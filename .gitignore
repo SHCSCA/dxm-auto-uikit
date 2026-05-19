@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+
+app/frontend/dist/
+app/frontend/node_modules/
+app/desktop/node_modules/
+
+# Runtime data / local artifacts
+data/screenshots/
+data/sessions/
+data/sqlite/
+data/evidences/
+outputs/reports/
+outputs/spreadsheets/
+data/ai/
+
+# Local agent/workspace metadata
+.codex/
+.hermes/
+
+# Local probe junk should live under tools/probes/, not root
+/tmp_*.py

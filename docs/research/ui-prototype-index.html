@@ -1,0 +1,1028 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>店小秘自动刊登助手 - UI 原型</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: #121935;
+      --panel-2: #0f1530;
+      --line: #22305d;
+      --text: #edf2ff;
+      --muted: #98a3c7;
+      --brand: #6ea8fe;
+      --green: #30c48d;
+      --yellow: #ffcf5a;
+      --red: #ff6b7a;
+      --blue-soft: rgba(110, 168, 254, 0.15);
+      --radius: 14px;
+      --shadow: 0 10px 30px rgba(0,0,0,.25);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: linear-gradient(180deg, #08101c 0%, #0f1730 100%);
+      color: var(--text);
+    }
+
+    .app {
+      min-height: 100vh;
+      padding: 16px;
+      display: grid;
+      grid-template-rows: 72px 1fr 180px;
+      gap: 16px;
+    }
+
+    .topbar, .sidebar, .panel, .browser, .footer {
+      background: rgba(18, 25, 53, 0.96);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .logo {
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, #5d8bff, #63e1ff);
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      color: #07122b;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .brand small { color: var(--muted); }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .chip {
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .chip strong { color: var(--text); }
+    .chip.ok strong { color: var(--green); }
+    .chip.warn strong { color: var(--yellow); }
+
+    .main {
+      display: grid;
+      grid-template-columns: 220px 520px 1fr;
+      gap: 16px;
+      min-height: 0;
+    }
+
+    .sidebar {
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .nav-title {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      padding: 4px 8px 10px;
+    }
+
+    .nav-item {
+      padding: 12px 14px;
+      border-radius: 12px;
+      color: var(--text);
+      background: transparent;
+      border: 1px solid transparent;
+      cursor: default;
+    }
+
+    .nav-item.active {
+      background: var(--blue-soft);
+      border-color: #33539f;
+    }
+
+    .panel {
+      padding: 18px;
+      overflow: auto;
+    }
+
+    .panel h2, .browser h2, .footer h2 {
+      margin: 0 0 14px;
+      font-size: 18px;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .field label {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .input, .select, .textarea {
+      border: 1px solid var(--line);
+      background: #0a1125;
+      color: var(--text);
+      border-radius: 12px;
+      padding: 11px 12px;
+      font-size: 14px;
+    }
+
+    .textarea { min-height: 90px; resize: vertical; }
+
+    .section {
+      margin-top: 18px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+    }
+
+    .button-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+
+    .btn {
+      border: 0;
+      padding: 11px 16px;
+      border-radius: 12px;
+      font-weight: 700;
+      cursor: default;
+      color: #07122b;
+      background: #dbe7ff;
+    }
+
+    .btn.primary { background: var(--brand); color: #08101c; }
+    .btn.secondary { background: #1a2448; color: var(--text); border: 1px solid var(--line); }
+    .btn.warn { background: var(--yellow); }
+    .btn.danger { background: var(--red); color: white; }
+    .btn.ghost { background: transparent; border: 1px dashed #4060b4; color: #b7c7ff; }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .card {
+      background: #0d142b;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px;
+    }
+
+    .card .k { font-size: 12px; color: var(--muted); }
+    .card .v { font-size: 22px; font-weight: 800; margin-top: 6px; }
+    .card.green .v { color: var(--green); }
+    .card.yellow .v { color: var(--yellow); }
+    .card.red .v { color: var(--red); }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+      overflow: hidden;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+    }
+
+    th, td {
+      text-align: left;
+      padding: 12px 10px;
+      font-size: 13px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    th { color: var(--muted); background: #0d142b; }
+    tr:last-child td { border-bottom: none; }
+
+    .tag {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      background: #13224a;
+      border: 1px solid #2c478f;
+      color: #c9d7ff;
+    }
+
+    .tag.success { background: rgba(48,196,141,.14); border-color: rgba(48,196,141,.35); color: #7ef0c4; }
+    .tag.warning { background: rgba(255,207,90,.14); border-color: rgba(255,207,90,.35); color: #ffe28d; }
+    .tag.error { background: rgba(255,107,122,.14); border-color: rgba(255,107,122,.35); color: #ffb4bd; }
+
+    .browser {
+      padding: 16px;
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+      gap: 12px;
+      min-height: 0;
+    }
+
+    .browser-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .browser-badges {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .rpa-stage {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 330px;
+      gap: 12px;
+      min-height: 0;
+    }
+
+    .browser-view {
+      background: #f6f8fc;
+      color: #1f2a44;
+      border-radius: 14px;
+      overflow: hidden;
+      border: 1px solid #d4ddf5;
+      display: grid;
+      grid-template-rows: 42px 1fr;
+      min-height: 0;
+    }
+
+    .browser-top {
+      background: #e9eefb;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 14px;
+      border-bottom: 1px solid #d4ddf5;
+    }
+
+    .dot { width: 10px; height: 10px; border-radius: 50%; }
+    .dot.red { background: #ff5f57; }
+    .dot.yellow { background: #febc2e; }
+    .dot.green { background: #28c840; }
+
+    .browser-body {
+      position: relative;
+      padding: 18px;
+      overflow: auto;
+    }
+
+    .dxm-page {
+      background: white;
+      border: 1px solid #dde5f5;
+      border-radius: 12px;
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+      min-height: 100%;
+    }
+
+    .dxm-title {
+      font-weight: 800;
+      color: #203154;
+      font-size: 18px;
+    }
+
+    .dxm-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .dxm-field {
+      border: 1px solid #d9e2f6;
+      border-radius: 10px;
+      padding: 10px;
+      background: #fbfcff;
+      min-height: 68px;
+      position: relative;
+    }
+
+    .dxm-field small { color: #6c7a96; display: block; margin-bottom: 6px; }
+    .dxm-highlight {
+      outline: 3px solid #6ea8fe;
+      box-shadow: 0 0 0 6px rgba(110,168,254,.15);
+      animation: pulse 1.6s infinite;
+    }
+
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(110,168,254,.35); }
+      70% { box-shadow: 0 0 0 12px rgba(110,168,254,0); }
+      100% { box-shadow: 0 0 0 0 rgba(110,168,254,0); }
+    }
+
+    .overlay-tip {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      background: rgba(8,16,32,.9);
+      color: white;
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 13px;
+      max-width: 260px;
+      box-shadow: var(--shadow);
+    }
+
+    .rpa-side {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 1fr 220px;
+      gap: 12px;
+    }
+
+    .rpa-panel {
+      background: #0d142b;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+      min-height: 0;
+      overflow: auto;
+    }
+
+    .rpa-panel h3 {
+      margin: 0 0 10px;
+      font-size: 15px;
+      color: #dbe7ff;
+    }
+
+    .step-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .step-item {
+      display: grid;
+      grid-template-columns: 26px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px;
+      border-radius: 12px;
+      background: #101937;
+      border: 1px solid #243566;
+    }
+
+    .step-item.active {
+      background: rgba(110,168,254,.12);
+      border-color: #4b73d2;
+    }
+
+    .step-no {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: #1d2c57;
+      color: #bdd2ff;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .step-main {
+      display: grid;
+      gap: 4px;
+    }
+
+    .step-main strong {
+      font-size: 13px;
+      color: #eef4ff;
+    }
+
+    .step-main span {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .evidence-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .evidence-card {
+      border-radius: 12px;
+      background: #101937;
+      border: 1px solid #243566;
+      padding: 10px;
+      min-height: 78px;
+    }
+
+    .evidence-card .title {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    .mini-shot {
+      height: 70px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #e8eefb, #cad7f6);
+      border: 1px solid #c8d4ef;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .mini-shot::after {
+      content: '当前截图';
+      position: absolute;
+      right: 8px;
+      bottom: 6px;
+      font-size: 11px;
+      color: #394b71;
+    }
+
+    .manual-alert {
+      margin-top: 8px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: rgba(255, 207, 90, .12);
+      border: 1px solid rgba(255, 207, 90, .35);
+      color: #ffe28d;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .footer {
+      padding: 16px;
+      overflow: auto;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .log-item {
+      display: grid;
+      grid-template-columns: 90px 1fr auto;
+      gap: 12px;
+      padding: 10px 12px;
+      background: #0d142b;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      align-items: center;
+    }
+
+    .log-item .time { color: #9fb4ff; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .muted { color: var(--muted); }
+
+    .trust-box {
+      margin-top: 16px;
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px dashed #3b5db1;
+      background: rgba(110,168,254,.08);
+      color: #dce7ff;
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    @media (max-width: 1480px) {
+      .main { grid-template-columns: 200px 1fr; }
+      .browser { grid-column: span 2; min-height: 620px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">DX</div>
+        <div>
+          <h1>店小秘自动刊登助手</h1>
+          <small>本地运行 / 全流程可视 / 可随时人工接管 / 支持 POP 与半托管全量字段</small>
+        </div>
+      </div>
+      <div class="status-row">
+        <div class="chip ok">设备状态：<strong>正常</strong></div>
+        <div class="chip ok">店小秘状态：<strong>已登录</strong></div>
+        <div class="chip">当前店铺：<strong>AliExpress-店铺A</strong></div>
+        <div class="chip warn">套餐：<strong>Pro</strong></div>
+        <div class="chip">版本：<strong>v1.0</strong></div>
+      </div>
+    </header>
+
+    <main class="main">
+      <aside class="sidebar">
+        <div class="nav-title">功能导航</div>
+        <div class="nav-item active">仪表盘</div>
+        <div class="nav-item">导入商品</div>
+        <div class="nav-item">规则配置</div>
+        <div class="nav-item">模板中心</div>
+        <div class="nav-item">任务中心</div>
+        <div class="nav-item">异常池</div>
+        <div class="nav-item">日志中心</div>
+        <div class="nav-item">店铺管理</div>
+        <div class="nav-item">设置</div>
+      </aside>
+
+      <section class="panel">
+        <h2>任务控制台</h2>
+        <div class="row">
+          <div class="field">
+            <label>任务名称</label>
+            <div class="input">6月速卖通铺货批次</div>
+          </div>
+          <div class="field">
+            <label>运行模式</label>
+            <div class="select">自动发布</div>
+          </div>
+          <div class="field">
+            <label>店铺选择</label>
+            <div class="select">AliExpress-店铺A</div>
+          </div>
+          <div class="field">
+            <label>平台</label>
+            <div class="select">速卖通</div>
+          </div>
+        </div>
+
+        <div class="section">
+          <h2>商品导入</h2>
+          <div class="button-row">
+            <button class="btn secondary">导入 Excel/CSV</button>
+            <button class="btn secondary">粘贴商品链接</button>
+            <button class="btn secondary">手工创建商品</button>
+            <button class="btn ghost">从剪贴板导入</button>
+          </div>
+
+          <div class="cards">
+            <div class="card">
+              <div class="k">已导入商品</div>
+              <div class="v">128</div>
+            </div>
+            <div class="card green">
+              <div class="k">预校验通过</div>
+              <div class="v">102</div>
+            </div>
+            <div class="card yellow">
+              <div class="k">待人工处理</div>
+              <div class="v">18</div>
+            </div>
+            <div class="card red">
+              <div class="k">已拦截</div>
+              <div class="v">8</div>
+            </div>
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th>标题</th>
+                <th>SKU数</th>
+                <th>图片数</th>
+                <th>价格</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Women Running Shoes Breathable Lightweight</td>
+                <td>3</td>
+                <td>6</td>
+                <td>$29.90</td>
+                <td><span class="tag success">通过</span></td>
+              </tr>
+              <tr>
+                <td>Kitchen Storage Rack Multi Layer Organizer</td>
+                <td>2</td>
+                <td>5</td>
+                <td>$18.50</td>
+                <td><span class="tag warning">待人工</span></td>
+              </tr>
+              <tr>
+                <td>LED Table Lamp Smart Touch Dimmable</td>
+                <td>4</td>
+                <td>7</td>
+                <td>$24.80</td>
+                <td><span class="tag error">拦截</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="section">
+          <h2>字段域覆盖摘要</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>字段域</th>
+                <th>覆盖内容</th>
+                <th>适用场景</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>标题 / 类目 / 资质</td>
+                <td>标题模板、类目映射、品牌资质、PDF认证材料</td>
+                <td>POP / 半托管</td>
+                <td><span class="tag success">已建模</span></td>
+              </tr>
+              <tr>
+                <td>主图 / 白底图 / 营销图 / 视频</td>
+                <td>主图、白底图、营销图、产品视频、安装视频</td>
+                <td>POP / 半托管</td>
+                <td><span class="tag success">已建模</span></td>
+              </tr>
+              <tr>
+                <td>SKU / 尺码 / 价格</td>
+                <td>颜色尺码、SKU、计价模板、基准价模板、报价模板</td>
+                <td>POP / 半托管</td>
+                <td><span class="tag success">已建模</span></td>
+              </tr>
+              <tr>
+                <td>重量 / 尺寸 / 运费</td>
+                <td>包装重量、尺寸、发货地、运费模板、报价物流规则</td>
+                <td>POP / 半托管</td>
+                <td><span class="tag success">已建模</span></td>
+              </tr>
+              <tr>
+                <td>合规 / 责任主体</td>
+                <td>欧盟负责人、制造商、GPSR、海关属性、安全字段</td>
+                <td>欧盟 / 特殊类目 / 半托管</td>
+                <td><span class="tag warning">高级页管理</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="section">
+          <h2>模板中心摘要</h2>
+          <div class="cards">
+            <div class="card">
+              <div class="k">标题/类目模板</div>
+              <div class="v" style="font-size:18px;">12 套</div>
+            </div>
+            <div class="card">
+              <div class="k">图片/视频模板</div>
+              <div class="v" style="font-size:18px;">8 套</div>
+            </div>
+            <div class="card">
+              <div class="k">SKU/计价模板</div>
+              <div class="v" style="font-size:18px;">15 套</div>
+            </div>
+            <div class="card">
+              <div class="k">合规/责任人模板</div>
+              <div class="v" style="font-size:18px;">6 套</div>
+            </div>
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th>模板类型</th>
+                <th>示例内容</th>
+                <th>绑定维度</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>标题模板</td>
+                <td>核心词 + 属性词 + 卖点词</td>
+                <td>平台 / 店铺 / 类目</td>
+                <td><span class="tag success">已启用</span></td>
+              </tr>
+              <tr>
+                <td>类目与资质模板</td>
+                <td>类目映射 / 品牌资质 / PDF资质</td>
+                <td>平台 / 类目</td>
+                <td><span class="tag success">已启用</span></td>
+              </tr>
+              <tr>
+                <td>图片模板</td>
+                <td>主图 / 白底图 / 营销图 / 视频</td>
+                <td>店铺 / 类目</td>
+                <td><span class="tag warning">部分缺失</span></td>
+              </tr>
+              <tr>
+                <td>SKU/价格模板</td>
+                <td>颜色尺码 / 计价 / 基准价 / 运费</td>
+                <td>店铺 / 类目 / 物流</td>
+                <td><span class="tag success">已启用</span></td>
+              </tr>
+              <tr>
+                <td>合规模板</td>
+                <td>欧盟责任人 / 制造商 / 海关属性</td>
+                <td>类目 / 国家站点</td>
+                <td><span class="tag warning">待补充</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="section">
+          <h2>规则摘要</h2>
+          <div class="row">
+            <div class="field">
+              <label>标题模板</label>
+              <div class="textarea">[核心词] + [属性词] + [卖点词] + [场景词]</div>
+            </div>
+            <div class="field">
+              <label>默认发布配置</label>
+              <div class="textarea">发货地：中国
+运费模板：AE-CN-01
+服务模板：默认模板
+发布方式：自动发布</div>
+            </div>
+          </div>
+          <div class="button-row">
+            <button class="btn primary">开始执行</button>
+            <button class="btn secondary">暂停</button>
+            <button class="btn secondary">继续</button>
+            <button class="btn danger">停止</button>
+            <button class="btn secondary">仅跑预处理</button>
+            <button class="btn secondary">仅保存待发布</button>
+          </div>
+
+          <div class="trust-box">
+            安全说明：店小秘账号密码仅在右侧真实店小秘页面中输入与使用。商品任务、登录态、截图、日志默认仅保存在本机，不上传云端。用户可随时暂停任务或接管浏览器。
+          </div>
+        </div>
+      </section>
+
+      <section class="browser">
+        <div class="browser-toolbar">
+          <h2>RPA 实时执行区</h2>
+          <div class="browser-badges">
+            <span class="chip">当前任务：<strong>批次#20260619</strong></span>
+            <span class="chip">当前商品：<strong>Women Running Shoes...</strong></span>
+            <span class="chip ok">执行状态：<strong>运行中</strong></span>
+            <span class="chip">当前步骤：<strong>填写标题</strong></span>
+          </div>
+        </div>
+
+        <div class="button-row" style="margin-top:0;">
+          <button class="btn secondary">只看模式</button>
+          <button class="btn warn">人工接管</button>
+          <button class="btn secondary">暂停任务</button>
+          <button class="btn secondary">跳过当前商品</button>
+          <button class="btn secondary">重试当前步骤</button>
+          <button class="btn secondary">截图</button>
+          <button class="btn secondary">录屏</button>
+        </div>
+
+        <div class="rpa-stage">
+          <div class="browser-view">
+            <div class="browser-top">
+              <span class="dot red"></span>
+              <span class="dot yellow"></span>
+              <span class="dot green"></span>
+              <div style="margin-left:10px;color:#54627f;font-size:13px;">https://www.dianxiaomi.com/ali/create-product</div>
+            </div>
+            <div class="browser-body">
+              <div class="overlay-tip">
+                正在执行：填写速卖通产品标题
+                <br>字段：标题 Subject
+                <br>来源：AI 清洗后的标准标题
+                <br>动作：click → input → verify
+              </div>
+
+              <div class="dxm-page">
+                <div class="dxm-title">店小秘 · 速卖通创建产品</div>
+                <div class="dxm-grid">
+                  <div class="dxm-field dxm-highlight">
+                    <small>产品标题</small>
+                    Women Running Shoes Breathable Lightweight Casual Sport Sneakers
+                  </div>
+                  <div class="dxm-field">
+                    <small>产品分类</small>
+                    Sports & Entertainment &gt; Running Shoes
+                  </div>
+                  <div class="dxm-field">
+                    <small>品牌</small>
+                    None
+                  </div>
+                  <div class="dxm-field">
+                    <small>发货地</small>
+                    China (CN)
+                  </div>
+                  <div class="dxm-field">
+                    <small>运费模板</small>
+                    AE-CN-01
+                  </div>
+                  <div class="dxm-field">
+                    <small>服务模板</small>
+                    默认模板
+                  </div>
+                  <div class="dxm-field">
+                    <small>零售价</small>
+                    USD 29.90
+                  </div>
+                  <div class="dxm-field">
+                    <small>库存</small>
+                    Black-39: 50 / Black-40: 50 / White-39: 50
+                  </div>
+                  <div class="dxm-field" style="grid-column: span 2; min-height: 96px;">
+                    <small>商品说明</small>
+                    Breathable upper, lightweight sole, comfortable for daily running and casual sports wear.
+                  </div>
+                  <div class="dxm-field" style="grid-column: span 2; min-height: 96px;">
+                    <small>主图 / 营销图 / 视频</small>
+                    主图 6 张已就绪，白底图 1 张，营销图 2 张，视频 1 条，当前正在校验图片并准备上传。
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="rpa-side">
+            <div class="rpa-panel">
+              <h3>步骤树</h3>
+              <div class="step-list">
+                <div class="step-item">
+                  <div class="step-no">1</div>
+                  <div class="step-main">
+                    <strong>打开店小秘</strong>
+                    <span>进入首页并确认浏览器会话可用</span>
+                  </div>
+                  <span class="tag success">成功</span>
+                </div>
+                <div class="step-item">
+                  <div class="step-no">2</div>
+                  <div class="step-main">
+                    <strong>检测登录态</strong>
+                    <span>已确认用户在真实店小秘页面登录</span>
+                  </div>
+                  <span class="tag success">成功</span>
+                </div>
+                <div class="step-item">
+                  <div class="step-no">3</div>
+                  <div class="step-main">
+                    <strong>切换店铺与场景</strong>
+                    <span>AliExpress-店铺A / 发布场景：半托管</span>
+                  </div>
+                  <span class="tag success">成功</span>
+                </div>
+                <div class="step-item">
+                  <div class="step-no">4</div>
+                  <div class="step-main">
+                    <strong>加载模板中心</strong>
+                    <span>标题、类目、资质、图片、SKU、价格、合规模板</span>
+                  </div>
+                  <span class="tag success">成功</span>
+                </div>
+                <div class="step-item active">
+                  <div class="step-no">5</div>
+                  <div class="step-main">
+                    <strong>填写标题 / 类目 / 资质</strong>
+                    <span>当前正在高亮输入框并校验字符长度、资质要求</span>
+                  </div>
+                  <span class="tag warning">执行中</span>
+                </div>
+                <div class="step-item">
+                  <div class="step-no">6</div>
+                  <div class="step-main">
+                    <strong>上传主图 / 白底图 / 营销图 / 视频</strong>
+                    <span>按模板校验尺寸、数量、比例与来源</span>
+                  </div>
+                  <span class="tag">待执行</span>
+                </div>
+                <div class="step-item">
+                  <div class="step-no">7</div>
+                  <div class="step-main">
+                    <strong>填写 SKU / 尺码 / 价格 / 基准价</strong>
+                    <span>包含计价模板、报价模板、运费模板、尺寸映射</span>
+                  </div>
+                  <span class="tag">待执行</span>
+                </div>
+                <div class="step-item">
+                  <div class="step-no">8</div>
+                  <div class="step-main">
+                    <strong>填写重量 / 尺寸 / 报价 / 履约方式</strong>
+                    <span>半托管场景补充供货价、供货周期、仓配规则</span>
+                  </div>
+                  <span class="tag">待执行</span>
+                </div>
+                <div class="step-item">
+                  <div class="step-no">9</div>
+                  <div class="step-main">
+                    <strong>填写欧盟负责人 / 制造商 / 合规信息</strong>
+                    <span>按类目与国家站点决定是否必填</span>
+                  </div>
+                  <span class="tag">待执行</span>
+                </div>
+                <div class="step-item">
+                  <div class="step-no">10</div>
+                  <div class="step-main">
+                    <strong>保存 / 发布 / 提交报价</strong>
+                    <span>按 POP 或半托管链路自动执行到最终状态</span>
+                  </div>
+                  <span class="tag">待执行</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="rpa-panel">
+              <h3>证据面板</h3>
+              <div class="evidence-grid">
+                <div class="evidence-card">
+                  <div class="title">当前截图</div>
+                  <div class="mini-shot"></div>
+                </div>
+                <div class="evidence-card">
+                  <div class="title">DOM 快照</div>
+                  <div style="font-size:12px;color:#cbd7f8;line-height:1.6;">selector: input[name='subject']<br>state: visible / enabled<br>value_length: 68</div>
+                </div>
+                <div class="evidence-card">
+                  <div class="title">执行动作</div>
+                  <div style="font-size:12px;color:#cbd7f8;line-height:1.6;">mouse.move → click<br>keyboard.insertText<br>assert text persisted</div>
+                </div>
+                <div class="evidence-card">
+                  <div class="title">页面反馈</div>
+                  <div style="font-size:12px;color:#cbd7f8;line-height:1.6;">未检测到报错弹窗<br>上传队列空闲<br>保存按钮可点击</div>
+                </div>
+              </div>
+              <div class="manual-alert">
+                人工接管提示：如果检测到验证码、类目权限冲突、页面结构变化，任务会自动暂停并将当前步骤切换为 waiting_manual_action，用户处理后可点击“继续执行”。
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="muted">提示：此区域已升级为 RPA 风格执行驾驶舱，支持步骤树、动作高亮、证据流、人工接管与录屏截图入口。</div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <h2>日志 / 步骤流</h2>
+      <div class="timeline">
+        <div class="log-item">
+          <div class="time">10:31:12</div>
+          <div>打开店小秘首页，检测登录态成功</div>
+          <div><span class="tag success">成功</span></div>
+        </div>
+        <div class="log-item">
+          <div class="time">10:31:18</div>
+          <div>切换到店铺 AliExpress-店铺A，进入速卖通创建产品页</div>
+          <div><span class="tag success">成功</span></div>
+        </div>
+        <div class="log-item">
+          <div class="time">10:31:24</div>
+          <div>正在填写产品标题：Women Running Shoes Breathable Lightweight...</div>
+          <div><span class="tag success">执行中</span></div>
+        </div>
+        <div class="log-item">
+          <div class="time">10:31:33</div>
+          <div>正在上传主图 3/6，自动绑定颜色 SKU 图片</div>
+          <div><span class="tag warning">处理中</span></div>
+        </div>
+        <div class="log-item">
+          <div class="time">10:32:08</div>
+          <div>预计下一步：保存到待发布 / 自动发布（按当前模式）</div>
+          <div><span class="tag">等待</span></div>
+        </div>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>

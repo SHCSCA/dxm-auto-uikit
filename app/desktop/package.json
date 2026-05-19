@@ -1,0 +1,13 @@
+{
+  "name": "dxm-auto-uikit-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "main": "src/main.js",
+  "scripts": {
+    "dev": "electron src/main.js",
+    "start": "electron src/main.js"
+  },
+  "dependencies": {
+    "electron": "^33.2.1"
+  }
+}

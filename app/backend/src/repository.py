@@ -1,0 +1,179 @@
+from __future__ import annotations
+
+from typing import Any
+
+from src.db import connection, dumps, loads
+from src.utils import now_iso
+
+
+class Repository:
+    def list_stores(self):
+        with connection() as conn:
+            return conn.execute("SELECT * FROM stores ORDER BY id DESC").fetchall()
+
+    def create_store(self, name: str, platform: str):
+        now = now_iso()
+        with connection() as conn:
+            cur = conn.execute(
+                "INSERT INTO stores (name, platform, status, created_at, updated_at) VALUES (?, ?, 'connected', ?, ?)",
+                (name, platform, now, now),
+            )
+            return conn.execute("SELECT * FROM stores WHERE id=?", (cur.lastrowid,)).fetchone()
+
+    def list_templates(self):
+        with connection() as conn:
+            rows = conn.execute("SELECT * FROM templates ORDER BY id DESC").fetchall()
+            for row in rows:
+                row['payload'] = loads(row.pop('payload_json'), {})
+                row['is_enabled'] = bool(row['is_enabled'])
+            return rows
+
+    def create_template(self, data: dict[str, Any]):
+        now = now_iso()
+        with connection() as conn:
+            cur = conn.execute(
+                "INSERT INTO templates (template_type, template_name, binding_scope, payload_json, is_enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    data['template_type'], data['template_name'], data['binding_scope'], dumps(data['payload']), int(data['is_enabled']), now, now,
+                ),
+            )
+            row = conn.execute("SELECT * FROM templates WHERE id=?", (cur.lastrowid,)).fetchone()
+            row['payload'] = loads(row.pop('payload_json'), {})
+            row['is_enabled'] = bool(row['is_enabled'])
+            return row
+
+    def list_products(self):
+        with connection() as conn:
+            rows = conn.execute("SELECT * FROM products ORDER BY id DESC").fetchall()
+            for row in rows:
+                row['payload'] = loads(row.pop('payload_json'), {})
+            return rows
+
+    def create_product(self, data: dict[str, Any]):
+        now = now_iso()
+        with connection() as conn:
+            cur = conn.execute(
+                "INSERT INTO products (title, source, status, category_name, price, currency, sku_count, image_count, payload_json, created_at, updated_at) VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?)",
+                (data['title'], data.get('source', 'manual'), data['category_name'], data['price'], data['currency'], data['sku_count'], data['image_count'], dumps(data['payload']), now, now),
+            )
+            row = conn.execute("SELECT * FROM products WHERE id=?", (cur.lastrowid,)).fetchone()
+            row['payload'] = loads(row.pop('payload_json'), {})
+            return row
+
+    def bulk_import_products(self, rows: list[dict[str, Any]]):
+        created = []
+        for row in rows:
+            created.append(self.create_product({
+                'title': row.get('title', '未命名商品'),
+                'source': 'import',
+                'category_name': row.get('category_name', '未分类'),
+                'price': float(row.get('price', 0) or 0),
+                'currency': row.get('currency', 'USD'),
+                'sku_count': int(row.get('sku_count', 1) or 1),
+                'image_count': int(row.get('image_count', 0) or 0),
+                'payload': row,
+            }))
+        return created
+
+    def list_tasks(self):
+        with connection() as conn:
+            rows = conn.execute("SELECT * FROM tasks ORDER BY id DESC").fetchall()
+            for row in rows:
+                row['payload'] = loads(row.pop('payload_json'), {})
+            return rows
+
+    def get_task(self, task_id: int):
+        with connection() as conn:
+            task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if not task:
+                return None
+            task['payload'] = loads(task.pop('payload_json'), {})
+            task['jobs'] = conn.execute("SELECT * FROM jobs WHERE task_id=? ORDER BY id ASC", (task_id,)).fetchall()
+            return task
+
+    def create_task(self, data: dict[str, Any]):
+        now = now_iso()
+        with connection() as conn:
+            cur = conn.execute(
+                "INSERT INTO tasks (name, store_id, status, mode, publish_scene, total_jobs, payload_json, created_at, updated_at) VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?)",
+                (data['name'], data.get('store_id'), data['mode'], data['publish_scene'], len(data.get('product_ids', [])), dumps({'product_ids': data.get('product_ids', [])}), now, now),
+            )
+            task_id = cur.lastrowid
+            for product_id in data.get('product_ids', []):
+                conn.execute(
+                    "INSERT INTO jobs (task_id, product_id, status, created_at, updated_at) VALUES (?, ?, 'pending', ?, ?)",
+                    (task_id, product_id, now, now),
+                )
+            task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            task['payload'] = loads(task.pop('payload_json'), {})
+            return task
+
+    def update_task_status(self, task_id: int, status: str, completed_jobs: int | None = None, failed_jobs: int | None = None):
+        now = now_iso()
+        with connection() as conn:
+            existing = conn.execute("SELECT completed_jobs, failed_jobs FROM tasks WHERE id=?", (task_id,)).fetchone()
+            conn.execute(
+                "UPDATE tasks SET status=?, completed_jobs=?, failed_jobs=?, updated_at=? WHERE id=?",
+                (status, completed_jobs if completed_jobs is not None else existing['completed_jobs'], failed_jobs if failed_jobs is not None else existing['failed_jobs'], now, task_id),
+            )
+
+    def update_job(self, job_id: int, **fields):
+        now = now_iso()
+        cols = []
+        values = []
+        for key, value in fields.items():
+            cols.append(f"{key}=?")
+            values.append(value)
+        cols.append("updated_at=?")
+        values.append(now)
+        values.append(job_id)
+        with connection() as conn:
+            conn.execute(f"UPDATE jobs SET {', '.join(cols)} WHERE id=?", values)
+
+    def add_log(self, task_id: int, job_id: int | None, level: str, message: str, context: dict[str, Any] | None = None):
+        now = now_iso()
+        with connection() as conn:
+            conn.execute(
+                "INSERT INTO job_logs (task_id, job_id, level, message, context_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (task_id, job_id, level, message, dumps(context or {}), now),
+            )
+
+    def list_logs(self, task_id: int | None = None):
+        with connection() as conn:
+            if task_id is None:
+                rows = conn.execute("SELECT * FROM job_logs ORDER BY id DESC LIMIT 200").fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM job_logs WHERE task_id=? ORDER BY id DESC LIMIT 200", (task_id,)).fetchall()
+            for row in rows:
+                row['context'] = loads(row.pop('context_json'), {})
+            return rows
+
+    def add_evidence(self, task_id: int, job_id: int | None, evidence_type: str, file_path: str | None, meta: dict[str, Any] | None = None):
+        now = now_iso()
+        with connection() as conn:
+            conn.execute(
+                "INSERT INTO job_evidences (task_id, job_id, evidence_type, file_path, meta_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (task_id, job_id, evidence_type, file_path, dumps(meta or {}), now),
+            )
+
+    def list_evidences(self, task_id: int | None = None):
+        with connection() as conn:
+            if task_id is None:
+                rows = conn.execute("SELECT * FROM job_evidences ORDER BY id DESC LIMIT 200").fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM job_evidences WHERE task_id=? ORDER BY id DESC LIMIT 200", (task_id,)).fetchall()
+            for row in rows:
+                row['meta'] = loads(row.pop('meta_json'), {})
+            return rows
+
+    def add_exception(self, task_id: int, job_id: int | None, error_code: str, field_domain: str, title: str, detail: str, suggestion: str):
+        now = now_iso()
+        with connection() as conn:
+            conn.execute(
+                "INSERT INTO exceptions (task_id, job_id, error_code, field_domain, title, detail, suggestion, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (task_id, job_id, error_code, field_domain, title, detail, suggestion, now, now),
+            )
+
+    def list_exceptions(self):
+        with connection() as conn:
+            return conn.execute("SELECT * FROM exceptions ORDER BY id DESC LIMIT 200").fetchall()
