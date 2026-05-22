@@ -1,32 +1,36 @@
 import { useEffect, useMemo, useState } from 'react'
-import { getJson, postJson } from './api'
-import type { Evidence, ExceptionItem, LiveEvent, LogItem, Product, Store, Task, Template } from './types'
+import { getJson, getJsonOrDefault, postJson } from './api'
+import type { Evidence, ExceptionItem, LiveEvent, LogItem, Product, Report, Store, Task, Template } from './types'
 
 const seedRows = [
-  { title: 'Women Running Shoes Breathable Lightweight', category_name: '运动鞋', price: 29.9, sku_count: 3, image_count: 6 },
-  { title: 'Kitchen Storage Rack Multi Layer Organizer', category_name: '厨房收纳', price: 18.5, sku_count: 2, image_count: 5 },
-  { title: 'LED Table Lamp Smart Touch Dimmable', category_name: '台灯', price: 24.8, sku_count: 4, image_count: 7 },
+  {
+    title: 'Wind Breaker Anime Acrylic Stand Hot Spring Battle Charm',
+    source_title: '防风铃x空座温泉云蒸决战阵防风少年',
+    category_name: '立牌类谷子',
+    price: 7.01,
+    sku_count: 8,
+    image_count: 8,
+    image: { eu_outer_package_filename: '微信图片_202504092228421.jpg' },
+  },
 ]
 
 const flowNav = [
-  '官网登录',
-  '产品',
-  '数据采集',
-  '认领到采集箱',
-  '采集箱备注',
-  '编辑产品',
-  '待发布 / 发布',
-  '异常协作',
+  '登录态',
+  '采集箱',
+  '领取',
+  '普通编辑',
+  '半托管',
+  '保存',
+  '报告',
   '模板中心',
 ]
 
 const navTargetMap: Partial<Record<typeof flowNav[number], string>> = {
-  '产品': 'product',
-  '数据采集': 'data_acquisition',
-  '认领到采集箱': 'draft_box',
-  '采集箱备注': 'draft_box',
-  '编辑产品': 'draft_box',
-  '待发布 / 发布': 'draft_box',
+  '采集箱': 'draft_box',
+  '领取': 'data_acquisition',
+  '普通编辑': 'draft_box',
+  '半托管': 'draft_box',
+  '保存': 'draft_box',
 }
 
 type FlowNavItem = typeof flowNav[number]
@@ -42,6 +46,22 @@ type LoginSummary = {
 }
 type DemoStage = 'system' | 'waiting_captcha' | 'login_success'
 type BrowserMode = 'live' | 'evidence'
+type ExecutionConfig = {
+  storeName: string
+  categoryName: string
+  categoryTemplate: string
+  referenceTemplate: string
+  imageBankSource: string
+  euOuterPackageFilename: string
+  logisticsTemplate: string
+  freightTemplates: string[]
+  serviceTemplates: string[]
+  jitStock: string
+  barcodeStrategy: string
+  saveMode: string
+  publishScene: string
+  publishPolicy: string
+}
 
 export default function App() {
   const [stores, setStores] = useState<Store[]>([])
@@ -51,6 +71,7 @@ export default function App() {
   const [logs, setLogs] = useState<LogItem[]>([])
   const [evidences, setEvidences] = useState<Evidence[]>([])
   const [exceptions, setExceptions] = useState<ExceptionItem[]>([])
+  const [reports, setReports] = useState<Report[]>([])
   const [liveEvents, setLiveEvents] = useState<LiveEvent[]>([])
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
@@ -58,11 +79,11 @@ export default function App() {
   const [loginState, setLoginState] = useState<any>(null)
   const [loginUsername, setLoginUsername] = useState('master-demo')
   const [loginPassword, setLoginPassword] = useState('demo-pass')
-  const [activeNav, setActiveNav] = useState<FlowNavItem>('官网登录')
+  const [activeNav, setActiveNav] = useState<FlowNavItem>('登录态')
   const [demoStage, setDemoStage] = useState<DemoStage>('system')
   const [manualMode, setManualMode] = useState(false)
   const [browserMode, setBrowserMode] = useState<BrowserMode>('live')
-  const [interactionMessage, setInteractionMessage] = useState('先点击左侧真实业务导航或登录动作按钮，演示台现在会即时反馈状态。')
+  const [interactionMessage, setInteractionMessage] = useState('V1 执行器只保存不发布：先确认登录态，再进入采集箱、领取、普通编辑、半托管、保存和报告链路。')
   const [draftNoteText, setDraftNoteText] = useState('AI认领')
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
@@ -73,7 +94,7 @@ export default function App() {
   const currentEvidence = evidences[0]
 
   async function refreshAll() {
-    const [storesData, templatesData, productsData, tasksData, logsData, evidencesData, exceptionsData, liveStatusData, loginStateData] = await Promise.all([
+    const [storesData, templatesData, productsData, tasksData, logsData, evidencesData, exceptionsData, reportsData, liveStatusData, loginStateData] = await Promise.all([
       getJson<Store[]>('/api/stores'),
       getJson<Template[]>('/api/templates'),
       getJson<Product[]>('/api/products'),
@@ -81,6 +102,7 @@ export default function App() {
       getJson<LogItem[]>('/api/logs'),
       getJson<Evidence[]>('/api/evidences'),
       getJson<ExceptionItem[]>('/api/exceptions'),
+      getJsonOrDefault<Report[]>('/api/reports', []),
       getJson<any>('/api/dxm/live-status'),
       getJson<any>('/api/dxm/login-state'),
     ])
@@ -91,6 +113,7 @@ export default function App() {
     setLogs(logsData)
     setEvidences(evidencesData)
     setExceptions(exceptionsData)
+    setReports(reportsData)
     setLiveStatus(liveStatusData)
     setLoginState(loginStateData)
     if (!selectedTaskId && tasksData[0]) setSelectedTaskId(tasksData[0].id)
@@ -120,25 +143,37 @@ export default function App() {
       if (!store) {
         store = await postJson<Store>('/api/stores/connect', { name: 'Dang Kang', platform: 'AliExpress' })
       }
-      if (templates.length === 0) {
-        await Promise.all([
-          postJson('/api/templates', { template_type: 'title', template_name: '标题模板', binding_scope: '平台 / 店铺 / 类目', payload: { rule: '核心词 + 属性词 + 卖点词' }, is_enabled: true }),
-          postJson('/api/templates', { template_type: 'category', template_name: '类目与资质模板', binding_scope: '平台 / 类目', payload: { category: '类目映射 / 品牌资质 / PDF资质' }, is_enabled: true }),
-          postJson('/api/templates', { template_type: 'image', template_name: '图片模板', binding_scope: '店铺 / 类目', payload: { content: '主图 / 白底图 / 营销图 / 视频' }, is_enabled: true }),
-          postJson('/api/templates', { template_type: 'pricing', template_name: 'SKU/价格模板', binding_scope: '店铺 / 类目 / 物流', payload: { content: '颜色尺码 / 计价 / 基准价' }, is_enabled: true }),
-          postJson('/api/templates', { template_type: 'compliance', template_name: '半托管与合规模板', binding_scope: '店铺 / 类目 / 国家站点', payload: { content: '欧盟责任人 / 制造商 / 含税报价' }, is_enabled: true }),
-        ])
+      const templateSeeds = [
+        { template_type: 'title', template_name: '标题模板', binding_scope: '平台 / 店铺 / 类目', payload: { rule: '核心词 + 属性词 + 卖点词' }, is_enabled: true },
+        { template_type: 'category', template_name: '立牌类谷子属性模板', binding_scope: '平台 / 店铺 / 类目', payload: { binding: { store_name: 'Dang Kang', category_name: '立牌类谷子' }, category: { category_keyword: '立牌', category_match: 'ACG Stand', attribute_template_priorities: ['立牌类谷子'] } }, is_enabled: true },
+        { template_type: 'sku', template_name: 'SKU/货品编码模板', binding_scope: '店铺 / 类目', payload: { sku: { goods_code_strategy: '沿用店小秘生成', barcode_strategy: '留空' } }, is_enabled: true },
+        { template_type: 'pricing', template_name: '价格库存模板', binding_scope: '店铺 / 类目 / 物流', payload: { pricing: { declared_value: '1', stock: '200' } }, is_enabled: true },
+        { template_type: 'logistics', template_name: '包装物流模板', binding_scope: '店铺 / 类目', payload: { logistics: { weight: '0.03', length: '10', width: '10', height: '2', attribute: '普货', is_original_box: '否', freight_templates: ['石油40g普货包裹.', '40g普货包裹'], service_templates: ['Service Template for New Sellers'] } }, is_enabled: true },
+        { template_type: 'image', template_name: '图片银行模板', binding_scope: '店铺 / 类目', payload: { image: { source: '图片银行（速卖通）', eu_outer_package_filename: '微信图片_202504092228421.jpg', slots: [{ slot_key: 'eu_outer_package', label: '外包装/标签实拍图-欧盟', filename: '微信图片_202504092228421.jpg', source: 'smt_image_bank' }] } }, is_enabled: true },
+        { template_type: 'semi_managed', template_name: '半托管模板', binding_scope: '店铺 / 类目 / 国家站点', payload: { semi_managed: { countries: '全选', original_box: '否', logistics_attribute: '普货', jit_stock: '100', barcode_strategy: '留空' } }, is_enabled: true },
+        { template_type: 'compliance', template_name: '合规模板', binding_scope: '类目 / 国家站点', payload: { compliance: { eu_responsible_names: ['Jacqueiline Marti'], manufacturer_names: ['jiyang county thunder', 'Jiyang County thunder'], customs_product_names: ['钥匙扣', 'keychain'] } }, is_enabled: true },
+      ]
+      const existingTemplateTypes = new Set(templates.map((item) => item.template_type))
+      const missingTemplateSeeds = templateSeeds.filter((item) => !existingTemplateTypes.has(item.template_type))
+      if (missingTemplateSeeds.length) {
+        await Promise.all(missingTemplateSeeds.map((template) => postJson('/api/templates', template)))
       }
       let importedProducts = products
       if (importedProducts.length === 0) {
         importedProducts = await postJson<Product[]>('/api/products/import', { rows: seedRows })
       }
       const task = await postJson<Task>('/api/tasks', {
-        name: '速卖通真实流程演示批次',
+        name: 'V1 半托管保存执行批次',
         store_id: store.id,
-        mode: 'save_draft',
-        publish_scene: 'POP',
+        mode: 'single_save',
+        publish_scene: 'SMT_SEMI_MANAGED_SAVE_ONLY',
         product_ids: importedProducts.map((item) => item.id),
+        claim_mark: 'AI认领',
+        payload: {
+          store_name: 'Dang Kang',
+          category_name: '立牌类谷子',
+          image: { eu_outer_package_filename: '微信图片_202504092228421.jpg' },
+        },
       })
       setSelectedTaskId(task.id)
       await refreshAll()
@@ -150,8 +185,8 @@ export default function App() {
   async function startSelectedTask() {
     if (!selectedTask) return
     await postJson(`/api/tasks/${selectedTask.id}/start`, {})
-    setActiveNav('数据采集')
-    setInteractionMessage('任务已启动，演示焦点自动切到“数据采集”，方便用户继续跟踪真实流程。')
+    setActiveNav('采集箱')
+    setInteractionMessage('任务已启动，演示焦点自动切到“采集箱”。本批次只保存不发布，保存后进入报告复盘。')
     await refreshAll()
   }
 
@@ -174,8 +209,8 @@ export default function App() {
       return
     }
     setInteractionMessage(`已切换到「${item}」视角，演示内容会围绕这个真实业务节点高亮。`)
-    if (item === '异常协作') setManualMode(true)
-    if (item === '官网登录') setBrowserMode('live')
+    if (item === '报告') setBrowserMode('evidence')
+    if (item === '登录态') setBrowserMode('live')
   }
 
   async function handleWaitCaptcha() {
@@ -187,7 +222,7 @@ export default function App() {
       })
       setLoginState(result)
       setDemoStage('waiting_captcha')
-      setActiveNav('官网登录')
+      setActiveNav('登录态')
       setInteractionMessage('已调用真实登录 start：账号密码状态已提交，界面进入验证码等待态。')
     } finally {
       setBusy(false)
@@ -201,10 +236,10 @@ export default function App() {
       const result = await postJson<any>('/api/dxm/login/continue', { confirm: true })
       setLoginState(result)
       setDemoStage(result.stage === 'login_success' ? 'login_success' : 'waiting_captcha')
-      setActiveNav(result.stage === 'login_success' ? '产品' : '官网登录')
+      setActiveNav(result.stage === 'login_success' ? '采集箱' : '登录态')
       setManualMode(result.stage !== 'login_success')
       setInteractionMessage(result.stage === 'login_success'
-        ? '已调用真实登录 continue：检测到登录成功，界面切到业务流起点。'
+        ? '已调用真实登录 continue：检测到登录成功，界面切到半托管只保存业务流起点。'
         : '已调用真实登录 continue：当前仍未确认登录成功，请检查验证码或人工接管。')
     } finally {
       setBusy(false)
@@ -215,7 +250,7 @@ export default function App() {
   function handleToggleManualMode() {
     setManualMode((prev) => {
       const next = !prev
-      setActiveNav(next ? '异常协作' : activeNav)
+      setActiveNav(next ? '报告' : activeNav)
       setInteractionMessage(next ? '已开启人工接管视角：界面会强调协作、阻塞原因和下一步建议。' : '已退出人工接管视角，回到自动执行观察模式。')
       return next
     })
@@ -232,9 +267,11 @@ export default function App() {
       const result = await postJson<any>('/api/dxm/draft-box/action', {
         action,
         note_text: action === 'remark' ? draftNoteText : null,
+        product_query: currentProduct?.title,
+        store_name: currentStore?.name ?? 'Dang Kang',
       })
       setLoginState(result)
-      setActiveNav(action === 'remark' ? '采集箱备注' : '编辑产品')
+      setActiveNav(action === 'remark' ? '采集箱' : '普通编辑')
       setDemoStage('login_success')
       setInteractionMessage(action === 'remark'
         ? `已调用真实采集箱备注动作，目标备注：${draftNoteText}`
@@ -258,9 +295,13 @@ export default function App() {
   const loginSummary = getInteractiveLoginSummary(systemLoginSummary, demoStage, manualMode)
   const coverageData = buildCoverageData(templates, currentStore)
   const selectedTemplateRows = buildTemplateRows(templates)
+  const executionConfig = useMemo(
+    () => buildExecutionConfig(templates, currentStore, currentProduct, selectedTask),
+    [templates, currentStore, currentProduct, selectedTask],
+  )
   const pageTitle = browserMode === 'evidence'
-    ? '证据解读视图'
-    : liveStatus?.product_page?.title || loginState?.page_title || liveStatus?.title || '店小秘官网 / 登录页'
+    ? '保存报告与证据视图'
+    : liveStatus?.product_page?.title || loginState?.page_title || liveStatus?.title || '店小秘登录态 / 半托管保存页'
   const pageUrl = browserMode === 'evidence'
     ? `demo://focus/${encodeURIComponent(activeNav)}`
     : liveStatus?.product_page?.url || loginState?.page_url || liveStatus?.final_url || 'https://www.dianxiaomi.com/'
@@ -274,15 +315,17 @@ export default function App() {
         <div className="brand">
           <div className="logo">DX</div>
           <div>
-            <h1>店小秘真实流程演示台</h1>
-            <small>从用户视角组织登录、认领、采集箱、编辑与发布，不再用猜测页面做演示</small>
+            <h1>V1 半托管保存执行器</h1>
+            <small>登录态、采集箱、领取、普通编辑、半托管、保存、报告；只保存不发布</small>
           </div>
         </div>
         <div className="status-row">
-          <div className="chip ok">设计原则：<strong>先真实，再自动化</strong></div>
+          <div className="chip ok">执行原则：<strong>只保存不发布</strong></div>
           <div className={`chip ${loginSummary.tagClass}`}>登录阶段：<strong>{loginSummary.stageLabel}</strong></div>
           <div className={`chip ${stores.length ? 'ok' : 'warn'}`}>当前店铺：<strong>{currentStore?.name ?? 'Dang Kang'}</strong></div>
           <div className="chip">模板命中：<strong>{selectedTemplateRows.length || 5} 项</strong></div>
+          <div className="chip">V1覆盖：<strong>{coverageData.length} 域</strong></div>
+          <div className="chip">报告：<strong>{reports.length} 份</strong></div>
           <div className="chip">人工协作：<strong>{pendingManualCount} 项</strong></div>
         </div>
       </header>
@@ -309,7 +352,7 @@ export default function App() {
           {!sidebarCollapsed && (
             <div className="sidebar-note">
               <strong>产品经理视角</strong>
-              <span>桌面版最终会交付 exe，必须让客户首屏就看懂，不靠滚动找信息。</span>
+              <span>V1 是半托管保存执行器，客户首屏必须看懂当前批次不会发布。</span>
               <span>当前焦点：{activeNav}</span>
             </div>
           )}
@@ -343,7 +386,7 @@ export default function App() {
 
             <div className="workspace-card">
               <div className="section-head">
-                <h2>业务概览</h2>
+                <h2>保存执行概览</h2>
               </div>
               <div className="cards cards-compact">
                 <div className="card"><div className="k">商品</div><div className="v">{importedCount}</div></div>
@@ -353,14 +396,59 @@ export default function App() {
               </div>
               <div className="mini-list">
                 <div><strong>店铺：</strong>{currentStore?.name ?? 'Dang Kang'}</div>
-                <div><strong>平台：</strong>速卖通 / 店小秘采集链路</div>
-                <div><strong>任务：</strong>{selectedTask?.name ?? '速卖通真实流程演示批次'}</div>
+                <div><strong>平台：</strong>速卖通 / 店小秘半托管保存链路</div>
+                <div><strong>任务：</strong>{selectedTask?.name ?? 'V1 半托管保存执行批次'}</div>
+                <div><strong>模式：</strong>{selectedTask?.mode ?? 'single_save'} / {selectedTask?.publish_scene ?? 'SMT_SEMI_MANAGED_SAVE_ONLY'}</div>
+              </div>
+            </div>
+
+            <div className="workspace-card workspace-card--wide config-review-card">
+              <div className="section-head">
+                <h2>启动前配置确认</h2>
+                <span className="tag success">{executionConfig.publishPolicy}</span>
+              </div>
+              <div className="config-grid">
+                <div className="config-item">
+                  <span>店铺 / 类目</span>
+                  <strong>{executionConfig.storeName}</strong>
+                  <small>{executionConfig.categoryName}，本批次只面向 Dang Kang 店铺执行</small>
+                </div>
+                <div className="config-item">
+                  <span>类目模板 / 引用模板</span>
+                  <strong>{executionConfig.categoryTemplate}</strong>
+                  <small>{executionConfig.referenceTemplate}</small>
+                </div>
+                <div className="config-item">
+                  <span>图片银行欧盟外包装</span>
+                  <strong>{executionConfig.euOuterPackageFilename}</strong>
+                  <small>{executionConfig.imageBankSource}</small>
+                </div>
+                <div className="config-item">
+                  <span>物流模板</span>
+                  <strong>{executionConfig.logisticsTemplate}</strong>
+                  <small>货运：{executionConfig.freightTemplates.join(' / ')}</small>
+                </div>
+                <div className="config-item">
+                  <span>半托管 JIT 库存</span>
+                  <strong>{executionConfig.jitStock}</strong>
+                  <small>半托管货品库存，启动后按模板填入</small>
+                </div>
+                <div className="config-item">
+                  <span>条码策略</span>
+                  <strong>{executionConfig.barcodeStrategy}</strong>
+                  <small>SKU / 半托管条码保持留空</small>
+                </div>
+              </div>
+              <div className="config-guard">
+                <span className="tag success">保存模式：{executionConfig.saveMode}</span>
+                <span className="tag">场景：{executionConfig.publishScene}</span>
+                <span className="tag warning">服务模板：{executionConfig.serviceTemplates.join(' / ')}</span>
               </div>
             </div>
 
             <div className="workspace-card">
               <div className="section-head">
-                <h2>采集箱动作</h2>
+                <h2>采集箱 / 领取</h2>
               </div>
               <div className="field">
                 <label>备注内容</label>
@@ -371,24 +459,24 @@ export default function App() {
                 <button className="btn primary" type="button" onClick={() => handleDraftBoxAction('edit')} disabled={busy}>进编辑界面</button>
               </div>
               <div className="mini-list">
-                <div><strong>备注动作：</strong>更多 → 添加备注</div>
+                <div><strong>备注动作：</strong>更多 → 添加备注，标记半托管保存批次</div>
                 <div><strong>编辑动作：</strong>编辑 → 跳过，去编辑产品</div>
               </div>
             </div>
 
             <div className="workspace-card">
               <div className="section-head">
-                <h2>模板 / 合规</h2>
+                <h2>报告</h2>
               </div>
               <div className="mini-list">
-                {coverageData.slice(0, 4).map((item) => (
-                  <div key={item.title}><strong>{item.title}：</strong>{item.status}</div>
+                {(reports.length ? reports : mockReports).slice(0, 4).map((report) => (
+                  <div key={String(report.id)}><strong>{humanReportTitle(report)}：</strong>{humanReportSummary(report)}</div>
                 ))}
               </div>
               <div className="mini-tags">
-                {selectedTemplateRows.slice(0, 4).map((template, idx) => (
-                  <span key={`${template.template_name}-${idx}`} className="tag">{template.template_name}</span>
-                ))}
+                <span className="tag success">只保存不发布</span>
+                <span className="tag">reports: {reports.length}</span>
+                <span className="tag">保存后复盘</span>
               </div>
             </div>
 
@@ -406,7 +494,7 @@ export default function App() {
               </div>
               <div className="button-row compact-row">
                 <button className="btn secondary" type="button" onClick={bootstrapDemo} disabled={busy}>{busy ? '准备中...' : '准备演示数据'}</button>
-                <button className="btn secondary" type="button" onClick={startSelectedTask} disabled={!selectedTask || busy}>开始执行</button>
+                <button className="btn secondary" type="button" onClick={startSelectedTask} disabled={!selectedTask || busy}>开始只保存执行</button>
                 <button className="btn secondary" type="button" onClick={() => handleBrowserModeChange('live')}>实时截图</button>
                 <button className="btn secondary" type="button" onClick={() => handleBrowserModeChange('evidence')}>证据模式</button>
               </div>
@@ -420,6 +508,7 @@ export default function App() {
             <div className="browser-badges">
               <span className="chip">页面名称：<strong>{pageTitle}</strong></span>
               <span className="chip">当前任务：<strong>{selectedTask ? `批次#${selectedTask.id}` : '未创建'}</strong></span>
+              <span className="chip ok">发布策略：<strong>只保存不发布</strong></span>
               <span className={`chip ${selectedTask?.status === 'running' || selectedTask?.status === 'completed' ? 'ok' : 'warn'}`}>执行状态：<strong>{humanTaskStatus(selectedTask?.status ?? 'draft')}</strong></span>
               <span className={`chip ${loginSummary.tagClass}`}>登录进度：<strong>{loginSummary.stageLabel}</strong></span>
             </div>
@@ -429,7 +518,7 @@ export default function App() {
             <button className="btn secondary" type="button" onClick={() => handleBrowserModeChange('live')}>只看真实截图</button>
             <button className="btn secondary" type="button" onClick={() => handleBrowserModeChange('evidence')}>查看证据模式</button>
             <button className="btn secondary" type="button" onClick={() => setInteractionMessage(`已请求重试当前步骤：${currentStep?.stepName ?? activeNav}`)}>重试当前步骤</button>
-            <button className="btn secondary" type="button" onClick={() => setInteractionMessage('已记录当前证据视图，方便后续回放与问题复盘。')}>记录证据</button>
+            <button className="btn secondary" type="button" onClick={() => setInteractionMessage('已记录当前证据视图，保存后报告会用于回放与问题复盘。')}>记录证据</button>
             <button className="btn warn" type="button" onClick={handleToggleManualMode}>{manualMode ? '退出人工接管' : '人工接管'}</button>
           </div>
 
@@ -447,13 +536,14 @@ export default function App() {
                   <br />当前动作：{currentStep?.stepName ?? '等待从真实登录开始'}
                   <br />字段域：{humanField(currentStep?.fieldDomain)}
                   <br />来源说明：真实页面读取 + 模板引用 + 用户协作输入
+                  <br />发布策略：只保存不发布
                 </div>
 
                 {activeScreenshotUrl ? (
                   <img src={activeScreenshotUrl} alt="真实店小秘执行截图" style={{ width: '100%', borderRadius: 18, display: 'block' }} />
                 ) : (
                   <div className="dxm-page dxm-page--login">
-                    <div className="dxm-title">店小秘 · 官网登录与流程协作视图</div>
+                    <div className="dxm-title">店小秘 · 登录态与半托管保存协作视图</div>
                     <div className="login-placeholder">
                       <div className="login-column">
                         <div className="dxm-field dxm-highlight"><small>账号</small>已由 AI 填写（演示态）</div>
@@ -514,13 +604,13 @@ export default function App() {
                   </div>
                 </div>
                 <div className="manual-alert">
-                  产品经理判断标准：用户只看这一栏，也应该知道现在页面在哪、系统在干什么、下一步该谁动手。
+                  产品经理判断标准：用户只看这一栏，也应该知道现在页面在哪、系统在干什么，以及本次只保存不发布。
                 </div>
               </div>
             </div>
           </div>
 
-          <div className="muted">不再展示猜测型“速卖通创建产品”假页面。优先展示真实截图；没接上实时数据时，展示的是围绕真实登录协作设计的过渡视图。</div>
+          <div className="muted">V1 不执行发布动作。优先展示真实截图；没接上实时数据时，展示围绕登录态、采集箱、领取、普通编辑、半托管、保存、报告的过渡视图。</div>
         </section>
       </main>
 
@@ -549,27 +639,82 @@ const mockTemplates = [
 ]
 
 const mockLogs = [
-  { level: 'success', message: '已按真实流程重排演示界面，登录协作区放到首屏' },
-  { level: 'success', message: 'RPA 实时区优先展示真实截图与当前 URL，不再默认展示假想创建页' },
+  { level: 'success', message: '已按 V1 半托管保存链路重排演示界面，登录态放到首屏' },
+  { level: 'success', message: 'RPA 实时区优先展示真实截图与当前 URL，执行策略为只保存不发布' },
   { level: 'warning', message: '验证码等待态仍需后端提供更细粒度状态' },
-  { level: 'warning', message: '模板引用区已改成用户可读结构，等待接入实时字段命中结果' },
-  { level: 'warning', message: '下一步建议：补 login/start、login/continue 和 runtime state 接口' },
+  { level: 'warning', message: '报告区已兼容 /api/reports 空数组，等待后端接入真实报告' },
+  { level: 'warning', message: '下一步建议：补 reports、login/start、login/continue 和 runtime state 接口' },
 ]
 const mockTimes = ['10:31:12', '10:31:18', '10:31:24', '10:31:33', '10:32:08']
+const mockReports: Report[] = [
+  { id: 'local-save-policy', title: '保存策略', status: 'draft', summary: 'single_save / SMT_SEMI_MANAGED_SAVE_ONLY，只保存不发布' },
+  { id: 'local-step-report', title: '步骤报告', status: 'draft', summary: '登录态、采集箱、领取、普通编辑、半托管、保存、报告' },
+  { id: 'local-evidence', title: '证据报告', status: 'draft', summary: '保存后汇总截图、日志和人工协作原因' },
+]
+
+function buildExecutionConfig(templates: Template[], store?: Store, product?: Product, task?: Task | null): ExecutionConfig {
+  const categoryTemplate = findTemplate(templates, 'category')
+  const logisticsTemplate = findTemplate(templates, 'logistics')
+  const imageTemplate = findTemplate(templates, 'image')
+  const skuTemplate = findTemplate(templates, 'sku')
+  const semiManagedTemplate = findTemplate(templates, 'semi_managed')
+  const taskPayload = asRecord(task?.payload)
+  const taskImage = asRecord(taskPayload.image)
+  const categoryPayload = asRecord(categoryTemplate?.payload)
+  const categoryData = asRecord(categoryPayload.category)
+  const categoryBinding = asRecord(categoryPayload.binding)
+  const logisticsData = asRecord(asRecord(logisticsTemplate?.payload).logistics)
+  const imageData = asRecord(asRecord(imageTemplate?.payload).image)
+  const skuData = asRecord(asRecord(skuTemplate?.payload).sku)
+  const semiManagedData = asRecord(asRecord(semiManagedTemplate?.payload).semi_managed)
+
+  return {
+    storeName: asText(taskPayload.store_name, store?.name ?? asText(categoryBinding.store_name, 'Dang Kang')),
+    categoryName: asText(taskPayload.category_name, product?.category_name ?? asText(categoryBinding.category_name, '立牌类谷子')),
+    categoryTemplate: categoryTemplate?.template_name ?? '立牌类谷子属性模板',
+    referenceTemplate: `类目：${asText(categoryData.category_match, 'ACG Stand')} / 引用：${asTextList(categoryData.attribute_template_priorities, ['立牌类谷子']).join(' / ')}`,
+    imageBankSource: asText(imageData.source, '图片银行（速卖通）'),
+    euOuterPackageFilename: asText(taskImage.eu_outer_package_filename, product?.image?.eu_outer_package_filename ?? asText(imageData.eu_outer_package_filename, '微信图片_202504092228421.jpg')),
+    logisticsTemplate: logisticsTemplate?.template_name ?? '包装物流模板',
+    freightTemplates: asTextList(logisticsData.freight_templates, ['石油40g普货包裹.', '40g普货包裹']),
+    serviceTemplates: asTextList(logisticsData.service_templates, ['Service Template for New Sellers']),
+    jitStock: asText(semiManagedData.jit_stock, '100'),
+    barcodeStrategy: asText(semiManagedData.barcode_strategy, asText(skuData.barcode_strategy, '留空')),
+    saveMode: task?.mode ?? 'single_save',
+    publishScene: task?.publish_scene ?? 'SMT_SEMI_MANAGED_SAVE_ONLY',
+    publishPolicy: '只保存不发布',
+  }
+}
+
+function findTemplate(templates: Template[], templateType: string) {
+  return templates.find((item) => item.template_type === templateType && item.is_enabled) ?? templates.find((item) => item.template_type === templateType)
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function asText(value: unknown, fallback: string) {
+  return typeof value === 'string' && value.trim() ? value : fallback
+}
+
+function asTextList(value: unknown, fallback: string[]) {
+  return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : fallback
+}
 
 function buildCoverageData(templates: Template[], store?: Store) {
   const enabledCount = templates.filter((item) => item.is_enabled).length
   return [
     {
       title: '登录协作域',
-      content: '官网登录、验证码等待、记住密码、登录结果回显',
+      content: '登录态、验证码等待、记住密码、登录结果回显',
       why: '用户要先看懂系统停在哪，才敢继续协作',
       status: '前端已重构',
       tagClass: 'success',
     },
     {
       title: '店铺与流程域',
-      content: `${store?.name ?? 'Dang Kang'} / 数据采集 / 采集箱 / 编辑 / 发布`,
+      content: `${store?.name ?? 'Dang Kang'} / 采集箱 / 领取 / 普通编辑 / 半托管 / 保存 / 报告`,
       why: '真实业务路径比抽象功能导航更好理解',
       status: '已切换真实语义',
       tagClass: 'success',
@@ -624,8 +769,8 @@ function getInteractiveLoginSummary(summary: LoginSummary, demoStage: DemoStage,
     return {
       stage: 'logged_in',
       title: '登录协作已完成，进入业务流',
-      detail: '演示台已切到登录后的业务观察视角，后面要重点看数据采集、认领、采集箱和编辑页。',
-      nextAction: '继续跟踪真实页面截图、步骤树和模板命中结果。',
+      detail: '演示台已切到登录后的业务观察视角，后面要重点看采集箱、领取、普通编辑、半托管、保存和报告。',
+      nextAction: '继续跟踪真实页面截图、步骤树、模板命中和保存报告。',
       userAction: '当前主要是确认系统动作是否与真实页面一致。',
       tagClass: 'success',
       stageLabel: '已登录',
@@ -676,8 +821,8 @@ function getLoginSummary(loginState: any, liveStatus: any): LoginSummary {
     return {
       stage: 'logged_in',
       title: '已进入真实店小秘后台',
-      detail: '当前已检测到真实登录态，可以继续进入产品、数据采集、采集箱和编辑流程。',
-      nextAction: '继续同步当前页面状态，并把认领 / 备注 / 编辑动作实时展示出来。',
+      detail: '当前已检测到真实登录态，可以继续进入采集箱、领取、普通编辑、半托管保存流程。',
+      nextAction: '继续同步当前页面状态，并把领取 / 备注 / 编辑 / 保存动作实时展示出来。',
       userAction: '用户当前主要是观察与确认；如遇验证码失效或结构变化，再人工接管。',
       tagClass: 'success',
       stageLabel: '已登录',
@@ -687,7 +832,7 @@ function getLoginSummary(loginState: any, liveStatus: any): LoginSummary {
     return {
       stage: 'not_started',
       title: '还没有建立真实登录会话',
-      detail: '系统当前只知道还没拿到店小秘真实会话，符合“必须从官网登录开始”的新要求。',
+      detail: '系统当前只知道还没拿到店小秘真实会话，符合“必须先确认登录态”的新要求。',
       nextAction: '打开店小秘官网，先填账号密码，再进入验证码等待态。',
       userAction: '用户需要在真实浏览器里完成验证码，随后点击继续登录。',
       tagClass: 'warning',
@@ -718,12 +863,13 @@ function getLoginSummary(loginState: any, liveStatus: any): LoginSummary {
 
 function buildSteps(currentStep: LiveEvent | undefined, taskStatus?: string, liveStatus?: any): StepMeta[] {
   const base = [
-    ['login', '官网登录', '打开店小秘官网，填写账号密码并等待验证码'],
-    ['data_acquisition', '进入数据采集', '产品 → 数据采集 → 速卖通'],
-    ['claim', '认领到采集箱', '选择店铺并执行认领，回看成功弹窗'],
-    ['remark', '采集箱备注', '采集箱 → 更多 → 添加备注（AI认领）'],
-    ['edit', '编辑产品', '跳过分类引导，进入真实编辑页'],
-    ['publish', '待发布 / 发布', '保存并移入待发布，确认发布条件'],
+    ['login', '登录态', '确认店小秘真实会话，必要时等待验证码'],
+    ['draft_box', '采集箱', '进入采集箱并确认待处理商品'],
+    ['claim', '领取', '选择店铺并领取到采集箱，回看成功弹窗'],
+    ['edit', '普通编辑', '跳过分类引导，进入真实编辑页并完成基础字段'],
+    ['semi_managed', '半托管', '补齐半托管服务、含税报价和合规字段'],
+    ['save', '保存', '执行保存动作，只保存不发布'],
+    ['report', '报告', '生成保存结果、证据和异常复盘报告'],
   ] as const
 
   const currentCode = mapCurrentCode(currentStep?.stepCode, liveStatus)
@@ -749,11 +895,38 @@ function buildSteps(currentStep: LiveEvent | undefined, taskStatus?: string, liv
 }
 
 function mapCurrentCode(stepCode?: string, liveStatus?: any) {
-  if (liveStatus?.logged_in && !stepCode) return 'data_acquisition'
+  if (liveStatus?.logged_in && !stepCode) return 'draft_box'
   const mapping: Record<string, string> = {
+    PRECHECK_CONFIG: 'login',
+    PRECHECK_SESSION: 'login',
+    PRECHECK_SELECTOR_PROFILE: 'login',
+    PRECHECK_PUBLISH_GUARD: 'login',
+    OPEN_DRAFT_LIST: 'draft_box',
+    FIND_PRODUCT: 'draft_box',
+    ITEM_LOCKING: 'claim',
+    ITEM_LOCKED: 'claim',
+    CLAIM_PRODUCT: 'claim',
+    VERIFY_LIST_OWNERSHIP: 'claim',
+    OPEN_EDIT_PAGE: 'edit',
+    VERIFY_EDIT_OWNERSHIP: 'edit',
+    FILL_BASE_INFO: 'edit',
+    FILL_VARIANTS: 'edit',
+    FILL_MEDIA: 'edit',
+    FILL_COMPLIANCE: 'edit',
+    ENABLE_SEMI_MANAGED: 'semi_managed',
+    OPEN_SEMI_MANAGED_PAGE: 'semi_managed',
+    FILL_SEMI_GOODS: 'semi_managed',
+    FILL_SEMI_VARIANTS: 'semi_managed',
+    PRE_SAVE_GUARD_CHECK: 'save',
+    SAVE_ONLY: 'save',
+    VERIFY_SAVE_RESULT: 'save',
+    VERIFY_NOT_PUBLISHED: 'save',
+    WRITE_REPORT: 'report',
+    RELEASE_LOCK: 'report',
+    DONE: 'report',
     check_login: 'login',
     open_home: 'login',
-    open_create_page: 'data_acquisition',
+    open_create_page: 'draft_box',
     switch_store: 'claim',
     load_templates: 'edit',
     fill_title: 'edit',
@@ -762,18 +935,37 @@ function mapCurrentCode(stepCode?: string, liveStatus?: any) {
     fill_sku_price: 'edit',
     select_shipping: 'edit',
     select_shipping_template: 'edit',
-    compliance: 'edit',
-    save_draft: 'publish',
+    compliance: 'semi_managed',
+    save_draft: 'save',
+    single_save: 'save',
+    report: 'report',
   }
   return mapping[stepCode ?? ''] || 'login'
 }
 
 function humanTaskStatus(status: string) {
-  return ({ draft: '待启动', running: '运行中', completed: '已完成', paused: '已暂停', failed: '失败', cancelled: '已停止' } as Record<string, string>)[status] ?? status
+  return ({ draft: '待启动', running: '运行中', completed: '已完成', partial_success: '部分成功', paused: '已暂停', failed: '失败', cancelled: '已停止' } as Record<string, string>)[status] ?? status
 }
 
 function humanField(domain?: string) {
-  return ({ title: '标题', category: '类目属性', media: '图片 / 视频', pricing: 'SKU 与价格', shipping: '物流与运费', result: '保存与发布', session: '登录态', navigation: '页面跳转' } as Record<string, string>)[domain ?? ''] ?? '登录与流程协作'
+  return ({
+    config: '配置预检',
+    publish_guard: '发布隔离',
+    ownership: '商品归属',
+    editor: '普通编辑页',
+    base_info: '标题与基础属性',
+    variants: '变种表格',
+    semi_goods: '半托管货品',
+    semi_variants: '半托管变种',
+    title: '标题',
+    category: '类目属性',
+    media: '图片 / 视频',
+    pricing: 'SKU 与价格',
+    shipping: '物流与运费',
+    result: '保存结果',
+    session: '登录态',
+    navigation: '页面跳转',
+  } as Record<string, string>)[domain ?? ''] ?? '登录与流程协作'
 }
 
 function humanLogStatus(level: string) {
@@ -787,4 +979,26 @@ function toArtifactUrl(value?: string | null) {
   const idx = value.indexOf(marker)
   if (idx >= 0) return '/artifacts/' + value.slice(idx + marker.length)
   return value
+}
+
+function humanReportTitle(report: Report) {
+  return String(report.title ?? report.report_type ?? `报告 #${report.id}`)
+}
+
+function humanReportSummary(report: Report) {
+  const summary = report.summary
+  if (typeof summary === 'string') return summary
+  if (summary && typeof summary === 'object') {
+    const data = summary as Record<string, unknown>
+    const status = data.status ? humanTaskStatus(String(data.status)) : humanTaskStatus(String(report.status ?? 'draft'))
+    const claim = data.claim_mark ? `，领取标记 ${data.claim_mark}` : ''
+    const published = data.published === false ? '，未发布' : ''
+    return `${status}${claim}${published}`
+  }
+  const saveResult = report.save_result
+  if (saveResult && typeof saveResult === 'object') {
+    const data = saveResult as Record<string, unknown>
+    return String(data.msg ?? data.message ?? humanTaskStatus(String(report.status ?? 'draft')))
+  }
+  return humanTaskStatus(String(report.status ?? 'draft'))
 }

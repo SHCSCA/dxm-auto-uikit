@@ -32,9 +32,11 @@ class ProductCreate(BaseModel):
 class TaskCreate(BaseModel):
     name: str
     store_id: int | None = None
-    mode: str = "save_draft"
-    publish_scene: str = "POP"
+    mode: str = "single_save"
+    publish_scene: str = "SMT_SEMI_MANAGED_SAVE_ONLY"
     product_ids: list[int] = Field(default_factory=list)
+    claim_mark: str = "AI认领"
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProductImportRequest(BaseModel):
@@ -57,6 +59,14 @@ class LoginNavigateRequest(BaseModel):
 class DraftBoxActionRequest(BaseModel):
     action: str
     note_text: str | None = None
+    product_query: str | None = None
+    store_name: str | None = None
+
+
+class SelectorProfileValidateRequest(BaseModel):
+    url: str
+    body_text: str = ""
+    visible_buttons: list[str] = Field(default_factory=list)
 
 
 class AIConfigUpdateRequest(BaseModel):

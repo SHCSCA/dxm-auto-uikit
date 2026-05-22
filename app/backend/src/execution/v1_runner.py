@@ -1,0 +1,790 @@
+from __future__ import annotations
+
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
+
+from src.core.config import SCREENSHOT_DIR
+from src.execution.dxm_live import DxmLiveClient
+from src.repository import Repository
+from src.services.config_validation import ConfigValidationService
+from src.services.ownership_lock import OwnershipLockService
+from src.services.publish_guard import PublishGuardService
+from src.state_machine.contracts import StateName, normalize_execution_mode
+from src.utils import now_iso
+
+
+V1_STEPS = [
+    (StateName.PRECHECK_CONFIG, "启动前配置校验", "config"),
+    (StateName.PRECHECK_SESSION, "检查店小秘登录态", "session"),
+    (StateName.PRECHECK_PUBLISH_GUARD, "发布隔离预检", "publish_guard"),
+    (StateName.OPEN_DRAFT_LIST, "进入速卖通采集箱", "navigation"),
+    (StateName.FIND_PRODUCT, "定位目标商品", "ownership"),
+    (StateName.ITEM_LOCKING, "创建商品归属锁", "ownership"),
+    (StateName.CLAIM_PRODUCT, "写入领取备注", "ownership"),
+    (StateName.VERIFY_LIST_OWNERSHIP, "校验采集箱归属", "ownership"),
+    (StateName.OPEN_EDIT_PAGE, "打开普通编辑页", "editor"),
+    (StateName.VERIFY_EDIT_OWNERSHIP, "校验编辑页归属", "ownership"),
+    (StateName.FILL_BASE_INFO, "填写标题与基础属性", "base_info"),
+    (StateName.FILL_VARIANTS, "填写普通变种表格", "variants"),
+    (StateName.FILL_MEDIA, "处理图片银行与详情图", "media"),
+    (StateName.FILL_COMPLIANCE, "填写合规与详情字段", "compliance"),
+    (StateName.ENABLE_SEMI_MANAGED, "勾选半托管服务参与", "semi_managed"),
+    (StateName.OPEN_SEMI_MANAGED_PAGE, "进入半托管编辑页", "semi_managed"),
+    (StateName.FILL_SEMI_GOODS, "填写半托管货品信息", "semi_goods"),
+    (StateName.FILL_SEMI_VARIANTS, "填写半托管变种信息", "semi_variants"),
+    (StateName.PRE_SAVE_GUARD_CHECK, "保存前发布隔离复核", "publish_guard"),
+    (StateName.SAVE_ONLY, "只点击保存", "save"),
+    (StateName.VERIFY_SAVE_RESULT, "校验保存成功", "result"),
+    (StateName.VERIFY_NOT_PUBLISHED, "记录未发布证明", "result"),
+    (StateName.WRITE_REPORT, "生成商品执行报告", "report"),
+    (StateName.RELEASE_LOCK, "释放商品归属锁", "ownership"),
+]
+
+MODE_LAST_STATE = {
+    "probe": StateName.PRECHECK_PUBLISH_GUARD,
+    "dry_run": StateName.PRECHECK_CONFIG,
+    "claim_only": StateName.VERIFY_LIST_OWNERSHIP,
+    "single_save": StateName.RELEASE_LOCK,
+    "batch_save": StateName.RELEASE_LOCK,
+}
+
+DEFAULT_TEMPLATE_TYPES = {
+    "category",
+    "sku",
+    "pricing",
+    "logistics",
+    "image",
+    "compliance",
+    "semi_managed",
+}
+
+
+class V1TaskRunner:
+    def __init__(self, repo: Repository, manager, workflow_adapter: Any | None = None) -> None:
+        self.repo = repo
+        self.manager = manager
+        self.workflow_adapter = workflow_adapter
+        self._workflow_executor = ThreadPoolExecutor(max_workers=1) if workflow_adapter is not None else None
+        self.live = DxmLiveClient()
+        self.publish_guard = PublishGuardService()
+        self.config_validation = ConfigValidationService()
+        self.ownership_lock = OwnershipLockService()
+
+    async def run_task(self, task_id: int) -> None:
+        task = self.repo.get_task(task_id)
+        if not task:
+            return
+        try:
+            mode = normalize_execution_mode(task.get("mode") or task.get("payload", {}).get("execution_mode") or "single_save").value
+        except ValueError as exc:
+            self.repo.update_task_status(task_id, "failed", completed_jobs=0, failed_jobs=len(task.get("jobs", [])))
+            for job in task.get("jobs", []):
+                self.repo.update_job(
+                    job["id"],
+                    status="failed",
+                    current_step_code="FAILED",
+                    current_step_name="禁止的执行模式",
+                    error_code="E999",
+                    error_message=str(exc),
+                )
+                self.repo.add_exception(
+                    task_id,
+                    job["id"],
+                    "E999",
+                    "publish_guard",
+                    "禁止的执行模式",
+                    str(exc),
+                    "改为 probe、dry_run、claim_only、single_save 或 batch_save。",
+                )
+            await self.manager.broadcast(task_id, {"type": "task_status", "status": "failed", "taskId": task_id})
+            return
+        self.repo.update_task_status(task_id, "running")
+        await self.manager.broadcast(task_id, {"type": "task_status", "status": "running", "taskId": task_id, "mode": mode})
+
+        completed = 0
+        failed = 0
+        for job in task["jobs"]:
+            success = await self._run_job(task, job, mode)
+            if success:
+                completed += 1
+            else:
+                failed += 1
+            self.repo.update_task_status(task_id, "running", completed_jobs=completed, failed_jobs=failed)
+            await self.manager.broadcast(task_id, {
+                "type": "job_completed",
+                "taskId": task_id,
+                "jobId": job["id"],
+                "completedJobs": completed,
+                "failedJobs": failed,
+            })
+
+        final_status = "completed" if failed == 0 else ("partial_success" if completed else "failed")
+        self.repo.update_task_status(task_id, final_status, completed_jobs=completed, failed_jobs=failed)
+        await self.manager.broadcast(task_id, {
+            "type": "task_status",
+            "taskId": task_id,
+            "status": final_status,
+            "completedJobs": completed,
+            "failedJobs": failed,
+        })
+
+    async def _run_job(self, task: dict[str, Any], job: dict[str, Any], mode: str) -> bool:
+        task_id = task["id"]
+        job_id = job["id"]
+        product_id = job.get("product_id")
+        product = self._product(product_id)
+        execution_defaults = self._execution_defaults(task, product)
+        lock_token: str | None = None
+        claim_mark = self._claim_mark(task)
+        filled_fields: list[str] = []
+        empty_fields: list[str] = []
+        evidence_paths: list[str] = []
+        workflow_results: list[dict[str, Any]] = []
+        last_state = MODE_LAST_STATE[mode]
+
+        self.repo.update_job(job_id, status="running", current_step_code="PRECHECK_CONFIG", current_step_name="启动前配置校验")
+        self.repo.add_log(task_id, job_id, "info", "V1 执行开始", {"mode": mode, "product_id": product_id})
+
+        try:
+            if self.workflow_adapter is None and mode in {"claim_only", "single_save", "batch_save"}:
+                raise V1ExecutionError("E901", "缺少真实工作流适配器", f"{mode} requires workflow_adapter")
+
+            for state_name, step_name, field_domain in self._steps_for_mode(mode):
+                self._guard_step(task, job, state_name, claim_mark, product)
+                self.repo.update_job(job_id, status="running", current_step_code=state_name.value, current_step_name=step_name)
+                evidence_path = self._write_evidence(task_id, job_id, state_name)
+                evidence_paths.append(str(evidence_path))
+                self.repo.add_evidence(task_id, job_id, "state_snapshot", str(evidence_path), {
+                    "state": state_name.value,
+                    "field_domain": field_domain,
+                    "mode": mode,
+                })
+                self.repo.add_log(task_id, job_id, "info", f"执行步骤：{step_name}", {
+                    "state": state_name.value,
+                    "field_domain": field_domain,
+                    "mode": mode,
+                })
+
+                if state_name == StateName.ITEM_LOCKING:
+                    lock = self.ownership_lock.acquire_lock(
+                        task_id=task_id,
+                        job_id=job_id,
+                        product_id=product_id or job_id,
+                        store_name=self._store_name(task),
+                        source_title=self._source_title(product_id),
+                        claim_mark_base=task.get("payload", {}).get("claim_mark", "AI认领"),
+                    )
+                    if lock["conflict"]:
+                        raise V1ExecutionError("E202", "商品归属锁冲突", lock["reason"])
+                    lock_token = lock["lock_token"]
+                    claim_mark = lock["claim_mark"]
+
+                if state_name == StateName.VERIFY_LIST_OWNERSHIP and lock_token:
+                    verified = self.ownership_lock.mark_page_claim_verified(lock_token, claim_mark)
+                    if verified["conflict"]:
+                        raise V1ExecutionError("E202", "页面领取标记不一致", verified["reason"])
+
+                workflow_result = await self._run_workflow_action_async(task, job, state_name, claim_mark, execution_defaults)
+                if workflow_result:
+                    workflow_results.append(workflow_result)
+                    self.repo.add_evidence(task_id, job_id, "workflow_action", workflow_result.get("screenshot_url"), {
+                        "state": state_name.value,
+                        "action": workflow_result.get("action"),
+                        "stage": workflow_result.get("stage"),
+                        "page_title": workflow_result.get("page_title"),
+                        "page_url": workflow_result.get("page_url"),
+                        "ok": workflow_result.get("ok"),
+                        "product_query": workflow_result.get("product_query"),
+                        "store_name": workflow_result.get("store_name"),
+                        "save_result": workflow_result.get("save_result"),
+                    })
+
+                if state_name in {
+                    StateName.FILL_BASE_INFO,
+                    StateName.FILL_VARIANTS,
+                    StateName.FILL_MEDIA,
+                    StateName.FILL_COMPLIANCE,
+                    StateName.FILL_SEMI_GOODS,
+                    StateName.FILL_SEMI_VARIANTS,
+                }:
+                    filled_fields.append(field_domain)
+
+                if state_name == StateName.PRE_SAVE_GUARD_CHECK:
+                    result = self.publish_guard.check(
+                        intended_action="save",
+                        target_text="保存",
+                        current_url="https://www.dianxiaomi.com/web/smt/editFromSmt",
+                        visible_texts=["保存"],
+                        modal_texts=[],
+                        network_urls=["https://www.dianxiaomi.com/api/smt/product/save"],
+                    )
+                    if not result["allowed"]:
+                        raise V1ExecutionError("E999", "发布风险被拦截", "; ".join(result["reasons"]))
+
+                if state_name == StateName.RELEASE_LOCK and lock_token:
+                    self.ownership_lock.release_lock(lock_token)
+                    lock_token = None
+
+                await self.manager.broadcast(task_id, {
+                    "type": "step_update",
+                    "taskId": task_id,
+                    "jobId": job_id,
+                    "productId": product_id,
+                    "stepCode": state_name.value,
+                    "stepName": step_name,
+                    "fieldDomain": field_domain,
+                    "screenshotPath": str(evidence_path),
+                    "timestamp": now_iso(),
+                })
+                await asyncio.sleep(0.03)
+
+                if state_name == last_state:
+                    break
+
+            if mode in {"probe", "dry_run", "claim_only"}:
+                empty_fields.append("未进入商品保存字段，当前模式不需要填写")
+            if mode in {"single_save", "batch_save"}:
+                empty_fields.append("货品条码：配置允许留空")
+
+            summary = self._build_summary(task, job, mode, claim_mark, filled_fields, empty_fields, evidence_paths, workflow_results, execution_defaults)
+            save_result = self._save_result_for_mode(mode, workflow_results)
+            self.repo.add_report(task_id, job_id, product_id, "success", False, save_result, summary)
+            self.repo.update_job(
+                job_id,
+                status="succeeded",
+                current_step_code="DONE",
+                current_step_name="V1 执行完成",
+                error_code=None,
+                error_message=None,
+            )
+            self.repo.add_log(task_id, job_id, "success", "V1 商品流程完成", {"mode": mode, "published": False})
+            return True
+        except Exception as exc:
+            if lock_token:
+                self.ownership_lock.release_lock(lock_token)
+            error = exc if isinstance(exc, V1ExecutionError) else V1ExecutionError("E999", "V1 执行失败", str(exc))
+            self.repo.update_job(
+                job_id,
+                status="failed",
+                current_step_code="FAILED",
+                current_step_name="执行失败",
+                error_code=error.error_code,
+                error_message=error.detail,
+            )
+            self.repo.add_exception(
+                task_id,
+                job_id,
+                error.error_code,
+                "v1_executor",
+                error.title,
+                error.detail,
+                "检查配置、页面状态和证据后重试；禁止忽略发布或归属风险继续执行。",
+            )
+            self.repo.add_report(
+                task_id,
+                job_id,
+                product_id,
+                "failed",
+                False,
+                {"ok": False, "error_code": error.error_code, "message": error.detail},
+                self._build_summary(task, job, mode, claim_mark, filled_fields, empty_fields, evidence_paths, workflow_results, execution_defaults, blocked_reason=error.detail),
+            )
+            self.repo.add_log(task_id, job_id, "error", error.title, {"error_code": error.error_code, "detail": error.detail})
+            return False
+
+    def _steps_for_mode(self, mode: str):
+        if mode == "dry_run":
+            return [V1_STEPS[0]]
+        return V1_STEPS
+
+    def _guard_step(
+        self,
+        task: dict[str, Any],
+        job: dict[str, Any],
+        state_name: StateName,
+        claim_mark: str,
+        product: Mapping[str, Any] | None = None,
+    ) -> None:
+        if state_name == StateName.PRECHECK_CONFIG:
+            mode = task.get("mode", "")
+            validation = self.config_validation.validate_task(task, self.repo.list_templates(), product=product)
+            if not validation["ok"]:
+                detail = "缺少配置：" + ", ".join(validation["missing"]) if validation["missing"] else "; ".join(validation["warnings"])
+                raise V1ExecutionError(validation["error_code"] or "E302", "启动前配置校验失败", detail)
+            if mode in {"single_save", "batch_save"} and task.get("publish_scene") != "SMT_SEMI_MANAGED_SAVE_ONLY":
+                raise V1ExecutionError("E999", "任务发布场景不安全", "V1 只允许 SMT_SEMI_MANAGED_SAVE_ONLY")
+        if state_name == StateName.CLAIM_PRODUCT and not claim_mark:
+            raise V1ExecutionError("E202", "领取标记为空", "任务缺少 claim_mark")
+        if state_name == StateName.SAVE_ONLY:
+            result = self.publish_guard.check(intended_action="save", target_text="保存")
+            if not result["allowed"]:
+                raise V1ExecutionError("E999", "保存动作被发布隔离器阻断", "; ".join(result["reasons"]))
+
+    def _run_workflow_action(
+        self,
+        task: dict[str, Any],
+        job: dict[str, Any],
+        state_name: StateName,
+        claim_mark: str,
+        defaults: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if self.workflow_adapter is None:
+            return None
+
+        product_query = self._source_title(job.get("product_id"))
+        store_name = self._store_name(task)
+        actions = {
+            StateName.PRECHECK_SESSION: ("check_login_state", "E101", "店小秘登录态检查失败", lambda: self.workflow_adapter.check_login_state()),
+            StateName.OPEN_DRAFT_LIST: ("open_draft_box", "E201", "进入采集箱失败", lambda: self.workflow_adapter.open_draft_box()),
+            StateName.CLAIM_PRODUCT: (
+                "claim_product",
+                "E202",
+                "写入领取备注失败",
+                lambda: self.workflow_adapter.claim_product(
+                    claim_mark,
+                    product_query=product_query,
+                    store_name=store_name,
+                ),
+            ),
+            StateName.OPEN_EDIT_PAGE: (
+                "open_editor",
+                "E901",
+                "打开编辑页失败",
+                lambda: self.workflow_adapter.open_editor(
+                    product_query=product_query,
+                    store_name=store_name,
+                    note_text=claim_mark,
+                ),
+            ),
+            StateName.VERIFY_EDIT_OWNERSHIP: (
+                "verify_edit_ownership",
+                "E202",
+                "编辑页归属校验失败",
+                lambda: self.workflow_adapter.verify_edit_ownership(
+                    product_query=product_query,
+                    store_name=store_name,
+                ),
+            ),
+            StateName.FILL_BASE_INFO: (
+                "fill_editor_required_defaults",
+                "E901",
+                "填写普通编辑页必填项失败",
+                lambda: self.workflow_adapter.fill_editor_required_defaults(
+                    defaults=defaults,
+                    product_query=product_query,
+                    store_name=store_name,
+                ),
+            ),
+            StateName.FILL_VARIANTS: (
+                "fill_editor_variants",
+                "E901",
+                "填写普通变种表格失败",
+                lambda: self.workflow_adapter.fill_editor_variants(
+                    defaults=defaults,
+                    product_query=product_query,
+                    store_name=store_name,
+                ),
+            ),
+            StateName.FILL_MEDIA: (
+                "fill_media_assets",
+                "E901",
+                "处理图片素材失败",
+                lambda: self.workflow_adapter.fill_media_assets(
+                    defaults=defaults,
+                    product_query=product_query,
+                    store_name=store_name,
+                ),
+            ),
+            StateName.FILL_COMPLIANCE: (
+                "fill_compliance_defaults",
+                "E901",
+                "填写合规信息失败",
+                lambda: self.workflow_adapter.fill_compliance_defaults(
+                    defaults=defaults,
+                    product_query=product_query,
+                    store_name=store_name,
+                ),
+            ),
+            StateName.ENABLE_SEMI_MANAGED: (
+                "enable_semi_managed",
+                "E901",
+                "勾选半托管服务失败",
+                lambda: self.workflow_adapter.enable_semi_managed(
+                    product_query=product_query,
+                    store_name=store_name,
+                ),
+            ),
+            StateName.OPEN_SEMI_MANAGED_PAGE: (
+                "open_semi_managed_page",
+                "E901",
+                "打开半托管编辑页失败",
+                lambda: self.workflow_adapter.open_semi_managed_page(
+                    defaults=defaults,
+                    product_query=product_query,
+                    store_name=store_name,
+                ),
+            ),
+            StateName.FILL_SEMI_GOODS: (
+                "fill_semi_managed_defaults",
+                "E901",
+                "填写半托管货品信息失败",
+                lambda: self.workflow_adapter.fill_semi_managed_defaults(
+                    defaults=defaults,
+                    product_query=product_query,
+                    store_name=store_name,
+                ),
+            ),
+            StateName.FILL_SEMI_VARIANTS: (
+                "fill_semi_managed_defaults",
+                "E901",
+                "填写半托管变种信息失败",
+                lambda: self.workflow_adapter.fill_semi_managed_defaults(
+                    defaults=defaults,
+                    product_query=product_query,
+                    store_name=store_name,
+                ),
+            ),
+            StateName.SAVE_ONLY: (
+                "save_only",
+                "E999",
+                "只保存失败",
+                lambda: self.workflow_adapter.save_only(
+                    defaults=defaults,
+                    product_query=product_query,
+                    store_name=store_name,
+                ),
+            ),
+            StateName.VERIFY_NOT_PUBLISHED: (
+                "verify_not_published",
+                "E999",
+                "未发布状态校验失败",
+                lambda: self.workflow_adapter.verify_not_published(
+                    product_query=product_query,
+                    store_name=store_name,
+                ),
+            ),
+        }
+        action = actions.get(state_name)
+        if action is None:
+            return None
+
+        action_name, error_code, error_title, call = action
+        adapter_method = getattr(self.workflow_adapter, action_name, None)
+        if action_name in {"fill_media_assets", "fill_compliance_defaults"} and not callable(adapter_method):
+            raise V1ExecutionError(
+                error_code,
+                error_title,
+                f"{action_name} adapter method unavailable",
+            )
+        try:
+            result = call()
+        except Exception as exc:
+            raise V1ExecutionError(error_code, error_title, f"{action_name}: {exc}") from exc
+
+        if not result.get("ok"):
+            stage = result.get("stage") or "unknown_stage"
+            page_url = result.get("page_url") or "unknown_url"
+            raise V1ExecutionError(error_code, error_title, f"{action_name} failed at {stage}: {page_url}")
+        if state_name == StateName.CLAIM_PRODUCT and result.get("evidence", {}).get("note_verified") is False:
+            raise V1ExecutionError(error_code, error_title, f"{action_name} note_verified false")
+        if state_name == StateName.SAVE_ONLY:
+            save_result = self._extract_save_result(result)
+            if not save_result or save_result.get("ok") is not True:
+                raise V1ExecutionError(error_code, error_title, f"{action_name} save_result missing or false")
+        return result
+
+    async def _run_workflow_action_async(
+        self,
+        task: dict[str, Any],
+        job: dict[str, Any],
+        state_name: StateName,
+        claim_mark: str,
+        defaults: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if self.workflow_adapter is None:
+            return None
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            self._workflow_executor,
+            self._run_workflow_action,
+            task,
+            job,
+            state_name,
+            claim_mark,
+            defaults,
+        )
+
+    def _noop_workflow_result(self, action_name: str, product_query: str, store_name: str) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "action": action_name,
+            "stage": "noop_adapter_action",
+            "page_title": None,
+            "page_url": None,
+            "screenshot_url": None,
+            "product_query": product_query,
+            "store_name": store_name,
+            "evidence": {
+                "action": action_name,
+                "noop": True,
+                "reason": "workflow_adapter method not available",
+                "product_query": product_query,
+                "store_name": store_name,
+            },
+        }
+
+    def _write_evidence(self, task_id: int, job_id: int, state_name: StateName) -> Path:
+        path = SCREENSHOT_DIR / f"v1_task_{task_id}_job_{job_id}_{state_name.value}.txt"
+        path.write_text(
+            f"state={state_name.value}\ntask_id={task_id}\njob_id={job_id}\ncreated_at={now_iso()}\npublished=false\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def _build_summary(
+        self,
+        task: dict[str, Any],
+        job: dict[str, Any],
+        mode: str,
+        claim_mark: str,
+        filled_fields: list[str],
+        empty_fields: list[str],
+        evidence_paths: list[str],
+        workflow_results: list[dict[str, Any]],
+        execution_defaults: Mapping[str, Any] | None = None,
+        blocked_reason: str | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "task_id": task["id"],
+            "job_id": job["id"],
+            "product_id": job.get("product_id"),
+            "store_name": self._store_name(task),
+            "source_title": self._source_title(job.get("product_id")),
+            "category": self._summary_category(task, job, execution_defaults),
+            "claim_mark": claim_mark,
+            "mode": mode,
+            "status": "failed" if blocked_reason else "success",
+            "blocked_reason": blocked_reason,
+            "empty_fields": empty_fields,
+            "filled_fields": filled_fields,
+            "evidence_paths": evidence_paths,
+            "template_trace": list((execution_defaults or {}).get("_template_trace") or []),
+            "resolved_defaults": self._redacted_defaults(execution_defaults or {}),
+            "workflow_actions": [result.get("action") for result in workflow_results],
+            "workflow_results": workflow_results,
+            "published": False,
+        }
+
+    def _summary_category(
+        self,
+        task: Mapping[str, Any],
+        job: Mapping[str, Any],
+        execution_defaults: Mapping[str, Any] | None = None,
+    ) -> str:
+        product = self._product(job.get("product_id"))
+        product_payload = (product or {}).get("payload") or {}
+        task_payload = task.get("payload") or {}
+        category_defaults = (execution_defaults or {}).get("category")
+        if isinstance(category_defaults, Mapping):
+            configured = category_defaults.get("category_match") or category_defaults.get("category_name")
+            if configured:
+                return str(configured)
+        return str(
+            (product or {}).get("category_name")
+            or product_payload.get("category_name")
+            or task_payload.get("category_name")
+            or "未配置类目"
+        )
+
+    def _redacted_defaults(self, defaults: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in defaults.items()
+            if not str(key).startswith("_")
+        }
+
+    def _save_result_for_mode(self, mode: str, workflow_results: list[dict[str, Any]]) -> dict[str, Any]:
+        if mode in {"probe", "dry_run", "claim_only"}:
+            return {"ok": True, "mode": mode, "message": "当前模式未执行保存动作", "published": False}
+        save_result = next((self._extract_save_result(result) for result in reversed(workflow_results) if result.get("action") == "save_only"), None)
+        if not save_result:
+            raise V1ExecutionError("E999", "缺少保存证据", "save_only save_result missing")
+        save_result["published"] = False
+        return save_result
+
+    def _extract_save_result(self, workflow_result: dict[str, Any]) -> dict[str, Any] | None:
+        save_result = workflow_result.get("save_result")
+        if save_result:
+            return save_result
+        evidence = workflow_result.get("evidence") or {}
+        return evidence.get("save_result")
+
+    def _store_name(self, task: dict[str, Any]) -> str:
+        return task.get("payload", {}).get("store_name") or "Dang Kang"
+
+    def _execution_defaults(
+        self,
+        task: Mapping[str, Any],
+        product: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        defaults: dict[str, Any] = {}
+        template_trace: list[dict[str, Any]] = []
+        for template in reversed(self.repo.list_templates()):
+            if not template.get("is_enabled", True):
+                continue
+            if not self._template_applies_to(template, task, product):
+                continue
+            template_type = self._normalize_template_type(template.get("template_type"))
+            if template_type not in DEFAULT_TEMPLATE_TYPES:
+                continue
+            payload = template.get("payload") or {}
+            if isinstance(payload, Mapping):
+                self._merge_template_payload(defaults, template_type, payload)
+                template_trace.append({
+                    "template_id": template.get("id"),
+                    "template_type": template_type,
+                    "template_name": template.get("template_name"),
+                    "binding_scope": template.get("binding_scope"),
+                })
+
+        task_payload = task.get("payload") or {}
+        if isinstance(task_payload, Mapping):
+            self._merge_payload(defaults, task_payload, skip_keys={"template_overrides"})
+            overrides = task_payload.get("template_overrides")
+            if isinstance(overrides, Mapping):
+                for template_type, payload in overrides.items():
+                    normalized = self._normalize_template_type(template_type)
+                    if normalized in DEFAULT_TEMPLATE_TYPES and isinstance(payload, Mapping):
+                        self._deep_merge(defaults.setdefault(normalized, {}), payload)
+
+        product_payload = (product or {}).get("payload") or {}
+        if isinstance(product_payload, Mapping):
+            self._merge_payload(defaults, product_payload)
+        defaults["_template_trace"] = template_trace
+        return defaults
+
+    def _template_applies_to(
+        self,
+        template: Mapping[str, Any],
+        task: Mapping[str, Any],
+        product: Mapping[str, Any] | None,
+    ) -> bool:
+        payload = template.get("payload") or {}
+        if not isinstance(payload, Mapping):
+            return True
+        binding = (
+            payload.get("binding")
+            or payload.get("applies_to")
+            or payload.get("match")
+        )
+        if not isinstance(binding, Mapping):
+            return True
+
+        task_payload = task.get("payload") or {}
+        product_payload = (product or {}).get("payload") or {}
+        actual_store = self._store_name(dict(task))
+        actual_category = (
+            (product or {}).get("category_name")
+            or product_payload.get("category_name")
+            or task_payload.get("category_name")
+            or task_payload.get("category")
+        )
+        actual_platform = (
+            task_payload.get("platform")
+            or task.get("platform")
+            or "AliExpress"
+        )
+        return (
+            self._matches_binding(binding, ("store_name", "store", "stores", "store_names"), actual_store)
+            and self._matches_binding(binding, ("category_name", "category", "categories", "category_names"), actual_category)
+            and self._matches_binding(binding, ("platform", "platforms"), actual_platform)
+        )
+
+    def _matches_binding(self, binding: Mapping[str, Any], keys: tuple[str, ...], actual: Any) -> bool:
+        expected = next((binding.get(key) for key in keys if key in binding), None)
+        if expected is None or expected == "":
+            return True
+        actual_text = str(actual or "").strip().lower()
+        if isinstance(expected, (list, tuple, set)):
+            values = expected
+        else:
+            values = [expected]
+        normalized = [str(value or "").strip().lower() for value in values]
+        return "*" in normalized or "all" in normalized or actual_text in normalized
+
+    def _merge_template_payload(self, target: dict[str, Any], template_type: str, payload: Mapping[str, Any]) -> None:
+        self._merge_payload(target, payload)
+        grouped_payload = payload.get(template_type)
+        if isinstance(grouped_payload, Mapping):
+            self._deep_merge(target.setdefault(template_type, {}), grouped_payload)
+            return
+        flat_group_payload = {
+            key: value
+            for key, value in payload.items()
+            if key not in DEFAULT_TEMPLATE_TYPES and key != "template_overrides"
+        }
+        if flat_group_payload:
+            self._deep_merge(target.setdefault(template_type, {}), flat_group_payload)
+
+    def _merge_payload(
+        self,
+        target: dict[str, Any],
+        payload: Mapping[str, Any],
+        skip_keys: set[str] | None = None,
+    ) -> None:
+        skip_keys = skip_keys or set()
+        for key, value in payload.items():
+            if key in skip_keys:
+                continue
+            normalized = self._normalize_template_type(key)
+            target_key = normalized if normalized in DEFAULT_TEMPLATE_TYPES else key
+            if isinstance(value, Mapping) and isinstance(target.get(target_key), dict):
+                self._deep_merge(target[target_key], value)
+            elif isinstance(value, Mapping):
+                target[target_key] = dict(value)
+            else:
+                target[target_key] = value
+
+    def _deep_merge(self, target: dict[str, Any], source: Mapping[str, Any]) -> None:
+        for key, value in source.items():
+            if isinstance(value, Mapping) and isinstance(target.get(key), dict):
+                self._deep_merge(target[key], value)
+            elif isinstance(value, Mapping):
+                target[key] = dict(value)
+            else:
+                target[key] = value
+
+    def _normalize_template_type(self, value: Any) -> str:
+        return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+    def _source_title(self, product_id: int | None) -> str:
+        if product_id is None:
+            return "未指定商品"
+        product = self._product(product_id)
+        if product:
+            payload = product.get("payload") or {}
+            return payload.get("source_title") or product.get("title") or f"任务商品 #{product_id}"
+        return f"任务商品 #{product_id}"
+
+    def _product(self, product_id: int | None) -> dict[str, Any] | None:
+        if product_id is None:
+            return None
+        for product in self.repo.list_products():
+            if product.get("id") == product_id:
+                return product
+        return None
+
+    def _claim_mark(self, task: dict[str, Any]) -> str:
+        base_mark = task.get("payload", {}).get("claim_mark", "AI认领")
+        return f"{base_mark}-{task['id']}"
+
+
+class V1ExecutionError(Exception):
+    def __init__(self, error_code: str, title: str, detail: str) -> None:
+        super().__init__(detail)
+        self.error_code = error_code
+        self.title = title
+        self.detail = detail

@@ -5,6 +5,7 @@ from typing import Any
 from playwright.sync_api import sync_playwright
 
 from src.core.config import SCREENSHOT_DIR, SESSION_DIR
+from src.execution.browser_runtime import chrome_launch_options
 
 COOKIE_FILE = SESSION_DIR / 'dianxiaomi_cookies.json'
 PROBE_FILE = SESSION_DIR / 'dianxiaomi_probe.json'
@@ -45,7 +46,7 @@ class DxmLiveClient:
         product_screenshot = SCREENSHOT_DIR / 'dianxiaomi_live_products.png'
         result: dict[str, Any] = {}
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, executable_path='/usr/bin/google-chrome', args=['--no-sandbox'])
+            browser = p.chromium.launch(**chrome_launch_options(headless=True))
             context = browser.new_context(ignore_https_errors=True, viewport={'width': 1440, 'height': 1024})
             context.add_cookies(self.load_cookies())
             page = context.new_page()

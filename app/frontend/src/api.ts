@@ -7,6 +7,14 @@ export async function getJson<T>(path: string): Promise<T> {
   return response.json()
 }
 
+export async function getJsonOrDefault<T>(path: string, fallback: T): Promise<T> {
+  try {
+    return await getJson<T>(path)
+  } catch {
+    return fallback
+  }
+}
+
 export async function postJson<T>(path: string, body: unknown): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     method: 'POST',

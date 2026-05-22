@@ -93,10 +93,18 @@ class Repository:
 
     def create_task(self, data: dict[str, Any]):
         now = now_iso()
+        payload = dict(data.get('payload') or {})
+        payload.update({
+            'product_ids': data.get('product_ids', []),
+            'claim_mark': data.get('claim_mark', 'AI认领'),
+            'execution_mode': data['mode'],
+            'publish_allowed': False,
+            'max_count': len(data.get('product_ids', [])),
+        })
         with connection() as conn:
             cur = conn.execute(
                 "INSERT INTO tasks (name, store_id, status, mode, publish_scene, total_jobs, payload_json, created_at, updated_at) VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?)",
-                (data['name'], data.get('store_id'), data['mode'], data['publish_scene'], len(data.get('product_ids', [])), dumps({'product_ids': data.get('product_ids', [])}), now, now),
+                (data['name'], data.get('store_id'), data['mode'], data['publish_scene'], len(data.get('product_ids', [])), dumps(payload), now, now),
             )
             task_id = cur.lastrowid
             for product_id in data.get('product_ids', []):
@@ -177,3 +185,64 @@ class Repository:
     def list_exceptions(self):
         with connection() as conn:
             return conn.execute("SELECT * FROM exceptions ORDER BY id DESC LIMIT 200").fetchall()
+
+    def add_report(
+        self,
+        task_id: int,
+        job_id: int | None,
+        product_id: int | None,
+        status: str,
+        published: bool,
+        save_result: dict[str, Any],
+        summary: dict[str, Any],
+    ):
+        now = now_iso()
+        with connection() as conn:
+            existing = conn.execute(
+                "SELECT id FROM reports WHERE task_id=? AND job_id=?",
+                (task_id, job_id),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE reports
+                    SET product_id=?, status=?, published=?, save_result_json=?, summary_json=?, updated_at=?
+                    WHERE id=?
+                    """,
+                    (product_id, status, int(published), dumps(save_result), dumps(summary), now, existing['id']),
+                )
+                report_id = existing['id']
+            else:
+                cur = conn.execute(
+                    """
+                    INSERT INTO reports (
+                        task_id, job_id, product_id, status, published,
+                        save_result_json, summary_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (task_id, job_id, product_id, status, int(published), dumps(save_result), dumps(summary), now, now),
+                )
+                report_id = cur.lastrowid
+            return self.get_report(report_id)
+
+    def get_report(self, report_id: int):
+        with connection() as conn:
+            row = conn.execute("SELECT * FROM reports WHERE id=?", (report_id,)).fetchone()
+            if not row:
+                return None
+            row['published'] = bool(row['published'])
+            row['save_result'] = loads(row.pop('save_result_json'), {})
+            row['summary'] = loads(row.pop('summary_json'), {})
+            return row
+
+    def list_reports(self, task_id: int | None = None):
+        with connection() as conn:
+            if task_id is None:
+                rows = conn.execute("SELECT * FROM reports ORDER BY id DESC LIMIT 200").fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM reports WHERE task_id=? ORDER BY id ASC", (task_id,)).fetchall()
+            for row in rows:
+                row['published'] = bool(row['published'])
+                row['save_result'] = loads(row.pop('save_result_json'), {})
+                row['summary'] = loads(row.pop('summary_json'), {})
+            return rows

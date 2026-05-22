@@ -1,11 +1,14 @@
 __pycache__/
 *.pyc
+.venv/
+*.egg-info/
 
 app/frontend/dist/
 app/frontend/node_modules/
 app/desktop/node_modules/
 
 # Runtime data / local artifacts
+data/
 data/screenshots/
 data/sessions/
 data/sqlite/
@@ -13,6 +16,8 @@ data/evidences/
 outputs/reports/
 outputs/spreadsheets/
 data/ai/
+data/*.log
+app/backend/data/
 
 # Local agent/workspace metadata
 .codex/

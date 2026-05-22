@@ -8,9 +8,10 @@ from fastapi.staticfiles import StaticFiles
 from src.core.config import DATA_DIR
 from src.db import init_db
 from src.execution.dxm_live import DxmLiveClient
+from src.execution.dxm_adapter import DxmWorkflowAdapter
 from src.execution.dxm_login_flow import DxmLoginFlow
 from src.execution.playwright_engine import PlaywrightEngine
-from src.execution.simulator import TaskRunner
+from src.execution.v1_runner import V1TaskRunner
 from src.models import (
     AIConfigUpdateRequest,
     DraftBoxActionRequest,
@@ -20,6 +21,7 @@ from src.models import (
     LoginStartRequest,
     ProductCreate,
     ProductImportRequest,
+    SelectorProfileValidateRequest,
     StoreCreate,
     TaskCreate,
     TitleGenerateRequest,
@@ -27,6 +29,7 @@ from src.models import (
 )
 from src.repository import Repository
 from src.services.title_ai import TitleAIService
+from src.services.selector_profile import SelectorProfileService
 from src.ws import ConnectionManager
 
 app = FastAPI(title='dxm-auto-uikit backend', version='0.1.0')
@@ -42,11 +45,13 @@ app.mount('/artifacts', StaticFiles(directory=DATA_DIR), name='artifacts')
 init_db()
 repo = Repository()
 manager = ConnectionManager()
-runner = TaskRunner(repo, manager)
 engine = PlaywrightEngine()
 live_client = DxmLiveClient()
 login_flow = DxmLoginFlow(live_client)
+workflow_adapter = DxmWorkflowAdapter(login_flow)
+runner = V1TaskRunner(repo, manager, workflow_adapter=workflow_adapter)
 title_ai_service = TitleAIService()
+selector_profile_service = SelectorProfileService()
 
 
 @app.get('/health', response_model=HealthResponse)
@@ -70,6 +75,11 @@ def dxm_login_state():
     return normalize_artifact_paths(login_flow.get_state())
 
 
+@app.get('/api/dxm/workflow/check-login')
+def dxm_workflow_check_login():
+    return normalize_artifact_paths(_workflow_adapter().check_login_state())
+
+
 @app.post('/api/dxm/login/start')
 def dxm_login_start(payload: LoginStartRequest):
     result = login_flow.start_login(payload.username, payload.password)
@@ -90,10 +100,38 @@ def dxm_navigate(payload: LoginNavigateRequest):
     return normalize_artifact_paths(result)
 
 
+@app.post('/api/dxm/workflow/open-draft-box')
+def dxm_workflow_open_draft_box():
+    return normalize_artifact_paths(_workflow_adapter().open_draft_box())
+
+
 @app.post('/api/dxm/draft-box/action')
 def dxm_draft_box_action(payload: DraftBoxActionRequest):
-    result = login_flow.perform_draft_box_action(payload.action, note_text=payload.note_text)
+    result = login_flow.perform_draft_box_action(
+        payload.action,
+        note_text=payload.note_text,
+        product_query=payload.product_query,
+        store_name=payload.store_name,
+    )
     return normalize_artifact_paths(result)
+
+
+@app.post('/api/dxm/workflow/claim-product')
+def dxm_workflow_claim_product(payload: DraftBoxActionRequest):
+    return normalize_artifact_paths(_workflow_adapter().claim_product(
+        payload.note_text or 'AI认领',
+        product_query=payload.product_query,
+        store_name=payload.store_name,
+    ))
+
+
+@app.post('/api/dxm/workflow/open-editor')
+def dxm_workflow_open_editor(payload: DraftBoxActionRequest | None = None):
+    payload = payload or DraftBoxActionRequest(action='edit')
+    return normalize_artifact_paths(_workflow_adapter().open_editor(
+        product_query=payload.product_query,
+        store_name=payload.store_name,
+    ))
 
 
 @app.get('/api/ai/config')
@@ -194,6 +232,36 @@ def list_exceptions():
     return repo.list_exceptions()
 
 
+@app.get('/api/reports')
+def list_reports(task_id: int | None = None):
+    return normalize_artifact_paths(repo.list_reports(task_id))
+
+
+@app.get('/api/reports/tasks/{task_id}')
+def list_task_reports(task_id: int):
+    return normalize_artifact_paths(repo.list_reports(task_id))
+
+
+@app.get('/api/selector-profiles')
+def list_selector_profiles():
+    return selector_profile_service.list_profiles()
+
+
+@app.get('/api/selector-profiles/{page_key}')
+def get_selector_profile(page_key: str):
+    return selector_profile_service.get_profile(page_key)
+
+
+@app.post('/api/selector-profiles/{page_key}/validate')
+def validate_selector_profile(page_key: str, payload: SelectorProfileValidateRequest):
+    return selector_profile_service.validate_page(
+        page_key,
+        payload.url,
+        payload.body_text,
+        payload.visible_buttons,
+    )
+
+
 @app.get('/api/logs')
 def list_logs(task_id: int | None = None):
     return repo.list_logs(task_id)
@@ -227,6 +295,10 @@ def normalize_artifact_paths(data):
                 normalized[key] = normalize_artifact_paths(value)
         return normalized
     return data
+
+
+def _workflow_adapter():
+    return DxmWorkflowAdapter(login_flow)
 
 
 def build_login_state(data: dict):

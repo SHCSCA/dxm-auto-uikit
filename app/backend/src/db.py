@@ -138,5 +138,77 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                job_id INTEGER,
+                product_id INTEGER,
+                status TEXT NOT NULL,
+                published INTEGER NOT NULL DEFAULT 0,
+                save_result_json TEXT NOT NULL,
+                summary_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS ownership_locks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lock_token TEXT NOT NULL UNIQUE,
+                ownership_fingerprint TEXT NOT NULL,
+                task_id INTEGER NOT NULL,
+                job_id INTEGER NOT NULL,
+                product_id INTEGER NOT NULL,
+                store_name TEXT NOT NULL,
+                source_title TEXT NOT NULL,
+                sku_prefix TEXT,
+                claim_mark TEXT NOT NULL,
+                lock_owner_run_id TEXT,
+                status TEXT NOT NULL DEFAULT 'active',
+                page_claim_mark TEXT,
+                page_claim_verified INTEGER NOT NULL DEFAULT 0,
+                page_claim_verified_at TEXT,
+                expires_at TEXT NOT NULL,
+                released_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_ownership_locks_active_fingerprint
+                ON ownership_locks (ownership_fingerprint, status, expires_at);
+
+            CREATE INDEX IF NOT EXISTS idx_ownership_locks_token
+                ON ownership_locks (lock_token);
             """
         )
+        _ensure_columns(
+            conn,
+            "ownership_locks",
+            {
+                "lock_owner_run_id": "TEXT",
+                "page_claim_mark": "TEXT",
+                "page_claim_verified": "INTEGER NOT NULL DEFAULT 0",
+                "page_claim_verified_at": "TEXT",
+                "released_at": "TEXT",
+            },
+        )
+        _ensure_columns(
+            conn,
+            "reports",
+            {
+                "product_id": "INTEGER",
+                "published": "INTEGER NOT NULL DEFAULT 0",
+                "save_result_json": "TEXT NOT NULL DEFAULT '{}'",
+                "summary_json": "TEXT NOT NULL DEFAULT '{}'",
+            },
+        )
+
+
+def _ensure_columns(conn: sqlite3.Connection, table_name: str, columns: dict[str, str]) -> None:
+    existing = {
+        row["name"]
+        for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    }
+    for column_name, column_definition in columns.items():
+        if column_name not in existing:
+            conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}")
