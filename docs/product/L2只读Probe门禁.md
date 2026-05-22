@@ -26,6 +26,7 @@ app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target 
 - `network.non_read_request_count == 0`
 - `network.blocked_request_count == 0`
 - `network.forbidden_keyword_request_count == 0`
+- `network.websocket_count == 0`
 - `safety.ok == true`
 - 真实店小秘目标必须加载 cookie，且不得疑似停留在登录页
 - 输出 JSON、Markdown、截图和 DOM 路径
@@ -40,11 +41,15 @@ app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target 
 - 不填写输入框、不搜索商品、不选择店铺、不勾选半托管
 - 不允许 `POST`、`PUT`、`PATCH`、`DELETE`
 - 不允许 URL 命中 `save`、`publish`、`submitPublish`、`claim`、`remark`、`note`
+- 真实店小秘目标默认拦截 XHR、fetch、WebSocket、EventSource 等主动请求；如果页面自动发起这类请求，L2 判定不通过，后续必须单独评审只读 allowlist
+- BrowserContext 禁用 Service Worker，避免请求绕过路由门禁
 - 不把 `tools/probes/**/tmp_*` 历史脚本作为 L2 门禁入口
 
 ## 输出位置
 
 运行产物在 `data/l2_readonly_probe/`，该目录受 `.gitignore` 保护，不随代码提交。
+截图和 DOM 是本地敏感证据，只用于交付审查，不应贴到公开日志、PR 描述或外部工单。
+CLI 标准输出只打印安全摘要、证据路径和 hash，不打印完整 DOM、可见文本或 body 预览。
 
 ## 证据等级
 

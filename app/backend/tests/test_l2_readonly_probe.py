@@ -34,6 +34,11 @@ class FakeRoute:
         self.continued = True
 
 
+class FakeWebSocket:
+    def __init__(self, url: str):
+        self.url = url
+
+
 @pytest.mark.parametrize("method", ["GET", "HEAD", "OPTIONS"])
 def test_readonly_probe_guard_allows_read_methods(method):
     module = _load_probe_module()
@@ -69,6 +74,26 @@ def test_readonly_probe_guard_blocks_write_methods(method):
     assert f"write_method:{method}" in summary["blocked_requests"][0]["reasons"]
     safety = module.evaluate_safety({
         "final_url": "https://www.dianxiaomi.com/web/smt/smtProductList/draft",
+        "login_state": {"required": False},
+        "network": summary,
+    })
+    assert safety["ok"] is False
+
+
+def test_readonly_probe_guard_blocks_active_requests_in_strict_mode():
+    module = _load_probe_module()
+    guard = module.ReadOnlyProbeGuard(strict_active_requests=True)
+    route = FakeRoute(FakeRequest("GET", "https://www.dianxiaomi.com/api/read", resource_type="xhr"))
+
+    guard._route(route)
+
+    summary = guard.summary()
+    assert route.aborted is True
+    assert summary["blocked_request_count"] == 1
+    assert summary["strict_active_requests"] is True
+    assert "active_or_unknown_resource_type:xhr" in summary["blocked_requests"][0]["reasons"]
+    safety = module.evaluate_safety({
+        "final_url": "https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
         "login_state": {"required": False},
         "network": summary,
     })
@@ -154,6 +179,42 @@ def test_readonly_probe_safety_fails_when_required_login_cookie_missing():
     assert any("登录 cookie" in reason for reason in safety["reasons"])
 
 
+def test_readonly_probe_safety_fails_on_websocket_or_login_page():
+    module = _load_probe_module()
+    guard = module.ReadOnlyProbeGuard()
+    guard._on_websocket(FakeWebSocket("wss://www.dianxiaomi.com/ws/read"))
+
+    safety = module.evaluate_safety({
+        "final_url": "https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
+        "network": guard.summary(),
+        "login_state": {
+            "required": True,
+            "cookies_loaded": True,
+            "suspected_login_page": True,
+            "signals": ["login_text"],
+        },
+    })
+
+    assert safety["ok"] is False
+    assert any("WebSocket" in reason for reason in safety["reasons"])
+    assert any("登录页" in reason for reason in safety["reasons"])
+
+
+def test_detect_login_state_records_url_and_text_signals():
+    module = _load_probe_module()
+
+    state = module.detect_login_state(
+        required=True,
+        cookies_loaded=True,
+        final_url="https://www.dianxiaomi.com/passport/login",
+        title="店小秘",
+        body_text="请登录后继续",
+    )
+
+    assert state["suspected_login_page"] is True
+    assert state["signals"] == ["login_url", "login_text"]
+
+
 def test_readonly_probe_markdown_contains_core_evidence_fields(tmp_path):
     module = _load_probe_module()
     screenshot = tmp_path / "probe.png"
@@ -220,6 +281,44 @@ def test_sha256_and_url_sanitization_helpers(tmp_path):
     assert module.sanitize_url("https://www.dianxiaomi.com/path?token=secret#frag") == (
         "https://www.dianxiaomi.com/path?__redacted__#__redacted__"
     )
+
+
+def test_visible_match_and_stdout_summary_are_sanitized():
+    module = _load_probe_module()
+    matches = module.sanitize_visible_matches([
+        {
+            "text": "联系 13812345678",
+            "href": "https://www.dianxiaomi.com/path?token=secret",
+            "cls": "session=abcdefg",
+            "id": "user@example.com",
+            "tag": "A",
+            "rect": {"x": 0, "y": 0, "w": 10, "h": 10},
+        }
+    ])
+    result = {
+        "schema": "dxm_l2_readonly_probe.v1",
+        "ok": True,
+        "target": "draft_box",
+        "final_url": "https://www.dianxiaomi.com/path?__redacted__",
+        "body_preview": "secret body",
+        "visible_matches": matches,
+        "safety": {"ok": True, "reasons": []},
+        "network": {"request_count": 1, "methods_seen": ["GET"]},
+        "screenshot_path": "probe.png",
+        "screenshot_sha256": "a" * 64,
+        "dom_path": "probe.html",
+        "dom_sha256": "b" * 64,
+        "json_path": "probe.json",
+        "markdown_path": "probe.md",
+    }
+
+    summary = module.summarize_for_stdout(result)
+
+    assert matches[0]["text"] == "联系 [redacted-phone]"
+    assert matches[0]["href"] == "https://www.dianxiaomi.com/path?__redacted__"
+    assert matches[0]["id"] == "[redacted-email]"
+    assert "body_preview" not in summary
+    assert "visible_matches" not in summary
 
 
 def test_load_cookies_normalizes_exported_cookie_shape(tmp_path):

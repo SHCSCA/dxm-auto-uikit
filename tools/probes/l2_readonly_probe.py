@@ -26,6 +26,8 @@ TARGETS = {
 }
 READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+PASSIVE_RESOURCE_TYPES = {"document", "stylesheet", "script", "image", "font", "media"}
+ACTIVE_RESOURCE_TYPES = {"xhr", "fetch", "eventsource", "websocket"}
 FORBIDDEN_URL_KEYWORDS = (
     "save",
     "publish",
@@ -41,8 +43,14 @@ LOGIN_TEXT_KEYWORDS = ("请登录", "登录店小秘", "账户登录", "账号�
 
 
 class ReadOnlyProbeGuard:
-    def __init__(self, forbidden_keywords: tuple[str, ...] = FORBIDDEN_URL_KEYWORDS) -> None:
+    def __init__(
+        self,
+        forbidden_keywords: tuple[str, ...] = FORBIDDEN_URL_KEYWORDS,
+        *,
+        strict_active_requests: bool = False,
+    ) -> None:
         self.forbidden_keywords = tuple(keyword.lower() for keyword in forbidden_keywords)
+        self.strict_active_requests = strict_active_requests
         self.requests: list[dict[str, Any]] = []
         self.blocked_requests: list[dict[str, Any]] = []
         self.responses: list[dict[str, Any]] = []
@@ -71,6 +79,8 @@ class ReadOnlyProbeGuard:
             blocked_reasons.append(f"non_read_method:{method}")
         if method in WRITE_METHODS:
             blocked_reasons.append(f"write_method:{method}")
+        if self.strict_active_requests and request.resource_type not in PASSIVE_RESOURCE_TYPES:
+            blocked_reasons.append(f"active_or_unknown_resource_type:{request.resource_type}")
         keyword_hits = self._keyword_hits(url)
         record["forbidden_keyword_hits"] = keyword_hits
         self.requests.append(record)
@@ -125,6 +135,9 @@ class ReadOnlyProbeGuard:
             "request_count": len(self.requests),
             "methods_seen": methods,
             "read_methods_allowed": sorted(READ_METHODS),
+            "passive_resource_types_allowed": sorted(PASSIVE_RESOURCE_TYPES),
+            "active_resource_types_blocked": sorted(ACTIVE_RESOURCE_TYPES),
+            "strict_active_requests": self.strict_active_requests,
             "write_request_count": len(write_requests),
             "non_read_request_count": len(non_read_requests),
             "blocked_request_count": len(self.blocked_requests),
@@ -157,12 +170,16 @@ def run_probe(
     json_path = output_dir / f"{target}_{timestamp}.json"
     markdown_path = output_dir / f"{target}_{timestamp}.md"
 
-    guard = ReadOnlyProbeGuard()
     target_is_dxm = is_dianxiaomi_url(url)
+    guard = ReadOnlyProbeGuard(strict_active_requests=target_is_dxm)
     with sync_playwright() as playwright:
         options = chrome_launch_options(headless=headless)
         browser = playwright.chromium.launch(**options)
-        context = browser.new_context(ignore_https_errors=True, viewport={"width": 1440, "height": 1200})
+        context = browser.new_context(
+            ignore_https_errors=True,
+            service_workers="block",
+            viewport={"width": 1440, "height": 1200},
+        )
         cookies_loaded = False
         if target_is_dxm and cookie_file.exists():
             cookies = load_cookies(cookie_file)
@@ -187,8 +204,8 @@ def run_probe(
         "schema": "dxm_l2_readonly_probe.v1",
         "ok": True,
         "target": target,
-        "target_url": url,
-        "final_url": current_url,
+        "target_url": sanitize_url(url),
+        "final_url": sanitize_url(current_url),
         "title": title,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "environment": {
@@ -210,7 +227,7 @@ def run_probe(
         "dom_path": str(dom_path),
         "dom_sha256": sha256_file(dom_path),
         "body_preview": redact_sensitive_text(body[:body_limit]),
-        "visible_matches": matches,
+        "visible_matches": sanitize_visible_matches(matches),
         "network": guard.summary(),
         "safety": {},
     }
@@ -234,6 +251,8 @@ def evaluate_safety(result: dict[str, Any]) -> dict[str, Any]:
         reasons.append(f"被拦截请求数量非零：{network['blocked_request_count']}")
     if network.get("forbidden_keyword_request_count"):
         reasons.append(f"网络 URL 命中禁用关键词：{network['forbidden_keyword_request_count']}")
+    if network.get("websocket_count"):
+        reasons.append(f"检测到 WebSocket 连接：{network['websocket_count']}")
     if network.get("forbidden_keyword_websocket_count"):
         reasons.append(f"WebSocket URL 命中禁用关键词：{network['forbidden_keyword_websocket_count']}")
     final_hits = [
@@ -299,6 +318,19 @@ def collect_visible_matches(page) -> list[dict[str, Any]]:
     )
 
 
+def sanitize_visible_matches(matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    sanitized = []
+    for item in matches:
+        sanitized.append({
+            **item,
+            "text": redact_sensitive_text(str(item.get("text") or "")),
+            "href": sanitize_url(str(item.get("href") or "")) if item.get("href") else None,
+            "cls": redact_sensitive_text(str(item.get("cls") or ""))[:160],
+            "id": redact_sensitive_text(str(item.get("id") or ""))[:80],
+        })
+    return sanitized
+
+
 def is_dianxiaomi_url(url: str) -> bool:
     try:
         host = urlsplit(url).hostname or ""
@@ -342,6 +374,8 @@ def redact_sensitive_text(text: str) -> str:
 
 
 def sanitize_url(url: str) -> str:
+    if not url:
+        return ""
     try:
         parts = urlsplit(url)
     except ValueError:
@@ -377,6 +411,9 @@ def render_markdown(result: dict[str, Any]) -> str:
 
 ## 只读安全断言
 - 允许只读方法：{", ".join(safety.get("read_methods_allowed") or [])}
+- 允许被动资源类型：{", ".join(network.get("passive_resource_types_allowed") or sorted(PASSIVE_RESOURCE_TYPES))}
+- 阻断主动资源类型：{", ".join(network.get("active_resource_types_blocked") or sorted(ACTIVE_RESOURCE_TYPES))}
+- 真实站点严格拦截主动请求：{network.get("strict_active_requests", False)}
 - 写方法禁止：{", ".join(safety.get("write_methods_forbidden") or [])}
 - 禁用 URL 关键词：{", ".join(safety.get("forbidden_url_keywords") or [])}
 - 写请求数量：{network.get("write_request_count")}
@@ -429,8 +466,36 @@ def main() -> int:
         headless=not args.headed,
         wait_ms=args.wait_ms,
     )
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(json.dumps(summarize_for_stdout(result), ensure_ascii=False, indent=2))
     return 0 if result["ok"] else 2
+
+
+def summarize_for_stdout(result: dict[str, Any]) -> dict[str, Any]:
+    network = result.get("network") or {}
+    return {
+        "schema": result.get("schema"),
+        "ok": result.get("ok"),
+        "target": result.get("target"),
+        "final_url": result.get("final_url"),
+        "safety": result.get("safety"),
+        "network": {
+            "request_count": network.get("request_count"),
+            "methods_seen": network.get("methods_seen"),
+            "write_request_count": network.get("write_request_count"),
+            "non_read_request_count": network.get("non_read_request_count"),
+            "blocked_request_count": network.get("blocked_request_count"),
+            "forbidden_keyword_request_count": network.get("forbidden_keyword_request_count"),
+            "websocket_count": network.get("websocket_count"),
+        },
+        "evidence": {
+            "screenshot_path": result.get("screenshot_path"),
+            "screenshot_sha256": result.get("screenshot_sha256"),
+            "dom_path": result.get("dom_path"),
+            "dom_sha256": result.get("dom_sha256"),
+            "json_path": result.get("json_path"),
+            "markdown_path": result.get("markdown_path"),
+        },
+    }
 
 
 if __name__ == "__main__":
