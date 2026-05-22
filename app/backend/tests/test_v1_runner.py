@@ -106,13 +106,41 @@ def v1_db(tmp_path, monkeypatch):
 def _create_task(repo: Repository, mode: str = "single_save", product_count: int = 1):
     store = repo.create_store("Dang Kang", "AliExpress")
     template_payloads = {
-        "category": {"category_name": "模板类目", "category": {"template_category_id": "tmpl-cat"}},
+        "category": {
+            "category_name": "模板类目",
+            "category": {
+                "template_category_id": "tmpl-cat",
+            },
+        },
         "sku": {"stock": "100", "sku": {"template_sku_rule": "tmpl-sku"}},
         "pricing": {"price": "9.99", "pricing": {"currency": "USD"}},
-        "logistics": {"weight": "0.03", "logistics": {"length": "10"}},
-        "image": {"image": {"eu_outer_package_filename": "template-eu.jpg"}},
+        "logistics": {
+            "weight": "0.03",
+            "logistics": {
+                "length": "10",
+                "width": "10",
+                "height": "2",
+            },
+        },
+        "image": {
+            "image": {
+                "eu_outer_package_filename": "template-eu.jpg",
+                "marketing_images_strategy": "generate",
+            },
+        },
         "compliance": {"compliance": {"material": "PVC"}},
-        "semi_managed": {"semi_managed": {"supply_price": "4.20"}},
+        "semi_managed": {
+            "semi_managed": {
+                "supply_price": "4.20",
+                "jit_stock": "100",
+                "is_original_box": "否",
+                "length": "10",
+                "width": "10",
+                "height": "2",
+                "goods_code_strategy": "allow_blank",
+                "barcode_strategy": "allow_blank",
+            },
+        },
     }
     for template_type, template_payload in template_payloads.items():
         repo.create_template(

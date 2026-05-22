@@ -3587,15 +3587,53 @@ class DxmLoginFlow:
         if not save_rect or not hasattr(page, 'on'):
             return []
         events: list[dict[str, Any]] = []
+        requests_by_id: dict[int, dict[str, Any]] = {}
 
-        def on_response(response) -> None:
-            url = str(getattr(response, 'url', '') or '')
-            if not self._is_save_related_url(url):
+        def request_method(request: Any) -> str | None:
+            return str(getattr(request, 'method', '') or '').upper() or None
+
+        def request_url(request: Any) -> str:
+            return str(getattr(request, 'url', '') or '')
+
+        def request_resource_type(request: Any) -> str | None:
+            return str(getattr(request, 'resource_type', '') or '') or None
+
+        def on_request(request) -> None:
+            url = request_url(request)
+            method = request_method(request)
+            resource_type = request_resource_type(request)
+            if not self._is_save_related_url(url, method=method, resource_type=resource_type):
                 return
             item: dict[str, Any] = {
                 'url': url,
-                'status': getattr(response, 'status', None),
+                'method': method,
+                'resource_type': resource_type,
             }
+            try:
+                post_data = request.post_data
+                if post_data:
+                    item['post_data_excerpt'] = str(post_data)[:500]
+            except Exception:
+                pass
+            requests_by_id[id(request)] = item
+            events.append(item)
+
+        def on_response(response) -> None:
+            url = str(getattr(response, 'url', '') or '')
+            request = getattr(response, 'request', None)
+            method = request_method(request) if request is not None else None
+            resource_type = request_resource_type(request) if request is not None else None
+            if not self._is_save_related_url(url, method=method, resource_type=resource_type):
+                return
+            item = requests_by_id.get(id(request)) if request is not None else None
+            if item is None:
+                item = {
+                    'url': url,
+                    'method': method,
+                    'resource_type': resource_type,
+                }
+                events.append(item)
+            item['status'] = getattr(response, 'status', None)
             try:
                 item['json'] = response.json()
             except Exception:
@@ -3603,21 +3641,36 @@ class DxmLoginFlow:
                     item['text_excerpt'] = str(response.text() or '')[:500]
                 except Exception:
                     item['text_excerpt'] = ''
-            events.append(item)
 
         try:
             page.on('response', on_response)
         except Exception:
             return events
+        try:
+            page.on('request', on_request)
+        except Exception:
+            pass
         return events
 
-    def _is_save_related_url(self, url: str) -> bool:
+    def _is_save_related_url(
+        self,
+        url: str,
+        *,
+        method: str | None = None,
+        resource_type: str | None = None,
+    ) -> bool:
         text = url.lower()
-        return (
-            'dianxiaomi.com' in text
-            and any(term in text for term in ('save', 'edit', 'update', 'submit'))
-            and not any(term in text for term in ('publish', 'release', 'online', 'submitpublish'))
-        )
+        if 'dianxiaomi.com' not in text:
+            return False
+        if any(term in text for term in ('publish', 'release', 'online', 'submitpublish')):
+            return False
+        if any(text.endswith(ext) for ext in ('.js', '.css', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.woff', '.woff2')):
+            return False
+        if any(term in text for term in ('save', 'edit', 'update', 'submit')):
+            return True
+        if (method or '').upper() in {'POST', 'PUT', 'PATCH'} and (resource_type or '').lower() in {'xhr', 'fetch'}:
+            return any(term in text for term in ('smt', 'product', 'semi', 'sku', 'item'))
+        return False
 
     def _network_save_result(self, events: list[dict[str, Any]]) -> dict[str, Any]:
         if not events:
@@ -3631,8 +3684,10 @@ class DxmLoginFlow:
                 return {
                     'ok': ok,
                     'url': item.get('url'),
+                    'method': item.get('method'),
                     'status': item.get('status'),
                     'code': code,
+                    'msg': msg,
                     'message': msg,
                     'raw': payload,
                 }
@@ -3641,7 +3696,9 @@ class DxmLoginFlow:
         return {
             'ok': 200 <= int(status or 0) < 300,
             'url': last.get('url'),
+            'method': last.get('method'),
             'status': status,
+            'msg': last.get('text_excerpt'),
             'message': last.get('text_excerpt'),
         }
 

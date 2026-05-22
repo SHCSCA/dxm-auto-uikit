@@ -112,8 +112,106 @@ class ConfigValidationService:
                 missing.append("compliance")
             if not self._has_eu_outer_package_image(payload, product_payload, templates):
                 missing.append("image.eu_outer_package_filename")
+            missing.extend(self._missing_save_only_template_fields(payload, product_payload, templates, present_templates))
             return missing
         return []
+
+    def _missing_save_only_template_fields(
+        self,
+        task_payload: Mapping[str, Any],
+        product_payload: Mapping[str, Any],
+        templates: Any,
+        present_templates: set[str],
+    ) -> list[str]:
+        missing: list[str] = []
+        check_domain = present_templates.__contains__
+        if not self._has_any_domain_value(
+            "category",
+            task_payload,
+            product_payload,
+            templates,
+            (
+                "category.category_match",
+                "category.category_name",
+                "category.category_keyword",
+                "category.template_category_id",
+                "category_name",
+            ),
+        ) and check_domain("category"):
+            missing.append("category")
+        if not self._has_any_domain_value(
+            "image",
+            task_payload,
+            product_payload,
+            templates,
+            ("image.marketing_images_strategy", "image.marketing_strategy"),
+        ) and check_domain("image"):
+            missing.append("image.marketing_images_strategy")
+        if not self._has_any_domain_value(
+            "logistics",
+            task_payload,
+            product_payload,
+            templates,
+            ("logistics.weight", "weight"),
+        ) and check_domain("logistics"):
+            missing.append("logistics.weight")
+        if not self._has_all_domain_values(
+            "logistics",
+            task_payload,
+            product_payload,
+            templates,
+            ("length", "width", "height"),
+        ) and check_domain("logistics"):
+            missing.append("logistics.dimensions")
+        if not self._has_any_domain_value(
+            "semi_managed",
+            task_payload,
+            product_payload,
+            templates,
+            ("semi_managed.product_price", "semi_managed.supply_price", "product_price", "supply_price"),
+        ) and check_domain("semi_managed"):
+            missing.append("semi_managed.product_price_or_supply_price")
+        if not self._has_any_domain_value(
+            "semi_managed",
+            task_payload,
+            product_payload,
+            templates,
+            ("semi_managed.jit_stock", "semi_managed.stock", "jit_stock"),
+        ) and check_domain("semi_managed"):
+            missing.append("semi_managed.jit_stock")
+        if not self._has_any_domain_value(
+            "semi_managed",
+            task_payload,
+            product_payload,
+            templates,
+            ("semi_managed.is_original_box", "semi_managed.original_box", "is_original_box"),
+        ) and check_domain("semi_managed"):
+            missing.append("semi_managed.is_original_box")
+        if not self._has_all_domain_values(
+            "semi_managed",
+            task_payload,
+            product_payload,
+            templates,
+            ("length", "width", "height"),
+        ) and check_domain("semi_managed"):
+            missing.append("semi_managed.dimensions")
+        if not self._has_any_domain_value(
+            "semi_managed",
+            task_payload,
+            product_payload,
+            templates,
+            ("semi_managed.goods_code_strategy", "goods_code_strategy"),
+        ) and check_domain("semi_managed"):
+            missing.append("semi_managed.goods_code_strategy")
+        if not self._has_any_domain_value(
+            "semi_managed",
+            task_payload,
+            product_payload,
+            templates,
+            ("semi_managed.barcode_strategy", "barcode_strategy"),
+        ) and check_domain("semi_managed"):
+            missing.append("semi_managed.barcode_strategy")
+        return missing
 
     def _present_template_types(self, templates: Any) -> set[str]:
         present: set[str] = set()
@@ -203,6 +301,55 @@ class ConfigValidationService:
             if isinstance(value, Mapping):
                 return bool(value)
         return False
+
+    def _has_any_domain_value(
+        self,
+        domain: str,
+        task_payload: Mapping[str, Any],
+        product_payload: Mapping[str, Any],
+        templates: Any,
+        paths: tuple[str, ...],
+    ) -> bool:
+        for payload in self._domain_payloads(domain, task_payload, product_payload, templates):
+            if any(self._non_empty(self._path_value(payload, path)) for path in paths):
+                return True
+        return False
+
+    def _has_all_domain_values(
+        self,
+        domain: str,
+        task_payload: Mapping[str, Any],
+        product_payload: Mapping[str, Any],
+        templates: Any,
+        keys: tuple[str, ...],
+    ) -> bool:
+        return all(
+            self._has_any_domain_value(
+                domain,
+                task_payload,
+                product_payload,
+                templates,
+                (f"{domain}.{key}", key),
+            )
+            for key in keys
+        )
+
+    def _domain_payloads(
+        self,
+        domain: str,
+        task_payload: Mapping[str, Any],
+        product_payload: Mapping[str, Any],
+        templates: Any,
+    ) -> tuple[Mapping[str, Any], ...]:
+        return (*self._template_payloads(templates, domain), task_payload, product_payload)
+
+    def _path_value(self, payload: Mapping[str, Any], path: str) -> Any:
+        current: Any = payload
+        for part in path.split("."):
+            if not isinstance(current, Mapping):
+                return None
+            current = current.get(part)
+        return current
 
     def _has_eu_outer_package_image(
         self,

@@ -279,6 +279,13 @@ class DummyNetworkResponse:
     url = 'https://www.dianxiaomi.com/api/smt/product/save'
     status = 200
 
+    @property
+    def request(self):
+        class Request:
+            method = 'POST'
+
+        return Request()
+
     def json(self):
         return {'code': 0, 'msg': '产品已保存到「待发布」'}
 
@@ -2018,6 +2025,8 @@ def test_save_only_succeeds_when_success_prompt_appears_after_click(tmp_path):
     assert page.evaluate_calls == 2
     assert state['stage'] == 'save_only'
     assert state['save_result']['ok'] is True
+    assert state['save_result']['network_events'] == []
+    assert state['save_result']['network_save_result'] == {'ok': None, 'reason': '未捕获保存相关接口响应'}
 
 
 def test_save_only_records_network_success_as_save_evidence(tmp_path):
@@ -2030,5 +2039,9 @@ def test_save_only_records_network_success_as_save_evidence(tmp_path):
     assert state['stage'] == 'save_only'
     assert page.clicks == [(25.0, 40.0)]
     assert state['save_result']['network_save_result']['ok'] is True
+    assert state['save_result']['network_save_result']['method'] == 'POST'
     assert state['save_result']['network_save_result']['code'] == 0
+    assert state['save_result']['network_save_result']['msg'] == '产品已保存到「待发布」'
+    assert state['save_result']['network_events'][0]['method'] == 'POST'
+    assert state['save_result']['network_events'][0]['status'] == 200
     assert state['save_result']['network_events'][0]['json']['msg'] == '产品已保存到「待发布」'

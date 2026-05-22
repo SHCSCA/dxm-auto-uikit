@@ -1,0 +1,150 @@
+{
+  "scope": {
+    "store_name": "Dang Kang",
+    "platform": "AliExpress",
+    "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+    "allowed_modes": ["single_save", "batch_save"]
+  },
+  "templates": [
+    {
+      "template_type": "category",
+      "template_name": "Dang Kang SMT semi-managed category",
+      "binding_scope": "store/category/platform",
+      "is_enabled": true,
+      "payload": {
+        "binding": {
+          "store_name": "Dang Kang",
+          "platform": "AliExpress",
+          "category_name": "立牌类谷子"
+        },
+        "category": {
+          "template_category_id": "CONFIRM_CATEGORY_ID",
+          "category_keyword": "立牌",
+          "category_match": "CONFIRM_CATEGORY_NAME",
+          "attribute_template_priorities": ["立牌类谷子"]
+        }
+      }
+    },
+    {
+      "template_type": "sku",
+      "template_name": "Dang Kang SMT semi-managed SKU",
+      "binding_scope": "store/category/platform",
+      "is_enabled": true,
+      "payload": {
+        "binding": {
+          "store_name": "Dang Kang",
+          "platform": "AliExpress",
+          "category_name": "立牌类谷子"
+        },
+        "sku": {
+          "sku_code_strategy": "use_product_or_dxm",
+          "goods_code_strategy": "allow_blank",
+          "barcode_strategy": "allow_blank"
+        }
+      }
+    },
+    {
+      "template_type": "pricing",
+      "template_name": "Dang Kang SMT semi-managed pricing",
+      "binding_scope": "store/category/platform",
+      "is_enabled": true,
+      "payload": {
+        "binding": {
+          "store_name": "Dang Kang",
+          "platform": "AliExpress",
+          "category_name": "立牌类谷子"
+        },
+        "pricing": {
+          "declared_value": "1",
+          "stock": "200",
+          "retail_price": "CONFIRM_PER_PRODUCT"
+        }
+      }
+    },
+    {
+      "template_type": "logistics",
+      "template_name": "Dang Kang SMT semi-managed logistics",
+      "binding_scope": "store/category/platform",
+      "is_enabled": true,
+      "payload": {
+        "binding": {
+          "store_name": "Dang Kang",
+          "platform": "AliExpress",
+          "category_name": "立牌类谷子"
+        },
+        "logistics": {
+          "weight": "0.03",
+          "length": "10",
+          "width": "10",
+          "height": "2",
+          "delivery_days": "7",
+          "freight_template_priorities": ["CONFIRM_FREIGHT_TEMPLATE"],
+          "service_template_priorities": ["CONFIRM_SERVICE_TEMPLATE"],
+          "logistics_attribute": "普货",
+          "is_original_box": "否"
+        }
+      }
+    },
+    {
+      "template_type": "image",
+      "template_name": "Dang Kang SMT semi-managed images",
+      "binding_scope": "store/category/platform",
+      "is_enabled": true,
+      "payload": {
+        "binding": {
+          "store_name": "Dang Kang",
+          "platform": "AliExpress",
+          "category_name": "立牌类谷子"
+        },
+        "image": {
+          "eu_outer_package_filename": "CONFIRM_EU_OUTER_PACKAGE_FILENAME.jpg",
+          "marketing_images_strategy": "generate"
+        }
+      }
+    },
+    {
+      "template_type": "compliance",
+      "template_name": "Dang Kang SMT semi-managed compliance",
+      "binding_scope": "store/category/platform",
+      "is_enabled": true,
+      "payload": {
+        "binding": {
+          "store_name": "Dang Kang",
+          "platform": "AliExpress",
+          "category_name": "立牌类谷子"
+        },
+        "compliance": {
+          "material": "CONFIRM_MATERIAL",
+          "eu_responsible_priorities": ["CONFIRM_EU_RESPONSIBLE"],
+          "manufacturer_priorities": ["CONFIRM_MANUFACTURER"],
+          "customs_product_name_priorities": ["钥匙扣", "keychain"],
+          "eu_outer_package_filename": "CONFIRM_EU_OUTER_PACKAGE_FILENAME.jpg"
+        }
+      }
+    },
+    {
+      "template_type": "semi_managed",
+      "template_name": "Dang Kang SMT semi-managed save-only",
+      "binding_scope": "store/category/platform",
+      "is_enabled": true,
+      "payload": {
+        "binding": {
+          "store_name": "Dang Kang",
+          "platform": "AliExpress",
+          "category_name": "立牌类谷子"
+        },
+        "semi_managed": {
+          "supply_price": "CONFIRM_PER_PRODUCT",
+          "jit_stock": "100",
+          "is_original_box": "否",
+          "logistics_attribute": "普货",
+          "length": "10",
+          "width": "10",
+          "height": "2",
+          "goods_code_strategy": "allow_blank",
+          "barcode_strategy": "allow_blank"
+        }
+      }
+    }
+  ]
+}
