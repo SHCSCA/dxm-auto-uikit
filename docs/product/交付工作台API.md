@@ -20,6 +20,7 @@
 - `dxmReferenceTemplates`：前端模板矩阵使用的分区映射视图。
 - `publish_guard_state`：交付安全状态，固定不开放发布动作；当现有报告和证据均显示 `published=false` 时返回 `safe_unpublished`。
 - `evidence_grade`：证据等级。
+- `regression_gates`：L0/L1/L2/L3 回归门禁矩阵。L1 读取 `data/l1_selector_replay/` 最新离线 replay；L2 读取 `data/l2_readonly_probe/` 最新只读 probe；L3 必须显示人工批准要求。
 - `acceptanceGaps` / `safety`：交付缺口和只保存不发布安全条。
 
 ## 证据等级
@@ -27,3 +28,10 @@
 - `A`：存在 `save_result`、`published=false` 证明，并捕获到 network 或 HAR 保存响应。
 - `B`：存在 `save_result` 与 `published=false` 证明，但缺少 network/HAR 保存响应。
 - `C`：保存结果或未发布证明不完整。
+
+## 回归门禁状态
+
+- L0：后端单测和前端 build，固定不访问店小秘。
+- L1：`tools/probes/l1_selector_replay.py`，离线 DOM fixture replay，通过时 `status=passed`。
+- L2：`tools/probes/l2_readonly_probe.py`，真实 URL 通过时 `status=passed`；本地/mock 通过时 `status=mock_passed`，不得等同于真实页面通过。
+- L3：`single_save` 金丝雀，真实写操作，必须人工明确批准后才允许执行。
