@@ -749,6 +749,7 @@ function humanGateStatus(status: string) {
   return ({
     ready: '已就绪',
     not_run: '未运行',
+    mock_passed: '离线通过',
     passed: '通过',
     failed: '失败',
     approval_required: '需批准',
@@ -756,13 +757,13 @@ function humanGateStatus(status: string) {
 }
 
 function gateStatusPill(status: string) {
-  if (status === 'passed' || status === 'ready') return 'ok'
+  if (status === 'passed' || status === 'ready' || status === 'mock_passed') return 'ok'
   if (status === 'failed') return 'danger'
   return 'warn'
 }
 
 function gateStatusTone(status: string) {
-  if (status === 'passed' || status === 'ready') return 'is-ok'
+  if (status === 'passed' || status === 'ready' || status === 'mock_passed') return 'is-ok'
   if (status === 'failed') return 'is-danger'
   return 'is-warn'
 }

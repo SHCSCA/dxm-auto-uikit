@@ -365,7 +365,7 @@ function buildRegressionGates(
     {
       level: 'L2',
       title: '真实登录态只读 probe',
-      status: l2Ok ? 'passed' : 'not_run',
+      status: l2Ok ? 'mock_passed' : 'not_run',
       evidenceLevel: l2Ok ? 'B' : 'C',
       requiresApproval: true,
       command: 'tools/probes/l2_readonly_probe.py',

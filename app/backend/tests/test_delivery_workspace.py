@@ -175,6 +175,7 @@ def _create_delivery_fixture(
 def _client_with_temp_repo(tmp_path, monkeypatch):
     db_path = tmp_path / "delivery-workspace.db"
     monkeypatch.setattr(db, "DB_PATH", db_path)
+    monkeypatch.setattr(delivery_workspace, "L1_REPLAY_DIR", tmp_path / "l1_selector_replay")
     monkeypatch.setattr(delivery_workspace, "L2_PROBE_DIR", tmp_path / "l2_readonly_probe")
     db.init_db()
     repo = Repository()
@@ -221,6 +222,7 @@ def test_delivery_workspace_returns_frontend_contract(tmp_path, monkeypatch):
     assert any(point["kind"] == "published_proof" for point in data["evidence_points"])
     assert data["evidence_grade"]["grade"] == "A"
     assert [gate["level"] for gate in data["regression_gates"]] == ["L0", "L1", "L2", "L3"]
+    assert data["regression_gates"][1]["status"] == "not_run"
     assert data["regression_gates"][2]["status"] == "not_run"
     assert data["regression_gates"][3]["status"] == "passed"
     assert data["safety"]["evidenceGrade"] == "A"
@@ -361,7 +363,42 @@ def test_delivery_workspace_exposes_latest_l2_probe_evidence(tmp_path, monkeypat
     data = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}").json()
 
     l2_gate = next(gate for gate in data["regression_gates"] if gate["level"] == "L2")
-    assert l2_gate["status"] == "passed"
+    assert l2_gate["status"] == "mock_passed"
     assert l2_gate["evidenceLevel"] == "B"
     assert l2_gate["latest"]["json_path"] == str(l2_json)
     assert l2_gate["latest"]["network"]["write_request_count"] == 0
+
+
+def test_delivery_workspace_exposes_latest_l1_replay_evidence(tmp_path, monkeypatch):
+    l1_dir = tmp_path / "l1_selector_replay"
+    l1_dir.mkdir()
+    l1_json = l1_dir / "l1_selector_replay_20260522T010203Z.json"
+    l1_json.write_text(
+        """
+        {
+          "schema": "dxm_l1_selector_replay.v1",
+          "ok": true,
+          "created_at": "2026-05-22T01:02:03+00:00",
+          "markdown_path": "data/l1_selector_replay/replay.md",
+          "manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "case_count": 3,
+          "passed_count": 3,
+          "failed_count": 0,
+          "cases": [
+            {"id": "draft", "page_key": "smt_draft_list", "ok": true, "failures": []}
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(delivery_workspace, "L1_REPLAY_DIR", l1_dir)
+    fixture = _create_delivery_fixture(repo, with_network=False, with_verify_proof=False)
+
+    data = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}").json()
+
+    l1_gate = next(gate for gate in data["regression_gates"] if gate["level"] == "L1")
+    assert l1_gate["status"] == "passed"
+    assert l1_gate["evidenceLevel"] == "B"
+    assert l1_gate["latest"]["json_path"] == str(l1_json)
+    assert l1_gate["latest"]["passed_count"] == 3

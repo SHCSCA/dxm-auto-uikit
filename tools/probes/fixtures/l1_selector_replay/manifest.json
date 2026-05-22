@@ -1,0 +1,29 @@
+{
+  "schema": "dxm_l1_selector_replay_manifest.v1",
+  "cases": [
+    {
+      "id": "draft_list_claimed_product",
+      "page_key": "smt_draft_list",
+      "url": "https://www.dianxiaomi.com/web/smt/smtProductList/draft",
+      "fixture": "draft_list_claimed_product.html",
+      "required_texts": ["草稿", "编辑", "Dang Kang", "AI认领"],
+      "checks": ["claimed_row_ownership", "publish_button_absent"]
+    },
+    {
+      "id": "edit_media_and_templates",
+      "page_key": "smt_edit",
+      "url": "https://www.dianxiaomi.com/web/smt/product/edit?id=fixture",
+      "fixture": "edit_media_and_templates.html",
+      "required_texts": ["商品信息", "半托管服务", "引用模板", "外包装/标签实拍图-欧盟", "营销图片"],
+      "checks": ["eu_outer_package_image_bank", "marketing_white_background", "publish_button_absent"]
+    },
+    {
+      "id": "semi_managed_fields",
+      "page_key": "smt_semi_edit",
+      "url": "https://www.dianxiaomi.com/web/smt/semi/editFromSmt?id=fixture",
+      "fixture": "semi_managed_fields.html",
+      "required_texts": ["半托管信息", "JIT库存", "是否原箱", "物流属性", "保存"],
+      "checks": ["semi_managed_fields", "save_only_button_filter", "publish_button_absent"]
+    }
+  ]
+}

@@ -23,6 +23,7 @@ REFERENCE_SECTION_LABELS = {
 }
 
 ROOT = Path(__file__).resolve().parents[4]
+L1_REPLAY_DIR = ROOT / "data" / "l1_selector_replay"
 L2_PROBE_DIR = ROOT / "data" / "l2_readonly_probe"
 
 ACTION_TO_STATES = {
@@ -303,6 +304,7 @@ def _evidence_grade(extracted: dict[str, Any]) -> dict[str, Any]:
 
 
 def _regression_gates(extracted: dict[str, Any]) -> list[dict[str, Any]]:
+    latest_l1 = _latest_schema_result(L1_REPLAY_DIR, "dxm_l1_selector_replay.v1")
     latest_l2 = _latest_l2_probe_result()
     has_l3_save_proof = bool(extracted["save_results"] and extracted["published_proofs"])
     has_l3_network = bool(extracted["network_save_results"] or extracted["har_summaries"])
@@ -313,14 +315,16 @@ def _regression_gates(extracted: dict[str, Any]) -> list[dict[str, Any]]:
         l2_ok = latest_l2.get("ok") is True
         target_url = str(latest_l2.get("target_url") or "")
         is_real_target = "dianxiaomi.com" in target_url
-        l2_status = "passed" if l2_ok else "failed"
         if l2_ok and is_real_target:
+            l2_status = "passed"
             l2_level = "A"
             l2_detail = "最新真实店小秘 L2 只读 probe 通过。"
         elif l2_ok:
+            l2_status = "mock_passed"
             l2_level = "B"
             l2_detail = "最新 L2 离线/mock probe 通过；真实页面仍待批准执行。"
         else:
+            l2_status = "failed"
             l2_level = "C"
             l2_detail = "最新 L2 probe 未通过，需查看证据报告。"
 
@@ -337,11 +341,18 @@ def _regression_gates(extracted: dict[str, Any]) -> list[dict[str, Any]]:
         {
             "level": "L1",
             "title": "离线 DOM/fixture replay",
-            "status": "ready",
-            "evidenceLevel": "B",
+            "status": "passed" if latest_l1 and latest_l1.get("ok") else "failed" if latest_l1 else "not_run",
+            "evidenceLevel": "B" if latest_l1 and latest_l1.get("ok") else "C",
             "requiresApproval": False,
-            "command": "selector profile / DOM fixture replay",
-            "detail": "验证采集箱行、欧盟图槽位、营销图白底、保存按钮过滤等选择器。",
+            "command": "tools/probes/l1_selector_replay.py",
+            "detail": (
+                f"最新 L1 replay 通过：{latest_l1.get('passed_count')}/{latest_l1.get('case_count')}。"
+                if latest_l1 and latest_l1.get("ok")
+                else "最新 L1 replay 未通过，需查看 Markdown 证据。"
+                if latest_l1
+                else "尚未运行 L1 离线 DOM/fixture replay。"
+            ),
+            "latest": latest_l1,
         },
         {
             "level": "L2",
@@ -372,42 +383,95 @@ def _regression_gates(extracted: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _latest_l2_probe_result() -> dict[str, Any] | None:
-    if not L2_PROBE_DIR.exists():
+    data = _latest_schema_result(L2_PROBE_DIR, "dxm_l2_readonly_probe.v1")
+    if not data:
         return None
-    candidates = sorted(L2_PROBE_DIR.rglob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+    return {
+        key: data.get(key)
+        for key in (
+            "ok",
+            "target",
+            "target_url",
+            "final_url",
+            "created_at",
+            "json_path",
+            "markdown_path",
+            "screenshot_path",
+            "screenshot_sha256",
+            "dom_path",
+            "dom_sha256",
+            "network",
+            "safety",
+        )
+    }
+
+
+def _latest_schema_result(directory: Path, schema: str) -> dict[str, Any] | None:
+    if not directory.exists():
+        return None
+    candidates = sorted(directory.rglob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
     for path in candidates:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        if data.get("schema") != "dxm_l2_readonly_probe.v1":
+        if data.get("schema") != schema:
             continue
-        return {
-            "ok": data.get("ok") is True,
-            "target": data.get("target"),
-            "target_url": data.get("target_url"),
-            "final_url": data.get("final_url"),
-            "created_at": data.get("created_at"),
-            "json_path": str(path),
-            "markdown_path": data.get("markdown_path"),
-            "screenshot_path": data.get("screenshot_path"),
-            "screenshot_sha256": data.get("screenshot_sha256"),
-            "dom_path": data.get("dom_path"),
-            "dom_sha256": data.get("dom_sha256"),
-            "network": {
-                key: (data.get("network") or {}).get(key)
-                for key in (
-                    "request_count",
-                    "write_request_count",
-                    "non_read_request_count",
-                    "blocked_request_count",
-                    "forbidden_keyword_request_count",
-                    "websocket_count",
-                )
-            },
-            "safety": data.get("safety"),
-        }
+        result = _summarize_probe_result(data, path)
+        return result
     return None
+
+
+def _summarize_probe_result(data: Mapping[str, Any], path: Path) -> dict[str, Any]:
+    summary = {
+        "ok": data.get("ok") is True,
+        "created_at": data.get("created_at"),
+        "json_path": str(path),
+        "markdown_path": data.get("markdown_path"),
+    }
+    if data.get("schema") == "dxm_l1_selector_replay.v1":
+        summary.update(
+            {
+                "case_count": data.get("case_count"),
+                "passed_count": data.get("passed_count"),
+                "failed_count": data.get("failed_count"),
+                "manifest_sha256": data.get("manifest_sha256"),
+                "failed_cases": [
+                    {
+                        "id": case.get("id"),
+                        "page_key": case.get("page_key"),
+                        "failures": case.get("failures") or [],
+                    }
+                    for case in data.get("cases") or []
+                    if not case.get("ok")
+                ][:10],
+            }
+        )
+    elif data.get("schema") == "dxm_l2_readonly_probe.v1":
+        summary.update(
+            {
+                "target": data.get("target"),
+                "target_url": data.get("target_url"),
+                "final_url": data.get("final_url"),
+                "screenshot_path": data.get("screenshot_path"),
+                "screenshot_sha256": data.get("screenshot_sha256"),
+                "dom_path": data.get("dom_path"),
+                "dom_sha256": data.get("dom_sha256"),
+                "network": {
+                    key: (data.get("network") or {}).get(key)
+                    for key in (
+                        "request_count",
+                        "write_request_count",
+                        "non_read_request_count",
+                        "blocked_request_count",
+                        "forbidden_keyword_request_count",
+                        "websocket_count",
+                    )
+                },
+                "safety": data.get("safety"),
+            }
+        )
+    return summary
 
 
 def _extract_delivery_evidence(reports: list[dict[str, Any]], evidences: list[dict[str, Any]]) -> dict[str, Any]:

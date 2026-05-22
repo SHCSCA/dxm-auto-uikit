@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>普通编辑页 fixture</title>
+</head>
+<body>
+  <main>
+    <section aria-label="属性信息">
+      <h2>商品信息</h2>
+      <button type="button">引用模板</button>
+      <span>半托管服务</span>
+      <button type="button">编辑半托管信息</button>
+    </section>
+    <section aria-label="资质信息">
+      <label>外包装/标签实拍图-欧盟:</label>
+      <div class="image-slot">
+        <button type="button">添加图片</button>
+        <ul class="image-menu">
+          <li>本地图片</li>
+          <li>空间图片</li>
+          <li>网络图片</li>
+          <li>图片银行（速卖通）</li>
+          <li>引用产品图片</li>
+          <li>引用采集图片</li>
+        </ul>
+      </div>
+    </section>
+    <section aria-label="营销图片">
+      <h2>营销图片</h2>
+      <figure>
+        <img src="white.jpg" alt="1:1白底图">
+        <figcaption>(1:1白底图)</figcaption>
+      </figure>
+      <figure>
+        <img src="scene.jpg" alt="3:4场景图">
+        <figcaption>(3:4场景图)</figcaption>
+      </figure>
+      <button type="button">一键生成</button>
+      <button type="button">图片白底</button>
+      <div role="dialog" aria-label="图片白底">
+        <label><input type="checkbox" checked>选择全部</label>
+        <button type="button">一键白底</button>
+        <button type="button">关闭</button>
+      </div>
+    </section>
+    <footer>
+      <button type="button">保存</button>
+    </footer>
+  </main>
+</body>
+</html>

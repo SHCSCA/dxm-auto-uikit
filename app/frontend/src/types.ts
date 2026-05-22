@@ -147,7 +147,7 @@ export type AcceptanceGap = {
 export type RegressionGate = {
   level: 'L0' | 'L1' | 'L2' | 'L3' | string
   title: string
-  status: 'ready' | 'not_run' | 'passed' | 'failed' | 'approval_required' | string
+  status: 'ready' | 'not_run' | 'mock_passed' | 'passed' | 'failed' | 'approval_required' | string
   evidenceLevel: EvidenceGrade
   requiresApproval: boolean
   command?: string
