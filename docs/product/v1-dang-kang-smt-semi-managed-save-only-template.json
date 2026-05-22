@@ -3,7 +3,17 @@
     "store_name": "Dang Kang",
     "platform": "AliExpress",
     "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
-    "allowed_modes": ["single_save", "batch_save"]
+    "allowed_modes": ["single_save", "batch_save"],
+    "safety_boundary": {
+      "operate_real_dxm": false,
+      "network_write_allowed": false,
+      "publish_allowed": false,
+      "notes": [
+        "This file is a template specification and test fixture reference only.",
+        "Do not use it to operate the real Dianxiaomi account without a separate manual confirmation gate.",
+        "V1 remains save-only; publish, continue_publish and save_and_publish are forbidden."
+      ]
+    }
   },
   "templates": [
     {
@@ -20,8 +30,13 @@
         "category": {
           "template_category_id": "CONFIRM_CATEGORY_ID",
           "category_keyword": "立牌",
-          "category_match": "CONFIRM_CATEGORY_NAME",
-          "attribute_template_priorities": ["立牌类谷子"]
+          "category_match": "CONFIRM_CATEGORY_NAME"
+        },
+        "dxm_reference_templates": {
+          "attribute_info": {
+            "names": ["立牌类谷子"],
+            "required": true
+          }
         }
       }
     },
@@ -78,10 +93,18 @@
           "width": "10",
           "height": "2",
           "delivery_days": "7",
-          "freight_template_priorities": ["CONFIRM_FREIGHT_TEMPLATE"],
-          "service_template_priorities": ["CONFIRM_SERVICE_TEMPLATE"],
           "logistics_attribute": "普货",
           "is_original_box": "否"
+        },
+        "dxm_reference_templates": {
+          "freight": {
+            "names": ["CONFIRM_FREIGHT_TEMPLATE"],
+            "required": true
+          },
+          "service": {
+            "names": ["CONFIRM_SERVICE_TEMPLATE"],
+            "required": true
+          }
         }
       }
     },
@@ -99,6 +122,12 @@
         "image": {
           "eu_outer_package_filename": "CONFIRM_EU_OUTER_PACKAGE_FILENAME.jpg",
           "marketing_images_strategy": "generate"
+        },
+        "dxm_reference_templates": {
+          "description": {
+            "names": ["CONFIRM_DESCRIPTION_TEMPLATE"],
+            "required": false
+          }
         }
       }
     },
@@ -115,10 +144,22 @@
         },
         "compliance": {
           "material": "CONFIRM_MATERIAL",
-          "eu_responsible_priorities": ["CONFIRM_EU_RESPONSIBLE"],
-          "manufacturer_priorities": ["CONFIRM_MANUFACTURER"],
           "customs_product_name_priorities": ["钥匙扣", "keychain"],
           "eu_outer_package_filename": "CONFIRM_EU_OUTER_PACKAGE_FILENAME.jpg"
+        },
+        "dxm_reference_templates": {
+          "eu_responsible": {
+            "names": ["CONFIRM_EU_RESPONSIBLE"],
+            "required": true
+          },
+          "manufacturer": {
+            "names": ["CONFIRM_MANUFACTURER"],
+            "required": true
+          },
+          "compliance": {
+            "names": ["CONFIRM_COMPLIANCE_TEMPLATE"],
+            "required": false
+          }
         }
       }
     },
@@ -143,6 +184,12 @@
           "height": "2",
           "goods_code_strategy": "allow_blank",
           "barcode_strategy": "allow_blank"
+        },
+        "dxm_reference_templates": {
+          "semi_managed": {
+            "names": [],
+            "required": false
+          }
         }
       }
     }

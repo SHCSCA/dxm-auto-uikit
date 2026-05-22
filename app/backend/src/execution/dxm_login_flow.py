@@ -19,6 +19,16 @@ WORKFLOW_SCREENSHOT_MAP = {
     'data_acquisition': SCREENSHOT_DIR / 'dianxiaomi_data_acquisition.png',
     'draft_box': SCREENSHOT_DIR / 'dianxiaomi_draft_box.png',
 }
+DXM_REFERENCE_TEMPLATE_SECTIONS = (
+    'attribute_info',
+    'description',
+    'freight',
+    'service',
+    'eu_responsible',
+    'manufacturer',
+    'compliance',
+    'semi_managed',
+)
 DRAFT_ACTION_SCREENSHOT_MAP = {
     'remark': SCREENSHOT_DIR / 'dianxiaomi_draft_box_remark.png',
     'edit': SCREENSHOT_DIR / 'dianxiaomi_draft_box_edit.png',
@@ -911,6 +921,26 @@ class DxmLoginFlow:
                 'fill_result': {'category': category, 'missing': ['category']},
                 'published': False,
             }
+        dxm_reference_template_results = self._apply_dxm_reference_templates_on_page(page, values)
+        reference_missing = self._missing_required_reference_template_results(dxm_reference_template_results)
+        if reference_missing:
+            screenshot_path = EDITOR_ACTION_SCREENSHOT_MAP['fill_editor_required_defaults']
+            page.screenshot(path=str(screenshot_path), full_page=True)
+            return {
+                'stage': 'fill_editor_required_defaults_failed',
+                'label': '店小秘引用模板失败',
+                'message': '店小秘引用模板缺失或未命中：' + ', '.join(reference_missing),
+                'page_title': page.title(),
+                'page_url': page.url,
+                'screenshot_url': self._artifact_url(screenshot_path),
+                'fill_result': {
+                    'category': category,
+                    'dxm_reference_template_results': dxm_reference_template_results,
+                    'missing': reference_missing,
+                },
+                'dxm_reference_template_results': dxm_reference_template_results,
+                'published': False,
+            }
         field_result = page.evaluate(r'''(values) => {
           const visible = (el) => {
             const r = el.getBoundingClientRect();
@@ -1027,20 +1057,17 @@ class DxmLoginFlow:
                 'gross_height': True,
             })
 
-        reference_templates = self._apply_reference_templates_on_page(
-            page,
-            values.get('attribute_template_priorities') or [],
-        )
+        reference_templates = dxm_reference_template_results.get('attribute_info') or {'ok': True, 'skipped': True}
         category_attributes = self._fill_category_required_attributes(page)
         self._dismiss_blocking_modals(page)
         original_box = self._choose_ant_select_near_label(page, '是否原箱', ['否'])
         logistics = self._check_choice_by_text(page, '普货')
         tax = self._check_choice_by_text(page, '不含关税报价')
-        freight = self._choose_ant_select_near_label(page, '运费模板', values.get('freight_template_priorities') or [])
-        service = self._choose_ant_select_near_label(page, '服务模板', values.get('service_template_priorities') or [])
+        freight = dxm_reference_template_results.get('freight') or self._choose_ant_select_near_label(page, '运费模板', values.get('freight_template_priorities') or [])
+        service = dxm_reference_template_results.get('service') or self._choose_ant_select_near_label(page, '服务模板', values.get('service_template_priorities') or [])
         customs = self._fill_customs_supervision_attribute(page, values.get('customs_product_name_priorities') or [])
-        eu_responsible = self._choose_ant_select_near_label(page, '欧盟责任人', values.get('eu_responsible_priorities') or [])
-        manufacturer = self._choose_ant_select_near_label(page, '品牌制造商', values.get('manufacturer_priorities') or [])
+        eu_responsible = dxm_reference_template_results.get('eu_responsible') or self._choose_ant_select_near_label(page, '欧盟责任人', values.get('eu_responsible_priorities') or [])
+        manufacturer = dxm_reference_template_results.get('manufacturer') or self._choose_ant_select_near_label(page, '品牌制造商', values.get('manufacturer_priorities') or [])
 
         page.wait_for_timeout(1200)
         self._dismiss_blocking_modals(page)
@@ -1069,6 +1096,7 @@ class DxmLoginFlow:
             'customs_supervision': customs,
         }
         missing.extend(name for name, result in required_selects.items() if not result.get('ok'))
+        missing.extend(self._missing_required_reference_template_results(dxm_reference_template_results))
         if field_result.get('remaining_chinese_attributes'):
             missing.append('custom_attributes_english')
         missing = sorted(set(missing))
@@ -1089,6 +1117,7 @@ class DxmLoginFlow:
             'fill_result': {
                 'category': category,
                 'reference_templates': reference_templates,
+                'dxm_reference_template_results': dxm_reference_template_results,
                 'category_attributes': category_attributes,
                 'fields': field_result,
                 'original_box': original_box,
@@ -1102,6 +1131,7 @@ class DxmLoginFlow:
                 'missing': missing,
                 'optional_unfilled': optional_unfilled,
             },
+            'dxm_reference_template_results': dxm_reference_template_results,
             'published': False,
         }
 
@@ -2474,6 +2504,83 @@ class DxmLoginFlow:
           return {ok: priorities.some(term => text.includes(String(term))), text:text.slice(0, 160)};
         }''', priorities)
         return {**result, 'verified': verify, 'ok': bool(result.get('ok') and verify.get('ok'))}
+
+    def _apply_dxm_reference_templates_on_page(self, page: Page, values: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        configs = self._dxm_reference_template_configs(values)
+        results: dict[str, dict[str, Any]] = {}
+        label_sections = {
+            'freight': '运费模板',
+            'service': '服务模板',
+            'eu_responsible': '欧盟责任人',
+            'manufacturer': '品牌制造商',
+        }
+        unsupported_labels = {
+            'description': '描述信息',
+            'compliance': '合规信息',
+            'semi_managed': '半托管信息',
+        }
+        for section in DXM_REFERENCE_TEMPLATE_SECTIONS:
+            config = configs.get(section)
+            if not config:
+                continue
+            names = list(config.get('names') or [])
+            required = bool(config.get('required', True))
+            if not names:
+                result = {'ok': not required, 'skipped': True, 'reason': 'no_reference_template_config'}
+            elif section == 'attribute_info':
+                result = self._apply_reference_templates_on_page(page, names)
+            elif section in label_sections:
+                result = self._choose_ant_select_near_label(page, label_sections[section], names)
+            else:
+                result = {
+                    'ok': False,
+                    'reason': f'{unsupported_labels[section]}引用模板暂未实现真实控件：{", ".join(names)}',
+                    'optional': not required,
+                }
+            results[section] = {**result, 'section': section, 'names': names, 'required': required}
+        return results
+
+    def _dxm_reference_template_configs(self, values: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        raw = values.get('dxm_reference_templates_resolved') or values.get('dxm_reference_templates')
+        if not raw and any(section in values for section in DXM_REFERENCE_TEMPLATE_SECTIONS):
+            raw = values
+        if isinstance(raw, dict):
+            return {
+                section: self._normalize_dxm_reference_template_config(raw.get(section))
+                for section in DXM_REFERENCE_TEMPLATE_SECTIONS
+                if section in raw
+            }
+        legacy = {
+            'attribute_info': values.get('attribute_template_priorities'),
+            'freight': values.get('freight_template_priorities'),
+            'service': values.get('service_template_priorities'),
+            'eu_responsible': values.get('eu_responsible_priorities'),
+            'manufacturer': values.get('manufacturer_priorities'),
+        }
+        return {
+            section: {'names': names, 'required': True}
+            for section, names in legacy.items()
+            if names
+        }
+
+    def _normalize_dxm_reference_template_config(self, config: Any) -> dict[str, Any]:
+        if isinstance(config, dict):
+            names = config.get('names') or config.get('templates') or config.get('template_names') or config.get('priorities') or []
+            if isinstance(names, str):
+                names = [names]
+            return {'names': [str(name) for name in (names or []) if str(name or '').strip()], 'required': bool(config.get('required', True))}
+        if isinstance(config, str):
+            return {'names': [config], 'required': True}
+        if isinstance(config, list):
+            return {'names': [str(name) for name in config if str(name or '').strip()], 'required': True}
+        return {'names': [], 'required': True}
+
+    def _missing_required_reference_template_results(self, results: dict[str, dict[str, Any]]) -> list[str]:
+        return [
+            f'dxm_reference_templates.{section}'
+            for section, result in results.items()
+            if result.get('required', True) and not result.get('ok')
+        ]
 
     def _fill_customs_supervision_attribute(self, page: Page, priorities: list[str]) -> dict[str, Any]:
         configured = page.evaluate(r'''() => {

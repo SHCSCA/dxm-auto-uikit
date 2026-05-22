@@ -1,12 +1,26 @@
 from src.services.config_validation import ConfigValidationService
 
 
+def _dxm_reference_templates():
+    return {
+        "attribute_info": {"names": ["立牌类谷子"]},
+        "description": {"names": ["详情模板"]},
+        "freight": {"names": ["40g普货包裹"]},
+        "service": {"names": ["Service Template for New Sellers"]},
+        "eu_responsible": {"names": ["Jacqueiline Marti"]},
+        "manufacturer": {"names": ["jiyang county thunder"]},
+        "compliance": {"names": ["合规模板"]},
+        "semi_managed": {"names": ["半托管模板"]},
+    }
+
+
 def _required_templates():
     return [
         {
             "template_type": "category",
             "template_name": "类目模板",
             "payload": {
+                "dxm_reference_templates": _dxm_reference_templates(),
                 "category": {
                     "category_keyword": "立牌",
                     "category_match": "ACG Stand",
@@ -108,6 +122,112 @@ def test_valid_single_save_passes_with_required_templates():
         "warnings": [],
         "mode": "single_save",
     }
+
+
+def test_single_save_accepts_new_dxm_reference_templates():
+    service = ConfigValidationService()
+    templates = [
+        (
+            {
+                **template,
+                "payload": {
+                    **template["payload"],
+                    "dxm_reference_templates": {
+                        "attribute_info": {"names": ["立牌类谷子"]},
+                        "description": {"names": ["详情模板"]},
+                        "freight": {"names": ["40g普货包裹"]},
+                        "service": {"names": ["Service Template for New Sellers"]},
+                        "eu_responsible": {"names": ["Jacqueiline Marti"]},
+                        "manufacturer": {"names": ["jiyang county thunder"]},
+                        "compliance": {"names": ["合规模板"]},
+                        "semi_managed": {"names": ["半托管模板"], "required": True},
+                    },
+                },
+            }
+            if template["template_type"] == "category"
+            else template
+        )
+        for template in _required_templates()
+    ]
+
+    result = service.validate_task(
+        {
+            "mode": "single_save",
+            "store_id": 1001,
+            "payload": {"product_ids": [501], "publish": False},
+        },
+        templates,
+    )
+
+    assert result["ok"] is True
+    assert result["missing"] == []
+
+
+def test_single_save_new_dxm_reference_templates_take_priority_over_legacy_fields():
+    service = ConfigValidationService()
+    templates = [
+        (
+            {
+                **template,
+                "payload": {
+                    **template["payload"],
+                    "category": {
+                        **template["payload"]["category"],
+                        "dxm_reference_templates": {
+                            "attribute_info": {"names": []},
+                        },
+                    },
+                },
+            }
+            if template["template_type"] == "category"
+            else template
+        )
+        for template in _required_templates()
+    ]
+
+    result = service.validate_task(
+        {
+            "mode": "single_save",
+            "store_id": 1001,
+            "payload": {"product_ids": [501], "publish": False},
+        },
+        templates,
+    )
+
+    assert result["ok"] is False
+    assert result["missing"] == ["dxm_reference_templates.attribute_info"]
+
+
+def test_batch_save_requires_configured_dxm_reference_template_names():
+    service = ConfigValidationService()
+    templates = [
+        (
+            {
+                **template,
+                "payload": {
+                    **template["payload"],
+                    "dxm_reference_templates": {
+                        "freight": {"names": [], "required": True},
+                    },
+                },
+            }
+            if template["template_type"] == "logistics"
+            else template
+        )
+        for template in _required_templates()
+    ]
+
+    result = service.validate_task(
+        {
+            "mode": "batch_save",
+            "store_id": 1001,
+            "payload": {"product_ids": [501], "publish": False},
+        },
+        templates,
+    )
+
+    assert result["ok"] is False
+    assert result["missing"] == ["dxm_reference_templates.freight"]
 
 
 def test_single_save_requires_semi_managed_template():

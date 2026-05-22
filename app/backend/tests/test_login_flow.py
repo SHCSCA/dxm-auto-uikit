@@ -1435,6 +1435,95 @@ def test_flatten_editor_defaults_consumes_grouped_templates(tmp_path):
     assert flattened['eu_responsible_priorities'] == ['Jacqueiline Marti']
 
 
+def test_apply_dxm_reference_templates_uses_attribute_reference_control(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    calls = []
+
+    monkeypatch.setattr(
+        flow,
+        '_apply_reference_templates_on_page',
+        lambda page, names: calls.append(names) or {'ok': True, 'text': '立牌类谷子'},
+    )
+
+    results = flow._apply_dxm_reference_templates_on_page(
+        object(),
+        {'attribute_info': {'names': ['立牌类谷子'], 'required': True}},
+    )
+
+    assert calls == [['立牌类谷子']]
+    assert results['attribute_info']['ok'] is True
+    assert results['attribute_info']['text'] == '立牌类谷子'
+
+
+def test_apply_dxm_reference_templates_records_label_select_sections(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    calls = []
+
+    def choose(page, label, names):
+        calls.append((label, names))
+        return {'ok': True, 'text': names[0]}
+
+    monkeypatch.setattr(flow, '_choose_ant_select_near_label', choose)
+
+    results = flow._apply_dxm_reference_templates_on_page(
+        object(),
+        {
+            'freight': {'names': ['40g普货包裹'], 'required': True},
+            'service': {'names': ['Service Template for New Sellers'], 'required': True},
+            'eu_responsible': {'names': ['Jacqueiline Marti'], 'required': True},
+            'manufacturer': {'names': ['jiyang county thunder'], 'required': True},
+        },
+    )
+
+    assert calls == [
+        ('运费模板', ['40g普货包裹']),
+        ('服务模板', ['Service Template for New Sellers']),
+        ('欧盟责任人', ['Jacqueiline Marti']),
+        ('品牌制造商', ['jiyang county thunder']),
+    ]
+    assert {name: result['text'] for name, result in results.items()} == {
+        'freight': '40g普货包裹',
+        'service': 'Service Template for New Sellers',
+        'eu_responsible': 'Jacqueiline Marti',
+        'manufacturer': 'jiyang county thunder',
+    }
+
+
+def test_fill_editor_required_defaults_fails_when_required_description_template_missing(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    page = DummySemiPage({
+        'title': True,
+        'remaining_chinese_attributes': [],
+    })
+
+    monkeypatch.setattr(flow, '_select_editor_category', lambda *args, **kwargs: {'ok': True})
+    monkeypatch.setattr(flow, '_dismiss_blocking_modals', lambda page: None)
+    monkeypatch.setattr(flow, '_fill_text_inputs_near_label', lambda *args, **kwargs: {'ok': True})
+    monkeypatch.setattr(flow, '_fill_packaging_info', lambda *args, **kwargs: {'ok': True})
+    monkeypatch.setattr(flow, '_fill_category_required_attributes', lambda page: {'ok': True})
+    monkeypatch.setattr(flow, '_check_choice_by_text', lambda page, text: {'ok': True})
+    monkeypatch.setattr(flow, '_choose_ant_select_near_label', lambda page, label, names: {'ok': True, 'text': names[0] if names else label})
+    monkeypatch.setattr(flow, '_fill_customs_supervision_attribute', lambda page, names: {'ok': True})
+    monkeypatch.setattr(flow, '_editor_required_defaults_state', lambda page: {'missing': []})
+
+    state = flow._fill_editor_required_defaults_on_page(
+        page,
+        {
+            'dxm_reference_templates_resolved': {
+                'description': {'names': ['详情模板'], 'required': True},
+            },
+        },
+    )
+
+    assert state['stage'] == 'fill_editor_required_defaults_failed'
+    assert 'dxm_reference_templates.description' in state['fill_result']['missing']
+    assert state['fill_result']['dxm_reference_template_results']['description']['ok'] is False
+    assert '描述' in state['fill_result']['dxm_reference_template_results']['description']['reason']
+
+
 def test_flatten_editor_defaults_consumes_semi_managed_price_aliases(tmp_path):
     live_client = DummyLiveClient(logged_in=True)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')

@@ -1,4 +1,20 @@
 export type Store = { id: number; name: string; platform: string; status: string }
+export type DxmReferenceSectionCode =
+  | 'attribute_info'
+  | 'description'
+  | 'freight'
+  | 'service'
+  | 'eu_responsible'
+  | 'manufacturer'
+  | 'compliance'
+  | 'semi_managed'
+export type DxmReferenceTemplateSection = {
+  section: DxmReferenceSectionCode
+  label: string
+  templateNames: string[]
+  required: boolean
+  source: 'new' | 'legacy' | 'fallback'
+}
 export type Template = { id: number; template_type: string; template_name: string; binding_scope: string; payload: Record<string, unknown>; is_enabled: boolean }
 export type Product = { id: number; title: string; category_name: string; price: number; currency: string; sku_count: number; image_count: number; status: string; image?: { eu_outer_package_filename?: string } }
 export type Task = { id: number; name: string; status: string; mode: string; publish_scene: string; total_jobs: number; completed_jobs: number; failed_jobs: number; payload: { product_ids?: number[]; store_name?: string; category_name?: string; image?: { eu_outer_package_filename?: string }; [key: string]: unknown } }

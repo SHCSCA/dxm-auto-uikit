@@ -77,6 +77,14 @@ class FakeWorkflowAdapter:
         evidence = {"action": action}
         if action == "claim_product":
             evidence["note_verified"] = self.note_verified
+        if action == "fill_editor_required_defaults" and args:
+            defaults = args[0] if isinstance(args[0], dict) else {}
+            resolved = defaults.get("dxm_reference_templates_resolved") or {}
+            applied = {
+                section: {"ok": True, "section": section, **config}
+                for section, config in resolved.items()
+            }
+            evidence["dxm_reference_template_results"] = applied
         if action == "save_only" and self.include_save_result:
             evidence["save_result"] = self.save_result
         result = {
@@ -92,6 +100,8 @@ class FakeWorkflowAdapter:
         }
         if action == "save_only" and self.include_save_result:
             result["save_result"] = self.save_result
+        if "dxm_reference_template_results" in evidence:
+            result["dxm_reference_template_results"] = evidence["dxm_reference_template_results"]
         return result
 
 
@@ -105,9 +115,20 @@ def v1_db(tmp_path, monkeypatch):
 
 def _create_task(repo: Repository, mode: str = "single_save", product_count: int = 1):
     store = repo.create_store("Dang Kang", "AliExpress")
+    dxm_reference_templates = {
+        "attribute_info": {"names": ["立牌类谷子"]},
+        "description": {"names": ["详情模板"]},
+        "freight": {"names": ["40g普货包裹"]},
+        "service": {"names": ["Service Template for New Sellers"]},
+        "eu_responsible": {"names": ["Jacqueiline Marti"]},
+        "manufacturer": {"names": ["jiyang county thunder"]},
+        "compliance": {"names": ["合规模板"]},
+        "semi_managed": {"names": ["半托管模板"]},
+    }
     template_payloads = {
         "category": {
             "category_name": "模板类目",
+            "dxm_reference_templates": dxm_reference_templates,
             "category": {
                 "template_category_id": "tmpl-cat",
             },
@@ -327,6 +348,10 @@ def test_execution_defaults_only_applies_matching_template_bindings():
 
     assert defaults["category"]["category_match"] == "ACG Stand"
     assert defaults["category"]["attribute_template_priorities"] == ["立牌类谷子"]
+    assert defaults["dxm_reference_templates_resolved"]["attribute_info"] == {
+        "names": ["立牌类谷子"],
+        "required": True,
+    }
     assert defaults["_template_trace"] == [
         {
             "template_id": 2,
@@ -335,6 +360,121 @@ def test_execution_defaults_only_applies_matching_template_bindings():
             "binding_scope": "store/category",
         }
     ]
+
+
+def test_execution_defaults_resolves_new_dxm_reference_templates():
+    class TemplateRepo:
+        def list_templates(self):
+            return [
+                {
+                    "id": 1,
+                    "template_type": "dxm_reference",
+                    "template_name": "Dxm Reference",
+                    "binding_scope": "V1",
+                    "payload": {
+                        "dxm_reference_templates": {
+                            "freight": {"names": ["40g普货包裹"]},
+                            "service": {"names": [], "required": False},
+                        },
+                        "logistics": {
+                            "freight_template_priorities": ["旧运费模板"],
+                            "service_template_priorities": ["旧服务模板"],
+                        },
+                    },
+                    "is_enabled": True,
+                },
+            ]
+
+    runner = V1TaskRunner(TemplateRepo(), DummyManager())
+    defaults = runner._execution_defaults({"payload": {}}, {"payload": {}})
+
+    assert defaults["dxm_reference_templates_resolved"]["freight"] == {"names": ["40g普货包裹"], "required": True}
+    assert defaults["dxm_reference_templates_resolved"]["service"] == {"names": [], "required": False}
+    assert defaults["dxm_reference_templates_resolved"]["attribute_info"] == {"names": [], "required": True}
+
+
+def test_single_save_missing_required_dxm_reference_template_fails_before_save(v1_db):
+    repo = Repository()
+    task = _create_task(repo, mode="single_save", product_count=1)
+    with db.connection() as conn:
+        conn.execute(
+            "UPDATE templates SET payload_json=? WHERE template_type='category'",
+            (
+                db.dumps(
+                    {
+                        "category_name": "模板类目",
+                        "dxm_reference_templates": {
+                            "attribute_info": {"names": ["立牌类谷子"]},
+                            "description": {"names": ["详情模板"]},
+                            "freight": {"names": [], "required": True},
+                            "service": {"names": ["Service Template for New Sellers"]},
+                            "eu_responsible": {"names": ["Jacqueiline Marti"]},
+                            "manufacturer": {"names": ["jiyang county thunder"]},
+                            "compliance": {"names": ["合规模板"]},
+                            "semi_managed": {"names": ["半托管模板"]},
+                        },
+                        "category": {
+                            "template_category_id": "tmpl-cat",
+                        },
+                    }
+                ),
+            ),
+        )
+    manager = DummyManager()
+    adapter = FakeWorkflowAdapter()
+
+    asyncio.run(V1TaskRunner(repo, manager, workflow_adapter=adapter).run_task(task["id"]))
+
+    reports = repo.list_reports(task["id"])
+    refreshed = repo.get_task(task["id"])
+    assert refreshed["status"] == "failed"
+    assert reports[0]["status"] == "failed"
+    assert "dxm_reference_templates.freight" in reports[0]["summary"]["blocked_reason"]
+    assert "save_only" not in [call[0] for call in adapter.calls]
+
+
+def test_single_save_report_includes_resolved_dxm_reference_templates(v1_db):
+    repo = Repository()
+    task = _create_task(repo, mode="single_save", product_count=1)
+    with db.connection() as conn:
+        conn.execute(
+            "UPDATE tasks SET payload_json=? WHERE id=?",
+            (
+                db.dumps(
+                    {
+                        **task["payload"],
+                        "dxm_reference_templates": {
+                            "freight": {"names": ["40g普货包裹"], "required": True},
+                            "description": {"names": [], "required": False},
+                        },
+                    }
+                ),
+                task["id"],
+            ),
+        )
+    manager = DummyManager()
+    adapter = FakeWorkflowAdapter()
+
+    asyncio.run(V1TaskRunner(repo, manager, workflow_adapter=adapter).run_task(task["id"]))
+
+    reports = repo.list_reports(task["id"])
+    assert reports[0]["status"] == "success"
+    resolved = reports[0]["summary"]["dxm_reference_templates_resolved"]
+    assert resolved["description"] == {"names": [], "required": False}
+    assert resolved["freight"] == {"names": ["40g普货包裹"], "required": True}
+    reference_results = reports[0]["summary"]["dxm_reference_template_results"]
+    assert set(reference_results) == {
+        "attribute_info",
+        "description",
+        "freight",
+        "service",
+        "eu_responsible",
+        "manufacturer",
+        "compliance",
+        "semi_managed",
+    }
+    assert reference_results["description"] == {"ok": True, "section": "description", "names": [], "required": False}
+    assert reference_results["freight"] == {"ok": True, "section": "freight", "names": ["40g普货包裹"], "required": True}
 
 
 def test_claim_only_calls_adapter_without_opening_editor_or_saving(v1_db):

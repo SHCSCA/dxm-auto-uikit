@@ -4,6 +4,8 @@ from collections.abc import Iterable, Mapping
 from enum import StrEnum
 from typing import Any
 
+from src.services.dxm_reference_templates import resolve_dxm_reference_templates
+
 
 class ExecutionMode(StrEnum):
     PROBE = "probe"
@@ -113,8 +115,26 @@ class ConfigValidationService:
             if not self._has_eu_outer_package_image(payload, product_payload, templates):
                 missing.append("image.eu_outer_package_filename")
             missing.extend(self._missing_save_only_template_fields(payload, product_payload, templates, present_templates))
+            missing.extend(self._missing_required_reference_templates(payload, product_payload, templates))
             return missing
         return []
+
+    def _missing_required_reference_templates(
+        self,
+        task_payload: Mapping[str, Any],
+        product_payload: Mapping[str, Any],
+        templates: Any,
+    ) -> list[str]:
+        resolved = resolve_dxm_reference_templates(
+            *self._all_template_payloads(templates),
+            task_payload,
+            product_payload,
+        )
+        missing: list[str] = []
+        for section, config in resolved.items():
+            if config.get("required", True) and not config.get("names"):
+                missing.append(f"dxm_reference_templates.{section}")
+        return missing
 
     def _missing_save_only_template_fields(
         self,
@@ -231,6 +251,18 @@ class ConfigValidationService:
             if not self._is_template_enabled(template):
                 continue
             if self._template_type(template) != template_type:
+                continue
+            payload = template.get("payload")
+            if isinstance(payload, Mapping):
+                payloads.append(payload)
+        return payloads
+
+    def _all_template_payloads(self, templates: Any) -> list[Mapping[str, Any]]:
+        payloads: list[Mapping[str, Any]] = []
+        for template in self._iter_templates(templates):
+            if not isinstance(template, Mapping):
+                continue
+            if not self._is_template_enabled(template):
                 continue
             payload = template.get("payload")
             if isinstance(payload, Mapping):

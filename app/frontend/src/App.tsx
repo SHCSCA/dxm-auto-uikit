@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { getJson, getJsonOrDefault, postJson } from './api'
-import type { Evidence, ExceptionItem, LiveEvent, LogItem, Product, Report, Store, Task, Template } from './types'
+import type { DxmReferenceSectionCode, DxmReferenceTemplateSection, Evidence, ExceptionItem, LiveEvent, LogItem, Product, Report, Store, Task, Template } from './types'
 
 const seedRows = [
   {
@@ -51,6 +51,8 @@ type ExecutionConfig = {
   categoryName: string
   categoryTemplate: string
   referenceTemplate: string
+  dxmReferenceTemplates: DxmReferenceTemplateSection[]
+  referencedDxmTemplateNames: string[]
   imageBankSource: string
   euOuterPackageFilename: string
   logisticsTemplate: string
@@ -61,6 +63,30 @@ type ExecutionConfig = {
   saveMode: string
   publishScene: string
   publishPolicy: string
+}
+
+const dxmReferenceSectionDefs: Array<{ section: DxmReferenceSectionCode; label: string }> = [
+  { section: 'attribute_info', label: 'attribute_info' },
+  { section: 'description', label: 'description' },
+  { section: 'freight', label: 'freight' },
+  { section: 'service', label: 'service' },
+  { section: 'eu_responsible', label: 'eu_responsible' },
+  { section: 'manufacturer', label: 'manufacturer' },
+  { section: 'compliance', label: 'compliance' },
+  { section: 'semi_managed', label: 'semi_managed' },
+]
+
+const dxmReferenceSectionSet = new Set<DxmReferenceSectionCode>(dxmReferenceSectionDefs.map((item) => item.section))
+
+const demoDxmReferenceTemplates = {
+  attribute_info: { names: ['立牌类谷子属性模板'], required: true },
+  description: { names: ['详情描述模板-ACG立牌'], required: true },
+  freight: { names: ['石油40g普货包裹.', '40g普货包裹'], required: true },
+  service: { names: ['Service Template for New Sellers'], required: true },
+  eu_responsible: { names: ['Jacqueiline Marti'], required: true },
+  manufacturer: { names: ['jiyang county thunder', 'Jiyang County thunder'], required: true },
+  compliance: { names: ['合规模板', '钥匙扣', 'keychain'], required: true },
+  semi_managed: { names: ['半托管模板'], required: true },
 }
 
 export default function App() {
@@ -152,6 +178,7 @@ export default function App() {
         { template_type: 'image', template_name: '图片银行模板', binding_scope: '店铺 / 类目', payload: { image: { source: '图片银行（速卖通）', eu_outer_package_filename: '微信图片_202504092228421.jpg', slots: [{ slot_key: 'eu_outer_package', label: '外包装/标签实拍图-欧盟', filename: '微信图片_202504092228421.jpg', source: 'smt_image_bank' }] } }, is_enabled: true },
         { template_type: 'semi_managed', template_name: '半托管模板', binding_scope: '店铺 / 类目 / 国家站点', payload: { semi_managed: { countries: '全选', original_box: '否', logistics_attribute: '普货', jit_stock: '100', barcode_strategy: '留空' } }, is_enabled: true },
         { template_type: 'compliance', template_name: '合规模板', binding_scope: '类目 / 国家站点', payload: { compliance: { eu_responsible_names: ['Jacqueiline Marti'], manufacturer_names: ['jiyang county thunder', 'Jiyang County thunder'], customs_product_names: ['钥匙扣', 'keychain'] } }, is_enabled: true },
+        { template_type: 'dxm_reference', template_name: '店小秘引用模板映射', binding_scope: '店铺 / 类目 / 国家站点', payload: { dxm_reference_templates: demoDxmReferenceTemplates }, is_enabled: true },
       ]
       const existingTemplateTypes = new Set(templates.map((item) => item.template_type))
       const missingTemplateSeeds = templateSeeds.filter((item) => !existingTemplateTypes.has(item.template_type))
@@ -299,6 +326,7 @@ export default function App() {
     () => buildExecutionConfig(templates, currentStore, currentProduct, selectedTask),
     [templates, currentStore, currentProduct, selectedTask],
   )
+  const dxmReferenceTemplateCount = executionConfig.referencedDxmTemplateNames.length
   const pageTitle = browserMode === 'evidence'
     ? '保存报告与证据视图'
     : liveStatus?.product_page?.title || loginState?.page_title || liveStatus?.title || '店小秘登录态 / 半托管保存页'
@@ -323,7 +351,7 @@ export default function App() {
           <div className="chip ok">执行原则：<strong>只保存不发布</strong></div>
           <div className={`chip ${loginSummary.tagClass}`}>登录阶段：<strong>{loginSummary.stageLabel}</strong></div>
           <div className={`chip ${stores.length ? 'ok' : 'warn'}`}>当前店铺：<strong>{currentStore?.name ?? 'Dang Kang'}</strong></div>
-          <div className="chip">模板命中：<strong>{selectedTemplateRows.length || 5} 项</strong></div>
+          <div className="chip">模板命中：<strong>{dxmReferenceTemplateCount || selectedTemplateRows.length || 5} 项</strong></div>
           <div className="chip">V1覆盖：<strong>{coverageData.length} 域</strong></div>
           <div className="chip">报告：<strong>{reports.length} 份</strong></div>
           <div className="chip">人工协作：<strong>{pendingManualCount} 项</strong></div>
@@ -439,6 +467,28 @@ export default function App() {
                   <small>SKU / 半托管条码保持留空</small>
                 </div>
               </div>
+              <div className="dxm-template-map" aria-label="店小秘引用模板映射">
+                <div className="dxm-template-map-head">
+                  <h3>店小秘引用模板映射</h3>
+                  <span className="tag">固定 {executionConfig.dxmReferenceTemplates.length} sections</span>
+                </div>
+                <div className="dxm-template-grid">
+                  {executionConfig.dxmReferenceTemplates.map((section) => (
+                    <div className="dxm-template-section" key={section.section}>
+                      <div className="dxm-template-section-head">
+                        <strong>{section.label}</strong>
+                        <span className={`tag ${section.required ? 'success' : 'warning'}`}>required={String(section.required)}</span>
+                      </div>
+                      <div className="dxm-template-names">
+                        {section.templateNames.length ? section.templateNames.map((name) => (
+                          <span className="template-pill" key={`${section.section}-${name}`}>{name}</span>
+                        )) : <span className="muted">未配置模板名</span>}
+                      </div>
+                      <small>{section.source === 'new' ? '来源：dxm_reference_templates' : section.source === 'legacy' ? '来源：旧字段兼容' : '来源：默认占位'}</small>
+                    </div>
+                  ))}
+                </div>
+              </div>
               <div className="config-guard">
                 <span className="tag success">保存模式：{executionConfig.saveMode}</span>
                 <span className="tag">场景：{executionConfig.publishScene}</span>
@@ -520,6 +570,21 @@ export default function App() {
             <button className="btn secondary" type="button" onClick={() => setInteractionMessage(`已请求重试当前步骤：${currentStep?.stepName ?? activeNav}`)}>重试当前步骤</button>
             <button className="btn secondary" type="button" onClick={() => setInteractionMessage('已记录当前证据视图，保存后报告会用于回放与问题复盘。')}>记录证据</button>
             <button className="btn warn" type="button" onClick={handleToggleManualMode}>{manualMode ? '退出人工接管' : '人工接管'}</button>
+          </div>
+
+          <div className="task-preview-strip" aria-label="任务预览将引用的店小秘模板清单">
+            <div className="task-preview-title">
+              <span>任务预览</span>
+              <strong>将引用的店小秘模板清单</strong>
+            </div>
+            <div className="task-preview-list">
+              {executionConfig.dxmReferenceTemplates.map((section) => (
+                <div className="task-preview-item" key={`preview-${section.section}`}>
+                  <span>{section.label}</span>
+                  <strong>{section.templateNames.length ? section.templateNames.join(' / ') : '未配置'}</strong>
+                </div>
+              ))}
+            </div>
           </div>
 
           <div className="rpa-stage">
@@ -658,6 +723,8 @@ function buildExecutionConfig(templates: Template[], store?: Store, product?: Pr
   const imageTemplate = findTemplate(templates, 'image')
   const skuTemplate = findTemplate(templates, 'sku')
   const semiManagedTemplate = findTemplate(templates, 'semi_managed')
+  const dxmReferenceTemplates = buildDxmReferenceTemplateSections(templates)
+  const referencedDxmTemplateNames = uniqueTextList(dxmReferenceTemplates.flatMap((section) => section.templateNames))
   const taskPayload = asRecord(task?.payload)
   const taskImage = asRecord(taskPayload.image)
   const categoryPayload = asRecord(categoryTemplate?.payload)
@@ -672,12 +739,14 @@ function buildExecutionConfig(templates: Template[], store?: Store, product?: Pr
     storeName: asText(taskPayload.store_name, store?.name ?? asText(categoryBinding.store_name, 'Dang Kang')),
     categoryName: asText(taskPayload.category_name, product?.category_name ?? asText(categoryBinding.category_name, '立牌类谷子')),
     categoryTemplate: categoryTemplate?.template_name ?? '立牌类谷子属性模板',
-    referenceTemplate: `类目：${asText(categoryData.category_match, 'ACG Stand')} / 引用：${asTextList(categoryData.attribute_template_priorities, ['立牌类谷子']).join(' / ')}`,
+    referenceTemplate: formatDxmReferenceSummary(dxmReferenceTemplates, `类目：${asText(categoryData.category_match, 'ACG Stand')} / 引用：${asTextList(categoryData.attribute_template_priorities, ['立牌类谷子']).join(' / ')}`),
+    dxmReferenceTemplates,
+    referencedDxmTemplateNames,
     imageBankSource: asText(imageData.source, '图片银行（速卖通）'),
     euOuterPackageFilename: asText(taskImage.eu_outer_package_filename, product?.image?.eu_outer_package_filename ?? asText(imageData.eu_outer_package_filename, '微信图片_202504092228421.jpg')),
     logisticsTemplate: logisticsTemplate?.template_name ?? '包装物流模板',
-    freightTemplates: asTextList(logisticsData.freight_templates, ['石油40g普货包裹.', '40g普货包裹']),
-    serviceTemplates: asTextList(logisticsData.service_templates, ['Service Template for New Sellers']),
+    freightTemplates: sectionTemplateNames(dxmReferenceTemplates, 'freight', asTextList(logisticsData.freight_templates, ['石油40g普货包裹.', '40g普货包裹'])),
+    serviceTemplates: sectionTemplateNames(dxmReferenceTemplates, 'service', asTextList(logisticsData.service_templates, ['Service Template for New Sellers'])),
     jitStock: asText(semiManagedData.jit_stock, '100'),
     barcodeStrategy: asText(semiManagedData.barcode_strategy, asText(skuData.barcode_strategy, '留空')),
     saveMode: task?.mode ?? 'single_save',
@@ -688,6 +757,185 @@ function buildExecutionConfig(templates: Template[], store?: Store, product?: Pr
 
 function findTemplate(templates: Template[], templateType: string) {
   return templates.find((item) => item.template_type === templateType && item.is_enabled) ?? templates.find((item) => item.template_type === templateType)
+}
+
+function buildDxmReferenceTemplateSections(templates: Template[]): DxmReferenceTemplateSection[] {
+  const newSections = collectDxmReferenceTemplateSections(templates)
+  const legacySections = collectLegacyDxmReferenceTemplateSections(templates)
+
+  return dxmReferenceSectionDefs.map((definition) => (
+    newSections.get(definition.section)
+    ?? legacySections.get(definition.section)
+    ?? {
+      section: definition.section,
+      label: definition.label,
+      templateNames: [],
+      required: true,
+      source: 'fallback',
+    }
+  ))
+}
+
+function collectDxmReferenceTemplateSections(templates: Template[]) {
+  const sections = new Map<DxmReferenceSectionCode, DxmReferenceTemplateSection>()
+
+  templates.forEach((template) => {
+    const payload = asRecord(template.payload)
+    const dxmReferenceTemplates = payload.dxm_reference_templates
+    if (!dxmReferenceTemplates) return
+
+    const referenceRecord = asRecord(dxmReferenceTemplates)
+    const singleSection = asDxmReferenceSection(referenceRecord.section)
+    const referenceItems = Array.isArray(dxmReferenceTemplates)
+      ? dxmReferenceTemplates
+      : Array.isArray(referenceRecord.sections)
+        ? referenceRecord.sections
+        : Array.isArray(referenceRecord.mappings)
+          ? referenceRecord.mappings
+          : null
+    const entries = singleSection
+      ? [{ section: singleSection, value: dxmReferenceTemplates }]
+      : referenceItems
+      ? referenceItems.map((item) => {
+        const record = asRecord(item)
+        return { section: asDxmReferenceSection(record.section), value: item }
+      })
+      : Object.entries(referenceRecord).map(([section, value]) => ({
+        section: asDxmReferenceSection(section),
+        value,
+      }))
+
+    entries.forEach((entry) => {
+      if (!entry.section) return
+      const normalized = normalizeDxmReferenceTemplateValue(entry.value, template.template_name)
+      mergeDxmReferenceSection(sections, {
+        section: entry.section,
+        label: entry.section,
+        templateNames: normalized.templateNames,
+        required: normalized.required,
+        source: 'new',
+      })
+    })
+  })
+
+  return sections
+}
+
+function collectLegacyDxmReferenceTemplateSections(templates: Template[]) {
+  const categoryTemplate = findTemplate(templates, 'category')
+  const titleTemplate = findTemplate(templates, 'title')
+  const logisticsTemplate = findTemplate(templates, 'logistics')
+  const complianceTemplate = findTemplate(templates, 'compliance')
+  const semiManagedTemplate = findTemplate(templates, 'semi_managed')
+  const categoryPayload = asRecord(categoryTemplate?.payload)
+  const categoryData = asRecord(categoryPayload.category)
+  const logisticsData = asRecord(asRecord(logisticsTemplate?.payload).logistics)
+  const complianceData = asRecord(asRecord(complianceTemplate?.payload).compliance)
+  const sections = new Map<DxmReferenceSectionCode, DxmReferenceTemplateSection>()
+
+  setLegacyDxmReferenceSection(sections, 'attribute_info', asTextList(categoryData.attribute_template_priorities, categoryTemplate?.template_name ? [categoryTemplate.template_name] : []))
+  setLegacyDxmReferenceSection(sections, 'description', titleTemplate?.template_name ? [titleTemplate.template_name] : [])
+  setLegacyDxmReferenceSection(sections, 'freight', asTextList(logisticsData.freight_templates, []))
+  setLegacyDxmReferenceSection(sections, 'service', asTextList(logisticsData.service_templates, []))
+  setLegacyDxmReferenceSection(sections, 'eu_responsible', asTextList(complianceData.eu_responsible_names, []))
+  setLegacyDxmReferenceSection(sections, 'manufacturer', asTextList(complianceData.manufacturer_names, []))
+  setLegacyDxmReferenceSection(sections, 'compliance', uniqueTextList([
+    ...(complianceTemplate?.template_name ? [complianceTemplate.template_name] : []),
+    ...asTextList(complianceData.customs_product_names, []),
+  ]))
+  setLegacyDxmReferenceSection(sections, 'semi_managed', semiManagedTemplate?.template_name ? [semiManagedTemplate.template_name] : [])
+
+  return sections
+}
+
+function setLegacyDxmReferenceSection(sections: Map<DxmReferenceSectionCode, DxmReferenceTemplateSection>, section: DxmReferenceSectionCode, templateNames: string[]) {
+  sections.set(section, {
+    section,
+    label: section,
+    templateNames: uniqueTextList(templateNames),
+    required: true,
+    source: 'legacy',
+  })
+}
+
+function mergeDxmReferenceSection(sections: Map<DxmReferenceSectionCode, DxmReferenceTemplateSection>, incoming: DxmReferenceTemplateSection) {
+  const current = sections.get(incoming.section)
+  if (!current) {
+    sections.set(incoming.section, {
+      ...incoming,
+      templateNames: uniqueTextList(incoming.templateNames),
+    })
+    return
+  }
+
+  sections.set(incoming.section, {
+    ...current,
+    templateNames: uniqueTextList([...current.templateNames, ...incoming.templateNames]),
+    required: current.required && incoming.required,
+  })
+}
+
+function normalizeDxmReferenceTemplateValue(value: unknown, ownerTemplateName: string): { templateNames: string[]; required: boolean } {
+  if (typeof value === 'string') {
+    return { templateNames: [value], required: true }
+  }
+
+  if (Array.isArray(value)) {
+    return {
+      templateNames: uniqueTextList(value.flatMap((item) => extractTemplateNames(item, ownerTemplateName))),
+      required: value.every((item) => asRequired(asRecord(item).required, true)),
+    }
+  }
+
+  const record = asRecord(value)
+  const hasExplicitNames = ['templates', 'template_names', 'templateNames', 'names', 'template_name', 'templateName', 'name']
+    .some((key) => Object.prototype.hasOwnProperty.call(record, key))
+  const templateNames = uniqueTextList([
+    ...extractTemplateNames(record.templates, ownerTemplateName),
+    ...extractTemplateNames(record.template_names, ownerTemplateName),
+    ...extractTemplateNames(record.templateNames, ownerTemplateName),
+    ...extractTemplateNames(record.names, ownerTemplateName),
+    ...extractTemplateNames(record.template_name, ownerTemplateName),
+    ...extractTemplateNames(record.templateName, ownerTemplateName),
+    ...extractTemplateNames(record.name, ownerTemplateName),
+  ])
+
+  return {
+    templateNames: hasExplicitNames ? templateNames : extractTemplateNames(record, ownerTemplateName),
+    required: asRequired(record.required, true),
+  }
+}
+
+function extractTemplateNames(value: unknown, ownerTemplateName: string): string[] {
+  if (!value) return []
+  if (typeof value === 'string' || typeof value === 'number') return [String(value)]
+  if (Array.isArray(value)) return uniqueTextList(value.flatMap((item) => extractTemplateNames(item, ownerTemplateName)))
+  const record = asRecord(value)
+  const explicitName = asText(record.template_name, asText(record.templateName, asText(record.name, '')))
+  return explicitName ? [explicitName] : ownerTemplateName ? [ownerTemplateName] : []
+}
+
+function asDxmReferenceSection(value: unknown): DxmReferenceSectionCode | null {
+  return typeof value === 'string' && dxmReferenceSectionSet.has(value as DxmReferenceSectionCode) ? value as DxmReferenceSectionCode : null
+}
+
+function asRequired(value: unknown, fallback: boolean) {
+  return typeof value === 'boolean' ? value : fallback
+}
+
+function formatDxmReferenceSummary(sections: DxmReferenceTemplateSection[], fallback: string) {
+  const namedSections = sections.filter((section) => section.templateNames.length)
+  if (!namedSections.length) return fallback
+  return namedSections.map((section) => `${section.label}：${section.templateNames.join(' / ')}`).join('；')
+}
+
+function sectionTemplateNames(sections: DxmReferenceTemplateSection[], sectionCode: DxmReferenceSectionCode, fallback: string[]) {
+  const section = sections.find((item) => item.section === sectionCode)
+  return section?.templateNames.length ? section.templateNames : fallback
+}
+
+function uniqueTextList(values: string[]) {
+  return Array.from(new Set(values.map((item) => item.trim()).filter(Boolean)))
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

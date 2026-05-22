@@ -10,6 +10,7 @@ from src.core.config import SCREENSHOT_DIR
 from src.execution.dxm_live import DxmLiveClient
 from src.repository import Repository
 from src.services.config_validation import ConfigValidationService
+from src.services.dxm_reference_templates import resolve_dxm_reference_templates
 from src.services.ownership_lock import OwnershipLockService
 from src.services.publish_guard import PublishGuardService
 from src.state_machine.contracts import StateName, normalize_execution_mode
@@ -59,6 +60,7 @@ DEFAULT_TEMPLATE_TYPES = {
     "image",
     "compliance",
     "semi_managed",
+    "dxm_reference",
 }
 
 
@@ -200,6 +202,7 @@ class V1TaskRunner:
                         "product_query": workflow_result.get("product_query"),
                         "store_name": workflow_result.get("store_name"),
                         "save_result": workflow_result.get("save_result"),
+                        "dxm_reference_template_results": workflow_result.get("dxm_reference_template_results"),
                     })
 
                 if state_name in {
@@ -572,11 +575,23 @@ class V1TaskRunner:
             "filled_fields": filled_fields,
             "evidence_paths": evidence_paths,
             "template_trace": list((execution_defaults or {}).get("_template_trace") or []),
+            "dxm_reference_templates_resolved": dict((execution_defaults or {}).get("dxm_reference_templates_resolved") or {}),
+            "dxm_reference_template_results": self._workflow_reference_template_results(workflow_results),
             "resolved_defaults": self._redacted_defaults(execution_defaults or {}),
             "workflow_actions": [result.get("action") for result in workflow_results],
             "workflow_results": workflow_results,
             "published": False,
         }
+
+    def _workflow_reference_template_results(self, workflow_results: list[dict[str, Any]]) -> dict[str, Any]:
+        for result in workflow_results:
+            reference_results = result.get("dxm_reference_template_results")
+            if isinstance(reference_results, Mapping):
+                return dict(reference_results)
+            fill_result = result.get("fill_result")
+            if isinstance(fill_result, Mapping) and isinstance(fill_result.get("dxm_reference_template_results"), Mapping):
+                return dict(fill_result["dxm_reference_template_results"])
+        return {}
 
     def _summary_category(
         self,
@@ -663,6 +678,7 @@ class V1TaskRunner:
         product_payload = (product or {}).get("payload") or {}
         if isinstance(product_payload, Mapping):
             self._merge_payload(defaults, product_payload)
+        defaults["dxm_reference_templates_resolved"] = resolve_dxm_reference_templates(defaults)
         defaults["_template_trace"] = template_trace
         return defaults
 
