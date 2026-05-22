@@ -8,6 +8,7 @@ import type {
   LogItem,
   Product,
   Report,
+  RunStep,
   Task,
   Template,
 } from '../types'
@@ -184,15 +185,28 @@ export function ExecutionConsole({ workspace, selectedTask }: CommonProps) {
   const steps = workspace.deliverySteps.length
     ? workspace.deliverySteps.map((step) => ({
       title: step.label,
+      code: step.state,
       detail: `${step.state}${step.evidence_count ? ` / 证据 ${step.evidence_count}` : ''}${step.workflow_actions?.length ? ` / ${step.workflow_actions.join(', ')}` : ''}`,
       state: step.status === 'completed' ? 'done' : step.status === 'running' ? 'current' : step.status === 'failed' ? 'blocked' : 'pending',
     }))
     : buildConsoleSteps(selectedTask, workspace.logs)
+  const activeStep = steps.find((step) => step.state === 'current' || step.state === 'blocked') ?? steps.find((step) => step.state === 'pending') ?? steps[0]
+  const browserFrame = getBrowserFrame(workspace, selectedTask)
 
   return (
-    <section className="module-layout" aria-label="执行控制台">
+    <section className="agent-console-layout" aria-label="执行控制台">
+      <div className="module-card agent-console-stage">
+        <ModuleHead title="Agent Console 原型" meta="独立浏览器 Profile / 可见执行" />
+        <AgentBrowserFrame
+          workspace={workspace}
+          selectedTask={selectedTask}
+          activeStep={activeStep}
+          browserFrame={browserFrame}
+        />
+      </div>
+
       <div className="module-card span-2">
-        <ModuleHead title="执行控制台" meta={selectedTask ? `任务 #${selectedTask.id}` : '未选择任务'} />
+        <ModuleHead title="状态机步骤" meta={selectedTask ? `任务 #${selectedTask.id}` : '未选择任务'} />
         <div className="stepper">
           {steps.map((step, index) => (
             <div key={step.title} className={`step ${step.state}`}>
@@ -210,8 +224,8 @@ export function ExecutionConsole({ workspace, selectedTask }: CommonProps) {
         <ModuleHead title="实时摘要" meta="只读观察" />
         <div className="console-summary">
           <strong>{selectedTask ? humanTaskStatus(selectedTask.status) : '待启动'}</strong>
-          <span>控制台仅展示保存核验链路状态，实际动作由后端任务编排控制。</span>
-          <span>本次前端重构未调用店小秘登录、导航或草稿箱动作。</span>
+          <span>真实执行时会新开独立 Profile 浏览器，用户旁观自动化动作。</span>
+          <span>HUD 只展示步骤和安全状态，不提供发布入口。</span>
         </div>
       </div>
 
@@ -224,6 +238,105 @@ export function ExecutionConsole({ workspace, selectedTask }: CommonProps) {
         </div>
       </div>
     </section>
+  )
+}
+
+function AgentBrowserFrame({
+  workspace,
+  selectedTask,
+  activeStep,
+  browserFrame,
+}: {
+  workspace: DeliveryWorkspace
+  selectedTask: Task | null
+  activeStep?: { title: string; code?: string; detail: string; state: string }
+  browserFrame: { url: string; screenshotUrl: string; source: string }
+}) {
+  const nextStep = nextPendingStep(workspace.deliverySteps, activeStep?.code)
+  const storeName = selectedTask?.payload.store_name ?? workspace.stores[0]?.name ?? 'Dang Kang'
+  const product = workspace.products[0]
+
+  return (
+    <div className="agent-browser">
+      <div className="agent-browser__chrome">
+        <div className="traffic-lights" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </div>
+        <div className="browser-tab">店小秘 Agent Console</div>
+        <div className="browser-url">{browserFrame.url}</div>
+        <span className="status-pill ok">Profile 隔离</span>
+      </div>
+      <div className="agent-browser__viewport">
+        {browserFrame.screenshotUrl ? (
+          <img src={browserFrame.screenshotUrl} alt="当前真实浏览器截图" />
+        ) : (
+          <div className="browser-placeholder">
+            <div className="dxm-topbar">
+              <strong>店小秘</strong>
+              <span>产品编辑 / 速卖通 / 半托管</span>
+            </div>
+            <div className="dxm-toolbar">
+              <span>Dang Kang</span>
+              <span>{product?.category_name ?? '立牌类谷子'}</span>
+              <span>保存核验</span>
+            </div>
+            <div className="dxm-form-grid">
+              <div>
+                <label>商品标题</label>
+                <strong>{product?.title ?? '等待真实商品'}</strong>
+              </div>
+              <div>
+                <label>图片银行</label>
+                <strong>{product?.image?.eu_outer_package_filename ?? '等待外包装图'}</strong>
+              </div>
+              <div>
+                <label>半托管</label>
+                <strong>待进入半托管信息页</strong>
+              </div>
+              <div>
+                <label>保存策略</label>
+                <strong>只保存，不发布</strong>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="agent-hud" aria-label="浏览器内执行步骤框">
+          <div className="agent-hud__head">
+            <span className={`hud-dot ${activeStep?.state ?? 'pending'}`} />
+            <strong>{activeStep?.title ?? '等待任务'}</strong>
+          </div>
+          <dl>
+            <div>
+              <dt>店铺</dt>
+              <dd>{storeName}</dd>
+            </div>
+            <div>
+              <dt>当前状态</dt>
+              <dd>{activeStep?.code ?? 'WAITING'}</dd>
+            </div>
+            <div>
+              <dt>正在执行</dt>
+              <dd>{activeStep?.detail ?? '等待后端推送步骤'}</dd>
+            </div>
+            <div>
+              <dt>下一步</dt>
+              <dd>{nextStep?.label ?? '等待状态机推进'}</dd>
+            </div>
+          </dl>
+          <div className="agent-hud__guard">
+            <span>发布隔离</span>
+            <strong>{workspace.publishGuardState?.safe ? '通过' : '等待证明'}</strong>
+          </div>
+        </div>
+      </div>
+      <div className="agent-browser__footer">
+        <span>{browserFrame.source}</span>
+        <span>可见浏览器接入后，这里会跟随 Playwright persistent context 刷新。</span>
+      </div>
+    </div>
   )
 }
 
@@ -511,6 +624,32 @@ function buildConsoleSteps(selectedTask: Task | null, logs: LogItem[]) {
     { title: '保存核验', detail: '保存结果、隔离结果和截图证据', state: completed ? 'done' : 'pending' },
     { title: '报告复盘', detail: '证据等级、异常池、验收缺口归档', state: completed ? 'done' : 'pending' },
   ]
+}
+
+function getBrowserFrame(workspace: DeliveryWorkspace, selectedTask: Task | null) {
+  const taskEvidence = selectedTask
+    ? workspace.evidences.filter((item) => item.task_id === selectedTask.id)
+    : workspace.evidences
+  const screenshot = [...taskEvidence]
+    .reverse()
+    .find((item) => {
+      const path = item.file_path ?? ''
+      return /\.(png|jpg|jpeg|webp)$/i.test(path)
+    })
+  const screenshotUrl = screenshot ? toArtifactUrl((screenshot as Evidence & { file_path_url?: string }).file_path_url ?? screenshot.file_path) : ''
+  const pageUrl = String(screenshot?.meta?.page_url ?? workspace.evidencePoints.find((point) => point.state)?.page_url ?? '')
+
+  return {
+    url: pageUrl || 'https://www.dianxiaomi.com/smt/product/edit',
+    screenshotUrl,
+    source: screenshotUrl ? '来自最新执行截图' : '原型占位画面，等待真实浏览器会话',
+  }
+}
+
+function nextPendingStep(steps: RunStep[], currentCode?: string) {
+  if (!steps.length) return null
+  const currentIndex = currentCode ? steps.findIndex((step) => step.state === currentCode) : -1
+  return steps.slice(Math.max(currentIndex + 1, 0)).find((step) => step.status === 'pending') ?? null
 }
 
 function requiresManualApproval(task: Task) {
