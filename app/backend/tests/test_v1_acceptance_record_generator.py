@@ -129,6 +129,24 @@ def _create_acceptance_db(db_path: Path) -> None:
                 "screenshot_url": "/artifacts/screenshots/dianxiaomi_verify_not_published.png",
             },
         ],
+        "agent_console": {
+            "session_id": "agent-test",
+            "browser_visible": True,
+            "current_url": "https://www.dianxiaomi.com/web/smt/editFromSmt",
+            "last_step_code": "RELEASE_LOCK",
+            "last_step_name": "释放商品归属锁",
+            "hud": {
+                "state": "RELEASE_LOCK",
+                "guard": "只保存不发布",
+                "next_step": "任务收尾与报告",
+            },
+            "screenshot": "data/screenshots/agent_console/agent-test.png",
+        },
+        "agent_console_events": [
+            {"last_step_code": "PRECHECK_CONFIG"},
+            {"last_step_code": "SAVE_ONLY"},
+            {"last_step_code": "RELEASE_LOCK"},
+        ],
         "published": False,
     }
     conn.execute(
@@ -200,4 +218,8 @@ def test_generate_v1_acceptance_record_covers_required_evidence(tmp_path):
     assert "data/screenshots/v1_task_19_job_31_SAVE_ONLY.txt" in markdown
     assert "未捕获保存相关接口响应" in markdown
     assert "published=false" in markdown
+    assert "Agent Console 可见执行证据" in markdown
+    assert "session_id：agent-test" in markdown
+    assert "guard=只保存不发布" in markdown
+    assert "event_count：3" in markdown
     assert "old_save.png" not in markdown

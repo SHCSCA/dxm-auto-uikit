@@ -415,6 +415,7 @@ function AgentConsoleControls({
       </div>
       <div className="agent-console-controls__fields">
         <StatusField label="session_id" value={agentConsole?.session_id} />
+        <StatusField label="last_step" value={agentConsole?.last_step_code ?? agentConsole?.hud?.state} />
         <StatusField label="profile_dir" value={agentConsole?.profile_dir} />
         <StatusField label="current_url" value={agentConsole?.current_url ?? agentConsole?.target_url} />
         <StatusField label="screenshot" value={screenshot} />

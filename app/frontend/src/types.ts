@@ -102,6 +102,8 @@ export type AgentConsoleSession = {
   active: boolean
   session_id: string | null
   task_id: number | null
+  job_id?: number | null
+  product_id?: number | null
   profile_dir: string | null
   launch_browser: boolean
   browser_visible: boolean
@@ -109,6 +111,11 @@ export type AgentConsoleSession = {
   current_url: string | null
   page_title: string | null
   hud: AgentConsoleHud
+  field_domain?: string | null
+  mode?: string | null
+  last_step_code?: string | null
+  last_step_name?: string | null
+  step_history?: Array<Record<string, unknown>>
   screenshot: string | null
   screenshot_url?: string | null
   created_at: string | null

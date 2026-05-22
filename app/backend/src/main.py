@@ -54,10 +54,10 @@ engine = PlaywrightEngine()
 live_client = DxmLiveClient()
 login_flow = DxmLoginFlow(live_client)
 workflow_adapter = DxmWorkflowAdapter(login_flow)
-runner = V1TaskRunner(repo, manager, workflow_adapter=workflow_adapter)
 title_ai_service = TitleAIService()
 selector_profile_service = SelectorProfileService()
 agent_console_service = AgentConsoleService()
+runner = V1TaskRunner(repo, manager, workflow_adapter=workflow_adapter, agent_console=agent_console_service)
 
 REAL_WRITE_START_MODES = {'single_save', 'batch_save'}
 ALLOWED_START_MODES = {'probe', 'dry_run', 'claim_only', 'single_save', 'batch_save'}

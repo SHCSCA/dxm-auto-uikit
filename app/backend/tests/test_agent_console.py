@@ -86,6 +86,52 @@ def test_agent_console_api_lifecycle_uses_preview_mode(tmp_path, monkeypatch):
     service.stop()
 
 
+def test_agent_console_updates_task_step_without_launching_browser(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+
+    result = service.update_task_step(
+        task_id=7,
+        job_id=11,
+        product_id=13,
+        step_code="SAVE_ONLY",
+        step_name="只点击保存",
+        field_domain="save",
+        mode="single_save",
+        store_name="Dang Kang",
+        next_step="记录未发布证明",
+        screenshot_path="data/screenshots/save.txt",
+    )
+
+    assert result["updated"] is True
+    assert result["browser_visible"] is False
+    assert result["last_step_code"] == "SAVE_ONLY"
+    assert result["hud"]["state"] == "SAVE_ONLY"
+    assert result["hud"]["title"] == "只点击保存"
+    assert result["hud"]["guard"] == "只保存不发布"
+    assert result["hud"]["next_step"] == "记录未发布证明"
+    status = service.status()
+    assert status["step_history"][-1]["screenshot_path"] == "data/screenshots/save.txt"
+
+
+def test_agent_console_rejects_other_task_step(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+
+    result = service.update_task_step(
+        task_id=8,
+        step_code="PRECHECK_CONFIG",
+        step_name="启动前配置校验",
+    )
+
+    assert result["ok"] is False
+    assert result["updated"] is False
+    assert result["reason"] == "task_mismatch"
+    assert result["task_id"] == 7
+
+
 def test_agent_console_start_rejects_missing_task(tmp_path, monkeypatch):
     client, _repo, service = _client_with_temp_repo_and_console(tmp_path, monkeypatch)
 

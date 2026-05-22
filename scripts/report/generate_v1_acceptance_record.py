@@ -99,6 +99,23 @@ def _network_gap(save_result: dict[str, Any]) -> str:
     return f"network_save_result={_format_json(network_save_result)}"
 
 
+def _agent_console_section(summary: dict[str, Any], repo_root: Path) -> str:
+    console = summary.get("agent_console") or {}
+    if not isinstance(console, dict) or not console:
+        return "- Agent Console：未记录可见浏览器会话"
+    hud = console.get("hud") if isinstance(console.get("hud"), dict) else {}
+    screenshot = _to_repo_relative(console.get("screenshot"), repo_root) or "-"
+    return "\n".join([
+        f"- session_id：{console.get('session_id') or '-'}",
+        f"- browser_visible：{console.get('browser_visible')}",
+        f"- current_url：{console.get('current_url') or '-'}",
+        f"- last_step：{console.get('last_step_code') or '-'} / {console.get('last_step_name') or '-'}",
+        f"- HUD：state={hud.get('state') or '-'}；guard={hud.get('guard') or '-'}；next={hud.get('next_step') or '-'}",
+        f"- screenshot：`{screenshot}`",
+        f"- event_count：{len(summary.get('agent_console_events') or [])}",
+    ])
+
+
 def _existing_note(path_value: str, repo_root: Path) -> str:
     return "存在" if (repo_root / path_value).exists() else "运行数据未随 git 提交"
 
@@ -153,6 +170,7 @@ def generate_markdown(db_path: str | Path, report_id: int = DEFAULT_REPORT_ID, r
     store_name = summary.get("store_name") or task_payload.get("store_name") or (store or {}).get("name") or "-"
     claim_mark = summary.get("claim_mark") or task_payload.get("claim_mark") or "-"
     category = summary.get("category") or (product or {}).get("category_name") or task_payload.get("category_name") or "-"
+    agent_console_section = _agent_console_section(summary, repo_root)
 
     return f"""# V1 真实验收记录
 
@@ -193,6 +211,9 @@ def generate_markdown(db_path: str | Path, report_id: int = DEFAULT_REPORT_ID, r
 | --- | --- | --- |
 | 保存成功截图 | `{save_screenshot}` | {_existing_note(save_screenshot, repo_root)} |
 | 未发布校验截图 | `{not_published_screenshot}` | {_existing_note(not_published_screenshot, repo_root)} |
+
+## Agent Console 可见执行证据
+{agent_console_section}
 
 ## 证据路径
 状态快照路径：

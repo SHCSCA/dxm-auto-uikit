@@ -105,6 +105,43 @@ class FakeWorkflowAdapter:
         return result
 
 
+class FakeAgentConsole:
+    def __init__(self, fail: bool = False):
+        self.calls = []
+        self.fail = fail
+        self.start_calls = []
+
+    def update_task_step(self, **payload):
+        if self.fail:
+            raise RuntimeError("console unavailable")
+        self.calls.append(payload)
+        return {
+            "ok": True,
+            "updated": True,
+            "reason": "updated",
+            "active": True,
+            "session_id": "agent-test",
+            "task_id": payload.get("task_id"),
+            "job_id": payload.get("job_id"),
+            "product_id": payload.get("product_id"),
+            "browser_visible": False,
+            "current_url": "about:blank",
+            "last_step_code": payload.get("step_code"),
+            "last_step_name": payload.get("step_name"),
+            "hud": {
+                "title": payload.get("step_name"),
+                "state": payload.get("step_code"),
+                "action": payload.get("field_domain"),
+                "next_step": payload.get("next_step"),
+                "store_name": payload.get("store_name"),
+                "guard": "只保存不发布",
+            },
+            "screenshot": None,
+            "updated_at": "2026-05-22T00:00:00+00:00",
+            "last_error": None,
+        }
+
+
 @pytest.fixture()
 def v1_db(tmp_path, monkeypatch):
     db_path = tmp_path / "v1-runner.db"
@@ -306,6 +343,57 @@ def test_single_save_calls_workflow_adapter_in_complete_save_order(v1_db):
     assert reports[0]["summary"]["category"] == "立牌类谷子"
     assert reports[0]["summary"]["template_trace"]
     assert "_template_trace" not in reports[0]["summary"]["resolved_defaults"]
+
+
+def test_single_save_syncs_agent_console_hud_without_changing_workflow_order(v1_db):
+    repo = Repository()
+    task = _create_task(repo, mode="single_save", product_count=1)
+    manager = DummyManager()
+    adapter = FakeWorkflowAdapter()
+    console = FakeAgentConsole()
+
+    asyncio.run(V1TaskRunner(repo, manager, workflow_adapter=adapter, agent_console=console).run_task(task["id"]))
+
+    states = [call["step_code"] for call in console.calls]
+    assert "PRECHECK_CONFIG" in states
+    assert "PRECHECK_PUBLISH_GUARD" in states
+    assert "SAVE_ONLY" in states
+    assert "VERIFY_NOT_PUBLISHED" in states
+    assert "WRITE_REPORT" in states
+    assert "RELEASE_LOCK" in states
+    assert all(call["store_name"] == "Dang Kang" for call in console.calls)
+    assert console.start_calls == []
+    assert [call[0] for call in adapter.calls].count("save_only") == 1
+    assert [call[0] for call in adapter.calls].index("save_only") < [call[0] for call in adapter.calls].index("verify_not_published")
+
+    report = repo.list_reports(task["id"])[0]
+    assert report["published"] is False
+    assert report["save_result"]["published"] is False
+    assert report["summary"]["agent_console"]["session_id"] == "agent-test"
+    assert report["summary"]["agent_console"]["hud"]["guard"] == "只保存不发布"
+    assert report["summary"]["agent_console"]["last_step_code"] == "RELEASE_LOCK"
+    assert any(
+        evidence["meta"].get("agent_console", {}).get("hud", {}).get("guard") == "只保存不发布"
+        for evidence in repo.list_evidences(task["id"])
+    )
+
+
+def test_agent_console_sync_failure_does_not_fail_save_flow(v1_db):
+    repo = Repository()
+    task = _create_task(repo, mode="single_save", product_count=1)
+    manager = DummyManager()
+    adapter = FakeWorkflowAdapter()
+    console = FakeAgentConsole(fail=True)
+
+    asyncio.run(V1TaskRunner(repo, manager, workflow_adapter=adapter, agent_console=console).run_task(task["id"]))
+
+    refreshed = repo.get_task(task["id"])
+    report = repo.list_reports(task["id"])[0]
+    assert refreshed["status"] == "completed"
+    assert report["status"] == "success"
+    assert report["published"] is False
+    assert report["summary"]["agent_console"]["reason"] == "agent_console_exception"
+    assert "console unavailable" in report["summary"]["agent_console"]["last_error"]
 
 
 def test_execution_defaults_only_applies_matching_template_bindings():

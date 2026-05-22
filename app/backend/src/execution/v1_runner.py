@@ -65,10 +65,17 @@ DEFAULT_TEMPLATE_TYPES = {
 
 
 class V1TaskRunner:
-    def __init__(self, repo: Repository, manager, workflow_adapter: Any | None = None) -> None:
+    def __init__(
+        self,
+        repo: Repository,
+        manager,
+        workflow_adapter: Any | None = None,
+        agent_console: Any | None = None,
+    ) -> None:
         self.repo = repo
         self.manager = manager
         self.workflow_adapter = workflow_adapter
+        self.agent_console = agent_console
         self._workflow_executor = ThreadPoolExecutor(max_workers=1) if workflow_adapter is not None else None
         self.live = DxmLiveClient()
         self.publish_guard = PublishGuardService()
@@ -145,6 +152,7 @@ class V1TaskRunner:
         empty_fields: list[str] = []
         evidence_paths: list[str] = []
         workflow_results: list[dict[str, Any]] = []
+        agent_console_events: list[dict[str, Any]] = []
         last_state = MODE_LAST_STATE[mode]
 
         self.repo.update_job(job_id, status="running", current_step_code="PRECHECK_CONFIG", current_step_name="启动前配置校验")
@@ -159,11 +167,25 @@ class V1TaskRunner:
                 self.repo.update_job(job_id, status="running", current_step_code=state_name.value, current_step_name=step_name)
                 evidence_path = self._write_evidence(task_id, job_id, state_name)
                 evidence_paths.append(str(evidence_path))
-                self.repo.add_evidence(task_id, job_id, "state_snapshot", str(evidence_path), {
+                agent_console_event = self._sync_agent_console(
+                    task,
+                    job,
+                    mode,
+                    state_name,
+                    step_name,
+                    field_domain,
+                    str(evidence_path),
+                )
+                if agent_console_event:
+                    agent_console_events.append(agent_console_event)
+                evidence_meta = {
                     "state": state_name.value,
                     "field_domain": field_domain,
                     "mode": mode,
-                })
+                }
+                if agent_console_event:
+                    evidence_meta["agent_console"] = agent_console_event
+                self.repo.add_evidence(task_id, job_id, "state_snapshot", str(evidence_path), evidence_meta)
                 self.repo.add_log(task_id, job_id, "info", f"执行步骤：{step_name}", {
                     "state": state_name.value,
                     "field_domain": field_domain,
@@ -252,7 +274,7 @@ class V1TaskRunner:
             if mode in {"single_save", "batch_save"}:
                 empty_fields.append("货品条码：配置允许留空")
 
-            summary = self._build_summary(task, job, mode, claim_mark, filled_fields, empty_fields, evidence_paths, workflow_results, execution_defaults)
+            summary = self._build_summary(task, job, mode, claim_mark, filled_fields, empty_fields, evidence_paths, workflow_results, execution_defaults, agent_console_events=agent_console_events)
             save_result = self._save_result_for_mode(mode, workflow_results)
             self.repo.add_report(task_id, job_id, product_id, "success", False, save_result, summary)
             self.repo.update_job(
@@ -293,7 +315,7 @@ class V1TaskRunner:
                 "failed",
                 False,
                 {"ok": False, "error_code": error.error_code, "message": error.detail},
-                self._build_summary(task, job, mode, claim_mark, filled_fields, empty_fields, evidence_paths, workflow_results, execution_defaults, blocked_reason=error.detail),
+                self._build_summary(task, job, mode, claim_mark, filled_fields, empty_fields, evidence_paths, workflow_results, execution_defaults, blocked_reason=error.detail, agent_console_events=agent_console_events),
             )
             self.repo.add_log(task_id, job_id, "error", error.title, {"error_code": error.error_code, "detail": error.detail})
             return False
@@ -302,6 +324,80 @@ class V1TaskRunner:
         if mode == "dry_run":
             return [V1_STEPS[0]]
         return V1_STEPS
+
+    def _sync_agent_console(
+        self,
+        task: dict[str, Any],
+        job: dict[str, Any],
+        mode: str,
+        state_name: StateName,
+        step_name: str,
+        field_domain: str,
+        screenshot_path: str,
+    ) -> dict[str, Any] | None:
+        if self.agent_console is None:
+            return None
+        try:
+            result = self.agent_console.update_task_step(
+                task_id=task["id"],
+                job_id=job["id"],
+                product_id=job.get("product_id"),
+                step_code=state_name.value,
+                step_name=step_name,
+                field_domain=field_domain,
+                mode=mode,
+                store_name=self._store_name(task),
+                next_step=self._next_step_name(mode, state_name),
+                screenshot_path=screenshot_path,
+            )
+        except Exception as exc:
+            result = {
+                "ok": False,
+                "updated": False,
+                "reason": "agent_console_exception",
+                "error": str(exc),
+            }
+        if result.get("reason") == "agent_console_inactive":
+            return None
+        return self._agent_console_summary(result)
+
+    def _agent_console_summary(self, result: Mapping[str, Any]) -> dict[str, Any]:
+        hud = result.get("hud") if isinstance(result.get("hud"), Mapping) else {}
+        return {
+            "ok": bool(result.get("ok", True)),
+            "updated": bool(result.get("updated")),
+            "reason": result.get("reason"),
+            "session_id": result.get("session_id"),
+            "task_id": result.get("task_id"),
+            "job_id": result.get("job_id"),
+            "product_id": result.get("product_id"),
+            "browser_visible": result.get("browser_visible"),
+            "current_url": result.get("current_url"),
+            "last_step_code": result.get("last_step_code") or hud.get("state"),
+            "last_step_name": result.get("last_step_name") or hud.get("title"),
+            "hud": {
+                "title": hud.get("title"),
+                "state": hud.get("state"),
+                "action": hud.get("action"),
+                "next_step": hud.get("next_step"),
+                "store_name": hud.get("store_name"),
+                "guard": hud.get("guard"),
+            },
+            "screenshot": result.get("screenshot"),
+            "updated_at": result.get("updated_at"),
+            "last_error": result.get("last_error") or result.get("error"),
+        }
+
+    def _next_step_name(self, mode: str, current_state: StateName) -> str | None:
+        steps = self._steps_for_mode(mode)
+        for index, (state_name, _step_name, _field_domain) in enumerate(steps):
+            if state_name == current_state:
+                if state_name == MODE_LAST_STATE[mode]:
+                    return "任务收尾与报告"
+                if index + 1 < len(steps):
+                    return steps[index + 1][1]
+                return None
+        return None
 
     def _guard_step(
         self,
@@ -559,7 +655,9 @@ class V1TaskRunner:
         workflow_results: list[dict[str, Any]],
         execution_defaults: Mapping[str, Any] | None = None,
         blocked_reason: str | None = None,
+        agent_console_events: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
+        console_events = agent_console_events or []
         return {
             "task_id": task["id"],
             "job_id": job["id"],
@@ -580,6 +678,8 @@ class V1TaskRunner:
             "resolved_defaults": self._redacted_defaults(execution_defaults or {}),
             "workflow_actions": [result.get("action") for result in workflow_results],
             "workflow_results": workflow_results,
+            "agent_console_events": console_events,
+            "agent_console": console_events[-1] if console_events else None,
             "published": False,
         }
 
