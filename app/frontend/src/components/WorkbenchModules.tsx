@@ -8,6 +8,7 @@ import type {
   ExceptionItem,
   LogItem,
   Product,
+  RegressionGate,
   Report,
   RunStep,
   Task,
@@ -63,6 +64,11 @@ export function Dashboard({ workspace, selectedTask }: CommonProps) {
       <MetricCard label="模板映射" value={`${referenceReady}/${workspace.dxmReferenceTemplates.length}`} detail="dxm_reference_templates 覆盖" tone="yellow" />
       <MetricCard label="证据等级" value={grade} detail={`阻断缺口 ${blockerCount} 项`} tone={grade === 'A' ? 'green' : grade === 'B' ? 'yellow' : 'red'} />
 
+      <div className="module-card span-3">
+        <ModuleHead title="回归门禁矩阵" meta="L0-L3" />
+        <RegressionGateGrid gates={workspace.regressionGates} />
+      </div>
+
       <div className="module-card span-2">
         <ModuleHead title="真实验收缺口" meta={`${workspace.acceptanceGaps.length} 项`} />
         <GapList gaps={workspace.acceptanceGaps.slice(0, 4)} />
@@ -77,6 +83,28 @@ export function Dashboard({ workspace, selectedTask }: CommonProps) {
         </div>
       </div>
     </section>
+  )
+}
+
+function RegressionGateGrid({ gates }: { gates: RegressionGate[] }) {
+  return (
+    <div className="regression-gate-grid">
+      {gates.map((gate) => (
+        <div key={gate.level} className={`regression-gate ${gateStatusTone(gate.status)}`}>
+          <div className="regression-gate__head">
+            <strong>{gate.level}</strong>
+            <span className={`status-pill ${gateStatusPill(gate.status)}`}>{humanGateStatus(gate.status)}</span>
+          </div>
+          <h3>{gate.title}</h3>
+          <p>{gate.detail}</p>
+          <div className="regression-gate__meta">
+            <span>证据 {gate.evidenceLevel}</span>
+            <span>{gate.requiresApproval ? '需批准' : '本地门禁'}</span>
+          </div>
+          {gate.command && <code>{gate.command}</code>}
+        </div>
+      ))}
+    </div>
   )
 }
 
@@ -715,6 +743,28 @@ function CheckRow({ label, ok }: { label: string; ok: boolean }) {
       <strong>{label}</strong>
     </div>
   )
+}
+
+function humanGateStatus(status: string) {
+  return ({
+    ready: '已就绪',
+    not_run: '未运行',
+    passed: '通过',
+    failed: '失败',
+    approval_required: '需批准',
+  } as Record<string, string>)[status] ?? status
+}
+
+function gateStatusPill(status: string) {
+  if (status === 'passed' || status === 'ready') return 'ok'
+  if (status === 'failed') return 'danger'
+  return 'warn'
+}
+
+function gateStatusTone(status: string) {
+  if (status === 'passed' || status === 'ready') return 'is-ok'
+  if (status === 'failed') return 'is-danger'
+  return 'is-warn'
 }
 
 function buildConsoleSteps(selectedTask: Task | null, logs: LogItem[]) {

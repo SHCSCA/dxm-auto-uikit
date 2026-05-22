@@ -13,6 +13,7 @@ import type {
   Product,
   Report,
   ReportSummary,
+  RegressionGate,
   RunStep,
   SafetyGuardState,
   Store,
@@ -41,6 +42,7 @@ type DeliveryWorkspaceApi = Partial<DeliveryWorkspace> & {
   template_resolution?: TemplateResolutionResult
   publish_guard_state?: SafetyGuardState
   evidence_grade?: { grade: EvidenceGrade; [key: string]: unknown }
+  regression_gates?: RegressionGate[]
 }
 
 export const seedRows = [
@@ -102,6 +104,7 @@ export function composeWorkspace(bundle: WorkspaceApiBundle): DeliveryWorkspace 
   const templateResolution = workspace?.templateResolution ?? workspace?.template_resolution ?? fallback.templateResolution
   const publishGuardState = workspace?.publishGuardState ?? workspace?.publish_guard_state ?? fallback.publishGuardState
   const evidenceGradeValue = workspace?.evidenceGrade ?? workspace?.evidence_grade ?? fallback.evidenceGrade
+  const regressionGates = firstList(workspace?.regressionGates, workspace?.regression_gates, fallback.regressionGates)
   const stores = chooseList(workspace?.stores, bundle.stores, fallback.stores, Boolean(workspace), apiHasData)
   const templates = chooseList(workspace?.templates, bundle.templates, fallback.templates, Boolean(workspace), apiHasData)
   const products = chooseList(workspace?.products, bundle.products, fallback.products, Boolean(workspace), apiHasData)
@@ -128,6 +131,7 @@ export function composeWorkspace(bundle: WorkspaceApiBundle): DeliveryWorkspace 
     templateResolution,
     publishGuardState,
     evidenceGrade: evidenceGradeValue,
+    regressionGates,
     dxmReferenceTemplates: normalizeReferenceSections(workspace?.dxmReferenceTemplates, templates, reports, templateResolution),
     acceptanceGaps: firstList(workspace?.acceptanceGaps, buildAcceptanceGaps(exceptions, evidences, reports, evidenceGradeValue), fallback.acceptanceGaps),
     safety: workspace?.safety ?? safetyFromGuard(publishGuardState, evidenceGradeValue) ?? fallback.safety,
@@ -177,6 +181,7 @@ export function buildEmptyWorkspace(): DeliveryWorkspace {
       reasons: [],
     },
     evidenceGrade: { grade: 'C' },
+    regressionGates: buildRegressionGates(null, { grade: 'C' }, []),
     dxmReferenceTemplates: normalizeReferenceSections(undefined, [], [], null),
     acceptanceGaps: [{
       id: 'empty-workspace',
@@ -286,6 +291,13 @@ export function buildMockWorkspace(): DeliveryWorkspace {
     reasons: [],
   }
   const evidenceGradeValue = { grade: 'C' as EvidenceGrade, has_network_or_har_save_response: false }
+  const regressionGates = buildRegressionGates(null, evidenceGradeValue, [{
+    ok: true,
+    target: 'data_acquisition',
+    target_url: 'file:///mock/l2.html',
+    created_at: '2026-05-22T09:00:00+08:00',
+    network: { write_request_count: 0, blocked_request_count: 0, websocket_count: 0 },
+  }])
 
   return {
     source: 'mock',
@@ -309,6 +321,7 @@ export function buildMockWorkspace(): DeliveryWorkspace {
     },
     publishGuardState,
     evidenceGrade: evidenceGradeValue,
+    regressionGates,
     dxmReferenceTemplates: normalizeReferenceSections(undefined, templates, reports),
     acceptanceGaps: buildAcceptanceGaps(exceptions, evidences, reports, evidenceGradeValue),
     safety: {
@@ -318,6 +331,57 @@ export function buildMockWorkspace(): DeliveryWorkspace {
       lastCheckedAt: '2026-05-22 09:00',
     },
   }
+}
+
+function buildRegressionGates(
+  reportSummary: ReportSummary | null,
+  grade: { grade: EvidenceGrade; [key: string]: unknown } | null,
+  l2Results: Array<Record<string, unknown>>,
+): RegressionGate[] {
+  const hasSave = Boolean(reportSummary?.save_results?.length)
+  const hasProof = Boolean(reportSummary?.published_proofs?.length)
+  const hasNetwork = Boolean(reportSummary?.network_save_results?.length || reportSummary?.har_summaries?.length)
+  const latestL2 = l2Results[0] ?? null
+  const l2Ok = latestL2?.ok === true
+  return [
+    {
+      level: 'L0',
+      title: '单测与 fake adapter',
+      status: 'ready',
+      evidenceLevel: 'B',
+      requiresApproval: false,
+      command: 'pytest app/backend/tests -q',
+      detail: '不访问店小秘，验证配置、发布隔离、runner 和报告聚合。',
+    },
+    {
+      level: 'L1',
+      title: '离线 DOM/fixture replay',
+      status: 'ready',
+      evidenceLevel: 'B',
+      requiresApproval: false,
+      command: 'selector profile / DOM fixture replay',
+      detail: '验证关键选择器和页面片段，不触碰真实页面。',
+    },
+    {
+      level: 'L2',
+      title: '真实登录态只读 probe',
+      status: l2Ok ? 'passed' : 'not_run',
+      evidenceLevel: l2Ok ? 'B' : 'C',
+      requiresApproval: true,
+      command: 'tools/probes/l2_readonly_probe.py',
+      detail: l2Ok ? '已有离线/mock L2 证据；真实页面仍需批准执行。' : '尚未运行真实 L2 只读 probe。',
+      latest: latestL2,
+    },
+    {
+      level: 'L3',
+      title: '单商品 save-only 金丝雀',
+      status: hasSave && hasProof ? 'passed' : 'approval_required',
+      evidenceLevel: hasSave && hasProof && hasNetwork ? 'A' : hasSave && hasProof ? 'B' : (grade?.grade ?? 'C'),
+      requiresApproval: true,
+      command: 'single_save with manual approval token',
+      detail: hasSave && hasProof ? '已有保存结果和未发布证明。' : '真实写操作必须由用户批准，只保存不发布。',
+    },
+  ]
 }
 
 export function humanTaskStatus(status: string) {

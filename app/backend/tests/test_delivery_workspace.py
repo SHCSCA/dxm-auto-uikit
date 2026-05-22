@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from src import db
 from src.main import app
 from src.repository import Repository
+from src.services import delivery_workspace
 
 
 def _table_signature() -> dict:
@@ -174,6 +175,7 @@ def _create_delivery_fixture(
 def _client_with_temp_repo(tmp_path, monkeypatch):
     db_path = tmp_path / "delivery-workspace.db"
     monkeypatch.setattr(db, "DB_PATH", db_path)
+    monkeypatch.setattr(delivery_workspace, "L2_PROBE_DIR", tmp_path / "l2_readonly_probe")
     db.init_db()
     repo = Repository()
     import src.main as main
@@ -206,6 +208,7 @@ def test_delivery_workspace_returns_frontend_contract(tmp_path, monkeypatch):
         "dxmReferenceTemplates",
         "publish_guard_state",
         "evidence_grade",
+        "regression_gates",
         "acceptanceGaps",
         "safety",
     }
@@ -217,6 +220,9 @@ def test_delivery_workspace_returns_frontend_contract(tmp_path, monkeypatch):
     assert any(point["kind"] == "network_save_result" for point in data["evidence_points"])
     assert any(point["kind"] == "published_proof" for point in data["evidence_points"])
     assert data["evidence_grade"]["grade"] == "A"
+    assert [gate["level"] for gate in data["regression_gates"]] == ["L0", "L1", "L2", "L3"]
+    assert data["regression_gates"][2]["status"] == "not_run"
+    assert data["regression_gates"][3]["status"] == "passed"
     assert data["safety"]["evidenceGrade"] == "A"
     assert data["dxmReferenceTemplates"][2]["section"] == "freight"
     assert data["dxmReferenceTemplates"][2]["templateNames"] == ["40g普货包裹"]
@@ -315,3 +321,47 @@ def test_delivery_workspace_does_not_change_db_schema(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert _table_signature() == before
+
+
+def test_delivery_workspace_exposes_latest_l2_probe_evidence(tmp_path, monkeypatch):
+    l2_dir = tmp_path / "l2_readonly_probe"
+    l2_dir.mkdir()
+    l2_json = l2_dir / "data_acquisition_20260522T010203Z.json"
+    l2_json.write_text(
+        """
+        {
+          "schema": "dxm_l2_readonly_probe.v1",
+          "ok": true,
+          "target": "data_acquisition",
+          "target_url": "file:///tmp/mock.html",
+          "final_url": "file:///tmp/mock.html",
+          "created_at": "2026-05-22T01:02:03+00:00",
+          "markdown_path": "data/l2_readonly_probe/probe.md",
+          "screenshot_path": "data/l2_readonly_probe/probe.png",
+          "screenshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "dom_path": "data/l2_readonly_probe/probe.html",
+          "dom_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "network": {
+            "request_count": 1,
+            "write_request_count": 0,
+            "non_read_request_count": 0,
+            "blocked_request_count": 0,
+            "forbidden_keyword_request_count": 0,
+            "websocket_count": 0
+          },
+          "safety": {"ok": true, "mode": "L2_READ_ONLY", "reasons": []}
+        }
+        """,
+        encoding="utf-8",
+    )
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(delivery_workspace, "L2_PROBE_DIR", l2_dir)
+    fixture = _create_delivery_fixture(repo, with_network=False, with_verify_proof=False)
+
+    data = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}").json()
+
+    l2_gate = next(gate for gate in data["regression_gates"] if gate["level"] == "L2")
+    assert l2_gate["status"] == "passed"
+    assert l2_gate["evidenceLevel"] == "B"
+    assert l2_gate["latest"]["json_path"] == str(l2_json)
+    assert l2_gate["latest"]["network"]["write_request_count"] == 0

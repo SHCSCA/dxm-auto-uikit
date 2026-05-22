@@ -493,6 +493,77 @@ a:hover {
   gap: 10px;
 }
 
+.regression-gate-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.regression-gate {
+  min-height: 178px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.regression-gate.is-ok {
+  border-color: #b9d7c8;
+  background: #f8fffb;
+}
+
+.regression-gate.is-warn {
+  border-color: #f0d28c;
+  background: #fffaf0;
+}
+
+.regression-gate.is-danger {
+  border-color: #f3b8bf;
+  background: var(--red-soft);
+}
+
+.regression-gate__head,
+.regression-gate__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.regression-gate__head strong {
+  font-size: 18px;
+}
+
+.regression-gate h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.regression-gate p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.regression-gate__meta span,
+.regression-gate code {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.regression-gate code {
+  display: block;
+  overflow-wrap: anywhere;
+  padding: 6px 7px;
+  border-radius: 6px;
+  background: #eef2f7;
+  color: #344255;
+}
+
 .reference-cell {
   min-height: 142px;
   padding: 12px;
@@ -1327,6 +1398,7 @@ tr:last-child td {
   }
 
   .reference-grid,
+  .regression-gate-grid,
   .config-matrix,
   .evidence-point-grid,
   .report-grid {
@@ -1373,6 +1445,7 @@ tr:last-child td {
   .agent-console-layout,
   .config-matrix,
   .reference-grid,
+  .regression-gate-grid,
   .evidence-point-grid,
   .grade-grid,
   .report-grid,

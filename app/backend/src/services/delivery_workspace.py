@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from src.execution.v1_runner import MODE_LAST_STATE, V1_STEPS
@@ -19,6 +21,9 @@ REFERENCE_SECTION_LABELS = {
     "compliance": "合规模板",
     "semi_managed": "半托管模板",
 }
+
+ROOT = Path(__file__).resolve().parents[4]
+L2_PROBE_DIR = ROOT / "data" / "l2_readonly_probe"
 
 ACTION_TO_STATES = {
     "check_login_state": ("PRECHECK_SESSION",),
@@ -75,6 +80,7 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
         "dxmReferenceTemplates": _dxm_reference_sections(latest_report),
         "publish_guard_state": _publish_guard_state(reports, extracted),
         "evidence_grade": _evidence_grade(extracted),
+        "regression_gates": _regression_gates(extracted),
         "acceptanceGaps": _acceptance_gaps(exceptions, extracted),
         "safety": _safety_state(extracted),
         "logs": logs,
@@ -294,6 +300,114 @@ def _evidence_grade(extracted: dict[str, Any]) -> dict[str, Any]:
         "has_publish_risk": has_publish_risk,
         "criteria": "A requires save_result, verified published=false proof, network/HAR save response, and no publish signal; B allows missing network/HAR; C is incomplete or blocked.",
     }
+
+
+def _regression_gates(extracted: dict[str, Any]) -> list[dict[str, Any]]:
+    latest_l2 = _latest_l2_probe_result()
+    has_l3_save_proof = bool(extracted["save_results"] and extracted["published_proofs"])
+    has_l3_network = bool(extracted["network_save_results"] or extracted["har_summaries"])
+    l2_status = "not_run"
+    l2_level = "C"
+    l2_detail = "尚未运行 L2 只读 probe；真实 L2 需要用户明确批准。"
+    if latest_l2:
+        l2_ok = latest_l2.get("ok") is True
+        target_url = str(latest_l2.get("target_url") or "")
+        is_real_target = "dianxiaomi.com" in target_url
+        l2_status = "passed" if l2_ok else "failed"
+        if l2_ok and is_real_target:
+            l2_level = "A"
+            l2_detail = "最新真实店小秘 L2 只读 probe 通过。"
+        elif l2_ok:
+            l2_level = "B"
+            l2_detail = "最新 L2 离线/mock probe 通过；真实页面仍待批准执行。"
+        else:
+            l2_level = "C"
+            l2_detail = "最新 L2 probe 未通过，需查看证据报告。"
+
+    return [
+        {
+            "level": "L0",
+            "title": "单测与 fake adapter",
+            "status": "ready",
+            "evidenceLevel": "B",
+            "requiresApproval": False,
+            "command": "app/backend/.venv/Scripts/python.exe -m pytest app/backend/tests -q",
+            "detail": "不访问店小秘，验证配置、发布隔离、runner、报告聚合和前端契约。",
+        },
+        {
+            "level": "L1",
+            "title": "离线 DOM/fixture replay",
+            "status": "ready",
+            "evidenceLevel": "B",
+            "requiresApproval": False,
+            "command": "selector profile / DOM fixture replay",
+            "detail": "验证采集箱行、欧盟图槽位、营销图白底、保存按钮过滤等选择器。",
+        },
+        {
+            "level": "L2",
+            "title": "真实登录态只读 probe",
+            "status": l2_status,
+            "evidenceLevel": l2_level,
+            "requiresApproval": True,
+            "command": "tools/probes/l2_readonly_probe.py --target data_acquisition|draft_box",
+            "detail": l2_detail,
+            "latest": latest_l2,
+        },
+        {
+            "level": "L3",
+            "title": "单商品 save-only 金丝雀",
+            "status": "passed" if has_l3_save_proof else "approval_required",
+            "evidenceLevel": "A" if has_l3_save_proof and has_l3_network else "B" if has_l3_save_proof else "C",
+            "requiresApproval": True,
+            "command": "single_save with manual approval token",
+            "detail": (
+                "已找到保存结果、未发布证明和网络/HAR 保存证据。"
+                if has_l3_save_proof and has_l3_network
+                else "已找到保存结果和未发布证明；缺少网络/HAR 保存证据。"
+                if has_l3_save_proof
+                else "真实写操作必须由用户明确批准，只能操作 Dang Kang 已备注归属商品。"
+            ),
+        },
+    ]
+
+
+def _latest_l2_probe_result() -> dict[str, Any] | None:
+    if not L2_PROBE_DIR.exists():
+        return None
+    candidates = sorted(L2_PROBE_DIR.rglob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+    for path in candidates:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if data.get("schema") != "dxm_l2_readonly_probe.v1":
+            continue
+        return {
+            "ok": data.get("ok") is True,
+            "target": data.get("target"),
+            "target_url": data.get("target_url"),
+            "final_url": data.get("final_url"),
+            "created_at": data.get("created_at"),
+            "json_path": str(path),
+            "markdown_path": data.get("markdown_path"),
+            "screenshot_path": data.get("screenshot_path"),
+            "screenshot_sha256": data.get("screenshot_sha256"),
+            "dom_path": data.get("dom_path"),
+            "dom_sha256": data.get("dom_sha256"),
+            "network": {
+                key: (data.get("network") or {}).get(key)
+                for key in (
+                    "request_count",
+                    "write_request_count",
+                    "non_read_request_count",
+                    "blocked_request_count",
+                    "forbidden_keyword_request_count",
+                    "websocket_count",
+                )
+            },
+            "safety": data.get("safety"),
+        }
+    return None
 
 
 def _extract_delivery_evidence(reports: list[dict[str, Any]], evidences: list[dict[str, Any]]) -> dict[str, Any]:

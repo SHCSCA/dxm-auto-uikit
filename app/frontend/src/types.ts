@@ -144,6 +144,17 @@ export type AcceptanceGap = {
   evidenceLevel: EvidenceGrade
 }
 
+export type RegressionGate = {
+  level: 'L0' | 'L1' | 'L2' | 'L3' | string
+  title: string
+  status: 'ready' | 'not_run' | 'passed' | 'failed' | 'approval_required' | string
+  evidenceLevel: EvidenceGrade
+  requiresApproval: boolean
+  command?: string
+  detail: string
+  latest?: Record<string, unknown> | null
+}
+
 export type DeliveryWorkspace = {
   source: 'api' | 'fallback' | 'mock'
   stores: Store[]
@@ -161,6 +172,7 @@ export type DeliveryWorkspace = {
   templateResolution: TemplateResolutionResult | null
   publishGuardState: SafetyGuardState | null
   evidenceGrade: { grade: EvidenceGrade; [key: string]: unknown } | null
+  regressionGates: RegressionGate[]
   dxmReferenceTemplates: DxmReferenceTemplateSection[]
   acceptanceGaps: AcceptanceGap[]
   safety: {
