@@ -766,6 +766,84 @@ tr:last-child td {
   font-size: 24px;
 }
 
+.console-error {
+  padding: 9px 10px;
+  border: 1px solid #f3b8bf;
+  border-radius: var(--radius);
+  background: var(--red-soft);
+  color: var(--red);
+  overflow-wrap: anywhere;
+}
+
+.agent-console-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+}
+
+.agent-console-controls__status,
+.agent-console-controls__actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.agent-console-controls__status {
+  grid-column: 1 / -1;
+}
+
+.agent-console-controls__actions {
+  justify-content: flex-end;
+}
+
+.agent-console-controls__fields {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.agent-console-field {
+  min-width: 0;
+  min-height: 74px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+
+.agent-console-field span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.agent-console-field code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #edf1f7;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.agent-console-controls__error {
+  grid-column: 1 / -1;
+}
+
 .agent-browser {
   overflow: hidden;
   border: 1px solid #222a34;
@@ -1258,6 +1336,10 @@ tr:last-child td {
   .stepper {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+
+  .agent-console-controls__fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 860px) {
@@ -1335,6 +1417,20 @@ tr:last-child td {
 
   .agent-browser__footer {
     display: grid;
+    justify-content: stretch;
+  }
+
+  .agent-console-controls {
+    display: grid;
+    grid-template-columns: 1fr;
+    justify-content: stretch;
+  }
+
+  .agent-console-controls__fields {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-console-controls__actions {
     justify-content: stretch;
   }
 

@@ -1,5 +1,6 @@
 import type {
   AcceptanceGap,
+  AgentConsoleSession,
   DeliveryWorkspace,
   DxmReferenceTemplateSection,
   Evidence,
@@ -24,6 +25,15 @@ type TaskCenterProps = CommonProps & {
   onSelectTask: (taskId: number) => void
   onBootstrapDemo: () => void
   onStartTask: () => void
+}
+
+type ExecutionConsoleProps = CommonProps & {
+  agentConsole: AgentConsoleSession | null
+  agentConsoleError: string | null
+  busy: boolean
+  onStartAgentConsole: () => void
+  onStopAgentConsole: () => void
+  onSnapshotAgentConsole: () => void
 }
 
 export function Dashboard({ workspace, selectedTask }: CommonProps) {
@@ -180,7 +190,16 @@ export function TaskCenter({ workspace, selectedTask, busy, onSelectTask, onBoot
   )
 }
 
-export function ExecutionConsole({ workspace, selectedTask }: CommonProps) {
+export function ExecutionConsole({
+  workspace,
+  selectedTask,
+  agentConsole,
+  agentConsoleError,
+  busy,
+  onStartAgentConsole,
+  onStopAgentConsole,
+  onSnapshotAgentConsole,
+}: ExecutionConsoleProps) {
   const taskLogs = selectedTask ? workspace.logs.filter((item) => item.task_id === selectedTask.id) : workspace.logs
   const steps = workspace.deliverySteps.length
     ? workspace.deliverySteps.map((step) => ({
@@ -191,17 +210,30 @@ export function ExecutionConsole({ workspace, selectedTask }: CommonProps) {
     }))
     : buildConsoleSteps(selectedTask, workspace.logs)
   const activeStep = steps.find((step) => step.state === 'current' || step.state === 'blocked') ?? steps.find((step) => step.state === 'pending') ?? steps[0]
-  const browserFrame = getBrowserFrame(workspace, selectedTask)
+  const browserFrame = getBrowserFrame(workspace, selectedTask, agentConsole)
 
   return (
     <section className="agent-console-layout" aria-label="执行控制台">
       <div className="module-card agent-console-stage">
-        <ModuleHead title="Agent Console 原型" meta="独立浏览器 Profile / 可见执行" />
+        <ModuleHead
+          title="Agent Console"
+          meta={agentConsole?.active ? `会话 ${agentConsole.session_id}` : '独立 Profile 浏览器 / 可见执行'}
+        />
+        <AgentConsoleControls
+          agentConsole={agentConsole}
+          agentConsoleError={agentConsoleError}
+          selectedTask={selectedTask}
+          busy={busy}
+          onStartAgentConsole={onStartAgentConsole}
+          onStopAgentConsole={onStopAgentConsole}
+          onSnapshotAgentConsole={onSnapshotAgentConsole}
+        />
         <AgentBrowserFrame
           workspace={workspace}
           selectedTask={selectedTask}
           activeStep={activeStep}
           browserFrame={browserFrame}
+          agentConsole={agentConsole}
         />
       </div>
 
@@ -224,8 +256,9 @@ export function ExecutionConsole({ workspace, selectedTask }: CommonProps) {
         <ModuleHead title="实时摘要" meta="只读观察" />
         <div className="console-summary">
           <strong>{selectedTask ? humanTaskStatus(selectedTask.status) : '待启动'}</strong>
-          <span>真实执行时会新开独立 Profile 浏览器，用户旁观自动化动作。</span>
+          <span>{agentConsole?.active ? '可见浏览器会话已建立，右上 HUD 会展示当前步骤。' : '可先打开独立 Profile 浏览器，用户旁观自动化动作。'}</span>
           <span>HUD 只展示步骤和安全状态，不提供发布入口。</span>
+          {(agentConsoleError || agentConsole?.last_error) && <span className="console-error">{agentConsoleError || agentConsole?.last_error}</span>}
         </div>
       </div>
 
@@ -246,14 +279,24 @@ function AgentBrowserFrame({
   selectedTask,
   activeStep,
   browserFrame,
+  agentConsole,
 }: {
   workspace: DeliveryWorkspace
   selectedTask: Task | null
   activeStep?: { title: string; code?: string; detail: string; state: string }
   browserFrame: { url: string; screenshotUrl: string; source: string }
+  agentConsole: AgentConsoleSession | null
 }) {
   const nextStep = nextPendingStep(workspace.deliverySteps, activeStep?.code)
-  const storeName = selectedTask?.payload.store_name ?? workspace.stores[0]?.name ?? 'Dang Kang'
+  const hasConsoleHud = Boolean(agentConsole?.active || agentConsole?.updated_at)
+  const hud = agentConsole?.hud
+  const storeName = (hasConsoleHud ? hud?.store_name : null) ?? selectedTask?.payload.store_name ?? workspace.stores[0]?.name ?? 'Dang Kang'
+  const hudTitle = (hasConsoleHud ? hud?.title ?? hud?.label : null) ?? activeStep?.title ?? '等待任务'
+  const hudState = (hasConsoleHud ? hud?.state ?? hud?.code : null) ?? activeStep?.code ?? 'WAITING'
+  const hudAction = (hasConsoleHud ? hud?.action ?? hud?.detail : null) ?? activeStep?.detail ?? '等待后端推送步骤'
+  const hudNext = (hasConsoleHud ? hud?.next_step : null) ?? nextStep?.label ?? '等待状态机推进'
+  const hudGuard = (hasConsoleHud ? hud?.guard : null) ?? (workspace.publishGuardState?.safe ? '通过' : '等待证明')
+  const hudDotState = agentConsole?.last_error ? 'blocked' : agentConsole?.active ? 'current' : activeStep?.state ?? 'pending'
   const product = workspace.products[0]
 
   return (
@@ -266,7 +309,9 @@ function AgentBrowserFrame({
         </div>
         <div className="browser-tab">店小秘 Agent Console</div>
         <div className="browser-url">{browserFrame.url}</div>
-        <span className="status-pill ok">Profile 隔离</span>
+        <span className={`status-pill ${agentConsole?.browser_visible ? 'ok' : 'muted'}`}>
+          {agentConsole?.browser_visible ? '可见浏览器' : 'Profile 待命'}
+        </span>
       </div>
       <div className="agent-browser__viewport">
         {browserFrame.screenshotUrl ? (
@@ -305,8 +350,8 @@ function AgentBrowserFrame({
 
         <div className="agent-hud" aria-label="浏览器内执行步骤框">
           <div className="agent-hud__head">
-            <span className={`hud-dot ${activeStep?.state ?? 'pending'}`} />
-            <strong>{activeStep?.title ?? '等待任务'}</strong>
+            <span className={`hud-dot ${hudDotState}`} />
+            <strong>{hudTitle}</strong>
           </div>
           <dl>
             <div>
@@ -315,27 +360,86 @@ function AgentBrowserFrame({
             </div>
             <div>
               <dt>当前状态</dt>
-              <dd>{activeStep?.code ?? 'WAITING'}</dd>
+              <dd>{hudState}</dd>
             </div>
             <div>
               <dt>正在执行</dt>
-              <dd>{activeStep?.detail ?? '等待后端推送步骤'}</dd>
+              <dd>{hudAction}</dd>
             </div>
             <div>
               <dt>下一步</dt>
-              <dd>{nextStep?.label ?? '等待状态机推进'}</dd>
+              <dd>{hudNext}</dd>
             </div>
           </dl>
           <div className="agent-hud__guard">
             <span>发布隔离</span>
-            <strong>{workspace.publishGuardState?.safe ? '通过' : '等待证明'}</strong>
+            <strong>{hudGuard}</strong>
           </div>
         </div>
       </div>
       <div className="agent-browser__footer">
         <span>{browserFrame.source}</span>
-        <span>可见浏览器接入后，这里会跟随 Playwright persistent context 刷新。</span>
+        <span>{agentConsole?.profile_dir ? `Profile: ${agentConsole.profile_dir}` : '等待启动独立浏览器 Profile'}</span>
       </div>
+    </div>
+  )
+}
+
+function AgentConsoleControls({
+  agentConsole,
+  agentConsoleError,
+  selectedTask,
+  busy,
+  onStartAgentConsole,
+  onStopAgentConsole,
+  onSnapshotAgentConsole,
+}: {
+  agentConsole: AgentConsoleSession | null
+  agentConsoleError: string | null
+  selectedTask: Task | null
+  busy: boolean
+  onStartAgentConsole: () => void
+  onStopAgentConsole: () => void
+  onSnapshotAgentConsole: () => void
+}) {
+  const active = Boolean(agentConsole?.active)
+  const screenshot = agentConsole?.screenshot_url ?? agentConsole?.screenshot ?? ''
+  return (
+    <div className="agent-console-controls">
+      <div className="agent-console-controls__status">
+        <span className={`status-pill ${active ? 'ok' : 'muted'}`}>{active ? '浏览器会话中' : '未打开浏览器'}</span>
+        <span className={`status-pill ${agentConsole?.browser_visible ? 'ok' : active ? 'warn' : 'muted'}`}>
+          {agentConsole?.browser_visible ? '窗口可见' : '窗口未显示'}
+        </span>
+        <span className="status-pill ok">只保存不发布</span>
+      </div>
+      <div className="agent-console-controls__fields">
+        <StatusField label="session_id" value={agentConsole?.session_id} />
+        <StatusField label="profile_dir" value={agentConsole?.profile_dir} />
+        <StatusField label="current_url" value={agentConsole?.current_url ?? agentConsole?.target_url} />
+        <StatusField label="screenshot" value={screenshot} />
+      </div>
+      <div className="agent-console-controls__actions">
+        <button className="button button--primary" type="button" onClick={onStartAgentConsole} disabled={busy || !selectedTask}>
+          打开可见浏览器
+        </button>
+        <button className="button button--quiet" type="button" onClick={onSnapshotAgentConsole} disabled={busy || !active}>
+          抓取当前截图
+        </button>
+        <button className="button button--secondary" type="button" onClick={onStopAgentConsole} disabled={busy || !active}>
+          关闭浏览器
+        </button>
+      </div>
+      {agentConsoleError && <div className="agent-console-controls__error console-error">{agentConsoleError}</div>}
+    </div>
+  )
+}
+
+function StatusField({ label, value }: { label: string; value?: string | number | null }) {
+  return (
+    <div className="agent-console-field">
+      <span>{label}</span>
+      <code>{value ? String(value) : '暂无'}</code>
     </div>
   )
 }
@@ -626,7 +730,15 @@ function buildConsoleSteps(selectedTask: Task | null, logs: LogItem[]) {
   ]
 }
 
-function getBrowserFrame(workspace: DeliveryWorkspace, selectedTask: Task | null) {
+function getBrowserFrame(workspace: DeliveryWorkspace, selectedTask: Task | null, agentConsole?: AgentConsoleSession | null) {
+  if (agentConsole?.active) {
+    const screenshotUrl = toArtifactUrl(agentConsole.screenshot_url ?? agentConsole.screenshot)
+    return {
+      url: agentConsole.current_url || agentConsole.target_url || 'https://www.dianxiaomi.com/',
+      screenshotUrl,
+      source: screenshotUrl ? '来自 Agent Console 当前截图' : agentConsole.browser_visible ? '来自可见独立 Profile 浏览器会话' : '浏览器会话已创建，等待窗口可见',
+    }
+  }
   const taskEvidence = selectedTask
     ? workspace.evidences.filter((item) => item.task_id === selectedTask.id)
     : workspace.evidences

@@ -46,6 +46,29 @@ class TaskStartRequest(BaseModel):
     confirmation: str | None = None
 
 
+class AgentConsoleStep(BaseModel):
+    title: str | None = None
+    label: str | None = None
+    state: str | None = None
+    code: str | None = None
+    action: str | None = None
+    detail: str | None = None
+    next_step: str | None = None
+    store_name: str | None = None
+    guard: str | None = None
+
+
+class AgentConsoleStartRequest(BaseModel):
+    task_id: int | None = None
+    target_url: str | None = None
+    launch_browser: bool = True
+    step: AgentConsoleStep | None = None
+
+
+class AgentConsoleHudRequest(BaseModel):
+    step: AgentConsoleStep = Field(default_factory=AgentConsoleStep)
+
+
 class ProductImportRequest(BaseModel):
     rows: list[dict[str, Any]]
 

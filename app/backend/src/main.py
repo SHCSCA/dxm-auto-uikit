@@ -14,6 +14,8 @@ from src.execution.playwright_engine import PlaywrightEngine
 from src.execution.v1_runner import V1TaskRunner
 from src.models import (
     AIConfigUpdateRequest,
+    AgentConsoleHudRequest,
+    AgentConsoleStartRequest,
     DraftBoxActionRequest,
     HealthResponse,
     LoginContinueRequest,
@@ -32,6 +34,7 @@ from src.repository import Repository
 from src.services.title_ai import TitleAIService
 from src.services.selector_profile import SelectorProfileService
 from src.services.delivery_workspace import build_delivery_workspace
+from src.services.agent_console import AgentConsoleService
 from src.ws import ConnectionManager
 
 app = FastAPI(title='dxm-auto-uikit backend', version='0.1.0')
@@ -54,6 +57,7 @@ workflow_adapter = DxmWorkflowAdapter(login_flow)
 runner = V1TaskRunner(repo, manager, workflow_adapter=workflow_adapter)
 title_ai_service = TitleAIService()
 selector_profile_service = SelectorProfileService()
+agent_console_service = AgentConsoleService()
 
 REAL_WRITE_START_MODES = {'single_save', 'batch_save'}
 ALLOWED_START_MODES = {'probe', 'dry_run', 'claim_only', 'single_save', 'batch_save'}
@@ -287,6 +291,40 @@ def get_delivery_workspace(task_id: int | None = None):
     if workspace is None:
         raise HTTPException(status_code=404, detail='Task not found')
     return normalize_artifact_paths(workspace)
+
+
+@app.get('/api/agent-console/status')
+def get_agent_console_status():
+    return normalize_artifact_paths(agent_console_service.status())
+
+
+@app.post('/api/agent-console/start')
+def start_agent_console(payload: AgentConsoleStartRequest):
+    if payload.task_id is not None and repo.get_task(payload.task_id) is None:
+        raise HTTPException(status_code=404, detail='Task not found')
+    step = payload.step.model_dump(exclude_none=True) if payload.step else None
+    result = agent_console_service.start(
+        task_id=payload.task_id,
+        target_url=payload.target_url,
+        launch_browser=payload.launch_browser,
+        step=step,
+    )
+    return normalize_artifact_paths(result)
+
+
+@app.post('/api/agent-console/hud')
+def update_agent_console_hud(payload: AgentConsoleHudRequest):
+    return normalize_artifact_paths(agent_console_service.update_hud(payload.step.model_dump(exclude_none=True)))
+
+
+@app.post('/api/agent-console/snapshot')
+def snapshot_agent_console():
+    return normalize_artifact_paths(agent_console_service.snapshot())
+
+
+@app.post('/api/agent-console/stop')
+def stop_agent_console():
+    return normalize_artifact_paths(agent_console_service.stop())
 
 
 @app.websocket('/ws/tasks/{task_id}')

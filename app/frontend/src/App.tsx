@@ -11,8 +11,10 @@ import {
   ReportCenter,
   TaskCenter,
 } from './components/WorkbenchModules'
-import type { DeliveryWorkspace, Evidence, ExceptionItem, LogItem, Product, Report, Store, Task, Template, WorkbenchSection } from './types'
+import type { AgentConsoleSession, DeliveryWorkspace, Evidence, ExceptionItem, LogItem, Product, Report, Store, Task, Template, WorkbenchSection } from './types'
 import { composeWorkspace, demoTemplateSeeds, seedRows } from './workspace'
+
+const AGENT_CONSOLE_TARGET_URL = 'https://www.dianxiaomi.com/'
 
 const sourceLabels: Record<DeliveryWorkspace['source'], string> = {
   api: '/api/delivery/workspace',
@@ -35,6 +37,8 @@ export default function App() {
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [agentConsole, setAgentConsole] = useState<AgentConsoleSession | null>(null)
+  const [agentConsoleError, setAgentConsoleError] = useState<string | null>(null)
 
   const selectedTask = useMemo(
     () => workspace.tasks.find((task) => task.id === selectedTaskId) ?? workspace.tasks[0] ?? null,
@@ -53,6 +57,7 @@ export default function App() {
       evidences,
       exceptions,
       reports,
+      consoleStatus,
     ] = await Promise.all([
       getJsonOrDefault<Partial<DeliveryWorkspace> | null>(deliveryPath, null),
       getJsonOrDefault<Store[]>('/api/stores', []),
@@ -63,6 +68,7 @@ export default function App() {
       getJsonOrDefault<Evidence[]>('/api/evidences', []),
       getJsonOrDefault<ExceptionItem[]>('/api/exceptions', []),
       getJsonOrDefault<Report[]>('/api/reports', []),
+      getJsonOrDefault<AgentConsoleSession | null>('/api/agent-console/status', null),
     ])
     const nextWorkspace = composeWorkspace({
       workspace: deliveryWorkspace,
@@ -76,12 +82,26 @@ export default function App() {
       reports,
     })
     setWorkspace(nextWorkspace)
+    setAgentConsole(consoleStatus)
     setSelectedTaskId((current) => current ?? nextWorkspace.tasks[0]?.id ?? null)
   }, [selectedTaskId])
 
   useEffect(() => {
     void refreshWorkspace()
   }, [refreshWorkspace])
+
+  const refreshAgentConsole = useCallback(async () => {
+    const status = await getJsonOrDefault<AgentConsoleSession | null>('/api/agent-console/status', null)
+    setAgentConsole(status)
+  }, [])
+
+  useEffect(() => {
+    if (!agentConsole?.active) return
+    const timer = window.setInterval(() => {
+      void refreshAgentConsole()
+    }, 4000)
+    return () => window.clearInterval(timer)
+  }, [agentConsole?.active, refreshAgentConsole])
 
   async function bootstrapDemo() {
     setBusy(true)
@@ -137,6 +157,62 @@ export default function App() {
     }
   }
 
+  async function startAgentConsole() {
+    if (!selectedTask) {
+      setAgentConsoleError('请先选择一个保存核验任务')
+      setActiveSection('console')
+      return
+    }
+    const step = buildAgentConsoleHudStep(workspace, selectedTask)
+    setBusy(true)
+    setAgentConsoleError(null)
+    try {
+      const status = await postJson<AgentConsoleSession>('/api/agent-console/start', {
+        task_id: selectedTask.id,
+        target_url: AGENT_CONSOLE_TARGET_URL,
+        launch_browser: true,
+        step,
+      })
+      setAgentConsole(status)
+      const hudStatus = await postJson<AgentConsoleSession>('/api/agent-console/hud', { step })
+      setAgentConsole(hudStatus)
+      setActiveSection('console')
+    } catch (error) {
+      setAgentConsoleError(error instanceof Error ? error.message : '打开 Agent Console 失败')
+      await refreshAgentConsole()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function stopAgentConsole() {
+    setBusy(true)
+    setAgentConsoleError(null)
+    try {
+      const status = await postJson<AgentConsoleSession>('/api/agent-console/stop', {})
+      setAgentConsole(status)
+    } catch (error) {
+      setAgentConsoleError(error instanceof Error ? error.message : '关闭 Agent Console 失败')
+      await refreshAgentConsole()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function snapshotAgentConsole() {
+    setBusy(true)
+    setAgentConsoleError(null)
+    try {
+      const status = await postJson<AgentConsoleSession>('/api/agent-console/snapshot', {})
+      setAgentConsole(status)
+    } catch (error) {
+      setAgentConsoleError(error instanceof Error ? error.message : '抓取 Agent Console 截图失败')
+      await refreshAgentConsole()
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const content = (() => {
     switch (activeSection) {
       case 'config':
@@ -153,7 +229,18 @@ export default function App() {
           />
         )
       case 'console':
-        return <ExecutionConsole workspace={workspace} selectedTask={selectedTask} />
+        return (
+          <ExecutionConsole
+            workspace={workspace}
+            selectedTask={selectedTask}
+            agentConsole={agentConsole}
+            agentConsoleError={agentConsoleError}
+            busy={busy}
+            onStartAgentConsole={startAgentConsole}
+            onStopAgentConsole={stopAgentConsole}
+            onSnapshotAgentConsole={snapshotAgentConsole}
+          />
+        )
       case 'evidence':
         return <EvidenceTimeline workspace={workspace} selectedTask={selectedTask} />
       case 'exceptions':
@@ -178,4 +265,16 @@ export default function App() {
       {content}
     </AppShell>
   )
+}
+
+function buildAgentConsoleHudStep(workspace: DeliveryWorkspace, selectedTask: Task): AgentConsoleSession['hud'] {
+  const storeName = String(selectedTask.payload.store_name ?? workspace.stores[0]?.name ?? 'Dang Kang')
+  return {
+    title: '只保存核验待命',
+    state: 'SAVE_ONLY',
+    action: '打开可见浏览器，等待保存核验',
+    next_step: '配置预检',
+    store_name: storeName,
+    guard: '只保存不发布',
+  }
 }

@@ -86,6 +86,37 @@ export type ReportSummary = {
   dxm_reference_fields?: Record<string, unknown>
 }
 export type ExceptionResolutionAction = 'retry' | 'stop' | 'handoff' | 'mark_reviewed'
+export type AgentConsoleHud = {
+  title?: string
+  label?: string
+  state?: string
+  code?: string
+  action?: string
+  detail?: string
+  next_step?: string
+  store_name?: string
+  guard?: string
+  updated_at?: string
+}
+export type AgentConsoleSession = {
+  active: boolean
+  session_id: string | null
+  task_id: number | null
+  profile_dir: string | null
+  launch_browser: boolean
+  browser_visible: boolean
+  target_url: string | null
+  current_url: string | null
+  page_title: string | null
+  hud: AgentConsoleHud
+  screenshot: string | null
+  screenshot_url?: string | null
+  created_at: string | null
+  updated_at: string | null
+  last_error: string | null
+}
+export type AgentConsoleHudStep = AgentConsoleHud
+export type AgentConsoleStatus = AgentConsoleSession
 export type WorkbenchSection =
   | 'dashboard'
   | 'config'
