@@ -1,0 +1,317 @@
+from fastapi.testclient import TestClient
+
+from src import db
+from src.main import app
+from src.repository import Repository
+
+
+def _table_signature() -> dict:
+    with db.connection() as conn:
+        tables = [
+            row["name"]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            ).fetchall()
+        ]
+        return {
+            table: conn.execute(f"PRAGMA table_info({table})").fetchall()
+            for table in tables
+        }
+
+
+def _create_delivery_fixture(
+    repo: Repository,
+    *,
+    with_network: bool = True,
+    with_verify_proof: bool = True,
+    with_publish_network: bool = False,
+    published_value=False,
+) -> dict:
+    store = repo.create_store("Dang Kang", "AliExpress")
+    product = repo.create_product(
+        {
+            "title": "ACG Stand Product",
+            "source": "test",
+            "category_name": "立牌类谷子",
+            "price": 7.01,
+            "currency": "USD",
+            "sku_count": 8,
+            "image_count": 8,
+            "payload": {"source_title": "ACG Stand Product"},
+        }
+    )
+    task = repo.create_task(
+        {
+            "name": "交付工作台任务",
+            "store_id": store["id"],
+            "mode": "single_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "claim_mark": "AI认领",
+            "product_ids": [product["id"]],
+            "payload": {
+                "store_name": "Dang Kang",
+                "dxm_reference_templates": {
+                    "freight": {"names": ["40g普货包裹"], "required": True},
+                    "description": {"names": [], "required": False},
+                },
+            },
+        }
+    )
+    job = repo.get_task(task["id"])["jobs"][0]
+    save_result = {
+        "ok": True,
+        "message": "已点击保存",
+        "success_text": "编辑成功",
+        "published": False,
+    }
+    if with_network:
+        network_events = [
+            {
+                "method": "POST",
+                "url": "https://www.dianxiaomi.com/api/smt/product/save",
+                "status": 200,
+            }
+        ]
+        if with_publish_network:
+            network_events.append(
+                {
+                    "method": "POST",
+                    "url": "https://www.dianxiaomi.com/api/smt/product/publish",
+                    "status": 200,
+                }
+            )
+        save_result.update(
+            {
+                "network_save_result": {
+                    "ok": True,
+                    "method": "POST",
+                    "url": "https://www.dianxiaomi.com/api/smt/product/save",
+                    "code": 0,
+                    "msg": "产品已保存到「待发布」",
+                },
+                "network_events": network_events,
+                "har_summary": {
+                    "save_response_seen": True,
+                    "path": "data/network_logs/save.har",
+                },
+            }
+        )
+
+    summary = {
+        "task_id": task["id"],
+        "job_id": job["id"],
+        "product_id": product["id"],
+        "store_name": "Dang Kang",
+        "source_title": "ACG Stand Product",
+        "category": "立牌类谷子",
+        "claim_mark": f"AI认领-{task['id']}-{job['id']}",
+        "mode": "single_save",
+        "status": "success",
+        "filled_fields": ["base_info", "variants", "media", "compliance", "semi_goods"],
+        "empty_fields": ["货品条码：配置允许留空"],
+        "evidence_paths": ["data/screenshots/save.txt", "data/screenshots/not_published.txt"],
+        "dxm_reference_templates_resolved": {
+            "freight": {"names": ["40g普货包裹"], "required": True},
+            "description": {"names": [], "required": False},
+        },
+        "dxm_reference_template_results": {
+            "freight": {"ok": True, "section": "freight", "names": ["40g普货包裹"], "required": True},
+            "description": {"ok": True, "section": "description", "names": [], "required": False},
+        },
+        "template_trace": [
+            {
+                "template_id": 1,
+                "template_type": "dxm_reference",
+                "template_name": "Dxm Reference",
+                "binding_scope": "V1",
+            }
+        ],
+        "workflow_actions": ["save_only", "verify_not_published"],
+        "workflow_results": [
+            {
+                "action": "save_only",
+                "ok": True,
+                "save_result": save_result,
+                "screenshot_url": "/artifacts/screenshots/dianxiaomi_save_only.png",
+            },
+            {
+                "action": "verify_not_published",
+                "ok": True,
+                "published": published_value,
+                "screenshot_url": "/artifacts/screenshots/dianxiaomi_verify_not_published.png",
+            },
+        ],
+        "published": published_value,
+    }
+    if not with_verify_proof:
+        summary["workflow_results"] = [item for item in summary["workflow_results"] if item["action"] != "verify_not_published"]
+    repo.add_evidence(
+        task["id"],
+        job["id"],
+        "state_snapshot",
+        "data/screenshots/save.txt",
+        {"state": "SAVE_ONLY", "field_domain": "save"},
+    )
+    repo.add_evidence(
+        task["id"],
+        job["id"],
+        "workflow_action",
+        "/artifacts/screenshots/dianxiaomi_save_only.png",
+        {"state": "SAVE_ONLY", "action": "save_only", "save_result": save_result},
+    )
+    if with_verify_proof:
+        repo.add_evidence(
+            task["id"],
+            job["id"],
+            "workflow_action",
+            "/artifacts/screenshots/dianxiaomi_verify_not_published.png",
+            {"state": "VERIFY_NOT_PUBLISHED", "action": "verify_not_published", "published": published_value},
+        )
+    report = repo.add_report(task["id"], job["id"], product["id"], "success", False, save_result, summary)
+    return {"task": task, "job": job, "report": report}
+
+
+def _client_with_temp_repo(tmp_path, monkeypatch):
+    db_path = tmp_path / "delivery-workspace.db"
+    monkeypatch.setattr(db, "DB_PATH", db_path)
+    db.init_db()
+    repo = Repository()
+    import src.main as main
+
+    monkeypatch.setattr(main, "repo", repo)
+    return TestClient(app), repo
+
+
+def test_delivery_workspace_returns_frontend_contract(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_delivery_fixture(repo, with_network=True)
+
+    response = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert set(data) >= {
+        "baseline",
+        "current_task",
+        "stores",
+        "templates",
+        "products",
+        "tasks",
+        "steps",
+        "evidences",
+        "evidence_points",
+        "reports",
+        "report_summary",
+        "template_resolution",
+        "dxmReferenceTemplates",
+        "publish_guard_state",
+        "evidence_grade",
+        "acceptanceGaps",
+        "safety",
+    }
+    assert data["baseline"]["schema"] == "delivery_workspace.v1"
+    assert data["current_task"]["id"] == fixture["task"]["id"]
+    assert any(step["state"] == "SAVE_ONLY" and step["has_evidence"] and step["has_workflow_result"] for step in data["steps"])
+    assert data["report_summary"]["latest_report"]["save_result"]["ok"] is True
+    assert data["report_summary"]["latest_report"]["published"] is False
+    assert any(point["kind"] == "network_save_result" for point in data["evidence_points"])
+    assert any(point["kind"] == "published_proof" for point in data["evidence_points"])
+    assert data["evidence_grade"]["grade"] == "A"
+    assert data["safety"]["evidenceGrade"] == "A"
+    assert data["dxmReferenceTemplates"][2]["section"] == "freight"
+    assert data["dxmReferenceTemplates"][2]["templateNames"] == ["40g普货包裹"]
+
+
+def test_delivery_workspace_without_task_id_uses_latest_task(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_delivery_fixture(repo, with_network=True)
+
+    response = client.get("/api/delivery/workspace")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["current_task"]["id"] == fixture["task"]["id"]
+    assert data["tasks"][0]["id"] == fixture["task"]["id"]
+    assert data["publish_guard_state"]["publish_allowed"] is False
+
+
+def test_delivery_workspace_exposes_publish_guard_and_dxm_reference_fields(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_delivery_fixture(repo, with_network=True)
+
+    data = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}").json()
+
+    assert data["publish_guard_state"]["published"] is False
+    assert data["publish_guard_state"]["publish_allowed"] is False
+    assert data["publish_guard_state"]["status"] == "safe_unpublished"
+    assert data["template_resolution"]["dxm_reference_templates_resolved"]["freight"]["names"] == ["40g普货包裹"]
+    assert data["template_resolution"]["dxm_reference_template_results"]["description"]["required"] is False
+    assert data["report_summary"]["dxm_reference_fields"]["freight"]["resolved"]["required"] is True
+
+
+def test_delivery_workspace_grades_b_without_network_or_har_save_response(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_delivery_fixture(repo, with_network=False)
+
+    data = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}").json()
+
+    assert data["evidence_grade"]["grade"] == "B"
+    assert data["evidence_grade"]["has_save_result"] is True
+    assert data["evidence_grade"]["has_network_or_har_save_response"] is False
+
+
+def test_delivery_workspace_blocks_publish_network_signal(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_delivery_fixture(repo, with_network=True, with_publish_network=True)
+
+    data = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}").json()
+
+    assert data["publish_guard_state"]["status"] == "blocked_published_signal"
+    assert data["publish_guard_state"]["safe"] is False
+    assert data["evidence_grade"]["grade"] == "C"
+    assert data["evidence_grade"]["has_publish_risk"] is True
+
+
+def test_delivery_workspace_report_published_false_is_not_unpublished_proof_without_verify(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_delivery_fixture(repo, with_network=True, with_verify_proof=False)
+
+    data = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}").json()
+
+    assert data["publish_guard_state"]["status"] == "waiting_for_unpublished_proof"
+    assert data["publish_guard_state"]["safe"] is False
+    assert data["evidence_grade"]["grade"] == "C"
+    assert data["evidence_grade"]["has_published_proof"] is False
+
+
+def test_delivery_workspace_parses_published_string_false_as_unpublished(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_delivery_fixture(repo, with_network=True, published_value="false")
+
+    data = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}").json()
+
+    assert data["publish_guard_state"]["status"] == "safe_unpublished"
+    assert data["publish_guard_state"]["safe"] is True
+    assert data["evidence_grade"]["grade"] == "A"
+
+
+def test_delivery_workspace_parses_published_string_true_as_blocked(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_delivery_fixture(repo, with_network=True, published_value="true")
+
+    data = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}").json()
+
+    assert data["publish_guard_state"]["status"] == "blocked_published_signal"
+    assert data["publish_guard_state"]["published"] is True
+    assert data["evidence_grade"]["grade"] == "C"
+
+
+def test_delivery_workspace_does_not_change_db_schema(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_delivery_fixture(repo, with_network=True)
+    before = _table_signature()
+
+    response = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}")
+
+    assert response.status_code == 200
+    assert _table_signature() == before

@@ -39,6 +39,13 @@ class TaskCreate(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class TaskStartRequest(BaseModel):
+    manual_approval: bool = False
+    approval_token: str | None = None
+    approved_by: str | None = None
+    confirmation: str | None = None
+
+
 class ProductImportRequest(BaseModel):
     rows: list[dict[str, Any]]
 

@@ -1,4 +1,5 @@
-const runtimeBase = (window as any).__DXM_API_BASE__
+const params = new URLSearchParams(window.location.search)
+const runtimeBase = params.get('apiBase') || (window as any).__DXM_API_BASE__
 export const API_BASE = runtimeBase || ''
 
 export async function getJson<T>(path: string): Promise<T> {

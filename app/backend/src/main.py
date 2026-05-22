@@ -1,7 +1,7 @@
 import asyncio
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -24,12 +24,14 @@ from src.models import (
     SelectorProfileValidateRequest,
     StoreCreate,
     TaskCreate,
+    TaskStartRequest,
     TitleGenerateRequest,
     TemplateCreate,
 )
 from src.repository import Repository
 from src.services.title_ai import TitleAIService
 from src.services.selector_profile import SelectorProfileService
+from src.services.delivery_workspace import build_delivery_workspace
 from src.ws import ConnectionManager
 
 app = FastAPI(title='dxm-auto-uikit backend', version='0.1.0')
@@ -52,6 +54,11 @@ workflow_adapter = DxmWorkflowAdapter(login_flow)
 runner = V1TaskRunner(repo, manager, workflow_adapter=workflow_adapter)
 title_ai_service = TitleAIService()
 selector_profile_service = SelectorProfileService()
+
+REAL_WRITE_START_MODES = {'single_save', 'batch_save'}
+ALLOWED_START_MODES = {'probe', 'dry_run', 'claim_only', 'single_save', 'batch_save'}
+SAVE_ONLY_PUBLISH_SCENE = 'SMT_SEMI_MANAGED_SAVE_ONLY'
+L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
 
 
 @app.get('/health', response_model=HealthResponse)
@@ -204,7 +211,9 @@ def create_task(payload: TaskCreate):
 
 
 @app.post('/api/tasks/{task_id}/start')
-async def start_task(task_id: int):
+async def start_task(task_id: int, payload: TaskStartRequest | None = None):
+    payload = payload or TaskStartRequest()
+    _assert_task_can_start(task_id, payload)
     asyncio.create_task(runner.run_task(task_id))
     return {'ok': True, 'taskId': task_id}
 
@@ -272,6 +281,14 @@ def list_evidences(task_id: int | None = None):
     return normalize_artifact_paths(repo.list_evidences(task_id))
 
 
+@app.get('/api/delivery/workspace')
+def get_delivery_workspace(task_id: int | None = None):
+    workspace = build_delivery_workspace(repo, task_id)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail='Task not found')
+    return normalize_artifact_paths(workspace)
+
+
 @app.websocket('/ws/tasks/{task_id}')
 async def task_ws(websocket: WebSocket, task_id: int):
     await manager.connect(task_id, websocket)
@@ -295,6 +312,61 @@ def normalize_artifact_paths(data):
                 normalized[key] = normalize_artifact_paths(value)
         return normalized
     return data
+
+
+def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
+    task = repo.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail='Task not found')
+
+    payload = task.get('payload') or {}
+    mode = str(task.get('mode') or payload.get('execution_mode') or '')
+    if mode not in ALLOWED_START_MODES:
+        raise HTTPException(status_code=400, detail=f'Unsupported execution mode: {mode}')
+    if task.get('status') == 'running':
+        raise HTTPException(status_code=409, detail='Task is already running')
+
+    if mode not in REAL_WRITE_START_MODES:
+        return
+
+    if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
+        raise HTTPException(status_code=403, detail='Real save task requires save-only publish scene')
+    if _task_store_name(task) != 'Dang Kang':
+        raise HTTPException(status_code=403, detail='Real save task requires Dang Kang store')
+
+    approval = payload.get('manual_approval') or {}
+    if not isinstance(approval, dict):
+        approval = {}
+    token_ok = bool(
+        request.approval_token
+        and approval.get('token')
+        and request.approval_token == approval.get('token')
+    )
+    approved = (
+        request.manual_approval is True
+        and request.confirmation == L3_CONFIRMATION
+        and bool(request.approved_by)
+        and approval.get('approved') is True
+        and token_ok
+    )
+    if not approved:
+        raise HTTPException(
+            status_code=403,
+            detail='Manual approval is required before starting real single_save/batch_save',
+        )
+
+
+def _task_store_name(task: dict) -> str:
+    payload = task.get('payload') or {}
+    if payload.get('store_name'):
+        return str(payload['store_name'])
+    store_id = task.get('store_id')
+    if store_id is None:
+        return ''
+    for store in repo.list_stores():
+        if store.get('id') == store_id:
+            return str(store.get('name') or '')
+    return ''
 
 
 def _workflow_adapter():
