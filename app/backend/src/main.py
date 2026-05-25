@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import hmac
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -33,7 +35,7 @@ from src.models import (
 from src.repository import Repository
 from src.services.title_ai import TitleAIService
 from src.services.selector_profile import SelectorProfileService
-from src.services.delivery_workspace import build_delivery_workspace
+from src.services.delivery_workspace import build_delivery_workspace, l2_real_probe_gate
 from src.services.agent_console import AgentConsoleService
 from src.ws import ConnectionManager
 
@@ -59,7 +61,8 @@ selector_profile_service = SelectorProfileService()
 agent_console_service = AgentConsoleService()
 runner = V1TaskRunner(repo, manager, workflow_adapter=workflow_adapter, agent_console=agent_console_service)
 
-REAL_WRITE_START_MODES = {'single_save', 'batch_save'}
+REAL_DXM_MUTATION_MODES = {'claim_only', 'single_save', 'batch_save'}
+REAL_WRITE_START_MODES = REAL_DXM_MUTATION_MODES
 ALLOWED_START_MODES = {'probe', 'dry_run', 'claim_only', 'single_save', 'batch_save'}
 SAVE_ONLY_PUBLISH_SCENE = 'SMT_SEMI_MANAGED_SAVE_ONLY'
 L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
@@ -218,20 +221,30 @@ def create_task(payload: TaskCreate):
 async def start_task(task_id: int, payload: TaskStartRequest | None = None):
     payload = payload or TaskStartRequest()
     _assert_task_can_start(task_id, payload)
+    if not repo.try_start_task(task_id):
+        raise HTTPException(status_code=409, detail='Task is already running')
     asyncio.create_task(runner.run_task(task_id))
     return {'ok': True, 'taskId': task_id}
 
 
 @app.post('/api/tasks/{task_id}/pause')
 def pause_task(task_id: int):
-    repo.update_task_status(task_id, 'paused')
+    task = repo.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail='Task not found')
+    if task.get('mode') in REAL_WRITE_START_MODES:
+        raise HTTPException(status_code=409, detail='Real save task pause is disabled until worker pause acknowledgements are implemented')
+    if not repo.try_pause_task(task_id):
+        raise HTTPException(status_code=409, detail='Task is not running')
     return {'ok': True, 'taskId': task_id, 'status': 'paused'}
 
 
 @app.post('/api/tasks/{task_id}/resume')
 def resume_task(task_id: int):
-    repo.update_task_status(task_id, 'running')
-    return {'ok': True, 'taskId': task_id, 'status': 'running'}
+    task = repo.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail='Task not found')
+    raise HTTPException(status_code=409, detail='Resume is disabled until worker resume acknowledgements are implemented')
 
 
 @app.post('/api/tasks/{task_id}/stop')
@@ -302,6 +315,13 @@ def get_agent_console_status():
 def start_agent_console(payload: AgentConsoleStartRequest):
     if payload.task_id is not None and repo.get_task(payload.task_id) is None:
         raise HTTPException(status_code=404, detail='Task not found')
+    if payload.launch_browser:
+        l2_gate = l2_real_probe_gate()
+        if l2_gate.get('status') != 'passed':
+            raise HTTPException(
+                status_code=403,
+                detail=f"Agent console browser start requires passed L2 readonly gate: {l2_gate.get('status')}",
+            )
     step = payload.step.model_dump(exclude_none=True) if payload.step else None
     result = agent_console_service.start(
         task_id=payload.task_id,
@@ -353,7 +373,7 @@ def normalize_artifact_paths(data):
 
 
 def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
-    task = repo.get_task(task_id)
+    task = repo.get_task_private(task_id)
     if not task:
         raise HTTPException(status_code=404, detail='Task not found')
 
@@ -363,34 +383,41 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
         raise HTTPException(status_code=400, detail=f'Unsupported execution mode: {mode}')
     if task.get('status') == 'running':
         raise HTTPException(status_code=409, detail='Task is already running')
+    if task.get('status') != 'draft':
+        raise HTTPException(status_code=409, detail=f"Task cannot start from status: {task.get('status')}")
 
-    if mode not in REAL_WRITE_START_MODES:
+    if mode not in REAL_DXM_MUTATION_MODES:
         return
 
     if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
-        raise HTTPException(status_code=403, detail='Real save task requires save-only publish scene')
+        raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')
     if _task_store_name(task) != 'Dang Kang':
-        raise HTTPException(status_code=403, detail='Real save task requires Dang Kang store')
+        raise HTTPException(status_code=403, detail='Real DXM mutation task requires Dang Kang store')
 
     approval = payload.get('manual_approval') or {}
     if not isinstance(approval, dict):
         approval = {}
-    token_ok = bool(
-        request.approval_token
-        and approval.get('token')
-        and request.approval_token == approval.get('token')
-    )
+    token_hash = approval.get('token_hash')
+    request_token_hash = hashlib.sha256(request.approval_token.encode('utf-8')).hexdigest() if request.approval_token else ''
+    token_ok = bool(token_hash and hmac.compare_digest(request_token_hash, str(token_hash)))
     approved = (
         request.manual_approval is True
         and request.confirmation == L3_CONFIRMATION
         and bool(request.approved_by)
         and approval.get('approved') is True
+        and approval.get('source') == 'server'
         and token_ok
     )
     if not approved:
         raise HTTPException(
             status_code=403,
-            detail='Manual approval is required before starting real single_save/batch_save',
+            detail='Manual approval is required before starting real claim_only/single_save/batch_save',
+        )
+    l2_gate = l2_real_probe_gate()
+    if l2_gate.get('status') != 'passed':
+        raise HTTPException(
+            status_code=403,
+            detail=f"L2 readonly probe gate is not passed: {l2_gate.get('status')}",
         )
 
 

@@ -32,7 +32,8 @@ app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target 
 - 输出 JSON、Markdown、截图和 DOM 路径
 - 截图记录 `sha256`
 - DOM 记录 `sha256`
-- 报告包含 OS、浏览器版本、Python 版本、目标 URL、最终 URL、登录态、网络摘要
+- 报告包含 OS、浏览器版本、Python 版本、目标 URL、最终 URL、登录态、网络摘要和 `diagnostics`
+- `diagnostics` 只解释失败原因，不参与放行宽松化；即使某些请求被列入 `allowlist_review_candidates`，仍必须保持 `allowlist_applied=false` 且 `safety.ok=false`
 
 ## 禁止范围
 
@@ -50,6 +51,18 @@ app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target 
 运行产物在 `data/l2_readonly_probe/`，该目录受 `.gitignore` 保护，不随代码提交。
 截图和 DOM 是本地敏感证据，只用于交付审查，不应贴到公开日志、PR 描述或外部工单。
 CLI 标准输出只打印安全摘要、证据路径和 hash，不打印完整 DOM、可见文本或 body 预览。
+
+## 失败诊断
+
+JSON/Markdown 的 `diagnostics` 包含：
+
+> 注：`data/l2_readonly_probe/real_20260522/` 中的早期失败证据可能没有完整 `diagnostics` 字段；当前代码会在工作台聚合层派生诊断摘要，但重新跑 L2 时应以新版 JSON/Markdown 产物为准。
+
+- `strict_pass_checks`：逐项列出 `ok/safety_ok/final_url_matches/zero_*` 等硬门禁布尔值。
+- `navigation`：记录请求目标 path、最终 path、是否离开目标 path，以及最终 path 分类（如 `home/login/target/other`）。
+- `render_state`：记录 body 长度、可见匹配数量、是否疑似 loading/app shell。
+- `blocked_request_groups`：按 host/path/method/resource_type/reason/keyword 聚合被拦截请求，避免只看前 50 条原始请求。
+- `allowlist_review_candidates`：仅用于人工评审“可能是只读启动依赖”的 GET active request；该字段不得自动放行 L2。
 
 ## 证据等级
 

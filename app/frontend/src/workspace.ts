@@ -193,7 +193,7 @@ export function buildEmptyWorkspace(): DeliveryWorkspace {
     }],
     safety: {
       mode: 'probe / dry_run / claim_only / single_save / batch_save',
-      guarantee: '只保存不发布：真实 single_save/batch_save 启动前必须有后端人工批准令牌。',
+      guarantee: '只保存不发布：真实 claim_only/single_save/batch_save 启动前必须有后端人工批准令牌。',
       forbiddenActions: ['发布', '继续发布', '保存并发布', '移入待发布'],
       lastCheckedAt: '等待任务数据',
     },
@@ -232,7 +232,7 @@ export function buildMockWorkspace(): DeliveryWorkspace {
     },
   }]
   const logs: LogItem[] = [
-    { id: 1, task_id: 19, job_id: 31, level: 'info', message: '配置已完成预检，等待保存核验任务启动', context: {}, created_at: '2026-05-22T09:00:00+08:00' },
+    { id: 1, task_id: 19, job_id: 31, level: 'info', message: '配置已完成预检，等待 L2/L3 门禁复核', context: {}, created_at: '2026-05-22T09:00:00+08:00' },
     { id: 2, task_id: 19, job_id: 31, level: 'warning', message: '后端 /api/delivery/workspace 未接入时，前端使用工作台 fallback 数据', context: {}, created_at: '2026-05-22T09:01:00+08:00' },
   ]
   const evidences: Evidence[] = [
@@ -258,7 +258,7 @@ export function buildMockWorkspace(): DeliveryWorkspace {
   const deliverySteps: RunStep[] = [
     { state: 'PRECHECK_CONFIG', label: '配置预检', field_domain: 'config', status: 'completed', has_evidence: true, evidence_count: 1 },
     { state: 'FILL_MEDIA', label: '图片与营销图', field_domain: 'media', status: 'pending', has_evidence: false, evidence_count: 0 },
-    { state: 'SAVE_ONLY', label: '保存', field_domain: 'save', status: 'pending', has_evidence: false, evidence_count: 0 },
+    { state: 'L3_SAVE_GATE', label: 'L3 保存门禁', field_domain: 'save', status: 'pending', has_evidence: false, evidence_count: 0 },
     { state: 'VERIFY_NOT_PUBLISHED', label: '未发布校验', field_domain: 'publish_guard', status: 'pending', has_evidence: false, evidence_count: 0 },
   ]
   const evidencePoints: EvidencePoint[] = evidences.map((evidence) => ({

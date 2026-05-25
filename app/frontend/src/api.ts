@@ -4,7 +4,7 @@ export const API_BASE = runtimeBase || ''
 
 export async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`)
-  if (!response.ok) throw new Error(`GET ${path} failed`)
+  if (!response.ok) throw new Error(await responseErrorMessage(response, `GET ${path} failed`))
   return response.json()
 }
 
@@ -22,6 +22,22 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  if (!response.ok) throw new Error(`POST ${path} failed`)
+  if (!response.ok) throw new Error(await responseErrorMessage(response, `POST ${path} failed`))
   return response.json()
+}
+
+async function responseErrorMessage(response: Response, fallback: string): Promise<string> {
+  try {
+    const payload = await response.clone().json()
+    if (typeof payload?.detail === 'string') return payload.detail
+    if (typeof payload?.message === 'string') return payload.message
+  } catch {
+    try {
+      const text = await response.text()
+      if (text.trim()) return text.trim()
+    } catch {
+      // Keep the caller-facing fallback below.
+    }
+  }
+  return `${fallback} (${response.status})`
 }

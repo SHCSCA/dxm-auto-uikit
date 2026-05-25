@@ -10,17 +10,57 @@ type SafetyStatusBarProps = {
 
 export function SafetyStatusBar({ workspace, selectedTask, busy, onRefresh }: SafetyStatusBarProps) {
   const activeTaskLabel = selectedTask ? `#${selectedTask.id} ${humanTaskStatus(selectedTask.status)}` : '未选择任务'
+  const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
+  const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
+  const blockerGaps = workspace.acceptanceGaps.filter((gap) => gap.severity === 'blocker')
+  const publishGuardReasons = workspace.publishGuardState?.reasons ?? []
+  const l2BlocksRealSave = l2Gate?.status !== 'passed'
+  const l3BlocksRealSave = l3Gate?.status === 'blocked'
+  const l3NeedsApproval = l3Gate?.status !== 'passed'
+  const hasBlocker = blockerGaps.length > 0
+  const tone = l2BlocksRealSave || l3BlocksRealSave
+    ? 'danger'
+    : workspace.source === 'mock' || workspace.evidenceGrade?.grade === 'C' || hasBlocker
+      ? 'warn'
+      : 'ok'
+  const headline = tone === 'danger'
+    ? '禁止启动真实保存任务 / 真实保存已阻断'
+    : tone === 'warn'
+      ? '尚未形成真实可交付证明'
+      : workspace.safety.guarantee
+  const statusLine = `当前任务 ${activeTaskLabel}，L2 ${humanGateStatus(l2Gate?.status ?? workspace.safety.l2Status ?? 'not_run')}，L3 ${humanGateStatus(l3Gate?.status ?? 'not_run')}`
+  const gateDetails = [
+    l2Gate ? `L2：${l2Gate.detail}` : 'L2：缺少真实只读门禁状态',
+    l3Gate ? `L3：${l3Gate.detail}` : 'L3：缺少真实保存门禁状态',
+  ]
+  const blockerDetails = [
+    ...blockerGaps.map((gap) => `blocker：${gap.title} - ${gap.detail}`),
+    ...publishGuardReasons.map((reason) => `publish guard：${reason}`),
+  ]
+  const detail = tone === 'danger'
+    ? `${statusLine}。${[...gateDetails, ...blockerDetails].join('；') || '真实保存启动条件未满足。'}`
+    : tone === 'warn'
+      ? `${statusLine}，最近校验 ${workspace.safety.lastCheckedAt}`
+      : `当前任务 ${activeTaskLabel}，最近校验 ${workspace.safety.lastCheckedAt}`
 
   return (
-    <section className="safety-bar" aria-label="只保存不发布安全条">
+    <section className={`safety-bar safety-bar--${tone}`} aria-label="安全门禁状态条">
       <div className="safety-bar__main">
         <span className="safety-dot" aria-hidden="true" />
         <div>
-          <strong>{workspace.safety.guarantee}</strong>
-          <span>当前任务 {activeTaskLabel}，最近校验 {workspace.safety.lastCheckedAt}</span>
+          <strong>{headline}</strong>
+          <span>{detail}</span>
         </div>
       </div>
       <div className="safety-bar__meta" aria-label="禁止入口检查">
+        <span className={`guard-chip guard-chip--${l2BlocksRealSave ? 'danger' : 'ok'}`}>L2：{humanGateStatus(l2Gate?.status ?? 'not_run')}</span>
+        <span className={`guard-chip guard-chip--${l3BlocksRealSave ? 'danger' : l3NeedsApproval ? 'warn' : 'ok'}`}>L3：{l3NeedsApproval ? `不可启动 / ${humanGateStatus(l3Gate?.status ?? 'not_run')}` : humanGateStatus(l3Gate?.status ?? 'not_run')}</span>
+        {blockerGaps.slice(0, 2).map((gap) => (
+          <span key={gap.id} className="guard-chip guard-chip--danger">blocker：{gap.title}</span>
+        ))}
+        {publishGuardReasons.slice(0, 2).map((reason) => (
+          <span key={reason} className="guard-chip guard-chip--danger">guard：{reason}</span>
+        ))}
         {workspace.safety.forbiddenActions.map((action) => (
           <span key={action} className="guard-chip">{action}：无入口</span>
         ))}
@@ -30,4 +70,17 @@ export function SafetyStatusBar({ workspace, selectedTask, busy, onRefresh }: Sa
       </div>
     </section>
   )
+}
+
+function humanGateStatus(status: string) {
+  return ({
+    ready: '已就绪',
+    not_run: '未运行',
+    mock_passed: '离线通过',
+    partial: '部分完成',
+    passed: '通过',
+    failed: '失败',
+    blocked: '已阻断',
+    approval_required: '需批准',
+  } as Record<string, string>)[status] ?? status
 }

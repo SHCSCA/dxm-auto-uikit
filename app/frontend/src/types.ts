@@ -64,7 +64,14 @@ export type TemplateResolutionResult = {
 export type EvidencePoint = {
   kind: string
   id?: number
+  task_id?: number
+  taskId?: number
+  evidence_id?: number
+  evidenceId?: number
+  report_id?: number | string
+  reportId?: number | string
   job_id?: number | null
+  jobId?: number | null
   state?: string
   action?: string
   file_path?: string | null
@@ -147,7 +154,7 @@ export type AcceptanceGap = {
 export type RegressionGate = {
   level: 'L0' | 'L1' | 'L2' | 'L3' | string
   title: string
-  status: 'ready' | 'not_run' | 'mock_passed' | 'passed' | 'failed' | 'approval_required' | string
+  status: 'ready' | 'not_run' | 'mock_passed' | 'partial' | 'passed' | 'failed' | 'blocked' | 'approval_required' | string
   evidenceLevel: EvidenceGrade
   requiresApproval: boolean
   command?: string
@@ -180,5 +187,8 @@ export type DeliveryWorkspace = {
     guarantee: string
     forbiddenActions: string[]
     lastCheckedAt: string
+    evidenceGrade?: EvidenceGrade
+    blockedByL2?: boolean
+    l2Status?: string | null
   }
 }

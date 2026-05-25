@@ -19,9 +19,12 @@
 - `template_resolution`：`dxm_reference_templates_resolved`、`dxm_reference_template_results`、`template_trace`、`resolved_defaults`。
 - `dxmReferenceTemplates`：前端模板矩阵使用的分区映射视图。
 - `publish_guard_state`：交付安全状态，固定不开放发布动作；当现有报告和证据均显示 `published=false` 时返回 `safe_unpublished`。
-- `evidence_grade`：证据等级。
-- `regression_gates`：L0/L1/L2/L3 回归门禁矩阵。L1 读取 `data/l1_selector_replay/` 最新离线 replay；L2 读取 `data/l2_readonly_probe/` 最新只读 probe；L3 必须显示人工批准要求。
-- `acceptanceGaps` / `safety`：交付缺口和只保存不发布安全条。
+- `evidence_grade`：交付证据等级；当 L2 真实只读门禁未通过时，对外 `grade` 最高为 `C`，并通过 `raw_evidence_grade` 保留保存/未发布/网络证据本身的原始等级。
+- `regression_gates`：L0/L1/L2/L3 回归门禁矩阵。L1 读取 `data/l1_selector_replay/` 最新离线 replay；L2 按目标聚合 `data/l2_readonly_probe/` 下的 `data_acquisition` 与 `draft_box` 最新真实只读 probe；L3 必须受 L2 通过状态和人工批准共同约束。
+- `regression_gates[].latest.realTargets|mockTargets[*].diagnostics`：L2 失败诊断，包括逐项硬门禁检查、导航 path 分类、渲染状态和被拦截请求聚合。该字段只提升可解释性，不改变 L2/L3 放行条件。
+- `delivery_readiness`：按 job 聚合保存结果、未发布证明、保存截图/路径、未发布截图/路径、network/HAR 保存响应。任一 job 缺证据时，任务级 `evidence_grade.grade` 最高为 `C`，`acceptanceGaps` 必须给出对应 `gap-job-{job_id}-delivery-evidence` blocker。
+- `acceptanceGaps` / `safety`：交付缺口和安全门禁状态条。
+- 当 L2 非 `passed` 时，`acceptanceGaps` 必须包含 `gap-l2-real-probe` blocker，`safety.evidenceGrade` 必须为 `C`，前端必须显示真实保存阻断状态。
 
 ## 证据等级
 
@@ -33,5 +36,5 @@
 
 - L0：后端单测和前端 build，固定不访问店小秘。
 - L1：`tools/probes/l1_selector_replay.py`，离线 DOM fixture replay，通过时 `status=passed`。
-- L2：`tools/probes/l2_readonly_probe.py`，真实 URL 通过时 `status=passed`；本地/mock 通过时 `status=mock_passed`，不得等同于真实页面通过。
-- L3：`single_save` 金丝雀，真实写操作，必须人工明确批准后才允许执行。
+- L2：`tools/probes/l2_readonly_probe.py`，仅当 `data_acquisition` 与 `draft_box` 两个真实 `dianxiaomi.com` 目标均 `ok=true`、`safety.ok=true`、登录态有效，并且 `write/non_read/blocked/forbidden/websocket` 计数全为 `0` 时 `status=passed`。只有一个真实目标通过时为 `partial`；本地/mock 通过时为 `mock_passed`，不得等同于真实页面通过；任一真实目标失败时为 `failed`。
+- L3：`claim_only` / `single_save` / `batch_save` 真实写操作。只有 L2 `status=passed` 且人工明确批准后才允许执行；否则工作台显示 `blocked`，后端启动接口也拒绝 `claim_only/single_save/batch_save`。

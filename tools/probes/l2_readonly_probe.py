@@ -102,10 +102,11 @@ class ReadOnlyProbeGuard:
 
     def _on_request_failed(self, request) -> None:
         failure = request.failure or {}
+        error_text = failure.get("errorText") if isinstance(failure, dict) else str(failure)
         self.failures.append({
             "method": request.method,
             "url": sanitize_url(request.url),
-            "error_text": failure.get("errorText"),
+            "error_text": error_text,
         })
 
     def _on_websocket(self, websocket) -> None:
@@ -233,6 +234,7 @@ def run_probe(
     }
     result["safety"] = evaluate_safety(result)
     result["ok"] = bool(result["safety"]["ok"])
+    result["diagnostics"] = build_probe_diagnostics(result)
     result["json_path"] = str(json_path)
     result["markdown_path"] = str(markdown_path)
     json_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -274,6 +276,160 @@ def evaluate_safety(result: dict[str, Any]) -> dict[str, Any]:
         "forbidden_url_keywords": list(FORBIDDEN_URL_KEYWORDS),
         "reasons": reasons,
     }
+
+
+def build_probe_diagnostics(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "strict_pass_checks": _strict_pass_checks(result),
+        "navigation": _navigation_diagnostics(result),
+        "render_state": _render_state_diagnostics(result),
+        "blocked_request_groups": _group_blocked_requests(result),
+        "allowlist_review_candidates": _allowlist_review_candidates(result),
+    }
+
+
+def _strict_pass_checks(result: dict[str, Any]) -> dict[str, bool]:
+    network = result.get("network") or {}
+    login_state = result.get("login_state") or {}
+    safety = result.get("safety") or {}
+    return {
+        "ok": result.get("ok") is True,
+        "safety_ok": safety.get("ok") is True,
+        "target_url_matches": _target_url_matches(result.get("target"), result.get("target_url")),
+        "final_url_matches": _target_url_matches(result.get("target"), result.get("final_url")),
+        "cookies_loaded": login_state.get("cookies_loaded") is True,
+        "not_login_page": login_state.get("suspected_login_page") is False,
+        "zero_write": int(network.get("write_request_count") or 0) == 0,
+        "zero_non_read": int(network.get("non_read_request_count") or 0) == 0,
+        "zero_blocked": int(network.get("blocked_request_count") or 0) == 0,
+        "zero_forbidden": int(network.get("forbidden_keyword_request_count") or 0) == 0,
+        "zero_websocket": int(network.get("websocket_count") or 0) == 0,
+    }
+
+
+def _navigation_diagnostics(result: dict[str, Any]) -> dict[str, Any]:
+    target = str(result.get("target") or "")
+    target_path = _url_path(result.get("target_url"))
+    final_path = _url_path(result.get("final_url"))
+    final_matches = _target_url_matches(target, result.get("final_url"))
+    return {
+        "requested_target_path": target_path,
+        "final_path": final_path,
+        "left_target_path": bool(is_dianxiaomi_url(str(result.get("target_url") or "")) and not final_matches),
+        "final_path_class": _classify_final_path(target, result.get("final_url")),
+    }
+
+
+def _render_state_diagnostics(result: dict[str, Any]) -> dict[str, Any]:
+    body = str(result.get("body_preview") or "")
+    visible_matches = result.get("visible_matches") or []
+    target_markers = _target_markers(str(result.get("target") or ""))
+    target_markers_found = sorted({
+        marker
+        for marker in target_markers
+        if marker and (marker in body or any(marker in str(match.get("text") or "") for match in visible_matches))
+    })
+    loading_screen_detected = any(marker in body for marker in ("加载", "loading", "Loading"))
+    app_shell_only = not target_markers_found and (len(body.strip()) < 200 or loading_screen_detected)
+    return {
+        "body_text_length": len(body),
+        "visible_match_count": len(visible_matches),
+        "loading_screen_detected": loading_screen_detected,
+        "target_markers_found": target_markers_found,
+        "app_shell_only": app_shell_only,
+    }
+
+
+def _group_blocked_requests(result: dict[str, Any]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for item in (result.get("network") or {}).get("blocked_requests") or []:
+        parts = _split_url(str(item.get("url") or ""))
+        reasons = tuple(item.get("reasons") or [])
+        keyword_hits = tuple(item.get("forbidden_keyword_hits") or [])
+        key = (
+            item.get("method"),
+            parts["host"],
+            parts["path"],
+            item.get("resource_type"),
+            reasons,
+            keyword_hits,
+        )
+        current = grouped.setdefault(key, {
+            "count": 0,
+            "method": item.get("method"),
+            "host": parts["host"],
+            "path": parts["path"],
+            "resource_type": item.get("resource_type"),
+            "reasons": list(reasons),
+            "keyword_hits": list(keyword_hits),
+            "sample_url": item.get("url"),
+        })
+        current["count"] += 1
+    return sorted(grouped.values(), key=lambda group: (-int(group["count"]), str(group["host"]), str(group["path"])))[:25]
+
+
+def _allowlist_review_candidates(result: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates = []
+    for group in _group_blocked_requests(result):
+        reasons = group.get("reasons") or []
+        if (
+            group.get("method") in READ_METHODS
+            and group.get("resource_type") in ACTIVE_RESOURCE_TYPES
+            and not group.get("keyword_hits")
+            and all(str(reason).startswith("active_or_unknown_resource_type:") for reason in reasons)
+        ):
+            candidates.append({
+                **group,
+                "review_only": True,
+                "allowlist_applied": False,
+            })
+    return candidates[:20]
+
+
+def _target_url_matches(target: Any, url: Any) -> bool:
+    target_key = str(target or "")
+    expected = TARGETS.get(target_key)
+    if not expected or not is_dianxiaomi_url(str(url or "")):
+        return False
+    return _url_path(url).lower().startswith(_url_path(expected).lower())
+
+
+def _classify_final_path(target: str, url: Any) -> str:
+    path = _url_path(url).lower()
+    if not path:
+        return "unknown"
+    if not is_dianxiaomi_url(str(url or "")):
+        return "mock_or_external"
+    if any(keyword in str(url).lower() for keyword in LOGIN_URL_KEYWORDS):
+        return "login"
+    if path.startswith("/web/home"):
+        return "home"
+    if _target_url_matches(target, url):
+        return "target"
+    return "other"
+
+
+def _target_markers(target: str) -> tuple[str, ...]:
+    if target == "data_acquisition":
+        return ("采集箱", "数据采集", "采集")
+    if target == "draft_box":
+        return ("草稿箱", "草稿", "产品列表")
+    return ()
+
+
+def _url_path(url: Any) -> str:
+    try:
+        return urlsplit(str(url or "")).path
+    except ValueError:
+        return ""
+
+
+def _split_url(url: str) -> dict[str, str]:
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return {"host": "", "path": ""}
+    return {"host": parts.netloc, "path": parts.path}
 
 
 def load_cookies(cookie_file: Path) -> list[dict[str, Any]]:
@@ -439,6 +595,11 @@ def render_markdown(result: dict[str, Any]) -> str:
 ## 网络摘要
 ```json
 {json.dumps(network, ensure_ascii=False, indent=2)}
+```
+
+## 失败诊断
+```json
+{json.dumps(result.get("diagnostics") or {}, ensure_ascii=False, indent=2)}
 ```
 """
 

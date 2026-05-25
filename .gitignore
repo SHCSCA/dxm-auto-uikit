@@ -15,6 +15,9 @@ data/sqlite/
 data/evidences/
 outputs/reports/
 outputs/spreadsheets/
+outputs/browser-checks/
+outputs/final-delivery-check/
+outputs/playwright/
 data/ai/
 data/*.log
 app/backend/data/

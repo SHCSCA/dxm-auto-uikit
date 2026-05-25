@@ -39,6 +39,14 @@ class FakeWebSocket:
         self.url = url
 
 
+class FakeFailedRequest:
+    method = "GET"
+    url = "https://www.dianxiaomi.com/static/app.js?token=secret"
+
+    def __init__(self, failure):
+        self.failure = failure
+
+
 @pytest.mark.parametrize("method", ["GET", "HEAD", "OPTIONS"])
 def test_readonly_probe_guard_allows_read_methods(method):
     module = _load_probe_module()
@@ -98,6 +106,19 @@ def test_readonly_probe_guard_blocks_active_requests_in_strict_mode():
         "network": summary,
     })
     assert safety["ok"] is False
+
+
+def test_readonly_probe_guard_records_string_request_failure():
+    module = _load_probe_module()
+    guard = module.ReadOnlyProbeGuard()
+
+    guard._on_request_failed(FakeFailedRequest("net::ERR_FAILED"))
+
+    assert guard.summary()["failed_requests"] == [{
+        "method": "GET",
+        "url": "https://www.dianxiaomi.com/static/app.js?__redacted__",
+        "error_text": "net::ERR_FAILED",
+    }]
 
 
 @pytest.mark.parametrize("keyword", ["save", "publish", "submitPublish", "claim", "remark", "note"])
@@ -270,6 +291,73 @@ def test_readonly_probe_markdown_contains_core_evidence_fields(tmp_path):
     assert "markdown" in markdown
     assert "draft_box" in markdown
     assert "None" not in markdown
+
+
+def test_readonly_probe_diagnostics_group_failed_real_navigation_and_requests():
+    module = _load_probe_module()
+    result = {
+        "target": "data_acquisition",
+        "target_url": "https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
+        "final_url": "https://www.dianxiaomi.com/web/home?__redacted__",
+        "ok": False,
+        "body_preview": "店小秘",
+        "visible_matches": [],
+        "login_state": {
+            "required": True,
+            "cookies_loaded": True,
+            "suspected_login_page": False,
+            "signals": [],
+        },
+        "network": {
+            "write_request_count": 1,
+            "non_read_request_count": 1,
+            "blocked_request_count": 3,
+            "forbidden_keyword_request_count": 1,
+            "websocket_count": 0,
+            "blocked_requests": [
+                {
+                    "method": "GET",
+                    "url": "https://www.dianxiaomi.com/api/userInfo.json",
+                    "resource_type": "xhr",
+                    "reasons": ["active_or_unknown_resource_type:xhr"],
+                    "forbidden_keyword_hits": [],
+                },
+                {
+                    "method": "GET",
+                    "url": "https://www.dianxiaomi.com/api/userInfo.json",
+                    "resource_type": "xhr",
+                    "reasons": ["active_or_unknown_resource_type:xhr"],
+                    "forbidden_keyword_hits": [],
+                },
+                {
+                    "method": "POST",
+                    "url": "https://events.sellfox.com/events",
+                    "resource_type": "fetch",
+                    "reasons": ["non_read_method:POST", "write_method:POST"],
+                    "forbidden_keyword_hits": [],
+                },
+                {
+                    "method": "GET",
+                    "url": "https://s1.dianxiaomi.com/assets/publishDetection.js",
+                    "resource_type": "script",
+                    "reasons": ["forbidden_url_keywords:publish"],
+                    "forbidden_keyword_hits": ["publish"],
+                },
+            ],
+        },
+        "safety": {"ok": False, "reasons": ["blocked"]},
+    }
+
+    diagnostics = module.build_probe_diagnostics(result)
+
+    assert diagnostics["navigation"]["left_target_path"] is True
+    assert diagnostics["navigation"]["final_path_class"] == "home"
+    assert diagnostics["strict_pass_checks"]["zero_blocked"] is False
+    assert diagnostics["strict_pass_checks"]["final_url_matches"] is False
+    assert diagnostics["render_state"]["app_shell_only"] is True
+    assert diagnostics["blocked_request_groups"][0]["count"] == 2
+    assert diagnostics["blocked_request_groups"][0]["path"] == "/api/userInfo.json"
+    assert diagnostics["allowlist_review_candidates"][0]["review_only"] is True
 
 
 def test_sha256_and_url_sanitization_helpers(tmp_path):

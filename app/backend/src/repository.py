@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from src.db import connection, dumps, loads
@@ -79,21 +80,26 @@ class Repository:
         with connection() as conn:
             rows = conn.execute("SELECT * FROM tasks ORDER BY id DESC").fetchall()
             for row in rows:
-                row['payload'] = loads(row.pop('payload_json'), {})
+                row['payload'] = self._public_task_payload(loads(row.pop('payload_json'), {}))
             return rows
 
-    def get_task(self, task_id: int):
+    def get_task(self, task_id: int, *, include_private: bool = False):
         with connection() as conn:
             task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
             if not task:
                 return None
-            task['payload'] = loads(task.pop('payload_json'), {})
+            payload = loads(task.pop('payload_json'), {})
+            task['payload'] = payload if include_private else self._public_task_payload(payload)
             task['jobs'] = conn.execute("SELECT * FROM jobs WHERE task_id=? ORDER BY id ASC", (task_id,)).fetchall()
             return task
+
+    def get_task_private(self, task_id: int):
+        return self.get_task(task_id, include_private=True)
 
     def create_task(self, data: dict[str, Any]):
         now = now_iso()
         payload = dict(data.get('payload') or {})
+        payload.pop('manual_approval', None)
         payload.update({
             'product_ids': data.get('product_ids', []),
             'claim_mark': data.get('claim_mark', 'AI认领'),
@@ -116,6 +122,26 @@ class Repository:
             task['payload'] = loads(task.pop('payload_json'), {})
             return task
 
+    def set_task_manual_approval(self, task_id: int, *, approved: bool, token: str, approved_by: str = "system"):
+        now = now_iso()
+        with connection() as conn:
+            task = conn.execute("SELECT payload_json FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if not task:
+                return None
+            payload = loads(task['payload_json'], {})
+            payload['manual_approval'] = {
+                'approved': bool(approved),
+                'token_hash': hashlib.sha256(token.encode("utf-8")).hexdigest(),
+                'approved_by': approved_by,
+                'approved_at': now,
+                'source': 'server',
+            }
+            conn.execute(
+                "UPDATE tasks SET payload_json=?, updated_at=? WHERE id=?",
+                (dumps(payload), now, task_id),
+            )
+        return self.get_task(task_id)
+
     def update_task_status(self, task_id: int, status: str, completed_jobs: int | None = None, failed_jobs: int | None = None):
         now = now_iso()
         with connection() as conn:
@@ -124,6 +150,39 @@ class Repository:
                 "UPDATE tasks SET status=?, completed_jobs=?, failed_jobs=?, updated_at=? WHERE id=?",
                 (status, completed_jobs if completed_jobs is not None else existing['completed_jobs'], failed_jobs if failed_jobs is not None else existing['failed_jobs'], now, task_id),
             )
+
+    def try_start_task(self, task_id: int) -> bool:
+        now = now_iso()
+        with connection() as conn:
+            cur = conn.execute(
+                "UPDATE tasks SET status='running', updated_at=? WHERE id=? AND status='draft'",
+                (now, task_id),
+            )
+            return cur.rowcount == 1
+
+    def try_pause_task(self, task_id: int) -> bool:
+        now = now_iso()
+        with connection() as conn:
+            cur = conn.execute(
+                "UPDATE tasks SET status='paused', updated_at=? WHERE id=? AND status='running'",
+                (now, task_id),
+            )
+            return cur.rowcount == 1
+
+    def try_resume_task(self, task_id: int) -> bool:
+        return False
+
+    def _public_task_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        public_payload = dict(payload or {})
+        approval = public_payload.get('manual_approval')
+        if isinstance(approval, dict):
+            public_approval = {
+                key: value
+                for key, value in approval.items()
+                if key not in {'token', 'token_hash'}
+            }
+            public_payload['manual_approval'] = public_approval
+        return public_payload
 
     def update_job(self, job_id: int, **fields):
         now = now_iso()

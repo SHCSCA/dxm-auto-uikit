@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from collections import defaultdict
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from src.execution.v1_runner import MODE_LAST_STATE, V1_STEPS
 from src.repository import Repository
@@ -25,6 +28,20 @@ REFERENCE_SECTION_LABELS = {
 ROOT = Path(__file__).resolve().parents[4]
 L1_REPLAY_DIR = ROOT / "data" / "l1_selector_replay"
 L2_PROBE_DIR = ROOT / "data" / "l2_readonly_probe"
+REQUIRED_L2_TARGETS = ("data_acquisition", "draft_box")
+L2_TARGET_PATH_HINTS = {
+    "data_acquisition": "/web/productcrawl/dataacquisition",
+    "draft_box": "/web/smt/smtproductlist/draft",
+}
+L2_ZERO_NETWORK_COUNTERS = (
+    "write_request_count",
+    "non_read_request_count",
+    "blocked_request_count",
+    "forbidden_keyword_request_count",
+    "websocket_count",
+)
+L2_REAL_TARGET_MAX_SKEW_SECONDS = 30 * 60
+L2_REAL_TARGET_MAX_AGE_SECONDS = 2 * 60 * 60
 
 ACTION_TO_STATES = {
     "check_login_state": ("PRECHECK_SESSION",),
@@ -64,6 +81,8 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
     ]
     latest_report = _latest_report(reports)
     extracted = _extract_delivery_evidence(reports, evidences)
+    l2_gate = _l2_probe_gate()
+    delivery_readiness = _delivery_readiness(task, reports, evidences)
 
     return {
         "baseline": _baseline(),
@@ -74,16 +93,17 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
         "tasks": tasks,
         "steps": _steps(task, reports, evidences),
         "evidences": evidences,
-        "evidence_points": _evidence_points(evidences, extracted),
+        "evidence_points": _evidence_points(evidences, reports, task_id),
         "reports": reports,
         "report_summary": _report_summary(reports, extracted),
         "template_resolution": _template_resolution(latest_report),
         "dxmReferenceTemplates": _dxm_reference_sections(latest_report),
         "publish_guard_state": _publish_guard_state(reports, extracted),
-        "evidence_grade": _evidence_grade(extracted),
-        "regression_gates": _regression_gates(extracted),
-        "acceptanceGaps": _acceptance_gaps(exceptions, extracted),
-        "safety": _safety_state(extracted),
+        "evidence_grade": _evidence_grade(extracted, l2_gate, delivery_readiness),
+        "regression_gates": _regression_gates(extracted, l2_gate, delivery_readiness),
+        "delivery_readiness": delivery_readiness,
+        "acceptanceGaps": _acceptance_gaps(exceptions, extracted, l2_gate, delivery_readiness),
+        "safety": _safety_state(extracted, l2_gate, delivery_readiness),
         "logs": logs,
         "exceptions": exceptions,
     }
@@ -198,7 +218,11 @@ def _step_defs_for_mode(mode: str):
     return selected
 
 
-def _evidence_points(evidences: list[dict[str, Any]], extracted: dict[str, Any]) -> list[dict[str, Any]]:
+def _evidence_points(
+    evidences: list[dict[str, Any]],
+    reports: list[dict[str, Any]],
+    task_id: int,
+) -> list[dict[str, Any]]:
     points: list[dict[str, Any]] = []
     for evidence in evidences:
         meta = evidence.get("meta") or {}
@@ -206,6 +230,7 @@ def _evidence_points(evidences: list[dict[str, Any]], extracted: dict[str, Any])
             {
                 "kind": evidence.get("evidence_type"),
                 "id": evidence.get("id"),
+                "task_id": evidence.get("task_id"),
                 "job_id": evidence.get("job_id"),
                 "state": meta.get("state"),
                 "action": meta.get("action"),
@@ -215,14 +240,17 @@ def _evidence_points(evidences: list[dict[str, Any]], extracted: dict[str, Any])
                 "ok": meta.get("ok"),
             }
         )
-    for save_result in extracted["save_results"]:
-        points.append({"kind": "save_result", "save_result": save_result})
-    for proof in extracted["published_proofs"]:
-        points.append({"kind": "published_proof", **proof})
-    for network_result in extracted["network_save_results"]:
-        points.append({"kind": "network_save_result", "network_save_result": network_result})
-    for har_summary in extracted["har_summaries"]:
-        points.append({"kind": "har_summary", "har_summary": har_summary})
+    for report in reports:
+        report_id = report.get("id")
+        report_extracted = _extract_delivery_evidence([report], [])
+        for save_result in report_extracted["save_results"]:
+            points.append({"kind": "save_result", "task_id": task_id, "report_id": report_id, "save_result": save_result})
+        for proof in report_extracted["published_proofs"]:
+            points.append({"kind": "published_proof", "task_id": task_id, "report_id": report_id, **proof})
+        for network_result in report_extracted["network_save_results"]:
+            points.append({"kind": "network_save_result", "task_id": task_id, "report_id": report_id, "network_save_result": network_result})
+        for har_summary in report_extracted["har_summaries"]:
+            points.append({"kind": "har_summary", "task_id": task_id, "report_id": report_id, "har_summary": har_summary})
     return points
 
 
@@ -280,11 +308,22 @@ def _publish_guard_state(reports: list[dict[str, Any]], extracted: dict[str, Any
     }
 
 
-def _evidence_grade(extracted: dict[str, Any]) -> dict[str, Any]:
+def _evidence_grade(
+    extracted: dict[str, Any],
+    l2_gate: Mapping[str, Any] | None = None,
+    delivery_readiness: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     has_save_result = bool(extracted["save_results"])
     has_published_proof = bool(extracted["published_proofs"])
     has_network_or_har = bool(extracted["network_save_results"] or extracted["har_summaries"])
     has_publish_risk = bool(extracted["publish_risk"]["reasons"])
+    l2_status = (l2_gate or {}).get("status")
+    blocked_by_l2 = bool(l2_gate) and l2_status != "passed"
+    blocked_by_job_readiness = (
+        bool(delivery_readiness)
+        and delivery_readiness.get("has_l3_evidence") is True
+        and delivery_readiness.get("ready") is False
+    )
     if has_publish_risk:
         grade = "C"
     elif has_save_result and has_published_proof and has_network_or_har:
@@ -293,40 +332,60 @@ def _evidence_grade(extracted: dict[str, Any]) -> dict[str, Any]:
         grade = "B"
     else:
         grade = "C"
+    raw_grade = grade
+    if blocked_by_l2 or blocked_by_job_readiness:
+        grade = "C"
     return {
         "grade": grade,
+        "raw_evidence_grade": raw_grade,
         "has_save_result": has_save_result,
         "has_published_proof": has_published_proof,
         "has_network_or_har_save_response": has_network_or_har,
         "has_publish_risk": has_publish_risk,
+        "blocked_by_l2": blocked_by_l2,
+        "blocked_by_job_readiness": blocked_by_job_readiness,
+        "l2_status": l2_status,
         "criteria": "A requires save_result, verified published=false proof, network/HAR save response, and no publish signal; B allows missing network/HAR; C is incomplete or blocked.",
     }
 
 
-def _regression_gates(extracted: dict[str, Any]) -> list[dict[str, Any]]:
+def _regression_gates(
+    extracted: dict[str, Any],
+    l2_gate: Mapping[str, Any] | None = None,
+    delivery_readiness: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     latest_l1 = _latest_schema_result(L1_REPLAY_DIR, "dxm_l1_selector_replay.v1")
-    latest_l2 = _latest_l2_probe_result()
+    l2_gate = dict(l2_gate or _l2_probe_gate())
+    l2_passed = l2_gate["status"] == "passed"
     has_l3_save_proof = bool(extracted["save_results"] and extracted["published_proofs"])
     has_l3_network = bool(extracted["network_save_results"] or extracted["har_summaries"])
-    l2_status = "not_run"
-    l2_level = "C"
-    l2_detail = "尚未运行 L2 只读 probe；真实 L2 需要用户明确批准。"
-    if latest_l2:
-        l2_ok = latest_l2.get("ok") is True
-        target_url = str(latest_l2.get("target_url") or "")
-        is_real_target = "dianxiaomi.com" in target_url
-        if l2_ok and is_real_target:
-            l2_status = "passed"
-            l2_level = "A"
-            l2_detail = "最新真实店小秘 L2 只读 probe 通过。"
-        elif l2_ok:
-            l2_status = "mock_passed"
-            l2_level = "B"
-            l2_detail = "最新 L2 离线/mock probe 通过；真实页面仍待批准执行。"
-        else:
-            l2_status = "failed"
-            l2_level = "C"
-            l2_detail = "最新 L2 probe 未通过，需查看证据报告。"
+    if not l2_passed:
+        l3_status = "blocked"
+        l3_level = "C"
+        l3_detail = f"L2 未通过（当前：{l2_gate['status']}），真实 claim_only/single_save/batch_save 启动入口关闭。"
+    elif (
+        delivery_readiness
+        and delivery_readiness.get("has_l3_evidence") is True
+        and delivery_readiness.get("ready") is False
+    ):
+        l3_status = "blocked"
+        l3_level = "C"
+        missing_jobs = [
+            f"Job #{item.get('job_id')} 缺少 {', '.join(str(value) for value in item.get('missing') or [])}"
+            for item in delivery_readiness.get("jobs") or []
+            if not item.get("ready")
+        ][:3]
+        l3_detail = "任务级交付证据不完整；" + "；".join(missing_jobs)
+    else:
+        l3_status = "passed" if has_l3_save_proof else "approval_required"
+        l3_level = "A" if has_l3_save_proof and has_l3_network else "B" if has_l3_save_proof else "C"
+        l3_detail = (
+            "已找到保存结果、未发布证明和网络/HAR 保存证据。"
+            if has_l3_save_proof and has_l3_network
+            else "已找到保存结果和未发布证明；缺少网络/HAR 保存证据。"
+            if has_l3_save_proof
+            else "真实写操作必须由用户明确批准，只能操作 Dang Kang 已备注归属商品。"
+        )
 
     return [
         {
@@ -357,29 +416,420 @@ def _regression_gates(extracted: dict[str, Any]) -> list[dict[str, Any]]:
         {
             "level": "L2",
             "title": "真实登录态只读 probe",
-            "status": l2_status,
-            "evidenceLevel": l2_level,
+            "status": l2_gate["status"],
+            "evidenceLevel": l2_gate["evidenceLevel"],
             "requiresApproval": True,
             "command": "tools/probes/l2_readonly_probe.py --target data_acquisition|draft_box",
-            "detail": l2_detail,
-            "latest": latest_l2,
+            "detail": l2_gate["detail"],
+            "latest": l2_gate["latest"],
         },
         {
             "level": "L3",
             "title": "单商品 save-only 金丝雀",
-            "status": "passed" if has_l3_save_proof else "approval_required",
-            "evidenceLevel": "A" if has_l3_save_proof and has_l3_network else "B" if has_l3_save_proof else "C",
+            "status": l3_status,
+            "evidenceLevel": l3_level,
             "requiresApproval": True,
             "command": "single_save with manual approval token",
-            "detail": (
-                "已找到保存结果、未发布证明和网络/HAR 保存证据。"
-                if has_l3_save_proof and has_l3_network
-                else "已找到保存结果和未发布证明；缺少网络/HAR 保存证据。"
-                if has_l3_save_proof
-                else "真实写操作必须由用户明确批准，只能操作 Dang Kang 已备注归属商品。"
-            ),
+            "detail": l3_detail,
         },
     ]
+
+
+def _delivery_readiness(
+    task: Mapping[str, Any],
+    reports: list[dict[str, Any]],
+    evidences: list[dict[str, Any]],
+) -> dict[str, Any]:
+    jobs = list(task.get("jobs") or [])
+    reports_by_job: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    evidences_by_job: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for report in reports:
+        job_id = report.get("job_id")
+        if job_id is not None:
+            reports_by_job[int(job_id)].append(report)
+    for evidence in evidences:
+        job_id = evidence.get("job_id")
+        if job_id is not None:
+            evidences_by_job[int(job_id)].append(evidence)
+
+    job_results = []
+    for job in jobs:
+        job_id = int(job["id"])
+        payloads: list[tuple[str, Any]] = []
+        for report in reports_by_job.get(job_id, []):
+            payloads.append((f"report:{report.get('id')}.save_result", report.get("save_result")))
+            payloads.append((f"report:{report.get('id')}.summary", report.get("summary")))
+        for evidence in evidences_by_job.get(job_id, []):
+            payloads.append((f"evidence:{evidence.get('id')}", evidence.get("meta")))
+
+        has_save_result = any(_payload_has_save_result(payload) for _, payload in payloads)
+        has_unpublished_proof = any(_payload_has_unpublished_proof(payload, source) for source, payload in payloads)
+        has_network_or_har = any(_payload_has_network_or_har(payload) for _, payload in payloads)
+        has_save_evidence_file = any(_evidence_file_for_action(item, {"save_only", "SAVE_ONLY"}) for item in evidences_by_job.get(job_id, []))
+        has_unpublished_evidence_file = any(_evidence_file_for_action(item, {"verify_not_published", "VERIFY_NOT_PUBLISHED"}) for item in evidences_by_job.get(job_id, []))
+        missing = []
+        if not has_save_result:
+            missing.append("save_result")
+        if not has_unpublished_proof:
+            missing.append("published=false proof")
+        if not has_network_or_har:
+            missing.append("network/HAR save response")
+        if not has_save_evidence_file:
+            missing.append("save screenshot/path")
+        if not has_unpublished_evidence_file:
+            missing.append("unpublished screenshot/path")
+        job_results.append(
+            {
+                "job_id": job_id,
+                "product_id": job.get("product_id"),
+                "ready": not missing,
+                "has_save_result": has_save_result,
+                "has_unpublished_proof": has_unpublished_proof,
+                "has_network_or_har_save_response": has_network_or_har,
+                "has_save_evidence_file": has_save_evidence_file,
+                "has_unpublished_evidence_file": has_unpublished_evidence_file,
+                "missing": missing,
+            }
+        )
+
+    complete_count = sum(1 for item in job_results if item["ready"])
+    return {
+        "ready": bool(job_results) and complete_count == len(job_results),
+        "has_l3_evidence": bool(reports or evidences),
+        "total_job_count": len(job_results),
+        "complete_job_count": complete_count,
+        "jobs": job_results,
+    }
+
+
+def _payload_has_save_result(payload: Any) -> bool:
+    if isinstance(payload, Mapping):
+        nested = payload.get("save_result")
+        if isinstance(nested, Mapping) and (_looks_like_save_result(nested) or nested.get("ok") is True):
+            return True
+        if _looks_like_save_result(payload):
+            return True
+        return any(_payload_has_save_result(value) for value in payload.values())
+    if isinstance(payload, list):
+        return any(_payload_has_save_result(item) for item in payload)
+    return False
+
+
+def _payload_has_unpublished_proof(payload: Any, source: str) -> bool:
+    if isinstance(payload, Mapping):
+        published = _parse_bool(payload.get("published")) if "published" in payload else None
+        if published is False and _is_unpublished_proof_payload(payload, source):
+            return True
+        return any(_payload_has_unpublished_proof(value, source) for value in payload.values())
+    if isinstance(payload, list):
+        return any(_payload_has_unpublished_proof(item, source) for item in payload)
+    return False
+
+
+def _payload_has_network_or_har(payload: Any) -> bool:
+    if isinstance(payload, Mapping):
+        network_save_result = payload.get("network_save_result")
+        if isinstance(network_save_result, Mapping) and _network_save_result_seen(network_save_result):
+            return True
+        har_summary = payload.get("har_summary") or payload.get("har")
+        if isinstance(har_summary, Mapping) and _har_save_response_seen(har_summary):
+            return True
+        network_events = payload.get("network_events")
+        if isinstance(network_events, list) and any(
+            isinstance(event, Mapping) and _network_event_save_response_seen(event)
+            for event in network_events
+        ):
+            return True
+        return any(_payload_has_network_or_har(value) for value in payload.values())
+    if isinstance(payload, list):
+        return any(_payload_has_network_or_har(item) for item in payload)
+    return False
+
+
+def _evidence_file_for_action(evidence: Mapping[str, Any], accepted: set[str]) -> bool:
+    if not evidence.get("file_path"):
+        return False
+    meta = evidence.get("meta") or {}
+    return str(meta.get("action") or "") in accepted or str(meta.get("state") or "") in accepted
+
+
+def l2_real_probe_gate() -> dict[str, Any]:
+    return _l2_probe_gate()
+
+
+def _l2_probe_gate(now: datetime | None = None) -> dict[str, Any]:
+    grouped = _latest_l2_probe_results_by_target()
+    real_targets = grouped["real"]
+    mock_targets = grouped["mock"]
+    latest = {
+        "requiredTargets": list(REQUIRED_L2_TARGETS),
+        "targets": real_targets if real_targets else mock_targets,
+        "realTargets": real_targets,
+        "mockTargets": mock_targets,
+        "missingTargets": [
+            target for target in REQUIRED_L2_TARGETS
+            if target not in real_targets
+        ],
+    }
+
+    if real_targets:
+        failed_targets = [
+            target for target, result in real_targets.items()
+            if not _l2_result_is_strict_pass(result, require_real_target_path=True)
+        ]
+        if failed_targets:
+            latest["failedTargets"] = failed_targets
+            return {
+                "status": "failed",
+                "evidenceLevel": "C",
+                "detail": f"真实 L2 只读 probe 未通过：{', '.join(failed_targets)}；禁止进入 L3。",
+                "latest": latest,
+            }
+        missing_targets = latest["missingTargets"]
+        if missing_targets:
+            return {
+                "status": "partial",
+                "evidenceLevel": "C",
+                "detail": f"真实 L2 只读 probe 只覆盖部分目标，缺少：{', '.join(missing_targets)}；禁止进入 L3。",
+                "latest": latest,
+            }
+        time_window = _l2_real_targets_time_window(real_targets, now=now)
+        latest["timeWindow"] = time_window
+        if time_window["ok"] is not True:
+            return {
+                "status": "failed",
+                "evidenceLevel": "C",
+                "detail": f"真实 L2 双目标证据不满足时效要求：{time_window['detail']}；禁止进入 L3。",
+                "latest": latest,
+            }
+        return {
+            "status": "passed",
+            "evidenceLevel": "A",
+            "detail": "data_acquisition 与 draft_box 真实 L2 只读 probe 均通过，且写入、拦截、禁词、WebSocket 计数全为 0。",
+            "latest": latest,
+        }
+
+    if mock_targets:
+        failed_mock_targets = [
+            target for target, result in mock_targets.items()
+            if not _l2_result_is_strict_pass(result, require_real_target_path=False)
+        ]
+        if failed_mock_targets:
+            latest["failedTargets"] = failed_mock_targets
+            return {
+                "status": "failed",
+                "evidenceLevel": "C",
+                "detail": f"L2 离线/mock probe 未通过：{', '.join(failed_mock_targets)}。",
+                "latest": latest,
+            }
+        return {
+            "status": "mock_passed",
+            "evidenceLevel": "B",
+            "detail": "仅发现离线/mock L2 证据；不满足真实页面 L2 放行条件。",
+            "latest": latest,
+        }
+
+    return {
+        "status": "not_run",
+        "evidenceLevel": "C",
+        "detail": "尚未运行 L2 只读 probe；真实 L2 需要用户明确批准。",
+        "latest": None,
+    }
+
+
+def _latest_l2_probe_results_by_target() -> dict[str, dict[str, dict[str, Any]]]:
+    grouped: dict[str, dict[str, dict[str, Any]]] = {"real": {}, "mock": {}}
+    if not L2_PROBE_DIR.exists():
+        return grouped
+    candidates = sorted(L2_PROBE_DIR.rglob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+    for path in candidates:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if data.get("schema") != "dxm_l2_readonly_probe.v1":
+            continue
+        result = _summarize_probe_result(data, path)
+        target = str(result.get("target") or "")
+        if target not in REQUIRED_L2_TARGETS:
+            continue
+        bucket = "real" if _is_real_l2_target(result) else "mock"
+        grouped[bucket].setdefault(target, result)
+    return grouped
+
+
+def _l2_real_targets_time_window(
+    real_targets: Mapping[str, Mapping[str, Any]],
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    now = _aware_utc(now or datetime.now(timezone.utc))
+    parsed_times = []
+    missing = []
+    for target in REQUIRED_L2_TARGETS:
+        result = real_targets.get(target)
+        parsed = _parse_probe_created_at(result.get("created_at") if result else None)
+        if parsed is None:
+            missing.append(target)
+        else:
+            parsed_times.append(parsed)
+    if missing:
+        return {
+            "ok": False,
+            "detail": f"缺少 created_at：{', '.join(missing)}",
+            "maxSkewSeconds": L2_REAL_TARGET_MAX_SKEW_SECONDS,
+        }
+    earliest = min(parsed_times)
+    latest = max(parsed_times)
+    skew_seconds = int((latest - earliest).total_seconds())
+    newest_age_seconds = int((now - latest).total_seconds())
+    if newest_age_seconds < 0:
+        return {
+            "ok": False,
+            "detail": f"created_at 晚于当前时间 {abs(newest_age_seconds)}s",
+            "skewSeconds": skew_seconds,
+            "maxSkewSeconds": L2_REAL_TARGET_MAX_SKEW_SECONDS,
+            "ageSeconds": newest_age_seconds,
+            "maxAgeSeconds": L2_REAL_TARGET_MAX_AGE_SECONDS,
+            "earliest": earliest.isoformat(),
+            "latest": latest.isoformat(),
+            "now": now.isoformat(),
+        }
+    return {
+        "ok": skew_seconds <= L2_REAL_TARGET_MAX_SKEW_SECONDS and newest_age_seconds <= L2_REAL_TARGET_MAX_AGE_SECONDS,
+        "detail": f"双目标时间差 {skew_seconds}s，上限 {L2_REAL_TARGET_MAX_SKEW_SECONDS}s；最新证据年龄 {newest_age_seconds}s，上限 {L2_REAL_TARGET_MAX_AGE_SECONDS}s",
+        "skewSeconds": skew_seconds,
+        "maxSkewSeconds": L2_REAL_TARGET_MAX_SKEW_SECONDS,
+        "ageSeconds": newest_age_seconds,
+        "maxAgeSeconds": L2_REAL_TARGET_MAX_AGE_SECONDS,
+        "earliest": earliest.isoformat(),
+        "latest": latest.isoformat(),
+        "now": now.isoformat(),
+    }
+
+
+def _parse_probe_created_at(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return _aware_utc(datetime.fromisoformat(value.replace("Z", "+00:00")))
+    except ValueError:
+        return None
+
+
+def _aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _is_real_l2_target(result: Mapping[str, Any]) -> bool:
+    return _is_dianxiaomi_url(result.get("target_url")) or _is_dianxiaomi_url(result.get("final_url"))
+
+
+def _is_dianxiaomi_url(value: Any) -> bool:
+    if not value:
+        return False
+    try:
+        parsed = urlsplit(str(value))
+    except ValueError:
+        return False
+    hostname = parsed.hostname or ""
+    return hostname == "dianxiaomi.com" or hostname.endswith(".dianxiaomi.com")
+
+
+def _l2_result_is_strict_pass(result: Mapping[str, Any], *, require_real_target_path: bool) -> bool:
+    if result.get("ok") is not True:
+        return False
+    safety = result.get("safety")
+    if not isinstance(safety, Mapping) or safety.get("ok") is not True:
+        return False
+    if require_real_target_path:
+        login_state = result.get("login_state")
+        if not isinstance(login_state, Mapping):
+            return False
+        if login_state.get("required") is not True:
+            return False
+        if login_state.get("cookies_loaded") is not True:
+            return False
+        if login_state.get("suspected_login_page") is not False:
+            return False
+    for key in ("screenshot_path", "screenshot_sha256", "dom_path", "dom_sha256"):
+        if not result.get(key):
+            return False
+    if not _l2_evidence_files_match_hashes(result):
+        return False
+    target = str(result.get("target") or "")
+    if require_real_target_path:
+        if not _l2_target_url_matches(target, result.get("target_url")):
+            return False
+        if not _l2_target_url_matches(target, result.get("final_url")):
+            return False
+    network = result.get("network")
+    if not isinstance(network, Mapping):
+        return False
+    return all(_counter_is_zero(network.get(key)) for key in L2_ZERO_NETWORK_COUNTERS)
+
+
+def _l2_evidence_files_match_hashes(result: Mapping[str, Any]) -> bool:
+    return _l2_file_hash_matches(result.get("screenshot_path"), result.get("screenshot_sha256")) and _l2_file_hash_matches(
+        result.get("dom_path"),
+        result.get("dom_sha256"),
+    )
+
+
+def _l2_file_hash_matches(path_value: Any, expected_hash: Any) -> bool:
+    expected = str(expected_hash or "").lower()
+    if len(expected) != 64:
+        return False
+    path = _resolve_l2_evidence_path(path_value)
+    if path is None or not path.is_file():
+        return False
+    actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    return actual == expected
+
+
+def _resolve_l2_evidence_path(path_value: Any) -> Path | None:
+    if not path_value:
+        return None
+    raw = Path(str(path_value))
+    path = raw if raw.is_absolute() else ROOT / raw
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return None
+    allowed_roots = [ROOT / "data", L2_PROBE_DIR]
+    if any(_path_is_relative_to(resolved, root) for root in allowed_roots):
+        return resolved
+    return None
+
+
+def _path_is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _l2_target_url_matches(target: str, url: Any) -> bool:
+    if not _is_dianxiaomi_url(url):
+        return False
+    try:
+        parsed = urlsplit(str(url))
+    except ValueError:
+        return False
+    hint = L2_TARGET_PATH_HINTS.get(target)
+    return bool(hint and parsed.path.lower().startswith(hint))
+
+
+def _counter_is_zero(value: Any) -> bool:
+    if value is None:
+        return False
+    try:
+        return int(value) == 0
+    except (TypeError, ValueError):
+        return False
 
 
 def _latest_l2_probe_result() -> dict[str, Any] | None:
@@ -457,6 +907,7 @@ def _summarize_probe_result(data: Mapping[str, Any], path: Path) -> dict[str, An
                 "screenshot_sha256": data.get("screenshot_sha256"),
                 "dom_path": data.get("dom_path"),
                 "dom_sha256": data.get("dom_sha256"),
+                "login_state": data.get("login_state"),
                 "network": {
                     key: (data.get("network") or {}).get(key)
                     for key in (
@@ -469,9 +920,112 @@ def _summarize_probe_result(data: Mapping[str, Any], path: Path) -> dict[str, An
                     )
                 },
                 "safety": data.get("safety"),
+                "diagnostics": data.get("diagnostics") or _l2_probe_diagnostics(data),
             }
         )
     return summary
+
+
+def _l2_probe_diagnostics(data: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "strict_pass_checks": {
+            "ok": data.get("ok") is True,
+            "safety_ok": isinstance(data.get("safety"), Mapping) and data["safety"].get("ok") is True,
+            "target_url_matches": _l2_target_url_matches(str(data.get("target") or ""), data.get("target_url")),
+            "final_url_matches": _l2_target_url_matches(str(data.get("target") or ""), data.get("final_url")),
+            "cookies_loaded": isinstance(data.get("login_state"), Mapping) and data["login_state"].get("cookies_loaded") is True,
+            "not_login_page": isinstance(data.get("login_state"), Mapping) and data["login_state"].get("suspected_login_page") is False,
+            "zero_write": _counter_is_zero((data.get("network") or {}).get("write_request_count")),
+            "zero_non_read": _counter_is_zero((data.get("network") or {}).get("non_read_request_count")),
+            "zero_blocked": _counter_is_zero((data.get("network") or {}).get("blocked_request_count")),
+            "zero_forbidden": _counter_is_zero((data.get("network") or {}).get("forbidden_keyword_request_count")),
+            "zero_websocket": _counter_is_zero((data.get("network") or {}).get("websocket_count")),
+        },
+        "navigation": _l2_navigation_diagnostics(data),
+        "render_state": _l2_render_state_diagnostics(data),
+        "blocked_request_groups": _l2_blocked_request_groups(data),
+    }
+
+
+def _l2_navigation_diagnostics(data: Mapping[str, Any]) -> dict[str, Any]:
+    target = str(data.get("target") or "")
+    final_url = data.get("final_url")
+    final_matches = _l2_target_url_matches(target, final_url)
+    return {
+        "requested_target_path": _url_path(data.get("target_url")),
+        "final_path": _url_path(final_url),
+        "left_target_path": bool(_is_dianxiaomi_url(data.get("target_url")) and not final_matches),
+        "final_path_class": _l2_final_path_class(target, final_url),
+    }
+
+
+def _l2_render_state_diagnostics(data: Mapping[str, Any]) -> dict[str, Any]:
+    body = str(data.get("body_preview") or "")
+    visible_matches = data.get("visible_matches") or []
+    return {
+        "body_text_length": len(body),
+        "visible_match_count": len(visible_matches) if isinstance(visible_matches, list) else 0,
+        "loading_screen_detected": any(marker in body for marker in ("加载", "loading", "Loading")),
+        "app_shell_only": len(body.strip()) < 200 and not visible_matches,
+    }
+
+
+def _l2_blocked_request_groups(data: Mapping[str, Any]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for item in (data.get("network") or {}).get("blocked_requests") or []:
+        parts = _split_url(str(item.get("url") or ""))
+        reasons = tuple(item.get("reasons") or [])
+        keyword_hits = tuple(item.get("forbidden_keyword_hits") or [])
+        key = (
+            item.get("method"),
+            parts["host"],
+            parts["path"],
+            item.get("resource_type"),
+            reasons,
+            keyword_hits,
+        )
+        current = grouped.setdefault(key, {
+            "count": 0,
+            "method": item.get("method"),
+            "host": parts["host"],
+            "path": parts["path"],
+            "resource_type": item.get("resource_type"),
+            "reasons": list(reasons),
+            "keyword_hits": list(keyword_hits),
+            "sample_url": item.get("url"),
+        })
+        current["count"] += 1
+    return sorted(grouped.values(), key=lambda group: (-int(group["count"]), str(group["host"]), str(group["path"])))[:25]
+
+
+def _l2_final_path_class(target: str, url: Any) -> str:
+    path = _url_path(url).lower()
+    if not path:
+        return "unknown"
+    if not _is_dianxiaomi_url(url):
+        return "mock_or_external"
+    if "login" in str(url).lower() or "passport" in str(url).lower():
+        return "login"
+    if path.startswith("/web/home"):
+        return "home"
+    if _l2_target_url_matches(target, url):
+        return "target"
+    return "other"
+
+
+def _url_path(url: Any) -> str:
+    try:
+        return urlsplit(str(url or "")).path
+    except ValueError:
+        return ""
+
+
+def _split_url(url: str) -> dict[str, str]:
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return {"host": "", "path": ""}
+    return {"host": parts.netloc, "path": parts.path}
 
 
 def _extract_delivery_evidence(reports: list[dict[str, Any]], evidences: list[dict[str, Any]]) -> dict[str, Any]:
@@ -568,10 +1122,13 @@ def _looks_like_save_result(payload: Mapping[str, Any]) -> bool:
 
 
 def _network_save_result_seen(payload: Mapping[str, Any]) -> bool:
-    if payload.get("ok") is True:
+    if payload.get("save_response_seen") is True:
         return True
     url = str(payload.get("url") or "").lower()
-    return "save" in url and _status_2xx_or_3xx(payload.get("status"))
+    status = payload.get("status")
+    if status is None and payload.get("ok") is True:
+        status = 200
+    return "save" in url and _status_2xx_or_3xx(status)
 
 
 def _network_event_save_response_seen(payload: Mapping[str, Any]) -> bool:
@@ -708,8 +1265,43 @@ def _dxm_reference_sections(latest_report: dict[str, Any] | None) -> list[dict[s
     return output
 
 
-def _acceptance_gaps(exceptions: list[dict[str, Any]], extracted: dict[str, Any]) -> list[dict[str, Any]]:
+def _acceptance_gaps(
+    exceptions: list[dict[str, Any]],
+    extracted: dict[str, Any],
+    l2_gate: Mapping[str, Any] | None = None,
+    delivery_readiness: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     gaps: list[dict[str, Any]] = []
+    l2_status = (l2_gate or {}).get("status")
+    if l2_gate and l2_status != "passed":
+        gaps.append(
+            {
+                "id": "gap-l2-real-probe",
+                "title": "L2 真实只读门禁未通过",
+                "severity": "blocker",
+                "owner": "l2_readonly_probe",
+                "detail": str(l2_gate.get("detail") or f"L2 当前状态为 {l2_status}，禁止进入真实 claim_only/single_save/batch_save。"),
+                "evidenceLevel": "C",
+            }
+        )
+    if (
+        delivery_readiness
+        and delivery_readiness.get("has_l3_evidence") is True
+        and delivery_readiness.get("ready") is False
+    ):
+        for item in (delivery_readiness.get("jobs") or [])[:6]:
+            if item.get("ready"):
+                continue
+            gaps.append(
+                {
+                    "id": f"gap-job-{item.get('job_id')}-delivery-evidence",
+                    "title": f"Job #{item.get('job_id')} 交付证据不完整",
+                    "severity": "blocker",
+                    "owner": "delivery_readiness",
+                    "detail": "缺少：" + "、".join(str(value) for value in item.get("missing") or []),
+                    "evidenceLevel": "A",
+                }
+            )
     if not extracted["save_results"]:
         gaps.append(
             {
@@ -761,21 +1353,27 @@ def _acceptance_gaps(exceptions: list[dict[str, Any]], extracted: dict[str, Any]
                 "title": "L3 金丝雀需人工批准",
                 "severity": "watch",
                 "owner": "ops-review",
-                "detail": "真实 single_save 写操作必须在用户明确批准后执行。",
+                "detail": "真实 claim_only/single_save/batch_save 写操作必须在用户明确批准后执行。",
                 "evidenceLevel": "C",
             }
         )
     return gaps
 
 
-def _safety_state(extracted: dict[str, Any]) -> dict[str, Any]:
-    grade = _evidence_grade(extracted)
+def _safety_state(
+    extracted: dict[str, Any],
+    l2_gate: Mapping[str, Any] | None = None,
+    delivery_readiness: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    grade = _evidence_grade(extracted, l2_gate, delivery_readiness)
     return {
         "mode": "single_save / batch_save / claim_only / dry_run / probe",
         "guarantee": "只保存不发布：工作台不提供任何发布动作入口，后端发布隔离固定开启。",
         "forbiddenActions": ["发布", "继续发布", "保存并发布", "移入待发布"],
         "lastCheckedAt": "runtime aggregation",
         "evidenceGrade": grade["grade"],
+        "blockedByL2": grade["blocked_by_l2"],
+        "l2Status": grade["l2_status"],
     }
 
 

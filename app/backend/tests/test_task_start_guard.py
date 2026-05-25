@@ -56,6 +56,10 @@ def _create_task(repo: Repository, *, mode: str = "single_save", store_name: str
     )
 
 
+def _approve_task(repo: Repository, task_id: int, token: str):
+    repo.set_task_manual_approval(task_id, approved=True, token=token)
+
+
 def test_single_save_start_requires_manual_approval(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     task = _create_task(repo)
@@ -66,9 +70,50 @@ def test_single_save_start_requires_manual_approval(tmp_path, monkeypatch):
     assert runner.calls == []
 
 
+def test_claim_only_start_requires_same_real_mutation_gate(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "not_run"})
+    task = _create_task(repo, mode="claim_only")
+
+    response = client.post(f"/api/tasks/{task['id']}/start", json={})
+
+    assert response.status_code == 403
+    assert "Manual approval is required" in response.json()["detail"]
+    assert runner.calls == []
+
+
+def test_claim_only_start_rejects_when_l2_gate_not_passed_after_approval(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "failed"})
+    task = _create_task(repo, mode="claim_only")
+    _approve_task(repo, task["id"], "claim-token")
+
+    response = client.post(
+        f"/api/tasks/{task['id']}/start",
+        json={
+            "manual_approval": True,
+            "approval_token": "claim-token",
+            "approved_by": "ops-owner",
+            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
+        },
+    )
+
+    assert response.status_code == 403
+    assert "L2 readonly probe gate is not passed: failed" in response.json()["detail"]
+    assert runner.calls == []
+
+
 def test_single_save_start_accepts_matching_manual_approval_token(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
-    task = _create_task(repo, approval={"approved": True, "token": "l3-token"})
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_task(repo)
+    _approve_task(repo, task["id"], "l3-token")
 
     response = client.post(
         f"/api/tasks/{task['id']}/start",
@@ -82,6 +127,269 @@ def test_single_save_start_accepts_matching_manual_approval_token(tmp_path, monk
 
     assert response.status_code == 200
     assert response.json()["ok"] is True
+    assert repo.get_task(task["id"])["status"] == "running"
+
+
+def test_real_save_start_cannot_be_triggered_twice(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_task(repo)
+    _approve_task(repo, task["id"], "l3-token")
+    payload = {
+        "manual_approval": True,
+        "approval_token": "l3-token",
+        "approved_by": "ops-owner",
+        "confirmation": "CONFIRM_DXM_SAVE_ONLY",
+    }
+
+    first = client.post(f"/api/tasks/{task['id']}/start", json=payload)
+    second = client.post(f"/api/tasks/{task['id']}/start", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 409
+    assert second.json()["detail"] == "Task is already running"
+
+
+def test_completed_real_save_task_cannot_be_restarted(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_task(repo)
+    _approve_task(repo, task["id"], "l3-token")
+    repo.update_task_status(task["id"], "completed")
+
+    response = client.post(
+        f"/api/tasks/{task['id']}/start",
+        json={
+            "manual_approval": True,
+            "approval_token": "l3-token",
+            "approved_by": "ops-owner",
+            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
+        },
+    )
+
+    assert response.status_code == 409
+    assert runner.calls == []
+
+
+def test_completed_real_save_task_cannot_be_paused_then_restarted(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_task(repo)
+    _approve_task(repo, task["id"], "l3-token")
+    repo.update_task_status(task["id"], "completed")
+    payload = {
+        "manual_approval": True,
+        "approval_token": "l3-token",
+        "approved_by": "ops-owner",
+        "confirmation": "CONFIRM_DXM_SAVE_ONLY",
+    }
+
+    pause_response = client.post(f"/api/tasks/{task['id']}/pause")
+    start_response = client.post(f"/api/tasks/{task['id']}/start", json=payload)
+
+    assert pause_response.status_code == 409
+    assert "pause is disabled" in pause_response.json()["detail"]
+    assert start_response.status_code == 409
+    assert repo.get_task(task["id"])["status"] == "completed"
+    assert runner.calls == []
+
+
+def test_running_real_save_task_cannot_be_paused_or_restarted(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_task(repo)
+    _approve_task(repo, task["id"], "l3-token")
+    first = client.post(
+        f"/api/tasks/{task['id']}/start",
+        json={
+            "manual_approval": True,
+            "approval_token": "l3-token",
+            "approved_by": "ops-owner",
+            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
+        },
+    )
+    pause_response = client.post(f"/api/tasks/{task['id']}/pause")
+    second = client.post(
+        f"/api/tasks/{task['id']}/start",
+        json={
+            "manual_approval": True,
+            "approval_token": "l3-token",
+            "approved_by": "ops-owner",
+            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
+        },
+    )
+
+    assert first.status_code == 200
+    assert pause_response.status_code == 409
+    assert "pause is disabled" in pause_response.json()["detail"]
+    assert second.status_code == 409
+    assert repo.get_task(task["id"])["status"] == "running"
+    assert runner.calls == [task["id"]]
+
+
+def test_resume_is_disabled_without_worker_acknowledgement(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo, mode="dry_run")
+    repo.update_task_status(task["id"], "paused")
+
+    response = client.post(f"/api/tasks/{task['id']}/resume")
+
+    assert response.status_code == 409
+    assert "Resume is disabled" in response.json()["detail"]
+
+
+def test_agent_console_start_requires_passed_l2_gate(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "failed"})
+    task = _create_task(repo, mode="dry_run")
+
+    response = client.post("/api/agent-console/start", json={"task_id": task["id"], "launch_browser": True})
+
+    assert response.status_code == 403
+    assert "Agent console browser start requires passed L2" in response.json()["detail"]
+
+
+def test_manual_approval_token_is_not_exposed_by_read_apis(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_task(repo)
+    _approve_task(repo, task["id"], "secret-l3-token")
+
+    task_payload = client.get(f"/api/tasks/{task['id']}").json()["payload"]
+    list_payload = client.get("/api/tasks").json()[0]["payload"]
+    workspace_payload = client.get(f"/api/delivery/workspace?task_id={task['id']}").json()["current_task"]["payload"]
+
+    for payload in (task_payload, list_payload, workspace_payload):
+        approval = payload.get("manual_approval") or {}
+        assert approval.get("approved") is True
+        assert "token" not in approval
+        assert "token_hash" not in approval
+
+    leaked_fields = dict(workspace_payload.get("manual_approval") or {})
+    response = client.post(
+        f"/api/tasks/{task['id']}/start",
+        json={
+            "manual_approval": True,
+            "approval_token": leaked_fields.get("token"),
+            "approved_by": "ops-owner",
+            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
+        },
+    )
+
+    assert response.status_code == 403
+    assert runner.calls == []
+
+
+def test_paused_real_save_task_cannot_be_restarted_with_current_gate_and_approval(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_task(repo)
+    _approve_task(repo, task["id"], "l3-token")
+    repo.update_task_status(task["id"], "paused")
+
+    response = client.post(
+        f"/api/tasks/{task['id']}/start",
+        json={
+            "manual_approval": True,
+            "approval_token": "l3-token",
+            "approved_by": "ops-owner",
+            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
+        },
+    )
+
+    assert response.status_code == 409
+    assert repo.get_task(task["id"])["status"] == "paused"
+    assert runner.calls == []
+
+
+def test_create_task_payload_cannot_preapprove_real_save(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_task(repo, approval={"approved": True, "token": "user-injected-token"})
+
+    response = client.post(
+        f"/api/tasks/{task['id']}/start",
+        json={
+            "manual_approval": True,
+            "approval_token": "user-injected-token",
+            "approved_by": "ops-owner",
+            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
+        },
+    )
+
+    assert response.status_code == 403
+    assert runner.calls == []
+
+
+def test_existing_payload_approval_without_server_source_is_rejected(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_task(repo)
+    from src import db
+
+    payload = repo.get_task(task["id"])["payload"]
+    payload["manual_approval"] = {"approved": True, "token": "legacy-token"}
+    with db.connection() as conn:
+        conn.execute(
+            "UPDATE tasks SET payload_json=? WHERE id=?",
+            (db.dumps(payload), task["id"]),
+        )
+
+    response = client.post(
+        f"/api/tasks/{task['id']}/start",
+        json={
+            "manual_approval": True,
+            "approval_token": "legacy-token",
+            "approved_by": "ops-owner",
+            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
+        },
+    )
+
+    assert response.status_code == 403
+    assert runner.calls == []
+
+
+def test_real_save_start_rejects_when_l2_gate_not_passed(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    for status in ("not_run", "mock_passed", "partial", "failed"):
+        monkeypatch.setattr(main, "l2_real_probe_gate", lambda status=status: {"status": status})
+        for mode in ("claim_only", "single_save", "batch_save"):
+            task = _create_task(repo, mode=mode)
+            _approve_task(repo, task["id"], f"l3-token-{status}-{mode}")
+
+            response = client.post(
+                f"/api/tasks/{task['id']}/start",
+                json={
+                    "manual_approval": True,
+                    "approval_token": f"l3-token-{status}-{mode}",
+                    "approved_by": "ops-owner",
+                    "confirmation": "CONFIRM_DXM_SAVE_ONLY",
+                },
+            )
+
+            assert response.status_code == 403
+            assert f"L2 readonly probe gate is not passed: {status}" in response.json()["detail"]
+            assert task["id"] not in runner.calls
 
 
 def test_single_save_start_rejects_non_dang_kang_store(tmp_path, monkeypatch):
