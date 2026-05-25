@@ -205,6 +205,7 @@ const text = {
   oldWaitSave: '\u7b49\u5f85\u4fdd\u5b58\u6838\u9a8c',
   oldVisibleBrowser: '\u6253\u5f00\u53ef\u89c1\u6d4f\u89c8\u5668',
   oldAutomation: '\u65c1\u89c2\u81ea\u52a8\u5316',
+  fakePlaceholder: '\u8bca\u65ad\u5360\u4f4d',
 };
 const initialText = await bodyText();
 await clickText(text.tasks);
@@ -257,6 +258,7 @@ const result = {
     taskStartBlockedCopy: taskText.includes(text.forbiddenStart),
     consoleReadonlyCopy: consoleText.includes(text.readonly) && consoleText.includes(text.noSaveStart),
     consoleNoFakeBrowser: consoleText.includes(text.noBrowser) && consoleText.includes(text.noFakeEvidence),
+    consoleNoFakePlaceholder: !(consoleText + ' ' + taskText).includes(text.fakePlaceholder),
     noOldActionCopy: !(consoleText + ' ' + taskText).includes(text.oldSaveOnly)
       && !(consoleText + ' ' + taskText).includes(text.oldWaitSave)
       && !(consoleText + ' ' + taskText).includes(text.oldVisibleBrowser)

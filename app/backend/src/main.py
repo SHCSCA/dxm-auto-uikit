@@ -121,6 +121,7 @@ def dxm_workflow_open_draft_box():
 
 @app.post('/api/dxm/draft-box/action')
 def dxm_draft_box_action(payload: DraftBoxActionRequest):
+    _assert_direct_real_dxm_mutation_allowed(payload)
     result = login_flow.perform_draft_box_action(
         payload.action,
         note_text=payload.note_text,
@@ -132,6 +133,7 @@ def dxm_draft_box_action(payload: DraftBoxActionRequest):
 
 @app.post('/api/dxm/workflow/claim-product')
 def dxm_workflow_claim_product(payload: DraftBoxActionRequest):
+    _assert_direct_real_dxm_mutation_allowed(payload)
     return normalize_artifact_paths(_workflow_adapter().claim_product(
         payload.note_text or 'AI认领',
         product_query=payload.product_query,
@@ -421,6 +423,23 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
         )
 
 
+def _assert_direct_real_dxm_mutation_allowed(payload: DraftBoxActionRequest) -> None:
+    if payload.task_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail='Direct real DXM mutation requires an approved guarded task',
+        )
+    _assert_task_can_start(
+        payload.task_id,
+        TaskStartRequest(
+            manual_approval=payload.manual_approval,
+            approval_token=payload.approval_token,
+            approved_by=payload.approved_by,
+            confirmation=payload.confirmation,
+        ),
+    )
+
+
 def _task_store_name(task: dict) -> str:
     payload = task.get('payload') or {}
     if payload.get('store_name'):
@@ -443,8 +462,8 @@ def build_login_state(data: dict):
         return {
             'stage': 'login_success',
             'label': '已登录',
-            'message': '已检测到真实店小秘登录态，可以继续进入数据采集、采集箱和编辑流程。',
-            'next_action': '继续同步当前页面并执行真实业务步骤。',
+            'message': '已检测到真实店小秘登录态；当前仅可继续只读诊断，真实变更仍受 L2/L3 门禁阻断。',
+            'next_action': '继续同步当前页面并查看只读诊断；不要执行 claim_only/single_save/batch_save。',
             'requires_user_action': False,
             'screenshot_url': data.get('home_screenshot_url') or data.get('product_page', {}).get('screenshot_url'),
             'page_title': data.get('title') or data.get('product_page', {}).get('title'),

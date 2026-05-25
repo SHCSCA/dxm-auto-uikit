@@ -14,6 +14,10 @@ $browserQaOutDir = Join-Path $absoluteOutDir "browser-checks"
 $browserQaJson = Join-Path $browserQaOutDir "qa-browser-check.json"
 $summaryPath = Join-Path $absoluteOutDir "final-delivery-check.md"
 $jsonPath = Join-Path $absoluteOutDir "final-delivery-check.json"
+$qaProcesses = @()
+$qaBackendPort = $null
+$qaFrontendPort = $null
+$workspaceApiBase = "http://127.0.0.1:8000"
 
 New-Item -ItemType Directory -Path $absoluteOutDir -Force | Out-Null
 New-Item -ItemType Directory -Path $browserQaOutDir -Force | Out-Null
@@ -78,6 +82,9 @@ function Invoke-CapturedCommand {
   if ($null -eq $stdout) { $stdout = "" }
   if ($null -eq $stderr) { $stderr = "" }
   $exitCode = if ($exited -and $process.HasExited) { [int]$process.ExitCode } else { 124 }
+  if ($Name -eq "Backend pytest" -and (($stdout + "`n" + $stderr) -match '(?m)(=+ FAILURES =+|=+ ERRORS =+|[1-9][0-9]* failed|[1-9][0-9]* error)')) {
+    $exitCode = 1
+  }
 
   if ($stdout.Trim()) {
     Write-Host $stdout.Trim()
@@ -114,6 +121,83 @@ function Stop-ProcessTree {
     # Best-effort cleanup for timed-out commands.
   }
   Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+}
+
+function Get-FreeTcpPort {
+  param([int]$PreferredPort)
+
+  $port = $PreferredPort
+  while ($port -lt ($PreferredPort + 100)) {
+    if (!(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)) {
+      return $port
+    }
+    $port += 1
+  }
+  throw "No free TCP port found near $PreferredPort."
+}
+
+function Start-BackgroundCommand {
+  param(
+    [string]$Name,
+    [string]$FilePath,
+    [string[]]$Arguments,
+    [string]$WorkingDirectory
+  )
+
+  $slug = ($Name.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-')
+  $stdoutPath = Join-Path $absoluteOutDir "$slug.stdout.log"
+  $stderrPath = Join-Path $absoluteOutDir "$slug.stderr.log"
+  Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+  Write-Host "[$(((Get-Date).ToUniversalTime()).ToString("s"))Z] Starting $Name"
+  $process = Start-Process `
+    -FilePath $FilePath `
+    -ArgumentList (Join-CommandArguments $Arguments) `
+    -WorkingDirectory $WorkingDirectory `
+    -RedirectStandardOutput $stdoutPath `
+    -RedirectStandardError $stderrPath `
+    -WindowStyle Hidden `
+    -PassThru
+  [pscustomobject]@{
+    name = $Name
+    process = $process
+    stdoutLog = $stdoutPath
+    stderrLog = $stderrPath
+  }
+}
+
+function Wait-HttpReady {
+  param(
+    [string]$Name,
+    [string]$Uri,
+    [int]$TimeoutSeconds = 30
+  )
+
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  $lastError = $null
+  while ((Get-Date) -lt $deadline) {
+    try {
+      Invoke-WebRequest -UseBasicParsing -Uri $Uri -TimeoutSec 2 | Out-Null
+      Write-Host "[$(((Get-Date).ToUniversalTime()).ToString("s"))Z] $Name ready: $Uri"
+      return
+    } catch {
+      $lastError = $_.Exception.Message
+      Start-Sleep -Milliseconds 500
+    }
+  }
+  throw "$Name did not become ready at $Uri. Last error: $lastError"
+}
+
+function Stop-QAProcesses {
+  foreach ($entry in $qaProcesses) {
+    if ($entry -and $entry.process -and !$entry.process.HasExited) {
+      Stop-ProcessTree -ProcessId ([int]$entry.process.Id)
+    }
+  }
+}
+
+trap {
+  Stop-QAProcesses
+  throw
 }
 
 function Join-CommandArguments {
@@ -174,10 +258,30 @@ $commands += Invoke-CapturedCommand `
   -TimeoutSeconds 120
 
 if (!$SkipBrowserQA) {
+  $qaBackendPort = Get-FreeTcpPort -PreferredPort 18000
+  $qaFrontendPort = Get-FreeTcpPort -PreferredPort 15173
+  $workspaceApiBase = "http://127.0.0.1:$qaBackendPort"
+  $viteCmd = Join-Path $frontendDir "node_modules\.bin\vite.cmd"
+  if (!(Test-Path -LiteralPath $viteCmd)) {
+    throw "Vite was not found at $viteCmd. Run scripts\start-mvp.bat --check first."
+  }
+  $qaProcesses += Start-BackgroundCommand `
+    -Name "QA backend service" `
+    -FilePath $pythonExe `
+    -Arguments @("-m", "uvicorn", "src.main:app", "--host", "127.0.0.1", "--port", [string]$qaBackendPort) `
+    -WorkingDirectory $backendDir
+  Wait-HttpReady -Name "QA backend service" -Uri "$workspaceApiBase/health" -TimeoutSeconds 45
+  $qaProcesses += Start-BackgroundCommand `
+    -Name "QA frontend preview" `
+    -FilePath $viteCmd `
+    -Arguments @("preview", "--host", "127.0.0.1", "--port", [string]$qaFrontendPort, "--strictPort") `
+    -WorkingDirectory $frontendDir
+  Wait-HttpReady -Name "QA frontend preview" -Uri "http://127.0.0.1:$qaFrontendPort" -TimeoutSeconds 45
+  $browserQaUrl = "http://127.0.0.1:$qaFrontendPort/?apiBase=$([uri]::EscapeDataString($workspaceApiBase))"
   $commands += Invoke-CapturedCommand `
     -Name "Browser workbench QA" `
     -FilePath "powershell.exe" `
-    -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts\qa-browser-check.ps1", "-OutDir", $browserQaOutDir) `
+    -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts\qa-browser-check.ps1", "-Url", $browserQaUrl, "-OutDir", $browserQaOutDir) `
     -WorkingDirectory $root `
     -TimeoutSeconds 180
 }
@@ -203,7 +307,7 @@ try {
 
 $workspaceSnapshot = $null
 try {
-  $workspaceSnapshot = Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/delivery/workspace" -TimeoutSec 5
+  $workspaceSnapshot = Invoke-RestMethod -Uri "$workspaceApiBase/api/delivery/workspace" -TimeoutSec 5
 } catch {
   $workspaceSnapshot = $null
 }
@@ -254,6 +358,12 @@ $result = [pscustomobject]@{
   preGitStatusShort = $preGitStatus
   postGitStatusShort = $postGitStatus
   commands = $commands
+  qaServices = @{
+    backendPort = $qaBackendPort
+    frontendPort = $qaFrontendPort
+    workspaceApiBase = $workspaceApiBase
+    isolated = -not [bool]$SkipBrowserQA
+  }
   browserQa = $browserQa
   gates = @{
     l2 = $l2Gate
@@ -285,6 +395,9 @@ $summaryLines.Add("- Source package check: $($result.sourcePackageCheck)")
 $summaryLines.Add("- Deliverable mode: $($result.deliverableMode)")
 $summaryLines.Add("- Real DXM writes: $($result.realDxmWrites)")
 $summaryLines.Add("- Git HEAD: $($result.gitHead)")
+if (!$SkipBrowserQA) {
+  $summaryLines.Add("- Browser QA services: isolated backend $qaBackendPort / frontend $qaFrontendPort")
+}
 $summaryLines.Add("")
 $summaryLines.Add("## Safety Gates")
 if ($l2Gate) {
@@ -345,6 +458,8 @@ $summaryLines.Add("")
 Set-Content -LiteralPath $summaryPath -Encoding UTF8 -Value ($summaryLines -join "`n")
 
 Get-Content -LiteralPath $summaryPath
+
+Stop-QAProcesses
 
 if (!$overallOk) {
   exit 1

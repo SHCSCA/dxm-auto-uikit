@@ -133,7 +133,7 @@ python3 -m pytest tests -q
 scripts\final-delivery-check.bat
 ```
 
-它会串行运行 Windows 启动前检查、后端全量测试、前端生产构建、L1 selector replay、`git diff --check`、浏览器 QA，并输出 `outputs/final-delivery-check/final-delivery-check.md` / `.json`。报告顶部会分别显示“本地工作台自检结果”和“真实 DXM 写入放行状态”；如果前后端服务尚未启动，请先运行 `scripts\start-mvp.bat`。检查模式可能安装前端依赖，但不会启动服务、不会访问店小秘、不会执行真实保存。
+它会串行运行 Windows 启动前检查、后端全量测试、前端生产构建、L1 selector replay、`git diff --check`、浏览器 QA，并输出 `outputs/final-delivery-check/final-delivery-check.md` / `.json`。浏览器 QA 会临时启动隔离的当前源码后端和前端预览服务，避免误测 8000/5173 上的旧进程；检查模式可能安装前端依赖，但不会访问店小秘、不会执行真实保存。报告顶部会分别显示“本地工作台自检结果”和“真实 DXM 写入放行状态”。
 
 发布源码包前可加 clean worktree 门禁：
 

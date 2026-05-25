@@ -13,6 +13,15 @@ class DummyRunner:
         self.calls.append(task_id)
 
 
+class DummyDxmLoginFlow:
+    def __init__(self):
+        self.draft_box_actions: list[tuple[str, str | None, str | None, str | None]] = []
+
+    def perform_draft_box_action(self, action, note_text=None, product_query=None, store_name=None):
+        self.draft_box_actions.append((action, note_text, product_query, store_name))
+        return {"stage": "draft_box_action", "action": action}
+
+
 def _client_with_temp_repo(tmp_path, monkeypatch):
     db_path = tmp_path / "task-start-guard.db"
     monkeypatch.setattr(db, "DB_PATH", db_path)
@@ -390,6 +399,77 @@ def test_real_save_start_rejects_when_l2_gate_not_passed(tmp_path, monkeypatch):
             assert response.status_code == 403
             assert f"L2 readonly probe gate is not passed: {status}" in response.json()["detail"]
             assert task["id"] not in runner.calls
+
+
+def test_direct_draft_box_action_rejects_when_l2_gate_not_passed(tmp_path, monkeypatch):
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    flow = DummyDxmLoginFlow()
+    monkeypatch.setattr(main, "login_flow", flow)
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "failed"})
+
+    response = client.post(
+        "/api/dxm/draft-box/action",
+        json={"action": "remark", "note_text": "AI认领", "store_name": "Dang Kang"},
+    )
+
+    assert response.status_code == 403
+    assert "Direct real DXM mutation requires an approved guarded task" in response.json()["detail"]
+    assert flow.draft_box_actions == []
+
+
+def test_direct_claim_product_rejects_when_l2_gate_not_passed(tmp_path, monkeypatch):
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    flow = DummyDxmLoginFlow()
+    monkeypatch.setattr(main, "login_flow", flow)
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "failed"})
+
+    response = client.post(
+        "/api/dxm/workflow/claim-product",
+        json={"action": "remark", "note_text": "AI认领", "store_name": "Dang Kang"},
+    )
+
+    assert response.status_code == 403
+    assert "Direct real DXM mutation requires an approved guarded task" in response.json()["detail"]
+    assert flow.draft_box_actions == []
+
+
+def test_direct_real_dxm_mutation_rejects_approved_task_when_l2_gate_not_passed(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    flow = DummyDxmLoginFlow()
+    task = _create_task(repo, mode="claim_only")
+    _approve_task(repo, task["id"], "direct-token")
+    monkeypatch.setattr(main, "login_flow", flow)
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "failed"})
+
+    approval = {
+        "task_id": task["id"],
+        "manual_approval": True,
+        "approval_token": "direct-token",
+        "approved_by": "ops-owner",
+        "confirmation": "CONFIRM_DXM_SAVE_ONLY",
+        "store_name": "Dang Kang",
+    }
+
+    draft_response = client.post(
+        "/api/dxm/draft-box/action",
+        json={"action": "remark", "note_text": "AI认领", **approval},
+    )
+    claim_response = client.post(
+        "/api/dxm/workflow/claim-product",
+        json={"action": "remark", "note_text": "AI认领", **approval},
+    )
+
+    assert draft_response.status_code == 403
+    assert claim_response.status_code == 403
+    assert "L2 readonly probe gate is not passed: failed" in draft_response.json()["detail"]
+    assert "L2 readonly probe gate is not passed: failed" in claim_response.json()["detail"]
+    assert flow.draft_box_actions == []
 
 
 def test_single_save_start_rejects_non_dang_kang_store(tmp_path, monkeypatch):

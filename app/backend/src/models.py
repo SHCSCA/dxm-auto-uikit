@@ -91,6 +91,11 @@ class DraftBoxActionRequest(BaseModel):
     note_text: str | None = None
     product_query: str | None = None
     store_name: str | None = None
+    task_id: int | None = None
+    manual_approval: bool = False
+    approval_token: str | None = None
+    approved_by: str | None = None
+    confirmation: str | None = None
 
 
 class SelectorProfileValidateRequest(BaseModel):

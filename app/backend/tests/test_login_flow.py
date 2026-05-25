@@ -745,9 +745,10 @@ def test_navigate_endpoint_delegates_to_login_flow(monkeypatch):
     assert data['stage'] == 'workflow_navigation'
 
 
-def test_draft_box_action_endpoint_delegates_to_login_flow(monkeypatch):
+def test_draft_box_action_endpoint_delegates_to_login_flow_after_guard_passes(monkeypatch):
     flow = DummyLoginFlow()
     monkeypatch.setattr('src.main.login_flow', flow)
+    monkeypatch.setattr('src.main._assert_direct_real_dxm_mutation_allowed', lambda payload: None)
 
     client = TestClient(app)
     response = client.post('/api/dxm/draft-box/action', json={'action': 'remark', 'note_text': 'AI认领'})
@@ -796,10 +797,11 @@ def test_workflow_open_draft_box_uses_adapter_contract(monkeypatch):
     assert data['evidence']['current_nav'] == 'draft_box'
 
 
-def test_workflow_claim_product_uses_adapter_contract(monkeypatch):
+def test_workflow_claim_product_uses_adapter_contract_after_guard_passes(monkeypatch):
     flow = DummyLoginFlow()
     monkeypatch.setattr('src.main.login_flow', flow)
     monkeypatch.setattr('src.main.workflow_adapter', DxmWorkflowAdapter(flow))
+    monkeypatch.setattr('src.main._assert_direct_real_dxm_mutation_allowed', lambda payload: None)
 
     client = TestClient(app)
     response = client.post('/api/dxm/workflow/claim-product', json={'action': 'remark', 'note_text': 'AI认领-1'})
@@ -826,9 +828,10 @@ def test_workflow_open_editor_uses_adapter_contract(monkeypatch):
     assert data['evidence']['stage'] == 'editor_page'
 
 
-def test_edit_action_endpoint_returns_editor_page(monkeypatch):
+def test_edit_action_endpoint_returns_editor_page_after_guard_passes(monkeypatch):
     flow = DummyLoginFlow()
     monkeypatch.setattr('src.main.login_flow', flow)
+    monkeypatch.setattr('src.main._assert_direct_real_dxm_mutation_allowed', lambda payload: None)
 
     client = TestClient(app)
     response = client.post('/api/dxm/draft-box/action', json={'action': 'edit'})

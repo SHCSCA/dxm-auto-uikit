@@ -480,7 +480,6 @@ function AgentBrowserFrame({
   const hudNext = (hasConsoleHud ? hud?.next_step : null) ?? nextStep?.label ?? '等待状态机推进'
   const hudGuard = (hasConsoleHud ? hud?.guard : null) ?? (workspace.publishGuardState?.safe ? '通过' : '等待证明')
   const hudDotState = agentConsole?.last_error ? 'blocked' : agentConsole?.active ? 'current' : activeStep?.state ?? 'pending'
-  const product = workspace.products[0]
 
   return (
     <div className="agent-browser">
@@ -500,34 +499,10 @@ function AgentBrowserFrame({
         {browserFrame.screenshotUrl ? (
           <img src={browserFrame.screenshotUrl} alt="当前真实浏览器截图" />
         ) : agentConsole?.active || agentConsole?.updated_at ? (
-          <div className="browser-placeholder">
-            <div className="dxm-topbar">
-              <strong>店小秘</strong>
-              <span>诊断占位 / 非真实页面证据</span>
-            </div>
-            <div className="dxm-toolbar">
-              <span>{storeName}</span>
-              <span>{product?.category_name ?? '等待真实类目'}</span>
-              <span>只读诊断</span>
-            </div>
-            <div className="dxm-form-grid">
-              <div>
-                <label>商品标题</label>
-                <strong>{product?.title ?? '等待真实商品'}</strong>
-              </div>
-              <div>
-                <label>图片银行</label>
-                <strong>{product?.image?.eu_outer_package_filename ?? '等待外包装图'}</strong>
-              </div>
-              <div>
-                <label>半托管</label>
-                <strong>待进入半托管信息页</strong>
-              </div>
-              <div>
-                <label>当前口径</label>
-                <strong>原型占位，不代表页面可达</strong>
-              </div>
-            </div>
+          <div className="browser-empty-state">
+            <strong>等待真实诊断截图</strong>
+            <span>浏览器会话状态已记录，但当前没有可验收的页面截图。</span>
+            <small>这里不展示仿真店小秘页面；只有真实截图或 DOM/网络证据写入后才可作为页面可达证明。</small>
           </div>
         ) : (
           <div className="browser-empty-state">
@@ -1138,7 +1113,7 @@ function getBrowserFrame(workspace: DeliveryWorkspace, selectedTask: Task | null
   return {
     url: pageUrl || '等待真实只读诊断截图',
     screenshotUrl,
-    source: screenshotUrl ? '来自最新执行截图' : '原型占位画面，非真实页面可达证据',
+    source: screenshotUrl ? '来自最新执行截图' : '等待真实诊断截图，当前无页面可达证据',
   }
 }
 
@@ -1193,11 +1168,15 @@ function numberFromUnknown(value: unknown) {
 }
 
 function requiresManualApproval(task: Task) {
-  return task.mode === 'single_save' || task.mode === 'batch_save'
+  return isRealDxmMutationTask(task)
 }
 
 function requiresRealL2(task: Task) {
-  return task.mode === 'single_save' || task.mode === 'batch_save'
+  return isRealDxmMutationTask(task)
+}
+
+function isRealDxmMutationTask(task: Task) {
+  return task.mode === 'claim_only' || task.mode === 'single_save' || task.mode === 'batch_save'
 }
 
 function l2StartLabel(status?: string) {
