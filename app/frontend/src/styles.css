@@ -1514,6 +1514,39 @@ tr:last-child td {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.delivery-check-card__body {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  color: var(--muted);
+}
+
+.delivery-check-card__body p {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.delivery-check-card__paths {
+  display: grid;
+  gap: 8px;
+}
+
+.delivery-check-card__paths code,
+.delivery-check-card__command {
+  display: block;
+  max-width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f8fafc;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.delivery-check-card__paths span {
+  font-size: 12px;
+}
+
 .gap-row {
   display: grid;
   gap: 6px;

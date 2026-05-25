@@ -131,6 +131,22 @@ export type AgentConsoleSession = {
 }
 export type AgentConsoleHudStep = AgentConsoleHud
 export type AgentConsoleStatus = AgentConsoleSession
+export type FinalDeliveryCheckSummary = {
+  status: 'available' | 'not_run' | 'unreadable' | string
+  checked_at?: string | null
+  local_workbench_check?: string | null
+  real_dxm_write_readiness?: string | null
+  source_package_readiness?: string | null
+  source_package_check?: string | null
+  require_clean_worktree?: boolean | null
+  git_head?: string | null
+  browser_qa_ok?: boolean | null
+  qa_services?: Record<string, unknown> | null
+  gates?: Record<string, unknown> | null
+  summary_path?: string | null
+  json_path?: string | null
+  error?: string | null
+}
 export type WorkbenchSection =
   | 'dashboard'
   | 'config'

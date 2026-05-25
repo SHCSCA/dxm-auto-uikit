@@ -191,16 +191,20 @@ await new Promise(r => setTimeout(r, 1800));
 const text = {
   tasks: '\u4efb\u52a1\u4e2d\u5fc3',
   console: '\u6267\u884c\u63a7\u5236\u53f0',
+  reports: '\u62a5\u544a\u4e2d\u5fc3',
   hero: '\u534a\u6258\u7ba1\u4fdd\u5b58\u4ea4\u4ed8\u5de5\u4f5c\u53f0',
   appName: '\u5e97\u5c0f\u79d8\u534a\u6258\u7ba1\u6267\u884c\u5668',
   localWrite: '\u521b\u5efa\u6f14\u793a\u6279\u6b21\uff08\u5199\u5165\u672c\u5730\uff09',
   readonlyDiag: '\u67e5\u770b\u53ea\u8bfb\u8bca\u65ad',
+  l2BlockHelp: '\u67e5\u770b L2 \u963b\u65ad\u8bf4\u660e',
   evidenceGap: '\u67e5\u770b\u8bc1\u636e\u7f3a\u53e3',
   forbiddenStart: '\u7981\u6b62\u542f\u52a8',
   readonly: '\u53ea\u8bfb\u8bca\u65ad',
   noSaveStart: '\u4e0d\u542f\u52a8\u4fdd\u5b58',
   noBrowser: '\u5c1a\u672a\u6253\u5f00\u771f\u5b9e\u8bca\u65ad\u6d4f\u89c8\u5668',
   noFakeEvidence: '\u4e0d\u628a\u5546\u54c1\u4fe1\u606f\u4f2a\u88c5\u6210\u6d4f\u89c8\u5668\u8bc1\u636e',
+  finalCheck: '\u6700\u8fd1\u4ea4\u4ed8\u81ea\u68c0',
+  expectedBlocked: '\u771f\u5b9e\u5199\u5165\u4fdd\u6301\u963b\u65ad',
   oldSaveOnly: '\u53ea\u4fdd\u5b58\u4e0d\u53d1\u5e03',
   oldWaitSave: '\u7b49\u5f85\u4fdd\u5b58\u6838\u9a8c',
   oldVisibleBrowser: '\u6253\u5f00\u53ef\u89c1\u6d4f\u89c8\u5668',
@@ -216,6 +220,9 @@ await clickText(text.console);
 await new Promise(r => setTimeout(r, 700));
 const consoleText = await bodyText();
 const consoleShot = await screenshot('qa-execution-console');
+await clickText(text.reports);
+await new Promise(r => setTimeout(r, 700));
+const reportText = await bodyText();
 function sha256(path) {
   return crypto.createHash('sha256').update(fs.readFileSync(path)).digest('hex');
 }
@@ -254,11 +261,12 @@ const result = {
   assertions: {
     initialLoaded: initialText.includes(text.hero) || initialText.includes(text.appName),
     localWriteCopy: taskText.includes(text.localWrite),
-    taskRecoveryActions: taskText.includes(text.readonlyDiag) && taskText.includes(text.evidenceGap),
+    taskRecoveryActions: (taskText.includes(text.readonlyDiag) || taskText.includes(text.l2BlockHelp)) && taskText.includes(text.evidenceGap),
     taskStartBlockedCopy: taskText.includes(text.forbiddenStart),
     consoleReadonlyCopy: consoleText.includes(text.readonly) && consoleText.includes(text.noSaveStart),
     consoleNoFakeBrowser: consoleText.includes(text.noBrowser) && consoleText.includes(text.noFakeEvidence),
     consoleNoFakePlaceholder: !(consoleText + ' ' + taskText).includes(text.fakePlaceholder),
+    reportDeliveryCheckVisible: reportText.includes(text.finalCheck) && reportText.includes(text.expectedBlocked),
     noOldActionCopy: !(consoleText + ' ' + taskText).includes(text.oldSaveOnly)
       && !(consoleText + ' ' + taskText).includes(text.oldWaitSave)
       && !(consoleText + ' ' + taskText).includes(text.oldVisibleBrowser)

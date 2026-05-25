@@ -159,7 +159,7 @@ cd /d "$frontendDir"
 echo Frontend service is running. Close this window to stop it.
 echo Log file: $frontendLog
 echo [%date% %time%] Starting frontend on http://127.0.0.1:$frontendPort >> "$frontendLog"
-call "$viteCmd" --host 0.0.0.0 --port $frontendPort >> "$frontendLog" 2>&1
+call "$viteCmd" --host 127.0.0.1 --port $frontendPort >> "$frontendLog" 2>&1
 echo [%date% %time%] Frontend exited with code %errorlevel% >> "$frontendLog"
 echo Frontend stopped. You can close this window.
 "@ | Set-Content -LiteralPath $frontendRunner -Encoding ASCII

@@ -472,6 +472,48 @@ def test_direct_real_dxm_mutation_rejects_approved_task_when_l2_gate_not_passed(
     assert flow.draft_box_actions == []
 
 
+def test_direct_real_dxm_mutation_rejects_even_after_l2_and_approval(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    flow = DummyDxmLoginFlow()
+    task = _create_task(repo, mode="claim_only")
+    _approve_task(repo, task["id"], "direct-token")
+    monkeypatch.setattr(main, "login_flow", flow)
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+
+    response = client.post(
+        "/api/dxm/draft-box/action",
+        json={
+            "action": "remark",
+            "note_text": "AI认领",
+            "task_id": task["id"],
+            "manual_approval": True,
+            "approval_token": "direct-token",
+            "approved_by": "ops-owner",
+            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
+            "store_name": "Dang Kang",
+        },
+    )
+
+    assert response.status_code == 403
+    assert "task runner evidence chain" in response.json()["detail"]
+    assert flow.draft_box_actions == []
+
+
+def test_direct_open_editor_rejects_without_guarded_runner(tmp_path, monkeypatch):
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    flow = DummyDxmLoginFlow()
+    monkeypatch.setattr(main, "login_flow", flow)
+
+    response = client.post("/api/dxm/workflow/open-editor", json={"action": "edit"})
+
+    assert response.status_code == 403
+    assert flow.draft_box_actions == []
+
+
 def test_single_save_start_rejects_non_dang_kang_store(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     task = _create_task(repo, store_name="Other Store", approval={"approved": True, "token": "l3-token"})

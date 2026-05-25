@@ -11,7 +11,7 @@ import {
   ReportCenter,
   TaskCenter,
 } from './components/WorkbenchModules'
-import type { AgentConsoleSession, DeliveryWorkspace, Evidence, ExceptionItem, LogItem, Product, Report, Store, Task, Template, WorkbenchSection } from './types'
+import type { AgentConsoleSession, DeliveryWorkspace, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LogItem, Product, Report, Store, Task, Template, WorkbenchSection } from './types'
 import { composeWorkspace, demoTemplateSeeds, seedRows } from './workspace'
 
 const AGENT_CONSOLE_TARGET_URL = 'https://www.dianxiaomi.com/'
@@ -49,6 +49,7 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [busy, setBusy] = useState(false)
   const [agentConsole, setAgentConsole] = useState<AgentConsoleSession | null>(null)
+  const [finalCheck, setFinalCheck] = useState<FinalDeliveryCheckSummary | null>(null)
   const [agentConsoleError, setAgentConsoleError] = useState<string | null>(null)
   const [operationError, setOperationError] = useState<string | null>(null)
   const [workspaceNotice, setWorkspaceNotice] = useState<WorkspaceNotice | null>({
@@ -92,6 +93,7 @@ export default function App() {
       exceptions,
       reports,
       consoleStatus,
+      finalCheckSummary,
     ] = await Promise.all([
       loadOrFallback<Partial<DeliveryWorkspace> | null>(deliveryPath, null),
       loadOrFallback<Store[]>('/api/stores', []),
@@ -103,6 +105,7 @@ export default function App() {
       loadOrFallback<ExceptionItem[]>('/api/exceptions', []),
       loadOrFallback<Report[]>('/api/reports', []),
       loadOrFallback<AgentConsoleSession | null>('/api/agent-console/status', null),
+      loadOrFallback<FinalDeliveryCheckSummary | null>('/api/delivery/final-check', null),
     ])
     const nextWorkspace = composeWorkspace({
       workspace: deliveryWorkspace,
@@ -117,6 +120,7 @@ export default function App() {
     })
     setWorkspace(nextWorkspace)
     setAgentConsole(consoleStatus)
+    setFinalCheck(finalCheckSummary)
     setSelectedTaskId((current) => current ?? nextWorkspace.tasks[0]?.id ?? null)
     if (failures.length) {
       const failedPaths = failures.map((failure) => failure.path).join('、')
@@ -316,7 +320,7 @@ export default function App() {
       case 'exceptions':
         return <ExceptionQueue workspace={workspace} selectedTask={selectedTask} />
       case 'reports':
-        return <ReportCenter workspace={workspace} selectedTask={selectedTask} onShowEvidence={() => setActiveSection('evidence')} onShowConsole={() => setActiveSection('console')} />
+        return <ReportCenter workspace={workspace} selectedTask={selectedTask} finalCheck={finalCheck} onShowEvidence={() => setActiveSection('evidence')} onShowConsole={() => setActiveSection('console')} />
       case 'dashboard':
       default:
         return <Dashboard workspace={workspace} selectedTask={selectedTask} />

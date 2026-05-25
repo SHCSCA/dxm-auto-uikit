@@ -49,7 +49,7 @@
 说明：
 - 右侧实时执行区已经能看到任务状态、步骤流、日志和证据
 - 工作台会显示 L0/L1/L2/L3 门禁、证据等级和真实保存阻断原因
-- L2 真实只读未通过前，真实 `single_save` / `batch_save` 会被后端与前端双重阻断
+- L2 真实只读未通过前，真实 `claim_only` / `single_save` / `batch_save` 会被后端与前端双重阻断
 - 下一步重点是让真实 L2 双目标只读 probe 通过，再由人工批准执行 L3 金丝雀
 
 ---
@@ -134,6 +134,10 @@ scripts\final-delivery-check.bat
 ```
 
 它会串行运行 Windows 启动前检查、后端全量测试、前端生产构建、L1 selector replay、`git diff --check`、浏览器 QA，并输出 `outputs/final-delivery-check/final-delivery-check.md` / `.json`。浏览器 QA 会临时启动隔离的当前源码后端和前端预览服务，避免误测 8000/5173 上的旧进程；检查模式可能安装前端依赖，但不会访问店小秘、不会执行真实保存。报告顶部会分别显示“本地工作台自检结果”和“真实 DXM 写入放行状态”。
+
+当前验收成功标准：`Local workbench check: PASS`、`Browser QA: PASS`、`Source package check: PASS`（发布源码包时）以及 `Real DXM write readiness: BLOCKED` 同时成立。这里的 `BLOCKED` 是预期安全状态，表示真实 L2/L3 尚未放行，不表示本地工作台交付失败。
+
+启动工作台后，报告中心会显示最近一次交付自检摘要和报告路径，方便验收人直接确认本地 PASS、真实写入 BLOCKED 与源码包状态。
 
 发布源码包前可加 clean worktree 门禁：
 

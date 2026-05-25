@@ -7,6 +7,7 @@ import type {
   Evidence,
   EvidencePoint,
   ExceptionItem,
+  FinalDeliveryCheckSummary,
   LogItem,
   Product,
   RegressionGate,
@@ -208,8 +209,9 @@ export function TaskCenter({ workspace, selectedTask, busy, onSelectTask, onBoot
             <strong>真实保存已阻断</strong>
             <span>{l2Gate?.detail ?? '需要 data_acquisition 与 draft_box 两个真实只读检查均通过。'}</span>
             {l3BlocksStart && <span>{l3Gate?.detail ?? 'L3 已阻断，必须先解除发布隔离风险。'}</span>}
+            {selectedTask?.status === 'draft' && <span>本地演示批次已可用于验收门禁；真实保存被 L2 阻断是当前预期结果。</span>}
             <div className="next-step-actions">
-              <button className="button button--secondary" type="button" onClick={onShowConsole}>查看只读诊断</button>
+              <button className="button button--secondary" type="button" onClick={onShowConsole}>查看 L2 阻断说明</button>
               <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
             </div>
           </div>
@@ -708,14 +710,16 @@ export function ExceptionQueue({ workspace, selectedTask }: CommonProps) {
 export function ReportCenter({
   workspace,
   selectedTask,
+  finalCheck,
   onShowEvidence,
   onShowConsole,
-}: CommonProps & { onShowEvidence: () => void; onShowConsole: () => void }) {
+}: CommonProps & { finalCheck: FinalDeliveryCheckSummary | null; onShowEvidence: () => void; onShowConsole: () => void }) {
   const reports = selectedTask ? workspace.reports.filter((item) => item.task_id === selectedTask.id) : workspace.reports
   const reportSummary = workspace.reportSummary
 
   return (
     <section className="module-layout" aria-label="报告中心">
+      <FinalDeliveryCheckCard finalCheck={finalCheck} />
       <div className="module-card span-3">
         <ModuleHead title="保存隔离摘要" meta={workspace.publishGuardState?.status ?? '等待执行'} />
         <div className="report-check-grid">
@@ -755,6 +759,35 @@ export function ReportCenter({
         </div>
       </div>
     </section>
+  )
+}
+
+function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheckSummary | null }) {
+  const available = finalCheck?.status === 'available'
+  const checkedAt = finalCheck?.checked_at ? new Date(finalCheck.checked_at).toLocaleString() : '尚无记录'
+  const reportPath = finalCheck?.summary_path ?? 'outputs/final-delivery-check/final-delivery-check.md'
+  const jsonPath = finalCheck?.json_path ?? 'outputs/final-delivery-check/final-delivery-check.json'
+  const gitHead = finalCheck?.git_head ? finalCheck.git_head.slice(0, 8) : '未记录'
+
+  return (
+    <div className="module-card span-3 delivery-check-card">
+      <ModuleHead title="最近交付自检" meta={available ? checkedAt : '尚未运行'} />
+      <div className="report-check-grid">
+        <CheckRow label={`本地工作台 ${finalCheck?.local_workbench_check ?? '未检查'}`} ok={finalCheck?.local_workbench_check === 'PASS'} />
+        <CheckRow label={`真实 DXM 写入 ${finalCheck?.real_dxm_write_readiness ?? '未检查'}`} ok={finalCheck?.real_dxm_write_readiness === 'BLOCKED'} />
+        <CheckRow label={`源码包 ${finalCheck?.source_package_readiness ?? '未检查'}`} ok={finalCheck?.source_package_readiness === 'CLEAN'} />
+        <CheckRow label={`浏览器 QA ${finalCheck?.browser_qa_ok === true ? 'PASS' : '未通过/未运行'}`} ok={finalCheck?.browser_qa_ok === true} />
+      </div>
+      <div className="delivery-check-card__body">
+        <p>{available ? '当前预期交付态：本地工作台通过，真实写入保持阻断。BLOCKED 代表真实 L2/L3 尚未放行，不代表本地工作台失败。' : '还没有读取到交付自检报告。运行 scripts\\final-delivery-check.bat 后，这里会显示最近一次验收摘要。'}</p>
+        <div className="delivery-check-card__paths">
+          <code>{reportPath}</code>
+          <code>{jsonPath}</code>
+          <span>Git {gitHead}</span>
+        </div>
+        <code className="delivery-check-card__command">scripts\final-delivery-check.bat -RequireCleanWorktree</code>
+      </div>
+    </div>
   )
 }
 

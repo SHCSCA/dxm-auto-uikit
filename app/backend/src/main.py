@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import hmac
+import json
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -40,14 +41,21 @@ from src.services.agent_console import AgentConsoleService
 from src.ws import ConnectionManager
 
 app = FastAPI(title='dxm-auto-uikit backend', version='0.1.0')
+LOOPBACK_CORS_ORIGIN_RE = r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
+PUBLIC_ARTIFACT_ROOTS = {
+    'screenshots': DATA_DIR / 'screenshots',
+    'evidences': DATA_DIR / 'evidences',
+}
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=['*'],
+    allow_origin_regex=LOOPBACK_CORS_ORIGIN_RE,
     allow_credentials=True,
     allow_methods=['*'],
     allow_headers=['*'],
 )
-app.mount('/artifacts', StaticFiles(directory=DATA_DIR), name='artifacts')
+for public_name, public_root in PUBLIC_ARTIFACT_ROOTS.items():
+    public_root.mkdir(parents=True, exist_ok=True)
+    app.mount(f'/artifacts/{public_name}', StaticFiles(directory=public_root), name=f'artifacts-{public_name}')
 
 init_db()
 repo = Repository()
@@ -66,6 +74,8 @@ REAL_WRITE_START_MODES = REAL_DXM_MUTATION_MODES
 ALLOWED_START_MODES = {'probe', 'dry_run', 'claim_only', 'single_save', 'batch_save'}
 SAVE_ONLY_PUBLISH_SCENE = 'SMT_SEMI_MANAGED_SAVE_ONLY'
 L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
+REPO_ROOT = Path(__file__).resolve().parents[3]
+FINAL_DELIVERY_CHECK_JSON = REPO_ROOT / 'outputs' / 'final-delivery-check' / 'final-delivery-check.json'
 
 
 @app.get('/health', response_model=HealthResponse)
@@ -144,6 +154,7 @@ def dxm_workflow_claim_product(payload: DraftBoxActionRequest):
 @app.post('/api/dxm/workflow/open-editor')
 def dxm_workflow_open_editor(payload: DraftBoxActionRequest | None = None):
     payload = payload or DraftBoxActionRequest(action='edit')
+    _assert_direct_real_dxm_mutation_allowed(payload)
     return normalize_artifact_paths(_workflow_adapter().open_editor(
         product_query=payload.product_query,
         store_name=payload.store_name,
@@ -308,6 +319,11 @@ def get_delivery_workspace(task_id: int | None = None):
     return normalize_artifact_paths(workspace)
 
 
+@app.get('/api/delivery/final-check')
+def get_final_delivery_check_summary():
+    return _read_final_delivery_check_summary()
+
+
 @app.get('/api/agent-console/status')
 def get_agent_console_status():
     return normalize_artifact_paths(agent_console_service.status())
@@ -367,11 +383,63 @@ def normalize_artifact_paths(data):
         for key, value in data.items():
             if isinstance(value, str) and value.startswith(str(DATA_DIR)):
                 normalized[key] = value
-                normalized[f'{key}_url'] = '/artifacts/' + Path(value).relative_to(DATA_DIR).as_posix()
+                artifact_url = _public_artifact_url(value)
+                if artifact_url:
+                    normalized[f'{key}_url'] = artifact_url
             else:
                 normalized[key] = normalize_artifact_paths(value)
         return normalized
     return data
+
+
+def _public_artifact_url(value: str) -> str | None:
+    try:
+        path = Path(value).resolve()
+    except OSError:
+        return None
+    for public_name, public_root in PUBLIC_ARTIFACT_ROOTS.items():
+        try:
+            relative = path.relative_to(public_root.resolve())
+        except ValueError:
+            continue
+        return f'/artifacts/{public_name}/{relative.as_posix()}'
+    return None
+
+
+def _read_final_delivery_check_summary():
+    json_path = FINAL_DELIVERY_CHECK_JSON
+    if not json_path.exists():
+        return {
+            'status': 'not_run',
+            'summary_path': None,
+            'json_path': str(json_path),
+        }
+    try:
+        payload = json.loads(json_path.read_text(encoding='utf-8-sig'))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {
+            'status': 'unreadable',
+            'summary_path': None,
+            'json_path': str(json_path),
+            'error': str(exc),
+        }
+    artifacts = payload.get('artifacts') if isinstance(payload.get('artifacts'), dict) else {}
+    browser_qa = payload.get('browserQa') if isinstance(payload.get('browserQa'), dict) else {}
+    return {
+        'status': 'available',
+        'checked_at': payload.get('checkedAt'),
+        'local_workbench_check': payload.get('localWorkbenchCheck'),
+        'real_dxm_write_readiness': payload.get('realDxmWriteReadiness'),
+        'source_package_readiness': payload.get('sourcePackageReadiness'),
+        'source_package_check': payload.get('sourcePackageCheck'),
+        'require_clean_worktree': payload.get('requireCleanWorktree'),
+        'git_head': payload.get('gitHead'),
+        'browser_qa_ok': browser_qa.get('ok'),
+        'qa_services': payload.get('qaServices'),
+        'gates': payload.get('gates'),
+        'summary_path': artifacts.get('summary'),
+        'json_path': str(json_path),
+    }
 
 
 def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
@@ -437,6 +505,10 @@ def _assert_direct_real_dxm_mutation_allowed(payload: DraftBoxActionRequest) -> 
             approved_by=payload.approved_by,
             confirmation=payload.confirmation,
         ),
+    )
+    raise HTTPException(
+        status_code=403,
+        detail='Direct real DXM mutation must run through the task runner evidence chain',
     )
 
 
