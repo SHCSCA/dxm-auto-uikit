@@ -800,7 +800,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
         <CheckRow label={`本地工作台 ${finalCheck?.local_workbench_check ?? '未检查'}`} ok={finalCheck?.local_workbench_check === 'PASS'} />
         <DeliveryReadinessRow readiness={readiness} />
         <FinalCheckFreshnessRow finalCheck={finalCheck} />
-        <CheckRow label={`源码包 ${finalCheck?.source_package_readiness ?? '未检查'}`} ok={finalCheck?.source_package_readiness === 'CLEAN'} />
+        <SourcePackageCheckRow finalCheck={finalCheck} />
         <CheckRow label={`浏览器 QA ${finalCheck?.browser_qa_ok === true ? 'PASS' : finalCheck?.browser_qa_ok === false ? 'FAIL' : '待刷新/未运行'}`} ok={finalCheck?.browser_qa_ok === true} />
       </div>
       <div className="delivery-check-card__body">
@@ -829,6 +829,18 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
       </div>
     </div>
   )
+}
+
+function SourcePackageCheckRow({ finalCheck }: { finalCheck: FinalDeliveryCheckSummary | null }) {
+  const sourcePackageCheck = finalCheck?.source_package_check ?? '未检查'
+  const sourcePackageReadiness = finalCheck?.source_package_readiness ?? '未检查'
+  const notRequired = finalCheck?.source_package_check === 'NOT_REQUIRED'
+  const ok = sourcePackageCheck === 'PASS' || notRequired
+  const label = notRequired
+    ? '源码包验收 NOT_REQUIRED（默认本地验收不要求源码包 clean）'
+    : `源码包验收 ${sourcePackageCheck} / 工作区 ${sourcePackageReadiness}`
+
+  return <CheckRow label={label} ok={ok} />
 }
 
 function FinalCheckFreshnessRow({ finalCheck }: { finalCheck: FinalDeliveryCheckSummary | null }) {

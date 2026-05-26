@@ -285,6 +285,8 @@ const text = {
   screenshotHashes: '\u622a\u56fe\u54c8\u5e0c',
   localAcceptanceCommand: '\u672c\u5730\u9a8c\u6536\u547d\u4ee4',
   sourceAcceptanceCommand: '\u6e90\u7801\u5305\u9a8c\u6536\u547d\u4ee4',
+  sourcePackageNotRequired: '\u6e90\u7801\u5305\u9a8c\u6536 NOT_REQUIRED',
+  sourcePackageNotRequiredCopy: '\u9ed8\u8ba4\u672c\u5730\u9a8c\u6536\u4e0d\u8981\u6c42\u6e90\u7801\u5305 clean',
   demoBatchButton: '\u521b\u5efa\u6f14\u793a\u6279\u6b21\uff08\u5199\u5165\u672c\u5730\uff09',
   localDemoTask: '\u672c\u5730\u6f14\u793a\u6838\u9a8c\u6279\u6b21',
   localDemoStart: '\u542f\u52a8\u672c\u5730\u6f14\u793a\u4efb\u52a1',
@@ -312,6 +314,7 @@ const consoleShot = await screenshot('qa-execution-console');
 const clickedReports = await clickText(text.reports);
 await new Promise(r => setTimeout(r, 700));
 const reportText = await bodyText();
+const finalCheckSummaryForReport = await fetchJson('/api/delivery/final-check');
 const reportBlockedStatusTone = await evalValue('(() => { const row = document.querySelector(".delivery-readiness-row"); return Boolean(row && row.className.includes("is-blocked") && (row.innerText || "").includes("BLOCKED")); })()');
 const reportAcceptanceCommands = await evalValue('(() => [...document.querySelectorAll(".delivery-check-card__commands code")].map(el => (el.innerText || el.textContent || "").trim()))()');
 const l2CommandBlocks = await evalValue('(() => [...document.querySelectorAll(".l2-next-step-card__commands code")].map(el => (el.innerText || el.textContent || "").trim()))()');
@@ -450,6 +453,7 @@ const hasSourceAcceptanceCommand = Array.isArray(reportAcceptanceCommands) && re
 const hasRunIdSetup = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(command => command.includes('$runId') && command.includes('Get-Date'));
 const hasDataAcquisitionRunId = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(command => command.includes('--target data_acquisition') && command.includes('--run-id $runId'));
 const hasDraftBoxRunId = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(command => command.includes('--target draft_box') && command.includes('--run-id $runId'));
+const finalCheckRequiresNotRequiredCopy = finalCheckSummaryForReport?.source_package_check === 'NOT_REQUIRED';
 const result = {
   checkedAt: new Date().toISOString(),
   url: targetUrl,
@@ -474,6 +478,7 @@ const result = {
     reportBlockedStatusLanguage: reportText.includes(text.blockedExpectedState) && reportText.includes(text.noRealWrite) && reportBlockedStatusTone,
     reportDualAcceptanceCommands: reportText.includes(text.localAcceptanceCommand) && reportText.includes(text.sourceAcceptanceCommand) && hasLocalAcceptanceCommand && hasSourceAcceptanceCommand,
     reportL2RunBindingCopy: reportText.includes(text.l2SameBinding) && hasRunIdSetup && hasDataAcquisitionRunId && hasDraftBoxRunId,
+    reportSourcePackageNotRequiredCopy: !finalCheckRequiresNotRequiredCopy || (reportText.includes(text.sourcePackageNotRequired) && reportText.includes(text.sourcePackageNotRequiredCopy)),
     demoBatchCanStartLocally: demoBatchCreated && Boolean(demoCreatedTask) && demoText.includes(text.localDemoTask) && demoStartButtonEnabled,
     noDeveloperFallbackCopy: !(initialText + ' ' + taskText + ' ' + consoleText + ' ' + reportText).includes(text.fallbackCopy),
     localStartPostBlocked: blockedStartStatus === 403,
