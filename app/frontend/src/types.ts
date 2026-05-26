@@ -140,7 +140,17 @@ export type FinalDeliveryCheckSummary = {
   source_package_check?: string | null
   require_clean_worktree?: boolean | null
   git_head?: string | null
+  current_git_head?: string | null
+  current_git_status_short?: string | null
+  current_git_is_dirty?: boolean | null
+  final_check_matches_current_worktree?: boolean | null
+  final_check_freshness?: string | null
   browser_qa_ok?: boolean | null
+  browser_qa_checked_at?: string | null
+  browser_qa_git_head?: string | null
+  browser_qa_git_status_short?: string | null
+  browser_qa_matches_report_git_head?: boolean | null
+  browser_qa_screenshot_hashes?: Record<string, string> | null
   qa_services?: Record<string, unknown> | null
   gates?: Record<string, unknown> | null
   summary_path?: string | null

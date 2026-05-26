@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import subprocess
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -430,6 +431,15 @@ def _read_final_delivery_check_summary():
         }
     artifacts = payload.get('artifacts') if isinstance(payload.get('artifacts'), dict) else {}
     browser_qa = payload.get('browserQa') if isinstance(payload.get('browserQa'), dict) else {}
+    browser_qa_manifest = browser_qa.get('manifest') if isinstance(browser_qa.get('manifest'), dict) else {}
+    current_git = _current_git_summary()
+    report_git_head = payload.get('gitHead')
+    browser_qa_git_head = browser_qa_manifest.get('gitHead')
+    matches_current = (
+        bool(report_git_head)
+        and report_git_head == current_git.get('head')
+        and current_git.get('is_dirty') is False
+    )
     return {
         'status': 'available',
         'checked_at': payload.get('checkedAt'),
@@ -438,13 +448,61 @@ def _read_final_delivery_check_summary():
         'source_package_readiness': payload.get('sourcePackageReadiness'),
         'source_package_check': payload.get('sourcePackageCheck'),
         'require_clean_worktree': payload.get('requireCleanWorktree'),
-        'git_head': payload.get('gitHead'),
+        'git_head': report_git_head,
+        'current_git_head': current_git.get('head'),
+        'current_git_status_short': current_git.get('status_short'),
+        'current_git_is_dirty': current_git.get('is_dirty'),
+        'final_check_matches_current_worktree': matches_current,
+        'final_check_freshness': _final_check_freshness(report_git_head, current_git),
         'browser_qa_ok': browser_qa.get('ok'),
+        'browser_qa_checked_at': browser_qa.get('checkedAt'),
+        'browser_qa_git_head': browser_qa_git_head,
+        'browser_qa_git_status_short': browser_qa_manifest.get('gitStatusShort'),
+        'browser_qa_matches_report_git_head': bool(report_git_head and browser_qa_git_head and report_git_head == browser_qa_git_head),
+        'browser_qa_screenshot_hashes': browser_qa.get('screenshotHashes'),
         'qa_services': payload.get('qaServices'),
         'gates': payload.get('gates'),
         'summary_path': artifacts.get('summary'),
         'json_path': str(json_path),
     }
+
+
+def _current_git_summary():
+    try:
+        head = subprocess.check_output(
+            ['git', '-C', str(REPO_ROOT), 'rev-parse', 'HEAD'],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        status_short = subprocess.check_output(
+            ['git', '-C', str(REPO_ROOT), 'status', '--short'],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return {
+            'head': None,
+            'status_short': None,
+            'is_dirty': None,
+        }
+    return {
+        'head': head,
+        'status_short': status_short,
+        'is_dirty': bool(status_short),
+    }
+
+
+def _final_check_freshness(report_git_head, current_git):
+    current_head = current_git.get('head')
+    if not report_git_head or not current_head:
+        return 'unknown'
+    if report_git_head != current_head:
+        return 'stale_head'
+    if current_git.get('is_dirty') is True:
+        return 'dirty_worktree'
+    if current_git.get('is_dirty') is False:
+        return 'current'
+    return 'unknown'
 
 
 def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:

@@ -779,6 +779,9 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
   const reportPath = finalCheck?.summary_path ?? 'outputs/final-delivery-check/final-delivery-check.md'
   const jsonPath = finalCheck?.json_path ?? 'outputs/final-delivery-check/final-delivery-check.json'
   const gitHead = finalCheck?.git_head ? finalCheck.git_head.slice(0, 8) : '未记录'
+  const currentGitHead = finalCheck?.current_git_head ? finalCheck.current_git_head.slice(0, 8) : '未记录'
+  const browserQaGitHead = finalCheck?.browser_qa_git_head ? finalCheck.browser_qa_git_head.slice(0, 8) : '未记录'
+  const finalCheckMatchesCurrent = finalCheck?.final_check_matches_current_worktree === true
   const readiness = finalCheck?.real_dxm_write_readiness ?? '未检查'
   const readinessDetail = !available
     ? '还没有读取到交付自检报告。运行 scripts\\final-delivery-check.bat 后，这里会显示最近一次验收摘要。'
@@ -794,15 +797,22 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
       <div className="report-check-grid">
         <CheckRow label={`本地工作台 ${finalCheck?.local_workbench_check ?? '未检查'}`} ok={finalCheck?.local_workbench_check === 'PASS'} />
         <DeliveryReadinessRow readiness={readiness} />
+        <FinalCheckFreshnessRow finalCheck={finalCheck} />
         <CheckRow label={`源码包 ${finalCheck?.source_package_readiness ?? '未检查'}`} ok={finalCheck?.source_package_readiness === 'CLEAN'} />
         <CheckRow label={`浏览器 QA ${finalCheck?.browser_qa_ok === true ? 'PASS' : finalCheck?.browser_qa_ok === false ? 'FAIL' : '待刷新/未运行'}`} ok={finalCheck?.browser_qa_ok === true} />
       </div>
       <div className="delivery-check-card__body">
         <p>{readinessDetail}</p>
+        {available && !finalCheckMatchesCurrent && (
+          <p className="delivery-check-card__warning">
+            自检未覆盖当前代码：请重新运行本地验收命令；源码包交付前运行源码包验收命令。
+          </p>
+        )}
         <div className="delivery-check-card__paths">
           <code>{reportPath}</code>
           <code>{jsonPath}</code>
-          <span>Git {gitHead}</span>
+          <span>自检 Git {gitHead} / 当前 Git {currentGitHead}</span>
+          <span>浏览器 QA Git {browserQaGitHead} / 截图哈希 {finalCheck?.browser_qa_screenshot_hashes ? Object.keys(finalCheck.browser_qa_screenshot_hashes).length : 0} 项</span>
         </div>
         <div className="delivery-check-card__commands">
           <div>
@@ -815,6 +825,27 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+function FinalCheckFreshnessRow({ finalCheck }: { finalCheck: FinalDeliveryCheckSummary | null }) {
+  const matches = finalCheck?.final_check_matches_current_worktree === true
+  const freshness = finalCheck?.final_check_freshness ?? 'unknown'
+  const label = matches ? '自检覆盖当前代码' : '自检未覆盖当前代码'
+  const detail = matches
+    ? '报告 Git 与当前工作区一致。'
+    : freshness === 'dirty_worktree'
+      ? '当前有未提交改动，报告不能作为源码包证明。'
+      : freshness === 'stale_head'
+        ? '报告 Git 与当前代码不一致。'
+        : '尚无法确认报告与当前代码一致。'
+
+  return (
+    <div className={`final-check-freshness-row ${matches ? 'is-current' : 'is-stale'}`}>
+      <span>{matches ? 'OK' : '!'}</span>
+      <strong>{label}</strong>
+      <small>{detail}</small>
     </div>
   )
 }
