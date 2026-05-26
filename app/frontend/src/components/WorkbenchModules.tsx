@@ -732,6 +732,10 @@ export function ReportCenter({
   const reports = selectedTask ? workspace.reports.filter((item) => item.task_id === selectedTask.id) : workspace.reports
   const reportSummary = workspace.reportSummary
   const l2ProbePlan = workspace.l2ProbePlan
+  const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
+  const l2AllowlistReviewItems = summarizeL2Diagnostics(l2Gate).flatMap((item) =>
+    item.reviewCandidateRequests.map((request) => ({ target: item.targetLabel, request })),
+  )
 
   return (
     <section className="module-layout" aria-label="报告中心" data-testid="report-center-section">
@@ -767,6 +771,22 @@ export function ReportCenter({
       </div>
       <div className="module-card span-3 l2-next-step-card">
         <ModuleHead title="重新验证 L2" meta="需人工批准" />
+        <div className="l2-allowlist-review">
+          <div className="l2-allowlist-review__head">
+            <strong>L2 allowlist 候选处理</strong>
+            <span>先评审，再复跑 L2</span>
+          </div>
+          <p>review_only=true / allowlist_applied=false。未完成人工评审前，不运行下方 L2 复验命令。</p>
+          {l2AllowlistReviewItems.length > 0 ? (
+            <ul>
+              {l2AllowlistReviewItems.slice(0, 8).map((item) => (
+                <li key={`${item.target}:${item.request}`}>{item.target}：{item.request}</li>
+              ))}
+            </ul>
+          ) : (
+            <p>当前工作区没有可展示的 allowlist 候选；仍需按最终报告和 L2 证据复核后再决定是否重跑。</p>
+          )}
+        </div>
         <p>{l2ProbePlan.purpose || '真实写入保持阻断；仅在操作者确认可进行只读探测时，才重新运行双目标 L2。'}</p>
         <div className="l2-next-step-card__commands">
           {l2ProbePlan.commands.map((command) => (
