@@ -306,6 +306,7 @@ const text = {
   sourceAcceptanceCommand: '\u6e90\u7801\u5305\u9a8c\u6536\u547d\u4ee4',
   localWorkbenchLabel: '\u672c\u5730\u5de5\u4f5c\u53f0',
   browserQaLabel: '\u6d4f\u89c8\u5668 QA',
+  finalReportCenterQa: '\u6700\u7ec8\u62a5\u544a\u4e2d\u5fc3 QA',
   sourcePackageLabel: '\u6e90\u7801\u5305\u9a8c\u6536',
   sourcePackageNotRequired: '\u6e90\u7801\u5305\u9a8c\u6536 NOT_REQUIRED',
   sourcePackageNotRequiredCopy: '\u9ed8\u8ba4\u672c\u5730\u9a8c\u6536\u4e0d\u8981\u6c42\u6e90\u7801\u5305 clean',
@@ -331,7 +332,7 @@ if (reportOnlyFinal) {
     : text.sourcePackageLabel + ' ' + String(finalCheckSummary?.source_package_check ?? '\u672a\u68c0\u67e5');
   const expectedBrowserQa = text.browserQaLabel + ' ' + (finalCheckSummary?.browser_qa_ok === true ? 'PASS' : 'FAIL');
   const expectedLocalWorkbench = text.localWorkbenchLabel + ' ' + String(finalCheckSummary?.local_workbench_check ?? '\u672a\u68c0\u67e5');
-  const expectedPostFinalReportQa = '最终报告中心 QA ' + (finalCheckSummary?.post_final_report_qa_ok === true ? 'PASS' : 'FAIL');
+  const expectedPostFinalReportQa = text.finalReportCenterQa + ' ' + (finalCheckSummary?.post_final_report_qa_ok === true ? 'PASS' : 'FAIL');
   const requiredReportFragments = [
     text.finalCheck,
     expectedLocalWorkbench,
@@ -391,6 +392,7 @@ if (reportOnlyFinal) {
           && finalReportCenterQaDiagnostics.finalReportCenterScreenshotDomPath.includes('qa-report-center-final.png')
           && finalReportCenterQaDiagnostics.apiPostFinalReportQaOk === true
           && Boolean(finalReportCenterQaDiagnostics.apiFinalReportCenterScreenshotPath)),
+      finalReportCenterQaTextVisible: allowMissingPostFinalQa || finalReportCenterQaDiagnostics.hasExpectedPostFinalReportQa,
       finalReportCenterShowsFreshnessState: reportText.includes(text.finalCheckCurrent)
         || reportText.includes(text.finalCheckStale),
       finalReportCenterShowsBlockedDxmState: reportText.includes(text.blockedExpectedState)

@@ -164,6 +164,9 @@ def test_final_delivery_check_captures_final_report_center_after_final_json_writ
     assert "finalReportCenterShowsFinalPassState" in qa_script
     assert "finalReportCenterQaVisible" in qa_script
     assert "finalReportCenterQaDomState" in qa_script
+    assert "finalReportCenterQaTextVisible" in qa_script
+    assert "hasExpectedPostFinalReportQa" in qa_script[qa_script.index("assertions: {"):qa_script.index("finalReportApiIsFinal")]
+    assert "'最终报告中心 QA '" not in qa_script
     assert "finalReportCenterScreenshotDomPath" in qa_script
     assert 'clickSelector(\'[data-section="reports"]\')' in qa_script
     assert 'reportCenterSectionVisible' in qa_script
