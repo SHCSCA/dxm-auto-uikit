@@ -191,11 +191,13 @@ export function TaskCenter({ workspace, selectedTask, busy, onSelectTask, onBoot
     ? '请选择任务'
     : l2BlocksStart
       ? l2StartLabel(l2Gate?.status)
-      : needsApproval
-        ? '等待人工批准'
-        : needsRealL2
-          ? '启动保存核验任务'
-          : '启动本地演示任务'
+      : l3BlocksStart
+        ? 'L3 保持锁定，禁止启动'
+        : needsApproval
+          ? '等待人工批准'
+          : needsRealL2
+            ? '启动保存核验任务'
+            : '启动本地演示任务'
   return (
     <section className="module-layout" aria-label="任务中心">
       <div className="module-card span-2">
@@ -212,7 +214,7 @@ export function TaskCenter({ workspace, selectedTask, busy, onSelectTask, onBoot
           <div className="gate-note gate-note--danger">
             <strong>真实保存已阻断</strong>
             <span>{l2Gate?.detail ?? '需要 data_acquisition 与 draft_box 两个真实只读检查均通过。'}</span>
-            {l3BlocksStart && <span>{l3Gate?.detail ?? 'L3 已阻断，必须先解除发布隔离风险。'}</span>}
+            {l3BlocksStart && <span>L3 当前按门禁锁定：L2 未 passed 或人工批准未完成前，不启动真实 claim_only/single_save/batch_save。</span>}
             {selectedTask?.status === 'draft' && <span>本地演示批次已可用于验收门禁；真实保存被 L2 阻断是当前预期结果。</span>}
             <div className="next-step-actions">
               <button className="button button--secondary" type="button" onClick={onShowConsole}>查看 L2 阻断说明</button>
@@ -328,7 +330,7 @@ export function TaskCenter({ workspace, selectedTask, busy, onSelectTask, onBoot
             label="L3 save-only 金丝雀"
             status={l3Gate?.status ?? 'not_run'}
             detail={l3Gate?.status === 'blocked'
-              ? 'L3 已阻断：真实保存必须停止并复核 publish guard。'
+              ? 'L3 当前按门禁锁定：L2 未 passed 或人工批准未完成前，不启动真实 claim_only/single_save/batch_save。'
               : 'L3 真实写操作仍需要人工批准令牌，approval_required 不是已通过。'}
           />
           <div className="gate-note">
@@ -661,7 +663,7 @@ export function EvidenceTimeline({
           {!evidencePoints.length && (
             <EmptyState
               title="暂无可验收证据"
-              detail="保存结果、未发布证明和网络/HAR 摘要齐全后才会形成 A/B/C 证据等级。"
+              detail="当前真实写入未放行时，保存结果、未发布证明和网络/HAR 为 0 条是预期阻断；只有 L3 金丝雀完成后才生成可验收证据等级。"
               actions={(
                 <>
                   <button className="button button--secondary" type="button" onClick={onShowTasks}>查看任务门禁</button>

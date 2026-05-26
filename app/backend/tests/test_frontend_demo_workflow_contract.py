@@ -91,6 +91,24 @@ def test_report_center_treats_missing_l3_evidence_as_expected_when_real_write_bl
     assert "L3 未放行前不要求生成真实保存证据" in source
 
 
+def test_task_and_evidence_center_describe_l3_blocked_as_expected_lock():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    task_center_section = source[source.index("export function TaskCenter"):source.index("export function ExecutionConsole")]
+    evidence_timeline_section = source[source.index("export function EvidenceTimeline"):source.index("function EvidencePointCard")]
+
+    assert "真实保存必须停止并复核 publish guard" not in task_center_section
+    assert "解除发布隔离风险" not in task_center_section
+    assert "齐全后才会形成 A/B/C 证据等级" not in evidence_timeline_section
+
+    assert "L3 当前按门禁锁定" in task_center_section
+    assert "L2 未 passed 或人工批准未完成前" in task_center_section
+    assert "不启动真实 claim_only/single_save/batch_save" in task_center_section
+    assert "L3 保持锁定，禁止启动" in task_center_section
+    assert "当前真实写入未放行时" in evidence_timeline_section
+    assert "0 条是预期阻断" in evidence_timeline_section
+    assert "只有 L3 金丝雀完成后才生成可验收证据等级" in evidence_timeline_section
+
+
 def test_task_center_surfaces_l2_allowlist_review_candidates_as_manual_review_only():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
 
