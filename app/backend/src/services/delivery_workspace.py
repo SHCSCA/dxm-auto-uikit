@@ -44,6 +44,8 @@ L2_ZERO_NETWORK_COUNTERS = (
     "forbidden_keyword_request_count",
     "websocket_count",
 )
+L2_READ_METHODS = {"GET", "HEAD", "OPTIONS"}
+L2_ACTIVE_RESOURCE_TYPES = {"xhr", "fetch", "eventsource", "websocket"}
 L2_REAL_TARGET_MAX_SKEW_SECONDS = 30 * 60
 L2_REAL_TARGET_MAX_AGE_SECONDS = 2 * 60 * 60
 
@@ -1072,13 +1074,27 @@ def _summarize_probe_result(data: Mapping[str, Any], path: Path) -> dict[str, An
                     )
                 },
                 "safety": data.get("safety"),
-                "diagnostics": data.get("diagnostics") or _l2_probe_diagnostics(data),
+                "diagnostics": _l2_probe_diagnostics(data),
             }
         )
     return summary
 
 
 def _l2_probe_diagnostics(data: Mapping[str, Any]) -> dict[str, Any]:
+    existing = data.get("diagnostics")
+    if isinstance(existing, Mapping):
+        diagnostics = dict(existing)
+        blocked_groups = diagnostics.get("blocked_request_groups")
+        if not isinstance(blocked_groups, list):
+            blocked_groups = _l2_blocked_request_groups(data)
+            diagnostics["blocked_request_groups"] = blocked_groups
+        diagnostics.setdefault(
+            "allowlist_review_candidates",
+            _l2_allowlist_review_candidates_from_groups(blocked_groups),
+        )
+        return diagnostics
+
+    blocked_groups = _l2_blocked_request_groups(data)
     return {
         "strict_pass_checks": {
             "ok": data.get("ok") is True,
@@ -1095,7 +1111,8 @@ def _l2_probe_diagnostics(data: Mapping[str, Any]) -> dict[str, Any]:
         },
         "navigation": _l2_navigation_diagnostics(data),
         "render_state": _l2_render_state_diagnostics(data),
-        "blocked_request_groups": _l2_blocked_request_groups(data),
+        "blocked_request_groups": blocked_groups,
+        "allowlist_review_candidates": _l2_allowlist_review_candidates_from_groups(blocked_groups),
     }
 
 
@@ -1148,6 +1165,30 @@ def _l2_blocked_request_groups(data: Mapping[str, Any]) -> list[dict[str, Any]]:
         })
         current["count"] += 1
     return sorted(grouped.values(), key=lambda group: (-int(group["count"]), str(group["host"]), str(group["path"])))[:25]
+
+
+def _l2_allowlist_review_candidates_from_groups(groups: Any) -> list[dict[str, Any]]:
+    candidates = []
+    if not isinstance(groups, list):
+        return candidates
+
+    for group in groups:
+        if not isinstance(group, Mapping):
+            continue
+        reasons = group.get("reasons") or []
+        if not isinstance(reasons, list):
+            reasons = [reasons]
+        if (
+            str(group.get("method") or "").upper() in L2_READ_METHODS
+            and str(group.get("resource_type") or "").lower() in L2_ACTIVE_RESOURCE_TYPES
+            and not group.get("keyword_hits")
+            and all(str(reason).startswith("active_or_unknown_resource_type:") for reason in reasons)
+        ):
+            candidate = dict(group)
+            candidate["review_only"] = True
+            candidate["allowlist_applied"] = False
+            candidates.append(candidate)
+    return candidates[:20]
 
 
 def _l2_final_path_class(target: str, url: Any) -> str:

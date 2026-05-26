@@ -56,8 +56,10 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "Get-JsonObjectPropertyCount $l2Gate.latest.realTargets" in script
     assert "Get-JsonObjectPropertyCount $l2Gate.latest.mockTargets" in script
     assert "l2ProbeEvidenceSummary" in script
+    assert "l2AllowlistReviewCandidates" in script
     assert "l2ProbePlan" in script
     assert "## L2 Readonly Probe Evidence" in script
+    assert "## L2 Allowlist Review Candidates" in script
     assert "## L2 Recheck Plan" in script
     assert "write_request_count" in script
     assert "non_read_request_count" in script
@@ -68,6 +70,9 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "markdown_path" in script
     assert "screenshot_sha256" in script
     assert "dom_sha256" in script
+    assert "review_only" in script
+    assert "allowlist_applied" in script
+    assert "manual review only; not an L2 pass" in script
 
 
 def test_final_delivery_check_writes_current_provisional_report_before_browser_qa():

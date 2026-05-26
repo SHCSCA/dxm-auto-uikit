@@ -681,6 +681,19 @@ def test_delivery_workspace_l2_fails_when_latest_real_targets_fail(tmp_path, mon
     diagnostics = l2_gate["latest"]["realTargets"]["data_acquisition"]["diagnostics"]
     assert diagnostics["navigation"]["left_target_path"] is True
     assert diagnostics["blocked_request_groups"][0]["path"] == "/api/userInfo.json"
+    assert diagnostics["allowlist_review_candidates"] == [
+        {
+            "count": 21,
+            "method": "GET",
+            "host": "www.dianxiaomi.com",
+            "path": "/api/userInfo.json",
+            "resource_type": "xhr",
+            "reasons": ["active_or_unknown_resource_type:xhr"],
+            "keyword_hits": [],
+            "review_only": True,
+            "allowlist_applied": False,
+        }
+    ]
 
 
 def test_delivery_workspace_l2_passes_only_when_both_real_targets_are_clean(tmp_path, monkeypatch):

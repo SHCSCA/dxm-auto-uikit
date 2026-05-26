@@ -634,6 +634,7 @@ $l2Gate = Get-WorkspaceGate -WorkspaceSnapshot $workspaceSnapshot -Level "L2"
 $l3Gate = Get-WorkspaceGate -WorkspaceSnapshot $workspaceSnapshot -Level "L3"
 $l2ProbePlan = if ($workspaceSnapshot -and $workspaceSnapshot.l2_probe_plan) { $workspaceSnapshot.l2_probe_plan } else { $null }
 $l2ProbeEvidenceSummary = @()
+$l2AllowlistReviewCandidates = @()
 if ($l2Gate -and $l2Gate.latest) {
   $targetBuckets = @()
   if ((Get-JsonObjectPropertyCount $l2Gate.latest.realTargets) -gt 0) {
@@ -658,6 +659,22 @@ if ($l2Gate -and $l2Gate.latest) {
             path = $_.path
             resource_type = $_.resource_type
             reasons = $_.reasons
+          }
+        })
+      }
+      if ($diagnostics -and $diagnostics.allowlist_review_candidates) {
+        $l2AllowlistReviewCandidates += @($diagnostics.allowlist_review_candidates | ForEach-Object {
+          [pscustomobject]@{
+            target = $targetProperty.Name
+            evidenceKind = $bucket.kind
+            count = $_.count
+            method = $_.method
+            host = $_.host
+            path = $_.path
+            resource_type = $_.resource_type
+            reasons = $_.reasons
+            review_only = $_.review_only
+            allowlist_applied = $_.allowlist_applied
           }
         })
       }
@@ -736,6 +753,7 @@ $result = [pscustomobject]@{
   postFinalReportQa = $null
   l2ProbePlan = $l2ProbePlan
   l2ProbeEvidenceSummary = $l2ProbeEvidenceSummary
+  l2AllowlistReviewCandidates = $l2AllowlistReviewCandidates
   gates = @{
     l2 = $l2Gate
     l3 = $l3Gate
@@ -879,6 +897,18 @@ if ($l2ProbeEvidenceSummary.Count -gt 0) {
   }
 } else {
   $summaryLines.Add("- No L2 readonly probe evidence was available in the workspace snapshot.")
+}
+$summaryLines.Add("")
+$summaryLines.Add("## L2 Allowlist Review Candidates")
+if ($l2AllowlistReviewCandidates.Count -gt 0) {
+  $summaryLines.Add("- These entries are manual review only; not an L2 pass and not automatically allowlisted.")
+  foreach ($candidate in $l2AllowlistReviewCandidates) {
+    $summaryLines.Add("- $($candidate.target) [$($candidate.evidenceKind)] $($candidate.method) $($candidate.host)$($candidate.path) x$($candidate.count) / $($candidate.resource_type)")
+    $summaryLines.Add("  - reasons: $($candidate.reasons -join ', ')")
+    $summaryLines.Add("  - review_only=$($candidate.review_only); allowlist_applied=$($candidate.allowlist_applied)")
+  }
+} else {
+  $summaryLines.Add("- No L2 allowlist review candidates were available in the workspace snapshot.")
 }
 $summaryLines.Add("")
 $summaryLines.Add("## L2 Recheck Plan")
