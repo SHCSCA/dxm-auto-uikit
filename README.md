@@ -125,7 +125,7 @@ python3 -m pytest tests -q
 - 前端：`cd app/frontend && npm run build`
 - L1：`python tools/probes/l1_selector_replay.py --output-dir data/l1_selector_replay`
 - L2：需要真实店小秘登录态，双目标 `data_acquisition` / `draft_box` 全部通过后才允许 L3
-- 浏览器 QA：前后端启动后运行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\qa-browser-check.ps1`，输出 `outputs/browser-checks/qa-browser-check.json`、两张页面截图、`qa-console.jsonl` 和 `qa-network.json`；JSON 会记录浏览器/OS/git/script hash，并断言无 console error、无网络失败、无 4xx/5xx、无非 GET、无外部 host
+- 浏览器 QA：前后端启动后运行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\qa-browser-check.ps1`，输出 `outputs/browser-checks/qa-browser-check.json`、桌面/移动页面截图、`qa-console.jsonl`、`qa-network.json` 和 `qa-blocked-actions.json`；JSON 会记录浏览器/OS/git/script hash，并断言无 console error、无网络失败、无 4xx/5xx、无非 GET、无外部 origin，且本地启动与直接 DXM 写入端点均被 403 阻断
 
 本地工作台交付自检（推荐给验收人）：
 

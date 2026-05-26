@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useEffect, useMemo, useRef, type ReactNode } from 'react'
 import type { WorkbenchSection } from '../types'
 
 const navItems: Array<{ id: WorkbenchSection; label: string; short: string }> = [
@@ -28,6 +28,16 @@ export function AppShell({
   onToggleSidebar,
   sourceLabel,
 }: AppShellProps) {
+  const mainRef = useRef<HTMLElement | null>(null)
+  const activeLabel = useMemo(
+    () => navItems.find((item) => item.id === activeSection)?.label ?? '工作台',
+    [activeSection],
+  )
+
+  useEffect(() => {
+    mainRef.current?.focus({ preventScroll: true })
+  }, [activeSection])
+
   return (
     <div className={`app-shell ${sidebarCollapsed ? 'is-collapsed' : ''}`}>
       <aside className="sidebar" aria-label="运营工作台导航">
@@ -66,7 +76,8 @@ export function AppShell({
           </div>
         )}
       </aside>
-      <main className="workspace" tabIndex={-1}>
+      <main ref={mainRef} className="workspace" tabIndex={-1} aria-label={`${activeLabel}主内容`}>
+        <span className="sr-only" aria-live="polite">当前页面：{activeLabel}</span>
         {children}
       </main>
     </div>

@@ -153,15 +153,16 @@ export function ConfigCenter({ workspace }: CommonProps) {
       </div>
 
       <div className="module-card span-3">
-        <ModuleHead title="模板清单" meta="现有 API + fallback" />
+        <ModuleHead title="模板清单" meta="现有 API + 安全空态" />
         <div className="table-wrap">
           <table>
+            <caption>配置模板清单</caption>
             <thead>
               <tr>
-                <th>类型</th>
-                <th>模板名</th>
-                <th>绑定范围</th>
-                <th>状态</th>
+                <th scope="col">类型</th>
+                <th scope="col">模板名</th>
+                <th scope="col">绑定范围</th>
+                <th scope="col">状态</th>
               </tr>
             </thead>
             <tbody>
@@ -908,7 +909,7 @@ function EvidenceRow({ evidence }: { evidence: Evidence }) {
         <span>{acceptance}</span>
         <small>{formatTime(evidence.created_at)} / {evidence.evidence_type}</small>
       </div>
-      {url ? <a href={url} target="_blank" rel="noreferrer">查看证据</a> : <span className="status-pill muted">无文件</span>}
+      {url ? <a href={url} target="_blank" rel="noreferrer" aria-label={`查看证据：${title}`}>查看证据</a> : <span className="status-pill muted">无文件</span>}
     </article>
   )
 }
@@ -923,7 +924,7 @@ function EvidencePointCard({ point }: { point: EvidencePoint }) {
       <span className="status-pill muted">{point.kind}</span>
       <strong>{title}</strong>
       <small>{point.created_at ? formatTime(point.created_at) : '结构化报告项'}</small>
-      {url ? <a href={url} target="_blank" rel="noreferrer">查看</a> : <span>无文件</span>}
+      {url ? <a href={url} target="_blank" rel="noreferrer" aria-label={`查看证据项：${title}`}>查看</a> : <span>无文件</span>}
     </article>
   )
 }
@@ -952,7 +953,7 @@ function ReportCard({ report }: { report: Report }) {
       <p>{humanReportSummary(report)}</p>
       <div className="report-card__footer">
         <small>{report.created_at ? formatTime(report.created_at) : '待生成时间'}</small>
-        {url ? <a href={url} target="_blank" rel="noreferrer">打开报告</a> : <span>等待文件</span>}
+        {url ? <a href={url} target="_blank" rel="noreferrer" aria-label={`打开报告：${String(report.title ?? report.report_type ?? `报告 #${report.id}`)}`}>打开报告</a> : <span>等待文件</span>}
       </div>
     </article>
   )

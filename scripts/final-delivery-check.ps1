@@ -377,8 +377,10 @@ $result = [pscustomobject]@{
     taskCenterScreenshot = (Join-Path $browserQaOutDir "qa-task-center.png")
     executionConsoleScreenshot = (Join-Path $browserQaOutDir "qa-execution-console.png")
     reportCenterScreenshot = (Join-Path $browserQaOutDir "qa-report-center.png")
+    mobileTaskScreenshot = (Join-Path $browserQaOutDir "qa-mobile-task-center.png")
     qaConsole = (Join-Path $browserQaOutDir "qa-console.jsonl")
     qaNetwork = (Join-Path $browserQaOutDir "qa-network.json")
+    qaBlockedActions = (Join-Path $browserQaOutDir "qa-blocked-actions.json")
   }
 }
 
@@ -441,8 +443,10 @@ $summaryLines.Add("- Browser QA Markdown: $($result.artifacts.browserQaMarkdown)
 $summaryLines.Add("- Task screenshot: $($result.artifacts.taskCenterScreenshot)")
 $summaryLines.Add("- Console screenshot: $($result.artifacts.executionConsoleScreenshot)")
 $summaryLines.Add("- Report screenshot: $($result.artifacts.reportCenterScreenshot)")
+$summaryLines.Add("- Mobile task screenshot: $($result.artifacts.mobileTaskScreenshot)")
 $summaryLines.Add("- Console sidecar: $($result.artifacts.qaConsole)")
 $summaryLines.Add("- Network sidecar: $($result.artifacts.qaNetwork)")
+$summaryLines.Add("- Blocked actions sidecar: $($result.artifacts.qaBlockedActions)")
 $summaryLines.Add("")
 $summaryLines.Add("## Worktree")
 if ([string]::IsNullOrWhiteSpace($preGitStatus)) {

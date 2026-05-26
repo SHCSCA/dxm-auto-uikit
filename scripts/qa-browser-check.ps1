@@ -229,6 +229,24 @@ const clickedReports = await clickText(text.reports);
 await new Promise(r => setTimeout(r, 700));
 const reportText = await bodyText();
 const reportShot = await screenshot('qa-report-center');
+await send('Emulation.setDeviceMetricsOverride', {
+  width: 390,
+  height: 844,
+  deviceScaleFactor: 1,
+  mobile: true,
+});
+await send('Emulation.setTouchEmulationEnabled', { enabled: true });
+await send('Page.navigate', { url: targetUrl });
+await new Promise(r => setTimeout(r, 1400));
+const mobileInitialText = await bodyText();
+const clickedMobileTasks = await clickText(text.tasks);
+await new Promise(r => setTimeout(r, 700));
+const mobileTaskText = await bodyText();
+const mobileReflow = await evalValue('document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1');
+const mobileOverflow = await evalValue('(() => { const viewportWidth = document.documentElement.clientWidth; const candidates = [...document.querySelectorAll("button, a, code, .guard-chip, .status-pill, .module-head, .module-card")]; const bad = candidates.map(el => ({ el, rect: el.getBoundingClientRect() })).filter(({ rect }) => rect.width > 0 && (rect.left < -1 || rect.right > viewportWidth + 1)); return { ok: bad.length === 0, count: bad.length, samples: bad.slice(0, 5).map(({ el, rect }) => ({ tag: el.tagName, text: String(el.innerText || el.textContent || "").trim().slice(0, 80), left: Math.round(rect.left), right: Math.round(rect.right), width: Math.round(rect.width) })) }; })()');
+const mobileShot = await screenshot('qa-mobile-task-center');
+await send('Emulation.clearDeviceMetricsOverride');
+await send('Emulation.setTouchEmulationEnabled', { enabled: false });
 function sha256(path) {
   return crypto.createHash('sha256').update(fs.readFileSync(path)).digest('hex');
 }
@@ -247,6 +265,7 @@ fs.writeFileSync(
 const networkPath = outDir + '/qa-network.json';
 fs.writeFileSync(networkPath, JSON.stringify(networkEvents, null, 2));
 const allowedHostname = new URL(targetUrl).hostname;
+const allowedOrigins = new Set([new URL(targetUrl).origin, new URL(apiBase).origin]);
 const failedNetworkEvents = networkEvents.filter(event => event.type === 'failed');
 const badNetworkResponses = networkEvents.filter(event => event.type === 'response' && (event.status < 200 || event.status >= 400));
 const unexpectedNetworkMethods = networkEvents.filter(event => event.type === 'request' && event.method !== 'GET');
@@ -254,36 +273,88 @@ const unexpectedNetworkHosts = networkEvents.filter(event => {
   if (!event.url || !(event.type === 'request' || event.type === 'response')) return false;
   try {
     const parsed = new URL(event.url);
-    return parsed.protocol.startsWith('http') && parsed.hostname !== allowedHostname;
+    return parsed.protocol.startsWith('http') && !allowedOrigins.has(parsed.origin);
   } catch {
     return true;
   }
 });
-const screenshotPaths = [taskShot, consoleShot, reportShot];
+const screenshotPaths = [taskShot, consoleShot, reportShot, mobileShot];
 let blockedStartStatus = null;
 let blockedAgentConsoleStatus = null;
+let blockedActionChecks = [];
+let beforeTaskStatus = null;
+let afterTaskStatus = null;
+async function postBlockedAction(name, path, body) {
+  const response = await fetch(apiBase + path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const rawBody = await response.text();
+  let parsedBody = null;
+  try {
+    parsedBody = JSON.parse(rawBody);
+  } catch {
+    parsedBody = rawBody;
+  }
+  return {
+    name,
+    path,
+    status: response.status,
+    detail: parsedBody && typeof parsedBody === 'object' ? parsedBody.detail : String(rawBody).slice(0, 240),
+  };
+}
 try {
   const workspaceResponse = await fetch(apiBase + '/api/delivery/workspace');
   const workspacePayload = await workspaceResponse.json();
   const taskId = workspacePayload?.current_task?.id;
+  beforeTaskStatus = workspacePayload?.current_task ? {
+    id: taskId,
+    status: workspacePayload.current_task.status,
+    totalJobs: workspacePayload.current_task.total_jobs,
+    completedJobs: workspacePayload.current_task.completed_jobs,
+    failedJobs: workspacePayload.current_task.failed_jobs,
+  } : null;
   if (taskId) {
-    const startResponse = await fetch(apiBase + '/api/tasks/' + taskId + '/start', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({}),
-    });
-    blockedStartStatus = startResponse.status;
-    const consoleResponse = await fetch(apiBase + '/api/agent-console/start', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ task_id: taskId, launch_browser: true }),
-    });
-    blockedAgentConsoleStatus = consoleResponse.status;
+    const directPayload = {
+      action: 'note',
+      note_text: 'QA_BLOCKED_ACTION_SHOULD_NOT_WRITE',
+      product_query: 'QA_BLOCKED_PRODUCT',
+      store_name: 'Dang Kang',
+      task_id: taskId,
+    };
+    blockedActionChecks = [
+      await postBlockedAction('task_start', '/api/tasks/' + taskId + '/start', {}),
+      await postBlockedAction('agent_console_start', '/api/agent-console/start', { task_id: taskId, launch_browser: true }),
+      await postBlockedAction('dxm_draft_box_action', '/api/dxm/draft-box/action', directPayload),
+      await postBlockedAction('dxm_claim_product', '/api/dxm/workflow/claim-product', directPayload),
+      await postBlockedAction('dxm_open_editor', '/api/dxm/workflow/open-editor', { ...directPayload, action: 'edit' }),
+    ];
+    blockedStartStatus = blockedActionChecks.find(item => item.name === 'task_start')?.status ?? null;
+    blockedAgentConsoleStatus = blockedActionChecks.find(item => item.name === 'agent_console_start')?.status ?? null;
+    const afterWorkspaceResponse = await fetch(apiBase + '/api/delivery/workspace');
+    const afterWorkspacePayload = await afterWorkspaceResponse.json();
+    afterTaskStatus = afterWorkspacePayload?.current_task ? {
+      id: afterWorkspacePayload.current_task.id,
+      status: afterWorkspacePayload.current_task.status,
+      totalJobs: afterWorkspacePayload.current_task.total_jobs,
+      completedJobs: afterWorkspacePayload.current_task.completed_jobs,
+      failedJobs: afterWorkspacePayload.current_task.failed_jobs,
+    } : null;
   }
 } catch {
   blockedStartStatus = 'error';
   blockedAgentConsoleStatus = 'error';
 }
+const blockedActionsPath = outDir + '/qa-blocked-actions.json';
+fs.writeFileSync(blockedActionsPath, JSON.stringify({
+  apiBase,
+  beforeTaskStatus,
+  afterTaskStatus,
+  checks: blockedActionChecks,
+}, null, 2));
+const blockedActionsAllForbidden = blockedActionChecks.length === 5 && blockedActionChecks.every(item => item.status === 403);
+const taskStateUnchanged = JSON.stringify(beforeTaskStatus) === JSON.stringify(afterTaskStatus);
 const result = {
   checkedAt: new Date().toISOString(),
   url: targetUrl,
@@ -296,14 +367,19 @@ const result = {
     taskRecoveryActions: (taskText.includes(text.readonlyDiag) || taskText.includes(text.l2BlockHelp)) && taskText.includes(text.evidenceGap),
     taskStartBlockedCopy: taskText.includes(text.forbiddenStart),
     taskStartButtonDisabled: taskStartDisabled,
+    mobileLoaded: mobileInitialText.includes(text.hero) || mobileInitialText.includes(text.appName),
+    mobileNavWorked: clickedMobileTasks && mobileTaskText.includes(text.localWrite),
+    mobileNoHorizontalOverflow: mobileReflow === true && mobileOverflow.ok === true,
     consoleReadonlyCopy: consoleText.includes(text.readonly) && consoleText.includes(text.noSaveStart),
     consoleNoFakeBrowser: consoleText.includes(text.noBrowser) && consoleText.includes(text.noFakeEvidence),
     consoleStartButtonDisabled: consoleStartDisabled,
     consoleNoFakePlaceholder: !(consoleText + ' ' + taskText).includes(text.fakePlaceholder),
     reportDeliveryCheckVisible: reportText.includes(text.finalCheck) && reportText.includes(text.expectedBlocked),
     noDeveloperFallbackCopy: !(initialText + ' ' + taskText + ' ' + consoleText + ' ' + reportText).includes(text.fallbackCopy),
-    localStartPostBlocked: typeof blockedStartStatus === 'number' && blockedStartStatus >= 400,
+    localStartPostBlocked: blockedStartStatus === 403,
     localAgentConsolePostBlocked: blockedAgentConsoleStatus === 403,
+    localDirectDxmPostsBlocked: blockedActionsAllForbidden,
+    blockedPostsDidNotMutateTask: taskStateUnchanged,
     noOldActionCopy: !(consoleText + ' ' + taskText).includes(text.oldSaveOnly)
       && !(consoleText + ' ' + taskText).includes(text.oldWaitSave)
       && !(consoleText + ' ' + taskText).includes(text.oldVisibleBrowser)
@@ -314,7 +390,8 @@ const result = {
     networkHttpOk: badNetworkResponses.length === 0,
     networkGetOnly: unexpectedNetworkMethods.length === 0,
     networkLocalOnly: unexpectedNetworkHosts.length === 0,
-    sidecarsWritten: fs.existsSync(consolePath) && fs.existsSync(networkPath),
+    screenshotsWritten: screenshotPaths.every(path => fs.existsSync(path)),
+    sidecarsWritten: fs.existsSync(consolePath) && fs.existsSync(networkPath) && fs.existsSync(blockedActionsPath),
   },
   consoleErrors,
   networkSummary: {
@@ -324,18 +401,22 @@ const result = {
     unexpectedMethodCount: unexpectedNetworkMethods.length,
     unexpectedHostCount: unexpectedNetworkHosts.length,
     allowedHostname,
+    allowedOrigins: [...allowedOrigins],
     blockedStartStatus,
     blockedAgentConsoleStatus,
+    mobileOverflow,
   },
   screenshots: screenshotPaths,
   screenshotHashes: Object.fromEntries(screenshotPaths.map(path => [path, sha256(path)])),
   sidecars: {
     console: consolePath,
     network: networkPath,
+    blockedActions: blockedActionsPath,
   },
   sidecarHashes: {
     [consolePath]: sha256(consolePath),
     [networkPath]: sha256(networkPath),
+    [blockedActionsPath]: sha256(blockedActionsPath),
   },
   environment: {
     node: process.version,
@@ -390,6 +471,9 @@ if (!result.ok) process.exit(1);
 "@
   [System.IO.File]::WriteAllText($scriptPath, $nodeScript, [System.Text.Encoding]::UTF8)
   & $node $scriptPath
+  if ($LASTEXITCODE -ne 0) {
+    throw "Browser QA node check failed with exit code $LASTEXITCODE."
+  }
 } finally {
   if ($proc -and -not $proc.HasExited) {
     Stop-Process -Id $proc.Id -Force
