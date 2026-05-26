@@ -84,12 +84,53 @@ def test_report_center_treats_missing_l3_evidence_as_expected_when_real_write_bl
 
     assert "realWriteExpectedBlocked" in report_center_section
     assert "EvidenceCheckRow" in report_center_section
+    assert "BusinessReportCheckRow" in report_center_section
+    assert "PostL3ReportCheckRow" in report_center_section
     assert "label=\"保存结果\"" in source
     assert "label=\"未发布证明\"" in source
     assert "label=\"网络/HAR\"" in source
+    assert "业务保存报告 0 份（L3 后置，预期阻断）" in source
     assert "（预期阻断）" in source
     assert "state={'locked'}" in source
     assert "L3 未放行前不要求生成真实保存证据" in source
+    assert "真实写入 BLOCKED 时不要求生成业务保存报告" in source
+    assert "L3 后置报告必须覆盖" in source
+    assert "L3 放行后要求" in source
+    assert "CheckRow label={`报告 ${reportSummary?.total_reports ?? reports.length} 份`}" not in report_center_section
+
+
+def test_safety_bar_downgrades_l3_post_evidence_gaps_when_real_write_blocked():
+    source = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
+
+    assert "l3PostEvidenceGapIds" in source
+    assert "visibleBlockerGaps" in source
+    assert "l3PostEvidenceGapCount" in source
+    assert "gap-save-result" in source
+    assert "gap-unpublished-proof" in source
+    assert "gap-network-save-response" in source
+    assert "L3 后置证据" in source
+    assert "预期阻断" in source
+    assert "blockerGaps.slice(0, 2)" not in source
+
+
+def test_dashboard_and_exception_gap_lists_present_l3_post_evidence_as_locked_scope():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    dashboard_section = source[source.index("export function Dashboard"):source.index("function RegressionGateGrid")]
+    exception_section = source[source.index("export function ExceptionQueue"):source.index("export function ReportCenter")]
+    gap_list_section = source[source.index("function GapList"):source.index("function CheckRow")]
+
+    assert "presentAcceptanceGaps" in source
+    assert "isRealWriteExpectedBlocked" in source
+    assert "l3PostEvidenceGapIds" in source
+    assert "presentedAcceptanceGaps" in dashboard_section
+    assert "presentedAcceptanceGaps" in exception_section
+    assert "GapList gaps={presentedAcceptanceGaps" in dashboard_section
+    assert "GapList gaps={presentedAcceptanceGaps}" in exception_section
+    assert "L3 后置：" in source
+    assert "真实写入放行后再补齐" in source
+    assert "severity: 'watch'" in source
+    assert "data-gap-id={gap.id}" in gap_list_section
+    assert "data-severity={gap.severity}" in gap_list_section
 
 
 def test_task_and_evidence_center_describe_l3_blocked_as_expected_lock():

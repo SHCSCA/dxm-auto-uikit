@@ -190,6 +190,17 @@ def test_final_delivery_check_captures_final_report_center_after_final_json_writ
     assert "expectedLockedEvidence" in qa_script
     assert "finalReportExpectedLockedEvidenceRows" in qa_script
     assert "finalReportLockedEvidenceRowsNotWarn" in qa_script
+    assert "reportBusinessReportLocked" in qa_script
+    assert "reportPostL3ChecklistLocked" in qa_script
+    assert "finalReportBusinessReportLocked" in qa_script
+    assert "finalReportPostL3ChecklistLocked" in qa_script
+    assert "finalReportNoL3PostEvidenceBlockerChips" in qa_script
+    assert "guardDangerTexts" in qa_script
+    assert "noL3PostEvidenceDangerChips" in qa_script
+    assert "formatQaState" in qa_script
+    assert "\\u5f85\\u5237\\u65b0/\\u672a\\u8fd0\\u884c" in qa_script
+    assert "finalCheckSummary?.browser_qa_ok === true ? 'PASS' : 'FAIL'" not in qa_script
+    assert "finalCheckSummary?.post_final_report_qa_ok === true ? 'PASS' : 'FAIL'" not in qa_script
     assert "保存结果 0 条（预期阻断）" not in qa_script
     assert 'clickSelector(\'[data-section="reports"]\')' in qa_script
     assert 'reportCenterSectionVisible' in qa_script

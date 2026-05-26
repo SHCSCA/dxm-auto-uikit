@@ -1,6 +1,8 @@
 import type { DeliveryWorkspace, Task } from '../types'
 import { humanTaskStatus } from '../workspace'
 
+const l3PostEvidenceGapIds = new Set(['gap-save-result', 'gap-unpublished-proof', 'gap-network-save-response'])
+
 type SafetyStatusBarProps = {
   workspace: DeliveryWorkspace
   selectedTask: Task | null
@@ -12,12 +14,15 @@ export function SafetyStatusBar({ workspace, selectedTask, busy, onRefresh }: Sa
   const activeTaskLabel = selectedTask ? `#${selectedTask.id} ${humanTaskStatus(selectedTask.status)}` : '未选择任务'
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
   const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
-  const blockerGaps = workspace.acceptanceGaps.filter((gap) => gap.severity === 'blocker')
   const publishGuardReasons = workspace.publishGuardState?.reasons ?? []
   const l2BlocksRealSave = l2Gate?.status !== 'passed'
   const l3BlocksRealSave = l3Gate?.status === 'blocked'
   const l3NeedsApproval = l3Gate?.status !== 'passed'
-  const hasBlocker = blockerGaps.length > 0
+  const realWriteExpectedBlocked = l2BlocksRealSave || l3NeedsApproval
+  const blockerGaps = workspace.acceptanceGaps.filter((gap) => gap.severity === 'blocker')
+  const visibleBlockerGaps = blockerGaps.filter((gap) => !(realWriteExpectedBlocked && l3PostEvidenceGapIds.has(gap.id)))
+  const l3PostEvidenceGapCount = blockerGaps.filter((gap) => realWriteExpectedBlocked && l3PostEvidenceGapIds.has(gap.id)).length
+  const hasBlocker = visibleBlockerGaps.length > 0
   const tone = l2BlocksRealSave || l3BlocksRealSave
     ? 'danger'
     : workspace.source === 'mock' || workspace.evidenceGrade?.grade === 'C' || hasBlocker
@@ -35,7 +40,8 @@ export function SafetyStatusBar({ workspace, selectedTask, busy, onRefresh }: Sa
     l3Gate ? `L3：${l3Gate.detail}` : 'L3：缺少真实保存门禁状态',
   ]
   const blockerDetails = [
-    ...blockerGaps.map((gap) => `blocker：${gap.title} - ${gap.detail}`),
+    ...visibleBlockerGaps.map((gap) => `blocker：${gap.title} - ${gap.detail}`),
+    ...(l3PostEvidenceGapCount > 0 ? [`L3 后置证据：${l3PostEvidenceGapCount} 项预期阻断 - 真实写入放行后再补齐`] : []),
     ...publishGuardReasons.map((reason) => `publish guard：${reason}`),
   ]
   const detail = tone === 'danger'
@@ -56,9 +62,12 @@ export function SafetyStatusBar({ workspace, selectedTask, busy, onRefresh }: Sa
       <div className="safety-bar__meta" aria-label="禁止入口检查">
         <span className={`guard-chip guard-chip--${l2BlocksRealSave ? 'danger' : 'ok'}`}>L2：{humanGateStatus(l2Gate?.status ?? 'not_run')}</span>
         <span className={`guard-chip guard-chip--${l3BlocksRealSave ? 'danger' : l3NeedsApproval ? 'warn' : 'ok'}`}>L3：{l3NeedsApproval ? `不可启动 / ${humanGateStatus(l3Gate?.status ?? 'not_run')}` : humanGateStatus(l3Gate?.status ?? 'not_run')}</span>
-        {blockerGaps.slice(0, 2).map((gap) => (
+        {visibleBlockerGaps.slice(0, 2).map((gap) => (
           <span key={gap.id} className="guard-chip guard-chip--danger">blocker：{gap.title}</span>
         ))}
+        {l3PostEvidenceGapCount > 0 && (
+          <span className="guard-chip guard-chip--warn">L3 后置证据：{l3PostEvidenceGapCount} 项预期阻断</span>
+        )}
         {publishGuardReasons.slice(0, 2).map((reason) => (
           <span key={reason} className="guard-chip guard-chip--danger">guard：{reason}</span>
         ))}

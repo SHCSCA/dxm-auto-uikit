@@ -23,6 +23,8 @@ type CommonProps = {
   selectedTask: Task | null
 }
 
+const l3PostEvidenceGapIds = new Set(['gap-save-result', 'gap-unpublished-proof', 'gap-network-save-response'])
+
 type TaskCenterProps = CommonProps & {
   busy: boolean
   onSelectTask: (taskId: number) => void
@@ -47,7 +49,10 @@ export function Dashboard({ workspace, selectedTask }: CommonProps) {
   const totalJobs = workspace.tasks.reduce((sum, task) => sum + task.total_jobs, 0)
   const completedJobs = workspace.tasks.reduce((sum, task) => sum + task.completed_jobs, 0)
   const failedJobs = workspace.tasks.reduce((sum, task) => sum + task.failed_jobs, 0)
-  const blockerCount = workspace.acceptanceGaps.filter((gap) => gap.severity === 'blocker').length
+  const realWriteExpectedBlocked = isRealWriteExpectedBlocked(workspace)
+  const presentedAcceptanceGaps = presentAcceptanceGaps(workspace.acceptanceGaps, realWriteExpectedBlocked)
+  const blockerCount = presentedAcceptanceGaps.filter((gap) => gap.severity === 'blocker').length
+  const l3PostEvidenceCount = presentedAcceptanceGaps.filter((gap) => l3PostEvidenceGapIds.has(gap.id)).length
   const referenceReady = workspace.dxmReferenceTemplates.filter((item) => item.templateNames.length).length
   const grade = workspace.evidenceGrade?.grade ?? 'C'
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
@@ -77,7 +82,7 @@ export function Dashboard({ workspace, selectedTask }: CommonProps) {
       <MetricCard label="商品数" value={workspace.products.length} detail="已进入保存核验视图" tone="blue" />
       <MetricCard label="任务进度" value={`${completedJobs}/${Math.max(totalJobs, 1)}`} detail={`失败 ${failedJobs} 项`} tone="green" />
       <MetricCard label="模板映射" value={`${referenceReady}/${workspace.dxmReferenceTemplates.length}`} detail="dxm_reference_templates 覆盖" tone="yellow" />
-      <MetricCard label="证据等级" value={grade} detail={`阻断缺口 ${blockerCount} 项`} tone={grade === 'A' ? 'green' : grade === 'B' ? 'yellow' : 'red'} />
+      <MetricCard label="证据等级" value={grade} detail={`阻断缺口 ${blockerCount} 项${l3PostEvidenceCount ? ` / L3 后置 ${l3PostEvidenceCount} 项` : ''}`} tone={grade === 'A' ? 'green' : grade === 'B' ? 'yellow' : 'red'} />
 
       <div className="module-card span-3">
         <ModuleHead title="回归门禁矩阵" meta="L0-L3" />
@@ -85,8 +90,8 @@ export function Dashboard({ workspace, selectedTask }: CommonProps) {
       </div>
 
       <div className="module-card span-2">
-        <ModuleHead title="真实验收缺口" meta={`${workspace.acceptanceGaps.length} 项`} />
-        <GapList gaps={workspace.acceptanceGaps.slice(0, 4)} />
+        <ModuleHead title="真实验收缺口" meta={`${presentedAcceptanceGaps.length} 项`} />
+        <GapList gaps={presentedAcceptanceGaps.slice(0, 4)} />
       </div>
       <div className="module-card">
         <ModuleHead title="保存隔离检查" meta="安全条已启用" />
@@ -705,6 +710,7 @@ export function EvidenceTimeline({
 
 export function ExceptionQueue({ workspace, selectedTask }: CommonProps) {
   const exceptions = selectedTask ? workspace.exceptions.filter((item) => item.task_id === selectedTask.id) : workspace.exceptions
+  const presentedAcceptanceGaps = presentAcceptanceGaps(workspace.acceptanceGaps, isRealWriteExpectedBlocked(workspace))
   return (
     <section className="module-layout" aria-label="异常池">
       <div className="module-card span-2">
@@ -719,8 +725,8 @@ export function ExceptionQueue({ workspace, selectedTask }: CommonProps) {
         </div>
       </div>
       <div className="module-card">
-        <ModuleHead title="真实验收缺口" meta={`${workspace.acceptanceGaps.length} 项`} />
-        <GapList gaps={workspace.acceptanceGaps} />
+        <ModuleHead title="真实验收缺口" meta={`${presentedAcceptanceGaps.length} 项`} />
+        <GapList gaps={presentedAcceptanceGaps} />
       </div>
     </section>
   )
@@ -738,6 +744,7 @@ export function ReportCenter({
   const l2ProbePlan = workspace.l2ProbePlan
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
   const realWriteExpectedBlocked = finalCheck?.real_dxm_write_readiness === 'BLOCKED' && finalCheck?.real_dxm_mutation_allowed !== true
+  const businessReportCount = reportSummary?.total_reports ?? reports.length
   const saveResultCount = reportSummary?.save_results?.length ?? 0
   const unpublishedProofCount = reportSummary?.published_proofs?.length ?? 0
   const networkHarCount = (reportSummary?.network_save_results?.length ?? 0) + (reportSummary?.har_summaries?.length ?? 0)
@@ -751,7 +758,7 @@ export function ReportCenter({
       <div className="module-card span-3">
         <ModuleHead title="保存隔离摘要" meta={workspace.publishGuardState?.status ?? '等待执行'} />
         <div className="report-check-grid">
-          <CheckRow label={`报告 ${reportSummary?.total_reports ?? reports.length} 份`} ok={(reportSummary?.total_reports ?? reports.length) > 0} />
+          <BusinessReportCheckRow count={businessReportCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
           <EvidenceCheckRow label="保存结果" count={saveResultCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
           <EvidenceCheckRow label="未发布证明" count={unpublishedProofCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
           <EvidenceCheckRow label="网络/HAR" count={networkHarCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
@@ -768,8 +775,10 @@ export function ReportCenter({
           ))}
           {!reports.length && (
             <EmptyState
-              title="暂无报告"
-              detail="L3 金丝雀完成并生成未发布证明后，这里会展示报告和证据路径。当前可先查看 L2 诊断和证据缺口。"
+              title={realWriteExpectedBlocked ? 'L3 真实保存报告待放行' : '暂无报告'}
+              detail={realWriteExpectedBlocked
+                ? '真实写入 BLOCKED 时不要求生成业务保存报告；本地交付自检报告见上方最近交付自检。'
+                : 'L3 金丝雀完成并生成未发布证明后，这里会展示报告和证据路径。当前可先查看 L2 诊断和证据缺口。'}
               actions={(
                 <>
                   <button className="button button--secondary" type="button" onClick={onShowEvidence}>查看证据缺口</button>
@@ -808,12 +817,12 @@ export function ReportCenter({
         <p>{l2ProbePlan.safetyNotes.join(' ')}</p>
       </div>
       <div className="module-card span-3">
-        <ModuleHead title="报告必须覆盖" meta="交付检查表" />
+        <ModuleHead title={realWriteExpectedBlocked ? 'L3 后置报告必须覆盖' : '报告必须覆盖'} meta={realWriteExpectedBlocked ? '真实写入放行后' : '交付检查表'} />
         <div className="report-check-grid">
-          <CheckRow label="配置模板命中" ok={workspace.dxmReferenceTemplates.some((item) => item.templateNames.length)} />
-          <CheckRow label="执行步骤与结果" ok={workspace.logs.length > 0} />
-          <CheckRow label="证据等级 A/B/C" ok={workspace.evidences.length > 0} />
-          <CheckRow label="验收缺口已列明" ok={workspace.acceptanceGaps.length > 0} />
+          <PostL3ReportCheckRow label="配置模板命中" ok={workspace.dxmReferenceTemplates.some((item) => item.templateNames.length)} realWriteExpectedBlocked={realWriteExpectedBlocked} />
+          <PostL3ReportCheckRow label="执行步骤与结果" ok={workspace.logs.length > 0} realWriteExpectedBlocked={realWriteExpectedBlocked} />
+          <PostL3ReportCheckRow label="证据等级 A/B/C" ok={workspace.evidences.length > 0} realWriteExpectedBlocked={realWriteExpectedBlocked} />
+          <PostL3ReportCheckRow label="验收缺口已列明" ok={workspace.acceptanceGaps.length > 0} realWriteExpectedBlocked={realWriteExpectedBlocked} />
         </div>
       </div>
     </section>
@@ -1131,7 +1140,7 @@ function GapList({ gaps }: { gaps: AcceptanceGap[] }) {
   return (
     <div className="gap-list">
       {gaps.map((gap) => (
-        <article key={gap.id} className={`gap-row severity-${gap.severity}`}>
+        <article key={gap.id} className={`gap-row severity-${gap.severity}`} data-gap-id={gap.id} data-severity={gap.severity}>
           <div>
             <strong>{gap.title}</strong>
             <span>{gap.detail}</span>
@@ -1143,6 +1152,28 @@ function GapList({ gaps }: { gaps: AcceptanceGap[] }) {
   )
 }
 
+function isRealWriteExpectedBlocked(workspace: DeliveryWorkspace) {
+  const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
+  const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
+
+  return l2Gate?.status !== 'passed' || l3Gate?.status !== 'passed'
+}
+
+function presentAcceptanceGaps(gaps: AcceptanceGap[], realWriteExpectedBlocked: boolean): AcceptanceGap[] {
+  if (!realWriteExpectedBlocked) return gaps
+
+  return gaps.map((gap) => {
+    if (!l3PostEvidenceGapIds.has(gap.id)) return gap
+
+    return {
+      ...gap,
+      title: `L3 后置：${gap.title}`,
+      severity: 'watch',
+      detail: `${gap.detail}（预期阻断，真实写入放行后再补齐）`,
+    }
+  })
+}
+
 function CheckRow({ label, ok, testId, state }: { label: string; ok: boolean; testId?: string; state?: string }) {
   return (
     <div className={`check-row ${ok ? 'ok' : 'warn'}`} data-testid={testId} data-state={state}>
@@ -1152,12 +1183,28 @@ function CheckRow({ label, ok, testId, state }: { label: string; ok: boolean; te
   )
 }
 
+function BusinessReportCheckRow({ count, realWriteExpectedBlocked }: { count: number; realWriteExpectedBlocked: boolean }) {
+  if (count === 0 && realWriteExpectedBlocked) {
+    return <CheckRow label="业务保存报告 0 份（L3 后置，预期阻断）" ok={true} state={'locked'} />
+  }
+
+  return <CheckRow label={`业务保存报告 ${count} 份`} ok={count > 0} state={count > 0 ? 'present' : 'missing'} />
+}
+
 function EvidenceCheckRow({ label, count, realWriteExpectedBlocked }: { label: string; count: number; realWriteExpectedBlocked: boolean }) {
   if (count === 0 && realWriteExpectedBlocked) {
     return <CheckRow label={`${label} 0 条（预期阻断）`} ok={true} state={'locked'} />
   }
 
   return <CheckRow label={`${label} ${count} 条`} ok={count > 0} state={count > 0 ? 'present' : 'missing'} />
+}
+
+function PostL3ReportCheckRow({ label, ok, realWriteExpectedBlocked }: { label: string; ok: boolean; realWriteExpectedBlocked: boolean }) {
+  if (realWriteExpectedBlocked) {
+    return <CheckRow label={`${label}（L3 放行后要求）`} ok={true} state={'locked'} />
+  }
+
+  return <CheckRow label={label} ok={ok} state={ok ? 'present' : 'missing'} />
 }
 
 function DecisionRow({ label, status, detail }: { label: string; status: string; detail: string }) {

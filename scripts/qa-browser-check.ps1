@@ -303,6 +303,14 @@ const text = {
   saveResultLocked: '\u4fdd\u5b58\u7ed3\u679c 0 \u6761\uff08\u9884\u671f\u963b\u65ad\uff09',
   unpublishedProofLocked: '\u672a\u53d1\u5e03\u8bc1\u660e 0 \u6761\uff08\u9884\u671f\u963b\u65ad\uff09',
   networkHarLocked: '\u7f51\u7edc/HAR 0 \u6761\uff08\u9884\u671f\u963b\u65ad\uff09',
+  businessReportLocked: '\u4e1a\u52a1\u4fdd\u5b58\u62a5\u544a 0 \u4efd\uff08L3 \u540e\u7f6e\uff0c\u9884\u671f\u963b\u65ad\uff09',
+  postL3ChecklistLocked: 'L3 \u540e\u7f6e\u62a5\u544a\u5fc5\u987b\u8986\u76d6',
+  saveResultGapTitle: '\u7f3a\u5c11\u4fdd\u5b58\u7ed3\u679c',
+  unpublishedProofGapTitle: '\u7f3a\u5c11\u672a\u53d1\u5e03\u8bc1\u660e',
+  networkSaveResponseGapTitle: '\u4fdd\u5b58\u63a5\u53e3\u54cd\u5e94\u672a\u6355\u83b7',
+  oldSaveResultBlocker: 'blocker\uff1a\u7f3a\u5c11\u4fdd\u5b58\u7ed3\u679c',
+  oldUnpublishedProofBlocker: 'blocker\uff1a\u7f3a\u5c11\u672a\u53d1\u5e03\u8bc1\u660e',
+  oldNetworkHarBlocker: 'blocker\uff1a\u7f3a\u5c11\u7f51\u7edc/HAR',
   noRealWrite: '\u4e0d\u53ef\u6267\u884c\u771f\u5b9e\u5199\u5165',
   finalCheckCurrent: '\u81ea\u68c0\u8986\u76d6\u5f53\u524d\u4ee3\u7801',
   finalCheckStale: '\u81ea\u68c0\u672a\u8986\u76d6\u5f53\u524d\u4ee3\u7801',
@@ -329,6 +337,9 @@ const text = {
   oldAutomation: '\u65c1\u89c2\u81ea\u52a8\u5316',
   fakePlaceholder: '\u8bca\u65ad\u5360\u4f4d',
 };
+function formatQaState(value) {
+  return value === true ? 'PASS' : value === false ? 'FAIL' : '\u5f85\u5237\u65b0/\u672a\u8fd0\u884c';
+}
 if (reportOnlyFinal) {
   const clickedReports = await clickSelector('[data-section="reports"]') || await clickText(text.reports);
   await new Promise(r => setTimeout(r, 300));
@@ -336,15 +347,17 @@ if (reportOnlyFinal) {
   const expectedSourcePackage = finalCheckSummary?.source_package_check === 'NOT_REQUIRED'
     ? text.sourcePackageNotRequired
     : text.sourcePackageLabel + ' ' + String(finalCheckSummary?.source_package_check ?? '\u672a\u68c0\u67e5');
-  const expectedBrowserQa = text.browserQaLabel + ' ' + (finalCheckSummary?.browser_qa_ok === true ? 'PASS' : 'FAIL');
+  const expectedBrowserQa = text.browserQaLabel + ' ' + formatQaState(finalCheckSummary?.browser_qa_ok);
   const expectedLocalWorkbench = text.localWorkbenchLabel + ' ' + String(finalCheckSummary?.local_workbench_check ?? '\u672a\u68c0\u67e5');
-  const expectedPostFinalReportQa = text.finalReportCenterQa + ' ' + (finalCheckSummary?.post_final_report_qa_ok === true ? 'PASS' : 'FAIL');
+  const expectedPostFinalReportQa = text.finalReportCenterQa + ' ' + formatQaState(finalCheckSummary?.post_final_report_qa_ok);
+  const finalReportRealWriteBlocked = finalCheckSummary?.real_dxm_write_readiness === 'BLOCKED' && finalCheckSummary?.real_dxm_mutation_allowed !== true;
   const expectedLockedEvidence = [text.saveResultLocked, text.unpublishedProofLocked, text.networkHarLocked];
   const requiredReportFragments = [
     text.finalCheck,
     expectedLocalWorkbench,
     expectedBrowserQa,
     expectedSourcePackage,
+    ...(finalReportRealWriteBlocked ? [text.businessReportLocked, text.postL3ChecklistLocked] : []),
     ...(allowMissingPostFinalQa ? [] : ['qa-report-center-final.png']),
   ];
   const reportText = await waitForBodyIncludes(requiredReportFragments, 5000);
@@ -354,13 +367,26 @@ if (reportOnlyFinal) {
   const reportCenterSectionVisible = await evalValue('Boolean(document.querySelector("[data-testid=\\"report-center-section\\"]"))');
   const finalReportBlockedStatusTone = await evalValue('(() => { const row = document.querySelector(".delivery-readiness-row"); return Boolean(row && row.className.includes("is-blocked") && (row.innerText || "").includes("BLOCKED")); })()');
   const lockedEvidenceRows = await evalValue('(() => [...document.querySelectorAll(".check-row[data-state=\\"locked\\"]")].map(el => ({ text: el.innerText || "", className: el.className || "" })))()');
+  const guardDangerTexts = await evalValue('(() => [...document.querySelectorAll(".guard-chip--danger")].map(el => el.innerText || el.textContent || ""))()');
+  const noL3PostEvidenceDangerChips = Array.isArray(guardDangerTexts) && !guardDangerTexts.some(value => {
+    const chip = String(value || '');
+    return chip.includes(text.saveResultGapTitle)
+      || chip.includes(text.unpublishedProofGapTitle)
+      || chip.includes(text.networkSaveResponseGapTitle);
+  });
   const finalReportCenterQaDiagnostics = {
     expectedPostFinalReportQa,
     hasExpectedPostFinalReportQa: reportText.includes(expectedPostFinalReportQa),
     expectedLockedEvidence,
     lockedEvidenceRows,
+    guardDangerTexts,
     hasExpectedLockedEvidenceRows: expectedLockedEvidence.every(fragment => reportText.includes(fragment)),
     lockedEvidenceRowsNotWarn: Array.isArray(lockedEvidenceRows) && lockedEvidenceRows.length >= 3 && lockedEvidenceRows.every(row => !String(row.className || '').includes('warn')),
+    noL3PostEvidenceDangerChips,
+    noL3PostEvidenceBlockerChips: noL3PostEvidenceDangerChips
+      && !reportText.includes(text.oldSaveResultBlocker)
+      && !reportText.includes(text.oldUnpublishedProofBlocker)
+      && !reportText.includes(text.oldNetworkHarBlocker),
     hasFinalReportScreenshotName: reportText.includes('qa-report-center-final.png'),
     finalReportCenterQaDomState,
     finalReportCenterScreenshotDomPath,
@@ -410,8 +436,11 @@ if (reportOnlyFinal) {
       finalReportCenterShowsBlockedDxmState: reportText.includes(text.blockedExpectedState)
         && reportText.includes(text.noRealWrite)
         && finalReportBlockedStatusTone,
+      finalReportBusinessReportLocked: !finalReportRealWriteBlocked || reportText.includes(text.businessReportLocked),
+      finalReportPostL3ChecklistLocked: !finalReportRealWriteBlocked || reportText.includes(text.postL3ChecklistLocked),
       finalReportExpectedLockedEvidenceRows: finalReportCenterQaDiagnostics.hasExpectedLockedEvidenceRows,
       finalReportLockedEvidenceRowsNotWarn: finalReportCenterQaDiagnostics.lockedEvidenceRowsNotWarn,
+      finalReportNoL3PostEvidenceBlockerChips: finalReportCenterQaDiagnostics.noL3PostEvidenceBlockerChips,
       finalReportApiIsFinal: finalCheckSummary?.local_workbench_check === 'PASS'
         && finalCheckSummary?.browser_qa_ok === true
         && finalCheckSummary?.real_dxm_write_readiness === 'BLOCKED',
@@ -649,6 +678,7 @@ const hasRunIdSetup = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(com
 const hasDataAcquisitionRunId = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(command => command.includes('--target data_acquisition') && command.includes('--run-id $runId'));
 const hasDraftBoxRunId = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(command => command.includes('--target draft_box') && command.includes('--run-id $runId'));
 const finalCheckRequiresNotRequiredCopy = finalCheckSummaryForReport?.source_package_check === 'NOT_REQUIRED';
+const finalCheckRealWriteBlocked = finalCheckSummaryForReport?.real_dxm_write_readiness === 'BLOCKED' && finalCheckSummaryForReport?.real_dxm_mutation_allowed !== true;
 const result = {
   checkedAt: new Date().toISOString(),
   url: targetUrl,
@@ -672,6 +702,11 @@ const result = {
     reportDeliveryCheckVisible: reportText.includes(text.finalCheck) && reportText.includes(text.expectedBlocked),
     reportFreshnessVisible: (reportText.includes(text.finalCheckCurrent) || reportText.includes(text.finalCheckStale)) && reportText.includes(text.browserQaGit) && reportText.includes(text.screenshotHashes),
     reportBlockedStatusLanguage: reportText.includes(text.blockedExpectedState) && reportText.includes(text.noRealWrite) && reportBlockedStatusTone,
+    reportBusinessReportLocked: !finalCheckRealWriteBlocked || reportText.includes(text.businessReportLocked),
+    reportPostL3ChecklistLocked: !finalCheckRealWriteBlocked || reportText.includes(text.postL3ChecklistLocked),
+    reportNoL3PostEvidenceBlockerChips: !finalCheckRealWriteBlocked || (!reportText.includes(text.oldSaveResultBlocker)
+      && !reportText.includes(text.oldUnpublishedProofBlocker)
+      && !reportText.includes(text.oldNetworkHarBlocker)),
     reportDualAcceptanceCommands: reportText.includes(text.localAcceptanceCommand) && reportText.includes(text.sourceAcceptanceCommand) && hasLocalAcceptanceCommand && hasSourceAcceptanceCommand,
     reportL2RunBindingCopy: reportText.includes(text.l2SameBinding) && hasRunIdSetup && hasDataAcquisitionRunId && hasDraftBoxRunId,
     reportSourcePackageNotRequiredCopy: !finalCheckRequiresNotRequiredCopy || (reportText.includes(text.sourcePackageNotRequired) && reportText.includes(text.sourcePackageNotRequiredCopy)),
