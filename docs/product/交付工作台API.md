@@ -36,5 +36,5 @@
 
 - L0：后端单测和前端 build，固定不访问店小秘。
 - L1：`tools/probes/l1_selector_replay.py`，离线 DOM fixture replay，通过时 `status=passed`。
-- L2：`tools/probes/l2_readonly_probe.py`，仅当 `data_acquisition` 与 `draft_box` 两个真实 `dianxiaomi.com` 目标均 `ok=true`、`safety.ok=true`、登录态有效，并且 `write/non_read/blocked/forbidden/websocket` 计数全为 `0` 时 `status=passed`。只有一个真实目标通过时为 `partial`；本地/mock 通过时为 `mock_passed`，不得等同于真实页面通过；任一真实目标失败时为 `failed`。
+- L2：`tools/probes/l2_readonly_probe.py`，仅当 `data_acquisition` 与 `draft_box` 两个真实 `dianxiaomi.com` 目标均 `ok=true`、`safety.ok=true`、登录态有效，`write/non_read/blocked/forbidden/websocket` 计数全为 `0`，且共享同一个 `evidence_binding.run_id`、`script_sha256`、`git_head` 和 session fingerprint 时 `status=passed`。只有一个真实目标通过时为 `partial`；本地/mock 通过时为 `mock_passed`，不得等同于真实页面通过；任一真实目标失败、缺少同轮次绑定或绑定不一致时为 `failed`。
 - L3：`claim_only` / `single_save` / `batch_save` 真实写操作。只有 L2 `status=passed` 且人工明确批准后才允许执行；否则工作台显示 `blocked`，后端启动接口也拒绝 `claim_only/single_save/batch_save`。

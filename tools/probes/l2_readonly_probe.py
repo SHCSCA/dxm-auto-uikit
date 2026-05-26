@@ -5,11 +5,13 @@ import hashlib
 import json
 import platform
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+from uuid import uuid4
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -161,11 +163,13 @@ def run_probe(
     headless: bool = True,
     wait_ms: int = 3500,
     body_limit: int = 6000,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     from playwright.sync_api import sync_playwright
 
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    run_metadata = build_probe_run_metadata(run_id=run_id or f"l2-{timestamp}-{uuid4().hex[:8]}", cookie_file=cookie_file)
     screenshot_path = output_dir / f"{target}_{timestamp}.png"
     dom_path = output_dir / f"{target}_{timestamp}.html"
     json_path = output_dir / f"{target}_{timestamp}.json"
@@ -203,6 +207,7 @@ def run_probe(
 
     result = {
         "schema": "dxm_l2_readonly_probe.v1",
+        **run_metadata,
         "ok": True,
         "target": target,
         "target_url": sanitize_url(url),
@@ -545,10 +550,44 @@ def sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def build_probe_run_metadata(*, run_id: str, cookie_file: Path) -> dict[str, Any]:
+    cookie_sha256 = sha256_file(cookie_file) if cookie_file.exists() else None
+    try:
+        git_head = subprocess.check_output(
+            ["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        git_head = "unknown"
+    metadata = {
+        "run_id": run_id,
+        "script_sha256": sha256_file(Path(__file__)),
+        "git_head": git_head,
+        "cookie_file_sha256": cookie_sha256,
+    }
+    metadata["evidence_binding"] = {
+        "schema": "dxm_l2_evidence_binding.v1",
+        "run_id": run_id,
+        "target_set": sorted(TARGETS),
+        "session_fingerprint_sha256": cookie_sha256,
+        "script_path": "tools/probes/l2_readonly_probe.py",
+        "script_sha256": metadata["script_sha256"],
+        "git_head": git_head,
+        "git_dirty": None,
+        "git_diff_sha256": None,
+    }
+    return metadata
+
+
 def render_markdown(result: dict[str, Any]) -> str:
     network = result.get("network") or {}
     safety = result.get("safety") or {}
     reasons = safety.get("reasons") or ["无"]
+    run_id = result.get("run_id") or "未记录"
+    script_sha256 = result.get("script_sha256") or "未记录"
+    git_head = result.get("git_head") or "未记录"
+    cookie_file_sha256 = result.get("cookie_file_sha256") or "未记录"
     return f"""# L2 只读 Probe 证据
 
 ## 基本信息
@@ -558,6 +597,11 @@ def render_markdown(result: dict[str, Any]) -> str:
 - title：{result.get("title")}
 - created_at：{result.get("created_at")}
 - ok：{result.get("ok")}
+- run_id：{run_id}
+- script_sha256：{script_sha256}
+- git_head：{git_head}
+- cookie_file_sha256：{cookie_file_sha256}
+- evidence_binding：`{json.dumps(result.get("evidence_binding") or {}, ensure_ascii=False)}`
 
 ## 环境
 - OS：{result.get("environment", {}).get("os")}
@@ -612,6 +656,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     parser.add_argument("--headed", action="store_true")
     parser.add_argument("--wait-ms", type=int, default=3500)
+    parser.add_argument("--run-id", default=None, help="Shared identifier for both real L2 targets in one approved probe run.")
     return parser.parse_args()
 
 
@@ -626,6 +671,7 @@ def main() -> int:
         output_dir=Path(args.output_dir),
         headless=not args.headed,
         wait_ms=args.wait_ms,
+        run_id=args.run_id,
     )
     print(json.dumps(summarize_for_stdout(result), ensure_ascii=False, indent=2))
     return 0 if result["ok"] else 2
@@ -637,6 +683,9 @@ def summarize_for_stdout(result: dict[str, Any]) -> dict[str, Any]:
         "schema": result.get("schema"),
         "ok": result.get("ok"),
         "target": result.get("target"),
+        "run_id": result.get("run_id"),
+        "script_sha256": result.get("script_sha256"),
+        "git_head": result.get("git_head"),
         "final_url": result.get("final_url"),
         "safety": result.get("safety"),
         "network": {

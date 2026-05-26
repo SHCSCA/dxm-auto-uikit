@@ -602,6 +602,15 @@ def _l2_probe_gate(now: datetime | None = None) -> dict[str, Any]:
                 "detail": f"真实 L2 双目标证据不满足时效要求：{time_window['detail']}；禁止进入 L3。",
                 "latest": latest,
             }
+        run_binding = _l2_real_targets_run_binding(real_targets)
+        latest["runBinding"] = run_binding
+        if run_binding["ok"] is not True:
+            return {
+                "status": "failed",
+                "evidenceLevel": "C",
+                "detail": f"真实 L2 双目标证据不满足同轮次要求：{run_binding['detail']}；禁止进入 L3。",
+                "latest": latest,
+            }
         return {
             "status": "passed",
             "evidenceLevel": "A",
@@ -706,6 +715,48 @@ def _l2_real_targets_time_window(
         "latest": latest.isoformat(),
         "now": now.isoformat(),
     }
+
+
+def _l2_real_targets_run_binding(real_targets: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    fields = ("run_id", "script_sha256", "git_head", "cookie_file_sha256")
+    values_by_field: dict[str, list[str]] = {field: [] for field in fields}
+    missing: list[str] = []
+    for target in REQUIRED_L2_TARGETS:
+        result = real_targets.get(target) or {}
+        for field in fields:
+            value = _l2_binding_value(result, field)
+            if isinstance(value, str) and value.strip():
+                values_by_field[field].append(value.strip())
+            else:
+                missing.append(f"{target}.{field}")
+
+    distinct = {field: sorted(set(values)) for field, values in values_by_field.items()}
+    mismatched = [field for field, values in distinct.items() if len(values) > 1]
+    ok = not missing and not mismatched
+    detail_parts = []
+    if missing:
+        detail_parts.append(f"缺少 run metadata：{', '.join(missing)}")
+    if mismatched:
+        detail_parts.append(f"run metadata 不一致：{', '.join(mismatched)}")
+    return {
+        "ok": ok,
+        "detail": "；".join(detail_parts) if detail_parts else "双目标 run_id、session fingerprint、script_sha256 与 git_head 一致。",
+        "runIds": distinct["run_id"],
+        "scriptSha256": distinct["script_sha256"],
+        "gitHeads": distinct["git_head"],
+        "cookieFileSha256": distinct["cookie_file_sha256"],
+        "missing": missing,
+        "mismatched": mismatched,
+    }
+
+
+def _l2_binding_value(result: Mapping[str, Any], field: str) -> Any:
+    binding = result.get("evidence_binding")
+    if isinstance(binding, Mapping):
+        if field == "cookie_file_sha256":
+            return binding.get("session_fingerprint_sha256") or binding.get("cookie_file_sha256")
+        return binding.get(field)
+    return result.get(field)
 
 
 def _parse_probe_created_at(value: Any) -> datetime | None:
@@ -844,6 +895,11 @@ def _latest_l2_probe_result() -> dict[str, Any] | None:
             "target_url",
             "final_url",
             "created_at",
+            "run_id",
+            "script_sha256",
+            "git_head",
+            "cookie_file_sha256",
+            "evidence_binding",
             "json_path",
             "markdown_path",
             "screenshot_path",
@@ -903,6 +959,11 @@ def _summarize_probe_result(data: Mapping[str, Any], path: Path) -> dict[str, An
                 "target": data.get("target"),
                 "target_url": data.get("target_url"),
                 "final_url": data.get("final_url"),
+                "run_id": data.get("run_id"),
+                "script_sha256": data.get("script_sha256"),
+                "git_head": data.get("git_head"),
+                "cookie_file_sha256": data.get("cookie_file_sha256"),
+                "evidence_binding": data.get("evidence_binding"),
                 "screenshot_path": data.get("screenshot_path"),
                 "screenshot_sha256": data.get("screenshot_sha256"),
                 "dom_path": data.get("dom_path"),

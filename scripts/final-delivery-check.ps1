@@ -495,7 +495,7 @@ $summaryLines.Add("## Safety Gates")
 if ($l2Gate) {
   $summaryLines.Add("- L2: $($l2Gate.status)")
   if ($l2Gate.status -ne "passed") {
-    $summaryLines.Add("  - reason: real data_acquisition and draft_box readonly probes are not passed in the same valid gate window")
+    $summaryLines.Add("  - reason: real data_acquisition and draft_box readonly probes are not passed in the same valid gate window and evidence binding")
   }
 } else {
   $summaryLines.Add("- L2: UNKNOWN - backend workspace snapshot was unavailable")

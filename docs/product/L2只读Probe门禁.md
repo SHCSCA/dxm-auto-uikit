@@ -9,10 +9,13 @@ L2 只读 probe 只用于验证登录态、目标页面可达性、DOM/按钮文
 真实店小秘 L2 只读探测仍会打开真实页面。只有在用户明确批准“执行 L2 真实只读探测”后才运行以下命令；它不会点击、输入、认领、备注、保存或发布。
 
 ```powershell
-cd C:\Users\wz\Desktop\py\dxm-auto-uikit
-app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target data_acquisition
-app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target draft_box
+Set-Location <PROJECT_ROOT>
+$runId = "l2-real-" + (Get-Date -Format "yyyyMMddTHHmmssZ")
+app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target data_acquisition --run-id $runId
+app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target draft_box --run-id $runId
 ```
+
+两个真实目标必须使用同一个 `--run-id`，并且由同一脚本版本、同一 git head、同一 cookie/session fingerprint 生成。缺少 `evidence_binding` 或 run metadata 的历史证据只允许展示诊断，不能解锁 L3。
 
 离线/mock 验证必须使用 `--url` 指向本地页面，不访问 `dianxiaomi.com`：
 
@@ -29,6 +32,7 @@ app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target 
 - `network.websocket_count == 0`
 - `safety.ok == true`
 - 真实店小秘目标必须加载 cookie，且不得疑似停留在登录页
+- `data_acquisition` 与 `draft_box` 必须共享同一个 `evidence_binding.run_id`、`script_sha256`、`git_head` 和 `session_fingerprint_sha256`
 - 输出 JSON、Markdown、截图和 DOM 路径
 - 截图记录 `sha256`
 - DOM 记录 `sha256`
@@ -68,4 +72,4 @@ JSON/Markdown 的 `diagnostics` 包含：
 
 - A 级：L2 JSON/Markdown/截图/DOM/hash 齐全，网络摘要显示 0 写请求、0 拦截、0 禁用关键词命中，且登录态有效。
 - B 级：页面截图和 DOM 齐全，但真实站点存在无法规避的读接口非 GET 行为，报告必须显示已 abort 并判定不通过。
-- 不通过：任何写方法、发布/保存/认领/备注关键词、登录态失效或证据文件缺失。
+- 不通过：任何写方法、发布/保存/认领/备注关键词、登录态失效、证据文件缺失，或双目标缺少同轮次 evidence binding。

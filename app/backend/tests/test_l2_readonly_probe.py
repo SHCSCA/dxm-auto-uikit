@@ -409,6 +409,19 @@ def test_visible_match_and_stdout_summary_are_sanitized():
     assert "visible_matches" not in summary
 
 
+def test_probe_run_metadata_includes_run_and_code_identity(tmp_path):
+    module = _load_probe_module()
+    cookie_file = tmp_path / "cookies.json"
+    cookie_file.write_text('[{"name":"sid","value":"abc"}]', encoding="utf-8")
+
+    metadata = module.build_probe_run_metadata(run_id="l2-real-20260526T000000Z", cookie_file=cookie_file)
+
+    assert metadata["run_id"] == "l2-real-20260526T000000Z"
+    assert len(metadata["script_sha256"]) == 64
+    assert metadata["git_head"] == "unknown" or len(metadata["git_head"]) == 40
+    assert metadata["cookie_file_sha256"] == module.sha256_file(cookie_file)
+
+
 def test_load_cookies_normalizes_exported_cookie_shape(tmp_path):
     module = _load_probe_module()
     cookie_file = tmp_path / "cookies.json"

@@ -275,6 +275,10 @@ def _write_l2_probe_result(
     ok: bool = True,
     created_at: str | None = None,
     network: dict | None = None,
+    run_id: str | None = "run-20260526T000000Z",
+    script_sha256: str | None = "a" * 64,
+    git_head: str | None = "b" * 40,
+    cookie_file_sha256: str | None = "c" * 64,
 ):
     directory.mkdir(parents=True, exist_ok=True)
     created_at = created_at or _fresh_l2_created_at()
@@ -293,9 +297,7 @@ def _write_l2_probe_result(
     screenshot_path.write_bytes(f"{target} screenshot evidence".encode("utf-8"))
     dom_path.write_text(f"<html><body>{target} dom evidence</body></html>", encoding="utf-8")
     path = directory / f"{target}_{created_at.replace(':', '').replace('-', '')}.json"
-    path.write_text(
-        json.dumps(
-            {
+    payload = {
                 "schema": "dxm_l2_readonly_probe.v1",
                 "ok": ok,
                 "target": target,
@@ -319,9 +321,29 @@ def _write_l2_probe_result(
                     "mode": "L2_READ_ONLY",
                     "reasons": [] if ok else ["blocked by test"],
                 },
-            },
-            ensure_ascii=False,
-        ),
+    }
+    if run_id is not None:
+        payload["run_id"] = run_id
+    if script_sha256 is not None:
+        payload["script_sha256"] = script_sha256
+    if git_head is not None:
+        payload["git_head"] = git_head
+    if cookie_file_sha256 is not None:
+        payload["cookie_file_sha256"] = cookie_file_sha256
+    if any(payload.get(field) is not None for field in ("run_id", "script_sha256", "git_head", "cookie_file_sha256")):
+        payload["evidence_binding"] = {
+            "schema": "dxm_l2_evidence_binding.v1",
+            "run_id": payload.get("run_id"),
+            "target_set": ["data_acquisition", "draft_box"],
+            "session_fingerprint_sha256": payload.get("cookie_file_sha256"),
+            "script_path": "tools/probes/l2_readonly_probe.py",
+            "script_sha256": payload.get("script_sha256"),
+            "git_head": payload.get("git_head"),
+            "git_dirty": False,
+            "git_diff_sha256": None,
+        }
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False),
         encoding="utf-8",
     )
     return path
@@ -764,6 +786,65 @@ def test_delivery_workspace_l2_rejects_clean_targets_from_different_probe_window
     assert l2_gate["evidenceLevel"] == "C"
     assert "时效要求" in l2_gate["detail"]
     assert l2_gate["latest"]["timeWindow"]["ok"] is False
+
+
+def test_delivery_workspace_l2_rejects_clean_real_targets_from_different_probe_runs(tmp_path, monkeypatch):
+    l2_dir = tmp_path / "l2_readonly_probe"
+    _write_l2_probe_result(
+        l2_dir,
+        "data_acquisition",
+        target_url="https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
+        run_id="run-a",
+    )
+    _write_l2_probe_result(
+        l2_dir,
+        "draft_box",
+        target_url="https://www.dianxiaomi.com/web/smt/smtProductList/draft",
+        created_at=_fresh_l2_created_at(-30),
+        run_id="run-b",
+    )
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(delivery_workspace, "L2_PROBE_DIR", l2_dir)
+    fixture = _create_delivery_fixture(repo, with_network=False, with_verify_proof=False)
+
+    data = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}").json()
+
+    l2_gate = next(gate for gate in data["regression_gates"] if gate["level"] == "L2")
+    assert l2_gate["status"] == "failed"
+    assert "同轮次" in l2_gate["detail"]
+    assert l2_gate["latest"]["runBinding"]["ok"] is False
+    assert l2_gate["latest"]["runBinding"]["runIds"] == ["run-a", "run-b"]
+
+
+def test_delivery_workspace_l2_rejects_clean_real_targets_without_probe_run_metadata(tmp_path, monkeypatch):
+    l2_dir = tmp_path / "l2_readonly_probe"
+    _write_l2_probe_result(
+        l2_dir,
+        "data_acquisition",
+        target_url="https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
+        run_id=None,
+    )
+    _write_l2_probe_result(
+        l2_dir,
+        "draft_box",
+        target_url="https://www.dianxiaomi.com/web/smt/smtProductList/draft",
+        created_at=_fresh_l2_created_at(-30),
+        run_id=None,
+    )
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(delivery_workspace, "L2_PROBE_DIR", l2_dir)
+    fixture = _create_delivery_fixture(repo, with_network=False, with_verify_proof=False)
+
+    data = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}").json()
+
+    l2_gate = next(gate for gate in data["regression_gates"] if gate["level"] == "L2")
+    assert l2_gate["status"] == "failed"
+    assert "同轮次" in l2_gate["detail"]
+    assert l2_gate["latest"]["runBinding"]["ok"] is False
+    assert set(l2_gate["latest"]["runBinding"]["missing"]) == {
+        "data_acquisition.run_id",
+        "draft_box.run_id",
+    }
 
 
 def test_delivery_workspace_l2_rejects_success_without_safety_login_or_target_path(tmp_path, monkeypatch):
