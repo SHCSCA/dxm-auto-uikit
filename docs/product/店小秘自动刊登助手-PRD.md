@@ -1,5 +1,7 @@
 # 店小秘自动刊登助手 PRD
 
+> 当前交付状态（2026-05-25）：本文是早期 PRD 口径，不能作为真实写入放行依据。当前可交付承诺限定为 Windows 本地安全诊断工作台和验收证据链；真实 DXM `claim_only` / `single_save` / `batch_save` 仍保持 BLOCKED，放行条件以 `docs/product/L2只读Probe门禁.md`、`docs/product/交付状态报告-20260525.md` 和最终交付自检报告为准。
+
 > 文档角色：产品经理正式需求文档
 > 版本：v0.1
 > 阶段：MVP → V1 商用版

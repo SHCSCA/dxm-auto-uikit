@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import type { WorkbenchSection } from '../types'
 
 const navItems: Array<{ id: WorkbenchSection; label: string; short: string }> = [
-  { id: 'dashboard', label: 'Dashboard', short: 'DB' },
+  { id: 'dashboard', label: '总览', short: '览' },
   { id: 'config', label: '配置中心', short: '配' },
   { id: 'tasks', label: '任务中心', short: '任' },
   { id: 'console', label: '执行控制台', short: '控' },
@@ -62,7 +62,7 @@ export function AppShell({
           <div className="sidebar__note">
             <span>数据源</span>
             <strong>{sourceLabel}</strong>
-            <small>后端工作台接口未就绪时，前端自动组合现有 API 与 fallback。</small>
+            <small>后端工作台接口未就绪时，前端会显示安全空态或本地演示数据。</small>
           </div>
         )}
       </aside>

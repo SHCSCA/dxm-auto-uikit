@@ -253,7 +253,7 @@ export function TaskCenter({ workspace, selectedTask, busy, onSelectTask, onBoot
         </div>
       </div>
 
-      <div className="module-card">
+      <div className="module-card span-2 product-queue-card">
         <ModuleHead title="L2/L3 决策说明" meta="真实保存启动条件" />
         <div className="gate-decision">
           <DecisionRow
@@ -749,6 +749,15 @@ export function ReportCenter({
           )}
         </div>
       </div>
+      <div className="module-card span-3 l2-next-step-card">
+        <ModuleHead title="重新验证 L2" meta="需人工批准" />
+        <p>真实写入保持阻断；仅在操作者确认可进行只读探测时，才重新运行双目标 L2。</p>
+        <div className="l2-next-step-card__commands">
+          <code>app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target data_acquisition</code>
+          <code>app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target draft_box</code>
+        </div>
+        <p>证据目录：data\l2_readonly_probe。两个真实目标同一门禁窗口通过后，才允许申请 L3 金丝雀。</p>
+      </div>
       <div className="module-card span-3">
         <ModuleHead title="报告必须覆盖" meta="交付检查表" />
         <div className="report-check-grid">
@@ -776,7 +785,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
         <CheckRow label={`本地工作台 ${finalCheck?.local_workbench_check ?? '未检查'}`} ok={finalCheck?.local_workbench_check === 'PASS'} />
         <CheckRow label={`真实 DXM 写入 ${finalCheck?.real_dxm_write_readiness ?? '未检查'}`} ok={finalCheck?.real_dxm_write_readiness === 'BLOCKED'} />
         <CheckRow label={`源码包 ${finalCheck?.source_package_readiness ?? '未检查'}`} ok={finalCheck?.source_package_readiness === 'CLEAN'} />
-        <CheckRow label={`浏览器 QA ${finalCheck?.browser_qa_ok === true ? 'PASS' : '未通过/未运行'}`} ok={finalCheck?.browser_qa_ok === true} />
+        <CheckRow label={`浏览器 QA ${finalCheck?.browser_qa_ok === true ? 'PASS' : finalCheck?.browser_qa_ok === false ? 'FAIL' : '待刷新/未运行'}`} ok={finalCheck?.browser_qa_ok === true} />
       </div>
       <div className="delivery-check-card__body">
         <p>{available ? '当前预期交付态：本地工作台通过，真实写入保持阻断。BLOCKED 代表真实 L2/L3 尚未放行，不代表本地工作台失败。' : '还没有读取到交付自检报告。运行 scripts\\final-delivery-check.bat 后，这里会显示最近一次验收摘要。'}</p>
