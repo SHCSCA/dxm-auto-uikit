@@ -79,6 +79,126 @@ function Get-JsonObjectPropertyCount {
   return @($Value.PSObject.Properties).Count
 }
 
+function Get-WorkspaceSnapshot {
+  param(
+    [string]$ApiBase
+  )
+
+  try {
+    return Invoke-JsonUtf8 -Uri "$ApiBase/api/delivery/workspace" -TimeoutSec 5
+  } catch {
+    return $null
+  }
+}
+
+function Get-WorkspaceGate {
+  param(
+    [object]$WorkspaceSnapshot,
+    [string]$Level
+  )
+
+  if ($WorkspaceSnapshot -and $WorkspaceSnapshot.regression_gates) {
+    return $WorkspaceSnapshot.regression_gates | Where-Object { $_.level -eq $Level } | Select-Object -First 1
+  }
+  return $null
+}
+
+function Get-RealDxmWriteReadiness {
+  param(
+    [object]$L2Gate,
+    [object]$L3Gate
+  )
+
+  if (!$L2Gate -or !$L3Gate) {
+    return "UNKNOWN"
+  }
+  if ($L2Gate.status -eq "passed" -and $L3Gate.status -eq "passed") {
+    return "READY"
+  }
+  return "BLOCKED"
+}
+
+function Get-SourcePackageCheck {
+  param(
+    [string]$SourcePackageReadiness
+  )
+
+  if (!$RequireCleanWorktree) {
+    return "NOT_REQUIRED"
+  }
+  if ($SourcePackageReadiness -eq "CLEAN") {
+    return "PASS"
+  }
+  return "FAIL"
+}
+
+function Write-ProvisionalDeliveryCheckReport {
+  param(
+    [object]$WorkspaceSnapshot,
+    [string]$WorkspaceApiBase
+  )
+
+  $provisionalGitHead = $null
+  $provisionalGitStatus = $null
+  try {
+    $provisionalGitHead = (& git -C $root rev-parse HEAD).Trim()
+    $provisionalGitStatus = (& git -C $root status --short) -join "`n"
+  } catch {
+    $provisionalGitHead = $null
+    $provisionalGitStatus = $null
+  }
+
+  $provisionalL2Gate = Get-WorkspaceGate -WorkspaceSnapshot $WorkspaceSnapshot -Level "L2"
+  $provisionalL3Gate = Get-WorkspaceGate -WorkspaceSnapshot $WorkspaceSnapshot -Level "L3"
+  $provisionalReadiness = Get-RealDxmWriteReadiness -L2Gate $provisionalL2Gate -L3Gate $provisionalL3Gate
+  # Provisional report must be BLOCKED when gates are unavailable; Browser QA needs a fail-closed current-run state.
+  if ($provisionalReadiness -eq "UNKNOWN") {
+    $provisionalReadiness = "BLOCKED"
+  }
+  $sourceReadiness = if ([string]::IsNullOrWhiteSpace($provisionalGitStatus)) { "CLEAN" } else { "DIRTY" }
+
+  $provisionalResult = [pscustomobject]@{
+    schema = "dxm_final_delivery_check.v1"
+    checkedAt = (Get-Date).ToUniversalTime().ToString("o")
+    ok = $false
+    status = "final_delivery_check_in_progress_for_browser_qa"
+    localWorkbenchCheck = "IN_PROGRESS"
+    realDxmWriteReadiness = $provisionalReadiness
+    sourcePackageReadiness = $sourceReadiness
+    preSourcePackageReadiness = $sourceReadiness
+    postSourcePackageReadiness = $sourceReadiness
+    requireCleanWorktree = [bool]$RequireCleanWorktree
+    sourcePackageCheck = Get-SourcePackageCheck -SourcePackageReadiness $sourceReadiness
+    gateEvidenceCheck = if ($provisionalL2Gate -and $provisionalL3Gate) { "PASS" } else { "FAIL" }
+    deliverableMode = "local safety diagnostic workbench"
+    realDxmWrites = if ($provisionalReadiness -eq "READY") { "ready only after L2/L3 evidence review and explicit manual canary approval" } elseif ($provisionalReadiness -eq "UNKNOWN") { "unknown because L2/L3 gates could not be read; writes remain blocked" } else { "blocked until real L2 data_acquisition and draft_box pass, followed by L3 manual canary" }
+    root = $root
+    gitHead = $provisionalGitHead
+    preGitStatusShort = $provisionalGitStatus
+    postGitStatusShort = $provisionalGitStatus
+    commands = $commands
+    qaServices = @{
+      backendPort = $qaBackendPort
+      frontendPort = $qaFrontendPort
+      workspaceApiBase = $WorkspaceApiBase
+      pytestRuntimeDataDir = $pytestRuntimeDataDir
+      qaRuntimeDataDir = $qaRuntimeDataDir
+      isolated = $true
+    }
+    browserQa = $null
+    gates = @{
+      l2 = $provisionalL2Gate
+      l3 = $provisionalL3Gate
+    }
+    artifacts = @{
+      summary = $summaryPath
+      json = $jsonPath
+    }
+  }
+
+  $provisionalResult | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
+}
+
 function Resolve-Python {
   $venvPython = Join-Path $backendDir ".venv\Scripts\python.exe"
   if (Test-Path -LiteralPath $venvPython) {
@@ -450,7 +570,7 @@ if (!$SkipBrowserQA) {
     -FilePath $pythonExe `
     -Arguments @("-m", "uvicorn", "src.main:app", "--host", "127.0.0.1", "--port", [string]$qaBackendPort) `
     -WorkingDirectory $backendDir `
-    -Environment @{ DXM_DATA_DIR = $qaRuntimeDataDir }
+    -Environment @{ DXM_DATA_DIR = $qaRuntimeDataDir; DXM_FINAL_DELIVERY_CHECK_JSON = $jsonPath }
   Wait-HttpReady -Name "QA backend service" -Uri "$workspaceApiBase/health" -TimeoutSeconds 45
   $qaProcesses += Start-BackgroundCommand `
     -Name "QA frontend preview" `
@@ -458,6 +578,10 @@ if (!$SkipBrowserQA) {
     -Arguments @("preview", "--host", "127.0.0.1", "--port", [string]$qaFrontendPort, "--strictPort") `
     -WorkingDirectory $frontendDir
   Wait-HttpReady -Name "QA frontend preview" -Uri "http://127.0.0.1:$qaFrontendPort" -TimeoutSeconds 45
+  # Browser QA reads /api/delivery/final-check before the full report is written.
+  # Seed it with this run's git/gate context so QA never depends on a stale prior report.
+  $provisionalWorkspaceSnapshot = Get-WorkspaceSnapshot -ApiBase $workspaceApiBase
+  Write-ProvisionalDeliveryCheckReport -WorkspaceSnapshot $provisionalWorkspaceSnapshot -WorkspaceApiBase $workspaceApiBase
   $browserQaUrl = "http://127.0.0.1:$qaFrontendPort/?apiBase=$([uri]::EscapeDataString($workspaceApiBase))"
   $commands += Invoke-CapturedCommand `
     -Name "Browser workbench QA" `
@@ -487,17 +611,11 @@ try {
 }
 
 $workspaceSnapshot = $null
-try {
-  $workspaceSnapshot = Invoke-JsonUtf8 -Uri "$workspaceApiBase/api/delivery/workspace" -TimeoutSec 5
-} catch {
-  $workspaceSnapshot = $null
-}
+$workspaceSnapshot = Get-WorkspaceSnapshot -ApiBase $workspaceApiBase
 $l2Gate = $null
 $l3Gate = $null
-if ($workspaceSnapshot -and $workspaceSnapshot.regression_gates) {
-  $l2Gate = $workspaceSnapshot.regression_gates | Where-Object { $_.level -eq "L2" } | Select-Object -First 1
-  $l3Gate = $workspaceSnapshot.regression_gates | Where-Object { $_.level -eq "L3" } | Select-Object -First 1
-}
+$l2Gate = Get-WorkspaceGate -WorkspaceSnapshot $workspaceSnapshot -Level "L2"
+$l3Gate = Get-WorkspaceGate -WorkspaceSnapshot $workspaceSnapshot -Level "L3"
 $l2ProbePlan = if ($workspaceSnapshot -and $workspaceSnapshot.l2_probe_plan) { $workspaceSnapshot.l2_probe_plan } else { $null }
 $l2ProbeEvidenceSummary = @()
 if ($l2Gate -and $l2Gate.latest) {
@@ -559,23 +677,11 @@ $localWorkbenchOk = @($commands | Where-Object { -not $_.ok }).Count -eq 0
 if (!$SkipBrowserQA -and (!$browserQa -or $browserQa.ok -ne $true)) {
   $localWorkbenchOk = $false
 }
-$realDxmWriteReadiness = if (!$gateEvidenceOk) {
-  "UNKNOWN"
-} elseif ($l2Gate.status -eq "passed" -and $l3Gate.status -eq "passed") {
-  "READY"
-} else {
-  "BLOCKED"
-}
+$realDxmWriteReadiness = Get-RealDxmWriteReadiness -L2Gate $l2Gate -L3Gate $l3Gate
 $preSourcePackageReadiness = if ([string]::IsNullOrWhiteSpace($preGitStatus)) { "CLEAN" } else { "DIRTY" }
 $postSourcePackageReadiness = if ([string]::IsNullOrWhiteSpace($postGitStatus)) { "CLEAN" } else { "DIRTY" }
 $sourcePackageReadiness = if ($preSourcePackageReadiness -eq "CLEAN" -and $postSourcePackageReadiness -eq "CLEAN") { "CLEAN" } else { "DIRTY" }
-$sourcePackageCheck = if (!$RequireCleanWorktree) {
-  "NOT_REQUIRED"
-} elseif ($sourcePackageReadiness -eq "CLEAN") {
-  "PASS"
-} else {
-  "FAIL"
-}
+$sourcePackageCheck = Get-SourcePackageCheck -SourcePackageReadiness $sourcePackageReadiness
 $overallOk = $localWorkbenchOk -and $gateEvidenceOk -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")
 
 $result = [pscustomobject]@{

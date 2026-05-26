@@ -21,6 +21,55 @@ def test_final_delivery_check_summary_returns_not_run_when_report_missing(tmp_pa
     }
 
 
+def test_final_delivery_check_summary_uses_env_json_path_override(tmp_path, monkeypatch):
+    import src.main as main
+
+    default_report = tmp_path / "default" / "final-delivery-check.json"
+    override_report = tmp_path / "custom" / "final-delivery-check.json"
+    default_report.parent.mkdir()
+    override_report.parent.mkdir()
+    default_report.write_text(json.dumps({
+        "checkedAt": "2026-05-25T09:18:34Z",
+        "localWorkbenchCheck": "FAIL",
+        "realDxmWriteReadiness": "UNKNOWN",
+        "sourcePackageReadiness": "DIRTY",
+        "sourcePackageCheck": "NOT_REQUIRED",
+        "gitHead": "default-head",
+        "artifacts": {"summary": "default.md"},
+    }), encoding="utf-8")
+    override_report.write_text(json.dumps({
+        "checkedAt": "2026-05-25T09:19:34Z",
+        "localWorkbenchCheck": "IN_PROGRESS",
+        "realDxmWriteReadiness": "BLOCKED",
+        "sourcePackageReadiness": "DIRTY",
+        "sourcePackageCheck": "NOT_REQUIRED",
+        "gitHead": "override-head",
+        "artifacts": {"summary": "custom.md"},
+    }), encoding="utf-8")
+    monkeypatch.setattr(main, "FINAL_DELIVERY_CHECK_JSON", default_report)
+    monkeypatch.setenv("DXM_FINAL_DELIVERY_CHECK_JSON", str(override_report))
+    monkeypatch.setattr(
+        main,
+        "_current_git_summary",
+        lambda: {
+            "head": "override-head",
+            "status_short": " M scripts/final-delivery-check.ps1",
+            "is_dirty": True,
+        },
+        raising=False,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/delivery/final-check")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["json_path"] == str(override_report)
+    assert payload["summary_path"] == "custom.md"
+    assert payload["real_dxm_write_readiness"] == "BLOCKED"
+    assert payload["git_head"] == "override-head"
+
+
 def test_final_delivery_check_summary_reads_latest_report(tmp_path, monkeypatch):
     import src.main as main
 

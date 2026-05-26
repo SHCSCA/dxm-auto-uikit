@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -413,7 +414,7 @@ def _public_artifact_url(value: str) -> str | None:
 
 
 def _read_final_delivery_check_summary():
-    json_path = FINAL_DELIVERY_CHECK_JSON
+    json_path = _final_delivery_check_json_path()
     if not json_path.exists():
         return {
             'status': 'not_run',
@@ -465,6 +466,13 @@ def _read_final_delivery_check_summary():
         'summary_path': artifacts.get('summary'),
         'json_path': str(json_path),
     }
+
+
+def _final_delivery_check_json_path():
+    configured = os.environ.get('DXM_FINAL_DELIVERY_CHECK_JSON')
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return FINAL_DELIVERY_CHECK_JSON
 
 
 def _current_git_summary():

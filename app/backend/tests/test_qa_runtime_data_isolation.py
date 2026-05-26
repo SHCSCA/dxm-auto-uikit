@@ -65,3 +65,17 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "markdown_path" in script
     assert "screenshot_sha256" in script
     assert "dom_sha256" in script
+
+
+def test_final_delivery_check_writes_current_provisional_report_before_browser_qa():
+    script = FINAL_DELIVERY_CHECK.read_text(encoding="utf-8")
+
+    assert "Write-ProvisionalDeliveryCheckReport" in script
+    assert "final_delivery_check_in_progress_for_browser_qa" in script
+    assert "Browser QA reads /api/delivery/final-check" in script
+    assert "Provisional report must be BLOCKED when gates are unavailable" in script
+    qa_startup_section = script[
+        script.index('Wait-HttpReady -Name "QA frontend preview"'):
+        script.index('-Name "Browser workbench QA"')
+    ]
+    assert "Write-ProvisionalDeliveryCheckReport" in qa_startup_section
