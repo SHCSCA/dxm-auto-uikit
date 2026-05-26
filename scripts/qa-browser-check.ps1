@@ -297,6 +297,9 @@ const text = {
   finalCheck: '\u6700\u8fd1\u4ea4\u4ed8\u81ea\u68c0',
   expectedBlocked: '\u771f\u5b9e\u5199\u5165\u4fdd\u6301\u963b\u65ad',
   blockedExpectedState: '\u9884\u671f\u963b\u65ad',
+  saveResultLocked: '\u4fdd\u5b58\u7ed3\u679c 0 \u6761\uff08\u9884\u671f\u963b\u65ad\uff09',
+  unpublishedProofLocked: '\u672a\u53d1\u5e03\u8bc1\u660e 0 \u6761\uff08\u9884\u671f\u963b\u65ad\uff09',
+  networkHarLocked: '\u7f51\u7edc/HAR 0 \u6761\uff08\u9884\u671f\u963b\u65ad\uff09',
   noRealWrite: '\u4e0d\u53ef\u6267\u884c\u771f\u5b9e\u5199\u5165',
   finalCheckCurrent: '\u81ea\u68c0\u8986\u76d6\u5f53\u524d\u4ee3\u7801',
   finalCheckStale: '\u81ea\u68c0\u672a\u8986\u76d6\u5f53\u524d\u4ee3\u7801',
@@ -333,6 +336,7 @@ if (reportOnlyFinal) {
   const expectedBrowserQa = text.browserQaLabel + ' ' + (finalCheckSummary?.browser_qa_ok === true ? 'PASS' : 'FAIL');
   const expectedLocalWorkbench = text.localWorkbenchLabel + ' ' + String(finalCheckSummary?.local_workbench_check ?? '\u672a\u68c0\u67e5');
   const expectedPostFinalReportQa = text.finalReportCenterQa + ' ' + (finalCheckSummary?.post_final_report_qa_ok === true ? 'PASS' : 'FAIL');
+  const expectedLockedEvidence = [text.saveResultLocked, text.unpublishedProofLocked, text.networkHarLocked];
   const requiredReportFragments = [
     text.finalCheck,
     expectedLocalWorkbench,
@@ -346,9 +350,14 @@ if (reportOnlyFinal) {
   const finalReportCenterScreenshotDomPath = await evalValue('(() => { const el = document.querySelector("[data-testid=\\"final-report-center-screenshot-path\\"]"); return el ? (el.innerText || el.textContent || "") : ""; })()');
   const reportCenterSectionVisible = await evalValue('Boolean(document.querySelector("[data-testid=\\"report-center-section\\"]"))');
   const finalReportBlockedStatusTone = await evalValue('(() => { const row = document.querySelector(".delivery-readiness-row"); return Boolean(row && row.className.includes("is-blocked") && (row.innerText || "").includes("BLOCKED")); })()');
+  const lockedEvidenceRows = await evalValue('(() => [...document.querySelectorAll(".check-row[data-state=\\"locked\\"]")].map(el => ({ text: el.innerText || "", className: el.className || "" })))()');
   const finalReportCenterQaDiagnostics = {
     expectedPostFinalReportQa,
     hasExpectedPostFinalReportQa: reportText.includes(expectedPostFinalReportQa),
+    expectedLockedEvidence,
+    lockedEvidenceRows,
+    hasExpectedLockedEvidenceRows: expectedLockedEvidence.every(fragment => reportText.includes(fragment)),
+    lockedEvidenceRowsNotWarn: Array.isArray(lockedEvidenceRows) && lockedEvidenceRows.length >= 3 && lockedEvidenceRows.every(row => !String(row.className || '').includes('warn')),
     hasFinalReportScreenshotName: reportText.includes('qa-report-center-final.png'),
     finalReportCenterQaDomState,
     finalReportCenterScreenshotDomPath,
@@ -398,6 +407,8 @@ if (reportOnlyFinal) {
       finalReportCenterShowsBlockedDxmState: reportText.includes(text.blockedExpectedState)
         && reportText.includes(text.noRealWrite)
         && finalReportBlockedStatusTone,
+      finalReportExpectedLockedEvidenceRows: finalReportCenterQaDiagnostics.hasExpectedLockedEvidenceRows,
+      finalReportLockedEvidenceRowsNotWarn: finalReportCenterQaDiagnostics.lockedEvidenceRowsNotWarn,
       finalReportApiIsFinal: finalCheckSummary?.local_workbench_check === 'PASS'
         && finalCheckSummary?.browser_qa_ok === true
         && finalCheckSummary?.real_dxm_write_readiness === 'BLOCKED',

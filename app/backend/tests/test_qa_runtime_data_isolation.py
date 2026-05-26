@@ -168,6 +168,10 @@ def test_final_delivery_check_captures_final_report_center_after_final_json_writ
     assert "hasExpectedPostFinalReportQa" in qa_script[qa_script.index("assertions: {"):qa_script.index("finalReportApiIsFinal")]
     assert "'最终报告中心 QA '" not in qa_script
     assert "finalReportCenterScreenshotDomPath" in qa_script
+    assert "expectedLockedEvidence" in qa_script
+    assert "finalReportExpectedLockedEvidenceRows" in qa_script
+    assert "finalReportLockedEvidenceRowsNotWarn" in qa_script
+    assert "保存结果 0 条（预期阻断）" not in qa_script
     assert 'clickSelector(\'[data-section="reports"]\')' in qa_script
     assert 'reportCenterSectionVisible' in qa_script
     assert "waitForBodyIncludes" in qa_script

@@ -77,6 +77,20 @@ def test_report_center_shows_allowlist_review_before_l2_recheck_commands():
     assert "真实写入允许 false" in source
 
 
+def test_report_center_treats_missing_l3_evidence_as_expected_when_real_write_blocked():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    report_center_section = source[source.index("export function ReportCenter"):source.index("function FinalDeliveryCheckCard")]
+
+    assert "realWriteExpectedBlocked" in report_center_section
+    assert "EvidenceCheckRow" in report_center_section
+    assert "label=\"保存结果\"" in source
+    assert "label=\"未发布证明\"" in source
+    assert "label=\"网络/HAR\"" in source
+    assert "（预期阻断）" in source
+    assert "state={'locked'}" in source
+    assert "L3 未放行前不要求生成真实保存证据" in source
+
+
 def test_task_center_surfaces_l2_allowlist_review_candidates_as_manual_review_only():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
 

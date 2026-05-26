@@ -733,6 +733,10 @@ export function ReportCenter({
   const reportSummary = workspace.reportSummary
   const l2ProbePlan = workspace.l2ProbePlan
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
+  const realWriteExpectedBlocked = finalCheck?.real_dxm_write_readiness === 'BLOCKED' && finalCheck?.real_dxm_mutation_allowed !== true
+  const saveResultCount = reportSummary?.save_results?.length ?? 0
+  const unpublishedProofCount = reportSummary?.published_proofs?.length ?? 0
+  const networkHarCount = (reportSummary?.network_save_results?.length ?? 0) + (reportSummary?.har_summaries?.length ?? 0)
   const l2AllowlistReviewItems = summarizeL2Diagnostics(l2Gate).flatMap((item) =>
     item.reviewCandidateRequests.map((request) => ({ target: item.targetLabel, request })),
   )
@@ -744,10 +748,13 @@ export function ReportCenter({
         <ModuleHead title="保存隔离摘要" meta={workspace.publishGuardState?.status ?? '等待执行'} />
         <div className="report-check-grid">
           <CheckRow label={`报告 ${reportSummary?.total_reports ?? reports.length} 份`} ok={(reportSummary?.total_reports ?? reports.length) > 0} />
-          <CheckRow label={`保存结果 ${reportSummary?.save_results?.length ?? 0} 条`} ok={Boolean(reportSummary?.save_results?.length)} />
-          <CheckRow label={`未发布证明 ${reportSummary?.published_proofs?.length ?? 0} 条`} ok={Boolean(reportSummary?.published_proofs?.length)} />
-          <CheckRow label={`网络/HAR ${((reportSummary?.network_save_results?.length ?? 0) + (reportSummary?.har_summaries?.length ?? 0))} 条`} ok={Boolean((reportSummary?.network_save_results?.length ?? 0) + (reportSummary?.har_summaries?.length ?? 0))} />
+          <EvidenceCheckRow label="保存结果" count={saveResultCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
+          <EvidenceCheckRow label="未发布证明" count={unpublishedProofCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
+          <EvidenceCheckRow label="网络/HAR" count={networkHarCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
         </div>
+        {realWriteExpectedBlocked && (
+          <p className="delivery-check-card__warning">L3 未放行前不要求生成真实保存证据；0 条代表当前真实写入按门禁锁定。</p>
+        )}
       </div>
       <div className="module-card span-3">
         <ModuleHead title="报告中心" meta={`${reports.length} 份报告`} />
@@ -1139,6 +1146,14 @@ function CheckRow({ label, ok, testId, state }: { label: string; ok: boolean; te
       <strong>{label}</strong>
     </div>
   )
+}
+
+function EvidenceCheckRow({ label, count, realWriteExpectedBlocked }: { label: string; count: number; realWriteExpectedBlocked: boolean }) {
+  if (count === 0 && realWriteExpectedBlocked) {
+    return <CheckRow label={`${label} 0 条（预期阻断）`} ok={true} state={'locked'} />
+  }
+
+  return <CheckRow label={`${label} ${count} 条`} ok={count > 0} state={count > 0 ? 'present' : 'missing'} />
 }
 
 function DecisionRow({ label, status, detail }: { label: string; status: string; detail: string }) {
