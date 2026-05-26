@@ -209,6 +209,39 @@ def test_completed_real_save_task_cannot_be_paused_then_restarted(tmp_path, monk
     assert runner.calls == []
 
 
+def test_running_real_save_task_cannot_be_stopped_without_worker_ack(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo, approval={"approved": True, "token": "l3-token"})
+    repo.update_task_status(task["id"], "running")
+
+    response = client.post(f"/api/tasks/{task['id']}/stop")
+
+    assert response.status_code == 409
+    assert "stop is disabled" in response.json()["detail"]
+    assert repo.get_task(task["id"])["status"] == "running"
+
+
+def test_stop_task_requires_existing_task(tmp_path, monkeypatch):
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+
+    response = client.post("/api/tasks/999/stop")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Task not found"
+
+
+def test_dry_run_task_can_be_stopped(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo, mode="dry_run")
+    repo.update_task_status(task["id"], "running")
+
+    response = client.post(f"/api/tasks/{task['id']}/stop")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "cancelled"
+    assert repo.get_task(task["id"])["status"] == "cancelled"
+
+
 def test_running_real_save_task_cannot_be_paused_or_restarted(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main

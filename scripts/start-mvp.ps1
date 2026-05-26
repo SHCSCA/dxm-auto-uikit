@@ -28,6 +28,25 @@ function Fail {
   exit 1
 }
 
+function Get-PortOwnerText {
+  param([int]$Port)
+  $connections = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+  if (!$connections) {
+    return "port $Port is available"
+  }
+  $owners = @()
+  foreach ($connection in $connections) {
+    $processName = "unknown"
+    try {
+      $processName = (Get-Process -Id $connection.OwningProcess -ErrorAction Stop).ProcessName
+    } catch {
+      $processName = "unknown"
+    }
+    $owners += "PID $($connection.OwningProcess) ($processName)"
+  }
+  return "port $Port is in use by " + (($owners | Select-Object -Unique) -join ", ")
+}
+
 if ($help) {
   Write-Host ""
   Write-Host "Usage:"
@@ -113,12 +132,12 @@ $frontendBusy = Get-NetTCPConnection -LocalPort $frontendPort -State Listen -Err
 
 if ($checkOnly) {
   if ($backendBusy) {
-    Write-Step "Check warning: backend port $backendPort is already in use. Launch may fail unless this is the intended DXM backend."
+    Write-Step "Check warning: backend $(Get-PortOwnerText -Port $backendPort). Launch may fail unless this is the intended DXM backend."
   } else {
     Write-Step "Backend port $backendPort is available"
   }
   if ($frontendBusy) {
-    Write-Step "Check warning: frontend port $frontendPort is already in use. Launch may fail unless this is the intended DXM frontend."
+    Write-Step "Check warning: frontend $(Get-PortOwnerText -Port $frontendPort). Launch may fail unless this is the intended DXM frontend."
   } else {
     Write-Step "Frontend port $frontendPort is available"
   }
@@ -128,11 +147,11 @@ if ($checkOnly) {
 }
 
 if ($backendBusy) {
-  Fail "backend port $backendPort is already in use."
+  Fail "backend $(Get-PortOwnerText -Port $backendPort). Close the old DXM Backend Service window or stop that process before launching."
 }
 
 if ($frontendBusy) {
-  Fail "frontend port $frontendPort is already in use."
+  Fail "frontend $(Get-PortOwnerText -Port $frontendPort). Close the old DXM Frontend Service window or stop that process before launching."
 }
 
 Write-Step "Writing service runner scripts"
@@ -173,21 +192,28 @@ Start-Process -FilePath "cmd.exe" -ArgumentList "/k `"$frontendRunner`""
 Write-Step "Waiting for services"
 Start-Sleep -Seconds 8
 
+$serviceWarnings = @()
 try {
   Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$backendPort/health" -TimeoutSec 2 | Out-Null
   Write-Step "Backend OK: http://127.0.0.1:$backendPort/health"
 } catch {
-  Write-Step "Warning: backend did not respond yet. Check $backendLog"
+  $serviceWarnings += "backend did not respond yet. Check $backendLog"
+  Write-Step "Warning: $($serviceWarnings[-1])"
 }
 
 try {
   Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$frontendPort" -TimeoutSec 2 | Out-Null
   Write-Step "Frontend OK: http://127.0.0.1:$frontendPort"
 } catch {
-  Write-Step "Warning: frontend did not respond yet. Check $frontendLog"
+  $serviceWarnings += "frontend did not respond yet. Check $frontendLog"
+  Write-Step "Warning: $($serviceWarnings[-1])"
 }
 
 Write-Step "Opening frontend page: http://127.0.0.1:$frontendPort"
 Start-Process "http://127.0.0.1:$frontendPort"
 Write-Step "Stop services by closing the DXM Backend Service and DXM Frontend Service windows."
-Write-Step "Done"
+if ($serviceWarnings.Count -gt 0) {
+  Write-Step "STARTED_WITH_WARNINGS: $($serviceWarnings -join '; ')"
+} else {
+  Write-Step "STARTED_OK"
+}

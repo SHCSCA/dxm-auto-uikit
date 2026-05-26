@@ -1,6 +1,7 @@
 param(
   [switch]$SkipBrowserQA,
   [switch]$RequireCleanWorktree,
+  [switch]$Help,
   [string]$OutDir = "outputs/final-delivery-check"
 )
 
@@ -18,6 +19,22 @@ $qaProcesses = @()
 $qaBackendPort = $null
 $qaFrontendPort = $null
 $workspaceApiBase = "http://127.0.0.1:8000"
+$commands = @()
+
+if ($Help) {
+  Write-Host ""
+  Write-Host "Usage:"
+  Write-Host "  scripts\final-delivery-check.bat"
+  Write-Host "  scripts\final-delivery-check.bat -RequireCleanWorktree"
+  Write-Host "  scripts\final-delivery-check.bat -OutDir outputs\final-delivery-check"
+  Write-Host ""
+  Write-Host "Options:"
+  Write-Host "  -RequireCleanWorktree  Require pre/post git status to be clean for source package acceptance."
+  Write-Host "  -SkipBrowserQA         Developer-only shortcut; do not use for formal delivery acceptance."
+  Write-Host "  -OutDir <path>         Write reports, logs, screenshots and sidecars to a custom directory."
+  Write-Host ""
+  exit 0
+}
 
 New-Item -ItemType Directory -Path $absoluteOutDir -Force | Out-Null
 New-Item -ItemType Directory -Path $browserQaOutDir -Force | Out-Null
@@ -195,8 +212,71 @@ function Stop-QAProcesses {
   }
 }
 
+function Write-FatalDeliveryCheckReport {
+  param([string]$Message)
+
+  $fatalGitHead = $null
+  $fatalGitStatus = $null
+  try {
+    $fatalGitHead = (& git -C $root rev-parse HEAD).Trim()
+    $fatalGitStatus = (& git -C $root status --short) -join "`n"
+  } catch {
+    $fatalGitHead = $null
+    $fatalGitStatus = $null
+  }
+
+  $fatalResult = [pscustomobject]@{
+    schema = "dxm_final_delivery_check.v1"
+    checkedAt = (Get-Date).ToUniversalTime().ToString("o")
+    ok = $false
+    status = "final_delivery_check_fatal_error"
+    localWorkbenchCheck = "FAIL"
+    realDxmWriteReadiness = "UNKNOWN"
+    sourcePackageReadiness = if ([string]::IsNullOrWhiteSpace($fatalGitStatus)) { "CLEAN" } else { "DIRTY" }
+    requireCleanWorktree = [bool]$RequireCleanWorktree
+    sourcePackageCheck = if ($RequireCleanWorktree -and [string]::IsNullOrWhiteSpace($fatalGitStatus)) { "PASS" } elseif ($RequireCleanWorktree) { "FAIL" } else { "NOT_REQUIRED" }
+    deliverableMode = "local safety diagnostic workbench"
+    realDxmWrites = "unknown because final delivery check stopped before L2/L3 gates could be read"
+    root = $root
+    gitHead = $fatalGitHead
+    preGitStatusShort = $fatalGitStatus
+    postGitStatusShort = $fatalGitStatus
+    fatalError = $Message
+    commands = $commands
+    artifacts = @{
+      summary = $summaryPath
+      json = $jsonPath
+    }
+  }
+
+  $fatalResult | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
+
+  $fatalLines = @(
+    "# DXM Local Workbench Delivery Check",
+    "",
+    "- Checked at: $($fatalResult.checkedAt)",
+    "- Local workbench check: FAIL",
+    "- Real DXM write readiness: UNKNOWN",
+    "- Source package readiness: $($fatalResult.sourcePackageReadiness)",
+    "- Source package check: $($fatalResult.sourcePackageCheck)",
+    "- Git HEAD: $($fatalResult.gitHead)",
+    "- Fatal error: $Message",
+    "",
+    "## Recovery",
+    "- Run `scripts\start-mvp.bat --check` to locate missing Python/npm/curl/backend/frontend dependencies.",
+    "- If this happened during Browser QA startup, inspect `outputs\final-delivery-check\qa-backend-service.stderr.log` and `outputs\final-delivery-check\qa-frontend-preview.stderr.log`.",
+    "- Do not treat UNKNOWN real DXM readiness as approval to write; true write operations remain blocked until L2/L3 evidence passes."
+  )
+  Set-Content -LiteralPath $summaryPath -Encoding UTF8 -Value ($fatalLines -join "`n")
+}
+
 trap {
   Stop-QAProcesses
+  try {
+    Write-FatalDeliveryCheckReport -Message ([string]$_.Exception.Message)
+  } catch {
+    Write-Warning "Could not write fatal delivery check report: $($_.Exception.Message)"
+  }
   throw
 }
 
@@ -219,7 +299,6 @@ try {
 } catch {
   $preGitStatus = $null
 }
-$commands = @()
 $commands += Invoke-CapturedCommand `
   -Name "Windows startup preflight" `
   -FilePath "cmd.exe" `
@@ -318,11 +397,18 @@ if ($workspaceSnapshot -and $workspaceSnapshot.regression_gates) {
   $l3Gate = $workspaceSnapshot.regression_gates | Where-Object { $_.level -eq "L3" } | Select-Object -First 1
 }
 
+$gateEvidenceOk = [bool]($workspaceSnapshot -and $l2Gate -and $l3Gate)
 $localWorkbenchOk = @($commands | Where-Object { -not $_.ok }).Count -eq 0
 if (!$SkipBrowserQA -and (!$browserQa -or $browserQa.ok -ne $true)) {
   $localWorkbenchOk = $false
 }
-$realDxmWriteReadiness = "BLOCKED"
+$realDxmWriteReadiness = if (!$gateEvidenceOk) {
+  "UNKNOWN"
+} elseif ($l2Gate.status -eq "passed" -and $l3Gate.status -eq "passed") {
+  "READY"
+} else {
+  "BLOCKED"
+}
 $preSourcePackageReadiness = if ([string]::IsNullOrWhiteSpace($preGitStatus)) { "CLEAN" } else { "DIRTY" }
 $postSourcePackageReadiness = if ([string]::IsNullOrWhiteSpace($postGitStatus)) { "CLEAN" } else { "DIRTY" }
 $sourcePackageReadiness = if ($preSourcePackageReadiness -eq "CLEAN" -and $postSourcePackageReadiness -eq "CLEAN") { "CLEAN" } else { "DIRTY" }
@@ -333,7 +419,7 @@ $sourcePackageCheck = if (!$RequireCleanWorktree) {
 } else {
   "FAIL"
 }
-$overallOk = $localWorkbenchOk -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")
+$overallOk = $localWorkbenchOk -and $gateEvidenceOk -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")
 
 $result = [pscustomobject]@{
   schema = "dxm_final_delivery_check.v1"
@@ -351,8 +437,9 @@ $result = [pscustomobject]@{
   postSourcePackageReadiness = $postSourcePackageReadiness
   requireCleanWorktree = [bool]$RequireCleanWorktree
   sourcePackageCheck = $sourcePackageCheck
+  gateEvidenceCheck = if ($gateEvidenceOk) { "PASS" } else { "FAIL" }
   deliverableMode = "local safety diagnostic workbench"
-  realDxmWrites = "blocked until real L2 data_acquisition and draft_box pass, followed by L3 manual canary"
+  realDxmWrites = if ($realDxmWriteReadiness -eq "READY") { "ready only after L2/L3 evidence review and explicit manual canary approval" } elseif ($realDxmWriteReadiness -eq "UNKNOWN") { "unknown because L2/L3 gates could not be read; writes remain blocked" } else { "blocked until real L2 data_acquisition and draft_box pass, followed by L3 manual canary" }
   root = $root
   gitHead = $gitHead
   preGitStatusShort = $preGitStatus
@@ -395,9 +482,11 @@ $summaryLines.Add("- Real DXM write readiness: $($result.realDxmWriteReadiness)"
 $summaryLines.Add("- Source package readiness: $($result.sourcePackageReadiness)")
 $summaryLines.Add("- Require clean worktree: $($result.requireCleanWorktree)")
 $summaryLines.Add("- Source package check: $($result.sourcePackageCheck)")
+$summaryLines.Add("- Gate evidence check: $($result.gateEvidenceCheck)")
 $summaryLines.Add("- Deliverable mode: $($result.deliverableMode)")
 $summaryLines.Add("- Real DXM writes: $($result.realDxmWrites)")
 $summaryLines.Add("- Git HEAD: $($result.gitHead)")
+$summaryLines.Add("- Acceptance note: for this local safety diagnostic delivery, PASS means local workbench checks pass, required source package checks pass, and real DXM readiness is derived from L2/L3 gates; UNKNOWN is a failure and current expected write state remains BLOCKED.")
 if (!$SkipBrowserQA) {
   $summaryLines.Add("- Browser QA services: isolated backend $qaBackendPort / frontend $qaFrontendPort")
 }

@@ -58,6 +58,13 @@
 
 当前仓库默认面向 Windows 本地交付；推荐先运行检查模式，确认 Python、npm、后端依赖和前端依赖都就绪。
 
+前置条件：
+- Windows 10/11 + PowerShell
+- Python 3.11+
+- Node.js/npm
+- Git
+- 首次安装前端依赖时需要可访问 npm registry 的网络
+
 ### 0. Windows 启动前检查
 
 ```bat
@@ -133,9 +140,9 @@ python3 -m pytest tests -q
 scripts\final-delivery-check.bat
 ```
 
-它会串行运行 Windows 启动前检查、后端全量测试、前端生产构建、L1 selector replay、`git diff --check`、浏览器 QA，并输出 `outputs/final-delivery-check/final-delivery-check.md` / `.json`。浏览器 QA 会临时启动隔离的当前源码后端和前端预览服务，避免误测 8000/5173 上的旧进程；检查模式可能安装前端依赖，但不会访问店小秘、不会执行真实保存。报告顶部会分别显示“本地工作台自检结果”和“真实 DXM 写入放行状态”。
+它会串行运行 Windows 启动前检查、后端全量测试、前端生产构建、L1 selector replay、`git diff --check`、浏览器 QA，并输出 `outputs/final-delivery-check/final-delivery-check.md` / `.json`。最终自检模式下，浏览器 QA 截图和 sidecar 文件位于 `outputs\final-delivery-check\browser-checks\`。浏览器 QA 会临时启动隔离的当前源码后端和前端预览服务，避免误测 8000/5173 上的旧进程；检查模式可能安装前端依赖，但不会访问店小秘、不会执行真实保存。报告顶部会分别显示“本地工作台自检结果”和“真实 DXM 写入放行状态”。
 
-当前验收成功标准：`Local workbench check: PASS`、`Browser QA: PASS`、`Source package check: PASS`（发布源码包时）以及 `Real DXM write readiness: BLOCKED` 同时成立。这里的 `BLOCKED` 是预期安全状态，表示真实 L2/L3 尚未放行，不表示本地工作台交付失败。
+当前验收成功标准：默认验收要求 `Local workbench check: PASS`、`Browser QA: PASS`、`Source package check: NOT_REQUIRED` 以及 `Real DXM write readiness: BLOCKED` 同时成立；发布源码包验收才要求 `Source package check: PASS`。这里的 `BLOCKED` 是预期安全状态，表示真实 L2/L3 尚未放行，不表示本地工作台交付失败。
 
 启动工作台后，报告中心会显示最近一次交付自检摘要和报告路径，方便验收人直接确认本地 PASS、真实写入 BLOCKED 与源码包状态。
 
@@ -146,6 +153,14 @@ scripts\final-delivery-check.bat -RequireCleanWorktree
 ```
 
 当前开发态有未提交改动时，该模式会把 `Source package check` 标为 `FAIL`；本地工作台自检结果会单独保留。
+
+查看自检参数：
+
+```bat
+scripts\final-delivery-check.bat --help
+```
+
+正式验收不要使用 `-SkipBrowserQA`。
 
 ---
 
@@ -204,7 +219,10 @@ scripts/
 ├── start-backend.sh
 ├── start-frontend.sh
 ├── start-mvp.sh
-└── final-delivery-check.bat
+├── start-mvp.bat
+├── start-mvp.ps1
+├── final-delivery-check.bat
+└── final-delivery-check.ps1
 ```
 
 ---

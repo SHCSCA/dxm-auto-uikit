@@ -262,6 +262,11 @@ def resume_task(task_id: int):
 
 @app.post('/api/tasks/{task_id}/stop')
 def stop_task(task_id: int):
+    task = repo.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail='Task not found')
+    if task.get('mode') in REAL_WRITE_START_MODES:
+        raise HTTPException(status_code=409, detail='Real save task stop is disabled until worker stop acknowledgements are implemented')
     repo.update_task_status(task_id, 'cancelled')
     return {'ok': True, 'taskId': task_id, 'status': 'cancelled'}
 
