@@ -9,7 +9,7 @@ FINAL_DELIVERY_CHECK = REPO_ROOT / "scripts" / "final-delivery-check.ps1"
 QA_BROWSER_CHECK = REPO_ROOT / "scripts" / "qa-browser-check.ps1"
 WORKBENCH_MODULES = REPO_ROOT / "app" / "frontend" / "src" / "components" / "WorkbenchModules.tsx"
 APP_SHELL = REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx"
-USER_DELIVERY_GUIDE = REPO_ROOT / "docs" / "product" / "用户交付使用说明-20260525.md"
+USER_DELIVERY_GUIDE = REPO_ROOT / "docs" / "product" / "用户交付使用说明-20260526.md"
 
 
 def test_backend_config_can_use_dxm_data_dir_override(tmp_path):
@@ -116,6 +116,25 @@ def test_user_delivery_guide_explains_l2_allowlist_review_packet():
     assert "residual_risk" in guide
     assert "Allowlist 人工评审记录" in l2_gate
     assert "l2_recheck_required=true" in l2_gate
+
+
+def test_user_delivery_guide_has_current_acceptance_checklist():
+    guide = USER_DELIVERY_GUIDE.read_text(encoding="utf-8")
+
+    assert "# 用户交付使用说明 - 2026-05-26" in guide
+    assert "## 验收人快速判定清单" in guide
+    assert "本地工作台验收通过" in guide
+    assert "`Local workbench check: PASS`" in guide
+    assert "`Browser QA: PASS`" in guide
+    assert "`Real DXM write readiness: BLOCKED`" in guide
+    assert "`okScope=local_workbench_only`" in guide
+    assert "`realDxmMutationAllowed=false`" in guide
+    assert "只代表本地安全诊断工作台可交付" in guide
+    assert "源码包交付通过" in guide
+    assert "`Source package check: PASS`" in guide
+    assert "`scripts\\final-delivery-check.bat -RequireCleanWorktree`" in guide
+    assert "不允许启动真实写入" in guide
+    assert "不能只看 `ok: true`" in guide
 
 
 def test_readme_next_steps_focus_on_allowlist_l2_l3_reverification():

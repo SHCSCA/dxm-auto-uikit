@@ -24,11 +24,12 @@ export function SafetyStatusBar({ workspace, selectedTask, busy, onRefresh }: Sa
       ? 'warn'
       : 'ok'
   const headline = tone === 'danger'
-    ? '禁止启动真实保存任务 / 真实保存已阻断'
+    ? '本地工作台可交付，真实写入预期 BLOCKED'
     : tone === 'warn'
       ? '尚未形成真实可交付证明'
       : workspace.safety.guarantee
-  const statusLine = `当前任务 ${activeTaskLabel}，L2 ${humanGateStatus(l2Gate?.status ?? workspace.safety.l2Status ?? 'not_run')}，L3 ${humanGateStatus(l3Gate?.status ?? 'not_run')}`
+  const gateStatusLine = `L2 ${humanGateStatus(l2Gate?.status ?? workspace.safety.l2Status ?? 'not_run')}，L3 ${humanGateStatus(l3Gate?.status ?? 'not_run')}`
+  const statusLine = `当前任务 ${activeTaskLabel}，${tone === 'danger' ? `真实写入门禁未通过：${gateStatusLine}` : gateStatusLine}`
   const gateDetails = [
     l2Gate ? `L2：${l2Gate.detail}` : 'L2：缺少真实只读门禁状态',
     l3Gate ? `L3：${l3Gate.detail}` : 'L3：缺少真实保存门禁状态',

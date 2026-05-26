@@ -4,6 +4,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 APP_TSX = REPO_ROOT / "app" / "frontend" / "src" / "App.tsx"
 WORKBENCH_MODULES_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "WorkbenchModules.tsx"
+SAFETY_STATUS_BAR_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "SafetyStatusBar.tsx"
 QA_BROWSER_CHECK = REPO_ROOT / "scripts" / "qa-browser-check.ps1"
 
 
@@ -109,6 +110,16 @@ def test_task_and_evidence_center_describe_l3_blocked_as_expected_lock():
     assert "只有 L3 金丝雀完成后才生成可验收证据等级" in evidence_timeline_section
 
 
+def test_task_center_only_uses_demo_ready_copy_for_dry_run_tasks():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    task_center_section = source[source.index("export function TaskCenter"):source.index("export function ExecutionConsole")]
+
+    assert "selectedTask?.mode === 'dry_run'" in task_center_section
+    assert "selectedTaskIsDryRun && selectedTask?.status === 'draft' && <span>本地演示批次已可用于验收门禁" in task_center_section
+    assert "{selectedTask?.status === 'draft' && <span>本地演示批次已可用于验收门禁" not in task_center_section
+    assert "当前真实任务保持阻断，可创建本地 dry_run 演示批次完成工作台验收。" in task_center_section
+
+
 def test_task_center_surfaces_l2_allowlist_review_candidates_as_manual_review_only():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
 
@@ -122,12 +133,16 @@ def test_task_center_surfaces_l2_allowlist_review_candidates_as_manual_review_on
 def test_frontend_first_screen_names_local_safety_diagnostic_delivery():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     shell = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
+    safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
     qa_source = QA_BROWSER_CHECK.read_text(encoding="utf-8")
 
     assert "本地安全诊断工作台" in source
     assert "本地 PASS 仅代表工作台自检通过，真实 DXM 写入仍 BLOCKED" in source
+    assert "本地工作台可交付，真实写入预期 BLOCKED" in safety_bar
+    assert "真实写入门禁未通过" in safety_bar
     assert "本地验收 / L2 只读诊断 / L3 阻断复核" in shell
     assert "\\u672c\\u5730\\u5b89\\u5168\\u8bca\\u65ad\\u5de5\\u4f5c\\u53f0" in qa_source
+    assert "\\u672c\\u5730\\u5de5\\u4f5c\\u53f0\\u53ef\\u4ea4\\u4ed8" in qa_source
     assert "半托管保存交付工作台" not in source
     assert "保存核验 / 证据复盘" not in shell
 

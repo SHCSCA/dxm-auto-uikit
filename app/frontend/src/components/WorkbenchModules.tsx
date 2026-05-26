@@ -183,6 +183,7 @@ export function TaskCenter({ workspace, selectedTask, busy, onSelectTask, onBoot
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
   const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
   const needsRealL2 = selectedTask ? requiresRealL2(selectedTask) : false
+  const selectedTaskIsDryRun = selectedTask?.mode === 'dry_run'
   const l2BlocksStart = needsRealL2 && l2Gate?.status !== 'passed'
   const l3BlocksStart = needsRealL2 && l3Gate?.status === 'blocked'
   const l2DiagnosticSummaries = summarizeL2Diagnostics(l2Gate)
@@ -215,7 +216,8 @@ export function TaskCenter({ workspace, selectedTask, busy, onSelectTask, onBoot
             <strong>真实保存已阻断</strong>
             <span>{l2Gate?.detail ?? '需要 data_acquisition 与 draft_box 两个真实只读检查均通过。'}</span>
             {l3BlocksStart && <span>L3 当前按门禁锁定：L2 未 passed 或人工批准未完成前，不启动真实 claim_only/single_save/batch_save。</span>}
-            {selectedTask?.status === 'draft' && <span>本地演示批次已可用于验收门禁；真实保存被 L2 阻断是当前预期结果。</span>}
+            {selectedTaskIsDryRun && selectedTask?.status === 'draft' && <span>本地演示批次已可用于验收门禁；真实保存被 L2 阻断是当前预期结果。</span>}
+            {!selectedTaskIsDryRun && selectedTask?.status === 'draft' && <span>当前真实任务保持阻断，可创建本地 dry_run 演示批次完成工作台验收。</span>}
             <div className="next-step-actions">
               <button className="button button--secondary" type="button" onClick={onShowConsole}>查看 L2 阻断说明</button>
               <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
