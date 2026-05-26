@@ -1,7 +1,8 @@
+import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parents[2]
-DATA_DIR = BASE_DIR.parent.parent / "data"
+DATA_DIR = Path(os.environ["DXM_DATA_DIR"]).expanduser().resolve() if os.environ.get("DXM_DATA_DIR") else BASE_DIR.parent.parent / "data"
 SQLITE_DIR = DATA_DIR / "sqlite"
 EVIDENCE_DIR = DATA_DIR / "evidences"
 SCREENSHOT_DIR = DATA_DIR / "screenshots"

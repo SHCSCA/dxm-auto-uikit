@@ -12,6 +12,9 @@ $backendDir = Join-Path $root "app\backend"
 $frontendDir = Join-Path $root "app\frontend"
 $absoluteOutDir = if ([System.IO.Path]::IsPathRooted($OutDir)) { $OutDir } else { Join-Path $root $OutDir }
 $browserQaOutDir = Join-Path $absoluteOutDir "browser-checks"
+$l1ReplayOutDir = Join-Path $absoluteOutDir "l1-selector-replay"
+$pytestRuntimeDataDir = Join-Path $absoluteOutDir "pytest-runtime-data"
+$qaRuntimeDataDir = Join-Path $absoluteOutDir "qa-runtime-data"
 $browserQaJson = Join-Path $browserQaOutDir "qa-browser-check.json"
 $summaryPath = Join-Path $absoluteOutDir "final-delivery-check.md"
 $jsonPath = Join-Path $absoluteOutDir "final-delivery-check.json"
@@ -127,6 +130,35 @@ function Invoke-CapturedCommand {
   }
 }
 
+function Invoke-CapturedCommandWithEnvironment {
+  param(
+    [string]$Name,
+    [string]$FilePath,
+    [string[]]$Arguments,
+    [string]$WorkingDirectory,
+    [int]$TimeoutSeconds = 600,
+    [hashtable]$Environment
+  )
+
+  $previousValues = @{}
+  foreach ($key in $Environment.Keys) {
+    $previousValues[$key] = [System.Environment]::GetEnvironmentVariable($key, "Process")
+    [System.Environment]::SetEnvironmentVariable($key, [string]$Environment[$key], "Process")
+  }
+  try {
+    return Invoke-CapturedCommand `
+      -Name $Name `
+      -FilePath $FilePath `
+      -Arguments $Arguments `
+      -WorkingDirectory $WorkingDirectory `
+      -TimeoutSeconds $TimeoutSeconds
+  } finally {
+    foreach ($key in $Environment.Keys) {
+      [System.Environment]::SetEnvironmentVariable($key, $previousValues[$key], "Process")
+    }
+  }
+}
+
 function Stop-ProcessTree {
   param([int]$ProcessId)
 
@@ -179,6 +211,33 @@ function Start-BackgroundCommand {
     process = $process
     stdoutLog = $stdoutPath
     stderrLog = $stderrPath
+  }
+}
+
+function Start-BackgroundCommandWithEnvironment {
+  param(
+    [string]$Name,
+    [string]$FilePath,
+    [string[]]$Arguments,
+    [string]$WorkingDirectory,
+    [hashtable]$Environment
+  )
+
+  $previousValues = @{}
+  foreach ($key in $Environment.Keys) {
+    $previousValues[$key] = [System.Environment]::GetEnvironmentVariable($key, "Process")
+    [System.Environment]::SetEnvironmentVariable($key, [string]$Environment[$key], "Process")
+  }
+  try {
+    return Start-BackgroundCommand `
+      -Name $Name `
+      -FilePath $FilePath `
+      -Arguments $Arguments `
+      -WorkingDirectory $WorkingDirectory
+  } finally {
+    foreach ($key in $Environment.Keys) {
+      [System.Environment]::SetEnvironmentVariable($key, $previousValues[$key], "Process")
+    }
   }
 }
 
@@ -305,12 +364,15 @@ $commands += Invoke-CapturedCommand `
   -Arguments @("/c", "scripts\start-mvp.bat", "--check") `
   -WorkingDirectory $root `
   -TimeoutSeconds 180
-$commands += Invoke-CapturedCommand `
+Remove-Item -LiteralPath $pytestRuntimeDataDir -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path $pytestRuntimeDataDir -Force | Out-Null
+$commands += Invoke-CapturedCommandWithEnvironment `
   -Name "Backend pytest" `
   -FilePath $pythonExe `
   -Arguments @("-m", "pytest", "-q") `
   -WorkingDirectory $backendDir `
-  -TimeoutSeconds 180
+  -TimeoutSeconds 180 `
+  -Environment @{ DXM_DATA_DIR = $pytestRuntimeDataDir }
 $commands += Invoke-CapturedCommand `
   -Name "Frontend production build" `
   -FilePath $npmExe `
@@ -320,7 +382,7 @@ $commands += Invoke-CapturedCommand `
 $commands += Invoke-CapturedCommand `
   -Name "L1 selector replay" `
   -FilePath $pythonExe `
-  -Arguments @("tools/probes/l1_selector_replay.py", "--output-dir", "data/l1_selector_replay") `
+  -Arguments @("tools/probes/l1_selector_replay.py", "--output-dir", $l1ReplayOutDir) `
   -WorkingDirectory $root `
   -TimeoutSeconds 180
 $commands += Invoke-CapturedCommand `
@@ -340,15 +402,18 @@ if (!$SkipBrowserQA) {
   $qaBackendPort = Get-FreeTcpPort -PreferredPort 18000
   $qaFrontendPort = Get-FreeTcpPort -PreferredPort 15173
   $workspaceApiBase = "http://127.0.0.1:$qaBackendPort"
+  Remove-Item -LiteralPath $qaRuntimeDataDir -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Path $qaRuntimeDataDir -Force | Out-Null
   $viteCmd = Join-Path $frontendDir "node_modules\.bin\vite.cmd"
   if (!(Test-Path -LiteralPath $viteCmd)) {
     throw "Vite was not found at $viteCmd. Run scripts\start-mvp.bat --check first."
   }
-  $qaProcesses += Start-BackgroundCommand `
+  $qaProcesses += Start-BackgroundCommandWithEnvironment `
     -Name "QA backend service" `
     -FilePath $pythonExe `
     -Arguments @("-m", "uvicorn", "src.main:app", "--host", "127.0.0.1", "--port", [string]$qaBackendPort) `
-    -WorkingDirectory $backendDir
+    -WorkingDirectory $backendDir `
+    -Environment @{ DXM_DATA_DIR = $qaRuntimeDataDir }
   Wait-HttpReady -Name "QA backend service" -Uri "$workspaceApiBase/health" -TimeoutSeconds 45
   $qaProcesses += Start-BackgroundCommand `
     -Name "QA frontend preview" `
@@ -449,6 +514,8 @@ $result = [pscustomobject]@{
     backendPort = $qaBackendPort
     frontendPort = $qaFrontendPort
     workspaceApiBase = $workspaceApiBase
+    pytestRuntimeDataDir = $pytestRuntimeDataDir
+    qaRuntimeDataDir = $qaRuntimeDataDir
     isolated = -not [bool]$SkipBrowserQA
   }
   browserQa = $browserQa
@@ -459,6 +526,7 @@ $result = [pscustomobject]@{
   artifacts = @{
     summary = $summaryPath
     json = $jsonPath
+    l1SelectorReplayDir = $l1ReplayOutDir
     browserQaJson = $browserQaJson
     browserQaMarkdown = (Join-Path $browserQaOutDir "qa-browser-check.md")
     taskCenterScreenshot = (Join-Path $browserQaOutDir "qa-task-center.png")
