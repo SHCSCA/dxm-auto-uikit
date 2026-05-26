@@ -1583,6 +1583,22 @@ tr:last-child td {
   font-size: 12px;
 }
 
+.delivery-check-card__commands {
+  display: grid;
+  gap: 8px;
+}
+
+.delivery-check-card__commands div {
+  display: grid;
+  gap: 5px;
+}
+
+.delivery-check-card__commands span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .l2-next-step-card p {
   margin: 0;
   color: var(--muted);
@@ -1669,6 +1685,59 @@ tr:last-child td {
 
 .check-row strong {
   font-size: 13px;
+}
+
+.delivery-readiness-row {
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 3px 8px;
+  align-items: center;
+  background: var(--surface-alt);
+}
+
+.delivery-readiness-row > span {
+  width: 28px;
+  min-height: 24px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 850;
+  grid-row: span 2;
+}
+
+.delivery-readiness-row strong {
+  font-size: 13px;
+}
+
+.delivery-readiness-row small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.delivery-readiness-row.is-blocked {
+  border-color: rgba(180, 83, 9, 0.34);
+  background: #fff8eb;
+}
+
+.delivery-readiness-row.is-blocked > span {
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.delivery-readiness-row.is-ready > span {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.delivery-readiness-row.is-unknown > span {
+  background: var(--red-soft);
+  color: var(--red);
 }
 
 @media (max-width: 1320px) {

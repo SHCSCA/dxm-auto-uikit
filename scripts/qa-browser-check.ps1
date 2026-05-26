@@ -207,6 +207,13 @@ const text = {
   noFakeEvidence: '\u4e0d\u628a\u5546\u54c1\u4fe1\u606f\u4f2a\u88c5\u6210\u6d4f\u89c8\u5668\u8bc1\u636e',
   finalCheck: '\u6700\u8fd1\u4ea4\u4ed8\u81ea\u68c0',
   expectedBlocked: '\u771f\u5b9e\u5199\u5165\u4fdd\u6301\u963b\u65ad',
+  blockedExpectedState: '\u9884\u671f\u963b\u65ad',
+  noRealWrite: '\u4e0d\u53ef\u6267\u884c\u771f\u5b9e\u5199\u5165',
+  localAcceptanceCommand: '\u672c\u5730\u9a8c\u6536\u547d\u4ee4',
+  sourceAcceptanceCommand: '\u6e90\u7801\u5305\u9a8c\u6536\u547d\u4ee4',
+  l2RunIdFlag: '--run-id',
+  l2RunIdVar: '$runId',
+  l2SameBinding: '\u540c\u4e00 run-id',
   fallbackCopy: 'fallback',
   oldSaveOnly: '\u53ea\u4fdd\u5b58\u4e0d\u53d1\u5e03',
   oldWaitSave: '\u7b49\u5f85\u4fdd\u5b58\u6838\u9a8c',
@@ -228,6 +235,9 @@ const consoleShot = await screenshot('qa-execution-console');
 const clickedReports = await clickText(text.reports);
 await new Promise(r => setTimeout(r, 700));
 const reportText = await bodyText();
+const reportBlockedStatusTone = await evalValue('(() => { const row = document.querySelector(".delivery-readiness-row"); return Boolean(row && row.className.includes("is-blocked") && (row.innerText || "").includes("BLOCKED")); })()');
+const reportAcceptanceCommands = await evalValue('(() => [...document.querySelectorAll(".delivery-check-card__commands code")].map(el => (el.innerText || el.textContent || "").trim()))()');
+const l2CommandBlocks = await evalValue('(() => [...document.querySelectorAll(".l2-next-step-card__commands code")].map(el => (el.innerText || el.textContent || "").trim()))()');
 const reportShot = await screenshot('qa-report-center');
 await send('Emulation.setDeviceMetricsOverride', {
   width: 390,
@@ -355,6 +365,11 @@ fs.writeFileSync(blockedActionsPath, JSON.stringify({
 }, null, 2));
 const blockedActionsAllForbidden = blockedActionChecks.length === 5 && blockedActionChecks.every(item => item.status === 403);
 const taskStateUnchanged = JSON.stringify(beforeTaskStatus) === JSON.stringify(afterTaskStatus);
+const hasLocalAcceptanceCommand = Array.isArray(reportAcceptanceCommands) && reportAcceptanceCommands.some(command => /scripts[\\/]+final-delivery-check\.bat$/.test(command));
+const hasSourceAcceptanceCommand = Array.isArray(reportAcceptanceCommands) && reportAcceptanceCommands.some(command => /scripts[\\/]+final-delivery-check\.bat\s+-RequireCleanWorktree$/.test(command));
+const hasRunIdSetup = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(command => command.includes('$runId') && command.includes('Get-Date'));
+const hasDataAcquisitionRunId = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(command => command.includes('--target data_acquisition') && command.includes('--run-id $runId'));
+const hasDraftBoxRunId = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(command => command.includes('--target draft_box') && command.includes('--run-id $runId'));
 const result = {
   checkedAt: new Date().toISOString(),
   url: targetUrl,
@@ -375,6 +390,9 @@ const result = {
     consoleStartButtonDisabled: consoleStartDisabled,
     consoleNoFakePlaceholder: !(consoleText + ' ' + taskText).includes(text.fakePlaceholder),
     reportDeliveryCheckVisible: reportText.includes(text.finalCheck) && reportText.includes(text.expectedBlocked),
+    reportBlockedStatusLanguage: reportText.includes(text.blockedExpectedState) && reportText.includes(text.noRealWrite) && reportBlockedStatusTone,
+    reportDualAcceptanceCommands: reportText.includes(text.localAcceptanceCommand) && reportText.includes(text.sourceAcceptanceCommand) && hasLocalAcceptanceCommand && hasSourceAcceptanceCommand,
+    reportL2RunBindingCopy: reportText.includes(text.l2SameBinding) && hasRunIdSetup && hasDataAcquisitionRunId && hasDraftBoxRunId,
     noDeveloperFallbackCopy: !(initialText + ' ' + taskText + ' ' + consoleText + ' ' + reportText).includes(text.fallbackCopy),
     localStartPostBlocked: blockedStartStatus === 403,
     localAgentConsolePostBlocked: blockedAgentConsoleStatus === 403,

@@ -754,10 +754,11 @@ export function ReportCenter({
         <ModuleHead title="重新验证 L2" meta="需人工批准" />
         <p>真实写入保持阻断；仅在操作者确认可进行只读探测时，才重新运行双目标 L2。</p>
         <div className="l2-next-step-card__commands">
-          <code>app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target data_acquisition</code>
-          <code>app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target draft_box</code>
+          <code>$runId = "l2-real-" + (Get-Date -Format "yyyyMMddTHHmmssZ")</code>
+          <code>app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target data_acquisition --run-id $runId</code>
+          <code>app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target draft_box --run-id $runId</code>
         </div>
-        <p>证据目录：data\l2_readonly_probe。两个真实目标同一门禁窗口通过后，才允许申请 L3 金丝雀。</p>
+        <p>证据目录：data\l2_readonly_probe。两个真实目标必须同一 run-id、同一 session fingerprint、同一脚本 hash 与同一 git head，才允许申请 L3 金丝雀。</p>
       </div>
       <div className="module-card span-3">
         <ModuleHead title="报告必须覆盖" meta="交付检查表" />
@@ -778,25 +779,62 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
   const reportPath = finalCheck?.summary_path ?? 'outputs/final-delivery-check/final-delivery-check.md'
   const jsonPath = finalCheck?.json_path ?? 'outputs/final-delivery-check/final-delivery-check.json'
   const gitHead = finalCheck?.git_head ? finalCheck.git_head.slice(0, 8) : '未记录'
+  const readiness = finalCheck?.real_dxm_write_readiness ?? '未检查'
+  const readinessDetail = !available
+    ? '还没有读取到交付自检报告。运行 scripts\\final-delivery-check.bat 后，这里会显示最近一次验收摘要。'
+    : readiness === 'READY'
+      ? '当前自检显示真实写入 READY；执行前仍需复核 L2/L3 证据、人工金丝雀批准和报告链路。'
+      : readiness === 'BLOCKED'
+        ? '当前预期交付态：本地工作台通过，真实写入保持阻断。BLOCKED 代表真实 L2/L3 尚未放行，不代表本地工作台失败。'
+        : '当前真实写入状态未知，不可执行真实写入；请先重新运行交付自检并复核 L2/L3 门禁。'
 
   return (
     <div className="module-card span-3 delivery-check-card">
       <ModuleHead title="最近交付自检" meta={available ? checkedAt : '尚未运行'} />
       <div className="report-check-grid">
         <CheckRow label={`本地工作台 ${finalCheck?.local_workbench_check ?? '未检查'}`} ok={finalCheck?.local_workbench_check === 'PASS'} />
-        <CheckRow label={`真实 DXM 写入 ${finalCheck?.real_dxm_write_readiness ?? '未检查'}`} ok={finalCheck?.real_dxm_write_readiness === 'BLOCKED'} />
+        <DeliveryReadinessRow readiness={readiness} />
         <CheckRow label={`源码包 ${finalCheck?.source_package_readiness ?? '未检查'}`} ok={finalCheck?.source_package_readiness === 'CLEAN'} />
         <CheckRow label={`浏览器 QA ${finalCheck?.browser_qa_ok === true ? 'PASS' : finalCheck?.browser_qa_ok === false ? 'FAIL' : '待刷新/未运行'}`} ok={finalCheck?.browser_qa_ok === true} />
       </div>
       <div className="delivery-check-card__body">
-        <p>{available ? '当前预期交付态：本地工作台通过，真实写入保持阻断。BLOCKED 代表真实 L2/L3 尚未放行，不代表本地工作台失败。' : '还没有读取到交付自检报告。运行 scripts\\final-delivery-check.bat 后，这里会显示最近一次验收摘要。'}</p>
+        <p>{readinessDetail}</p>
         <div className="delivery-check-card__paths">
           <code>{reportPath}</code>
           <code>{jsonPath}</code>
           <span>Git {gitHead}</span>
         </div>
-        <code className="delivery-check-card__command">scripts\final-delivery-check.bat -RequireCleanWorktree</code>
+        <div className="delivery-check-card__commands">
+          <div>
+            <span>本地验收命令</span>
+            <code className="delivery-check-card__command">scripts\final-delivery-check.bat</code>
+          </div>
+          <div>
+            <span>源码包验收命令</span>
+            <code className="delivery-check-card__command">scripts\final-delivery-check.bat -RequireCleanWorktree</code>
+          </div>
+        </div>
       </div>
+    </div>
+  )
+}
+
+function DeliveryReadinessRow({ readiness }: { readiness: string }) {
+  const isBlocked = readiness === 'BLOCKED'
+  const isReady = readiness === 'READY'
+  const tone = isReady ? 'is-ready' : isBlocked ? 'is-blocked' : 'is-unknown'
+  const label = isReady ? '真实 DXM 写入 READY' : isBlocked ? '真实 DXM 写入 BLOCKED' : `真实 DXM 写入 ${readiness}`
+  const detail = isReady
+    ? '仅在 L2/L3 证据复核与人工金丝雀批准后可执行。'
+    : isBlocked
+      ? '预期阻断，不可执行真实写入。'
+      : '状态未知，不可执行真实写入。'
+
+  return (
+    <div className={`delivery-readiness-row ${tone}`}>
+      <span>{isReady ? 'OK' : isBlocked ? 'LOCK' : '!'}</span>
+      <strong>{label}</strong>
+      <small>{detail}</small>
     </div>
   )
 }
