@@ -1,7 +1,8 @@
 param(
   [string]$Url = "http://127.0.0.1:5173",
   [string]$OutDir = "outputs/browser-checks",
-  [int]$Port = 9230
+  [int]$Port = 9230,
+  [switch]$ReportOnlyFinal
 )
 
 $ErrorActionPreference = "Stop"
@@ -97,6 +98,7 @@ const apiBase = new URL(targetUrl).searchParams.get('apiBase') || new URL(target
 const rootDir = '$($root.Replace("\", "/"))';
 const outDir = '$($absoluteOutDir.Replace("\", "/"))';
 const qaScriptPath = '$($PSCommandPath.Replace("\", "/"))';
+const reportOnlyFinal = $($ReportOnlyFinal.IsPresent.ToString().ToLowerInvariant());
 const versionInfo = await (await fetch('http://127.0.0.1:' + port + '/json/version')).json();
 if (typeof WebSocket !== 'function') {
   throw new Error('This QA check requires Node.js with global WebSocket support. Use Node 22+ or the bundled Codex Node runtime.');
@@ -253,7 +255,7 @@ async function screenshot(name) {
   fs.writeFileSync(path, Buffer.from(res.data, 'base64'));
   return path;
 }
-const realMutationTaskForBlockedChecks = await ensureRealMutationTask();
+const realMutationTaskForBlockedChecks = reportOnlyFinal ? null : await ensureRealMutationTask();
 await send('Page.enable');
 await send('Runtime.enable');
 await send('Network.enable');
@@ -285,6 +287,9 @@ const text = {
   screenshotHashes: '\u622a\u56fe\u54c8\u5e0c',
   localAcceptanceCommand: '\u672c\u5730\u9a8c\u6536\u547d\u4ee4',
   sourceAcceptanceCommand: '\u6e90\u7801\u5305\u9a8c\u6536\u547d\u4ee4',
+  localWorkbenchLabel: '\u672c\u5730\u5de5\u4f5c\u53f0',
+  browserQaLabel: '\u6d4f\u89c8\u5668 QA',
+  sourcePackageLabel: '\u6e90\u7801\u5305\u9a8c\u6536',
   sourcePackageNotRequired: '\u6e90\u7801\u5305\u9a8c\u6536 NOT_REQUIRED',
   sourcePackageNotRequiredCopy: '\u9ed8\u8ba4\u672c\u5730\u9a8c\u6536\u4e0d\u8981\u6c42\u6e90\u7801\u5305 clean',
   demoBatchButton: '\u521b\u5efa\u6f14\u793a\u6279\u6b21\uff08\u5199\u5165\u672c\u5730\uff09',
@@ -300,6 +305,135 @@ const text = {
   oldAutomation: '\u65c1\u89c2\u81ea\u52a8\u5316',
   fakePlaceholder: '\u8bca\u65ad\u5360\u4f4d',
 };
+if (reportOnlyFinal) {
+  const clickedReports = await clickText(text.reports);
+  await new Promise(r => setTimeout(r, 900));
+  const reportText = await bodyText();
+  const finalCheckSummary = await fetchJson('/api/delivery/final-check');
+  const finalReportShot = await screenshot('qa-report-center-final');
+  const finalReportBlockedStatusTone = await evalValue('(() => { const row = document.querySelector(".delivery-readiness-row"); return Boolean(row && row.className.includes("is-blocked") && (row.innerText || "").includes("BLOCKED")); })()');
+  const expectedSourcePackage = finalCheckSummary?.source_package_check === 'NOT_REQUIRED'
+    ? text.sourcePackageNotRequired
+    : text.sourcePackageLabel + ' ' + String(finalCheckSummary?.source_package_check ?? '\u672a\u68c0\u67e5');
+  const expectedBrowserQa = text.browserQaLabel + ' ' + (finalCheckSummary?.browser_qa_ok === true ? 'PASS' : 'FAIL');
+  const expectedLocalWorkbench = text.localWorkbenchLabel + ' ' + String(finalCheckSummary?.local_workbench_check ?? '\u672a\u68c0\u67e5');
+  const consolePath = outDir + '/qa-final-report-console.jsonl';
+  fs.writeFileSync(
+    consolePath,
+    consoleEvents.map(event => JSON.stringify(event)).join('\n') + (consoleEvents.length ? '\n' : '')
+  );
+  const networkPath = outDir + '/qa-final-report-network.json';
+  fs.writeFileSync(networkPath, JSON.stringify(networkEvents, null, 2));
+  const allowedOrigins = new Set([new URL(targetUrl).origin, new URL(apiBase).origin]);
+  const failedNetworkEvents = networkEvents.filter(event => event.type === 'failed');
+  const badNetworkResponses = networkEvents.filter(event => event.type === 'response' && (event.status < 200 || event.status >= 400));
+  const unexpectedNetworkMethods = networkEvents.filter(event => event.type === 'request' && event.method !== 'GET');
+  const unexpectedNetworkHosts = networkEvents.filter(event => {
+    if (!event.url || !(event.type === 'request' || event.type === 'response')) return false;
+    try {
+      const parsed = new URL(event.url);
+      return parsed.protocol.startsWith('http') && !allowedOrigins.has(parsed.origin);
+    } catch {
+      return true;
+    }
+  });
+  const finalResult = {
+    checkedAt: new Date().toISOString(),
+    url: targetUrl,
+    mode: 'report_only_final',
+    ok: true,
+    assertions: {
+      finalReportCenterOpened: clickedReports && reportText.includes(text.finalCheck),
+      finalReportCenterShowsFinalPassState: reportText.includes(expectedLocalWorkbench)
+        && reportText.includes(expectedBrowserQa)
+        && reportText.includes(expectedSourcePackage),
+      finalReportCenterShowsFreshnessState: reportText.includes(text.finalCheckCurrent)
+        || reportText.includes(text.finalCheckStale),
+      finalReportCenterShowsBlockedDxmState: reportText.includes(text.blockedExpectedState)
+        && reportText.includes(text.noRealWrite)
+        && finalReportBlockedStatusTone,
+      finalReportApiIsFinal: finalCheckSummary?.local_workbench_check === 'PASS'
+        && finalCheckSummary?.browser_qa_ok === true
+        && finalCheckSummary?.real_dxm_write_readiness === 'BLOCKED',
+      noConsoleErrors: consoleErrors.length === 0,
+      networkNoFailures: failedNetworkEvents.length === 0,
+      networkHttpOk: badNetworkResponses.length === 0,
+      networkGetOnly: unexpectedNetworkMethods.length === 0,
+      networkLocalOnly: unexpectedNetworkHosts.length === 0,
+      screenshotsWritten: fs.existsSync(finalReportShot),
+      sidecarsWritten: fs.existsSync(consolePath) && fs.existsSync(networkPath),
+    },
+    consoleErrors,
+    networkSummary: {
+      eventCount: networkEvents.length,
+      failedCount: failedNetworkEvents.length,
+      badResponseCount: badNetworkResponses.length,
+      unexpectedMethodCount: unexpectedNetworkMethods.length,
+      unexpectedHostCount: unexpectedNetworkHosts.length,
+      allowedOrigins: [...allowedOrigins],
+    },
+    screenshots: [finalReportShot],
+    screenshotHashes: { [finalReportShot]: sha256(finalReportShot) },
+    sidecars: {
+      console: consolePath,
+      network: networkPath,
+    },
+    sidecarHashes: {
+      [consolePath]: sha256(consolePath),
+      [networkPath]: sha256(networkPath),
+    },
+    environment: {
+      node: process.version,
+      platform: process.platform,
+      os: os.type() + ' ' + os.release(),
+      browser: versionInfo.Browser || versionInfo['User-Agent'] || 'unknown',
+      protocolVersion: versionInfo['Protocol-Version'] || null,
+      chromeDebugPort: port,
+      viewport: '1440x1100',
+    },
+    manifest: {
+      command: 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\\\qa-browser-check.ps1 -ReportOnlyFinal',
+      scriptPath: qaScriptPath,
+      scriptSha256: sha256(qaScriptPath),
+      gitHead: runGit(['rev-parse', 'HEAD']),
+      gitStatusShort: runGit(['status', '--short']),
+      backendLogPath: rootDir + '/data/backend.log',
+      frontendLogPath: rootDir + '/data/frontend.log',
+    },
+  };
+  finalResult.ok = Object.values(finalResult.assertions).every(Boolean);
+  const finalJsonPath = outDir + '/qa-final-report-check.json';
+  fs.writeFileSync(finalJsonPath, JSON.stringify(finalResult, null, 2));
+  const finalSummaryPath = outDir + '/qa-final-report-check.md';
+  const finalAssertionLines = Object.entries(finalResult.assertions).map(([key, value]) => '- ' + (value ? 'PASS' : 'FAIL') + ' ' + key);
+  const finalScreenshotLines = finalResult.screenshots.map(path => '- ' + path + ' sha256=' + finalResult.screenshotHashes[path]);
+  const finalSidecarLines = Object.entries(finalResult.sidecars).map(([key, path]) => '- ' + key + ': ' + path + ' sha256=' + finalResult.sidecarHashes[path]);
+  const finalConsoleLines = finalResult.consoleErrors.length ? finalResult.consoleErrors.map(error => '- ' + error) : ['- none'];
+  fs.writeFileSync(finalSummaryPath, [
+    '# Final Report Center QA',
+    '',
+    '- Checked at: ' + finalResult.checkedAt,
+    '- URL: ' + finalResult.url,
+    '- Result: ' + (finalResult.ok ? 'PASS' : 'FAIL'),
+    '',
+    '## Assertions',
+    ...finalAssertionLines,
+    '',
+    '## Screenshots',
+    ...finalScreenshotLines,
+    '',
+    '## Sidecars',
+    ...finalSidecarLines,
+    '',
+    '## Console Errors',
+    ...finalConsoleLines,
+    '',
+  ].join('\n'));
+  console.log(JSON.stringify(finalResult, null, 2));
+  ws.close();
+  if (!finalResult.ok) process.exit(1);
+  process.exit(0);
+}
 const initialText = await bodyText();
 const clickedTasks = await clickText(text.tasks);
 await new Promise(r => setTimeout(r, 700));

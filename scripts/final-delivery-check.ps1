@@ -16,6 +16,7 @@ $l1ReplayOutDir = Join-Path $absoluteOutDir "l1-selector-replay"
 $pytestRuntimeDataDir = Join-Path $absoluteOutDir "pytest-runtime-data"
 $qaRuntimeDataDir = Join-Path $absoluteOutDir "qa-runtime-data"
 $browserQaJson = Join-Path $browserQaOutDir "qa-browser-check.json"
+$postFinalReportQaJson = Join-Path $browserQaOutDir "qa-final-report-check.json"
 $summaryPath = Join-Path $absoluteOutDir "final-delivery-check.md"
 $jsonPath = Join-Path $absoluteOutDir "final-delivery-check.json"
 $qaProcesses = @()
@@ -717,6 +718,7 @@ $result = [pscustomobject]@{
     isolated = -not [bool]$SkipBrowserQA
   }
   browserQa = $browserQa
+  postFinalReportQa = $null
   l2ProbePlan = $l2ProbePlan
   l2ProbeEvidenceSummary = $l2ProbeEvidenceSummary
   gates = @{
@@ -729,9 +731,12 @@ $result = [pscustomobject]@{
     l1SelectorReplayDir = $l1ReplayOutDir
     browserQaJson = $browserQaJson
     browserQaMarkdown = (Join-Path $browserQaOutDir "qa-browser-check.md")
+    postFinalReportQaJson = $postFinalReportQaJson
+    postFinalReportQaMarkdown = (Join-Path $browserQaOutDir "qa-final-report-check.md")
     taskCenterScreenshot = (Join-Path $browserQaOutDir "qa-task-center.png")
     executionConsoleScreenshot = (Join-Path $browserQaOutDir "qa-execution-console.png")
     reportCenterScreenshot = (Join-Path $browserQaOutDir "qa-report-center.png")
+    finalReportCenterScreenshot = (Join-Path $browserQaOutDir "qa-report-center-final.png")
     mobileTaskScreenshot = (Join-Path $browserQaOutDir "qa-mobile-task-center.png")
     qaConsole = (Join-Path $browserQaOutDir "qa-console.jsonl")
     qaNetwork = (Join-Path $browserQaOutDir "qa-network.json")
@@ -740,6 +745,35 @@ $result = [pscustomobject]@{
 }
 
 $result | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
+
+$postFinalReportQa = $null
+if (!$SkipBrowserQA) {
+  # The main Browser QA screenshot captures the provisional report used during the run.
+  # After writing the final JSON, capture the final report-center state as delivery evidence.
+  $commands += Invoke-CapturedCommand `
+    -Name "Final report center QA" `
+    -FilePath "powershell.exe" `
+    -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts\qa-browser-check.ps1", "-Url", $browserQaUrl, "-OutDir", $browserQaOutDir, "-ReportOnlyFinal") `
+    -WorkingDirectory $root `
+    -TimeoutSeconds 180
+  if (Test-Path -LiteralPath $postFinalReportQaJson) {
+    $postFinalReportQa = Get-Content -LiteralPath $postFinalReportQaJson -Raw -Encoding UTF8 | ConvertFrom-Json
+  }
+  if (!$postFinalReportQa -or $postFinalReportQa.ok -ne $true) {
+    $localWorkbenchOk = $false
+  }
+  $overallOk = $localWorkbenchOk -and $gateEvidenceOk -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")
+  $result.ok = $overallOk
+  $result.status = if ($overallOk) {
+    if ($RequireCleanWorktree) { "local_workbench_source_package_check_pass" } else { "local_workbench_check_pass" }
+  } else {
+    if ($RequireCleanWorktree -and $sourcePackageCheck -eq "FAIL") { "source_package_check_fail" } else { "local_workbench_check_fail" }
+  }
+  $result.localWorkbenchCheck = if ($localWorkbenchOk) { "PASS" } else { "FAIL" }
+  $result.commands = $commands
+  $result.postFinalReportQa = $postFinalReportQa
+  $result | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
+}
 
 $summaryLines = New-Object System.Collections.Generic.List[string]
 $summaryLines.Add("# DXM Local Workbench Delivery Check")
@@ -837,13 +871,24 @@ if ($browserQa -and $browserQa.assertions) {
   }
 }
 $summaryLines.Add("")
+$summaryLines.Add("## Final Report Center QA")
+$summaryLines.Add("- Final report center QA: $(if ($postFinalReportQa -and $postFinalReportQa.ok -eq $true) { "PASS" } elseif ($SkipBrowserQA) { "SKIPPED" } else { "FAIL/MISSING" })")
+if ($postFinalReportQa -and $postFinalReportQa.assertions) {
+  foreach ($property in $postFinalReportQa.assertions.PSObject.Properties) {
+    $summaryLines.Add("- $(if ($property.Value) { "PASS" } else { "FAIL" }) $($property.Name)")
+  }
+}
+$summaryLines.Add("")
 $summaryLines.Add("## Artifacts")
 $summaryLines.Add("- JSON: $jsonPath")
 $summaryLines.Add("- Browser QA JSON: $($result.artifacts.browserQaJson)")
 $summaryLines.Add("- Browser QA Markdown: $($result.artifacts.browserQaMarkdown)")
+$summaryLines.Add("- Final report QA JSON: $($result.artifacts.postFinalReportQaJson)")
+$summaryLines.Add("- Final report QA Markdown: $($result.artifacts.postFinalReportQaMarkdown)")
 $summaryLines.Add("- Task screenshot: $($result.artifacts.taskCenterScreenshot)")
 $summaryLines.Add("- Console screenshot: $($result.artifacts.executionConsoleScreenshot)")
 $summaryLines.Add("- Report screenshot: $($result.artifacts.reportCenterScreenshot)")
+$summaryLines.Add("- Final report screenshot: $($result.artifacts.finalReportCenterScreenshot)")
 $summaryLines.Add("- Mobile task screenshot: $($result.artifacts.mobileTaskScreenshot)")
 $summaryLines.Add("- Console sidecar: $($result.artifacts.qaConsole)")
 $summaryLines.Add("- Network sidecar: $($result.artifacts.qaNetwork)")

@@ -6,6 +6,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FINAL_DELIVERY_CHECK = REPO_ROOT / "scripts" / "final-delivery-check.ps1"
+QA_BROWSER_CHECK = REPO_ROOT / "scripts" / "qa-browser-check.ps1"
 
 
 def test_backend_config_can_use_dxm_data_dir_override(tmp_path):
@@ -79,3 +80,19 @@ def test_final_delivery_check_writes_current_provisional_report_before_browser_q
         script.index('-Name "Browser workbench QA"')
     ]
     assert "Write-ProvisionalDeliveryCheckReport" in qa_startup_section
+
+
+def test_final_delivery_check_captures_final_report_center_after_final_json_write():
+    script = FINAL_DELIVERY_CHECK.read_text(encoding="utf-8")
+    qa_script = QA_BROWSER_CHECK.read_text(encoding="utf-8")
+
+    assert "ReportOnlyFinal" in qa_script
+    assert "finalReportCenterShowsFinalPassState" in qa_script
+    assert "qa-report-center-final" in qa_script
+    assert "Final report center QA" in script
+    assert "postFinalReportQa" in script
+    assert "finalReportCenterScreenshot" in script
+    final_json_write = script.index("$result | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $jsonPath -Encoding UTF8")
+    post_final_qa = script.index('-Name "Final report center QA"')
+    stop_qa = script.rindex("Stop-QAProcesses")
+    assert final_json_write < post_final_qa < stop_qa
