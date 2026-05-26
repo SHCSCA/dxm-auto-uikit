@@ -188,6 +188,21 @@ export type RegressionGate = {
   latest?: Record<string, unknown> | null
 }
 
+export type L2ProbePlan = {
+  schema: string
+  requiresApproval: boolean
+  purpose: string
+  runIdCommand: string
+  pythonCommand: string
+  scriptPath: string
+  cookieFile: string
+  outputDir: string
+  targets: Array<{ id: string; url: string; required: boolean }>
+  commands: string[]
+  acceptanceCriteria: string[]
+  safetyNotes: string[]
+}
+
 export type DeliveryWorkspace = {
   source: 'api' | 'fallback' | 'mock'
   stores: Store[]
@@ -206,6 +221,7 @@ export type DeliveryWorkspace = {
   publishGuardState: SafetyGuardState | null
   evidenceGrade: { grade: EvidenceGrade; [key: string]: unknown } | null
   regressionGates: RegressionGate[]
+  l2ProbePlan: L2ProbePlan
   dxmReferenceTemplates: DxmReferenceTemplateSection[]
   acceptanceGaps: AcceptanceGap[]
   safety: {

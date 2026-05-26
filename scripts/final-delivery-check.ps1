@@ -42,6 +42,43 @@ if ($Help) {
 New-Item -ItemType Directory -Path $absoluteOutDir -Force | Out-Null
 New-Item -ItemType Directory -Path $browserQaOutDir -Force | Out-Null
 
+function Invoke-JsonUtf8 {
+  param(
+    [string]$Uri,
+    [int]$TimeoutSec = 5
+  )
+
+  $response = Invoke-WebRequest -Uri $Uri -UseBasicParsing -TimeoutSec $TimeoutSec
+  $content = $null
+  if ($response.RawContentStream) {
+    $stream = $response.RawContentStream
+    if ($stream.CanSeek) {
+      $stream.Position = 0
+    }
+    $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8, $true)
+    try {
+      $content = $reader.ReadToEnd()
+    } finally {
+      $reader.Dispose()
+    }
+  }
+  if ([string]::IsNullOrEmpty($content)) {
+    $content = [string]$response.Content
+  }
+  return $content | ConvertFrom-Json
+}
+
+function Get-JsonObjectPropertyCount {
+  param(
+    [object]$Value
+  )
+
+  if ($null -eq $Value -or $null -eq $Value.PSObject) {
+    return 0
+  }
+  return @($Value.PSObject.Properties).Count
+}
+
 function Resolve-Python {
   $venvPython = Join-Path $backendDir ".venv\Scripts\python.exe"
   if (Test-Path -LiteralPath $venvPython) {
@@ -451,7 +488,7 @@ try {
 
 $workspaceSnapshot = $null
 try {
-  $workspaceSnapshot = Invoke-RestMethod -Uri "$workspaceApiBase/api/delivery/workspace" -TimeoutSec 5
+  $workspaceSnapshot = Invoke-JsonUtf8 -Uri "$workspaceApiBase/api/delivery/workspace" -TimeoutSec 5
 } catch {
   $workspaceSnapshot = $null
 }
@@ -460,6 +497,61 @@ $l3Gate = $null
 if ($workspaceSnapshot -and $workspaceSnapshot.regression_gates) {
   $l2Gate = $workspaceSnapshot.regression_gates | Where-Object { $_.level -eq "L2" } | Select-Object -First 1
   $l3Gate = $workspaceSnapshot.regression_gates | Where-Object { $_.level -eq "L3" } | Select-Object -First 1
+}
+$l2ProbePlan = if ($workspaceSnapshot -and $workspaceSnapshot.l2_probe_plan) { $workspaceSnapshot.l2_probe_plan } else { $null }
+$l2ProbeEvidenceSummary = @()
+if ($l2Gate -and $l2Gate.latest) {
+  $targetBuckets = @()
+  if ((Get-JsonObjectPropertyCount $l2Gate.latest.realTargets) -gt 0) {
+    $targetBuckets += [pscustomobject]@{ kind = "real"; targets = $l2Gate.latest.realTargets }
+  }
+  if ($targetBuckets.Count -eq 0 -and (Get-JsonObjectPropertyCount $l2Gate.latest.mockTargets) -gt 0) {
+    $targetBuckets += [pscustomobject]@{ kind = "mock"; targets = $l2Gate.latest.mockTargets }
+  }
+  foreach ($bucket in $targetBuckets) {
+    foreach ($targetProperty in $bucket.targets.PSObject.Properties) {
+      $targetResult = $targetProperty.Value
+      $network = $targetResult.network
+      $diagnostics = $targetResult.diagnostics
+      $navigation = if ($diagnostics) { $diagnostics.navigation } else { $null }
+      $topBlockedGroups = @()
+      if ($diagnostics -and $diagnostics.blocked_request_groups) {
+        $topBlockedGroups = @($diagnostics.blocked_request_groups | Select-Object -First 3 | ForEach-Object {
+          [pscustomobject]@{
+            count = $_.count
+            method = $_.method
+            host = $_.host
+            path = $_.path
+            resource_type = $_.resource_type
+            reasons = $_.reasons
+          }
+        })
+      }
+      $l2ProbeEvidenceSummary += [pscustomobject]@{
+        target = $targetProperty.Name
+        evidenceKind = $bucket.kind
+        ok = $targetResult.ok
+        run_id = $targetResult.run_id
+        final_url = $targetResult.final_url
+        final_path = if ($navigation) { $navigation.final_path } else { $null }
+        final_path_class = if ($navigation) { $navigation.final_path_class } else { $null }
+        json_path = $targetResult.json_path
+        markdown_path = $targetResult.markdown_path
+        screenshot_path = $targetResult.screenshot_path
+        screenshot_sha256 = $targetResult.screenshot_sha256
+        dom_path = $targetResult.dom_path
+        dom_sha256 = $targetResult.dom_sha256
+        network = @{
+          write_request_count = if ($network) { $network.write_request_count } else { $null }
+          non_read_request_count = if ($network) { $network.non_read_request_count } else { $null }
+          blocked_request_count = if ($network) { $network.blocked_request_count } else { $null }
+          forbidden_keyword_request_count = if ($network) { $network.forbidden_keyword_request_count } else { $null }
+          websocket_count = if ($network) { $network.websocket_count } else { $null }
+        }
+        top_blocked_request_groups = $topBlockedGroups
+      }
+    }
+  }
 }
 
 $gateEvidenceOk = [bool]($workspaceSnapshot -and $l2Gate -and $l3Gate)
@@ -519,6 +611,8 @@ $result = [pscustomobject]@{
     isolated = -not [bool]$SkipBrowserQA
   }
   browserQa = $browserQa
+  l2ProbePlan = $l2ProbePlan
+  l2ProbeEvidenceSummary = $l2ProbeEvidenceSummary
   gates = @{
     l2 = $l2Gate
     l3 = $l3Gate
@@ -563,7 +657,7 @@ $summaryLines.Add("## Safety Gates")
 if ($l2Gate) {
   $summaryLines.Add("- L2: $($l2Gate.status)")
   if ($l2Gate.status -ne "passed") {
-    $summaryLines.Add("  - reason: real data_acquisition and draft_box readonly probes are not passed in the same valid gate window and evidence binding")
+    $summaryLines.Add("  - reason: $($l2Gate.detail)")
   }
 } else {
   $summaryLines.Add("- L2: UNKNOWN - backend workspace snapshot was unavailable")
@@ -575,6 +669,50 @@ if ($l3Gate) {
   }
 } else {
   $summaryLines.Add("- L3: UNKNOWN - backend workspace snapshot was unavailable")
+}
+$summaryLines.Add("")
+$summaryLines.Add("## L2 Readonly Probe Evidence")
+if ($l2ProbeEvidenceSummary.Count -gt 0) {
+  foreach ($item in $l2ProbeEvidenceSummary) {
+    $summaryLines.Add("- $($item.target) [$($item.evidenceKind)] ok=$($item.ok) run_id=$($item.run_id)")
+    $summaryLines.Add("  - final_url: $($item.final_url)")
+    if ($item.final_path) {
+      $summaryLines.Add("  - final_path: $($item.final_path) ($($item.final_path_class))")
+    }
+    $summaryLines.Add("  - network: write_request_count=$($item.network.write_request_count), non_read_request_count=$($item.network.non_read_request_count), blocked_request_count=$($item.network.blocked_request_count), forbidden_keyword_request_count=$($item.network.forbidden_keyword_request_count), websocket_count=$($item.network.websocket_count)")
+    $summaryLines.Add("  - json_path: $($item.json_path)")
+    $summaryLines.Add("  - markdown_path: $($item.markdown_path)")
+    $summaryLines.Add("  - screenshot_path: $($item.screenshot_path)")
+    $summaryLines.Add("  - screenshot_sha256: $($item.screenshot_sha256)")
+    $summaryLines.Add("  - dom_path: $($item.dom_path)")
+    $summaryLines.Add("  - dom_sha256: $($item.dom_sha256)")
+    if ($item.top_blocked_request_groups.Count -gt 0) {
+      foreach ($group in $item.top_blocked_request_groups) {
+        $summaryLines.Add("  - blocked_group: $($group.method) $($group.host)$($group.path) x$($group.count) / $($group.resource_type) / $($group.reasons -join ', ')")
+      }
+    }
+  }
+} else {
+  $summaryLines.Add("- No L2 readonly probe evidence was available in the workspace snapshot.")
+}
+$summaryLines.Add("")
+$summaryLines.Add("## L2 Recheck Plan")
+if ($l2ProbePlan) {
+  $summaryLines.Add("- Purpose: $($l2ProbePlan.purpose)")
+  $summaryLines.Add("- Requires approval: $($l2ProbePlan.requiresApproval)")
+  $summaryLines.Add("- Cookie file: $($l2ProbePlan.cookieFile)")
+  $summaryLines.Add("- Output dir: $($l2ProbePlan.outputDir)")
+  foreach ($command in $l2ProbePlan.commands) {
+    $summaryLines.Add("- Command: $command")
+  }
+  foreach ($criterion in $l2ProbePlan.acceptanceCriteria) {
+    $summaryLines.Add("- Acceptance: $criterion")
+  }
+  foreach ($note in $l2ProbePlan.safetyNotes) {
+    $summaryLines.Add("- Safety: $note")
+  }
+} else {
+  $summaryLines.Add("- L2 recheck plan was unavailable from the workspace API.")
 }
 $summaryLines.Add("")
 $summaryLines.Add("## Commands")

@@ -719,6 +719,7 @@ export function ReportCenter({
 }: CommonProps & { finalCheck: FinalDeliveryCheckSummary | null; onShowEvidence: () => void; onShowConsole: () => void }) {
   const reports = selectedTask ? workspace.reports.filter((item) => item.task_id === selectedTask.id) : workspace.reports
   const reportSummary = workspace.reportSummary
+  const l2ProbePlan = workspace.l2ProbePlan
 
   return (
     <section className="module-layout" aria-label="报告中心">
@@ -754,13 +755,14 @@ export function ReportCenter({
       </div>
       <div className="module-card span-3 l2-next-step-card">
         <ModuleHead title="重新验证 L2" meta="需人工批准" />
-        <p>真实写入保持阻断；仅在操作者确认可进行只读探测时，才重新运行双目标 L2。</p>
+        <p>{l2ProbePlan.purpose || '真实写入保持阻断；仅在操作者确认可进行只读探测时，才重新运行双目标 L2。'}</p>
         <div className="l2-next-step-card__commands">
-          <code>$runId = "l2-real-" + (Get-Date -Format "yyyyMMddTHHmmssZ")</code>
-          <code>app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target data_acquisition --run-id $runId</code>
-          <code>app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target draft_box --run-id $runId</code>
+          {l2ProbePlan.commands.map((command) => (
+            <code key={command}>{command}</code>
+          ))}
         </div>
-        <p>证据目录：data\l2_readonly_probe。两个真实目标必须同一 run-id、同一 session fingerprint、同一脚本 hash 与同一 git head，才允许申请 L3 金丝雀。</p>
+        <p>证据目录：{l2ProbePlan.outputDir}。{l2ProbePlan.acceptanceCriteria.join(' ')}</p>
+        <p>{l2ProbePlan.safetyNotes.join(' ')}</p>
       </div>
       <div className="module-card span-3">
         <ModuleHead title="报告必须覆盖" meta="交付检查表" />

@@ -8,6 +8,7 @@ import type {
   EvidenceGrade,
   EvidencePoint,
   ExceptionItem,
+  L2ProbePlan,
   LiveEvent,
   LogItem,
   Product,
@@ -43,6 +44,7 @@ type DeliveryWorkspaceApi = Partial<DeliveryWorkspace> & {
   publish_guard_state?: SafetyGuardState
   evidence_grade?: { grade: EvidenceGrade; [key: string]: unknown }
   regression_gates?: RegressionGate[]
+  l2_probe_plan?: L2ProbePlan
 }
 
 export const seedRows = [
@@ -105,6 +107,7 @@ export function composeWorkspace(bundle: WorkspaceApiBundle): DeliveryWorkspace 
   const publishGuardState = workspace?.publishGuardState ?? workspace?.publish_guard_state ?? fallback.publishGuardState
   const evidenceGradeValue = workspace?.evidenceGrade ?? workspace?.evidence_grade ?? fallback.evidenceGrade
   const regressionGates = firstList(workspace?.regressionGates, workspace?.regression_gates, fallback.regressionGates)
+  const l2ProbePlan = normalizeL2ProbePlan(workspace?.l2ProbePlan ?? workspace?.l2_probe_plan, fallback.l2ProbePlan)
   const stores = chooseList(workspace?.stores, bundle.stores, fallback.stores, Boolean(workspace), apiHasData)
   const templates = chooseList(workspace?.templates, bundle.templates, fallback.templates, Boolean(workspace), apiHasData)
   const products = chooseList(workspace?.products, bundle.products, fallback.products, Boolean(workspace), apiHasData)
@@ -132,6 +135,7 @@ export function composeWorkspace(bundle: WorkspaceApiBundle): DeliveryWorkspace 
     publishGuardState,
     evidenceGrade: evidenceGradeValue,
     regressionGates,
+    l2ProbePlan,
     dxmReferenceTemplates: normalizeReferenceSections(workspace?.dxmReferenceTemplates, templates, reports, templateResolution),
     acceptanceGaps: firstList(workspace?.acceptanceGaps, buildAcceptanceGaps(exceptions, evidences, reports, evidenceGradeValue), fallback.acceptanceGaps),
     safety: workspace?.safety ?? safetyFromGuard(publishGuardState, evidenceGradeValue) ?? fallback.safety,
@@ -182,6 +186,7 @@ export function buildEmptyWorkspace(): DeliveryWorkspace {
     },
     evidenceGrade: { grade: 'C' },
     regressionGates: buildRegressionGates(null, { grade: 'C' }, []),
+    l2ProbePlan: buildL2ProbePlan(),
     dxmReferenceTemplates: normalizeReferenceSections(undefined, [], [], null),
     acceptanceGaps: [{
       id: 'empty-workspace',
@@ -322,6 +327,7 @@ export function buildMockWorkspace(): DeliveryWorkspace {
     publishGuardState,
     evidenceGrade: evidenceGradeValue,
     regressionGates,
+    l2ProbePlan: buildL2ProbePlan(),
     dxmReferenceTemplates: normalizeReferenceSections(undefined, templates, reports),
     acceptanceGaps: buildAcceptanceGaps(exceptions, evidences, reports, evidenceGradeValue),
     safety: {
@@ -382,6 +388,61 @@ function buildRegressionGates(
       detail: hasSave && hasProof ? '已有保存结果和未发布证明。' : '真实写操作必须由用户批准，只保存不发布。',
     },
   ]
+}
+
+function buildL2ProbePlan(): L2ProbePlan {
+  const runIdCommand = '$runId = "l2-real-" + (Get-Date -Format "yyyyMMddTHHmmssZ")'
+  const pythonCommand = 'app\\backend\\.venv\\Scripts\\python.exe'
+  const scriptPath = 'tools\\probes\\l2_readonly_probe.py'
+  const cookieFile = 'data\\sessions\\dianxiaomi_cookies.json'
+  const outputDir = 'data\\l2_readonly_probe'
+  const targets = [
+    { id: 'data_acquisition', url: 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition', required: true },
+    { id: 'draft_box', url: 'https://www.dianxiaomi.com/web/smt/smtProductList/draft', required: true },
+  ]
+  return {
+    schema: 'dxm_l2_readonly_probe_plan.v1',
+    requiresApproval: true,
+    purpose: '真实店小秘双目标只读诊断；不领取、不备注、不保存、不发布。',
+    runIdCommand,
+    pythonCommand,
+    scriptPath,
+    cookieFile,
+    outputDir,
+    targets,
+    commands: [
+      runIdCommand,
+      ...targets.map((target) => `${pythonCommand} ${scriptPath} --target ${target.id} --run-id $runId --cookie-file ${cookieFile} --output-dir ${outputDir}`),
+    ],
+    acceptanceCriteria: [
+      '两个目标必须使用同一 run-id。',
+      '两个目标必须共享同一 session fingerprint、script_sha256 和 git_head。',
+      '只读网络计数必须全为 0。',
+    ],
+    safetyNotes: [
+      '运行前必须由操作者明确批准真实 L2 只读探测。',
+      'L2 只读探测失败或只产生 mock 证据时不自动放行 L3。',
+    ],
+  }
+}
+
+function normalizeL2ProbePlan(value: L2ProbePlan | undefined, fallback: L2ProbePlan): L2ProbePlan {
+  const plan = asRecord(value)
+  return {
+    ...fallback,
+    schema: stringOr(plan.schema, fallback.schema),
+    requiresApproval: typeof plan.requiresApproval === 'boolean' ? plan.requiresApproval : fallback.requiresApproval,
+    purpose: stringOr(plan.purpose, fallback.purpose),
+    runIdCommand: stringOr(plan.runIdCommand, fallback.runIdCommand),
+    pythonCommand: stringOr(plan.pythonCommand, fallback.pythonCommand),
+    scriptPath: stringOr(plan.scriptPath, fallback.scriptPath),
+    cookieFile: stringOr(plan.cookieFile, fallback.cookieFile),
+    outputDir: stringOr(plan.outputDir, fallback.outputDir),
+    targets: Array.isArray(plan.targets) ? plan.targets as L2ProbePlan['targets'] : fallback.targets,
+    commands: Array.isArray(plan.commands) ? plan.commands.map(String).filter(Boolean) : fallback.commands,
+    acceptanceCriteria: Array.isArray(plan.acceptanceCriteria) ? plan.acceptanceCriteria.map(String).filter(Boolean) : fallback.acceptanceCriteria,
+    safetyNotes: Array.isArray(plan.safetyNotes) ? plan.safetyNotes.map(String).filter(Boolean) : fallback.safetyNotes,
+  }
 }
 
 export function humanTaskStatus(status: string) {
@@ -598,4 +659,8 @@ function unique(values: string[]) {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function stringOr(value: unknown, fallback: string) {
+  return typeof value === 'string' && value ? value : fallback
 }

@@ -28,6 +28,10 @@ REFERENCE_SECTION_LABELS = {
 ROOT = Path(__file__).resolve().parents[4]
 L1_REPLAY_DIR = ROOT / "data" / "l1_selector_replay"
 L2_PROBE_DIR = ROOT / "data" / "l2_readonly_probe"
+L2_PROBE_SCRIPT = "tools\\probes\\l2_readonly_probe.py"
+L2_PROBE_PYTHON = "app\\backend\\.venv\\Scripts\\python.exe"
+L2_PROBE_COOKIE_FILE = "data\\sessions\\dianxiaomi_cookies.json"
+L2_PROBE_OUTPUT_DIR = "data\\l2_readonly_probe"
 REQUIRED_L2_TARGETS = ("data_acquisition", "draft_box")
 L2_TARGET_PATH_HINTS = {
     "data_acquisition": "/web/productcrawl/dataacquisition",
@@ -104,6 +108,7 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
         "delivery_readiness": delivery_readiness,
         "acceptanceGaps": _acceptance_gaps(exceptions, extracted, l2_gate, delivery_readiness),
         "safety": _safety_state(extracted, l2_gate, delivery_readiness),
+        "l2_probe_plan": _l2_probe_plan(),
         "logs": logs,
         "exceptions": exceptions,
     }
@@ -433,6 +438,50 @@ def _regression_gates(
             "detail": l3_detail,
         },
     ]
+
+
+def _l2_probe_plan() -> dict[str, Any]:
+    run_id_command = '$runId = "l2-real-" + (Get-Date -Format "yyyyMMddTHHmmssZ")'
+    commands = [
+        run_id_command,
+        *[
+            f"{L2_PROBE_PYTHON} {L2_PROBE_SCRIPT} --target {target} --run-id $runId --cookie-file {L2_PROBE_COOKIE_FILE} --output-dir {L2_PROBE_OUTPUT_DIR}"
+            for target in REQUIRED_L2_TARGETS
+        ],
+    ]
+    return {
+        "schema": "dxm_l2_readonly_probe_plan.v1",
+        "requiresApproval": True,
+        "purpose": "真实店小秘双目标只读诊断；不领取、不备注、不保存、不发布。",
+        "runIdCommand": run_id_command,
+        "pythonCommand": L2_PROBE_PYTHON,
+        "scriptPath": L2_PROBE_SCRIPT,
+        "cookieFile": L2_PROBE_COOKIE_FILE,
+        "outputDir": L2_PROBE_OUTPUT_DIR,
+        "targets": [
+            {
+                "id": target,
+                "url": url,
+                "required": True,
+            }
+            for target, url in (
+                ("data_acquisition", "https://www.dianxiaomi.com/web/productCrawl/dataAcquisition"),
+                ("draft_box", "https://www.dianxiaomi.com/web/smt/smtProductList/draft"),
+            )
+        ],
+        "commands": commands,
+        "acceptanceCriteria": [
+            "两个目标必须使用同一 run-id。",
+            "两个目标必须共享同一 session fingerprint、script_sha256 和 git_head。",
+            "write_request_count、non_read_request_count、blocked_request_count、forbidden_keyword_request_count 与 websocket_count 必须全为 0。",
+            "目标 URL 与最终 URL 必须停留在对应真实店小秘目标路径，且不得疑似登录页。",
+        ],
+        "safetyNotes": [
+            "运行前必须由操作者明确批准真实 L2 只读探测。",
+            "L2 只读探测失败或只产生 mock 证据时不自动放行 L3。",
+            "该计划只生成诊断证据，不授权 claim_only、single_save 或 batch_save 真实写入。",
+        ],
+    }
 
 
 def _delivery_readiness(

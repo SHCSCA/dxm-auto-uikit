@@ -38,3 +38,17 @@ def test_browser_qa_covers_demo_batch_startable_user_path():
     assert "fetchJson('/api/products')" in ensure_section
     assert "existingStores.find(store => store?.name === 'Dang Kang')" in ensure_section
     assert "/api/delivery/workspace" not in ensure_section
+
+
+def test_report_center_uses_backend_l2_probe_plan_contract():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    workspace_source = (REPO_ROOT / "app" / "frontend" / "src" / "workspace.ts").read_text(encoding="utf-8")
+    report_center_section = source[source.index("export function ReportCenter"):source.index("function FinalDeliveryCheckCard")]
+
+    assert "workspace.l2ProbePlan" in report_center_section
+    assert "l2ProbePlan.commands.map" in report_center_section
+    assert "l2ProbePlan.acceptanceCriteria" in report_center_section
+    assert "normalizeL2ProbePlan" in workspace_source
+    assert "Array.isArray(plan.commands)" in workspace_source
+    assert "Array.isArray(plan.acceptanceCriteria)" in workspace_source
+    assert "Array.isArray(plan.safetyNotes)" in workspace_source

@@ -376,6 +376,7 @@ def test_delivery_workspace_returns_frontend_contract(tmp_path, monkeypatch):
         "regression_gates",
         "acceptanceGaps",
         "safety",
+        "l2_probe_plan",
     }
     assert data["baseline"]["schema"] == "delivery_workspace.v1"
     assert data["current_task"]["id"] == fixture["task"]["id"]
@@ -397,6 +398,28 @@ def test_delivery_workspace_returns_frontend_contract(tmp_path, monkeypatch):
     assert data["safety"]["evidenceGrade"] == "C"
     assert data["dxmReferenceTemplates"][2]["section"] == "freight"
     assert data["dxmReferenceTemplates"][2]["templateNames"] == ["40g普货包裹"]
+
+
+def test_delivery_workspace_exposes_canonical_l2_probe_plan(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_delivery_fixture(repo, with_network=False, with_verify_proof=False)
+
+    response = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}")
+
+    assert response.status_code == 200
+    plan = response.json()["l2_probe_plan"]
+    assert plan["schema"] == "dxm_l2_readonly_probe_plan.v1"
+    assert plan["requiresApproval"] is True
+    assert plan["runIdCommand"].startswith('$runId = "l2-real-"')
+    assert plan["outputDir"] == r"data\l2_readonly_probe"
+    assert plan["cookieFile"] == r"data\sessions\dianxiaomi_cookies.json"
+    assert [target["id"] for target in plan["targets"]] == ["data_acquisition", "draft_box"]
+    assert any("--target data_acquisition" in command and "--run-id $runId" in command for command in plan["commands"])
+    assert any("--target draft_box" in command and "--run-id $runId" in command for command in plan["commands"])
+    assert all("--cookie-file data\\sessions\\dianxiaomi_cookies.json" in command for command in plan["commands"][1:])
+    assert all("--output-dir data\\l2_readonly_probe" in command for command in plan["commands"][1:])
+    assert any("同一 run-id" in item for item in plan["acceptanceCriteria"])
+    assert any("不自动放行 L3" in item for item in plan["safetyNotes"])
 
 
 def test_delivery_workspace_evidence_points_are_isolated_to_requested_task(tmp_path, monkeypatch):

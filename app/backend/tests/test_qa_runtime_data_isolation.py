@@ -43,3 +43,25 @@ def test_final_delivery_check_runs_browser_qa_backend_with_isolated_data_dir():
     assert "DXM_DATA_DIR" in qa_backend_section
     assert "pytestRuntimeDataDir" in script
     assert "qaRuntimeDataDir" in script
+
+
+def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
+    script = FINAL_DELIVERY_CHECK.read_text(encoding="utf-8")
+
+    assert "Invoke-JsonUtf8" in script
+    assert "Invoke-RestMethod -Uri \"$workspaceApiBase/api/delivery/workspace\"" not in script
+    assert "Get-JsonObjectPropertyCount $l2Gate.latest.realTargets" in script
+    assert "Get-JsonObjectPropertyCount $l2Gate.latest.mockTargets" in script
+    assert "l2ProbeEvidenceSummary" in script
+    assert "l2ProbePlan" in script
+    assert "## L2 Readonly Probe Evidence" in script
+    assert "## L2 Recheck Plan" in script
+    assert "write_request_count" in script
+    assert "non_read_request_count" in script
+    assert "blocked_request_count" in script
+    assert "forbidden_keyword_request_count" in script
+    assert "websocket_count" in script
+    assert "json_path" in script
+    assert "markdown_path" in script
+    assert "screenshot_sha256" in script
+    assert "dom_sha256" in script
