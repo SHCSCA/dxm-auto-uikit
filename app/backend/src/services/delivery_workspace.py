@@ -700,6 +700,8 @@ def _latest_l2_probe_results_by_target() -> dict[str, dict[str, dict[str, Any]]]
     if not L2_PROBE_DIR.exists():
         return grouped
     candidates = sorted(L2_PROBE_DIR.rglob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+    real_candidates: list[dict[str, Any]] = []
+    mock_candidates: list[dict[str, Any]] = []
     for path in candidates:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -712,8 +714,48 @@ def _latest_l2_probe_results_by_target() -> dict[str, dict[str, dict[str, Any]]]
         if target not in REQUIRED_L2_TARGETS:
             continue
         bucket = "real" if _is_real_l2_target(result) else "mock"
-        grouped[bucket].setdefault(target, result)
+        if bucket == "real":
+            real_candidates.append(result)
+        else:
+            mock_candidates.append(result)
+    grouped["real"] = _latest_complete_l2_real_target_group(real_candidates) or _latest_l2_results_by_target(real_candidates)
+    grouped["mock"] = _latest_l2_results_by_target(mock_candidates)
     return grouped
+
+
+def _latest_l2_results_by_target(results: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    for result in results:
+        target = str(result.get("target") or "")
+        if target in REQUIRED_L2_TARGETS:
+            latest.setdefault(target, result)
+    return latest
+
+
+def _latest_complete_l2_real_target_group(results: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    groups: dict[tuple[str, str, str, str], dict[str, dict[str, Any]]] = {}
+    for result in results:
+        key = _l2_complete_binding_key(result)
+        if key is None:
+            continue
+        target = str(result.get("target") or "")
+        group = groups.setdefault(key, {})
+        group.setdefault(target, result)
+        if all(required in group for required in REQUIRED_L2_TARGETS):
+            return {target: group[target] for target in REQUIRED_L2_TARGETS}
+    return {}
+
+
+def _l2_complete_binding_key(result: Mapping[str, Any]) -> tuple[str, str, str, str] | None:
+    values = [
+        _l2_binding_value(result, "run_id"),
+        _l2_binding_value(result, "cookie_file_sha256"),
+        _l2_binding_value(result, "script_sha256"),
+        _l2_binding_value(result, "git_head"),
+    ]
+    if all(isinstance(value, str) and value.strip() for value in values):
+        return tuple(str(value).strip() for value in values)
+    return None
 
 
 def _l2_real_targets_time_window(

@@ -709,6 +709,41 @@ def test_delivery_workspace_l2_passes_only_when_both_real_targets_are_clean(tmp_
     assert l2_gate["latest"]["missingTargets"] == []
 
 
+def test_delivery_workspace_l2_uses_latest_complete_bound_probe_run(tmp_path, monkeypatch):
+    l2_dir = tmp_path / "l2_readonly_probe"
+    _write_l2_probe_result(
+        l2_dir,
+        "data_acquisition",
+        target_url="https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
+        created_at=_fresh_l2_created_at(-120),
+        run_id="run-complete",
+    )
+    _write_l2_probe_result(
+        l2_dir,
+        "draft_box",
+        target_url="https://www.dianxiaomi.com/web/smt/smtProductList/draft",
+        created_at=_fresh_l2_created_at(-90),
+        run_id="run-complete",
+    )
+    _write_l2_probe_result(
+        l2_dir,
+        "data_acquisition",
+        target_url="https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
+        created_at=_fresh_l2_created_at(-10),
+        run_id="run-partial",
+    )
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(delivery_workspace, "L2_PROBE_DIR", l2_dir)
+    fixture = _create_delivery_fixture(repo, with_network=False, with_verify_proof=False)
+
+    data = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}").json()
+
+    l2_gate = next(gate for gate in data["regression_gates"] if gate["level"] == "L2")
+    assert l2_gate["status"] == "passed"
+    assert l2_gate["latest"]["runBinding"]["runIds"] == ["run-complete"]
+    assert l2_gate["latest"]["realTargets"]["data_acquisition"]["run_id"] == "run-complete"
+
+
 def test_delivery_workspace_l2_rejects_missing_or_mismatched_evidence_files(tmp_path, monkeypatch):
     l2_dir = tmp_path / "l2_readonly_probe"
     bad_json = _write_l2_probe_result(
