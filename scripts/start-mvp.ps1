@@ -209,11 +209,12 @@ try {
   Write-Step "Warning: $($serviceWarnings[-1])"
 }
 
-Write-Step "Opening frontend page: http://127.0.0.1:$frontendPort"
-Start-Process "http://127.0.0.1:$frontendPort"
 Write-Step "Stop services by closing the DXM Backend Service and DXM Frontend Service windows."
 if ($serviceWarnings.Count -gt 0) {
-  Write-Step "STARTED_WITH_WARNINGS: $($serviceWarnings -join '; ')"
+  Write-Step "STARTED_WITH_WARNINGS: page was not opened automatically. $($serviceWarnings -join '; ')"
+  Write-Step "Open the page manually after both health checks pass: http://127.0.0.1:$frontendPort"
 } else {
+  Write-Step "Opening frontend page: http://127.0.0.1:$frontendPort"
+  Start-Process "http://127.0.0.1:$frontendPort"
   Write-Step "STARTED_OK"
 }
