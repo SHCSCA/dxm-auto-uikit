@@ -8,6 +8,7 @@
 - L0 后端/前端本地门禁与 L1 离线 selector replay 可运行。
 - 真实 L2 只读 probe 最近一次未通过，因此 L3 `single_save` 真实保存入口必须保持阻断。
 - 当前可交付给内部验收的是本地安全诊断工作台；当前不可交付的是店小秘真实无人值守保存/写入。
+- 源码包验收命令：`scripts\final-delivery-check.bat -RequireCleanWorktree`；通过时范围应为 `local_workbench_only`，真实 DXM 写入仍应为 `BLOCKED`。具体 Git HEAD 以 `outputs/final-delivery-check/final-delivery-check.json` 的 `gitHead` 字段为准。
 
 ## 当前已完成
 
