@@ -19,6 +19,8 @@ $browserQaJson = Join-Path $browserQaOutDir "qa-browser-check.json"
 $postFinalReportQaJson = Join-Path $browserQaOutDir "qa-final-report-check.json"
 $summaryPath = Join-Path $absoluteOutDir "final-delivery-check.md"
 $jsonPath = Join-Path $absoluteOutDir "final-delivery-check.json"
+$l2AllowlistReviewTemplateMarkdownPath = Join-Path $absoluteOutDir "l2-allowlist-review-template.md"
+$l2AllowlistReviewTemplateJsonPath = Join-Path $absoluteOutDir "l2-allowlist-review-template.json"
 $qaProcesses = @()
 $qaBackendPort = $null
 $qaFrontendPort = $null
@@ -717,6 +719,83 @@ $sourcePackageReadiness = if ($preSourcePackageReadiness -eq "CLEAN" -and $postS
 $sourcePackageCheck = Get-SourcePackageCheck -SourcePackageReadiness $sourcePackageReadiness
 $overallOk = $localWorkbenchOk -and $gateEvidenceOk -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")
 
+$l2AllowlistReviewTemplate = [pscustomobject]@{
+  schema = "dxm_l2_allowlist_review_template.v1"
+  generatedAt = (Get-Date).ToUniversalTime().ToString("o")
+  gitHead = $gitHead
+  sourceFinalCheckJson = $jsonPath
+  sourceFinalCheckMarkdown = $summaryPath
+  reviewState = "pending"
+  instructions = @(
+    "Manual review only; filling this template does not pass L2.",
+    "Keep allowlist_applied=false until a code change implements an explicit, minimal, audited allowlist.",
+    "Reject write methods, WebSocket, EventSource, forbidden-keyword URLs, and any request without a clear read-only startup purpose.",
+    "After any approved allowlist code change, rerun real L2 data_acquisition and draft_box with the same run-id before L3."
+  )
+  requiredFields = @("reviewer", "reviewed_at", "decision", "rationale", "approved_scope", "residual_risk")
+  candidates = @($l2AllowlistReviewCandidates | ForEach-Object {
+    [pscustomobject]@{
+      target = $_.target
+      evidenceKind = $_.evidenceKind
+      method = $_.method
+      host = $_.host
+      path = $_.path
+      resource_type = $_.resource_type
+      count = $_.count
+      reasons = $_.reasons
+      review_only = $_.review_only
+      allowlist_applied = $_.allowlist_applied
+      reviewer = ""
+      reviewed_at = ""
+      decision = "pending"
+      rationale = ""
+      approved_scope = ""
+      residual_risk = ""
+      l2_recheck_required = $true
+    }
+  })
+}
+$l2AllowlistReviewTemplate | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $l2AllowlistReviewTemplateJsonPath -Encoding UTF8
+
+$l2ReviewTemplateLines = New-Object System.Collections.Generic.List[string]
+$l2ReviewTemplateLines.Add("# L2 Allowlist Review Template")
+$l2ReviewTemplateLines.Add("")
+$l2ReviewTemplateLines.Add("- Generated at: $($l2AllowlistReviewTemplate.generatedAt)")
+$l2ReviewTemplateLines.Add("- Git HEAD: $gitHead")
+$l2ReviewTemplateLines.Add("- Review state: pending")
+$l2ReviewTemplateLines.Add("- Source final check JSON: $jsonPath")
+$l2ReviewTemplateLines.Add("- Source final check Markdown: $summaryPath")
+$l2ReviewTemplateLines.Add("")
+$l2ReviewTemplateLines.Add("## Rules")
+foreach ($instruction in $l2AllowlistReviewTemplate.instructions) {
+  $l2ReviewTemplateLines.Add("- $instruction")
+}
+$l2ReviewTemplateLines.Add("")
+$l2ReviewTemplateLines.Add("## Candidates")
+if ($l2AllowlistReviewCandidates.Count -gt 0) {
+  foreach ($candidate in $l2AllowlistReviewCandidates) {
+    $l2ReviewTemplateLines.Add("- [ ] $($candidate.target) [$($candidate.evidenceKind)] $($candidate.method) $($candidate.host)$($candidate.path) x$($candidate.count) / $($candidate.resource_type)")
+    $l2ReviewTemplateLines.Add("  - reasons: $($candidate.reasons -join ', ')")
+    $l2ReviewTemplateLines.Add("  - review_only=$($candidate.review_only); allowlist_applied=$($candidate.allowlist_applied)")
+    $l2ReviewTemplateLines.Add("  - reviewer:")
+    $l2ReviewTemplateLines.Add("  - reviewed_at:")
+    $l2ReviewTemplateLines.Add("  - decision: pending | approve | reject")
+    $l2ReviewTemplateLines.Add("  - rationale:")
+    $l2ReviewTemplateLines.Add("  - approved_scope:")
+    $l2ReviewTemplateLines.Add("  - residual_risk:")
+    $l2ReviewTemplateLines.Add("  - l2_recheck_required: true")
+  }
+} else {
+  $l2ReviewTemplateLines.Add("- No candidates were available in the workspace snapshot; keep real DXM writes blocked.")
+}
+$l2ReviewTemplateLines.Add("")
+$l2ReviewTemplateLines.Add("## Completion Criteria")
+$l2ReviewTemplateLines.Add("- Every candidate has reviewer, reviewed_at, decision and rationale.")
+$l2ReviewTemplateLines.Add("- Approved candidates define an explicit minimal scope and residual risk.")
+$l2ReviewTemplateLines.Add("- Rejected candidates remain blocked.")
+$l2ReviewTemplateLines.Add("- Real L2 must be rerun after any code/config change; this template is not an L2 pass.")
+Set-Content -LiteralPath $l2AllowlistReviewTemplateMarkdownPath -Encoding UTF8 -Value ($l2ReviewTemplateLines -join "`n")
+
 $result = [pscustomobject]@{
   schema = "dxm_final_delivery_check.v1"
   checkedAt = (Get-Date).ToUniversalTime().ToString("o")
@@ -754,6 +833,7 @@ $result = [pscustomobject]@{
   l2ProbePlan = $l2ProbePlan
   l2ProbeEvidenceSummary = $l2ProbeEvidenceSummary
   l2AllowlistReviewCandidates = $l2AllowlistReviewCandidates
+  l2AllowlistReviewTemplate = $l2AllowlistReviewTemplate
   gates = @{
     l2 = $l2Gate
     l3 = $l3Gate
@@ -761,6 +841,8 @@ $result = [pscustomobject]@{
   artifacts = @{
     summary = $summaryPath
     json = $jsonPath
+    l2AllowlistReviewTemplateMarkdown = $l2AllowlistReviewTemplateMarkdownPath
+    l2AllowlistReviewTemplateJson = $l2AllowlistReviewTemplateJsonPath
     l1SelectorReplayDir = $l1ReplayOutDir
     browserQaJson = $browserQaJson
     browserQaMarkdown = (Join-Path $browserQaOutDir "qa-browser-check.md")
@@ -911,6 +993,12 @@ if ($l2AllowlistReviewCandidates.Count -gt 0) {
 } else {
   $summaryLines.Add("- No L2 allowlist review candidates were available in the workspace snapshot.")
 }
+$summaryLines.Add("")
+$summaryLines.Add("## L2 Allowlist Review Template")
+$summaryLines.Add("- Markdown: $l2AllowlistReviewTemplateMarkdownPath")
+$summaryLines.Add("- JSON: $l2AllowlistReviewTemplateJsonPath")
+$summaryLines.Add("- State: pending manual review; this template is not an L2 pass.")
+$summaryLines.Add("- Required fields: reviewer, reviewed_at, decision, rationale, approved_scope, residual_risk.")
 $summaryLines.Add("")
 $summaryLines.Add("## L2 Recheck Plan")
 if ($l2ProbePlan) {

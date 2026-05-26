@@ -858,10 +858,17 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
         <div className="delivery-check-card__paths">
           <code>{reportPath}</code>
           <code>{jsonPath}</code>
+          {finalCheck?.l2_allowlist_review_template_markdown_path && (
+            <code>{finalCheck.l2_allowlist_review_template_markdown_path}</code>
+          )}
+          {finalCheck?.l2_allowlist_review_template_json_path && (
+            <code>{finalCheck.l2_allowlist_review_template_json_path}</code>
+          )}
           {finalCheck?.final_report_center_screenshot_path && (
             <code data-testid="final-report-center-screenshot-path">{finalCheck.final_report_center_screenshot_path}</code>
           )}
           <span>自检 Git {gitHead} / 当前 Git {currentGitHead}</span>
+          <span>L2 allowlist 评审模板 {finalCheck?.l2_allowlist_review_template_state ?? '未生成'} / 候选 {finalCheck?.l2_allowlist_review_template_candidate_count ?? 0} 项</span>
           <span>浏览器 QA Git {browserQaGitHead} / 截图哈希 {finalCheck?.browser_qa_screenshot_hashes ? Object.keys(finalCheck.browser_qa_screenshot_hashes).length : 0} 项</span>
           <span>最终报告页截图 qa-report-center-final.png / 截图哈希 {finalCheck?.post_final_report_qa_screenshot_hashes ? Object.keys(finalCheck.post_final_report_qa_screenshot_hashes).length : 0} 项</span>
         </div>

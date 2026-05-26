@@ -154,6 +154,10 @@ export type FinalDeliveryCheckSummary = {
   post_final_report_qa_ok?: boolean | null
   post_final_report_qa_checked_at?: string | null
   post_final_report_qa_screenshot_hashes?: Record<string, string> | null
+  l2_allowlist_review_template_state?: string | null
+  l2_allowlist_review_template_candidate_count?: number | null
+  l2_allowlist_review_template_markdown_path?: string | null
+  l2_allowlist_review_template_json_path?: string | null
   qa_services?: Record<string, unknown> | null
   gates?: Record<string, unknown> | null
   summary_path?: string | null

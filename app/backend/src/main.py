@@ -434,6 +434,8 @@ def _read_final_delivery_check_summary():
     browser_qa = payload.get('browserQa') if isinstance(payload.get('browserQa'), dict) else {}
     browser_qa_manifest = browser_qa.get('manifest') if isinstance(browser_qa.get('manifest'), dict) else {}
     post_final_report_qa = payload.get('postFinalReportQa') if isinstance(payload.get('postFinalReportQa'), dict) else {}
+    l2_allowlist_review_template = payload.get('l2AllowlistReviewTemplate') if isinstance(payload.get('l2AllowlistReviewTemplate'), dict) else {}
+    l2_allowlist_review_candidates = l2_allowlist_review_template.get('candidates')
     current_git = _current_git_summary()
     report_git_head = payload.get('gitHead')
     browser_qa_git_head = browser_qa_manifest.get('gitHead')
@@ -470,6 +472,10 @@ def _read_final_delivery_check_summary():
         'summary_path': artifacts.get('summary'),
         'final_report_center_screenshot_path': artifacts.get('finalReportCenterScreenshot'),
         'post_final_report_qa_json_path': artifacts.get('postFinalReportQaJson'),
+        'l2_allowlist_review_template_state': l2_allowlist_review_template.get('reviewState'),
+        'l2_allowlist_review_template_candidate_count': len(l2_allowlist_review_candidates) if isinstance(l2_allowlist_review_candidates, list) else 0,
+        'l2_allowlist_review_template_markdown_path': artifacts.get('l2AllowlistReviewTemplateMarkdown'),
+        'l2_allowlist_review_template_json_path': artifacts.get('l2AllowlistReviewTemplateJson'),
         'json_path': str(json_path),
     }
 

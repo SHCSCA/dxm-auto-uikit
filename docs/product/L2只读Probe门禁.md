@@ -68,6 +68,21 @@ JSON/Markdown 的 `diagnostics` 包含：
 - `blocked_request_groups`：按 host/path/method/resource_type/reason/keyword 聚合被拦截请求，避免只看前 50 条原始请求。
 - `allowlist_review_candidates`：仅用于人工评审“可能是只读启动依赖”的 GET active request；该字段不得自动放行 L2。
 
+## Allowlist 人工评审记录
+
+最终自检会生成 `outputs/final-delivery-check/l2-allowlist-review-template.md` 和 `outputs/final-delivery-check/l2-allowlist-review-template.json`。该模板用于归档人工判断，不是 L2 通过证明。
+
+每个候选至少需要补齐：
+
+- `reviewer` / `reviewed_at`
+- `decision`：`approve`、`reject` 或 `needs_info`
+- `rationale`：业务必要性与只读依据
+- `approved_scope`：精确到 method、host、path、resource_type 的最小范围
+- `residual_risk`：残余风险和监控/到期复核策略
+- `l2_recheck_required=true`
+
+只有当评审记录完成、代码或配置实现了显式最小 allowlist，并且重新运行真实 L2 双目标通过后，才允许进入 L3 判断。任何缺少评审人、理由、范围或复跑证据的候选都必须继续阻断。
+
 ## 证据等级
 
 - A 级：L2 JSON/Markdown/截图/DOM/hash 齐全，网络摘要显示 0 写请求、0 拦截、0 禁用关键词命中，且登录态有效。

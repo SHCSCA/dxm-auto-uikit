@@ -93,11 +93,17 @@ def test_final_delivery_check_summary_reads_latest_report(tmp_path, monkeypatch)
             "checkedAt": "2026-05-25T09:18:44Z",
             "screenshotHashes": {"qa-report-center-final.png": "final-hash"},
         },
+        "l2AllowlistReviewTemplate": {
+            "reviewState": "pending",
+            "candidates": [{"decision": "pending"}],
+        },
         "qaServices": {"isolated": True, "backendPort": 18000, "frontendPort": 15173},
         "artifacts": {
             "summary": "outputs/final-delivery-check/final-delivery-check.md",
             "finalReportCenterScreenshot": "outputs/final-delivery-check/browser-checks/qa-report-center-final.png",
             "postFinalReportQaJson": "outputs/final-delivery-check/browser-checks/qa-final-report-check.json",
+            "l2AllowlistReviewTemplateMarkdown": "outputs/final-delivery-check/l2-allowlist-review-template.md",
+            "l2AllowlistReviewTemplateJson": "outputs/final-delivery-check/l2-allowlist-review-template.json",
         },
         "gates": {"l2": {"status": "failed"}, "l3": {"status": "blocked"}},
     }), encoding="utf-8")
@@ -134,6 +140,10 @@ def test_final_delivery_check_summary_reads_latest_report(tmp_path, monkeypatch)
     assert payload["post_final_report_qa_screenshot_hashes"] == {"qa-report-center-final.png": "final-hash"}
     assert payload["final_report_center_screenshot_path"] == "outputs/final-delivery-check/browser-checks/qa-report-center-final.png"
     assert payload["post_final_report_qa_json_path"] == "outputs/final-delivery-check/browser-checks/qa-final-report-check.json"
+    assert payload["l2_allowlist_review_template_state"] == "pending"
+    assert payload["l2_allowlist_review_template_candidate_count"] == 1
+    assert payload["l2_allowlist_review_template_markdown_path"] == "outputs/final-delivery-check/l2-allowlist-review-template.md"
+    assert payload["l2_allowlist_review_template_json_path"] == "outputs/final-delivery-check/l2-allowlist-review-template.json"
     assert payload["qa_services"]["isolated"] is True
     assert payload["gates"]["l2"]["status"] == "failed"
     assert payload["summary_path"] == "outputs/final-delivery-check/final-delivery-check.md"

@@ -58,9 +58,11 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "Get-JsonObjectPropertyCount $l2Gate.latest.mockTargets" in script
     assert "l2ProbeEvidenceSummary" in script
     assert "l2AllowlistReviewCandidates" in script
+    assert "l2AllowlistReviewTemplate" in script
     assert "l2ProbePlan" in script
     assert "## L2 Readonly Probe Evidence" in script
     assert "## L2 Allowlist Review Candidates" in script
+    assert "## L2 Allowlist Review Template" in script
     assert "## L2 Recheck Plan" in script
     assert "write_request_count" in script
     assert "non_read_request_count" in script
@@ -74,6 +76,11 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "review_only" in script
     assert "allowlist_applied" in script
     assert "manual review only; not an L2 pass" in script
+    assert "reviewer" in script
+    assert "decision" in script
+    assert "rationale" in script
+    assert "l2-allowlist-review-template.md" in script
+    assert "l2-allowlist-review-template.json" in script
     assert "L2/L3 gate records available" in script
     assert "Only means L2/L3 records were readable; not that L2/L3 passed" in script
     assert "Gate evidence check:" not in script
@@ -81,12 +88,19 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
 
 def test_user_delivery_guide_explains_l2_allowlist_review_packet():
     guide = USER_DELIVERY_GUIDE.read_text(encoding="utf-8")
+    l2_gate = (REPO_ROOT / "docs" / "product" / "L2只读Probe门禁.md").read_text(encoding="utf-8")
 
     assert "L2 Allowlist Review Candidates" in guide
     assert "review_only=True" in guide
     assert "allowlist_applied=False" in guide
     assert "不自动放行 L2/L3" in guide
     assert "不能为了让报告全绿" in guide
+    assert "l2-allowlist-review-template.md" in guide
+    assert "l2-allowlist-review-template.json" in guide
+    assert "approved_scope" in guide
+    assert "residual_risk" in guide
+    assert "Allowlist 人工评审记录" in l2_gate
+    assert "l2_recheck_required=true" in l2_gate
 
 
 def test_readme_next_steps_focus_on_allowlist_l2_l3_reverification():

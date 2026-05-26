@@ -56,6 +56,7 @@ def test_report_center_uses_backend_l2_probe_plan_contract():
 
 def test_report_center_shows_allowlist_review_before_l2_recheck_commands():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    types_source = (REPO_ROOT / "app" / "frontend" / "src" / "types.ts").read_text(encoding="utf-8")
     report_center_section = source[source.index("export function ReportCenter"):source.index("function FinalDeliveryCheckCard")]
 
     assert "l2AllowlistReviewItems" in report_center_section
@@ -63,6 +64,9 @@ def test_report_center_shows_allowlist_review_before_l2_recheck_commands():
     assert "先评审，再复跑 L2" in report_center_section
     assert "review_only=true / allowlist_applied=false" in report_center_section
     assert "未完成人工评审前，不运行下方 L2 复验命令" in report_center_section
+    assert "l2_allowlist_review_template_state" in source
+    assert "l2_allowlist_review_template_markdown_path" in source
+    assert "l2_allowlist_review_template_candidate_count" in types_source
 
 
 def test_task_center_surfaces_l2_allowlist_review_candidates_as_manual_review_only():
