@@ -52,3 +52,38 @@ def test_report_center_uses_backend_l2_probe_plan_contract():
     assert "Array.isArray(plan.commands)" in workspace_source
     assert "Array.isArray(plan.acceptanceCriteria)" in workspace_source
     assert "Array.isArray(plan.safetyNotes)" in workspace_source
+
+
+def test_task_center_surfaces_l2_allowlist_review_candidates_as_manual_review_only():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+
+    assert "reviewCandidateRequests" in source
+    assert "只读依赖人工评审清单" in source
+    assert "manual review only" in source
+    assert "allowlist_applied=false" in source
+    assert "不自动放行 L2/L3" in source
+
+
+def test_frontend_first_screen_names_local_safety_diagnostic_delivery():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    shell = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
+    qa_source = QA_BROWSER_CHECK.read_text(encoding="utf-8")
+
+    assert "本地安全诊断工作台" in source
+    assert "本地 PASS 仅代表工作台自检通过，真实 DXM 写入仍 BLOCKED" in source
+    assert "本地验收 / L2 只读诊断 / L3 阻断复核" in shell
+    assert "\\u672c\\u5730\\u5b89\\u5168\\u8bca\\u65ad\\u5de5\\u4f5c\\u53f0" in qa_source
+    assert "半托管保存交付工作台" not in source
+    assert "保存核验 / 证据复盘" not in shell
+
+
+def test_mock_workspace_uses_dry_run_demo_language_not_real_single_save():
+    workspace_source = (REPO_ROOT / "app" / "frontend" / "src" / "workspace.ts").read_text(encoding="utf-8")
+    mock_section = workspace_source[workspace_source.index("export function buildMockWorkspace"):workspace_source.index("function buildRegressionGates")]
+
+    assert "name: '本地演示保存核验批次 #19'" in mock_section
+    assert "mode: 'dry_run'" in mock_section
+    assert "演示截图占位" in mock_section
+    assert "本地演示保存核验报告 #19" in mock_section
+    assert "mode: 'single_save'" not in mock_section
+    assert "保存动作截图" not in mock_section

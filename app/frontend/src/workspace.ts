@@ -221,9 +221,9 @@ export function buildMockWorkspace(): DeliveryWorkspace {
   }]
   const tasks: Task[] = [{
     id: 19,
-    name: '半托管保存核验批次 #19',
+    name: '本地演示保存核验批次 #19',
     status: 'draft',
-    mode: 'single_save',
+    mode: 'dry_run',
     publish_scene: 'SMT_SEMI_MANAGED_SAVE_ONLY',
     total_jobs: 1,
     completed_jobs: 0,
@@ -242,8 +242,8 @@ export function buildMockWorkspace(): DeliveryWorkspace {
   ]
   const evidences: Evidence[] = [
     { id: 676, task_id: 19, job_id: 31, evidence_type: 'state_snapshot', file_path: 'data/screenshots/v1_task_19_job_31_PRECHECK_CONFIG.txt', meta: { grade: 'A', title: '配置预检快照', acceptance: '可追溯到模板与店铺配置' }, created_at: '2026-05-22T01:55:49Z' },
-    { id: 677, task_id: 19, job_id: 31, evidence_type: 'workflow_action', file_path: '/artifacts/screenshots/dianxiaomi_save_only.png', meta: { grade: 'B', title: '保存动作截图', acceptance: '需要真实浏览器截图补齐哈希' }, created_at: '2026-05-22T01:56:56Z' },
-    { id: 680, task_id: 19, job_id: 31, evidence_type: 'workflow_action', file_path: '/artifacts/screenshots/dianxiaomi_verify_not_published.png', meta: { grade: 'C', title: '结果隔离核验', acceptance: '缺少独立审计人复核记录' }, created_at: '2026-05-22T01:57:14Z' },
+    { id: 677, task_id: 19, job_id: 31, evidence_type: 'workflow_action', file_path: '/artifacts/screenshots/dianxiaomi_save_only.png', meta: { grade: 'B', title: '本地演示截图占位', acceptance: '仅用于降级页面布局，不作为真实 DXM 保存证据' }, created_at: '2026-05-22T01:56:56Z' },
+    { id: 680, task_id: 19, job_id: 31, evidence_type: 'workflow_action', file_path: '/artifacts/screenshots/dianxiaomi_verify_not_published.png', meta: { grade: 'C', title: '演示结果隔离核验', acceptance: '缺少真实 L3 金丝雀与独立审计人复核记录' }, created_at: '2026-05-22T01:57:14Z' },
   ]
   const exceptions: ExceptionItem[] = [
     { id: 1, task_id: 19, job_id: 31, error_code: 'GAP-A1', field_domain: 'evidence', title: 'A级证据仍缺浏览器会话指纹', detail: '保存截图已有，但没有浏览器环境、账号、批次三者的同屏绑定。', suggestion: '报告中心需要补充会话摘要和截图哈希。', status: 'open' },
@@ -252,10 +252,10 @@ export function buildMockWorkspace(): DeliveryWorkspace {
   const reports: Report[] = [{
     id: 11,
     task_id: 19,
-    title: '保存核验报告 #19',
+    title: '本地演示保存核验报告 #19',
     status: 'draft',
     report_type: 'save_only_acceptance',
-    summary: '已建立保存隔离报告框架，等待真实执行结果补齐。',
+    summary: '已建立本地演示报告框架，等待真实 L2/L3 放行后补齐执行结果。',
     file_path: null,
     created_at: '2026-05-22T01:57:14Z',
     published: false,
@@ -331,8 +331,8 @@ export function buildMockWorkspace(): DeliveryWorkspace {
     dxmReferenceTemplates: normalizeReferenceSections(undefined, templates, reports),
     acceptanceGaps: buildAcceptanceGaps(exceptions, evidences, reports, evidenceGradeValue),
     safety: {
-      mode: 'single_save',
-      guarantee: '只保存不发布：工作台不提供任何上架入口，报告必须证明保存隔离。',
+      mode: 'dry_run',
+      guarantee: '本地演示 dry_run：工作台不提供任何上架入口，真实写入仍需 L2/L3 放行。',
       forbiddenActions: ['立即上架', '继续上架', '保存并上架', '批量上架'],
       lastCheckedAt: '2026-05-22 09:00',
     },

@@ -63,8 +63,9 @@ export function Dashboard({ workspace, selectedTask }: CommonProps) {
     <section className="dashboard-grid" aria-label="Dashboard">
       <div className="hero-panel">
         <div>
-          <h1>半托管保存交付工作台</h1>
-          <p>面向运营交付的桌面工作台：先看配置与任务，再看执行、证据、异常和报告，不暴露任何上架入口。</p>
+          <h1>本地安全诊断工作台</h1>
+          <p>本地验收、L2 只读诊断与 L3 阻断复核集中在这里；不暴露任何真实保存或上架入口。</p>
+          <p className="hero-panel__note">本地 PASS 仅代表工作台自检通过，真实 DXM 写入仍 BLOCKED。</p>
         </div>
         <div className="hero-panel__status">
           <span>当前批次</span>
@@ -290,6 +291,17 @@ export function TaskCenter({ workspace, selectedTask, busy, onSelectTask, onBoot
                       <li>只读依赖候选 {item.reviewCandidateCount} 项，仍需人工评审，不自动放行。</li>
                     )}
                   </ul>
+                  {item.reviewCandidateRequests.length > 0 && (
+                    <div className="l2-review-candidates" aria-label={`${item.targetLabel} 只读依赖人工评审清单`}>
+                      <strong>只读依赖人工评审清单</strong>
+                      <span>manual review only / allowlist_applied=false / 不自动放行 L2/L3</span>
+                      <ul>
+                        {item.reviewCandidateRequests.map((request) => (
+                          <li key={request}>{request}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </article>
               ))}
             </div>
@@ -1115,6 +1127,7 @@ type L2DiagnosticSummary = {
   topRequests: string[]
   renderHint: string | null
   reviewCandidateCount: number
+  reviewCandidateRequests: string[]
 }
 
 function summarizeL2Diagnostics(gate?: RegressionGate): L2DiagnosticSummary[] {
@@ -1142,6 +1155,15 @@ function summarizeL2Diagnostics(gate?: RegressionGate): L2DiagnosticSummary[] {
       const reason = Array.isArray(item?.reasons) ? item.reasons.join(', ') : 'blocked'
       return `${method} ${path} x${count} / ${reason}`
     })
+    const reviewCandidateRequests = reviewCandidates.slice(0, 4).map((candidate) => {
+      const item = asRecord(candidate)
+      const count = numberValue(item?.count)
+      const method = stringValue(item?.method, 'GET')
+      const host = stringValue(item?.host, '')
+      const path = stringValue(item?.path, '未知请求')
+      const reason = Array.isArray(item?.reasons) ? item.reasons.join(', ') : '待人工评审'
+      return `${method} ${host}${path} x${count} / ${reason}`
+    })
     return {
       target,
       targetLabel: target === 'data_acquisition' ? 'data_acquisition 采集页' : target === 'draft_box' ? 'draft_box 草稿箱' : target,
@@ -1150,6 +1172,7 @@ function summarizeL2Diagnostics(gate?: RegressionGate): L2DiagnosticSummary[] {
       topRequests,
       renderHint: renderState?.app_shell_only === true ? '页面疑似停留在 app shell/loading，未证明目标模块可达。' : null,
       reviewCandidateCount: reviewCandidates.length,
+      reviewCandidateRequests,
     }
   })
 }

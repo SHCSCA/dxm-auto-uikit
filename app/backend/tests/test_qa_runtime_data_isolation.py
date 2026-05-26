@@ -9,6 +9,7 @@ FINAL_DELIVERY_CHECK = REPO_ROOT / "scripts" / "final-delivery-check.ps1"
 QA_BROWSER_CHECK = REPO_ROOT / "scripts" / "qa-browser-check.ps1"
 WORKBENCH_MODULES = REPO_ROOT / "app" / "frontend" / "src" / "components" / "WorkbenchModules.tsx"
 APP_SHELL = REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx"
+USER_DELIVERY_GUIDE = REPO_ROOT / "docs" / "product" / "用户交付使用说明-20260525.md"
 
 
 def test_backend_config_can_use_dxm_data_dir_override(tmp_path):
@@ -73,6 +74,30 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "review_only" in script
     assert "allowlist_applied" in script
     assert "manual review only; not an L2 pass" in script
+    assert "L2/L3 gate records available" in script
+    assert "Only means L2/L3 records were readable; not that L2/L3 passed" in script
+    assert "Gate evidence check:" not in script
+
+
+def test_user_delivery_guide_explains_l2_allowlist_review_packet():
+    guide = USER_DELIVERY_GUIDE.read_text(encoding="utf-8")
+
+    assert "L2 Allowlist Review Candidates" in guide
+    assert "review_only=True" in guide
+    assert "allowlist_applied=False" in guide
+    assert "不自动放行 L2/L3" in guide
+    assert "不能为了让报告全绿" in guide
+
+
+def test_readme_next_steps_focus_on_allowlist_l2_l3_reverification():
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    next_steps = readme[readme.index("## 下一步重点"):readme.index("## 目录结构")]
+
+    assert "评审 `allowlist_review_candidates`" in next_steps
+    assert "最小、可审计的 L2 只读 allowlist" in next_steps
+    assert "同一个 `run-id` 复跑真实 L2 双目标" in next_steps
+    assert "L3 `single_save` 金丝雀" in next_steps
+    assert "实现真实 `DxmAdapter`" not in next_steps
 
 
 def test_final_delivery_check_writes_current_provisional_report_before_browser_qa():
@@ -94,6 +119,7 @@ def test_final_delivery_check_captures_final_report_center_after_final_json_writ
     qa_script = QA_BROWSER_CHECK.read_text(encoding="utf-8")
     workbench_modules = WORKBENCH_MODULES.read_text(encoding="utf-8")
     app_shell = APP_SHELL.read_text(encoding="utf-8")
+    frontend_css = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
 
     assert "ReportOnlyFinal" in qa_script
     assert "AllowMissingPostFinalQa" in qa_script
@@ -111,6 +137,8 @@ def test_final_delivery_check_captures_final_report_center_after_final_json_writ
     assert "state={postFinalReportQaState}" in workbench_modules
     assert "data-testid={testId}" in workbench_modules
     assert "data-state={state}" in workbench_modules
+    assert ".l2-review-candidates" in frontend_css
+    assert "overflow-wrap: anywhere" in frontend_css
     assert 'data-testid="final-report-center-screenshot-path"' in workbench_modules
     assert 'data-testid="report-center-section"' in workbench_modules
     assert ".replaceAll(" not in workbench_modules

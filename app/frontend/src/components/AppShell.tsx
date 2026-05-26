@@ -45,8 +45,8 @@ export function AppShell({
           <div className="brand-mark" aria-hidden="true">DX</div>
           {!sidebarCollapsed && (
             <div>
-              <strong>交付工作台</strong>
-              <span>保存核验 / 证据复盘</span>
+              <strong>本地安全诊断工作台</strong>
+              <span>本地验收 / L2 只读诊断 / L3 阻断复核</span>
             </div>
           )}
           <button className="icon-button" type="button" onClick={onToggleSidebar} aria-label="切换侧边栏">

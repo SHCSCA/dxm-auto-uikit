@@ -54,7 +54,7 @@ export default function App() {
   const [operationError, setOperationError] = useState<string | null>(null)
   const [workspaceNotice, setWorkspaceNotice] = useState<WorkspaceNotice | null>({
     kind: 'loading',
-    title: '正在加载交付工作台',
+    title: '正在加载本地安全诊断工作台',
     detail: '正在读取 /api/delivery/workspace 与关联接口。',
   })
 
@@ -79,7 +79,7 @@ export default function App() {
       ? current
       : {
         kind: 'loading',
-        title: '正在加载交付工作台',
+        title: '正在加载本地安全诊断工作台',
         detail: `正在读取 ${deliveryPath} 与关联接口。`,
       })
     const [
@@ -126,7 +126,7 @@ export default function App() {
       const failedPaths = failures.map((failure) => failure.path).join('、')
       setWorkspaceNotice({
         kind: 'degraded',
-        title: '交付工作台接口不可用，正在显示只读降级数据',
+        title: '本地安全诊断接口不可用，正在显示只读降级数据',
         detail: `失败接口：${failedPaths}。${failures[0]?.message ?? '请检查后端服务状态。'}`,
       })
     } else {

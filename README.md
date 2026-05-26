@@ -176,12 +176,11 @@ scripts\final-delivery-check.bat --help
 
 ## 下一步重点
 
-1. 真实接入店小秘登录态与 session 管理
-2. 实现真实 `DxmAdapter`
-3. 接入真实字段域填写顺序
-4. 把图片上传 / SKU / 价格 / 运费模板做成真实执行步骤
-5. 做人工接管模式
-6. 增加真实异常归因
+1. 评审 `allowlist_review_candidates`，确认哪些 GET/XHR 属于只读启动依赖。
+2. 若确认安全，建立显式、最小、可审计的 L2 只读 allowlist；继续禁止写方法、WebSocket、EventSource 和 `save/publish/claim/remark/note` 相关 URL。
+3. 使用同一个 `run-id` 复跑真实 L2 双目标 `data_acquisition` 与 `draft_box`，并确认两份证据共享 session fingerprint、脚本 hash 与 git head。
+4. 只有真实 L2 双目标全通过后，才由人工批准一条 L3 `single_save` 金丝雀。
+5. L3 金丝雀必须补齐保存成功、未发布证明、截图、DOM/hash 和 network/HAR 证据，再更新交付结论。
 
 ---
 
