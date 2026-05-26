@@ -80,6 +80,10 @@ def test_final_delivery_check_summary_reads_latest_report(tmp_path, monkeypatch)
         "realDxmWriteReadiness": "BLOCKED",
         "sourcePackageReadiness": "CLEAN",
         "sourcePackageCheck": "PASS",
+        "okScope": "local_workbench_only",
+        "realDxmMutationAllowed": False,
+        "expectedRealDxmWriteReadiness": "BLOCKED",
+        "realDxmWriteReadinessMatchesExpected": True,
         "requireCleanWorktree": True,
         "gitHead": "abc123",
         "browserQa": {
@@ -96,6 +100,10 @@ def test_final_delivery_check_summary_reads_latest_report(tmp_path, monkeypatch)
         "l2AllowlistReviewTemplate": {
             "reviewState": "pending",
             "candidates": [{"decision": "pending"}],
+        },
+        "l2AllowlistReviewTemplateHashes": {
+            "markdown_sha256": "m" * 64,
+            "json_sha256": "j" * 64,
         },
         "qaServices": {"isolated": True, "backendPort": 18000, "frontendPort": 15173},
         "artifacts": {
@@ -129,6 +137,10 @@ def test_final_delivery_check_summary_reads_latest_report(tmp_path, monkeypatch)
     assert payload["real_dxm_write_readiness"] == "BLOCKED"
     assert payload["source_package_readiness"] == "CLEAN"
     assert payload["source_package_check"] == "PASS"
+    assert payload["ok_scope"] == "local_workbench_only"
+    assert payload["real_dxm_mutation_allowed"] is False
+    assert payload["expected_real_dxm_write_readiness"] == "BLOCKED"
+    assert payload["real_dxm_write_readiness_matches_expected"] is True
     assert payload["browser_qa_ok"] is True
     assert payload["browser_qa_checked_at"] == "2026-05-25T09:18:33Z"
     assert payload["browser_qa_git_head"] == "abc123"
@@ -144,6 +156,8 @@ def test_final_delivery_check_summary_reads_latest_report(tmp_path, monkeypatch)
     assert payload["l2_allowlist_review_template_candidate_count"] == 1
     assert payload["l2_allowlist_review_template_markdown_path"] == "outputs/final-delivery-check/l2-allowlist-review-template.md"
     assert payload["l2_allowlist_review_template_json_path"] == "outputs/final-delivery-check/l2-allowlist-review-template.json"
+    assert payload["l2_allowlist_review_template_markdown_sha256"] == "m" * 64
+    assert payload["l2_allowlist_review_template_json_sha256"] == "j" * 64
     assert payload["qa_services"]["isolated"] is True
     assert payload["gates"]["l2"]["status"] == "failed"
     assert payload["summary_path"] == "outputs/final-delivery-check/final-delivery-check.md"

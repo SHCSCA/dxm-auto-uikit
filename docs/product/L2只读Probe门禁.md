@@ -72,6 +72,8 @@ JSON/Markdown 的 `diagnostics` 包含：
 
 最终自检会生成 `outputs/final-delivery-check/l2-allowlist-review-template.md` 和 `outputs/final-delivery-check/l2-allowlist-review-template.json`。该模板用于归档人工判断，不是 L2 通过证明。
 
+最终自检报告会记录模板 Markdown/JSON 的 `sha256` 哈希；报告中心也会展示同一组哈希短值。人工评审归档时必须保留原始模板、填写后模板以及各自哈希，避免后续复跑或审批时混淆不同批次的候选。
+
 每个候选至少需要补齐：
 
 - `reviewer` / `reviewed_at`

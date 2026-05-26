@@ -824,6 +824,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
       ? 'FAIL'
       : '待刷新/未运行'
   const readiness = finalCheck?.real_dxm_write_readiness ?? '未检查'
+  const realDxmMutationAllowedLabel = finalCheck?.real_dxm_mutation_allowed === true ? '真实写入允许 true' : '真实写入允许 false'
   const readinessDetail = !available
     ? '还没有读取到交付自检报告。运行 scripts\\final-delivery-check.bat 后，这里会显示最近一次验收摘要。'
     : readiness === 'READY'
@@ -868,7 +869,10 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
             <code data-testid="final-report-center-screenshot-path">{finalCheck.final_report_center_screenshot_path}</code>
           )}
           <span>自检 Git {gitHead} / 当前 Git {currentGitHead}</span>
+          <span>OK 范围 {finalCheck?.ok_scope ?? '未记录'} / {realDxmMutationAllowedLabel}</span>
+          <span>预期真实写入 {finalCheck?.expected_real_dxm_write_readiness ?? '未记录'} / 匹配 {finalCheck?.real_dxm_write_readiness_matches_expected === true ? 'true' : 'false'}</span>
           <span>L2 allowlist 评审模板 {finalCheck?.l2_allowlist_review_template_state ?? '未生成'} / 候选 {finalCheck?.l2_allowlist_review_template_candidate_count ?? 0} 项</span>
+          <span>模板哈希 MD {shortHash(finalCheck?.l2_allowlist_review_template_markdown_sha256)} / JSON {shortHash(finalCheck?.l2_allowlist_review_template_json_sha256)}</span>
           <span>浏览器 QA Git {browserQaGitHead} / 截图哈希 {finalCheck?.browser_qa_screenshot_hashes ? Object.keys(finalCheck.browser_qa_screenshot_hashes).length : 0} 项</span>
           <span>最终报告页截图 qa-report-center-final.png / 截图哈希 {finalCheck?.post_final_report_qa_screenshot_hashes ? Object.keys(finalCheck.post_final_report_qa_screenshot_hashes).length : 0} 项</span>
         </div>
@@ -897,6 +901,10 @@ function SourcePackageCheckRow({ finalCheck }: { finalCheck: FinalDeliveryCheckS
     : `源码包验收 ${sourcePackageCheck} / 工作区 ${sourcePackageReadiness}`
 
   return <CheckRow label={label} ok={ok} />
+}
+
+function shortHash(value?: string | null) {
+  return value ? value.slice(0, 12) : '未记录'
 }
 
 function FinalCheckFreshnessRow({ finalCheck }: { finalCheck: FinalDeliveryCheckSummary | null }) {

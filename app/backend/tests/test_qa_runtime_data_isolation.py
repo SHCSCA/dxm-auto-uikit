@@ -59,7 +59,18 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "l2ProbeEvidenceSummary" in script
     assert "l2AllowlistReviewCandidates" in script
     assert "l2AllowlistReviewTemplate" in script
+    assert "l2AllowlistReviewTemplateHashes" in script
+    assert "Get-FileHash -LiteralPath $l2AllowlistReviewTemplateMarkdownPath" in script
+    assert "markdown_sha256" in script
+    assert "json_sha256" in script
     assert "l2ProbePlan" in script
+    assert "okScope" in script
+    assert "realDxmMutationAllowed" in script
+    assert "$ExpectedRealDxmWriteReadiness = \"BLOCKED\"" in script
+    assert "realDxmWriteReadinessMatchesExpected" in script
+    assert "Expected real DXM write readiness" in script
+    assert "local_workbench_only" in script
+    assert "Real DXM mutation allowed" in script
     assert "## L2 Readonly Probe Evidence" in script
     assert "## L2 Allowlist Review Candidates" in script
     assert "## L2 Allowlist Review Template" in script
@@ -79,6 +90,8 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "reviewer" in script
     assert "decision" in script
     assert "rationale" in script
+    assert "Markdown sha256" in script
+    assert "JSON sha256" in script
     assert "l2-allowlist-review-template.md" in script
     assert "l2-allowlist-review-template.json" in script
     assert "L2/L3 gate records available" in script
@@ -97,6 +110,8 @@ def test_user_delivery_guide_explains_l2_allowlist_review_packet():
     assert "不能为了让报告全绿" in guide
     assert "l2-allowlist-review-template.md" in guide
     assert "l2-allowlist-review-template.json" in guide
+    assert "sha256" in guide
+    assert "哈希" in guide
     assert "approved_scope" in guide
     assert "residual_risk" in guide
     assert "Allowlist 人工评审记录" in l2_gate
@@ -112,6 +127,15 @@ def test_readme_next_steps_focus_on_allowlist_l2_l3_reverification():
     assert "同一个 `run-id` 复跑真实 L2 双目标" in next_steps
     assert "L3 `single_save` 金丝雀" in next_steps
     assert "实现真实 `DxmAdapter`" not in next_steps
+
+
+def test_readme_explains_final_check_ok_scope_for_machine_consumers():
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "`ok: true`" in readme
+    assert "`okScope`" in readme
+    assert "`realDxmMutationAllowed`" in readme
+    assert "不能只读取 `ok`" in readme
 
 
 def test_final_delivery_check_writes_current_provisional_report_before_browser_qa():

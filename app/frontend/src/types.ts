@@ -136,6 +136,10 @@ export type FinalDeliveryCheckSummary = {
   checked_at?: string | null
   local_workbench_check?: string | null
   real_dxm_write_readiness?: string | null
+  ok_scope?: string | null
+  real_dxm_mutation_allowed?: boolean | null
+  expected_real_dxm_write_readiness?: string | null
+  real_dxm_write_readiness_matches_expected?: boolean | null
   source_package_readiness?: string | null
   source_package_check?: string | null
   require_clean_worktree?: boolean | null
@@ -158,6 +162,8 @@ export type FinalDeliveryCheckSummary = {
   l2_allowlist_review_template_candidate_count?: number | null
   l2_allowlist_review_template_markdown_path?: string | null
   l2_allowlist_review_template_json_path?: string | null
+  l2_allowlist_review_template_markdown_sha256?: string | null
+  l2_allowlist_review_template_json_sha256?: string | null
   qa_services?: Record<string, unknown> | null
   gates?: Record<string, unknown> | null
   summary_path?: string | null

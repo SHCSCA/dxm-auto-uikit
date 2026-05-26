@@ -66,7 +66,15 @@ def test_report_center_shows_allowlist_review_before_l2_recheck_commands():
     assert "未完成人工评审前，不运行下方 L2 复验命令" in report_center_section
     assert "l2_allowlist_review_template_state" in source
     assert "l2_allowlist_review_template_markdown_path" in source
+    assert "l2_allowlist_review_template_markdown_sha256" in source
+    assert "l2_allowlist_review_template_json_sha256" in source
     assert "l2_allowlist_review_template_candidate_count" in types_source
+    assert "ok_scope" in source
+    assert "real_dxm_mutation_allowed" in source
+    assert "expected_real_dxm_write_readiness" in source
+    assert "real_dxm_write_readiness_matches_expected" in source
+    assert "预期真实写入" in source
+    assert "真实写入允许 false" in source
 
 
 def test_task_center_surfaces_l2_allowlist_review_candidates_as_manual_review_only():

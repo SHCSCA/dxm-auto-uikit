@@ -436,6 +436,7 @@ def _read_final_delivery_check_summary():
     post_final_report_qa = payload.get('postFinalReportQa') if isinstance(payload.get('postFinalReportQa'), dict) else {}
     l2_allowlist_review_template = payload.get('l2AllowlistReviewTemplate') if isinstance(payload.get('l2AllowlistReviewTemplate'), dict) else {}
     l2_allowlist_review_candidates = l2_allowlist_review_template.get('candidates')
+    l2_allowlist_review_template_hashes = payload.get('l2AllowlistReviewTemplateHashes') if isinstance(payload.get('l2AllowlistReviewTemplateHashes'), dict) else {}
     current_git = _current_git_summary()
     report_git_head = payload.get('gitHead')
     browser_qa_git_head = browser_qa_manifest.get('gitHead')
@@ -449,6 +450,10 @@ def _read_final_delivery_check_summary():
         'checked_at': payload.get('checkedAt'),
         'local_workbench_check': payload.get('localWorkbenchCheck'),
         'real_dxm_write_readiness': payload.get('realDxmWriteReadiness'),
+        'ok_scope': payload.get('okScope'),
+        'real_dxm_mutation_allowed': payload.get('realDxmMutationAllowed'),
+        'expected_real_dxm_write_readiness': payload.get('expectedRealDxmWriteReadiness'),
+        'real_dxm_write_readiness_matches_expected': payload.get('realDxmWriteReadinessMatchesExpected'),
         'source_package_readiness': payload.get('sourcePackageReadiness'),
         'source_package_check': payload.get('sourcePackageCheck'),
         'require_clean_worktree': payload.get('requireCleanWorktree'),
@@ -476,6 +481,8 @@ def _read_final_delivery_check_summary():
         'l2_allowlist_review_template_candidate_count': len(l2_allowlist_review_candidates) if isinstance(l2_allowlist_review_candidates, list) else 0,
         'l2_allowlist_review_template_markdown_path': artifacts.get('l2AllowlistReviewTemplateMarkdown'),
         'l2_allowlist_review_template_json_path': artifacts.get('l2AllowlistReviewTemplateJson'),
+        'l2_allowlist_review_template_markdown_sha256': l2_allowlist_review_template_hashes.get('markdown_sha256'),
+        'l2_allowlist_review_template_json_sha256': l2_allowlist_review_template_hashes.get('json_sha256'),
         'json_path': str(json_path),
     }
 

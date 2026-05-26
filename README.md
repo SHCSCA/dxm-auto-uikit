@@ -144,6 +144,8 @@ scripts\final-delivery-check.bat
 
 当前验收成功标准：默认验收要求 `Local workbench check: PASS`、`Browser QA: PASS`、`Source package check: NOT_REQUIRED` 以及 `Real DXM write readiness: BLOCKED` 同时成立；发布源码包验收才要求 `Source package check: PASS`。这里的 `BLOCKED` 是预期安全状态，表示真实 L2/L3 尚未放行，不表示本地工作台交付失败。
 
+自动化或管理摘要读取 `final-delivery-check.json` 时，不能只读取 `ok`。当前 `ok: true` 只代表 `okScope` 所声明的范围通过；若 `okScope` 为 `local_workbench_only` 且 `realDxmMutationAllowed` 为 `false`，结论仍然是本地工作台可交付、真实 DXM 写入不可启动。
+
 启动工作台后，报告中心会显示最近一次交付自检摘要和报告路径，方便验收人直接确认本地 PASS、真实写入 BLOCKED 与源码包状态。
 
 验收人可以在任务中心点击“创建演示批次（写入本地）”，该按钮只创建本地 `dry_run` 演示任务；“启动本地演示任务”可跑通本地工作台状态流转。真实 `claim_only` / `single_save` / `batch_save` 仍受 L2/L3 与人工批准令牌阻断。

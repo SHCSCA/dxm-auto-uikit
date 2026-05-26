@@ -2,6 +2,7 @@ param(
   [switch]$SkipBrowserQA,
   [switch]$RequireCleanWorktree,
   [switch]$Help,
+  [string]$ExpectedRealDxmWriteReadiness = "BLOCKED",
   [string]$OutDir = "outputs/final-delivery-check"
 )
 
@@ -37,6 +38,7 @@ if ($Help) {
   Write-Host "Options:"
   Write-Host "  -RequireCleanWorktree  Require pre/post git status to be clean for source package acceptance."
   Write-Host "  -SkipBrowserQA         Developer-only shortcut; do not use for formal delivery acceptance."
+  Write-Host "  -ExpectedRealDxmWriteReadiness <BLOCKED|READY|UNKNOWN>  Expected real DXM write readiness for this acceptance run; default BLOCKED."
   Write-Host "  -OutDir <path>         Write reports, logs, screenshots and sidecars to a custom directory."
   Write-Host ""
   exit 0
@@ -179,6 +181,10 @@ function Write-ProvisionalDeliveryCheckReport {
     schema = "dxm_final_delivery_check.v1"
     checkedAt = (Get-Date).ToUniversalTime().ToString("o")
     ok = $false
+    okScope = "local_workbench_only"
+    realDxmMutationAllowed = $false
+    expectedRealDxmWriteReadiness = $ExpectedRealDxmWriteReadiness
+    realDxmWriteReadinessMatchesExpected = $provisionalReadiness -eq $ExpectedRealDxmWriteReadiness
     status = "final_delivery_check_in_progress_for_browser_qa"
     localWorkbenchCheck = "IN_PROGRESS"
     realDxmWriteReadiness = $provisionalReadiness
@@ -463,6 +469,10 @@ function Write-FatalDeliveryCheckReport {
     schema = "dxm_final_delivery_check.v1"
     checkedAt = (Get-Date).ToUniversalTime().ToString("o")
     ok = $false
+    okScope = "local_workbench_only"
+    realDxmMutationAllowed = $false
+    expectedRealDxmWriteReadiness = $ExpectedRealDxmWriteReadiness
+    realDxmWriteReadinessMatchesExpected = $false
     status = "final_delivery_check_fatal_error"
     localWorkbenchCheck = "FAIL"
     realDxmWriteReadiness = "UNKNOWN"
@@ -717,7 +727,10 @@ $preSourcePackageReadiness = if ([string]::IsNullOrWhiteSpace($preGitStatus)) { 
 $postSourcePackageReadiness = if ([string]::IsNullOrWhiteSpace($postGitStatus)) { "CLEAN" } else { "DIRTY" }
 $sourcePackageReadiness = if ($preSourcePackageReadiness -eq "CLEAN" -and $postSourcePackageReadiness -eq "CLEAN") { "CLEAN" } else { "DIRTY" }
 $sourcePackageCheck = Get-SourcePackageCheck -SourcePackageReadiness $sourcePackageReadiness
-$overallOk = $localWorkbenchOk -and $gateEvidenceOk -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")
+$realDxmMutationAllowed = $realDxmWriteReadiness -eq "READY"
+$okScope = if ($realDxmMutationAllowed) { "local_workbench_and_real_dxm_ready" } else { "local_workbench_only" }
+$realDxmWriteReadinessMatchesExpected = $realDxmWriteReadiness -eq $ExpectedRealDxmWriteReadiness
+$overallOk = $localWorkbenchOk -and $gateEvidenceOk -and $realDxmWriteReadinessMatchesExpected -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")
 
 $l2AllowlistReviewTemplate = [pscustomobject]@{
   schema = "dxm_l2_allowlist_review_template.v1"
@@ -796,10 +809,19 @@ $l2ReviewTemplateLines.Add("- Rejected candidates remain blocked.")
 $l2ReviewTemplateLines.Add("- Real L2 must be rerun after any code/config change; this template is not an L2 pass.")
 Set-Content -LiteralPath $l2AllowlistReviewTemplateMarkdownPath -Encoding UTF8 -Value ($l2ReviewTemplateLines -join "`n")
 
+$l2AllowlistReviewTemplateHashes = [pscustomobject]@{
+  markdown_sha256 = (Get-FileHash -LiteralPath $l2AllowlistReviewTemplateMarkdownPath -Algorithm SHA256).Hash.ToLowerInvariant()
+  json_sha256 = (Get-FileHash -LiteralPath $l2AllowlistReviewTemplateJsonPath -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
 $result = [pscustomobject]@{
   schema = "dxm_final_delivery_check.v1"
   checkedAt = (Get-Date).ToUniversalTime().ToString("o")
   ok = $overallOk
+  okScope = $okScope
+  realDxmMutationAllowed = $realDxmMutationAllowed
+  expectedRealDxmWriteReadiness = $ExpectedRealDxmWriteReadiness
+  realDxmWriteReadinessMatchesExpected = $realDxmWriteReadinessMatchesExpected
   status = if ($overallOk) {
     if ($RequireCleanWorktree) { "local_workbench_source_package_check_pass" } else { "local_workbench_check_pass" }
   } else {
@@ -834,6 +856,7 @@ $result = [pscustomobject]@{
   l2ProbeEvidenceSummary = $l2ProbeEvidenceSummary
   l2AllowlistReviewCandidates = $l2AllowlistReviewCandidates
   l2AllowlistReviewTemplate = $l2AllowlistReviewTemplate
+  l2AllowlistReviewTemplateHashes = $l2AllowlistReviewTemplateHashes
   gates = @{
     l2 = $l2Gate
     l3 = $l3Gate
@@ -880,7 +903,7 @@ if (!$SkipBrowserQA) {
   if (!$postFinalReportStateQaCommand.ok -or !$postFinalReportQa -or $postFinalReportQa.ok -ne $true) {
     $localWorkbenchOk = $false
   }
-  $overallOk = $localWorkbenchOk -and $gateEvidenceOk -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")
+  $overallOk = $localWorkbenchOk -and $gateEvidenceOk -and $realDxmWriteReadinessMatchesExpected -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")
   $result.ok = $overallOk
   $result.status = if ($overallOk) {
     if ($RequireCleanWorktree) { "local_workbench_source_package_check_pass" } else { "local_workbench_check_pass" }
@@ -907,7 +930,7 @@ if (!$SkipBrowserQA) {
   if (!$postFinalReportCenterQaCommand.ok -or !$postFinalReportQa -or $postFinalReportQa.ok -ne $true) {
     $localWorkbenchOk = $false
   }
-  $overallOk = $localWorkbenchOk -and $gateEvidenceOk -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")
+  $overallOk = $localWorkbenchOk -and $gateEvidenceOk -and $realDxmWriteReadinessMatchesExpected -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")
   $result.ok = $overallOk
   $result.status = if ($overallOk) {
     if ($RequireCleanWorktree) { "local_workbench_source_package_check_pass" } else { "local_workbench_check_pass" }
@@ -924,6 +947,10 @@ $summaryLines = New-Object System.Collections.Generic.List[string]
 $summaryLines.Add("# DXM Local Workbench Delivery Check")
 $summaryLines.Add("")
 $summaryLines.Add("- Checked at: $($result.checkedAt)")
+$summaryLines.Add("- OK scope: $($result.okScope)")
+$summaryLines.Add("- Real DXM mutation allowed: $($result.realDxmMutationAllowed)")
+$summaryLines.Add("- Expected real DXM write readiness: $($result.expectedRealDxmWriteReadiness)")
+$summaryLines.Add("- Real DXM write readiness matches expected: $($result.realDxmWriteReadinessMatchesExpected)")
 $summaryLines.Add("- Local workbench check: $($result.localWorkbenchCheck)")
 $summaryLines.Add("- Real DXM write readiness: $($result.realDxmWriteReadiness)")
 $summaryLines.Add("- Source package readiness: $($result.sourcePackageReadiness)")
@@ -996,7 +1023,9 @@ if ($l2AllowlistReviewCandidates.Count -gt 0) {
 $summaryLines.Add("")
 $summaryLines.Add("## L2 Allowlist Review Template")
 $summaryLines.Add("- Markdown: $l2AllowlistReviewTemplateMarkdownPath")
+$summaryLines.Add("- Markdown sha256: $($l2AllowlistReviewTemplateHashes.markdown_sha256)")
 $summaryLines.Add("- JSON: $l2AllowlistReviewTemplateJsonPath")
+$summaryLines.Add("- JSON sha256: $($l2AllowlistReviewTemplateHashes.json_sha256)")
 $summaryLines.Add("- State: pending manual review; this template is not an L2 pass.")
 $summaryLines.Add("- Required fields: reviewer, reviewed_at, decision, rationale, approved_scope, residual_risk.")
 $summaryLines.Add("")
