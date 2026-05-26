@@ -305,6 +305,11 @@ const text = {
   networkHarLocked: '\u7f51\u7edc/HAR 0 \u6761\uff08\u9884\u671f\u963b\u65ad\uff09',
   businessReportLocked: '\u4e1a\u52a1\u4fdd\u5b58\u62a5\u544a 0 \u4efd\uff08L3 \u540e\u7f6e\uff0c\u9884\u671f\u963b\u65ad\uff09',
   postL3ChecklistLocked: 'L3 \u540e\u7f6e\u62a5\u544a\u5fc5\u987b\u8986\u76d6',
+  realWriteReleaseTitle: '\u771f\u5b9e\u5199\u5165\u653e\u884c\u524d\u7f6e',
+  l2RealReadOnlyPassed: 'L2 \u53cc\u76ee\u6807\u771f\u5b9e\u53ea\u8bfb\u901a\u8fc7',
+  l3ManualCanaryApproved: '\u4eba\u5de5\u6279\u51c6 L3 \u91d1\u4e1d\u96c0',
+  saveEvidenceComplete: '\u4fdd\u5b58\u6210\u529f\u3001\u672a\u53d1\u5e03\u8bc1\u660e\u3001\u622a\u56fe\u548c network/HAR',
+  allowlistTemplateNotL2Pass: '\u4e0d\u80fd\u7528 allowlist \u6a21\u677f\u66ff\u4ee3 L2 \u901a\u8fc7',
   saveResultGapTitle: '\u7f3a\u5c11\u4fdd\u5b58\u7ed3\u679c',
   unpublishedProofGapTitle: '\u7f3a\u5c11\u672a\u53d1\u5e03\u8bc1\u660e',
   networkSaveResponseGapTitle: '\u4fdd\u5b58\u63a5\u53e3\u54cd\u5e94\u672a\u6355\u83b7',
@@ -357,7 +362,15 @@ if (reportOnlyFinal) {
     expectedLocalWorkbench,
     expectedBrowserQa,
     expectedSourcePackage,
-    ...(finalReportRealWriteBlocked ? [text.businessReportLocked, text.postL3ChecklistLocked] : []),
+    ...(finalReportRealWriteBlocked ? [
+      text.businessReportLocked,
+      text.postL3ChecklistLocked,
+      text.realWriteReleaseTitle,
+      text.l2RealReadOnlyPassed,
+      text.l3ManualCanaryApproved,
+      text.saveEvidenceComplete,
+      text.allowlistTemplateNotL2Pass,
+    ] : []),
     ...(allowMissingPostFinalQa ? [] : ['qa-report-center-final.png']),
   ];
   const reportText = await waitForBodyIncludes(requiredReportFragments, 5000);
@@ -367,6 +380,7 @@ if (reportOnlyFinal) {
   const reportCenterSectionVisible = await evalValue('Boolean(document.querySelector("[data-testid=\\"report-center-section\\"]"))');
   const finalReportBlockedStatusTone = await evalValue('(() => { const row = document.querySelector(".delivery-readiness-row"); return Boolean(row && row.className.includes("is-blocked") && (row.innerText || "").includes("BLOCKED")); })()');
   const lockedEvidenceRows = await evalValue('(() => [...document.querySelectorAll(".check-row[data-state=\\"locked\\"]")].map(el => ({ text: el.innerText || "", className: el.className || "" })))()');
+  const lockedEvidenceRowsNeutral = Array.isArray(lockedEvidenceRows) && lockedEvidenceRows.length >= 3 && lockedEvidenceRows.every(row => String(row.className || '').includes('locked') && !String(row.className || '').includes('ok') && !String(row.className || '').includes('warn'));
   const guardDangerTexts = await evalValue('(() => [...document.querySelectorAll(".guard-chip--danger")].map(el => el.innerText || el.textContent || ""))()');
   const noL3PostEvidenceDangerChips = Array.isArray(guardDangerTexts) && !guardDangerTexts.some(value => {
     const chip = String(value || '');
@@ -382,6 +396,12 @@ if (reportOnlyFinal) {
     guardDangerTexts,
     hasExpectedLockedEvidenceRows: expectedLockedEvidence.every(fragment => reportText.includes(fragment)),
     lockedEvidenceRowsNotWarn: Array.isArray(lockedEvidenceRows) && lockedEvidenceRows.length >= 3 && lockedEvidenceRows.every(row => !String(row.className || '').includes('warn')),
+    lockedEvidenceRowsNeutral,
+    hasRealWriteReleasePrerequisites: reportText.includes(text.realWriteReleaseTitle)
+      && reportText.includes(text.l2RealReadOnlyPassed)
+      && reportText.includes(text.l3ManualCanaryApproved)
+      && reportText.includes(text.saveEvidenceComplete)
+      && reportText.includes(text.allowlistTemplateNotL2Pass),
     noL3PostEvidenceDangerChips,
     noL3PostEvidenceBlockerChips: noL3PostEvidenceDangerChips
       && !reportText.includes(text.oldSaveResultBlocker)
@@ -440,6 +460,8 @@ if (reportOnlyFinal) {
       finalReportPostL3ChecklistLocked: !finalReportRealWriteBlocked || reportText.includes(text.postL3ChecklistLocked),
       finalReportExpectedLockedEvidenceRows: finalReportCenterQaDiagnostics.hasExpectedLockedEvidenceRows,
       finalReportLockedEvidenceRowsNotWarn: finalReportCenterQaDiagnostics.lockedEvidenceRowsNotWarn,
+      finalReportLockedEvidenceRowsNeutral: finalReportCenterQaDiagnostics.lockedEvidenceRowsNeutral,
+      finalReportRealWriteReleasePrerequisites: finalReportCenterQaDiagnostics.hasRealWriteReleasePrerequisites,
       finalReportNoL3PostEvidenceBlockerChips: finalReportCenterQaDiagnostics.noL3PostEvidenceBlockerChips,
       finalReportApiIsFinal: finalCheckSummary?.local_workbench_check === 'PASS'
         && finalCheckSummary?.browser_qa_ok === true
@@ -542,6 +564,8 @@ const finalCheckSummaryForReport = await fetchJson('/api/delivery/final-check');
 const reportBlockedStatusTone = await evalValue('(() => { const row = document.querySelector(".delivery-readiness-row"); return Boolean(row && row.className.includes("is-blocked") && (row.innerText || "").includes("BLOCKED")); })()');
 const reportAcceptanceCommands = await evalValue('(() => [...document.querySelectorAll(".delivery-check-card__commands code")].map(el => (el.innerText || el.textContent || "").trim()))()');
 const l2CommandBlocks = await evalValue('(() => [...document.querySelectorAll(".l2-next-step-card__commands code")].map(el => (el.innerText || el.textContent || "").trim()))()');
+const reportLockedEvidenceRows = await evalValue('(() => [...document.querySelectorAll(".check-row[data-state=\\"locked\\"]")].map(el => ({ text: el.innerText || "", className: el.className || "" })))()');
+const reportLockedEvidenceRowsNeutral = Array.isArray(reportLockedEvidenceRows) && reportLockedEvidenceRows.length >= 3 && reportLockedEvidenceRows.every(row => String(row.className || '').includes('locked') && !String(row.className || '').includes('ok') && !String(row.className || '').includes('warn'));
 const reportShot = await screenshot('qa-report-center');
 await send('Emulation.setDeviceMetricsOverride', {
   width: 390,
@@ -704,6 +728,12 @@ const result = {
     reportBlockedStatusLanguage: reportText.includes(text.blockedExpectedState) && reportText.includes(text.noRealWrite) && reportBlockedStatusTone,
     reportBusinessReportLocked: !finalCheckRealWriteBlocked || reportText.includes(text.businessReportLocked),
     reportPostL3ChecklistLocked: !finalCheckRealWriteBlocked || reportText.includes(text.postL3ChecklistLocked),
+    reportLockedEvidenceRowsNeutral: !finalCheckRealWriteBlocked || reportLockedEvidenceRowsNeutral,
+    reportRealWriteReleasePrerequisites: reportText.includes(text.realWriteReleaseTitle)
+      && reportText.includes(text.l2RealReadOnlyPassed)
+      && reportText.includes(text.l3ManualCanaryApproved)
+      && reportText.includes(text.saveEvidenceComplete)
+      && reportText.includes(text.allowlistTemplateNotL2Pass),
     reportNoL3PostEvidenceBlockerChips: !finalCheckRealWriteBlocked || (!reportText.includes(text.oldSaveResultBlocker)
       && !reportText.includes(text.oldUnpublishedProofBlocker)
       && !reportText.includes(text.oldNetworkHarBlocker)),

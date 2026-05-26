@@ -25,6 +25,25 @@ type CommonProps = {
 
 const l3PostEvidenceGapIds = new Set(['gap-save-result', 'gap-unpublished-proof', 'gap-network-save-response'])
 
+const realWriteReleasePrerequisites = [
+  {
+    title: 'L2 双目标真实只读通过',
+    detail: 'data_acquisition 与 draft_box 必须使用同一 run-id；无写请求、非只读请求、禁用 URL、WebSocket 或登录态异常。',
+  },
+  {
+    title: 'allowlist 只能来自人工评审',
+    detail: '不能用 allowlist 模板替代 L2 通过；批准后仍要改代码/配置并复跑同一批真实 L2。',
+  },
+  {
+    title: '人工批准 L3 金丝雀',
+    detail: '只有 L2 双目标 passed 后，才允许服务端批准单商品 save-only 金丝雀。',
+  },
+  {
+    title: 'L3 证据补齐后再更新结论',
+    detail: '保存成功、未发布证明、截图和 network/HAR 必须齐全，才能把真实写入从 BLOCKED 改为 READY。',
+  },
+]
+
 type TaskCenterProps = CommonProps & {
   busy: boolean
   onSelectTask: (taskId: number) => void
@@ -32,6 +51,7 @@ type TaskCenterProps = CommonProps & {
   onStartTask: () => void
   onShowConsole: () => void
   onShowEvidence: () => void
+  onShowReports: () => void
 }
 
 type ExecutionConsoleProps = CommonProps & {
@@ -43,6 +63,7 @@ type ExecutionConsoleProps = CommonProps & {
   onSnapshotAgentConsole: () => void
   onShowTasks: () => void
   onShowEvidence: () => void
+  onShowReports: () => void
 }
 
 export function Dashboard({ workspace, selectedTask }: CommonProps) {
@@ -143,7 +164,7 @@ export function ConfigCenter({ workspace }: CommonProps) {
           <ConfigItem label="店铺" value={workspace.stores[0]?.name ?? '未配置真实店铺'} hint={workspace.stores[0]?.platform ?? '等待 /api/stores 返回'} empty={!hasStores} />
           <ConfigItem label="类目" value={product?.category_name ?? '未绑定真实商品类目'} hint="用于匹配属性和模板范围" empty={!hasProducts} />
           <ConfigItem label="图片银行" value={product?.image?.eu_outer_package_filename ?? '未绑定真实外包装图'} hint="欧盟外包装/标签实拍图" empty={!hasProducts} />
-          <ConfigItem label="执行模式" value="本地 dry_run / 真实 single_save" hint="演示批次可本地启动；真实保存仍需 L2/L3 放行" />
+          <ConfigItem label="执行模式" value="本地 dry_run；真实 single_save 当前 BLOCKED" hint="演示批次可本地启动；真实保存仍需 L2/L3 放行" />
         </div>
         {(!hasStores || !hasProducts) && (
           <EmptyState
@@ -183,7 +204,7 @@ export function ConfigCenter({ workspace }: CommonProps) {
   )
 }
 
-export function TaskCenter({ workspace, selectedTask, busy, onSelectTask, onBootstrapDemo, onStartTask, onShowConsole, onShowEvidence }: TaskCenterProps) {
+export function TaskCenter({ workspace, selectedTask, busy, onSelectTask, onBootstrapDemo, onStartTask, onShowConsole, onShowEvidence, onShowReports }: TaskCenterProps) {
   const needsApproval = selectedTask ? requiresManualApproval(selectedTask) : false
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
   const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
@@ -225,6 +246,7 @@ export function TaskCenter({ workspace, selectedTask, busy, onSelectTask, onBoot
             {!selectedTaskIsDryRun && selectedTask?.status === 'draft' && <span>当前真实任务保持阻断，可创建本地 dry_run 演示批次完成工作台验收。</span>}
             <div className="next-step-actions">
               <button className="button button--secondary" type="button" onClick={onShowConsole}>查看 L2 阻断说明</button>
+              <button className="button button--secondary" type="button" onClick={onShowReports}>查看 L2 评审与复验计划</button>
               <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
             </div>
           </div>
@@ -383,6 +405,7 @@ export function ExecutionConsole({
   onSnapshotAgentConsole,
   onShowTasks,
   onShowEvidence,
+  onShowReports,
 }: ExecutionConsoleProps) {
   const taskLogs = selectedTask ? workspace.logs.filter((item) => item.task_id === selectedTask.id) : workspace.logs
   const steps = workspace.deliverySteps.length
@@ -430,6 +453,7 @@ export function ExecutionConsole({
             <span>{realSaveBlockReason}</span>
             <div className="next-step-actions">
               <button className="button button--secondary" type="button" onClick={onShowTasks}>回到任务门禁</button>
+              <button className="button button--secondary" type="button" onClick={onShowReports}>查看 L2 评审与复验计划</button>
               <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
             </div>
           </div>
@@ -871,6 +895,17 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
       </div>
       <div className="delivery-check-card__body">
         <p>{readinessDetail}</p>
+        <div className="delivery-check-card__release-gates" aria-label="真实写入放行前置">
+          <strong>真实写入放行前置</strong>
+          <ol>
+            {realWriteReleasePrerequisites.map((item) => (
+              <li key={item.title}>
+                <span>{item.title}</span>
+                <small>{item.detail}</small>
+              </li>
+            ))}
+          </ol>
+        </div>
         {available && !finalCheckMatchesCurrent && (
           <p className="delivery-check-card__warning">
             自检未覆盖当前代码：请重新运行本地验收命令；源码包交付前运行源码包验收命令。
@@ -1175,9 +1210,12 @@ function presentAcceptanceGaps(gaps: AcceptanceGap[], realWriteExpectedBlocked: 
 }
 
 function CheckRow({ label, ok, testId, state }: { label: string; ok: boolean; testId?: string; state?: string }) {
+  const tone = state === 'locked' ? 'locked' : ok ? 'ok' : 'warn'
+  const marker = state === 'locked' ? 'LOCK' : ok ? '✓' : '!'
+
   return (
-    <div className={`check-row ${ok ? 'ok' : 'warn'}`} data-testid={testId} data-state={state}>
-      <span aria-hidden="true">{ok ? '✓' : '!'}</span>
+    <div className={`check-row ${tone}`} data-testid={testId} data-state={state}>
+      <span aria-hidden="true">{marker}</span>
       <strong>{label}</strong>
     </div>
   )
@@ -1185,7 +1223,7 @@ function CheckRow({ label, ok, testId, state }: { label: string; ok: boolean; te
 
 function BusinessReportCheckRow({ count, realWriteExpectedBlocked }: { count: number; realWriteExpectedBlocked: boolean }) {
   if (count === 0 && realWriteExpectedBlocked) {
-    return <CheckRow label="业务保存报告 0 份（L3 后置，预期阻断）" ok={true} state={'locked'} />
+    return <CheckRow label="业务保存报告 0 份（L3 后置，预期阻断）" ok={false} state={'locked'} />
   }
 
   return <CheckRow label={`业务保存报告 ${count} 份`} ok={count > 0} state={count > 0 ? 'present' : 'missing'} />
@@ -1193,7 +1231,7 @@ function BusinessReportCheckRow({ count, realWriteExpectedBlocked }: { count: nu
 
 function EvidenceCheckRow({ label, count, realWriteExpectedBlocked }: { label: string; count: number; realWriteExpectedBlocked: boolean }) {
   if (count === 0 && realWriteExpectedBlocked) {
-    return <CheckRow label={`${label} 0 条（预期阻断）`} ok={true} state={'locked'} />
+    return <CheckRow label={`${label} 0 条（预期阻断）`} ok={false} state={'locked'} />
   }
 
   return <CheckRow label={`${label} ${count} 条`} ok={count > 0} state={count > 0 ? 'present' : 'missing'} />
@@ -1201,7 +1239,7 @@ function EvidenceCheckRow({ label, count, realWriteExpectedBlocked }: { label: s
 
 function PostL3ReportCheckRow({ label, ok, realWriteExpectedBlocked }: { label: string; ok: boolean; realWriteExpectedBlocked: boolean }) {
   if (realWriteExpectedBlocked) {
-    return <CheckRow label={`${label}（L3 放行后要求）`} ok={true} state={'locked'} />
+    return <CheckRow label={`${label}（L3 放行后要求）`} ok={false} state={'locked'} />
   }
 
   return <CheckRow label={label} ok={ok} state={ok ? 'present' : 'missing'} />

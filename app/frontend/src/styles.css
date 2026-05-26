@@ -1687,6 +1687,44 @@ tr:last-child td {
   font-weight: 800;
 }
 
+.delivery-check-card__release-gates {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-alt);
+  color: var(--text);
+}
+
+.delivery-check-card__release-gates > strong {
+  font-size: 13px;
+}
+
+.delivery-check-card__release-gates ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.delivery-check-card__release-gates li {
+  line-height: 1.45;
+}
+
+.delivery-check-card__release-gates span {
+  display: block;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.delivery-check-card__release-gates small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .l2-next-step-card p {
   margin: 0;
   color: var(--muted);
@@ -1769,6 +1807,12 @@ tr:last-child td {
 .check-row.warn span {
   background: var(--amber-soft);
   color: var(--amber);
+}
+
+.check-row.locked span {
+  background: #eef2ff;
+  color: #3730a3;
+  font-size: 9px;
 }
 
 .check-row strong {

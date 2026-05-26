@@ -94,8 +94,9 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "JSON sha256" in script
     assert "l2-allowlist-review-template.md" in script
     assert "l2-allowlist-review-template.json" in script
-    assert "L2/L3 gate records available" in script
-    assert "Only means L2/L3 records were readable; not that L2/L3 passed" in script
+    assert "Gate record readability" in script
+    assert "PASS only means L2/L3 records were readable; it is not an L2/L3 gate pass" in script
+    assert "L2/L3 gate records available" not in script
     assert "Gate evidence check:" not in script
 
 
@@ -190,8 +191,11 @@ def test_final_delivery_check_captures_final_report_center_after_final_json_writ
     assert "expectedLockedEvidence" in qa_script
     assert "finalReportExpectedLockedEvidenceRows" in qa_script
     assert "finalReportLockedEvidenceRowsNotWarn" in qa_script
+    assert "finalReportLockedEvidenceRowsNeutral" in qa_script
     assert "reportBusinessReportLocked" in qa_script
     assert "reportPostL3ChecklistLocked" in qa_script
+    assert "reportLockedEvidenceRowsNeutral" in qa_script
+    assert "reportRealWriteReleasePrerequisites" in qa_script
     assert "finalReportBusinessReportLocked" in qa_script
     assert "finalReportPostL3ChecklistLocked" in qa_script
     assert "finalReportNoL3PostEvidenceBlockerChips" in qa_script

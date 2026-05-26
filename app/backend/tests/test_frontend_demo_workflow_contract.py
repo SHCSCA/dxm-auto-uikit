@@ -22,7 +22,7 @@ def test_task_center_does_not_apply_l3_real_write_block_to_dry_run_tasks():
 
     assert "const l3BlocksStart = needsRealL2 && l3Gate?.status === 'blocked'" in source
     assert "启动本地演示任务" in source
-    assert "本地 dry_run / 真实 single_save" in source
+    assert "本地 dry_run；真实 single_save 当前 BLOCKED" in source
 
 
 def test_browser_qa_covers_demo_batch_startable_user_path():
@@ -78,6 +78,21 @@ def test_report_center_shows_allowlist_review_before_l2_recheck_commands():
     assert "真实写入允许 false" in source
 
 
+def test_final_delivery_card_explains_blocked_to_ready_prerequisites():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    final_card_section = source[source.index("function FinalDeliveryCheckCard"):source.index("function SourcePackageCheckRow")]
+    qa_script = QA_BROWSER_CHECK.read_text(encoding="utf-8")
+
+    assert "真实写入放行前置" in final_card_section
+    assert "L2 双目标真实只读通过" in source
+    assert "人工批准 L3 金丝雀" in source
+    assert "保存成功、未发布证明、截图和 network/HAR" in source
+    assert "不能用 allowlist 模板替代 L2 通过" in source
+    assert "delivery-check-card__release-gates" in final_card_section
+    assert "realWriteReleasePrerequisites" in source
+    assert "reportRealWriteReleasePrerequisites" in qa_script
+
+
 def test_report_center_treats_missing_l3_evidence_as_expected_when_real_write_blocked():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     report_center_section = source[source.index("export function ReportCenter"):source.index("function FinalDeliveryCheckCard")]
@@ -92,6 +107,9 @@ def test_report_center_treats_missing_l3_evidence_as_expected_when_real_write_bl
     assert "业务保存报告 0 份（L3 后置，预期阻断）" in source
     assert "（预期阻断）" in source
     assert "state={'locked'}" in source
+    assert "state === 'locked' ? 'locked'" in source
+    assert "state === 'locked' ? 'LOCK'" in source
+    assert "ok={true} state={'locked'}" not in source
     assert "L3 未放行前不要求生成真实保存证据" in source
     assert "真实写入 BLOCKED 时不要求生成业务保存报告" in source
     assert "L3 后置报告必须覆盖" in source
@@ -163,12 +181,16 @@ def test_task_center_only_uses_demo_ready_copy_for_dry_run_tasks():
 
 def test_task_center_surfaces_l2_allowlist_review_candidates_as_manual_review_only():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    app_source = APP_TSX.read_text(encoding="utf-8")
 
     assert "reviewCandidateRequests" in source
     assert "只读依赖人工评审清单" in source
     assert "manual review only" in source
     assert "allowlist_applied=false" in source
     assert "不自动放行 L2/L3" in source
+    assert "onShowReports" in source
+    assert "查看 L2 评审与复验计划" in source
+    assert "onShowReports={() => setActiveSection('reports')}" in app_source
 
 
 def test_frontend_first_screen_names_local_safety_diagnostic_delivery():

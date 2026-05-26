@@ -298,6 +298,7 @@ export default function App() {
             onStartTask={startSelectedTask}
             onShowConsole={() => setActiveSection('console')}
             onShowEvidence={() => setActiveSection('evidence')}
+            onShowReports={() => setActiveSection('reports')}
           />
         )
       case 'console':
@@ -313,6 +314,7 @@ export default function App() {
             onSnapshotAgentConsole={snapshotAgentConsole}
             onShowTasks={() => setActiveSection('tasks')}
             onShowEvidence={() => setActiveSection('evidence')}
+            onShowReports={() => setActiveSection('reports')}
           />
         )
       case 'evidence':
