@@ -433,6 +433,7 @@ def _read_final_delivery_check_summary():
     artifacts = payload.get('artifacts') if isinstance(payload.get('artifacts'), dict) else {}
     browser_qa = payload.get('browserQa') if isinstance(payload.get('browserQa'), dict) else {}
     browser_qa_manifest = browser_qa.get('manifest') if isinstance(browser_qa.get('manifest'), dict) else {}
+    post_final_report_qa = payload.get('postFinalReportQa') if isinstance(payload.get('postFinalReportQa'), dict) else {}
     current_git = _current_git_summary()
     report_git_head = payload.get('gitHead')
     browser_qa_git_head = browser_qa_manifest.get('gitHead')
@@ -461,9 +462,14 @@ def _read_final_delivery_check_summary():
         'browser_qa_git_status_short': browser_qa_manifest.get('gitStatusShort'),
         'browser_qa_matches_report_git_head': bool(report_git_head and browser_qa_git_head and report_git_head == browser_qa_git_head),
         'browser_qa_screenshot_hashes': browser_qa.get('screenshotHashes'),
+        'post_final_report_qa_ok': post_final_report_qa.get('ok'),
+        'post_final_report_qa_checked_at': post_final_report_qa.get('checkedAt'),
+        'post_final_report_qa_screenshot_hashes': post_final_report_qa.get('screenshotHashes'),
         'qa_services': payload.get('qaServices'),
         'gates': payload.get('gates'),
         'summary_path': artifacts.get('summary'),
+        'final_report_center_screenshot_path': artifacts.get('finalReportCenterScreenshot'),
+        'post_final_report_qa_json_path': artifacts.get('postFinalReportQaJson'),
         'json_path': str(json_path),
     }
 

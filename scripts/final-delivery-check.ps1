@@ -133,6 +133,21 @@ function Get-SourcePackageCheck {
   return "FAIL"
 }
 
+function Remove-PostFinalReportQaArtifacts {
+  $paths = @(
+    $postFinalReportQaJson,
+    (Join-Path $browserQaOutDir "qa-final-report-check.md"),
+    (Join-Path $browserQaOutDir "qa-report-center-final.png"),
+    (Join-Path $browserQaOutDir "qa-final-report-console.jsonl"),
+    (Join-Path $browserQaOutDir "qa-final-report-network.json")
+  )
+  foreach ($path in $paths) {
+    if ($path -and (Test-Path -LiteralPath $path)) {
+      Remove-Item -LiteralPath $path -Force
+    }
+  }
+}
+
 function Write-ProvisionalDeliveryCheckReport {
   param(
     [object]$WorkspaceSnapshot,
@@ -749,17 +764,47 @@ $result | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $jsonPath -Encodin
 $postFinalReportQa = $null
 if (!$SkipBrowserQA) {
   # The main Browser QA screenshot captures the provisional report used during the run.
-  # After writing the final JSON, capture the final report-center state as delivery evidence.
-  $commands += Invoke-CapturedCommand `
+  # After writing the final JSON, first verify the final report state, then write that
+  # result back and verify the report center visibly exposes the final-page QA evidence.
+  Remove-PostFinalReportQaArtifacts
+  $postFinalReportStateQaCommand = Invoke-CapturedCommand `
+    -Name "Final report state QA" `
+    -FilePath "powershell.exe" `
+    -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts\qa-browser-check.ps1", "-Url", $browserQaUrl, "-OutDir", $browserQaOutDir, "-ReportOnlyFinal", "-AllowMissingPostFinalQa") `
+    -WorkingDirectory $root `
+    -TimeoutSeconds 180
+  $commands += $postFinalReportStateQaCommand
+  if (Test-Path -LiteralPath $postFinalReportQaJson) {
+    $postFinalReportQa = Get-Content -LiteralPath $postFinalReportQaJson -Raw -Encoding UTF8 | ConvertFrom-Json
+  }
+  if (!$postFinalReportStateQaCommand.ok -or !$postFinalReportQa -or $postFinalReportQa.ok -ne $true) {
+    $localWorkbenchOk = $false
+  }
+  $overallOk = $localWorkbenchOk -and $gateEvidenceOk -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")
+  $result.ok = $overallOk
+  $result.status = if ($overallOk) {
+    if ($RequireCleanWorktree) { "local_workbench_source_package_check_pass" } else { "local_workbench_check_pass" }
+  } else {
+    if ($RequireCleanWorktree -and $sourcePackageCheck -eq "FAIL") { "source_package_check_fail" } else { "local_workbench_check_fail" }
+  }
+  $result.localWorkbenchCheck = if ($localWorkbenchOk) { "PASS" } else { "FAIL" }
+  $result.commands = $commands
+  $result.postFinalReportQa = $postFinalReportQa
+  $result | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
+
+  Remove-PostFinalReportQaArtifacts
+  $postFinalReportQa = $null
+  $postFinalReportCenterQaCommand = Invoke-CapturedCommand `
     -Name "Final report center QA" `
     -FilePath "powershell.exe" `
     -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts\qa-browser-check.ps1", "-Url", $browserQaUrl, "-OutDir", $browserQaOutDir, "-ReportOnlyFinal") `
     -WorkingDirectory $root `
     -TimeoutSeconds 180
+  $commands += $postFinalReportCenterQaCommand
   if (Test-Path -LiteralPath $postFinalReportQaJson) {
     $postFinalReportQa = Get-Content -LiteralPath $postFinalReportQaJson -Raw -Encoding UTF8 | ConvertFrom-Json
   }
-  if (!$postFinalReportQa -or $postFinalReportQa.ok -ne $true) {
+  if (!$postFinalReportCenterQaCommand.ok -or !$postFinalReportQa -or $postFinalReportQa.ok -ne $true) {
     $localWorkbenchOk = $false
   }
   $overallOk = $localWorkbenchOk -and $gateEvidenceOk -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")

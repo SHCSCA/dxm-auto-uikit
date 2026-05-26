@@ -7,6 +7,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FINAL_DELIVERY_CHECK = REPO_ROOT / "scripts" / "final-delivery-check.ps1"
 QA_BROWSER_CHECK = REPO_ROOT / "scripts" / "qa-browser-check.ps1"
+WORKBENCH_MODULES = REPO_ROOT / "app" / "frontend" / "src" / "components" / "WorkbenchModules.tsx"
+APP_SHELL = REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx"
 
 
 def test_backend_config_can_use_dxm_data_dir_override(tmp_path):
@@ -85,14 +87,48 @@ def test_final_delivery_check_writes_current_provisional_report_before_browser_q
 def test_final_delivery_check_captures_final_report_center_after_final_json_write():
     script = FINAL_DELIVERY_CHECK.read_text(encoding="utf-8")
     qa_script = QA_BROWSER_CHECK.read_text(encoding="utf-8")
+    workbench_modules = WORKBENCH_MODULES.read_text(encoding="utf-8")
+    app_shell = APP_SHELL.read_text(encoding="utf-8")
 
     assert "ReportOnlyFinal" in qa_script
+    assert "AllowMissingPostFinalQa" in qa_script
     assert "finalReportCenterShowsFinalPassState" in qa_script
+    assert "finalReportCenterQaVisible" in qa_script
+    assert "finalReportCenterQaDomState" in qa_script
+    assert "finalReportCenterScreenshotDomPath" in qa_script
+    assert 'clickSelector(\'[data-section="reports"]\')' in qa_script
+    assert 'reportCenterSectionVisible' in qa_script
+    assert "waitForBodyIncludes" in qa_script
+    assert "post_final_report_qa_ok" in qa_script
+    assert "final_report_center_screenshot_path" in qa_script
     assert "qa-report-center-final" in qa_script
+    assert 'testId="final-report-center-qa"' in workbench_modules
+    assert "state={postFinalReportQaState}" in workbench_modules
+    assert "data-testid={testId}" in workbench_modules
+    assert "data-state={state}" in workbench_modules
+    assert 'data-testid="final-report-center-screenshot-path"' in workbench_modules
+    assert 'data-testid="report-center-section"' in workbench_modules
+    assert ".replaceAll(" not in workbench_modules
+    assert "data-section={item.id}" in app_shell
+    assert "Final report state QA" in script
     assert "Final report center QA" in script
+    assert "Remove-PostFinalReportQaArtifacts" in script
+    assert "$postFinalReportStateQaCommand.ok" in script
+    assert "$postFinalReportCenterQaCommand.ok" in script
     assert "postFinalReportQa" in script
     assert "finalReportCenterScreenshot" in script
     final_json_write = script.index("$result | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $jsonPath -Encoding UTF8")
+    post_final_state_qa = script.index('-Name "Final report state QA"')
     post_final_qa = script.index('-Name "Final report center QA"')
     stop_qa = script.rindex("Stop-QAProcesses")
-    assert final_json_write < post_final_qa < stop_qa
+    assert final_json_write < post_final_state_qa < post_final_qa < stop_qa
+    first_cleanup = script.index("Remove-PostFinalReportQaArtifacts", final_json_write)
+    second_cleanup = script.index("Remove-PostFinalReportQaArtifacts", first_cleanup + 1)
+    assert final_json_write < first_cleanup < post_final_state_qa
+    assert post_final_state_qa < second_cleanup < post_final_qa
+    second_cleanup_section = script[second_cleanup:post_final_qa]
+    assert "$postFinalReportQa = $null" in second_cleanup_section
+    state_section = script[post_final_state_qa:post_final_qa]
+    center_section = script[post_final_qa:stop_qa]
+    assert "$postFinalReportStateQaCommand.ok" in state_section
+    assert "$postFinalReportCenterQaCommand.ok" in center_section

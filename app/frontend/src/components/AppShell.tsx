@@ -62,6 +62,7 @@ export function AppShell({
               onClick={() => onSectionChange(item.id)}
               title={item.label}
               aria-current={activeSection === item.id ? 'page' : undefined}
+              data-section={item.id}
             >
               <span className="nav-item__icon" aria-hidden="true">{item.short}</span>
               {!sidebarCollapsed && <span>{item.label}</span>}

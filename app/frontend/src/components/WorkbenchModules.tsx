@@ -722,7 +722,7 @@ export function ReportCenter({
   const l2ProbePlan = workspace.l2ProbePlan
 
   return (
-    <section className="module-layout" aria-label="报告中心">
+    <section className="module-layout" aria-label="报告中心" data-testid="report-center-section">
       <FinalDeliveryCheckCard finalCheck={finalCheck} />
       <div className="module-card span-3">
         <ModuleHead title="保存隔离摘要" meta={workspace.publishGuardState?.status ?? '等待执行'} />
@@ -786,6 +786,11 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
   const currentGitHead = finalCheck?.current_git_head ? finalCheck.current_git_head.slice(0, 8) : '未记录'
   const browserQaGitHead = finalCheck?.browser_qa_git_head ? finalCheck.browser_qa_git_head.slice(0, 8) : '未记录'
   const finalCheckMatchesCurrent = finalCheck?.final_check_matches_current_worktree === true
+  const postFinalReportQaState = finalCheck?.post_final_report_qa_ok === true
+    ? 'PASS'
+    : finalCheck?.post_final_report_qa_ok === false
+      ? 'FAIL'
+      : '待刷新/未运行'
   const readiness = finalCheck?.real_dxm_write_readiness ?? '未检查'
   const readinessDetail = !available
     ? '还没有读取到交付自检报告。运行 scripts\\final-delivery-check.bat 后，这里会显示最近一次验收摘要。'
@@ -804,6 +809,12 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
         <FinalCheckFreshnessRow finalCheck={finalCheck} />
         <SourcePackageCheckRow finalCheck={finalCheck} />
         <CheckRow label={`浏览器 QA ${finalCheck?.browser_qa_ok === true ? 'PASS' : finalCheck?.browser_qa_ok === false ? 'FAIL' : '待刷新/未运行'}`} ok={finalCheck?.browser_qa_ok === true} />
+        <CheckRow
+          label={`最终报告中心 QA ${postFinalReportQaState}`}
+          ok={finalCheck?.post_final_report_qa_ok === true}
+          testId="final-report-center-qa"
+          state={postFinalReportQaState}
+        />
       </div>
       <div className="delivery-check-card__body">
         <p>{readinessDetail}</p>
@@ -815,8 +826,12 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
         <div className="delivery-check-card__paths">
           <code>{reportPath}</code>
           <code>{jsonPath}</code>
+          {finalCheck?.final_report_center_screenshot_path && (
+            <code data-testid="final-report-center-screenshot-path">{finalCheck.final_report_center_screenshot_path}</code>
+          )}
           <span>自检 Git {gitHead} / 当前 Git {currentGitHead}</span>
           <span>浏览器 QA Git {browserQaGitHead} / 截图哈希 {finalCheck?.browser_qa_screenshot_hashes ? Object.keys(finalCheck.browser_qa_screenshot_hashes).length : 0} 项</span>
+          <span>最终报告页截图 qa-report-center-final.png / 截图哈希 {finalCheck?.post_final_report_qa_screenshot_hashes ? Object.keys(finalCheck.post_final_report_qa_screenshot_hashes).length : 0} 项</span>
         </div>
         <div className="delivery-check-card__commands">
           <div>
@@ -1070,9 +1085,9 @@ function GapList({ gaps }: { gaps: AcceptanceGap[] }) {
   )
 }
 
-function CheckRow({ label, ok }: { label: string; ok: boolean }) {
+function CheckRow({ label, ok, testId, state }: { label: string; ok: boolean; testId?: string; state?: string }) {
   return (
-    <div className={`check-row ${ok ? 'ok' : 'warn'}`}>
+    <div className={`check-row ${ok ? 'ok' : 'warn'}`} data-testid={testId} data-state={state}>
       <span aria-hidden="true">{ok ? '✓' : '!'}</span>
       <strong>{label}</strong>
     </div>
@@ -1328,8 +1343,8 @@ function displaySafeWorkflowAction(action: string) {
 
 function displaySafeLogMessage(message: string) {
   return message
-    .replaceAll('只点击保存', 'L3 保存门禁待批准')
-    .replaceAll('SAVE_ONLY', 'L3_SAVE_GATE')
+    .split('只点击保存').join('L3 保存门禁待批准')
+    .split('SAVE_ONLY').join('L3_SAVE_GATE')
 }
 
 function humanReportSummary(report: Report) {

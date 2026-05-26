@@ -151,9 +151,14 @@ export type FinalDeliveryCheckSummary = {
   browser_qa_git_status_short?: string | null
   browser_qa_matches_report_git_head?: boolean | null
   browser_qa_screenshot_hashes?: Record<string, string> | null
+  post_final_report_qa_ok?: boolean | null
+  post_final_report_qa_checked_at?: string | null
+  post_final_report_qa_screenshot_hashes?: Record<string, string> | null
   qa_services?: Record<string, unknown> | null
   gates?: Record<string, unknown> | null
   summary_path?: string | null
+  final_report_center_screenshot_path?: string | null
+  post_final_report_qa_json_path?: string | null
   json_path?: string | null
   error?: string | null
 }

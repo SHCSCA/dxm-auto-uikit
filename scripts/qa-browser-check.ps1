@@ -2,7 +2,8 @@ param(
   [string]$Url = "http://127.0.0.1:5173",
   [string]$OutDir = "outputs/browser-checks",
   [int]$Port = 9230,
-  [switch]$ReportOnlyFinal
+  [switch]$ReportOnlyFinal,
+  [switch]$AllowMissingPostFinalQa
 )
 
 $ErrorActionPreference = "Stop"
@@ -99,6 +100,7 @@ const rootDir = '$($root.Replace("\", "/"))';
 const outDir = '$($absoluteOutDir.Replace("\", "/"))';
 const qaScriptPath = '$($PSCommandPath.Replace("\", "/"))';
 const reportOnlyFinal = $($ReportOnlyFinal.IsPresent.ToString().ToLowerInvariant());
+const allowMissingPostFinalQa = $($AllowMissingPostFinalQa.IsPresent.ToString().ToLowerInvariant());
 const versionInfo = await (await fetch('http://127.0.0.1:' + port + '/json/version')).json();
 if (typeof WebSocket !== 'function') {
   throw new Error('This QA check requires Node.js with global WebSocket support. Use Node 22+ or the bundled Codex Node runtime.');
@@ -177,8 +179,23 @@ async function evalValue(expr) {
 async function bodyText() {
   return await evalValue('document.body.innerText.replace(/\\\\s+/g, " ")');
 }
+async function waitForBodyIncludes(fragments, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  let text = await bodyText();
+  while (Date.now() < deadline) {
+    if (fragments.every(fragment => !fragment || text.includes(fragment))) {
+      return text;
+    }
+    await new Promise(r => setTimeout(r, 200));
+    text = await bodyText();
+  }
+  return text;
+}
 async function clickText(label) {
   return await evalValue('(() => { const els = [...document.querySelectorAll("button,a,[role=\\"button\\"],nav *")]; const el = els.find(e => (e.innerText || e.textContent || "").trim() === ' + JSON.stringify(label) + '); if (el) { el.click(); return true; } return false; })()');
+}
+async function clickSelector(selector) {
+  return await evalValue('(() => { const el = document.querySelector(' + JSON.stringify(selector) + '); if (el) { el.click(); return true; } return false; })()');
 }
 function summarizeTask(task) {
   return task ? {
@@ -306,17 +323,39 @@ const text = {
   fakePlaceholder: '\u8bca\u65ad\u5360\u4f4d',
 };
 if (reportOnlyFinal) {
-  const clickedReports = await clickText(text.reports);
-  await new Promise(r => setTimeout(r, 900));
-  const reportText = await bodyText();
+  const clickedReports = await clickSelector('[data-section="reports"]') || await clickText(text.reports);
+  await new Promise(r => setTimeout(r, 300));
   const finalCheckSummary = await fetchJson('/api/delivery/final-check');
-  const finalReportShot = await screenshot('qa-report-center-final');
-  const finalReportBlockedStatusTone = await evalValue('(() => { const row = document.querySelector(".delivery-readiness-row"); return Boolean(row && row.className.includes("is-blocked") && (row.innerText || "").includes("BLOCKED")); })()');
   const expectedSourcePackage = finalCheckSummary?.source_package_check === 'NOT_REQUIRED'
     ? text.sourcePackageNotRequired
     : text.sourcePackageLabel + ' ' + String(finalCheckSummary?.source_package_check ?? '\u672a\u68c0\u67e5');
   const expectedBrowserQa = text.browserQaLabel + ' ' + (finalCheckSummary?.browser_qa_ok === true ? 'PASS' : 'FAIL');
   const expectedLocalWorkbench = text.localWorkbenchLabel + ' ' + String(finalCheckSummary?.local_workbench_check ?? '\u672a\u68c0\u67e5');
+  const expectedPostFinalReportQa = '最终报告中心 QA ' + (finalCheckSummary?.post_final_report_qa_ok === true ? 'PASS' : 'FAIL');
+  const requiredReportFragments = [
+    text.finalCheck,
+    expectedLocalWorkbench,
+    expectedBrowserQa,
+    expectedSourcePackage,
+    ...(allowMissingPostFinalQa ? [] : ['qa-report-center-final.png']),
+  ];
+  const reportText = await waitForBodyIncludes(requiredReportFragments, 5000);
+  const finalReportShot = await screenshot('qa-report-center-final');
+  const finalReportCenterQaDomState = await evalValue('(() => { const el = document.querySelector("[data-testid=\\"final-report-center-qa\\"]"); return el ? el.getAttribute("data-state") : null; })()');
+  const finalReportCenterScreenshotDomPath = await evalValue('(() => { const el = document.querySelector("[data-testid=\\"final-report-center-screenshot-path\\"]"); return el ? (el.innerText || el.textContent || "") : ""; })()');
+  const reportCenterSectionVisible = await evalValue('Boolean(document.querySelector("[data-testid=\\"report-center-section\\"]"))');
+  const finalReportBlockedStatusTone = await evalValue('(() => { const row = document.querySelector(".delivery-readiness-row"); return Boolean(row && row.className.includes("is-blocked") && (row.innerText || "").includes("BLOCKED")); })()');
+  const finalReportCenterQaDiagnostics = {
+    expectedPostFinalReportQa,
+    hasExpectedPostFinalReportQa: reportText.includes(expectedPostFinalReportQa),
+    hasFinalReportScreenshotName: reportText.includes('qa-report-center-final.png'),
+    finalReportCenterQaDomState,
+    finalReportCenterScreenshotDomPath,
+    reportCenterSectionVisible,
+    apiPostFinalReportQaOk: finalCheckSummary?.post_final_report_qa_ok,
+    apiFinalReportCenterScreenshotPath: finalCheckSummary?.final_report_center_screenshot_path,
+    reportTextSample: reportText.slice(0, 1200),
+  };
   const consolePath = outDir + '/qa-final-report-console.jsonl';
   fs.writeFileSync(
     consolePath,
@@ -343,10 +382,15 @@ if (reportOnlyFinal) {
     mode: 'report_only_final',
     ok: true,
     assertions: {
-      finalReportCenterOpened: clickedReports && reportText.includes(text.finalCheck),
+      finalReportCenterOpened: clickedReports && reportCenterSectionVisible,
       finalReportCenterShowsFinalPassState: reportText.includes(expectedLocalWorkbench)
         && reportText.includes(expectedBrowserQa)
         && reportText.includes(expectedSourcePackage),
+      finalReportCenterQaVisible: allowMissingPostFinalQa
+        || (finalReportCenterQaDiagnostics.finalReportCenterQaDomState === 'PASS'
+          && finalReportCenterQaDiagnostics.finalReportCenterScreenshotDomPath.includes('qa-report-center-final.png')
+          && finalReportCenterQaDiagnostics.apiPostFinalReportQaOk === true
+          && Boolean(finalReportCenterQaDiagnostics.apiFinalReportCenterScreenshotPath)),
       finalReportCenterShowsFreshnessState: reportText.includes(text.finalCheckCurrent)
         || reportText.includes(text.finalCheckStale),
       finalReportCenterShowsBlockedDxmState: reportText.includes(text.blockedExpectedState)
@@ -364,6 +408,7 @@ if (reportOnlyFinal) {
       sidecarsWritten: fs.existsSync(consolePath) && fs.existsSync(networkPath),
     },
     consoleErrors,
+    finalReportCenterQaDiagnostics,
     networkSummary: {
       eventCount: networkEvents.length,
       failedCount: failedNetworkEvents.length,

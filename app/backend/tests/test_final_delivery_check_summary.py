@@ -88,8 +88,17 @@ def test_final_delivery_check_summary_reads_latest_report(tmp_path, monkeypatch)
             "manifest": {"gitHead": "abc123", "gitStatusShort": ""},
             "screenshotHashes": {"qa-report-center.png": "hash"},
         },
+        "postFinalReportQa": {
+            "ok": True,
+            "checkedAt": "2026-05-25T09:18:44Z",
+            "screenshotHashes": {"qa-report-center-final.png": "final-hash"},
+        },
         "qaServices": {"isolated": True, "backendPort": 18000, "frontendPort": 15173},
-        "artifacts": {"summary": "outputs/final-delivery-check/final-delivery-check.md"},
+        "artifacts": {
+            "summary": "outputs/final-delivery-check/final-delivery-check.md",
+            "finalReportCenterScreenshot": "outputs/final-delivery-check/browser-checks/qa-report-center-final.png",
+            "postFinalReportQaJson": "outputs/final-delivery-check/browser-checks/qa-final-report-check.json",
+        },
         "gates": {"l2": {"status": "failed"}, "l3": {"status": "blocked"}},
     }), encoding="utf-8")
     monkeypatch.setattr(main, "FINAL_DELIVERY_CHECK_JSON", report_path)
@@ -120,6 +129,11 @@ def test_final_delivery_check_summary_reads_latest_report(tmp_path, monkeypatch)
     assert payload["browser_qa_git_status_short"] == ""
     assert payload["browser_qa_matches_report_git_head"] is True
     assert payload["browser_qa_screenshot_hashes"] == {"qa-report-center.png": "hash"}
+    assert payload["post_final_report_qa_ok"] is True
+    assert payload["post_final_report_qa_checked_at"] == "2026-05-25T09:18:44Z"
+    assert payload["post_final_report_qa_screenshot_hashes"] == {"qa-report-center-final.png": "final-hash"}
+    assert payload["final_report_center_screenshot_path"] == "outputs/final-delivery-check/browser-checks/qa-report-center-final.png"
+    assert payload["post_final_report_qa_json_path"] == "outputs/final-delivery-check/browser-checks/qa-final-report-check.json"
     assert payload["qa_services"]["isolated"] is True
     assert payload["gates"]["l2"]["status"] == "failed"
     assert payload["summary_path"] == "outputs/final-delivery-check/final-delivery-check.md"
