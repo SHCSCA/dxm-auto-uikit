@@ -286,9 +286,10 @@ const text = {
   hero: '\u672c\u5730\u5b89\u5168\u8bca\u65ad\u5de5\u4f5c\u53f0',
   localWorkbenchDeliverable: '\u672c\u5730\u5de5\u4f5c\u53f0\u53ef\u4ea4\u4ed8',
   expectedSafetyBlocked: '\u771f\u5b9e\u5199\u5165\u9884\u671f BLOCKED',
+  nextStepSummary: 'L2 allowlist \u4eba\u5de5\u8bc4\u5ba1 + \u53cc\u76ee\u6807\u590d\u9a8c',
   realWriteGateFailed: '\u771f\u5b9e\u5199\u5165\u95e8\u7981\u672a\u901a\u8fc7',
   appName: '\u5e97\u5c0f\u79d8\u534a\u6258\u7ba1\u6267\u884c\u5668',
-  localWrite: '\u521b\u5efa\u6f14\u793a\u6279\u6b21\uff08\u5199\u5165\u672c\u5730\uff09',
+  localWrite: '\u521b\u5efa\u672c\u5730 dry_run \u6f14\u793a\u6279\u6b21',
   readonlyDiag: '\u67e5\u770b\u53ea\u8bfb\u8bca\u65ad',
   l2BlockHelp: '\u67e5\u770b L2 \u963b\u65ad\u8bf4\u660e',
   evidenceGap: '\u67e5\u770b\u8bc1\u636e\u7f3a\u53e3',
@@ -329,7 +330,8 @@ const text = {
   sourcePackageLabel: '\u6e90\u7801\u5305\u9a8c\u6536',
   sourcePackageNotRequired: '\u6e90\u7801\u5305\u9a8c\u6536 NOT_REQUIRED',
   sourcePackageNotRequiredCopy: '\u9ed8\u8ba4\u672c\u5730\u9a8c\u6536\u4e0d\u8981\u6c42\u6e90\u7801\u5305 clean',
-  demoBatchButton: '\u521b\u5efa\u6f14\u793a\u6279\u6b21\uff08\u5199\u5165\u672c\u5730\uff09',
+  demoBatchButton: '\u521b\u5efa\u672c\u5730 dry_run \u6f14\u793a\u6279\u6b21',
+  noDxmTouch: '\u4e0d\u89e6\u8fbe DXM',
   localDemoTask: '\u672c\u5730\u6f14\u793a\u6838\u9a8c\u6279\u6b21',
   localDemoStart: '\u542f\u52a8\u672c\u5730\u6f14\u793a\u4efb\u52a1',
   l2RunIdFlag: '--run-id',
@@ -465,6 +467,8 @@ if (reportOnlyFinal) {
       finalReportNoL3PostEvidenceBlockerChips: finalReportCenterQaDiagnostics.noL3PostEvidenceBlockerChips,
       finalReportApiIsFinal: finalCheckSummary?.local_workbench_check === 'PASS'
         && finalCheckSummary?.browser_qa_ok === true
+        && finalCheckSummary?.ok_scope === 'local_workbench_only'
+        && finalCheckSummary?.real_dxm_mutation_allowed === false
         && finalCheckSummary?.real_dxm_write_readiness === 'BLOCKED',
       noConsoleErrors: consoleErrors.length === 0,
       networkNoFailures: failedNetworkEvents.length === 0,
@@ -711,8 +715,8 @@ const result = {
     initialLoaded: initialText.includes(text.hero) || initialText.includes(text.appName),
     navClicksWorked: clickedTasks && clickedConsole && clickedReports,
     localizedOverviewNav: initialText.includes(text.overview),
-    firstScreenExpectedBlockedScope: initialText.includes(text.localWorkbenchDeliverable) && initialText.includes(text.expectedSafetyBlocked) && initialText.includes(text.realWriteGateFailed),
-    localWriteCopy: taskText.includes(text.localWrite),
+    firstScreenExpectedBlockedScope: initialText.includes(text.localWorkbenchDeliverable) && initialText.includes(text.expectedSafetyBlocked) && initialText.includes(text.realWriteGateFailed) && initialText.includes(text.nextStepSummary),
+    localWriteCopy: taskText.includes(text.localWrite) && taskText.includes(text.noDxmTouch),
     taskRecoveryActions: (taskText.includes(text.readonlyDiag) || taskText.includes(text.l2BlockHelp)) && taskText.includes(text.evidenceGap),
     taskStartBlockedCopy: taskText.includes(text.forbiddenStart),
     taskStartButtonDisabled: taskStartDisabled,

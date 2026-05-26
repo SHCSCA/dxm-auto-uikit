@@ -92,6 +92,11 @@ export function Dashboard({ workspace, selectedTask }: CommonProps) {
           <h1>本地安全诊断工作台</h1>
           <p>本地验收、L2 只读诊断与 L3 阻断复核集中在这里；不暴露任何真实保存或上架入口。</p>
           <p className="hero-panel__note">本地 PASS 仅代表工作台自检通过，真实 DXM 写入仍 BLOCKED。</p>
+          <div className="hero-panel__outcomes" aria-label="验收结论">
+            <span><strong>本地安全诊断工作台</strong><b>可交付</b></span>
+            <span><strong>真实 DXM 写入</strong><b>BLOCKED</b></span>
+            <span><strong>下一步</strong><b>L2 allowlist 人工评审 + 双目标复验</b></span>
+          </div>
         </div>
         <div className="hero-panel__status">
           <span>当前批次</span>
@@ -231,8 +236,9 @@ export function TaskCenter({ workspace, selectedTask, busy, onSelectTask, onBoot
         <ModuleHead title="任务中心" meta={`${workspace.tasks.length} 个批次`} />
         <div className="toolbar">
           <button className="button button--secondary" type="button" onClick={onBootstrapDemo} disabled={busy}>
-            创建演示批次（写入本地）
+            创建本地 dry_run 演示批次
           </button>
+          <span className="toolbar-note">不触达 DXM</span>
           <button className="button button--primary" type="button" onClick={onStartTask} disabled={startDisabled}>
             {startLabel}
           </button>
@@ -869,6 +875,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
       : '待刷新/未运行'
   const readiness = finalCheck?.real_dxm_write_readiness ?? '未检查'
   const realDxmMutationAllowedLabel = finalCheck?.real_dxm_mutation_allowed === true ? '真实写入允许 true' : '真实写入允许 false'
+  const blockedReason = finalCheck?.real_dxm_write_blocked_reason
   const readinessDetail = !available
     ? '还没有读取到交付自检报告。运行 scripts\\final-delivery-check.bat 后，这里会显示最近一次验收摘要。'
     : readiness === 'READY'
@@ -895,6 +902,13 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
       </div>
       <div className="delivery-check-card__body">
         <p>{readinessDetail}</p>
+        {blockedReason && (
+          <p className="delivery-check-card__warning">真实写入阻断原因：{blockedReason}</p>
+        )}
+        <div className="delivery-check-card__next-step">
+          <strong>下一步</strong>
+          <span>人工评审 allowlist 候选 - 改代码/配置 - 同一 run-id 复跑 data_acquisition + draft_box - 通过后再申请 L3。</span>
+        </div>
         <div className="delivery-check-card__release-gates" aria-label="真实写入放行前置">
           <strong>真实写入放行前置</strong>
           <ol>
@@ -1359,7 +1373,7 @@ function humanGateStatus(status: string) {
   return ({
     ready: '已就绪',
     not_run: '未运行',
-    mock_passed: '离线通过',
+    mock_passed: '离线证据',
     partial: '部分完成',
     passed: '通过',
     failed: '失败',

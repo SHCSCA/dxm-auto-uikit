@@ -23,6 +23,8 @@ def test_task_center_does_not_apply_l3_real_write_block_to_dry_run_tasks():
     assert "const l3BlocksStart = needsRealL2 && l3Gate?.status === 'blocked'" in source
     assert "启动本地演示任务" in source
     assert "本地 dry_run；真实 single_save 当前 BLOCKED" in source
+    assert "创建本地 dry_run 演示批次" in source
+    assert "不触达 DXM" in source
 
 
 def test_browser_qa_covers_demo_batch_startable_user_path():
@@ -72,6 +74,7 @@ def test_report_center_shows_allowlist_review_before_l2_recheck_commands():
     assert "l2_allowlist_review_template_candidate_count" in types_source
     assert "ok_scope" in source
     assert "real_dxm_mutation_allowed" in source
+    assert "real_dxm_write_blocked_reason" in source
     assert "expected_real_dxm_write_readiness" in source
     assert "real_dxm_write_readiness_matches_expected" in source
     assert "预期真实写入" in source
@@ -201,6 +204,10 @@ def test_frontend_first_screen_names_local_safety_diagnostic_delivery():
 
     assert "本地安全诊断工作台" in source
     assert "本地 PASS 仅代表工作台自检通过，真实 DXM 写入仍 BLOCKED" in source
+    assert "aria-label=\"验收结论\"" in source
+    assert "本地安全诊断工作台</strong><b>可交付" in source
+    assert "真实 DXM 写入</strong><b>BLOCKED" in source
+    assert "L2 allowlist 人工评审 + 双目标复验" in source
     assert "本地工作台可交付，真实写入预期 BLOCKED" in safety_bar
     assert "真实写入门禁未通过" in safety_bar
     assert "本地验收 / L2 只读诊断 / L3 阻断复核" in shell
@@ -218,5 +225,18 @@ def test_mock_workspace_uses_dry_run_demo_language_not_real_single_save():
     assert "mode: 'dry_run'" in mock_section
     assert "演示截图占位" in mock_section
     assert "本地演示保存核验报告 #19" in mock_section
+    assert "buildRegressionGates(null, evidenceGradeValue, [])" in mock_section
+    assert "file:///mock/l2.html" not in mock_section
     assert "mode: 'single_save'" not in mock_section
     assert "保存动作截图" not in mock_section
+
+
+def test_frontend_labels_mock_l2_as_evidence_not_passed():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
+    workspace_source = (REPO_ROOT / "app" / "frontend" / "src" / "workspace.ts").read_text(encoding="utf-8")
+
+    assert "mock_passed: '离线证据'" in source
+    assert "mock_passed: '离线证据'" in safety_bar
+    assert "仅有离线/mock L2 证据；不满足真实页面 L2 放行条件。" in workspace_source
+    assert "已有离线/mock L2 证据；真实页面仍需批准执行。" not in workspace_source

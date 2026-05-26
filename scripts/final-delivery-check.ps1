@@ -108,19 +108,89 @@ function Get-WorkspaceGate {
   return $null
 }
 
+function Get-L3EvidenceReadiness {
+  param(
+    [object]$WorkspaceSnapshot
+  )
+
+  $missing = New-Object System.Collections.Generic.List[string]
+  $deliveryReadiness = if ($WorkspaceSnapshot) { $WorkspaceSnapshot.delivery_readiness } else { $null }
+  if (!$deliveryReadiness) {
+    $missing.Add("delivery_readiness unavailable")
+  } else {
+    if ($deliveryReadiness.has_l3_evidence -ne $true) {
+      $missing.Add("L3 manual canary evidence missing")
+    }
+    $jobs = @($deliveryReadiness.jobs)
+    if ($jobs.Count -eq 0) {
+      $missing.Add("delivery_readiness jobs missing")
+    }
+    foreach ($job in $jobs) {
+      $jobLabel = if ($job.job_id) { "job $($job.job_id)" } else { "job" }
+      if ($job.has_save_result -ne $true) {
+        $missing.Add("$jobLabel save_result missing")
+      }
+      if ($job.has_unpublished_proof -ne $true) {
+        $missing.Add("$jobLabel published=false proof missing")
+      }
+      if ($job.has_network_or_har_save_response -ne $true) {
+        $missing.Add("$jobLabel network/HAR save response missing")
+      }
+      if ($job.has_save_evidence_file -ne $true) {
+        $missing.Add("$jobLabel save screenshot/path missing")
+      }
+      if ($job.has_unpublished_evidence_file -ne $true) {
+        $missing.Add("$jobLabel unpublished screenshot/path missing")
+      }
+    }
+  }
+
+  [pscustomobject]@{
+    ready = $missing.Count -eq 0
+    missing = @($missing)
+  }
+}
+
 function Get-RealDxmWriteReadiness {
   param(
     [object]$L2Gate,
-    [object]$L3Gate
+    [object]$L3Gate,
+    [object]$L3EvidenceReadiness
   )
 
   if (!$L2Gate -or !$L3Gate) {
     return "UNKNOWN"
   }
   if ($L2Gate.status -eq "passed" -and $L3Gate.status -eq "passed") {
-    return "READY"
+    if ($L3EvidenceReadiness -and $L3EvidenceReadiness.ready -eq $true) {
+      return "READY"
+    }
+    return "BLOCKED"
   }
   return "BLOCKED"
+}
+
+function Get-RealDxmWriteBlockedReason {
+  param(
+    [object]$L2Gate,
+    [object]$L3Gate,
+    [object]$L3EvidenceReadiness
+  )
+
+  if (!$L2Gate -or !$L3Gate) {
+    return "L2/L3 gate records unavailable; real DXM writes remain blocked."
+  }
+  if ($L2Gate.status -ne "passed") {
+    return "L2 gate is $($L2Gate.status); real DXM writes require data_acquisition and draft_box real readonly pass in the same run."
+  }
+  if ($L3Gate.status -ne "passed") {
+    return "L3 gate is $($L3Gate.status); real DXM writes require manual single-save canary approval and evidence."
+  }
+  if (!$L3EvidenceReadiness -or $L3EvidenceReadiness.ready -ne $true) {
+    $missing = if ($L3EvidenceReadiness -and $L3EvidenceReadiness.missing) { $L3EvidenceReadiness.missing -join "; " } else { "L3 evidence completeness unknown" }
+    return "L3 evidence incomplete: $missing."
+  }
+  return ""
 }
 
 function Get-SourcePackageCheck {
@@ -170,7 +240,9 @@ function Write-ProvisionalDeliveryCheckReport {
 
   $provisionalL2Gate = Get-WorkspaceGate -WorkspaceSnapshot $WorkspaceSnapshot -Level "L2"
   $provisionalL3Gate = Get-WorkspaceGate -WorkspaceSnapshot $WorkspaceSnapshot -Level "L3"
-  $provisionalReadiness = Get-RealDxmWriteReadiness -L2Gate $provisionalL2Gate -L3Gate $provisionalL3Gate
+  $provisionalL3EvidenceReadiness = Get-L3EvidenceReadiness -WorkspaceSnapshot $WorkspaceSnapshot
+  $provisionalReadiness = Get-RealDxmWriteReadiness -L2Gate $provisionalL2Gate -L3Gate $provisionalL3Gate -L3EvidenceReadiness $provisionalL3EvidenceReadiness
+  $provisionalBlockedReason = Get-RealDxmWriteBlockedReason -L2Gate $provisionalL2Gate -L3Gate $provisionalL3Gate -L3EvidenceReadiness $provisionalL3EvidenceReadiness
   # Provisional report must be BLOCKED when gates are unavailable; Browser QA needs a fail-closed current-run state.
   if ($provisionalReadiness -eq "UNKNOWN") {
     $provisionalReadiness = "BLOCKED"
@@ -188,6 +260,9 @@ function Write-ProvisionalDeliveryCheckReport {
     status = "final_delivery_check_in_progress_for_browser_qa"
     localWorkbenchCheck = "IN_PROGRESS"
     realDxmWriteReadiness = $provisionalReadiness
+    productionRealWriteReady = $provisionalReadiness -eq "READY"
+    realDxmWriteBlockedReason = $provisionalBlockedReason
+    l3EvidenceReadiness = $provisionalL3EvidenceReadiness
     sourcePackageReadiness = $sourceReadiness
     preSourcePackageReadiness = $sourceReadiness
     postSourcePackageReadiness = $sourceReadiness
@@ -722,7 +797,9 @@ $localWorkbenchOk = @($commands | Where-Object { -not $_.ok }).Count -eq 0
 if (!$SkipBrowserQA -and (!$browserQa -or $browserQa.ok -ne $true)) {
   $localWorkbenchOk = $false
 }
-$realDxmWriteReadiness = Get-RealDxmWriteReadiness -L2Gate $l2Gate -L3Gate $l3Gate
+$l3EvidenceReadiness = Get-L3EvidenceReadiness -WorkspaceSnapshot $workspaceSnapshot
+$realDxmWriteReadiness = Get-RealDxmWriteReadiness -L2Gate $l2Gate -L3Gate $l3Gate -L3EvidenceReadiness $l3EvidenceReadiness
+$realDxmWriteBlockedReason = Get-RealDxmWriteBlockedReason -L2Gate $l2Gate -L3Gate $l3Gate -L3EvidenceReadiness $l3EvidenceReadiness
 $preSourcePackageReadiness = if ([string]::IsNullOrWhiteSpace($preGitStatus)) { "CLEAN" } else { "DIRTY" }
 $postSourcePackageReadiness = if ([string]::IsNullOrWhiteSpace($postGitStatus)) { "CLEAN" } else { "DIRTY" }
 $sourcePackageReadiness = if ($preSourcePackageReadiness -eq "CLEAN" -and $postSourcePackageReadiness -eq "CLEAN") { "CLEAN" } else { "DIRTY" }
@@ -829,6 +906,9 @@ $result = [pscustomobject]@{
   }
   localWorkbenchCheck = if ($localWorkbenchOk) { "PASS" } else { "FAIL" }
   realDxmWriteReadiness = $realDxmWriteReadiness
+  productionRealWriteReady = $realDxmMutationAllowed
+  realDxmWriteBlockedReason = $realDxmWriteBlockedReason
+  l3EvidenceReadiness = $l3EvidenceReadiness
   sourcePackageReadiness = $sourcePackageReadiness
   preSourcePackageReadiness = $preSourcePackageReadiness
   postSourcePackageReadiness = $postSourcePackageReadiness
@@ -944,11 +1024,13 @@ if (!$SkipBrowserQA) {
 }
 
 $summaryLines = New-Object System.Collections.Generic.List[string]
-$summaryLines.Add("# DXM Local Workbench Delivery Check")
+$summaryLines.Add("# DXM Local-Only Workbench Delivery Check / Real DXM Write BLOCKED Unless Proven READY")
 $summaryLines.Add("")
 $summaryLines.Add("- Checked at: $($result.checkedAt)")
 $summaryLines.Add("- OK scope: $($result.okScope)")
 $summaryLines.Add("- Real DXM mutation allowed: $($result.realDxmMutationAllowed)")
+$summaryLines.Add("- Production real write ready: $($result.productionRealWriteReady)")
+$summaryLines.Add("- Real DXM write blocked reason: $($result.realDxmWriteBlockedReason)")
 $summaryLines.Add("- Expected real DXM write readiness: $($result.expectedRealDxmWriteReadiness)")
 $summaryLines.Add("- Real DXM write readiness matches expected: $($result.realDxmWriteReadinessMatchesExpected)")
 $summaryLines.Add("- Local workbench check: $($result.localWorkbenchCheck)")
@@ -962,6 +1044,7 @@ $summaryLines.Add("- Deliverable mode: $($result.deliverableMode)")
 $summaryLines.Add("- Real DXM writes: $($result.realDxmWrites)")
 $summaryLines.Add("- Git HEAD: $($result.gitHead)")
 $summaryLines.Add("- Acceptance note: for this local safety diagnostic delivery, PASS means local workbench checks pass, required source package checks pass, and real DXM readiness is derived from L2/L3 gates; UNKNOWN is a failure and current expected write state remains BLOCKED.")
+$summaryLines.Add("- READY note: real DXM READY requires L2/L3 passed plus L3 save_result, published=false proof, save/unpublished screenshots or paths, and network/HAR save response evidence.")
 if (!$SkipBrowserQA) {
   $summaryLines.Add("- Browser QA services: isolated backend $qaBackendPort / frontend $qaFrontendPort")
 }

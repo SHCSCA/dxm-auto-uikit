@@ -503,6 +503,35 @@ a:focus-visible {
   font-weight: 700;
 }
 
+.hero-panel__outcomes {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.hero-panel__outcomes span {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.hero-panel__outcomes strong {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.hero-panel__outcomes b {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
 .hero-panel__status {
   display: grid;
   gap: 6px;
@@ -520,6 +549,13 @@ a:focus-visible {
 
 .hero-panel__status strong {
   font-size: 16px;
+}
+
+.toolbar-note {
+  align-self: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .metric-card {
@@ -1650,6 +1686,26 @@ tr:last-child td {
   line-height: 1.6;
 }
 
+.delivery-check-card__next-step {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid rgba(37, 99, 235, 0.26);
+  border-radius: 8px;
+  background: rgba(239, 246, 255, 0.72);
+}
+
+.delivery-check-card__next-step strong {
+  color: #1d4ed8;
+  font-size: 13px;
+}
+
+.delivery-check-card__next-step span {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .delivery-check-card__paths {
   display: grid;
   gap: 8px;
@@ -1947,6 +2003,7 @@ tr:last-child td {
 
   .safety-bar,
   .hero-panel,
+  .hero-panel__outcomes,
   .task-row,
   .decision-row,
   .evidence-row,

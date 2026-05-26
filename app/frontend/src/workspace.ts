@@ -296,13 +296,7 @@ export function buildMockWorkspace(): DeliveryWorkspace {
     reasons: [],
   }
   const evidenceGradeValue = { grade: 'C' as EvidenceGrade, has_network_or_har_save_response: false }
-  const regressionGates = buildRegressionGates(null, evidenceGradeValue, [{
-    ok: true,
-    target: 'data_acquisition',
-    target_url: 'file:///mock/l2.html',
-    created_at: '2026-05-22T09:00:00+08:00',
-    network: { write_request_count: 0, blocked_request_count: 0, websocket_count: 0 },
-  }])
+  const regressionGates = buildRegressionGates(null, evidenceGradeValue, [])
 
   return {
     source: 'mock',
@@ -375,7 +369,7 @@ function buildRegressionGates(
       evidenceLevel: l2Ok ? 'B' : 'C',
       requiresApproval: true,
       command: 'tools/probes/l2_readonly_probe.py',
-      detail: l2Ok ? '已有离线/mock L2 证据；真实页面仍需批准执行。' : '尚未运行真实 L2 只读 probe。',
+      detail: l2Ok ? '仅有离线/mock L2 证据；不满足真实页面 L2 放行条件。' : '尚未运行真实 L2 只读 probe。',
       latest: latestL2,
     },
     {

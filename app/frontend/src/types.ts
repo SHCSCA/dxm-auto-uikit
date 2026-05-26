@@ -136,6 +136,9 @@ export type FinalDeliveryCheckSummary = {
   checked_at?: string | null
   local_workbench_check?: string | null
   real_dxm_write_readiness?: string | null
+  production_real_write_ready?: boolean | null
+  real_dxm_write_blocked_reason?: string | null
+  l3_evidence_readiness?: Record<string, unknown> | null
   ok_scope?: string | null
   real_dxm_mutation_allowed?: boolean | null
   expected_real_dxm_write_readiness?: string | null

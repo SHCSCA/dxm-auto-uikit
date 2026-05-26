@@ -78,6 +78,9 @@ def test_final_delivery_check_summary_reads_latest_report(tmp_path, monkeypatch)
         "checkedAt": "2026-05-25T09:18:34Z",
         "localWorkbenchCheck": "PASS",
         "realDxmWriteReadiness": "BLOCKED",
+        "productionRealWriteReady": False,
+        "realDxmWriteBlockedReason": "L2 gate is failed; real DXM writes require data_acquisition and draft_box real readonly pass in the same run.",
+        "l3EvidenceReadiness": {"ready": False, "missing": ["L3 manual canary evidence missing"]},
         "sourcePackageReadiness": "CLEAN",
         "sourcePackageCheck": "PASS",
         "okScope": "local_workbench_only",
@@ -135,6 +138,9 @@ def test_final_delivery_check_summary_reads_latest_report(tmp_path, monkeypatch)
     assert payload["status"] == "available"
     assert payload["local_workbench_check"] == "PASS"
     assert payload["real_dxm_write_readiness"] == "BLOCKED"
+    assert payload["production_real_write_ready"] is False
+    assert payload["real_dxm_write_blocked_reason"].startswith("L2 gate is failed")
+    assert payload["l3_evidence_readiness"]["ready"] is False
     assert payload["source_package_readiness"] == "CLEAN"
     assert payload["source_package_check"] == "PASS"
     assert payload["ok_scope"] == "local_workbench_only"

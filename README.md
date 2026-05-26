@@ -149,7 +149,7 @@ scripts\final-delivery-check.bat
 
 启动工作台后，报告中心会显示最近一次交付自检摘要和报告路径，方便验收人直接确认本地 PASS、真实写入 BLOCKED 与源码包状态。
 
-验收人可以在任务中心点击“创建演示批次（写入本地）”，该按钮只创建本地 `dry_run` 演示任务；“启动本地演示任务”可跑通本地工作台状态流转。真实 `claim_only` / `single_save` / `batch_save` 仍受 L2/L3 与人工批准令牌阻断。
+验收人可以在任务中心点击“创建本地 dry_run 演示批次”，该按钮只创建本地 `dry_run` 演示任务，不触达 DXM；“启动本地演示任务”可跑通本地工作台状态流转。真实 `claim_only` / `single_save` / `batch_save` 仍受 L2/L3 与人工批准令牌阻断。
 
 发布源码包前可加 clean worktree 门禁：
 

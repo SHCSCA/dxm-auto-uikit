@@ -86,7 +86,7 @@ function humanGateStatus(status: string) {
   return ({
     ready: '已就绪',
     not_run: '未运行',
-    mock_passed: '离线通过',
+    mock_passed: '离线证据',
     partial: '部分完成',
     passed: '通过',
     failed: '失败',

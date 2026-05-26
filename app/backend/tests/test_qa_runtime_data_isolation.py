@@ -68,6 +68,13 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "realDxmMutationAllowed" in script
     assert "$ExpectedRealDxmWriteReadiness = \"BLOCKED\"" in script
     assert "realDxmWriteReadinessMatchesExpected" in script
+    assert "productionRealWriteReady" in script
+    assert "realDxmWriteBlockedReason" in script
+    assert "l3EvidenceReadiness" in script
+    assert "Get-L3EvidenceReadiness" in script
+    assert "save screenshot/path missing" in script
+    assert "network/HAR save response missing" in script
+    assert "READY note: real DXM READY requires L2/L3 passed plus L3 save_result" in script
     assert "Expected real DXM write readiness" in script
     assert "local_workbench_only" in script
     assert "Real DXM mutation allowed" in script
@@ -95,6 +102,7 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "l2-allowlist-review-template.md" in script
     assert "l2-allowlist-review-template.json" in script
     assert "Gate record readability" in script
+    assert "DXM Local-Only Workbench Delivery Check / Real DXM Write BLOCKED Unless Proven READY" in script
     assert "PASS only means L2/L3 records were readable; it is not an L2/L3 gate pass" in script
     assert "L2/L3 gate records available" not in script
     assert "Gate evidence check:" not in script
