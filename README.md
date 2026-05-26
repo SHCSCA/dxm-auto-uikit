@@ -36,14 +36,14 @@
 - 模板中心基础 CRUD
 - 商品导入（JSON/演示数据）
 - 任务创建
-- 本地任务启动与状态流转
+- 本地 `dry_run` 演示任务启动与状态流转
 - Task/Job 状态流转
 - WebSocket 实时执行事件
 - 日志中心
 - 证据面板
 - 异常池（当前框架已接入，演示流程暂未主动制造异常）
 - Playwright 主引擎骨架
-- POP 保存待发布演示链路（模拟执行，不代表真实 DXM 写入放行）
+- POP 保存待发布演示链路（本地 `dry_run` 可启动；真实 `single_save` 不代表 DXM 写入放行）
 
 ### 当前是“安全门禁可运行版”
 说明：
@@ -145,6 +145,8 @@ scripts\final-delivery-check.bat
 当前验收成功标准：默认验收要求 `Local workbench check: PASS`、`Browser QA: PASS`、`Source package check: NOT_REQUIRED` 以及 `Real DXM write readiness: BLOCKED` 同时成立；发布源码包验收才要求 `Source package check: PASS`。这里的 `BLOCKED` 是预期安全状态，表示真实 L2/L3 尚未放行，不表示本地工作台交付失败。
 
 启动工作台后，报告中心会显示最近一次交付自检摘要和报告路径，方便验收人直接确认本地 PASS、真实写入 BLOCKED 与源码包状态。
+
+验收人可以在任务中心点击“创建演示批次（写入本地）”，该按钮只创建本地 `dry_run` 演示任务；“启动本地演示任务”可跑通本地工作台状态流转。真实 `claim_only` / `single_save` / `batch_save` 仍受 L2/L3 与人工批准令牌阻断。
 
 发布源码包前可加 clean worktree 门禁：
 

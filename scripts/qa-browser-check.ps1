@@ -178,12 +178,82 @@ async function bodyText() {
 async function clickText(label) {
   return await evalValue('(() => { const els = [...document.querySelectorAll("button,a,[role=\\"button\\"],nav *")]; const el = els.find(e => (e.innerText || e.textContent || "").trim() === ' + JSON.stringify(label) + '); if (el) { el.click(); return true; } return false; })()');
 }
+function summarizeTask(task) {
+  return task ? {
+    id: task.id,
+    mode: task.mode,
+    status: task.status,
+    totalJobs: task.total_jobs,
+    completedJobs: task.completed_jobs,
+    failedJobs: task.failed_jobs,
+  } : null;
+}
+async function fetchJson(path) {
+  const response = await fetch(apiBase + path);
+  if (!response.ok) throw new Error('GET ' + path + ' failed with ' + response.status);
+  return await response.json();
+}
+async function postJson(path, body) {
+  const response = await fetch(apiBase + path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const rawBody = await response.text();
+  let parsedBody = null;
+  try {
+    parsedBody = JSON.parse(rawBody);
+  } catch {
+    parsedBody = rawBody;
+  }
+  if (!response.ok) {
+    throw new Error('POST ' + path + ' failed with ' + response.status + ': ' + String(rawBody).slice(0, 240));
+  }
+  return parsedBody;
+}
+async function ensureRealMutationTask() {
+  const existingStores = await fetchJson('/api/stores');
+  const dangKangStore = Array.isArray(existingStores)
+    ? existingStores.find(store => store?.name === 'Dang Kang')
+    : null;
+  const store = dangKangStore
+    ? dangKangStore
+    : await postJson('/api/stores/connect', { name: 'Dang Kang', platform: 'AliExpress' });
+  let products = await fetchJson('/api/products');
+  if (!Array.isArray(products)) products = [];
+  if (!products.length) {
+    products = await postJson('/api/products/import', { rows: [{
+      title: 'QA guarded product',
+      source: 'qa',
+      category_name: 'QA_CATEGORY',
+      price: 7.01,
+      currency: 'USD',
+      sku_count: 1,
+      image_count: 1,
+      image: 'qa-product.jpg',
+    }] });
+  }
+  return await postJson('/api/tasks', {
+    name: 'QA guarded real mutation task',
+    store_id: store.id,
+    mode: 'single_save',
+    publish_scene: 'SMT_SEMI_MANAGED_SAVE_ONLY',
+    product_ids: products.map(item => item.id),
+    claim_mark: 'QA_CLAIM',
+    payload: {
+      store_name: store.name,
+      category_name: products[0]?.category_name ?? 'QA_CATEGORY',
+      image: products[0]?.image ?? 'qa-product.jpg',
+    },
+  });
+}
 async function screenshot(name) {
   const res = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
   const path = outDir + '/' + name + '.png';
   fs.writeFileSync(path, Buffer.from(res.data, 'base64'));
   return path;
 }
+const realMutationTaskForBlockedChecks = await ensureRealMutationTask();
 await send('Page.enable');
 await send('Runtime.enable');
 await send('Network.enable');
@@ -215,6 +285,9 @@ const text = {
   screenshotHashes: '\u622a\u56fe\u54c8\u5e0c',
   localAcceptanceCommand: '\u672c\u5730\u9a8c\u6536\u547d\u4ee4',
   sourceAcceptanceCommand: '\u6e90\u7801\u5305\u9a8c\u6536\u547d\u4ee4',
+  demoBatchButton: '\u521b\u5efa\u6f14\u793a\u6279\u6b21\uff08\u5199\u5165\u672c\u5730\uff09',
+  localDemoTask: '\u672c\u5730\u6f14\u793a\u6838\u9a8c\u6279\u6b21',
+  localDemoStart: '\u542f\u52a8\u672c\u5730\u6f14\u793a\u4efb\u52a1',
   l2RunIdFlag: '--run-id',
   l2RunIdVar: '$runId',
   l2SameBinding: '\u540c\u4e00 run-id',
@@ -319,16 +392,9 @@ async function postBlockedAction(name, path, body) {
   };
 }
 try {
-  const workspaceResponse = await fetch(apiBase + '/api/delivery/workspace');
-  const workspacePayload = await workspaceResponse.json();
-  const taskId = workspacePayload?.current_task?.id;
-  beforeTaskStatus = workspacePayload?.current_task ? {
-    id: taskId,
-    status: workspacePayload.current_task.status,
-    totalJobs: workspacePayload.current_task.total_jobs,
-    completedJobs: workspacePayload.current_task.completed_jobs,
-    failedJobs: workspacePayload.current_task.failed_jobs,
-  } : null;
+  const realMutationTask = realMutationTaskForBlockedChecks;
+  const taskId = realMutationTask?.id;
+  beforeTaskStatus = summarizeTask(realMutationTask);
   if (taskId) {
     const directPayload = {
       action: 'note',
@@ -346,15 +412,11 @@ try {
     ];
     blockedStartStatus = blockedActionChecks.find(item => item.name === 'task_start')?.status ?? null;
     blockedAgentConsoleStatus = blockedActionChecks.find(item => item.name === 'agent_console_start')?.status ?? null;
-    const afterWorkspaceResponse = await fetch(apiBase + '/api/delivery/workspace');
-    const afterWorkspacePayload = await afterWorkspaceResponse.json();
-    afterTaskStatus = afterWorkspacePayload?.current_task ? {
-      id: afterWorkspacePayload.current_task.id,
-      status: afterWorkspacePayload.current_task.status,
-      totalJobs: afterWorkspacePayload.current_task.total_jobs,
-      completedJobs: afterWorkspacePayload.current_task.completed_jobs,
-      failedJobs: afterWorkspacePayload.current_task.failed_jobs,
-    } : null;
+    const afterWorkspacePayload = await fetchJson('/api/delivery/workspace?task_id=' + taskId);
+    const afterTask = Array.isArray(afterWorkspacePayload?.tasks)
+      ? afterWorkspacePayload.tasks.find(task => task?.id === taskId)
+      : afterWorkspacePayload?.current_task;
+    afterTaskStatus = summarizeTask(afterTask);
   }
 } catch {
   blockedStartStatus = 'error';
@@ -369,6 +431,20 @@ fs.writeFileSync(blockedActionsPath, JSON.stringify({
 }, null, 2));
 const blockedActionsAllForbidden = blockedActionChecks.length === 5 && blockedActionChecks.every(item => item.status === 403);
 const taskStateUnchanged = JSON.stringify(beforeTaskStatus) === JSON.stringify(afterTaskStatus);
+const tasksBeforeDemo = await fetchJson('/api/tasks');
+const maxTaskIdBeforeDemo = Array.isArray(tasksBeforeDemo) && tasksBeforeDemo.length
+  ? Math.max(...tasksBeforeDemo.map(item => Number(item.id) || 0))
+  : 0;
+await evalValue('window.confirm = () => true');
+const demoBatchCreated = await clickText(text.demoBatchButton);
+await new Promise(r => setTimeout(r, 1200));
+const demoText = await bodyText();
+const demoStartButtonEnabled = await evalValue('(() => { const buttons = [...document.querySelectorAll("button")]; const button = buttons.find(el => (el.innerText || "").includes("' + text.localDemoStart + '")); return Boolean(button && !button.disabled); })()');
+const tasksAfterDemo = await fetchJson('/api/tasks');
+const newTasks = Array.isArray(tasksAfterDemo)
+  ? tasksAfterDemo.filter(item => item.id > maxTaskIdBeforeDemo)
+  : [];
+const demoCreatedTask = newTasks.find(item => item.id > maxTaskIdBeforeDemo && item.mode === 'dry_run' && item.status === 'draft' && String(item.name || '').includes(text.localDemoTask));
 const hasLocalAcceptanceCommand = Array.isArray(reportAcceptanceCommands) && reportAcceptanceCommands.some(command => /scripts[\\/]+final-delivery-check\.bat$/.test(command));
 const hasSourceAcceptanceCommand = Array.isArray(reportAcceptanceCommands) && reportAcceptanceCommands.some(command => /scripts[\\/]+final-delivery-check\.bat\s+-RequireCleanWorktree$/.test(command));
 const hasRunIdSetup = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(command => command.includes('$runId') && command.includes('Get-Date'));
@@ -398,6 +474,7 @@ const result = {
     reportBlockedStatusLanguage: reportText.includes(text.blockedExpectedState) && reportText.includes(text.noRealWrite) && reportBlockedStatusTone,
     reportDualAcceptanceCommands: reportText.includes(text.localAcceptanceCommand) && reportText.includes(text.sourceAcceptanceCommand) && hasLocalAcceptanceCommand && hasSourceAcceptanceCommand,
     reportL2RunBindingCopy: reportText.includes(text.l2SameBinding) && hasRunIdSetup && hasDataAcquisitionRunId && hasDraftBoxRunId,
+    demoBatchCanStartLocally: demoBatchCreated && Boolean(demoCreatedTask) && demoText.includes(text.localDemoTask) && demoStartButtonEnabled,
     noDeveloperFallbackCopy: !(initialText + ' ' + taskText + ' ' + consoleText + ' ' + reportText).includes(text.fallbackCopy),
     localStartPostBlocked: blockedStartStatus === 403,
     localAgentConsolePostBlocked: blockedAgentConsoleStatus === 403,

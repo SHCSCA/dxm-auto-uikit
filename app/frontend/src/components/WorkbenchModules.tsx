@@ -137,7 +137,7 @@ export function ConfigCenter({ workspace }: CommonProps) {
           <ConfigItem label="店铺" value={workspace.stores[0]?.name ?? '未配置真实店铺'} hint={workspace.stores[0]?.platform ?? '等待 /api/stores 返回'} empty={!hasStores} />
           <ConfigItem label="类目" value={product?.category_name ?? '未绑定真实商品类目'} hint="用于匹配属性和模板范围" empty={!hasProducts} />
           <ConfigItem label="图片银行" value={product?.image?.eu_outer_package_filename ?? '未绑定真实外包装图'} hint="欧盟外包装/标签实拍图" empty={!hasProducts} />
-          <ConfigItem label="执行模式" value="single_save" hint="保存核验，不走上架动作" />
+          <ConfigItem label="执行模式" value="本地 dry_run / 真实 single_save" hint="演示批次可本地启动；真实保存仍需 L2/L3 放行" />
         </div>
         {(!hasStores || !hasProducts) && (
           <EmptyState
@@ -183,7 +183,7 @@ export function TaskCenter({ workspace, selectedTask, busy, onSelectTask, onBoot
   const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
   const needsRealL2 = selectedTask ? requiresRealL2(selectedTask) : false
   const l2BlocksStart = needsRealL2 && l2Gate?.status !== 'passed'
-  const l3BlocksStart = l3Gate?.status === 'blocked'
+  const l3BlocksStart = needsRealL2 && l3Gate?.status === 'blocked'
   const l2DiagnosticSummaries = summarizeL2Diagnostics(l2Gate)
   const startDisabled = busy || !selectedTask || needsApproval || l2BlocksStart || l3BlocksStart
   const startLabel = !selectedTask
@@ -192,7 +192,9 @@ export function TaskCenter({ workspace, selectedTask, busy, onSelectTask, onBoot
       ? l2StartLabel(l2Gate?.status)
       : needsApproval
         ? '等待人工批准'
-        : '启动保存核验任务'
+        : needsRealL2
+          ? '启动保存核验任务'
+          : '启动本地演示任务'
   return (
     <section className="module-layout" aria-label="任务中心">
       <div className="module-card span-2">
