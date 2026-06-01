@@ -434,6 +434,7 @@ class V1TaskRunner:
             return None
 
         product_query = self._source_title(job.get("product_id"))
+        target_source_urls = self._source_urls(job.get("product_id"))
         store_name = self._store_name(task)
         actions = {
             StateName.PRECHECK_SESSION: ("check_login_state", "E101", "店小秘登录态检查失败", lambda: self.workflow_adapter.check_login_state()),
@@ -446,6 +447,7 @@ class V1TaskRunner:
                     claim_mark,
                     product_query=product_query,
                     store_name=store_name,
+                    target_source_urls=target_source_urls,
                 ),
             ),
             StateName.OPEN_EDIT_PAGE: (
@@ -765,6 +767,10 @@ class V1TaskRunner:
                     "binding_scope": template.get("binding_scope"),
                 })
 
+        product_payload = (product or {}).get("payload") or {}
+        if isinstance(product_payload, Mapping):
+            self._merge_payload(defaults, product_payload)
+
         task_payload = task.get("payload") or {}
         if isinstance(task_payload, Mapping):
             self._merge_payload(defaults, task_payload, skip_keys={"template_overrides"})
@@ -774,10 +780,6 @@ class V1TaskRunner:
                     normalized = self._normalize_template_type(template_type)
                     if normalized in DEFAULT_TEMPLATE_TYPES and isinstance(payload, Mapping):
                         self._deep_merge(defaults.setdefault(normalized, {}), payload)
-
-        product_payload = (product or {}).get("payload") or {}
-        if isinstance(product_payload, Mapping):
-            self._merge_payload(defaults, product_payload)
         defaults["dxm_reference_templates_resolved"] = resolve_dxm_reference_templates(defaults)
         defaults["_template_trace"] = template_trace
         return defaults
@@ -884,6 +886,17 @@ class V1TaskRunner:
             payload = product.get("payload") or {}
             return payload.get("source_title") or product.get("title") or f"任务商品 #{product_id}"
         return f"任务商品 #{product_id}"
+
+    def _source_urls(self, product_id: int | None) -> list[str]:
+        product = self._product(product_id)
+        payload = (product or {}).get("payload") or {}
+        values: list[Any] = []
+        if isinstance(payload, Mapping):
+            values.extend([payload.get("source_url"), payload.get("url")])
+            source_urls = payload.get("source_urls")
+            if isinstance(source_urls, (list, tuple)):
+                values.extend(source_urls)
+        return [str(value).strip() for value in values if str(value or "").strip()]
 
     def _product(self, product_id: int | None) -> dict[str, Any] | None:
         if product_id is None:

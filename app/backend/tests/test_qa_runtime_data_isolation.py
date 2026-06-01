@@ -66,7 +66,7 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "l2ProbePlan" in script
     assert "okScope" in script
     assert "realDxmMutationAllowed" in script
-    assert "$ExpectedRealDxmWriteReadiness = \"BLOCKED\"" in script
+    assert "$ExpectedRealDxmWriteReadiness = \"READY\"" in script
     assert "realDxmWriteReadinessMatchesExpected" in script
     assert "productionRealWriteReady" in script
     assert "realDxmWriteBlockedReason" in script
@@ -74,7 +74,7 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "Get-L3EvidenceReadiness" in script
     assert "save screenshot/path missing" in script
     assert "network/HAR save response missing" in script
-    assert "READY note: real DXM READY requires L2/L3 passed plus L3 save_result" in script
+    assert "READY note: real DXM READY currently means controlled single_save readiness only" in script
     assert "Expected real DXM write readiness" in script
     assert "local_workbench_only" in script
     assert "Real DXM mutation allowed" in script
@@ -102,7 +102,7 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "l2-allowlist-review-template.md" in script
     assert "l2-allowlist-review-template.json" in script
     assert "Gate record readability" in script
-    assert "DXM Local-Only Workbench Delivery Check / Real DXM Write BLOCKED Unless Proven READY" in script
+    assert "DXM Semi-Managed Automation Workbench Delivery Check" in script
     assert "PASS only means L2/L3 records were readable; it is not an L2/L3 gate pass" in script
     assert "L2/L3 gate records available" not in script
     assert "Gate evidence check:" not in script
@@ -132,17 +132,17 @@ def test_user_delivery_guide_has_current_acceptance_checklist():
 
     assert "# 用户交付使用说明 - 2026-05-26" in guide
     assert "## 验收人快速判定清单" in guide
-    assert "本地工作台验收通过" in guide
+    assert "自动化工作台验收通过" in guide
     assert "`Local workbench check: PASS`" in guide
     assert "`Browser QA: PASS`" in guide
-    assert "`Real DXM write readiness: BLOCKED`" in guide
-    assert "`okScope=local_workbench_only`" in guide
-    assert "`realDxmMutationAllowed=false`" in guide
-    assert "只代表本地安全诊断工作台可交付" in guide
+    assert "`Real DXM write readiness: READY`" in guide
+    assert "`okScope=local_workbench_and_controlled_single_save_ready`" in guide
+    assert "`realDxmMutationAllowed=true`" in guide
+    assert "自动化工作台与受控 `single_save` 可交付" in guide
     assert "源码包交付通过" in guide
     assert "`Source package check: PASS`" in guide
     assert "`scripts\\final-delivery-check.bat -RequireCleanWorktree`" in guide
-    assert "不允许启动真实写入" in guide
+    assert "真实 `single_save` 仍只能按 L2/L3、人工批准和金丝雀证据链启动" in guide
     assert "不能只看 `ok: true`" in guide
 
 
@@ -150,10 +150,10 @@ def test_readme_next_steps_focus_on_allowlist_l2_l3_reverification():
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     next_steps = readme[readme.index("## 下一步重点"):readme.index("## 目录结构")]
 
-    assert "评审 `allowlist_review_candidates`" in next_steps
-    assert "最小、可审计的 L2 只读 allowlist" in next_steps
-    assert "同一个 `run-id` 复跑真实 L2 双目标" in next_steps
-    assert "L3 `single_save` 金丝雀" in next_steps
+    assert "config/l2_readonly_allowlist.json" in next_steps
+    assert "受控 `single_save` READY 证据" in next_steps
+    assert "claim_only` / `batch_save" in next_steps
+    assert "批量、无人值守和发布" in next_steps
     assert "实现真实 `DxmAdapter`" not in next_steps
 
 

@@ -30,6 +30,36 @@ READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 PASSIVE_RESOURCE_TYPES = {"document", "stylesheet", "script", "image", "font", "media"}
 ACTIVE_RESOURCE_TYPES = {"xhr", "fetch", "eventsource", "websocket"}
+SUPPRESSED_THIRD_PARTY_TELEMETRY = (
+    {
+        "id": "sellfox-events",
+        "host": "events.sellfox.com",
+        "path": "/events",
+        "methods": {"POST"},
+        "resource_types": {"fetch"},
+    },
+    {
+        "id": "qiyukf-remote-storage",
+        "host": "qiyukf.com",
+        "path": "/webapi/user/remoteStorage.action",
+        "methods": {"POST"},
+        "resource_types": {"xhr"},
+    },
+    {
+        "id": "qiyukf-unread",
+        "host": "qiyukf.com",
+        "path": "/webapi/user/getUnread.action",
+        "methods": {"GET"},
+        "resource_types": {"xhr"},
+    },
+    {
+        "id": "qiyukf-sdk-setting",
+        "host": "qiyukf.com",
+        "path": "/webapi/sdk/setting/data",
+        "methods": {"GET"},
+        "resource_types": {"xhr"},
+    },
+)
 FORBIDDEN_URL_KEYWORDS = (
     "save",
     "publish",
@@ -40,6 +70,7 @@ FORBIDDEN_URL_KEYWORDS = (
 )
 DEFAULT_COOKIE_FILE = ROOT / "data" / "sessions" / "dianxiaomi_cookies.json"
 DEFAULT_OUTPUT_DIR = ROOT / "data" / "l2_readonly_probe"
+DEFAULT_ALLOWLIST_FILE = ROOT / "config" / "l2_readonly_allowlist.json"
 LOGIN_URL_KEYWORDS = ("login", "passport")
 LOGIN_TEXT_KEYWORDS = ("请登录", "登录店小秘", "账户登录", "账号登录", "密码登录")
 
@@ -50,11 +81,19 @@ class ReadOnlyProbeGuard:
         forbidden_keywords: tuple[str, ...] = FORBIDDEN_URL_KEYWORDS,
         *,
         strict_active_requests: bool = False,
+        allowlist_entries: list[dict[str, Any]] | None = None,
+        allowlist_file: Path | None = None,
+        allowlist_errors: list[str] | None = None,
     ) -> None:
         self.forbidden_keywords = tuple(keyword.lower() for keyword in forbidden_keywords)
         self.strict_active_requests = strict_active_requests
+        self.allowlist_entries = allowlist_entries or []
+        self.allowlist_file = allowlist_file
+        self.allowlist_errors = allowlist_errors or []
         self.requests: list[dict[str, Any]] = []
         self.blocked_requests: list[dict[str, Any]] = []
+        self.allowlisted_requests: list[dict[str, Any]] = []
+        self.suppressed_requests: list[dict[str, Any]] = []
         self.responses: list[dict[str, Any]] = []
         self.failures: list[dict[str, Any]] = []
         self.websockets: list[dict[str, Any]] = []
@@ -76,6 +115,15 @@ class ReadOnlyProbeGuard:
             "url": sanitize_url(url),
             "resource_type": request.resource_type,
         }
+        telemetry_policy = _matching_suppressed_telemetry(method, url, request.resource_type)
+        if telemetry_policy is not None:
+            self.suppressed_requests.append({
+                **record,
+                "reasons": ["third_party_telemetry_suppressed"],
+                "policy_id": telemetry_policy["id"],
+            })
+            route.abort()
+            return
         blocked_reasons = []
         if method not in READ_METHODS:
             blocked_reasons.append(f"non_read_method:{method}")
@@ -89,6 +137,18 @@ class ReadOnlyProbeGuard:
         if keyword_hits:
             blocked_reasons.append("forbidden_url_keywords:" + ",".join(keyword_hits))
         if blocked_reasons:
+            allowlist_match = self._matching_allowlist_entry(record, blocked_reasons, keyword_hits)
+            if allowlist_match is not None:
+                record["allowlisted"] = True
+                record["allowlist_id"] = allowlist_match.get("id")
+                record["allowlist_rationale"] = allowlist_match.get("rationale")
+                allowed = {
+                    **record,
+                    "reasons": blocked_reasons,
+                }
+                self.allowlisted_requests.append(allowed)
+                route.continue_()
+                return
             blocked = {**record, "reasons": blocked_reasons}
             self.blocked_requests.append(blocked)
             route.abort()
@@ -122,12 +182,49 @@ class ReadOnlyProbeGuard:
         lowered = url.lower()
         return [keyword for keyword in self.forbidden_keywords if keyword.lower() in lowered]
 
+    def _matching_allowlist_entry(
+        self,
+        record: dict[str, Any],
+        blocked_reasons: list[str],
+        keyword_hits: list[str],
+    ) -> dict[str, Any] | None:
+        if not self.allowlist_entries:
+            return None
+        method = str(record.get("method") or "").upper()
+        if method not in READ_METHODS and method not in WRITE_METHODS:
+            return None
+        parts = _split_url(str(record.get("url") or ""))
+        for entry in self.allowlist_entries:
+            if not _allowlist_entry_matches(
+                entry=entry,
+                method=method,
+                host=parts["host"],
+                path=parts["path"],
+                resource_type=str(record.get("resource_type") or ""),
+                blocked_reasons=blocked_reasons,
+                keyword_hits=keyword_hits,
+            ):
+                continue
+            return entry
+        return None
+
     def summary(self) -> dict[str, Any]:
         methods = sorted({item["method"] for item in self.requests})
-        write_requests = [item for item in self.requests if item["method"] in WRITE_METHODS]
-        non_read_requests = [item for item in self.requests if item["method"] not in READ_METHODS]
+        unapproved_requests = [item for item in self.requests if not item.get("allowlisted")]
+        observed_write_requests = [item for item in self.requests if item["method"] in WRITE_METHODS]
+        write_requests = [item for item in unapproved_requests if item["method"] in WRITE_METHODS]
+        non_read_requests = [item for item in unapproved_requests if item["method"] not in READ_METHODS]
+        allowlisted_non_read_requests = [
+            item for item in self.allowlisted_requests
+            if item.get("method") not in READ_METHODS
+        ]
         forbidden_keyword_requests = [
-            item for item in self.requests
+            item for item in self.blocked_requests
+            if item.get("forbidden_keyword_hits")
+        ]
+        observed_forbidden_keyword_requests = [item for item in self.requests if item.get("forbidden_keyword_hits")]
+        allowlisted_forbidden_keyword_requests = [
+            item for item in self.allowlisted_requests
             if item.get("forbidden_keyword_hits")
         ]
         forbidden_keyword_websockets = [
@@ -143,8 +240,21 @@ class ReadOnlyProbeGuard:
             "strict_active_requests": self.strict_active_requests,
             "write_request_count": len(write_requests),
             "non_read_request_count": len(non_read_requests),
+            "observed_write_method_request_count": len(observed_write_requests),
+            "allowlisted_non_read_request_count": len(allowlisted_non_read_requests),
             "blocked_request_count": len(self.blocked_requests),
             "forbidden_keyword_request_count": len(forbidden_keyword_requests),
+            "observed_forbidden_keyword_request_count": len(observed_forbidden_keyword_requests),
+            "allowlisted_forbidden_keyword_request_count": len(allowlisted_forbidden_keyword_requests),
+            "allowlist_applied": bool(self.allowlisted_requests),
+            "allowlist_file": str(self.allowlist_file) if self.allowlist_file else None,
+            "allowlist_entries_loaded": len(self.allowlist_entries),
+            "allowlist_error_count": len(self.allowlist_errors),
+            "allowlist_errors": self.allowlist_errors,
+            "allowlisted_request_count": len(self.allowlisted_requests),
+            "allowlisted_requests": self.allowlisted_requests[:50],
+            "suppressed_request_count": len(self.suppressed_requests),
+            "suppressed_requests": self.suppressed_requests[:50],
             "websocket_count": len(self.websockets),
             "forbidden_keyword_websocket_count": len(forbidden_keyword_websockets),
             "blocked_requests": self.blocked_requests[:50],
@@ -164,6 +274,7 @@ def run_probe(
     wait_ms: int = 3500,
     body_limit: int = 6000,
     run_id: str | None = None,
+    allowlist_file: Path | None = None,
 ) -> dict[str, Any]:
     from playwright.sync_api import sync_playwright
 
@@ -176,12 +287,18 @@ def run_probe(
     markdown_path = output_dir / f"{target}_{timestamp}.md"
 
     target_is_dxm = is_dianxiaomi_url(url)
-    guard = ReadOnlyProbeGuard(strict_active_requests=target_is_dxm)
+    allowlist_entries, allowlist_errors, resolved_allowlist_file = load_allowlist(allowlist_file)
+    guard = ReadOnlyProbeGuard(
+        strict_active_requests=target_is_dxm,
+        allowlist_entries=allowlist_entries if target_is_dxm else [],
+        allowlist_file=resolved_allowlist_file if target_is_dxm else None,
+        allowlist_errors=allowlist_errors if target_is_dxm else [],
+    )
     with sync_playwright() as playwright:
         options = chrome_launch_options(headless=headless)
         browser = playwright.chromium.launch(**options)
         context = browser.new_context(
-            ignore_https_errors=True,
+            ignore_https_errors=not target_is_dxm,
             service_workers="block",
             viewport={"width": 1440, "height": 1200},
         )
@@ -235,6 +352,13 @@ def run_probe(
         "body_preview": redact_sensitive_text(body[:body_limit]),
         "visible_matches": sanitize_visible_matches(matches),
         "network": guard.summary(),
+        "allowlist": {
+            "file": str(resolved_allowlist_file) if resolved_allowlist_file and target_is_dxm else None,
+            "file_sha256": sha256_file(resolved_allowlist_file) if resolved_allowlist_file and target_is_dxm and resolved_allowlist_file.exists() else None,
+            "entries_loaded": len(allowlist_entries) if target_is_dxm else 0,
+            "errors": allowlist_errors if target_is_dxm else [],
+            "applied": bool(guard.allowlisted_requests) if target_is_dxm else False,
+        },
         "safety": {},
     }
     result["safety"] = evaluate_safety(result)
@@ -258,6 +382,8 @@ def evaluate_safety(result: dict[str, Any]) -> dict[str, Any]:
         reasons.append(f"被拦截请求数量非零：{network['blocked_request_count']}")
     if network.get("forbidden_keyword_request_count"):
         reasons.append(f"网络 URL 命中禁用关键词：{network['forbidden_keyword_request_count']}")
+    if network.get("allowlist_error_count"):
+        reasons.append(f"allowlist 配置错误：{network['allowlist_error_count']}")
     if network.get("websocket_count"):
         reasons.append(f"检测到 WebSocket 连接：{network['websocket_count']}")
     if network.get("forbidden_keyword_websocket_count"):
@@ -289,6 +415,8 @@ def build_probe_diagnostics(result: dict[str, Any]) -> dict[str, Any]:
         "navigation": _navigation_diagnostics(result),
         "render_state": _render_state_diagnostics(result),
         "blocked_request_groups": _group_blocked_requests(result),
+        "allowlisted_request_groups": _group_allowlisted_requests(result),
+        "suppressed_request_groups": _group_suppressed_requests(result),
         "allowlist_review_candidates": _allowlist_review_candidates(result),
     }
 
@@ -346,8 +474,26 @@ def _render_state_diagnostics(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def _group_blocked_requests(result: dict[str, Any]) -> list[dict[str, Any]]:
+    return _group_network_requests((result.get("network") or {}).get("blocked_requests") or [])
+
+
+def _group_allowlisted_requests(result: dict[str, Any]) -> list[dict[str, Any]]:
+    groups = _group_network_requests((result.get("network") or {}).get("allowlisted_requests") or [])
+    for group in groups:
+        group["allowlist_applied"] = True
+    return groups
+
+
+def _group_suppressed_requests(result: dict[str, Any]) -> list[dict[str, Any]]:
+    groups = _group_network_requests((result.get("network") or {}).get("suppressed_requests") or [])
+    for group in groups:
+        group["suppressed"] = True
+    return groups
+
+
+def _group_network_requests(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[tuple[Any, ...], dict[str, Any]] = {}
-    for item in (result.get("network") or {}).get("blocked_requests") or []:
+    for item in items:
         parts = _split_url(str(item.get("url") or ""))
         reasons = tuple(item.get("reasons") or [])
         keyword_hits = tuple(item.get("forbidden_keyword_hits") or [])
@@ -369,6 +515,9 @@ def _group_blocked_requests(result: dict[str, Any]) -> list[dict[str, Any]]:
             "keyword_hits": list(keyword_hits),
             "sample_url": item.get("url"),
         })
+        if item.get("allowlist_id"):
+            current["allowlist_id"] = item.get("allowlist_id")
+            current["allowlist_rationale"] = item.get("allowlist_rationale")
         current["count"] += 1
     return sorted(grouped.values(), key=lambda group: (-int(group["count"]), str(group["host"]), str(group["path"])))[:25]
 
@@ -435,6 +584,123 @@ def _split_url(url: str) -> dict[str, str]:
     except ValueError:
         return {"host": "", "path": ""}
     return {"host": parts.netloc, "path": parts.path}
+
+
+def load_allowlist(allowlist_file: Path | None) -> tuple[list[dict[str, Any]], list[str], Path | None]:
+    if allowlist_file is None:
+        return [], [], None
+    resolved = allowlist_file if allowlist_file.is_absolute() else ROOT / allowlist_file
+    if not resolved.exists():
+        return [], [f"allowlist file not found: {resolved}"], resolved
+    try:
+        payload = json.loads(resolved.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return [], [f"allowlist JSON parse error: {exc}"], resolved
+    if not isinstance(payload, dict):
+        return [], ["allowlist root must be an object"], resolved
+    if payload.get("schema") != "dxm_l2_readonly_allowlist.v1":
+        return [], ["allowlist schema must be dxm_l2_readonly_allowlist.v1"], resolved
+    entries = payload.get("entries")
+    if not isinstance(entries, list):
+        return [], ["allowlist entries must be an array"], resolved
+    approved_entries = []
+    errors = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            errors.append(f"entry {index} must be an object")
+            continue
+        error = _validate_allowlist_entry(entry, index)
+        if error:
+            errors.append(error)
+            continue
+        if entry.get("decision") == "approve":
+            approved_entries.append(entry)
+    return approved_entries, errors, resolved
+
+
+def _validate_allowlist_entry(entry: dict[str, Any], index: int) -> str | None:
+    prefix = f"entry {index}"
+    method = str(entry.get("method") or "").upper()
+    if method not in READ_METHODS and method not in WRITE_METHODS:
+        return f"{prefix} method must be one of {sorted(READ_METHODS | WRITE_METHODS)}"
+    if method in WRITE_METHODS and entry.get("readonly_post") is not True:
+        return f"{prefix} write-like method {method} requires readonly_post=true"
+    if method in WRITE_METHODS and str(entry.get("host") or "").lower() != "www.dianxiaomi.com":
+        return f"{prefix} readonly_post is limited to first-party DXM APIs"
+    resource_type = str(entry.get("resource_type") or "")
+    if resource_type == "websocket":
+        return f"{prefix} cannot allow websocket"
+    if not resource_type:
+        return f"{prefix} resource_type is required"
+    if not str(entry.get("host") or "").strip():
+        return f"{prefix} host is required"
+    has_path = bool(str(entry.get("path") or "").strip())
+    has_path_regex = bool(str(entry.get("path_regex") or "").strip())
+    if has_path == has_path_regex:
+        return f"{prefix} must define exactly one of path or path_regex"
+    allowed_reasons = entry.get("allowed_reasons")
+    if not isinstance(allowed_reasons, list) or not allowed_reasons:
+        return f"{prefix} allowed_reasons must be a non-empty array"
+    if method in READ_METHODS and any(str(reason).startswith(("non_read_method:", "write_method:")) for reason in allowed_reasons):
+        return f"{prefix} cannot allow non-read/write block reasons"
+    if has_path_regex:
+        try:
+            re.compile(str(entry.get("path_regex")))
+        except re.error as exc:
+            return f"{prefix} path_regex is invalid: {exc}"
+    return None
+
+
+def _allowlist_entry_matches(
+    *,
+    entry: dict[str, Any],
+    method: str,
+    host: str,
+    path: str,
+    resource_type: str,
+    blocked_reasons: list[str],
+    keyword_hits: list[str],
+) -> bool:
+    if entry.get("decision") != "approve":
+        return False
+    if str(entry.get("method") or "").upper() != method:
+        return False
+    if method in WRITE_METHODS and entry.get("readonly_post") is not True:
+        return False
+    if str(entry.get("host") or "").lower() != host.lower():
+        return False
+    if str(entry.get("resource_type") or "") != resource_type:
+        return False
+    entry_path = str(entry.get("path") or "")
+    if entry_path and entry_path != path:
+        return False
+    entry_path_regex = str(entry.get("path_regex") or "")
+    if entry_path_regex and not re.fullmatch(entry_path_regex, path):
+        return False
+    allowed_keywords = {str(keyword).lower() for keyword in entry.get("allow_forbidden_keywords") or []}
+    if any(keyword.lower() not in allowed_keywords for keyword in keyword_hits):
+        return False
+    allowed_reasons = {str(reason) for reason in entry.get("allowed_reasons") or []}
+    return all(reason in allowed_reasons for reason in blocked_reasons)
+
+
+def _matching_suppressed_telemetry(method: str, url: str, resource_type: str) -> dict[str, Any] | None:
+    parts = _split_url(sanitize_url(url))
+    host = parts["host"].lower()
+    path = parts["path"]
+    if is_dianxiaomi_url(url):
+        return None
+    for policy in SUPPRESSED_THIRD_PARTY_TELEMETRY:
+        if host != str(policy["host"]).lower():
+            continue
+        if path != policy["path"]:
+            continue
+        if method.upper() not in policy["methods"]:
+            continue
+        if resource_type not in policy["resource_types"]:
+            continue
+        return policy
+    return None
 
 
 def load_cookies(cookie_file: Path) -> list[dict[str, Any]]:
@@ -583,6 +849,7 @@ def build_probe_run_metadata(*, run_id: str, cookie_file: Path) -> dict[str, Any
 def render_markdown(result: dict[str, Any]) -> str:
     network = result.get("network") or {}
     safety = result.get("safety") or {}
+    allowlist = result.get("allowlist") or {}
     reasons = safety.get("reasons") or ["无"]
     run_id = result.get("run_id") or "未记录"
     script_sha256 = result.get("script_sha256") or "未记录"
@@ -614,6 +881,13 @@ def render_markdown(result: dict[str, Any]) -> str:
 - 允许被动资源类型：{", ".join(network.get("passive_resource_types_allowed") or sorted(PASSIVE_RESOURCE_TYPES))}
 - 阻断主动资源类型：{", ".join(network.get("active_resource_types_blocked") or sorted(ACTIVE_RESOURCE_TYPES))}
 - 真实站点严格拦截主动请求：{network.get("strict_active_requests", False)}
+- allowlist 文件：{allowlist.get("file") or "未启用"}
+- allowlist_sha256：{allowlist.get("file_sha256") or "未记录"}
+- allowlist_applied：{network.get("allowlist_applied", False)}
+- allowlist 放行请求数量：{network.get("allowlisted_request_count", 0)}
+- 观测到 HTTP 写方法数量：{network.get("observed_write_method_request_count", 0)}
+- allowlist 放行查询型非 GET 数量：{network.get("allowlisted_non_read_request_count", 0)}
+- 预拦截第三方请求数量：{network.get("suppressed_request_count", 0)}
 - 写方法禁止：{", ".join(safety.get("write_methods_forbidden") or [])}
 - 禁用 URL 关键词：{", ".join(safety.get("forbidden_url_keywords") or [])}
 - 写请求数量：{network.get("write_request_count")}
@@ -657,6 +931,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--headed", action="store_true")
     parser.add_argument("--wait-ms", type=int, default=3500)
     parser.add_argument("--run-id", default=None, help="Shared identifier for both real L2 targets in one approved probe run.")
+    parser.add_argument(
+        "--allowlist-file",
+        default=None,
+        help="Explicit reviewed L2 read-only allowlist JSON. Not applied unless this flag is provided.",
+    )
     return parser.parse_args()
 
 
@@ -672,6 +951,7 @@ def main() -> int:
         headless=not args.headed,
         wait_ms=args.wait_ms,
         run_id=args.run_id,
+        allowlist_file=Path(args.allowlist_file) if args.allowlist_file else None,
     )
     print(json.dumps(summarize_for_stdout(result), ensure_ascii=False, indent=2))
     return 0 if result["ok"] else 2
@@ -695,6 +975,8 @@ def summarize_for_stdout(result: dict[str, Any]) -> dict[str, Any]:
             "non_read_request_count": network.get("non_read_request_count"),
             "blocked_request_count": network.get("blocked_request_count"),
             "forbidden_keyword_request_count": network.get("forbidden_keyword_request_count"),
+            "allowlisted_request_count": network.get("allowlisted_request_count"),
+            "suppressed_request_count": network.get("suppressed_request_count"),
             "websocket_count": network.get("websocket_count"),
         },
         "evidence": {

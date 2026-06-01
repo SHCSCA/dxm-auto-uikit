@@ -230,6 +230,10 @@ async function postJson(path, body) {
   }
   return parsedBody;
 }
+const initialFinalCheckSummary = reportOnlyFinal ? null : await fetchJson('/api/delivery/final-check').catch(() => null);
+const qaExpectedReady = initialFinalCheckSummary?.real_dxm_write_readiness === 'READY'
+  && initialFinalCheckSummary?.controlled_single_save_ready === true;
+const shouldRunBlockedMutationChecks = !qaExpectedReady;
 async function ensureRealMutationTask() {
   const existingStores = await fetchJson('/api/stores');
   const dangKangStore = Array.isArray(existingStores)
@@ -266,13 +270,50 @@ async function ensureRealMutationTask() {
     },
   });
 }
+async function ensureDryRunDemoTask() {
+  const existingStores = await fetchJson('/api/stores');
+  const dangKangStore = Array.isArray(existingStores)
+    ? existingStores.find(store => store?.name === 'Dang Kang')
+    : null;
+  const store = dangKangStore
+    ? dangKangStore
+    : await postJson('/api/stores/connect', { name: 'Dang Kang', platform: 'AliExpress' });
+  let products = await fetchJson('/api/products');
+  if (!Array.isArray(products)) products = [];
+  if (!products.length) {
+    products = await postJson('/api/products/import', { rows: [{
+      title: 'QA guarded product',
+      source: 'qa',
+      category_name: 'QA_CATEGORY',
+      price: 7.01,
+      currency: 'USD',
+      sku_count: 1,
+      image_count: 1,
+      image: 'qa-product.jpg',
+    }] });
+  }
+  return await postJson('/api/tasks', {
+    name: '\u672c\u5730\u6f14\u793a\u6838\u9a8c\u6279\u6b21',
+    store_id: store.id,
+    mode: 'dry_run',
+    publish_scene: 'SMT_SEMI_MANAGED_SAVE_ONLY',
+    product_ids: products.map(item => item.id),
+    claim_mark: 'AI_CLAIM',
+    payload: {
+      store_name: store.name,
+      category_name: products[0]?.category_name ?? 'QA_CATEGORY',
+      image: products[0]?.image ?? 'qa-product.jpg',
+    },
+  });
+}
 async function screenshot(name) {
   const res = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
   const path = outDir + '/' + name + '.png';
   fs.writeFileSync(path, Buffer.from(res.data, 'base64'));
   return path;
 }
-const realMutationTaskForBlockedChecks = reportOnlyFinal ? null : await ensureRealMutationTask();
+const readyModeDemoTask = reportOnlyFinal || !qaExpectedReady ? null : await ensureDryRunDemoTask();
+const realMutationTaskForBlockedChecks = reportOnlyFinal || !shouldRunBlockedMutationChecks ? null : await ensureRealMutationTask();
 await send('Page.enable');
 await send('Runtime.enable');
 await send('Network.enable');
@@ -283,10 +324,10 @@ const text = {
   overview: '\u603b\u89c8',
   console: '\u6267\u884c\u63a7\u5236\u53f0',
   reports: '\u62a5\u544a\u4e2d\u5fc3',
-  hero: '\u672c\u5730\u5b89\u5168\u8bca\u65ad\u5de5\u4f5c\u53f0',
-  localWorkbenchDeliverable: '\u672c\u5730\u5de5\u4f5c\u53f0\u53ef\u4ea4\u4ed8',
-  expectedSafetyBlocked: '\u771f\u5b9e\u5199\u5165\u9884\u671f BLOCKED',
-  nextStepSummary: 'L2 allowlist \u4eba\u5de5\u8bc4\u5ba1 + \u53cc\u76ee\u6807\u590d\u9a8c',
+  hero: '\u0044\u0058\u004d \u81ea\u52a8\u5316\u5de5\u4f5c\u53f0',
+  localWorkbenchDeliverable: '\u81ea\u52a8\u5316\u5de5\u4f5c\u53f0\u53ef\u4ea4\u4ed8',
+  expectedSafetyBlocked: '\u771f\u5b9e DXM \u5199\u5165 L3 \u53d7\u63a7',
+  nextStepSummary: '\u5355\u5546\u54c1\u91d1\u4e1d\u96c0',
   realWriteGateFailed: '\u771f\u5b9e\u5199\u5165\u95e8\u7981\u672a\u901a\u8fc7',
   appName: '\u5e97\u5c0f\u79d8\u534a\u6258\u7ba1\u6267\u884c\u5668',
   localWrite: '\u521b\u5efa\u672c\u5730 dry_run \u6f14\u793a\u6279\u6b21',
@@ -299,7 +340,10 @@ const text = {
   noBrowser: '\u5c1a\u672a\u6253\u5f00\u771f\u5b9e\u8bca\u65ad\u6d4f\u89c8\u5668',
   noFakeEvidence: '\u4e0d\u628a\u5546\u54c1\u4fe1\u606f\u4f2a\u88c5\u6210\u6d4f\u89c8\u5668\u8bc1\u636e',
   finalCheck: '\u6700\u8fd1\u4ea4\u4ed8\u81ea\u68c0',
-  expectedBlocked: '\u771f\u5b9e\u5199\u5165\u4fdd\u6301\u963b\u65ad',
+  expectedBlocked: '\u771f\u5b9e\u4fdd\u5b58\u4fdd\u6301\u963b\u65ad',
+  realSingleSaveReady: '\u771f\u5b9e DXM single_save READY',
+  readyLimitedCopy: '\u4ec5\u4ee3\u8868\u53d7\u63a7\u5355\u54c1\u4fdd\u5b58',
+  batchUnattendedPublishBlocked: '\u6279\u91cf\u65e0\u4eba\u503c\u5b88\u53d1\u5e03 \u963b\u65ad',
   blockedExpectedState: '\u9884\u671f\u963b\u65ad',
   saveResultLocked: '\u4fdd\u5b58\u7ed3\u679c 0 \u6761\uff08\u9884\u671f\u963b\u65ad\uff09',
   unpublishedProofLocked: '\u672a\u53d1\u5e03\u8bc1\u660e 0 \u6761\uff08\u9884\u671f\u963b\u65ad\uff09',
@@ -324,7 +368,7 @@ const text = {
   screenshotHashes: '\u622a\u56fe\u54c8\u5e0c',
   localAcceptanceCommand: '\u672c\u5730\u9a8c\u6536\u547d\u4ee4',
   sourceAcceptanceCommand: '\u6e90\u7801\u5305\u9a8c\u6536\u547d\u4ee4',
-  localWorkbenchLabel: '\u672c\u5730\u5de5\u4f5c\u53f0',
+  localWorkbenchLabel: '\u81ea\u52a8\u5316\u5de5\u4f5c\u53f0',
   browserQaLabel: '\u6d4f\u89c8\u5668 QA',
   finalReportCenterQa: '\u6700\u7ec8\u62a5\u544a\u4e2d\u5fc3 QA',
   sourcePackageLabel: '\u6e90\u7801\u5305\u9a8c\u6536',
@@ -358,6 +402,10 @@ if (reportOnlyFinal) {
   const expectedLocalWorkbench = text.localWorkbenchLabel + ' ' + String(finalCheckSummary?.local_workbench_check ?? '\u672a\u68c0\u67e5');
   const expectedPostFinalReportQa = text.finalReportCenterQa + ' ' + formatQaState(finalCheckSummary?.post_final_report_qa_ok);
   const finalReportRealWriteBlocked = finalCheckSummary?.real_dxm_write_readiness === 'BLOCKED' && finalCheckSummary?.real_dxm_mutation_allowed !== true;
+  const finalReportReady = finalCheckSummary?.real_dxm_write_readiness === 'READY'
+    && finalCheckSummary?.controlled_single_save_ready === true
+    && finalCheckSummary?.real_dxm_mutation_scope === 'controlled_single_save_only'
+    && finalCheckSummary?.batch_unattended_publish_allowed === false;
   const expectedLockedEvidence = [text.saveResultLocked, text.unpublishedProofLocked, text.networkHarLocked];
   const requiredReportFragments = [
     text.finalCheck,
@@ -455,21 +503,30 @@ if (reportOnlyFinal) {
       finalReportCenterQaTextVisible: allowMissingPostFinalQa || finalReportCenterQaDiagnostics.hasExpectedPostFinalReportQa,
       finalReportCenterShowsFreshnessState: reportText.includes(text.finalCheckCurrent)
         || reportText.includes(text.finalCheckStale),
-      finalReportCenterShowsBlockedDxmState: reportText.includes(text.blockedExpectedState)
-        && reportText.includes(text.noRealWrite)
-        && finalReportBlockedStatusTone,
+      finalReportCenterShowsBlockedDxmState: finalReportReady
+        ? reportText.includes(text.realSingleSaveReady)
+          && reportText.includes(text.readyLimitedCopy)
+          && reportText.includes(text.batchUnattendedPublishBlocked)
+        : reportText.includes(text.blockedExpectedState)
+          && reportText.includes(text.noRealWrite)
+          && finalReportBlockedStatusTone,
       finalReportBusinessReportLocked: !finalReportRealWriteBlocked || reportText.includes(text.businessReportLocked),
       finalReportPostL3ChecklistLocked: !finalReportRealWriteBlocked || reportText.includes(text.postL3ChecklistLocked),
-      finalReportExpectedLockedEvidenceRows: finalReportCenterQaDiagnostics.hasExpectedLockedEvidenceRows,
-      finalReportLockedEvidenceRowsNotWarn: finalReportCenterQaDiagnostics.lockedEvidenceRowsNotWarn,
-      finalReportLockedEvidenceRowsNeutral: finalReportCenterQaDiagnostics.lockedEvidenceRowsNeutral,
+      finalReportExpectedLockedEvidenceRows: !finalReportRealWriteBlocked || finalReportCenterQaDiagnostics.hasExpectedLockedEvidenceRows,
+      finalReportLockedEvidenceRowsNotWarn: !finalReportRealWriteBlocked || finalReportCenterQaDiagnostics.lockedEvidenceRowsNotWarn,
+      finalReportLockedEvidenceRowsNeutral: !finalReportRealWriteBlocked || finalReportCenterQaDiagnostics.lockedEvidenceRowsNeutral,
       finalReportRealWriteReleasePrerequisites: finalReportCenterQaDiagnostics.hasRealWriteReleasePrerequisites,
       finalReportNoL3PostEvidenceBlockerChips: finalReportCenterQaDiagnostics.noL3PostEvidenceBlockerChips,
-      finalReportApiIsFinal: finalCheckSummary?.local_workbench_check === 'PASS'
+      finalReportApiIsFinal: allowMissingPostFinalQa || finalCheckSummary?.local_workbench_check === 'PASS'
         && finalCheckSummary?.browser_qa_ok === true
-        && finalCheckSummary?.ok_scope === 'local_workbench_only'
-        && finalCheckSummary?.real_dxm_mutation_allowed === false
-        && finalCheckSummary?.real_dxm_write_readiness === 'BLOCKED',
+        && (
+          finalReportReady
+            ? finalCheckSummary?.ok_scope === 'local_workbench_and_controlled_single_save_ready'
+              && finalCheckSummary?.real_dxm_mutation_allowed === true
+            : finalCheckSummary?.ok_scope === 'local_workbench_only'
+              && finalCheckSummary?.real_dxm_mutation_allowed === false
+              && finalCheckSummary?.real_dxm_write_readiness === 'BLOCKED'
+        ),
       noConsoleErrors: consoleErrors.length === 0,
       networkNoFailures: failedNetworkEvents.length === 0,
       networkHttpOk: badNetworkResponses.length === 0,
@@ -551,6 +608,7 @@ if (reportOnlyFinal) {
   process.exit(0);
 }
 const initialText = await bodyText();
+const initialTextCompact = initialText.replace(/\s+/g, '');
 const clickedTasks = await clickText(text.tasks);
 await new Promise(r => setTimeout(r, 700));
 const taskText = await bodyText();
@@ -691,6 +749,8 @@ const maxTaskIdBeforeDemo = Array.isArray(tasksBeforeDemo) && tasksBeforeDemo.le
   ? Math.max(...tasksBeforeDemo.map(item => Number(item.id) || 0))
   : 0;
 await evalValue('window.confirm = () => true');
+await clickText(text.tasks);
+await new Promise(r => setTimeout(r, 500));
 const demoBatchCreated = await clickText(text.demoBatchButton);
 await new Promise(r => setTimeout(r, 1200));
 const demoText = await bodyText();
@@ -707,6 +767,10 @@ const hasDataAcquisitionRunId = Array.isArray(l2CommandBlocks) && l2CommandBlock
 const hasDraftBoxRunId = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(command => command.includes('--target draft_box') && command.includes('--run-id $runId'));
 const finalCheckRequiresNotRequiredCopy = finalCheckSummaryForReport?.source_package_check === 'NOT_REQUIRED';
 const finalCheckRealWriteBlocked = finalCheckSummaryForReport?.real_dxm_write_readiness === 'BLOCKED' && finalCheckSummaryForReport?.real_dxm_mutation_allowed !== true;
+const finalCheckExpectedReady = finalCheckSummaryForReport?.real_dxm_write_readiness === 'READY'
+  && finalCheckSummaryForReport?.controlled_single_save_ready === true
+  && finalCheckSummaryForReport?.real_dxm_mutation_scope === 'controlled_single_save_only'
+  && finalCheckSummaryForReport?.batch_unattended_publish_allowed === false;
 const result = {
   checkedAt: new Date().toISOString(),
   url: targetUrl,
@@ -715,21 +779,29 @@ const result = {
     initialLoaded: initialText.includes(text.hero) || initialText.includes(text.appName),
     navClicksWorked: clickedTasks && clickedConsole && clickedReports,
     localizedOverviewNav: initialText.includes(text.overview),
-    firstScreenExpectedBlockedScope: initialText.includes(text.localWorkbenchDeliverable) && initialText.includes(text.expectedSafetyBlocked) && initialText.includes(text.realWriteGateFailed) && initialText.includes(text.nextStepSummary),
+    firstScreenExpectedBlockedScope: initialTextCompact.includes('\u81ea\u52a8\u5316\u5de5\u4f5c\u53f0')
+      && initialTextCompact.includes('\u53ef\u4ea4\u4ed8')
+      && initialTextCompact.includes(text.expectedSafetyBlocked.replace(/\s+/g, ''))
+      && initialTextCompact.includes(text.nextStepSummary.replace(/\s+/g, '')),
     localWriteCopy: taskText.includes(text.localWrite) && taskText.includes(text.noDxmTouch),
-    taskRecoveryActions: (taskText.includes(text.readonlyDiag) || taskText.includes(text.l2BlockHelp)) && taskText.includes(text.evidenceGap),
-    taskStartBlockedCopy: taskText.includes(text.forbiddenStart),
-    taskStartButtonDisabled: taskStartDisabled,
+    taskRecoveryActions: finalCheckExpectedReady || ((taskText.includes(text.readonlyDiag) || taskText.includes(text.l2BlockHelp)) && taskText.includes(text.evidenceGap)),
+    taskStartBlockedCopy: finalCheckExpectedReady || taskText.includes(text.forbiddenStart),
+    taskStartButtonDisabled: finalCheckExpectedReady || taskStartDisabled,
     mobileLoaded: mobileInitialText.includes(text.hero) || mobileInitialText.includes(text.appName),
     mobileNavWorked: clickedMobileTasks && mobileTaskText.includes(text.localWrite),
     mobileNoHorizontalOverflow: mobileReflow === true && mobileOverflow.ok === true,
     consoleReadonlyCopy: consoleText.includes(text.readonly) && consoleText.includes(text.noSaveStart),
     consoleNoFakeBrowser: consoleText.includes(text.noBrowser) && consoleText.includes(text.noFakeEvidence),
-    consoleStartButtonDisabled: consoleStartDisabled,
+    consoleStartButtonDisabled: finalCheckExpectedReady || consoleStartDisabled,
     consoleNoFakePlaceholder: !(consoleText + ' ' + taskText).includes(text.fakePlaceholder),
-    reportDeliveryCheckVisible: reportText.includes(text.finalCheck) && reportText.includes(text.expectedBlocked),
+    reportDeliveryCheckVisible: reportText.includes(text.finalCheck)
+      && (finalCheckExpectedReady
+        ? reportText.includes(text.realSingleSaveReady) && reportText.includes(text.batchUnattendedPublishBlocked)
+        : reportText.includes(text.expectedBlocked)),
     reportFreshnessVisible: (reportText.includes(text.finalCheckCurrent) || reportText.includes(text.finalCheckStale)) && reportText.includes(text.browserQaGit) && reportText.includes(text.screenshotHashes),
-    reportBlockedStatusLanguage: reportText.includes(text.blockedExpectedState) && reportText.includes(text.noRealWrite) && reportBlockedStatusTone,
+    reportBlockedStatusLanguage: finalCheckExpectedReady
+      ? reportText.includes(text.readyLimitedCopy) && reportText.includes('\u6279\u91cf\u3001\u65e0\u4eba\u503c\u5b88\u548c\u53d1\u5e03')
+      : reportText.includes(text.blockedExpectedState) && reportText.includes(text.noRealWrite) && reportBlockedStatusTone,
     reportBusinessReportLocked: !finalCheckRealWriteBlocked || reportText.includes(text.businessReportLocked),
     reportPostL3ChecklistLocked: !finalCheckRealWriteBlocked || reportText.includes(text.postL3ChecklistLocked),
     reportLockedEvidenceRowsNeutral: !finalCheckRealWriteBlocked || reportLockedEvidenceRowsNeutral,
@@ -746,9 +818,9 @@ const result = {
     reportSourcePackageNotRequiredCopy: !finalCheckRequiresNotRequiredCopy || (reportText.includes(text.sourcePackageNotRequired) && reportText.includes(text.sourcePackageNotRequiredCopy)),
     demoBatchCanStartLocally: demoBatchCreated && Boolean(demoCreatedTask) && demoText.includes(text.localDemoTask) && demoStartButtonEnabled,
     noDeveloperFallbackCopy: !(initialText + ' ' + taskText + ' ' + consoleText + ' ' + reportText).includes(text.fallbackCopy),
-    localStartPostBlocked: blockedStartStatus === 403,
-    localAgentConsolePostBlocked: blockedAgentConsoleStatus === 403,
-    localDirectDxmPostsBlocked: blockedActionsAllForbidden,
+    localStartPostBlocked: !shouldRunBlockedMutationChecks || blockedStartStatus === 403,
+    localAgentConsolePostBlocked: !shouldRunBlockedMutationChecks || blockedAgentConsoleStatus === 403,
+    localDirectDxmPostsBlocked: !shouldRunBlockedMutationChecks || blockedActionsAllForbidden,
     blockedPostsDidNotMutateTask: taskStateUnchanged,
     noOldActionCopy: !(consoleText + ' ' + taskText).includes(text.oldSaveOnly)
       && !(consoleText + ' ' + taskText).includes(text.oldWaitSave)

@@ -203,6 +203,7 @@ class DxmLoginFlow:
         note_text: str | None = None,
         product_query: str | None = None,
         store_name: str | None = None,
+        target_source_urls: list[str] | None = None,
     ) -> dict[str, Any]:
         if action not in DRAFT_ACTION_SCREENSHOT_MAP:
             state = self._error_state(
@@ -219,6 +220,7 @@ class DxmLoginFlow:
                 note_text=note_text,
                 product_query=product_query,
                 store_name=store_name,
+                target_source_urls=target_source_urls,
             )
         except Exception as exc:
             state = self._error_state(
@@ -439,6 +441,7 @@ class DxmLoginFlow:
         note_text: str | None = None,
         product_query: str | None = None,
         store_name: str | None = None,
+        target_source_urls: list[str] | None = None,
     ) -> dict[str, Any]:
         page = self._ensure_page_with_cookies()
         draft_url = WORKFLOW_TARGETS['draft_box']['url']
@@ -453,12 +456,24 @@ class DxmLoginFlow:
         claim_mark = note_text or self._current_claim_mark(product_query=product_query, store_name=store_name)
         self._search_draft_box(page, product_query=product_query, store_name=store_name)
         try:
-            row_info = self._find_draft_box_row(page, product_query, store_name=store_name, claim_mark=claim_mark)
+            row_info = self._find_draft_box_row(
+                page,
+                product_query,
+                store_name=store_name,
+                claim_mark=claim_mark,
+                target_source_urls=target_source_urls,
+            )
         except RuntimeError:
             if not product_query or not store_name:
                 raise
             self._search_draft_box(page, product_query=None, store_name=store_name)
-            row_info = self._find_draft_box_row(page, product_query, store_name=store_name, claim_mark=claim_mark)
+            row_info = self._find_draft_box_row(
+                page,
+                product_query,
+                store_name=store_name,
+                claim_mark=claim_mark,
+                target_source_urls=target_source_urls,
+            )
 
         if action == 'edit':
             editor_page = self._open_editor_from_draft_box(page, row_info=row_info)
@@ -485,7 +500,13 @@ class DxmLoginFlow:
         if note_text in (row_info.get('rowText') or ''):
             note_result = {'verified': True, 'rowText': row_info.get('rowText'), 'already_present': True}
         else:
-            note_result = self._add_note_to_draft_row(page, row_info, note_text)
+            note_result = self._add_note_to_draft_row(
+                page,
+                row_info,
+                note_text,
+                product_query=product_query,
+                store_name=store_name,
+            )
         screenshot_path = DRAFT_ACTION_SCREENSHOT_MAP[action]
         page.screenshot(path=str(screenshot_path), full_page=True)
         return {
@@ -699,7 +720,20 @@ class DxmLoginFlow:
                 'label': '普通编辑页必填项未通过',
                 'message': required_result.get('message') or '普通编辑页必填项未通过，不能进入半托管信息。',
             }
+        variants_result = self._fill_editor_variants_on_page(page, defaults)
+        if variants_result['stage'].endswith('_failed'):
+            return {
+                **variants_result,
+                'stage': 'open_semi_managed_page_failed',
+                'label': '普通编辑页变体信息未通过',
+                'message': variants_result.get('message') or '普通编辑页变体信息未补齐，不能进入半托管信息。',
+                'preflight_results': {
+                    'required_defaults': required_result,
+                    'variants': variants_result,
+                },
+            }
         eu_media_verified_before_enable = False
+        media_result = {'stage': 'media_assets_filled', 'fill_result': {'eu_outer_package_image': {'ok': True, 'skipped': True, 'reason': 'no_config'}}}
         if self._extract_eu_outer_package_filename(defaults or {}):
             media_result = self._fill_media_assets_on_page(page, defaults)
             if media_result['stage'].endswith('_failed'):
@@ -710,6 +744,64 @@ class DxmLoginFlow:
                     'message': media_result.get('message') or '欧盟外包装图未回填，不能进入半托管信息。',
                 }
             eu_media_verified_before_enable = self._media_result_has_verified_eu_outer_package(media_result)
+        compliance_result = self._fill_compliance_defaults_on_page(page, defaults)
+        if compliance_result['stage'].endswith('_failed'):
+            return {
+                **compliance_result,
+                'stage': 'open_semi_managed_page_failed',
+                'label': '普通编辑页合规信息未通过',
+                'message': compliance_result.get('message') or '普通编辑页合规信息未补齐，不能进入半托管信息。',
+                'preflight_results': {
+                    'required_defaults': required_result,
+                    'variants': variants_result,
+                    'media': media_result,
+                    'compliance': compliance_result,
+                },
+            }
+        main_images_result = self._repair_product_main_images_on_page(page)
+        if not main_images_result.get('ok'):
+            return {
+                'stage': 'open_semi_managed_page_failed',
+                'label': '普通编辑页主图未通过',
+                'message': main_images_result.get('message') or '主图存在无效图片，不能进入半托管信息。',
+                'page_title': page.title(),
+                'page_url': page.url,
+                'fill_result': main_images_result,
+                'preflight_results': {
+                    'required_defaults': required_result,
+                    'variants': variants_result,
+                    'media': media_result,
+                    'compliance': compliance_result,
+                    'main_images': main_images_result,
+                },
+                'published': False,
+            }
+        customs_preflight = (required_result.get('fill_result') or {}).get('customs_supervision') or {}
+        customs_after_repairs = customs_preflight
+        if customs_preflight and not customs_preflight.get('ok'):
+            flattened_defaults = self._flatten_editor_defaults(defaults or {})
+            customs_after_repairs = self._fill_customs_supervision_attribute(
+                page,
+                flattened_defaults.get('customs_product_name_priorities') or ['钥匙扣', 'keychain'],
+            )
+            if not customs_after_repairs.get('ok'):
+                return {
+                    'stage': 'open_semi_managed_page_failed',
+                    'label': '普通编辑页海关监管属性未通过',
+                    'message': customs_after_repairs.get('reason') or '海关监管属性未补齐，不能进入半托管信息。',
+                    'page_title': page.title(),
+                    'page_url': page.url,
+                    'fill_result': customs_after_repairs,
+                    'preflight_results': {
+                        'required_defaults': required_result,
+                        'variants': variants_result,
+                        'media': media_result,
+                        'compliance': compliance_result,
+                        'main_images': main_images_result,
+                        'customs_supervision_after_repairs': customs_after_repairs,
+                    },
+                    'published': False,
+                }
         enable_result = self._enable_semi_managed_on_page(page)
         if enable_result['stage'].endswith('_failed'):
             enable_result['stage'] = 'open_semi_managed_page_failed'
@@ -783,6 +875,158 @@ class DxmLoginFlow:
             'source_editor_url': source_editor_url,
             'published': False,
         }
+
+    def _repair_product_main_images_on_page(self, page: Page) -> dict[str, Any]:
+        self._dismiss_blocking_modals(page)
+        before = self._product_main_images_state(page)
+        if not before.get('found'):
+            return {
+                'ok': False,
+                'message': before.get('message') or '未找到普通编辑页主图模块。',
+                'before': before,
+                'after': before,
+            }
+        deleted_invalid = []
+        for _ in range(10):
+            delete_target = page.evaluate(r'''() => {
+              const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+              const rectOf = (el) => {
+                const r = el.getBoundingClientRect();
+                return {x:r.x, y:r.y, w:r.width, h:r.height};
+              };
+              const parseDims = (text, img) => {
+                const m = String(text || '').match(/(\d+)\s*[xX×]\s*(\d+)/);
+                if (m) return {width:Number(m[1]), height:Number(m[2])};
+                return {width:Number(img?.naturalWidth || 0), height:Number(img?.naturalHeight || 0)};
+              };
+              const root = document.querySelector('.productMainImgModule');
+              if (!root) return null;
+              root.scrollIntoView({block:'center', inline:'nearest'});
+              const items = Array.from(root.querySelectorAll('.single-image.img-item, .single-image'));
+              for (let index = 0; index < items.length; index += 1) {
+                const item = items[index];
+                const text = textOf(item);
+                const img = item.querySelector('img');
+                const dims = parseDims(text, img);
+                const src = img?.getAttribute('src') || '';
+                const valid = dims.width > 0 && dims.height > 0 && !/addImg|placeholder/i.test(src);
+                if (valid) continue;
+                const del = item.querySelector('.icon_delete, [class*="icon_delete"], [class*="delete"]');
+                if (del) return {first_invalid_delete:true, index, text, src, dims, rect:rectOf(del)};
+              }
+              return null;
+            }''')
+            if not delete_target:
+                break
+            self._click_rect_center(page, delete_target['rect'])
+            deleted_invalid.append({key: delete_target.get(key) for key in ('index', 'text', 'src', 'dims')})
+            page.wait_for_timeout(800)
+            confirm = self._click_safe_modal_button(page, ['确定', '确认', '删除'])
+            if confirm.get('ok'):
+                page.wait_for_timeout(800)
+            self._dismiss_blocking_modals(page)
+
+        if before.get('selected_valid_count', 0) < 1 and before.get('valid_count', 0) < 1:
+            return {
+                'ok': False,
+                'message': '主图模块没有可用的有效图片。',
+                'before': before,
+                'after': before,
+            }
+        action = page.evaluate(r'''() => {
+          const parseDims = (text, img) => {
+            const m = String(text || '').match(/(\d+)\s*[xX×]\s*(\d+)/);
+            if (m) return {width:Number(m[1]), height:Number(m[2])};
+            return {width:Number(img?.naturalWidth || 0), height:Number(img?.naturalHeight || 0)};
+          };
+          const describe = (item, index) => {
+            const input = item.querySelector('input[type="checkbox"]');
+            const img = item.querySelector('img');
+            const text = String(item.innerText || item.textContent || '').replace(/\s+/g, ' ').trim();
+            const dims = parseDims(text, img);
+            const checked = Boolean((input && input.checked) || item.classList.contains('checked'));
+            const src = img?.getAttribute('src') || '';
+            const valid = dims.width > 0 && dims.height > 0 && !/addImg|placeholder/i.test(src);
+            return {item, input, index, text, dims, checked, valid, src};
+          };
+          const root = document.querySelector('.productMainImgModule');
+          if (!root) return {clicked_invalid: [], clicked_valid: [], found: false};
+          const items = Array.from(root.querySelectorAll('.single-image.img-item, .single-image'))
+            .map(describe)
+            .filter(info => info.text.includes(' X ') || info.text.includes('×') || info.src);
+          const clickedInvalid = [];
+          for (const info of items) {
+            if (info.checked && !info.valid && info.input) {
+              info.input.click();
+              clickedInvalid.push({index: info.index, text: info.text, dims: info.dims, src: info.src});
+            }
+          }
+          const refreshed = items.map(info => describe(info.item, info.index));
+          const validCount = refreshed.filter(info => info.valid).length;
+          const targetSelectedValidCount = Math.min(2, Math.max(1, validCount));
+          let selectedValidCount = refreshed.filter(info => info.checked && info.valid).length;
+          const clickedValid = [];
+          for (const info of refreshed) {
+            if (selectedValidCount >= targetSelectedValidCount) break;
+            if (!info.checked && info.valid && info.input) {
+              info.input.click();
+              clickedValid.push({index: info.index, text: info.text, dims: info.dims, src: info.src});
+              selectedValidCount += 1;
+            }
+          }
+          return {found: true, clicked_invalid: clickedInvalid, clicked_valid: clickedValid};
+        }''')
+        page.wait_for_timeout(800)
+        after = self._product_main_images_state(page)
+        ok = bool(after.get('found')) and after.get('selected_invalid_count', 0) == 0 and after.get('selected_valid_count', 0) >= 1
+        if ok:
+            message = '主图已修复：已取消无效 0 X 0 图片，并保留有效主图。'
+        else:
+            message = '主图仍存在无效已选图片，不能进入半托管信息。'
+        return {
+            'ok': ok,
+            'message': message,
+            'before': before,
+            'deleted_invalid': deleted_invalid,
+            'action': action,
+            'after': after,
+        }
+
+    def _product_main_images_state(self, page: Page) -> dict[str, Any]:
+        return page.evaluate(r'''() => {
+          const parseDims = (text, img) => {
+            const m = String(text || '').match(/(\d+)\s*[xX×]\s*(\d+)/);
+            if (m) return {width:Number(m[1]), height:Number(m[2])};
+            return {width:Number(img?.naturalWidth || 0), height:Number(img?.naturalHeight || 0)};
+          };
+          const root = document.querySelector('.productMainImgModule');
+          if (!root) {
+            return {found:false, message:'未找到普通编辑页主图模块。', images:[], total:0, valid_count:0, selected_valid_count:0, selected_invalid_count:0};
+          }
+          const images = Array.from(root.querySelectorAll('.single-image.img-item, .single-image')).map((item, index) => {
+            const input = item.querySelector('input[type="checkbox"]');
+            const img = item.querySelector('img');
+            const text = String(item.innerText || item.textContent || '').replace(/\s+/g, ' ').trim();
+            const dims = parseDims(text, img);
+            const checked = Boolean((input && input.checked) || item.classList.contains('checked'));
+            const src = img?.getAttribute('src') || '';
+            const valid = dims.width > 0 && dims.height > 0 && !/addImg|placeholder/i.test(src);
+            return {index, text, checked, valid, width:dims.width, height:dims.height, src};
+          }).filter(item => item.text.includes(' X ') || item.text.includes('×') || item.src);
+          const selectedInvalid = images.filter(item => item.checked && !item.valid);
+          const selectedValid = images.filter(item => item.checked && item.valid);
+          const validImages = images.filter(item => item.valid);
+          return {
+            found: true,
+            total: images.length,
+            valid_count: validImages.length,
+            selected_valid_count: selectedValid.length,
+            selected_invalid_count: selectedInvalid.length,
+            selected_invalid: selectedInvalid,
+            selected_valid: selectedValid,
+            images,
+          };
+        }''')
 
     def _media_result_has_verified_eu_outer_package(self, media_result: dict[str, Any]) -> bool:
         fill_result = media_result.get('fill_result') if isinstance(media_result, dict) else {}
@@ -906,8 +1150,6 @@ class DxmLoginFlow:
         )
         page.wait_for_timeout(1000)
         self._dismiss_blocking_modals(page)
-        if not category.get('ok') and str(category.get('text') or '').find(str(values['category_match'])) >= 0:
-            category = {**category, 'ok': True, 'verified_by_clicked_result': True}
         if not category.get('ok'):
             screenshot_path = EDITOR_ACTION_SCREENSHOT_MAP['fill_editor_required_defaults']
             page.screenshot(path=str(screenshot_path), full_page=True)
@@ -1072,8 +1314,6 @@ class DxmLoginFlow:
         page.wait_for_timeout(1200)
         self._dismiss_blocking_modals(page)
         validation = self._editor_required_defaults_state(page)
-        if not category.get('ok') and str(category.get('text') or '').find(str(values['category_match'])) >= 0:
-            category = {**category, 'ok': True, 'verified_by_clicked_result': True}
         screenshot_path = EDITOR_ACTION_SCREENSHOT_MAP['fill_editor_required_defaults']
         page.screenshot(path=str(screenshot_path), full_page=True)
         missing = list(validation.get('missing') or [])
@@ -1085,15 +1325,19 @@ class DxmLoginFlow:
             item for item in missing
             if not (item in field_missing_map and field_result.get(field_missing_map[item]))
         ]
+        downstream_owned_missing = {
+            'declared_value',
+            'stock',
+            'weight',
+            'customs_supervision',
+        }
+        missing = [item for item in missing if item not in downstream_owned_missing]
         required_selects = {
             'category': category,
             'category_attributes': category_attributes,
-            'original_box': original_box,
-            'logistics_attribute': logistics,
             'tax_quote': tax,
             'freight_template': freight,
             'service_template': service,
-            'customs_supervision': customs,
         }
         missing.extend(name for name, result in required_selects.items() if not result.get('ok'))
         missing.extend(self._missing_required_reference_template_results(dxm_reference_template_results))
@@ -1186,12 +1430,17 @@ class DxmLoginFlow:
           const width = fillByPlaceholder('宽', values.width);
           const height = fillByPlaceholder('高', values.height);
           const plainGoodsVisible = textOf(scope).includes(values.logistics_attribute || '普货');
+          const logisticsIconCount = scope === document ? 0 : Array.from(scope.querySelectorAll('tbody tr i.icon_edit2, tbody tr .icon_edit2'))
+            .filter(visible)
+            .map(el => el.closest('i,.icon_edit2') || el)
+            .filter((el, idx, arr) => arr.indexOf(el) === idx)
+            .length;
           const missing = [];
           if (!declaredValue.filled) missing.push('declared_value');
           if (!stock.filled) missing.push('stock');
           if (!weight.filled) missing.push('weight');
           if (!length.filled || !width.filled || !height.filled) missing.push('dimensions');
-          if (!plainGoodsVisible) missing.push('logistics_attribute');
+          if (!plainGoodsVisible && !logisticsIconCount) missing.push('logistics_attribute');
           return {
             ok: missing.length === 0,
             missing,
@@ -1202,9 +1451,25 @@ class DxmLoginFlow:
             width,
             height,
             logistics_attribute_visible: plainGoodsVisible,
+            logistics_icon_count: logisticsIconCount,
             variant_scope_found: scope !== document,
           };
         }''', values)
+        missing = list(result.get('missing') or [])
+        if result.get('variant_scope_found') and int(result.get('logistics_icon_count') or 0) > 0:
+            logistics_result = self._fill_editor_variant_logistics_attribute(page, str(values.get('logistics_attribute') or '普货'))
+            result['logistics_attribute_detail'] = logistics_result
+            if logistics_result.get('ok'):
+                result['missing'] = [item for item in missing if item != 'logistics_attribute']
+            else:
+                result['missing'] = sorted(set(missing + ['logistics_attribute']))
+            result['ok'] = not result['missing']
+        elif 'logistics_attribute' in missing and result.get('variant_scope_found'):
+            logistics_result = self._fill_semi_logistics_attribute(page, str(values.get('logistics_attribute') or '普货'))
+            result['logistics_attribute_detail'] = logistics_result
+            if logistics_result.get('ok'):
+                result['missing'] = [item for item in missing if item != 'logistics_attribute']
+                result['ok'] = not result['missing']
         screenshot_path = EDITOR_ACTION_SCREENSHOT_MAP['fill_editor_variants']
         page.screenshot(path=str(screenshot_path), full_page=True)
         ok = bool(result.get('ok'))
@@ -1217,6 +1482,125 @@ class DxmLoginFlow:
             'screenshot_url': self._artifact_url(screenshot_path),
             'fill_result': result,
             'published': False,
+        }
+
+    def _fill_editor_variant_logistics_attribute(self, page: Page, value: str) -> dict[str, Any]:
+        normalized = value.replace(' ', '').lower()
+        plain_goods = normalized in {'普货', '普通货', '普通', 'none', 'no', '无'}
+        icons = page.evaluate(r'''() => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const rectOf = (el) => {
+            const r = el.getBoundingClientRect();
+            return {x:r.x, y:r.y, w:r.width, h:r.height};
+          };
+          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          const tables = Array.from(document.querySelectorAll('table,.vxe-table,.ant-table,div'))
+            .filter(visible)
+            .filter(el => {
+              const text = textOf(el);
+              return text.includes('零售价') && text.includes('货值') && text.includes('库存') && text.includes('物流属性');
+            });
+          const scope = tables.sort((a, b) => textOf(a).length - textOf(b).length)[0];
+          if (!scope) return [];
+          return Array.from(scope.querySelectorAll('tbody tr i.icon_edit2, tbody tr .icon_edit2'))
+            .filter(visible)
+            .map(el => el.closest('i,.icon_edit2') || el)
+            .filter((el, idx, arr) => arr.indexOf(el) === idx)
+            .map((el, index) => ({index, rect:rectOf(el), row_text:textOf(el.closest('tr') || el).slice(0, 160)}))
+            .sort((a, b) => a.rect.y - b.rect.y || a.rect.x - b.rect.x);
+        }''')
+        if not icons:
+            return {'ok': False, 'reason': '未找到普通变体物流属性编辑入口'}
+
+        modal_results = []
+        for item in icons:
+            opened = page.evaluate(r'''(targetIndex) => {
+              const visible = (el) => {
+                const r = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+              };
+              const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+              const tables = Array.from(document.querySelectorAll('table,.vxe-table,.ant-table,div'))
+                .filter(visible)
+                .filter(el => {
+                  const text = textOf(el);
+                  return text.includes('零售价') && text.includes('货值') && text.includes('库存') && text.includes('物流属性');
+                });
+              const scope = tables.sort((a, b) => textOf(a).length - textOf(b).length)[0];
+              if (!scope) return {ok:false, reason:'未找到普通变体表格'};
+              const icons = Array.from(scope.querySelectorAll('tbody tr i.icon_edit2, tbody tr .icon_edit2'))
+                .filter(visible)
+                .map(el => el.closest('i,.icon_edit2') || el)
+                .filter((el, idx, arr) => arr.indexOf(el) === idx)
+                .sort((a, b) => {
+                  const ar = a.getBoundingClientRect();
+                  const br = b.getBoundingClientRect();
+                  return ar.y - br.y || ar.x - br.x;
+                });
+              const icon = icons[targetIndex];
+              if (!icon) return {ok:false, reason:'普通变体物流属性编辑入口索引失效'};
+              icon.scrollIntoView({block:'center', inline:'center'});
+              icon.click();
+              return {ok:true, row_text:textOf(icon.closest('tr') || icon).slice(0, 160)};
+            }''', item.get('index'))
+            if not opened.get('ok'):
+                modal_results.append({**opened, 'row_text': item.get('row_text')})
+                continue
+            page.wait_for_timeout(800)
+            state = page.evaluate(r'''({value, plainGoods}) => {
+              const visible = (el) => {
+                const r = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+              };
+              const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
+              const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+              const rectOf = (el) => {
+                const r = el.getBoundingClientRect();
+                return {x:r.x, y:r.y, w:r.width, h:r.height};
+              };
+              const modal = Array.from(document.querySelectorAll('.ant-modal, .ant-modal-wrap, [role="dialog"]'))
+                .filter(visible)
+                .find(el => textOf(el).includes('物流属性') && textOf(el).includes('确定'));
+              if (!modal) return {ok:false, reason:'普通变体物流属性弹窗未打开'};
+              const labels = Array.from(modal.querySelectorAll('label')).filter(visible);
+              const selected = [];
+              for (const label of labels) {
+                const input = label.querySelector('input[type="checkbox"],input[type="radio"]');
+                const text = norm(label.innerText || label.textContent);
+                if (!input) continue;
+                if (text.includes(norm(value)) && !input.checked) {
+                  label.dispatchEvent(new MouseEvent('click', {bubbles:true}));
+                  selected.push(text);
+                }
+              }
+              const hasRequested = labels.some(label => norm(label.innerText || label.textContent).includes(norm(value)));
+              const confirm = Array.from(modal.querySelectorAll('button,span,a,div'))
+                .filter(visible)
+                .find(el => norm(el.innerText || el.textContent) === '确定');
+              return {ok:hasRequested, confirm_rect: confirm ? rectOf(confirm) : null, selected, reason: hasRequested ? null : '未找到请求的普通变体物流属性'};
+            }''', {'value': value, 'plainGoods': plain_goods})
+            if not state.get('ok') or not state.get('confirm_rect'):
+                modal_results.append({**state, 'row_text': item.get('row_text')})
+                page.keyboard.press('Escape')
+                page.wait_for_timeout(300)
+                continue
+            self._click_rect_center(page, state['confirm_rect'])
+            page.wait_for_timeout(700)
+            modal_results.append({**state, 'row_text': item.get('row_text')})
+
+        missing = [item for item in modal_results if not item.get('ok')]
+        return {
+            'ok': not missing,
+            'plain_goods': plain_goods,
+            'icon_count': len(icons),
+            'results': modal_results,
+            'reason': missing[0].get('reason') if missing else None,
         }
 
     def _fill_media_assets_on_page(self, page: Page, defaults: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1245,6 +1629,7 @@ class DxmLoginFlow:
             marketing_result = self._generate_marketing_images_on_page(
                 page,
                 allow_generate=not self._marketing_images_marked_already_generated(values),
+                scene_fallback_filename=self._extract_marketing_scene_filename(values),
             )
             if not marketing_result.get('ok'):
                 failures.append({'label': '营销图片', **marketing_result})
@@ -1453,6 +1838,8 @@ class DxmLoginFlow:
             label_text = str(label or '').strip()
             filename_text = str(filename or '').strip()
             key_text = str(slot_key or '').strip()
+            if self._is_marketing_image_slot(label_text, key_text):
+                return
             if not label_text and self._is_eu_outer_package_slot(label_text, key_text):
                 label_text = '外包装/标签实拍图-欧盟'
             if not label_text or not filename_text:
@@ -1496,6 +1883,49 @@ class DxmLoginFlow:
             direct_filename = direct_filename or direct_image.get('filename') or direct_image.get('file_name') or direct_image.get('name')
         add_slot('外包装/标签实拍图-欧盟', direct_filename, 'eu_outer_package')
         return slots
+
+    def _is_marketing_image_slot(self, label: Any, slot_key: Any = None) -> bool:
+        text = f'{label or ""} {slot_key or ""}'.lower().replace('-', '_').replace(' ', '_')
+        return (
+            'marketing' in text
+            or '白底图' in text
+            or '场景图' in text
+            or '3:4' in text
+            or '1:1' in text
+        )
+
+    def _extract_marketing_scene_filename(self, defaults: dict[str, Any] | None) -> str:
+        data = defaults or {}
+        candidates: list[Any] = [
+            data.get('marketing_scene_3_4_filename'),
+            data.get('marketing_scene_filename'),
+            data.get('scene_3_4_filename'),
+        ]
+        image_payload = data.get('image')
+        if isinstance(image_payload, dict):
+            candidates.extend([
+                image_payload.get('marketing_scene_3_4_filename'),
+                image_payload.get('marketing_scene_filename'),
+                image_payload.get('scene_3_4_filename'),
+            ])
+            nested = image_payload.get('marketing_scene_3_4') or image_payload.get('marketing_scene_image')
+            if isinstance(nested, dict):
+                candidates.extend([nested.get('filename'), nested.get('file_name'), nested.get('name')])
+            slots = image_payload.get('slots')
+            if isinstance(slots, list):
+                for slot in slots:
+                    if not isinstance(slot, dict):
+                        continue
+                    label = slot.get('label') or slot.get('slot_label')
+                    slot_key = slot.get('slot_key') or slot.get('type')
+                    slot_text = f'{label or ""} {slot_key or ""}'.lower().replace('-', '_').replace(' ', '_')
+                    if 'marketing_scene_3_4' in slot_text or '3:4' in slot_text or '场景图' in slot_text:
+                        candidates.extend([slot.get('filename'), slot.get('file_name'), slot.get('name')])
+        for value in candidates:
+            text = str(value or '').strip()
+            if text:
+                return text
+        return self._extract_eu_outer_package_filename(data)
 
     def _is_eu_outer_package_slot(self, label: Any, slot_key: Any = None) -> bool:
         text = f'{label or ""} {slot_key or ""}'.lower().replace('-', '_').replace(' ', '_')
@@ -1544,20 +1974,34 @@ class DxmLoginFlow:
         ]
         return any(value is True or str(value).strip().lower() in {'true', '1', 'yes', '已生成'} for value in values)
 
-    def _generate_marketing_images_on_page(self, page: Page, allow_generate: bool = True) -> dict[str, Any]:
+    def _generate_marketing_images_on_page(
+        self,
+        page: Page,
+        allow_generate: bool = True,
+        scene_fallback_filename: str = '',
+    ) -> dict[str, Any]:
         before = self._marketing_images_state(page)
         if before.get('ok'):
             white_background = self._apply_marketing_white_background(page)
+            after = self._marketing_images_state(page)
             if not white_background.get('ok'):
+                if after.get('ok'):
+                    return {
+                        'ok': True,
+                        'already_generated': True,
+                        'before': before,
+                        'white_background': white_background,
+                        'after': after,
+                        'warning': white_background.get('reason') or '营销图片白底处理未完成，但必需营销图已存在',
+                    }
                 return {
                     'ok': False,
                     'already_generated': True,
                     'reason': white_background.get('reason') or '营销图片白底处理失败',
                     'before': before,
                     'white_background': white_background,
-                    'after': before,
+                    'after': after,
                 }
-            after = self._marketing_images_state(page)
             return {'ok': True, 'already_generated': True, 'before': before, 'white_background': white_background, 'after': after}
         if not allow_generate:
             return {
@@ -1606,8 +2050,190 @@ class DxmLoginFlow:
         page.wait_for_timeout(1500)
         after = self._marketing_images_state(page)
         if not after.get('ok'):
-            return {'ok': False, 'reason': after.get('reason') or '营销图片一键生成后仍未补齐', 'target': target, 'before': before, 'white_background': white_background, 'after': after}
+            fallback = self._fill_missing_marketing_scene_from_bank(page, after, scene_fallback_filename)
+            if fallback.get('ok'):
+                final_state = self._marketing_images_state(page)
+                if final_state.get('ok'):
+                    return {'ok': True, 'target': target, 'before': before, 'white_background': white_background, 'after': final_state, 'scene_fallback': fallback}
+                return {'ok': False, 'reason': final_state.get('reason') or '营销图片备用图回填后仍未补齐', 'target': target, 'before': before, 'white_background': white_background, 'after': final_state, 'scene_fallback': fallback}
+            return {'ok': False, 'reason': fallback.get('reason') or after.get('reason') or '营销图片一键生成后仍未补齐', 'target': target, 'before': before, 'white_background': white_background, 'after': after, 'scene_fallback': fallback}
         return {'ok': True, 'target': target, 'before': before, 'white_background': white_background, 'after': after}
+
+    def _fill_missing_marketing_scene_from_bank(self, page: Page, state: dict[str, Any], filename: str) -> dict[str, Any]:
+        missing = state.get('missing') if isinstance(state, dict) else []
+        if '3:4场景图' not in (missing or []):
+            return {'ok': True, 'skipped': True, 'reason': '3:4场景图未缺失'}
+        filename = str(filename or '').strip()
+        if not filename:
+            return {'ok': False, 'reason': '营销3:4场景图缺少备用图片文件名'}
+        return self._fill_marketing_scene_image_by_filename(page, filename)
+
+    def _fill_marketing_scene_image_by_filename(self, page: Page, filename: str) -> dict[str, Any]:
+        clear_result = self._remove_invalid_marketing_image(page, '3:4场景图')
+        if not clear_result.get('ok'):
+            return clear_result
+        open_result = self._open_marketing_image_picker(page, '3:4场景图')
+        if not open_result.get('ok'):
+            return {**open_result, 'clear_result': clear_result}
+        bank_result = self._open_smt_image_bank_from_picker(page, require_menu=False)
+        if not bank_result.get('ok'):
+            return {**bank_result, 'clear_result': clear_result, 'picker': open_result}
+        select_result = self._select_image_bank_asset_by_filename(page, filename)
+        if not select_result.get('ok'):
+            return {**select_result, 'clear_result': clear_result, 'picker': open_result, 'image_bank': bank_result}
+        return {'ok': True, 'filename': filename, 'clear_result': clear_result, 'picker': open_result, 'image_bank': bank_result, 'selection': select_result}
+
+    def _remove_invalid_marketing_image(self, page: Page, label: str) -> dict[str, Any]:
+        self._dismiss_blocking_modals(page)
+        target = page.evaluate(r'''(label) => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
+          const rectOf = (el) => {
+            const r = el.getBoundingClientRect();
+            return {x:r.x, y:r.y, w:r.width, h:r.height};
+          };
+          const wanted = norm(label);
+          const item = Array.from(document.querySelectorAll('.market-img-item'))
+            .filter(visible)
+            .map(el => ({el, text:textOf(el), rect:rectOf(el)}))
+            .filter(item => norm(item.text).includes(wanted))
+            .sort((a, b) => (a.rect.w * a.rect.h) - (b.rect.w * b.rect.h) || a.text.length - b.text.length)[0]?.el;
+          if (!item) return {ok:false, reason:`未找到营销图片槽位：${label}`};
+          const text = textOf(item);
+          const img = item.querySelector('img');
+          const src = String(img?.getAttribute('src') || '');
+          const sizeMatch = text.match(/(\d+)\s*[xX×]\s*(\d+)/);
+          const width = sizeMatch ? Number(sizeMatch[1]) : null;
+          const height = sizeMatch ? Number(sizeMatch[2]) : null;
+          const emptyDataPlaceholder = src.startsWith('data:image') && !sizeMatch;
+          const hasImage = Boolean(src) && !src.includes('addImg') && !src.includes('addimg') && !emptyDataPlaceholder;
+          const invalid = hasImage && (
+            (width !== null && height !== null && (width <= 0 || height <= 0))
+            || (label.includes('3:4') && width !== null && height !== null && (width < 750 || height < 1000))
+          );
+          if (!hasImage || !invalid) return {ok:true, skipped:true, reason: hasImage ? '营销图片不是无效图，无需删除' : '营销图片槽位为空'};
+          const dangerous = Array.from(item.querySelectorAll('button,a,span,div'))
+            .filter(visible)
+            .find(el => ['发布','继续发布','确认发布','提交发布','保存并发布','保存并移入待发布'].includes(norm(el.innerText || el.textContent)));
+          if (dangerous) return {ok:false, reason:`营销图片槽位附近出现危险动作：${norm(dangerous.innerText || dangerous.textContent)}`};
+          const deleteTargets = Array.from(item.querySelectorAll('button,a,[role="button"],span,div,i,em'))
+            .filter(visible)
+            .map(el => ({el, text:norm(el.innerText || el.textContent), title:norm(el.getAttribute('title') || el.getAttribute('aria-label') || ''), cls:String(el.className || ''), rect:rectOf(el)}))
+            .filter(x => {
+              const hay = `${x.text} ${x.title} ${x.cls}`.toLowerCase();
+              const small = x.rect.w <= 48 && x.rect.h <= 48;
+              return small && /(删除|delete|trash|remove|icon_delete)/i.test(hay);
+            })
+            .sort((a, b) => (a.rect.w * a.rect.h) - (b.rect.w * b.rect.h));
+          const picked = deleteTargets[0];
+          if (!picked) return {ok:false, reason:`未找到${label}无效图删除入口`, item_text:text.slice(0, 240)};
+          picked.el.scrollIntoView({block:'center', inline:'nearest'});
+          return {ok:true, rect:rectOf(picked.el), text:picked.text, title:picked.title, class_name:picked.cls, item_text:text.slice(0, 240), dimensions: sizeMatch ? {width, height} : null};
+        }''', label)
+        if not target.get('ok') or target.get('skipped'):
+            return target
+        self._click_rect_center(page, target['rect'])
+        page.wait_for_timeout(700)
+        confirm = self._click_safe_modal_button(page, ['确定', '确认', '删除'])
+        if not confirm.get('ok') and '未找到可确认的弹窗' not in str(confirm.get('reason') or ''):
+            return {**target, 'ok': False, 'reason': confirm.get('reason'), 'confirm': confirm}
+        page.wait_for_timeout(1200)
+        return {**target, 'confirm': confirm}
+
+    def _open_marketing_image_picker(self, page: Page, label: str) -> dict[str, Any]:
+        self._dismiss_blocking_modals(page)
+        target = page.evaluate(r'''(label) => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
+          const rectOf = (el) => {
+            const r = el.getBoundingClientRect();
+            return {x:r.x, y:r.y, w:r.width, h:r.height};
+          };
+          const wanted = norm(label);
+          const items = Array.from(document.querySelectorAll('.market-img-item'))
+            .filter(visible)
+            .map(el => ({el, text:textOf(el), rect:rectOf(el)}))
+            .filter(item => norm(item.text).includes(wanted))
+            .sort((a, b) => (a.rect.w * a.rect.h) - (b.rect.w * b.rect.h) || a.text.length - b.text.length);
+          const item = items[0]?.el;
+          if (!item) return {ok:false, reason:`未找到营销图片槽位：${label}`};
+          const itemRect = rectOf(item);
+          const dangerous = Array.from(item.querySelectorAll('button,a,span,div'))
+            .filter(visible)
+            .find(el => ['发布','继续发布','确认发布','提交发布','保存并发布','保存并移入待发布'].includes(norm(el.innerText || el.textContent)));
+          if (dangerous) return {ok:false, reason:`营销图片槽位附近出现危险动作：${norm(dangerous.innerText || dangerous.textContent)}`};
+          const itemText = textOf(item);
+          const placeholder = Array.from(item.querySelectorAll('img')).filter(visible).map(img => ({el:img, src:String(img.getAttribute('src') || ''), rect:rectOf(img)}))
+            .find(x => x.src.includes('addImg') || x.src.includes('addimg') || (x.src.startsWith('data:image') && !/\d+\s*[xX×]\s*\d+/.test(itemText)));
+          if (placeholder) {
+            const clickTarget = placeholder.el.closest('button,a,[role="button"],.img-out,.img-box,.single-image,.add-img,.upload-img,div,span') || placeholder.el;
+            clickTarget.scrollIntoView({block:'center', inline:'nearest'});
+            return {ok:true, rect:rectOf(clickTarget), text:'添加图片', class_name:String(clickTarget.className || ''), placeholder:true};
+          }
+          const imgRect = Array.from(item.querySelectorAll('img')).filter(visible).map(rectOf)[0] || itemRect;
+          const controls = Array.from(item.querySelectorAll('button,a,[role="button"],.operate-box,.icon-operate,.add-img,.upload-img,span,div,i,em'))
+            .filter(visible)
+            .map(el => ({el, text:norm(el.innerText || el.textContent), title:norm(el.getAttribute('title') || el.getAttribute('aria-label') || ''), cls:String(el.className || ''), rect:rectOf(el)}))
+            .filter(x => {
+              const hay = `${x.text} ${x.title} ${x.cls}`.toLowerCase();
+              if (/(删除|delete|trash|remove|close|发布|保存并发布)/i.test(hay)) return false;
+              if (x.text === '预览' || x.text === '生成标签') return false;
+              if (x.cls.includes('disabled')) return false;
+              if (x.text.includes('添加图片') || x.text.includes('选择图片') || x.text.includes('图片银行') || x.text.includes('上传图片')) return true;
+              const centerX = x.rect.x + x.rect.w / 2;
+              const centerY = x.rect.y + x.rect.h / 2;
+              const small = x.rect.w <= 64 && x.rect.h <= 64;
+              const inImage = centerX >= imgRect.x - 8 && centerX <= imgRect.x + imgRect.w + 24 && centerY >= imgRect.y - 8 && centerY <= imgRect.y + imgRect.h + 24;
+              return small && inImage && (hay.includes('operate') || hay.includes('tool') || hay.includes('icon') || hay.includes('upload') || hay.includes('add') || !x.text);
+            })
+            .sort((a, b) => {
+              const score = (x) => {
+                if (x.text.includes('添加图片') || x.text.includes('选择图片')) return 0;
+                if (x.text.includes('图片银行') || x.text.includes('上传图片')) return 1;
+                if (x.cls.toLowerCase().includes('icon-operate')) return 2;
+                if (x.cls.toLowerCase().includes('operate')) return 3;
+                return 4;
+              };
+              return score(a) - score(b) || (a.rect.w * a.rect.h) - (b.rect.w * b.rect.h);
+            });
+          const picked = controls[0];
+          if (!picked) return {ok:false, reason:`${label}槽位没有可点击的图片选择入口`, item_text:textOf(item).slice(0, 240)};
+          picked.el.scrollIntoView({block:'center', inline:'nearest'});
+          return {ok:true, text:picked.text, title:picked.title, class_name:picked.cls, rect:rectOf(picked.el), item_text:textOf(item).slice(0, 240)};
+        }''', label)
+        if not target.get('ok'):
+            return target
+        self._click_rect_center(page, target['rect'])
+        page.wait_for_timeout(1200)
+        self._dismiss_blocking_modals(page)
+        opened = page.evaluate(r'''() => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          const body = textOf(document.body || document.documentElement);
+          const hasBankMenu = Array.from(document.querySelectorAll('li,button,a,span,div')).filter(visible).some(el => textOf(el).includes('图片银行（速卖通）'));
+          const hasImageDialog = Array.from(document.querySelectorAll('.ant-modal, .ant-modal-wrap, [role="dialog"]')).filter(visible).some(el => {
+            const text = textOf(el);
+            return text.includes('图片') || text.includes('上传') || text.includes('图片银行');
+          });
+          return {ok: hasBankMenu || hasImageDialog, has_bank_menu: hasBankMenu, has_image_dialog: hasImageDialog, body_excerpt: body.slice(-500)};
+        }''')
+        if not opened.get('ok'):
+            return {'ok': False, 'reason': f'点击{label}槽位后未出现图片选择菜单或图片弹窗', 'target': target, 'opened': opened}
+        return {'ok': True, 'target': target, 'opened': opened}
 
     def _open_marketing_white_background_dialog(self, page: Page) -> dict[str, Any]:
         trigger = page.evaluate(r'''() => {
@@ -1827,10 +2453,24 @@ class DxmLoginFlow:
             const text = textOf(el);
             const img = el.querySelector('img');
             const src = String(img?.getAttribute('src') || '');
+            const sizeMatch = text.match(/(\d+)\s*[xX×]\s*(\d+)/);
+            const naturalWidth = Number(img?.naturalWidth || 0) || null;
+            const naturalHeight = Number(img?.naturalHeight || 0) || null;
+            const width = sizeMatch ? Number(sizeMatch[1]) : naturalWidth;
+            const height = sizeMatch ? Number(sizeMatch[2]) : naturalHeight;
+            const rawHasImage = Boolean(src) && !src.includes('addImg') && !src.includes('addimg');
+            const hasNonZeroSize = rawHasImage && width !== null && height !== null && width > 0 && height > 0;
+            const isWhite = text.includes('1:1白底图');
+            const isScene = text.includes('3:4场景图');
+            const meetsRequiredSize = (isWhite && width >= 800 && height >= 800)
+              || (isScene && width >= 750 && height >= 1000)
+              || (!isWhite && !isScene && hasNonZeroSize);
             return {
               text,
-              has_image: Boolean(src) && !src.includes('addImg') && !src.includes('addimg'),
-              is_placeholder: !src || src.includes('addImg') || src.includes('addimg'),
+              has_image: rawHasImage && hasNonZeroSize && meetsRequiredSize,
+              raw_has_image: rawHasImage,
+              is_placeholder: !src || src.includes('addImg') || src.includes('addimg') || !hasNonZeroSize || !meetsRequiredSize,
+              dimensions: width !== null && height !== null ? {width, height, source: sizeMatch ? 'text' : 'natural'} : null,
               src_excerpt: src.slice(0, 120),
             };
           });
@@ -1890,6 +2530,7 @@ class DxmLoginFlow:
         return {**result, 'ok': False, 'reason': reason, 'verified': after, 'filename': filename, 'clear_result': clear_result, 'materialized': materialize_result}
 
     def _remove_image_slot_existing_image(self, page: Page, slot_label: str) -> dict[str, Any]:
+        self._dismiss_blocking_modals(page)
         target = page.evaluate(r'''(slotLabel) => {
           const visible = (el) => {
             const r = el.getBoundingClientRect();
@@ -2303,34 +2944,43 @@ class DxmLoginFlow:
         return {'ok': True, 'filename': filename, 'search': filled_search, 'picked': pick, 'confirm': confirm}
 
     def _click_safe_modal_button(self, page: Page, labels: list[str]) -> dict[str, Any]:
-        result = page.evaluate(r'''(labels) => {
-          const visible = (el) => {
-            const r = el.getBoundingClientRect();
-            const style = window.getComputedStyle(el);
-            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-          };
-          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-          const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
-          const rectOf = (el) => {
-            const r = el.getBoundingClientRect();
-            return {x:r.x, y:r.y, w:r.width, h:r.height};
-          };
-          const modals = Array.from(document.querySelectorAll('.ant-modal, .ant-modal-wrap, [role="dialog"]')).filter(visible).reverse();
-          const modal = modals[0];
-          if (!modal) return {ok:false, reason:'未找到可确认的弹窗'};
-          const modalText = textOf(modal);
-          const dangerousTerms = ['发布', '立即发布', '继续发布', '保存并发布', '确认发布', '提交发布', '保存并移入待发布', '移入待发布'];
-          const dangerousTerm = dangerousTerms.find(term => norm(modalText).includes(norm(term)));
-          if (dangerousTerm) return {ok:false, reason:`检测到危险弹窗：${dangerousTerm}`, modal_text:modalText.slice(0, 300)};
-          const buttons = Array.from(modal.querySelectorAll('button,a,span,div')).filter(visible);
-          const target = buttons.find(el => labels.includes(norm(el.innerText || el.textContent)) && !el.disabled);
-          if (!target) return {ok:false, reason:`未找到确认按钮：${labels.join('/')}`, modal_text:modalText.slice(0, 300)};
-          return {ok:true, text:norm(target.innerText || target.textContent), rect:rectOf(target)};
-        }''', labels)
-        if not result.get('ok'):
-            return result
-        self._click_rect_center(page, result['rect'])
-        return result
+        last_result: dict[str, Any] = {}
+        for attempt in range(2):
+            result = page.evaluate(r'''(labels) => {
+              const visible = (el) => {
+                const r = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+              };
+              const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+              const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
+              const rectOf = (el) => {
+                const r = el.getBoundingClientRect();
+                return {x:r.x, y:r.y, w:r.width, h:r.height};
+              };
+              const modals = Array.from(document.querySelectorAll('.ant-modal, .ant-modal-wrap, [role="dialog"]')).filter(visible).reverse();
+              const modal = modals[0];
+              if (!modal) return {ok:false, reason:'未找到可确认的弹窗'};
+              const modalText = textOf(modal);
+              const dangerousTerms = ['发布', '立即发布', '继续发布', '保存并发布', '确认发布', '提交发布', '保存并移入待发布', '移入待发布'];
+              const dangerousTerm = dangerousTerms.find(term => norm(modalText).includes(norm(term)));
+              if (dangerousTerm) return {ok:false, reason:`检测到危险弹窗：${dangerousTerm}`, modal_text:modalText.slice(0, 300)};
+              const buttons = Array.from(modal.querySelectorAll('button,a,span,div')).filter(visible);
+              const target = buttons.find(el => labels.includes(norm(el.innerText || el.textContent)) && !el.disabled);
+              if (!target) return {ok:false, reason:`未找到确认按钮：${labels.join('/')}`, modal_text:modalText.slice(0, 300)};
+              return {ok:true, text:norm(target.innerText || target.textContent), rect:rectOf(target)};
+            }''', labels)
+            if result.get('ok'):
+                self._click_rect_center(page, result['rect'])
+                return result
+            last_result = result
+            modal_text = str(result.get('modal_text') or '')
+            if attempt == 0 and ('公告' in modal_text or '通知' in modal_text or '小秘公告' in modal_text):
+                dismissed = self._dismiss_blocking_modals(page)
+                if dismissed:
+                    page.wait_for_timeout(500)
+                    continue
+        return last_result
 
     def _select_editor_category(self, page: Page, keyword: str, match_text: str) -> dict[str, Any]:
         body_state = self._editor_required_defaults_state(page)
@@ -2396,13 +3046,14 @@ class DxmLoginFlow:
         if selected:
             self._wait_for_body_text(page, ['ACG Stand', '立牌类谷子'], timeout=6000)
         state = self._editor_required_defaults_state(page)
-        ok = bool(selected and state.get('category_selected'))
+        ok = bool(state.get('category_selected'))
         if not ok:
             self._close_visible_modal(page)
         return {
             'ok': ok,
             'text': row.get('text'),
             'category_text': state.get('category_text'),
+            'selected_action_clicked': bool(selected),
             'reason': None if ok else '分类结果已点击，但未检测到页面分类回显',
         }
 
@@ -2442,15 +3093,293 @@ class DxmLoginFlow:
         brand = self._choose_ant_select_near_label(page, '品牌', ['NONE', 'NoEnName', '无品牌'])
         item_type = self._choose_ant_select_near_label(page, '产品类型', ['Model', 'Puppets', 'Other'])
         chemical = self._choose_ant_select_near_label(page, '高关注化学品', ['None', '无', 'No'])
+        generic = self._fill_unselected_category_attribute_selects(page)
         result = {
             'age': age,
             'origin': origin,
             'brand': brand,
             'item_type': item_type,
             'high_concerned_chemical': chemical,
+            'generic_required_attributes': generic,
         }
         missing = [name for name, value in result.items() if not value.get('ok')]
         return {'ok': not missing, 'missing': missing, **result}
+
+    def _fill_unselected_category_attribute_selects(self, page: Page) -> dict[str, Any]:
+        filled: list[dict[str, Any]] = []
+        text_filled = self._fill_category_attribute_text_inputs(page)
+        skipped: list[str] = []
+        attempted: set[str] = set()
+        for _ in range(24):
+            target = page.evaluate(r'''(attempted) => {
+              const visible = (el) => {
+                const r = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+              };
+              const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+              const rectOf = (el) => {
+                const r = el.getBoundingClientRect();
+                return {x:r.x, y:r.y, w:r.width, h:r.height};
+              };
+              const items = Array.from(document.querySelectorAll('.attr-form-item')).filter(visible).map(el => {
+                const text = textOf(el);
+                const select = Array.from(el.querySelectorAll('.ant-select')).filter(visible).find(sel => textOf(sel).includes('请选择'));
+                const label = text.replace(/\s*请选择\s*$/, '').slice(0,120);
+                return select && !attempted.includes(label) ? {label, rect:rectOf(select)} : null;
+              }).filter(Boolean);
+              return items[0] || null;
+            }''', list(attempted))
+            if not target:
+                break
+            label = str(target.get('label') or '')
+            attempted.add(label)
+            priorities = self._category_attribute_priorities(label)
+            selected = self._select_category_attribute_value(page, label, priorities)
+            if selected.get('ok'):
+                filled.append({'label': label, 'value': selected.get('value'), 'strategy': selected.get('strategy')})
+            else:
+                page.keyboard.press('Escape')
+                page.wait_for_timeout(200)
+                skipped.append(label)
+
+        remaining = page.evaluate(r'''() => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          return Array.from(document.querySelectorAll('.attr-form-item')).filter(visible)
+            .map(el => textOf(el))
+            .filter(text => text.includes('请选择'))
+            .map(text => text.replace(/\s*请选择\s*$/, '').slice(0,120));
+        }''')
+        return {'ok': not remaining, 'filled': filled, 'text_filled': text_filled, 'skipped': skipped, 'remaining': remaining, 'attempted': sorted(attempted)}
+
+    def _select_category_attribute_value(self, page: Page, label: str, priorities: list[str]) -> dict[str, Any]:
+        for priority in priorities[:4]:
+            prepared = self._focus_category_attribute_input(page, label, priority)
+            if not prepared.get('ok'):
+                continue
+            page.wait_for_timeout(800)
+            option = self._visible_category_attribute_option(page, [priority, *priorities])
+            if option:
+                page.keyboard.press('ArrowDown')
+                page.wait_for_timeout(120)
+                page.keyboard.press('Enter')
+                page.wait_for_timeout(650)
+                state = self._category_attribute_row_state(page, label)
+                if state.get('ok'):
+                    return {'ok': True, 'value': state.get('text') or option.get('text'), 'strategy': 'keyboard_select'}
+
+                self._click_rect_center(page, option['rect'])
+                page.wait_for_timeout(650)
+                state = self._category_attribute_row_state(page, label)
+                if state.get('ok'):
+                    return {'ok': True, 'value': state.get('text') or option.get('text'), 'strategy': 'option_click'}
+
+            fallback = self._fill_category_attribute_free_text(page, label, priority)
+            if fallback.get('ok'):
+                page.wait_for_timeout(350)
+                state = self._category_attribute_row_state(page, label)
+                if state.get('ok'):
+                    return {'ok': True, 'value': fallback.get('value'), 'strategy': 'free_text'}
+        return {'ok': False, 'reason': 'no_selectable_option'}
+
+    def _focus_category_attribute_input(self, page: Page, label: str, value: str) -> dict[str, Any]:
+        return page.evaluate(r'''({label, value}) => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          const item = Array.from(document.querySelectorAll('.attr-form-item')).filter(visible).find(el => textOf(el).includes(label));
+          if (!item) return {ok:false, reason:'attribute_not_found'};
+          const select = Array.from(item.querySelectorAll('.ant-select')).filter(visible)[0];
+          const input = select ? Array.from(select.querySelectorAll('input')).filter(visible).find(el => !el.disabled) : null;
+          if (!select || !input) return {ok:false, reason:'input_not_found', text:textOf(item).slice(0,160)};
+          select.scrollIntoView({block:'center', inline:'nearest'});
+          select.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, cancelable:true, view:window}));
+          select.dispatchEvent(new MouseEvent('mouseup', {bubbles:true, cancelable:true, view:window}));
+          select.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
+          input.click();
+          input.focus();
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+          if (setter) setter.call(input, String(value));
+          else input.value = String(value);
+          input.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:String(value)}));
+          input.dispatchEvent(new Event('change', {bubbles:true}));
+          return {ok:true, label, value, text:textOf(item).slice(0,160), className:String(select.className || '')};
+        }''', {'label': label, 'value': value})
+
+    def _category_attribute_row_state(self, page: Page, label: str) -> dict[str, Any]:
+        return page.evaluate(r'''(label) => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          const item = Array.from(document.querySelectorAll('.attr-form-item')).filter(visible).find(el => textOf(el).includes(label));
+          if (!item) return {ok:false, reason:'attribute_not_found'};
+          const text = textOf(item);
+          return {ok: !text.includes('请选择'), text:text.slice(0,160)};
+        }''', label)
+
+    def _visible_category_attribute_option(self, page: Page, priorities: list[str]) -> dict[str, Any] | None:
+        return page.evaluate(r'''(priorities) => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          const norm = (s) => String(s || '').replace(/\s+/g, '').toLowerCase();
+          const rectOf = (el) => {
+            const r = el.getBoundingClientRect();
+            return {x:r.x, y:r.y, w:r.width, h:r.height};
+          };
+          const options = Array.from(document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option, .ant-select-dropdown:not(.ant-select-dropdown-hidden) [role="option"]'))
+            .filter(visible)
+            .map(el => ({el, text:textOf(el)}))
+            .filter(x => x.text && !x.text.includes('暂无数据') && !x.text.includes('请选择'));
+          if (!options.length) return null;
+          for (const priority of priorities) {
+            const match = options.find(x => norm(x.text).includes(norm(priority)));
+            if (match) return {text:match.text, rect:rectOf(match.el)};
+          }
+          const picked = options.sort((a, b) => a.text.length - b.text.length)[0];
+          return {text:picked.text, rect:rectOf(picked.el)};
+        }''', priorities)
+
+    def _search_category_attribute_option(self, page: Page, priorities: list[str]) -> dict[str, Any] | None:
+        for priority in priorities[:4]:
+            page.keyboard.press('Control+A')
+            page.keyboard.press('Backspace')
+            page.keyboard.type(str(priority))
+            page.wait_for_timeout(800)
+            option = page.evaluate(r'''(priorities) => {
+              const visible = (el) => {
+                const r = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+              };
+              const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+              const norm = (s) => String(s || '').replace(/\s+/g, '').toLowerCase();
+              const rectOf = (el) => {
+                const r = el.getBoundingClientRect();
+                return {x:r.x, y:r.y, w:r.width, h:r.height};
+              };
+              const options = Array.from(document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option, .ant-select-dropdown:not(.ant-select-dropdown-hidden) [role="option"]'))
+                .filter(visible)
+                .map(el => ({el, text:textOf(el)}))
+                .filter(x => x.text && !x.text.includes('暂无数据') && !x.text.includes('请选择'));
+              if (!options.length) return null;
+              for (const priority of priorities) {
+                const match = options.find(x => norm(x.text).includes(norm(priority)));
+                if (match) return {text:match.text, rect:rectOf(match.el)};
+              }
+              const picked = options.sort((a, b) => a.text.length - b.text.length)[0];
+              return {text:picked.text, rect:rectOf(picked.el)};
+            }''', priorities)
+            if option:
+                return option
+        return None
+
+    def _fill_category_attribute_free_text(self, page: Page, label: str, value: str) -> dict[str, Any]:
+        page.keyboard.press('Escape')
+        page.wait_for_timeout(150)
+        return page.evaluate(r'''({label, value}) => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          const setValue = (el, value) => {
+            if (!el || el.disabled) return false;
+            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+            if (setter) setter.call(el, value);
+            else el.value = value;
+            el.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:value}));
+            el.dispatchEvent(new Event('change', {bubbles:true}));
+            el.dispatchEvent(new Event('blur', {bubbles:true}));
+            return true;
+          };
+          const item = Array.from(document.querySelectorAll('.attr-form-item')).filter(visible).find(el => textOf(el).includes(label));
+          if (!item) return {ok:false, reason:'attribute_not_found'};
+          const select = Array.from(item.querySelectorAll('.ant-select')).filter(visible)[0];
+          if (!select || !String(select.className || '').includes('ant-select-auto-complete')) {
+            return {ok:false, reason:'not_free_text_attribute'};
+          }
+          const input = Array.from(select.querySelectorAll('input')).filter(visible).find(el => !el.disabled);
+          const ok = setValue(input, value);
+          return {ok, label, value, text:textOf(item).slice(0,160)};
+        }''', {'label': label, 'value': value})
+
+    def _fill_category_attribute_text_inputs(self, page: Page) -> dict[str, Any]:
+        return page.evaluate(r'''() => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          const setValue = (el, value) => {
+            if (!el || el.disabled || String(el.value || '').trim()) return false;
+            const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+            const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+            if (setter) setter.call(el, value);
+            else el.value = value;
+            el.dispatchEvent(new Event('input', {bubbles:true}));
+            el.dispatchEvent(new Event('change', {bubbles:true}));
+            el.dispatchEvent(new Event('blur', {bubbles:true}));
+            return true;
+          };
+          const defaults = [
+            {label:'型号(Model Number)', value:'ACG-Keychain'},
+            {label:'警告(Warning)', value:'Keep away from fire'},
+            {label:'尺寸(Dimensions)', value:'10cm'},
+            {label:'动漫电影游戏人物角色(ACG Character)', value:'Hermione Granger'},
+          ];
+          const filled = [];
+          for (const item of defaults) {
+            const row = Array.from(document.querySelectorAll('.attr-form-item')).filter(visible).find(el => textOf(el).includes(item.label));
+            const input = row ? Array.from(row.querySelectorAll('input,textarea')).filter(visible).find(el => !el.disabled) : null;
+            if (setValue(input, item.value)) filled.push(item);
+          }
+          return {ok:true, filled};
+        }''')
+
+    def _category_attribute_priorities(self, label: str) -> list[str]:
+        text = label.lower()
+        if 'mfg series' in text or '系列' in label:
+            return ['Resin', '树脂', 'Model']
+        if 'material' in text or '材质' in label:
+            return ['Acrylic', '亚克力', 'PVC', 'Plastic']
+        if 'theme' in text or '主题' in label:
+            return ['Anime', 'Movie', 'TV', 'Cartoon']
+        if 'gender' in text or '性别' in label:
+            return ['Unisex', '男女', '通用']
+        if 'condition' in text or '状态' in label:
+            return ['In-Stock', '现货', 'New']
+        if 'remote' in text or '遥控' in label or 'electric' in text or '带电' in label or 'original package' in text or '原盒' in label:
+            return ['No', '否', 'None']
+        if 'source' in text or '动漫来源' in label:
+            return ['Japan', 'Anime', 'Other']
+        if 'item type' in text or 'puppets' in text or '玩偶' in label or '产品类型' in label:
+            return ['Model', 'Figure', 'Puppets', 'Other']
+        if 'completion' in text or '完成度' in label:
+            return ['Finished Goods', 'Finished', '成品']
+        if 'commodity' in text or '商品属性' in label:
+            return ['Finished Goods', 'Accessories', 'Other']
+        if 'scale' in text or '比例' in label:
+            return ['1/12', '1:12', 'Other']
+        if 'acg name' in text or '动漫电影游戏名称' in label or 'version' in text or '版本' in label:
+            return ['Other', '其他', 'Anime']
+        return ['Other', '其他', 'No', 'None']
 
     def _apply_reference_templates_on_page(self, page: Page, priorities: list[str]) -> dict[str, Any]:
         if not priorities:
@@ -2585,6 +3514,15 @@ class DxmLoginFlow:
     def _fill_customs_supervision_attribute(self, page: Page, priorities: list[str]) -> dict[str, Any]:
         configured = page.evaluate(r'''() => {
           const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const rectOf = (el) => {
+            const r = el.getBoundingClientRect();
+            return {x:r.x, y:r.y, w:r.width, h:r.height};
+          };
           const body = textOf(document.body || document.documentElement);
           const compact = body.replace(/\s+/g, '');
           const valueAfter = (label) => {
@@ -2600,12 +3538,16 @@ class DxmLoginFlow:
             return '';
           };
           const hasTaxCode = compact.includes('税率代码') && /\d{8,12}/.test(compact);
-          const productNameValue = valueAfterAny(['品名(Productname)', '品名(Product name)', '品名']);
+          const productNameValue = valueAfterAny(['品名(Productname)', '品名(Product name)', 'Productname', 'Productname:', '品名']);
           const kindValue = valueAfterAny(['种类(Kind)', '种类']);
           const hasProductName = Boolean(productNameValue) && !productNameValue.startsWith('请选择');
           const hasKind = Boolean(kindValue) && !kindValue.startsWith('请选择');
           const hasCustomsArea = compact.includes('海关监管属性') || compact.includes('更新海关监管') || compact.includes('添加海关监管') || compact.includes('添加全球海关监管属性');
           const selectError = compact.includes('请完善海关监管属性') || compact.includes('请选择海关监管属性');
+          const customsItem = Array.from(document.querySelectorAll('.ant-form-item')).filter(visible).find(el => textOf(el).includes('海关监管属性'));
+          const updateButton = customsItem && Array.from(customsItem.querySelectorAll('button,a,span,div'))
+            .find(el => visible(el) && String(el.innerText || el.textContent || '').replace(/\s+/g, '').trim() === '更新海关监管');
+          const updateTarget = updateButton && (updateButton.closest('button,a') || updateButton);
           return {
             ok: hasTaxCode && hasCustomsArea && (hasProductName || hasKind) && !selectError,
             has_tax_code: hasTaxCode,
@@ -2613,24 +3555,58 @@ class DxmLoginFlow:
             has_kind: hasKind,
             has_customs_area: hasCustomsArea,
             select_error: selectError,
+            product_name_value: productNameValue,
+            kind_value: kindValue,
+            update_rect: updateTarget ? rectOf(updateTarget) : null,
             body_excerpt: body.slice(-800),
           };
         }''')
         if configured.get('ok'):
+            if configured.get('update_rect'):
+                self._click_rect_center(page, configured['update_rect'])
+                page.wait_for_timeout(1500)
+                self._dismiss_blocking_modals(page)
+                return {'ok': True, 'already_configured': True, 'updated_existing': True, 'state': configured}
             return {'ok': True, 'already_configured': True, 'state': configured}
 
         opened = page.evaluate(r'''() => {
           const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
+          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
           const rectOf = (el) => {
             const r = el.getBoundingClientRect();
             return {x:r.x, y:r.y, w:r.width, h:r.height};
           };
           const allowedTexts = ['添加海关监管', '添加全球海关监管属性'];
-          const buttons = Array.from(document.querySelectorAll('button'))
-            .filter(el => allowedTexts.includes(norm(el.innerText || el.textContent)) && !el.disabled);
+          const labelNode = Array.from(document.querySelectorAll('label, .ant-form-item-label, .label-wrapper'))
+            .filter(visible)
+            .find(el => textOf(el).includes('海关监管属性'));
+          const customsItem = (labelNode && labelNode.closest('.ant-form-item'))
+            || Array.from(document.querySelectorAll('.ant-form-item, .form-item, section')).filter(visible)
+              .find(el => textOf(el).includes('海关监管属性'))
+            || null;
+          if (customsItem) customsItem.scrollIntoView({block:'center', inline:'nearest'});
+          const scope = customsItem || document;
+          const globalLabel = customsItem && Array.from(customsItem.querySelectorAll('label,span,div,input')).filter(visible)
+            .find(el => norm(el.innerText || el.textContent) === '添加全球海关监管属性');
+          const globalTarget = globalLabel && (globalLabel.closest('label') || globalLabel);
+          if (globalTarget && !String(globalTarget.className || '').includes('checked')) globalTarget.click();
+          const buttons = Array.from(scope.querySelectorAll('button,a,span,div,[role="button"]'))
+            .filter(visible)
+            .filter(el => allowedTexts.includes(norm(el.innerText || el.textContent)) && !el.disabled)
+            .map(el => el.closest('button,a,[role="button"]') || el)
+            .filter((el, idx, arr) => arr.indexOf(el) === idx);
           const visibleButtons = buttons
             .map(el => ({el, rect:rectOf(el)}))
-            .filter(x => x.rect.w > 0 && x.rect.h > 0);
+            .filter(x => x.rect.w > 0 && x.rect.h > 0)
+            .sort((a, b) => {
+              const rank = (el) => ['BUTTON', 'A'].includes(el.tagName) || el.getAttribute('role') === 'button' ? 0 : 1;
+              return rank(a.el) - rank(b.el);
+            });
           const button = visibleButtons.find(x => x.rect.y + x.rect.h > 0 && x.rect.y < window.innerHeight)
             || visibleButtons[0]
             || null;
@@ -2655,15 +3631,41 @@ class DxmLoginFlow:
         except TimeoutError:
             fallback = page.evaluate(r'''() => {
               const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
+              const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+              const visible = (el) => {
+                const r = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+              };
               const rectOf = (el) => {
                 const r = el.getBoundingClientRect();
                 return {x:r.x, y:r.y, w:r.width, h:r.height};
               };
               const allowedTexts = ['添加海关监管', '添加全球海关监管属性'];
-              const button = Array.from(document.querySelectorAll('button'))
+              const labelNode = Array.from(document.querySelectorAll('label, .ant-form-item-label, .label-wrapper'))
+                .filter(visible)
+                .find(el => textOf(el).includes('海关监管属性'));
+              const customsItem = (labelNode && labelNode.closest('.ant-form-item'))
+                || Array.from(document.querySelectorAll('.ant-form-item, .form-item, section')).filter(visible)
+                  .find(el => textOf(el).includes('海关监管属性'))
+                || null;
+              if (customsItem) customsItem.scrollIntoView({block:'center', inline:'nearest'});
+              const scope = customsItem || document;
+              const globalLabel = customsItem && Array.from(customsItem.querySelectorAll('label,span,div,input')).filter(visible)
+                .find(el => norm(el.innerText || el.textContent) === '添加全球海关监管属性');
+              const globalTarget = globalLabel && (globalLabel.closest('label') || globalLabel);
+              if (globalTarget && !String(globalTarget.className || '').includes('checked')) globalTarget.click();
+              const button = Array.from(scope.querySelectorAll('button,a,span,div,[role="button"]'))
+                .filter(visible)
                 .filter(el => allowedTexts.includes(norm(el.innerText || el.textContent)) && !el.disabled)
+                .map(el => el.closest('button,a,[role="button"]') || el)
+                .filter((el, idx, arr) => arr.indexOf(el) === idx)
                 .map(el => ({el, rect:rectOf(el)}))
                 .filter(x => x.rect.w > 0 && x.rect.h > 0)
+                .sort((a, b) => {
+                  const rank = (el) => ['BUTTON', 'A'].includes(el.tagName) || el.getAttribute('role') === 'button' ? 0 : 1;
+                  return rank(a.el) - rank(b.el);
+                })
                 .find(x => x.rect.y + x.rect.h > 0 && x.rect.y < window.innerHeight);
               if (!button) return null;
               return button.rect;
@@ -2761,12 +3763,12 @@ class DxmLoginFlow:
           };
           const modalStillOpen = compact.includes('品名(Productname)') && compact.includes('取消') && compact.includes('确定');
           const hasTaxCode = compact.includes('税率代码') && /\d{8,12}/.test(compact);
-          const productNameValue = valueAfterAny(['品名(Productname)', '品名(Product name)', '品名']);
+          const productNameValue = valueAfterAny(['品名(Productname)', '品名(Product name)', 'Productname', 'Productname:', '品名']);
           const kindValue = valueAfterAny(['种类(Kind)', '种类']);
           const hasProductName = Boolean(productNameValue) && !productNameValue.startsWith('请选择');
           const hasKind = Boolean(kindValue) && !kindValue.startsWith('请选择');
           const hasCustomsArea = compact.includes('海关监管属性') || compact.includes('更新海关监管') || compact.includes('添加海关监管') || compact.includes('添加全球海关监管属性');
-          const selectError = compact.includes('请选择海关监管属性');
+          const selectError = compact.includes('请选择海关监管属性') || compact.includes('请完善海关监管属性');
           return {
             ok: !modalStillOpen && hasTaxCode && hasCustomsArea && (hasProductName || hasKind) && !selectError,
             modal_still_open: modalStillOpen,
@@ -2775,6 +3777,8 @@ class DxmLoginFlow:
             has_kind: hasKind,
             has_customs_area: hasCustomsArea,
             select_error: selectError,
+            product_name_value: productNameValue,
+            kind_value: kindValue,
             body_excerpt: body.slice(-1000),
           };
         }''')
@@ -2828,11 +3832,12 @@ class DxmLoginFlow:
             const root = input?.closest('.ant-select');
             return root ? norm(root.innerText || root.textContent) : '';
           };
-          const categorySelect = Array.from(document.querySelectorAll('.ant-select')).find(el => {
+          const categoryItem = Array.from(document.querySelectorAll('.category-item,.ant-form-item')).filter(visible).map(el => {
             const r = el.getBoundingClientRect();
-            return visible(el) && r.y < 420 && norm(el.innerText || el.textContent).includes('请选择分类');
-          });
-          const categoryText = categorySelect ? norm(categorySelect.innerText || categorySelect.textContent) : '';
+            return {el, text:textOf(el), compact:norm(el.innerText || el.textContent), rect:r};
+          }).filter(item => item.rect.y < 560 && item.compact.includes('产品分类'))
+            .sort((a, b) => a.compact.length - b.compact.length)[0];
+          const categoryText = categoryItem ? norm(categoryItem.text) : '';
           const values = {
             category_text: categoryText,
             title: titleInput?.value || '',
@@ -2848,7 +3853,8 @@ class DxmLoginFlow:
           };
           const missing = [];
           if (!values.title || hasChinese(values.title)) missing.push('english_title');
-          if (!compactBody.includes('ACGStand') && !compactBody.includes('立牌类谷子')) missing.push('category');
+          const categorySelected = categoryText.includes('ACGStand') || categoryText.includes('立牌类谷子');
+          if (!categorySelected) missing.push('category');
           if (!values.declared_value) missing.push('declared_value');
           if (!values.weight) missing.push('weight');
           if (!values.length || !values.width || !values.height) missing.push('package_dimensions');
@@ -2883,7 +3889,7 @@ class DxmLoginFlow:
             missing,
             values,
             customs_configured: customsConfigured,
-            category_selected: compactBody.includes('ACGStand') || compactBody.includes('立牌类谷子'),
+            category_selected: categorySelected,
             category_text: values.category_text,
           };
         }''')
@@ -3902,7 +4908,9 @@ class DxmLoginFlow:
                 return {visible:true, clicked:'modal-close', rect:rectOf(closeButton)};
               }
               const isNoticeModal = modal.classList.contains('notice-list-modal') || compactModalText.includes('公告') || compactModalText.includes('通知');
-              const labels = isNoticeModal ? ['我知道了','知道了','关闭','确定','下一条'] : ['我知道了','知道了','关闭','取消'];
+              const labels = isNoticeModal
+                ? ['跳过','下一步','完成','我知道了','知道了','关闭','确定','下一条']
+                : ['跳过','下一步','完成','我知道了','知道了','关闭','取消'];
               const buttons = Array.from(modal.querySelectorAll('button,a,span,div')).filter(isVisible);
               const textMatches = buttons.filter(el => labels.includes(norm(el.innerText || el.textContent)));
               const target = textMatches.find(el => ['BUTTON', 'A'].includes(el.tagName))
@@ -4046,6 +5054,7 @@ class DxmLoginFlow:
           if (storeTarget) storeTarget.dispatchEvent(new MouseEvent('click', {bubbles:true}));
         }''', store_name)
             page.wait_for_timeout(1200)
+            self._dismiss_blocking_modals(page)
         if product_query is not None or store_name:
             page.evaluate(r'''(frag) => {
           const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
@@ -4068,6 +5077,7 @@ class DxmLoginFlow:
             label='采集箱搜索结果',
             timeout=30000,
         )
+        self._dismiss_blocking_modals(page)
 
     def _find_draft_box_row(
         self,
@@ -4075,18 +5085,26 @@ class DxmLoginFlow:
         product_query: str | None = None,
         store_name: str | None = None,
         claim_mark: str | None = None,
+        target_source_urls: list[str] | None = None,
     ) -> dict[str, Any]:
-        row_info = page.evaluate(r'''({frag, store, claimMark}) => {
+        row_info = page.evaluate(r'''({frag, store, claimMark, targetSourceUrls}) => {
           const rows = Array.from(document.querySelectorAll('tr.vxe-body--row, tr'));
           const normText = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
           const sourceUrls = (row) => Array.from(row.querySelectorAll('a[href]'))
             .map(a => String(a.href || a.getAttribute('href') || ''))
             .filter(url => url.includes('goods_id=') || url.includes('detail.1688.com') || url.includes('yangkeduo.com'));
           const claim = claimMark;
+          const targetUrls = Array.isArray(targetSourceUrls) ? targetSourceUrls.filter(Boolean).map(String) : [];
+          const hasTargetSource = (row) => {
+            if (!targetUrls.length) return false;
+            const urls = sourceUrls(row);
+            return urls.some(url => targetUrls.some(target => url === target || url.includes(target) || target.includes(url)));
+          };
           const candidates = rows.map((tr, idx) => ({idx, text:normText(tr)})).filter(x => {
             if (!x.text) return false;
             if (store && !x.text.includes(`「${store}」`) && !x.text.includes(store)) return false;
             if (claim && x.text.includes(claim)) return true;
+            if (hasTargetSource(rows[x.idx])) return true;
             return frag ? x.text.includes(frag) : ['移入待发布','编辑','发布','更多'].some(k => x.text.includes(k));
           });
           const claimMatches = claim ? candidates.filter(x => x.text.includes(claim)) : [];
@@ -4104,6 +5122,21 @@ class DxmLoginFlow:
             }).filter(Boolean);
             return {ok:true, rowIndex:claimMatches[0].idx, rowText:claimMatches[0].text.slice(0,700), sourceUrls:sourceUrls(row), actions, matchedBy:'claim_mark'};
           }
+          const sourceMatches = targetUrls.length ? candidates.filter(x => hasTargetSource(rows[x.idx])) : [];
+          if (sourceMatches.length > 1) {
+            return {ok:false, ambiguous:true, matches:sourceMatches.map(x => ({rowIndex:x.idx, rowText:x.text.slice(0,300), sourceUrls:sourceUrls(rows[x.idx])}))};
+          }
+          if (sourceMatches.length === 1) {
+            const row = rows[sourceMatches[0].idx];
+            const actions = Array.from(row.querySelectorAll('*')).map(el => {
+              const txt = normText(el);
+              const r = el.getBoundingClientRect();
+              if (!txt || r.width < 5 || r.height < 5) return null;
+              if (!['移入待发布','编辑','发布','更多'].includes(txt)) return null;
+              return {txt, tag: el.tagName, cls: String(el.className || ''), rect: {x:r.x,y:r.y,w:r.width,h:r.height}};
+            }).filter(Boolean);
+            return {ok:true, rowIndex:sourceMatches[0].idx, rowText:sourceMatches[0].text.slice(0,700), sourceUrls:sourceUrls(row), actions, matchedBy:'source_url'};
+          }
           if (frag && candidates.length > 1) {
             return {ok:false, ambiguous:true, matches:candidates.map(x => ({rowIndex:x.idx, rowText:x.text.slice(0,300)}))};
           }
@@ -4118,14 +5151,21 @@ class DxmLoginFlow:
             return {txt, tag: el.tagName, cls: String(el.className || ''), rect: {x:r.x,y:r.y,w:r.width,h:r.height}};
           }).filter(Boolean);
           return {ok:true, rowIndex:picked.idx, rowText:picked.text.slice(0,700), sourceUrls:sourceUrls(row), actions};
-        }''', {'frag': product_query, 'store': store_name, 'claimMark': claim_mark})
+        }''', {'frag': product_query, 'store': store_name, 'claimMark': claim_mark, 'targetSourceUrls': target_source_urls or []})
         if not row_info or not row_info.get('ok'):
             if row_info and row_info.get('ambiguous'):
                 raise RuntimeError(f'目标商品行不唯一，请提供更精确的商品标题或唯一标识：{product_query}')
             raise RuntimeError(f'未找到目标商品行：{product_query or "首个可操作商品"}')
         return row_info
 
-    def _add_note_to_draft_row(self, page: Page, row_info: dict[str, Any], note_text: str) -> dict[str, Any]:
+    def _add_note_to_draft_row(
+        self,
+        page: Page,
+        row_info: dict[str, Any],
+        note_text: str,
+        product_query: str | None = None,
+        store_name: str | None = None,
+    ) -> dict[str, Any]:
         actions = row_info.get('actions', [])
         more = (
             next((a for a in actions if a.get('txt') == '更多' and 'ant-dropdown-trigger' in str(a.get('cls', ''))), None)
@@ -4182,6 +5222,38 @@ class DxmLoginFlow:
           const text = fallbackText.slice(0,700);
           return {verified:fallbackText.includes(note), rowText:text};
         }''', {'rowIndex': row_info.get('rowIndex'), 'note': note_text})
+        if verify and verify.get('verified'):
+            return verify
+        if store_name or product_query:
+            try:
+                self._search_draft_box(page, product_query=None, store_name=store_name)
+                page.wait_for_timeout(1000)
+                fallback_verify = page.evaluate(r'''({note, store}) => {
+                  const rows = Array.from(document.querySelectorAll('tr.vxe-body--row, tr'));
+                  const texts = rows.map(row => (row.innerText || row.textContent || '').replace(/\s+/g, ' ').trim());
+                  const matches = texts.filter(text => {
+                    if (!text.includes(note)) return false;
+                    if (!store) return true;
+                    return text.includes(`「${store}」`) || text.includes(store);
+                  });
+                  if (matches.length === 1) {
+                    return {verified:true, rowText:matches[0].slice(0,700), verifiedBy:'claim_mark_store_search'};
+                  }
+                  return {
+                    verified:false,
+                    rowText:(matches[0] || '').slice(0,700),
+                    matchCount:matches.length,
+                    verifiedBy:'claim_mark_store_search'
+                  };
+                }''', {'note': note_text, 'store': store_name})
+                if fallback_verify and fallback_verify.get('verified'):
+                    fallback_verify['initialRowText'] = (verify or {}).get('rowText')
+                    return fallback_verify
+                if verify is not None:
+                    verify['fallbackVerify'] = fallback_verify
+            except Exception as exc:
+                if verify is not None:
+                    verify['fallbackError'] = str(exc)
         return verify or {}
 
     def _click_rect_center(self, page: Page, rect: dict[str, Any]) -> None:
@@ -4208,8 +5280,21 @@ class DxmLoginFlow:
             or next((a for a in actions if a.get('txt') == '编辑'), None)
         )
         if edit_action:
-            self._click_rect_center(page, edit_action['rect'])
-            page.wait_for_timeout(1500)
+            if hasattr(self._context, 'expect_page'):
+                try:
+                    with self._context.expect_page(timeout=8000) as new_page_info:
+                        self._click_rect_center(page, edit_action['rect'])
+                    new_page = new_page_info.value
+                    new_page.wait_for_load_state('domcontentloaded', timeout=10000)
+                    new_page.wait_for_timeout(1500)
+                    if '/web/smt/edit' in new_page.url:
+                        return new_page
+                    page = new_page
+                except TimeoutError:
+                    page.wait_for_timeout(1500)
+            else:
+                self._click_rect_center(page, edit_action['rect'])
+                page.wait_for_timeout(1500)
         else:
             for selector in edit_selectors:
                 locator = page.locator(selector).first

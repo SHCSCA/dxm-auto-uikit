@@ -1,14 +1,15 @@
 # dxm-auto-uikit
 
-店小秘自动刊登助手 MVP。
+DXM 半托管自动化工作台。
 
-当前已落地为 **本地可运行工作台 + V1 安全门禁原型**，不是纯文档项目了。
+当前已落地为 **本地可运行的 DXM 半托管自动化工作台 + 真实保存门禁**，不是纯文档项目了。
 
 交付状态说明：
 - L0 后端/前端本地门禁与 L1 离线 selector replay 可运行。
-- 真实 L2 只读 probe 最近一次未通过，因此 L3 `single_save` 真实保存入口必须保持阻断。
-- 当前可交付给内部验收的是本地安全诊断工作台；当前不可交付的是店小秘真实无人值守保存/写入。
-- 源码包验收命令：`scripts\final-delivery-check.bat -RequireCleanWorktree`；通过时范围应为 `local_workbench_only`，真实 DXM 写入仍应为 `BLOCKED`。具体 Git HEAD 以 `outputs/final-delivery-check/final-delivery-check.json` 的 `gitHead` 字段为准。
+- 已知真实证据：L3 task 70 受控 `single_save` 成功，保存接口 `popChoiceProduct/add.json` 返回 `code=0`，且 `published=false`。
+- 截至 2026-06-01 10:30（Asia/Shanghai），最新 L2 双目标真实只读 probe 与 L3 受控 `single_save` 金丝雀均已通过，最终自检显示 `Real DXM write readiness: READY`，范围仅为 `controlled_single_save_only`。
+- 当前交付重点是 DXM 半托管自动化工作台与受控 save-only 自动化链路；批量、无人值守和发布不随 `single_save` READY 自动放行。
+- 源码包验收命令：`scripts\final-delivery-check.bat -RequireCleanWorktree`；具体 Git HEAD 以 `outputs/final-delivery-check/final-delivery-check.json` 的 `gitHead` 字段为准。
 
 ## 当前已完成
 
@@ -32,7 +33,7 @@
 
 ## MVP 当前能力
 
-### 已实现：本地/演示/诊断能力
+### 已实现：自动化工作台 / 演示 / 诊断能力
 - 店铺连接（演示态）
 - 模板中心基础 CRUD
 - 商品导入（JSON/演示数据）
@@ -44,14 +45,14 @@
 - 证据面板
 - 异常池（当前框架已接入，演示流程暂未主动制造异常）
 - Playwright 主引擎骨架
-- POP 保存待发布演示链路（本地 `dry_run` 可启动；真实 `single_save` 不代表 DXM 写入放行）
+- POP 保存待发布演示链路（本地 `dry_run` 可启动；真实 `single_save` 已具备受控 READY 证据，但批量、无人值守和发布仍不放行）
 
-### 当前是“安全门禁可运行版”
+### 当前是“受控 single_save READY 版”
 说明：
 - 右侧实时执行区已经能看到任务状态、步骤流、日志和证据
 - 工作台会显示 L0/L1/L2/L3 门禁、证据等级和真实保存阻断原因
-- L2 真实只读未通过前，真实 `claim_only` / `single_save` / `batch_save` 会被后端与前端双重阻断
-- 下一步重点是让真实 L2 双目标只读 probe 通过，再由人工批准执行 L3 金丝雀
+- L2/L3 不满足时，真实 `claim_only` / `single_save` / `batch_save` 会被后端与前端双重阻断
+- 当前已验证的真实写入范围仅为受控 `single_save`；批量、无人值守和发布仍保持门禁阻断
 
 ---
 
@@ -135,21 +136,21 @@ python3 -m pytest tests -q
 - L2：需要真实店小秘登录态，双目标 `data_acquisition` / `draft_box` 必须使用同一个 `--run-id` 完成只读 probe，并共享同一 session fingerprint、脚本 hash 与 git head；全部通过后才允许 L3
 - 浏览器 QA：前后端启动后运行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\qa-browser-check.ps1`，输出 `outputs/browser-checks/qa-browser-check.json`、桌面/移动页面截图、`qa-console.jsonl`、`qa-network.json` 和 `qa-blocked-actions.json`；JSON 会记录浏览器/OS/git/script hash，并断言无 console error、无网络失败、无 4xx/5xx、无非 GET、无外部 origin，且本地启动与直接 DXM 写入端点均被 403 阻断
 
-本地工作台交付自检（推荐给验收人）：
+DXM 半托管自动化工作台交付自检（推荐给验收人）：
 
 ```bat
 scripts\final-delivery-check.bat
 ```
 
-它会串行运行 Windows 启动前检查、后端全量测试、前端生产构建、L1 selector replay、`git diff --check`、浏览器 QA，并输出 `outputs/final-delivery-check/final-delivery-check.md` / `.json`。最终自检模式下，浏览器 QA 截图和 sidecar 文件位于 `outputs\final-delivery-check\browser-checks\`。浏览器 QA 会临时启动隔离的当前源码后端和前端预览服务，避免误测 8000/5173 上的旧进程；检查模式可能安装前端依赖，但不会访问店小秘、不会执行真实保存。报告顶部会分别显示“本地工作台自检结果”和“真实 DXM 写入放行状态”。
+它会串行运行 Windows 启动前检查、后端全量测试、前端生产构建、L1 selector replay、`git diff --check`、浏览器 QA，并输出 `outputs/final-delivery-check/final-delivery-check.md` / `.json`。最终自检模式下，浏览器 QA 截图和 sidecar 文件位于 `outputs\final-delivery-check\browser-checks\`。浏览器 QA 会临时启动隔离的当前源码后端和前端预览服务，避免误测 8000/5173 上的旧进程；检查模式可能安装前端依赖，但不会访问店小秘、不会执行真实保存。报告顶部会分别显示“自动化工作台自检结果”和“真实 DXM 写入放行状态”。
 
-当前验收成功标准：默认验收要求 `Local workbench check: PASS`、`Browser QA: PASS`、`Source package check: NOT_REQUIRED` 以及 `Real DXM write readiness: BLOCKED` 同时成立；发布源码包验收才要求 `Source package check: PASS`。这里的 `BLOCKED` 是预期安全状态，表示真实 L2/L3 尚未放行，不表示本地工作台交付失败。
+当前验收成功标准：默认验收要求 `Local workbench check: PASS`、`Browser QA: PASS`、`Source package check: NOT_REQUIRED`，并按 L2/L3 门禁计算 `Real DXM write readiness`。截至 2026-06-01 10:30，最新最终自检在 `-ExpectedRealDxmWriteReadiness READY` 下通过，`okScope=local_workbench_and_controlled_single_save_ready`。如果未来因 L2 证据过期或 L3 未放行显示 `BLOCKED`，表示真实写入不可启动，不表示自动化工作台本地功能失败；发布源码包验收才要求 `Source package check: PASS`。
 
-自动化或管理摘要读取 `final-delivery-check.json` 时，不能只读取 `ok`。当前 `ok: true` 只代表 `okScope` 所声明的范围通过；若 `okScope` 为 `local_workbench_only` 且 `realDxmMutationAllowed` 为 `false`，结论仍然是本地工作台可交付、真实 DXM 写入不可启动。
+自动化或管理摘要读取 `final-delivery-check.json` 时，不能只读取 `ok`。当前 `ok: true` 只代表 `okScope` 所声明的范围通过；若 `okScope` 为 `local_workbench_only` 且 `realDxmMutationAllowed` 为 `false`，结论仍然是自动化工作台可交付、真实 DXM 写入不可启动。
 
-启动工作台后，报告中心会显示最近一次交付自检摘要和报告路径，方便验收人直接确认本地 PASS、真实写入 BLOCKED 与源码包状态。
+启动工作台后，报告中心会显示最近一次交付自检摘要和报告路径，方便验收人直接确认自动化工作台 PASS、真实写入门禁状态与源码包状态。
 
-验收人可以在任务中心点击“创建本地 dry_run 演示批次”，该按钮只创建本地 `dry_run` 演示任务，不触达 DXM；“启动本地演示任务”可跑通本地工作台状态流转。真实 `claim_only` / `single_save` / `batch_save` 仍受 L2/L3 与人工批准令牌阻断。
+验收人可以在任务中心点击“创建本地 dry_run 演示批次”，该按钮只创建本地 `dry_run` 演示任务，不触达 DXM；“启动本地演示任务”可跑通自动化工作台状态流转。真实 `single_save` 只在当前 L2/L3 READY、人工批准令牌和金丝雀证据链约束下放行；真实 `claim_only` / `batch_save`、批量无人值守和发布仍保持阻断。
 
 发布源码包前可加 clean worktree 门禁：
 
@@ -157,7 +158,7 @@ scripts\final-delivery-check.bat
 scripts\final-delivery-check.bat -RequireCleanWorktree
 ```
 
-当前开发态有未提交改动时，该模式会把 `Source package check` 标为 `FAIL`；本地工作台自检结果会单独保留。
+当前开发态有未提交改动时，该模式会把 `Source package check` 标为 `FAIL`；自动化工作台自检结果会单独保留。
 
 查看自检参数：
 
@@ -179,11 +180,10 @@ scripts\final-delivery-check.bat --help
 
 ## 下一步重点
 
-1. 评审 `allowlist_review_candidates`，确认哪些 GET/XHR 属于只读启动依赖。
-2. 若确认安全，建立显式、最小、可审计的 L2 只读 allowlist；继续禁止写方法、WebSocket、EventSource 和 `save/publish/claim/remark/note` 相关 URL。
-3. 使用同一个 `run-id` 复跑真实 L2 双目标 `data_acquisition` 与 `draft_box`，并确认两份证据共享 session fingerprint、脚本 hash 与 git head。
-4. 只有真实 L2 双目标全通过后，才由人工批准一条 L3 `single_save` 金丝雀。
-5. L3 金丝雀必须补齐保存成功、未发布证明、截图、DOM/hash 和 network/HAR 证据，再更新交付结论。
+1. 保持 `config/l2_readonly_allowlist.json` 的最小只读范围；继续禁止写方法、WebSocket、EventSource 和 action 端点。
+2. 将当前受控 `single_save` READY 证据纳入交付归档，并在源码发布包前运行 `scripts\final-delivery-check.bat -RequireCleanWorktree`。
+3. 若要扩大到 `claim_only` / `batch_save`，必须为对应范围重新建立 L2/L3 证据，不复用 `single_save` 结论。
+4. 批量、无人值守和发布必须单独设计门禁、人工批准和回滚策略。
 
 ---
 
@@ -233,4 +233,4 @@ scripts/
 
 ## 一句话状态
 
-**dxm-auto-uikit 已经从“文档方案”进入“本地工作台 + 安全门禁原型”；真实保存交付仍以 L2 双目标通过和 L3 人工批准金丝雀为前置。**
+**dxm-auto-uikit 已经进入“DXM 半托管自动化工作台 + 受控 single_save READY”阶段；批量、无人值守和发布仍保持单独门禁，不随当前 READY 自动放行。**

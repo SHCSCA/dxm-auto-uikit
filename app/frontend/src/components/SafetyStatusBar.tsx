@@ -29,7 +29,7 @@ export function SafetyStatusBar({ workspace, selectedTask, busy, onRefresh }: Sa
       ? 'warn'
       : 'ok'
   const headline = tone === 'danger'
-    ? '本地工作台可交付，真实写入预期 BLOCKED'
+    ? '真实写入门禁未通过'
     : tone === 'warn'
       ? '尚未形成真实可交付证明'
       : workspace.safety.guarantee

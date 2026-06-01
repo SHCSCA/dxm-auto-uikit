@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from src import db
@@ -137,6 +139,76 @@ def test_single_save_start_accepts_matching_manual_approval_token(tmp_path, monk
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert repo.get_task(task["id"])["status"] == "running"
+
+
+def test_manual_approval_endpoint_generates_server_token_and_start_accepts_it(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_task(repo)
+
+    approval_response = client.post(
+        f"/api/tasks/{task['id']}/manual-approval",
+        json={"approved_by": "ops-owner", "confirmation": "CONFIRM_DXM_SAVE_ONLY"},
+    )
+
+    assert approval_response.status_code == 200
+    approval_payload = approval_response.json()
+    token = approval_payload["approvalToken"]
+    assert len(token) >= 24
+    assert approval_payload["manualApproval"]["approved"] is True
+    assert approval_payload["manualApproval"]["source"] == "server"
+    assert "token_hash" not in approval_payload["manualApproval"]
+    assert "token" not in approval_payload["manualApproval"]
+
+    stored_payload = client.get(f"/api/tasks/{task['id']}").json()["payload"]
+    assert "token_hash" not in stored_payload["manual_approval"]
+
+    start_response = client.post(
+        f"/api/tasks/{task['id']}/start",
+        json={
+            "manual_approval": True,
+            "approval_token": token,
+            "approved_by": "ops-owner",
+            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
+        },
+    )
+
+    assert start_response.status_code == 200
+    assert start_response.json()["ok"] is True
+
+
+def test_manual_approval_endpoint_requires_l2_passed(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "failed"})
+    task = _create_task(repo)
+
+    response = client.post(
+        f"/api/tasks/{task['id']}/manual-approval",
+        json={"approved_by": "ops-owner", "confirmation": "CONFIRM_DXM_SAVE_ONLY"},
+    )
+
+    assert response.status_code == 403
+    assert "L2 readonly probe gate is not passed: failed" in response.json()["detail"]
+
+
+def test_manual_approval_endpoint_rejects_non_real_mode(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_task(repo, mode="dry_run")
+
+    response = client.post(
+        f"/api/tasks/{task['id']}/manual-approval",
+        json={"approved_by": "ops-owner", "confirmation": "CONFIRM_DXM_SAVE_ONLY"},
+    )
+
+    assert response.status_code == 400
+    assert "only available for real DXM mutation modes" in response.json()["detail"]
 
 
 def test_real_save_start_cannot_be_triggered_twice(tmp_path, monkeypatch):
@@ -572,3 +644,11 @@ def test_dry_run_can_start_without_manual_approval(tmp_path, monkeypatch):
     response = client.post(f"/api/tasks/{task['id']}/start", json={})
 
     assert response.status_code == 200
+
+
+def test_dxm_flow_dismisses_feature_guide_next_step_modal():
+    source = (Path(__file__).resolve().parents[1] / "src" / "execution" / "dxm_login_flow.py").read_text(encoding="utf-8")
+
+    assert "['跳过','下一步','完成','我知道了','知道了','关闭','取消']" in source
+    assert "['跳过','下一步','完成','我知道了','知道了','关闭','确定','下一条']" in source
+    assert "page.wait_for_timeout(1200)\n            self._dismiss_blocking_modals(page)" in source

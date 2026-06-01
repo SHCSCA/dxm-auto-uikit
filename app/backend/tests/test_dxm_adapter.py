@@ -14,8 +14,8 @@ class FakeLoginFlow:
         self.calls.append(('navigate_post_login', target))
         return self._state('workflow_navigation')
 
-    def perform_draft_box_action(self, action, note_text=None, product_query=None, store_name=None):
-        self.calls.append(('perform_draft_box_action', action, note_text, product_query, store_name))
+    def perform_draft_box_action(self, action, note_text=None, product_query=None, store_name=None, target_source_urls=None):
+        self.calls.append(('perform_draft_box_action', action, note_text, product_query, store_name, target_source_urls))
         return self._state('editor_page' if action == 'edit' else 'draft_box_action')
 
     def perform_editor_action(self, action, defaults=None, product_query=None, store_name=None):
@@ -103,7 +103,7 @@ def test_claim_product_delegates_to_remark_action_with_note_text():
     flow = FakeLoginFlow()
     result = DxmWorkflowAdapter(flow).claim_product('AI认领')
 
-    assert flow.calls == [('perform_draft_box_action', 'remark', 'AI认领', None, None)]
+    assert flow.calls == [('perform_draft_box_action', 'remark', 'AI认领', None, None, None)]
     assert result['action'] == 'claim_product'
     assert result['stage'] == 'draft_box_action'
 
@@ -112,7 +112,7 @@ def test_claim_product_passes_optional_target_filters():
     flow = FakeLoginFlow()
     result = DxmWorkflowAdapter(flow).claim_product('AI认领', product_query='崩坏3钥匙扣', store_name='Dang Kang')
 
-    assert flow.calls == [('perform_draft_box_action', 'remark', 'AI认领', '崩坏3钥匙扣', 'Dang Kang')]
+    assert flow.calls == [('perform_draft_box_action', 'remark', 'AI认领', '崩坏3钥匙扣', 'Dang Kang', None)]
     assert result['action'] == 'claim_product'
 
 
@@ -120,7 +120,7 @@ def test_open_editor_delegates_to_edit_action():
     flow = FakeLoginFlow()
     result = DxmWorkflowAdapter(flow).open_editor()
 
-    assert flow.calls == [('perform_draft_box_action', 'edit', None, None, None)]
+    assert flow.calls == [('perform_draft_box_action', 'edit', None, None, None, None)]
     assert result['action'] == 'open_editor'
     assert result['stage'] == 'editor_page'
 
@@ -129,7 +129,7 @@ def test_open_editor_passes_optional_target_filters():
     flow = FakeLoginFlow()
     result = DxmWorkflowAdapter(flow).open_editor(product_query='崩坏3钥匙扣', store_name='Dang Kang')
 
-    assert flow.calls == [('perform_draft_box_action', 'edit', None, '崩坏3钥匙扣', 'Dang Kang')]
+    assert flow.calls == [('perform_draft_box_action', 'edit', None, '崩坏3钥匙扣', 'Dang Kang', None)]
     assert result['action'] == 'open_editor'
 
 
@@ -141,7 +141,7 @@ def test_open_editor_passes_note_text_for_claim_mark_targeting():
         note_text='AI认领-19-31',
     )
 
-    assert flow.calls == [('perform_draft_box_action', 'edit', 'AI认领-19-31', '崩坏3钥匙扣', 'Dang Kang')]
+    assert flow.calls == [('perform_draft_box_action', 'edit', 'AI认领-19-31', '崩坏3钥匙扣', 'Dang Kang', None)]
     assert result['action'] == 'open_editor'
 
 

@@ -46,6 +46,11 @@ class TaskStartRequest(BaseModel):
     confirmation: str | None = None
 
 
+class TaskManualApprovalRequest(BaseModel):
+    approved_by: str
+    confirmation: str
+
+
 class AgentConsoleStep(BaseModel):
     title: str | None = None
     label: str | None = None

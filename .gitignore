@@ -17,6 +17,7 @@ outputs/reports/
 outputs/spreadsheets/
 outputs/browser-checks/
 outputs/final-delivery-check/
+outputs/l3-canary/
 outputs/playwright/
 data/ai/
 data/*.log

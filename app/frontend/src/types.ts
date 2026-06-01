@@ -141,6 +141,9 @@ export type FinalDeliveryCheckSummary = {
   l3_evidence_readiness?: Record<string, unknown> | null
   ok_scope?: string | null
   real_dxm_mutation_allowed?: boolean | null
+  real_dxm_mutation_scope?: string | null
+  controlled_single_save_ready?: boolean | null
+  batch_unattended_publish_allowed?: boolean | null
   expected_real_dxm_write_readiness?: string | null
   real_dxm_write_readiness_matches_expected?: boolean | null
   source_package_readiness?: string | null
@@ -215,6 +218,7 @@ export type L2ProbePlan = {
   scriptPath: string
   cookieFile: string
   outputDir: string
+  allowlistFile?: string
   targets: Array<{ id: string; url: string; required: boolean }>
   commands: string[]
   acceptanceCriteria: string[]

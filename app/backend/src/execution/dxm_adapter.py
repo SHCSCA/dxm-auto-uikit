@@ -19,6 +19,7 @@ class DxmWorkflowAdapter:
         note_text: str,
         product_query: str | None = None,
         store_name: str | None = None,
+        target_source_urls: list[str] | None = None,
     ) -> dict[str, Any]:
         return self._result(
             'claim_product',
@@ -27,6 +28,7 @@ class DxmWorkflowAdapter:
                 note_text,
                 product_query=product_query,
                 store_name=store_name,
+                target_source_urls=target_source_urls,
             ),
         )
 

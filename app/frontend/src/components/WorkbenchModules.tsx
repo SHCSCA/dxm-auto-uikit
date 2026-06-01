@@ -77,6 +77,7 @@ export function Dashboard({ workspace, selectedTask }: CommonProps) {
   const referenceReady = workspace.dxmReferenceTemplates.filter((item) => item.templateNames.length).length
   const grade = workspace.evidenceGrade?.grade ?? 'C'
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
+  const realWriteReady = !realWriteExpectedBlocked
   const nextAction = !selectedTask
     ? '去任务中心准备数据'
     : l2Gate?.status !== 'passed'
@@ -89,13 +90,13 @@ export function Dashboard({ workspace, selectedTask }: CommonProps) {
     <section className="dashboard-grid" aria-label="Dashboard">
       <div className="hero-panel">
         <div>
-          <h1>本地安全诊断工作台</h1>
-          <p>本地验收、L2 只读诊断与 L3 阻断复核集中在这里；不暴露任何真实保存或上架入口。</p>
-          <p className="hero-panel__note">本地 PASS 仅代表工作台自检通过，真实 DXM 写入仍 BLOCKED。</p>
+          <h1>DXM 自动化工作台</h1>
+          <p>任务编排、L2 真实只读证据、L3 批准和 save-only runner 集中在这里；发布入口始终隔离。</p>
+          <p className="hero-panel__note">真实写入只允许在 L2 passed 和 L3 人工批准后由受控 runner 执行。</p>
           <div className="hero-panel__outcomes" aria-label="验收结论">
-            <span><strong>本地安全诊断工作台</strong><b>可交付</b></span>
-            <span><strong>真实 DXM 写入</strong><b>BLOCKED</b></span>
-            <span><strong>下一步</strong><b>L2 allowlist 人工评审 + 双目标复验</b></span>
+            <span><strong>自动化工作台</strong><b>可交付</b></span>
+            <span><strong>真实 DXM 写入</strong><b>{realWriteReady ? '受控 READY' : 'L3 受控'}</b></span>
+            <span><strong>{realWriteReady ? '当前范围' : '下一步'}</strong><b>{realWriteReady ? 'single_save READY' : '单商品金丝雀'}</b></span>
           </div>
         </div>
         <div className="hero-panel__status">
@@ -169,7 +170,7 @@ export function ConfigCenter({ workspace }: CommonProps) {
           <ConfigItem label="店铺" value={workspace.stores[0]?.name ?? '未配置真实店铺'} hint={workspace.stores[0]?.platform ?? '等待 /api/stores 返回'} empty={!hasStores} />
           <ConfigItem label="类目" value={product?.category_name ?? '未绑定真实商品类目'} hint="用于匹配属性和模板范围" empty={!hasProducts} />
           <ConfigItem label="图片银行" value={product?.image?.eu_outer_package_filename ?? '未绑定真实外包装图'} hint="欧盟外包装/标签实拍图" empty={!hasProducts} />
-          <ConfigItem label="执行模式" value="本地 dry_run；真实 single_save 当前 BLOCKED" hint="演示批次可本地启动；真实保存仍需 L2/L3 放行" />
+          <ConfigItem label="执行模式" value="本地 dry_run；真实 single_save 走 L3 批准" hint="演示批次可本地启动；真实保存必须由受控 runner 执行" />
         </div>
         {(!hasStores || !hasProducts) && (
           <EmptyState
@@ -218,7 +219,7 @@ export function TaskCenter({ workspace, selectedTask, busy, onSelectTask, onBoot
   const l2BlocksStart = needsRealL2 && l2Gate?.status !== 'passed'
   const l3BlocksStart = needsRealL2 && l3Gate?.status === 'blocked'
   const l2DiagnosticSummaries = summarizeL2Diagnostics(l2Gate)
-  const startDisabled = busy || !selectedTask || needsApproval || l2BlocksStart || l3BlocksStart
+  const startDisabled = busy || !selectedTask || l2BlocksStart || l3BlocksStart
   const startLabel = !selectedTask
     ? '请选择任务'
     : l2BlocksStart
@@ -226,7 +227,7 @@ export function TaskCenter({ workspace, selectedTask, busy, onSelectTask, onBoot
       : l3BlocksStart
         ? 'L3 保持锁定，禁止启动'
         : needsApproval
-          ? '等待人工批准'
+          ? '批准并启动真实金丝雀'
           : needsRealL2
             ? '启动保存核验任务'
             : '启动本地演示任务'
@@ -267,7 +268,7 @@ export function TaskCenter({ workspace, selectedTask, busy, onSelectTask, onBoot
         )}
         {needsApproval && (
           <div className="gate-note">
-            L3 真实写操作必须先由后端人工批准令牌解锁；当前工作台不会直接启动 claim_only/single_save/batch_save。
+            L3 真实任务会先请求后端批准令牌，再通过受控 runner 启动；仍只允许 save-only/claim-only，不发布。
           </div>
         )}
         <div className="task-list">
@@ -794,7 +795,7 @@ export function ReportCenter({
           <EvidenceCheckRow label="网络/HAR" count={networkHarCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
         </div>
         {realWriteExpectedBlocked && (
-          <p className="delivery-check-card__warning">L3 未放行前不要求生成真实保存证据；0 条代表当前真实写入按门禁锁定。</p>
+          <p className="delivery-check-card__warning">L3 未放行前不要求生成真实保存证据；0 条代表当前自动化真实保存按门禁锁定。</p>
         )}
       </div>
       <div className="module-card span-3">
@@ -807,7 +808,7 @@ export function ReportCenter({
             <EmptyState
               title={realWriteExpectedBlocked ? 'L3 真实保存报告待放行' : '暂无报告'}
               detail={realWriteExpectedBlocked
-                ? '真实写入 BLOCKED 时不要求生成业务保存报告；本地交付自检报告见上方最近交付自检。'
+                ? '真实写入 BLOCKED 时不要求生成业务保存报告；自动化工作台交付自检报告见上方最近交付自检。'
                 : 'L3 金丝雀完成并生成未发布证明后，这里会展示报告和证据路径。当前可先查看 L2 诊断和证据缺口。'}
               actions={(
                 <>
@@ -874,21 +875,24 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
       ? 'FAIL'
       : '待刷新/未运行'
   const readiness = finalCheck?.real_dxm_write_readiness ?? '未检查'
-  const realDxmMutationAllowedLabel = finalCheck?.real_dxm_mutation_allowed === true ? '真实写入允许 true' : '真实写入允许 false'
+  const realDxmMutationScope = finalCheck?.real_dxm_mutation_scope ?? (finalCheck?.real_dxm_mutation_allowed === true ? 'controlled_single_save_only' : 'none')
+  const realDxmMutationAllowedLabel = finalCheck?.real_dxm_mutation_allowed === true
+    ? `真实写入允许 true / ${realDxmMutationScope}`
+    : '真实写入允许 false / none'
   const blockedReason = finalCheck?.real_dxm_write_blocked_reason
   const readinessDetail = !available
     ? '还没有读取到交付自检报告。运行 scripts\\final-delivery-check.bat 后，这里会显示最近一次验收摘要。'
     : readiness === 'READY'
-      ? '当前自检显示真实写入 READY；执行前仍需复核 L2/L3 证据、人工金丝雀批准和报告链路。'
+      ? '当前自检显示受控 single_save READY；执行前仍需复核 L2/L3 证据、人工金丝雀批准和报告链路。批量、无人值守和发布仍需单独放行。'
       : readiness === 'BLOCKED'
-        ? '当前预期交付态：本地工作台通过，真实写入保持阻断。BLOCKED 代表真实 L2/L3 尚未放行，不代表本地工作台失败。'
+        ? '当前预期交付态：自动化工作台可继续验收，真实保存保持阻断。BLOCKED 代表真实 L2/L3 尚未放行，不代表自动化工作台失败。'
         : '当前真实写入状态未知，不可执行真实写入；请先重新运行交付自检并复核 L2/L3 门禁。'
 
   return (
     <div className="module-card span-3 delivery-check-card">
       <ModuleHead title="最近交付自检" meta={available ? checkedAt : '尚未运行'} />
       <div className="report-check-grid">
-        <CheckRow label={`本地工作台 ${finalCheck?.local_workbench_check ?? '未检查'}`} ok={finalCheck?.local_workbench_check === 'PASS'} />
+        <CheckRow label={`自动化工作台 ${finalCheck?.local_workbench_check ?? '未检查'}`} ok={finalCheck?.local_workbench_check === 'PASS'} />
         <DeliveryReadinessRow readiness={readiness} />
         <FinalCheckFreshnessRow finalCheck={finalCheck} />
         <SourcePackageCheckRow finalCheck={finalCheck} />
@@ -907,7 +911,11 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
         )}
         <div className="delivery-check-card__next-step">
           <strong>下一步</strong>
-          <span>人工评审 allowlist 候选 - 改代码/配置 - 同一 run-id 复跑 data_acquisition + draft_box - 通过后再申请 L3。</span>
+          <span>
+            {readiness === 'READY'
+              ? '交付源码包前运行 clean worktree 验收；扩大到 claim_only / batch_save 前重新建立对应 L2/L3 证据链。'
+              : '人工评审 allowlist 候选 - 改代码/配置 - 同一 run-id 复跑 data_acquisition + draft_box - 通过后再申请受控 L3 single_save。'}
+          </span>
         </div>
         <div className="delivery-check-card__release-gates" aria-label="真实写入放行前置">
           <strong>真实写入放行前置</strong>
@@ -939,6 +947,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
           )}
           <span>自检 Git {gitHead} / 当前 Git {currentGitHead}</span>
           <span>OK 范围 {finalCheck?.ok_scope ?? '未记录'} / {realDxmMutationAllowedLabel}</span>
+          <span>受控 single_save {finalCheck?.controlled_single_save_ready === true ? 'READY' : '未放行'} / 批量无人值守发布 {finalCheck?.batch_unattended_publish_allowed === true ? '允许' : '阻断'}</span>
           <span>预期真实写入 {finalCheck?.expected_real_dxm_write_readiness ?? '未记录'} / 匹配 {finalCheck?.real_dxm_write_readiness_matches_expected === true ? 'true' : 'false'}</span>
           <span>L2 allowlist 评审模板 {finalCheck?.l2_allowlist_review_template_state ?? '未生成'} / 候选 {finalCheck?.l2_allowlist_review_template_candidate_count ?? 0} 项</span>
           <span>模板哈希 MD {shortHash(finalCheck?.l2_allowlist_review_template_markdown_sha256)} / JSON {shortHash(finalCheck?.l2_allowlist_review_template_json_sha256)}</span>
@@ -1001,9 +1010,9 @@ function DeliveryReadinessRow({ readiness }: { readiness: string }) {
   const isBlocked = readiness === 'BLOCKED'
   const isReady = readiness === 'READY'
   const tone = isReady ? 'is-ready' : isBlocked ? 'is-blocked' : 'is-unknown'
-  const label = isReady ? '真实 DXM 写入 READY' : isBlocked ? '真实 DXM 写入 BLOCKED' : `真实 DXM 写入 ${readiness}`
+  const label = isReady ? '真实 DXM single_save READY' : isBlocked ? '真实 DXM 写入 BLOCKED' : `真实 DXM 写入 ${readiness}`
   const detail = isReady
-    ? '仅在 L2/L3 证据复核与人工金丝雀批准后可执行。'
+    ? '仅代表受控单品保存；批量、无人值守和发布仍需单独放行。'
     : isBlocked
       ? '预期阻断，不可执行真实写入。'
       : '状态未知，不可执行真实写入。'

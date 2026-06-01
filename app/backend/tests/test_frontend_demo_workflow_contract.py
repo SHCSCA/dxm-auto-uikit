@@ -22,7 +22,7 @@ def test_task_center_does_not_apply_l3_real_write_block_to_dry_run_tasks():
 
     assert "const l3BlocksStart = needsRealL2 && l3Gate?.status === 'blocked'" in source
     assert "启动本地演示任务" in source
-    assert "本地 dry_run；真实 single_save 当前 BLOCKED" in source
+    assert "本地 dry_run；真实 single_save 走 L3 批准" in source
     assert "创建本地 dry_run 演示批次" in source
     assert "不触达 DXM" in source
 
@@ -196,23 +196,24 @@ def test_task_center_surfaces_l2_allowlist_review_candidates_as_manual_review_on
     assert "onShowReports={() => setActiveSection('reports')}" in app_source
 
 
-def test_frontend_first_screen_names_local_safety_diagnostic_delivery():
+def test_frontend_first_screen_names_dxm_automation_delivery():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     shell = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
     safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
     qa_source = QA_BROWSER_CHECK.read_text(encoding="utf-8")
 
-    assert "本地安全诊断工作台" in source
-    assert "本地 PASS 仅代表工作台自检通过，真实 DXM 写入仍 BLOCKED" in source
+    assert "DXM 自动化工作台" in source
+    assert "真实写入只允许在 L2 passed 和 L3 人工批准后由受控 runner 执行" in source
     assert "aria-label=\"验收结论\"" in source
-    assert "本地安全诊断工作台</strong><b>可交付" in source
-    assert "真实 DXM 写入</strong><b>BLOCKED" in source
-    assert "L2 allowlist 人工评审 + 双目标复验" in source
-    assert "本地工作台可交付，真实写入预期 BLOCKED" in safety_bar
+    assert "自动化工作台</strong><b>可交付" in source
+    assert "真实 DXM 写入</strong><b>{realWriteReady ? '受控 READY' : 'L3 受控'}" in source
+    assert "当前范围' : '下一步'" in source
+    assert "single_save READY" in source
+    assert "单商品金丝雀" in source
     assert "真实写入门禁未通过" in safety_bar
-    assert "本地验收 / L2 只读诊断 / L3 阻断复核" in shell
-    assert "\\u672c\\u5730\\u5b89\\u5168\\u8bca\\u65ad\\u5de5\\u4f5c\\u53f0" in qa_source
-    assert "\\u672c\\u5730\\u5de5\\u4f5c\\u53f0\\u53ef\\u4ea4\\u4ed8" in qa_source
+    assert "任务编排 / L2 只读证据 / L3 金丝雀" in shell
+    assert "\\u0044\\u0058\\u004d \\u81ea\\u52a8\\u5316\\u5de5\\u4f5c\\u53f0" in qa_source
+    assert "\\u81ea\\u52a8\\u5316\\u5de5\\u4f5c\\u53f0\\u53ef\\u4ea4\\u4ed8" in qa_source
     assert "半托管保存交付工作台" not in source
     assert "保存核验 / 证据复盘" not in shell
 

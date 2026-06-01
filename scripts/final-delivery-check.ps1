@@ -2,7 +2,7 @@ param(
   [switch]$SkipBrowserQA,
   [switch]$RequireCleanWorktree,
   [switch]$Help,
-  [string]$ExpectedRealDxmWriteReadiness = "BLOCKED",
+  [string]$ExpectedRealDxmWriteReadiness = "READY",
   [string]$OutDir = "outputs/final-delivery-check"
 )
 
@@ -38,7 +38,7 @@ if ($Help) {
   Write-Host "Options:"
   Write-Host "  -RequireCleanWorktree  Require pre/post git status to be clean for source package acceptance."
   Write-Host "  -SkipBrowserQA         Developer-only shortcut; do not use for formal delivery acceptance."
-  Write-Host "  -ExpectedRealDxmWriteReadiness <BLOCKED|READY|UNKNOWN>  Expected real DXM write readiness for this acceptance run; default BLOCKED."
+  Write-Host "  -ExpectedRealDxmWriteReadiness <BLOCKED|READY|UNKNOWN>  Expected real DXM write readiness for this acceptance run; default READY."
   Write-Host "  -OutDir <path>         Write reports, logs, screenshots and sidecars to a custom directory."
   Write-Host ""
   exit 0
@@ -91,6 +91,31 @@ function Get-WorkspaceSnapshot {
 
   try {
     return Invoke-JsonUtf8 -Uri "$ApiBase/api/delivery/workspace" -TimeoutSec 5
+  } catch {
+    return $null
+  }
+}
+
+function Get-AuthoritativeWorkspaceSnapshot {
+  $code = @"
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path('app/backend').resolve()))
+
+from src.repository import Repository
+from src.services.delivery_workspace import build_delivery_workspace
+
+print(json.dumps(build_delivery_workspace(Repository()), ensure_ascii=True))
+"@
+
+  try {
+    $output = & $pythonExe -c $code
+    if ($LASTEXITCODE -ne 0 -or !$output) {
+      return $null
+    }
+    return (($output -join "`n") | ConvertFrom-Json)
   } catch {
     return $null
   }
@@ -247,6 +272,8 @@ function Write-ProvisionalDeliveryCheckReport {
   if ($provisionalReadiness -eq "UNKNOWN") {
     $provisionalReadiness = "BLOCKED"
   }
+  $provisionalControlledSingleSaveReady = $provisionalReadiness -eq "READY"
+  $provisionalRealDxmMutationScope = if ($provisionalControlledSingleSaveReady) { "controlled_single_save_only" } else { "none" }
   $sourceReadiness = if ([string]::IsNullOrWhiteSpace($provisionalGitStatus)) { "CLEAN" } else { "DIRTY" }
 
   $provisionalResult = [pscustomobject]@{
@@ -254,13 +281,16 @@ function Write-ProvisionalDeliveryCheckReport {
     checkedAt = (Get-Date).ToUniversalTime().ToString("o")
     ok = $false
     okScope = "local_workbench_only"
-    realDxmMutationAllowed = $false
+    realDxmMutationAllowed = $provisionalControlledSingleSaveReady
+    realDxmMutationScope = $provisionalRealDxmMutationScope
+    controlledSingleSaveReady = $provisionalControlledSingleSaveReady
+    batchUnattendedPublishAllowed = $false
     expectedRealDxmWriteReadiness = $ExpectedRealDxmWriteReadiness
     realDxmWriteReadinessMatchesExpected = $provisionalReadiness -eq $ExpectedRealDxmWriteReadiness
     status = "final_delivery_check_in_progress_for_browser_qa"
     localWorkbenchCheck = "IN_PROGRESS"
     realDxmWriteReadiness = $provisionalReadiness
-    productionRealWriteReady = $provisionalReadiness -eq "READY"
+    productionRealWriteReady = $false
     realDxmWriteBlockedReason = $provisionalBlockedReason
     l3EvidenceReadiness = $provisionalL3EvidenceReadiness
     sourcePackageReadiness = $sourceReadiness
@@ -269,8 +299,8 @@ function Write-ProvisionalDeliveryCheckReport {
     requireCleanWorktree = [bool]$RequireCleanWorktree
     sourcePackageCheck = Get-SourcePackageCheck -SourcePackageReadiness $sourceReadiness
     gateEvidenceCheck = if ($provisionalL2Gate -and $provisionalL3Gate) { "PASS" } else { "FAIL" }
-    deliverableMode = "local safety diagnostic workbench"
-    realDxmWrites = if ($provisionalReadiness -eq "READY") { "ready only after L2/L3 evidence review and explicit manual canary approval" } elseif ($provisionalReadiness -eq "UNKNOWN") { "unknown because L2/L3 gates could not be read; writes remain blocked" } else { "blocked until real L2 data_acquisition and draft_box pass, followed by L3 manual canary" }
+    deliverableMode = "DXM semi-managed automation workbench"
+    realDxmWrites = if ($provisionalReadiness -eq "READY") { "controlled single_save is ready only after L2/L3 evidence review and explicit manual canary approval; batch/unattended/publish remain separately gated" } elseif ($provisionalReadiness -eq "UNKNOWN") { "unknown because L2/L3 gates could not be read; writes remain blocked" } else { "blocked until fresh real L2 data_acquisition and draft_box pass, followed by L3 manual canary evidence" }
     root = $root
     gitHead = $provisionalGitHead
     preGitStatusShort = $provisionalGitStatus
@@ -546,6 +576,9 @@ function Write-FatalDeliveryCheckReport {
     ok = $false
     okScope = "local_workbench_only"
     realDxmMutationAllowed = $false
+    realDxmMutationScope = "none"
+    controlledSingleSaveReady = $false
+    batchUnattendedPublishAllowed = $false
     expectedRealDxmWriteReadiness = $ExpectedRealDxmWriteReadiness
     realDxmWriteReadinessMatchesExpected = $false
     status = "final_delivery_check_fatal_error"
@@ -554,7 +587,7 @@ function Write-FatalDeliveryCheckReport {
     sourcePackageReadiness = if ([string]::IsNullOrWhiteSpace($fatalGitStatus)) { "CLEAN" } else { "DIRTY" }
     requireCleanWorktree = [bool]$RequireCleanWorktree
     sourcePackageCheck = if ($RequireCleanWorktree -and [string]::IsNullOrWhiteSpace($fatalGitStatus)) { "PASS" } elseif ($RequireCleanWorktree) { "FAIL" } else { "NOT_REQUIRED" }
-    deliverableMode = "local safety diagnostic workbench"
+    deliverableMode = "DXM semi-managed automation workbench"
     realDxmWrites = "unknown because final delivery check stopped before L2/L3 gates could be read"
     root = $root
     gitHead = $fatalGitHead
@@ -682,8 +715,11 @@ if (!$SkipBrowserQA) {
     -WorkingDirectory $frontendDir
   Wait-HttpReady -Name "QA frontend preview" -Uri "http://127.0.0.1:$qaFrontendPort" -TimeoutSeconds 45
   # Browser QA reads /api/delivery/final-check before the full report is written.
-  # Seed it with this run's git/gate context so QA never depends on a stale prior report.
-  $provisionalWorkspaceSnapshot = Get-WorkspaceSnapshot -ApiBase $workspaceApiBase
+  # Seed it with this run's authoritative git/gate context so QA never depends on a stale prior report.
+  $provisionalWorkspaceSnapshot = Get-AuthoritativeWorkspaceSnapshot
+  if (!$provisionalWorkspaceSnapshot) {
+    $provisionalWorkspaceSnapshot = Get-WorkspaceSnapshot -ApiBase $workspaceApiBase
+  }
   Write-ProvisionalDeliveryCheckReport -WorkspaceSnapshot $provisionalWorkspaceSnapshot -WorkspaceApiBase $workspaceApiBase
   $browserQaUrl = "http://127.0.0.1:$qaFrontendPort/?apiBase=$([uri]::EscapeDataString($workspaceApiBase))"
   $commands += Invoke-CapturedCommand `
@@ -714,7 +750,10 @@ try {
 }
 
 $workspaceSnapshot = $null
-$workspaceSnapshot = Get-WorkspaceSnapshot -ApiBase $workspaceApiBase
+$workspaceSnapshot = Get-AuthoritativeWorkspaceSnapshot
+if (!$workspaceSnapshot) {
+  $workspaceSnapshot = Get-WorkspaceSnapshot -ApiBase $workspaceApiBase
+}
 $l2Gate = $null
 $l3Gate = $null
 $l2Gate = Get-WorkspaceGate -WorkspaceSnapshot $workspaceSnapshot -Level "L2"
@@ -804,8 +843,11 @@ $preSourcePackageReadiness = if ([string]::IsNullOrWhiteSpace($preGitStatus)) { 
 $postSourcePackageReadiness = if ([string]::IsNullOrWhiteSpace($postGitStatus)) { "CLEAN" } else { "DIRTY" }
 $sourcePackageReadiness = if ($preSourcePackageReadiness -eq "CLEAN" -and $postSourcePackageReadiness -eq "CLEAN") { "CLEAN" } else { "DIRTY" }
 $sourcePackageCheck = Get-SourcePackageCheck -SourcePackageReadiness $sourcePackageReadiness
-$realDxmMutationAllowed = $realDxmWriteReadiness -eq "READY"
-$okScope = if ($realDxmMutationAllowed) { "local_workbench_and_real_dxm_ready" } else { "local_workbench_only" }
+$controlledSingleSaveReady = $realDxmWriteReadiness -eq "READY"
+$realDxmMutationAllowed = $controlledSingleSaveReady
+$realDxmMutationScope = if ($controlledSingleSaveReady) { "controlled_single_save_only" } else { "none" }
+$batchUnattendedPublishAllowed = $false
+$okScope = if ($controlledSingleSaveReady) { "local_workbench_and_controlled_single_save_ready" } else { "local_workbench_only" }
 $realDxmWriteReadinessMatchesExpected = $realDxmWriteReadiness -eq $ExpectedRealDxmWriteReadiness
 $overallOk = $localWorkbenchOk -and $gateEvidenceOk -and $realDxmWriteReadinessMatchesExpected -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")
 
@@ -897,6 +939,9 @@ $result = [pscustomobject]@{
   ok = $overallOk
   okScope = $okScope
   realDxmMutationAllowed = $realDxmMutationAllowed
+  realDxmMutationScope = $realDxmMutationScope
+  controlledSingleSaveReady = $controlledSingleSaveReady
+  batchUnattendedPublishAllowed = $batchUnattendedPublishAllowed
   expectedRealDxmWriteReadiness = $ExpectedRealDxmWriteReadiness
   realDxmWriteReadinessMatchesExpected = $realDxmWriteReadinessMatchesExpected
   status = if ($overallOk) {
@@ -906,7 +951,7 @@ $result = [pscustomobject]@{
   }
   localWorkbenchCheck = if ($localWorkbenchOk) { "PASS" } else { "FAIL" }
   realDxmWriteReadiness = $realDxmWriteReadiness
-  productionRealWriteReady = $realDxmMutationAllowed
+  productionRealWriteReady = $false
   realDxmWriteBlockedReason = $realDxmWriteBlockedReason
   l3EvidenceReadiness = $l3EvidenceReadiness
   sourcePackageReadiness = $sourcePackageReadiness
@@ -915,8 +960,8 @@ $result = [pscustomobject]@{
   requireCleanWorktree = [bool]$RequireCleanWorktree
   sourcePackageCheck = $sourcePackageCheck
   gateEvidenceCheck = if ($gateEvidenceOk) { "PASS" } else { "FAIL" }
-  deliverableMode = "local safety diagnostic workbench"
-  realDxmWrites = if ($realDxmWriteReadiness -eq "READY") { "ready only after L2/L3 evidence review and explicit manual canary approval" } elseif ($realDxmWriteReadiness -eq "UNKNOWN") { "unknown because L2/L3 gates could not be read; writes remain blocked" } else { "blocked until real L2 data_acquisition and draft_box pass, followed by L3 manual canary" }
+  deliverableMode = "DXM semi-managed automation workbench"
+  realDxmWrites = if ($realDxmWriteReadiness -eq "READY") { "controlled single_save is ready only after L2/L3 evidence review and explicit manual canary approval; batch/unattended/publish remain separately gated" } elseif ($realDxmWriteReadiness -eq "UNKNOWN") { "unknown because L2/L3 gates could not be read; writes remain blocked" } else { "blocked until fresh real L2 data_acquisition and draft_box pass, followed by L3 manual canary evidence" }
   root = $root
   gitHead = $gitHead
   preGitStatusShort = $preGitStatus
@@ -1024,12 +1069,15 @@ if (!$SkipBrowserQA) {
 }
 
 $summaryLines = New-Object System.Collections.Generic.List[string]
-$summaryLines.Add("# DXM Local-Only Workbench Delivery Check / Real DXM Write BLOCKED Unless Proven READY")
+$summaryLines.Add("# DXM Semi-Managed Automation Workbench Delivery Check")
 $summaryLines.Add("")
 $summaryLines.Add("- Checked at: $($result.checkedAt)")
 $summaryLines.Add("- OK scope: $($result.okScope)")
 $summaryLines.Add("- Real DXM mutation allowed: $($result.realDxmMutationAllowed)")
-$summaryLines.Add("- Production real write ready: $($result.productionRealWriteReady)")
+$summaryLines.Add("- Real DXM mutation scope: $($result.realDxmMutationScope)")
+$summaryLines.Add("- Controlled single_save ready: $($result.controlledSingleSaveReady)")
+$summaryLines.Add("- Batch/unattended/publish allowed: $($result.batchUnattendedPublishAllowed)")
+$summaryLines.Add("- Production batch/unattended/publish ready: $($result.productionRealWriteReady)")
 $summaryLines.Add("- Real DXM write blocked reason: $($result.realDxmWriteBlockedReason)")
 $summaryLines.Add("- Expected real DXM write readiness: $($result.expectedRealDxmWriteReadiness)")
 $summaryLines.Add("- Real DXM write readiness matches expected: $($result.realDxmWriteReadinessMatchesExpected)")
@@ -1043,8 +1091,8 @@ $summaryLines.Add("- Gate record note: PASS only means L2/L3 records were readab
 $summaryLines.Add("- Deliverable mode: $($result.deliverableMode)")
 $summaryLines.Add("- Real DXM writes: $($result.realDxmWrites)")
 $summaryLines.Add("- Git HEAD: $($result.gitHead)")
-$summaryLines.Add("- Acceptance note: for this local safety diagnostic delivery, PASS means local workbench checks pass, required source package checks pass, and real DXM readiness is derived from L2/L3 gates; UNKNOWN is a failure and current expected write state remains BLOCKED.")
-$summaryLines.Add("- READY note: real DXM READY requires L2/L3 passed plus L3 save_result, published=false proof, save/unpublished screenshots or paths, and network/HAR save response evidence.")
+$summaryLines.Add("- Acceptance note: PASS means the automation workbench checks pass, required source package checks pass, and real DXM readiness is derived from L2/L3 gates; UNKNOWN is a failure and does not approve writes.")
+$summaryLines.Add("- READY note: real DXM READY currently means controlled single_save readiness only; batch, unattended operation, and publish remain separately gated. READY requires L2/L3 passed plus L3 save_result, published=false proof, save/unpublished screenshots or paths, and network/HAR save response evidence.")
 if (!$SkipBrowserQA) {
   $summaryLines.Add("- Browser QA services: isolated backend $qaBackendPort / frontend $qaFrontendPort")
 }
@@ -1061,7 +1109,7 @@ if ($l2Gate) {
 if ($l3Gate) {
   $summaryLines.Add("- L3: $($l3Gate.status)")
   if ($l3Gate.status -ne "passed") {
-    $summaryLines.Add("  - reason: real DXM mutation remains blocked until L2 passes and L3 manual canary evidence is collected")
+    $summaryLines.Add("  - reason: controlled real DXM save remains blocked until L2 passes and L3 manual canary evidence is collected")
   }
 } else {
   $summaryLines.Add("- L3: UNKNOWN - backend workspace snapshot was unavailable")

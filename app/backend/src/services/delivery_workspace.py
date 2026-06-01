@@ -32,6 +32,7 @@ L2_PROBE_SCRIPT = "tools\\probes\\l2_readonly_probe.py"
 L2_PROBE_PYTHON = "app\\backend\\.venv\\Scripts\\python.exe"
 L2_PROBE_COOKIE_FILE = "data\\sessions\\dianxiaomi_cookies.json"
 L2_PROBE_OUTPUT_DIR = "data\\l2_readonly_probe"
+L2_PROBE_ALLOWLIST_FILE = "config\\l2_readonly_allowlist.json"
 REQUIRED_L2_TARGETS = ("data_acquisition", "draft_box")
 L2_TARGET_PATH_HINTS = {
     "data_acquisition": "/web/productcrawl/dataacquisition",
@@ -426,7 +427,7 @@ def _regression_gates(
             "status": l2_gate["status"],
             "evidenceLevel": l2_gate["evidenceLevel"],
             "requiresApproval": True,
-            "command": "tools/probes/l2_readonly_probe.py --target data_acquisition|draft_box",
+            "command": "tools/probes/l2_readonly_probe.py --target data_acquisition|draft_box --allowlist-file config\\l2_readonly_allowlist.json",
             "detail": l2_gate["detail"],
             "latest": l2_gate["latest"],
         },
@@ -447,7 +448,7 @@ def _l2_probe_plan() -> dict[str, Any]:
     commands = [
         run_id_command,
         *[
-            f"{L2_PROBE_PYTHON} {L2_PROBE_SCRIPT} --target {target} --run-id $runId --cookie-file {L2_PROBE_COOKIE_FILE} --output-dir {L2_PROBE_OUTPUT_DIR}"
+            f"{L2_PROBE_PYTHON} {L2_PROBE_SCRIPT} --target {target} --run-id $runId --cookie-file {L2_PROBE_COOKIE_FILE} --output-dir {L2_PROBE_OUTPUT_DIR} --allowlist-file {L2_PROBE_ALLOWLIST_FILE}"
             for target in REQUIRED_L2_TARGETS
         ],
     ]
@@ -460,6 +461,7 @@ def _l2_probe_plan() -> dict[str, Any]:
         "scriptPath": L2_PROBE_SCRIPT,
         "cookieFile": L2_PROBE_COOKIE_FILE,
         "outputDir": L2_PROBE_OUTPUT_DIR,
+        "allowlistFile": L2_PROBE_ALLOWLIST_FILE,
         "targets": [
             {
                 "id": target,
@@ -1321,12 +1323,31 @@ def _network_save_result_seen(payload: Mapping[str, Any]) -> bool:
     status = payload.get("status")
     if status is None and payload.get("ok") is True:
         status = 200
-    return "save" in url and _status_2xx_or_3xx(status)
+    return _looks_like_save_network_response(payload, url) and _status_2xx_or_3xx(status)
 
 
 def _network_event_save_response_seen(payload: Mapping[str, Any]) -> bool:
     url = str(payload.get("url") or "").lower()
-    return "save" in url and _status_2xx_or_3xx(payload.get("status"))
+    return _looks_like_save_network_response(payload, url) and _status_2xx_or_3xx(payload.get("status"))
+
+
+def _looks_like_save_network_response(payload: Mapping[str, Any], url: str) -> bool:
+    if "save" in url:
+        return True
+    if not url.endswith("/api/popchoiceproduct/add.json"):
+        return False
+    response_code = payload.get("code")
+    response_text = " ".join(_strings_from_value(payload.get("msg")) + _strings_from_value(payload.get("message")))
+    nested_json = payload.get("json")
+    if isinstance(nested_json, Mapping):
+        response_code = nested_json.get("code", response_code)
+        response_text = " ".join(
+            [
+                response_text,
+                *(_strings_from_value(nested_json.get("msg")) + _strings_from_value(nested_json.get("message"))),
+            ]
+        )
+    return str(response_code) == "0" and ("保存成功" in response_text or "编辑保存成功" in response_text)
 
 
 def _collect_publish_scan_inputs(payload: Mapping[str, Any], publish_scan: dict[str, list[str]]) -> None:
@@ -1341,14 +1362,13 @@ def _collect_publish_scan_inputs(payload: Mapping[str, Any], publish_scan: dict[
         elif key_text in {
             "action",
             "intended_action",
+            "target_action",
             "target_text",
             "button_text",
             "button_label",
+            "clicked_text",
             "label",
-            "text",
-            "message",
             "reason",
-            "body_excerpt",
         }:
             publish_scan["visible_texts"].extend(_strings_from_value(value))
     network_events = payload.get("network_events")

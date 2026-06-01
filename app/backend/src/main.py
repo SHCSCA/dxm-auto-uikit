@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import subprocess
 from pathlib import Path
 
@@ -31,6 +32,7 @@ from src.models import (
     SelectorProfileValidateRequest,
     StoreCreate,
     TaskCreate,
+    TaskManualApprovalRequest,
     TaskStartRequest,
     TitleGenerateRequest,
     TemplateCreate,
@@ -230,6 +232,31 @@ def get_task(task_id: int):
 @app.post('/api/tasks')
 def create_task(payload: TaskCreate):
     return repo.create_task(payload.model_dump())
+
+
+@app.post('/api/tasks/{task_id}/manual-approval')
+def approve_task_for_real_dxm(task_id: int, payload: TaskManualApprovalRequest):
+    _assert_task_can_receive_manual_approval(task_id, payload)
+    token = secrets.token_urlsafe(24)
+    task = repo.set_task_manual_approval(
+        task_id,
+        approved=True,
+        token=token,
+        approved_by=payload.approved_by.strip(),
+    )
+    if not task:
+        raise HTTPException(status_code=404, detail='Task not found')
+    approval = (task.get('payload') or {}).get('manual_approval') or {}
+    return {
+        'ok': True,
+        'taskId': task_id,
+        'approvalToken': token,
+        'confirmation': L3_CONFIRMATION,
+        'approvedBy': approval.get('approved_by'),
+        'approvedAt': approval.get('approved_at'),
+        'l2GateStatus': 'passed',
+        'manualApproval': approval,
+    }
 
 
 @app.post('/api/tasks/{task_id}/start')
@@ -455,6 +482,9 @@ def _read_final_delivery_check_summary():
         'l3_evidence_readiness': payload.get('l3EvidenceReadiness'),
         'ok_scope': payload.get('okScope'),
         'real_dxm_mutation_allowed': payload.get('realDxmMutationAllowed'),
+        'real_dxm_mutation_scope': payload.get('realDxmMutationScope'),
+        'controlled_single_save_ready': payload.get('controlledSingleSaveReady'),
+        'batch_unattended_publish_allowed': payload.get('batchUnattendedPublishAllowed'),
         'expected_real_dxm_write_readiness': payload.get('expectedRealDxmWriteReadiness'),
         'real_dxm_write_readiness_matches_expected': payload.get('realDxmWriteReadinessMatchesExpected'),
         'source_package_readiness': payload.get('sourcePackageReadiness'),
@@ -533,6 +563,31 @@ def _final_check_freshness(report_git_head, current_git):
     if current_git.get('is_dirty') is False:
         return 'current'
     return 'unknown'
+
+
+def _assert_task_can_receive_manual_approval(task_id: int, request: TaskManualApprovalRequest) -> None:
+    task = repo.get_task_private(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail='Task not found')
+    mode = str(task.get('mode') or (task.get('payload') or {}).get('execution_mode') or '')
+    if mode not in REAL_DXM_MUTATION_MODES:
+        raise HTTPException(status_code=400, detail=f'Manual approval is only available for real DXM mutation modes: {mode}')
+    if task.get('status') != 'draft':
+        raise HTTPException(status_code=409, detail=f"Task cannot be approved from status: {task.get('status')}")
+    if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
+        raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')
+    if _task_store_name(task) != 'Dang Kang':
+        raise HTTPException(status_code=403, detail='Real DXM mutation task requires Dang Kang store')
+    if not request.approved_by or not request.approved_by.strip():
+        raise HTTPException(status_code=400, detail='approved_by is required')
+    if request.confirmation != L3_CONFIRMATION:
+        raise HTTPException(status_code=400, detail=f'confirmation must be {L3_CONFIRMATION}')
+    l2_gate = l2_real_probe_gate()
+    if l2_gate.get('status') != 'passed':
+        raise HTTPException(
+            status_code=403,
+            detail=f"L2 readonly probe gate is not passed: {l2_gate.get('status')}",
+        )
 
 
 def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:

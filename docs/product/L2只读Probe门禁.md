@@ -11,11 +11,15 @@ L2 只读 probe 只用于验证登录态、目标页面可达性、DOM/按钮文
 ```powershell
 Set-Location <PROJECT_ROOT>
 $runId = "l2-real-" + (Get-Date -Format "yyyyMMddTHHmmssZ")
-app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target data_acquisition --run-id $runId
-app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target draft_box --run-id $runId
+app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target data_acquisition --run-id $runId --cookie-file data\sessions\dianxiaomi_cookies.json --output-dir data\l2_readonly_probe --allowlist-file config\l2_readonly_allowlist.json
+app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target draft_box --run-id $runId --cookie-file data\sessions\dianxiaomi_cookies.json --output-dir data\l2_readonly_probe --allowlist-file config\l2_readonly_allowlist.json
 ```
 
 两个真实目标必须使用同一个 `--run-id`，并且由同一脚本版本、同一 git head、同一 cookie/session fingerprint 生成。缺少 `evidence_binding` 或 run metadata 的历史证据只允许展示诊断，不能解锁 L3。
+
+`--allowlist-file` 不会默认启用，必须显式传入。当前仓库的 `config/l2_readonly_allowlist.json` 只批准已审计的 DXM SPA 启动读取依赖；对于 DXM 用 POST 承载的查询接口，必须显式标注 `readonly_post=true`。它不会放行 WebSocket、EventSource、认领、备注写入、保存、提交或发布端点。
+
+最新交付证据：2026-06-01 10:00 左右，`run_id=l2-real-20260601T100010Z` 已完成 `data_acquisition` 与 `draft_box` 双目标真实只读 probe，两份证据均 `ok=true`，写入、非只读、拦截、禁词和 WebSocket 计数均为 0。该证据用于当前受控 `single_save` READY 判断，不自动放行批量、无人值守或发布。
 
 离线/mock 验证必须使用 `--url` 指向本地页面，不访问 `dianxiaomi.com`：
 
@@ -37,7 +41,9 @@ app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target 
 - 截图记录 `sha256`
 - DOM 记录 `sha256`
 - 报告包含 OS、浏览器版本、Python 版本、目标 URL、最终 URL、登录态、网络摘要和 `diagnostics`
-- `diagnostics` 只解释失败原因，不参与放行宽松化；即使某些请求被列入 `allowlist_review_candidates`，仍必须保持 `allowlist_applied=false` 且 `safety.ok=false`
+- 未完成配置化评审时，`diagnostics` 只解释失败原因，不参与放行宽松化；`allowlist_review_candidates` 仍必须保持 `allowlist_applied=false` 且 `safety.ok=false`
+- 已完成评审并显式传入 `--allowlist-file` 后，被批准的启动依赖必须记录到 `network.allowlisted_requests` 与 `diagnostics.allowlisted_request_groups`；未批准的 `blocked/forbidden/websocket/write` 计数仍必须为 0
+- 精确匹配的第三方遥测 denylist 会在发出前 abort，并记录到 `network.suppressed_requests`；该机制不得用于 `dianxiaomi.com` 或任何业务写入接口
 
 ## 禁止范围
 
@@ -45,8 +51,10 @@ app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target 
 - 不点击认领、编辑、保存、发布按钮
 - 不填写输入框、不搜索商品、不选择店铺、不勾选半托管
 - 不允许 `POST`、`PUT`、`PATCH`、`DELETE`
-- 不允许 URL 命中 `save`、`publish`、`submitPublish`、`claim`、`remark`、`note`
+- 不允许真实业务写入 POST；DXM 查询型 POST 只有在 `readonly_post=true` 且精确匹配 host/path/resource_type/reason/keyword 时才能放行并记入 `allowlisted_non_read_request_count`
+- 不允许 URL 命中 `save`、`publish`、`submitPublish`、`claim`、`remark`、`note`；唯一例外是 `config/l2_readonly_allowlist.json` 中窄范围批准的被动静态 JS chunk，且必须同时匹配 host/path/resource_type/reason/keyword
 - 真实店小秘目标默认拦截 XHR、fetch、WebSocket、EventSource 等主动请求；如果页面自动发起这类请求，L2 判定不通过，后续必须单独评审只读 allowlist
+- 真实 `dianxiaomi.com` 目标不忽略 HTTPS 证书错误；只有本地/mock URL 才允许 `ignore_https_errors`
 - BrowserContext 禁用 Service Worker，避免请求绕过路由门禁
 - 不把 `tools/probes/**/tmp_*` 历史脚本作为 L2 门禁入口
 
@@ -66,6 +74,8 @@ JSON/Markdown 的 `diagnostics` 包含：
 - `navigation`：记录请求目标 path、最终 path、是否离开目标 path，以及最终 path 分类（如 `home/login/target/other`）。
 - `render_state`：记录 body 长度、可见匹配数量、是否疑似 loading/app shell。
 - `blocked_request_groups`：按 host/path/method/resource_type/reason/keyword 聚合被拦截请求，避免只看前 50 条原始请求。
+- `allowlisted_request_groups`：按 host/path/method/resource_type/reason/keyword 聚合被显式配置批准的只读启动请求。
+- `suppressed_request_groups`：按 host/path/method/resource_type/reason/keyword 聚合被预拦截的第三方遥测请求。
 - `allowlist_review_candidates`：仅用于人工评审“可能是只读启动依赖”的 GET active request；该字段不得自动放行 L2。
 
 ## Allowlist 人工评审记录

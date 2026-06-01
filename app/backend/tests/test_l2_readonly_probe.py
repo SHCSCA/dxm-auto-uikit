@@ -108,6 +108,174 @@ def test_readonly_probe_guard_blocks_active_requests_in_strict_mode():
     assert safety["ok"] is False
 
 
+def test_readonly_probe_guard_applies_explicit_readonly_allowlist_for_bootstrap_xhr():
+    module = _load_probe_module()
+    guard = module.ReadOnlyProbeGuard(
+        strict_active_requests=True,
+        allowlist_entries=[
+            {
+                "id": "dxm-user-info-readonly",
+                "decision": "approve",
+                "method": "GET",
+                "host": "www.dianxiaomi.com",
+                "path": "/api/userInfo.json",
+                "resource_type": "xhr",
+                "allowed_reasons": ["active_or_unknown_resource_type:xhr"],
+                "allow_forbidden_keywords": [],
+                "rationale": "DXM SPA bootstrap identity read.",
+            }
+        ],
+    )
+    route = FakeRoute(FakeRequest("GET", "https://www.dianxiaomi.com/api/userInfo.json", resource_type="xhr"))
+
+    guard._route(route)
+
+    summary = guard.summary()
+    assert route.continued is True
+    assert route.aborted is False
+    assert summary["blocked_request_count"] == 0
+    assert summary["forbidden_keyword_request_count"] == 0
+    assert summary["allowlist_applied"] is True
+    assert summary["allowlisted_request_count"] == 1
+    assert summary["allowlisted_requests"][0]["allowlist_id"] == "dxm-user-info-readonly"
+    safety = module.evaluate_safety({
+        "final_url": "https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
+        "login_state": {"required": False},
+        "network": summary,
+    })
+    assert safety["ok"] is True
+
+
+def test_readonly_probe_guard_applies_explicit_allowlist_for_reviewed_static_publish_chunk():
+    module = _load_probe_module()
+    guard = module.ReadOnlyProbeGuard(
+        strict_active_requests=True,
+        allowlist_entries=[
+            {
+                "id": "dxm-static-publish-detection-script",
+                "decision": "approve",
+                "method": "GET",
+                "host": "s1.dianxiaomi.com",
+                "path_regex": r"/dxm-web/2026-05/assets/publishDetection-[A-Za-z0-9_-]+\.js",
+                "resource_type": "script",
+                "allowed_reasons": ["forbidden_url_keywords:publish"],
+                "allow_forbidden_keywords": ["publish"],
+                "rationale": "Reviewed passive DXM static asset required by SPA bootstrap.",
+            }
+        ],
+    )
+    route = FakeRoute(FakeRequest(
+        "GET",
+        "https://s1.dianxiaomi.com/dxm-web/2026-05/assets/publishDetection-COrhuT0d.js",
+        resource_type="script",
+    ))
+
+    guard._route(route)
+
+    summary = guard.summary()
+    assert route.continued is True
+    assert summary["blocked_request_count"] == 0
+    assert summary["forbidden_keyword_request_count"] == 0
+    assert summary["observed_forbidden_keyword_request_count"] == 1
+    assert summary["allowlisted_forbidden_keyword_request_count"] == 1
+
+
+def test_readonly_probe_allowlist_never_allows_write_methods():
+    module = _load_probe_module()
+    guard = module.ReadOnlyProbeGuard(
+        strict_active_requests=True,
+        allowlist_entries=[
+            {
+                "id": "invalid-write-attempt",
+                "decision": "approve",
+                "method": "GET",
+                "host": "www.dianxiaomi.com",
+                "path": "/api/save.json",
+                "resource_type": "xhr",
+                "allowed_reasons": ["write_method:POST", "non_read_method:POST"],
+                "allow_forbidden_keywords": ["save"],
+            }
+        ],
+    )
+    route = FakeRoute(FakeRequest("POST", "https://www.dianxiaomi.com/api/save.json", resource_type="xhr"))
+
+    guard._route(route)
+
+    summary = guard.summary()
+    assert route.aborted is True
+    assert summary["write_request_count"] == 1
+    assert summary["blocked_request_count"] == 1
+    assert summary["allowlisted_request_count"] == 0
+
+
+def test_readonly_probe_guard_applies_explicit_readonly_post_allowlist():
+    module = _load_probe_module()
+    guard = module.ReadOnlyProbeGuard(
+        strict_active_requests=True,
+        allowlist_entries=[
+            {
+                "id": "dxm-draft-count-readonly-post",
+                "decision": "approve",
+                "method": "POST",
+                "readonly_post": True,
+                "host": "www.dianxiaomi.com",
+                "path": "/api/smtProduct/getOfflineCounts.json",
+                "resource_type": "xhr",
+                "allowed_reasons": [
+                    "non_read_method:POST",
+                    "write_method:POST",
+                    "active_or_unknown_resource_type:xhr",
+                ],
+                "allow_forbidden_keywords": [],
+                "rationale": "DXM uses POST for a count query.",
+            }
+        ],
+    )
+    route = FakeRoute(FakeRequest("POST", "https://www.dianxiaomi.com/api/smtProduct/getOfflineCounts.json", resource_type="xhr"))
+
+    guard._route(route)
+
+    summary = guard.summary()
+    assert route.continued is True
+    assert summary["observed_write_method_request_count"] == 1
+    assert summary["allowlisted_non_read_request_count"] == 1
+    assert summary["write_request_count"] == 0
+    assert summary["non_read_request_count"] == 0
+    assert summary["blocked_request_count"] == 0
+
+
+def test_readonly_probe_suppresses_exact_third_party_telemetry_without_counting_as_dxm_write():
+    module = _load_probe_module()
+    guard = module.ReadOnlyProbeGuard(strict_active_requests=True)
+    route = FakeRoute(FakeRequest("POST", "https://events.sellfox.com/events", resource_type="fetch"))
+
+    guard._route(route)
+
+    summary = guard.summary()
+    assert route.aborted is True
+    assert route.continued is False
+    assert summary["request_count"] == 0
+    assert summary["write_request_count"] == 0
+    assert summary["non_read_request_count"] == 0
+    assert summary["blocked_request_count"] == 0
+    assert summary["suppressed_request_count"] == 1
+    assert summary["suppressed_requests"][0]["policy_id"] == "sellfox-events"
+
+
+def test_readonly_probe_never_suppresses_first_party_posts():
+    module = _load_probe_module()
+    guard = module.ReadOnlyProbeGuard(strict_active_requests=True)
+    route = FakeRoute(FakeRequest("POST", "https://www.dianxiaomi.com/events", resource_type="fetch"))
+
+    guard._route(route)
+
+    summary = guard.summary()
+    assert route.aborted is True
+    assert summary["write_request_count"] == 1
+    assert summary["blocked_request_count"] == 1
+    assert summary["suppressed_request_count"] == 0
+
+
 def test_readonly_probe_guard_records_string_request_failure():
     module = _load_probe_module()
     guard = module.ReadOnlyProbeGuard()
@@ -450,3 +618,48 @@ def test_load_cookies_normalizes_exported_cookie_shape(tmp_path):
             "expires": 1893456000,
         }
     ]
+
+
+def test_load_allowlist_requires_reviewed_readonly_shape(tmp_path):
+    module = _load_probe_module()
+    allowlist_file = tmp_path / "l2_allowlist.json"
+    allowlist_file.write_text(json.dumps({
+        "schema": "dxm_l2_readonly_allowlist.v1",
+        "entries": [
+            {
+                "id": "approved",
+                "decision": "approve",
+                "method": "GET",
+                "host": "www.dianxiaomi.com",
+                "path": "/api/userInfo.json",
+                "resource_type": "xhr",
+                "allowed_reasons": ["active_or_unknown_resource_type:xhr"],
+                "allow_forbidden_keywords": [],
+            },
+            {
+                "id": "rejected",
+                "decision": "reject",
+                "method": "GET",
+                "host": "www.dianxiaomi.com",
+                "path": "/api/unsafe.json",
+                "resource_type": "xhr",
+                "allowed_reasons": ["active_or_unknown_resource_type:xhr"],
+            },
+            {
+                "id": "bad-write",
+                "decision": "approve",
+                "method": "POST",
+                "host": "www.dianxiaomi.com",
+                "path": "/api/save.json",
+                "resource_type": "xhr",
+                "allowed_reasons": ["write_method:POST"],
+            },
+        ],
+    }), encoding="utf-8")
+
+    entries, errors, resolved = module.load_allowlist(allowlist_file)
+
+    assert resolved == allowlist_file
+    assert [entry["id"] for entry in entries] == ["approved"]
+    assert len(errors) == 1
+    assert "requires readonly_post=true" in errors[0]

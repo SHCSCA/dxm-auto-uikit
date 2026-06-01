@@ -503,6 +503,45 @@ def test_delivery_workspace_does_not_treat_generic_ok_as_network_save_response(t
     assert not any(point["kind"] == "network_save_result" for point in data["evidence_points"])
 
 
+def test_delivery_workspace_accepts_dxm_add_json_code_zero_as_save_response(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_delivery_fixture(repo, with_network=False)
+    report = repo.list_reports(fixture["task"]["id"])[0]
+    save_result = report["save_result"]
+    save_result["network_save_result"] = {
+        "ok": True,
+        "url": "https://www.dianxiaomi.com/api/popChoiceProduct/add.json",
+        "method": "POST",
+        "status": 200,
+        "code": 0,
+        "msg": "您的产品编辑保存成功！",
+    }
+    save_result["network_events"] = [
+        {
+            "url": "https://www.dianxiaomi.com/api/popChoiceProduct/add.json",
+            "method": "POST",
+            "resource_type": "xhr",
+            "status": 200,
+            "json": {"code": 0, "msg": "您的产品编辑保存成功！"},
+        }
+    ]
+    repo.add_report(
+        fixture["task"]["id"],
+        fixture["job"]["id"],
+        report["product_id"],
+        "success",
+        False,
+        save_result,
+        report["summary"],
+    )
+
+    data = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}").json()
+
+    assert data["delivery_readiness"]["jobs"][0]["has_network_or_har_save_response"] is True
+    assert data["evidence_grade"]["has_network_or_har_save_response"] is True
+    assert any(point["kind"] == "network_save_result" for point in data["evidence_points"])
+
+
 def test_delivery_workspace_marks_acceptance_blocked_when_l2_not_passed(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     fixture = _create_delivery_fixture(repo, with_network=True)
@@ -560,6 +599,35 @@ def test_delivery_workspace_blocks_publish_network_signal(tmp_path, monkeypatch)
     assert data["publish_guard_state"]["safe"] is False
     assert data["evidence_grade"]["grade"] == "C"
     assert data["evidence_grade"]["has_publish_risk"] is True
+
+
+def test_delivery_workspace_ignores_ambient_publish_buttons_in_body_excerpt(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_delivery_fixture(repo, with_network=True)
+    report = repo.list_reports(fixture["task"]["id"])[0]
+    summary = report["summary"]
+    summary["workflow_results"] = [
+        {
+            "action": "save_only",
+            "fill_result": {
+                "body_excerpt": "保存并移入待发布 保存 立即发布",
+            },
+        }
+    ]
+    repo.add_report(
+        fixture["task"]["id"],
+        fixture["job"]["id"],
+        report["product_id"],
+        "success",
+        False,
+        report["save_result"],
+        summary,
+    )
+
+    data = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}").json()
+
+    assert data["publish_guard_state"]["status"] == "safe_unpublished"
+    assert data["evidence_grade"]["has_publish_risk"] is False
 
 
 def test_delivery_workspace_report_published_false_is_not_unpublished_proof_without_verify(tmp_path, monkeypatch):

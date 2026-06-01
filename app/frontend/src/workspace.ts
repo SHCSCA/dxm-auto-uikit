@@ -390,6 +390,7 @@ function buildL2ProbePlan(): L2ProbePlan {
   const scriptPath = 'tools\\probes\\l2_readonly_probe.py'
   const cookieFile = 'data\\sessions\\dianxiaomi_cookies.json'
   const outputDir = 'data\\l2_readonly_probe'
+  const allowlistFile = 'config\\l2_readonly_allowlist.json'
   const targets = [
     { id: 'data_acquisition', url: 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition', required: true },
     { id: 'draft_box', url: 'https://www.dianxiaomi.com/web/smt/smtProductList/draft', required: true },
@@ -403,10 +404,11 @@ function buildL2ProbePlan(): L2ProbePlan {
     scriptPath,
     cookieFile,
     outputDir,
+    allowlistFile,
     targets,
     commands: [
       runIdCommand,
-      ...targets.map((target) => `${pythonCommand} ${scriptPath} --target ${target.id} --run-id $runId --cookie-file ${cookieFile} --output-dir ${outputDir}`),
+      ...targets.map((target) => `${pythonCommand} ${scriptPath} --target ${target.id} --run-id $runId --cookie-file ${cookieFile} --output-dir ${outputDir} --allowlist-file ${allowlistFile}`),
     ],
     acceptanceCriteria: [
       '两个目标必须使用同一 run-id。',
@@ -432,6 +434,7 @@ function normalizeL2ProbePlan(value: L2ProbePlan | undefined, fallback: L2ProbeP
     scriptPath: stringOr(plan.scriptPath, fallback.scriptPath),
     cookieFile: stringOr(plan.cookieFile, fallback.cookieFile),
     outputDir: stringOr(plan.outputDir, fallback.outputDir),
+    allowlistFile: stringOr(plan.allowlistFile, fallback.allowlistFile ?? ''),
     targets: Array.isArray(plan.targets) ? plan.targets as L2ProbePlan['targets'] : fallback.targets,
     commands: Array.isArray(plan.commands) ? plan.commands.map(String).filter(Boolean) : fallback.commands,
     acceptanceCriteria: Array.isArray(plan.acceptanceCriteria) ? plan.acceptanceCriteria.map(String).filter(Boolean) : fallback.acceptanceCriteria,

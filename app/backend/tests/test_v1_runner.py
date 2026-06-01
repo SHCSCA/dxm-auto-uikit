@@ -36,8 +36,8 @@ class FakeWorkflowAdapter:
     def open_draft_box(self):
         return self._record("open_draft_box")
 
-    def claim_product(self, note_text, product_query=None, store_name=None):
-        return self._record("claim_product", note_text, product_query, store_name)
+    def claim_product(self, note_text, product_query=None, store_name=None, target_source_urls=None):
+        return self._record("claim_product", note_text, product_query, store_name, target_source_urls)
 
     def open_editor(self, product_query=None, store_name=None, note_text=None):
         return self._record("open_editor", product_query, store_name, note_text)
@@ -223,6 +223,7 @@ def _create_task(repo: Repository, mode: str = "single_save", product_count: int
                 "image_count": 8,
                 "payload": {
                     "source_title": f"ACG Stand Product {idx + 1}",
+                    "source_url": f"https://detail.1688.com/offer/test-{idx + 1}.html",
                     "category": {"template_category_id": f"product-cat-{idx + 1}"},
                     "image": {"eu_outer_package_filename": f"product-eu-{idx + 1}.jpg"},
                     "compliance": {"battery": "none"},
@@ -295,7 +296,7 @@ def test_single_save_calls_workflow_adapter_in_complete_save_order(v1_db):
     assert adapter.calls == [
         ("check_login_state",),
         ("open_draft_box",),
-        ("claim_product", f"AI认领-{task['id']}-{job_id}", "ACG Stand Product 1", "Dang Kang"),
+        ("claim_product", f"AI认领-{task['id']}-{job_id}", "ACG Stand Product 1", "Dang Kang", ["https://detail.1688.com/offer/test-1.html"]),
         ("open_editor", "ACG Stand Product 1", "Dang Kang", f"AI认领-{task['id']}-{job_id}"),
         ("verify_edit_ownership", "ACG Stand Product 1", "Dang Kang"),
         ("fill_editor_required_defaults", adapter.calls[5][1], "ACG Stand Product 1", "Dang Kang"),
@@ -394,6 +395,25 @@ def test_agent_console_sync_failure_does_not_fail_save_flow(v1_db):
     assert report["published"] is False
     assert report["summary"]["agent_console"]["reason"] == "agent_console_exception"
     assert "console unavailable" in report["summary"]["agent_console"]["last_error"]
+
+
+def test_execution_defaults_task_payload_overrides_stale_product_media_slots(v1_db):
+    repo = Repository()
+    task = _create_task(repo, mode="single_save", product_count=1)
+    product = repo.list_products()[0]
+    product["payload"]["image"]["slots"] = [
+        {"slot_key": "marketing_scene_3_4", "strategy": "generate", "label": "(3:4场景图)"},
+        {"slot_key": "eu_outer_package", "filename": "product-eu-1.jpg", "label": "外包装/标签实拍图-欧盟"},
+    ]
+    task["payload"]["image"]["slots"] = [
+        {"slot_key": "marketing_scene_3_4", "strategy": "generate", "label": "(3:4场景图)", "filename": "scene-750x1000.jpg"},
+        {"slot_key": "eu_outer_package", "filename": "task-eu.jpg", "label": "外包装/标签实拍图-欧盟"},
+    ]
+
+    defaults = V1TaskRunner(repo, DummyManager())._execution_defaults(task, product)
+
+    assert defaults["image"]["slots"][0]["filename"] == "scene-750x1000.jpg"
+    assert defaults["image"]["slots"][1]["filename"] == "task-eu.jpg"
 
 
 def test_execution_defaults_only_applies_matching_template_bindings():
@@ -577,7 +597,7 @@ def test_claim_only_calls_adapter_without_opening_editor_or_saving(v1_db):
     assert adapter.calls == [
         ("check_login_state",),
         ("open_draft_box",),
-        ("claim_product", f"AI认领-{task['id']}-{job_id}", "ACG Stand Product 1", "Dang Kang"),
+        ("claim_product", f"AI认领-{task['id']}-{job_id}", "ACG Stand Product 1", "Dang Kang", ["https://detail.1688.com/offer/test-1.html"]),
     ]
     reports = repo.list_reports(task["id"])
     assert reports[0]["status"] == "success"

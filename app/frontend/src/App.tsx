@@ -15,6 +15,8 @@ import type { AgentConsoleSession, DeliveryWorkspace, Evidence, ExceptionItem, F
 import { composeWorkspace, demoTemplateSeeds, seedRows } from './workspace'
 
 const AGENT_CONSOLE_TARGET_URL = 'https://www.dianxiaomi.com/'
+const REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save', 'batch_save'])
+const L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
 
 const sourceLabels: Record<DeliveryWorkspace['source'], string> = {
   api: '/api/delivery/workspace',
@@ -31,6 +33,12 @@ type WorkspaceNotice = {
   kind: 'loading' | 'degraded'
   title: string
   detail: string
+}
+
+type ManualApprovalResponse = {
+  ok: boolean
+  approvalToken: string
+  confirmation: string
 }
 
 export default function App() {
@@ -54,7 +62,7 @@ export default function App() {
   const [operationError, setOperationError] = useState<string | null>(null)
   const [workspaceNotice, setWorkspaceNotice] = useState<WorkspaceNotice | null>({
     kind: 'loading',
-    title: '正在加载本地安全诊断工作台',
+    title: '正在加载 DXM 自动化工作台',
     detail: '正在读取 /api/delivery/workspace 与关联接口。',
   })
 
@@ -79,7 +87,7 @@ export default function App() {
       ? current
       : {
         kind: 'loading',
-        title: '正在加载本地安全诊断工作台',
+        title: '正在加载 DXM 自动化工作台',
         detail: `正在读取 ${deliveryPath} 与关联接口。`,
       })
     const [
@@ -126,7 +134,7 @@ export default function App() {
       const failedPaths = failures.map((failure) => failure.path).join('、')
       setWorkspaceNotice({
         kind: 'degraded',
-        title: '本地安全诊断接口不可用，正在显示只读降级数据',
+        title: 'DXM 自动化接口不可用，正在显示只读降级数据',
         detail: `失败接口：${failedPaths}。${failures[0]?.message ?? '请检查后端服务状态。'}`,
       })
     } else {
@@ -203,7 +211,25 @@ export default function App() {
     setBusy(true)
     setOperationError(null)
     try {
-      await postJson(`/api/tasks/${selectedTask.id}/start`, {})
+      if (REAL_DXM_MUTATION_MODES.has(selectedTask.mode)) {
+        const approvedBy = window.prompt('输入 L3 批准人标识。将只启动 save-only/claim-only 受控任务，不会发布。', 'ops-owner')
+        if (!approvedBy?.trim()) {
+          setOperationError('已取消：真实任务启动必须填写 L3 批准人。')
+          return
+        }
+        const approval = await postJson<ManualApprovalResponse>(`/api/tasks/${selectedTask.id}/manual-approval`, {
+          approved_by: approvedBy.trim(),
+          confirmation: L3_CONFIRMATION,
+        })
+        await postJson(`/api/tasks/${selectedTask.id}/start`, {
+          manual_approval: true,
+          approval_token: approval.approvalToken,
+          approved_by: approvedBy.trim(),
+          confirmation: approval.confirmation || L3_CONFIRMATION,
+        })
+      } else {
+        await postJson(`/api/tasks/${selectedTask.id}/start`, {})
+      }
       setActiveSection('console')
       await refreshWorkspace()
     } catch (error) {
