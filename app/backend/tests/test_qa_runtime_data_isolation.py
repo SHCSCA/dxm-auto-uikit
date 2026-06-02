@@ -43,6 +43,7 @@ def test_final_delivery_check_runs_browser_qa_backend_with_isolated_data_dir():
     assert "Start-BackgroundCommandWithEnvironment" in script
     backend_pytest_section = script[script.index('-Name "Backend pytest"') - 400:script.index('-Name "Frontend production build"')]
     assert "DXM_DATA_DIR" in backend_pytest_section
+    assert '-TimeoutSeconds 360' in backend_pytest_section
     qa_backend_section = script[script.index('-Name "QA backend service"') - 400:script.index('Wait-HttpReady -Name "QA backend service"')]
     assert "DXM_DATA_DIR" in qa_backend_section
     assert "pytestRuntimeDataDir" in script
@@ -178,6 +179,14 @@ def test_final_delivery_check_writes_current_provisional_report_before_browser_q
         script.index('-Name "Browser workbench QA"')
     ]
     assert "Write-ProvisionalDeliveryCheckReport" in qa_startup_section
+
+
+def test_browser_qa_disables_extensions_and_bounds_cdp_commands():
+    script = QA_BROWSER_CHECK.read_text(encoding="utf-8")
+
+    assert '"--disable-extensions"' in script
+    assert "CDP command timed out: ' + method" in script
+    assert "pending.delete(msgId)" in script
 
 
 def test_final_delivery_check_captures_final_report_center_after_final_json_write():

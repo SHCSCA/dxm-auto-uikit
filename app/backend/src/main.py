@@ -3,8 +3,11 @@ import hashlib
 import hmac
 import json
 import os
+import shutil
+import socket
 import secrets
 import subprocess
+import sys
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -29,19 +32,24 @@ from src.models import (
     LoginStartRequest,
     ProductCreate,
     ProductImportRequest,
+    RuntimeControlRequest,
     SelectorProfileValidateRequest,
     StoreCreate,
+    TaskConfigOverrideRequest,
     TaskCreate,
     TaskManualApprovalRequest,
     TaskStartRequest,
     TitleGenerateRequest,
     TemplateCreate,
+    TemplateUpdate,
 )
 from src.repository import Repository
+from src.services.config_defaults import DEFAULT_TEMPLATE_TYPES
 from src.services.title_ai import TitleAIService
 from src.services.selector_profile import SelectorProfileService
 from src.services.delivery_workspace import build_delivery_workspace, l2_real_probe_gate
 from src.services.agent_console import AgentConsoleService
+from src.services.config_preview import ConfigPreviewService
 from src.ws import ConnectionManager
 
 app = FastAPI(title='dxm-auto-uikit backend', version='0.1.0')
@@ -71,15 +79,38 @@ workflow_adapter = DxmWorkflowAdapter(login_flow)
 title_ai_service = TitleAIService()
 selector_profile_service = SelectorProfileService()
 agent_console_service = AgentConsoleService()
+config_preview_service = ConfigPreviewService()
 runner = V1TaskRunner(repo, manager, workflow_adapter=workflow_adapter, agent_console=agent_console_service)
 
 REAL_DXM_MUTATION_MODES = {'claim_only', 'single_save', 'batch_save'}
+RELEASED_REAL_DXM_MUTATION_MODES = {'single_save'}
 REAL_WRITE_START_MODES = REAL_DXM_MUTATION_MODES
 ALLOWED_START_MODES = {'probe', 'dry_run', 'claim_only', 'single_save', 'batch_save'}
 SAVE_ONLY_PUBLISH_SCENE = 'SMT_SEMI_MANAGED_SAVE_ONLY'
 L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
+UNRELEASED_REAL_DXM_MODE_DETAIL = 'Only controlled single_save is released for real DXM mutation'
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FINAL_DELIVERY_CHECK_JSON = REPO_ROOT / 'outputs' / 'final-delivery-check' / 'final-delivery-check.json'
+RUNTIME_LOG_SOURCES = {
+    'backend': DATA_DIR / 'backend.log',
+    'frontend': DATA_DIR / 'frontend.log',
+    'launcher': DATA_DIR / 'start-mvp.log',
+    'npm': DATA_DIR / 'npm-install.log',
+}
+RUNTIME_VIRTUAL_LOG_SOURCES = {'task', 'agent'}
+RUNTIME_LOG_LEVELS = {'info', 'warning', 'error'}
+RUNTIME_CONTROL_ACTIONS = {'stop_agent_console', 'clear_stuck_tasks', 'restart_backend', 'restart_frontend'}
+RUNTIME_LOG_TAG_PATTERNS = {
+    '启动': ('starting', 'started', 'running on', 'vite', 'ready in', 'launcher'),
+    '登录检测': ('login', 'check-login', '登录'),
+    '配置校验': ('precheck', 'config', '配置'),
+    '打开 DXM': ('dianxiaomi.com', 'open-draft', 'navigate'),
+    '点击': ('click', '点击'),
+    '填写': ('fill', 'input', '填写'),
+    '保存': ('save', '保存', 'add.json'),
+    '网络响应': ('http/', 'response', 'status', 'network', 'har'),
+    '报告生成': ('report', '报告'),
+}
 
 
 @app.get('/health', response_model=HealthResponse)
@@ -204,6 +235,19 @@ def create_template(payload: TemplateCreate):
     return repo.create_template(payload.model_dump())
 
 
+@app.patch('/api/templates/{template_id}')
+def update_template(template_id: int, payload: TemplateUpdate):
+    template = repo.update_template(template_id, payload.model_dump(exclude_unset=True))
+    if not template:
+        raise HTTPException(status_code=404, detail='Template not found')
+    return template
+
+
+@app.get('/api/config/preview')
+def config_preview(task_id: int | None = None):
+    return config_preview_service.build(repo, task_id)
+
+
 @app.get('/api/products')
 def list_products():
     return repo.list_products()
@@ -232,6 +276,17 @@ def get_task(task_id: int):
 @app.post('/api/tasks')
 def create_task(payload: TaskCreate):
     return repo.create_task(payload.model_dump())
+
+
+@app.patch('/api/tasks/{task_id}/config-overrides')
+def update_task_config_overrides(task_id: int, payload: TaskConfigOverrideRequest):
+    section = payload.section.strip().lower().replace('-', '_').replace(' ', '_')
+    if section not in DEFAULT_TEMPLATE_TYPES:
+        raise HTTPException(status_code=400, detail=f'Unsupported config override section: {payload.section}')
+    task = repo.update_task_template_override(task_id, section, payload.values)
+    if not task:
+        raise HTTPException(status_code=404, detail='Task not found')
+    return task
 
 
 @app.post('/api/tasks/{task_id}/manual-approval')
@@ -340,6 +395,170 @@ def list_logs(task_id: int | None = None):
     return repo.list_logs(task_id)
 
 
+@app.get('/api/runtime/logs')
+def runtime_logs(
+    source: str = 'backend',
+    cursor: int = 0,
+    limit: int = 200,
+    level: str | None = None,
+    q: str | None = None,
+    task_id: int | None = None,
+):
+    if source not in RUNTIME_LOG_SOURCES and source not in RUNTIME_VIRTUAL_LOG_SOURCES:
+        raise HTTPException(status_code=400, detail=f'Unknown runtime log source: {source}')
+    normalized_level = level.strip().lower() if level else None
+    if normalized_level and normalized_level not in RUNTIME_LOG_LEVELS:
+        raise HTTPException(status_code=400, detail=f'Unknown runtime log level: {level}')
+    limit = max(1, min(limit, 500))
+    cursor = max(0, cursor)
+    query = q.strip().lower() if q else ''
+    if source == 'task':
+        return _runtime_task_logs(task_id=task_id, cursor=cursor, limit=limit, level=normalized_level, query=query)
+    if source == 'agent':
+        return _runtime_agent_logs(cursor=cursor, limit=limit, level=normalized_level, query=query)
+    path = RUNTIME_LOG_SOURCES[source]
+    if not path.exists():
+        return {
+            'source': source,
+            'path': str(path),
+            'exists': False,
+            'cursor': cursor,
+            'nextCursor': cursor,
+            'items': [],
+            'lines': [],
+        }
+    try:
+        size = path.stat().st_size
+        start = min(cursor, size) if cursor else max(0, size - 262_144)
+        with path.open('rb') as handle:
+            handle.seek(start)
+            data = handle.read(262_144)
+            next_cursor = handle.tell()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f'Could not read runtime log: {exc}') from exc
+
+    text = data.decode('utf-8-sig', errors='replace')
+    items = [_runtime_log_item(line) for line in text.splitlines()]
+    if normalized_level:
+        items = [item for item in items if item['level'] == normalized_level]
+    if query:
+        items = [item for item in items if query in item['line'].lower()]
+    if len(items) > limit:
+        items = items[-limit:]
+    return {
+        'source': source,
+        'path': str(path),
+        'exists': True,
+        'cursor': start,
+        'nextCursor': next_cursor,
+        'items': items,
+        'lines': [item['line'] for item in items],
+        'truncated': len(data) >= 262_144,
+    }
+
+
+@app.get('/api/runtime/status')
+def runtime_status(frontend_url: str | None = None):
+    frontend_url = frontend_url or os.environ.get('DXM_FRONTEND_URL') or f"http://127.0.0.1:{os.environ.get('DXM_FRONTEND_PORT', '5173')}"
+    backend_url = os.environ.get('DXM_BACKEND_URL') or f"http://127.0.0.1:{os.environ.get('DXM_BACKEND_PORT', '8000')}"
+    agent_status = agent_console_service.status()
+    dxm_state = normalize_artifact_paths(login_flow.get_state())
+    return {
+        'backend': {
+            'status': 'ok',
+            'url': backend_url,
+            'port': _url_port(backend_url),
+            'detail': 'Backend API is responding',
+        },
+        'frontend': _runtime_http_service_status('frontend', frontend_url),
+        'agentConsole': {
+            'status': 'running' if agent_status.get('active') else 'idle',
+            'active': bool(agent_status.get('active')),
+            'browserVisible': bool(agent_status.get('browser_visible')),
+            'currentUrl': agent_status.get('current_url') or agent_status.get('target_url'),
+            'lastError': agent_status.get('last_error'),
+        },
+        'dxmLogin': {
+            'status': str(dxm_state.get('status') or dxm_state.get('stage') or 'unknown'),
+            'currentUrl': dxm_state.get('current_url') or dxm_state.get('url'),
+            'lastError': dxm_state.get('last_error') or dxm_state.get('error'),
+        },
+        'dependencies': {
+            'python': {
+                'status': 'ok' if Path(sys.executable).exists() else 'missing',
+                'path': sys.executable,
+            },
+            'node': {
+                'status': 'ok' if shutil.which('node') else 'missing',
+                'path': shutil.which('node'),
+            },
+        },
+    }
+
+
+@app.post('/api/runtime/control')
+def runtime_control(payload: RuntimeControlRequest):
+    action = payload.action.strip().lower()
+    if action not in RUNTIME_CONTROL_ACTIONS:
+        raise HTTPException(status_code=400, detail=f'Unknown runtime control action: {payload.action}')
+
+    if action in {'restart_backend', 'restart_frontend'}:
+        _append_runtime_control_log(f"restart requested but not available from backend: {action}")
+        raise HTTPException(
+            status_code=409,
+            detail='launcher-managed restart is not available from this backend process yet; use the single launcher window to restart services',
+        )
+
+    if action == 'stop_agent_console':
+        before = agent_console_service.status()
+        result = agent_console_service.stop()
+        task_id = before.get('task_id')
+        if isinstance(task_id, int):
+            repo.add_log(task_id, before.get('job_id'), 'info', '运行时控制：已停止浏览器 Agent', {
+                'action': action,
+                'session_id': before.get('session_id'),
+            })
+        _append_runtime_control_log(f"stop_agent_console task={task_id or 'none'} session={before.get('session_id') or 'none'}")
+        return normalize_artifact_paths({
+            'ok': True,
+            'action': action,
+            'agentConsole': result,
+            'message': '浏览器 Agent 已停止',
+        })
+
+    if action == 'clear_stuck_tasks':
+        cleared: list[dict] = []
+        skipped: list[dict] = []
+        candidates = [task for task in repo.list_tasks() if task.get('status') in {'running', 'paused'}]
+        for task in candidates:
+            task_id = task.get('id')
+            mode = str(task.get('mode') or (task.get('payload') or {}).get('execution_mode') or '')
+            if mode in REAL_WRITE_START_MODES:
+                skipped.append({'id': task_id, 'mode': mode, 'status': task.get('status'), 'reason': 'real_write_protected'})
+                continue
+            repo.update_task_status(task_id, 'cancelled')
+            repo.add_log(task_id, None, 'warning', '运行时控制：已清理卡住任务会话', {
+                'action': action,
+                'previous_status': task.get('status'),
+                'mode': mode,
+            })
+            cleared.append({'id': task_id, 'mode': mode, 'previousStatus': task.get('status')})
+        _append_runtime_control_log(
+            f"clear_stuck_tasks cleared={','.join(str(item['id']) for item in cleared) or 'none'} "
+            f"skipped={','.join(str(item['id']) for item in skipped) or 'none'}"
+        )
+        return {
+            'ok': True,
+            'action': action,
+            'clearedTaskIds': [item['id'] for item in cleared],
+            'clearedTasks': cleared,
+            'skippedTasks': skipped,
+            'message': f"已清理 {len(cleared)} 个非真实写入任务；保护 {len(skipped)} 个真实写入任务",
+        }
+
+    raise HTTPException(status_code=400, detail=f'Unhandled runtime control action: {payload.action}')
+
+
 @app.get('/api/evidences')
 def list_evidences(task_id: int | None = None):
     return normalize_artifact_paths(repo.list_evidences(task_id))
@@ -394,6 +613,11 @@ def snapshot_agent_console():
     return normalize_artifact_paths(agent_console_service.snapshot())
 
 
+@app.post('/api/agent-console/frame')
+def refresh_agent_console_frame():
+    return normalize_artifact_paths(agent_console_service.refresh_frame())
+
+
 @app.post('/api/agent-console/stop')
 def stop_agent_console():
     return normalize_artifact_paths(agent_console_service.stop())
@@ -438,6 +662,201 @@ def _public_artifact_url(value: str) -> str | None:
             continue
         return f'/artifacts/{public_name}/{relative.as_posix()}'
     return None
+
+
+def _runtime_log_item(line: str) -> dict:
+    normalized = line.lower()
+    if any(token in normalized for token in (' error', 'error:', 'traceback', 'exception', ' failed', ' 500 ')):
+        level = 'error'
+    elif any(token in normalized for token in ('warn', 'warning', 'blocked', 'forbidden', ' 403 ', ' 409 ')):
+        level = 'warning'
+    else:
+        level = 'info'
+    tags = [
+        tag
+        for tag, patterns in RUNTIME_LOG_TAG_PATTERNS.items()
+        if any(pattern.lower() in normalized for pattern in patterns)
+    ]
+    return {'line': line, 'level': level, 'tags': tags}
+
+
+def _runtime_task_logs(task_id: int | None, cursor: int, limit: int, level: str | None, query: str) -> dict:
+    rows = repo.list_logs(task_id)
+    rows = sorted(rows, key=lambda item: int(item.get('id') or 0))
+    if cursor:
+        rows = [row for row in rows if int(row.get('id') or 0) > cursor]
+
+    items = []
+    for row in rows:
+        row_level = str(row.get('level') or 'info').lower()
+        line = _format_task_log_line(row)
+        item = _runtime_log_item(line)
+        item['level'] = row_level if row_level in RUNTIME_LOG_LEVELS else item['level']
+        if level and item['level'] != level:
+            continue
+        if query and query not in item['line'].lower():
+            continue
+        items.append(item)
+
+    if len(items) > limit:
+        items = items[-limit:]
+    next_cursor = max([cursor, *[int(row.get('id') or 0) for row in rows]], default=cursor)
+    return {
+        'source': 'task',
+        'path': f'job_logs{f"?task_id={task_id}" if task_id else ""}',
+        'exists': True,
+        'cursor': cursor,
+        'nextCursor': next_cursor,
+        'items': items,
+        'lines': [item['line'] for item in items],
+        'truncated': len(rows) > limit,
+    }
+
+
+def _runtime_agent_logs(cursor: int, limit: int, level: str | None, query: str) -> dict:
+    status = agent_console_service.status()
+    history = list(status.get('step_history') or [])
+    action_events = list(status.get('action_events') or [])
+    events = []
+    if not history and not action_events:
+        events.append({
+            'index': 1,
+            'line': _format_agent_status_line(status),
+        })
+    else:
+        for index, event in enumerate(history, start=1):
+            events.append({
+                'index': index,
+                'line': _format_agent_history_line(event),
+            })
+        offset = len(events)
+        for index, event in enumerate(action_events, start=1):
+            events.append({
+                'index': offset + index,
+                'line': _format_agent_action_line(event),
+            })
+        if status.get('last_error'):
+            events.append({
+                'index': len(events) + 1,
+                'line': f"[{status.get('updated_at') or ''}] ERROR Agent Console: {status.get('last_error')}",
+            })
+
+    if cursor:
+        events = [event for event in events if int(event.get('index') or 0) > cursor]
+
+    items = []
+    for event in events:
+        item = _runtime_log_item(str(event.get('line') or ''))
+        if level and item['level'] != level:
+            continue
+        if query and query not in item['line'].lower():
+            continue
+        items.append(item)
+    if len(items) > limit:
+        items = items[-limit:]
+    next_cursor = max([cursor, *[int(event.get('index') or 0) for event in events]], default=cursor)
+    return {
+        'source': 'agent',
+        'path': 'agent_console.events',
+        'exists': True,
+        'cursor': cursor,
+        'nextCursor': next_cursor,
+        'items': items,
+        'lines': [item['line'] for item in items],
+        'truncated': len(events) > limit,
+    }
+
+
+def _format_task_log_line(row: dict) -> str:
+    task_id = row.get('task_id')
+    job_id = row.get('job_id')
+    level = str(row.get('level') or 'info').upper()
+    created_at = row.get('created_at') or ''
+    context = row.get('context') if isinstance(row.get('context'), dict) else {}
+    tags = []
+    if context.get('action'):
+        tags.append(f"action={context.get('action')}")
+    if context.get('step') or context.get('step_code'):
+        tags.append(f"step={context.get('step') or context.get('step_code')}")
+    suffix = f" [{' '.join(tags)}]" if tags else ''
+    return f"[{created_at}] {level} task#{task_id}{f' job#{job_id}' if job_id else ''}: {row.get('message')}{suffix}"
+
+
+def _format_agent_status_line(status: dict) -> str:
+    state = status.get('hud') if isinstance(status.get('hud'), dict) else {}
+    active = 'running' if status.get('active') else 'idle'
+    visible = 'visible' if status.get('browser_visible') else 'hidden'
+    return (
+        f"[{status.get('updated_at') or status.get('created_at') or ''}] "
+        f"Agent Console {active}/{visible}: {state.get('title') or '待命'} "
+        f"url={status.get('current_url') or status.get('target_url') or '-'}"
+    )
+
+
+def _format_agent_history_line(event: dict) -> str:
+    field_domain = event.get('field_domain')
+    mode = event.get('mode')
+    field_part = f" / {field_domain}" if field_domain else ''
+    mode_part = f" / {mode}" if mode else ''
+    return (
+        f"[{event.get('updated_at') or ''}] Agent action task#{event.get('task_id')}: "
+        f"{event.get('step_code') or 'STEP'} / {event.get('step_name') or '状态推进'}"
+        f"{field_part}{mode_part}"
+    )
+
+
+def _format_agent_action_line(event: dict) -> str:
+    action_type = event.get('type') or 'workflow_action'
+    action = event.get('action') or 'action'
+    state = event.get('step_code') or event.get('state') or 'STEP'
+    target = event.get('target')
+    status = event.get('status') or 'ok'
+    target_part = f" target={target}" if target else ''
+    return (
+        f"[{event.get('timestamp') or ''}] Agent action task#{event.get('task_id')}: "
+        f"{state} / {action_type} / {action} status={status}{target_part}"
+    )
+
+
+def _append_runtime_control_log(message: str) -> None:
+    path = RUNTIME_LOG_SOURCES.get('launcher') or (DATA_DIR / 'start-mvp.log')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = f"[runtime-control] {message}"
+    try:
+        with path.open('a', encoding='utf-8') as handle:
+            handle.write(line + '\n')
+    except OSError:
+        pass
+
+
+def _runtime_http_service_status(name: str, url: str) -> dict:
+    port = _url_port(url)
+    reachable = _port_open('127.0.0.1', port) if port else False
+    return {
+        'status': 'ok' if reachable else 'down',
+        'url': url,
+        'port': port,
+        'detail': f'{name} port is listening' if reachable else f'{name} port is not listening',
+    }
+
+
+def _url_port(url: str) -> int | None:
+    try:
+        if ':' not in url.rsplit('/', 1)[0]:
+            return 443 if url.startswith('https://') else 80
+        return int(url.rsplit(':', 1)[1].split('/', 1)[0])
+    except (IndexError, ValueError):
+        return None
+
+
+def _port_open(host: str, port: int | None) -> bool:
+    if not port:
+        return False
+    try:
+        with socket.create_connection((host, port), timeout=0.3):
+            return True
+    except OSError:
+        return False
 
 
 def _read_final_delivery_check_summary():
@@ -572,6 +991,8 @@ def _assert_task_can_receive_manual_approval(task_id: int, request: TaskManualAp
     mode = str(task.get('mode') or (task.get('payload') or {}).get('execution_mode') or '')
     if mode not in REAL_DXM_MUTATION_MODES:
         raise HTTPException(status_code=400, detail=f'Manual approval is only available for real DXM mutation modes: {mode}')
+    if mode not in RELEASED_REAL_DXM_MUTATION_MODES:
+        raise HTTPException(status_code=403, detail=UNRELEASED_REAL_DXM_MODE_DETAIL)
     if task.get('status') != 'draft':
         raise HTTPException(status_code=409, detail=f"Task cannot be approved from status: {task.get('status')}")
     if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
@@ -606,6 +1027,8 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
 
     if mode not in REAL_DXM_MUTATION_MODES:
         return
+    if mode not in RELEASED_REAL_DXM_MUTATION_MODES:
+        raise HTTPException(status_code=403, detail=UNRELEASED_REAL_DXM_MODE_DETAIL)
 
     if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
         raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')

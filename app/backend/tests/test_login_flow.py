@@ -1950,6 +1950,27 @@ def test_flatten_editor_defaults_consumes_semi_managed_price_aliases(tmp_path):
     assert flattened['product_price'] == '49.00'
 
 
+def test_flatten_editor_defaults_consumes_config_center_edit_page_aliases(tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+
+    flattened = flow._flatten_editor_defaults({
+        'sku': {'sku_code': 'SKU-001', 'jit_stock': '88'},
+        'pricing': {'product_price': '9.99', 'supply_price': '6.66', 'stock': '77'},
+        'logistics': {'freight_template': '半托管运费模板', 'service_template': '无忧服务模板'},
+        'compliance': {'customs_name': 'Acrylic stand'},
+    })
+
+    assert flattened['sku_code'] == 'SKU-001'
+    assert flattened['jit_stock'] == '88'
+    assert flattened['product_price'] == '9.99'
+    assert flattened['supply_price'] == '6.66'
+    assert flattened['stock'] == '77'
+    assert flattened['freight_template_priorities'] == '半托管运费模板'
+    assert flattened['service_template_priorities'] == '无忧服务模板'
+    assert flattened['customs_product_name_priorities'] == 'Acrylic stand'
+
+
 def test_fill_semi_managed_defaults_uses_column_header_strategy(monkeypatch, tmp_path):
     live_client = DummyLiveClient(logged_in=True)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')

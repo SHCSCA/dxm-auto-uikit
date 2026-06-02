@@ -73,7 +73,7 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
     if task_id is None:
         if not tasks:
             return None
-        task_id = int(tasks[0]["id"])
+        task_id = _default_delivery_task_id(repo, tasks)
 
     task = repo.get_task(task_id)
     if not task:
@@ -115,6 +115,20 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
         "logs": logs,
         "exceptions": exceptions,
     }
+
+
+def _default_delivery_task_id(repo: Repository, tasks: list[dict[str, Any]]) -> int:
+    for report in repo.list_reports():
+        if _report_has_delivery_evidence(report):
+            return int(report["task_id"])
+    return int(tasks[0]["id"])
+
+
+def _report_has_delivery_evidence(report: Mapping[str, Any]) -> bool:
+    if str(report.get("status") or "").lower() != "success":
+        return False
+    extracted = _extract_delivery_evidence([dict(report)], [])
+    return bool(extracted["save_results"] and extracted["published_proofs"])
 
 
 def _baseline() -> dict[str, Any]:

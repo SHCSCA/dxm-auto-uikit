@@ -26,6 +26,16 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
   return response.json()
 }
 
+export async function patchJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) throw new Error(await responseErrorMessage(response, `PATCH ${path} failed`))
+  return response.json()
+}
+
 async function responseErrorMessage(response: Response, fallback: string): Promise<string> {
   try {
     const payload = await response.clone().json()

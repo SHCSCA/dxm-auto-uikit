@@ -455,6 +455,45 @@ def test_delivery_workspace_without_task_id_uses_latest_task(tmp_path, monkeypat
     assert data["publish_guard_state"]["publish_allowed"] is False
 
 
+def test_delivery_workspace_without_task_id_prefers_task_with_delivery_evidence_over_newer_draft(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_delivery_fixture(repo, with_network=True)
+    store = repo.create_store("Dang Kang QA", "AliExpress")
+    product = repo.create_product(
+        {
+            "title": "QA unreleased real mode product",
+            "source": "qa",
+            "category_name": "QA_CATEGORY",
+            "price": 7.01,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {"source_title": "QA unreleased real mode product"},
+        }
+    )
+    newer_draft = repo.create_task(
+        {
+            "name": "QA unreleased claim_only task",
+            "store_id": store["id"],
+            "mode": "claim_only",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "product_ids": [product["id"]],
+            "claim_mark": "QA_CLAIM",
+            "payload": {"store_name": store["name"], "category_name": product["category_name"]},
+        }
+    )
+
+    response = client.get("/api/delivery/workspace")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert newer_draft["id"] > fixture["task"]["id"]
+    assert data["tasks"][0]["id"] == newer_draft["id"]
+    assert data["current_task"]["id"] == fixture["task"]["id"]
+    assert data["report_summary"]["latest_report"]["task_id"] == fixture["task"]["id"]
+    assert data["publish_guard_state"]["status"] == "safe_unpublished"
+
+
 def test_delivery_workspace_exposes_publish_guard_and_dxm_reference_fields(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     fixture = _create_delivery_fixture(repo, with_network=True)

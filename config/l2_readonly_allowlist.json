@@ -238,7 +238,7 @@
       "decision": "approve",
       "method": "GET",
       "host": "s1.dianxiaomi.com",
-      "path_regex": "/dxm-web/2026-05/assets/publishDetection-[A-Za-z0-9_-]+\\.js",
+      "path_regex": "/dxm-web/2026-(05|06)/assets/publishDetection-[A-Za-z0-9_-]+\\.js",
       "resource_type": "script",
       "allowed_reasons": ["forbidden_url_keywords:publish"],
       "allow_forbidden_keywords": ["publish"],

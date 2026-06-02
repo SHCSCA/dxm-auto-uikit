@@ -9,8 +9,8 @@ from typing import Any
 from src.core.config import SCREENSHOT_DIR
 from src.execution.dxm_live import DxmLiveClient
 from src.repository import Repository
+from src.services.config_defaults import DEFAULT_TEMPLATE_TYPES, ConfigDefaultsResolver
 from src.services.config_validation import ConfigValidationService
-from src.services.dxm_reference_templates import resolve_dxm_reference_templates
 from src.services.ownership_lock import OwnershipLockService
 from src.services.publish_guard import PublishGuardService
 from src.state_machine.contracts import StateName, normalize_execution_mode
@@ -52,18 +52,6 @@ MODE_LAST_STATE = {
     "batch_save": StateName.RELEASE_LOCK,
 }
 
-DEFAULT_TEMPLATE_TYPES = {
-    "category",
-    "sku",
-    "pricing",
-    "logistics",
-    "image",
-    "compliance",
-    "semi_managed",
-    "dxm_reference",
-}
-
-
 class V1TaskRunner:
     def __init__(
         self,
@@ -80,6 +68,7 @@ class V1TaskRunner:
         self.live = DxmLiveClient()
         self.publish_guard = PublishGuardService()
         self.config_validation = ConfigValidationService()
+        self.defaults_resolver = ConfigDefaultsResolver()
         self.ownership_lock = OwnershipLockService()
 
     async def run_task(self, task_id: int) -> None:
@@ -153,6 +142,7 @@ class V1TaskRunner:
         evidence_paths: list[str] = []
         workflow_results: list[dict[str, Any]] = []
         agent_console_events: list[dict[str, Any]] = []
+        agent_action_events: list[dict[str, Any]] = []
         last_state = MODE_LAST_STATE[mode]
 
         self.repo.update_job(job_id, status="running", current_step_code="PRECHECK_CONFIG", current_step_name="启动前配置校验")
@@ -213,8 +203,19 @@ class V1TaskRunner:
 
                 workflow_result = await self._run_workflow_action_async(task, job, state_name, claim_mark, execution_defaults)
                 if workflow_result:
+                    agent_action_event = self._sync_agent_action(
+                        task,
+                        job,
+                        mode,
+                        state_name,
+                        step_name,
+                        field_domain,
+                        workflow_result,
+                    )
+                    if agent_action_event:
+                        agent_action_events.append(agent_action_event)
                     workflow_results.append(workflow_result)
-                    self.repo.add_evidence(task_id, job_id, "workflow_action", workflow_result.get("screenshot_url"), {
+                    workflow_meta = {
                         "state": state_name.value,
                         "action": workflow_result.get("action"),
                         "stage": workflow_result.get("stage"),
@@ -225,7 +226,10 @@ class V1TaskRunner:
                         "store_name": workflow_result.get("store_name"),
                         "save_result": workflow_result.get("save_result"),
                         "dxm_reference_template_results": workflow_result.get("dxm_reference_template_results"),
-                    })
+                    }
+                    if agent_action_event:
+                        workflow_meta["agent_action"] = agent_action_event
+                    self.repo.add_evidence(task_id, job_id, "workflow_action", workflow_result.get("screenshot_url"), workflow_meta)
 
                 if state_name in {
                     StateName.FILL_BASE_INFO,
@@ -274,7 +278,19 @@ class V1TaskRunner:
             if mode in {"single_save", "batch_save"}:
                 empty_fields.append("货品条码：配置允许留空")
 
-            summary = self._build_summary(task, job, mode, claim_mark, filled_fields, empty_fields, evidence_paths, workflow_results, execution_defaults, agent_console_events=agent_console_events)
+            summary = self._build_summary(
+                task,
+                job,
+                mode,
+                claim_mark,
+                filled_fields,
+                empty_fields,
+                evidence_paths,
+                workflow_results,
+                execution_defaults,
+                agent_console_events=agent_console_events,
+                agent_action_events=agent_action_events,
+            )
             save_result = self._save_result_for_mode(mode, workflow_results)
             self.repo.add_report(task_id, job_id, product_id, "success", False, save_result, summary)
             self.repo.update_job(
@@ -315,7 +331,20 @@ class V1TaskRunner:
                 "failed",
                 False,
                 {"ok": False, "error_code": error.error_code, "message": error.detail},
-                self._build_summary(task, job, mode, claim_mark, filled_fields, empty_fields, evidence_paths, workflow_results, execution_defaults, blocked_reason=error.detail, agent_console_events=agent_console_events),
+                self._build_summary(
+                    task,
+                    job,
+                    mode,
+                    claim_mark,
+                    filled_fields,
+                    empty_fields,
+                    evidence_paths,
+                    workflow_results,
+                    execution_defaults,
+                    blocked_reason=error.detail,
+                    agent_console_events=agent_console_events,
+                    agent_action_events=agent_action_events,
+                ),
             )
             self.repo.add_log(task_id, job_id, "error", error.title, {"error_code": error.error_code, "detail": error.detail})
             return False
@@ -387,6 +416,97 @@ class V1TaskRunner:
             "updated_at": result.get("updated_at"),
             "last_error": result.get("last_error") or result.get("error"),
         }
+
+    def _sync_agent_action(
+        self,
+        task: dict[str, Any],
+        job: dict[str, Any],
+        mode: str,
+        state_name: StateName,
+        step_name: str,
+        field_domain: str,
+        workflow_result: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        if self.agent_console is None:
+            return None
+        action_name = str(workflow_result.get("action") or state_name.value)
+        save_result = self._extract_save_result(dict(workflow_result)) if action_name == "save_only" else None
+        try:
+            result = self.agent_console.record_action_event(
+                task_id=task["id"],
+                job_id=job["id"],
+                product_id=job.get("product_id"),
+                type=self._agent_action_type(action_name),
+                action=action_name,
+                label=step_name,
+                state=state_name.value,
+                step_code=state_name.value,
+                field_domain=field_domain,
+                status="ok" if workflow_result.get("ok") else "failed",
+                target=self._agent_action_target(action_name, workflow_result),
+                page_url=workflow_result.get("page_url"),
+                screenshot_url=workflow_result.get("screenshot_url"),
+                save_result=save_result,
+                store_name=self._store_name(task),
+            )
+        except Exception as exc:
+            result = {
+                "ok": False,
+                "updated": False,
+                "reason": "agent_console_exception",
+                "error": str(exc),
+            }
+        if result.get("reason") == "agent_console_inactive":
+            return None
+        summary = self._agent_console_summary(result)
+        action_events = result.get("action_events") if isinstance(result.get("action_events"), list) else []
+        if action_events:
+            summary["action_event"] = action_events[-1]
+            return action_events[-1]
+        summary["action_event"] = {
+            "type": self._agent_action_type(action_name),
+            "action": action_name,
+            "label": step_name,
+            "state": state_name.value,
+            "step_code": state_name.value,
+            "task_id": task["id"],
+            "job_id": job["id"],
+            "product_id": job.get("product_id"),
+            "field_domain": field_domain,
+            "status": "ok" if workflow_result.get("ok") else "failed",
+            "target": self._agent_action_target(action_name, workflow_result),
+            "page_url": workflow_result.get("page_url"),
+            "screenshot_url": workflow_result.get("screenshot_url"),
+            "save_result": save_result,
+            "store_name": self._store_name(task),
+        }
+        return {key: value for key, value in summary["action_event"].items() if value is not None}
+
+    def _agent_action_type(self, action_name: str) -> str:
+        if action_name == "save_only":
+            return "save"
+        if action_name == "fill_media_assets":
+            return "upload"
+        if action_name.startswith("fill_") or action_name == "claim_product":
+            return "fill"
+        if action_name in {"enable_semi_managed"}:
+            return "select"
+        if action_name.startswith("verify_") or action_name == "check_login_state":
+            return "wait"
+        if action_name.startswith("open_"):
+            return "click"
+        return "workflow_action"
+
+    def _agent_action_target(self, action_name: str, workflow_result: Mapping[str, Any]) -> str | None:
+        if action_name == "save_only":
+            return "保存"
+        if action_name == "claim_product":
+            return "领取备注"
+        if action_name.startswith("fill_"):
+            return str(workflow_result.get("product_query") or "编辑页字段")
+        if action_name.startswith("open_"):
+            return str(workflow_result.get("page_url") or "店小秘页面")
+        return str(workflow_result.get("stage") or "") or None
 
     def _next_step_name(self, mode: str, current_state: StateName) -> str | None:
         steps = self._steps_for_mode(mode)
@@ -658,8 +778,10 @@ class V1TaskRunner:
         execution_defaults: Mapping[str, Any] | None = None,
         blocked_reason: str | None = None,
         agent_console_events: list[dict[str, Any]] | None = None,
+        agent_action_events: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         console_events = agent_console_events or []
+        action_events = agent_action_events or []
         return {
             "task_id": task["id"],
             "job_id": job["id"],
@@ -682,6 +804,7 @@ class V1TaskRunner:
             "workflow_results": workflow_results,
             "agent_console_events": console_events,
             "agent_console": console_events[-1] if console_events else None,
+            "agent_action_events": action_events,
             "published": False,
         }
 
@@ -747,42 +870,7 @@ class V1TaskRunner:
         task: Mapping[str, Any],
         product: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
-        defaults: dict[str, Any] = {}
-        template_trace: list[dict[str, Any]] = []
-        for template in reversed(self.repo.list_templates()):
-            if not template.get("is_enabled", True):
-                continue
-            if not self._template_applies_to(template, task, product):
-                continue
-            template_type = self._normalize_template_type(template.get("template_type"))
-            if template_type not in DEFAULT_TEMPLATE_TYPES:
-                continue
-            payload = template.get("payload") or {}
-            if isinstance(payload, Mapping):
-                self._merge_template_payload(defaults, template_type, payload)
-                template_trace.append({
-                    "template_id": template.get("id"),
-                    "template_type": template_type,
-                    "template_name": template.get("template_name"),
-                    "binding_scope": template.get("binding_scope"),
-                })
-
-        product_payload = (product or {}).get("payload") or {}
-        if isinstance(product_payload, Mapping):
-            self._merge_payload(defaults, product_payload)
-
-        task_payload = task.get("payload") or {}
-        if isinstance(task_payload, Mapping):
-            self._merge_payload(defaults, task_payload, skip_keys={"template_overrides"})
-            overrides = task_payload.get("template_overrides")
-            if isinstance(overrides, Mapping):
-                for template_type, payload in overrides.items():
-                    normalized = self._normalize_template_type(template_type)
-                    if normalized in DEFAULT_TEMPLATE_TYPES and isinstance(payload, Mapping):
-                        self._deep_merge(defaults.setdefault(normalized, {}), payload)
-        defaults["dxm_reference_templates_resolved"] = resolve_dxm_reference_templates(defaults)
-        defaults["_template_trace"] = template_trace
-        return defaults
+        return self.defaults_resolver.resolve(self.repo.list_templates(), task, product).defaults
 
     def _template_applies_to(
         self,

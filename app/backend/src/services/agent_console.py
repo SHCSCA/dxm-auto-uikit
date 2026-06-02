@@ -14,6 +14,8 @@ from src.execution.browser_runtime import chrome_launch_options
 PROFILE_ROOT = DATA_DIR / "browser_profiles" / "agent_console"
 SCREENSHOT_ROOT = DATA_DIR / "screenshots" / "agent_console"
 DEFAULT_TARGET_URL = "https://www.dianxiaomi.com/"
+MAX_NETWORK_EVENTS = 120
+MAX_ACTION_EVENTS = 160
 
 
 class AgentConsoleService:
@@ -68,7 +70,10 @@ class AgentConsoleService:
                 "last_step_code": None,
                 "last_step_name": None,
                 "step_history": [],
+                "network_events": [],
+                "action_events": [],
                 "screenshot": None,
+                "last_frame_at": None,
                 "created_at": _now(),
                 "updated_at": _now(),
                 "last_error": None,
@@ -182,7 +187,81 @@ class AgentConsoleService:
                 }
         return {**self._compact_status(), "ok": True, "updated": True, "reason": "updated"}
 
+    def record_action_event(
+        self,
+        *,
+        task_id: int,
+        job_id: int | None = None,
+        product_id: int | None = None,
+        type: str = "workflow_action",
+        action: str | None = None,
+        label: str | None = None,
+        state: str | None = None,
+        step_code: str | None = None,
+        field_domain: str | None = None,
+        status: str | None = None,
+        target: str | None = None,
+        value: str | None = None,
+        page_url: str | None = None,
+        screenshot_url: str | None = None,
+        save_result: dict[str, Any] | None = None,
+        store_name: str | None = None,
+    ) -> dict[str, Any]:
+        with self._lock:
+            if not self._state.get("active"):
+                return {
+                    "ok": True,
+                    "updated": False,
+                    "reason": "agent_console_inactive",
+                    "active": False,
+                }
+            current_task_id = self._state.get("task_id")
+            if current_task_id is not None and current_task_id != task_id:
+                return {
+                    "ok": False,
+                    "updated": False,
+                    "reason": "task_mismatch",
+                    "active": True,
+                    "session_id": self._state.get("session_id"),
+                    "task_id": current_task_id,
+                }
+            if current_task_id is None:
+                self._state["task_id"] = task_id
+
+            event = {
+                "type": type or "workflow_action",
+                "action": action,
+                "label": label or action or "自动化动作",
+                "state": state or step_code,
+                "step_code": step_code or state,
+                "task_id": task_id,
+                "job_id": job_id,
+                "product_id": product_id,
+                "field_domain": field_domain,
+                "status": status or "ok",
+                "target": target,
+                "value": value,
+                "page_url": page_url,
+                "screenshot_url": screenshot_url,
+                "save_result": save_result,
+                "store_name": store_name,
+                "timestamp": _now(),
+            }
+            events = list(self._state.get("action_events") or [])
+            events.append({key: value for key, value in event.items() if value is not None})
+            self._state["action_events"] = events[-MAX_ACTION_EVENTS:]
+            if page_url:
+                self._state["current_url"] = page_url
+            if screenshot_url:
+                self._state["screenshot"] = screenshot_url
+            self._state["updated_at"] = _now()
+
+        return {**self._compact_status(), "ok": True, "updated": True, "reason": "action_recorded"}
+
     def snapshot(self) -> dict[str, Any]:
+        return self.refresh_frame()
+
+    def refresh_frame(self) -> dict[str, Any]:
         with self._lock:
             page = self._page
             session_id = self._state.get("session_id")
@@ -195,12 +274,32 @@ class AgentConsoleService:
             self._run_browser_op(lambda: page.screenshot(path=str(path), full_page=True))
             with self._lock:
                 self._state["screenshot"] = str(path)
+                self._state["last_frame_at"] = _now()
+                try:
+                    self._state["current_url"] = page.url
+                    self._state["page_title"] = page.title()
+                except Exception as exc:
+                    self._state["last_error"] = str(exc)
                 self._state["updated_at"] = _now()
         except Exception as exc:
             with self._lock:
                 self._state["last_error"] = str(exc)
                 self._state["updated_at"] = _now()
         return self.status()
+
+    def _record_network_event(self, event: dict[str, Any]) -> None:
+        cleaned = {
+            "type": event.get("type") or "network",
+            "method": event.get("method"),
+            "url": event.get("url"),
+            "status": event.get("status"),
+            "timestamp": event.get("timestamp") or _now(),
+        }
+        with self._lock:
+            events = list(self._state.get("network_events") or [])
+            events.append(cleaned)
+            self._state["network_events"] = events[-MAX_NETWORK_EVENTS:]
+            self._state["updated_at"] = _now()
 
     def _launch_visible_browser(self, profile_dir: Path, state: dict[str, Any]) -> None:
         try:
@@ -222,6 +321,7 @@ class AgentConsoleService:
                 args=args,
             )
             page = context.pages[0] if context.pages else context.new_page()
+            self._attach_network_listeners(page)
             page.add_init_script(HUD_INIT_SCRIPT)
             page.goto(state["target_url"], wait_until="domcontentloaded", timeout=45000)
             self._apply_hud(page, state["hud"])
@@ -241,6 +341,35 @@ class AgentConsoleService:
                 self._state["last_error"] = str(exc)
                 self._state["browser_visible"] = False
                 self._state["updated_at"] = _now()
+
+    def _attach_network_listeners(self, page) -> None:
+        def on_request(request) -> None:
+            try:
+                self._record_network_event({
+                    "type": "request",
+                    "method": getattr(request, "method", None),
+                    "url": getattr(request, "url", None),
+                })
+            except Exception:
+                pass
+
+        def on_response(response) -> None:
+            try:
+                request = getattr(response, "request", None)
+                self._record_network_event({
+                    "type": "response",
+                    "method": getattr(request, "method", None),
+                    "url": getattr(response, "url", None),
+                    "status": getattr(response, "status", None),
+                })
+            except Exception:
+                pass
+
+        try:
+            page.on("request", on_request)
+            page.on("response", on_response)
+        except Exception:
+            pass
 
     def _apply_hud(self, page, hud: dict[str, Any]) -> None:
         page.evaluate(
@@ -309,7 +438,10 @@ class AgentConsoleService:
             "last_step_code": None,
             "last_step_name": None,
             "step_history": [],
+            "network_events": [],
+            "action_events": [],
             "screenshot": None,
+            "last_frame_at": None,
             "created_at": None,
             "updated_at": None,
             "last_error": None,
@@ -329,7 +461,10 @@ class AgentConsoleService:
                 "hud": dict(self._state.get("hud") or {}),
                 "last_step_code": self._state.get("last_step_code"),
                 "last_step_name": self._state.get("last_step_name"),
+                "network_events": list(self._state.get("network_events") or []),
+                "action_events": list(self._state.get("action_events") or []),
                 "screenshot": self._state.get("screenshot"),
+                "last_frame_at": self._state.get("last_frame_at"),
                 "updated_at": self._state.get("updated_at"),
                 "last_error": self._state.get("last_error"),
             }

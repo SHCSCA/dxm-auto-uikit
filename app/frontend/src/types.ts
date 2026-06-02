@@ -18,7 +18,58 @@ export type DxmReferenceTemplateSection = {
 export type Template = { id: number; template_type: string; template_name: string; binding_scope: string; payload: Record<string, unknown>; is_enabled: boolean }
 export type Product = { id: number; title: string; category_name: string; price: number; currency: string; sku_count: number; image_count: number; status: string; image?: { eu_outer_package_filename?: string } }
 export type Task = { id: number; name: string; status: string; mode: string; publish_scene: string; total_jobs: number; completed_jobs: number; failed_jobs: number; payload: { product_ids?: number[]; store_name?: string; category_name?: string; image?: { eu_outer_package_filename?: string }; [key: string]: unknown } }
+export type RealTaskCreateRequest = { storeId: number; mode: 'probe' | 'single_save'; productIds: number[] }
 export type LogItem = { id: number; task_id: number; job_id: number | null; level: string; message: string; context: Record<string, unknown>; created_at: string }
+export type RuntimeLogSource = 'backend' | 'frontend' | 'launcher' | 'npm' | 'task' | 'agent'
+export type RuntimeLogItem = { line: string; level: 'info' | 'warning' | 'error' | string; tags: string[] }
+export type RuntimeLogResponse = { source: string; path: string; exists: boolean; cursor: number; nextCursor: number; lines: string[]; items?: RuntimeLogItem[]; truncated?: boolean }
+export type RuntimeStatus = {
+  backend: { status: string; url?: string; port?: number | null; detail?: string }
+  frontend: { status: string; url?: string; port?: number | null; detail?: string }
+  agentConsole: { status: string; active: boolean; browserVisible: boolean; currentUrl?: string | null; lastError?: string | null }
+  dxmLogin: { status: string; currentUrl?: string | null; lastError?: string | null }
+  dependencies: Record<string, { status: string; path?: string | null }>
+}
+export type RuntimeControlAction = 'stop_agent_console' | 'clear_stuck_tasks' | 'restart_backend' | 'restart_frontend'
+export type RuntimeControlResponse = {
+  ok: boolean
+  action: RuntimeControlAction | string
+  message?: string
+  clearedTaskIds?: number[]
+  clearedTasks?: Array<Record<string, unknown>>
+  skippedTasks?: Array<Record<string, unknown>>
+  agentConsole?: AgentConsoleSession
+}
+export type ConfigPreviewField = {
+  path: string
+  name: string
+  label: string
+  value: unknown
+  source: string
+  required: boolean
+  missing: boolean
+}
+export type ConfigPreviewGroup = {
+  section: string
+  label: string
+  templateType: string
+  required: boolean
+  templatePresent: boolean
+  complete: boolean
+  missing: string[]
+  fields: ConfigPreviewField[]
+}
+export type ConfigPreview = {
+  ok: boolean
+  mode: string | null
+  taskId: number | null
+  productId: number | null
+  missing: string[]
+  warnings: string[]
+  fieldGroups: ConfigPreviewGroup[]
+  templateTrace: Array<Record<string, unknown>>
+  resolvedDefaults: Record<string, unknown>
+}
 export type Evidence = { id: number; task_id: number; job_id: number | null; evidence_type: string; file_path: string | null; meta: Record<string, unknown>; created_at: string }
 export type ExceptionItem = { id: number; task_id: number; job_id: number | null; error_code: string; field_domain: string; title: string; detail: string; suggestion: string; status: string }
 export type Report = { id: number | string; task_id?: number; title?: string; status?: string; report_type?: string; summary?: string; file_path?: string | null; file_path_url?: string | null; created_at?: string; [key: string]: unknown }
@@ -105,6 +156,31 @@ export type AgentConsoleHud = {
   guard?: string
   updated_at?: string
 }
+export type AgentConsoleNetworkEvent = {
+  type?: string
+  method?: string
+  url?: string
+  status?: number
+  timestamp?: string
+}
+export type AgentConsoleActionEvent = {
+  type: 'workflow_action' | 'click' | 'fill' | 'select' | 'upload' | 'wait' | 'save' | string
+  action?: string
+  label?: string
+  state?: string
+  step_code?: string
+  task_id?: number
+  job_id?: number
+  product_id?: number
+  field_domain?: string
+  status?: 'ok' | 'failed' | string
+  target?: string
+  value?: string
+  page_url?: string
+  screenshot_url?: string
+  save_result?: Record<string, unknown>
+  timestamp?: string
+}
 export type AgentConsoleSession = {
   active: boolean
   session_id: string | null
@@ -123,8 +199,11 @@ export type AgentConsoleSession = {
   last_step_code?: string | null
   last_step_name?: string | null
   step_history?: Array<Record<string, unknown>>
+  action_events?: AgentConsoleActionEvent[]
+  network_events?: AgentConsoleNetworkEvent[]
   screenshot: string | null
   screenshot_url?: string | null
+  last_frame_at?: string | null
   created_at: string | null
   updated_at: string | null
   last_error: string | null
@@ -180,6 +259,7 @@ export type FinalDeliveryCheckSummary = {
 }
 export type WorkbenchSection =
   | 'dashboard'
+  | 'guide'
   | 'config'
   | 'tasks'
   | 'console'

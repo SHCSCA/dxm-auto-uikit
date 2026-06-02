@@ -3,6 +3,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from src import db
+from src.execution.v1_runner import V1TaskRunner
 from src.main import app
 from src.repository import Repository
 
@@ -91,30 +92,57 @@ def test_claim_only_start_requires_same_real_mutation_gate(tmp_path, monkeypatch
     response = client.post(f"/api/tasks/{task['id']}/start", json={})
 
     assert response.status_code == 403
-    assert "Manual approval is required" in response.json()["detail"]
+    detail = response.json()["detail"].lower()
+    assert "controlled single_save" in detail
+    assert "released" in detail
     assert runner.calls == []
 
 
-def test_claim_only_start_rejects_when_l2_gate_not_passed_after_approval(tmp_path, monkeypatch):
+def test_unreleased_real_modes_reject_manual_approval(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+
+    for mode in ("claim_only", "batch_save"):
+        task = _create_task(repo, mode=mode)
+
+        response = client.post(
+            f"/api/tasks/{task['id']}/manual-approval",
+            json={"approved_by": "ops-owner", "confirmation": "CONFIRM_DXM_SAVE_ONLY"},
+        )
+
+        assert response.status_code == 403
+        detail = response.json()["detail"].lower()
+        assert "controlled single_save" in detail
+        assert "released" in detail
+
+
+def test_unreleased_real_modes_cannot_start_after_approval_and_l2_passed(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
-    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "failed"})
-    task = _create_task(repo, mode="claim_only")
-    _approve_task(repo, task["id"], "claim-token")
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
 
-    response = client.post(
-        f"/api/tasks/{task['id']}/start",
-        json={
-            "manual_approval": True,
-            "approval_token": "claim-token",
-            "approved_by": "ops-owner",
-            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
-        },
-    )
+    for mode in ("claim_only", "batch_save"):
+        task = _create_task(repo, mode=mode)
+        _approve_task(repo, task["id"], f"{mode}-token")
 
-    assert response.status_code == 403
-    assert "L2 readonly probe gate is not passed: failed" in response.json()["detail"]
+        response = client.post(
+            f"/api/tasks/{task['id']}/start",
+            json={
+                "manual_approval": True,
+                "approval_token": f"{mode}-token",
+                "approved_by": "ops-owner",
+                "confirmation": "CONFIRM_DXM_SAVE_ONLY",
+            },
+        )
+
+        assert response.status_code == 403
+        detail = response.json()["detail"].lower()
+        assert "controlled single_save" in detail
+        assert "released" in detail
+        assert task["id"] not in runner.calls
     assert runner.calls == []
 
 
@@ -373,6 +401,513 @@ def test_agent_console_start_requires_passed_l2_gate(tmp_path, monkeypatch):
     assert "Agent console browser start requires passed L2" in response.json()["detail"]
 
 
+def test_runtime_logs_tail_known_log_sources(tmp_path, monkeypatch):
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    backend_log = tmp_path / "backend.log"
+    backend_log.write_text("\n".join(f"line {index}" for index in range(160)), encoding="utf-8")
+    monkeypatch.setattr(main, "RUNTIME_LOG_SOURCES", {"backend": backend_log})
+
+    response = client.get("/api/runtime/logs?source=backend&limit=3")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source"] == "backend"
+    assert payload["exists"] is True
+    assert payload["lines"] == ["line 157", "line 158", "line 159"]
+    assert [item["line"] for item in payload["items"]] == payload["lines"]
+    assert payload["nextCursor"] == backend_log.stat().st_size
+
+
+def test_runtime_logs_filter_by_level_and_query_with_tags(tmp_path, monkeypatch):
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    backend_log = tmp_path / "backend.log"
+    backend_log.write_text(
+        "\n".join([
+            "INFO starting backend",
+            "WARNING save response blocked",
+            "ERROR failed add.json save",
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(main, "RUNTIME_LOG_SOURCES", {"backend": backend_log})
+
+    response = client.get("/api/runtime/logs?source=backend&level=error&q=add.json")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["lines"] == ["ERROR failed add.json save"]
+    assert payload["items"][0]["level"] == "error"
+    assert "保存" in payload["items"][0]["tags"]
+
+
+def test_runtime_logs_expose_task_job_logs_with_cursor_and_filter(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo, mode="dry_run")
+    repo.add_log(task["id"], None, "info", "配置校验通过", {"step_code": "PRECHECK_CONFIG"})
+    repo.add_log(task["id"], 42, "error", "保存失败 add.json", {"action": "save_only"})
+
+    response = client.get(f"/api/runtime/logs?source=task&task_id={task['id']}&level=error&q=add.json")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source"] == "task"
+    assert payload["exists"] is True
+    assert payload["path"] == f"job_logs?task_id={task['id']}"
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["level"] == "error"
+    assert "task#" in payload["items"][0]["line"]
+    assert "job#42" in payload["items"][0]["line"]
+    assert "保存" in payload["items"][0]["tags"]
+    next_cursor = payload["nextCursor"]
+
+    repo.add_log(task["id"], None, "warning", "点击重试", {"action": "click"})
+    cursor_response = client.get(f"/api/runtime/logs?source=task&task_id={task['id']}&cursor={next_cursor}")
+
+    assert cursor_response.status_code == 200
+    cursor_payload = cursor_response.json()
+    assert cursor_payload["lines"] == [line for line in cursor_payload["lines"] if "点击重试" in line]
+    assert cursor_payload["nextCursor"] > next_cursor
+
+
+def test_runtime_logs_expose_browser_agent_history(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    task = _create_task(repo, mode="dry_run")
+    start_response = client.post("/api/agent-console/start", json={"task_id": task["id"], "launch_browser": False})
+    assert start_response.status_code == 200
+
+    main.agent_console_service.update_task_step(
+        task_id=task["id"],
+        job_id=7,
+        product_id=11,
+        step_code="SAVE_ONLY",
+        step_name="点击保存",
+        field_domain="semi_managed",
+        mode="single_save",
+    )
+    main.agent_console_service.record_action_event(
+        task_id=task["id"],
+        job_id=7,
+        product_id=11,
+        type="save",
+        action="save_only",
+        label="只点击保存",
+        state="SAVE_ONLY",
+        field_domain="save",
+        status="ok",
+        target="保存",
+    )
+
+    response = client.get("/api/runtime/logs?source=agent&q=status=ok")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source"] == "agent"
+    assert payload["path"] == "agent_console.events"
+    assert payload["exists"] is True
+    assert payload["lines"] == [line for line in payload["lines"] if "SAVE_ONLY" in line and "save_only" in line]
+    assert "保存" in payload["items"][0]["tags"]
+
+
+def test_runtime_status_reports_services_agent_and_dependencies(tmp_path, monkeypatch):
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+
+    response = client.get("/api/runtime/status?frontend_url=http://127.0.0.1:9")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["backend"]["status"] == "ok"
+    assert payload["frontend"]["status"] == "down"
+    assert payload["frontend"]["port"] == 9
+    assert payload["agentConsole"]["status"] in {"idle", "running"}
+    assert "dxmLogin" in payload
+    assert payload["dependencies"]["python"]["status"] == "ok"
+
+
+def test_runtime_control_stops_agent_console_and_records_log(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo, mode="dry_run")
+
+    start_response = client.post(
+        "/api/agent-console/start",
+        json={"task_id": task["id"], "launch_browser": False},
+    )
+    assert start_response.status_code == 200
+
+    response = client.post("/api/runtime/control", json={"action": "stop_agent_console"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["action"] == "stop_agent_console"
+    assert payload["agentConsole"]["active"] is False
+    logs = repo.list_logs(task["id"])
+    assert any("运行时控制：已停止浏览器 Agent" in item["message"] for item in logs)
+
+
+def test_runtime_control_clears_only_non_real_stuck_tasks(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    dry_run = _create_task(repo, mode="dry_run")
+    single_save = _create_task(repo, mode="single_save")
+    repo.update_task_status(dry_run["id"], "running")
+    repo.update_task_status(single_save["id"], "running")
+
+    response = client.post("/api/runtime/control", json={"action": "clear_stuck_tasks"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["clearedTaskIds"] == [dry_run["id"]]
+    assert repo.get_task(dry_run["id"])["status"] == "cancelled"
+    assert repo.get_task(single_save["id"])["status"] == "running"
+    assert any(item["id"] == single_save["id"] and item["reason"] == "real_write_protected" for item in payload["skippedTasks"])
+
+
+def test_runtime_control_rejects_backend_restart_without_launcher(tmp_path, monkeypatch):
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+
+    response = client.post("/api/runtime/control", json={"action": "restart_backend"})
+
+    assert response.status_code == 409
+    assert "launcher-managed restart" in response.json()["detail"]
+
+
+def test_runtime_logs_reject_unknown_source(tmp_path, monkeypatch):
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+
+    response = client.get("/api/runtime/logs?source=unknown")
+
+    assert response.status_code == 400
+    assert "Unknown runtime log source" in response.json()["detail"]
+
+
+def test_template_update_persists_edit_page_section_payload(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    template = repo.create_template(
+        {
+            "template_type": "logistics",
+            "template_name": "包装物流",
+            "binding_scope": "Dang Kang / 立牌类谷子",
+            "payload": {"weight": "0.03"},
+            "is_enabled": True,
+        }
+    )
+
+    response = client.patch(
+        f"/api/templates/{template['id']}",
+        json={
+            "payload": {
+                "weight": "0.05",
+                "length": "12",
+                "width": "10",
+                "height": "3",
+                "logistics_attribute": "普货",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["template_type"] == "logistics"
+    assert payload["payload"]["weight"] == "0.05"
+    assert repo.list_templates()[0]["payload"]["length"] == "12"
+
+
+def test_config_preview_reports_missing_edit_page_sections(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo)
+
+    response = client.get(f"/api/config/preview?task_id={task['id']}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is False
+    assert data["mode"] == "single_save"
+    assert "sku" in data["missing"]
+    assert "pricing" in data["missing"]
+    assert "image.eu_outer_package_filename" in data["missing"]
+    groups = {group["section"]: group for group in data["fieldGroups"]}
+    assert groups["logistics"]["templatePresent"] is False
+    assert groups["image"]["complete"] is False
+    assert any(field["missing"] for field in groups["image"]["fields"])
+
+
+def test_config_preview_shows_effective_values_and_sources(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    base_task = _create_task(repo)
+    repo.create_template(
+        {
+            "template_type": "logistics",
+            "template_name": "包装物流模板",
+            "binding_scope": "Dang Kang",
+            "payload": {"weight": "0.03", "length": "10", "width": "10", "height": "2"},
+            "is_enabled": True,
+        }
+    )
+    base_payload = repo.get_task_private(base_task["id"])["payload"]
+    override_task = repo.create_task(
+        {
+            "name": "override source task",
+            "store_id": base_task["store_id"],
+            "mode": "single_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "claim_mark": "AI认领",
+            "product_ids": base_payload["product_ids"],
+            "payload": {
+                **base_payload,
+                "template_overrides": {"logistics": {"weight": "0.05"}},
+            },
+        }
+    )
+
+    response = client.get(f"/api/config/preview?task_id={override_task['id']}")
+
+    assert response.status_code == 200
+    groups = {group["section"]: group for group in response.json()["fieldGroups"]}
+    logistics_fields = {field["path"]: field for field in groups["logistics"]["fields"]}
+    assert logistics_fields["logistics.weight"]["value"] == "0.05"
+    assert logistics_fields["logistics.weight"]["source"] == "任务覆盖"
+    assert logistics_fields["logistics.length"]["value"] == "10"
+    assert logistics_fields["logistics.length"]["source"] == "模板：包装物流模板"
+
+
+def test_config_preview_covers_dxm_edit_page_sections_and_reference_templates(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo)
+    repo.create_template(
+        {
+            "template_type": "dxm_reference",
+            "template_name": "DXM 引用模板",
+            "binding_scope": "Dang Kang",
+            "payload": {
+                "freight_template_priorities": "半托管运费模板",
+                "service_template_priorities": "无忧服务模板",
+                "eu_responsible_names": "EU Responsible Person",
+                "manufacturer_names": "默认制造商",
+            },
+            "is_enabled": True,
+        }
+    )
+
+    preview = client.get(f"/api/config/preview?task_id={task['id']}").json()
+    groups = {group["section"]: group for group in preview["fieldGroups"]}
+
+    assert "task_basic" in groups
+    assert "dxm_reference" in groups
+    task_fields = {field["path"]: field for field in groups["task_basic"]["fields"]}
+    assert task_fields["store_name"]["source"].startswith("任务：")
+    assert task_fields["execution_mode"]["value"] == "single_save"
+    reference_fields = {field["path"]: field for field in groups["dxm_reference"]["fields"]}
+    assert reference_fields["dxm_reference_templates_resolved.freight.names"]["value"] == ["半托管运费模板"]
+    assert reference_fields["dxm_reference_templates_resolved.service.names"]["source"] == "模板：DXM 引用模板"
+    assert "sku.jit_stock" in {field["path"] for field in groups["sku"]["fields"]}
+    assert "pricing.price_multiplier" in {field["path"] for field in groups["pricing"]["fields"]}
+    assert "image.local_asset_path" in {field["path"] for field in groups["image"]["fields"]}
+    assert "logistics.freight_template" in {field["path"] for field in groups["logistics"]["fields"]}
+    assert "compliance.brand" in {field["path"] for field in groups["compliance"]["fields"]}
+
+
+def test_config_preview_uses_resolved_dxm_reference_template_sections(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo)
+    repo.create_template(
+        {
+            "template_type": "dxm_reference",
+            "template_name": "DXM 八段引用模板",
+            "binding_scope": "Dang Kang",
+            "payload": {
+                "dxm_reference_templates": {
+                    "attribute_info": {"names": ["属性模板 A"]},
+                    "description": {"names": ["描述模板 A"], "required": False},
+                    "freight": {"names": ["半托管运费模板"]},
+                    "service": {"names": ["无忧服务模板"]},
+                    "eu_responsible": {"names": ["EU Responsible Person"]},
+                    "manufacturer": {"names": ["默认制造商"]},
+                    "compliance": {"names": ["合规模板"]},
+                    "semi_managed": {"names": ["半托管模板"]},
+                }
+            },
+            "is_enabled": True,
+        }
+    )
+
+    preview = client.get(f"/api/config/preview?task_id={task['id']}").json()
+    group = {group["section"]: group for group in preview["fieldGroups"]}["dxm_reference"]
+    fields = {field["path"]: field for field in group["fields"]}
+
+    assert group["complete"] is True
+    assert set(fields) == {
+        "dxm_reference_templates_resolved.attribute_info.names",
+        "dxm_reference_templates_resolved.description.names",
+        "dxm_reference_templates_resolved.freight.names",
+        "dxm_reference_templates_resolved.service.names",
+        "dxm_reference_templates_resolved.eu_responsible.names",
+        "dxm_reference_templates_resolved.manufacturer.names",
+        "dxm_reference_templates_resolved.compliance.names",
+        "dxm_reference_templates_resolved.semi_managed.names",
+    }
+    assert fields["dxm_reference_templates_resolved.attribute_info.names"]["value"] == ["属性模板 A"]
+    assert fields["dxm_reference_templates_resolved.description.names"]["required"] is False
+    assert fields["dxm_reference_templates_resolved.freight.names"]["source"] == "模板：DXM 八段引用模板"
+
+
+def test_config_preview_keeps_publish_allowed_out_of_editable_value_fields(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo)
+
+    preview = client.get(f"/api/config/preview?task_id={task['id']}").json()
+    task_fields = {field["path"] for group in preview["fieldGroups"] if group["section"] == "task_basic" for field in group["fields"]}
+
+    assert "publish_allowed" not in task_fields
+
+
+def test_config_preview_and_runner_use_same_resolved_defaults(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    base_task = _create_task(repo)
+    repo.create_template(
+        {
+            "template_type": "logistics",
+            "template_name": "包装物流模板",
+            "binding_scope": "Dang Kang",
+            "payload": {"weight": "0.03", "length": "10", "width": "10", "height": "2"},
+            "is_enabled": True,
+        }
+    )
+    base_payload = repo.get_task_private(base_task["id"])["payload"]
+    task = repo.create_task(
+        {
+            "name": "same resolver task",
+            "store_id": base_task["store_id"],
+            "mode": "single_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "claim_mark": "AI认领",
+            "product_ids": base_payload["product_ids"],
+            "payload": {
+                **base_payload,
+                "template_overrides": {"logistics": {"weight": "0.05"}},
+            },
+        }
+    )
+    product = repo.list_products()[0]
+
+    preview = client.get(f"/api/config/preview?task_id={task['id']}").json()
+    runner = V1TaskRunner(repo, object())
+    execution_defaults = runner._execution_defaults(repo.get_task_private(task["id"]), product)
+
+    assert preview["resolvedDefaults"] == execution_defaults
+    assert preview["resolvedDefaults"]["logistics"]["weight"] == "0.05"
+    assert preview["resolvedDefaults"]["logistics"]["length"] == "10"
+
+
+def test_task_config_override_endpoint_updates_preview_and_runner_defaults(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo)
+    repo.create_template(
+        {
+            "template_type": "logistics",
+            "template_name": "包装物流模板",
+            "binding_scope": "Dang Kang",
+            "payload": {"weight": "0.03", "length": "10", "width": "10", "height": "2"},
+            "is_enabled": True,
+        }
+    )
+
+    response = client.patch(
+        f"/api/tasks/{task['id']}/config-overrides",
+        json={"section": "logistics", "values": {"weight": "0.08", "length": "12", "width": ""}},
+    )
+
+    assert response.status_code == 200
+    public_payload = response.json()["payload"]
+    assert public_payload["template_overrides"]["logistics"] == {"weight": "0.08", "length": "12"}
+    preview = client.get(f"/api/config/preview?task_id={task['id']}").json()
+    groups = {group["section"]: group for group in preview["fieldGroups"]}
+    logistics_fields = {field["path"]: field for field in groups["logistics"]["fields"]}
+    assert logistics_fields["logistics.weight"]["value"] == "0.08"
+    assert logistics_fields["logistics.weight"]["source"] == "任务覆盖"
+    assert logistics_fields["logistics.length"]["value"] == "12"
+    assert logistics_fields["logistics.length"]["source"] == "任务覆盖"
+    assert logistics_fields["logistics.height"]["value"] == "2"
+    assert logistics_fields["logistics.height"]["source"] == "模板：包装物流模板"
+
+    runner = V1TaskRunner(repo, object())
+    execution_defaults = runner._execution_defaults(repo.get_task_private(task["id"]), repo.list_products()[0])
+    assert execution_defaults["logistics"]["weight"] == "0.08"
+    assert execution_defaults["logistics"]["height"] == "2"
+
+
+def test_task_config_override_endpoint_can_clear_section(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo)
+    first = client.patch(
+        f"/api/tasks/{task['id']}/config-overrides",
+        json={"section": "logistics", "values": {"weight": "0.08"}},
+    )
+    assert first.status_code == 200
+
+    cleared = client.patch(
+        f"/api/tasks/{task['id']}/config-overrides",
+        json={"section": "logistics", "values": {"weight": ""}},
+    )
+
+    assert cleared.status_code == 200
+    assert "template_overrides" not in repo.get_task_private(task["id"])["payload"]
+
+
+def test_task_config_override_endpoint_prunes_empty_nested_values(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo)
+    first = client.patch(
+        f"/api/tasks/{task['id']}/config-overrides",
+        json={
+            "section": "dxm_reference",
+            "values": {
+                "dxm_reference_templates": {
+                    "freight": {"names": "半托管运费模板"},
+                    "service": {"names": ""},
+                }
+            },
+        },
+    )
+    assert first.status_code == 200
+    assert repo.get_task_private(task["id"])["payload"]["template_overrides"]["dxm_reference"] == {
+        "dxm_reference_templates": {"freight": {"names": "半托管运费模板"}}
+    }
+
+    cleared = client.patch(
+        f"/api/tasks/{task['id']}/config-overrides",
+        json={
+            "section": "dxm_reference",
+            "values": {
+                "dxm_reference_templates": {
+                    "freight": {"names": ""},
+                    "service": {"names": ""},
+                }
+            },
+        },
+    )
+
+    assert cleared.status_code == 200
+    assert "template_overrides" not in repo.get_task_private(task["id"])["payload"]
+
+
+def test_task_config_override_endpoint_rejects_unknown_section(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo)
+
+    response = client.patch(
+        f"/api/tasks/{task['id']}/config-overrides",
+        json={"section": "publish", "values": {"enabled": True}},
+    )
+
+    assert response.status_code == 400
+
+
 def test_manual_approval_token_is_not_exposed_by_read_apis(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
@@ -487,7 +1022,7 @@ def test_real_save_start_rejects_when_l2_gate_not_passed(tmp_path, monkeypatch):
 
     for status in ("not_run", "mock_passed", "partial", "failed"):
         monkeypatch.setattr(main, "l2_real_probe_gate", lambda status=status: {"status": status})
-        for mode in ("claim_only", "single_save", "batch_save"):
+        for mode in ("single_save",):
             task = _create_task(repo, mode=mode)
             _approve_task(repo, task["id"], f"l3-token-{status}-{mode}")
 
@@ -547,7 +1082,7 @@ def test_direct_real_dxm_mutation_rejects_approved_task_when_l2_gate_not_passed(
     import src.main as main
 
     flow = DummyDxmLoginFlow()
-    task = _create_task(repo, mode="claim_only")
+    task = _create_task(repo, mode="single_save")
     _approve_task(repo, task["id"], "direct-token")
     monkeypatch.setattr(main, "login_flow", flow)
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "failed"})
@@ -577,12 +1112,51 @@ def test_direct_real_dxm_mutation_rejects_approved_task_when_l2_gate_not_passed(
     assert flow.draft_box_actions == []
 
 
+def test_direct_real_dxm_mutation_rejects_unreleased_modes_even_after_l2_and_approval(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    flow = DummyDxmLoginFlow()
+    monkeypatch.setattr(main, "login_flow", flow)
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+
+    endpoints = (
+        "/api/dxm/draft-box/action",
+        "/api/dxm/workflow/claim-product",
+        "/api/dxm/workflow/open-editor",
+    )
+    for mode in ("claim_only", "batch_save"):
+        task = _create_task(repo, mode=mode)
+        token = f"{mode}-direct-token"
+        _approve_task(repo, task["id"], token)
+        for endpoint in endpoints:
+            response = client.post(
+                endpoint,
+                json={
+                    "action": "remark",
+                    "note_text": "AI认领",
+                    "task_id": task["id"],
+                    "manual_approval": True,
+                    "approval_token": token,
+                    "approved_by": "ops-owner",
+                    "confirmation": "CONFIRM_DXM_SAVE_ONLY",
+                    "store_name": "Dang Kang",
+                },
+            )
+
+            assert response.status_code == 403
+            detail = response.json()["detail"].lower()
+            assert "controlled single_save" in detail
+            assert "released" in detail
+    assert flow.draft_box_actions == []
+
+
 def test_direct_real_dxm_mutation_rejects_even_after_l2_and_approval(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
     flow = DummyDxmLoginFlow()
-    task = _create_task(repo, mode="claim_only")
+    task = _create_task(repo, mode="single_save")
     _approve_task(repo, task["id"], "direct-token")
     monkeypatch.setattr(main, "login_flow", flow)
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})

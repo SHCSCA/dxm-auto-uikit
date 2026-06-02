@@ -19,6 +19,14 @@ class TemplateCreate(BaseModel):
     is_enabled: bool = True
 
 
+class TemplateUpdate(BaseModel):
+    template_type: str | None = None
+    template_name: str | None = None
+    binding_scope: str | None = None
+    payload: dict[str, Any] | None = None
+    is_enabled: bool | None = None
+
+
 class ProductCreate(BaseModel):
     title: str
     category_name: str = "未分类"
@@ -49,6 +57,16 @@ class TaskStartRequest(BaseModel):
 class TaskManualApprovalRequest(BaseModel):
     approved_by: str
     confirmation: str
+
+
+class TaskConfigOverrideRequest(BaseModel):
+    section: str
+    values: dict[str, Any] = Field(default_factory=dict)
+
+
+class RuntimeControlRequest(BaseModel):
+    action: str
+    task_id: int | None = None
 
 
 class AgentConsoleStep(BaseModel):

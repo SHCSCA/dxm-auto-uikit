@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getJson, getJsonOrDefault, postJson } from './api'
 import { AppShell } from './components/AppShell'
 import { SafetyStatusBar } from './components/SafetyStatusBar'
@@ -8,15 +8,20 @@ import {
   EvidenceTimeline,
   ExceptionQueue,
   ExecutionConsole,
+  GuideCenter,
   ReportCenter,
   TaskCenter,
 } from './components/WorkbenchModules'
-import type { AgentConsoleSession, DeliveryWorkspace, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LogItem, Product, Report, Store, Task, Template, WorkbenchSection } from './types'
+import type { AgentConsoleSession, ConfigPreview, DeliveryWorkspace, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
 import { composeWorkspace, demoTemplateSeeds, seedRows } from './workspace'
 
 const AGENT_CONSOLE_TARGET_URL = 'https://www.dianxiaomi.com/'
 const REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save', 'batch_save'])
+const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['single_save'])
+const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'batch_save'])
 const L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
+const DEMO_ENABLED = new URLSearchParams(window.location.search).get('dev') === '1'
+  || (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_DXM_ENABLE_DEMO === '1'
 
 const sourceLabels: Record<DeliveryWorkspace['source'], string> = {
   api: '/api/delivery/workspace',
@@ -41,6 +46,8 @@ type ManualApprovalResponse = {
   confirmation: string
 }
 
+const runtimeLogSources: RuntimeLogSource[] = ['backend', 'frontend', 'launcher', 'npm', 'task', 'agent']
+
 export default function App() {
   const [workspace, setWorkspace] = useState<DeliveryWorkspace>(() => composeWorkspace({
     stores: [],
@@ -52,7 +59,7 @@ export default function App() {
     exceptions: [],
     reports: [],
   }))
-  const [activeSection, setActiveSection] = useState<WorkbenchSection>('dashboard')
+  const [activeSection, setActiveSection] = useState<WorkbenchSection>('guide')
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -60,10 +67,33 @@ export default function App() {
   const [finalCheck, setFinalCheck] = useState<FinalDeliveryCheckSummary | null>(null)
   const [agentConsoleError, setAgentConsoleError] = useState<string | null>(null)
   const [operationError, setOperationError] = useState<string | null>(null)
+  const [runtimeLogSource, setRuntimeLogSource] = useState<RuntimeLogSource>('backend')
+  const [runtimeLogs, setRuntimeLogs] = useState<Record<RuntimeLogSource, RuntimeLogResponse | null>>({
+    backend: null,
+    frontend: null,
+    launcher: null,
+    npm: null,
+    task: null,
+    agent: null,
+  })
+  const [runtimeLogError, setRuntimeLogError] = useState<string | null>(null)
+  const [runtimeLogLevel, setRuntimeLogLevel] = useState<'all' | 'info' | 'warning' | 'error'>('all')
+  const [runtimeLogQuery, setRuntimeLogQuery] = useState('')
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null)
+  const [configPreview, setConfigPreview] = useState<ConfigPreview | null>(null)
+  const [configPreviewLoading, setConfigPreviewLoading] = useState(false)
   const [workspaceNotice, setWorkspaceNotice] = useState<WorkspaceNotice | null>({
     kind: 'loading',
     title: '正在加载 DXM 自动化工作台',
     detail: '正在读取 /api/delivery/workspace 与关联接口。',
+  })
+  const runtimeLogCursorRef = useRef<Record<RuntimeLogSource, number>>({
+    backend: 0,
+    frontend: 0,
+    launcher: 0,
+    npm: 0,
+    task: 0,
+    agent: 0,
   })
 
   const selectedTask = useMemo(
@@ -146,7 +176,38 @@ export default function App() {
     void refreshWorkspace()
   }, [refreshWorkspace])
 
-  const refreshAgentConsole = useCallback(async () => {
+  const refreshConfigPreview = useCallback(async (taskId: number | null = selectedTask?.id ?? null) => {
+    if (!taskId) {
+      setConfigPreview(null)
+      return null
+    }
+    setConfigPreviewLoading(true)
+    try {
+      const preview = await getJson<ConfigPreview>(`/api/config/preview?task_id=${taskId}`)
+      setConfigPreview(preview)
+      return preview
+    } catch {
+      setConfigPreview(null)
+      return null
+    } finally {
+      setConfigPreviewLoading(false)
+    }
+  }, [selectedTask?.id])
+
+  useEffect(() => {
+    void refreshConfigPreview()
+  }, [refreshConfigPreview])
+
+  const refreshAgentConsole = useCallback(async (useFrameEndpoint = false) => {
+    if (useFrameEndpoint) {
+      try {
+        const status = await postJson<AgentConsoleSession | null>('/api/agent-console/frame', {})
+        setAgentConsole(status)
+        return
+      } catch {
+        // Fall back to the lightweight status contract when the frame endpoint is not available.
+      }
+    }
     const status = await getJsonOrDefault<AgentConsoleSession | null>('/api/agent-console/status', null)
     setAgentConsole(status)
   }, [])
@@ -154,10 +215,113 @@ export default function App() {
   useEffect(() => {
     if (!agentConsole?.active) return
     const timer = window.setInterval(() => {
-      void refreshAgentConsole()
-    }, 4000)
+      void refreshAgentConsole(Boolean(agentConsole?.browser_visible))
+    }, 3500)
     return () => window.clearInterval(timer)
-  }, [agentConsole?.active, refreshAgentConsole])
+  }, [agentConsole?.active, agentConsole?.browser_visible, refreshAgentConsole])
+
+  const refreshRuntimeLogs = useCallback(async () => {
+    try {
+      const loaded = await Promise.all(runtimeLogSources.map(async (source) => {
+        const params = new URLSearchParams({
+          source,
+          cursor: String(runtimeLogCursorRef.current[source] ?? 0),
+          limit: '120',
+        })
+        if (source === 'task' && selectedTask?.id) params.set('task_id', String(selectedTask.id))
+        if (runtimeLogLevel !== 'all') params.set('level', runtimeLogLevel)
+        if (runtimeLogQuery.trim()) params.set('q', runtimeLogQuery.trim())
+        const response = await getJson<RuntimeLogResponse>(`/api/runtime/logs?${params.toString()}`)
+        return [source, response] as const
+      }))
+      setRuntimeLogs((current) => {
+        const next = { ...current }
+        loaded.forEach(([source, response]) => {
+          runtimeLogCursorRef.current[source] = response.nextCursor
+          const existing = current[source]
+          const shouldAppend = response.cursor > 0 && existing && existing.source === response.source
+          const existingItems = existing?.items ?? existing?.lines.map((line) => ({ line, level: 'info', tags: [] })) ?? []
+          const responseItems = response.items ?? response.lines.map((line) => ({ line, level: 'info', tags: [] }))
+          const items = shouldAppend ? [...existingItems, ...responseItems].slice(-400) : responseItems
+          next[source] = { ...response, items, lines: items.map((item) => item.line) }
+        })
+        return next
+      })
+      setRuntimeLogError(null)
+    } catch (error) {
+      setRuntimeLogError(error instanceof Error ? error.message : '读取运行日志失败')
+    }
+  }, [runtimeLogLevel, runtimeLogQuery, selectedTask?.id])
+
+  useEffect(() => {
+    runtimeLogCursorRef.current = { backend: 0, frontend: 0, launcher: 0, npm: 0, task: 0, agent: 0 }
+    setRuntimeLogs({ backend: null, frontend: null, launcher: null, npm: null, task: null, agent: null })
+  }, [runtimeLogLevel, runtimeLogQuery, selectedTask?.id])
+
+  useEffect(() => {
+    void refreshRuntimeLogs()
+    const timer = window.setInterval(() => {
+      void refreshRuntimeLogs()
+    }, 1500)
+    return () => window.clearInterval(timer)
+  }, [refreshRuntimeLogs])
+
+  const refreshRuntimeStatus = useCallback(async () => {
+    const status = await getJsonOrDefault<RuntimeStatus | null>(`/api/runtime/status?frontend_url=${encodeURIComponent(window.location.origin)}`, null)
+    setRuntimeStatus(status)
+  }, [])
+
+  useEffect(() => {
+    void refreshRuntimeStatus()
+    const timer = window.setInterval(() => {
+      void refreshRuntimeStatus()
+    }, 5000)
+    return () => window.clearInterval(timer)
+  }, [refreshRuntimeStatus])
+
+  async function createRealTask(request: RealTaskCreateRequest) {
+    setBusy(true)
+    setOperationError(null)
+    try {
+      const store = workspace.stores.find((item) => item.id === request.storeId)
+      const products = workspace.products.filter((item) => request.productIds.includes(item.id))
+      if (!store) {
+        setOperationError('请先连接真实店铺，再创建任务。')
+        setActiveSection('tasks')
+        return
+      }
+      if (!products.length) {
+        setOperationError('请至少选择一个真实商品。')
+        setActiveSection('tasks')
+        return
+      }
+      const firstProduct = products[0]
+      const modeLabel = request.mode === 'probe' ? 'L2 只读检查' : 'L3 single_save'
+      const task = await postJson<Task>('/api/tasks', {
+        name: `${modeLabel} - ${store.name} - ${products.length} 件商品`,
+        store_id: store.id,
+        mode: request.mode,
+        publish_scene: 'SMT_SEMI_MANAGED_SAVE_ONLY',
+        product_ids: products.map((item) => item.id),
+        claim_mark: 'AI认领',
+        payload: {
+          store_name: store.name,
+          category_name: firstProduct?.category_name ?? '未指定类目',
+          image: firstProduct?.image,
+          source: 'user_created_real_task',
+          product_count: products.length,
+        },
+      })
+      setSelectedTaskId(task.id)
+      setActiveSection('tasks')
+      await refreshWorkspace()
+      await refreshConfigPreview(task.id)
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : '创建真实任务失败')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function bootstrapDemo() {
     const confirmed = window.confirm('这会向本地后端写入演示店铺、模板、商品和本地演示核验批次；不会访问店小秘，也不会启动真实保存。继续？')
@@ -212,7 +376,21 @@ export default function App() {
     setOperationError(null)
     try {
       if (REAL_DXM_MUTATION_MODES.has(selectedTask.mode)) {
-        const approvedBy = window.prompt('输入 L3 批准人标识。将只启动 save-only/claim-only 受控任务，不会发布。', 'ops-owner')
+        if (UNRELEASED_REAL_DXM_MUTATION_MODES.has(selectedTask.mode)) {
+          setOperationError('当前真实 DXM 写入仅发布受控 single_save；claim_only/batch_save 必须重新建立 L2/L3 证据后再放行。')
+          return
+        }
+        if (!RELEASED_REAL_DXM_MUTATION_MODES.has(selectedTask.mode)) {
+          setOperationError(`当前执行模式 ${selectedTask.mode} 未发布，禁止启动真实 DXM 写入。`)
+          return
+        }
+        const latestConfigPreview = await refreshConfigPreview(selectedTask.id)
+        if (!latestConfigPreview || !latestConfigPreview.ok) {
+          setOperationError(`配置预检未通过：${latestConfigPreview?.missing.slice(0, 6).join('、') || '请补齐 DXM 编辑页配置'}`)
+          setActiveSection('config')
+          return
+        }
+        const approvedBy = window.prompt('输入 L3 批准人标识。将只启动受控 single_save save-only 金丝雀，不会发布。', 'ops-owner')
         if (!approvedBy?.trim()) {
           setOperationError('已取消：真实任务启动必须填写 L3 批准人。')
           return
@@ -309,19 +487,63 @@ export default function App() {
     }
   }
 
+  async function runRuntimeControl(action: RuntimeControlAction) {
+    setBusy(true)
+    setOperationError(null)
+    try {
+      const result = await postJson<RuntimeControlResponse>('/api/runtime/control', { action, task_id: selectedTask?.id ?? null })
+      if (result.agentConsole) setAgentConsole(result.agentConsole)
+      await refreshWorkspace()
+      await refreshRuntimeStatus()
+      await refreshRuntimeLogs()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '运行时维护动作失败'
+      setOperationError(message)
+      await refreshWorkspace()
+      await refreshRuntimeStatus()
+      await refreshRuntimeLogs()
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const content = (() => {
     switch (activeSection) {
       case 'config':
-        return <ConfigCenter workspace={workspace} selectedTask={selectedTask} />
+        return <ConfigCenter workspace={workspace} selectedTask={selectedTask} configPreview={configPreview} configPreviewLoading={configPreviewLoading} onConfigSaved={async () => { await refreshWorkspace(); await refreshConfigPreview() }} />
+      case 'guide':
+        return (
+          <GuideCenter
+            workspace={workspace}
+            selectedTask={selectedTask}
+            configPreview={configPreview}
+            runtimeStatus={runtimeStatus}
+            onStartTask={startSelectedTask}
+            onShowConfig={() => setActiveSection('config')}
+            onShowTasks={() => setActiveSection('tasks')}
+            onShowConsole={() => setActiveSection('console')}
+            onShowEvidence={() => setActiveSection('evidence')}
+            onShowReports={() => setActiveSection('reports')}
+            onShowExceptions={() => setActiveSection('exceptions')}
+          />
+        )
       case 'tasks':
         return (
           <TaskCenter
             workspace={workspace}
             selectedTask={selectedTask}
+            configPreview={configPreview}
+            configPreviewLoading={configPreviewLoading}
             busy={busy}
-            onSelectTask={setSelectedTaskId}
+            demoEnabled={DEMO_ENABLED}
+            onSelectTask={(taskId) => {
+              setSelectedTaskId(taskId)
+              void refreshConfigPreview(taskId)
+            }}
+            onCreateRealTask={createRealTask}
             onBootstrapDemo={bootstrapDemo}
             onStartTask={startSelectedTask}
+            onShowConfig={() => setActiveSection('config')}
             onShowConsole={() => setActiveSection('console')}
             onShowEvidence={() => setActiveSection('evidence')}
             onShowReports={() => setActiveSection('reports')}
@@ -334,10 +556,19 @@ export default function App() {
             selectedTask={selectedTask}
             agentConsole={agentConsole}
             agentConsoleError={agentConsoleError}
+            runtimeLogs={runtimeLogs}
+            runtimeLogSource={runtimeLogSource}
+            runtimeLogError={runtimeLogError}
+            runtimeLogLevel={runtimeLogLevel}
+            runtimeLogQuery={runtimeLogQuery}
             busy={busy}
+            onRuntimeLogSourceChange={setRuntimeLogSource}
+            onRuntimeLogLevelChange={setRuntimeLogLevel}
+            onRuntimeLogQueryChange={setRuntimeLogQuery}
             onStartAgentConsole={startAgentConsole}
             onStopAgentConsole={stopAgentConsole}
             onSnapshotAgentConsole={snapshotAgentConsole}
+            onRuntimeControl={runRuntimeControl}
             onShowTasks={() => setActiveSection('tasks')}
             onShowEvidence={() => setActiveSection('evidence')}
             onShowReports={() => setActiveSection('reports')}
@@ -363,7 +594,15 @@ export default function App() {
       onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
       sourceLabel={sourceLabels[workspace.source]}
     >
-      <SafetyStatusBar workspace={workspace} selectedTask={selectedTask} busy={busy} onRefresh={refreshWorkspace} />
+      <SafetyStatusBar
+        workspace={workspace}
+        selectedTask={selectedTask}
+        runtimeStatus={runtimeStatus}
+        busy={busy}
+        onRefresh={() => { void refreshWorkspace(); void refreshRuntimeStatus(); void refreshRuntimeLogs(); void refreshConfigPreview() }}
+        onShowTasks={() => setActiveSection('tasks')}
+        onShowConsole={() => setActiveSection('console')}
+      />
       {workspaceNotice && (
         <div className={`workspace-alert workspace-alert--${workspaceNotice.kind}`} role={workspaceNotice.kind === 'degraded' ? 'alert' : 'status'}>
           <strong>{workspaceNotice.title}</strong>
@@ -389,8 +628,8 @@ function buildAgentConsoleHudStep(workspace: DeliveryWorkspace, selectedTask: Ta
   return {
     title: '只读诊断待命',
     state: 'READONLY_DIAGNOSTIC',
-    action: '打开只读诊断浏览器，不启动保存',
-    next_step: '复核 L2/L3 门禁',
+    action: '打开真实店小秘浏览器，不启动保存',
+    next_step: '复核只读检查和人工确认',
     store_name: storeName,
     guard: '诊断观察，不保存不发布',
   }

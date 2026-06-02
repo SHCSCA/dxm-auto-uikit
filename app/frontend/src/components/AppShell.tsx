@@ -2,13 +2,11 @@ import { useEffect, useMemo, useRef, type ReactNode } from 'react'
 import type { WorkbenchSection } from '../types'
 
 const navItems: Array<{ id: WorkbenchSection; label: string; short: string }> = [
+  { id: 'guide', label: '操作引导', short: '导' },
   { id: 'dashboard', label: '总览', short: '览' },
   { id: 'config', label: '配置中心', short: '配' },
   { id: 'tasks', label: '任务中心', short: '任' },
-  { id: 'console', label: '执行控制台', short: '控' },
-  { id: 'evidence', label: '证据中心', short: '证' },
-  { id: 'exceptions', label: '异常池', short: '异' },
-  { id: 'reports', label: '报告中心', short: '报' },
+  { id: 'console', label: '执行控制台', short: '执' },
 ]
 
 type AppShellProps = {
@@ -46,7 +44,7 @@ export function AppShell({
           {!sidebarCollapsed && (
             <div>
               <strong>DXM 自动化工作台</strong>
-              <span>任务编排 / L2 只读证据 / L3 金丝雀</span>
+              <span>配置 / 任务 / 真实浏览器执行</span>
             </div>
           )}
           <button className="icon-button" type="button" onClick={onToggleSidebar} aria-label="切换侧边栏">
@@ -73,7 +71,7 @@ export function AppShell({
           <div className="sidebar__note">
             <span>数据源</span>
             <strong>{sourceLabel}</strong>
-            <small>后端工作台接口未就绪时，前端会显示安全空态或本地演示数据。</small>
+            <small>后端接口未就绪时只显示安全空态；演示数据仅开发模式可用。</small>
           </div>
         )}
       </aside>

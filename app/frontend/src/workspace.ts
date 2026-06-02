@@ -198,7 +198,7 @@ export function buildEmptyWorkspace(): DeliveryWorkspace {
     }],
     safety: {
       mode: 'probe / dry_run / claim_only / single_save / batch_save',
-      guarantee: '只保存不发布：真实 claim_only/single_save/batch_save 启动前必须有后端人工批准令牌。',
+      guarantee: '只保存不发布：当前仅受控 single_save 可在后端人工批准令牌下启动；claim_only/batch_save 未发布。',
       forbiddenActions: ['发布', '继续发布', '保存并发布', '移入待发布'],
       lastCheckedAt: '等待任务数据',
     },
@@ -238,7 +238,7 @@ export function buildMockWorkspace(): DeliveryWorkspace {
   }]
   const logs: LogItem[] = [
     { id: 1, task_id: 19, job_id: 31, level: 'info', message: '配置已完成预检，等待 L2/L3 门禁复核', context: {}, created_at: '2026-05-22T09:00:00+08:00' },
-    { id: 2, task_id: 19, job_id: 31, level: 'warning', message: '后端 /api/delivery/workspace 未接入时，前端使用工作台 fallback 数据', context: {}, created_at: '2026-05-22T09:01:00+08:00' },
+    { id: 2, task_id: 19, job_id: 31, level: 'warning', message: '后端 /api/delivery/workspace 未接入时，前端使用工作台默认数据', context: {}, created_at: '2026-05-22T09:01:00+08:00' },
   ]
   const evidences: Evidence[] = [
     { id: 676, task_id: 19, job_id: 31, evidence_type: 'state_snapshot', file_path: 'data/screenshots/v1_task_19_job_31_PRECHECK_CONFIG.txt', meta: { grade: 'A', title: '配置预检快照', acceptance: '可追溯到模板与店铺配置' }, created_at: '2026-05-22T01:55:49Z' },

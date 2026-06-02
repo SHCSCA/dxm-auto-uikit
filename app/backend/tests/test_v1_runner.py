@@ -108,6 +108,7 @@ class FakeWorkflowAdapter:
 class FakeAgentConsole:
     def __init__(self, fail: bool = False):
         self.calls = []
+        self.action_calls = []
         self.fail = fail
         self.start_calls = []
 
@@ -138,6 +139,37 @@ class FakeAgentConsole:
             },
             "screenshot": None,
             "updated_at": "2026-05-22T00:00:00+00:00",
+            "last_error": None,
+        }
+
+    def record_action_event(self, **payload):
+        if self.fail:
+            raise RuntimeError("console unavailable")
+        self.action_calls.append(payload)
+        return {
+            "ok": True,
+            "updated": True,
+            "reason": "action_recorded",
+            "active": True,
+            "session_id": "agent-test",
+            "task_id": payload.get("task_id"),
+            "job_id": payload.get("job_id"),
+            "product_id": payload.get("product_id"),
+            "browser_visible": False,
+            "current_url": payload.get("page_url") or "about:blank",
+            "last_step_code": payload.get("step_code") or payload.get("state"),
+            "last_step_name": payload.get("label") or payload.get("action"),
+            "hud": {
+                "title": payload.get("label") or payload.get("action"),
+                "state": payload.get("step_code") or payload.get("state"),
+                "action": payload.get("action"),
+                "next_step": None,
+                "store_name": payload.get("store_name"),
+                "guard": "只保存不发布",
+            },
+            "action_events": [payload],
+            "screenshot": payload.get("screenshot_url"),
+            "updated_at": "2026-05-22T00:00:01+00:00",
             "last_error": None,
         }
 
@@ -364,6 +396,12 @@ def test_single_save_syncs_agent_console_hud_without_changing_workflow_order(v1_
     assert "RELEASE_LOCK" in states
     assert all(call["store_name"] == "Dang Kang" for call in console.calls)
     assert console.start_calls == []
+    assert [call["action"] for call in console.action_calls] == [call[0] for call in adapter.calls]
+    assert next(call for call in console.action_calls if call["action"] == "fill_editor_required_defaults")["type"] == "fill"
+    assert next(call for call in console.action_calls if call["action"] == "fill_media_assets")["type"] == "upload"
+    save_action = next(call for call in console.action_calls if call["action"] == "save_only")
+    assert save_action["type"] == "save"
+    assert save_action["save_result"]["published"] is False
     assert [call[0] for call in adapter.calls].count("save_only") == 1
     assert [call[0] for call in adapter.calls].index("save_only") < [call[0] for call in adapter.calls].index("verify_not_published")
 
@@ -373,8 +411,15 @@ def test_single_save_syncs_agent_console_hud_without_changing_workflow_order(v1_
     assert report["summary"]["agent_console"]["session_id"] == "agent-test"
     assert report["summary"]["agent_console"]["hud"]["guard"] == "只保存不发布"
     assert report["summary"]["agent_console"]["last_step_code"] == "RELEASE_LOCK"
+    assert report["summary"]["agent_action_events"][-1]["action"] == "verify_not_published"
+    assert any(event["action"] == "save_only" and event["type"] == "save" for event in report["summary"]["agent_action_events"])
     assert any(
         evidence["meta"].get("agent_console", {}).get("hud", {}).get("guard") == "只保存不发布"
+        for evidence in repo.list_evidences(task["id"])
+    )
+    assert any(
+        evidence["evidence_type"] == "workflow_action"
+        and evidence["meta"].get("agent_action", {}).get("action") == "save_only"
         for evidence in repo.list_evidences(task["id"])
     )
 

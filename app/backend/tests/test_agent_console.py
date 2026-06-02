@@ -79,6 +79,12 @@ def test_agent_console_api_lifecycle_uses_preview_mode(tmp_path, monkeypatch):
     assert snapshot_response.json()["active"] is True
     assert snapshot_response.json()["screenshot"] is None
 
+    frame_response = client.post("/api/agent-console/frame")
+    assert frame_response.status_code == 200
+    assert frame_response.json()["active"] is True
+    assert frame_response.json()["last_frame_at"] is None
+    assert frame_response.json()["network_events"] == []
+
     stop_response = client.post("/api/agent-console/stop")
     assert stop_response.status_code == 200
     assert stop_response.json()["active"] is False
@@ -113,6 +119,76 @@ def test_agent_console_updates_task_step_without_launching_browser(tmp_path, mon
     assert result["hud"]["next_step"] == "记录未发布证明"
     status = service.status()
     assert status["step_history"][-1]["screenshot_path"] == "data/screenshots/save.txt"
+
+
+def test_agent_console_records_bounded_action_events(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+
+    for index in range(165):
+        result = service.record_action_event(
+            task_id=7,
+            job_id=11,
+            product_id=13,
+            type="fill",
+            action=f"fill_field_{index}",
+            label=f"填写字段 {index}",
+            state="FILL_BASE_INFO",
+            field_domain="base_info",
+            status="ok",
+            target="商品标题",
+            value="ACG Stand Product",
+            page_url="https://www.dianxiaomi.com/web/smt/edit",
+        )
+
+    assert result["updated"] is True
+    status = service.status()
+    assert len(status["action_events"]) == 160
+    assert status["action_events"][0]["action"] == "fill_field_5"
+    assert status["action_events"][-1]["type"] == "fill"
+    assert status["action_events"][-1]["target"] == "商品标题"
+    assert status["action_events"][-1]["timestamp"] is not None
+
+
+def test_agent_console_refresh_frame_updates_screenshot_and_timestamp(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    monkeypatch.setattr(agent_console_module, "SCREENSHOT_ROOT", tmp_path / "screenshots")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+    fake_page = _FakePage()
+
+    with service._lock:
+        service._page = fake_page
+        service._state["browser_visible"] = True
+
+    status = service.refresh_frame()
+
+    assert status["screenshot"].endswith(".png")
+    assert (tmp_path / "screenshots" / f"{status['session_id']}.png").exists()
+    assert status["last_frame_at"] is not None
+    assert status["current_url"] == "https://www.dianxiaomi.com/web/home"
+    assert status["page_title"] == "店小秘 Home"
+
+
+def test_agent_console_records_bounded_network_events(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+
+    for index in range(125):
+        service._record_network_event({
+            "type": "response",
+            "method": "POST",
+            "url": f"https://www.dianxiaomi.com/api/popChoiceProduct/add.json?i={index}",
+            "status": 200,
+        })
+
+    status = service.status()
+    assert len(status["network_events"]) == 120
+    assert status["network_events"][0]["url"].endswith("i=5")
+    assert status["network_events"][-1]["status"] == 200
+    assert status["network_events"][-1]["timestamp"] is not None
 
 
 def test_agent_console_rejects_other_task_step(tmp_path, monkeypatch):
@@ -185,3 +261,15 @@ def _create_task(repo: Repository):
             "payload": {"store_name": "Dang Kang"},
         }
     )
+
+
+class _FakePage:
+    url = "https://www.dianxiaomi.com/web/home"
+
+    def title(self):
+        return "店小秘 Home"
+
+    def screenshot(self, *, path: str, full_page: bool):
+        assert full_page is True
+        with open(path, "wb") as handle:
+            handle.write(b"fake-png")

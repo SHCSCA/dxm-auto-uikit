@@ -79,13 +79,13 @@ scripts\start-mvp.bat --check
 scripts\start-mvp.bat
 ```
 
-启动后会打开两个 CMD 服务窗口；只有后端 `/health` 与前端页面健康检查都通过时，才会自动打开前端页面。若启动日志出现 warning，脚本不会自动开页，请先查看日志并等健康检查恢复后再手动访问。
+启动后只保留当前启动器控制台窗口，后端和前端会作为子进程运行；只有后端 `/health` 与前端页面健康检查都通过时，才会自动打开前端页面。若启动日志出现 warning，脚本不会自动开页，请先查看日志并等健康检查恢复后再手动访问。
 
 - 后端：`http://127.0.0.1:8000`
 - 前端：`http://127.0.0.1:5173`
 - 日志：`data\start-mvp.log`、`data\backend.log`、`data\frontend.log`
 
-停止方式：关闭 `DXM Backend Service` / `DXM Frontend Service`（中文可理解为 DXM 后端服务 / DXM 前端服务）两个 CMD 窗口。
+停止方式：关闭当前启动器窗口，或在启动器窗口按 `Ctrl+C`。脚本退出时会尽力停止后端和前端子进程树。
 
 ### 1. 类 Unix / Git Bash 启动后端
 ```bash

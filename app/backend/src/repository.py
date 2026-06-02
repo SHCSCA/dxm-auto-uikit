@@ -43,6 +43,42 @@ class Repository:
             row['is_enabled'] = bool(row['is_enabled'])
             return row
 
+    def update_template(self, template_id: int, data: dict[str, Any]):
+        current = self.get_template(template_id)
+        if not current:
+            return None
+        next_payload = {
+            'template_type': data.get('template_type') or current['template_type'],
+            'template_name': data.get('template_name') or current['template_name'],
+            'binding_scope': data.get('binding_scope') or current['binding_scope'],
+            'payload': data['payload'] if data.get('payload') is not None else current['payload'],
+            'is_enabled': current['is_enabled'] if data.get('is_enabled') is None else bool(data['is_enabled']),
+        }
+        now = now_iso()
+        with connection() as conn:
+            conn.execute(
+                "UPDATE templates SET template_type=?, template_name=?, binding_scope=?, payload_json=?, is_enabled=?, updated_at=? WHERE id=?",
+                (
+                    next_payload['template_type'],
+                    next_payload['template_name'],
+                    next_payload['binding_scope'],
+                    dumps(next_payload['payload']),
+                    int(next_payload['is_enabled']),
+                    now,
+                    template_id,
+                ),
+            )
+        return self.get_template(template_id)
+
+    def get_template(self, template_id: int):
+        with connection() as conn:
+            row = conn.execute("SELECT * FROM templates WHERE id=?", (template_id,)).fetchone()
+            if not row:
+                return None
+            row['payload'] = loads(row.pop('payload_json'), {})
+            row['is_enabled'] = bool(row['is_enabled'])
+            return row
+
     def list_products(self):
         with connection() as conn:
             rows = conn.execute("SELECT * FROM products ORDER BY id DESC").fetchall()
@@ -141,6 +177,66 @@ class Repository:
                 (dumps(payload), now, task_id),
             )
         return self.get_task(task_id)
+
+    def update_task_template_override(self, task_id: int, section: str, values: dict[str, Any]):
+        now = now_iso()
+        with connection() as conn:
+            task = conn.execute("SELECT payload_json FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if not task:
+                return None
+            payload = loads(task['payload_json'], {})
+            if section == 'task_basic':
+                allowed = {'store_name', 'category_name', 'claim_mark', 'execution_mode'}
+                for key, value in dict(values or {}).items():
+                    if key not in allowed:
+                        continue
+                    if value is None or (isinstance(value, str) and value.strip() == ''):
+                        payload.pop(key, None)
+                    else:
+                        payload[key] = value
+                conn.execute(
+                    "UPDATE tasks SET payload_json=?, updated_at=? WHERE id=?",
+                    (dumps(payload), now, task_id),
+                )
+                return self.get_task(task_id)
+            overrides = payload.get('template_overrides')
+            if not isinstance(overrides, dict):
+                overrides = {}
+            cleaned_values = self._prune_empty_config_values(dict(values or {}))
+            if cleaned_values:
+                overrides[section] = cleaned_values
+            else:
+                overrides.pop(section, None)
+            if overrides:
+                payload['template_overrides'] = overrides
+            else:
+                payload.pop('template_overrides', None)
+            conn.execute(
+                "UPDATE tasks SET payload_json=?, updated_at=? WHERE id=?",
+                (dumps(payload), now, task_id),
+            )
+        return self.get_task(task_id)
+
+    def _prune_empty_config_values(self, value: Any):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value if value.strip() != '' else None
+        if isinstance(value, dict):
+            cleaned = {}
+            for key, child in value.items():
+                cleaned_child = self._prune_empty_config_values(child)
+                if cleaned_child is not None:
+                    cleaned[key] = cleaned_child
+            return cleaned or None
+        if isinstance(value, list):
+            cleaned_items = [
+                cleaned_child
+                for item in value
+                if (cleaned_child := self._prune_empty_config_values(item)) is not None
+            ]
+            return cleaned_items or None
+        return value
 
     def update_task_status(self, task_id: int, status: str, completed_jobs: int | None = None, failed_jobs: int | None = None):
         now = now_iso()

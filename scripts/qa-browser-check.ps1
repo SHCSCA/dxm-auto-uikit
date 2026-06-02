@@ -8,7 +8,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-function Find-Chrome {
+function Find-BrowserCandidates {
   $candidates = @(
     "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
     "$env:ProgramFiles(x86)\Google\Chrome\Application\chrome.exe",
@@ -16,12 +16,26 @@ function Find-Chrome {
     "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
     "$env:ProgramFiles(x86)\Microsoft\Edge\Application\msedge.exe"
   )
+  $found = @()
   foreach ($candidate in $candidates) {
     if ($candidate -and (Test-Path -LiteralPath $candidate)) {
-      return $candidate
+      $found += (Resolve-Path -LiteralPath $candidate).Path
     }
   }
-  throw "Chrome or Edge was not found."
+  $playwrightRoot = Join-Path $env:LOCALAPPDATA "ms-playwright"
+  if (Test-Path -LiteralPath $playwrightRoot) {
+    $playwrightChromium = Get-ChildItem -Path $playwrightRoot -Recurse -Filter chrome.exe -ErrorAction SilentlyContinue |
+      Where-Object { $_.FullName -like "*chrome-win64*" } |
+      Sort-Object FullName -Descending
+    foreach ($candidate in $playwrightChromium) {
+      $found += $candidate.FullName
+    }
+  }
+  $found = @($found | Select-Object -Unique)
+  if (!$found.Count) {
+    throw "Chrome or Edge was not found."
+  }
+  return $found
 }
 
 function Find-Node {
@@ -40,53 +54,186 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $absoluteOutDir = if ([System.IO.Path]::IsPathRooted($OutDir)) { $OutDir } else { Join-Path $root $OutDir }
 New-Item -ItemType Directory -Path $absoluteOutDir -Force | Out-Null
 
-$chrome = Find-Chrome
+$browserCandidates = @(Find-BrowserCandidates)
 $node = Find-Node
-$userData = Join-Path $env:TEMP ("dxm-qa-chrome-" + [guid]::NewGuid().ToString("N"))
 $scriptPath = Join-Path $env:TEMP ("dxm-qa-browser-check-" + [guid]::NewGuid().ToString("N") + ".mjs")
-New-Item -ItemType Directory -Path $userData | Out-Null
 
-$existing = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
-if ($existing) {
-  $candidate = $Port + 1
-  while ($candidate -lt ($Port + 50)) {
-    if (!(Get-NetTCPConnection -LocalPort $candidate -ErrorAction SilentlyContinue)) {
-      Write-Host "Port $Port is already in use; using $candidate instead."
-      $Port = $candidate
-      break
+function Test-DebugPortAvailable {
+  param([int]$CandidatePort)
+
+  $listener = $null
+  try {
+    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $CandidatePort)
+    $listener.Start()
+    return $true
+  } catch {
+    return $false
+  } finally {
+    if ($listener) {
+      $listener.Stop()
     }
-    $candidate += 1
-  }
-  if ((Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue)) {
-    throw "No available Chrome debugging port found near $Port."
   }
 }
 
-$chromeArgs = @(
-  "--headless=new",
-  "--disable-gpu",
-  "--no-first-run",
-  "--no-default-browser-check",
-  "--user-data-dir=$userData",
-  "--remote-debugging-port=$Port",
-  "--window-size=1440,1100",
-  "about:blank"
-)
+function Find-QaDebugPort {
+  param(
+    [int]$PreferredPort,
+    [int]$MaxAttempts = 200
+  )
 
-$proc = Start-Process -FilePath $chrome -ArgumentList $chromeArgs -PassThru -WindowStyle Hidden
-try {
-  $deadline = (Get-Date).AddSeconds(15)
+  for ($offset = 0; $offset -lt $MaxAttempts; $offset += 1) {
+    $candidate = $PreferredPort + $offset
+    if (Test-DebugPortAvailable -CandidatePort $candidate) {
+      return $candidate
+    }
+  }
+
+  foreach ($basePort in @(15000, 20000, 30000, 40000, 50000)) {
+    for ($offset = 0; $offset -lt 100; $offset += 1) {
+      $candidate = $basePort + $offset
+      if (Test-DebugPortAvailable -CandidatePort $candidate) {
+        return $candidate
+      }
+    }
+  }
+
+  throw "No available Chrome debugging port found near $PreferredPort."
+}
+
+$selectedPort = Find-QaDebugPort -PreferredPort $Port
+if ($selectedPort -ne $Port) {
+  Write-Host "Port $Port is unavailable or reserved; using $selectedPort instead."
+  $Port = $selectedPort
+}
+
+function New-QaBrowserArgs {
+  param(
+    [string]$UserData,
+    [int]$DebugPort,
+    [string]$HeadlessMode
+  )
+
+  $headlessArg = if ($HeadlessMode -eq "new") { "--headless=new" } else { "--headless" }
+  return @(
+    $headlessArg,
+    "--disable-gpu",
+    "--disable-extensions",
+    "--disable-component-extensions-with-background-pages",
+    "--disable-background-networking",
+    "--disable-dev-shm-usage",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--remote-allow-origins=*",
+    "--user-data-dir=$UserData",
+    "--remote-debugging-port=$DebugPort",
+    "--window-size=1440,1100",
+    "about:blank"
+  )
+}
+
+function Test-CdpReady {
+  param(
+    [int]$DebugPort,
+    [int]$TimeoutSeconds
+  )
+
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
   do {
     Start-Sleep -Milliseconds 300
     try {
-      Invoke-RestMethod -Uri "http://127.0.0.1:$Port/json/list" -TimeoutSec 2 | Out-Null
-      break
+      Invoke-RestMethod -Uri "http://127.0.0.1:$DebugPort/json/list" -TimeoutSec 2 | Out-Null
+      return $true
     } catch {
       if ((Get-Date) -ge $deadline) {
-        throw "Chrome DevTools endpoint did not start."
+        return $false
       }
     }
   } while ($true)
+}
+
+function Start-QaCdpBrowser {
+  param(
+    [string[]]$Candidates,
+    [int]$DebugPort,
+    [string]$AttemptOutDir
+  )
+
+  $attempts = @()
+  $headlessModes = @("new", "legacy")
+  $attemptIndex = 0
+  foreach ($candidate in $Candidates) {
+    foreach ($mode in $headlessModes) {
+      $attemptIndex += 1
+      $attemptUserData = Join-Path $env:TEMP ("dxm-qa-chrome-" + [guid]::NewGuid().ToString("N"))
+      New-Item -ItemType Directory -Path $attemptUserData -Force | Out-Null
+      $stdoutPath = Join-Path $AttemptOutDir "qa-browser-stdout-$attemptIndex.log"
+      $stderrPath = Join-Path $AttemptOutDir "qa-browser-stderr-$attemptIndex.log"
+      $args = New-QaBrowserArgs -UserData $attemptUserData -DebugPort $DebugPort -HeadlessMode $mode
+      $startedProcess = $null
+      $isReady = $false
+      try {
+        Write-Host "Starting browser QA with $([System.IO.Path]::GetFileName($candidate)) headless=$mode on port $DebugPort"
+        $startedProcess = Start-Process `
+          -FilePath $candidate `
+          -ArgumentList $args `
+          -PassThru `
+          -WindowStyle Hidden `
+          -RedirectStandardOutput $stdoutPath `
+          -RedirectStandardError $stderrPath
+        if (Test-CdpReady -DebugPort $DebugPort -TimeoutSeconds 15) {
+          $isReady = $true
+          return @{
+            Process = $startedProcess
+            UserData = $attemptUserData
+            BrowserPath = $candidate
+            HeadlessMode = $mode
+            StdoutPath = $stdoutPath
+            StderrPath = $stderrPath
+            Attempts = $attempts
+          }
+        }
+        $exitText = if ($startedProcess.HasExited) { "exit=$($startedProcess.ExitCode)" } else { "not ready" }
+        $attempts += @{
+          browser = $candidate
+          headlessMode = $mode
+          status = $exitText
+          stdout = $stdoutPath
+          stderr = $stderrPath
+        }
+      } catch {
+        $attempts += @{
+          browser = $candidate
+          headlessMode = $mode
+          status = "failed: $($_.Exception.Message)"
+          stdout = $stdoutPath
+          stderr = $stderrPath
+        }
+      } finally {
+        if (!$isReady -and $startedProcess -and -not $startedProcess.HasExited) {
+          Stop-Process -Id $startedProcess.Id -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Milliseconds 500
+        }
+        if (!$isReady -and (Test-Path -LiteralPath $attemptUserData)) {
+          Remove-Item -LiteralPath $attemptUserData -Recurse -Force -ErrorAction SilentlyContinue
+        }
+      }
+    }
+  }
+
+  $attemptPath = Join-Path $AttemptOutDir "qa-browser-launch-attempts.json"
+  $attempts | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $attemptPath -Encoding UTF8
+  throw "Chrome DevTools endpoint did not start after trying $($attempts.Count) browser launch attempts. See $attemptPath and qa-browser-stderr-*.log."
+}
+
+$proc = $null
+$userData = $null
+$browserLaunch = $null
+try {
+  $browserLaunch = Start-QaCdpBrowser -Candidates $browserCandidates -DebugPort $Port -AttemptOutDir $absoluteOutDir
+  $proc = $browserLaunch.Process
+  $userData = $browserLaunch.UserData
+  $browserPath = $browserLaunch.BrowserPath
+  $headlessMode = $browserLaunch.HeadlessMode
 
   $nodeScript = @"
 import crypto from 'node:crypto';
@@ -101,6 +248,27 @@ const outDir = '$($absoluteOutDir.Replace("\", "/"))';
 const qaScriptPath = '$($PSCommandPath.Replace("\", "/"))';
 const reportOnlyFinal = $($ReportOnlyFinal.IsPresent.ToString().ToLowerInvariant());
 const allowMissingPostFinalQa = $($AllowMissingPostFinalQa.IsPresent.ToString().ToLowerInvariant());
+const browserPath = '$($browserPath.Replace("\", "/"))';
+const browserHeadlessMode = '$headlessMode';
+function writeFatalQaError(error) {
+  fs.mkdirSync(outDir, { recursive: true });
+  const payload = {
+    checkedAt: new Date().toISOString(),
+    url: targetUrl,
+    message: error && error.message ? error.message : String(error),
+    stack: error && error.stack ? error.stack : null,
+  };
+  fs.writeFileSync(outDir + '/qa-browser-error.json', JSON.stringify(payload, null, 2));
+  console.error(payload.message);
+}
+process.on('uncaughtException', error => {
+  writeFatalQaError(error);
+  process.exit(1);
+});
+process.on('unhandledRejection', error => {
+  writeFatalQaError(error);
+  process.exit(1);
+});
 const versionInfo = await (await fetch('http://127.0.0.1:' + port + '/json/version')).json();
 if (typeof WebSocket !== 'function') {
   throw new Error('This QA check requires Node.js with global WebSocket support. Use Node 22+ or the bundled Codex Node runtime.');
@@ -170,11 +338,29 @@ await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = rejec
 function send(method, params = {}) {
   const msgId = ++id;
   ws.send(JSON.stringify({ id: msgId, method, params }));
-  return new Promise((resolve, reject) => pending.set(msgId, { resolve, reject }));
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(msgId);
+      reject(new Error('CDP command timed out: ' + method));
+    }, 45000);
+    pending.set(msgId, {
+      resolve: value => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      reject: error => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    });
+  });
 }
 async function evalValue(expr) {
   const res = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
   return res.result.value;
+}
+async function horizontalOverflowState() {
+  return await evalValue('(() => { const viewportWidth = document.documentElement.clientWidth; const selectors = "button, a, code, .guard-chip, .status-pill, .module-head, .module-card, .effective-value-item"; const candidates = [...document.querySelectorAll(selectors)]; const bad = candidates.map(el => ({ el, rect: el.getBoundingClientRect() })).filter(({ rect }) => rect.width > 0 && (rect.left < -1 || rect.right > viewportWidth + 1)); return { ok: bad.length === 0, count: bad.length, samples: bad.slice(0, 5).map(({ el, rect }) => ({ tag: el.tagName, className: String(el.className || "").slice(0, 80), text: String(el.innerText || el.textContent || "").trim().slice(0, 80), left: Math.round(rect.left), right: Math.round(rect.right), width: Math.round(rect.width) })) }; })()');
 }
 async function bodyText() {
   return await evalValue('document.body.innerText.replace(/\\\\s+/g, " ")');
@@ -191,11 +377,55 @@ async function waitForBodyIncludes(fragments, timeoutMs = 5000) {
   }
   return text;
 }
+async function waitForTextGone(fragment, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs;
+  let text = await bodyText();
+  while (Date.now() < deadline) {
+    if (!fragment || !text.includes(fragment)) {
+      return text;
+    }
+    await new Promise(r => setTimeout(r, 200));
+    text = await bodyText();
+  }
+  return text;
+}
+async function waitForWorkspaceSettled(timeoutMs = 20000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const settled = await evalValue('(() => Boolean(document.querySelector("[data-section=\\"tasks\\"]")) && !document.querySelector(".workspace-alert--loading"))()');
+    if (settled) return true;
+    await new Promise(r => setTimeout(r, 250));
+  }
+  return false;
+}
+async function waitForLocalDemoStartButtonEnabled(label, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const enabled = await evalValue('(() => { const buttons = [...document.querySelectorAll("button")]; const button = buttons.find(el => (el.innerText || "").includes(' + JSON.stringify(label) + ')); return Boolean(button && !button.disabled); })()');
+    if (enabled) return true;
+    await new Promise(r => setTimeout(r, 200));
+  }
+  return false;
+}
 async function clickText(label) {
   return await evalValue('(() => { const els = [...document.querySelectorAll("button,a,[role=\\"button\\"],nav *")]; const el = els.find(e => (e.innerText || e.textContent || "").trim() === ' + JSON.stringify(label) + '); if (el) { el.click(); return true; } return false; })()');
 }
+async function clickTaskByName(name) {
+  return await evalValue('(() => { const rows = [...document.querySelectorAll(".task-row")]; const row = rows.find(button => { const title = button.querySelector("strong"); return ((title && title.textContent) || "").trim() === ' + JSON.stringify(name) + '; }); if (row) { row.click(); return true; } return false; })()');
+}
 async function clickSelector(selector) {
   return await evalValue('(() => { const el = document.querySelector(' + JSON.stringify(selector) + '); if (el) { el.click(); return true; } return false; })()');
+}
+async function openReportCenter() {
+  let clicked = await clickSelector('[data-section="reports"]') || await clickText(text.reports) || await clickText(text.reportReviewPlan);
+  if (clicked) return true;
+  await clickSelector('[data-section="tasks"]') || await clickText(text.tasks);
+  await new Promise(r => setTimeout(r, 350));
+  clicked = await clickSelector('[data-section="reports"]') || await clickText(text.reportReviewPlan);
+  if (clicked) return true;
+  await clickSelector('[data-section="console"]') || await clickText(text.console);
+  await new Promise(r => setTimeout(r, 350));
+  return await clickSelector('[data-section="reports"]') || await clickText(text.reportReviewPlan) || await clickText(text.reports);
 }
 function summarizeTask(task) {
   return task ? {
@@ -270,6 +500,42 @@ async function ensureRealMutationTask() {
     },
   });
 }
+async function ensureUnreleasedRealModeTask() {
+  const existingStores = await fetchJson('/api/stores');
+  const dangKangStore = Array.isArray(existingStores)
+    ? existingStores.find(store => store?.name === 'Dang Kang')
+    : null;
+  const store = dangKangStore
+    ? dangKangStore
+    : await postJson('/api/stores/connect', { name: 'Dang Kang', platform: 'AliExpress' });
+  let products = await fetchJson('/api/products');
+  if (!Array.isArray(products)) products = [];
+  if (!products.length) {
+    products = await postJson('/api/products/import', { rows: [{
+      title: 'QA unreleased real mode product',
+      source: 'qa',
+      category_name: 'QA_CATEGORY',
+      price: 7.01,
+      currency: 'USD',
+      sku_count: 1,
+      image_count: 1,
+      image: 'qa-product.jpg',
+    }] });
+  }
+  return await postJson('/api/tasks', {
+    name: 'QA unreleased claim_only task',
+    store_id: store.id,
+    mode: 'claim_only',
+    publish_scene: 'SMT_SEMI_MANAGED_SAVE_ONLY',
+    product_ids: [products[0].id],
+    claim_mark: 'QA_CLAIM',
+    payload: {
+      store_name: store.name,
+      category_name: products[0]?.category_name ?? 'QA_CATEGORY',
+      image: products[0]?.image ?? 'qa-product.jpg',
+    },
+  });
+}
 async function ensureDryRunDemoTask() {
   const existingStores = await fetchJson('/api/stores');
   const dangKangStore = Array.isArray(existingStores)
@@ -307,13 +573,14 @@ async function ensureDryRunDemoTask() {
   });
 }
 async function screenshot(name) {
-  const res = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
+  const res = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
   const path = outDir + '/' + name + '.png';
   fs.writeFileSync(path, Buffer.from(res.data, 'base64'));
   return path;
 }
 const readyModeDemoTask = reportOnlyFinal || !qaExpectedReady ? null : await ensureDryRunDemoTask();
 const realMutationTaskForBlockedChecks = reportOnlyFinal || !shouldRunBlockedMutationChecks ? null : await ensureRealMutationTask();
+const unreleasedRealModeTask = reportOnlyFinal ? null : await ensureUnreleasedRealModeTask();
 await send('Page.enable');
 await send('Runtime.enable');
 await send('Network.enable');
@@ -324,6 +591,12 @@ const text = {
   overview: '\u603b\u89c8',
   console: '\u6267\u884c\u63a7\u5236\u53f0',
   reports: '\u62a5\u544a\u4e2d\u5fc3',
+  config: '\u914d\u7f6e\u4e2d\u5fc3',
+  editableConfig: '\u0044\u0058\u004d \u7f16\u8f91\u9875\u914d\u7f6e',
+  taskOverrideSave: '\u4ec5\u672c\u6b21\u4efb\u52a1\u4f7f\u7528',
+  templateSave: '\u4fdd\u5b58\u4e3a\u5e97\u94fa\u6a21\u677f',
+  fieldSource: '\u6765\u6e90\uff1a',
+  reportReviewPlan: '\u67e5\u770b L2 \u8bc4\u5ba1\u4e0e\u590d\u9a8c\u8ba1\u5212',
   hero: '\u0044\u0058\u004d \u81ea\u52a8\u5316\u5de5\u4f5c\u53f0',
   localWorkbenchDeliverable: '\u81ea\u52a8\u5316\u5de5\u4f5c\u53f0\u53ef\u4ea4\u4ed8',
   expectedSafetyBlocked: '\u771f\u5b9e DXM \u5199\u5165 L3 \u53d7\u63a7',
@@ -335,10 +608,10 @@ const text = {
   l2BlockHelp: '\u67e5\u770b L2 \u963b\u65ad\u8bf4\u660e',
   evidenceGap: '\u67e5\u770b\u8bc1\u636e\u7f3a\u53e3',
   forbiddenStart: '\u7981\u6b62\u542f\u52a8',
-  readonly: '\u53ea\u8bfb\u8bca\u65ad',
-  noSaveStart: '\u4e0d\u542f\u52a8\u4fdd\u5b58',
-  noBrowser: '\u5c1a\u672a\u6253\u5f00\u771f\u5b9e\u8bca\u65ad\u6d4f\u89c8\u5668',
-  noFakeEvidence: '\u4e0d\u628a\u5546\u54c1\u4fe1\u606f\u4f2a\u88c5\u6210\u6d4f\u89c8\u5668\u8bc1\u636e',
+  readonly: '\u771f\u5b9e\u6d4f\u89c8\u5668',
+  noSaveStart: '\u4e0d\u4f1a\u53d1\u5e03',
+  noBrowser: '\u5e97\u5c0f\u79d8\u81ea\u52a8\u6d4f\u89c8\u5668',
+  noFakeEvidence: '\u771f\u5b9e\u5e97\u5c0f\u79d8',
   finalCheck: '\u6700\u8fd1\u4ea4\u4ed8\u81ea\u68c0',
   expectedBlocked: '\u771f\u5b9e\u4fdd\u5b58\u4fdd\u6301\u963b\u65ad',
   realSingleSaveReady: '\u771f\u5b9e DXM single_save READY',
@@ -381,18 +654,23 @@ const text = {
   l2RunIdFlag: '--run-id',
   l2RunIdVar: '$runId',
   l2SameBinding: '\u540c\u4e00 run-id',
-  fallbackCopy: 'fallback',
-  oldSaveOnly: '\u53ea\u4fdd\u5b58\u4e0d\u53d1\u5e03',
+  fallbackCopyPatterns: ['fallback \u6570\u636e', '\u6765\u6e90\uff1afallback', 'mock \u6216 fallback', 'mock or fallback'],
+  unreleasedRealModeCopy: '\u0063\u006c\u0061\u0069\u006d\u005f\u006f\u006e\u006c\u0079/\u0062\u0061\u0074\u0063\u0068\u005f\u0073\u0061\u0076\u0065 \u5f53\u524d\u672a\u53d1\u5e03',
+  unreleasedRealModeButtonDisabled: '\u672a\u53d1\u5e03\uff0c\u7981\u6b62\u542f\u52a8',
+  controlledSingleSaveOnly: '\u4ec5\u53d7\u63a7 single_save',
   oldWaitSave: '\u7b49\u5f85\u4fdd\u5b58\u6838\u9a8c',
   oldVisibleBrowser: '\u6253\u5f00\u53ef\u89c1\u6d4f\u89c8\u5668',
   oldAutomation: '\u65c1\u89c2\u81ea\u52a8\u5316',
   fakePlaceholder: '\u8bca\u65ad\u5360\u4f4d',
+  workspaceLoading: '\u6b63\u5728\u8bfb\u53d6 /api/delivery/workspace',
 };
 function formatQaState(value) {
   return value === true ? 'PASS' : value === false ? 'FAIL' : '\u5f85\u5237\u65b0/\u672a\u8fd0\u884c';
 }
+await waitForTextGone(text.workspaceLoading, 12000);
+await waitForWorkspaceSettled(20000);
 if (reportOnlyFinal) {
-  const clickedReports = await clickSelector('[data-section="reports"]') || await clickText(text.reports);
+  const clickedReports = await openReportCenter();
   await new Promise(r => setTimeout(r, 300));
   const finalCheckSummary = await fetchJson('/api/delivery/final-check');
   const expectedSourcePackage = finalCheckSummary?.source_package_check === 'NOT_REQUIRED'
@@ -560,6 +838,8 @@ if (reportOnlyFinal) {
       platform: process.platform,
       os: os.type() + ' ' + os.release(),
       browser: versionInfo.Browser || versionInfo['User-Agent'] || 'unknown',
+      browserPath,
+      browserHeadlessMode,
       protocolVersion: versionInfo['Protocol-Version'] || null,
       chromeDebugPort: port,
       viewport: '1440x1100',
@@ -609,17 +889,30 @@ if (reportOnlyFinal) {
 }
 const initialText = await bodyText();
 const initialTextCompact = initialText.replace(/\s+/g, '');
-const clickedTasks = await clickText(text.tasks);
+const clickedConfig = await clickSelector('[data-section="config"]') || await clickText(text.config);
 await new Promise(r => setTimeout(r, 700));
+const configText = await bodyText();
+const configShot = await screenshot('qa-config-center');
+const desktopReflow = await evalValue('document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1');
+const desktopOverflow = await horizontalOverflowState();
+const clickedTasks = await clickSelector('[data-section="tasks"]') || await clickText(text.tasks);
+await waitForWorkspaceSettled(12000);
+await new Promise(r => setTimeout(r, 700));
+let unreleasedRealModeTaskSelected = !unreleasedRealModeTask;
+if (unreleasedRealModeTask) {
+  unreleasedRealModeTaskSelected = await clickTaskByName(unreleasedRealModeTask.name);
+  await new Promise(r => setTimeout(r, 900));
+}
 const taskText = await bodyText();
 const taskStartDisabled = await evalValue('(() => { const buttons = [...document.querySelectorAll("button")]; const button = buttons.find(el => (el.innerText || "").includes("\u7981\u6b62\u542f\u52a8")); return Boolean(button && button.disabled); })()');
+const unreleasedRealModeStartButtonDisabled = taskStartDisabled && taskText.includes(text.unreleasedRealModeButtonDisabled);
 const taskShot = await screenshot('qa-task-center');
-const clickedConsole = await clickText(text.console);
+const clickedConsole = await clickSelector('[data-section="console"]') || await clickText(text.console);
 await new Promise(r => setTimeout(r, 700));
 const consoleText = await bodyText();
-const consoleStartDisabled = await evalValue('(() => { const buttons = [...document.querySelectorAll("button")]; const button = buttons.find(el => (el.innerText || "").includes("L2 \u672a\u901a\u8fc7\uff0c\u7981\u6b62\u6253\u5f00\u8bca\u65ad\u6d4f\u89c8\u5668")); return Boolean(button && button.disabled); })()');
+const consoleStartDisabled = await evalValue('(() => { const buttons = [...document.querySelectorAll("button")]; const button = buttons.find(el => (el.innerText || "").includes("\u5148\u5b8c\u6210\u53ea\u8bfb\u68c0\u67e5")); return Boolean(button && button.disabled); })()');
 const consoleShot = await screenshot('qa-execution-console');
-const clickedReports = await clickText(text.reports);
+const clickedReports = await openReportCenter();
 await new Promise(r => setTimeout(r, 700));
 const reportText = await bodyText();
 const finalCheckSummaryForReport = await fetchJson('/api/delivery/final-check');
@@ -638,12 +931,13 @@ await send('Emulation.setDeviceMetricsOverride', {
 await send('Emulation.setTouchEmulationEnabled', { enabled: true });
 await send('Page.navigate', { url: targetUrl });
 await new Promise(r => setTimeout(r, 1400));
+await waitForWorkspaceSettled(16000);
 const mobileInitialText = await bodyText();
-const clickedMobileTasks = await clickText(text.tasks);
+const clickedMobileTasks = await clickSelector('[data-section="tasks"]') || await clickText(text.tasks);
 await new Promise(r => setTimeout(r, 700));
 const mobileTaskText = await bodyText();
 const mobileReflow = await evalValue('document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1');
-const mobileOverflow = await evalValue('(() => { const viewportWidth = document.documentElement.clientWidth; const candidates = [...document.querySelectorAll("button, a, code, .guard-chip, .status-pill, .module-head, .module-card")]; const bad = candidates.map(el => ({ el, rect: el.getBoundingClientRect() })).filter(({ rect }) => rect.width > 0 && (rect.left < -1 || rect.right > viewportWidth + 1)); return { ok: bad.length === 0, count: bad.length, samples: bad.slice(0, 5).map(({ el, rect }) => ({ tag: el.tagName, text: String(el.innerText || el.textContent || "").trim().slice(0, 80), left: Math.round(rect.left), right: Math.round(rect.right), width: Math.round(rect.width) })) }; })()');
+const mobileOverflow = await horizontalOverflowState();
 const mobileShot = await screenshot('qa-mobile-task-center');
 await send('Emulation.clearDeviceMetricsOverride');
 await send('Emulation.setTouchEmulationEnabled', { enabled: false });
@@ -678,7 +972,7 @@ const unexpectedNetworkHosts = networkEvents.filter(event => {
     return true;
   }
 });
-const screenshotPaths = [taskShot, consoleShot, reportShot, mobileShot];
+const screenshotPaths = [configShot, taskShot, consoleShot, reportShot, mobileShot];
 let blockedStartStatus = null;
 let blockedAgentConsoleStatus = null;
 let blockedActionChecks = [];
@@ -744,27 +1038,17 @@ fs.writeFileSync(blockedActionsPath, JSON.stringify({
 }, null, 2));
 const blockedActionsAllForbidden = blockedActionChecks.length === 5 && blockedActionChecks.every(item => item.status === 403);
 const taskStateUnchanged = JSON.stringify(beforeTaskStatus) === JSON.stringify(afterTaskStatus);
-const tasksBeforeDemo = await fetchJson('/api/tasks');
-const maxTaskIdBeforeDemo = Array.isArray(tasksBeforeDemo) && tasksBeforeDemo.length
-  ? Math.max(...tasksBeforeDemo.map(item => Number(item.id) || 0))
-  : 0;
-await evalValue('window.confirm = () => true');
-await clickText(text.tasks);
+await clickSelector('[data-section="tasks"]') || await clickText(text.tasks);
 await new Promise(r => setTimeout(r, 500));
-const demoBatchCreated = await clickText(text.demoBatchButton);
-await new Promise(r => setTimeout(r, 1200));
-const demoText = await bodyText();
-const demoStartButtonEnabled = await evalValue('(() => { const buttons = [...document.querySelectorAll("button")]; const button = buttons.find(el => (el.innerText || "").includes("' + text.localDemoStart + '")); return Boolean(button && !button.disabled); })()');
-const tasksAfterDemo = await fetchJson('/api/tasks');
-const newTasks = Array.isArray(tasksAfterDemo)
-  ? tasksAfterDemo.filter(item => item.id > maxTaskIdBeforeDemo)
-  : [];
-const demoCreatedTask = newTasks.find(item => item.id > maxTaskIdBeforeDemo && item.mode === 'dry_run' && item.status === 'draft' && String(item.name || '').includes(text.localDemoTask));
+const taskTextAfterDefaultDemoCheck = await bodyText();
+const demoBatchHiddenByDefault = !taskTextAfterDefaultDemoCheck.includes(text.demoBatchButton)
+  && !taskTextAfterDefaultDemoCheck.includes(text.localDemoStart);
 const hasLocalAcceptanceCommand = Array.isArray(reportAcceptanceCommands) && reportAcceptanceCommands.some(command => /scripts[\\/]+final-delivery-check\.bat$/.test(command));
 const hasSourceAcceptanceCommand = Array.isArray(reportAcceptanceCommands) && reportAcceptanceCommands.some(command => /scripts[\\/]+final-delivery-check\.bat\s+-RequireCleanWorktree$/.test(command));
 const hasRunIdSetup = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(command => command.includes('$runId') && command.includes('Get-Date'));
 const hasDataAcquisitionRunId = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(command => command.includes('--target data_acquisition') && command.includes('--run-id $runId'));
 const hasDraftBoxRunId = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(command => command.includes('--target draft_box') && command.includes('--run-id $runId'));
+const userFacingText = initialText + ' ' + taskText + ' ' + consoleText + ' ' + reportText;
 const finalCheckRequiresNotRequiredCopy = finalCheckSummaryForReport?.source_package_check === 'NOT_REQUIRED';
 const finalCheckRealWriteBlocked = finalCheckSummaryForReport?.real_dxm_write_readiness === 'BLOCKED' && finalCheckSummaryForReport?.real_dxm_mutation_allowed !== true;
 const finalCheckExpectedReady = finalCheckSummaryForReport?.real_dxm_write_readiness === 'READY'
@@ -780,15 +1064,25 @@ const result = {
     navClicksWorked: clickedTasks && clickedConsole && clickedReports,
     localizedOverviewNav: initialText.includes(text.overview),
     firstScreenExpectedBlockedScope: initialTextCompact.includes('\u81ea\u52a8\u5316\u5de5\u4f5c\u53f0')
-      && initialTextCompact.includes('\u53ef\u4ea4\u4ed8')
-      && initialTextCompact.includes(text.expectedSafetyBlocked.replace(/\s+/g, ''))
-      && initialTextCompact.includes(text.nextStepSummary.replace(/\s+/g, '')),
-    localWriteCopy: taskText.includes(text.localWrite) && taskText.includes(text.noDxmTouch),
+      && (finalCheckExpectedReady
+        ? initialText.includes(text.realSingleSaveReady)
+          || initialText.includes('single_save READY')
+          || initialText.includes('\u7b49\u5f85\u4eba\u5de5\u786e\u8ba4')
+        : initialTextCompact.includes('\u73b0\u5728\u53ea\u505a\u8fd9\u4e00\u6b65')
+          && initialTextCompact.includes(text.realWriteGateFailed.replace(/\s+/g, ''))
+          && initialTextCompact.includes('\u67e5\u770b\u5b8c\u6574 9 \u6b65\u6d41\u7a0b'.replace(/\s+/g, ''))),
+    configCenterTaskOverrideControls: clickedConfig
+      && configText.includes(text.editableConfig)
+      && configText.includes(text.taskOverrideSave)
+      && configText.includes(text.templateSave)
+      && configText.includes(text.fieldSource),
+    localWriteCopy: !taskText.includes(text.localWrite) && taskText.includes('single_save'),
     taskRecoveryActions: finalCheckExpectedReady || ((taskText.includes(text.readonlyDiag) || taskText.includes(text.l2BlockHelp)) && taskText.includes(text.evidenceGap)),
     taskStartBlockedCopy: finalCheckExpectedReady || taskText.includes(text.forbiddenStart),
     taskStartButtonDisabled: finalCheckExpectedReady || taskStartDisabled,
+    desktopNoHorizontalOverflow: desktopReflow === true && desktopOverflow.ok === true,
     mobileLoaded: mobileInitialText.includes(text.hero) || mobileInitialText.includes(text.appName),
-    mobileNavWorked: clickedMobileTasks && mobileTaskText.includes(text.localWrite),
+    mobileNavWorked: clickedMobileTasks && mobileTaskText.includes('single_save'),
     mobileNoHorizontalOverflow: mobileReflow === true && mobileOverflow.ok === true,
     consoleReadonlyCopy: consoleText.includes(text.readonly) && consoleText.includes(text.noSaveStart),
     consoleNoFakeBrowser: consoleText.includes(text.noBrowser) && consoleText.includes(text.noFakeEvidence),
@@ -816,14 +1110,19 @@ const result = {
     reportDualAcceptanceCommands: reportText.includes(text.localAcceptanceCommand) && reportText.includes(text.sourceAcceptanceCommand) && hasLocalAcceptanceCommand && hasSourceAcceptanceCommand,
     reportL2RunBindingCopy: reportText.includes(text.l2SameBinding) && hasRunIdSetup && hasDataAcquisitionRunId && hasDraftBoxRunId,
     reportSourcePackageNotRequiredCopy: !finalCheckRequiresNotRequiredCopy || (reportText.includes(text.sourcePackageNotRequired) && reportText.includes(text.sourcePackageNotRequiredCopy)),
-    demoBatchCanStartLocally: demoBatchCreated && Boolean(demoCreatedTask) && demoText.includes(text.localDemoTask) && demoStartButtonEnabled,
-    noDeveloperFallbackCopy: !(initialText + ' ' + taskText + ' ' + consoleText + ' ' + reportText).includes(text.fallbackCopy),
+    demoBatchHiddenByDefault: demoBatchHiddenByDefault,
+    unreleasedRealModeTaskSelected: unreleasedRealModeTaskSelected,
+    unreleasedRealModeCopy: taskText.includes(text.unreleasedRealModeButtonDisabled)
+      && taskText.includes('L3 single_save')
+      && taskText.includes('\u6279\u91cf\u4fdd\u5b58\u672a\u653e\u884c')
+      && taskText.includes('\u53d1\u5e03\u52a8\u4f5c\u672a\u5f00\u653e'),
+    unreleasedRealModeButtonDisabled: unreleasedRealModeStartButtonDisabled,
+    noDeveloperFallbackCopy: text.fallbackCopyPatterns.every(pattern => !userFacingText.includes(pattern)),
     localStartPostBlocked: !shouldRunBlockedMutationChecks || blockedStartStatus === 403,
     localAgentConsolePostBlocked: !shouldRunBlockedMutationChecks || blockedAgentConsoleStatus === 403,
     localDirectDxmPostsBlocked: !shouldRunBlockedMutationChecks || blockedActionsAllForbidden,
     blockedPostsDidNotMutateTask: taskStateUnchanged,
-    noOldActionCopy: !(consoleText + ' ' + taskText).includes(text.oldSaveOnly)
-      && !(consoleText + ' ' + taskText).includes(text.oldWaitSave)
+    noOldActionCopy: !(consoleText + ' ' + taskText).includes(text.oldWaitSave)
       && !(consoleText + ' ' + taskText).includes(text.oldVisibleBrowser)
       && !(consoleText + ' ' + taskText).includes(text.oldAutomation)
       && !(consoleText + ' ' + taskText).includes('SAVE_ONLY'),
@@ -846,6 +1145,7 @@ const result = {
     allowedOrigins: [...allowedOrigins],
     blockedStartStatus,
     blockedAgentConsoleStatus,
+    desktopOverflow,
     mobileOverflow,
   },
   screenshots: screenshotPaths,
@@ -865,6 +1165,8 @@ const result = {
     platform: process.platform,
     os: os.type() + ' ' + os.release(),
     browser: versionInfo.Browser || versionInfo['User-Agent'] || 'unknown',
+    browserPath,
+    browserHeadlessMode,
     protocolVersion: versionInfo['Protocol-Version'] || null,
     chromeDebugPort: port,
     viewport: '1440x1100',
@@ -921,7 +1223,7 @@ if (!result.ok) process.exit(1);
     Stop-Process -Id $proc.Id -Force
     Start-Sleep -Milliseconds 800
   }
-  if (Test-Path -LiteralPath $userData) {
+  if ($userData -and (Test-Path -LiteralPath $userData)) {
     try {
       Remove-Item -LiteralPath $userData -Recurse -Force -ErrorAction Stop
     } catch {

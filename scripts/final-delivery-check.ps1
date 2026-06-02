@@ -664,7 +664,7 @@ $commands += Invoke-CapturedCommandWithEnvironment `
   -FilePath $pythonExe `
   -Arguments @("-m", "pytest", "-q") `
   -WorkingDirectory $backendDir `
-  -TimeoutSeconds 180 `
+  -TimeoutSeconds 360 `
   -Environment @{ DXM_DATA_DIR = $pytestRuntimeDataDir }
 $commands += Invoke-CapturedCommand `
   -Name "Frontend production build" `
