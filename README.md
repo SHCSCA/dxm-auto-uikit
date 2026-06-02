@@ -1,8 +1,8 @@
 # dxm-auto-uikit
 
-DXM 半托管自动化工作台。
+DXM 半托管自动化工作台，面向真实店小秘账号、真实浏览器和受控 save-only 流程。
 
-当前已落地为 **本地可运行的 DXM 半托管自动化工作台 + 真实保存门禁**，不是纯文档项目了。
+当前已落地为 **DXM 半托管自动化工作台 + 真实保存门禁**。它不是本地演示页，也不是安全诊断工具；普通用户路径是启动工作台、登录真实店小秘、补齐编辑页配置、创建 `single_save` 任务，并在真实浏览器中完成“只保存不发布”的单商品保存核验。
 
 交付状态说明：
 - L0 后端/前端本地门禁与 L1 离线 selector replay 可运行。
@@ -10,6 +10,29 @@ DXM 半托管自动化工作台。
 - 截至 2026-06-01 10:30（Asia/Shanghai），最新 L2 双目标真实只读 probe 与 L3 受控 `single_save` 金丝雀均已通过，最终自检显示 `Real DXM write readiness: READY`，范围仅为 `controlled_single_save_only`。
 - 当前交付重点是 DXM 半托管自动化工作台与受控 save-only 自动化链路；批量、无人值守和发布不随 `single_save` READY 自动放行。
 - 源码包验收命令：`scripts\final-delivery-check.bat -RequireCleanWorktree`；具体 Git HEAD 以 `outputs/final-delivery-check/final-delivery-check.json` 的 `gitHead` 字段为准。
+
+## 真实用户快速开始
+
+> 当前用户可执行范围：受控单商品 `single_save`。最终动作只保存，不发布。
+
+1. 在 Windows PowerShell 或 CMD 中进入项目根目录。
+
+```bat
+cd /d C:\Users\wz\Desktop\py\dxm-auto-uikit
+scripts\start-mvp.bat --check
+scripts\start-mvp.bat
+```
+
+2. 保留启动器窗口。启动器会托管后端和前端；关闭该窗口或按 `Ctrl+C` 会停止服务。
+3. 等启动器显示 `STARTED_OK` 后，使用自动打开的工作台页面；如果 5173 被占用，启动器会选择附近空闲端口并在日志中写出实际 URL。
+4. 进入工作台的“操作引导”，在“打开真实 DXM 浏览器并确认登录”步骤点击“打开登录页”，在独立店小秘浏览器窗口完成真实账号登录和验证码处理。
+5. 回到“配置中心”，按店小秘编辑页分区补齐：店铺与任务基础、类目与标题、SKU/价格/库存、价格策略、图片与素材、包装物流、合规/海关、半托管、店小秘引用模板。保存时可选“仅本次任务使用”或“保存为店铺模板”。
+6. 进入“任务中心”，选择真实店铺和商品，模式选择 `L3 single_save`，点击“创建真实任务”。
+7. 只有 L2 真实只读检查为 `passed`、配置预检通过且人工批准完成后，才能点击“批准并启动真实金丝雀”。弹窗要求输入 L3 批准人标识。
+8. 进入“执行控制台”观察真实浏览器画面、自动操作轨迹、网络响应和实时日志。日志可切换“后端 / 前端 / 启动器 / 任务 / 浏览器 Agent”来源。
+9. 任务完成后，到“报告中心”和“证据中心”核对保存响应、未发布证明、截图和结构化报告。验收结论必须是保存成功且 `published=false`。
+
+不要用本地 `dry_run` 演示批次代替真实交付验收。`dry_run` 只用于开发自检，不访问店小秘。
 
 ## 当前已完成
 
@@ -31,21 +54,20 @@ DXM 半托管自动化工作台。
 
 ---
 
-## MVP 当前能力
+## 当前产品能力
 
-### 已实现：自动化工作台 / 演示 / 诊断能力
-- 店铺连接（演示态）
+### 已实现：DXM 半托管自动化工作台
+- 店铺与商品队列展示
 - 模板中心基础 CRUD
-- 商品导入（JSON/演示数据）
-- 任务创建
-- 本地 `dry_run` 演示任务启动与状态流转
+- 商品导入
+- 真实 `probe` / `single_save` 任务创建
 - Task/Job 状态流转
 - WebSocket 实时执行事件
-- 日志中心
+- 执行控制台、真实浏览器画面和日志中心
 - 证据面板
 - 异常池（当前框架已接入，演示流程暂未主动制造异常）
 - Playwright 主引擎骨架
-- POP 保存待发布演示链路（本地 `dry_run` 可启动；真实 `single_save` 已具备受控 READY 证据，但批量、无人值守和发布仍不放行）
+- POP 保存待发布链路（真实 `single_save` 已具备受控 READY 证据；批量、无人值守和发布仍不放行）
 
 ### 当前是“受控 single_save READY 版”
 说明：
@@ -67,7 +89,7 @@ DXM 半托管自动化工作台。
 - Git
 - 首次安装前端依赖时需要可访问 npm registry 的网络
 
-### 0. Windows 启动前检查
+### 0. Windows 单窗口启动
 
 ```bat
 scripts\start-mvp.bat --check
@@ -79,15 +101,15 @@ scripts\start-mvp.bat --check
 scripts\start-mvp.bat
 ```
 
-启动后只保留当前启动器控制台窗口，后端和前端会作为子进程运行；只有后端 `/health` 与前端页面健康检查都通过时，才会自动打开前端页面。若启动日志出现 warning，脚本不会自动开页，请先查看日志并等健康检查恢复后再手动访问。
+启动后只保留当前启动器控制台窗口。后端和前端会作为同一启动器窗口托管的子进程运行；只有后端 `/health` 与前端页面健康检查都通过时，才会自动打开前端页面。若 5173 被占用，启动器会自动使用附近空闲端口；若启动日志出现 warning，脚本不会自动开页，请先查看日志并等健康检查恢复后再手动访问启动器打印的前端 URL。
 
 - 后端：`http://127.0.0.1:8000`
-- 前端：`http://127.0.0.1:5173`
+- 前端：默认 `http://127.0.0.1:5173`，端口占用时以启动器输出为准
 - 日志：`data\start-mvp.log`、`data\backend.log`、`data\frontend.log`
 
 停止方式：关闭当前启动器窗口，或在启动器窗口按 `Ctrl+C`。脚本退出时会尽力停止后端和前端子进程树。
 
-### 1. 类 Unix / Git Bash 启动后端
+### 1. 类 Unix / Git Bash 启动后端（开发备用）
 ```bash
 bash scripts/start-backend.sh
 ```
@@ -95,7 +117,7 @@ bash scripts/start-backend.sh
 后端地址：
 - `http://127.0.0.1:8000`
 
-### 2. 类 Unix / Git Bash 启动前端
+### 2. 类 Unix / Git Bash 启动前端（开发备用）
 ```bash
 bash scripts/start-frontend.sh
 ```
@@ -103,7 +125,7 @@ bash scripts/start-frontend.sh
 前端地址：
 - `http://127.0.0.1:5173`
 
-### 3. 类 Unix / Git Bash 一键启动（后台方式）
+### 3. 类 Unix / Git Bash 一键启动（开发备用）
 ```bash
 bash scripts/start-mvp.sh
 ```
@@ -150,7 +172,7 @@ scripts\final-delivery-check.bat
 
 启动工作台后，报告中心会显示最近一次交付自检摘要和报告路径，方便验收人直接确认自动化工作台 PASS、真实写入门禁状态与源码包状态。
 
-验收人可以在任务中心点击“创建本地 dry_run 演示批次”，该按钮只创建本地 `dry_run` 演示任务，不触达 DXM；“启动本地演示任务”可跑通自动化工作台状态流转。真实 `single_save` 只在当前 L2/L3 READY、人工批准令牌和金丝雀证据链约束下放行；真实 `claim_only` / `batch_save`、批量无人值守和发布仍保持阻断。
+开发自检可在任务中心点击“创建本地 dry_run 演示批次”，该按钮只创建本地 `dry_run` 演示任务，不触达 DXM，不能作为真实交付验收依据。真实用户交付路径是 `single_save`，且只在当前 L2/L3 READY、人工批准令牌和金丝雀证据链约束下放行；真实 `claim_only` / `batch_save`、批量无人值守和发布仍保持阻断。
 
 发布源码包前可加 clean worktree 门禁：
 

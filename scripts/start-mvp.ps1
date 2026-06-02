@@ -8,6 +8,7 @@ $launcherLog = Join-Path $dataDir "start-mvp.log"
 $backendLog = Join-Path $dataDir "backend.log"
 $frontendLog = Join-Path $dataDir "frontend.log"
 $npmInstallLog = Join-Path $dataDir "npm-install.log"
+$runtimeControlCommand = Join-Path $dataDir "runtime-control-command.json"
 $backendPort = 8000
 $frontendPort = 5173
 $checkOnly = $args -contains "--check" -or $args -contains "/check"
@@ -385,9 +386,49 @@ function Stop-ManagedServices {
   }
 }
 
+function Read-RuntimeControlCommand {
+  if (!(Test-Path -LiteralPath $runtimeControlCommand)) {
+    return $null
+  }
+
+  try {
+    $raw = Get-Content -LiteralPath $runtimeControlCommand -Raw -Encoding UTF8
+    Remove-Item -LiteralPath $runtimeControlCommand -Force -ErrorAction SilentlyContinue
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+      return $null
+    }
+    return $raw | ConvertFrom-Json
+  } catch {
+    Write-Step "Runtime control: failed to read command file: $($_.Exception.Message)"
+    return $null
+  }
+}
+
+function Restart-ManagedService {
+  param([object]$Service)
+
+  Write-Step "Runtime control: restarting $($Service.Name)"
+  if ($Service.Process -and !$Service.Process.HasExited) {
+    Stop-ProcessTree -RootProcessId $Service.Process.Id
+  }
+  if ($Service.JobHandle) {
+    [DxmJobObject]::Close($Service.JobHandle)
+    $Service.JobHandle = [IntPtr]::Zero
+  }
+
+  $started = Start-ManagedProcess -Name $Service.Name -Command $Service.Command -LogPath $Service.Log -GatePath $Service.Gate
+  $Service.Process = $started.Process
+  $Service.JobHandle = $started.JobHandle
+  Start-Sleep -Seconds 3
+  if ($Service.Process.HasExited) {
+    Fail "$($Service.Name) failed after runtime restart on port $($Service.Port). Check $($Service.Log)"
+  }
+  Write-Step "Runtime control: restarted $($Service.Name) on port $($Service.Port)"
+}
+
 $backendGate = Join-Path $dataDir "backend-start.gate"
 $frontendGate = Join-Path $dataDir "frontend-start.gate"
-$backendCommand = New-ManagedProcessCommand -WorkingDirectory $backendDir -FilePath $pythonExe -Arguments "-m uvicorn src.main:app --host 127.0.0.1 --port $backendPort" -StartMessage "Starting backend on http://127.0.0.1:$backendPort" -ExitName "Backend" -Environment @{ DXM_LOGIN_HEADED = "1"; DXM_BACKEND_PORT = "$backendPort"; DXM_BACKEND_URL = "http://127.0.0.1:$backendPort"; DXM_FRONTEND_PORT = "$frontendPort"; DXM_FRONTEND_URL = "http://127.0.0.1:$frontendPort" } -GatePath $backendGate
+$backendCommand = New-ManagedProcessCommand -WorkingDirectory $backendDir -FilePath $pythonExe -Arguments "-m uvicorn src.main:app --host 127.0.0.1 --port $backendPort" -StartMessage "Starting backend on http://127.0.0.1:$backendPort" -ExitName "Backend" -Environment @{ DXM_LOGIN_HEADED = "1"; DXM_BACKEND_PORT = "$backendPort"; DXM_BACKEND_URL = "http://127.0.0.1:$backendPort"; DXM_FRONTEND_PORT = "$frontendPort"; DXM_FRONTEND_URL = "http://127.0.0.1:$frontendPort"; DXM_RUNTIME_CONTROL_COMMAND_FILE = $runtimeControlCommand } -GatePath $backendGate
 $frontendCommand = New-ManagedProcessCommand -WorkingDirectory $frontendDir -FilePath $viteCmd -Arguments "--host 127.0.0.1 --port $frontendPort" -StartMessage "Starting frontend on http://127.0.0.1:$frontendPort" -ExitName "Frontend" -Environment @{} -GatePath $frontendGate
 
 $managedServices = @()
@@ -398,6 +439,8 @@ try {
     Name = "backend"
     Port = $backendPort
     Log = $backendLog
+    Command = $backendCommand
+    Gate = $backendGate
     Process = $backendStart.Process
     JobHandle = $backendStart.JobHandle
   }
@@ -406,6 +449,8 @@ try {
     Name = "frontend"
     Port = $frontendPort
     Log = $frontendLog
+    Command = $frontendCommand
+    Gate = $frontendGate
     Process = $frontendStart.Process
     JobHandle = $frontendStart.JobHandle
   }
@@ -447,6 +492,24 @@ try {
   }
 
   while ($true) {
+    $runtimeCommand = Read-RuntimeControlCommand
+    if ($runtimeCommand) {
+      $action = [string]$runtimeCommand.action
+      if ($action -eq "restart_backend") {
+        $service = $managedServices | Where-Object { $_.Name -eq "backend" } | Select-Object -First 1
+        if ($service) {
+          Restart-ManagedService -Service $service
+        }
+      } elseif ($action -eq "restart_frontend") {
+        $service = $managedServices | Where-Object { $_.Name -eq "frontend" } | Select-Object -First 1
+        if ($service) {
+          Restart-ManagedService -Service $service
+        }
+      } else {
+        Write-Step "Runtime control: ignored unknown action $action"
+      }
+    }
+
     foreach ($service in $managedServices) {
       if ($service.Process.HasExited) {
         Fail "$($service.Name) stopped on port $($service.Port). Check $($service.Log)"

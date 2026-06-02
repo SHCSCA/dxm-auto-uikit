@@ -8,6 +8,8 @@ import socket
 import secrets
 import subprocess
 import sys
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -97,6 +99,9 @@ RUNTIME_LOG_SOURCES = {
     'launcher': DATA_DIR / 'start-mvp.log',
     'npm': DATA_DIR / 'npm-install.log',
 }
+RUNTIME_CONTROL_COMMAND_FILE = Path(
+    os.environ.get('DXM_RUNTIME_CONTROL_COMMAND_FILE') or DATA_DIR / 'runtime-control-command.json'
+)
 RUNTIME_VIRTUAL_LOG_SOURCES = {'task', 'agent'}
 RUNTIME_LOG_LEVELS = {'info', 'warning', 'error'}
 RUNTIME_CONTROL_ACTIONS = {'stop_agent_console', 'clear_stuck_tasks', 'restart_backend', 'restart_frontend'}
@@ -503,11 +508,14 @@ def runtime_control(payload: RuntimeControlRequest):
         raise HTTPException(status_code=400, detail=f'Unknown runtime control action: {payload.action}')
 
     if action in {'restart_backend', 'restart_frontend'}:
-        _append_runtime_control_log(f"restart requested but not available from backend: {action}")
-        raise HTTPException(
-            status_code=409,
-            detail='launcher-managed restart is not available from this backend process yet; use the single launcher window to restart services',
-        )
+        command = _write_runtime_control_command(action=action, task_id=payload.task_id)
+        _append_runtime_control_log(f"queued launcher restart action={action} command_id={command['id']}")
+        return {
+            'ok': True,
+            'action': action,
+            'command': command,
+            'message': '已请求启动器托管重启；请查看启动器日志确认完成',
+        }
 
     if action == 'stop_agent_console':
         before = agent_console_service.status()
@@ -827,6 +835,22 @@ def _append_runtime_control_log(message: str) -> None:
             handle.write(line + '\n')
     except OSError:
         pass
+
+
+def _write_runtime_control_command(action: str, task_id: int | None) -> dict:
+    RUNTIME_CONTROL_COMMAND_FILE.parent.mkdir(parents=True, exist_ok=True)
+    command = {
+        'schema': 'dxm_runtime_control_command.v1',
+        'id': uuid.uuid4().hex,
+        'source': 'backend-api',
+        'action': action,
+        'task_id': task_id,
+        'requested_at': datetime.now(timezone.utc).isoformat(),
+    }
+    tmp_path = RUNTIME_CONTROL_COMMAND_FILE.with_suffix('.tmp')
+    tmp_path.write_text(json.dumps(command, ensure_ascii=False), encoding='utf-8')
+    tmp_path.replace(RUNTIME_CONTROL_COMMAND_FILE)
+    return command
 
 
 def _runtime_http_service_status(name: str, url: str) -> dict:

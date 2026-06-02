@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -568,13 +569,40 @@ def test_runtime_control_clears_only_non_real_stuck_tasks(tmp_path, monkeypatch)
     assert any(item["id"] == single_save["id"] and item["reason"] == "real_write_protected" for item in payload["skippedTasks"])
 
 
-def test_runtime_control_rejects_backend_restart_without_launcher(tmp_path, monkeypatch):
+def test_runtime_control_queues_launcher_managed_backend_restart(tmp_path, monkeypatch):
+    import src.main as main
+
     client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    command_file = tmp_path / "runtime-control-command.json"
+    monkeypatch.setattr(main, "RUNTIME_CONTROL_COMMAND_FILE", command_file)
 
     response = client.post("/api/runtime/control", json={"action": "restart_backend"})
 
-    assert response.status_code == 409
-    assert "launcher-managed restart" in response.json()["detail"]
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["action"] == "restart_backend"
+    assert "启动器" in payload["message"]
+    command = json.loads(command_file.read_text(encoding="utf-8"))
+    assert command["action"] == "restart_backend"
+    assert command["source"] == "backend-api"
+
+
+def test_runtime_control_queues_launcher_managed_frontend_restart(tmp_path, monkeypatch):
+    import src.main as main
+
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    command_file = tmp_path / "runtime-control-command.json"
+    monkeypatch.setattr(main, "RUNTIME_CONTROL_COMMAND_FILE", command_file)
+
+    response = client.post("/api/runtime/control", json={"action": "restart_frontend"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["action"] == "restart_frontend"
+    command = json.loads(command_file.read_text(encoding="utf-8"))
+    assert command["action"] == "restart_frontend"
 
 
 def test_runtime_logs_reject_unknown_source(tmp_path, monkeypatch):

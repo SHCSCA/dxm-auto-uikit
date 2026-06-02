@@ -171,6 +171,20 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "reason:" in workbench_source
 
 
+def test_guide_center_can_start_real_dxm_login_without_l2_gate():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+
+    assert "async function openDxmLogin" in app_source
+    assert "/api/dxm/login/start" in app_source
+    assert "onOpenDxmLogin={openDxmLogin}" in app_source
+    assert "onOpenDxmLogin: () => void" in workbench_source
+    assert "action: '打开登录页'" in workbench_source
+    assert "onAction: onOpenDxmLogin" in workbench_source
+    assert "账号密码只用于本次真实店小秘登录" in workbench_source
+    assert "DXM 登录状态" in workbench_source
+
+
 def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noise():
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
@@ -181,7 +195,10 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "className=\"module-card span-2 agent-console-stage\"" in console_section
     assert "className=\"module-card console-log-card console-log-card--live\"" in console_section
     assert "RuntimeLogPreview" in console_section
-    assert "实时日志中心" in console_section
+    assert "最近日志" in console_section
+    assert "summary>完整日志中心</summary>" in console_section
+    assert console_section.index("RuntimeLogPreview") < console_section.index("summary>完整日志中心</summary>")
+    assert console_section.index("RuntimeLogPanel") > console_section.index("summary>完整日志中心</summary>")
     assert "summary>辅助面板：运行维护 / 自动操作轨迹</summary>" in console_section
     assert "summary>执行步骤明细</summary>" in console_section
     assert "summary>任务执行日志</summary>" in console_section

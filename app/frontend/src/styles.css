@@ -2143,13 +2143,20 @@ tr:last-child td {
   min-height: 0;
 }
 
+.console-log-card > small {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .console-log-card--compact,
 .console-log-card--live {
   gap: 10px;
 }
 
 .console-log-card--live {
-  max-height: 760px;
+  max-height: 320px;
 }
 
 .console-log-drawer {

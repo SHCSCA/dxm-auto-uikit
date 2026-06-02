@@ -42,6 +42,7 @@ type ConfigCenterProps = CommonProps & {
 type GuideCenterProps = CommonProps & {
   configPreview: ConfigPreview | null
   runtimeStatus: RuntimeStatus | null
+  onOpenDxmLogin: () => void
   onStartTask: () => void
   onShowConfig: () => void
   onShowTasks: () => void
@@ -201,6 +202,7 @@ export function GuideCenter({
   selectedTask,
   configPreview,
   runtimeStatus,
+  onOpenDxmLogin,
   onStartTask,
   onShowConfig,
   onShowTasks,
@@ -237,10 +239,12 @@ export function GuideCenter({
       id: 'browser-login',
       title: '打开真实 DXM 浏览器并确认登录',
       done: Boolean(agentReady && dxmLoggedIn),
-      detail: dxmLoggedIn ? '已检测到 DXM 登录态。' : '需要打开自动浏览器并完成店小秘登录。',
+      detail: dxmLoggedIn ? '已检测到 DXM 登录态。' : '需要打开真实店小秘登录页并完成登录；账号密码只用于本次真实店小秘登录。',
       reason: dxmLoggedIn ? '' : `DXM 登录状态：${runtimeStatus?.dxmLogin?.status ?? '未知'}`,
-      action: '打开执行控制台',
-      onAction: onShowConsole,
+      action: '打开登录页',
+      onAction: onOpenDxmLogin,
+      secondaryAction: '查看控制台',
+      onSecondaryAction: onShowConsole,
     },
     {
       id: 'store',
@@ -1464,8 +1468,14 @@ export function ExecutionConsole({
       </div>
 
       <div className="module-card console-log-card console-log-card--live">
-        <ModuleHead title="实时日志中心" meta={`${runtimeLogCount} 条，每 1.5 秒刷新`} />
+        <ModuleHead title="最近日志" meta={`${runtimeLogCount} 条，每 1.5 秒刷新`} />
         <RuntimeLogPreview logs={runtimeLogs} source={runtimeLogSource} error={runtimeLogError} />
+        <small>完整日志、筛选和搜索已收起在下方，需要排查时再展开。</small>
+      </div>
+
+      <details className="module-card span-3 disclosure-card console-advanced console-log-drawer">
+        <summary>完整日志中心</summary>
+        <ModuleHead title="实时日志中心" meta={`${runtimeLogCount} 条，每 1.5 秒刷新`} />
         <RuntimeLogPanel
           logs={runtimeLogs}
           source={runtimeLogSource}
@@ -1476,7 +1486,7 @@ export function ExecutionConsole({
           onLevelChange={onRuntimeLogLevelChange}
           onQueryChange={onRuntimeLogQueryChange}
         />
-      </div>
+      </details>
 
       <details className="module-card span-3 disclosure-card console-advanced console-support-drawer">
         <summary>辅助面板：运行维护 / 自动操作轨迹</summary>
@@ -1565,7 +1575,7 @@ function RuntimeControlPanel({
           <button className="button button--quiet" type="button" disabled={busy} onClick={() => onRuntimeControl('restart_frontend')}>
             重启前端
           </button>
-          <small>当前后端会返回启动器托管提示；避免在任务执行中让 API 自杀式重启。</small>
+          <small>启动器托管提示：重启命令会写入启动器日志；若不是通过 start-mvp 启动，请手动重启。</small>
         </div>
       </details>
       <small>维护动作会写入启动器日志；真实保存任务不会被“清理卡住任务”取消。</small>

@@ -417,6 +417,36 @@ export default function App() {
     }
   }
 
+  async function openDxmLogin() {
+    const username = window.prompt('输入店小秘账号。账号密码只用于本次真实店小秘登录，不会保存到配置中心。', '')
+    if (!username?.trim()) {
+      setOperationError('已取消：打开真实店小秘登录页需要账号。')
+      return
+    }
+    const password = window.prompt('输入店小秘密码。后端只会记录脱敏状态，登录后请在真实浏览器处理验证码。', '')
+    if (!password) {
+      setOperationError('已取消：打开真实店小秘登录页需要密码。')
+      return
+    }
+    setBusy(true)
+    setOperationError(null)
+    try {
+      await postJson('/api/dxm/login/start', {
+        username: username.trim(),
+        password,
+      })
+      setActiveSection('console')
+      await refreshRuntimeStatus()
+      await refreshRuntimeLogs()
+      await refreshWorkspace()
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : '打开真实店小秘登录页失败')
+      await refreshRuntimeStatus()
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function startAgentConsole() {
     if (!selectedTask) {
       setAgentConsoleError('请先选择一个保存核验任务')
@@ -518,6 +548,7 @@ export default function App() {
             selectedTask={selectedTask}
             configPreview={configPreview}
             runtimeStatus={runtimeStatus}
+            onOpenDxmLogin={openDxmLogin}
             onStartTask={startSelectedTask}
             onShowConfig={() => setActiveSection('config')}
             onShowTasks={() => setActiveSection('tasks')}

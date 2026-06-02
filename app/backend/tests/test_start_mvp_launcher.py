@@ -63,3 +63,16 @@ def test_start_mvp_auto_selects_free_frontend_port_when_5173_is_busy():
     assert "$frontendPort = Find-FreePort -PreferredPort $frontendPort" in script
     assert "Frontend port 5173 is busy; using port $frontendPort instead" in script
     assert 'Fail "frontend $(Get-PortOwnerText -Port $frontendPort)' not in script
+
+
+def test_start_mvp_processes_runtime_restart_commands_from_ui():
+    script = START_MVP_SCRIPT.read_text(encoding="utf-8")
+
+    assert "$runtimeControlCommand = Join-Path $dataDir \"runtime-control-command.json\"" in script
+    assert "DXM_RUNTIME_CONTROL_COMMAND_FILE" in script
+    assert "function Read-RuntimeControlCommand" in script
+    assert "function Restart-ManagedService" in script
+    assert "Runtime control: restarting" in script
+    assert "restart_backend" in script
+    assert "restart_frontend" in script
+    assert "Read-RuntimeControlCommand" in script[script.index("while ($true)"):]
