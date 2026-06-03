@@ -7,9 +7,10 @@ DXM 半托管自动化工作台，面向真实店小秘账号、真实浏览器�
 交付状态说明：
 - L0 后端/前端本地门禁与 L1 离线 selector replay 可运行。
 - 已知真实证据：L3 task 70 受控 `single_save` 成功，保存接口 `popChoiceProduct/add.json` 返回 `code=0`，且 `published=false`。
-- 截至 2026-06-01 10:30（Asia/Shanghai），最新 L2 双目标真实只读 probe 与 L3 受控 `single_save` 金丝雀均已通过，最终自检显示 `Real DXM write readiness: READY`，范围仅为 `controlled_single_save_only`。
+- 截至 2026-06-03 09:46（Asia/Shanghai），最新 clean worktree 交付自检通过；L2 双目标真实只读 probe 与 L3 受控 `single_save` 金丝雀均已通过，最终自检显示 `Real DXM write readiness: READY`，范围仅为 `controlled_single_save_only`。
 - 当前交付重点是 DXM 半托管自动化工作台与受控 save-only 自动化链路；批量、无人值守和发布不随 `single_save` READY 自动放行。
 - 源码包验收命令：`scripts\final-delivery-check.bat -RequireCleanWorktree`；具体 Git HEAD 以 `outputs/final-delivery-check/final-delivery-check.json` 的 `gitHead` 字段为准。
+- 最新验收记录：`docs/product/最终交付验收记录-20260603.md`。
 
 ## 真实用户快速开始
 
@@ -166,7 +167,7 @@ scripts\final-delivery-check.bat
 
 它会串行运行 Windows 启动前检查、后端全量测试、前端生产构建、L1 selector replay、`git diff --check`、浏览器 QA，并输出 `outputs/final-delivery-check/final-delivery-check.md` / `.json`。最终自检模式下，浏览器 QA 截图和 sidecar 文件位于 `outputs\final-delivery-check\browser-checks\`。浏览器 QA 会临时启动隔离的当前源码后端和前端预览服务，避免误测 8000/5173 上的旧进程；检查模式可能安装前端依赖，但不会访问店小秘、不会执行真实保存。报告顶部会分别显示“自动化工作台自检结果”和“真实 DXM 写入放行状态”。
 
-当前验收成功标准：默认验收要求 `Local workbench check: PASS`、`Browser QA: PASS`、`Source package check: NOT_REQUIRED`，并按 L2/L3 门禁计算 `Real DXM write readiness`。截至 2026-06-01 10:30，最新最终自检在 `-ExpectedRealDxmWriteReadiness READY` 下通过，`okScope=local_workbench_and_controlled_single_save_ready`。如果未来因 L2 证据过期或 L3 未放行显示 `BLOCKED`，表示真实写入不可启动，不表示自动化工作台本地功能失败；发布源码包验收才要求 `Source package check: PASS`。
+当前源码包验收成功标准：`Local workbench check: PASS`、`Browser QA: PASS`、`Final report center QA: PASS`、`Source package check: PASS`，并按 L2/L3 门禁计算 `Real DXM write readiness`。截至 2026-06-03 09:46，最新最终自检在 `-ExpectedRealDxmWriteReadiness READY -RequireCleanWorktree` 下通过，`okScope=local_workbench_and_controlled_single_save_ready`；具体 Git HEAD 必须以 `outputs/final-delivery-check/final-delivery-check.json` 的 `gitHead` 字段为准。如果未来因 L2 证据过期或 L3 未放行显示 `BLOCKED`，表示真实写入不可启动，不表示自动化工作台本地功能失败。
 
 自动化或管理摘要读取 `final-delivery-check.json` 时，不能只读取 `ok`。当前 `ok: true` 只代表 `okScope` 所声明的范围通过；若 `okScope` 为 `local_workbench_only` 且 `realDxmMutationAllowed` 为 `false`，结论仍然是自动化工作台可交付、真实 DXM 写入不可启动。
 

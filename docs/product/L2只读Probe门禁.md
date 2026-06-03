@@ -19,7 +19,7 @@ app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target 
 
 `--allowlist-file` 不会默认启用，必须显式传入。当前仓库的 `config/l2_readonly_allowlist.json` 只批准已审计的 DXM SPA 启动读取依赖；对于 DXM 用 POST 承载的查询接口，必须显式标注 `readonly_post=true`。它不会放行 WebSocket、EventSource、认领、备注写入、保存、提交或发布端点。
 
-最新交付证据：2026-06-01 10:00 左右，`run_id=l2-real-20260601T100010Z` 已完成 `data_acquisition` 与 `draft_box` 双目标真实只读 probe，两份证据均 `ok=true`，写入、非只读、拦截、禁词和 WebSocket 计数均为 0。该证据用于当前受控 `single_save` READY 判断，不自动放行批量、无人值守或发布。
+最新交付证据：2026-06-03 08:49 左右，`run_id=l2-real-20260603T084921Z` 已完成 `data_acquisition` 与 `draft_box` 双目标真实只读 probe，两份证据均 `ok=true`，写入、非只读、拦截、禁词和 WebSocket 计数均为 0。该证据用于当前受控 `single_save` READY 判断，不自动放行批量、无人值守或发布。
 
 离线/mock 验证必须使用 `--url` 指向本地页面，不访问 `dianxiaomi.com`：
 
