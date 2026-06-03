@@ -176,6 +176,46 @@ function Get-L3EvidenceReadiness {
   }
 }
 
+function Convert-RealModeReleasePlanForFinalCheck {
+  param(
+    [object]$WorkspaceSnapshot
+  )
+
+  if (!$WorkspaceSnapshot -or !$WorkspaceSnapshot.real_mode_release_plan) {
+    return $null
+  }
+
+  $plan = $WorkspaceSnapshot.real_mode_release_plan
+  $modes = @($plan.modes | ForEach-Object {
+    $checklist = @($_.readiness_checklist)
+    $missingChecklist = @($checklist | Where-Object { $_.status -ne "passed" })
+    [pscustomobject]@{
+      mode = $_.mode
+      label = $_.label
+      status = $_.status
+      allowed = [bool]$_.allowed
+      releaseScope = $_.release_scope
+      requiredEvidenceCount = @($_.required_evidence).Count
+      requiredControlCount = @($_.required_controls).Count
+      blockerCount = @($_.blockers).Count
+      readinessChecklistCount = $checklist.Count
+      missingChecklistCount = $missingChecklist.Count
+      blockers = @($_.blockers)
+      readinessChecklist = $checklist
+    }
+  })
+
+  return [pscustomobject]@{
+    schema = $plan.schema
+    scope = $plan.scope
+    publishAllowed = [bool]$plan.publish_allowed
+    batchUnattendedPublishAllowed = [bool]$plan.batch_unattended_publish_allowed
+    allowedModes = @($modes | Where-Object { $_.allowed } | ForEach-Object { $_.mode })
+    blockedModes = @($modes | Where-Object { -not $_.allowed } | ForEach-Object { $_.mode })
+    modes = $modes
+  }
+}
+
 function Get-RealDxmWriteReadiness {
   param(
     [object]$L2Gate,
@@ -274,6 +314,7 @@ function Write-ProvisionalDeliveryCheckReport {
   }
   $provisionalControlledSingleSaveReady = $provisionalReadiness -eq "READY"
   $provisionalRealDxmMutationScope = if ($provisionalControlledSingleSaveReady) { "controlled_single_save_only" } else { "none" }
+  $provisionalRealModeReleasePlan = Convert-RealModeReleasePlanForFinalCheck -WorkspaceSnapshot $WorkspaceSnapshot
   $sourceReadiness = if ([string]::IsNullOrWhiteSpace($provisionalGitStatus)) { "CLEAN" } else { "DIRTY" }
 
   $provisionalResult = [pscustomobject]@{
@@ -285,6 +326,7 @@ function Write-ProvisionalDeliveryCheckReport {
     realDxmMutationScope = $provisionalRealDxmMutationScope
     controlledSingleSaveReady = $provisionalControlledSingleSaveReady
     batchUnattendedPublishAllowed = $false
+    realModeReleasePlan = $provisionalRealModeReleasePlan
     expectedRealDxmWriteReadiness = $ExpectedRealDxmWriteReadiness
     realDxmWriteReadinessMatchesExpected = $provisionalReadiness -eq $ExpectedRealDxmWriteReadiness
     status = "final_delivery_check_in_progress_for_browser_qa"
@@ -847,6 +889,7 @@ $controlledSingleSaveReady = $realDxmWriteReadiness -eq "READY"
 $realDxmMutationAllowed = $controlledSingleSaveReady
 $realDxmMutationScope = if ($controlledSingleSaveReady) { "controlled_single_save_only" } else { "none" }
 $batchUnattendedPublishAllowed = $false
+$realModeReleasePlan = Convert-RealModeReleasePlanForFinalCheck -WorkspaceSnapshot $workspaceSnapshot
 $okScope = if ($controlledSingleSaveReady) { "local_workbench_and_controlled_single_save_ready" } else { "local_workbench_only" }
 $realDxmWriteReadinessMatchesExpected = $realDxmWriteReadiness -eq $ExpectedRealDxmWriteReadiness
 $overallOk = $localWorkbenchOk -and $gateEvidenceOk -and $realDxmWriteReadinessMatchesExpected -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")
@@ -942,6 +985,7 @@ $result = [pscustomobject]@{
   realDxmMutationScope = $realDxmMutationScope
   controlledSingleSaveReady = $controlledSingleSaveReady
   batchUnattendedPublishAllowed = $batchUnattendedPublishAllowed
+  realModeReleasePlan = $realModeReleasePlan
   expectedRealDxmWriteReadiness = $ExpectedRealDxmWriteReadiness
   realDxmWriteReadinessMatchesExpected = $realDxmWriteReadinessMatchesExpected
   status = if ($overallOk) {
@@ -1095,6 +1139,23 @@ $summaryLines.Add("- Acceptance note: PASS means the automation workbench checks
 $summaryLines.Add("- READY note: real DXM READY currently means controlled single_save readiness only; batch, unattended operation, and publish remain separately gated. READY requires L2/L3 passed plus L3 save_result, published=false proof, save/unpublished screenshots or paths, and network/HAR save response evidence.")
 if (!$SkipBrowserQA) {
   $summaryLines.Add("- Browser QA services: isolated backend $qaBackendPort / frontend $qaFrontendPort")
+}
+$summaryLines.Add("")
+$summaryLines.Add("## Real Mode Release Plan")
+if ($result.realModeReleasePlan) {
+  $summaryLines.Add("- Scope: $($result.realModeReleasePlan.scope)")
+  $summaryLines.Add("- Publish allowed: $($result.realModeReleasePlan.publishAllowed)")
+  $summaryLines.Add("- Batch/unattended/publish allowed: $($result.realModeReleasePlan.batchUnattendedPublishAllowed)")
+  $summaryLines.Add("- Allowed modes: $($result.realModeReleasePlan.allowedModes -join ', ')")
+  $summaryLines.Add("- Blocked modes: $($result.realModeReleasePlan.blockedModes -join ', ')")
+  foreach ($mode in $result.realModeReleasePlan.modes) {
+    $summaryLines.Add("- $($mode.mode): status=$($mode.status), allowed=$($mode.allowed), release_scope=$($mode.releaseScope), missing_checklist=$($mode.missingChecklistCount)/$($mode.readinessChecklistCount)")
+    if ($mode.blockers.Count -gt 0) {
+      $summaryLines.Add("  - blockers: $($mode.blockers -join '; ')")
+    }
+  }
+} else {
+  $summaryLines.Add("- Real mode release plan was unavailable from the workspace snapshot; do not infer claim_only, batch_save, unattended, or publish readiness.")
 }
 $summaryLines.Add("")
 $summaryLines.Add("## Safety Gates")

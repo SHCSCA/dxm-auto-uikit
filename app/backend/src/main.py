@@ -1000,6 +1000,7 @@ def _read_final_delivery_check_summary():
         'real_dxm_mutation_scope': payload.get('realDxmMutationScope'),
         'controlled_single_save_ready': payload.get('controlledSingleSaveReady'),
         'batch_unattended_publish_allowed': payload.get('batchUnattendedPublishAllowed'),
+        'real_mode_release_plan': payload.get('realModeReleasePlan'),
         'expected_real_dxm_write_readiness': payload.get('expectedRealDxmWriteReadiness'),
         'real_dxm_write_readiness_matches_expected': payload.get('realDxmWriteReadinessMatchesExpected'),
         'source_package_readiness': payload.get('sourcePackageReadiness'),

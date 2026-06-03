@@ -73,6 +73,12 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "realDxmWriteBlockedReason" in script
     assert "l3EvidenceReadiness" in script
     assert "Get-L3EvidenceReadiness" in script
+    assert "Convert-RealModeReleasePlanForFinalCheck" in script
+    assert "realModeReleasePlan" in script
+    assert "blockedModes" in script
+    assert "missing_checklist" in script
+    assert "## Real Mode Release Plan" in script
+    assert "do not infer claim_only, batch_save, unattended, or publish readiness" in script
     assert "save screenshot/path missing" in script
     assert "network/HAR save response missing" in script
     assert "READY note: real DXM READY currently means controlled single_save readiness only" in script

@@ -85,6 +85,19 @@ def test_final_delivery_check_summary_reads_latest_report(tmp_path, monkeypatch)
         "sourcePackageCheck": "PASS",
         "okScope": "local_workbench_only",
         "realDxmMutationAllowed": False,
+        "realModeReleasePlan": {
+            "schema": "dxm_real_mode_release_plan.v1",
+            "scope": "controlled_single_save_only",
+            "publishAllowed": False,
+            "batchUnattendedPublishAllowed": False,
+            "allowedModes": ["single_save"],
+            "blockedModes": ["claim_only", "batch_save"],
+            "modes": [
+                {"mode": "single_save", "allowed": True},
+                {"mode": "claim_only", "allowed": False},
+                {"mode": "batch_save", "allowed": False},
+            ],
+        },
         "expectedRealDxmWriteReadiness": "BLOCKED",
         "realDxmWriteReadinessMatchesExpected": True,
         "requireCleanWorktree": True,
@@ -145,6 +158,8 @@ def test_final_delivery_check_summary_reads_latest_report(tmp_path, monkeypatch)
     assert payload["source_package_check"] == "PASS"
     assert payload["ok_scope"] == "local_workbench_only"
     assert payload["real_dxm_mutation_allowed"] is False
+    assert payload["real_mode_release_plan"]["scope"] == "controlled_single_save_only"
+    assert payload["real_mode_release_plan"]["blockedModes"] == ["claim_only", "batch_save"]
     assert payload["expected_real_dxm_write_readiness"] == "BLOCKED"
     assert payload["real_dxm_write_readiness_matches_expected"] is True
     assert payload["browser_qa_ok"] is True
