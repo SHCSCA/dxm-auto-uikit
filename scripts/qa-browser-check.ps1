@@ -924,7 +924,7 @@ const taskShot = await screenshot('qa-task-center');
 const clickedConsole = await clickSelector('[data-section="console"]') || await clickText(text.console);
 await new Promise(r => setTimeout(r, 700));
 const consoleText = await bodyText();
-const consoleStartDisabled = await evalValue('(() => { const buttons = [...document.querySelectorAll("button")]; const button = buttons.find(el => (el.innerText || "").includes("\u5148\u5b8c\u6210\u53ea\u8bfb\u68c0\u67e5")); return Boolean(button && button.disabled); })()');
+const consoleStartDisabled = await evalValue('(() => { const buttons = [...document.querySelectorAll("button")]; const button = buttons.find(el => (el.innerText || "").includes("\u542f\u52a8\u6267\u884c\u89c2\u5bdf")); return Boolean(button && button.disabled); })()');
 const consoleShot = await screenshot('qa-execution-console');
 const clickedReports = await openReportCenter();
 await new Promise(r => setTimeout(r, 700));

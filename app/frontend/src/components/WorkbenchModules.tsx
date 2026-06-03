@@ -2029,7 +2029,7 @@ function AgentConsoleControls({
           disabled={busy || !selectedTask || diagnosticBlocked}
           title={diagnosticBlocked ? diagnosticBlockReason : realSaveBlocked ? realSaveBlockReason : '打开执行观察浏览器；保存前仍需人工确认'}
         >
-          {diagnosticBlocked ? '只读通过后执行' : '启动执行观察'}
+          启动执行观察
         </button>
         <button className="button button--quiet" type="button" onClick={onSnapshotAgentConsole} disabled={busy || !active}>
           刷新当前画面
