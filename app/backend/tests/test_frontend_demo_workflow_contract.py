@@ -252,6 +252,23 @@ def test_agent_console_uses_live_frame_and_network_event_contract():
     assert "刷新当前画面" in workbench_source
 
 
+def test_execution_console_exposes_manual_takeover_for_real_browser():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    types_source = (REPO_ROOT / "app" / "frontend" / "src" / "types.ts").read_text(encoding="utf-8")
+
+    assert "async function requestAgentConsoleTakeover" in app_source
+    assert "/api/agent-console/takeover" in app_source
+    assert "/api/agent-console/release" in app_source
+    assert "onRequestAgentConsoleTakeover={requestAgentConsoleTakeover}" in app_source
+    assert "onReleaseAgentConsoleTakeover={releaseAgentConsoleTakeover}" in app_source
+    assert "manual_takeover?: boolean" in types_source
+    assert "manual_takeover_started_at?: string | null" in types_source
+    assert "人工接管真实浏览器" in workbench_source
+    assert "交还 Agent" in workbench_source
+    assert "用户正在真实浏览器中接管" in workbench_source
+
+
 def test_execution_console_exposes_runtime_control_and_agent_action_timeline():
     app_source = APP_TSX.read_text(encoding="utf-8")
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")

@@ -201,6 +201,8 @@ export type AgentConsoleSession = {
   step_history?: Array<Record<string, unknown>>
   action_events?: AgentConsoleActionEvent[]
   network_events?: AgentConsoleNetworkEvent[]
+  manual_takeover?: boolean
+  manual_takeover_started_at?: string | null
   screenshot: string | null
   screenshot_url?: string | null
   last_frame_at?: string | null

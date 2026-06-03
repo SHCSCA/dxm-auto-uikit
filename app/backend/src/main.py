@@ -626,6 +626,16 @@ def refresh_agent_console_frame():
     return normalize_artifact_paths(agent_console_service.refresh_frame())
 
 
+@app.post('/api/agent-console/takeover')
+def request_agent_console_takeover():
+    return normalize_artifact_paths(agent_console_service.request_manual_takeover())
+
+
+@app.post('/api/agent-console/release')
+def release_agent_console_takeover():
+    return normalize_artifact_paths(agent_console_service.release_manual_takeover())
+
+
 @app.post('/api/agent-console/stop')
 def stop_agent_console():
     return normalize_artifact_paths(agent_console_service.stop())

@@ -171,6 +171,49 @@ def test_agent_console_refresh_frame_updates_screenshot_and_timestamp(tmp_path, 
     assert status["page_title"] == "店小秘 Home"
 
 
+def test_agent_console_manual_takeover_brings_real_browser_to_front(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+    fake_page = _FakePage()
+
+    with service._lock:
+        service._page = fake_page
+        service._state["browser_visible"] = True
+
+    takeover = service.request_manual_takeover()
+
+    assert takeover["active"] is True
+    assert takeover["manual_takeover"] is True
+    assert takeover["manual_takeover_started_at"] is not None
+    assert fake_page.brought_to_front is True
+    assert takeover["action_events"][-1]["type"] == "manual_takeover"
+
+    released = service.release_manual_takeover()
+
+    assert released["manual_takeover"] is False
+    assert released["manual_takeover_started_at"] is None
+    assert released["action_events"][-1]["action"] == "release_agent"
+
+
+def test_agent_console_api_manual_takeover_lifecycle(tmp_path, monkeypatch):
+    client, repo, service = _client_with_temp_repo_and_console(tmp_path, monkeypatch)
+    task = _create_task(repo)
+    start_response = client.post("/api/agent-console/start", json={"task_id": task["id"], "launch_browser": False})
+    assert start_response.status_code == 200
+
+    takeover_response = client.post("/api/agent-console/takeover")
+
+    assert takeover_response.status_code == 200
+    assert takeover_response.json()["manual_takeover"] is True
+
+    release_response = client.post("/api/agent-console/release")
+
+    assert release_response.status_code == 200
+    assert release_response.json()["manual_takeover"] is False
+    service.stop()
+
+
 def test_agent_console_records_bounded_network_events(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
     service = AgentConsoleService()
@@ -265,6 +308,7 @@ def _create_task(repo: Repository):
 
 class _FakePage:
     url = "https://www.dianxiaomi.com/web/home"
+    brought_to_front = False
 
     def title(self):
         return "店小秘 Home"
@@ -273,3 +317,6 @@ class _FakePage:
         assert full_page is True
         with open(path, "wb") as handle:
             handle.write(b"fake-png")
+
+    def bring_to_front(self):
+        self.brought_to_front = True

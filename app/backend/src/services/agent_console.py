@@ -72,6 +72,8 @@ class AgentConsoleService:
                 "step_history": [],
                 "network_events": [],
                 "action_events": [],
+                "manual_takeover": False,
+                "manual_takeover_started_at": None,
                 "screenshot": None,
                 "last_frame_at": None,
                 "created_at": _now(),
@@ -261,6 +263,34 @@ class AgentConsoleService:
     def snapshot(self) -> dict[str, Any]:
         return self.refresh_frame()
 
+    def request_manual_takeover(self) -> dict[str, Any]:
+        with self._lock:
+            if not self._state.get("active"):
+                return {**dict(self._state), "ok": False, "reason": "agent_console_inactive"}
+            self._state["manual_takeover"] = True
+            self._state["manual_takeover_started_at"] = _now()
+            self._state["updated_at"] = _now()
+            page = self._page
+
+        if page is not None:
+            try:
+                self._run_browser_op(lambda: page.bring_to_front())
+            except Exception as exc:
+                with self._lock:
+                    self._state["last_error"] = str(exc)
+                    self._state["updated_at"] = _now()
+
+        return self._record_manual_takeover_event(action="request_takeover", label="人工接管真实浏览器")
+
+    def release_manual_takeover(self) -> dict[str, Any]:
+        with self._lock:
+            if not self._state.get("active"):
+                return {**dict(self._state), "ok": False, "reason": "agent_console_inactive"}
+            self._state["manual_takeover"] = False
+            self._state["manual_takeover_started_at"] = None
+            self._state["updated_at"] = _now()
+        return self._record_manual_takeover_event(action="release_agent", label="交还 Agent")
+
     def refresh_frame(self) -> dict[str, Any]:
         with self._lock:
             page = self._page
@@ -300,6 +330,22 @@ class AgentConsoleService:
             events.append(cleaned)
             self._state["network_events"] = events[-MAX_NETWORK_EVENTS:]
             self._state["updated_at"] = _now()
+
+    def _record_manual_takeover_event(self, *, action: str, label: str) -> dict[str, Any]:
+        with self._lock:
+            event = {
+                "type": "manual_takeover",
+                "action": action,
+                "label": label,
+                "status": "ok",
+                "page_url": self._state.get("current_url"),
+                "timestamp": _now(),
+            }
+            events = list(self._state.get("action_events") or [])
+            events.append({key: value for key, value in event.items() if value is not None})
+            self._state["action_events"] = events[-MAX_ACTION_EVENTS:]
+            self._state["updated_at"] = _now()
+            return dict(self._state)
 
     def _launch_visible_browser(self, profile_dir: Path, state: dict[str, Any]) -> None:
         try:
@@ -440,6 +486,8 @@ class AgentConsoleService:
             "step_history": [],
             "network_events": [],
             "action_events": [],
+            "manual_takeover": False,
+            "manual_takeover_started_at": None,
             "screenshot": None,
             "last_frame_at": None,
             "created_at": None,
@@ -463,6 +511,8 @@ class AgentConsoleService:
                 "last_step_name": self._state.get("last_step_name"),
                 "network_events": list(self._state.get("network_events") or []),
                 "action_events": list(self._state.get("action_events") or []),
+                "manual_takeover": self._state.get("manual_takeover"),
+                "manual_takeover_started_at": self._state.get("manual_takeover_started_at"),
                 "screenshot": self._state.get("screenshot"),
                 "last_frame_at": self._state.get("last_frame_at"),
                 "updated_at": self._state.get("updated_at"),

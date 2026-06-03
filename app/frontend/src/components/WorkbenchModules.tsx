@@ -103,6 +103,8 @@ type ExecutionConsoleProps = CommonProps & {
   onStartAgentConsole: () => void
   onStopAgentConsole: () => void
   onSnapshotAgentConsole: () => void
+  onRequestAgentConsoleTakeover: () => void
+  onReleaseAgentConsoleTakeover: () => void
   onRuntimeControl: (action: RuntimeControlAction) => void
   onShowTasks: () => void
   onShowEvidence: () => void
@@ -1386,6 +1388,8 @@ export function ExecutionConsole({
   onStartAgentConsole,
   onStopAgentConsole,
   onSnapshotAgentConsole,
+  onRequestAgentConsoleTakeover,
+  onReleaseAgentConsoleTakeover,
   onRuntimeControl,
   onShowTasks,
   onShowEvidence,
@@ -1446,6 +1450,8 @@ export function ExecutionConsole({
           onStartAgentConsole={onStartAgentConsole}
           onStopAgentConsole={onStopAgentConsole}
           onSnapshotAgentConsole={onSnapshotAgentConsole}
+          onRequestAgentConsoleTakeover={onRequestAgentConsoleTakeover}
+          onReleaseAgentConsoleTakeover={onReleaseAgentConsoleTakeover}
         />
         {realSaveBlocked && (
           <details className="gate-note gate-note--danger inline-disclosure">
@@ -1872,6 +1878,8 @@ function AgentConsoleControls({
   onStartAgentConsole,
   onStopAgentConsole,
   onSnapshotAgentConsole,
+  onRequestAgentConsoleTakeover,
+  onReleaseAgentConsoleTakeover,
 }: {
   agentConsole: AgentConsoleSession | null
   agentConsoleError: string | null
@@ -1884,8 +1892,11 @@ function AgentConsoleControls({
   onStartAgentConsole: () => void
   onStopAgentConsole: () => void
   onSnapshotAgentConsole: () => void
+  onRequestAgentConsoleTakeover: () => void
+  onReleaseAgentConsoleTakeover: () => void
 }) {
   const active = Boolean(agentConsole?.active)
+  const manualTakeover = Boolean(agentConsole?.manual_takeover)
   const screenshot = agentConsole?.screenshot_url ?? agentConsole?.screenshot ?? ''
   return (
     <div className="agent-console-controls">
@@ -1893,6 +1904,9 @@ function AgentConsoleControls({
         <span className={`status-pill ${active ? 'ok' : 'muted'}`}>{active ? '浏览器会话中' : '未打开浏览器'}</span>
         <span className={`status-pill ${agentConsole?.browser_visible ? 'ok' : active ? 'warn' : 'muted'}`}>
           {agentConsole?.browser_visible ? '窗口可见' : '窗口未显示'}
+        </span>
+        <span className={`status-pill ${manualTakeover ? 'warn' : 'muted'}`}>
+          {manualTakeover ? '用户正在真实浏览器中接管' : 'Agent 可接管'}
         </span>
         <span className="status-pill warn">不会发布</span>
       </div>
@@ -1918,6 +1932,12 @@ function AgentConsoleControls({
         </button>
         <button className="button button--quiet" type="button" onClick={onSnapshotAgentConsole} disabled={busy || !active}>
           刷新当前画面
+        </button>
+        <button className="button button--quiet" type="button" onClick={onRequestAgentConsoleTakeover} disabled={busy || !active}>
+          人工接管真实浏览器
+        </button>
+        <button className="button button--quiet" type="button" onClick={onReleaseAgentConsoleTakeover} disabled={busy || !active || !manualTakeover}>
+          交还 Agent
         </button>
         <button className="button button--secondary" type="button" onClick={onStopAgentConsole} disabled={busy || !active}>
           关闭浏览器

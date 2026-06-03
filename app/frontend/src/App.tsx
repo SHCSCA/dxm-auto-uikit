@@ -517,6 +517,38 @@ export default function App() {
     }
   }
 
+  async function requestAgentConsoleTakeover() {
+    setBusy(true)
+    setAgentConsoleError(null)
+    try {
+      const status = await postJson<AgentConsoleSession>('/api/agent-console/takeover', {})
+      setAgentConsole(status)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '人工接管真实浏览器失败'
+      setAgentConsoleError(message)
+      setOperationError(message)
+      await refreshAgentConsole()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function releaseAgentConsoleTakeover() {
+    setBusy(true)
+    setAgentConsoleError(null)
+    try {
+      const status = await postJson<AgentConsoleSession>('/api/agent-console/release', {})
+      setAgentConsole(status)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '交还 Agent 失败'
+      setAgentConsoleError(message)
+      setOperationError(message)
+      await refreshAgentConsole()
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function runRuntimeControl(action: RuntimeControlAction) {
     setBusy(true)
     setOperationError(null)
@@ -599,6 +631,8 @@ export default function App() {
             onStartAgentConsole={startAgentConsole}
             onStopAgentConsole={stopAgentConsole}
             onSnapshotAgentConsole={snapshotAgentConsole}
+            onRequestAgentConsoleTakeover={requestAgentConsoleTakeover}
+            onReleaseAgentConsoleTakeover={releaseAgentConsoleTakeover}
             onRuntimeControl={runRuntimeControl}
             onShowTasks={() => setActiveSection('tasks')}
             onShowEvidence={() => setActiveSection('evidence')}
