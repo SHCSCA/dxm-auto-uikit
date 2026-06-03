@@ -11,6 +11,7 @@ import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -237,12 +238,21 @@ def list_templates():
 
 @app.post('/api/templates')
 def create_template(payload: TemplateCreate):
-    return repo.create_template(payload.model_dump())
+    data = payload.model_dump()
+    data['payload'] = _normalize_template_payload(data.get('template_type'), data.get('payload'))
+    return repo.create_template(data)
 
 
 @app.patch('/api/templates/{template_id}')
 def update_template(template_id: int, payload: TemplateUpdate):
-    template = repo.update_template(template_id, payload.model_dump(exclude_unset=True))
+    data = payload.model_dump(exclude_unset=True)
+    if 'payload' in data:
+        template_type = data.get('template_type')
+        if template_type is None:
+            current = repo.get_template(template_id)
+            template_type = current.get('template_type') if current else None
+        data['payload'] = _normalize_template_payload(template_type, data.get('payload'))
+    template = repo.update_template(template_id, data)
     if not template:
         raise HTTPException(status_code=404, detail='Template not found')
     return template
@@ -288,7 +298,8 @@ def update_task_config_overrides(task_id: int, payload: TaskConfigOverrideReques
     section = payload.section.strip().lower().replace('-', '_').replace(' ', '_')
     if section not in DEFAULT_TEMPLATE_TYPES:
         raise HTTPException(status_code=400, detail=f'Unsupported config override section: {payload.section}')
-    task = repo.update_task_template_override(task_id, section, payload.values)
+    values = _normalize_config_override_values(section, payload.values)
+    task = repo.update_task_template_override(task_id, section, values)
     if not task:
         raise HTTPException(status_code=404, detail='Task not found')
     return task
@@ -639,6 +650,57 @@ def release_agent_console_takeover():
 @app.post('/api/agent-console/stop')
 def stop_agent_console():
     return normalize_artifact_paths(agent_console_service.stop())
+
+
+def _normalize_config_override_values(section: str, values: dict[str, Any]) -> dict[str, Any]:
+    if section != 'dxm_reference':
+        return values
+    return _normalize_dxm_reference_override(values)
+
+
+def _normalize_template_payload(template_type: Any, payload: Any) -> Any:
+    normalized_type = str(template_type or '').strip().lower().replace('-', '_').replace(' ', '_')
+    if normalized_type != 'dxm_reference':
+        return payload
+    return _normalize_dxm_reference_override(payload)
+
+
+def _normalize_dxm_reference_override(value: Any) -> Any:
+    if isinstance(value, dict):
+        normalized: dict[str, Any] = {}
+        for key, child in value.items():
+            if key in {'names', 'templates', 'template_names', 'priorities'}:
+                normalized[key] = _split_reference_names(child)
+            elif key == 'name':
+                normalized['names'] = _split_reference_names(child)
+            elif key == 'dxm_reference_templates':
+                normalized[key] = _normalize_dxm_reference_override(child)
+            elif isinstance(child, (dict, list)):
+                normalized[key] = _normalize_dxm_reference_override(child)
+            else:
+                normalized[key] = child
+        return normalized
+    if isinstance(value, list):
+        return [_normalize_dxm_reference_override(item) for item in value]
+    return value
+
+
+def _split_reference_names(value: Any) -> list[str]:
+    if value is None:
+        return []
+    raw_values = value if isinstance(value, list) else [value]
+    names: list[str] = []
+    for raw in raw_values:
+        text = str(raw or '').strip()
+        if not text:
+            continue
+        for separator in ('\r\n', '\n', ' / ', '，', ',', '；', ';'):
+            text = text.replace(separator, '\n')
+        for item in text.split('\n'):
+            name = item.strip()
+            if name and name not in names:
+                names.append(name)
+    return names
 
 
 @app.websocket('/ws/tasks/{task_id}')

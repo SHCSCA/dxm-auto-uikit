@@ -442,6 +442,7 @@ type EditableConfigField = {
   placeholder: string
   previewPath?: string
   usage?: 'direct' | 'template' | 'advisory'
+  valueKind?: 'text' | 'list'
 }
 type EditableConfigSection = {
   code: ConfigSectionCode
@@ -582,14 +583,14 @@ const editableConfigSections: EditableConfigSection[] = [
     title: '店小秘引用模板',
     detail: '店小秘编辑页 8 段下拉模板引用，执行时按 resolved 结果匹配真实模板；尺码模板按类目属性规则处理。',
     fields: [
-      { name: 'dxm_reference_templates.attribute_info.names', previewPath: 'dxm_reference_templates_resolved.attribute_info.names', label: '属性信息模板', placeholder: '类目属性模板', usage: 'template' },
-      { name: 'dxm_reference_templates.description.names', previewPath: 'dxm_reference_templates_resolved.description.names', label: '描述模板', placeholder: '描述模板 A', usage: 'template' },
-      { name: 'dxm_reference_templates.freight.names', previewPath: 'dxm_reference_templates_resolved.freight.names', label: '运费模板', placeholder: '半托管运费模板', usage: 'template' },
-      { name: 'dxm_reference_templates.service.names', previewPath: 'dxm_reference_templates_resolved.service.names', label: '服务模板', placeholder: '无忧服务模板', usage: 'template' },
-      { name: 'dxm_reference_templates.eu_responsible.names', previewPath: 'dxm_reference_templates_resolved.eu_responsible.names', label: '欧盟责任人', placeholder: 'EU Responsible Person', usage: 'template' },
-      { name: 'dxm_reference_templates.manufacturer.names', previewPath: 'dxm_reference_templates_resolved.manufacturer.names', label: '制造商', placeholder: '默认制造商', usage: 'template' },
-      { name: 'dxm_reference_templates.compliance.names', previewPath: 'dxm_reference_templates_resolved.compliance.names', label: '合规模板', placeholder: '合规模板', usage: 'template' },
-      { name: 'dxm_reference_templates.semi_managed.names', previewPath: 'dxm_reference_templates_resolved.semi_managed.names', label: '半托管模板', placeholder: '半托管模板', usage: 'template' },
+      { name: 'dxm_reference_templates.attribute_info.names', previewPath: 'dxm_reference_templates_resolved.attribute_info.names', label: '属性信息模板', placeholder: '每行一个属性信息模板', usage: 'template', valueKind: 'list' },
+      { name: 'dxm_reference_templates.description.names', previewPath: 'dxm_reference_templates_resolved.description.names', label: '描述模板', placeholder: '每行一个描述模板', usage: 'template', valueKind: 'list' },
+      { name: 'dxm_reference_templates.freight.names', previewPath: 'dxm_reference_templates_resolved.freight.names', label: '运费模板', placeholder: '每行一个运费模板', usage: 'template', valueKind: 'list' },
+      { name: 'dxm_reference_templates.service.names', previewPath: 'dxm_reference_templates_resolved.service.names', label: '服务模板', placeholder: '每行一个服务模板', usage: 'template', valueKind: 'list' },
+      { name: 'dxm_reference_templates.eu_responsible.names', previewPath: 'dxm_reference_templates_resolved.eu_responsible.names', label: '欧盟责任人', placeholder: '每行一个欧盟责任人', usage: 'template', valueKind: 'list' },
+      { name: 'dxm_reference_templates.manufacturer.names', previewPath: 'dxm_reference_templates_resolved.manufacturer.names', label: '制造商', placeholder: '每行一个制造商', usage: 'template', valueKind: 'list' },
+      { name: 'dxm_reference_templates.compliance.names', previewPath: 'dxm_reference_templates_resolved.compliance.names', label: '合规模板', placeholder: '每行一个合规模板', usage: 'template', valueKind: 'list' },
+      { name: 'dxm_reference_templates.semi_managed.names', previewPath: 'dxm_reference_templates_resolved.semi_managed.names', label: '半托管模板', placeholder: '每行一个半托管模板', usage: 'template', valueKind: 'list' },
     ],
   },
 ]
@@ -603,7 +604,7 @@ function getNestedConfigValue(payload: Record<string, unknown>, path: string) {
   return current
 }
 
-function setNestedConfigValue(target: Record<string, unknown>, path: string, value: string) {
+function setNestedConfigValue(target: Record<string, unknown>, path: string, value: unknown) {
   const parts = path.split('.')
   let cursor = target
   parts.forEach((part, index) => {
@@ -620,6 +621,23 @@ function setNestedConfigValue(target: Record<string, unknown>, path: string, val
   return target
 }
 
+function parseEditableConfigFieldValue(field: EditableConfigField, rawValue: string): unknown {
+  if (field.valueKind !== 'list') return rawValue
+  return rawValue
+    .replace(/\r\n/g, '\n')
+    .replace(/[，,；;]/g, '\n')
+    .replace(/\s\/\s/g, '\n')
+    .split('\n')
+    .map((item) => item.trim())
+    .filter((item, index, items) => item && items.indexOf(item) === index)
+}
+
+function editableConfigDraftValue(value: unknown, field: EditableConfigField) {
+  if (value === undefined || value === null) return ''
+  if (Array.isArray(value)) return field.valueKind === 'list' ? value.join('\n') : value.join(' / ')
+  return String(value)
+}
+
 function buildEditableConfigDraft(templates: Template[], configPreview: ConfigPreview | null) {
   const draft = {} as Record<ConfigSectionCode, Record<string, string>>
   editableConfigSections.forEach((section) => {
@@ -631,10 +649,10 @@ function buildEditableConfigDraft(templates: Template[], configPreview: ConfigPr
       (() => {
         const previewField = fieldPreview(preview, field)
         if (previewField && previewField.value !== undefined && previewField.value !== null && String(previewField.value).trim() !== '') {
-          return Array.isArray(previewField.value) ? previewField.value.join(' / ') : String(previewField.value)
+          return editableConfigDraftValue(previewField.value, field)
         }
         const payloadValue = getNestedConfigValue(payload, field.name) ?? payload[field.name]
-        return payloadValue === undefined || payloadValue === null ? '' : String(payloadValue)
+        return editableConfigDraftValue(payloadValue, field)
       })(),
     ]))
   })
@@ -852,7 +870,8 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
     setConfigMessage(null)
     try {
       const payload = section.fields.reduce<Record<string, unknown>>((acc, field) => {
-        setNestedConfigValue(acc, field.name, configDraft[section.code]?.[field.name] ?? '')
+        const rawValue = configDraft[section.code]?.[field.name] ?? ''
+        setNestedConfigValue(acc, field.name, parseEditableConfigFieldValue(field, rawValue))
         return acc
       }, {})
       if (scope === 'task') {
@@ -1053,11 +1072,21 @@ function EditableConfigSectionCard({
               {field.label}{fieldPreview(preview, field)?.required ? ' *' : ''}
               {field.usage && <em className={`field-usage field-usage--${field.usage}`}>{fieldUsageLabel(field.usage)}</em>}
             </span>
-            <input
-              value={configDraft[section.code]?.[field.name] ?? ''}
-              placeholder={field.placeholder}
-              onChange={(event) => onFieldChange(section.code, field.name, event.target.value)}
-            />
+            {field.valueKind === 'list' ? (
+              <textarea
+                value={configDraft[section.code]?.[field.name] ?? ''}
+                placeholder={field.placeholder}
+                rows={3}
+                onChange={(event) => onFieldChange(section.code, field.name, event.target.value)}
+              />
+            ) : (
+              <input
+                value={configDraft[section.code]?.[field.name] ?? ''}
+                placeholder={field.placeholder}
+                onChange={(event) => onFieldChange(section.code, field.name, event.target.value)}
+              />
+            )}
+            {field.valueKind === 'list' && <small className="field-source">每行一个；会按顺序匹配店小秘模板。</small>}
             <small className={fieldPreview(preview, field)?.missing ? 'field-source is-missing' : 'field-source'}>
               {fieldSourceText(fieldPreview(preview, field))}
             </small>

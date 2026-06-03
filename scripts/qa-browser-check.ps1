@@ -593,9 +593,14 @@ const text = {
   reports: '\u62a5\u544a\u4e2d\u5fc3',
   config: '\u914d\u7f6e\u4e2d\u5fc3',
   editableConfig: '\u0044\u0058\u004d \u7f16\u8f91\u9875\u914d\u7f6e',
+  nextRequiredConfig: '\u4e0b\u4e00\u6b65\u5fc5\u586b\u5b57\u6bb5',
+  configReadySummary: '\u5f53\u524d\u4efb\u52a1\u914d\u7f6e\u5df2\u5c31\u7eea',
+  onePerLine: '\u6bcf\u884c\u4e00\u4e2a',
   taskOverrideSave: '\u4ec5\u672c\u6b21\u4efb\u52a1\u4f7f\u7528',
   templateSave: '\u4fdd\u5b58\u4e3a\u5e97\u94fa\u6a21\u677f',
   fieldSource: '\u6765\u6e90\uff1a',
+  loginManualBrowser: '\u767b\u5f55/\u4eba\u5de5\u5904\u7406\u771f\u5b9e\u6d4f\u89c8\u5668',
+  executionObserve: '\u542f\u52a8\u6267\u884c\u89c2\u5bdf',
   reportReviewPlan: '\u67e5\u770b L2 \u8bc4\u5ba1\u4e0e\u590d\u9a8c\u8ba1\u5212',
   hero: '\u0044\u0058\u004d \u81ea\u52a8\u5316\u5de5\u4f5c\u53f0',
   localWorkbenchDeliverable: '\u81ea\u52a8\u5316\u5de5\u4f5c\u53f0\u53ef\u4ea4\u4ed8',
@@ -892,6 +897,8 @@ const initialTextCompact = initialText.replace(/\s+/g, '');
 const clickedConfig = await clickSelector('[data-section="config"]') || await clickText(text.config);
 await new Promise(r => setTimeout(r, 700));
 const configText = await bodyText();
+const configHasRequiredSummary = configText.includes(text.nextRequiredConfig) || configText.includes(text.configReadySummary);
+const configHasListEditor = await evalValue('(() => [...document.querySelectorAll(".editable-config-section__fields label")].some(label => { const textarea = label.querySelector("textarea"); const content = String(label.innerText || label.textContent || "") + " " + String(textarea?.getAttribute("placeholder") || ""); return Boolean(textarea) && content.includes(' + JSON.stringify(text.onePerLine) + '); }))()');
 const configShot = await screenshot('qa-config-center');
 const desktopReflow = await evalValue('document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1');
 const desktopOverflow = await horizontalOverflowState();
@@ -1073,6 +1080,8 @@ const result = {
           && initialTextCompact.includes('\u67e5\u770b\u5b8c\u6574 9 \u6b65\u6d41\u7a0b'.replace(/\s+/g, ''))),
     configCenterTaskOverrideControls: clickedConfig
       && configText.includes(text.editableConfig)
+      && configHasRequiredSummary
+      && configHasListEditor
       && configText.includes(text.taskOverrideSave)
       && configText.includes(text.templateSave)
       && configText.includes(text.fieldSource),
@@ -1085,6 +1094,7 @@ const result = {
     mobileNavWorked: clickedMobileTasks && mobileTaskText.includes('single_save'),
     mobileNoHorizontalOverflow: mobileReflow === true && mobileOverflow.ok === true,
     consoleReadonlyCopy: consoleText.includes(text.readonly) && consoleText.includes(text.noSaveStart),
+    consoleRealBrowserLoginEntry: consoleText.includes(text.loginManualBrowser) && consoleText.includes(text.executionObserve),
     consoleNoFakeBrowser: consoleText.includes(text.noBrowser) && consoleText.includes(text.noFakeEvidence),
     consoleStartButtonDisabled: finalCheckExpectedReady || consoleStartDisabled,
     consoleNoFakePlaceholder: !(consoleText + ' ' + taskText).includes(text.fakePlaceholder),

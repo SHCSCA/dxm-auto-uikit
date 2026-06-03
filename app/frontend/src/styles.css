@@ -1531,7 +1531,8 @@ tr:last-child td {
   color: var(--amber);
 }
 
-.editable-config-section__fields input {
+.editable-config-section__fields input,
+.editable-config-section__fields textarea {
   width: 100%;
   min-height: 36px;
   border: 1px solid var(--line);
@@ -1539,6 +1540,12 @@ tr:last-child td {
   background: #fff;
   color: var(--text);
   padding: 7px 9px;
+}
+
+.editable-config-section__fields textarea {
+  min-height: 82px;
+  resize: vertical;
+  line-height: 1.45;
 }
 
 .field-source {

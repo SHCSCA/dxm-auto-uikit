@@ -126,11 +126,30 @@ def test_config_center_can_save_task_level_overrides_separately_from_templates()
     assert "update_task_template_override" in repo_source
 
 
+def test_config_center_preserves_multi_value_reference_template_fields():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
+
+    assert "valueKind?: 'text' | 'list'" in source
+    assert "valueKind: 'list'" in source
+    assert "parseEditableConfigFieldValue" in config_section
+    assert "function editableConfigDraftValue" in source
+    assert "value.join('\\n')" in source
+    assert "<textarea" in config_section
+    assert "每行一个" in config_section
+
+
 def test_browser_qa_verifies_config_center_task_override_controls():
     source = QA_BROWSER_CHECK.read_text(encoding="utf-8")
 
     assert "taskOverrideSave" in source
     assert "templateSave" in source
+    assert "nextRequiredConfig" in source
+    assert "configReadySummary" in source
+    assert "onePerLine" in source
+    assert "configHasListEditor" in source
+    assert "loginManualBrowser" in source
+    assert "consoleRealBrowserLoginEntry" in source
     assert "fieldSource" in source
     assert "configCenterTaskOverrideControls" in source
     assert "qa-config-center" in source

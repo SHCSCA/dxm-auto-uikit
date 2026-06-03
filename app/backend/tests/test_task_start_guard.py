@@ -904,7 +904,7 @@ def test_task_config_override_endpoint_prunes_empty_nested_values(tmp_path, monk
     )
     assert first.status_code == 200
     assert repo.get_task_private(task["id"])["payload"]["template_overrides"]["dxm_reference"] == {
-        "dxm_reference_templates": {"freight": {"names": "半托管运费模板"}}
+        "dxm_reference_templates": {"freight": {"names": ["半托管运费模板"]}}
     }
 
     cleared = client.patch(
@@ -922,6 +922,73 @@ def test_task_config_override_endpoint_prunes_empty_nested_values(tmp_path, monk
 
     assert cleared.status_code == 200
     assert "template_overrides" not in repo.get_task_private(task["id"])["payload"]
+
+
+def test_task_config_override_normalizes_dxm_reference_names_to_arrays(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo)
+
+    response = client.patch(
+        f"/api/tasks/{task['id']}/config-overrides",
+        json={
+            "section": "dxm_reference",
+            "values": {
+                "dxm_reference_templates": {
+                    "freight": {"names": "半托管运费模板 / 普货模板\n半托管运费模板"},
+                    "service": {"names": ["无忧服务", ""]},
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    stored = repo.get_task_private(task["id"])["payload"]["template_overrides"]["dxm_reference"]
+    assert stored["dxm_reference_templates"]["freight"]["names"] == ["半托管运费模板", "普货模板"]
+    assert stored["dxm_reference_templates"]["service"]["names"] == ["无忧服务"]
+    preview = client.get(f"/api/config/preview?task_id={task['id']}").json()
+    resolved = preview["resolvedDefaults"]["dxm_reference_templates_resolved"]
+    assert resolved["freight"]["names"] == ["半托管运费模板", "普货模板"]
+    assert resolved["service"]["names"] == ["无忧服务"]
+
+
+def test_template_api_normalizes_dxm_reference_names_to_arrays(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+
+    created = client.post(
+        "/api/templates",
+        json={
+            "template_type": "dxm_reference",
+            "template_name": "DXM 引用模板",
+            "binding_scope": "Dang Kang",
+            "payload": {
+                "dxm_reference_templates": {
+                    "freight": {"names": "半托管运费模板 / 普货模板\n半托管运费模板"},
+                    "service": {"names": ["无忧服务", ""]},
+                }
+            },
+            "is_enabled": True,
+        },
+    )
+
+    assert created.status_code == 200
+    created_payload = created.json()["payload"]["dxm_reference_templates"]
+    assert created_payload["freight"]["names"] == ["半托管运费模板", "普货模板"]
+    assert created_payload["service"]["names"] == ["无忧服务"]
+
+    updated = client.patch(
+        f"/api/templates/{created.json()['id']}",
+        json={
+            "payload": {
+                "dxm_reference_templates": {
+                    "freight": {"names": "升级模板，兜底模板"},
+                }
+            },
+        },
+    )
+
+    assert updated.status_code == 200
+    updated_payload = repo.list_templates()[0]["payload"]["dxm_reference_templates"]
+    assert updated_payload["freight"]["names"] == ["升级模板", "兜底模板"]
 
 
 def test_task_config_override_endpoint_rejects_unknown_section(tmp_path, monkeypatch):
