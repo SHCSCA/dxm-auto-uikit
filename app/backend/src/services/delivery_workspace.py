@@ -109,6 +109,7 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
         "evidence_grade": _evidence_grade(extracted, l2_gate, delivery_readiness),
         "regression_gates": _regression_gates(extracted, l2_gate, delivery_readiness),
         "delivery_readiness": delivery_readiness,
+        "real_mode_release_plan": _real_mode_release_plan(),
         "acceptanceGaps": _acceptance_gaps(exceptions, extracted, l2_gate, delivery_readiness),
         "safety": _safety_state(extracted, l2_gate, delivery_readiness),
         "l2_probe_plan": _l2_probe_plan(),
@@ -145,6 +146,166 @@ def _baseline() -> dict[str, Any]:
             "read tasks/jobs/reports/evidences/logs/templates/exceptions",
             "extract save result, unpublished proof, network and HAR summary",
             "grade delivery evidence without publishing",
+        ],
+    }
+
+
+def _real_mode_release_plan() -> dict[str, Any]:
+    def checklist(
+        item_id: str,
+        label: str,
+        *,
+        required: bool = True,
+        status: str = "missing",
+        evidence_source: str = "mode-specific evidence",
+        blocker: str | None = None,
+        detail: str = "",
+    ) -> dict[str, Any]:
+        return {
+            "id": item_id,
+            "label": label,
+            "required": required,
+            "status": status,
+            "evidence_source": evidence_source,
+            "blocker": blocker,
+            "detail": detail,
+        }
+
+    shared_controls = [
+        "fresh same-run L2 data_acquisition and draft_box proof",
+        "server-side manual approval token",
+        "task runner evidence chain only; direct mutation endpoint remains forbidden",
+        "publish guard must prove no publish, continue publish, save-and-publish, or move-to-publish action",
+    ]
+    return {
+        "schema": "dxm_real_mode_release_plan.v1",
+        "scope": "controlled_single_save_only",
+        "publish_allowed": False,
+        "batch_unattended_publish_allowed": False,
+        "modes": [
+            {
+                "mode": "single_save",
+                "label": "受控 single_save",
+                "status": "released_controlled",
+                "allowed": True,
+                "release_scope": "single product save-only canary",
+                "required_evidence": [
+                    "L2 dual-target readonly proof",
+                    "L3 save_result code=0",
+                    "published=false proof",
+                    "save and unpublished screenshots or paths",
+                    "network/HAR save response evidence",
+                ],
+                "required_controls": shared_controls,
+                "blockers": [],
+                "readiness_checklist": [
+                    checklist("l2_dual_target", "L2 dual-target readonly proof", status="passed", evidence_source="L2 gate"),
+                    checklist("l3_single_canary", "single_save canary save evidence", status="passed", evidence_source="L3 task 70"),
+                    checklist("published_false", "published=false proof", status="passed", evidence_source="report summary"),
+                    checklist("publish_guard", "publish guard clean", status="passed", evidence_source="delivery workspace aggregation"),
+                ],
+            },
+            {
+                "mode": "claim_only",
+                "label": "claim_only",
+                "status": "blocked_unreleased",
+                "allowed": False,
+                "release_scope": "not released",
+                "required_evidence": [
+                    "dedicated L2/L3 run for claim_only",
+                    "claim ownership proof",
+                    "no editor open and no save request proof",
+                    "local ownership lock and release audit trail",
+                ],
+                "required_controls": [
+                    *shared_controls,
+                    "claim marker must be operator-approved and reversible",
+                    "manual recovery plan for wrong target claim",
+                ],
+                "blockers": [
+                    "cannot reuse single_save evidence",
+                    "claim marker write semantics need independent audit",
+                    "manual recovery and rollback procedure not yet accepted",
+                ],
+                "readiness_checklist": [
+                    checklist(
+                        "dedicated_l2_l3",
+                        "Dedicated claim_only L2/L3 evidence",
+                        blocker="cannot reuse single_save evidence",
+                        detail="claim_only changes draft ownership state; it needs its own readonly and canary evidence chain.",
+                    ),
+                    checklist(
+                        "claim_ownership_proof",
+                        "Claim ownership proof",
+                        blocker="missing claim ownership proof",
+                        detail="Must prove the exact draft row was claimed and can be traced to store, product, and source URL.",
+                    ),
+                    checklist(
+                        "no_editor_or_save",
+                        "No editor open and no save request proof",
+                        blocker="missing negative save proof",
+                        detail="claim_only must not open the editor or issue save/add.json requests.",
+                    ),
+                    checklist(
+                        "rollback_release",
+                        "Ownership release or manual rollback path",
+                        blocker="missing ownership rollback proof",
+                        detail="Operator must have a documented recovery path before claim_only can be released.",
+                    ),
+                ],
+            },
+            {
+                "mode": "batch_save",
+                "label": "batch_save",
+                "status": "blocked_unreleased",
+                "allowed": False,
+                "release_scope": "not released",
+                "required_evidence": [
+                    "dedicated L2/L3 run for batch_save",
+                    "batch size limit proof",
+                    "per-job save_result code=0",
+                    "per-job published=false proof",
+                    "per-job network/HAR save response evidence",
+                    "partial failure report and retry boundary proof",
+                ],
+                "required_controls": [
+                    *shared_controls,
+                    "small batch cap before any unattended execution",
+                    "stop-on-first-publish-risk policy",
+                    "rollback and manual handoff procedure",
+                ],
+                "blockers": [
+                    "cannot reuse single_save evidence",
+                    "batch failure isolation and rollback are not yet accepted",
+                    "unattended execution remains forbidden",
+                ],
+                "readiness_checklist": [
+                    checklist(
+                        "dedicated_l2_l3",
+                        "Dedicated batch_save L2/L3 evidence",
+                        blocker="cannot reuse single_save evidence",
+                        detail="Batch behavior must be proven separately from one controlled single_save canary.",
+                    ),
+                    checklist(
+                        "batch_size_limit",
+                        "Batch size limit proof",
+                        blocker="missing batch size cap acceptance",
+                        detail="The runner and UI must enforce a small batch cap before any batch_save release.",
+                    ),
+                    checklist(
+                        "per_job_save_and_unpublished",
+                        "Per-job save result and published=false proof",
+                        blocker="missing per-job evidence",
+                        detail="Every job needs save_result code=0, unpublished proof, and report linkage.",
+                    ),
+                    checklist(
+                        "partial_failure_rollback",
+                        "Partial failure report plus rollback/manual handoff",
+                        blocker="missing partial failure rollback proof",
+                        detail="A failed item must stop safely with a visible handoff path and no publish action.",
+                    ),
+                ],
+            },
         ],
     }
 

@@ -12,6 +12,7 @@ import type {
   LiveEvent,
   LogItem,
   Product,
+  RealModeReleasePlan,
   Report,
   ReportSummary,
   RegressionGate,
@@ -45,6 +46,7 @@ type DeliveryWorkspaceApi = Partial<DeliveryWorkspace> & {
   evidence_grade?: { grade: EvidenceGrade; [key: string]: unknown }
   regression_gates?: RegressionGate[]
   l2_probe_plan?: L2ProbePlan
+  real_mode_release_plan?: RealModeReleasePlan
 }
 
 export const seedRows = [
@@ -108,6 +110,7 @@ export function composeWorkspace(bundle: WorkspaceApiBundle): DeliveryWorkspace 
   const evidenceGradeValue = workspace?.evidenceGrade ?? workspace?.evidence_grade ?? fallback.evidenceGrade
   const regressionGates = firstList(workspace?.regressionGates, workspace?.regression_gates, fallback.regressionGates)
   const l2ProbePlan = normalizeL2ProbePlan(workspace?.l2ProbePlan ?? workspace?.l2_probe_plan, fallback.l2ProbePlan)
+  const realModeReleasePlan = normalizeRealModeReleasePlan(workspace?.realModeReleasePlan ?? workspace?.real_mode_release_plan, fallback.realModeReleasePlan)
   const stores = chooseList(workspace?.stores, bundle.stores, fallback.stores, Boolean(workspace), apiHasData)
   const templates = chooseList(workspace?.templates, bundle.templates, fallback.templates, Boolean(workspace), apiHasData)
   const products = chooseList(workspace?.products, bundle.products, fallback.products, Boolean(workspace), apiHasData)
@@ -136,6 +139,7 @@ export function composeWorkspace(bundle: WorkspaceApiBundle): DeliveryWorkspace 
     evidenceGrade: evidenceGradeValue,
     regressionGates,
     l2ProbePlan,
+    realModeReleasePlan,
     dxmReferenceTemplates: normalizeReferenceSections(workspace?.dxmReferenceTemplates, templates, reports, templateResolution),
     acceptanceGaps: firstList(workspace?.acceptanceGaps, buildAcceptanceGaps(exceptions, evidences, reports, evidenceGradeValue), fallback.acceptanceGaps),
     safety: workspace?.safety ?? safetyFromGuard(publishGuardState, evidenceGradeValue) ?? fallback.safety,
@@ -187,6 +191,7 @@ export function buildEmptyWorkspace(): DeliveryWorkspace {
     evidenceGrade: { grade: 'C' },
     regressionGates: buildRegressionGates(null, { grade: 'C' }, []),
     l2ProbePlan: buildL2ProbePlan(),
+    realModeReleasePlan: buildRealModeReleasePlan(),
     dxmReferenceTemplates: normalizeReferenceSections(undefined, [], [], null),
     acceptanceGaps: [{
       id: 'empty-workspace',
@@ -322,6 +327,7 @@ export function buildMockWorkspace(): DeliveryWorkspace {
     evidenceGrade: evidenceGradeValue,
     regressionGates,
     l2ProbePlan: buildL2ProbePlan(),
+    realModeReleasePlan: buildRealModeReleasePlan(),
     dxmReferenceTemplates: normalizeReferenceSections(undefined, templates, reports),
     acceptanceGaps: buildAcceptanceGaps(exceptions, evidences, reports, evidenceGradeValue),
     safety: {
@@ -422,6 +428,119 @@ function buildL2ProbePlan(): L2ProbePlan {
   }
 }
 
+export function buildRealModeReleasePlan(): RealModeReleasePlan {
+  const checklist = (
+    id: string,
+    label: string,
+    status: 'passed' | 'missing' = 'missing',
+    blocker: string | null = null,
+    detail = '',
+  ) => ({
+    id,
+    label,
+    required: true,
+    status,
+    evidence_source: status === 'passed' ? 'current delivery evidence chain' : 'mode-specific evidence',
+    blocker,
+    detail,
+  })
+  const sharedControls = [
+    'publish_allowed=false',
+    '禁止发布、继续发布、保存并发布、移入待发布',
+    '人工批准令牌',
+    '失败停止并人工接管',
+  ]
+  return {
+    schema: 'dxm_real_mode_release_plan.v1',
+    scope: 'controlled_single_save_only',
+    publish_allowed: false,
+    batch_unattended_publish_allowed: false,
+    modes: [
+      {
+        mode: 'single_save',
+        label: '受控 single_save 已放行',
+        status: 'released_controlled',
+        allowed: true,
+        release_scope: 'single product save-only canary',
+        required_evidence: [
+          'L2 双目标真实只读通过',
+          '保存接口 code=0',
+          'published=false 未发布证明',
+          '截图与 network/HAR 证据',
+        ],
+        required_controls: sharedControls,
+        blockers: [],
+        readiness_checklist: [
+          checklist('l2_dual_target', 'L2 双目标真实只读通过', 'passed'),
+          checklist('l3_single_canary', 'single_save 金丝雀保存证据', 'passed'),
+          checklist('published_false', 'published=false 未发布证明', 'passed'),
+          checklist('publish_guard', '发布隔离无风险信号', 'passed'),
+        ],
+      },
+      {
+        mode: 'claim_only',
+        label: 'claim_only 当前未发布',
+        status: 'blocked_unreleased',
+        allowed: false,
+        release_scope: 'not released',
+        required_evidence: [
+          '独立 claim_only L2/L3 证据',
+          'claim ownership proof',
+          '不打开编辑页、不触发保存请求证明',
+          '领取锁定与释放审计链',
+        ],
+        required_controls: [
+          ...sharedControls,
+          'claim 标记可回退',
+          '人工释放/恢复计划',
+        ],
+        blockers: [
+          'cannot reuse single_save evidence',
+          '不能复用 single_save 证据',
+          '缺少 claim ownership proof',
+        ],
+        readiness_checklist: [
+          checklist('dedicated_l2_l3', '独立 claim_only L2/L3 证据', 'missing', 'cannot reuse single_save evidence', 'claim_only 会改变草稿归属状态，不能复用 single_save 金丝雀。'),
+          checklist('claim_ownership_proof', 'claim ownership proof', 'missing', 'missing claim ownership proof', '需要证明命中的是目标店铺、目标商品和目标来源链接。'),
+          checklist('no_editor_or_save', '不打开编辑页、不触发保存请求证明', 'missing', 'missing negative save proof', 'claim_only 不能触发编辑页保存接口。'),
+          checklist('rollback_release', '归属释放或人工回滚路径', 'missing', 'missing ownership rollback proof', '误领或中断时必须有人工恢复路径。'),
+        ],
+      },
+      {
+        mode: 'batch_save',
+        label: 'batch_save 当前未发布',
+        status: 'blocked_unreleased',
+        allowed: false,
+        release_scope: 'not released',
+        required_evidence: [
+          '独立 batch_save L2/L3 证据',
+          'batch size limit proof',
+          '逐商品保存结果与 published=false',
+          '逐商品 network/HAR 证据',
+          '部分失败报告与重试边界',
+        ],
+        required_controls: [
+          ...sharedControls,
+          '批量大小上限',
+          '发现发布风险立即停止',
+          '回滚/人工接管',
+        ],
+        blockers: [
+          'cannot reuse single_save evidence',
+          '不能复用 single_save 证据',
+          '缺少批量大小上限、回滚和部分失败验收',
+        ],
+        readiness_checklist: [
+          checklist('dedicated_l2_l3', '独立 batch_save L2/L3 证据', 'missing', 'cannot reuse single_save evidence', '批量行为必须单独验证，不能用单品证据替代。'),
+          checklist('batch_size_limit', '批量大小上限', 'missing', 'missing batch size cap acceptance', 'UI 和 runner 都必须强制小批量上限。'),
+          checklist('per_job_save_and_unpublished', '逐商品保存结果与 published=false', 'missing', 'missing per-job evidence', '每个 job 都需要保存结果、未发布证明和报告链路。'),
+          checklist('partial_failure_rollback', '部分失败报告与回滚/人工接管', 'missing', 'missing partial failure rollback proof', '任一失败必须安全停止并给出接管路径。'),
+        ],
+      },
+    ],
+  }
+}
+
 function normalizeL2ProbePlan(value: L2ProbePlan | undefined, fallback: L2ProbePlan): L2ProbePlan {
   const plan = asRecord(value)
   return {
@@ -439,6 +558,63 @@ function normalizeL2ProbePlan(value: L2ProbePlan | undefined, fallback: L2ProbeP
     commands: Array.isArray(plan.commands) ? plan.commands.map(String).filter(Boolean) : fallback.commands,
     acceptanceCriteria: Array.isArray(plan.acceptanceCriteria) ? plan.acceptanceCriteria.map(String).filter(Boolean) : fallback.acceptanceCriteria,
     safetyNotes: Array.isArray(plan.safetyNotes) ? plan.safetyNotes.map(String).filter(Boolean) : fallback.safetyNotes,
+  }
+}
+
+function normalizeRealModeReleasePlan(value: RealModeReleasePlan | undefined, fallback: RealModeReleasePlan): RealModeReleasePlan {
+  const plan = asRecord(value)
+  return {
+    ...fallback,
+    schema: stringOr(plan.schema, fallback.schema),
+    scope: stringOr(plan.scope, fallback.scope),
+    publish_allowed: typeof plan.publish_allowed === 'boolean' ? plan.publish_allowed : fallback.publish_allowed,
+    batch_unattended_publish_allowed: typeof plan.batch_unattended_publish_allowed === 'boolean' ? plan.batch_unattended_publish_allowed : fallback.batch_unattended_publish_allowed,
+    modes: Array.isArray(plan.modes)
+      ? plan.modes.map((item, index) => normalizeRealModeReleaseItem(item, fallback.modes[index] ?? fallback.modes[0])).filter(Boolean)
+      : fallback.modes,
+  }
+}
+
+function normalizeRealModeReleaseItem(value: unknown, fallback: RealModeReleasePlan['modes'][number]): RealModeReleasePlan['modes'][number] {
+  const item = asRecord(value)
+  return {
+    ...fallback,
+    mode: stringOr(item.mode, fallback.mode),
+    label: stringOr(item.label, fallback.label),
+    status: stringOr(item.status, fallback.status),
+    allowed: typeof item.allowed === 'boolean' ? item.allowed : fallback.allowed,
+    release_scope: stringOr(item.release_scope, fallback.release_scope),
+    required_evidence: Array.isArray(item.required_evidence) ? item.required_evidence.map(String).filter(Boolean) : fallback.required_evidence,
+    required_controls: Array.isArray(item.required_controls) ? item.required_controls.map(String).filter(Boolean) : fallback.required_controls,
+    blockers: Array.isArray(item.blockers) ? item.blockers.map(String).filter(Boolean) : fallback.blockers,
+    readiness_checklist: Array.isArray(item.readiness_checklist)
+      ? item.readiness_checklist.map((entry, index) => normalizeReadinessChecklistItem(entry, fallback.readiness_checklist?.[index])).filter(Boolean)
+      : fallback.readiness_checklist,
+  }
+}
+
+function normalizeReadinessChecklistItem(
+  value: unknown,
+  fallback?: NonNullable<RealModeReleasePlan['modes'][number]['readiness_checklist']>[number],
+): NonNullable<RealModeReleasePlan['modes'][number]['readiness_checklist']>[number] {
+  const item = asRecord(value)
+  const safeFallback = fallback ?? {
+    id: '',
+    label: '',
+    required: true,
+    status: 'missing',
+    evidence_source: '',
+    blocker: null,
+    detail: '',
+  }
+  return {
+    id: stringOr(item.id, safeFallback.id),
+    label: stringOr(item.label, safeFallback.label),
+    required: typeof item.required === 'boolean' ? item.required : safeFallback.required,
+    status: stringOr(item.status, safeFallback.status),
+    evidence_source: stringOr(item.evidence_source, safeFallback.evidence_source),
+    blocker: item.blocker === null ? null : stringOr(item.blocker, safeFallback.blocker ?? ''),
+    detail: stringOr(item.detail, safeFallback.detail),
   }
 }
 

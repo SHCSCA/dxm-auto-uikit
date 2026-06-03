@@ -16,7 +16,7 @@ data/evidences/
 outputs/reports/
 outputs/spreadsheets/
 outputs/browser-checks/
-outputs/final-delivery-check/
+outputs/final-delivery-check*/
 outputs/l3-canary/
 outputs/playwright/
 outputs/ui-smoke-*/

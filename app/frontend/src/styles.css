@@ -1201,6 +1201,81 @@ tr:last-child td {
   line-height: 1.45;
 }
 
+.real-mode-release-panel {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid #e8c0c5;
+  border-radius: 8px;
+  background: #fff7f8;
+}
+
+.real-mode-release-panel__head,
+.real-mode-release-item__title {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.real-mode-release-panel__head strong,
+.real-mode-release-panel__head span {
+  display: block;
+}
+
+.real-mode-release-panel__head > div > span,
+.real-mode-release-panel > p,
+.real-mode-release-item small,
+.real-mode-release-item__title span,
+.real-mode-release-item li {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.real-mode-release-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.real-mode-release-item {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #efd5d8;
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.real-mode-release-item ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.real-mode-release-item li {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 6px;
+  align-items: start;
+}
+
+.real-mode-release-item li span {
+  color: var(--red);
+  font-weight: 700;
+}
+
+.real-mode-release-item li p {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .real-task-form {
   display: grid;
   grid-template-columns: minmax(220px, 0.85fr) minmax(320px, 1.4fr);
@@ -3571,20 +3646,24 @@ tr:last-child td {
 
   .real-task-card,
   .real-task-card__head,
+  .real-mode-release-panel__head,
   .task-start-strip,
   .real-task-form,
   .real-task-mode,
-  .real-task-products {
+  .real-task-products,
+  .real-mode-release-panel__grid {
     min-width: 0;
   }
 
   .real-task-form,
   .real-task-mode,
-  .real-task-products {
+  .real-task-products,
+  .real-mode-release-panel__grid {
     grid-template-columns: 1fr;
   }
 
   .real-task-card__head,
+  .real-mode-release-panel__head,
   .task-start-strip {
     align-items: stretch;
   }

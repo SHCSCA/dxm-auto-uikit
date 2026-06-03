@@ -663,6 +663,13 @@ const text = {
   unreleasedRealModeCopy: '\u0063\u006c\u0061\u0069\u006d\u005f\u006f\u006e\u006c\u0079/\u0062\u0061\u0074\u0063\u0068\u005f\u0073\u0061\u0076\u0065 \u5f53\u524d\u672a\u53d1\u5e03',
   unreleasedRealModeButtonDisabled: '\u672a\u53d1\u5e03\uff0c\u7981\u6b62\u542f\u52a8',
   controlledSingleSaveOnly: '\u4ec5\u53d7\u63a7 single_save',
+  realModeReleasePlanTitle: '\u0063\u006c\u0061\u0069\u006d\u005f\u006f\u006e\u006c\u0079 / \u0062\u0061\u0074\u0063\u0068\u005f\u0073\u0061\u0076\u0065 \u653e\u884c\u51c6\u5907',
+  claimOnlyUnreleased: '\u0063\u006c\u0061\u0069\u006d\u005f\u006f\u006e\u006c\u0079 \u5f53\u524d\u672a\u53d1\u5e03',
+  batchSaveUnreleased: '\u0062\u0061\u0074\u0063\u0068\u005f\u0073\u0061\u0076\u0065 \u5f53\u524d\u672a\u53d1\u5e03',
+  cannotReuseSingleSave: '\u4e0d\u80fd\u590d\u7528 single_save \u8bc1\u636e',
+  batchSizeLimit: '\u6279\u91cf\u5927\u5c0f\u4e0a\u9650',
+  rollbackHandoff: '\u56de\u6eda/\u4eba\u5de5\u63a5\u7ba1',
+  batchSaveNotRunner: '\u0062\u0061\u0074\u0063\u0068\u005f\u0073\u0061\u0076\u0065 \u4e0d\u8fdb\u5165 runner',
   oldWaitSave: '\u7b49\u5f85\u4fdd\u5b58\u6838\u9a8c',
   oldVisibleBrowser: '\u6253\u5f00\u53ef\u89c1\u6d4f\u89c8\u5668',
   oldAutomation: '\u65c1\u89c2\u81ea\u52a8\u5316',
@@ -1089,6 +1096,14 @@ const result = {
     taskRecoveryActions: finalCheckExpectedReady || ((taskText.includes(text.readonlyDiag) || taskText.includes(text.l2BlockHelp)) && taskText.includes(text.evidenceGap)),
     taskStartBlockedCopy: finalCheckExpectedReady || taskText.includes(text.forbiddenStart),
     taskStartButtonDisabled: finalCheckExpectedReady || taskStartDisabled,
+    realModeReleasePlanVisible: taskText.includes(text.realModeReleasePlanTitle)
+      && taskText.includes(text.claimOnlyUnreleased)
+      && taskText.includes(text.batchSaveUnreleased)
+      && taskText.includes(text.cannotReuseSingleSave)
+      && taskText.includes(text.batchSizeLimit)
+      && taskText.includes(text.rollbackHandoff)
+      && taskText.includes(text.batchSaveNotRunner)
+      && taskText.includes(text.controlledSingleSaveOnly),
     desktopNoHorizontalOverflow: desktopReflow === true && desktopOverflow.ok === true,
     mobileLoaded: mobileInitialText.includes(text.hero) || mobileInitialText.includes(text.appName),
     mobileNavWorked: clickedMobileTasks && mobileTaskText.includes('single_save'),

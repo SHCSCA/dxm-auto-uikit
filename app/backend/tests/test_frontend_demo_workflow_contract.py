@@ -590,6 +590,39 @@ def test_frontend_blocks_unreleased_real_modes_before_l3_manual_approval():
     assert "SAVE_ONLY" in no_old_action_copy_section
 
 
+def test_task_center_surfaces_real_mode_release_readiness_without_releasing_modes():
+    workspace_source = WORKSPACE_TS.read_text(encoding="utf-8")
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    qa_source = QA_BROWSER_CHECK.read_text(encoding="utf-8")
+    task_center_section = workbench_source[workbench_source.index("export function TaskCenter"):workbench_source.index("export function ExecutionConsole")]
+
+    assert "real_mode_release_plan?: RealModeReleasePlan" in workspace_source
+    assert "workspace?.real_mode_release_plan" in workspace_source
+    assert "buildRealModeReleasePlan" in workspace_source
+    assert "normalizeRealModeReleasePlan" in workspace_source
+    assert "normalizeReadinessChecklistItem" in workspace_source
+    assert "readiness_checklist" in workspace_source
+    assert "RealModeReleasePlanPanel" in task_center_section
+    assert "claim_only / batch_save 放行准备" in workbench_source
+    assert "claim_only 当前未发布" in workbench_source
+    assert "batch_save 当前未发布" in workbench_source
+    assert "不能复用 single_save 证据" in workbench_source
+    assert "批量大小上限" in workbench_source
+    assert "回滚/人工接管" in workbench_source
+    assert "batch_save 不进入 runner" in workbench_source
+    assert "仅受控 single_save" in workbench_source
+    assert "humanReadinessCheckLabel" in workbench_source
+    assert "humanReleaseBlocker" in workbench_source
+    assert "独立 L2/L3 证据链" in workbench_source
+    assert "目标草稿领取归属证明" in workbench_source
+    assert "逐商品保存结果与 published=false" in workbench_source
+    assert "RELEASED_REAL_DXM_MUTATION_MODES = new Set(['single_save'])" in (REPO_ROOT / "app" / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+    assert "real-mode-release-panel" in styles_source
+    assert "real-mode-release-panel__grid" in styles_source
+    assert "realModeReleasePlanVisible" in qa_source
+
+
 def test_frontend_does_not_expose_developer_fallback_copy():
     workspace_source = WORKSPACE_TS.read_text(encoding="utf-8")
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")

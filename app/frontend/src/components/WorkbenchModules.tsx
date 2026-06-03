@@ -1137,6 +1137,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
   const selectedStore = workspace.stores.find((store) => String(store.id) === draftStoreId)
   const draftProductIdSet = new Set(draftProductIds)
   const selectedDraftProducts = workspace.products.filter((product) => draftProductIdSet.has(product.id))
+  const unreleasedReleaseItems = workspace.realModeReleasePlan.modes.filter((item) => item.mode === 'claim_only' || item.mode === 'batch_save')
   const canCreateRealTask = Boolean(selectedStore && selectedDraftProducts.length > 0 && !busy)
   const startDisabled = busy || !selectedTask || selectedTaskIsUnreleasedRealMode || configBlocksStart || l2BlocksStart || l3BlocksStart
   const startLabel = !selectedTask
@@ -1260,6 +1261,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
             <span className="toolbar-note">{selectedDraftProducts.length ? `已选择 ${selectedDraftProducts.length} 个商品` : '先选择商品'}</span>
           </div>
         </div>
+        <RealModeReleasePlanPanel items={unreleasedReleaseItems} />
         <div className="toolbar task-start-strip" aria-label="当前任务操作">
           {demoEnabled && (
             <>
@@ -2531,6 +2533,63 @@ function SourcePackageCheckRow({ finalCheck }: { finalCheck: FinalDeliveryCheckS
 
 function shortHash(value?: string | null) {
   return value ? value.slice(0, 12) : '未记录'
+}
+
+function RealModeReleasePlanPanel({ items }: { items: DeliveryWorkspace['realModeReleasePlan']['modes'] }) {
+  if (!items.length) return null
+  return (
+    <div className="real-mode-release-panel" aria-label="未发布真实模式放行准备清单">
+      <div className="real-mode-release-panel__head">
+        <div>
+          <strong>claim_only / batch_save 放行准备</strong>
+          <span>claim_only 当前未发布；batch_save 当前未发布；不能复用 single_save 证据。</span>
+        </div>
+        <span className="guard-chip guard-chip--danger">仅受控 single_save</span>
+      </div>
+      <div className="real-mode-release-panel__grid">
+        {items.map((item) => (
+          <article key={item.mode} className="real-mode-release-item" data-mode={item.mode} data-status={item.status}>
+            <div className="real-mode-release-item__title">
+              <strong>{item.label || `${item.mode} 当前未发布`}</strong>
+              <span>{item.allowed ? '可启动' : '未发布/阻断'}</span>
+            </div>
+            <ul>
+              {(item.readiness_checklist ?? []).slice(0, 4).map((check) => (
+                <li key={check.id}>
+                  <span>{check.status === 'passed' ? 'OK' : '缺口'}</span>
+                  <p>{humanReadinessCheckLabel(check.id, check.label)}</p>
+                </li>
+              ))}
+            </ul>
+            <small>{humanReleaseBlocker(item.blockers[0])}</small>
+          </article>
+        ))}
+      </div>
+      <p>批量大小上限、逐商品未发布证明、部分失败报告、回滚/人工接管全部完成前，batch_save 不进入 runner。</p>
+    </div>
+  )
+}
+
+function humanReadinessCheckLabel(id: string, fallback: string) {
+  return ({
+    dedicated_l2_l3: '独立 L2/L3 证据链',
+    claim_ownership_proof: '目标草稿领取归属证明',
+    no_editor_or_save: '不打开编辑页、不触发保存请求证明',
+    rollback_release: '归属释放或人工回滚路径',
+    batch_size_limit: '批量大小上限',
+    per_job_save_and_unpublished: '逐商品保存结果与 published=false',
+    partial_failure_rollback: '部分失败报告与回滚/人工接管',
+  } as Record<string, string>)[id] ?? fallback
+}
+
+function humanReleaseBlocker(value?: string) {
+  if (!value) return '需要独立验收后放行'
+  if (value.includes('cannot reuse single_save')) return '不能复用 single_save 证据'
+  if (value.includes('claim marker')) return '领取标记写入语义需独立审计'
+  if (value.includes('rollback')) return '回滚/人工接管流程未验收'
+  if (value.includes('batch failure')) return '批量失败隔离与回滚未验收'
+  if (value.includes('unattended')) return '无人值守执行仍未开放'
+  return value
 }
 
 function FinalCheckFreshnessRow({ finalCheck }: { finalCheck: FinalDeliveryCheckSummary | null }) {

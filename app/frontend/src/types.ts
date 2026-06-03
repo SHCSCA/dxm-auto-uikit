@@ -306,6 +306,32 @@ export type L2ProbePlan = {
   acceptanceCriteria: string[]
   safetyNotes: string[]
 }
+export type RealModeReleaseItem = {
+  mode: 'single_save' | 'claim_only' | 'batch_save' | string
+  label: string
+  status: 'released_controlled' | 'blocked_unreleased' | string
+  allowed: boolean
+  release_scope: string
+  required_evidence: string[]
+  required_controls: string[]
+  blockers: string[]
+  readiness_checklist?: Array<{
+    id: string
+    label: string
+    required: boolean
+    status: 'passed' | 'missing' | 'blocked' | string
+    evidence_source: string
+    blocker?: string | null
+    detail: string
+  }>
+}
+export type RealModeReleasePlan = {
+  schema: string
+  scope: string
+  publish_allowed: boolean
+  batch_unattended_publish_allowed: boolean
+  modes: RealModeReleaseItem[]
+}
 
 export type DeliveryWorkspace = {
   source: 'api' | 'fallback' | 'mock'
@@ -326,6 +352,7 @@ export type DeliveryWorkspace = {
   evidenceGrade: { grade: EvidenceGrade; [key: string]: unknown } | null
   regressionGates: RegressionGate[]
   l2ProbePlan: L2ProbePlan
+  realModeReleasePlan: RealModeReleasePlan
   dxmReferenceTemplates: DxmReferenceTemplateSection[]
   acceptanceGaps: AcceptanceGap[]
   safety: {
