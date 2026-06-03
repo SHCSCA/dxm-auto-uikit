@@ -1675,6 +1675,77 @@ tr:last-child td {
   background: #fffaf0;
 }
 
+.next-required-fields {
+  display: grid;
+  grid-template-columns: minmax(180px, 280px) minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.next-required-fields.is-warn {
+  border-color: #f0c15a;
+  background: #fffaf0;
+}
+
+.next-required-fields.is-ok {
+  border-color: #b9d7c8;
+  background: #f8fcfa;
+}
+
+.next-required-fields strong,
+.next-required-fields span,
+.next-required-fields b,
+.next-required-fields code,
+.next-required-fields small {
+  min-width: 0;
+}
+
+.next-required-fields > div:first-child strong {
+  display: block;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.next-required-fields > div:first-child span {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.next-required-fields__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.next-required-fields__list > span {
+  max-width: 260px;
+  display: grid;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.next-required-fields__list b {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.next-required-fields__list code,
+.next-required-fields__list small {
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
 .effective-value-preview {
   min-height: 0;
 }
@@ -2676,6 +2747,32 @@ tr:last-child td {
   display: block;
 }
 
+.agent-browser__evidence-note {
+  position: absolute;
+  left: 14px;
+  top: 14px;
+  z-index: 2;
+  max-width: min(420px, calc(100% - 32px));
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.14);
+}
+
+.agent-browser__evidence-note strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.agent-browser__evidence-note span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .browser-empty-state {
   min-height: 520px;
   display: grid;
@@ -3347,6 +3444,7 @@ tr:last-child td {
   .safety-bar,
   .hero-panel,
   .config-focus-card__body,
+  .next-required-fields,
   .console-focus-panel__main,
   .console-focus-panel__facts,
   .guide-hero__body,

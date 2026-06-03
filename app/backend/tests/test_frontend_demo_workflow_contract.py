@@ -49,6 +49,9 @@ def test_config_center_prioritizes_missing_sections_and_sources():
     config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
 
     assert "ConfigReadinessPanel" in source
+    assert "NextRequiredConfigFields" in config_section
+    assert "下一步必填字段" in source
+    assert "只显示当前最需要处理的字段" in source
     assert "DXM 编辑页配置" in config_section
     assert "默认只展开待补分区" in config_section
     assert "config-focus-card" in config_section
@@ -202,7 +205,8 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "summary>辅助面板：运行维护 / 自动操作轨迹</summary>" in console_section
     assert "summary>执行步骤明细</summary>" in console_section
     assert "summary>任务执行日志</summary>" in console_section
-    assert "打开真实浏览器" in workbench_source
+    assert "登录/人工处理真实浏览器" in workbench_source
+    assert "启动执行观察" in workbench_source
     assert "不会发布" in workbench_source
     assert "console-focus-panel" in styles_source
     assert ".console-advanced" in styles_source
@@ -249,6 +253,8 @@ def test_agent_console_uses_live_frame_and_network_event_contract():
     assert "等待网络响应" in console_section
     assert "getRecentNetworkEvents(agentConsole)" in console_section
     assert "自动刷新画面" in workbench_source
+    assert "真实窗口是主要操控界面" in console_section
+    assert "截图只作为证据缩略图" in console_section
     assert "刷新当前画面" in workbench_source
 
 
@@ -256,10 +262,15 @@ def test_execution_console_exposes_manual_takeover_for_real_browser():
     app_source = APP_TSX.read_text(encoding="utf-8")
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     types_source = (REPO_ROOT / "app" / "frontend" / "src" / "types.ts").read_text(encoding="utf-8")
+    console_section = workbench_source[workbench_source.index("export function ExecutionConsole"):workbench_source.index("function RuntimeControlPanel")]
 
     assert "async function requestAgentConsoleTakeover" in app_source
     assert "/api/agent-console/takeover" in app_source
     assert "/api/agent-console/release" in app_source
+    assert "onOpenDxmLogin={openDxmLogin}" in app_source
+    assert "onOpenDxmLogin" in console_section
+    assert "登录/人工处理真实浏览器" in workbench_source
+    assert "登录和人工处理不要求 L2" in workbench_source
     assert "onRequestAgentConsoleTakeover={requestAgentConsoleTakeover}" in app_source
     assert "onReleaseAgentConsoleTakeover={releaseAgentConsoleTakeover}" in app_source
     assert "manual_takeover?: boolean" in types_source

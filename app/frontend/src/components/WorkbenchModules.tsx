@@ -101,6 +101,7 @@ type ExecutionConsoleProps = CommonProps & {
   onRuntimeLogLevelChange: (level: 'all' | 'info' | 'warning' | 'error') => void
   onRuntimeLogQueryChange: (query: string) => void
   onStartAgentConsole: () => void
+  onOpenDxmLogin: () => void
   onStopAgentConsole: () => void
   onSnapshotAgentConsole: () => void
   onRequestAgentConsoleTakeover: () => void
@@ -671,6 +672,50 @@ function ConfigReadinessPanel({
   )
 }
 
+function NextRequiredConfigFields({
+  section,
+  preview,
+  configOk,
+  loading,
+}: {
+  section: EditableConfigSection
+  preview: ConfigPreviewGroup | undefined
+  configOk: boolean
+  loading: boolean
+}) {
+  const missingFields = (preview?.fields ?? [])
+    .filter((field) => field.missing)
+    .slice(0, 5)
+  const fallbackFields = section.fields.slice(0, 4).map((field) => ({
+    label: field.label,
+    path: field.previewPath ?? field.name,
+    source: '等待预检',
+  }))
+  const fields = missingFields.length
+    ? missingFields.map((field) => ({ label: field.label, path: field.path, source: field.source }))
+    : fallbackFields
+
+  return (
+    <div className={`next-required-fields ${configOk ? 'is-ok' : 'is-warn'}`} aria-label="下一步必填字段">
+      <div>
+        <strong>{configOk ? '当前任务配置已就绪' : `下一步必填字段：${section.title}`}</strong>
+        <span>{configOk ? '需要微调时再展开下方分区。' : '只显示当前最需要处理的字段；完整字段放在下方分区。'}</span>
+      </div>
+      <div className="next-required-fields__list">
+        {loading ? (
+          <span>正在读取预检结果...</span>
+        ) : fields.map((field) => (
+          <span key={`${field.path}:${field.label}`}>
+            <b>{field.label}</b>
+            <code>{field.path}</code>
+            {!configOk && <small>{field.source}</small>}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function sourceBadgeText(source: string) {
   if (source.startsWith('任务：')) return '任务覆盖'
   if (source.startsWith('商品：')) return '商品 payload'
@@ -868,6 +913,12 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
             detail="当前未从接口读取到 stores/products，不展示 Dang Kang 或立牌类谷子默认值以免误判为已配置。"
           />
         )}
+        <NextRequiredConfigFields
+          section={nextConfigSection}
+          preview={nextConfigPreview}
+          configOk={Boolean(configPreview?.ok)}
+          loading={configPreviewLoading}
+        />
         <div className="config-coverage-strip" aria-label="店小秘编辑页分区" data-field-coverage={configCoverageFieldIds.join('|')}>
           {configCoverageLabels.map((label) => <span key={label}>{label}</span>)}
         </div>
@@ -1394,6 +1445,7 @@ export function ExecutionConsole({
   onShowTasks,
   onShowEvidence,
   onShowReports,
+  onOpenDxmLogin,
 }: ExecutionConsoleProps) {
   const taskLogs = selectedTask ? workspace.logs.filter((item) => item.task_id === selectedTask.id) : workspace.logs
   const steps = workspace.deliverySteps.length
@@ -1448,6 +1500,7 @@ export function ExecutionConsole({
           diagnosticBlocked={diagnosticBlocked}
           diagnosticBlockReason={diagnosticBlockReason}
           onStartAgentConsole={onStartAgentConsole}
+          onOpenDxmLogin={onOpenDxmLogin}
           onStopAgentConsole={onStopAgentConsole}
           onSnapshotAgentConsole={onSnapshotAgentConsole}
           onRequestAgentConsoleTakeover={onRequestAgentConsoleTakeover}
@@ -1794,12 +1847,18 @@ function AgentBrowserFrame({
       </div>
       <div className="agent-browser__viewport">
         {browserFrame.screenshotUrl ? (
-          <img src={browserFrame.screenshotUrl} alt="当前真实浏览器截图" />
+          <>
+            <div className="agent-browser__evidence-note">
+              <strong>真实窗口是主要操控界面</strong>
+              <span>截图只作为证据缩略图；需要操作时点击“人工接管真实浏览器”。</span>
+            </div>
+            <img src={browserFrame.screenshotUrl} alt="当前真实浏览器证据缩略图" />
+          </>
         ) : agentConsole?.active || agentConsole?.updated_at ? (
           <div className="browser-empty-state">
-            <strong>等待真实浏览器画面</strong>
-            <span>浏览器会话状态已记录，自动刷新画面还在等待首帧。</span>
-            <small>这里只展示真实店小秘截图或 DOM/网络证据，不展示本地仿真页面。</small>
+            <strong>真实窗口是主要操控界面</strong>
+            <span>浏览器会话状态已记录，自动刷新画面还在等待首帧；截图只作为证据缩略图。</span>
+            <small>需要人工介入时，用“人工接管真实浏览器”切到真实 dianxiaomi.com 窗口。</small>
           </div>
         ) : (
           <div className="browser-empty-state">
@@ -1876,6 +1935,7 @@ function AgentConsoleControls({
   diagnosticBlocked,
   diagnosticBlockReason,
   onStartAgentConsole,
+  onOpenDxmLogin,
   onStopAgentConsole,
   onSnapshotAgentConsole,
   onRequestAgentConsoleTakeover,
@@ -1890,6 +1950,7 @@ function AgentConsoleControls({
   diagnosticBlocked: boolean
   diagnosticBlockReason: string
   onStartAgentConsole: () => void
+  onOpenDxmLogin: () => void
   onStopAgentConsole: () => void
   onSnapshotAgentConsole: () => void
   onRequestAgentConsoleTakeover: () => void
@@ -1924,11 +1985,20 @@ function AgentConsoleControls({
         <button
           className="button button--secondary"
           type="button"
+          onClick={onOpenDxmLogin}
+          disabled={busy}
+          title="登录和人工处理不要求 L2；只用于打开真实店小秘窗口，不启动保存。"
+        >
+          登录/人工处理真实浏览器
+        </button>
+        <button
+          className="button button--quiet"
+          type="button"
           onClick={onStartAgentConsole}
           disabled={busy || !selectedTask || diagnosticBlocked}
-          title={diagnosticBlocked ? diagnosticBlockReason : realSaveBlocked ? realSaveBlockReason : '打开真实店小秘浏览器；保存前仍需人工确认'}
+          title={diagnosticBlocked ? diagnosticBlockReason : realSaveBlocked ? realSaveBlockReason : '打开执行观察浏览器；保存前仍需人工确认'}
         >
-          {diagnosticBlocked ? '先完成只读检查' : '打开真实浏览器'}
+          {diagnosticBlocked ? '只读通过后执行' : '启动执行观察'}
         </button>
         <button className="button button--quiet" type="button" onClick={onSnapshotAgentConsole} disabled={busy || !active}>
           刷新当前画面

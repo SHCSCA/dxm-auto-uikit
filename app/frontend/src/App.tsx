@@ -629,6 +629,7 @@ export default function App() {
             onRuntimeLogLevelChange={setRuntimeLogLevel}
             onRuntimeLogQueryChange={setRuntimeLogQuery}
             onStartAgentConsole={startAgentConsole}
+            onOpenDxmLogin={openDxmLogin}
             onStopAgentConsole={stopAgentConsole}
             onSnapshotAgentConsole={snapshotAgentConsole}
             onRequestAgentConsoleTakeover={requestAgentConsoleTakeover}

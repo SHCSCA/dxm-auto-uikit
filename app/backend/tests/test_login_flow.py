@@ -859,6 +859,21 @@ def test_login_start_returns_waiting_captcha(monkeypatch):
     assert data['requires_user_action'] is True
 
 
+def test_login_start_is_not_blocked_by_l2_gate(monkeypatch):
+    import src.main as main
+
+    flow = DummyLoginFlow()
+    monkeypatch.setattr('src.main.login_flow', flow)
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "failed"})
+
+    client = TestClient(app)
+    response = client.post('/api/dxm/login/start', json={'username': 'demo-user', 'password': 'demo-pass'})
+
+    assert response.status_code == 200
+    assert flow.started_with == ('demo-user', 'demo-pass')
+    assert response.json()['requires_user_action'] is True
+
+
 def test_login_continue_returns_success_state(monkeypatch):
     flow = DummyLoginFlow()
     monkeypatch.setattr('src.main.login_flow', flow)
