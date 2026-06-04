@@ -119,6 +119,11 @@ def test_config_center_can_save_task_level_overrides_separately_from_templates()
     assert "buildEditableConfigDraft(workspace.templates, configPreview)" in config_section
     assert "scope: 'template' | 'task'" in config_section
     assert "`/api/tasks/${selectedTask.id}/config-overrides`" in config_section
+    assert "findSelectedTaskProduct(workspace.products, selectedTask)" in config_section
+    assert "buildCurrentTemplateBinding(workspace, selectedTask, product)" in config_section
+    assert "payload: withTemplateBinding(payload, currentTemplateBinding)" in config_section
+    assert "findScopedTemplate(workspace.templates, section.templateType, currentTemplateBinding)" in config_section
+    assert "当前模板范围" in config_section
     assert "仅本次任务使用" in config_section
     assert "保存为店铺模板" in config_section
     assert "当前任务会优先使用这些值" in config_section

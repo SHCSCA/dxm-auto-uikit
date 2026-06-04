@@ -656,6 +656,73 @@ function editableConfigDraftValue(value: unknown, field: EditableConfigField) {
   return String(value)
 }
 
+type TemplateBinding = {
+  store_name?: string
+  category_name?: string
+  platform?: string
+}
+
+function textValue(value: unknown) {
+  return typeof value === 'string' ? value.trim() : value === undefined || value === null ? '' : String(value).trim()
+}
+
+function findSelectedTaskProduct(products: Product[], selectedTask: Task | null) {
+  const productIds = Array.isArray(selectedTask?.payload?.product_ids) ? selectedTask.payload.product_ids : []
+  const firstProductId = productIds.length ? Number(productIds[0]) : null
+  if (firstProductId !== null && Number.isFinite(firstProductId)) {
+    const matched = products.find((product) => product.id === firstProductId)
+    if (matched) return matched
+  }
+  return products[0] ?? null
+}
+
+function buildCurrentTemplateBinding(workspace: DeliveryWorkspace, selectedTask: Task | null, product: Product | null): TemplateBinding {
+  const storeName = textValue(selectedTask?.payload?.store_name) || textValue(workspace.stores[0]?.name)
+  const store = workspace.stores.find((item) => item.name === storeName) ?? workspace.stores[0]
+  const categoryName = textValue(selectedTask?.payload?.category_name) || textValue(product?.category_name)
+  const platform = textValue(store?.platform) || 'AliExpress'
+  return {
+    ...(storeName ? { store_name: storeName } : {}),
+    ...(categoryName ? { category_name: categoryName } : {}),
+    ...(platform ? { platform } : {}),
+  }
+}
+
+function templateBindingScopeLabel(binding: TemplateBinding) {
+  const store = binding.store_name || '全店铺'
+  const category = binding.category_name || '全类目'
+  const platform = binding.platform || '全平台'
+  return `店铺：${store} / 类目：${category} / 平台：${platform}`
+}
+
+function templateBindingValueMatches(expected: unknown, actual: string | undefined) {
+  if (expected === undefined || expected === null || expected === '') return true
+  const values = Array.isArray(expected) ? expected : [expected]
+  return values.map((item) => textValue(item).toLowerCase()).includes(textValue(actual).toLowerCase())
+}
+
+function templateHasExactBinding(template: Template, binding: TemplateBinding) {
+  const rawBinding = template.payload?.binding
+  if (!rawBinding || typeof rawBinding !== 'object' || Array.isArray(rawBinding)) return false
+  const record = rawBinding as Record<string, unknown>
+  return (
+    templateBindingValueMatches(record.store_name ?? record.store, binding.store_name)
+    && templateBindingValueMatches(record.category_name ?? record.category, binding.category_name)
+    && templateBindingValueMatches(record.platform, binding.platform)
+  )
+}
+
+function findScopedTemplate(templates: Template[], templateType: string, binding: TemplateBinding) {
+  return templates.find((template) => template.template_type === templateType && templateHasExactBinding(template, binding))
+}
+
+function withTemplateBinding(payload: Record<string, unknown>, binding: TemplateBinding) {
+  const cleanBinding = Object.fromEntries(
+    Object.entries(binding).filter(([, value]) => textValue(value)),
+  )
+  return Object.keys(cleanBinding).length ? { ...payload, binding: cleanBinding } : payload
+}
+
 function buildEditableConfigDraft(templates: Template[], configPreview: ConfigPreview | null) {
   const draft = {} as Record<ConfigSectionCode, Record<string, string>>
   editableConfigSections.forEach((section) => {
@@ -830,7 +897,9 @@ function fieldUsageLabel(usage?: EditableConfigField['usage']) {
 }
 
 export function ConfigCenter({ workspace, selectedTask, configPreview, configPreviewLoading, onConfigSaved }: ConfigCenterProps) {
-  const product = workspace.products[0]
+  const product = findSelectedTaskProduct(workspace.products, selectedTask)
+  const currentTemplateBinding = buildCurrentTemplateBinding(workspace, selectedTask, product)
+  const currentTemplateScopeLabel = templateBindingScopeLabel(currentTemplateBinding)
   const enabledTemplates = workspace.templates.filter((item) => item.is_enabled)
   const templateResults = workspace.templateResolution?.dxm_reference_template_results ?? {}
   const hasStores = workspace.stores.length > 0
@@ -902,12 +971,12 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
         await onConfigSaved()
         return
       }
-      const existing = workspace.templates.find((template) => template.template_type === section.templateType)
+      const existing = findScopedTemplate(workspace.templates, section.templateType, currentTemplateBinding)
       const body = {
         template_type: section.templateType,
         template_name: section.title,
-        binding_scope: workspace.stores[0]?.name ?? '全局默认',
-        payload,
+        binding_scope: currentTemplateScopeLabel,
+        payload: withTemplateBinding(payload, currentTemplateBinding),
         is_enabled: true,
       }
       if (existing) {
@@ -915,7 +984,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
       } else {
         await postJson<Template>('/api/templates', body)
       }
-      setConfigMessage(`${section.title} 已保存为店铺/类目模板，后续任务会按该模板取值。`)
+      setConfigMessage(`${section.title} 已保存为当前店铺/类目模板，后续匹配 ${currentTemplateScopeLabel} 的任务会按该模板取值。`)
       await onConfigSaved()
     } catch (error) {
       setConfigMessage(error instanceof Error ? error.message : `${section.title} 保存失败`)
@@ -942,6 +1011,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
               {configPreview?.ok ? '可用于当前任务' : `${incompleteGroups.length || sectionsNeedingAttention.length} 个分区待补`}
             </span>
             <small>{selectedTask ? `当前任务 #${selectedTask.id}` : '先到任务中心选择任务后，可保存为本次任务覆盖。'}</small>
+            <small>当前模板范围：{currentTemplateScopeLabel}</small>
           </div>
         </div>
         {(!hasStores || !hasProducts) && (
