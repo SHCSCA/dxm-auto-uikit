@@ -580,7 +580,7 @@ async function screenshot(name) {
 }
 const readyModeDemoTask = reportOnlyFinal || !qaExpectedReady ? null : await ensureDryRunDemoTask();
 const realMutationTaskForBlockedChecks = reportOnlyFinal || !shouldRunBlockedMutationChecks ? null : await ensureRealMutationTask();
-const unreleasedRealModeTask = reportOnlyFinal ? null : await ensureUnreleasedRealModeTask();
+const unreleasedRealModeTask = reportOnlyFinal || qaExpectedReady ? null : await ensureUnreleasedRealModeTask();
 await send('Page.enable');
 await send('Runtime.enable');
 await send('Network.enable');
@@ -1140,11 +1140,13 @@ const result = {
     reportSourcePackageNotRequiredCopy: !finalCheckRequiresNotRequiredCopy || (reportText.includes(text.sourcePackageNotRequired) && reportText.includes(text.sourcePackageNotRequiredCopy)),
     demoBatchHiddenByDefault: demoBatchHiddenByDefault,
     unreleasedRealModeTaskSelected: unreleasedRealModeTaskSelected,
-    unreleasedRealModeCopy: taskText.includes(text.unreleasedRealModeButtonDisabled)
-      && taskText.includes('L3 single_save')
-      && taskText.includes('\u6279\u91cf\u4fdd\u5b58\u672a\u653e\u884c')
-      && taskText.includes('\u53d1\u5e03\u52a8\u4f5c\u672a\u5f00\u653e'),
-    unreleasedRealModeButtonDisabled: unreleasedRealModeStartButtonDisabled,
+    unreleasedRealModeCopy: qaExpectedReady
+      ? taskText.includes(text.claimOnlyUnreleased) && taskText.includes(text.batchSaveUnreleased)
+      : taskText.includes(text.unreleasedRealModeButtonDisabled)
+        && taskText.includes('L3 single_save')
+        && taskText.includes('\u6279\u91cf\u4fdd\u5b58\u672a\u653e\u884c')
+        && taskText.includes('\u53d1\u5e03\u52a8\u4f5c\u672a\u5f00\u653e'),
+    unreleasedRealModeButtonDisabled: qaExpectedReady || unreleasedRealModeStartButtonDisabled,
     noDeveloperFallbackCopy: text.fallbackCopyPatterns.every(pattern => !userFacingText.includes(pattern)),
     localStartPostBlocked: !shouldRunBlockedMutationChecks || blockedStartStatus === 403,
     localAgentConsolePostBlocked: !shouldRunBlockedMutationChecks || blockedAgentConsoleStatus === 403,

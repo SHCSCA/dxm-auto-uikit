@@ -590,7 +590,7 @@ def test_frontend_blocks_unreleased_real_modes_before_l3_manual_approval():
     assert "unreleasedRealModeCopy" in qa_source
     assert "unreleasedRealModeButtonDisabled" in qa_source
     assert "async function ensureUnreleasedRealModeTask()" in qa_source
-    assert "const unreleasedRealModeTask = reportOnlyFinal ? null : await ensureUnreleasedRealModeTask();" in qa_source
+    assert "const unreleasedRealModeTask = reportOnlyFinal || qaExpectedReady ? null : await ensureUnreleasedRealModeTask();" in qa_source
     assert "mode: 'claim_only'" in qa_source
     assert "QA unreleased claim_only task" in qa_source
     assert "async function clickTaskByName(name)" in qa_source
@@ -598,6 +598,7 @@ def test_frontend_blocks_unreleased_real_modes_before_l3_manual_approval():
     assert "await clickText(unreleasedRealModeTask.name)" not in qa_source
     assert "unreleasedRealModeTaskSelected:" in qa_source
     assert "unreleasedRealModeStartButtonDisabled" in qa_source
+    assert "qaExpectedReady || unreleasedRealModeStartButtonDisabled" in qa_source
     assert "taskStartDisabled && taskText.includes(text.unreleasedRealModeButtonDisabled)" in qa_source
     assert "\\u0063\\u006c\\u0061\\u0069\\u006d\\u005f\\u006f\\u006e\\u006c\\u0079/\\u0062\\u0061\\u0074\\u0063\\u0068\\u005f\\u0073\\u0061\\u0076\\u0065 \\u5f53\\u524d\\u672a\\u53d1\\u5e03" in qa_source
     assert "\\u672a\\u53d1\\u5e03\\uff0c\\u7981\\u6b62\\u542f\\u52a8" in qa_source
