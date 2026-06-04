@@ -1649,15 +1649,8 @@ export function ExecutionConsole({
         />
       </div>
 
-      <div className="module-card console-log-card console-log-card--live">
-        <ModuleHead title="最近日志" meta={`${runtimeLogCount} 条，每 1.5 秒刷新`} />
-        <RuntimeLogPreview logs={runtimeLogs} source={runtimeLogSource} error={runtimeLogError} />
-        <small>完整日志、筛选和搜索已收起在下方，需要排查时再展开。</small>
-      </div>
-
-      <details className="module-card span-3 disclosure-card console-advanced console-log-drawer">
-        <summary>完整日志中心</summary>
-        <ModuleHead title="实时日志中心" meta={`${runtimeLogCount} 条，每 1.5 秒刷新`} />
+      <div className="module-card span-1 console-log-card console-log-card--live">
+        <ModuleHead title="实时日志" meta={`${runtimeLogCount} 条，每 1.5 秒刷新`} />
         <RuntimeLogPanel
           logs={runtimeLogs}
           source={runtimeLogSource}
@@ -1668,7 +1661,7 @@ export function ExecutionConsole({
           onLevelChange={onRuntimeLogLevelChange}
           onQueryChange={onRuntimeLogQueryChange}
         />
-      </details>
+      </div>
 
       <details className="module-card span-3 disclosure-card console-advanced console-support-drawer">
         <summary>辅助面板：运行维护 / 自动操作轨迹</summary>
@@ -1903,7 +1896,9 @@ function ConsoleFocusPanel({
     frontend: '前端',
     launcher: '启动器',
     npm: '依赖安装',
-  } as Record<typeof runtimeLogSource, string>)[runtimeLogSource]
+    task: '任务',
+    agent: '浏览器 Agent',
+  } as Record<RuntimeLogSource, string>)[runtimeLogSource]
   return (
     <div className="module-card span-3 console-focus-panel">
       <div className="console-focus-panel__main">

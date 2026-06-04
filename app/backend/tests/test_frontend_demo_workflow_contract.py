@@ -233,12 +233,12 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "ConsoleFocusPanel" in console_section
     assert "title=\"真实浏览器\"" in console_section
     assert "className=\"module-card span-2 agent-console-stage\"" in console_section
-    assert "className=\"module-card console-log-card console-log-card--live\"" in console_section
-    assert "RuntimeLogPreview" in console_section
-    assert "最近日志" in console_section
-    assert "summary>完整日志中心</summary>" in console_section
-    assert console_section.index("RuntimeLogPreview") < console_section.index("summary>完整日志中心</summary>")
-    assert console_section.index("RuntimeLogPanel") > console_section.index("summary>完整日志中心</summary>")
+    assert "className=\"module-card span-1 console-log-card console-log-card--live\"" in console_section
+    assert "title=\"实时日志\"" in console_section
+    assert "RuntimeLogPanel" in console_section
+    assert "RuntimeLogPreview" not in console_section
+    assert "summary>完整日志中心</summary>" not in console_section
+    assert "完整日志、筛选和搜索已收起在下方" not in console_section
     assert "summary>辅助面板：运行维护 / 自动操作轨迹</summary>" in console_section
     assert "summary>执行步骤明细</summary>" in console_section
     assert "summary>任务执行日志</summary>" in console_section
@@ -257,9 +257,11 @@ def test_execution_console_log_center_autofollows_and_surfaces_sources():
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
     log_panel_section = workbench_source[workbench_source.index("function RuntimeLogPanel"):workbench_source.index("function RuntimeLogLine")]
+    focus_panel_section = workbench_source[workbench_source.index("function ConsoleFocusPanel"):workbench_source.index("function AgentBrowserFrame")]
 
     assert "window.setInterval" in app_source
     assert "1500" in app_source
+    assert "useState<RuntimeLogSource>('launcher')" in app_source
     assert "实时日志中心" in workbench_source
     assert "每 1.5 秒刷新" in workbench_source
     assert "自动跟随最新日志" in log_panel_section
@@ -271,6 +273,9 @@ def test_execution_console_log_center_autofollows_and_surfaces_sources():
     assert "启动器" in log_panel_section
     assert "依赖安装" in log_panel_section
     assert "浏览器 Agent" in log_panel_section
+    assert "launcher: '启动器'" in focus_panel_section
+    assert "task: '任务'" in focus_panel_section
+    assert "agent: '浏览器 Agent'" in focus_panel_section
     assert "打开 DXM" in workbench_source
     assert "网络响应" in workbench_source
     assert ".console-log-card--live" in styles_source
