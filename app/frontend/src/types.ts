@@ -181,11 +181,12 @@ export type AgentConsoleActionEvent = {
   save_result?: Record<string, unknown>
   timestamp?: string
 }
-export type AgentConsoleControlAction = 'click' | 'type' | 'press' | 'scroll' | 'goto'
+export type AgentConsoleControlAction = 'click' | 'selector_click' | 'selector_fill' | 'type' | 'press' | 'scroll' | 'goto'
 export type AgentConsoleControlCommand = {
   action: AgentConsoleControlAction
   x?: number
   y?: number
+  selector?: string
   text?: string
   key?: string
   url?: string

@@ -2236,6 +2236,7 @@ function BrowserControlPad({
 }) {
   const [text, setText] = useState('')
   const [key, setKey] = useState('Enter')
+  const [selector, setSelector] = useState('')
   const [url, setUrl] = useState(agentConsole?.current_url ?? agentConsole?.target_url ?? 'https://www.dianxiaomi.com/')
   const active = Boolean(agentConsole?.active && agentConsole?.browser_visible)
   const disabled = busy || !active || Boolean(agentConsole?.manual_takeover)
@@ -2297,6 +2298,34 @@ function BrowserControlPad({
           onClick={() => onControlAgentConsoleBrowser({ action: 'type', text })}
         >
           输入到焦点
+        </button>
+      </div>
+      <div className="browser-control-pad__row browser-control-pad__row--wide browser-control-pad__row--selector">
+        <label className="browser-control-pad__selector-field">
+          <span>选择器定位</span>
+          <input
+            value={selector}
+            onChange={(event) => setSelector(event.target.value)}
+            placeholder="例如 input[name='subject']"
+            aria-label="选择器定位"
+            disabled={busy}
+          />
+        </label>
+        <button
+          className="button button--quiet"
+          type="button"
+          disabled={disabled || !selector.trim()}
+          onClick={() => onControlAgentConsoleBrowser({ action: 'selector_click', selector: selector.trim() })}
+        >
+          按选择器点击
+        </button>
+        <button
+          className="button button--quiet"
+          type="button"
+          disabled={disabled || !selector.trim() || !text}
+          onClick={() => onControlAgentConsoleBrowser({ action: 'selector_fill', selector: selector.trim(), text })}
+        >
+          按选择器填写
         </button>
       </div>
       <div className="browser-control-pad__row">

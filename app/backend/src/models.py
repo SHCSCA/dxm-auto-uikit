@@ -96,6 +96,7 @@ class AgentConsoleControlRequest(BaseModel):
     action: str
     x: int | None = None
     y: int | None = None
+    selector: str | None = None
     text: str | None = None
     key: str | None = None
     url: str | None = None

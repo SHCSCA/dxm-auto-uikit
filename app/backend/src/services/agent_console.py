@@ -344,6 +344,15 @@ class AgentConsoleService:
             y = _required_int(command, "y")
             page.mouse.click(x, y)
             return {"action": action, "x": x, "y": y}
+        if action == "selector_click":
+            selector = _required_text(command, "selector", "selector is required for selector_click")
+            page.locator(selector).click(timeout=8000)
+            return {"action": action, "selector": selector}
+        if action == "selector_fill":
+            selector = _required_text(command, "selector", "selector is required for selector_fill")
+            text = _required_text(command, "text", "text is required for selector_fill")
+            page.locator(selector).fill(text, timeout=8000)
+            return {"action": action, "selector": selector, "text_length": len(text)}
         if action == "type":
             text = str(command.get("text") or "")
             if not text:
@@ -617,9 +626,18 @@ def _required_int(command: dict[str, Any], key: str) -> int:
     return int(value)
 
 
+def _required_text(command: dict[str, Any], key: str, message: str) -> str:
+    value = str(command.get(key) or "").strip()
+    if not value:
+        raise ValueError(message)
+    return value
+
+
 def _browser_control_label(action: str, command: dict[str, Any]) -> str:
     labels = {
         "click": "页面内点击",
+        "selector_click": "选择器点击",
+        "selector_fill": "选择器填写",
         "type": "页面内输入",
         "press": "键盘按键",
         "scroll": "页面滚动",
@@ -631,6 +649,8 @@ def _browser_control_label(action: str, command: dict[str, Any]) -> str:
 def _browser_control_target(action: str, command: dict[str, Any]) -> str | None:
     if action == "click":
         return f"x={command.get('x')}, y={command.get('y')}"
+    if action in {"selector_click", "selector_fill"}:
+        return str(command.get("selector") or "")
     if action == "scroll":
         return f"delta_x={command.get('delta_x') or 0}, delta_y={command.get('delta_y') or 0}"
     if action == "goto":
@@ -639,7 +659,7 @@ def _browser_control_target(action: str, command: dict[str, Any]) -> str | None:
 
 
 def _browser_control_value(action: str, command: dict[str, Any]) -> str | None:
-    if action == "type":
+    if action in {"type", "selector_fill"}:
         text = str(command.get("text") or "")
         return f"{len(text)} chars"
     if action == "press":

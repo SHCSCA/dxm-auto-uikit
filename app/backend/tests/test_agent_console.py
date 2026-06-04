@@ -244,6 +244,32 @@ def test_agent_console_controls_live_browser_and_records_actions(tmp_path, monke
     assert status["last_frame_at"] is not None
 
 
+def test_agent_console_controls_live_browser_by_selector_and_records_actions(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    monkeypatch.setattr(agent_console_module, "SCREENSHOT_ROOT", tmp_path / "screenshots")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+    fake_page = _FakePage()
+
+    with service._lock:
+        service._page = fake_page
+        service._state["browser_visible"] = True
+
+    clicked = service.control_browser({"action": "selector_click", "selector": "[data-testid='title']"})
+    filled = service.control_browser({"action": "selector_fill", "selector": "[name='title']", "text": "DXM edited title"})
+
+    assert clicked["ok"] is True
+    assert filled["ok"] is True
+    assert fake_page.locator_calls == ["[data-testid='title']", "[name='title']"]
+    assert fake_page.locators["[data-testid='title']"].clicks == [8000]
+    assert fake_page.locators["[name='title']"].fills == [("DXM edited title", 8000)]
+    status = service.status()
+    assert status["action_events"][-1]["type"] == "browser_control"
+    assert status["action_events"][-1]["action"] == "selector_fill"
+    assert status["action_events"][-1]["target"] == "[name='title']"
+    assert status["action_events"][-1]["value"] == "16 chars"
+
+
 def test_agent_console_api_manual_takeover_lifecycle(tmp_path, monkeypatch):
     client, repo, service = _client_with_temp_repo_and_console(tmp_path, monkeypatch)
     task = _create_task(repo)
@@ -382,6 +408,8 @@ class _FakePage:
         self.mouse = _FakeMouse()
         self.keyboard = _FakeKeyboard()
         self.goto_calls = []
+        self.locator_calls = []
+        self.locators = {}
         self.screenshot_full_page = None
 
     def title(self):
@@ -401,6 +429,14 @@ class _FakePage:
 
     def wait_for_timeout(self, milliseconds: int):
         assert milliseconds >= 0
+
+    def locator(self, selector: str):
+        self.locator_calls.append(selector)
+        locator = self.locators.get(selector)
+        if locator is None:
+            locator = _FakeLocator()
+            self.locators[selector] = locator
+        return locator
 
 
 class _FakeMouse:
@@ -425,3 +461,15 @@ class _FakeKeyboard:
 
     def press(self, key: str):
         self.pressed.append(key)
+
+
+class _FakeLocator:
+    def __init__(self):
+        self.clicks = []
+        self.fills = []
+
+    def click(self, *, timeout: int):
+        self.clicks.append(timeout)
+
+    def fill(self, text: str, *, timeout: int):
+        self.fills.append((text, timeout))

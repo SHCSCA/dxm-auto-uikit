@@ -2556,6 +2556,23 @@ tr:last-child td {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
+.browser-control-pad__row--selector {
+  grid-template-columns: minmax(220px, 1fr) auto auto;
+}
+
+.browser-control-pad__selector-field {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.browser-control-pad__selector-field span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
 .browser-control-pad input,
 .browser-control-pad select {
   min-width: 0;
@@ -3751,6 +3768,11 @@ tr:last-child td {
     display: grid;
     grid-template-columns: 1fr;
     justify-content: stretch;
+  }
+
+  .browser-control-pad__row--wide,
+  .browser-control-pad__row--selector {
+    grid-template-columns: 1fr;
   }
 
   .agent-console-controls__field-grid {

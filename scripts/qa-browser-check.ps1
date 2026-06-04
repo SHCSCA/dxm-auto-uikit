@@ -610,6 +610,9 @@ const text = {
   browserControlPad: '\u9875\u9762\u5185\u64cd\u63a7',
   browserControlTypedInput: '\u8f93\u5165\u5230\u7126\u70b9',
   browserControlClickCoords: '\u70b9\u51fb\u5750\u6807',
+  browserControlSelector: '\u9009\u62e9\u5668\u5b9a\u4f4d',
+  browserControlSelectorClick: '\u6309\u9009\u62e9\u5668\u70b9\u51fb',
+  browserControlSelectorFill: '\u6309\u9009\u62e9\u5668\u586b\u5199',
   browserControlWindowScope: '\u4ec5\u63a7\u5236\u5f53\u524d\u72ec\u7acb\u6d4f\u89c8\u5668\u7a97\u53e3',
   reportReviewPlan: '\u67e5\u770b L2 \u8bc4\u5ba1\u4e0e\u590d\u9a8c\u8ba1\u5212',
   hero: '\u0044\u0058\u004d \u81ea\u52a8\u5316\u5de5\u4f5c\u53f0',
@@ -1144,6 +1147,9 @@ const result = {
     consoleBrowserControlPad: consoleText.includes(text.browserControlPad)
       && consoleText.includes(text.browserControlTypedInput)
       && consoleText.includes(text.browserControlClickCoords)
+      && consoleText.includes(text.browserControlSelector)
+      && consoleText.includes(text.browserControlSelectorClick)
+      && consoleText.includes(text.browserControlSelectorFill)
       && consoleText.includes(text.browserControlWindowScope),
     consoleNoFakeBrowser: consoleText.includes(text.noBrowser) && consoleText.includes(text.noFakeEvidence),
     consoleStartButtonDisabled: finalCheckExpectedReady || consoleStartDisabled,

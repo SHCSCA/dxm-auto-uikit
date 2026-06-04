@@ -170,6 +170,9 @@ def test_browser_qa_verifies_config_center_task_override_controls():
     assert "consoleBrowserControlPad" in source
     assert "browserControlPad" in source
     assert "browserControlClickCoords" in source
+    assert "browserControlSelector" in source
+    assert "browserControlSelectorClick" in source
+    assert "browserControlSelectorFill" in source
     assert "fieldSource" in source
     assert "configCenterTaskOverrideControls" in source
     assert "qa-config-center" in source
@@ -330,10 +333,16 @@ def test_execution_console_exposes_in_page_browser_control_contract():
     assert "BrowserControlPad" in workbench_source
     assert "页面内操控" in workbench_source
     assert "点击坐标" in workbench_source
+    assert "选择器定位" in workbench_source
+    assert "按选择器点击" in workbench_source
+    assert "按选择器填写" in workbench_source
     assert "输入到焦点" in workbench_source
     assert "按键" in workbench_source
     assert "滚动页面" in workbench_source
     assert "仅控制当前独立浏览器窗口" in workbench_source
+    assert "'selector_click'" in types_source
+    assert "'selector_fill'" in types_source
+    assert "selector?: string" in types_source
     assert ".browser-control-pad" in styles_source
 
 
