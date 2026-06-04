@@ -53,10 +53,14 @@ def test_config_center_prioritizes_missing_sections_and_sources():
     assert "下一步必填字段" in source
     assert "只显示当前最需要处理的字段" in source
     assert "DXM 编辑页配置" in config_section
-    assert "默认只展开待补分区" in config_section
+    assert "按店小秘编辑页分区逐段填写" in config_section
+    assert "config-section-tabs" in config_section
+    assert "setActiveConfigSectionCode" in config_section
+    assert "selectedConfigSection" in config_section
+    assert "正在编辑分区" in config_section
+    assert "查看其它分区" in config_section
     assert "config-focus-card" in config_section
     assert "sectionsNeedingAttention" in config_section
-    assert "查看已就绪分区" in config_section
     assert "previewSection: 'semi_managed'" in source
     assert "templateType: 'sku'" in source
     assert "templateType: 'pricing'" in source
@@ -156,6 +160,11 @@ def test_browser_qa_verifies_config_center_task_override_controls():
     assert "configHasTemplateScope" in source
     assert "onePerLine" in source
     assert "configHasListEditor" in source
+    assert "configSectionTabState" in source
+    assert "configSectionSwitchState" in source
+    assert "configCenterSectionNavigation" in source
+    assert "configTaskOverridePayloadState" in source
+    assert "configCenterTaskOverridePayloadUsesTypedValue" in source
     assert "loginManualBrowser" in source
     assert "consoleRealBrowserLoginEntry" in source
     assert "fieldSource" in source

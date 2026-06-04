@@ -593,6 +593,11 @@ const text = {
   reports: '\u62a5\u544a\u4e2d\u5fc3',
   config: '\u914d\u7f6e\u4e2d\u5fc3',
   editableConfig: '\u0044\u0058\u004d \u7f16\u8f91\u9875\u914d\u7f6e',
+  configStepMeta: '\u6309\u5e97\u5c0f\u79d8\u7f16\u8f91\u9875\u5206\u533a\u9010\u6bb5\u586b\u5199',
+  currentEditingSection: '\u6b63\u5728\u7f16\u8f91\u5206\u533a',
+  otherConfigSections: '\u67e5\u770b\u5176\u5b83\u5206\u533a',
+  logisticsSection: '\u5305\u88c5\u7269\u6d41',
+  weightField: '\u91cd\u91cf kg',
   nextRequiredConfig: '\u4e0b\u4e00\u6b65\u5fc5\u586b\u5b57\u6bb5',
   configReadySummary: '\u5f53\u524d\u4efb\u52a1\u914d\u7f6e\u5df2\u5c31\u7eea',
   currentTemplateScope: '\u5f53\u524d\u6a21\u677f\u8303\u56f4',
@@ -908,6 +913,12 @@ const configText = await bodyText();
 const configHasRequiredSummary = configText.includes(text.nextRequiredConfig) || configText.includes(text.configReadySummary);
 const configHasTemplateScope = configText.includes(text.currentTemplateScope);
 const configHasListEditor = await evalValue('(() => [...document.querySelectorAll(".editable-config-section__fields label")].some(label => { const textarea = label.querySelector("textarea"); const content = String(label.innerText || label.textContent || "") + " " + String(textarea?.getAttribute("placeholder") || ""); return Boolean(textarea) && content.includes(' + JSON.stringify(text.onePerLine) + '); }))()');
+const configSectionTabState = await evalValue('(() => { const tabs = [...document.querySelectorAll(".config-section-tabs button")]; const focused = [...document.querySelectorAll(".editable-config-grid--focused .editable-config-section")]; return { tabCount: tabs.length, focusedCount: focused.length, hasSelected: tabs.some(tab => tab.getAttribute("aria-selected") === "true") }; })()');
+const switchedConfigSection = await evalValue('(() => { const target = [...document.querySelectorAll(".config-section-tabs button")].find(tab => (tab.innerText || "").includes(' + JSON.stringify(text.logisticsSection) + ')); if (!target) return false; target.click(); return true; })()');
+await new Promise(r => setTimeout(r, 350));
+const configTextAfterSectionSwitch = await bodyText();
+const configSectionSwitchState = await evalValue('(() => { const focused = [...document.querySelectorAll(".editable-config-grid--focused .editable-config-section")]; return { focusedCount: focused.length, selectedLogistics: document.body.innerText.includes(' + JSON.stringify(text.currentEditingSection + '\uff1a' + text.logisticsSection) + '), hasWeightField: document.body.innerText.includes(' + JSON.stringify(text.weightField) + ') }; })()');
+const configTaskOverridePayloadState = await evalValue(' (async () => { window.__dxmQaConfigOverrideSaves = []; if (!window.__dxmQaOriginalFetch) { window.__dxmQaOriginalFetch = window.fetch.bind(window); window.fetch = async (input, init = {}) => { const url = typeof input === "string" ? input : String(input && input.url ? input.url : input); const method = String(init && init.method ? init.method : "GET").toUpperCase(); if (method === "PATCH" && url.includes("/api/tasks/") && url.includes("/config-overrides")) { window.__dxmQaConfigOverrideSaves.push({ url, method, body: init.body || "" }); return new Response(JSON.stringify({ id: 0, status: "qa_intercepted" }), { status: 200, headers: { "content-type": "application/json" } }); } return window.__dxmQaOriginalFetch(input, init); }; } const focused = document.querySelector(".editable-config-grid--focused .editable-config-section"); const label = focused ? [...focused.querySelectorAll("label")].find(item => (item.innerText || "").includes(' + JSON.stringify(text.weightField) + ')) : null; const input = label ? label.querySelector("input, textarea") : null; if (!input) return { ok: false, reason: "weight input missing" }; const value = "0.123"; const proto = input.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype; const descriptor = Object.getOwnPropertyDescriptor(proto, "value"); descriptor.set.call(input, value); input.dispatchEvent(new Event("input", { bubbles: true })); input.dispatchEvent(new Event("change", { bubbles: true })); await new Promise(r => setTimeout(r, 100)); const saveButton = focused ? [...focused.querySelectorAll("button")].find(button => (button.innerText || "").includes(' + JSON.stringify(text.taskOverrideSave) + ')) : null; if (!saveButton) return { ok: false, reason: "task override button missing" }; saveButton.click(); const deadline = Date.now() + 2500; while (Date.now() < deadline && window.__dxmQaConfigOverrideSaves.length < 1) { await new Promise(r => setTimeout(r, 100)); } const saved = window.__dxmQaConfigOverrideSaves[0] || null; let parsed = null; try { parsed = saved ? JSON.parse(saved.body || "{}") : null; } catch {} return { ok: Boolean(saved && parsed && parsed.section === "logistics" && parsed.values && String(parsed.values.weight) === value), captured: Boolean(saved), parsed, value }; })()');
 const configShot = await screenshot('qa-config-center');
 const desktopReflow = await evalValue('document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1');
 const desktopOverflow = await horizontalOverflowState();
@@ -1095,6 +1106,19 @@ const result = {
       && configText.includes(text.taskOverrideSave)
       && configText.includes(text.templateSave)
       && configText.includes(text.fieldSource),
+    configCenterSectionNavigation: clickedConfig
+      && configText.includes(text.configStepMeta)
+      && configText.includes(text.currentEditingSection)
+      && configText.includes(text.otherConfigSections)
+      && configSectionTabState.tabCount >= 9
+      && configSectionTabState.focusedCount === 1
+      && configSectionTabState.hasSelected === true
+      && switchedConfigSection === true
+      && configSectionSwitchState.focusedCount === 1
+      && configSectionSwitchState.selectedLogistics === true
+      && configSectionSwitchState.hasWeightField === true
+      && configTextAfterSectionSwitch.includes(text.weightField),
+    configCenterTaskOverridePayloadUsesTypedValue: configTaskOverridePayloadState.ok === true,
     localWriteCopy: !taskText.includes(text.localWrite) && taskText.includes('single_save'),
     taskRecoveryActions: finalCheckExpectedReady || ((taskText.includes(text.readonlyDiag) || taskText.includes(text.l2BlockHelp)) && taskText.includes(text.evidenceGap)),
     taskStartBlockedCopy: finalCheckExpectedReady || taskText.includes(text.forbiddenStart),

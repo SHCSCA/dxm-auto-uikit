@@ -896,6 +896,13 @@ function fieldUsageLabel(usage?: EditableConfigField['usage']) {
   return ''
 }
 
+function configSectionState(preview: ConfigPreviewGroup | undefined) {
+  if (!preview) return { label: '等待预检', className: 'is-pending' }
+  if (!preview.complete) return { label: '待补字段', className: 'is-incomplete' }
+  if (!preview.templatePresent) return { label: '缺模板', className: 'is-incomplete' }
+  return { label: '已就绪', className: 'is-complete' }
+}
+
 export function ConfigCenter({ workspace, selectedTask, configPreview, configPreviewLoading, onConfigSaved }: ConfigCenterProps) {
   const product = findSelectedTaskProduct(workspace.products, selectedTask)
   const currentTemplateBinding = buildCurrentTemplateBinding(workspace, selectedTask, product)
@@ -915,9 +922,14 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
     preview: previewGroups.get(section.previewSection),
   }))
   const sectionsNeedingAttention = sectionsWithPreview.filter(({ preview }) => preview && (!preview.complete || !preview.templatePresent))
-  const sectionsReady = sectionsWithPreview.filter(({ preview }) => !(preview && (!preview.complete || !preview.templatePresent)))
+  const sectionsReady = sectionsWithPreview.filter(({ preview }) => Boolean(preview && preview.complete && preview.templatePresent))
   const nextConfigSection = sectionsNeedingAttention[0]?.section ?? editableConfigSections[0]
   const nextConfigPreview = sectionsNeedingAttention[0]?.preview ?? previewGroups.get(nextConfigSection.previewSection)
+  const [activeConfigSectionCode, setActiveConfigSectionCode] = useState<ConfigSectionCode>(nextConfigSection.code)
+  const selectedConfigSection = sectionsWithPreview.find(({ section }) => section.code === activeConfigSectionCode)
+    ?? sectionsWithPreview.find(({ section }) => section.code === nextConfigSection.code)
+    ?? sectionsWithPreview[0]
+  const otherConfigSections = sectionsWithPreview.filter(({ section }) => section.code !== selectedConfigSection.section.code)
   const readySectionCount = sectionsReady.length
   const configCoverageLabels = ['店铺与任务基础', '类目与标题', 'SKU / 价格 / 库存', '价格策略', '图片与素材', '包装物流', '合规 / 海关', '半托管', '店小秘引用模板']
   const effectivePreviewTitle = '本次任务实际取值预览'
@@ -941,6 +953,10 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   useEffect(() => {
     setConfigDraft(initialConfigDraft)
   }, [initialConfigDraft])
+
+  useEffect(() => {
+    setActiveConfigSectionCode(nextConfigSection.code)
+  }, [nextConfigSection.code, selectedTask?.id])
 
   function updateConfigField(sectionCode: ConfigSectionCode, fieldName: string, value: string) {
     setConfigDraft((current) => ({
@@ -1051,33 +1067,49 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
       <EffectiveValuePreview configPreview={configPreview} sourcePriorityLabels={sourcePriorityLabels} title={effectivePreviewTitle} />
 
       <div className="module-card span-3">
-        <ModuleHead title="DXM 编辑页配置" meta="默认只展开待补分区" />
+        <ModuleHead title="DXM 编辑页配置" meta="按店小秘编辑页分区逐段填写" />
         {configMessage && <div className="config-save-message">{configMessage}</div>}
-        <div className="editable-config-grid">
-          {(sectionsNeedingAttention.length ? sectionsNeedingAttention : sectionsWithPreview).map(({ section, preview }, index) => {
-            const openByDefault = sectionsNeedingAttention.length
-              ? index === 0
-              : section.code === nextConfigSection.code
+        <div className="config-section-tabs" role="tablist" aria-label="DXM 编辑页分区导航">
+          {sectionsWithPreview.map(({ section, preview }) => {
+            const state = configSectionState(preview)
+            const active = section.code === selectedConfigSection.section.code
             return (
-              <EditableConfigSectionCard
+              <button
                 key={section.code}
-                section={section}
-                preview={preview}
-                configDraft={configDraft}
-                savingSection={savingSection}
-                selectedTask={selectedTask}
-                openByDefault={openByDefault}
-                onFieldChange={updateConfigField}
-                onSave={saveConfigSection}
-              />
+                type="button"
+                role="tab"
+                aria-selected={active}
+                className={`${active ? 'is-active' : ''} ${state.className}`}
+                onClick={() => setActiveConfigSectionCode(section.code)}
+              >
+                <strong>{section.title}</strong>
+                <span>{state.label}</span>
+              </button>
             )
           })}
         </div>
-        {sectionsNeedingAttention.length > 0 && (
+        <div className="selected-config-section-note">
+          <strong>正在编辑分区：{selectedConfigSection.section.title}</strong>
+          <span>{previewSummary(selectedConfigSection.section, selectedConfigSection.preview)}</span>
+        </div>
+        <div className="editable-config-grid editable-config-grid--focused">
+          <EditableConfigSectionCard
+            key={selectedConfigSection.section.code}
+            section={selectedConfigSection.section}
+            preview={selectedConfigSection.preview}
+            configDraft={configDraft}
+            savingSection={savingSection}
+            selectedTask={selectedTask}
+            openByDefault={true}
+            onFieldChange={updateConfigField}
+            onSave={saveConfigSection}
+          />
+        </div>
+        {otherConfigSections.length > 0 && (
           <details className="inline-disclosure config-ready-sections">
-            <summary>查看已就绪分区（{readySectionCount} 个）</summary>
+            <summary>查看其它分区（{otherConfigSections.length} 个，已就绪 {readySectionCount} 个）</summary>
             <div className="editable-config-grid editable-config-grid--compact">
-              {sectionsReady.map(({ section, preview }) => (
+              {otherConfigSections.map(({ section, preview }) => (
                 <EditableConfigSectionCard
                   key={section.code}
                   section={section}
