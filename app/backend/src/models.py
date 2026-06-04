@@ -92,6 +92,17 @@ class AgentConsoleHudRequest(BaseModel):
     step: AgentConsoleStep = Field(default_factory=AgentConsoleStep)
 
 
+class AgentConsoleControlRequest(BaseModel):
+    action: str
+    x: int | None = None
+    y: int | None = None
+    text: str | None = None
+    key: str | None = None
+    url: str | None = None
+    delta_x: int = 0
+    delta_y: int = 0
+
+
 class ProductImportRequest(BaseModel):
     rows: list[dict[str, Any]]
 

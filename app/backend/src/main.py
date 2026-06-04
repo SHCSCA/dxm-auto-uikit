@@ -26,6 +26,7 @@ from src.execution.playwright_engine import PlaywrightEngine
 from src.execution.v1_runner import V1TaskRunner
 from src.models import (
     AIConfigUpdateRequest,
+    AgentConsoleControlRequest,
     AgentConsoleHudRequest,
     AgentConsoleStartRequest,
     DraftBoxActionRequest,
@@ -635,6 +636,11 @@ def snapshot_agent_console():
 @app.post('/api/agent-console/frame')
 def refresh_agent_console_frame():
     return normalize_artifact_paths(agent_console_service.refresh_frame())
+
+
+@app.post('/api/agent-console/control')
+def control_agent_console_browser(payload: AgentConsoleControlRequest):
+    return normalize_artifact_paths(agent_console_service.control_browser(payload.model_dump(exclude_none=True)))
 
 
 @app.post('/api/agent-console/takeover')

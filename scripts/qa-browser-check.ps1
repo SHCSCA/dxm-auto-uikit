@@ -607,6 +607,10 @@ const text = {
   fieldSource: '\u6765\u6e90\uff1a',
   loginManualBrowser: '\u767b\u5f55/\u4eba\u5de5\u5904\u7406\u771f\u5b9e\u6d4f\u89c8\u5668',
   executionObserve: '\u542f\u52a8\u6267\u884c\u89c2\u5bdf',
+  browserControlPad: '\u9875\u9762\u5185\u64cd\u63a7',
+  browserControlTypedInput: '\u8f93\u5165\u5230\u7126\u70b9',
+  browserControlClickCoords: '\u70b9\u51fb\u5750\u6807',
+  browserControlWindowScope: '\u4ec5\u63a7\u5236\u5f53\u524d\u72ec\u7acb\u6d4f\u89c8\u5668\u7a97\u53e3',
   reportReviewPlan: '\u67e5\u770b L2 \u8bc4\u5ba1\u4e0e\u590d\u9a8c\u8ba1\u5212',
   hero: '\u0044\u0058\u004d \u81ea\u52a8\u5316\u5de5\u4f5c\u53f0',
   localWorkbenchDeliverable: '\u81ea\u52a8\u5316\u5de5\u4f5c\u53f0\u53ef\u4ea4\u4ed8',
@@ -1137,6 +1141,10 @@ const result = {
     mobileNoHorizontalOverflow: mobileReflow === true && mobileOverflow.ok === true,
     consoleReadonlyCopy: consoleText.includes(text.readonly) && consoleText.includes(text.noSaveStart),
     consoleRealBrowserLoginEntry: consoleText.includes(text.loginManualBrowser) && consoleText.includes(text.executionObserve),
+    consoleBrowserControlPad: consoleText.includes(text.browserControlPad)
+      && consoleText.includes(text.browserControlTypedInput)
+      && consoleText.includes(text.browserControlClickCoords)
+      && consoleText.includes(text.browserControlWindowScope),
     consoleNoFakeBrowser: consoleText.includes(text.noBrowser) && consoleText.includes(text.noFakeEvidence),
     consoleStartButtonDisabled: finalCheckExpectedReady || consoleStartDisabled,
     consoleNoFakePlaceholder: !(consoleText + ' ' + taskText).includes(text.fakePlaceholder),

@@ -181,6 +181,17 @@ export type AgentConsoleActionEvent = {
   save_result?: Record<string, unknown>
   timestamp?: string
 }
+export type AgentConsoleControlAction = 'click' | 'type' | 'press' | 'scroll' | 'goto'
+export type AgentConsoleControlCommand = {
+  action: AgentConsoleControlAction
+  x?: number
+  y?: number
+  text?: string
+  key?: string
+  url?: string
+  delta_x?: number
+  delta_y?: number
+}
 export type AgentConsoleSession = {
   active: boolean
   session_id: string | null
@@ -212,6 +223,12 @@ export type AgentConsoleSession = {
 }
 export type AgentConsoleHudStep = AgentConsoleHud
 export type AgentConsoleStatus = AgentConsoleSession
+export type AgentConsoleControlResponse = AgentConsoleSession & {
+  ok?: boolean
+  reason?: string
+  control_result?: Record<string, unknown>
+  error?: string
+}
 export type FinalDeliveryCheckSummary = {
   status: 'available' | 'not_run' | 'unreadable' | string
   checked_at?: string | null

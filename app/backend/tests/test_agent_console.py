@@ -168,6 +168,7 @@ def test_agent_console_refresh_frame_updates_screenshot_and_timestamp(tmp_path, 
     assert (tmp_path / "screenshots" / f"{status['session_id']}.png").exists()
     assert status["last_frame_at"] is not None
     assert status["current_url"] == "https://www.dianxiaomi.com/web/home"
+    assert fake_page.screenshot_full_page is False
     assert status["page_title"] == "店小秘 Home"
 
 
@@ -196,6 +197,53 @@ def test_agent_console_manual_takeover_brings_real_browser_to_front(tmp_path, mo
     assert released["action_events"][-1]["action"] == "release_agent"
 
 
+def test_agent_console_rejects_browser_control_without_live_page(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+
+    result = service.control_browser({"action": "click", "x": 12, "y": 34})
+
+    assert result["ok"] is False
+    assert result["reason"] == "browser_page_unavailable"
+    assert result["active"] is True
+
+
+def test_agent_console_controls_live_browser_and_records_actions(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    monkeypatch.setattr(agent_console_module, "SCREENSHOT_ROOT", tmp_path / "screenshots")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+    fake_page = _FakePage()
+
+    with service._lock:
+        service._page = fake_page
+        service._state["browser_visible"] = True
+
+    click = service.control_browser({"action": "click", "x": 120, "y": 240})
+    typed = service.control_browser({"action": "type", "text": "DXM test"})
+    pressed = service.control_browser({"action": "press", "key": "Enter"})
+    scrolled = service.control_browser({"action": "scroll", "delta_y": 360})
+    navigated = service.control_browser({"action": "goto", "url": "https://www.dianxiaomi.com/web/home"})
+
+    assert click["ok"] is True
+    assert typed["ok"] is True
+    assert pressed["ok"] is True
+    assert scrolled["ok"] is True
+    assert navigated["ok"] is True
+    assert fake_page.mouse.clicks == [(120, 240)]
+    assert fake_page.keyboard.typed == ["DXM test"]
+    assert fake_page.keyboard.pressed == ["Enter"]
+    assert fake_page.mouse.wheels == [(0, 360)]
+    assert fake_page.goto_calls[-1] == ("https://www.dianxiaomi.com/web/home", "domcontentloaded", 45000)
+    status = service.status()
+    assert status["current_url"] == "https://www.dianxiaomi.com/web/home"
+    assert status["action_events"][-1]["type"] == "browser_control"
+    assert status["action_events"][-1]["action"] == "goto"
+    assert status["action_events"][-1]["status"] == "ok"
+    assert status["last_frame_at"] is not None
+
+
 def test_agent_console_api_manual_takeover_lifecycle(tmp_path, monkeypatch):
     client, repo, service = _client_with_temp_repo_and_console(tmp_path, monkeypatch)
     task = _create_task(repo)
@@ -211,6 +259,26 @@ def test_agent_console_api_manual_takeover_lifecycle(tmp_path, monkeypatch):
 
     assert release_response.status_code == 200
     assert release_response.json()["manual_takeover"] is False
+    service.stop()
+
+
+def test_agent_console_api_control_browser_records_live_action(tmp_path, monkeypatch):
+    client, repo, service = _client_with_temp_repo_and_console(tmp_path, monkeypatch)
+    task = _create_task(repo)
+    start_response = client.post("/api/agent-console/start", json={"task_id": task["id"], "launch_browser": False})
+    assert start_response.status_code == 200
+    fake_page = _FakePage()
+    with service._lock:
+        service._page = fake_page
+        service._state["browser_visible"] = True
+
+    response = client.post("/api/agent-console/control", json={"action": "type", "text": "hello"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["action_events"][-1]["action"] == "type"
+    assert fake_page.keyboard.typed == ["hello"]
     service.stop()
 
 
@@ -310,13 +378,50 @@ class _FakePage:
     url = "https://www.dianxiaomi.com/web/home"
     brought_to_front = False
 
+    def __init__(self):
+        self.mouse = _FakeMouse()
+        self.keyboard = _FakeKeyboard()
+        self.goto_calls = []
+        self.screenshot_full_page = None
+
     def title(self):
         return "店小秘 Home"
 
     def screenshot(self, *, path: str, full_page: bool):
-        assert full_page is True
+        self.screenshot_full_page = full_page
         with open(path, "wb") as handle:
             handle.write(b"fake-png")
 
     def bring_to_front(self):
         self.brought_to_front = True
+
+    def goto(self, url: str, *, wait_until: str, timeout: int):
+        self.goto_calls.append((url, wait_until, timeout))
+        self.url = url
+
+    def wait_for_timeout(self, milliseconds: int):
+        assert milliseconds >= 0
+
+
+class _FakeMouse:
+    def __init__(self):
+        self.clicks = []
+        self.wheels = []
+
+    def click(self, x: int, y: int):
+        self.clicks.append((x, y))
+
+    def wheel(self, delta_x: int, delta_y: int):
+        self.wheels.append((delta_x, delta_y))
+
+
+class _FakeKeyboard:
+    def __init__(self):
+        self.typed = []
+        self.pressed = []
+
+    def type(self, text: str):
+        self.typed.append(text)
+
+    def press(self, key: str):
+        self.pressed.append(key)

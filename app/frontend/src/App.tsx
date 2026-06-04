@@ -12,7 +12,7 @@ import {
   ReportCenter,
   TaskCenter,
 } from './components/WorkbenchModules'
-import type { AgentConsoleSession, ConfigPreview, DeliveryWorkspace, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
+import type { AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
 import { composeWorkspace, demoTemplateSeeds, seedRows } from './workspace'
 
 const AGENT_CONSOLE_TARGET_URL = 'https://www.dianxiaomi.com/'
@@ -585,6 +585,27 @@ export default function App() {
     }
   }
 
+  async function controlAgentConsoleBrowser(command: AgentConsoleControlCommand) {
+    setBusy(true)
+    setAgentConsoleError(null)
+    try {
+      const status = await postJson<AgentConsoleControlResponse>('/api/agent-console/control', command)
+      setAgentConsole(status)
+      if (status.ok === false) {
+        const message = status.error || status.reason || '页面内浏览器控制失败'
+        setAgentConsoleError(message)
+        setOperationError(message)
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '页面内浏览器控制失败'
+      setAgentConsoleError(message)
+      setOperationError(message)
+      await refreshAgentConsole(true)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function runRuntimeControl(action: RuntimeControlAction) {
     setBusy(true)
     setOperationError(null)
@@ -674,6 +695,7 @@ export default function App() {
             onSnapshotAgentConsole={snapshotAgentConsole}
             onRequestAgentConsoleTakeover={requestAgentConsoleTakeover}
             onReleaseAgentConsoleTakeover={releaseAgentConsoleTakeover}
+            onControlAgentConsoleBrowser={controlAgentConsoleBrowser}
             onRuntimeControl={runRuntimeControl}
             onShowTasks={() => setActiveSection('tasks')}
             onShowEvidence={() => setActiveSection('evidence')}

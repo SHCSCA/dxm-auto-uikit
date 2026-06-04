@@ -167,6 +167,9 @@ def test_browser_qa_verifies_config_center_task_override_controls():
     assert "configCenterTaskOverridePayloadUsesTypedValue" in source
     assert "loginManualBrowser" in source
     assert "consoleRealBrowserLoginEntry" in source
+    assert "consoleBrowserControlPad" in source
+    assert "browserControlPad" in source
+    assert "browserControlClickCoords" in source
     assert "fieldSource" in source
     assert "configCenterTaskOverrideControls" in source
     assert "qa-config-center" in source
@@ -306,9 +309,32 @@ def test_agent_console_uses_live_frame_and_network_event_contract():
     assert "等待网络响应" in console_section
     assert "getRecentNetworkEvents(agentConsole)" in console_section
     assert "自动刷新画面" in workbench_source
-    assert "真实窗口是主要操控界面" in console_section
-    assert "截图只作为证据缩略图" in console_section
+    assert "控制台可直接操控真实浏览器" in console_section
+    assert "点击截图会映射到当前独立浏览器视口" in console_section
+    assert "is-controllable" in console_section
     assert "刷新当前画面" in workbench_source
+
+
+def test_execution_console_exposes_in_page_browser_control_contract():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    types_source = (REPO_ROOT / "app" / "frontend" / "src" / "types.ts").read_text(encoding="utf-8")
+    console_section = workbench_source[workbench_source.index("export function ExecutionConsole"):workbench_source.index("function RuntimeControlPanel")]
+
+    assert "export type AgentConsoleControlCommand" in types_source
+    assert "async function controlAgentConsoleBrowser" in app_source
+    assert "/api/agent-console/control" in app_source
+    assert "onControlAgentConsoleBrowser={controlAgentConsoleBrowser}" in app_source
+    assert "onControlAgentConsoleBrowser" in console_section
+    assert "BrowserControlPad" in workbench_source
+    assert "页面内操控" in workbench_source
+    assert "点击坐标" in workbench_source
+    assert "输入到焦点" in workbench_source
+    assert "按键" in workbench_source
+    assert "滚动页面" in workbench_source
+    assert "仅控制当前独立浏览器窗口" in workbench_source
+    assert ".browser-control-pad" in styles_source
 
 
 def test_execution_console_exposes_manual_takeover_for_real_browser():
@@ -358,6 +384,7 @@ def test_execution_console_exposes_runtime_control_and_agent_action_timeline():
     assert "agentConsole?.action_events" in workbench_source
     assert "agentConsole?.step_history" in workbench_source
     assert "save: '保存'" in workbench_source
+    assert "browser_control: '控制'" in workbench_source
     assert "fill: '填写'" in workbench_source
     assert ".runtime-control-panel" in styles_source
     assert ".agent-action-timeline" in styles_source

@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import { patchJson, postJson } from '../api'
 import type {
   AcceptanceGap,
   AgentConsoleActionEvent,
+  AgentConsoleControlCommand,
   AgentConsoleSession,
   ConfigPreview,
   ConfigPreviewGroup,
@@ -110,6 +111,7 @@ type ExecutionConsoleProps = CommonProps & {
   onSnapshotAgentConsole: () => void
   onRequestAgentConsoleTakeover: () => void
   onReleaseAgentConsoleTakeover: () => void
+  onControlAgentConsoleBrowser: (command: AgentConsoleControlCommand) => void
   onRuntimeControl: (action: RuntimeControlAction) => void
   onShowTasks: () => void
   onShowEvidence: () => void
@@ -1594,6 +1596,7 @@ export function ExecutionConsole({
   onSnapshotAgentConsole,
   onRequestAgentConsoleTakeover,
   onReleaseAgentConsoleTakeover,
+  onControlAgentConsoleBrowser,
   onRuntimeControl,
   onShowTasks,
   onShowEvidence,
@@ -1660,6 +1663,7 @@ export function ExecutionConsole({
           onSnapshotAgentConsole={onSnapshotAgentConsole}
           onRequestAgentConsoleTakeover={onRequestAgentConsoleTakeover}
           onReleaseAgentConsoleTakeover={onReleaseAgentConsoleTakeover}
+          onControlAgentConsoleBrowser={onControlAgentConsoleBrowser}
         />
         {realSaveBlocked && (
           <details className="gate-note gate-note--danger inline-disclosure">
@@ -1678,6 +1682,8 @@ export function ExecutionConsole({
           activeStep={activeStep}
           browserFrame={browserFrame}
           agentConsole={agentConsole}
+          busy={busy}
+          onControlAgentConsoleBrowser={onControlAgentConsoleBrowser}
         />
       </div>
 
@@ -1862,6 +1868,7 @@ function getAgentActionTypeLabel(type?: string) {
     upload: '上传',
     wait: '等待',
     save: '保存',
+    browser_control: '控制',
   }
   return labels[type ?? ''] ?? (type ? type.slice(0, 12) : '动作')
 }
@@ -1869,7 +1876,7 @@ function getAgentActionTypeLabel(type?: string) {
 function getAgentActionStatus(status?: string) {
   if (!status) return null
   if (status === 'ok') return { label: 'ok', tone: 'ok' }
-  if (status === 'failed') return { label: 'failed', tone: 'danger' }
+  if (status === 'failed' || status === 'error') return { label: status, tone: 'danger' }
   return { label: status.slice(0, 16), tone: 'muted' }
 }
 
@@ -1962,12 +1969,16 @@ function AgentBrowserFrame({
   activeStep,
   browserFrame,
   agentConsole,
+  busy,
+  onControlAgentConsoleBrowser,
 }: {
   workspace: DeliveryWorkspace
   selectedTask: Task | null
   activeStep?: { title: string; code?: string; detail: string; state: string }
   browserFrame: { url: string; screenshotUrl: string; source: string }
   agentConsole: AgentConsoleSession | null
+  busy: boolean
+  onControlAgentConsoleBrowser: (command: AgentConsoleControlCommand) => void
 }) {
   const nextStep = nextPendingStep(workspace.deliverySteps, activeStep?.code)
   const hasConsoleHud = Boolean(agentConsole?.active || agentConsole?.updated_at)
@@ -1980,6 +1991,18 @@ function AgentBrowserFrame({
   const hudGuard = (hasConsoleHud ? hud?.guard : null) ?? (workspace.publishGuardState?.safe ? '通过' : '等待证明')
   const hudDotState = agentConsole?.last_error ? 'blocked' : agentConsole?.active ? 'current' : activeStep?.state ?? 'pending'
   const recentNetworkEvents = getRecentNetworkEvents(agentConsole)
+  const canControl = Boolean(agentConsole?.active && agentConsole?.browser_visible && !agentConsole?.manual_takeover)
+
+  function handleBrowserImageClick(event: MouseEvent<HTMLImageElement>) {
+    if (!canControl || busy) return
+    const image = event.currentTarget
+    const rect = image.getBoundingClientRect()
+    const naturalWidth = image.naturalWidth || rect.width
+    const naturalHeight = image.naturalHeight || rect.height
+    const x = Math.round(((event.clientX - rect.left) / rect.width) * naturalWidth)
+    const y = Math.round(((event.clientY - rect.top) / rect.height) * naturalHeight)
+    onControlAgentConsoleBrowser({ action: 'click', x, y })
+  }
 
   return (
     <div className="agent-browser">
@@ -1999,16 +2022,21 @@ function AgentBrowserFrame({
         {browserFrame.screenshotUrl ? (
           <>
             <div className="agent-browser__evidence-note">
-              <strong>真实窗口是主要操控界面</strong>
-              <span>截图只作为证据缩略图；需要操作时点击“人工接管真实浏览器”。</span>
+              <strong>控制台可直接操控真实浏览器</strong>
+              <span>{canControl ? '点击截图会映射到当前独立浏览器视口。' : '启动浏览器且未人工接管时，可在这里点击真实页面。'}</span>
             </div>
-            <img src={browserFrame.screenshotUrl} alt="当前真实浏览器证据缩略图" />
+            <img
+              src={browserFrame.screenshotUrl}
+              alt="当前真实浏览器视口"
+              className={canControl ? 'is-controllable' : ''}
+              onClick={handleBrowserImageClick}
+            />
           </>
         ) : agentConsole?.active || agentConsole?.updated_at ? (
           <div className="browser-empty-state">
-            <strong>真实窗口是主要操控界面</strong>
-            <span>浏览器会话状态已记录，自动刷新画面还在等待首帧；截图只作为证据缩略图。</span>
-            <small>需要人工介入时，用“人工接管真实浏览器”切到真实 dianxiaomi.com 窗口。</small>
+            <strong>等待真实浏览器首帧</strong>
+            <span>浏览器会话状态已记录，刷新当前画面后即可在控制台点击、输入和滚动。</span>
+            <small>页面内操控仅控制当前独立浏览器窗口；发布隔离仍按门禁执行。</small>
           </div>
         ) : (
           <div className="browser-empty-state">
@@ -2092,6 +2120,7 @@ function AgentConsoleControls({
   onSnapshotAgentConsole,
   onRequestAgentConsoleTakeover,
   onReleaseAgentConsoleTakeover,
+  onControlAgentConsoleBrowser,
 }: {
   agentConsole: AgentConsoleSession | null
   agentConsoleError: string | null
@@ -2109,6 +2138,7 @@ function AgentConsoleControls({
   onSnapshotAgentConsole: () => void
   onRequestAgentConsoleTakeover: () => void
   onReleaseAgentConsoleTakeover: () => void
+  onControlAgentConsoleBrowser: (command: AgentConsoleControlCommand) => void
 }) {
   const active = Boolean(agentConsole?.active)
   const manualTakeover = Boolean(agentConsole?.manual_takeover)
@@ -2185,7 +2215,102 @@ function AgentConsoleControls({
           关闭浏览器
         </button>
       </div>
+      <BrowserControlPad
+        agentConsole={agentConsole}
+        busy={busy}
+        onControlAgentConsoleBrowser={onControlAgentConsoleBrowser}
+      />
       {agentConsoleError && <div className="agent-console-controls__error console-error">{agentConsoleError}</div>}
+    </div>
+  )
+}
+
+function BrowserControlPad({
+  agentConsole,
+  busy,
+  onControlAgentConsoleBrowser,
+}: {
+  agentConsole: AgentConsoleSession | null
+  busy: boolean
+  onControlAgentConsoleBrowser: (command: AgentConsoleControlCommand) => void
+}) {
+  const [text, setText] = useState('')
+  const [key, setKey] = useState('Enter')
+  const [url, setUrl] = useState(agentConsole?.current_url ?? agentConsole?.target_url ?? 'https://www.dianxiaomi.com/')
+  const active = Boolean(agentConsole?.active && agentConsole?.browser_visible)
+  const disabled = busy || !active || Boolean(agentConsole?.manual_takeover)
+  const disabledReason = agentConsole?.manual_takeover
+    ? '人工接管中，先交还 Agent。'
+    : active
+      ? '仅控制当前独立浏览器窗口。'
+      : '启动真实浏览器后才能页面内操控。'
+
+  useEffect(() => {
+    const nextUrl = agentConsole?.current_url ?? agentConsole?.target_url
+    if (nextUrl) setUrl(nextUrl)
+  }, [agentConsole?.current_url, agentConsole?.target_url])
+
+  return (
+    <div className="browser-control-pad" aria-label="页面内操控">
+      <div className="browser-control-pad__head">
+        <strong>页面内操控</strong>
+        <span>{disabledReason}</span>
+      </div>
+      <small>仅控制当前独立浏览器窗口；不会绕过任务门禁或发布隔离。</small>
+      <div className="browser-control-pad__row browser-control-pad__row--wide">
+        <input
+          value={url}
+          onChange={(event) => setUrl(event.target.value)}
+          placeholder="https://www.dianxiaomi.com/"
+          aria-label="导航 URL"
+          disabled={busy}
+        />
+        <button
+          className="button button--quiet"
+          type="button"
+          disabled={disabled || !url.trim()}
+          onClick={() => onControlAgentConsoleBrowser({ action: 'goto', url: url.trim() })}
+        >
+          导航
+        </button>
+      </div>
+      <div className="browser-control-pad__row">
+        <button className="button button--quiet" type="button" disabled={disabled} onClick={() => onControlAgentConsoleBrowser({ action: 'scroll', delta_y: -420 })}>
+          向上滚动
+        </button>
+        <button className="button button--quiet" type="button" disabled={disabled} onClick={() => onControlAgentConsoleBrowser({ action: 'scroll', delta_y: 420 })}>
+          滚动页面
+        </button>
+      </div>
+      <div className="browser-control-pad__row browser-control-pad__row--wide">
+        <input
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          placeholder="输入到焦点"
+          aria-label="输入到焦点"
+          disabled={busy}
+        />
+        <button
+          className="button button--quiet"
+          type="button"
+          disabled={disabled || !text}
+          onClick={() => onControlAgentConsoleBrowser({ action: 'type', text })}
+        >
+          输入到焦点
+        </button>
+      </div>
+      <div className="browser-control-pad__row">
+        <select value={key} onChange={(event) => setKey(event.target.value)} aria-label="按键" disabled={busy}>
+          <option value="Enter">Enter</option>
+          <option value="Tab">Tab</option>
+          <option value="Escape">Escape</option>
+          <option value="Backspace">Backspace</option>
+        </select>
+        <button className="button button--quiet" type="button" disabled={disabled} onClick={() => onControlAgentConsoleBrowser({ action: 'press', key })}>
+          按键
+        </button>
+        <span>点击坐标：直接点上方真实浏览器视口截图。</span>
+      </div>
     </div>
   )
 }

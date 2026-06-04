@@ -301,7 +301,7 @@ class AgentConsoleService:
         SCREENSHOT_ROOT.mkdir(parents=True, exist_ok=True)
         path = SCREENSHOT_ROOT / f"{session_id}.png"
         try:
-            self._run_browser_op(lambda: page.screenshot(path=str(path), full_page=True))
+            self._run_browser_op(lambda: page.screenshot(path=str(path), full_page=False))
             with self._lock:
                 self._state["screenshot"] = str(path)
                 self._state["last_frame_at"] = _now()
@@ -317,6 +317,60 @@ class AgentConsoleService:
                 self._state["updated_at"] = _now()
         return self.status()
 
+    def control_browser(self, command: dict[str, Any]) -> dict[str, Any]:
+        action = str(command.get("action") or "").strip().lower()
+        with self._lock:
+            if not self._state.get("active"):
+                return {**dict(self._state), "ok": False, "reason": "agent_console_inactive"}
+            page = self._page
+            if page is None:
+                return {**dict(self._state), "ok": False, "reason": "browser_page_unavailable"}
+
+        try:
+            result = self._run_browser_op(lambda: self._perform_browser_control(page, action, command))
+            self._record_browser_control_event(action=action, command=command, status="ok", result=result)
+            self.refresh_frame()
+            return {**self.status(), "ok": True, "reason": "browser_control_executed", "control_result": result}
+        except Exception as exc:
+            self._record_browser_control_event(action=action or "unknown", command=command, status="error", error=str(exc))
+            with self._lock:
+                self._state["last_error"] = str(exc)
+                self._state["updated_at"] = _now()
+            return {**self.status(), "ok": False, "reason": "browser_control_failed", "error": str(exc)}
+
+    def _perform_browser_control(self, page, action: str, command: dict[str, Any]) -> dict[str, Any]:
+        if action == "click":
+            x = _required_int(command, "x")
+            y = _required_int(command, "y")
+            page.mouse.click(x, y)
+            return {"action": action, "x": x, "y": y}
+        if action == "type":
+            text = str(command.get("text") or "")
+            if not text:
+                raise ValueError("text is required for type")
+            page.keyboard.type(text)
+            return {"action": action, "text_length": len(text)}
+        if action == "press":
+            key = str(command.get("key") or "").strip()
+            if not key:
+                raise ValueError("key is required for press")
+            page.keyboard.press(key)
+            return {"action": action, "key": key}
+        if action == "scroll":
+            delta_x = int(command.get("delta_x") or 0)
+            delta_y = int(command.get("delta_y") or 0)
+            if delta_x == 0 and delta_y == 0:
+                raise ValueError("delta_x or delta_y is required for scroll")
+            page.mouse.wheel(delta_x, delta_y)
+            return {"action": action, "delta_x": delta_x, "delta_y": delta_y}
+        if action == "goto":
+            url = str(command.get("url") or "").strip()
+            if not url.startswith(("https://www.dianxiaomi.com/", "https://dianxiaomi.com/")):
+                raise ValueError("goto only allows dianxiaomi.com URLs")
+            page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            return {"action": action, "url": url}
+        raise ValueError(f"Unsupported browser control action: {action or 'empty'}")
+
     def _record_network_event(self, event: dict[str, Any]) -> None:
         cleaned = {
             "type": event.get("type") or "network",
@@ -329,6 +383,33 @@ class AgentConsoleService:
             events = list(self._state.get("network_events") or [])
             events.append(cleaned)
             self._state["network_events"] = events[-MAX_NETWORK_EVENTS:]
+            self._state["updated_at"] = _now()
+
+    def _record_browser_control_event(
+        self,
+        *,
+        action: str,
+        command: dict[str, Any],
+        status: str,
+        result: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> None:
+        with self._lock:
+            event = {
+                "type": "browser_control",
+                "action": action,
+                "label": _browser_control_label(action, command),
+                "status": status,
+                "target": _browser_control_target(action, command),
+                "value": _browser_control_value(action, command),
+                "page_url": self._state.get("current_url"),
+                "result": result,
+                "error": error,
+                "timestamp": _now(),
+            }
+            events = list(self._state.get("action_events") or [])
+            events.append({key: value for key, value in event.items() if value is not None})
+            self._state["action_events"] = events[-MAX_ACTION_EVENTS:]
             self._state["updated_at"] = _now()
 
     def _record_manual_takeover_event(self, *, action: str, label: str) -> dict[str, Any]:
@@ -527,6 +608,43 @@ def _now() -> str:
 def _step_action(field_domain: str | None, mode: str | None) -> str:
     parts = [part for part in (field_domain, mode) if part]
     return " / ".join(parts) if parts else "状态机步骤推进"
+
+
+def _required_int(command: dict[str, Any], key: str) -> int:
+    value = command.get(key)
+    if value is None:
+        raise ValueError(f"{key} is required")
+    return int(value)
+
+
+def _browser_control_label(action: str, command: dict[str, Any]) -> str:
+    labels = {
+        "click": "页面内点击",
+        "type": "页面内输入",
+        "press": "键盘按键",
+        "scroll": "页面滚动",
+        "goto": "页面导航",
+    }
+    return labels.get(action) or f"浏览器控制：{action or 'unknown'}"
+
+
+def _browser_control_target(action: str, command: dict[str, Any]) -> str | None:
+    if action == "click":
+        return f"x={command.get('x')}, y={command.get('y')}"
+    if action == "scroll":
+        return f"delta_x={command.get('delta_x') or 0}, delta_y={command.get('delta_y') or 0}"
+    if action == "goto":
+        return str(command.get("url") or "")
+    return None
+
+
+def _browser_control_value(action: str, command: dict[str, Any]) -> str | None:
+    if action == "type":
+        text = str(command.get("text") or "")
+        return f"{len(text)} chars"
+    if action == "press":
+        return str(command.get("key") or "")
+    return None
 
 
 HUD_INIT_SCRIPT = """
