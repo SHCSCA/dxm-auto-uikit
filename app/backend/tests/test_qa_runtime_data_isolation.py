@@ -50,6 +50,29 @@ def test_final_delivery_check_runs_browser_qa_backend_with_isolated_data_dir():
     assert "qaRuntimeDataDir" in script
 
 
+def test_final_delivery_check_seeds_qa_runtime_from_authoritative_data_before_backend_start():
+    script = FINAL_DELIVERY_CHECK.read_text(encoding="utf-8")
+
+    assert "Seed-QARuntimeData" in script
+    assert "$authoritativeDataDir = Join-Path $root \"data\"" in script
+    assert "Copy-AuthoritativeDataItem" in script
+    assert "sqlite" in script
+    assert "l2_readonly_probe" in script
+    assert "screenshots" in script
+    assert "evidences" in script
+    qa_startup_section = script[
+        script.index("Remove-Item -LiteralPath $qaRuntimeDataDir"):
+        script.index('-Name "QA backend service"')
+    ]
+    assert "Seed-QARuntimeData" in qa_startup_section
+    assert "DXM_DATA_DIR = $qaRuntimeDataDir" not in qa_startup_section
+    qa_backend_section = script[
+        script.index('-Name "QA backend service"'):
+        script.index('Wait-HttpReady -Name "QA backend service"')
+    ]
+    assert "DXM_DATA_DIR = $qaRuntimeDataDir" in qa_backend_section
+
+
 def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     script = FINAL_DELIVERY_CHECK.read_text(encoding="utf-8")
 

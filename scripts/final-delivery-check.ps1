@@ -11,6 +11,7 @@ $ErrorActionPreference = "Stop"
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $backendDir = Join-Path $root "app\backend"
 $frontendDir = Join-Path $root "app\frontend"
+$authoritativeDataDir = Join-Path $root "data"
 $absoluteOutDir = if ([System.IO.Path]::IsPathRooted($OutDir)) { $OutDir } else { Join-Path $root $OutDir }
 $browserQaOutDir = Join-Path $absoluteOutDir "browser-checks"
 $l1ReplayOutDir = Join-Path $absoluteOutDir "l1-selector-replay"
@@ -513,6 +514,37 @@ function Get-FreeTcpPort {
   throw "No free TCP port found near $PreferredPort."
 }
 
+function Copy-AuthoritativeDataItem {
+  param(
+    [string]$Name,
+    [string]$TargetDataDir
+  )
+
+  $sourcePath = Join-Path $authoritativeDataDir $Name
+  if (!(Test-Path -LiteralPath $sourcePath)) {
+    return
+  }
+
+  $sourceFullPath = (Resolve-Path -LiteralPath $sourcePath).Path
+  $targetRootFullPath = (Resolve-Path -LiteralPath $TargetDataDir).Path
+  if ($sourceFullPath -eq $targetRootFullPath) {
+    throw "Refusing to seed QA runtime from itself: $sourceFullPath"
+  }
+
+  Copy-Item -LiteralPath $sourcePath -Destination $TargetDataDir -Recurse -Force
+}
+
+function Seed-QARuntimeData {
+  param(
+    [string]$TargetDataDir
+  )
+
+  New-Item -ItemType Directory -Path $TargetDataDir -Force | Out-Null
+  foreach ($name in @("sqlite", "l2_readonly_probe", "screenshots", "evidences")) {
+    Copy-AuthoritativeDataItem -Name $name -TargetDataDir $TargetDataDir
+  }
+}
+
 function Start-BackgroundCommand {
   param(
     [string]$Name,
@@ -739,6 +771,7 @@ if (!$SkipBrowserQA) {
   $workspaceApiBase = "http://127.0.0.1:$qaBackendPort"
   Remove-Item -LiteralPath $qaRuntimeDataDir -Recurse -Force -ErrorAction SilentlyContinue
   New-Item -ItemType Directory -Path $qaRuntimeDataDir -Force | Out-Null
+  Seed-QARuntimeData -TargetDataDir $qaRuntimeDataDir
   $viteCmd = Join-Path $frontendDir "node_modules\.bin\vite.cmd"
   if (!(Test-Path -LiteralPath $viteCmd)) {
     throw "Vite was not found at $viteCmd. Run scripts\start-mvp.bat --check first."
