@@ -152,6 +152,8 @@ def test_browser_qa_verifies_config_center_task_override_controls():
     assert "templateSave" in source
     assert "nextRequiredConfig" in source
     assert "configReadySummary" in source
+    assert "currentTemplateScope" in source
+    assert "configHasTemplateScope" in source
     assert "onePerLine" in source
     assert "configHasListEditor" in source
     assert "loginManualBrowser" in source

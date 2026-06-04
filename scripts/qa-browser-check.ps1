@@ -595,6 +595,7 @@ const text = {
   editableConfig: '\u0044\u0058\u004d \u7f16\u8f91\u9875\u914d\u7f6e',
   nextRequiredConfig: '\u4e0b\u4e00\u6b65\u5fc5\u586b\u5b57\u6bb5',
   configReadySummary: '\u5f53\u524d\u4efb\u52a1\u914d\u7f6e\u5df2\u5c31\u7eea',
+  currentTemplateScope: '\u5f53\u524d\u6a21\u677f\u8303\u56f4',
   onePerLine: '\u6bcf\u884c\u4e00\u4e2a',
   taskOverrideSave: '\u4ec5\u672c\u6b21\u4efb\u52a1\u4f7f\u7528',
   templateSave: '\u4fdd\u5b58\u4e3a\u5e97\u94fa\u6a21\u677f',
@@ -905,6 +906,7 @@ const clickedConfig = await clickSelector('[data-section="config"]') || await cl
 await new Promise(r => setTimeout(r, 700));
 const configText = await bodyText();
 const configHasRequiredSummary = configText.includes(text.nextRequiredConfig) || configText.includes(text.configReadySummary);
+const configHasTemplateScope = configText.includes(text.currentTemplateScope);
 const configHasListEditor = await evalValue('(() => [...document.querySelectorAll(".editable-config-section__fields label")].some(label => { const textarea = label.querySelector("textarea"); const content = String(label.innerText || label.textContent || "") + " " + String(textarea?.getAttribute("placeholder") || ""); return Boolean(textarea) && content.includes(' + JSON.stringify(text.onePerLine) + '); }))()');
 const configShot = await screenshot('qa-config-center');
 const desktopReflow = await evalValue('document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1');
@@ -1088,6 +1090,7 @@ const result = {
     configCenterTaskOverrideControls: clickedConfig
       && configText.includes(text.editableConfig)
       && configHasRequiredSummary
+      && configHasTemplateScope
       && configHasListEditor
       && configText.includes(text.taskOverrideSave)
       && configText.includes(text.templateSave)
