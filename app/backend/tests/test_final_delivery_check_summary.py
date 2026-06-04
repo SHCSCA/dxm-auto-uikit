@@ -184,6 +184,64 @@ def test_final_delivery_check_summary_reads_latest_report(tmp_path, monkeypatch)
     assert payload["summary_path"] == "outputs/final-delivery-check/final-delivery-check.md"
     assert payload["final_check_matches_current_worktree"] is True
     assert payload["final_check_freshness"] == "current"
+    assert payload["final_check_runtime_gate_freshness"] in {"current", "stale_gate", "unknown"}
+
+
+def test_final_delivery_check_summary_marks_ready_report_stale_when_live_l2_expired(tmp_path, monkeypatch):
+    import src.main as main
+
+    report_path = tmp_path / "final-delivery-check.json"
+    report_path.write_text(json.dumps({
+        "checkedAt": "2026-05-25T09:18:34Z",
+        "localWorkbenchCheck": "PASS",
+        "realDxmWriteReadiness": "READY",
+        "realDxmMutationAllowed": True,
+        "realDxmMutationScope": "controlled_single_save_only",
+        "controlledSingleSaveReady": True,
+        "sourcePackageReadiness": "CLEAN",
+        "sourcePackageCheck": "PASS",
+        "requireCleanWorktree": True,
+        "gitHead": "abc123",
+        "browserQa": {"ok": True, "manifest": {"gitHead": "abc123", "gitStatusShort": ""}},
+        "artifacts": {"summary": "outputs/final-delivery-check/final-delivery-check.md"},
+    }), encoding="utf-8")
+    monkeypatch.setattr(main, "FINAL_DELIVERY_CHECK_JSON", report_path)
+    monkeypatch.setattr(
+        main,
+        "_current_git_summary",
+        lambda: {
+            "head": "abc123",
+            "status_short": "",
+            "is_dirty": False,
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main,
+        "_current_real_dxm_gate_summary",
+        lambda: {
+            "readiness": "BLOCKED",
+            "blocked_reason": "L2 gate is failed; latest evidence is expired.",
+            "l2_status": "failed",
+            "l3_status": "blocked",
+            "delivery_ready": False,
+        },
+        raising=False,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/delivery/final-check")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["real_dxm_write_readiness"] == "READY"
+    assert payload["final_check_matches_current_worktree"] is True
+    assert payload["final_check_freshness"] == "current"
+    assert payload["current_real_dxm_write_readiness"] == "BLOCKED"
+    assert payload["final_check_runtime_gate_matches_report"] is False
+    assert payload["final_check_runtime_gate_freshness"] == "stale_gate"
+    assert payload["effective_real_dxm_write_readiness"] == "BLOCKED"
+    assert payload["effective_real_dxm_write_blocked_reason"].startswith("L2 gate is failed")
 
 
 def test_final_delivery_check_summary_flags_stale_report_git_head(tmp_path, monkeypatch):

@@ -2324,7 +2324,8 @@ export function ReportCenter({
   const reportSummary = workspace.reportSummary
   const l2ProbePlan = workspace.l2ProbePlan
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
-  const realWriteExpectedBlocked = finalCheck?.real_dxm_write_readiness === 'BLOCKED' && finalCheck?.real_dxm_mutation_allowed !== true
+  const effectiveReadiness = finalCheck?.effective_real_dxm_write_readiness ?? finalCheck?.real_dxm_write_readiness
+  const realWriteExpectedBlocked = effectiveReadiness === 'BLOCKED'
   const businessReportCount = reportSummary?.total_reports ?? reports.length
   const saveResultCount = reportSummary?.save_results?.length ?? 0
   const unpublishedProofCount = reportSummary?.published_proofs?.length ?? 0
@@ -2424,15 +2425,20 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
     : finalCheck?.post_final_report_qa_ok === false
       ? 'FAIL'
       : '待刷新/未运行'
-  const readiness = finalCheck?.real_dxm_write_readiness ?? '未检查'
+  const readiness = finalCheck?.effective_real_dxm_write_readiness ?? finalCheck?.real_dxm_write_readiness ?? '未检查'
+  const reportReadiness = finalCheck?.real_dxm_write_readiness ?? '未检查'
+  const runtimeGateFreshness = finalCheck?.final_check_runtime_gate_freshness ?? 'unknown'
+  const runtimeGateStale = runtimeGateFreshness === 'stale_gate'
   const realDxmMutationScope = finalCheck?.real_dxm_mutation_scope ?? (finalCheck?.real_dxm_mutation_allowed === true ? 'controlled_single_save_only' : 'none')
   const realDxmMutationAllowedLabel = finalCheck?.real_dxm_mutation_allowed === true
     ? `真实写入允许 true / ${realDxmMutationScope}`
     : '真实写入允许 false / none'
-  const blockedReason = finalCheck?.real_dxm_write_blocked_reason
+  const blockedReason = finalCheck?.effective_real_dxm_write_blocked_reason ?? finalCheck?.real_dxm_write_blocked_reason
   const readinessDetail = !available
     ? '还没有读取到交付自检报告。运行 scripts\\final-delivery-check.bat 后，这里会显示最近一次验收摘要。'
-    : readiness === 'READY'
+    : runtimeGateStale
+      ? '历史自检曾显示 READY，但当前运行门禁已过期或不再支持真实写入；现在按 BLOCKED 处理。'
+      : readiness === 'READY'
       ? '当前自检显示受控 single_save READY；执行前仍需复核 L2/L3 证据、人工金丝雀批准和报告链路。批量、无人值守和发布仍需单独放行。'
       : readiness === 'BLOCKED'
         ? '当前预期交付态：自动化工作台可继续验收，真实保存保持阻断。BLOCKED 代表真实 L2/L3 尚未放行，不代表自动化工作台失败。'
@@ -2445,6 +2451,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
         <CheckRow label={`自动化工作台 ${finalCheck?.local_workbench_check ?? '未检查'}`} ok={finalCheck?.local_workbench_check === 'PASS'} />
         <DeliveryReadinessRow readiness={readiness} />
         <FinalCheckFreshnessRow finalCheck={finalCheck} />
+        <RuntimeGateFreshnessRow finalCheck={finalCheck} />
         <SourcePackageCheckRow finalCheck={finalCheck} />
         <CheckRow label={`浏览器 QA ${finalCheck?.browser_qa_ok === true ? 'PASS' : finalCheck?.browser_qa_ok === false ? 'FAIL' : '待刷新/未运行'}`} ok={finalCheck?.browser_qa_ok === true} />
         <CheckRow
@@ -2458,6 +2465,11 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
         <p>{readinessDetail}</p>
         {blockedReason && (
           <p className="delivery-check-card__warning">真实写入阻断原因：{blockedReason}</p>
+        )}
+        {runtimeGateStale && (
+          <p className="delivery-check-card__warning">
+            运行门禁已覆盖历史自检：报告记录 {reportReadiness}，当前 L2={finalCheck?.current_l2_gate_status ?? 'unknown'} / L3={finalCheck?.current_l3_gate_status ?? 'unknown'}，有效状态为 {readiness}。
+          </p>
         )}
         <div className="delivery-check-card__next-step">
           <strong>下一步</strong>
@@ -2497,6 +2509,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
           )}
           <span>自检 Git {gitHead} / 当前 Git {currentGitHead}</span>
           <span>OK 范围 {finalCheck?.ok_scope ?? '未记录'} / {realDxmMutationAllowedLabel}</span>
+          <span>有效真实写入 {readiness} / 报告记录 {reportReadiness} / 运行门禁 {runtimeGateFreshness}</span>
           <span>受控 single_save {finalCheck?.controlled_single_save_ready === true ? 'READY' : '未放行'} / 批量无人值守发布 {finalCheck?.batch_unattended_publish_allowed === true ? '允许' : '阻断'}</span>
           <span>预期真实写入 {finalCheck?.expected_real_dxm_write_readiness ?? '未记录'} / 匹配 {finalCheck?.real_dxm_write_readiness_matches_expected === true ? 'true' : 'false'}</span>
           <span>L2 allowlist 评审模板 {finalCheck?.l2_allowlist_review_template_state ?? '未生成'} / 候选 {finalCheck?.l2_allowlist_review_template_candidate_count ?? 0} 项</span>
@@ -2603,6 +2616,26 @@ function FinalCheckFreshnessRow({ finalCheck }: { finalCheck: FinalDeliveryCheck
       : freshness === 'stale_head'
         ? '报告 Git 与当前代码不一致。'
         : '尚无法确认报告与当前代码一致。'
+
+  return (
+    <div className={`final-check-freshness-row ${matches ? 'is-current' : 'is-stale'}`}>
+      <span>{matches ? 'OK' : '!'}</span>
+      <strong>{label}</strong>
+      <small>{detail}</small>
+    </div>
+  )
+}
+
+function RuntimeGateFreshnessRow({ finalCheck }: { finalCheck: FinalDeliveryCheckSummary | null }) {
+  const freshness = finalCheck?.final_check_runtime_gate_freshness ?? 'unknown'
+  const matches = finalCheck?.final_check_runtime_gate_matches_report === true
+  const staleGate = freshness === 'stale_gate'
+  const label = matches ? '运行门禁仍支持自检结论' : staleGate ? '运行门禁已使自检过期' : '运行门禁待复核'
+  const detail = matches
+    ? '当前 L2/L3 与最近自检的真实写入状态一致。'
+    : staleGate
+      ? 'L2/L3 证据有时效；历史 READY 不能作为当前启动依据。'
+      : '尚无法确认当前 L2/L3 是否仍支持最近自检。'
 
   return (
     <div className={`final-check-freshness-row ${matches ? 'is-current' : 'is-stale'}`}>

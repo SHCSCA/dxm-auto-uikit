@@ -980,8 +980,25 @@ def _read_final_delivery_check_summary():
     l2_allowlist_review_candidates = l2_allowlist_review_template.get('candidates')
     l2_allowlist_review_template_hashes = payload.get('l2AllowlistReviewTemplateHashes') if isinstance(payload.get('l2AllowlistReviewTemplateHashes'), dict) else {}
     current_git = _current_git_summary()
+    current_gate = _current_real_dxm_gate_summary()
     report_git_head = payload.get('gitHead')
     browser_qa_git_head = browser_qa_manifest.get('gitHead')
+    report_readiness = payload.get('realDxmWriteReadiness')
+    current_readiness = current_gate.get('readiness')
+    runtime_gate_matches_report = bool(report_readiness and current_readiness and report_readiness == current_readiness)
+    runtime_gate_freshness = (
+        'current'
+        if runtime_gate_matches_report
+        else 'stale_gate'
+        if report_readiness == 'READY' and current_readiness == 'BLOCKED'
+        else 'unknown'
+    )
+    effective_readiness = current_readiness or report_readiness
+    effective_blocked_reason = (
+        current_gate.get('blocked_reason')
+        if effective_readiness == 'BLOCKED' and current_gate.get('blocked_reason')
+        else payload.get('realDxmWriteBlockedReason')
+    )
     matches_current = (
         bool(report_git_head)
         and report_git_head == current_git.get('head')
@@ -991,7 +1008,15 @@ def _read_final_delivery_check_summary():
         'status': 'available',
         'checked_at': payload.get('checkedAt'),
         'local_workbench_check': payload.get('localWorkbenchCheck'),
-        'real_dxm_write_readiness': payload.get('realDxmWriteReadiness'),
+        'real_dxm_write_readiness': report_readiness,
+        'current_real_dxm_write_readiness': current_readiness,
+        'current_real_dxm_write_blocked_reason': current_gate.get('blocked_reason'),
+        'current_l2_gate_status': current_gate.get('l2_status'),
+        'current_l3_gate_status': current_gate.get('l3_status'),
+        'final_check_runtime_gate_matches_report': runtime_gate_matches_report,
+        'final_check_runtime_gate_freshness': runtime_gate_freshness,
+        'effective_real_dxm_write_readiness': effective_readiness,
+        'effective_real_dxm_write_blocked_reason': effective_blocked_reason,
         'production_real_write_ready': payload.get('productionRealWriteReady'),
         'real_dxm_write_blocked_reason': payload.get('realDxmWriteBlockedReason'),
         'l3_evidence_readiness': payload.get('l3EvidenceReadiness'),
@@ -1066,6 +1091,56 @@ def _current_git_summary():
         'status_short': status_short,
         'is_dirty': bool(status_short),
     }
+
+
+def _current_real_dxm_gate_summary():
+    try:
+        workspace = build_delivery_workspace(repo)
+    except Exception:
+        return {
+            'readiness': None,
+            'blocked_reason': '当前运行门禁不可读取；不可依据旧自检报告启动真实写入。',
+            'l2_status': None,
+            'l3_status': None,
+            'delivery_ready': None,
+        }
+    gates = workspace.get('regression_gates') if isinstance(workspace, dict) else []
+    l2_gate = _workspace_gate(gates, 'L2')
+    l3_gate = _workspace_gate(gates, 'L3')
+    delivery_readiness = workspace.get('delivery_readiness') if isinstance(workspace, dict) else {}
+    delivery_ready = delivery_readiness.get('ready') is True if isinstance(delivery_readiness, dict) else False
+    l2_status = l2_gate.get('status') if l2_gate else None
+    l3_status = l3_gate.get('status') if l3_gate else None
+    if l2_status == 'passed' and l3_status == 'passed' and delivery_ready:
+        return {
+            'readiness': 'READY',
+            'blocked_reason': '',
+            'l2_status': l2_status,
+            'l3_status': l3_status,
+            'delivery_ready': delivery_ready,
+        }
+    if not l2_gate or not l3_gate:
+        reason = '当前运行门禁缺少 L2/L3 记录；不可依据旧自检报告启动真实写入。'
+    elif l2_status != 'passed':
+        reason = f"L2 gate is {l2_status}; {l2_gate.get('detail') or 'real DXM writes require fresh dual-target readonly evidence.'}"
+    elif l3_status != 'passed':
+        reason = f"L3 gate is {l3_status}; {l3_gate.get('detail') or 'real DXM writes require fresh single_save canary evidence.'}"
+    else:
+        reason = 'L3 evidence readiness is incomplete in the current workspace.'
+    return {
+        'readiness': 'BLOCKED',
+        'blocked_reason': reason,
+        'l2_status': l2_status,
+        'l3_status': l3_status,
+        'delivery_ready': delivery_ready,
+    }
+
+
+def _workspace_gate(gates, level: str):
+    for gate in gates or []:
+        if isinstance(gate, dict) and gate.get('level') == level:
+            return gate
+    return None
 
 
 def _final_check_freshness(report_git_head, current_git):
