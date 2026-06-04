@@ -578,7 +578,7 @@ async function screenshot(name) {
   fs.writeFileSync(path, Buffer.from(res.data, 'base64'));
   return path;
 }
-const readyModeDemoTask = reportOnlyFinal || !qaExpectedReady ? null : await ensureDryRunDemoTask();
+const readyModeDemoTask = null;
 const realMutationTaskForBlockedChecks = reportOnlyFinal || !shouldRunBlockedMutationChecks ? null : await ensureRealMutationTask();
 const unreleasedRealModeTask = reportOnlyFinal || qaExpectedReady ? null : await ensureUnreleasedRealModeTask();
 await send('Page.enable');

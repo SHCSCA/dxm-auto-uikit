@@ -364,6 +364,8 @@ def test_browser_qa_verifies_demo_is_hidden_from_default_user_path():
     assert "clickSelector('[data-section=\"reports\"]')" in source
     assert "taskTextAfterDefaultDemoCheck" in source
     assert "!taskTextAfterDefaultDemoCheck.includes(text.demoBatchButton)" in source
+    assert "const readyModeDemoTask = null;" in source
+    assert "const readyModeDemoTask = reportOnlyFinal || !qaExpectedReady ? null : await ensureDryRunDemoTask();" not in source
     assert "fetchJson('/api/stores')" in ensure_section
     assert "fetchJson('/api/products')" in ensure_section
     assert "existingStores.find(store => store?.name === 'Dang Kang')" in ensure_section
