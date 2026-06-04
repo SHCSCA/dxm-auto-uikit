@@ -16,6 +16,25 @@ SCREENSHOT_ROOT = DATA_DIR / "screenshots" / "agent_console"
 DEFAULT_TARGET_URL = "https://www.dianxiaomi.com/"
 MAX_NETWORK_EVENTS = 120
 MAX_ACTION_EVENTS = 160
+BLOCKED_SELECTOR_CONTROL_KEYWORDS = (
+    "publish",
+    "submitpublish",
+    "save",
+    "claim",
+    "remark",
+    "note",
+    "release",
+    "submit",
+    "add.json",
+    "发布",
+    "保存",
+    "待发布",
+    "认领",
+    "领取",
+    "备注",
+    "刊登",
+    "上架",
+)
 
 
 class AgentConsoleService:
@@ -325,6 +344,10 @@ class AgentConsoleService:
             page = self._page
             if page is None:
                 return {**dict(self._state), "ok": False, "reason": "browser_page_unavailable"}
+            if not self._state.get("browser_visible"):
+                return {**dict(self._state), "ok": False, "reason": "browser_window_not_visible"}
+            if self._state.get("manual_takeover"):
+                return {**dict(self._state), "ok": False, "reason": "manual_takeover_active"}
 
         try:
             result = self._run_browser_op(lambda: self._perform_browser_control(page, action, command))
@@ -346,11 +369,13 @@ class AgentConsoleService:
             return {"action": action, "x": x, "y": y}
         if action == "selector_click":
             selector = _required_text(command, "selector", "selector is required for selector_click")
+            _assert_safe_selector_control(selector)
             page.locator(selector).click(timeout=8000)
             return {"action": action, "selector": selector}
         if action == "selector_fill":
             selector = _required_text(command, "selector", "selector is required for selector_fill")
-            text = _required_text(command, "text", "text is required for selector_fill")
+            _assert_safe_selector_control(selector)
+            text = _required_untrimmed_text(command, "text", "text is required for selector_fill")
             page.locator(selector).fill(text, timeout=8000)
             return {"action": action, "selector": selector, "text_length": len(text)}
         if action == "type":
@@ -631,6 +656,20 @@ def _required_text(command: dict[str, Any], key: str, message: str) -> str:
     if not value:
         raise ValueError(message)
     return value
+
+
+def _required_untrimmed_text(command: dict[str, Any], key: str, message: str) -> str:
+    value = command.get(key)
+    if value is None or not str(value).strip():
+        raise ValueError(message)
+    return str(value)
+
+
+def _assert_safe_selector_control(selector: str) -> None:
+    normalized = selector.casefold()
+    for keyword in BLOCKED_SELECTOR_CONTROL_KEYWORDS:
+        if keyword.casefold() in normalized:
+            raise ValueError(f"blocked selector target: {keyword}")
 
 
 def _browser_control_label(action: str, command: dict[str, Any]) -> str:

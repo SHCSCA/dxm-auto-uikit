@@ -270,6 +270,80 @@ def test_agent_console_controls_live_browser_by_selector_and_records_actions(tmp
     assert status["action_events"][-1]["value"] == "16 chars"
 
 
+def test_agent_console_rejects_browser_control_when_window_not_visible(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+    fake_page = _FakePage()
+
+    with service._lock:
+        service._page = fake_page
+        service._state["browser_visible"] = False
+
+    result = service.control_browser({"action": "type", "text": "DXM test"})
+
+    assert result["ok"] is False
+    assert result["reason"] == "browser_window_not_visible"
+    assert fake_page.keyboard.typed == []
+
+
+def test_agent_console_rejects_browser_control_during_manual_takeover(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+    fake_page = _FakePage()
+
+    with service._lock:
+        service._page = fake_page
+        service._state["browser_visible"] = True
+        service._state["manual_takeover"] = True
+
+    result = service.control_browser({"action": "click", "x": 120, "y": 240})
+
+    assert result["ok"] is False
+    assert result["reason"] == "manual_takeover_active"
+    assert fake_page.mouse.clicks == []
+
+
+def test_agent_console_rejects_high_risk_selector_controls(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    monkeypatch.setattr(agent_console_module, "SCREENSHOT_ROOT", tmp_path / "screenshots")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+    fake_page = _FakePage()
+
+    with service._lock:
+        service._page = fake_page
+        service._state["browser_visible"] = True
+
+    result = service.control_browser({"action": "selector_click", "selector": "button[data-action='publish']"})
+
+    assert result["ok"] is False
+    assert result["reason"] == "browser_control_failed"
+    assert "blocked selector target" in result["error"]
+    assert fake_page.locator_calls == []
+    assert service.status()["action_events"][-1]["status"] == "error"
+
+
+def test_agent_console_selector_fill_preserves_user_text_spacing(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    monkeypatch.setattr(agent_console_module, "SCREENSHOT_ROOT", tmp_path / "screenshots")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+    fake_page = _FakePage()
+
+    with service._lock:
+        service._page = fake_page
+        service._state["browser_visible"] = True
+
+    result = service.control_browser({"action": "selector_fill", "selector": "[name='title']", "text": "  DXM title  "})
+
+    assert result["ok"] is True
+    assert fake_page.locators["[name='title']"].fills == [("  DXM title  ", 8000)]
+    assert result["control_result"]["text_length"] == 13
+    assert service.status()["action_events"][-1]["value"] == "13 chars"
+
+
 def test_agent_console_api_manual_takeover_lifecycle(tmp_path, monkeypatch):
     client, repo, service = _client_with_temp_repo_and_console(tmp_path, monkeypatch)
     task = _create_task(repo)
