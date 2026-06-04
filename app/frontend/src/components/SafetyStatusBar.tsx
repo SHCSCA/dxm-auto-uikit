@@ -55,10 +55,15 @@ export function SafetyStatusBar({ workspace, selectedTask, runtimeStatus, busy, 
   const conciseDetail = tone === 'danger'
     ? `${statusLine}。完成只读检查和人工确认后，再启动只保存任务。`
     : detail
+  const runtimeEndpointLine = runtimeStatus
+    ? `服务端 ${runtimeStatus.backend.url ?? `端口 ${runtimeStatus.backend.port ?? '未知'}`} / 前端 ${runtimeStatus.frontend.url ?? `端口 ${runtimeStatus.frontend.port ?? '未知'}`}`
+    : '服务端与前端地址待检测'
   const runtimeChips = runtimeStatus
     ? [
       { label: `后端：${runtimeStatus.backend.status === 'ok' ? '运行中' : '异常'}`, tone: runtimeStatus.backend.status === 'ok' ? 'ok' : 'danger' },
       { label: `前端：${runtimeStatus.frontend.status === 'ok' ? '运行中' : '异常'}`, tone: runtimeStatus.frontend.status === 'ok' ? 'ok' : 'danger' },
+      { label: `后端端口：${runtimeStatus.backend.port ?? '未知'}`, tone: runtimeStatus.backend.status === 'ok' ? 'ok' : 'danger' },
+      { label: `前端端口：${runtimeStatus.frontend.port ?? '未知'}`, tone: runtimeStatus.frontend.status === 'ok' ? 'ok' : 'danger' },
       { label: `自动浏览器：${runtimeStatus.agentConsole.active ? '运行中' : '待命'}`, tone: runtimeStatus.agentConsole.active ? 'ok' : 'warn' },
       { label: `DXM 登录：${runtimeStatus.dxmLogin.status}`, tone: runtimeStatus.dxmLogin.status.includes('error') ? 'danger' : 'warn' },
     ]
@@ -91,6 +96,7 @@ export function SafetyStatusBar({ workspace, selectedTask, runtimeStatus, busy, 
         <div>
           <strong>{headline}</strong>
           <span>{conciseDetail}</span>
+          <small className="safety-bar__runtime-endpoints">{runtimeEndpointLine}</small>
           {tone === 'danger' && (
             <details className="safety-bar__details">
               <summary>查看阻断详情</summary>

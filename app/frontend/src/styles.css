@@ -328,6 +328,14 @@ a:focus-visible {
   margin-top: 2px;
 }
 
+.safety-bar__runtime-endpoints {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .safety-bar--danger .safety-bar__main strong {
   color: #7a1f2a;
 }

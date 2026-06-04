@@ -74,6 +74,7 @@ def test_config_center_matches_dxm_edit_page_sections_and_value_preview():
     assert "店铺与任务基础" in config_section
     assert "类目与标题" in config_section
     assert "SKU / 价格 / 库存" in config_section
+    assert "价格策略" in config_section
     assert "图片与素材" in config_section
     assert "包装物流" in config_section
     assert "合规 / 海关" in config_section
@@ -198,10 +199,20 @@ def test_guide_center_can_start_real_dxm_login_without_l2_gate():
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
 
     assert "async function openDxmLogin" in app_source
+    assert "async function continueDxmLogin" in app_source
+    assert "async function navigateDxmTarget" in app_source
     assert "/api/dxm/login/start" in app_source
+    assert "/api/dxm/login/continue" in app_source
+    assert "/api/dxm/navigate" in app_source
     assert "onOpenDxmLogin={openDxmLogin}" in app_source
+    assert "onContinueDxmLogin={continueDxmLogin}" in app_source
+    assert "onNavigateDxmTarget={navigateDxmTarget}" in app_source
     assert "onOpenDxmLogin: () => void" in workbench_source
+    assert "onContinueDxmLogin: () => void" in workbench_source
+    assert "onNavigateDxmTarget: (target: 'data_acquisition' | 'draft_box') => void" in workbench_source
     assert "action: '打开登录页'" in workbench_source
+    assert "验证码已完成，检测登录态" in workbench_source
+    assert "进入采集箱" in workbench_source
     assert "onAction: onOpenDxmLogin" in workbench_source
     assert "账号密码只用于本次真实店小秘登录" in workbench_source
     assert "DXM 登录状态" in workbench_source
@@ -225,6 +236,8 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "summary>执行步骤明细</summary>" in console_section
     assert "summary>任务执行日志</summary>" in console_section
     assert "登录/人工处理真实浏览器" in workbench_source
+    assert "验证码已完成，检测登录态" in workbench_source
+    assert "进入采集箱" in workbench_source
     assert "启动执行观察" in workbench_source
     assert "不会发布" in workbench_source
     assert "console-focus-panel" in styles_source
@@ -647,6 +660,10 @@ def test_frontend_surfaces_runtime_status_and_log_filters():
     assert "runtimeStatus={runtimeStatus}" in app_source
     assert "`后端：${runtimeStatus.backend.status === 'ok' ? '运行中' : '异常'}`" in safety_bar
     assert "`前端：${runtimeStatus.frontend.status === 'ok' ? '运行中' : '异常'}`" in safety_bar
+    assert "runtimeEndpointLine" in safety_bar
+    assert "后端端口" in safety_bar
+    assert "前端端口" in safety_bar
+    assert "safety-bar__runtime-endpoints" in safety_bar
     assert "自动浏览器" in safety_bar
     assert "DXM 登录" in safety_bar
     assert "safety-bar__meta-details" in safety_bar

@@ -447,6 +447,42 @@ export default function App() {
     }
   }
 
+  async function continueDxmLogin() {
+    setBusy(true)
+    setOperationError(null)
+    try {
+      await postJson('/api/dxm/login/continue', { confirm: true })
+      setActiveSection('console')
+      await refreshRuntimeStatus()
+      await refreshRuntimeLogs()
+      await refreshWorkspace()
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : '继续检测店小秘登录态失败')
+      await refreshRuntimeStatus()
+      await refreshRuntimeLogs()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function navigateDxmTarget(target: 'data_acquisition' | 'draft_box') {
+    setBusy(true)
+    setOperationError(null)
+    try {
+      await postJson('/api/dxm/navigate', { target })
+      setActiveSection('console')
+      await refreshRuntimeStatus()
+      await refreshRuntimeLogs()
+      await refreshWorkspace()
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : '进入店小秘业务页失败')
+      await refreshRuntimeStatus()
+      await refreshRuntimeLogs()
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function startAgentConsole() {
     if (!selectedTask) {
       setAgentConsoleError('请先选择一个保存核验任务')
@@ -581,6 +617,8 @@ export default function App() {
             configPreview={configPreview}
             runtimeStatus={runtimeStatus}
             onOpenDxmLogin={openDxmLogin}
+            onContinueDxmLogin={continueDxmLogin}
+            onNavigateDxmTarget={navigateDxmTarget}
             onStartTask={startSelectedTask}
             onShowConfig={() => setActiveSection('config')}
             onShowTasks={() => setActiveSection('tasks')}
@@ -630,6 +668,8 @@ export default function App() {
             onRuntimeLogQueryChange={setRuntimeLogQuery}
             onStartAgentConsole={startAgentConsole}
             onOpenDxmLogin={openDxmLogin}
+            onContinueDxmLogin={continueDxmLogin}
+            onNavigateDxmTarget={navigateDxmTarget}
             onStopAgentConsole={stopAgentConsole}
             onSnapshotAgentConsole={snapshotAgentConsole}
             onRequestAgentConsoleTakeover={requestAgentConsoleTakeover}

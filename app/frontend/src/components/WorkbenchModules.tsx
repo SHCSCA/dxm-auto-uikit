@@ -43,6 +43,8 @@ type GuideCenterProps = CommonProps & {
   configPreview: ConfigPreview | null
   runtimeStatus: RuntimeStatus | null
   onOpenDxmLogin: () => void
+  onContinueDxmLogin: () => void
+  onNavigateDxmTarget: (target: 'data_acquisition' | 'draft_box') => void
   onStartTask: () => void
   onShowConfig: () => void
   onShowTasks: () => void
@@ -102,6 +104,8 @@ type ExecutionConsoleProps = CommonProps & {
   onRuntimeLogQueryChange: (query: string) => void
   onStartAgentConsole: () => void
   onOpenDxmLogin: () => void
+  onContinueDxmLogin: () => void
+  onNavigateDxmTarget: (target: 'data_acquisition' | 'draft_box') => void
   onStopAgentConsole: () => void
   onSnapshotAgentConsole: () => void
   onRequestAgentConsoleTakeover: () => void
@@ -206,6 +210,8 @@ export function GuideCenter({
   configPreview,
   runtimeStatus,
   onOpenDxmLogin,
+  onContinueDxmLogin,
+  onNavigateDxmTarget,
   onStartTask,
   onShowConfig,
   onShowTasks,
@@ -246,8 +252,10 @@ export function GuideCenter({
       reason: dxmLoggedIn ? '' : `DXM 登录状态：${runtimeStatus?.dxmLogin?.status ?? '未知'}`,
       action: '打开登录页',
       onAction: onOpenDxmLogin,
-      secondaryAction: '查看控制台',
-      onSecondaryAction: onShowConsole,
+      secondaryAction: dxmLoggedIn ? '进入采集箱' : '验证码已完成，检测登录态',
+      onSecondaryAction: dxmLoggedIn ? () => onNavigateDxmTarget('draft_box') : onContinueDxmLogin,
+      tertiaryAction: '查看控制台',
+      onTertiaryAction: onShowConsole,
     },
     {
       id: 'store',
@@ -355,6 +363,11 @@ export function GuideCenter({
                 {nextGuideStep.secondaryAction}
               </button>
             )}
+            {nextGuideStep.tertiaryAction && (
+              <button className="button button--quiet" type="button" onClick={nextGuideStep.onTertiaryAction}>
+                {nextGuideStep.tertiaryAction}
+              </button>
+            )}
           </div>
         </article>
         <details className="inline-disclosure guide-full-path">
@@ -375,6 +388,11 @@ export function GuideCenter({
                   {step.secondaryAction && (
                     <button className="button button--quiet" type="button" onClick={step.onSecondaryAction}>
                       {step.secondaryAction}
+                    </button>
+                  )}
+                  {step.tertiaryAction && (
+                    <button className="button button--quiet" type="button" onClick={step.onTertiaryAction}>
+                      {step.tertiaryAction}
                     </button>
                   )}
                 </div>
@@ -832,7 +850,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   const nextConfigSection = sectionsNeedingAttention[0]?.section ?? editableConfigSections[0]
   const nextConfigPreview = sectionsNeedingAttention[0]?.preview ?? previewGroups.get(nextConfigSection.previewSection)
   const readySectionCount = sectionsReady.length
-  const configCoverageLabels = ['店铺与任务基础', '类目与标题', 'SKU / 价格 / 库存', '图片与素材', '包装物流', '合规 / 海关', '半托管', '店小秘引用模板']
+  const configCoverageLabels = ['店铺与任务基础', '类目与标题', 'SKU / 价格 / 库存', '价格策略', '图片与素材', '包装物流', '合规 / 海关', '半托管', '店小秘引用模板']
   const effectivePreviewTitle = '本次任务实际取值预览'
   const sourcePriorityLabels = ['任务覆盖', '商品 payload', '店铺/类目模板', '系统默认值']
   const fieldUsageLegend = ['直接填入 DXM', '模板匹配', '策略/备用']
@@ -1468,6 +1486,8 @@ export function ExecutionConsole({
   onRuntimeLogLevelChange,
   onRuntimeLogQueryChange,
   onStartAgentConsole,
+  onContinueDxmLogin,
+  onNavigateDxmTarget,
   onStopAgentConsole,
   onSnapshotAgentConsole,
   onRequestAgentConsoleTakeover,
@@ -1532,6 +1552,8 @@ export function ExecutionConsole({
           diagnosticBlockReason={diagnosticBlockReason}
           onStartAgentConsole={onStartAgentConsole}
           onOpenDxmLogin={onOpenDxmLogin}
+          onContinueDxmLogin={onContinueDxmLogin}
+          onNavigateDxmTarget={onNavigateDxmTarget}
           onStopAgentConsole={onStopAgentConsole}
           onSnapshotAgentConsole={onSnapshotAgentConsole}
           onRequestAgentConsoleTakeover={onRequestAgentConsoleTakeover}
@@ -1967,6 +1989,8 @@ function AgentConsoleControls({
   diagnosticBlockReason,
   onStartAgentConsole,
   onOpenDxmLogin,
+  onContinueDxmLogin,
+  onNavigateDxmTarget,
   onStopAgentConsole,
   onSnapshotAgentConsole,
   onRequestAgentConsoleTakeover,
@@ -1982,6 +2006,8 @@ function AgentConsoleControls({
   diagnosticBlockReason: string
   onStartAgentConsole: () => void
   onOpenDxmLogin: () => void
+  onContinueDxmLogin: () => void
+  onNavigateDxmTarget: (target: 'data_acquisition' | 'draft_box') => void
   onStopAgentConsole: () => void
   onSnapshotAgentConsole: () => void
   onRequestAgentConsoleTakeover: () => void
@@ -2021,6 +2047,24 @@ function AgentConsoleControls({
           title="登录和人工处理不要求 L2；只用于打开真实店小秘窗口，不启动保存。"
         >
           登录/人工处理真实浏览器
+        </button>
+        <button
+          className="button button--quiet"
+          type="button"
+          onClick={onContinueDxmLogin}
+          disabled={busy}
+          title="验证码、短信或人工确认完成后，用这个按钮让系统重新检测 DXM 登录态。"
+        >
+          验证码已完成，检测登录态
+        </button>
+        <button
+          className="button button--quiet"
+          type="button"
+          onClick={() => onNavigateDxmTarget('draft_box')}
+          disabled={busy}
+          title="登录成功后进入真实店小秘采集箱；该动作只导航，不保存、不发布。"
+        >
+          进入采集箱
         </button>
         <button
           className="button button--quiet"
@@ -2429,8 +2473,9 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
   const reportReadiness = finalCheck?.real_dxm_write_readiness ?? '未检查'
   const runtimeGateFreshness = finalCheck?.final_check_runtime_gate_freshness ?? 'unknown'
   const runtimeGateStale = runtimeGateFreshness === 'stale_gate'
-  const realDxmMutationScope = finalCheck?.real_dxm_mutation_scope ?? (finalCheck?.real_dxm_mutation_allowed === true ? 'controlled_single_save_only' : 'none')
-  const realDxmMutationAllowedLabel = finalCheck?.real_dxm_mutation_allowed === true
+  const realDxmMutationAllowed = finalCheck?.effective_real_dxm_mutation_allowed ?? (readiness === 'READY' && finalCheck?.real_dxm_mutation_allowed === true)
+  const realDxmMutationScope = finalCheck?.effective_real_dxm_mutation_scope ?? (realDxmMutationAllowed ? finalCheck?.real_dxm_mutation_scope ?? 'controlled_single_save_only' : 'none')
+  const realDxmMutationAllowedLabel = realDxmMutationAllowed
     ? `真实写入允许 true / ${realDxmMutationScope}`
     : '真实写入允许 false / none'
   const blockedReason = finalCheck?.effective_real_dxm_write_blocked_reason ?? finalCheck?.real_dxm_write_blocked_reason

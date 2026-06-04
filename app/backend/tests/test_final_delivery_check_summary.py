@@ -242,6 +242,8 @@ def test_final_delivery_check_summary_marks_ready_report_stale_when_live_l2_expi
     assert payload["final_check_runtime_gate_freshness"] == "stale_gate"
     assert payload["effective_real_dxm_write_readiness"] == "BLOCKED"
     assert payload["effective_real_dxm_write_blocked_reason"].startswith("L2 gate is failed")
+    assert payload["effective_real_dxm_mutation_allowed"] is False
+    assert payload["effective_real_dxm_mutation_scope"] == "none"
 
 
 def test_final_delivery_check_summary_flags_stale_report_git_head(tmp_path, monkeypatch):

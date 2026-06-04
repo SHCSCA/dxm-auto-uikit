@@ -999,6 +999,8 @@ def _read_final_delivery_check_summary():
         if effective_readiness == 'BLOCKED' and current_gate.get('blocked_reason')
         else payload.get('realDxmWriteBlockedReason')
     )
+    effective_mutation_allowed = payload.get('realDxmMutationAllowed') is True and effective_readiness == 'READY'
+    effective_mutation_scope = payload.get('realDxmMutationScope') if effective_mutation_allowed else 'none'
     matches_current = (
         bool(report_git_head)
         and report_git_head == current_git.get('head')
@@ -1017,6 +1019,8 @@ def _read_final_delivery_check_summary():
         'final_check_runtime_gate_freshness': runtime_gate_freshness,
         'effective_real_dxm_write_readiness': effective_readiness,
         'effective_real_dxm_write_blocked_reason': effective_blocked_reason,
+        'effective_real_dxm_mutation_allowed': effective_mutation_allowed,
+        'effective_real_dxm_mutation_scope': effective_mutation_scope,
         'production_real_write_ready': payload.get('productionRealWriteReady'),
         'real_dxm_write_blocked_reason': payload.get('realDxmWriteBlockedReason'),
         'l3_evidence_readiness': payload.get('l3EvidenceReadiness'),

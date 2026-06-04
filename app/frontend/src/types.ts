@@ -225,6 +225,8 @@ export type FinalDeliveryCheckSummary = {
   final_check_runtime_gate_freshness?: string | null
   effective_real_dxm_write_readiness?: string | null
   effective_real_dxm_write_blocked_reason?: string | null
+  effective_real_dxm_mutation_allowed?: boolean | null
+  effective_real_dxm_mutation_scope?: string | null
   production_real_write_ready?: boolean | null
   real_dxm_write_blocked_reason?: string | null
   l3_evidence_readiness?: Record<string, unknown> | null
