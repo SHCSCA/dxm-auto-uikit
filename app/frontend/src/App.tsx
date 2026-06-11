@@ -214,10 +214,14 @@ export default function App() {
     setFinalCheck(finalCheckSummary)
     setSelectedTaskId((current) => current ?? pickDefaultTaskId(deliveryWorkspace, nextWorkspace.tasks))
     if (failures.length) {
+      const firstFailure = failures[0]
+      const taskMissing = Boolean(firstFailure?.path.startsWith('/api/delivery/workspace') && /task not found/i.test(firstFailure.message))
       setWorkspaceNotice({
         kind: 'degraded',
-        title: '工作台服务连接异常',
-        detail: `暂时无法读取完整任务数据。请检查启动器和后端服务状态；系统不会伪造真实保存结果。${failures[0]?.message ?? ''}`,
+        title: taskMissing ? '当前任务需要重新选择' : '工作台服务连接异常',
+        detail: taskMissing
+          ? '上次选择的任务已不存在或已归档。请在任务中心重新选择或创建单商品只保存任务；真实保存前仍会重新校验。'
+          : `暂时无法读取完整任务数据。请查看执行控制台日志；系统不会用本地演示结果替代真实保存。${firstFailure?.message ?? ''}`,
       })
     } else {
       setWorkspaceNotice(null)
@@ -901,7 +905,7 @@ export default function App() {
       )}
       {operationError && (
         <div className="operation-alert" role="alert">
-          <strong>操作未完成</strong>
+          <strong>操作需要重试</strong>
           <span>{operationError}</span>
           <button className="button button--quiet" type="button" onClick={() => setOperationError(null)}>
             知道了

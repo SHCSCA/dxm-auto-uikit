@@ -378,48 +378,50 @@ export function GuideCenter({
     ? '后续只需要复核报告、证据和真实浏览器记录；要处理新商品时再回到任务中心创建任务。'
     : '先处理当前最靠前的一步；完整流程放在下方详情里，避免你一进来就被所有状态淹没。'
   const guideFocusTitle = selectedTaskCompleted ? '完成后复核' : '现在只做这一步'
-  const guideFocusMeta = selectedTaskCompleted ? '报告与证据' : `${completedSteps}/${guideSteps.length} 完成`
+  const guideFocusMeta = selectedTaskCompleted
+    ? '报告与证据'
+    : canRequestSave
+      ? '可申请单商品只保存'
+      : `${completedSteps}/${guideSteps.length} 完成`
+  const nextStepNumber = Math.max(guideSteps.indexOf(nextGuideStep) + 1, 1)
+  const summaryRows = [
+    {
+      label: '真实登录',
+      value: dxmLoggedIn ? '已就绪' : '待完成',
+      ok: dxmLoggedIn,
+      action: dxmLoggedIn ? '打开采集箱' : '打开登录页',
+      onAction: dxmLoggedIn ? () => onNavigateDxmTarget('draft_box') : onOpenDxmLogin,
+    },
+    {
+      label: '编辑页配置',
+      value: configOk ? '完整' : `${configPreview?.missing.length ?? 0} 项待补`,
+      ok: configOk,
+      action: '配置',
+      onAction: onShowConfig,
+    },
+    {
+      label: '只读检查',
+      value: l2Passed ? '通过' : humanGateStateLabel(l2Gate?.status ?? 'not_run'),
+      ok: l2Passed,
+      action: l2Passed ? '任务' : '复验',
+      onAction: l2Passed ? onShowTasks : onRunL2Probe,
+    },
+    {
+      label: '当前任务',
+      value: selectedTask ? `${humanTaskModeLabel(selectedTask.mode)} / ${selectedTask.status}` : '未选择',
+      ok: Boolean(selectedSingleSave && (selectedTaskDraft || selectedTaskCompleted)),
+      action: '选择',
+      onAction: onShowTasks,
+    },
+  ]
 
   return (
-    <section className="module-layout" aria-label="操作引导">
-      <div className="module-card span-3 guide-hero">
-        <ModuleHead title="操作引导" meta="按当前状态推进" />
-        <div className="guide-hero__body">
-          <div>
-            <h1>{guideHeroTitle}</h1>
-            <p>{guideHeroCopy}</p>
-          </div>
-          <span className={`status-pill ${selectedTaskCompleted || canRequestSave ? 'ok' : 'warn'}`}>
-            {selectedTaskCompleted ? '当前任务已完成' : canRequestSave ? '可申请单商品只保存' : '等待前置条件'}
-          </span>
-        </div>
-        <div className="guide-path-summary" aria-label="当前路径">
-          <strong>当前路径</strong>
-          {guidePathSummary.map((item) => (
-            <span key={item.label} className={`is-${item.status}`}>
-              <b>{item.label}</b>
-              <small>{item.status === 'done' ? '已完成' : item.status === 'current' ? '当前' : '等待'}</small>
-            </span>
-          ))}
-        </div>
-        <div className="guide-automation-path" aria-label="真实自动化主路径">
-          <strong>真实自动化主路径</strong>
-          {guideAutomationPath.map((item, index) => (
-            <article key={item.title} className={`is-${item.status}`}>
-              <span>{index + 1}</span>
-              <div>
-                <b>{item.title}</b>
-                <small>{item.detail}</small>
-              </div>
-            </article>
-          ))}
-        </div>
-      </div>
-
-      <div className="module-card span-2 guide-next-card">
+    <section className="module-layout guide-layout" aria-label="操作引导">
+      <div className="module-card span-2 guide-next-card guide-command-card">
         <ModuleHead title={guideFocusTitle} meta={guideFocusMeta} />
+        <p className="sr-only">{guideHeroTitle}。{guideHeroCopy}</p>
         <article className={`guide-step guide-step--primary is-${nextGuideStep.status}`} data-guide-step={nextGuideStep.id}>
-          <span>{Math.max(guideSteps.indexOf(nextGuideStep) + 1, 1)}</span>
+          <span>{nextStepNumber}</span>
           <div>
             <strong>{nextGuideStep.title}</strong>
             <small>{nextGuideStep.detail}</small>
@@ -458,8 +460,28 @@ export function GuideCenter({
             </div>
           )}
         </article>
+        <div className="guide-path-summary guide-path-summary--compact" aria-label="当前路径">
+          {guidePathSummary.map((item) => (
+            <span key={item.label} className={`is-${item.status}`}>
+              <b>{item.label}</b>
+              <small>{item.status === 'done' ? '完成' : item.status === 'current' ? '当前' : '等待'}</small>
+            </span>
+          ))}
+        </div>
         <details className="inline-disclosure guide-full-path">
-          <summary>查看完整 {guideSteps.length} 步流程</summary>
+          <summary>展开完整操作流程</summary>
+          <div className="guide-automation-path" aria-label="真实自动化主路径">
+            <strong>真实自动化主路径</strong>
+            {guideAutomationPath.map((item, index) => (
+              <article key={item.title} className={`is-${item.status}`}>
+                <span>{index + 1}</span>
+                <div>
+                  <b>{item.title}</b>
+                  <small>{item.detail}</small>
+                </div>
+              </article>
+            ))}
+          </div>
           <div className="guide-step-list">
             {guideSteps.map((step, index) => (
               <article key={step.title} className={`guide-step is-${step.status}`} data-guide-step={step.id}>
@@ -489,19 +511,26 @@ export function GuideCenter({
           </div>
         </details>
       </div>
-      <div className="module-card">
-        <ModuleHead title="后台状态" meta="异常时再处理" />
-        <div className="check-list">
+      <div className="module-card guide-status-card">
+        <ModuleHead title="后台状态摘要" meta="只显示会阻断下一步的项" />
+        <div className="guide-status-list">
           <CheckRow label="工作台服务" ok={backendOk && frontendOk} />
-          <CheckRow label="DXM 登录" ok={dxmLoggedIn} />
-          <CheckRow label="配置完整" ok={configOk} />
-          <CheckRow label="只读检查通过" ok={l2Passed} />
+          {summaryRows.map((row) => (
+            <div key={row.label} className="guide-status-row">
+              <span className={`guide-status-dot ${row.ok ? 'is-ok' : 'is-warn'}`} aria-hidden="true" />
+              <div>
+                <strong>{row.label}</strong>
+                <small>{row.value}</small>
+              </div>
+              <button className="button button--quiet" type="button" onClick={row.onAction}>{row.action}</button>
+            </div>
+          ))}
           <CheckRow label="单商品只保存任务" ok={selectedSingleSave} />
         </div>
         {!(backendOk && frontendOk) && (
           <div className="guide-exception-callout">
             <strong>工作台服务连接异常</strong>
-            <small>先检查启动器和运行日志；服务恢复后继续真实店小秘操作。</small>
+            <small>服务恢复后继续真实店小秘操作；系统不会用本地演示结果替代真实保存。</small>
             <button className="button button--secondary" type="button" onClick={onShowConsole}>查看运行日志</button>
           </div>
         )}

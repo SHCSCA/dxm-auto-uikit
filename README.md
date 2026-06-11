@@ -270,11 +270,11 @@ scripts\final-delivery-check.bat --help
 ## 下一步重点
 
 1. 保持 `config/l2_readonly_allowlist.json` 的最小只读范围；继续禁止写方法、WebSocket、EventSource 和 action 端点。
-2. 将 2026-06-11 受控单商品只保存 READY 证据纳入交付归档，并在源码发布包前运行 `scripts\final-delivery-check.bat -RequireCleanWorktree`。
+2. 将 2026-06-11 受控单商品只保存证据和 READY 结论纳入交付归档，并在源码发布包前运行 `scripts\final-delivery-check.bat -RequireCleanWorktree`。
 3. 若要扩大到认领或批量保存，必须为对应范围重新建立只读页面检查、人工批准和保存/回滚证据，不复用单商品只保存结论。
 4. 批量、无人值守和发布必须单独设计门禁、人工批准和回滚策略。
 
-历史 clean worktree 验收记录见 `docs/product/最终交付验收记录-20260603.md`；当前分支已通过本地工作台和受控 single_save READY 自检，源码包发布前仍必须重新跑 clean worktree 最终自检。
+免安装版快速使用说明见 `docs/product/免安装版快速使用说明-20260611.md`。历史 clean worktree 验收记录见 `docs/product/最终交付验收记录-20260603.md`；当前分支已通过本地工作台和受控 single_save READY 自检，源码包发布前仍必须重新跑 clean worktree 最终自检。
 
 ---
 

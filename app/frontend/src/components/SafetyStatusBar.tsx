@@ -27,13 +27,19 @@ export function SafetyStatusBar({ workspace, selectedTask, runtimeStatus, deskto
   const l3NeedsApproval = l3Gate?.status !== 'passed'
   const realWriteExpectedBlocked = l2BlocksRealSave || l3NeedsApproval
   const blockerGaps = workspace.acceptanceGaps.filter((gap) => gap.severity === 'blocker')
-  const visibleBlockerGaps = blockerGaps.filter((gap) => !(realWriteExpectedBlocked && l3PostEvidenceGapIds.has(gap.id)))
+  const noTaskSelected = !selectedTask && workspace.tasks.length === 0
+  const preTaskEvidenceGapIds = new Set(['gap-evidence-a', 'gap-report', 'empty-workspace'])
+  const visibleBlockerGaps = blockerGaps.filter((gap) => {
+    if (realWriteExpectedBlocked && l3PostEvidenceGapIds.has(gap.id)) return false
+    if (noTaskSelected && preTaskEvidenceGapIds.has(gap.id)) return false
+    return true
+  })
   const l3PostEvidenceGapCount = blockerGaps.filter((gap) => realWriteExpectedBlocked && l3PostEvidenceGapIds.has(gap.id)).length
   const hasBlocker = visibleBlockerGaps.length > 0
   const dxmLoggedIn = runtimeStatus ? dxmReadySessionStatuses.has(runtimeStatus.dxmLogin.status) : false
-  const tone = l2BlocksRealSave || l3BlocksRealSave
+  const tone = l3BlocksRealSave || hasBlocker || publishGuardReasons.length > 0
     ? 'danger'
-    : workspace.source === 'mock' || workspace.evidenceGrade?.grade === 'C' || hasBlocker
+    : l2BlocksRealSave || l3NeedsApproval || workspace.source === 'mock' || workspace.evidenceGrade?.grade === 'C'
       ? 'warn'
       : 'ok'
   const headline = selectedTaskCompleted
