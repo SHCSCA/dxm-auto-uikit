@@ -17,7 +17,15 @@ const runtimeInfo = {
   frontendPath: null,
   backendLogPath: null,
   desktopLogPath: null,
+  qaCapturePath: null,
   lastError: null,
+}
+
+function getQaCapturePath() {
+  const arg = process.argv.find((value) => value.startsWith('--qa-capture='))
+  if (!arg) return null
+  const capturePath = arg.slice('--qa-capture='.length).trim()
+  return capturePath || null
 }
 
 function initializeDesktopLogPath() {
@@ -243,6 +251,8 @@ async function createWindow() {
   try {
     initializeDesktopLogPath()
     appendDesktopLog(`Desktop app starting packaged=${app.isPackaged} resourcesPath=${process.resourcesPath}`)
+    const qaCapturePath = getQaCapturePath()
+    runtimeInfo.qaCapturePath = qaCapturePath
     const repoRoot = resolveRepoRoot()
     runtimeInfo.repoRoot = repoRoot
     const port = await findFreePort(8000)
@@ -259,6 +269,7 @@ async function createWindow() {
       height: 940,
       minWidth: 1180,
       minHeight: 760,
+      show: !qaCapturePath,
       backgroundColor: '#f6f8fb',
       title: 'DXM Agent Console',
       webPreferences: {
@@ -280,6 +291,14 @@ async function createWindow() {
       },
     })
     appendDesktopLog(`Loaded frontend ${frontendPath} with apiBase=${runtimeInfo.apiBase}`)
+    if (qaCapturePath) {
+      await new Promise((resolve) => setTimeout(resolve, 1200))
+      fs.mkdirSync(path.dirname(qaCapturePath), { recursive: true })
+      const image = await mainWindow.webContents.capturePage()
+      fs.writeFileSync(qaCapturePath, image.toPNG())
+      appendDesktopLog(`QA capture written: ${qaCapturePath}`)
+      app.quit()
+    }
   } catch (error) {
     runtimeInfo.lastError = error.stack || error.message
     appendDesktopLog(`Desktop startup failed: ${runtimeInfo.lastError}`)

@@ -50,6 +50,11 @@ def test_desktop_main_starts_backend_hidden_and_loads_frontend_with_api_base():
     assert "apiBase=" in source
     assert "killBackendProcess()" in source
     assert "will-quit" in source
+    assert "function getQaCapturePath()" in source
+    assert "--qa-capture=" in source
+    assert "show: !qaCapturePath" in source
+    assert "webContents.capturePage()" in source
+    assert "QA capture written" in source
 
 
 def test_desktop_main_surfaces_startup_failures_in_visible_window():
@@ -101,6 +106,8 @@ def test_verify_desktop_package_smoke_script_checks_packaged_exe_logs():
     assert "desktop-main.log" in source
     assert "Loaded frontend" in source
     assert "Starting backend" in source
+    assert "--qa-capture=$CapturePath" in source
+    assert "QA capture was not created" in source
     assert "taskkill" in source
 
 

@@ -82,13 +82,17 @@ a:hover {
 .sidebar__brand {
   min-height: 44px;
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) 32px;
+  grid-template-columns: 38px minmax(0, 1fr);
   align-items: center;
-  gap: 9px;
+  gap: 10px;
+  position: relative;
+  padding-right: 40px;
 }
 
 .is-collapsed .sidebar__brand {
   grid-template-columns: 38px;
+  justify-items: center;
+  padding-right: 0;
 }
 
 .brand-mark {
@@ -105,6 +109,7 @@ a:hover {
 .sidebar__brand strong,
 .sidebar__brand span {
   display: block;
+  white-space: nowrap;
 }
 
 .sidebar__brand strong {
@@ -140,6 +145,16 @@ a:hover {
   background: var(--rail-soft);
   color: #f9fbff;
   cursor: pointer;
+}
+
+.sidebar__brand .icon-button {
+  position: absolute;
+  right: 0;
+  top: 6px;
+}
+
+.is-collapsed .sidebar__brand .icon-button {
+  position: static;
 }
 
 .icon-button:focus-visible,

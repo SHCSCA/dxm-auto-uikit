@@ -7,6 +7,7 @@ $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $ExePath = Join-Path $RepoRoot 'outputs\desktop-build\win-unpacked\DXM Agent Console.exe'
 $LogPath = Join-Path $env:APPDATA 'DXM Agent Console\data\desktop-main.log'
 $LegacyLogPath = Join-Path $env:APPDATA 'dxm-agent-desktop\data\desktop-main.log'
+$CapturePath = Join-Path $env:TEMP 'dxm-agent-console-packaged-smoke.png'
 
 Write-Host 'DXM Agent Console packaged smoke'
 Write-Host "Exe: $ExePath"
@@ -21,8 +22,23 @@ foreach ($Path in @($LogPath, $LegacyLogPath)) {
   }
 }
 
-$Process = Start-Process -FilePath $ExePath -WorkingDirectory (Split-Path $ExePath) -PassThru
-Start-Sleep -Seconds $WaitSeconds
+if (Test-Path $CapturePath) {
+  Remove-Item -LiteralPath $CapturePath -Force
+}
+
+$Process = Start-Process -FilePath $ExePath -WorkingDirectory (Split-Path $ExePath) -ArgumentList "--qa-capture=$CapturePath" -PassThru
+if (!$Process.WaitForExit($WaitSeconds * 1000)) {
+  try {
+    Stop-Process -Id $Process.Id -Force
+  } catch {}
+  throw "Packaged smoke timed out after $WaitSeconds seconds"
+}
+if ($Process.ExitCode -ne 0) {
+  throw "Packaged smoke failed: exit code $($Process.ExitCode)"
+}
+if (!(Test-Path $CapturePath)) {
+  throw "Packaged smoke failed: QA capture was not created: $CapturePath"
+}
 
 $LogCandidates = @($LogPath, $LegacyLogPath)
 $ExistingLog = $LogCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -51,3 +67,4 @@ Get-Process | Where-Object { $_.Path -like '*desktop-build*DXM Agent Console.exe
 }
 
 Write-Host "Packaged smoke passed. Log: $ExistingLog"
+Write-Host "QA capture: $CapturePath"
