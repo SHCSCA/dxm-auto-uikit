@@ -74,6 +74,55 @@ def test_config_center_prioritizes_missing_sections_and_sources():
     assert "setActiveConfigSectionCode" in config_section
     assert "selectedConfigSection" in config_section
     assert "正在编辑分区" in config_section
+
+
+def test_config_center_explains_precheck_and_disabled_save_continue():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
+    editable_card = source[source.index("function EditableConfigSectionCard"):source.index("export function TaskCenter")]
+    qa_source = QA_BROWSER_CHECK.read_text(encoding="utf-8")
+
+    assert "onRefreshConfigPreview" in source
+    assert "onRefreshConfigPreview={async () => { await refreshConfigPreview(); await refreshWorkspace() }}" in app_source
+    assert "运行配置预检" in config_section
+    assert "刷新配置预检" in config_section
+    assert "读取当前任务、店铺、商品和模板" in config_section
+    assert "不会操作店小秘" in config_section
+    assert "disabledReason" in editable_card
+    assert "先选择任务" in editable_card
+    assert "先运行配置预检" in editable_card
+    assert "不能继续的原因" in editable_card
+    assert "configPrecheckActionVisible" in qa_source
+    assert "configDisabledReasonVisible" in qa_source
+
+
+def test_config_center_focused_section_execution_preview_and_template_save_state():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    qa_source = QA_BROWSER_CHECK.read_text(encoding="utf-8")
+
+    assert "demoTemplateSeeds" in source
+    assert "applyDefaultTemplatePack" in config_section
+    assert "默认测试模板" in config_section
+    assert "使用之前测试通过的数据配置" in config_section
+    assert "defaultTemplatePackState" in config_section
+    assert "config-template-console" in config_section
+    assert "当前分区模板" in config_section
+    assert "sectionTemplateOptions" in config_section
+    assert "selectedTemplateBySection" in config_section
+    assert "applyTemplateToDraft" in config_section
+    assert "套用到表单" in config_section
+    assert "多套模板按当前店铺/类目优先展示" in config_section
+    assert "sectionSaveState" in config_section
+    assert "未保存修改" in config_section
+    assert "已保存" in config_section
+    assert "保存时间" in config_section
+    assert ".config-template-console" in styles_source
+    assert ".config-save-state" in styles_source
+    assert "configDefaultTemplatePackVisible" in qa_source
+    assert "configTemplateSelectorVisible" in qa_source
     assert "只展示当前分区；常用分区在上方，低频字段收进“更多编辑页分区”。" in config_section
     assert "otherConfigSections.map" not in config_section
     assert "配置保存闭环" in config_section

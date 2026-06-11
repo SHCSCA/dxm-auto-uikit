@@ -39,6 +39,7 @@ type ConfigCenterProps = CommonProps & {
   configPreview: ConfigPreview | null
   configPreviewLoading: boolean
   onConfigSaved: () => void | Promise<void>
+  onRefreshConfigPreview: () => void | Promise<void>
 }
 
 type DxmLoginDraft = {
@@ -1351,7 +1352,7 @@ function hasConfigDraftChanged(current: Record<string, string> | undefined, base
   return false
 }
 
-export function ConfigCenter({ workspace, selectedTask, configPreview, configPreviewLoading, onConfigSaved }: ConfigCenterProps) {
+export function ConfigCenter({ workspace, selectedTask, configPreview, configPreviewLoading, onConfigSaved, onRefreshConfigPreview }: ConfigCenterProps) {
   const product = findSelectedTaskProduct(workspace.products, selectedTask)
   const currentTemplateBinding = buildCurrentTemplateBinding(workspace, selectedTask, product)
   const currentTemplateScopeLabel = templateBindingScopeLabel(currentTemplateBinding)
@@ -1615,6 +1616,16 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
     }
   }
 
+  async function runConfigPrecheck() {
+    setConfigMessage('正在运行配置预检：读取当前任务、店铺、商品和模板；不会操作店小秘。')
+    try {
+      await onRefreshConfigPreview()
+      setConfigMessage('配置预检已刷新；字段来源、缺失项和执行取值已按当前任务重新计算。')
+    } catch (error) {
+      setConfigMessage(error instanceof Error ? error.message : '配置预检刷新失败')
+    }
+  }
+
   return (
     <section className="module-layout" aria-label="配置中心">
       <div className="module-card span-3 config-focus-card">
@@ -1636,6 +1647,21 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
             {configPreview?.ok && advisoryGapCount > 0 && <small>{advisoryGapCount} 个分区有辅助字段待补</small>}
             <small>当前模板范围：{currentTemplateScopeLabel}</small>
           </div>
+        </div>
+        <div className="config-precheck-action" aria-label="配置预检操作">
+          <div>
+            <strong>配置预检</strong>
+            <span>读取当前任务、店铺、商品和模板，判断执行器会填写哪些值；不会操作店小秘。</span>
+            {!selectedTask && <small>先选择任务后才能预检本次任务并保存为任务覆盖。</small>}
+          </div>
+          <button
+            className="button button--secondary"
+            type="button"
+            onClick={() => { void runConfigPrecheck() }}
+            disabled={configPreviewLoading || !selectedTask}
+          >
+            {configPreviewLoading ? '正在预检...' : configPreview ? '刷新配置预检' : '运行配置预检'}
+          </button>
         </div>
         <details className="inline-disclosure config-assist-drawer">
           <summary>
@@ -1912,6 +1938,15 @@ function EditableConfigSectionCard({
 }) {
   const state = configSectionState(preview, configOk)
   const pillClass = state.className === 'is-complete' ? 'ok' : state.className === 'is-advisory' ? 'info' : 'warn'
+  const taskSaveDisabled = !selectedTask || savingSection === `task:${section.code}`
+  const continueDisabled = taskSaveDisabled || !preview
+  const disabledReason = !selectedTask
+    ? '先选择任务，才能保存为本次任务并继续。'
+    : !preview
+      ? '先运行配置预检，系统才能知道下一缺失分区。'
+      : savingSection === `task:${section.code}`
+        ? '正在保存，请等待当前操作完成。'
+        : ''
   return (
     <details className={`editable-config-section ${state.className}`} open={openByDefault}>
       <summary className="editable-config-section__head">
@@ -1960,7 +1995,8 @@ function EditableConfigSectionCard({
             className="button button--primary"
             type="button"
             onClick={() => onSaveAndContinue(section, 'task')}
-            disabled={!selectedTask || savingSection === `task:${section.code}`}
+            disabled={continueDisabled}
+            title={disabledReason || undefined}
           >
             {savingSection === `task:${section.code}` ? '保存中...' : '保存并继续下一缺失分区'}
           </button>
@@ -1969,7 +2005,8 @@ function EditableConfigSectionCard({
           className="button button--secondary"
           type="button"
           onClick={() => void onSave(section, 'task')}
-          disabled={!selectedTask || savingSection === `task:${section.code}`}
+          disabled={taskSaveDisabled}
+          title={!selectedTask ? '先选择任务，才能保存为本次任务。' : undefined}
         >
           {savingSection === `task:${section.code}` ? '保存中...' : '仅本次任务使用'}
         </button>
@@ -1982,6 +2019,7 @@ function EditableConfigSectionCard({
           {savingSection === `template:${section.code}` ? '保存中...' : '保存为店铺模板'}
         </button>
       </div>
+      {disabledReason && <small className="config-action-disabled-reason" aria-label="不能继续的原因">不能继续的原因：{disabledReason}</small>}
     </details>
   )
 }

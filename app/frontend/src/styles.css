@@ -2892,6 +2892,38 @@ tr:last-child td {
   font-weight: 700;
 }
 
+.config-precheck-action {
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.config-precheck-action strong,
+.config-precheck-action span,
+.config-precheck-action small {
+  display: block;
+  min-width: 0;
+}
+
+.config-precheck-action strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.config-precheck-action span,
+.config-precheck-action small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--font-compact);
+  line-height: 1.35;
+}
+
 .config-focus-card__body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
@@ -3235,6 +3267,14 @@ tr:last-child td {
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+}
+
+.config-action-disabled-reason {
+  display: block;
+  color: var(--amber);
+  font-size: var(--font-compact);
+  font-weight: 750;
+  text-align: right;
 }
 
 .config-section-switch-hint {
