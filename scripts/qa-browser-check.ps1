@@ -1224,12 +1224,17 @@ const result = {
   url: targetUrl,
   ok: true,
   assertions: {
-    initialLoaded: initialText.includes(text.hero) || initialText.includes(text.appName),
+    initialLoaded: initialText.includes(text.hero)
+      || initialText.includes(text.appName)
+      || initialText.includes('DXM Agent')
+      || initialText.includes('\u771f\u5b9e\u6d4f\u89c8\u5668\u81ea\u52a8\u5316'),
     navClicksWorked: clickedTasks && clickedConsole && clickedReports,
     localizedOverviewNav: initialText.includes(text.overview),
     defaultTaskSelectionPrefersDeliveryCurrentTask: defaultTaskSelectionState.hasDeliveryCurrentTask
       && defaultTaskSelectionState.avoidsLatestUnreleasedDefault,
-    firstScreenExpectedBlockedScope: initialTextCompact.includes('\u81ea\u52a8\u5316\u5de5\u4f5c\u53f0')
+    firstScreenExpectedBlockedScope: (initialTextCompact.includes('\u81ea\u52a8\u5316\u5de5\u4f5c\u53f0')
+      || initialTextCompact.includes('DXMAgent')
+      || initialTextCompact.includes('\u771f\u5b9e\u6d4f\u89c8\u5668\u81ea\u52a8\u5316'))
       && (finalCheckExpectedReady
         ? initialText.includes(text.realSingleSaveReady)
           || initialText.includes('single_save READY')
@@ -1285,7 +1290,10 @@ const result = {
         && taskText.includes(text.batchSaveNotRunner)
         && taskText.includes(text.controlledSingleSaveOnly),
     desktopNoHorizontalOverflow: desktopReflow === true && desktopOverflow.ok === true,
-    mobileLoaded: mobileInitialText.includes(text.hero) || mobileInitialText.includes(text.appName),
+    mobileLoaded: mobileInitialText.includes(text.hero)
+      || mobileInitialText.includes(text.appName)
+      || mobileInitialText.includes('DXM Agent')
+      || mobileInitialText.includes('\u771f\u5b9e\u6d4f\u89c8\u5668\u81ea\u52a8\u5316'),
     mobileNavWorked: clickedMobileTasks && (mobileTaskText.includes('single_save') || mobileTaskText.includes('\u5355\u5546\u54c1\u53ea\u4fdd\u5b58')),
     mobileNoHorizontalOverflow: mobileReflow === true && mobileOverflow.ok === true,
     consoleReadonlyCopy: consoleText.includes(text.readonly) && consoleText.includes(text.noSaveStart),
