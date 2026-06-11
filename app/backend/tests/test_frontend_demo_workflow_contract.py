@@ -232,6 +232,25 @@ def test_config_center_exposes_default_template_pack_and_save_state():
     assert "configTemplateSelectorVisible" in qa_source
 
 
+def test_config_center_uses_compact_density_and_collapsed_assist_drawer():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    qa_source = QA_BROWSER_CHECK.read_text(encoding="utf-8")
+
+    assert "--font-body: 13px" in styles_source
+    assert "--font-compact: 12px" in styles_source
+    assert ".content-density-summary" in styles_source
+    assert ".config-assist-drawer" in styles_source
+    assert "config-density-summary" in config_section
+    assert "config-assist-drawer" in config_section
+    assert "配置详情与下一步字段" in config_section
+    assert "NextRequiredConfigFields" in config_section
+    assert "configDensityCompact" in qa_source
+    assert "configAssistDrawerCollapsed" in qa_source
+    assert "configEditorNearFirstViewport" in qa_source
+
+
 def test_config_center_template_lookup_matches_backend_binding_aliases():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     config_helpers = source[source.index("function templateBindingValueMatches"):source.index("function withTemplateBinding")]

@@ -1014,6 +1014,7 @@ await new Promise(r => setTimeout(r, 350));
 const configTextAfterSectionSwitch = await bodyText();
 const configSectionSwitchState = await evalValue('(() => { const focused = [...document.querySelectorAll(".editable-config-grid--focused .editable-config-section")]; return { focusedCount: focused.length, selectedLogistics: document.body.innerText.includes(' + JSON.stringify(text.currentEditingSection + '\uff1a' + text.logisticsSection) + '), hasWeightField: document.body.innerText.includes(' + JSON.stringify(text.weightField) + ') }; })()');
 const configTemplateConsoleState = await evalValue('(() => { const consoleEl = document.querySelector(".config-template-console"); const selector = document.querySelector("[data-config-template-selector]"); const saveState = document.querySelector(".config-save-state"); return { visible: Boolean(consoleEl), text: consoleEl ? consoleEl.innerText : "", selectorVisible: Boolean(selector), selectorOptions: selector ? selector.querySelectorAll("option").length : 0, saveStateText: saveState ? saveState.innerText : "" }; })()');
+const configDensityState = await evalValue('(() => { const bodyFontSize = parseFloat(getComputedStyle(document.body).fontSize || "0"); const summary = document.querySelector("[data-config-density-summary]"); const assist = document.querySelector(".config-assist-drawer"); const editor = document.querySelector(".config-template-console"); const summaryRect = summary ? summary.getBoundingClientRect() : null; const editorRect = editor ? editor.getBoundingClientRect() : null; return { bodyFontSize, viewportHeight: window.innerHeight, summaryVisible: Boolean(summary), summaryHeight: summaryRect ? Math.round(summaryRect.height) : null, assistVisible: Boolean(assist), assistOpen: assist ? assist.open === true : null, editorVisible: Boolean(editor), editorTop: editorRect ? Math.round(editorRect.top) : null }; })()');
 const configTaskOverridePayloadState = await evalValue(' (async () => { window.__dxmQaConfigOverrideSaves = []; if (!window.__dxmQaOriginalFetch) { window.__dxmQaOriginalFetch = window.fetch.bind(window); window.fetch = async (input, init = {}) => { const url = typeof input === "string" ? input : String(input && input.url ? input.url : input); const method = String(init && init.method ? init.method : "GET").toUpperCase(); if (method === "PATCH" && url.includes("/api/tasks/") && url.includes("/config-overrides")) { window.__dxmQaConfigOverrideSaves.push({ url, method, body: init.body || "" }); return new Response(JSON.stringify({ id: 0, status: "qa_intercepted" }), { status: 200, headers: { "content-type": "application/json" } }); } return window.__dxmQaOriginalFetch(input, init); }; } const focused = document.querySelector(".editable-config-grid--focused .editable-config-section"); const label = focused ? [...focused.querySelectorAll("label")].find(item => (item.innerText || "").includes(' + JSON.stringify(text.weightField) + ')) : null; const input = label ? label.querySelector("input, textarea") : null; if (!input) return { ok: false, reason: "weight input missing" }; const value = "0.123"; const proto = input.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype; const descriptor = Object.getOwnPropertyDescriptor(proto, "value"); descriptor.set.call(input, value); input.dispatchEvent(new Event("input", { bubbles: true })); input.dispatchEvent(new Event("change", { bubbles: true })); await new Promise(r => setTimeout(r, 100)); const saveButton = focused ? [...focused.querySelectorAll("button")].find(button => (button.innerText || "").includes(' + JSON.stringify(text.taskOverrideSave) + ')) : null; if (!saveButton) return { ok: false, reason: "task override button missing" }; saveButton.click(); const deadline = Date.now() + 2500; while (Date.now() < deadline && window.__dxmQaConfigOverrideSaves.length < 1) { await new Promise(r => setTimeout(r, 100)); } const saved = window.__dxmQaConfigOverrideSaves[0] || null; let parsed = null; try { parsed = saved ? JSON.parse(saved.body || "{}") : null; } catch {} return { ok: Boolean(saved && parsed && parsed.section === "logistics" && parsed.values && String(parsed.values.weight) === value), captured: Boolean(saved), parsed, value }; })()');
 const configAllText = configText + ' ' + configTextAfterSectionSwitch;
 if (!configHasListEditor) {
@@ -1267,6 +1268,18 @@ const result = {
       && !(configTemplateConsoleState.saveStateText.includes('\u672a\u4fdd\u5b58\u4fee\u6539')
         && (configTemplateConsoleState.saveStateText.includes('\u5df2\u4fdd\u5b58\u5230\u672c\u6b21\u4efb\u52a1')
           || configTemplateConsoleState.saveStateText.includes('\u5df2\u4fdd\u5b58\u5230\u5e97\u94fa\u6a21\u677f'))),
+    configDensityCompact: clickedConfig
+      && configDensityState.bodyFontSize <= 13
+      && configDensityState.summaryVisible === true
+      && configDensityState.summaryHeight !== null
+      && configDensityState.summaryHeight <= 90,
+    configAssistDrawerCollapsed: clickedConfig
+      && configDensityState.assistVisible === true
+      && configDensityState.assistOpen === false,
+    configEditorNearFirstViewport: clickedConfig
+      && configDensityState.editorVisible === true
+      && configDensityState.editorTop !== null
+      && configDensityState.editorTop <= Math.min(760, configDensityState.viewportHeight * 0.72),
     configCenterSectionNavigation: clickedConfig
       && configText.includes(text.configStepMeta)
       && configText.includes(text.currentEditingSection)
@@ -1404,6 +1417,7 @@ const result = {
     taskQuickActionsState,
     configTaskOverridePayloadState,
     configTemplateConsoleState,
+    configDensityState,
     consoleLoginFormDomState,
     consoleRuntimeLogState,
     realMutationApprovalDomState,

@@ -1619,60 +1619,64 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
     <section className="module-layout" aria-label="配置中心">
       <div className="module-card span-3 config-focus-card">
         <ModuleHead title="配置中心" meta={configPreviewLoading ? '正在预检' : `${enabledTemplates.length} 个启用模板`} />
-        <div className="config-focus-card__body">
+        <div className="content-density-summary config-density-summary" data-config-density-summary>
           <div>
-            <h1>{configPreview?.ok ? '当前任务配置已满足启动预检' : `先补：${nextConfigSection.title}`}</h1>
-            <p>
+            <strong>{configPreview?.ok ? '配置已满足启动预检' : `先补：${nextConfigSection.title}`}</strong>
+            <span>
               {configPreview?.ok
-                ? '仍可展开下方分区微调本次任务；执行取值、模板匹配和辅助配置会进入执行取值，其中辅助配置不作为启动门禁必填。'
+                ? '下方可直接微调 DXM 编辑页配置；详情和下一步字段已收起。'
                 : previewSummary(nextConfigSection, nextConfigPreview)}
-            </p>
+            </span>
           </div>
-          <div className="config-focus-card__status">
+          <div className="content-density-summary__meta">
             <span className={`status-pill ${configPreview?.ok ? 'ok' : 'warn'}`}>
               {configPreview?.ok ? '可用于当前任务' : `${incompleteGroups.length || sectionsBlockingStart.length} 个分区待补`}
             </span>
             <small>{selectedTask ? `当前任务 #${selectedTask.id}` : '先到任务中心选择任务后，可保存为本次任务覆盖。'}</small>
-            {configPreview?.ok && advisoryGapCount > 0 && <small>{advisoryGapCount} 个分区有辅助字段待补，不阻断启动。</small>}
+            {configPreview?.ok && advisoryGapCount > 0 && <small>{advisoryGapCount} 个分区有辅助字段待补</small>}
             <small>当前模板范围：{currentTemplateScopeLabel}</small>
           </div>
         </div>
-        {(!hasStores || !hasProducts) && (
-          <EmptyState
-            title="暂无真实店铺/商品配置"
-            detail="当前未从接口读取到 stores/products，不展示 Dang Kang 或立牌类谷子默认值以免误判为已配置。"
+        <details className="inline-disclosure config-assist-drawer">
+          <summary>
+            配置详情与下一步字段
+            <span>{configPreview?.ok ? '配置就绪，按需展开复核' : `下一步必填字段：${nextConfigSection.title}`}</span>
+          </summary>
+          {(!hasStores || !hasProducts) && (
+            <EmptyState
+              title="暂无真实店铺/商品配置"
+              detail="当前未从接口读取到 stores/products，不展示 Dang Kang 或立牌类谷子默认值以免误判为已配置。"
+            />
+          )}
+          <NextRequiredConfigFields
+            section={nextConfigSection}
+            preview={nextConfigPreview}
+            configOk={Boolean(configPreview?.ok)}
+            loading={configPreviewLoading}
+            onEditRequiredSection={() => setActiveConfigSectionCode(nextConfigSection.code)}
           />
-        )}
-        <NextRequiredConfigFields
-          section={nextConfigSection}
-          preview={nextConfigPreview}
-          configOk={Boolean(configPreview?.ok)}
-          loading={configPreviewLoading}
-          onEditRequiredSection={() => setActiveConfigSectionCode(nextConfigSection.code)}
-        />
-        <div className="config-coverage-strip" aria-label="店小秘编辑页分区" data-field-coverage={configCoverageFieldIds.join('|')}>
-          {configCoverageLabels.map((label) => <span key={label}>{label}</span>)}
-        </div>
-        <div className="config-usage-legend" aria-label="字段用途">
-          {fieldUsageLegend.map((label) => <span key={label}>{label}</span>)}
-        </div>
-        <details className="inline-disclosure config-context-summary">
-          <summary>查看店铺、商品、图片与执行模式</summary>
-          <div className="config-matrix">
-            <ConfigItem label="店铺" value={workspace.stores[0]?.name ?? '未配置真实店铺'} hint={workspace.stores[0]?.platform ?? '等待 /api/stores 返回'} empty={!hasStores} />
-            <ConfigItem label="类目" value={product?.category_name ?? '未绑定真实商品类目'} hint="用于匹配属性和模板范围" empty={!hasProducts} />
-            <ConfigItem label="图片银行" value={product?.image?.eu_outer_package_filename ?? '未绑定真实外包装图'} hint="欧盟外包装/标签实拍图" empty={!hasProducts} />
-            <ConfigItem label="执行模式" value="真实单商品只保存" hint="受控真实浏览器执行，只保存不发布" />
+          <div className="config-coverage-strip" aria-label="店小秘编辑页分区" data-field-coverage={configCoverageFieldIds.join('|')}>
+            {configCoverageLabels.map((label) => <span key={label}>{label}</span>)}
           </div>
-          <ConfigReadinessPanel
-            configPreview={configPreview}
-            selectedTask={selectedTask}
-            incompleteGroups={incompleteGroups}
-          />
+          <div className="config-usage-legend" aria-label="字段用途">
+            {fieldUsageLegend.map((label) => <span key={label}>{label}</span>)}
+          </div>
+          <details className="inline-disclosure config-context-summary">
+            <summary>查看店铺、商品、图片与执行模式</summary>
+            <div className="config-matrix">
+              <ConfigItem label="店铺" value={workspace.stores[0]?.name ?? '未配置真实店铺'} hint={workspace.stores[0]?.platform ?? '等待 /api/stores 返回'} empty={!hasStores} />
+              <ConfigItem label="类目" value={product?.category_name ?? '未绑定真实商品类目'} hint="用于匹配属性和模板范围" empty={!hasProducts} />
+              <ConfigItem label="图片银行" value={product?.image?.eu_outer_package_filename ?? '未绑定真实外包装图'} hint="欧盟外包装/标签实拍图" empty={!hasProducts} />
+              <ConfigItem label="执行模式" value="真实单商品只保存" hint="受控真实浏览器执行，只保存不发布" />
+            </div>
+            <ConfigReadinessPanel
+              configPreview={configPreview}
+              selectedTask={selectedTask}
+              incompleteGroups={incompleteGroups}
+            />
+          </details>
         </details>
       </div>
-
-      <EffectiveValuePreview configPreview={configPreview} sourcePriorityLabels={sourcePriorityLabels} title={effectivePreviewTitle} />
 
       <div className="module-card span-3">
         <ModuleHead title="DXM 编辑页配置" meta="按店小秘编辑页分区逐段填写" />
@@ -1815,6 +1819,8 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
           <p className="config-section-switch-hint">只展示当前分区；常用分区在上方，低频字段收进“更多编辑页分区”。</p>
         </details>
       </div>
+
+      <EffectiveValuePreview configPreview={configPreview} sourcePriorityLabels={sourcePriorityLabels} title={effectivePreviewTitle} />
 
       <details className="module-card span-3 disclosure-card">
         <summary>高级模板映射（{Object.keys(templateResults).length} 段已有执行结果）</summary>

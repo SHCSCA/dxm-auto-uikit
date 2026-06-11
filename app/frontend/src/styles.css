@@ -21,6 +21,9 @@
   --violet-soft: #f1ecff;
   --radius: 8px;
   --shadow: 0 12px 36px rgba(29, 37, 45, 0.08);
+  --font-body: 13px;
+  --font-compact: 12px;
+  --font-micro: 11px;
 }
 
 * {
@@ -38,6 +41,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: var(--font-body);
 }
 
 button,
@@ -562,10 +566,10 @@ a:focus-visible {
 }
 
 .operation-alert {
-  min-height: 46px;
-  padding: 10px 12px;
+  min-height: 36px;
+  padding: 7px 10px;
   border: 1px solid #f3b8bf;
-  border-left: 5px solid var(--red);
+  border-left: 4px solid var(--red);
   border-radius: var(--radius);
   background: var(--red-soft);
   color: var(--red);
@@ -583,10 +587,10 @@ a:focus-visible {
 }
 
 .workspace-alert {
-  min-height: 46px;
-  padding: 10px 12px;
+  min-height: 36px;
+  padding: 7px 10px;
   border: 1px solid var(--line);
-  border-left: 5px solid var(--brand);
+  border-left: 4px solid var(--brand);
   border-radius: var(--radius);
   background: var(--surface);
   display: flex;
@@ -615,11 +619,11 @@ a:focus-visible {
 }
 
 .button {
-  min-height: 36px;
+  min-height: 32px;
   border: 1px solid transparent;
   border-radius: 8px;
-  padding: 8px 12px;
-  font-size: 13px;
+  padding: 6px 10px;
+  font-size: var(--font-compact);
   font-weight: 750;
   cursor: pointer;
 }
@@ -657,7 +661,7 @@ a:focus-visible {
   min-height: 0;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
+  gap: 12px;
   align-content: start;
 }
 
@@ -807,10 +811,10 @@ a:focus-visible {
 
 .module-card {
   min-width: 0;
-  min-height: 120px;
-  padding: 14px;
+  min-height: 0;
+  padding: 12px;
   display: grid;
-  gap: 12px;
+  gap: 10px;
   align-content: start;
 }
 
@@ -831,12 +835,12 @@ a:focus-visible {
 
 .module-head h2 {
   margin: 0;
-  font-size: 17px;
+  font-size: 16px;
 }
 
 .module-head span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-compact);
 }
 
 .operation-guide {
@@ -2833,6 +2837,61 @@ tr:last-child td {
   min-height: 0;
 }
 
+.content-density-summary {
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  border-radius: var(--radius);
+  background: #f8fbff;
+}
+
+.content-density-summary strong,
+.content-density-summary span,
+.content-density-summary small {
+  min-width: 0;
+}
+
+.content-density-summary strong {
+  display: block;
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.content-density-summary span {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: var(--font-compact);
+  line-height: 1.35;
+}
+
+.content-density-summary__meta {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  color: var(--muted);
+  text-align: right;
+}
+
+.content-density-summary__meta small {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  font-size: var(--font-micro);
+  font-weight: 700;
+}
+
 .config-focus-card__body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
@@ -2917,6 +2976,40 @@ tr:last-child td {
 .config-context-summary {
   border-top: 1px solid var(--line);
   padding-top: 8px;
+}
+
+.config-assist-drawer {
+  min-height: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.config-assist-drawer > summary {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  color: var(--text);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.config-assist-drawer > summary span {
+  color: var(--muted);
+  font-size: var(--font-compact);
+  font-weight: 700;
+}
+
+.config-assist-drawer[open] {
+  padding-bottom: 10px;
+}
+
+.config-assist-drawer[open] > :not(summary) {
+  margin: 0 10px 10px;
 }
 
 .config-readiness {
