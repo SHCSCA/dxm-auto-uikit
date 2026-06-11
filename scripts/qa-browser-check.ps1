@@ -639,6 +639,10 @@ const text = {
   nextRequiredConfig: '\u4e0b\u4e00\u6b65\u5fc5\u586b\u5b57\u6bb5',
   configReadySummary: '\u5f53\u524d\u4efb\u52a1\u914d\u7f6e\u5df2\u5c31\u7eea',
   currentTemplateScope: '\u5f53\u524d\u6a21\u677f\u8303\u56f4',
+  defaultTemplatePack: '\u9ed8\u8ba4\u6d4b\u8bd5\u6a21\u677f',
+  usePreviousTestConfig: '\u4f7f\u7528\u4e4b\u524d\u6d4b\u8bd5\u901a\u8fc7\u7684\u6570\u636e\u914d\u7f6e',
+  currentSectionTemplate: '\u5f53\u524d\u5206\u533a\u6a21\u677f',
+  applyTemplateToForm: '\u5957\u7528\u5230\u8868\u5355',
   onePerLine: '\u6bcf\u884c\u4e00\u4e2a',
   taskOverrideSave: '\u4ec5\u672c\u6b21\u4efb\u52a1\u4f7f\u7528',
   templateSave: '\u4fdd\u5b58\u4e3a\u5e97\u94fa\u6a21\u677f',
@@ -1009,6 +1013,7 @@ const switchedConfigSection = await evalValue('(() => { const target = [...docum
 await new Promise(r => setTimeout(r, 350));
 const configTextAfterSectionSwitch = await bodyText();
 const configSectionSwitchState = await evalValue('(() => { const focused = [...document.querySelectorAll(".editable-config-grid--focused .editable-config-section")]; return { focusedCount: focused.length, selectedLogistics: document.body.innerText.includes(' + JSON.stringify(text.currentEditingSection + '\uff1a' + text.logisticsSection) + '), hasWeightField: document.body.innerText.includes(' + JSON.stringify(text.weightField) + ') }; })()');
+const configTemplateConsoleState = await evalValue('(() => { const consoleEl = document.querySelector(".config-template-console"); const selector = document.querySelector("[data-config-template-selector]"); const saveState = document.querySelector(".config-save-state"); return { visible: Boolean(consoleEl), text: consoleEl ? consoleEl.innerText : "", selectorVisible: Boolean(selector), selectorOptions: selector ? selector.querySelectorAll("option").length : 0, saveStateText: saveState ? saveState.innerText : "" }; })()');
 const configTaskOverridePayloadState = await evalValue(' (async () => { window.__dxmQaConfigOverrideSaves = []; if (!window.__dxmQaOriginalFetch) { window.__dxmQaOriginalFetch = window.fetch.bind(window); window.fetch = async (input, init = {}) => { const url = typeof input === "string" ? input : String(input && input.url ? input.url : input); const method = String(init && init.method ? init.method : "GET").toUpperCase(); if (method === "PATCH" && url.includes("/api/tasks/") && url.includes("/config-overrides")) { window.__dxmQaConfigOverrideSaves.push({ url, method, body: init.body || "" }); return new Response(JSON.stringify({ id: 0, status: "qa_intercepted" }), { status: 200, headers: { "content-type": "application/json" } }); } return window.__dxmQaOriginalFetch(input, init); }; } const focused = document.querySelector(".editable-config-grid--focused .editable-config-section"); const label = focused ? [...focused.querySelectorAll("label")].find(item => (item.innerText || "").includes(' + JSON.stringify(text.weightField) + ')) : null; const input = label ? label.querySelector("input, textarea") : null; if (!input) return { ok: false, reason: "weight input missing" }; const value = "0.123"; const proto = input.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype; const descriptor = Object.getOwnPropertyDescriptor(proto, "value"); descriptor.set.call(input, value); input.dispatchEvent(new Event("input", { bubbles: true })); input.dispatchEvent(new Event("change", { bubbles: true })); await new Promise(r => setTimeout(r, 100)); const saveButton = focused ? [...focused.querySelectorAll("button")].find(button => (button.innerText || "").includes(' + JSON.stringify(text.taskOverrideSave) + ')) : null; if (!saveButton) return { ok: false, reason: "task override button missing" }; saveButton.click(); const deadline = Date.now() + 2500; while (Date.now() < deadline && window.__dxmQaConfigOverrideSaves.length < 1) { await new Promise(r => setTimeout(r, 100)); } const saved = window.__dxmQaConfigOverrideSaves[0] || null; let parsed = null; try { parsed = saved ? JSON.parse(saved.body || "{}") : null; } catch {} return { ok: Boolean(saved && parsed && parsed.section === "logistics" && parsed.values && String(parsed.values.weight) === value), captured: Boolean(saved), parsed, value }; })()');
 const configAllText = configText + ' ' + configTextAfterSectionSwitch;
 if (!configHasListEditor) {
@@ -1249,6 +1254,19 @@ const result = {
           && initialTextCompact.includes(text.realWriteGateFailed.replace(/\s+/g, ''))
           && initialTextCompact.includes('\u67e5\u770b\u5b8c\u6574 8 \u6b65\u6d41\u7a0b'.replace(/\s+/g, '')))),
     configCenterTaskOverrideControls: clickedConfig && configTaskOverridePayloadState.ok === true,
+    configDefaultTemplatePackVisible: clickedConfig
+      && configTemplateConsoleState.visible === true
+      && configTemplateConsoleState.text.includes(text.defaultTemplatePack)
+      && configTemplateConsoleState.text.includes(text.usePreviousTestConfig),
+    configTemplateSelectorVisible: clickedConfig
+      && configTemplateConsoleState.selectorVisible === true
+      && configTemplateConsoleState.selectorOptions >= 2
+      && configTemplateConsoleState.text.includes(text.currentSectionTemplate)
+      && configTemplateConsoleState.text.includes(text.applyTemplateToForm),
+    configSaveStateNotContradictory: clickedConfig
+      && !(configTemplateConsoleState.saveStateText.includes('\u672a\u4fdd\u5b58\u4fee\u6539')
+        && (configTemplateConsoleState.saveStateText.includes('\u5df2\u4fdd\u5b58\u5230\u672c\u6b21\u4efb\u52a1')
+          || configTemplateConsoleState.saveStateText.includes('\u5df2\u4fdd\u5b58\u5230\u5e97\u94fa\u6a21\u677f'))),
     configCenterSectionNavigation: clickedConfig
       && configText.includes(text.configStepMeta)
       && configText.includes(text.currentEditingSection)
@@ -1385,6 +1403,7 @@ const result = {
     taskDrawerState,
     taskQuickActionsState,
     configTaskOverridePayloadState,
+    configTemplateConsoleState,
     consoleLoginFormDomState,
     consoleRuntimeLogState,
     realMutationApprovalDomState,

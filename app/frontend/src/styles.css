@@ -2422,6 +2422,80 @@ tr:last-child td {
   margin-bottom: 10px;
 }
 
+.config-template-console {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(220px, 0.95fr) minmax(300px, 1.25fr) minmax(220px, 0.8fr);
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.config-template-console__default,
+.config-template-console__picker,
+.config-save-state {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #f8fbff;
+}
+
+.config-template-console strong,
+.config-template-console span,
+.config-template-console small {
+  display: block;
+  min-width: 0;
+}
+
+.config-template-console strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.config-template-console span,
+.config-template-console small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.config-template-console label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.config-template-console select {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--text);
+  padding: 7px 9px;
+}
+
+.config-save-state {
+  background: #fff;
+}
+
+.config-save-state.is-dirty {
+  border-color: #f0c15a;
+  background: #fffaf0;
+}
+
+.config-save-state.is-saved {
+  border-color: #bfddce;
+  background: #f7fcf9;
+}
+
+.config-save-state.is-error {
+  border-color: #f3b8bf;
+  background: #fff6f7;
+}
+
 .config-section-tabs--primary {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }

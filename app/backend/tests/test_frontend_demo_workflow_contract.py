@@ -204,6 +204,34 @@ def test_config_center_can_save_task_level_overrides_separately_from_templates()
     assert "update_task_template_override" in repo_source
 
 
+def test_config_center_exposes_default_template_pack_and_save_state():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    qa_source = QA_BROWSER_CHECK.read_text(encoding="utf-8")
+
+    assert "demoTemplateSeeds" in source
+    assert "applyDefaultTemplatePack" in config_section
+    assert "默认测试模板" in config_section
+    assert "使用之前测试通过的数据配置" in config_section
+    assert "defaultTemplatePackState" in config_section
+    assert "config-template-console" in config_section
+    assert "当前分区模板" in config_section
+    assert "sectionTemplateOptions" in config_section
+    assert "selectedTemplateBySection" in config_section
+    assert "applyTemplateToDraft" in config_section
+    assert "套用到表单" in config_section
+    assert "多套模板按当前店铺/类目优先展示" in config_section
+    assert "sectionSaveState" in config_section
+    assert "未保存修改" in config_section
+    assert "已保存" in config_section
+    assert "保存时间" in config_section
+    assert ".config-template-console" in styles_source
+    assert ".config-save-state" in styles_source
+    assert "configDefaultTemplatePackVisible" in qa_source
+    assert "configTemplateSelectorVisible" in qa_source
+
+
 def test_config_center_template_lookup_matches_backend_binding_aliases():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     config_helpers = source[source.index("function templateBindingValueMatches"):source.index("function withTemplateBinding")]

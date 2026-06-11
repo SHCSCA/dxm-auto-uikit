@@ -28,7 +28,7 @@ import type {
   Task,
   Template,
 } from '../types'
-import { evidenceGrade, humanLevel, humanTaskStatus, referenceSectionLabels, toArtifactUrl } from '../workspace'
+import { demoTemplateSeeds, evidenceGrade, humanLevel, humanTaskStatus, referenceSectionLabels, toArtifactUrl } from '../workspace'
 
 type CommonProps = {
   workspace: DeliveryWorkspace
@@ -1017,11 +1017,108 @@ function findScopedTemplate(templates: Template[], templateType: string, binding
   return templates.find((template) => template.template_type === templateType && templateHasExactBinding(template, binding))
 }
 
+function sectionTemplateOptions(templates: Template[], section: EditableConfigSection, binding: TemplateBinding) {
+  return templates
+    .filter((template) => template.template_type === section.templateType && template.is_enabled)
+    .sort((a, b) => Number(templateHasExactBinding(b, binding)) - Number(templateHasExactBinding(a, binding)) || a.template_name.localeCompare(b.template_name, 'zh-CN'))
+}
+
 function withTemplateBinding(payload: Record<string, unknown>, binding: TemplateBinding) {
   const cleanBinding = Object.fromEntries(
     Object.entries(binding).filter(([, value]) => textValue(value)),
   )
   return Object.keys(cleanBinding).length ? { ...payload, binding: cleanBinding } : payload
+}
+
+function templatePayloadForSection(template: Template | Omit<Template, 'id'> | undefined, section: EditableConfigSection) {
+  const payload = template?.payload
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return {}
+  const record = { ...(payload as Record<string, unknown>) }
+  delete record.binding
+  const grouped = record[section.templateType]
+  if (grouped && typeof grouped === 'object' && !Array.isArray(grouped)) {
+    return { ...record, ...(grouped as Record<string, unknown>) }
+  }
+  return record
+}
+
+function defaultTemplatePayloadForSection(section: EditableConfigSection, binding: TemplateBinding) {
+  const seed = demoTemplateSeeds.find((template) => template.template_type === section.templateType)
+  const payload = templatePayloadForSection(seed, section)
+  const defaultsByType: Record<string, Record<string, unknown>> = {
+    task_basic: {
+      store_name: binding.store_name || 'Dang Kang',
+      category_name: binding.category_name || '立牌类谷子',
+      claim_mark: 'DXM 单商品只保存测试',
+    },
+    category: {
+      category_name: binding.category_name || '立牌类谷子',
+      category_keyword: '立牌',
+      title_strategy: '保留原始标题并清洗平台词',
+    },
+    sku: {
+      sku_code: '沿用店小秘生成',
+      stock: '200',
+      jit_stock: '100',
+      goods_code_strategy: '沿用店小秘生成',
+      barcode_strategy: '留空',
+    },
+    pricing: {
+      product_price: '7.01',
+      supply_price: '5.20',
+      declared_value: '1',
+      stock: '200',
+      price_strategy: '按测试模板固定价',
+    },
+    image: {
+      source: '图片银行（速卖通）',
+      eu_outer_package_filename: '微信图片_202504092228421.jpg',
+      marketing_images_strategy: '使用 EU 外包装图补齐 3:4',
+      main_image_strategy: '保留 800x800 合规主图',
+      invalid_image_strategy: '删除 0x0 无效图',
+    },
+    logistics: {
+      weight: '0.03',
+      length: '10',
+      width: '10',
+      height: '2',
+      logistics_attribute: '普货',
+      freight_template: '石油40g普货包裹.',
+      service_template: 'Service Template for New Sellers',
+      package_gross_weight: '0.057',
+    },
+    compliance: {
+      customs_name: '钥匙扣',
+      material: 'Acrylic',
+      purpose: 'Decoration',
+      brand: '无品牌',
+      statement: '符合平台合规要求',
+      eu_responsible_names: ['Jacqueiline Marti'],
+      manufacturer_names: ['jiyang county thunder', 'Jiyang County thunder'],
+      customs_product_names: ['钥匙扣', 'keychain'],
+    },
+    semi_managed: {
+      product_price: '7.01',
+      supply_price: '5.20',
+      countries: '全选',
+      original_box: '否',
+      is_original_box: '否',
+      jit_stock: '100',
+      barcode_strategy: '留空',
+      length: '10',
+      width: '10',
+      height: '2',
+      goods_code_strategy: '沿用店小秘生成',
+    },
+  }
+  return { ...payload, ...(defaultsByType[section.templateType] ?? {}) }
+}
+
+function buildSectionDraftFromPayload(section: EditableConfigSection, payload: Record<string, unknown>) {
+  return Object.fromEntries(section.fields.map((field) => [
+    field.name,
+    editableConfigDraftValue(getNestedConfigValue(payload, field.name) ?? payload[field.name], field),
+  ]))
 }
 
 function buildEditableConfigDraft(templates: Template[], configPreview: ConfigPreview | null) {
@@ -1246,6 +1343,14 @@ function countNestedConfigValues(value: unknown): number {
   return String(value).trim() ? 1 : 0
 }
 
+function hasConfigDraftChanged(current: Record<string, string> | undefined, baseline: Record<string, string> | undefined) {
+  const keys = new Set([...Object.keys(current ?? {}), ...Object.keys(baseline ?? {})])
+  for (const key of keys) {
+    if ((current?.[key] ?? '') !== (baseline?.[key] ?? '')) return true
+  }
+  return false
+}
+
 export function ConfigCenter({ workspace, selectedTask, configPreview, configPreviewLoading, onConfigSaved }: ConfigCenterProps) {
   const product = findSelectedTaskProduct(workspace.products, selectedTask)
   const currentTemplateBinding = buildCurrentTemplateBinding(workspace, selectedTask, product)
@@ -1260,6 +1365,9 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   const [configDraft, setConfigDraft] = useState(initialConfigDraft)
   const [savingSection, setSavingSection] = useState<string | null>(null)
   const [configMessage, setConfigMessage] = useState<string | null>(null)
+  const [defaultTemplatePackState, setDefaultTemplatePackState] = useState<string>('尚未套用默认测试模板')
+  const [selectedTemplateBySection, setSelectedTemplateBySection] = useState<Record<ConfigSectionCode, string>>({} as Record<ConfigSectionCode, string>)
+  const [sectionSaveState, setSectionSaveState] = useState<Record<ConfigSectionCode, { status: 'clean' | 'dirty' | 'saving' | 'saved' | 'error'; scope?: string; savedAt?: string; message?: string }>>({} as Record<ConfigSectionCode, { status: 'clean' | 'dirty' | 'saving' | 'saved' | 'error'; scope?: string; savedAt?: string; message?: string }>)
   const sectionsWithPreview = editableConfigSections.map((section) => ({
     section,
     preview: previewGroups.get(section.previewSection),
@@ -1285,6 +1393,29 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   const secondaryConfigSections = sectionsWithPreview.filter(({ section }) => !primaryConfigSectionCodes.has(section.code))
   const activeTaskOverrideFieldCount = countTaskOverrideFields(selectedTask, selectedConfigSection.section.templateType)
   const activePreviewOverrideFieldCount = countPreviewTaskOverrideFields(selectedConfigSection.preview)
+  const activeSectionTemplateOptions = sectionTemplateOptions(workspace.templates, selectedConfigSection.section, currentTemplateBinding)
+  const activeSelectedTemplateId = selectedTemplateBySection[selectedConfigSection.section.code] ?? ''
+  const activeSectionSaveState = sectionSaveState[selectedConfigSection.section.code]
+  const activeSectionDirty = hasConfigDraftChanged(configDraft[selectedConfigSection.section.code], initialConfigDraft[selectedConfigSection.section.code])
+  const activeSectionAlreadyPersisted = Boolean(selectedConfigSection.preview?.templatePresent)
+  const activeSectionStatus = activeSectionSaveState?.status ?? (activeSectionDirty ? 'dirty' : 'clean')
+  const activeSectionStatusTitle = activeSectionStatus === 'dirty'
+    ? '未保存修改'
+    : activeSectionStatus === 'saved'
+      ? '已保存'
+      : activeSectionStatus === 'saving'
+        ? '保存中'
+        : activeSectionStatus === 'error'
+          ? '保存失败'
+          : activeSectionAlreadyPersisted
+            ? '已保存模板'
+            : '未保存模板'
+  const activeSectionStatusMessage = activeSectionSaveState?.message
+    ?? (activeSectionStatus === 'dirty'
+      ? '当前分区有改动，尚未保存。'
+      : activeSectionAlreadyPersisted
+        ? '当前分区来自已保存模板或任务覆盖，未修改。'
+        : '当前分区还没有已保存模板，请套用默认模板或手动保存。')
   const configCoverageLabels = ['店铺与任务基础', '类目与标题', 'SKU / 价格 / 库存', '价格策略', '图片与素材', '包装物流', '合规 / 海关', '半托管', '店小秘引用模板']
   const effectivePreviewTitle = '本次任务实际取值预览'
   const sourcePriorityLabels = ['任务覆盖', '商品 payload', '店铺/类目模板', '系统默认值']
@@ -1321,6 +1452,13 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
         [fieldName]: value,
       },
     }))
+    setSectionSaveState((current) => ({
+      ...current,
+      [sectionCode]: {
+        status: 'dirty',
+        message: '未保存修改',
+      },
+    }))
   }
 
   function selectNextMissingConfigSection(savedSectionCode: ConfigSectionCode) {
@@ -1338,6 +1476,14 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
 
   async function saveConfigSection(section: EditableConfigSection, scope: 'template' | 'task' = 'template', continueToNextMissingSection = false) {
     setSavingSection(`${scope}:${section.code}`)
+    setSectionSaveState((current) => ({
+      ...current,
+      [section.code]: {
+        status: 'saving',
+        scope: scope === 'task' ? '本次任务' : '店铺模板',
+        message: '保存中...',
+      },
+    }))
     setConfigMessage(null)
     try {
       const payload = section.fields.reduce<Record<string, unknown>>((acc, field) => {
@@ -1351,6 +1497,16 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
           section: section.templateType,
           values: payload,
         })
+        const savedAt = new Date().toLocaleString('zh-CN', { hour12: false })
+        setSectionSaveState((current) => ({
+          ...current,
+          [section.code]: {
+            status: 'saved',
+            scope: '本次任务',
+            savedAt,
+            message: `已保存到本次任务；保存时间 ${savedAt}`,
+          },
+        }))
         setConfigMessage(`${section.title} 已保存为本次任务覆盖；页面填写值会进入执行取值，带 * 字段参与启动门禁，辅助配置不作为启动门禁必填。`)
         await onConfigSaved()
         if (continueToNextMissingSection) {
@@ -1371,12 +1527,30 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
       } else {
         await postJson<Template>('/api/templates', body)
       }
+      const savedAt = new Date().toLocaleString('zh-CN', { hour12: false })
+      setSectionSaveState((current) => ({
+        ...current,
+        [section.code]: {
+          status: 'saved',
+          scope: '店铺模板',
+          savedAt,
+          message: `已保存到店铺模板；保存时间 ${savedAt}`,
+        },
+      }))
       setConfigMessage(`${section.title} 已保存为当前店铺/类目模板，后续匹配 ${currentTemplateScopeLabel} 的任务会按该模板取值；辅助配置会进入执行取值，但不作为启动门禁必填。`)
       await onConfigSaved()
       if (continueToNextMissingSection) {
         selectNextMissingConfigSection(section.code)
       }
     } catch (error) {
+      setSectionSaveState((current) => ({
+        ...current,
+        [section.code]: {
+          status: 'error',
+          scope: scope === 'task' ? '本次任务' : '店铺模板',
+          message: error instanceof Error ? error.message : `${section.title} 保存失败`,
+        },
+      }))
       setConfigMessage(error instanceof Error ? error.message : `${section.title} 保存失败`)
     } finally {
       setSavingSection(null)
@@ -1385,6 +1559,60 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
 
   function continueToNextMissingSection(section: EditableConfigSection, scope: 'template' | 'task') {
     void saveConfigSection(section, scope, true)
+  }
+
+  function applyTemplateToDraft(section: EditableConfigSection, templateId: string) {
+    const payload = templateId === '__default_test__'
+      ? defaultTemplatePayloadForSection(section, currentTemplateBinding)
+      : templatePayloadForSection(workspace.templates.find((template) => String(template.id) === templateId), section)
+    setSelectedTemplateBySection((current) => ({ ...current, [section.code]: templateId }))
+    setConfigDraft((current) => ({
+      ...current,
+      [section.code]: buildSectionDraftFromPayload(section, payload),
+    }))
+    setSectionSaveState((current) => ({
+      ...current,
+      [section.code]: {
+        status: 'dirty',
+        message: templateId === '__default_test__' ? '已套用默认测试模板，尚未保存' : '已套用已保存模板，尚未保存',
+      },
+    }))
+  }
+
+  async function applyDefaultTemplatePack() {
+    setSavingSection('template:default-pack')
+    setDefaultTemplatePackState('正在写入默认测试模板...')
+    setConfigMessage(null)
+    try {
+      const nextDraft = { ...configDraft }
+      for (const section of editableConfigSections) {
+        const payload = defaultTemplatePayloadForSection(section, currentTemplateBinding)
+        nextDraft[section.code] = buildSectionDraftFromPayload(section, payload)
+        const existing = findScopedTemplate(workspace.templates, section.templateType, currentTemplateBinding)
+        const body = {
+          template_type: section.templateType,
+          template_name: `默认测试模板 / ${section.title}`,
+          binding_scope: currentTemplateScopeLabel,
+          payload: withTemplateBinding(payload, currentTemplateBinding),
+          is_enabled: true,
+        }
+        if (existing) {
+          await patchJson<Template>(`/api/templates/${existing.id}`, body)
+        } else {
+          await postJson<Template>('/api/templates', body)
+        }
+      }
+      const savedAt = new Date().toLocaleString('zh-CN', { hour12: false })
+      setConfigDraft(nextDraft)
+      setDefaultTemplatePackState(`默认测试模板已保存；保存时间 ${savedAt}`)
+      setConfigMessage(`默认测试模板已写入当前店铺/类目范围：${currentTemplateScopeLabel}。使用之前测试通过的数据配置，可继续按分区微调。`)
+      await onConfigSaved()
+    } catch (error) {
+      setDefaultTemplatePackState('默认测试模板保存失败')
+      setConfigMessage(error instanceof Error ? error.message : '默认测试模板保存失败')
+    } finally {
+      setSavingSection(null)
+    }
   }
 
   return (
@@ -1448,6 +1676,53 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
 
       <div className="module-card span-3">
         <ModuleHead title="DXM 编辑页配置" meta="按店小秘编辑页分区逐段填写" />
+        <div className="config-template-console" aria-label="配置模板控制台">
+          <div className="config-template-console__default">
+            <strong>默认测试模板</strong>
+            <span>使用之前测试通过的数据配置，按当前店铺/类目保存为一套模板。</span>
+            <button
+              className="button button--secondary"
+              type="button"
+              onClick={() => { void applyDefaultTemplatePack() }}
+              disabled={savingSection === 'template:default-pack'}
+            >
+              {savingSection === 'template:default-pack' ? '正在保存默认模板...' : '套用默认测试模板'}
+            </button>
+            <small>{defaultTemplatePackState}</small>
+          </div>
+          <div className="config-template-console__picker">
+            <label>
+              <span>当前分区模板</span>
+              <select
+                value={activeSelectedTemplateId}
+                onChange={(event) => setSelectedTemplateBySection((current) => ({ ...current, [selectedConfigSection.section.code]: event.target.value }))}
+                data-config-template-selector={selectedConfigSection.section.code}
+              >
+                <option value="">选择已保存模板</option>
+                <option value="__default_test__">默认测试模板（当前分区）</option>
+                {activeSectionTemplateOptions.map((template) => (
+                  <option key={template.id} value={template.id}>
+                    {template.template_name} / {template.binding_scope}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              className="button button--quiet"
+              type="button"
+              onClick={() => applyTemplateToDraft(selectedConfigSection.section, activeSelectedTemplateId)}
+              disabled={!activeSelectedTemplateId}
+            >
+              套用到表单
+            </button>
+            <small>多套模板按当前店铺/类目优先展示；套用到表单后仍需点击保存，才会进入执行取值。</small>
+          </div>
+          <div className={`config-save-state is-${activeSectionStatus}`} aria-label="当前分区保存状态">
+            <strong>{activeSectionStatusTitle}</strong>
+            <span>{activeSectionStatusMessage}</span>
+            {activeSectionSaveState?.savedAt && <small>保存时间：{activeSectionSaveState.savedAt} / 保存位置：{activeSectionSaveState.scope}</small>}
+          </div>
+        </div>
         {configMessage && <div className="config-save-message">{configMessage}</div>}
         {configReadyForReview && (
           <div className="config-ready-review" aria-label="配置已就绪摘要">
