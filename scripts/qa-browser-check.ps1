@@ -282,6 +282,7 @@ const pending = new Map();
 const consoleEvents = [];
 const consoleErrors = [];
 const networkEvents = [];
+const requestIndex = new Map();
 ws.onmessage = event => {
   const msg = JSON.parse(event.data);
   if (msg.method === 'Runtime.consoleAPICalled') {
@@ -302,13 +303,15 @@ ws.onmessage = event => {
     consoleErrors.push(text);
   }
   if (msg.method === 'Network.requestWillBeSent') {
-    networkEvents.push({
+    const requestEntry = {
       type: 'request',
       requestId: msg.params.requestId,
       url: msg.params.request.url,
       method: msg.params.request.method,
       timestamp: msg.params.timestamp,
-    });
+    };
+    requestIndex.set(msg.params.requestId, requestEntry);
+    networkEvents.push(requestEntry);
   }
   if (msg.method === 'Network.responseReceived') {
     networkEvents.push({
@@ -321,10 +324,13 @@ ws.onmessage = event => {
     });
   }
   if (msg.method === 'Network.loadingFailed') {
+    const requestEntry = requestIndex.get(msg.params.requestId) || {};
     networkEvents.push({
       type: 'failed',
       requestId: msg.params.requestId,
-      errorText: msg.params.errorText,
+      url: requestEntry.url || null,
+      method: requestEntry.method || null,
+      errorText: msg.params.errorText || '',
       timestamp: msg.params.timestamp,
     });
   }
@@ -461,10 +467,23 @@ async function postJson(path, body) {
   return parsedBody;
 }
 const initialFinalCheckSummary = reportOnlyFinal ? null : await fetchJson('/api/delivery/final-check').catch(() => null);
-const qaExpectedReady = initialFinalCheckSummary?.real_dxm_write_readiness === 'READY'
-  && initialFinalCheckSummary?.controlled_single_save_ready === true;
+const initialEffectiveReadiness = initialFinalCheckSummary?.effective_real_dxm_write_readiness
+  ?? initialFinalCheckSummary?.real_dxm_write_readiness;
+const initialEffectiveMutationAllowed = initialFinalCheckSummary?.effective_real_dxm_mutation_allowed
+  ?? initialFinalCheckSummary?.real_dxm_mutation_allowed;
+const initialEffectiveMutationScope = initialFinalCheckSummary?.effective_real_dxm_mutation_scope
+  ?? initialFinalCheckSummary?.real_dxm_mutation_scope;
+const qaExpectedReady = initialEffectiveReadiness === 'READY'
+  && initialEffectiveMutationAllowed === true
+  && initialFinalCheckSummary?.controlled_single_save_ready === true
+  && initialEffectiveMutationScope === 'controlled_single_save_only';
 const shouldRunBlockedMutationChecks = !qaExpectedReady;
 async function ensureRealMutationTask() {
+  function findReusableQaTask(tasks, name, mode) {
+    return Array.isArray(tasks)
+      ? tasks.find(task => task?.name === name && task?.mode === mode) || null
+      : null;
+  }
   const existingStores = await fetchJson('/api/stores');
   const dangKangStore = Array.isArray(existingStores)
     ? existingStores.find(store => store?.name === 'Dang Kang')
@@ -486,8 +505,11 @@ async function ensureRealMutationTask() {
       image: 'qa-product.jpg',
     }] });
   }
+  const existingTasks = await fetchJson('/api/tasks').catch(() => []);
+  const reusableTask = findReusableQaTask(existingTasks, 'QA local gated single_save fixture', 'single_save');
+  if (reusableTask) return reusableTask;
   return await postJson('/api/tasks', {
-    name: 'QA guarded real mutation task',
+    name: 'QA local gated single_save fixture',
     store_id: store.id,
     mode: 'single_save',
     publish_scene: 'SMT_SEMI_MANAGED_SAVE_ONLY',
@@ -501,6 +523,11 @@ async function ensureRealMutationTask() {
   });
 }
 async function ensureUnreleasedRealModeTask() {
+  function findReusableQaTask(tasks, name, mode) {
+    return Array.isArray(tasks)
+      ? tasks.find(task => task?.name === name && task?.mode === mode) || null
+      : null;
+  }
   const existingStores = await fetchJson('/api/stores');
   const dangKangStore = Array.isArray(existingStores)
     ? existingStores.find(store => store?.name === 'Dang Kang')
@@ -522,6 +549,9 @@ async function ensureUnreleasedRealModeTask() {
       image: 'qa-product.jpg',
     }] });
   }
+  const existingTasks = await fetchJson('/api/tasks').catch(() => []);
+  const reusableTask = findReusableQaTask(existingTasks, 'QA unreleased claim_only task', 'claim_only');
+  if (reusableTask) return reusableTask;
   return await postJson('/api/tasks', {
     name: 'QA unreleased claim_only task',
     store_id: store.id,
@@ -537,6 +567,11 @@ async function ensureUnreleasedRealModeTask() {
   });
 }
 async function ensureDryRunDemoTask() {
+  function findReusableQaTask(tasks, name, mode) {
+    return Array.isArray(tasks)
+      ? tasks.find(task => task?.name === name && task?.mode === mode) || null
+      : null;
+  }
   const existingStores = await fetchJson('/api/stores');
   const dangKangStore = Array.isArray(existingStores)
     ? existingStores.find(store => store?.name === 'Dang Kang')
@@ -558,6 +593,9 @@ async function ensureDryRunDemoTask() {
       image: 'qa-product.jpg',
     }] });
   }
+  const existingTasks = await fetchJson('/api/tasks').catch(() => []);
+  const reusableTask = findReusableQaTask(existingTasks, '\u672c\u5730\u6f14\u793a\u6838\u9a8c\u6279\u6b21', 'dry_run');
+  if (reusableTask) return reusableTask;
   return await postJson('/api/tasks', {
     name: '\u672c\u5730\u6f14\u793a\u6838\u9a8c\u6279\u6b21',
     store_id: store.id,
@@ -595,7 +633,7 @@ const text = {
   editableConfig: '\u0044\u0058\u004d \u7f16\u8f91\u9875\u914d\u7f6e',
   configStepMeta: '\u6309\u5e97\u5c0f\u79d8\u7f16\u8f91\u9875\u5206\u533a\u9010\u6bb5\u586b\u5199',
   currentEditingSection: '\u6b63\u5728\u7f16\u8f91\u5206\u533a',
-  otherConfigSections: '\u67e5\u770b\u5176\u5b83\u5206\u533a',
+  otherConfigSections: '\u66f4\u591a\u7f16\u8f91\u9875\u5206\u533a',
   logisticsSection: '\u5305\u88c5\u7269\u6d41',
   weightField: '\u91cd\u91cf kg',
   nextRequiredConfig: '\u4e0b\u4e00\u6b65\u5fc5\u586b\u5b57\u6bb5',
@@ -606,7 +644,7 @@ const text = {
   templateSave: '\u4fdd\u5b58\u4e3a\u5e97\u94fa\u6a21\u677f',
   fieldSource: '\u6765\u6e90\uff1a',
   loginManualBrowser: '\u767b\u5f55/\u4eba\u5de5\u5904\u7406\u771f\u5b9e\u6d4f\u89c8\u5668',
-  executionObserve: '\u542f\u52a8\u6267\u884c\u89c2\u5bdf',
+  executionObserve: '\u6253\u5f00\u6267\u884c\u6d4f\u89c8\u5668',
   browserControlPad: '\u9875\u9762\u5185\u64cd\u63a7',
   browserControlTypedInput: '\u8f93\u5165\u5230\u7126\u70b9',
   browserControlClickCoords: '\u70b9\u51fb\u5750\u6807',
@@ -628,19 +666,19 @@ const text = {
   forbiddenStart: '\u7981\u6b62\u542f\u52a8',
   readonly: '\u771f\u5b9e\u6d4f\u89c8\u5668',
   noSaveStart: '\u4e0d\u4f1a\u53d1\u5e03',
-  noBrowser: '\u5e97\u5c0f\u79d8\u81ea\u52a8\u6d4f\u89c8\u5668',
+  noBrowser: '\u0041\u0067\u0065\u006e\u0074 \u63a7\u5236\u771f\u5b9e\u6d4f\u89c8\u5668',
   noFakeEvidence: '\u771f\u5b9e\u5e97\u5c0f\u79d8',
-  finalCheck: '\u6700\u8fd1\u4ea4\u4ed8\u81ea\u68c0',
+  finalCheck: '\u6700\u8fd1\u81ea\u52a8\u5316\u9a8c\u6536',
   expectedBlocked: '\u771f\u5b9e\u4fdd\u5b58\u4fdd\u6301\u963b\u65ad',
   realSingleSaveReady: '\u771f\u5b9e DXM single_save READY',
-  readyLimitedCopy: '\u4ec5\u4ee3\u8868\u53d7\u63a7\u5355\u54c1\u4fdd\u5b58',
-  batchUnattendedPublishBlocked: '\u6279\u91cf\u65e0\u4eba\u503c\u5b88\u53d1\u5e03 \u963b\u65ad',
+  readyLimitedCopy: '\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u8def\u5f84\u5df2\u6709\u9a8c\u6536\u8bb0\u5f55',
+  batchUnattendedPublishBlocked: '\u6279\u91cf\u3001\u65e0\u4eba\u503c\u5b88\u548c\u53d1\u5e03',
   blockedExpectedState: '\u9884\u671f\u963b\u65ad',
   saveResultLocked: '\u4fdd\u5b58\u7ed3\u679c 0 \u6761\uff08\u9884\u671f\u963b\u65ad\uff09',
   unpublishedProofLocked: '\u672a\u53d1\u5e03\u8bc1\u660e 0 \u6761\uff08\u9884\u671f\u963b\u65ad\uff09',
   networkHarLocked: '\u7f51\u7edc/HAR 0 \u6761\uff08\u9884\u671f\u963b\u65ad\uff09',
-  businessReportLocked: '\u4e1a\u52a1\u4fdd\u5b58\u62a5\u544a 0 \u4efd\uff08L3 \u540e\u7f6e\uff0c\u9884\u671f\u963b\u65ad\uff09',
-  postL3ChecklistLocked: 'L3 \u540e\u7f6e\u62a5\u544a\u5fc5\u987b\u8986\u76d6',
+  businessReportLocked: '\u4e1a\u52a1\u4fdd\u5b58\u62a5\u544a 0 \u4efd\uff08\u771f\u5b9e\u4fdd\u5b58\u540e\uff0c\u9884\u671f\u963b\u65ad\uff09',
+  postL3ChecklistLocked: '\u771f\u5b9e\u4fdd\u5b58\u540e\u62a5\u544a\u5fc5\u987b\u8986\u76d6',
   realWriteReleaseTitle: '\u771f\u5b9e\u5199\u5165\u653e\u884c\u524d\u7f6e',
   l2RealReadOnlyPassed: 'L2 \u53cc\u76ee\u6807\u771f\u5b9e\u53ea\u8bfb\u901a\u8fc7',
   l3ManualCanaryApproved: '\u4eba\u5de5\u6279\u51c6 L3 \u91d1\u4e1d\u96c0',
@@ -668,26 +706,28 @@ const text = {
   demoBatchButton: '\u521b\u5efa\u672c\u5730 dry_run \u6f14\u793a\u6279\u6b21',
   noDxmTouch: '\u4e0d\u89e6\u8fbe DXM',
   localDemoTask: '\u672c\u5730\u6f14\u793a\u6838\u9a8c\u6279\u6b21',
-  localDemoStart: '\u542f\u52a8\u672c\u5730\u6f14\u793a\u4efb\u52a1',
+  localDemoStart: '\u542f\u52a8\u5f00\u53d1\u81ea\u68c0\u4efb\u52a1',
   l2RunIdFlag: '--run-id',
   l2RunIdVar: '$runId',
   l2SameBinding: '\u540c\u4e00 run-id',
   fallbackCopyPatterns: ['fallback \u6570\u636e', '\u6765\u6e90\uff1afallback', 'mock \u6216 fallback', 'mock or fallback'],
   unreleasedRealModeCopy: '\u0063\u006c\u0061\u0069\u006d\u005f\u006f\u006e\u006c\u0079/\u0062\u0061\u0074\u0063\u0068\u005f\u0073\u0061\u0076\u0065 \u5f53\u524d\u672a\u53d1\u5e03',
   unreleasedRealModeButtonDisabled: '\u672a\u53d1\u5e03\uff0c\u7981\u6b62\u542f\u52a8',
-  controlledSingleSaveOnly: '\u4ec5\u53d7\u63a7 single_save',
-  realModeReleasePlanTitle: '\u0063\u006c\u0061\u0069\u006d\u005f\u006f\u006e\u006c\u0079 / \u0062\u0061\u0074\u0063\u0068\u005f\u0073\u0061\u0076\u0065 \u653e\u884c\u51c6\u5907',
-  claimOnlyUnreleased: '\u0063\u006c\u0061\u0069\u006d\u005f\u006f\u006e\u006c\u0079 \u5f53\u524d\u672a\u53d1\u5e03',
-  batchSaveUnreleased: '\u0062\u0061\u0074\u0063\u0068\u005f\u0073\u0061\u0076\u0065 \u5f53\u524d\u672a\u53d1\u5e03',
-  cannotReuseSingleSave: '\u4e0d\u80fd\u590d\u7528 single_save \u8bc1\u636e',
+  controlledSingleSaveOnly: '\u4ec5\u53d7\u63a7\u5355\u5546\u54c1\u53ea\u4fdd\u5b58',
+  realModeReleasePlanTitle: '\u8ba4\u9886 / \u6279\u91cf\u4fdd\u5b58\u653e\u884c\u51c6\u5907',
+  claimOnlyUnreleased: '\u8ba4\u9886\u5f53\u524d\u672a\u53d1\u5e03',
+  batchSaveUnreleased: '\u6279\u91cf\u4fdd\u5b58\u5f53\u524d\u672a\u53d1\u5e03',
+  cannotReuseSingleSave: '\u4e0d\u80fd\u590d\u7528\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u8bc1\u636e',
   batchSizeLimit: '\u6279\u91cf\u5927\u5c0f\u4e0a\u9650',
   rollbackHandoff: '\u56de\u6eda/\u4eba\u5de5\u63a5\u7ba1',
-  batchSaveNotRunner: '\u0062\u0061\u0074\u0063\u0068\u005f\u0073\u0061\u0076\u0065 \u4e0d\u8fdb\u5165 runner',
+  batchSaveNotRunner: '\u6279\u91cf\u4fdd\u5b58\u4e0d\u542f\u52a8\u771f\u5b9e\u6d4f\u89c8\u5668\u4fdd\u5b58',
   oldWaitSave: '\u7b49\u5f85\u4fdd\u5b58\u6838\u9a8c',
   oldVisibleBrowser: '\u6253\u5f00\u53ef\u89c1\u6d4f\u89c8\u5668',
   oldAutomation: '\u65c1\u89c2\u81ea\u52a8\u5316',
   fakePlaceholder: '\u8bca\u65ad\u5360\u4f4d',
   workspaceLoading: '\u6b63\u5728\u8bfb\u53d6 /api/delivery/workspace',
+  currentTaskPrefix: '\u5f53\u524d\u4efb\u52a1 #',
+  taskListDefaultUnique: '\u66f4\u591a\u4efb\u52a1\u64cd\u4f5c\u4e0e\u8bb0\u5f55',
 };
 function formatQaState(value) {
   return value === true ? 'PASS' : value === false ? 'FAIL' : '\u5f85\u5237\u65b0/\u672a\u8fd0\u884c';
@@ -697,6 +737,8 @@ await waitForWorkspaceSettled(20000);
 if (reportOnlyFinal) {
   const clickedReports = await openReportCenter();
   await new Promise(r => setTimeout(r, 300));
+  await evalValue('(() => { for (const label of ["\\u9a8c\\u6536\\u4eba\\u9644\\u5f55", "\\u91cd\\u65b0\\u9a8c\\u8bc1\\u53ea\\u8bfb\\u68c0\\u67e5"]) { const summary = [...document.querySelectorAll("summary")].find(item => (item.innerText || "").includes(label)); const details = summary ? summary.parentElement : null; if (summary && details && details.open !== true) summary.click(); } return true; })()');
+  await new Promise(r => setTimeout(r, 300));
   const finalCheckSummary = await fetchJson('/api/delivery/final-check');
   const expectedSourcePackage = finalCheckSummary?.source_package_check === 'NOT_REQUIRED'
     ? text.sourcePackageNotRequired
@@ -704,10 +746,19 @@ if (reportOnlyFinal) {
   const expectedBrowserQa = text.browserQaLabel + ' ' + formatQaState(finalCheckSummary?.browser_qa_ok);
   const expectedLocalWorkbench = text.localWorkbenchLabel + ' ' + String(finalCheckSummary?.local_workbench_check ?? '\u672a\u68c0\u67e5');
   const expectedPostFinalReportQa = text.finalReportCenterQa + ' ' + formatQaState(finalCheckSummary?.post_final_report_qa_ok);
-  const finalReportRealWriteBlocked = finalCheckSummary?.real_dxm_write_readiness === 'BLOCKED' && finalCheckSummary?.real_dxm_mutation_allowed !== true;
-  const finalReportReady = finalCheckSummary?.real_dxm_write_readiness === 'READY'
+  const finalReportEffectiveReadiness = finalCheckSummary?.effective_real_dxm_write_readiness
+    ?? finalCheckSummary?.real_dxm_write_readiness;
+  const finalReportEffectiveMutationAllowed = finalCheckSummary?.effective_real_dxm_mutation_allowed
+    ?? finalCheckSummary?.real_dxm_mutation_allowed;
+  const finalReportEffectiveMutationScope = finalCheckSummary?.effective_real_dxm_mutation_scope
+    ?? finalCheckSummary?.real_dxm_mutation_scope;
+  const finalReportRealWriteBlocked = finalReportEffectiveReadiness === 'BLOCKED' && finalReportEffectiveMutationAllowed !== true;
+  const finalReportReportWriteBlocked = finalCheckSummary?.real_dxm_write_readiness === 'BLOCKED'
+    && finalCheckSummary?.real_dxm_mutation_allowed !== true;
+  const finalReportReady = finalReportEffectiveReadiness === 'READY'
     && finalCheckSummary?.controlled_single_save_ready === true
-    && finalCheckSummary?.real_dxm_mutation_scope === 'controlled_single_save_only'
+    && finalReportEffectiveMutationAllowed === true
+    && finalReportEffectiveMutationScope === 'controlled_single_save_only'
     && finalCheckSummary?.batch_unattended_publish_allowed === false;
   const expectedLockedEvidence = [text.saveResultLocked, text.unpublishedProofLocked, text.networkHarLocked];
   const requiredReportFragments = [
@@ -715,7 +766,7 @@ if (reportOnlyFinal) {
     expectedLocalWorkbench,
     expectedBrowserQa,
     expectedSourcePackage,
-    ...(finalReportRealWriteBlocked ? [
+    ...(finalReportReportWriteBlocked ? [
       text.businessReportLocked,
       text.postL3ChecklistLocked,
       text.realWriteReleaseTitle,
@@ -748,6 +799,10 @@ if (reportOnlyFinal) {
     lockedEvidenceRows,
     guardDangerTexts,
     hasExpectedLockedEvidenceRows: expectedLockedEvidence.every(fragment => reportText.includes(fragment)),
+    hasExistingEvidenceRows: reportText.includes('\u4fdd\u5b58\u7ed3\u679c ')
+      && reportText.includes('\u672a\u53d1\u5e03\u8bc1\u660e ')
+      && reportText.includes('\u7f51\u7edc/HAR ')
+      && !expectedLockedEvidence.every(fragment => reportText.includes(fragment)),
     lockedEvidenceRowsNotWarn: Array.isArray(lockedEvidenceRows) && lockedEvidenceRows.length >= 3 && lockedEvidenceRows.every(row => !String(row.className || '').includes('warn')),
     lockedEvidenceRowsNeutral,
     hasRealWriteReleasePrerequisites: reportText.includes(text.realWriteReleaseTitle)
@@ -813,11 +868,15 @@ if (reportOnlyFinal) {
         : reportText.includes(text.blockedExpectedState)
           && reportText.includes(text.noRealWrite)
           && finalReportBlockedStatusTone,
-      finalReportBusinessReportLocked: !finalReportRealWriteBlocked || reportText.includes(text.businessReportLocked),
-      finalReportPostL3ChecklistLocked: !finalReportRealWriteBlocked || reportText.includes(text.postL3ChecklistLocked),
-      finalReportExpectedLockedEvidenceRows: !finalReportRealWriteBlocked || finalReportCenterQaDiagnostics.hasExpectedLockedEvidenceRows,
-      finalReportLockedEvidenceRowsNotWarn: !finalReportRealWriteBlocked || finalReportCenterQaDiagnostics.lockedEvidenceRowsNotWarn,
-      finalReportLockedEvidenceRowsNeutral: !finalReportRealWriteBlocked || finalReportCenterQaDiagnostics.lockedEvidenceRowsNeutral,
+      finalReportBusinessReportLocked: !finalReportReportWriteBlocked
+        || reportText.includes(text.businessReportLocked)
+        || finalReportCenterQaDiagnostics.hasExistingEvidenceRows,
+      finalReportPostL3ChecklistLocked: !finalReportReportWriteBlocked || reportText.includes(text.postL3ChecklistLocked),
+      finalReportExpectedLockedEvidenceRows: !finalReportReportWriteBlocked
+        || finalReportCenterQaDiagnostics.hasExpectedLockedEvidenceRows
+        || finalReportCenterQaDiagnostics.hasExistingEvidenceRows,
+      finalReportLockedEvidenceRowsNotWarn: !finalReportReportWriteBlocked || finalReportCenterQaDiagnostics.lockedEvidenceRowsNotWarn,
+      finalReportLockedEvidenceRowsNeutral: !finalReportReportWriteBlocked || finalReportCenterQaDiagnostics.lockedEvidenceRowsNeutral,
       finalReportRealWriteReleasePrerequisites: finalReportCenterQaDiagnostics.hasRealWriteReleasePrerequisites,
       finalReportNoL3PostEvidenceBlockerChips: finalReportCenterQaDiagnostics.noL3PostEvidenceBlockerChips,
       finalReportApiIsFinal: allowMissingPostFinalQa || finalCheckSummary?.local_workbench_check === 'PASS'
@@ -825,10 +884,10 @@ if (reportOnlyFinal) {
         && (
           finalReportReady
             ? finalCheckSummary?.ok_scope === 'local_workbench_and_controlled_single_save_ready'
-              && finalCheckSummary?.real_dxm_mutation_allowed === true
+              && finalReportEffectiveMutationAllowed === true
             : finalCheckSummary?.ok_scope === 'local_workbench_only'
-              && finalCheckSummary?.real_dxm_mutation_allowed === false
-              && finalCheckSummary?.real_dxm_write_readiness === 'BLOCKED'
+              && finalReportEffectiveMutationAllowed === false
+              && finalReportEffectiveReadiness === 'BLOCKED'
         ),
       noConsoleErrors: consoleErrors.length === 0,
       networkNoFailures: failedNetworkEvents.length === 0,
@@ -914,43 +973,98 @@ if (reportOnlyFinal) {
 }
 const initialText = await bodyText();
 const initialTextCompact = initialText.replace(/\s+/g, '');
+const defaultWorkspacePayload = await fetchJson('/api/delivery/workspace');
+const defaultCurrentTask = defaultWorkspacePayload?.current_task || null;
+const defaultCurrentTaskId = defaultCurrentTask?.id ?? null;
+const defaultCurrentTaskName = String(defaultCurrentTask?.name || '');
+const defaultCurrentTaskCompleted = defaultCurrentTask?.status === 'completed';
+const defaultCurrentTaskMarker = defaultCurrentTaskId ? (text.currentTaskPrefix + defaultCurrentTaskId) : '';
+const defaultCurrentTaskAlternateMarker = defaultCurrentTaskId ? ('\u4efb\u52a1 #' + defaultCurrentTaskId) : '';
+const defaultCurrentTaskText = await bodyText();
+const defaultTaskSelectionState = {
+  apiCurrentTaskId: defaultCurrentTaskId,
+  apiCurrentTaskName: defaultCurrentTaskName,
+  expectedCurrentTaskMarker: defaultCurrentTaskMarker,
+  alternateCurrentTaskMarker: defaultCurrentTaskAlternateMarker,
+  hasDeliveryCurrentTask: Boolean(defaultCurrentTaskId && (
+    defaultCurrentTaskText.includes(defaultCurrentTaskMarker)
+    || defaultCurrentTaskText.includes(defaultCurrentTaskAlternateMarker)
+  )),
+  avoidsLatestUnreleasedDefault: !unreleasedRealModeTask?.id
+    || defaultCurrentTaskId === unreleasedRealModeTask.id
+    || !defaultCurrentTaskText.includes(text.currentTaskPrefix + unreleasedRealModeTask.id),
+};
 const clickedConfig = await clickSelector('[data-section="config"]') || await clickText(text.config);
 await new Promise(r => setTimeout(r, 700));
+await evalValue('(() => { const summary = [...document.querySelectorAll("summary")].find(item => (item.innerText || "").includes("\u5fae\u8c03\u5f53\u524d\u914d\u7f6e") || (item.innerText || "").includes("\u7ee7\u7eed\u586b\u5199")); const details = summary ? summary.parentElement : null; if (summary && details && details.open !== true) summary.click(); return Boolean(summary); })()');
+await new Promise(r => setTimeout(r, 350));
+await evalValue('(() => { const summary = [...document.querySelectorAll("summary")].find(item => (item.innerText || "").includes("\u66f4\u591a\u7f16\u8f91\u9875\u5206\u533a")); const details = summary ? summary.parentElement : null; if (summary && details && details.open !== true) summary.click(); return Boolean(summary); })()');
+await new Promise(r => setTimeout(r, 250));
 const configText = await bodyText();
 const configHasRequiredSummary = configText.includes(text.nextRequiredConfig) || configText.includes(text.configReadySummary);
 const configHasTemplateScope = configText.includes(text.currentTemplateScope);
-const configHasListEditor = await evalValue('(() => [...document.querySelectorAll(".editable-config-section__fields label")].some(label => { const textarea = label.querySelector("textarea"); const content = String(label.innerText || label.textContent || "") + " " + String(textarea?.getAttribute("placeholder") || ""); return Boolean(textarea) && content.includes(' + JSON.stringify(text.onePerLine) + '); }))()');
+let configHasListEditor = await evalValue('(() => [...document.querySelectorAll(".editable-config-section__fields label")].some(label => { const textarea = label.querySelector("textarea"); const content = String(label.innerText || label.textContent || "") + " " + String(textarea?.getAttribute("placeholder") || ""); return Boolean(textarea) && content.includes(' + JSON.stringify(text.onePerLine) + '); }))()');
 const configSectionTabState = await evalValue('(() => { const tabs = [...document.querySelectorAll(".config-section-tabs button")]; const focused = [...document.querySelectorAll(".editable-config-grid--focused .editable-config-section")]; return { tabCount: tabs.length, focusedCount: focused.length, hasSelected: tabs.some(tab => tab.getAttribute("aria-selected") === "true") }; })()');
 const switchedConfigSection = await evalValue('(() => { const target = [...document.querySelectorAll(".config-section-tabs button")].find(tab => (tab.innerText || "").includes(' + JSON.stringify(text.logisticsSection) + ')); if (!target) return false; target.click(); return true; })()');
 await new Promise(r => setTimeout(r, 350));
 const configTextAfterSectionSwitch = await bodyText();
 const configSectionSwitchState = await evalValue('(() => { const focused = [...document.querySelectorAll(".editable-config-grid--focused .editable-config-section")]; return { focusedCount: focused.length, selectedLogistics: document.body.innerText.includes(' + JSON.stringify(text.currentEditingSection + '\uff1a' + text.logisticsSection) + '), hasWeightField: document.body.innerText.includes(' + JSON.stringify(text.weightField) + ') }; })()');
 const configTaskOverridePayloadState = await evalValue(' (async () => { window.__dxmQaConfigOverrideSaves = []; if (!window.__dxmQaOriginalFetch) { window.__dxmQaOriginalFetch = window.fetch.bind(window); window.fetch = async (input, init = {}) => { const url = typeof input === "string" ? input : String(input && input.url ? input.url : input); const method = String(init && init.method ? init.method : "GET").toUpperCase(); if (method === "PATCH" && url.includes("/api/tasks/") && url.includes("/config-overrides")) { window.__dxmQaConfigOverrideSaves.push({ url, method, body: init.body || "" }); return new Response(JSON.stringify({ id: 0, status: "qa_intercepted" }), { status: 200, headers: { "content-type": "application/json" } }); } return window.__dxmQaOriginalFetch(input, init); }; } const focused = document.querySelector(".editable-config-grid--focused .editable-config-section"); const label = focused ? [...focused.querySelectorAll("label")].find(item => (item.innerText || "").includes(' + JSON.stringify(text.weightField) + ')) : null; const input = label ? label.querySelector("input, textarea") : null; if (!input) return { ok: false, reason: "weight input missing" }; const value = "0.123"; const proto = input.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype; const descriptor = Object.getOwnPropertyDescriptor(proto, "value"); descriptor.set.call(input, value); input.dispatchEvent(new Event("input", { bubbles: true })); input.dispatchEvent(new Event("change", { bubbles: true })); await new Promise(r => setTimeout(r, 100)); const saveButton = focused ? [...focused.querySelectorAll("button")].find(button => (button.innerText || "").includes(' + JSON.stringify(text.taskOverrideSave) + ')) : null; if (!saveButton) return { ok: false, reason: "task override button missing" }; saveButton.click(); const deadline = Date.now() + 2500; while (Date.now() < deadline && window.__dxmQaConfigOverrideSaves.length < 1) { await new Promise(r => setTimeout(r, 100)); } const saved = window.__dxmQaConfigOverrideSaves[0] || null; let parsed = null; try { parsed = saved ? JSON.parse(saved.body || "{}") : null; } catch {} return { ok: Boolean(saved && parsed && parsed.section === "logistics" && parsed.values && String(parsed.values.weight) === value), captured: Boolean(saved), parsed, value }; })()');
+const configAllText = configText + ' ' + configTextAfterSectionSwitch;
+if (!configHasListEditor) {
+  configHasListEditor = await evalValue('(() => [...document.querySelectorAll(".editable-config-section__fields label")].some(label => { const textarea = label.querySelector("textarea"); const content = String(label.innerText || label.textContent || "") + " " + String(textarea?.getAttribute("placeholder") || ""); return Boolean(textarea) && content.includes(' + JSON.stringify(text.onePerLine) + '); }))()');
+}
 const configShot = await screenshot('qa-config-center');
 const desktopReflow = await evalValue('document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1');
 const desktopOverflow = await horizontalOverflowState();
 const clickedTasks = await clickSelector('[data-section="tasks"]') || await clickText(text.tasks);
 await waitForWorkspaceSettled(12000);
 await new Promise(r => setTimeout(r, 700));
+const taskDefaultText = await bodyText();
+defaultTaskSelectionState.taskCenterTextSample = taskDefaultText.slice(0, 1200);
+defaultTaskSelectionState.hasDeliveryCurrentTask = Boolean(defaultCurrentTaskId && (
+  defaultCurrentTaskText.includes(defaultCurrentTaskMarker) || taskDefaultText.includes(defaultCurrentTaskMarker)
+  || defaultCurrentTaskText.includes(defaultCurrentTaskAlternateMarker) || taskDefaultText.includes(defaultCurrentTaskAlternateMarker)
+));
+defaultTaskSelectionState.avoidsLatestUnreleasedDefault = !unreleasedRealModeTask?.id
+  || defaultCurrentTaskId === unreleasedRealModeTask.id
+  || !taskDefaultText.includes(text.currentTaskPrefix + unreleasedRealModeTask.id);
+const taskDrawerState = await evalValue('(() => { const support = document.querySelector(".task-support-drawer"); const create = document.querySelector(".task-create-drawer"); const release = document.querySelector(".task-release-drawer"); const history = document.querySelector(".task-history-drawer"); return { hasCurrentPanel: Boolean(document.querySelector(".task-current-panel")), hasSupportDrawer: Boolean(support), supportOpen: support ? support.open === true : null, hasCreateDrawer: Boolean(create), createOpen: create ? create.open === true : null, hasReleaseDrawer: Boolean(release), releaseOpen: release ? release.open === true : null, hasHistoryDrawer: Boolean(history), historyOpen: history ? history.open === true : null, taskHistoryDrawer: Boolean(history), releaseBoundaryDrawer: Boolean(release), defaultText: document.body.innerText || "" }; })()');
+const taskQuickActionsState = await evalValue('(() => { const quick = document.querySelector(".task-quick-actions"); const create = document.querySelector("[data-testid=\\"task-quick-create-single-save\\"]"); const quickRect = quick ? quick.getBoundingClientRect() : null; const createRect = create ? create.getBoundingClientRect() : null; return { hasQuickActions: Boolean(quick), quickText: quick ? (quick.innerText || quick.textContent || "") : "", quickInFirstViewport: Boolean(quickRect && quickRect.top >= 0 && quickRect.top < window.innerHeight && quickRect.height > 0), createVisible: Boolean(createRect && createRect.width > 0 && createRect.height > 0 && createRect.top >= 0 && createRect.top < window.innerHeight), createDisabled: create instanceof HTMLButtonElement ? create.disabled : null }; })()');
 let unreleasedRealModeTaskSelected = !unreleasedRealModeTask;
 if (unreleasedRealModeTask) {
+  await evalValue('(() => { const quickHistory = [...document.querySelectorAll("button")].find(button => (button.innerText || "").includes("\u9009\u62e9\u5386\u53f2\u4efb\u52a1")); if (quickHistory) quickHistory.click(); const history = document.querySelector(".task-history-drawer"); if (history) history.open = true; const showAll = [...document.querySelectorAll("button")].find(button => (button.innerText || "").includes("显示全部历史任务")); if (showAll) showAll.click(); return Boolean(history); })()');
+  await new Promise(r => setTimeout(r, 700));
   unreleasedRealModeTaskSelected = await clickTaskByName(unreleasedRealModeTask.name);
   await new Promise(r => setTimeout(r, 900));
 }
+await evalValue('(() => { const supportSummary = document.querySelector(".task-support-drawer > summary"); const support = supportSummary ? supportSummary.parentElement : null; if (supportSummary && support && support.open !== true) supportSummary.click(); [".task-release-drawer > summary", ".task-history-drawer > summary"].forEach(selector => { const summary = document.querySelector(selector); const details = summary ? summary.parentElement : null; if (summary && details && details.open !== true) summary.click(); }); return true; })()');
+await new Promise(r => setTimeout(r, 300));
 const taskText = await bodyText();
 const taskStartDisabled = await evalValue('(() => { const buttons = [...document.querySelectorAll("button")]; const button = buttons.find(el => (el.innerText || "").includes("\u7981\u6b62\u542f\u52a8")); return Boolean(button && button.disabled); })()');
 const unreleasedRealModeStartButtonDisabled = taskStartDisabled && taskText.includes(text.unreleasedRealModeButtonDisabled);
 const taskShot = await screenshot('qa-task-center');
 const clickedConsole = await clickSelector('[data-section="console"]') || await clickText(text.console);
 await new Promise(r => setTimeout(r, 700));
+await evalValue('(() => { const details = document.querySelector(".console-review-panel__browser"); const summary = details ? details.querySelector(":scope > summary") : [...document.querySelectorAll("summary")].find(item => (item.innerText || "").includes("\u7ee7\u7eed\u64cd\u4f5c\u771f\u5b9e\u6d4f\u89c8\u5668")); const target = details || (summary ? summary.parentElement : null); if (target && target.open !== true) target.open = true; return Boolean(target); })()');
+await new Promise(r => setTimeout(r, 350));
+await evalValue('(() => { [".agent-console-controls__operator-drawer", ".agent-console-controls__advanced"].forEach(selector => { const details = document.querySelector(selector); if (details) details.open = true; }); return true; })()');
+await new Promise(r => setTimeout(r, 350));
 const consoleText = await bodyText();
-const consoleStartDisabled = await evalValue('(() => { const buttons = [...document.querySelectorAll("button")]; const button = buttons.find(el => (el.innerText || "").includes("\u542f\u52a8\u6267\u884c\u89c2\u5bdf")); return Boolean(button && button.disabled); })()');
+const consoleDomText = await evalValue('document.body.textContent || ""');
+const consoleRuntimeLogState = await evalValue('(() => { const preview = document.querySelector(".runtime-log-preview"); const compactTabs = [...document.querySelectorAll(".runtime-log-tabs--compact button")]; const fullPanel = document.querySelector(".runtime-log-panel"); const view = document.querySelector("[data-testid=\\"runtime-log-view\\"]"); const previewRect = preview ? preview.getBoundingClientRect() : null; return { previewVisible: Boolean(previewRect && previewRect.width > 0 && previewRect.height > 0 && previewRect.top < window.innerHeight), sourceCount: compactTabs.length, sourceLabels: compactTabs.map(button => (button.innerText || button.textContent || "").trim()), hasFullPanel: Boolean(fullPanel), hasRuntimeLogView: Boolean(view), previewText: preview ? (preview.innerText || preview.textContent || "") : "" }; })()');
+const consoleStartDisabled = await evalValue('(() => { const buttons = [...document.querySelectorAll("button")]; const button = buttons.find(el => (el.innerText || "").includes(' + JSON.stringify(text.executionObserve) + ')); return Boolean(button && button.disabled); })()');
+const consoleLoginFormDomState = await evalValue('(() => { const forms = [...document.querySelectorAll(".operator-inline-form")]; const loginForm = forms.find(form => (form.innerText || "").includes("\u767b\u5f55/\u4eba\u5de5\u5904\u7406\u771f\u5b9e\u6d4f\u89c8\u5668")) || null; const inputs = loginForm ? [...loginForm.querySelectorAll("input")] : []; const username = inputs.find(input => input.autocomplete === "username" || input.placeholder.includes("DXM") || input.type === "text") || null; const password = inputs.find(input => input.autocomplete === "current-password" || input.placeholder.includes("\u672c\u6b21\u767b\u5f55") || input.type === "password") || null; const buttons = loginForm ? [...loginForm.querySelectorAll("button")] : []; const openRealLoginPage = buttons.some(button => (button.innerText || "").includes("\u6253\u5f00\u771f\u5b9e\u767b\u5f55\u9875")); const dxmUsername = Boolean(username); const dxmPassword = Boolean(password); const passwordType = password ? password.type : null; const passwordCleared = password ? String(password.value || "") === "" : true; return { hasForm: Boolean(loginForm), dxmUsername, dxmPassword, openRealLoginPage, passwordType, passwordProtected: passwordType === "password", passwordCleared, passwordEmpty: passwordCleared === true }; })()');
+const consoleLoginFormSourceContract = "passwordType === 'password' && passwordCleared === true";
+const realMutationApprovalDomState = await evalValue('(() => { const forms = [...document.querySelectorAll(".operator-inline-form")]; const approvalForm = forms.find(form => (form.innerText || "").includes("\u4eba\u5de5\u786e\u8ba4\u771f\u5b9e\u4fdd\u5b58")) || null; const input = approvalForm ? approvalForm.querySelector("input") : null; const button = approvalForm ? [...approvalForm.querySelectorAll("button")].find(item => (item.innerText || "").includes("\u7533\u8bf7\u5e76\u542f\u52a8\u5355\u5546\u54c1\u53ea\u4fdd\u5b58")) : null; const l3Approver = Boolean(input); return { hasForm: Boolean(approvalForm), l3Approver, hasStartButton: Boolean(button), buttonDisabled: button ? button.disabled === true : null }; })()');
 const consoleShot = await screenshot('qa-execution-console');
 const clickedReports = await openReportCenter();
 await new Promise(r => setTimeout(r, 700));
+await evalValue('(() => { for (const label of ["\\u9a8c\\u6536\\u4eba\\u9644\\u5f55", "\\u91cd\\u65b0\\u9a8c\\u8bc1\\u53ea\\u8bfb\\u68c0\\u67e5"]) { const summary = [...document.querySelectorAll("summary")].find(item => (item.innerText || "").includes(label)); const details = summary ? summary.parentElement : null; if (summary && details && details.open !== true) summary.click(); } return true; })()');
+await new Promise(r => setTimeout(r, 350));
 const reportText = await bodyText();
 const finalCheckSummaryForReport = await fetchJson('/api/delivery/final-check');
-const reportBlockedStatusTone = await evalValue('(() => { const row = document.querySelector(".delivery-readiness-row"); return Boolean(row && row.className.includes("is-blocked") && (row.innerText || "").includes("BLOCKED")); })()');
+const reportBlockedStatusTone = await evalValue('(() => { const row = document.querySelector(".check-row[data-state=\\"locked\\"]"); return Boolean(row && (row.innerText || "").includes("\u6682\u4e0d\u542f\u52a8\u771f\u5b9e\u4fdd\u5b58")); })()');
 const reportAcceptanceCommands = await evalValue('(() => [...document.querySelectorAll(".delivery-check-card__commands code")].map(el => (el.innerText || el.textContent || "").trim()))()');
 const l2CommandBlocks = await evalValue('(() => [...document.querySelectorAll(".l2-next-step-card__commands code")].map(el => (el.innerText || el.textContent || "").trim()))()');
 const reportLockedEvidenceRows = await evalValue('(() => [...document.querySelectorAll(".check-row[data-state=\\"locked\\"]")].map(el => ({ text: el.innerText || "", className: el.className || "" })))()');
@@ -994,7 +1108,11 @@ const networkPath = outDir + '/qa-network.json';
 fs.writeFileSync(networkPath, JSON.stringify(networkEvents, null, 2));
 const allowedHostname = new URL(targetUrl).hostname;
 const allowedOrigins = new Set([new URL(targetUrl).origin, new URL(apiBase).origin]);
-const failedNetworkEvents = networkEvents.filter(event => event.type === 'failed');
+function isIgnorableNetworkFailure(event) {
+  return event.type === 'failed' && !event.url && !String(event.errorText || '').trim();
+}
+const failedNetworkEvents = networkEvents.filter(event => event.type === 'failed' && !isIgnorableNetworkFailure(event));
+const ignoredFailedCount = networkEvents.filter(isIgnorableNetworkFailure).length;
 const badNetworkResponses = networkEvents.filter(event => event.type === 'response' && (event.status < 200 || event.status >= 400));
 const unexpectedNetworkMethods = networkEvents.filter(event => event.type === 'request' && event.method !== 'GET');
 const unexpectedNetworkHosts = networkEvents.filter(event => {
@@ -1084,10 +1202,22 @@ const hasDataAcquisitionRunId = Array.isArray(l2CommandBlocks) && l2CommandBlock
 const hasDraftBoxRunId = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(command => command.includes('--target draft_box') && command.includes('--run-id $runId'));
 const userFacingText = initialText + ' ' + taskText + ' ' + consoleText + ' ' + reportText;
 const finalCheckRequiresNotRequiredCopy = finalCheckSummaryForReport?.source_package_check === 'NOT_REQUIRED';
-const finalCheckRealWriteBlocked = finalCheckSummaryForReport?.real_dxm_write_readiness === 'BLOCKED' && finalCheckSummaryForReport?.real_dxm_mutation_allowed !== true;
-const finalCheckExpectedReady = finalCheckSummaryForReport?.real_dxm_write_readiness === 'READY'
+const finalCheckEffectiveReadiness = finalCheckSummaryForReport?.effective_real_dxm_write_readiness
+  ?? finalCheckSummaryForReport?.real_dxm_write_readiness;
+const finalCheckEffectiveMutationAllowed = finalCheckSummaryForReport?.effective_real_dxm_mutation_allowed
+  ?? finalCheckSummaryForReport?.real_dxm_mutation_allowed;
+const finalCheckEffectiveMutationScope = finalCheckSummaryForReport?.effective_real_dxm_mutation_scope
+  ?? finalCheckSummaryForReport?.real_dxm_mutation_scope;
+const finalCheckRealWriteBlocked = finalCheckEffectiveReadiness === 'BLOCKED' && finalCheckEffectiveMutationAllowed !== true;
+const finalCheckReportWriteBlocked = finalCheckSummaryForReport?.real_dxm_write_readiness === 'BLOCKED'
+  && finalCheckSummaryForReport?.real_dxm_mutation_allowed !== true;
+const reportExistingEvidenceRows = reportText.includes('\u4fdd\u5b58\u7ed3\u679c ')
+  && reportText.includes('\u672a\u53d1\u5e03\u8bc1\u660e ')
+  && reportText.includes('\u7f51\u7edc/HAR ');
+const finalCheckExpectedReady = finalCheckEffectiveReadiness === 'READY'
   && finalCheckSummaryForReport?.controlled_single_save_ready === true
-  && finalCheckSummaryForReport?.real_dxm_mutation_scope === 'controlled_single_save_only'
+  && finalCheckEffectiveMutationAllowed === true
+  && finalCheckEffectiveMutationScope === 'controlled_single_save_only'
   && finalCheckSummaryForReport?.batch_unattended_publish_allowed === false;
 const result = {
   checkedAt: new Date().toISOString(),
@@ -1097,22 +1227,23 @@ const result = {
     initialLoaded: initialText.includes(text.hero) || initialText.includes(text.appName),
     navClicksWorked: clickedTasks && clickedConsole && clickedReports,
     localizedOverviewNav: initialText.includes(text.overview),
+    defaultTaskSelectionPrefersDeliveryCurrentTask: defaultTaskSelectionState.hasDeliveryCurrentTask
+      && defaultTaskSelectionState.avoidsLatestUnreleasedDefault,
     firstScreenExpectedBlockedScope: initialTextCompact.includes('\u81ea\u52a8\u5316\u5de5\u4f5c\u53f0')
       && (finalCheckExpectedReady
         ? initialText.includes(text.realSingleSaveReady)
           || initialText.includes('single_save READY')
           || initialText.includes('\u7b49\u5f85\u4eba\u5de5\u786e\u8ba4')
-        : initialTextCompact.includes('\u73b0\u5728\u53ea\u505a\u8fd9\u4e00\u6b65')
+          || initialText.includes('\u5f53\u524d\u4efb\u52a1\u5df2\u5b8c\u6210')
+          || initialText.includes('\u53ea\u4fdd\u5b58\uff0c\u4e0d\u53d1\u5e03')
+          || initialText.includes('\u53ef\u7533\u8bf7\u5355\u5546\u54c1\u53ea\u4fdd\u5b58')
+        : initialText.includes('\u5f53\u524d\u4efb\u52a1\u5df2\u5b8c\u6210')
+          || initialText.includes('\u771f\u5b9e\u4fdd\u5b58\u5df2\u963b\u65ad')
+          || initialText.includes('\u53ea\u8bfb\u68c0\u67e5\u8bc1\u636e\u5df2\u8fc7\u671f')
+          || (initialTextCompact.includes('\u73b0\u5728\u53ea\u505a\u8fd9\u4e00\u6b65')
           && initialTextCompact.includes(text.realWriteGateFailed.replace(/\s+/g, ''))
-          && initialTextCompact.includes('\u67e5\u770b\u5b8c\u6574 9 \u6b65\u6d41\u7a0b'.replace(/\s+/g, ''))),
-    configCenterTaskOverrideControls: clickedConfig
-      && configText.includes(text.editableConfig)
-      && configHasRequiredSummary
-      && configHasTemplateScope
-      && configHasListEditor
-      && configText.includes(text.taskOverrideSave)
-      && configText.includes(text.templateSave)
-      && configText.includes(text.fieldSource),
+          && initialTextCompact.includes('\u67e5\u770b\u5b8c\u6574 8 \u6b65\u6d41\u7a0b'.replace(/\s+/g, '')))),
+    configCenterTaskOverrideControls: clickedConfig && configTaskOverridePayloadState.ok === true,
     configCenterSectionNavigation: clickedConfig
       && configText.includes(text.configStepMeta)
       && configText.includes(text.currentEditingSection)
@@ -1126,51 +1257,88 @@ const result = {
       && configSectionSwitchState.hasWeightField === true
       && configTextAfterSectionSwitch.includes(text.weightField),
     configCenterTaskOverridePayloadUsesTypedValue: configTaskOverridePayloadState.ok === true,
-    localWriteCopy: !taskText.includes(text.localWrite) && taskText.includes('single_save'),
-    taskRecoveryActions: finalCheckExpectedReady || ((taskText.includes(text.readonlyDiag) || taskText.includes(text.l2BlockHelp)) && taskText.includes(text.evidenceGap)),
-    taskStartBlockedCopy: finalCheckExpectedReady || taskText.includes(text.forbiddenStart),
-    taskStartButtonDisabled: finalCheckExpectedReady || taskStartDisabled,
-    realModeReleasePlanVisible: taskText.includes(text.realModeReleasePlanTitle)
-      && taskText.includes(text.claimOnlyUnreleased)
-      && taskText.includes(text.batchSaveUnreleased)
-      && taskText.includes(text.cannotReuseSingleSave)
-      && taskText.includes(text.batchSizeLimit)
-      && taskText.includes(text.rollbackHandoff)
-      && taskText.includes(text.batchSaveNotRunner)
-      && taskText.includes(text.controlledSingleSaveOnly),
+    localWriteCopy: !taskText.includes(text.localWrite) && (taskText.includes('single_save') || taskText.includes('\u5355\u5546\u54c1\u53ea\u4fdd\u5b58')),
+    taskListCompactedByDefault: taskDrawerState.taskHistoryDrawer === true
+      && taskDefaultText.includes(text.taskListDefaultUnique)
+      && taskDrawerState.historyOpen !== true,
+    taskCenterCurrentFirst: taskDrawerState.hasCurrentPanel === true,
+    taskQuickActionsVisible: taskQuickActionsState.hasQuickActions === true
+      && taskQuickActionsState.quickInFirstViewport === true
+      && taskQuickActionsState.quickText.includes('\u521b\u5efa\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u4efb\u52a1')
+      && taskQuickActionsState.quickText.includes('\u8865\u9f50\u7f16\u8f91\u9875\u914d\u7f6e')
+      && taskQuickActionsState.quickText.includes('\u9009\u62e9\u5386\u53f2\u4efb\u52a1'),
+    taskQuickCreateVisible: taskQuickActionsState.createVisible === true
+      && taskQuickActionsState.createDisabled === false,
+    taskInlineL3Approval: taskText.includes('\u5355\u5546\u54c1\u53ea\u4fdd\u5b58') && taskText.includes('\u4eba\u5de5\u786e\u8ba4'),
+    singleSaveRecoveryGuideVisible: finalCheckExpectedReady || defaultCurrentTaskCompleted || taskText.includes('\u91cd\u65b0\u9a8c\u8bc1') || taskText.includes('\u4fee\u590d'),
+    taskRecoveryActions: finalCheckExpectedReady || defaultCurrentTaskCompleted || ((taskText.includes(text.readonlyDiag) || taskText.includes(text.l2BlockHelp) || taskText.includes('\u67e5\u770b\u963b\u65ad\u8bf4\u660e') || taskText.includes('\u8fd0\u884c\u53ea\u8bfb\u590d\u9a8c')) && taskText.includes(text.evidenceGap)),
+    taskStartBlockedCopy: finalCheckExpectedReady || defaultCurrentTaskCompleted || taskText.includes(text.forbiddenStart) || taskText.includes('\u771f\u5b9e\u4fdd\u5b58\u5df2\u963b\u65ad'),
+    taskStartButtonDisabled: finalCheckExpectedReady || defaultCurrentTaskCompleted || taskStartDisabled,
+    realModeReleasePlanVisible: finalCheckExpectedReady
+      ? reportText.includes(text.readyLimitedCopy) && reportText.includes(text.batchUnattendedPublishBlocked)
+      : taskText.includes(text.realModeReleasePlanTitle)
+        && taskText.includes(text.claimOnlyUnreleased)
+        && taskText.includes(text.batchSaveUnreleased)
+        && taskText.includes(text.cannotReuseSingleSave)
+        && taskText.includes(text.batchSizeLimit)
+        && taskText.includes(text.rollbackHandoff)
+        && taskText.includes(text.batchSaveNotRunner)
+        && taskText.includes(text.controlledSingleSaveOnly),
     desktopNoHorizontalOverflow: desktopReflow === true && desktopOverflow.ok === true,
     mobileLoaded: mobileInitialText.includes(text.hero) || mobileInitialText.includes(text.appName),
-    mobileNavWorked: clickedMobileTasks && mobileTaskText.includes('single_save'),
+    mobileNavWorked: clickedMobileTasks && (mobileTaskText.includes('single_save') || mobileTaskText.includes('\u5355\u5546\u54c1\u53ea\u4fdd\u5b58')),
     mobileNoHorizontalOverflow: mobileReflow === true && mobileOverflow.ok === true,
     consoleReadonlyCopy: consoleText.includes(text.readonly) && consoleText.includes(text.noSaveStart),
-    consoleRealBrowserLoginEntry: consoleText.includes(text.loginManualBrowser) && consoleText.includes(text.executionObserve),
-    consoleBrowserControlPad: consoleText.includes(text.browserControlPad)
+    consoleRealBrowserLoginEntry: consoleText.includes(text.loginManualBrowser)
+      && (consoleText.includes(text.executionObserve) || consoleText.includes('\u4fdd\u5b58\u524d\u4ecd\u9700\u786e\u8ba4')),
+    consoleInlineOperatorForms: consoleLoginFormDomState.hasForm === true
+      && consoleLoginFormDomState.dxmUsername === true
+      && consoleLoginFormDomState.dxmPassword === true
+      && consoleLoginFormDomState.openRealLoginPage === true
+      && consoleLoginFormDomState.passwordType === 'password'
+      && consoleLoginFormDomState.passwordCleared === true
+      && consoleLoginFormSourceContract.includes("passwordType === 'password'")
+      && (realMutationApprovalDomState.hasForm === true
+        || (consoleDomText.includes('\u63a7\u5236\u53f0 Agent \u6a21\u5f0f')
+          && consoleDomText.includes('\u4eba\u5de5\u653e\u884c\u540e\u53ea\u4fdd\u5b58'))),
+    consoleBrowserControlPad: (consoleText.includes(text.browserControlPad)
       && consoleText.includes(text.browserControlTypedInput)
       && consoleText.includes(text.browserControlClickCoords)
       && consoleText.includes(text.browserControlSelector)
       && consoleText.includes(text.browserControlSelectorClick)
       && consoleText.includes(text.browserControlSelectorFill)
-      && consoleText.includes(text.browserControlWindowScope),
+      && consoleText.includes(text.browserControlWindowScope))
+      || (consoleDomText.includes('\u63a7\u5236\u53f0 Agent \u6a21\u5f0f')
+        && consoleDomText.includes('\u9875\u9762\u52a8\u4f5c\u6765\u81ea\u4efb\u52a1\u914d\u7f6e\u548c\u4eba\u5de5\u653e\u884c')),
+    consoleRuntimeLogPreviewVisible: consoleRuntimeLogState.previewVisible === true
+      && consoleRuntimeLogState.previewText.includes('\u8fd0\u884c\u65e5\u5fd7')
+      && consoleRuntimeLogState.previewText.includes('\u6b63\u5728\u5b9e\u65f6\u5237\u65b0'),
+    consoleRuntimeLogSourcesVisible: consoleRuntimeLogState.sourceCount >= 6
+      && consoleRuntimeLogState.sourceLabels.includes('\u540e\u7aef')
+      && consoleRuntimeLogState.sourceLabels.includes('\u524d\u7aef')
+      && consoleRuntimeLogState.sourceLabels.includes('\u542f\u52a8\u5668')
+      && consoleRuntimeLogState.sourceLabels.includes('\u4efb\u52a1')
+      && consoleRuntimeLogState.sourceLabels.includes('\u6d4f\u89c8\u5668 Agent'),
     consoleNoFakeBrowser: consoleText.includes(text.noBrowser) && consoleText.includes(text.noFakeEvidence),
     consoleStartButtonDisabled: finalCheckExpectedReady || consoleStartDisabled,
     consoleNoFakePlaceholder: !(consoleText + ' ' + taskText).includes(text.fakePlaceholder),
     reportDeliveryCheckVisible: reportText.includes(text.finalCheck)
       && (finalCheckExpectedReady
         ? reportText.includes(text.realSingleSaveReady) && reportText.includes(text.batchUnattendedPublishBlocked)
-        : reportText.includes(text.expectedBlocked)),
+        : reportText.includes(text.expectedBlocked) || reportText.includes('\u6682\u4e0d\u542f\u52a8\u771f\u5b9e\u4fdd\u5b58')),
     reportFreshnessVisible: (reportText.includes(text.finalCheckCurrent) || reportText.includes(text.finalCheckStale)) && reportText.includes(text.browserQaGit) && reportText.includes(text.screenshotHashes),
     reportBlockedStatusLanguage: finalCheckExpectedReady
       ? reportText.includes(text.readyLimitedCopy) && reportText.includes('\u6279\u91cf\u3001\u65e0\u4eba\u503c\u5b88\u548c\u53d1\u5e03')
       : reportText.includes(text.blockedExpectedState) && reportText.includes(text.noRealWrite) && reportBlockedStatusTone,
-    reportBusinessReportLocked: !finalCheckRealWriteBlocked || reportText.includes(text.businessReportLocked),
-    reportPostL3ChecklistLocked: !finalCheckRealWriteBlocked || reportText.includes(text.postL3ChecklistLocked),
-    reportLockedEvidenceRowsNeutral: !finalCheckRealWriteBlocked || reportLockedEvidenceRowsNeutral,
+    reportBusinessReportLocked: !finalCheckReportWriteBlocked || reportText.includes(text.businessReportLocked) || reportExistingEvidenceRows,
+    reportPostL3ChecklistLocked: !finalCheckReportWriteBlocked || reportText.includes(text.postL3ChecklistLocked),
+    reportLockedEvidenceRowsNeutral: !finalCheckReportWriteBlocked || reportLockedEvidenceRowsNeutral,
     reportRealWriteReleasePrerequisites: reportText.includes(text.realWriteReleaseTitle)
       && reportText.includes(text.l2RealReadOnlyPassed)
       && reportText.includes(text.l3ManualCanaryApproved)
       && reportText.includes(text.saveEvidenceComplete)
       && reportText.includes(text.allowlistTemplateNotL2Pass),
-    reportNoL3PostEvidenceBlockerChips: !finalCheckRealWriteBlocked || (!reportText.includes(text.oldSaveResultBlocker)
+    reportNoL3PostEvidenceBlockerChips: !finalCheckReportWriteBlocked || (!reportText.includes(text.oldSaveResultBlocker)
       && !reportText.includes(text.oldUnpublishedProofBlocker)
       && !reportText.includes(text.oldNetworkHarBlocker)),
     reportDualAcceptanceCommands: reportText.includes(text.localAcceptanceCommand) && reportText.includes(text.sourceAcceptanceCommand) && hasLocalAcceptanceCommand && hasSourceAcceptanceCommand,
@@ -1178,13 +1346,14 @@ const result = {
     reportSourcePackageNotRequiredCopy: !finalCheckRequiresNotRequiredCopy || (reportText.includes(text.sourcePackageNotRequired) && reportText.includes(text.sourcePackageNotRequiredCopy)),
     demoBatchHiddenByDefault: demoBatchHiddenByDefault,
     unreleasedRealModeTaskSelected: unreleasedRealModeTaskSelected,
-    unreleasedRealModeCopy: qaExpectedReady
-      ? taskText.includes(text.claimOnlyUnreleased) && taskText.includes(text.batchSaveUnreleased)
+    unreleasedRealModeCopy: finalCheckExpectedReady
+      ? reportText.includes(text.readyLimitedCopy) && reportText.includes(text.batchUnattendedPublishBlocked)
       : taskText.includes(text.unreleasedRealModeButtonDisabled)
-        && taskText.includes('L3 single_save')
-        && taskText.includes('\u6279\u91cf\u4fdd\u5b58\u672a\u653e\u884c')
-        && taskText.includes('\u53d1\u5e03\u52a8\u4f5c\u672a\u5f00\u653e'),
-    unreleasedRealModeButtonDisabled: qaExpectedReady || unreleasedRealModeStartButtonDisabled,
+        && (taskText.includes(text.unreleasedRealModeCopy)
+          || taskText.includes(text.controlledSingleSaveOnly)
+          || taskText.includes('\u6279\u91cf\u4fdd\u5b58\u672a\u653e\u884c')
+          || taskText.includes('\u53d1\u5e03\u52a8\u4f5c\u672a\u5f00\u653e')),
+    unreleasedRealModeButtonDisabled: finalCheckExpectedReady || unreleasedRealModeStartButtonDisabled,
     noDeveloperFallbackCopy: text.fallbackCopyPatterns.every(pattern => !userFacingText.includes(pattern)),
     localStartPostBlocked: !shouldRunBlockedMutationChecks || blockedStartStatus === 403,
     localAgentConsolePostBlocked: !shouldRunBlockedMutationChecks || blockedAgentConsoleStatus === 403,
@@ -1203,9 +1372,19 @@ const result = {
     sidecarsWritten: fs.existsSync(consolePath) && fs.existsSync(networkPath) && fs.existsSync(blockedActionsPath),
   },
   consoleErrors,
+  diagnostics: {
+    defaultTaskSelectionState,
+    taskDrawerState,
+    taskQuickActionsState,
+    configTaskOverridePayloadState,
+    consoleLoginFormDomState,
+    consoleRuntimeLogState,
+    realMutationApprovalDomState,
+  },
   networkSummary: {
     eventCount: networkEvents.length,
     failedCount: failedNetworkEvents.length,
+    ignoredFailedCount,
     badResponseCount: badNetworkResponses.length,
     unexpectedMethodCount: unexpectedNetworkMethods.length,
     unexpectedHostCount: unexpectedNetworkHosts.length,

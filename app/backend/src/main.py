@@ -104,9 +104,17 @@ RUNTIME_LOG_SOURCES = {
 RUNTIME_CONTROL_COMMAND_FILE = Path(
     os.environ.get('DXM_RUNTIME_CONTROL_COMMAND_FILE') or DATA_DIR / 'runtime-control-command.json'
 )
+RUNTIME_CONTROL_MANAGED_BY_LAUNCHER = bool(os.environ.get('DXM_RUNTIME_CONTROL_COMMAND_FILE'))
 RUNTIME_VIRTUAL_LOG_SOURCES = {'task', 'agent'}
 RUNTIME_LOG_LEVELS = {'info', 'warning', 'error'}
-RUNTIME_CONTROL_ACTIONS = {'stop_agent_console', 'clear_stuck_tasks', 'restart_backend', 'restart_frontend'}
+RUNTIME_CONTROL_ACTIONS = {'stop_agent_console', 'clear_stuck_tasks', 'restart_backend', 'restart_frontend', 'run_l2_readonly_probe'}
+L2_READONLY_PROBE_RUNNER = REPO_ROOT / 'tools' / 'probes' / 'l2_readonly_probe_runner.py'
+L2_READONLY_PROBE_SCRIPT = REPO_ROOT / 'tools' / 'probes' / 'l2_readonly_probe.py'
+L2_READONLY_PROBE_COOKIE_FILE = DATA_DIR / 'sessions' / 'dianxiaomi_cookies.json'
+L2_READONLY_PROBE_OUTPUT_DIR = DATA_DIR / 'l2_readonly_probe'
+L2_READONLY_PROBE_ALLOWLIST_FILE = REPO_ROOT / 'config' / 'l2_readonly_allowlist.json'
+L2_READONLY_PROBE_LOCK_FILE = L2_READONLY_PROBE_OUTPUT_DIR / 'runner.lock'
+L2_READONLY_PROBE_LOCK_TTL_SECONDS = 60 * 60
 RUNTIME_LOG_TAG_PATTERNS = {
     '启动': ('starting', 'started', 'running on', 'vite', 'ready in', 'launcher'),
     '登录检测': ('login', 'check-login', '登录'),
@@ -510,6 +518,16 @@ def runtime_status(frontend_url: str | None = None):
                 'path': shutil.which('node'),
             },
         },
+        'runtimeControl': {
+            'managedByLauncher': RUNTIME_CONTROL_MANAGED_BY_LAUNCHER,
+            'restartAvailable': RUNTIME_CONTROL_MANAGED_BY_LAUNCHER,
+            'commandFile': str(RUNTIME_CONTROL_COMMAND_FILE),
+            'detail': (
+                '由 start-mvp 启动器托管，可在 UI 内重启后端/前端'
+                if RUNTIME_CONTROL_MANAGED_BY_LAUNCHER
+                else '当前后端不是由 start-mvp 启动器托管，UI 不能重启服务；请关闭当前进程后用 scripts/start-mvp.bat 启动'
+            ),
+        },
     }
 
 
@@ -520,6 +538,11 @@ def runtime_control(payload: RuntimeControlRequest):
         raise HTTPException(status_code=400, detail=f'Unknown runtime control action: {payload.action}')
 
     if action in {'restart_backend', 'restart_frontend'}:
+        if not RUNTIME_CONTROL_MANAGED_BY_LAUNCHER:
+            raise HTTPException(
+                status_code=409,
+                detail='当前后端不是由 start-mvp 启动器托管，无法通过 UI 重启服务。请关闭当前进程后用 scripts/start-mvp.bat 启动。',
+            )
         command = _write_runtime_control_command(action=action, task_id=payload.task_id)
         _append_runtime_control_log(f"queued launcher restart action={action} command_id={command['id']}")
         return {
@@ -527,6 +550,15 @@ def runtime_control(payload: RuntimeControlRequest):
             'action': action,
             'command': command,
             'message': '已请求启动器托管重启；请查看启动器日志确认完成',
+        }
+
+    if action == 'run_l2_readonly_probe':
+        result = _start_l2_readonly_probe(payload.task_id)
+        return {
+            'ok': True,
+            'action': action,
+            **result,
+            'message': '已启动 L2 双目标真实只读复验；请在执行控制台查看启动器日志',
         }
 
     if action == 'stop_agent_console':
@@ -618,6 +650,7 @@ def start_agent_console(payload: AgentConsoleStartRequest):
         task_id=payload.task_id,
         target_url=payload.target_url,
         launch_browser=payload.launch_browser,
+        launch_browser_async=payload.launch_browser,
         step=step,
     )
     return normalize_artifact_paths(result)
@@ -913,6 +946,108 @@ def _append_runtime_control_log(message: str) -> None:
             handle.write(line + '\n')
     except OSError:
         pass
+
+
+def _start_l2_readonly_probe(task_id: int | None) -> dict:
+    if not L2_READONLY_PROBE_RUNNER.exists():
+        raise HTTPException(status_code=500, detail='L2 readonly probe runner is missing')
+    run_id = 'l2-real-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ') + '-' + uuid.uuid4().hex[:8]
+    _acquire_l2_probe_lock(run_id=run_id, task_id=task_id)
+    log_path = RUNTIME_LOG_SOURCES.get('launcher') or (DATA_DIR / 'start-mvp.log')
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        sys.executable,
+        '-u',
+        str(L2_READONLY_PROBE_RUNNER),
+        '--run-id',
+        run_id,
+        '--python',
+        sys.executable,
+        '--script',
+        str(L2_READONLY_PROBE_SCRIPT),
+        '--cookie-file',
+        str(L2_READONLY_PROBE_COOKIE_FILE),
+        '--output-dir',
+        str(L2_READONLY_PROBE_OUTPUT_DIR),
+        '--allowlist-file',
+        str(L2_READONLY_PROBE_ALLOWLIST_FILE),
+        '--lock-file',
+        str(L2_READONLY_PROBE_LOCK_FILE),
+    ]
+    creationflags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+    try:
+        with log_path.open('ab') as handle:
+            process = subprocess.Popen(
+                command,
+                cwd=str(REPO_ROOT),
+                stdin=subprocess.DEVNULL,
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+                creationflags=creationflags,
+            )
+    except OSError as exc:
+        _release_l2_probe_lock(run_id)
+        raise HTTPException(status_code=500, detail=f'Could not start L2 readonly probe: {exc}') from exc
+    _write_l2_probe_lock(run_id=run_id, task_id=task_id, pid=process.pid)
+    _append_runtime_control_log(
+        f"started L2 readonly dual-target probe run_id={run_id} pid={process.pid} task={task_id or 'none'}"
+    )
+    return {
+        'runId': run_id,
+        'pid': process.pid,
+        'logPath': str(log_path),
+        'targets': ['data_acquisition', 'draft_box'],
+    }
+
+
+def _acquire_l2_probe_lock(run_id: str, task_id: int | None) -> None:
+    L2_READONLY_PROBE_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if L2_READONLY_PROBE_LOCK_FILE.exists():
+        if not _l2_probe_lock_is_stale():
+            raise HTTPException(status_code=409, detail='L2 readonly probe is already running')
+        L2_READONLY_PROBE_LOCK_FILE.unlink(missing_ok=True)
+    payload = _l2_probe_lock_payload(run_id=run_id, task_id=task_id, pid=None)
+    try:
+        fd = os.open(str(L2_READONLY_PROBE_LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail='L2 readonly probe is already running') from exc
+    with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+        json.dump(payload, handle, ensure_ascii=False)
+
+
+def _write_l2_probe_lock(run_id: str, task_id: int | None, pid: int | None) -> None:
+    payload = _l2_probe_lock_payload(run_id=run_id, task_id=task_id, pid=pid)
+    L2_READONLY_PROBE_LOCK_FILE.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
+
+
+def _release_l2_probe_lock(run_id: str) -> None:
+    try:
+        payload = json.loads(L2_READONLY_PROBE_LOCK_FILE.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+    if payload.get('run_id') in (None, run_id):
+        L2_READONLY_PROBE_LOCK_FILE.unlink(missing_ok=True)
+
+
+def _l2_probe_lock_payload(run_id: str, task_id: int | None, pid: int | None) -> dict[str, Any]:
+    return {
+        'schema': 'dxm_l2_readonly_probe_lock.v1',
+        'run_id': run_id,
+        'task_id': task_id,
+        'pid': pid,
+        'created_at': datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _l2_probe_lock_is_stale() -> bool:
+    try:
+        payload = json.loads(L2_READONLY_PROBE_LOCK_FILE.read_text(encoding='utf-8'))
+        created_at = datetime.fromisoformat(str(payload.get('created_at')))
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return True
+    return (datetime.now(timezone.utc) - created_at).total_seconds() > L2_READONLY_PROBE_LOCK_TTL_SECONDS
 
 
 def _write_runtime_control_command(action: str, task_id: int | None) -> dict:
@@ -1287,8 +1422,8 @@ def build_login_state(data: dict):
         return {
             'stage': 'login_success',
             'label': '已登录',
-            'message': '已检测到真实店小秘登录态；当前仅可继续只读诊断，真实变更仍受 L2/L3 门禁阻断。',
-            'next_action': '继续同步当前页面并查看只读诊断；不要执行 claim_only/single_save/batch_save。',
+            'message': '已检测到真实店小秘登录态；可以继续配置、L2 复验和受控 single_save 自动化准备。',
+            'next_action': '进入操作引导，按配置预检、L2 复验、人工批准顺序启动受控 single_save；claim_only、batch_save 和发布仍未放行。',
             'requires_user_action': False,
             'screenshot_url': data.get('home_screenshot_url') or data.get('product_page', {}).get('screenshot_url'),
             'page_title': data.get('title') or data.get('product_page', {}).get('title'),

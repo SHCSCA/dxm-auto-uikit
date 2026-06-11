@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { patchJson, postJson } from '../api'
 import type {
   AcceptanceGap,
@@ -24,6 +24,7 @@ import type {
   RuntimeStatus,
   RuntimeControlAction,
   RunStep,
+  Store,
   Task,
   Template,
 } from '../types'
@@ -40,9 +41,20 @@ type ConfigCenterProps = CommonProps & {
   onConfigSaved: () => void | Promise<void>
 }
 
+type DxmLoginDraft = {
+  username: string
+  password: string
+}
+
 type GuideCenterProps = CommonProps & {
   configPreview: ConfigPreview | null
   runtimeStatus: RuntimeStatus | null
+  dxmLoginDraft: DxmLoginDraft
+  l3ApprovedBy: string
+  busy: boolean
+  onDxmLoginDraftChange: (draft: DxmLoginDraft) => void
+  onL3ApprovedByChange: (value: string) => void
+  onRunL2Probe: () => void
   onOpenDxmLogin: () => void
   onContinueDxmLogin: () => void
   onNavigateDxmTarget: (target: 'data_acquisition' | 'draft_box') => void
@@ -56,6 +68,9 @@ type GuideCenterProps = CommonProps & {
 }
 
 const l3PostEvidenceGapIds = new Set(['gap-save-result', 'gap-unpublished-proof', 'gap-network-save-response'])
+const LEGACY_QA_REAL_MUTATION_TASK_NAME = ['QA guarded', 'real mutation task'].join(' ')
+const RELEASED_SINGLE_SAVE_STORE_NAMES = new Set(['Dang Kang'])
+const DXM_LOGGED_IN_STATUSES = new Set(['login_success', 'logged_in', 'not_published_verified'])
 
 const realWriteReleasePrerequisites = [
   {
@@ -81,10 +96,13 @@ type TaskCenterProps = CommonProps & {
   configPreviewLoading: boolean
   busy: boolean
   demoEnabled: boolean
+  l3ApprovedBy: string
+  onL3ApprovedByChange: (value: string) => void
   onSelectTask: (taskId: number) => void
   onCreateRealTask: (request: RealTaskCreateRequest) => void | Promise<void>
   onBootstrapDemo: () => void
   onStartTask: () => void
+  onRunL2Probe: () => void
   onShowConfig: () => void
   onShowConsole: () => void
   onShowEvidence: () => void
@@ -94,12 +112,15 @@ type TaskCenterProps = CommonProps & {
 type ExecutionConsoleProps = CommonProps & {
   agentConsole: AgentConsoleSession | null
   agentConsoleError: string | null
+  runtimeStatus: RuntimeStatus | null
   runtimeLogs: Record<RuntimeLogSource, RuntimeLogResponse | null>
   runtimeLogSource: RuntimeLogSource
   runtimeLogError: string | null
   runtimeLogLevel: 'all' | 'info' | 'warning' | 'error'
   runtimeLogQuery: string
   busy: boolean
+  dxmLoginDraft: DxmLoginDraft
+  onDxmLoginDraftChange: (draft: DxmLoginDraft) => void
   onRuntimeLogSourceChange: (source: RuntimeLogSource) => void
   onRuntimeLogLevelChange: (level: 'all' | 'info' | 'warning' | 'error') => void
   onRuntimeLogQueryChange: (query: string) => void
@@ -129,10 +150,12 @@ export function Dashboard({ workspace, selectedTask }: CommonProps) {
   const grade = workspace.evidenceGrade?.grade ?? 'C'
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
   const realWriteReady = !realWriteExpectedBlocked
-  const nextAction = !selectedTask
+  const nextAction = selectedTask?.status === 'completed'
+    ? '查看报告'
+    : !selectedTask
     ? '去任务中心准备数据'
     : l2Gate?.status !== 'passed'
-      ? '查看 L2 门禁'
+      ? '查看只读检查'
       : requiresManualApproval(selectedTask)
         ? '等待人工批准'
         : '打开执行控制台'
@@ -141,18 +164,18 @@ export function Dashboard({ workspace, selectedTask }: CommonProps) {
     <section className="dashboard-grid" aria-label="Dashboard">
       <div className="hero-panel">
         <div>
-          <h1>DXM 自动化工作台</h1>
-          <p>任务编排、L2 真实只读证据、L3 批准和 save-only runner 集中在这里；发布入口始终隔离。</p>
-          <p className="hero-panel__note">真实写入只允许在 L2 passed 和 L3 人工批准后由受控 runner 执行。</p>
+          <h1>店小秘半托管只保存自动化</h1>
+          <p>按真实店铺、真实商品和编辑页配置推进：登录店小秘、检查页面、人工确认后，只执行单商品保存。</p>
+          <p className="hero-panel__note">不会发布；批量和无人值守保存仍保持关闭，验收详情放在下方折叠区。</p>
           <div className="hero-panel__outcomes" aria-label="验收结论">
-            <span><strong>自动化工作台</strong><b>可交付</b></span>
-            <span><strong>真实 DXM 写入</strong><b>{realWriteReady ? '受控 READY' : 'L3 受控'}</b></span>
-            <span><strong>{realWriteReady ? '当前范围' : '下一步'}</strong><b>{realWriteReady ? 'single_save READY' : '单商品金丝雀'}</b></span>
+            <span><strong>工作台</strong><b>可使用</b></span>
+            <span><strong>保存范围</strong><b>{realWriteReady ? '单商品只保存可执行' : '等待人工确认'}</b></span>
+            <span><strong>{realWriteReady ? '当前范围' : '下一步'}</strong><b>{realWriteReady ? '只保存，不发布' : '完成页面检查'}</b></span>
           </div>
         </div>
         <div className="hero-panel__status">
           <span>当前批次</span>
-          <strong>{selectedTask ? selectedTask.name : '待创建保存核验批次'}</strong>
+          <strong>{selectedTask ? displayTaskName(selectedTask) : '待创建保存核验批次'}</strong>
           <small>{nextAction} / {selectedTask ? humanTaskStatus(selectedTask.status) : '请先创建真实任务'}</small>
         </div>
       </div>
@@ -163,18 +186,18 @@ export function Dashboard({ workspace, selectedTask }: CommonProps) {
       </div>
 
       <div className="module-card">
-        <ModuleHead title="当前状态" meta={realWriteReady ? 'single_save READY' : '等待门禁'} />
+        <ModuleHead title="当前状态" meta={realWriteReady ? '可申请单商品只保存' : '等待人工确认'} />
         <div className="check-list">
           <CheckRow label="真实店铺/商品已读取" ok={workspace.stores.length > 0 && workspace.products.length > 0} />
-          <CheckRow label="L2 真实只读通过" ok={l2Gate?.status === 'passed'} />
-          <CheckRow label="仅 single_save 放行" ok />
+          <CheckRow label="只读页面检查通过" ok={l2Gate?.status === 'passed'} />
+          <CheckRow label="仅单商品只保存放行" ok />
           <CheckRow label="发布入口隔离" ok={workspace.publishGuardState?.publish_allowed === false || workspace.publishGuardState?.safe === true} />
         </div>
       </div>
 
       <MetricCard label="商品数" value={workspace.products.length} detail="待执行商品队列" tone="blue" />
       <MetricCard label="任务进度" value={`${completedJobs}/${Math.max(totalJobs, 1)}`} detail={`失败 ${failedJobs} 项`} tone="green" />
-      <MetricCard label="证据等级" value={grade} detail={`缺口 ${blockerCount} 项${l3PostEvidenceCount ? ` / L3 后置 ${l3PostEvidenceCount} 项` : ''}`} tone={grade === 'A' ? 'green' : grade === 'B' ? 'yellow' : 'red'} />
+      <MetricCard label="证据等级" value={grade} detail={`缺口 ${blockerCount} 项${l3PostEvidenceCount ? ` / 保存后补齐 ${l3PostEvidenceCount} 项` : ''}`} tone={grade === 'A' ? 'green' : grade === 'B' ? 'yellow' : 'red'} />
 
       <details className="module-card span-3 disclosure-card">
         <summary>查看验收门禁和证据缺口</summary>
@@ -190,8 +213,8 @@ function OperationGuide({ workspace, selectedTask }: CommonProps) {
   const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
   const steps = [
     { label: '配置店铺、类目、图片和半托管参数', ok: workspace.stores.length > 0 && workspace.products.length > 0 },
-    { label: '选择真实 single_save 任务', ok: selectedTask?.mode === 'single_save' },
-    { label: '确认 L2 真实只读通过', ok: l2Gate?.status === 'passed' },
+    { label: '选择单商品只保存任务', ok: selectedTask?.mode === 'single_save' },
+    { label: '确认只读页面检查通过', ok: l2Gate?.status === 'passed' },
     { label: '人工批准后启动真实浏览器保存', ok: l3Gate?.status === 'passed' || selectedTask?.status === 'completed' },
   ]
   return (
@@ -211,6 +234,12 @@ export function GuideCenter({
   selectedTask,
   configPreview,
   runtimeStatus,
+  dxmLoginDraft,
+  l3ApprovedBy,
+  busy,
+  onDxmLoginDraftChange,
+  onL3ApprovedByChange,
+  onRunL2Probe,
   onOpenDxmLogin,
   onContinueDxmLogin,
   onNavigateDxmTarget,
@@ -227,30 +256,23 @@ export function GuideCenter({
   const backendOk = runtimeStatus?.backend?.status === 'ok'
   const frontendOk = runtimeStatus?.frontend?.status === 'ok'
   const agentReady = runtimeStatus?.agentConsole?.status === 'running' || runtimeStatus?.agentConsole?.status === 'idle'
-  const dxmLoggedIn = runtimeStatus?.dxmLogin?.status === 'login_success' || runtimeStatus?.dxmLogin?.status === 'logged_in'
+  const dxmLoggedIn = DXM_LOGGED_IN_STATUSES.has(runtimeStatus?.dxmLogin?.status ?? '')
   const hasStore = workspace.stores.length > 0
   const hasProducts = workspace.products.length > 0
   const configOk = Boolean(configPreview?.ok)
   const selectedSingleSave = selectedTask?.mode === 'single_save'
+  const selectedTaskDraft = selectedTask?.status === 'draft'
+  const selectedTaskCompleted = selectedTask?.status === 'completed'
   const l2Passed = l2Gate?.status === 'passed'
-  const canRequestSave = selectedSingleSave && configOk && l2Passed
+  const canRequestSave = selectedSingleSave && selectedTaskDraft && configOk && l2Passed
   const reportReady = workspace.reports.some((report) => report.task_id === selectedTask?.id) || Boolean(workspace.reportSummary?.latest_report)
   const hasExceptions = workspace.exceptions.length > 0
   const guideSteps = [
     {
-      id: 'services',
-      title: '确认服务运行',
-      done: backendOk && frontendOk,
-      detail: backendOk && frontendOk ? '后端和前端均可访问。' : '先确认启动器和端口状态。',
-      reason: backendOk && frontendOk ? '' : `后端 ${runtimeStatus?.backend?.status ?? '未知'} / 前端 ${runtimeStatus?.frontend?.status ?? '未知'}`,
-      action: '查看运行日志',
-      onAction: onShowConsole,
-    },
-    {
       id: 'browser-login',
       title: '打开真实 DXM 浏览器并确认登录',
-      done: Boolean(agentReady && dxmLoggedIn),
-      detail: dxmLoggedIn ? '已检测到 DXM 登录态。' : '需要打开真实店小秘登录页并完成登录；账号密码只用于本次真实店小秘登录。',
+      done: selectedTaskCompleted || Boolean(agentReady && dxmLoggedIn),
+      detail: dxmLoggedIn ? '已检测到 DXM 登录态。' : '需要打开真实店小秘登录页并完成登录；密码不保存，账号可能出现在本机运行态摘要中。',
       reason: dxmLoggedIn ? '' : `DXM 登录状态：${runtimeStatus?.dxmLogin?.status ?? '未知'}`,
       action: '打开登录页',
       onAction: onOpenDxmLogin,
@@ -262,7 +284,7 @@ export function GuideCenter({
     {
       id: 'store',
       title: '选择店铺',
-      done: hasStore,
+      done: selectedTaskCompleted || hasStore,
       detail: hasStore ? `当前店铺：${workspace.stores[0]?.name}` : '还没有可用店铺。',
       reason: hasStore ? '' : '请先创建或连接店铺。',
       action: '去配置中心',
@@ -271,7 +293,7 @@ export function GuideCenter({
     {
       id: 'products',
       title: '导入商品',
-      done: hasProducts,
+      done: selectedTaskCompleted || hasProducts,
       detail: hasProducts ? `商品队列 ${workspace.products.length} 个。` : '还没有待处理商品。',
       reason: hasProducts ? '' : '请先导入真实商品或创建任务商品。',
       action: '去任务中心',
@@ -280,36 +302,42 @@ export function GuideCenter({
     {
       id: 'config',
       title: '填写编辑页配置',
-      done: configOk,
-      detail: configOk ? '当前任务配置完整。' : `待补：${configPreview?.missing.slice(0, 4).join('、') || 'DXM 编辑页必填项'}`,
-      reason: configOk ? '' : `${configPreview?.missing.length ?? 0} 个配置项待补齐。`,
+      done: selectedTaskCompleted || configOk,
+      detail: selectedTaskCompleted ? '当前任务已完成，历史配置不再作为下一步阻断。' : configOk ? '当前任务配置完整。' : `待补：${configPreview?.missing.slice(0, 4).join('、') || 'DXM 编辑页必填项'}`,
+      reason: selectedTaskCompleted || configOk ? '' : `${configPreview?.missing.length ?? 0} 个配置项待补齐。`,
       action: '补齐配置',
       onAction: onShowConfig,
     },
     {
       id: 'l2',
-      title: '运行只读检查',
-      done: l2Passed,
-      detail: l2Passed ? '真实页面只读检查已通过。' : l2Gate?.detail ?? '只读检查还未通过。',
-      reason: l2Passed ? '' : `L2：${l2Gate?.status ?? 'not_run'}`,
-      action: '查看任务门禁',
-      onAction: onShowTasks,
+      title: '运行只读页面核验',
+      done: selectedTaskCompleted || l2Passed,
+      detail: selectedTaskCompleted ? '当前任务已完成，只读证据已进入报告复盘口径。' : l2Passed ? '真实页面只读核验已通过。' : humanGateDetail(l2Gate?.detail) ?? '只读页面核验还未通过。',
+      reason: l2Passed ? '' : `只读检查：${humanGateStateLabel(l2Gate?.status ?? 'not_run')}`,
+      action: l2Passed ? '查看任务门禁' : '运行只读复验',
+      onAction: l2Passed ? onShowTasks : onRunL2Probe,
+      secondaryAction: l2Passed ? undefined : '查看复验计划',
+      onSecondaryAction: l2Passed ? undefined : onShowReports,
     },
     {
       id: 'approval',
       title: '人工确认真实保存',
       done: Boolean(l3Gate?.status === 'passed' || selectedTask?.status === 'running' || selectedTask?.status === 'completed'),
-      detail: canRequestSave ? '可以申请只保存一个商品，仍不会发布。' : '配置、任务模式和只读检查通过后才可申请。',
-      reason: canRequestSave ? '' : `任务 ${selectedTask ? selectedTask.mode : '未选择'} / 配置 ${configOk ? '完整' : '未完整'} / L2 ${l2Gate?.status ?? 'not_run'}`,
-      action: canRequestSave ? '申请并启动 single_save' : '选择任务',
-      onAction: canRequestSave ? onStartTask : onShowTasks,
+      detail: selectedTaskCompleted
+        ? '当前任务已完成，继续查看报告与证据。'
+        : canRequestSave
+          ? '可以申请只保存一个商品，仍不会发布。'
+          : '配置、任务模式、任务状态和只读检查通过后才可申请。',
+      reason: selectedTaskCompleted || canRequestSave ? '' : `任务 ${selectedTask ? humanTaskModeLabel(selectedTask.mode) : '未选择'} / 状态 ${selectedTask?.status ?? '未选择'} / 配置 ${configOk ? '完整' : '未完整'} / 只读检查 ${humanGateStateLabel(l2Gate?.status ?? 'not_run')}`,
+      action: selectedTaskCompleted ? '查看报告' : canRequestSave ? '申请并启动单商品只保存' : '选择任务',
+      onAction: selectedTaskCompleted ? onShowReports : canRequestSave ? onStartTask : onShowTasks,
     },
     {
       id: 'observe',
-      title: '观察实时浏览器执行',
+      title: '进入控制台操控真实浏览器',
       done: Boolean(runtimeStatus?.agentConsole?.active || selectedTask?.status === 'completed'),
-      detail: runtimeStatus?.agentConsole?.active ? '自动浏览器正在运行。' : '启动后在执行控制台观察页面、步骤和日志。',
-      reason: runtimeStatus?.agentConsole?.active || selectedTask?.status === 'completed' ? '' : '等待任务启动后同步真实浏览器画面。',
+      detail: runtimeStatus?.agentConsole?.active ? '真实浏览器会话已接入控制台。' : '启动后在执行控制台查看会话状态、步骤、日志，并在需要时人工接管真实浏览器。',
+      reason: runtimeStatus?.agentConsole?.active || selectedTask?.status === 'completed' ? '' : '等待任务启动后接入真实浏览器会话。',
       action: '进入控制台',
       onAction: onShowConsole,
     },
@@ -329,8 +357,28 @@ export function GuideCenter({
     const status = step.done ? 'done' : priorDone ? 'current' : 'blocked'
     return { ...step, status }
   })
+  const guidePathSummary = [
+    { label: '登录', status: guideSteps[0]?.status ?? 'blocked' },
+    { label: '配置', status: (guideSteps[1]?.done && guideSteps[2]?.done && guideSteps[3]?.done) ? 'done' : guideSteps.slice(1, 4).some((step) => step.status === 'current') ? 'current' : 'blocked' },
+    { label: '只读检查', status: guideSteps[4]?.status ?? 'blocked' },
+    { label: '真实保存', status: (guideSteps[5]?.done && guideSteps[6]?.done) ? 'done' : guideSteps.slice(5, 7).some((step) => step.status === 'current') ? 'current' : 'blocked' },
+    { label: '报告', status: guideSteps[7]?.status ?? 'blocked' },
+  ]
+  const guideAutomationPath = [
+    { title: '登录真实店小秘', detail: '打开独立浏览器，人工完成验证码和登录。', status: guidePathSummary[0]?.status ?? 'blocked' },
+    { title: '核对编辑页配置', detail: '按店小秘编辑页分区确认本次任务取值。', status: guidePathSummary[1]?.status ?? 'blocked' },
+    { title: '只读复验页面', detail: '先验证采集页和采集箱真实可达，不写入。', status: guidePathSummary[2]?.status ?? 'blocked' },
+    { title: '单商品只保存', detail: '人工批准后只保存一个商品，不发布。', status: guidePathSummary[3]?.status ?? 'blocked' },
+    { title: '报告复核', detail: '检查保存回包、未发布证明和浏览器记录。', status: guidePathSummary[4]?.status ?? 'blocked' },
+  ]
   const completedSteps = guideSteps.filter((step) => step.done).length
   const nextGuideStep = guideSteps.find((step) => !step.done) ?? guideSteps[guideSteps.length - 1]
+  const guideHeroTitle = selectedTaskCompleted ? '当前任务已完成' : '从启动到真实保存'
+  const guideHeroCopy = selectedTaskCompleted
+    ? '后续只需要复核报告、证据和真实浏览器记录；要处理新商品时再回到任务中心创建任务。'
+    : '先处理当前最靠前的一步；完整流程放在下方详情里，避免你一进来就被所有状态淹没。'
+  const guideFocusTitle = selectedTaskCompleted ? '完成后复核' : '现在只做这一步'
+  const guideFocusMeta = selectedTaskCompleted ? '报告与证据' : `${completedSteps}/${guideSteps.length} 完成`
 
   return (
     <section className="module-layout" aria-label="操作引导">
@@ -338,17 +386,38 @@ export function GuideCenter({
         <ModuleHead title="操作引导" meta="按当前状态推进" />
         <div className="guide-hero__body">
           <div>
-            <h1>从启动到真实保存</h1>
-            <p>先处理当前最靠前的一步；完整流程放在下方详情里，避免你一进来就被所有状态淹没。</p>
+            <h1>{guideHeroTitle}</h1>
+            <p>{guideHeroCopy}</p>
           </div>
-          <span className={`status-pill ${canRequestSave ? 'ok' : 'warn'}`}>
-            {canRequestSave ? '可申请 single_save' : '等待前置条件'}
+          <span className={`status-pill ${selectedTaskCompleted || canRequestSave ? 'ok' : 'warn'}`}>
+            {selectedTaskCompleted ? '当前任务已完成' : canRequestSave ? '可申请单商品只保存' : '等待前置条件'}
           </span>
+        </div>
+        <div className="guide-path-summary" aria-label="当前路径">
+          <strong>当前路径</strong>
+          {guidePathSummary.map((item) => (
+            <span key={item.label} className={`is-${item.status}`}>
+              <b>{item.label}</b>
+              <small>{item.status === 'done' ? '已完成' : item.status === 'current' ? '当前' : '等待'}</small>
+            </span>
+          ))}
+        </div>
+        <div className="guide-automation-path" aria-label="真实自动化主路径">
+          <strong>真实自动化主路径</strong>
+          {guideAutomationPath.map((item, index) => (
+            <article key={item.title} className={`is-${item.status}`}>
+              <span>{index + 1}</span>
+              <div>
+                <b>{item.title}</b>
+                <small>{item.detail}</small>
+              </div>
+            </article>
+          ))}
         </div>
       </div>
 
       <div className="module-card span-2 guide-next-card">
-        <ModuleHead title="现在只做这一步" meta={`${completedSteps}/${guideSteps.length} 完成`} />
+        <ModuleHead title={guideFocusTitle} meta={guideFocusMeta} />
         <article className={`guide-step guide-step--primary is-${nextGuideStep.status}`} data-guide-step={nextGuideStep.id}>
           <span>{Math.max(guideSteps.indexOf(nextGuideStep) + 1, 1)}</span>
           <div>
@@ -356,24 +425,41 @@ export function GuideCenter({
             <small>{nextGuideStep.detail}</small>
             {nextGuideStep.reason && <em>原因：{nextGuideStep.reason}</em>}
           </div>
-          <div className="guide-step__actions">
-            <button className="button button--primary" type="button" onClick={nextGuideStep.onAction}>
-              {nextGuideStep.action}
-            </button>
-            {nextGuideStep.secondaryAction && (
-              <button className="button button--quiet" type="button" onClick={nextGuideStep.onSecondaryAction}>
-                {nextGuideStep.secondaryAction}
+          {nextGuideStep.id === 'browser-login' ? (
+            <DxmLoginInlineForm
+              draft={dxmLoginDraft}
+              busy={busy}
+              onDraftChange={onDxmLoginDraftChange}
+              onSubmit={onOpenDxmLogin}
+              onContinue={onContinueDxmLogin}
+            />
+          ) : nextGuideStep.id === 'approval' && canRequestSave ? (
+            <L3ApprovalInlineForm
+              approvedBy={l3ApprovedBy}
+              busy={busy}
+              onApprovedByChange={onL3ApprovedByChange}
+              onSubmit={onStartTask}
+            />
+          ) : (
+            <div className="guide-step__actions">
+              <button className="button button--primary" type="button" onClick={nextGuideStep.onAction}>
+                {nextGuideStep.action}
               </button>
-            )}
-            {nextGuideStep.tertiaryAction && (
-              <button className="button button--quiet" type="button" onClick={nextGuideStep.onTertiaryAction}>
-                {nextGuideStep.tertiaryAction}
-              </button>
-            )}
-          </div>
+              {nextGuideStep.secondaryAction && (
+                <button className="button button--quiet" type="button" onClick={nextGuideStep.onSecondaryAction}>
+                  {nextGuideStep.secondaryAction}
+                </button>
+              )}
+              {nextGuideStep.tertiaryAction && (
+                <button className="button button--quiet" type="button" onClick={nextGuideStep.onTertiaryAction}>
+                  {nextGuideStep.tertiaryAction}
+                </button>
+              )}
+            </div>
+          )}
         </article>
         <details className="inline-disclosure guide-full-path">
-          <summary>查看完整 9 步流程</summary>
+          <summary>查看完整 {guideSteps.length} 步流程</summary>
           <div className="guide-step-list">
             {guideSteps.map((step, index) => (
               <article key={step.title} className={`guide-step is-${step.status}`} data-guide-step={step.id}>
@@ -404,14 +490,30 @@ export function GuideCenter({
         </details>
       </div>
       <div className="module-card">
-        <ModuleHead title="前置条件" meta="简要状态" />
+        <ModuleHead title="后台状态" meta="异常时再处理" />
         <div className="check-list">
-          <CheckRow label="服务运行" ok={backendOk && frontendOk} />
+          <CheckRow label="工作台服务" ok={backendOk && frontendOk} />
           <CheckRow label="DXM 登录" ok={dxmLoggedIn} />
           <CheckRow label="配置完整" ok={configOk} />
-          <CheckRow label="L2 通过" ok={l2Passed} />
-          <CheckRow label="single_save 任务" ok={selectedSingleSave} />
+          <CheckRow label="只读检查通过" ok={l2Passed} />
+          <CheckRow label="单商品只保存任务" ok={selectedSingleSave} />
         </div>
+        {!(backendOk && frontendOk) && (
+          <div className="guide-exception-callout">
+            <strong>工作台服务连接异常</strong>
+            <small>先检查启动器和运行日志；服务恢复后继续真实店小秘操作。</small>
+            <button className="button button--secondary" type="button" onClick={onShowConsole}>查看运行日志</button>
+          </div>
+        )}
+        <details className="inline-disclosure">
+          <summary>常用入口</summary>
+          <div className="guide-quick-actions">
+            <button className="button button--quiet" type="button" onClick={onShowTasks}>任务中心</button>
+            <button className="button button--quiet" type="button" onClick={onShowConfig}>配置中心</button>
+            <button className="button button--quiet" type="button" onClick={onShowConsole}>执行控制台</button>
+            <button className="button button--quiet" type="button" onClick={onShowReports}>报告中心</button>
+          </div>
+        </details>
         {hasExceptions && (
           <div className="guide-exception-callout">
             <strong>发现异常 {workspace.exceptions.length} 项</strong>
@@ -421,6 +523,113 @@ export function GuideCenter({
         )}
       </div>
     </section>
+  )
+}
+
+function DxmLoginInlineForm({
+  draft,
+  busy,
+  compact = false,
+  onDraftChange,
+  onSubmit,
+  onContinue,
+}: {
+  draft: DxmLoginDraft
+  busy: boolean
+  compact?: boolean
+  onDraftChange: (draft: DxmLoginDraft) => void
+  onSubmit: () => void
+  onContinue: () => void
+}) {
+  const canSubmit = Boolean(draft.username.trim() && draft.password && !busy)
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!canSubmit) return
+    onSubmit()
+  }
+
+  return (
+    <form className={`operator-inline-form ${compact ? 'operator-inline-form--compact' : ''}`} onSubmit={submit}>
+      <div className="operator-inline-form__head">
+        <strong>登录/人工处理真实浏览器</strong>
+        <span>这里只打开真实店小秘窗口，不启动保存。密码不保存；账号仅用于本机登录会话，可能出现在本机运行态或日志摘要中。</span>
+      </div>
+      <label>
+        <span>店小秘账号</span>
+        <input
+          value={draft.username}
+          autoComplete="username"
+          placeholder="输入 DXM 账号"
+          required
+          disabled={busy}
+          onChange={(event) => onDraftChange({ ...draft, username: event.target.value })}
+        />
+      </label>
+      <label>
+        <span>店小秘密码</span>
+        <input
+          type="password"
+          value={draft.password}
+          autoComplete="current-password"
+          placeholder="仅本次登录使用"
+          required
+          disabled={busy}
+          onChange={(event) => onDraftChange({ ...draft, password: event.target.value })}
+        />
+      </label>
+      <div className="operator-inline-form__actions">
+        <button className="button button--primary" type="submit" disabled={!canSubmit}>
+          打开真实登录页
+        </button>
+        <button className="button button--quiet" type="button" onClick={onContinue} disabled={busy}>
+          验证码已完成，检测登录态
+        </button>
+      </div>
+    </form>
+  )
+}
+
+function L3ApprovalInlineForm({
+  approvedBy,
+  busy,
+  disabledReason = '',
+  onApprovedByChange,
+  onSubmit,
+}: {
+  approvedBy: string
+  busy: boolean
+  disabledReason?: string
+  onApprovedByChange: (value: string) => void
+  onSubmit: () => void
+}) {
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    onSubmit()
+  }
+
+  return (
+    <form className="operator-inline-form operator-inline-form--approval" onSubmit={submit}>
+      <div className="operator-inline-form__head">
+        <strong>人工确认真实保存</strong>
+        <span>只启动单商品只保存任务，不会发布。</span>
+      </div>
+      <label>
+        <span>批准人标识</span>
+        <input
+          value={approvedBy}
+          placeholder="例如 ops-owner"
+          required
+          disabled={busy}
+          onChange={(event) => onApprovedByChange(event.target.value)}
+        />
+      </label>
+      <div className="operator-inline-form__actions">
+        <button className="button button--primary" type="submit" disabled={busy || !approvedBy.trim()}>
+          申请并启动单商品只保存
+        </button>
+        {disabledReason && <small>{disabledReason}</small>}
+      </div>
+    </form>
   )
 }
 
@@ -479,10 +688,9 @@ const editableConfigSections: EditableConfigSection[] = [
     templateType: 'task_basic',
     previewSection: 'task_basic',
     title: '店铺与任务基础',
-    detail: '控制当前任务绑定店铺、执行模式、类目和认领标记。',
+    detail: '控制当前任务绑定店铺、类目和认领标记；执行模式在创建任务时选择。',
     fields: [
       { name: 'store_name', label: '店铺', placeholder: '例如：Dang Kang', usage: 'direct' },
-      { name: 'execution_mode', label: '执行模式', placeholder: 'probe / single_save', usage: 'direct' },
       { name: 'category_name', label: '绑定类目', placeholder: '例如：立牌类谷子', usage: 'direct' },
       { name: 'claim_mark', label: '认领标记', placeholder: '用于区分 DXM 草稿箱记录', usage: 'direct' },
     ],
@@ -587,13 +795,14 @@ const editableConfigSections: EditableConfigSection[] = [
     detail: '供货价、库存、原包装和条码策略。',
     fields: [
       { name: 'product_price', label: '商品价', placeholder: '7.99', usage: 'direct' },
+      { name: 'supply_price', label: '供货价', placeholder: '5.20', usage: 'direct' },
       { name: 'jit_stock', label: 'JIT 库存', placeholder: '100', usage: 'direct' },
       { name: 'is_original_box', label: '是否原包装', placeholder: '否', usage: 'direct' },
       { name: 'length', label: '半托管长 cm', placeholder: '10', usage: 'direct' },
       { name: 'width', label: '半托管宽 cm', placeholder: '10', usage: 'direct' },
       { name: 'height', label: '半托管高 cm', placeholder: '2', usage: 'direct' },
-      { name: 'goods_code_strategy', label: '货号策略', placeholder: '使用 SKU', usage: 'advisory' },
-      { name: 'barcode_strategy', label: '条码策略', placeholder: '自动生成/留空', usage: 'advisory' },
+      { name: 'goods_code_strategy', label: '货号策略', placeholder: '使用 SKU', usage: 'direct' },
+      { name: 'barcode_strategy', label: '条码策略', placeholder: '自动生成/留空', usage: 'direct' },
     ],
   },
   {
@@ -614,6 +823,17 @@ const editableConfigSections: EditableConfigSection[] = [
     ],
   },
 ]
+
+function uniqueConfigSections<T extends { section: EditableConfigSection }>(items: T[]) {
+  const seen = new Set<ConfigSectionCode>()
+  const result: T[] = []
+  for (const item of items) {
+    if (seen.has(item.section.code)) continue
+    seen.add(item.section.code)
+    result.push(item)
+  }
+  return result
+}
 
 function getNestedConfigValue(payload: Record<string, unknown>, path: string) {
   let current: unknown = payload
@@ -678,6 +898,51 @@ function findSelectedTaskProduct(products: Product[], selectedTask: Task | null)
   return products[0] ?? null
 }
 
+function normalizedIdentity(value: unknown) {
+  return textValue(value).toLowerCase()
+}
+
+function uniqueByStoreIdentity(stores: Store[]) {
+  const seen = new Set<string>()
+  const unique: Store[] = []
+  for (const store of stores) {
+    const key = [normalizedIdentity(store.name), normalizedIdentity(store.platform)].join('|')
+    if (seen.has(key)) continue
+    seen.add(key)
+    unique.push(store)
+  }
+  return unique
+}
+
+function productSourceIdentity(product: Product) {
+  const productRecord = product as Product & { payload?: Record<string, unknown>; source_url?: unknown; url?: unknown; source_urls?: unknown }
+  const payload = productRecord.payload && typeof productRecord.payload === 'object' ? productRecord.payload : {}
+  const directUrl = textValue(productRecord.source_url) || textValue(productRecord.url)
+  const payloadUrl = textValue(payload.source_url) || textValue(payload.url)
+  const sourceUrls = Array.isArray(payload.source_urls) ? payload.source_urls : Array.isArray(productRecord.source_urls) ? productRecord.source_urls : []
+  return payloadUrl || directUrl || textValue(sourceUrls[0])
+}
+
+function productDisplayIdentity(product: Product) {
+  const title = normalizedIdentity(product.title)
+  if (!title) return `id:${product.id}`
+  const source = normalizedIdentity(productSourceIdentity(product))
+  const fallback = `sku:${textValue(product.sku_count)}`
+  return [title, normalizedIdentity(product.category_name), source || fallback].join('|')
+}
+
+function uniqueByProductIdentity(products: Product[]) {
+  const seen = new Set<string>()
+  const unique: Product[] = []
+  for (const product of products) {
+    const key = productDisplayIdentity(product)
+    if (seen.has(key)) continue
+    seen.add(key)
+    unique.push(product)
+  }
+  return unique
+}
+
 function buildCurrentTemplateBinding(workspace: DeliveryWorkspace, selectedTask: Task | null, product: Product | null): TemplateBinding {
   const storeName = textValue(selectedTask?.payload?.store_name) || textValue(workspace.stores[0]?.name)
   const store = workspace.stores.find((item) => item.name === storeName) ?? workspace.stores[0]
@@ -700,7 +965,12 @@ function templateBindingScopeLabel(binding: TemplateBinding) {
 function templateBindingValueMatches(expected: unknown, actual: string | undefined) {
   if (expected === undefined || expected === null || expected === '') return true
   const values = Array.isArray(expected) ? expected : [expected]
-  return values.map((item) => textValue(item).toLowerCase()).includes(textValue(actual).toLowerCase())
+  const normalized = values.map((item) => textValue(item).toLowerCase())
+  return normalized.includes('*') || normalized.includes('all') || normalized.includes(textValue(actual).toLowerCase())
+}
+
+function templateBindingCandidate(record: Record<string, unknown>, keys: string[]) {
+  return keys.find((key) => Object.prototype.hasOwnProperty.call(record, key))
 }
 
 function templateHasExactBinding(template: Template, binding: TemplateBinding) {
@@ -708,9 +978,9 @@ function templateHasExactBinding(template: Template, binding: TemplateBinding) {
   if (!rawBinding || typeof rawBinding !== 'object' || Array.isArray(rawBinding)) return false
   const record = rawBinding as Record<string, unknown>
   return (
-    templateBindingValueMatches(record.store_name ?? record.store, binding.store_name)
-    && templateBindingValueMatches(record.category_name ?? record.category, binding.category_name)
-    && templateBindingValueMatches(record.platform, binding.platform)
+    templateBindingValueMatches(record[templateBindingCandidate(record, ["store_name", "store", "stores", "store_names"]) ?? ''], binding.store_name)
+    && templateBindingValueMatches(record[templateBindingCandidate(record, ["category_name", "category", "categories", "category_names"]) ?? ''], binding.category_name)
+    && templateBindingValueMatches(record[templateBindingCandidate(record, ["platform", "platforms"]) ?? ''], binding.platform)
   )
 }
 
@@ -756,7 +1026,7 @@ function ConfigReadinessPanel({
   incompleteGroups: ConfigPreviewGroup[]
 }) {
   if (!selectedTask) {
-    return <EmptyState title="先选择任务" detail="选择 single_save 任务后，这里会显示执行前配置是否完整。" />
+    return <EmptyState title="先选择任务" detail="选择单商品只保存任务后，这里会显示执行前配置是否完整。" />
   }
   if (!configPreview) {
     return <div className="config-readiness is-warn"><strong>配置预检未加载</strong><span>请刷新工作台，或确认后端 /api/config/preview 可用。</span></div>
@@ -766,7 +1036,7 @@ function ConfigReadinessPanel({
     <div className={`config-readiness ${configPreview.ok ? 'is-ok' : 'is-warn'}`}>
       <div>
         <strong>{configPreview.ok ? '配置可用于当前任务' : '配置还不能启动真实保存'}</strong>
-        <span>任务 #{configPreview.taskId} / {configPreview.mode ?? '未识别模式'} / {configPreview.ok ? '可进入 L2/L3 判断' : `待补 ${incompleteGroups.length || missing.length} 项`}</span>
+        <span>任务 #{configPreview.taskId} / {humanTaskModeLabel(configPreview.mode)} / {configPreview.ok ? '可进入保存判断' : `待补 ${incompleteGroups.length || missing.length} 项`}</span>
       </div>
       {missing.length > 0 && (
         <div className="missing-strip">
@@ -782,11 +1052,13 @@ function NextRequiredConfigFields({
   preview,
   configOk,
   loading,
+  onEditRequiredSection,
 }: {
   section: EditableConfigSection
   preview: ConfigPreviewGroup | undefined
   configOk: boolean
   loading: boolean
+  onEditRequiredSection: () => void
 }) {
   const missingFields = (preview?.fields ?? [])
     .filter((field) => field.missing)
@@ -801,10 +1073,19 @@ function NextRequiredConfigFields({
     : fallbackFields
 
   return (
-    <div className={`next-required-fields ${configOk ? 'is-ok' : 'is-warn'}`} aria-label="下一步必填字段">
+    <div
+      className={`next-required-fields ${configOk ? 'is-ok' : 'is-warn'}`}
+      aria-label="下一步必填字段"
+      data-config-next-required={section.code}
+    >
       <div>
         <strong>{configOk ? '当前任务配置已就绪' : `下一步必填字段：${section.title}`}</strong>
         <span>{configOk ? '需要微调时再展开下方分区。' : '只显示当前最需要处理的字段；完整字段放在下方分区。'}</span>
+        {!configOk && (
+          <button className="button button--secondary next-required-fields__action" type="button" onClick={onEditRequiredSection}>
+            编辑当前必填分区
+          </button>
+        )}
       </div>
       <div className="next-required-fields__list">
         {loading ? (
@@ -850,8 +1131,11 @@ function EffectiveValuePreview({
     .slice(0, 14)
 
   return (
-    <div className="module-card span-3 effective-value-preview">
-      <ModuleHead title={title} meta={configPreview?.taskId ? `任务 #${configPreview.taskId}` : '等待任务'} />
+    <details className="module-card span-3 disclosure-card effective-value-preview">
+      <summary>
+        {title}
+        <span>{configPreview?.taskId ? `任务 #${configPreview.taskId}，展开查看最终取值来源` : '等待任务'}</span>
+      </summary>
       <div className="source-legend" aria-label="取值优先级">
         {sourcePriorityLabels.map((label) => <span key={label}>{label}</span>)}
       </div>
@@ -869,15 +1153,20 @@ function EffectiveValuePreview({
           ))}
         </div>
       )}
-    </div>
+    </details>
   )
 }
 
-function previewSummary(section: EditableConfigSection, preview?: ConfigPreviewGroup) {
+function previewSummary(section: EditableConfigSection, preview?: ConfigPreviewGroup, configOk = false) {
   if (!preview) return `${section.detail} / 等待预检`
   if (!preview.templatePresent) return `${section.detail} / 未保存模板`
-  if (!preview.complete) return `${section.detail} / 缺 ${preview.missing.length || preview.fields.filter((field) => field.missing).length} 项`
-  return `${section.detail} / 执行时会按右侧来源取值`
+  if (!preview.complete) {
+    const missingCount = preview.missing.length || preview.fields.filter((field) => field.missing).length
+    return configOk
+      ? `${section.detail} / 辅助缺 ${missingCount} 项，不阻断启动`
+      : `${section.detail} / 缺 ${missingCount} 项`
+  }
+  return `${section.detail} / 页面填写值会进入执行取值，带 * 字段参与启动门禁`
 }
 
 function fieldPreview(preview: ConfigPreviewGroup | undefined, field: EditableConfigField) {
@@ -892,17 +1181,40 @@ function fieldSourceText(field: ReturnType<typeof fieldPreview>) {
 }
 
 function fieldUsageLabel(usage?: EditableConfigField['usage']) {
-  if (usage === 'direct') return '直接填入 DXM'
+  if (usage === 'direct') return '执行取值'
   if (usage === 'template') return '模板匹配'
-  if (usage === 'advisory') return '策略/备用'
+  if (usage === 'advisory') return '辅助配置'
   return ''
 }
 
-function configSectionState(preview: ConfigPreviewGroup | undefined) {
+function configSectionState(preview: ConfigPreviewGroup | undefined, configOk = false) {
   if (!preview) return { label: '等待预检', className: 'is-pending' }
-  if (!preview.complete) return { label: '待补字段', className: 'is-incomplete' }
   if (!preview.templatePresent) return { label: '缺模板', className: 'is-incomplete' }
+  if (!preview.complete) {
+    return configOk
+      ? { label: '辅助待补', className: 'is-advisory' }
+      : { label: '待补字段', className: 'is-incomplete' }
+  }
   return { label: '已就绪', className: 'is-complete' }
+}
+
+function countPreviewTaskOverrideFields(preview: ConfigPreviewGroup | undefined) {
+  return (preview?.fields ?? []).filter((field) => field.source === '任务覆盖' || field.source.startsWith('任务覆盖')).length
+}
+
+function countTaskOverrideFields(task: Task | null, templateType: string) {
+  const overrides = task?.payload?.template_overrides
+  if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) return 0
+  return countNestedConfigValues((overrides as Record<string, unknown>)[templateType])
+}
+
+function countNestedConfigValues(value: unknown): number {
+  if (value === undefined || value === null) return 0
+  if (Array.isArray(value)) return value.some((item) => countNestedConfigValues(item) > 0) ? 1 : 0
+  if (typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).reduce<number>((total, child) => total + countNestedConfigValues(child), 0)
+  }
+  return String(value).trim() ? 1 : 0
 }
 
 export function ConfigCenter({ workspace, selectedTask, configPreview, configPreviewLoading, onConfigSaved }: ConfigCenterProps) {
@@ -923,20 +1235,32 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
     section,
     preview: previewGroups.get(section.previewSection),
   }))
-  const sectionsNeedingAttention = sectionsWithPreview.filter(({ preview }) => preview && (!preview.complete || !preview.templatePresent))
+  const sectionsBlockingStart = sectionsWithPreview.filter(({ preview }) => preview && (!preview.templatePresent || (preview.required && !preview.complete)))
+  const sectionsWithAdvisoryGaps = sectionsWithPreview.filter(({ preview }) => preview && preview.templatePresent && !preview.complete && !preview.required)
+  const advisoryGapCount = sectionsWithAdvisoryGaps.length
   const sectionsReady = sectionsWithPreview.filter(({ preview }) => Boolean(preview && preview.complete && preview.templatePresent))
-  const nextConfigSection = sectionsNeedingAttention[0]?.section ?? editableConfigSections[0]
-  const nextConfigPreview = sectionsNeedingAttention[0]?.preview ?? previewGroups.get(nextConfigSection.previewSection)
+  const nextConfigSection = sectionsBlockingStart[0]?.section ?? editableConfigSections[0]
+  const nextConfigPreview = sectionsBlockingStart[0]?.preview ?? previewGroups.get(nextConfigSection.previewSection)
   const [activeConfigSectionCode, setActiveConfigSectionCode] = useState<ConfigSectionCode>(nextConfigSection.code)
   const selectedConfigSection = sectionsWithPreview.find(({ section }) => section.code === activeConfigSectionCode)
     ?? sectionsWithPreview.find(({ section }) => section.code === nextConfigSection.code)
     ?? sectionsWithPreview[0]
-  const otherConfigSections = sectionsWithPreview.filter(({ section }) => section.code !== selectedConfigSection.section.code)
-  const readySectionCount = sectionsReady.length
+  const primaryConfigSections = uniqueConfigSections([
+    selectedConfigSection,
+    ...sectionsBlockingStart,
+    ...sectionsWithAdvisoryGaps,
+    ...sectionsReady,
+    ...sectionsWithPreview,
+  ]).slice(0, 4)
+  const primaryConfigSectionCodes = new Set(primaryConfigSections.map(({ section }) => section.code))
+  const secondaryConfigSections = sectionsWithPreview.filter(({ section }) => !primaryConfigSectionCodes.has(section.code))
+  const activeTaskOverrideFieldCount = countTaskOverrideFields(selectedTask, selectedConfigSection.section.templateType)
+  const activePreviewOverrideFieldCount = countPreviewTaskOverrideFields(selectedConfigSection.preview)
   const configCoverageLabels = ['店铺与任务基础', '类目与标题', 'SKU / 价格 / 库存', '价格策略', '图片与素材', '包装物流', '合规 / 海关', '半托管', '店小秘引用模板']
   const effectivePreviewTitle = '本次任务实际取值预览'
   const sourcePriorityLabels = ['任务覆盖', '商品 payload', '店铺/类目模板', '系统默认值']
-  const fieldUsageLegend = ['直接填入 DXM', '模板匹配', '策略/备用']
+  const fieldUsageLegend = ['执行取值', '模板匹配', '辅助配置']
+  const configReadyForReview = Boolean(configPreview?.ok)
   const configCoverageFieldIds = [
     'dxm_reference_templates.attribute_info.names',
     'dxm_reference_templates.description.names',
@@ -970,7 +1294,20 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
     }))
   }
 
-  async function saveConfigSection(section: EditableConfigSection, scope: 'template' | 'task' = 'template') {
+  function selectNextMissingConfigSection(savedSectionCode: ConfigSectionCode) {
+    const blockingSections = sectionsBlockingStart.map(({ section }) => section)
+    const currentIndex = blockingSections.findIndex((section) => section.code === savedSectionCode)
+    const orderedCandidates = currentIndex >= 0
+      ? [...blockingSections.slice(currentIndex + 1), ...blockingSections.slice(0, currentIndex)]
+      : blockingSections
+    const nextSection = orderedCandidates.find((section) => section.code !== savedSectionCode)
+      ?? sectionsWithAdvisoryGaps[0]?.section
+      ?? sectionsWithPreview.find(({ section }) => section.code !== savedSectionCode)?.section
+      ?? nextConfigSection
+    setActiveConfigSectionCode(nextSection.code)
+  }
+
+  async function saveConfigSection(section: EditableConfigSection, scope: 'template' | 'task' = 'template', continueToNextMissingSection = false) {
     setSavingSection(`${scope}:${section.code}`)
     setConfigMessage(null)
     try {
@@ -985,8 +1322,11 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
           section: section.templateType,
           values: payload,
         })
-        setConfigMessage(`${section.title} 已保存为本次任务覆盖，当前任务会优先使用这些值。`)
+        setConfigMessage(`${section.title} 已保存为本次任务覆盖；页面填写值会进入执行取值，带 * 字段参与启动门禁，辅助配置不作为启动门禁必填。`)
         await onConfigSaved()
+        if (continueToNextMissingSection) {
+          selectNextMissingConfigSection(section.code)
+        }
         return
       }
       const existing = findScopedTemplate(workspace.templates, section.templateType, currentTemplateBinding)
@@ -1002,13 +1342,20 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
       } else {
         await postJson<Template>('/api/templates', body)
       }
-      setConfigMessage(`${section.title} 已保存为当前店铺/类目模板，后续匹配 ${currentTemplateScopeLabel} 的任务会按该模板取值。`)
+      setConfigMessage(`${section.title} 已保存为当前店铺/类目模板，后续匹配 ${currentTemplateScopeLabel} 的任务会按该模板取值；辅助配置会进入执行取值，但不作为启动门禁必填。`)
       await onConfigSaved()
+      if (continueToNextMissingSection) {
+        selectNextMissingConfigSection(section.code)
+      }
     } catch (error) {
       setConfigMessage(error instanceof Error ? error.message : `${section.title} 保存失败`)
     } finally {
       setSavingSection(null)
     }
+  }
+
+  function continueToNextMissingSection(section: EditableConfigSection, scope: 'template' | 'task') {
+    void saveConfigSection(section, scope, true)
   }
 
   return (
@@ -1020,15 +1367,16 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
             <h1>{configPreview?.ok ? '当前任务配置已满足启动预检' : `先补：${nextConfigSection.title}`}</h1>
             <p>
               {configPreview?.ok
-                ? '仍可展开下方分区微调本次任务，保存后执行器会按页面填写值取数。'
+                ? '仍可展开下方分区微调本次任务；执行取值、模板匹配和辅助配置会进入执行取值，其中辅助配置不作为启动门禁必填。'
                 : previewSummary(nextConfigSection, nextConfigPreview)}
             </p>
           </div>
           <div className="config-focus-card__status">
             <span className={`status-pill ${configPreview?.ok ? 'ok' : 'warn'}`}>
-              {configPreview?.ok ? '可用于当前任务' : `${incompleteGroups.length || sectionsNeedingAttention.length} 个分区待补`}
+              {configPreview?.ok ? '可用于当前任务' : `${incompleteGroups.length || sectionsBlockingStart.length} 个分区待补`}
             </span>
             <small>{selectedTask ? `当前任务 #${selectedTask.id}` : '先到任务中心选择任务后，可保存为本次任务覆盖。'}</small>
+            {configPreview?.ok && advisoryGapCount > 0 && <small>{advisoryGapCount} 个分区有辅助字段待补，不阻断启动。</small>}
             <small>当前模板范围：{currentTemplateScopeLabel}</small>
           </div>
         </div>
@@ -1043,6 +1391,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
           preview={nextConfigPreview}
           configOk={Boolean(configPreview?.ok)}
           loading={configPreviewLoading}
+          onEditRequiredSection={() => setActiveConfigSectionCode(nextConfigSection.code)}
         />
         <div className="config-coverage-strip" aria-label="店小秘编辑页分区" data-field-coverage={configCoverageFieldIds.join('|')}>
           {configCoverageLabels.map((label) => <span key={label}>{label}</span>)}
@@ -1056,7 +1405,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
             <ConfigItem label="店铺" value={workspace.stores[0]?.name ?? '未配置真实店铺'} hint={workspace.stores[0]?.platform ?? '等待 /api/stores 返回'} empty={!hasStores} />
             <ConfigItem label="类目" value={product?.category_name ?? '未绑定真实商品类目'} hint="用于匹配属性和模板范围" empty={!hasProducts} />
             <ConfigItem label="图片银行" value={product?.image?.eu_outer_package_filename ?? '未绑定真实外包装图'} hint="欧盟外包装/标签实拍图" empty={!hasProducts} />
-            <ConfigItem label="执行模式" value="真实 single_save" hint="受控 runner 执行，只保存不发布" />
+            <ConfigItem label="执行模式" value="真实单商品只保存" hint="受控真实浏览器执行，只保存不发布" />
           </div>
           <ConfigReadinessPanel
             configPreview={configPreview}
@@ -1071,62 +1420,96 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
       <div className="module-card span-3">
         <ModuleHead title="DXM 编辑页配置" meta="按店小秘编辑页分区逐段填写" />
         {configMessage && <div className="config-save-message">{configMessage}</div>}
-        <div className="config-section-tabs" role="tablist" aria-label="DXM 编辑页分区导航">
-          {sectionsWithPreview.map(({ section, preview }) => {
-            const state = configSectionState(preview)
-            const active = section.code === selectedConfigSection.section.code
-            return (
-              <button
-                key={section.code}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                className={`${active ? 'is-active' : ''} ${state.className}`}
-                onClick={() => setActiveConfigSectionCode(section.code)}
-              >
-                <strong>{section.title}</strong>
-                <span>{state.label}</span>
-              </button>
-            )
-          })}
-        </div>
-        <div className="selected-config-section-note">
-          <strong>正在编辑分区：{selectedConfigSection.section.title}</strong>
-          <span>{previewSummary(selectedConfigSection.section, selectedConfigSection.preview)}</span>
-        </div>
-        <div className="editable-config-grid editable-config-grid--focused">
-          <EditableConfigSectionCard
-            key={selectedConfigSection.section.code}
-            section={selectedConfigSection.section}
-            preview={selectedConfigSection.preview}
-            configDraft={configDraft}
-            savingSection={savingSection}
-            selectedTask={selectedTask}
-            openByDefault={true}
-            onFieldChange={updateConfigField}
-            onSave={saveConfigSection}
-          />
-        </div>
-        {otherConfigSections.length > 0 && (
-          <details className="inline-disclosure config-ready-sections">
-            <summary>查看其它分区（{otherConfigSections.length} 个，已就绪 {readySectionCount} 个）</summary>
-            <div className="editable-config-grid editable-config-grid--compact">
-              {otherConfigSections.map(({ section, preview }) => (
-                <EditableConfigSectionCard
-                  key={section.code}
-                  section={section}
-                  preview={preview}
-                  configDraft={configDraft}
-                  savingSection={savingSection}
-                  selectedTask={selectedTask}
-                  openByDefault={false}
-                  onFieldChange={updateConfigField}
-                  onSave={saveConfigSection}
-                />
-              ))}
+        {configReadyForReview && (
+          <div className="config-ready-review" aria-label="配置已就绪摘要">
+            <div>
+              <strong>配置已就绪，默认无需继续填写</strong>
+              <span>执行器会按当前预览取值填写店小秘编辑页；需要改本次任务时，再展开下方“微调当前配置”。</span>
             </div>
-          </details>
+            <div className="config-ready-review__facts">
+              <span><b>启动预检</b><strong>通过</strong></span>
+              <span><b>可编辑分区</b><strong>{editableConfigSections.length} 个</strong></span>
+              <span><b>当前范围</b><strong>{currentTemplateScopeLabel}</strong></span>
+            </div>
+          </div>
         )}
+        <details className="inline-disclosure config-edit-drawer" open={!configReadyForReview}>
+          <summary>{configReadyForReview ? '微调当前配置' : `继续填写：${selectedConfigSection.section.title}`}</summary>
+          <div className="config-section-tabs config-section-tabs--primary" role="tablist" aria-label="DXM 编辑页常用分区导航">
+            {primaryConfigSections.map(({ section, preview }) => {
+              const state = configSectionState(preview, Boolean(configPreview?.ok))
+              const active = section.code === selectedConfigSection.section.code
+              return (
+                <button
+                  key={section.code}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  className={`${active ? 'is-active' : ''} ${state.className}`}
+                  onClick={() => setActiveConfigSectionCode(section.code)}
+                >
+                  <strong>{section.title}</strong>
+                  <span>{state.label}</span>
+                </button>
+              )
+            })}
+          </div>
+          {secondaryConfigSections.length > 0 && (
+            <details className="inline-disclosure config-section-more-drawer">
+              <summary>更多编辑页分区（{secondaryConfigSections.length}）</summary>
+              <div className="config-section-tabs config-section-tabs--secondary" role="tablist" aria-label="DXM 编辑页更多分区导航">
+                {secondaryConfigSections.map(({ section, preview }) => {
+                  const state = configSectionState(preview, Boolean(configPreview?.ok))
+                  const active = section.code === selectedConfigSection.section.code
+                  return (
+                    <button
+                      key={section.code}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      className={`${active ? 'is-active' : ''} ${state.className}`}
+                      onClick={() => setActiveConfigSectionCode(section.code)}
+                    >
+                      <strong>{section.title}</strong>
+                      <span>{state.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </details>
+          )}
+          <div className="selected-config-section-note">
+            <strong>正在编辑分区：{selectedConfigSection.section.title}</strong>
+            <span>{previewSummary(selectedConfigSection.section, selectedConfigSection.preview, Boolean(configPreview?.ok))}</span>
+            <div className="config-save-proof" aria-label="配置保存闭环">
+              <strong>保存闭环</strong>
+              <span>
+                {selectedTask
+                  ? activeTaskOverrideFieldCount > 0
+                    ? `本次任务已保存 ${activeTaskOverrideFieldCount} 个字段；预览中 ${activePreviewOverrideFieldCount} 个字段正在按任务覆盖取值，执行器启动时读取同一份预览取值。`
+                    : '尚未保存本次任务覆盖；当前分区会先按商品和店铺模板取值，保存后这里会显示任务覆盖字段数。'
+                  : '选择任务后，可保存为本次任务覆盖并在这里核对执行取值。'}
+              </span>
+            </div>
+          </div>
+          <SectionExecutionValuePreview section={selectedConfigSection.section} preview={selectedConfigSection.preview} />
+          <div className="editable-config-grid editable-config-grid--focused">
+            <EditableConfigSectionCard
+              key={selectedConfigSection.section.code}
+              section={selectedConfigSection.section}
+              preview={selectedConfigSection.preview}
+              configDraft={configDraft}
+              savingSection={savingSection}
+              selectedTask={selectedTask}
+              configOk={Boolean(configPreview?.ok)}
+              openByDefault={true}
+              onFieldChange={updateConfigField}
+              onSave={saveConfigSection}
+              onSaveAndContinue={continueToNextMissingSection}
+            />
+          </div>
+          <p className="config-section-switch-hint">只展示当前分区；常用分区在上方，低频字段收进“更多编辑页分区”。</p>
+        </details>
       </div>
 
       <details className="module-card span-3 disclosure-card">
@@ -1159,33 +1542,74 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   )
 }
 
+function SectionExecutionValuePreview({
+  section,
+  preview,
+}: {
+  section: EditableConfigSection
+  preview: ConfigPreviewGroup | undefined
+}) {
+  const fields = section.fields
+    .map((field) => fieldPreview(preview, field))
+    .filter((field): field is ConfigPreviewGroup['fields'][number] => Boolean(field))
+    .slice(0, 10)
+
+  return (
+    <div className="section-execution-preview" aria-label="当前分区执行取值核对">
+      <div className="section-execution-preview__head">
+        <strong>当前分区执行取值核对</strong>
+        <span>执行时按这些值填写店小秘编辑页</span>
+      </div>
+      {fields.length ? (
+        <div className="section-execution-preview__grid">
+          {fields.map((field) => (
+            <div key={field.path} className={field.missing ? 'section-execution-preview__item is-missing' : 'section-execution-preview__item'}>
+              <span>{field.label}</span>
+              <code>{formatPreviewValue(field.value)}</code>
+              <small>{sourceBadgeText(field.source)} / {field.path}</small>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <span className="section-execution-preview__empty">等待预检返回当前分区字段。</span>
+      )}
+    </div>
+  )
+}
+
 function EditableConfigSectionCard({
   section,
   preview,
   configDraft,
   savingSection,
   selectedTask,
+  configOk,
   openByDefault,
   onFieldChange,
   onSave,
+  onSaveAndContinue,
 }: {
   section: EditableConfigSection
   preview: ConfigPreviewGroup | undefined
   configDraft: Record<ConfigSectionCode, Record<string, string>>
   savingSection: string | null
   selectedTask: Task | null
+  configOk: boolean
   openByDefault: boolean
   onFieldChange: (sectionCode: ConfigSectionCode, fieldName: string, value: string) => void
   onSave: (section: EditableConfigSection, scope: 'template' | 'task') => void | Promise<void>
+  onSaveAndContinue: (section: EditableConfigSection, scope: 'template' | 'task') => void
 }) {
+  const state = configSectionState(preview, configOk)
+  const pillClass = state.className === 'is-complete' ? 'ok' : state.className === 'is-advisory' ? 'info' : 'warn'
   return (
-    <details className={`editable-config-section ${preview?.complete ? 'is-complete' : 'is-incomplete'}`} open={openByDefault}>
+    <details className={`editable-config-section ${state.className}`} open={openByDefault}>
       <summary className="editable-config-section__head">
         <div>
           <strong>{section.title}</strong>
-          <span>{previewSummary(section, preview)}</span>
+          <span>{previewSummary(section, preview, configOk)}</span>
         </div>
-        <span className={`status-pill ${preview?.complete ? 'ok' : 'warn'}`}>{preview?.complete ? '已就绪' : '待补齐'}</span>
+        <span className={`status-pill ${pillClass}`}>{state.label}</span>
       </summary>
       <div className="editable-config-section__fields">
         {section.fields.map((field) => (
@@ -1221,6 +1645,16 @@ function EditableConfigSectionCard({
         </div>
       ) : null}
       <div className="editable-config-section__actions">
+        {!configOk && (
+          <button
+            className="button button--primary"
+            type="button"
+            onClick={() => onSaveAndContinue(section, 'task')}
+            disabled={!selectedTask || savingSection === `task:${section.code}`}
+          >
+            {savingSection === `task:${section.code}` ? '保存中...' : '保存并继续下一缺失分区'}
+          </button>
+        )}
         <button
           className="button button--secondary"
           type="button"
@@ -1242,61 +1676,100 @@ function EditableConfigSectionCard({
   )
 }
 
-export function TaskCenter({ workspace, selectedTask, configPreview, configPreviewLoading, busy, demoEnabled, onSelectTask, onCreateRealTask, onBootstrapDemo, onStartTask, onShowConfig, onShowConsole, onShowEvidence, onShowReports }: TaskCenterProps) {
-  const [draftStoreId, setDraftStoreId] = useState(() => workspace.stores[0]?.id ? String(workspace.stores[0].id) : '')
+export function TaskCenter({ workspace, selectedTask, configPreview, configPreviewLoading, busy, demoEnabled, l3ApprovedBy, onL3ApprovedByChange, onSelectTask, onCreateRealTask, onBootstrapDemo, onStartTask, onRunL2Probe, onShowConfig, onShowConsole, onShowEvidence, onShowReports }: TaskCenterProps) {
+  const uniqueStoreOptions = useMemo(() => uniqueByStoreIdentity(workspace.stores), [workspace.stores])
+  const uniqueProductOptions = useMemo(() => uniqueByProductIdentity(workspace.products), [workspace.products])
+  const [draftStoreId, setDraftStoreId] = useState(() => uniqueStoreOptions[0]?.id ? String(uniqueStoreOptions[0].id) : '')
   const [draftMode, setDraftMode] = useState<RealTaskCreateRequest['mode']>('single_save')
-  const [draftProductIds, setDraftProductIds] = useState<number[]>(() => workspace.products[0] ? [workspace.products[0].id] : [])
+  const [draftProductIds, setDraftProductIds] = useState<number[]>(() => uniqueProductOptions[0] ? [uniqueProductOptions[0].id] : [])
+  const [showAllTasks, setShowAllTasks] = useState(false)
   const needsApproval = selectedTask ? requiresManualApproval(selectedTask) : false
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
   const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
   const needsRealL2 = selectedTask ? requiresRealL2(selectedTask) : false
   const selectedTaskIsDryRun = selectedTask?.mode === 'dry_run'
   const selectedTaskIsUnreleasedRealMode = selectedTask ? isUnreleasedRealDxmMutationTask(selectedTask) : false
+  const selectedTaskNotDraft = Boolean(selectedTask && selectedTask.status !== 'draft')
   const l2BlocksStart = needsRealL2 && l2Gate?.status !== 'passed'
   const l3BlocksStart = needsRealL2 && l3Gate?.status === 'blocked'
   const configBlocksStart = Boolean(selectedTask && isRealDxmMutationTask(selectedTask) && configPreview && !configPreview.ok)
   const l2DiagnosticSummaries = summarizeL2Diagnostics(l2Gate)
-  const selectedStore = workspace.stores.find((store) => String(store.id) === draftStoreId)
+  const selectedStore = uniqueStoreOptions.find((store) => String(store.id) === draftStoreId)
   const draftProductIdSet = new Set(draftProductIds)
-  const selectedDraftProducts = workspace.products.filter((product) => draftProductIdSet.has(product.id))
+  const selectedDraftProducts = uniqueProductOptions.filter((product) => draftProductIdSet.has(product.id))
+  const selectedStoreReleasedForSingleSave = Boolean(selectedStore && RELEASED_SINGLE_SAVE_STORE_NAMES.has(selectedStore.name))
+  const storeBlocksSingleSave = Boolean(selectedStore && draftMode !== 'probe' && !selectedStoreReleasedForSingleSave)
   const unreleasedReleaseItems = workspace.realModeReleasePlan.modes.filter((item) => item.mode === 'claim_only' || item.mode === 'batch_save')
-  const canCreateRealTask = Boolean(selectedStore && selectedDraftProducts.length > 0 && !busy)
-  const startDisabled = busy || !selectedTask || selectedTaskIsUnreleasedRealMode || configBlocksStart || l2BlocksStart || l3BlocksStart
+  const latestSingleSaveTask = [...workspace.tasks]
+    .filter(isStartableSingleSaveTask)
+    .sort((a, b) => b.id - a.id)[0] ?? null
+  const compactTaskRows = useMemo(() => {
+    const seen = new Set<string>()
+    const rows: Task[] = []
+    for (const task of workspace.tasks) {
+      const key = getTaskDisplayKey(task)
+      if (seen.has(key)) continue
+      seen.add(key)
+      rows.push(task)
+    }
+    return rows
+  }, [workspace.tasks])
+  const defaultTaskRows = compactTaskRows.filter((task) => !isAuxiliaryTask(task))
+  const compactVisibleTaskRows = defaultTaskRows.slice(0, 6)
+  const visibleTaskRows = showAllTasks
+    ? workspace.tasks
+    : selectedTask && isAuxiliaryTask(selectedTask)
+      ? [selectedTask, ...compactVisibleTaskRows].slice(0, 12)
+    : selectedTask && !compactVisibleTaskRows.some((task) => task.id === selectedTask.id)
+      ? [selectedTask, ...compactVisibleTaskRows.filter((task) => task.id !== selectedTask.id)].slice(0, 12)
+      : compactVisibleTaskRows
+  const collapsedTaskCount = Math.max(workspace.tasks.length - compactTaskRows.length, 0)
+  const hiddenTaskCount = Math.max(workspace.tasks.length - visibleTaskRows.length, 0)
+  const canToggleTaskHistory = workspace.tasks.length > visibleTaskRows.length || showAllTasks
+  const canCreateRealTask = Boolean(selectedStore && selectedDraftProducts.length > 0 && !busy && !storeBlocksSingleSave)
+  const needsSingleSaveRecovery = Boolean(selectedTask && !selectedTaskNotDraft && (selectedTaskIsUnreleasedRealMode || configBlocksStart || l2BlocksStart || l3BlocksStart))
+  const startDisabled = busy || !selectedTask || selectedTaskNotDraft || selectedTaskIsUnreleasedRealMode || configBlocksStart || l2BlocksStart || l3BlocksStart
   const startLabel = !selectedTask
     ? '请选择任务'
-    : selectedTaskIsUnreleasedRealMode
-      ? '未发布，禁止启动'
-      : configBlocksStart
-        ? '配置未完成，禁止启动'
-      : l2BlocksStart
-      ? l2StartLabel(l2Gate?.status)
-      : l3BlocksStart
-        ? 'L3 保持锁定，禁止启动'
-        : needsApproval
-          ? '批准并启动真实金丝雀'
-          : needsRealL2
-            ? '启动保存核验任务'
-            : '启动本地演示任务'
+    : selectedTask.status === 'completed'
+      ? '任务已完成，查看报告'
+      : selectedTask.status === 'running'
+        ? '任务运行中'
+        : selectedTask.status !== 'draft'
+          ? '任务非草稿，禁止启动'
+          : selectedTaskIsUnreleasedRealMode
+            ? '未发布，禁止启动'
+            : configBlocksStart
+              ? '配置未完成，禁止启动'
+              : l2BlocksStart
+                ? l2StartLabel(l2Gate?.status)
+                : l3BlocksStart
+                  ? '人工确认未完成，禁止启动'
+                  : needsApproval
+                    ? '批准并启动单商品只保存'
+                    : needsRealL2
+                      ? '启动保存核验任务'
+                      : '启动开发自检任务'
 
   useEffect(() => {
-    const firstStore = workspace.stores[0]
+    const firstStore = uniqueStoreOptions[0]
     if (!firstStore) {
       if (draftStoreId) setDraftStoreId('')
       return
     }
-    if (!draftStoreId || !workspace.stores.some((store) => String(store.id) === draftStoreId)) {
+    if (!draftStoreId || !uniqueStoreOptions.some((store) => String(store.id) === draftStoreId)) {
       setDraftStoreId(String(firstStore.id))
     }
-  }, [draftStoreId, workspace.stores])
+  }, [draftStoreId, uniqueStoreOptions])
 
   useEffect(() => {
-    const availableIds = new Set(workspace.products.map((product) => product.id))
+    const availableIds = new Set(uniqueProductOptions.map((product) => product.id))
     setDraftProductIds((current) => {
       const kept = current.filter((id) => availableIds.has(id))
       if (kept.length) return kept.length === current.length ? current : kept
-      return workspace.products[0] ? [workspace.products[0].id] : []
+      return uniqueProductOptions[0] ? [uniqueProductOptions[0].id] : []
     })
-  }, [workspace.products])
+  }, [uniqueProductOptions])
 
   function toggleDraftProduct(productId: number) {
     setDraftProductIds((current) => {
@@ -1317,94 +1790,84 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
     })
   }
 
+  function submitSingleSaveTask() {
+    if (!canCreateRealTask || !selectedStore) return
+    setDraftMode('single_save')
+    void onCreateRealTask({
+      storeId: selectedStore.id,
+      mode: 'single_save',
+      productIds: selectedDraftProducts.map((product) => product.id),
+    })
+  }
+
   return (
     <section className="module-layout" aria-label="任务中心">
-      <div className="module-card span-2">
-        <ModuleHead title="任务中心" meta={`${workspace.tasks.length} 个批次`} />
-        <div className="real-task-card" aria-label="创建真实任务" data-publish-scene="SMT_SEMI_MANAGED_SAVE_ONLY">
-          <div className="real-task-card__head">
-            <div>
-              <strong>创建真实任务</strong>
-              <span>选择店铺、商品和执行范围；保存路径固定为只保存不发布。</span>
-            </div>
-            <span className="guard-chip">发布动作未开放</span>
-          </div>
-          <div className="real-task-form">
-            <label>
-              <span>店铺</span>
-              <select value={draftStoreId} onChange={(event) => setDraftStoreId(event.target.value)} disabled={busy || workspace.stores.length === 0}>
-                {workspace.stores.map((store) => (
-                  <option key={store.id} value={store.id}>{store.name} / {store.platform}</option>
-                ))}
-                {!workspace.stores.length && <option value="">等待真实店铺</option>}
-              </select>
-            </label>
-            <div className="real-task-mode" role="radiogroup" aria-label="执行模式">
-              <button className={draftMode === 'probe' ? 'is-selected' : ''} type="button" onClick={() => setDraftMode('probe')} aria-pressed={draftMode === 'probe'}>
-                <strong>L2 只读检查</strong>
-                <span>只读探测，不保存</span>
-              </button>
-              <button className={draftMode === 'single_save' ? 'is-selected' : ''} type="button" onClick={() => setDraftMode('single_save')} aria-pressed={draftMode === 'single_save'}>
-                <strong>L3 single_save</strong>
-                <span>人工批准后真实保存</span>
-              </button>
-              <button type="button" disabled aria-disabled="true">
-                <strong>批量保存未放行</strong>
-                <span>批量/无人值守需单独验收</span>
-              </button>
-            </div>
-          </div>
-          <div className="real-task-products" aria-label="选择商品">
-            {workspace.products.slice(0, 6).map((product) => (
-              <label key={product.id} className="real-task-product">
-                <input
-                  type="checkbox"
-                  checked={draftProductIdSet.has(product.id)}
-                  onChange={() => toggleDraftProduct(product.id)}
-                  disabled={busy}
-                />
-                <span>{product.title}</span>
-                <small>{product.category_name || '未指定类目'} / SKU {product.sku_count}</small>
-              </label>
-            ))}
-            {workspace.products.length > 6 && <span className="toolbar-note">还有 {workspace.products.length - 6} 个商品会保留在队列，可分批创建。</span>}
-            {!workspace.products.length && <EmptyState title="暂无商品" detail="请先导入真实商品；普通模式不使用本地演示商品。" />}
-          </div>
-          <div className="task-start-strip">
-            <button
-              className="button button--primary"
-              type="button"
-              onClick={submitRealTask}
-              disabled={!canCreateRealTask}
-              data-testid="real-task-create"
-            >
-              创建真实任务
-            </button>
-            <span className="toolbar-note">{selectedDraftProducts.length ? `已选择 ${selectedDraftProducts.length} 个商品` : '先选择商品'}</span>
-          </div>
-        </div>
-        <RealModeReleasePlanPanel items={unreleasedReleaseItems} />
-        <div className="toolbar task-start-strip" aria-label="当前任务操作">
-          {demoEnabled && (
-            <>
-              <button className="button button--quiet" type="button" onClick={onBootstrapDemo} disabled={busy}>
-                创建本地 dry_run 演示批次
-              </button>
-              <span className="toolbar-note">开发模式，不触达 DXM</span>
-            </>
-          )}
+      <div className="module-card span-1 task-quick-actions" aria-label="任务操作台">
+        <ModuleHead title="任务操作台" meta="现在只做这三件事" />
+        <div className="task-quick-actions__buttons">
           <button
             className="button button--primary"
             type="button"
-            onClick={onStartTask}
-            disabled={startDisabled}
-            aria-disabled={startDisabled}
-            data-testid="task-start-button"
-            data-start-disabled={startDisabled ? 'true' : 'false'}
+            onClick={submitSingleSaveTask}
+            disabled={!canCreateRealTask}
+            data-testid="task-quick-create-single-save"
           >
-            {startLabel}
+            创建单商品只保存任务
+          </button>
+          <button className="button button--secondary" type="button" onClick={onShowConfig}>
+            补齐编辑页配置
+          </button>
+          <button className="button button--quiet" type="button" onClick={() => setShowAllTasks(true)}>
+            选择历史任务
           </button>
         </div>
+        <div className="task-quick-actions__status">
+          <span>当前任务</span>
+          <strong>{selectedTask ? displayTaskName(selectedTask) : '未选择任务'}</strong>
+          <small>{selectedTask ? `${humanTaskModeLabel(selectedTask.mode)} / ${humanTaskStatus(selectedTask.status)}` : '先创建单商品只保存任务'}</small>
+        </div>
+        <p>
+          {canCreateRealTask
+            ? `将使用 ${selectedStore?.name ?? '当前店铺'} 和已选 ${selectedDraftProducts.length} 个商品创建草稿任务。`
+            : storeBlocksSingleSave
+              ? '当前店铺未放行单商品只保存，请先换到已放行店铺或做只读检查。'
+              : '请先确认有真实店铺和商品。'}
+        </p>
+      </div>
+
+      <div className="module-card span-2">
+        <ModuleHead title="任务中心" meta={showAllTasks ? `${workspace.tasks.length} 个批次` : `${visibleTaskRows.length} 个常用批次`} />
+        <TaskCurrentActionPanel
+          selectedTask={selectedTask}
+          workspace={workspace}
+          configPreview={configPreview}
+          l2Gate={l2Gate}
+          l3Gate={l3Gate}
+          startLabel={startLabel}
+          startDisabled={startDisabled}
+          busy={busy}
+          onStartTask={onStartTask}
+          onShowConfig={onShowConfig}
+          onShowConsole={onShowConsole}
+          onShowReports={onShowReports}
+        />
+        {needsSingleSaveRecovery && (
+          <SingleSaveRecoveryGuide
+            selectedTask={selectedTask}
+            latestSingleSaveTask={latestSingleSaveTask}
+            selectedTaskIsUnreleasedRealMode={selectedTaskIsUnreleasedRealMode}
+            configBlocksStart={configBlocksStart}
+            l2BlocksStart={l2BlocksStart}
+            l3BlocksStart={l3BlocksStart}
+            canCreateRealTask={canCreateRealTask}
+            busy={busy}
+            onSelectSingleSave={() => latestSingleSaveTask && onSelectTask(latestSingleSaveTask.id)}
+            onCreateSingleSave={submitSingleSaveTask}
+            onRunL2Probe={onRunL2Probe}
+            onShowConfig={onShowConfig}
+            onShowReports={onShowReports}
+          />
+        )}
         {(configBlocksStart || configPreviewLoading) && (
           <div className={`gate-note ${configBlocksStart ? 'gate-note--danger' : ''}`}>
             <strong>{configPreviewLoading ? '正在检查配置' : '配置预检未通过'}</strong>
@@ -1419,158 +1882,281 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
         {(l2BlocksStart || l3BlocksStart) && (
           <div className="gate-note gate-note--danger">
             <strong>真实保存已阻断</strong>
-            <span>{l2Gate?.detail ?? '需要 data_acquisition 与 draft_box 两个真实只读检查均通过。'}</span>
-            {l3BlocksStart && <span>L3 当前按门禁锁定：L2 未 passed 或人工批准未完成前，不启动未发布 claim_only/batch_save；仅受控 single_save 可在 L2 passed + 人工批准后进入 runner。</span>}
-            {demoEnabled && selectedTaskIsDryRun && selectedTask?.status === 'draft' && <span>本地演示批次仅用于开发验收；真实保存仍以 single_save 门禁为准。</span>}
+            <span>{humanGateDetail(l2Gate?.detail) ?? '需要商品采集页与草稿箱页两个只读检查均通过。'}</span>
+            {l3BlocksStart && <span>只读检查未通过或人工确认未完成前，不启动认领、批量保存或真实保存。</span>}
+            {demoEnabled && selectedTaskIsDryRun && selectedTask?.status === 'draft' && <span>开发自检批次不触达店小秘；真实保存仍以单商品只保存规则为准。</span>}
             {!selectedTaskIsDryRun && selectedTask?.status === 'draft' && <span>当前真实任务保持门禁控制，请先处理上方阻断原因。</span>}
             <div className="next-step-actions">
-              <button className="button button--secondary" type="button" onClick={onShowConsole}>查看 L2 阻断说明</button>
-              <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看 L2 评审与复验计划</button>
+              <button className="button button--secondary" type="button" onClick={onShowConsole}>查看阻断说明</button>
+              <button className="button button--secondary" type="button" onClick={onRunL2Probe} disabled={busy}>运行只读复验</button>
+              <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看评审与复验计划</button>
               <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
             </div>
           </div>
         )}
         {l2BlocksStart && l2DiagnosticSummaries.length > 0 && (
-          <div className="l2-block-summary">
-            <strong>L2 阻断摘要</strong>
+          <details className="inline-disclosure l2-block-summary">
+            <summary>只读检查诊断摘要</summary>
             {l2DiagnosticSummaries.slice(0, 2).map((item) => (
-              <span key={item.target}>{item.targetLabel}：{item.navigation}，{item.failedChecks.slice(0, 2).join(' / ') || 'strict_pass_checks 未满足'}</span>
+              <span key={item.target}>{item.targetLabel}：{humanDiagnosticNavigation(item.navigation)}，{item.failedChecks.slice(0, 2).map(humanFailedCheckLabel).join(' / ') || '页面检查未满足'}</span>
             ))}
-          </div>
+          </details>
         )}
-        {needsApproval && (
+        {needsApproval && !selectedTaskNotDraft && (
           <div className="gate-note">
-            L3 真实 single_save 会先请求后端批准令牌，再通过受控 runner 启动；claim_only/batch_save 当前未发布，不发布。
+            <span>单商品只保存会先请求后端批准令牌，再启动真实浏览器保存；认领和批量保存当前未开放。</span>
+            <L3ApprovalInlineForm
+              approvedBy={l3ApprovedBy}
+              busy={busy || startDisabled}
+              onApprovedByChange={onL3ApprovedByChange}
+              onSubmit={onStartTask}
+              disabledReason={startDisabled ? startLabel : ''}
+            />
           </div>
         )}
-        <div className="task-list">
-          {workspace.tasks.map((task) => (
-            <button
-              key={task.id}
-              type="button"
-              className={`task-row ${selectedTask?.id === task.id ? 'is-selected' : ''}`}
-              onClick={() => onSelectTask(task.id)}
-              data-task-id={task.id}
-              data-task-mode={task.mode}
-            >
-              <div>
-                <strong>{task.name}</strong>
-                <span>{task.payload.store_name ?? workspace.stores[0]?.name ?? '未绑定店铺'} / {task.payload.category_name ?? '未指定类目'}</span>
-              </div>
-              <div className="task-row__meta">
-                <span>{humanTaskStatus(task.status)}</span>
-                <small>{task.completed_jobs}/{Math.max(task.total_jobs, 1)} 完成</small>
-              </div>
-            </button>
-          ))}
-          {!workspace.tasks.length && (
-            <EmptyState title="暂无真实任务" detail={demoEnabled ? '开发模式可创建 dry_run 演示批次；普通使用请先导入商品并创建 single_save 任务。' : '请先导入商品并创建 single_save 任务，普通模式不展示本地演示入口。'} />
-          )}
-        </div>
       </div>
 
-      <div className="module-card span-2 decision-card">
-        <ModuleHead title="L2/L3 决策说明" meta="真实保存启动条件" />
-        <div className="gate-decision">
-          <DecisionRow
-            label="L2 真实只读 probe"
-            status={l2Gate?.status ?? 'not_run'}
-            detail="只有 passed 才允许进入真实保存启动判断；mock_passed、partial、failed、not_run 都不能启动真实保存。"
-          />
-          {l2DiagnosticSummaries.length > 0 && (
-            <div className="l2-diagnostics" aria-label="L2 失败诊断">
-              <div className="l2-diagnostics__head">
-                <strong>只读失败诊断</strong>
-                <span>仅用于定位问题，不放行 L3</span>
-              </div>
-              {l2DiagnosticSummaries.map((item) => (
-                <article key={item.target} className="l2-diagnostic-card">
-                  <div className="l2-diagnostic-card__title">
-                    <strong>{item.targetLabel}</strong>
-                    <span>{item.navigation}</span>
-                  </div>
-                  <div className="l2-diagnostic-card__chips">
-                    {item.failedChecks.slice(0, 4).map((check) => (
-                      <span key={check} className="guard-chip guard-chip--danger">{check}</span>
-                    ))}
-                  </div>
-                  <ul>
-                    {item.topRequests.map((request) => (
-                      <li key={request}>{request}</li>
-                    ))}
-                    {item.renderHint && <li>{item.renderHint}</li>}
-                    {item.reviewCandidateCount > 0 && (
-                      <li>只读依赖候选 {item.reviewCandidateCount} 项，仍需人工评审，不自动放行。</li>
-                    )}
-                  </ul>
-                  {item.reviewCandidateRequests.length > 0 && (
-                    <div className="l2-review-candidates" aria-label={`${item.targetLabel} 只读依赖人工评审清单`}>
-                      <strong>只读依赖人工评审清单</strong>
-                      <span>manual review only / allowlist_applied=false / 不自动放行 L2/L3</span>
-                      <ul>
-                        {item.reviewCandidateRequests.map((request) => (
-                          <li key={request}>{request}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </article>
-              ))}
-            </div>
-          )}
-          {l2Gate?.status !== 'passed' && l2DiagnosticSummaries.length === 0 && (
-            <div className="l2-diagnostics" aria-label="L2 失败诊断">
-              <div className="l2-diagnostics__head">
-                <strong>只读失败诊断</strong>
-                <span>未收到明细，不放行 L3</span>
-              </div>
-              <article className="l2-diagnostic-card">
-                <div className="l2-diagnostic-card__title">
-                  <strong>L2 未通过</strong>
-                  <span>{l2Gate?.status ?? 'not_run'}</span>
+      <details className="module-card span-2 task-support-drawer disclosure-card">
+        <summary>
+          更多任务操作与记录
+          <span>创建新任务、历史批次、商品队列和启动条件都在这里</span>
+        </summary>
+        <div className="task-support-drawer__content">
+          <details className="inline-disclosure task-create-drawer">
+            <summary>创建真实任务</summary>
+            <div className="real-task-card" aria-label="创建真实任务" data-publish-scene="SMT_SEMI_MANAGED_SAVE_ONLY">
+              <div className="real-task-card__head">
+                <div>
+                  <strong>选择店铺、商品和执行范围</strong>
+                  <span>保存路径固定为只保存不发布；批量/无人值守仍需单独验收。</span>
                 </div>
-                <ul>
-                  <li>{l2Gate?.detail ?? '缺少真实只读 probe 证据。'}</li>
-                  <li>需要 data_acquisition 与 draft_box 双目标真实通过后，才可进入 L3 判断。</li>
-                </ul>
-              </article>
+                <span className="guard-chip">发布动作未开放</span>
+              </div>
+              <div className="real-task-form">
+                <label>
+                  <span>店铺</span>
+                  <select value={draftStoreId} onChange={(event) => setDraftStoreId(event.target.value)} disabled={busy || uniqueStoreOptions.length === 0}>
+                    {uniqueStoreOptions.map((store) => (
+                      <option key={store.id} value={store.id}>
+                        {store.name} / {store.platform}{RELEASED_SINGLE_SAVE_STORE_NAMES.has(store.name) ? '' : '（未放行单商品只保存）'}
+                      </option>
+                    ))}
+                    {!uniqueStoreOptions.length && <option value="">等待真实店铺</option>}
+                  </select>
+                </label>
+                <div className="real-task-mode" role="radiogroup" aria-label="执行模式">
+                  <button className={draftMode === 'probe' ? 'is-selected' : ''} type="button" onClick={() => setDraftMode('probe')} aria-pressed={draftMode === 'probe'}>
+                    <strong>只读页面检查</strong>
+                    <span>不保存，只检查页面</span>
+                  </button>
+                  <button className={draftMode === 'single_save' ? 'is-selected' : ''} type="button" onClick={() => setDraftMode('single_save')} aria-pressed={draftMode === 'single_save'}>
+                    <strong>单商品只保存</strong>
+                    <span>人工批准后真实保存</span>
+                  </button>
+                  <button type="button" disabled aria-disabled="true">
+                    <strong>批量保存未放行</strong>
+                    <span>批量/无人值守需单独验收</span>
+                  </button>
+                </div>
+              </div>
+              {draftMode !== 'probe' && storeBlocksSingleSave && (
+                <div className="guard-note guard-note--warn">
+                  单商品只保存当前只放行 {Array.from(RELEASED_SINGLE_SAVE_STORE_NAMES).join('、')}；其它店铺请先运行只读页面检查并单独放行。
+                </div>
+              )}
+              <div className="real-task-products" aria-label="选择商品">
+                {uniqueProductOptions.slice(0, 6).map((product) => (
+                  <label key={product.id} className="real-task-product">
+                    <input
+                      type="checkbox"
+                      checked={draftProductIdSet.has(product.id)}
+                      onChange={() => toggleDraftProduct(product.id)}
+                      disabled={busy}
+                    />
+                    <span>{product.title}</span>
+                    <small>{product.category_name || '未指定类目'} / SKU {product.sku_count}</small>
+                  </label>
+                ))}
+                {uniqueProductOptions.length > 6 && <span className="toolbar-note">还有 {uniqueProductOptions.length - 6} 个商品会保留在队列，可分批创建。</span>}
+                {!uniqueProductOptions.length && <EmptyState title="暂无商品" detail="请先导入真实商品；普通模式不使用本地演示商品。" />}
+              </div>
+              <div className="task-start-strip">
+                <button
+                  className="button button--primary"
+                  type="button"
+                  onClick={submitRealTask}
+                  disabled={!canCreateRealTask}
+                  data-testid="real-task-create"
+                >
+                  创建真实任务
+                </button>
+                <span className="toolbar-note">{selectedDraftProducts.length ? `已选择 ${selectedDraftProducts.length} 个商品` : '先选择商品'}</span>
+              </div>
             </div>
-          )}
-          <DecisionRow
-            label="L3 save-only 金丝雀"
-            status={l3Gate?.status ?? 'not_run'}
-            detail={l3Gate?.status === 'blocked'
-              ? 'L3 当前按门禁锁定：L2 未 passed 或人工批准未完成前，不启动未发布 claim_only/batch_save；仅受控 single_save 可在 L2 passed + 人工批准后进入 runner。'
-              : 'L3 真实写操作仍需要人工批准令牌，approval_required 不是已通过。'}
-          />
-          <div className="gate-note">
-            当前按钮策略：L2 非 passed 或 L3 blocked 时保持阻断；single_save 仍需后端人工批准；claim_only/batch_save 当前未发布。
-          </div>
+            {demoEnabled && (
+              <div className="toolbar task-start-strip" aria-label="开发模式任务">
+                <button className="button button--quiet" type="button" onClick={onBootstrapDemo} disabled={busy}>
+                  创建开发自检批次
+                </button>
+                <span className="toolbar-note">开发模式，不触达 DXM</span>
+              </div>
+            )}
+          </details>
+          <details className="inline-disclosure task-history-drawer">
+            <summary>选择其它任务 / 历史批次</summary>
+            {workspace.tasks.length > 0 && (
+              <div className="task-list-toolbar">
+                <div className="task-list-summary">
+                  <strong>任务列表</strong>
+                  <span>
+                    默认显示单商品只保存相关批次，辅助/历史批次默认隐藏{collapsedTaskCount > 0 ? `，已合并 ${collapsedTaskCount} 条重复批次` : ''}。
+                  </span>
+                </div>
+                {canToggleTaskHistory && (
+                  <button className="button button--quiet" type="button" onClick={() => setShowAllTasks((value) => !value)}>
+                    {showAllTasks ? '收起历史任务' : `显示全部历史任务（${workspace.tasks.length}）`}
+                  </button>
+                )}
+                {!showAllTasks && hiddenTaskCount > 0 && <small>已隐藏 {hiddenTaskCount} 条历史记录，不影响真实任务数据。</small>}
+              </div>
+            )}
+            <div className="task-list">
+              {visibleTaskRows.map((task) => (
+                <button
+                  key={task.id}
+                  type="button"
+                  className={`task-row ${selectedTask?.id === task.id ? 'is-selected' : ''}`}
+                  onClick={() => onSelectTask(task.id)}
+                  data-task-id={task.id}
+                  data-task-mode={task.mode}
+                >
+                  <div>
+                    <strong>{displayTaskName(task)}</strong>
+                    <span>{task.payload.store_name ?? workspace.stores[0]?.name ?? '未绑定店铺'} / {task.payload.category_name ?? '未指定类目'}</span>
+                  </div>
+                  <div className="task-row__meta">
+                    <span>{humanTaskStatus(task.status)}</span>
+                    <small>{task.completed_jobs}/{Math.max(task.total_jobs, 1)} 完成</small>
+                  </div>
+                </button>
+              ))}
+              {!workspace.tasks.length && (
+                <EmptyState title="暂无真实任务" detail={demoEnabled ? '开发模式可创建本地自检批次；普通使用请先导入商品并创建单商品只保存任务。' : '请先导入商品并创建单商品只保存任务，普通模式不展示本地自检入口。'} />
+              )}
+            </div>
+          </details>
+          <details className="inline-disclosure task-product-drawer">
+            <summary>查看商品队列</summary>
+            <div className="product-queue-card">
+              <ModuleHead title="商品队列" meta={`${uniqueProductOptions.length} 个商品`} />
+              <div className="product-list">
+                {uniqueProductOptions.map((product) => (
+                  <ProductCard key={product.id} product={product} />
+                ))}
+                {!uniqueProductOptions.length && (
+                  <EmptyState title="暂无商品" detail="真实导入后这里展示待保存队列；开发自检数据仅开发模式可用。" />
+                )}
+              </div>
+            </div>
+          </details>
+          <details className="inline-disclosure task-release-drawer">
+            <summary>查看未发布模式边界</summary>
+            <RealModeReleasePlanPanel items={unreleasedReleaseItems} />
+          </details>
+          <details className="inline-disclosure task-acceptance-drawer">
+            <summary>查看任务验收口径</summary>
+            <div>
+              <ModuleHead title="任务验收口径" meta="运营可读" />
+              <div className="acceptance-strip">
+                <span>先验证配置完整性</span>
+                <span>只读检查通过后才允许人工确认保存</span>
+                <span>保留截图与结构化证据</span>
+                <span>异常进入人工池</span>
+                <span>最后生成报告</span>
+              </div>
+            </div>
+          </details>
+          <details className="inline-disclosure task-decision-drawer">
+            <summary>启动条件说明</summary>
+            <div className="gate-decision">
+              <DecisionRow
+                label="只读页面检查"
+                status={l2Gate?.status ?? 'not_run'}
+                detail="只有真实页面检查通过后，才允许进入真实保存启动判断；离线证据、部分通过、失败或未运行都不能启动真实保存。"
+              />
+              {l2DiagnosticSummaries.length > 0 && (
+                <div className="l2-diagnostics" aria-label="L2 失败诊断">
+                  <div className="l2-diagnostics__head">
+                    <strong>只读失败诊断</strong>
+                    <span>仅用于定位问题，不放行真实保存</span>
+                  </div>
+                {l2DiagnosticSummaries.map((item) => (
+                  <article key={item.target} className="l2-diagnostic-card">
+                    <div className="l2-diagnostic-card__title">
+                      <strong>{item.targetLabel}</strong>
+                      <span>{item.navigation}</span>
+                    </div>
+                    <div className="l2-diagnostic-card__chips">
+                      {item.failedChecks.slice(0, 4).map((check) => (
+                        <span key={check} className="guard-chip guard-chip--danger">{check}</span>
+                      ))}
+                    </div>
+                    <ul>
+                      {item.topRequests.map((request) => (
+                        <li key={request}>{request}</li>
+                      ))}
+                      {item.renderHint && <li>{item.renderHint}</li>}
+                      {item.reviewCandidateCount > 0 && (
+                        <li>只读依赖候选 {item.reviewCandidateCount} 项，仍需人工评审，不自动放行。</li>
+                      )}
+                    </ul>
+                    {item.reviewCandidateRequests.length > 0 && (
+                      <div className="l2-review-candidates" aria-label={`${item.targetLabel} 只读依赖人工评审清单`}>
+                        <strong>只读依赖人工评审清单</strong>
+                        <span>仅人工评审，不自动放行真实保存</span>
+                        <ul>
+                          {item.reviewCandidateRequests.map((request) => (
+                            <li key={request}>{request}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </article>
+                ))}
+                </div>
+              )}
+              {l2Gate?.status !== 'passed' && l2DiagnosticSummaries.length === 0 && (
+                <div className="l2-diagnostics" aria-label="L2 失败诊断">
+                  <div className="l2-diagnostics__head">
+                    <strong>只读失败诊断</strong>
+                    <span>未收到明细，不放行真实保存</span>
+                  </div>
+                  <article className="l2-diagnostic-card">
+                    <div className="l2-diagnostic-card__title">
+                      <strong>只读检查未通过</strong>
+                      <span>{l2Gate?.status ?? 'not_run'}</span>
+                    </div>
+                    <ul>
+                      <li>{l2Gate?.detail ?? '缺少真实只读页面检查证据。'}</li>
+                      <li>需要商品采集页与草稿箱页双目标真实通过后，才可进入保存判断。</li>
+                    </ul>
+                  </article>
+                </div>
+              )}
+              <DecisionRow
+                label="单商品只保存"
+                status={l3Gate?.status ?? 'not_run'}
+                detail={l3Gate?.status === 'blocked'
+                  ? '只读检查未通过或人工确认未完成前，不启动认领、批量保存或真实保存。'
+                  : '真实写操作仍需要人工批准令牌；待批准不等于已通过。'}
+              />
+              <div className="gate-note">
+                当前按钮策略：只读检查未通过或人工确认未完成时保持阻断；单商品只保存仍需后端人工批准；认领和批量保存当前未开放。
+              </div>
+            </div>
+          </details>
         </div>
-      </div>
-
-      <div className="module-card product-queue-card">
-        <ModuleHead title="商品队列" meta={`${workspace.products.length} 个商品`} />
-        <div className="product-list">
-          {workspace.products.map((product) => (
-            <ProductCard key={product.id} product={product} />
-          ))}
-          {!workspace.products.length && (
-            <EmptyState title="暂无商品" detail="真实导入后这里展示待保存队列；本地演示数据仅开发模式可用。" />
-          )}
-        </div>
-      </div>
-
-      <div className="module-card span-3">
-        <ModuleHead title="任务验收口径" meta="运营可读" />
-        <div className="acceptance-strip">
-          <span>先验证配置完整性</span>
-          <span>L2 通过后才允许申请 L3</span>
-          <span>保留截图与结构化证据</span>
-          <span>异常进入人工池</span>
-          <span>最后生成报告</span>
-        </div>
-      </div>
+      </details>
     </section>
   )
 }
@@ -1580,12 +2166,15 @@ export function ExecutionConsole({
   selectedTask,
   agentConsole,
   agentConsoleError,
+  runtimeStatus,
   runtimeLogs,
   runtimeLogSource,
   runtimeLogError,
   runtimeLogLevel,
   runtimeLogQuery,
   busy,
+  dxmLoginDraft,
+  onDxmLoginDraftChange,
   onRuntimeLogSourceChange,
   onRuntimeLogLevelChange,
   onRuntimeLogQueryChange,
@@ -1605,12 +2194,15 @@ export function ExecutionConsole({
 }: ExecutionConsoleProps) {
   const taskLogs = selectedTask ? workspace.logs.filter((item) => item.task_id === selectedTask.id) : workspace.logs
   const steps = workspace.deliverySteps.length
-    ? workspace.deliverySteps.map((step) => ({
-      title: displaySafeStepLabel(step.label),
-      code: displaySafeStepCode(step.state),
-      detail: `${displaySafeStepCode(step.state)}${step.evidence_count ? ` / 证据 ${step.evidence_count}` : ''}${step.workflow_actions?.length ? ` / ${step.workflow_actions.map(displaySafeWorkflowAction).join(', ')}` : ''}`,
-      state: step.status === 'completed' ? 'done' : step.status === 'running' ? 'current' : step.status === 'failed' ? 'blocked' : 'pending',
-    }))
+    ? workspace.deliverySteps.map((step) => {
+      const stepLabel = humanConsoleCodeLabel(step.state)
+      return {
+        title: displaySafeStepLabel(step.label),
+        code: displaySafeStepCode(step.state),
+        detail: `${stepLabel}${step.evidence_count ? ` / 证据 ${step.evidence_count}` : ''}${step.workflow_actions?.length ? ` / ${step.workflow_actions.map(displaySafeWorkflowAction).join(', ')}` : ''}`,
+        state: step.status === 'completed' ? 'done' : step.status === 'running' ? 'current' : step.status === 'failed' ? 'blocked' : 'pending',
+      }
+    })
     : buildConsoleSteps(selectedTask, workspace.logs)
   const activeStep = steps.find((step) => step.state === 'current' || step.state === 'blocked') ?? steps.find((step) => step.state === 'pending') ?? steps[0]
   const browserFrame = getBrowserFrame(workspace, selectedTask, agentConsole)
@@ -1626,6 +2218,8 @@ export function ExecutionConsole({
     ?? runtimeLogs[runtimeLogSource]?.lines.length
     ?? 0
   const actionTimelineCount = agentConsole?.action_events?.length ?? agentConsole?.step_history?.length ?? 0
+  const selectedTaskCompleted = selectedTask?.status === 'completed'
+  const compactCompletedReview = selectedTaskCompleted && !agentConsole?.active
 
   return (
     <section className="agent-console-layout" aria-label="执行控制台">
@@ -1641,21 +2235,61 @@ export function ExecutionConsole({
         onShowReports={onShowReports}
       />
 
-      <div className="module-card span-2 agent-console-stage">
-        <ModuleHead
-          title="真实浏览器"
-          meta={agentConsole?.active ? '自动浏览器运行中' : '打开真实店小秘，保存前仍需确认'}
-        />
-        <AgentConsoleControls
+      {compactCompletedReview ? (
+        <ConsoleCompletedReviewPanel
+          selectedTask={selectedTask}
+          runtimeLogSource={runtimeLogSource}
+          runtimeLogCount={runtimeLogCount}
+          onShowReports={onShowReports}
+          onShowEvidence={onShowEvidence}
+          onShowTasks={onShowTasks}
+        >
+          <AgentStagePanel
+            embedded
+            workspace={workspace}
+            selectedTask={selectedTask}
+            activeStep={activeStep}
+            browserFrame={browserFrame}
+            agentConsole={agentConsole}
+            agentConsoleError={agentConsoleError}
+            busy={busy}
+            realSaveBlocked={realSaveBlocked}
+            realSaveBlockReason={realSaveBlockReason}
+            diagnosticBlocked={diagnosticBlocked}
+            diagnosticBlockReason={diagnosticBlockReason}
+            dxmLoginDraft={dxmLoginDraft}
+            onStartAgentConsole={onStartAgentConsole}
+            onDxmLoginDraftChange={onDxmLoginDraftChange}
+            onOpenDxmLogin={onOpenDxmLogin}
+            onContinueDxmLogin={onContinueDxmLogin}
+            onNavigateDxmTarget={onNavigateDxmTarget}
+            onStopAgentConsole={onStopAgentConsole}
+            onSnapshotAgentConsole={onSnapshotAgentConsole}
+            onRequestAgentConsoleTakeover={onRequestAgentConsoleTakeover}
+            onReleaseAgentConsoleTakeover={onReleaseAgentConsoleTakeover}
+            onControlAgentConsoleBrowser={onControlAgentConsoleBrowser}
+            onRuntimeControl={onRuntimeControl}
+            onShowTasks={onShowTasks}
+            onShowEvidence={onShowEvidence}
+            onShowReports={onShowReports}
+          />
+        </ConsoleCompletedReviewPanel>
+      ) : (
+        <AgentStagePanel
+          workspace={workspace}
+          selectedTask={selectedTask}
+          activeStep={activeStep}
+          browserFrame={browserFrame}
           agentConsole={agentConsole}
           agentConsoleError={agentConsoleError}
-          selectedTask={selectedTask}
           busy={busy}
           realSaveBlocked={realSaveBlocked}
           realSaveBlockReason={realSaveBlockReason}
           diagnosticBlocked={diagnosticBlocked}
           diagnosticBlockReason={diagnosticBlockReason}
+          dxmLoginDraft={dxmLoginDraft}
           onStartAgentConsole={onStartAgentConsole}
+          onDxmLoginDraftChange={onDxmLoginDraftChange}
           onOpenDxmLogin={onOpenDxmLogin}
           onContinueDxmLogin={onContinueDxmLogin}
           onNavigateDxmTarget={onNavigateDxmTarget}
@@ -1664,103 +2298,258 @@ export function ExecutionConsole({
           onRequestAgentConsoleTakeover={onRequestAgentConsoleTakeover}
           onReleaseAgentConsoleTakeover={onReleaseAgentConsoleTakeover}
           onControlAgentConsoleBrowser={onControlAgentConsoleBrowser}
+          onRuntimeControl={onRuntimeControl}
+          onShowTasks={onShowTasks}
+          onShowEvidence={onShowEvidence}
+          onShowReports={onShowReports}
         />
-        {realSaveBlocked && (
-          <details className="gate-note gate-note--danger inline-disclosure">
-            <summary>查看真实保存阻断详情</summary>
-            <span>{realSaveBlockReason}</span>
-            <div className="next-step-actions">
-              <button className="button button--secondary" type="button" onClick={onShowTasks}>回到任务门禁</button>
-              <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看 L2 评审与复验计划</button>
-              <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
-            </div>
-          </details>
-        )}
-        <AgentBrowserFrame
-          workspace={workspace}
-          selectedTask={selectedTask}
-          activeStep={activeStep}
-          browserFrame={browserFrame}
-          agentConsole={agentConsole}
-          busy={busy}
-          onControlAgentConsoleBrowser={onControlAgentConsoleBrowser}
-        />
-      </div>
+      )}
 
-      <div className="module-card span-1 console-log-card console-log-card--live">
+      <div className="module-card span-1 console-log-card console-log-card--compact">
         <ModuleHead title="实时日志" meta={`${runtimeLogCount} 条，每 1.5 秒刷新`} />
-        <RuntimeLogPanel
+        <RuntimeLogPreview
           logs={runtimeLogs}
           source={runtimeLogSource}
           error={runtimeLogError}
-          level={runtimeLogLevel}
-          query={runtimeLogQuery}
           onSourceChange={onRuntimeLogSourceChange}
-          onLevelChange={onRuntimeLogLevelChange}
-          onQueryChange={onRuntimeLogQueryChange}
         />
+        <small>日志会自动刷新；筛选和搜索保留在下方“更多诊断与维护”。</small>
       </div>
 
-      <details className="module-card span-3 disclosure-card console-advanced console-support-drawer">
-        <summary>辅助面板：运行维护 / 自动操作轨迹</summary>
-        <div className="console-support-grid">
-          <section className="console-support-panel" aria-label="运行时维护">
-            <ModuleHead title="运行时维护" meta="安全动作" />
-            <RuntimeControlPanel
-              busy={busy}
-              agentConsole={agentConsole}
-              onRuntimeControl={onRuntimeControl}
+      <details className="module-card span-3 disclosure-card console-advanced console-diagnostics-drawer">
+        <summary>更多诊断与维护</summary>
+        <div className="console-diagnostics-grid">
+          <section className="console-diagnostics-panel console-diagnostics-panel--wide" aria-label="完整日志中心">
+            <ModuleHead title="完整日志中心" meta={`${runtimeLogCount} 条，每 1.5 秒刷新`} />
+            <RuntimeLogPanel
+              logs={runtimeLogs}
+              source={runtimeLogSource}
+              error={runtimeLogError}
+              level={runtimeLogLevel}
+              query={runtimeLogQuery}
+              onSourceChange={onRuntimeLogSourceChange}
+              onLevelChange={onRuntimeLogLevelChange}
+              onQueryChange={onRuntimeLogQueryChange}
             />
           </section>
-          <section className="console-support-panel console-support-panel--wide" aria-label="自动操作轨迹">
+          <section className="console-diagnostics-panel" aria-label="运行时维护">
+            <ModuleHead title="运行时维护" meta="安全动作" />
+          <RuntimeControlPanel
+            busy={busy}
+            agentConsole={agentConsole}
+            runtimeStatus={runtimeStatus}
+            onRuntimeControl={onRuntimeControl}
+          />
+          </section>
+          <section className="console-diagnostics-panel" aria-label="自动操作轨迹">
             <ModuleHead title="自动操作轨迹" meta={`${actionTimelineCount} 条`} />
             <AgentActionTimeline agentConsole={agentConsole} />
           </section>
-        </div>
-      </details>
-
-      <details className="module-card span-3 disclosure-card console-advanced">
-        <summary>执行步骤明细</summary>
-        <ModuleHead title="状态机步骤" meta={selectedTask ? `任务 #${selectedTask.id}` : '未选择任务'} />
-        <div className="stepper">
-          {steps.map((step, index) => (
-            <div key={step.title} className={`step ${step.state}`}>
-              <span>{index + 1}</span>
-              <div>
-                <strong>{step.title}</strong>
-                <small>{step.detail}</small>
-              </div>
+          <section className="console-diagnostics-panel console-diagnostics-panel--wide" aria-label="状态机步骤">
+            <ModuleHead title="状态机步骤" meta={selectedTask ? `任务 #${selectedTask.id}` : '未选择任务'} />
+            <div className="stepper">
+              {steps.map((step, index) => (
+                <div key={step.title} className={`step ${step.state}`}>
+                  <span>{index + 1}</span>
+                  <div>
+                    <strong>{step.title}</strong>
+                    <small>{step.detail}</small>
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      </details>
-
-      <details className="module-card span-3 disclosure-card console-advanced">
-        <summary>任务执行日志</summary>
-        <ModuleHead title="执行日志" meta={`${taskLogs.length} 条`} />
-        <div className="timeline-list">
-          {taskLogs.map((log) => (
-            <LogRow key={log.id} log={log} />
-          ))}
-          {!taskLogs.length && (
-            <EmptyState title="暂无执行日志" detail="当前仅可查看 L2 诊断与证据；L2 未通过时禁止启动真实保存/L3。" />
-          )}
+          </section>
+          <section className="console-diagnostics-panel console-diagnostics-panel--wide" aria-label="任务执行日志">
+            <ModuleHead title="任务执行日志" meta={`${taskLogs.length} 条`} />
+            <div className="timeline-list">
+              {taskLogs.map((log) => (
+                <LogRow key={log.id} log={log} />
+              ))}
+              {!taskLogs.length && (
+                <EmptyState title="暂无执行日志" detail="当前仅可查看只读诊断与证据；只读检查未通过时禁止启动真实保存。" />
+              )}
+            </div>
+          </section>
         </div>
       </details>
     </section>
   )
 }
 
+function AgentStagePanel({
+  embedded = false,
+  workspace,
+  selectedTask,
+  activeStep,
+  browserFrame,
+  agentConsole,
+  agentConsoleError,
+  busy,
+  realSaveBlocked,
+  realSaveBlockReason,
+  diagnosticBlocked,
+  diagnosticBlockReason,
+  dxmLoginDraft,
+  onStartAgentConsole,
+  onDxmLoginDraftChange,
+  onOpenDxmLogin,
+  onContinueDxmLogin,
+  onNavigateDxmTarget,
+  onStopAgentConsole,
+  onSnapshotAgentConsole,
+  onRequestAgentConsoleTakeover,
+  onReleaseAgentConsoleTakeover,
+  onControlAgentConsoleBrowser,
+  onRuntimeControl,
+  onShowTasks,
+  onShowEvidence,
+  onShowReports,
+}: {
+  embedded?: boolean
+  workspace: DeliveryWorkspace
+  selectedTask: Task | null
+  activeStep?: { title: string; code?: string; detail: string; state: string }
+  browserFrame: { url: string; evidencePath: string; source: string }
+  agentConsole: AgentConsoleSession | null
+  agentConsoleError: string | null
+  busy: boolean
+  realSaveBlocked: boolean
+  realSaveBlockReason: string
+  diagnosticBlocked: boolean
+  diagnosticBlockReason: string
+  dxmLoginDraft: DxmLoginDraft
+  onStartAgentConsole: () => void
+  onDxmLoginDraftChange: (draft: DxmLoginDraft) => void
+  onOpenDxmLogin: () => void
+  onContinueDxmLogin: () => void
+  onNavigateDxmTarget: (target: 'data_acquisition' | 'draft_box') => void
+  onStopAgentConsole: () => void
+  onSnapshotAgentConsole: () => void
+  onRequestAgentConsoleTakeover: () => void
+  onReleaseAgentConsoleTakeover: () => void
+  onControlAgentConsoleBrowser: (command: AgentConsoleControlCommand) => void
+  onRuntimeControl: (action: RuntimeControlAction) => void
+  onShowTasks: () => void
+  onShowEvidence: () => void
+  onShowReports: () => void
+}) {
+  return (
+    <div className={embedded ? 'agent-console-stage agent-console-stage--embedded' : 'module-card span-2 agent-console-stage'}>
+      <ModuleHead
+        title="Agent 控制真实浏览器"
+        meta={agentConsole?.active ? '自动浏览器运行中' : '打开真实店小秘，保存前仍需确认'}
+      />
+      <AgentConsoleControls
+        agentConsole={agentConsole}
+        agentConsoleError={agentConsoleError}
+        selectedTask={selectedTask}
+        busy={busy}
+        realSaveBlocked={realSaveBlocked}
+        realSaveBlockReason={realSaveBlockReason}
+        diagnosticBlocked={diagnosticBlocked}
+        diagnosticBlockReason={diagnosticBlockReason}
+        dxmLoginDraft={dxmLoginDraft}
+        onStartAgentConsole={onStartAgentConsole}
+        onDxmLoginDraftChange={onDxmLoginDraftChange}
+        onOpenDxmLogin={onOpenDxmLogin}
+        onContinueDxmLogin={onContinueDxmLogin}
+        onNavigateDxmTarget={onNavigateDxmTarget}
+        onStopAgentConsole={onStopAgentConsole}
+        onSnapshotAgentConsole={onSnapshotAgentConsole}
+        onRequestAgentConsoleTakeover={onRequestAgentConsoleTakeover}
+        onReleaseAgentConsoleTakeover={onReleaseAgentConsoleTakeover}
+        onControlAgentConsoleBrowser={onControlAgentConsoleBrowser}
+        onRuntimeControl={onRuntimeControl}
+      />
+      {realSaveBlocked && (
+        <details className="gate-note gate-note--danger inline-disclosure">
+          <summary>查看真实保存阻断详情</summary>
+          <span>{realSaveBlockReason}</span>
+          <div className="next-step-actions">
+            <button className="button button--secondary" type="button" onClick={onShowTasks}>回到任务门禁</button>
+            <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看只读评审与复验计划</button>
+            <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
+          </div>
+        </details>
+      )}
+      <details className="agent-browser-drawer inline-disclosure">
+        <summary>浏览器状态与证据路径</summary>
+        <small>外部真实浏览器窗口由 Agent 控制；控制台默认不内嵌浏览器画面，避免把状态面板误当成实时页面。</small>
+        <AgentBrowserFrame
+          workspace={workspace}
+          selectedTask={selectedTask}
+          activeStep={activeStep}
+          browserFrame={browserFrame}
+          agentConsole={agentConsole}
+        />
+      </details>
+    </div>
+  )
+}
+
+function ConsoleCompletedReviewPanel({
+  selectedTask,
+  runtimeLogSource,
+  runtimeLogCount,
+  onShowReports,
+  onShowEvidence,
+  onShowTasks,
+  children,
+}: {
+  selectedTask: Task | null
+  runtimeLogSource: RuntimeLogSource
+  runtimeLogCount: number
+  onShowReports: () => void
+  onShowEvidence: () => void
+  onShowTasks: () => void
+  children: ReactNode
+}) {
+  const sourceLabel = runtimeLogSourceLabels()[runtimeLogSource]
+  return (
+    <div className="module-card span-2 console-review-panel">
+      <ModuleHead title="任务已完成" meta={selectedTask ? `任务 #${selectedTask.id}` : '等待任务'} />
+      <div className="console-review-panel__body">
+        <div>
+          <strong>下一步只复核结果</strong>
+          <span>查看报告、未发布证明和真实浏览器记录；如要处理新商品，回到任务中心创建新任务。</span>
+        </div>
+        <div className="console-review-panel__facts">
+          <span><b>报告</b><strong>优先查看</strong></span>
+          <span><b>证据</b><strong>核对未发布</strong></span>
+          <span><b>日志</b><strong>{sourceLabel} {runtimeLogCount} 条</strong></span>
+        </div>
+      </div>
+      <div className="console-review-panel__actions">
+        <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看报告</button>
+        <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据</button>
+        <button className="button button--quiet" type="button" onClick={onShowTasks}>创建/选择任务</button>
+      </div>
+      <details className="inline-disclosure console-review-panel__browser">
+        <summary>继续操作真实浏览器</summary>
+        <small>仅在需要重新登录、补做只读复验或人工排查时展开；完成态默认不展示浏览器操控细节。</small>
+        {children}
+      </details>
+    </div>
+  )
+}
+
 function RuntimeControlPanel({
   busy,
   agentConsole,
+  runtimeStatus,
   onRuntimeControl,
 }: {
   busy: boolean
   agentConsole: AgentConsoleSession | null
+  runtimeStatus: RuntimeStatus | null
   onRuntimeControl: (action: RuntimeControlAction) => void
 }) {
   const agentActive = Boolean(agentConsole?.active)
+  const launcherManaged = Boolean(runtimeStatus?.runtimeControl?.managedByLauncher)
+  const restartAvailable = Boolean(runtimeStatus?.runtimeControl?.restartAvailable)
+  const restartDisabled = busy || !restartAvailable
+  const runtimeControlDetail = runtimeStatus?.runtimeControl?.detail
+    ?? '未读取到启动器托管状态；重启服务前请确认是通过 scripts/start-mvp.bat 启动。'
   return (
     <div className="runtime-control-panel">
       <button
@@ -1779,16 +2568,26 @@ function RuntimeControlPanel({
       >
         清理卡住任务
       </button>
+      <button
+        className="button button--quiet"
+        type="button"
+        disabled={busy}
+        onClick={() => onRuntimeControl('run_l2_readonly_probe')}
+      >
+        运行只读复验
+      </button>
       <details className="inline-disclosure">
         <summary>服务重启</summary>
         <div className="runtime-control-panel__restart">
-          <button className="button button--quiet" type="button" disabled={busy} onClick={() => onRuntimeControl('restart_backend')}>
+          <button className="button button--quiet" type="button" disabled={restartDisabled} onClick={() => onRuntimeControl('restart_backend')}>
             重启后端
           </button>
-          <button className="button button--quiet" type="button" disabled={busy} onClick={() => onRuntimeControl('restart_frontend')}>
+          <button className="button button--quiet" type="button" disabled={restartDisabled} onClick={() => onRuntimeControl('restart_frontend')}>
             重启前端
           </button>
-          <small>启动器托管提示：重启命令会写入启动器日志；若不是通过 start-mvp 启动，请手动重启。</small>
+          <small>
+            启动器托管：{launcherManaged ? '已接管' : '未接管'}。{runtimeControlDetail}
+          </small>
         </div>
       </details>
       <small>维护动作会写入启动器日志；真实保存任务不会被“清理卡住任务”取消。</small>
@@ -1930,6 +2729,47 @@ function ConsoleFocusPanel({
   onShowReports: () => void
 }) {
   const active = Boolean(agentConsole?.active)
+  const hasBrowserSession = Boolean(agentConsole?.active || agentConsole?.updated_at)
+  const browserLaunching = Boolean(agentConsole?.browser_launching)
+  const browserVisible = Boolean(agentConsole?.browser_visible)
+  const manualTakeover = Boolean(agentConsole?.manual_takeover)
+  const currentUrl = agentConsole?.current_url ?? agentConsole?.target_url
+  const selectedTaskCompleted = selectedTask?.status === 'completed'
+  const guardLabel = selectedTaskCompleted
+    ? '任务已完成'
+    : realSaveBlocked
+      ? '保存前置条件未完成'
+      : '可申请只保存'
+  const browserLabel = active
+    ? browserLaunching
+      ? '正在启动'
+      : browserVisible
+      ? '窗口可见'
+      : '会话中，窗口未显示'
+    : '待启动'
+  const controlLabel = manualTakeover
+    ? '人工接管中'
+    : active && browserVisible
+      ? 'Agent 可控'
+      : active
+        ? browserLaunching ? '启动中' : '等待窗口可见'
+        : '启动后可控'
+  const takeoverLabel = active
+    ? manualTakeover
+      ? '接管中，可交还 Agent'
+      : '可在生命周期区接管'
+    : '启动浏览器后可接管'
+  const consoleNext = selectedTaskCompleted
+    ? '查看报告与未发布证明'
+    : active
+      ? browserLaunching
+        ? '等待独立真实浏览器启动完成'
+        : humanConsoleText(agentConsole?.hud?.next_step ?? '按当前步骤继续操作真实浏览器')
+      : realSaveBlocked
+        ? '处理任务门禁后再打开执行浏览器'
+        : '打开执行浏览器'
+  const primaryActionLabel = selectedTaskCompleted ? '查看报告' : '处理任务门禁'
+  const primaryAction = selectedTaskCompleted ? onShowReports : onShowTasks
   const sourceLabel = ({
     backend: '后端',
     frontend: '前端',
@@ -1948,16 +2788,32 @@ function ConsoleFocusPanel({
           <p>{activeStep?.detail ?? '先完成配置、只读检查和人工确认，再启动真实浏览器执行。'}</p>
         </div>
       </div>
-      <div className="console-focus-panel__facts" aria-label="执行摘要">
-        <span><strong>任务</strong><b>{selectedTask ? `${selectedTask.name} / ${humanTaskStatus(selectedTask.status)}` : '待选择'}</b></span>
-        <span><strong>浏览器</strong><b>{active ? '自动浏览器运行中' : '待启动'}</b></span>
-        <span><strong>日志</strong><b>{sourceLabel} {runtimeLogCount} 条</b></span>
-        <span><strong>门禁</strong><b>{realSaveBlocked ? '保存前置条件未完成' : '可申请只保存'}</b></span>
+      <div className="console-focus-panel__facts console-focus-panel__primary-facts" aria-label="执行摘要">
+        <span><strong>任务</strong><b>{selectedTask ? `${displayTaskName(selectedTask)} / ${humanTaskStatus(selectedTask.status)}` : '待选择'}</b></span>
+        <span><strong>真实浏览器</strong><b>{browserLabel}</b></span>
+        <span><strong>当前步骤</strong><b>{activeStep?.title ?? '等待任务'}</b></span>
+        <span><strong>下一步</strong><b>{consoleNext}</b></span>
       </div>
+      <details className="console-focus-panel__details inline-disclosure">
+        <summary>技术状态</summary>
+        <div className="console-focus-panel__facts">
+          <span><strong>当前页面</strong><b>{hasBrowserSession && currentUrl ? shortUrl(currentUrl) : '等待启动真实浏览器'}</b></span>
+          <span><strong>操控状态</strong><b>{controlLabel}</b></span>
+          <span><strong>人工接管</strong><b>{takeoverLabel}</b></span>
+          <span><strong>日志</strong><b>{sourceLabel} {runtimeLogCount} 条</b></span>
+          <span><strong>门禁</strong><b>{guardLabel}</b></span>
+        </div>
+      </details>
       <div className="console-focus-panel__actions">
-        {realSaveBlocked && <small>{realSaveBlockReason}</small>}
-        <button className="button button--secondary" type="button" onClick={onShowTasks}>处理任务门禁</button>
-        <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">查看复验计划</button>
+        {selectedTaskCompleted ? (
+          <small>任务已完成，下面复核报告、证据和日志。</small>
+        ) : (
+          <>
+            {realSaveBlocked && <small>{realSaveBlockReason}</small>}
+            <button className="button button--secondary" type="button" onClick={primaryAction}>{primaryActionLabel}</button>
+            <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">查看复验计划</button>
+          </>
+        )}
       </div>
     </div>
   )
@@ -1969,40 +2825,26 @@ function AgentBrowserFrame({
   activeStep,
   browserFrame,
   agentConsole,
-  busy,
-  onControlAgentConsoleBrowser,
 }: {
   workspace: DeliveryWorkspace
   selectedTask: Task | null
   activeStep?: { title: string; code?: string; detail: string; state: string }
-  browserFrame: { url: string; screenshotUrl: string; source: string }
+  browserFrame: { url: string; evidencePath: string; source: string }
   agentConsole: AgentConsoleSession | null
-  busy: boolean
-  onControlAgentConsoleBrowser: (command: AgentConsoleControlCommand) => void
 }) {
   const nextStep = nextPendingStep(workspace.deliverySteps, activeStep?.code)
   const hasConsoleHud = Boolean(agentConsole?.active || agentConsole?.updated_at)
   const hud = agentConsole?.hud
   const storeName = (hasConsoleHud ? hud?.store_name : null) ?? selectedTask?.payload.store_name ?? workspace.stores[0]?.name ?? '等待真实店铺'
   const hudTitle = (hasConsoleHud ? hud?.title ?? hud?.label : null) ?? activeStep?.title ?? '等待任务'
-  const hudState = (hasConsoleHud ? hud?.state ?? hud?.code : null) ?? activeStep?.code ?? 'WAITING'
-  const hudAction = (hasConsoleHud ? hud?.action ?? hud?.detail : null) ?? activeStep?.detail ?? '等待后端推送步骤'
-  const hudNext = (hasConsoleHud ? hud?.next_step : null) ?? nextStep?.label ?? '等待状态机推进'
+  const hudState = humanConsoleCodeLabel((hasConsoleHud ? hud?.state ?? hud?.code : null) ?? activeStep?.code ?? 'WAITING')
+  const hudAction = humanConsoleText((hasConsoleHud ? hud?.action ?? hud?.detail : null) ?? activeStep?.detail ?? '等待后端推送步骤')
+  const hudNext = humanConsoleText((hasConsoleHud ? hud?.next_step : null) ?? nextStep?.label ?? '等待状态机推进')
   const hudGuard = (hasConsoleHud ? hud?.guard : null) ?? (workspace.publishGuardState?.safe ? '通过' : '等待证明')
   const hudDotState = agentConsole?.last_error ? 'blocked' : agentConsole?.active ? 'current' : activeStep?.state ?? 'pending'
   const recentNetworkEvents = getRecentNetworkEvents(agentConsole)
+  const browserLaunching = Boolean(agentConsole?.browser_launching)
   const canControl = Boolean(agentConsole?.active && agentConsole?.browser_visible && !agentConsole?.manual_takeover)
-
-  function handleBrowserImageClick(event: MouseEvent<HTMLImageElement>) {
-    if (!canControl || busy) return
-    const image = event.currentTarget
-    const rect = image.getBoundingClientRect()
-    const naturalWidth = image.naturalWidth || rect.width
-    const naturalHeight = image.naturalHeight || rect.height
-    const x = Math.round(((event.clientX - rect.left) / rect.width) * naturalWidth)
-    const y = Math.round(((event.clientY - rect.top) / rect.height) * naturalHeight)
-    onControlAgentConsoleBrowser({ action: 'click', x, y })
-  }
 
   return (
     <div className="agent-browser">
@@ -2014,37 +2856,40 @@ function AgentBrowserFrame({
         </div>
         <div className="browser-tab">店小秘自动浏览器</div>
         <div className="browser-url">{browserFrame.url}</div>
-        <span className={`status-pill ${agentConsole?.browser_visible ? 'ok' : 'muted'}`}>
-          {agentConsole?.browser_visible ? '可见浏览器' : '独立浏览器待命'}
+        <span className={`status-pill ${agentConsole?.browser_visible ? 'ok' : browserLaunching ? 'warn' : 'muted'}`}>
+          {agentConsole?.browser_visible ? '可见浏览器' : browserLaunching ? '正在启动' : '独立浏览器待命'}
         </span>
       </div>
       <div className="agent-browser__viewport">
-        {browserFrame.screenshotUrl ? (
-          <>
-            <div className="agent-browser__evidence-note">
-              <strong>控制台可直接操控真实浏览器</strong>
-              <span>{canControl ? '点击截图会映射到当前独立浏览器视口。' : '启动浏览器且未人工接管时，可在这里点击真实页面。'}</span>
+        <div className="browser-live-surface">
+          <div>
+            <strong>{agentConsole?.active || agentConsole?.updated_at ? '真实浏览器会话' : '尚未打开真实店小秘浏览器'}</strong>
+            <span>
+              {agentConsole?.active || agentConsole?.updated_at
+                ? browserLaunching
+                  ? '正在启动独立真实浏览器；状态会自动刷新，期间不会触发保存或发布。'
+                  : canControl
+                  ? '可通过下方控制面板直接操作当前独立浏览器窗口。'
+                  : '浏览器状态已连接；人工接管或窗口未显示时，控制面板会保持只读/禁用。'
+                : '点击上方按钮后，会使用独立 Profile 打开真实 dianxiaomi.com。'}
+            </span>
+            <small>控制台不渲染本地截图；截图只作为报告证据路径保存，避免把历史图片误当成实时浏览器。</small>
+          </div>
+          <dl>
+            <div>
+              <dt>当前 URL</dt>
+              <dd>{browserFrame.url}</dd>
             </div>
-            <img
-              src={browserFrame.screenshotUrl}
-              alt="当前真实浏览器视口"
-              className={canControl ? 'is-controllable' : ''}
-              onClick={handleBrowserImageClick}
-            />
-          </>
-        ) : agentConsole?.active || agentConsole?.updated_at ? (
-          <div className="browser-empty-state">
-            <strong>等待真实浏览器首帧</strong>
-            <span>浏览器会话状态已记录，刷新当前画面后即可在控制台点击、输入和滚动。</span>
-            <small>页面内操控仅控制当前独立浏览器窗口；发布隔离仍按门禁执行。</small>
-          </div>
-        ) : (
-          <div className="browser-empty-state">
-            <strong>尚未打开真实店小秘浏览器</strong>
-            <span>点击上方按钮后，会使用独立浏览器打开真实 dianxiaomi.com。</span>
-            <small>保存动作仍受只读检查和人工确认保护，不会触发发布。</small>
-          </div>
-        )}
+            <div>
+              <dt>控制状态</dt>
+              <dd>{canControl ? 'Agent 可控' : agentConsole?.manual_takeover ? '人工接管中' : browserLaunching ? '浏览器启动中' : '等待可见窗口'}</dd>
+            </div>
+            <div>
+              <dt>下一步</dt>
+              <dd>{agentConsole?.active ? hudNext : '启动真实浏览器后在独立窗口操作店小秘'}</dd>
+            </div>
+          </dl>
+        </div>
 
         <div className="agent-hud" aria-label="浏览器内执行步骤框">
           <div className="agent-hud__head">
@@ -2075,30 +2920,33 @@ function AgentBrowserFrame({
           </div>
         </div>
       </div>
-      <div className="agent-browser__footer">
-        <div className="agent-browser__source">
-          <span>{browserFrame.source}</span>
-          <div className="agent-network-events" aria-label="网络响应">
-            <strong>网络响应</strong>
-            {recentNetworkEvents.length > 0 ? (
-              recentNetworkEvents.map((event, index) => (
-                <span key={`${event.timestamp ?? event.url ?? 'network'}-${index}`}>
-                  <b>{event.status ?? event.type ?? 'event'}</b>
-                  <em>{event.method ?? '-'}</em>
-                  <code>{shortUrl(event.url)}</code>
+      <details className="agent-browser__details inline-disclosure">
+        <summary>证据路径与网络响应</summary>
+        <div className="agent-browser__footer">
+          <div className="agent-browser__source">
+            <span>{browserFrame.source}</span>
+            <div className="agent-network-events" aria-label="网络响应">
+              <strong>网络响应</strong>
+              {recentNetworkEvents.length > 0 ? (
+                recentNetworkEvents.map((event, index) => (
+                  <span key={`${event.timestamp ?? event.url ?? 'network'}-${index}`}>
+                    <b>{event.status ?? event.type ?? 'event'}</b>
+                    <em>{event.method ?? '-'}</em>
+                    <code>{shortUrl(event.url)}</code>
+                  </span>
+                ))
+              ) : (
+                <span>
+                  <b>待命</b>
+                  <em>-</em>
+                  <code>等待网络响应</code>
                 </span>
-              ))
-            ) : (
-              <span>
-                <b>待命</b>
-                <em>-</em>
-                <code>等待网络响应</code>
-              </span>
-            )}
+              )}
+            </div>
           </div>
+          <span>{agentConsole?.profile_dir ? `浏览器数据目录: ${agentConsole.profile_dir}` : '等待启动独立浏览器'}</span>
         </div>
-        <span>{agentConsole?.profile_dir ? `浏览器数据目录: ${agentConsole.profile_dir}` : '等待启动独立浏览器'}</span>
-      </div>
+      </details>
     </div>
   )
 }
@@ -2112,7 +2960,9 @@ function AgentConsoleControls({
   realSaveBlockReason,
   diagnosticBlocked,
   diagnosticBlockReason,
+  dxmLoginDraft,
   onStartAgentConsole,
+  onDxmLoginDraftChange,
   onOpenDxmLogin,
   onContinueDxmLogin,
   onNavigateDxmTarget,
@@ -2121,6 +2971,7 @@ function AgentConsoleControls({
   onRequestAgentConsoleTakeover,
   onReleaseAgentConsoleTakeover,
   onControlAgentConsoleBrowser,
+  onRuntimeControl,
 }: {
   agentConsole: AgentConsoleSession | null
   agentConsoleError: string | null
@@ -2130,7 +2981,9 @@ function AgentConsoleControls({
   realSaveBlockReason: string
   diagnosticBlocked: boolean
   diagnosticBlockReason: string
+  dxmLoginDraft: DxmLoginDraft
   onStartAgentConsole: () => void
+  onDxmLoginDraftChange: (draft: DxmLoginDraft) => void
   onOpenDxmLogin: () => void
   onContinueDxmLogin: () => void
   onNavigateDxmTarget: (target: 'data_acquisition' | 'draft_box') => void
@@ -2139,51 +2992,79 @@ function AgentConsoleControls({
   onRequestAgentConsoleTakeover: () => void
   onReleaseAgentConsoleTakeover: () => void
   onControlAgentConsoleBrowser: (command: AgentConsoleControlCommand) => void
+  onRuntimeControl: (action: RuntimeControlAction) => void
 }) {
   const active = Boolean(agentConsole?.active)
   const manualTakeover = Boolean(agentConsole?.manual_takeover)
   const screenshot = agentConsole?.screenshot_url ?? agentConsole?.screenshot ?? ''
+  const launching = Boolean(agentConsole?.browser_launching)
+  const visible = Boolean(agentConsole?.browser_visible)
+  const takeoverStateLabel = !active
+    ? '启动后可接管'
+    : manualTakeover
+      ? '用户正在真实浏览器中接管'
+      : launching
+        ? '浏览器启动中'
+      : visible
+        ? 'Agent 可接管'
+        : '等待窗口可见'
+  const lifecycleStatus = !active
+    ? diagnosticBlocked
+      ? '只读检查未通过，执行浏览器暂不启动'
+      : '执行浏览器待启动'
+    : manualTakeover
+      ? '人工正在接管真实浏览器'
+      : launching
+        ? '正在启动真实浏览器'
+      : visible
+        ? '真实浏览器已启动，Agent 可控'
+        : '浏览器会话已创建，等待窗口可见'
+  const lifecycleNext = !active
+    ? diagnosticBlocked
+      ? '先运行只读复验；填写账号密码后可单独打开登录/人工处理浏览器。'
+      : '点击打开执行浏览器，进入独立 Profile 浏览器。'
+    : manualTakeover
+      ? '完成人工处理后点击交还 Agent。'
+      : launching
+        ? '正在打开独立 Profile 浏览器；控制台会自动刷新状态。'
+      : visible
+        ? '可刷新画面、人工接管，或使用高级浏览器控制。'
+        : '等待窗口显示；如长时间无响应，可关闭后重试。'
   return (
     <div className="agent-console-controls">
       <div className="agent-console-controls__status">
         <span className={`status-pill ${active ? 'ok' : 'muted'}`}>{active ? '浏览器会话中' : '未打开浏览器'}</span>
-        <span className={`status-pill ${agentConsole?.browser_visible ? 'ok' : active ? 'warn' : 'muted'}`}>
-          {agentConsole?.browser_visible ? '窗口可见' : '窗口未显示'}
+        <span className={`status-pill ${visible ? 'ok' : launching ? 'warn' : active ? 'warn' : 'muted'}`}>
+          {visible ? '窗口可见' : launching ? '正在启动' : '窗口未显示'}
         </span>
         <span className={`status-pill ${manualTakeover ? 'warn' : 'muted'}`}>
-          {manualTakeover ? '用户正在真实浏览器中接管' : 'Agent 可接管'}
+          {takeoverStateLabel}
         </span>
         <span className="status-pill warn">不会发布</span>
       </div>
-      <details className="agent-console-controls__fields inline-disclosure">
-        <summary>技术详情</summary>
-        <div className="agent-console-controls__field-grid">
-          <StatusField label="session_id" value={agentConsole?.session_id} />
-          <StatusField label="last_step" value={agentConsole?.last_step_code ?? agentConsole?.hud?.state} />
-          <StatusField label="profile_dir" value={agentConsole?.profile_dir} />
-          <StatusField label="current_url" value={agentConsole?.current_url ?? agentConsole?.target_url} />
-          <StatusField label="screenshot" value={screenshot} />
+      <div className={`agent-console-lifecycle ${diagnosticBlocked && !active ? 'is-blocked' : active ? 'is-active' : ''}`} aria-label="真实浏览器会话生命周期">
+        <strong>{lifecycleStatus}</strong>
+        <span>{lifecycleNext}</span>
+        {diagnosticBlocked && !active && <small>{diagnosticBlockReason}</small>}
+        {!diagnosticBlocked && realSaveBlocked && !active && <small>{realSaveBlockReason}</small>}
+        {diagnosticBlocked && !active && (
+          <div className="agent-console-lifecycle__actions">
+            <button className="button button--secondary" type="button" disabled={busy} onClick={() => onRuntimeControl('run_l2_readonly_probe')}>
+              运行只读复验
+            </button>
+          </div>
+        )}
+      </div>
+      <div className="agent-console-controls__mission">
+        <strong>控制台 Agent 模式</strong>
+        <span>实时操控独立真实浏览器窗口，页面动作来自任务配置和人工放行。控制台不播放截图；截图只作为证据路径，不会启动保存或发布。</span>
+        <div>
+          <b>1 登录/接入</b>
+          <b>2 只读定位</b>
+          <b>3 人工放行后只保存</b>
         </div>
-      </details>
+      </div>
       <div className="agent-console-controls__actions">
-        <button
-          className="button button--secondary"
-          type="button"
-          onClick={onOpenDxmLogin}
-          disabled={busy}
-          title="登录和人工处理不要求 L2；只用于打开真实店小秘窗口，不启动保存。"
-        >
-          登录/人工处理真实浏览器
-        </button>
-        <button
-          className="button button--quiet"
-          type="button"
-          onClick={onContinueDxmLogin}
-          disabled={busy}
-          title="验证码、短信或人工确认完成后，用这个按钮让系统重新检测 DXM 登录态。"
-        >
-          验证码已完成，检测登录态
-        </button>
         <button
           className="button button--quiet"
           type="button"
@@ -2197,29 +3078,61 @@ function AgentConsoleControls({
           className="button button--quiet"
           type="button"
           onClick={onStartAgentConsole}
-          disabled={busy || !selectedTask || diagnosticBlocked}
-          title={diagnosticBlocked ? diagnosticBlockReason : realSaveBlocked ? realSaveBlockReason : '打开执行观察浏览器；保存前仍需人工确认'}
+          disabled={busy || !selectedTask || diagnosticBlocked || active || launching}
+          title={active ? '当前独立真实浏览器会话正在运行。' : diagnosticBlocked ? diagnosticBlockReason : realSaveBlocked ? realSaveBlockReason : '打开执行观察浏览器；保存前仍需人工确认'}
         >
-          启动执行观察
-        </button>
-        <button className="button button--quiet" type="button" onClick={onSnapshotAgentConsole} disabled={busy || !active}>
-          刷新当前画面
-        </button>
-        <button className="button button--quiet" type="button" onClick={onRequestAgentConsoleTakeover} disabled={busy || !active}>
-          人工接管真实浏览器
-        </button>
-        <button className="button button--quiet" type="button" onClick={onReleaseAgentConsoleTakeover} disabled={busy || !active || !manualTakeover}>
-          交还 Agent
-        </button>
-        <button className="button button--secondary" type="button" onClick={onStopAgentConsole} disabled={busy || !active}>
-          关闭浏览器
+          {launching ? '执行浏览器启动中' : active ? '执行浏览器已打开' : '打开执行浏览器'}
         </button>
       </div>
-      <BrowserControlPad
-        agentConsole={agentConsole}
-        busy={busy}
-        onControlAgentConsoleBrowser={onControlAgentConsoleBrowser}
-      />
+      <details className="agent-console-controls__advanced agent-console-controls__operator-drawer inline-disclosure">
+        <summary>真实浏览器操作细节</summary>
+        <div className="agent-console-controls__operator-grid">
+          <DxmLoginInlineForm
+            draft={dxmLoginDraft}
+            busy={busy}
+            onDraftChange={onDxmLoginDraftChange}
+            onSubmit={onOpenDxmLogin}
+            onContinue={onContinueDxmLogin}
+            compact
+          />
+          <details className="agent-console-controls__advanced inline-disclosure">
+            <summary>真实浏览器会话生命周期</summary>
+            <div className="agent-console-controls__session">
+              <button className="button button--quiet" type="button" onClick={onSnapshotAgentConsole} disabled={busy || !active}>
+                刷新当前画面
+              </button>
+              <button className="button button--quiet" type="button" onClick={onRequestAgentConsoleTakeover} disabled={busy || !active}>
+                人工接管真实浏览器
+              </button>
+              <button className="button button--quiet" type="button" onClick={onReleaseAgentConsoleTakeover} disabled={busy || !active || !manualTakeover}>
+                交还 Agent
+              </button>
+              <button className="button button--secondary" type="button" onClick={onStopAgentConsole} disabled={busy || !active}>
+                关闭浏览器
+              </button>
+              <small>启动、接管、交还和关闭的对象都是独立真实浏览器窗口；控制台不播放截图，不会启动保存或发布。</small>
+            </div>
+          </details>
+          <details className="agent-console-controls__advanced inline-disclosure">
+            <summary>高级浏览器控制</summary>
+            <BrowserControlPad
+              agentConsole={agentConsole}
+              busy={busy}
+              onControlAgentConsoleBrowser={onControlAgentConsoleBrowser}
+            />
+          </details>
+          <details className="agent-console-controls__fields inline-disclosure">
+            <summary>技术详情</summary>
+            <div className="agent-console-controls__field-grid">
+              <StatusField label="session_id" value={agentConsole?.session_id} />
+              <StatusField label="last_step" value={agentConsole?.last_step_code ?? agentConsole?.hud?.state} />
+              <StatusField label="profile_dir" value={agentConsole?.profile_dir} />
+              <StatusField label="current_url" value={agentConsole?.current_url ?? agentConsole?.target_url} />
+              <StatusField label="screenshot" value={screenshot} />
+            </div>
+          </details>
+        </div>
+      </details>
       {agentConsoleError && <div className="agent-console-controls__error console-error">{agentConsoleError}</div>}
     </div>
   )
@@ -2259,13 +3172,16 @@ function BrowserControlPad({
       </div>
       <small>仅控制当前独立浏览器窗口；不会绕过任务门禁或发布隔离。</small>
       <div className="browser-control-pad__row browser-control-pad__row--wide">
-        <input
-          value={url}
-          onChange={(event) => setUrl(event.target.value)}
-          placeholder="https://www.dianxiaomi.com/"
-          aria-label="导航 URL"
-          disabled={busy}
-        />
+        <label className="browser-control-pad__selector-field">
+          <span>目标 URL</span>
+          <input
+            value={url}
+            onChange={(event) => setUrl(event.target.value)}
+            placeholder="https://www.dianxiaomi.com/"
+            aria-label="导航 URL"
+            disabled={busy}
+          />
+        </label>
         <button
           className="button button--quiet"
           type="button"
@@ -2284,13 +3200,16 @@ function BrowserControlPad({
         </button>
       </div>
       <div className="browser-control-pad__row browser-control-pad__row--wide">
-        <input
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          placeholder="输入到焦点"
-          aria-label="输入到焦点"
-          disabled={busy}
-        />
+        <label className="browser-control-pad__selector-field">
+          <span>输入文本</span>
+          <input
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            placeholder="输入到焦点"
+            aria-label="输入到焦点"
+            disabled={busy}
+          />
+        </label>
         <button
           className="button button--quiet"
           type="button"
@@ -2302,7 +3221,7 @@ function BrowserControlPad({
       </div>
       <div className="browser-control-pad__row browser-control-pad__row--wide browser-control-pad__row--selector">
         <label className="browser-control-pad__selector-field">
-          <span>选择器定位</span>
+          <span>CSS 选择器</span>
           <input
             value={selector}
             onChange={(event) => setSelector(event.target.value)}
@@ -2329,16 +3248,19 @@ function BrowserControlPad({
         </button>
       </div>
       <div className="browser-control-pad__row">
-        <select value={key} onChange={(event) => setKey(event.target.value)} aria-label="按键" disabled={busy}>
-          <option value="Enter">Enter</option>
-          <option value="Tab">Tab</option>
-          <option value="Escape">Escape</option>
-          <option value="Backspace">Backspace</option>
-        </select>
+        <label className="browser-control-pad__selector-field">
+          <span>按键</span>
+          <select value={key} onChange={(event) => setKey(event.target.value)} aria-label="按键" disabled={busy}>
+            <option value="Enter">Enter</option>
+            <option value="Tab">Tab</option>
+            <option value="Escape">Escape</option>
+            <option value="Backspace">Backspace</option>
+          </select>
+        </label>
         <button className="button button--quiet" type="button" disabled={disabled} onClick={() => onControlAgentConsoleBrowser({ action: 'press', key })}>
           按键
         </button>
-        <span>点击坐标：直接点上方真实浏览器视口截图。</span>
+        <span>坐标点击会发送到独立真实浏览器窗口；控制台仅显示会话状态和证据路径。</span>
       </div>
     </div>
   )
@@ -2377,17 +3299,42 @@ function RuntimeLogPreview({
   logs,
   source,
   error,
+  onSourceChange,
 }: {
   logs: Record<RuntimeLogSource, RuntimeLogResponse | null>
   source: RuntimeLogSource
   error: string | null
+  onSourceChange: (source: RuntimeLogSource) => void
 }) {
   const current = logs[source]
   const items: RuntimeLogItem[] = current?.items ?? current?.lines.map((line) => ({ line, level: 'info', tags: [] })) ?? []
-  const visibleItems = items.slice(-4)
+  const visibleItems = items.slice(-7)
+  const labels = runtimeLogSourceLabels()
+  const refreshMeta = runtimeLogRefreshMeta(current, items.length)
 
   return (
     <div className="runtime-log-preview" aria-live="polite">
+      <div className="runtime-log-preview__head">
+        <strong>运行日志</strong>
+        <span className={`runtime-log-refresh runtime-log-refresh--${refreshMeta.tone}`}>
+          {refreshMeta.status}
+        </span>
+      </div>
+      <div className="runtime-log-tabs runtime-log-tabs--compact" role="tablist" aria-label="运行日志来源">
+        {(Object.keys(labels) as RuntimeLogSource[]).map((item) => (
+          <button
+            key={item}
+            type="button"
+            className={item === source ? 'is-active' : ''}
+            onClick={() => onSourceChange(item)}
+          >
+            {labels[item]}
+          </button>
+        ))}
+      </div>
+      <div className={`runtime-log-refresh runtime-log-refresh--${refreshMeta.tone}`}>
+        <small>{refreshMeta.detail}</small>
+      </div>
       {error && <div className="console-error">{error}</div>}
       {visibleItems.length ? (
         visibleItems.map((item, index) => (
@@ -2399,7 +3346,7 @@ function RuntimeLogPreview({
       ) : (
         <span>{current?.exists === false ? '日志文件尚未生成。' : '等待服务写入日志...'}</span>
       )}
-      <small>{current?.path ?? 'data/*.log'}</small>
+      <small>日志来源：{labels[source]} / 正在实时刷新</small>
     </div>
   )
 }
@@ -2426,15 +3373,10 @@ function RuntimeLogPanel({
   const current = logs[source]
   const logViewRef = useRef<HTMLDivElement | null>(null)
   const [autoFollow, setAutoFollow] = useState(true)
-  const labels: Record<RuntimeLogSource, string> = {
-    backend: '后端',
-    frontend: '前端',
-    launcher: '启动器',
-    npm: '依赖安装',
-    task: '任务',
-    agent: '浏览器 Agent',
-  }
+  const labels = runtimeLogSourceLabels()
+
   const items: RuntimeLogItem[] = current?.items ?? current?.lines.map((line) => ({ line, level: 'info', tags: [] })) ?? []
+  const refreshMeta = runtimeLogRefreshMeta(current, items.length)
 
   useEffect(() => {
     if (!autoFollow || !logViewRef.current) return
@@ -2460,6 +3402,9 @@ function RuntimeLogPanel({
       <div className="runtime-log-toolbar">
         <strong>实时日志中心</strong>
         <span>后端、前端、启动器、任务和浏览器 Agent 日志会每 1.5 秒增量刷新。</span>
+        <span className={`runtime-log-toolbar__refresh runtime-log-toolbar__refresh--${refreshMeta.tone}`}>
+          {refreshMeta.status} · {refreshMeta.detail}
+        </span>
         <label>
           <input
             type="checkbox"
@@ -2508,9 +3453,31 @@ function RuntimeLogPanel({
           ? items.map((item, index) => <RuntimeLogLine key={`${source}-${index}`} item={item} />)
           : <span>{current?.exists === false ? '日志文件尚未生成，启动服务后会自动出现。' : '等待日志刷新...'}</span>}
       </div>
-      <small>{current?.path ?? 'data/*.log'} / 标签：启动、登录检测、配置校验、打开 DXM、点击、填写、保存、网络响应、报告生成</small>
+      <small>日志来源：{labels[source]} / 标签：启动、登录检测、配置校验、打开 DXM、点击、填写、保存、网络响应、报告生成</small>
     </div>
   )
+}
+
+function runtimeLogRefreshMeta(current: RuntimeLogResponse | null | undefined, itemCount: number) {
+  if (!current) {
+    return { status: '等待首次刷新', detail: '正在连接日志接口', tone: 'pending' }
+  }
+  if (current.exists === false) {
+    return { status: '日志未生成', detail: '服务启动后会自动出现', tone: 'pending' }
+  }
+  const refreshedAt = current.fetchedAt ? formatTime(current.fetchedAt) : '刚刚'
+  return { status: '正在实时刷新', detail: `最后刷新 ${refreshedAt} · 当前 ${itemCount} 条`, tone: 'ok' }
+}
+
+function runtimeLogSourceLabels(): Record<RuntimeLogSource, string> {
+  return {
+    backend: '后端',
+    frontend: '前端',
+    launcher: '启动器',
+    npm: '依赖安装',
+    task: '任务',
+    agent: '浏览器 Agent',
+  }
 }
 
 function RuntimeLogLine({ item }: { item: RuntimeLogItem }) {
@@ -2546,19 +3513,22 @@ export function EvidenceTimeline({
           {!evidencePoints.length && (
             <EmptyState
               title="暂无可验收证据"
-              detail="当前真实写入未放行时，保存结果、未发布证明和网络/HAR 为 0 条是预期阻断；只有 L3 金丝雀完成后才生成可验收证据等级。"
+              detail="当前真实写入未放行时，保存结果、未发布证明和网络/HAR 为 0 条是预期阻断；只有单商品只保存完成后才生成可验收证据等级。"
               actions={(
                 <>
                   <button className="button button--secondary" type="button" onClick={onShowTasks}>查看任务门禁</button>
-                  <button className="button button--quiet" type="button" onClick={onShowConsole}>查看只读诊断</button>
+                  <button className="button button--quiet" type="button" onClick={onShowConsole}>查看只读证据</button>
                 </>
               )}
             />
           )}
         </div>
       </div>
-      <div className="module-card span-3">
-        <ModuleHead title="原始证据" meta={`${evidences.length} 条`} />
+      <details className="module-card span-3 disclosure-card evidence-raw-disclosure">
+        <summary>
+          原始证据明细
+          <span>{evidences.length} 条，按需展开</span>
+        </summary>
         <div className="evidence-timeline">
           {evidences.map((evidence) => (
             <EvidenceRow key={evidence.id} evidence={evidence} />
@@ -2571,15 +3541,18 @@ export function EvidenceTimeline({
             />
           )}
         </div>
-      </div>
-      <div className="module-card span-3">
-        <ModuleHead title="证据等级说明" meta="验收导向" />
+      </details>
+      <details className="module-card span-3 disclosure-card evidence-grade-disclosure">
+        <summary>
+          证据等级说明
+          <span>验收口径</span>
+        </summary>
         <div className="grade-grid">
           <GradeCard grade="A" title="可直接验收" detail="同屏绑定任务、账号、商品、保存结果，并可回溯文件。" />
           <GradeCard grade="B" title="可辅助验收" detail="有截图或结构化记录，但缺少部分上下文绑定。" />
           <GradeCard grade="C" title="只能提示风险" detail="前端或日志提示，不能单独作为交付验收证据。" />
         </div>
-      </div>
+      </details>
     </section>
   )
 }
@@ -2587,6 +3560,9 @@ export function EvidenceTimeline({
 export function ExceptionQueue({ workspace, selectedTask }: CommonProps) {
   const exceptions = selectedTask ? workspace.exceptions.filter((item) => item.task_id === selectedTask.id) : workspace.exceptions
   const presentedAcceptanceGaps = presentAcceptanceGaps(workspace.acceptanceGaps, isRealWriteExpectedBlocked(workspace))
+  const emptyExceptionDetail = selectedTask?.status === 'completed'
+    ? '当前任务暂无异常记录；如需复核保存链路，请查看报告中心和证据中心。'
+    : '未执行不代表通过；执行失败、字段缺失和门禁阻断会进入异常池。'
   return (
     <section className="module-layout" aria-label="异常池">
       <div className="module-card span-2">
@@ -2596,7 +3572,7 @@ export function ExceptionQueue({ workspace, selectedTask }: CommonProps) {
             <ExceptionCard key={item.id} item={item} />
           ))}
           {!exceptions.length && (
-            <EmptyState title="暂无异常" detail="未执行不代表通过；执行失败、字段缺失和门禁阻断会进入异常池。" />
+            <EmptyState title="暂无异常" detail={emptyExceptionDetail} />
           )}
         </div>
       </div>
@@ -2606,6 +3582,16 @@ export function ExceptionQueue({ workspace, selectedTask }: CommonProps) {
       </div>
     </section>
   )
+}
+
+function humanPublishGuardStatus(status?: string | null) {
+  return ({
+    safe_unpublished: '保存后未发布',
+    unsafe_publish_risk: '发现发布风险',
+    blocked: '已暂停',
+    waiting: '等待执行',
+    unknown: '等待执行',
+  } as Record<string, string>)[status ?? 'unknown'] ?? status ?? '等待执行'
 }
 
 export function ReportCenter({
@@ -2633,7 +3619,7 @@ export function ReportCenter({
     <section className="module-layout" aria-label="报告中心" data-testid="report-center-section">
       <FinalDeliveryCheckCard finalCheck={finalCheck} />
       <div className="module-card span-3">
-        <ModuleHead title="保存隔离摘要" meta={workspace.publishGuardState?.status ?? '等待执行'} />
+        <ModuleHead title="保存隔离摘要" meta={humanPublishGuardStatus(workspace.publishGuardState?.status)} />
         <div className="report-check-grid">
           <BusinessReportCheckRow count={businessReportCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
           <EvidenceCheckRow label="保存结果" count={saveResultCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
@@ -2641,7 +3627,7 @@ export function ReportCenter({
           <EvidenceCheckRow label="网络/HAR" count={networkHarCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
         </div>
         {realWriteExpectedBlocked && (
-          <p className="delivery-check-card__warning">L3 未放行前不要求生成真实保存证据；0 条代表当前自动化真实保存按门禁锁定。</p>
+          <p className="delivery-check-card__warning">人工确认前不要求生成新的真实保存证据；0 条代表当前自动化真实保存按规则暂停。</p>
         )}
       </div>
       <div className="module-card span-3">
@@ -2652,22 +3638,25 @@ export function ReportCenter({
           ))}
           {!reports.length && (
             <EmptyState
-              title={realWriteExpectedBlocked ? 'L3 真实保存报告待放行' : '暂无报告'}
+              title={realWriteExpectedBlocked ? '真实保存报告待人工确认' : '暂无报告'}
               detail={realWriteExpectedBlocked
-                ? '真实写入 BLOCKED 时不要求生成业务保存报告；自动化工作台交付自检报告见上方最近交付自检。'
-                : 'L3 金丝雀完成并生成未发布证明后，这里会展示报告和证据路径。当前可先查看 L2 诊断和证据缺口。'}
+                ? '真实写入未确认前不要求生成业务保存报告；自动化工作台验收摘要见上方。'
+                : '单商品只保存完成并生成未发布证明后，这里会展示报告和证据路径。当前可先查看只读诊断和证据缺口。'}
               actions={(
                 <>
                   <button className="button button--secondary" type="button" onClick={onShowEvidence}>查看证据缺口</button>
-                  <button className="button button--quiet" type="button" onClick={onShowConsole}>查看只读诊断</button>
+                  <button className="button button--quiet" type="button" onClick={onShowConsole}>查看只读证据</button>
                 </>
               )}
             />
           )}
         </div>
       </div>
-      <div className="module-card span-3 l2-next-step-card">
-        <ModuleHead title="重新验证 L2" meta="需人工批准" />
+      <details className="module-card span-3 disclosure-card l2-next-step-card">
+        <summary>
+          重新验证只读检查
+          <span>高级复核，需人工批准</span>
+        </summary>
         <div className="l2-allowlist-review">
           <div className="l2-allowlist-review__head">
             <strong>L2 allowlist 候选处理</strong>
@@ -2692,16 +3681,19 @@ export function ReportCenter({
         </div>
         <p>证据目录：{l2ProbePlan.outputDir}。{l2ProbePlan.acceptanceCriteria.join(' ')}</p>
         <p>{l2ProbePlan.safetyNotes.join(' ')}</p>
-      </div>
-      <div className="module-card span-3">
-        <ModuleHead title={realWriteExpectedBlocked ? 'L3 后置报告必须覆盖' : '报告必须覆盖'} meta={realWriteExpectedBlocked ? '真实写入放行后' : '交付检查表'} />
+      </details>
+      <details className="module-card span-3 disclosure-card">
+        <summary>
+          {realWriteExpectedBlocked ? '真实保存后报告必须覆盖' : '报告必须覆盖'}
+          <span>{realWriteExpectedBlocked ? '真实写入放行后' : '交付检查表'}</span>
+        </summary>
         <div className="report-check-grid">
           <PostL3ReportCheckRow label="配置模板命中" ok={workspace.dxmReferenceTemplates.some((item) => item.templateNames.length)} realWriteExpectedBlocked={realWriteExpectedBlocked} />
           <PostL3ReportCheckRow label="执行步骤与结果" ok={workspace.logs.length > 0} realWriteExpectedBlocked={realWriteExpectedBlocked} />
           <PostL3ReportCheckRow label="证据等级 A/B/C" ok={workspace.evidences.length > 0} realWriteExpectedBlocked={realWriteExpectedBlocked} />
           <PostL3ReportCheckRow label="验收缺口已列明" ok={workspace.acceptanceGaps.length > 0} realWriteExpectedBlocked={realWriteExpectedBlocked} />
         </div>
-      </div>
+      </details>
     </section>
   )
 }
@@ -2715,6 +3707,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
   const currentGitHead = finalCheck?.current_git_head ? finalCheck.current_git_head.slice(0, 8) : '未记录'
   const browserQaGitHead = finalCheck?.browser_qa_git_head ? finalCheck.browser_qa_git_head.slice(0, 8) : '未记录'
   const finalCheckMatchesCurrent = finalCheck?.final_check_matches_current_worktree === true
+  const localWorkbenchOk = finalCheck?.local_workbench_check === 'PASS'
   const postFinalReportQaState = finalCheck?.post_final_report_qa_ok === true
     ? 'PASS'
     : finalCheck?.post_final_report_qa_ok === false
@@ -2724,57 +3717,74 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
   const reportReadiness = finalCheck?.real_dxm_write_readiness ?? '未检查'
   const runtimeGateFreshness = finalCheck?.final_check_runtime_gate_freshness ?? 'unknown'
   const runtimeGateStale = runtimeGateFreshness === 'stale_gate'
-  const realDxmMutationAllowed = finalCheck?.effective_real_dxm_mutation_allowed ?? (readiness === 'READY' && finalCheck?.real_dxm_mutation_allowed === true)
+  const realDxmMutationAllowed = finalCheck?.effective_real_dxm_mutation_allowed ?? (isReadyReadiness(readiness) && finalCheck?.real_dxm_mutation_allowed === true)
   const realDxmMutationScope = finalCheck?.effective_real_dxm_mutation_scope ?? (realDxmMutationAllowed ? finalCheck?.real_dxm_mutation_scope ?? 'controlled_single_save_only' : 'none')
   const realDxmMutationAllowedLabel = realDxmMutationAllowed
     ? `真实写入允许 true / ${realDxmMutationScope}`
     : '真实写入允许 false / none'
   const blockedReason = finalCheck?.effective_real_dxm_write_blocked_reason ?? finalCheck?.real_dxm_write_blocked_reason
   const readinessDetail = !available
-    ? '还没有读取到交付自检报告。运行 scripts\\final-delivery-check.bat 后，这里会显示最近一次验收摘要。'
-    : runtimeGateStale
-      ? '历史自检曾显示 READY，但当前运行门禁已过期或不再支持真实写入；现在按 BLOCKED 处理。'
-      : readiness === 'READY'
-      ? '当前自检显示受控 single_save READY；执行前仍需复核 L2/L3 证据、人工金丝雀批准和报告链路。批量、无人值守和发布仍需单独放行。'
-      : readiness === 'BLOCKED'
-        ? '当前预期交付态：自动化工作台可继续验收，真实保存保持阻断。BLOCKED 代表真实 L2/L3 尚未放行，不代表自动化工作台失败。'
-        : '当前真实写入状态未知，不可执行真实写入；请先重新运行交付自检并复核 L2/L3 门禁。'
+    ? '还没有读取到最近验收结果；请先运行本地验收。'
+    : runtimeGateStale && isReadyReadiness(readiness)
+      ? '最终验收报告待刷新；当前运行门禁已按最新 L2/L3 覆盖为可申请单商品只保存，源码包交付前仍需重新运行最终验收。'
+      : runtimeGateStale
+        ? '最终验收报告待刷新；请先重新运行只读复验和本地验收。'
+      : isReadyReadiness(readiness)
+      ? '单商品只保存路径已有验收记录；执行前仍需人工确认，批量、无人值守和发布仍保持关闭。'
+      : isBlockedReadiness(readiness)
+        ? '自动化工作台可继续查看和复验；真实保存暂不启动。'
+        : '当前真实写入状态未知，不可执行真实写入；请先重新运行本地验收并复核只读检查。'
+  const nextStepText = isReadyReadiness(readiness)
+    ? '复核当前任务、批准人和报告链路后，再启动单商品只保存。'
+    : '先点击任务中心的“运行只读复验”，通过后再进行人工确认保存。'
 
   return (
     <div className="module-card span-3 delivery-check-card">
-      <ModuleHead title="最近交付自检" meta={available ? checkedAt : '尚未运行'} />
+      <ModuleHead title="最近自动化验收" meta={available ? checkedAt : '尚未运行'} />
       <div className="report-check-grid">
-        <CheckRow label={`自动化工作台 ${finalCheck?.local_workbench_check ?? '未检查'}`} ok={finalCheck?.local_workbench_check === 'PASS'} />
-        <DeliveryReadinessRow readiness={readiness} />
-        <FinalCheckFreshnessRow finalCheck={finalCheck} />
-        <RuntimeGateFreshnessRow finalCheck={finalCheck} />
-        <SourcePackageCheckRow finalCheck={finalCheck} />
-        <CheckRow label={`浏览器 QA ${finalCheck?.browser_qa_ok === true ? 'PASS' : finalCheck?.browser_qa_ok === false ? 'FAIL' : '待刷新/未运行'}`} ok={finalCheck?.browser_qa_ok === true} />
         <CheckRow
-          label={`最终报告中心 QA ${postFinalReportQaState}`}
-          ok={finalCheck?.post_final_report_qa_ok === true}
-          testId="final-report-center-qa"
-          state={postFinalReportQaState}
+          label={`最终验收报告${localWorkbenchOk ? '通过' : '待刷新'}`}
+          ok={localWorkbenchOk}
+        />
+        <CheckRow
+          label={`真实保存状态：${humanReadinessLabel(readiness)}`}
+          ok={isReadyReadiness(readiness)}
+          state={isBlockedReadiness(readiness) ? 'locked' : undefined}
         />
       </div>
       <div className="delivery-check-card__body">
         <p>{readinessDetail}</p>
         {blockedReason && (
-          <p className="delivery-check-card__warning">真实写入阻断原因：{blockedReason}</p>
-        )}
-        {runtimeGateStale && (
-          <p className="delivery-check-card__warning">
-            运行门禁已覆盖历史自检：报告记录 {reportReadiness}，当前 L2={finalCheck?.current_l2_gate_status ?? 'unknown'} / L3={finalCheck?.current_l3_gate_status ?? 'unknown'}，有效状态为 {readiness}。
-          </p>
+          <p className="delivery-check-card__warning">当前原因：{humanGateDetail(blockedReason)}</p>
         )}
         <div className="delivery-check-card__next-step">
           <strong>下一步</strong>
-          <span>
-            {readiness === 'READY'
-              ? '交付源码包前运行 clean worktree 验收；扩大到 claim_only / batch_save 前重新建立对应 L2/L3 证据链。'
-              : '人工评审 allowlist 候选 - 改代码/配置 - 同一 run-id 复跑 data_acquisition + draft_box - 通过后再申请受控 L3 single_save。'}
-          </span>
+          <span>{nextStepText}</span>
         </div>
+        <details className="disclosure-card delivery-check-card__appendix">
+          <summary>
+            验收人附录
+            <span>仅供验收复核</span>
+          </summary>
+          <div className="report-check-grid">
+            <CheckRow label={`自动化工作台 ${finalCheck?.local_workbench_check ?? '未检查'}`} ok={finalCheck?.local_workbench_check === 'PASS'} />
+            <DeliveryReadinessRow readiness={readiness} />
+            <FinalCheckFreshnessRow finalCheck={finalCheck} />
+            <RuntimeGateFreshnessRow finalCheck={finalCheck} />
+            <SourcePackageCheckRow finalCheck={finalCheck} />
+            <CheckRow label={`浏览器 QA ${finalCheck?.browser_qa_ok === true ? 'PASS' : finalCheck?.browser_qa_ok === false ? 'FAIL' : '待刷新/未运行'}`} ok={finalCheck?.browser_qa_ok === true} />
+            <CheckRow
+              label={`最终报告中心 QA ${postFinalReportQaState}`}
+              ok={finalCheck?.post_final_report_qa_ok === true}
+              testId="final-report-center-qa"
+              state={postFinalReportQaState}
+            />
+          </div>
+          {runtimeGateStale && (
+            <p className="delivery-check-card__warning">
+              运行门禁已覆盖历史自检：报告记录 {reportReadiness}，当前 L2={finalCheck?.current_l2_gate_status ?? 'unknown'} / L3={finalCheck?.current_l3_gate_status ?? 'unknown'}，有效状态为 {readiness}。
+            </p>
+          )}
         <div className="delivery-check-card__release-gates" aria-label="真实写入放行前置">
           <strong>真实写入放行前置</strong>
           <ol>
@@ -2823,6 +3833,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
             <code className="delivery-check-card__command">scripts\final-delivery-check.bat -RequireCleanWorktree</code>
           </div>
         </div>
+        </details>
       </div>
     </div>
   )
@@ -2844,16 +3855,231 @@ function shortHash(value?: string | null) {
   return value ? value.slice(0, 12) : '未记录'
 }
 
+function TaskCurrentActionPanel({
+  selectedTask,
+  workspace,
+  configPreview,
+  l2Gate,
+  l3Gate,
+  startLabel,
+  startDisabled,
+  busy,
+  onStartTask,
+  onShowConfig,
+  onShowConsole,
+  onShowReports,
+}: {
+  selectedTask: Task | null
+  workspace: DeliveryWorkspace
+  configPreview: ConfigPreview | null
+  l2Gate?: DeliveryWorkspace['regressionGates'][number]
+  l3Gate?: DeliveryWorkspace['regressionGates'][number]
+  startLabel: string
+  startDisabled: boolean
+  busy: boolean
+  onStartTask: () => void
+  onShowConfig: () => void
+  onShowConsole: () => void
+  onShowReports: () => void
+}) {
+  const storeName = selectedTask?.payload.store_name ?? workspace.stores[0]?.name ?? '未绑定店铺'
+  const categoryName = selectedTask?.payload.category_name ?? '未指定类目'
+  const configOk = selectedTask ? configPreview?.ok === true : false
+  const l2Ready = l2Gate?.status === 'passed'
+  const l3Ready = l3Gate?.status === 'passed'
+  const selectedTaskCompleted = selectedTask?.status === 'completed'
+  const primaryDisabled = busy || (!selectedTaskCompleted && startDisabled)
+  const primaryAction = selectedTaskCompleted ? onShowReports : onStartTask
+  const configCheckOk = selectedTaskCompleted || configOk
+  const l2CheckOk = selectedTaskCompleted || l2Ready
+  const l3CheckOk = selectedTaskCompleted || l3Ready
+  const configCheckLabel = selectedTaskCompleted ? '已完成' : configOk ? '已就绪' : selectedTask ? '待补齐' : '待选择任务'
+  const l2CheckLabel = selectedTaskCompleted ? '已完成' : humanGateStateLabel(l2Gate?.status ?? 'not_run')
+  const l3CheckLabel = selectedTaskCompleted ? '已完成' : humanGateStateLabel(l3Gate?.status ?? 'blocked')
+  const decision = taskStartDecision({
+    selectedTask,
+    configOk,
+    l2Ready,
+    l3Ready,
+    startDisabled,
+    startLabel,
+    busy,
+  })
+
+  return (
+    <div className="task-current-panel" aria-label="当前任务执行">
+      <div className="task-current-panel__main">
+        <div>
+          <span className="task-current-panel__eyebrow">当前任务</span>
+          <h1>{selectedTask ? displayTaskName(selectedTask) : '先选择或创建单商品只保存任务'}</h1>
+          {selectedTask && (
+            <span className="task-current-panel__task-id">{`当前任务 #${selectedTask.id}`}</span>
+          )}
+          <p>{selectedTask ? `${storeName} / ${categoryName} / ${humanTaskModeLabel(selectedTask.mode)}` : '默认只展示真实自动化主路径；创建新任务和历史批次已收起。'}</p>
+        </div>
+        <button
+          className="button button--primary"
+          type="button"
+          onClick={primaryAction}
+          disabled={primaryDisabled}
+          aria-disabled={primaryDisabled}
+          data-testid="task-start-button"
+          data-start-disabled={primaryDisabled ? 'true' : 'false'}
+          data-section={selectedTaskCompleted ? 'reports' : undefined}
+        >
+          {startLabel}
+        </button>
+      </div>
+      <div className={`task-current-panel__decision task-current-panel__decision--${decision.tone}`} aria-label="启动判定">
+        <span>
+          <strong>当前能做</strong>
+          <b>{decision.scope}</b>
+        </span>
+        <span>
+          <strong>原因</strong>
+          <b>{decision.reason}</b>
+        </span>
+        <span>
+          <strong>下一步</strong>
+          <b>{decision.next}</b>
+        </span>
+      </div>
+      <div className="task-current-panel__checks" aria-label="启动检查">
+        <span className={configCheckOk ? 'is-ok' : 'is-warn'}>
+          <strong>配置</strong>
+          <b>{configCheckLabel}</b>
+        </span>
+        <span className={l2CheckOk ? 'is-ok' : 'is-warn'}>
+          <strong>只读检查</strong>
+          <b>{l2CheckLabel}</b>
+        </span>
+        <span className={l3CheckOk ? 'is-ok' : 'is-warn'}>
+          <strong>人工确认</strong>
+          <b>{l3CheckLabel}</b>
+        </span>
+      </div>
+      <div className="task-current-panel__actions">
+        <button className="button button--quiet" type="button" onClick={onShowConfig}>补齐配置</button>
+        <button className="button button--quiet" type="button" onClick={onShowConsole}>打开执行控制台复核</button>
+        <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">查看复验计划</button>
+      </div>
+    </div>
+  )
+}
+
+function SingleSaveRecoveryGuide({
+  selectedTask,
+  latestSingleSaveTask,
+  selectedTaskIsUnreleasedRealMode,
+  configBlocksStart,
+  l2BlocksStart,
+  l3BlocksStart,
+  canCreateRealTask,
+  busy,
+  onSelectSingleSave,
+  onCreateSingleSave,
+  onRunL2Probe,
+  onShowConfig,
+  onShowReports,
+}: {
+  selectedTask: Task | null
+  latestSingleSaveTask: Task | null
+  selectedTaskIsUnreleasedRealMode: boolean
+  configBlocksStart: boolean
+  l2BlocksStart: boolean
+  l3BlocksStart: boolean
+  canCreateRealTask: boolean
+  busy: boolean
+  onSelectSingleSave: () => void
+  onCreateSingleSave: () => void
+  onRunL2Probe: () => void
+  onShowConfig: () => void
+  onShowReports: () => void
+}) {
+  const steps = [
+    {
+      title: '回到单商品只保存',
+      detail: selectedTaskIsUnreleasedRealMode
+        ? `${humanTaskModeLabel(selectedTask?.mode)} 当前未发布；不能复用认领/批量保存证据。`
+        : latestSingleSaveTask
+          ? `可继续使用最近单商品只保存任务：#${latestSingleSaveTask.id} ${displayTaskName(latestSingleSaveTask)}`
+          : '还没有可用单商品只保存任务，需要用当前店铺和商品创建一个。',
+      done: Boolean(selectedTask?.mode === 'single_save' && !selectedTaskIsUnreleasedRealMode),
+    },
+    {
+      title: '补齐 DXM 编辑页配置',
+      detail: configBlocksStart ? '当前任务配置预检未通过，先回配置中心补字段。' : '配置预检未阻断当前任务。',
+      done: !configBlocksStart,
+    },
+    {
+      title: '刷新只读页面检查',
+      detail: l2BlocksStart ? '商品采集页与草稿箱页必须同一轮检查、不过期、无写请求。' : '只读页面检查当前未阻断启动判断。',
+      done: !l2BlocksStart,
+    },
+    {
+      title: '填写批准人并启动保存',
+      detail: l3BlocksStart ? '只读检查通过后再填写批准人，只启动一个单商品只保存任务。' : '通过后仍需页面内填写批准人。',
+      done: !l3BlocksStart,
+    },
+  ]
+
+  return (
+    <div className="single-save-recovery-guide" data-testid="single-save-recovery-guide">
+      <div className="single-save-recovery-guide__head">
+        <div>
+          <strong>恢复到单商品只保存</strong>
+          <span>当前任务不可直接启动时，按这里回到真实自动化可执行路径。</span>
+        </div>
+        <span className="guard-chip guard-chip--danger">不放行认领/批量保存</span>
+      </div>
+      <div className="single-save-recovery-guide__steps">
+        {steps.map((step, index) => (
+          <article key={step.title} className={step.done ? 'is-done' : 'is-current'}>
+            <span>{index + 1}</span>
+            <div>
+              <strong>{step.title}</strong>
+              <small>{step.detail}</small>
+            </div>
+          </article>
+        ))}
+      </div>
+      <div className="single-save-recovery-guide__actions">
+        <button className="button button--secondary" type="button" onClick={onSelectSingleSave} disabled={busy || !latestSingleSaveTask}>
+          选择最近单商品只保存任务
+        </button>
+        <button className="button button--quiet" type="button" onClick={onCreateSingleSave} disabled={busy || !canCreateRealTask}>
+          创建新的单商品只保存任务
+        </button>
+        {configBlocksStart && (
+          <button className="button button--quiet" type="button" onClick={onShowConfig}>
+            去补配置
+          </button>
+        )}
+        {(l2BlocksStart || l3BlocksStart) && (
+          <button className="button button--quiet" type="button" onClick={onRunL2Probe} disabled={busy}>
+            运行只读复验
+          </button>
+        )}
+        {(l2BlocksStart || l3BlocksStart) && (
+          <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">
+            查看复验计划
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function RealModeReleasePlanPanel({ items }: { items: DeliveryWorkspace['realModeReleasePlan']['modes'] }) {
   if (!items.length) return null
   return (
     <div className="real-mode-release-panel" aria-label="未发布真实模式放行准备清单">
       <div className="real-mode-release-panel__head">
         <div>
-          <strong>claim_only / batch_save 放行准备</strong>
-          <span>claim_only 当前未发布；batch_save 当前未发布；不能复用 single_save 证据。</span>
+          <strong>认领 / 批量保存放行准备</strong>
+          <span>认领当前未发布；批量保存当前未发布；不能复用单商品只保存证据。</span>
         </div>
-        <span className="guard-chip guard-chip--danger">仅受控 single_save</span>
+        <span className="guard-chip guard-chip--danger">仅受控单商品只保存</span>
       </div>
       <div className="real-mode-release-panel__grid">
         {items.map((item) => (
@@ -2874,14 +4100,14 @@ function RealModeReleasePlanPanel({ items }: { items: DeliveryWorkspace['realMod
           </article>
         ))}
       </div>
-      <p>批量大小上限、逐商品未发布证明、部分失败报告、回滚/人工接管全部完成前，batch_save 不进入 runner。</p>
+      <p>批量大小上限、逐商品未发布证明、部分失败报告、回滚/人工接管全部完成前，批量保存不启动真实浏览器保存。</p>
     </div>
   )
 }
 
 function humanReadinessCheckLabel(id: string, fallback: string) {
   return ({
-    dedicated_l2_l3: '独立 L2/L3 证据链',
+    dedicated_l2_l3: '独立只读与真实保存证据链',
     claim_ownership_proof: '目标草稿领取归属证明',
     no_editor_or_save: '不打开编辑页、不触发保存请求证明',
     rollback_release: '归属释放或人工回滚路径',
@@ -2893,12 +4119,109 @@ function humanReadinessCheckLabel(id: string, fallback: string) {
 
 function humanReleaseBlocker(value?: string) {
   if (!value) return '需要独立验收后放行'
-  if (value.includes('cannot reuse single_save')) return '不能复用 single_save 证据'
+  if (value.includes('cannot reuse single_save')) return '不能复用单商品只保存证据'
   if (value.includes('claim marker')) return '领取标记写入语义需独立审计'
   if (value.includes('rollback')) return '回滚/人工接管流程未验收'
   if (value.includes('batch failure')) return '批量失败隔离与回滚未验收'
   if (value.includes('unattended')) return '无人值守执行仍未开放'
   return value
+}
+
+function taskStartDecision({
+  selectedTask,
+  configOk,
+  l2Ready,
+  l3Ready,
+  startDisabled,
+  startLabel,
+  busy,
+}: {
+  selectedTask: Task | null
+  configOk: boolean
+  l2Ready: boolean
+  l3Ready: boolean
+  startDisabled: boolean
+  startLabel: string
+  busy: boolean
+}) {
+  if (!selectedTask) {
+    return {
+      scope: '选择或创建任务',
+      reason: '尚未选择单商品只保存任务。',
+      next: '创建真实任务，或从历史批次选择一个单商品只保存任务。',
+      tone: 'warn',
+    }
+  }
+  if (selectedTask.status === 'completed') {
+    return {
+      scope: '查看报告与证据',
+      reason: '当前任务已完成，不需要再次启动。',
+      next: '查看保存结果、未发布证明和复验计划。',
+      tone: 'ok',
+    }
+  }
+  if (selectedTask.status === 'running') {
+    return {
+      scope: '等待当前任务运行',
+      reason: '任务正在运行，避免重复启动。',
+      next: '到执行控制台查看真实浏览器、日志和步骤。',
+      tone: 'ok',
+    }
+  }
+  if (selectedTask.status !== 'draft') {
+    return {
+      scope: '不可启动',
+      reason: '当前任务不是草稿状态。',
+      next: '选择草稿任务，或创建新的单商品只保存任务。',
+      tone: 'warn',
+    }
+  }
+  if (isUnreleasedRealDxmMutationTask(selectedTask)) {
+    return {
+      scope: '不可启动',
+      reason: `${humanTaskModeLabel(selectedTask.mode)} 当前未放行。`,
+      next: '回到单商品只保存路径；认领和批量保存需要单独验收。',
+      tone: 'warn',
+    }
+  }
+  if (isRealDxmMutationTask(selectedTask) && !configOk) {
+    return {
+      scope: '先补配置',
+      reason: '当前任务配置预检未通过。',
+      next: '去配置中心补齐 DXM 编辑页必填字段。',
+      tone: 'warn',
+    }
+  }
+  if (requiresRealL2(selectedTask) && !l2Ready) {
+    return {
+      scope: '先做只读复验',
+      reason: '真实页面只读检查未通过或已过期。',
+      next: '运行只读复验，确认商品采集页和草稿箱页均无写入风险。',
+      tone: 'warn',
+    }
+  }
+  if (requiresRealL2(selectedTask) && !l3Ready) {
+    return {
+      scope: '等待人工确认',
+      reason: '真实保存前还没有完成批准人确认。',
+      next: '填写批准人后，只启动单商品只保存任务。',
+      tone: 'warn',
+    }
+  }
+  if (busy || startDisabled) {
+    return {
+      scope: '暂不可操作',
+      reason: startLabel,
+      next: '等待当前操作结束后刷新任务状态。',
+      tone: 'warn',
+    }
+  }
+  return {
+    scope: startLabel.includes('保存') || startLabel.includes('批准') ? '可申请单商品只保存' : '可启动当前任务',
+    reason: '配置、只读检查和人工确认当前未阻断。',
+    next: '点击主按钮后，在执行控制台查看真实浏览器执行。',
+    tone: 'ok',
+  }
 }
 
 function FinalCheckFreshnessRow({ finalCheck }: { finalCheck: FinalDeliveryCheckSummary | null }) {
@@ -2943,8 +4266,8 @@ function RuntimeGateFreshnessRow({ finalCheck }: { finalCheck: FinalDeliveryChec
 }
 
 function DeliveryReadinessRow({ readiness }: { readiness: string }) {
-  const isBlocked = readiness === 'BLOCKED'
-  const isReady = readiness === 'READY'
+  const isBlocked = isBlockedReadiness(readiness)
+  const isReady = isReadyReadiness(readiness)
   const tone = isReady ? 'is-ready' : isBlocked ? 'is-blocked' : 'is-unknown'
   const label = isReady ? '真实 DXM single_save READY' : isBlocked ? '真实 DXM 写入 BLOCKED' : `真实 DXM 写入 ${readiness}`
   const detail = isReady
@@ -2955,7 +4278,7 @@ function DeliveryReadinessRow({ readiness }: { readiness: string }) {
 
   return (
     <div className={`delivery-readiness-row ${tone}`}>
-      <span>{isReady ? 'OK' : isBlocked ? 'LOCK' : '!'}</span>
+      <span>{isReady ? 'OK' : isBlocked ? '暂停' : '!'}</span>
       <strong>{label}</strong>
       <small>{detail}</small>
     </div>
@@ -3076,18 +4399,61 @@ function EvidenceRow({ evidence }: { evidence: Evidence }) {
 }
 
 function EvidencePointCard({ point }: { point: EvidencePoint }) {
-  const title = String(point.action ?? point.state ?? point.kind)
+  const title = humanEvidencePointTitle(point)
+  const kindLabel = humanEvidencePointKind(point.kind)
   const ok = point.ok === undefined ? true : point.ok
   const url = toArtifactUrl(point.file_path_url ?? point.file_path)
 
   return (
     <article className={`evidence-point-card ${ok ? 'ok' : 'warn'}`}>
-      <span className="status-pill muted">{point.kind}</span>
+      <span className="status-pill muted">{kindLabel}</span>
       <strong>{title}</strong>
       <small>{point.created_at ? formatTime(point.created_at) : '结构化报告项'}</small>
       {url ? <a href={url} target="_blank" rel="noreferrer" aria-label={`查看证据项：${title}`}>查看</a> : <span>无文件</span>}
     </article>
   )
+}
+
+function humanEvidencePointKind(kind: string) {
+  const normalized = String(kind ?? '').toLowerCase()
+  if (normalized === 'state_snapshot') return '步骤快照'
+  if (normalized === 'workflow_action') return '执行证据'
+  if (normalized.includes('report')) return '报告证据'
+  if (normalized.includes('summary')) return '汇总证据'
+  if (normalized.includes('publish_guard')) return '发布隔离'
+  return kind || '证据'
+}
+
+function humanEvidencePointTitle(point: EvidencePoint) {
+  const raw = String(point.action ?? point.state ?? point.kind ?? '')
+  const normalized = raw.toUpperCase()
+  const labels: Record<string, string> = {
+    RELEASE_LOCK: '释放任务锁',
+    WRITE_REPORT: '生成报告',
+    VERIFY_NOT_PUBLISHED: '确认未发布',
+    VERIFY_SAVE_RESULT: '校验保存成功',
+    SAVE_ONLY: '只点击保存',
+    PRE_SAVE_GUARD_CHECK: '保存前发布隔离检查',
+    FILL_SEMI_VARIANTS: '填写半托管变种',
+    FILL_SEMI_GOODS: '填写半托管货品',
+    OPEN_SEMI_MANAGED_PAGE: '进入半托管编辑页',
+    ENABLE_SEMI_MANAGED: '启用半托管服务',
+    FILL_COMPLIANCE: '填写合规信息',
+    FILL_MEDIA: '处理图片素材',
+    FILL_VARIANTS: '填写变种信息',
+    FILL_BASE_INFO: '填写标题与基础属性',
+    VERIFY_EDIT_OWNERSHIP: '校验编辑页归属',
+    OPEN_EDIT_PAGE: '打开编辑页',
+    VERIFY_LIST_OWNERSHIP: '校验采集箱归属',
+    CLAIM_PRODUCT: '标记目标商品',
+    ITEM_LOCKING: '创建任务锁',
+    FIND_PRODUCT: '定位目标商品',
+    OPEN_DRAFT_LIST: '进入采集箱',
+    PRECHECK_PUBLISH_GUARD: '发布隔离预检',
+    PRECHECK_SESSION: '检查登录态',
+    PRECHECK_CONFIG: '启动前配置校验',
+  }
+  return labels[normalized] ?? raw.replace(/_/g, ' ').toLowerCase()
 }
 
 function ExceptionCard({ item }: { item: ExceptionItem }) {
@@ -3101,6 +4467,21 @@ function ExceptionCard({ item }: { item: ExceptionItem }) {
       <small>{item.field_domain} / {item.suggestion}</small>
     </article>
   )
+}
+
+function isReadyReadiness(readiness: string) {
+  return readiness === 'READY'
+}
+
+function isBlockedReadiness(readiness: string) {
+  return readiness === 'BLOCKED'
+}
+
+function humanReadinessLabel(readiness: string) {
+  if (isReadyReadiness(readiness)) return '可申请单商品只保存'
+  if (isBlockedReadiness(readiness)) return '暂不启动真实保存'
+  if (readiness === '未检查') return '待验收'
+  return '待确认'
 }
 
 function ReportCard({ report }: { report: Report }) {
@@ -3161,7 +4542,7 @@ function presentAcceptanceGaps(gaps: AcceptanceGap[], realWriteExpectedBlocked: 
 
     return {
       ...gap,
-      title: `L3 后置：${gap.title}`,
+      title: `真实保存后补齐：${gap.title}`,
       severity: 'watch',
       detail: `${gap.detail}（预期阻断，真实写入放行后再补齐）`,
     }
@@ -3170,7 +4551,7 @@ function presentAcceptanceGaps(gaps: AcceptanceGap[], realWriteExpectedBlocked: 
 
 function CheckRow({ label, ok, testId, state }: { label: string; ok: boolean; testId?: string; state?: string }) {
   const tone = state === 'locked' ? 'locked' : ok ? 'ok' : 'warn'
-  const marker = state === 'locked' ? 'LOCK' : ok ? '✓' : '!'
+  const marker = state === 'locked' ? '暂停' : ok ? '✓' : '!'
 
   return (
     <div className={`check-row ${tone}`} data-testid={testId} data-state={state}>
@@ -3182,7 +4563,7 @@ function CheckRow({ label, ok, testId, state }: { label: string; ok: boolean; te
 
 function BusinessReportCheckRow({ count, realWriteExpectedBlocked }: { count: number; realWriteExpectedBlocked: boolean }) {
   if (count === 0 && realWriteExpectedBlocked) {
-    return <CheckRow label="业务保存报告 0 份（L3 后置，预期阻断）" ok={false} state={'locked'} />
+    return <CheckRow label="业务保存报告 0 份（真实保存后，预期阻断）" ok={false} state={'locked'} />
   }
 
   return <CheckRow label={`业务保存报告 ${count} 份`} ok={count > 0} state={count > 0 ? 'present' : 'missing'} />
@@ -3198,7 +4579,7 @@ function EvidenceCheckRow({ label, count, realWriteExpectedBlocked }: { label: s
 
 function PostL3ReportCheckRow({ label, ok, realWriteExpectedBlocked }: { label: string; ok: boolean; realWriteExpectedBlocked: boolean }) {
   if (realWriteExpectedBlocked) {
-    return <CheckRow label={`${label}（L3 放行后要求）`} ok={false} state={'locked'} />
+    return <CheckRow label={`${label}（真实保存后要求）`} ok={false} state={'locked'} />
   }
 
   return <CheckRow label={label} ok={ok} state={ok ? 'present' : 'missing'} />
@@ -3346,20 +4727,19 @@ function buildConsoleSteps(selectedTask: Task | null, logs: LogItem[]) {
   return [
     { title: '配置预检', detail: '店铺、商品、模板、图片与隔离口径', state: hasLogs ? 'done' : 'current' },
     { title: '任务锁定', detail: '绑定商品与批次，不触碰上架入口', state: active || completed ? 'done' : 'pending' },
-    { title: '只读诊断', detail: '核对真实页面、字段和截图证据', state: active ? 'current' : completed ? 'done' : 'pending' },
-    { title: 'L2 复核', detail: '确认双目标同轮次只读证据', state: completed ? 'done' : 'pending' },
-    { title: 'L3 门禁', detail: '需要人工批准与明确保存回包证据', state: completed ? 'done' : 'pending' },
+    { title: '只读页面核验', detail: '核对真实页面、字段和证据路径', state: active ? 'current' : completed ? 'done' : 'pending' },
+    { title: '只读复核', detail: '确认双目标同轮次只读证据', state: completed ? 'done' : 'pending' },
+    { title: '真实保存确认', detail: '需要人工批准与明确保存回包证据', state: completed ? 'done' : 'pending' },
     { title: '报告复盘', detail: '证据等级、异常池、验收缺口归档', state: completed ? 'done' : 'pending' },
   ]
 }
 
 function getBrowserFrame(workspace: DeliveryWorkspace, selectedTask: Task | null, agentConsole?: AgentConsoleSession | null) {
   if (agentConsole?.active) {
-    const screenshotUrl = withCacheBust(toArtifactUrl(agentConsole.screenshot_url ?? agentConsole.screenshot), agentConsole.last_frame_at)
     return {
       url: agentConsole.current_url || agentConsole.target_url || 'https://www.dianxiaomi.com/',
-      screenshotUrl,
-      source: screenshotUrl ? '来自 Agent Console 自动刷新画面' : agentConsole.browser_visible ? '来自可见独立 Profile 浏览器会话' : '浏览器会话已创建，等待窗口可见',
+      evidencePath: agentConsole.screenshot_url ?? agentConsole.screenshot ?? '',
+      source: agentConsole.browser_visible ? '来自可见独立 Profile 浏览器会话' : '浏览器会话已创建，等待窗口可见',
     }
   }
   const taskEvidence = selectedTask
@@ -3371,20 +4751,13 @@ function getBrowserFrame(workspace: DeliveryWorkspace, selectedTask: Task | null
       const path = item.file_path ?? ''
       return /\.(png|jpg|jpeg|webp)$/i.test(path)
     })
-  const screenshotUrl = screenshot ? toArtifactUrl((screenshot as Evidence & { file_path_url?: string }).file_path_url ?? screenshot.file_path) : ''
   const pageUrl = String(screenshot?.meta?.page_url ?? workspace.evidencePoints.find((point) => point.state)?.page_url ?? '')
 
   return {
-    url: pageUrl || '等待真实浏览器画面',
-    screenshotUrl,
-    source: screenshotUrl ? '来自最新执行截图' : '等待真实浏览器画面，当前无页面可达证据',
+    url: agentConsole?.target_url || '等待启动真实浏览器',
+    evidencePath: screenshot?.file_path ?? '',
+    source: screenshot || pageUrl ? '历史截图仅用于报告证据，实时操作请启动真实浏览器' : '等待真实浏览器会话，当前无页面可达证据',
   }
-}
-
-function withCacheBust(url: string, stamp?: string | null) {
-  if (!url || !stamp) return url
-  const separator = url.includes('?') ? '&' : '?'
-  return `${url}${separator}frame=${encodeURIComponent(stamp)}`
 }
 
 function nextPendingStep(steps: RunStep[], currentCode?: string) {
@@ -3445,6 +4818,39 @@ function requiresRealL2(task: Task) {
   return isRealDxmMutationTask(task)
 }
 
+function getTaskDisplayKey(task: Task) {
+  const productIds = Array.isArray(task.payload.product_ids) ? task.payload.product_ids.join(',') : ''
+  return [
+    displayTaskName(task),
+    task.mode,
+    task.payload.store_name ?? task.store_id ?? '',
+    task.payload.category_name ?? '',
+    productIds,
+  ].join('|')
+}
+
+function displayTaskName(task: Pick<Task, 'name' | 'mode'>) {
+  if (task.mode === 'single_save' && task.name === LEGACY_QA_REAL_MUTATION_TASK_NAME) {
+    return 'QA local gated single_save fixture'
+  }
+  if (task.mode === 'single_save' && task.name.toLowerCase().includes('l3 canary save-only')) {
+    return '单商品只保存核验任务'
+  }
+  return task.name
+}
+
+function isAuxiliaryTask(task: Pick<Task, 'name' | 'mode'>) {
+  return task.mode === 'dry_run' || task.name.startsWith('QA ')
+}
+
+function isStartableSingleSaveTask(task: Task) {
+  const storeName = String(task.payload.store_name ?? '')
+  return task.mode === 'single_save'
+    && task.status === 'draft'
+    && !isAuxiliaryTask(task)
+    && RELEASED_SINGLE_SAVE_STORE_NAMES.has(storeName)
+}
+
 function isReleasedRealDxmMutationTask(task: Task) {
   return task.mode === 'single_save'
 }
@@ -3457,29 +4863,123 @@ function isRealDxmMutationTask(task: Task) {
   return isReleasedRealDxmMutationTask(task) || isUnreleasedRealDxmMutationTask(task)
 }
 
+function humanTaskModeLabel(mode?: string | null) {
+  const labels: Record<string, string> = {
+    probe: '只读页面检查',
+    single_save: '单商品只保存',
+    claim_only: '认领未开放',
+    batch_save: '批量保存未开放',
+    dry_run: '开发自检',
+  }
+  return mode ? labels[mode] ?? mode : '等待任务'
+}
+
+function humanGateStateLabel(status: string) {
+  const labels: Record<string, string> = {
+    passed: '通过',
+    failed: '失败',
+    blocked: '已阻断',
+    approval_required: '待人工确认',
+    not_run: '未运行',
+    partial: '部分完成',
+    mock_passed: '离线证据',
+    ready: '已就绪',
+  }
+  return labels[status] ?? status
+}
+
+function humanGateDetail(detail?: string | null) {
+  if (!detail) return null
+  if (detail.includes('时效') || detail.includes('过期') || detail.includes('最新证据年龄')) {
+    return '只读检查证据已过期，请点击“运行只读复验”刷新后再继续。'
+  }
+  if (detail.includes('data_acquisition') || detail.includes('draft_box')) {
+    return detail
+      .split('data_acquisition').join('商品采集页')
+      .split('draft_box').join('草稿箱页')
+      .split('L2').join('只读检查')
+      .split('L3').join('真实保存')
+      .split('passed').join('通过')
+      .split('probe').join('检查')
+  }
+  return detail
+    .split('L2').join('只读检查')
+    .split('L3').join('真实保存')
+    .split('passed').join('通过')
+    .split('probe').join('检查')
+}
+
+function humanDiagnosticNavigation(value: string) {
+  return value
+    .split('data_acquisition').join('商品采集页')
+    .split('draft_box').join('草稿箱页')
+    .replace(/\/web\/productCrawl\/dataAcquisition/g, '商品采集页')
+    .replace(/\/web\/smt\/smtProductList\/draft/g, '草稿箱页')
+}
+
+function humanFailedCheckLabel(value: string) {
+  if (value.includes('strict_pass_checks')) return '页面检查未满足'
+  if (value.includes('network')) return '网络检查未满足'
+  if (value.includes('render')) return '页面渲染未满足'
+  return value
+    .split('strict_pass_checks').join('页面检查')
+    .split('passed').join('通过')
+}
+
 function l2StartLabel(status?: string) {
-  if (status === 'partial') return 'L2 缺目标，禁止启动'
-  if (status === 'failed') return 'L2 失败，禁止启动'
-  if (status === 'mock_passed') return '等待真实 L2，禁止启动'
-  return 'L2 未通过，禁止启动'
+  if (status === 'partial') return '只读检查缺目标，禁止启动'
+  if (status === 'failed') return '只读检查失败，禁止启动'
+  if (status === 'mock_passed') return '等待真实只读检查，禁止启动'
+  return '只读检查未通过，禁止启动'
 }
 
 function displaySafeStepLabel(label: string) {
-  return label.includes('只点击保存') ? 'L3 保存门禁待批准' : label
+  return label.includes('只点击保存') ? '真实保存待批准' : label
 }
 
 function displaySafeStepCode(code: string) {
-  return code === 'SAVE_ONLY' ? 'L3_SAVE_GATE' : code
+  return code === 'SAVE_ONLY' ? 'SAVE_GATE' : code
 }
 
 function displaySafeWorkflowAction(action: string) {
   return action === 'save_only' || action === 'SAVE_ONLY' ? 'l3_save_gate' : action
 }
 
+function humanConsoleCodeLabel(code?: string | null) {
+  if (!code) return '等待状态'
+  const normalized = String(code).toUpperCase()
+  const labels: Record<string, string> = {
+    PRECHECK_CONFIG: '启动前配置校验',
+    PRECHECK_SESSION: '检查登录态',
+    PRECHECK_PUBLISH_GUARD: '发布隔离预检',
+    OPEN_DRAFT_LIST: '进入采集箱',
+    OPEN_EDIT_PAGE: '打开编辑页',
+    SAVE_ONLY: '只保存',
+    SAVE_GATE: '只保存',
+    VERIFY_SAVE_RESULT: '校验保存成功',
+    VERIFY_NOT_PUBLISHED: '确认未发布',
+    WRITE_REPORT: '生成报告',
+    RELEASE_LOCK: '释放任务锁',
+    WAITING: '等待状态',
+  }
+  return labels[normalized] ?? String(code).replace(/_/g, ' ').toLowerCase()
+}
+
+function humanConsoleText(value?: string | null) {
+  if (!value) return ''
+  return String(value)
+    .split('PRECHECK_CONFIG').join('启动前配置校验')
+    .split('SAVE_ONLY').join('只保存')
+    .split('L3_SAVE_GATE').join('只保存')
+    .split('SAVE_GATE').join('只保存')
+    .split('L2').join('只读检查')
+    .split('L3').join('真实保存')
+}
+
 function displaySafeLogMessage(message: string) {
   return message
-    .split('只点击保存').join('L3 保存门禁待批准')
-    .split('SAVE_ONLY').join('L3_SAVE_GATE')
+    .split('只点击保存').join('真实保存待批准')
+    .split('SAVE_ONLY').join('SAVE_GATE')
 }
 
 function humanReportSummary(report: Report) {

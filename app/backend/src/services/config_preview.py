@@ -24,7 +24,7 @@ FIELD_GROUPS = [
         "label": "类目与标题",
         "templateType": "category",
         "fields": [
-            {"path": "category.category_name", "field": "category_name", "label": "目标类目", "required": True},
+            {"path": "category.category_name", "field": "category_name", "label": "目标类目", "required": False},
             {"path": "category.template_category_id", "field": "template_category_id", "label": "目标类目 ID", "required": False},
             {"path": "category.category_keyword", "field": "category_keyword", "label": "类目关键词", "required": True},
             {"path": "category.title_strategy", "field": "title_strategy", "label": "标题策略", "required": False},
@@ -37,6 +37,7 @@ FIELD_GROUPS = [
         "label": "SKU / 价格 / 库存",
         "templateType": "sku",
         "fields": [
+            {"path": "sku.sku_code", "field": "sku_code", "label": "SKU 编码", "required": False},
             {"path": "sku.stock", "field": "stock", "label": "库存", "required": False},
             {"path": "sku.jit_stock", "field": "jit_stock", "label": "JIT 库存", "required": False},
             {"path": "sku.normal_stock", "field": "normal_stock", "label": "普通库存", "required": False},
@@ -103,7 +104,8 @@ FIELD_GROUPS = [
         "label": "半托管",
         "templateType": "semi_managed",
         "fields": [
-            {"path": "semi_managed.product_price", "field": "product_price", "label": "商品价", "required": True},
+            {"path": "semi_managed.product_price", "field": "product_price", "label": "商品价", "required": False},
+            {"path": "semi_managed.supply_price", "field": "supply_price", "label": "供货价", "required": False},
             {"path": "semi_managed.jit_stock", "field": "jit_stock", "label": "JIT 库存", "required": True},
             {"path": "semi_managed.is_original_box", "field": "is_original_box", "label": "是否原包装", "required": True},
             {"path": "semi_managed.length", "field": "length", "label": "半托管长 cm", "required": True},
@@ -155,7 +157,8 @@ class ConfigPreviewService:
             }
 
         product = self._product_for_task(repo, task)
-        validation = self.validation.validate_task(task, templates, product=product)
+        applicable_templates = self._applicable_templates(templates, task, product)
+        validation = self.validation.validate_task(task, applicable_templates, product=product)
         defaults, source_tree, template_trace = self._effective_defaults(templates, task, product)
         missing = list(validation.get("missing") or [])
         return {
@@ -165,7 +168,7 @@ class ConfigPreviewService:
             "productId": product.get("id") if isinstance(product, Mapping) else None,
             "missing": missing,
             "warnings": list(validation.get("warnings") or []),
-            "fieldGroups": self._field_groups(defaults, source_tree, missing, templates),
+            "fieldGroups": self._field_groups(defaults, source_tree, missing, applicable_templates),
             "templateTrace": template_trace,
             "resolvedDefaults": defaults,
         }
@@ -328,6 +331,18 @@ class ConfigPreviewService:
     ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
         result = self.defaults_resolver.resolve(templates, task, product)
         return result.defaults, result.sources, result.template_trace
+
+    def _applicable_templates(
+        self,
+        templates: list[Mapping[str, Any]],
+        task: Mapping[str, Any],
+        product: Mapping[str, Any] | None,
+    ) -> list[Mapping[str, Any]]:
+        return [
+            template
+            for template in templates
+            if self.defaults_resolver.template_applies_to(template, task, product)
+        ]
 
     def _template_applies_to(
         self,

@@ -575,6 +575,7 @@ def test_runtime_control_queues_launcher_managed_backend_restart(tmp_path, monke
     client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     command_file = tmp_path / "runtime-control-command.json"
     monkeypatch.setattr(main, "RUNTIME_CONTROL_COMMAND_FILE", command_file)
+    monkeypatch.setattr(main, "RUNTIME_CONTROL_MANAGED_BY_LAUNCHER", True)
 
     response = client.post("/api/runtime/control", json={"action": "restart_backend"})
 
@@ -594,6 +595,7 @@ def test_runtime_control_queues_launcher_managed_frontend_restart(tmp_path, monk
     client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     command_file = tmp_path / "runtime-control-command.json"
     monkeypatch.setattr(main, "RUNTIME_CONTROL_COMMAND_FILE", command_file)
+    monkeypatch.setattr(main, "RUNTIME_CONTROL_MANAGED_BY_LAUNCHER", True)
 
     response = client.post("/api/runtime/control", json={"action": "restart_frontend"})
 
@@ -603,6 +605,131 @@ def test_runtime_control_queues_launcher_managed_frontend_restart(tmp_path, monk
     assert payload["action"] == "restart_frontend"
     command = json.loads(command_file.read_text(encoding="utf-8"))
     assert command["action"] == "restart_frontend"
+
+
+def test_runtime_control_rejects_restart_when_not_launcher_managed(tmp_path, monkeypatch):
+    import src.main as main
+
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    command_file = tmp_path / "runtime-control-command.json"
+    monkeypatch.setattr(main, "RUNTIME_CONTROL_COMMAND_FILE", command_file)
+    monkeypatch.setattr(main, "RUNTIME_CONTROL_MANAGED_BY_LAUNCHER", False)
+
+    response = client.post("/api/runtime/control", json={"action": "restart_backend"})
+
+    assert response.status_code == 409
+    assert "start-mvp" in response.json()["detail"]
+    assert not command_file.exists()
+
+
+def test_runtime_status_reports_launcher_managed_restart_availability(tmp_path, monkeypatch):
+    import src.main as main
+
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    command_file = tmp_path / "runtime-control-command.json"
+    monkeypatch.setattr(main, "RUNTIME_CONTROL_COMMAND_FILE", command_file)
+    monkeypatch.setattr(main, "RUNTIME_CONTROL_MANAGED_BY_LAUNCHER", True)
+
+    response = client.get("/api/runtime/status")
+
+    assert response.status_code == 200
+    runtime_control = response.json()["runtimeControl"]
+    assert runtime_control["managedByLauncher"] is True
+    assert runtime_control["restartAvailable"] is True
+    assert runtime_control["commandFile"] == str(command_file)
+    assert "start-mvp" in runtime_control["detail"]
+
+
+def test_runtime_control_starts_l2_readonly_probe_runner_without_real_write(tmp_path, monkeypatch):
+    import src.main as main
+
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo, mode="single_save")
+    launcher_log = tmp_path / "start-mvp.log"
+    runner_script = tmp_path / "l2_readonly_probe_runner.py"
+    probe_script = tmp_path / "l2_readonly_probe.py"
+    lock_file = tmp_path / "runner.lock"
+    runner_script.write_text("print('runner')", encoding="utf-8")
+    probe_script.write_text("print('probe')", encoding="utf-8")
+    monkeypatch.setattr(main, "RUNTIME_LOG_SOURCES", {"launcher": launcher_log})
+    monkeypatch.setattr(main, "L2_READONLY_PROBE_RUNNER", runner_script)
+    monkeypatch.setattr(main, "L2_READONLY_PROBE_SCRIPT", probe_script)
+    monkeypatch.setattr(main, "L2_READONLY_PROBE_LOCK_FILE", lock_file)
+
+    popen_calls = []
+
+    class FakeProcess:
+        pid = 4321
+
+    def fake_popen(command, **kwargs):
+        popen_calls.append({"command": command, "kwargs": kwargs})
+        return FakeProcess()
+
+    monkeypatch.setattr(main.subprocess, "Popen", fake_popen)
+
+    response = client.post("/api/runtime/control", json={"action": "run_l2_readonly_probe", "task_id": task["id"]})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["action"] == "run_l2_readonly_probe"
+    assert payload["pid"] == 4321
+    assert payload["targets"] == ["data_acquisition", "draft_box"]
+    assert payload["runId"].startswith("l2-real-")
+    assert len(popen_calls) == 1
+    command = popen_calls[0]["command"]
+    assert str(runner_script) in command
+    assert "--run-id" in command
+    assert "--script" in command
+    assert str(probe_script) in command
+    assert "--cookie-file" in command
+    assert "--output-dir" in command
+    assert "--allowlist-file" in command
+    assert "--lock-file" in command
+    assert str(lock_file) in command
+    assert "claim_only" not in command
+    assert "single_save" not in command
+    assert "batch_save" not in command
+    assert "started L2 readonly dual-target probe" in launcher_log.read_text(encoding="utf-8")
+    lock_payload = json.loads(lock_file.read_text(encoding="utf-8"))
+    assert lock_payload["run_id"] == payload["runId"]
+    assert lock_payload["pid"] == 4321
+
+
+def test_runtime_control_rejects_parallel_l2_readonly_probe(tmp_path, monkeypatch):
+    import src.main as main
+
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo, mode="single_save")
+    launcher_log = tmp_path / "start-mvp.log"
+    runner_script = tmp_path / "l2_readonly_probe_runner.py"
+    probe_script = tmp_path / "l2_readonly_probe.py"
+    lock_file = tmp_path / "runner.lock"
+    runner_script.write_text("print('runner')", encoding="utf-8")
+    probe_script.write_text("print('probe')", encoding="utf-8")
+    lock_file.write_text(
+        json.dumps({
+            "schema": "dxm_l2_readonly_probe_lock.v1",
+            "run_id": "l2-real-existing",
+            "task_id": task["id"],
+            "pid": 1111,
+            "created_at": "2099-01-01T00:00:00+00:00",
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(main, "RUNTIME_LOG_SOURCES", {"launcher": launcher_log})
+    monkeypatch.setattr(main, "L2_READONLY_PROBE_RUNNER", runner_script)
+    monkeypatch.setattr(main, "L2_READONLY_PROBE_SCRIPT", probe_script)
+    monkeypatch.setattr(main, "L2_READONLY_PROBE_LOCK_FILE", lock_file)
+
+    popen_calls = []
+    monkeypatch.setattr(main.subprocess, "Popen", lambda *args, **kwargs: popen_calls.append((args, kwargs)))
+
+    response = client.post("/api/runtime/control", json={"action": "run_l2_readonly_probe", "task_id": task["id"]})
+
+    assert response.status_code == 409
+    assert "already running" in response.json()["detail"]
+    assert popen_calls == []
 
 
 def test_runtime_logs_reject_unknown_source(tmp_path, monkeypatch):
@@ -704,6 +831,35 @@ def test_config_preview_shows_effective_values_and_sources(tmp_path, monkeypatch
     assert logistics_fields["logistics.length"]["source"] == "模板：包装物流模板"
 
 
+def test_config_preview_does_not_mark_other_store_template_present(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo, store_name="Dang Kang")
+    repo.create_template(
+        {
+            "template_type": "logistics",
+            "template_name": "其它店铺包装物流模板",
+            "binding_scope": "Other Store / 立牌类谷子",
+            "payload": {
+                "binding": {"store_name": "Other Store", "category_name": "立牌类谷子", "platform": "AliExpress"},
+                "weight": "0.03",
+                "length": "10",
+                "width": "10",
+                "height": "2",
+            },
+            "is_enabled": True,
+        }
+    )
+
+    preview = client.get(f"/api/config/preview?task_id={task['id']}").json()
+    groups = {group["section"]: group for group in preview["fieldGroups"]}
+    logistics_fields = {field["path"]: field for field in groups["logistics"]["fields"]}
+
+    assert groups["logistics"]["templatePresent"] is False
+    assert "logistics" in preview["missing"]
+    assert logistics_fields["logistics.weight"]["value"] == ""
+    assert logistics_fields["logistics.weight"]["source"] == "未设置"
+
+
 def test_config_preview_covers_dxm_edit_page_sections_and_reference_templates(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     task = _create_task(repo)
@@ -738,6 +894,57 @@ def test_config_preview_covers_dxm_edit_page_sections_and_reference_templates(tm
     assert "image.local_asset_path" in {field["path"] for field in groups["image"]["fields"]}
     assert "logistics.freight_template" in {field["path"] for field in groups["logistics"]["fields"]}
     assert "compliance.brand" in {field["path"] for field in groups["compliance"]["fields"]}
+
+
+def test_config_preview_does_not_mark_optional_category_name_missing_when_keyword_is_set(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo)
+    repo.create_template(
+        {
+            "template_type": "category",
+            "template_name": "类目关键词模板",
+            "binding_scope": "Dang Kang",
+            "payload": {"category": {"category_keyword": "立牌"}},
+            "is_enabled": True,
+        }
+    )
+
+    preview = client.get(f"/api/config/preview?task_id={task['id']}").json()
+    category_group = {group["section"]: group for group in preview["fieldGroups"]}["category"]
+    fields = {field["path"]: field for field in category_group["fields"]}
+
+    assert fields["category.category_keyword"]["required"] is True
+    assert fields["category.category_keyword"]["missing"] is False
+    assert fields["category.category_name"]["required"] is False
+    assert fields["category.category_name"]["missing"] is False
+
+
+def test_config_preview_shows_semi_managed_supply_price_as_execution_value(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo)
+    payload = repo.get_task_private(task["id"])["payload"]
+    payload["semi_managed"] = {
+        "supply_price": "5.60",
+        "jit_stock": "100",
+        "is_original_box": "否",
+        "length": "10",
+        "width": "10",
+        "height": "2",
+        "goods_code_strategy": "allow_blank",
+        "barcode_strategy": "allow_blank",
+    }
+    repo.update_task_template_override(task["id"], "semi_managed", payload["semi_managed"])
+
+    preview = client.get(f"/api/config/preview?task_id={task['id']}").json()
+    semi_group = {group["section"]: group for group in preview["fieldGroups"]}["semi_managed"]
+    fields = {field["path"]: field for field in semi_group["fields"]}
+
+    assert fields["semi_managed.product_price"]["required"] is False
+    assert fields["semi_managed.product_price"]["missing"] is False
+    assert fields["semi_managed.supply_price"]["value"] == "5.60"
+    assert fields["semi_managed.supply_price"]["source"] == "任务覆盖"
+    assert fields["semi_managed.goods_code_strategy"]["required"] is True
+    assert fields["semi_managed.barcode_strategy"]["required"] is True
 
 
 def test_config_preview_uses_resolved_dxm_reference_template_sections(tmp_path, monkeypatch):
@@ -867,6 +1074,77 @@ def test_task_config_override_endpoint_updates_preview_and_runner_defaults(tmp_p
     execution_defaults = runner._execution_defaults(repo.get_task_private(task["id"]), repo.list_products()[0])
     assert execution_defaults["logistics"]["weight"] == "0.08"
     assert execution_defaults["logistics"]["height"] == "2"
+
+
+def test_task_config_override_endpoint_updates_semi_managed_runner_defaults(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo)
+
+    response = client.patch(
+        f"/api/tasks/{task['id']}/config-overrides",
+        json={
+            "section": "semi_managed",
+            "values": {
+                "supply_price": "6.66",
+                "jit_stock": "88",
+                "is_original_box": "否",
+                "length": "12",
+                "width": "9",
+                "height": "3",
+                "goods_code_strategy": "use_sku",
+                "barcode_strategy": "allow_blank",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    public_payload = response.json()["payload"]
+    assert public_payload["template_overrides"]["semi_managed"]["supply_price"] == "6.66"
+    preview = client.get(f"/api/config/preview?task_id={task['id']}").json()
+    groups = {group["section"]: group for group in preview["fieldGroups"]}
+    semi_fields = {field["path"]: field for field in groups["semi_managed"]["fields"]}
+    assert semi_fields["semi_managed.supply_price"]["value"] == "6.66"
+    assert semi_fields["semi_managed.supply_price"]["source"] == "任务覆盖"
+    assert semi_fields["semi_managed.jit_stock"]["value"] == "88"
+    assert semi_fields["semi_managed.jit_stock"]["source"] == "任务覆盖"
+
+    runner = V1TaskRunner(repo, object())
+    execution_defaults = runner._execution_defaults(repo.get_task_private(task["id"]), repo.list_products()[0])
+    assert execution_defaults["semi_managed"]["supply_price"] == "6.66"
+    assert execution_defaults["semi_managed"]["jit_stock"] == "88"
+    assert execution_defaults["semi_managed"]["goods_code_strategy"] == "use_sku"
+
+
+def test_task_config_override_endpoint_updates_sku_code_runner_defaults(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo)
+
+    response = client.patch(
+        f"/api/tasks/{task['id']}/config-overrides",
+        json={
+            "section": "sku",
+            "values": {
+                "sku_code": "SKU-UI-001",
+                "jit_stock": "66",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    public_payload = response.json()["payload"]
+    assert public_payload["template_overrides"]["sku"]["sku_code"] == "SKU-UI-001"
+    preview = client.get(f"/api/config/preview?task_id={task['id']}").json()
+    groups = {group["section"]: group for group in preview["fieldGroups"]}
+    sku_fields = {field["path"]: field for field in groups["sku"]["fields"]}
+    assert sku_fields["sku.sku_code"]["value"] == "SKU-UI-001"
+    assert sku_fields["sku.sku_code"]["source"] == "任务覆盖"
+    assert sku_fields["sku.jit_stock"]["value"] == "66"
+    assert sku_fields["sku.jit_stock"]["source"] == "任务覆盖"
+
+    runner = V1TaskRunner(repo, object())
+    execution_defaults = runner._execution_defaults(repo.get_task_private(task["id"]), repo.list_products()[0])
+    assert execution_defaults["sku"]["sku_code"] == "SKU-UI-001"
+    assert execution_defaults["sku"]["jit_stock"] == "66"
 
 
 def test_task_config_override_endpoint_can_clear_section(tmp_path, monkeypatch):

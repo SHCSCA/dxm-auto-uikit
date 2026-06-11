@@ -395,6 +395,61 @@ function Resolve-Npm {
   throw "npm was not found."
 }
 
+function Resolve-Node {
+  $node = Get-Command node.exe -ErrorAction SilentlyContinue
+  if ($node) {
+    return $node.Source
+  }
+  $node = Get-Command node -ErrorAction SilentlyContinue
+  if ($node) {
+    return $node.Source
+  }
+  throw "node was not found."
+}
+
+function Read-QaJsonSummary {
+  param([string]$Path)
+
+  if (!(Test-Path -LiteralPath $Path)) {
+    return $null
+  }
+
+  try {
+    return Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+  } catch {
+    # Windows PowerShell 5.1 can reject valid browser-captured JSON when DOM text
+    # contains characters its JSON parser handles poorly. Keep the full artifact
+    # on disk and re-read only the delivery-check fields through Node.
+  }
+
+  $code = @"
+const fs = require('fs');
+const input = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+const slim = {
+  checkedAt: input.checkedAt || null,
+  url: input.url || null,
+  mode: input.mode || null,
+  ok: input.ok === true,
+  assertions: input.assertions || {},
+  screenshotHashes: input.screenshotHashes || {},
+  sidecarHashes: input.sidecarHashes || {},
+  environment: input.environment || {},
+  manifest: input.manifest || {}
+};
+process.stdout.write(JSON.stringify(slim));
+"@
+
+  try {
+    $output = & $nodeExe -e $code $Path
+    if ($LASTEXITCODE -ne 0 -or !$output) {
+      return $null
+    }
+    return (($output -join "`n") | ConvertFrom-Json)
+  } catch {
+    return $null
+  }
+}
+
 function Invoke-CapturedCommand {
   param(
     [string]$Name,
@@ -719,6 +774,7 @@ function Join-CommandArguments {
 
 $pythonExe = Resolve-Python
 $npmExe = Resolve-Npm
+$nodeExe = Resolve-Node
 $preGitStatus = $null
 try {
   $preGitStatus = (& git -C $root status --short) -join "`n"
@@ -807,11 +863,7 @@ if (!$SkipBrowserQA) {
 
 $browserQa = $null
 if (!$SkipBrowserQA -and (Test-Path -LiteralPath $browserQaJson)) {
-  try {
-    $browserQa = Get-Content -LiteralPath $browserQaJson -Raw | ConvertFrom-Json
-  } catch {
-    $browserQa = $null
-  }
+  $browserQa = Read-QaJsonSummary -Path $browserQaJson
 }
 
 $gitHead = $null
@@ -1100,7 +1152,7 @@ if (!$SkipBrowserQA) {
     -TimeoutSeconds 180
   $commands += $postFinalReportStateQaCommand
   if (Test-Path -LiteralPath $postFinalReportQaJson) {
-    $postFinalReportQa = Get-Content -LiteralPath $postFinalReportQaJson -Raw -Encoding UTF8 | ConvertFrom-Json
+    $postFinalReportQa = Read-QaJsonSummary -Path $postFinalReportQaJson
   }
   if (!$postFinalReportStateQaCommand.ok -or !$postFinalReportQa -or $postFinalReportQa.ok -ne $true) {
     $localWorkbenchOk = $false
@@ -1127,7 +1179,7 @@ if (!$SkipBrowserQA) {
     -TimeoutSeconds 180
   $commands += $postFinalReportCenterQaCommand
   if (Test-Path -LiteralPath $postFinalReportQaJson) {
-    $postFinalReportQa = Get-Content -LiteralPath $postFinalReportQaJson -Raw -Encoding UTF8 | ConvertFrom-Json
+    $postFinalReportQa = Read-QaJsonSummary -Path $postFinalReportQaJson
   }
   if (!$postFinalReportCenterQaCommand.ok -or !$postFinalReportQa -or $postFinalReportQa.ok -ne $true) {
     $localWorkbenchOk = $false

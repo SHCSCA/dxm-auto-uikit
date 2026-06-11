@@ -145,7 +145,7 @@ def test_user_delivery_guide_explains_l2_allowlist_review_packet():
     assert "L2 Allowlist Review Candidates" in guide
     assert "review_only=True" in guide
     assert "allowlist_applied=False" in guide
-    assert "不自动放行 L2/L3" in guide
+    assert "不自动放行只读页面检查或真实保存" in guide
     assert "不能为了让报告全绿" in guide
     assert "l2-allowlist-review-template.md" in guide
     assert "l2-allowlist-review-template.json" in guide
@@ -160,7 +160,7 @@ def test_user_delivery_guide_explains_l2_allowlist_review_packet():
 def test_user_delivery_guide_has_current_acceptance_checklist():
     guide = USER_DELIVERY_GUIDE.read_text(encoding="utf-8")
 
-    assert "# 用户交付使用说明 - 2026-06-03" in guide
+    assert "# 用户交付使用说明 - 2026-06-10" in guide
     assert "## 验收人快速判定清单" in guide
     assert "自动化工作台验收通过" in guide
     assert "`Local workbench check: PASS`" in guide
@@ -168,12 +168,12 @@ def test_user_delivery_guide_has_current_acceptance_checklist():
     assert "`Real DXM write readiness: READY`" in guide
     assert "`okScope=local_workbench_and_controlled_single_save_ready`" in guide
     assert "`realDxmMutationAllowed=true`" in guide
-    assert "自动化工作台与受控 `single_save` 可交付" in guide
+    assert "自动化工作台与受控单商品只保存可交付" in guide
     assert "源码包交付通过" in guide
     assert "`Source package check: PASS`" in guide
     assert "`scripts\\final-delivery-check.bat -RequireCleanWorktree`" in guide
     assert "以 `outputs/final-delivery-check/final-delivery-check.json` 的 `gitHead` 字段为准" in guide
-    assert "真实 `single_save` 仍只能按 L2/L3、人工批准和金丝雀证据链启动" in guide
+    assert "真实单商品只保存仍只能按只读页面检查、人工批准和保存证据链启动" in guide
     assert "不能只看 `ok: true`" in guide
 
 
@@ -182,8 +182,8 @@ def test_readme_next_steps_focus_on_allowlist_l2_l3_reverification():
     next_steps = readme[readme.index("## 下一步重点"):readme.index("## 目录结构")]
 
     assert "config/l2_readonly_allowlist.json" in next_steps
-    assert "受控 `single_save` READY 证据" in next_steps
-    assert "claim_only` / `batch_save" in next_steps
+    assert "受控单商品只保存证据" in next_steps
+    assert "认领或批量保存" in next_steps
     assert "批量、无人值守和发布" in next_steps
     assert "实现真实 `DxmAdapter`" not in next_steps
     assert "最终交付验收记录-20260603.md" in readme
@@ -229,6 +229,12 @@ def test_final_delivery_check_captures_final_report_center_after_final_json_writ
 
     assert "ReportOnlyFinal" in qa_script
     assert "AllowMissingPostFinalQa" in qa_script
+    assert "function Resolve-Node" in script
+    assert "$nodeExe = Resolve-Node" in script
+    assert "function Read-QaJsonSummary" in script
+    assert "const slim = {" in script
+    assert "$browserQa = Read-QaJsonSummary -Path $browserQaJson" in script
+    assert "$postFinalReportQa = Read-QaJsonSummary -Path $postFinalReportQaJson" in script
     assert "finalReportCenterShowsFinalPassState" in qa_script
     assert "finalReportCenterQaVisible" in qa_script
     assert "finalReportCenterQaDomState" in qa_script

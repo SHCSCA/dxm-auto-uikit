@@ -1,13 +1,67 @@
 import { useEffect, useMemo, useRef, type ReactNode } from 'react'
 import type { WorkbenchSection } from '../types'
 
-const navItems: Array<{ id: WorkbenchSection; label: string; short: string }> = [
-  { id: 'guide', label: '操作引导', short: '导' },
-  { id: 'dashboard', label: '总览', short: '览' },
-  { id: 'config', label: '配置中心', short: '配' },
-  { id: 'tasks', label: '任务中心', short: '任' },
-  { id: 'console', label: '执行控制台', short: '执' },
+type WorkbenchPrimaryArea = {
+  id: 'execute' | 'prepare' | 'review' | 'system'
+  label: string
+  short: string
+  summary: string
+  items: Array<{ id: WorkbenchSection; label: string; short: string; hint: string }>
+}
+
+const primaryAreas: WorkbenchPrimaryArea[] = [
+  {
+    id: 'execute',
+    label: '执行',
+    short: '执',
+    summary: 'Agent 控制台与真实浏览器',
+    items: [
+      { id: 'console', label: 'Agent 控制台', short: '控', hint: '真实浏览器' },
+      { id: 'tasks', label: '当前任务', short: '任', hint: '启动与审批' },
+    ],
+  },
+  {
+    id: 'prepare',
+    label: '准备',
+    short: '备',
+    summary: '操作引导与编辑页配置',
+    items: [
+      { id: 'guide', label: '操作引导', short: '导', hint: '下一步' },
+      { id: 'config', label: '编辑页配置', short: '配', hint: '按店小秘分区填写' },
+    ],
+  },
+  {
+    id: 'review',
+    label: '复核',
+    short: '核',
+    summary: '证据、报告、异常',
+    items: [
+      { id: 'evidence', label: '证据中心', short: '证', hint: '保存证据' },
+      { id: 'reports', label: '报告中心', short: '报', hint: '复验结论' },
+      { id: 'exceptions', label: '异常池', short: '异', hint: '待处理问题' },
+    ],
+  },
+  {
+    id: 'system',
+    label: '系统',
+    short: '系',
+    summary: '状态与诊断',
+    items: [
+      { id: 'dashboard', label: '系统总览', short: '览', hint: '连接与门禁' },
+    ],
+  },
 ]
+
+const sectionLabels: Record<WorkbenchSection, string> = {
+  guide: '操作引导',
+  dashboard: '总览',
+  config: '配置中心',
+  tasks: '任务中心',
+  console: '执行控制台',
+  evidence: '证据中心',
+  exceptions: '异常池',
+  reports: '报告中心',
+}
 
 type AppShellProps = {
   activeSection: WorkbenchSection
@@ -28,7 +82,7 @@ export function AppShell({
 }: AppShellProps) {
   const mainRef = useRef<HTMLElement | null>(null)
   const activeLabel = useMemo(
-    () => navItems.find((item) => item.id === activeSection)?.label ?? '工作台',
+    () => sectionLabels[activeSection] ?? '工作台',
     [activeSection],
   )
 
@@ -52,26 +106,50 @@ export function AppShell({
           </button>
         </div>
         <nav className="nav-list">
-          {navItems.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={`nav-item ${activeSection === item.id ? 'is-active' : ''}`}
-              onClick={() => onSectionChange(item.id)}
-              title={item.label}
-              aria-current={activeSection === item.id ? 'page' : undefined}
-              data-section={item.id}
+          {primaryAreas.map((area) => (
+            <section
+              key={area.id}
+              className={`nav-section ${area.items.some((item) => item.id === activeSection) ? 'is-active' : ''}`}
+              aria-label={area.label}
             >
-              <span className="nav-item__icon" aria-hidden="true">{item.short}</span>
-              {!sidebarCollapsed && <span>{item.label}</span>}
-            </button>
+              <div className="nav-section__head">
+                <span className="nav-item__icon" aria-hidden="true">{area.short}</span>
+                {!sidebarCollapsed && (
+                  <span>
+                    <strong>{area.label}</strong>
+                    <small>{area.summary}</small>
+                  </span>
+                )}
+              </div>
+              <div className="nav-section__items">
+                {area.items.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={`nav-item nav-subitem ${activeSection === item.id ? 'is-active' : ''}`}
+                    onClick={() => onSectionChange(item.id)}
+                    title={`${area.label} / ${item.label}：${item.hint}`}
+                    aria-current={activeSection === item.id ? 'page' : undefined}
+                    data-section={item.id}
+                  >
+                    {!sidebarCollapsed && (
+                      <>
+                        <span>{item.label}</span>
+                        <small>{item.hint}</small>
+                      </>
+                    )}
+                    {sidebarCollapsed && <span>{item.short}</span>}
+                  </button>
+                ))}
+              </div>
+            </section>
           ))}
         </nav>
         {!sidebarCollapsed && (
           <div className="sidebar__note">
-            <span>数据源</span>
+            <span>连接状态</span>
             <strong>{sourceLabel}</strong>
-            <small>后端接口未就绪时只显示安全空态；演示数据仅开发模式可用。</small>
+            <small>真实店小秘操作在执行控制台的独立浏览器窗口中完成。</small>
           </div>
         )}
       </aside>

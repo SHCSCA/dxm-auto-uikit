@@ -1,13 +1,17 @@
 {
-  "name": "dxm-auto-uikit-desktop",
+  "name": "dxm-agent-desktop",
   "version": "0.1.0",
   "private": true,
-  "main": "src/main.js",
+  "main": "src/main.cjs",
   "scripts": {
-    "dev": "electron src/main.js",
-    "start": "electron src/main.js"
+    "dev": "electron .",
+    "start": "electron .",
+    "build:frontend": "npm --prefix ../frontend run build",
+    "build": "npm run build:frontend && electron-builder --dir --config electron-builder.yml",
+    "build:installer": "npm run build:frontend && electron-builder --config electron-builder.yml"
   },
-  "dependencies": {
-    "electron": "^33.2.1"
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^24.13.3"
   }
 }

@@ -1,4 +1,8 @@
 from fastapi.testclient import TestClient
+import sys
+import threading
+import time
+import types
 
 from src import db
 from src.main import app
@@ -32,6 +36,129 @@ def test_agent_console_service_preview_session_does_not_launch_browser(tmp_path,
     stopped = service.stop()
     assert stopped["active"] is False
     assert stopped["browser_visible"] is False
+
+
+def test_agent_console_can_launch_real_browser_in_background(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+    launch_started = threading.Event()
+    launch_release = threading.Event()
+
+    def fake_launch(profile_dir, state):
+        launch_started.set()
+        assert str(profile_dir).startswith(str(tmp_path / "profiles"))
+        assert state["target_url"] == "https://www.dianxiaomi.com/"
+        launch_release.wait(timeout=5)
+        with service._lock:
+            service._state["browser_launching"] = False
+            service._state["browser_visible"] = True
+            service._state["current_url"] = state["target_url"]
+            service._state["page_title"] = "店小秘ERP"
+            service._state["last_error"] = None
+
+    monkeypatch.setattr(service, "_launch_visible_browser", fake_launch)
+
+    started_at = time.monotonic()
+    status = service.start(
+        task_id=42,
+        target_url="https://www.dianxiaomi.com/",
+        launch_browser=True,
+        launch_browser_async=True,
+    )
+    elapsed = time.monotonic() - started_at
+
+    assert elapsed < 0.5
+    assert status["active"] is True
+    assert status["browser_launching"] is True
+    assert status["browser_visible"] is False
+    assert launch_started.wait(timeout=1)
+    assert service.status()["browser_launching"] is True
+
+    launch_release.set()
+    for _ in range(20):
+        status = service.status()
+        if status["browser_visible"]:
+            break
+        time.sleep(0.05)
+
+    assert status["browser_launching"] is False
+    assert status["browser_visible"] is True
+    assert status["current_url"] == "https://www.dianxiaomi.com/"
+
+
+def test_agent_console_start_reuses_visible_browser_for_same_task(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+    close_calls = []
+
+    original_close = service._close_current_browser
+
+    def close_spy():
+        close_calls.append("closed")
+        original_close()
+
+    monkeypatch.setattr(service, "_close_current_browser", close_spy)
+
+    initial = service.start(
+        task_id=42,
+        target_url="https://www.dianxiaomi.com/",
+        launch_browser=False,
+        step={"state": "WAITING", "action": "等待启动真实浏览器"},
+    )
+    with service._lock:
+        service._state["browser_visible"] = True
+        service._state["browser_launching"] = False
+        service._state["current_url"] = "https://www.dianxiaomi.com/web/home"
+        service._page = object()
+
+    reused = service.start(
+        task_id=42,
+        target_url="https://www.dianxiaomi.com/web/home",
+        launch_browser=True,
+        step={"state": "BROWSER_READY", "action": "真实浏览器已打开"},
+    )
+
+    assert close_calls == ["closed"]
+    assert reused["session_id"] == initial["session_id"]
+    assert reused["profile_dir"] == initial["profile_dir"]
+    assert reused["task_id"] == 42
+    assert reused["browser_visible"] is True
+    assert reused["browser_launching"] is False
+    assert reused["current_url"] == "https://www.dianxiaomi.com/web/home"
+    assert reused["hud"]["state"] == "BROWSER_READY"
+    assert reused["hud"]["action"] == "真实浏览器已打开"
+
+
+def test_agent_console_status_does_not_wait_for_slow_launch_title(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    monkeypatch.setattr(agent_console_module, "chrome_launch_options", lambda headless: {})
+    page = _SlowTitleLaunchPage()
+    fake_playwright = _FakePlaywrightForLaunch(page)
+    monkeypatch.setitem(
+        sys.modules,
+        "playwright.sync_api",
+        types.SimpleNamespace(sync_playwright=lambda: types.SimpleNamespace(start=lambda: fake_playwright)),
+    )
+    service = AgentConsoleService()
+
+    service.start(
+        task_id=42,
+        target_url="https://www.dianxiaomi.com/",
+        launch_browser=True,
+        launch_browser_async=True,
+    )
+    assert page.title_started.wait(timeout=1)
+
+    started_at = time.monotonic()
+    try:
+        status = service.status()
+    finally:
+        page.title_release.set()
+    elapsed = time.monotonic() - started_at
+
+    assert elapsed < 0.5
+    assert status["active"] is True
+    assert status["browser_launching"] is True
 
 
 def test_agent_console_api_lifecycle_uses_preview_mode(tmp_path, monkeypatch):
@@ -172,6 +299,25 @@ def test_agent_console_refresh_frame_updates_screenshot_and_timestamp(tmp_path, 
     assert status["page_title"] == "店小秘 Home"
 
 
+def test_agent_console_status_uses_cached_browser_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+
+    with service._lock:
+        service._page = _ThreadBoundFakePage()
+        service._state["browser_visible"] = True
+        service._state["current_url"] = "https://www.dianxiaomi.com/web/home"
+        service._state["page_title"] = "店小秘 Home"
+        service._state["last_error"] = None
+
+    status = service.status()
+
+    assert status["current_url"] == "https://www.dianxiaomi.com/web/home"
+    assert status["page_title"] == "店小秘 Home"
+    assert status["last_error"] is None
+
+
 def test_agent_console_manual_takeover_brings_real_browser_to_front(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
     service = AgentConsoleService()
@@ -242,6 +388,26 @@ def test_agent_console_controls_live_browser_and_records_actions(tmp_path, monke
     assert status["action_events"][-1]["action"] == "goto"
     assert status["action_events"][-1]["status"] == "ok"
     assert status["last_frame_at"] is not None
+
+
+def test_agent_console_successful_browser_control_clears_stale_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    monkeypatch.setattr(agent_console_module, "SCREENSHOT_ROOT", tmp_path / "screenshots")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+    fake_page = _FakePage()
+
+    with service._lock:
+        service._page = fake_page
+        service._state["browser_visible"] = True
+        service._state["last_error"] = "Cannot switch to a different thread"
+
+    result = service.control_browser({"action": "goto", "url": "https://www.dianxiaomi.com/web/home"})
+
+    assert result["ok"] is True
+    assert result["last_error"] is None
+    assert service.status()["last_error"] is None
+    assert service.status()["action_events"][-1]["status"] == "ok"
 
 
 def test_agent_console_controls_live_browser_by_selector_and_records_actions(tmp_path, monkeypatch):
@@ -511,6 +677,67 @@ class _FakePage:
             locator = _FakeLocator()
             self.locators[selector] = locator
         return locator
+
+
+class _ThreadBoundFakePage:
+    @property
+    def url(self):
+        raise RuntimeError("Cannot switch to a different thread")
+
+    def title(self):
+        raise RuntimeError("Cannot switch to a different thread")
+
+
+class _SlowTitleLaunchPage:
+    url = "https://www.dianxiaomi.com/"
+
+    def __init__(self):
+        self.title_started = threading.Event()
+        self.title_release = threading.Event()
+
+    def on(self, event_name, callback):
+        assert event_name in {"request", "response"}
+
+    def add_init_script(self, script):
+        assert script
+
+    def goto(self, url: str, *, wait_until: str, timeout: int):
+        self.url = url
+
+    def evaluate(self, script, payload):
+        assert payload["state"] == "WAITING"
+
+    def title(self):
+        self.title_started.set()
+        self.title_release.wait(timeout=5)
+        return "店小秘ERP"
+
+
+class _FakeContextForLaunch:
+    def __init__(self, page):
+        self.pages = [page]
+
+    def new_page(self):
+        return self.pages[0]
+
+    def close(self):
+        pass
+
+
+class _FakeChromiumForLaunch:
+    def __init__(self, page):
+        self.page = page
+
+    def launch_persistent_context(self, profile_dir, **options):
+        return _FakeContextForLaunch(self.page)
+
+
+class _FakePlaywrightForLaunch:
+    def __init__(self, page):
+        self.chromium = _FakeChromiumForLaunch(page)
+
+    def stop(self):
+        pass
 
 
 class _FakeMouse:

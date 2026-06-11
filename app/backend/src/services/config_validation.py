@@ -83,7 +83,8 @@ class ConfigValidationService:
         if publish_warnings:
             return self._result(False, self.PUBLISH_ERROR_CODE, [], publish_warnings, mode)
 
-        missing = self._missing_for_mode(mode, task_data, payload, templates, product_payload)
+        applicable_templates = self._applicable_templates(templates, task_data, product)
+        missing = self._missing_for_mode(mode, task_data, payload, applicable_templates, product_payload)
         return self._result(not missing, self.CONFIG_ERROR_CODE if missing else None, missing, warnings, mode)
 
     def _payload(self, task: Mapping[str, Any]) -> dict:
@@ -242,6 +243,73 @@ class ConfigValidationService:
             if template_type:
                 present.add(template_type)
         return present
+
+    def _applicable_templates(
+        self,
+        templates: Any,
+        task: Mapping[str, Any],
+        product: Mapping[str, Any] | None,
+    ) -> list[Any]:
+        return [
+            template
+            for template in self._iter_templates(templates)
+            if self._template_applies_to(template, task, product)
+        ]
+
+    def _template_applies_to(
+        self,
+        template: Any,
+        task: Mapping[str, Any],
+        product: Mapping[str, Any] | None,
+    ) -> bool:
+        payload = self._template_payload(template)
+        binding = payload.get("binding") or payload.get("applies_to") or payload.get("match")
+        if not isinstance(binding, Mapping):
+            return True
+
+        task_payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+        product_payload = (product or {}).get("payload") if isinstance((product or {}).get("payload"), Mapping) else {}
+        actual_store = (
+            task_payload.get("store_name")
+            or task.get("store_name")
+            or task_payload.get("store")
+            or task.get("store")
+            or "Dang Kang"
+        )
+        actual_category = (
+            (product or {}).get("category_name")
+            or product_payload.get("category_name")
+            or task_payload.get("category_name")
+            or task_payload.get("category")
+        )
+        actual_platform = (
+            task_payload.get("platform")
+            or task.get("platform")
+            or "AliExpress"
+        )
+        return (
+            self._matches_binding(binding, ("store_name", "store", "stores", "store_names"), actual_store)
+            and self._matches_binding(binding, ("category_name", "category", "categories", "category_names"), actual_category)
+            and self._matches_binding(binding, ("platform", "platforms"), actual_platform)
+        )
+
+    def _template_payload(self, template: Any) -> Mapping[str, Any]:
+        if isinstance(template, Mapping):
+            payload = template.get("payload")
+            return payload if isinstance(payload, Mapping) else template
+        if isinstance(template, tuple) and len(template) == 2 and isinstance(template[1], Mapping):
+            payload = template[1].get("payload")
+            return payload if isinstance(payload, Mapping) else template[1]
+        return {}
+
+    def _matches_binding(self, binding: Mapping[str, Any], keys: tuple[str, ...], actual: Any) -> bool:
+        expected = next((binding.get(key) for key in keys if key in binding), None)
+        if expected is None or expected == "":
+            return True
+        actual_text = str(actual or "").strip().lower()
+        values = expected if isinstance(expected, (list, tuple, set)) else [expected]
+        normalized = [str(value or "").strip().lower() for value in values]
+        return "*" in normalized or "all" in normalized or actual_text in normalized
 
     def _template_payloads(self, templates: Any, template_type: str) -> list[Mapping[str, Any]]:
         payloads: list[Mapping[str, Any]] = []

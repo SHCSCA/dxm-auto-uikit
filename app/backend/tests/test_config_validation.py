@@ -124,6 +124,35 @@ def test_valid_single_save_passes_with_required_templates():
     }
 
 
+def test_single_save_ignores_templates_bound_to_other_store():
+    service = ConfigValidationService()
+    templates = [
+        {
+            **template,
+            "payload": {
+                **template["payload"],
+                "binding": {"store_name": "Other Store", "category_name": "立牌类谷子", "platform": "AliExpress"},
+            },
+        }
+        for template in _required_templates()
+    ]
+
+    result = service.validate_task(
+        {
+            "mode": "single_save",
+            "store_id": 1001,
+            "payload": {"store_name": "Dang Kang", "product_ids": [501], "publish": False},
+        },
+        templates,
+        product={"category_name": "立牌类谷子", "payload": {}},
+    )
+
+    assert result["ok"] is False
+    assert "category" in result["missing"]
+    assert "sku" in result["missing"]
+    assert "image.eu_outer_package_filename" in result["missing"]
+
+
 def test_single_save_accepts_new_dxm_reference_templates():
     service = ConfigValidationService()
     templates = [

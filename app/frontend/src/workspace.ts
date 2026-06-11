@@ -37,7 +37,7 @@ export type WorkspaceApiBundle = {
 }
 
 type DeliveryWorkspaceApi = Partial<DeliveryWorkspace> & {
-  current_task?: Task
+  current_task?: Task | null
   steps?: RunStep[]
   evidence_points?: EvidencePoint[]
   report_summary?: ReportSummary
@@ -114,7 +114,10 @@ export function composeWorkspace(bundle: WorkspaceApiBundle): DeliveryWorkspace 
   const stores = chooseList(workspace?.stores, bundle.stores, fallback.stores, Boolean(workspace), apiHasData)
   const templates = chooseList(workspace?.templates, bundle.templates, fallback.templates, Boolean(workspace), apiHasData)
   const products = chooseList(workspace?.products, bundle.products, fallback.products, Boolean(workspace), apiHasData)
-  const tasks = chooseList(workspace?.tasks, currentTask ? [currentTask] : bundle.tasks, fallback.tasks, Boolean(workspace), apiHasData)
+  const tasks = mergeCurrentTaskIntoTasks(
+    currentTask,
+    chooseList(nonEmptyList(workspace?.tasks), currentTask ? [currentTask, ...bundle.tasks] : bundle.tasks, fallback.tasks, Boolean(workspace), apiHasData),
+  )
   const logs = chooseList(workspace?.logs, bundle.logs, fallback.logs, Boolean(workspace), apiHasData)
   const evidences = chooseList(workspace?.evidences, bundle.evidences, fallback.evidences, Boolean(workspace), apiHasData)
   const exceptions = chooseList(workspace?.exceptions, bundle.exceptions, fallback.exceptions, Boolean(workspace), apiHasData)
@@ -198,7 +201,7 @@ export function buildEmptyWorkspace(): DeliveryWorkspace {
       title: '尚无真实任务数据',
       severity: 'watch',
       owner: 'workspace',
-      detail: '准备演示数据或接入后端任务后，工作台才会展示报告和证据。',
+      detail: '接入后端任务或导入真实商品后，工作台才会展示报告和证据。',
       evidenceLevel: 'C',
     }],
     safety: {
@@ -404,7 +407,7 @@ function buildL2ProbePlan(): L2ProbePlan {
   return {
     schema: 'dxm_l2_readonly_probe_plan.v1',
     requiresApproval: true,
-    purpose: '真实店小秘双目标只读诊断；不领取、不备注、不保存、不发布。',
+    purpose: '真实店小秘双目标 L2 页面核验；不领取、不备注、不保存、不发布。',
     runIdCommand,
     pythonCommand,
     scriptPath,
@@ -774,7 +777,7 @@ function safetyFromGuard(
   }
 }
 
-function normalizeTask(value: Task | undefined): Task | null {
+function normalizeTask(value: Task | null | undefined): Task | null {
   if (!value) return null
   return {
     ...value,
@@ -783,6 +786,15 @@ function normalizeTask(value: Task | undefined): Task | null {
     failed_jobs: Number(value.failed_jobs ?? 0),
     payload: value.payload ?? {},
   }
+}
+
+function nonEmptyList<T>(value: T[] | undefined): T[] | undefined {
+  return Array.isArray(value) && value.length > 0 ? value : undefined
+}
+
+function mergeCurrentTaskIntoTasks(currentTask: Task | null, tasks: Task[]): Task[] {
+  if (!currentTask) return tasks
+  return [currentTask, ...tasks.filter((task) => task.id !== currentTask.id)]
 }
 
 function firstList<T>(...lists: Array<T[] | undefined>): T[] {

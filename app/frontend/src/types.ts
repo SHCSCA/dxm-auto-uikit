@@ -1,4 +1,20 @@
 export type Store = { id: number; name: string; platform: string; status: string }
+export type DesktopRuntimeInfo = {
+  repoRoot?: string | null
+  backendPort?: number | null
+  apiBase?: string | null
+  frontendPath?: string | null
+  backendLogPath?: string | null
+  desktopLogPath?: string | null
+  lastError?: string | null
+}
+
+declare global {
+  interface Window {
+    dxmDesktop?: { getRuntimeInfo: () => Promise<DesktopRuntimeInfo> }
+  }
+}
+
 export type DxmReferenceSectionCode =
   | 'attribute_info'
   | 'description'
@@ -17,20 +33,21 @@ export type DxmReferenceTemplateSection = {
 }
 export type Template = { id: number; template_type: string; template_name: string; binding_scope: string; payload: Record<string, unknown>; is_enabled: boolean }
 export type Product = { id: number; title: string; category_name: string; price: number; currency: string; sku_count: number; image_count: number; status: string; image?: { eu_outer_package_filename?: string } }
-export type Task = { id: number; name: string; status: string; mode: string; publish_scene: string; total_jobs: number; completed_jobs: number; failed_jobs: number; payload: { product_ids?: number[]; store_name?: string; category_name?: string; image?: { eu_outer_package_filename?: string }; [key: string]: unknown } }
+export type Task = { id: number; name: string; status: string; mode: string; publish_scene: string; store_id?: number | null; total_jobs: number; completed_jobs: number; failed_jobs: number; payload: { product_ids?: number[]; store_name?: string; category_name?: string; image?: { eu_outer_package_filename?: string }; [key: string]: unknown } }
 export type RealTaskCreateRequest = { storeId: number; mode: 'probe' | 'single_save'; productIds: number[] }
 export type LogItem = { id: number; task_id: number; job_id: number | null; level: string; message: string; context: Record<string, unknown>; created_at: string }
 export type RuntimeLogSource = 'backend' | 'frontend' | 'launcher' | 'npm' | 'task' | 'agent'
 export type RuntimeLogItem = { line: string; level: 'info' | 'warning' | 'error' | string; tags: string[] }
-export type RuntimeLogResponse = { source: string; path: string; exists: boolean; cursor: number; nextCursor: number; lines: string[]; items?: RuntimeLogItem[]; truncated?: boolean }
+export type RuntimeLogResponse = { source: string; path: string; exists: boolean; cursor: number; nextCursor: number; lines: string[]; items?: RuntimeLogItem[]; truncated?: boolean; fetchedAt?: string; error?: string }
 export type RuntimeStatus = {
   backend: { status: string; url?: string; port?: number | null; detail?: string }
   frontend: { status: string; url?: string; port?: number | null; detail?: string }
   agentConsole: { status: string; active: boolean; browserVisible: boolean; currentUrl?: string | null; lastError?: string | null }
   dxmLogin: { status: string; currentUrl?: string | null; lastError?: string | null }
   dependencies: Record<string, { status: string; path?: string | null }>
+  runtimeControl?: { managedByLauncher: boolean; restartAvailable: boolean; commandFile?: string | null; detail?: string | null }
 }
-export type RuntimeControlAction = 'stop_agent_console' | 'clear_stuck_tasks' | 'restart_backend' | 'restart_frontend'
+export type RuntimeControlAction = 'stop_agent_console' | 'clear_stuck_tasks' | 'restart_backend' | 'restart_frontend' | 'run_l2_readonly_probe'
 export type RuntimeControlResponse = {
   ok: boolean
   action: RuntimeControlAction | string
@@ -201,6 +218,7 @@ export type AgentConsoleSession = {
   product_id?: number | null
   profile_dir: string | null
   launch_browser: boolean
+  browser_launching?: boolean
   browser_visible: boolean
   target_url: string | null
   current_url: string | null

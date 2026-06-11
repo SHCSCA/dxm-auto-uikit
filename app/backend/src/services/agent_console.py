@@ -48,15 +48,7 @@ class AgentConsoleService:
 
     def status(self) -> dict[str, Any]:
         with self._lock:
-            state = dict(self._state)
-            page = self._page
-        if page is not None:
-            try:
-                state["current_url"] = page.url
-                state["page_title"] = page.title()
-            except Exception as exc:
-                state["last_error"] = str(exc)
-        return state
+            return dict(self._state)
 
     def start(
         self,
@@ -64,8 +56,18 @@ class AgentConsoleService:
         task_id: int | None = None,
         target_url: str | None = None,
         launch_browser: bool = True,
+        launch_browser_async: bool = False,
         step: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        reused = self._reuse_visible_browser_if_possible(
+            task_id=task_id,
+            target_url=target_url,
+            launch_browser=launch_browser,
+            step=step,
+        )
+        if reused is not None:
+            return reused
+
         self._close_current_browser()
         with self._lock:
             session_id = f"agent-{uuid.uuid4().hex[:10]}"
@@ -77,6 +79,7 @@ class AgentConsoleService:
                 "task_id": task_id,
                 "profile_dir": str(profile_dir),
                 "launch_browser": launch_browser,
+                "browser_launching": bool(launch_browser),
                 "browser_visible": False,
                 "target_url": target_url or DEFAULT_TARGET_URL,
                 "current_url": target_url or DEFAULT_TARGET_URL,
@@ -102,9 +105,46 @@ class AgentConsoleService:
             self._state = state
 
         if launch_browser:
-            self._run_browser_op(lambda: self._launch_visible_browser(profile_dir, state))
+            if launch_browser_async:
+                self._browser_executor.submit(lambda: self._launch_visible_browser(profile_dir, state))
+            else:
+                self._run_browser_op(lambda: self._launch_visible_browser(profile_dir, state))
 
         return self.status()
+
+    def _reuse_visible_browser_if_possible(
+        self,
+        *,
+        task_id: int | None,
+        target_url: str | None,
+        launch_browser: bool,
+        step: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if not launch_browser:
+            return None
+        with self._lock:
+            current_task_id = self._state.get("task_id")
+            same_task = task_id is None or current_task_id is None or current_task_id == task_id
+            if (
+                not same_task
+                or not self._state.get("active")
+                or not self._state.get("browser_visible")
+                or self._page is None
+            ):
+                return None
+
+            if current_task_id is None and task_id is not None:
+                self._state["task_id"] = task_id
+            if target_url:
+                self._state["target_url"] = target_url
+                if not self._state.get("current_url"):
+                    self._state["current_url"] = target_url
+            self._state["launch_browser"] = True
+            self._state["browser_launching"] = False
+            self._state["hud"] = self._hud_state(step)
+            self._state["last_error"] = None
+            self._state["updated_at"] = _now()
+            return dict(self._state)
 
     def stop(self) -> dict[str, Any]:
         self._close_current_browser()
@@ -320,15 +360,20 @@ class AgentConsoleService:
         SCREENSHOT_ROOT.mkdir(parents=True, exist_ok=True)
         path = SCREENSHOT_ROOT / f"{session_id}.png"
         try:
-            self._run_browser_op(lambda: page.screenshot(path=str(path), full_page=False))
+            def capture_frame() -> dict[str, str]:
+                page.screenshot(path=str(path), full_page=False)
+                return {
+                    "current_url": page.url,
+                    "page_title": page.title(),
+                }
+
+            frame = self._run_browser_op(capture_frame)
             with self._lock:
                 self._state["screenshot"] = str(path)
                 self._state["last_frame_at"] = _now()
-                try:
-                    self._state["current_url"] = page.url
-                    self._state["page_title"] = page.title()
-                except Exception as exc:
-                    self._state["last_error"] = str(exc)
+                self._state["current_url"] = frame["current_url"]
+                self._state["page_title"] = frame["page_title"]
+                self._state["last_error"] = None
                 self._state["updated_at"] = _now()
         except Exception as exc:
             with self._lock:
@@ -486,6 +531,8 @@ class AgentConsoleService:
             page.add_init_script(HUD_INIT_SCRIPT)
             page.goto(state["target_url"], wait_until="domcontentloaded", timeout=45000)
             self._apply_hud(page, state["hud"])
+            current_url = page.url
+            page_title = page.title()
             with self._lock:
                 if self._state.get("session_id") != state["session_id"] or not self._state.get("active"):
                     self._close_browser_objects(context, playwright)
@@ -493,13 +540,16 @@ class AgentConsoleService:
                 self._playwright = playwright
                 self._context = context
                 self._page = page
+                self._state["browser_launching"] = False
                 self._state["browser_visible"] = True
-                self._state["current_url"] = page.url
-                self._state["page_title"] = page.title()
+                self._state["current_url"] = current_url
+                self._state["page_title"] = page_title
+                self._state["last_error"] = None
                 self._state["updated_at"] = _now()
         except Exception as exc:
             with self._lock:
                 self._state["last_error"] = str(exc)
+                self._state["browser_launching"] = False
                 self._state["browser_visible"] = False
                 self._state["updated_at"] = _now()
 
@@ -587,6 +637,7 @@ class AgentConsoleService:
             "task_id": None,
             "profile_dir": None,
             "launch_browser": False,
+            "browser_launching": False,
             "browser_visible": False,
             "target_url": DEFAULT_TARGET_URL,
             "current_url": None,
@@ -619,6 +670,7 @@ class AgentConsoleService:
                 "job_id": self._state.get("job_id"),
                 "product_id": self._state.get("product_id"),
                 "browser_visible": self._state.get("browser_visible"),
+                "browser_launching": self._state.get("browser_launching"),
                 "current_url": self._state.get("current_url"),
                 "page_title": self._state.get("page_title"),
                 "hud": dict(self._state.get("hud") or {}),

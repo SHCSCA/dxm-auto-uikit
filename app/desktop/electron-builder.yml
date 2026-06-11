@@ -1,0 +1,27 @@
+appId: com.dxm.agent.console
+productName: DXM Agent Console
+electronDist: ./node_modules/electron/dist
+directories:
+  output: ../../outputs/desktop-build
+files:
+  - src/**
+  - package.json
+  # Repository resource contract: app/frontend/dist/** and app/backend/src/**
+  - ../frontend/dist/**
+  - ../backend/src/**
+extraResources:
+  - from: ../frontend/dist
+    to: app/frontend/dist
+  - from: ../backend/src
+    to: app/backend/src
+  - from: ../backend/.venv
+    to: app/backend/.venv
+win:
+  target: nsis
+  artifactName: DXM-Agent-Console-${version}.${ext}
+  signAndEditExecutable: false
+  signDlls: false
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true

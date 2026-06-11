@@ -12,21 +12,44 @@ import {
   ReportCenter,
   TaskCenter,
 } from './components/WorkbenchModules'
-import type { AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
+import type { AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
 import { composeWorkspace, demoTemplateSeeds, seedRows } from './workspace'
 
 const AGENT_CONSOLE_TARGET_URL = 'https://www.dianxiaomi.com/'
+const DXM_TARGET_URLS = {
+  data_acquisition: 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition',
+  draft_box: 'https://www.dianxiaomi.com/web/smt/smtProductList/draft',
+} as const
+const DXM_TARGET_PATHS: Record<keyof typeof DXM_TARGET_URLS, string> = {
+  data_acquisition: '/web/productCrawl/dataAcquisition',
+  draft_box: '/web/smt/smtProductList/draft',
+}
+const DXM_TARGET_LABELS: Record<keyof typeof DXM_TARGET_URLS, string> = {
+  data_acquisition: '采集页',
+  draft_box: '采集箱',
+}
+const AGENT_CONSOLE_NAVIGATION_SETTLE_MS = 2500
 const REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save', 'batch_save'])
 const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['single_save'])
 const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'batch_save'])
+const DXM_READY_SESSION_STATUSES = new Set(['login_success', 'logged_in', 'not_published_verified'])
 const L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
 const DEMO_ENABLED = new URLSearchParams(window.location.search).get('dev') === '1'
   || (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_DXM_ENABLE_DEMO === '1'
+const initialTaskIdFromUrl = (() => {
+  const rawTaskId = new URLSearchParams(window.location.search).get('task_id')
+  const taskId = Number(rawTaskId)
+  return Number.isInteger(taskId) && taskId > 0 ? taskId : null
+})()
 
 const sourceLabels: Record<DeliveryWorkspace['source'], string> = {
-  api: '/api/delivery/workspace',
-  fallback: '现有 API 组合',
-  mock: '空工作台 / 演示前',
+  api: '工作台数据已连接',
+  fallback: '本机工作台服务部分连接',
+  mock: '正在连接本机工作台服务',
+}
+
+type DeliveryWorkspaceResponse = Partial<DeliveryWorkspace> & {
+  current_task?: Task | null
 }
 
 type ApiFailure = {
@@ -48,6 +71,31 @@ type ManualApprovalResponse = {
 
 const runtimeLogSources: RuntimeLogSource[] = ['backend', 'frontend', 'launcher', 'npm', 'task', 'agent']
 
+function compactDxmUrl(value: string | null | undefined) {
+  if (!value) return '未知页面'
+  try {
+    const url = new URL(value)
+    return `${url.hostname}${url.pathname}${url.search}`
+  } catch {
+    return value
+  }
+}
+
+function currentUrlMatchesDxmTarget(value: string | null | undefined, target: keyof typeof DXM_TARGET_URLS) {
+  if (!value) return false
+  try {
+    return new URL(value).pathname.startsWith(DXM_TARGET_PATHS[target])
+  } catch {
+    return value.includes(DXM_TARGET_PATHS[target])
+  }
+}
+
+function waitForAgentConsoleNavigationSettle() {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, AGENT_CONSOLE_NAVIGATION_SETTLE_MS)
+  })
+}
+
 export default function App() {
   const [workspace, setWorkspace] = useState<DeliveryWorkspace>(() => composeWorkspace({
     stores: [],
@@ -60,13 +108,14 @@ export default function App() {
     reports: [],
   }))
   const [activeSection, setActiveSection] = useState<WorkbenchSection>('guide')
-  const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null)
+  const [selectedTaskId, setSelectedTaskId] = useState<number | null>(initialTaskIdFromUrl)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [busy, setBusy] = useState(false)
   const [agentConsole, setAgentConsole] = useState<AgentConsoleSession | null>(null)
   const [finalCheck, setFinalCheck] = useState<FinalDeliveryCheckSummary | null>(null)
   const [agentConsoleError, setAgentConsoleError] = useState<string | null>(null)
   const [operationError, setOperationError] = useState<string | null>(null)
+  const [operationNotice, setOperationNotice] = useState<string | null>(null)
   const [runtimeLogSource, setRuntimeLogSource] = useState<RuntimeLogSource>('launcher')
   const [runtimeLogs, setRuntimeLogs] = useState<Record<RuntimeLogSource, RuntimeLogResponse | null>>({
     backend: null,
@@ -80,12 +129,15 @@ export default function App() {
   const [runtimeLogLevel, setRuntimeLogLevel] = useState<'all' | 'info' | 'warning' | 'error'>('all')
   const [runtimeLogQuery, setRuntimeLogQuery] = useState('')
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null)
+  const [desktopRuntime, setDesktopRuntime] = useState<DesktopRuntimeInfo | null>(null)
   const [configPreview, setConfigPreview] = useState<ConfigPreview | null>(null)
   const [configPreviewLoading, setConfigPreviewLoading] = useState(false)
+  const [dxmLoginDraft, setDxmLoginDraft] = useState({ username: '', password: '' })
+  const [l3ApprovedBy, setL3ApprovedBy] = useState('')
   const [workspaceNotice, setWorkspaceNotice] = useState<WorkspaceNotice | null>({
     kind: 'loading',
     title: '正在加载 DXM 自动化工作台',
-    detail: '正在读取 /api/delivery/workspace 与关联接口。',
+    detail: '正在读取任务、店铺、商品、证据和报告状态。',
   })
   const runtimeLogCursorRef = useRef<Record<RuntimeLogSource, number>>({
     backend: 0,
@@ -95,6 +147,7 @@ export default function App() {
     task: 0,
     agent: 0,
   })
+  const lastObservedL2CompletionRef = useRef<string | null>(null)
 
   const selectedTask = useMemo(
     () => workspace.tasks.find((task) => task.id === selectedTaskId) ?? workspace.tasks[0] ?? null,
@@ -118,7 +171,7 @@ export default function App() {
       : {
         kind: 'loading',
         title: '正在加载 DXM 自动化工作台',
-        detail: `正在读取 ${deliveryPath} 与关联接口。`,
+        detail: '正在读取任务、店铺、商品、证据和报告状态。',
       })
     const [
       deliveryWorkspace,
@@ -133,7 +186,7 @@ export default function App() {
       consoleStatus,
       finalCheckSummary,
     ] = await Promise.all([
-      loadOrFallback<Partial<DeliveryWorkspace> | null>(deliveryPath, null),
+      loadOrFallback<DeliveryWorkspaceResponse | null>(deliveryPath, null),
       loadOrFallback<Store[]>('/api/stores', []),
       loadOrFallback<Template[]>('/api/templates', []),
       loadOrFallback<Product[]>('/api/products', []),
@@ -159,13 +212,12 @@ export default function App() {
     setWorkspace(nextWorkspace)
     setAgentConsole(consoleStatus)
     setFinalCheck(finalCheckSummary)
-    setSelectedTaskId((current) => current ?? nextWorkspace.tasks[0]?.id ?? null)
+    setSelectedTaskId((current) => current ?? pickDefaultTaskId(deliveryWorkspace, nextWorkspace.tasks))
     if (failures.length) {
-      const failedPaths = failures.map((failure) => failure.path).join('、')
       setWorkspaceNotice({
         kind: 'degraded',
-        title: 'DXM 自动化接口不可用，正在显示只读降级数据',
-        detail: `失败接口：${failedPaths}。${failures[0]?.message ?? '请检查后端服务状态。'}`,
+        title: '工作台服务连接异常',
+        detail: `暂时无法读取完整任务数据。请检查启动器和后端服务状态；系统不会伪造真实保存结果。${failures[0]?.message ?? ''}`,
       })
     } else {
       setWorkspaceNotice(null)
@@ -203,13 +255,14 @@ export default function App() {
       try {
         const status = await postJson<AgentConsoleSession | null>('/api/agent-console/frame', {})
         setAgentConsole(status)
-        return
+        return status
       } catch {
         // Fall back to the lightweight status contract when the frame endpoint is not available.
       }
     }
     const status = await getJsonOrDefault<AgentConsoleSession | null>('/api/agent-console/status', null)
     setAgentConsole(status)
+    return status
   }, [])
 
   useEffect(() => {
@@ -221,8 +274,8 @@ export default function App() {
   }, [agentConsole?.active, agentConsole?.browser_visible, refreshAgentConsole])
 
   const refreshRuntimeLogs = useCallback(async () => {
-    try {
-      const loaded = await Promise.all(runtimeLogSources.map(async (source) => {
+    const loaded = await Promise.all(runtimeLogSources.map(async (source) => {
+      try {
         const params = new URLSearchParams({
           source,
           cursor: String(runtimeLogCursorRef.current[source] ?? 0),
@@ -232,25 +285,41 @@ export default function App() {
         if (runtimeLogLevel !== 'all') params.set('level', runtimeLogLevel)
         if (runtimeLogQuery.trim()) params.set('q', runtimeLogQuery.trim())
         const response = await getJson<RuntimeLogResponse>(`/api/runtime/logs?${params.toString()}`)
-        return [source, response] as const
-      }))
-      setRuntimeLogs((current) => {
-        const next = { ...current }
-        loaded.forEach(([source, response]) => {
-          runtimeLogCursorRef.current[source] = response.nextCursor
-          const existing = current[source]
-          const shouldAppend = response.cursor > 0 && existing && existing.source === response.source
-          const existingItems = existing?.items ?? existing?.lines.map((line) => ({ line, level: 'info', tags: [] })) ?? []
-          const responseItems = response.items ?? response.lines.map((line) => ({ line, level: 'info', tags: [] }))
-          const items = shouldAppend ? [...existingItems, ...responseItems].slice(-400) : responseItems
-          next[source] = { ...response, items, lines: items.map((item) => item.line) }
-        })
-        return next
+        return { source, response, ok: true as const }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '读取运行日志失败'
+        const cursor = runtimeLogCursorRef.current[source] ?? 0
+        const response: RuntimeLogResponse = {
+          source,
+          path: 'runtime-log-fetch',
+          exists: true,
+          cursor,
+          nextCursor: cursor,
+          lines: [`${source} 日志读取失败：${message}`],
+          items: [{ line: `${source} 日志读取失败：${message}`, level: 'error', tags: ['fetch_failed'] }],
+          error: message,
+        }
+        return { source, response, ok: false as const, error: message }
+      }
+    }))
+    const fetchedAt = new Date().toISOString()
+    setRuntimeLogs((current) => {
+      const next = { ...current }
+      loaded.forEach(({ source, response, ok }) => {
+        if (ok) runtimeLogCursorRef.current[source] = response.nextCursor
+        const existing = current[source]
+        const shouldAppend = ok && response.cursor > 0 && existing && existing.source === response.source
+        const existingItems = existing?.items ?? existing?.lines.map((line) => ({ line, level: 'info', tags: [] })) ?? []
+        const responseItems = response.items ?? response.lines.map((line) => ({ line, level: 'info', tags: [] }))
+        const items = shouldAppend ? [...existingItems, ...responseItems].slice(-400) : responseItems
+        next[source] = { ...response, fetchedAt, items, lines: items.map((item) => item.line) }
       })
-      setRuntimeLogError(null)
-    } catch (error) {
-      setRuntimeLogError(error instanceof Error ? error.message : '读取运行日志失败')
-    }
+      return next
+    })
+    const failed = loaded.filter((item) => !item.ok)
+    setRuntimeLogError(failed.length
+      ? `部分日志源读取失败：${failed.map((item) => item.source).join('、')}；其他日志继续刷新。`
+      : null)
   }, [runtimeLogLevel, runtimeLogQuery, selectedTask?.id])
 
   useEffect(() => {
@@ -272,12 +341,42 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    const launcherItems = runtimeLogs.launcher?.items ?? []
+    const completion = [...launcherItems]
+      .reverse()
+      .find((item) => item.line.includes('[l2-readonly-runner] finished') && item.line.includes('exit_code=0'))
+    if (!completion) return
+
+    const completionKey = completion.line.match(/run_id=([^\s]+)/)?.[1] ?? completion.line
+    if (lastObservedL2CompletionRef.current === completionKey) return
+    lastObservedL2CompletionRef.current = completionKey
+    void refreshWorkspace()
+    void refreshRuntimeStatus()
+  }, [refreshRuntimeStatus, refreshWorkspace, runtimeLogs.launcher])
+
+  useEffect(() => {
     void refreshRuntimeStatus()
     const timer = window.setInterval(() => {
       void refreshRuntimeStatus()
     }, 5000)
     return () => window.clearInterval(timer)
   }, [refreshRuntimeStatus])
+
+  useEffect(() => {
+    let cancelled = false
+    async function loadDesktopRuntime() {
+      const runtime = await window.dxmDesktop?.getRuntimeInfo?.()
+      if (!cancelled && runtime) setDesktopRuntime(runtime)
+    }
+    void loadDesktopRuntime()
+    const timer = window.setInterval(() => {
+      void loadDesktopRuntime()
+    }, 5000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [])
 
   async function createRealTask(request: RealTaskCreateRequest) {
     setBusy(true)
@@ -296,7 +395,7 @@ export default function App() {
         return
       }
       const firstProduct = products[0]
-      const modeLabel = request.mode === 'probe' ? 'L2 只读检查' : 'L3 single_save'
+      const modeLabel = request.mode === 'probe' ? '只读页面检查' : '单商品只保存'
       const task = await postJson<Task>('/api/tasks', {
         name: `${modeLabel} - ${store.name} - ${products.length} 件商品`,
         store_id: store.id,
@@ -377,11 +476,19 @@ export default function App() {
     try {
       if (REAL_DXM_MUTATION_MODES.has(selectedTask.mode)) {
         if (UNRELEASED_REAL_DXM_MUTATION_MODES.has(selectedTask.mode)) {
-          setOperationError('当前真实 DXM 写入仅发布受控 single_save；claim_only/batch_save 必须重新建立 L2/L3 证据后再放行。')
+          setOperationError('当前仅开放单商品只保存；认领和批量保存必须重新验收后再放行。')
           return
         }
         if (!RELEASED_REAL_DXM_MUTATION_MODES.has(selectedTask.mode)) {
           setOperationError(`当前执行模式 ${selectedTask.mode} 未发布，禁止启动真实 DXM 写入。`)
+          return
+        }
+        const latestRuntimeStatus = await getJson<RuntimeStatus>(`/api/runtime/status?frontend_url=${encodeURIComponent(window.location.origin)}`)
+        setRuntimeStatus(latestRuntimeStatus)
+        const dxmLoginStatus = latestRuntimeStatus.dxmLogin?.status ?? ''
+        if (!DXM_READY_SESSION_STATUSES.has(dxmLoginStatus)) {
+          setOperationError(`请先完成真实 DXM 登录；当前登录状态：${dxmLoginStatus || '未知'}。`)
+          setActiveSection('guide')
           return
         }
         const latestConfigPreview = await refreshConfigPreview(selectedTask.id)
@@ -390,9 +497,10 @@ export default function App() {
           setActiveSection('config')
           return
         }
-        const approvedBy = window.prompt('输入 L3 批准人标识。将只启动受控 single_save save-only 金丝雀，不会发布。', 'ops-owner')
-        if (!approvedBy?.trim()) {
-          setOperationError('已取消：真实任务启动必须填写 L3 批准人。')
+        const approvedBy = l3ApprovedBy.trim()
+        if (!approvedBy) {
+          setOperationError('请填写批准人标识；将只启动单商品只保存任务，不会发布。')
+          setActiveSection('guide')
           return
         }
         const approval = await postJson<ManualApprovalResponse>(`/api/tasks/${selectedTask.id}/manual-approval`, {
@@ -418,23 +526,25 @@ export default function App() {
   }
 
   async function openDxmLogin() {
-    const username = window.prompt('输入店小秘账号。账号密码只用于本次真实店小秘登录，不会保存到配置中心。', '')
-    if (!username?.trim()) {
-      setOperationError('已取消：打开真实店小秘登录页需要账号。')
+    const username = dxmLoginDraft.username.trim()
+    if (!username) {
+      setOperationError('请先在页面内填写店小秘账号，再打开真实店小秘登录页。')
+      setActiveSection('guide')
       return
     }
-    const password = window.prompt('输入店小秘密码。后端只会记录脱敏状态，登录后请在真实浏览器处理验证码。', '')
-    if (!password) {
-      setOperationError('已取消：打开真实店小秘登录页需要密码。')
+    if (!dxmLoginDraft.password) {
+      setOperationError('请先在页面内填写店小秘密码；密码只用于本次真实登录请求，不写入配置中心。')
+      setActiveSection('guide')
       return
     }
     setBusy(true)
     setOperationError(null)
     try {
       await postJson('/api/dxm/login/start', {
-        username: username.trim(),
-        password,
+        username,
+        password: dxmLoginDraft.password,
       })
+      setDxmLoginDraft((current) => ({ ...current, password: '' }))
       setActiveSection('console')
       await refreshRuntimeStatus()
       await refreshRuntimeLogs()
@@ -443,6 +553,7 @@ export default function App() {
       setOperationError(error instanceof Error ? error.message : '打开真实店小秘登录页失败')
       await refreshRuntimeStatus()
     } finally {
+      setDxmLoginDraft((current) => ({ ...current, password: '' }))
       setBusy(false)
     }
   }
@@ -466,16 +577,45 @@ export default function App() {
   }
 
   async function navigateDxmTarget(target: 'data_acquisition' | 'draft_box') {
+    const targetUrl = DXM_TARGET_URLS[target]
+    const targetLabel = DXM_TARGET_LABELS[target]
     setBusy(true)
     setOperationError(null)
+    setOperationNotice(null)
     try {
-      await postJson('/api/dxm/navigate', { target })
+      if (agentConsole?.active && agentConsole.browser_visible && !agentConsole.manual_takeover) {
+        const status = await postJson<AgentConsoleControlResponse>('/api/agent-console/control', {
+          action: 'goto',
+          url: targetUrl,
+        })
+        setAgentConsole(status)
+        if (status.ok === false) {
+          const message = status.error || status.reason || `执行浏览器进入${targetLabel}失败`
+          setAgentConsoleError(message)
+          setOperationError(message)
+          return
+        }
+        await waitForAgentConsoleNavigationSettle()
+        const settledStatus = await refreshAgentConsole(true) ?? status
+        setAgentConsoleError(null)
+        if (currentUrlMatchesDxmTarget(settledStatus.current_url, target)) {
+          setOperationNotice(`执行浏览器已进入${targetLabel}`)
+        } else {
+          setOperationError(`执行浏览器已发送进入${targetLabel}指令，但店小秘当前停留在 ${compactDxmUrl(settledStatus.current_url)}。请确认登录态后重试。`)
+        }
+      } else {
+        await postJson('/api/dxm/navigate', { target })
+        setOperationNotice(`已请求店小秘登录流进入${targetLabel}`)
+      }
       setActiveSection('console')
+      await refreshAgentConsole(true)
       await refreshRuntimeStatus()
       await refreshRuntimeLogs()
       await refreshWorkspace()
     } catch (error) {
       setOperationError(error instanceof Error ? error.message : '进入店小秘业务页失败')
+      setOperationNotice(null)
+      await refreshAgentConsole(true)
       await refreshRuntimeStatus()
       await refreshRuntimeLogs()
     } finally {
@@ -491,7 +631,7 @@ export default function App() {
     }
     const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
     if (l2Gate?.status !== 'passed') {
-      const message = `只读诊断不可启动：${l2Gate?.detail ?? 'L2 真实只读 probe 未通过'}`
+      const message = `只读复验未通过，真实浏览器自动化不可启动：${l2Gate?.detail ?? '真实只读检查未通过'}`
       setAgentConsoleError(message)
       setOperationError(message)
       setActiveSection('console')
@@ -609,21 +749,30 @@ export default function App() {
   async function runRuntimeControl(action: RuntimeControlAction) {
     setBusy(true)
     setOperationError(null)
+    setOperationNotice(null)
     try {
       const result = await postJson<RuntimeControlResponse>('/api/runtime/control', { action, task_id: selectedTask?.id ?? null })
       if (result.agentConsole) setAgentConsole(result.agentConsole)
+      setOperationNotice(result.message ?? runtimeControlSuccessMessage(action))
       await refreshWorkspace()
       await refreshRuntimeStatus()
       await refreshRuntimeLogs()
     } catch (error) {
       const message = error instanceof Error ? error.message : '运行时维护动作失败'
       setOperationError(message)
+      setOperationNotice(null)
       await refreshWorkspace()
       await refreshRuntimeStatus()
       await refreshRuntimeLogs()
     } finally {
       setBusy(false)
     }
+  }
+
+  async function runL2ReadonlyProbe() {
+    setRuntimeLogSource('launcher')
+    setActiveSection('console')
+    await runRuntimeControl('run_l2_readonly_probe')
   }
 
   const content = (() => {
@@ -637,6 +786,12 @@ export default function App() {
             selectedTask={selectedTask}
             configPreview={configPreview}
             runtimeStatus={runtimeStatus}
+            dxmLoginDraft={dxmLoginDraft}
+            l3ApprovedBy={l3ApprovedBy}
+            busy={busy}
+            onDxmLoginDraftChange={setDxmLoginDraft}
+            onL3ApprovedByChange={setL3ApprovedBy}
+            onRunL2Probe={runL2ReadonlyProbe}
             onOpenDxmLogin={openDxmLogin}
             onContinueDxmLogin={continueDxmLogin}
             onNavigateDxmTarget={navigateDxmTarget}
@@ -658,6 +813,9 @@ export default function App() {
             configPreviewLoading={configPreviewLoading}
             busy={busy}
             demoEnabled={DEMO_ENABLED}
+            l3ApprovedBy={l3ApprovedBy}
+            onL3ApprovedByChange={setL3ApprovedBy}
+            onRunL2Probe={runL2ReadonlyProbe}
             onSelectTask={(taskId) => {
               setSelectedTaskId(taskId)
               void refreshConfigPreview(taskId)
@@ -678,12 +836,15 @@ export default function App() {
             selectedTask={selectedTask}
             agentConsole={agentConsole}
             agentConsoleError={agentConsoleError}
+            runtimeStatus={runtimeStatus}
             runtimeLogs={runtimeLogs}
             runtimeLogSource={runtimeLogSource}
             runtimeLogError={runtimeLogError}
             runtimeLogLevel={runtimeLogLevel}
             runtimeLogQuery={runtimeLogQuery}
             busy={busy}
+            dxmLoginDraft={dxmLoginDraft}
+            onDxmLoginDraftChange={setDxmLoginDraft}
             onRuntimeLogSourceChange={setRuntimeLogSource}
             onRuntimeLogLevelChange={setRuntimeLogLevel}
             onRuntimeLogQueryChange={setRuntimeLogQuery}
@@ -726,6 +887,7 @@ export default function App() {
         workspace={workspace}
         selectedTask={selectedTask}
         runtimeStatus={runtimeStatus}
+        desktopRuntime={desktopRuntime}
         busy={busy}
         onRefresh={() => { void refreshWorkspace(); void refreshRuntimeStatus(); void refreshRuntimeLogs(); void refreshConfigPreview() }}
         onShowTasks={() => setActiveSection('tasks')}
@@ -746,19 +908,46 @@ export default function App() {
           </button>
         </div>
       )}
+      {operationNotice && (
+        <div className="operation-alert operation-alert--ok" role="status" data-testid="operation-notice">
+          <strong>操作已提交</strong>
+          <span>{operationNotice}</span>
+          <button className="button button--quiet" type="button" onClick={() => setOperationNotice(null)}>
+            知道了
+          </button>
+        </div>
+      )}
       {content}
     </AppShell>
   )
 }
 
+function runtimeControlSuccessMessage(action: RuntimeControlAction) {
+  return ({
+    stop_agent_console: '浏览器 Agent 已停止。',
+    clear_stuck_tasks: '已提交清理卡住任务请求。',
+    restart_backend: '已提交后端重启请求，请查看启动器日志。',
+    restart_frontend: '已提交前端重启请求，请查看启动器日志。',
+    run_l2_readonly_probe: '已启动只读复验，请在执行控制台查看启动器日志。',
+  } as Record<RuntimeControlAction, string>)[action]
+}
+
+function pickDefaultTaskId(deliveryWorkspace: DeliveryWorkspaceResponse | null, tasks: Task[]) {
+  const deliveryTaskId = deliveryWorkspace?.current_task?.id
+  if (typeof deliveryTaskId === 'number' && tasks.some((task) => task.id === deliveryTaskId)) {
+    return deliveryTaskId
+  }
+  return tasks.find((task) => task.mode === 'single_save')?.id ?? tasks[0]?.id ?? null
+}
+
 function buildAgentConsoleHudStep(workspace: DeliveryWorkspace, selectedTask: Task): AgentConsoleSession['hud'] {
   const storeName = String(selectedTask.payload.store_name ?? workspace.stores[0]?.name ?? '等待真实店铺')
   return {
-    title: '只读诊断待命',
+    title: '只读复验待命',
     state: 'READONLY_DIAGNOSTIC',
     action: '打开真实店小秘浏览器，不启动保存',
-    next_step: '复核只读检查和人工确认',
+    next_step: '复核只读证据和人工确认',
     store_name: storeName,
-    guard: '诊断观察，不保存不发布',
+    guard: '复验观察，不保存不发布',
   }
 }

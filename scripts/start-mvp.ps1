@@ -46,6 +46,70 @@ function Get-PortOwnerText {
   return "port $Port is in use by " + (($owners | Select-Object -Unique) -join ", ")
 }
 
+function Get-PortOwnerProcesses {
+  param([int]$Port)
+  $connections = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+  if (!$connections) {
+    return @()
+  }
+  return @($connections | ForEach-Object { $_.OwningProcess } | Sort-Object -Unique)
+}
+
+function Get-ProcessCommandLineText {
+  param([int]$ProcessId)
+  try {
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
+    return [string]$process.CommandLine
+  } catch {
+    return ""
+  }
+}
+
+function Test-IsManagedDxmBackendProcess {
+  param([int]$ProcessId)
+  $commandLine = (Get-ProcessCommandLineText -ProcessId $ProcessId).ToLowerInvariant()
+  $rootText = $root.ToLowerInvariant()
+  return (
+    $commandLine.Contains($rootText) -and
+    $commandLine.Contains("uvicorn") -and
+    $commandLine.Contains("src.main:app") -and
+    $commandLine.Contains("--port $backendPort")
+  )
+}
+
+function Stop-ProcessTree {
+  param([int]$RootProcessId)
+  $children = Get-CimInstance Win32_Process -Filter "ParentProcessId = $RootProcessId" -ErrorAction SilentlyContinue
+  foreach ($child in $children) {
+    Stop-ProcessTree -RootProcessId $child.ProcessId
+  }
+  Stop-Process -Id $RootProcessId -Force -ErrorAction SilentlyContinue
+}
+
+function Stop-ManagedBackendPortOwners {
+  param([int]$Port)
+  $ownerIds = Get-PortOwnerProcesses -Port $Port
+  if (!$ownerIds.Count) {
+    return $true
+  }
+  $unmanaged = @($ownerIds | Where-Object { !(Test-IsManagedDxmBackendProcess -ProcessId $_) })
+  if ($unmanaged.Count -gt 0) {
+    Write-Step "Backend port $Port is occupied by unmanaged process(es): $($unmanaged -join ', ')"
+    return $false
+  }
+  foreach ($ownerId in $ownerIds) {
+    Write-Step "Stopping previous DXM backend on port $Port, PID $ownerId"
+    Stop-ProcessTree -RootProcessId $ownerId
+  }
+  Start-Sleep -Seconds 2
+  $remaining = Get-PortOwnerProcesses -Port $Port
+  if ($remaining.Count -gt 0) {
+    Write-Step "Backend port $Port is still occupied after cleanup: $($remaining -join ', ')"
+    return $false
+  }
+  return $true
+}
+
 function Find-FreePort {
   param(
     [int]$PreferredPort,
@@ -167,8 +231,17 @@ if ($checkOnly) {
   exit 0
 }
 
+if (Test-Path -LiteralPath $runtimeControlCommand) {
+  Remove-Item -LiteralPath $runtimeControlCommand -Force -ErrorAction SilentlyContinue
+  Write-Step "Runtime control: cleared stale command file before managed startup"
+}
+
 if ($backendBusy) {
-  Fail "backend $(Get-PortOwnerText -Port $backendPort). Stop that process before launching. Log: $launcherLog"
+  Write-Step "Backend port $backendPort is busy; checking whether it is an older DXM backend"
+  if (!(Stop-ManagedBackendPortOwners -Port $backendPort)) {
+    Fail "backend $(Get-PortOwnerText -Port $backendPort). Stop that process before launching. Log: $launcherLog"
+  }
+  Write-Step "Previous DXM backend stopped; launching current backend code"
 }
 
 if ($frontendBusy) {
@@ -348,7 +421,7 @@ function Start-ManagedProcess {
   Remove-Item -LiteralPath $GatePath -Force -ErrorAction SilentlyContinue
   $encodedCommand = New-EncodedPowerShellCommand -Command $Command
   Write-Step "Starting $Name; log: $LogPath"
-  $process = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encodedCommand -NoNewWindow -PassThru -RedirectStandardOutput $LogPath
+  $process = Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encodedCommand -WindowStyle Hidden -PassThru -RedirectStandardOutput $LogPath
   $jobHandle = [DxmJobObject]::CreateKillOnCloseJob("dxm-auto-uikit-$Name-$($PID)-$($process.Id)")
   try {
     [DxmJobObject]::Assign($jobHandle, $process.Handle)
@@ -362,15 +435,6 @@ function Start-ManagedProcess {
     Process = $process
     JobHandle = $jobHandle
   }
-}
-
-function Stop-ProcessTree {
-  param([int]$RootProcessId)
-  $children = Get-CimInstance Win32_Process -Filter "ParentProcessId = $RootProcessId" -ErrorAction SilentlyContinue
-  foreach ($child in $children) {
-    Stop-ProcessTree -RootProcessId $child.ProcessId
-  }
-  Stop-Process -Id $RootProcessId -Force -ErrorAction SilentlyContinue
 }
 
 function Stop-ManagedServices {
@@ -416,14 +480,108 @@ function Restart-ManagedService {
     $Service.JobHandle = [IntPtr]::Zero
   }
 
+  $logTailCursors[$Service.Name] = Initialize-LogTailCursor -Path $Service.Log
   $started = Start-ManagedProcess -Name $Service.Name -Command $Service.Command -LogPath $Service.Log -GatePath $Service.Gate
   $Service.Process = $started.Process
   $Service.JobHandle = $started.JobHandle
   Start-Sleep -Seconds 3
-  if ($Service.Process.HasExited) {
+  if ($Service.Process.HasExited -and !(Test-ManagedServiceHealthy -Service $Service)) {
     Fail "$($Service.Name) failed after runtime restart on port $($Service.Port). Check $($Service.Log)"
   }
   Write-Step "Runtime control: restarted $($Service.Name) on port $($Service.Port)"
+}
+
+function Test-ManagedServiceHealthy {
+  param([object]$Service)
+  $path = if ($Service.Name -eq "backend") { "/health" } else { "" }
+  try {
+    Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$($Service.Port)$path" -TimeoutSec 2 | Out-Null
+    return $true
+  } catch {
+    return $false
+  }
+}
+
+function Initialize-LogTailCursor {
+  param([string]$Path)
+  if (!(Test-Path -LiteralPath $Path)) {
+    return 0
+  }
+  try {
+    return (Get-Item -LiteralPath $Path).Length
+  } catch {
+    return 0
+  }
+}
+
+function Read-NewRuntimeLogLines {
+  param(
+    [string]$Path,
+    [long]$Cursor,
+    [int]$MaxBytes = 65536
+  )
+  if (!(Test-Path -LiteralPath $Path)) {
+    return [pscustomobject]@{
+      Cursor = $Cursor
+      Lines = @()
+    }
+  }
+  try {
+    $file = Get-Item -LiteralPath $Path
+    if ($file.Length -lt $Cursor) {
+      $Cursor = 0
+    }
+    $bytesToRead = [Math]::Min([long]$MaxBytes, [Math]::Max([long]0, $file.Length - $Cursor))
+    if ($bytesToRead -le 0) {
+      return [pscustomobject]@{
+        Cursor = $file.Length
+        Lines = @()
+      }
+    }
+    $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try {
+      [void]$stream.Seek($Cursor, [System.IO.SeekOrigin]::Begin)
+      $buffer = New-Object byte[] $bytesToRead
+      $read = $stream.Read($buffer, 0, $buffer.Length)
+      $nextCursor = $stream.Position
+    } finally {
+      $stream.Dispose()
+    }
+    $text = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $read)
+    return [pscustomobject]@{
+      Cursor = $nextCursor
+      Lines = @($text -split "`r?`n" | Where-Object { $_ -ne "" })
+    }
+  } catch {
+    return [pscustomobject]@{
+      Cursor = $Cursor
+      Lines = @("log tail failed: $($_.Exception.Message)")
+    }
+  }
+}
+
+function Write-ServiceLogUpdates {
+  foreach ($service in $managedServices) {
+    if (!$service.Log) {
+      continue
+    }
+    $cursor = 0
+    if ($logTailCursors.ContainsKey($service.Name)) {
+      $cursor = [long]$logTailCursors[$service.Name]
+    }
+    $tail = Read-NewRuntimeLogLines -Path $service.Log -Cursor $cursor
+    $logTailCursors[$service.Name] = [long]$tail.Cursor
+    $prefix = if ($service.Name -eq "backend") {
+      "[backend]"
+    } elseif ($service.Name -eq "frontend") {
+      "[frontend]"
+    } else {
+      "[$($service.Name)]"
+    }
+    foreach ($line in $tail.Lines) {
+      Write-Host "$prefix $line"
+    }
+  }
 }
 
 $backendGate = Join-Path $dataDir "backend-start.gate"
@@ -432,8 +590,10 @@ $backendCommand = New-ManagedProcessCommand -WorkingDirectory $backendDir -FileP
 $frontendCommand = New-ManagedProcessCommand -WorkingDirectory $frontendDir -FilePath $viteCmd -Arguments "--host 127.0.0.1 --port $frontendPort" -StartMessage "Starting frontend on http://127.0.0.1:$frontendPort" -ExitName "Frontend" -Environment @{} -GatePath $frontendGate
 
 $managedServices = @()
+$logTailCursors = @{}
 
 try {
+  $logTailCursors["backend"] = Initialize-LogTailCursor -Path $backendLog
   $backendStart = Start-ManagedProcess -Name "backend" -Command $backendCommand -LogPath $backendLog -GatePath $backendGate
   $managedServices += [pscustomobject]@{
     Name = "backend"
@@ -444,6 +604,7 @@ try {
     Process = $backendStart.Process
     JobHandle = $backendStart.JobHandle
   }
+  $logTailCursors["frontend"] = Initialize-LogTailCursor -Path $frontendLog
   $frontendStart = Start-ManagedProcess -Name "frontend" -Command $frontendCommand -LogPath $frontendLog -GatePath $frontendGate
   $managedServices += [pscustomobject]@{
     Name = "frontend"
@@ -455,8 +616,12 @@ try {
     JobHandle = $frontendStart.JobHandle
   }
 
+  Write-Step "Streaming backend/frontend logs into this launcher window. Full logs remain in data\backend.log and data\frontend.log."
   Write-Step "Waiting for services"
-  Start-Sleep -Seconds 8
+  for ($i = 0; $i -lt 8; $i += 1) {
+    Write-ServiceLogUpdates
+    Start-Sleep -Seconds 1
+  }
 
   foreach ($service in $managedServices) {
     if ($service.Process.HasExited) {
@@ -492,6 +657,7 @@ try {
   }
 
   while ($true) {
+    Write-ServiceLogUpdates
     $runtimeCommand = Read-RuntimeControlCommand
     if ($runtimeCommand) {
       $action = [string]$runtimeCommand.action
@@ -511,7 +677,7 @@ try {
     }
 
     foreach ($service in $managedServices) {
-      if ($service.Process.HasExited) {
+      if ($service.Process.HasExited -and !(Test-ManagedServiceHealthy -Service $service)) {
         Fail "$($service.Name) stopped on port $($service.Port). Check $($service.Log)"
       }
     }

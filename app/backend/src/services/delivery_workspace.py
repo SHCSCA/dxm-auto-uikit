@@ -630,7 +630,7 @@ def _l2_probe_plan() -> dict[str, Any]:
     return {
         "schema": "dxm_l2_readonly_probe_plan.v1",
         "requiresApproval": True,
-        "purpose": "真实店小秘双目标只读诊断；不领取、不备注、不保存、不发布。",
+        "purpose": "真实店小秘双目标 L2 页面核验；不领取、不备注、不保存、不发布。",
         "runIdCommand": run_id_command,
         "pythonCommand": L2_PROBE_PYTHON,
         "scriptPath": L2_PROBE_SCRIPT,
