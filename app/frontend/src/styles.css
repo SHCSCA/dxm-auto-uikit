@@ -2504,13 +2504,14 @@ tr:last-child td {
 .config-template-console {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(220px, 0.95fr) minmax(300px, 1.25fr) minmax(220px, 0.8fr);
+  grid-template-columns: minmax(210px, 0.95fr) minmax(270px, 1.2fr) minmax(210px, 0.9fr) minmax(210px, 0.85fr);
   gap: 10px;
   margin-bottom: 10px;
 }
 
 .config-template-console__default,
 .config-template-console__picker,
+.config-template-source,
 .config-save-state {
   min-width: 0;
   display: grid;
@@ -2558,6 +2559,10 @@ tr:last-child td {
 
 .config-save-state {
   background: #fff;
+}
+
+.config-template-source {
+  background: #f9fafb;
 }
 
 .config-save-state.is-dirty {

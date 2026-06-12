@@ -1296,6 +1296,13 @@ function formatPreviewValue(value: unknown) {
   return String(value)
 }
 
+function templateSourceNameFromPreview(preview: ConfigPreviewGroup | undefined) {
+  const source = (preview?.fields ?? [])
+    .map((field) => field.source)
+    .find((item) => item.startsWith('模板：'))
+  return source ? source.replace(/^模板：/, '') : ''
+}
+
 function EffectiveValuePreview({
   configPreview,
   sourcePriorityLabels,
@@ -1450,8 +1457,11 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   const secondaryConfigSections = sectionsWithPreview.filter(({ section }) => !primaryConfigSectionCodes.has(section.code))
   const activeTaskOverrideFieldCount = countTaskOverrideFields(selectedTask, selectedConfigSection.section.templateType)
   const activePreviewOverrideFieldCount = countPreviewTaskOverrideFields(selectedConfigSection.preview)
+  const activeSectionAllTemplates = workspace.templates.filter((template) => template.template_type === selectedConfigSection.section.templateType)
   const activeSectionTemplateOptions = sectionTemplateOptions(workspace.templates, selectedConfigSection.section, currentTemplateBinding)
+  const filteredTemplateChoiceCount = Math.max(0, activeSectionAllTemplates.length - activeSectionTemplateOptions.length)
   const activeSelectedTemplateId = selectedTemplateBySection[selectedConfigSection.section.code] ?? ''
+  const activeTemplateSourceName = templateSourceNameFromPreview(selectedConfigSection.preview)
   const activeSectionSaveState = sectionSaveState[selectedConfigSection.section.code]
   const activeSectionDirty = hasConfigDraftChanged(configDraft[selectedConfigSection.section.code], initialConfigDraft[selectedConfigSection.section.code])
   const activeSectionAlreadyPersisted = Boolean(selectedConfigSection.preview?.templatePresent)
@@ -1802,6 +1812,11 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
               套用到表单
             </button>
             <small>多套模板按当前店铺/类目优先展示；套用到表单后仍需点击保存，才会进入执行取值。</small>
+          </div>
+          <div className="config-template-source" aria-label="当前模板来源">
+            <strong>当前生效模板</strong>
+            <span>{activeTemplateSourceName || (activeSectionAlreadyPersisted ? '已由预检命中模板' : '尚未命中已保存模板')}</span>
+            <small>可选模板 {activeSectionTemplateOptions.length} 套；已筛除不匹配或禁用模板 {filteredTemplateChoiceCount} 套。选择模板只会填入表单，保存后才会生效。</small>
           </div>
           <div className={`config-save-state is-${activeSectionStatus}`} aria-label="当前分区保存状态">
             <strong>{activeSectionStatusTitle}</strong>

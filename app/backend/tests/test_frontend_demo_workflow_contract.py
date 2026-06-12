@@ -292,6 +292,26 @@ def test_config_center_exposes_default_template_pack_and_save_state():
     assert "configTemplateSelectorVisible" in qa_source
 
 
+def test_config_center_explains_active_template_source_and_filtered_choices():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
+    helper_section = source[source.index("function sourceBadgeText"):source.index("function EffectiveValuePreview")]
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    qa_source = QA_BROWSER_CHECK.read_text(encoding="utf-8")
+
+    assert "activeSectionAllTemplates" in config_section
+    assert "filteredTemplateChoiceCount" in config_section
+    assert "activeTemplateSourceName" in config_section
+    assert "templateSourceNameFromPreview" in helper_section
+    assert "当前生效模板" in config_section
+    assert "可选模板" in config_section
+    assert "已筛除不匹配或禁用模板" in config_section
+    assert "选择模板只会填入表单，保存后才会生效" in config_section
+    assert "config-template-source" in config_section
+    assert ".config-template-source" in styles_source
+    assert "configTemplateSourceState" in qa_source
+
+
 def test_config_center_uses_compact_density_and_collapsed_assist_drawer():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
