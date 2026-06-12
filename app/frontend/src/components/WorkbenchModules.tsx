@@ -3003,6 +3003,7 @@ export function ExecutionConsole({
         activeStep={activeStep}
         agentConsole={agentConsole}
         primaryPath={consolePrimaryPath}
+        runtimeStatus={runtimeStatus}
         runtimeLogSource={runtimeLogSource}
         runtimeLogCount={runtimeLogCount}
         onStartAgentConsole={onStartAgentConsole}
@@ -3634,6 +3635,7 @@ function ConsoleFocusPanel({
   activeStep,
   agentConsole,
   primaryPath,
+  runtimeStatus,
   runtimeLogSource,
   runtimeLogCount,
   onStartAgentConsole,
@@ -3646,6 +3648,7 @@ function ConsoleFocusPanel({
   activeStep?: { title: string; code?: string; detail: string; state: string }
   agentConsole: AgentConsoleSession | null
   primaryPath: ConsolePrimaryPath
+  runtimeStatus: RuntimeStatus | null
   runtimeLogSource: RuntimeLogSource
   runtimeLogCount: number
   onStartAgentConsole: () => void
@@ -3693,7 +3696,10 @@ function ConsoleFocusPanel({
           : humanConsoleText(agentConsole?.hud?.next_step ?? '按当前步骤继续操作真实浏览器')
       : primaryPath.next
   const primaryActionLabel = primaryPath.ctaLabel
+  const l2ProbeResourceState = getL2ProbeResourceState(runtimeStatus)
+  const primaryActionDisabled = primaryPath.action === 'run_l2' && l2ProbeResourceState.blocked
   const primaryAction = () => {
+    if (primaryActionDisabled) return
     if (primaryPath.action === 'reports') return onShowReports()
     if (primaryPath.action === 'config') return onShowConfig()
     if (primaryPath.action === 'run_l2') return onRuntimeControl('run_l2_readonly_probe')
@@ -3746,7 +3752,16 @@ function ConsoleFocusPanel({
         ) : (
           <>
             {primaryPath.saveBlocked && <small>{primaryPath.reason}</small>}
-            <button className="button button--secondary" type="button" onClick={primaryAction}>{primaryActionLabel}</button>
+            <button
+              className="button button--secondary"
+              type="button"
+              onClick={primaryAction}
+              disabled={primaryActionDisabled}
+              title={primaryActionDisabled ? l2ProbeResourceState.title : undefined}
+            >
+              {primaryActionLabel}
+            </button>
+            {primaryActionDisabled && <small>{l2ProbeResourceState.detail}</small>}
             <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">查看检查计划</button>
           </>
         )}

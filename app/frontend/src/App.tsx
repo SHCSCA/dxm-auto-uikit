@@ -968,7 +968,18 @@ export default function App() {
       await refreshRuntimeLogs()
     } catch (error) {
       const message = error instanceof Error ? error.message : '运行时维护动作失败'
-      setOperationError(humanOperationError(message))
+      const humanMessage = humanOperationError(message)
+      if (action === 'run_l2_readonly_probe') {
+        setL2RunnerState({
+          status: 'failed',
+          runId: null,
+          exitCode: null,
+          message: '预检启动失败，真实保存仍阻断',
+          line: humanMessage,
+          updatedAt: new Date().toISOString(),
+        })
+      }
+      setOperationError(humanMessage)
       setOperationNotice(null)
       await refreshWorkspace()
       await refreshRuntimeStatus()

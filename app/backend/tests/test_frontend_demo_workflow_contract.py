@@ -1980,6 +1980,12 @@ def test_frontend_surfaces_runtime_status_and_log_filters():
     assert "run_l2_readonly_probe" in (REPO_ROOT / "app" / "frontend" / "src" / "types.ts").read_text(encoding="utf-8")
     assert "onRuntimeControl('run_l2_readonly_probe')" in workbench_source
     assert "getL2ProbeResourceState(runtimeStatus)" in workbench_source
+    focus_panel_section = workbench_source[workbench_source.index("function ConsoleFocusPanel"):workbench_source.index("function AgentBrowserFrame")]
+    assert "runtimeStatus: RuntimeStatus | null" in focus_panel_section
+    assert "const l2ProbeResourceState = getL2ProbeResourceState(runtimeStatus)" in focus_panel_section
+    assert "const primaryActionDisabled = primaryPath.action === 'run_l2' && l2ProbeResourceState.blocked" in focus_panel_section
+    assert "disabled={primaryActionDisabled}" in focus_panel_section
+    assert "title={primaryActionDisabled ? l2ProbeResourceState.title : undefined}" in focus_panel_section
     assert "dependencies.l2_readonly_probe_runner" in workbench_source
     assert "dependencies.l2_readonly_probe_script" in workbench_source
     assert "dependencies.l2_readonly_probe_allowlist" in workbench_source
@@ -2098,7 +2104,23 @@ def test_frontend_humanizes_l2_runner_missing_error():
     assert "const marker = 'Searched:'" in app_source
     assert ".slice(0, 3)" in app_source
     assert "已检查：${paths.join('；')}" in app_source
-    assert "setOperationError(humanOperationError(message))" in app_source
+    assert "const humanMessage = humanOperationError(message)" in app_source
+    assert "setOperationError(humanMessage)" in app_source
+
+
+def test_frontend_marks_l2_runner_failed_when_start_request_fails():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    run_runtime_control = app_source[
+        app_source.index("async function runRuntimeControl"):
+        app_source.index("async function runL2ReadonlyProbe")
+    ]
+
+    assert "if (action === 'run_l2_readonly_probe')" in run_runtime_control
+    assert "setL2RunnerState({" in run_runtime_control
+    assert "status: 'failed'" in run_runtime_control
+    assert "预检启动失败，真实保存仍阻断" in run_runtime_control
+    assert "humanOperationError(message)" in run_runtime_control
+    assert "setOperationError(humanMessage)" in run_runtime_control
 
 
 def test_frontend_keeps_runtime_and_config_fetch_failures_distinct_from_user_state():
