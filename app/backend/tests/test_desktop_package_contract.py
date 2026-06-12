@@ -168,6 +168,10 @@ def test_verify_desktop_package_smoke_script_checks_packaged_exe_logs():
     assert "backend did not start with bundled Python" in source
     assert "tools\\probes\\l2_readonly_probe_runner.py" in source
     assert "config\\l2_readonly_allowlist.json" in source
+    assert "Assert-PackagedRuntimeClean" in source
+    assert "*.pyc" in source
+    assert "__pycache__" in source
+    assert "Packaged runtime generated Python bytecode cache" in source
     assert "taskkill" in source
 
 

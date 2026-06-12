@@ -87,6 +87,20 @@ function Assert-DesktopSmokeLog {
   }
 }
 
+function Assert-PackagedRuntimeClean {
+  param(
+    [string]$ExePath
+  )
+  $VenvPath = Join-Path (Split-Path $ExePath) 'resources\app\backend\.venv'
+  $BytecodeFiles = @(Get-ChildItem -LiteralPath $VenvPath -Recurse -Force -Filter '*.pyc' -ErrorAction SilentlyContinue)
+  $BytecodeDirs = @(Get-ChildItem -LiteralPath $VenvPath -Recurse -Force -Directory -Filter '__pycache__' -ErrorAction SilentlyContinue)
+  if ($BytecodeFiles.Count -gt 0 -or $BytecodeDirs.Count -gt 0) {
+    throw "Packaged runtime generated Python bytecode cache. *.pyc=$($BytecodeFiles.Count), __pycache__=$($BytecodeDirs.Count). Runtime must keep the免安装版 directory clean."
+  }
+}
+
+Assert-PackagedRuntimeClean -ExePath $ExePath
+
 $Process = Start-Process -FilePath $ExePath -WorkingDirectory (Split-Path $ExePath) -ArgumentList "--qa-capture=$CapturePath" -PassThru
 if (!$Process.WaitForExit($WaitSeconds * 1000)) {
   try {
@@ -103,6 +117,7 @@ if (!(Test-Path $CapturePath)) {
 
 $ExistingLog = Get-DesktopSmokeLog
 Assert-DesktopSmokeLog -ExistingLog $ExistingLog -ExpectedPythonRoot (Split-Path $ExePath) -Label 'Packaged smoke'
+Assert-PackagedRuntimeClean -ExePath $ExePath
 
 try {
   if (!$Process.HasExited) {
