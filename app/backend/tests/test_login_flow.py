@@ -956,6 +956,44 @@ def test_login_start_is_not_blocked_by_l2_gate(monkeypatch):
     assert response.json()['requires_user_action'] is True
 
 
+def test_login_start_returns_recoverable_state_when_browser_runner_crashes(monkeypatch):
+    class CrashingLoginFlow(DummyLoginFlow):
+        def start_login(self, username: str, password: str):
+            raise RuntimeError('Internal Server Error')
+
+    monkeypatch.setattr('src.main.login_flow', CrashingLoginFlow())
+
+    client = TestClient(app)
+    response = client.post('/api/dxm/login/start', json={'username': 'demo-user', 'password': 'demo-pass'})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data['stage'] == 'login_failed'
+    assert data['label'] == '打开失败'
+    assert '真实店小秘登录浏览器启动失败' in data['message']
+    assert '关闭旧的 DXM Agent Console 或旧浏览器进程后重试' in data['next_action']
+    assert data['requires_user_action'] is True
+
+
+def test_login_continue_returns_recoverable_state_when_browser_runner_crashes(monkeypatch):
+    class CrashingLoginFlow(DummyLoginFlow):
+        def continue_login(self):
+            raise RuntimeError('Target page, context or browser has been closed')
+
+    monkeypatch.setattr('src.main.login_flow', CrashingLoginFlow())
+
+    client = TestClient(app)
+    response = client.post('/api/dxm/login/continue', json={'confirm': True})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data['stage'] == 'login_failed'
+    assert data['label'] == '检测失败'
+    assert '真实店小秘登录态检测失败' in data['message']
+    assert '真实浏览器窗口' in data['next_action']
+    assert data['requires_user_action'] is True
+
+
 def test_login_continue_returns_success_state(monkeypatch):
     flow = DummyLoginFlow()
     monkeypatch.setattr('src.main.login_flow', flow)

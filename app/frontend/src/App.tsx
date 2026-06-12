@@ -709,8 +709,11 @@ export default function App() {
       await refreshRuntimeLogs()
       await refreshWorkspace()
     } catch (error) {
-      setOperationError(error instanceof Error ? error.message : '打开真实店小秘登录页失败')
+      const message = error instanceof Error ? error.message : '打开真实店小秘登录页失败'
+      const humanMessage = humanDxmLoginError(message)
+      setOperationError(humanMessage)
       await refreshRuntimeStatus()
+      await refreshRuntimeLogs()
     } finally {
       if (!dxmLoginDraft.rememberCredential) {
         setDxmLoginDraft((current) => ({ ...current, password: '' }))
@@ -776,7 +779,9 @@ export default function App() {
       await refreshRuntimeLogs()
       await refreshWorkspace()
     } catch (error) {
-      setOperationError(error instanceof Error ? error.message : '继续检测店小秘登录态失败')
+      const message = error instanceof Error ? error.message : '继续检测店小秘登录态失败'
+      const humanMessage = humanDxmLoginError(message)
+      setOperationError(humanMessage)
       await refreshRuntimeStatus()
       await refreshRuntimeLogs()
     } finally {
@@ -1177,6 +1182,43 @@ function humanOperationError(message: string) {
   }
   if (message.includes('L2 readonly probe script is missing')) {
     return `只读页面检查脚本缺失，请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
+  }
+  return message
+}
+
+function humanDxmLoginError(message: string) {
+  const normalized = message.toLowerCase()
+  const commonTail = '账号密码不会用于保存或发布；可在右侧实时日志查看后端和启动器细节。'
+  if (
+    message.includes('Internal Server Error')
+    || normalized.includes('post /api/dxm/login/start failed')
+    || normalized.includes('post /api/dxm/login/continue failed')
+  ) {
+    return `真实店小秘登录浏览器启动失败：本机后端返回异常。请关闭旧的 DXM Agent Console 或旧浏览器进程后重试；如果仍失败，重开免安装 EXE。${commonTail}`
+  }
+  if (
+    normalized.includes('browser has been closed')
+    || message.includes('Target page, context or browser has been closed')
+    || normalized.includes('context or browser has been closed')
+  ) {
+    return `真实店小秘登录浏览器已关闭或被占用。请保留新打开的真实浏览器窗口，或重新点击“打开真实登录页”。${commonTail}`
+  }
+  if (
+    normalized.includes('user data directory is already in use')
+    || normalized.includes('profile')
+    || normalized.includes('locked')
+  ) {
+    return `真实店小秘登录浏览器数据目录被旧进程占用。请关闭旧的 DXM Agent Console 或旧浏览器进程后重试。${commonTail}`
+  }
+  if (
+    normalized.includes('executable')
+    || normalized.includes('playwright')
+    || normalized.includes('chromium')
+  ) {
+    return `真实店小秘登录浏览器依赖缺失或不可启动。请重新打开完整免安装目录版，并查看实时日志中的依赖安装结果。${commonTail}`
+  }
+  if (normalized.includes('login_failed')) {
+    return `真实店小秘登录未完成。请在可见浏览器窗口内修正验证码或账号密码，再点击“验证码已完成，检测登录态”。${commonTail}`
   }
   return message
 }

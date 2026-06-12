@@ -178,7 +178,14 @@ def dxm_workflow_check_login():
 
 @app.post('/api/dxm/login/start')
 def dxm_login_start(payload: LoginStartRequest):
-    result = _run_login_flow(login_flow.start_login, payload.username, payload.password)
+    try:
+        result = _run_login_flow(login_flow.start_login, payload.username, payload.password)
+    except Exception as exc:
+        result = _login_flow_failure_state(
+            label='打开失败',
+            message=f'真实店小秘登录浏览器启动失败：{exc}',
+            next_action='请关闭旧的 DXM Agent Console 或旧浏览器进程后重试；账号密码不会用于保存或发布。',
+        )
     return normalize_artifact_paths(result)
 
 
@@ -186,7 +193,14 @@ def dxm_login_start(payload: LoginStartRequest):
 def dxm_login_continue(payload: LoginContinueRequest):
     if not payload.confirm:
         return normalize_artifact_paths(login_flow.get_state())
-    result = _run_login_flow(login_flow.continue_login)
+    try:
+        result = _run_login_flow(login_flow.continue_login)
+    except Exception as exc:
+        result = _login_flow_failure_state(
+            label='检测失败',
+            message=f'真实店小秘登录态检测失败：{exc}',
+            next_action='请确认真实浏览器窗口仍然打开，完成验证码或账号修正后再次检测；必要时重新打开登录页。',
+        )
     return normalize_artifact_paths(result)
 
 
@@ -1624,6 +1638,21 @@ def _task_store_name(task: dict) -> str:
 
 def _run_login_flow(func, *args, **kwargs):
     return login_flow_executor.submit(func, *args, **kwargs).result()
+
+
+def _login_flow_failure_state(label: str, message: str, next_action: str) -> dict[str, Any]:
+    return {
+        'stage': 'login_failed',
+        'label': label,
+        'message': message,
+        'next_action': next_action,
+        'requires_user_action': True,
+        'page_title': '店小秘登录浏览器',
+        'page_url': 'https://www.dianxiaomi.com/',
+        'screenshot_url': None,
+        'browser_visible': False,
+        'updated_at': datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def _workflow_adapter():

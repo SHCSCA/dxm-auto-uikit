@@ -2125,6 +2125,32 @@ def test_frontend_humanizes_l2_runner_missing_error():
     assert "setOperationError(humanMessage)" in app_source
 
 
+def test_frontend_humanizes_dxm_login_browser_start_failures():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    open_login_section = app_source[
+        app_source.index("async function openDxmLogin"):
+        app_source.index("function credentialStateFromSave")
+    ]
+    continue_login_section = app_source[
+        app_source.index("async function continueDxmLogin"):
+        app_source.index("async function navigateDxmTarget")
+    ]
+
+    assert "function humanDxmLoginError(message: string)" in app_source
+    assert "真实店小秘登录浏览器启动失败" in app_source
+    assert "请关闭旧的 DXM Agent Console 或旧浏览器进程后重试" in app_source
+    assert "账号密码不会用于保存或发布" in app_source
+    assert "Internal Server Error" in app_source
+    assert "browser has been closed" in app_source
+    assert "Target page, context or browser has been closed" in app_source
+    assert "user data directory is already in use" in app_source
+    assert "const humanMessage = humanDxmLoginError(message)" in open_login_section
+    assert "setOperationError(humanMessage)" in open_login_section
+    assert "await refreshRuntimeLogs()" in open_login_section
+    assert "const humanMessage = humanDxmLoginError(message)" in continue_login_section
+    assert "setOperationError(humanMessage)" in continue_login_section
+
+
 def test_frontend_marks_l2_runner_failed_when_start_request_fails():
     app_source = APP_TSX.read_text(encoding="utf-8")
     run_runtime_control = app_source[
