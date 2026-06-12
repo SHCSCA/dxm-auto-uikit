@@ -1641,9 +1641,16 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
       ...current,
       [section.code]: {
         status: 'dirty',
-        message: templateId === '__default_test__' ? '已套用默认测试模板，尚未保存' : '已套用已保存模板，尚未保存',
+        message: templateId === '__default_test__' ? '已套用默认测试模板，尚未保存' : '已套用模板，尚未保存',
       },
     }))
+  }
+
+  function handleTemplateSelection(section: EditableConfigSection, templateId: string) {
+    setSelectedTemplateBySection((current) => ({ ...current, [section.code]: templateId }))
+    if (templateId) {
+      applyTemplateToDraft(section, templateId)
+    }
   }
 
   async function applyDefaultTemplatePack() {
@@ -1775,14 +1782,14 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
         <div className="config-template-console" aria-label="配置模板控制台">
           <div className="config-template-console__default">
             <strong>默认测试模板</strong>
-            <span>使用之前测试通过的数据配置，按当前店铺/类目保存为一套模板。</span>
+            <span>使用之前测试通过的数据配置；会保存或覆盖当前店铺/类目范围下的全部分区模板。</span>
             <button
               className="button button--secondary"
               type="button"
               onClick={() => { void applyDefaultTemplatePack() }}
               disabled={savingSection === 'template:default-pack'}
             >
-              {savingSection === 'template:default-pack' ? '正在保存默认模板...' : '套用默认测试模板'}
+              {savingSection === 'template:default-pack' ? '正在保存默认模板...' : '保存/覆盖当前店铺模板'}
             </button>
             <small>{defaultTemplatePackState}</small>
           </div>
@@ -1791,7 +1798,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
               <span>当前分区模板</span>
               <select
                 value={activeSelectedTemplateId}
-                onChange={(event) => setSelectedTemplateBySection((current) => ({ ...current, [selectedConfigSection.section.code]: event.target.value }))}
+                onChange={(event) => handleTemplateSelection(selectedConfigSection.section, event.target.value)}
                 data-config-template-selector={selectedConfigSection.section.code}
               >
                 <option value="">选择已保存模板</option>
@@ -1809,9 +1816,9 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
               onClick={() => applyTemplateToDraft(selectedConfigSection.section, activeSelectedTemplateId)}
               disabled={!activeSelectedTemplateId}
             >
-              套用到表单
+              重新套用到表单
             </button>
-            <small>多套模板按当前店铺/类目优先展示；套用到表单后仍需点击保存，才会进入执行取值。</small>
+            <small>多套模板按当前店铺/类目优先展示；选择即填入当前分区，仍需点击保存后才会进入执行取值。</small>
           </div>
           <div className="config-template-source" aria-label="当前模板来源">
             <strong>当前生效模板</strong>

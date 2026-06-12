@@ -107,13 +107,18 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "applyDefaultTemplatePack" in config_section
     assert "默认测试模板" in config_section
     assert "使用之前测试通过的数据配置" in config_section
+    assert "保存/覆盖当前店铺模板" in config_section
+    assert "会保存或覆盖当前店铺/类目范围下的全部分区模板" in config_section
     assert "defaultTemplatePackState" in config_section
     assert "config-template-console" in config_section
     assert "当前分区模板" in config_section
     assert "sectionTemplateOptions" in config_section
     assert "selectedTemplateBySection" in config_section
     assert "applyTemplateToDraft" in config_section
+    assert "handleTemplateSelection" in config_section
+    assert "已套用模板，尚未保存" in config_section
     assert "套用到表单" in config_section
+    assert "选择即填入当前分区" in config_section
     assert "多套模板按当前店铺/类目优先展示" in config_section
     assert "sectionSaveState" in config_section
     assert "未保存修改" in config_section
