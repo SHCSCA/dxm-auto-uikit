@@ -407,6 +407,32 @@ def test_config_center_explains_active_template_source_and_filtered_choices():
     assert "configTemplateSourceState" in qa_source
 
 
+def test_config_center_explains_template_match_and_filter_reasons():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
+    helper_section = source[source.index("function templateBindingValueMatches"):source.index("function withTemplateBinding")]
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+
+    assert "function TemplateMatchExplanation" in source
+    assert "templateMatchExplanation" in config_section
+    assert "aria-label=\"模板命中解释\"" in config_section
+    assert "模板命中解释" in config_section
+    assert "当前匹配范围" in source
+    assert "当前命中" in source
+    assert "可选模板" in source
+    assert "筛除模板" in source
+    assert "停用" in source
+    assert "店铺不匹配" in source
+    assert "类目不匹配" in source
+    assert "平台不匹配" in source
+    assert "templateFilterReason" in helper_section
+    assert "templateMatchSummary" in helper_section
+    assert "templateTraceSummaries" in source
+    assert "configPreview?.templateTrace" in config_section
+    assert "workspace.templateResolution?.template_trace" in config_section
+    assert ".template-match-explanation" in styles_source
+
+
 def test_config_center_uses_compact_density_and_collapsed_assist_drawer():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]

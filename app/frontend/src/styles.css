@@ -2638,7 +2638,7 @@ tr:last-child td {
 .config-template-console__status-strip {
   min-width: 0;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 8px;
   margin-top: 8px;
 }
@@ -2646,6 +2646,7 @@ tr:last-child td {
 .config-template-console__default,
 .config-template-console__picker,
 .config-template-source,
+.template-match-explanation,
 .config-save-state {
   min-width: 0;
   display: grid;
@@ -2721,6 +2722,53 @@ tr:last-child td {
 
 .config-template-source {
   background: #f9fafb;
+}
+
+.template-match-explanation {
+  background: #fff;
+}
+
+.template-match-explanation__facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.template-match-explanation__facts span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f8fbff;
+}
+
+.template-match-explanation__facts strong {
+  font-size: 12px;
+}
+
+.template-match-explanation__details {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.template-match-explanation__details > summary {
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.template-match-explanation__lists {
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.template-match-explanation__lists > div {
+  display: grid;
+  gap: 4px;
 }
 
 .config-save-state.is-dirty {

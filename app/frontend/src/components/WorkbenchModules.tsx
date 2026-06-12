@@ -1258,6 +1258,67 @@ function templateSelectableForBinding(template: Template, binding: TemplateBindi
   return templateHasExactBinding(template, binding)
 }
 
+function templateBindingDisplayValue(value: unknown) {
+  const values = templateBindingValues(value)
+  if (!values.length) return '未限制'
+  if (values.includes('*') || values.map((item) => item.toLowerCase()).includes('all')) return '全部'
+  return values.join('、')
+}
+
+function templateFilterReason(template: Template, binding: TemplateBinding) {
+  if (!template.is_enabled) return '停用：模板已关闭，不会进入当前任务候选。'
+  const record = templateBindingRecord(template)
+  if (!record) return '可用：未限制店铺、类目或平台。'
+  const checks = [
+    {
+      label: '店铺',
+      mismatch: '店铺不匹配',
+      expected: templateBindingField(record, ["store_name", "store", "stores", "store_names"]),
+      actual: binding.store_name,
+    },
+    {
+      label: '类目',
+      mismatch: '类目不匹配',
+      expected: templateBindingField(record, ["category_name", "category", "categories", "category_names"]),
+      actual: binding.category_name,
+    },
+    {
+      label: '平台',
+      mismatch: '平台不匹配',
+      expected: templateBindingField(record, ["platform", "platforms"]),
+      actual: binding.platform,
+    },
+  ]
+  const failed = checks.find((check) => !templateBindingValueMatches(check.expected, check.actual))
+  if (failed) {
+    return `${failed.mismatch}：模板 ${failed.label}=${templateBindingDisplayValue(failed.expected)}，当前 ${failed.label}=${textValue(failed.actual) || '未设置'}。`
+  }
+  return '可用：匹配当前店铺、类目和平台。'
+}
+
+function templateMatchSummary(template: Template | undefined, binding: TemplateBinding) {
+  if (!template) return '尚未选择已保存模板；可先使用默认测试模板或保存当前分区。'
+  if (!templateBindingRecord(template)) return '当前命中全局模板，未限制店铺、类目或平台。'
+  const score = templateBindingSpecificity(template, binding)
+  return score > 0
+    ? `当前命中精确模板，匹配强度 ${score}。`
+    : '当前命中可用模板，但未形成精确店铺/类目/平台绑定。'
+}
+
+function templateTraceSummaries(trace: unknown[]) {
+  return trace
+    .map((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return ''
+      const record = item as Record<string, unknown>
+      const name = textValue(record.template_name) || textValue(record.template_type) || '未命名模板'
+      const scope = textValue(record.binding_scope)
+      const type = textValue(record.template_type)
+      return `${name}${type ? ` / ${type}` : ''}${scope ? ` / ${scope}` : ''}`
+    })
+    .filter(Boolean)
+    .slice(0, 4)
+}
+
 function sectionTemplateOptions(templates: Template[], section: EditableConfigSection, binding: TemplateBinding) {
   return templates
     .filter((template) => template.template_type === section.templateType && template.is_enabled && templateSelectableForBinding(template, binding))
@@ -1615,6 +1676,72 @@ function hasConfigDraftChanged(current: Record<string, string> | undefined, base
   return false
 }
 
+function TemplateMatchExplanation({
+  activeTemplateName,
+  activeTemplateSourceName,
+  allTemplates,
+  activeTemplate,
+  availableTemplates,
+  binding,
+  currentScopeLabel,
+  persisted,
+  templateTrace,
+}: {
+  activeTemplateName: string
+  activeTemplateSourceName: string
+  activeTemplate?: Template
+  allTemplates: Template[]
+  availableTemplates: Template[]
+  binding: TemplateBinding
+  currentScopeLabel: string
+  persisted: boolean
+  templateTrace: unknown[]
+}) {
+  const availableIds = new Set(availableTemplates.map((template) => template.id))
+  const filteredTemplates = allTemplates.filter((template) => !availableIds.has(template.id))
+  const disabledCount = filteredTemplates.filter((template) => !template.is_enabled).length
+  const bindingMismatchCount = filteredTemplates.length - disabledCount
+  const traceSummaries = templateTraceSummaries(templateTrace)
+  const filteredSummaries = filteredTemplates.slice(0, 4).map((template) => `${template.template_name}：${templateFilterReason(template, binding)}`)
+  const effectiveTemplateName = activeTemplateSourceName || activeTemplateName || (persisted ? '配置检查已命中模板' : '尚未命中已保存模板')
+
+  return (
+    <div className="template-match-explanation" aria-label="模板命中解释">
+      <strong>模板命中解释</strong>
+      <span>当前匹配范围：{currentScopeLabel}</span>
+      <span>当前命中：{effectiveTemplateName}</span>
+      <small>{templateMatchSummary(activeTemplate, binding)}</small>
+      <div className="template-match-explanation__facts">
+        <span><b>可选模板</b><strong>{availableTemplates.length}</strong></span>
+        <span><b>筛除模板</b><strong>{filteredTemplates.length}</strong></span>
+        <span><b>停用</b><strong>{disabledCount}</strong></span>
+        <span><b>范围不匹配</b><strong>{bindingMismatchCount}</strong></span>
+      </div>
+      <details className="inline-disclosure template-match-explanation__details">
+        <summary>查看筛除原因和后端命中记录</summary>
+        <div className="template-match-explanation__lists">
+          <div>
+            <b>筛除原因</b>
+            {filteredSummaries.length ? (
+              filteredSummaries.map((item) => <small key={item}>{item}</small>)
+            ) : (
+              <small>当前分区没有被筛除的模板。</small>
+            )}
+          </div>
+          <div>
+            <b>后端命中记录</b>
+            {traceSummaries.length ? (
+              traceSummaries.map((item) => <small key={item}>{item}</small>)
+            ) : (
+              <small>等待本次任务配置检查返回 templateTrace。</small>
+            )}
+          </div>
+        </div>
+      </details>
+    </div>
+  )
+}
+
 export function ConfigCenter({ workspace, selectedTask, configPreview, configPreviewError, configPreviewLoading, onConfigSaved, onRefreshConfigPreview, onShowTasks }: ConfigCenterProps) {
   const product = findSelectedTaskProduct(workspace.products, selectedTask)
   const currentTemplateBinding = useMemo(
@@ -1672,10 +1799,24 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
       ? templateOptionLabel(activeSelectedTemplate)
       : '未选择模板'
   const activeTemplateSourceName = templateSourceNameFromPreview(selectedConfigSection.preview)
+  const activeTemplateTrace = configPreview?.templateTrace?.length
+    ? configPreview.templateTrace
+    : workspace.templateResolution?.template_trace ?? []
   const activeSectionSaveState = sectionSaveState[selectedConfigSection.section.code]
   const activeSectionDirty = hasConfigDraftChanged(configDraft[selectedConfigSection.section.code], initialConfigDraft[selectedConfigSection.section.code])
   const templateSaveDisabled = !selectedTask
   const activeSectionAlreadyPersisted = Boolean(selectedConfigSection.preview?.templatePresent)
+  const templateMatchExplanation = {
+    allTemplates: activeSectionAllTemplates,
+    availableTemplates: activeSectionTemplateOptions,
+    binding: currentTemplateBinding,
+    currentScopeLabel: currentTemplateScopeLabel,
+    activeTemplate: activeSelectedTemplate,
+    activeTemplateName: activeSelectedTemplateLabel,
+    activeTemplateSourceName,
+    persisted: activeSectionAlreadyPersisted,
+    templateTrace: activeTemplateTrace,
+  }
   const activeSectionStatus = activeSectionSaveState?.status ?? (activeSectionDirty ? 'dirty' : 'clean')
   const activeSectionStatusTitle = activeSectionStatus === 'dirty'
     ? '未保存修改'
@@ -2075,6 +2216,9 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
                 <span>{activeTemplateSourceName || (activeSectionAlreadyPersisted ? '已由配置检查命中模板' : '尚未命中已保存模板')}</span>
                 <small>可选模板 {activeSectionTemplateOptions.length} 套；已筛除不匹配或禁用模板 {filteredTemplateChoiceCount} 套。</small>
                 <small>选择模板不会改表单，点击套用后才会填入当前分区，保存后才会生效。</small>
+              </div>
+              <div className="template-match-explanation-shell" aria-label="模板命中解释">
+                <TemplateMatchExplanation {...templateMatchExplanation} />
               </div>
               <div className="config-template-console__default">
                 <strong>默认测试模板</strong>
