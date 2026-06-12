@@ -1122,13 +1122,14 @@ def test_dxm_login_flow_start_persists_browser_snapshot(monkeypatch, tmp_path):
 def test_dxm_login_flow_continue_records_login_failure(monkeypatch, tmp_path):
     live_client = DummyLiveClient(logged_in=False)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    close_calls = []
 
     monkeypatch.setattr(flow, '_submit_login_after_captcha', lambda: {
         'page_title': '店小秘官网登录页',
         'page_url': 'https://www.dianxiaomi.com/',
         'screenshot_url': '/artifacts/screenshots/login-result.png',
     })
-    monkeypatch.setattr(flow, '_close_browser_session', lambda: None)
+    monkeypatch.setattr(flow, '_close_browser_session', lambda: close_calls.append('closed'))
 
     state = flow.continue_login()
 
@@ -1136,6 +1137,9 @@ def test_dxm_login_flow_continue_records_login_failure(monkeypatch, tmp_path):
     assert state['stage'] == 'login_failed'
     assert state['requires_user_action'] is True
     assert state['screenshot_url'] == '/artifacts/screenshots/login-result.png'
+    assert state['browser_visible'] is True
+    assert '真实浏览器窗口会保留' in state['next_action']
+    assert close_calls == []
 
 
 def test_dxm_login_flow_navigate_updates_runtime_state(monkeypatch, tmp_path):

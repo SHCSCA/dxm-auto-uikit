@@ -147,15 +147,17 @@ class DxmLoginFlow:
                 'stage': 'login_failed',
                 'label': '登录失败',
                 'message': '继续登录后仍未检测到有效登录态，请检查验证码、账号密码或页面结构变化。',
-                'next_action': '重新打开官网登录页并再次尝试，必要时人工接管浏览器。',
+                'next_action': '真实浏览器窗口会保留；请在窗口内修正验证码或账号密码后，再点击检测登录态。',
                 'requires_user_action': True,
                 'page_title': live_status.get('title') or '店小秘官网登录页',
                 'page_url': live_status.get('final_url') or submit_state.get('page_url') or 'https://www.dianxiaomi.com/',
                 'screenshot_url': submit_state.get('screenshot_url') or live_status.get('home_screenshot_url') or live_status.get('product_page', {}).get('screenshot_url'),
+                'browser_visible': not self._is_headless(),
                 'updated_at': now_iso(),
             }
         self._write_state(state)
-        self._close_browser_session()
+        if state['stage'] != 'login_failed':
+            self._close_browser_session()
         return state
 
     def navigate_post_login(self, target: str) -> dict[str, Any]:

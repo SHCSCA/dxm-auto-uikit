@@ -583,6 +583,13 @@ def test_guide_center_can_start_real_dxm_login_without_l2_gate():
     assert "DXM_LOGGED_IN_STATUSES" in workbench_source
     assert "not_published_verified" in workbench_source
     assert "DXM 登录状态" in workbench_source
+    assert "runtimeStatus={runtimeStatus}" in workbench_source
+    assert "function humanDxmLoginFlowNotice" in app_source
+    assert "setOperationNotice(humanDxmLoginFlowNotice(loginStart" in app_source
+    assert "const message = humanDxmLoginFlowNotice(loginResult" in app_source
+    assert "setOperationError(message)" in app_source
+    assert "真实浏览器窗口会保留" in workbench_source
+    assert "真实浏览器窗口会保留" in (REPO_ROOT / "app" / "backend" / "src" / "execution" / "dxm_login_flow.py").read_text(encoding="utf-8")
 
 
 def test_start_selected_task_requires_dxm_session_before_real_save():
@@ -618,6 +625,15 @@ def test_real_operator_inputs_are_inline_not_browser_prompts():
     assert "店小秘密码" in workbench_source
     assert "记住账号密码" in workbench_source
     assert "清除已记住账号" in workbench_source
+    assert "function humanDxmLoginState" in workbench_source
+    assert "等待验证码/人工确认" in workbench_source
+    assert "登录未通过" in workbench_source
+    assert "DXM 已进入业务页" in workbench_source
+    assert "真实浏览器停留在" in workbench_source
+    assert "真实浏览器窗口会保留" in workbench_source
+    assert "operator-inline-form__login-state" in workbench_source
+    assert "operator-inline-form__login-state" in styles_source
+    assert ".operator-inline-form__login-state.is-danger" in styles_source
     assert "批准人标识" in workbench_source
     assert "打开真实登录页" in workbench_source
     assert "申请并启动单商品只保存" in workbench_source

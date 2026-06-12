@@ -1339,6 +1339,44 @@ a:focus-visible {
   color: #9a3412;
 }
 
+.operator-inline-form__login-state {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 3px;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+}
+
+.operator-inline-form__login-state strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.operator-inline-form__login-state span,
+.operator-inline-form__login-state small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.operator-inline-form__login-state.is-ok {
+  border-color: #bfddce;
+  background: #f7fcf9;
+}
+
+.operator-inline-form__login-state.is-warn {
+  border-color: #f0c15a;
+  background: #fffaf0;
+}
+
+.operator-inline-form__login-state.is-danger {
+  border-color: #f3b8bf;
+  background: #fff6f7;
+}
+
 .operator-inline-form__actions {
   display: flex;
   flex-wrap: wrap;

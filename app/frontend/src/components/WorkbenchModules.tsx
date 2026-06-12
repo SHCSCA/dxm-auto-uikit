@@ -458,6 +458,7 @@ export function GuideCenter({
             <DxmLoginInlineForm
               draft={dxmLoginDraft}
               credentialState={dxmCredentialState}
+              runtimeStatus={runtimeStatus}
               busy={busy}
               onDraftChange={onDxmLoginDraftChange}
               onClearSavedCredential={onClearSavedDxmCredential}
@@ -587,6 +588,7 @@ export function GuideCenter({
 function DxmLoginInlineForm({
   draft,
   credentialState,
+  runtimeStatus,
   busy,
   compact = false,
   onDraftChange,
@@ -596,6 +598,7 @@ function DxmLoginInlineForm({
 }: {
   draft: DxmLoginDraft
   credentialState: DxmCredentialState
+  runtimeStatus?: RuntimeStatus | null
   busy: boolean
   compact?: boolean
   onDraftChange: (draft: DxmLoginDraft) => void
@@ -604,6 +607,7 @@ function DxmLoginInlineForm({
   onContinue: () => void
 }) {
   const canSubmit = Boolean(draft.username.trim() && draft.password && !busy)
+  const loginState = humanDxmLoginState(runtimeStatus)
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!canSubmit) return
@@ -651,6 +655,13 @@ function DxmLoginInlineForm({
       <small className={`operator-inline-form__credential-state ${credentialState.saved ? 'is-saved' : credentialState.available ? 'is-available' : 'is-disabled'}`}>
         {credentialState.message}
       </small>
+      {loginState && (
+        <div className={`operator-inline-form__login-state is-${loginState.tone}`} aria-label="DXM 登录状态">
+          <strong>{loginState.label}</strong>
+          <span>{loginState.detail}</span>
+          <small>{loginState.next}</small>
+        </div>
+      )}
       <div className="operator-inline-form__actions">
         <button className="button button--primary" type="submit" disabled={!canSubmit}>
           打开真实登录页
@@ -664,6 +675,52 @@ function DxmLoginInlineForm({
       </div>
     </form>
   )
+}
+
+function humanDxmLoginState(runtimeStatus?: RuntimeStatus | null) {
+  const status = runtimeStatus?.dxmLogin?.status
+  if (!status) return null
+  const currentUrl = compactDxmLoginUrl(runtimeStatus?.dxmLogin?.currentUrl)
+  if (DXM_LOGGED_IN_STATUSES.has(status) || status === 'workflow_navigation') {
+    return {
+      tone: 'ok',
+      label: status === 'workflow_navigation' ? 'DXM 已进入业务页' : 'DXM 已登录',
+      detail: currentUrl ? `当前页面：${currentUrl}` : '真实店小秘登录态已可用。',
+      next: '下一步：进入采集箱或运行只读页面检查。',
+    }
+  }
+  if (status === 'waiting_captcha') {
+    return {
+      tone: 'warn',
+      label: '等待验证码/人工确认',
+      detail: currentUrl ? `真实浏览器停留在：${currentUrl}` : '账号密码已填入真实浏览器，等待你完成验证码。',
+      next: '完成验证码后点击“验证码已完成，检测登录态”。',
+    }
+  }
+  if (status === 'login_failed' || status.includes('failed')) {
+    return {
+      tone: 'danger',
+      label: '登录未通过',
+      detail: runtimeStatus?.dxmLogin?.lastError || (currentUrl ? `当前页面：${currentUrl}` : '未检测到有效登录态。'),
+      next: '真实浏览器窗口会保留；请修正验证码或账号密码后再次检测，必要时重新打开登录页。',
+    }
+  }
+  return {
+    tone: 'warn',
+    label: `DXM 状态：${status}`,
+    detail: currentUrl ? `当前页面：${currentUrl}` : '登录状态还未完成确认。',
+    next: '按当前页面提示继续登录，完成后检测登录态。',
+  }
+}
+
+function compactDxmLoginUrl(url?: string | null) {
+  if (!url) return ''
+  try {
+    const parsed = new URL(url)
+    return `${parsed.hostname}${parsed.pathname}`
+  } catch {
+    return url.length > 80 ? `${url.slice(0, 77)}...` : url
+  }
 }
 
 function L3ApprovalInlineForm({
@@ -3682,6 +3739,7 @@ function AgentConsoleControls({
         <DxmLoginInlineForm
           draft={dxmLoginDraft}
           credentialState={dxmCredentialState}
+          runtimeStatus={runtimeStatus}
           busy={busy}
           onDraftChange={onDxmLoginDraftChange}
           onClearSavedCredential={onClearSavedDxmCredential}

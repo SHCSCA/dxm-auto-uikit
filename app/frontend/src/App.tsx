@@ -667,10 +667,11 @@ export default function App() {
       } else {
         await clearSavedDxmCredential(false)
       }
-      await postJson('/api/dxm/login/start', {
+      const loginStart = await postJson<Record<string, unknown>>('/api/dxm/login/start', {
         username,
         password: dxmLoginDraft.password,
       })
+      setOperationNotice(humanDxmLoginFlowNotice(loginStart, '已打开真实店小秘登录页；请在弹出的真实浏览器中完成验证码。'))
       if (!dxmLoginDraft.rememberCredential) {
         setDxmLoginDraft((current) => ({ ...current, password: '' }))
       }
@@ -733,7 +734,14 @@ export default function App() {
     setBusy(true)
     setOperationError(null)
     try {
-      await postJson('/api/dxm/login/continue', { confirm: true })
+      const loginResult = await postJson<Record<string, unknown>>('/api/dxm/login/continue', { confirm: true })
+      const stage = String(loginResult.stage ?? '')
+      const message = humanDxmLoginFlowNotice(loginResult, '已检测店小秘登录态。')
+      if (stage.includes('failed')) {
+        setOperationError(message)
+      } else {
+        setOperationNotice(message)
+      }
       setActiveSection('console')
       await refreshRuntimeStatus()
       await refreshRuntimeLogs()
@@ -1133,6 +1141,13 @@ function searchedPathHint(message: string) {
     .filter(Boolean)
     .slice(0, 3)
   return paths.length ? ` 已检查：${paths.join('；')}` : ''
+}
+
+function humanDxmLoginFlowNotice(result: Record<string, unknown>, fallback: string) {
+  const message = String(result.message ?? '').trim()
+  const nextAction = String(result.next_action ?? '').trim()
+  if (message && nextAction) return `${message} 下一步：${nextAction}`
+  return message || nextAction || fallback
 }
 
 function pickDefaultTaskId(deliveryWorkspace: DeliveryWorkspaceResponse | null, tasks: Task[]) {
