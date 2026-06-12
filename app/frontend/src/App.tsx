@@ -158,7 +158,7 @@ export default function App() {
     status: 'idle',
     runId: null,
     exitCode: null,
-    message: '等待运行只读页面检查',
+    message: '等待运行预检（只读，不保存）',
     line: null,
     updatedAt: null,
   })
@@ -419,18 +419,18 @@ export default function App() {
     if (runnerEvent.line.includes('[l2-readonly-runner] finished')) {
       const runnerSucceeded = runnerEvent.line.includes('exit_code=0') || exitCode === 0
       if (runnerSucceeded) {
-        setL2RunnerState({ status: 'passed', runId, exitCode, message: '只读页面检查通过，已刷新门禁', line: runnerEvent.line, updatedAt: new Date().toISOString() })
+        setL2RunnerState({ status: 'passed', runId, exitCode, message: '预检通过，已刷新门禁', line: runnerEvent.line, updatedAt: new Date().toISOString() })
         void refreshWorkspace()
         void refreshRuntimeStatus()
       } else {
-        setL2RunnerState({ status: 'failed', runId, exitCode, message: '只读页面检查失败，真实保存仍阻断', line: runnerEvent.line, updatedAt: new Date().toISOString() })
-        setOperationError('只读页面检查失败，真实保存仍保持阻断；请查看启动器日志和检查计划。')
+        setL2RunnerState({ status: 'failed', runId, exitCode, message: '预检失败，真实保存仍阻断', line: runnerEvent.line, updatedAt: new Date().toISOString() })
+        setOperationError('预检失败，真实保存仍保持阻断；请查看启动器日志和检查计划。')
       }
       return
     }
 
     if (runnerEvent.line.includes('[l2-readonly-runner] started')) {
-      setL2RunnerState({ status: 'running', runId, exitCode: null, message: '正在运行双目标只读检查', line: runnerEvent.line, updatedAt: new Date().toISOString() })
+      setL2RunnerState({ status: 'running', runId, exitCode: null, message: '正在运行双目标预检', line: runnerEvent.line, updatedAt: new Date().toISOString() })
     }
   }, [refreshRuntimeStatus, refreshWorkspace, runtimeLogs.launcher])
 
@@ -839,7 +839,7 @@ export default function App() {
     }
     const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
     if (l2Gate?.status !== 'passed') {
-      const message = `只读页面检查未通过，Agent 执行浏览器不可启动：${l2Gate?.detail ?? '真实只读检查未通过'}`
+      const message = `预检未通过，Agent 执行浏览器不可启动：${l2Gate?.detail ?? '真实页面预检未通过'}`
       setAgentConsoleError(message)
       setOperationError(message)
       setActiveSection('console')
@@ -980,7 +980,7 @@ export default function App() {
 
   async function runL2ReadonlyProbe() {
     setRuntimeLogSource('launcher')
-    setL2RunnerState({ status: 'running', runId: null, exitCode: null, message: '正在运行双目标只读检查', line: null, updatedAt: new Date().toISOString() })
+    setL2RunnerState({ status: 'running', runId: null, exitCode: null, message: '正在运行双目标预检', line: null, updatedAt: new Date().toISOString() })
     setActiveSection('console')
     await runRuntimeControl('run_l2_readonly_probe')
   }
@@ -1155,7 +1155,7 @@ function runtimeControlSuccessMessage(action: RuntimeControlAction) {
     mark_real_task_manual_review: '已将真实写入任务转入人工复核。不会取消真实浏览器进程，请查看任务日志确认现场。',
     restart_backend: '已提交后端重启请求，请查看启动器日志。',
     restart_frontend: '已提交前端重启请求，请查看启动器日志。',
-    run_l2_readonly_probe: '已启动只读页面检查，请在执行控制台查看实时日志。',
+    run_l2_readonly_probe: '已启动预检（只读，不保存），请在执行控制台查看实时日志。',
   } as Record<RuntimeControlAction, string>)[action]
 }
 

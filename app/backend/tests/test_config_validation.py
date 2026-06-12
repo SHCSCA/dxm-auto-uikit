@@ -124,6 +124,40 @@ def test_valid_single_save_passes_with_required_templates():
     }
 
 
+def test_single_save_template_overrides_satisfy_required_save_fields():
+    service = ConfigValidationService()
+    templates = _required_templates()
+    for template in templates:
+        payload = template["payload"]
+        if template["template_type"] == "image":
+            payload["image"].pop("marketing_images_strategy", None)
+        if template["template_type"] == "semi_managed":
+            payload["semi_managed"].pop("supply_price", None)
+            payload["semi_managed"].pop("goods_code_strategy", None)
+
+    result = service.validate_task(
+        {
+            "mode": "single_save",
+            "store_id": 1001,
+            "payload": {
+                "product_ids": [501],
+                "publish": False,
+                "template_overrides": {
+                    "image": {"marketing_images_strategy": "使用商品图补齐营销图"},
+                    "semi_managed": {
+                        "product_price": "7.01",
+                        "goods_code_strategy": "沿用店小秘生成",
+                    },
+                },
+            },
+        },
+        templates,
+    )
+
+    assert result["ok"] is True
+    assert result["missing"] == []
+
+
 def test_single_save_ignores_templates_bound_to_other_store():
     service = ConfigValidationService()
     templates = [

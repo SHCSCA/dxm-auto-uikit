@@ -117,6 +117,8 @@ const l3PostEvidenceGapIds = new Set(['gap-save-result', 'gap-unpublished-proof'
 const LEGACY_QA_REAL_MUTATION_TASK_NAME = ['QA guarded', 'real mutation task'].join(' ')
 const RELEASED_SINGLE_SAVE_STORE_NAMES = new Set(['Dang Kang'])
 const DXM_LOGGED_IN_STATUSES = new Set(['login_success', 'logged_in', 'not_published_verified', 'workflow_navigation'])
+const READONLY_PRECHECK_CTA = '运行预检（只读，不保存）'
+const READONLY_PRECHECK_PURPOSE = '预检会打开真实店小秘采集页和采集箱，只读取页面，不保存、不发布；通过后才能打开执行浏览器。'
 
 const realWriteReleasePrerequisites = [
   {
@@ -370,11 +372,11 @@ export function GuideCenter({
     },
     {
       id: 'l2',
-      title: '运行只读页面核验',
+      title: '运行预检',
       done: selectedTaskCompleted || l2Passed,
-      detail: selectedTaskCompleted ? '当前任务已完成，只读证据已进入报告复盘口径。' : l2Passed ? '真实页面只读核验已通过。' : humanGateDetail(l2Gate?.detail) ?? '只读页面核验还未通过。',
-      reason: l2Passed ? '' : `只读检查：${humanGateStateLabel(l2Gate?.status ?? 'not_run')}`,
-      action: l2Passed ? '查看任务门禁' : '运行只读页面检查（不保存）',
+      detail: selectedTaskCompleted ? '当前任务已完成，预检证据已进入报告复盘口径。' : l2Passed ? '真实页面预检已通过。' : humanGateDetail(l2Gate?.detail) ?? '预检还未通过。',
+      reason: l2Passed ? '' : `预检：${humanGateStateLabel(l2Gate?.status ?? 'not_run')}`,
+      action: l2Passed ? '查看任务门禁' : READONLY_PRECHECK_CTA,
       onAction: l2Passed ? onShowTasks : onRunL2Probe,
       secondaryAction: l2Passed ? undefined : '查看检查计划',
       onSecondaryAction: l2Passed ? undefined : onShowReports,
@@ -2704,7 +2706,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
               </div>
               {draftMode !== 'probe' && storeBlocksSingleSave && (
                 <div className="guard-note guard-note--warn">
-                  单商品只保存当前只放行 {Array.from(RELEASED_SINGLE_SAVE_STORE_NAMES).join('、')}；其它店铺请先运行只读页面检查并单独放行。
+                  单商品只保存当前只放行 {Array.from(RELEASED_SINGLE_SAVE_STORE_NAMES).join('、')}；其它店铺请先运行预检并单独放行。
                 </div>
               )}
               {singleSaveProductCountInvalid && (
@@ -3379,7 +3381,7 @@ function RuntimeControlPanel({
         title={l2ProbeResourceState.title}
         onClick={() => onRuntimeControl('run_l2_readonly_probe')}
       >
-        运行只读页面检查（不保存）
+        {READONLY_PRECHECK_CTA}
       </button>
       {l2ProbeResourceState.blocked && <small>{l2ProbeResourceState.detail}</small>}
       <details className="inline-disclosure">
@@ -3696,6 +3698,12 @@ function ConsoleFocusPanel({
           <ModuleHead title="当前执行" meta={selectedTask ? `任务 #${selectedTask.id}` : '未选择任务'} />
           <h1>{active ? activeStep?.title ?? primaryPath.title : primaryPath.title}</h1>
           <p>{active ? activeStep?.detail ?? primaryPath.detail : primaryPath.detail}</p>
+          {primaryPath.action === 'run_l2' && !active && (
+            <div className="console-precheck-explainer" role="note">
+              <strong>预检做什么</strong>
+              <span>{READONLY_PRECHECK_PURPOSE}</span>
+            </div>
+          )}
         </div>
       </div>
       <div className="console-focus-panel__facts console-focus-panel__primary-facts" aria-label="执行摘要">
@@ -3972,7 +3980,7 @@ function AgentConsoleControls({
         {primaryPath.code === 'l2' && !active && (
           <div className="agent-console-lifecycle__actions">
             <button className="button button--secondary" type="button" disabled={l2ProbeDisabled} title={l2ProbeResourceState.title} onClick={() => onRuntimeControl('run_l2_readonly_probe')}>
-              运行只读页面检查（不保存）
+              {READONLY_PRECHECK_CTA}
             </button>
             {l2ProbeResourceState.blocked && <small>{l2ProbeResourceState.detail}</small>}
           </div>
@@ -4020,7 +4028,7 @@ function AgentConsoleControls({
           title={l2ProbeResourceState.title}
           onClick={() => onRuntimeControl('run_l2_readonly_probe')}
         >
-          运行只读页面检查（不保存）
+          {READONLY_PRECHECK_CTA}
         </button>
         <button
           className="button button--quiet"
@@ -4225,16 +4233,16 @@ function L2RunnerStatePanel({ state, l2Gate }: { state: L2RunnerState; l2Gate?: 
   const gateLabel = humanGateStateLabel(l2Gate?.status ?? 'not_run')
   const tone = state.status === 'passed' ? 'ok' : state.status === 'failed' ? 'danger' : state.status === 'running' ? 'warn' : 'pending'
   const title = state.status === 'passed'
-    ? '只读页面检查通过，已刷新门禁'
+    ? '预检通过，已刷新门禁'
     : state.status === 'failed'
-      ? '只读页面检查失败，真实保存仍阻断'
+      ? '预检失败，真实保存仍阻断'
       : state.status === 'running'
-        ? '正在运行双目标只读检查'
-        : '等待运行只读页面检查'
+        ? '正在运行双目标预检'
+        : '等待运行预检（只读，不保存）'
 
   return (
     <div className={`module-card span-1 l2-runner-state l2-runner-state--${state.status}`} aria-live="polite">
-      <ModuleHead title="只读页面检查状态" meta={`门禁：${gateLabel}`} />
+      <ModuleHead title="预检状态" meta={`门禁：${gateLabel}`} />
       <div className="l2-runner-state__body">
         <span className={`status-pill ${tone}`}>{state.status === 'idle' ? '待运行' : state.status === 'running' ? '运行中' : state.status === 'passed' ? '通过' : '失败'}</span>
         <strong>{title}</strong>
@@ -4692,7 +4700,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
         : '当前真实写入状态未知，不可执行真实写入；请先重新运行本地验收并复核只读检查。'
   const nextStepText = isReadyReadiness(readiness)
     ? '复核当前任务、批准人和报告链路后，再启动单商品只保存。'
-    : '先点击任务中心的“运行只读页面检查（不保存）”，通过后再进行人工确认保存。'
+    : `先点击任务中心的“${READONLY_PRECHECK_CTA}”，通过后再进行人工确认保存。`
 
   return (
     <div className="module-card span-3 delivery-check-card">
@@ -4959,7 +4967,7 @@ function ReadonlyRecheckHelpCard({
       </div>
       <div className="readonly-recheck-help__facts" aria-label="只读页面检查说明">
         <span>
-          <strong>只读页面检查做什么</strong>
+          <strong>预检做什么</strong>
           <small>检查商品采集页和草稿箱页是否能正常打开。</small>
         </span>
         <span>
@@ -4971,11 +4979,11 @@ function ReadonlyRecheckHelpCard({
           <small>再回到单商品只保存，由人工确认后启动。</small>
         </span>
       </div>
-      {l3BlocksStart && <span className="readonly-recheck-help__note">只读检查未通过或人工确认未完成前，不启动认领、批量保存或真实保存。</span>}
+      {l3BlocksStart && <span className="readonly-recheck-help__note">预检未通过或人工确认未完成前，不启动认领、批量保存或真实保存。</span>}
       {demoEnabled && selectedTaskIsDryRun && selectedTask?.status === 'draft' && <span className="readonly-recheck-help__note">开发自检批次不触达店小秘；真实保存仍以单商品只保存规则为准。</span>}
       {!selectedTaskIsDryRun && selectedTask?.status === 'draft' && <span className="readonly-recheck-help__note">当前真实任务保持门禁控制，请先处理上方阻断原因。</span>}
       <div className="next-step-actions">
-        <button className="button button--primary" type="button" onClick={onRunL2Probe} disabled={busy}>运行只读页面检查（不保存）</button>
+        <button className="button button--primary" type="button" onClick={onRunL2Probe} disabled={busy}>{READONLY_PRECHECK_CTA}</button>
         <button className="button button--secondary" type="button" onClick={onShowConsole}>查看阻断说明</button>
         <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看检查计划</button>
         <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
@@ -4984,7 +4992,7 @@ function ReadonlyRecheckHelpCard({
         <summary>查看诊断摘要</summary>
         {summaries.length > 0 ? summaries.slice(0, 2).map((item) => (
           <span key={item.target}>{item.targetLabel}：{humanDiagnosticNavigation(item.navigation)}，{item.failedChecks.slice(0, 2).map(humanFailedCheckLabel).join(' / ') || '页面检查未满足'}</span>
-        )) : <span>暂无诊断明细；先运行只读页面检查生成结果。</span>}
+        )) : <span>暂无诊断明细；先运行预检生成结果。</span>}
       </details>
     </div>
   )
@@ -5080,7 +5088,7 @@ function SingleSaveRecoveryGuide({
         )}
         {(l2BlocksStart || l3BlocksStart) && (
           <button className="button button--quiet" type="button" onClick={onRunL2Probe} disabled={busy}>
-            运行只读页面检查（不保存）
+            {READONLY_PRECHECK_CTA}
           </button>
         )}
         {(l2BlocksStart || l3BlocksStart) && (
@@ -5217,9 +5225,9 @@ function taskStartDecision({
   }
   if (requiresRealL2(selectedTask) && !l2Ready) {
     return {
-      scope: '先做只读页面检查',
-      reason: '真实页面只读检查未通过或已过期。',
-      next: '运行只读页面检查，确认商品采集页和草稿箱页均无写入风险。',
+      scope: '先做预检',
+      reason: '真实页面预检未通过或已过期。',
+      next: `${READONLY_PRECHECK_CTA}，确认商品采集页和草稿箱页均无写入风险。`,
       tone: 'warn',
     }
   }
@@ -5371,13 +5379,13 @@ function buildConsolePrimaryPath({
   if (requiresRealL2(selectedTask) && !l2Ready) {
     return {
       code: 'l2',
-      title: '先运行只读页面检查',
-      reason: `只读检查：${humanGateStateLabel(l2Gate?.status ?? 'not_run')}`,
-      detail: l2Detail ?? '需要商品采集页和草稿箱页两个真实页面只读检查均通过。',
-      next: '运行只读页面检查（不保存）',
-      ctaLabel: '运行只读页面检查（不保存）',
+      title: '先运行预检（只读，不保存）',
+      reason: `预检：${humanGateStateLabel(l2Gate?.status ?? 'not_run')}。${READONLY_PRECHECK_PURPOSE}`,
+      detail: l2Detail ?? '需要商品采集页和草稿箱页两个真实页面预检均通过。',
+      next: READONLY_PRECHECK_CTA,
+      ctaLabel: READONLY_PRECHECK_CTA,
       action: 'run_l2',
-      browserStatus: '只读检查未通过，Agent 执行浏览器暂不启动',
+      browserStatus: '预检未通过，Agent 执行浏览器暂不启动',
       blocksBrowserStart: true,
       saveBlocked: true,
     }
@@ -6098,22 +6106,22 @@ function humanGateDetail(detail?: string | null) {
     || detail.includes('age')
     || detail.includes('expired')
   ) {
-    return '只读检查证据已过期，请点击“运行只读页面检查（不保存）”刷新后再继续。'
+    return `预检证据已过期，请点击“${READONLY_PRECHECK_CTA}”刷新后再继续。`
   }
   if (detail.includes('data_acquisition') || detail.includes('draft_box')) {
     return detail
       .split('data_acquisition').join('商品采集页')
       .split('draft_box').join('草稿箱页')
-      .split('L2').join('只读检查')
+      .split('L2').join('预检')
       .split('L3').join('真实保存')
       .split('passed').join('通过')
-      .split('probe').join('检查')
+      .split('probe').join('预检')
   }
   return detail
-    .split('L2').join('只读检查')
+    .split('L2').join('预检')
     .split('L3').join('真实保存')
     .split('passed').join('通过')
-    .split('probe').join('检查')
+    .split('probe').join('预检')
 }
 
 function humanDiagnosticNavigation(value: string) {
@@ -6134,10 +6142,10 @@ function humanFailedCheckLabel(value: string) {
 }
 
 function l2StartLabel(status?: string) {
-  if (status === 'partial') return '只读检查缺目标，禁止启动'
-  if (status === 'failed') return '只读检查失败，禁止启动'
-  if (status === 'mock_passed') return '等待真实只读检查，禁止启动'
-  return '只读检查未通过，禁止启动'
+  if (status === 'partial') return '预检缺目标，禁止启动'
+  if (status === 'failed') return '预检失败，禁止启动'
+  if (status === 'mock_passed') return '等待真实预检，禁止启动'
+  return '预检未通过，禁止启动'
 }
 
 function displaySafeStepLabel(label: string) {

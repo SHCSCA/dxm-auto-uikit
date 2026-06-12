@@ -75,6 +75,103 @@ def _approve_task(repo: Repository, task_id: int, token: str):
     repo.set_task_manual_approval(task_id, approved=True, token=token)
 
 
+def _create_required_save_templates(repo: Repository, *, omit_override_backed_fields: bool = False) -> None:
+    template_payloads = [
+        (
+            "category",
+            "类目模板",
+            {
+                "dxm_reference_templates": {
+                    "attribute_info": {"names": ["立牌类谷子"]},
+                    "description": {"names": ["详情模板"]},
+                    "freight": {"names": ["40g普货包裹"]},
+                    "service": {"names": ["Service Template for New Sellers"]},
+                    "eu_responsible": {"names": ["Jacqueiline Marti"]},
+                    "manufacturer": {"names": ["jiyang county thunder"]},
+                    "compliance": {"names": ["合规模板"]},
+                    "semi_managed": {"names": ["半托管模板"]},
+                },
+                "category": {"category_keyword": "立牌", "category_match": "ACG Stand"},
+            },
+        ),
+        ("sku", "SKU模板", {"sku": {"sku_code": "610274761685-DK-AD-10CM"}}),
+        ("pricing", "价格模板", {"pricing": {"declared_value": "1", "stock": "200", "retail_price": "9.99"}}),
+        (
+            "logistics",
+            "包装物流模板",
+            {
+                "logistics": {
+                    "weight": "0.03",
+                    "length": "10",
+                    "width": "10",
+                    "height": "2",
+                    "delivery_days": "7",
+                    "freight_template_priorities": ["40g普货包裹"],
+                    "service_template_priorities": ["Service Template for New Sellers"],
+                    "logistics_attribute": "普货",
+                    "is_original_box": "否",
+                }
+            },
+        ),
+        (
+            "image",
+            "图片模板",
+            {
+                "image": {
+                    "eu_outer_package_filename": "template-eu.jpg",
+                    "marketing_images_strategy": "generate",
+                }
+            },
+        ),
+        (
+            "compliance",
+            "合规模板",
+            {
+                "compliance": {
+                    "material": "ABS",
+                    "eu_responsible_priorities": ["Jacqueiline Marti"],
+                    "manufacturer_priorities": ["jiyang county thunder"],
+                    "customs_product_name_priorities": ["钥匙扣", "keychain"],
+                }
+            },
+        ),
+        (
+            "semi_managed",
+            "半托管模板",
+            {
+                "semi_managed": {
+                    "supply_price": "4.20",
+                    "jit_stock": "100",
+                    "is_original_box": "否",
+                    "length": "10",
+                    "width": "10",
+                    "height": "2",
+                    "goods_code_strategy": "allow_blank",
+                    "barcode_strategy": "allow_blank",
+                }
+            },
+        ),
+    ]
+    if omit_override_backed_fields:
+        for template_type, _template_name, payload in template_payloads:
+            if template_type == "image":
+                payload["image"].pop("marketing_images_strategy", None)
+            if template_type == "semi_managed":
+                payload["semi_managed"].pop("supply_price", None)
+                payload["semi_managed"].pop("goods_code_strategy", None)
+
+    for template_type, template_name, payload in template_payloads:
+        repo.create_template(
+            {
+                "template_type": template_type,
+                "template_name": template_name,
+                "binding_scope": "Dang Kang",
+                "payload": payload,
+                "is_enabled": True,
+            }
+        )
+
+
 def test_create_single_save_rejects_multiple_products(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     store = repo.create_store("Dang Kang", "AliExpress")
@@ -235,6 +332,62 @@ def test_single_save_start_accepts_matching_manual_approval_token(tmp_path, monk
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert repo.get_task(task["id"])["status"] == "running"
+
+
+def test_single_save_start_accepts_task_template_overrides_for_required_fields(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_task(repo)
+    _create_required_save_templates(repo, omit_override_backed_fields=True)
+
+    missing_before = client.get(f"/api/config/preview?task_id={task['id']}").json()["missing"]
+    assert "image.marketing_images_strategy" in missing_before
+    assert "semi_managed.product_price_or_supply_price" in missing_before
+    assert "semi_managed.goods_code_strategy" in missing_before
+
+    image_response = client.patch(
+        f"/api/tasks/{task['id']}/config-overrides",
+        json={"section": "image", "values": {"marketing_images_strategy": "使用商品图补齐营销图"}},
+    )
+    semi_response = client.patch(
+        f"/api/tasks/{task['id']}/config-overrides",
+        json={
+            "section": "semi_managed",
+            "values": {
+                "product_price": "7.01",
+                "goods_code_strategy": "沿用店小秘生成",
+            },
+        },
+    )
+    assert image_response.status_code == 200
+    assert semi_response.status_code == 200
+
+    missing_after = client.get(f"/api/config/preview?task_id={task['id']}").json()["missing"]
+    assert "image.marketing_images_strategy" not in missing_after
+    assert "semi_managed.product_price_or_supply_price" not in missing_after
+    assert "semi_managed.goods_code_strategy" not in missing_after
+
+    approval_response = client.post(
+        f"/api/tasks/{task['id']}/manual-approval",
+        json={"approved_by": "ops-owner", "confirmation": "CONFIRM_DXM_SAVE_ONLY"},
+    )
+    assert approval_response.status_code == 200
+
+    start_response = client.post(
+        f"/api/tasks/{task['id']}/start",
+        json={
+            "manual_approval": True,
+            "approval_token": approval_response.json()["approvalToken"],
+            "approved_by": "ops-owner",
+            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
+        },
+    )
+
+    assert start_response.status_code == 200
+    assert start_response.json()["ok"] is True
+    assert runner.calls == [task["id"]]
 
 
 def test_manual_approval_endpoint_generates_server_token_and_start_accepts_it(tmp_path, monkeypatch):

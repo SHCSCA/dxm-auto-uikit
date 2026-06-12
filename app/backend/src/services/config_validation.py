@@ -66,8 +66,9 @@ class ConfigValidationService:
     ) -> dict:
         task_data = dict(task or {})
         payload = self._payload(task_data)
+        effective_payload = self._payload_with_template_overrides(payload)
         product_payload = self._payload(product or {})
-        mode = self._normalize_mode(task_data.get("mode") or payload.get("mode"))
+        mode = self._normalize_mode(task_data.get("mode") or effective_payload.get("mode"))
         warnings: list[str] = []
 
         if not mode:
@@ -79,17 +80,42 @@ class ConfigValidationService:
             warnings.append(f"unsupported execution mode: {mode}")
             return self._result(False, self.CONFIG_ERROR_CODE, ["mode"], warnings, mode)
 
-        publish_warnings = self._publish_warnings(task_data, payload)
+        publish_warnings = self._publish_warnings(task_data, effective_payload)
         if publish_warnings:
             return self._result(False, self.PUBLISH_ERROR_CODE, [], publish_warnings, mode)
 
         applicable_templates = self._applicable_templates(templates, task_data, product)
-        missing = self._missing_for_mode(mode, task_data, payload, applicable_templates, product_payload)
+        missing = self._missing_for_mode(mode, task_data, effective_payload, applicable_templates, product_payload)
         return self._result(not missing, self.CONFIG_ERROR_CODE if missing else None, missing, warnings, mode)
 
     def _payload(self, task: Mapping[str, Any]) -> dict:
         payload = task.get("payload")
         return dict(payload) if isinstance(payload, Mapping) else {}
+
+    def _payload_with_template_overrides(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        effective = dict(payload)
+        overrides = payload.get("template_overrides")
+        if not isinstance(overrides, Mapping):
+            return effective
+        for section, section_values in overrides.items():
+            if not isinstance(section_values, Mapping):
+                continue
+            normalized = self._normalize_template_key(section)
+            if not normalized:
+                continue
+            existing = effective.get(normalized)
+            merged = dict(existing) if isinstance(existing, Mapping) else {}
+            self._deep_merge(merged, section_values)
+            effective[normalized] = merged
+        return effective
+
+    def _deep_merge(self, target: dict[str, Any], source: Mapping[str, Any]) -> None:
+        for key, value in source.items():
+            current = target.get(key)
+            if isinstance(current, dict) and isinstance(value, Mapping):
+                self._deep_merge(current, value)
+            else:
+                target[key] = value
 
     def _missing_for_mode(
         self,

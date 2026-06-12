@@ -3867,6 +3867,25 @@ tr:last-child td {
   line-height: 1.55;
 }
 
+.console-precheck-explainer {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.console-precheck-explainer strong {
+  color: var(--text);
+}
+
+.console-precheck-explainer span {
+  overflow-wrap: anywhere;
+}
+
 .console-focus-panel__facts {
   min-width: 0;
   display: grid;
