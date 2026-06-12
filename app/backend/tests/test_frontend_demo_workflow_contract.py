@@ -803,7 +803,7 @@ def test_real_operator_inputs_are_inline_not_browser_prompts():
     assert "记住账号密码" in workbench_source
     assert "清除已记住账号" in workbench_source
     assert "function humanDxmLoginState" in workbench_source
-    assert "等待验证码/人工确认" in workbench_source
+    assert "登录还没完成，不是系统故障" in workbench_source
     assert "登录未通过" in workbench_source
     assert "DXM 已进入业务页" in workbench_source
     assert "真实浏览器停留在" in workbench_source
@@ -920,10 +920,11 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "控制台只控制独立真实浏览器；证据文件只在报告中留档，不替代实时操控。" in workbench_source
     assert "控制台不播放截图；截图只作为证据路径，不会启动保存或发布。" not in workbench_source
     assert "'module-card span-2 agent-console-stage'" in console_section
-    assert "className=\"module-card span-1 console-log-card console-log-card--compact\"" in console_section
+    assert '<details className="module-card span-1 console-log-card console-log-card--compact inline-disclosure">' in console_section
+    assert "<summary>实时日志（自动刷新）</summary>" in console_section
     assert "title=\"实时日志\"" in console_section
     assert "RuntimeLogPreview" in console_section
-    assert "日志会自动刷新；筛选和搜索保留在下方“更多诊断与维护”。" in console_section
+    assert "日志默认收起，打开后可看最近刷新结果；筛选和搜索保留在下方“更多诊断与维护”。" in console_section
     assert "<summary>更多诊断与维护</summary>" in console_section
     assert "console-diagnostics-drawer" in console_section
     assert "console-diagnostics-grid" in console_section
@@ -951,7 +952,10 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "打开执行浏览器（不保存）" in workbench_source
     assert "disabled={busy || !selectedTask || browserStartBlocked || active || launching}" in workbench_source
     assert "Agent 执行浏览器启动中" in workbench_source
-    assert "{launching ? 'Agent 执行浏览器启动中' : active ? 'Agent 执行浏览器已打开' : '打开执行浏览器（不保存）'}" in workbench_source
+    assert "? 'Agent 执行浏览器启动中'" in workbench_source
+    assert "? 'Agent 执行浏览器已打开'" in workbench_source
+    assert "? '人工确认后打开执行浏览器'" in workbench_source
+    assert ": '打开执行浏览器（不保存）'}" in workbench_source
     assert "当前 Agent 执行浏览器会话正在运行。" in workbench_source
     assert "<summary>执行浏览器操作细节</summary>" in workbench_source
     assert "agent-console-controls__operator-drawer" in workbench_source
@@ -1043,6 +1047,31 @@ def test_execution_console_keeps_focus_panel_single_action_first():
     assert "<strong>当前步骤</strong>" in visible_before_details
     assert "<strong>下一步</strong>" in visible_before_details
     assert "<strong>日志</strong>" in details_section
+
+
+def test_execution_console_surfaces_operator_decision_and_collapses_live_logs_by_default():
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    console_section = workbench_source[
+        workbench_source.index("export function ExecutionConsole"):
+        workbench_source.index("function AgentBrowserFrame")
+    ]
+    focus_section = workbench_source[
+        workbench_source.index("function ConsoleFocusPanel"):
+        workbench_source.index("function AgentBrowserFrame")
+    ]
+
+    assert "aria-label=\"控制台当前决策\"" in focus_section
+    assert "console-focus-panel__decision-grid" in focus_section
+    assert "<strong>当前动作</strong>" in focus_section
+    assert "<strong>阻断原因</strong>" in focus_section
+    assert "<strong>下一步</strong>" in focus_section
+    assert "primaryPath.reason" in focus_section
+    assert '<details className="module-card span-1 console-log-card console-log-card--compact inline-disclosure">' in console_section
+    assert "<summary>实时日志（自动刷新）</summary>" in console_section
+    assert "日志默认收起，打开后可看最近刷新结果；筛选和搜索保留在下方“更多诊断与维护”。" in console_section
+    assert ".console-focus-panel__decision-grid" in styles_source
+    assert ".console-log-card.inline-disclosure > summary" in styles_source
 
 
 def test_execution_console_distinguishes_login_browser_from_agent_execution_browser():
@@ -1512,7 +1541,7 @@ def test_execution_console_default_log_summary_hides_absolute_paths():
     login_form_section = source[source.index("function DxmLoginInlineForm"):source.index("function RegressionGateGrid")]
     log_summary_section = source[source.index("function RuntimeLogPreview"):source.index("function RuntimeLogPanel")]
 
-    assert "日志会自动刷新；筛选和搜索保留在下方“更多诊断与维护”" in console_section
+    assert "日志默认收起，打开后可看最近刷新结果；筛选和搜索保留在下方“更多诊断与维护”" in console_section
     assert "humanConsoleCodeLabel(step.state)" in console_section
     assert "humanConsoleCodeLabel((hasConsoleHud ? hud?.state ?? hud?.code : null) ?? activeStep?.code ?? 'WAITING')" in source
     assert "PRECHECK_CONFIG: '启动前配置校验'" in source
@@ -2475,7 +2504,7 @@ def test_frontend_guides_waiting_captcha_and_login_failed_as_operator_steps():
     assert "humanDxmLoginFlowNotice(loginResult" in continue_login_section
 
     assert "登录还没完成，不是系统故障" in workbench_source
-    assert "打开着真实浏览器" in workbench_source
+    assert "保持真实浏览器打开" in workbench_source
     assert "如果验证码已完成仍失败" in workbench_source
     assert "重新打开登录页会复用当前账号输入" in workbench_source
 
@@ -2616,7 +2645,7 @@ def test_sidebar_copy_names_save_only_agent_flow_without_ambiguous_browser_wordi
     shell = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
 
     assert "只保存自动化" in shell
-    assert "开始 / 配置 / 任务 / 控制台 / 结果" in shell
+    assert "开始 / 配置 / 任务 / 浏览器 / 结果" in shell
     assert "任务与执行控制台" in shell
     assert "{ id: 'console', label: '执行控制台', short: '控', hint: '登录、预检、真实浏览器' }" in shell
     assert "真实店小秘操作在登录浏览器和执行浏览器中完成" in shell

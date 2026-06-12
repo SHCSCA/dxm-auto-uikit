@@ -99,7 +99,7 @@ export function AppShell({
             <div>
               <strong>DXM Agent</strong>
               <span>只保存自动化</span>
-              <span className="sr-only">开始 / 配置 / 任务 / 控制台 / 结果</span>
+              <span className="sr-only">开始 / 配置 / 任务 / 浏览器 / 结果</span>
             </div>
           )}
           <button className="icon-button" type="button" onClick={onToggleSidebar} aria-label="切换侧边栏">

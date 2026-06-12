@@ -4040,6 +4040,13 @@ tr:last-child td {
   gap: 8px;
 }
 
+.console-focus-panel__decision-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .console-focus-panel__primary-facts {
   min-width: 0;
   display: grid;
@@ -4047,6 +4054,7 @@ tr:last-child td {
   gap: 8px;
 }
 
+.console-focus-panel__decision-grid span,
 .console-focus-panel__primary-facts span,
 .console-focus-panel__facts span {
   min-width: 0;
@@ -4060,17 +4068,25 @@ tr:last-child td {
   gap: 5px;
 }
 
+.console-focus-panel__decision-grid span {
+  min-height: 64px;
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--line));
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-alt));
+}
+
 .console-focus-panel__primary-facts span {
   min-height: 52px;
   padding: 8px;
 }
 
+.console-focus-panel__decision-grid strong,
 .console-focus-panel__primary-facts strong,
 .console-focus-panel__facts strong {
   color: var(--muted);
   font-size: 12px;
 }
 
+.console-focus-panel__decision-grid b,
 .console-focus-panel__primary-facts b,
 .console-focus-panel__facts b {
   min-width: 0;
@@ -4097,6 +4113,7 @@ tr:last-child td {
 
 .console-log-card {
   min-height: 0;
+  padding: 12px;
 }
 
 .console-log-card > small {
@@ -4262,6 +4279,15 @@ tr:last-child td {
 .l2-runner-state__body small {
   color: var(--muted);
   line-height: 1.45;
+}
+
+.console-log-card.inline-disclosure > summary {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
 }
 
 .l2-runner-state__body code {
@@ -6008,6 +6034,7 @@ tr:last-child td {
   .config-precheck-action,
   .next-required-fields,
   .console-focus-panel__main,
+  .console-focus-panel__decision-grid,
   .console-focus-panel__primary-facts,
   .console-focus-panel__facts,
   .guide-hero__body,

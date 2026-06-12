@@ -753,7 +753,7 @@ function humanDxmLoginState(runtimeStatus?: RuntimeStatus | null, runtimeStatusE
     return {
       tone: 'ok',
       label: status === 'workflow_navigation' ? 'DXM 已进入业务页' : 'DXM 已登录',
-      detail: currentUrl ? `当前页面：${currentUrl}` : '真实店小秘登录态已可用。',
+      detail: currentUrl ? `真实浏览器停留在：${currentUrl}` : '真实店小秘登录态已可用。',
       next: '下一步：进入采集箱或运行只读页面检查。',
     }
   }
@@ -761,7 +761,7 @@ function humanDxmLoginState(runtimeStatus?: RuntimeStatus | null, runtimeStatusE
     return {
       tone: 'warn',
       label: '登录还没完成，不是系统故障',
-      detail: currentUrl ? `请打开着真实浏览器继续处理：${currentUrl}` : '账号密码已填入真实浏览器，等待你完成验证码。',
+      detail: currentUrl ? `请保持真实浏览器打开并继续处理：${currentUrl}` : '账号密码已填入真实浏览器，等待你完成验证码。',
       next: '完成验证码后点击“验证码已完成，检测登录态”。',
     }
   }
@@ -769,14 +769,14 @@ function humanDxmLoginState(runtimeStatus?: RuntimeStatus | null, runtimeStatusE
     return {
       tone: 'danger',
       label: '登录未通过',
-      detail: runtimeStatus?.dxmLogin?.lastError || (currentUrl ? `当前页面：${currentUrl}` : '未检测到有效登录态。'),
+      detail: runtimeStatus?.dxmLogin?.lastError || (currentUrl ? `真实浏览器停留在：${currentUrl}` : '未检测到有效登录态。'),
       next: '真实浏览器窗口会保留；如果验证码已完成仍失败，请修正验证码或账号密码后再次检测；重新打开登录页会复用当前账号输入。',
     }
   }
   return {
     tone: 'warn',
     label: `DXM 状态：${status}`,
-    detail: currentUrl ? `当前页面：${currentUrl}` : '登录状态还未完成确认。',
+    detail: currentUrl ? `真实浏览器停留在：${currentUrl}` : '登录状态还未完成确认。',
     next: '按当前页面提示继续登录，完成后检测登录态。',
   }
 }
@@ -3304,7 +3304,8 @@ export function ExecutionConsole({
         />
       )}
 
-      <div className="module-card span-1 console-log-card console-log-card--compact">
+      <details className="module-card span-1 console-log-card console-log-card--compact inline-disclosure">
+        <summary>实时日志（自动刷新）</summary>
         <ModuleHead title="实时日志" meta={`${runtimeLogCount} 条，每 1.5 秒刷新`} />
         <RuntimeLogPreview
           logs={runtimeLogs}
@@ -3312,8 +3313,8 @@ export function ExecutionConsole({
           error={runtimeLogError}
           onSourceChange={onRuntimeLogSourceChange}
         />
-        <small>日志会自动刷新；筛选和搜索保留在下方“更多诊断与维护”。</small>
-      </div>
+        <small>日志默认收起，打开后可看最近刷新结果；筛选和搜索保留在下方“更多诊断与维护”。</small>
+      </details>
 
       <L2RunnerStatePanel
         state={l2RunnerState}
@@ -3986,6 +3987,11 @@ function ConsoleFocusPanel({
             </div>
           )}
         </div>
+      </div>
+      <div className="console-focus-panel__decision-grid" aria-label="控制台当前决策">
+        <span><strong>当前动作</strong><b>{active ? activeStep?.title ?? primaryPath.title : primaryPath.title}</b></span>
+        <span><strong>阻断原因</strong><b>{primaryPath.saveBlocked ? primaryPath.reason : '当前未发现保存阻断'}</b></span>
+        <span><strong>下一步</strong><b>{consoleNext}</b></span>
       </div>
       <div className="console-focus-panel__primary-facts">
         <span><strong>任务</strong><b>{selectedTask ? `${displayTaskName(selectedTask)} / ${humanTaskStatus(selectedTask.status)}` : '待选择'}</b></span>
