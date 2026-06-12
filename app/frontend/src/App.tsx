@@ -270,7 +270,7 @@ export default function App() {
         title: taskMissing ? '当前任务需要重新选择' : '工作台服务连接异常',
         detail: taskMissing
           ? '上次选择的任务已不存在或已归档。请在任务中心重新选择或创建单商品只保存任务；真实保存前仍会重新校验。'
-          : `暂时无法读取完整任务数据。请查看执行控制台日志；系统不会用本地演示结果替代真实保存。${firstFailure?.message ?? ''}`,
+          : humanWorkspaceFetchError(firstFailure?.message),
       })
     } else {
       setWorkspaceNotice(null)
@@ -1233,6 +1233,20 @@ function humanOperationError(message: string) {
   return message
 }
 
+function humanWorkspaceFetchError(message?: string) {
+  const normalized = (message ?? '').toLowerCase()
+  if (
+    normalized.includes('/api/delivery/workspace')
+    || normalized.includes('failed to fetch')
+    || normalized.includes('networkerror')
+    || normalized.includes('load failed')
+    || normalized.includes('failed (500)')
+  ) {
+    return '暂时无法读取完整任务数据。请重新打开 DXM Agent Console 免安装版；开发模式请确认后端服务正在运行。真实保存不会启动或发布。'
+  }
+  return '暂时无法读取完整任务数据。请查看执行控制台日志；系统不会用本地演示结果替代真实保存。'
+}
+
 function humanRuntimeStatusError(message: string) {
   const normalized = message.toLowerCase()
   if (
@@ -1241,7 +1255,7 @@ function humanRuntimeStatusError(message: string) {
     || normalized.includes('networkerror')
     || normalized.includes('load failed')
   ) {
-    return `本机后端未连接：请重新打开 DXM Agent Console 免安装版；开发模式请先启动后端服务。真实保存不会启动或发布。原始错误：${message}`
+    return '本机后端未连接：请重新打开 DXM Agent Console 免安装版；开发模式请先启动后端服务。真实保存不会启动或发布。'
   }
   return message
 }

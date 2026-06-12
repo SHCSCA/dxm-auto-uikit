@@ -2566,6 +2566,21 @@ def test_frontend_keeps_runtime_and_config_fetch_failures_distinct_from_user_sta
     assert "configPreviewError: string | null" in workbench_source
 
 
+def test_frontend_does_not_surface_raw_backend_fetch_failures_to_operator():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
+
+    assert "function humanWorkspaceFetchError" in app_source
+    assert "humanWorkspaceFetchError(firstFailure?.message)" in app_source
+    assert "GET /api/delivery/workspace failed" not in app_source
+    assert "GET /api/runtime/status" not in app_source
+    assert "原始错误：" not in app_source
+    assert "本机后端未连接：请重新打开 DXM Agent Console 免安装版；开发模式请先启动后端服务。真实保存不会启动或发布。" in app_source
+    assert "暂时无法读取完整任务数据。请重新打开 DXM Agent Console 免安装版；开发模式请确认后端服务正在运行。真实保存不会启动或发布。" in app_source
+    assert "runtimeEndpointLine = runtimeStatus" in safety_bar
+    assert "运行状态接口不可用：${runtimeStatusError}" in safety_bar
+
+
 def test_frontend_treats_workflow_navigation_as_logged_in_across_primary_surfaces():
     app_source = APP_TSX.read_text(encoding="utf-8")
     safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
