@@ -580,6 +580,7 @@ def runtime_status(frontend_url: str | None = None):
             'currentUrl': dxm_state.get('current_url') or dxm_state.get('url'),
             'lastError': dxm_state.get('last_error') or dxm_state.get('error'),
         },
+        'l2ReadonlyProbe': _l2_probe_lock_status(),
         'dependencies': {
             'python': {
                 'status': 'ok' if Path(sys.executable).exists() else 'missing',
@@ -1291,6 +1292,32 @@ def _l2_probe_lock_is_stale() -> bool:
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return True
     return (datetime.now(timezone.utc) - created_at).total_seconds() > L2_READONLY_PROBE_LOCK_TTL_SECONDS
+
+
+def _l2_probe_lock_status() -> dict[str, Any]:
+    base = {
+        'running': False,
+        'stale': False,
+        'runId': None,
+        'taskId': None,
+        'pid': None,
+        'createdAt': None,
+        'lockFile': str(L2_READONLY_PROBE_LOCK_FILE),
+    }
+    try:
+        payload = json.loads(L2_READONLY_PROBE_LOCK_FILE.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return base
+    stale = _l2_probe_lock_is_stale()
+    return {
+        **base,
+        'running': not stale,
+        'stale': stale,
+        'runId': payload.get('run_id'),
+        'taskId': payload.get('task_id'),
+        'pid': payload.get('pid'),
+        'createdAt': payload.get('created_at'),
+    }
 
 
 def _write_runtime_control_command(action: str, task_id: int | None) -> dict:

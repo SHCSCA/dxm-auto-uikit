@@ -1008,6 +1008,36 @@ def test_runtime_status_reports_l2_probe_checked_paths_when_resource_missing(tmp
     assert str(missing_root / "tools" / "probes" / "l2_readonly_probe_runner.py") in runner["checkedPaths"]
 
 
+def test_runtime_status_reports_l2_probe_runner_lock_state(tmp_path, monkeypatch):
+    import src.main as main
+
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    lock_file = tmp_path / "runner.lock"
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    lock_file.write_text(
+        json.dumps({
+            "schema": "dxm_l2_readonly_probe_lock.v1",
+            "run_id": "l2-real-existing",
+            "task_id": 42,
+            "pid": 2468,
+            "created_at": "2099-01-01T00:00:00+00:00",
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(main, "L2_READONLY_PROBE_LOCK_FILE", lock_file)
+
+    response = client.get("/api/runtime/status")
+
+    assert response.status_code == 200
+    probe = response.json()["l2ReadonlyProbe"]
+    assert probe["running"] is True
+    assert probe["stale"] is False
+    assert probe["runId"] == "l2-real-existing"
+    assert probe["taskId"] == 42
+    assert probe["pid"] == 2468
+    assert probe["lockFile"] == str(lock_file)
+
+
 def test_runtime_control_starts_l2_readonly_probe_runner_without_real_write(tmp_path, monkeypatch):
     import src.main as main
 

@@ -2618,8 +2618,10 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
   const l2BlocksStart = needsRealL2 && l2Gate?.status !== 'passed'
   const l3BlocksStart = needsRealL2 && l3Gate?.status === 'blocked'
   const loginBlocksStart = selectedRealDxmMutationTask && !dxmLoggedIn
-  const configUnknownBlocksStart = selectedRealDxmMutationTask && !configPreview && !configPreviewLoading
-  const configBlocksStart = Boolean(selectedTask && isRealDxmMutationTask(selectedTask) && configPreview && !configPreview.ok)
+  const configPreviewForSelectedTask = selectedTask && configPreview?.taskId === selectedTask.id ? configPreview : null
+  const configPreviewTaskMismatch = Boolean(selectedTask && configPreview && configPreview.taskId !== selectedTask.id)
+  const configUnknownBlocksStart = selectedRealDxmMutationTask && !configPreviewForSelectedTask && !configPreviewLoading
+  const configBlocksStart = Boolean(selectedTask && isRealDxmMutationTask(selectedTask) && configPreviewForSelectedTask && !configPreviewForSelectedTask.ok)
   const l2DiagnosticSummaries = summarizeL2Diagnostics(l2Gate)
   const selectedStore = uniqueStoreOptions.find((store) => String(store.id) === draftStoreId)
   const draftProductIdSet = new Set(draftProductIds)
@@ -2672,6 +2674,8 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
               ? '运行状态不可用，先查看日志'
             : loginBlocksStart
               ? 'DXM 未登录，先打开真实浏览器登录'
+              : configPreviewTaskMismatch
+                ? '配置属于其它任务，重新检查本次任务'
               : configPreviewError && configUnknownBlocksStart
                 ? '配置检查接口不可用'
               : configUnknownBlocksStart
@@ -2781,7 +2785,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
         <TaskCurrentActionPanel
           selectedTask={selectedTask}
           workspace={workspace}
-          configPreview={configPreview}
+          configPreview={configPreviewForSelectedTask}
           l2Gate={l2Gate}
           l3Gate={l3Gate}
           startLabel={startLabel}
@@ -2810,11 +2814,11 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
             onShowReports={onShowReports}
           />
         )}
-        {(configBlocksStart || configPreviewLoading || configPreviewError) && (
+        {(configBlocksStart || configPreviewLoading || configPreviewError || configPreviewTaskMismatch) && (
           <div className={`gate-note ${configBlocksStart ? 'gate-note--danger' : ''}`}>
-            <strong>{configPreviewError ? '配置检查接口不可用' : configPreviewLoading ? '正在检查配置' : '配置检查未通过'}</strong>
-            <span>{configPreviewError ? `请先确认本机后端仍在运行，再重新检查配置：${configPreviewError}` : configPreviewLoading ? '正在读取当前任务的 DXM 编辑页字段来源。' : `请先补齐：${configPreview?.missing.slice(0, 6).join('、') || 'DXM 编辑页配置'}`}</span>
-            {configBlocksStart && (
+            <strong>{configPreviewError ? '配置检查接口不可用' : configPreviewTaskMismatch ? '配置属于其它任务' : configPreviewLoading ? '正在检查配置' : '配置检查未通过'}</strong>
+            <span>{configPreviewError ? `请先确认本机后端仍在运行，再重新检查配置：${configPreviewError}` : configPreviewTaskMismatch ? '请重新检查本次任务配置，避免沿用上一任务的配置结果。' : configPreviewLoading ? '正在读取当前任务的 DXM 编辑页字段来源。' : `请先补齐：${configPreviewForSelectedTask?.missing.slice(0, 6).join('、') || 'DXM 编辑页配置'}`}</span>
+            {(configBlocksStart || configPreviewTaskMismatch) && (
               <div className="next-step-actions">
                 <button className="button button--secondary" type="button" onClick={onShowConfig}>去配置中心</button>
               </div>
@@ -3639,6 +3643,15 @@ function getL2ProbeResourceState(runtimeStatus: RuntimeStatus | null) {
       blocked: true,
       title: '只读页面检查依赖状态未知，请先刷新运行状态或重新打开免安装版。',
       detail: '只读页面检查依赖状态未知，请先刷新运行状态或重新打开免安装版。',
+    }
+  }
+  if (runtimeStatus.l2ReadonlyProbe?.running) {
+    const runId = runtimeStatus.l2ReadonlyProbe.runId ?? '未知 runId'
+    const taskId = runtimeStatus.l2ReadonlyProbe.taskId ? ` / 任务 #${runtimeStatus.l2ReadonlyProbe.taskId}` : ''
+    return {
+      blocked: true,
+      title: `预检正在运行：${runId}${taskId}`,
+      detail: `预检正在运行：${runId}${taskId}。请等待完成或查看实时日志；完成前不会启动第二个预检。`,
     }
   }
   const dependencies = runtimeStatus?.dependencies ?? {}

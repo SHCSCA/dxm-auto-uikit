@@ -2019,9 +2019,13 @@ def test_task_center_start_button_matches_real_start_prechecks():
     assert "const selectedRealDxmMutationTask = Boolean(selectedTask && isRealDxmMutationTask(selectedTask))" in task_center_section
     assert "const dxmLoggedIn = !runtimeStatusError && DXM_LOGGED_IN_STATUSES.has(runtimeStatus?.dxmLogin?.status ?? '')" in task_center_section
     assert "const loginBlocksStart = selectedRealDxmMutationTask && !dxmLoggedIn" in task_center_section
-    assert "const configUnknownBlocksStart = selectedRealDxmMutationTask && !configPreview && !configPreviewLoading" in task_center_section
+    assert "const configPreviewForSelectedTask = selectedTask && configPreview?.taskId === selectedTask.id ? configPreview : null" in task_center_section
+    assert "const configPreviewTaskMismatch = Boolean(selectedTask && configPreview && configPreview.taskId !== selectedTask.id)" in task_center_section
+    assert "const configUnknownBlocksStart = selectedRealDxmMutationTask && !configPreviewForSelectedTask && !configPreviewLoading" in task_center_section
+    assert "const configBlocksStart = Boolean(selectedTask && isRealDxmMutationTask(selectedTask) && configPreviewForSelectedTask && !configPreviewForSelectedTask.ok)" in task_center_section
     assert "startDisabled = busy || !selectedTask || selectedTaskNotDraft || selectedTaskIsUnreleasedRealMode || loginBlocksStart || configUnknownBlocksStart || configPreviewLoading || configBlocksStart || l2BlocksStart || l3BlocksStart" in task_center_section
     assert "DXM 未登录，先打开真实浏览器登录" in task_center_section
+    assert "配置属于其它任务，重新检查本次任务" in task_center_section
     assert "先检查本次任务配置" in task_center_section
     assert "正在检查配置，稍候启动" in task_center_section
 
@@ -2159,6 +2163,22 @@ def test_task_center_precheck_buttons_share_resource_gate():
     assert "l2ProbeResourceState: ReturnType<typeof getL2ProbeResourceState>" in recovery_card
     assert "disabled={busy || l2ProbeResourceState.blocked}" in recovery_card
     assert "title={l2ProbeResourceState.title}" in recovery_card
+
+
+def test_execution_console_disables_l2_probe_when_runner_lock_is_active():
+    types_source = (REPO_ROOT / "app" / "frontend" / "src" / "types.ts").read_text(encoding="utf-8")
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    l2_state_function = workbench_source[
+        workbench_source.index("function getL2ProbeResourceState"):
+        workbench_source.index("function RuntimeControlResultSummary")
+    ]
+
+    assert "l2ReadonlyProbe?: {" in types_source
+    assert "running: boolean" in types_source
+    assert "runtimeStatus.l2ReadonlyProbe?.running" in l2_state_function
+    assert "预检正在运行" in l2_state_function
+    assert "runId" in l2_state_function
+    assert "请等待完成或查看实时日志" in l2_state_function
 
 
 def test_task_center_precheck_cards_receive_resource_state_prop():
