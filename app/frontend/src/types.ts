@@ -66,7 +66,7 @@ export type RuntimeStatus = {
   frontend: { status: string; url?: string; port?: number | null; detail?: string }
   agentConsole: { status: string; active: boolean; browserVisible: boolean; currentUrl?: string | null; lastError?: string | null }
   dxmLogin: { status: string; currentUrl?: string | null; lastError?: string | null }
-  dependencies: Record<string, { status: string; path?: string | null }>
+  dependencies: Record<string, { status: string; path?: string | null; checkedPaths?: string[] }>
   runtimeControl?: {
     owner?: 'start_mvp' | 'desktop' | 'direct' | string
     managedByLauncher: boolean

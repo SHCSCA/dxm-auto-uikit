@@ -22,11 +22,11 @@ DXM 半托管自动化工作台，面向真实店小秘账号、真实浏览器�
 已打包免安装运行版：
 
 ```text
-C:\Users\wz\Desktop\DXM-Agent-Console-Portable-latest.exe
-outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
+C:\Users\wz\Desktop\DXM-Agent-Console-免安装版\DXM Agent Console.exe
+outputs\desktop-build\win-unpacked\DXM Agent Console.exe
 ```
 
-当前默认交付使用 portable 单文件免安装版。首次启动会自解压本地 Python 和前端资源，可能需要 1-3 分钟；启动后只保留一个 DXM Agent Console 窗口。`outputs\desktop-build\win-unpacked\DXM Agent Console.exe` 保留为开发/排查备用入口，不能只复制其中的 exe 文件脱离 `resources` 目录运行。
+当前默认交付使用免安装目录版。必须保留整个 `DXM-Agent-Console-免安装版` 或 `win-unpacked` 文件夹和 `resources` 目录，不能只复制其中的 exe 文件单独运行。单文件 `DXM-Agent-Console-Portable-latest.exe` 当前在本机 QA smoke 中会卡在 portable 外壳阶段，暂不作为推荐入口。
 
 源码开发态可用下面命令启动桌面壳：
 
@@ -135,11 +135,11 @@ scripts\start-mvp.bat
 已打包免安装运行版：
 
 ```bat
-C:\Users\wz\Desktop\DXM-Agent-Console-Portable-latest.exe
-outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
+C:\Users\wz\Desktop\DXM-Agent-Console-免安装版\DXM Agent Console.exe
+outputs\desktop-build\win-unpacked\DXM Agent Console.exe
 ```
 
-当前交付入口是 portable 单文件免安装版；`win-unpacked` 文件夹只作为开发/排查备用，若使用它必须保留整个文件夹和 `resources` 目录。
+当前交付入口是免安装目录版；若使用 `win-unpacked`，必须保留整个文件夹和 `resources` 目录。单文件 portable 暂列为待修复备用产物，不作为用户交付入口。
 
 源码开发态启动桌面版：
 

@@ -825,10 +825,34 @@ def test_runtime_status_reports_l2_probe_resource_readiness_from_resource_root(t
     dependencies = response.json()["dependencies"]
     assert dependencies["l2_readonly_probe_runner"]["status"] == "ok"
     assert dependencies["l2_readonly_probe_runner"]["path"] == str(runner_script)
+    assert str(runner_script) in dependencies["l2_readonly_probe_runner"]["checkedPaths"]
     assert dependencies["l2_readonly_probe_script"]["status"] == "ok"
     assert dependencies["l2_readonly_probe_script"]["path"] == str(probe_script)
+    assert str(probe_script) in dependencies["l2_readonly_probe_script"]["checkedPaths"]
     assert dependencies["l2_readonly_probe_allowlist"]["status"] == "ok"
     assert dependencies["l2_readonly_probe_allowlist"]["path"] == str(allowlist_file)
+    assert str(allowlist_file) in dependencies["l2_readonly_probe_allowlist"]["checkedPaths"]
+
+
+def test_runtime_status_reports_l2_probe_checked_paths_when_resource_missing(tmp_path, monkeypatch):
+    import src.main as main
+
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    missing_root = tmp_path / "missing-repo-root"
+    resource_root = tmp_path / "empty-desktop-resources"
+    resource_root.mkdir()
+    monkeypatch.setenv("DXM_RESOURCE_ROOT", str(resource_root))
+    monkeypatch.setattr(main, "_resource_root_candidates", lambda: [resource_root, missing_root])
+    monkeypatch.setattr(main, "L2_READONLY_PROBE_RUNNER", missing_root / "tools" / "probes" / "l2_readonly_probe_runner.py")
+
+    response = client.get("/api/runtime/status")
+
+    assert response.status_code == 200
+    runner = response.json()["dependencies"]["l2_readonly_probe_runner"]
+    assert runner["status"] == "missing"
+    assert runner["path"] == str(missing_root / "tools" / "probes" / "l2_readonly_probe_runner.py")
+    assert str(resource_root / "tools" / "probes" / "l2_readonly_probe_runner.py") in runner["checkedPaths"]
+    assert str(missing_root / "tools" / "probes" / "l2_readonly_probe_runner.py") in runner["checkedPaths"]
 
 
 def test_runtime_control_starts_l2_readonly_probe_runner_without_real_write(tmp_path, monkeypatch):

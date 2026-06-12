@@ -13,6 +13,7 @@ VERIFY_DESKTOP_PACKAGE = REPO_ROOT / "scripts" / "verify-desktop-package.ps1"
 FRONTEND_VITE_CONFIG = REPO_ROOT / "app" / "frontend" / "vite.config.ts"
 README = REPO_ROOT / "README.md"
 USER_GUIDE = REPO_ROOT / "docs" / "product" / "用户交付使用说明-20260526.md"
+PORTABLE_QUICK_GUIDE = REPO_ROOT / "docs" / "product" / "免安装版快速使用说明-20260611.md"
 APP_TSX = REPO_ROOT / "app" / "frontend" / "src" / "App.tsx"
 SAFETY_STATUS_BAR = REPO_ROOT / "app" / "frontend" / "src" / "components" / "SafetyStatusBar.tsx"
 WORKBENCH_MODULES_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "WorkbenchModules.tsx"
@@ -142,13 +143,23 @@ def test_user_docs_present_desktop_exe_as_primary_delivery_entry():
 
     for source in (readme, user_guide):
         assert "DXM Agent Console 桌面版" in source
-        assert "C:\\Users\\wz\\Desktop\\DXM-Agent-Console-Portable-latest.exe" in source
-        assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in source
+        assert "C:\\Users\\wz\\Desktop\\DXM-Agent-Console-免安装版\\DXM Agent Console.exe" in source
         assert "outputs\\desktop-build\\win-unpacked\\DXM Agent Console.exe" in source
-        assert "当前默认交付使用 portable 单文件免安装版" in source
+        assert "当前默认交付使用免安装目录版" in source
+        assert "单文件 `DXM-Agent-Console-Portable-latest.exe` 当前在本机 QA smoke 中会卡在 portable 外壳阶段" in source
         assert "scripts\\start-desktop.bat" in source
         assert "scripts\\verify-desktop-package.ps1" in source
         assert "AppData\\Roaming\\DXM Agent Console\\data\\desktop-main.log" in source
+
+
+def test_portable_quick_guide_uses_verified_folder_exe_entry():
+    source = PORTABLE_QUICK_GUIDE.read_text(encoding="utf-8")
+
+    assert "C:\\Users\\wz\\Desktop\\DXM-Agent-Console-免安装版\\DXM Agent Console.exe" in source
+    assert "outputs\\desktop-build\\win-unpacked\\DXM Agent Console.exe" in source
+    assert "必须保留整个 `DXM-Agent-Console-免安装版` 或 `win-unpacked` 文件夹和 `resources` 目录" in source
+    assert "DXM-Agent-Console-Portable-latest.exe" in source
+    assert "暂不作为推荐入口" in source
 
 
 def test_frontend_vite_build_uses_relative_base_for_electron_file_loading():

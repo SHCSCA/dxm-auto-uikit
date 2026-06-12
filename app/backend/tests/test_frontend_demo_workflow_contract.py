@@ -1755,6 +1755,9 @@ def test_frontend_surfaces_runtime_status_and_log_filters():
     assert "dependencies.l2_readonly_probe_runner" in workbench_source
     assert "dependencies.l2_readonly_probe_script" in workbench_source
     assert "dependencies.l2_readonly_probe_allowlist" in workbench_source
+    assert "checkedPaths" in (REPO_ROOT / "app" / "frontend" / "src" / "types.ts").read_text(encoding="utf-8")
+    assert "已检查：" in workbench_source
+    assert ".slice(0, 4)" in workbench_source
     assert "只读复验资源缺失，请使用完整免安装包或新版 portable exe" in workbench_source
     assert "task: '任务'" in workbench_source
     assert "agent: '浏览器 Agent'" in workbench_source
@@ -1843,6 +1846,10 @@ def test_frontend_humanizes_l2_runner_missing_error():
     assert "function humanOperationError" in app_source
     assert "L2 readonly probe runner is missing" in app_source
     assert "只读复验启动器缺失，请使用最新免安装版或重新打包桌面版。" in app_source
+    assert "function searchedPathHint(message: string)" in app_source
+    assert "const marker = 'Searched:'" in app_source
+    assert ".slice(0, 3)" in app_source
+    assert "已检查：${paths.join('；')}" in app_source
     assert "setOperationError(humanOperationError(message))" in app_source
 
 

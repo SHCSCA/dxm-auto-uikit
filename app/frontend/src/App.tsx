@@ -1114,12 +1114,25 @@ function runtimeControlSuccessMessage(action: RuntimeControlAction) {
 
 function humanOperationError(message: string) {
   if (message.includes('L2 readonly probe runner is missing')) {
-    return '只读复验启动器缺失，请使用最新免安装版或重新打包桌面版。已阻止真实保存，不会发布。'
+    return `只读复验启动器缺失，请使用最新免安装版或重新打包桌面版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
   }
   if (message.includes('L2 readonly probe script is missing')) {
-    return '只读复验脚本缺失，请使用最新免安装版或重新打包桌面版。已阻止真实保存，不会发布。'
+    return `只读复验脚本缺失，请使用最新免安装版或重新打包桌面版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
   }
   return message
+}
+
+function searchedPathHint(message: string) {
+  const marker = 'Searched:'
+  const index = message.indexOf(marker)
+  if (index < 0) return ''
+  const paths = message
+    .slice(index + marker.length)
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 3)
+  return paths.length ? ` 已检查：${paths.join('；')}` : ''
 }
 
 function pickDefaultTaskId(deliveryWorkspace: DeliveryWorkspaceResponse | null, tasks: Task[]) {

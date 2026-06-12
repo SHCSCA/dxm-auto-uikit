@@ -3115,10 +3115,14 @@ function getL2ProbeResourceState(runtimeStatus: RuntimeStatus | null) {
   const detail = missing
     .map(([label, item]) => `${label}: ${item?.path ?? '路径未知'}`)
     .join('；')
+  const checkedPaths = missing
+    .flatMap(([, item]) => item?.checkedPaths ?? [])
+    .slice(0, 4)
+  const checkedText = checkedPaths.length ? `已检查：${checkedPaths.join('；')}` : '已检查路径：暂无'
   return {
     blocked: true,
-    title: `只读复验资源缺失：${detail}`,
-    detail: `只读复验资源缺失，请使用完整免安装包或新版 portable exe。${detail}`,
+    title: `只读复验资源缺失：${detail}。${checkedText}`,
+    detail: `只读复验资源缺失，请使用完整免安装包或新版 portable exe。${detail}。${checkedText}`,
   }
 }
 

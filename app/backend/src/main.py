@@ -1074,14 +1074,38 @@ def _resource_root_candidates() -> list[Path]:
     return unique
 
 
+def _resource_path_candidates(default_path: Path, relative_path: str) -> list[Path]:
+    candidates = [default_path]
+    candidates.extend(root / relative_path for root in _resource_root_candidates())
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            key = str(candidate.resolve())
+        except OSError:
+            key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate)
+    return unique
+
+
 def _resolve_resource_path(default_path: Path, relative_path: str) -> Path:
-    if default_path.exists():
-        return default_path
-    for root in _resource_root_candidates():
-        candidate = root / relative_path
+    for candidate in _resource_path_candidates(default_path, relative_path):
         if candidate.exists():
             return candidate
     return default_path
+
+
+def _resource_dependency_status(default_path: Path, relative_path: str) -> dict[str, Any]:
+    resolved = _resolve_resource_path(default_path, relative_path)
+    checked_paths = _resource_path_candidates(default_path, relative_path)
+    return {
+        'status': 'ok' if resolved.exists() else 'missing',
+        'path': str(resolved),
+        'checkedPaths': [str(path) for path in checked_paths],
+    }
 
 
 def _l2_readonly_probe_paths() -> dict[str, Path]:
@@ -1095,21 +1119,20 @@ def _l2_readonly_probe_paths() -> dict[str, Path]:
     }
 
 
-def _l2_readonly_probe_dependency_status() -> dict[str, dict[str, str]]:
-    probe_paths = _l2_readonly_probe_paths()
+def _l2_readonly_probe_dependency_status() -> dict[str, dict[str, Any]]:
     return {
-        'l2_readonly_probe_runner': {
-            'status': 'ok' if probe_paths['runner'].exists() else 'missing',
-            'path': str(probe_paths['runner']),
-        },
-        'l2_readonly_probe_script': {
-            'status': 'ok' if probe_paths['script'].exists() else 'missing',
-            'path': str(probe_paths['script']),
-        },
-        'l2_readonly_probe_allowlist': {
-            'status': 'ok' if probe_paths['allowlist'].exists() else 'missing',
-            'path': str(probe_paths['allowlist']),
-        },
+        'l2_readonly_probe_runner': _resource_dependency_status(
+            L2_READONLY_PROBE_RUNNER,
+            'tools/probes/l2_readonly_probe_runner.py',
+        ),
+        'l2_readonly_probe_script': _resource_dependency_status(
+            L2_READONLY_PROBE_SCRIPT,
+            'tools/probes/l2_readonly_probe.py',
+        ),
+        'l2_readonly_probe_allowlist': _resource_dependency_status(
+            L2_READONLY_PROBE_ALLOWLIST_FILE,
+            'config/l2_readonly_allowlist.json',
+        ),
     }
 
 
