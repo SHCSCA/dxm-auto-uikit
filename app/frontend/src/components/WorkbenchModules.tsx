@@ -165,6 +165,7 @@ type ExecutionConsoleProps = CommonProps & {
   agentConsoleError: string | null
   configPreview: ConfigPreview | null
   configPreviewError: string | null
+  configPreviewLoading: boolean
   runtimeStatus: RuntimeStatus | null
   runtimeStatusError: string | null
   runtimeLogs: Record<RuntimeLogSource, RuntimeLogResponse | null>
@@ -2918,6 +2919,7 @@ export function ExecutionConsole({
   agentConsoleError,
   configPreview,
   configPreviewError,
+  configPreviewLoading,
   runtimeStatus,
   runtimeStatusError,
   runtimeLogs,
@@ -2966,7 +2968,7 @@ export function ExecutionConsole({
   const browserFrame = getBrowserFrame(workspace, selectedTask, agentConsole)
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
   const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
-  const consolePrimaryPath = buildConsolePrimaryPath({ selectedTask, configPreview, configPreviewError, l2Gate, l3Gate, busy })
+  const consolePrimaryPath = buildConsolePrimaryPath({ selectedTask, configPreview, configPreviewError, configPreviewLoading, l2Gate, l3Gate, busy })
   const realSaveBlocked = consolePrimaryPath.saveBlocked
   const realSaveBlockReason = consolePrimaryPath.detail
   const browserStartBlocked = consolePrimaryPath.blocksBrowserStart
@@ -5259,6 +5261,7 @@ function buildConsolePrimaryPath({
   selectedTask,
   configPreview,
   configPreviewError,
+  configPreviewLoading,
   l2Gate,
   l3Gate,
   busy,
@@ -5266,6 +5269,7 @@ function buildConsolePrimaryPath({
   selectedTask: Task | null
   configPreview: ConfigPreview | null
   configPreviewError: string | null
+  configPreviewLoading: boolean
   l2Gate?: RegressionGate
   l3Gate?: RegressionGate
   busy: boolean
@@ -5356,6 +5360,20 @@ function buildConsolePrimaryPath({
       ctaLabel: '去配置中心重新检查',
       action: 'config',
       browserStatus: '配置检查接口异常，Agent 执行浏览器暂不启动',
+      blocksBrowserStart: true,
+      saveBlocked: true,
+    }
+  }
+  if (isRealDxmMutationTask(selectedTask) && (configPreviewLoading || configPreview?.taskId !== selectedTask.id)) {
+    return {
+      code: 'config',
+      title: '正在校验本次任务配置',
+      reason: '正在读取配置中心保存的本次任务取值。',
+      detail: '系统正在确认店铺、类目、图片、物流和半托管字段；校验完成前不会启动真实保存。',
+      next: '等待配置校验完成',
+      ctaLabel: '查看配置中心',
+      action: 'config',
+      browserStatus: '配置校验中，Agent 执行浏览器暂不启动',
       blocksBrowserStart: true,
       saveBlocked: true,
     }

@@ -826,7 +826,7 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "hasBrowserSession && currentUrl ? shortUrl(currentUrl) : '等待启动执行浏览器'" in workbench_source
     assert "可在生命周期区接管" in workbench_source
     assert "可在会话管理中接管" not in workbench_source
-    assert "buildConsolePrimaryPath({ selectedTask, configPreview, configPreviewError, l2Gate, l3Gate, busy })" in workbench_source
+    assert "buildConsolePrimaryPath({ selectedTask, configPreview, configPreviewError, configPreviewLoading, l2Gate, l3Gate, busy })" in workbench_source
     assert "primaryPath={consolePrimaryPath}" in console_section
     assert "primaryPath.action === 'config'" in workbench_source
     assert "primaryPath.action === 'run_l2'" in workbench_source
@@ -2144,12 +2144,15 @@ def test_execution_console_uses_unified_primary_path_before_rendering():
 
     assert "function buildConsolePrimaryPath" in source
     assert "configPreview: ConfigPreview | null" in source
-    assert "const consolePrimaryPath = buildConsolePrimaryPath({ selectedTask, configPreview, configPreviewError, l2Gate, l3Gate, busy })" in console_section
+    assert "configPreviewLoading: boolean" in source
+    assert "const consolePrimaryPath = buildConsolePrimaryPath({ selectedTask, configPreview, configPreviewError, configPreviewLoading, l2Gate, l3Gate, busy })" in console_section
     assert "const realSaveBlocked = consolePrimaryPath.saveBlocked" in console_section
     assert "const browserStartBlocked = consolePrimaryPath.blocksBrowserStart" in console_section
     assert "const diagnosticBlockReason" not in console_section
     assert "l2Gate?.detail ?? '只读检查未通过。'" not in console_section
     assert "先选择或创建任务" in source
+    assert "正在校验本次任务配置" in source
+    assert "configPreviewLoading || configPreview?.taskId !== selectedTask.id" in source
     assert "先补齐本次任务配置" in source
     assert "先运行预检（只读，不保存）" in source
     assert "等待人工确认保存" in source

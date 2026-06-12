@@ -1055,6 +1055,7 @@ export default function App() {
             agentConsoleError={agentConsoleError}
             configPreview={configPreview}
             configPreviewError={configPreviewError}
+            configPreviewLoading={configPreviewLoading}
             runtimeStatus={runtimeStatus}
             runtimeStatusError={runtimeStatusError}
             runtimeLogs={runtimeLogs}
