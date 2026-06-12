@@ -138,6 +138,10 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "项配置" in source
     assert "selectedTemplateBySection" in config_section
     assert "activeSelectedTemplateLabel" in config_section
+    assert "activeTemplateUsageLabel" in config_section
+    assert "当前使用：{activeTemplateUsageLabel}" in config_section
+    assert "配置检查已命中模板；要换模板请先选择并点击套用。" in config_section
+    assert "未手动选择；当前仍按已命中的模板或字段来源执行。" in config_section
     assert "config-template-console__quick-status" in config_section
     assert "可选 {activeSectionTemplateOptions.length} 套模板" in config_section
     assert "已选择：" in config_section

@@ -1799,19 +1799,22 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   const filteredTemplateChoiceCount = Math.max(0, activeSectionAllTemplates.length - activeSectionTemplateOptions.length)
   const activeSelectedTemplateId = selectedTemplateBySection[selectedConfigSection.section.code] ?? ''
   const activeSelectedTemplate = activeSectionTemplateOptions.find((template) => String(template.id) === activeSelectedTemplateId)
+  const activeTemplateSourceName = templateSourceNameFromPreview(selectedConfigSection.preview)
+  const activeSectionAlreadyPersisted = Boolean(selectedConfigSection.preview?.templatePresent)
   const activeSelectedTemplateLabel = activeSelectedTemplateId === '__default_test__'
     ? '默认测试模板（当前分区）'
     : activeSelectedTemplate
       ? templateOptionLabel(activeSelectedTemplate)
       : '未选择模板'
-  const activeTemplateSourceName = templateSourceNameFromPreview(selectedConfigSection.preview)
+  const activeTemplateUsageLabel = activeSelectedTemplateId === '__default_test__' || activeSelectedTemplate
+    ? activeSelectedTemplateLabel
+    : activeTemplateSourceName || (activeSectionAlreadyPersisted ? '配置检查已命中模板' : '尚未命中已保存模板')
   const activeTemplateTrace = configPreview?.templateTrace?.length
     ? configPreview.templateTrace
     : workspace.templateResolution?.template_trace ?? []
   const activeSectionSaveState = sectionSaveState[selectedConfigSection.section.code]
   const activeSectionDirty = hasConfigDraftChanged(configDraft[selectedConfigSection.section.code], initialConfigDraft[selectedConfigSection.section.code])
   const templateSaveDisabled = !selectedTask
-  const activeSectionAlreadyPersisted = Boolean(selectedConfigSection.preview?.templatePresent)
   const templateMatchExplanation = {
     allTemplates: activeSectionAllTemplates,
     availableTemplates: activeSectionTemplateOptions,
@@ -2207,6 +2210,10 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
             <span>
               <b>已选择：{activeSelectedTemplateLabel}</b>
               <small>{activeSelectedTemplateId ? '点击套用后才会写入表单；保存后才会影响执行。' : '可选择已保存模板；示例值在下方高级区。'}</small>
+            </span>
+            <span>
+              <b>当前使用：{activeTemplateUsageLabel}</b>
+              <small>{activeTemplateSourceName ? '配置检查已命中模板；要换模板请先选择并点击套用。' : '未手动选择；当前仍按已命中的模板或字段来源执行。'}</small>
             </span>
           </div>
           <div className={`config-save-state config-save-state--compact is-${activeSectionStatus}`} aria-label="当前分区保存状态">
