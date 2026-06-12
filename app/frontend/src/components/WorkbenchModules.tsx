@@ -2418,6 +2418,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
   const needsApproval = selectedTask ? requiresManualApproval(selectedTask) : false
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
   const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
+  const l2ProbeResourceState = getL2ProbeResourceState(runtimeStatus)
   const needsRealL2 = selectedTask ? requiresRealL2(selectedTask) : false
   const selectedTaskIsDryRun = selectedTask?.mode === 'dry_run'
   const selectedRealDxmMutationTask = Boolean(selectedTask && isRealDxmMutationTask(selectedTask))
@@ -2611,6 +2612,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
             l3BlocksStart={l3BlocksStart}
             canCreateRealTask={canCreateRealTask}
             busy={busy}
+            l2ProbeResourceState={l2ProbeResourceState}
             onSelectSingleSave={() => latestSingleSaveTask && onSelectTask(latestSingleSaveTask.id)}
             onCreateSingleSave={submitSingleSaveTask}
             onRunL2Probe={onRunL2Probe}
@@ -2638,6 +2640,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
             demoEnabled={demoEnabled}
             selectedTask={selectedTask}
             selectedTaskIsDryRun={selectedTaskIsDryRun}
+            l2ProbeResourceState={l2ProbeResourceState}
             onRunL2Probe={onRunL2Probe}
             onShowConsole={onShowConsole}
             onShowEvidence={onShowEvidence}
@@ -4984,6 +4987,7 @@ function ReadonlyRecheckHelpCard({
   demoEnabled: boolean
   selectedTask: Task | null
   selectedTaskIsDryRun: boolean
+  l2ProbeResourceState: ReturnType<typeof getL2ProbeResourceState>
   onRunL2Probe: () => void
   onShowConsole: () => void
   onShowEvidence: () => void
@@ -5016,7 +5020,16 @@ function ReadonlyRecheckHelpCard({
       {demoEnabled && selectedTaskIsDryRun && selectedTask?.status === 'draft' && <span className="readonly-recheck-help__note">开发自检批次不触达店小秘；真实保存仍以单商品只保存规则为准。</span>}
       {!selectedTaskIsDryRun && selectedTask?.status === 'draft' && <span className="readonly-recheck-help__note">当前真实任务保持门禁控制，请先处理上方阻断原因。</span>}
       <div className="next-step-actions">
-        <button className="button button--primary" type="button" onClick={onRunL2Probe} disabled={busy}>{READONLY_PRECHECK_CTA}</button>
+        <button
+          className="button button--primary"
+          type="button"
+          onClick={onRunL2Probe}
+          disabled={busy || l2ProbeResourceState.blocked}
+          title={l2ProbeResourceState.title}
+        >
+          {READONLY_PRECHECK_CTA}
+        </button>
+        {l2ProbeResourceState.blocked && <small>{l2ProbeResourceState.detail}</small>}
         <button className="button button--secondary" type="button" onClick={onShowConsole}>查看阻断说明</button>
         <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看检查计划</button>
         <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
@@ -5054,6 +5067,7 @@ function SingleSaveRecoveryGuide({
   l3BlocksStart: boolean
   canCreateRealTask: boolean
   busy: boolean
+  l2ProbeResourceState: ReturnType<typeof getL2ProbeResourceState>
   onSelectSingleSave: () => void
   onCreateSingleSave: () => void
   onRunL2Probe: () => void
@@ -5120,10 +5134,17 @@ function SingleSaveRecoveryGuide({
           </button>
         )}
         {(l2BlocksStart || l3BlocksStart) && (
-          <button className="button button--quiet" type="button" onClick={onRunL2Probe} disabled={busy}>
+          <button
+            className="button button--quiet"
+            type="button"
+            onClick={onRunL2Probe}
+            disabled={busy || l2ProbeResourceState.blocked}
+            title={l2ProbeResourceState.title}
+          >
             {READONLY_PRECHECK_CTA}
           </button>
         )}
+        {(l2BlocksStart || l3BlocksStart) && l2ProbeResourceState.blocked && <small>{l2ProbeResourceState.detail}</small>}
         {(l2BlocksStart || l3BlocksStart) && (
           <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">
             查看检查计划

@@ -2002,6 +2002,23 @@ def test_frontend_surfaces_runtime_status_and_log_filters():
     assert "item.tags.slice(0, 3)" in workbench_source
 
 
+def test_task_center_precheck_buttons_share_resource_gate():
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    task_center_section = workbench_source[workbench_source.index("export function TaskCenter"):workbench_source.index("function TaskCurrentActionPanel")]
+    readonly_card = workbench_source[workbench_source.index("function ReadonlyRecheckHelpCard"):workbench_source.index("function SingleSaveRecoveryGuide")]
+    recovery_card = workbench_source[workbench_source.index("function SingleSaveRecoveryGuide"):workbench_source.index("function RealModeReleasePlanPanel")]
+
+    assert "const l2ProbeResourceState = getL2ProbeResourceState(runtimeStatus)" in task_center_section
+    assert "l2ProbeResourceState={l2ProbeResourceState}" in task_center_section
+    assert "l2ProbeResourceState: ReturnType<typeof getL2ProbeResourceState>" in readonly_card
+    assert "disabled={busy || l2ProbeResourceState.blocked}" in readonly_card
+    assert "title={l2ProbeResourceState.title}" in readonly_card
+    assert "{l2ProbeResourceState.blocked && <small>{l2ProbeResourceState.detail}</small>}" in readonly_card
+    assert "l2ProbeResourceState: ReturnType<typeof getL2ProbeResourceState>" in recovery_card
+    assert "disabled={busy || l2ProbeResourceState.blocked}" in recovery_card
+    assert "title={l2ProbeResourceState.title}" in recovery_card
+
+
 def test_safety_status_bar_keeps_long_guidance_inside_details_drawer():
     safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
