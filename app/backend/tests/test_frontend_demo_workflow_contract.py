@@ -2455,6 +2455,31 @@ def test_frontend_humanizes_dxm_login_browser_start_failures():
     assert "setOperationError(humanMessage)" in continue_login_section
 
 
+def test_frontend_guides_waiting_captcha_and_login_failed_as_operator_steps():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    open_login_section = app_source[
+        app_source.index("async function openDxmLogin"):
+        app_source.index("function credentialStateFromSave")
+    ]
+    continue_login_section = app_source[
+        app_source.index("async function continueDxmLogin"):
+        app_source.index("async function navigateDxmTarget")
+    ]
+
+    assert "等待验证码不是失败" in app_source
+    assert "可见浏览器窗口" in app_source
+    assert "setActiveSection('guide')" in continue_login_section
+    assert "login_failed" in continue_login_section
+    assert "humanDxmLoginFlowNotice(loginStart" in open_login_section
+    assert "humanDxmLoginFlowNotice(loginResult" in continue_login_section
+
+    assert "登录还没完成，不是系统故障" in workbench_source
+    assert "打开着真实浏览器" in workbench_source
+    assert "如果验证码已完成仍失败" in workbench_source
+    assert "重新打开登录页会复用当前账号输入" in workbench_source
+
+
 def test_frontend_humanizes_agent_console_browser_start_failures():
     app_source = APP_TSX.read_text(encoding="utf-8")
     start_console_section = app_source[

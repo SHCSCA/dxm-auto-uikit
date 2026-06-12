@@ -794,6 +794,22 @@ def test_runtime_status_reports_services_agent_and_dependencies(tmp_path, monkey
     assert payload["dependencies"]["python"]["status"] == "ok"
 
 
+def test_runtime_status_uses_login_page_url_for_current_url(tmp_path, monkeypatch):
+    import src.main as main
+
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(main.login_flow, "get_state", lambda: {
+        "stage": "waiting_captcha",
+        "page_url": "https://www.dianxiaomi.com/login.htm",
+        "last_error": None,
+    })
+
+    response = client.get("/api/runtime/status?frontend_url=http://127.0.0.1:9")
+
+    assert response.status_code == 200
+    assert response.json()["dxmLogin"]["currentUrl"] == "https://www.dianxiaomi.com/login.htm"
+
+
 def test_runtime_control_stops_agent_console_and_records_log(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     task = _create_task(repo, mode="dry_run")

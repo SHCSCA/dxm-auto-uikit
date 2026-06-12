@@ -728,7 +728,8 @@ export default function App() {
       if (!dxmLoginDraft.rememberCredential) {
         setDxmLoginDraft((current) => ({ ...current, password: '' }))
       }
-      setActiveSection('console')
+      const stage = String(loginStart.stage ?? '')
+      setActiveSection(stage === 'waiting_captcha' ? 'guide' : 'console')
       await refreshRuntimeStatus()
       await refreshRuntimeLogs()
       await refreshWorkspace()
@@ -793,12 +794,14 @@ export default function App() {
       const loginResult = await postJson<Record<string, unknown>>('/api/dxm/login/continue', { confirm: true })
       const stage = String(loginResult.stage ?? '')
       const message = humanDxmLoginFlowNotice(loginResult, '已检测店小秘登录态。')
-      if (stage.includes('failed')) {
+      const loginFailed = stage === 'login_failed' || stage.includes('failed')
+      if (loginFailed) {
         setOperationError(message)
+        setActiveSection('guide')
       } else {
         setOperationNotice(message)
+        setActiveSection(stage === 'waiting_captcha' ? 'guide' : 'console')
       }
-      setActiveSection('console')
       await refreshRuntimeStatus()
       await refreshRuntimeLogs()
       await refreshWorkspace()
@@ -1340,8 +1343,15 @@ function checkedPathHint(message: string) {
 }
 
 function humanDxmLoginFlowNotice(result: Record<string, unknown>, fallback: string) {
+  const stage = String(result.stage ?? '').trim()
   const message = String(result.message ?? '').trim()
   const nextAction = String(result.next_action ?? '').trim()
+  if (stage === 'waiting_captcha') {
+    return '等待验证码不是失败：已打开可见浏览器窗口；请在真实店小秘页面完成验证码。下一步：完成后点击“验证码已完成，检测登录态”。'
+  }
+  if (stage === 'login_failed' || stage.includes('failed')) {
+    return `登录还没完成，不是系统故障：${message || '未检测到有效登录态。'} 下一步：${nextAction || '请打开着真实浏览器，修正验证码或账号密码后再次检测。'}`
+  }
   if (message && nextAction) return `${message} 下一步：${nextAction}`
   return message || nextAction || fallback
 }

@@ -577,7 +577,7 @@ def runtime_status(frontend_url: str | None = None):
         },
         'dxmLogin': {
             'status': str(dxm_state.get('status') or dxm_state.get('stage') or 'unknown'),
-            'currentUrl': dxm_state.get('current_url') or dxm_state.get('url'),
+            'currentUrl': dxm_state.get('current_url') or dxm_state.get('url') or dxm_state.get('page_url'),
             'lastError': dxm_state.get('last_error') or dxm_state.get('error'),
         },
         'l2ReadonlyProbe': _l2_probe_lock_status(),

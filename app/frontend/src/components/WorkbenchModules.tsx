@@ -760,8 +760,8 @@ function humanDxmLoginState(runtimeStatus?: RuntimeStatus | null, runtimeStatusE
   if (status === 'waiting_captcha') {
     return {
       tone: 'warn',
-      label: '等待验证码/人工确认',
-      detail: currentUrl ? `真实浏览器停留在：${currentUrl}` : '账号密码已填入真实浏览器，等待你完成验证码。',
+      label: '登录还没完成，不是系统故障',
+      detail: currentUrl ? `请打开着真实浏览器继续处理：${currentUrl}` : '账号密码已填入真实浏览器，等待你完成验证码。',
       next: '完成验证码后点击“验证码已完成，检测登录态”。',
     }
   }
@@ -770,7 +770,7 @@ function humanDxmLoginState(runtimeStatus?: RuntimeStatus | null, runtimeStatusE
       tone: 'danger',
       label: '登录未通过',
       detail: runtimeStatus?.dxmLogin?.lastError || (currentUrl ? `当前页面：${currentUrl}` : '未检测到有效登录态。'),
-      next: '真实浏览器窗口会保留；请修正验证码或账号密码后再次检测，必要时重新打开登录页。',
+      next: '真实浏览器窗口会保留；如果验证码已完成仍失败，请修正验证码或账号密码后再次检测；重新打开登录页会复用当前账号输入。',
     }
   }
   return {
