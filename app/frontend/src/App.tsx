@@ -399,7 +399,7 @@ export default function App() {
       setRuntimeStatusError(null)
     } catch (error) {
       setRuntimeStatus(null)
-      setRuntimeStatusError(error instanceof Error ? error.message : '运行状态接口不可用')
+      setRuntimeStatusError(humanRuntimeStatusError(error instanceof Error ? error.message : '运行状态接口不可用'))
     }
   }, [])
 
@@ -683,7 +683,7 @@ export default function App() {
       setActiveSection('console')
       await refreshWorkspace()
     } catch (error) {
-      setOperationError(error instanceof Error ? error.message : '启动保存核验任务失败')
+      setOperationError(humanOperationError(error instanceof Error ? error.message : '启动保存核验任务失败'))
     } finally {
       setBusy(false)
     }
@@ -1216,6 +1216,8 @@ function runtimeControlSuccessMessage(action: RuntimeControlAction) {
 }
 
 function humanOperationError(message: string) {
+  const runtimeStatusMessage = humanRuntimeStatusError(message)
+  if (runtimeStatusMessage !== message) return runtimeStatusMessage
   if (message.includes('L2 readonly probe resources are missing')) {
     return `只读页面检查资源缺失，请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${checkedPathHint(message)}`
   }
@@ -1224,6 +1226,19 @@ function humanOperationError(message: string) {
   }
   if (message.includes('L2 readonly probe script is missing')) {
     return `只读页面检查脚本缺失，请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
+  }
+  return message
+}
+
+function humanRuntimeStatusError(message: string) {
+  const normalized = message.toLowerCase()
+  if (
+    normalized.includes('get /api/runtime/status')
+    || normalized.includes('failed to fetch')
+    || normalized.includes('networkerror')
+    || normalized.includes('load failed')
+  ) {
+    return `本机后端未连接：请重新打开 DXM Agent Console 免安装版；开发模式请先启动后端服务。真实保存不会启动或发布。原始错误：${message}`
   }
   return message
 }

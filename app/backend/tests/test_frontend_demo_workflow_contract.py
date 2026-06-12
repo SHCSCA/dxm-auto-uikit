@@ -2493,7 +2493,12 @@ def test_frontend_keeps_runtime_and_config_fetch_failures_distinct_from_user_sta
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
 
     assert "const [runtimeStatusError, setRuntimeStatusError]" in app_source
-    assert "setRuntimeStatusError(error instanceof Error ? error.message : '运行状态接口不可用')" in app_source
+    assert "function humanRuntimeStatusError(message: string)" in app_source
+    assert "setRuntimeStatusError(humanRuntimeStatusError(error instanceof Error ? error.message : '运行状态接口不可用'))" in app_source
+    assert "本机后端未连接" in app_source
+    assert "请重新打开 DXM Agent Console 免安装版" in app_source
+    assert "开发模式请先启动后端服务" in app_source
+    assert "humanOperationError(error instanceof Error ? error.message : '启动保存核验任务失败')" in app_source
     assert "runtimeStatusError={runtimeStatusError}" in app_source
     assert "运行状态接口不可用" in safety_bar
     assert "状态接口异常" in safety_bar
