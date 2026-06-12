@@ -2019,6 +2019,18 @@ def test_task_center_precheck_buttons_share_resource_gate():
     assert "title={l2ProbeResourceState.title}" in recovery_card
 
 
+def test_task_center_precheck_cards_receive_resource_state_prop():
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    readonly_card = workbench_source[workbench_source.index("function ReadonlyRecheckHelpCard"):workbench_source.index("function SingleSaveRecoveryGuide")]
+    recovery_card = workbench_source[workbench_source.index("function SingleSaveRecoveryGuide"):workbench_source.index("function RealModeReleasePlanPanel")]
+
+    readonly_params = readonly_card[readonly_card.index("function ReadonlyRecheckHelpCard({"):readonly_card.index("}: {")]
+    recovery_params = recovery_card[recovery_card.index("function SingleSaveRecoveryGuide({"):recovery_card.index("}: {")]
+
+    assert "l2ProbeResourceState," in readonly_params
+    assert "l2ProbeResourceState," in recovery_params
+
+
 def test_safety_status_bar_keeps_long_guidance_inside_details_drawer():
     safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
