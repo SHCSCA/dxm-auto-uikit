@@ -4345,9 +4345,32 @@ tr:last-child td {
   font-weight: 850;
 }
 
+.runtime-log-preview__head > .runtime-log-refresh,
+.runtime-log-toolbar__refresh {
+  border-radius: 999px;
+  background: #12362a;
+  color: #9de3c2;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 850;
+}
+
 .runtime-log-refresh--pending span {
   background: #2d3541;
   color: #b9c6d5;
+}
+
+.runtime-log-preview__head > .runtime-log-refresh--pending,
+.runtime-log-toolbar__refresh--pending {
+  background: #2d3541;
+  color: #b9c6d5;
+}
+
+.runtime-log-preview__head > .runtime-log-refresh--warn,
+.runtime-log-toolbar__refresh--warn,
+.runtime-log-refresh--warn span {
+  background: #fff4d6;
+  color: #9a5a00;
 }
 
 .runtime-log-refresh small {

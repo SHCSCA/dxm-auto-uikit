@@ -1,4 +1,6 @@
 import json
+import os
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -484,6 +486,50 @@ def test_runtime_logs_tail_known_log_sources(tmp_path, monkeypatch):
     assert payload["lines"] == ["line 157", "line 158", "line 159"]
     assert [item["line"] for item in payload["items"]] == payload["lines"]
     assert payload["nextCursor"] == backend_log.stat().st_size
+    assert payload["modifiedAt"]
+    assert payload["ageSeconds"] >= 0
+    assert payload["stale"] is False
+
+
+def test_runtime_logs_flag_stale_launcher_log_without_hiding_tail(tmp_path, monkeypatch):
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    launcher_log = tmp_path / "start-mvp.log"
+    launcher_log.write_text("\n".join([
+        "[2026-06-11T01:44:37.738Z] Starting backend on stale port",
+        "[2026-06-11T01:44:39.296Z] Loaded frontend from stale build",
+    ]), encoding="utf-8")
+    stale_mtime = time.time() - (main.RUNTIME_LOG_STALE_SECONDS + 120)
+    os.utime(launcher_log, (stale_mtime, stale_mtime))
+    monkeypatch.setattr(main, "RUNTIME_LOG_SOURCES", {"launcher": launcher_log})
+
+    response = client.get("/api/runtime/logs?source=launcher&limit=5")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source"] == "launcher"
+    assert payload["exists"] is True
+    assert payload["lines"][-1].endswith("Loaded frontend from stale build")
+    assert payload["modifiedAt"]
+    assert payload["ageSeconds"] >= main.RUNTIME_LOG_STALE_SECONDS
+    assert payload["stale"] is True
+
+
+def test_backend_runtime_startup_records_current_log_marker(tmp_path, monkeypatch):
+    import src.main as main
+
+    backend_log = tmp_path / "backend.log"
+    monkeypatch.setattr(main, "RUNTIME_LOG_SOURCES", {"backend": backend_log})
+
+    with TestClient(app) as client:
+        response = client.get("/api/runtime/logs?source=backend&limit=5")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["exists"] is True
+    assert any("DXM backend runtime started" in line for line in payload["lines"])
+    assert payload["stale"] is False
 
 
 def test_runtime_logs_filter_by_level_and_query_with_tags(tmp_path, monkeypatch):

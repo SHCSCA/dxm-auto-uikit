@@ -132,7 +132,7 @@ export default function App() {
   const [agentConsoleError, setAgentConsoleError] = useState<string | null>(null)
   const [operationError, setOperationError] = useState<string | null>(null)
   const [operationNotice, setOperationNotice] = useState<string | null>(null)
-  const [runtimeLogSource, setRuntimeLogSource] = useState<RuntimeLogSource>('launcher')
+  const [runtimeLogSource, setRuntimeLogSource] = useState<RuntimeLogSource>('backend')
   const [runtimeLogs, setRuntimeLogs] = useState<Record<RuntimeLogSource, RuntimeLogResponse | null>>({
     backend: null,
     frontend: null,

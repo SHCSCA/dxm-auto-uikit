@@ -794,7 +794,7 @@ def test_execution_console_log_center_autofollows_and_surfaces_sources():
 
     assert "window.setInterval" in app_source
     assert "1500" in app_source
-    assert "useState<RuntimeLogSource>('launcher')" in app_source
+    assert "useState<RuntimeLogSource>('backend')" in app_source
     assert "完整日志中心" in workbench_source
     assert "每 1.5 秒刷新" in workbench_source
     assert "更多诊断与维护" in workbench_source
@@ -816,6 +816,7 @@ def test_execution_console_log_center_autofollows_and_surfaces_sources():
     assert "网络响应" in workbench_source
     assert ".console-log-card--live" in styles_source
     assert ".runtime-log-toolbar" in styles_source
+    assert ".runtime-log-preview__head > .runtime-log-refresh--warn" in styles_source
 
 
 def test_runtime_log_refresh_isolates_failed_sources():
@@ -1222,8 +1223,13 @@ def test_execution_console_default_log_summary_hides_absolute_paths():
     assert "runtime-log-tabs--compact" in log_summary_section
     assert "items.slice(-7)" in log_summary_section
     assert "runtimeLogRefreshMeta(current, items.length)" in log_summary_section
-    assert "正在实时刷新" in log_summary_section
-    assert "最后刷新" in source
+    assert "界面自动刷新" in log_summary_section
+    assert "日志来源：{labels[source]} / 正在实时刷新" not in log_summary_section
+    assert "日志源久未写入" in source
+    assert "formatLogAge(current.ageSeconds)" in source
+    assert "界面刷新" in source
+    assert "最后写入" in source
+    assert "最后刷新" not in source
     assert "current?.path ?? 'data/*.log'" not in log_summary_section
 
 

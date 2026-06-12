@@ -9,6 +9,7 @@ import secrets
 import subprocess
 import sys
 import uuid
+from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,7 +58,13 @@ from src.services.agent_console import AgentConsoleService
 from src.services.config_preview import ConfigPreviewService
 from src.ws import ConnectionManager
 
-app = FastAPI(title='dxm-auto-uikit backend', version='0.1.0')
+@asynccontextmanager
+async def app_lifespan(_app: FastAPI):
+    _append_backend_runtime_log(f'DXM backend runtime started pid={os.getpid()} owner={_runtime_control_owner()}')
+    yield
+
+
+app = FastAPI(title='dxm-auto-uikit backend', version='0.1.0', lifespan=app_lifespan)
 LOOPBACK_CORS_ORIGIN_RE = r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
 PUBLIC_ARTIFACT_ROOTS = {
     'screenshots': DATA_DIR / 'screenshots',
@@ -114,6 +121,7 @@ RUNTIME_CONTROL_MANAGED_BY_LAUNCHER = bool(os.environ.get('DXM_RUNTIME_CONTROL_C
 RUNTIME_DESKTOP_MODE = bool(os.environ.get('DXM_DESKTOP'))
 RUNTIME_VIRTUAL_LOG_SOURCES = {'task', 'agent'}
 RUNTIME_LOG_LEVELS = {'info', 'warning', 'error'}
+RUNTIME_LOG_STALE_SECONDS = 30 * 60
 RUNTIME_CONTROL_ACTIONS = {
     'stop_agent_console',
     'clear_stuck_tasks',
@@ -469,9 +477,14 @@ def runtime_logs(
             'nextCursor': cursor,
             'items': [],
             'lines': [],
+            'modifiedAt': None,
+            'ageSeconds': None,
+            'stale': False,
         }
     try:
-        size = path.stat().st_size
+        stat = path.stat()
+        size = stat.st_size
+        modified_at = datetime.fromtimestamp(stat.st_mtime, timezone.utc)
         start = min(cursor, size) if cursor else max(0, size - 262_144)
         with path.open('rb') as handle:
             handle.seek(start)
@@ -488,6 +501,7 @@ def runtime_logs(
         items = [item for item in items if query in item['line'].lower()]
     if len(items) > limit:
         items = items[-limit:]
+    age_seconds = max(0, int((datetime.now(timezone.utc) - modified_at).total_seconds()))
     return {
         'source': source,
         'path': str(path),
@@ -497,6 +511,9 @@ def runtime_logs(
         'items': items,
         'lines': [item['line'] for item in items],
         'truncated': len(data) >= 262_144,
+        'modifiedAt': modified_at.isoformat(),
+        'ageSeconds': age_seconds,
+        'stale': age_seconds > RUNTIME_LOG_STALE_SECONDS,
     }
 
 
@@ -1018,6 +1035,17 @@ def _append_runtime_control_log(message: str) -> None:
     try:
         with path.open('a', encoding='utf-8') as handle:
             handle.write(line + '\n')
+    except OSError:
+        pass
+
+
+def _append_backend_runtime_log(message: str) -> None:
+    path = RUNTIME_LOG_SOURCES.get('backend') or (DATA_DIR / 'backend.log')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).isoformat()
+    try:
+        with path.open('a', encoding='utf-8') as handle:
+            handle.write(f'[{timestamp}] {message}\n')
     except OSError:
         pass
 

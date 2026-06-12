@@ -3961,7 +3961,7 @@ function RuntimeLogPreview({
       ) : (
         <span>{current?.exists === false ? '日志文件尚未生成。' : '等待服务写入日志...'}</span>
       )}
-      <small>日志来源：{labels[source]} / 正在实时刷新</small>
+      <small>日志来源：{labels[source]} / 界面自动刷新</small>
     </div>
   )
 }
@@ -4081,7 +4081,12 @@ function runtimeLogRefreshMeta(current: RuntimeLogResponse | null | undefined, i
     return { status: '日志未生成', detail: '服务启动后会自动出现', tone: 'pending' }
   }
   const refreshedAt = current.fetchedAt ? formatTime(current.fetchedAt) : '刚刚'
-  return { status: '正在实时刷新', detail: `最后刷新 ${refreshedAt} · 当前 ${itemCount} 条`, tone: 'ok' }
+  if (current.stale) {
+    const writtenAt = current.modifiedAt ? formatTime(current.modifiedAt) : '未知时间'
+    const ageText = formatLogAge(current.ageSeconds)
+    return { status: '日志源久未写入', detail: `最后写入 ${writtenAt}${ageText ? ` · ${ageText}` : ''} · 界面刷新 ${refreshedAt} · 当前 ${itemCount} 条`, tone: 'warn' }
+  }
+  return { status: '正在实时刷新', detail: `界面刷新 ${refreshedAt} · 当前 ${itemCount} 条`, tone: 'ok' }
 }
 
 function runtimeLogSourceLabels(): Record<RuntimeLogSource, string> {
@@ -5682,4 +5687,13 @@ function formatTime(value: string) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function formatLogAge(seconds: number | null | undefined) {
+  if (typeof seconds !== 'number' || Number.isNaN(seconds) || seconds < 0) return ''
+  if (seconds < 60) return `${seconds} 秒未写入`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes} 分钟未写入`
+  const hours = Math.floor(minutes / 60)
+  return `${hours} 小时未写入`
 }

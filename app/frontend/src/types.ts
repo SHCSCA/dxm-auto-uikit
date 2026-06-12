@@ -60,7 +60,7 @@ export type RealTaskCreateRequest = { storeId: number; mode: 'probe' | 'single_s
 export type LogItem = { id: number; task_id: number; job_id: number | null; level: string; message: string; context: Record<string, unknown>; created_at: string }
 export type RuntimeLogSource = 'backend' | 'frontend' | 'launcher' | 'npm' | 'task' | 'agent'
 export type RuntimeLogItem = { line: string; level: 'info' | 'warning' | 'error' | string; tags: string[] }
-export type RuntimeLogResponse = { source: string; path: string; exists: boolean; cursor: number; nextCursor: number; lines: string[]; items?: RuntimeLogItem[]; truncated?: boolean; fetchedAt?: string; error?: string }
+export type RuntimeLogResponse = { source: string; path: string; exists: boolean; cursor: number; nextCursor: number; lines: string[]; items?: RuntimeLogItem[]; truncated?: boolean; modifiedAt?: string | null; ageSeconds?: number | null; stale?: boolean; fetchedAt?: string; error?: string }
 export type RuntimeStatus = {
   backend: { status: string; url?: string; port?: number | null; detail?: string }
   frontend: { status: string; url?: string; port?: number | null; detail?: string }
