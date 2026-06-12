@@ -3246,27 +3246,30 @@ function AgentStagePanel({
         onControlAgentConsoleBrowser={onControlAgentConsoleBrowser}
         onRuntimeControl={onRuntimeControl}
       />
-      {realSaveBlocked && (
-        <details className="gate-note gate-note--danger inline-disclosure">
-          <summary>查看当前阻断详情</summary>
-          <span>{realSaveBlockReason}</span>
-          <div className="next-step-actions">
-            <button className="button button--secondary" type="button" onClick={onShowTasks}>回到任务中心</button>
-            <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看只读评审与检查计划</button>
-            <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
-          </div>
+      <details className="agent-stage-support-drawer inline-disclosure">
+        <summary>执行浏览器详情与证据</summary>
+        {realSaveBlocked && (
+          <details className="gate-note gate-note--danger inline-disclosure">
+            <summary>查看当前阻断详情</summary>
+            <span>{realSaveBlockReason}</span>
+            <div className="next-step-actions">
+              <button className="button button--secondary" type="button" onClick={onShowTasks}>回到任务中心</button>
+              <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看只读评审与检查计划</button>
+              <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
+            </div>
+          </details>
+        )}
+        <details className="agent-browser-drawer inline-disclosure">
+          <summary>浏览器状态与证据路径</summary>
+          <small>外部真实浏览器窗口由 Agent 控制；控制台默认不内嵌浏览器画面，避免把状态面板误当成实时页面。</small>
+          <AgentBrowserFrame
+            workspace={workspace}
+            selectedTask={selectedTask}
+            activeStep={activeStep}
+            browserFrame={browserFrame}
+            agentConsole={agentConsole}
+          />
         </details>
-      )}
-      <details className="agent-browser-drawer inline-disclosure">
-        <summary>浏览器状态与证据路径</summary>
-        <small>外部真实浏览器窗口由 Agent 控制；控制台默认不内嵌浏览器画面，避免把状态面板误当成实时页面。</small>
-        <AgentBrowserFrame
-          workspace={workspace}
-          selectedTask={selectedTask}
-          activeStep={activeStep}
-          browserFrame={browserFrame}
-          agentConsole={agentConsole}
-        />
       </details>
     </div>
   )

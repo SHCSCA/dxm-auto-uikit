@@ -4018,6 +4018,24 @@ tr:last-child td {
   box-shadow: none;
 }
 
+.agent-stage-support-drawer {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.agent-stage-support-drawer[open] {
+  display: grid;
+  gap: 10px;
+}
+
+.agent-stage-support-drawer .gate-note,
+.agent-stage-support-drawer .agent-browser-drawer {
+  margin-top: 0;
+}
+
 .agent-browser-drawer {
   margin-top: 10px;
   border: 1px solid var(--line);

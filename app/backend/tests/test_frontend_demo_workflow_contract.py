@@ -891,6 +891,32 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert ".agent-console-controls__operator-grid" in styles_source
 
 
+def test_execution_console_collapses_browser_evidence_and_block_details_into_one_drawer():
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    stage_section = workbench_source[
+        workbench_source.index("function AgentStagePanel"):
+        workbench_source.index("function ConsoleCompletedReviewPanel")
+    ]
+
+    assert '<details className="agent-stage-support-drawer inline-disclosure">' in stage_section
+    assert "<summary>执行浏览器详情与证据</summary>" in stage_section
+    visible_stage = stage_section[
+        stage_section.index("<AgentConsoleControls"):
+        stage_section.index('<details className="agent-stage-support-drawer inline-disclosure">')
+    ]
+    assert "<summary>查看当前阻断详情</summary>" not in visible_stage
+    assert "<summary>浏览器状态与证据路径</summary>" not in visible_stage
+
+    support_drawer = stage_section[
+        stage_section.index('<details className="agent-stage-support-drawer inline-disclosure">'):
+    ]
+    assert "<summary>查看当前阻断详情</summary>" in support_drawer
+    assert "<summary>浏览器状态与证据路径</summary>" in support_drawer
+    assert "AgentBrowserFrame" in support_drawer
+    assert ".agent-stage-support-drawer" in styles_source
+
+
 def test_execution_console_distinguishes_login_browser_from_agent_execution_browser():
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     app_source = (REPO_ROOT / "app" / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
