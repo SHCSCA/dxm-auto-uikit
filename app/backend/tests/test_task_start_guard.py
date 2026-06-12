@@ -810,6 +810,25 @@ def test_runtime_status_uses_login_page_url_for_current_url(tmp_path, monkeypatc
     assert response.json()["dxmLogin"]["currentUrl"] == "https://www.dianxiaomi.com/login.htm"
 
 
+def test_runtime_status_exposes_agent_browser_launch_diagnostics(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo, mode="dry_run")
+
+    start_response = client.post(
+        "/api/agent-console/start",
+        json={"task_id": task["id"], "launch_browser": False},
+    )
+    assert start_response.status_code == 200
+
+    response = client.get("/api/runtime/status?frontend_url=http://127.0.0.1:9")
+
+    assert response.status_code == 200
+    agent_console = response.json()["agentConsole"]
+    assert agent_console["profileDir"]
+    assert agent_console["browserLaunching"] is False
+    assert "agent-" in agent_console["profileDir"]
+
+
 def test_runtime_control_stops_agent_console_and_records_log(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     task = _create_task(repo, mode="dry_run")

@@ -4072,6 +4072,7 @@ function AgentBrowserFrame({
   const recentNetworkEvents = getRecentNetworkEvents(agentConsole)
   const browserLaunching = Boolean(agentConsole?.browser_launching)
   const canControl = Boolean(agentConsole?.active && agentConsole?.browser_visible && !agentConsole?.manual_takeover)
+  const browserLaunchFailure = Boolean(agentConsole?.last_error && !browserLaunching && !agentConsole?.browser_visible)
 
   return (
     <div className="agent-browser">
@@ -4119,6 +4120,13 @@ function AgentBrowserFrame({
           <small className="browser-live-surface__control-note">
             页面内操控仅控制当前独立浏览器窗口：支持选择器定位、按选择器点击、按选择器填写；输入到焦点和点击坐标已关闭，需要时请人工接管真实店小秘窗口。
           </small>
+          {browserLaunchFailure && (
+            <div className="browser-launch-diagnostic" role="alert" aria-label="真实浏览器启动失败诊断">
+              <strong>真实浏览器启动失败</strong>
+              <span>{agentConsole?.last_error}</span>
+              <small>处理：关闭旧的 DXM Agent Console 或旧浏览器进程后重试；浏览器 Profile：{agentConsole?.profile_dir || '等待后端返回 Profile 目录'}。</small>
+            </div>
+          )}
         </div>
 
         <div className="agent-hud" aria-label="浏览器内执行步骤框">

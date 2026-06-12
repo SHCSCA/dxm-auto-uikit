@@ -5335,6 +5335,28 @@ tr:last-child td {
   font-size: 12px;
 }
 
+.browser-launch-diagnostic {
+  width: min(680px, 100%);
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid #efb6bd;
+  border-radius: 7px;
+  background: #fff1f3;
+}
+
+.browser-launch-diagnostic strong {
+  margin: 0;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.browser-launch-diagnostic span,
+.browser-launch-diagnostic small {
+  color: #7f1d1d;
+  font-size: 12px;
+}
+
 .browser-live-surface dl {
   width: min(680px, calc(100% - 380px));
   display: grid;

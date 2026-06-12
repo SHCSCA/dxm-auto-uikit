@@ -64,7 +64,7 @@ export type RuntimeLogResponse = { source: string; path: string; exists: boolean
 export type RuntimeStatus = {
   backend: { status: string; url?: string; port?: number | null; detail?: string }
   frontend: { status: string; url?: string; port?: number | null; detail?: string }
-  agentConsole: { status: string; active: boolean; browserVisible: boolean; currentUrl?: string | null; lastError?: string | null }
+  agentConsole: { status: string; active: boolean; browserVisible: boolean; browserLaunching?: boolean; currentUrl?: string | null; profileDir?: string | null; lastError?: string | null }
   dxmLogin: { status: string; currentUrl?: string | null; lastError?: string | null }
   l2ReadonlyProbe?: {
     running: boolean

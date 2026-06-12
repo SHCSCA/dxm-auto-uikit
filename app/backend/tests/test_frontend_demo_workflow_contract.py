@@ -1150,6 +1150,20 @@ def test_execution_console_explains_disabled_session_controls():
     assert ".agent-console-controls__session-reason" in styles_source
 
 
+def test_execution_console_surfaces_browser_launch_failure_diagnostics():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    types_source = (REPO_ROOT / "app" / "frontend" / "src" / "types.ts").read_text(encoding="utf-8")
+    agent_browser_section = source[source.index("function AgentBrowserFrame"):source.index("function AgentConsoleControls")]
+
+    assert "browserLaunchFailure" in agent_browser_section
+    assert "真实浏览器启动失败" in agent_browser_section
+    assert "关闭旧的 DXM Agent Console 或旧浏览器进程后重试" in agent_browser_section
+    assert "浏览器 Profile" in agent_browser_section
+    assert "agentConsole?.profile_dir" in agent_browser_section
+    assert "browserLaunching" in types_source
+    assert "profileDir" in types_source
+
+
 def test_execution_console_log_center_autofollows_and_surfaces_sources():
     app_source = APP_TSX.read_text(encoding="utf-8")
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")

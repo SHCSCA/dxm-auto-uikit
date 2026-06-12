@@ -574,7 +574,9 @@ def runtime_status(frontend_url: str | None = None):
             'status': 'running' if agent_status.get('active') else 'idle',
             'active': bool(agent_status.get('active')),
             'browserVisible': bool(agent_status.get('browser_visible')),
+            'browserLaunching': bool(agent_status.get('browser_launching')),
             'currentUrl': agent_status.get('current_url') or agent_status.get('target_url'),
+            'profileDir': agent_status.get('profile_dir'),
             'lastError': agent_status.get('last_error'),
         },
         'dxmLogin': {
