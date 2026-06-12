@@ -131,7 +131,11 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "handleTemplateSelection" in config_section
     assert "已套用模板，尚未保存" in config_section
     assert "套用到表单" in config_section
-    assert "选择模板只会填入表单" in config_section
+    assert "选择模板不会改表单，点击套用后才会填入当前分区" in config_section
+    assert "function handleTemplateSelection(section: EditableConfigSection, templateId: string)" in config_section
+    assert "applyTemplateToDraft(section, templateId)" not in config_section[config_section.index("function handleTemplateSelection"):config_section.index("async function applyDefaultTemplatePack")]
+    assert "确认写入默认测试模板包" in config_section
+    assert "将保存默认测试模板包到当前店铺/类目范围" in config_section
     assert "多套模板按当前店铺/类目优先展示" in config_section
     assert "sectionSaveState" in config_section
     assert "未保存修改" in config_section
@@ -158,6 +162,18 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "配置已就绪，默认无需继续填写" in config_section
     assert "微调当前配置" in config_section
     assert "open={!configReadyForReview}" in config_section
+    assert "saveState={sectionSaveState[selectedConfigSection.section.code]}" in config_section
+    assert "type ConfigSectionSaveState" in source
+    assert "当前分区保存回执" in source
+    assert "保存位置" in source
+    assert "保存时间" in source
+    assert "保存后这里会显示最近一次保存结果" in source
+    assert "config-section-save-receipt" in source
+    assert ".config-section-save-receipt" in styles_source
+    assert ".config-section-save-receipt.is-saved" in styles_source
+    assert "templateSaveDisabled" in source
+    assert "先选择任务，避免误存为全店/全类目模板。" in source
+    assert "保存为店铺模板会影响后续匹配当前店铺/类目的任务。" in source
     assert "config-ready-review" in config_section
     assert "config-edit-drawer" in config_section
     assert "config-focus-card" in config_section
@@ -335,7 +351,7 @@ def test_config_center_explains_active_template_source_and_filtered_choices():
     assert "当前生效模板" in config_section
     assert "可选模板" in config_section
     assert "已筛除不匹配或禁用模板" in config_section
-    assert "选择模板只会填入表单，保存后才会生效" in config_section
+    assert "选择模板不会改表单，点击套用后才会填入当前分区" in config_section
     assert "config-template-source" in config_section
     assert ".config-template-source" in styles_source
     assert "configTemplateSourceState" in qa_source

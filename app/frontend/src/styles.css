@@ -3459,6 +3459,50 @@ tr:last-child td {
   justify-content: flex-end;
 }
 
+.config-section-save-receipt {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #f8fbff;
+}
+
+.config-section-save-receipt strong,
+.config-section-save-receipt span,
+.config-section-save-receipt small {
+  display: block;
+  min-width: 0;
+}
+
+.config-section-save-receipt strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.config-section-save-receipt span,
+.config-section-save-receipt small {
+  color: var(--muted);
+  font-size: var(--font-compact);
+  line-height: 1.35;
+}
+
+.config-section-save-receipt.is-dirty,
+.config-section-save-receipt.is-saving {
+  border-color: #f0c15a;
+  background: #fffaf0;
+}
+
+.config-section-save-receipt.is-saved {
+  border-color: #bfddce;
+  background: #f7fcf9;
+}
+
+.config-section-save-receipt.is-error {
+  border-color: #f3b8bf;
+  background: #fff6f7;
+}
+
 .config-section-save-hint {
   display: block;
   color: var(--muted);

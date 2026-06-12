@@ -81,6 +81,13 @@ type ConsolePrimaryPath = {
   saveBlocked: boolean
 }
 
+type ConfigSectionSaveState = {
+  status: 'clean' | 'dirty' | 'saving' | 'saved' | 'error'
+  scope?: string
+  savedAt?: string
+  message?: string
+}
+
 type GuideCenterProps = CommonProps & {
   configPreview: ConfigPreview | null
   runtimeStatus: RuntimeStatus | null
@@ -1512,7 +1519,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   const [configMessage, setConfigMessage] = useState<string | null>(null)
   const [defaultTemplatePackState, setDefaultTemplatePackState] = useState<string>('尚未套用默认测试模板')
   const [selectedTemplateBySection, setSelectedTemplateBySection] = useState<Record<ConfigSectionCode, string>>({} as Record<ConfigSectionCode, string>)
-  const [sectionSaveState, setSectionSaveState] = useState<Record<ConfigSectionCode, { status: 'clean' | 'dirty' | 'saving' | 'saved' | 'error'; scope?: string; savedAt?: string; message?: string }>>({} as Record<ConfigSectionCode, { status: 'clean' | 'dirty' | 'saving' | 'saved' | 'error'; scope?: string; savedAt?: string; message?: string }>)
+  const [sectionSaveState, setSectionSaveState] = useState<Record<ConfigSectionCode, ConfigSectionSaveState>>({} as Record<ConfigSectionCode, ConfigSectionSaveState>)
   const sectionsWithPreview = editableConfigSections.map((section) => ({
     section,
     preview: previewGroups.get(section.previewSection),
@@ -1545,6 +1552,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   const activeTemplateSourceName = templateSourceNameFromPreview(selectedConfigSection.preview)
   const activeSectionSaveState = sectionSaveState[selectedConfigSection.section.code]
   const activeSectionDirty = hasConfigDraftChanged(configDraft[selectedConfigSection.section.code], initialConfigDraft[selectedConfigSection.section.code])
+  const templateSaveDisabled = !selectedTask
   const activeSectionAlreadyPersisted = Boolean(selectedConfigSection.preview?.templatePresent)
   const activeSectionStatus = activeSectionSaveState?.status ?? (activeSectionDirty ? 'dirty' : 'clean')
   const activeSectionStatusTitle = activeSectionStatus === 'dirty'
@@ -1670,11 +1678,9 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
         payload: withTemplateBinding(payload, currentTemplateBinding),
         is_enabled: true,
       }
-      if (existing) {
-        await patchJson<Template>(`/api/templates/${existing.id}`, body)
-      } else {
-        await postJson<Template>('/api/templates', body)
-      }
+      const savedTemplate = existing
+        ? await patchJson<Template>(`/api/templates/${existing.id}`, body)
+        : await postJson<Template>('/api/templates', body)
       const savedAt = new Date().toLocaleString('zh-CN', { hour12: false })
       setSectionSaveState((current) => ({
         ...current,
@@ -1682,10 +1688,10 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
           status: 'saved',
           scope: '店铺模板',
           savedAt,
-          message: `已保存到店铺模板；保存时间 ${savedAt}`,
+          message: `${existing ? '已覆盖' : '已新建'}店铺模板 #${savedTemplate.id} ${savedTemplate.template_name}；保存时间 ${savedAt}`,
         },
       }))
-      setConfigMessage(`${section.title} 已保存为当前店铺/类目模板，后续匹配 ${currentTemplateScopeLabel} 的任务会按该模板取值；辅助配置会进入执行取值，但不作为启动门禁必填。`)
+      setConfigMessage(`${section.title} ${existing ? '已覆盖' : '已新建'}店铺模板 #${savedTemplate.id}，影响范围：${currentTemplateScopeLabel}；后续匹配该范围的任务会按该模板取值，辅助配置会进入执行取值但不作为启动门禁必填。`)
       await onConfigSaved()
       if (continueToNextMissingSection) {
         selectNextMissingConfigSection(section.code)
@@ -1729,12 +1735,19 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
 
   function handleTemplateSelection(section: EditableConfigSection, templateId: string) {
     setSelectedTemplateBySection((current) => ({ ...current, [section.code]: templateId }))
-    if (templateId) {
-      applyTemplateToDraft(section, templateId)
-    }
   }
 
   async function applyDefaultTemplatePack() {
+    if (!selectedTask) {
+      setDefaultTemplatePackState('先选择任务，避免误存为全店/全类目模板。')
+      setConfigMessage('先选择任务，避免误存为全店/全类目模板。')
+      return
+    }
+    const confirmMessage = `确认写入默认测试模板包？将保存默认测试模板包到当前店铺/类目范围：${currentTemplateScopeLabel}。会覆盖或新建 ${editableConfigSections.length} 个分区模板，影响后续匹配当前范围的任务。`
+    if (!window.confirm(confirmMessage)) {
+      setDefaultTemplatePackState('已取消写入默认测试模板包')
+      return
+    }
     setSavingSection('template:default-pack')
     setDefaultTemplatePackState('正在写入默认测试模板...')
     setConfigMessage(null)
@@ -1769,7 +1782,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
             message: `默认测试模板已保存到店铺模板；保存时间 ${savedAt}`,
           },
         ]),
-      ) as Record<ConfigSectionCode, { status: 'clean' | 'dirty' | 'saving' | 'saved' | 'error'; scope?: string; savedAt?: string; message?: string }>)
+      ) as Record<ConfigSectionCode, ConfigSectionSaveState>)
       setDefaultTemplatePackState(`默认测试模板已保存；保存时间 ${savedAt}`)
       setConfigMessage(`默认测试模板已写入当前店铺/类目范围：${currentTemplateScopeLabel}。使用之前测试通过的数据配置，可继续按分区微调。`)
       await onConfigSaved()
@@ -1896,6 +1909,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
                   </option>
                 ))}
               </select>
+              <small>选择模板不会改表单，点击套用后才会填入当前分区。</small>
             </label>
             <button
               className="button button--quiet"
@@ -1917,7 +1931,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
                 <strong>当前生效模板</strong>
                 <span>{activeTemplateSourceName || (activeSectionAlreadyPersisted ? '已由预检命中模板' : '尚未命中已保存模板')}</span>
                 <small>可选模板 {activeSectionTemplateOptions.length} 套；已筛除不匹配或禁用模板 {filteredTemplateChoiceCount} 套。</small>
-                <small>多套模板按当前店铺/类目优先展示；选择模板只会填入表单，保存后才会生效。</small>
+                <small>多套模板按当前店铺/类目优先展示；选择模板不会改表单，点击套用后才会填入当前分区，保存后才会生效。</small>
               </div>
               <div className="config-template-console__default">
                 <strong>默认测试模板</strong>
@@ -1926,7 +1940,8 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
                   className="button button--secondary"
                   type="button"
                   onClick={() => { void applyDefaultTemplatePack() }}
-                  disabled={savingSection === 'template:default-pack'}
+                  disabled={savingSection === 'template:default-pack' || templateSaveDisabled}
+                  title={templateSaveDisabled ? '先选择任务，避免误存为全店/全类目模板。' : '保存为店铺模板会影响后续匹配当前店铺/类目的任务。'}
                 >
                   {savingSection === 'template:default-pack' ? '保存测试模板中...' : '写入测试模板到当前范围'}
                 </button>
@@ -2022,7 +2037,9 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
               preview={selectedConfigSection.preview}
               configDraft={configDraft}
               savingSection={savingSection}
+              saveState={sectionSaveState[selectedConfigSection.section.code]}
               selectedTask={selectedTask}
+              templateSaveDisabled={templateSaveDisabled}
               configOk={Boolean(configPreview?.ok)}
               openByDefault={true}
               onFieldChange={updateConfigField}
@@ -2106,7 +2123,9 @@ function EditableConfigSectionCard({
   preview,
   configDraft,
   savingSection,
+  saveState,
   selectedTask,
+  templateSaveDisabled,
   configOk,
   openByDefault,
   onFieldChange,
@@ -2117,7 +2136,9 @@ function EditableConfigSectionCard({
   preview: ConfigPreviewGroup | undefined
   configDraft: Record<ConfigSectionCode, Record<string, string>>
   savingSection: string | null
+  saveState?: ConfigSectionSaveState
   selectedTask: Task | null
+  templateSaveDisabled: boolean
   configOk: boolean
   openByDefault: boolean
   onFieldChange: (sectionCode: ConfigSectionCode, fieldName: string, value: string) => void
@@ -2127,7 +2148,23 @@ function EditableConfigSectionCard({
   const state = configSectionState(preview, configOk)
   const pillClass = state.className === 'is-complete' ? 'ok' : state.className === 'is-advisory' ? 'info' : 'warn'
   const taskSaveDisabled = !selectedTask || savingSection === `task:${section.code}`
+  const templateDisabledReason = templateSaveDisabled
+    ? '先选择任务，避免误存为全店/全类目模板。'
+    : savingSection === `template:${section.code}`
+      ? '正在保存，请等待当前操作完成。'
+      : '保存为店铺模板会影响后续匹配当前店铺/类目的任务。'
   const continueDisabled = taskSaveDisabled || !preview
+  const receiptStatus = saveState?.status ?? 'clean'
+  const receiptTitle = receiptStatus === 'dirty'
+    ? '有未保存修改'
+    : receiptStatus === 'saving'
+      ? '正在保存'
+      : receiptStatus === 'saved'
+        ? '最近一次保存成功'
+        : receiptStatus === 'error'
+          ? '最近一次保存失败'
+          : '等待保存'
+  const receiptMessage = saveState?.message ?? '保存后这里会显示最近一次保存结果。'
   const disabledReason = !selectedTask
     ? '先选择任务，才能保存为本次任务并继续。'
     : !preview
@@ -2202,10 +2239,21 @@ function EditableConfigSectionCard({
           className="button button--quiet"
           type="button"
           onClick={() => void onSave(section, 'template')}
-          disabled={savingSection === `template:${section.code}`}
+          disabled={templateSaveDisabled || savingSection === `template:${section.code}`}
+          title={templateDisabledReason}
         >
           {savingSection === `template:${section.code}` ? '保存中...' : '保存为店铺模板（后续任务可用）'}
         </button>
+      </div>
+      <div className={`config-section-save-receipt is-${receiptStatus}`} aria-label="当前分区保存回执">
+        <strong>{receiptTitle}</strong>
+        <span>{receiptMessage}</span>
+        {(saveState?.scope || saveState?.savedAt) && (
+          <small>
+            {saveState.scope ? `保存位置：${saveState.scope}` : '保存位置：待确认'}
+            {saveState.savedAt ? ` / 保存时间：${saveState.savedAt}` : ''}
+          </small>
+        )}
       </div>
       <small className="config-section-save-hint">本次任务只影响当前批次；店铺模板会影响后续匹配当前店铺/类目的任务。</small>
       {disabledReason && <small className="config-action-disabled-reason" aria-label="不能继续的原因">不能继续的原因：{disabledReason}</small>}
