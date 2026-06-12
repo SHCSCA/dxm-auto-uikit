@@ -2054,7 +2054,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
         ]),
       ) as Record<ConfigSectionCode, ConfigSectionSaveState>)
       setDefaultTemplatePackState(`默认测试模板已保存；保存时间 ${savedAt}`)
-      setConfigMessage(`默认测试模板已写入当前店铺/类目范围：${currentTemplateScopeLabel}。使用之前测试通过的数据配置，可继续按分区微调。`)
+      setConfigMessage(`默认测试模板已写入当前店铺/类目范围：${currentTemplateScopeLabel}。这些是示例值，真实执行前请按当前商品继续核对分区字段。`)
       await onConfigSaved()
     } catch (error) {
       setDefaultTemplatePackState('默认测试模板保存失败')
@@ -2175,7 +2175,6 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
                 data-config-template-selector={selectedConfigSection.section.code}
               >
                 <option value="">选择已保存模板</option>
-                <option value="__default_test__">默认测试模板（当前分区）</option>
                 {activeSectionTemplateOptions.map((template) => (
                   <option key={template.id} value={template.id}>
                     {templateOptionLabel(template)}
@@ -2201,11 +2200,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
             </span>
             <span>
               <b>已选择：{activeSelectedTemplateLabel}</b>
-              <small>{activeSelectedTemplateId ? '点击套用后才会写入表单；保存后才会影响执行。' : '可选择默认测试模板或已保存模板。'}</small>
-            </span>
-            <span>
-              <b>默认测试模板</b>
-              <small>使用之前测试通过的数据配置；点击写入后保存到当前店铺/类目范围。</small>
+              <small>{activeSelectedTemplateId ? '点击套用后才会写入表单；保存后才会影响执行。' : '可选择已保存模板；示例值在下方高级区。'}</small>
             </span>
           </div>
           <div className={`config-save-state config-save-state--compact is-${activeSectionStatus}`} aria-label="当前分区保存状态">
@@ -2219,7 +2214,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
             <small>选择模板不会改表单，点击套用后才会填入当前分区，保存后才会生效。</small>
           </div>
           <details className="inline-disclosure config-template-console__details">
-            <summary>模板来源与默认模板详情</summary>
+            <summary>模板来源与高级/开发辅助</summary>
             <div className="config-template-console__detail-grid">
               <div className="config-template-source config-template-source--detail" aria-label="当前模板来源详情">
                 <strong>当前生效模板</strong>
@@ -2233,6 +2228,13 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
               <div className="config-template-console__default">
                 <strong>默认测试模板</strong>
                 <span>使用之前测试通过的数据配置；覆盖当前店铺/类目下全部分区。</span>
+                <button
+                  className="button button--quiet"
+                  type="button"
+                  onClick={() => applyTemplateToDraft(selectedConfigSection.section, '__default_test__')}
+                >
+                  填入当前分区示例值
+                </button>
                 <button
                   className="button button--secondary"
                   type="button"

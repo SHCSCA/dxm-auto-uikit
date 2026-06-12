@@ -890,8 +890,9 @@ export default function App() {
       setActiveSection('console')
     } catch (error) {
       const message = error instanceof Error ? error.message : '打开 Agent Console 失败'
-      setAgentConsoleError(message)
-      setOperationError(message)
+      const humanMessage = humanAgentConsoleError(message)
+      setAgentConsoleError(humanMessage)
+      setOperationError(humanMessage)
       await refreshAgentConsole()
     } finally {
       setBusy(false)
@@ -1162,11 +1163,15 @@ export default function App() {
       <SafetyStatusBar
         workspace={workspace}
         selectedTask={selectedTask}
+        configPreview={configPreview}
+        configPreviewError={configPreviewError}
+        configPreviewLoading={configPreviewLoading}
         runtimeStatus={runtimeStatus}
         runtimeStatusError={runtimeStatusError}
         desktopRuntime={desktopRuntime}
         busy={busy}
         onRefresh={() => { void refreshWorkspace(); void refreshRuntimeStatus(); void refreshRuntimeLogs(); void refreshConfigPreview() }}
+        onShowConfig={() => setActiveSection('config')}
         onShowTasks={() => setActiveSection('tasks')}
         onShowConsole={() => setActiveSection('console')}
       />
@@ -1256,6 +1261,39 @@ function humanDxmLoginError(message: string) {
   }
   if (normalized.includes('login_failed')) {
     return `真实店小秘登录未完成。请在可见浏览器窗口内修正验证码或账号密码，再点击“验证码已完成，检测登录态”。${commonTail}`
+  }
+  return message
+}
+
+function humanAgentConsoleError(message: string) {
+  const normalized = message.toLowerCase()
+  const commonTail = '执行浏览器只会在预检和人工确认通过后接入真实店小秘页面；不会自动发布。'
+  if (
+    message.includes('Internal Server Error')
+    || normalized.includes('post /api/agent-console/start failed')
+  ) {
+    return `真实执行浏览器启动失败：本机后端返回异常。请关闭旧的 DXM Agent Console 或旧浏览器进程后重试；如果仍失败，重开免安装 EXE。${commonTail}`
+  }
+  if (
+    normalized.includes('browser has been closed')
+    || message.includes('Target page, context or browser has been closed')
+    || normalized.includes('context or browser has been closed')
+  ) {
+    return `真实执行浏览器已关闭或启动后立即退出。请保留新打开的真实浏览器窗口，或关闭旧进程后重新打开执行控制台。${commonTail}`
+  }
+  if (
+    normalized.includes('user data directory is already in use')
+    || normalized.includes('profile')
+    || normalized.includes('locked')
+  ) {
+    return `真实执行浏览器数据目录被旧进程占用。请关闭旧的 DXM Agent Console 或旧浏览器进程后重试。${commonTail}`
+  }
+  if (
+    normalized.includes('executable')
+    || normalized.includes('playwright')
+    || normalized.includes('chromium')
+  ) {
+    return `真实执行浏览器依赖缺失或不可启动。请重新打开完整免安装目录版，并查看执行控制台实时日志。${commonTail}`
   }
   return message
 }

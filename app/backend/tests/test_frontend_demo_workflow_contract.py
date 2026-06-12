@@ -115,8 +115,12 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "applyDefaultTemplatePack" in config_section
     assert "默认测试模板" in config_section
     assert "使用之前测试通过的数据配置" in config_section
-    assert config_section.index("使用之前测试通过的数据配置") < config_section.index("config-template-console__details")
+    assert config_section.index("使用之前测试通过的数据配置") > config_section.index("config-template-console__details")
     assert "写入测试模板到当前范围" in config_section
+    common_selector = config_section[config_section.index("<select"):config_section.index("</select>")]
+    assert "__default_test__" not in common_selector
+    assert "填入当前分区示例值" in config_section
+    assert "高级/开发辅助" in config_section
     assert "保存/覆盖当前店铺模板" not in config_section
     assert "覆盖当前店铺/类目下全部分区" in config_section
     assert "defaultTemplatePackState" in config_section
@@ -146,6 +150,7 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "function handleTemplateSelection(section: EditableConfigSection, templateId: string)" in config_section
     assert "applyTemplateToDraft(section, templateId)" not in config_section[config_section.index("function handleTemplateSelection"):config_section.index("async function applyDefaultTemplatePack")]
     assert "确认写入默认测试模板包" in config_section
+    assert "示例值" in config_section
     assert "将保存默认测试模板包到当前店铺/类目范围" in config_section
     assert "精确店铺/类目模板优先" in config_section
     assert "全局模板只作为读取候选，不会被保存覆盖" in config_section
@@ -2195,6 +2200,24 @@ def test_safety_status_bar_does_not_duplicate_completed_task_status():
     assert "`#${selectedTask.id} ${humanTaskStatus(selectedTask.status)}`" not in safety_bar
 
 
+def test_safety_status_bar_prioritizes_config_block_before_l2_precheck():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
+
+    assert "configPreview: ConfigPreview | null" in safety_bar
+    assert "configPreviewError?: string | null" in safety_bar
+    assert "configPreviewLoading: boolean" in safety_bar
+    assert "onShowConfig: () => void" in safety_bar
+    assert "const configBlocksRealSave" in safety_bar
+    assert "继续下一步：补齐本次任务配置" in safety_bar
+    assert "handlePrimaryAction = selectedTaskCompleted" in safety_bar
+    assert "? onShowConfig" in safety_bar
+    assert "configPreview={configPreview}" in app_source
+    assert "configPreviewError={configPreviewError}" in app_source
+    assert "configPreviewLoading={configPreviewLoading}" in app_source
+    assert "onShowConfig={() => setActiveSection('config')}" in app_source
+
+
 def test_frontend_refreshes_workspace_after_l2_runner_finishes():
     app_source = APP_TSX.read_text(encoding="utf-8")
     runner_observer = app_source[
@@ -2386,6 +2409,23 @@ def test_frontend_humanizes_dxm_login_browser_start_failures():
     assert "await refreshRuntimeLogs()" in open_login_section
     assert "const humanMessage = humanDxmLoginError(message)" in continue_login_section
     assert "setOperationError(humanMessage)" in continue_login_section
+
+
+def test_frontend_humanizes_agent_console_browser_start_failures():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    start_console_section = app_source[
+        app_source.index("async function startAgentConsole"):
+        app_source.index("async function stopAgentConsole")
+    ]
+
+    assert "function humanAgentConsoleError(message: string)" in app_source
+    assert "真实执行浏览器启动失败" in app_source
+    assert "请关闭旧的 DXM Agent Console 或旧浏览器进程后重试" in app_source
+    assert "browser has been closed" in app_source
+    assert "user data directory is already in use" in app_source
+    assert "const humanMessage = humanAgentConsoleError(message)" in start_console_section
+    assert "setAgentConsoleError(humanMessage)" in start_console_section
+    assert "setOperationError(humanMessage)" in start_console_section
 
 
 def test_frontend_marks_l2_runner_failed_when_start_request_fails():

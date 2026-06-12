@@ -1,4 +1,4 @@
-import type { DeliveryWorkspace, DesktopRuntimeInfo, RuntimeStatus, Task } from '../types'
+import type { ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, RuntimeStatus, Task } from '../types'
 import { humanTaskStatus } from '../workspace'
 
 const l3PostEvidenceGapIds = new Set(['gap-save-result', 'gap-unpublished-proof', 'gap-network-save-response'])
@@ -7,21 +7,32 @@ const dxmReadySessionStatuses = new Set(['login_success', 'logged_in', 'not_publ
 type SafetyStatusBarProps = {
   workspace: DeliveryWorkspace
   selectedTask: Task | null
+  configPreview: ConfigPreview | null
+  configPreviewError?: string | null
+  configPreviewLoading: boolean
   runtimeStatus: RuntimeStatus | null
   runtimeStatusError?: string | null
   desktopRuntime?: DesktopRuntimeInfo | null
   busy: boolean
   onRefresh: () => void
+  onShowConfig: () => void
   onShowTasks: () => void
   onShowConsole: () => void
 }
 
-export function SafetyStatusBar({ workspace, selectedTask, runtimeStatus, runtimeStatusError, desktopRuntime, busy, onRefresh, onShowTasks, onShowConsole }: SafetyStatusBarProps) {
+export function SafetyStatusBar({ workspace, selectedTask, configPreview, configPreviewError, configPreviewLoading, runtimeStatus, runtimeStatusError, desktopRuntime, busy, onRefresh, onShowConfig, onShowTasks, onShowConsole }: SafetyStatusBarProps) {
   const activeTaskLabel = selectedTask ? `#${selectedTask.id}` : '未选择任务'
   const activeTaskStatusLabel = selectedTask ? humanTaskStatus(selectedTask.status) : ''
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
   const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
   const selectedTaskCompleted = selectedTask?.status === 'completed'
+  const selectedRealDxmMutationTask = Boolean(selectedTask && ['claim_only', 'single_save', 'batch_save'].includes(selectedTask.mode))
+  const configBlocksRealSave = Boolean(
+    selectedTask
+    && selectedRealDxmMutationTask
+    && !selectedTaskCompleted
+    && (configPreviewError || configPreviewLoading || !configPreview || configPreview.taskId !== selectedTask.id || !configPreview.ok)
+  )
   const publishGuardReasons = workspace.publishGuardState?.reasons ?? []
   const l2BlocksRealSave = l2Gate?.status !== 'passed'
   const l3BlocksRealSave = l3Gate?.status === 'blocked'
@@ -46,7 +57,9 @@ export function SafetyStatusBar({ workspace, selectedTask, runtimeStatus, runtim
       : 'ok'
   const nextHeadline = !dxmLoggedIn
     ? '继续下一步：打开真实店小秘登录'
-    : l2BlocksRealSave
+    : configBlocksRealSave
+      ? '继续下一步：补齐本次任务配置'
+      : l2BlocksRealSave
       ? '继续下一步：运行只读页面检查'
       : l3NeedsApproval
         ? '继续下一步：人工确认单商品只保存'
@@ -143,6 +156,8 @@ export function SafetyStatusBar({ workspace, selectedTask, runtimeStatus, runtim
     ? onShowConsole
     : !dxmLoggedIn
       ? onShowConsole
+      : configBlocksRealSave
+        ? onShowConfig
       : l2BlocksRealSave || l3NeedsApproval
         ? onShowTasks
         : onShowConsole

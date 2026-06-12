@@ -259,11 +259,11 @@ def test_app_shell_presents_agent_console_as_user_first_navigation():
     assert "label: '结果'" in source
     assert "label: '更多'" in source
     assert "真实浏览器" in source
-    assert "任务与真实浏览器" in source
+    assert "任务与执行控制台" in source
     assert "结果报告" in source
     assert "问题处理" in source
     assert "证据" in source
-    assert "执行控制台" not in source
+    assert "{ id: 'console', label: '执行控制台', short: '控', hint: '登录、预检、真实浏览器' }" in source
     assert "证据中心" not in source
     assert "报告中心" not in source
     assert "异常池" not in source
