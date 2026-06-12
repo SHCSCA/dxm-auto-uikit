@@ -108,6 +108,25 @@ def test_desktop_preload_exposes_readonly_runtime_metadata():
     assert "desktop:dxm-credential:clear" in main_source
 
 
+def test_desktop_credential_smoke_verifies_safe_storage_without_destroying_user_secret():
+    source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    verify_source = VERIFY_DESKTOP_PACKAGE.read_text(encoding="utf-8")
+
+    assert "function getQaCredentialSmokePath()" in source
+    assert "--qa-credential-smoke=" in source
+    assert "function runCredentialSmoke(outputPath)" in source
+    assert "const previousCredential = fs.existsSync(credentialPath)" in source
+    assert "saveDxmCredential({ username: '__qa_dxm_user__', password: '__qa_dxm_password__' })" in source
+    assert "loaded.credential.username !== '__qa_dxm_user__'" in source
+    assert "loaded.credential.password !== '__qa_dxm_password__'" in source
+    assert "fs.writeFileSync(credentialPath, previousCredential, 'utf8')" in source
+    assert "fs.rmSync(credentialPath, { force: true })" in source
+    assert "Credential smoke written" in source
+
+    assert "--qa-credential-smoke=$CredentialSmokePath" in verify_source
+    assert "Credential smoke passed" in verify_source
+
+
 def test_desktop_builder_packages_windows_exe_without_console_windows():
     source = DESKTOP_BUILDER.read_text(encoding="utf-8")
 

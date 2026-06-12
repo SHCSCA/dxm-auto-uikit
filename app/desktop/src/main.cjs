@@ -28,6 +28,13 @@ function getQaCapturePath() {
   return capturePath || null
 }
 
+function getQaCredentialSmokePath() {
+  const arg = process.argv.find((value) => value.startsWith('--qa-credential-smoke='))
+  if (!arg) return null
+  const outputPath = arg.slice('--qa-credential-smoke='.length).trim()
+  return outputPath || null
+}
+
 function initializeDesktopLogPath() {
   try {
     const dataDir = path.join(app.getPath('userData'), 'data')
@@ -140,6 +147,59 @@ function clearDxmCredential() {
     fs.rmSync(credentialPath, { force: true })
   }
   return { ok: true, available: safeStorageAvailable() }
+}
+
+function runCredentialSmoke(outputPath) {
+  const credentialPath = getCredentialPath()
+  const previousCredential = fs.existsSync(credentialPath)
+    ? fs.readFileSync(credentialPath, 'utf8')
+    : null
+  const result = {
+    ok: false,
+    available: safeStorageAvailable(),
+    saved: false,
+    loaded: false,
+    cleared: false,
+    restoredPreviousCredential: previousCredential !== null,
+    credentialPath,
+  }
+
+  try {
+    const saved = saveDxmCredential({ username: '__qa_dxm_user__', password: '__qa_dxm_password__' })
+    if (!saved.ok) throw new Error(saved.error || 'Credential save failed')
+    result.saved = true
+
+    const loaded = loadDxmCredential()
+    if (!loaded.ok) throw new Error(loaded.error || 'Credential load failed')
+    if (!loaded.credential) throw new Error('Credential smoke did not load a credential')
+    if (loaded.credential.username !== '__qa_dxm_user__') throw new Error('Credential smoke username mismatch')
+    if (loaded.credential.password !== '__qa_dxm_password__') throw new Error('Credential smoke password mismatch')
+    result.loaded = true
+
+    const cleared = clearDxmCredential()
+    if (!cleared.ok) throw new Error(cleared.error || 'Credential clear failed')
+    result.cleared = !fs.existsSync(credentialPath)
+    if (!result.cleared) throw new Error('Credential smoke did not clear test credential')
+
+    result.ok = true
+  } catch (error) {
+    result.error = error instanceof Error ? error.message : String(error)
+  } finally {
+    if (previousCredential !== null) {
+      fs.writeFileSync(credentialPath, previousCredential, 'utf8')
+    } else if (fs.existsSync(credentialPath)) {
+      fs.rmSync(credentialPath, { force: true })
+    }
+    result.restored = previousCredential !== null ? fs.existsSync(credentialPath) : !fs.existsSync(credentialPath)
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true })
+    fs.writeFileSync(outputPath, JSON.stringify(result, null, 2), 'utf8')
+    appendDesktopLog(`Credential smoke written: ${outputPath} ok=${result.ok}`)
+  }
+
+  if (!result.ok) {
+    throw new Error(`Credential smoke failed: ${result.error || 'unknown error'}`)
+  }
+  return result
 }
 
 function appendDesktopLog(message) {
@@ -337,6 +397,7 @@ async function createWindow() {
     initializeDesktopLogPath()
     appendDesktopLog(`Desktop app starting packaged=${app.isPackaged} resourcesPath=${process.resourcesPath}`)
     const qaCapturePath = getQaCapturePath()
+    const qaCredentialSmokePath = getQaCredentialSmokePath()
     runtimeInfo.qaCapturePath = qaCapturePath
     const repoRoot = resolveRepoRoot()
     runtimeInfo.repoRoot = repoRoot
@@ -376,6 +437,9 @@ async function createWindow() {
       },
     })
     appendDesktopLog(`Loaded frontend ${frontendPath} with apiBase=${runtimeInfo.apiBase}`)
+    if (qaCredentialSmokePath) {
+      runCredentialSmoke(qaCredentialSmokePath)
+    }
     if (qaCapturePath) {
       await new Promise((resolve) => setTimeout(resolve, 1200))
       fs.mkdirSync(path.dirname(qaCapturePath), { recursive: true })

@@ -12,6 +12,7 @@ $LogPath = Join-Path $env:APPDATA 'DXM Agent Console\data\desktop-main.log'
 $LegacyLogPath = Join-Path $env:APPDATA 'dxm-agent-desktop\data\desktop-main.log'
 $CapturePath = Join-Path $env:TEMP 'dxm-agent-console-packaged-smoke.png'
 $PortableCapturePath = Join-Path $env:TEMP 'dxm-agent-console-portable-smoke.png'
+$CredentialSmokePath = Join-Path $env:TEMP 'dxm-agent-console-credential-smoke.json'
 
 Write-Host 'DXM Agent Console packaged smoke'
 Write-Host "Exe: $ExePath"
@@ -44,6 +45,9 @@ if (Test-Path $CapturePath) {
 }
 if (Test-Path $PortableCapturePath) {
   Remove-Item -LiteralPath $PortableCapturePath -Force
+}
+if (Test-Path $CredentialSmokePath) {
+  Remove-Item -LiteralPath $CredentialSmokePath -Force
 }
 
 function Wait-ForFile {
@@ -113,6 +117,22 @@ function Assert-DesktopSmokeLog {
   }
   if ($LogText -notmatch 'Loaded frontend') {
     throw "$Label failed: desktop-main.log does not contain Loaded frontend. Log: $ExistingLog"
+  }
+}
+
+function Assert-CredentialSmoke {
+  param(
+    [string]$Path
+  )
+  if (!(Test-Path -LiteralPath $Path)) {
+    throw "Credential smoke result was not created: $Path"
+  }
+  $Result = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+  if ($Result.ok -ne $true) {
+    throw "Credential smoke failed: $($Result.error)"
+  }
+  if ($Result.available -ne $true -or $Result.saved -ne $true -or $Result.loaded -ne $true -or $Result.cleared -ne $true -or $Result.restored -ne $true) {
+    throw "Credential smoke did not prove save/load/clear/restore: $($Result | ConvertTo-Json -Compress)"
   }
 }
 
@@ -232,7 +252,7 @@ Assert-PackagedRuntimeClean -ExePath $ExePath
 Assert-PackagedBackendResourceStatus -ExePath $ExePath -TimeoutSeconds $WaitSeconds
 Write-Host 'Packaged backend resource status passed.'
 
-$Process = Start-Process -FilePath $ExePath -WorkingDirectory (Split-Path $ExePath) -ArgumentList "--qa-capture=$CapturePath" -PassThru
+$Process = Start-Process -FilePath $ExePath -WorkingDirectory (Split-Path $ExePath) -ArgumentList @("--qa-capture=$CapturePath", "--qa-credential-smoke=$CredentialSmokePath") -PassThru
 if (!$Process.WaitForExit($WaitSeconds * 1000)) {
   try {
     Stop-Process -Id $Process.Id -Force
@@ -245,6 +265,7 @@ if ($Process.ExitCode -ne 0) {
 if (!(Test-Path $CapturePath)) {
   throw "Packaged smoke failed: QA capture was not created: $CapturePath"
 }
+Assert-CredentialSmoke -Path $CredentialSmokePath
 
 $ExistingLog = Get-DesktopSmokeLog
 Assert-DesktopSmokeLog -ExistingLog $ExistingLog -ExpectedPythonRoot (Split-Path $ExePath) -Label 'Packaged smoke'
@@ -264,6 +285,7 @@ Get-Process | Where-Object { $_.Path -like '*desktop-build*DXM-Agent-Console.exe
 
 Write-Host "Packaged smoke passed. Log: $ExistingLog"
 Write-Host "QA capture: $CapturePath"
+Write-Host "Credential smoke passed. Result: $CredentialSmokePath"
 
 if ($CheckPortable -and (Test-Path $PortableExePath)) {
   Write-Host "Portable exe: $PortableExePath"
