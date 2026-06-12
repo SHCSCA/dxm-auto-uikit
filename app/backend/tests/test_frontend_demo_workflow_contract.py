@@ -356,7 +356,8 @@ def test_browser_qa_verifies_config_center_task_override_controls():
     assert "realMutationApprovalDomState" in source
     assert "consoleLoginFormDomState" in source
     assert "passwordType === 'password'" in source
-    assert "passwordCleared === true" in source
+    assert "rememberCredential" in source
+    assert "credentialStateText" in source
     assert "consoleRealBrowserLoginEntry" in source
     assert "consoleBrowserControlPad" in source
     assert "consoleRuntimeLogState" in source
@@ -510,7 +511,8 @@ def test_guide_center_can_start_real_dxm_login_without_l2_gate():
     assert "验证码已完成，检测登录态" in workbench_source
     assert "进入采集箱" in workbench_source
     assert "onAction: onOpenDxmLogin" in workbench_source
-    assert "密码不保存，账号可能出现在本机运行态摘要中" in workbench_source
+    assert "可见的独立店小秘浏览器窗口" in workbench_source
+    assert "账号密码可保存到本机加密存储" in workbench_source
     assert "DXM_LOGGED_IN_STATUSES" in workbench_source
     assert "not_published_verified" in workbench_source
     assert "DXM 登录状态" in workbench_source
@@ -536,19 +538,23 @@ def test_real_operator_inputs_are_inline_not_browser_prompts():
     assert "DxmLoginInlineForm" in workbench_source
     assert "L3ApprovalInlineForm" in workbench_source
     assert "dxmLoginDraft" in app_source
+    assert "loadDxmCredential" in app_source
+    assert "saveDxmCredential" in app_source
+    assert "clearDxmCredential" in app_source
     assert "l3ApprovedBy" in app_source
     assert "useState('ops-owner')" not in app_source
-    assert "useState('')" in app_source
+    assert "rememberCredential: true" in app_source
     assert "const canSubmit = Boolean(draft.username.trim() && draft.password && !busy)" in workbench_source
     assert "if (!canSubmit) return" in workbench_source
     assert "required" in workbench_source
     assert "店小秘账号" in workbench_source
     assert "店小秘密码" in workbench_source
+    assert "记住账号密码" in workbench_source
+    assert "清除已记住账号" in workbench_source
     assert "批准人标识" in workbench_source
     assert "打开真实登录页" in workbench_source
     assert "申请并启动单商品只保存" in workbench_source
-    assert "密码不保存" in workbench_source
-    assert "本机运行态或日志摘要" in workbench_source
+    assert "本机加密存储" in workbench_source
     assert "operator-inline-form" in styles_source
 
 
@@ -558,8 +564,8 @@ def test_user_docs_explain_login_secret_and_launcher_takeover_boundaries():
 
     for source in (readme, user_guide):
         assert "密码" in source
-        assert "不保存" in source
-        assert "账号可能出现在本机运行态" in source
+        assert "本机加密存储" in source
+        assert "可见" in source
         assert "启动器会自动接管 8000 端口" in source
         assert "不要在真实任务" in source
         assert "重复启动" in source

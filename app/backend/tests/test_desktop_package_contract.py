@@ -69,11 +69,19 @@ def test_desktop_main_surfaces_startup_failures_in_visible_window():
 
 def test_desktop_preload_exposes_readonly_runtime_metadata():
     source = DESKTOP_PRELOAD.read_text(encoding="utf-8")
+    main_source = DESKTOP_MAIN.read_text(encoding="utf-8")
 
     assert "contextBridge" in source
     assert "dxmDesktop" in source
     assert "getRuntimeInfo" in source
     assert "ipcRenderer.invoke('desktop:get-runtime-info')" in source
+    assert "loadDxmCredential" in source
+    assert "saveDxmCredential" in source
+    assert "clearDxmCredential" in source
+    assert "safeStorage" in main_source
+    assert "desktop:dxm-credential:load" in main_source
+    assert "desktop:dxm-credential:save" in main_source
+    assert "desktop:dxm-credential:clear" in main_source
 
 
 def test_desktop_builder_packages_windows_exe_without_console_windows():
@@ -188,7 +196,8 @@ def test_frontend_surfaces_electron_desktop_runtime_metadata():
     types_source = TYPES_TS.read_text(encoding="utf-8")
 
     assert "export type DesktopRuntimeInfo" in types_source
-    assert "dxmDesktop?: { getRuntimeInfo" in types_source
+    assert "dxmDesktop?: {" in types_source
+    assert "getRuntimeInfo: () => Promise<DesktopRuntimeInfo>" in types_source
     assert "const [desktopRuntime, setDesktopRuntime]" in app_source
     assert "window.dxmDesktop?.getRuntimeInfo" in app_source
     assert "desktopRuntime={desktopRuntime}" in app_source

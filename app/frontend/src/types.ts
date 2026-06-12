@@ -8,10 +8,32 @@ export type DesktopRuntimeInfo = {
   desktopLogPath?: string | null
   lastError?: string | null
 }
+export type DxmStoredCredential = {
+  username: string
+  password: string
+  updatedAt?: string | null
+}
+export type DxmCredentialLoadResult = {
+  ok: boolean
+  available: boolean
+  credential?: DxmStoredCredential | null
+  error?: string | null
+}
+export type DxmCredentialSaveResult = {
+  ok: boolean
+  available: boolean
+  updatedAt?: string | null
+  error?: string | null
+}
 
 declare global {
   interface Window {
-    dxmDesktop?: { getRuntimeInfo: () => Promise<DesktopRuntimeInfo> }
+    dxmDesktop?: {
+      getRuntimeInfo: () => Promise<DesktopRuntimeInfo>
+      loadDxmCredential?: () => Promise<DxmCredentialLoadResult>
+      saveDxmCredential?: (credential: { username: string; password: string }) => Promise<DxmCredentialSaveResult>
+      clearDxmCredential?: () => Promise<DxmCredentialSaveResult>
+    }
   }
 }
 

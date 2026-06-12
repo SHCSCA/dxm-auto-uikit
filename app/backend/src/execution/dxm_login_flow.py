@@ -108,6 +108,7 @@ class DxmLoginFlow:
             'page_title': browser_state.get('page_title') or '店小秘官网登录页',
             'page_url': browser_state.get('page_url') or 'https://www.dianxiaomi.com/',
             'screenshot_url': browser_state.get('screenshot_url'),
+            'browser_visible': browser_state.get('browser_visible') is True,
             'updated_at': now_iso(),
             'username': username,
             'password_mask': self._mask_secret(password),
@@ -389,6 +390,7 @@ class DxmLoginFlow:
             'page_title': page.title(),
             'page_url': page.url,
             'screenshot_url': self._artifact_url(LOGIN_SCREENSHOT_FILE),
+            'browser_visible': not self._is_headless(),
         }
 
     def _submit_login_after_captcha(self) -> dict[str, Any]:

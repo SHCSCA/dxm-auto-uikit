@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron')
+const { app, BrowserWindow, ipcMain, safeStorage, shell } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 const net = require('node:net')
@@ -63,6 +63,83 @@ function ensureDataDir(repoRoot) {
     : path.join(repoRoot, 'data')
   fs.mkdirSync(dataDir, { recursive: true })
   return dataDir
+}
+
+function getDesktopDataDir() {
+  const dataDir = path.join(app.getPath('userData'), 'data')
+  fs.mkdirSync(dataDir, { recursive: true })
+  return dataDir
+}
+
+function getCredentialPath() {
+  return path.join(getDesktopDataDir(), 'dxm-login-credential.json')
+}
+
+function safeStorageAvailable() {
+  try {
+    return Boolean(safeStorage && safeStorage.isEncryptionAvailable())
+  } catch {
+    return false
+  }
+}
+
+function loadDxmCredential() {
+  const credentialPath = getCredentialPath()
+  if (!fs.existsSync(credentialPath)) {
+    return { ok: true, available: safeStorageAvailable(), credential: null }
+  }
+  if (!safeStorageAvailable()) {
+    return { ok: false, available: false, credential: null, error: 'Electron safeStorage is unavailable.' }
+  }
+  try {
+    const raw = JSON.parse(fs.readFileSync(credentialPath, 'utf8'))
+    const encrypted = Buffer.from(String(raw.passwordCipherBase64 || ''), 'base64')
+    const password = encrypted.length ? safeStorage.decryptString(encrypted) : ''
+    return {
+      ok: true,
+      available: true,
+      credential: {
+        username: String(raw.username || ''),
+        password,
+        updatedAt: raw.updatedAt || null,
+      },
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      available: true,
+      credential: null,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+function saveDxmCredential(payload) {
+  if (!safeStorageAvailable()) {
+    return { ok: false, available: false, error: 'Electron safeStorage is unavailable.' }
+  }
+  const username = String(payload?.username || '').trim()
+  const password = String(payload?.password || '')
+  if (!username || !password) {
+    return { ok: false, available: true, error: 'Username and password are required.' }
+  }
+  const encrypted = safeStorage.encryptString(password)
+  const body = {
+    username,
+    passwordCipherBase64: encrypted.toString('base64'),
+    updatedAt: new Date().toISOString(),
+    storage: 'electron-safeStorage',
+  }
+  fs.writeFileSync(getCredentialPath(), JSON.stringify(body, null, 2), 'utf8')
+  return { ok: true, available: true, updatedAt: body.updatedAt }
+}
+
+function clearDxmCredential() {
+  const credentialPath = getCredentialPath()
+  if (fs.existsSync(credentialPath)) {
+    fs.rmSync(credentialPath, { force: true })
+  }
+  return { ok: true, available: safeStorageAvailable() }
 }
 
 function appendDesktopLog(message) {
@@ -308,6 +385,9 @@ async function createWindow() {
 }
 
 ipcMain.handle('desktop:get-runtime-info', () => ({ ...runtimeInfo }))
+ipcMain.handle('desktop:dxm-credential:load', () => loadDxmCredential())
+ipcMain.handle('desktop:dxm-credential:save', (_event, payload) => saveDxmCredential(payload))
+ipcMain.handle('desktop:dxm-credential:clear', () => clearDxmCredential())
 
 app.whenReady().then(() => {
   createWindow()

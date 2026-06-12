@@ -1341,6 +1341,36 @@ a:focus-visible {
   padding: 7px 9px;
 }
 
+.operator-inline-form .operator-inline-form__remember {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+}
+
+.operator-inline-form__remember input {
+  width: 16px;
+  min-height: 16px;
+  height: 16px;
+  padding: 0;
+}
+
+.operator-inline-form__credential-state {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.operator-inline-form__credential-state.is-saved {
+  color: #047857;
+}
+
+.operator-inline-form__credential-state.is-disabled {
+  color: #9a3412;
+}
+
 .operator-inline-form__actions {
   display: flex;
   flex-wrap: wrap;

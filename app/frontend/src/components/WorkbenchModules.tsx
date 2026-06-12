@@ -45,15 +45,25 @@ type ConfigCenterProps = CommonProps & {
 type DxmLoginDraft = {
   username: string
   password: string
+  rememberCredential: boolean
+}
+
+type DxmCredentialState = {
+  available: boolean
+  loaded: boolean
+  saved: boolean
+  message: string
 }
 
 type GuideCenterProps = CommonProps & {
   configPreview: ConfigPreview | null
   runtimeStatus: RuntimeStatus | null
   dxmLoginDraft: DxmLoginDraft
+  dxmCredentialState: DxmCredentialState
   l3ApprovedBy: string
   busy: boolean
   onDxmLoginDraftChange: (draft: DxmLoginDraft) => void
+  onClearSavedDxmCredential: () => void
   onL3ApprovedByChange: (value: string) => void
   onRunL2Probe: () => void
   onOpenDxmLogin: () => void
@@ -121,7 +131,9 @@ type ExecutionConsoleProps = CommonProps & {
   runtimeLogQuery: string
   busy: boolean
   dxmLoginDraft: DxmLoginDraft
+  dxmCredentialState: DxmCredentialState
   onDxmLoginDraftChange: (draft: DxmLoginDraft) => void
+  onClearSavedDxmCredential: () => void
   onRuntimeLogSourceChange: (source: RuntimeLogSource) => void
   onRuntimeLogLevelChange: (level: 'all' | 'info' | 'warning' | 'error') => void
   onRuntimeLogQueryChange: (query: string) => void
@@ -236,9 +248,11 @@ export function GuideCenter({
   configPreview,
   runtimeStatus,
   dxmLoginDraft,
+  dxmCredentialState,
   l3ApprovedBy,
   busy,
   onDxmLoginDraftChange,
+  onClearSavedDxmCredential,
   onL3ApprovedByChange,
   onRunL2Probe,
   onOpenDxmLogin,
@@ -273,7 +287,7 @@ export function GuideCenter({
       id: 'browser-login',
       title: '打开真实 DXM 浏览器并确认登录',
       done: selectedTaskCompleted || Boolean(agentReady && dxmLoggedIn),
-      detail: dxmLoggedIn ? '已检测到 DXM 登录态。' : '需要打开真实店小秘登录页并完成登录；密码不保存，账号可能出现在本机运行态摘要中。',
+      detail: dxmLoggedIn ? '已检测到 DXM 登录态。' : '会打开可见的独立店小秘浏览器窗口，便于输入验证码、检查错误并手动调整；账号密码可保存到本机加密存储。',
       reason: dxmLoggedIn ? '' : `DXM 登录状态：${runtimeStatus?.dxmLogin?.status ?? '未知'}`,
       action: '打开登录页',
       onAction: onOpenDxmLogin,
@@ -431,8 +445,10 @@ export function GuideCenter({
           {nextGuideStep.id === 'browser-login' ? (
             <DxmLoginInlineForm
               draft={dxmLoginDraft}
+              credentialState={dxmCredentialState}
               busy={busy}
               onDraftChange={onDxmLoginDraftChange}
+              onClearSavedCredential={onClearSavedDxmCredential}
               onSubmit={onOpenDxmLogin}
               onContinue={onContinueDxmLogin}
             />
@@ -558,16 +574,20 @@ export function GuideCenter({
 
 function DxmLoginInlineForm({
   draft,
+  credentialState,
   busy,
   compact = false,
   onDraftChange,
+  onClearSavedCredential,
   onSubmit,
   onContinue,
 }: {
   draft: DxmLoginDraft
+  credentialState: DxmCredentialState
   busy: boolean
   compact?: boolean
   onDraftChange: (draft: DxmLoginDraft) => void
+  onClearSavedCredential: () => void
   onSubmit: () => void
   onContinue: () => void
 }) {
@@ -582,7 +602,7 @@ function DxmLoginInlineForm({
     <form className={`operator-inline-form ${compact ? 'operator-inline-form--compact' : ''}`} onSubmit={submit}>
       <div className="operator-inline-form__head">
         <strong>登录/人工处理真实浏览器</strong>
-        <span>这里只打开真实店小秘窗口，不启动保存。密码不保存；账号仅用于本机登录会话，可能出现在本机运行态或日志摘要中。</span>
+        <span>这里只打开真实店小秘窗口，不启动保存；窗口会显式可见，用户可输入验证码、查看错误并手动调整。</span>
       </div>
       <label>
         <span>店小秘账号</span>
@@ -607,12 +627,27 @@ function DxmLoginInlineForm({
           onChange={(event) => onDraftChange({ ...draft, password: event.target.value })}
         />
       </label>
+      <label className="operator-inline-form__remember">
+        <input
+          type="checkbox"
+          checked={draft.rememberCredential}
+          disabled={busy || !credentialState.available}
+          onChange={(event) => onDraftChange({ ...draft, rememberCredential: event.target.checked })}
+        />
+        <span>记住账号密码</span>
+      </label>
+      <small className={`operator-inline-form__credential-state ${credentialState.saved ? 'is-saved' : credentialState.available ? 'is-available' : 'is-disabled'}`}>
+        {credentialState.message}
+      </small>
       <div className="operator-inline-form__actions">
         <button className="button button--primary" type="submit" disabled={!canSubmit}>
           打开真实登录页
         </button>
         <button className="button button--quiet" type="button" onClick={onContinue} disabled={busy}>
           验证码已完成，检测登录态
+        </button>
+        <button className="button button--quiet" type="button" onClick={onClearSavedCredential} disabled={busy || !credentialState.loaded}>
+          清除已记住账号
         </button>
       </div>
     </form>
@@ -2522,7 +2557,9 @@ export function ExecutionConsole({
   runtimeLogQuery,
   busy,
   dxmLoginDraft,
+  dxmCredentialState,
   onDxmLoginDraftChange,
+  onClearSavedDxmCredential,
   onRuntimeLogSourceChange,
   onRuntimeLogLevelChange,
   onRuntimeLogQueryChange,
@@ -2606,8 +2643,10 @@ export function ExecutionConsole({
             diagnosticBlocked={diagnosticBlocked}
             diagnosticBlockReason={diagnosticBlockReason}
             dxmLoginDraft={dxmLoginDraft}
+            dxmCredentialState={dxmCredentialState}
             onStartAgentConsole={onStartAgentConsole}
             onDxmLoginDraftChange={onDxmLoginDraftChange}
+            onClearSavedDxmCredential={onClearSavedDxmCredential}
             onOpenDxmLogin={onOpenDxmLogin}
             onContinueDxmLogin={onContinueDxmLogin}
             onNavigateDxmTarget={onNavigateDxmTarget}
@@ -2636,8 +2675,10 @@ export function ExecutionConsole({
           diagnosticBlocked={diagnosticBlocked}
           diagnosticBlockReason={diagnosticBlockReason}
           dxmLoginDraft={dxmLoginDraft}
+          dxmCredentialState={dxmCredentialState}
           onStartAgentConsole={onStartAgentConsole}
           onDxmLoginDraftChange={onDxmLoginDraftChange}
+          onClearSavedDxmCredential={onClearSavedDxmCredential}
           onOpenDxmLogin={onOpenDxmLogin}
           onContinueDxmLogin={onContinueDxmLogin}
           onNavigateDxmTarget={onNavigateDxmTarget}
@@ -2738,8 +2779,10 @@ function AgentStagePanel({
   diagnosticBlocked,
   diagnosticBlockReason,
   dxmLoginDraft,
+  dxmCredentialState,
   onStartAgentConsole,
   onDxmLoginDraftChange,
+  onClearSavedDxmCredential,
   onOpenDxmLogin,
   onContinueDxmLogin,
   onNavigateDxmTarget,
@@ -2766,8 +2809,10 @@ function AgentStagePanel({
   diagnosticBlocked: boolean
   diagnosticBlockReason: string
   dxmLoginDraft: DxmLoginDraft
+  dxmCredentialState: DxmCredentialState
   onStartAgentConsole: () => void
   onDxmLoginDraftChange: (draft: DxmLoginDraft) => void
+  onClearSavedDxmCredential: () => void
   onOpenDxmLogin: () => void
   onContinueDxmLogin: () => void
   onNavigateDxmTarget: (target: 'data_acquisition' | 'draft_box') => void
@@ -2797,8 +2842,10 @@ function AgentStagePanel({
         diagnosticBlocked={diagnosticBlocked}
         diagnosticBlockReason={diagnosticBlockReason}
         dxmLoginDraft={dxmLoginDraft}
+        dxmCredentialState={dxmCredentialState}
         onStartAgentConsole={onStartAgentConsole}
         onDxmLoginDraftChange={onDxmLoginDraftChange}
+        onClearSavedDxmCredential={onClearSavedDxmCredential}
         onOpenDxmLogin={onOpenDxmLogin}
         onContinueDxmLogin={onContinueDxmLogin}
         onNavigateDxmTarget={onNavigateDxmTarget}
@@ -3309,8 +3356,10 @@ function AgentConsoleControls({
   diagnosticBlocked,
   diagnosticBlockReason,
   dxmLoginDraft,
+  dxmCredentialState,
   onStartAgentConsole,
   onDxmLoginDraftChange,
+  onClearSavedDxmCredential,
   onOpenDxmLogin,
   onContinueDxmLogin,
   onNavigateDxmTarget,
@@ -3330,8 +3379,10 @@ function AgentConsoleControls({
   diagnosticBlocked: boolean
   diagnosticBlockReason: string
   dxmLoginDraft: DxmLoginDraft
+  dxmCredentialState: DxmCredentialState
   onStartAgentConsole: () => void
   onDxmLoginDraftChange: (draft: DxmLoginDraft) => void
+  onClearSavedDxmCredential: () => void
   onOpenDxmLogin: () => void
   onContinueDxmLogin: () => void
   onNavigateDxmTarget: (target: 'data_acquisition' | 'draft_box') => void
@@ -3437,8 +3488,10 @@ function AgentConsoleControls({
         <div className="agent-console-controls__operator-grid">
           <DxmLoginInlineForm
             draft={dxmLoginDraft}
+            credentialState={dxmCredentialState}
             busy={busy}
             onDraftChange={onDxmLoginDraftChange}
+            onClearSavedCredential={onClearSavedDxmCredential}
             onSubmit={onOpenDxmLogin}
             onContinue={onContinueDxmLogin}
             compact

@@ -12,7 +12,7 @@ import {
   ReportCenter,
   TaskCenter,
 } from './components/WorkbenchModules'
-import type { AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
+import type { AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, DxmCredentialSaveResult, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
 import { composeWorkspace, demoTemplateSeeds, seedRows } from './workspace'
 
 const AGENT_CONSOLE_TARGET_URL = 'https://www.dianxiaomi.com/'
@@ -61,6 +61,13 @@ type WorkspaceNotice = {
   kind: 'loading' | 'degraded'
   title: string
   detail: string
+}
+
+type DxmCredentialState = {
+  available: boolean
+  loaded: boolean
+  saved: boolean
+  message: string
 }
 
 type ManualApprovalResponse = {
@@ -132,7 +139,13 @@ export default function App() {
   const [desktopRuntime, setDesktopRuntime] = useState<DesktopRuntimeInfo | null>(null)
   const [configPreview, setConfigPreview] = useState<ConfigPreview | null>(null)
   const [configPreviewLoading, setConfigPreviewLoading] = useState(false)
-  const [dxmLoginDraft, setDxmLoginDraft] = useState({ username: '', password: '' })
+  const [dxmLoginDraft, setDxmLoginDraft] = useState({ username: '', password: '', rememberCredential: true })
+  const [dxmCredentialState, setDxmCredentialState] = useState<DxmCredentialState>({
+    available: false,
+    loaded: false,
+    saved: false,
+    message: '桌面安全存储检测中',
+  })
   const [l3ApprovedBy, setL3ApprovedBy] = useState('')
   const [workspaceNotice, setWorkspaceNotice] = useState<WorkspaceNotice | null>({
     kind: 'loading',
@@ -382,6 +395,59 @@ export default function App() {
     }
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+    async function loadSavedCredential() {
+      const loader = window.dxmDesktop?.loadDxmCredential
+      if (!loader) {
+        setDxmCredentialState({
+          available: false,
+          loaded: false,
+          saved: false,
+          message: '当前不是桌面安全存储环境；不会保存密码。',
+        })
+        return
+      }
+      try {
+        const result = await loader()
+        if (cancelled) return
+        if (result.ok && result.credential) {
+          setDxmLoginDraft((current) => ({
+            ...current,
+            username: result.credential?.username ?? current.username,
+            password: result.credential?.password ?? current.password,
+            rememberCredential: true,
+          }))
+          setDxmCredentialState({
+            available: result.available,
+            loaded: true,
+            saved: true,
+            message: `已从本机加密存储载入账号${result.credential.updatedAt ? `，保存时间 ${new Date(result.credential.updatedAt).toLocaleString()}` : ''}。`,
+          })
+          return
+        }
+        setDxmCredentialState({
+          available: result.available,
+          loaded: false,
+          saved: false,
+          message: result.available ? '可记住账号密码；密码会写入本机加密存储。' : '本机加密存储不可用；不会保存密码。',
+        })
+      } catch (error) {
+        if (cancelled) return
+        setDxmCredentialState({
+          available: false,
+          loaded: false,
+          saved: false,
+          message: error instanceof Error ? error.message : '读取已保存账号失败',
+        })
+      }
+    }
+    void loadSavedCredential()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   async function createRealTask(request: RealTaskCreateRequest) {
     setBusy(true)
     setOperationError(null)
@@ -544,11 +610,29 @@ export default function App() {
     setBusy(true)
     setOperationError(null)
     try {
+      if (dxmLoginDraft.rememberCredential) {
+        const saver = window.dxmDesktop?.saveDxmCredential
+        if (saver) {
+          const saveResult = await saver({ username, password: dxmLoginDraft.password })
+          setDxmCredentialState(credentialStateFromSave(saveResult))
+        } else {
+          setDxmCredentialState({
+            available: false,
+            loaded: false,
+            saved: false,
+            message: '当前不是桌面安全存储环境；本次不会保存密码。',
+          })
+        }
+      } else {
+        await clearSavedDxmCredential(false)
+      }
       await postJson('/api/dxm/login/start', {
         username,
         password: dxmLoginDraft.password,
       })
-      setDxmLoginDraft((current) => ({ ...current, password: '' }))
+      if (!dxmLoginDraft.rememberCredential) {
+        setDxmLoginDraft((current) => ({ ...current, password: '' }))
+      }
       setActiveSection('console')
       await refreshRuntimeStatus()
       await refreshRuntimeLogs()
@@ -557,8 +641,50 @@ export default function App() {
       setOperationError(error instanceof Error ? error.message : '打开真实店小秘登录页失败')
       await refreshRuntimeStatus()
     } finally {
-      setDxmLoginDraft((current) => ({ ...current, password: '' }))
+      if (!dxmLoginDraft.rememberCredential) {
+        setDxmLoginDraft((current) => ({ ...current, password: '' }))
+      }
       setBusy(false)
+    }
+  }
+
+  function credentialStateFromSave(result: DxmCredentialSaveResult): DxmCredentialState {
+    if (result.ok) {
+      return {
+        available: result.available,
+        loaded: true,
+        saved: true,
+        message: `账号密码已保存到本机加密存储${result.updatedAt ? `，保存时间 ${new Date(result.updatedAt).toLocaleString()}` : ''}。`,
+      }
+    }
+    return {
+      available: result.available,
+      loaded: false,
+      saved: false,
+      message: result.error || '账号密码保存失败。',
+    }
+  }
+
+  async function clearSavedDxmCredential(clearDraft = true) {
+    const clearer = window.dxmDesktop?.clearDxmCredential
+    if (clearer) {
+      const result = await clearer()
+      setDxmCredentialState({
+        available: result.available,
+        loaded: false,
+        saved: false,
+        message: result.ok ? '已清除本机保存的店小秘账号密码。' : result.error || '清除已保存账号失败。',
+      })
+    } else {
+      setDxmCredentialState({
+        available: false,
+        loaded: false,
+        saved: false,
+        message: '当前不是桌面安全存储环境；没有可清除的本机密码。',
+      })
+    }
+    if (clearDraft) {
+      setDxmLoginDraft((current) => ({ ...current, password: '', rememberCredential: false }))
     }
   }
 
@@ -791,9 +917,11 @@ export default function App() {
             configPreview={configPreview}
             runtimeStatus={runtimeStatus}
             dxmLoginDraft={dxmLoginDraft}
+            dxmCredentialState={dxmCredentialState}
             l3ApprovedBy={l3ApprovedBy}
             busy={busy}
             onDxmLoginDraftChange={setDxmLoginDraft}
+            onClearSavedDxmCredential={() => { void clearSavedDxmCredential() }}
             onL3ApprovedByChange={setL3ApprovedBy}
             onRunL2Probe={runL2ReadonlyProbe}
             onOpenDxmLogin={openDxmLogin}
@@ -848,7 +976,9 @@ export default function App() {
             runtimeLogQuery={runtimeLogQuery}
             busy={busy}
             dxmLoginDraft={dxmLoginDraft}
+            dxmCredentialState={dxmCredentialState}
             onDxmLoginDraftChange={setDxmLoginDraft}
+            onClearSavedDxmCredential={() => { void clearSavedDxmCredential() }}
             onRuntimeLogSourceChange={setRuntimeLogSource}
             onRuntimeLogLevelChange={setRuntimeLogLevel}
             onRuntimeLogQueryChange={setRuntimeLogQuery}

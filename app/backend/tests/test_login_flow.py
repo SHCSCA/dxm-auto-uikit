@@ -164,6 +164,21 @@ def test_login_browser_headless_can_be_explicitly_requested(monkeypatch):
     assert flow._is_headless() is True
 
 
+def test_login_start_reports_visible_browser(monkeypatch, tmp_path):
+    flow = DxmLoginFlow(DummyLiveClient(), state_file=tmp_path / 'runtime-state.json')
+    monkeypatch.setattr(flow, '_open_login_page_and_fill', lambda username, password: {
+        'page_title': '店小秘官网登录页',
+        'page_url': 'https://www.dianxiaomi.com/',
+        'screenshot_url': '/artifacts/screenshots/dianxiaomi_login_start.png',
+        'browser_visible': True,
+    })
+
+    state = flow.start_login('demo-user', 'demo-pass')
+
+    assert state['stage'] == 'waiting_captcha'
+    assert state['browser_visible'] is True
+
+
 def test_draft_box_target_opens_status_zero_collection_list():
     assert WORKFLOW_TARGETS['draft_box']['url'].endswith('/web/smt/smtProductList/draft?status=0')
 
