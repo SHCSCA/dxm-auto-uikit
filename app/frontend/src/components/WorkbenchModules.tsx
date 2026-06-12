@@ -2703,6 +2703,7 @@ export function ExecutionConsole({
             browserFrame={browserFrame}
             agentConsole={agentConsole}
             agentConsoleError={agentConsoleError}
+            runtimeStatus={runtimeStatus}
             busy={busy}
             realSaveBlocked={realSaveBlocked}
             realSaveBlockReason={realSaveBlockReason}
@@ -2735,6 +2736,7 @@ export function ExecutionConsole({
           browserFrame={browserFrame}
           agentConsole={agentConsole}
           agentConsoleError={agentConsoleError}
+          runtimeStatus={runtimeStatus}
           busy={busy}
           realSaveBlocked={realSaveBlocked}
           realSaveBlockReason={realSaveBlockReason}
@@ -2843,6 +2845,7 @@ function AgentStagePanel({
   browserFrame,
   agentConsole,
   agentConsoleError,
+  runtimeStatus,
   busy,
   realSaveBlocked,
   realSaveBlockReason,
@@ -2873,6 +2876,7 @@ function AgentStagePanel({
   browserFrame: { url: string; evidencePath: string; source: string }
   agentConsole: AgentConsoleSession | null
   agentConsoleError: string | null
+  runtimeStatus: RuntimeStatus | null
   busy: boolean
   realSaveBlocked: boolean
   realSaveBlockReason: string
@@ -2905,6 +2909,7 @@ function AgentStagePanel({
       <AgentConsoleControls
         agentConsole={agentConsole}
         agentConsoleError={agentConsoleError}
+        runtimeStatus={runtimeStatus}
         selectedTask={selectedTask}
         busy={busy}
         realSaveBlocked={realSaveBlocked}
@@ -3021,6 +3026,8 @@ function RuntimeControlPanel({
   const runtimeOwnerText = runtimeControlOwnerText(runtimeStatus?.runtimeControl?.owner ?? 'direct', Boolean(runtimeStatus?.runtimeControl?.managedByDesktop))
   const runtimeControlDetail = runtimeStatus?.runtimeControl?.detail
     ?? '未读取到启动来源；请关闭并重新打开免安装版 exe，或使用 scripts/start-mvp.bat 启动后再重试。'
+  const l2ProbeResourceState = getL2ProbeResourceState(runtimeStatus)
+  const l2ProbeDisabled = busy || l2ProbeResourceState.blocked
   return (
     <div className="runtime-control-panel">
       <button
@@ -3050,11 +3057,13 @@ function RuntimeControlPanel({
       <button
         className="button button--quiet"
         type="button"
-        disabled={busy}
+        disabled={l2ProbeDisabled}
+        title={l2ProbeResourceState.title}
         onClick={() => onRuntimeControl('run_l2_readonly_probe')}
       >
         运行只读复验
       </button>
+      {l2ProbeResourceState.blocked && <small>{l2ProbeResourceState.detail}</small>}
       <details className="inline-disclosure">
         <summary>服务重启</summary>
         <div className="runtime-control-panel__restart">
@@ -3079,6 +3088,31 @@ function runtimeControlOwnerText(owner: string, managedByDesktop: boolean) {
   if (owner === 'desktop' || managedByDesktop) return 'DXM Agent Console 免安装版'
   if (owner === 'start_mvp') return 'start-mvp.bat'
   return '旧进程/直接 Python，关闭并重新打开免安装版 exe'
+}
+
+function getL2ProbeResourceState(runtimeStatus: RuntimeStatus | null) {
+  const dependencies = runtimeStatus?.dependencies ?? {}
+  const required = [
+    ['只读复验启动器', dependencies.l2_readonly_probe_runner],
+    ['只读复验脚本', dependencies.l2_readonly_probe_script],
+    ['只读 allowlist', dependencies.l2_readonly_probe_allowlist],
+  ] as const
+  const missing = required.filter(([, item]) => item?.status === 'missing')
+  if (!missing.length) {
+    return {
+      blocked: false,
+      title: '运行双目标真实只读复验；不会保存、不会发布。',
+      detail: '',
+    }
+  }
+  const detail = missing
+    .map(([label, item]) => `${label}: ${item?.path ?? '路径未知'}`)
+    .join('；')
+  return {
+    blocked: true,
+    title: `只读复验资源缺失：${detail}`,
+    detail: `只读复验资源缺失，请使用完整免安装包或新版 portable exe。${detail}`,
+  }
 }
 
 function RuntimeControlResultSummary({ result }: { result: RuntimeControlResponse | null }) {
@@ -3500,6 +3534,7 @@ function AgentBrowserFrame({
 function AgentConsoleControls({
   agentConsole,
   agentConsoleError,
+  runtimeStatus,
   selectedTask,
   busy,
   realSaveBlocked,
@@ -3523,6 +3558,7 @@ function AgentConsoleControls({
 }: {
   agentConsole: AgentConsoleSession | null
   agentConsoleError: string | null
+  runtimeStatus: RuntimeStatus | null
   selectedTask: Task | null
   busy: boolean
   realSaveBlocked: boolean
@@ -3580,6 +3616,8 @@ function AgentConsoleControls({
       : visible
         ? '可刷新画面、人工接管，或使用高级浏览器控制。'
         : '等待窗口显示；如长时间无响应，可关闭后重试。'
+  const l2ProbeResourceState = getL2ProbeResourceState(runtimeStatus)
+  const l2ProbeDisabled = busy || l2ProbeResourceState.blocked
   return (
     <div className="agent-console-controls">
       <div className="agent-console-controls__status">
@@ -3599,9 +3637,10 @@ function AgentConsoleControls({
         {!diagnosticBlocked && realSaveBlocked && !active && <small>{realSaveBlockReason}</small>}
         {diagnosticBlocked && !active && (
           <div className="agent-console-lifecycle__actions">
-            <button className="button button--secondary" type="button" disabled={busy} onClick={() => onRuntimeControl('run_l2_readonly_probe')}>
+            <button className="button button--secondary" type="button" disabled={l2ProbeDisabled} title={l2ProbeResourceState.title} onClick={() => onRuntimeControl('run_l2_readonly_probe')}>
               运行只读复验
             </button>
+            {l2ProbeResourceState.blocked && <small>{l2ProbeResourceState.detail}</small>}
           </div>
         )}
       </div>
@@ -3614,7 +3653,32 @@ function AgentConsoleControls({
           <b>3 人工放行后只保存</b>
         </div>
       </div>
+      <div className="agent-console-controls__primary-operator" aria-label="真实浏览器首步操作">
+        <div className="agent-console-controls__primary-copy">
+          <strong>首步：打开真实店小秘登录页</strong>
+          <span>主操作区可直接登录、检测验证码和运行只读复验；保存和发布入口仍保持关闭。</span>
+        </div>
+        <DxmLoginInlineForm
+          draft={dxmLoginDraft}
+          credentialState={dxmCredentialState}
+          busy={busy}
+          onDraftChange={onDxmLoginDraftChange}
+          onClearSavedCredential={onClearSavedDxmCredential}
+          onSubmit={onOpenDxmLogin}
+          onContinue={onContinueDxmLogin}
+          compact
+        />
+      </div>
       <div className="agent-console-controls__actions">
+        <button
+          className="button button--secondary"
+          type="button"
+          disabled={l2ProbeDisabled}
+          title={l2ProbeResourceState.title}
+          onClick={() => onRuntimeControl('run_l2_readonly_probe')}
+        >
+          运行只读复验
+        </button>
         <button
           className="button button--quiet"
           type="button"
@@ -3637,16 +3701,6 @@ function AgentConsoleControls({
       <details className="agent-console-controls__advanced agent-console-controls__operator-drawer inline-disclosure">
         <summary>真实浏览器操作细节</summary>
         <div className="agent-console-controls__operator-grid">
-          <DxmLoginInlineForm
-            draft={dxmLoginDraft}
-            credentialState={dxmCredentialState}
-            busy={busy}
-            onDraftChange={onDxmLoginDraftChange}
-            onClearSavedCredential={onClearSavedDxmCredential}
-            onSubmit={onOpenDxmLogin}
-            onContinue={onContinueDxmLogin}
-            compact
-          />
           <details className="agent-console-controls__advanced inline-disclosure">
             <summary>真实浏览器会话生命周期</summary>
             <div className="agent-console-controls__session">

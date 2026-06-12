@@ -5,15 +5,20 @@ param(
 $ErrorActionPreference = 'Stop'
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $ExePath = Join-Path $RepoRoot 'outputs\desktop-build\win-unpacked\DXM Agent Console.exe'
+$PortableExePath = Join-Path $RepoRoot 'outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe'
 $LogPath = Join-Path $env:APPDATA 'DXM Agent Console\data\desktop-main.log'
 $LegacyLogPath = Join-Path $env:APPDATA 'dxm-agent-desktop\data\desktop-main.log'
 $CapturePath = Join-Path $env:TEMP 'dxm-agent-console-packaged-smoke.png'
 
 Write-Host 'DXM Agent Console packaged smoke'
 Write-Host "Exe: $ExePath"
+Write-Host "Portable exe: $PortableExePath"
 
 if (!(Test-Path $ExePath)) {
   throw "Packaged exe is missing: $ExePath"
+}
+if (!(Test-Path $PortableExePath)) {
+  throw "Portable exe is missing: $PortableExePath"
 }
 
 $RequiredResources = @(

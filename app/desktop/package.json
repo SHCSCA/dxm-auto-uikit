@@ -8,6 +8,7 @@
     "start": "electron .",
     "build:frontend": "npm --prefix ../frontend run build",
     "build": "npm run build:frontend && electron-builder --dir --config electron-builder.yml",
+    "build:portable": "npm run build:frontend && electron-builder --win portable --config electron-builder.yml",
     "build:installer": "npm run build:frontend && electron-builder --config electron-builder.yml"
   },
   "devDependencies": {

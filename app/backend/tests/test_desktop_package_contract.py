@@ -27,6 +27,7 @@ def test_desktop_package_declares_electron_entrypoints_and_build_scripts():
     assert package["scripts"]["dev"] == "electron ."
     assert "npm --prefix ../frontend run build" in package["scripts"]["build:frontend"]
     assert "electron-builder --dir --config electron-builder.yml" in package["scripts"]["build"]
+    assert "electron-builder --win portable --config electron-builder.yml" in package["scripts"]["build:portable"]
     assert "electron-builder --config electron-builder.yml" in package["scripts"]["build:installer"]
     assert "electron" in package["devDependencies"]
     assert "electron-builder" in package["devDependencies"]
@@ -94,8 +95,10 @@ def test_desktop_builder_packages_windows_exe_without_console_windows():
 
     assert "appId: com.dxm.agent.console" in source
     assert "productName: DXM Agent Console" in source
+    assert "target: portable" in source
     assert "target: nsis" in source
     assert "artifactName: DXM-Agent-Console-${version}.${ext}" in source
+    assert "DXM-Agent-Console-Portable-${version}.${ext}" in source
     assert "app/frontend/dist/**" in source
     assert "app/backend/src/**" in source
     assert "../backend/.venv" in source
@@ -120,6 +123,7 @@ def test_verify_desktop_package_smoke_script_checks_packaged_exe_logs():
 
     assert "DXM Agent Console packaged smoke" in source
     assert "outputs\\desktop-build\\win-unpacked\\DXM Agent Console.exe" in source
+    assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in source
     assert "desktop-main.log" in source
     assert "Loaded frontend" in source
     assert "Starting backend" in source
@@ -138,8 +142,10 @@ def test_user_docs_present_desktop_exe_as_primary_delivery_entry():
 
     for source in (readme, user_guide):
         assert "DXM Agent Console 桌面版" in source
+        assert "C:\\Users\\wz\\Desktop\\DXM-Agent-Console-Portable-latest.exe" in source
+        assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in source
         assert "outputs\\desktop-build\\win-unpacked\\DXM Agent Console.exe" in source
-        assert "当前默认交付使用免安装运行版" in source
+        assert "当前默认交付使用 portable 单文件免安装版" in source
         assert "scripts\\start-desktop.bat" in source
         assert "scripts\\verify-desktop-package.ps1" in source
         assert "AppData\\Roaming\\DXM Agent Console\\data\\desktop-main.log" in source

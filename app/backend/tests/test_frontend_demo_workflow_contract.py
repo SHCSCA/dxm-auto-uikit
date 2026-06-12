@@ -723,6 +723,10 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "summary>执行步骤明细</summary>" not in console_section
     assert "summary>任务执行日志</summary>" not in console_section
     assert "登录/人工处理真实浏览器" in workbench_source
+    assert "agent-console-controls__primary-operator" in workbench_source
+    assert "DxmLoginInlineForm" in workbench_source
+    assert "首步：打开真实店小秘登录页" in workbench_source
+    assert "主操作区可直接登录、检测验证码和运行只读复验" in workbench_source
     assert "验证码已完成，检测登录态" in workbench_source
     assert "进入采集箱" in workbench_source
     assert "实时操控独立真实浏览器窗口" in workbench_source
@@ -761,12 +765,18 @@ def test_execution_console_collapses_operator_forms_inside_real_browser_details(
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     controls_section = workbench_source[workbench_source.index("function AgentConsoleControls"):workbench_source.index("function BrowserControlPad")]
     drawer_section = controls_section[controls_section.index("<summary>真实浏览器操作细节</summary>"):controls_section.index("{agentConsoleError")]
+    primary_section = controls_section[
+        controls_section.index("agent-console-controls__primary-operator"):
+        controls_section.index("<details className=\"agent-console-controls__advanced agent-console-controls__operator-drawer")
+    ]
 
-    assert "DxmLoginInlineForm" in drawer_section
+    assert "DxmLoginInlineForm" in primary_section
+    assert "运行只读复验" in primary_section
+    assert "DxmLoginInlineForm" not in drawer_section
     assert "<summary>真实浏览器会话生命周期</summary>" in drawer_section
     assert "<summary>高级浏览器控制</summary>" in drawer_section
     assert "<summary>技术详情</summary>" in drawer_section
-    assert drawer_section.index("DxmLoginInlineForm") < drawer_section.index("<summary>真实浏览器会话生命周期</summary>")
+    assert primary_section.index("DxmLoginInlineForm") < primary_section.index("agent-console-controls__actions")
     assert controls_section.index("agent-console-controls__actions") < controls_section.index("<summary>真实浏览器操作细节</summary>")
 
 
@@ -927,7 +937,11 @@ def test_execution_console_exposes_runtime_control_and_agent_action_timeline():
     assert "runtimeStatus={runtimeStatus}" in app_source
     assert "已启动只读复验，请在执行控制台查看启动器日志" in app_source
     assert ".operation-alert--ok" in styles_source
-    assert "runtimeControl?: { managedByLauncher: boolean; restartAvailable: boolean;" in types_source
+    assert "runtimeControl?: {" in types_source
+    assert "owner?: 'start_mvp' | 'desktop' | 'direct' | string" in types_source
+    assert "managedByLauncher: boolean" in types_source
+    assert "managedByDesktop?: boolean" in types_source
+    assert "restartAvailable: boolean" in types_source
     assert "onRuntimeControl={onRuntimeControl}" in workbench_source
     assert "onRuntimeControl('run_l2_readonly_probe')" in workbench_source
     assert "agent-console-lifecycle__actions" in workbench_source
@@ -1724,6 +1738,11 @@ def test_frontend_surfaces_runtime_status_and_log_filters():
     assert "RuntimeLogLine" in workbench_source
     assert "run_l2_readonly_probe" in (REPO_ROOT / "app" / "frontend" / "src" / "types.ts").read_text(encoding="utf-8")
     assert "onRuntimeControl('run_l2_readonly_probe')" in workbench_source
+    assert "getL2ProbeResourceState(runtimeStatus)" in workbench_source
+    assert "dependencies.l2_readonly_probe_runner" in workbench_source
+    assert "dependencies.l2_readonly_probe_script" in workbench_source
+    assert "dependencies.l2_readonly_probe_allowlist" in workbench_source
+    assert "只读复验资源缺失，请使用完整免安装包或新版 portable exe" in workbench_source
     assert "task: '任务'" in workbench_source
     assert "agent: '浏览器 Agent'" in workbench_source
     assert "级别" in workbench_source

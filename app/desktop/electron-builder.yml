@@ -21,10 +21,18 @@ extraResources:
   - from: ../../config
     to: config
 win:
-  target: nsis
+  target:
+    - target: portable
+      arch:
+        - x64
+    - target: nsis
+      arch:
+        - x64
   artifactName: DXM-Agent-Console-${version}.${ext}
   signAndEditExecutable: false
   signDlls: false
+portable:
+  artifactName: DXM-Agent-Console-Portable-${version}.${ext}
 nsis:
   oneClick: false
   perMachine: false

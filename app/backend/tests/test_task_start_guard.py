@@ -754,6 +754,37 @@ def test_runtime_status_reports_desktop_exe_as_desktop_managed(tmp_path, monkeyp
     assert "scripts/start-mvp.bat" not in runtime_control["detail"]
 
 
+def test_runtime_status_reports_l2_probe_resource_readiness_from_resource_root(tmp_path, monkeypatch):
+    import src.main as main
+
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    missing_root = tmp_path / "missing-repo-root"
+    resource_root = tmp_path / "desktop-resources"
+    runner_script = resource_root / "tools" / "probes" / "l2_readonly_probe_runner.py"
+    probe_script = resource_root / "tools" / "probes" / "l2_readonly_probe.py"
+    allowlist_file = resource_root / "config" / "l2_readonly_allowlist.json"
+    runner_script.parent.mkdir(parents=True)
+    allowlist_file.parent.mkdir(parents=True)
+    runner_script.write_text("print('runner')", encoding="utf-8")
+    probe_script.write_text("print('probe')", encoding="utf-8")
+    allowlist_file.write_text('{"schema":"dxm_l2_readonly_allowlist.v1"}', encoding="utf-8")
+    monkeypatch.setenv("DXM_RESOURCE_ROOT", str(resource_root))
+    monkeypatch.setattr(main, "L2_READONLY_PROBE_RUNNER", missing_root / "tools" / "probes" / "l2_readonly_probe_runner.py")
+    monkeypatch.setattr(main, "L2_READONLY_PROBE_SCRIPT", missing_root / "tools" / "probes" / "l2_readonly_probe.py")
+    monkeypatch.setattr(main, "L2_READONLY_PROBE_ALLOWLIST_FILE", missing_root / "config" / "l2_readonly_allowlist.json")
+
+    response = client.get("/api/runtime/status")
+
+    assert response.status_code == 200
+    dependencies = response.json()["dependencies"]
+    assert dependencies["l2_readonly_probe_runner"]["status"] == "ok"
+    assert dependencies["l2_readonly_probe_runner"]["path"] == str(runner_script)
+    assert dependencies["l2_readonly_probe_script"]["status"] == "ok"
+    assert dependencies["l2_readonly_probe_script"]["path"] == str(probe_script)
+    assert dependencies["l2_readonly_probe_allowlist"]["status"] == "ok"
+    assert dependencies["l2_readonly_probe_allowlist"]["path"] == str(allowlist_file)
+
+
 def test_runtime_control_starts_l2_readonly_probe_runner_without_real_write(tmp_path, monkeypatch):
     import src.main as main
 

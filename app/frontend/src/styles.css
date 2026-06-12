@@ -4057,6 +4057,40 @@ tr:last-child td {
   line-height: 1.2;
 }
 
+.agent-console-controls__primary-operator {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid #bfddce;
+  border-radius: 7px;
+  background: #f7fcf9;
+}
+
+.agent-console-controls__primary-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.agent-console-controls__primary-copy strong {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.agent-console-controls__primary-copy span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.agent-console-controls__primary-operator > .operator-inline-form {
+  margin-top: 0;
+  background: #fff;
+}
+
 .agent-console-controls__actions {
   grid-column: 1 / -1;
   justify-content: flex-start;
@@ -4088,14 +4122,10 @@ tr:last-child td {
 .agent-console-controls__operator-grid {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   align-items: start;
   padding-top: 10px;
-}
-
-.agent-console-controls__operator-grid > .operator-inline-form {
-  grid-row: span 3;
 }
 
 .agent-console-controls__operator-grid > .inline-disclosure {

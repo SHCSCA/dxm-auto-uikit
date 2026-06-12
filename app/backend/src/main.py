@@ -558,6 +558,7 @@ def runtime_status(frontend_url: str | None = None):
                 'status': 'ok' if shutil.which('node') else 'missing',
                 'path': shutil.which('node'),
             },
+            **_l2_readonly_probe_dependency_status(),
         },
         'runtimeControl': {
             'owner': _runtime_control_owner(),
@@ -1063,6 +1064,24 @@ def _l2_readonly_probe_paths() -> dict[str, Path]:
         'cookie_file': L2_READONLY_PROBE_COOKIE_FILE,
         'output_dir': L2_READONLY_PROBE_OUTPUT_DIR,
         'lock_file': L2_READONLY_PROBE_LOCK_FILE,
+    }
+
+
+def _l2_readonly_probe_dependency_status() -> dict[str, dict[str, str]]:
+    probe_paths = _l2_readonly_probe_paths()
+    return {
+        'l2_readonly_probe_runner': {
+            'status': 'ok' if probe_paths['runner'].exists() else 'missing',
+            'path': str(probe_paths['runner']),
+        },
+        'l2_readonly_probe_script': {
+            'status': 'ok' if probe_paths['script'].exists() else 'missing',
+            'path': str(probe_paths['script']),
+        },
+        'l2_readonly_probe_allowlist': {
+            'status': 'ok' if probe_paths['allowlist'].exists() else 'missing',
+            'path': str(probe_paths['allowlist']),
+        },
     }
 
 
