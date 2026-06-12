@@ -1150,13 +1150,36 @@ def _l2_readonly_probe_dependency_status() -> dict[str, dict[str, Any]]:
     }
 
 
+def _raise_l2_probe_dependency_error(missing: list[tuple[str, Path]]) -> None:
+    detail = '; '.join(f'{label}: {path}' for label, path in missing)
+    checked = '; '.join(
+        str(path)
+        for default_path, relative_path in (
+            (L2_READONLY_PROBE_RUNNER, 'tools/probes/l2_readonly_probe_runner.py'),
+            (L2_READONLY_PROBE_SCRIPT, 'tools/probes/l2_readonly_probe.py'),
+            (L2_READONLY_PROBE_ALLOWLIST_FILE, 'config/l2_readonly_allowlist.json'),
+        )
+        for path in _resource_path_candidates(default_path, relative_path)
+    )
+    raise HTTPException(
+        status_code=424,
+        detail=f'L2 readonly probe resources are missing: {detail}. Checked: {checked}',
+    )
+
+
 def _start_l2_readonly_probe(task_id: int | None) -> dict:
     probe_paths = _l2_readonly_probe_paths()
-    if not probe_paths['runner'].exists():
-        searched = ', '.join(str(root / 'tools/probes/l2_readonly_probe_runner.py') for root in _resource_root_candidates())
-        raise HTTPException(status_code=500, detail=f'L2 readonly probe runner is missing. Searched: {searched}')
-    if not probe_paths['script'].exists():
-        raise HTTPException(status_code=500, detail=f'L2 readonly probe script is missing: {probe_paths["script"]}')
+    missing = [
+        (label, probe_paths[key])
+        for key, label in (
+            ('runner', 'runner'),
+            ('script', 'script'),
+            ('allowlist', 'allowlist'),
+        )
+        if not probe_paths[key].exists()
+    ]
+    if missing:
+        _raise_l2_probe_dependency_error(missing)
     run_id = 'l2-real-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ') + '-' + uuid.uuid4().hex[:8]
     _acquire_l2_probe_lock(run_id=run_id, task_id=task_id)
     log_path = RUNTIME_LOG_SOURCES.get('launcher') or (DATA_DIR / 'start-mvp.log')
@@ -1194,7 +1217,21 @@ def _start_l2_readonly_probe(task_id: int | None) -> dict:
     except OSError as exc:
         _release_l2_probe_lock(run_id)
         raise HTTPException(status_code=500, detail=f'Could not start L2 readonly probe: {exc}') from exc
-    _write_l2_probe_lock(run_id=run_id, task_id=task_id, pid=process.pid)
+    try:
+        _write_l2_probe_lock(run_id=run_id, task_id=task_id, pid=process.pid)
+    except OSError as exc:
+        try:
+            process.terminate()
+            process.wait(timeout=5)
+        except Exception:
+            kill = getattr(process, 'kill', None)
+            if callable(kill):
+                try:
+                    kill()
+                except Exception:
+                    pass
+        _release_l2_probe_lock(run_id)
+        raise HTTPException(status_code=500, detail=f'Could not record L2 readonly probe lock: {exc}') from exc
     _append_runtime_control_log(
         f"started L2 readonly dual-target probe run_id={run_id} pid={process.pid} task={task_id or 'none'}"
     )

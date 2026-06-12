@@ -4287,15 +4287,17 @@ function AgentConsoleControls({
         />
       </div>
       <div className="agent-console-controls__actions">
-        <button
-          className="button button--secondary"
-          type="button"
-          disabled={l2ProbeDisabled}
-          title={l2ProbeResourceState.title}
-          onClick={() => onRuntimeControl('run_l2_readonly_probe')}
-        >
-          {READONLY_PRECHECK_CTA}
-        </button>
+        {primaryPath.code !== 'l2' && (
+          <button
+            className="button button--secondary"
+            type="button"
+            disabled={l2ProbeDisabled}
+            title={l2ProbeResourceState.title}
+            onClick={() => onRuntimeControl('run_l2_readonly_probe')}
+          >
+            {READONLY_PRECHECK_CTA}
+          </button>
+        )}
         <button
           className="button button--quiet"
           type="button"
@@ -4312,7 +4314,13 @@ function AgentConsoleControls({
           disabled={busy || !selectedTask || browserStartBlocked || active || launching}
           title={active ? '当前 Agent 执行浏览器会话正在运行。' : browserStartBlocked ? browserStartBlockReason : realSaveBlocked ? realSaveBlockReason : '打开执行浏览器（不保存）；保存前仍需人工确认'}
         >
-          {launching ? 'Agent 执行浏览器启动中' : active ? 'Agent 执行浏览器已打开' : '打开执行浏览器（不保存）'}
+          {launching
+            ? 'Agent 执行浏览器启动中'
+            : active
+              ? 'Agent 执行浏览器已打开'
+              : primaryPath.code === 'l3'
+                ? '人工确认后打开执行浏览器'
+                : '打开执行浏览器（不保存）'}
         </button>
       </div>
       <details className="agent-console-controls__advanced agent-console-controls__operator-drawer inline-disclosure">

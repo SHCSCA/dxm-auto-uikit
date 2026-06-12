@@ -24,10 +24,10 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
     id: 'execute',
     label: '执行',
     short: '2',
-    summary: '任务与真实浏览器',
+    summary: '任务与执行控制台',
     items: [
       { id: 'tasks', label: '任务', short: '任', hint: '选择商品与批准' },
-      { id: 'console', label: '真实浏览器', short: '控', hint: '登录和执行' },
+      { id: 'console', label: '执行控制台', short: '控', hint: '登录、预检、真实浏览器' },
     ],
   },
   {
@@ -57,7 +57,7 @@ const sectionLabels: Record<WorkbenchSection, string> = {
   dashboard: '状态',
   config: '配置模板',
   tasks: '任务',
-  console: '真实浏览器',
+  console: '执行控制台',
   evidence: '证据',
   exceptions: '问题处理',
   reports: '结果报告',
@@ -99,7 +99,7 @@ export function AppShell({
             <div>
               <strong>DXM Agent</strong>
               <span>只保存自动化</span>
-              <span className="sr-only">开始 / 配置 / 任务 / 浏览器 / 结果</span>
+              <span className="sr-only">开始 / 配置 / 任务 / 控制台 / 结果</span>
             </div>
           )}
           <button className="icon-button" type="button" onClick={onToggleSidebar} aria-label="切换侧边栏">

@@ -2350,6 +2350,8 @@ def test_frontend_humanizes_l2_runner_missing_error():
     app_source = APP_TSX.read_text(encoding="utf-8")
 
     assert "function humanOperationError" in app_source
+    assert "L2 readonly probe resources are missing" in app_source
+    assert "只读页面检查资源缺失，请关闭旧进程并重新打开完整免安装目录版。" in app_source
     assert "L2 readonly probe runner is missing" in app_source
     assert "只读页面检查启动器缺失，请关闭旧进程并重新打开完整免安装目录版。" in app_source
     assert "function searchedPathHint(message: string)" in app_source
@@ -2500,9 +2502,9 @@ def test_sidebar_copy_names_save_only_agent_flow_without_ambiguous_browser_wordi
     shell = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
 
     assert "只保存自动化" in shell
-    assert "开始 / 配置 / 任务 / 浏览器 / 结果" in shell
-    assert "任务与真实浏览器" in shell
-    assert "{ id: 'console', label: '真实浏览器', short: '控', hint: '登录和执行' }" in shell
+    assert "开始 / 配置 / 任务 / 控制台 / 结果" in shell
+    assert "任务与执行控制台" in shell
+    assert "{ id: 'console', label: '执行控制台', short: '控', hint: '登录、预检、真实浏览器' }" in shell
     assert "真实店小秘操作在登录浏览器和执行浏览器中完成" in shell
 
     assert "真实浏览器自动化" not in shell
@@ -2510,11 +2512,20 @@ def test_sidebar_copy_names_save_only_agent_flow_without_ambiguous_browser_wordi
     assert "Agent 控制台与真实浏览器" not in shell
     assert "hint: '真实浏览器'" not in shell
     assert "单商品只保存 Agent" not in shell
-    assert "执行控制台" not in shell
     assert "证据中心" not in shell
     assert "报告中心" not in shell
     assert "异常池" not in shell
     assert "系统总览" not in shell
+
+
+def test_agent_console_l2_state_has_single_precheck_cta_before_advanced_details():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    controls = source[source.index("function AgentConsoleControls"):source.index("function L2RunnerStatePanel")]
+    primary_actions = controls[controls.index('<div className="agent-console-controls__actions">'):controls.index('<details className="agent-console-controls__advanced')]
+
+    assert "{primaryPath.code !== 'l2' && (" in primary_actions
+    assert primary_actions.count("{READONLY_PRECHECK_CTA}") == 1
+    assert "人工确认后打开执行浏览器" in controls
 
 
 def test_mock_workspace_uses_dry_run_demo_language_not_real_single_save():

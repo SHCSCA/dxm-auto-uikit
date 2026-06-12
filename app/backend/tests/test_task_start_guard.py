@@ -1108,6 +1108,95 @@ def test_runtime_control_resolves_l2_runner_from_desktop_resource_root(tmp_path,
     assert str(allowlist_file) in command
 
 
+def test_runtime_control_rejects_l2_probe_when_allowlist_resource_missing(tmp_path, monkeypatch):
+    import src.main as main
+
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo, mode="single_save")
+    runner_script = tmp_path / "l2_readonly_probe_runner.py"
+    probe_script = tmp_path / "l2_readonly_probe.py"
+    missing_allowlist_file = tmp_path / "missing" / "l2_readonly_allowlist.json"
+    empty_resource_root = tmp_path / "empty-resource-root"
+    lock_file = tmp_path / "runner.lock"
+    runner_script.write_text("print('runner')", encoding="utf-8")
+    probe_script.write_text("print('probe')", encoding="utf-8")
+    empty_resource_root.mkdir()
+    monkeypatch.setattr(main, "L2_READONLY_PROBE_RUNNER", runner_script)
+    monkeypatch.setattr(main, "L2_READONLY_PROBE_SCRIPT", probe_script)
+    monkeypatch.setattr(main, "L2_READONLY_PROBE_ALLOWLIST_FILE", missing_allowlist_file)
+    monkeypatch.setattr(main, "L2_READONLY_PROBE_LOCK_FILE", lock_file)
+    monkeypatch.setattr(main, "_resource_root_candidates", lambda: [empty_resource_root])
+
+    popen_calls = []
+
+    def fake_popen(command, **kwargs):
+        popen_calls.append({"command": command, "kwargs": kwargs})
+        raise AssertionError("readonly probe runner must not start without allowlist")
+
+    monkeypatch.setattr(main.subprocess, "Popen", fake_popen)
+
+    response = client.post("/api/runtime/control", json={"action": "run_l2_readonly_probe", "task_id": task["id"]})
+
+    assert response.status_code == 424
+    detail = response.json()["detail"]
+    assert "L2 readonly probe resources are missing" in detail
+    assert "allowlist" in detail
+    assert str(missing_allowlist_file) in detail
+    assert popen_calls == []
+    assert not lock_file.exists()
+
+
+def test_runtime_control_stops_l2_probe_process_when_pid_lock_write_fails(tmp_path, monkeypatch):
+    import src.main as main
+
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo, mode="single_save")
+    launcher_log = tmp_path / "start-mvp.log"
+    runner_script = tmp_path / "l2_readonly_probe_runner.py"
+    probe_script = tmp_path / "l2_readonly_probe.py"
+    allowlist_file = tmp_path / "l2_readonly_allowlist.json"
+    lock_file = tmp_path / "runner.lock"
+    runner_script.write_text("print('runner')", encoding="utf-8")
+    probe_script.write_text("print('probe')", encoding="utf-8")
+    allowlist_file.write_text('{"schema":"dxm_l2_readonly_allowlist.v1"}', encoding="utf-8")
+    monkeypatch.setattr(main, "RUNTIME_LOG_SOURCES", {"launcher": launcher_log})
+    monkeypatch.setattr(main, "L2_READONLY_PROBE_RUNNER", runner_script)
+    monkeypatch.setattr(main, "L2_READONLY_PROBE_SCRIPT", probe_script)
+    monkeypatch.setattr(main, "L2_READONLY_PROBE_ALLOWLIST_FILE", allowlist_file)
+    monkeypatch.setattr(main, "L2_READONLY_PROBE_LOCK_FILE", lock_file)
+
+    class FakeProcess:
+        pid = 2468
+
+        def __init__(self):
+            self.terminated = False
+            self.waited = False
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            self.waited = True
+            return 0
+
+    fake_process = FakeProcess()
+    monkeypatch.setattr(main.subprocess, "Popen", lambda *args, **kwargs: fake_process)
+
+    def fail_write_lock(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(main, "_write_l2_probe_lock", fail_write_lock)
+
+    response = client.post("/api/runtime/control", json={"action": "run_l2_readonly_probe", "task_id": task["id"]})
+
+    assert response.status_code == 500
+    assert "Could not record L2 readonly probe lock" in response.json()["detail"]
+    assert "disk full" in response.json()["detail"]
+    assert fake_process.terminated is True
+    assert fake_process.waited is True
+    assert not lock_file.exists()
+
+
 def test_runtime_control_rejects_parallel_l2_readonly_probe(tmp_path, monkeypatch):
     import src.main as main
 

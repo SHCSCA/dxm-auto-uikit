@@ -1211,6 +1211,9 @@ function runtimeControlSuccessMessage(action: RuntimeControlAction) {
 }
 
 function humanOperationError(message: string) {
+  if (message.includes('L2 readonly probe resources are missing')) {
+    return `只读页面检查资源缺失，请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${checkedPathHint(message)}`
+  }
   if (message.includes('L2 readonly probe runner is missing')) {
     return `只读页面检查启动器缺失，请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
   }
@@ -1267,6 +1270,19 @@ function searchedPathHint(message: string) {
     .map((item) => item.trim())
     .filter(Boolean)
     .slice(0, 3)
+  return paths.length ? ` 已检查：${paths.join('；')}` : ''
+}
+
+function checkedPathHint(message: string) {
+  const marker = 'Checked:'
+  const index = message.indexOf(marker)
+  if (index < 0) return ''
+  const paths = message
+    .slice(index + marker.length)
+    .split(';')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 4)
   return paths.length ? ` 已检查：${paths.join('；')}` : ''
 }
 
