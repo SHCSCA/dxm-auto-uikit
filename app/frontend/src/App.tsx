@@ -959,7 +959,7 @@ export default function App() {
   const content = (() => {
     switch (activeSection) {
       case 'config':
-        return <ConfigCenter workspace={workspace} selectedTask={selectedTask} configPreview={configPreview} configPreviewLoading={configPreviewLoading} onConfigSaved={async () => { await refreshWorkspace(); await refreshConfigPreview() }} onRefreshConfigPreview={async () => { await refreshConfigPreview(); await refreshWorkspace() }} />
+        return <ConfigCenter workspace={workspace} selectedTask={selectedTask} configPreview={configPreview} configPreviewLoading={configPreviewLoading} onConfigSaved={async () => { await refreshWorkspace(); await refreshConfigPreview() }} onRefreshConfigPreview={async () => { await refreshConfigPreview(); await refreshWorkspace() }} onShowTasks={() => setActiveSection('tasks')} />
       case 'guide':
         return (
           <GuideCenter

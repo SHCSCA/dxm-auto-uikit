@@ -41,6 +41,7 @@ type ConfigCenterProps = CommonProps & {
   configPreviewLoading: boolean
   onConfigSaved: () => void | Promise<void>
   onRefreshConfigPreview: () => void | Promise<void>
+  onShowTasks: () => void
 }
 
 type DxmLoginDraft = {
@@ -1474,7 +1475,7 @@ function hasConfigDraftChanged(current: Record<string, string> | undefined, base
   return false
 }
 
-export function ConfigCenter({ workspace, selectedTask, configPreview, configPreviewLoading, onConfigSaved, onRefreshConfigPreview }: ConfigCenterProps) {
+export function ConfigCenter({ workspace, selectedTask, configPreview, configPreviewLoading, onConfigSaved, onRefreshConfigPreview, onShowTasks }: ConfigCenterProps) {
   const product = findSelectedTaskProduct(workspace.products, selectedTask)
   const currentTemplateBinding = useMemo(
     () => buildCurrentTemplateBinding(workspace, selectedTask, product),
@@ -1740,6 +1741,17 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
       }
       const savedAt = new Date().toLocaleString('zh-CN', { hour12: false })
       setConfigDraft(nextDraft)
+      setSectionSaveState(() => Object.fromEntries(
+        editableConfigSections.map((section) => [
+          section.code,
+          {
+            status: 'saved',
+            scope: '店铺模板',
+            savedAt,
+            message: `默认测试模板已保存到店铺模板；保存时间 ${savedAt}`,
+          },
+        ]),
+      ) as Record<ConfigSectionCode, { status: 'clean' | 'dirty' | 'saving' | 'saved' | 'error'; scope?: string; savedAt?: string; message?: string }>)
       setDefaultTemplatePackState(`默认测试模板已保存；保存时间 ${savedAt}`)
       setConfigMessage(`默认测试模板已写入当前店铺/类目范围：${currentTemplateScopeLabel}。使用之前测试通过的数据配置，可继续按分区微调。`)
       await onConfigSaved()
@@ -1785,18 +1797,26 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
         </div>
         <div className="config-precheck-action" aria-label="配置预检操作">
           <div>
-            <strong>启动预检</strong>
+            <strong>检查本次任务配置</strong>
             <span>读取当前任务、店铺、商品和模板，判断执行器会填写哪些值；不会操作店小秘。</span>
             {!selectedTask && <small>先选择任务后才能预检本次任务并保存为任务覆盖。</small>}
           </div>
-          <button
-            className="button button--secondary"
-            type="button"
-            onClick={() => { void runConfigPrecheck() }}
-            disabled={configPreviewLoading || !selectedTask}
-          >
-            {configPreviewLoading ? '正在预检...' : configPreview ? '刷新启动预检' : '运行启动预检'}
-          </button>
+          <div className="config-precheck-action__buttons">
+            {!selectedTask && (
+              <button className="button button--primary" type="button" onClick={onShowTasks}>
+                去任务中心选择任务
+              </button>
+            )}
+            <button
+              className="button button--secondary"
+              type="button"
+              onClick={() => { void runConfigPrecheck() }}
+              disabled={configPreviewLoading || !selectedTask}
+              title={!selectedTask ? '先选择任务后才能检查本次任务配置。' : undefined}
+            >
+              {configPreviewLoading ? '正在检查...' : configPreview ? '重新检查本次任务配置' : '检查本次任务配置'}
+            </button>
+          </div>
         </div>
         <details className="inline-disclosure config-assist-drawer">
           <summary>

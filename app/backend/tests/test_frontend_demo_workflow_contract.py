@@ -85,8 +85,11 @@ def test_config_center_explains_precheck_and_disabled_save_continue():
 
     assert "onRefreshConfigPreview" in source
     assert "onRefreshConfigPreview={async () => { await refreshConfigPreview(); await refreshWorkspace() }}" in app_source
-    assert "运行启动预检" in config_section
-    assert "刷新启动预检" in config_section
+    assert "检查本次任务配置" in config_section
+    assert "重新检查本次任务配置" in config_section
+    assert "去任务中心选择任务" in config_section
+    assert "onShowTasks" in source
+    assert "onShowTasks={() => setActiveSection('tasks')}" in app_source
     assert "读取当前任务、店铺、商品和模板" in config_section
     assert "不会操作店小秘" in config_section
     assert "disabledReason" in editable_card
@@ -110,6 +113,8 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "保存/覆盖当前店铺模板" in config_section
     assert "覆盖当前店铺/类目下全部分区" in config_section
     assert "defaultTemplatePackState" in config_section
+    assert "默认测试模板已保存到店铺模板" in config_section
+    assert "setSectionSaveState(() => Object.fromEntries" in config_section
     assert "config-template-console" in config_section
     assert "config-template-console__status-strip" in config_section
     assert "当前分区模板" in config_section
@@ -287,6 +292,7 @@ def test_config_center_exposes_default_template_pack_and_save_state():
     assert "使用之前测试通过的数据配置" in config_section
     assert "defaultTemplatePackState" in config_section
     assert "config-template-console" in config_section
+    assert "config-precheck-action__buttons" in config_section
     assert "当前分区模板" in config_section
     assert "sectionTemplateOptions" in config_section
     assert "selectedTemplateBySection" in config_section
