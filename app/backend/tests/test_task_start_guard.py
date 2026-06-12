@@ -1076,6 +1076,39 @@ def test_task_config_override_endpoint_updates_preview_and_runner_defaults(tmp_p
     assert execution_defaults["logistics"]["height"] == "2"
 
 
+def test_config_preview_recovers_when_legacy_section_payload_is_scalar(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo)
+    private_task = repo.get_task_private(task["id"])
+    legacy_payload = {
+        **private_task["payload"],
+        "logistics": "legacy bad scalar",
+        "template_overrides": {
+            "logistics": {
+                "weight": "0.08",
+                "length": "12",
+            },
+        },
+    }
+    with db.connection() as conn:
+        conn.execute(
+            "UPDATE tasks SET payload_json=? WHERE id=?",
+            (json.dumps(legacy_payload, ensure_ascii=False), task["id"]),
+        )
+
+    response = client.get(f"/api/config/preview?task_id={task['id']}")
+
+    assert response.status_code == 200
+    preview = response.json()
+    assert preview["resolvedDefaults"]["logistics"] == {
+        "weight": "0.08",
+        "length": "12",
+    }
+    groups = {group["section"]: group for group in preview["fieldGroups"]}
+    logistics_fields = {field["path"]: field for field in groups["logistics"]["fields"]}
+    assert logistics_fields["logistics.weight"]["source"] == "任务覆盖"
+
+
 def test_task_config_override_endpoint_updates_semi_managed_runner_defaults(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     task = _create_task(repo)

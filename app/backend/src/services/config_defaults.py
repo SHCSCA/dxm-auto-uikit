@@ -70,8 +70,8 @@ class ConfigDefaultsResolver:
                 for template_type, payload in overrides.items():
                     normalized = self.normalize_template_type(template_type)
                     if normalized in DEFAULT_TEMPLATE_TYPES and isinstance(payload, Mapping):
-                        self.deep_merge(defaults.setdefault(normalized, {}), payload)
-                        self.deep_source_merge(sources.setdefault(normalized, {}), payload, "任务覆盖")
+                        self.deep_merge(self.ensure_section(defaults, normalized), payload)
+                        self.deep_source_merge(self.ensure_section(sources, normalized), payload, "任务覆盖")
 
         defaults["dxm_reference_templates_resolved"] = resolve_dxm_reference_templates(defaults)
         defaults["_template_trace"] = template_trace
@@ -126,8 +126,8 @@ class ConfigDefaultsResolver:
         self.merge_payload(target, sources, payload, source_label)
         grouped_payload = payload.get(template_type)
         if isinstance(grouped_payload, Mapping):
-            self.deep_merge(target.setdefault(template_type, {}), grouped_payload)
-            self.deep_source_merge(sources.setdefault(template_type, {}), grouped_payload, source_label)
+            self.deep_merge(self.ensure_section(target, template_type), grouped_payload)
+            self.deep_source_merge(self.ensure_section(sources, template_type), grouped_payload, source_label)
             return
         flat_group_payload = {
             key: value
@@ -135,8 +135,8 @@ class ConfigDefaultsResolver:
             if key not in DEFAULT_TEMPLATE_TYPES and key != "template_overrides"
         }
         if flat_group_payload:
-            self.deep_merge(target.setdefault(template_type, {}), flat_group_payload)
-            self.deep_source_merge(sources.setdefault(template_type, {}), flat_group_payload, source_label)
+            self.deep_merge(self.ensure_section(target, template_type), flat_group_payload)
+            self.deep_source_merge(self.ensure_section(sources, template_type), flat_group_payload, source_label)
 
     def merge_payload(
         self,
@@ -170,6 +170,13 @@ class ConfigDefaultsResolver:
                 target[key] = dict(value)
             else:
                 target[key] = value
+
+    def ensure_section(self, target: dict[str, Any], key: str) -> dict[str, Any]:
+        value = target.get(key)
+        if not isinstance(value, dict):
+            value = {}
+            target[key] = value
+        return value
 
     def deep_source_merge(self, target: dict[str, Any], source: Mapping[str, Any], source_label: str) -> None:
         for key, value in source.items():

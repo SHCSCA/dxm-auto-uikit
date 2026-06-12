@@ -97,10 +97,14 @@ L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
 UNRELEASED_REAL_DXM_MODE_DETAIL = 'Only controlled single_save is released for real DXM mutation'
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FINAL_DELIVERY_CHECK_JSON = REPO_ROOT / 'outputs' / 'final-delivery-check' / 'final-delivery-check.json'
+RUNTIME_LAUNCHER_LOG_FILE = Path(
+    os.environ.get('DXM_LAUNCHER_LOG_FILE')
+    or DATA_DIR / ('desktop-main.log' if os.environ.get('DXM_DESKTOP') else 'start-mvp.log')
+)
 RUNTIME_LOG_SOURCES = {
     'backend': DATA_DIR / 'backend.log',
     'frontend': DATA_DIR / 'frontend.log',
-    'launcher': DATA_DIR / 'start-mvp.log',
+    'launcher': RUNTIME_LAUNCHER_LOG_FILE,
     'npm': DATA_DIR / 'npm-install.log',
 }
 RUNTIME_CONTROL_COMMAND_FILE = Path(
