@@ -2542,16 +2542,49 @@ tr:last-child td {
 .config-template-console {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(260px, 1.2fr) minmax(210px, 0.85fr) minmax(270px, 1.1fr);
   gap: 10px;
   margin-bottom: 10px;
 }
 
+.config-template-console--compact {
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.45fr);
+  align-items: stretch;
+}
+
+.config-template-console__main {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #f8fbff;
+}
+
+.config-template-console__details {
+  grid-column: 1 / -1;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+}
+
+.config-template-console__details > summary {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.config-template-console__detail-grid,
 .config-template-console__status-strip {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
+  margin-top: 8px;
 }
 
 .config-template-console__default,
@@ -2611,6 +2644,23 @@ tr:last-child td {
 
 .config-save-state {
   background: #fff;
+}
+
+.config-save-state--compact {
+  align-content: center;
+  gap: 3px;
+  padding: 8px 10px;
+}
+
+.config-save-state--compact b {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.config-save-state--compact span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .config-template-source {
@@ -3407,6 +3457,14 @@ tr:last-child td {
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+}
+
+.config-section-save-hint {
+  display: block;
+  color: var(--muted);
+  font-size: var(--font-compact);
+  line-height: 1.45;
+  text-align: right;
 }
 
 .config-action-disabled-reason {

@@ -59,7 +59,7 @@ def test_config_center_prioritizes_missing_sections_and_sources():
     assert "只显示当前最需要处理的字段" in source
     assert "onEditRequiredSection" in source
     assert "编辑当前必填分区" in source
-    assert "保存并继续下一缺失分区" in source
+    assert "保存到本次任务并继续" in source
     assert "selectNextMissingConfigSection" in config_section
     assert "continueToNextMissingSection" in config_section
     assert "data-config-next-required" in source
@@ -110,13 +110,15 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "applyDefaultTemplatePack" in config_section
     assert "默认测试模板" in config_section
     assert "使用之前测试通过的数据配置" in config_section
-    assert "保存/覆盖当前店铺模板" in config_section
+    assert "写入测试模板到当前范围" in config_section
+    assert "保存/覆盖当前店铺模板" not in config_section
     assert "覆盖当前店铺/类目下全部分区" in config_section
     assert "defaultTemplatePackState" in config_section
     assert "默认测试模板已保存到店铺模板" in config_section
     assert "setSectionSaveState(() => Object.fromEntries" in config_section
     assert "config-template-console" in config_section
-    assert "config-template-console__status-strip" in config_section
+    assert "config-template-console--compact" in config_section
+    assert "config-template-console__details" in config_section
     assert "当前分区模板" in config_section
     assert "sectionTemplateOptions" in config_section
     assert "templateOptionLabel(template)" in config_section
@@ -259,8 +261,10 @@ def test_config_center_can_save_task_level_overrides_separately_from_templates()
     assert "payload: withTemplateBinding(payload, currentTemplateBinding)" in config_section
     assert "findScopedTemplate(workspace.templates, section.templateType, currentTemplateBinding)" in config_section
     assert "当前模板范围" in config_section
-    assert "仅本次任务使用" in config_section
-    assert "保存为店铺模板" in config_section
+    assert "保存到本次任务" in config_section
+    assert "保存为店铺模板（后续任务可用）" in config_section
+    assert "本次任务只影响当前批次" in config_section
+    assert "仅本次任务使用" not in config_section
     assert "页面填写值会进入执行取值" in config_section
     assert "带 * 字段参与启动门禁" in config_section
     assert "当前任务会优先使用这些值" not in config_section
@@ -292,18 +296,26 @@ def test_config_center_exposes_default_template_pack_and_save_state():
     assert "使用之前测试通过的数据配置" in config_section
     assert "defaultTemplatePackState" in config_section
     assert "config-template-console" in config_section
+    assert "config-template-console--compact" in config_section
+    assert "config-template-console__main" in config_section
+    assert "config-template-console__details" in config_section
     assert "config-precheck-action__buttons" in config_section
     assert "当前分区模板" in config_section
     assert "sectionTemplateOptions" in config_section
     assert "selectedTemplateBySection" in config_section
     assert "applyTemplateToDraft" in config_section
     assert "套用到表单" in config_section
+    assert "重新套用到表单" not in config_section
+    assert "写入测试模板到当前范围" in config_section
     assert "多套模板按当前店铺/类目优先展示" in config_section
     assert "sectionSaveState" in config_section
     assert "未保存修改" in config_section
     assert "已保存" in config_section
     assert "保存时间" in config_section
     assert ".config-template-console" in styles_source
+    assert ".config-template-console--compact" in styles_source
+    assert ".config-template-console__detail-grid" in styles_source
+    assert ".config-save-state--compact" in styles_source
     assert ".config-save-state" in styles_source
     assert "configDefaultTemplatePackVisible" in qa_source
     assert "configTemplateSelectorVisible" in qa_source
@@ -477,7 +489,7 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "当前任务已完成，继续查看报告与证据。" in workbench_source
     assert "const guardLabel = selectedTaskCompleted" in workbench_source
     assert "? '任务已完成'" in workbench_source
-    assert "const primaryActionLabel = selectedTaskCompleted ? '查看报告' : '处理任务门禁'" in workbench_source
+    assert "const primaryActionLabel = selectedTaskCompleted ? '查看报告' : '处理只读检查与确认'" in workbench_source
     assert ".filter(isStartableSingleSaveTask)" in workbench_source
     assert "selectedTask.status === 'completed'" in workbench_source
     assert "任务已完成，查看报告" in workbench_source
