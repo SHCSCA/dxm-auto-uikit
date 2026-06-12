@@ -1953,6 +1953,22 @@ tr:last-child td {
   width: 100%;
 }
 
+.task-quick-actions__reason,
+.single-save-recovery-guide__reason {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.task-quick-actions__reason {
+  margin-top: -2px;
+}
+
+.single-save-recovery-guide__reason {
+  max-width: 220px;
+  align-self: center;
+}
+
 .task-quick-actions p {
   margin: 0;
 }

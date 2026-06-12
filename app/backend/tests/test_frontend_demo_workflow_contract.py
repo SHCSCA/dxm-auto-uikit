@@ -1808,6 +1808,30 @@ def test_task_center_defaults_to_current_task_first_and_collapses_setup_noise():
     assert "releaseBoundaryDrawer" in qa_source
 
 
+def test_task_center_explains_disabled_single_save_actions():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    task_center_section = source[source.index("export function TaskCenter"):source.index("export function ExecutionConsole")]
+    recovery_section = source[source.index("function SingleSaveRecoveryGuide"):source.index("function RealModeReleasePlanPanel")]
+
+    assert "const quickCreateSingleSaveDisabledReason =" in task_center_section
+    assert "id=\"task-quick-create-single-save-reason\"" in task_center_section
+    assert "aria-describedby={quickCreateSingleSaveDisabledReason ? 'task-quick-create-single-save-reason' : undefined}" in task_center_section
+    assert "title={quickCreateSingleSaveDisabledReason || undefined}" in task_center_section
+    assert "请选择真实店铺" in task_center_section
+    assert "当前已选 ${selectedDraftProducts.length} 个" in task_center_section
+
+    assert "const selectSingleSaveDisabledReason =" in recovery_section
+    assert "const createSingleSaveDisabledReason =" in recovery_section
+    assert "id=\"single-save-recovery-select-reason\"" in recovery_section
+    assert "id=\"single-save-recovery-create-reason\"" in recovery_section
+    assert "aria-describedby={selectSingleSaveDisabledReason ? 'single-save-recovery-select-reason' : undefined}" in recovery_section
+    assert "aria-describedby={createSingleSaveDisabledReason ? 'single-save-recovery-create-reason' : undefined}" in recovery_section
+    assert "title={selectSingleSaveDisabledReason || undefined}" in recovery_section
+    assert "title={createSingleSaveDisabledReason || undefined}" in recovery_section
+    assert "暂无最近单商品只保存任务" in recovery_section
+    assert "请先确认有真实店铺和 1 个商品" in recovery_section
+
+
 def test_task_center_compacts_duplicate_history_tasks_by_default():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")

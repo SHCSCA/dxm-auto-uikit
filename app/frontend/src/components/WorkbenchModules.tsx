@@ -2630,6 +2630,15 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
   const storeBlocksSingleSave = Boolean(selectedStore && draftMode !== 'probe' && !selectedStoreReleasedForSingleSave)
   const singleSaveProductCountInvalid = draftMode === 'single_save' && selectedDraftProducts.length !== 1
   const canCreateSingleSaveTask = Boolean(selectedStore && selectedDraftProducts.length === 1 && !busy && !storeBlocksSingleSave)
+  const quickCreateSingleSaveDisabledReason = busy
+    ? '正在处理当前操作，请稍候。'
+    : !selectedStore
+      ? '请选择真实店铺。'
+      : selectedDraftProducts.length !== 1
+        ? `单商品只保存一次只能选 1 个商品；当前已选 ${selectedDraftProducts.length} 个。`
+        : storeBlocksSingleSave
+          ? '当前店铺未放行单商品只保存，请先换到已放行店铺或做只读检查。'
+          : ''
   const unreleasedReleaseItems = workspace.realModeReleasePlan.modes.filter((item) => item.mode === 'claim_only' || item.mode === 'batch_save')
   const latestSingleSaveTask = [...workspace.tasks]
     .filter(isStartableSingleSaveTask)
@@ -2752,11 +2761,18 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
             className="button button--primary"
             type="button"
             onClick={submitSingleSaveTask}
-            disabled={!canCreateSingleSaveTask}
+            disabled={Boolean(quickCreateSingleSaveDisabledReason)}
+            aria-describedby={quickCreateSingleSaveDisabledReason ? 'task-quick-create-single-save-reason' : undefined}
+            title={quickCreateSingleSaveDisabledReason || undefined}
             data-testid="task-quick-create-single-save"
           >
             创建单商品只保存任务
           </button>
+          {quickCreateSingleSaveDisabledReason && (
+            <small id="task-quick-create-single-save-reason" className="task-quick-actions__reason">
+              {quickCreateSingleSaveDisabledReason}
+            </small>
+          )}
           <button className="button button--secondary" type="button" onClick={onShowConfig}>
             补齐编辑页配置
           </button>
@@ -2770,13 +2786,9 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
           <small>{selectedTask ? `${humanTaskModeLabel(selectedTask.mode)} / ${humanTaskStatus(selectedTask.status)}` : '先创建单商品只保存任务'}</small>
         </div>
         <p>
-          {canCreateRealTask
+          {!quickCreateSingleSaveDisabledReason
             ? `将使用 ${selectedStore?.name ?? '当前店铺'} 和已选 ${selectedDraftProducts.length} 个商品创建草稿任务。`
-            : singleSaveProductCountInvalid
-              ? `单商品只保存一次只能选 1 个商品；当前已选 ${selectedDraftProducts.length} 个。`
-            : storeBlocksSingleSave
-              ? '当前店铺未放行单商品只保存，请先换到已放行店铺或做只读检查。'
-              : '请先确认有真实店铺和商品。'}
+            : quickCreateSingleSaveDisabledReason}
         </p>
       </div>
 
@@ -5416,6 +5428,16 @@ function SingleSaveRecoveryGuide({
   onShowConfig: () => void
   onShowReports: () => void
 }) {
+  const selectSingleSaveDisabledReason = busy
+    ? '正在处理当前操作，请稍候。'
+    : !latestSingleSaveTask
+      ? '暂无最近单商品只保存任务，请创建新的单商品只保存任务。'
+      : ''
+  const createSingleSaveDisabledReason = busy
+    ? '正在处理当前操作，请稍候。'
+    : !canCreateRealTask
+      ? '请先确认有真实店铺和 1 个商品，再创建单商品只保存任务。'
+      : ''
   const steps = [
     {
       title: '回到单商品只保存',
@@ -5464,12 +5486,36 @@ function SingleSaveRecoveryGuide({
         ))}
       </div>
       <div className="single-save-recovery-guide__actions">
-        <button className="button button--secondary" type="button" onClick={onSelectSingleSave} disabled={busy || !latestSingleSaveTask}>
+        <button
+          className="button button--secondary"
+          type="button"
+          onClick={onSelectSingleSave}
+          disabled={Boolean(selectSingleSaveDisabledReason)}
+          aria-describedby={selectSingleSaveDisabledReason ? 'single-save-recovery-select-reason' : undefined}
+          title={selectSingleSaveDisabledReason || undefined}
+        >
           选择最近单商品只保存任务
         </button>
-        <button className="button button--quiet" type="button" onClick={onCreateSingleSave} disabled={busy || !canCreateRealTask}>
+        {selectSingleSaveDisabledReason && (
+          <small id="single-save-recovery-select-reason" className="single-save-recovery-guide__reason">
+            {selectSingleSaveDisabledReason}
+          </small>
+        )}
+        <button
+          className="button button--quiet"
+          type="button"
+          onClick={onCreateSingleSave}
+          disabled={Boolean(createSingleSaveDisabledReason)}
+          aria-describedby={createSingleSaveDisabledReason ? 'single-save-recovery-create-reason' : undefined}
+          title={createSingleSaveDisabledReason || undefined}
+        >
           创建新的单商品只保存任务
         </button>
+        {createSingleSaveDisabledReason && (
+          <small id="single-save-recovery-create-reason" className="single-save-recovery-guide__reason">
+            {createSingleSaveDisabledReason}
+          </small>
+        )}
         {configBlocksStart && (
           <button className="button button--quiet" type="button" onClick={onShowConfig}>
             去补配置
