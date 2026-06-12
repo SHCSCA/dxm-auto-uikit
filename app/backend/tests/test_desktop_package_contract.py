@@ -95,6 +95,10 @@ def test_desktop_builder_packages_windows_exe_without_console_windows():
     assert "app/backend/src/**" in source
     assert "../backend/.venv" in source
     assert "app/backend/.venv" in source
+    assert "../../tools/probes" in source
+    assert "tools/probes" in source
+    assert "../../config" in source
+    assert "to: config" in source
 
 
 def test_start_desktop_launcher_builds_frontend_then_runs_electron():
@@ -116,6 +120,8 @@ def test_verify_desktop_package_smoke_script_checks_packaged_exe_logs():
     assert "Starting backend" in source
     assert "--qa-capture=$CapturePath" in source
     assert "QA capture was not created" in source
+    assert "tools\\probes\\l2_readonly_probe_runner.py" in source
+    assert "config\\l2_readonly_allowlist.json" in source
     assert "taskkill" in source
 
 

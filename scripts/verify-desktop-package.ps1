@@ -16,6 +16,18 @@ if (!(Test-Path $ExePath)) {
   throw "Packaged exe is missing: $ExePath"
 }
 
+$RequiredResources = @(
+  'resources\tools\probes\l2_readonly_probe_runner.py',
+  'resources\tools\probes\l2_readonly_probe.py',
+  'resources\config\l2_readonly_allowlist.json'
+)
+foreach ($RelativePath in $RequiredResources) {
+  $ResourcePath = Join-Path (Split-Path $ExePath) $RelativePath
+  if (!(Test-Path $ResourcePath)) {
+    throw "Packaged resource is missing: $RelativePath"
+  }
+}
+
 foreach ($Path in @($LogPath, $LegacyLogPath)) {
   if (Test-Path $Path) {
     Remove-Item -LiteralPath $Path -Force

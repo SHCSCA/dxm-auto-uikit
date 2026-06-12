@@ -16,6 +16,10 @@ extraResources:
     to: app/backend/src
   - from: ../backend/.venv
     to: app/backend/.venv
+  - from: ../../tools/probes
+    to: tools/probes
+  - from: ../../config
+    to: config
 win:
   target: nsis
   artifactName: DXM-Agent-Console-${version}.${ext}
