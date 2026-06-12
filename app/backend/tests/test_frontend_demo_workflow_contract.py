@@ -2174,6 +2174,35 @@ def test_runtime_maintenance_explains_cleared_and_protected_tasks():
     assert ".runtime-control-result" in styles_source
 
 
+def test_l2_precheck_start_receipt_shows_run_id_targets_and_log_path():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    types_source = (REPO_ROOT / "app" / "frontend" / "src" / "types.ts").read_text(encoding="utf-8")
+    run_runtime_control = app_source[
+        app_source.index("async function runRuntimeControl"):
+        app_source.index("async function runL2ReadonlyProbe")
+    ]
+    result_summary = workbench_source[
+        workbench_source.index("function RuntimeControlResultSummary"):
+        workbench_source.index("function runtimeTaskLabel")
+    ]
+
+    assert "runId?: string" in types_source
+    assert "logPath?: string" in types_source
+    assert "targets?: string[]" in types_source
+    assert "if (action === 'run_l2_readonly_probe' && result.runId)" in run_runtime_control
+    assert "runId: result.runId" in run_runtime_control
+    assert "line: result.logPath ?? null" in run_runtime_control
+    assert "result.action === 'run_l2_readonly_probe'" in result_summary
+    assert "预检已启动" in result_summary
+    assert "run-id：{result.runId ?? '等待返回'}" in result_summary
+    assert "检查目标：{formatL2ProbeTargets(result.targets)}" in result_summary
+    assert "日志：{result.logPath ?? '启动器日志'}" in result_summary
+    assert "function formatL2ProbeTargets" in workbench_source
+    assert "data_acquisition: '商品采集页'" in workbench_source
+    assert "draft_box: '采集箱/草稿箱'" in workbench_source
+
+
 def test_execution_console_can_mark_real_task_for_manual_review():
     app_source = APP_TSX.read_text(encoding="utf-8")
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")

@@ -967,6 +967,16 @@ export default function App() {
       const result = await postJson<RuntimeControlResponse>('/api/runtime/control', { action, task_id: selectedTask?.id ?? null })
       setLastRuntimeControlResult(result)
       if (result.agentConsole) setAgentConsole(result.agentConsole)
+      if (action === 'run_l2_readonly_probe' && result.runId) {
+        setL2RunnerState({
+          status: 'running',
+          runId: result.runId,
+          exitCode: null,
+          message: '正在运行双目标预检',
+          line: result.logPath ?? null,
+          updatedAt: new Date().toISOString(),
+        })
+      }
       setOperationNotice(result.message ?? runtimeControlSuccessMessage(action))
       await refreshWorkspace()
       await refreshRuntimeStatus()

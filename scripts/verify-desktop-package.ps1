@@ -185,6 +185,9 @@ function Assert-PackagedBackendResourceStatus {
     if (!$Status) {
       throw "Packaged runtime status check timed out: $ApiBase/api/runtime/status"
     }
+    if ([int]$Status.backend.port -ne $Port) {
+      throw "Packaged runtime backend port mismatch. Expected $Port, got $($Status.backend.port)"
+    }
 
     Assert-PackagedRuntimeDependencyOk -Dependencies $Status.dependencies -Name 'l2_readonly_probe_runner' -ResourceRoot $ResourceRoot
     Assert-PackagedRuntimeDependencyOk -Dependencies $Status.dependencies -Name 'l2_readonly_probe_script' -ResourceRoot $ResourceRoot

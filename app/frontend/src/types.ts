@@ -85,6 +85,9 @@ export type RuntimeControlResponse = {
   clearedTasks?: Array<Record<string, unknown>>
   skippedTasks?: Array<Record<string, unknown>>
   markedTasks?: Array<Record<string, unknown>>
+  runId?: string
+  logPath?: string
+  targets?: string[]
   agentConsole?: AgentConsoleSession
 }
 export type ConfigPreviewField = {

@@ -3503,8 +3503,19 @@ function getL2ProbeResourceState(runtimeStatus: RuntimeStatus | null) {
 }
 
 function RuntimeControlResultSummary({ result }: { result: RuntimeControlResponse | null }) {
-  if (!result || (result.action !== 'clear_stuck_tasks' && result.action !== 'mark_real_task_manual_review')) {
+  if (!result || (result.action !== 'clear_stuck_tasks' && result.action !== 'mark_real_task_manual_review' && result.action !== 'run_l2_readonly_probe')) {
     return null
+  }
+  if (result.action === 'run_l2_readonly_probe') {
+    return (
+      <div className="runtime-control-result" aria-label="预检启动结果">
+        <strong>预检已启动</strong>
+        <span>run-id：{result.runId ?? '等待返回'}</span>
+        <span>检查目标：{formatL2ProbeTargets(result.targets)}</span>
+        <span>日志：{result.logPath ?? '启动器日志'}</span>
+        <small>不会保存、不会发布；完成后门禁会自动刷新。</small>
+      </div>
+    )
   }
   if (result.action === 'mark_real_task_manual_review') {
     const marked = result.markedTasks ?? []
@@ -3530,6 +3541,16 @@ function RuntimeControlResultSummary({ result }: { result: RuntimeControlRespons
       {result.message && <small>{result.message}</small>}
     </div>
   )
+}
+
+function formatL2ProbeTargets(targets?: string[]) {
+  const labels = {
+    data_acquisition: '商品采集页',
+    draft_box: '采集箱/草稿箱',
+  } as Record<string, string>
+  const values = (targets?.length ? targets : ['data_acquisition', 'draft_box'])
+    .map((target) => labels[target] ?? target)
+  return values.join('、')
 }
 
 function runtimeTaskLabel(item: Record<string, unknown>) {

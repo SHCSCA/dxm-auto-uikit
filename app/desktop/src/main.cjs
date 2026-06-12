@@ -262,6 +262,8 @@ function startBackend(repoRoot, port) {
       DXM_DATA_DIR: dataDir,
       DXM_RESOURCE_ROOT: repoRoot,
       DXM_LAUNCHER_LOG_FILE: runtimeInfo.desktopLogPath,
+      DXM_BACKEND_PORT: String(port),
+      DXM_BACKEND_URL: `http://127.0.0.1:${port}`,
       // Desktop mode contract: DXM_DESKTOP=1
       DXM_DESKTOP: '1',
       PYTHONIOENCODING: 'utf-8',

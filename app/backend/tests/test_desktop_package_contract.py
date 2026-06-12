@@ -64,6 +64,8 @@ def test_desktop_main_starts_backend_hidden_and_loads_frontend_with_api_base():
     assert "DXM_DATA_DIR" in source
     assert "DXM_RESOURCE_ROOT" in source
     assert "DXM_LAUNCHER_LOG_FILE" in source
+    assert "DXM_BACKEND_PORT: String(port)" in source
+    assert "DXM_BACKEND_URL: `http://127.0.0.1:${port}`" in source
     assert "DXM_DESKTOP=1" in source
     assert "PYTHONDONTWRITEBYTECODE" in source
     assert "windowsHide: true" in source
@@ -172,6 +174,7 @@ def test_verify_desktop_package_smoke_script_checks_packaged_exe_logs():
     assert "config\\l2_readonly_allowlist.json" in source
     assert "Assert-PackagedBackendResourceStatus" in source
     assert "/api/runtime/status" in source
+    assert "Packaged runtime backend port mismatch" in source
     assert "DXM_RESOURCE_ROOT" in source
     assert "l2_readonly_probe_runner" in source
     assert "l2_readonly_probe_script" in source
