@@ -2659,12 +2659,14 @@ export function ExecutionConsole({
   const browserFrame = getBrowserFrame(workspace, selectedTask, agentConsole)
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
   const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
+  const l2Detail = humanGateDetail(l2Gate?.detail)
+  const l3Detail = humanGateDetail(l3Gate?.detail)
   const realSaveBlocked = l2Gate?.status !== 'passed' || l3Gate?.status !== 'passed'
   const realSaveBlockReason = l2Gate?.status !== 'passed'
-    ? l2Gate?.detail ?? '只读检查未通过。'
-    : l3Gate?.detail ?? '人工确认保存未完成。'
+    ? l2Detail ?? '只读检查未通过。'
+    : l3Detail ?? '人工确认保存未完成。'
   const diagnosticBlocked = l2Gate?.status !== 'passed'
-  const diagnosticBlockReason = l2Gate?.detail ?? '只读检查未通过。'
+  const diagnosticBlockReason = l2Detail ?? '只读检查未通过。'
   const runtimeLogCount = runtimeLogs[runtimeLogSource]?.items?.length
     ?? runtimeLogs[runtimeLogSource]?.lines.length
     ?? 0
@@ -5565,7 +5567,14 @@ function humanGateStateLabel(status: string) {
 
 function humanGateDetail(detail?: string | null) {
   if (!detail) return null
-  if (detail.includes('时效') || detail.includes('过期') || detail.includes('最新证据年龄')) {
+  if (
+    detail.includes('时效')
+    || detail.includes('过期')
+    || detail.includes('最新证据年龄')
+    || detail.includes('证据年龄')
+    || detail.includes('age')
+    || detail.includes('expired')
+  ) {
     return '只读检查证据已过期，请点击“运行只读复验”刷新后再继续。'
   }
   if (detail.includes('data_acquisition') || detail.includes('draft_box')) {

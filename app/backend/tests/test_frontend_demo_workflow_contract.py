@@ -1835,6 +1835,18 @@ def test_frontend_humanizes_l2_runner_missing_error():
     assert "setOperationError(humanOperationError(message))" in app_source
 
 
+def test_execution_console_humanizes_l2_gate_details_before_rendering():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    console_section = source[source.index("export function ExecutionConsole"):source.index("function AgentStagePanel")]
+
+    assert "const l2Detail = humanGateDetail(l2Gate?.detail)" in console_section
+    assert "const realSaveBlockReason = l2Gate?.status !== 'passed'" in console_section
+    assert "const diagnosticBlockReason = l2Detail ?? '只读检查未通过。'" in console_section
+    assert "l2Gate?.detail ?? '只读检查未通过。'" not in console_section
+    assert "最新证据年龄" in source
+    assert "只读检查证据已过期，请点击“运行只读复验”刷新后再继续。" in source
+
+
 def test_frontend_first_screen_names_dxm_automation_delivery():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     shell = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
