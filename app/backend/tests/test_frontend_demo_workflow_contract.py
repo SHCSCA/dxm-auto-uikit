@@ -235,7 +235,7 @@ def test_config_center_can_save_task_level_overrides_separately_from_templates()
     models_source = (REPO_ROOT / "app" / "backend" / "src" / "models.py").read_text(encoding="utf-8")
     repo_source = (REPO_ROOT / "app" / "backend" / "src" / "repository.py").read_text(encoding="utf-8")
 
-    assert "buildEditableConfigDraft(workspace.templates, configPreview)" in config_section
+    assert "buildEditableConfigDraft(workspace.templates, configPreview, currentTemplateBinding)" in config_section
     assert "scope: 'template' | 'task'" in config_section
     assert "`/api/tasks/${selectedTask.id}/config-overrides`" in config_section
     assert "findSelectedTaskProduct(workspace.products, selectedTask)" in config_section
@@ -251,6 +251,17 @@ def test_config_center_can_save_task_level_overrides_separately_from_templates()
     assert "@app.patch('/api/tasks/{task_id}/config-overrides')" in main_source
     assert "TaskConfigOverrideRequest" in models_source
     assert "update_task_template_override" in repo_source
+
+
+def test_config_center_draft_uses_current_scope_before_template_fallback():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    helper_section = source[source.index("function buildEditableConfigDraft"):source.index("function ConfigReadinessPanel")]
+    config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
+
+    assert "binding: TemplateBinding" in helper_section
+    assert "findScopedTemplate(templates, section.templateType, binding)" in helper_section
+    assert "templates.find((item) => item.template_type === section.templateType)" not in helper_section
+    assert "buildEditableConfigDraft(workspace.templates, configPreview, currentTemplateBinding)" in config_section
 
 
 def test_config_center_exposes_default_template_pack_and_save_state():
@@ -312,6 +323,15 @@ def test_config_center_template_lookup_matches_backend_binding_aliases():
     assert "\"platforms\"" in config_helpers
     assert "normalized.includes('*')" in config_helpers
     assert "normalized.includes('all')" in config_helpers
+
+
+def test_config_center_template_picker_hides_other_scope_templates():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    config_helpers = source[source.index("function templateBindingValueMatches"):source.index("function withTemplateBinding")]
+
+    assert "templateSelectableForBinding" in config_helpers
+    assert "templateSelectableForBinding(template, binding)" in config_helpers
+    assert ".filter((template) => template.template_type === section.templateType && template.is_enabled && templateSelectableForBinding(template, binding))" in config_helpers
 
 
 def test_config_center_preserves_multi_value_reference_template_fields():
@@ -797,6 +817,7 @@ def test_execution_console_exposes_in_page_browser_control_contract():
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
     types_source = (REPO_ROOT / "app" / "frontend" / "src" / "types.ts").read_text(encoding="utf-8")
     console_section = workbench_source[workbench_source.index("export function ExecutionConsole"):workbench_source.index("function RuntimeControlPanel")]
+    control_action_type = types_source[types_source.index("export type AgentConsoleControlAction"):types_source.index("export type AgentConsoleControlCommand")]
 
     assert "export type AgentConsoleControlCommand" in types_source
     assert "async function controlAgentConsoleBrowser" in app_source
@@ -807,20 +828,21 @@ def test_execution_console_exposes_in_page_browser_control_contract():
     assert "<summary>高级浏览器控制</summary>" in workbench_source
     assert "页面内操控" in workbench_source
     assert "目标 URL" in workbench_source
-    assert "输入文本" in workbench_source
     assert "CSS 选择器" in workbench_source
-    assert "<span>按键</span>" in workbench_source
     assert "坐标点击" in workbench_source
-    assert "坐标点击会发送到独立真实浏览器窗口" in workbench_source
+    assert "原始坐标点击、焦点输入和按键已关闭" in workbench_source
     assert "选择器定位" in workbench_source
     assert "按选择器点击" in workbench_source
     assert "按选择器填写" in workbench_source
-    assert "输入到焦点" in workbench_source
-    assert "按键" in workbench_source
+    assert "输入到焦点" not in workbench_source
+    assert "<span>按键</span>" not in workbench_source
     assert "滚动页面" in workbench_source
     assert "仅控制当前独立浏览器窗口" in workbench_source
-    assert "'selector_click'" in types_source
-    assert "'selector_fill'" in types_source
+    assert "'click'" not in control_action_type
+    assert "'type'" not in control_action_type
+    assert "'press'" not in control_action_type
+    assert "'selector_click'" in control_action_type
+    assert "'selector_fill'" in control_action_type
     assert "selector?: string" in types_source
     assert ".browser-control-pad" in styles_source
 

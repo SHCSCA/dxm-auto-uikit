@@ -1053,9 +1053,15 @@ function findScopedTemplate(templates: Template[], templateType: string, binding
   return templates.find((template) => template.template_type === templateType && templateHasExactBinding(template, binding))
 }
 
+function templateSelectableForBinding(template: Template, binding: TemplateBinding) {
+  const rawBinding = template.payload?.binding
+  if (!rawBinding || typeof rawBinding !== 'object' || Array.isArray(rawBinding)) return true
+  return templateHasExactBinding(template, binding)
+}
+
 function sectionTemplateOptions(templates: Template[], section: EditableConfigSection, binding: TemplateBinding) {
   return templates
-    .filter((template) => template.template_type === section.templateType && template.is_enabled)
+    .filter((template) => template.template_type === section.templateType && template.is_enabled && templateSelectableForBinding(template, binding))
     .sort((a, b) => Number(templateHasExactBinding(b, binding)) - Number(templateHasExactBinding(a, binding)) || a.template_name.localeCompare(b.template_name, 'zh-CN'))
 }
 
@@ -1157,10 +1163,10 @@ function buildSectionDraftFromPayload(section: EditableConfigSection, payload: R
   ]))
 }
 
-function buildEditableConfigDraft(templates: Template[], configPreview: ConfigPreview | null) {
+function buildEditableConfigDraft(templates: Template[], configPreview: ConfigPreview | null, binding: TemplateBinding) {
   const draft = {} as Record<ConfigSectionCode, Record<string, string>>
   editableConfigSections.forEach((section) => {
-    const template = templates.find((item) => item.template_type === section.templateType)
+    const template = findScopedTemplate(templates, section.templateType, binding)
     const payload = template?.payload ?? {}
     const preview = configPreview?.fieldGroups.find((group) => group.section === section.previewSection)
     draft[section.code] = Object.fromEntries(section.fields.map((field) => [
@@ -1389,7 +1395,10 @@ function hasConfigDraftChanged(current: Record<string, string> | undefined, base
 
 export function ConfigCenter({ workspace, selectedTask, configPreview, configPreviewLoading, onConfigSaved, onRefreshConfigPreview }: ConfigCenterProps) {
   const product = findSelectedTaskProduct(workspace.products, selectedTask)
-  const currentTemplateBinding = buildCurrentTemplateBinding(workspace, selectedTask, product)
+  const currentTemplateBinding = useMemo(
+    () => buildCurrentTemplateBinding(workspace, selectedTask, product),
+    [workspace, selectedTask, product],
+  )
   const currentTemplateScopeLabel = templateBindingScopeLabel(currentTemplateBinding)
   const enabledTemplates = workspace.templates.filter((item) => item.is_enabled)
   const templateResults = workspace.templateResolution?.dxm_reference_template_results ?? {}
@@ -1397,7 +1406,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   const hasProducts = workspace.products.length > 0
   const previewGroups = new Map((configPreview?.fieldGroups ?? []).map((group) => [group.section, group]))
   const incompleteGroups = (configPreview?.fieldGroups ?? []).filter((group) => group.required && !group.complete)
-  const initialConfigDraft = useMemo(() => buildEditableConfigDraft(workspace.templates, configPreview), [workspace.templates, configPreview])
+  const initialConfigDraft = useMemo(() => buildEditableConfigDraft(workspace.templates, configPreview, currentTemplateBinding), [workspace.templates, configPreview, currentTemplateBinding])
   const [configDraft, setConfigDraft] = useState(initialConfigDraft)
   const [savingSection, setSavingSection] = useState<string | null>(null)
   const [configMessage, setConfigMessage] = useState<string | null>(null)
