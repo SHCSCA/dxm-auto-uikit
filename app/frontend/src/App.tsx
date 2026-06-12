@@ -1124,10 +1124,21 @@ function humanOperationError(message: string) {
 
 function pickDefaultTaskId(deliveryWorkspace: DeliveryWorkspaceResponse | null, tasks: Task[]) {
   const deliveryTaskId = deliveryWorkspace?.current_task?.id
-  if (typeof deliveryTaskId === 'number' && tasks.some((task) => task.id === deliveryTaskId)) {
+  const deliveryTask = typeof deliveryTaskId === 'number'
+    ? tasks.find((task) => task.id === deliveryTaskId)
+    : null
+  if (deliveryTask && deliveryTask.status !== 'completed') {
     return deliveryTaskId
   }
-  return tasks.find((task) => task.mode === 'single_save')?.id ?? tasks[0]?.id ?? null
+  return tasks.find(isActionableSingleSaveTask)?.id
+    ?? deliveryTask?.id
+    ?? tasks.find((task) => task.mode === 'single_save')?.id
+    ?? tasks[0]?.id
+    ?? null
+}
+
+function isActionableSingleSaveTask(task: Task) {
+  return task.mode === 'single_save' && !['completed', 'cancelled', 'archived'].includes(String(task.status || ''))
 }
 
 function buildAgentConsoleHudStep(workspace: DeliveryWorkspace, selectedTask: Task): AgentConsoleSession['hud'] {

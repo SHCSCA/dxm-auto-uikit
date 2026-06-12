@@ -1552,14 +1552,16 @@ def test_task_center_blocks_unreleased_store_for_single_save_creation():
     assert "draftMode !== 'probe' && storeBlocksSingleSave" in task_center_section
 
 
-def test_app_defaults_to_delivery_current_task_before_latest_unreleased_task():
+def test_app_defaults_to_actionable_single_save_when_delivery_task_is_completed():
     app_source = APP_TSX.read_text(encoding="utf-8")
     workspace_source = (REPO_ROOT / "app" / "frontend" / "src" / "workspace.ts").read_text(encoding="utf-8")
     qa_source = QA_BROWSER_CHECK.read_text(encoding="utf-8")
 
     assert "function pickDefaultTaskId(" in app_source
     assert "deliveryWorkspace?.current_task?.id" in app_source
-    assert "tasks.find((task) => task.mode === 'single_save')" in app_source
+    assert "function isActionableSingleSaveTask(" in app_source
+    assert "deliveryTask && deliveryTask.status !== 'completed'" in app_source
+    assert "tasks.find(isActionableSingleSaveTask)" in app_source
     assert "setSelectedTaskId((current) => current ?? pickDefaultTaskId(deliveryWorkspace, nextWorkspace.tasks))" in app_source
     assert "mergeCurrentTaskIntoTasks(" in workspace_source
     assert "nonEmptyList(workspace?.tasks)" in workspace_source
