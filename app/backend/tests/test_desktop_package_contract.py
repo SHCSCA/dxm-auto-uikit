@@ -168,6 +168,13 @@ def test_verify_desktop_package_smoke_script_checks_packaged_exe_logs():
     assert "backend did not start with bundled Python" in source
     assert "tools\\probes\\l2_readonly_probe_runner.py" in source
     assert "config\\l2_readonly_allowlist.json" in source
+    assert "Assert-PackagedBackendResourceStatus" in source
+    assert "/api/runtime/status" in source
+    assert "DXM_RESOURCE_ROOT" in source
+    assert "l2_readonly_probe_runner" in source
+    assert "l2_readonly_probe_script" in source
+    assert "l2_readonly_probe_allowlist" in source
+    assert "Packaged backend resource status passed" in source
     assert "Assert-PackagedRuntimeClean" in source
     assert "*.pyc" in source
     assert "__pycache__" in source
@@ -216,7 +223,7 @@ def test_app_shell_presents_agent_console_as_user_first_navigation():
     assert "label: '复核'" in source
     assert "label: '系统'" in source
     assert "执行控制台" in source
-    assert "真实浏览器" in source
+    assert "执行浏览器" in source
     assert "证据中心" in source
     assert "报告中心" in source
     assert "异常池" in source
@@ -237,7 +244,7 @@ def test_execution_console_focus_panel_keeps_primary_summary_small():
     ]
     assert primary_section.count("<span><strong>") == 4
     assert "<strong>任务</strong><b>" in primary_section
-    assert "<strong>真实浏览器</strong><b>" in primary_section
+    assert "<strong>执行浏览器</strong><b>" in primary_section
     assert "<strong>当前步骤</strong><b>" in primary_section
     assert "<strong>下一步</strong><b>" in primary_section
     assert "<summary>技术状态</summary>" in focus_section
