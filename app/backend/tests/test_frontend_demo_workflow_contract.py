@@ -136,7 +136,8 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "applyTemplateToDraft(section, templateId)" not in config_section[config_section.index("function handleTemplateSelection"):config_section.index("async function applyDefaultTemplatePack")]
     assert "确认写入默认测试模板包" in config_section
     assert "将保存默认测试模板包到当前店铺/类目范围" in config_section
-    assert "多套模板按当前店铺/类目优先展示" in config_section
+    assert "精确店铺/类目模板优先" in config_section
+    assert "全局模板只作为读取候选，不会被保存覆盖" in config_section
     assert "sectionSaveState" in config_section
     assert "未保存修改" in config_section
     assert "已保存" in config_section
@@ -275,7 +276,7 @@ def test_config_center_can_save_task_level_overrides_separately_from_templates()
     assert "findSelectedTaskProduct(workspace.products, selectedTask)" in config_section
     assert "buildCurrentTemplateBinding(workspace, selectedTask, product)" in config_section
     assert "payload: withTemplateBinding(payload, currentTemplateBinding)" in config_section
-    assert "findScopedTemplate(workspace.templates, section.templateType, currentTemplateBinding)" in config_section
+    assert "findExactScopedTemplate(workspace.templates, section.templateType, currentTemplateBinding)" in config_section
     assert "当前模板范围" in config_section
     assert "保存到本次任务" in config_section
     assert "保存为店铺模板（后续任务可用）" in config_section
@@ -323,7 +324,8 @@ def test_config_center_exposes_default_template_pack_and_save_state():
     assert "套用到表单" in config_section
     assert "重新套用到表单" not in config_section
     assert "写入测试模板到当前范围" in config_section
-    assert "多套模板按当前店铺/类目优先展示" in config_section
+    assert "精确店铺/类目模板优先" in config_section
+    assert "全局模板只作为读取候选，不会被保存覆盖" in config_section
     assert "sectionSaveState" in config_section
     assert "未保存修改" in config_section
     assert "已保存" in config_section
@@ -388,6 +390,9 @@ def test_config_center_template_lookup_matches_backend_binding_aliases():
     assert "\"platforms\"" in config_helpers
     assert "normalized.includes('*')" in config_helpers
     assert "normalized.includes('all')" in config_helpers
+    assert "function templateBindingSpecificity" in config_helpers
+    assert "function compareTemplateBindingSpecificity" in config_helpers
+    assert "templateBindingSpecificity(right, binding) - templateBindingSpecificity(left, binding)" in config_helpers
 
 
 def test_config_center_template_picker_hides_other_scope_templates():
@@ -397,6 +402,19 @@ def test_config_center_template_picker_hides_other_scope_templates():
     assert "templateSelectableForBinding" in config_helpers
     assert "templateSelectableForBinding(template, binding)" in config_helpers
     assert ".filter((template) => template.template_type === section.templateType && template.is_enabled && templateSelectableForBinding(template, binding))" in config_helpers
+    assert ".sort((left, right) => compareTemplateBindingSpecificity(left, right, binding)" in config_helpers
+
+
+def test_config_center_template_save_does_not_overwrite_global_template():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
+    config_helpers = source[source.index("function templateBindingValueMatches"):source.index("function withTemplateBinding")]
+
+    assert "function templateHasStrictBinding" in config_helpers
+    assert "function findExactScopedTemplate" in config_helpers
+    assert "templateHasStrictBinding(template, binding)" in config_helpers
+    assert "const existing = findExactScopedTemplate(workspace.templates, section.templateType, currentTemplateBinding)" in config_section
+    assert "全局模板只作为读取候选，不会被保存覆盖" in config_section
 
 
 def test_config_center_preserves_multi_value_reference_template_fields():

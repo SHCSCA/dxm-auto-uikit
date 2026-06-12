@@ -1122,42 +1122,104 @@ function templateBindingScopeLabel(binding: TemplateBinding) {
   return `店铺：${store} / 类目：${category} / 平台：${platform}`
 }
 
-function templateBindingValueMatches(expected: unknown, actual: string | undefined) {
-  if (expected === undefined || expected === null || expected === '') return true
-  const values = Array.isArray(expected) ? expected : [expected]
-  const normalized = values.map((item) => textValue(item).toLowerCase())
-  return normalized.includes('*') || normalized.includes('all') || normalized.includes(textValue(actual).toLowerCase())
-}
-
 function templateBindingCandidate(record: Record<string, unknown>, keys: string[]) {
   return keys.find((key) => Object.prototype.hasOwnProperty.call(record, key))
 }
 
-function templateHasExactBinding(template: Template, binding: TemplateBinding) {
+function templateBindingValues(value: unknown) {
+  const values = Array.isArray(value) ? value : [value]
+  return values
+    .map((item) => textValue(item))
+    .filter(Boolean)
+}
+
+function templateBindingRecord(template: Template) {
   const rawBinding = template.payload?.binding
-  if (!rawBinding || typeof rawBinding !== 'object' || Array.isArray(rawBinding)) return false
-  const record = rawBinding as Record<string, unknown>
+  if (!rawBinding || typeof rawBinding !== 'object' || Array.isArray(rawBinding)) return null
+  return rawBinding as Record<string, unknown>
+}
+
+function templateBindingValueMatches(expected: unknown, actual: string | undefined) {
+  if (expected === undefined || expected === null || expected === '') return true
+  const normalized = templateBindingValues(expected).map((item) => item.toLowerCase())
+  return normalized.includes('*') || normalized.includes('all') || normalized.includes(textValue(actual).toLowerCase())
+}
+
+function templateBindingValueStrictlyMatches(expected: unknown, actual: string | undefined) {
+  const actualValue = textValue(actual).toLowerCase()
+  if (!actualValue) return false
+  const normalized = templateBindingValues(expected).map((item) => item.toLowerCase())
+  if (!normalized.length || normalized.includes('*') || normalized.includes('all')) return false
+  return normalized.includes(actualValue)
+}
+
+function templateBindingSpecificityValue(expected: unknown, actual: string | undefined) {
+  const actualValue = textValue(actual).toLowerCase()
+  const normalized = templateBindingValues(expected).map((item) => item.toLowerCase())
+  if (!actualValue || !normalized.length || normalized.includes('*') || normalized.includes('all')) return 0
+  if (!normalized.includes(actualValue)) return 0
+  return normalized.length === 1 ? 3 : 2
+}
+
+function templateBindingField(record: Record<string, unknown>, keys: string[]) {
+  return record[templateBindingCandidate(record, keys) ?? '']
+}
+
+function templateHasExactBinding(template: Template, binding: TemplateBinding) {
+  const record = templateBindingRecord(template)
+  if (!record) return false
   return (
-    templateBindingValueMatches(record[templateBindingCandidate(record, ["store_name", "store", "stores", "store_names"]) ?? ''], binding.store_name)
-    && templateBindingValueMatches(record[templateBindingCandidate(record, ["category_name", "category", "categories", "category_names"]) ?? ''], binding.category_name)
-    && templateBindingValueMatches(record[templateBindingCandidate(record, ["platform", "platforms"]) ?? ''], binding.platform)
+    templateBindingValueMatches(templateBindingField(record, ["store_name", "store", "stores", "store_names"]), binding.store_name)
+    && templateBindingValueMatches(templateBindingField(record, ["category_name", "category", "categories", "category_names"]), binding.category_name)
+    && templateBindingValueMatches(templateBindingField(record, ["platform", "platforms"]), binding.platform)
+  )
+}
+
+function templateHasStrictBinding(template: Template, binding: TemplateBinding) {
+  const record = templateBindingRecord(template)
+  if (!record) return false
+  return (
+    templateBindingValueStrictlyMatches(templateBindingField(record, ["store_name", "store", "stores", "store_names"]), binding.store_name)
+    && templateBindingValueStrictlyMatches(templateBindingField(record, ["category_name", "category", "categories", "category_names"]), binding.category_name)
+    && templateBindingValueStrictlyMatches(templateBindingField(record, ["platform", "platforms"]), binding.platform)
   )
 }
 
 function findScopedTemplate(templates: Template[], templateType: string, binding: TemplateBinding) {
-  return templates.find((template) => template.template_type === templateType && templateHasExactBinding(template, binding))
+  return templates
+    .filter((template) => template.template_type === templateType && templateSelectableForBinding(template, binding))
+    .sort((left, right) => compareTemplateBindingSpecificity(left, right, binding))[0]
+}
+
+function findExactScopedTemplate(templates: Template[], templateType: string, binding: TemplateBinding) {
+  return templates.find((template) => template.template_type === templateType && templateHasStrictBinding(template, binding))
+}
+
+function templateBindingSpecificity(template: Template, binding: TemplateBinding) {
+  const record = templateBindingRecord(template)
+  if (!record) return 0
+  return (
+    templateBindingSpecificityValue(templateBindingField(record, ["store_name", "store", "stores", "store_names"]), binding.store_name)
+    + templateBindingSpecificityValue(templateBindingField(record, ["category_name", "category", "categories", "category_names"]), binding.category_name)
+    + templateBindingSpecificityValue(templateBindingField(record, ["platform", "platforms"]), binding.platform)
+  )
+}
+
+function compareTemplateBindingSpecificity(left: Template, right: Template, binding: TemplateBinding) {
+  const scoreDiff = templateBindingSpecificity(right, binding) - templateBindingSpecificity(left, binding)
+  return scoreDiff || left.template_name.localeCompare(right.template_name, 'zh-CN') || right.id - left.id
 }
 
 function templateSelectableForBinding(template: Template, binding: TemplateBinding) {
-  const rawBinding = template.payload?.binding
-  if (!rawBinding || typeof rawBinding !== 'object' || Array.isArray(rawBinding)) return true
+  const rawBinding = templateBindingRecord(template)
+  if (!rawBinding) return true
   return templateHasExactBinding(template, binding)
 }
 
 function sectionTemplateOptions(templates: Template[], section: EditableConfigSection, binding: TemplateBinding) {
   return templates
     .filter((template) => template.template_type === section.templateType && template.is_enabled && templateSelectableForBinding(template, binding))
-    .sort((a, b) => Number(templateHasExactBinding(b, binding)) - Number(templateHasExactBinding(a, binding)) || a.template_name.localeCompare(b.template_name, 'zh-CN'))
+    .sort((left, right) => compareTemplateBindingSpecificity(left, right, binding))
 }
 
 function templateOptionLabel(template: Template) {
@@ -1670,7 +1732,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
         }
         return
       }
-      const existing = findScopedTemplate(workspace.templates, section.templateType, currentTemplateBinding)
+      const existing = findExactScopedTemplate(workspace.templates, section.templateType, currentTemplateBinding)
       const body = {
         template_type: section.templateType,
         template_name: section.title,
@@ -1756,7 +1818,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
       for (const section of editableConfigSections) {
         const payload = defaultTemplatePayloadForSection(section, currentTemplateBinding)
         nextDraft[section.code] = buildSectionDraftFromPayload(section, payload)
-        const existing = findScopedTemplate(workspace.templates, section.templateType, currentTemplateBinding)
+        const existing = findExactScopedTemplate(workspace.templates, section.templateType, currentTemplateBinding)
         const body = {
           template_type: section.templateType,
           template_name: `默认测试模板 / ${section.title}`,
@@ -1910,6 +1972,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
                 ))}
               </select>
               <small>选择模板不会改表单，点击套用后才会填入当前分区。</small>
+              <small>精确店铺/类目模板优先；全局模板只作为读取候选，不会被保存覆盖。</small>
             </label>
             <button
               className="button button--quiet"
@@ -1931,7 +1994,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
                 <strong>当前生效模板</strong>
                 <span>{activeTemplateSourceName || (activeSectionAlreadyPersisted ? '已由预检命中模板' : '尚未命中已保存模板')}</span>
                 <small>可选模板 {activeSectionTemplateOptions.length} 套；已筛除不匹配或禁用模板 {filteredTemplateChoiceCount} 套。</small>
-                <small>多套模板按当前店铺/类目优先展示；选择模板不会改表单，点击套用后才会填入当前分区，保存后才会生效。</small>
+                <small>选择模板不会改表单，点击套用后才会填入当前分区，保存后才会生效。</small>
               </div>
               <div className="config-template-console__default">
                 <strong>默认测试模板</strong>

@@ -9,6 +9,7 @@ DESKTOP_PORTABLE_PATCH = DESKTOP_DIR / "scripts" / "patch-electron-builder-porta
 DESKTOP_MAIN = DESKTOP_DIR / "src" / "main.cjs"
 DESKTOP_PRELOAD = DESKTOP_DIR / "src" / "preload.cjs"
 DESKTOP_BUILDER = DESKTOP_DIR / "electron-builder.yml"
+DESKTOP_PRUNE_RUNTIME = DESKTOP_DIR / "scripts" / "prune-packaged-runtime.cjs"
 START_DESKTOP = REPO_ROOT / "scripts" / "start-desktop.bat"
 VERIFY_DESKTOP_PACKAGE = REPO_ROOT / "scripts" / "verify-desktop-package.ps1"
 FRONTEND_VITE_CONFIG = REPO_ROOT / "app" / "frontend" / "vite.config.ts"
@@ -122,6 +123,25 @@ def test_desktop_builder_packages_windows_exe_without_console_windows():
     assert "tools/probes" in source
     assert "../../config" in source
     assert "to: config" in source
+
+
+def test_desktop_builder_excludes_backend_dev_runtime_cache_from_delivery_bundle():
+    source = DESKTOP_BUILDER.read_text(encoding="utf-8")
+    prune_source = DESKTOP_PRUNE_RUNTIME.read_text(encoding="utf-8")
+
+    assert "afterPack: scripts/prune-packaged-runtime.cjs" in source
+    assert "!**/__pycache__/**" in source
+    assert "!**/*.pyc" in source
+    assert "!Lib/site-packages/pytest/**" in source
+    assert "!Lib/site-packages/_pytest/**" in source
+    assert "!Lib/site-packages/pip/**" in source
+    assert "!Lib/site-packages/setuptools/**" in source
+    assert "function prunePackagedRuntime" in prune_source
+    assert "__pycache__" in prune_source
+    assert ".pyc" in prune_source
+    assert "site-packages" in prune_source
+    assert "pytest" in prune_source
+    assert "setuptools" in prune_source
 
 
 def test_start_desktop_launcher_builds_frontend_then_runs_electron():
