@@ -24,9 +24,9 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
     id: 'execute',
     label: '执行',
     short: '2',
-    summary: 'Agent 控制台与真实浏览器',
+    summary: 'Agent 控制台与执行浏览器',
     items: [
-      { id: 'console', label: 'Agent 控制台', short: '控', hint: '真实浏览器' },
+      { id: 'console', label: '执行控制台', short: '控', hint: '登录与执行浏览器' },
       { id: 'tasks', label: '当前任务', short: '任', hint: '启动与审批' },
     ],
   },
@@ -98,8 +98,8 @@ export function AppShell({
           {!sidebarCollapsed && (
             <div>
               <strong>DXM Agent</strong>
-              <span>真实浏览器自动化</span>
-              <span className="sr-only">配置 / 任务 / 真实浏览器执行</span>
+              <span>单商品只保存 Agent</span>
+              <span className="sr-only">配置 / 任务 / 登录 / 执行</span>
             </div>
           )}
           <button className="icon-button" type="button" onClick={onToggleSidebar} aria-label="切换侧边栏">
@@ -152,7 +152,7 @@ export function AppShell({
             </section>
           ))}
         </nav>
-        <span className="sr-only">数据连接状态：{sourceLabel}。真实店小秘操作在执行控制台的独立浏览器窗口中完成。</span>
+        <span className="sr-only">数据连接状态：{sourceLabel}。真实店小秘操作在登录浏览器和执行浏览器中完成。</span>
       </aside>
       <main ref={mainRef} className="workspace" tabIndex={-1} aria-label={`${activeLabel}主内容`}>
         <span className="sr-only" aria-live="polite">当前页面：{activeLabel}</span>

@@ -754,7 +754,7 @@ def test_default_shell_copy_does_not_present_demo_as_user_path():
     assert "连接状态" in shell_source
     assert "数据连接状态：{sourceLabel}" in shell_source
     assert "<strong>{sourceLabel}</strong>" not in shell_source
-    assert "真实店小秘操作在执行控制台的独立浏览器窗口中完成" in shell_source
+    assert "真实店小秘操作在登录浏览器和执行浏览器中完成" in shell_source
     assert "真实接口优先" not in shell_source
     assert "不伪造保存结果" not in shell_source
     assert "演示数据仅开发模式可用" not in shell_source
@@ -2073,12 +2073,27 @@ def test_frontend_first_screen_names_dxm_automation_delivery():
     assert "系统状态与验收详情" in safety_bar
     assert "safety-bar__meta-details inline-disclosure" in safety_bar
     assert "真实写入门禁未通过" not in safety_bar
-    assert "配置 / 任务 / 真实浏览器执行" in shell
+    assert "配置 / 任务 / 登录 / 执行" in shell
     assert "\\u0044\\u0058\\u004d \\u81ea\\u52a8\\u5316\\u5de5\\u4f5c\\u53f0" in qa_source
     assert "\\u73b0\\u5728\\u53ea\\u505a\\u8fd9\\u4e00\\u6b65" in qa_source
     assert "\\u67e5\\u770b\\u5b8c\\u6574 8 \\u6b65\\u6d41\\u7a0b" in qa_source
     assert "半托管保存交付工作台" not in source
     assert "保存核验 / 证据复盘" not in shell
+
+
+def test_sidebar_copy_names_save_only_agent_flow_without_ambiguous_browser_wording():
+    shell = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
+
+    assert "单商品只保存 Agent" in shell
+    assert "配置 / 任务 / 登录 / 执行" in shell
+    assert "Agent 控制台与执行浏览器" in shell
+    assert "{ id: 'console', label: '执行控制台', short: '控', hint: '登录与执行浏览器' }" in shell
+    assert "真实店小秘操作在登录浏览器和执行浏览器中完成" in shell
+
+    assert "真实浏览器自动化" not in shell
+    assert "配置 / 任务 / 真实浏览器执行" not in shell
+    assert "Agent 控制台与真实浏览器" not in shell
+    assert "hint: '真实浏览器'" not in shell
 
 
 def test_mock_workspace_uses_dry_run_demo_language_not_real_single_save():
