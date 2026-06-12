@@ -3183,8 +3183,8 @@ function AgentStagePanel({
   return (
     <div className={embedded ? 'agent-console-stage agent-console-stage--embedded' : 'module-card span-2 agent-console-stage'}>
       <ModuleHead
-        title="Agent 控制真实浏览器"
-        meta={agentConsole?.active ? '自动浏览器运行中' : '打开真实店小秘，保存前仍需确认'}
+        title="登录浏览器与执行浏览器"
+        meta={agentConsole?.active ? 'Agent 执行浏览器运行中' : '登录浏览器可先打开，执行浏览器需通过门禁'}
       />
       <AgentConsoleControls
         agentConsole={agentConsole}
@@ -3664,14 +3664,14 @@ function ConsoleFocusPanel({
       </div>
       <div className="console-focus-panel__facts console-focus-panel__primary-facts" aria-label="执行摘要">
         <span><strong>任务</strong><b>{selectedTask ? `${displayTaskName(selectedTask)} / ${humanTaskStatus(selectedTask.status)}` : '待选择'}</b></span>
-        <span><strong>真实浏览器</strong><b>{browserLabel}</b></span>
+        <span><strong>执行浏览器</strong><b>{browserLabel}</b></span>
         <span><strong>当前步骤</strong><b>{activeStep?.title ?? '等待任务'}</b></span>
         <span><strong>下一步</strong><b>{consoleNext}</b></span>
       </div>
       <details className="console-focus-panel__details inline-disclosure">
         <summary>技术状态</summary>
         <div className="console-focus-panel__facts">
-          <span><strong>当前页面</strong><b>{hasBrowserSession && currentUrl ? shortUrl(currentUrl) : '等待启动真实浏览器'}</b></span>
+          <span><strong>当前页面</strong><b>{hasBrowserSession && currentUrl ? shortUrl(currentUrl) : '等待启动执行浏览器'}</b></span>
           <span><strong>操控状态</strong><b>{controlLabel}</b></span>
           <span><strong>人工接管</strong><b>{takeoverLabel}</b></span>
           <span><strong>日志</strong><b>{sourceLabel} {runtimeLogCount} 条</b></span>
@@ -3895,18 +3895,18 @@ function AgentConsoleControls({
   const lifecycleStatus = !active
     ? browserStartBlocked
       ? primaryPath.browserStatus
-      : '真实浏览器待启动'
+      : 'Agent 执行浏览器待启动'
     : manualTakeover
-      ? '人工正在接管真实浏览器'
+      ? '人工正在接管 Agent 执行浏览器'
       : launching
-        ? '正在启动真实浏览器'
+        ? '正在启动 Agent 执行浏览器'
       : visible
-        ? '真实浏览器已启动，Agent 可控'
+        ? 'Agent 执行浏览器已启动，可控'
         : '浏览器会话已创建，等待窗口可见'
   const lifecycleNext = !active
     ? browserStartBlocked
       ? primaryPath.next
-      : '点击打开真实浏览器（不保存），进入独立 Profile 浏览器。'
+      : '点击打开执行浏览器（不保存），进入独立 Profile 浏览器。'
     : manualTakeover
       ? '完成人工处理后点击交还 Agent。'
       : launching
@@ -3928,7 +3928,7 @@ function AgentConsoleControls({
         </span>
         <span className="status-pill warn">不会发布</span>
       </div>
-      <div className={`agent-console-lifecycle ${browserStartBlocked && !active ? 'is-blocked' : active ? 'is-active' : ''}`} aria-label="真实浏览器会话生命周期">
+      <div className={`agent-console-lifecycle ${browserStartBlocked && !active ? 'is-blocked' : active ? 'is-active' : ''}`} aria-label="Agent 执行浏览器会话生命周期">
         <strong>{lifecycleStatus}</strong>
         <span>{lifecycleNext}</span>
         {browserStartBlocked && !active && <small>{browserStartBlockReason}</small>}
@@ -3951,17 +3951,17 @@ function AgentConsoleControls({
       )}
       <div className="agent-console-controls__mission">
         <strong>控制台 Agent 模式</strong>
-        <span>实时操控独立真实浏览器窗口，页面动作来自任务配置和人工放行。控制台不播放截图；截图只作为证据路径，不会启动保存或发布。</span>
+        <span>登录浏览器用于人工登录；执行浏览器只在配置、只读检查和人工确认通过后由 Agent 操控。控制台不播放截图；截图只作为证据路径，不会启动保存或发布。</span>
         <div>
           <b>1 登录/接入</b>
           <b>2 只读定位</b>
           <b>3 人工放行后只保存</b>
         </div>
       </div>
-      <div className="agent-console-controls__primary-operator" aria-label="真实浏览器首步操作">
+      <div className="agent-console-controls__primary-operator" aria-label="登录浏览器首步操作">
         <div className="agent-console-controls__primary-copy">
-          <strong>首步：打开真实店小秘登录页</strong>
-          <span>主操作区可直接登录、检测验证码和运行只读页面检查；保存和发布入口仍保持关闭。</span>
+          <strong>登录浏览器：打开真实店小秘登录页</strong>
+          <span>只负责登录、验证码和人工导航；L2 未通过也可以打开，不会保存、不发布。</span>
         </div>
         <DxmLoginInlineForm
           draft={dxmLoginDraft}
@@ -4000,16 +4000,16 @@ function AgentConsoleControls({
           type="button"
           onClick={onStartAgentConsole}
           disabled={busy || !selectedTask || browserStartBlocked || active || launching}
-          title={active ? '当前独立真实浏览器会话正在运行。' : browserStartBlocked ? browserStartBlockReason : realSaveBlocked ? realSaveBlockReason : '打开真实浏览器（不保存）；保存前仍需人工确认'}
+          title={active ? '当前 Agent 执行浏览器会话正在运行。' : browserStartBlocked ? browserStartBlockReason : realSaveBlocked ? realSaveBlockReason : '打开执行浏览器（不保存）；保存前仍需人工确认'}
         >
-          {launching ? '真实浏览器启动中' : active ? '真实浏览器已打开' : '打开真实浏览器（不保存）'}
+          {launching ? 'Agent 执行浏览器启动中' : active ? 'Agent 执行浏览器已打开' : '打开执行浏览器（不保存）'}
         </button>
       </div>
       <details className="agent-console-controls__advanced agent-console-controls__operator-drawer inline-disclosure">
-        <summary>真实浏览器操作细节</summary>
+        <summary>执行浏览器操作细节</summary>
         <div className="agent-console-controls__operator-grid">
           <details className="agent-console-controls__advanced inline-disclosure">
-            <summary>真实浏览器会话生命周期</summary>
+            <summary>Agent 执行浏览器会话生命周期</summary>
             <div className="agent-console-controls__session">
               <button className="button button--quiet" type="button" onClick={onSnapshotAgentConsole} disabled={busy || !active}>
                 刷新当前画面
@@ -5237,11 +5237,11 @@ function buildConsolePrimaryPath({
       code: 'select_task',
       title: '先选择或创建任务',
       reason: '当前没有选中的单商品只保存任务。',
-      detail: '先在任务中心创建或选择一个单商品只保存任务，再进入配置、只读检查和真实浏览器执行。',
+      detail: '先在任务中心创建或选择一个单商品只保存任务，再进入配置、只读检查和 Agent 执行浏览器。',
       next: '去任务中心选择任务',
       ctaLabel: '去任务中心选择任务',
       action: 'tasks',
-      browserStatus: '未选择任务，真实浏览器暂不启动',
+      browserStatus: '未选择任务，Agent 执行浏览器暂不启动',
       blocksBrowserStart: true,
       saveBlocked: true,
     }
@@ -5264,8 +5264,8 @@ function buildConsolePrimaryPath({
     return {
       code: 'running',
       title: '任务正在运行',
-      reason: '任务已经启动，避免重复启动真实浏览器。',
-      detail: '查看当前真实浏览器、运行日志和自动操作轨迹。',
+      reason: '任务已经启动，避免重复启动 Agent 执行浏览器。',
+      detail: '查看当前执行浏览器、运行日志和自动操作轨迹。',
       next: '等待当前任务完成',
       ctaLabel: '查看检查计划',
       action: 'reports',
@@ -5283,7 +5283,7 @@ function buildConsolePrimaryPath({
       next: '回到任务中心选择草稿任务',
       ctaLabel: '选择草稿任务',
       action: 'tasks',
-      browserStatus: '任务状态不可启动，真实浏览器暂不启动',
+      browserStatus: '任务状态不可启动，Agent 执行浏览器暂不启动',
       blocksBrowserStart: true,
       saveBlocked: true,
     }
@@ -5297,7 +5297,7 @@ function buildConsolePrimaryPath({
       next: '回到任务中心创建单商品只保存任务',
       ctaLabel: '创建单商品只保存任务',
       action: 'tasks',
-      browserStatus: '当前模式未放行，真实浏览器暂不启动',
+      browserStatus: '当前模式未放行，Agent 执行浏览器暂不启动',
       blocksBrowserStart: true,
       saveBlocked: true,
     }
@@ -5311,7 +5311,7 @@ function buildConsolePrimaryPath({
       next: '去配置中心重新检查',
       ctaLabel: '去配置中心重新检查',
       action: 'config',
-      browserStatus: '配置检查接口异常，真实浏览器暂不启动',
+      browserStatus: '配置检查接口异常，Agent 执行浏览器暂不启动',
       blocksBrowserStart: true,
       saveBlocked: true,
     }
@@ -5327,7 +5327,7 @@ function buildConsolePrimaryPath({
       next: '去配置中心补齐配置',
       ctaLabel: '去配置中心补齐配置',
       action: 'config',
-      browserStatus: '配置未完成，真实浏览器暂不启动',
+      browserStatus: '配置未完成，Agent 执行浏览器暂不启动',
       blocksBrowserStart: true,
       saveBlocked: true,
     }
@@ -5341,7 +5341,7 @@ function buildConsolePrimaryPath({
       next: '运行只读页面检查（不保存）',
       ctaLabel: '运行只读页面检查（不保存）',
       action: 'run_l2',
-      browserStatus: '只读检查未通过，真实浏览器暂不启动',
+      browserStatus: '只读检查未通过，Agent 执行浏览器暂不启动',
       blocksBrowserStart: true,
       saveBlocked: true,
     }
@@ -5355,7 +5355,7 @@ function buildConsolePrimaryPath({
       next: '去任务中心填写批准人并启动',
       ctaLabel: '去任务中心人工确认',
       action: 'tasks',
-      browserStatus: '等待人工确认，真实浏览器暂不启动',
+      browserStatus: '等待人工确认，Agent 执行浏览器暂不启动',
       blocksBrowserStart: true,
       saveBlocked: true,
     }
@@ -5365,24 +5365,24 @@ function buildConsolePrimaryPath({
       code: 'busy',
       title: '正在处理当前操作',
       reason: '工作台正在处理上一个请求。',
-      detail: '请等待当前请求完成后再启动真实浏览器。',
+      detail: '请等待当前请求完成后再启动 Agent 执行浏览器。',
       next: '等待当前操作完成',
       ctaLabel: '查看检查计划',
       action: 'reports',
-      browserStatus: '当前操作未完成，真实浏览器暂不启动',
+      browserStatus: '当前操作未完成，Agent 执行浏览器暂不启动',
       blocksBrowserStart: true,
       saveBlocked: true,
     }
   }
   return {
     code: 'ready',
-    title: '可以打开真实浏览器',
+    title: '可以打开执行浏览器',
     reason: '配置、只读检查和人工确认当前未阻断。',
-    detail: '将打开独立真实浏览器窗口；保存前仍需确认，不会发布。',
-    next: '打开真实浏览器（不保存）',
-    ctaLabel: '打开真实浏览器（不保存）',
+    detail: '将打开独立 Agent 执行浏览器窗口；保存前仍需确认，不会发布。',
+    next: '打开执行浏览器（不保存）',
+    ctaLabel: '打开执行浏览器（不保存）',
     action: 'start_browser',
-    browserStatus: '真实浏览器待启动',
+    browserStatus: 'Agent 执行浏览器待启动',
     blocksBrowserStart: false,
     saveBlocked: false,
   }

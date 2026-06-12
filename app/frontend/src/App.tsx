@@ -839,7 +839,7 @@ export default function App() {
     }
     const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
     if (l2Gate?.status !== 'passed') {
-      const message = `只读页面检查未通过，真实浏览器自动化不可启动：${l2Gate?.detail ?? '真实只读检查未通过'}`
+      const message = `只读页面检查未通过，Agent 执行浏览器不可启动：${l2Gate?.detail ?? '真实只读检查未通过'}`
       setAgentConsoleError(message)
       setOperationError(message)
       setActiveSection('console')

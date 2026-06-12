@@ -780,13 +780,13 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "完成态默认不展示浏览器操控细节" in workbench_source
     assert "embedded" in workbench_source
     assert "agent-console-stage--embedded" in workbench_source
-    assert "title=\"Agent 控制真实浏览器\"" in console_section
-    assert "<strong>真实浏览器</strong>" in workbench_source
+    assert "title=\"登录浏览器与执行浏览器\"" in console_section
+    assert "<strong>执行浏览器</strong>" in workbench_source
     assert "<strong>当前页面</strong>" in workbench_source
     assert "<strong>操控状态</strong>" in workbench_source
     assert "<strong>人工接管</strong>" in workbench_source
     assert "<strong>下一步</strong>" in workbench_source
-    assert "hasBrowserSession && currentUrl ? shortUrl(currentUrl) : '等待启动真实浏览器'" in workbench_source
+    assert "hasBrowserSession && currentUrl ? shortUrl(currentUrl) : '等待启动执行浏览器'" in workbench_source
     assert "可在生命周期区接管" in workbench_source
     assert "可在会话管理中接管" not in workbench_source
     assert "buildConsolePrimaryPath({ selectedTask, configPreview, configPreviewError, l2Gate, l3Gate, busy })" in workbench_source
@@ -796,7 +796,7 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "primaryPath.action === 'start_browser'" in workbench_source
     assert "去配置中心补齐配置" in workbench_source
     assert "运行只读页面检查（不保存）" in workbench_source
-    assert "可以打开真实浏览器" in workbench_source
+    assert "可以打开执行浏览器" in workbench_source
     assert "处理只读检查与确认" not in workbench_source
     assert "处理任务门禁" not in workbench_source
     assert "控制台不播放截图；截图只作为证据路径，不会启动保存或发布。" in workbench_source
@@ -815,29 +815,29 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "登录/人工处理真实浏览器" in workbench_source
     assert "agent-console-controls__primary-operator" in workbench_source
     assert "DxmLoginInlineForm" in workbench_source
-    assert "首步：打开真实店小秘登录页" in workbench_source
-    assert "主操作区可直接登录、检测验证码和运行只读页面检查" in workbench_source
+    assert "登录浏览器：打开真实店小秘登录页" in workbench_source
+    assert "只负责登录、验证码和人工导航；L2 未通过也可以打开，不会保存、不发布。" in workbench_source
     assert "验证码已完成，检测登录态" in workbench_source
     assert "进入采集箱" in workbench_source
-    assert "实时操控独立真实浏览器窗口" in workbench_source
+    assert "登录浏览器用于人工登录；执行浏览器只在配置、只读检查和人工确认通过后由 Agent 操控。" in workbench_source
     assert "控制台不播放截图；截图只作为证据路径，不会启动保存或发布。" in workbench_source
-    assert "aria-label=\"真实浏览器会话生命周期\"" in workbench_source
-    assert "未选择任务，真实浏览器暂不启动" in workbench_source
-    assert "配置未完成，真实浏览器暂不启动" in workbench_source
-    assert "只读检查未通过，真实浏览器暂不启动" in workbench_source
-    assert "等待人工确认，真实浏览器暂不启动" in workbench_source
+    assert "aria-label=\"Agent 执行浏览器会话生命周期\"" in workbench_source
+    assert "未选择任务，Agent 执行浏览器暂不启动" in workbench_source
+    assert "配置未完成，Agent 执行浏览器暂不启动" in workbench_source
+    assert "只读检查未通过，Agent 执行浏览器暂不启动" in workbench_source
+    assert "等待人工确认，Agent 执行浏览器暂不启动" in workbench_source
     assert "会打开可见的独立店小秘浏览器窗口" in workbench_source
     assert "启动后可接管" in workbench_source
     assert "const takeoverStateLabel = !active" in workbench_source
-    assert "打开真实浏览器（不保存）" in workbench_source
+    assert "打开执行浏览器（不保存）" in workbench_source
     assert "disabled={busy || !selectedTask || browserStartBlocked || active || launching}" in workbench_source
-    assert "真实浏览器启动中" in workbench_source
-    assert "{launching ? '真实浏览器启动中' : active ? '真实浏览器已打开' : '打开真实浏览器（不保存）'}" in workbench_source
-    assert "当前独立真实浏览器会话正在运行。" in workbench_source
-    assert "<summary>真实浏览器操作细节</summary>" in workbench_source
+    assert "Agent 执行浏览器启动中" in workbench_source
+    assert "{launching ? 'Agent 执行浏览器启动中' : active ? 'Agent 执行浏览器已打开' : '打开执行浏览器（不保存）'}" in workbench_source
+    assert "当前 Agent 执行浏览器会话正在运行。" in workbench_source
+    assert "<summary>执行浏览器操作细节</summary>" in workbench_source
     assert "agent-console-controls__operator-drawer" in workbench_source
     assert "agent-console-controls__operator-grid" in workbench_source
-    assert "<summary>真实浏览器会话生命周期</summary>" in workbench_source
+    assert "<summary>Agent 执行浏览器会话生命周期</summary>" in workbench_source
     assert "控制台不播放截图，不会启动保存或发布" in workbench_source
     assert "<summary>会话管理</summary>" not in workbench_source
     assert "<summary>高级浏览器控制</summary>" in workbench_source
@@ -854,10 +854,31 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert ".agent-console-controls__operator-grid" in styles_source
 
 
+def test_execution_console_distinguishes_login_browser_from_agent_execution_browser():
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    app_source = (REPO_ROOT / "app" / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+    console_section = workbench_source[workbench_source.index("function AgentConsoleControls"):workbench_source.index("function BrowserControlPad")]
+    primary_path_section = workbench_source[workbench_source.index("function buildConsolePrimaryPath"):workbench_source.index("function FinalCheckFreshnessRow")]
+
+    assert 'title="登录浏览器与执行浏览器"' in workbench_source
+    assert "<strong>登录浏览器：打开真实店小秘登录页</strong>" in console_section
+    assert "只负责登录、验证码和人工导航；L2 未通过也可以打开，不会保存、不发布。" in console_section
+    assert "登录浏览器用于人工登录；执行浏览器只在配置、只读检查和人工确认通过后由 Agent 操控。" in console_section
+    assert "打开执行浏览器（不保存）" in console_section
+    assert "Agent 执行浏览器启动中" in console_section
+    assert "Agent 执行浏览器已打开" in console_section
+    assert "Agent 执行浏览器暂不启动" in primary_path_section
+    assert "只读页面检查未通过，Agent 执行浏览器不可启动" in app_source
+
+    assert "首步：打开真实店小秘登录页" not in console_section
+    assert "只读检查未通过，真实浏览器暂不启动" not in primary_path_section
+    assert "只读页面检查未通过，真实浏览器自动化不可启动" not in app_source
+
+
 def test_execution_console_collapses_operator_forms_inside_real_browser_details():
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     controls_section = workbench_source[workbench_source.index("function AgentConsoleControls"):workbench_source.index("function BrowserControlPad")]
-    drawer_section = controls_section[controls_section.index("<summary>真实浏览器操作细节</summary>"):controls_section.index("{agentConsoleError")]
+    drawer_section = controls_section[controls_section.index("<summary>执行浏览器操作细节</summary>"):controls_section.index("{agentConsoleError")]
     primary_section = controls_section[
         controls_section.index("agent-console-controls__primary-operator"):
         controls_section.index("<details className=\"agent-console-controls__advanced agent-console-controls__operator-drawer")
@@ -866,11 +887,11 @@ def test_execution_console_collapses_operator_forms_inside_real_browser_details(
     assert "DxmLoginInlineForm" in primary_section
     assert "运行只读页面检查（不保存）" in primary_section
     assert "DxmLoginInlineForm" not in drawer_section
-    assert "<summary>真实浏览器会话生命周期</summary>" in drawer_section
+    assert "<summary>Agent 执行浏览器会话生命周期</summary>" in drawer_section
     assert "<summary>高级浏览器控制</summary>" in drawer_section
     assert "<summary>技术详情</summary>" in drawer_section
     assert primary_section.index("DxmLoginInlineForm") < primary_section.index("agent-console-controls__actions")
-    assert controls_section.index("agent-console-controls__actions") < controls_section.index("<summary>真实浏览器操作细节</summary>")
+    assert controls_section.index("agent-console-controls__actions") < controls_section.index("<summary>执行浏览器操作细节</summary>")
 
 
 def test_execution_console_log_center_autofollows_and_surfaces_sources():
@@ -2027,7 +2048,7 @@ def test_execution_console_uses_unified_primary_path_before_rendering():
     assert "先补齐本次任务配置" in source
     assert "先运行只读页面检查" in source
     assert "等待人工确认保存" in source
-    assert "可以打开真实浏览器" in source
+    assert "可以打开执行浏览器" in source
     assert "最新证据年龄" in source
     assert "只读检查证据已过期，请点击“运行只读页面检查（不保存）”刷新后再继续。" in source
 
