@@ -5394,7 +5394,11 @@ class DxmLoginFlow:
         return f'已触发采集箱动作：{action}'
 
     def _is_headless(self) -> bool:
+        if os.getenv('DXM_LOGIN_HEADLESS') == '1':
+            return True
         if os.getenv('DXM_LOGIN_HEADED') == '1':
+            return False
+        if os.name == 'nt':
             return False
         return not bool(os.getenv('DISPLAY'))
 

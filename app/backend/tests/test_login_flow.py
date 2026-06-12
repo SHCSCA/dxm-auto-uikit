@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from src.execution import dxm_login_flow as dxm_login_flow_module
 from src.execution.dxm_adapter import DxmWorkflowAdapter
 from src.execution.dxm_login_flow import DxmLoginFlow, WORKFLOW_TARGETS
 from src.main import app
@@ -140,6 +141,27 @@ class DummyLoginFlow:
             'note_text': note_text,
         }
         return self.state
+
+
+def test_login_browser_is_headed_by_default_on_windows(monkeypatch):
+    monkeypatch.delenv('DXM_LOGIN_HEADLESS', raising=False)
+    monkeypatch.delenv('DXM_LOGIN_HEADED', raising=False)
+    monkeypatch.delenv('DISPLAY', raising=False)
+    monkeypatch.setattr(dxm_login_flow_module.os, 'name', 'nt', raising=False)
+
+    flow = DxmLoginFlow(DummyLiveClient())
+
+    assert flow._is_headless() is False
+
+
+def test_login_browser_headless_can_be_explicitly_requested(monkeypatch):
+    monkeypatch.setenv('DXM_LOGIN_HEADLESS', '1')
+    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
+    monkeypatch.setattr(dxm_login_flow_module.os, 'name', 'nt', raising=False)
+
+    flow = DxmLoginFlow(DummyLiveClient())
+
+    assert flow._is_headless() is True
 
 
 def test_draft_box_target_opens_status_zero_collection_list():
