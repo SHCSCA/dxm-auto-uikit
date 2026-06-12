@@ -971,6 +971,8 @@ def test_login_start_returns_recoverable_state_when_browser_runner_crashes(monke
     assert data['stage'] == 'login_failed'
     assert data['label'] == '打开失败'
     assert '真实店小秘登录浏览器启动失败' in data['message']
+    assert 'Internal Server Error' not in data['message']
+    assert data['raw_error'] == 'Internal Server Error'
     assert '关闭旧的 DXM Agent Console 或旧浏览器进程后重试' in data['next_action']
     assert data['requires_user_action'] is True
 

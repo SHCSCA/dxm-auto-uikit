@@ -183,8 +183,9 @@ def dxm_login_start(payload: LoginStartRequest):
     except Exception as exc:
         result = _login_flow_failure_state(
             label='打开失败',
-            message=f'真实店小秘登录浏览器启动失败：{exc}',
+            message='真实店小秘登录浏览器启动失败。请按下一步处理，原始错误已保留到诊断字段和实时日志。',
             next_action='请关闭旧的 DXM Agent Console 或旧浏览器进程后重试；账号密码不会用于保存或发布。',
+            raw_error=str(exc),
         )
     return normalize_artifact_paths(result)
 
@@ -198,8 +199,9 @@ def dxm_login_continue(payload: LoginContinueRequest):
     except Exception as exc:
         result = _login_flow_failure_state(
             label='检测失败',
-            message=f'真实店小秘登录态检测失败：{exc}',
+            message='真实店小秘登录态检测失败。请按下一步处理，原始错误已保留到诊断字段和实时日志。',
             next_action='请确认真实浏览器窗口仍然打开，完成验证码或账号修正后再次检测；必要时重新打开登录页。',
+            raw_error=str(exc),
         )
     return normalize_artifact_paths(result)
 
@@ -1704,12 +1706,13 @@ def _run_login_flow(func, *args, **kwargs):
     return login_flow_executor.submit(func, *args, **kwargs).result()
 
 
-def _login_flow_failure_state(label: str, message: str, next_action: str) -> dict[str, Any]:
+def _login_flow_failure_state(label: str, message: str, next_action: str, raw_error: str | None = None) -> dict[str, Any]:
     return {
         'stage': 'login_failed',
         'label': label,
         'message': message,
         'next_action': next_action,
+        'raw_error': raw_error,
         'requires_user_action': True,
         'page_title': '店小秘登录浏览器',
         'page_url': 'https://www.dianxiaomi.com/',
