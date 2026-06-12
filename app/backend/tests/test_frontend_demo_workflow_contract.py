@@ -113,6 +113,11 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "config-template-console" in config_section
     assert "当前分区模板" in config_section
     assert "sectionTemplateOptions" in config_section
+    assert "templateOptionLabel(template)" in config_section
+    assert "function templateOptionLabel(" in source
+    assert "`#${template.id} ${template.template_name}" in source
+    assert "countNestedConfigValues(template.payload)" in source
+    assert "项配置" in source
     assert "selectedTemplateBySection" in config_section
     assert "applyTemplateToDraft" in config_section
     assert "handleTemplateSelection" in config_section

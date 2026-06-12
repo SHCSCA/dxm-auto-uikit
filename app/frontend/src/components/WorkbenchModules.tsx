@@ -1077,6 +1077,11 @@ function sectionTemplateOptions(templates: Template[], section: EditableConfigSe
     .sort((a, b) => Number(templateHasExactBinding(b, binding)) - Number(templateHasExactBinding(a, binding)) || a.template_name.localeCompare(b.template_name, 'zh-CN'))
 }
 
+function templateOptionLabel(template: Template) {
+  const fieldCount = countNestedConfigValues(template.payload)
+  return `#${template.id} ${template.template_name} / ${template.binding_scope} / ${fieldCount} 项配置`
+}
+
 function withTemplateBinding(payload: Record<string, unknown>, binding: TemplateBinding) {
   const cleanBinding = Object.fromEntries(
     Object.entries(binding).filter(([, value]) => textValue(value)),
@@ -1805,7 +1810,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
                 <option value="__default_test__">默认测试模板（当前分区）</option>
                 {activeSectionTemplateOptions.map((template) => (
                   <option key={template.id} value={template.id}>
-                    {template.template_name} / {template.binding_scope}
+                    {templateOptionLabel(template)}
                   </option>
                 ))}
               </select>
