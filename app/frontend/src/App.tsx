@@ -275,6 +275,7 @@ export default function App() {
     } else {
       setWorkspaceNotice(null)
     }
+    return nextWorkspace
   }, [selectedTaskId])
 
   useEffect(() => {
@@ -402,6 +403,31 @@ export default function App() {
     }
   }, [])
 
+  const handleL2RunnerFinished = useCallback(async ({
+    runnerSucceeded,
+    runId,
+    exitCode,
+    line,
+  }: {
+    runnerSucceeded: boolean
+    runId: string | null
+    exitCode: number | null
+    line: string
+  }) => {
+    const refreshedWorkspace = await refreshWorkspace()
+    await refreshRuntimeStatus()
+    const refreshedL2Gate = refreshedWorkspace.regressionGates.find((gate) => gate.level === 'L2')
+    const gatePassed = runnerSucceeded && refreshedL2Gate?.status === 'passed'
+    const gateDetail = refreshedL2Gate?.detail ? `；${refreshedL2Gate.detail}` : ''
+    if (gatePassed) {
+      setL2RunnerState({ status: 'passed', runId, exitCode, message: '预检通过，已刷新门禁', line, updatedAt: new Date().toISOString() })
+      return
+    }
+    const message = runnerSucceeded ? '预检完成，但门禁仍未通过' : '预检失败，真实保存仍阻断'
+    setL2RunnerState({ status: 'failed', runId, exitCode, message, line: `${line}${gateDetail}`, updatedAt: new Date().toISOString() })
+    setOperationError(`${message}；请查看启动器日志和检查计划。`)
+  }, [refreshRuntimeStatus, refreshWorkspace])
+
   useEffect(() => {
     const launcherItems = runtimeLogs.launcher?.items ?? []
     const runnerEvent = [...launcherItems]
@@ -418,21 +444,19 @@ export default function App() {
 
     if (runnerEvent.line.includes('[l2-readonly-runner] finished')) {
       const runnerSucceeded = runnerEvent.line.includes('exit_code=0') || exitCode === 0
-      if (runnerSucceeded) {
-        setL2RunnerState({ status: 'passed', runId, exitCode, message: '预检通过，已刷新门禁', line: runnerEvent.line, updatedAt: new Date().toISOString() })
-        void refreshWorkspace()
-        void refreshRuntimeStatus()
-      } else {
-        setL2RunnerState({ status: 'failed', runId, exitCode, message: '预检失败，真实保存仍阻断', line: runnerEvent.line, updatedAt: new Date().toISOString() })
-        setOperationError('预检失败，真实保存仍保持阻断；请查看启动器日志和检查计划。')
-      }
+      void handleL2RunnerFinished({
+        runnerSucceeded,
+        runId,
+        exitCode,
+        line: runnerEvent.line,
+      })
       return
     }
 
     if (runnerEvent.line.includes('[l2-readonly-runner] started')) {
       setL2RunnerState({ status: 'running', runId, exitCode: null, message: '正在运行双目标预检', line: runnerEvent.line, updatedAt: new Date().toISOString() })
     }
-  }, [refreshRuntimeStatus, refreshWorkspace, runtimeLogs.launcher])
+  }, [handleL2RunnerFinished, runtimeLogs.launcher])
 
   useEffect(() => {
     void refreshRuntimeStatus()

@@ -2127,13 +2127,21 @@ def test_safety_status_bar_does_not_duplicate_completed_task_status():
 
 def test_frontend_refreshes_workspace_after_l2_runner_finishes():
     app_source = APP_TSX.read_text(encoding="utf-8")
+    runner_observer = app_source[
+        app_source.index("const handleL2RunnerFinished"):
+        app_source.index("useEffect(() => {\n    void refreshRuntimeStatus()")
+    ]
 
     assert "lastObservedL2CompletionRef" in app_source
-    assert "[l2-readonly-runner] finished" in app_source
-    assert "exit_code=0" in app_source
-    assert "runnerEvent.line.match(/run_id=" in app_source
-    assert "void refreshWorkspace()" in app_source
-    assert "void refreshRuntimeStatus()" in app_source
+    assert "[l2-readonly-runner] finished" in runner_observer
+    assert "exit_code=0" in runner_observer
+    assert "runnerEvent.line.match(/run_id=" in runner_observer
+    assert "const refreshedWorkspace = await refreshWorkspace()" in runner_observer
+    assert "const refreshedL2Gate = refreshedWorkspace.regressionGates.find((gate) => gate.level === 'L2')" in runner_observer
+    assert "runnerSucceeded && refreshedL2Gate?.status === 'passed'" in runner_observer
+    assert "预检完成，但门禁仍未通过" in runner_observer
+    assert "void handleL2RunnerFinished({" in runner_observer
+    assert "void refreshWorkspace()" not in runner_observer
 
 
 def test_execution_console_surfaces_l2_runner_result_not_just_start_message():
@@ -2147,13 +2155,14 @@ def test_execution_console_surfaces_l2_runner_result_not_just_start_message():
     assert "exit_code=0" in app_source
     assert "exit_code=" in app_source
     assert "setL2RunnerState({ status: 'failed'" in app_source
-    assert "setOperationError('预检失败" in app_source
+    assert "setOperationError(`${message}；请查看启动器日志和检查计划。`)" in app_source
     assert "l2RunnerState={l2RunnerState}" in app_source
     assert "L2RunnerStatePanel" in workbench_source
     assert "预检状态" in workbench_source
     assert "正在运行双目标预检" in workbench_source
     assert "预检通过，已刷新门禁" in workbench_source
     assert "预检失败，真实保存仍阻断" in workbench_source
+    assert "预检完成，但门禁仍未通过" in app_source
     assert ".l2-runner-state" in styles_source
 
 
