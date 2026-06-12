@@ -366,20 +366,14 @@ def test_agent_console_controls_live_browser_and_records_actions(tmp_path, monke
         service._page = fake_page
         service._state["browser_visible"] = True
 
-    click = service.control_browser({"action": "click", "x": 120, "y": 240})
-    typed = service.control_browser({"action": "type", "text": "DXM test"})
-    pressed = service.control_browser({"action": "press", "key": "Enter"})
     scrolled = service.control_browser({"action": "scroll", "delta_y": 360})
     navigated = service.control_browser({"action": "goto", "url": "https://www.dianxiaomi.com/web/home"})
 
-    assert click["ok"] is True
-    assert typed["ok"] is True
-    assert pressed["ok"] is True
     assert scrolled["ok"] is True
     assert navigated["ok"] is True
-    assert fake_page.mouse.clicks == [(120, 240)]
-    assert fake_page.keyboard.typed == ["DXM test"]
-    assert fake_page.keyboard.pressed == ["Enter"]
+    assert fake_page.mouse.clicks == []
+    assert fake_page.keyboard.typed == []
+    assert fake_page.keyboard.pressed == []
     assert fake_page.mouse.wheels == [(0, 360)]
     assert fake_page.goto_calls[-1] == ("https://www.dianxiaomi.com/web/home", "domcontentloaded", 45000)
     status = service.status()
@@ -388,6 +382,33 @@ def test_agent_console_controls_live_browser_and_records_actions(tmp_path, monke
     assert status["action_events"][-1]["action"] == "goto"
     assert status["action_events"][-1]["status"] == "ok"
     assert status["last_frame_at"] is not None
+
+
+def test_agent_console_rejects_untargeted_browser_controls(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    monkeypatch.setattr(agent_console_module, "SCREENSHOT_ROOT", tmp_path / "screenshots")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+    fake_page = _FakePage()
+
+    with service._lock:
+        service._page = fake_page
+        service._state["browser_visible"] = True
+
+    clicked = service.control_browser({"action": "click", "x": 120, "y": 240})
+    typed = service.control_browser({"action": "type", "text": "DXM test"})
+    pressed = service.control_browser({"action": "press", "key": "Enter"})
+
+    assert clicked["ok"] is False
+    assert typed["ok"] is False
+    assert pressed["ok"] is False
+    assert clicked["reason"] == "browser_control_failed"
+    assert "selector-based control" in clicked["error"]
+    assert "selector-based control" in typed["error"]
+    assert "selector-based control" in pressed["error"]
+    assert fake_page.mouse.clicks == []
+    assert fake_page.keyboard.typed == []
+    assert fake_page.keyboard.pressed == []
 
 
 def test_agent_console_successful_browser_control_clears_stale_error(tmp_path, monkeypatch):
@@ -528,7 +549,7 @@ def test_agent_console_api_manual_takeover_lifecycle(tmp_path, monkeypatch):
     service.stop()
 
 
-def test_agent_console_api_control_browser_records_live_action(tmp_path, monkeypatch):
+def test_agent_console_api_rejects_untargeted_browser_control(tmp_path, monkeypatch):
     client, repo, service = _client_with_temp_repo_and_console(tmp_path, monkeypatch)
     task = _create_task(repo)
     start_response = client.post("/api/agent-console/start", json={"task_id": task["id"], "launch_browser": False})
@@ -542,9 +563,12 @@ def test_agent_console_api_control_browser_records_live_action(tmp_path, monkeyp
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["ok"] is True
+    assert payload["ok"] is False
+    assert payload["reason"] == "browser_control_failed"
     assert payload["action_events"][-1]["action"] == "type"
-    assert fake_page.keyboard.typed == ["hello"]
+    assert payload["action_events"][-1]["status"] == "error"
+    assert "selector-based control" in payload["error"]
+    assert fake_page.keyboard.typed == []
     service.stop()
 
 

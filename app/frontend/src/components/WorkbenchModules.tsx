@@ -3558,7 +3558,6 @@ function BrowserControlPad({
   onControlAgentConsoleBrowser: (command: AgentConsoleControlCommand) => void
 }) {
   const [text, setText] = useState('')
-  const [key, setKey] = useState('Enter')
   const [selector, setSelector] = useState('')
   const [url, setUrl] = useState(agentConsole?.current_url ?? agentConsole?.target_url ?? 'https://www.dianxiaomi.com/')
   const active = Boolean(agentConsole?.active && agentConsole?.browser_visible)
@@ -3609,26 +3608,6 @@ function BrowserControlPad({
           滚动页面
         </button>
       </div>
-      <div className="browser-control-pad__row browser-control-pad__row--wide">
-        <label className="browser-control-pad__selector-field">
-          <span>输入文本</span>
-          <input
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            placeholder="输入到焦点"
-            aria-label="输入到焦点"
-            disabled={busy}
-          />
-        </label>
-        <button
-          className="button button--quiet"
-          type="button"
-          disabled={disabled || !text}
-          onClick={() => onControlAgentConsoleBrowser({ action: 'type', text })}
-        >
-          输入到焦点
-        </button>
-      </div>
       <div className="browser-control-pad__row browser-control-pad__row--wide browser-control-pad__row--selector">
         <label className="browser-control-pad__selector-field">
           <span>CSS 选择器</span>
@@ -3637,6 +3616,16 @@ function BrowserControlPad({
             onChange={(event) => setSelector(event.target.value)}
             placeholder="例如 input[name='subject']"
             aria-label="选择器定位"
+            disabled={busy}
+          />
+        </label>
+        <label className="browser-control-pad__selector-field">
+          <span>填写内容</span>
+          <input
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            placeholder="用于选择器填写"
+            aria-label="选择器填写内容"
             disabled={busy}
           />
         </label>
@@ -3657,20 +3646,8 @@ function BrowserControlPad({
           按选择器填写
         </button>
       </div>
-      <div className="browser-control-pad__row">
-        <label className="browser-control-pad__selector-field">
-          <span>按键</span>
-          <select value={key} onChange={(event) => setKey(event.target.value)} aria-label="按键" disabled={busy}>
-            <option value="Enter">Enter</option>
-            <option value="Tab">Tab</option>
-            <option value="Escape">Escape</option>
-            <option value="Backspace">Backspace</option>
-          </select>
-        </label>
-        <button className="button button--quiet" type="button" disabled={disabled} onClick={() => onControlAgentConsoleBrowser({ action: 'press', key })}>
-          按键
-        </button>
-        <span>坐标点击会发送到独立真实浏览器窗口；控制台仅显示会话状态和证据路径。</span>
+      <div className="browser-control-pad__row browser-control-pad__row--wide">
+        <span>原始坐标点击、焦点输入和按键已关闭；需要直接操作时请在真实浏览器窗口中人工接管。</span>
       </div>
     </div>
   )
