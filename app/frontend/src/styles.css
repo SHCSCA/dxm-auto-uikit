@@ -4235,6 +4235,41 @@ tr:last-child td {
   word-break: break-word;
 }
 
+.l2-precheck-failure-advice {
+  display: grid;
+  gap: 7px;
+  margin-top: 10px;
+  padding: 9px;
+  border: 1px solid #f3b8bf;
+  border-radius: 7px;
+  background: #fff6f7;
+}
+
+.l2-precheck-failure-advice > strong {
+  color: #b42335;
+  font-size: 13px;
+}
+
+.l2-precheck-failure-advice article {
+  display: grid;
+  gap: 5px;
+}
+
+.l2-precheck-failure-advice span {
+  display: grid;
+  gap: 2px;
+}
+
+.l2-precheck-failure-advice b {
+  color: var(--text);
+  font-size: 11px;
+}
+
+.l2-precheck-failure-advice small {
+  color: var(--muted);
+  line-height: 1.35;
+}
+
 .l2-precheck-runbook {
   display: grid;
   gap: 8px;

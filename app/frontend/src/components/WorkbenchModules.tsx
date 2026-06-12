@@ -4489,6 +4489,7 @@ function L2RunnerStatePanel({
   onShowReports: () => void
 }) {
   const gateLabel = humanGateStateLabel(l2Gate?.status ?? 'not_run')
+  const diagnosticSummaries = summarizeL2Diagnostics(l2Gate)
   const tone = state.status === 'passed' ? 'ok' : state.status === 'failed' ? 'danger' : state.status === 'running' ? 'warn' : 'pending'
   const title = state.status === 'passed'
     ? '预检通过，已刷新门禁'
@@ -4508,11 +4509,44 @@ function L2RunnerStatePanel({
         {state.exitCode !== null && <small>退出码：{state.exitCode}</small>}
         {state.line && <code>{state.line}</code>}
       </div>
+      <L2PrecheckFailureAdvice summaries={diagnosticSummaries} state={state} />
       <L2PrecheckRunbook
         state={state}
         onLogSourceChange={onLogSourceChange}
         onShowReports={onShowReports}
       />
+    </div>
+  )
+}
+
+function L2PrecheckFailureAdvice({
+  summaries,
+  state,
+}: {
+  summaries: L2DiagnosticSummary[]
+  state: L2RunnerState
+}) {
+  if (state.status !== 'failed' && summaries.length === 0) return null
+  const visibleSummaries = summaries.slice(0, 2)
+
+  return (
+    <div className="l2-precheck-failure-advice" aria-label="预检失败处理建议">
+      <strong>预检失败处理建议</strong>
+      {visibleSummaries.length ? (
+        visibleSummaries.map((item) => (
+          <article key={item.target}>
+            <span><b>失败页面</b><small>{item.targetLabel} / {humanDiagnosticNavigation(item.navigation)}</small></span>
+            <span><b>失败检查</b><small>{item.failedChecks.slice(0, 2).map(humanFailedCheckLabel).join(' / ') || '页面检查未满足'}</small></span>
+            <span><b>下一步处理</b><small>{item.nextAction}</small></span>
+          </article>
+        ))
+      ) : (
+        <article>
+          <span><b>失败页面</b><small>等待诊断明细</small></span>
+          <span><b>失败检查</b><small>未收到页面诊断，请先查看启动器日志。</small></span>
+          <span><b>下一步处理</b><small>确认真实浏览器已登录并能打开目标页，再重新运行预检。</small></span>
+        </article>
+      )}
     </div>
   )
 }
@@ -6192,7 +6226,7 @@ function summarizeL2Diagnostics(gate?: RegressionGate): L2DiagnosticSummary[] {
     })
     return {
       target,
-      targetLabel: target === 'data_acquisition' ? 'data_acquisition 采集页' : target === 'draft_box' ? 'draft_box 草稿箱' : target,
+      targetLabel: humanL2TargetLabel(target),
       navigation: `最终 ${finalPath}（${l2FinalPathLabel(finalClass)}）`,
       failedChecks,
       topRequests,
@@ -6207,6 +6241,13 @@ function summarizeL2Diagnostics(gate?: RegressionGate): L2DiagnosticSummary[] {
       }),
     }
   })
+}
+
+function humanL2TargetLabel(target: string) {
+  return ({
+    data_acquisition: '商品采集页',
+    draft_box: '采集箱/草稿箱',
+  } as Record<string, string>)[target] ?? target
 }
 
 function l2DiagnosticNextAction({

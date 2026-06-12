@@ -2239,6 +2239,29 @@ def test_execution_console_explains_l2_precheck_runbook_and_next_action():
     assert ".l2-precheck-runbook__steps" in styles_source
 
 
+def test_execution_console_shows_l2_failure_advice_in_precheck_card():
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    runner_panel = workbench_source[workbench_source.index("function L2RunnerStatePanel"):workbench_source.index("function RuntimeLogPreview")]
+    summarize_section = workbench_source[workbench_source.index("function summarizeL2Diagnostics"):workbench_source.index("function l2DiagnosticNextAction")]
+
+    assert "const diagnosticSummaries = summarizeL2Diagnostics(l2Gate)" in runner_panel
+    assert "L2PrecheckFailureAdvice" in runner_panel
+    assert "function L2PrecheckFailureAdvice" in workbench_source
+    assert "aria-label=\"预检失败处理建议\"" in workbench_source
+    assert "预检失败处理建议" in workbench_source
+    assert "失败页面" in workbench_source
+    assert "失败检查" in workbench_source
+    assert "下一步处理" in workbench_source
+    assert "item.nextAction" in workbench_source
+    assert "humanDiagnosticNavigation(item.navigation)" in workbench_source
+    assert "humanFailedCheckLabel" in workbench_source
+    assert "humanL2TargetLabel(target)" in summarize_section
+    assert "data_acquisition 采集页" not in summarize_section
+    assert "draft_box 草稿箱" not in summarize_section
+    assert ".l2-precheck-failure-advice" in styles_source
+
+
 def test_runtime_maintenance_explains_cleared_and_protected_tasks():
     app_source = APP_TSX.read_text(encoding="utf-8")
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
