@@ -159,6 +159,8 @@ def test_verify_desktop_package_smoke_script_checks_packaged_exe_logs():
 
     assert "DXM Agent Console packaged smoke" in source
     assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
+    assert "DXM-Agent-Console-Portable-0.1.0.exe" in source
+    assert "[switch]$CheckPortable" in source
     assert "desktop-main.log" in source
     assert "Loaded frontend" in source
     assert "Starting backend" in source
@@ -180,6 +182,9 @@ def test_verify_desktop_package_smoke_script_checks_packaged_exe_logs():
     assert "__pycache__" in source
     assert "Packaged runtime generated Python bytecode cache" in source
     assert "taskkill" in source
+    assert "Portable QA capture was not created" in source
+    assert "Portable smoke passed" in source
+    assert "Portable smoke skipped. Current delivery target is the verified directory免安装版" in source
 
 
 def test_user_docs_present_desktop_exe_as_primary_delivery_entry():

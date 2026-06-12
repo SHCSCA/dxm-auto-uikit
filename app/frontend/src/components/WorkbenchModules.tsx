@@ -3467,6 +3467,13 @@ function runtimeControlOwnerText(owner: string, managedByDesktop: boolean) {
 }
 
 function getL2ProbeResourceState(runtimeStatus: RuntimeStatus | null) {
+  if (!runtimeStatus || !runtimeStatus.dependencies) {
+    return {
+      blocked: true,
+      title: '只读页面检查依赖状态未知，请先刷新运行状态或重新打开免安装版。',
+      detail: '只读页面检查依赖状态未知，请先刷新运行状态或重新打开免安装版。',
+    }
+  }
   const dependencies = runtimeStatus?.dependencies ?? {}
   const required = [
     ['只读页面检查启动器', dependencies.l2_readonly_probe_runner],

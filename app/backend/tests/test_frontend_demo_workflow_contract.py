@@ -2033,6 +2033,8 @@ def test_frontend_surfaces_runtime_status_and_log_filters():
     assert "dependencies.l2_readonly_probe_runner" in workbench_source
     assert "dependencies.l2_readonly_probe_script" in workbench_source
     assert "dependencies.l2_readonly_probe_allowlist" in workbench_source
+    assert "if (!runtimeStatus || !runtimeStatus.dependencies)" in workbench_source
+    assert "只读页面检查依赖状态未知，请先刷新运行状态或重新打开免安装版。" in workbench_source
     assert "checkedPaths" in (REPO_ROOT / "app" / "frontend" / "src" / "types.ts").read_text(encoding="utf-8")
     assert "已检查：" in workbench_source
     assert ".slice(0, 4)" in workbench_source

@@ -1,13 +1,16 @@
 param(
-  [int]$WaitSeconds = 25
+  [int]$WaitSeconds = 25,
+  [switch]$CheckPortable
 )
 
 $ErrorActionPreference = 'Stop'
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $ExePath = Join-Path $RepoRoot 'outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe'
+$PortableExePath = Join-Path $RepoRoot 'outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe'
 $LogPath = Join-Path $env:APPDATA 'DXM Agent Console\data\desktop-main.log'
 $LegacyLogPath = Join-Path $env:APPDATA 'dxm-agent-desktop\data\desktop-main.log'
 $CapturePath = Join-Path $env:TEMP 'dxm-agent-console-packaged-smoke.png'
+$PortableCapturePath = Join-Path $env:TEMP 'dxm-agent-console-portable-smoke.png'
 
 Write-Host 'DXM Agent Console packaged smoke'
 Write-Host "Exe: $ExePath"
@@ -37,6 +40,9 @@ foreach ($Path in @($LogPath, $LegacyLogPath)) {
 
 if (Test-Path $CapturePath) {
   Remove-Item -LiteralPath $CapturePath -Force
+}
+if (Test-Path $PortableCapturePath) {
+  Remove-Item -LiteralPath $PortableCapturePath -Force
 }
 
 function Wait-ForFile {
@@ -232,3 +238,30 @@ Get-Process | Where-Object { $_.Path -like '*desktop-build*DXM-Agent-Console.exe
 
 Write-Host "Packaged smoke passed. Log: $ExistingLog"
 Write-Host "QA capture: $CapturePath"
+
+if ($CheckPortable -and (Test-Path $PortableExePath)) {
+  Write-Host "Portable exe: $PortableExePath"
+  $PortableProcess = Start-Process -FilePath $PortableExePath -ArgumentList "--qa-capture=$PortableCapturePath" -WindowStyle Hidden -PassThru
+  if (!(Wait-ForFile -Path $PortableCapturePath -TimeoutSeconds $WaitSeconds)) {
+    try {
+      Stop-Process -Id $PortableProcess.Id -Force
+    } catch {}
+    throw "Portable QA capture was not created: $PortableCapturePath"
+  }
+  $PortableExited = $PortableProcess.WaitForExit(5000)
+  if ($PortableExited -and $PortableProcess.ExitCode -ne 0) {
+    throw "Portable smoke failed: exit code $($PortableProcess.ExitCode)"
+  }
+  if (!$PortableExited) {
+    try {
+      Stop-Process -Id $PortableProcess.Id -Force
+    } catch {}
+  }
+  $PortableLog = Get-DesktopSmokeLog
+  Assert-DesktopSmokeLog -ExistingLog $PortableLog -ExpectedPythonRoot $null -Label 'Portable smoke'
+  Write-Host "Portable smoke passed. QA capture: $PortableCapturePath"
+} elseif ($CheckPortable) {
+  Write-Host "Portable exe not found, skipped: $PortableExePath"
+} else {
+  Write-Host "Portable smoke skipped. Current delivery target is the verified directory免安装版: outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe"
+}
