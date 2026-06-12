@@ -32,7 +32,7 @@ const AGENT_CONSOLE_NAVIGATION_SETTLE_MS = 2500
 const REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save', 'batch_save'])
 const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['single_save'])
 const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'batch_save'])
-const DXM_READY_SESSION_STATUSES = new Set(['login_success', 'logged_in', 'not_published_verified'])
+const DXM_READY_SESSION_STATUSES = new Set(['login_success', 'logged_in', 'not_published_verified', 'workflow_navigation'])
 const L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
 const DEMO_ENABLED = new URLSearchParams(window.location.search).get('dev') === '1'
   || (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_DXM_ENABLE_DEMO === '1'
@@ -154,8 +154,10 @@ export default function App() {
   })
   const [lastRuntimeControlResult, setLastRuntimeControlResult] = useState<RuntimeControlResponse | null>(null)
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null)
+  const [runtimeStatusError, setRuntimeStatusError] = useState<string | null>(null)
   const [desktopRuntime, setDesktopRuntime] = useState<DesktopRuntimeInfo | null>(null)
   const [configPreview, setConfigPreview] = useState<ConfigPreview | null>(null)
+  const [configPreviewError, setConfigPreviewError] = useState<string | null>(null)
   const [configPreviewLoading, setConfigPreviewLoading] = useState(false)
   const [dxmLoginDraft, setDxmLoginDraft] = useState({ username: '', password: '', rememberCredential: true })
   const [dxmCredentialState, setDxmCredentialState] = useState<DxmCredentialState>({
@@ -266,14 +268,17 @@ export default function App() {
   const refreshConfigPreview = useCallback(async (taskId: number | null = selectedTask?.id ?? null) => {
     if (!taskId) {
       setConfigPreview(null)
+      setConfigPreviewError(null)
       return null
     }
     setConfigPreviewLoading(true)
     try {
       const preview = await getJson<ConfigPreview>(`/api/config/preview?task_id=${taskId}`)
       setConfigPreview(preview)
+      setConfigPreviewError(null)
       return preview
-    } catch {
+    } catch (error) {
+      setConfigPreviewError(error instanceof Error ? error.message : '配置检查接口不可用')
       setConfigPreview(null)
       return null
     } finally {
@@ -371,8 +376,14 @@ export default function App() {
   }, [refreshRuntimeLogs])
 
   const refreshRuntimeStatus = useCallback(async () => {
-    const status = await getJsonOrDefault<RuntimeStatus | null>(`/api/runtime/status?frontend_url=${encodeURIComponent(window.location.origin)}`, null)
-    setRuntimeStatus(status)
+    try {
+      const status = await getJson<RuntimeStatus>(`/api/runtime/status?frontend_url=${encodeURIComponent(window.location.origin)}`)
+      setRuntimeStatus(status)
+      setRuntimeStatusError(null)
+    } catch (error) {
+      setRuntimeStatus(null)
+      setRuntimeStatusError(error instanceof Error ? error.message : '运行状态接口不可用')
+    }
   }, [])
 
   useEffect(() => {
@@ -959,7 +970,7 @@ export default function App() {
   const content = (() => {
     switch (activeSection) {
       case 'config':
-        return <ConfigCenter workspace={workspace} selectedTask={selectedTask} configPreview={configPreview} configPreviewLoading={configPreviewLoading} onConfigSaved={async () => { await refreshWorkspace(); await refreshConfigPreview() }} onRefreshConfigPreview={async () => { await refreshConfigPreview(); await refreshWorkspace() }} onShowTasks={() => setActiveSection('tasks')} />
+        return <ConfigCenter workspace={workspace} selectedTask={selectedTask} configPreview={configPreview} configPreviewError={configPreviewError} configPreviewLoading={configPreviewLoading} onConfigSaved={async () => { await refreshWorkspace(); await refreshConfigPreview() }} onRefreshConfigPreview={async () => { await refreshConfigPreview(); await refreshWorkspace() }} onShowTasks={() => setActiveSection('tasks')} />
       case 'guide':
         return (
           <GuideCenter
@@ -967,6 +978,7 @@ export default function App() {
             selectedTask={selectedTask}
             configPreview={configPreview}
             runtimeStatus={runtimeStatus}
+            runtimeStatusError={runtimeStatusError}
             dxmLoginDraft={dxmLoginDraft}
             dxmCredentialState={dxmCredentialState}
             l3ApprovedBy={l3ApprovedBy}
@@ -993,8 +1005,10 @@ export default function App() {
             workspace={workspace}
             selectedTask={selectedTask}
             configPreview={configPreview}
+            configPreviewError={configPreviewError}
             configPreviewLoading={configPreviewLoading}
             runtimeStatus={runtimeStatus}
+            runtimeStatusError={runtimeStatusError}
             busy={busy}
             demoEnabled={DEMO_ENABLED}
             l3ApprovedBy={l3ApprovedBy}
@@ -1021,7 +1035,9 @@ export default function App() {
             agentConsole={agentConsole}
             agentConsoleError={agentConsoleError}
             configPreview={configPreview}
+            configPreviewError={configPreviewError}
             runtimeStatus={runtimeStatus}
+            runtimeStatusError={runtimeStatusError}
             runtimeLogs={runtimeLogs}
             runtimeLogSource={runtimeLogSource}
             runtimeLogError={runtimeLogError}
@@ -1077,6 +1093,7 @@ export default function App() {
         workspace={workspace}
         selectedTask={selectedTask}
         runtimeStatus={runtimeStatus}
+        runtimeStatusError={runtimeStatusError}
         desktopRuntime={desktopRuntime}
         busy={busy}
         onRefresh={() => { void refreshWorkspace(); void refreshRuntimeStatus(); void refreshRuntimeLogs(); void refreshConfigPreview() }}

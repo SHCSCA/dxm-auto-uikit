@@ -2,12 +2,13 @@ import type { DeliveryWorkspace, DesktopRuntimeInfo, RuntimeStatus, Task } from 
 import { humanTaskStatus } from '../workspace'
 
 const l3PostEvidenceGapIds = new Set(['gap-save-result', 'gap-unpublished-proof', 'gap-network-save-response'])
-const dxmReadySessionStatuses = new Set(['login_success', 'logged_in', 'not_published_verified'])
+const dxmReadySessionStatuses = new Set(['login_success', 'logged_in', 'not_published_verified', 'workflow_navigation'])
 
 type SafetyStatusBarProps = {
   workspace: DeliveryWorkspace
   selectedTask: Task | null
   runtimeStatus: RuntimeStatus | null
+  runtimeStatusError?: string | null
   desktopRuntime?: DesktopRuntimeInfo | null
   busy: boolean
   onRefresh: () => void
@@ -15,7 +16,7 @@ type SafetyStatusBarProps = {
   onShowConsole: () => void
 }
 
-export function SafetyStatusBar({ workspace, selectedTask, runtimeStatus, desktopRuntime, busy, onRefresh, onShowTasks, onShowConsole }: SafetyStatusBarProps) {
+export function SafetyStatusBar({ workspace, selectedTask, runtimeStatus, runtimeStatusError, desktopRuntime, busy, onRefresh, onShowTasks, onShowConsole }: SafetyStatusBarProps) {
   const activeTaskLabel = selectedTask ? `#${selectedTask.id}` : '未选择任务'
   const activeTaskStatusLabel = selectedTask ? humanTaskStatus(selectedTask.status) : ''
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
@@ -36,15 +37,18 @@ export function SafetyStatusBar({ workspace, selectedTask, runtimeStatus, deskto
   })
   const l3PostEvidenceGapCount = blockerGaps.filter((gap) => realWriteExpectedBlocked && l3PostEvidenceGapIds.has(gap.id)).length
   const hasBlocker = visibleBlockerGaps.length > 0
+  const runtimeStatusUnavailable = Boolean(runtimeStatusError)
   const dxmLoggedIn = runtimeStatus ? dxmReadySessionStatuses.has(runtimeStatus.dxmLogin.status) : false
-  const tone = l3BlocksRealSave || hasBlocker || publishGuardReasons.length > 0
+  const tone = runtimeStatusUnavailable || l3BlocksRealSave || hasBlocker || publishGuardReasons.length > 0
     ? 'danger'
     : l2BlocksRealSave || l3NeedsApproval || workspace.source === 'mock' || workspace.evidenceGrade?.grade === 'C'
       ? 'warn'
       : 'ok'
   const headline = selectedTaskCompleted
     ? '当前任务已完成，可查看执行记录'
-    : !dxmLoggedIn
+    : runtimeStatusUnavailable
+      ? '运行状态接口不可用'
+      : !dxmLoggedIn
       ? '继续下一步：打开真实店小秘登录'
       : l2BlocksRealSave
         ? '继续下一步：运行只读页面检查'
@@ -68,13 +72,17 @@ export function SafetyStatusBar({ workspace, selectedTask, runtimeStatus, deskto
       ? `${statusLine}，最近校验 ${workspace.safety.lastCheckedAt}`
       : `当前任务 ${activeTaskLabel}，最近校验 ${workspace.safety.lastCheckedAt}`
   const conciseDetail = tone === 'danger'
-    ? '工作台只会执行受控“只保存”，发布和批量无人值守仍保持关闭。'
+    ? runtimeStatusUnavailable
+      ? '无法读取本机运行状态；请查看实时日志或重启免安装版。'
+      : '工作台只会执行受控“只保存”，发布和批量无人值守仍保持关闭。'
     : selectedTaskCompleted
       ? `任务 ${activeTaskLabel} ${activeTaskStatusLabel}，继续查看报告、证据或打开执行控制台复核。`
       : '按操作引导继续：真实登录、配置、只读页面检查、人工确认后才启动保存。'
   const runtimeEndpointLine = runtimeStatus
     ? `服务端 ${runtimeStatus.backend.url ?? `端口 ${runtimeStatus.backend.port ?? '未知'}`} / 前端 ${runtimeStatus.frontend.url ?? `端口 ${runtimeStatus.frontend.port ?? '未知'}`}`
-    : '服务端与前端地址待检测'
+    : runtimeStatusUnavailable
+      ? `运行状态接口不可用：${runtimeStatusError}`
+      : '服务端与前端地址待检测'
   const desktopRuntimeLine = desktopRuntime
     ? `DXM Agent Console 桌面模式 / 后端 ${desktopRuntime.apiBase ?? `端口 ${desktopRuntime.backendPort ?? '未知'}`}`
     : null
@@ -95,6 +103,7 @@ export function SafetyStatusBar({ workspace, selectedTask, runtimeStatus, deskto
     ]
     : []
   const detailChips = [
+    ...(runtimeStatusUnavailable ? [{ label: '状态接口异常', tone: 'danger' }] : []),
     ...runtimeChips,
     ...(desktopRuntime ? [
       { label: 'DXM Agent Console 桌面模式', tone: 'ok' },
@@ -115,6 +124,8 @@ export function SafetyStatusBar({ workspace, selectedTask, runtimeStatus, deskto
   ]
   const primaryStatus = selectedTaskCompleted
     ? '当前任务已完成'
+    : runtimeStatusUnavailable
+    ? '状态接口异常'
     : !dxmLoggedIn
     ? '等待真实登录'
     : l2BlocksRealSave

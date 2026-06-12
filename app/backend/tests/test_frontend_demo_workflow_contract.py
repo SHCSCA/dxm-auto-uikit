@@ -789,7 +789,7 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "hasBrowserSession && currentUrl ? shortUrl(currentUrl) : '等待启动真实浏览器'" in workbench_source
     assert "可在生命周期区接管" in workbench_source
     assert "可在会话管理中接管" not in workbench_source
-    assert "buildConsolePrimaryPath({ selectedTask, configPreview, l2Gate, l3Gate, busy })" in workbench_source
+    assert "buildConsolePrimaryPath({ selectedTask, configPreview, configPreviewError, l2Gate, l3Gate, busy })" in workbench_source
     assert "primaryPath={consolePrimaryPath}" in console_section
     assert "primaryPath.action === 'config'" in workbench_source
     assert "primaryPath.action === 'run_l2'" in workbench_source
@@ -1763,7 +1763,7 @@ def test_task_center_start_button_matches_real_start_prechecks():
     assert "runtimeStatus={runtimeStatus}" in app_source
     assert "runtimeStatus: RuntimeStatus | null" in workbench_source
     assert "const selectedRealDxmMutationTask = Boolean(selectedTask && isRealDxmMutationTask(selectedTask))" in task_center_section
-    assert "const dxmLoggedIn = DXM_LOGGED_IN_STATUSES.has(runtimeStatus?.dxmLogin?.status ?? '')" in task_center_section
+    assert "const dxmLoggedIn = !runtimeStatusError && DXM_LOGGED_IN_STATUSES.has(runtimeStatus?.dxmLogin?.status ?? '')" in task_center_section
     assert "const loginBlocksStart = selectedRealDxmMutationTask && !dxmLoggedIn" in task_center_section
     assert "const configUnknownBlocksStart = selectedRealDxmMutationTask && !configPreview && !configPreviewLoading" in task_center_section
     assert "startDisabled = busy || !selectedTask || selectedTaskNotDraft || selectedTaskIsUnreleasedRealMode || loginBlocksStart || configUnknownBlocksStart || configPreviewLoading || configBlocksStart || l2BlocksStart || l3BlocksStart" in task_center_section
@@ -1969,13 +1969,44 @@ def test_frontend_humanizes_l2_runner_missing_error():
     assert "setOperationError(humanOperationError(message))" in app_source
 
 
+def test_frontend_keeps_runtime_and_config_fetch_failures_distinct_from_user_state():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+
+    assert "const [runtimeStatusError, setRuntimeStatusError]" in app_source
+    assert "setRuntimeStatusError(error instanceof Error ? error.message : '运行状态接口不可用')" in app_source
+    assert "runtimeStatusError={runtimeStatusError}" in app_source
+    assert "运行状态接口不可用" in safety_bar
+    assert "状态接口异常" in safety_bar
+    assert "runtimeStatusError?: string | null" in safety_bar
+
+    assert "const [configPreviewError, setConfigPreviewError]" in app_source
+    assert "setConfigPreviewError(error instanceof Error ? error.message : '配置检查接口不可用')" in app_source
+    assert "configPreviewError={configPreviewError}" in app_source
+    assert "配置检查接口不可用" in workbench_source
+    assert "请先确认本机后端仍在运行，再重新检查配置" in workbench_source
+    assert "configPreviewError: string | null" in workbench_source
+
+
+def test_frontend_treats_workflow_navigation_as_logged_in_across_primary_surfaces():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+
+    assert "new Set(['login_success', 'logged_in', 'not_published_verified', 'workflow_navigation'])" in app_source
+    assert "new Set(['login_success', 'logged_in', 'not_published_verified', 'workflow_navigation'])" in safety_bar
+    assert "new Set(['login_success', 'logged_in', 'not_published_verified', 'workflow_navigation'])" in workbench_source
+    assert "label: status === 'workflow_navigation' ? 'DXM 已进入业务页' : 'DXM 已登录'" in workbench_source
+
+
 def test_execution_console_uses_unified_primary_path_before_rendering():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     console_section = source[source.index("export function ExecutionConsole"):source.index("function AgentStagePanel")]
 
     assert "function buildConsolePrimaryPath" in source
     assert "configPreview: ConfigPreview | null" in source
-    assert "const consolePrimaryPath = buildConsolePrimaryPath({ selectedTask, configPreview, l2Gate, l3Gate, busy })" in console_section
+    assert "const consolePrimaryPath = buildConsolePrimaryPath({ selectedTask, configPreview, configPreviewError, l2Gate, l3Gate, busy })" in console_section
     assert "const realSaveBlocked = consolePrimaryPath.saveBlocked" in console_section
     assert "const browserStartBlocked = consolePrimaryPath.blocksBrowserStart" in console_section
     assert "const diagnosticBlockReason" not in console_section

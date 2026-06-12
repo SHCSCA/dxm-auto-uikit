@@ -38,6 +38,7 @@ type CommonProps = {
 
 type ConfigCenterProps = CommonProps & {
   configPreview: ConfigPreview | null
+  configPreviewError: string | null
   configPreviewLoading: boolean
   onConfigSaved: () => void | Promise<void>
   onRefreshConfigPreview: () => void | Promise<void>
@@ -91,6 +92,7 @@ type ConfigSectionSaveState = {
 type GuideCenterProps = CommonProps & {
   configPreview: ConfigPreview | null
   runtimeStatus: RuntimeStatus | null
+  runtimeStatusError: string | null
   dxmLoginDraft: DxmLoginDraft
   dxmCredentialState: DxmCredentialState
   l3ApprovedBy: string
@@ -114,7 +116,7 @@ type GuideCenterProps = CommonProps & {
 const l3PostEvidenceGapIds = new Set(['gap-save-result', 'gap-unpublished-proof', 'gap-network-save-response'])
 const LEGACY_QA_REAL_MUTATION_TASK_NAME = ['QA guarded', 'real mutation task'].join(' ')
 const RELEASED_SINGLE_SAVE_STORE_NAMES = new Set(['Dang Kang'])
-const DXM_LOGGED_IN_STATUSES = new Set(['login_success', 'logged_in', 'not_published_verified'])
+const DXM_LOGGED_IN_STATUSES = new Set(['login_success', 'logged_in', 'not_published_verified', 'workflow_navigation'])
 
 const realWriteReleasePrerequisites = [
   {
@@ -137,8 +139,10 @@ const realWriteReleasePrerequisites = [
 
 type TaskCenterProps = CommonProps & {
   configPreview: ConfigPreview | null
+  configPreviewError: string | null
   configPreviewLoading: boolean
   runtimeStatus: RuntimeStatus | null
+  runtimeStatusError: string | null
   busy: boolean
   demoEnabled: boolean
   l3ApprovedBy: string
@@ -158,7 +162,9 @@ type ExecutionConsoleProps = CommonProps & {
   agentConsole: AgentConsoleSession | null
   agentConsoleError: string | null
   configPreview: ConfigPreview | null
+  configPreviewError: string | null
   runtimeStatus: RuntimeStatus | null
+  runtimeStatusError: string | null
   runtimeLogs: Record<RuntimeLogSource, RuntimeLogResponse | null>
   runtimeLogSource: RuntimeLogSource
   runtimeLogError: string | null
@@ -285,6 +291,7 @@ export function GuideCenter({
   selectedTask,
   configPreview,
   runtimeStatus,
+  runtimeStatusError,
   dxmLoginDraft,
   dxmCredentialState,
   l3ApprovedBy,
@@ -309,7 +316,7 @@ export function GuideCenter({
   const backendOk = runtimeStatus?.backend?.status === 'ok'
   const frontendOk = runtimeStatus?.frontend?.status === 'ok'
   const agentReady = runtimeStatus?.agentConsole?.status === 'running' || runtimeStatus?.agentConsole?.status === 'idle'
-  const dxmLoggedIn = DXM_LOGGED_IN_STATUSES.has(runtimeStatus?.dxmLogin?.status ?? '')
+  const dxmLoggedIn = !runtimeStatusError && DXM_LOGGED_IN_STATUSES.has(runtimeStatus?.dxmLogin?.status ?? '')
   const hasStore = workspace.stores.length > 0
   const hasProducts = workspace.products.length > 0
   const configOk = Boolean(configPreview?.ok)
@@ -485,6 +492,7 @@ export function GuideCenter({
               draft={dxmLoginDraft}
               credentialState={dxmCredentialState}
               runtimeStatus={runtimeStatus}
+              runtimeStatusError={runtimeStatusError}
               busy={busy}
               onDraftChange={onDxmLoginDraftChange}
               onClearSavedCredential={onClearSavedDxmCredential}
@@ -615,6 +623,7 @@ function DxmLoginInlineForm({
   draft,
   credentialState,
   runtimeStatus,
+  runtimeStatusError,
   busy,
   compact = false,
   onDraftChange,
@@ -625,6 +634,7 @@ function DxmLoginInlineForm({
   draft: DxmLoginDraft
   credentialState: DxmCredentialState
   runtimeStatus?: RuntimeStatus | null
+  runtimeStatusError?: string | null
   busy: boolean
   compact?: boolean
   onDraftChange: (draft: DxmLoginDraft) => void
@@ -633,7 +643,7 @@ function DxmLoginInlineForm({
   onContinue: () => void
 }) {
   const canSubmit = Boolean(draft.username.trim() && draft.password && !busy)
-  const loginState = humanDxmLoginState(runtimeStatus)
+  const loginState = humanDxmLoginState(runtimeStatus, runtimeStatusError)
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!canSubmit) return
@@ -703,7 +713,15 @@ function DxmLoginInlineForm({
   )
 }
 
-function humanDxmLoginState(runtimeStatus?: RuntimeStatus | null) {
+function humanDxmLoginState(runtimeStatus?: RuntimeStatus | null, runtimeStatusError?: string | null) {
+  if (runtimeStatusError) {
+    return {
+      tone: 'danger',
+      label: '运行状态接口不可用',
+      detail: runtimeStatusError,
+      next: '请先确认本机后端仍在运行，查看实时日志后重试；不要把接口失败当成 DXM 未登录。',
+    }
+  }
   const status = runtimeStatus?.dxmLogin?.status
   if (!status) return null
   const currentUrl = compactDxmLoginUrl(runtimeStatus?.dxmLogin?.currentUrl)
@@ -1348,15 +1366,26 @@ function buildEditableConfigDraft(templates: Template[], configPreview: ConfigPr
 
 function ConfigReadinessPanel({
   configPreview,
+  configPreviewError,
   selectedTask,
   incompleteGroups,
 }: {
   configPreview: ConfigPreview | null
+  configPreviewError: string | null
   selectedTask: Task | null
   incompleteGroups: ConfigPreviewGroup[]
 }) {
   if (!selectedTask) {
     return <EmptyState title="先选择任务" detail="选择单商品只保存任务后，这里会显示执行前配置是否完整。" />
+  }
+  if (configPreviewError) {
+    return (
+      <div className="config-readiness is-danger" role="alert">
+        <strong>配置检查接口不可用</strong>
+        <span>{configPreviewError}</span>
+        <span>请先确认本机后端仍在运行，再重新检查配置；系统不会把接口失败当成字段已补齐。</span>
+      </div>
+    )
   }
   if (!configPreview) {
     return <div className="config-readiness is-warn"><strong>本次任务配置检查未加载</strong><span>请刷新工作台，或确认后端 /api/config/preview 可用。</span></div>
@@ -1562,7 +1591,7 @@ function hasConfigDraftChanged(current: Record<string, string> | undefined, base
   return false
 }
 
-export function ConfigCenter({ workspace, selectedTask, configPreview, configPreviewLoading, onConfigSaved, onRefreshConfigPreview, onShowTasks }: ConfigCenterProps) {
+export function ConfigCenter({ workspace, selectedTask, configPreview, configPreviewError, configPreviewLoading, onConfigSaved, onRefreshConfigPreview, onShowTasks }: ConfigCenterProps) {
   const product = findSelectedTaskProduct(workspace.products, selectedTask)
   const currentTemplateBinding = useMemo(
     () => buildCurrentTemplateBinding(workspace, selectedTask, product),
@@ -1869,12 +1898,14 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   return (
     <section className="module-layout" aria-label="配置中心">
       <div className="module-card span-3 config-focus-card">
-        <ModuleHead title="配置中心" meta={configPreviewLoading ? '正在检查配置' : `${enabledTemplates.length} 个启用模板`} />
+        <ModuleHead title="配置中心" meta={configPreviewError ? '配置检查接口异常' : configPreviewLoading ? '正在检查配置' : `${enabledTemplates.length} 个启用模板`} />
         <div className="content-density-summary config-density-summary" data-config-density-summary>
           <div>
-            <strong>{configPreview?.ok ? '配置已通过本次任务检查' : `先补：${nextConfigSection.title}`}</strong>
+            <strong>{configPreviewError ? '配置检查接口不可用' : configPreview?.ok ? '配置已通过本次任务检查' : `先补：${nextConfigSection.title}`}</strong>
             <span>
-              {configPreview?.ok
+              {configPreviewError
+                ? '请先确认本机后端仍在运行，再重新检查配置。'
+                : configPreview?.ok
                 ? '下方可直接微调 DXM 编辑页配置；详情和下一步字段已收起。'
                 : previewSummary(nextConfigSection, nextConfigPreview)}
             </span>
@@ -1945,6 +1976,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
             </div>
             <ConfigReadinessPanel
               configPreview={configPreview}
+              configPreviewError={configPreviewError}
               selectedTask={selectedTask}
               incompleteGroups={incompleteGroups}
             />
@@ -2324,7 +2356,7 @@ function EditableConfigSectionCard({
   )
 }
 
-export function TaskCenter({ workspace, selectedTask, configPreview, configPreviewLoading, runtimeStatus, busy, demoEnabled, l3ApprovedBy, onL3ApprovedByChange, onSelectTask, onCreateRealTask, onBootstrapDemo, onStartTask, onRunL2Probe, onShowConfig, onShowConsole, onShowEvidence, onShowReports }: TaskCenterProps) {
+export function TaskCenter({ workspace, selectedTask, configPreview, configPreviewError, configPreviewLoading, runtimeStatus, runtimeStatusError, busy, demoEnabled, l3ApprovedBy, onL3ApprovedByChange, onSelectTask, onCreateRealTask, onBootstrapDemo, onStartTask, onRunL2Probe, onShowConfig, onShowConsole, onShowEvidence, onShowReports }: TaskCenterProps) {
   const uniqueStoreOptions = useMemo(() => uniqueByStoreIdentity(workspace.stores), [workspace.stores])
   const uniqueProductOptions = useMemo(() => uniqueByProductIdentity(workspace.products), [workspace.products])
   const [draftStoreId, setDraftStoreId] = useState(() => uniqueStoreOptions[0]?.id ? String(uniqueStoreOptions[0].id) : '')
@@ -2337,7 +2369,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
   const needsRealL2 = selectedTask ? requiresRealL2(selectedTask) : false
   const selectedTaskIsDryRun = selectedTask?.mode === 'dry_run'
   const selectedRealDxmMutationTask = Boolean(selectedTask && isRealDxmMutationTask(selectedTask))
-  const dxmLoggedIn = DXM_LOGGED_IN_STATUSES.has(runtimeStatus?.dxmLogin?.status ?? '')
+  const dxmLoggedIn = !runtimeStatusError && DXM_LOGGED_IN_STATUSES.has(runtimeStatus?.dxmLogin?.status ?? '')
   const selectedTaskIsUnreleasedRealMode = selectedTask ? isUnreleasedRealDxmMutationTask(selectedTask) : false
   const selectedTaskNotDraft = Boolean(selectedTask && selectedTask.status !== 'draft')
   const l2BlocksStart = needsRealL2 && l2Gate?.status !== 'passed'
@@ -2393,8 +2425,12 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
           ? '任务非草稿，禁止启动'
           : selectedTaskIsUnreleasedRealMode
             ? '未发布，禁止启动'
+            : runtimeStatusError && loginBlocksStart
+              ? '运行状态不可用，先查看日志'
             : loginBlocksStart
               ? 'DXM 未登录，先打开真实浏览器登录'
+              : configPreviewError && configUnknownBlocksStart
+                ? '配置检查接口不可用'
               : configUnknownBlocksStart
                 ? '先检查本次任务配置'
                 : configPreviewLoading
@@ -2530,10 +2566,10 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
             onShowReports={onShowReports}
           />
         )}
-        {(configBlocksStart || configPreviewLoading) && (
+        {(configBlocksStart || configPreviewLoading || configPreviewError) && (
           <div className={`gate-note ${configBlocksStart ? 'gate-note--danger' : ''}`}>
-            <strong>{configPreviewLoading ? '正在检查配置' : '配置检查未通过'}</strong>
-            <span>{configPreviewLoading ? '正在读取当前任务的 DXM 编辑页字段来源。' : `请先补齐：${configPreview?.missing.slice(0, 6).join('、') || 'DXM 编辑页配置'}`}</span>
+            <strong>{configPreviewError ? '配置检查接口不可用' : configPreviewLoading ? '正在检查配置' : '配置检查未通过'}</strong>
+            <span>{configPreviewError ? `请先确认本机后端仍在运行，再重新检查配置：${configPreviewError}` : configPreviewLoading ? '正在读取当前任务的 DXM 编辑页字段来源。' : `请先补齐：${configPreview?.missing.slice(0, 6).join('、') || 'DXM 编辑页配置'}`}</span>
             {configBlocksStart && (
               <div className="next-step-actions">
                 <button className="button button--secondary" type="button" onClick={onShowConfig}>去配置中心</button>
@@ -2846,7 +2882,9 @@ export function ExecutionConsole({
   agentConsole,
   agentConsoleError,
   configPreview,
+  configPreviewError,
   runtimeStatus,
+  runtimeStatusError,
   runtimeLogs,
   runtimeLogSource,
   runtimeLogError,
@@ -2893,7 +2931,7 @@ export function ExecutionConsole({
   const browserFrame = getBrowserFrame(workspace, selectedTask, agentConsole)
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
   const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
-  const consolePrimaryPath = buildConsolePrimaryPath({ selectedTask, configPreview, l2Gate, l3Gate, busy })
+  const consolePrimaryPath = buildConsolePrimaryPath({ selectedTask, configPreview, configPreviewError, l2Gate, l3Gate, busy })
   const realSaveBlocked = consolePrimaryPath.saveBlocked
   const realSaveBlockReason = consolePrimaryPath.detail
   const browserStartBlocked = consolePrimaryPath.blocksBrowserStart
@@ -2973,6 +3011,7 @@ export function ExecutionConsole({
           agentConsole={agentConsole}
           agentConsoleError={agentConsoleError}
           runtimeStatus={runtimeStatus}
+          runtimeStatusError={runtimeStatusError}
           busy={busy}
           realSaveBlocked={realSaveBlocked}
           realSaveBlockReason={realSaveBlockReason}
@@ -3083,6 +3122,7 @@ function AgentStagePanel({
   agentConsole,
   agentConsoleError,
   runtimeStatus,
+  runtimeStatusError,
   busy,
   realSaveBlocked,
   realSaveBlockReason,
@@ -3115,6 +3155,7 @@ function AgentStagePanel({
   agentConsole: AgentConsoleSession | null
   agentConsoleError: string | null
   runtimeStatus: RuntimeStatus | null
+  runtimeStatusError: string | null
   busy: boolean
   realSaveBlocked: boolean
   realSaveBlockReason: string
@@ -3149,6 +3190,7 @@ function AgentStagePanel({
         agentConsole={agentConsole}
         agentConsoleError={agentConsoleError}
         runtimeStatus={runtimeStatus}
+        runtimeStatusError={runtimeStatusError}
         selectedTask={selectedTask}
         busy={busy}
         realSaveBlocked={realSaveBlocked}
@@ -3787,6 +3829,7 @@ function AgentConsoleControls({
   agentConsole,
   agentConsoleError,
   runtimeStatus,
+  runtimeStatusError,
   selectedTask,
   busy,
   realSaveBlocked,
@@ -3812,6 +3855,7 @@ function AgentConsoleControls({
   agentConsole: AgentConsoleSession | null
   agentConsoleError: string | null
   runtimeStatus: RuntimeStatus | null
+  runtimeStatusError: string | null
   selectedTask: Task | null
   busy: boolean
   realSaveBlocked: boolean
@@ -3923,6 +3967,7 @@ function AgentConsoleControls({
           draft={dxmLoginDraft}
           credentialState={dxmCredentialState}
           runtimeStatus={runtimeStatus}
+          runtimeStatusError={runtimeStatusError}
           busy={busy}
           onDraftChange={onDxmLoginDraftChange}
           onClearSavedCredential={onClearSavedDxmCredential}
@@ -5169,12 +5214,14 @@ function taskStartDecision({
 function buildConsolePrimaryPath({
   selectedTask,
   configPreview,
+  configPreviewError,
   l2Gate,
   l3Gate,
   busy,
 }: {
   selectedTask: Task | null
   configPreview: ConfigPreview | null
+  configPreviewError: string | null
   l2Gate?: RegressionGate
   l3Gate?: RegressionGate
   busy: boolean
@@ -5251,6 +5298,20 @@ function buildConsolePrimaryPath({
       ctaLabel: '创建单商品只保存任务',
       action: 'tasks',
       browserStatus: '当前模式未放行，真实浏览器暂不启动',
+      blocksBrowserStart: true,
+      saveBlocked: true,
+    }
+  }
+  if (isRealDxmMutationTask(selectedTask) && configPreviewError) {
+    return {
+      code: 'config',
+      title: '配置检查接口不可用',
+      reason: '配置检查接口不可用，不能判断当前任务字段是否完整。',
+      detail: `请先确认本机后端仍在运行，再重新检查配置：${configPreviewError}`,
+      next: '去配置中心重新检查',
+      ctaLabel: '去配置中心重新检查',
+      action: 'config',
+      browserStatus: '配置检查接口异常，真实浏览器暂不启动',
       blocksBrowserStart: true,
       saveBlocked: true,
     }
