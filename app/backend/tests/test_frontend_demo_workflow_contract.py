@@ -133,6 +133,11 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "countNestedConfigValues(template.payload)" in source
     assert "项配置" in source
     assert "selectedTemplateBySection" in config_section
+    assert "activeSelectedTemplateLabel" in config_section
+    assert "config-template-console__quick-status" in config_section
+    assert "可选 {activeSectionTemplateOptions.length} 套模板" in config_section
+    assert "已选择：" in config_section
+    assert "点击套用后才会写入表单" in config_section
     assert "applyTemplateToDraft" in config_section
     assert "handleTemplateSelection" in config_section
     assert "已套用模板，尚未保存" in config_section
@@ -149,6 +154,7 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "已保存" in config_section
     assert "保存时间" in config_section
     assert ".config-template-console" in styles_source
+    assert ".config-template-console__quick-status" in styles_source
     assert ".config-save-state" in styles_source
     assert "configDefaultTemplatePackVisible" in qa_source
     assert "configTemplateSelectorVisible" in qa_source

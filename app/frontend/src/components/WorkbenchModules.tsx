@@ -1648,6 +1648,12 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   const activeSectionTemplateOptions = sectionTemplateOptions(workspace.templates, selectedConfigSection.section, currentTemplateBinding)
   const filteredTemplateChoiceCount = Math.max(0, activeSectionAllTemplates.length - activeSectionTemplateOptions.length)
   const activeSelectedTemplateId = selectedTemplateBySection[selectedConfigSection.section.code] ?? ''
+  const activeSelectedTemplate = activeSectionTemplateOptions.find((template) => String(template.id) === activeSelectedTemplateId)
+  const activeSelectedTemplateLabel = activeSelectedTemplateId === '__default_test__'
+    ? '默认测试模板（当前分区）'
+    : activeSelectedTemplate
+      ? templateOptionLabel(activeSelectedTemplate)
+      : '未选择模板'
   const activeTemplateSourceName = templateSourceNameFromPreview(selectedConfigSection.preview)
   const activeSectionSaveState = sectionSaveState[selectedConfigSection.section.code]
   const activeSectionDirty = hasConfigDraftChanged(configDraft[selectedConfigSection.section.code], initialConfigDraft[selectedConfigSection.section.code])
@@ -2022,6 +2028,16 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
             >
               套用到表单
             </button>
+          </div>
+          <div className="config-template-console__quick-status" aria-label="当前模板选择状态">
+            <span>
+              <b>可选 {activeSectionTemplateOptions.length} 套模板</b>
+              <small>已筛除不匹配或禁用模板 {filteredTemplateChoiceCount} 套</small>
+            </span>
+            <span>
+              <b>已选择：{activeSelectedTemplateLabel}</b>
+              <small>{activeSelectedTemplateId ? '点击套用后才会写入表单；保存后才会影响执行。' : '可选择默认测试模板或已保存模板。'}</small>
+            </span>
           </div>
           <div className={`config-save-state config-save-state--compact is-${activeSectionStatus}`} aria-label="当前分区保存状态">
             <b>{activeSectionStatusTitle}</b>
