@@ -17,6 +17,7 @@ if (!(Test-Path $ExePath)) {
 }
 
 $RequiredResources = @(
+  'resources\app\backend\.venv\Scripts\python.exe',
   'resources\tools\probes\l2_readonly_probe_runner.py',
   'resources\tools\probes\l2_readonly_probe.py',
   'resources\config\l2_readonly_allowlist.json'
@@ -61,6 +62,11 @@ if (!$ExistingLog) {
 $LogText = Get-Content -LiteralPath $ExistingLog -Raw -Encoding UTF8
 if ($LogText -notmatch 'Starting backend') {
   throw "Packaged smoke failed: desktop-main.log does not contain Starting backend. Log: $ExistingLog"
+}
+$BundledPythonRelative = 'resources\app\backend\.venv\Scripts\python.exe'
+$BundledPythonPath = Join-Path (Split-Path $ExePath) $BundledPythonRelative
+if ($LogText -notmatch [regex]::Escape($BundledPythonPath)) {
+  throw "Packaged backend did not start with bundled Python: $BundledPythonPath. Log: $ExistingLog"
 }
 if ($LogText -notmatch 'Loaded frontend') {
   throw "Packaged smoke failed: desktop-main.log does not contain Loaded frontend. Log: $ExistingLog"

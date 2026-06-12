@@ -40,6 +40,8 @@ def test_desktop_main_starts_backend_hidden_and_loads_frontend_with_api_base():
     assert "app/backend/src/main.py" in source
     assert "findFreePort(8000" in source
     assert "app/backend/.venv/Scripts/python.exe" in source
+    assert "if (app.isPackaged)" in source
+    assert "Packaged backend Python is missing" in source
     assert "app.getPath('userData')" in source
     assert "src.main:app" in source
     assert "DXM_DATA_DIR" in source
@@ -122,6 +124,8 @@ def test_verify_desktop_package_smoke_script_checks_packaged_exe_logs():
     assert "Starting backend" in source
     assert "--qa-capture=$CapturePath" in source
     assert "QA capture was not created" in source
+    assert "resources\\app\\backend\\.venv\\Scripts\\python.exe" in source
+    assert "Packaged backend did not start with bundled Python" in source
     assert "tools\\probes\\l2_readonly_probe_runner.py" in source
     assert "config\\l2_readonly_allowlist.json" in source
     assert "taskkill" in source

@@ -92,7 +92,7 @@ export function AppShell({
 
   return (
     <div className={`app-shell ${sidebarCollapsed ? 'is-collapsed' : ''}`}>
-      <aside className="sidebar" aria-label="运营工作台导航">
+      <aside className="sidebar" aria-label={`运营工作台导航，${sourceLabel}`}>
         <div className="sidebar__brand">
           <div className="brand-mark" aria-hidden="true">DX</div>
           {!sidebarCollapsed && (
@@ -106,6 +106,12 @@ export function AppShell({
             {sidebarCollapsed ? '>' : '<'}
           </button>
         </div>
+        {!sidebarCollapsed && (
+          <div className="sidebar__current" aria-label="当前页面">
+            <span>当前：</span>
+            <strong>{activeLabel}</strong>
+          </div>
+        )}
         <nav className="nav-list">
           {primaryAreas.map((area) => (
             <section
@@ -114,13 +120,13 @@ export function AppShell({
               aria-label={area.label}
             >
               <div className="nav-section__head">
-                <span className="nav-section__index" aria-hidden="true">{area.short}</span>
                 {!sidebarCollapsed && (
                   <span>
                     <strong>{area.label}</strong>
-                    <small>{area.summary}</small>
+                    <small className="sr-only">{area.summary}</small>
                   </span>
                 )}
+                {sidebarCollapsed && <span aria-hidden="true">{area.short}</span>}
               </div>
               <div className="nav-section__items">
                 {area.items.map((item) => (
@@ -135,9 +141,8 @@ export function AppShell({
                   >
                     {!sidebarCollapsed && (
                       <>
-                        <span className="nav-subitem__mark" aria-hidden="true">{item.short}</span>
                         <span className="nav-subitem__label">{item.label}</span>
-                        <small>{item.hint}</small>
+                        <small className="sr-only">{item.hint}</small>
                       </>
                     )}
                     {sidebarCollapsed && <span>{item.short}</span>}
@@ -147,14 +152,7 @@ export function AppShell({
             </section>
           ))}
         </nav>
-        {!sidebarCollapsed && (
-          <div className="sidebar__note">
-            <span>状态</span>
-            <span className="sr-only">连接状态</span>
-            <span className="sr-only">真实店小秘操作在执行控制台的独立浏览器窗口中完成。</span>
-            <strong>{sourceLabel}</strong>
-          </div>
-        )}
+        <span className="sr-only">数据连接状态：{sourceLabel}。真实店小秘操作在执行控制台的独立浏览器窗口中完成。</span>
       </aside>
       <main ref={mainRef} className="workspace" tabIndex={-1} aria-label={`${activeLabel}主内容`}>
         <span className="sr-only" aria-live="polite">当前页面：{activeLabel}</span>

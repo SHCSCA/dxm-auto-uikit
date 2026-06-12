@@ -490,6 +490,22 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "reason:" in workbench_source
 
 
+def test_sidebar_is_navigation_only_not_status_or_hint_panel():
+    shell_source = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+
+    assert "sidebar__current" in shell_source
+    assert "当前：" in shell_source
+    assert "aria-label={`运营工作台导航，${sourceLabel}`}" in shell_source
+    assert "sidebar__note" not in shell_source
+    assert "nav-section__index" not in shell_source
+    assert "nav-subitem__mark" not in shell_source
+    assert "<small>{item.hint}</small>" not in shell_source
+    assert "nav-subitem__label" in shell_source
+    assert ".sidebar__current" in styles_source
+    assert ".sidebar__note" not in styles_source
+
+
 def test_guide_center_can_start_real_dxm_login_without_l2_gate():
     app_source = APP_TSX.read_text(encoding="utf-8")
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
@@ -630,7 +646,8 @@ def test_default_shell_copy_does_not_present_demo_as_user_path():
     assert "等待真实接口" not in app_source
     assert "空工作台 / 演示前" not in app_source
     assert "连接状态" in shell_source
-    assert "<strong>{sourceLabel}</strong>" in shell_source
+    assert "数据连接状态：{sourceLabel}" in shell_source
+    assert "<strong>{sourceLabel}</strong>" not in shell_source
     assert "真实店小秘操作在执行控制台的独立浏览器窗口中完成" in shell_source
     assert "真实接口优先" not in shell_source
     assert "不伪造保存结果" not in shell_source

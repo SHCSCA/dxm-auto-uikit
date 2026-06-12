@@ -237,6 +237,9 @@ function resolvePythonPath(repoRoot) {
   if (fs.existsSync(bundledVenvPython)) {
     return bundledVenvPython
   }
+  if (app.isPackaged) {
+    throw new Error(`Packaged backend Python is missing: ${bundledVenvPython}`)
+  }
   return process.platform === 'win32' ? 'python' : 'python3'
 }
 
