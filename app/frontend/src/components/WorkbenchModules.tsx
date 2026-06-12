@@ -1622,6 +1622,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
     [workspace, selectedTask, product],
   )
   const currentTemplateScopeLabel = templateBindingScopeLabel(currentTemplateBinding)
+  const configContextKey = `${selectedTask?.id ?? 'no-task'}|${currentTemplateScopeLabel}`
   const enabledTemplates = workspace.templates.filter((item) => item.is_enabled)
   const templateResults = workspace.templateResolution?.dxm_reference_template_results ?? {}
   const hasStores = workspace.stores.length > 0
@@ -1720,6 +1721,13 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   useEffect(() => {
     setActiveConfigSectionCode(nextConfigSection.code)
   }, [nextConfigSection.code, selectedTask?.id])
+
+  useEffect(() => {
+    setSelectedTemplateBySection({} as Record<ConfigSectionCode, string>)
+    setSectionSaveState({} as Record<ConfigSectionCode, ConfigSectionSaveState>)
+    setConfigMessage(null)
+    setDefaultTemplatePackState('尚未套用默认测试模板')
+  }, [configContextKey])
 
   function updateConfigField(sectionCode: ConfigSectionCode, fieldName: string, value: string) {
     setConfigDraft((current) => ({

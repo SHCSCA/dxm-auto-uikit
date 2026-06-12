@@ -228,6 +228,18 @@ def test_config_center_shows_save_scope_explainer_before_actions():
     assert ".config-save-scope-explainer" in styles_source
 
 
+def test_config_center_resets_transient_template_state_when_task_scope_changes():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
+
+    assert "const configContextKey = `${selectedTask?.id ?? 'no-task'}|${currentTemplateScopeLabel}`" in config_section
+    assert "setSelectedTemplateBySection({} as Record<ConfigSectionCode, string>)" in config_section
+    assert "setSectionSaveState({} as Record<ConfigSectionCode, ConfigSectionSaveState>)" in config_section
+    assert "setConfigMessage(null)" in config_section
+    assert "setDefaultTemplatePackState('尚未套用默认测试模板')" in config_section
+    assert "}, [configContextKey])" in config_section
+
+
 def test_config_center_distinguishes_advisory_gaps_from_start_blockers():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
