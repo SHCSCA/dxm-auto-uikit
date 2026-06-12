@@ -2697,7 +2697,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
           <details className="inline-disclosure l2-block-summary">
             <summary>只读检查诊断摘要</summary>
             {l2DiagnosticSummaries.slice(0, 2).map((item) => (
-              <span key={item.target}>{item.targetLabel}：{humanDiagnosticNavigation(item.navigation)}，{item.failedChecks.slice(0, 2).map(humanFailedCheckLabel).join(' / ') || '页面检查未满足'}</span>
+              <span key={item.target}>{item.targetLabel}：{humanDiagnosticNavigation(item.navigation)}，{item.failedChecks.slice(0, 2).map(humanFailedCheckLabel).join(' / ') || '页面检查未满足'}。下一步：{item.nextAction}</span>
             ))}
           </details>
         )}
@@ -2906,6 +2906,9 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
                       ))}
                     </div>
                     <ul>
+                      <li><strong>最终地址</strong>{item.navigation}</li>
+                      <li><strong>失败检查</strong>{item.failedChecks.slice(0, 4).map(humanFailedCheckLabel).join(' / ') || '页面检查未满足'}</li>
+                      <li><strong>下一步</strong>{item.nextAction}</li>
                       {item.topRequests.map((request) => (
                         <li key={request}>{request}</li>
                       ))}
@@ -5098,7 +5101,7 @@ function ReadonlyRecheckHelpCard({
       <details className="inline-disclosure readonly-recheck-help__diagnostics">
         <summary>查看诊断摘要</summary>
         {summaries.length > 0 ? summaries.slice(0, 2).map((item) => (
-          <span key={item.target}>{item.targetLabel}：{humanDiagnosticNavigation(item.navigation)}，{item.failedChecks.slice(0, 2).map(humanFailedCheckLabel).join(' / ') || '页面检查未满足'}</span>
+          <span key={item.target}>{item.targetLabel}：{humanDiagnosticNavigation(item.navigation)}，{item.failedChecks.slice(0, 2).map(humanFailedCheckLabel).join(' / ') || '页面检查未满足'}。下一步：{item.nextAction}</span>
         )) : <span>暂无诊断明细；先运行预检生成结果。</span>}
       </details>
     </div>
@@ -5947,6 +5950,7 @@ type L2DiagnosticSummary = {
   renderHint: string | null
   reviewCandidateCount: number
   reviewCandidateRequests: string[]
+  nextAction: string
 }
 
 function summarizeL2Diagnostics(gate?: RegressionGate): L2DiagnosticSummary[] {
@@ -5961,9 +5965,10 @@ function summarizeL2Diagnostics(gate?: RegressionGate): L2DiagnosticSummary[] {
     const checks = asRecord(diagnostics?.strict_pass_checks)
     const groups = Array.isArray(diagnostics?.blocked_request_groups) ? diagnostics.blocked_request_groups : []
     const reviewCandidates = Array.isArray(diagnostics?.allowlist_review_candidates) ? diagnostics.allowlist_review_candidates : []
-    const failedChecks = Object.entries(checks ?? {})
+    const failedCheckKeys = Object.entries(checks ?? {})
       .filter(([, value]) => value === false)
-      .map(([key]) => l2CheckLabel(key))
+      .map(([key]) => key)
+    const failedChecks = failedCheckKeys.map((key) => l2CheckLabel(key))
     const finalPath = stringValue(navigation?.final_path, '未知路径')
     const finalClass = stringValue(navigation?.final_path_class, 'unknown')
     const topRequests = groups.slice(0, 3).map((group) => {
@@ -5992,8 +5997,40 @@ function summarizeL2Diagnostics(gate?: RegressionGate): L2DiagnosticSummary[] {
       renderHint: renderState?.app_shell_only === true ? '页面疑似停留在 app shell/loading，未证明目标模块可达。' : null,
       reviewCandidateCount: reviewCandidates.length,
       reviewCandidateRequests,
+      nextAction: l2DiagnosticNextAction({
+        failedCheckKeys,
+        finalClass,
+        reviewCandidateCount: reviewCandidates.length,
+        appShellOnly: renderState?.app_shell_only === true,
+      }),
     }
   })
+}
+
+function l2DiagnosticNextAction({
+  failedCheckKeys,
+  finalClass,
+  reviewCandidateCount,
+  appShellOnly,
+}: {
+  failedCheckKeys: string[]
+  finalClass: string
+  reviewCandidateCount: number
+  appShellOnly: boolean
+}) {
+  if (failedCheckKeys.includes('cookies_loaded') || failedCheckKeys.includes('not_login_page') || finalClass === 'login') {
+    return '先在真实登录浏览器完成登录，再重新运行预检。'
+  }
+  if (failedCheckKeys.includes('final_url_matches') || failedCheckKeys.includes('target_url_matches') || finalClass === 'home' || finalClass === 'other') {
+    return '检查目标页面是否跳到首页/登录页，必要时重新进入采集页或草稿箱后复跑。'
+  }
+  if (reviewCandidateCount > 0) {
+    return '把只读依赖候选交给人工评审；未评审前不要放行真实保存。'
+  }
+  if (appShellOnly) {
+    return '页面停留在加载壳，等待真实页面加载完成或重开浏览器后复跑。'
+  }
+  return '查看启动器日志中的 blocked requests，修正页面阻断后复跑预检。'
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

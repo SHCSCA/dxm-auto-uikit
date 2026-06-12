@@ -1673,6 +1673,28 @@ def test_task_center_explains_l2_recheck_before_real_save():
         assert forbidden not in recheck_card_section
 
 
+def test_task_center_l2_diagnostics_include_actionable_failure_details():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    task_center_section = source[source.index("export function TaskCenter"):source.index("export function ExecutionConsole")]
+    recheck_card_section = source[source.index("function ReadonlyRecheckHelpCard"):source.index("function SingleSaveRecoveryGuide")]
+    summary_type_section = source[source.index("type L2DiagnosticSummary"):source.index("function summarizeL2Diagnostics")]
+    summarize_section = source[source.index("function summarizeL2Diagnostics"):source.index("function asRecord")]
+
+    assert "nextAction: string" in summary_type_section
+    assert "failedCheckKeys" in summarize_section
+    assert "nextAction: l2DiagnosticNextAction({" in summarize_section
+    assert "function l2DiagnosticNextAction" in source
+    assert "先在真实登录浏览器完成登录" in source
+    assert "检查目标页面是否跳到首页/登录页" in source
+    assert "把只读依赖候选交给人工评审" in source
+    assert "查看启动器日志中的 blocked requests" in source
+    assert "<strong>最终地址</strong>" in task_center_section
+    assert "<strong>失败检查</strong>" in task_center_section
+    assert "<strong>下一步</strong>" in task_center_section
+    assert "item.nextAction" in task_center_section
+    assert "下一步：{item.nextAction}" in recheck_card_section
+
+
 def test_task_center_defaults_to_current_task_first_and_collapses_setup_noise():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
