@@ -622,7 +622,16 @@ function normalizeReadinessChecklistItem(
 }
 
 export function humanTaskStatus(status: string) {
-  return ({ draft: '待启动', running: '运行中', completed: '已完成', partial_success: '部分成功', paused: '已暂停', failed: '失败', cancelled: '已停止' } as Record<string, string>)[status] ?? status
+  return ({
+    draft: '待启动',
+    running: '运行中',
+    completed: '已完成',
+    partial_success: '部分成功',
+    paused: '已暂停',
+    failed: '失败',
+    cancelled: '已停止',
+    needs_manual_review: '待人工复核',
+  } as Record<string, string>)[status] ?? status
 }
 
 export function humanLevel(level: string) {

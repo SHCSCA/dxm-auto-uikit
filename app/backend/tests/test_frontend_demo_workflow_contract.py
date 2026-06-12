@@ -1764,6 +1764,22 @@ def test_runtime_maintenance_explains_cleared_and_protected_tasks():
     assert ".runtime-control-result" in styles_source
 
 
+def test_execution_console_can_mark_real_task_for_manual_review():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    types_source = (REPO_ROOT / "app" / "frontend" / "src" / "types.ts").read_text(encoding="utf-8")
+    workspace_source = (REPO_ROOT / "app" / "frontend" / "src" / "workspace.ts").read_text(encoding="utf-8")
+
+    assert "mark_real_task_manual_review" in types_source
+    assert "mark_real_task_manual_review: '已将真实写入任务转入人工复核。" in app_source
+    assert "onRuntimeControl('mark_real_task_manual_review')" in workbench_source
+    assert "转人工复核" in workbench_source
+    assert "不会取消真实浏览器进程" in workbench_source
+    assert "needs_manual_review" in workbench_source
+    assert "markedTasks" in workbench_source
+    assert "待人工复核" in workspace_source
+
+
 def test_frontend_humanizes_l2_runner_missing_error():
     app_source = APP_TSX.read_text(encoding="utf-8")
 

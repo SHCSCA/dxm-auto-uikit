@@ -1105,6 +1105,7 @@ function runtimeControlSuccessMessage(action: RuntimeControlAction) {
   return ({
     stop_agent_console: '浏览器 Agent 已停止。',
     clear_stuck_tasks: '已提交清理卡住任务请求。',
+    mark_real_task_manual_review: '已将真实写入任务转入人工复核。不会取消真实浏览器进程，请查看任务日志确认现场。',
     restart_backend: '已提交后端重启请求，请查看启动器日志。',
     restart_frontend: '已提交前端重启请求，请查看启动器日志。',
     run_l2_readonly_probe: '已启动只读复验，请在执行控制台查看启动器日志。',

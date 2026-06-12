@@ -113,7 +113,14 @@ RUNTIME_CONTROL_COMMAND_FILE = Path(
 RUNTIME_CONTROL_MANAGED_BY_LAUNCHER = bool(os.environ.get('DXM_RUNTIME_CONTROL_COMMAND_FILE'))
 RUNTIME_VIRTUAL_LOG_SOURCES = {'task', 'agent'}
 RUNTIME_LOG_LEVELS = {'info', 'warning', 'error'}
-RUNTIME_CONTROL_ACTIONS = {'stop_agent_console', 'clear_stuck_tasks', 'restart_backend', 'restart_frontend', 'run_l2_readonly_probe'}
+RUNTIME_CONTROL_ACTIONS = {
+    'stop_agent_console',
+    'clear_stuck_tasks',
+    'mark_real_task_manual_review',
+    'restart_backend',
+    'restart_frontend',
+    'run_l2_readonly_probe',
+}
 L2_READONLY_PROBE_RUNNER = REPO_ROOT / 'tools' / 'probes' / 'l2_readonly_probe_runner.py'
 L2_READONLY_PROBE_SCRIPT = REPO_ROOT / 'tools' / 'probes' / 'l2_readonly_probe.py'
 L2_READONLY_PROBE_COOKIE_FILE = DATA_DIR / 'sessions' / 'dianxiaomi_cookies.json'
@@ -616,6 +623,40 @@ def runtime_control(payload: RuntimeControlRequest):
             'clearedTasks': cleared,
             'skippedTasks': skipped,
             'message': f"已清理 {len(cleared)} 个非真实写入任务；保护 {len(skipped)} 个真实写入任务",
+        }
+
+    if action == 'mark_real_task_manual_review':
+        if payload.task_id is None:
+            raise HTTPException(status_code=400, detail='task_id is required to mark a real task for manual review')
+        task = repo.get_task(payload.task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail='Task not found')
+        mode = str(task.get('mode') or (task.get('payload') or {}).get('execution_mode') or '')
+        if mode not in REAL_WRITE_START_MODES:
+            raise HTTPException(status_code=409, detail='Only real DXM write tasks can be marked for manual review')
+        previous_status = str(task.get('status') or '')
+        if previous_status not in {'running', 'paused', 'failed', 'partial_success'}:
+            raise HTTPException(status_code=409, detail=f'Task status cannot be marked for manual review: {previous_status}')
+        repo.update_task_status(payload.task_id, 'needs_manual_review')
+        repo.add_log(payload.task_id, None, 'warning', '运行时控制：真实写入任务已转人工复核', {
+            'action': action,
+            'previous_status': previous_status,
+            'mode': mode,
+            'reason': 'manual_review_requested',
+        })
+        marked = [{
+            'id': payload.task_id,
+            'mode': mode,
+            'previousStatus': previous_status,
+            'status': 'needs_manual_review',
+            'reason': 'manual_review_requested',
+        }]
+        _append_runtime_control_log(f"mark_real_task_manual_review task={payload.task_id} previous_status={previous_status} mode={mode}")
+        return {
+            'ok': True,
+            'action': action,
+            'markedTasks': marked,
+            'message': '已将真实写入任务转入人工复核；未取消真实浏览器执行进程',
         }
 
     raise HTTPException(status_code=400, detail=f'Unhandled runtime control action: {payload.action}')

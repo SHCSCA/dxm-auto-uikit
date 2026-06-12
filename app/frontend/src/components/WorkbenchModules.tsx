@@ -2771,6 +2771,7 @@ export function ExecutionConsole({
             <ModuleHead title="运行时维护" meta="安全动作" />
           <RuntimeControlPanel
             busy={busy}
+            selectedTask={selectedTask}
             agentConsole={agentConsole}
             runtimeStatus={runtimeStatus}
             lastRuntimeControlResult={lastRuntimeControlResult}
@@ -2977,18 +2978,21 @@ function ConsoleCompletedReviewPanel({
 
 function RuntimeControlPanel({
   busy,
+  selectedTask,
   agentConsole,
   runtimeStatus,
   lastRuntimeControlResult,
   onRuntimeControl,
 }: {
   busy: boolean
+  selectedTask: Task | null
   agentConsole: AgentConsoleSession | null
   runtimeStatus: RuntimeStatus | null
   lastRuntimeControlResult: RuntimeControlResponse | null
   onRuntimeControl: (action: RuntimeControlAction) => void
 }) {
   const agentActive = Boolean(agentConsole?.active)
+  const canMarkManualReview = canMarkRealTaskForManualReview(selectedTask)
   const launcherManaged = Boolean(runtimeStatus?.runtimeControl?.managedByLauncher)
   const restartAvailable = Boolean(runtimeStatus?.runtimeControl?.restartAvailable)
   const restartDisabled = busy || !restartAvailable
@@ -3015,6 +3019,14 @@ function RuntimeControlPanel({
       <button
         className="button button--quiet"
         type="button"
+        disabled={busy || !canMarkManualReview}
+        onClick={() => onRuntimeControl('mark_real_task_manual_review')}
+      >
+        转人工复核
+      </button>
+      <button
+        className="button button--quiet"
+        type="button"
         disabled={busy}
         onClick={() => onRuntimeControl('run_l2_readonly_probe')}
       >
@@ -3035,14 +3047,26 @@ function RuntimeControlPanel({
         </div>
       </details>
       <RuntimeControlResultSummary result={lastRuntimeControlResult} />
-      <small>维护动作会写入启动器日志；真实保存任务不会被“清理卡住任务”取消。</small>
+      <small>维护动作会写入启动器日志；真实保存任务不会被“清理卡住任务”取消；转人工复核不会取消真实浏览器进程。</small>
     </div>
   )
 }
 
 function RuntimeControlResultSummary({ result }: { result: RuntimeControlResponse | null }) {
-  if (!result || result.action !== 'clear_stuck_tasks') {
+  if (!result || (result.action !== 'clear_stuck_tasks' && result.action !== 'mark_real_task_manual_review')) {
     return null
+  }
+  if (result.action === 'mark_real_task_manual_review') {
+    const marked = result.markedTasks ?? []
+    const markedText = marked.length ? marked.map(manualReviewTaskLabel).join('、') : '0 个'
+    return (
+      <div className="runtime-control-result" aria-label="人工复核结果">
+        <strong>人工复核结果</strong>
+        <span>已转人工复核：{markedText}</span>
+        <span>状态标记：needs_manual_review</span>
+        {result.message && <small>{result.message}</small>}
+      </div>
+    )
   }
   const cleared = result.clearedTasks ?? []
   const skipped = result.skippedTasks ?? []
@@ -3070,6 +3094,22 @@ function protectedRuntimeTaskLabel(item: Record<string, unknown>) {
     item.reason === 'real_write_protected' ? 'real_write_protected' : typeof item.reason === 'string' ? item.reason : '',
   ].filter(Boolean)
   return parts.join(' ')
+}
+
+function manualReviewTaskLabel(item: Record<string, unknown>) {
+  const parts = [
+    runtimeTaskLabel(item),
+    typeof item.mode === 'string' ? item.mode : '',
+    typeof item.previousStatus === 'string' ? `${item.previousStatus} -> needs_manual_review` : 'needs_manual_review',
+  ].filter(Boolean)
+  return parts.join(' ')
+}
+
+function canMarkRealTaskForManualReview(task: Task | null) {
+  if (!task) return false
+  const mode = String(task.mode || task.payload?.execution_mode || '')
+  if (!['claim_only', 'single_save', 'batch_save'].includes(mode)) return false
+  return ['running', 'paused', 'failed', 'partial_success'].includes(String(task.status || ''))
 }
 
 function AgentActionTimeline({ agentConsole }: { agentConsole: AgentConsoleSession | null }) {

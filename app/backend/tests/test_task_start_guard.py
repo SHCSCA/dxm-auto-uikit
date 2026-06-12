@@ -634,6 +634,34 @@ def test_runtime_control_clears_only_non_real_stuck_tasks(tmp_path, monkeypatch)
     assert any(item["id"] == single_save["id"] and item["reason"] == "real_write_protected" for item in payload["skippedTasks"])
 
 
+def test_runtime_control_marks_real_task_for_manual_review_without_cancelling_worker(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo, mode="single_save")
+    repo.update_task_status(task["id"], "paused")
+
+    response = client.post(
+        "/api/runtime/control",
+        json={"action": "mark_real_task_manual_review", "task_id": task["id"]},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["action"] == "mark_real_task_manual_review"
+    assert payload["markedTasks"] == [
+        {
+            "id": task["id"],
+            "mode": "single_save",
+            "previousStatus": "paused",
+            "status": "needs_manual_review",
+            "reason": "manual_review_requested",
+        }
+    ]
+    assert repo.get_task(task["id"])["status"] == "needs_manual_review"
+    logs = repo.list_logs(task["id"])
+    assert any("运行时控制：真实写入任务已转人工复核" in item["message"] for item in logs)
+
+
 def test_runtime_control_queues_launcher_managed_backend_restart(tmp_path, monkeypatch):
     import src.main as main
 

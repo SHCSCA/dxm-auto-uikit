@@ -69,7 +69,7 @@ export type RuntimeStatus = {
   dependencies: Record<string, { status: string; path?: string | null }>
   runtimeControl?: { managedByLauncher: boolean; restartAvailable: boolean; commandFile?: string | null; detail?: string | null }
 }
-export type RuntimeControlAction = 'stop_agent_console' | 'clear_stuck_tasks' | 'restart_backend' | 'restart_frontend' | 'run_l2_readonly_probe'
+export type RuntimeControlAction = 'stop_agent_console' | 'clear_stuck_tasks' | 'mark_real_task_manual_review' | 'restart_backend' | 'restart_frontend' | 'run_l2_readonly_probe'
 export type RuntimeControlResponse = {
   ok: boolean
   action: RuntimeControlAction | string
@@ -77,6 +77,7 @@ export type RuntimeControlResponse = {
   clearedTaskIds?: number[]
   clearedTasks?: Array<Record<string, unknown>>
   skippedTasks?: Array<Record<string, unknown>>
+  markedTasks?: Array<Record<string, unknown>>
   agentConsole?: AgentConsoleSession
 }
 export type ConfigPreviewField = {
