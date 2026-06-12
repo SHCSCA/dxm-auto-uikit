@@ -2000,6 +2000,18 @@ def test_frontend_treats_workflow_navigation_as_logged_in_across_primary_surface
     assert "label: status === 'workflow_navigation' ? 'DXM 已进入业务页' : 'DXM 已登录'" in workbench_source
 
 
+def test_frontend_recovers_from_stale_task_id_in_url():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+
+    assert "function syncSelectedTaskIdUrl(taskId: number | null)" in app_source
+    assert "const taskMissing = failures.some((failure) => failure.path.startsWith('/api/delivery/workspace') && /task not found/i.test(failure.message))" in app_source
+    assert "const recoveredTaskId = pickDefaultTaskId(null, nextWorkspace.tasks)" in app_source
+    assert "setSelectedTaskId(recoveredTaskId)" in app_source
+    assert "syncSelectedTaskIdUrl(recoveredTaskId)" in app_source
+    assert "} else {\n      setSelectedTaskId((current) => current ?? pickDefaultTaskId(deliveryWorkspace, nextWorkspace.tasks))" in app_source
+    assert "syncSelectedTaskIdUrl(taskId)" in app_source
+
+
 def test_execution_console_uses_unified_primary_path_before_rendering():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     console_section = source[source.index("export function ExecutionConsole"):source.index("function AgentStagePanel")]

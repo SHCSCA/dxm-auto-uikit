@@ -112,6 +112,16 @@ function waitForAgentConsoleNavigationSettle() {
   })
 }
 
+function syncSelectedTaskIdUrl(taskId: number | null) {
+  const url = new URL(window.location.href)
+  if (taskId) {
+    url.searchParams.set('task_id', String(taskId))
+  } else {
+    url.searchParams.delete('task_id')
+  }
+  window.history.replaceState(window.history.state, '', url.toString())
+}
+
 export default function App() {
   const [workspace, setWorkspace] = useState<DeliveryWorkspace>(() => composeWorkspace({
     stores: [],
@@ -245,10 +255,16 @@ export default function App() {
     setWorkspace(nextWorkspace)
     setAgentConsole(consoleStatus)
     setFinalCheck(finalCheckSummary)
-    setSelectedTaskId((current) => current ?? pickDefaultTaskId(deliveryWorkspace, nextWorkspace.tasks))
+    const taskMissing = failures.some((failure) => failure.path.startsWith('/api/delivery/workspace') && /task not found/i.test(failure.message))
+    if (taskMissing) {
+      const recoveredTaskId = pickDefaultTaskId(null, nextWorkspace.tasks)
+      setSelectedTaskId(recoveredTaskId)
+      syncSelectedTaskIdUrl(recoveredTaskId)
+    } else {
+      setSelectedTaskId((current) => current ?? pickDefaultTaskId(deliveryWorkspace, nextWorkspace.tasks))
+    }
     if (failures.length) {
       const firstFailure = failures[0]
-      const taskMissing = Boolean(firstFailure?.path.startsWith('/api/delivery/workspace') && /task not found/i.test(firstFailure.message))
       setWorkspaceNotice({
         kind: 'degraded',
         title: taskMissing ? '当前任务需要重新选择' : '工作台服务连接异常',
@@ -534,6 +550,7 @@ export default function App() {
         },
       })
       setSelectedTaskId(task.id)
+      syncSelectedTaskIdUrl(task.id)
       setActiveSection('tasks')
       await refreshWorkspace()
       await refreshConfigPreview(task.id)
@@ -582,6 +599,7 @@ export default function App() {
         },
       })
       setSelectedTaskId(task.id)
+      syncSelectedTaskIdUrl(task.id)
       setActiveSection('tasks')
       await refreshWorkspace()
     } catch (error) {
@@ -1016,6 +1034,7 @@ export default function App() {
             onRunL2Probe={runL2ReadonlyProbe}
             onSelectTask={(taskId) => {
               setSelectedTaskId(taskId)
+              syncSelectedTaskIdUrl(taskId)
               void refreshConfigPreview(taskId)
             }}
             onCreateRealTask={createRealTask}
