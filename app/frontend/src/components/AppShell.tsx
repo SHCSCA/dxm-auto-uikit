@@ -12,55 +12,55 @@ type WorkbenchPrimaryArea = {
 const primaryAreas: WorkbenchPrimaryArea[] = [
   {
     id: 'prepare',
-    label: '准备',
+    label: '开始',
     short: '1',
-    summary: '操作引导与编辑页配置',
+    summary: '登录、配置、预检',
     items: [
-      { id: 'guide', label: '操作引导', short: '导', hint: '下一步' },
-      { id: 'config', label: '编辑页配置', short: '配', hint: '按店小秘分区填写' },
+      { id: 'guide', label: '开始使用', short: '起', hint: '登录与下一步' },
+      { id: 'config', label: '配置模板', short: '配', hint: '填写编辑页' },
     ],
   },
   {
     id: 'execute',
     label: '执行',
     short: '2',
-    summary: 'Agent 控制台与执行浏览器',
+    summary: '任务与真实浏览器',
     items: [
-      { id: 'console', label: '执行控制台', short: '控', hint: '登录与执行浏览器' },
-      { id: 'tasks', label: '当前任务', short: '任', hint: '启动与审批' },
+      { id: 'tasks', label: '任务', short: '任', hint: '选择商品与批准' },
+      { id: 'console', label: '真实浏览器', short: '控', hint: '登录和执行' },
     ],
   },
   {
     id: 'review',
-    label: '复核',
+    label: '结果',
     short: '3',
-    summary: '证据、报告、异常',
+    summary: '报告与问题',
     items: [
-      { id: 'evidence', label: '证据中心', short: '证', hint: '保存证据' },
-      { id: 'reports', label: '报告中心', short: '报', hint: '复验结论' },
-      { id: 'exceptions', label: '异常池', short: '异', hint: '待处理问题' },
+      { id: 'reports', label: '结果报告', short: '报', hint: '保存结果' },
+      { id: 'exceptions', label: '问题处理', short: '异', hint: '失败原因' },
+      { id: 'evidence', label: '证据', short: '证', hint: '保存证据' },
     ],
   },
   {
     id: 'system',
-    label: '系统',
+    label: '更多',
     short: '4',
-    summary: '状态与诊断',
+    summary: '系统状态',
     items: [
-      { id: 'dashboard', label: '系统总览', short: '览', hint: '连接与门禁' },
+      { id: 'dashboard', label: '状态', short: '态', hint: '连接与门禁' },
     ],
   },
 ]
 
 const sectionLabels: Record<WorkbenchSection, string> = {
-  guide: '操作引导',
-  dashboard: '总览',
-  config: '配置中心',
-  tasks: '任务中心',
-  console: '执行控制台',
-  evidence: '证据中心',
-  exceptions: '异常池',
-  reports: '报告中心',
+  guide: '开始使用',
+  dashboard: '状态',
+  config: '配置模板',
+  tasks: '任务',
+  console: '真实浏览器',
+  evidence: '证据',
+  exceptions: '问题处理',
+  reports: '结果报告',
 }
 
 type AppShellProps = {
@@ -98,20 +98,14 @@ export function AppShell({
           {!sidebarCollapsed && (
             <div>
               <strong>DXM Agent</strong>
-              <span>单商品只保存 Agent</span>
-              <span className="sr-only">配置 / 任务 / 登录 / 执行</span>
+              <span>只保存自动化</span>
+              <span className="sr-only">开始 / 配置 / 任务 / 浏览器 / 结果</span>
             </div>
           )}
           <button className="icon-button" type="button" onClick={onToggleSidebar} aria-label="切换侧边栏">
             {sidebarCollapsed ? '>' : '<'}
           </button>
         </div>
-        {!sidebarCollapsed && (
-          <div className="sidebar__current" aria-label="当前页面">
-            <span>当前：</span>
-            <strong>{activeLabel}</strong>
-          </div>
-        )}
         <nav className="nav-list">
           {primaryAreas.map((area) => (
             <section

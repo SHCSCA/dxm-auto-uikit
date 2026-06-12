@@ -512,13 +512,13 @@ def test_frontend_has_stateful_operation_guide_entry():
 
     assert "useState<WorkbenchSection>('guide')" in app_source
     assert "type WorkbenchPrimaryArea" in shell_source
-    assert "summary: '操作引导与编辑页配置'" in shell_source
-    assert "{ id: 'guide', label: '操作引导', short: '导', hint: '下一步' }" in shell_source
-    assert "{ id: 'config', label: '编辑页配置', short: '配', hint: '按店小秘分区填写' }" in shell_source
+    assert "summary: '登录、配置、预检'" in shell_source
+    assert "{ id: 'guide', label: '开始使用', short: '起', hint: '登录与下一步' }" in shell_source
+    assert "{ id: 'config', label: '配置模板', short: '配', hint: '填写编辑页' }" in shell_source
     assert "const sectionLabels: Record<WorkbenchSection, string>" in shell_source
-    assert "evidence: '证据中心'" in shell_source
-    assert "exceptions: '异常池'" in shell_source
-    assert "reports: '报告中心'" in shell_source
+    assert "evidence: '证据'" in shell_source
+    assert "exceptions: '问题处理'" in shell_source
+    assert "reports: '结果报告'" in shell_source
     assert "sectionLabels[activeSection] ?? '工作台'" in shell_source
     assert "case 'guide'" in app_source
     assert "GuideCenter" in app_source
@@ -620,15 +620,15 @@ def test_sidebar_is_navigation_only_not_status_or_hint_panel():
     shell_source = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
 
-    assert "sidebar__current" in shell_source
-    assert "当前：" in shell_source
+    assert "sidebar__current" not in shell_source
+    assert "当前：" not in shell_source
     assert "aria-label={`运营工作台导航，${sourceLabel}`}" in shell_source
     assert "sidebar__note" not in shell_source
     assert "nav-section__index" not in shell_source
     assert "nav-subitem__mark" not in shell_source
     assert "<small>{item.hint}</small>" not in shell_source
     assert "nav-subitem__label" in shell_source
-    assert ".sidebar__current" in styles_source
+    assert ".sidebar__current" not in styles_source
     assert ".sidebar__note" not in styles_source
 
 
@@ -2181,7 +2181,7 @@ def test_frontend_first_screen_names_dxm_automation_delivery():
     assert "系统状态与验收详情" in safety_bar
     assert "safety-bar__meta-details inline-disclosure" in safety_bar
     assert "真实写入门禁未通过" not in safety_bar
-    assert "配置 / 任务 / 登录 / 执行" in shell
+    assert "开始 / 配置 / 任务 / 浏览器 / 结果" in shell
     assert "\\u0044\\u0058\\u004d \\u81ea\\u52a8\\u5316\\u5de5\\u4f5c\\u53f0" in qa_source
     assert "\\u73b0\\u5728\\u53ea\\u505a\\u8fd9\\u4e00\\u6b65" in qa_source
     assert "\\u67e5\\u770b\\u5b8c\\u6574 8 \\u6b65\\u6d41\\u7a0b" in qa_source
@@ -2192,16 +2192,22 @@ def test_frontend_first_screen_names_dxm_automation_delivery():
 def test_sidebar_copy_names_save_only_agent_flow_without_ambiguous_browser_wording():
     shell = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
 
-    assert "单商品只保存 Agent" in shell
-    assert "配置 / 任务 / 登录 / 执行" in shell
-    assert "Agent 控制台与执行浏览器" in shell
-    assert "{ id: 'console', label: '执行控制台', short: '控', hint: '登录与执行浏览器' }" in shell
+    assert "只保存自动化" in shell
+    assert "开始 / 配置 / 任务 / 浏览器 / 结果" in shell
+    assert "任务与真实浏览器" in shell
+    assert "{ id: 'console', label: '真实浏览器', short: '控', hint: '登录和执行' }" in shell
     assert "真实店小秘操作在登录浏览器和执行浏览器中完成" in shell
 
     assert "真实浏览器自动化" not in shell
     assert "配置 / 任务 / 真实浏览器执行" not in shell
     assert "Agent 控制台与真实浏览器" not in shell
     assert "hint: '真实浏览器'" not in shell
+    assert "单商品只保存 Agent" not in shell
+    assert "执行控制台" not in shell
+    assert "证据中心" not in shell
+    assert "报告中心" not in shell
+    assert "异常池" not in shell
+    assert "系统总览" not in shell
 
 
 def test_mock_workspace_uses_dry_run_demo_language_not_real_single_save():

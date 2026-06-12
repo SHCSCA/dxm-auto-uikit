@@ -219,17 +219,21 @@ def test_app_shell_presents_agent_console_as_user_first_navigation():
     assert "type WorkbenchPrimaryArea" in source
     assert "const primaryAreas" in source
     assert "label: '执行'" in source
-    assert "label: '准备'" in source
-    assert "label: '复核'" in source
-    assert "label: '系统'" in source
-    assert "执行控制台" in source
-    assert "执行浏览器" in source
-    assert "证据中心" in source
-    assert "报告中心" in source
-    assert "异常池" in source
+    assert "label: '开始'" in source
+    assert "label: '结果'" in source
+    assert "label: '更多'" in source
+    assert "真实浏览器" in source
+    assert "任务与真实浏览器" in source
+    assert "结果报告" in source
+    assert "问题处理" in source
+    assert "证据" in source
+    assert "执行控制台" not in source
+    assert "证据中心" not in source
+    assert "报告中心" not in source
+    assert "异常池" not in source
     assert "nav-section" in source
     assert "nav-subitem" in source
-    assert "Agent 控制台" in source
+    assert "Agent 控制台" not in source
 
 
 def test_execution_console_focus_panel_keeps_primary_summary_small():
