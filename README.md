@@ -22,11 +22,18 @@ DXM 半托管自动化工作台，面向真实店小秘账号、真实浏览器�
 已打包免安装运行版：
 
 ```text
-C:\Users\wz\Desktop\DXM-Agent-Console-免安装版\DXM Agent Console.exe
-outputs\desktop-build\win-unpacked\DXM Agent Console.exe
+C:\Users\wz\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console.exe
+outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe
 ```
 
-当前默认交付使用免安装目录版。必须保留整个 `DXM-Agent-Console-免安装版` 或 `win-unpacked` 文件夹和 `resources` 目录，不能只复制其中的 exe 文件单独运行。单文件 `DXM-Agent-Console-Portable-latest.exe` 当前在本机 QA smoke 中会卡在 portable 外壳阶段，暂不作为推荐入口。
+当前默认交付使用目录免安装版：
+
+```text
+C:\Users\wz\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console.exe
+outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe
+```
+
+使用目录版时必须保留整个文件夹和 `resources` 目录，不能只复制 exe 文件。single-file portable 当前未通过本机 smoke，不作为交付入口。
 
 源码开发态可用下面命令启动桌面壳：
 
@@ -49,7 +56,7 @@ scripts\start-desktop.bat
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-desktop-package.ps1
 ```
 
-该命令会启动 `outputs\desktop-build\win-unpacked\DXM Agent Console.exe`，检查 `desktop-main.log` 中是否出现 `Starting backend` 和 `Loaded frontend`。
+该命令会启动 `outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe`，检查 `desktop-main.log` 中是否出现 `Starting backend` 和 `Loaded frontend`。
 
 ### 源码备用入口：单窗口启动器
 
@@ -135,11 +142,18 @@ scripts\start-mvp.bat
 已打包免安装运行版：
 
 ```bat
-C:\Users\wz\Desktop\DXM-Agent-Console-免安装版\DXM Agent Console.exe
-outputs\desktop-build\win-unpacked\DXM Agent Console.exe
+C:\Users\wz\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console.exe
+outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe
 ```
 
-当前交付入口是免安装目录版；若使用 `win-unpacked`，必须保留整个文件夹和 `resources` 目录。单文件 portable 暂列为待修复备用产物，不作为用户交付入口。
+当前交付入口是目录免安装版：
+
+```bat
+C:\Users\wz\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console.exe
+outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe
+```
+
+single-file portable 当前未通过本机 smoke，不作为交付入口。
 
 源码开发态启动桌面版：
 

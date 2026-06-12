@@ -5,6 +5,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DESKTOP_DIR = REPO_ROOT / "app" / "desktop"
 DESKTOP_PACKAGE = DESKTOP_DIR / "package.json"
+DESKTOP_PORTABLE_PATCH = DESKTOP_DIR / "scripts" / "patch-electron-builder-portable.cjs"
 DESKTOP_MAIN = DESKTOP_DIR / "src" / "main.cjs"
 DESKTOP_PRELOAD = DESKTOP_DIR / "src" / "preload.cjs"
 DESKTOP_BUILDER = DESKTOP_DIR / "electron-builder.yml"
@@ -32,6 +33,18 @@ def test_desktop_package_declares_electron_entrypoints_and_build_scripts():
     assert "electron-builder --config electron-builder.yml" in package["scripts"]["build:installer"]
     assert "electron" in package["devDependencies"]
     assert "electron-builder" in package["devDependencies"]
+
+
+def test_desktop_build_patches_portable_launcher_exec_quoting():
+    package = json.loads(DESKTOP_PACKAGE.read_text(encoding="utf-8"))
+    patch_source = DESKTOP_PORTABLE_PATCH.read_text(encoding="utf-8")
+
+    assert "patch:portable-template" in package["scripts"]
+    assert "patch-electron-builder-portable.cjs" in package["scripts"]["patch:portable-template"]
+    assert "npm run patch:portable-template" in package["scripts"]["build:portable"]
+    assert "npm run patch:portable-template" in package["scripts"]["build:installer"]
+    assert r'ExecWait "$INSTDIR\\${APP_EXECUTABLE_FILENAME} $R0" $0' in patch_source
+    assert r'ExecWait `"$INSTDIR\\${APP_EXECUTABLE_FILENAME}" $R0` $0' in patch_source
 
 
 def test_desktop_main_starts_backend_hidden_and_loads_frontend_with_api_base():
@@ -100,6 +113,7 @@ def test_desktop_builder_packages_windows_exe_without_console_windows():
     assert "target: nsis" in source
     assert "artifactName: DXM-Agent-Console-${version}.${ext}" in source
     assert "DXM-Agent-Console-Portable-${version}.${ext}" in source
+    assert "executableName: DXM-Agent-Console" in source
     assert "app/frontend/dist/**" in source
     assert "app/backend/src/**" in source
     assert "../backend/.venv" in source
@@ -123,15 +137,14 @@ def test_verify_desktop_package_smoke_script_checks_packaged_exe_logs():
     source = VERIFY_DESKTOP_PACKAGE.read_text(encoding="utf-8")
 
     assert "DXM Agent Console packaged smoke" in source
-    assert "outputs\\desktop-build\\win-unpacked\\DXM Agent Console.exe" in source
-    assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in source
+    assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
     assert "desktop-main.log" in source
     assert "Loaded frontend" in source
     assert "Starting backend" in source
     assert "--qa-capture=$CapturePath" in source
     assert "QA capture was not created" in source
     assert "resources\\app\\backend\\.venv\\Scripts\\python.exe" in source
-    assert "Packaged backend did not start with bundled Python" in source
+    assert "backend did not start with bundled Python" in source
     assert "tools\\probes\\l2_readonly_probe_runner.py" in source
     assert "config\\l2_readonly_allowlist.json" in source
     assert "taskkill" in source
@@ -143,23 +156,21 @@ def test_user_docs_present_desktop_exe_as_primary_delivery_entry():
 
     for source in (readme, user_guide):
         assert "DXM Agent Console 桌面版" in source
-        assert "C:\\Users\\wz\\Desktop\\DXM-Agent-Console-免安装版\\DXM Agent Console.exe" in source
-        assert "outputs\\desktop-build\\win-unpacked\\DXM Agent Console.exe" in source
-        assert "当前默认交付使用免安装目录版" in source
-        assert "单文件 `DXM-Agent-Console-Portable-latest.exe` 当前在本机 QA smoke 中会卡在 portable 外壳阶段" in source
+        assert "C:\\Users\\wz\\Desktop\\DXM-Agent-Console-免安装版\\DXM-Agent-Console.exe" in source
+        assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
+        assert "当前默认交付使用目录免安装版" in source
+        assert "single-file portable 当前未通过本机 smoke" in source
         assert "scripts\\start-desktop.bat" in source
         assert "scripts\\verify-desktop-package.ps1" in source
         assert "AppData\\Roaming\\DXM Agent Console\\data\\desktop-main.log" in source
 
 
-def test_portable_quick_guide_uses_verified_folder_exe_entry():
+def test_portable_quick_guide_uses_verified_portable_entry():
     source = PORTABLE_QUICK_GUIDE.read_text(encoding="utf-8")
 
-    assert "C:\\Users\\wz\\Desktop\\DXM-Agent-Console-免安装版\\DXM Agent Console.exe" in source
-    assert "outputs\\desktop-build\\win-unpacked\\DXM Agent Console.exe" in source
-    assert "必须保留整个 `DXM-Agent-Console-免安装版` 或 `win-unpacked` 文件夹和 `resources` 目录" in source
-    assert "DXM-Agent-Console-Portable-latest.exe" in source
-    assert "暂不作为推荐入口" in source
+    assert "C:\\Users\\wz\\Desktop\\DXM-Agent-Console-免安装版\\DXM-Agent-Console.exe" in source
+    assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
+    assert "使用目录版时必须保留整个文件夹和 `resources` 目录" in source
 
 
 def test_frontend_vite_build_uses_relative_base_for_electron_file_loading():

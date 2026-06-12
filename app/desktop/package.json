@@ -7,9 +7,10 @@
     "dev": "electron .",
     "start": "electron .",
     "build:frontend": "npm --prefix ../frontend run build",
+    "patch:portable-template": "node scripts/patch-electron-builder-portable.cjs",
     "build": "npm run build:frontend && electron-builder --dir --config electron-builder.yml",
-    "build:portable": "npm run build:frontend && electron-builder --win portable --config electron-builder.yml",
-    "build:installer": "npm run build:frontend && electron-builder --config electron-builder.yml"
+    "build:portable": "npm run patch:portable-template && npm run build:frontend && electron-builder --win portable --config electron-builder.yml",
+    "build:installer": "npm run patch:portable-template && npm run build:frontend && electron-builder --config electron-builder.yml"
   },
   "devDependencies": {
     "electron": "^33.2.1",

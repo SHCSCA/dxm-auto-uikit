@@ -21,6 +21,7 @@ extraResources:
   - from: ../../config
     to: config
 win:
+  executableName: DXM-Agent-Console
   target:
     - target: portable
       arch:
