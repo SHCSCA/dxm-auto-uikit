@@ -511,6 +511,22 @@ export function GuideCenter({
             />
           ) : (
             <div className="guide-step__actions">
+              {nextGuideStep.id === 'l2' && (
+                <div className="guide-precheck-brief" aria-label="预检说明">
+                  <span>
+                    <strong>预检会做</strong>
+                    <small>{READONLY_PRECHECK_PURPOSE}</small>
+                  </span>
+                  <span>
+                    <strong>不会做</strong>
+                    <small>不会领取、备注、保存或发布。</small>
+                  </span>
+                  <span>
+                    <strong>通过后</strong>
+                    <small>通过后再打开执行浏览器。</small>
+                  </span>
+                </div>
+              )}
               <button className="button button--primary" type="button" onClick={nextGuideStep.onAction}>
                 {nextGuideStep.action}
               </button>

@@ -622,6 +622,23 @@ def test_guide_center_keeps_support_panels_collapsed_by_default():
     assert "guide-path-summary guide-path-summary--compact" in full_path_drawer
 
 
+def test_guide_center_explains_precheck_in_primary_step():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    guide_center_section = source[source.index("export function GuideCenter"):source.index("function DxmLoginInlineForm")]
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    visible_primary = guide_center_section[
+        guide_center_section.index('<article className={`guide-step guide-step--primary'):
+        guide_center_section.index('<details className="inline-disclosure guide-full-path">')
+    ]
+
+    assert "nextGuideStep.id === 'l2'" in visible_primary
+    assert "guide-precheck-brief" in visible_primary
+    assert "READONLY_PRECHECK_PURPOSE" in visible_primary
+    assert "不会领取、备注、保存或发布" in visible_primary
+    assert "通过后再打开执行浏览器" in visible_primary
+    assert ".guide-precheck-brief" in styles_source
+
+
 def test_sidebar_is_navigation_only_not_status_or_hint_panel():
     shell_source = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")

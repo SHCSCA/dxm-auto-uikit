@@ -1171,6 +1171,41 @@ a:focus-visible {
   gap: 7px;
 }
 
+.guide-precheck-brief {
+  flex: 1 1 100%;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.guide-precheck-brief span {
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid #c7d8f4;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.guide-precheck-brief strong,
+.guide-precheck-brief small {
+  display: block;
+  min-width: 0;
+}
+
+.guide-precheck-brief strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.guide-precheck-brief small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .guide-status-card {
   min-height: 360px;
 }
