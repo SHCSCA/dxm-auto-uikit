@@ -1,4 +1,6 @@
 from pathlib import Path
+import threading
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -6,7 +8,9 @@ from fastapi.testclient import TestClient
 from src.execution import dxm_login_flow as dxm_login_flow_module
 from src.execution.dxm_adapter import DxmWorkflowAdapter
 from src.execution.dxm_login_flow import DxmLoginFlow, WORKFLOW_TARGETS
+from src.models import LoginContinueRequest, LoginStartRequest
 from src.main import app
+import src.main as main_module
 
 
 class DummyLiveClient:
@@ -177,6 +181,47 @@ def test_login_start_reports_visible_browser(monkeypatch, tmp_path):
 
     assert state['stage'] == 'waiting_captcha'
     assert state['browser_visible'] is True
+
+
+def test_login_start_and_continue_are_dispatched_on_same_thread(monkeypatch):
+    class ThreadRecordingLoginFlow:
+        def __init__(self):
+            self.calls: list[tuple[str, int]] = []
+            self.started = threading.Event()
+
+        def get_state(self):
+            return {'stage': 'waiting_captcha'}
+
+        def start_login(self, username: str, password: str):
+            self.calls.append(('start', threading.get_ident()))
+            self.started.set()
+            time.sleep(0.15)
+            return {'stage': 'waiting_captcha'}
+
+        def continue_login(self):
+            self.calls.append(('continue', threading.get_ident()))
+            return {'stage': 'login_success'}
+
+    flow = ThreadRecordingLoginFlow()
+    monkeypatch.setattr(main_module, 'login_flow', flow)
+
+    start_thread = threading.Thread(
+        target=lambda: main_module.dxm_login_start(LoginStartRequest(username='u', password='p'))
+    )
+    continue_thread = threading.Thread(
+        target=lambda: main_module.dxm_login_continue(LoginContinueRequest(confirm=True))
+    )
+
+    start_thread.start()
+    assert flow.started.wait(timeout=2)
+    continue_thread.start()
+    start_thread.join(timeout=2)
+    continue_thread.join(timeout=2)
+
+    assert not start_thread.is_alive()
+    assert not continue_thread.is_alive()
+    assert [name for name, _ in flow.calls] == ['start', 'continue']
+    assert flow.calls[0][1] == flow.calls[1][1]
 
 
 def test_draft_box_target_opens_status_zero_collection_list():

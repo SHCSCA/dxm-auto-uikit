@@ -9,6 +9,7 @@ import secrets
 import subprocess
 import sys
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -79,6 +80,7 @@ manager = ConnectionManager()
 engine = PlaywrightEngine()
 live_client = DxmLiveClient()
 login_flow = DxmLoginFlow(live_client)
+login_flow_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='dxm-login-flow')
 workflow_adapter = DxmWorkflowAdapter(login_flow)
 title_ai_service = TitleAIService()
 selector_profile_service = SelectorProfileService()
@@ -151,12 +153,12 @@ def dxm_login_state():
 
 @app.get('/api/dxm/workflow/check-login')
 def dxm_workflow_check_login():
-    return normalize_artifact_paths(_workflow_adapter().check_login_state())
+    return normalize_artifact_paths(_run_login_flow(_workflow_adapter().check_login_state))
 
 
 @app.post('/api/dxm/login/start')
 def dxm_login_start(payload: LoginStartRequest):
-    result = login_flow.start_login(payload.username, payload.password)
+    result = _run_login_flow(login_flow.start_login, payload.username, payload.password)
     return normalize_artifact_paths(result)
 
 
@@ -164,25 +166,26 @@ def dxm_login_start(payload: LoginStartRequest):
 def dxm_login_continue(payload: LoginContinueRequest):
     if not payload.confirm:
         return normalize_artifact_paths(login_flow.get_state())
-    result = login_flow.continue_login()
+    result = _run_login_flow(login_flow.continue_login)
     return normalize_artifact_paths(result)
 
 
 @app.post('/api/dxm/navigate')
 def dxm_navigate(payload: LoginNavigateRequest):
-    result = login_flow.navigate_post_login(payload.target)
+    result = _run_login_flow(login_flow.navigate_post_login, payload.target)
     return normalize_artifact_paths(result)
 
 
 @app.post('/api/dxm/workflow/open-draft-box')
 def dxm_workflow_open_draft_box():
-    return normalize_artifact_paths(_workflow_adapter().open_draft_box())
+    return normalize_artifact_paths(_run_login_flow(_workflow_adapter().open_draft_box))
 
 
 @app.post('/api/dxm/draft-box/action')
 def dxm_draft_box_action(payload: DraftBoxActionRequest):
     _assert_direct_real_dxm_mutation_allowed(payload)
-    result = login_flow.perform_draft_box_action(
+    result = _run_login_flow(
+        login_flow.perform_draft_box_action,
         payload.action,
         note_text=payload.note_text,
         product_query=payload.product_query,
@@ -194,7 +197,8 @@ def dxm_draft_box_action(payload: DraftBoxActionRequest):
 @app.post('/api/dxm/workflow/claim-product')
 def dxm_workflow_claim_product(payload: DraftBoxActionRequest):
     _assert_direct_real_dxm_mutation_allowed(payload)
-    return normalize_artifact_paths(_workflow_adapter().claim_product(
+    return normalize_artifact_paths(_run_login_flow(
+        _workflow_adapter().claim_product,
         payload.note_text or 'AI认领',
         product_query=payload.product_query,
         store_name=payload.store_name,
@@ -205,7 +209,8 @@ def dxm_workflow_claim_product(payload: DraftBoxActionRequest):
 def dxm_workflow_open_editor(payload: DraftBoxActionRequest | None = None):
     payload = payload or DraftBoxActionRequest(action='edit')
     _assert_direct_real_dxm_mutation_allowed(payload)
-    return normalize_artifact_paths(_workflow_adapter().open_editor(
+    return normalize_artifact_paths(_run_login_flow(
+        _workflow_adapter().open_editor,
         product_query=payload.product_query,
         store_name=payload.store_name,
     ))
@@ -1411,6 +1416,10 @@ def _task_store_name(task: dict) -> str:
         if store.get('id') == store_id:
             return str(store.get('name') or '')
     return ''
+
+
+def _run_login_flow(func, *args, **kwargs):
+    return login_flow_executor.submit(func, *args, **kwargs).result()
 
 
 def _workflow_adapter():
