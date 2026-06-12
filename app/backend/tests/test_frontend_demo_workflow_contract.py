@@ -59,7 +59,7 @@ def test_config_center_prioritizes_missing_sections_and_sources():
     assert "只显示当前最需要处理的字段" in source
     assert "onEditRequiredSection" in source
     assert "编辑当前必填分区" in source
-    assert "保存到本次任务并继续" in source
+    assert "仅本次任务使用并继续" in source
     assert "selectNextMissingConfigSection" in config_section
     assert "continueToNextMissingSection" in config_section
     assert "data-config-next-required" in source
@@ -86,8 +86,8 @@ def test_config_center_explains_precheck_and_disabled_save_continue():
 
     assert "onRefreshConfigPreview" in source
     assert "onRefreshConfigPreview={async () => { await refreshConfigPreview(); await refreshWorkspace() }}" in app_source
-    assert "检查本次任务配置" in config_section
-    assert "重新检查本次任务配置" in config_section
+    assert "运行配置预检" in config_section
+    assert "刷新配置预检" in config_section
     assert "去任务中心选择任务" in config_section
     assert "onShowTasks" in source
     assert "onShowTasks={() => setActiveSection('tasks')}" in app_source
@@ -97,9 +97,8 @@ def test_config_center_explains_precheck_and_disabled_save_continue():
     assert "先选择任务" in editable_card
     assert "先运行本次任务配置检查" in editable_card
     assert "不能继续的原因" in editable_card
-    assert "本次任务配置检查" in config_section
+    assert "配置预检" in config_section
     assert "等待检查" in config_copy_source
-    assert "配置预检" not in config_copy_source
     assert "等待预检" not in config_copy_source
     assert "启动预检" not in config_copy_source
     assert "configPrecheckActionVisible" in qa_source
@@ -116,6 +115,7 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "applyDefaultTemplatePack" in config_section
     assert "默认测试模板" in config_section
     assert "使用之前测试通过的数据配置" in config_section
+    assert config_section.index("使用之前测试通过的数据配置") < config_section.index("config-template-console__details")
     assert "写入测试模板到当前范围" in config_section
     assert "保存/覆盖当前店铺模板" not in config_section
     assert "覆盖当前店铺/类目下全部分区" in config_section
@@ -326,10 +326,9 @@ def test_config_center_can_save_task_level_overrides_separately_from_templates()
     assert "payload: withTemplateBinding(payload, currentTemplateBinding)" in config_section
     assert "findExactScopedTemplate(workspace.templates, section.templateType, currentTemplateBinding)" in config_section
     assert "当前模板范围" in config_section
-    assert "保存到本次任务" in config_section
+    assert "仅本次任务使用" in config_section
     assert "保存为店铺模板（后续任务可用）" in config_section
     assert "本次任务只影响当前批次" in config_section
-    assert "仅本次任务使用" not in config_section
     assert "页面填写值会进入执行取值" in config_section
     assert "带 * 字段参与启动门禁" in config_section
     assert "当前任务会优先使用这些值" not in config_section
@@ -403,6 +402,7 @@ def test_config_center_explains_active_template_source_and_filtered_choices():
     assert "已筛除不匹配或禁用模板" in config_section
     assert "选择模板不会改表单，点击套用后才会填入当前分区" in config_section
     assert "config-template-source" in config_section
+    assert config_section.index("config-template-source") < config_section.index("config-template-console__details")
     assert ".config-template-source" in styles_source
     assert "configTemplateSourceState" in qa_source
 
@@ -893,7 +893,7 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "完成态默认不展示浏览器操控细节" in workbench_source
     assert "embedded" in workbench_source
     assert "agent-console-stage--embedded" in workbench_source
-    assert "title=\"登录浏览器与执行浏览器\"" in console_section
+    assert "title=\"Agent 控制真实浏览器\"" in console_section
     assert "<strong>执行浏览器</strong>" in workbench_source
     assert "<strong>当前页面</strong>" in workbench_source
     assert "<strong>操控状态</strong>" in workbench_source
@@ -912,7 +912,8 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "可以打开执行浏览器" in workbench_source
     assert "处理只读检查与确认" not in workbench_source
     assert "处理任务门禁" not in workbench_source
-    assert "控制台不播放截图；截图只作为证据路径，不会启动保存或发布。" in workbench_source
+    assert "控制台只控制独立真实浏览器；证据文件只在报告中留档，不替代实时操控。" in workbench_source
+    assert "控制台不播放截图；截图只作为证据路径，不会启动保存或发布。" not in workbench_source
     assert "'module-card span-2 agent-console-stage'" in console_section
     assert "className=\"module-card span-1 console-log-card console-log-card--compact\"" in console_section
     assert "title=\"实时日志\"" in console_section
@@ -933,7 +934,7 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "验证码已完成，检测登录态" in workbench_source
     assert "进入采集箱" in workbench_source
     assert "登录浏览器用于人工登录；执行浏览器只在配置、只读检查和人工确认通过后由 Agent 操控。" in workbench_source
-    assert "控制台不播放截图；截图只作为证据路径，不会启动保存或发布。" in workbench_source
+    assert "控制台只控制独立真实浏览器；证据文件只在报告中留档，不替代实时操控。" in workbench_source
     assert "aria-label=\"Agent 执行浏览器会话生命周期\"" in workbench_source
     assert "未选择任务，Agent 执行浏览器暂不启动" in workbench_source
     assert "配置未完成，Agent 执行浏览器暂不启动" in workbench_source
@@ -951,7 +952,7 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "agent-console-controls__operator-drawer" in workbench_source
     assert "agent-console-controls__operator-grid" in workbench_source
     assert "<summary>Agent 执行浏览器会话生命周期</summary>" in workbench_source
-    assert "控制台不播放截图，不会启动保存或发布" in workbench_source
+    assert "控制台只控制真实浏览器，不会启动保存或发布" in workbench_source
     assert "<summary>会话管理</summary>" not in workbench_source
     assert "<summary>高级浏览器控制</summary>" in workbench_source
     assert "不会发布" in workbench_source
@@ -1029,12 +1030,13 @@ def test_execution_console_keeps_focus_panel_single_action_first():
     ]
     details_section = focus_section[focus_section.index("<details className=\"console-focus-panel__details inline-disclosure\">"):]
 
-    assert "console-focus-panel__primary-facts" not in focus_section
+    assert "console-focus-panel__primary-facts" in focus_section
     assert "aria-label=\"执行摘要\"" not in visible_before_details
     assert "<summary>技术状态</summary>" in details_section
-    assert "<strong>任务</strong>" in details_section
-    assert "<strong>执行浏览器</strong>" in details_section
-    assert "<strong>下一步</strong>" in details_section
+    assert "<strong>任务</strong>" in visible_before_details
+    assert "<strong>执行浏览器</strong>" in visible_before_details
+    assert "<strong>当前步骤</strong>" in visible_before_details
+    assert "<strong>下一步</strong>" in visible_before_details
     assert "<strong>日志</strong>" in details_section
 
 
@@ -1044,7 +1046,7 @@ def test_execution_console_distinguishes_login_browser_from_agent_execution_brow
     console_section = workbench_source[workbench_source.index("function AgentConsoleControls"):workbench_source.index("function BrowserControlPad")]
     primary_path_section = workbench_source[workbench_source.index("function buildConsolePrimaryPath"):workbench_source.index("function FinalCheckFreshnessRow")]
 
-    assert 'title="登录浏览器与执行浏览器"' in workbench_source
+    assert 'title="Agent 控制真实浏览器"' in workbench_source
     assert "<strong>登录浏览器：打开真实店小秘登录页</strong>" in console_section
     assert "只负责登录、验证码和人工导航；L2 未通过也可以打开，不会保存、不发布。" in console_section
     assert "登录浏览器用于人工登录；执行浏览器只在配置、只读检查和人工确认通过后由 Agent 操控。" in console_section
@@ -1185,7 +1187,7 @@ def test_execution_console_exposes_in_page_browser_control_contract():
     assert "选择器定位" in workbench_source
     assert "按选择器点击" in workbench_source
     assert "按选择器填写" in workbench_source
-    assert "输入到焦点" not in workbench_source
+    assert "输入到焦点和点击坐标已关闭" in workbench_source
     assert "<span>按键</span>" not in workbench_source
     assert "滚动页面" in workbench_source
     assert "仅控制当前独立浏览器窗口" in workbench_source
@@ -1894,10 +1896,17 @@ def test_app_defaults_to_actionable_single_save_when_delivery_task_is_completed(
     assert "currentTask ? [currentTask, ...bundle.tasks] : bundle.tasks" in workspace_source
     assert "defaultTaskSelectionPrefersDeliveryCurrentTask" in qa_source
     assert "const defaultWorkspacePayload = await fetchJson('/api/delivery/workspace');" in qa_source
+    assert "const defaultWorkspaceTasks = Array.isArray(defaultWorkspacePayload?.tasks) ? defaultWorkspacePayload.tasks : [];" in qa_source
+    assert "const defaultActionableSingleSaveTask = defaultWorkspaceTasks.find(task =>" in qa_source
     assert "currentTaskPrefix: '\\u5f53\\u524d\\u4efb\\u52a1 #'" in qa_source
+    assert "deliveryCurrentTaskCompleted: defaultCurrentTaskCompleted" in qa_source
     assert "expectedCurrentTaskMarker: defaultCurrentTaskMarker" in qa_source
+    assert "expectedActionableSingleSaveMarker: defaultActionableTaskMarker" in qa_source
+    assert "usesActionableSingleSaveWhenCurrentCompleted: Boolean(defaultCurrentTaskCompleted && defaultActionableSingleSaveTask?.id" in qa_source
     assert "defaultTaskSelectionState.taskCenterTextSample = taskDefaultText.slice(0, 1200)" in qa_source
     assert "defaultCurrentTaskText.includes(defaultCurrentTaskMarker) || taskDefaultText.includes(defaultCurrentTaskMarker)" in qa_source
+    assert "defaultTaskSelectionState.usesActionableSingleSaveWhenCurrentCompleted = Boolean(defaultCurrentTaskCompleted && defaultActionableSingleSaveTask?.id" in qa_source
+    assert "|| defaultTaskSelectionState.usesActionableSingleSaveWhenCurrentCompleted" in qa_source
     assert "const initialEffectiveReadiness = initialFinalCheckSummary?.effective_real_dxm_write_readiness" in qa_source
     assert "const finalReportEffectiveReadiness = finalCheckSummary?.effective_real_dxm_write_readiness" in qa_source
     assert "const finalReportReportWriteBlocked = finalCheckSummary?.real_dxm_write_readiness === 'BLOCKED'" in qa_source
@@ -1915,6 +1924,19 @@ def test_app_defaults_to_actionable_single_save_when_delivery_task_is_completed(
     assert "const finalCheckEffectiveReadiness = finalCheckSummaryForReport?.effective_real_dxm_write_readiness" in qa_source
     assert "hasDeliveryCurrentTaskName" not in qa_source
     assert "当前任务 #70" not in qa_source
+
+
+def test_browser_qa_accepts_blocked_4xx_posts_without_task_mutation():
+    qa_source = QA_BROWSER_CHECK.read_text(encoding="utf-8")
+
+    assert "function isBlockedStatus(status)" in qa_source
+    assert "status >= 400 && status < 500" in qa_source
+    assert "blockedActionChecks.every(item => isBlockedStatus(item.status))" in qa_source
+    assert "localStartPostBlocked: !shouldRunBlockedMutationChecks || isBlockedStatus(blockedStartStatus)" in qa_source
+    assert "localAgentConsolePostBlocked: !shouldRunBlockedMutationChecks || isBlockedStatus(blockedAgentConsoleStatus)" in qa_source
+    assert "localDirectDxmPostsBlocked: !shouldRunBlockedMutationChecks || blockedActionsAllForbidden" in qa_source
+    assert "blockedPostsDidNotMutateTask: taskStateUnchanged" in qa_source
+    assert "status === 403" not in qa_source
 
 
 def test_task_center_surfaces_l2_allowlist_review_candidates_as_manual_review_only():
@@ -2464,11 +2486,12 @@ def test_frontend_first_screen_names_dxm_automation_delivery():
     assert "当前可执行：单商品只保存自动化" in safety_bar
     assert "系统状态与验收详情" in safety_bar
     assert "safety-bar__meta-details inline-disclosure" in safety_bar
-    assert "真实写入门禁未通过" not in safety_bar
+    assert "真实保存已阻断" in safety_bar
     assert "开始 / 配置 / 任务 / 浏览器 / 结果" in shell
     assert "\\u0044\\u0058\\u004d \\u81ea\\u52a8\\u5316\\u5de5\\u4f5c\\u53f0" in qa_source
+    assert "initialText.includes(text.overview) || initialText.includes('\\u5f00\\u59cb\\u4f7f\\u7528')" in qa_source
     assert "\\u73b0\\u5728\\u53ea\\u505a\\u8fd9\\u4e00\\u6b65" in qa_source
-    assert "\\u67e5\\u770b\\u5b8c\\u6574 8 \\u6b65\\u6d41\\u7a0b" in qa_source
+    assert "\\u771f\\u5b9e\\u4fdd\\u5b58\\u5df2\\u963b\\u65ad" in qa_source
     assert "半托管保存交付工作台" not in source
     assert "保存核验 / 证据复盘" not in shell
 

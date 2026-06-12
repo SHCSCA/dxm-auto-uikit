@@ -2065,12 +2065,12 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   }
 
   async function runConfigPrecheck() {
-    setConfigMessage('正在检查本次任务配置：读取当前任务、店铺、商品和模板；不会操作店小秘。')
+    setConfigMessage('正在运行配置预检：读取当前任务、店铺、商品和模板；不会操作店小秘。')
     try {
       await onRefreshConfigPreview()
-      setConfigMessage('本次任务配置检查已刷新；字段来源、缺失项和执行取值已按当前任务重新计算。')
+      setConfigMessage('配置预检已刷新；字段来源、缺失项和执行取值已按当前任务重新计算。')
     } catch (error) {
-      setConfigMessage(error instanceof Error ? error.message : '本次任务配置检查刷新失败')
+      setConfigMessage(error instanceof Error ? error.message : '配置预检刷新失败')
     }
   }
 
@@ -2100,9 +2100,9 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
         </div>
         <div className="config-precheck-action" aria-label="本次任务配置检查操作">
           <div>
-            <strong>检查本次任务配置</strong>
-            <span>读取当前任务、店铺、商品和模板，判断执行器会填写哪些值；不会操作店小秘。</span>
-            {!selectedTask && <small>先选择任务后才能检查本次任务配置并保存为任务覆盖。</small>}
+            <strong>运行配置预检</strong>
+            <span>配置预检会读取当前任务、店铺、商品和模板，判断执行器会填写哪些值；不会操作店小秘。</span>
+            {!selectedTask && <small>先选择任务后才能运行配置预检并保存为任务覆盖。</small>}
           </div>
           <div className="config-precheck-action__buttons">
             {!selectedTask && (
@@ -2115,9 +2115,9 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
               type="button"
               onClick={() => { void runConfigPrecheck() }}
               disabled={configPreviewLoading || !selectedTask}
-              title={!selectedTask ? '先选择任务后才能检查本次任务配置。' : undefined}
+              title={!selectedTask ? '先选择任务后才能运行配置预检。' : undefined}
             >
-              {configPreviewLoading ? '正在检查...' : configPreview ? '重新检查本次任务配置' : '检查本次任务配置'}
+              {configPreviewLoading ? '正在运行...' : configPreview ? '刷新配置预检' : '运行配置预检'}
             </button>
           </div>
         </div>
@@ -2203,15 +2203,25 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
               <b>已选择：{activeSelectedTemplateLabel}</b>
               <small>{activeSelectedTemplateId ? '点击套用后才会写入表单；保存后才会影响执行。' : '可选择默认测试模板或已保存模板。'}</small>
             </span>
+            <span>
+              <b>默认测试模板</b>
+              <small>使用之前测试通过的数据配置；点击写入后保存到当前店铺/类目范围。</small>
+            </span>
           </div>
           <div className={`config-save-state config-save-state--compact is-${activeSectionStatus}`} aria-label="当前分区保存状态">
             <b>{activeSectionStatusTitle}</b>
             <span>{activeSectionStatusMessage}</span>
           </div>
+          <div className="config-template-source" aria-label="当前模板来源">
+            <strong>当前生效模板</strong>
+            <span>{activeTemplateSourceName || (activeSectionAlreadyPersisted ? '已由配置检查命中模板' : '尚未命中已保存模板')}</span>
+            <small>可选模板 {activeSectionTemplateOptions.length} 套；已筛除不匹配或禁用模板 {filteredTemplateChoiceCount} 套。</small>
+            <small>选择模板不会改表单，点击套用后才会填入当前分区，保存后才会生效。</small>
+          </div>
           <details className="inline-disclosure config-template-console__details">
             <summary>模板来源与默认模板详情</summary>
             <div className="config-template-console__detail-grid">
-              <div className="config-template-source" aria-label="当前模板来源">
+              <div className="config-template-source config-template-source--detail" aria-label="当前模板来源详情">
                 <strong>当前生效模板</strong>
                 <span>{activeTemplateSourceName || (activeSectionAlreadyPersisted ? '已由配置检查命中模板' : '尚未命中已保存模板')}</span>
                 <small>可选模板 {activeSectionTemplateOptions.length} 套；已筛除不匹配或禁用模板 {filteredTemplateChoiceCount} 套。</small>
@@ -2548,7 +2558,7 @@ function EditableConfigSectionCard({
             disabled={continueDisabled}
             title={disabledReason || undefined}
           >
-            {savingSection === `task:${section.code}` ? '保存中...' : '保存到本次任务并继续'}
+            {savingSection === `task:${section.code}` ? '保存中...' : '仅本次任务使用并继续'}
           </button>
         )}
         <button
@@ -2558,7 +2568,7 @@ function EditableConfigSectionCard({
           disabled={taskSaveDisabled}
           title={!selectedTask ? '先选择任务，才能保存为本次任务。' : undefined}
         >
-          {savingSection === `task:${section.code}` ? '保存中...' : '保存到本次任务'}
+          {savingSection === `task:${section.code}` ? '保存中...' : '仅本次任务使用'}
         </button>
         <button
           className="button button--quiet"
@@ -4251,7 +4261,7 @@ function AgentConsoleControls({
       )}
       <div className="agent-console-controls__mission">
         <strong>控制台 Agent 模式</strong>
-        <span>登录浏览器用于人工登录；执行浏览器只在配置、只读检查和人工确认通过后由 Agent 操控。控制台不播放截图；截图只作为证据路径，不会启动保存或发布。</span>
+        <span>登录浏览器用于人工登录；执行浏览器只在配置、只读检查和人工确认通过后由 Agent 操控。控制台只控制独立真实浏览器；证据文件只在报告中留档，不替代实时操控。</span>
         <div>
           <b>1 登录/接入</b>
           <b>2 只读定位</b>
@@ -4323,7 +4333,7 @@ function AgentConsoleControls({
               <button className="button button--secondary" type="button" onClick={onStopAgentConsole} disabled={busy || !active}>
                 关闭浏览器
               </button>
-              <small>启动、接管、交还和关闭的对象都是独立真实浏览器窗口；控制台不播放截图，不会启动保存或发布。</small>
+              <small>启动、接管、交还和关闭的对象都是独立真实浏览器窗口；控制台只控制真实浏览器，不会启动保存或发布。</small>
             </div>
           </details>
           <details className="agent-console-controls__advanced inline-disclosure">

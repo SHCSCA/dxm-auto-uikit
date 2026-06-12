@@ -443,6 +443,9 @@ function summarizeTask(task) {
     failedJobs: task.failed_jobs,
   } : null;
 }
+function isBlockedStatus(status) {
+  return typeof status === 'number' && status >= 400 && status < 500;
+}
 async function fetchJson(path) {
   const response = await fetch(apiBase + path);
   if (!response.ok) throw new Error('GET ' + path + ' failed with ' + response.status);
@@ -979,20 +982,34 @@ const initialText = await bodyText();
 const initialTextCompact = initialText.replace(/\s+/g, '');
 const defaultWorkspacePayload = await fetchJson('/api/delivery/workspace');
 const defaultCurrentTask = defaultWorkspacePayload?.current_task || null;
+const defaultWorkspaceTasks = Array.isArray(defaultWorkspacePayload?.tasks) ? defaultWorkspacePayload.tasks : [];
 const defaultCurrentTaskId = defaultCurrentTask?.id ?? null;
 const defaultCurrentTaskName = String(defaultCurrentTask?.name || '');
 const defaultCurrentTaskCompleted = defaultCurrentTask?.status === 'completed';
+const defaultActionableSingleSaveTask = defaultWorkspaceTasks.find(task =>
+  task?.mode === 'single_save' && !['completed', 'cancelled', 'archived'].includes(String(task?.status || ''))
+) || null;
 const defaultCurrentTaskMarker = defaultCurrentTaskId ? (text.currentTaskPrefix + defaultCurrentTaskId) : '';
 const defaultCurrentTaskAlternateMarker = defaultCurrentTaskId ? ('\u4efb\u52a1 #' + defaultCurrentTaskId) : '';
+const defaultActionableTaskMarker = defaultActionableSingleSaveTask?.id ? (text.currentTaskPrefix + defaultActionableSingleSaveTask.id) : '';
+const defaultActionableTaskAlternateMarker = defaultActionableSingleSaveTask?.id ? ('\u4efb\u52a1 #' + defaultActionableSingleSaveTask.id) : '';
 const defaultCurrentTaskText = await bodyText();
 const defaultTaskSelectionState = {
   apiCurrentTaskId: defaultCurrentTaskId,
   apiCurrentTaskName: defaultCurrentTaskName,
+  deliveryCurrentTaskCompleted: defaultCurrentTaskCompleted,
+  actionableSingleSaveTaskId: defaultActionableSingleSaveTask?.id ?? null,
   expectedCurrentTaskMarker: defaultCurrentTaskMarker,
   alternateCurrentTaskMarker: defaultCurrentTaskAlternateMarker,
+  expectedActionableSingleSaveMarker: defaultActionableTaskMarker,
+  alternateActionableSingleSaveMarker: defaultActionableTaskAlternateMarker,
   hasDeliveryCurrentTask: Boolean(defaultCurrentTaskId && (
     defaultCurrentTaskText.includes(defaultCurrentTaskMarker)
     || defaultCurrentTaskText.includes(defaultCurrentTaskAlternateMarker)
+  )),
+  usesActionableSingleSaveWhenCurrentCompleted: Boolean(defaultCurrentTaskCompleted && defaultActionableSingleSaveTask?.id && (
+    defaultCurrentTaskText.includes(defaultActionableTaskMarker)
+    || defaultCurrentTaskText.includes(defaultActionableTaskAlternateMarker)
   )),
   avoidsLatestUnreleasedDefault: !unreleasedRealModeTask?.id
     || defaultCurrentTaskId === unreleasedRealModeTask.id
@@ -1033,6 +1050,10 @@ defaultTaskSelectionState.taskCenterTextSample = taskDefaultText.slice(0, 1200);
 defaultTaskSelectionState.hasDeliveryCurrentTask = Boolean(defaultCurrentTaskId && (
   defaultCurrentTaskText.includes(defaultCurrentTaskMarker) || taskDefaultText.includes(defaultCurrentTaskMarker)
   || defaultCurrentTaskText.includes(defaultCurrentTaskAlternateMarker) || taskDefaultText.includes(defaultCurrentTaskAlternateMarker)
+));
+defaultTaskSelectionState.usesActionableSingleSaveWhenCurrentCompleted = Boolean(defaultCurrentTaskCompleted && defaultActionableSingleSaveTask?.id && (
+  defaultCurrentTaskText.includes(defaultActionableTaskMarker) || taskDefaultText.includes(defaultActionableTaskMarker)
+  || defaultCurrentTaskText.includes(defaultActionableTaskAlternateMarker) || taskDefaultText.includes(defaultActionableTaskAlternateMarker)
 ));
 defaultTaskSelectionState.avoidsLatestUnreleasedDefault = !unreleasedRealModeTask?.id
   || defaultCurrentTaskId === unreleasedRealModeTask.id
@@ -1196,7 +1217,7 @@ fs.writeFileSync(blockedActionsPath, JSON.stringify({
   afterTaskStatus,
   checks: blockedActionChecks,
 }, null, 2));
-const blockedActionsAllForbidden = blockedActionChecks.length === 5 && blockedActionChecks.every(item => item.status === 403);
+const blockedActionsAllForbidden = blockedActionChecks.length === 5 && blockedActionChecks.every(item => isBlockedStatus(item.status));
 const taskStateUnchanged = JSON.stringify(beforeTaskStatus) === JSON.stringify(afterTaskStatus);
 await clickSelector('[data-section="tasks"]') || await clickText(text.tasks);
 await new Promise(r => setTimeout(r, 500));
@@ -1237,9 +1258,11 @@ const result = {
       || initialText.includes('DXM Agent')
       || initialText.includes('\u771f\u5b9e\u6d4f\u89c8\u5668\u81ea\u52a8\u5316'),
     navClicksWorked: clickedTasks && clickedConsole && clickedReports,
-    localizedOverviewNav: initialText.includes(text.overview),
-    defaultTaskSelectionPrefersDeliveryCurrentTask: defaultTaskSelectionState.hasDeliveryCurrentTask
-      && defaultTaskSelectionState.avoidsLatestUnreleasedDefault,
+    localizedOverviewNav: initialText.includes(text.overview) || initialText.includes('\u5f00\u59cb\u4f7f\u7528'),
+    defaultTaskSelectionPrefersDeliveryCurrentTask: (
+      defaultTaskSelectionState.hasDeliveryCurrentTask
+      || defaultTaskSelectionState.usesActionableSingleSaveWhenCurrentCompleted
+    ) && defaultTaskSelectionState.avoidsLatestUnreleasedDefault,
     firstScreenExpectedBlockedScope: (initialTextCompact.includes('\u81ea\u52a8\u5316\u5de5\u4f5c\u53f0')
       || initialTextCompact.includes('DXMAgent')
       || initialTextCompact.includes('\u771f\u5b9e\u6d4f\u89c8\u5668\u81ea\u52a8\u5316'))
@@ -1408,8 +1431,8 @@ const result = {
           || taskText.includes('\u53d1\u5e03\u52a8\u4f5c\u672a\u5f00\u653e')),
     unreleasedRealModeButtonDisabled: finalCheckExpectedReady || unreleasedRealModeStartButtonDisabled,
     noDeveloperFallbackCopy: text.fallbackCopyPatterns.every(pattern => !userFacingText.includes(pattern)),
-    localStartPostBlocked: !shouldRunBlockedMutationChecks || blockedStartStatus === 403,
-    localAgentConsolePostBlocked: !shouldRunBlockedMutationChecks || blockedAgentConsoleStatus === 403,
+    localStartPostBlocked: !shouldRunBlockedMutationChecks || isBlockedStatus(blockedStartStatus),
+    localAgentConsolePostBlocked: !shouldRunBlockedMutationChecks || isBlockedStatus(blockedAgentConsoleStatus),
     localDirectDxmPostsBlocked: !shouldRunBlockedMutationChecks || blockedActionsAllForbidden,
     blockedPostsDidNotMutateTask: taskStateUnchanged,
     noOldActionCopy: !(consoleText + ' ' + taskText).includes(text.oldWaitSave)

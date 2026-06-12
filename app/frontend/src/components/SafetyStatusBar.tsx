@@ -44,17 +44,20 @@ export function SafetyStatusBar({ workspace, selectedTask, runtimeStatus, runtim
     : l2BlocksRealSave || l3NeedsApproval || workspace.source === 'mock' || workspace.evidenceGrade?.grade === 'C'
       ? 'warn'
       : 'ok'
+  const nextHeadline = !dxmLoggedIn
+    ? '继续下一步：打开真实店小秘登录'
+    : l2BlocksRealSave
+      ? '继续下一步：运行只读页面检查'
+      : l3NeedsApproval
+        ? '继续下一步：人工确认单商品只保存'
+        : '当前可执行：单商品只保存自动化'
   const headline = selectedTaskCompleted
     ? '当前任务已完成，可查看执行记录'
     : runtimeStatusUnavailable
       ? '运行状态接口不可用'
-      : !dxmLoggedIn
-      ? '继续下一步：打开真实店小秘登录'
-      : l2BlocksRealSave
-        ? '继续下一步：运行只读页面检查'
-        : l3NeedsApproval
-          ? '继续下一步：人工确认单商品只保存'
-          : '当前可执行：单商品只保存自动化'
+      : realWriteExpectedBlocked
+        ? `真实保存已阻断：${nextHeadline.replace('继续下一步：', '')}`
+        : nextHeadline
   const gateStatusLine = `L2 页面核验 ${humanGateStatus(l2Gate?.status ?? workspace.safety.l2Status ?? 'not_run')}，人工确认 ${humanGateStatus(l3Gate?.status ?? 'not_run')}`
   const statusLine = `当前任务 ${activeTaskLabel}，${tone === 'danger' ? `保存前置条件未完成：${gateStatusLine}` : gateStatusLine}`
   const gateDetails = [
