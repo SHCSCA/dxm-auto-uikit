@@ -148,7 +148,7 @@ export default function App() {
     status: 'idle',
     runId: null,
     exitCode: null,
-    message: '等待运行只读复验',
+    message: '等待运行只读页面检查',
     line: null,
     updatedAt: null,
   })
@@ -392,12 +392,12 @@ export default function App() {
     if (runnerEvent.line.includes('[l2-readonly-runner] finished')) {
       const runnerSucceeded = runnerEvent.line.includes('exit_code=0') || exitCode === 0
       if (runnerSucceeded) {
-        setL2RunnerState({ status: 'passed', runId, exitCode, message: '复验通过，已刷新门禁', line: runnerEvent.line, updatedAt: new Date().toISOString() })
+        setL2RunnerState({ status: 'passed', runId, exitCode, message: '只读页面检查通过，已刷新门禁', line: runnerEvent.line, updatedAt: new Date().toISOString() })
         void refreshWorkspace()
         void refreshRuntimeStatus()
       } else {
-        setL2RunnerState({ status: 'failed', runId, exitCode, message: '复验失败，真实保存仍阻断', line: runnerEvent.line, updatedAt: new Date().toISOString() })
-        setOperationError('只读复验失败，真实保存仍保持阻断；请查看启动器日志和复验计划。')
+        setL2RunnerState({ status: 'failed', runId, exitCode, message: '只读页面检查失败，真实保存仍阻断', line: runnerEvent.line, updatedAt: new Date().toISOString() })
+        setOperationError('只读页面检查失败，真实保存仍保持阻断；请查看启动器日志和检查计划。')
       }
       return
     }
@@ -802,7 +802,7 @@ export default function App() {
     }
     const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
     if (l2Gate?.status !== 'passed') {
-      const message = `只读复验未通过，真实浏览器自动化不可启动：${l2Gate?.detail ?? '真实只读检查未通过'}`
+      const message = `只读页面检查未通过，真实浏览器自动化不可启动：${l2Gate?.detail ?? '真实只读检查未通过'}`
       setAgentConsoleError(message)
       setOperationError(message)
       setActiveSection('console')
@@ -1108,16 +1108,16 @@ function runtimeControlSuccessMessage(action: RuntimeControlAction) {
     mark_real_task_manual_review: '已将真实写入任务转入人工复核。不会取消真实浏览器进程，请查看任务日志确认现场。',
     restart_backend: '已提交后端重启请求，请查看启动器日志。',
     restart_frontend: '已提交前端重启请求，请查看启动器日志。',
-    run_l2_readonly_probe: '已启动只读复验，请在执行控制台查看启动器日志。',
+    run_l2_readonly_probe: '已启动只读页面检查，请在执行控制台查看实时日志。',
   } as Record<RuntimeControlAction, string>)[action]
 }
 
 function humanOperationError(message: string) {
   if (message.includes('L2 readonly probe runner is missing')) {
-    return `只读复验启动器缺失，请使用最新免安装版或重新打包桌面版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
+    return `只读页面检查启动器缺失，请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
   }
   if (message.includes('L2 readonly probe script is missing')) {
-    return `只读复验脚本缺失，请使用最新免安装版或重新打包桌面版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
+    return `只读页面检查脚本缺失，请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
   }
   return message
 }
@@ -1157,11 +1157,11 @@ function isActionableSingleSaveTask(task: Task) {
 function buildAgentConsoleHudStep(workspace: DeliveryWorkspace, selectedTask: Task): AgentConsoleSession['hud'] {
   const storeName = String(selectedTask.payload.store_name ?? workspace.stores[0]?.name ?? '等待真实店铺')
   return {
-    title: '只读复验待命',
+    title: '只读页面检查待命',
     state: 'READONLY_DIAGNOSTIC',
     action: '打开真实店小秘浏览器，不启动保存',
     next_step: '复核只读证据和人工确认',
     store_name: storeName,
-    guard: '复验观察，不保存不发布',
+    guard: '只读观察，不保存不发布',
   }
 }

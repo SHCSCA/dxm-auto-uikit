@@ -64,7 +64,7 @@ a:hover {
 .app-shell {
   min-height: 100%;
   display: grid;
-  grid-template-columns: 184px minmax(0, 1fr);
+  grid-template-columns: 168px minmax(0, 1fr);
 }
 
 .app-shell.is-collapsed {
@@ -73,22 +73,22 @@ a:hover {
 
 .sidebar {
   min-height: 100vh;
-  padding: 12px 10px;
+  padding: 10px 9px;
   background: var(--rail);
   color: #f9fbff;
   display: grid;
   grid-template-rows: auto auto 1fr auto;
-  gap: 10px;
+  gap: 8px;
   position: sticky;
   top: 0;
 }
 
 .sidebar__brand {
-  min-height: 44px;
+  min-height: 40px;
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr);
+  grid-template-columns: 34px minmax(0, 1fr);
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   position: relative;
   padding-right: 40px;
 }
@@ -100,8 +100,8 @@ a:hover {
 }
 
 .brand-mark {
-  width: 38px;
-  height: 38px;
+  width: 34px;
+  height: 34px;
   border-radius: 8px;
   background: #f9fbff;
   color: #1d232b;
@@ -117,14 +117,14 @@ a:hover {
 }
 
 .sidebar__brand strong {
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.2;
 }
 
 .sidebar__brand span,
 .sidebar__current span {
   color: #aeb8c6;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.55;
 }
 
@@ -133,7 +133,7 @@ a:hover {
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 6px 8px;
+  padding: 5px 7px;
   border: 1px solid #334050;
   border-radius: 7px;
   background: #202834;
@@ -197,7 +197,7 @@ a:focus-visible {
 .nav-section {
   display: grid;
   gap: 3px;
-  padding: 6px 0;
+  padding: 5px 0;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -232,7 +232,7 @@ a:focus-visible {
 }
 
 .nav-item {
-  min-height: 42px;
+  min-height: 36px;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -242,13 +242,13 @@ a:focus-visible {
   color: #e8edf5;
   cursor: pointer;
   text-align: left;
-  padding: 8px;
+  padding: 7px;
 }
 
 .nav-subitem {
-  min-height: 34px;
+  min-height: 31px;
   margin-left: 0;
-  padding: 7px 9px;
+  padding: 6px 8px;
   display: flex;
   gap: 6px;
   align-items: center;
@@ -669,7 +669,7 @@ a:focus-visible {
 
 .hero-panel h1 {
   margin: 0 0 8px;
-  font-size: 30px;
+  font-size: 24px;
   line-height: 1.16;
 }
 
@@ -757,7 +757,7 @@ a:focus-visible {
 }
 
 .metric-card strong {
-  font-size: 30px;
+  font-size: 24px;
   line-height: 1.1;
 }
 
@@ -1122,14 +1122,14 @@ a:focus-visible {
 }
 
 .guide-step--primary strong {
-  font-size: 22px;
+  font-size: 18px;
   line-height: 1.25;
 }
 
 .guide-step--primary small {
   margin-top: 8px;
   max-width: 760px;
-  font-size: 14px;
+  font-size: 12px;
 }
 
 .guide-step--primary em {
@@ -2504,9 +2504,16 @@ tr:last-child td {
 .config-template-console {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(210px, 0.95fr) minmax(270px, 1.2fr) minmax(210px, 0.9fr) minmax(210px, 0.85fr);
+  grid-template-columns: minmax(260px, 1.2fr) minmax(210px, 0.85fr) minmax(270px, 1.1fr);
   gap: 10px;
   margin-bottom: 10px;
+}
+
+.config-template-console__status-strip {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
 }
 
 .config-template-console__default,
@@ -2523,10 +2530,17 @@ tr:last-child td {
 }
 
 .config-template-console strong,
+.config-template-console b,
 .config-template-console span,
 .config-template-console small {
   display: block;
   min-width: 0;
+}
+
+.config-template-console b {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
 }
 
 .config-template-console strong {
@@ -2938,7 +2952,7 @@ tr:last-child td {
 .content-density-summary strong {
   display: block;
   color: var(--text);
-  font-size: 16px;
+  font-size: 14px;
   line-height: 1.25;
 }
 
@@ -4013,6 +4027,30 @@ tr:last-child td {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 2px;
+}
+
+.agent-console-resource-alert {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid #f0b8c0;
+  border-left: 4px solid var(--red);
+  border-radius: 7px;
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.agent-console-resource-alert strong {
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.agent-console-resource-alert span,
+.agent-console-resource-alert small {
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .agent-console-controls__mission {
@@ -5503,6 +5541,8 @@ tr:last-child td {
   .console-diagnostics-grid,
   .console-support-grid,
   .config-matrix,
+  .config-template-console,
+  .config-template-console__status-strip,
   .editable-config-grid,
   .editable-config-section__fields,
   .effective-value-grid,
