@@ -1903,6 +1903,24 @@ def test_frontend_surfaces_runtime_status_and_log_filters():
     assert "item.tags.slice(0, 3)" in workbench_source
 
 
+def test_safety_status_bar_keeps_long_guidance_inside_details_drawer():
+    safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    main_section = safety_bar[
+        safety_bar.index('<div className="safety-bar__main">'):
+        safety_bar.index('<div className="safety-bar__meta"')
+    ]
+    details_section = safety_bar[safety_bar.index('<details className="safety-bar__meta-details'):]
+    safety_styles = styles_source[styles_source.index(".safety-bar {"):styles_source.index(".safety-bar--warn {")]
+
+    assert "<strong>{headline}</strong>" in main_section
+    assert "conciseDetail" not in main_section
+    assert "safety-bar__compact-detail" in details_section
+    assert "{conciseDetail}" in details_section
+    assert "min-height: 48px;" in safety_styles
+    assert "padding: 8px 12px;" in safety_styles
+
+
 def test_safety_status_bar_does_not_duplicate_completed_task_status():
     safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
 

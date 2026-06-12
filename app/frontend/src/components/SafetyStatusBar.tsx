@@ -150,7 +150,6 @@ export function SafetyStatusBar({ workspace, selectedTask, runtimeStatus, runtim
         <span className="safety-dot" aria-hidden="true" />
         <div>
           <strong>{headline}</strong>
-          <span>{conciseDetail}</span>
         </div>
       </div>
       <div className="safety-bar__meta" aria-label="当前操作">
@@ -161,6 +160,7 @@ export function SafetyStatusBar({ workspace, selectedTask, runtimeStatus, runtim
         </button>
         <details className="safety-bar__meta-details inline-disclosure">
           <summary>系统状态与验收详情</summary>
+          <p className="safety-bar__compact-detail">{conciseDetail}</p>
           <div>
             <span className="guard-chip guard-chip--muted">{runtimeEndpointLine}</span>
             {desktopRuntimeLine && <span className="guard-chip guard-chip--ok">{desktopRuntimeLine}</span>}
