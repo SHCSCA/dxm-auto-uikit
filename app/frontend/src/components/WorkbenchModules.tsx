@@ -3011,8 +3011,9 @@ function RuntimeControlPanel({
   const launcherManaged = Boolean(runtimeStatus?.runtimeControl?.managedByLauncher)
   const restartAvailable = Boolean(runtimeStatus?.runtimeControl?.restartAvailable)
   const restartDisabled = busy || !restartAvailable
+  const runtimeOwnerText = runtimeControlOwnerText(runtimeStatus?.runtimeControl?.owner ?? 'direct', Boolean(runtimeStatus?.runtimeControl?.managedByDesktop))
   const runtimeControlDetail = runtimeStatus?.runtimeControl?.detail
-    ?? '未读取到启动器托管状态；重启服务前请确认是通过 scripts/start-mvp.bat 启动。'
+    ?? '未读取到启动来源；请关闭并重新打开免安装版 exe，或使用 scripts/start-mvp.bat 启动后再重试。'
   return (
     <div className="runtime-control-panel">
       <button
@@ -3057,7 +3058,7 @@ function RuntimeControlPanel({
             重启前端
           </button>
           <small>
-            启动器托管：{launcherManaged ? '已接管' : '未接管'}。{runtimeControlDetail}
+            启动来源：{runtimeOwnerText}。启动器托管：{launcherManaged ? '已接管' : '未接管'}。{runtimeControlDetail}
           </small>
         </div>
       </details>
@@ -3065,6 +3066,12 @@ function RuntimeControlPanel({
       <small>维护动作会写入启动器日志；真实保存任务不会被“清理卡住任务”取消；转人工复核不会取消真实浏览器进程。</small>
     </div>
   )
+}
+
+function runtimeControlOwnerText(owner: string, managedByDesktop: boolean) {
+  if (owner === 'desktop' || managedByDesktop) return 'DXM Agent Console 免安装版'
+  if (owner === 'start_mvp') return 'start-mvp.bat'
+  return '旧进程/直接 Python，关闭并重新打开免安装版 exe'
 }
 
 function RuntimeControlResultSummary({ result }: { result: RuntimeControlResponse | null }) {

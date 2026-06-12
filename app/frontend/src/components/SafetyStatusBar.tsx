@@ -78,8 +78,14 @@ export function SafetyStatusBar({ workspace, selectedTask, runtimeStatus, deskto
   const desktopRuntimeLine = desktopRuntime
     ? `DXM Agent Console 桌面模式 / 后端 ${desktopRuntime.apiBase ?? `端口 ${desktopRuntime.backendPort ?? '未知'}`}`
     : null
+  const runtimeOwner = runtimeStatus?.runtimeControl?.owner ?? 'direct'
+  const runtimeOwnerChip = runtimeOwnerLabel(runtimeOwner, Boolean(runtimeStatus?.runtimeControl?.managedByDesktop))
+  const backendPortMismatch = typeof desktopRuntime?.backendPort === 'number'
+    && typeof runtimeStatus?.backend.port === 'number'
+    && desktopRuntime.backendPort !== runtimeStatus.backend.port
   const runtimeChips = runtimeStatus
     ? [
+      { label: `启动来源：${runtimeOwnerChip}`, tone: runtimeOwner === 'direct' ? 'warn' : 'ok' },
       { label: `后端：${runtimeStatus.backend.status === 'ok' ? '运行中' : '异常'}`, tone: runtimeStatus.backend.status === 'ok' ? 'ok' : 'danger' },
       { label: `前端：${runtimeStatus.frontend.status === 'ok' ? '运行中' : '异常'}`, tone: runtimeStatus.frontend.status === 'ok' ? 'ok' : 'danger' },
       { label: `后端端口：${runtimeStatus.backend.port ?? '未知'}`, tone: runtimeStatus.backend.status === 'ok' ? 'ok' : 'danger' },
@@ -95,6 +101,7 @@ export function SafetyStatusBar({ workspace, selectedTask, runtimeStatus, deskto
       { label: `桌面日志：${desktopRuntime.desktopLogPath ?? '待生成 desktop-main.log'}`, tone: desktopRuntime.lastError ? 'danger' : 'muted' },
       { label: `后端日志：${desktopRuntime.backendLogPath ?? '待生成 backend.log'}`, tone: 'muted' },
     ] : []),
+    ...(backendPortMismatch ? [{ label: '桌面后端端口与接口端口不一致', tone: 'danger' }] : []),
     { label: `L2 页面核验：${humanGateStatus(l2Gate?.status ?? 'not_run')}`, tone: l2BlocksRealSave ? 'danger' : 'ok' },
     { label: `人工确认：${l3NeedsApproval ? `不可启动 / ${humanGateStatus(l3Gate?.status ?? 'not_run')}` : humanGateStatus(l3Gate?.status ?? 'not_run')}`, tone: l3BlocksRealSave ? 'danger' : l3NeedsApproval ? 'warn' : 'ok' },
     ...visibleBlockerGaps.slice(0, 2).map((gap) => ({ label: `阻断项：${gap.title}`, tone: 'danger' })),
@@ -137,6 +144,9 @@ export function SafetyStatusBar({ workspace, selectedTask, runtimeStatus, deskto
       </div>
       <div className="safety-bar__meta" aria-label="禁止入口检查">
         <span className={`guard-chip guard-chip--${tone === 'danger' ? 'danger' : tone === 'warn' ? 'warn' : 'ok'}`}>{primaryStatus}</span>
+        {runtimeStatus && (
+          <span className={`guard-chip guard-chip--${runtimeOwner === 'direct' ? 'warn' : 'ok'}`}>启动来源：{runtimeOwnerChip}</span>
+        )}
         <span className="guard-chip guard-chip--ok">只保存，不发布</span>
         <button className="button button--secondary safety-bar__primary-action" type="button" onClick={handlePrimaryAction} disabled={busy}>
           {primaryActionLabel}
@@ -166,6 +176,12 @@ export function SafetyStatusBar({ workspace, selectedTask, runtimeStatus, deskto
 function dxmLoginTone(status: string) {
   if (dxmReadySessionStatuses.has(status)) return 'ok'
   return status.includes('error') ? 'danger' : 'warn'
+}
+
+function runtimeOwnerLabel(owner: string, managedByDesktop: boolean) {
+  if (owner === 'desktop' || managedByDesktop) return '免安装版已接管'
+  if (owner === 'start_mvp') return 'start-mvp 已接管'
+  return '旧进程/直接启动'
 }
 
 function humanGateStatus(status: string) {

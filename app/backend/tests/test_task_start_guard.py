@@ -722,6 +722,7 @@ def test_runtime_status_reports_launcher_managed_restart_availability(tmp_path, 
     command_file = tmp_path / "runtime-control-command.json"
     monkeypatch.setattr(main, "RUNTIME_CONTROL_COMMAND_FILE", command_file)
     monkeypatch.setattr(main, "RUNTIME_CONTROL_MANAGED_BY_LAUNCHER", True)
+    monkeypatch.setattr(main, "RUNTIME_DESKTOP_MODE", False, raising=False)
 
     response = client.get("/api/runtime/status")
 
@@ -731,6 +732,26 @@ def test_runtime_status_reports_launcher_managed_restart_availability(tmp_path, 
     assert runtime_control["restartAvailable"] is True
     assert runtime_control["commandFile"] == str(command_file)
     assert "start-mvp" in runtime_control["detail"]
+
+
+def test_runtime_status_reports_desktop_exe_as_desktop_managed(tmp_path, monkeypatch):
+    import src.main as main
+
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    command_file = tmp_path / "runtime-control-command.json"
+    monkeypatch.setattr(main, "RUNTIME_CONTROL_COMMAND_FILE", command_file)
+    monkeypatch.setattr(main, "RUNTIME_CONTROL_MANAGED_BY_LAUNCHER", False)
+    monkeypatch.setattr(main, "RUNTIME_DESKTOP_MODE", True, raising=False)
+
+    response = client.get("/api/runtime/status")
+
+    assert response.status_code == 200
+    runtime_control = response.json()["runtimeControl"]
+    assert runtime_control["owner"] == "desktop"
+    assert runtime_control["managedByDesktop"] is True
+    assert runtime_control["restartAvailable"] is False
+    assert "DXM Agent Console 免安装版" in runtime_control["detail"]
+    assert "scripts/start-mvp.bat" not in runtime_control["detail"]
 
 
 def test_runtime_control_starts_l2_readonly_probe_runner_without_real_write(tmp_path, monkeypatch):

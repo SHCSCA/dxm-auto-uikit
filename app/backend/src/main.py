@@ -111,6 +111,7 @@ RUNTIME_CONTROL_COMMAND_FILE = Path(
     os.environ.get('DXM_RUNTIME_CONTROL_COMMAND_FILE') or DATA_DIR / 'runtime-control-command.json'
 )
 RUNTIME_CONTROL_MANAGED_BY_LAUNCHER = bool(os.environ.get('DXM_RUNTIME_CONTROL_COMMAND_FILE'))
+RUNTIME_DESKTOP_MODE = bool(os.environ.get('DXM_DESKTOP'))
 RUNTIME_VIRTUAL_LOG_SOURCES = {'task', 'agent'}
 RUNTIME_LOG_LEVELS = {'info', 'warning', 'error'}
 RUNTIME_CONTROL_ACTIONS = {
@@ -499,6 +500,29 @@ def runtime_logs(
     }
 
 
+def _runtime_control_owner() -> str:
+    if RUNTIME_CONTROL_MANAGED_BY_LAUNCHER:
+        return 'start_mvp'
+    if RUNTIME_DESKTOP_MODE:
+        return 'desktop'
+    return 'direct'
+
+
+def _runtime_control_detail() -> str:
+    owner = _runtime_control_owner()
+    if owner == 'start_mvp':
+        return '由 start-mvp 启动器托管，可在 UI 内重启后端/前端'
+    if owner == 'desktop':
+        return '由 DXM Agent Console 免安装版启动；后端随桌面控制台关闭，服务重启请关闭并重新打开免安装版 exe。'
+    return '当前后端不是由 DXM Agent Console 或 start-mvp 启动器托管，UI 不能重启服务；请关闭当前 Python 进程后重新打开免安装版 exe。'
+
+
+def _runtime_control_restart_block_detail() -> str:
+    if _runtime_control_owner() == 'desktop':
+        return 'DXM Agent Console 免安装版当前不支持 UI 内重启后端。请关闭并重新打开免安装版 exe；真实保存不会自动发布。'
+    return '当前后端不是由 DXM Agent Console 或 start-mvp 启动器托管，无法通过 UI 重启服务。请关闭当前 Python 进程后重新打开免安装版 exe。'
+
+
 @app.get('/api/runtime/status')
 def runtime_status(frontend_url: str | None = None):
     frontend_url = frontend_url or os.environ.get('DXM_FRONTEND_URL') or f"http://127.0.0.1:{os.environ.get('DXM_FRONTEND_PORT', '5173')}"
@@ -536,14 +560,12 @@ def runtime_status(frontend_url: str | None = None):
             },
         },
         'runtimeControl': {
+            'owner': _runtime_control_owner(),
             'managedByLauncher': RUNTIME_CONTROL_MANAGED_BY_LAUNCHER,
+            'managedByDesktop': RUNTIME_DESKTOP_MODE and not RUNTIME_CONTROL_MANAGED_BY_LAUNCHER,
             'restartAvailable': RUNTIME_CONTROL_MANAGED_BY_LAUNCHER,
             'commandFile': str(RUNTIME_CONTROL_COMMAND_FILE),
-            'detail': (
-                '由 start-mvp 启动器托管，可在 UI 内重启后端/前端'
-                if RUNTIME_CONTROL_MANAGED_BY_LAUNCHER
-                else '当前后端不是由 start-mvp 启动器托管，UI 不能重启服务；请关闭当前进程后用 scripts/start-mvp.bat 启动'
-            ),
+            'detail': _runtime_control_detail(),
         },
     }
 
@@ -558,7 +580,7 @@ def runtime_control(payload: RuntimeControlRequest):
         if not RUNTIME_CONTROL_MANAGED_BY_LAUNCHER:
             raise HTTPException(
                 status_code=409,
-                detail='当前后端不是由 start-mvp 启动器托管，无法通过 UI 重启服务。请关闭当前进程后用 scripts/start-mvp.bat 启动。',
+                detail=_runtime_control_restart_block_detail(),
             )
         command = _write_runtime_control_command(action=action, task_id=payload.task_id)
         _append_runtime_control_log(f"queued launcher restart action={action} command_id={command['id']}")

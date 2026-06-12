@@ -15,6 +15,7 @@ README = REPO_ROOT / "README.md"
 USER_GUIDE = REPO_ROOT / "docs" / "product" / "用户交付使用说明-20260526.md"
 APP_TSX = REPO_ROOT / "app" / "frontend" / "src" / "App.tsx"
 SAFETY_STATUS_BAR = REPO_ROOT / "app" / "frontend" / "src" / "components" / "SafetyStatusBar.tsx"
+WORKBENCH_MODULES_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "WorkbenchModules.tsx"
 TYPES_TS = REPO_ROOT / "app" / "frontend" / "src" / "types.ts"
 
 
@@ -218,3 +219,21 @@ def test_frontend_surfaces_electron_desktop_runtime_metadata():
     assert "desktopRuntime.desktopLogPath" in safety_source
     assert "desktopRuntime.backendLogPath" in safety_source
     assert "桌面日志" in safety_source
+
+
+def test_frontend_explains_runtime_ownership_for_desktop_exe_users():
+    safety_source = SAFETY_STATUS_BAR.read_text(encoding="utf-8")
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    types_source = TYPES_TS.read_text(encoding="utf-8")
+
+    assert "owner?: 'start_mvp' | 'desktop' | 'direct' | string" in types_source
+    assert "managedByDesktop?: boolean" in types_source
+    assert "runtimeOwnerLabel" in safety_source
+    assert "启动来源" in safety_source
+    assert "免安装版已接管" in safety_source
+    assert "旧进程/直接启动" in safety_source
+    assert "backendPortMismatch" in safety_source
+    assert "桌面后端端口与接口端口不一致" in safety_source
+    assert "DXM Agent Console 免安装版" in workbench_source
+    assert "关闭并重新打开免安装版 exe" in workbench_source
+    assert "请确认是通过 scripts/start-mvp.bat 启动" not in workbench_source
