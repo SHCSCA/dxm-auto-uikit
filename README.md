@@ -33,7 +33,15 @@ C:\Users\wz\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console.exe
 outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe
 ```
 
-使用目录版时必须保留整个文件夹和 `resources` 目录，不能只复制 exe 文件。single-file portable 当前未通过本机 smoke，不作为交付入口。
+使用目录版时必须保留整个文件夹和 `resources` 目录，不能只复制 exe 文件。
+
+单文件 portable 也已通过本机 smoke，位置是：
+
+```text
+outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
+```
+
+portable 首次启动会解包 Electron 与 Python 运行时，`%TEMP%` 所在磁盘建议至少保留 1GB 可用空间；空间不足时会出现启动即退出、没有日志的现象。真实用户优先使用目录免安装版，单文件 portable 用于需要单 exe 分发的场景。
 
 源码开发态可用下面命令启动桌面壳：
 
@@ -153,7 +161,13 @@ C:\Users\wz\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console.exe
 outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe
 ```
 
-single-file portable 当前未通过本机 smoke，不作为交付入口。
+单文件 portable 已通过本机 smoke：
+
+```bat
+outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
+```
+
+portable 需要 `%TEMP%` 所在磁盘至少约 1GB 可用空间用于解包；空间不足时请清理旧的 `%TEMP%\ns*.tmp` 解包残留，或改用上面的目录免安装版。
 
 源码开发态启动桌面版：
 

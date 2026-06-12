@@ -185,6 +185,11 @@ def test_verify_desktop_package_smoke_script_checks_packaged_exe_logs():
     assert "__pycache__" in source
     assert "Packaged runtime generated Python bytecode cache" in source
     assert "taskkill" in source
+    assert "PortableMinTempFreeMB" in source
+    assert "Assert-PortableTempSpace" in source
+    assert "Portable TEMP space OK" in source
+    assert "Clean old %TEMP%" in source
+    assert "portable extraction folders" in source
     assert "Portable QA capture was not created" in source
     assert "Portable smoke passed" in source
     assert "Portable smoke skipped. Current delivery target is the verified directory免安装版" in source
@@ -199,7 +204,9 @@ def test_user_docs_present_desktop_exe_as_primary_delivery_entry():
         assert "C:\\Users\\wz\\Desktop\\DXM-Agent-Console-免安装版\\DXM-Agent-Console.exe" in source
         assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
         assert "当前默认交付使用目录免安装版" in source
-        assert "single-file portable 当前未通过本机 smoke" in source
+        assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in source
+        assert "portable 首次启动会解包 Electron 与 Python 运行时" in source
+        assert "%TEMP%` 所在磁盘建议至少保留 1GB 可用空间" in source
         assert "scripts\\start-desktop.bat" in source
         assert "scripts\\verify-desktop-package.ps1" in source
         assert "AppData\\Roaming\\DXM Agent Console\\data\\desktop-main.log" in source
@@ -211,6 +218,8 @@ def test_portable_quick_guide_uses_verified_portable_entry():
     assert "C:\\Users\\wz\\Desktop\\DXM-Agent-Console-免安装版\\DXM-Agent-Console.exe" in source
     assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
     assert "使用目录版时必须保留整个文件夹和 `resources` 目录" in source
+    assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in source
+    assert "至少建议保留 1GB 可用空间" in source
 
 
 def test_frontend_vite_build_uses_relative_base_for_electron_file_loading():

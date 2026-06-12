@@ -631,6 +631,13 @@ a:focus-visible {
   min-height: 0;
 }
 
+.agent-stage-control-summary {
+  margin: -4px 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .hero-panel,
 .module-card,
 .metric-card {
@@ -4013,6 +4020,14 @@ tr:last-child td {
   gap: 8px;
 }
 
+.console-focus-panel__primary-facts {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.console-focus-panel__primary-facts span,
 .console-focus-panel__facts span {
   min-width: 0;
   min-height: 58px;
@@ -4025,11 +4040,18 @@ tr:last-child td {
   gap: 5px;
 }
 
+.console-focus-panel__primary-facts span {
+  min-height: 52px;
+  padding: 8px;
+}
+
+.console-focus-panel__primary-facts strong,
 .console-focus-panel__facts strong {
   color: var(--muted);
   font-size: 12px;
 }
 
+.console-focus-panel__primary-facts b,
 .console-focus-panel__facts b {
   min-width: 0;
   color: var(--text);
@@ -5249,6 +5271,15 @@ tr:last-child td {
   line-height: 1.55;
 }
 
+.browser-live-surface__control-note {
+  max-width: 680px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.74);
+  font-size: 12px;
+}
+
 .browser-live-surface dl {
   width: min(680px, calc(100% - 380px));
   display: grid;
@@ -5957,6 +5988,7 @@ tr:last-child td {
   .config-precheck-action,
   .next-required-fields,
   .console-focus-panel__main,
+  .console-focus-panel__primary-facts,
   .console-focus-panel__facts,
   .guide-hero__body,
   .hero-panel__outcomes,

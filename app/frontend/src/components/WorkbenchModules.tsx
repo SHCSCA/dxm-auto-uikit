@@ -3276,13 +3276,6 @@ export function ExecutionConsole({
         />
       )}
 
-      <L2RunnerStatePanel
-        state={l2RunnerState}
-        l2Gate={l2Gate}
-        onLogSourceChange={onRuntimeLogSourceChange}
-        onShowReports={onShowReports}
-      />
-
       <div className="module-card span-1 console-log-card console-log-card--compact">
         <ModuleHead title="实时日志" meta={`${runtimeLogCount} 条，每 1.5 秒刷新`} />
         <RuntimeLogPreview
@@ -3293,6 +3286,13 @@ export function ExecutionConsole({
         />
         <small>日志会自动刷新；筛选和搜索保留在下方“更多诊断与维护”。</small>
       </div>
+
+      <L2RunnerStatePanel
+        state={l2RunnerState}
+        l2Gate={l2Gate}
+        onLogSourceChange={onRuntimeLogSourceChange}
+        onShowReports={onShowReports}
+      />
 
       <details className="module-card span-3 disclosure-card console-advanced console-diagnostics-drawer">
         <summary>更多诊断与维护</summary>
@@ -3426,9 +3426,12 @@ function AgentStagePanel({
   return (
     <div className={embedded ? 'agent-console-stage agent-console-stage--embedded' : 'module-card span-2 agent-console-stage'}>
       <ModuleHead
-        title="登录浏览器与执行浏览器"
-        meta={agentConsole?.active ? 'Agent 执行浏览器运行中' : '登录浏览器可先打开，执行浏览器需通过门禁'}
+        title="Agent 控制真实浏览器"
+        meta={agentConsole?.active ? '执行浏览器运行中' : '登录浏览器可先打开，执行浏览器需通过门禁'}
       />
+      <p className="agent-stage-control-summary">
+        真实店小秘页面内操控：选择器定位、按选择器点击、按选择器填写；输入到焦点和点击坐标已关闭，仅控制当前独立浏览器窗口。
+      </p>
       <AgentConsoleControls
         agentConsole={agentConsole}
         agentConsoleError={agentConsoleError}
@@ -3947,13 +3950,15 @@ function ConsoleFocusPanel({
           )}
         </div>
       </div>
+      <div className="console-focus-panel__primary-facts">
+        <span><strong>任务</strong><b>{selectedTask ? `${displayTaskName(selectedTask)} / ${humanTaskStatus(selectedTask.status)}` : '待选择'}</b></span>
+        <span><strong>执行浏览器</strong><b>{browserLabel}</b></span>
+        <span><strong>当前步骤</strong><b>{activeStep?.title ?? '等待任务'}</b></span>
+        <span><strong>下一步</strong><b>{consoleNext}</b></span>
+      </div>
       <details className="console-focus-panel__details inline-disclosure">
         <summary>技术状态</summary>
         <div className="console-focus-panel__facts">
-          <span><strong>任务</strong><b>{selectedTask ? `${displayTaskName(selectedTask)} / ${humanTaskStatus(selectedTask.status)}` : '待选择'}</b></span>
-          <span><strong>执行浏览器</strong><b>{browserLabel}</b></span>
-          <span><strong>当前步骤</strong><b>{activeStep?.title ?? '等待任务'}</b></span>
-          <span><strong>下一步</strong><b>{consoleNext}</b></span>
           <span><strong>当前页面</strong><b>{hasBrowserSession && currentUrl ? shortUrl(currentUrl) : '等待启动执行浏览器'}</b></span>
           <span><strong>操控状态</strong><b>{controlLabel}</b></span>
           <span><strong>人工接管</strong><b>{takeoverLabel}</b></span>
@@ -4029,7 +4034,7 @@ function AgentBrowserFrame({
       <div className="agent-browser__viewport">
         <div className="browser-live-surface">
           <div>
-            <strong>{agentConsole?.active || agentConsole?.updated_at ? '真实浏览器会话' : '尚未打开真实店小秘浏览器'}</strong>
+            <strong>{agentConsole?.active || agentConsole?.updated_at ? 'Agent 控制真实浏览器' : '尚未打开真实店小秘浏览器'}</strong>
             <span>
               {agentConsole?.active || agentConsole?.updated_at
                 ? browserLaunching
@@ -4055,6 +4060,9 @@ function AgentBrowserFrame({
               <dd>{agentConsole?.active ? hudNext : '启动真实浏览器后在独立窗口操作店小秘'}</dd>
             </div>
           </dl>
+          <small className="browser-live-surface__control-note">
+            页面内操控仅控制当前独立浏览器窗口：支持选择器定位、按选择器点击、按选择器填写；输入到焦点和点击坐标已关闭，需要时请人工接管真实店小秘窗口。
+          </small>
         </div>
 
         <div className="agent-hud" aria-label="浏览器内执行步骤框">

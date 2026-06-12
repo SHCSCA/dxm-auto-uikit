@@ -1,6 +1,7 @@
 param(
   [int]$WaitSeconds = 25,
-  [switch]$CheckPortable
+  [switch]$CheckPortable,
+  [int]$PortableMinTempFreeMB = 1024
 )
 
 $ErrorActionPreference = 'Stop'
@@ -58,6 +59,28 @@ function Wait-ForFile {
     Start-Sleep -Milliseconds 500
   }
   return $false
+}
+
+function Get-PathFreeBytes {
+  param(
+    [string]$Path
+  )
+  $FullPath = [System.IO.Path]::GetFullPath($Path)
+  $Root = [System.IO.Path]::GetPathRoot($FullPath)
+  $Drive = Get-PSDrive -Name ($Root.Substring(0, 1))
+  return [int64]$Drive.Free
+}
+
+function Assert-PortableTempSpace {
+  param(
+    [int]$RequiredMB
+  )
+  $FreeBytes = Get-PathFreeBytes -Path $env:TEMP
+  $FreeMB = [math]::Floor($FreeBytes / 1MB)
+  if ($FreeMB -lt $RequiredMB) {
+    throw "Portable smoke requires at least ${RequiredMB}MB free on TEMP drive. Current TEMP=$env:TEMP, free=${FreeMB}MB. Clean old %TEMP%\\ns*.tmp portable extraction folders or use the verified directory免安装版."
+  }
+  Write-Host "Portable TEMP space OK: $FreeMB MB free at $env:TEMP"
 }
 
 function Get-DesktopSmokeLog {
@@ -244,6 +267,7 @@ Write-Host "QA capture: $CapturePath"
 
 if ($CheckPortable -and (Test-Path $PortableExePath)) {
   Write-Host "Portable exe: $PortableExePath"
+  Assert-PortableTempSpace -RequiredMB $PortableMinTempFreeMB
   $PortableProcess = Start-Process -FilePath $PortableExePath -ArgumentList "--qa-capture=$PortableCapturePath" -WindowStyle Hidden -PassThru
   if (!(Wait-ForFile -Path $PortableCapturePath -TimeoutSeconds $WaitSeconds)) {
     try {
