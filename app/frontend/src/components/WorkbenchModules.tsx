@@ -4265,6 +4265,37 @@ function AgentConsoleControls({
         : '等待窗口显示；如长时间无响应，可关闭后重试。'
   const l2ProbeResourceState = getL2ProbeResourceState(runtimeStatus)
   const l2ProbeDisabled = busy || l2ProbeResourceState.blocked
+  const sessionDisabledReason = busy
+    ? '正在处理当前操作，请等待完成后再操作执行浏览器。'
+    : !active
+      ? '先打开执行浏览器，才能刷新、接管、交还或关闭。'
+      : manualTakeover
+        ? '当前已人工接管，处理完成后点击交还 Agent。'
+        : ''
+  const snapshotDisabledReason = busy
+    ? '正在处理当前操作，请等待完成后再刷新当前画面。'
+    : !active
+      ? '先打开执行浏览器，才能刷新当前画面。'
+      : ''
+  const takeoverDisabledReason = busy
+    ? '正在处理当前操作，请等待完成后再人工接管。'
+    : !active
+      ? '先打开执行浏览器，才能人工接管真实浏览器。'
+      : manualTakeover
+        ? '当前已人工接管，处理完成后点击交还 Agent。'
+        : ''
+  const releaseDisabledReason = busy
+    ? '正在处理当前操作，请等待完成后再交还 Agent。'
+    : !active
+      ? '先打开执行浏览器，才需要交还 Agent。'
+      : !manualTakeover
+        ? '当前未处于人工接管状态，无需交还 Agent。'
+        : ''
+  const stopDisabledReason = busy
+    ? '正在处理当前操作，请等待完成后再关闭浏览器。'
+    : !active
+      ? '执行浏览器尚未打开，无需关闭。'
+      : ''
   return (
     <div className="agent-console-controls">
       <div className="agent-console-controls__status">
@@ -4282,6 +4313,7 @@ function AgentConsoleControls({
         <span>{lifecycleNext}</span>
         {browserStartBlocked && !active && <small>{browserStartBlockReason}</small>}
         {!browserStartBlocked && realSaveBlocked && !active && <small>{realSaveBlockReason}</small>}
+        {sessionDisabledReason && <small className="agent-console-controls__session-reason" aria-label="执行浏览器会话按钮不可用原因">会话按钮不可用原因：{sessionDisabledReason}</small>}
         {primaryPath.code === 'l2' && !active && (
           <div className="agent-console-lifecycle__actions">
             <button className="button button--secondary" type="button" disabled={l2ProbeDisabled} title={l2ProbeResourceState.title} onClick={() => onRuntimeControl('run_l2_readonly_probe')}>
@@ -4368,18 +4400,19 @@ function AgentConsoleControls({
           <details className="agent-console-controls__advanced inline-disclosure">
             <summary>Agent 执行浏览器会话生命周期</summary>
             <div className="agent-console-controls__session">
-              <button className="button button--quiet" type="button" onClick={onSnapshotAgentConsole} disabled={busy || !active}>
+              <button className="button button--quiet" type="button" onClick={onSnapshotAgentConsole} disabled={busy || !active} title={snapshotDisabledReason || undefined}>
                 刷新当前画面
               </button>
-              <button className="button button--quiet" type="button" onClick={onRequestAgentConsoleTakeover} disabled={busy || !active}>
+              <button className="button button--quiet" type="button" onClick={onRequestAgentConsoleTakeover} disabled={busy || !active || manualTakeover} title={takeoverDisabledReason || undefined}>
                 人工接管真实浏览器
               </button>
-              <button className="button button--quiet" type="button" onClick={onReleaseAgentConsoleTakeover} disabled={busy || !active || !manualTakeover}>
+              <button className="button button--quiet" type="button" onClick={onReleaseAgentConsoleTakeover} disabled={busy || !active || !manualTakeover} title={releaseDisabledReason || undefined}>
                 交还 Agent
               </button>
-              <button className="button button--secondary" type="button" onClick={onStopAgentConsole} disabled={busy || !active}>
+              <button className="button button--secondary" type="button" onClick={onStopAgentConsole} disabled={busy || !active} title={stopDisabledReason || undefined}>
                 关闭浏览器
               </button>
+              {sessionDisabledReason && <small className="agent-console-controls__session-reason" aria-label="会话按钮不可用原因">会话按钮不可用原因：{sessionDisabledReason}</small>}
               <small>启动、接管、交还和关闭的对象都是独立真实浏览器窗口；控制台只控制真实浏览器，不会启动保存或发布。</small>
             </div>
           </details>

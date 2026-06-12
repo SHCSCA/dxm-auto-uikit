@@ -4696,6 +4696,15 @@ tr:last-child td {
   line-height: 1.45;
 }
 
+.agent-console-controls__session-reason {
+  flex-basis: 100%;
+  color: var(--amber-strong);
+}
+
+.agent-console-lifecycle .agent-console-controls__session-reason {
+  color: var(--amber-strong);
+}
+
 .agent-console-controls__field-grid {
   min-width: 0;
   display: grid;

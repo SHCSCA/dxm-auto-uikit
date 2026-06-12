@@ -1118,6 +1118,32 @@ def test_execution_console_collapses_operator_forms_inside_real_browser_details(
     assert controls_section.index("agent-console-controls__actions") < controls_section.index("<summary>执行浏览器操作细节</summary>")
 
 
+def test_execution_console_explains_disabled_session_controls():
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    controls_section = workbench_source[workbench_source.index("function AgentConsoleControls"):workbench_source.index("function BrowserControlPad")]
+    session_section = controls_section[
+        controls_section.index("<summary>Agent 执行浏览器会话生命周期</summary>"):
+        controls_section.index("<summary>高级浏览器控制</summary>")
+    ]
+    lifecycle_section = controls_section[
+        controls_section.index("className={`agent-console-lifecycle"):
+        controls_section.index("<div className=\"agent-console-controls__mission\">")
+    ]
+
+    assert "const sessionDisabledReason" in controls_section
+    assert "先打开执行浏览器，才能刷新、接管、交还或关闭。" in controls_section
+    assert "当前已人工接管，处理完成后点击交还 Agent。" in controls_section
+    assert "aria-label=\"执行浏览器会话按钮不可用原因\"" in lifecycle_section
+    assert "aria-label=\"会话按钮不可用原因\"" in session_section
+    assert "title={snapshotDisabledReason || undefined}" in session_section
+    assert "title={takeoverDisabledReason || undefined}" in session_section
+    assert "title={releaseDisabledReason || undefined}" in session_section
+    assert "title={stopDisabledReason || undefined}" in session_section
+    assert "disabled={busy || !active || manualTakeover}" in session_section
+    assert ".agent-console-controls__session-reason" in styles_source
+
+
 def test_execution_console_log_center_autofollows_and_surfaces_sources():
     app_source = APP_TSX.read_text(encoding="utf-8")
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
