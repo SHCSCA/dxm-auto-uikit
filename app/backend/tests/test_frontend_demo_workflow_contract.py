@@ -991,6 +991,27 @@ def test_execution_console_makes_l2_precheck_action_and_purpose_visible():
     assert "运行只读页面检查（不保存）" not in primary_path_section
 
 
+def test_execution_console_keeps_focus_panel_single_action_first():
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    focus_section = workbench_source[
+        workbench_source.index("function ConsoleFocusPanel"):
+        workbench_source.index("function AgentBrowserFrame")
+    ]
+    visible_before_details = focus_section[
+        focus_section.index("<div className=\"console-focus-panel__main\">"):
+        focus_section.index("<details className=\"console-focus-panel__details inline-disclosure\">")
+    ]
+    details_section = focus_section[focus_section.index("<details className=\"console-focus-panel__details inline-disclosure\">"):]
+
+    assert "console-focus-panel__primary-facts" not in focus_section
+    assert "aria-label=\"执行摘要\"" not in visible_before_details
+    assert "<summary>技术状态</summary>" in details_section
+    assert "<strong>任务</strong>" in details_section
+    assert "<strong>执行浏览器</strong>" in details_section
+    assert "<strong>下一步</strong>" in details_section
+    assert "<strong>日志</strong>" in details_section
+
+
 def test_execution_console_distinguishes_login_browser_from_agent_execution_browser():
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     app_source = (REPO_ROOT / "app" / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")

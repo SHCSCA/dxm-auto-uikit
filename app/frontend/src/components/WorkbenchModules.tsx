@@ -3774,15 +3774,13 @@ function ConsoleFocusPanel({
           )}
         </div>
       </div>
-      <div className="console-focus-panel__facts console-focus-panel__primary-facts" aria-label="执行摘要">
-        <span><strong>任务</strong><b>{selectedTask ? `${displayTaskName(selectedTask)} / ${humanTaskStatus(selectedTask.status)}` : '待选择'}</b></span>
-        <span><strong>执行浏览器</strong><b>{browserLabel}</b></span>
-        <span><strong>当前步骤</strong><b>{activeStep?.title ?? '等待任务'}</b></span>
-        <span><strong>下一步</strong><b>{consoleNext}</b></span>
-      </div>
       <details className="console-focus-panel__details inline-disclosure">
         <summary>技术状态</summary>
         <div className="console-focus-panel__facts">
+          <span><strong>任务</strong><b>{selectedTask ? `${displayTaskName(selectedTask)} / ${humanTaskStatus(selectedTask.status)}` : '待选择'}</b></span>
+          <span><strong>执行浏览器</strong><b>{browserLabel}</b></span>
+          <span><strong>当前步骤</strong><b>{activeStep?.title ?? '等待任务'}</b></span>
+          <span><strong>下一步</strong><b>{consoleNext}</b></span>
           <span><strong>当前页面</strong><b>{hasBrowserSession && currentUrl ? shortUrl(currentUrl) : '等待启动执行浏览器'}</b></span>
           <span><strong>操控状态</strong><b>{controlLabel}</b></span>
           <span><strong>人工接管</strong><b>{takeoverLabel}</b></span>
