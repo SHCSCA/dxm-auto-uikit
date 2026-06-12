@@ -23,6 +23,7 @@ import type {
   RuntimeLogSource,
   RuntimeStatus,
   RuntimeControlAction,
+  RuntimeControlResponse,
   RunStep,
   Store,
   Task,
@@ -53,6 +54,15 @@ type DxmCredentialState = {
   loaded: boolean
   saved: boolean
   message: string
+}
+
+type L2RunnerState = {
+  status: 'idle' | 'running' | 'passed' | 'failed'
+  runId: string | null
+  exitCode: number | null
+  message: string
+  line: string | null
+  updatedAt: string | null
 }
 
 type GuideCenterProps = CommonProps & {
@@ -129,6 +139,8 @@ type ExecutionConsoleProps = CommonProps & {
   runtimeLogError: string | null
   runtimeLogLevel: 'all' | 'info' | 'warning' | 'error'
   runtimeLogQuery: string
+  l2RunnerState: L2RunnerState
+  lastRuntimeControlResult: RuntimeControlResponse | null
   busy: boolean
   dxmLoginDraft: DxmLoginDraft
   dxmCredentialState: DxmCredentialState
@@ -2585,6 +2597,8 @@ export function ExecutionConsole({
   runtimeLogError,
   runtimeLogLevel,
   runtimeLogQuery,
+  l2RunnerState,
+  lastRuntimeControlResult,
   busy,
   dxmLoginDraft,
   dxmCredentialState,
@@ -2724,6 +2738,8 @@ export function ExecutionConsole({
         />
       )}
 
+      <L2RunnerStatePanel state={l2RunnerState} l2Gate={l2Gate} />
+
       <div className="module-card span-1 console-log-card console-log-card--compact">
         <ModuleHead title="实时日志" meta={`${runtimeLogCount} 条，每 1.5 秒刷新`} />
         <RuntimeLogPreview
@@ -2757,6 +2773,7 @@ export function ExecutionConsole({
             busy={busy}
             agentConsole={agentConsole}
             runtimeStatus={runtimeStatus}
+            lastRuntimeControlResult={lastRuntimeControlResult}
             onRuntimeControl={onRuntimeControl}
           />
           </section>
@@ -2962,11 +2979,13 @@ function RuntimeControlPanel({
   busy,
   agentConsole,
   runtimeStatus,
+  lastRuntimeControlResult,
   onRuntimeControl,
 }: {
   busy: boolean
   agentConsole: AgentConsoleSession | null
   runtimeStatus: RuntimeStatus | null
+  lastRuntimeControlResult: RuntimeControlResponse | null
   onRuntimeControl: (action: RuntimeControlAction) => void
 }) {
   const agentActive = Boolean(agentConsole?.active)
@@ -3015,9 +3034,42 @@ function RuntimeControlPanel({
           </small>
         </div>
       </details>
+      <RuntimeControlResultSummary result={lastRuntimeControlResult} />
       <small>维护动作会写入启动器日志；真实保存任务不会被“清理卡住任务”取消。</small>
     </div>
   )
+}
+
+function RuntimeControlResultSummary({ result }: { result: RuntimeControlResponse | null }) {
+  if (!result || result.action !== 'clear_stuck_tasks') {
+    return null
+  }
+  const cleared = result.clearedTasks ?? []
+  const skipped = result.skippedTasks ?? []
+  const clearedText = cleared.length ? cleared.map(runtimeTaskLabel).join('、') : '0 个'
+  const protectedText = skipped.length ? skipped.map(protectedRuntimeTaskLabel).join('、') : '0 个'
+  return (
+    <div className="runtime-control-result" aria-label="清理结果">
+      <strong>清理结果</strong>
+      <span>已取消非真实写入任务：{clearedText}</span>
+      <span>真实写入任务已保护，未自动取消：{protectedText}</span>
+      {result.message && <small>{result.message}</small>}
+    </div>
+  )
+}
+
+function runtimeTaskLabel(item: Record<string, unknown>) {
+  return `#${String(item.id ?? '?')}`
+}
+
+function protectedRuntimeTaskLabel(item: Record<string, unknown>) {
+  const parts = [
+    runtimeTaskLabel(item),
+    typeof item.mode === 'string' ? item.mode : '',
+    typeof item.status === 'string' ? item.status : '',
+    item.reason === 'real_write_protected' ? 'real_write_protected' : typeof item.reason === 'string' ? item.reason : '',
+  ].filter(Boolean)
+  return parts.join(' ')
 }
 
 function AgentActionTimeline({ agentConsole }: { agentConsole: AgentConsoleSession | null }) {
@@ -3701,6 +3753,31 @@ function shortUrl(url?: string) {
   } catch {
     return url.slice(0, 84)
   }
+}
+
+function L2RunnerStatePanel({ state, l2Gate }: { state: L2RunnerState; l2Gate?: RegressionGate }) {
+  const gateLabel = humanGateStateLabel(l2Gate?.status ?? 'not_run')
+  const tone = state.status === 'passed' ? 'ok' : state.status === 'failed' ? 'danger' : state.status === 'running' ? 'warn' : 'pending'
+  const title = state.status === 'passed'
+    ? '复验通过，已刷新门禁'
+    : state.status === 'failed'
+      ? '复验失败，真实保存仍阻断'
+      : state.status === 'running'
+        ? '正在运行双目标只读检查'
+        : '等待运行只读复验'
+
+  return (
+    <div className={`module-card span-1 l2-runner-state l2-runner-state--${state.status}`} aria-live="polite">
+      <ModuleHead title="只读复验状态" meta={`门禁：${gateLabel}`} />
+      <div className="l2-runner-state__body">
+        <span className={`status-pill ${tone}`}>{state.status === 'idle' ? '待运行' : state.status === 'running' ? '运行中' : state.status === 'passed' ? '通过' : '失败'}</span>
+        <strong>{title}</strong>
+        <small>{state.runId ? `run-id ${state.runId}` : '运行后会显示 run-id 和退出码。'}</small>
+        {state.exitCode !== null && <small>退出码：{state.exitCode}</small>}
+        {state.line && <code>{state.line}</code>}
+      </div>
+    </div>
+  )
 }
 
 function RuntimeLogPreview({

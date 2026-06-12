@@ -3837,6 +3837,38 @@ tr:last-child td {
   font-size: 13px;
 }
 
+.l2-runner-state {
+  align-self: start;
+}
+
+.l2-runner-state__body {
+  display: grid;
+  gap: 7px;
+}
+
+.l2-runner-state__body strong {
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.l2-runner-state__body small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.l2-runner-state__body code {
+  max-height: 58px;
+  overflow: auto;
+  padding: 7px 8px;
+  border-radius: 7px;
+  background: #101923;
+  color: #d8e1ec;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .runtime-log-tabs--compact {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4479,6 +4511,28 @@ tr:last-child td {
 
 .runtime-control-panel__restart small {
   grid-column: 1 / -1;
+}
+
+.runtime-control-result {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-alt);
+}
+
+.runtime-control-result strong {
+  font-size: 13px;
+}
+
+.runtime-control-result span,
+.runtime-control-result small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .agent-action-timeline {

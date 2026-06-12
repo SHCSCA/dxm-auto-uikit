@@ -70,6 +70,15 @@ type DxmCredentialState = {
   message: string
 }
 
+type L2RunnerState = {
+  status: 'idle' | 'running' | 'passed' | 'failed'
+  runId: string | null
+  exitCode: number | null
+  message: string
+  line: string | null
+  updatedAt: string | null
+}
+
 type ManualApprovalResponse = {
   ok: boolean
   approvalToken: string
@@ -135,6 +144,15 @@ export default function App() {
   const [runtimeLogError, setRuntimeLogError] = useState<string | null>(null)
   const [runtimeLogLevel, setRuntimeLogLevel] = useState<'all' | 'info' | 'warning' | 'error'>('all')
   const [runtimeLogQuery, setRuntimeLogQuery] = useState('')
+  const [l2RunnerState, setL2RunnerState] = useState<L2RunnerState>({
+    status: 'idle',
+    runId: null,
+    exitCode: null,
+    message: '等待运行只读复验',
+    line: null,
+    updatedAt: null,
+  })
+  const [lastRuntimeControlResult, setLastRuntimeControlResult] = useState<RuntimeControlResponse | null>(null)
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null)
   const [desktopRuntime, setDesktopRuntime] = useState<DesktopRuntimeInfo | null>(null)
   const [configPreview, setConfigPreview] = useState<ConfigPreview | null>(null)
@@ -359,16 +377,34 @@ export default function App() {
 
   useEffect(() => {
     const launcherItems = runtimeLogs.launcher?.items ?? []
-    const completion = [...launcherItems]
+    const runnerEvent = [...launcherItems]
       .reverse()
-      .find((item) => item.line.includes('[l2-readonly-runner] finished') && item.line.includes('exit_code=0'))
-    if (!completion) return
+      .find((item) => item.line.includes('[l2-readonly-runner]'))
+    if (!runnerEvent) return
 
-    const completionKey = completion.line.match(/run_id=([^\s]+)/)?.[1] ?? completion.line
-    if (lastObservedL2CompletionRef.current === completionKey) return
-    lastObservedL2CompletionRef.current = completionKey
-    void refreshWorkspace()
-    void refreshRuntimeStatus()
+    const runId = runnerEvent.line.match(/run_id=([^\s]+)/)?.[1] ?? null
+    const exitCodeRaw = runnerEvent.line.match(/exit_code=([^\s]+)/)?.[1] ?? null
+    const exitCode = exitCodeRaw !== null ? Number(exitCodeRaw) : null
+    const eventKey = `${runId ?? 'no-run'}:${exitCodeRaw ?? 'running'}:${runnerEvent.line}`
+    if (lastObservedL2CompletionRef.current === eventKey) return
+    lastObservedL2CompletionRef.current = eventKey
+
+    if (runnerEvent.line.includes('[l2-readonly-runner] finished')) {
+      const runnerSucceeded = runnerEvent.line.includes('exit_code=0') || exitCode === 0
+      if (runnerSucceeded) {
+        setL2RunnerState({ status: 'passed', runId, exitCode, message: '复验通过，已刷新门禁', line: runnerEvent.line, updatedAt: new Date().toISOString() })
+        void refreshWorkspace()
+        void refreshRuntimeStatus()
+      } else {
+        setL2RunnerState({ status: 'failed', runId, exitCode, message: '复验失败，真实保存仍阻断', line: runnerEvent.line, updatedAt: new Date().toISOString() })
+        setOperationError('只读复验失败，真实保存仍保持阻断；请查看启动器日志和复验计划。')
+      }
+      return
+    }
+
+    if (runnerEvent.line.includes('[l2-readonly-runner] started')) {
+      setL2RunnerState({ status: 'running', runId, exitCode: null, message: '正在运行双目标只读检查', line: runnerEvent.line, updatedAt: new Date().toISOString() })
+    }
   }, [refreshRuntimeStatus, refreshWorkspace, runtimeLogs.launcher])
 
   useEffect(() => {
@@ -887,6 +923,7 @@ export default function App() {
     setOperationNotice(null)
     try {
       const result = await postJson<RuntimeControlResponse>('/api/runtime/control', { action, task_id: selectedTask?.id ?? null })
+      setLastRuntimeControlResult(result)
       if (result.agentConsole) setAgentConsole(result.agentConsole)
       setOperationNotice(result.message ?? runtimeControlSuccessMessage(action))
       await refreshWorkspace()
@@ -906,6 +943,7 @@ export default function App() {
 
   async function runL2ReadonlyProbe() {
     setRuntimeLogSource('launcher')
+    setL2RunnerState({ status: 'running', runId: null, exitCode: null, message: '正在运行双目标只读检查', line: null, updatedAt: new Date().toISOString() })
     setActiveSection('console')
     await runRuntimeControl('run_l2_readonly_probe')
   }
@@ -979,6 +1017,8 @@ export default function App() {
             runtimeLogError={runtimeLogError}
             runtimeLogLevel={runtimeLogLevel}
             runtimeLogQuery={runtimeLogQuery}
+            l2RunnerState={l2RunnerState}
+            lastRuntimeControlResult={lastRuntimeControlResult}
             busy={busy}
             dxmLoginDraft={dxmLoginDraft}
             dxmCredentialState={dxmCredentialState}

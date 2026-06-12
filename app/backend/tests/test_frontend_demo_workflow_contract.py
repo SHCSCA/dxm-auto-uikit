@@ -1721,9 +1721,47 @@ def test_frontend_refreshes_workspace_after_l2_runner_finishes():
     assert "lastObservedL2CompletionRef" in app_source
     assert "[l2-readonly-runner] finished" in app_source
     assert "exit_code=0" in app_source
-    assert "completion.line.match(/run_id=" in app_source
+    assert "runnerEvent.line.match(/run_id=" in app_source
     assert "void refreshWorkspace()" in app_source
     assert "void refreshRuntimeStatus()" in app_source
+
+
+def test_execution_console_surfaces_l2_runner_result_not_just_start_message():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+
+    assert "type L2RunnerState" in app_source
+    assert "const [l2RunnerState, setL2RunnerState]" in app_source
+    assert "setL2RunnerState({ status: 'running'" in app_source
+    assert "exit_code=0" in app_source
+    assert "exit_code=" in app_source
+    assert "setL2RunnerState({ status: 'failed'" in app_source
+    assert "setOperationError('只读复验失败" in app_source
+    assert "l2RunnerState={l2RunnerState}" in app_source
+    assert "L2RunnerStatePanel" in workbench_source
+    assert "只读复验状态" in workbench_source
+    assert "正在运行双目标只读检查" in workbench_source
+    assert "复验通过，已刷新门禁" in workbench_source
+    assert "复验失败，真实保存仍阻断" in workbench_source
+    assert ".l2-runner-state" in styles_source
+
+
+def test_runtime_maintenance_explains_cleared_and_protected_tasks():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+
+    assert "const [lastRuntimeControlResult, setLastRuntimeControlResult]" in app_source
+    assert "setLastRuntimeControlResult(result)" in app_source
+    assert "lastRuntimeControlResult={lastRuntimeControlResult}" in app_source
+    assert "lastRuntimeControlResult: RuntimeControlResponse | null" in workbench_source
+    assert "RuntimeControlResultSummary" in workbench_source
+    assert "清理结果" in workbench_source
+    assert "已取消非真实写入任务" in workbench_source
+    assert "真实写入任务已保护，未自动取消" in workbench_source
+    assert "real_write_protected" in workbench_source
+    assert ".runtime-control-result" in styles_source
 
 
 def test_frontend_humanizes_l2_runner_missing_error():
