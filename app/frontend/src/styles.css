@@ -2961,6 +2961,31 @@ tr:last-child td {
   gap: 10px;
 }
 
+.editable-config-section__field-group-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.editable-config-section__field-group-head strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.editable-config-section__field-group-head span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.editable-config-section__more-fields {
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.editable-config-section__more-fields > .editable-config-section__fields {
+  margin-top: 8px;
+}
+
 .editable-config-section__fields label {
   min-width: 0;
   display: grid;

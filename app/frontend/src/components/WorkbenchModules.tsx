@@ -2272,6 +2272,47 @@ function EditableConfigSectionCard({
       : savingSection === `task:${section.code}`
         ? '正在保存，请等待当前操作完成。'
         : ''
+  const visibleConfigFields = section.fields.filter((field) => {
+    const previewField = fieldPreview(preview, field)
+    return Boolean(
+      previewField?.missing
+      || previewField?.required
+      || field.usage === 'direct'
+      || field.usage === 'template',
+    )
+  })
+  const primaryConfigFields = visibleConfigFields.length ? visibleConfigFields : section.fields.slice(0, Math.min(4, section.fields.length))
+  const primaryConfigFieldNames = new Set(primaryConfigFields.map((field) => field.name))
+  const secondaryConfigFields = section.fields.filter((field) => !primaryConfigFieldNames.has(field.name))
+  function renderConfigField(field: EditableConfigField) {
+    const previewField = fieldPreview(preview, field)
+    return (
+      <label key={field.name}>
+        <span>
+          {field.label}{previewField?.required ? ' *' : ''}
+          {field.usage && <em className={`field-usage field-usage--${field.usage}`}>{fieldUsageLabel(field.usage)}</em>}
+        </span>
+        {field.valueKind === 'list' ? (
+          <textarea
+            value={configDraft[section.code]?.[field.name] ?? ''}
+            placeholder={field.placeholder}
+            rows={3}
+            onChange={(event) => onFieldChange(section.code, field.name, event.target.value)}
+          />
+        ) : (
+          <input
+            value={configDraft[section.code]?.[field.name] ?? ''}
+            placeholder={field.placeholder}
+            onChange={(event) => onFieldChange(section.code, field.name, event.target.value)}
+          />
+        )}
+        {field.valueKind === 'list' && <small className="field-source">每行一个；会按顺序匹配店小秘模板。</small>}
+        <small className={previewField?.missing ? 'field-source is-missing' : 'field-source'}>
+          {fieldSourceText(previewField)}
+        </small>
+      </label>
+    )
+  }
   return (
     <details className={`editable-config-section ${state.className}`} open={openByDefault}>
       <summary className="editable-config-section__head">
@@ -2281,34 +2322,21 @@ function EditableConfigSectionCard({
         </div>
         <span className={`status-pill ${pillClass}`}>{state.label}</span>
       </summary>
-      <div className="editable-config-section__fields">
-        {section.fields.map((field) => (
-          <label key={field.name}>
-            <span>
-              {field.label}{fieldPreview(preview, field)?.required ? ' *' : ''}
-              {field.usage && <em className={`field-usage field-usage--${field.usage}`}>{fieldUsageLabel(field.usage)}</em>}
-            </span>
-            {field.valueKind === 'list' ? (
-              <textarea
-                value={configDraft[section.code]?.[field.name] ?? ''}
-                placeholder={field.placeholder}
-                rows={3}
-                onChange={(event) => onFieldChange(section.code, field.name, event.target.value)}
-              />
-            ) : (
-              <input
-                value={configDraft[section.code]?.[field.name] ?? ''}
-                placeholder={field.placeholder}
-                onChange={(event) => onFieldChange(section.code, field.name, event.target.value)}
-              />
-            )}
-            {field.valueKind === 'list' && <small className="field-source">每行一个；会按顺序匹配店小秘模板。</small>}
-            <small className={fieldPreview(preview, field)?.missing ? 'field-source is-missing' : 'field-source'}>
-              {fieldSourceText(fieldPreview(preview, field))}
-            </small>
-          </label>
-        ))}
+      <div className="editable-config-section__field-group-head">
+        <strong>当前重点字段</strong>
+        <span>{preview?.complete ? '配置已完整；仅展示执行会直接用到的字段。' : '优先处理缺失、必填和执行取值字段。'}</span>
       </div>
+      <div className="editable-config-section__fields editable-config-section__fields--primary">
+        {primaryConfigFields.map(renderConfigField)}
+      </div>
+      {secondaryConfigFields.length > 0 && (
+        <details className="inline-disclosure editable-config-section__more-fields">
+          <summary>更多字段与辅助配置</summary>
+          <div className="editable-config-section__fields">
+            {secondaryConfigFields.map(renderConfigField)}
+          </div>
+        </details>
+      )}
       {preview?.missing.length ? (
         <div className="missing-strip">
           {preview.missing.slice(0, 4).map((item) => <span key={item}>{item}</span>)}

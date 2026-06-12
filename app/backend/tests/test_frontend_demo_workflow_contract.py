@@ -196,6 +196,15 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "来源：" in source
     assert "缺失：" in source
     assert "open={openByDefault}" in config_section
+    editable_card = source[source.index("function EditableConfigSectionCard"):source.index("export function TaskCenter")]
+    assert "visibleConfigFields" in editable_card
+    assert "secondaryConfigFields" in editable_card
+    assert "renderConfigField" in editable_card
+    assert "当前重点字段" in editable_card
+    assert "<summary>更多字段与辅助配置</summary>" in editable_card
+    assert "editable-config-section__more-fields" in editable_card
+    assert "section.fields.map((field) => (" not in editable_card
+    assert ".editable-config-section__more-fields" in styles_source
 
 
 def test_config_center_distinguishes_advisory_gaps_from_start_blockers():
