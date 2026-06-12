@@ -43,6 +43,7 @@ def test_desktop_main_starts_backend_hidden_and_loads_frontend_with_api_base():
     assert "app.getPath('userData')" in source
     assert "src.main:app" in source
     assert "DXM_DATA_DIR" in source
+    assert "DXM_RESOURCE_ROOT" in source
     assert "DXM_LAUNCHER_LOG_FILE" in source
     assert "DXM_DESKTOP=1" in source
     assert "windowsHide: true" in source

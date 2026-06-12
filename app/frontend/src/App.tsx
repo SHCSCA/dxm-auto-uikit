@@ -894,7 +894,7 @@ export default function App() {
       await refreshRuntimeLogs()
     } catch (error) {
       const message = error instanceof Error ? error.message : '运行时维护动作失败'
-      setOperationError(message)
+      setOperationError(humanOperationError(message))
       setOperationNotice(null)
       await refreshWorkspace()
       await refreshRuntimeStatus()
@@ -1069,6 +1069,16 @@ function runtimeControlSuccessMessage(action: RuntimeControlAction) {
     restart_frontend: '已提交前端重启请求，请查看启动器日志。',
     run_l2_readonly_probe: '已启动只读复验，请在执行控制台查看启动器日志。',
   } as Record<RuntimeControlAction, string>)[action]
+}
+
+function humanOperationError(message: string) {
+  if (message.includes('L2 readonly probe runner is missing')) {
+    return '只读复验启动器缺失，请使用最新免安装版或重新打包桌面版。已阻止真实保存，不会发布。'
+  }
+  if (message.includes('L2 readonly probe script is missing')) {
+    return '只读复验脚本缺失，请使用最新免安装版或重新打包桌面版。已阻止真实保存，不会发布。'
+  }
+  return message
 }
 
 function pickDefaultTaskId(deliveryWorkspace: DeliveryWorkspaceResponse | null, tasks: Task[]) {

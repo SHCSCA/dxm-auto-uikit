@@ -257,6 +257,7 @@ function startBackend(repoRoot, port) {
     env: {
       ...process.env,
       DXM_DATA_DIR: dataDir,
+      DXM_RESOURCE_ROOT: repoRoot,
       DXM_LAUNCHER_LOG_FILE: runtimeInfo.desktopLogPath,
       // Desktop mode contract: DXM_DESKTOP=1
       DXM_DESKTOP: '1',

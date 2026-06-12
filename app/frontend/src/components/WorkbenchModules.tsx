@@ -2275,16 +2275,28 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
             )}
           </div>
         )}
-        {(l2BlocksStart || l3BlocksStart) && (
+        {l2BlocksStart && (
+          <ReadonlyRecheckHelpCard
+            l2Gate={l2Gate}
+            l3BlocksStart={l3BlocksStart}
+            summaries={l2DiagnosticSummaries}
+            busy={busy}
+            demoEnabled={demoEnabled}
+            selectedTask={selectedTask}
+            selectedTaskIsDryRun={selectedTaskIsDryRun}
+            onRunL2Probe={onRunL2Probe}
+            onShowConsole={onShowConsole}
+            onShowEvidence={onShowEvidence}
+            onShowReports={onShowReports}
+          />
+        )}
+        {!l2BlocksStart && l3BlocksStart && (
           <div className="gate-note gate-note--danger">
             <strong>真实保存已阻断</strong>
             <span>{humanGateDetail(l2Gate?.detail) ?? '需要商品采集页与草稿箱页两个只读检查均通过。'}</span>
-            {l3BlocksStart && <span>只读检查未通过或人工确认未完成前，不启动认领、批量保存或真实保存。</span>}
-            {demoEnabled && selectedTaskIsDryRun && selectedTask?.status === 'draft' && <span>开发自检批次不触达店小秘；真实保存仍以单商品只保存规则为准。</span>}
-            {!selectedTaskIsDryRun && selectedTask?.status === 'draft' && <span>当前真实任务保持门禁控制，请先处理上方阻断原因。</span>}
+            <span>只读检查未通过或人工确认未完成前，不启动认领、批量保存或真实保存。</span>
             <div className="next-step-actions">
               <button className="button button--secondary" type="button" onClick={onShowConsole}>查看阻断说明</button>
-              <button className="button button--secondary" type="button" onClick={onRunL2Probe} disabled={busy}>运行只读复验</button>
               <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看评审与复验计划</button>
               <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
             </div>
@@ -4359,6 +4371,73 @@ function TaskCurrentActionPanel({
         <button className="button button--quiet" type="button" onClick={onShowConsole}>打开执行控制台复核</button>
         <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">查看复验计划</button>
       </div>
+    </div>
+  )
+}
+
+function ReadonlyRecheckHelpCard({
+  l2Gate,
+  l3BlocksStart,
+  summaries,
+  busy,
+  demoEnabled,
+  selectedTask,
+  selectedTaskIsDryRun,
+  onRunL2Probe,
+  onShowConsole,
+  onShowEvidence,
+  onShowReports,
+}: {
+  l2Gate?: RegressionGate
+  l3BlocksStart: boolean
+  summaries: L2DiagnosticSummary[]
+  busy: boolean
+  demoEnabled: boolean
+  selectedTask: Task | null
+  selectedTaskIsDryRun: boolean
+  onRunL2Probe: () => void
+  onShowConsole: () => void
+  onShowEvidence: () => void
+  onShowReports: () => void
+}) {
+  return (
+    <div className="readonly-recheck-help" data-testid="readonly-recheck-help">
+      <div className="readonly-recheck-help__main">
+        <div>
+          <strong>只读复验未通过，真实保存先暂停</strong>
+          <span>{humanGateDetail(l2Gate?.detail) ?? '需要商品采集页与草稿箱页两个只读检查均通过。'}</span>
+        </div>
+        <span className="guard-chip guard-chip--danger">当前状态：{humanGateStateLabel(l2Gate?.status ?? 'not_run')}</span>
+      </div>
+      <div className="readonly-recheck-help__facts" aria-label="只读复验说明">
+        <span>
+          <strong>复验做什么</strong>
+          <small>检查商品采集页和草稿箱页是否能正常打开。</small>
+        </span>
+        <span>
+          <strong>不会做什么</strong>
+          <small>不领取、不备注、不保存、不发布。</small>
+        </span>
+        <span>
+          <strong>通过后做什么</strong>
+          <small>再回到单商品只保存，由人工确认后启动。</small>
+        </span>
+      </div>
+      {l3BlocksStart && <span className="readonly-recheck-help__note">只读检查未通过或人工确认未完成前，不启动认领、批量保存或真实保存。</span>}
+      {demoEnabled && selectedTaskIsDryRun && selectedTask?.status === 'draft' && <span className="readonly-recheck-help__note">开发自检批次不触达店小秘；真实保存仍以单商品只保存规则为准。</span>}
+      {!selectedTaskIsDryRun && selectedTask?.status === 'draft' && <span className="readonly-recheck-help__note">当前真实任务保持门禁控制，请先处理上方阻断原因。</span>}
+      <div className="next-step-actions">
+        <button className="button button--primary" type="button" onClick={onRunL2Probe} disabled={busy}>运行只读复验</button>
+        <button className="button button--secondary" type="button" onClick={onShowConsole}>查看阻断说明</button>
+        <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看复验计划</button>
+        <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
+      </div>
+      <details className="inline-disclosure readonly-recheck-help__diagnostics">
+        <summary>查看诊断摘要</summary>
+        {summaries.length > 0 ? summaries.slice(0, 2).map((item) => (
+          <span key={item.target}>{item.targetLabel}：{humanDiagnosticNavigation(item.navigation)}，{item.failedChecks.slice(0, 2).map(humanFailedCheckLabel).join(' / ') || '页面检查未满足'}</span>
+        )) : <span>暂无诊断明细；先运行只读复验生成结果。</span>}
+      </details>
     </div>
   )
 }

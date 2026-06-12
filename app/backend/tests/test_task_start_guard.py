@@ -761,6 +761,50 @@ def test_runtime_control_starts_l2_readonly_probe_runner_without_real_write(tmp_
     assert lock_payload["pid"] == 4321
 
 
+def test_runtime_control_resolves_l2_runner_from_desktop_resource_root(tmp_path, monkeypatch):
+    import src.main as main
+
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo, mode="single_save")
+    launcher_log = tmp_path / "start-mvp.log"
+    missing_root = tmp_path / "missing-repo-root"
+    resource_root = tmp_path / "desktop-resources"
+    runner_script = resource_root / "tools" / "probes" / "l2_readonly_probe_runner.py"
+    probe_script = resource_root / "tools" / "probes" / "l2_readonly_probe.py"
+    allowlist_file = resource_root / "config" / "l2_readonly_allowlist.json"
+    lock_file = tmp_path / "runner.lock"
+    runner_script.parent.mkdir(parents=True)
+    allowlist_file.parent.mkdir(parents=True)
+    runner_script.write_text("print('runner')", encoding="utf-8")
+    probe_script.write_text("print('probe')", encoding="utf-8")
+    allowlist_file.write_text('{"schema":"dxm_l2_readonly_allowlist.v1"}', encoding="utf-8")
+    monkeypatch.setenv("DXM_RESOURCE_ROOT", str(resource_root))
+    monkeypatch.setattr(main, "RUNTIME_LOG_SOURCES", {"launcher": launcher_log})
+    monkeypatch.setattr(main, "L2_READONLY_PROBE_RUNNER", missing_root / "tools" / "probes" / "l2_readonly_probe_runner.py")
+    monkeypatch.setattr(main, "L2_READONLY_PROBE_SCRIPT", missing_root / "tools" / "probes" / "l2_readonly_probe.py")
+    monkeypatch.setattr(main, "L2_READONLY_PROBE_ALLOWLIST_FILE", missing_root / "config" / "l2_readonly_allowlist.json")
+    monkeypatch.setattr(main, "L2_READONLY_PROBE_LOCK_FILE", lock_file)
+
+    popen_calls = []
+
+    class FakeProcess:
+        pid = 9876
+
+    def fake_popen(command, **kwargs):
+        popen_calls.append({"command": command, "kwargs": kwargs})
+        return FakeProcess()
+
+    monkeypatch.setattr(main.subprocess, "Popen", fake_popen)
+
+    response = client.post("/api/runtime/control", json={"action": "run_l2_readonly_probe", "task_id": task["id"]})
+
+    assert response.status_code == 200
+    command = popen_calls[0]["command"]
+    assert str(runner_script) in command
+    assert str(probe_script) in command
+    assert str(allowlist_file) in command
+
+
 def test_runtime_control_rejects_parallel_l2_readonly_probe(tmp_path, monkeypatch):
     import src.main as main
 

@@ -958,9 +958,58 @@ def _append_runtime_control_log(message: str) -> None:
         pass
 
 
+def _resource_root_candidates() -> list[Path]:
+    roots: list[Path] = []
+    for raw in (os.environ.get('DXM_RESOURCE_ROOT'), os.environ.get('DXM_REPO_ROOT')):
+        if raw:
+            roots.append(Path(raw))
+    roots.extend([
+        REPO_ROOT,
+        Path.cwd(),
+        Path(__file__).resolve().parents[3],
+    ])
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        try:
+            key = str(root.resolve())
+        except OSError:
+            key = str(root)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(root)
+    return unique
+
+
+def _resolve_resource_path(default_path: Path, relative_path: str) -> Path:
+    if default_path.exists():
+        return default_path
+    for root in _resource_root_candidates():
+        candidate = root / relative_path
+        if candidate.exists():
+            return candidate
+    return default_path
+
+
+def _l2_readonly_probe_paths() -> dict[str, Path]:
+    return {
+        'runner': _resolve_resource_path(L2_READONLY_PROBE_RUNNER, 'tools/probes/l2_readonly_probe_runner.py'),
+        'script': _resolve_resource_path(L2_READONLY_PROBE_SCRIPT, 'tools/probes/l2_readonly_probe.py'),
+        'allowlist': _resolve_resource_path(L2_READONLY_PROBE_ALLOWLIST_FILE, 'config/l2_readonly_allowlist.json'),
+        'cookie_file': L2_READONLY_PROBE_COOKIE_FILE,
+        'output_dir': L2_READONLY_PROBE_OUTPUT_DIR,
+        'lock_file': L2_READONLY_PROBE_LOCK_FILE,
+    }
+
+
 def _start_l2_readonly_probe(task_id: int | None) -> dict:
-    if not L2_READONLY_PROBE_RUNNER.exists():
-        raise HTTPException(status_code=500, detail='L2 readonly probe runner is missing')
+    probe_paths = _l2_readonly_probe_paths()
+    if not probe_paths['runner'].exists():
+        searched = ', '.join(str(root / 'tools/probes/l2_readonly_probe_runner.py') for root in _resource_root_candidates())
+        raise HTTPException(status_code=500, detail=f'L2 readonly probe runner is missing. Searched: {searched}')
+    if not probe_paths['script'].exists():
+        raise HTTPException(status_code=500, detail=f'L2 readonly probe script is missing: {probe_paths["script"]}')
     run_id = 'l2-real-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ') + '-' + uuid.uuid4().hex[:8]
     _acquire_l2_probe_lock(run_id=run_id, task_id=task_id)
     log_path = RUNTIME_LOG_SOURCES.get('launcher') or (DATA_DIR / 'start-mvp.log')
@@ -968,21 +1017,21 @@ def _start_l2_readonly_probe(task_id: int | None) -> dict:
     command = [
         sys.executable,
         '-u',
-        str(L2_READONLY_PROBE_RUNNER),
+        str(probe_paths['runner']),
         '--run-id',
         run_id,
         '--python',
         sys.executable,
         '--script',
-        str(L2_READONLY_PROBE_SCRIPT),
+        str(probe_paths['script']),
         '--cookie-file',
-        str(L2_READONLY_PROBE_COOKIE_FILE),
+        str(probe_paths['cookie_file']),
         '--output-dir',
-        str(L2_READONLY_PROBE_OUTPUT_DIR),
+        str(probe_paths['output_dir']),
         '--allowlist-file',
-        str(L2_READONLY_PROBE_ALLOWLIST_FILE),
+        str(probe_paths['allowlist']),
         '--lock-file',
-        str(L2_READONLY_PROBE_LOCK_FILE),
+        str(probe_paths['lock_file']),
     ]
     creationflags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
     try:

@@ -1267,9 +1267,9 @@ def test_task_center_only_uses_demo_ready_copy_for_dry_run_tasks():
     task_center_section = source[source.index("export function TaskCenter"):source.index("export function ExecutionConsole")]
 
     assert "selectedTask?.mode === 'dry_run'" in task_center_section
-    assert "demoEnabled && selectedTaskIsDryRun && selectedTask?.status === 'draft' && <span>开发自检批次不触达店小秘" in task_center_section
+    assert "demoEnabled && selectedTaskIsDryRun && selectedTask?.status === 'draft' && <span className=\"readonly-recheck-help__note\">开发自检批次不触达店小秘" in source
     assert "{selectedTask?.status === 'draft' && <span>本地演示批次已可用于验收门禁" not in task_center_section
-    assert "当前真实任务保持门禁控制，请先处理上方阻断原因。" in task_center_section
+    assert "当前真实任务保持门禁控制，请先处理上方阻断原因。" in source
 
 
 def test_task_center_exposes_real_task_creation_instead_of_demo_first_flow():
@@ -1315,6 +1315,28 @@ def test_task_center_surfaces_single_save_recovery_guide_for_blocked_real_tasks(
         assert forbidden not in recovery_section
     assert "single-save-recovery-guide" in styles_source
     assert "singleSaveRecoveryGuideVisible" in qa_source
+
+
+def test_task_center_explains_l2_recheck_before_real_save():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    task_center_section = source[source.index("export function TaskCenter"):source.index("export function ExecutionConsole")]
+    recheck_card_section = source[source.index("function ReadonlyRecheckHelpCard"):source.index("function SingleSaveRecoveryGuide")]
+
+    assert "ReadonlyRecheckHelpCard" in task_center_section
+    assert "l2BlocksStart && (" in task_center_section
+    assert "只读复验未通过，真实保存先暂停" in recheck_card_section
+    assert "检查商品采集页和草稿箱页" in recheck_card_section
+    assert "不领取、不备注、不保存、不发布" in recheck_card_section
+    assert "当前状态：{humanGateStateLabel(l2Gate?.status ?? 'not_run')}" in recheck_card_section
+    assert "运行只读复验" in recheck_card_section
+    assert "查看诊断摘要" in recheck_card_section
+    assert "查看复验计划" in recheck_card_section
+    assert "查看证据缺口" in recheck_card_section
+    assert "readonly-recheck-help" in styles_source
+
+    for forbidden in ("data_acquisition", "draft_box", "L2 readonly", "probe runner"):
+        assert forbidden not in recheck_card_section
 
 
 def test_task_center_defaults_to_current_task_first_and_collapses_setup_noise():
@@ -1685,6 +1707,15 @@ def test_frontend_refreshes_workspace_after_l2_runner_finishes():
     assert "completion.line.match(/run_id=" in app_source
     assert "void refreshWorkspace()" in app_source
     assert "void refreshRuntimeStatus()" in app_source
+
+
+def test_frontend_humanizes_l2_runner_missing_error():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+
+    assert "function humanOperationError" in app_source
+    assert "L2 readonly probe runner is missing" in app_source
+    assert "只读复验启动器缺失，请使用最新免安装版或重新打包桌面版。" in app_source
+    assert "setOperationError(humanOperationError(message))" in app_source
 
 
 def test_frontend_first_screen_names_dxm_automation_delivery():
