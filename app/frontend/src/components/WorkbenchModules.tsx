@@ -3276,7 +3276,12 @@ export function ExecutionConsole({
         />
       )}
 
-      <L2RunnerStatePanel state={l2RunnerState} l2Gate={l2Gate} />
+      <L2RunnerStatePanel
+        state={l2RunnerState}
+        l2Gate={l2Gate}
+        onLogSourceChange={onRuntimeLogSourceChange}
+        onShowReports={onShowReports}
+      />
 
       <div className="module-card span-1 console-log-card console-log-card--compact">
         <ModuleHead title="实时日志" meta={`${runtimeLogCount} 条，每 1.5 秒刷新`} />
@@ -4472,7 +4477,17 @@ function shortUrl(url?: string) {
   }
 }
 
-function L2RunnerStatePanel({ state, l2Gate }: { state: L2RunnerState; l2Gate?: RegressionGate }) {
+function L2RunnerStatePanel({
+  state,
+  l2Gate,
+  onLogSourceChange,
+  onShowReports,
+}: {
+  state: L2RunnerState
+  l2Gate?: RegressionGate
+  onLogSourceChange: (source: RuntimeLogSource) => void
+  onShowReports: () => void
+}) {
   const gateLabel = humanGateStateLabel(l2Gate?.status ?? 'not_run')
   const tone = state.status === 'passed' ? 'ok' : state.status === 'failed' ? 'danger' : state.status === 'running' ? 'warn' : 'pending'
   const title = state.status === 'passed'
@@ -4492,6 +4507,49 @@ function L2RunnerStatePanel({ state, l2Gate }: { state: L2RunnerState; l2Gate?: 
         <small>{state.runId ? `run-id ${state.runId}` : '运行后会显示 run-id 和退出码。'}</small>
         {state.exitCode !== null && <small>退出码：{state.exitCode}</small>}
         {state.line && <code>{state.line}</code>}
+      </div>
+      <L2PrecheckRunbook
+        state={state}
+        onLogSourceChange={onLogSourceChange}
+        onShowReports={onShowReports}
+      />
+    </div>
+  )
+}
+
+function L2PrecheckRunbook({
+  state,
+  onLogSourceChange,
+  onShowReports,
+}: {
+  state: L2RunnerState
+  onLogSourceChange: (source: RuntimeLogSource) => void
+  onShowReports: () => void
+}) {
+  const nextAction = state.status === 'passed'
+    ? '预检通过后，回到任务中心填写批准人，再启动单商品只保存。'
+    : state.status === 'running'
+      ? '预检运行中，请查看启动器日志等待完成结果。'
+      : state.status === 'failed'
+        ? '预检失败后怎么办：查看启动器日志和检查计划，先处理登录、页面打不开或写请求风险，再重新运行预检。'
+        : '点击“运行预检（只读，不保存）”后，系统只检查页面可达和写入风险。'
+
+  return (
+    <div className="l2-precheck-runbook" aria-label="预检操作引导">
+      <strong>预检操作引导</strong>
+      <div className="l2-precheck-runbook__steps">
+        <span><b>1 打开真实店小秘页面</b><small>确认已登录，能访问商品采集页。</small></span>
+        <span><b>2 只读检查两个页面</b><small>商品采集页 + 采集箱/草稿箱；不会领取、不会保存、不会发布。</small></span>
+        <span><b>3 通过后人工确认保存</b><small>只读通过不等于保存，仍需人工确认单商品只保存。</small></span>
+      </div>
+      <small>{nextAction}</small>
+      <div className="l2-precheck-runbook__actions">
+        <button className="button button--quiet" type="button" onClick={() => onLogSourceChange('launcher')}>
+          查看启动器日志
+        </button>
+        <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">
+          查看检查计划
+        </button>
       </div>
     </div>
   )

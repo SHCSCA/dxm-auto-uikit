@@ -2214,6 +2214,31 @@ def test_execution_console_surfaces_l2_runner_result_not_just_start_message():
     assert ".l2-runner-state" in styles_source
 
 
+def test_execution_console_explains_l2_precheck_runbook_and_next_action():
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    console_section = workbench_source[workbench_source.index("export function ExecutionConsole"):workbench_source.index("function RuntimeLogPreview")]
+    runner_panel = workbench_source[workbench_source.index("function L2RunnerStatePanel"):workbench_source.index("function RuntimeLogPreview")]
+
+    assert "L2PrecheckRunbook" in console_section
+    assert "function L2PrecheckRunbook" in workbench_source
+    assert "aria-label=\"预检操作引导\"" in runner_panel
+    assert "预检操作引导" in runner_panel
+    assert "1 打开真实店小秘页面" in runner_panel
+    assert "2 只读检查两个页面" in runner_panel
+    assert "3 通过后人工确认保存" in runner_panel
+    assert "商品采集页" in runner_panel
+    assert "采集箱/草稿箱" in runner_panel
+    assert "不会领取、不会保存、不会发布" in runner_panel
+    assert "onLogSourceChange('launcher')" in runner_panel
+    assert "查看启动器日志" in runner_panel
+    assert "onShowReports" in runner_panel
+    assert "查看检查计划" in runner_panel
+    assert "预检失败后怎么办" in runner_panel
+    assert "l2-precheck-runbook" in styles_source
+    assert ".l2-precheck-runbook__steps" in styles_source
+
+
 def test_runtime_maintenance_explains_cleared_and_protected_tasks():
     app_source = APP_TSX.read_text(encoding="utf-8")
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")

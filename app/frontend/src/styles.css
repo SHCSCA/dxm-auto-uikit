@@ -4235,6 +4235,61 @@ tr:last-child td {
   word-break: break-word;
 }
 
+.l2-precheck-runbook {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.l2-precheck-runbook > strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.l2-precheck-runbook > small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.l2-precheck-runbook__steps {
+  display: grid;
+  gap: 6px;
+}
+
+.l2-precheck-runbook__steps span {
+  display: grid;
+  gap: 3px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #f8fbff;
+}
+
+.l2-precheck-runbook__steps b {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.l2-precheck-runbook__steps small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.l2-precheck-runbook__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.l2-precheck-runbook__actions .button {
+  min-height: 30px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
 .runtime-log-tabs--compact {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
