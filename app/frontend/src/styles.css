@@ -860,11 +860,22 @@ a:focus-visible {
 }
 
 .guide-layout {
-  grid-template-columns: minmax(0, 2fr) minmax(280px, 0.9fr);
+  grid-template-columns: 1fr;
 }
 
 .guide-command-card {
-  min-height: 360px;
+  min-height: 0;
+}
+
+.guide-support-drawer {
+  margin-top: 10px;
+}
+
+.guide-support-drawer__content {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(260px, 0.6fr);
+  gap: 12px;
+  align-items: start;
 }
 
 .guide-hero__body {

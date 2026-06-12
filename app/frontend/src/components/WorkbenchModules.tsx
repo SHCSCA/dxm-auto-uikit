@@ -477,7 +477,7 @@ export function GuideCenter({
 
   return (
     <section className="module-layout guide-layout" aria-label="操作引导">
-      <div className="module-card span-2 guide-next-card guide-command-card">
+      <div className="module-card span-3 guide-next-card guide-command-card">
         <ModuleHead title={guideFocusTitle} meta={guideFocusMeta} />
         <p className="sr-only">{guideHeroTitle}。{guideHeroCopy}</p>
         <article className={`guide-step guide-step--primary is-${nextGuideStep.status}`} data-guide-step={nextGuideStep.id}>
@@ -524,16 +524,16 @@ export function GuideCenter({
             </div>
           )}
         </article>
-        <div className="guide-path-summary guide-path-summary--compact" aria-label="当前路径">
-          {guidePathSummary.map((item) => (
-            <span key={item.label} className={`is-${item.status}`}>
-              <b>{item.label}</b>
-              <small>{item.status === 'done' ? '完成' : item.status === 'current' ? '当前' : '等待'}</small>
-            </span>
-          ))}
-        </div>
         <details className="inline-disclosure guide-full-path">
           <summary>展开完整操作流程</summary>
+          <div className="guide-path-summary guide-path-summary--compact" aria-label="当前路径">
+            {guidePathSummary.map((item) => (
+              <span key={item.label} className={`is-${item.status}`}>
+                <b>{item.label}</b>
+                <small>{item.status === 'done' ? '完成' : item.status === 'current' ? '当前' : '等待'}</small>
+              </span>
+            ))}
+          </div>
           <div className="guide-automation-path" aria-label="真实自动化主路径">
             <strong>真实自动化主路径</strong>
             {guideAutomationPath.map((item, index) => (
@@ -574,46 +574,51 @@ export function GuideCenter({
             ))}
           </div>
         </details>
-      </div>
-      <div className="module-card guide-status-card">
-        <ModuleHead title="后台状态摘要" meta="只显示会阻断下一步的项" />
-        <div className="guide-status-list">
-          <CheckRow label="工作台服务" ok={backendOk && frontendOk} />
-          {summaryRows.map((row) => (
-            <div key={row.label} className="guide-status-row">
-              <span className={`guide-status-dot ${row.ok ? 'is-ok' : 'is-warn'}`} aria-hidden="true" />
-              <div>
-                <strong>{row.label}</strong>
-                <small>{row.value}</small>
+        <details className="inline-disclosure guide-support-drawer">
+          <summary>后台状态与常用入口</summary>
+          <div className="guide-support-drawer__content">
+            <section className="guide-status-card" aria-label="后台状态摘要">
+              <ModuleHead title="后台状态摘要" meta="只显示会阻断下一步的项" />
+              <div className="guide-status-list">
+                <CheckRow label="工作台服务" ok={backendOk && frontendOk} />
+                {summaryRows.map((row) => (
+                  <div key={row.label} className="guide-status-row">
+                    <span className={`guide-status-dot ${row.ok ? 'is-ok' : 'is-warn'}`} aria-hidden="true" />
+                    <div>
+                      <strong>{row.label}</strong>
+                      <small>{row.value}</small>
+                    </div>
+                    <button className="button button--quiet" type="button" onClick={row.onAction}>{row.action}</button>
+                  </div>
+                ))}
+                <CheckRow label="单商品只保存任务" ok={selectedSingleSave} />
               </div>
-              <button className="button button--quiet" type="button" onClick={row.onAction}>{row.action}</button>
-            </div>
-          ))}
-          <CheckRow label="单商品只保存任务" ok={selectedSingleSave} />
-        </div>
-        {!(backendOk && frontendOk) && (
-          <div className="guide-exception-callout">
-            <strong>工作台服务连接异常</strong>
-            <small>服务恢复后继续真实店小秘操作；系统不会用本地演示结果替代真实保存。</small>
-            <button className="button button--secondary" type="button" onClick={onShowConsole}>查看运行日志</button>
-          </div>
-        )}
-        <details className="inline-disclosure">
-          <summary>常用入口</summary>
-          <div className="guide-quick-actions">
-            <button className="button button--quiet" type="button" onClick={onShowTasks}>任务中心</button>
-            <button className="button button--quiet" type="button" onClick={onShowConfig}>配置中心</button>
-            <button className="button button--quiet" type="button" onClick={onShowConsole}>执行控制台</button>
-            <button className="button button--quiet" type="button" onClick={onShowReports}>报告中心</button>
+              {!(backendOk && frontendOk) && (
+                <div className="guide-exception-callout">
+                  <strong>工作台服务连接异常</strong>
+                  <small>服务恢复后继续真实店小秘操作；系统不会用本地演示结果替代真实保存。</small>
+                  <button className="button button--secondary" type="button" onClick={onShowConsole}>查看运行日志</button>
+                </div>
+              )}
+              {hasExceptions && (
+                <div className="guide-exception-callout">
+                  <strong>发现异常 {workspace.exceptions.length} 项</strong>
+                  <small>先处理异常再继续真实保存。</small>
+                  <button className="button button--secondary" type="button" onClick={onShowExceptions}>查看异常池</button>
+                </div>
+              )}
+            </section>
+            <details className="inline-disclosure">
+              <summary>常用入口</summary>
+              <div className="guide-quick-actions">
+                <button className="button button--quiet" type="button" onClick={onShowTasks}>任务中心</button>
+                <button className="button button--quiet" type="button" onClick={onShowConfig}>配置中心</button>
+                <button className="button button--quiet" type="button" onClick={onShowConsole}>执行控制台</button>
+                <button className="button button--quiet" type="button" onClick={onShowReports}>报告中心</button>
+              </div>
+            </details>
           </div>
         </details>
-        {hasExceptions && (
-          <div className="guide-exception-callout">
-            <strong>发现异常 {workspace.exceptions.length} 项</strong>
-            <small>先处理异常再继续真实保存。</small>
-            <button className="button button--secondary" type="button" onClick={onShowExceptions}>查看异常池</button>
-          </div>
-        )}
       </div>
     </section>
   )

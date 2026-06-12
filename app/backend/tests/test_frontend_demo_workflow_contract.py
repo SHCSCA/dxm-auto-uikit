@@ -579,6 +579,34 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "reason:" in workbench_source
 
 
+def test_guide_center_keeps_support_panels_collapsed_by_default():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    guide_center_section = source[source.index("export function GuideCenter"):source.index("function DxmLoginInlineForm")]
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+
+    assert '<div className="module-card span-3 guide-next-card guide-command-card">' in guide_center_section
+    assert '<div className="module-card guide-status-card">' not in guide_center_section
+    assert '<details className="inline-disclosure guide-support-drawer">' in guide_center_section
+    support_drawer = guide_center_section[guide_center_section.index('<details className="inline-disclosure guide-support-drawer">'):]
+    assert '<summary>后台状态与常用入口</summary>' in support_drawer
+    assert "后台状态摘要" in support_drawer
+    assert "<summary>常用入口</summary>" in support_drawer
+    guide_layout_styles = styles_source[styles_source.index(".guide-layout {"):styles_source.index(".guide-command-card {")]
+    visible_primary = guide_center_section[
+        guide_center_section.index('<article className={`guide-step guide-step--primary'):
+        guide_center_section.index('<details className="inline-disclosure guide-full-path">')
+    ]
+    full_path_drawer = guide_center_section[
+        guide_center_section.index('<details className="inline-disclosure guide-full-path">'):
+        guide_center_section.index('<details className="inline-disclosure guide-support-drawer">')
+    ]
+
+    assert ".guide-support-drawer" in styles_source
+    assert "grid-template-columns: 1fr;" in guide_layout_styles
+    assert "guide-path-summary guide-path-summary--compact" not in visible_primary
+    assert "guide-path-summary guide-path-summary--compact" in full_path_drawer
+
+
 def test_sidebar_is_navigation_only_not_status_or_hint_panel():
     shell_source = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
