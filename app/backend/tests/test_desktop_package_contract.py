@@ -65,6 +65,7 @@ def test_desktop_main_starts_backend_hidden_and_loads_frontend_with_api_base():
     assert "DXM_RESOURCE_ROOT" in source
     assert "DXM_LAUNCHER_LOG_FILE" in source
     assert "DXM_DESKTOP=1" in source
+    assert "PYTHONDONTWRITEBYTECODE" in source
     assert "windowsHide: true" in source
     assert "data/desktop-main.log" in source
     assert "app/frontend/dist/index.html" in source

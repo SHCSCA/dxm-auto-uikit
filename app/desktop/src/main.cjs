@@ -265,6 +265,7 @@ function startBackend(repoRoot, port) {
       // Desktop mode contract: DXM_DESKTOP=1
       DXM_DESKTOP: '1',
       PYTHONIOENCODING: 'utf-8',
+      PYTHONDONTWRITEBYTECODE: '1',
     },
     windowsHide: true,
   })
