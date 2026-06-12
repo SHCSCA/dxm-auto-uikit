@@ -3437,9 +3437,9 @@ function ConsoleFocusPanel({
         ? '等待独立真实浏览器启动完成'
         : humanConsoleText(agentConsole?.hud?.next_step ?? '按当前步骤继续操作真实浏览器')
       : realSaveBlocked
-        ? '处理任务门禁后再打开执行浏览器'
-        : '打开执行浏览器'
-  const primaryActionLabel = selectedTaskCompleted ? '查看报告' : '处理任务门禁'
+        ? '先处理只读检查后再打开真实浏览器'
+        : '打开真实浏览器（不保存）'
+  const primaryActionLabel = selectedTaskCompleted ? '查看报告' : '处理只读检查与确认'
   const primaryAction = selectedTaskCompleted ? onShowReports : onShowTasks
   const sourceLabel = ({
     backend: '后端',
@@ -3687,8 +3687,8 @@ function AgentConsoleControls({
         : '等待窗口可见'
   const lifecycleStatus = !active
     ? diagnosticBlocked
-      ? '只读检查未通过，执行浏览器暂不启动'
-      : '执行浏览器待启动'
+      ? '只读检查未通过，真实浏览器暂不启动'
+      : '真实浏览器待启动'
     : manualTakeover
       ? '人工正在接管真实浏览器'
       : launching
@@ -3699,7 +3699,7 @@ function AgentConsoleControls({
   const lifecycleNext = !active
     ? diagnosticBlocked
       ? '先运行只读页面检查；填写账号密码后可单独打开登录/人工处理浏览器。'
-      : '点击打开执行浏览器，进入独立 Profile 浏览器。'
+      : '点击打开真实浏览器（不保存），进入独立 Profile 浏览器。'
     : manualTakeover
       ? '完成人工处理后点击交还 Agent。'
       : launching
@@ -3792,9 +3792,9 @@ function AgentConsoleControls({
           type="button"
           onClick={onStartAgentConsole}
           disabled={busy || !selectedTask || diagnosticBlocked || active || launching}
-          title={active ? '当前独立真实浏览器会话正在运行。' : diagnosticBlocked ? diagnosticBlockReason : realSaveBlocked ? realSaveBlockReason : '打开执行观察浏览器；保存前仍需人工确认'}
+          title={active ? '当前独立真实浏览器会话正在运行。' : diagnosticBlocked ? diagnosticBlockReason : realSaveBlocked ? realSaveBlockReason : '打开真实浏览器（不保存）；保存前仍需人工确认'}
         >
-          {launching ? '执行浏览器启动中' : active ? '执行浏览器已打开' : '打开执行浏览器'}
+          {launching ? '真实浏览器启动中' : active ? '真实浏览器已打开' : '打开真实浏览器（不保存）'}
         </button>
       </div>
       <details className="agent-console-controls__advanced agent-console-controls__operator-drawer inline-disclosure">

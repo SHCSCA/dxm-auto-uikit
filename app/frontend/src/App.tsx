@@ -769,7 +769,7 @@ export default function App() {
         })
         setAgentConsole(status)
         if (status.ok === false) {
-          const message = status.error || status.reason || `执行浏览器进入${targetLabel}失败`
+          const message = status.error || status.reason || `真实浏览器进入${targetLabel}失败`
           setAgentConsoleError(message)
           setOperationError(message)
           return
@@ -778,9 +778,9 @@ export default function App() {
         const settledStatus = await refreshAgentConsole(true) ?? status
         setAgentConsoleError(null)
         if (currentUrlMatchesDxmTarget(settledStatus.current_url, target)) {
-          setOperationNotice(`执行浏览器已进入${targetLabel}`)
+          setOperationNotice(`真实浏览器已进入${targetLabel}`)
         } else {
-          setOperationError(`执行浏览器已发送进入${targetLabel}指令，但店小秘当前停留在 ${compactDxmUrl(settledStatus.current_url)}。请确认登录态后重试。`)
+          setOperationError(`真实浏览器已发送进入${targetLabel}指令，但店小秘当前停留在 ${compactDxmUrl(settledStatus.current_url)}。请确认登录态后重试。`)
         }
       } else {
         await postJson('/api/dxm/navigate', { target })

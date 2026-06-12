@@ -572,7 +572,8 @@ def test_guide_center_can_start_real_dxm_login_without_l2_gate():
     assert "店小秘当前停留在" in navigate_section
     assert "compactDxmUrl(settledStatus.current_url)" in navigate_section
     assert "await postJson('/api/dxm/navigate', { target })" in navigate_section
-    assert "执行浏览器已进入" in navigate_section
+    assert "真实浏览器已进入" in navigate_section
+    assert "执行浏览器" not in navigate_section
     assert "已请求店小秘登录流进入" in navigate_section
     assert "onOpenDxmLogin={openDxmLogin}" in app_source
     assert "onContinueDxmLogin={continueDxmLogin}" in app_source
@@ -736,7 +737,9 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "hasBrowserSession && currentUrl ? shortUrl(currentUrl) : '等待启动真实浏览器'" in workbench_source
     assert "可在生命周期区接管" in workbench_source
     assert "可在会话管理中接管" not in workbench_source
-    assert "处理任务门禁后再打开执行浏览器" in workbench_source
+    assert "先处理只读检查后再打开真实浏览器" in workbench_source
+    assert "处理只读检查与确认" in workbench_source
+    assert "处理任务门禁" not in workbench_source
     assert "控制台不播放截图；截图只作为证据路径，不会启动保存或发布。" in workbench_source
     assert "'module-card span-2 agent-console-stage'" in console_section
     assert "className=\"module-card span-1 console-log-card console-log-card--compact\"" in console_section
@@ -760,14 +763,14 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "实时操控独立真实浏览器窗口" in workbench_source
     assert "控制台不播放截图；截图只作为证据路径，不会启动保存或发布。" in workbench_source
     assert "aria-label=\"真实浏览器会话生命周期\"" in workbench_source
-    assert "只读检查未通过，执行浏览器暂不启动" in workbench_source
+    assert "只读检查未通过，真实浏览器暂不启动" in workbench_source
     assert "填写账号密码后可单独打开登录/人工处理浏览器" in workbench_source
     assert "启动后可接管" in workbench_source
     assert "const takeoverStateLabel = !active" in workbench_source
-    assert "打开执行浏览器" in workbench_source
+    assert "打开真实浏览器（不保存）" in workbench_source
     assert "disabled={busy || !selectedTask || diagnosticBlocked || active || launching}" in workbench_source
-    assert "执行浏览器启动中" in workbench_source
-    assert "{launching ? '执行浏览器启动中' : active ? '执行浏览器已打开' : '打开执行浏览器'}" in workbench_source
+    assert "真实浏览器启动中" in workbench_source
+    assert "{launching ? '真实浏览器启动中' : active ? '真实浏览器已打开' : '打开真实浏览器（不保存）'}" in workbench_source
     assert "当前独立真实浏览器会话正在运行。" in workbench_source
     assert "<summary>真实浏览器操作细节</summary>" in workbench_source
     assert "agent-console-controls__operator-drawer" in workbench_source
