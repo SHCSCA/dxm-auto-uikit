@@ -487,6 +487,7 @@ export default function App() {
     async function loadSavedCredential() {
       const loader = window.dxmDesktop?.loadDxmCredential
       if (!loader) {
+        setDxmLoginDraft((current) => ({ ...current, rememberCredential: false }))
         setDxmCredentialState({
           available: false,
           loaded: false,
@@ -519,8 +520,10 @@ export default function App() {
           saved: false,
           message: result.available ? '可记住账号密码；密码会写入本机加密存储。' : '本机加密存储不可用；不会保存密码。',
         })
+        setDxmLoginDraft((current) => ({ ...current, rememberCredential: Boolean(result.available) }))
       } catch (error) {
         if (cancelled) return
+        setDxmLoginDraft((current) => ({ ...current, rememberCredential: false }))
         setDxmCredentialState({
           available: false,
           loaded: false,

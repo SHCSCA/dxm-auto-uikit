@@ -796,6 +796,8 @@ def test_real_operator_inputs_are_inline_not_browser_prompts():
     assert "loadDxmCredential" in app_source
     assert "saveDxmCredential" in app_source
     assert "clearDxmCredential" in app_source
+    assert "setDxmLoginDraft((current) => ({ ...current, rememberCredential: false }))" in app_source
+    assert "setDxmLoginDraft((current) => ({ ...current, rememberCredential: Boolean(result.available) }))" in app_source
     assert "l3ApprovedBy" in app_source
     assert "useState('ops-owner')" not in app_source
     assert "rememberCredential: true" in app_source
