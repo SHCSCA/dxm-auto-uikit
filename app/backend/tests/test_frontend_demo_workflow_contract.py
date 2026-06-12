@@ -1842,6 +1842,15 @@ def test_frontend_surfaces_runtime_status_and_log_filters():
     assert "primaryStatus" in safety_bar
     assert "primaryActionLabel" in safety_bar
     assert "onShowTasks" in safety_bar
+    visible_meta = safety_bar[
+        safety_bar.index('<div className="safety-bar__meta"'):
+        safety_bar.index('<details className="safety-bar__meta-details')
+    ]
+    assert "启动来源" not in visible_meta
+    assert "runtimeOwnerChip" not in visible_meta
+    details_section = safety_bar[safety_bar.index('<details className="safety-bar__meta-details'):]
+    assert "启动来源" in safety_bar
+    assert "detailChips.map" in details_section
     assert "runtimeLogLevel" in app_source
     assert "runtimeLogQuery" in app_source
     assert "RuntimeLogSource" in app_source

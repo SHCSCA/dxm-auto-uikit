@@ -142,11 +142,8 @@ export function SafetyStatusBar({ workspace, selectedTask, runtimeStatus, deskto
           <span>{conciseDetail}</span>
         </div>
       </div>
-      <div className="safety-bar__meta" aria-label="禁止入口检查">
+      <div className="safety-bar__meta" aria-label="当前操作">
         <span className={`guard-chip guard-chip--${tone === 'danger' ? 'danger' : tone === 'warn' ? 'warn' : 'ok'}`}>{primaryStatus}</span>
-        {runtimeStatus && (
-          <span className={`guard-chip guard-chip--${runtimeOwner === 'direct' ? 'warn' : 'ok'}`}>启动来源：{runtimeOwnerChip}</span>
-        )}
         <span className="guard-chip guard-chip--ok">只保存，不发布</span>
         <button className="button button--secondary safety-bar__primary-action" type="button" onClick={handlePrimaryAction} disabled={busy}>
           {primaryActionLabel}
