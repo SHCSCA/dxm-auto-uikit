@@ -66,6 +66,21 @@ type L2RunnerState = {
   updatedAt: string | null
 }
 
+type ConsolePrimaryPathCode = 'select_task' | 'completed' | 'running' | 'not_draft' | 'unreleased' | 'config' | 'l2' | 'l3' | 'busy' | 'ready'
+
+type ConsolePrimaryPath = {
+  code: ConsolePrimaryPathCode
+  title: string
+  reason: string
+  detail: string
+  next: string
+  ctaLabel: string
+  action: 'tasks' | 'config' | 'run_l2' | 'reports' | 'start_browser'
+  browserStatus: string
+  blocksBrowserStart: boolean
+  saveBlocked: boolean
+}
+
 type GuideCenterProps = CommonProps & {
   configPreview: ConfigPreview | null
   runtimeStatus: RuntimeStatus | null
@@ -116,6 +131,7 @@ const realWriteReleasePrerequisites = [
 type TaskCenterProps = CommonProps & {
   configPreview: ConfigPreview | null
   configPreviewLoading: boolean
+  runtimeStatus: RuntimeStatus | null
   busy: boolean
   demoEnabled: boolean
   l3ApprovedBy: string
@@ -134,6 +150,7 @@ type TaskCenterProps = CommonProps & {
 type ExecutionConsoleProps = CommonProps & {
   agentConsole: AgentConsoleSession | null
   agentConsoleError: string | null
+  configPreview: ConfigPreview | null
   runtimeStatus: RuntimeStatus | null
   runtimeLogs: Record<RuntimeLogSource, RuntimeLogResponse | null>
   runtimeLogSource: RuntimeLogSource
@@ -161,6 +178,7 @@ type ExecutionConsoleProps = CommonProps & {
   onControlAgentConsoleBrowser: (command: AgentConsoleControlCommand) => void
   onRuntimeControl: (action: RuntimeControlAction) => void
   onShowTasks: () => void
+  onShowConfig: () => void
   onShowEvidence: () => void
   onShowReports: () => void
 }
@@ -2195,7 +2213,7 @@ function EditableConfigSectionCard({
   )
 }
 
-export function TaskCenter({ workspace, selectedTask, configPreview, configPreviewLoading, busy, demoEnabled, l3ApprovedBy, onL3ApprovedByChange, onSelectTask, onCreateRealTask, onBootstrapDemo, onStartTask, onRunL2Probe, onShowConfig, onShowConsole, onShowEvidence, onShowReports }: TaskCenterProps) {
+export function TaskCenter({ workspace, selectedTask, configPreview, configPreviewLoading, runtimeStatus, busy, demoEnabled, l3ApprovedBy, onL3ApprovedByChange, onSelectTask, onCreateRealTask, onBootstrapDemo, onStartTask, onRunL2Probe, onShowConfig, onShowConsole, onShowEvidence, onShowReports }: TaskCenterProps) {
   const uniqueStoreOptions = useMemo(() => uniqueByStoreIdentity(workspace.stores), [workspace.stores])
   const uniqueProductOptions = useMemo(() => uniqueByProductIdentity(workspace.products), [workspace.products])
   const [draftStoreId, setDraftStoreId] = useState(() => uniqueStoreOptions[0]?.id ? String(uniqueStoreOptions[0].id) : '')
@@ -2207,10 +2225,14 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
   const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
   const needsRealL2 = selectedTask ? requiresRealL2(selectedTask) : false
   const selectedTaskIsDryRun = selectedTask?.mode === 'dry_run'
+  const selectedRealDxmMutationTask = Boolean(selectedTask && isRealDxmMutationTask(selectedTask))
+  const dxmLoggedIn = DXM_LOGGED_IN_STATUSES.has(runtimeStatus?.dxmLogin?.status ?? '')
   const selectedTaskIsUnreleasedRealMode = selectedTask ? isUnreleasedRealDxmMutationTask(selectedTask) : false
   const selectedTaskNotDraft = Boolean(selectedTask && selectedTask.status !== 'draft')
   const l2BlocksStart = needsRealL2 && l2Gate?.status !== 'passed'
   const l3BlocksStart = needsRealL2 && l3Gate?.status === 'blocked'
+  const loginBlocksStart = selectedRealDxmMutationTask && !dxmLoggedIn
+  const configUnknownBlocksStart = selectedRealDxmMutationTask && !configPreview && !configPreviewLoading
   const configBlocksStart = Boolean(selectedTask && isRealDxmMutationTask(selectedTask) && configPreview && !configPreview.ok)
   const l2DiagnosticSummaries = summarizeL2Diagnostics(l2Gate)
   const selectedStore = uniqueStoreOptions.find((store) => String(store.id) === draftStoreId)
@@ -2248,8 +2270,8 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
   const hiddenTaskCount = Math.max(workspace.tasks.length - visibleTaskRows.length, 0)
   const canToggleTaskHistory = workspace.tasks.length > visibleTaskRows.length || showAllTasks
   const canCreateRealTask = Boolean(selectedStore && selectedDraftProducts.length > 0 && !busy && !storeBlocksSingleSave && !singleSaveProductCountInvalid)
-  const needsSingleSaveRecovery = Boolean(selectedTask && !selectedTaskNotDraft && (selectedTaskIsUnreleasedRealMode || configBlocksStart || l2BlocksStart || l3BlocksStart))
-  const startDisabled = busy || !selectedTask || selectedTaskNotDraft || selectedTaskIsUnreleasedRealMode || configBlocksStart || l2BlocksStart || l3BlocksStart
+  const needsSingleSaveRecovery = Boolean(selectedTask && !selectedTaskNotDraft && (selectedTaskIsUnreleasedRealMode || loginBlocksStart || configUnknownBlocksStart || configPreviewLoading || configBlocksStart || l2BlocksStart || l3BlocksStart))
+  const startDisabled = busy || !selectedTask || selectedTaskNotDraft || selectedTaskIsUnreleasedRealMode || loginBlocksStart || configUnknownBlocksStart || configPreviewLoading || configBlocksStart || l2BlocksStart || l3BlocksStart
   const startLabel = !selectedTask
     ? '请选择任务'
     : selectedTask.status === 'completed'
@@ -2260,17 +2282,23 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
           ? '任务非草稿，禁止启动'
           : selectedTaskIsUnreleasedRealMode
             ? '未发布，禁止启动'
-            : configBlocksStart
-              ? '配置未完成，禁止启动'
-              : l2BlocksStart
-                ? l2StartLabel(l2Gate?.status)
-                : l3BlocksStart
-                  ? '人工确认未完成，禁止启动'
-                  : needsApproval
-                    ? '批准并启动单商品只保存'
-                    : needsRealL2
-                      ? '启动保存核验任务'
-                      : '启动开发自检任务'
+            : loginBlocksStart
+              ? 'DXM 未登录，先打开真实浏览器登录'
+              : configUnknownBlocksStart
+                ? '先检查本次任务配置'
+                : configPreviewLoading
+                  ? '正在检查配置，稍候启动'
+                  : configBlocksStart
+                    ? '配置未完成，禁止启动'
+                    : l2BlocksStart
+                      ? l2StartLabel(l2Gate?.status)
+                      : l3BlocksStart
+                        ? '人工确认未完成，禁止启动'
+                        : needsApproval
+                          ? '批准并启动单商品只保存'
+                          : needsRealL2
+                            ? '启动保存核验任务'
+                            : '启动开发自检任务'
 
   useEffect(() => {
     const firstStore = uniqueStoreOptions[0]
@@ -2706,6 +2734,7 @@ export function ExecutionConsole({
   selectedTask,
   agentConsole,
   agentConsoleError,
+  configPreview,
   runtimeStatus,
   runtimeLogs,
   runtimeLogSource,
@@ -2732,6 +2761,7 @@ export function ExecutionConsole({
   onControlAgentConsoleBrowser,
   onRuntimeControl,
   onShowTasks,
+  onShowConfig,
   onShowEvidence,
   onShowReports,
   onOpenDxmLogin,
@@ -2752,14 +2782,11 @@ export function ExecutionConsole({
   const browserFrame = getBrowserFrame(workspace, selectedTask, agentConsole)
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
   const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
-  const l2Detail = humanGateDetail(l2Gate?.detail)
-  const l3Detail = humanGateDetail(l3Gate?.detail)
-  const realSaveBlocked = l2Gate?.status !== 'passed' || l3Gate?.status !== 'passed'
-  const realSaveBlockReason = l2Gate?.status !== 'passed'
-    ? l2Detail ?? '只读检查未通过。'
-    : l3Detail ?? '人工确认保存未完成。'
-  const diagnosticBlocked = l2Gate?.status !== 'passed'
-  const diagnosticBlockReason = l2Detail ?? '只读检查未通过。'
+  const consolePrimaryPath = buildConsolePrimaryPath({ selectedTask, configPreview, l2Gate, l3Gate, busy })
+  const realSaveBlocked = consolePrimaryPath.saveBlocked
+  const realSaveBlockReason = consolePrimaryPath.detail
+  const browserStartBlocked = consolePrimaryPath.blocksBrowserStart
+  const browserStartBlockReason = consolePrimaryPath.detail
   const runtimeLogCount = runtimeLogs[runtimeLogSource]?.items?.length
     ?? runtimeLogs[runtimeLogSource]?.lines.length
     ?? 0
@@ -2773,12 +2800,14 @@ export function ExecutionConsole({
         selectedTask={selectedTask}
         activeStep={activeStep}
         agentConsole={agentConsole}
-        realSaveBlocked={realSaveBlocked}
-        realSaveBlockReason={realSaveBlockReason}
+        primaryPath={consolePrimaryPath}
         runtimeLogSource={runtimeLogSource}
         runtimeLogCount={runtimeLogCount}
+        onStartAgentConsole={onStartAgentConsole}
         onShowTasks={onShowTasks}
+        onShowConfig={onShowConfig}
         onShowReports={onShowReports}
+        onRuntimeControl={onRuntimeControl}
       />
 
       {compactCompletedReview ? (
@@ -2802,8 +2831,9 @@ export function ExecutionConsole({
             busy={busy}
             realSaveBlocked={realSaveBlocked}
             realSaveBlockReason={realSaveBlockReason}
-            diagnosticBlocked={diagnosticBlocked}
-            diagnosticBlockReason={diagnosticBlockReason}
+            primaryPath={consolePrimaryPath}
+            browserStartBlocked={browserStartBlocked}
+            browserStartBlockReason={browserStartBlockReason}
             dxmLoginDraft={dxmLoginDraft}
             dxmCredentialState={dxmCredentialState}
             onStartAgentConsole={onStartAgentConsole}
@@ -2835,8 +2865,9 @@ export function ExecutionConsole({
           busy={busy}
           realSaveBlocked={realSaveBlocked}
           realSaveBlockReason={realSaveBlockReason}
-          diagnosticBlocked={diagnosticBlocked}
-          diagnosticBlockReason={diagnosticBlockReason}
+          primaryPath={consolePrimaryPath}
+          browserStartBlocked={browserStartBlocked}
+          browserStartBlockReason={browserStartBlockReason}
           dxmLoginDraft={dxmLoginDraft}
           dxmCredentialState={dxmCredentialState}
           onStartAgentConsole={onStartAgentConsole}
@@ -2944,8 +2975,9 @@ function AgentStagePanel({
   busy,
   realSaveBlocked,
   realSaveBlockReason,
-  diagnosticBlocked,
-  diagnosticBlockReason,
+  primaryPath,
+  browserStartBlocked,
+  browserStartBlockReason,
   dxmLoginDraft,
   dxmCredentialState,
   onStartAgentConsole,
@@ -2975,8 +3007,9 @@ function AgentStagePanel({
   busy: boolean
   realSaveBlocked: boolean
   realSaveBlockReason: string
-  diagnosticBlocked: boolean
-  diagnosticBlockReason: string
+  primaryPath: ConsolePrimaryPath
+  browserStartBlocked: boolean
+  browserStartBlockReason: string
   dxmLoginDraft: DxmLoginDraft
   dxmCredentialState: DxmCredentialState
   onStartAgentConsole: () => void
@@ -3009,8 +3042,9 @@ function AgentStagePanel({
         busy={busy}
         realSaveBlocked={realSaveBlocked}
         realSaveBlockReason={realSaveBlockReason}
-        diagnosticBlocked={diagnosticBlocked}
-        diagnosticBlockReason={diagnosticBlockReason}
+        primaryPath={primaryPath}
+        browserStartBlocked={browserStartBlocked}
+        browserStartBlockReason={browserStartBlockReason}
         dxmLoginDraft={dxmLoginDraft}
         dxmCredentialState={dxmCredentialState}
         onStartAgentConsole={onStartAgentConsole}
@@ -3028,10 +3062,10 @@ function AgentStagePanel({
       />
       {realSaveBlocked && (
         <details className="gate-note gate-note--danger inline-disclosure">
-          <summary>查看真实保存阻断详情</summary>
+          <summary>查看当前阻断详情</summary>
           <span>{realSaveBlockReason}</span>
           <div className="next-step-actions">
-            <button className="button button--secondary" type="button" onClick={onShowTasks}>回到任务门禁</button>
+            <button className="button button--secondary" type="button" onClick={onShowTasks}>回到任务中心</button>
             <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看只读评审与检查计划</button>
             <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
           </div>
@@ -3390,22 +3424,26 @@ function ConsoleFocusPanel({
   selectedTask,
   activeStep,
   agentConsole,
-  realSaveBlocked,
-  realSaveBlockReason,
+  primaryPath,
   runtimeLogSource,
   runtimeLogCount,
+  onStartAgentConsole,
   onShowTasks,
+  onShowConfig,
   onShowReports,
+  onRuntimeControl,
 }: {
   selectedTask: Task | null
   activeStep?: { title: string; code?: string; detail: string; state: string }
   agentConsole: AgentConsoleSession | null
-  realSaveBlocked: boolean
-  realSaveBlockReason: string
+  primaryPath: ConsolePrimaryPath
   runtimeLogSource: RuntimeLogSource
   runtimeLogCount: number
+  onStartAgentConsole: () => void
   onShowTasks: () => void
+  onShowConfig: () => void
   onShowReports: () => void
+  onRuntimeControl: (action: RuntimeControlAction) => void
 }) {
   const active = Boolean(agentConsole?.active)
   const hasBrowserSession = Boolean(agentConsole?.active || agentConsole?.updated_at)
@@ -3416,7 +3454,7 @@ function ConsoleFocusPanel({
   const selectedTaskCompleted = selectedTask?.status === 'completed'
   const guardLabel = selectedTaskCompleted
     ? '任务已完成'
-    : realSaveBlocked
+    : primaryPath.saveBlocked
       ? '保存前置条件未完成'
       : '可申请只保存'
   const browserLabel = active
@@ -3440,15 +3478,19 @@ function ConsoleFocusPanel({
     : '启动浏览器后可接管'
   const consoleNext = selectedTaskCompleted
     ? '查看报告与未发布证明'
-    : active
-      ? browserLaunching
-        ? '等待独立真实浏览器启动完成'
-        : humanConsoleText(agentConsole?.hud?.next_step ?? '按当前步骤继续操作真实浏览器')
-      : realSaveBlocked
-        ? '先处理只读检查后再打开真实浏览器'
-        : '打开真实浏览器（不保存）'
-  const primaryActionLabel = selectedTaskCompleted ? '查看报告' : '处理只读检查与确认'
-  const primaryAction = selectedTaskCompleted ? onShowReports : onShowTasks
+      : active
+        ? browserLaunching
+          ? '等待独立真实浏览器启动完成'
+          : humanConsoleText(agentConsole?.hud?.next_step ?? '按当前步骤继续操作真实浏览器')
+      : primaryPath.next
+  const primaryActionLabel = primaryPath.ctaLabel
+  const primaryAction = () => {
+    if (primaryPath.action === 'reports') return onShowReports()
+    if (primaryPath.action === 'config') return onShowConfig()
+    if (primaryPath.action === 'run_l2') return onRuntimeControl('run_l2_readonly_probe')
+    if (primaryPath.action === 'start_browser') return onStartAgentConsole()
+    return onShowTasks()
+  }
   const sourceLabel = ({
     backend: '后端',
     frontend: '前端',
@@ -3460,11 +3502,11 @@ function ConsoleFocusPanel({
   return (
     <div className="module-card span-3 console-focus-panel">
       <div className="console-focus-panel__main">
-        <span className={`console-focus-panel__dot ${realSaveBlocked ? 'is-warn' : active ? 'is-live' : ''}`} aria-hidden="true" />
+        <span className={`console-focus-panel__dot ${primaryPath.saveBlocked ? 'is-warn' : active ? 'is-live' : ''}`} aria-hidden="true" />
         <div>
           <ModuleHead title="当前执行" meta={selectedTask ? `任务 #${selectedTask.id}` : '未选择任务'} />
-          <h1>{activeStep?.title ?? '等待选择任务'}</h1>
-          <p>{activeStep?.detail ?? '先完成配置、只读检查和人工确认，再启动真实浏览器执行。'}</p>
+          <h1>{active ? activeStep?.title ?? primaryPath.title : primaryPath.title}</h1>
+          <p>{active ? activeStep?.detail ?? primaryPath.detail : primaryPath.detail}</p>
         </div>
       </div>
       <div className="console-focus-panel__facts console-focus-panel__primary-facts" aria-label="执行摘要">
@@ -3488,7 +3530,7 @@ function ConsoleFocusPanel({
           <small>任务已完成，下面复核报告、证据和日志。</small>
         ) : (
           <>
-            {realSaveBlocked && <small>{realSaveBlockReason}</small>}
+            {primaryPath.saveBlocked && <small>{primaryPath.reason}</small>}
             <button className="button button--secondary" type="button" onClick={primaryAction}>{primaryActionLabel}</button>
             <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">查看检查计划</button>
           </>
@@ -3638,8 +3680,9 @@ function AgentConsoleControls({
   busy,
   realSaveBlocked,
   realSaveBlockReason,
-  diagnosticBlocked,
-  diagnosticBlockReason,
+  primaryPath,
+  browserStartBlocked,
+  browserStartBlockReason,
   dxmLoginDraft,
   dxmCredentialState,
   onStartAgentConsole,
@@ -3662,8 +3705,9 @@ function AgentConsoleControls({
   busy: boolean
   realSaveBlocked: boolean
   realSaveBlockReason: string
-  diagnosticBlocked: boolean
-  diagnosticBlockReason: string
+  primaryPath: ConsolePrimaryPath
+  browserStartBlocked: boolean
+  browserStartBlockReason: string
   dxmLoginDraft: DxmLoginDraft
   dxmCredentialState: DxmCredentialState
   onStartAgentConsole: () => void
@@ -3694,8 +3738,8 @@ function AgentConsoleControls({
         ? 'Agent 可接管'
         : '等待窗口可见'
   const lifecycleStatus = !active
-    ? diagnosticBlocked
-      ? '只读检查未通过，真实浏览器暂不启动'
+    ? browserStartBlocked
+      ? primaryPath.browserStatus
       : '真实浏览器待启动'
     : manualTakeover
       ? '人工正在接管真实浏览器'
@@ -3705,8 +3749,8 @@ function AgentConsoleControls({
         ? '真实浏览器已启动，Agent 可控'
         : '浏览器会话已创建，等待窗口可见'
   const lifecycleNext = !active
-    ? diagnosticBlocked
-      ? '先运行只读页面检查；填写账号密码后可单独打开登录/人工处理浏览器。'
+    ? browserStartBlocked
+      ? primaryPath.next
       : '点击打开真实浏览器（不保存），进入独立 Profile 浏览器。'
     : manualTakeover
       ? '完成人工处理后点击交还 Agent。'
@@ -3729,12 +3773,12 @@ function AgentConsoleControls({
         </span>
         <span className="status-pill warn">不会发布</span>
       </div>
-      <div className={`agent-console-lifecycle ${diagnosticBlocked && !active ? 'is-blocked' : active ? 'is-active' : ''}`} aria-label="真实浏览器会话生命周期">
+      <div className={`agent-console-lifecycle ${browserStartBlocked && !active ? 'is-blocked' : active ? 'is-active' : ''}`} aria-label="真实浏览器会话生命周期">
         <strong>{lifecycleStatus}</strong>
         <span>{lifecycleNext}</span>
-        {diagnosticBlocked && !active && <small>{diagnosticBlockReason}</small>}
-        {!diagnosticBlocked && realSaveBlocked && !active && <small>{realSaveBlockReason}</small>}
-        {diagnosticBlocked && !active && (
+        {browserStartBlocked && !active && <small>{browserStartBlockReason}</small>}
+        {!browserStartBlocked && realSaveBlocked && !active && <small>{realSaveBlockReason}</small>}
+        {primaryPath.code === 'l2' && !active && (
           <div className="agent-console-lifecycle__actions">
             <button className="button button--secondary" type="button" disabled={l2ProbeDisabled} title={l2ProbeResourceState.title} onClick={() => onRuntimeControl('run_l2_readonly_probe')}>
               运行只读页面检查（不保存）
@@ -3799,8 +3843,8 @@ function AgentConsoleControls({
           className="button button--quiet"
           type="button"
           onClick={onStartAgentConsole}
-          disabled={busy || !selectedTask || diagnosticBlocked || active || launching}
-          title={active ? '当前独立真实浏览器会话正在运行。' : diagnosticBlocked ? diagnosticBlockReason : realSaveBlocked ? realSaveBlockReason : '打开真实浏览器（不保存）；保存前仍需人工确认'}
+          disabled={busy || !selectedTask || browserStartBlocked || active || launching}
+          title={active ? '当前独立真实浏览器会话正在运行。' : browserStartBlocked ? browserStartBlockReason : realSaveBlocked ? realSaveBlockReason : '打开真实浏览器（不保存）；保存前仍需人工确认'}
         >
           {launching ? '真实浏览器启动中' : active ? '真实浏览器已打开' : '打开真实浏览器（不保存）'}
         </button>
@@ -5008,6 +5052,167 @@ function taskStartDecision({
     reason: '配置、只读检查和人工确认当前未阻断。',
     next: '点击主按钮后，在执行控制台查看真实浏览器执行。',
     tone: 'ok',
+  }
+}
+
+function buildConsolePrimaryPath({
+  selectedTask,
+  configPreview,
+  l2Gate,
+  l3Gate,
+  busy,
+}: {
+  selectedTask: Task | null
+  configPreview: ConfigPreview | null
+  l2Gate?: RegressionGate
+  l3Gate?: RegressionGate
+  busy: boolean
+}): ConsolePrimaryPath {
+  const configOk = configPreview?.ok === true
+  const l2Ready = l2Gate?.status === 'passed'
+  const l3Ready = l3Gate?.status === 'passed'
+  const l2Detail = humanGateDetail(l2Gate?.detail)
+  const l3Detail = humanGateDetail(l3Gate?.detail)
+
+  if (!selectedTask) {
+    return {
+      code: 'select_task',
+      title: '先选择或创建任务',
+      reason: '当前没有选中的单商品只保存任务。',
+      detail: '先在任务中心创建或选择一个单商品只保存任务，再进入配置、只读检查和真实浏览器执行。',
+      next: '去任务中心选择任务',
+      ctaLabel: '去任务中心选择任务',
+      action: 'tasks',
+      browserStatus: '未选择任务，真实浏览器暂不启动',
+      blocksBrowserStart: true,
+      saveBlocked: true,
+    }
+  }
+  if (selectedTask.status === 'completed') {
+    return {
+      code: 'completed',
+      title: '任务已完成',
+      reason: '当前任务已完成。',
+      detail: '继续复核保存结果、未发布证明、日志和证据。',
+      next: '查看报告与未发布证明',
+      ctaLabel: '查看报告',
+      action: 'reports',
+      browserStatus: '任务已完成',
+      blocksBrowserStart: true,
+      saveBlocked: false,
+    }
+  }
+  if (selectedTask.status === 'running') {
+    return {
+      code: 'running',
+      title: '任务正在运行',
+      reason: '任务已经启动，避免重复启动真实浏览器。',
+      detail: '查看当前真实浏览器、运行日志和自动操作轨迹。',
+      next: '等待当前任务完成',
+      ctaLabel: '查看检查计划',
+      action: 'reports',
+      browserStatus: '任务运行中',
+      blocksBrowserStart: true,
+      saveBlocked: false,
+    }
+  }
+  if (selectedTask.status !== 'draft') {
+    return {
+      code: 'not_draft',
+      title: '当前任务不可启动',
+      reason: '当前任务不是草稿状态。',
+      detail: '请选择草稿任务，或重新创建单商品只保存任务。',
+      next: '回到任务中心选择草稿任务',
+      ctaLabel: '选择草稿任务',
+      action: 'tasks',
+      browserStatus: '任务状态不可启动，真实浏览器暂不启动',
+      blocksBrowserStart: true,
+      saveBlocked: true,
+    }
+  }
+  if (isUnreleasedRealDxmMutationTask(selectedTask)) {
+    return {
+      code: 'unreleased',
+      title: '当前模式未放行',
+      reason: `${humanTaskModeLabel(selectedTask.mode)} 当前未放行。`,
+      detail: '认领、批量保存和无人值守仍需单独验收；当前只开放单商品只保存路径。',
+      next: '回到任务中心创建单商品只保存任务',
+      ctaLabel: '创建单商品只保存任务',
+      action: 'tasks',
+      browserStatus: '当前模式未放行，真实浏览器暂不启动',
+      blocksBrowserStart: true,
+      saveBlocked: true,
+    }
+  }
+  if (isRealDxmMutationTask(selectedTask) && !configOk) {
+    return {
+      code: 'config',
+      title: '先补齐本次任务配置',
+      reason: configPreview ? '当前任务配置预检未通过。' : '尚未完成本次任务配置检查。',
+      detail: configPreview?.missing.length
+        ? `请先补齐：${configPreview.missing.slice(0, 4).join('、')}`
+        : '请先到配置中心检查本次任务配置，确认店铺、类目、图片、物流和半托管字段。',
+      next: '去配置中心补齐配置',
+      ctaLabel: '去配置中心补齐配置',
+      action: 'config',
+      browserStatus: '配置未完成，真实浏览器暂不启动',
+      blocksBrowserStart: true,
+      saveBlocked: true,
+    }
+  }
+  if (requiresRealL2(selectedTask) && !l2Ready) {
+    return {
+      code: 'l2',
+      title: '先运行只读页面检查',
+      reason: `只读检查：${humanGateStateLabel(l2Gate?.status ?? 'not_run')}`,
+      detail: l2Detail ?? '需要商品采集页和草稿箱页两个真实页面只读检查均通过。',
+      next: '运行只读页面检查（不保存）',
+      ctaLabel: '运行只读页面检查（不保存）',
+      action: 'run_l2',
+      browserStatus: '只读检查未通过，真实浏览器暂不启动',
+      blocksBrowserStart: true,
+      saveBlocked: true,
+    }
+  }
+  if (requiresRealL2(selectedTask) && !l3Ready) {
+    return {
+      code: 'l3',
+      title: '等待人工确认保存',
+      reason: '真实保存前还没有完成人工批准。',
+      detail: l3Detail ?? '只读检查通过后，仍需要人工确认批准，只启动单商品只保存。',
+      next: '去任务中心填写批准人并启动',
+      ctaLabel: '去任务中心人工确认',
+      action: 'tasks',
+      browserStatus: '等待人工确认，真实浏览器暂不启动',
+      blocksBrowserStart: true,
+      saveBlocked: true,
+    }
+  }
+  if (busy) {
+    return {
+      code: 'busy',
+      title: '正在处理当前操作',
+      reason: '工作台正在处理上一个请求。',
+      detail: '请等待当前请求完成后再启动真实浏览器。',
+      next: '等待当前操作完成',
+      ctaLabel: '查看检查计划',
+      action: 'reports',
+      browserStatus: '当前操作未完成，真实浏览器暂不启动',
+      blocksBrowserStart: true,
+      saveBlocked: true,
+    }
+  }
+  return {
+    code: 'ready',
+    title: '可以打开真实浏览器',
+    reason: '配置、只读检查和人工确认当前未阻断。',
+    detail: '将打开独立真实浏览器窗口；保存前仍需确认，不会发布。',
+    next: '打开真实浏览器（不保存）',
+    ctaLabel: '打开真实浏览器（不保存）',
+    action: 'start_browser',
+    browserStatus: '真实浏览器待启动',
+    blocksBrowserStart: false,
+    saveBlocked: false,
   }
 }
 

@@ -994,6 +994,7 @@ export default function App() {
             selectedTask={selectedTask}
             configPreview={configPreview}
             configPreviewLoading={configPreviewLoading}
+            runtimeStatus={runtimeStatus}
             busy={busy}
             demoEnabled={DEMO_ENABLED}
             l3ApprovedBy={l3ApprovedBy}
@@ -1019,6 +1020,7 @@ export default function App() {
             selectedTask={selectedTask}
             agentConsole={agentConsole}
             agentConsoleError={agentConsoleError}
+            configPreview={configPreview}
             runtimeStatus={runtimeStatus}
             runtimeLogs={runtimeLogs}
             runtimeLogSource={runtimeLogSource}
@@ -1046,6 +1048,7 @@ export default function App() {
             onControlAgentConsoleBrowser={controlAgentConsoleBrowser}
             onRuntimeControl={runRuntimeControl}
             onShowTasks={() => setActiveSection('tasks')}
+            onShowConfig={() => setActiveSection('config')}
             onShowEvidence={() => setActiveSection('evidence')}
             onShowReports={() => setActiveSection('reports')}
           />

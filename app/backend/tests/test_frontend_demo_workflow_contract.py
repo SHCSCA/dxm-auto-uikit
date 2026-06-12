@@ -489,7 +489,7 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "当前任务已完成，继续查看报告与证据。" in workbench_source
     assert "const guardLabel = selectedTaskCompleted" in workbench_source
     assert "? '任务已完成'" in workbench_source
-    assert "const primaryActionLabel = selectedTaskCompleted ? '查看报告' : '处理只读检查与确认'" in workbench_source
+    assert "const primaryActionLabel = primaryPath.ctaLabel" in workbench_source
     assert ".filter(isStartableSingleSaveTask)" in workbench_source
     assert "selectedTask.status === 'completed'" in workbench_source
     assert "任务已完成，查看报告" in workbench_source
@@ -749,8 +749,15 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "hasBrowserSession && currentUrl ? shortUrl(currentUrl) : '等待启动真实浏览器'" in workbench_source
     assert "可在生命周期区接管" in workbench_source
     assert "可在会话管理中接管" not in workbench_source
-    assert "先处理只读检查后再打开真实浏览器" in workbench_source
-    assert "处理只读检查与确认" in workbench_source
+    assert "buildConsolePrimaryPath({ selectedTask, configPreview, l2Gate, l3Gate, busy })" in workbench_source
+    assert "primaryPath={consolePrimaryPath}" in console_section
+    assert "primaryPath.action === 'config'" in workbench_source
+    assert "primaryPath.action === 'run_l2'" in workbench_source
+    assert "primaryPath.action === 'start_browser'" in workbench_source
+    assert "去配置中心补齐配置" in workbench_source
+    assert "运行只读页面检查（不保存）" in workbench_source
+    assert "可以打开真实浏览器" in workbench_source
+    assert "处理只读检查与确认" not in workbench_source
     assert "处理任务门禁" not in workbench_source
     assert "控制台不播放截图；截图只作为证据路径，不会启动保存或发布。" in workbench_source
     assert "'module-card span-2 agent-console-stage'" in console_section
@@ -775,12 +782,15 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "实时操控独立真实浏览器窗口" in workbench_source
     assert "控制台不播放截图；截图只作为证据路径，不会启动保存或发布。" in workbench_source
     assert "aria-label=\"真实浏览器会话生命周期\"" in workbench_source
+    assert "未选择任务，真实浏览器暂不启动" in workbench_source
+    assert "配置未完成，真实浏览器暂不启动" in workbench_source
     assert "只读检查未通过，真实浏览器暂不启动" in workbench_source
-    assert "填写账号密码后可单独打开登录/人工处理浏览器" in workbench_source
+    assert "等待人工确认，真实浏览器暂不启动" in workbench_source
+    assert "会打开可见的独立店小秘浏览器窗口" in workbench_source
     assert "启动后可接管" in workbench_source
     assert "const takeoverStateLabel = !active" in workbench_source
     assert "打开真实浏览器（不保存）" in workbench_source
-    assert "disabled={busy || !selectedTask || diagnosticBlocked || active || launching}" in workbench_source
+    assert "disabled={busy || !selectedTask || browserStartBlocked || active || launching}" in workbench_source
     assert "真实浏览器启动中" in workbench_source
     assert "{launching ? '真实浏览器启动中' : active ? '真实浏览器已打开' : '打开真实浏览器（不保存）'}" in workbench_source
     assert "当前独立真实浏览器会话正在运行。" in workbench_source
@@ -1670,7 +1680,7 @@ def test_frontend_blocks_unreleased_real_modes_before_l3_manual_approval():
     assert "将只启动单商品只保存任务，不会发布" in start_section
     assert "将只启动 save-only/claim-only 受控任务" not in start_section
     assert "const selectedTaskIsUnreleasedRealMode = selectedTask ? isUnreleasedRealDxmMutationTask(selectedTask) : false" in workbench_source
-    assert "startDisabled = busy || !selectedTask || selectedTaskNotDraft || selectedTaskIsUnreleasedRealMode || configBlocksStart || l2BlocksStart || l3BlocksStart" in workbench_source
+    assert "startDisabled = busy || !selectedTask || selectedTaskNotDraft || selectedTaskIsUnreleasedRealMode || loginBlocksStart || configUnknownBlocksStart || configPreviewLoading || configBlocksStart || l2BlocksStart || l3BlocksStart" in workbench_source
     assert "const selectedTaskNotDraft = Boolean(selectedTask && selectedTask.status !== 'draft')" in workbench_source
     assert "未发布，禁止启动" in workbench_source
     assert "function isReleasedRealDxmMutationTask" in workbench_source
@@ -1703,6 +1713,23 @@ def test_frontend_blocks_unreleased_real_modes_before_l3_manual_approval():
     assert "oldVisibleBrowser" in no_old_action_copy_section
     assert "oldAutomation" in no_old_action_copy_section
     assert "SAVE_ONLY" in no_old_action_copy_section
+
+
+def test_task_center_start_button_matches_real_start_prechecks():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    task_center_section = workbench_source[workbench_source.index("export function TaskCenter"):workbench_source.index("export function ExecutionConsole")]
+
+    assert "runtimeStatus={runtimeStatus}" in app_source
+    assert "runtimeStatus: RuntimeStatus | null" in workbench_source
+    assert "const selectedRealDxmMutationTask = Boolean(selectedTask && isRealDxmMutationTask(selectedTask))" in task_center_section
+    assert "const dxmLoggedIn = DXM_LOGGED_IN_STATUSES.has(runtimeStatus?.dxmLogin?.status ?? '')" in task_center_section
+    assert "const loginBlocksStart = selectedRealDxmMutationTask && !dxmLoggedIn" in task_center_section
+    assert "const configUnknownBlocksStart = selectedRealDxmMutationTask && !configPreview && !configPreviewLoading" in task_center_section
+    assert "startDisabled = busy || !selectedTask || selectedTaskNotDraft || selectedTaskIsUnreleasedRealMode || loginBlocksStart || configUnknownBlocksStart || configPreviewLoading || configBlocksStart || l2BlocksStart || l3BlocksStart" in task_center_section
+    assert "DXM 未登录，先打开真实浏览器登录" in task_center_section
+    assert "先检查本次任务配置" in task_center_section
+    assert "正在检查配置，稍候启动" in task_center_section
 
 
 def test_task_center_surfaces_real_mode_release_readiness_without_releasing_modes():
@@ -1893,14 +1920,22 @@ def test_frontend_humanizes_l2_runner_missing_error():
     assert "setOperationError(humanOperationError(message))" in app_source
 
 
-def test_execution_console_humanizes_l2_gate_details_before_rendering():
+def test_execution_console_uses_unified_primary_path_before_rendering():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     console_section = source[source.index("export function ExecutionConsole"):source.index("function AgentStagePanel")]
 
-    assert "const l2Detail = humanGateDetail(l2Gate?.detail)" in console_section
-    assert "const realSaveBlockReason = l2Gate?.status !== 'passed'" in console_section
-    assert "const diagnosticBlockReason = l2Detail ?? '只读检查未通过。'" in console_section
+    assert "function buildConsolePrimaryPath" in source
+    assert "configPreview: ConfigPreview | null" in source
+    assert "const consolePrimaryPath = buildConsolePrimaryPath({ selectedTask, configPreview, l2Gate, l3Gate, busy })" in console_section
+    assert "const realSaveBlocked = consolePrimaryPath.saveBlocked" in console_section
+    assert "const browserStartBlocked = consolePrimaryPath.blocksBrowserStart" in console_section
+    assert "const diagnosticBlockReason" not in console_section
     assert "l2Gate?.detail ?? '只读检查未通过。'" not in console_section
+    assert "先选择或创建任务" in source
+    assert "先补齐本次任务配置" in source
+    assert "先运行只读页面检查" in source
+    assert "等待人工确认保存" in source
+    assert "可以打开真实浏览器" in source
     assert "最新证据年龄" in source
     assert "只读检查证据已过期，请点击“运行只读页面检查（不保存）”刷新后再继续。" in source
 
