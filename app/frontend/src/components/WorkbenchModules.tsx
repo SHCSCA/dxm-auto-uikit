@@ -1359,7 +1359,7 @@ function ConfigReadinessPanel({
     return <EmptyState title="先选择任务" detail="选择单商品只保存任务后，这里会显示执行前配置是否完整。" />
   }
   if (!configPreview) {
-    return <div className="config-readiness is-warn"><strong>配置预检未加载</strong><span>请刷新工作台，或确认后端 /api/config/preview 可用。</span></div>
+    return <div className="config-readiness is-warn"><strong>本次任务配置检查未加载</strong><span>请刷新工作台，或确认后端 /api/config/preview 可用。</span></div>
   }
   const missing = configPreview.missing.slice(0, 8)
   return (
@@ -1396,7 +1396,7 @@ function NextRequiredConfigFields({
   const fallbackFields = section.fields.slice(0, 4).map((field) => ({
     label: field.label,
     path: field.previewPath ?? field.name,
-    source: '等待预检',
+    source: '等待检查',
   }))
   const fields = missingFields.length
     ? missingFields.map((field) => ({ label: field.label, path: field.path, source: field.source }))
@@ -1419,7 +1419,7 @@ function NextRequiredConfigFields({
       </div>
       <div className="next-required-fields__list">
         {loading ? (
-          <span>正在读取预检结果...</span>
+          <span>正在读取配置检查结果...</span>
         ) : fields.map((field) => (
           <span key={`${field.path}:${field.label}`}>
             <b>{field.label}</b>
@@ -1495,7 +1495,7 @@ function EffectiveValuePreview({
 }
 
 function previewSummary(section: EditableConfigSection, preview?: ConfigPreviewGroup, configOk = false) {
-  if (!preview) return `${section.detail} / 等待预检`
+  if (!preview) return `${section.detail} / 等待检查`
   if (!preview.templatePresent) return `${section.detail} / 未保存模板`
   if (!preview.complete) {
     const missingCount = preview.missing.length || preview.fields.filter((field) => field.missing).length
@@ -1511,7 +1511,7 @@ function fieldPreview(preview: ConfigPreviewGroup | undefined, field: EditableCo
 }
 
 function fieldSourceText(field: ReturnType<typeof fieldPreview>) {
-  if (!field) return '来源：等待预检'
+  if (!field) return '来源：等待检查'
   if (field.missing) return `缺失：${field.path}`
   const value = field.value === undefined || field.value === null || String(field.value).trim() === '' ? '空' : String(field.value)
   return `当前值：${value} / 来源：${field.source}`
@@ -1525,7 +1525,7 @@ function fieldUsageLabel(usage?: EditableConfigField['usage']) {
 }
 
 function configSectionState(preview: ConfigPreviewGroup | undefined, configOk = false) {
-  if (!preview) return { label: '等待预检', className: 'is-pending' }
+  if (!preview) return { label: '等待检查', className: 'is-pending' }
   if (!preview.templatePresent) return { label: '缺模板', className: 'is-incomplete' }
   if (!preview.complete) {
     return configOk
@@ -1857,22 +1857,22 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   }
 
   async function runConfigPrecheck() {
-    setConfigMessage('正在运行启动预检：读取当前任务、店铺、商品和模板；不会操作店小秘。')
+    setConfigMessage('正在检查本次任务配置：读取当前任务、店铺、商品和模板；不会操作店小秘。')
     try {
       await onRefreshConfigPreview()
-      setConfigMessage('启动预检已刷新；字段来源、缺失项和执行取值已按当前任务重新计算。')
+      setConfigMessage('本次任务配置检查已刷新；字段来源、缺失项和执行取值已按当前任务重新计算。')
     } catch (error) {
-      setConfigMessage(error instanceof Error ? error.message : '启动预检刷新失败')
+      setConfigMessage(error instanceof Error ? error.message : '本次任务配置检查刷新失败')
     }
   }
 
   return (
     <section className="module-layout" aria-label="配置中心">
       <div className="module-card span-3 config-focus-card">
-        <ModuleHead title="配置中心" meta={configPreviewLoading ? '正在预检' : `${enabledTemplates.length} 个启用模板`} />
+        <ModuleHead title="配置中心" meta={configPreviewLoading ? '正在检查配置' : `${enabledTemplates.length} 个启用模板`} />
         <div className="content-density-summary config-density-summary" data-config-density-summary>
           <div>
-            <strong>{configPreview?.ok ? '配置已满足启动预检' : `先补：${nextConfigSection.title}`}</strong>
+            <strong>{configPreview?.ok ? '配置已通过本次任务检查' : `先补：${nextConfigSection.title}`}</strong>
             <span>
               {configPreview?.ok
                 ? '下方可直接微调 DXM 编辑页配置；详情和下一步字段已收起。'
@@ -1888,11 +1888,11 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
             <small>当前模板范围：{currentTemplateScopeLabel}</small>
           </div>
         </div>
-        <div className="config-precheck-action" aria-label="配置预检操作">
+        <div className="config-precheck-action" aria-label="本次任务配置检查操作">
           <div>
             <strong>检查本次任务配置</strong>
             <span>读取当前任务、店铺、商品和模板，判断执行器会填写哪些值；不会操作店小秘。</span>
-            {!selectedTask && <small>先选择任务后才能预检本次任务并保存为任务覆盖。</small>}
+            {!selectedTask && <small>先选择任务后才能检查本次任务配置并保存为任务覆盖。</small>}
           </div>
           <div className="config-precheck-action__buttons">
             {!selectedTask && (
@@ -1992,7 +1992,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
             <div className="config-template-console__detail-grid">
               <div className="config-template-source" aria-label="当前模板来源">
                 <strong>当前生效模板</strong>
-                <span>{activeTemplateSourceName || (activeSectionAlreadyPersisted ? '已由预检命中模板' : '尚未命中已保存模板')}</span>
+                <span>{activeTemplateSourceName || (activeSectionAlreadyPersisted ? '已由配置检查命中模板' : '尚未命中已保存模板')}</span>
                 <small>可选模板 {activeSectionTemplateOptions.length} 套；已筛除不匹配或禁用模板 {filteredTemplateChoiceCount} 套。</small>
                 <small>选择模板不会改表单，点击套用后才会填入当前分区，保存后才会生效。</small>
               </div>
@@ -2024,10 +2024,10 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
           <div className="config-ready-review" aria-label="配置已就绪摘要">
             <div>
               <strong>配置已就绪，默认无需继续填写</strong>
-              <span>执行器会按当前预览取值填写店小秘编辑页；需要改本次任务时，再展开下方“微调当前配置”。</span>
+              <span>执行器会按当前检查取值填写店小秘编辑页；需要改本次任务时，再展开下方“微调当前配置”。</span>
             </div>
             <div className="config-ready-review__facts">
-              <span><b>启动预检</b><strong>通过</strong></span>
+              <span><b>配置检查</b><strong>通过</strong></span>
               <span><b>可编辑分区</b><strong>{editableConfigSections.length} 个</strong></span>
               <span><b>当前范围</b><strong>{currentTemplateScopeLabel}</strong></span>
             </div>
@@ -2086,7 +2086,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
               <span>
                 {selectedTask
                   ? activeTaskOverrideFieldCount > 0
-                    ? `本次任务已保存 ${activeTaskOverrideFieldCount} 个字段；预览中 ${activePreviewOverrideFieldCount} 个字段正在按任务覆盖取值，执行器启动时读取同一份预览取值。`
+                    ? `本次任务已保存 ${activeTaskOverrideFieldCount} 个字段；检查结果中 ${activePreviewOverrideFieldCount} 个字段正在按任务覆盖取值，执行器启动时读取同一份检查取值。`
                     : '尚未保存本次任务覆盖；当前分区会先按商品和店铺模板取值，保存后这里会显示任务覆盖字段数。'
                   : '选择任务后，可保存为本次任务覆盖并在这里核对执行取值。'}
               </span>
@@ -2175,7 +2175,7 @@ function SectionExecutionValuePreview({
           ))}
         </div>
       ) : (
-        <span className="section-execution-preview__empty">等待预检返回当前分区字段。</span>
+        <span className="section-execution-preview__empty">等待配置检查返回当前分区字段。</span>
       )}
     </div>
   )
@@ -2231,7 +2231,7 @@ function EditableConfigSectionCard({
   const disabledReason = !selectedTask
     ? '先选择任务，才能保存为本次任务并继续。'
     : !preview
-      ? '先运行配置预检，系统才能知道下一缺失分区。'
+      ? '先运行本次任务配置检查，系统才能知道下一缺失分区。'
       : savingSection === `task:${section.code}`
         ? '正在保存，请等待当前操作完成。'
         : ''
@@ -2532,7 +2532,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
         )}
         {(configBlocksStart || configPreviewLoading) && (
           <div className={`gate-note ${configBlocksStart ? 'gate-note--danger' : ''}`}>
-            <strong>{configPreviewLoading ? '正在检查配置' : '配置预检未通过'}</strong>
+            <strong>{configPreviewLoading ? '正在检查配置' : '配置检查未通过'}</strong>
             <span>{configPreviewLoading ? '正在读取当前任务的 DXM 编辑页字段来源。' : `请先补齐：${configPreview?.missing.slice(0, 6).join('、') || 'DXM 编辑页配置'}`}</span>
             {configBlocksStart && (
               <div className="next-step-actions">
@@ -4950,7 +4950,7 @@ function SingleSaveRecoveryGuide({
     },
     {
       title: '补齐 DXM 编辑页配置',
-      detail: configBlocksStart ? '当前任务配置预检未通过，先回配置中心补字段。' : '配置预检未阻断当前任务。',
+      detail: configBlocksStart ? '当前任务配置检查未通过，先回配置中心补字段。' : '配置检查未阻断当前任务。',
       done: !configBlocksStart,
     },
     {
@@ -5129,7 +5129,7 @@ function taskStartDecision({
   if (isRealDxmMutationTask(selectedTask) && !configOk) {
     return {
       scope: '先补配置',
-      reason: '当前任务配置预检未通过。',
+      reason: '当前任务配置检查未通过。',
       next: '去配置中心补齐 DXM 编辑页必填字段。',
       tone: 'warn',
     }
@@ -5259,7 +5259,7 @@ function buildConsolePrimaryPath({
     return {
       code: 'config',
       title: '先补齐本次任务配置',
-      reason: configPreview ? '当前任务配置预检未通过。' : '尚未完成本次任务配置检查。',
+      reason: configPreview ? '当前任务配置检查未通过。' : '尚未完成本次任务配置检查。',
       detail: configPreview?.missing.length
         ? `请先补齐：${configPreview.missing.slice(0, 4).join('、')}`
         : '请先到配置中心检查本次任务配置，确认店铺、类目、图片、物流和半托管字段。',
@@ -5828,7 +5828,7 @@ function buildConsoleSteps(selectedTask: Task | null, logs: LogItem[]) {
   const completed = selectedTask?.status === 'completed'
   const hasLogs = logs.length > 0
   return [
-    { title: '配置预检', detail: '店铺、商品、模板、图片与隔离口径', state: hasLogs ? 'done' : 'current' },
+    { title: '配置检查', detail: '店铺、商品、模板、图片与隔离口径', state: hasLogs ? 'done' : 'current' },
     { title: '任务锁定', detail: '绑定商品与批次，不触碰上架入口', state: active || completed ? 'done' : 'pending' },
     { title: '只读页面核验', detail: '核对真实页面、字段和证据路径', state: active ? 'current' : completed ? 'done' : 'pending' },
     { title: '只读复核', detail: '确认双目标同轮次只读证据', state: completed ? 'done' : 'pending' },

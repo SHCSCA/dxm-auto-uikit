@@ -604,7 +604,7 @@ export default function App() {
         }
         const latestConfigPreview = await refreshConfigPreview(selectedTask.id)
         if (!latestConfigPreview || !latestConfigPreview.ok) {
-          setOperationError(`配置预检未通过：${latestConfigPreview?.missing.slice(0, 6).join('、') || '请补齐 DXM 编辑页配置'}`)
+          setOperationError(`配置检查未通过：${latestConfigPreview?.missing.slice(0, 6).join('、') || '请补齐 DXM 编辑页配置'}`)
           setActiveSection('config')
           return
         }

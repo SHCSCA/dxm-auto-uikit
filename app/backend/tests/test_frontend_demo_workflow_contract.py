@@ -42,7 +42,7 @@ def test_frontend_loads_config_preview_and_blocks_real_start_when_incomplete():
     assert "ConfigPreview" in source
     assert "setConfigPreview" in source
     assert "/api/config/preview?task_id=" in source
-    assert "配置预检未通过" in start_section
+    assert "配置检查未通过" in start_section
     assert "setActiveSection('config')" in start_section
     assert "configBlocksStart" in workbench_source
     assert "配置未完成，禁止启动" in workbench_source
@@ -81,6 +81,7 @@ def test_config_center_explains_precheck_and_disabled_save_continue():
     app_source = APP_TSX.read_text(encoding="utf-8")
     config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
     editable_card = source[source.index("function EditableConfigSectionCard"):source.index("export function TaskCenter")]
+    config_copy_source = source[source.index("function ConfigReadinessPanel"):source.index("export function TaskCenter")]
     qa_source = QA_BROWSER_CHECK.read_text(encoding="utf-8")
 
     assert "onRefreshConfigPreview" in source
@@ -94,8 +95,13 @@ def test_config_center_explains_precheck_and_disabled_save_continue():
     assert "不会操作店小秘" in config_section
     assert "disabledReason" in editable_card
     assert "先选择任务" in editable_card
-    assert "先运行配置预检" in editable_card
+    assert "先运行本次任务配置检查" in editable_card
     assert "不能继续的原因" in editable_card
+    assert "本次任务配置检查" in config_section
+    assert "等待检查" in config_copy_source
+    assert "配置预检" not in config_copy_source
+    assert "等待预检" not in config_copy_source
+    assert "启动预检" not in config_copy_source
     assert "configPrecheckActionVisible" in qa_source
     assert "configDisabledReasonVisible" in qa_source
 
@@ -151,7 +157,7 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "配置保存闭环" in config_section
     assert "本次任务已保存" in config_section
     assert "正在按任务覆盖取值" in config_section
-    assert "执行器启动时读取同一份预览取值" in config_section
+    assert "执行器启动时读取同一份检查取值" in config_section
     assert "SectionExecutionValuePreview" in config_section
     assert "当前分区执行取值核对" in source
     assert "执行时按这些值填写店小秘编辑页" in source
