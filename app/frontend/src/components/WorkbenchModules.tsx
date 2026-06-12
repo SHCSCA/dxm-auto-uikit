@@ -2082,6 +2082,8 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
   const selectedDraftProducts = uniqueProductOptions.filter((product) => draftProductIdSet.has(product.id))
   const selectedStoreReleasedForSingleSave = Boolean(selectedStore && RELEASED_SINGLE_SAVE_STORE_NAMES.has(selectedStore.name))
   const storeBlocksSingleSave = Boolean(selectedStore && draftMode !== 'probe' && !selectedStoreReleasedForSingleSave)
+  const singleSaveProductCountInvalid = draftMode === 'single_save' && selectedDraftProducts.length !== 1
+  const canCreateSingleSaveTask = Boolean(selectedStore && selectedDraftProducts.length === 1 && !busy && !storeBlocksSingleSave)
   const unreleasedReleaseItems = workspace.realModeReleasePlan.modes.filter((item) => item.mode === 'claim_only' || item.mode === 'batch_save')
   const latestSingleSaveTask = [...workspace.tasks]
     .filter(isStartableSingleSaveTask)
@@ -2109,7 +2111,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
   const collapsedTaskCount = Math.max(workspace.tasks.length - compactTaskRows.length, 0)
   const hiddenTaskCount = Math.max(workspace.tasks.length - visibleTaskRows.length, 0)
   const canToggleTaskHistory = workspace.tasks.length > visibleTaskRows.length || showAllTasks
-  const canCreateRealTask = Boolean(selectedStore && selectedDraftProducts.length > 0 && !busy && !storeBlocksSingleSave)
+  const canCreateRealTask = Boolean(selectedStore && selectedDraftProducts.length > 0 && !busy && !storeBlocksSingleSave && !singleSaveProductCountInvalid)
   const needsSingleSaveRecovery = Boolean(selectedTask && !selectedTaskNotDraft && (selectedTaskIsUnreleasedRealMode || configBlocksStart || l2BlocksStart || l3BlocksStart))
   const startDisabled = busy || !selectedTask || selectedTaskNotDraft || selectedTaskIsUnreleasedRealMode || configBlocksStart || l2BlocksStart || l3BlocksStart
   const startLabel = !selectedTask
@@ -2174,7 +2176,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
   }
 
   function submitSingleSaveTask() {
-    if (!canCreateRealTask || !selectedStore) return
+    if (!canCreateSingleSaveTask || !selectedStore) return
     setDraftMode('single_save')
     void onCreateRealTask({
       storeId: selectedStore.id,
@@ -2192,7 +2194,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
             className="button button--primary"
             type="button"
             onClick={submitSingleSaveTask}
-            disabled={!canCreateRealTask}
+            disabled={!canCreateSingleSaveTask}
             data-testid="task-quick-create-single-save"
           >
             创建单商品只保存任务
@@ -2212,6 +2214,8 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
         <p>
           {canCreateRealTask
             ? `将使用 ${selectedStore?.name ?? '当前店铺'} 和已选 ${selectedDraftProducts.length} 个商品创建草稿任务。`
+            : singleSaveProductCountInvalid
+              ? `单商品只保存一次只能选 1 个商品；当前已选 ${selectedDraftProducts.length} 个。`
             : storeBlocksSingleSave
               ? '当前店铺未放行单商品只保存，请先换到已放行店铺或做只读检查。'
               : '请先确认有真实店铺和商品。'}
@@ -2345,6 +2349,11 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
               {draftMode !== 'probe' && storeBlocksSingleSave && (
                 <div className="guard-note guard-note--warn">
                   单商品只保存当前只放行 {Array.from(RELEASED_SINGLE_SAVE_STORE_NAMES).join('、')}；其它店铺请先运行只读页面检查并单独放行。
+                </div>
+              )}
+              {singleSaveProductCountInvalid && (
+                <div className="guard-note guard-note--warn">
+                  单商品只保存一次只能选择 1 个商品；当前已选 {selectedDraftProducts.length} 个。只读页面检查可多选，真实保存请保留 1 个商品。
                 </div>
               )}
               <div className="real-task-products" aria-label="选择商品">

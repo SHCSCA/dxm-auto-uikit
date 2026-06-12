@@ -464,6 +464,11 @@ export default function App() {
         setActiveSection('tasks')
         return
       }
+      if (request.mode === 'single_save' && products.length !== 1) {
+        setOperationError(`单商品只保存一次只能选择 1 个商品；当前已选 ${products.length} 个。请取消多余商品后再创建。`)
+        setActiveSection('tasks')
+        return
+      }
       const firstProduct = products[0]
       const modeLabel = request.mode === 'probe' ? '只读页面检查' : '单商品只保存'
       const task = await postJson<Task>('/api/tasks', {

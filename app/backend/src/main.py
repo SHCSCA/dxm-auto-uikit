@@ -308,6 +308,7 @@ def get_task(task_id: int):
 
 @app.post('/api/tasks')
 def create_task(payload: TaskCreate):
+    _assert_task_create_scope(payload)
     return repo.create_task(payload.model_dump())
 
 
@@ -1355,6 +1356,7 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
         return
     if mode not in RELEASED_REAL_DXM_MUTATION_MODES:
         raise HTTPException(status_code=403, detail=UNRELEASED_REAL_DXM_MODE_DETAIL)
+    _assert_single_save_product_count(task.get('payload') or {}, status_code=409)
 
     if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
         raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')
@@ -1385,6 +1387,22 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
         raise HTTPException(
             status_code=403,
             detail=f"L2 readonly probe gate is not passed: {l2_gate.get('status')}",
+        )
+
+
+def _assert_task_create_scope(payload: TaskCreate) -> None:
+    mode = str(payload.mode or '').strip()
+    if mode == 'single_save':
+        _assert_single_save_product_count({'product_ids': payload.product_ids}, status_code=400)
+
+
+def _assert_single_save_product_count(payload: dict[str, Any], *, status_code: int) -> None:
+    product_ids = payload.get('product_ids') if isinstance(payload, dict) else None
+    product_count = len(product_ids) if isinstance(product_ids, list) else 0
+    if product_count != 1:
+        raise HTTPException(
+            status_code=status_code,
+            detail=f'single_save requires exactly one product; got {product_count}',
         )
 
 

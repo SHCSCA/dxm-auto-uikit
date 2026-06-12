@@ -73,6 +73,71 @@ def _approve_task(repo: Repository, task_id: int, token: str):
     repo.set_task_manual_approval(task_id, approved=True, token=token)
 
 
+def test_create_single_save_rejects_multiple_products(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    store = repo.create_store("Dang Kang", "AliExpress")
+    product_ids = [
+        repo.create_product({
+            "title": f"Product {index}",
+            "source": "test",
+            "category_name": "立牌类谷子",
+            "price": 7.01,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {},
+        })["id"]
+        for index in range(2)
+    ]
+
+    response = client.post(
+        "/api/tasks",
+        json={
+            "name": "invalid multi product single save",
+            "store_id": store["id"],
+            "mode": "single_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "product_ids": product_ids,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "single_save requires exactly one product" in response.json()["detail"]
+
+
+def test_start_single_save_rejects_historical_multiple_products(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    store = repo.create_store("Dang Kang", "AliExpress")
+    product_ids = [
+        repo.create_product({
+            "title": f"Legacy Product {index}",
+            "source": "test",
+            "category_name": "立牌类谷子",
+            "price": 7.01,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {},
+        })["id"]
+        for index in range(2)
+    ]
+    task = repo.create_task({
+        "name": "legacy multi product single save",
+        "store_id": store["id"],
+        "mode": "single_save",
+        "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+        "claim_mark": "AI认领",
+        "product_ids": product_ids,
+        "payload": {"store_name": "Dang Kang"},
+    })
+
+    response = client.post(f"/api/tasks/{task['id']}/start", json={})
+
+    assert response.status_code == 409
+    assert "single_save requires exactly one product" in response.json()["detail"]
+    assert runner.calls == []
+
+
 def test_single_save_start_requires_manual_approval(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     task = _create_task(repo)
