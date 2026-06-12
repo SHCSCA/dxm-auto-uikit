@@ -796,6 +796,7 @@ def test_real_operator_inputs_are_inline_not_browser_prompts():
     assert "useState('ops-owner')" not in app_source
     assert "rememberCredential: true" in app_source
     assert "const canSubmit = Boolean(draft.username.trim() && draft.password && !busy)" in workbench_source
+    assert "const loginSubmitDisabledReason" in workbench_source
     assert "if (!canSubmit) return" in workbench_source
     assert "required" in workbench_source
     assert "店小秘账号" in workbench_source
@@ -813,6 +814,9 @@ def test_real_operator_inputs_are_inline_not_browser_prompts():
     assert ".operator-inline-form__login-state.is-danger" in styles_source
     assert "批准人标识" in workbench_source
     assert "打开真实登录页" in workbench_source
+    assert "title={!canSubmit ? loginSubmitDisabledReason : undefined}" in workbench_source
+    assert "不能打开登录页的原因" in workbench_source
+    assert "先填写店小秘账号和密码，才会打开真实登录页。" in workbench_source
     assert "申请并启动单商品只保存" in workbench_source
     assert "本机加密存储" in workbench_source
     assert "operator-inline-form" in styles_source

@@ -667,6 +667,11 @@ function DxmLoginInlineForm({
   onContinue: () => void
 }) {
   const canSubmit = Boolean(draft.username.trim() && draft.password && !busy)
+  const loginSubmitDisabledReason = busy
+    ? '正在处理当前操作，请等待完成后再打开真实登录页。'
+    : !draft.username.trim() || !draft.password
+      ? '先填写店小秘账号和密码，才会打开真实登录页。'
+      : ''
   const loginState = humanDxmLoginState(runtimeStatus, runtimeStatusError)
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -723,7 +728,7 @@ function DxmLoginInlineForm({
         </div>
       )}
       <div className="operator-inline-form__actions">
-        <button className="button button--primary" type="submit" disabled={!canSubmit}>
+        <button className="button button--primary" type="submit" disabled={!canSubmit} title={!canSubmit ? loginSubmitDisabledReason : undefined}>
           打开真实登录页
         </button>
         <button className="button button--quiet" type="button" onClick={onContinue} disabled={busy}>
@@ -732,6 +737,7 @@ function DxmLoginInlineForm({
         <button className="button button--quiet" type="button" onClick={onClearSavedCredential} disabled={busy || !credentialState.loaded}>
           清除已记住账号
         </button>
+        {!canSubmit && loginSubmitDisabledReason && <small aria-label="不能打开登录页的原因">不能打开登录页的原因：{loginSubmitDisabledReason}</small>}
       </div>
     </form>
   )
