@@ -213,6 +213,21 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert ".editable-config-section__more-fields" in styles_source
 
 
+def test_config_center_shows_save_scope_explainer_before_actions():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    editable_card = source[source.index("function EditableConfigSectionCard"):source.index("export function TaskCenter")]
+    actions_index = editable_card.index('<div className="editable-config-section__actions">')
+    before_actions = editable_card[:actions_index]
+
+    assert "config-save-scope-explainer" in before_actions
+    assert "保存到本次任务" in before_actions
+    assert "只影响当前任务；执行器会优先读取这份任务覆盖。" in before_actions
+    assert "保存为店铺模板" in before_actions
+    assert "影响后续匹配当前店铺/类目的任务，不覆盖全局模板。" in before_actions
+    assert ".config-save-scope-explainer" in styles_source
+
+
 def test_config_center_distinguishes_advisory_gaps_from_start_blockers():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")

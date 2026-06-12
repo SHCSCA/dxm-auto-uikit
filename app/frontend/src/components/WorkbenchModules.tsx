@@ -2377,6 +2377,16 @@ function EditableConfigSectionCard({
           {preview.missing.slice(0, 4).map((item) => <span key={item}>{item}</span>)}
         </div>
       ) : null}
+      <div className="config-save-scope-explainer" aria-label="保存方式说明">
+        <span>
+          <strong>保存到本次任务</strong>
+          <small>只影响当前任务；执行器会优先读取这份任务覆盖。</small>
+        </span>
+        <span>
+          <strong>保存为店铺模板</strong>
+          <small>影响后续匹配当前店铺/类目的任务，不覆盖全局模板。</small>
+        </span>
+      </div>
       <div className="editable-config-section__actions">
         {!configOk && (
           <button

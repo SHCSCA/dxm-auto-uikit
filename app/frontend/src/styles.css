@@ -3584,6 +3584,39 @@ tr:last-child td {
   background: #fff6f7;
 }
 
+.config-save-scope-explainer {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.config-save-scope-explainer span {
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid #d8e0ec;
+  border-radius: 7px;
+  background: #fbfcfd;
+}
+
+.config-save-scope-explainer strong,
+.config-save-scope-explainer small {
+  display: block;
+  min-width: 0;
+}
+
+.config-save-scope-explainer strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.config-save-scope-explainer small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .config-section-save-hint {
   display: block;
   color: var(--muted);
