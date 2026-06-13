@@ -2225,6 +2225,31 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
               <small>{activeTemplateSourceName ? '配置检查已命中模板；要换模板请先选择并点击套用。' : '未手动选择；当前仍按已命中的模板或字段来源执行。'}</small>
             </span>
           </div>
+          <div className="config-template-console__default-quick" aria-label="默认测试模板包">
+            <div>
+              <strong>默认测试模板</strong>
+              <span>使用之前测试通过的数据配置；可先填当前分区，也可覆盖当前店铺/类目下全部分区。</span>
+              <small>{defaultTemplatePackState}</small>
+            </div>
+            <div className="config-template-console__default-actions">
+              <button
+                className="button button--quiet"
+                type="button"
+                onClick={() => applyTemplateToDraft(selectedConfigSection.section, '__default_test__')}
+              >
+                填入当前分区示例值
+              </button>
+              <button
+                className="button button--secondary"
+                type="button"
+                onClick={() => { void applyDefaultTemplatePack() }}
+                disabled={savingSection === 'template:default-pack' || templateSaveDisabled}
+                title={templateSaveDisabled ? '先选择任务，避免误存为全店/全类目模板。' : '保存为店铺模板会影响后续匹配当前店铺/类目的任务。'}
+              >
+                {savingSection === 'template:default-pack' ? '保存测试模板中...' : '写入测试模板到当前范围'}
+              </button>
+            </div>
+          </div>
           <div className={`config-save-state config-save-state--compact is-${activeSectionStatus}`} aria-label="当前分区保存状态">
             <b>{activeSectionStatusTitle}</b>
             <span>{activeSectionStatusMessage}</span>
@@ -2246,27 +2271,6 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
               </div>
               <div className="template-match-explanation-shell" aria-label="模板命中解释">
                 <TemplateMatchExplanation {...templateMatchExplanation} />
-              </div>
-              <div className="config-template-console__default">
-                <strong>默认测试模板</strong>
-                <span>使用之前测试通过的数据配置；覆盖当前店铺/类目下全部分区。</span>
-                <button
-                  className="button button--quiet"
-                  type="button"
-                  onClick={() => applyTemplateToDraft(selectedConfigSection.section, '__default_test__')}
-                >
-                  填入当前分区示例值
-                </button>
-                <button
-                  className="button button--secondary"
-                  type="button"
-                  onClick={() => { void applyDefaultTemplatePack() }}
-                  disabled={savingSection === 'template:default-pack' || templateSaveDisabled}
-                  title={templateSaveDisabled ? '先选择任务，避免误存为全店/全类目模板。' : '保存为店铺模板会影响后续匹配当前店铺/类目的任务。'}
-                >
-                  {savingSection === 'template:default-pack' ? '保存测试模板中...' : '写入测试模板到当前范围'}
-                </button>
-                <small>{defaultTemplatePackState}</small>
               </div>
               <div className={`config-save-state is-${activeSectionStatus}`} aria-label="当前分区保存详情">
                 <b>保存状态</b>

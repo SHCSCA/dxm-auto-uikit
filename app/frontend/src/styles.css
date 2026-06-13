@@ -2690,6 +2690,33 @@ tr:last-child td {
   text-overflow: ellipsis;
 }
 
+.config-template-console__default-quick {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid #bfddce;
+  border-radius: 7px;
+  background: #f8fcfa;
+}
+
+.config-template-console__default-quick > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.config-template-console__default-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
 .config-template-console__details {
   grid-column: 1 / -1;
   padding: 8px 10px;

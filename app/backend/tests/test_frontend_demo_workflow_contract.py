@@ -115,7 +115,9 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "applyDefaultTemplatePack" in config_section
     assert "默认测试模板" in config_section
     assert "使用之前测试通过的数据配置" in config_section
-    assert config_section.index("使用之前测试通过的数据配置") > config_section.index("config-template-console__details")
+    assert "config-template-console__default-quick" in config_section
+    assert config_section.index("config-template-console__default-quick") < config_section.index("config-template-console__details")
+    assert config_section.index("使用之前测试通过的数据配置") < config_section.index("config-template-console__details")
     assert "写入测试模板到当前范围" in config_section
     common_selector = config_section[config_section.index("<select"):config_section.index("</select>")]
     assert "__default_test__" not in common_selector
@@ -163,6 +165,7 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "已保存" in config_section
     assert "保存时间" in config_section
     assert ".config-template-console" in styles_source
+    assert ".config-template-console__default-quick" in styles_source
     assert ".config-template-console__quick-status" in styles_source
     assert ".config-save-state" in styles_source
     assert "configDefaultTemplatePackVisible" in qa_source
