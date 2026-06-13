@@ -1198,24 +1198,26 @@ export default function App() {
           <span>{workspaceNotice.detail}</span>
         </div>
       )}
-      {operationError && (
-        <div className="operation-alert" role="alert">
-          <strong>操作需要重试</strong>
-          <span>{operationError}</span>
-          <button className="button button--quiet" type="button" onClick={() => setOperationError(null)}>
-            知道了
-          </button>
-        </div>
-      )}
-      {operationNotice && (
-        <div className="operation-alert operation-alert--ok" role="status" data-testid="operation-notice">
-          <strong>操作已提交</strong>
-          <span>{operationNotice}</span>
-          <button className="button button--quiet" type="button" onClick={() => setOperationNotice(null)}>
-            知道了
-          </button>
-        </div>
-      )}
+      <div className="operation-toast-stack" aria-live="polite">
+        {operationError && (
+          <div className="operation-alert" role="alert">
+            <strong>操作需要重试</strong>
+            <span>{operationError}</span>
+            <button className="button button--quiet" type="button" onClick={() => setOperationError(null)}>
+              知道了
+            </button>
+          </div>
+        )}
+        {operationNotice && (
+          <div className="operation-alert operation-alert--ok" role="status" data-testid="operation-notice">
+            <strong>操作已提交</strong>
+            <span>{operationNotice}</span>
+            <button className="button button--quiet" type="button" onClick={() => setOperationNotice(null)}>
+              知道了
+            </button>
+          </div>
+        )}
+      </div>
       {content}
     </AppShell>
   )
