@@ -4297,6 +4297,36 @@ tr:last-child td {
   overflow-wrap: anywhere;
 }
 
+.console-primary-blocker-card__explain {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid #f0d28c;
+  border-radius: 7px;
+  background: #fffdf6;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.console-primary-blocker-card__explain b {
+  flex: 0 0 auto;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.console-primary-blocker-card__explain span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.console-primary-blocker-card__action {
+  justify-self: start;
+}
+
 .console-focus-panel__primary-facts span {
   min-height: 52px;
   padding: 8px;

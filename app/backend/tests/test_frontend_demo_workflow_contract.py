@@ -1183,6 +1183,33 @@ def test_execution_console_surfaces_single_primary_blocker_card():
     assert visible_before_details.index("ConsolePrimaryBlockerCard") < visible_before_details.index("console-focus-panel__primary-facts")
 
 
+def test_execution_console_primary_blocker_card_contains_precheck_action_and_plain_explanation():
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    focus_section = workbench_source[
+        workbench_source.index("function ConsoleFocusPanel"):
+        workbench_source.index("function AgentBrowserFrame")
+    ]
+    blocker_card_section = workbench_source[
+        workbench_source.index("function ConsolePrimaryBlockerCard"):
+        workbench_source.index("function AgentBrowserFrame")
+    ]
+
+    assert "primaryActionLabel={primaryActionLabel}" in focus_section
+    assert "onPrimaryAction={primaryAction}" in focus_section
+    assert "primaryActionDisabled={primaryActionDisabled}" in focus_section
+    assert "primaryActionDisabledTitle={primaryActionDisabled ? l2ProbeResourceState.title : undefined}" in focus_section
+    assert "primaryPath.action === 'run_l2'" in blocker_card_section
+    assert "READONLY_PRECHECK_CTA" in blocker_card_section
+    assert "READONLY_PRECHECK_PURPOSE" in blocker_card_section
+    assert "button--primary" in blocker_card_section
+    assert "console-primary-blocker-card__action" in blocker_card_section
+    assert "console-primary-blocker-card__explain" in blocker_card_section
+    assert "disabled={primaryActionDisabled}" in blocker_card_section
+    assert ".console-primary-blocker-card__action" in styles_source
+    assert ".console-primary-blocker-card__explain" in styles_source
+
+
 def test_execution_console_distinguishes_login_browser_from_agent_execution_browser():
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     app_source = (REPO_ROOT / "app" / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")

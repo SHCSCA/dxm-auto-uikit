@@ -4104,7 +4104,14 @@ function ConsoleFocusPanel({
         <span><strong>阻断原因</strong><b>{primaryPath.saveBlocked ? primaryPath.reason : '当前未发现保存阻断'}</b></span>
         <span><strong>下一步</strong><b>{consoleNext}</b></span>
       </div>
-      <ConsolePrimaryBlockerCard primaryPath={primaryPath} consoleNext={consoleNext} />
+      <ConsolePrimaryBlockerCard
+        primaryPath={primaryPath}
+        consoleNext={consoleNext}
+        primaryActionLabel={primaryActionLabel}
+        onPrimaryAction={primaryAction}
+        primaryActionDisabled={primaryActionDisabled}
+        primaryActionDisabledTitle={primaryActionDisabled ? l2ProbeResourceState.title : undefined}
+      />
       <div className="console-focus-panel__primary-facts">
         <span><strong>任务</strong><b>{selectedTask ? `${displayTaskName(selectedTask)} / ${humanTaskStatus(selectedTask.status)}` : '待选择'}</b></span>
         <span><strong>执行浏览器</strong><b>{browserLabel}</b></span>
@@ -4127,15 +4134,6 @@ function ConsoleFocusPanel({
         ) : (
           <>
             {primaryPath.saveBlocked && <small>{primaryPath.reason}</small>}
-            <button
-              className="button button--secondary"
-              type="button"
-              onClick={primaryAction}
-              disabled={primaryActionDisabled}
-              title={primaryActionDisabled ? l2ProbeResourceState.title : undefined}
-            >
-              {primaryActionLabel}
-            </button>
             {primaryActionDisabled && <small>{l2ProbeResourceState.detail}</small>}
             <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">查看检查计划</button>
           </>
@@ -4145,7 +4143,21 @@ function ConsoleFocusPanel({
   )
 }
 
-function ConsolePrimaryBlockerCard({ primaryPath, consoleNext }: { primaryPath: ConsolePrimaryPath; consoleNext: string }) {
+function ConsolePrimaryBlockerCard({
+  primaryPath,
+  consoleNext,
+  primaryActionLabel,
+  onPrimaryAction,
+  primaryActionDisabled,
+  primaryActionDisabledTitle,
+}: {
+  primaryPath: ConsolePrimaryPath
+  consoleNext: string
+  primaryActionLabel: string
+  onPrimaryAction: () => void
+  primaryActionDisabled: boolean
+  primaryActionDisabledTitle?: string
+}) {
   const tone = primaryPath.saveBlocked ? 'is-blocked' : primaryPath.code === 'ready' ? 'is-ready' : 'is-neutral'
   return (
     <div className={`console-primary-blocker-card ${tone}`} aria-label="当前只处理这一项" data-console-primary-code={primaryPath.code}>
@@ -4164,6 +4176,21 @@ function ConsolePrimaryBlockerCard({ primaryPath, consoleNext }: { primaryPath: 
           <small>{primaryPath.next || consoleNext}</small>
         </span>
       </div>
+      {primaryPath.action === 'run_l2' && (
+        <p className="console-primary-blocker-card__explain">
+          <b>{READONLY_PRECHECK_CTA}</b>
+          <span>{READONLY_PRECHECK_PURPOSE}</span>
+        </p>
+      )}
+      <button
+        className="button button--primary console-primary-blocker-card__action"
+        type="button"
+        onClick={onPrimaryAction}
+        disabled={primaryActionDisabled}
+        title={primaryActionDisabledTitle}
+      >
+        {primaryActionLabel}
+      </button>
     </div>
   )
 }
