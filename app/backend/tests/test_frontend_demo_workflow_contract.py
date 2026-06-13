@@ -222,6 +222,27 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert ".editable-config-section__more-fields" in styles_source
 
 
+def test_config_center_does_not_treat_selected_template_as_currently_used_before_apply_and_save():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
+    usage_assignment = config_section[
+        config_section.index("const activeTemplateUsageLabel"):
+        config_section.index("const activeTemplateTrace")
+    ]
+    quick_status = config_section[
+        config_section.index('<div className="config-template-console__quick-status"'):
+        config_section.index('<div className={`config-save-state')
+    ]
+
+    assert "activeSelectedTemplate" not in usage_assignment
+    assert "activeSelectedTemplateLabel" not in usage_assignment
+    assert "activePendingTemplateActionLabel" in config_section
+    assert "activePendingTemplateActionLabel" in quick_status
+    assert "已选择：" in quick_status
+    assert "当前使用：{activeTemplateUsageLabel}" in quick_status
+    assert "只有“当前使用”才代表本次执行会读取的模板" in config_section
+
+
 def test_config_center_shows_save_scope_explainer_before_actions():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")

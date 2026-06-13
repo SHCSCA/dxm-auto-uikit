@@ -1809,9 +1809,11 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
     : activeSelectedTemplate
       ? templateOptionLabel(activeSelectedTemplate)
       : '未选择模板'
-  const activeTemplateUsageLabel = activeSelectedTemplateId === '__default_test__' || activeSelectedTemplate
-    ? activeSelectedTemplateLabel
-    : activeTemplateSourceName || (activeSectionAlreadyPersisted ? '配置检查已命中模板' : '尚未命中已保存模板')
+  const activePendingTemplateActionLabel = activeSelectedTemplateId
+    ? `待套用：${activeSelectedTemplateLabel}`
+    : '未选择待套用模板'
+  const activeTemplateUsageLabel = activeTemplateSourceName
+    || (activeSectionAlreadyPersisted ? '配置检查已命中模板' : '尚未命中已保存模板')
   const activeTemplateTrace = configPreview?.templateTrace?.length
     ? configPreview.templateTrace
     : workspace.templateResolution?.template_trace ?? []
@@ -2213,6 +2215,10 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
             <span>
               <b>已选择：{activeSelectedTemplateLabel}</b>
               <small>{activeSelectedTemplateId ? '点击套用后才会写入表单；保存后才会影响执行。' : '可选择已保存模板；示例值在下方高级区。'}</small>
+            </span>
+            <span>
+              <b>{activePendingTemplateActionLabel}</b>
+              <small>只有“当前使用”才代表本次执行会读取的模板；选择模板本身不会改执行取值。</small>
             </span>
             <span>
               <b>当前使用：{activeTemplateUsageLabel}</b>
