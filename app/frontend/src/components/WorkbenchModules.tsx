@@ -723,6 +723,7 @@ function DxmLoginInlineForm({
       <small className={`operator-inline-form__credential-state ${credentialState.saved ? 'is-saved' : credentialState.available ? 'is-available' : 'is-disabled'}`}>
         {credentialState.message}
       </small>
+      <CredentialStorageFacts credentialState={credentialState} />
       {loginState && (
         <div className={`operator-inline-form__login-state is-${loginState.tone}`} aria-label="DXM 登录状态">
           <strong>{loginState.label}</strong>
@@ -743,6 +744,31 @@ function DxmLoginInlineForm({
         {!canSubmit && loginSubmitDisabledReason && <small aria-label="不能打开登录页的原因">不能打开登录页的原因：{loginSubmitDisabledReason}</small>}
       </div>
     </form>
+  )
+}
+
+function CredentialStorageFacts({ credentialState }: { credentialState: DxmCredentialState }) {
+  const facts = credentialState.available
+    ? [
+        ['存储', '本机加密存储可用'],
+        ['下次', credentialState.saved ? '下次打开免安装版会自动填入' : '勾选后下次打开免安装版会自动填入'],
+        ['范围', '只保存在当前 Windows 用户目录'],
+      ]
+    : [
+        ['存储', '当前预览不能保存密码'],
+        ['处理', '请从桌面免安装版打开'],
+        ['结果', '不会写入本机密码'],
+      ]
+
+  return (
+    <div className={`operator-inline-form__credential-facts ${credentialState.available ? 'is-available' : 'is-disabled'}`} aria-label="账号记住状态">
+      {facts.map(([label, value]) => (
+        <span key={label}>
+          <b>{label}</b>
+          <small>{value}</small>
+        </span>
+      ))}
+    </div>
   )
 }
 

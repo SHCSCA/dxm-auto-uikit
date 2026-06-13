@@ -1654,6 +1654,24 @@ def test_inline_approval_uses_business_copy_not_gate_codes():
         assert forbidden not in approval_section
 
 
+def test_login_form_explains_credential_storage_state_for_desktop_and_browser_preview():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    login_form_section = source[source.index("function DxmLoginInlineForm"):source.index("function humanDxmLoginState")]
+    credential_facts_section = source[source.index("function CredentialStorageFacts"):source.index("function humanDxmLoginState")]
+
+    assert "CredentialStorageFacts" in login_form_section
+    assert "credentialState={credentialState}" in login_form_section
+    assert "账号记住状态" in credential_facts_section
+    assert "本机加密存储可用" in credential_facts_section
+    assert "下次打开免安装版会自动填入" in credential_facts_section
+    assert "只保存在当前 Windows 用户目录" in credential_facts_section
+    assert "当前预览不能保存密码" in credential_facts_section
+    assert "请从桌面免安装版打开" in credential_facts_section
+    assert "不会写入本机密码" in credential_facts_section
+    assert "operator-inline-form__credential-facts" in styles_source
+
+
 def test_execution_console_default_log_summary_hides_absolute_paths():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     console_section = source[source.index("export function ExecutionConsole"):source.index("function RuntimeLogPreview")]
