@@ -4276,7 +4276,19 @@ tr:last-child td {
   gap: 8px;
 }
 
+.console-focus-panel__takeover-state {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid #d8e2ef;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
 .console-focus-panel__decision-grid span,
+.console-focus-panel__takeover-state span,
 .console-focus-panel__primary-facts span,
 .console-focus-panel__facts span {
   min-width: 0;
@@ -4468,12 +4480,14 @@ tr:last-child td {
   white-space: nowrap;
 }
 
+.console-focus-panel__takeover-state span,
 .console-focus-panel__primary-facts span {
   min-height: 52px;
   padding: 8px;
 }
 
 .console-focus-panel__decision-grid strong,
+.console-focus-panel__takeover-state strong,
 .console-focus-panel__primary-facts strong,
 .console-focus-panel__facts strong {
   color: var(--muted);
@@ -4481,6 +4495,7 @@ tr:last-child td {
 }
 
 .console-focus-panel__decision-grid b,
+.console-focus-panel__takeover-state b,
 .console-focus-panel__primary-facts b,
 .console-focus-panel__facts b {
   min-width: 0;

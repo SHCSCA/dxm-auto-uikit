@@ -4157,6 +4157,28 @@ function ConsoleFocusPanel({
         onOpenDxmLogin={onOpenDxmLogin}
         onContinueDxmLogin={onContinueDxmLogin}
       />
+      <div className="console-focus-panel__takeover-state" aria-label="真实浏览器接管状态">
+        <span>
+          <strong>DXM 登录</strong>
+          <b>{loginState.title}</b>
+        </span>
+        <span>
+          <strong>浏览器窗口</strong>
+          <b>{browserLabel}</b>
+        </span>
+        <span>
+          <strong>Agent 操控</strong>
+          <b>{controlLabel}</b>
+        </span>
+        <span>
+          <strong>人工接管</strong>
+          <b>{takeoverLabel}</b>
+        </span>
+        <span>
+          <strong>当前页面</strong>
+          <b>{hasBrowserSession && currentUrl ? shortUrl(currentUrl) : '等待启动执行浏览器'}</b>
+        </span>
+      </div>
       <div className="console-focus-panel__primary-facts">
         <span><strong>任务</strong><b>{selectedTask ? `${displayTaskName(selectedTask)} / ${humanTaskStatus(selectedTask.status)}` : '待选择'}</b></span>
         <span><strong>执行浏览器</strong><b>{browserLabel}</b></span>

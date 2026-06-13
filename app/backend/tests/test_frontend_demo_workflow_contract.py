@@ -1210,6 +1210,34 @@ def test_execution_console_primary_blocker_card_contains_precheck_action_and_pla
     assert ".console-primary-blocker-card__explain" in styles_source
 
 
+def test_execution_console_surfaces_real_browser_takeover_state_before_details():
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    focus_section = workbench_source[
+        workbench_source.index("function ConsoleFocusPanel"):
+        workbench_source.index("function AgentBrowserFrame")
+    ]
+    visible_before_details = focus_section[
+        focus_section.index("<div className=\"console-focus-panel__main\">"):
+        focus_section.index("<details className=\"console-focus-panel__details inline-disclosure\">")
+    ]
+
+    assert "aria-label=\"真实浏览器接管状态\"" in visible_before_details
+    assert "console-focus-panel__takeover-state" in visible_before_details
+    assert "<strong>DXM 登录</strong>" in visible_before_details
+    assert "loginState.title" in visible_before_details
+    assert "<strong>浏览器窗口</strong>" in visible_before_details
+    assert "browserLabel" in visible_before_details
+    assert "<strong>Agent 操控</strong>" in visible_before_details
+    assert "controlLabel" in visible_before_details
+    assert "<strong>人工接管</strong>" in visible_before_details
+    assert "takeoverLabel" in visible_before_details
+    assert "当前页面" in visible_before_details
+    assert "shortUrl(currentUrl)" in visible_before_details
+    assert "console-focus-panel__takeover-state" in styles_source
+    assert "console-focus-panel__takeover-state span" in styles_source
+
+
 def test_execution_console_primary_blocker_card_shows_precheck_recovery_path():
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
