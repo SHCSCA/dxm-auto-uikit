@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, type ReactNode } from 'react'
 import type { WorkbenchSection } from '../types'
 
 type WorkbenchPrimaryArea = {
-  id: 'execute' | 'prepare' | 'review' | 'system'
+  id: 'execute' | 'prepare' | 'review'
   label: string
   short: string
   summary: string
@@ -37,17 +37,6 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
     summary: '报告与问题',
     items: [
       { id: 'reports', label: '结果报告', short: '报', hint: '保存结果' },
-      { id: 'exceptions', label: '问题处理', short: '异', hint: '失败原因' },
-      { id: 'evidence', label: '证据', short: '证', hint: '保存证据' },
-    ],
-  },
-  {
-    id: 'system',
-    label: '更多',
-    short: '4',
-    summary: '系统状态',
-    items: [
-      { id: 'dashboard', label: '状态', short: '态', hint: '连接与门禁' },
     ],
   },
 ]
@@ -99,7 +88,7 @@ export function AppShell({
             <div>
               <strong>DXM Agent</strong>
               <span>只保存自动化</span>
-              <span className="sr-only">开始 / 配置 / 任务 / 浏览器 / 结果</span>
+              <span className="sr-only">开始 / 配置 / 任务 / 执行 / 结果</span>
             </div>
           )}
           <button className="icon-button" type="button" onClick={onToggleSidebar} aria-label="切换侧边栏">

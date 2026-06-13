@@ -934,6 +934,23 @@ def test_sidebar_is_navigation_only_not_status_or_hint_panel():
     assert ".sidebar__note" not in styles_source
 
 
+def test_sidebar_primary_navigation_keeps_only_user_main_path():
+    shell_source = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
+    primary_area_section = shell_source[shell_source.index("const primaryAreas"):shell_source.index("const sectionLabels")]
+
+    assert primary_area_section.count("{ id: '") == 5
+    assert "{ id: 'guide', label: '开始使用'" in primary_area_section
+    assert "{ id: 'config', label: '配置模板'" in primary_area_section
+    assert "{ id: 'tasks', label: '任务'" in primary_area_section
+    assert "{ id: 'console', label: '执行控制台'" in primary_area_section
+    assert "{ id: 'reports', label: '结果报告'" in primary_area_section
+    assert "id: 'evidence'" not in primary_area_section
+    assert "id: 'exceptions'" not in primary_area_section
+    assert "id: 'dashboard'" not in primary_area_section
+    assert "label: '更多'" not in primary_area_section
+    assert "开始 / 配置 / 任务 / 执行 / 结果" in shell_source
+
+
 def test_guide_center_can_start_real_dxm_login_without_l2_gate():
     app_source = APP_TSX.read_text(encoding="utf-8")
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
@@ -3399,7 +3416,7 @@ def test_sidebar_copy_names_save_only_agent_flow_without_ambiguous_browser_wordi
     shell = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
 
     assert "只保存自动化" in shell
-    assert "开始 / 配置 / 任务 / 浏览器 / 结果" in shell
+    assert "开始 / 配置 / 任务 / 执行 / 结果" in shell
     assert "任务与执行控制台" in shell
     assert "{ id: 'console', label: '执行控制台', short: '控', hint: '登录、预检、真实浏览器' }" in shell
     assert "真实店小秘操作在登录浏览器和执行浏览器中完成" in shell
