@@ -22,6 +22,8 @@
   --radius: 8px;
   --shadow: 0 12px 36px rgba(29, 37, 45, 0.08);
   --font-body: 13px;
+  --font-panel-title: 18px;
+  --font-section-title: 14px;
   --font-compact: 12px;
   --font-micro: 11px;
 }
@@ -796,7 +798,7 @@ a:focus-visible {
 
 .module-head h2 {
   margin: 0;
-  font-size: 16px;
+  font-size: var(--font-section-title);
 }
 
 .module-head span {
@@ -1937,7 +1939,7 @@ tr:last-child td {
 .task-current-panel h1 {
   margin: 4px 0;
   color: var(--text);
-  font-size: 22px;
+  font-size: var(--font-panel-title);
   line-height: 1.25;
 }
 
@@ -3512,7 +3514,7 @@ tr:last-child td {
 
 .config-focus-card h1 {
   margin: 0 0 6px;
-  font-size: 24px;
+  font-size: var(--font-panel-title);
   line-height: 1.2;
 }
 
@@ -4232,7 +4234,7 @@ tr:last-child td {
 
 .console-focus-panel h1 {
   margin: 3px 0 4px;
-  font-size: 24px;
+  font-size: var(--font-panel-title);
   line-height: 1.2;
 }
 

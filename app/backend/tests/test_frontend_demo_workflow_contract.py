@@ -876,6 +876,25 @@ def test_first_screen_keeps_status_and_precheck_guidance_compact():
     ]
 
 
+def test_operational_surfaces_use_compact_type_scale():
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    root_tokens = styles_source[styles_source.index(":root {"):styles_source.index("}")]
+    module_head = styles_source[styles_source.index(".module-head h2 {"):styles_source.index(".module-head span {")]
+    console_focus = styles_source[styles_source.index(".console-focus-panel h1 {"):styles_source.index(".console-focus-panel p,")]
+    config_focus = styles_source[styles_source.index(".config-focus-card h1 {"):styles_source.index(".config-focus-card p {")]
+    task_current = styles_source[styles_source.index(".task-current-panel h1 {"):styles_source.index(".task-current-panel p {")]
+
+    assert "--font-panel-title: 18px;" in root_tokens
+    assert "--font-section-title: 14px;" in root_tokens
+    assert "font-size: var(--font-section-title);" in module_head
+    assert "font-size: var(--font-panel-title);" in console_focus
+    assert "font-size: var(--font-panel-title);" in config_focus
+    assert "font-size: var(--font-panel-title);" in task_current
+    assert "font-size: 24px;" not in console_focus
+    assert "font-size: 24px;" not in config_focus
+    assert "font-size: 22px;" not in task_current
+
+
 def test_sidebar_is_navigation_only_not_status_or_hint_panel():
     shell_source = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
