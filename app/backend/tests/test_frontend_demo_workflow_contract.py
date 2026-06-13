@@ -1092,7 +1092,7 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "hasBrowserSession && currentUrl ? shortUrl(currentUrl) : '等待启动执行浏览器'" in workbench_source
     assert "可在生命周期区接管" in workbench_source
     assert "可在会话管理中接管" not in workbench_source
-    assert "buildConsolePrimaryPath({ selectedTask, configPreview, configPreviewError, configPreviewLoading, l2Gate, l3Gate, busy })" in workbench_source
+    assert "buildConsolePrimaryPath({ selectedTask, configPreview, configPreviewError, configPreviewLoading, l2Gate, l3Gate, runtimeStatus, busy })" in workbench_source
     assert "primaryPath={consolePrimaryPath}" in console_section
     assert "primaryPath.action === 'config'" in workbench_source
     assert "primaryPath.action === 'run_l2'" in workbench_source
@@ -1303,8 +1303,8 @@ def test_execution_console_primary_blocker_card_contains_precheck_action_and_pla
 
     assert "primaryActionLabel={primaryActionLabel}" in focus_section
     assert "onPrimaryAction={primaryAction}" in focus_section
-    assert "primaryActionDisabled={primaryActionDisabled}" in focus_section
-    assert "primaryActionDisabledTitle={primaryActionDisabled ? l2ProbeResourceState.title : undefined}" in focus_section
+    assert "primaryActionDisabled={false}" in focus_section
+    assert "primaryActionDisabledTitle={undefined}" in focus_section
     assert "primaryPath.action === 'run_l2'" in blocker_card_section
     assert "READONLY_PRECHECK_CTA" in blocker_card_section
     assert "READONLY_PRECHECK_PURPOSE" in blocker_card_section
@@ -2604,10 +2604,9 @@ def test_frontend_surfaces_runtime_status_and_log_filters():
     assert "getL2ProbeResourceState(runtimeStatus)" in workbench_source
     focus_panel_section = workbench_source[workbench_source.index("function ConsoleFocusPanel"):workbench_source.index("function AgentBrowserFrame")]
     assert "runtimeStatus: RuntimeStatus | null" in focus_panel_section
-    assert "const l2ProbeResourceState = getL2ProbeResourceState(runtimeStatus)" in focus_panel_section
-    assert "const primaryActionDisabled = primaryPath.action === 'run_l2' && l2ProbeResourceState.blocked" in focus_panel_section
-    assert "disabled={primaryActionDisabled}" in focus_panel_section
-    assert "primaryActionDisabledTitle={primaryActionDisabled ? l2ProbeResourceState.title : undefined}" in focus_panel_section
+    assert "primaryPath.action === 'launcher_logs'" in focus_panel_section
+    assert "onRuntimeLogSourceChange('launcher')" in focus_panel_section
+    assert "primaryActionDisabled={false}" in focus_panel_section
     assert "dependencies.l2_readonly_probe_runner" in workbench_source
     assert "dependencies.l2_readonly_probe_script" in workbench_source
     assert "dependencies.l2_readonly_probe_allowlist" in workbench_source
@@ -2646,6 +2645,27 @@ def test_task_center_precheck_buttons_share_resource_gate():
     assert "l2ProbeResourceState: ReturnType<typeof getL2ProbeResourceState>" in recovery_card
     assert "disabled={busy || l2ProbeResourceState.blocked}" in recovery_card
     assert "title={l2ProbeResourceState.title}" in recovery_card
+
+
+def test_console_primary_path_blocks_l2_when_probe_runner_is_missing():
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    console_section = workbench_source[workbench_source.index("export function ExecutionConsole"):workbench_source.index("function AgentStagePanel")]
+    focus_section = workbench_source[workbench_source.index("function ConsoleFocusPanel"):workbench_source.index("function AgentBrowserFrame")]
+    primary_path_section = workbench_source[
+        workbench_source.index("function buildConsolePrimaryPath"):
+        workbench_source.index("function FinalCheckFreshnessRow")
+    ]
+
+    assert "runtimeStatus," in primary_path_section
+    assert "runtimeStatus: RuntimeStatus | null" in primary_path_section
+    assert "const l2ProbeResourceState = getL2ProbeResourceState(runtimeStatus)" in primary_path_section
+    assert "if (requiresRealL2(selectedTask) && !l2Ready && l2ProbeResourceState.blocked)" in primary_path_section
+    assert "title: '预检组件未就绪'" in primary_path_section
+    assert "ctaLabel: '查看启动器日志'" in primary_path_section
+    assert "action: 'launcher_logs'" in primary_path_section
+    assert "buildConsolePrimaryPath({ selectedTask, configPreview, configPreviewError, configPreviewLoading, l2Gate, l3Gate, runtimeStatus, busy })" in console_section
+    assert "if (primaryPath.action === 'launcher_logs') return onRuntimeLogSourceChange('launcher')" in focus_section
+    assert "primaryPath.action === 'run_l2' && l2ProbeResourceState.blocked" not in focus_section
 
 
 def test_l2_probe_resource_blocker_shows_repair_steps_and_checked_paths():
@@ -3224,7 +3244,7 @@ def test_execution_console_uses_unified_primary_path_before_rendering():
     assert "function buildConsolePrimaryPath" in source
     assert "configPreview: ConfigPreview | null" in source
     assert "configPreviewLoading: boolean" in source
-    assert "const consolePrimaryPath = buildConsolePrimaryPath({ selectedTask, configPreview, configPreviewError, configPreviewLoading, l2Gate, l3Gate, busy })" in console_section
+    assert "const consolePrimaryPath = buildConsolePrimaryPath({ selectedTask, configPreview, configPreviewError, configPreviewLoading, l2Gate, l3Gate, runtimeStatus, busy })" in console_section
     assert "const realSaveBlocked = consolePrimaryPath.saveBlocked" in console_section
     assert "const browserStartBlocked = consolePrimaryPath.blocksBrowserStart" in console_section
     assert "const diagnosticBlockReason" not in console_section

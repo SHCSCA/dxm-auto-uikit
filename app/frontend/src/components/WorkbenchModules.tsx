@@ -68,7 +68,7 @@ type L2RunnerState = {
   updatedAt: string | null
 }
 
-type ConsolePrimaryPathCode = 'select_task' | 'completed' | 'running' | 'not_draft' | 'unreleased' | 'config' | 'l2' | 'l3' | 'busy' | 'ready'
+type ConsolePrimaryPathCode = 'select_task' | 'completed' | 'running' | 'not_draft' | 'unreleased' | 'config' | 'l2' | 'l2_resource' | 'l3' | 'busy' | 'ready'
 
 type ConsolePrimaryPath = {
   code: ConsolePrimaryPathCode
@@ -77,7 +77,7 @@ type ConsolePrimaryPath = {
   detail: string
   next: string
   ctaLabel: string
-  action: 'tasks' | 'config' | 'run_l2' | 'reports' | 'start_browser'
+  action: 'tasks' | 'config' | 'run_l2' | 'reports' | 'start_browser' | 'launcher_logs'
   browserStatus: string
   blocksBrowserStart: boolean
   saveBlocked: boolean
@@ -3315,7 +3315,7 @@ export function ExecutionConsole({
   const browserFrame = getBrowserFrame(workspace, selectedTask, agentConsole)
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
   const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
-  const consolePrimaryPath = buildConsolePrimaryPath({ selectedTask, configPreview, configPreviewError, configPreviewLoading, l2Gate, l3Gate, busy })
+  const consolePrimaryPath = buildConsolePrimaryPath({ selectedTask, configPreview, configPreviewError, configPreviewLoading, l2Gate, l3Gate, runtimeStatus, busy })
   const realSaveBlocked = consolePrimaryPath.saveBlocked
   const realSaveBlockReason = consolePrimaryPath.detail
   const browserStartBlocked = consolePrimaryPath.blocksBrowserStart
@@ -4140,12 +4140,10 @@ function ConsoleFocusPanel({
       : primaryPath.next
   const primaryActionLabel = primaryPath.ctaLabel
   const loginState = humanDxmLoginState(runtimeStatus, runtimeStatusError)
-  const l2ProbeResourceState = getL2ProbeResourceState(runtimeStatus)
-  const primaryActionDisabled = primaryPath.action === 'run_l2' && l2ProbeResourceState.blocked
   const primaryAction = () => {
-    if (primaryActionDisabled) return
     if (primaryPath.action === 'reports') return onShowReports()
     if (primaryPath.action === 'config') return onShowConfig()
+    if (primaryPath.action === 'launcher_logs') return onRuntimeLogSourceChange('launcher')
     if (primaryPath.action === 'run_l2') return onRuntimeControl('run_l2_readonly_probe')
     if (primaryPath.action === 'start_browser') return onStartAgentConsole()
     return onShowTasks()
@@ -4184,8 +4182,8 @@ function ConsoleFocusPanel({
         consoleNext={consoleNext}
         primaryActionLabel={primaryActionLabel}
         onPrimaryAction={primaryAction}
-        primaryActionDisabled={primaryActionDisabled}
-        primaryActionDisabledTitle={primaryActionDisabled ? l2ProbeResourceState.title : undefined}
+        primaryActionDisabled={false}
+        primaryActionDisabledTitle={undefined}
         onShowReports={onShowReports}
         onRuntimeLogSourceChange={onRuntimeLogSourceChange}
         loginState={loginState}
@@ -6147,6 +6145,7 @@ function buildConsolePrimaryPath({
   configPreviewLoading,
   l2Gate,
   l3Gate,
+  runtimeStatus,
   busy,
 }: {
   selectedTask: Task | null
@@ -6155,11 +6154,13 @@ function buildConsolePrimaryPath({
   configPreviewLoading: boolean
   l2Gate?: RegressionGate
   l3Gate?: RegressionGate
+  runtimeStatus: RuntimeStatus | null
   busy: boolean
 }): ConsolePrimaryPath {
   const configOk = configPreview?.ok === true
   const l2Ready = l2Gate?.status === 'passed'
   const l3Ready = l3Gate?.status === 'passed'
+  const l2ProbeResourceState = getL2ProbeResourceState(runtimeStatus)
   const l2Detail = humanGateDetail(l2Gate?.detail)
   const l3Detail = humanGateDetail(l3Gate?.detail)
 
@@ -6273,6 +6274,20 @@ function buildConsolePrimaryPath({
       ctaLabel: '去配置中心补齐配置',
       action: 'config',
       browserStatus: '配置未完成，Agent 执行浏览器暂不启动',
+      blocksBrowserStart: true,
+      saveBlocked: true,
+    }
+  }
+  if (requiresRealL2(selectedTask) && !l2Ready && l2ProbeResourceState.blocked) {
+    return {
+      code: 'l2_resource',
+      title: '预检组件未就绪',
+      reason: '只读页面检查暂不可运行。',
+      detail: l2ProbeResourceState.detail,
+      next: '查看启动器日志，按提示恢复完整免安装目录后再运行预检。',
+      ctaLabel: '查看启动器日志',
+      action: 'launcher_logs',
+      browserStatus: '预检组件未就绪，Agent 执行浏览器暂不启动',
       blocksBrowserStart: true,
       saveBlocked: true,
     }
