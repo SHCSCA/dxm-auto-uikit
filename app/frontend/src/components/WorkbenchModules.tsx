@@ -3406,6 +3406,9 @@ export function ExecutionConsole({
       <L2RunnerStatePanel
         state={l2RunnerState}
         l2Gate={l2Gate}
+        runtimeStatus={runtimeStatus}
+        busy={busy}
+        onRunPrecheck={() => onRuntimeControl('run_l2_readonly_probe')}
         onLogSourceChange={onRuntimeLogSourceChange}
         onShowReports={onShowReports}
       />
@@ -4845,17 +4848,25 @@ function shortUrl(url?: string) {
 function L2RunnerStatePanel({
   state,
   l2Gate,
+  runtimeStatus,
+  busy,
+  onRunPrecheck,
   onLogSourceChange,
   onShowReports,
 }: {
   state: L2RunnerState
   l2Gate?: RegressionGate
+  runtimeStatus: RuntimeStatus | null
+  busy: boolean
+  onRunPrecheck: () => void
   onLogSourceChange: (source: RuntimeLogSource) => void
   onShowReports: () => void
 }) {
   const gateLabel = humanGateStateLabel(l2Gate?.status ?? 'not_run')
   const diagnosticSummaries = summarizeL2Diagnostics(l2Gate)
+  const l2ProbeResourceState = getL2ProbeResourceState(runtimeStatus)
   const tone = state.status === 'passed' ? 'ok' : state.status === 'failed' ? 'danger' : state.status === 'running' ? 'warn' : 'pending'
+  const precheckDisabled = busy || state.status === 'running' || l2ProbeResourceState.blocked
   const title = state.status === 'passed'
     ? '预检通过，已刷新门禁'
     : state.status === 'failed'
@@ -4874,6 +4885,21 @@ function L2RunnerStatePanel({
         <small>{state.runId ? `run-id ${state.runId}` : '运行后会显示 run-id 和退出码。'}</small>
         {state.exitCode !== null && <small>退出码：{state.exitCode}</small>}
         {stateLine && <code>{stateLine}</code>}
+      </div>
+      <div className="l2-runner-state__primary-action" aria-label="运行只读预检主操作">
+        <button
+          className="button"
+          type="button"
+          disabled={precheckDisabled}
+          title={l2ProbeResourceState.title}
+          onClick={() => {
+            onLogSourceChange('launcher')
+            onRunPrecheck()
+          }}
+        >
+          {state.status === 'running' ? '预检运行中' : READONLY_PRECHECK_CTA}
+        </button>
+        {l2ProbeResourceState.blocked && <small>{l2ProbeResourceState.detail}</small>}
       </div>
       <L2PrecheckFailureAdvice summaries={diagnosticSummaries} state={state} />
       <L2PrecheckRunbook

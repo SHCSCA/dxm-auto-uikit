@@ -2758,6 +2758,24 @@ def test_execution_console_explains_l2_precheck_runbook_and_next_action():
     assert ".l2-precheck-runbook__steps" in styles_source
 
 
+def test_execution_console_places_primary_precheck_action_in_l2_state_card():
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    console_section = workbench_source[workbench_source.index("export function ExecutionConsole"):workbench_source.index("function RuntimeLogPreview")]
+    runner_panel = workbench_source[workbench_source.index("function L2RunnerStatePanel"):workbench_source.index("function L2PrecheckFailureAdvice")]
+
+    assert "onRunPrecheck={() => onRuntimeControl('run_l2_readonly_probe')}" in console_section
+    assert "runtimeStatus={runtimeStatus}" in console_section
+    assert "busy={busy}" in console_section
+    assert "const l2ProbeResourceState = getL2ProbeResourceState(runtimeStatus)" in runner_panel
+    assert "const precheckDisabled = busy || state.status === 'running' || l2ProbeResourceState.blocked" in runner_panel
+    assert "aria-label=\"运行只读预检主操作\"" in runner_panel
+    assert "onLogSourceChange('launcher')" in runner_panel
+    assert "onRunPrecheck()" in runner_panel
+    assert "{state.status === 'running' ? '预检运行中' : READONLY_PRECHECK_CTA}" in runner_panel
+    assert "l2-runner-state__primary-action" in styles_source
+
+
 def test_execution_console_shows_l2_failure_advice_in_precheck_card():
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")

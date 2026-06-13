@@ -4727,6 +4727,22 @@ tr:last-child td {
   line-height: 1.45;
 }
 
+.l2-runner-state__primary-action {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.l2-runner-state__primary-action .button {
+  justify-self: start;
+}
+
+.l2-runner-state__primary-action small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .console-log-card.inline-disclosure > summary {
   min-height: 30px;
   display: flex;
