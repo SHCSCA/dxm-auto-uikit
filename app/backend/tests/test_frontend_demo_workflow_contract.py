@@ -246,6 +246,30 @@ def test_config_center_does_not_treat_selected_template_as_currently_used_before
     assert "只有“当前使用”才代表本次执行会读取的模板" in config_section
 
 
+def test_config_center_surfaces_single_template_status_bar():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
+    template_console = config_section[
+        config_section.index('<div className="config-template-console config-template-console--compact"'):
+        config_section.index('<details className="inline-disclosure config-template-console__details">')
+    ]
+
+    assert "aria-label=\"模板使用状态\"" in template_console
+    assert "config-template-console__status-bar" in template_console
+    assert "模板使用状态" in template_console
+    assert "当前使用" in template_console
+    assert "activeTemplateUsageLabel" in template_console
+    assert "待套用" in template_console
+    assert "activePendingTemplateActionLabel" in template_console
+    assert "保存状态" in template_console
+    assert "activeSectionStatusTitle" in template_console
+    assert "保存范围" in template_console
+    assert "currentTemplateScopeLabel" in template_console
+    assert "保存后才会影响执行" in template_console
+    assert ".config-template-console__status-bar" in styles_source
+
+
 def test_config_center_shows_save_scope_explainer_before_actions():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")

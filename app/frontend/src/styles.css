@@ -2837,6 +2837,37 @@ tr:last-child td {
   text-overflow: ellipsis;
 }
 
+.config-template-console__status-bar {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto repeat(4, minmax(0, 1fr)) minmax(180px, 0.9fr);
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid #d8e2ef;
+  border-radius: 7px;
+  background: #f8fbff;
+}
+
+.config-template-console__status-bar span {
+  min-width: 0;
+}
+
+.config-template-console__status-bar small {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.config-template-console__status-bar em {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1.3;
+}
+
 .config-template-console__default-quick {
   grid-column: 1 / -1;
   min-width: 0;

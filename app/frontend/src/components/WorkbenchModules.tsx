@@ -2270,6 +2270,14 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
               <small>{activeTemplateSourceName ? '配置检查已命中模板；要换模板请先选择并点击套用。' : '未手动选择；当前仍按已命中的模板或字段来源执行。'}</small>
             </span>
           </div>
+          <div className="config-template-console__status-bar" aria-label="模板使用状态">
+            <strong>模板使用状态</strong>
+            <span><b>当前使用</b><small>{activeTemplateUsageLabel}</small></span>
+            <span><b>待套用</b><small>{activePendingTemplateActionLabel}</small></span>
+            <span><b>保存状态</b><small>{activeSectionStatusTitle}</small></span>
+            <span><b>保存范围</b><small>{currentTemplateScopeLabel}</small></span>
+            <em>选择模板不会立即影响执行，保存后才会影响执行。</em>
+          </div>
           <div className="config-template-console__default-quick" aria-label="默认测试模板包">
             <div>
               <strong>默认测试模板</strong>
