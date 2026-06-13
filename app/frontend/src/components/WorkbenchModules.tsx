@@ -731,6 +731,7 @@ function DxmLoginInlineForm({
           <small>{loginState.next}</small>
         </div>
       )}
+      <LoginRecoverySteps loginState={loginState} />
       <div className="operator-inline-form__actions">
         <button className="button button--primary" type="submit" disabled={!canSubmit} title={!canSubmit ? loginSubmitDisabledReason : undefined}>
           打开真实登录页
@@ -744,6 +745,24 @@ function DxmLoginInlineForm({
         {!canSubmit && loginSubmitDisabledReason && <small aria-label="不能打开登录页的原因">不能打开登录页的原因：{loginSubmitDisabledReason}</small>}
       </div>
     </form>
+  )
+}
+
+function LoginRecoverySteps({ loginState }: { loginState: ReturnType<typeof humanDxmLoginState> }) {
+  if (!loginState || loginState.label !== '登录未通过') return null
+  const steps = [
+    '保持真实浏览器窗口打开',
+    '修正验证码或账号密码',
+    '再次点击“验证码已完成，检测登录态”',
+    '仍失败时重新点击“打开真实登录页”',
+  ]
+  return (
+    <div className="operator-inline-form__recovery-steps" aria-label="登录恢复步骤">
+      <strong>登录恢复步骤</strong>
+      <ol>
+        {steps.map((step) => <li key={step}>{step}</li>)}
+      </ol>
+    </div>
   )
 }
 

@@ -1340,6 +1340,15 @@ a:focus-visible {
   padding: 6px 8px;
 }
 
+.operator-inline-form--compact .operator-inline-form__recovery-steps {
+  grid-column: 1 / -1;
+  padding: 6px 8px;
+}
+
+.operator-inline-form--compact .operator-inline-form__recovery-steps ol {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .operator-inline-form--compact .operator-inline-form__login-state small {
   display: none;
 }
@@ -1482,6 +1491,35 @@ a:focus-visible {
   font-size: 11px;
   line-height: 1.3;
   overflow-wrap: anywhere;
+}
+
+.operator-inline-form__recovery-steps {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  padding: 8px 9px;
+  border: 1px solid #f0c15a;
+  border-radius: 7px;
+  background: #fffaf0;
+}
+
+.operator-inline-form__recovery-steps strong {
+  color: #7c4a03;
+  font-size: 12px;
+}
+
+.operator-inline-form__recovery-steps ol {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px 12px;
+}
+
+.operator-inline-form__recovery-steps li {
+  color: #7c4a03;
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .operator-inline-form__login-state {

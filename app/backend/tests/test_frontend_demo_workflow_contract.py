@@ -2676,6 +2676,23 @@ def test_frontend_guides_waiting_captcha_and_login_failed_as_operator_steps():
     assert "重新打开登录页会复用当前账号输入" in workbench_source
 
 
+def test_login_failed_state_has_structured_recovery_steps():
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    login_form_section = workbench_source[workbench_source.index("function DxmLoginInlineForm"):workbench_source.index("function CredentialStorageFacts")]
+    recovery_section = workbench_source[workbench_source.index("function LoginRecoverySteps"):workbench_source.index("function CredentialStorageFacts")]
+
+    assert "LoginRecoverySteps" in login_form_section
+    assert "loginState={loginState}" in login_form_section
+    assert "登录恢复步骤" in recovery_section
+    assert "保持真实浏览器窗口打开" in recovery_section
+    assert "修正验证码或账号密码" in recovery_section
+    assert "再次点击“验证码已完成，检测登录态”" in recovery_section
+    assert "仍失败时重新点击“打开真实登录页”" in recovery_section
+    assert "loginState.label !== '登录未通过'" in recovery_section
+    assert "operator-inline-form__recovery-steps" in styles_source
+
+
 def test_frontend_humanizes_agent_console_browser_start_failures():
     app_source = APP_TSX.read_text(encoding="utf-8")
     start_console_section = app_source[
