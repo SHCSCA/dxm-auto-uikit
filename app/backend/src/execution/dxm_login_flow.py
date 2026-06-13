@@ -125,10 +125,10 @@ class DxmLoginFlow:
                 stage='login_failed',
                 label='继续失败',
                 message=f'继续登录失败：{exc}',
-                next_action='确认验证码是否完成，必要时重新打开官网登录页。',
+                next_action='真实浏览器窗口会保留；请确认验证码是否完成，必要时在窗口内修正后再次检测，或重新打开官网登录页。',
             )
+            state['browser_visible'] = not self._is_headless()
             self._write_state(state)
-            self._close_browser_session()
             return state
         if live_status.get('logged_in'):
             state = {
