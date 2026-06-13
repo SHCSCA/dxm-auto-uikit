@@ -1324,6 +1324,8 @@ def test_execution_console_primary_blocker_card_contains_precheck_action_and_pla
     assert "onPrimaryAction={primaryAction}" in focus_section
     assert "primaryActionDisabled={false}" in focus_section
     assert "primaryActionDisabledTitle={undefined}" in focus_section
+    assert "primaryActionDisabled &&" not in focus_section
+    assert "l2ProbeResourceState.detail" not in focus_section
     assert "primaryPath.action === 'run_l2'" in blocker_card_section
     assert "READONLY_PRECHECK_CTA" in blocker_card_section
     assert "READONLY_PRECHECK_PURPOSE" in blocker_card_section
@@ -1333,6 +1335,28 @@ def test_execution_console_primary_blocker_card_contains_precheck_action_and_pla
     assert "disabled={primaryActionDisabled}" in blocker_card_section
     assert ".console-primary-blocker-card__action" in styles_source
     assert ".console-primary-blocker-card__explain" in styles_source
+
+
+def test_execution_console_primary_blocker_details_are_collapsed_by_default():
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    blocker_card_section = workbench_source[
+        workbench_source.index("function ConsolePrimaryBlockerCard"):
+        workbench_source.index("function AgentBrowserFrame")
+    ]
+
+    assert "console-primary-blocker-card__summary" in blocker_card_section
+    assert '<details className="console-primary-blocker-card__details inline-disclosure">' in blocker_card_section
+    assert "<summary>原因与处理细节</summary>" in blocker_card_section
+    assert "console-primary-blocker-card__facts" in blocker_card_section
+    assert blocker_card_section.index("console-primary-blocker-card__action") < blocker_card_section.index("console-primary-blocker-card__details")
+    assert blocker_card_section.index("console-primary-blocker-card__explain") > blocker_card_section.index("console-primary-blocker-card__details")
+    assert blocker_card_section.index("console-primary-blocker-card__recovery") > blocker_card_section.index("console-primary-blocker-card__details")
+    assert blocker_card_section.index("console-primary-blocker-card__task-path") > blocker_card_section.index("console-primary-blocker-card__details")
+    assert blocker_card_section.index("console-primary-blocker-card__login-recovery") > blocker_card_section.index("console-primary-blocker-card__details")
+    assert ".console-primary-blocker-card__summary" in styles_source
+    assert ".console-primary-blocker-card__details" in styles_source
+    assert ".console-primary-blocker-card__facts" in styles_source
 
 
 def test_execution_console_select_task_state_explains_task_preparation_path():

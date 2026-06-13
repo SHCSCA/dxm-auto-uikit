@@ -4234,7 +4234,6 @@ function ConsoleFocusPanel({
         ) : (
           <>
             {primaryPath.saveBlocked && <small>{primaryPath.reason}</small>}
-            {primaryActionDisabled && <small>{l2ProbeResourceState.detail}</small>}
             <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">查看检查计划</button>
           </>
         )}
@@ -4273,61 +4272,10 @@ function ConsolePrimaryBlockerCard({
   return (
     <div className={`console-primary-blocker-card ${tone}`} aria-label="当前只处理这一项" data-console-primary-code={primaryPath.code}>
       <strong>当前只处理这一项</strong>
-      <div>
-        <span>
-          <b>主因</b>
-          <small>{primaryPath.reason}</small>
-        </span>
-        <span>
-          <b>为什么</b>
-          <small>{primaryPath.detail}</small>
-        </span>
-        <span>
-          <b>下一步</b>
-          <small>{primaryPath.next || consoleNext}</small>
-        </span>
-      </div>
-      {primaryPath.action === 'run_l2' && (
-        <p className="console-primary-blocker-card__explain">
-          <b>{READONLY_PRECHECK_CTA}</b>
-          <span>{READONLY_PRECHECK_PURPOSE}</span>
-        </p>
-      )}
-      {primaryPath.action === 'run_l2' && (
-        <div className="console-primary-blocker-card__recovery" aria-label="预检失败恢复路径">
-          <span><b>1 确认登录</b><small>真实浏览器已登录，验证码或账号密码错误先在登录窗口修正。</small></span>
-          <span><b>2 打开目标页</b><small>能打开商品采集页和采集箱；打不开先处理页面权限或网络。</small></span>
-          <span><b>3 重新预检</b><small>无写入风险后，再点击运行预检。</small></span>
-          <button className="button button--quiet" type="button" onClick={() => onRuntimeLogSourceChange('launcher')}>
-            查看启动器日志
-          </button>
-          <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">
-            查看检查计划
-          </button>
-        </div>
-      )}
-      {primaryPath.code === 'select_task' && (
-        <div className="console-primary-blocker-card__task-path" aria-label="任务准备路径">
-          <span><b>1 创建或选择任务</b><small>只处理单商品只保存任务；批量和发布入口保持关闭。</small></span>
-          <span><b>2 确认店铺和商品</b><small>至少有真实店铺和 1 个商品，配置中心才知道本次取值。</small></span>
-          <span><b>3 回到配置和预检</b><small>任务选中后再补配置、运行预检、人工确认保存。</small></span>
-        </div>
-      )}
-      {showLoginRecovery && (
-        <div className="console-primary-blocker-card__login-recovery" aria-label="登录恢复路径">
-          <strong>{loginState.label}</strong>
-          <small>{loginState.next}</small>
-          <span><b>1 保持真实浏览器</b><small>真实店小秘窗口不要关闭，先看验证码、账号或密码提示。</small></span>
-          <span><b>2 修正验证码或账号密码</b><small>登录未通过时先在可见浏览器里处理，再回控制台检测。</small></span>
-          <span><b>3 检测登录态</b><small>完成验证码后点击检测；仍失败再重新打开登录页。</small></span>
-          <button className="button button--quiet" type="button" onClick={onContinueDxmLogin}>
-            验证码已完成，检测登录态
-          </button>
-          <button className="button button--quiet" type="button" onClick={onOpenDxmLogin}>
-            重新打开登录页
-          </button>
-        </div>
-      )}
+      <p className="console-primary-blocker-card__summary">
+        <b>{primaryPath.reason}</b>
+        <small>{primaryPath.next || consoleNext}</small>
+      </p>
       <button
         className="button button--primary console-primary-blocker-card__action"
         type="button"
@@ -4337,6 +4285,64 @@ function ConsolePrimaryBlockerCard({
       >
         {primaryActionLabel}
       </button>
+      <details className="console-primary-blocker-card__details inline-disclosure">
+        <summary>原因与处理细节</summary>
+        <div className="console-primary-blocker-card__facts">
+          <span>
+            <b>主因</b>
+            <small>{primaryPath.reason}</small>
+          </span>
+          <span>
+            <b>为什么</b>
+            <small>{primaryPath.detail}</small>
+          </span>
+          <span>
+            <b>下一步</b>
+            <small>{primaryPath.next || consoleNext}</small>
+          </span>
+        </div>
+        {primaryPath.action === 'run_l2' && (
+          <p className="console-primary-blocker-card__explain">
+            <b>{READONLY_PRECHECK_CTA}</b>
+            <span>{READONLY_PRECHECK_PURPOSE}</span>
+          </p>
+        )}
+        {primaryPath.action === 'run_l2' && (
+          <div className="console-primary-blocker-card__recovery" aria-label="预检失败恢复路径">
+            <span><b>1 确认登录</b><small>真实浏览器已登录，验证码或账号密码错误先在登录窗口修正。</small></span>
+            <span><b>2 打开目标页</b><small>能打开商品采集页和采集箱；打不开先处理页面权限或网络。</small></span>
+            <span><b>3 重新预检</b><small>无写入风险后，再点击运行预检。</small></span>
+            <button className="button button--quiet" type="button" onClick={() => onRuntimeLogSourceChange('launcher')}>
+              查看启动器日志
+            </button>
+            <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">
+              查看检查计划
+            </button>
+          </div>
+        )}
+        {primaryPath.code === 'select_task' && (
+          <div className="console-primary-blocker-card__task-path" aria-label="任务准备路径">
+            <span><b>1 创建或选择任务</b><small>只处理单商品只保存任务；批量和发布入口保持关闭。</small></span>
+            <span><b>2 确认店铺和商品</b><small>至少有真实店铺和 1 个商品，配置中心才知道本次取值。</small></span>
+            <span><b>3 回到配置和预检</b><small>任务选中后再补配置、运行预检、人工确认保存。</small></span>
+          </div>
+        )}
+        {showLoginRecovery && (
+          <div className="console-primary-blocker-card__login-recovery" aria-label="登录恢复路径">
+            <strong>{loginState.label}</strong>
+            <small>{loginState.next}</small>
+            <span><b>1 保持真实浏览器</b><small>真实店小秘窗口不要关闭，先看验证码、账号或密码提示。</small></span>
+            <span><b>2 修正验证码或账号密码</b><small>登录未通过时先在可见浏览器里处理，再回控制台检测。</small></span>
+            <span><b>3 检测登录态</b><small>完成验证码后点击检测；仍失败再重新打开登录页。</small></span>
+            <button className="button button--quiet" type="button" onClick={onContinueDxmLogin}>
+              验证码已完成，检测登录态
+            </button>
+            <button className="button button--quiet" type="button" onClick={onOpenDxmLogin}>
+              重新打开登录页
+            </button>
+          </div>
+        )}
+      </details>
     </div>
   )
 }
