@@ -945,8 +945,9 @@ export default function App() {
       setAgentConsole(status)
     } catch (error) {
       const message = error instanceof Error ? error.message : '人工接管真实浏览器失败'
-      setAgentConsoleError(message)
-      setOperationError(message)
+      const humanMessage = humanAgentConsoleError(message)
+      setAgentConsoleError(humanMessage)
+      setOperationError(humanMessage)
       await refreshAgentConsole()
     } finally {
       setBusy(false)
@@ -961,8 +962,9 @@ export default function App() {
       setAgentConsole(status)
     } catch (error) {
       const message = error instanceof Error ? error.message : '交还 Agent 失败'
-      setAgentConsoleError(message)
-      setOperationError(message)
+      const humanMessage = humanAgentConsoleError(message)
+      setAgentConsoleError(humanMessage)
+      setOperationError(humanMessage)
       await refreshAgentConsole()
     } finally {
       setBusy(false)
@@ -977,13 +979,15 @@ export default function App() {
       setAgentConsole(status)
       if (status.ok === false) {
         const message = status.error || status.reason || '页面内浏览器控制失败'
-        setAgentConsoleError(message)
-        setOperationError(message)
+        const humanMessage = humanAgentConsoleError(message)
+        setAgentConsoleError(humanMessage)
+        setOperationError(humanMessage)
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : '页面内浏览器控制失败'
-      setAgentConsoleError(message)
-      setOperationError(message)
+      const humanMessage = humanAgentConsoleError(message)
+      setAgentConsoleError(humanMessage)
+      setOperationError(humanMessage)
       await refreshAgentConsole(true)
     } finally {
       setBusy(false)

@@ -2896,6 +2896,32 @@ def test_frontend_humanizes_agent_console_browser_start_failures():
     assert "setOperationError(humanMessage)" in start_console_section
 
 
+def test_frontend_humanizes_agent_console_takeover_and_control_failures():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    takeover_section = app_source[
+        app_source.index("async function requestAgentConsoleTakeover"):
+        app_source.index("async function releaseAgentConsoleTakeover")
+    ]
+    release_section = app_source[
+        app_source.index("async function releaseAgentConsoleTakeover"):
+        app_source.index("async function controlAgentConsoleBrowser")
+    ]
+    control_section = app_source[
+        app_source.index("async function controlAgentConsoleBrowser"):
+        app_source.index("async function runRuntimeControl")
+    ]
+
+    assert "const humanMessage = humanAgentConsoleError(message)" in takeover_section
+    assert "setAgentConsoleError(humanMessage)" in takeover_section
+    assert "setOperationError(humanMessage)" in takeover_section
+    assert "const humanMessage = humanAgentConsoleError(message)" in release_section
+    assert "setAgentConsoleError(humanMessage)" in release_section
+    assert "setOperationError(humanMessage)" in release_section
+    assert "const humanMessage = humanAgentConsoleError(message)" in control_section
+    assert "setAgentConsoleError(humanMessage)" in control_section
+    assert "setOperationError(humanMessage)" in control_section
+
+
 def test_frontend_marks_l2_runner_failed_when_start_request_fails():
     app_source = APP_TSX.read_text(encoding="utf-8")
     run_runtime_control = app_source[
