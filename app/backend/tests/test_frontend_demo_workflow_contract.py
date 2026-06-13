@@ -1241,6 +1241,10 @@ def test_execution_console_surfaces_real_browser_takeover_state_before_details()
 def test_execution_console_primary_blocker_card_shows_precheck_recovery_path():
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    execution_console_section = workbench_source[
+        workbench_source.index("export function ExecutionConsole"):
+        workbench_source.index("function ConsoleFocusPanel")
+    ]
     focus_section = workbench_source[
         workbench_source.index("function ConsoleFocusPanel"):
         workbench_source.index("function AgentBrowserFrame")
@@ -1250,6 +1254,9 @@ def test_execution_console_primary_blocker_card_shows_precheck_recovery_path():
         workbench_source.index("function AgentBrowserFrame")
     ]
 
+    assert "onRuntimeLogSourceChange={onRuntimeLogSourceChange}" in execution_console_section
+    assert "onRuntimeLogSourceChange={onRuntimeLogSourceChange}" in focus_section
+    assert "onRuntimeLogSourceChange: (source: RuntimeLogSource) => void" in focus_section
     assert "onShowReports={onShowReports}" in focus_section
     assert "aria-label=\"预检失败恢复路径\"" in blocker_card_section
     assert "console-primary-blocker-card__recovery" in blocker_card_section
@@ -1259,6 +1266,8 @@ def test_execution_console_primary_blocker_card_shows_precheck_recovery_path():
     assert "真实浏览器已登录，验证码或账号密码错误先在登录窗口修正。" in blocker_card_section
     assert "能打开商品采集页和采集箱；打不开先处理页面权限或网络。" in blocker_card_section
     assert "无写入风险后，再点击运行预检。" in blocker_card_section
+    assert "onRuntimeLogSourceChange('launcher')" in blocker_card_section
+    assert "查看启动器日志" in blocker_card_section
     assert "onShowReports" in blocker_card_section
     assert "查看检查计划" in blocker_card_section
     assert ".console-primary-blocker-card__recovery" in styles_source
