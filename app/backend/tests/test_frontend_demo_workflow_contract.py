@@ -2859,6 +2859,24 @@ def test_frontend_humanizes_l2_runner_missing_error():
     assert "setOperationError(humanMessage)" in app_source
 
 
+def test_execution_console_hides_raw_l2_runner_missing_in_gate_and_state_messages():
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    gate_detail_function = workbench_source[
+        workbench_source.index("function humanGateDetail"):
+        workbench_source.index("function humanDiagnosticNavigation")
+    ]
+    runner_state_panel = workbench_source[
+        workbench_source.index("function L2RunnerStatePanel"):
+        workbench_source.index("function L2PrecheckFailureAdvice")
+    ]
+
+    assert "humanL2PrecheckError" in workbench_source
+    assert "L2 readonly probe runner is missing" in gate_detail_function
+    assert "缺少只读页面检查启动器" in gate_detail_function
+    assert "humanL2PrecheckError(state.line)" in runner_state_panel
+    assert "{state.line && <code>{state.line}</code>}" not in runner_state_panel
+
+
 def test_frontend_humanizes_dxm_login_browser_start_failures():
     app_source = APP_TSX.read_text(encoding="utf-8")
     open_login_section = app_source[

@@ -4863,6 +4863,7 @@ function L2RunnerStatePanel({
       : state.status === 'running'
         ? '正在运行双目标预检'
         : '等待运行预检（只读，不保存）'
+  const stateLine = state.line ? humanL2PrecheckError(state.line) : null
 
   return (
     <div className={`module-card span-1 l2-runner-state l2-runner-state--${state.status}`} aria-live="polite">
@@ -4872,7 +4873,7 @@ function L2RunnerStatePanel({
         <strong>{title}</strong>
         <small>{state.runId ? `run-id ${state.runId}` : '运行后会显示 run-id 和退出码。'}</small>
         {state.exitCode !== null && <small>退出码：{state.exitCode}</small>}
-        {state.line && <code>{state.line}</code>}
+        {stateLine && <code>{stateLine}</code>}
       </div>
       <L2PrecheckFailureAdvice summaries={diagnosticSummaries} state={state} />
       <L2PrecheckRunbook
@@ -6934,6 +6935,8 @@ function humanGateStateLabel(status: string) {
 
 function humanGateDetail(detail?: string | null) {
   if (!detail) return null
+  const resourceMessage = humanL2PrecheckError(detail)
+  if (resourceMessage !== detail) return resourceMessage
   if (
     detail.includes('时效')
     || detail.includes('过期')
@@ -6958,6 +6961,19 @@ function humanGateDetail(detail?: string | null) {
     .split('L3').join('真实保存')
     .split('passed').join('通过')
     .split('probe').join('预检')
+}
+
+function humanL2PrecheckError(message: string) {
+  if (message.includes('L2 readonly probe resources are missing')) {
+    return '预检组件未安装完整：请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
+  }
+  if (message.includes('L2 readonly probe runner is missing')) {
+    return '预检组件未安装完整：缺少只读页面检查启动器。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
+  }
+  if (message.includes('L2 readonly probe script is missing')) {
+    return '预检组件未安装完整：缺少只读页面检查脚本。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
+  }
+  return message
 }
 
 function humanDiagnosticNavigation(value: string) {
