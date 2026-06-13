@@ -67,7 +67,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
   const headline = selectedTaskCompleted
     ? '当前任务已完成，可查看执行记录'
     : runtimeStatusUnavailable
-      ? '运行状态接口不可用'
+      ? '工作台服务连接异常'
       : nextHeadline
   const gateStatusLine = `L2 页面核验 ${humanGateStatus(l2Gate?.status ?? workspace.safety.l2Status ?? 'not_run')}，人工确认 ${humanGateStatus(l3Gate?.status ?? 'not_run')}`
   const statusLine = `当前任务 ${activeTaskLabel}，${tone === 'danger' ? `保存前置条件未完成：${gateStatusLine}` : gateStatusLine}`
@@ -87,7 +87,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
       : `当前任务 ${activeTaskLabel}，最近校验 ${workspace.safety.lastCheckedAt}`
   const conciseDetail = tone === 'danger'
     ? runtimeStatusUnavailable
-      ? '无法读取本机运行状态；请查看实时日志或重启免安装版。'
+      ? '后端未连接不是账号、配置或店小秘页面问题；请查看实时日志、刷新状态或重启免安装版。'
       : '工作台只会执行受控“只保存”，发布和批量无人值守仍保持关闭。'
     : selectedTaskCompleted
       ? `任务 ${activeTaskLabel} ${activeTaskStatusLabel}，继续查看报告、证据或打开执行控制台复核。`
@@ -149,9 +149,13 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
       : '可启动只保存'
   const primaryActionLabel = selectedTaskCompleted
     ? '查看执行记录'
+    : runtimeStatusUnavailable
+      ? '查看日志'
     : '下一步'
   const handlePrimaryAction = selectedTaskCompleted
     ? onShowConsole
+    : runtimeStatusUnavailable
+      ? onShowConsole
     : !dxmLoggedIn
       ? onShowConsole
       : configBlocksRealSave
@@ -190,7 +194,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
           <span>{detail}</span>
         </details>
         <button className="button button--quiet" type="button" onClick={onRefresh} disabled={busy}>
-          刷新
+          {runtimeStatusUnavailable ? '刷新状态' : '刷新'}
         </button>
       </div>
     </section>

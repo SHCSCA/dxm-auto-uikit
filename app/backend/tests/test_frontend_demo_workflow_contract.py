@@ -3081,6 +3081,19 @@ def test_frontend_keeps_runtime_and_config_fetch_failures_distinct_from_user_sta
     assert "configPreviewError: string | null" in workbench_source
 
 
+def test_safety_bar_has_explicit_service_recovery_state_when_backend_is_unavailable():
+    safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
+
+    assert "runtimeStatusUnavailable" in safety_bar
+    assert "工作台服务连接异常" in safety_bar
+    assert "查看日志" in safety_bar
+    assert "刷新状态" in safety_bar
+    assert "后端未连接不是账号、配置或店小秘页面问题" in safety_bar
+    assert "primaryActionLabel = selectedTaskCompleted" in safety_bar
+    assert "runtimeStatusUnavailable" in safety_bar[safety_bar.index("const primaryActionLabel"):safety_bar.index("const handlePrimaryAction")]
+    assert "runtimeStatusUnavailable" in safety_bar[safety_bar.index("const handlePrimaryAction"):safety_bar.index("return (")]
+
+
 def test_frontend_does_not_surface_raw_backend_fetch_failures_to_operator():
     app_source = APP_TSX.read_text(encoding="utf-8")
     safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
