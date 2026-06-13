@@ -78,6 +78,19 @@ def test_desktop_main_starts_backend_hidden_and_loads_frontend_with_api_base():
     assert "--qa-capture=" in source
     assert "show: !qaCapturePath" in source
     assert "webContents.capturePage()" in source
+
+
+def test_desktop_main_logs_packaged_probe_resource_status_before_backend_start():
+    source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    startup_section = source[source.index("async function createWindow"):source.index("ipcMain.handle")]
+
+    assert "function logPackagedResourceStatus" in source
+    assert "tools/probes/l2_readonly_probe_runner.py" in source
+    assert "tools/probes/l2_readonly_probe.py" in source
+    assert "config/l2_readonly_allowlist.json" in source
+    assert "Packaged resource status:" in source
+    assert "logPackagedResourceStatus(repoRoot)" in startup_section
+    assert startup_section.index("logPackagedResourceStatus(repoRoot)") < startup_section.index("startBackend(repoRoot, port)")
     assert "QA capture written" in source
 
 

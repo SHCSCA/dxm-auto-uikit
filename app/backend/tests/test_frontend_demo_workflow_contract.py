@@ -178,6 +178,29 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "执行器启动时读取同一份检查取值" in config_section
     assert "SectionExecutionValuePreview" in config_section
     assert "当前分区执行取值核对" in source
+
+
+def test_config_center_save_feedback_selects_saved_template_and_shows_time():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
+    save_section = config_section[config_section.index("async function saveConfigSection"):config_section.index("function continueToNextMissingSection")]
+    default_pack_section = config_section[config_section.index("async function applyDefaultTemplatePack"):config_section.index("async function runConfigPrecheck")]
+    status_bar = config_section[config_section.index('aria-label="模板使用状态"'):config_section.index('aria-label="默认测试模板包"')]
+
+    assert "nextSelectedTemplates[section.code] = String(savedTemplate.id)" in default_pack_section
+    assert "nextLastSavedTemplates[section.code]" in default_pack_section
+    assert "const savedAt = new Date().toLocaleString('zh-CN', { hour12: false })" in save_section
+    assert "savedAt," in save_section
+    assert "setSelectedTemplateBySection((current) => ({ ...current, [section.code]: String(savedTemplate.id) }))" in save_section
+    assert "setLastSavedTemplateBySection((current) => ({" in save_section
+    assert "id: savedTemplate.id" in save_section
+    assert "name: savedTemplate.template_name" in save_section
+    assert "店铺模板 #${savedTemplate.id} ${savedTemplate.template_name}；保存时间 ${savedAt}" in save_section
+    assert "<b>当前使用</b><small>{activeTemplateUsageLabel}</small>" in status_bar
+    assert "<b>待套用</b><small>{activePendingTemplateActionLabel}</small>" in status_bar
+    assert "<b>最近保存</b><small>{activeLastSavedTemplateLabel}</small>" in status_bar
+    assert "<b>保存范围</b><small>{currentTemplateScopeLabel}</small>" in status_bar
     assert "执行时按这些值填写店小秘编辑页" in source
     assert "sourceBadgeText(field.source)" in source
     assert "formatPreviewValue(field.value)" in source

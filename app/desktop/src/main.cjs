@@ -210,6 +210,19 @@ function appendDesktopLog(message) {
   fs.appendFileSync(logPath, line, 'utf8')
 }
 
+function logPackagedResourceStatus(repoRoot) {
+  const resources = [
+    'tools/probes/l2_readonly_probe_runner.py',
+    'tools/probes/l2_readonly_probe.py',
+    'config/l2_readonly_allowlist.json',
+  ]
+  const facts = resources.map((relativePath) => {
+    const fullPath = path.join(repoRoot, ...relativePath.split('/'))
+    return `${relativePath}=${fs.existsSync(fullPath) ? 'ok' : 'missing'} (${fullPath})`
+  })
+  appendDesktopLog(`Packaged resource status: repoRoot=${repoRoot}; ${facts.join('; ')}`)
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll('&', '&amp;')
@@ -404,6 +417,7 @@ async function createWindow() {
     const port = await findFreePort(8000)
     runtimeInfo.backendPort = port
     runtimeInfo.apiBase = `http://127.0.0.1:${port}`
+    logPackagedResourceStatus(repoRoot)
     startBackend(repoRoot, port)
     await waitForHealth(runtimeInfo.apiBase)
 
