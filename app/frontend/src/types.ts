@@ -75,7 +75,7 @@ export type RuntimeStatus = {
     createdAt?: string | null
     lockFile?: string | null
   }
-  dependencies: Record<string, { status: string; path?: string | null; checkedPaths?: string[] }>
+  dependencies: Record<string, { status: string; path?: string | null; checkedPaths?: string[]; label?: string; requiredFor?: string; userMessage?: string; repairAction?: string; repairSteps?: string[] }>
   runtimeControl?: {
     owner?: 'start_mvp' | 'desktop' | 'direct' | string
     managedByLauncher: boolean

@@ -1225,13 +1225,13 @@ function humanOperationError(message: string) {
   const runtimeStatusMessage = humanRuntimeStatusError(message)
   if (runtimeStatusMessage !== message) return runtimeStatusMessage
   if (message.includes('L2 readonly probe resources are missing')) {
-    return `只读页面检查资源缺失，请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${checkedPathHint(message)}`
+    return `预检组件未安装完整，请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${checkedPathHint(message)}`
   }
   if (message.includes('L2 readonly probe runner is missing')) {
-    return `只读页面检查启动器缺失，请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
+    return `预检组件未安装完整：缺少只读页面检查启动器。请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
   }
   if (message.includes('L2 readonly probe script is missing')) {
-    return `只读页面检查脚本缺失，请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
+    return `预检组件未安装完整：缺少只读页面检查脚本。请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
   }
   return message
 }

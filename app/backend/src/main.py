@@ -1120,10 +1120,36 @@ def _resolve_resource_path(default_path: Path, relative_path: str) -> Path:
 def _resource_dependency_status(default_path: Path, relative_path: str) -> dict[str, Any]:
     resolved = _resolve_resource_path(default_path, relative_path)
     checked_paths = _resource_path_candidates(default_path, relative_path)
+    status = 'ok' if resolved.exists() else 'missing'
+    info = _resource_dependency_user_info(relative_path)
     return {
-        'status': 'ok' if resolved.exists() else 'missing',
+        'status': status,
         'path': str(resolved),
         'checkedPaths': [str(path) for path in checked_paths],
+        **info,
+        'userMessage': ''
+        if status == 'ok'
+        else f"预检组件未安装完整：缺少{info['label']}。",
+    }
+
+
+def _resource_dependency_user_info(relative_path: str) -> dict[str, Any]:
+    labels = {
+        'tools/probes/l2_readonly_probe_runner.py': '只读页面检查启动器',
+        'tools/probes/l2_readonly_probe.py': '只读页面检查脚本',
+        'config/l2_readonly_allowlist.json': '只读安全名单',
+    }
+    label = labels.get(relative_path, '运行依赖文件')
+    return {
+        'label': label,
+        'requiredFor': '运行预检（只读，不保存）',
+        'repairAction': '重新打开完整免安装版',
+        'repairSteps': [
+            '关闭旧的 DXM Agent Console 或后台旧进程。',
+            '打开桌面免安装目录里的 DXM-Agent-Console.exe。',
+            '不要只复制 exe，必须保留 resources 文件夹。',
+            '如果仍缺失，请重新打包免安装版后再启动。',
+        ],
     }
 
 

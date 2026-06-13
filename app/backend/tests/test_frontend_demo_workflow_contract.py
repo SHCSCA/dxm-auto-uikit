@@ -2437,17 +2437,22 @@ def test_frontend_surfaces_runtime_status_and_log_filters():
     assert "const l2ProbeResourceState = getL2ProbeResourceState(runtimeStatus)" in focus_panel_section
     assert "const primaryActionDisabled = primaryPath.action === 'run_l2' && l2ProbeResourceState.blocked" in focus_panel_section
     assert "disabled={primaryActionDisabled}" in focus_panel_section
-    assert "title={primaryActionDisabled ? l2ProbeResourceState.title : undefined}" in focus_panel_section
+    assert "primaryActionDisabledTitle={primaryActionDisabled ? l2ProbeResourceState.title : undefined}" in focus_panel_section
     assert "dependencies.l2_readonly_probe_runner" in workbench_source
     assert "dependencies.l2_readonly_probe_script" in workbench_source
     assert "dependencies.l2_readonly_probe_allowlist" in workbench_source
     assert "if (!runtimeStatus || !runtimeStatus.dependencies)" in workbench_source
+    assert "userMessage" in (REPO_ROOT / "app" / "frontend" / "src" / "types.ts").read_text(encoding="utf-8")
+    assert "repairSteps" in (REPO_ROOT / "app" / "frontend" / "src" / "types.ts").read_text(encoding="utf-8")
+    assert "item?.userMessage" in workbench_source
+    assert "item?.repairSteps" in workbench_source
+    assert "预检组件未安装完整" in workbench_source
     assert "只读页面检查依赖状态未知，请先刷新运行状态或重新打开免安装版。" in workbench_source
     assert "checkedPaths" in (REPO_ROOT / "app" / "frontend" / "src" / "types.ts").read_text(encoding="utf-8")
     assert "已检查：" in workbench_source
     assert ".slice(0, 4)" in workbench_source
     assert "agent-console-resource-alert" in workbench_source
-    assert "只读页面检查资源缺失，请关闭旧进程并重新打开完整免安装目录版" in workbench_source
+    assert "预检组件未安装完整，请关闭旧进程并重新打开完整免安装目录版" in workbench_source
     assert "DXM-Agent-Console-免安装版\\\\DXM-Agent-Console.exe" in workbench_source
     assert "task: '任务'" in workbench_source
     assert "agent: '浏览器 Agent'" in workbench_source
@@ -2732,9 +2737,9 @@ def test_frontend_humanizes_l2_runner_missing_error():
 
     assert "function humanOperationError" in app_source
     assert "L2 readonly probe resources are missing" in app_source
-    assert "只读页面检查资源缺失，请关闭旧进程并重新打开完整免安装目录版。" in app_source
+    assert "预检组件未安装完整，请关闭旧进程并重新打开完整免安装目录版。" in app_source
     assert "L2 readonly probe runner is missing" in app_source
-    assert "只读页面检查启动器缺失，请关闭旧进程并重新打开完整免安装目录版。" in app_source
+    assert "预检组件未安装完整：缺少只读页面检查启动器。" in app_source
     assert "function searchedPathHint(message: string)" in app_source
     assert "const marker = 'Searched:'" in app_source
     assert ".slice(0, 3)" in app_source

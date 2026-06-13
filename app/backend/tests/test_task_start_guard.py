@@ -1041,6 +1041,11 @@ def test_runtime_status_reports_l2_probe_checked_paths_when_resource_missing(tmp
     assert runner["path"] == str(missing_root / "tools" / "probes" / "l2_readonly_probe_runner.py")
     assert str(resource_root / "tools" / "probes" / "l2_readonly_probe_runner.py") in runner["checkedPaths"]
     assert str(missing_root / "tools" / "probes" / "l2_readonly_probe_runner.py") in runner["checkedPaths"]
+    assert runner["label"] == "只读页面检查启动器"
+    assert runner["requiredFor"] == "运行预检（只读，不保存）"
+    assert runner["userMessage"] == "预检组件未安装完整：缺少只读页面检查启动器。"
+    assert runner["repairAction"] == "重新打开完整免安装版"
+    assert "不要只复制 exe，必须保留 resources 文件夹。" in runner["repairSteps"]
 
 
 def test_runtime_status_reports_l2_probe_runner_lock_state(tmp_path, monkeypatch):

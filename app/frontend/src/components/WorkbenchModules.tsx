@@ -3795,21 +3795,24 @@ function getL2ProbeResourceState(runtimeStatus: RuntimeStatus | null) {
     }
   }
   const detail = missing
-    .map(([label, item]) => `${label}: ${item?.path ?? '路径未知'}`)
+    .map(([label, item]) => `${item?.userMessage || `预检组件未安装完整：缺少${item?.label || label}。`}`)
     .join('；')
   const checkedPaths = missing
     .flatMap(([, item]) => item?.checkedPaths ?? [])
     .slice(0, 4)
   const checkedText = checkedPaths.length ? `已检查：${checkedPaths.join('；')}` : '已检查路径：暂无'
-  const repairSteps = [
+  const backendRepairSteps = Array.from(new Set(missing.flatMap(([, item]) => item?.repairSteps ?? [])))
+  const repairSteps = backendRepairSteps.length
+    ? backendRepairSteps
+    : [
     '关闭旧的 DXM Agent Console 或后台旧进程。',
     '打开桌面免安装目录里的 DXM-Agent-Console.exe。',
     '不要只复制 exe，必须保留 resources 文件夹。',
-  ]
+    ]
   return {
     blocked: true,
-    title: `只读页面检查资源缺失：${detail}。${checkedText}`,
-    detail: `只读页面检查资源缺失，请关闭旧进程并重新打开完整免安装目录版。${detail}。${checkedText}`,
+    title: `预检组件未安装完整：${detail}。${checkedText}`,
+    detail: `预检组件未安装完整，请关闭旧进程并重新打开完整免安装目录版。${detail}。${checkedText}`,
     repairSteps,
     checkedPathPreview: checkedPaths,
   }
