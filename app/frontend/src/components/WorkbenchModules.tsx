@@ -4104,6 +4104,7 @@ function ConsoleFocusPanel({
         <span><strong>阻断原因</strong><b>{primaryPath.saveBlocked ? primaryPath.reason : '当前未发现保存阻断'}</b></span>
         <span><strong>下一步</strong><b>{consoleNext}</b></span>
       </div>
+      <ConsolePrimaryBlockerCard primaryPath={primaryPath} consoleNext={consoleNext} />
       <div className="console-focus-panel__primary-facts">
         <span><strong>任务</strong><b>{selectedTask ? `${displayTaskName(selectedTask)} / ${humanTaskStatus(selectedTask.status)}` : '待选择'}</b></span>
         <span><strong>执行浏览器</strong><b>{browserLabel}</b></span>
@@ -4139,6 +4140,29 @@ function ConsoleFocusPanel({
             <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">查看检查计划</button>
           </>
         )}
+      </div>
+    </div>
+  )
+}
+
+function ConsolePrimaryBlockerCard({ primaryPath, consoleNext }: { primaryPath: ConsolePrimaryPath; consoleNext: string }) {
+  const tone = primaryPath.saveBlocked ? 'is-blocked' : primaryPath.code === 'ready' ? 'is-ready' : 'is-neutral'
+  return (
+    <div className={`console-primary-blocker-card ${tone}`} aria-label="当前只处理这一项" data-console-primary-code={primaryPath.code}>
+      <strong>当前只处理这一项</strong>
+      <div>
+        <span>
+          <b>主因</b>
+          <small>{primaryPath.reason}</small>
+        </span>
+        <span>
+          <b>为什么</b>
+          <small>{primaryPath.detail}</small>
+        </span>
+        <span>
+          <b>下一步</b>
+          <small>{primaryPath.next || consoleNext}</small>
+        </span>
       </div>
     </div>
   )

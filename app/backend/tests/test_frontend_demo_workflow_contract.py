@@ -1153,6 +1153,36 @@ def test_execution_console_surfaces_operator_decision_and_collapses_live_logs_by
     assert ".console-log-card.inline-disclosure > summary" in styles_source
 
 
+def test_execution_console_surfaces_single_primary_blocker_card():
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    focus_section = workbench_source[
+        workbench_source.index("function ConsoleFocusPanel"):
+        workbench_source.index("function AgentBrowserFrame")
+    ]
+    blocker_card_section = workbench_source[
+        workbench_source.index("function ConsolePrimaryBlockerCard"):
+        workbench_source.index("function AgentBrowserFrame")
+    ]
+    visible_before_details = focus_section[
+        focus_section.index("<div className=\"console-focus-panel__main\">"):
+        focus_section.index("<details className=\"console-focus-panel__details inline-disclosure\">")
+    ]
+
+    assert "ConsolePrimaryBlockerCard" in focus_section
+    assert "primaryPath={primaryPath}" in focus_section
+    assert "当前只处理这一项" in blocker_card_section
+    assert "主因" in blocker_card_section
+    assert "为什么" in blocker_card_section
+    assert "下一步" in blocker_card_section
+    assert "primaryPath.code" in blocker_card_section
+    assert "primaryPath.reason" in blocker_card_section
+    assert "primaryPath.detail" in blocker_card_section
+    assert "primaryPath.next" in blocker_card_section
+    assert "console-primary-blocker-card" in styles_source
+    assert visible_before_details.index("ConsolePrimaryBlockerCard") < visible_before_details.index("console-focus-panel__primary-facts")
+
+
 def test_execution_console_distinguishes_login_browser_from_agent_execution_browser():
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     app_source = (REPO_ROOT / "app" / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")

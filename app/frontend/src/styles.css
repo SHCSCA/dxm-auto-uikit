@@ -4245,6 +4245,58 @@ tr:last-child td {
   background: color-mix(in srgb, var(--accent) 6%, var(--surface-alt));
 }
 
+.console-primary-blocker-card {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-alt);
+}
+
+.console-primary-blocker-card.is-blocked {
+  border-color: #f0d28c;
+  background: #fffaf0;
+}
+
+.console-primary-blocker-card.is-ready {
+  border-color: #bfddce;
+  background: #f8fcfa;
+}
+
+.console-primary-blocker-card > strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.console-primary-blocker-card > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.console-primary-blocker-card span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.console-primary-blocker-card b {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.console-primary-blocker-card small {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .console-focus-panel__primary-facts span {
   min-height: 52px;
   padding: 8px;
