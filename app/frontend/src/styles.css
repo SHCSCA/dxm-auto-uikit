@@ -4363,6 +4363,60 @@ tr:last-child td {
   white-space: nowrap;
 }
 
+.console-primary-blocker-card__login-recovery {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid #f1b9c2;
+  border-radius: 7px;
+  background: #fff7f8;
+}
+
+.console-primary-blocker-card__login-recovery > strong {
+  grid-column: 1 / -1;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.console-primary-blocker-card__login-recovery > small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.console-primary-blocker-card__login-recovery > span {
+  min-width: 0;
+  min-height: 54px;
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.console-primary-blocker-card__login-recovery b {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.console-primary-blocker-card__login-recovery span small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.console-primary-blocker-card__login-recovery > button {
+  align-self: end;
+  white-space: nowrap;
+}
+
 .console-focus-panel__primary-facts span {
   min-height: 52px;
   padding: 8px;

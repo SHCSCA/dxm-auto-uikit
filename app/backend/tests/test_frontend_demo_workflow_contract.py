@@ -2776,6 +2776,41 @@ def test_login_failed_state_has_structured_recovery_steps():
     assert "operator-inline-form__recovery-steps" in styles_source
 
 
+def test_execution_console_primary_blocker_card_shows_login_recovery_path():
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    execution_console_section = workbench_source[
+        workbench_source.index("export function ExecutionConsole"):
+        workbench_source.index("function AgentBrowserFrame")
+    ]
+    focus_section = workbench_source[
+        workbench_source.index("function ConsoleFocusPanel"):
+        workbench_source.index("function AgentBrowserFrame")
+    ]
+    blocker_card_section = workbench_source[
+        workbench_source.index("function ConsolePrimaryBlockerCard"):
+        workbench_source.index("function AgentBrowserFrame")
+    ]
+
+    assert "runtimeStatusError={runtimeStatusError}" in execution_console_section
+    assert "onOpenDxmLogin={onOpenDxmLogin}" in execution_console_section
+    assert "onContinueDxmLogin={onContinueDxmLogin}" in execution_console_section
+    assert "const loginState = humanDxmLoginState(runtimeStatus, runtimeStatusError)" in focus_section
+    assert "loginState={loginState}" in focus_section
+    assert "onOpenDxmLogin={onOpenDxmLogin}" in focus_section
+    assert "onContinueDxmLogin={onContinueDxmLogin}" in focus_section
+    assert "aria-label=\"登录恢复路径\"" in blocker_card_section
+    assert "console-primary-blocker-card__login-recovery" in blocker_card_section
+    assert "登录还没完成，不是系统故障" in blocker_card_section
+    assert "登录未通过" in blocker_card_section
+    assert "1 保持真实浏览器" in blocker_card_section
+    assert "2 修正验证码或账号密码" in blocker_card_section
+    assert "3 检测登录态" in blocker_card_section
+    assert "验证码已完成，检测登录态" in blocker_card_section
+    assert "重新打开登录页" in blocker_card_section
+    assert ".console-primary-blocker-card__login-recovery" in styles_source
+
+
 def test_frontend_humanizes_agent_console_browser_start_failures():
     app_source = APP_TSX.read_text(encoding="utf-8")
     start_console_section = app_source[

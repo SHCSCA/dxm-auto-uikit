@@ -3287,6 +3287,7 @@ export function ExecutionConsole({
         agentConsole={agentConsole}
         primaryPath={consolePrimaryPath}
         runtimeStatus={runtimeStatus}
+        runtimeStatusError={runtimeStatusError}
         runtimeLogSource={runtimeLogSource}
         runtimeLogCount={runtimeLogCount}
         onStartAgentConsole={onStartAgentConsole}
@@ -3294,6 +3295,8 @@ export function ExecutionConsole({
         onShowConfig={onShowConfig}
         onShowReports={onShowReports}
         onRuntimeControl={onRuntimeControl}
+        onOpenDxmLogin={onOpenDxmLogin}
+        onContinueDxmLogin={onContinueDxmLogin}
       />
 
       {compactCompletedReview ? (
@@ -4005,6 +4008,7 @@ function ConsoleFocusPanel({
   agentConsole,
   primaryPath,
   runtimeStatus,
+  runtimeStatusError,
   runtimeLogSource,
   runtimeLogCount,
   onStartAgentConsole,
@@ -4012,12 +4016,15 @@ function ConsoleFocusPanel({
   onShowConfig,
   onShowReports,
   onRuntimeControl,
+  onOpenDxmLogin,
+  onContinueDxmLogin,
 }: {
   selectedTask: Task | null
   activeStep?: { title: string; code?: string; detail: string; state: string }
   agentConsole: AgentConsoleSession | null
   primaryPath: ConsolePrimaryPath
   runtimeStatus: RuntimeStatus | null
+  runtimeStatusError?: string | null
   runtimeLogSource: RuntimeLogSource
   runtimeLogCount: number
   onStartAgentConsole: () => void
@@ -4025,6 +4032,8 @@ function ConsoleFocusPanel({
   onShowConfig: () => void
   onShowReports: () => void
   onRuntimeControl: (action: RuntimeControlAction) => void
+  onOpenDxmLogin: () => void
+  onContinueDxmLogin: () => void
 }) {
   const active = Boolean(agentConsole?.active)
   const hasBrowserSession = Boolean(agentConsole?.active || agentConsole?.updated_at)
@@ -4065,6 +4074,7 @@ function ConsoleFocusPanel({
           : humanConsoleText(agentConsole?.hud?.next_step ?? '按当前步骤继续操作真实浏览器')
       : primaryPath.next
   const primaryActionLabel = primaryPath.ctaLabel
+  const loginState = humanDxmLoginState(runtimeStatus, runtimeStatusError)
   const l2ProbeResourceState = getL2ProbeResourceState(runtimeStatus)
   const primaryActionDisabled = primaryPath.action === 'run_l2' && l2ProbeResourceState.blocked
   const primaryAction = () => {
@@ -4112,6 +4122,9 @@ function ConsoleFocusPanel({
         primaryActionDisabled={primaryActionDisabled}
         primaryActionDisabledTitle={primaryActionDisabled ? l2ProbeResourceState.title : undefined}
         onShowReports={onShowReports}
+        loginState={loginState}
+        onOpenDxmLogin={onOpenDxmLogin}
+        onContinueDxmLogin={onContinueDxmLogin}
       />
       <div className="console-focus-panel__primary-facts">
         <span><strong>任务</strong><b>{selectedTask ? `${displayTaskName(selectedTask)} / ${humanTaskStatus(selectedTask.status)}` : '待选择'}</b></span>
@@ -4152,6 +4165,9 @@ function ConsolePrimaryBlockerCard({
   primaryActionDisabled,
   primaryActionDisabledTitle,
   onShowReports,
+  loginState,
+  onOpenDxmLogin,
+  onContinueDxmLogin,
 }: {
   primaryPath: ConsolePrimaryPath
   consoleNext: string
@@ -4160,8 +4176,12 @@ function ConsolePrimaryBlockerCard({
   primaryActionDisabled: boolean
   primaryActionDisabledTitle?: string
   onShowReports: () => void
+  loginState: ReturnType<typeof humanDxmLoginState>
+  onOpenDxmLogin: () => void
+  onContinueDxmLogin: () => void
 }) {
   const tone = primaryPath.saveBlocked ? 'is-blocked' : primaryPath.code === 'ready' ? 'is-ready' : 'is-neutral'
+  const showLoginRecovery = loginState?.label === '登录还没完成，不是系统故障' || loginState?.label === '登录未通过'
   return (
     <div className={`console-primary-blocker-card ${tone}`} aria-label="当前只处理这一项" data-console-primary-code={primaryPath.code}>
       <strong>当前只处理这一项</strong>
@@ -4192,6 +4212,21 @@ function ConsolePrimaryBlockerCard({
           <span><b>3 重新预检</b><small>无写入风险后，再点击运行预检。</small></span>
           <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">
             查看检查计划
+          </button>
+        </div>
+      )}
+      {showLoginRecovery && (
+        <div className="console-primary-blocker-card__login-recovery" aria-label="登录恢复路径">
+          <strong>{loginState.label}</strong>
+          <small>{loginState.next}</small>
+          <span><b>1 保持真实浏览器</b><small>真实店小秘窗口不要关闭，先看验证码、账号或密码提示。</small></span>
+          <span><b>2 修正验证码或账号密码</b><small>登录未通过时先在可见浏览器里处理，再回控制台检测。</small></span>
+          <span><b>3 检测登录态</b><small>完成验证码后点击检测；仍失败再重新打开登录页。</small></span>
+          <button className="button button--quiet" type="button" onClick={onContinueDxmLogin}>
+            验证码已完成，检测登录态
+          </button>
+          <button className="button button--quiet" type="button" onClick={onOpenDxmLogin}>
+            重新打开登录页
           </button>
         </div>
       )}
