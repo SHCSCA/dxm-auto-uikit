@@ -1818,6 +1818,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   const [configMessage, setConfigMessage] = useState<string | null>(null)
   const [defaultTemplatePackState, setDefaultTemplatePackState] = useState<string>('尚未套用默认测试模板')
   const [selectedTemplateBySection, setSelectedTemplateBySection] = useState<Record<ConfigSectionCode, string>>({} as Record<ConfigSectionCode, string>)
+  const [lastSavedTemplateBySection, setLastSavedTemplateBySection] = useState<Record<ConfigSectionCode, { id: number; name: string; savedAt: string }>>({} as Record<ConfigSectionCode, { id: number; name: string; savedAt: string }>)
   const [sectionSaveState, setSectionSaveState] = useState<Record<ConfigSectionCode, ConfigSectionSaveState>>({} as Record<ConfigSectionCode, ConfigSectionSaveState>)
   const sectionsWithPreview = editableConfigSections.map((section) => ({
     section,
@@ -1859,6 +1860,10 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   const activePendingTemplateActionLabel = activeSelectedTemplateId
     ? `待套用：${activeSelectedTemplateLabel}`
     : '未选择待套用模板'
+  const activeLastSavedTemplate = lastSavedTemplateBySection[selectedConfigSection.section.code]
+  const activeLastSavedTemplateLabel = activeLastSavedTemplate
+    ? `#${activeLastSavedTemplate.id} ${activeLastSavedTemplate.name} / ${activeLastSavedTemplate.savedAt}`
+    : '本分区尚无最近保存记录'
   const activeTemplateUsageLabel = activeTemplateSourceName
     || (activeSectionAlreadyPersisted ? '配置检查已命中模板' : '尚未命中已保存模板')
   const activeTemplateTrace = configPreview?.templateTrace?.length
@@ -1926,6 +1931,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
 
   useEffect(() => {
     setSelectedTemplateBySection({} as Record<ConfigSectionCode, string>)
+    setLastSavedTemplateBySection({} as Record<ConfigSectionCode, { id: number; name: string; savedAt: string }>)
     setSectionSaveState({} as Record<ConfigSectionCode, ConfigSectionSaveState>)
     setConfigMessage(null)
     setDefaultTemplatePackState('尚未套用默认测试模板')
@@ -2013,6 +2019,15 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
         ? await patchJson<Template>(`/api/templates/${existing.id}`, body)
         : await postJson<Template>('/api/templates', body)
       const savedAt = new Date().toLocaleString('zh-CN', { hour12: false })
+      setSelectedTemplateBySection((current) => ({ ...current, [section.code]: String(savedTemplate.id) }))
+      setLastSavedTemplateBySection((current) => ({
+        ...current,
+        [section.code]: {
+          id: savedTemplate.id,
+          name: savedTemplate.template_name,
+          savedAt,
+        },
+      }))
       setSectionSaveState((current) => ({
         ...current,
         [section.code]: {
@@ -2258,9 +2273,10 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
             <strong>模板使用状态</strong>
             <span><b>当前使用</b><small>{activeTemplateUsageLabel}</small></span>
             <span><b>待套用</b><small>{activePendingTemplateActionLabel}</small></span>
+            <span><b>最近保存</b><small>{activeLastSavedTemplateLabel}</small></span>
             <span><b>保存状态</b><small>{activeSectionStatusTitle}</small></span>
             <span><b>保存范围</b><small>{currentTemplateScopeLabel}</small></span>
-            <em>只有“当前使用”才代表本次执行会读取的模板；点击套用后才会写入表单，保存后才会影响执行。</em>
+            <em>只有“当前使用”才代表本次执行会读取的模板；点击套用后才会写入表单，保存后才会影响执行。刚保存的模板会自动选中，后续可从下拉框再次套用。</em>
           </div>
           <div className="config-template-console__default-quick" aria-label="默认测试模板包">
             <div>

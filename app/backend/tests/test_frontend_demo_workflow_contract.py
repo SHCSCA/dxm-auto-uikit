@@ -271,6 +271,30 @@ def test_config_center_surfaces_single_template_status_bar():
     assert ".config-template-console__status-bar" in styles_source
 
 
+def test_config_center_tracks_recently_saved_template_for_multi_template_reuse():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
+    save_template_start = config_section.index("const savedTemplate = existing")
+    save_template_section = config_section[
+        save_template_start:
+        config_section.index("setConfigMessage(`${section.title}", save_template_start)
+    ]
+    status_bar = config_section[
+        config_section.index('<div className="config-template-console__status-bar"'):
+        config_section.index('<div className="config-template-console__default-quick"')
+    ]
+
+    assert "lastSavedTemplateBySection" in config_section
+    assert "setLastSavedTemplateBySection" in save_template_section
+    assert "savedTemplate.id" in save_template_section
+    assert "savedTemplate.template_name" in save_template_section
+    assert "setSelectedTemplateBySection" in save_template_section
+    assert "String(savedTemplate.id)" in save_template_section
+    assert "activeLastSavedTemplateLabel" in status_bar
+    assert "<b>最近保存</b><small>{activeLastSavedTemplateLabel}</small>" in status_bar
+    assert "刚保存的模板会自动选中，后续可从下拉框再次套用。" in config_section
+
+
 def test_config_center_keeps_template_source_details_out_of_first_viewport():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
