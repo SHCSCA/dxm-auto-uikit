@@ -2099,6 +2099,8 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
     setConfigMessage(null)
     try {
       const nextDraft = { ...configDraft }
+      const nextSelectedTemplates = { ...selectedTemplateBySection }
+      const nextLastSavedTemplates = { ...lastSavedTemplateBySection }
       for (const section of editableConfigSections) {
         const payload = defaultTemplatePayloadForSection(section, currentTemplateBinding)
         nextDraft[section.code] = buildSectionDraftFromPayload(section, payload)
@@ -2110,14 +2112,20 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
           payload: withTemplateBinding(payload, currentTemplateBinding),
           is_enabled: true,
         }
-        if (existing) {
-          await patchJson<Template>(`/api/templates/${existing.id}`, body)
-        } else {
-          await postJson<Template>('/api/templates', body)
+        const savedTemplate = existing
+          ? await patchJson<Template>(`/api/templates/${existing.id}`, body)
+          : await postJson<Template>('/api/templates', body)
+        nextSelectedTemplates[section.code] = String(savedTemplate.id)
+        nextLastSavedTemplates[section.code] = {
+          id: savedTemplate.id,
+          name: savedTemplate.template_name,
+          savedAt: new Date().toLocaleString('zh-CN', { hour12: false }),
         }
       }
       const savedAt = new Date().toLocaleString('zh-CN', { hour12: false })
       setConfigDraft(nextDraft)
+      setSelectedTemplateBySection(nextSelectedTemplates)
+      setLastSavedTemplateBySection(nextLastSavedTemplates)
       setSectionSaveState(() => Object.fromEntries(
         editableConfigSections.map((section) => [
           section.code,
@@ -2129,7 +2137,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
           },
         ]),
       ) as Record<ConfigSectionCode, ConfigSectionSaveState>)
-      setDefaultTemplatePackState(`默认测试模板已保存；保存时间 ${savedAt}`)
+      setDefaultTemplatePackState(`默认测试模板已保存；保存时间 ${savedAt}；已生成 ${Object.keys(nextLastSavedTemplates).length} 套分区模板`)
       setConfigMessage(`默认测试模板已写入当前店铺/类目范围：${currentTemplateScopeLabel}。这些是示例值，真实执行前请按当前商品继续核对分区字段。`)
       await onConfigSaved()
     } catch (error) {

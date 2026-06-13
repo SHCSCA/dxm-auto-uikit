@@ -295,6 +295,24 @@ def test_config_center_tracks_recently_saved_template_for_multi_template_reuse()
     assert "刚保存的模板会自动选中，后续可从下拉框再次套用。" in config_section
 
 
+def test_config_center_default_template_pack_tracks_each_saved_template():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
+    default_pack_section = config_section[
+        config_section.index("async function applyDefaultTemplatePack"):
+        config_section.index("async function runConfigPrecheck")
+    ]
+
+    assert "const nextSelectedTemplates" in default_pack_section
+    assert "const nextLastSavedTemplates" in default_pack_section
+    assert "const savedTemplate = existing" in default_pack_section
+    assert "nextSelectedTemplates[section.code] = String(savedTemplate.id)" in default_pack_section
+    assert "nextLastSavedTemplates[section.code]" in default_pack_section
+    assert "setSelectedTemplateBySection(nextSelectedTemplates)" in default_pack_section
+    assert "setLastSavedTemplateBySection(nextLastSavedTemplates)" in default_pack_section
+    assert "默认测试模板已保存；保存时间 ${savedAt}；已生成 ${Object.keys(nextLastSavedTemplates).length} 套分区模板" in default_pack_section
+
+
 def test_config_center_keeps_template_source_details_out_of_first_viewport():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
