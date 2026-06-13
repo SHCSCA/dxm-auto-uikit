@@ -2097,6 +2097,35 @@ tr:last-child td {
   width: 100%;
 }
 
+.task-quick-actions__diagnosis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-alt);
+}
+
+.task-quick-actions__diagnosis span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.task-quick-actions__diagnosis strong {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.task-quick-actions__diagnosis small {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .task-quick-actions__reason,
 .single-save-recovery-guide__reason {
   color: var(--muted);

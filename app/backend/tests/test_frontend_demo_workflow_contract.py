@@ -2081,6 +2081,30 @@ def test_task_center_explains_disabled_single_save_actions():
     assert "请先确认有真实店铺和 1 个商品" in recovery_section
 
 
+def test_task_center_explains_quick_action_availability_in_first_screen():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    task_center_section = source[source.index("export function TaskCenter"):source.index("export function ExecutionConsole")]
+    quick_actions_section = task_center_section[
+        task_center_section.index("<div className=\"module-card span-1 task-quick-actions\""):
+        task_center_section.index("<div className=\"module-card span-2\">")
+    ]
+
+    assert "const taskActionDiagnosis =" in task_center_section
+    assert "const historyTaskHint =" in task_center_section
+    assert "quickCreateSingleSaveDisabledReason || '可创建单商品只保存任务'" in task_center_section
+    assert "startDisabled ? startLabel : '可进入执行控制台启动'" in task_center_section
+    assert "暂无历史任务；先创建单商品只保存任务。" in task_center_section
+    assert "aria-label=\"任务按钮不可点击原因\"" in quick_actions_section
+    assert "<strong>创建任务</strong>" in quick_actions_section
+    assert "<strong>历史任务</strong>" in quick_actions_section
+    assert "<strong>启动任务</strong>" in quick_actions_section
+    assert "taskActionDiagnosis.create" in quick_actions_section
+    assert "taskActionDiagnosis.history" in quick_actions_section
+    assert "taskActionDiagnosis.start" in quick_actions_section
+    assert ".task-quick-actions__diagnosis" in styles_source
+
+
 def test_task_center_compacts_duplicate_history_tasks_by_default():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")

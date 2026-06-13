@@ -2773,6 +2773,18 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
                           : needsRealL2
                             ? '启动保存核验任务'
                             : '启动开发自检任务'
+  const historyTaskHint = canToggleTaskHistory
+    ? showAllTasks
+      ? '历史任务已展开。'
+      : `还有 ${hiddenTaskCount} 个历史任务可展开。`
+    : workspace.tasks.length
+      ? '当前已显示可用任务。'
+      : '暂无历史任务；先创建单商品只保存任务。'
+  const taskActionDiagnosis = {
+    create: quickCreateSingleSaveDisabledReason || '可创建单商品只保存任务',
+    history: historyTaskHint,
+    start: startDisabled ? startLabel : '可进入执行控制台启动',
+  }
 
   useEffect(() => {
     const firstStore = uniqueStoreOptions[0]
@@ -2850,6 +2862,20 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
           <button className="button button--quiet" type="button" onClick={() => setShowAllTasks(true)}>
             选择历史任务
           </button>
+        </div>
+        <div className="task-quick-actions__diagnosis" aria-label="任务按钮不可点击原因">
+          <span>
+            <strong>创建任务</strong>
+            <small>{taskActionDiagnosis.create}</small>
+          </span>
+          <span>
+            <strong>历史任务</strong>
+            <small>{taskActionDiagnosis.history}</small>
+          </span>
+          <span>
+            <strong>启动任务</strong>
+            <small>{taskActionDiagnosis.start}</small>
+          </span>
         </div>
         <div className="task-quick-actions__status">
           <span>当前任务</span>
