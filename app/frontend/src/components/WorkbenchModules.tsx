@@ -3678,6 +3678,13 @@ function getL2ProbeResourceState(runtimeStatus: RuntimeStatus | null) {
       blocked: true,
       title: '只读页面检查依赖状态未知，请先刷新运行状态或重新打开免安装版。',
       detail: '只读页面检查依赖状态未知，请先刷新运行状态或重新打开免安装版。',
+      repairSteps: [
+        '刷新运行状态，确认后端已经由免安装版接管。',
+        '如果仍未知，关闭旧的 DXM Agent Console 或后台旧进程。',
+        '打开桌面免安装目录里的 DXM-Agent-Console.exe。',
+        '不要只复制 exe，必须保留 resources 文件夹。',
+      ],
+      checkedPathPreview: [],
     }
   }
   if (runtimeStatus.l2ReadonlyProbe?.running) {
@@ -3687,6 +3694,8 @@ function getL2ProbeResourceState(runtimeStatus: RuntimeStatus | null) {
       blocked: true,
       title: `预检正在运行：${runId}${taskId}`,
       detail: `预检正在运行：${runId}${taskId}。请等待完成或查看实时日志；完成前不会启动第二个预检。`,
+      repairSteps: [],
+      checkedPathPreview: [],
     }
   }
   const dependencies = runtimeStatus?.dependencies ?? {}
@@ -3701,6 +3710,8 @@ function getL2ProbeResourceState(runtimeStatus: RuntimeStatus | null) {
       blocked: false,
       title: '运行双目标真实只读页面检查；不会保存、不会发布。',
       detail: '',
+      repairSteps: [],
+      checkedPathPreview: [],
     }
   }
   const detail = missing
@@ -3710,11 +3721,40 @@ function getL2ProbeResourceState(runtimeStatus: RuntimeStatus | null) {
     .flatMap(([, item]) => item?.checkedPaths ?? [])
     .slice(0, 4)
   const checkedText = checkedPaths.length ? `已检查：${checkedPaths.join('；')}` : '已检查路径：暂无'
+  const repairSteps = [
+    '关闭旧的 DXM Agent Console 或后台旧进程。',
+    '打开桌面免安装目录里的 DXM-Agent-Console.exe。',
+    '不要只复制 exe，必须保留 resources 文件夹。',
+  ]
   return {
     blocked: true,
     title: `只读页面检查资源缺失：${detail}。${checkedText}`,
     detail: `只读页面检查资源缺失，请关闭旧进程并重新打开完整免安装目录版。${detail}。${checkedText}`,
+    repairSteps,
+    checkedPathPreview: checkedPaths,
   }
+}
+
+function L2ProbeResourceRepairPanel({ l2ProbeResourceState }: { l2ProbeResourceState: ReturnType<typeof getL2ProbeResourceState> }) {
+  if (!l2ProbeResourceState.blocked || (!l2ProbeResourceState.repairSteps.length && !l2ProbeResourceState.checkedPathPreview.length)) return null
+  return (
+    <div className="l2-probe-repair-panel" aria-label="只读页面检查资源修复步骤">
+      <strong>只读页面检查资源修复步骤</strong>
+      {l2ProbeResourceState.repairSteps.length > 0 && (
+        <ol>
+          {l2ProbeResourceState.repairSteps.map((step) => <li key={step}>{step}</li>)}
+        </ol>
+      )}
+      {l2ProbeResourceState.checkedPathPreview.length > 0 && (
+        <details className="inline-disclosure">
+          <summary>查看已检查路径</summary>
+          <div>
+            {l2ProbeResourceState.checkedPathPreview.map((path) => <small key={path}>{path}</small>)}
+          </div>
+        </details>
+      )}
+    </div>
+  )
 }
 
 function RuntimeControlResultSummary({ result }: { result: RuntimeControlResponse | null }) {
@@ -4344,6 +4384,7 @@ function AgentConsoleControls({
               {READONLY_PRECHECK_CTA}
             </button>
             {l2ProbeResourceState.blocked && <small>{l2ProbeResourceState.detail}</small>}
+            <L2ProbeResourceRepairPanel l2ProbeResourceState={l2ProbeResourceState} />
           </div>
         )}
       </div>
@@ -4352,6 +4393,7 @@ function AgentConsoleControls({
           <strong>只读页面检查暂不可运行</strong>
           <span>{l2ProbeResourceState.detail}</span>
           <small>处理：关闭当前旧窗口或后台旧进程，重新打开桌面上的 DXM-Agent-Console-免安装版\\DXM-Agent-Console.exe；完整目录必须保留 resources 文件夹。</small>
+          <L2ProbeResourceRepairPanel l2ProbeResourceState={l2ProbeResourceState} />
         </div>
       )}
       <div className="agent-console-controls__mission">
@@ -5452,6 +5494,7 @@ function ReadonlyRecheckHelpCard({
           {READONLY_PRECHECK_CTA}
         </button>
         {l2ProbeResourceState.blocked && <small>{l2ProbeResourceState.detail}</small>}
+        <L2ProbeResourceRepairPanel l2ProbeResourceState={l2ProbeResourceState} />
         <button className="button button--secondary" type="button" onClick={onShowConsole}>查看阻断说明</button>
         <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看检查计划</button>
         <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>

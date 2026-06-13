@@ -4606,6 +4606,56 @@ tr:last-child td {
   overflow-wrap: anywhere;
 }
 
+.l2-probe-repair-panel {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  flex: 1 1 100%;
+  padding: 8px;
+  border: 1px solid #f0d28c;
+  border-radius: 7px;
+  background: #fffaf0;
+  color: #7c4a03;
+}
+
+.l2-probe-repair-panel strong {
+  color: #7c4a03;
+  font-size: 12px;
+}
+
+.l2-probe-repair-panel ol {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 3px;
+}
+
+.l2-probe-repair-panel li,
+.l2-probe-repair-panel small {
+  color: #7c4a03;
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.l2-probe-repair-panel details {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.l2-probe-repair-panel details > summary {
+  color: #7c4a03;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.l2-probe-repair-panel details > div {
+  display: grid;
+  gap: 2px;
+  margin-top: 4px;
+}
+
 .agent-console-controls__mission {
   grid-column: 1 / -1;
   min-width: 0;

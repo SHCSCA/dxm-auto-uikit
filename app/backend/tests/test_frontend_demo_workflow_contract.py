@@ -2334,6 +2334,34 @@ def test_task_center_precheck_buttons_share_resource_gate():
     assert "title={l2ProbeResourceState.title}" in recovery_card
 
 
+def test_l2_probe_resource_blocker_shows_repair_steps_and_checked_paths():
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    resource_state = workbench_source[
+        workbench_source.index("function getL2ProbeResourceState"):
+        workbench_source.index("function RuntimeControlResultSummary")
+    ]
+    repair_panel = workbench_source[
+        workbench_source.index("function L2ProbeResourceRepairPanel"):
+        workbench_source.index("function RuntimeControlResultSummary")
+    ]
+    readonly_card = workbench_source[workbench_source.index("function ReadonlyRecheckHelpCard"):workbench_source.index("function SingleSaveRecoveryGuide")]
+    console_controls = workbench_source[workbench_source.index("function AgentConsoleControls"):workbench_source.index("function RuntimeLogPreview")]
+
+    assert "checkedPaths" in resource_state
+    assert "repairSteps" in resource_state
+    assert "checkedPathPreview" in resource_state
+    assert "关闭旧的 DXM Agent Console 或后台旧进程" in resource_state
+    assert "打开桌面免安装目录里的 DXM-Agent-Console.exe" in resource_state
+    assert "不要只复制 exe，必须保留 resources 文件夹" in resource_state
+    assert "L2ProbeResourceRepairPanel" in readonly_card
+    assert "L2ProbeResourceRepairPanel" in console_controls
+    assert "只读页面检查资源修复步骤" in repair_panel
+    assert "l2ProbeResourceState.repairSteps.map" in repair_panel
+    assert "l2ProbeResourceState.checkedPathPreview.map" in repair_panel
+    assert ".l2-probe-repair-panel" in styles_source
+
+
 def test_execution_console_disables_l2_probe_when_runner_lock_is_active():
     types_source = (REPO_ROOT / "app" / "frontend" / "src" / "types.ts").read_text(encoding="utf-8")
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
