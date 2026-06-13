@@ -2813,30 +2813,6 @@ tr:last-child td {
   background: #f8fbff;
 }
 
-.config-template-console__quick-status {
-  grid-column: 1 / -1;
-  min-width: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 8px;
-}
-
-.config-template-console__quick-status > span {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-  padding: 7px 9px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: #fff;
-}
-
-.config-template-console__quick-status small {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .config-template-console__status-bar {
   grid-column: 1 / -1;
   min-width: 0;

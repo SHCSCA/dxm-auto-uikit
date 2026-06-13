@@ -141,12 +141,12 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "selectedTemplateBySection" in config_section
     assert "activeSelectedTemplateLabel" in config_section
     assert "activeTemplateUsageLabel" in config_section
-    assert "当前使用：{activeTemplateUsageLabel}" in config_section
-    assert "配置检查已命中模板；要换模板请先选择并点击套用。" in config_section
-    assert "未手动选择；当前仍按已命中的模板或字段来源执行。" in config_section
-    assert "config-template-console__quick-status" in config_section
-    assert "可选 {activeSectionTemplateOptions.length} 套模板" in config_section
-    assert "已选择：" in config_section
+    assert "<b>当前使用</b><small>{activeTemplateUsageLabel}</small>" in config_section
+    assert "只有“当前使用”才代表本次执行会读取的模板" in config_section
+    assert "点击套用后才会写入表单，保存后才会影响执行" in config_section
+    assert "config-template-console__quick-status" not in config_section
+    assert "可选 {activeSectionTemplateOptions.length} 套模板" not in config_section
+    assert "已选择：" not in config_section
     assert "点击套用后才会写入表单" in config_section
     assert "applyTemplateToDraft" in config_section
     assert "handleTemplateSelection" in config_section
@@ -166,7 +166,7 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "保存时间" in config_section
     assert ".config-template-console" in styles_source
     assert ".config-template-console__default-quick" in styles_source
-    assert ".config-template-console__quick-status" in styles_source
+    assert ".config-template-console__quick-status" not in styles_source
     assert ".config-save-state" in styles_source
     assert "configDefaultTemplatePackVisible" in qa_source
     assert "configTemplateSelectorVisible" in qa_source
@@ -232,17 +232,17 @@ def test_config_center_does_not_treat_selected_template_as_currently_used_before
         config_section.index("const activeTemplateUsageLabel"):
         config_section.index("const activeTemplateTrace")
     ]
-    quick_status = config_section[
-        config_section.index('<div className="config-template-console__quick-status"'):
-        config_section.index('<div className={`config-save-state')
+    status_bar = config_section[
+        config_section.index('<div className="config-template-console__status-bar"'):
+        config_section.index('<div className="config-template-console__default-quick"')
     ]
 
     assert "activeSelectedTemplate" not in usage_assignment
     assert "activeSelectedTemplateLabel" not in usage_assignment
     assert "activePendingTemplateActionLabel" in config_section
-    assert "activePendingTemplateActionLabel" in quick_status
-    assert "已选择：" in quick_status
-    assert "当前使用：{activeTemplateUsageLabel}" in quick_status
+    assert "activePendingTemplateActionLabel" in status_bar
+    assert "已选择：" not in status_bar
+    assert "<b>当前使用</b><small>{activeTemplateUsageLabel}</small>" in status_bar
     assert "只有“当前使用”才代表本次执行会读取的模板" in config_section
 
 
@@ -257,6 +257,7 @@ def test_config_center_surfaces_single_template_status_bar():
 
     assert "aria-label=\"模板使用状态\"" in template_console
     assert "config-template-console__status-bar" in template_console
+    assert "config-template-console__quick-status" not in template_console
     assert "模板使用状态" in template_console
     assert "当前使用" in template_console
     assert "activeTemplateUsageLabel" in template_console
@@ -268,6 +269,28 @@ def test_config_center_surfaces_single_template_status_bar():
     assert "currentTemplateScopeLabel" in template_console
     assert "保存后才会影响执行" in template_console
     assert ".config-template-console__status-bar" in styles_source
+
+
+def test_config_center_keeps_template_source_details_out_of_first_viewport():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
+    template_console = config_section[
+        config_section.index('<div className="config-template-console config-template-console--compact"'):
+        config_section.index('<details className="inline-disclosure config-template-console__details">')
+    ]
+    advanced_details = config_section[
+        config_section.index('<details className="inline-disclosure config-template-console__details">'):
+        config_section.index('<div className="config-section-tabs config-section-tabs--primary"')
+    ]
+
+    assert "config-template-console__status-bar" in template_console
+    assert 'aria-label="当前模板来源"' not in template_console
+    assert "当前生效模板" not in template_console
+    assert "可选模板 {activeSectionTemplateOptions.length} 套；已筛除不匹配或禁用模板" not in template_console
+    assert "已筛除不匹配或禁用模板" not in template_console
+    assert 'aria-label="当前模板来源详情"' in advanced_details
+    assert "config-template-source--detail" in advanced_details
+    assert "模板来源与高级/开发辅助" in advanced_details
 
 
 def test_config_center_shows_save_scope_explainer_before_actions():
@@ -459,7 +482,7 @@ def test_config_center_explains_active_template_source_and_filtered_choices():
     assert "已筛除不匹配或禁用模板" in config_section
     assert "选择模板不会改表单，点击套用后才会填入当前分区" in config_section
     assert "config-template-source" in config_section
-    assert config_section.index("config-template-source") < config_section.index("config-template-console__details")
+    assert config_section.index("config-template-source") > config_section.index("config-template-console__details")
     assert ".config-template-source" in styles_source
     assert "configTemplateSourceState" in qa_source
 

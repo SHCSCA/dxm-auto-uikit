@@ -2252,31 +2252,13 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
               套用到表单
             </button>
           </div>
-          <div className="config-template-console__quick-status" aria-label="当前模板选择状态">
-            <span>
-              <b>可选 {activeSectionTemplateOptions.length} 套模板</b>
-              <small>已筛除不匹配或禁用模板 {filteredTemplateChoiceCount} 套</small>
-            </span>
-            <span>
-              <b>已选择：{activeSelectedTemplateLabel}</b>
-              <small>{activeSelectedTemplateId ? '点击套用后才会写入表单；保存后才会影响执行。' : '可选择已保存模板；示例值在下方高级区。'}</small>
-            </span>
-            <span>
-              <b>{activePendingTemplateActionLabel}</b>
-              <small>只有“当前使用”才代表本次执行会读取的模板；选择模板本身不会改执行取值。</small>
-            </span>
-            <span>
-              <b>当前使用：{activeTemplateUsageLabel}</b>
-              <small>{activeTemplateSourceName ? '配置检查已命中模板；要换模板请先选择并点击套用。' : '未手动选择；当前仍按已命中的模板或字段来源执行。'}</small>
-            </span>
-          </div>
           <div className="config-template-console__status-bar" aria-label="模板使用状态">
             <strong>模板使用状态</strong>
             <span><b>当前使用</b><small>{activeTemplateUsageLabel}</small></span>
             <span><b>待套用</b><small>{activePendingTemplateActionLabel}</small></span>
             <span><b>保存状态</b><small>{activeSectionStatusTitle}</small></span>
             <span><b>保存范围</b><small>{currentTemplateScopeLabel}</small></span>
-            <em>选择模板不会立即影响执行，保存后才会影响执行。</em>
+            <em>只有“当前使用”才代表本次执行会读取的模板；点击套用后才会写入表单，保存后才会影响执行。</em>
           </div>
           <div className="config-template-console__default-quick" aria-label="默认测试模板包">
             <div>
@@ -2306,12 +2288,6 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
           <div className={`config-save-state config-save-state--compact is-${activeSectionStatus}`} aria-label="当前分区保存状态">
             <b>{activeSectionStatusTitle}</b>
             <span>{activeSectionStatusMessage}</span>
-          </div>
-          <div className="config-template-source" aria-label="当前模板来源">
-            <strong>当前生效模板</strong>
-            <span>{activeTemplateSourceName || (activeSectionAlreadyPersisted ? '已由配置检查命中模板' : '尚未命中已保存模板')}</span>
-            <small>可选模板 {activeSectionTemplateOptions.length} 套；已筛除不匹配或禁用模板 {filteredTemplateChoiceCount} 套。</small>
-            <small>选择模板不会改表单，点击套用后才会填入当前分区，保存后才会生效。</small>
           </div>
           <details className="inline-disclosure config-template-console__details">
             <summary>模板来源与高级/开发辅助</summary>
