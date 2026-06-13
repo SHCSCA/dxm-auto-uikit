@@ -2900,7 +2900,9 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
           startLabel={startLabel}
           startDisabled={startDisabled}
           busy={busy}
+          l2ProbeResourceState={l2ProbeResourceState}
           onStartTask={onStartTask}
+          onRunL2Probe={onRunL2Probe}
           onShowConfig={onShowConfig}
           onShowConsole={onShowConsole}
           onShowReports={onShowReports}
@@ -5501,7 +5503,9 @@ function TaskCurrentActionPanel({
   startLabel,
   startDisabled,
   busy,
+  l2ProbeResourceState,
   onStartTask,
+  onRunL2Probe,
   onShowConfig,
   onShowConsole,
   onShowReports,
@@ -5514,7 +5518,9 @@ function TaskCurrentActionPanel({
   startLabel: string
   startDisabled: boolean
   busy: boolean
+  l2ProbeResourceState: ReturnType<typeof getL2ProbeResourceState>
   onStartTask: () => void
+  onRunL2Probe: () => void
   onShowConfig: () => void
   onShowConsole: () => void
   onShowReports: () => void
@@ -5533,6 +5539,7 @@ function TaskCurrentActionPanel({
   const configCheckLabel = selectedTaskCompleted ? '已完成' : configOk ? '已就绪' : selectedTask ? '待补齐' : '待选择任务'
   const l2CheckLabel = selectedTaskCompleted ? '已完成' : humanGateStateLabel(l2Gate?.status ?? 'not_run')
   const l3CheckLabel = selectedTaskCompleted ? '已完成' : humanGateStateLabel(l3Gate?.status ?? 'blocked')
+  const showPrecheckRecoveryActions = Boolean(selectedTask && !selectedTaskCompleted && requiresRealL2(selectedTask) && !l2Ready)
   const decision = taskStartDecision({
     selectedTask,
     configOk,
@@ -5581,6 +5588,25 @@ function TaskCurrentActionPanel({
           <b>{decision.next}</b>
         </span>
       </div>
+      {showPrecheckRecoveryActions && (
+        <div className="task-current-panel__precheck-actions" aria-label="预检未通过处理">
+          <span>预检没有通过，不能启动真实保存。先运行只读预检；如果仍失败，到执行控制台看日志，再查看检查计划。</span>
+          <div>
+            <button
+              className="button button--secondary"
+              type="button"
+              onClick={onRunL2Probe}
+              disabled={busy || l2ProbeResourceState.blocked}
+              title={l2ProbeResourceState.title}
+            >
+              运行预检
+            </button>
+            <button className="button button--quiet" type="button" onClick={onShowConsole}>查看执行控制台</button>
+            <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">查看检查计划</button>
+          </div>
+          {l2ProbeResourceState.blocked && <small>{l2ProbeResourceState.detail}</small>}
+        </div>
+      )}
       <div className="task-current-panel__checks" aria-label="启动检查">
         <span className={configCheckOk ? 'is-ok' : 'is-warn'}>
           <strong>配置</strong>

@@ -1995,6 +1995,28 @@ tr:last-child td {
   overflow-wrap: anywhere;
 }
 
+.task-current-panel__precheck-actions {
+  display: grid;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid #f0d89a;
+  border-radius: 7px;
+  background: #fffaf0;
+}
+
+.task-current-panel__precheck-actions > span,
+.task-current-panel__precheck-actions small {
+  color: #5f4b16;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.task-current-panel__precheck-actions > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .task-current-panel__checks {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

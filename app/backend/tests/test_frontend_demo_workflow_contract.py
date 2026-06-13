@@ -1937,10 +1937,21 @@ def test_task_center_explains_l2_recheck_before_real_save():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
     task_center_section = source[source.index("export function TaskCenter"):source.index("export function ExecutionConsole")]
+    current_panel_section = source[source.index("function TaskCurrentActionPanel"):source.index("function ReadonlyRecheckHelpCard")]
     recheck_card_section = source[source.index("function ReadonlyRecheckHelpCard"):source.index("function SingleSaveRecoveryGuide")]
 
     assert "ReadonlyRecheckHelpCard" in task_center_section
     assert "l2BlocksStart && (" in task_center_section
+    assert "onRunL2Probe={onRunL2Probe}" in task_center_section
+    assert "l2ProbeResourceState={l2ProbeResourceState}" in task_center_section
+    assert "const showPrecheckRecoveryActions =" in current_panel_section
+    assert "aria-label=\"预检未通过处理\"" in current_panel_section
+    assert "预检没有通过，不能启动真实保存。" in current_panel_section
+    assert "运行预检" in current_panel_section
+    assert "查看执行控制台" in current_panel_section
+    assert "查看检查计划" in current_panel_section
+    assert "l2ProbeResourceState.blocked" in current_panel_section
+    assert "task-current-panel__precheck-actions" in styles_source
     assert "只读页面检查未通过，真实保存先暂停" in recheck_card_section
     assert "检查商品采集页和草稿箱页" in recheck_card_section
     assert "不领取、不备注、不保存、不发布" in recheck_card_section
