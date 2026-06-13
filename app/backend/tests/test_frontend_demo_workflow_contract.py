@@ -1210,6 +1210,33 @@ def test_execution_console_primary_blocker_card_contains_precheck_action_and_pla
     assert ".console-primary-blocker-card__explain" in styles_source
 
 
+def test_execution_console_select_task_state_explains_task_preparation_path():
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    primary_path_section = workbench_source[
+        workbench_source.index("function buildConsolePrimaryPath"):
+        workbench_source.index("function FinalCheckFreshnessRow")
+    ]
+    blocker_card_section = workbench_source[
+        workbench_source.index("function ConsolePrimaryBlockerCard"):
+        workbench_source.index("function AgentBrowserFrame")
+    ]
+
+    assert "code: 'select_task'" in primary_path_section
+    assert "title: '先选择或创建任务'" in primary_path_section
+    assert "ctaLabel: '去任务中心选择任务'" in primary_path_section
+    assert "primaryPath.code === 'select_task'" in blocker_card_section
+    assert "aria-label=\"任务准备路径\"" in blocker_card_section
+    assert "console-primary-blocker-card__task-path" in blocker_card_section
+    assert "1 创建或选择任务" in blocker_card_section
+    assert "只处理单商品只保存任务" in blocker_card_section
+    assert "2 确认店铺和商品" in blocker_card_section
+    assert "至少有真实店铺和 1 个商品" in blocker_card_section
+    assert "3 回到配置和预检" in blocker_card_section
+    assert "任务选中后再补配置、运行预检、人工确认保存。" in blocker_card_section
+    assert ".console-primary-blocker-card__task-path" in styles_source
+
+
 def test_execution_console_surfaces_real_browser_takeover_state_before_details():
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")

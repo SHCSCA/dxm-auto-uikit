@@ -4277,6 +4277,13 @@ function ConsolePrimaryBlockerCard({
           </button>
         </div>
       )}
+      {primaryPath.code === 'select_task' && (
+        <div className="console-primary-blocker-card__task-path" aria-label="任务准备路径">
+          <span><b>1 创建或选择任务</b><small>只处理单商品只保存任务；批量和发布入口保持关闭。</small></span>
+          <span><b>2 确认店铺和商品</b><small>至少有真实店铺和 1 个商品，配置中心才知道本次取值。</small></span>
+          <span><b>3 回到配置和预检</b><small>任务选中后再补配置、运行预检、人工确认保存。</small></span>
+        </div>
+      )}
       {showLoginRecovery && (
         <div className="console-primary-blocker-card__login-recovery" aria-label="登录恢复路径">
           <strong>{loginState.label}</strong>
