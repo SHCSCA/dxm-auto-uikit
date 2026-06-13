@@ -4111,6 +4111,7 @@ function ConsoleFocusPanel({
         onPrimaryAction={primaryAction}
         primaryActionDisabled={primaryActionDisabled}
         primaryActionDisabledTitle={primaryActionDisabled ? l2ProbeResourceState.title : undefined}
+        onShowReports={onShowReports}
       />
       <div className="console-focus-panel__primary-facts">
         <span><strong>任务</strong><b>{selectedTask ? `${displayTaskName(selectedTask)} / ${humanTaskStatus(selectedTask.status)}` : '待选择'}</b></span>
@@ -4150,6 +4151,7 @@ function ConsolePrimaryBlockerCard({
   onPrimaryAction,
   primaryActionDisabled,
   primaryActionDisabledTitle,
+  onShowReports,
 }: {
   primaryPath: ConsolePrimaryPath
   consoleNext: string
@@ -4157,6 +4159,7 @@ function ConsolePrimaryBlockerCard({
   onPrimaryAction: () => void
   primaryActionDisabled: boolean
   primaryActionDisabledTitle?: string
+  onShowReports: () => void
 }) {
   const tone = primaryPath.saveBlocked ? 'is-blocked' : primaryPath.code === 'ready' ? 'is-ready' : 'is-neutral'
   return (
@@ -4181,6 +4184,16 @@ function ConsolePrimaryBlockerCard({
           <b>{READONLY_PRECHECK_CTA}</b>
           <span>{READONLY_PRECHECK_PURPOSE}</span>
         </p>
+      )}
+      {primaryPath.action === 'run_l2' && (
+        <div className="console-primary-blocker-card__recovery" aria-label="预检失败恢复路径">
+          <span><b>1 确认登录</b><small>真实浏览器已登录，验证码或账号密码错误先在登录窗口修正。</small></span>
+          <span><b>2 打开目标页</b><small>能打开商品采集页和采集箱；打不开先处理页面权限或网络。</small></span>
+          <span><b>3 重新预检</b><small>无写入风险后，再点击运行预检。</small></span>
+          <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">
+            查看检查计划
+          </button>
+        </div>
       )}
       <button
         className="button button--primary console-primary-blocker-card__action"

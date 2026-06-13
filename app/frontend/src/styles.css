@@ -4327,6 +4327,42 @@ tr:last-child td {
   justify-self: start;
 }
 
+.console-primary-blocker-card__recovery {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.console-primary-blocker-card__recovery > span {
+  min-width: 0;
+  min-height: 54px;
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.console-primary-blocker-card__recovery b {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.console-primary-blocker-card__recovery small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.console-primary-blocker-card__recovery > button {
+  align-self: center;
+  white-space: nowrap;
+}
+
 .console-focus-panel__primary-facts span {
   min-height: 52px;
   padding: 8px;

@@ -1210,6 +1210,32 @@ def test_execution_console_primary_blocker_card_contains_precheck_action_and_pla
     assert ".console-primary-blocker-card__explain" in styles_source
 
 
+def test_execution_console_primary_blocker_card_shows_precheck_recovery_path():
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    focus_section = workbench_source[
+        workbench_source.index("function ConsoleFocusPanel"):
+        workbench_source.index("function AgentBrowserFrame")
+    ]
+    blocker_card_section = workbench_source[
+        workbench_source.index("function ConsolePrimaryBlockerCard"):
+        workbench_source.index("function AgentBrowserFrame")
+    ]
+
+    assert "onShowReports={onShowReports}" in focus_section
+    assert "aria-label=\"预检失败恢复路径\"" in blocker_card_section
+    assert "console-primary-blocker-card__recovery" in blocker_card_section
+    assert "1 确认登录" in blocker_card_section
+    assert "2 打开目标页" in blocker_card_section
+    assert "3 重新预检" in blocker_card_section
+    assert "真实浏览器已登录，验证码或账号密码错误先在登录窗口修正。" in blocker_card_section
+    assert "能打开商品采集页和采集箱；打不开先处理页面权限或网络。" in blocker_card_section
+    assert "无写入风险后，再点击运行预检。" in blocker_card_section
+    assert "onShowReports" in blocker_card_section
+    assert "查看检查计划" in blocker_card_section
+    assert ".console-primary-blocker-card__recovery" in styles_source
+
+
 def test_execution_console_distinguishes_login_browser_from_agent_execution_browser():
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     app_source = (REPO_ROOT / "app" / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
