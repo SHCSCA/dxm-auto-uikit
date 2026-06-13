@@ -701,6 +701,51 @@ def test_guide_center_explains_precheck_in_primary_step():
     assert ".guide-precheck-brief" in styles_source
 
 
+def test_first_screen_keeps_status_and_precheck_guidance_compact():
+    safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    safety_visible = safety_bar[
+        safety_bar.index("<section className={`safety-bar"):
+        safety_bar.index('<details className="safety-bar__meta-details')
+    ]
+    guide_primary = workbench_source[
+        workbench_source.index('<article className={`guide-step guide-step--primary'):
+        workbench_source.index('<details className="inline-disclosure guide-full-path">')
+    ]
+    login_call = guide_primary[
+        guide_primary.index("<DxmLoginInlineForm"):
+        guide_primary.index("/>", guide_primary.index("<DxmLoginInlineForm"))
+    ]
+    guide_primary_styles = styles_source[
+        styles_source.index(".guide-step--primary {"):
+        styles_source.index(".guide-full-path {")
+    ]
+    precheck_styles = styles_source[
+        styles_source.index(".guide-precheck-brief {"):
+        styles_source.index(".guide-status-card {")
+    ]
+
+    assert "真实保存已阻断" not in safety_visible
+    assert "系统状态与验收详情" not in safety_visible
+    assert "<summary>状态详情</summary>" in safety_bar
+    assert "min-height: 168px" not in guide_primary_styles
+    assert "grid-template-columns: repeat(3, minmax(0, 1fr));" not in precheck_styles
+    assert "guide-step__summary-line" in guide_primary
+    assert "guide-precheck-brief--compact" in guide_primary
+    assert "compact" in login_call
+    assert ".guide-step__summary-line" in styles_source
+    assert ".guide-precheck-brief--compact" in styles_source
+    assert ".operator-inline-form--compact .operator-inline-form__head span" in styles_source
+    assert ".operator-inline-form--compact .operator-inline-form__login-state" in styles_source
+    assert ".operator-inline-form--compact .operator-inline-form__credential-state" in styles_source
+    assert ".operator-inline-form--compact .operator-inline-form__actions small" in styles_source
+    assert "text-overflow: ellipsis;" in styles_source[
+        styles_source.index(".operator-inline-form--compact .operator-inline-form__credential-state"):
+        styles_source.index(".operator-inline-form--approval {")
+    ]
+
+
 def test_sidebar_is_navigation_only_not_status_or_hint_panel():
     shell_source = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
@@ -2310,8 +2355,10 @@ def test_safety_status_bar_keeps_long_guidance_inside_details_drawer():
     assert "conciseDetail" not in main_section
     assert "safety-bar__compact-detail" in details_section
     assert "{conciseDetail}" in details_section
-    assert "min-height: 48px;" in safety_styles
-    assert "padding: 8px 12px;" in safety_styles
+    assert "min-height: 42px;" in safety_styles
+    assert "padding: 6px 10px;" in safety_styles
+    assert "gap: 10px;" in safety_styles
+    assert "padding: 8px 12px;" not in safety_styles
 
 
 def test_safety_status_bar_does_not_duplicate_completed_task_status():
@@ -2694,9 +2741,10 @@ def test_frontend_first_screen_names_dxm_automation_delivery():
     assert "完成页面检查" in source
     assert "继续下一步：打开真实店小秘登录" in safety_bar
     assert "当前可执行：单商品只保存自动化" in safety_bar
-    assert "系统状态与验收详情" in safety_bar
+    assert "状态详情" in safety_bar
+    assert "系统状态与验收详情" not in safety_bar
     assert "safety-bar__meta-details inline-disclosure" in safety_bar
-    assert "真实保存已阻断" in safety_bar
+    assert "真实保存已阻断" not in safety_bar
     assert "开始 / 配置 / 任务 / 浏览器 / 结果" in shell
     assert "\\u0044\\u0058\\u004d \\u81ea\\u52a8\\u5316\\u5de5\\u4f5c\\u53f0" in qa_source
     assert "initialText.includes(text.overview) || initialText.includes('\\u5f00\\u59cb\\u4f7f\\u7528')" in qa_source

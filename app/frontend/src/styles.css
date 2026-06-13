@@ -284,8 +284,8 @@ a:focus-visible {
 }
 
 .safety-bar {
-  min-height: 48px;
-  padding: 8px 12px;
+  min-height: 42px;
+  padding: 6px 10px;
   border: 1px solid #b9d7c8;
   border-left: 5px solid var(--green);
   border-radius: var(--radius);
@@ -294,7 +294,7 @@ a:focus-visible {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 16px;
+  gap: 10px;
 }
 
 .safety-bar--warn {
@@ -323,7 +323,7 @@ a:focus-visible {
 .safety-bar__meta {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
@@ -386,7 +386,7 @@ a:focus-visible {
 
 .safety-bar__main strong {
   color: #123528;
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .safety-bar__compact-detail,
@@ -418,11 +418,11 @@ a:focus-visible {
 }
 
 .safety-dot {
-  width: 14px;
-  height: 14px;
+  width: 11px;
+  height: 11px;
   border-radius: 50%;
   background: var(--green);
-  box-shadow: 0 0 0 5px var(--green-soft);
+  box-shadow: 0 0 0 4px var(--green-soft);
 }
 
 .guard-chip,
@@ -1108,36 +1108,41 @@ a:focus-visible {
 }
 
 .guide-step--primary {
-  min-height: 168px;
+  min-height: 118px;
   grid-template-columns: 52px minmax(0, 1fr);
   background: #f8fbff;
   border-color: rgba(37, 99, 235, 0.26);
   align-items: start;
-  padding: 18px;
-  gap: 16px;
+  padding: 14px;
+  gap: 10px;
 }
 
 .guide-step--primary > span {
-  width: 42px;
-  height: 42px;
+  width: 36px;
+  height: 36px;
   background: var(--brand-soft);
   color: var(--brand);
-  font-size: 15px;
+  font-size: 13px;
 }
 
 .guide-step--primary strong {
-  font-size: 18px;
+  font-size: 16px;
   line-height: 1.25;
 }
 
+.guide-step__summary-line {
+  display: grid;
+  gap: 4px;
+  margin-top: 5px;
+}
+
 .guide-step--primary small {
-  margin-top: 8px;
   max-width: 760px;
   font-size: 12px;
 }
 
 .guide-step--primary em {
-  margin-top: 10px;
+  margin-top: 0;
 }
 
 .guide-step--primary .guide-step__actions,
@@ -1180,15 +1185,20 @@ a:focus-visible {
 
 .guide-precheck-brief {
   flex: 1 1 100%;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
   margin-bottom: 2px;
+}
+
+.guide-precheck-brief--compact {
+  margin-top: 2px;
 }
 
 .guide-precheck-brief span {
   min-width: 0;
-  padding: 8px 9px;
+  flex: 1 1 180px;
+  padding: 6px 8px;
   border: 1px solid #c7d8f4;
   border-radius: 7px;
   background: rgba(255, 255, 255, 0.72);
@@ -1202,14 +1212,14 @@ a:focus-visible {
 
 .guide-precheck-brief strong {
   color: var(--text);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .guide-precheck-brief small {
-  margin-top: 3px;
+  margin-top: 2px;
   color: var(--muted);
   font-size: 11px;
-  line-height: 1.45;
+  line-height: 1.35;
   overflow-wrap: anywhere;
 }
 
@@ -1297,6 +1307,44 @@ a:focus-visible {
 
 .operator-inline-form--compact {
   margin-top: 8px;
+  grid-template-columns: minmax(160px, 0.9fr) minmax(160px, 0.9fr) auto;
+  align-items: end;
+  gap: 7px;
+  padding: 8px;
+}
+
+.operator-inline-form--compact .operator-inline-form__head span {
+  display: none;
+}
+
+.operator-inline-form--compact .operator-inline-form__remember,
+.operator-inline-form--compact .operator-inline-form__credential-state {
+  grid-column: auto;
+}
+
+.operator-inline-form--compact .operator-inline-form__credential-state,
+.operator-inline-form--compact .operator-inline-form__actions small,
+.operator-inline-form--compact .operator-inline-form__login-state span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operator-inline-form--compact .operator-inline-form__login-state {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+}
+
+.operator-inline-form--compact .operator-inline-form__login-state small {
+  display: none;
+}
+
+.operator-inline-form--compact input {
+  min-height: 32px;
 }
 
 .operator-inline-form--approval {

@@ -68,9 +68,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
     ? '当前任务已完成，可查看执行记录'
     : runtimeStatusUnavailable
       ? '运行状态接口不可用'
-      : realWriteExpectedBlocked
-        ? `真实保存已阻断：${nextHeadline.replace('继续下一步：', '')}`
-        : nextHeadline
+      : nextHeadline
   const gateStatusLine = `L2 页面核验 ${humanGateStatus(l2Gate?.status ?? workspace.safety.l2Status ?? 'not_run')}，人工确认 ${humanGateStatus(l3Gate?.status ?? 'not_run')}`
   const statusLine = `当前任务 ${activeTaskLabel}，${tone === 'danger' ? `保存前置条件未完成：${gateStatusLine}` : gateStatusLine}`
   const gateDetails = [
@@ -151,7 +149,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
       : '可启动只保存'
   const primaryActionLabel = selectedTaskCompleted
     ? '查看执行记录'
-    : '继续下一步'
+    : '下一步'
   const handlePrimaryAction = selectedTaskCompleted
     ? onShowConsole
     : !dxmLoggedIn
@@ -177,7 +175,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
           {primaryActionLabel}
         </button>
         <details className="safety-bar__meta-details inline-disclosure">
-          <summary>系统状态与验收详情</summary>
+          <summary>状态详情</summary>
           <p className="safety-bar__compact-detail">{conciseDetail}</p>
           <div>
             <span className="guard-chip guard-chip--muted">{runtimeEndpointLine}</span>

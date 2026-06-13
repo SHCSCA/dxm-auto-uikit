@@ -487,8 +487,10 @@ export function GuideCenter({
           <span>{nextStepNumber}</span>
           <div>
             <strong>{nextGuideStep.title}</strong>
-            <small>{nextGuideStep.detail}</small>
-            {nextGuideStep.reason && <em>原因：{nextGuideStep.reason}</em>}
+            <div className="guide-step__summary-line">
+              <small>{nextGuideStep.detail}</small>
+              {nextGuideStep.reason && <em>原因：{nextGuideStep.reason}</em>}
+            </div>
           </div>
           {nextGuideStep.id === 'browser-login' ? (
             <DxmLoginInlineForm
@@ -497,6 +499,7 @@ export function GuideCenter({
               runtimeStatus={runtimeStatus}
               runtimeStatusError={runtimeStatusError}
               busy={busy}
+              compact
               onDraftChange={onDxmLoginDraftChange}
               onClearSavedCredential={onClearSavedDxmCredential}
               onSubmit={onOpenDxmLogin}
@@ -512,7 +515,7 @@ export function GuideCenter({
           ) : (
             <div className="guide-step__actions">
               {nextGuideStep.id === 'l2' && (
-                <div className="guide-precheck-brief" aria-label="预检说明">
+                <div className="guide-precheck-brief guide-precheck-brief--compact" aria-label="预检说明">
                   <span>
                     <strong>预检会做</strong>
                     <small>{READONLY_PRECHECK_PURPOSE}</small>
