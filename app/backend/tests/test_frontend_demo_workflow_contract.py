@@ -591,6 +591,23 @@ def test_config_center_template_lookup_matches_backend_binding_aliases():
     assert "templateBindingSpecificity(right, binding) - templateBindingSpecificity(left, binding)" in config_helpers
 
 
+def test_config_center_exact_template_lookup_does_not_duplicate_partial_scope_templates():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    config_helpers = source[source.index("function templateBindingValueMatches"):source.index("function withTemplateBinding")]
+    exact_function = config_helpers[
+        config_helpers.index("function templateHasStrictBinding"):
+        config_helpers.index("function findScopedTemplate")
+    ]
+
+    assert "function templateBindingValueExactlyMatches" in config_helpers
+    assert "templateBindingValueExactlyMatches(templateBindingField(record, [\"store_name\", \"store\", \"stores\", \"store_names\"]), binding.store_name)" in exact_function
+    assert "templateBindingValueExactlyMatches(templateBindingField(record, [\"category_name\", \"category\", \"categories\", \"category_names\"]), binding.category_name)" in exact_function
+    assert "templateBindingValueExactlyMatches(templateBindingField(record, [\"platform\", \"platforms\"]), binding.platform)" in exact_function
+    assert "if (!expectedValues.length && !actualValue) return true" in config_helpers
+    assert "if (!expectedValues.length || !actualValue) return false" in config_helpers
+    assert "templateBindingValueStrictlyMatches(templateBindingField(record" not in exact_function
+
+
 def test_config_center_template_picker_hides_other_scope_templates():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     config_helpers = source[source.index("function templateBindingValueMatches"):source.index("function withTemplateBinding")]

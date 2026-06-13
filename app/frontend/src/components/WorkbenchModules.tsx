@@ -1251,6 +1251,15 @@ function templateBindingValueStrictlyMatches(expected: unknown, actual: string |
   return normalized.includes(actualValue)
 }
 
+function templateBindingValueExactlyMatches(expected: unknown, actual: string | undefined) {
+  const actualValue = textValue(actual).toLowerCase()
+  const expectedValues = templateBindingValues(expected).map((item) => item.toLowerCase())
+  if (!expectedValues.length && !actualValue) return true
+  if (!expectedValues.length || !actualValue) return false
+  if (expectedValues.includes('*') || expectedValues.includes('all')) return false
+  return expectedValues.length === 1 && expectedValues.includes(actualValue)
+}
+
 function templateBindingSpecificityValue(expected: unknown, actual: string | undefined) {
   const actualValue = textValue(actual).toLowerCase()
   const normalized = templateBindingValues(expected).map((item) => item.toLowerCase())
@@ -1277,9 +1286,9 @@ function templateHasStrictBinding(template: Template, binding: TemplateBinding) 
   const record = templateBindingRecord(template)
   if (!record) return false
   return (
-    templateBindingValueStrictlyMatches(templateBindingField(record, ["store_name", "store", "stores", "store_names"]), binding.store_name)
-    && templateBindingValueStrictlyMatches(templateBindingField(record, ["category_name", "category", "categories", "category_names"]), binding.category_name)
-    && templateBindingValueStrictlyMatches(templateBindingField(record, ["platform", "platforms"]), binding.platform)
+    templateBindingValueExactlyMatches(templateBindingField(record, ["store_name", "store", "stores", "store_names"]), binding.store_name)
+    && templateBindingValueExactlyMatches(templateBindingField(record, ["category_name", "category", "categories", "category_names"]), binding.category_name)
+    && templateBindingValueExactlyMatches(templateBindingField(record, ["platform", "platforms"]), binding.platform)
   )
 }
 
