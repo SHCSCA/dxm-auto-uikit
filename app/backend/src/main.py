@@ -208,7 +208,13 @@ def dxm_login_continue(payload: LoginContinueRequest):
 
 @app.post('/api/dxm/navigate')
 def dxm_navigate(payload: LoginNavigateRequest):
-    result = _run_login_flow(login_flow.navigate_post_login, payload.target)
+    try:
+        result = _run_login_flow(login_flow.navigate_post_login, payload.target)
+    except Exception as exc:
+        result = _workflow_navigation_failure_state(
+            target=payload.target,
+            raw_error=str(exc),
+        )
     return normalize_artifact_paths(result)
 
 
@@ -1743,6 +1749,23 @@ def _login_flow_failure_state(label: str, message: str, next_action: str, raw_er
         'raw_error': raw_error,
         'requires_user_action': True,
         'page_title': '店小秘登录浏览器',
+        'page_url': 'https://www.dianxiaomi.com/',
+        'screenshot_url': None,
+        'browser_visible': False,
+        'updated_at': datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _workflow_navigation_failure_state(target: str, raw_error: str | None = None) -> dict[str, Any]:
+    return {
+        'stage': 'workflow_navigation_failed',
+        'label': '进入失败',
+        'message': '真实店小秘业务页进入失败。请按下一步处理，原始错误已保留到诊断字段和实时日志。',
+        'next_action': '请确认真实浏览器窗口仍然打开且已登录；必要时重新打开真实登录页，再进入目标业务页。',
+        'raw_error': raw_error,
+        'requires_user_action': True,
+        'target': target,
+        'page_title': '店小秘业务页',
         'page_url': 'https://www.dianxiaomi.com/',
         'screenshot_url': None,
         'browser_visible': False,

@@ -3091,6 +3091,23 @@ def test_frontend_guides_waiting_captcha_and_login_failed_as_operator_steps():
     assert "重新打开登录页会复用当前账号输入" in workbench_source
 
 
+def test_frontend_handles_dxm_navigation_failed_state_as_recoverable_operator_step():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    navigate_section = app_source[
+        app_source.index("async function navigateDxmTarget"):
+        app_source.index("async function startAgentConsole")
+    ]
+
+    assert "const navigationResult = await postJson<Record<string, unknown>>('/api/dxm/navigate', { target })" in navigate_section
+    assert "const navigationStage = String(navigationResult.stage ?? '')" in navigate_section
+    assert "navigationStage.includes('failed')" in navigate_section
+    assert "humanDxmNavigationNotice(navigationResult" in navigate_section
+    assert "setOperationError(humanDxmNavigationNotice(navigationResult" in navigate_section
+    assert "真实店小秘业务页进入失败" in app_source
+    assert "重新打开真实登录页" in app_source
+    assert "raw_error" in app_source
+
+
 def test_login_failed_state_has_structured_recovery_steps():
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")

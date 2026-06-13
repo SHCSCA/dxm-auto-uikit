@@ -1035,6 +1035,26 @@ def test_navigate_endpoint_delegates_to_login_flow(monkeypatch):
     assert data['stage'] == 'workflow_navigation'
 
 
+def test_navigate_endpoint_returns_recoverable_state_when_browser_session_crashes(monkeypatch):
+    class CrashingLoginFlow(DummyLoginFlow):
+        def navigate_post_login(self, target: str):
+            raise RuntimeError('Target page, context or browser has been closed')
+
+    monkeypatch.setattr('src.main.login_flow', CrashingLoginFlow())
+
+    client = TestClient(app)
+    response = client.post('/api/dxm/navigate', json={'target': 'draft_box'})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data['stage'] == 'workflow_navigation_failed'
+    assert data['label'] == '进入失败'
+    assert '真实店小秘业务页进入失败' in data['message']
+    assert '重新打开真实登录页' in data['next_action']
+    assert data['raw_error'] == 'Target page, context or browser has been closed'
+    assert data['requires_user_action'] is True
+
+
 def test_draft_box_action_endpoint_delegates_to_login_flow_after_guard_passes(monkeypatch):
     flow = DummyLoginFlow()
     monkeypatch.setattr('src.main.login_flow', flow)

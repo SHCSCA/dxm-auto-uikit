@@ -847,7 +847,13 @@ export default function App() {
           setOperationError(`真实浏览器已发送进入${targetLabel}指令，但店小秘当前停留在 ${compactDxmUrl(settledStatus.current_url)}。请确认登录态后重试。`)
         }
       } else {
-        await postJson('/api/dxm/navigate', { target })
+        const navigationResult = await postJson<Record<string, unknown>>('/api/dxm/navigate', { target })
+        const navigationStage = String(navigationResult.stage ?? '')
+        if (navigationStage.includes('failed')) {
+          setOperationError(humanDxmNavigationNotice(navigationResult, `进入${targetLabel}失败`))
+          setActiveSection('console')
+          return
+        }
         setOperationNotice(`已请求店小秘登录流进入${targetLabel}`)
       }
       setActiveSection('console')
@@ -1376,6 +1382,15 @@ function humanDxmLoginFlowNotice(result: Record<string, unknown>, fallback: stri
   }
   if (message && nextAction) return `${message} 下一步：${nextAction}`
   return message || nextAction || fallback
+}
+
+function humanDxmNavigationNotice(result: Record<string, unknown>, fallback: string) {
+  const message = String(result.message ?? '').trim()
+  const nextAction = String(result.next_action ?? '').trim()
+  const rawError = String(result.raw_error ?? '').trim()
+  const summary = message || '真实店小秘业务页进入失败。'
+  const next = nextAction || '请确认真实浏览器窗口仍然打开且已登录；必要时重新打开真实登录页。'
+  return `${summary} 下一步：${next}${rawError ? ` 诊断：${rawError}` : ''}`.trim()
 }
 
 function pickDefaultTaskId(deliveryWorkspace: DeliveryWorkspaceResponse | null, tasks: Task[]) {
