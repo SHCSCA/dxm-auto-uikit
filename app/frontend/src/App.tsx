@@ -1119,6 +1119,7 @@ export default function App() {
             configPreviewLoading={configPreviewLoading}
             runtimeStatus={runtimeStatus}
             runtimeStatusError={runtimeStatusError}
+            desktopRuntime={desktopRuntime}
             runtimeLogs={runtimeLogs}
             runtimeLogSource={runtimeLogSource}
             runtimeLogError={runtimeLogError}

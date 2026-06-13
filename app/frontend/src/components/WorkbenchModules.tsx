@@ -8,6 +8,7 @@ import type {
   ConfigPreview,
   ConfigPreviewGroup,
   DeliveryWorkspace,
+  DesktopRuntimeInfo,
   DxmReferenceTemplateSection,
   Evidence,
   EvidencePoint,
@@ -168,6 +169,7 @@ type ExecutionConsoleProps = CommonProps & {
   configPreviewLoading: boolean
   runtimeStatus: RuntimeStatus | null
   runtimeStatusError: string | null
+  desktopRuntime: DesktopRuntimeInfo | null
   runtimeLogs: Record<RuntimeLogSource, RuntimeLogResponse | null>
   runtimeLogSource: RuntimeLogSource
   runtimeLogError: string | null
@@ -3233,6 +3235,7 @@ export function ExecutionConsole({
   configPreviewLoading,
   runtimeStatus,
   runtimeStatusError,
+  desktopRuntime,
   runtimeLogs,
   runtimeLogSource,
   runtimeLogError,
@@ -3311,6 +3314,14 @@ export function ExecutionConsole({
         onOpenDxmLogin={onOpenDxmLogin}
         onContinueDxmLogin={onContinueDxmLogin}
       />
+
+      {runtimeStatusError && (
+        <ServiceRecoveryPanel
+          runtimeStatusError={runtimeStatusError}
+          desktopRuntime={desktopRuntime}
+          onRuntimeLogSourceChange={onRuntimeLogSourceChange}
+        />
+      )}
 
       {compactCompletedReview ? (
         <ConsoleCompletedReviewPanel
@@ -4978,6 +4989,41 @@ function L2PrecheckRunbook({
         </button>
       </div>
     </div>
+  )
+}
+
+function ServiceRecoveryPanel({
+  runtimeStatusError,
+  desktopRuntime,
+  onRuntimeLogSourceChange,
+}: {
+  runtimeStatusError: string
+  desktopRuntime: DesktopRuntimeInfo | null
+  onRuntimeLogSourceChange: (source: RuntimeLogSource) => void
+}) {
+  const desktopLogPath = desktopRuntime?.desktopLogPath ?? '免安装版启动后显示 desktop-main.log 路径'
+  const backendLogPath = desktopRuntime?.backendLogPath ?? '免安装版启动后显示 backend.log 路径'
+
+  return (
+    <section className="service-recovery-panel span-3" aria-label="工作台服务恢复">
+      <div className="service-recovery-panel__main">
+        <span className="status-dot status-dot--danger" aria-hidden="true" />
+        <div>
+          <strong>工作台服务连接异常</strong>
+          <small>不是店小秘账号、配置或页面问题；先恢复本机后端，再重新运行预检和真实浏览器流程。</small>
+        </div>
+      </div>
+      <div className="service-recovery-panel__paths">
+        <span><b>桌面日志</b><code>{desktopLogPath}</code></span>
+        <span><b>后端日志</b><code>{backendLogPath}</code></span>
+      </div>
+      <div className="service-recovery-panel__actions">
+        <small>{runtimeStatusError}</small>
+        <button type="button" className="secondary-button" onClick={() => onRuntimeLogSourceChange('launcher')}>
+          查看启动器日志
+        </button>
+      </div>
+    </section>
   )
 }
 

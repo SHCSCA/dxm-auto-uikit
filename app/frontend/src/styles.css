@@ -4578,6 +4578,97 @@ tr:last-child td {
   max-height: 320px;
 }
 
+.service-recovery-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(280px, 1.3fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid #f0b8c4;
+  border-left: 5px solid var(--danger);
+  border-radius: 8px;
+  background: #fff5f7;
+}
+
+.service-recovery-panel__main,
+.service-recovery-panel__actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.service-recovery-panel__main > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.service-recovery-panel__main strong {
+  color: #97122f;
+  font-size: 15px;
+}
+
+.service-recovery-panel small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.service-recovery-panel__paths {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.service-recovery-panel__paths span {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.service-recovery-panel__paths b {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.service-recovery-panel__paths code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 5px 8px;
+  border: 1px solid #f0cbd2;
+  border-radius: 7px;
+  background: #fff;
+  color: #334155;
+  font-size: 12px;
+}
+
+.service-recovery-panel__actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.service-recovery-panel__actions small {
+  max-width: 260px;
+}
+
+.status-dot {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--muted);
+}
+
+.status-dot--danger {
+  background: var(--danger);
+  box-shadow: 0 0 0 7px rgba(190, 24, 59, 0.08);
+}
+
 .console-review-panel {
   align-content: start;
   gap: 14px;
@@ -6548,6 +6639,15 @@ tr:last-child td {
   .agent-console-stage,
   .console-log-card {
     grid-column: span 2;
+  }
+
+  .service-recovery-panel {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .service-recovery-panel__actions {
+    justify-content: flex-start;
   }
 
   .console-diagnostics-grid,

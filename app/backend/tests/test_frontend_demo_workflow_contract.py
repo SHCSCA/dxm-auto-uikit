@@ -3094,6 +3094,32 @@ def test_safety_bar_has_explicit_service_recovery_state_when_backend_is_unavaila
     assert "runtimeStatusUnavailable" in safety_bar[safety_bar.index("const handlePrimaryAction"):safety_bar.index("return (")]
 
 
+def test_execution_console_surfaces_desktop_log_paths_when_service_is_unavailable():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+
+    console_section = workbench_source[
+        workbench_source.index("export function ExecutionConsole"):
+        workbench_source.index("function AgentStagePanel")
+    ]
+    service_recovery_section = workbench_source[
+        workbench_source.index("function ServiceRecoveryPanel"):
+        workbench_source.index("function RuntimeLogPreview")
+    ]
+
+    assert "desktopRuntime={desktopRuntime}" in app_source
+    assert "desktopRuntime: DesktopRuntimeInfo | null" in workbench_source
+    assert "ServiceRecoveryPanel" in console_section
+    assert "runtimeStatusError={runtimeStatusError}" in console_section
+    assert "desktopRuntime={desktopRuntime}" in console_section
+    assert 'aria-label="工作台服务恢复"' in service_recovery_section
+    assert "工作台服务连接异常" in service_recovery_section
+    assert "desktopRuntime?.desktopLogPath" in service_recovery_section
+    assert "desktopRuntime?.backendLogPath" in service_recovery_section
+    assert "不是店小秘账号、配置或页面问题" in service_recovery_section
+    assert "onRuntimeLogSourceChange('launcher')" in service_recovery_section
+
+
 def test_frontend_does_not_surface_raw_backend_fetch_failures_to_operator():
     app_source = APP_TSX.read_text(encoding="utf-8")
     safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
