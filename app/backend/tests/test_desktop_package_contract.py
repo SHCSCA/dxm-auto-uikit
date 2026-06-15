@@ -136,6 +136,9 @@ def test_desktop_credential_smoke_verifies_safe_storage_without_destroying_user_
     source = DESKTOP_MAIN.read_text(encoding="utf-8")
     verify_source = VERIFY_DESKTOP_PACKAGE.read_text(encoding="utf-8")
 
+    assert "function getQaUserDataDir()" in source
+    assert "--qa-user-data-dir=" in source
+    assert "app.setPath('userData', qaUserDataDir)" in source
     assert "function getQaCredentialSmokePath()" in source
     assert "--qa-credential-smoke=" in source
     assert "function runCredentialSmoke(outputPath)" in source
@@ -148,6 +151,10 @@ def test_desktop_credential_smoke_verifies_safe_storage_without_destroying_user_
     assert "Credential smoke written" in source
 
     assert "--qa-credential-smoke=$CredentialSmokePath" in verify_source
+    assert "[string]$SmokeUserDataDir" in verify_source
+    assert "dxm-agent-console-packaged-smoke-user-data" in verify_source
+    assert "$LogPath = Join-Path $SmokeUserDataDir 'data\\desktop-main.log'" in verify_source
+    assert "--qa-user-data-dir=$SmokeUserDataDir" in verify_source
     assert "Credential smoke passed" in verify_source
 
 

@@ -35,6 +35,19 @@ function getQaCredentialSmokePath() {
   return outputPath || null
 }
 
+function getQaUserDataDir() {
+  const arg = process.argv.find((value) => value.startsWith('--qa-user-data-dir='))
+  if (!arg) return null
+  const userDataDir = arg.slice('--qa-user-data-dir='.length).trim()
+  return userDataDir || null
+}
+
+const qaUserDataDir = getQaUserDataDir()
+if (qaUserDataDir) {
+  fs.mkdirSync(qaUserDataDir, { recursive: true })
+  app.setPath('userData', qaUserDataDir)
+}
+
 function initializeDesktopLogPath() {
   try {
     const dataDir = path.join(app.getPath('userData'), 'data')

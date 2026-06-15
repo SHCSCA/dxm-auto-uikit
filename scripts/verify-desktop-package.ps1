@@ -3,7 +3,8 @@ param(
   [switch]$CheckPortable,
   [int]$PortableMinTempFreeMB = 1024,
   [string]$CapturePath = "",
-  [string]$CredentialSmokePath = ""
+  [string]$CredentialSmokePath = "",
+  [string]$SmokeUserDataDir = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -24,8 +25,6 @@ function Resolve-SmokeArtifactPath {
 
 $ExePath = Join-Path $RepoRoot 'outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe'
 $PortableExePath = Join-Path $RepoRoot 'outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe'
-$LogPath = Join-Path $env:APPDATA 'DXM Agent Console\data\desktop-main.log'
-$LegacyLogPath = Join-Path $env:APPDATA 'dxm-agent-desktop\data\desktop-main.log'
 $PortableCapturePath = Join-Path $env:TEMP 'dxm-agent-console-portable-smoke.png'
 if ([string]::IsNullOrWhiteSpace($CapturePath)) {
   $CapturePath = Join-Path $env:TEMP 'dxm-agent-console-packaged-smoke.png'
@@ -33,8 +32,14 @@ if ([string]::IsNullOrWhiteSpace($CapturePath)) {
 if ([string]::IsNullOrWhiteSpace($CredentialSmokePath)) {
   $CredentialSmokePath = Join-Path $env:TEMP 'dxm-agent-console-credential-smoke.json'
 }
+if ([string]::IsNullOrWhiteSpace($SmokeUserDataDir)) {
+  $SmokeUserDataDir = Join-Path $env:TEMP 'dxm-agent-console-packaged-smoke-user-data'
+}
 $CapturePath = Resolve-SmokeArtifactPath -Path $CapturePath
 $CredentialSmokePath = Resolve-SmokeArtifactPath -Path $CredentialSmokePath
+$SmokeUserDataDir = [System.IO.Path]::GetFullPath($SmokeUserDataDir)
+$LogPath = Join-Path $SmokeUserDataDir 'data\desktop-main.log'
+$LegacyLogPath = Join-Path $SmokeUserDataDir 'legacy-data\desktop-main.log'
 
 Write-Host 'DXM Agent Console packaged smoke'
 Write-Host "Exe: $ExePath"
@@ -56,11 +61,10 @@ foreach ($RelativePath in $RequiredResources) {
   }
 }
 
-foreach ($Path in @($LogPath, $LegacyLogPath)) {
-  if (Test-Path $Path) {
-    Remove-Item -LiteralPath $Path -Force
-  }
+if (Test-Path $SmokeUserDataDir) {
+  Remove-Item -LiteralPath $SmokeUserDataDir -Recurse -Force
 }
+New-Item -ItemType Directory -Force -Path $SmokeUserDataDir | Out-Null
 
 if (Test-Path $CapturePath) {
   Remove-Item -LiteralPath $CapturePath -Force
@@ -274,7 +278,7 @@ Assert-PackagedRuntimeClean -ExePath $ExePath
 Assert-PackagedBackendResourceStatus -ExePath $ExePath -TimeoutSeconds $WaitSeconds
 Write-Host 'Packaged backend resource status passed.'
 
-$Process = Start-Process -FilePath $ExePath -WorkingDirectory (Split-Path $ExePath) -ArgumentList @("--qa-capture=$CapturePath", "--qa-credential-smoke=$CredentialSmokePath") -PassThru
+$Process = Start-Process -FilePath $ExePath -WorkingDirectory (Split-Path $ExePath) -ArgumentList @("--qa-capture=$CapturePath", "--qa-credential-smoke=$CredentialSmokePath", "--qa-user-data-dir=$SmokeUserDataDir") -PassThru
 if (!$Process.WaitForExit($WaitSeconds * 1000)) {
   try {
     Stop-Process -Id $Process.Id -Force
