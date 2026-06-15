@@ -240,7 +240,7 @@ export type AgentConsoleActionEvent = {
   save_result?: Record<string, unknown>
   timestamp?: string
 }
-export type AgentConsoleControlAction = 'selector_click' | 'selector_fill' | 'scroll' | 'goto'
+export type AgentConsoleControlAction = 'scroll' | 'goto'
 export type AgentConsoleControlCommand = {
   action: AgentConsoleControlAction
   x?: number

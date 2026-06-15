@@ -18,6 +18,21 @@ def test_cors_allows_loopback_frontend_origins():
     assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:15173"
 
 
+def test_cors_allows_desktop_file_origin_null():
+    client = TestClient(app)
+
+    response = client.options(
+        "/health",
+        headers={
+            "Origin": "null",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "null"
+
+
 def test_cors_does_not_allow_external_origins():
     client = TestClient(app)
 

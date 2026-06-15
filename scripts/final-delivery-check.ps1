@@ -12,6 +12,7 @@ $ErrorActionPreference = "Stop"
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $backendDir = Join-Path $root "app\backend"
 $frontendDir = Join-Path $root "app\frontend"
+$desktopDir = Join-Path $root "app\desktop"
 $authoritativeDataDir = Join-Path $root "data"
 $absoluteOutDir = if ([System.IO.Path]::IsPathRooted($OutDir)) { $OutDir } else { Join-Path $root $OutDir }
 $browserQaOutDir = Join-Path $absoluteOutDir "browser-checks"
@@ -826,6 +827,13 @@ $commands += Invoke-CapturedCommand `
   -Arguments @("run", "build") `
   -WorkingDirectory $frontendDir `
   -TimeoutSeconds 180
+$desktopBuildScript = if ($CheckPortableDesktop) { "build:portable" } else { "build" }
+$commands += Invoke-CapturedCommand `
+  -Name "Desktop production build" `
+  -FilePath $npmExe `
+  -Arguments @("run", $desktopBuildScript) `
+  -WorkingDirectory $desktopDir `
+  -TimeoutSeconds 600
 $packagedDesktopSmokeArgs = @(
   "-NoProfile",
   "-ExecutionPolicy",

@@ -83,6 +83,7 @@ PUBLIC_ARTIFACT_ROOTS = {
 }
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=['null'],
     allow_origin_regex=LOOPBACK_CORS_ORIGIN_RE,
     allow_credentials=True,
     allow_methods=['*'],

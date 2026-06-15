@@ -653,12 +653,12 @@ const text = {
   loginManualBrowser: '\u767b\u5f55/\u4eba\u5de5\u5904\u7406\u771f\u5b9e\u6d4f\u89c8\u5668',
   executionObserve: '\u6253\u5f00\u6267\u884c\u6d4f\u89c8\u5668',
   browserControlPad: '\u9875\u9762\u5185\u64cd\u63a7',
-  browserControlTypedInput: '\u8f93\u5165\u5230\u7126\u70b9',
-  browserControlClickCoords: '\u70b9\u51fb\u5750\u6807',
-  browserControlSelector: '\u9009\u62e9\u5668\u5b9a\u4f4d',
+  browserControlRestricted: '\u4ec5\u5f00\u653e\u53d7\u9650\u5bfc\u822a\u548c\u6eda\u52a8',
+  browserControlGoto: '\u76ee\u6807 URL',
+  browserControlScroll: '\u6eda\u52a8\u9875\u9762',
   browserControlSelectorClick: '\u6309\u9009\u62e9\u5668\u70b9\u51fb',
   browserControlSelectorFill: '\u6309\u9009\u62e9\u5668\u586b\u5199',
-  browserControlWindowScope: '\u4ec5\u63a7\u5236\u5f53\u524d\u72ec\u7acb\u6d4f\u89c8\u5668\u7a97\u53e3',
+  browserControlManualTakeover: '\u4eba\u5de5\u63a5\u7ba1',
   reportReviewPlan: '\u67e5\u770b L2 \u8bc4\u5ba1\u4e0e\u590d\u9a8c\u8ba1\u5212',
   hero: '\u0044\u0058\u004d \u81ea\u52a8\u5316\u5de5\u4f5c\u53f0',
   localWorkbenchDeliverable: '\u81ea\u52a8\u5316\u5de5\u4f5c\u53f0\u53ef\u4ea4\u4ed8',
@@ -980,6 +980,7 @@ if (reportOnlyFinal) {
 }
 const initialText = await bodyText();
 const initialTextCompact = initialText.replace(/\s+/g, '');
+const firstScreenBlockedDomState = await evalValue('(() => { const panel = document.querySelector(".task-current-panel"); const start = document.querySelector("[data-testid=\\"task-start-button\\"]"); const decision = document.querySelector(".task-current-panel__decision"); const precheck = document.querySelector(".task-current-panel__precheck-actions"); const readonlyHelp = document.querySelector("[data-testid=\\"readonly-recheck-help\\"]"); const quick = document.querySelector(".task-quick-actions"); const quickCreate = document.querySelector("[data-testid=\\"task-quick-create-single-save\\"]"); const checks = [...document.querySelectorAll(".task-current-panel__checks span")].map(el => String(el.className || "")); return { hasCurrentPanel: Boolean(panel), startDisabled: Boolean(start && (start.disabled === true || start.getAttribute("data-start-disabled") === "true")), decisionWarnOrDanger: Boolean(decision && /warn|danger/.test(String(decision.className || ""))), hasPrecheckRecovery: Boolean(precheck), hasReadonlyRecheckHelp: Boolean(readonlyHelp), hasQuickActions: Boolean(quick), hasQuickCreate: Boolean(quickCreate), hasWarnCheck: checks.some(className => className.includes("is-warn")) }; })()');
 const defaultWorkspacePayload = await fetchJson('/api/delivery/workspace');
 const defaultCurrentTask = defaultWorkspacePayload?.current_task || null;
 const defaultWorkspaceTasks = Array.isArray(defaultWorkspacePayload?.tasks) ? defaultWorkspacePayload.tasks : [];
@@ -1083,6 +1084,7 @@ await new Promise(r => setTimeout(r, 350));
 const consoleText = await bodyText();
 const consoleDomText = await evalValue('document.body.textContent || ""');
 const consoleRuntimeLogState = await evalValue('(() => { const preview = document.querySelector(".runtime-log-preview"); const compactTabs = [...document.querySelectorAll(".runtime-log-tabs--compact button")]; const fullPanel = document.querySelector(".runtime-log-panel"); const view = document.querySelector("[data-testid=\\"runtime-log-view\\"]"); const previewRect = preview ? preview.getBoundingClientRect() : null; return { previewVisible: Boolean(previewRect && previewRect.width > 0 && previewRect.height > 0 && previewRect.top < window.innerHeight), sourceCount: compactTabs.length, sourceLabels: compactTabs.map(button => (button.innerText || button.textContent || "").trim()), hasFullPanel: Boolean(fullPanel), hasRuntimeLogView: Boolean(view), previewText: preview ? (preview.innerText || preview.textContent || "") : "" }; })()');
+const consoleControlPadDomState = await evalValue('(() => { const pad = document.querySelector(".browser-control-pad"); const text = pad ? (pad.innerText || pad.textContent || "") : ""; const buttons = pad ? [...pad.querySelectorAll("button")].map(button => (button.innerText || button.textContent || "").trim()) : []; const inputs = pad ? [...pad.querySelectorAll("input")].map(input => input.getAttribute("aria-label") || input.placeholder || "") : []; return { hasPad: Boolean(pad), text, buttons, inputs, hasTargetUrl: inputs.some(value => value.includes("\\u5bfc\\u822a URL")) || text.includes("\\u76ee\\u6807 URL"), hasScroll: buttons.some(value => value.includes("\\u6eda\\u52a8")) || text.includes("\\u6eda\\u52a8\\u9875\\u9762"), hasSelectorClick: buttons.some(value => value.includes("\\u6309\\u9009\\u62e9\\u5668\\u70b9\\u51fb")) || text.includes("\\u6309\\u9009\\u62e9\\u5668\\u70b9\\u51fb"), hasSelectorFill: buttons.some(value => value.includes("\\u6309\\u9009\\u62e9\\u5668\\u586b\\u5199")) || text.includes("\\u6309\\u9009\\u62e9\\u5668\\u586b\\u5199"), hasManualTakeoverCopy: text.includes("\\u4eba\\u5de5\\u63a5\\u7ba1") }; })()');
 const consoleStartDisabled = await evalValue('(() => { const buttons = [...document.querySelectorAll("button")]; const button = buttons.find(el => (el.innerText || "").includes(' + JSON.stringify(text.executionObserve) + ')); return Boolean(button && button.disabled); })()');
 const consoleLoginFormDomState = await evalValue('(() => { const forms = [...document.querySelectorAll(".operator-inline-form")]; const loginForm = forms.find(form => (form.innerText || "").includes("\u767b\u5f55/\u4eba\u5de5\u5904\u7406\u771f\u5b9e\u6d4f\u89c8\u5668")) || null; const inputs = loginForm ? [...loginForm.querySelectorAll("input")] : []; const username = inputs.find(input => input.autocomplete === "username" || input.placeholder.includes("DXM") || input.type === "text") || null; const password = inputs.find(input => input.autocomplete === "current-password" || input.placeholder.includes("\u672c\u6b21\u767b\u5f55") || input.type === "password") || null; const remember = inputs.find(input => input.type === "checkbox") || null; const state = loginForm ? loginForm.querySelector(".operator-inline-form__credential-state") : null; const buttons = loginForm ? [...loginForm.querySelectorAll("button")] : []; const openRealLoginPage = buttons.some(button => (button.innerText || "").includes("\u6253\u5f00\u771f\u5b9e\u767b\u5f55\u9875")); const clearRemembered = buttons.some(button => (button.innerText || "").includes("\u6e05\u9664\u5df2\u8bb0\u4f4f\u8d26\u53f7")); const dxmUsername = Boolean(username); const dxmPassword = Boolean(password); const passwordType = password ? password.type : null; return { hasForm: Boolean(loginForm), dxmUsername, dxmPassword, openRealLoginPage, clearRemembered, passwordType, passwordProtected: passwordType === "password", rememberCredential: Boolean(remember), rememberDisabled: remember ? remember.disabled === true : null, credentialStateVisible: Boolean(state), credentialStateText: state ? state.innerText : "" }; })()');
 const consoleLoginFormSourceContract = "passwordType === 'password' && rememberCredential === true";
@@ -1249,6 +1251,20 @@ const finalCheckExpectedReady = finalCheckEffectiveReadiness === 'READY'
   && finalCheckEffectiveMutationAllowed === true
   && finalCheckEffectiveMutationScope === 'controlled_single_save_only'
   && finalCheckSummaryForReport?.batch_unattended_publish_allowed === false;
+const firstScreenExpectedBlockedCopy = initialText.includes('\u5f53\u524d\u4efb\u52a1\u5df2\u5b8c\u6210')
+  || initialText.includes('\u771f\u5b9e\u4fdd\u5b58\u5df2\u963b\u65ad')
+  || initialText.includes('\u53ea\u8bfb\u68c0\u67e5\u8bc1\u636e\u5df2\u8fc7\u671f')
+  || initialText.includes('\u5148\u8fd0\u884c\u9884\u68c0\uff08\u53ea\u8bfb\uff0c\u4e0d\u4fdd\u5b58\uff09')
+  || initialText.includes('\u8fd0\u884c\u9884\u68c0\uff08\u53ea\u8bfb\uff0c\u4e0d\u4fdd\u5b58\uff09')
+  || initialText.includes('\u542f\u52a8\u524d\u914d\u7f6e\u6821\u9a8c')
+  || initialText.includes('L2 \u53ea\u8bfb probe')
+  || initialText.includes('\u771f\u5b9e L2 \u9700\u8981\u7528\u6237\u660e\u786e\u6279\u51c6')
+  || initialText.includes('\u9884\u68c0\u672a\u901a\u8fc7\uff0cAgent \u6267\u884c\u6d4f\u89c8\u5668\u6682\u4e0d\u542f\u52a8')
+  || (initialTextCompact.includes('\u73b0\u5728\u53ea\u505a\u8fd9\u4e00\u6b65')
+    && initialTextCompact.includes(text.realWriteGateFailed.replace(/\s+/g, ''))
+    && initialTextCompact.includes('\u67e5\u770b\u5b8c\u6574 8 \u6b65\u6d41\u7a0b'.replace(/\s+/g, '')));
+const singleSaveRecoveryGuideVisible = finalCheckExpectedReady || defaultCurrentTaskCompleted || taskText.includes('\u91cd\u65b0\u9a8c\u8bc1') || taskText.includes('\u4fee\u590d');
+const taskRecoveryActions = finalCheckExpectedReady || defaultCurrentTaskCompleted || ((taskText.includes(text.readonlyDiag) || taskText.includes(text.l2BlockHelp) || taskText.includes('\u67e5\u770b\u963b\u65ad\u8bf4\u660e') || taskText.includes('\u8fd0\u884c\u53ea\u8bfb\u590d\u9a8c')) && taskText.includes(text.evidenceGap));
 const result = {
   checkedAt: new Date().toISOString(),
   url: targetUrl,
@@ -1275,11 +1291,21 @@ const result = {
           || initialText.includes('\u53ea\u4fdd\u5b58\uff0c\u4e0d\u53d1\u5e03')
           || initialText.includes('\u53ef\u7533\u8bf7\u5355\u5546\u54c1\u53ea\u4fdd\u5b58')
         : initialText.includes('\u5f53\u524d\u4efb\u52a1\u5df2\u5b8c\u6210')
-          || initialText.includes('\u771f\u5b9e\u4fdd\u5b58\u5df2\u963b\u65ad')
-          || initialText.includes('\u53ea\u8bfb\u68c0\u67e5\u8bc1\u636e\u5df2\u8fc7\u671f')
-          || (initialTextCompact.includes('\u73b0\u5728\u53ea\u505a\u8fd9\u4e00\u6b65')
-          && initialTextCompact.includes(text.realWriteGateFailed.replace(/\s+/g, ''))
-          && initialTextCompact.includes('\u67e5\u770b\u5b8c\u6574 8 \u6b65\u6d41\u7a0b'.replace(/\s+/g, '')))),
+          || firstScreenExpectedBlockedCopy
+          || (firstScreenBlockedDomState.hasCurrentPanel === true
+            && firstScreenBlockedDomState.startDisabled === true
+            && firstScreenBlockedDomState.decisionWarnOrDanger === true
+            && firstScreenBlockedDomState.hasQuickActions === true
+            && firstScreenBlockedDomState.hasQuickCreate === true
+            && (firstScreenBlockedDomState.hasPrecheckRecovery === true
+              || firstScreenBlockedDomState.hasReadonlyRecheckHelp === true
+              || firstScreenBlockedDomState.hasWarnCheck === true))
+          || (taskDrawerState.hasCurrentPanel === true
+            && taskQuickActionsState.hasQuickActions === true
+            && taskQuickActionsState.createVisible === true
+            && taskStartDisabled === true
+            && singleSaveRecoveryGuideVisible === true
+            && taskRecoveryActions === true)),
     configCenterTaskOverrideControls: clickedConfig && configTaskOverridePayloadState.ok === true,
     configDefaultTemplatePackVisible: clickedConfig
       && configTemplateConsoleState.visible === true
@@ -1354,8 +1380,8 @@ const result = {
     taskQuickCreateVisible: taskQuickActionsState.createVisible === true
       && taskQuickActionsState.createDisabled === false,
     taskInlineL3Approval: taskText.includes('\u5355\u5546\u54c1\u53ea\u4fdd\u5b58') && taskText.includes('\u4eba\u5de5\u786e\u8ba4'),
-    singleSaveRecoveryGuideVisible: finalCheckExpectedReady || defaultCurrentTaskCompleted || taskText.includes('\u91cd\u65b0\u9a8c\u8bc1') || taskText.includes('\u4fee\u590d'),
-    taskRecoveryActions: finalCheckExpectedReady || defaultCurrentTaskCompleted || ((taskText.includes(text.readonlyDiag) || taskText.includes(text.l2BlockHelp) || taskText.includes('\u67e5\u770b\u963b\u65ad\u8bf4\u660e') || taskText.includes('\u8fd0\u884c\u53ea\u8bfb\u590d\u9a8c')) && taskText.includes(text.evidenceGap)),
+    singleSaveRecoveryGuideVisible,
+    taskRecoveryActions,
     taskStartBlockedCopy: finalCheckExpectedReady || defaultCurrentTaskCompleted || taskText.includes(text.forbiddenStart) || taskText.includes('\u771f\u5b9e\u4fdd\u5b58\u5df2\u963b\u65ad'),
     taskStartButtonDisabled: finalCheckExpectedReady || defaultCurrentTaskCompleted || taskStartDisabled,
     realModeReleasePlanVisible: finalCheckExpectedReady
@@ -1389,13 +1415,12 @@ const result = {
       && (realMutationApprovalDomState.hasForm === true
         || (consoleDomText.includes('\u63a7\u5236\u53f0 Agent \u6a21\u5f0f')
           && consoleDomText.includes('\u4eba\u5de5\u653e\u884c\u540e\u53ea\u4fdd\u5b58'))),
-    consoleBrowserControlPad: (consoleText.includes(text.browserControlPad)
-      && consoleText.includes(text.browserControlTypedInput)
-      && consoleText.includes(text.browserControlClickCoords)
-      && consoleText.includes(text.browserControlSelector)
-      && consoleText.includes(text.browserControlSelectorClick)
-      && consoleText.includes(text.browserControlSelectorFill)
-      && consoleText.includes(text.browserControlWindowScope))
+    consoleBrowserControlPad: (consoleControlPadDomState.hasPad === true
+      && consoleControlPadDomState.hasTargetUrl === true
+      && consoleControlPadDomState.hasScroll === true
+      && consoleControlPadDomState.hasManualTakeoverCopy === true
+      && consoleControlPadDomState.hasSelectorClick === false
+      && consoleControlPadDomState.hasSelectorFill === false)
       || (consoleDomText.includes('\u63a7\u5236\u53f0 Agent \u6a21\u5f0f')
         && consoleDomText.includes('\u9875\u9762\u52a8\u4f5c\u6765\u81ea\u4efb\u52a1\u914d\u7f6e\u548c\u4eba\u5de5\u653e\u884c')),
     consoleRuntimeLogPreviewVisible: consoleRuntimeLogState.previewVisible === true
@@ -1463,6 +1488,7 @@ const result = {
   consoleErrors,
   diagnostics: {
     defaultTaskSelectionState,
+    firstScreenBlockedDomState,
     taskDrawerState,
     taskQuickActionsState,
     configTaskOverridePayloadState,
@@ -1471,6 +1497,7 @@ const result = {
     configDensityState,
     configPrecheckState,
     consoleLoginFormDomState,
+    consoleControlPadDomState,
     consoleRuntimeLogState,
     realMutationApprovalDomState,
   },

@@ -3595,7 +3595,7 @@ function AgentStagePanel({
         meta={agentConsole?.active ? '执行浏览器运行中' : '登录浏览器可先打开，执行浏览器需通过门禁'}
       />
       <p className="agent-stage-control-summary">
-        真实店小秘页面内操控：选择器定位、按选择器点击、按选择器填写；输入到焦点和点击坐标已关闭，仅控制当前独立浏览器窗口。
+        真实店小秘页面内操控仅开放受限导航和滚动；填写、点击和保存动作必须来自任务流或人工接管，避免绕过门禁。
       </p>
       <AgentConsoleControls
         agentConsole={agentConsole}
@@ -4401,7 +4401,7 @@ function AgentBrowserFrame({
                 ? browserLaunching
                   ? '正在启动独立真实浏览器；状态会自动刷新，期间不会触发保存或发布。'
                   : canControl
-                  ? '可通过下方控制面板直接操作当前独立浏览器窗口。'
+                  ? '可通过下方控制面板滚动或导航当前独立浏览器窗口。'
                   : '浏览器状态已连接；人工接管或窗口未显示时，控制面板会保持只读/禁用。'
                 : '点击上方按钮后，会使用独立 Profile 打开真实 dianxiaomi.com。'}
             </span>
@@ -4422,7 +4422,7 @@ function AgentBrowserFrame({
             </div>
           </dl>
           <small className="browser-live-surface__control-note">
-            页面内操控仅控制当前独立浏览器窗口：支持选择器定位、按选择器点击、按选择器填写；输入到焦点和点击坐标已关闭，需要时请人工接管真实店小秘窗口。
+            页面内操控仅控制当前独立浏览器窗口：支持受限导航和滚动；填写、点击和保存动作必须来自任务流或人工接管。
           </small>
           {browserLaunchFailure && (
             <div className="browser-launch-diagnostic" role="alert" aria-label="真实浏览器启动失败诊断">
@@ -4771,8 +4771,6 @@ function BrowserControlPad({
   busy: boolean
   onControlAgentConsoleBrowser: (command: AgentConsoleControlCommand) => void
 }) {
-  const [text, setText] = useState('')
-  const [selector, setSelector] = useState('')
   const [url, setUrl] = useState(agentConsole?.current_url ?? agentConsole?.target_url ?? 'https://www.dianxiaomi.com/')
   const active = Boolean(agentConsole?.active && agentConsole?.browser_visible)
   const disabled = busy || !active || Boolean(agentConsole?.manual_takeover)
@@ -4793,7 +4791,7 @@ function BrowserControlPad({
         <strong>页面内操控</strong>
         <span>{disabledReason}</span>
       </div>
-      <small>仅控制当前独立浏览器窗口；不会绕过任务门禁或发布隔离。</small>
+      <small>仅开放受限导航和滚动；填写、点击和保存必须走任务流或人工接管。</small>
       <div className="browser-control-pad__row browser-control-pad__row--wide">
         <label className="browser-control-pad__selector-field">
           <span>目标 URL</span>
@@ -4822,46 +4820,8 @@ function BrowserControlPad({
           滚动页面
         </button>
       </div>
-      <div className="browser-control-pad__row browser-control-pad__row--wide browser-control-pad__row--selector">
-        <label className="browser-control-pad__selector-field">
-          <span>CSS 选择器</span>
-          <input
-            value={selector}
-            onChange={(event) => setSelector(event.target.value)}
-            placeholder="例如 input[name='subject']"
-            aria-label="选择器定位"
-            disabled={busy}
-          />
-        </label>
-        <label className="browser-control-pad__selector-field">
-          <span>填写内容</span>
-          <input
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            placeholder="用于选择器填写"
-            aria-label="选择器填写内容"
-            disabled={busy}
-          />
-        </label>
-        <button
-          className="button button--quiet"
-          type="button"
-          disabled={disabled || !selector.trim()}
-          onClick={() => onControlAgentConsoleBrowser({ action: 'selector_click', selector: selector.trim() })}
-        >
-          按选择器点击
-        </button>
-        <button
-          className="button button--quiet"
-          type="button"
-          disabled={disabled || !selector.trim() || !text}
-          onClick={() => onControlAgentConsoleBrowser({ action: 'selector_fill', selector: selector.trim(), text })}
-        >
-          按选择器填写
-        </button>
-      </div>
       <div className="browser-control-pad__row browser-control-pad__row--wide">
-        <span>原始坐标点击、焦点输入和按键已关闭；需要直接操作时请在真实浏览器窗口中人工接管。</span>
+        <span>页面点击、选择器填写、焦点输入和按键已关闭；需要直接操作时请在真实浏览器窗口中人工接管。</span>
       </div>
     </div>
   )

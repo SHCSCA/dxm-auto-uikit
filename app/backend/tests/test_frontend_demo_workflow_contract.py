@@ -737,6 +737,9 @@ def test_browser_qa_verifies_config_center_task_override_controls():
     assert "credentialStateText" in source
     assert "consoleRealBrowserLoginEntry" in source
     assert "consoleBrowserControlPad" in source
+    assert "consoleControlPadDomState" in source
+    assert "firstScreenBlockedDomState" in source
+    assert 'data-start-disabled' in source
     assert "consoleRuntimeLogState" in source
     assert "consoleRuntimeLogPreviewVisible" in source
     assert "consoleRuntimeLogState.previewVisible === true" in source
@@ -745,8 +748,9 @@ def test_browser_qa_verifies_config_center_task_override_controls():
     assert "browserControlPad" in source
     assert "'\\u6253\\u5f00\\u6267\\u884c\\u6d4f\\u89c8\\u5668'" in source
     assert "'\\u542f\\u52a8\\u6267\\u884c\\u89c2\\u5bdf'" not in source
-    assert "browserControlClickCoords" in source
-    assert "browserControlSelector" in source
+    assert "browserControlRestricted" in source
+    assert "browserControlGoto" in source
+    assert "browserControlScroll" in source
     assert "browserControlSelectorClick" in source
     assert "browserControlSelectorFill" in source
     assert "fieldSource" in source
@@ -1738,22 +1742,20 @@ def test_execution_console_exposes_in_page_browser_control_contract():
     assert "<summary>高级浏览器控制</summary>" in workbench_source
     assert "页面内操控" in workbench_source
     assert "目标 URL" in workbench_source
-    assert "CSS 选择器" in workbench_source
-    assert "坐标点击" in workbench_source
-    assert "原始坐标点击、焦点输入和按键已关闭" in workbench_source
-    assert "选择器定位" in workbench_source
-    assert "按选择器点击" in workbench_source
-    assert "按选择器填写" in workbench_source
-    assert "输入到焦点和点击坐标已关闭" in workbench_source
+    assert "仅开放受限导航和滚动" in workbench_source
+    assert "填写、点击和保存必须走任务流或人工接管" in workbench_source
+    assert "页面点击、选择器填写、焦点输入和按键已关闭" in workbench_source
+    assert "CSS 选择器" not in workbench_source
+    assert "按选择器点击" not in workbench_source
+    assert "按选择器填写" not in workbench_source
     assert "<span>按键</span>" not in workbench_source
     assert "滚动页面" in workbench_source
     assert "仅控制当前独立浏览器窗口" in workbench_source
     assert "'click'" not in control_action_type
     assert "'type'" not in control_action_type
     assert "'press'" not in control_action_type
-    assert "'selector_click'" in control_action_type
-    assert "'selector_fill'" in control_action_type
-    assert "selector?: string" in types_source
+    assert "'selector_click'" not in control_action_type
+    assert "'selector_fill'" not in control_action_type
     assert ".browser-control-pad" in styles_source
 
 

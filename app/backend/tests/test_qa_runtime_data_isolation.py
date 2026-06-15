@@ -321,9 +321,14 @@ def test_final_delivery_check_includes_packaged_desktop_smoke_in_delivery_gate()
     assert "$packagedDesktopSmokeCapturePath" in script
     assert "$packagedDesktopCredentialSmokePath" in script
     assert "verify-desktop-package.ps1" in script
+    assert '-Name "Desktop production build"' in script
+    assert '$desktopBuildScript = if ($CheckPortableDesktop) { "build:portable" } else { "build" }' in script
+    assert '@("run", $desktopBuildScript)' in script
     assert '-Name "Packaged desktop smoke"' in script
+    packaged_args_start = script.index("$packagedDesktopSmokeArgs = @(")
+    packaged_args_end = script.index('if ($CheckPortableDesktop)', packaged_args_start)
     packaged_smoke_args = script[
-        script.index("$packagedDesktopSmokeArgs = @("):script.index('if ($CheckPortableDesktop)')
+        packaged_args_start:packaged_args_end
     ]
     assert '"-CapturePath"' in packaged_smoke_args
     assert "$packagedDesktopSmokeCapturePath" in packaged_smoke_args
@@ -339,6 +344,7 @@ def test_final_delivery_check_includes_packaged_desktop_smoke_in_delivery_gate()
     assert "Packaged credential smoke:" in script
 
     build = script.index('-Name "Frontend production build"')
+    desktop_build = script.index('-Name "Desktop production build"')
     smoke = script.index('-Name "Packaged desktop smoke"')
     result = script.index("$result = [pscustomobject]@{")
-    assert build < smoke < result
+    assert build < desktop_build < smoke < result
