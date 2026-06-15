@@ -52,6 +52,26 @@ if ($Help) {
 New-Item -ItemType Directory -Path $absoluteOutDir -Force | Out-Null
 New-Item -ItemType Directory -Path $browserQaOutDir -Force | Out-Null
 
+function Write-Utf8NoBomFile {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [AllowNull()][string]$Value
+  )
+
+  $encoding = New-Object System.Text.UTF8Encoding -ArgumentList $false
+  [System.IO.File]::WriteAllText($Path, [string]$Value, $encoding)
+}
+
+function Write-JsonNoBomFile {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][object]$Value,
+    [int]$Depth = 12
+  )
+
+  Write-Utf8NoBomFile -Path $Path -Value ($Value | ConvertTo-Json -Depth $Depth)
+}
+
 function Invoke-JsonUtf8 {
   param(
     [string]$Uri,
@@ -372,7 +392,7 @@ function Write-ProvisionalDeliveryCheckReport {
     }
   }
 
-  $provisionalResult | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
+  Write-JsonNoBomFile -Path $jsonPath -Value $provisionalResult
 }
 
 function Resolve-Python {
@@ -734,7 +754,7 @@ function Write-FatalDeliveryCheckReport {
     }
   }
 
-  $fatalResult | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
+  Write-JsonNoBomFile -Path $jsonPath -Value $fatalResult
 
   $fatalLines = @(
     "# DXM Local Workbench Delivery Check",
@@ -1041,7 +1061,7 @@ $l2AllowlistReviewTemplate = [pscustomobject]@{
     }
   })
 }
-$l2AllowlistReviewTemplate | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $l2AllowlistReviewTemplateJsonPath -Encoding UTF8
+Write-JsonNoBomFile -Path $l2AllowlistReviewTemplateJsonPath -Value $l2AllowlistReviewTemplate
 
 $l2ReviewTemplateLines = New-Object System.Collections.Generic.List[string]
 $l2ReviewTemplateLines.Add("# L2 Allowlist Review Template")
@@ -1165,7 +1185,7 @@ $result = [pscustomobject]@{
   }
 }
 
-$result | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
+Write-JsonNoBomFile -Path $jsonPath -Value $result
 
 $postFinalReportQa = $null
 if (!$SkipBrowserQA) {
@@ -1196,7 +1216,7 @@ if (!$SkipBrowserQA) {
   $result.localWorkbenchCheck = if ($localWorkbenchOk) { "PASS" } else { "FAIL" }
   $result.commands = $commands
   $result.postFinalReportQa = $postFinalReportQa
-  $result | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
+  Write-JsonNoBomFile -Path $jsonPath -Value $result
 
   Remove-PostFinalReportQaArtifacts
   $postFinalReportQa = $null
@@ -1223,7 +1243,7 @@ if (!$SkipBrowserQA) {
   $result.localWorkbenchCheck = if ($localWorkbenchOk) { "PASS" } else { "FAIL" }
   $result.commands = $commands
   $result.postFinalReportQa = $postFinalReportQa
-  $result | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
+  Write-JsonNoBomFile -Path $jsonPath -Value $result
 }
 
 $summaryLines = New-Object System.Collections.Generic.List[string]

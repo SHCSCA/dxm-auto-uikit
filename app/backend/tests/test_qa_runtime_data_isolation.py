@@ -283,7 +283,12 @@ def test_final_delivery_check_captures_final_report_center_after_final_json_writ
     assert "$postFinalReportCenterQaCommand.ok" in script
     assert "postFinalReportQa" in script
     assert "finalReportCenterScreenshot" in script
-    final_json_write = script.index("$result | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $jsonPath -Encoding UTF8")
+    assert "function Write-Utf8NoBomFile" in script
+    assert "New-Object System.Text.UTF8Encoding -ArgumentList $false" in script
+    assert "function Write-JsonNoBomFile" in script
+    assert "Set-Content -LiteralPath $jsonPath -Encoding UTF8" not in script
+    assert "$result | ConvertTo-Json -Depth 12 | Set-Content" not in script
+    final_json_write = script.index("Write-JsonNoBomFile -Path $jsonPath -Value $result")
     post_final_state_qa = script.index('-Name "Final report state QA"')
     post_final_qa = script.index('-Name "Final report center QA"')
     stop_qa = script.rindex("Stop-QAProcesses")
