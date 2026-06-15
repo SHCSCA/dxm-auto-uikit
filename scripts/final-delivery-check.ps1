@@ -24,6 +24,7 @@ $postFinalReportQaJson = Join-Path $browserQaOutDir "qa-final-report-check.json"
 $summaryPath = Join-Path $absoluteOutDir "final-delivery-check.md"
 $jsonPath = Join-Path $absoluteOutDir "final-delivery-check.json"
 $packagedDesktopSmokeCapturePath = Join-Path $absoluteOutDir "packaged-desktop-smoke.png"
+$packagedDesktopSmokeUserDataDir = Join-Path $absoluteOutDir "packaged-desktop-smoke-user-data"
 $portableDesktopSmokeCapturePath = Join-Path $absoluteOutDir "portable-desktop-smoke.png"
 $portableDesktopSmokeUserDataDir = Join-Path $absoluteOutDir "portable-desktop-smoke-user-data"
 $packagedDesktopCredentialSmokePath = Join-Path $absoluteOutDir "packaged-desktop-credential-smoke.json"
@@ -880,6 +881,8 @@ $packagedDesktopSmokeArgs = @(
   "20",
   "-CapturePath",
   $packagedDesktopSmokeCapturePath,
+  "-SmokeUserDataDir",
+  $packagedDesktopSmokeUserDataDir,
   "-PortableCapturePath",
   $portableDesktopSmokeCapturePath,
   "-PortableSmokeUserDataDir",
@@ -1227,6 +1230,7 @@ $result = [pscustomobject]@{
     summary = $summaryPath
     json = $jsonPath
     packagedDesktopSmokeCapture = $packagedDesktopSmokeCapturePath
+    packagedDesktopSmokeUserDataDir = $packagedDesktopSmokeUserDataDir
     portableDesktopSmokeCapture = $portableDesktopSmokeCapturePath
     portableDesktopSmokeUserDataDir = $portableDesktopSmokeUserDataDir
     packagedDesktopCredentialSmoke = $packagedDesktopCredentialSmokePath
@@ -1450,6 +1454,7 @@ $summaryLines.Add("## Packaged Desktop Smoke")
 $summaryLines.Add("- Packaged desktop smoke: $(if ($packagedDesktopSmokeCommand -and $packagedDesktopSmokeCommand.ok) { "PASS" } else { "FAIL/MISSING" })")
 $summaryLines.Add("- Portable desktop smoke: $(if ($CheckPortableDesktop) { "ENABLED" } else { "SKIPPED" })")
 $summaryLines.Add("- Packaged desktop capture: $($result.artifacts.packagedDesktopSmokeCapture)")
+$summaryLines.Add("- Packaged desktop user data: $($result.artifacts.packagedDesktopSmokeUserDataDir)")
 $summaryLines.Add("- Portable desktop capture: $($result.artifacts.portableDesktopSmokeCapture)")
 $summaryLines.Add("- Portable desktop user data: $($result.artifacts.portableDesktopSmokeUserDataDir)")
 $summaryLines.Add("- Packaged credential smoke: $($result.artifacts.packagedDesktopCredentialSmoke)")
@@ -1473,6 +1478,7 @@ $summaryLines.Add("")
 $summaryLines.Add("## Artifacts")
 $summaryLines.Add("- JSON: $jsonPath")
 $summaryLines.Add("- Packaged desktop smoke capture: $($result.artifacts.packagedDesktopSmokeCapture)")
+$summaryLines.Add("- Packaged desktop user data: $($result.artifacts.packagedDesktopSmokeUserDataDir)")
 $summaryLines.Add("- Portable desktop smoke capture: $($result.artifacts.portableDesktopSmokeCapture)")
 $summaryLines.Add("- Portable desktop user data: $($result.artifacts.portableDesktopSmokeUserDataDir)")
 $summaryLines.Add("- Packaged credential smoke: $($result.artifacts.packagedDesktopCredentialSmoke)")

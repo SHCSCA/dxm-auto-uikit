@@ -352,6 +352,7 @@ def test_final_delivery_check_includes_packaged_desktop_smoke_in_delivery_gate()
     assert "$packagedDesktopSmokeArgs" in script
     assert '$packagedDesktopSmokeArgs += "-CheckPortable"' in script
     assert "$packagedDesktopSmokeCapturePath" in script
+    assert "$packagedDesktopSmokeUserDataDir" in script
     assert "$portableDesktopSmokeCapturePath" in script
     assert "$portableDesktopSmokeUserDataDir" in script
     assert "$packagedDesktopCredentialSmokePath" in script
@@ -370,6 +371,8 @@ def test_final_delivery_check_includes_packaged_desktop_smoke_in_delivery_gate()
     ]
     assert '"-CapturePath"' in packaged_smoke_args
     assert "$packagedDesktopSmokeCapturePath" in packaged_smoke_args
+    assert '"-SmokeUserDataDir"' in packaged_smoke_args
+    assert "$packagedDesktopSmokeUserDataDir" in packaged_smoke_args
     assert '"-PortableCapturePath"' in packaged_smoke_args
     assert "$portableDesktopSmokeCapturePath" in packaged_smoke_args
     assert '"-PortableSmokeUserDataDir"' in packaged_smoke_args
@@ -378,6 +381,7 @@ def test_final_delivery_check_includes_packaged_desktop_smoke_in_delivery_gate()
     assert "$packagedDesktopCredentialSmokePath" in packaged_smoke_args
     assert "checkPortableDesktop" in script
     assert "packagedDesktopSmokeCapture" in script
+    assert "packagedDesktopSmokeUserDataDir" in script
     assert "portableDesktopSmokeCapture" in script
     assert "portableDesktopSmokeUserDataDir" in script
     assert "packagedDesktopCredentialSmoke" in script
@@ -385,6 +389,7 @@ def test_final_delivery_check_includes_packaged_desktop_smoke_in_delivery_gate()
     assert "Portable desktop smoke:" in script
     assert "Packaged desktop smoke:" in script
     assert "Packaged desktop capture:" in script
+    assert "Packaged desktop user data:" in script
     assert "Portable desktop capture:" in script
     assert "Portable desktop user data:" in script
     assert "Packaged credential smoke:" in script

@@ -118,8 +118,8 @@ const l3PostEvidenceGapIds = new Set(['gap-save-result', 'gap-unpublished-proof'
 const LEGACY_QA_REAL_MUTATION_TASK_NAME = ['QA guarded', 'real mutation task'].join(' ')
 const RELEASED_SINGLE_SAVE_STORE_NAMES = new Set(['Dang Kang'])
 const DXM_LOGGED_IN_STATUSES = new Set(['login_success', 'logged_in', 'not_published_verified', 'workflow_navigation'])
-const READONLY_PRECHECK_CTA = '运行预检（只读，不保存）'
-const READONLY_PRECHECK_PURPOSE = '预检会打开真实店小秘采集页和采集箱，只读取页面，不保存、不发布；通过后才能打开执行浏览器。'
+const READONLY_PRECHECK_CTA = '运行真实只读检查'
+const READONLY_PRECHECK_PURPOSE = '真实只读检查会打开店小秘采集页和采集箱，只读取页面，不领取、不保存、不发布；通过后才能打开执行浏览器。'
 
 const realWriteReleasePrerequisites = [
   {
@@ -375,10 +375,10 @@ export function GuideCenter({
     },
     {
       id: 'l2',
-      title: '运行预检',
+      title: '运行真实只读检查',
       done: selectedTaskCompleted || l2Passed,
-      detail: selectedTaskCompleted ? '当前任务已完成，预检证据已进入报告复盘口径。' : l2Passed ? '真实页面预检已通过。' : humanGateDetail(l2Gate?.detail) ?? '预检还未通过。',
-      reason: l2Passed ? '' : `预检：${humanGateStateLabel(l2Gate?.status ?? 'not_run')}`,
+      detail: selectedTaskCompleted ? '当前任务已完成，只读证据已进入报告复盘口径。' : l2Passed ? '真实只读检查已通过。' : humanGateDetail(l2Gate?.detail) ?? '真实只读检查还未通过。',
+      reason: l2Passed ? '' : `真实只读检查：${humanGateStateLabel(l2Gate?.status ?? 'not_run')}`,
       action: l2Passed ? '查看任务门禁' : READONLY_PRECHECK_CTA,
       onAction: l2Passed ? onShowTasks : onRunL2Probe,
       secondaryAction: l2Passed ? undefined : '查看检查计划',
@@ -3053,7 +3053,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
               </div>
               {draftMode !== 'probe' && storeBlocksSingleSave && (
                 <div className="guard-note guard-note--warn">
-                  单商品只保存当前只放行 {Array.from(RELEASED_SINGLE_SAVE_STORE_NAMES).join('、')}；其它店铺需联系管理员完成店铺放行配置，只读预检只生成证据，不会自动解锁店铺。
+                  单商品只保存当前只放行 {Array.from(RELEASED_SINGLE_SAVE_STORE_NAMES).join('、')}；其它店铺需联系管理员完成店铺放行配置，真实只读检查只生成证据，不会自动解锁店铺。
                 </div>
               )}
               {singleSaveProductCountInvalid && (
@@ -3830,7 +3830,7 @@ function getL2ProbeResourceState(runtimeStatus: RuntimeStatus | null) {
     }
   }
   const detail = missing
-    .map(([label, item]) => `${item?.userMessage || `预检组件未安装完整：缺少${item?.label || label}。`}`)
+    .map(([label, item]) => `${item?.userMessage || `真实只读检查组件未安装完整：缺少${item?.label || label}。`}`)
     .join('；')
   const checkedPaths = missing
     .flatMap(([, item]) => item?.checkedPaths ?? [])
@@ -3846,8 +3846,8 @@ function getL2ProbeResourceState(runtimeStatus: RuntimeStatus | null) {
     ]
   return {
     blocked: true,
-    title: `预检组件未安装完整：${detail}。${checkedText}`,
-    detail: `预检组件未安装完整，请关闭旧进程并重新打开完整免安装目录版。${detail}。${checkedText}`,
+    title: `真实只读检查组件未安装完整：${detail}。${checkedText}`,
+    detail: `真实只读检查组件未安装完整，请关闭旧进程并重新打开完整免安装目录版。${detail}。${checkedText}`,
     repairSteps,
     checkedPathPreview: checkedPaths,
   }
@@ -4312,10 +4312,10 @@ function ConsolePrimaryBlockerCard({
           </p>
         )}
         {primaryPath.action === 'run_l2' && (
-          <div className="console-primary-blocker-card__recovery" aria-label="预检失败恢复路径">
+          <div className="console-primary-blocker-card__recovery" aria-label="真实只读检查失败恢复路径">
             <span><b>1 确认登录</b><small>真实浏览器已登录，验证码或账号密码错误先在登录窗口修正。</small></span>
             <span><b>2 打开目标页</b><small>能打开商品采集页和采集箱；打不开先处理页面权限或网络。</small></span>
-            <span><b>3 重新预检</b><small>无写入风险后，再点击运行预检。</small></span>
+            <span><b>3 重新检查</b><small>无写入风险后，再点击运行真实只读检查。</small></span>
             <button className="button button--quiet" type="button" onClick={() => onRuntimeLogSourceChange('launcher')}>
               查看启动器日志
             </button>
@@ -4328,7 +4328,7 @@ function ConsolePrimaryBlockerCard({
           <div className="console-primary-blocker-card__task-path" aria-label="任务准备路径">
             <span><b>1 创建或选择任务</b><small>只处理单商品只保存任务；批量和发布入口保持关闭。</small></span>
             <span><b>2 确认店铺和商品</b><small>至少有真实店铺和 1 个商品，配置中心才知道本次取值。</small></span>
-            <span><b>3 回到配置和预检</b><small>任务选中后再补配置、运行预检、人工确认保存。</small></span>
+            <span><b>3 回到配置和检查</b><small>任务选中后再补配置、运行真实只读检查、人工确认保存。</small></span>
           </div>
         )}
         {showLoginRecovery && (
@@ -4880,17 +4880,17 @@ function L2RunnerStatePanel({
   const tone = state.status === 'passed' ? 'ok' : state.status === 'failed' ? 'danger' : state.status === 'running' ? 'warn' : 'pending'
   const precheckDisabled = busy || state.status === 'running' || l2ProbeResourceState.blocked
   const title = state.status === 'passed'
-    ? '预检通过，已刷新门禁'
+      ? '真实只读检查通过，已刷新门禁'
     : state.status === 'failed'
-      ? '预检失败，真实保存仍阻断'
+      ? '真实只读检查失败，真实保存仍阻断'
       : state.status === 'running'
-        ? '正在运行双目标预检'
-        : '等待运行预检（只读，不保存）'
+        ? '正在运行双目标真实只读检查'
+        : '等待运行真实只读检查'
   const stateLine = state.line ? humanL2PrecheckError(state.line) : null
 
   return (
     <div className={`module-card span-1 l2-runner-state l2-runner-state--${state.status}`} aria-live="polite">
-      <ModuleHead title="预检状态" meta={`门禁：${gateLabel}`} />
+      <ModuleHead title="真实只读检查" meta={`门禁：${gateLabel}`} />
       <div className="l2-runner-state__body">
         <span className={`status-pill ${tone}`}>{state.status === 'idle' ? '待运行' : state.status === 'running' ? '运行中' : state.status === 'passed' ? '通过' : '失败'}</span>
         <strong>{title}</strong>
@@ -4898,7 +4898,7 @@ function L2RunnerStatePanel({
         {state.exitCode !== null && <small>退出码：{state.exitCode}</small>}
         {stateLine && <code>{stateLine}</code>}
       </div>
-      <div className="l2-runner-state__primary-action" aria-label="运行只读预检主操作">
+      <div className="l2-runner-state__primary-action" aria-label="运行真实只读检查主操作">
         <button
           className="button"
           type="button"
@@ -4909,7 +4909,7 @@ function L2RunnerStatePanel({
             onRunPrecheck()
           }}
         >
-          {state.status === 'running' ? '预检运行中' : READONLY_PRECHECK_CTA}
+          {state.status === 'running' ? '真实只读检查运行中' : READONLY_PRECHECK_CTA}
         </button>
         {l2ProbeResourceState.blocked && <small>{l2ProbeResourceState.detail}</small>}
       </div>
@@ -4935,7 +4935,7 @@ function L2PrecheckFailureAdvice({
 
   return (
     <div className="l2-precheck-failure-advice" aria-label="预检失败处理建议">
-      <strong>预检失败处理建议</strong>
+      <strong>真实只读检查失败处理建议</strong>
       {visibleSummaries.length ? (
         visibleSummaries.map((item) => (
           <article key={item.target}>
@@ -4948,7 +4948,7 @@ function L2PrecheckFailureAdvice({
         <article>
           <span><b>失败页面</b><small>等待诊断明细</small></span>
           <span><b>失败检查</b><small>未收到页面诊断，请先查看启动器日志。</small></span>
-          <span><b>下一步处理</b><small>确认真实浏览器已登录并能打开目标页，再重新运行预检。</small></span>
+          <span><b>下一步处理</b><small>确认真实浏览器已登录并能打开目标页，再重新运行真实只读检查。</small></span>
         </article>
       )}
     </div>
@@ -4965,16 +4965,16 @@ function L2PrecheckRunbook({
   onShowReports: () => void
 }) {
   const nextAction = state.status === 'passed'
-    ? '预检通过后，回到任务中心填写批准人，再启动单商品只保存。'
+    ? '真实只读检查通过后，回到任务中心填写批准人，再启动单商品只保存。'
     : state.status === 'running'
-      ? '预检运行中，请查看启动器日志等待完成结果。'
+      ? '真实只读检查运行中，请查看启动器日志等待完成结果。'
       : state.status === 'failed'
-        ? '预检失败后怎么办：查看启动器日志和检查计划，先处理登录、页面打不开或写请求风险，再重新运行预检。'
-        : '点击“运行预检（只读，不保存）”后，系统只检查页面可达和写入风险。'
+        ? '真实只读检查失败后怎么办：查看启动器日志和检查计划，先处理登录、页面打不开或写请求风险，再重新运行。'
+        : `点击“${READONLY_PRECHECK_CTA}”后，系统只检查页面可达和写入风险。`
 
   return (
-    <div className="l2-precheck-runbook" aria-label="预检操作引导">
-      <strong>预检操作引导</strong>
+    <div className="l2-precheck-runbook" aria-label="真实只读检查操作引导">
+      <strong>真实只读检查操作引导</strong>
       <div className="l2-precheck-runbook__steps">
         <span><b>1 打开真实店小秘页面</b><small>确认已登录，能访问商品采集页。</small></span>
         <span><b>2 只读检查两个页面</b><small>商品采集页 + 采集箱/草稿箱；不会领取、不会保存、不会发布。</small></span>
@@ -5011,7 +5011,7 @@ function ServiceRecoveryPanel({
         <span className="status-dot status-dot--danger" aria-hidden="true" />
         <div>
           <strong>工作台服务连接异常</strong>
-          <small>不是店小秘账号、配置或页面问题；先恢复本机后端，再重新运行预检和真实浏览器流程。</small>
+          <small>不是店小秘账号、配置或页面问题；先恢复本机后端，再重新运行真实只读检查和真实浏览器流程。</small>
         </div>
       </div>
       <div className="service-recovery-panel__paths">
@@ -5700,8 +5700,8 @@ function TaskCurrentActionPanel({
         </span>
       </div>
       {showPrecheckRecoveryActions && (
-        <div className="task-current-panel__precheck-actions" aria-label="预检未通过处理">
-          <span>预检没有通过，不能启动真实保存。先运行只读预检；如果仍失败，到执行控制台看日志，再查看检查计划。</span>
+        <div className="task-current-panel__precheck-actions" aria-label="真实只读检查未通过处理">
+          <span>真实只读检查没有通过，不能启动真实保存。先运行真实只读检查；如果仍失败，到执行控制台看日志，再查看检查计划。</span>
           <div>
             <button
               className="button button--secondary"
@@ -5710,7 +5710,7 @@ function TaskCurrentActionPanel({
               disabled={busy || l2ProbeResourceState.blocked}
               title={l2ProbeResourceState.title}
             >
-              运行预检
+              运行真实只读检查
             </button>
             <button className="button button--quiet" type="button" onClick={onShowConsole}>查看执行控制台</button>
             <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">查看检查计划</button>
@@ -5791,7 +5791,7 @@ function ReadonlyRecheckHelpCard({
           <small>再回到单商品只保存，由人工确认后启动。</small>
         </span>
       </div>
-      {l3BlocksStart && <span className="readonly-recheck-help__note">预检未通过或人工确认未完成前，不启动认领、批量保存或真实保存。</span>}
+      {l3BlocksStart && <span className="readonly-recheck-help__note">真实只读检查未通过或人工确认未完成前，不启动认领、批量保存或真实保存。</span>}
       {demoEnabled && selectedTaskIsDryRun && selectedTask?.status === 'draft' && <span className="readonly-recheck-help__note">开发自检批次不触达店小秘；真实保存仍以单商品只保存规则为准。</span>}
       {!selectedTaskIsDryRun && selectedTask?.status === 'draft' && <span className="readonly-recheck-help__note">当前真实任务保持门禁控制，请先处理上方阻断原因。</span>}
       <div className="next-step-actions">
@@ -5814,7 +5814,7 @@ function ReadonlyRecheckHelpCard({
         <summary>查看诊断摘要</summary>
         {summaries.length > 0 ? summaries.slice(0, 2).map((item) => (
           <span key={item.target}>{item.targetLabel}：{humanDiagnosticNavigation(item.navigation)}，{item.failedChecks.slice(0, 2).map(humanFailedCheckLabel).join(' / ') || '页面检查未满足'}。下一步：{item.nextAction}</span>
-        )) : <span>暂无诊断明细；先运行预检生成结果。</span>}
+        )) : <span>暂无诊断明细；先运行真实只读检查生成结果。</span>}
       </details>
     </div>
   )
@@ -6090,8 +6090,8 @@ function taskStartDecision({
   }
   if (requiresRealL2(selectedTask) && !l2Ready) {
     return {
-      scope: '先做预检',
-      reason: '真实页面预检未通过或已过期。',
+      scope: '先做真实只读检查',
+      reason: '真实只读检查未通过或已过期。',
       next: `${READONLY_PRECHECK_CTA}，确认商品采集页和草稿箱页均无写入风险。`,
       tone: 'warn',
     }
@@ -6263,13 +6263,13 @@ function buildConsolePrimaryPath({
   if (requiresRealL2(selectedTask) && !l2Ready && l2ProbeResourceState.blocked) {
     return {
       code: 'l2_resource',
-      title: '预检组件未就绪',
+      title: '真实只读检查组件未就绪',
       reason: '只读页面检查暂不可运行。',
       detail: l2ProbeResourceState.detail,
-      next: '查看启动器日志，按提示恢复完整免安装目录后再运行预检。',
+      next: '查看启动器日志，按提示恢复完整免安装目录后再运行真实只读检查。',
       ctaLabel: '查看启动器日志',
       action: 'launcher_logs',
-      browserStatus: '预检组件未就绪，Agent 执行浏览器暂不启动',
+      browserStatus: '真实只读检查组件未就绪，Agent 执行浏览器暂不启动',
       blocksBrowserStart: true,
       saveBlocked: true,
     }
@@ -6277,13 +6277,13 @@ function buildConsolePrimaryPath({
   if (requiresRealL2(selectedTask) && !l2Ready) {
     return {
       code: 'l2',
-      title: '先运行预检（只读，不保存）',
-      reason: `预检：${humanGateStateLabel(l2Gate?.status ?? 'not_run')}。${READONLY_PRECHECK_PURPOSE}`,
-      detail: l2Detail ?? '需要商品采集页和草稿箱页两个真实页面预检均通过。',
+      title: '先运行真实只读检查',
+      reason: `真实只读检查：${humanGateStateLabel(l2Gate?.status ?? 'not_run')}。${READONLY_PRECHECK_PURPOSE}`,
+      detail: l2Detail ?? '需要商品采集页和草稿箱页两个真实页面只读检查均通过。',
       next: READONLY_PRECHECK_CTA,
       ctaLabel: READONLY_PRECHECK_CTA,
       action: 'run_l2',
-      browserStatus: '预检未通过，Agent 执行浏览器暂不启动',
+      browserStatus: '真实只读检查未通过，Agent 执行浏览器暂不启动',
       blocksBrowserStart: true,
       saveBlocked: true,
     }
@@ -6789,7 +6789,7 @@ function l2DiagnosticNextAction({
   appShellOnly: boolean
 }) {
   if (failedCheckKeys.includes('cookies_loaded') || failedCheckKeys.includes('not_login_page') || finalClass === 'login') {
-    return '先在真实登录浏览器完成登录，再重新运行预检。'
+    return '先在真实登录浏览器完成登录，再重新运行真实只读检查。'
   }
   if (failedCheckKeys.includes('final_url_matches') || failedCheckKeys.includes('target_url_matches') || finalClass === 'home' || finalClass === 'other') {
     return '检查目标页面是否跳到首页/登录页，必要时重新进入采集页或草稿箱后复跑。'
@@ -7067,13 +7067,13 @@ function humanGateDetail(detail?: string | null) {
 
 function humanL2PrecheckError(message: string) {
   if (message.includes('L2 readonly probe resources are missing')) {
-    return '预检组件未安装完整：请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
+    return '真实只读检查组件未安装完整：请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
   }
   if (message.includes('L2 readonly probe runner is missing')) {
-    return '预检组件未安装完整：缺少只读页面检查启动器。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
+    return '真实只读检查组件未安装完整：缺少只读页面检查启动器。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
   }
   if (message.includes('L2 readonly probe script is missing')) {
-    return '预检组件未安装完整：缺少只读页面检查脚本。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
+    return '真实只读检查组件未安装完整：缺少只读页面检查脚本。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
   }
   return message
 }
@@ -7096,10 +7096,10 @@ function humanFailedCheckLabel(value: string) {
 }
 
 function l2StartLabel(status?: string) {
-  if (status === 'partial') return '预检缺目标，禁止启动'
-  if (status === 'failed') return '预检失败，禁止启动'
-  if (status === 'mock_passed') return '等待真实预检，禁止启动'
-  return '预检未通过，禁止启动'
+  if (status === 'partial') return '真实只读检查缺目标，禁止启动'
+  if (status === 'failed') return '真实只读检查失败，禁止启动'
+  if (status === 'mock_passed') return '等待真实只读检查，禁止启动'
+  return '真实只读检查未通过，禁止启动'
 }
 
 function displaySafeStepLabel(label: string) {

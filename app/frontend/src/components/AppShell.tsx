@@ -14,20 +14,20 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
     id: 'prepare',
     label: '开始',
     short: '1',
-    summary: '登录、配置、预检',
+    summary: '登录、配置任务',
     items: [
-      { id: 'guide', label: '开始使用', short: '起', hint: '登录与下一步' },
-      { id: 'config', label: '配置中心', short: '配', hint: '模板与本次任务配置' },
+      { id: 'guide', label: '操作引导', short: '导', hint: '登录与下一步' },
+      { id: 'config', label: '编辑页配置', short: '配', hint: '模板与本次任务配置' },
     ],
   },
   {
     id: 'execute',
     label: '执行',
     short: '2',
-    summary: '任务与执行控制台',
+    summary: '任务、只读检查、浏览器',
     items: [
-      { id: 'tasks', label: '任务', short: '任', hint: '选择商品与批准' },
-      { id: 'console', label: '执行控制台', short: '控', hint: '登录、预检、真实浏览器' },
+      { id: 'tasks', label: '当前任务', short: '任', hint: '选择商品与批准' },
+      { id: 'console', label: '真实浏览器控制台', short: '控', hint: '登录、真实只读检查、真实浏览器' },
     ],
   },
   {
@@ -36,20 +36,20 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
     short: '3',
     summary: '报告与问题',
     items: [
-      { id: 'reports', label: '结果报告', short: '报', hint: '保存结果' },
+      { id: 'reports', label: '报告与证据', short: '报', hint: '保存结果与交付验收' },
     ],
   },
 ]
 
 const sectionLabels: Record<WorkbenchSection, string> = {
-  guide: '开始使用',
+  guide: '操作引导',
   dashboard: '状态',
-  config: '配置中心',
-  tasks: '任务',
-  console: '执行控制台',
+  config: '编辑页配置',
+  tasks: '当前任务',
+  console: '真实浏览器控制台',
   evidence: '证据',
   exceptions: '问题处理',
-  reports: '结果报告',
+  reports: '报告与证据',
 }
 
 type AppShellProps = {
@@ -88,7 +88,7 @@ export function AppShell({
             <div>
               <strong>DXM Agent</strong>
               <span>只保存自动化</span>
-              <span className="sr-only">开始 / 配置 / 任务 / 执行 / 结果</span>
+              <span className="sr-only">操作引导 / 编辑页配置 / 当前任务 / 真实浏览器控制台 / 报告与证据</span>
             </div>
           )}
           <button className="icon-button" type="button" onClick={onToggleSidebar} aria-label="切换侧边栏">

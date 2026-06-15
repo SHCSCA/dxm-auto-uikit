@@ -53,6 +53,7 @@ function Find-Node {
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $absoluteOutDir = if ([System.IO.Path]::IsPathRooted($OutDir)) { $OutDir } else { Join-Path $root $OutDir }
 New-Item -ItemType Directory -Path $absoluteOutDir -Force | Out-Null
+Remove-Item -LiteralPath (Join-Path $absoluteOutDir "qa-browser-error.json") -Force -ErrorAction SilentlyContinue
 
 $browserCandidates = @(Find-BrowserCandidates)
 $node = Find-Node
@@ -628,11 +629,11 @@ await send('Network.enable');
 await send('Page.navigate', { url: targetUrl });
 await new Promise(r => setTimeout(r, 1800));
 const text = {
-  tasks: '\u4efb\u52a1\u4e2d\u5fc3',
-  overview: '\u603b\u89c8',
-  console: '\u6267\u884c\u63a7\u5236\u53f0',
-  reports: '\u62a5\u544a\u4e2d\u5fc3',
-  config: '\u914d\u7f6e\u4e2d\u5fc3',
+  tasks: '\u5f53\u524d\u4efb\u52a1',
+  overview: '\u64cd\u4f5c\u5f15\u5bfc',
+  console: '\u771f\u5b9e\u6d4f\u89c8\u5668\u63a7\u5236\u53f0',
+  reports: '\u62a5\u544a\u4e0e\u8bc1\u636e',
+  config: '\u7f16\u8f91\u9875\u914d\u7f6e',
   editableConfig: '\u0044\u0058\u004d \u7f16\u8f91\u9875\u914d\u7f6e',
   configStepMeta: '\u6309\u5e97\u5c0f\u79d8\u7f16\u8f91\u9875\u5206\u533a\u9010\u6bb5\u586b\u5199',
   currentEditingSection: '\u6b63\u5728\u7f16\u8f91\u5206\u533a',
@@ -1275,7 +1276,7 @@ const result = {
       || initialText.includes('DXM Agent')
       || initialText.includes('\u771f\u5b9e\u6d4f\u89c8\u5668\u81ea\u52a8\u5316'),
     navClicksWorked: clickedTasks && clickedConsole && clickedReports,
-    localizedOverviewNav: initialText.includes(text.overview) || initialText.includes('\u5f00\u59cb\u4f7f\u7528'),
+    localizedOverviewNav: initialText.includes(text.overview) || initialText.includes('\u767b\u5f55\u3001\u914d\u7f6e\u4efb\u52a1') || initialText.includes('\u5f00\u59cb\u4f7f\u7528'),
     defaultTaskSelectionPrefersDeliveryCurrentTask: (
       defaultTaskSelectionState.hasDeliveryCurrentTask
       || defaultTaskSelectionState.usesActionableSingleSaveWhenCurrentCompleted

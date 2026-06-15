@@ -1147,7 +1147,7 @@ def _resource_dependency_status(default_path: Path, relative_path: str) -> dict[
         **info,
         'userMessage': ''
         if status == 'ok'
-        else f"预检组件未安装完整：缺少{info['label']}。",
+        else f"真实只读检查组件未安装完整：缺少{info['label']}。",
     }
 
 
@@ -1160,7 +1160,7 @@ def _resource_dependency_user_info(relative_path: str) -> dict[str, Any]:
     label = labels.get(relative_path, '运行依赖文件')
     return {
         'label': label,
-        'requiredFor': '运行预检（只读，不保存）',
+        'requiredFor': '运行真实只读检查（只读，不保存）',
         'repairAction': '重新打开完整免安装版',
         'repairSteps': [
             '关闭旧的 DXM Agent Console 或后台旧进程。',

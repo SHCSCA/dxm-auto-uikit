@@ -158,7 +158,7 @@ export default function App() {
     status: 'idle',
     runId: null,
     exitCode: null,
-    message: '等待运行预检（只读，不保存）',
+    message: '等待运行真实只读检查',
     line: null,
     updatedAt: null,
   })
@@ -420,10 +420,10 @@ export default function App() {
     const gatePassed = runnerSucceeded && refreshedL2Gate?.status === 'passed'
     const gateDetail = refreshedL2Gate?.detail ? `；${refreshedL2Gate.detail}` : ''
     if (gatePassed) {
-      setL2RunnerState({ status: 'passed', runId, exitCode, message: '预检通过，已刷新门禁', line, updatedAt: new Date().toISOString() })
+      setL2RunnerState({ status: 'passed', runId, exitCode, message: '真实只读检查通过，已刷新门禁', line, updatedAt: new Date().toISOString() })
       return
     }
-    const message = runnerSucceeded ? '预检已运行，但门禁未刷新通过' : '预检失败，真实保存仍阻断'
+    const message = runnerSucceeded ? '真实只读检查已运行，但门禁未刷新通过' : '真实只读检查失败，真实保存仍阻断'
     setL2RunnerState({ status: 'failed', runId, exitCode, message, line: `${line}${gateDetail}`, updatedAt: new Date().toISOString() })
     setOperationError(`${message}；请先查看页面里的门禁原因，再查看启动器日志或检查计划。`)
   }, [refreshRuntimeStatus, refreshWorkspace])
@@ -454,7 +454,7 @@ export default function App() {
     }
 
     if (runnerEvent.line.includes('[l2-readonly-runner] started')) {
-      setL2RunnerState({ status: 'running', runId, exitCode: null, message: '正在运行双目标预检', line: runnerEvent.line, updatedAt: new Date().toISOString() })
+      setL2RunnerState({ status: 'running', runId, exitCode: null, message: '正在运行双目标真实只读检查', line: runnerEvent.line, updatedAt: new Date().toISOString() })
     }
   }, [handleL2RunnerFinished, runtimeLogs.launcher])
 
@@ -590,7 +590,7 @@ export default function App() {
 
   async function bootstrapDemo() {
     if (!DEMO_ENABLED) {
-      setOperationError('开发自检数据只在 dev=1 模式可用；真实使用请创建单商品只保存任务并运行预检。')
+      setOperationError('开发自检数据只在 dev=1 模式可用；真实使用请创建单商品只保存任务并运行真实只读检查。')
       return
     }
     const confirmed = window.confirm('这会向本地后端写入演示店铺、模板、商品和本地演示核验批次；不会访问店小秘，也不会启动真实保存。继续？')
@@ -884,7 +884,7 @@ export default function App() {
     }
     const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
     if (l2Gate?.status !== 'passed') {
-      const message = `预检未通过，Agent 执行浏览器不可启动：${l2Gate?.detail ?? '真实页面预检未通过'}`
+      const message = `真实只读检查未通过，Agent 执行浏览器不可启动：${l2Gate?.detail ?? '真实页面只读检查未通过'}`
       setAgentConsoleError(message)
       setOperationError(message)
       setActiveSection('console')
@@ -1017,7 +1017,7 @@ export default function App() {
           status: 'running',
           runId: result.runId,
           exitCode: null,
-          message: '正在运行双目标预检',
+          message: '正在运行双目标真实只读检查',
           line: result.logPath ?? null,
           updatedAt: new Date().toISOString(),
         })
@@ -1034,7 +1034,7 @@ export default function App() {
           status: 'failed',
           runId: null,
           exitCode: null,
-          message: '预检启动失败，真实保存仍阻断',
+          message: '真实只读检查启动失败，真实保存仍阻断',
           line: humanMessage,
           updatedAt: new Date().toISOString(),
         })
@@ -1051,7 +1051,7 @@ export default function App() {
 
   async function runL2ReadonlyProbe() {
     setRuntimeLogSource('launcher')
-    setL2RunnerState({ status: 'running', runId: null, exitCode: null, message: '正在运行双目标预检', line: null, updatedAt: new Date().toISOString() })
+    setL2RunnerState({ status: 'running', runId: null, exitCode: null, message: '正在运行双目标真实只读检查', line: null, updatedAt: new Date().toISOString() })
     setActiveSection('console')
     await runRuntimeControl('run_l2_readonly_probe')
   }
@@ -1234,7 +1234,7 @@ function runtimeControlSuccessMessage(action: RuntimeControlAction) {
     mark_real_task_manual_review: '已将真实写入任务转入人工复核。不会取消真实浏览器进程，请查看任务日志确认现场。',
     restart_backend: '已提交后端重启请求，请查看启动器日志。',
     restart_frontend: '已提交前端重启请求，请查看启动器日志。',
-    run_l2_readonly_probe: '已启动预检（只读，不保存），请在执行控制台查看实时日志。',
+    run_l2_readonly_probe: '已启动真实只读检查，请在执行控制台查看实时日志。',
   } as Record<RuntimeControlAction, string>)[action]
 }
 
@@ -1242,13 +1242,13 @@ function humanOperationError(message: string) {
   const runtimeStatusMessage = humanRuntimeStatusError(message)
   if (runtimeStatusMessage !== message) return runtimeStatusMessage
   if (message.includes('L2 readonly probe resources are missing')) {
-    return `预检组件未安装完整，请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${checkedPathHint(message)}`
+    return `真实只读检查组件未安装完整，请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${checkedPathHint(message)}`
   }
   if (message.includes('L2 readonly probe runner is missing')) {
-    return `预检组件未安装完整：缺少只读页面检查启动器。请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
+    return `真实只读检查组件未安装完整：缺少只读页面检查启动器。请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
   }
   if (message.includes('L2 readonly probe script is missing')) {
-    return `预检组件未安装完整：缺少只读页面检查脚本。请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
+    return `真实只读检查组件未安装完整：缺少只读页面检查脚本。请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
   }
   return message
 }

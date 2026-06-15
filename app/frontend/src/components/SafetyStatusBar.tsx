@@ -60,7 +60,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
     : configBlocksRealSave
       ? '继续下一步：补齐本次任务配置'
       : l2BlocksRealSave
-      ? '继续下一步：运行只读页面检查'
+      ? '继续下一步：运行真实只读检查'
       : l3NeedsApproval
         ? '继续下一步：人工确认单商品只保存'
         : '当前可执行：单商品只保存自动化'
@@ -69,7 +69,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
     : runtimeStatusUnavailable
       ? '工作台服务连接异常'
       : nextHeadline
-  const gateStatusLine = `只读预检 ${humanGateStatus(l2Gate?.status ?? workspace.safety.l2Status ?? 'not_run')}，人工确认 ${humanGateStatus(l3Gate?.status ?? 'not_run')}`
+  const gateStatusLine = `真实只读检查 ${humanGateStatus(l2Gate?.status ?? workspace.safety.l2Status ?? 'not_run')}，人工确认 ${humanGateStatus(l3Gate?.status ?? 'not_run')}`
   const statusLine = `当前任务 ${activeTaskLabel}，${tone === 'danger' ? `保存前置条件未完成：${gateStatusLine}` : gateStatusLine}`
   const gateDetails = [
     l2Gate ? `L2 页面核验：${l2Gate.detail}` : 'L2 页面核验：缺少真实页面核验状态',
@@ -91,7 +91,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
       : '工作台只会执行受控“只保存”，发布和批量无人值守仍保持关闭。'
     : selectedTaskCompleted
       ? `任务 ${activeTaskLabel} ${activeTaskStatusLabel}，继续查看报告、证据或打开执行控制台复核。`
-      : '按操作引导继续：真实登录、配置、只读页面检查、人工确认后才启动保存。'
+      : '按操作引导继续：真实登录、配置、真实只读检查、人工确认后才启动保存。'
   const runtimeEndpointLine = runtimeStatus
     ? `服务端 ${runtimeStatus.backend.url ?? `端口 ${runtimeStatus.backend.port ?? '未知'}`} / 前端 ${runtimeStatus.frontend.url ?? `端口 ${runtimeStatus.frontend.port ?? '未知'}`}`
     : runtimeStatusUnavailable
@@ -125,7 +125,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
       { label: `后端日志：${desktopRuntime.backendLogPath ?? '待生成 backend.log'}`, tone: 'muted' },
     ] : []),
     ...(backendPortMismatch ? [{ label: '桌面后端端口与接口端口不一致', tone: 'danger' }] : []),
-    { label: `只读预检：${humanGateStatus(l2Gate?.status ?? 'not_run')}`, tone: l2BlocksRealSave ? 'danger' : 'ok' },
+    { label: `真实只读检查：${humanGateStatus(l2Gate?.status ?? 'not_run')}`, tone: l2BlocksRealSave ? 'danger' : 'ok' },
     { label: `人工确认：${l3NeedsApproval ? `不可启动 / ${humanGateStatus(l3Gate?.status ?? 'not_run')}` : humanGateStatus(l3Gate?.status ?? 'not_run')}`, tone: l3BlocksRealSave ? 'danger' : l3NeedsApproval ? 'warn' : 'ok' },
     ...visibleBlockerGaps.slice(0, 2).map((gap) => ({ label: `阻断项：${gap.title}`, tone: 'danger' })),
     ...(l3PostEvidenceGapCount > 0 ? [{ label: `保存后证据：${l3PostEvidenceGapCount} 项预期阻断`, tone: 'warn' }] : []),
