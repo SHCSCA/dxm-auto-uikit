@@ -103,6 +103,9 @@ def test_config_center_explains_precheck_and_disabled_save_continue():
     assert "等待预检" not in config_copy_source
     assert "启动预检" not in config_copy_source
     assert "configPrecheckActionVisible" in qa_source
+    assert "'\\u68c0\\u67e5\\u672c\\u6b21\\u914d\\u7f6e'" in qa_source
+    assert "'\\u5237\\u65b0\\u914d\\u7f6e\\u68c0\\u67e5'" in qa_source
+    assert "configPrecheckState.buttonDisabled === false" in qa_source
     assert "configDisabledReasonVisible" in qa_source
 
 
@@ -178,6 +181,9 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "configTemplateAdvancedState" in qa_source
     assert "defaultQuickPresent" in qa_source
     assert "defaultActionCount >= 2" in qa_source
+    assert "detailsSummary.textContent" in qa_source
+    assert "defaultSummary.textContent" in qa_source
+    assert "source.textContent" in qa_source
     assert "configTemplateSelectorVisible" in qa_source
     assert "只展示当前分区；常用分区在上方，低频字段收进“更多编辑页分区”。" in config_section
     assert "otherConfigSections.map" not in config_section
@@ -725,6 +731,8 @@ def test_browser_qa_verifies_config_center_task_override_controls():
     assert "consoleBrowserControlPad" in source
     assert "consoleRuntimeLogState" in source
     assert "consoleRuntimeLogPreviewVisible" in source
+    assert "consoleRuntimeLogState.hasRuntimeLogView === true" in source
+    assert "'\\u754c\\u9762\\u5237\\u65b0'" in source
     assert "consoleRuntimeLogSourcesVisible" in source
     assert "browserControlPad" in source
     assert "'\\u6253\\u5f00\\u6267\\u884c\\u6d4f\\u89c8\\u5668'" in source
