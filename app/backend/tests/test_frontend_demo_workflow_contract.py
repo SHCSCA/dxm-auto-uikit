@@ -126,15 +126,16 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "applyDefaultTemplatePack" in config_section
     assert "默认测试模板" in config_section
     assert "使用之前测试通过的数据配置" in config_section
-    assert "config-template-console__default-quick" in config_section
-    assert '<details className="inline-disclosure config-template-console__default-quick"' in config_section
-    assert config_section.index("config-template-console__default-quick") > config_section.index("config-template-console__details")
-    assert config_section.index("使用之前测试通过的数据配置") > config_section.index("config-template-console__details")
+    assert "config-template-console__primary-actions" in config_section
+    assert "config-template-console__default-status" in config_section
+    assert "config-template-console__default-quick" not in config_section
+    assert config_section.index("config-template-console__primary-actions") < config_section.index("config-template-console__details")
+    assert config_section.index("使用之前测试通过的数据配置") < config_section.index("config-template-console__details")
     assert "写入测试模板到当前范围" in config_section
     common_selector = config_section[config_section.index("<select"):config_section.index("</select>")]
     assert "__default_test__" not in common_selector
     assert "填入当前分区示例值" in config_section
-    assert "模板状态、默认测试模板与高级设置" in config_section
+    assert "模板状态与高级匹配说明" in config_section
     assert "保存/覆盖当前店铺模板" not in config_section
     assert "覆盖当前店铺/类目下全部分区" in config_section
     assert "defaultTemplatePackState" in config_section
@@ -177,15 +178,16 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "已保存" in config_section
     assert "保存时间" in config_section
     assert ".config-template-console" in styles_source
-    assert ".config-template-console__default-quick" in styles_source
+    assert ".config-template-console__primary-actions" in styles_source
+    assert ".config-template-console__default-status" in styles_source
     assert ".config-template-console__quick-status" not in styles_source
     assert ".config-save-state" in styles_source
     assert "configDefaultTemplatePackVisible" in qa_source
     assert "configTemplateAdvancedState" in qa_source
-    assert "defaultQuickPresent" in qa_source
+    assert "primaryDefaultVisible" in qa_source
     assert "defaultActionCount >= 2" in qa_source
     assert "detailsSummary.textContent" in qa_source
-    assert "defaultSummary.textContent" in qa_source
+    assert "primaryDefaultText" in qa_source
     assert "source.textContent" in qa_source
     assert "configTemplateSelectorVisible" in qa_source
     assert "只展示当前分区；常用分区在上方，低频字段收进“更多编辑页分区”。" in config_section
@@ -206,7 +208,8 @@ def test_config_center_save_feedback_selects_saved_template_and_shows_time():
     config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
     save_section = config_section[config_section.index("async function saveConfigSection"):config_section.index("function continueToNextMissingSection")]
     default_pack_section = config_section[config_section.index("async function applyDefaultTemplatePack"):config_section.index("async function runConfigPrecheck")]
-    status_bar = config_section[config_section.index('aria-label="模板使用状态"'):config_section.index('aria-label="默认测试模板包"')]
+    status_bar_start = config_section.index('aria-label="模板使用状态"')
+    status_bar = config_section[status_bar_start:config_section.index('<p className="config-template-console__explain"', status_bar_start)]
 
     assert "nextSelectedTemplates[section.code] = String(savedTemplate.id)" in default_pack_section
     assert "nextLastSavedTemplates[section.code]" in default_pack_section
@@ -268,6 +271,47 @@ def test_config_center_save_feedback_selects_saved_template_and_shows_time():
     assert ".editable-config-section__more-fields" in styles_source
 
 
+def test_config_center_default_template_is_first_screen_primary_action():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
+    template_console = config_section[
+        config_section.index('<div className="config-template-console config-template-console--compact"'):
+        config_section.index('<details className="inline-disclosure config-template-console__details">')
+    ]
+
+    assert "config-template-console__primary-actions" in template_console
+    assert "默认测试模板" in template_console
+    assert "填入当前分区示例值" in template_console
+    assert "写入测试模板到当前范围" in template_console
+    assert "defaultTemplatePackState" in template_console
+    assert "当前分区保存状态" in template_console
+    assert "模板状态、默认测试模板与高级设置" not in config_section
+    assert "模板状态与高级匹配说明" in config_section
+    assert ".config-template-console__primary-actions" in styles_source
+    assert ".config-template-console__default-status" in styles_source
+
+
+def test_config_center_focused_editor_removes_nonessential_field_group_header():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    editable_card = source[source.index("function EditableConfigSectionCard"):source.index("export function TaskCenter")]
+    field_group_styles = styles_source[
+        styles_source.index(".editable-config-section__field-group-head {"):
+        styles_source.index(".editable-config-section__field-group-head strong {")
+    ]
+
+    assert "当前重点字段" in editable_card
+    assert "display: none;" in field_group_styles
+    assert "gap: 4px;" in styles_source[styles_source.index(".editable-config-section {"):styles_source.index(".editable-config-section.is-incomplete")]
+    assert ".config-edit-drawer[open] > summary" in styles_source
+    open_summary_styles = styles_source[
+        styles_source.index(".config-edit-drawer[open] > summary {"):
+        styles_source.index(".config-template-console {")
+    ]
+    assert "display: none;" in open_summary_styles
+
+
 def test_config_center_does_not_treat_selected_template_as_currently_used_before_apply_and_save():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
@@ -275,9 +319,10 @@ def test_config_center_does_not_treat_selected_template_as_currently_used_before
         config_section.index("const activeTemplateUsageLabel"):
         config_section.index("const activeTemplateTrace")
     ]
+    status_bar_start = config_section.index('<div className="config-template-console__status-bar"')
     status_bar = config_section[
-        config_section.index('<div className="config-template-console__status-bar"'):
-        config_section.index('<details className="inline-disclosure config-template-console__default-quick"')
+        status_bar_start:
+        config_section.index('<p className="config-template-console__explain"', status_bar_start)
     ]
 
     assert "activeSelectedTemplate" not in usage_assignment
@@ -322,9 +367,10 @@ def test_config_center_tracks_recently_saved_template_for_multi_template_reuse()
         save_template_start:
         config_section.index("setConfigMessage(`${section.title}", save_template_start)
     ]
+    status_bar_start = config_section.index('<div className="config-template-console__status-bar"')
     status_bar = config_section[
-        config_section.index('<div className="config-template-console__status-bar"'):
-        config_section.index('<details className="inline-disclosure config-template-console__default-quick"')
+        status_bar_start:
+        config_section.index('<p className="config-template-console__explain"', status_bar_start)
     ]
 
     assert "lastSavedTemplateBySection" in config_section
@@ -375,7 +421,7 @@ def test_config_center_keeps_template_source_details_out_of_first_viewport():
     assert "已筛除不匹配或禁用模板" not in template_console
     assert 'aria-label="当前模板来源详情"' in advanced_details
     assert "config-template-source--detail" in advanced_details
-    assert "模板状态、默认测试模板与高级设置" in advanced_details
+    assert "模板状态与高级匹配说明" in advanced_details
 
 
 def test_config_center_shows_save_scope_explainer_before_actions():
@@ -611,7 +657,7 @@ def test_config_center_uses_compact_density_and_collapsed_assist_drawer():
     assert ".config-precheck-action span," in styles_source
     assert ".config-precheck-action small {" in styles_source
     assert ".config-template-console__main label small" in styles_source
-    assert ".config-template-console__default-quick > summary" in styles_source
+    assert ".config-template-console__default-status" in styles_source
     assert "flex-wrap: nowrap;" in styles_source[
         styles_source.index(".config-template-console__default-actions"):
         styles_source.index(".config-template-console__details")
@@ -1870,6 +1916,25 @@ def test_operation_feedback_uses_floating_toast_stack_not_page_flow_alerts():
     assert "fill: '填写'" in workbench_source
     assert ".runtime-control-panel" in styles_source
     assert ".agent-action-timeline" in styles_source
+
+
+def test_workspace_notice_is_collapsed_to_compact_drawer_by_default():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    shell_section = app_source[app_source.index("<AppShell"):app_source.index("{content}")]
+    notice_section = shell_section[shell_section.index("{workspaceNotice && ("):shell_section.index("{operationError && (")]
+
+    assert "<details" in notice_section
+    assert "workspace-alert__summary" in notice_section
+    assert "workspace-alert__detail" in notice_section
+    assert "workspace-alert__actions" in notice_section
+    assert "查看详情" in notice_section
+    assert "workspaceNotice.detail" in notice_section
+    assert notice_section.index("workspace-alert__summary") < notice_section.index("workspace-alert__detail")
+    assert ".workspace-alert__summary" in styles_source
+    assert ".workspace-alert__detail" in styles_source
+    assert ".workspace-alert[open]" in styles_source
+    assert "max-height: 38px;" in styles_source[styles_source.index(".workspace-alert:not([open])"):styles_source.index(".workspace-alert[open]")]
 
 
 def test_browser_qa_verifies_demo_is_hidden_from_default_user_path():

@@ -556,18 +556,19 @@ a:focus-visible {
 }
 
 .workspace-alert {
-  min-height: 36px;
-  padding: 7px 10px;
+  max-height: none;
+  padding: 0;
   border: 1px solid var(--line);
   border-left: 4px solid var(--brand);
   border-radius: var(--radius);
   background: var(--surface);
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
   box-shadow: var(--shadow);
   pointer-events: auto;
+  overflow: hidden;
+}
+
+.workspace-alert:not([open]) {
+  max-height: 38px;
 }
 
 .workspace-alert--degraded {
@@ -577,10 +578,56 @@ a:focus-visible {
   color: #6f4b00;
 }
 
+.workspace-alert__summary {
+  min-height: 36px;
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.workspace-alert__summary::-webkit-details-marker {
+  display: none;
+}
+
+.workspace-alert__summary::after {
+  content: ">";
+  width: 20px;
+  height: 20px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 900;
+  opacity: 0.72;
+}
+
+.workspace-alert[open] .workspace-alert__summary::after {
+  content: "v";
+}
+
 .workspace-alert span {
   min-width: 0;
   flex: 1;
   overflow-wrap: anywhere;
+}
+
+.workspace-alert__detail {
+  margin: 0;
+  padding: 0 10px 8px;
+  color: inherit;
+  font-size: var(--font-compact);
+  line-height: 1.35;
+}
+
+.workspace-alert__actions {
+  padding: 0 10px 10px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 .operation-alert span {
@@ -2803,7 +2850,7 @@ tr:last-child td {
 }
 
 .config-edit-drawer[open] > summary {
-  margin-bottom: 3px;
+  display: none;
 }
 
 .config-template-console {
@@ -2814,12 +2861,13 @@ tr:last-child td {
 }
 
 .config-template-console--compact {
-  grid-template-columns: minmax(0, 1fr) minmax(170px, 0.34fr);
-  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr) minmax(230px, 0.44fr) minmax(170px, 0.3fr);
+  align-items: start;
 }
 
 .config-template-console__main {
   min-width: 0;
+  align-self: start;
   display: grid;
   grid-template-columns: minmax(220px, 1fr) auto;
   align-items: end;
@@ -2861,48 +2909,34 @@ tr:last-child td {
   line-height: 1.4;
 }
 
-.config-template-console__default-quick {
-  grid-column: 1 / -1;
+.config-template-console__primary-actions {
   min-width: 0;
-  padding: 6px 8px;
+  align-self: start;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: start;
+  align-content: start;
+  gap: 7px;
+  padding: 5px 7px;
   border: 1px solid #bfddce;
   border-radius: 7px;
   background: #f8fcfa;
 }
 
-.config-template-console__default-quick > summary {
+.config-template-console__default-status {
   min-width: 0;
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  align-items: center;
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 850;
-  cursor: pointer;
+  flex: 1 1 210px;
+  align-self: start;
+  display: block;
 }
 
-.config-template-console__default-quick > summary span {
-  min-width: 0;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 650;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.config-template-console__default-quick > div {
-  margin-top: 7px;
-}
-
-.config-template-console__default-quick > div span {
-  color: var(--muted);
-  font-size: 11px;
+.config-template-console__default-status > * + * {
+  margin-top: 2px;
 }
 
 .config-template-console__default-actions {
-  margin-top: 7px;
+  align-self: start;
   display: flex;
   flex-wrap: nowrap;
   justify-content: flex-end;
@@ -3005,6 +3039,7 @@ tr:last-child td {
 }
 
 .config-save-state--compact {
+  align-self: start;
   align-content: center;
   gap: 2px;
   padding: 5px 7px;
@@ -3282,12 +3317,12 @@ tr:last-child td {
 
 .editable-config-section {
   min-width: 0;
-  padding: 8px 10px;
+  padding: 6px 8px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface-alt);
   display: grid;
-  gap: 6px;
+  gap: 4px;
 }
 
 .editable-config-section.is-incomplete {
@@ -3356,7 +3391,7 @@ tr:last-child td {
 }
 
 .editable-config-section__field-group-head {
-  display: flex;
+  display: none;
   justify-content: space-between;
   gap: 10px;
   align-items: center;

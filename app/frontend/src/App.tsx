@@ -1198,10 +1198,21 @@ export default function App() {
       />
       <div className="operation-toast-stack" aria-live="polite">
         {workspaceNotice && (
-          <div className={`workspace-alert workspace-alert--${workspaceNotice.kind}`} role={workspaceNotice.kind === 'degraded' ? 'alert' : 'status'} data-testid="workspace-notice">
-            <strong>{workspaceNotice.title}</strong>
-            <span>{workspaceNotice.detail}</span>
-          </div>
+          <details className={`workspace-alert workspace-alert--${workspaceNotice.kind}`} role={workspaceNotice.kind === 'degraded' ? 'alert' : 'status'} data-testid="workspace-notice">
+            <summary className="workspace-alert__summary">
+              <strong>{workspaceNotice.title}</strong>
+              <span>查看详情</span>
+            </summary>
+            <p className="workspace-alert__detail">{workspaceNotice.detail}</p>
+            <div className="workspace-alert__actions">
+              <button className="button button--quiet" type="button" onClick={() => { void refreshWorkspace(); void refreshRuntimeStatus() }}>
+                刷新状态
+              </button>
+              <button className="button button--quiet" type="button" onClick={() => setWorkspaceNotice(null)}>
+                暂时收起
+              </button>
+            </div>
+          </details>
         )}
         {operationError && (
           <div className="operation-alert" role="alert">
