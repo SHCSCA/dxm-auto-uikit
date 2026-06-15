@@ -160,7 +160,7 @@ def test_user_delivery_guide_explains_l2_allowlist_review_packet():
 def test_user_delivery_guide_has_current_acceptance_checklist():
     guide = USER_DELIVERY_GUIDE.read_text(encoding="utf-8")
 
-    assert "# 用户交付使用说明 - 2026-06-11" in guide
+    assert "# 用户交付使用说明 - 2026-06-15" in guide
     assert "## 验收人快速判定清单" in guide
     assert "自动化工作台验收通过" in guide
     assert "`Local workbench check: PASS`" in guide
@@ -172,7 +172,7 @@ def test_user_delivery_guide_has_current_acceptance_checklist():
     assert "源码包交付通过" in guide
     assert "`Source package check: PASS`" in guide
     assert "`scripts\\final-delivery-check.bat -RequireCleanWorktree`" in guide
-    assert "以 `outputs/final-delivery-check/final-delivery-check.json` 的 `gitHead` 字段为准" in guide
+    assert "报告 JSON 中 `gitHead` 对应" in guide
     assert "真实单商品只保存仍只能按只读页面检查、人工批准和保存证据链启动" in guide
     assert "不能只看 `ok: true`" in guide
 
@@ -186,7 +186,7 @@ def test_readme_next_steps_focus_on_allowlist_l2_l3_reverification():
     assert "认领或批量保存" in next_steps
     assert "批量、无人值守和发布" in next_steps
     assert "实现真实 `DxmAdapter`" not in next_steps
-    assert "最终交付验收记录-20260603.md" in readme
+    assert "最终交付验收记录-20260615.md" in readme
 
 
 def test_readme_explains_final_check_ok_scope_for_machine_consumers():
