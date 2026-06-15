@@ -11,10 +11,13 @@ README = REPO_ROOT / "README.md"
 USER_GUIDE = REPO_ROOT / "docs" / "product" / "用户交付使用说明-20260526.md"
 
 
-def test_demo_batch_creation_uses_dry_run_for_local_startable_user_path():
+def test_demo_batch_creation_is_dev_only_and_never_real_user_path():
     source = APP_TSX.read_text(encoding="utf-8")
     bootstrap_section = source[source.index("async function bootstrapDemo"):source.index("async function startSelectedTask")]
 
+    assert "if (!DEMO_ENABLED)" in bootstrap_section
+    assert "开发自检数据只在 dev=1 模式可用" in bootstrap_section
+    assert "真实使用请创建单商品只保存任务并运行预检" in bootstrap_section
     assert "mode: 'dry_run'" in bootstrap_section
     assert "mode: 'single_save'" not in bootstrap_section
     assert "本地演示核验批次" in bootstrap_section
@@ -2430,7 +2433,12 @@ def test_task_center_explains_disabled_single_save_actions():
     assert "aria-describedby={quickCreateSingleSaveDisabledReason ? 'task-quick-create-single-save-reason' : undefined}" in task_center_section
     assert "title={quickCreateSingleSaveDisabledReason || undefined}" in task_center_section
     assert "请选择真实店铺" in task_center_section
+    assert "请先勾选 1 个商品后再创建单商品只保存任务。" in task_center_section
     assert "当前已选 ${selectedDraftProducts.length} 个" in task_center_section
+    assert "当前版本仅放行 Dang Kang；其它店铺需联系管理员完成店铺放行配置。" in task_center_section
+    assert "const [draftProductIds, setDraftProductIds] = useState<number[]>([])" in task_center_section
+    assert "return uniqueProductOptions[0] ? [uniqueProductOptions[0].id] : []" not in task_center_section
+    assert "return current.filter((id) => id !== productId)" in task_center_section
 
     assert "const selectSingleSaveDisabledReason =" in recovery_section
     assert "const createSingleSaveDisabledReason =" in recovery_section

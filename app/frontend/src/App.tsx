@@ -589,6 +589,10 @@ export default function App() {
   }
 
   async function bootstrapDemo() {
+    if (!DEMO_ENABLED) {
+      setOperationError('开发自检数据只在 dev=1 模式可用；真实使用请创建单商品只保存任务并运行预检。')
+      return
+    }
     const confirmed = window.confirm('这会向本地后端写入演示店铺、模板、商品和本地演示核验批次；不会访问店小秘，也不会启动真实保存。继续？')
     if (!confirmed) return
     setBusy(true)

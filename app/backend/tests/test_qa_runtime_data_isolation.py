@@ -90,7 +90,8 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "l2ProbePlan" in script
     assert "okScope" in script
     assert "realDxmMutationAllowed" in script
-    assert "$ExpectedRealDxmWriteReadiness = \"READY\"" in script
+    assert "$ExpectedRealDxmWriteReadiness = \"BLOCKED\"" in script
+    assert "default BLOCKED" in script
     assert "realDxmWriteReadinessMatchesExpected" in script
     assert "productionRealWriteReady" in script
     assert "realDxmWriteBlockedReason" in script
@@ -165,10 +166,15 @@ def test_user_delivery_guide_has_current_acceptance_checklist():
     assert "自动化工作台验收通过" in guide
     assert "`Local workbench check: PASS`" in guide
     assert "`Browser QA: PASS`" in guide
+    assert "`Real DXM write readiness: BLOCKED`" in guide
     assert "`Real DXM write readiness: READY`" in guide
+    assert "`okScope=local_workbench_only`" in guide
     assert "`okScope=local_workbench_and_controlled_single_save_ready`" in guide
-    assert "`realDxmMutationAllowed=true`" in guide
-    assert "自动化工作台与受控单商品只保存可交付" in guide
+    assert "`realDxmMutationAllowed`" in guide
+    assert "当前真实写入 readiness 以最新门禁为准" in guide
+    assert "最终自检应为 `Real DXM write readiness: BLOCKED`" in guide
+    assert "工作台可交付，真实写入未放行" in guide
+    assert "工作台可交付，且受控单商品只保存当前可按门禁启动" in guide
     assert "源码包交付通过" in guide
     assert "`Source package check: PASS`" in guide
     assert "`scripts\\final-delivery-check.bat -RequireCleanWorktree`" in guide

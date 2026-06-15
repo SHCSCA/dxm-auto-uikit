@@ -109,7 +109,7 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
         "evidence_grade": _evidence_grade(extracted, l2_gate, delivery_readiness),
         "regression_gates": _regression_gates(extracted, l2_gate, delivery_readiness),
         "delivery_readiness": delivery_readiness,
-        "real_mode_release_plan": _real_mode_release_plan(),
+        "real_mode_release_plan": _real_mode_release_plan(l2_gate, delivery_readiness),
         "acceptanceGaps": _acceptance_gaps(exceptions, extracted, l2_gate, delivery_readiness),
         "safety": _safety_state(extracted, l2_gate, delivery_readiness),
         "l2_probe_plan": _l2_probe_plan(),
@@ -150,7 +150,10 @@ def _baseline() -> dict[str, Any]:
     }
 
 
-def _real_mode_release_plan() -> dict[str, Any]:
+def _real_mode_release_plan(
+    l2_gate: Mapping[str, Any] | None = None,
+    delivery_readiness: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     def checklist(
         item_id: str,
         label: str,
@@ -177,6 +180,16 @@ def _real_mode_release_plan() -> dict[str, Any]:
         "task runner evidence chain only; direct mutation endpoint remains forbidden",
         "publish guard must prove no publish, continue publish, save-and-publish, or move-to-publish action",
     ]
+    l2_status = str((l2_gate or {}).get("status") or "")
+    l2_passed = l2_status == "passed"
+    readiness_ready = bool(delivery_readiness and delivery_readiness.get("ready") is True)
+    single_save_currently_allowed = l2_passed and readiness_ready
+    single_save_status = "released_controlled" if single_save_currently_allowed else "blocked_stale_l2"
+    single_save_blockers = [] if single_save_currently_allowed else [
+        str((l2_gate or {}).get("detail") or "fresh same-run L2 data_acquisition and draft_box proof is required before real single_save can start")
+    ]
+    l2_check_status = "passed" if l2_passed else "blocked"
+    l2_check_blocker = None if l2_passed else "fresh L2 dual-target readonly proof is missing or stale"
     return {
         "schema": "dxm_real_mode_release_plan.v1",
         "scope": "controlled_single_save_only",
@@ -186,8 +199,8 @@ def _real_mode_release_plan() -> dict[str, Any]:
             {
                 "mode": "single_save",
                 "label": "受控 single_save",
-                "status": "released_controlled",
-                "allowed": True,
+                "status": single_save_status,
+                "allowed": single_save_currently_allowed,
                 "release_scope": "single product save-only canary",
                 "required_evidence": [
                     "L2 dual-target readonly proof",
@@ -197,10 +210,10 @@ def _real_mode_release_plan() -> dict[str, Any]:
                     "network/HAR save response evidence",
                 ],
                 "required_controls": shared_controls,
-                "blockers": [],
+                "blockers": single_save_blockers,
                 "readiness_checklist": [
-                    checklist("l2_dual_target", "L2 dual-target readonly proof", status="passed", evidence_source="L2 gate"),
-                    checklist("l3_single_canary", "single_save canary save evidence", status="passed", evidence_source="L3 task 70"),
+                    checklist("l2_dual_target", "L2 dual-target readonly proof", status=l2_check_status, evidence_source="L2 gate", blocker=l2_check_blocker),
+                    checklist("l3_single_canary", "historical single_save canary save evidence", status="passed", evidence_source="L3 task 70"),
                     checklist("published_false", "published=false proof", status="passed", evidence_source="report summary"),
                     checklist("publish_guard", "publish guard clean", status="passed", evidence_source="delivery workspace aggregation"),
                 ],

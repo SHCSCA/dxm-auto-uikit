@@ -2695,7 +2695,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
   const uniqueProductOptions = useMemo(() => uniqueByProductIdentity(workspace.products), [workspace.products])
   const [draftStoreId, setDraftStoreId] = useState(() => uniqueStoreOptions[0]?.id ? String(uniqueStoreOptions[0].id) : '')
   const [draftMode, setDraftMode] = useState<RealTaskCreateRequest['mode']>('single_save')
-  const [draftProductIds, setDraftProductIds] = useState<number[]>(() => uniqueProductOptions[0] ? [uniqueProductOptions[0].id] : [])
+  const [draftProductIds, setDraftProductIds] = useState<number[]>([])
   const [showAllTasks, setShowAllTasks] = useState(false)
   const needsApproval = selectedTask ? requiresManualApproval(selectedTask) : false
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
@@ -2726,10 +2726,12 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
     ? '正在处理当前操作，请稍候。'
     : !selectedStore
       ? '请选择真实店铺。'
-      : selectedDraftProducts.length !== 1
+      : selectedDraftProducts.length === 0
+        ? '请先勾选 1 个商品后再创建单商品只保存任务。'
+        : selectedDraftProducts.length !== 1
         ? `单商品只保存一次只能选 1 个商品；当前已选 ${selectedDraftProducts.length} 个。`
         : storeBlocksSingleSave
-          ? '当前店铺未放行单商品只保存，请先换到已放行店铺或做只读检查。'
+          ? '当前版本仅放行 Dang Kang；其它店铺需联系管理员完成店铺放行配置。'
           : ''
   const unreleasedReleaseItems = workspace.realModeReleasePlan.modes.filter((item) => item.mode === 'claim_only' || item.mode === 'batch_save')
   const latestSingleSaveTask = [...workspace.tasks]
@@ -2823,15 +2825,14 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
     setDraftProductIds((current) => {
       const kept = current.filter((id) => availableIds.has(id))
       if (kept.length) return kept.length === current.length ? current : kept
-      return uniqueProductOptions[0] ? [uniqueProductOptions[0].id] : []
+      return []
     })
   }, [uniqueProductOptions])
 
   function toggleDraftProduct(productId: number) {
     setDraftProductIds((current) => {
       if (current.includes(productId)) {
-        const next = current.filter((id) => id !== productId)
-        return next.length ? next : current
+        return current.filter((id) => id !== productId)
       }
       return [...current, productId]
     })
@@ -3052,7 +3053,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
               </div>
               {draftMode !== 'probe' && storeBlocksSingleSave && (
                 <div className="guard-note guard-note--warn">
-                  单商品只保存当前只放行 {Array.from(RELEASED_SINGLE_SAVE_STORE_NAMES).join('、')}；其它店铺请先运行预检并单独放行。
+                  单商品只保存当前只放行 {Array.from(RELEASED_SINGLE_SAVE_STORE_NAMES).join('、')}；其它店铺需联系管理员完成店铺放行配置，只读预检只生成证据，不会自动解锁店铺。
                 </div>
               )}
               {singleSaveProductCountInvalid && (

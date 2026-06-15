@@ -3,7 +3,7 @@ param(
   [switch]$RequireCleanWorktree,
   [switch]$CheckPortableDesktop,
   [switch]$Help,
-  [string]$ExpectedRealDxmWriteReadiness = "READY",
+  [string]$ExpectedRealDxmWriteReadiness = "BLOCKED",
   [string]$OutDir = "outputs/final-delivery-check"
 )
 
@@ -44,7 +44,7 @@ if ($Help) {
   Write-Host "  -RequireCleanWorktree  Require pre/post git status to be clean for source package acceptance."
   Write-Host "  -CheckPortableDesktop  Also verify the portable no-install desktop exe during packaged desktop smoke."
   Write-Host "  -SkipBrowserQA         Developer-only shortcut; do not use for formal delivery acceptance."
-  Write-Host "  -ExpectedRealDxmWriteReadiness <BLOCKED|READY|UNKNOWN>  Expected real DXM write readiness for this acceptance run; default READY."
+  Write-Host "  -ExpectedRealDxmWriteReadiness <BLOCKED|READY|UNKNOWN>  Expected real DXM write readiness for this acceptance run; default BLOCKED."
   Write-Host "  -OutDir <path>         Write reports, logs, screenshots and sidecars to a custom directory."
   Write-Host ""
   exit 0

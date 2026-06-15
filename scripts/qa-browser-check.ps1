@@ -1302,7 +1302,8 @@ const result = {
               || firstScreenBlockedDomState.hasWarnCheck === true))
           || (taskDrawerState.hasCurrentPanel === true
             && taskQuickActionsState.hasQuickActions === true
-            && taskQuickActionsState.createVisible === true
+            && taskQuickActionsState.quickText.includes('\u8bf7\u5148\u52fe\u9009 1 \u4e2a\u5546\u54c1\u540e\u518d\u521b\u5efa\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u4efb\u52a1')
+            && taskQuickActionsState.createDisabled === true
             && taskStartDisabled === true
             && singleSaveRecoveryGuideVisible === true
             && taskRecoveryActions === true)),
@@ -1377,8 +1378,10 @@ const result = {
       && taskQuickActionsState.quickText.includes('\u521b\u5efa\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u4efb\u52a1')
       && taskQuickActionsState.quickText.includes('\u8865\u9f50\u7f16\u8f91\u9875\u914d\u7f6e')
       && taskQuickActionsState.quickText.includes('\u9009\u62e9\u5386\u53f2\u4efb\u52a1'),
-    taskQuickCreateVisible: taskQuickActionsState.createVisible === true
-      && taskQuickActionsState.createDisabled === false,
+    taskQuickCreateVisible: taskQuickActionsState.hasQuickActions === true
+      && taskQuickActionsState.quickText.includes('\u521b\u5efa\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u4efb\u52a1')
+      && taskQuickActionsState.quickText.includes('\u8bf7\u5148\u52fe\u9009 1 \u4e2a\u5546\u54c1\u540e\u518d\u521b\u5efa\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u4efb\u52a1')
+      && taskQuickActionsState.createDisabled === true,
     taskInlineL3Approval: taskText.includes('\u5355\u5546\u54c1\u53ea\u4fdd\u5b58') && taskText.includes('\u4eba\u5de5\u786e\u8ba4'),
     singleSaveRecoveryGuideVisible,
     taskRecoveryActions,

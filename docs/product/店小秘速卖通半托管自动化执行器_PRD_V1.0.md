@@ -4,7 +4,7 @@
 > 核心边界：只保存到待发布，不发布。
 > 依据：店小秘速卖通半托管自动化操作流程（参考版）与真实浏览器跑通流程。
 > 版本日期：2026-05-20
-> 当前状态提示（2026-06-01 10:30）：本文是目标设计文档。当前已通过最新 L2 双目标真实只读 probe 与 L3 task 70 受控 `single_save` 金丝雀，真实写入 READY 范围仅为 `controlled_single_save_only`。批量、无人值守和发布不在当前放行范围内；`claim_only` / `batch_save` 仍需单独 L2/L3 证据链。
+> 当前状态提示（2026-06-15）：本文是目标设计文档。历史 L2 双目标真实只读 probe 与 L3 task 70 曾证明受控 `single_save` 可行；当前真实写入 readiness 必须以最新 `final-delivery-check` 和新鲜 L2/L3 为准。没有新鲜门禁时应为 `BLOCKED`；批量、无人值守和发布不在当前放行范围内，`claim_only` / `batch_save` 仍需单独 L2/L3 证据链。
 
 ## 1. 文档信息
 

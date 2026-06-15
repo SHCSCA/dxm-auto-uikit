@@ -263,13 +263,13 @@ scripts\final-delivery-check.bat
 
 它会串行运行 Windows 启动前检查、后端全量测试、前端生产构建、L1 selector replay、`git diff --check`、浏览器 QA，并输出 `outputs/final-delivery-check/final-delivery-check.md` / `.json`。最终自检模式下，浏览器 QA 截图和 sidecar 文件位于 `outputs\final-delivery-check\browser-checks\`。浏览器 QA 会临时启动隔离的当前源码后端和前端预览服务，避免误测 8000/5173 上的旧进程；检查模式可能安装前端依赖，但不会访问店小秘、不会执行真实保存。报告顶部会分别显示“自动化工作台自检结果”和“真实 DXM 写入放行状态”。
 
-当前源码包验收成功标准：`Local workbench check: PASS`、`Browser QA: PASS`、`Final report center QA: PASS`、`Source package check: PASS`，并按 L2/L3 门禁计算 `Real DXM write readiness`。2026-06-15 11:00（Asia/Shanghai）已重新取得真实 L2 双目标只读证据，`run_id=l2-real-20260615T110011Z`；最终自检应在 `-RequireCleanWorktree -CheckPortableDesktop -ExpectedRealDxmWriteReadiness READY` 下通过，`okScope=local_workbench_and_controlled_single_save_ready`。当前报告位于 `outputs/final-delivery-check-current-ready-final/final-delivery-check.md` / `.json`；具体 Git HEAD 以最新 `final-delivery-check.json` 的 `gitHead` 字段为准。正式源码包交付时仍必须重新运行 `-RequireCleanWorktree` 模式。如果未来因 L2 证据过期或 L3 未放行显示 `BLOCKED`，表示真实写入不可启动，不表示自动化工作台本地功能失败。
+当前源码包验收成功标准：`Local workbench check: PASS`、`Browser QA: PASS`、`Final report center QA: PASS`、`Source package check: PASS`，并按 L2/L3 门禁计算 `Real DXM write readiness`。截至最新本地验收，自动化工作台、桌面 portable 构建、packaged/portable smoke、Browser QA 和最终报告中心 QA 均可通过；真实 DXM 写入因 L2 真实只读证据已过期应显示 `BLOCKED`，`okScope=local_workbench_only`，`realDxmMutationAllowed=false`。正式源码包交付时必须重新运行 `-RequireCleanWorktree -CheckPortableDesktop -ExpectedRealDxmWriteReadiness BLOCKED`，或先重新取得同一 run-id 的 L2 双目标真实只读证据并完成 L3 人工金丝雀后，再按 `READY` 验收。`BLOCKED` 表示真实写入不可启动，不表示自动化工作台本地功能失败。
 
 自动化或管理摘要读取 `final-delivery-check.json` 时，不能只读取 `ok`。当前 `ok: true` 只代表 `okScope` 所声明的范围通过；若 `okScope` 为 `local_workbench_only` 且 `realDxmMutationAllowed` 为 `false`，结论仍然是自动化工作台可交付、真实 DXM 写入不可启动。
 
 启动工作台后，报告中心会显示最近一次交付自检摘要和报告路径，方便验收人直接确认自动化工作台 PASS、真实写入门禁状态与源码包状态。
 
-开发自检可在任务中心点击“创建本地 dry_run 演示批次”，该按钮只创建本地 `dry_run` 演示任务，不触达 DXM，不能作为真实交付验收依据。真实用户交付路径是 `single_save`，且只在当前 L2/L3 READY、人工批准令牌和金丝雀证据链约束下放行；真实 `claim_only` / `batch_save`、批量无人值守和发布仍保持阻断。
+开发自检入口只在 `?dev=1` 或显式启用 `VITE_DXM_ENABLE_DEMO=1` 时可用；它只创建本地 `dry_run` 自检任务，不触达 DXM，不能作为真实交付验收依据。真实用户交付路径是 `single_save`，且只在当前 L2/L3 READY、人工批准令牌和金丝雀证据链约束下放行；真实 `claim_only` / `batch_save`、批量无人值守和发布仍保持阻断。
 
 发布源码包前可加 clean worktree 门禁：
 
@@ -304,7 +304,7 @@ scripts\final-delivery-check.bat --help
 3. 若要扩大到认领或批量保存，必须为对应范围重新建立只读页面检查、人工批准和保存/回滚证据，不复用单商品只保存结论。
 4. 批量、无人值守和发布必须单独设计门禁、人工批准和回滚策略。
 
-免安装版快速使用说明见 `docs/product/免安装版快速使用说明-20260615.md`。当前 clean worktree 验收记录见 `docs/product/最终交付验收记录-20260615.md`；当前分支已通过本地工作台、portable 桌面 smoke 和受控 single_save READY 自检，源码包发布前仍必须重新跑 clean worktree 最终自检。
+免安装版快速使用说明见 `docs/product/免安装版快速使用说明-20260615.md`。当前验收记录见 `docs/product/最终交付验收记录-20260615.md`；当前分支已通过本地工作台、portable 桌面 smoke 和 BLOCKED 门禁自检。真实写入需要重新取得新鲜 L2/L3 证据后才能从 `BLOCKED` 切到受控 `single_save READY`。
 
 ---
 

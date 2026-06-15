@@ -414,9 +414,15 @@ def test_delivery_workspace_exposes_unreleased_real_mode_release_plan(tmp_path, 
     assert plan["batch_unattended_publish_allowed"] is False
     assert plan["publish_allowed"] is False
     modes = {item["mode"]: item for item in plan["modes"]}
-    assert modes["single_save"]["status"] == "released_controlled"
-    assert modes["single_save"]["allowed"] is True
+    assert modes["single_save"]["status"] == "blocked_stale_l2"
+    assert modes["single_save"]["allowed"] is False
     assert modes["single_save"]["release_scope"] == "single product save-only canary"
+    assert modes["single_save"]["blockers"]
+    single_save_checklist = {item["id"]: item for item in modes["single_save"]["readiness_checklist"]}
+    assert single_save_checklist["l2_dual_target"]["status"] == "blocked"
+    assert single_save_checklist["l2_dual_target"]["blocker"] == "fresh L2 dual-target readonly proof is missing or stale"
+    assert single_save_checklist["l3_single_canary"]["status"] == "passed"
+    assert "historical single_save canary" in single_save_checklist["l3_single_canary"]["label"]
     assert modes["claim_only"]["status"] == "blocked_unreleased"
     assert modes["claim_only"]["allowed"] is False
     assert modes["claim_only"]["release_scope"] == "not released"
