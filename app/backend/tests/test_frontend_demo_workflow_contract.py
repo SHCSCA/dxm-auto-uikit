@@ -111,19 +111,24 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
     qa_source = QA_BROWSER_CHECK.read_text(encoding="utf-8")
+    advanced_details = config_section[
+        config_section.index('<details className="inline-disclosure config-template-console__details">'):
+        config_section.index('{configMessage && <div className="config-save-message">')
+    ]
 
     assert "demoTemplateSeeds" in source
     assert "applyDefaultTemplatePack" in config_section
     assert "默认测试模板" in config_section
     assert "使用之前测试通过的数据配置" in config_section
     assert "config-template-console__default-quick" in config_section
-    assert config_section.index("config-template-console__default-quick") < config_section.index("config-template-console__details")
-    assert config_section.index("使用之前测试通过的数据配置") < config_section.index("config-template-console__details")
+    assert '<details className="inline-disclosure config-template-console__default-quick"' in config_section
+    assert config_section.index("config-template-console__default-quick") > config_section.index("config-template-console__details")
+    assert config_section.index("使用之前测试通过的数据配置") > config_section.index("config-template-console__details")
     assert "写入测试模板到当前范围" in config_section
     common_selector = config_section[config_section.index("<select"):config_section.index("</select>")]
     assert "__default_test__" not in common_selector
     assert "填入当前分区示例值" in config_section
-    assert "高级/开发辅助" in config_section
+    assert "模板状态、默认测试模板与高级设置" in config_section
     assert "保存/覆盖当前店铺模板" not in config_section
     assert "覆盖当前店铺/类目下全部分区" in config_section
     assert "defaultTemplatePackState" in config_section
@@ -143,7 +148,7 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "activeSelectedTemplateLabel" in config_section
     assert "activeTemplateUsageLabel" in config_section
     assert "<b>当前使用</b><small>{activeTemplateUsageLabel}</small>" in config_section
-    assert "只有“当前使用”才代表本次执行会读取的模板" in config_section
+    assert "只有“当前使用”才代表本次执行会读取的模板" in advanced_details
     assert "点击套用后才会写入表单，保存后才会影响执行" in config_section
     assert "config-template-console__quick-status" not in config_section
     assert "可选 {activeSectionTemplateOptions.length} 套模板" not in config_section
@@ -178,6 +183,8 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "正在按任务覆盖取值" in config_section
     assert "执行器启动时读取同一份检查取值" in config_section
     assert "SectionExecutionValuePreview" in config_section
+    assert config_section.index('<div className="editable-config-grid editable-config-grid--focused">') < config_section.index("<SectionExecutionValuePreview")
+    assert config_section.index('<div className="editable-config-grid editable-config-grid--focused">') < config_section.index('<div className="config-section-tabs config-section-tabs--primary"')
     assert "当前分区执行取值核对" in source
 
 
@@ -258,7 +265,7 @@ def test_config_center_does_not_treat_selected_template_as_currently_used_before
     ]
     status_bar = config_section[
         config_section.index('<div className="config-template-console__status-bar"'):
-        config_section.index('<div className="config-template-console__default-quick"')
+        config_section.index('<details className="inline-disclosure config-template-console__default-quick"')
     ]
 
     assert "activeSelectedTemplate" not in usage_assignment
@@ -274,24 +281,24 @@ def test_config_center_surfaces_single_template_status_bar():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
     config_section = source[source.index("export function ConfigCenter"):source.index("export function TaskCenter")]
-    template_console = config_section[
-        config_section.index('<div className="config-template-console config-template-console--compact"'):
-        config_section.index('<details className="inline-disclosure config-template-console__details">')
+    template_details = config_section[
+        config_section.index('<details className="inline-disclosure config-template-console__details">'):
+        config_section.index('{configMessage && <div className="config-save-message">')
     ]
 
-    assert "aria-label=\"模板使用状态\"" in template_console
-    assert "config-template-console__status-bar" in template_console
-    assert "config-template-console__quick-status" not in template_console
-    assert "模板使用状态" in template_console
-    assert "当前使用" in template_console
-    assert "activeTemplateUsageLabel" in template_console
-    assert "待套用" in template_console
-    assert "activePendingTemplateActionLabel" in template_console
-    assert "保存状态" in template_console
-    assert "activeSectionStatusTitle" in template_console
-    assert "保存范围" in template_console
-    assert "currentTemplateScopeLabel" in template_console
-    assert "保存后才会影响执行" in template_console
+    assert "aria-label=\"模板使用状态\"" in template_details
+    assert "config-template-console__status-bar" in template_details
+    assert "config-template-console__quick-status" not in template_details
+    assert "模板使用状态" in template_details
+    assert "当前使用" in template_details
+    assert "activeTemplateUsageLabel" in template_details
+    assert "待套用" in template_details
+    assert "activePendingTemplateActionLabel" in template_details
+    assert "保存状态" in template_details
+    assert "activeSectionStatusTitle" in template_details
+    assert "保存范围" in template_details
+    assert "currentTemplateScopeLabel" in template_details
+    assert "保存后才会影响执行" in template_details
     assert ".config-template-console__status-bar" in styles_source
 
 
@@ -305,7 +312,7 @@ def test_config_center_tracks_recently_saved_template_for_multi_template_reuse()
     ]
     status_bar = config_section[
         config_section.index('<div className="config-template-console__status-bar"'):
-        config_section.index('<div className="config-template-console__default-quick"')
+        config_section.index('<details className="inline-disclosure config-template-console__default-quick"')
     ]
 
     assert "lastSavedTemplateBySection" in config_section
@@ -349,14 +356,14 @@ def test_config_center_keeps_template_source_details_out_of_first_viewport():
         config_section.index('<div className="config-section-tabs config-section-tabs--primary"')
     ]
 
-    assert "config-template-console__status-bar" in template_console
+    assert "config-template-console__status-bar" not in template_console
     assert 'aria-label="当前模板来源"' not in template_console
     assert "当前生效模板" not in template_console
     assert "可选模板 {activeSectionTemplateOptions.length} 套；已筛除不匹配或禁用模板" not in template_console
     assert "已筛除不匹配或禁用模板" not in template_console
     assert 'aria-label="当前模板来源详情"' in advanced_details
     assert "config-template-source--detail" in advanced_details
-    assert "模板来源与高级/开发辅助" in advanced_details
+    assert "模板状态、默认测试模板与高级设置" in advanced_details
 
 
 def test_config_center_shows_save_scope_explainer_before_actions():
@@ -585,10 +592,20 @@ def test_config_center_uses_compact_density_and_collapsed_assist_drawer():
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
     qa_source = QA_BROWSER_CHECK.read_text(encoding="utf-8")
 
-    assert "--font-body: 13px" in styles_source
-    assert "--font-compact: 12px" in styles_source
+    assert "--font-body: 12px" in styles_source
+    assert "--font-compact: 11px" in styles_source
     assert ".content-density-summary" in styles_source
     assert ".config-assist-drawer" in styles_source
+    assert ".config-precheck-action span {" in styles_source
+    assert ".config-template-console__default-quick > summary" in styles_source
+    assert "flex-wrap: nowrap;" in styles_source[
+        styles_source.index(".config-template-console__default-actions"):
+        styles_source.index(".config-template-console__details")
+    ]
+    assert "display: none;" in styles_source[
+        styles_source.index(".config-precheck-action span {"):
+        styles_source.index(".config-precheck-action__buttons")
+    ]
     assert "config-density-summary" in config_section
     assert "config-assist-drawer" in config_section
     assert "配置详情与下一步字段" in config_section
@@ -908,8 +925,8 @@ def test_operational_surfaces_use_compact_type_scale():
     config_focus = styles_source[styles_source.index(".config-focus-card h1 {"):styles_source.index(".config-focus-card p {")]
     task_current = styles_source[styles_source.index(".task-current-panel h1 {"):styles_source.index(".task-current-panel p {")]
 
-    assert "--font-panel-title: 18px;" in root_tokens
-    assert "--font-section-title: 14px;" in root_tokens
+    assert "--font-panel-title: 16px;" in root_tokens
+    assert "--font-section-title: 13px;" in root_tokens
     assert "font-size: var(--font-section-title);" in module_head
     assert "font-size: var(--font-panel-title);" in console_focus
     assert "font-size: var(--font-panel-title);" in config_focus

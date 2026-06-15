@@ -21,11 +21,11 @@
   --violet-soft: #f1ecff;
   --radius: 8px;
   --shadow: 0 12px 36px rgba(29, 37, 45, 0.08);
-  --font-body: 13px;
-  --font-panel-title: 18px;
-  --font-section-title: 14px;
-  --font-compact: 12px;
-  --font-micro: 11px;
+  --font-body: 12px;
+  --font-panel-title: 16px;
+  --font-section-title: 13px;
+  --font-compact: 11px;
+  --font-micro: 10px;
 }
 
 * {
@@ -2834,10 +2834,10 @@ tr:last-child td {
   grid-column: 1 / -1;
   min-width: 0;
   display: grid;
-  grid-template-columns: auto repeat(4, minmax(0, 1fr)) minmax(180px, 0.9fr);
+  grid-template-columns: auto repeat(5, minmax(0, 1fr));
   align-items: center;
-  gap: 8px;
-  padding: 7px 9px;
+  gap: 6px;
+  padding: 6px 8px;
   border: 1px solid #d8e2ef;
   border-radius: 7px;
   background: #f8fbff;
@@ -2853,39 +2853,67 @@ tr:last-child td {
   text-overflow: ellipsis;
 }
 
-.config-template-console__status-bar em {
+.config-template-console__explain {
   min-width: 0;
+  margin: 0 0 8px;
   color: var(--muted);
   font-size: 11px;
-  font-style: normal;
-  line-height: 1.3;
+  line-height: 1.4;
 }
 
 .config-template-console__default-quick {
   grid-column: 1 / -1;
   min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 8px 10px;
+  padding: 6px 8px;
   border: 1px solid #bfddce;
   border-radius: 7px;
   background: #f8fcfa;
 }
 
-.config-template-console__default-quick > div:first-child {
+.config-template-console__default-quick > summary {
   min-width: 0;
-  display: grid;
-  gap: 3px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.config-template-console__default-quick > summary span {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-template-console__default-quick > div {
+  margin-top: 7px;
+}
+
+.config-template-console__default-quick > div span {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .config-template-console__default-actions {
+  margin-top: 7px;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
   flex: 0 0 auto;
+}
+
+.config-template-console__default-actions .button {
+  min-height: 30px;
+  padding: 5px 8px;
+  white-space: nowrap;
 }
 
 .config-template-console__details {
@@ -3506,6 +3534,10 @@ tr:last-child td {
   color: var(--muted);
   font-size: var(--font-compact);
   line-height: 1.35;
+}
+
+.config-precheck-action span {
+  display: none;
 }
 
 .config-precheck-action__buttons {

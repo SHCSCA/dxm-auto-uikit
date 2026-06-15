@@ -2286,46 +2286,48 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
               套用到表单
             </button>
           </div>
-          <div className="config-template-console__status-bar" aria-label="模板使用状态">
-            <strong>模板使用状态</strong>
-            <span><b>当前使用</b><small>{activeTemplateUsageLabel}</small></span>
-            <span><b>待套用</b><small>{activePendingTemplateActionLabel}</small></span>
-            <span><b>最近保存</b><small>{activeLastSavedTemplateLabel}</small></span>
-            <span><b>保存状态</b><small>{activeSectionStatusTitle}</small></span>
-            <span><b>保存范围</b><small>{currentTemplateScopeLabel}</small></span>
-            <em>只有“当前使用”才代表本次执行会读取的模板；点击套用后才会写入表单，保存后才会影响执行。刚保存的模板会自动选中，后续可从下拉框再次套用。</em>
-          </div>
-          <div className="config-template-console__default-quick" aria-label="默认测试模板包">
-            <div>
-              <strong>默认测试模板</strong>
-              <span>使用之前测试通过的数据配置；可先填当前分区，也可覆盖当前店铺/类目下全部分区。</span>
-              <small>{defaultTemplatePackState}</small>
-            </div>
-            <div className="config-template-console__default-actions">
-              <button
-                className="button button--quiet"
-                type="button"
-                onClick={() => applyTemplateToDraft(selectedConfigSection.section, '__default_test__')}
-              >
-                填入当前分区示例值
-              </button>
-              <button
-                className="button button--secondary"
-                type="button"
-                onClick={() => { void applyDefaultTemplatePack() }}
-                disabled={savingSection === 'template:default-pack' || templateSaveDisabled}
-                title={templateSaveDisabled ? '先选择任务，避免误存为全店/全类目模板。' : '保存为店铺模板会影响后续匹配当前店铺/类目的任务。'}
-              >
-                {savingSection === 'template:default-pack' ? '保存测试模板中...' : '写入测试模板到当前范围'}
-              </button>
-            </div>
-          </div>
           <div className={`config-save-state config-save-state--compact is-${activeSectionStatus}`} aria-label="当前分区保存状态">
             <b>{activeSectionStatusTitle}</b>
             <span>{activeSectionStatusMessage}</span>
           </div>
           <details className="inline-disclosure config-template-console__details">
-            <summary>模板来源与高级/开发辅助</summary>
+            <summary>模板状态、默认测试模板与高级设置</summary>
+            <div className="config-template-console__status-bar" aria-label="模板使用状态">
+              <strong>模板使用状态</strong>
+              <span><b>当前使用</b><small>{activeTemplateUsageLabel}</small></span>
+              <span><b>待套用</b><small>{activePendingTemplateActionLabel}</small></span>
+              <span><b>最近保存</b><small>{activeLastSavedTemplateLabel}</small></span>
+              <span><b>保存状态</b><small>{activeSectionStatusTitle}</small></span>
+              <span><b>保存范围</b><small>{currentTemplateScopeLabel}</small></span>
+            </div>
+            <details className="inline-disclosure config-template-console__default-quick" aria-label="默认测试模板包">
+              <summary>
+                默认测试模板
+                <span>{defaultTemplatePackState}</span>
+              </summary>
+              <div>
+                <span>使用之前测试通过的数据配置；可先填当前分区，也可覆盖当前店铺/类目下全部分区。</span>
+              </div>
+              <div className="config-template-console__default-actions">
+                <button
+                  className="button button--quiet"
+                  type="button"
+                  onClick={() => applyTemplateToDraft(selectedConfigSection.section, '__default_test__')}
+                >
+                  填入当前分区示例值
+                </button>
+                <button
+                  className="button button--secondary"
+                  type="button"
+                  onClick={() => { void applyDefaultTemplatePack() }}
+                  disabled={savingSection === 'template:default-pack' || templateSaveDisabled}
+                  title={templateSaveDisabled ? '先选择任务，避免误存为全店/全类目模板。' : '保存为店铺模板会影响后续匹配当前店铺/类目的任务。'}
+                >
+                  {savingSection === 'template:default-pack' ? '保存测试模板中...' : '写入测试模板到当前范围'}
+                </button>
+              </div>
+            </details>
+            <p className="config-template-console__explain">只有“当前使用”才代表本次执行会读取的模板；点击套用后才会写入表单，保存后才会影响执行。刚保存的模板会自动选中，后续可从下拉框再次套用。</p>
             <div className="config-template-console__detail-grid">
               <div className="config-template-source config-template-source--detail" aria-label="当前模板来源详情">
                 <strong>当前生效模板</strong>
@@ -2361,6 +2363,23 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
         )}
         <details className="inline-disclosure config-edit-drawer" open={!configReadyForReview}>
           <summary>{configReadyForReview ? '微调当前配置' : `继续填写：${selectedConfigSection.section.title}`}</summary>
+          <div className="editable-config-grid editable-config-grid--focused">
+            <EditableConfigSectionCard
+              key={selectedConfigSection.section.code}
+              section={selectedConfigSection.section}
+              preview={selectedConfigSection.preview}
+              configDraft={configDraft}
+              savingSection={savingSection}
+              saveState={sectionSaveState[selectedConfigSection.section.code]}
+              selectedTask={selectedTask}
+              templateSaveDisabled={templateSaveDisabled}
+              configOk={Boolean(configPreview?.ok)}
+              openByDefault={true}
+              onFieldChange={updateConfigField}
+              onSave={saveConfigSection}
+              onSaveAndContinue={continueToNextMissingSection}
+            />
+          </div>
           <div className="config-section-tabs config-section-tabs--primary" role="tablist" aria-label="DXM 编辑页常用分区导航">
             {primaryConfigSections.map(({ section, preview }) => {
               const state = configSectionState(preview, Boolean(configPreview?.ok))
@@ -2419,23 +2438,6 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
             </div>
           </div>
           <SectionExecutionValuePreview section={selectedConfigSection.section} preview={selectedConfigSection.preview} />
-          <div className="editable-config-grid editable-config-grid--focused">
-            <EditableConfigSectionCard
-              key={selectedConfigSection.section.code}
-              section={selectedConfigSection.section}
-              preview={selectedConfigSection.preview}
-              configDraft={configDraft}
-              savingSection={savingSection}
-              saveState={sectionSaveState[selectedConfigSection.section.code]}
-              selectedTask={selectedTask}
-              templateSaveDisabled={templateSaveDisabled}
-              configOk={Boolean(configPreview?.ok)}
-              openByDefault={true}
-              onFieldChange={updateConfigField}
-              onSave={saveConfigSection}
-              onSaveAndContinue={continueToNextMissingSection}
-            />
-          </div>
           <p className="config-section-switch-hint">只展示当前分区；常用分区在上方，低频字段收进“更多编辑页分区”。</p>
         </details>
       </div>
