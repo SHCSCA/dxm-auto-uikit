@@ -135,11 +135,12 @@ class DxmLoginFlow:
                 'stage': 'login_success',
                 'label': '已登录',
                 'message': '登录成功，已进入真实店小秘后台。',
-                'next_action': '继续进入数据采集、采集箱和编辑流程。',
+                'next_action': '真实浏览器窗口会保留；可继续进入数据采集、采集箱和编辑流程。',
                 'requires_user_action': False,
                 'page_title': live_status.get('title') or live_status.get('product_page', {}).get('title') or '店小秘首页',
                 'page_url': live_status.get('final_url') or live_status.get('product_page', {}).get('url') or 'https://www.dianxiaomi.com/index.htm',
                 'screenshot_url': submit_state.get('screenshot_url') or live_status.get('home_screenshot_url') or live_status.get('product_page', {}).get('screenshot_url'),
+                'browser_visible': not self._is_headless(),
                 'updated_at': now_iso(),
             }
         else:
@@ -156,8 +157,6 @@ class DxmLoginFlow:
                 'updated_at': now_iso(),
             }
         self._write_state(state)
-        if state['stage'] != 'login_failed':
-            self._close_browser_session()
         return state
 
     def navigate_post_login(self, target: str) -> dict[str, Any]:
@@ -188,16 +187,16 @@ class DxmLoginFlow:
             'stage': 'workflow_navigation',
             'label': config['label'],
             'message': config['message'],
-            'next_action': config['next_action'],
+            'next_action': f"真实浏览器窗口会保留；{config['next_action']}",
             'requires_user_action': False,
             'page_title': result.get('page_title') or config['label'],
             'page_url': result.get('page_url') or config['url'],
             'screenshot_url': result.get('screenshot_url'),
+            'browser_visible': not self._is_headless(),
             'updated_at': now_iso(),
             'current_nav': target,
         }
         self._write_state(state)
-        self._close_browser_session()
         return state
 
     def perform_draft_box_action(

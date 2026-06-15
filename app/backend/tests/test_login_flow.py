@@ -1221,6 +1221,29 @@ def test_dxm_login_flow_continue_exception_keeps_visible_browser_for_recovery(mo
     assert close_calls == []
 
 
+def test_dxm_login_flow_continue_success_keeps_visible_browser_for_next_steps(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    close_calls = []
+
+    monkeypatch.setattr(flow, '_submit_login_after_captcha', lambda: {
+        'page_title': '店小秘首页',
+        'page_url': 'https://www.dianxiaomi.com/web/home',
+        'screenshot_url': '/artifacts/screenshots/login-result.png',
+    })
+    monkeypatch.setattr(flow, '_close_browser_session', lambda: close_calls.append('closed'))
+    monkeypatch.setattr(flow, '_is_headless', lambda: False)
+
+    state = flow.continue_login()
+
+    assert state['stage'] == 'login_success'
+    assert state['browser_visible'] is True
+    assert '真实浏览器窗口会保留' in state['next_action']
+    assert '数据采集' in state['next_action']
+    assert '采集箱' in state['next_action']
+    assert close_calls == []
+
+
 def test_dxm_login_flow_navigate_updates_runtime_state(monkeypatch, tmp_path):
     live_client = DummyLiveClient(logged_in=True)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
@@ -1239,6 +1262,29 @@ def test_dxm_login_flow_navigate_updates_runtime_state(monkeypatch, tmp_path):
     assert state['current_nav'] == 'draft_box'
     assert state['screenshot_url'] == '/artifacts/screenshots/draft-box.png'
     assert '采集箱' in state['message']
+
+
+def test_dxm_login_flow_navigate_keeps_visible_browser_for_operator(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    close_calls = []
+
+    monkeypatch.setattr(flow, '_navigate_in_session', lambda target: {
+        'page_title': '数据采集',
+        'page_url': 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition',
+        'screenshot_url': '/artifacts/screenshots/data-acquisition.png',
+        'target': target,
+    })
+    monkeypatch.setattr(flow, '_close_browser_session', lambda: close_calls.append('closed'))
+    monkeypatch.setattr(flow, '_is_headless', lambda: False)
+
+    state = flow.navigate_post_login('data_acquisition')
+
+    assert state['stage'] == 'workflow_navigation'
+    assert state['current_nav'] == 'data_acquisition'
+    assert state['browser_visible'] is True
+    assert '真实浏览器窗口会保留' in state['next_action']
+    assert close_calls == []
 
 
 def test_dxm_login_flow_perform_draft_box_action_updates_state(monkeypatch, tmp_path):
