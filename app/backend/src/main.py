@@ -61,7 +61,18 @@ from src.ws import ConnectionManager
 @asynccontextmanager
 async def app_lifespan(_app: FastAPI):
     _append_backend_runtime_log(f'DXM backend runtime started pid={os.getpid()} owner={_runtime_control_owner()}')
-    yield
+    try:
+        yield
+    finally:
+        _append_backend_runtime_log('DXM backend runtime stopping; closing visible browser sessions')
+        try:
+            login_flow._close_browser_session()
+        except Exception as exc:
+            _append_backend_runtime_log(f'Login browser cleanup failed: {exc}')
+        try:
+            agent_console_service.stop()
+        except Exception as exc:
+            _append_backend_runtime_log(f'Agent console cleanup failed: {exc}')
 
 
 app = FastAPI(title='dxm-auto-uikit backend', version='0.1.0', lifespan=app_lifespan)

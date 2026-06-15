@@ -94,6 +94,17 @@ def test_desktop_main_logs_packaged_probe_resource_status_before_backend_start()
     assert "QA capture written" in source
 
 
+def test_desktop_backend_health_check_requires_ok_json_response():
+    source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    health_section = source[source.index("function waitForHealth"):source.index("function resolveFrontendPath")]
+
+    assert "const chunks = []" in health_section
+    assert "JSON.parse(raw)" in health_section
+    assert "payload.status === 'ok'" in health_section
+    assert "response.statusCode >= 200 && response.statusCode < 300" in health_section
+    assert "response.statusCode < 500" not in health_section
+
+
 def test_desktop_main_surfaces_startup_failures_in_visible_window():
     source = DESKTOP_MAIN.read_text(encoding="utf-8")
 

@@ -363,12 +363,21 @@ function waitForHealth(apiBase, timeoutMs = 45000) {
   return new Promise((resolve, reject) => {
     const poll = () => {
       const request = http.get(`${apiBase}/health`, (response) => {
-        response.resume()
-        if (response.statusCode && response.statusCode >= 200 && response.statusCode < 500) {
-          resolve()
-          return
-        }
-        retry()
+        const chunks = []
+        response.on('data', (chunk) => chunks.push(chunk))
+        response.on('end', () => {
+          try {
+            const raw = Buffer.concat(chunks).toString('utf8')
+            const payload = JSON.parse(raw)
+            if (response.statusCode && response.statusCode >= 200 && response.statusCode < 300 && payload.status === 'ok') {
+              resolve()
+              return
+            }
+          } catch (error) {
+            appendDesktopLog(`Backend health response was not ready: ${error.message}`)
+          }
+          retry()
+        })
       })
       request.on('error', retry)
       request.setTimeout(1500, () => {
