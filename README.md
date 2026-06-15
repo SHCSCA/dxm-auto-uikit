@@ -265,7 +265,7 @@ scripts\final-delivery-check.bat
 
 当前源码包验收成功标准：`Local workbench check: PASS`、`Browser QA: PASS`、`Final report evidence QA: PASS`、`Source package check: PASS`，并按 L2/L3 门禁计算 `Real DXM write readiness`。截至 2026-06-15 最新 clean worktree 验收，自动化工作台、桌面 portable 构建、packaged/portable smoke、Browser QA 和最终报告与证据 QA 均已通过；真实 DXM 写入状态为 `READY`，范围仅限 `controlled_single_save_only`，即受控单商品只保存。正式源码包交付命令为 `-RequireCleanWorktree -CheckPortableDesktop -ExpectedRealDxmWriteReadiness READY`。`READY` 不代表批量、无人值守、认领或发布放行。
 
-自动化或管理摘要读取 `final-delivery-check.json` 时，不能只读取 `ok`。当前 `ok: true` 只代表 `okScope` 所声明的范围通过；若 `okScope` 为 `local_workbench_and_controlled_single_save_ready` 且 `realDxmMutationScope` 为 `controlled_single_save_only`，结论是工作台可交付且仅单商品只保存可按门禁启动。
+自动化或管理摘要读取 `final-delivery-check.json` 时，不能只读取 `ok`。当前 `ok: true` 只代表 `okScope` 所声明的范围通过；必须同时读取 `realDxmMutationAllowed` 与 `realDxmMutationScope`。若 `okScope` 为 `local_workbench_and_controlled_single_save_ready`、`realDxmMutationAllowed` 为 `true` 且 `realDxmMutationScope` 为 `controlled_single_save_only`，结论是工作台可交付且仅单商品只保存可按门禁启动。
 
 启动工作台后，报告与证据会显示最近一次交付自检摘要和报告路径，方便验收人直接确认自动化工作台 PASS、真实写入门禁状态与源码包状态。
 

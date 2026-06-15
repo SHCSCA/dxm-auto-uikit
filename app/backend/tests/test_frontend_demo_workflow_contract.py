@@ -747,7 +747,7 @@ def test_browser_qa_verifies_config_center_task_override_controls():
     assert 'data-start-disabled' in source
     assert "consoleRuntimeLogState" in source
     assert "consoleRuntimeLogPreviewVisible" in source
-    assert "consoleRuntimeLogState.previewVisible === true" in source
+    assert "consoleRuntimeLogState.hasRuntimeLogView === true" in source
     assert "'\\u754c\\u9762\\u5237\\u65b0'" in source
     assert "consoleRuntimeLogSourcesVisible" in source
     assert "browserControlPad" in source
@@ -2696,6 +2696,7 @@ def test_frontend_blocks_unreleased_real_modes_before_l3_manual_approval():
     assert "\\u53ea\\u4fdd\\u5b58\\u4e0d\\u53d1\\u5e03" not in no_old_action_copy_section
     assert "oldWaitSave" in no_old_action_copy_section
     assert "oldVisibleBrowser" in no_old_action_copy_section
+    assert "\\u542f\\u52a8\\u6f14\\u793a\\u6d4f\\u89c8\\u5668" in qa_source
     assert "oldAutomation" in no_old_action_copy_section
     assert "SAVE_ONLY" in no_old_action_copy_section
 
@@ -3532,7 +3533,7 @@ def test_frontend_first_screen_names_dxm_automation_delivery():
     assert "safety-bar__meta-details inline-disclosure" in safety_bar
     assert "真实保存已阻断" not in safety_bar
     assert "引导 / 配置 / 任务 / 浏览器 / 报告 / 证据 / 问题" in shell
-    assert "\\u0044\\u0058\\u004d \\u81ea\\u52a8\\u5316\\u5de5\\u4f5c\\u53f0" in qa_source
+    assert "\\u0044\\u0058\\u004d \\u53ea\\u4fdd\\u5b58\\u81ea\\u52a8\\u5316" in qa_source
     assert "initialText.includes(text.overview) || initialText.includes('\\u767b\\u5f55\\u3001\\u914d\\u7f6e\\u4efb\\u52a1') || initialText.includes('\\u5f00\\u59cb\\u4f7f\\u7528')" in qa_source
     assert "\\u73b0\\u5728\\u53ea\\u505a\\u8fd9\\u4e00\\u6b65" in qa_source
     assert "\\u771f\\u5b9e\\u4fdd\\u5b58\\u5df2\\u963b\\u65ad" in qa_source

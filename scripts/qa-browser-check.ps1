@@ -637,11 +637,11 @@ await send('Network.enable');
 await send('Page.navigate', { url: targetUrl });
 await new Promise(r => setTimeout(r, 1800));
 const text = {
-  tasks: '\u5f53\u524d\u4efb\u52a1',
-  overview: '\u64cd\u4f5c\u5f15\u5bfc',
-  console: '\u771f\u5b9e\u6d4f\u89c8\u5668\u63a7\u5236\u53f0',
-  reports: '\u62a5\u544a\u4e0e\u8bc1\u636e',
-  config: '\u7f16\u8f91\u9875\u914d\u7f6e',
+  tasks: '\u4efb\u52a1',
+  overview: '\u5f15\u5bfc',
+  console: '\u6d4f\u89c8\u5668',
+  reports: '\u62a5\u544a',
+  config: '\u914d\u7f6e',
   editableConfig: '\u0044\u0058\u004d \u7f16\u8f91\u9875\u914d\u7f6e',
   configStepMeta: '\u6309\u5e97\u5c0f\u79d8\u7f16\u8f91\u9875\u5206\u533a\u9010\u6bb5\u586b\u5199',
   currentEditingSection: '\u6b63\u5728\u7f16\u8f91\u5206\u533a',
@@ -669,12 +669,12 @@ const text = {
   browserControlSelectorFill: '\u6309\u9009\u62e9\u5668\u586b\u5199',
   browserControlManualTakeover: '\u4eba\u5de5\u63a5\u7ba1',
   reportReviewPlan: '\u67e5\u770b L2 \u8bc4\u5ba1\u4e0e\u590d\u9a8c\u8ba1\u5212',
-  hero: '\u0044\u0058\u004d \u81ea\u52a8\u5316\u5de5\u4f5c\u53f0',
+  hero: '\u0044\u0058\u004d \u53ea\u4fdd\u5b58\u81ea\u52a8\u5316',
   localWorkbenchDeliverable: '\u81ea\u52a8\u5316\u5de5\u4f5c\u53f0\u53ef\u4ea4\u4ed8',
   expectedSafetyBlocked: '\u771f\u5b9e DXM \u5199\u5165 L3 \u53d7\u63a7',
   nextStepSummary: '\u5355\u5546\u54c1\u91d1\u4e1d\u96c0',
   realWriteGateFailed: '\u771f\u5b9e\u5199\u5165\u95e8\u7981\u672a\u901a\u8fc7',
-  appName: '\u5e97\u5c0f\u79d8\u534a\u6258\u7ba1\u6267\u884c\u5668',
+  appName: '\u771f\u5b9e\u6d4f\u89c8\u5668\u6267\u884c',
   localWrite: '\u521b\u5efa\u672c\u5730 dry_run \u6f14\u793a\u6279\u6b21',
   readonlyDiag: '\u67e5\u770b\u53ea\u8bfb\u8bca\u65ad',
   l2BlockHelp: '\u67e5\u770b L2 \u963b\u65ad\u8bf4\u660e',
@@ -738,7 +738,7 @@ const text = {
   rollbackHandoff: '\u56de\u6eda/\u4eba\u5de5\u63a5\u7ba1',
   batchSaveNotRunner: '\u6279\u91cf\u4fdd\u5b58\u4e0d\u542f\u52a8\u771f\u5b9e\u6d4f\u89c8\u5668\u4fdd\u5b58',
   oldWaitSave: '\u7b49\u5f85\u4fdd\u5b58\u6838\u9a8c',
-  oldVisibleBrowser: '\u6253\u5f00\u53ef\u89c1\u6d4f\u89c8\u5668',
+  oldVisibleBrowser: '\u542f\u52a8\u6f14\u793a\u6d4f\u89c8\u5668',
   oldAutomation: '\u65c1\u89c2\u81ea\u52a8\u5316',
   fakePlaceholder: '\u8bca\u65ad\u5360\u4f4d',
   workspaceLoading: '\u6b63\u5728\u8bfb\u53d6 /api/delivery/workspace',
@@ -1284,6 +1284,7 @@ const result = {
     initialLoaded: initialText.includes(text.hero)
       || initialText.includes(text.appName)
       || initialText.includes('DXM Agent')
+      || initialText.includes('\u0044\u0058\u004d \u53ea\u4fdd\u5b58')
       || initialText.includes('\u771f\u5b9e\u6d4f\u89c8\u5668\u81ea\u52a8\u5316'),
     navClicksWorked: clickedTasks && clickedConsole && clickedReports,
     localizedOverviewNav: initialText.includes(text.overview) || initialText.includes('\u767b\u5f55\u3001\u914d\u7f6e\u4efb\u52a1') || initialText.includes('\u5f00\u59cb\u4f7f\u7528'),
@@ -1292,6 +1293,7 @@ const result = {
       || defaultTaskSelectionState.usesActionableSingleSaveWhenCurrentCompleted
     ) && defaultTaskSelectionState.avoidsLatestUnreleasedDefault,
     firstScreenExpectedBlockedScope: (initialTextCompact.includes('\u81ea\u52a8\u5316\u5de5\u4f5c\u53f0')
+      || initialTextCompact.includes('\u0044\u0058\u004d\u53ea\u4fdd\u5b58\u81ea\u52a8\u5316')
       || initialTextCompact.includes('DXMAgent')
       || initialTextCompact.includes('\u771f\u5b9e\u6d4f\u89c8\u5668\u81ea\u52a8\u5316'))
       && (finalCheckExpectedReady
@@ -1412,6 +1414,7 @@ const result = {
     mobileLoaded: mobileInitialText.includes(text.hero)
       || mobileInitialText.includes(text.appName)
       || mobileInitialText.includes('DXM Agent')
+      || mobileInitialText.includes('\u0044\u0058\u004d \u53ea\u4fdd\u5b58')
       || mobileInitialText.includes('\u771f\u5b9e\u6d4f\u89c8\u5668\u81ea\u52a8\u5316'),
     mobileNavWorked: clickedMobileTasks && (mobileTaskText.includes('single_save') || mobileTaskText.includes('\u5355\u5546\u54c1\u53ea\u4fdd\u5b58')),
     mobileNoHorizontalOverflow: mobileReflow === true && mobileOverflow.ok === true,
@@ -1438,7 +1441,7 @@ const result = {
       && consoleControlPadDomState.hasSelectorFill === false)
       || (consoleDomText.includes('\u63a7\u5236\u53f0 Agent \u6a21\u5f0f')
         && consoleDomText.includes('\u9875\u9762\u52a8\u4f5c\u6765\u81ea\u4efb\u52a1\u914d\u7f6e\u548c\u4eba\u5de5\u653e\u884c')),
-    consoleRuntimeLogPreviewVisible: consoleRuntimeLogState.previewVisible === true
+    consoleRuntimeLogPreviewVisible: consoleRuntimeLogState.hasRuntimeLogView === true
       && consoleRuntimeLogState.previewText.includes('\u8fd0\u884c\u65e5\u5fd7')
       && (consoleRuntimeLogState.previewText.includes('\u6b63\u5728\u5b9e\u65f6\u5237\u65b0')
         || consoleRuntimeLogState.previewText.includes('\u754c\u9762\u5237\u65b0')),
