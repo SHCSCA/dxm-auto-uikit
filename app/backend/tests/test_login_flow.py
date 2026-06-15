@@ -1349,6 +1349,94 @@ def test_dxm_login_flow_edit_action_enters_editor_page(monkeypatch, tmp_path):
     assert '半托管服务' in state['detected_fields']
 
 
+def test_ensure_page_replaces_closed_page_in_existing_context(tmp_path):
+    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+
+    class ClosedPage:
+        def is_closed(self):
+            return True
+
+    class OpenPage:
+        def is_closed(self):
+            return False
+
+    class OpenContext:
+        def __init__(self):
+            self.created_pages = []
+
+        def is_closed(self):
+            return False
+
+        def new_page(self):
+            page = OpenPage()
+            self.created_pages.append(page)
+            return page
+
+    context = OpenContext()
+    flow._page = ClosedPage()
+    flow._context = context
+    flow._browser = object()
+
+    page = flow._ensure_page()
+
+    assert isinstance(page, OpenPage)
+    assert page is flow._page
+    assert context.created_pages == [page]
+
+
+def test_ensure_page_recreates_context_when_previous_context_closed(monkeypatch, tmp_path):
+    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+
+    class ClosedPage:
+        def is_closed(self):
+            return True
+
+    class ClosedContext:
+        def is_closed(self):
+            return True
+
+    class OpenPage:
+        pass
+
+    class OpenContext:
+        def __init__(self):
+            self.created_pages = []
+
+        def is_closed(self):
+            return False
+
+        def new_page(self):
+            page = OpenPage()
+            self.created_pages.append(page)
+            return page
+
+    class ConnectedBrowser:
+        def __init__(self):
+            self.contexts = []
+
+        def is_connected(self):
+            return True
+
+        def new_context(self, **kwargs):
+            context = OpenContext()
+            context.kwargs = kwargs
+            self.contexts.append(context)
+            return context
+
+    browser = ConnectedBrowser()
+    flow._page = ClosedPage()
+    flow._context = ClosedContext()
+    flow._browser = browser
+    monkeypatch.setattr(dxm_login_flow_module, 'sync_playwright', lambda: pytest.fail('should reuse connected browser'))
+
+    page = flow._ensure_page()
+
+    assert isinstance(page, OpenPage)
+    assert flow._context is browser.contexts[0]
+    assert browser.contexts[0].created_pages == [page]
+    assert browser.contexts[0].kwargs['ignore_https_errors'] is True
+
+
 def test_extract_editor_page_meta_reads_sections_buttons_and_fields(tmp_path):
     live_client = DummyLiveClient(logged_in=True)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')

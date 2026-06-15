@@ -4823,15 +4823,45 @@ class DxmLoginFlow:
         }
 
     def _ensure_page(self) -> Page:
-        if self._page is not None:
+        if self._page is not None and not self._is_playwright_object_closed(self._page):
+            return self._page
+        self._page = None
+        if self._context is not None and not self._is_playwright_object_closed(self._context):
+            self._page = self._context.new_page()
+            return self._page
+        self._context = None
+        if self._browser is not None and self._is_browser_connected(self._browser):
+            self._context = self._new_browser_context(self._browser)
+            self._page = self._context.new_page()
             return self._page
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(
             **chrome_launch_options(headless=self._is_headless()),
         )
-        self._context = self._browser.new_context(ignore_https_errors=True, viewport={'width': 1440, 'height': 1024})
+        self._context = self._new_browser_context(self._browser)
         self._page = self._context.new_page()
         return self._page
+
+    def _new_browser_context(self, browser: Browser) -> BrowserContext:
+        return browser.new_context(ignore_https_errors=True, viewport={'width': 1440, 'height': 1024})
+
+    def _is_playwright_object_closed(self, value: Any) -> bool:
+        is_closed = getattr(value, 'is_closed', None)
+        if callable(is_closed):
+            try:
+                return bool(is_closed())
+            except Exception:
+                return True
+        return False
+
+    def _is_browser_connected(self, browser: Browser) -> bool:
+        is_connected = getattr(browser, 'is_connected', None)
+        if callable(is_connected):
+            try:
+                return bool(is_connected())
+            except Exception:
+                return False
+        return True
 
     def _ensure_page_with_cookies(self) -> Page:
         page = self._ensure_page()
