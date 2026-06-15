@@ -25,6 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     parser.add_argument("--allowlist-file", default=str(DEFAULT_ALLOWLIST_FILE))
     parser.add_argument("--lock-file", default="")
+    parser.add_argument("--headed", action="store_true", help="Show the real browser window while running read-only probes.")
     parser.add_argument("--target", action="append", choices=REQUIRED_TARGETS, dest="targets")
     return parser.parse_args()
 
@@ -50,6 +51,8 @@ def main() -> int:
                 "--allowlist-file",
                 str(args.allowlist_file),
             ]
+            if args.headed:
+                command.append("--headed")
             print(f"[l2-readonly-runner] target={target} command={' '.join(command)}", flush=True)
             result = subprocess.run(command, cwd=str(ROOT), check=False)
             exit_codes.append(result.returncode)

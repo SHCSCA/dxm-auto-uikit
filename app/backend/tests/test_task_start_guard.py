@@ -1124,6 +1124,7 @@ def test_runtime_control_starts_l2_readonly_probe_runner_without_real_write(tmp_
     assert "--output-dir" in command
     assert "--allowlist-file" in command
     assert "--lock-file" in command
+    assert "--headed" in command
     assert str(lock_file) in command
     assert "claim_only" not in command
     assert "single_save" not in command

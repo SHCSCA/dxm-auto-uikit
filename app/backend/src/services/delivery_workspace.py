@@ -623,7 +623,7 @@ def _l2_probe_plan() -> dict[str, Any]:
     commands = [
         run_id_command,
         *[
-            f"{L2_PROBE_PYTHON} {L2_PROBE_SCRIPT} --target {target} --run-id $runId --cookie-file {L2_PROBE_COOKIE_FILE} --output-dir {L2_PROBE_OUTPUT_DIR} --allowlist-file {L2_PROBE_ALLOWLIST_FILE}"
+            f"{L2_PROBE_PYTHON} {L2_PROBE_SCRIPT} --target {target} --run-id $runId --cookie-file {L2_PROBE_COOKIE_FILE} --output-dir {L2_PROBE_OUTPUT_DIR} --allowlist-file {L2_PROBE_ALLOWLIST_FILE} --headed"
             for target in REQUIRED_L2_TARGETS
         ],
     ]

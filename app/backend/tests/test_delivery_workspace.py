@@ -454,6 +454,7 @@ def test_delivery_workspace_exposes_canonical_l2_probe_plan(tmp_path, monkeypatc
     assert [target["id"] for target in plan["targets"]] == ["data_acquisition", "draft_box"]
     assert any("--target data_acquisition" in command and "--run-id $runId" in command for command in plan["commands"])
     assert any("--target draft_box" in command and "--run-id $runId" in command for command in plan["commands"])
+    assert all("--headed" in command for command in plan["commands"][1:])
     assert all("--cookie-file data\\sessions\\dianxiaomi_cookies.json" in command for command in plan["commands"][1:])
     assert all("--output-dir data\\l2_readonly_probe" in command for command in plan["commands"][1:])
     assert any("同一 run-id" in item for item in plan["acceptanceCriteria"])

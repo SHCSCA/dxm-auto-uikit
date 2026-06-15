@@ -1250,6 +1250,7 @@ def _start_l2_readonly_probe(task_id: int | None) -> dict:
         str(probe_paths['allowlist']),
         '--lock-file',
         str(probe_paths['lock_file']),
+        '--headed',
     ]
     creationflags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
     try:
