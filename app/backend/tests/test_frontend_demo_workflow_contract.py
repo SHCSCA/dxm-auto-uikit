@@ -605,15 +605,21 @@ def test_config_center_uses_compact_density_and_collapsed_assist_drawer():
     assert "--font-compact: 11px" in styles_source
     assert ".content-density-summary" in styles_source
     assert ".config-assist-drawer" in styles_source
-    assert ".config-precheck-action span {" in styles_source
+    assert ".config-precheck-action span," in styles_source
+    assert ".config-precheck-action small {" in styles_source
+    assert ".config-template-console__main label small" in styles_source
     assert ".config-template-console__default-quick > summary" in styles_source
     assert "flex-wrap: nowrap;" in styles_source[
         styles_source.index(".config-template-console__default-actions"):
         styles_source.index(".config-template-console__details")
     ]
     assert "display: none;" in styles_source[
-        styles_source.index(".config-precheck-action span {"):
+        styles_source.index(".config-precheck-action span,"):
         styles_source.index(".config-precheck-action__buttons")
+    ]
+    assert "display: none;" in styles_source[
+        styles_source.index(".config-template-console__main label small"):
+        styles_source.index(".config-template-console select")
     ]
     assert "config-density-summary" in config_section
     assert "config-assist-drawer" in config_section
@@ -623,7 +629,9 @@ def test_config_center_uses_compact_density_and_collapsed_assist_drawer():
     assert "configAssistDrawerCollapsed" in qa_source
     assert "configEditorNearFirstViewport" in qa_source
     assert "focusedEditorTop" in qa_source
+    assert "focusedEditorFirstControlBottom" in qa_source
     assert "focusedEditorFieldCount >= 1" in qa_source
+    assert "configDensityState.focusedEditorFirstControlBottom <= Math.min(720, configDensityState.viewportHeight * 0.96)" in qa_source
     assert 'document.querySelector(".editable-config-grid--focused")' in qa_source
 
 
