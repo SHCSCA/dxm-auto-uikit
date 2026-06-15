@@ -663,3 +663,28 @@ def test_load_allowlist_requires_reviewed_readonly_shape(tmp_path):
     assert [entry["id"] for entry in entries] == ["approved"]
     assert len(errors) == 1
     assert "requires readonly_post=true" in errors[0]
+
+
+def test_repository_allowlist_covers_vip_active_time_readonly_bootstrap_request():
+    module = _load_probe_module()
+    repo_root = Path(__file__).resolve().parents[3]
+    allowlist_file = repo_root / "config" / "l2_readonly_allowlist.json"
+
+    entries, errors, resolved = module.load_allowlist(allowlist_file)
+    guard = module.ReadOnlyProbeGuard(
+        allowlist_entries=entries,
+        allowlist_file=resolved,
+        allowlist_errors=errors,
+        strict_active_requests=True,
+    )
+    route = FakeRoute(FakeRequest("GET", "https://www.dianxiaomi.com/api/getVipActiveTime.json", "xhr"))
+
+    guard._route(route)
+
+    summary = guard.summary()
+    assert errors == []
+    assert route.continued is True
+    assert route.aborted is False
+    assert summary["blocked_request_count"] == 0
+    assert summary["allowlisted_request_count"] == 1
+    assert summary["allowlisted_requests"][0]["allowlist_id"] == "dxm-bootstrap-vip-active-time"

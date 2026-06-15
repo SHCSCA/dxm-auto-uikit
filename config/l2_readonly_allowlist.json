@@ -1,9 +1,9 @@
 {
   "schema": "dxm_l2_readonly_allowlist.v1",
   "review_state": "approved_for_recheck",
-  "reviewer": "Codex safety review with Curie/Mencius subagent evidence",
-  "reviewed_at": "2026-05-26T18:20:00+08:00",
-  "source_probe_run_id": "l2-real-20260526T174227Z",
+  "reviewer": "Codex safety review with real L2 evidence",
+  "reviewed_at": "2026-06-15T10:57:55+08:00",
+  "source_probe_run_id": "l2-real-20260615T105730Z",
   "residual_risk": "These entries allow only reviewed GET bootstrap resources needed for DXM SPA rendering. They do not allow writes, WebSocket, EventSource, claim, remark, note, save, submit, or publish endpoints.",
   "entries": [
     {
@@ -49,6 +49,17 @@
       "allowed_reasons": ["active_or_unknown_resource_type:xhr"],
       "allow_forbidden_keywords": [],
       "rationale": "Reviewed DXM SPA login identity read from L2 run l2-real-20260526T174227Z."
+    },
+    {
+      "id": "dxm-bootstrap-vip-active-time",
+      "decision": "approve",
+      "method": "GET",
+      "host": "www.dianxiaomi.com",
+      "path": "/api/getVipActiveTime.json",
+      "resource_type": "xhr",
+      "allowed_reasons": ["active_or_unknown_resource_type:xhr"],
+      "allow_forbidden_keywords": [],
+      "rationale": "Reviewed DXM account VIP active-time status read from L2 run l2-real-20260615T105730Z; GET-only bootstrap status read with no save, publish, claim, remark, or note keyword."
     },
     {
       "id": "dxm-bootstrap-platform-name-map",
