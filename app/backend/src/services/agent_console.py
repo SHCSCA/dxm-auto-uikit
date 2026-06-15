@@ -408,22 +408,24 @@ class AgentConsoleService:
 
     def _perform_browser_control(self, page, action: str, command: dict[str, Any]) -> dict[str, Any]:
         if action == "click":
-            raise ValueError("untargeted browser controls are disabled; use selector-based control or manual takeover")
+            raise ValueError("browser click controls are disabled; use the approved task flow or manual takeover")
         if action == "selector_click":
             selector = _required_text(command, "selector", "selector is required for selector_click")
-            _assert_safe_selector_control(selector)
-            page.locator(selector).click(timeout=8000)
-            return {"action": action, "selector": selector}
+            raise ValueError(
+                "selector browser controls are disabled until publish guard approval is integrated; "
+                f"use the approved task flow or manual takeover: {selector}"
+            )
         if action == "selector_fill":
             selector = _required_text(command, "selector", "selector is required for selector_fill")
-            _assert_safe_selector_control(selector)
             text = _required_untrimmed_text(command, "text", "text is required for selector_fill")
-            page.locator(selector).fill(text, timeout=8000)
-            return {"action": action, "selector": selector, "text_length": len(text)}
+            raise ValueError(
+                "selector browser controls are disabled until publish guard approval is integrated; "
+                f"use the approved task flow or manual takeover: {selector}; text_length={len(text)}"
+            )
         if action == "type":
-            raise ValueError("untargeted browser controls are disabled; use selector-based control or manual takeover")
+            raise ValueError("browser type controls are disabled; use the approved task flow or manual takeover")
         if action == "press":
-            raise ValueError("untargeted browser controls are disabled; use selector-based control or manual takeover")
+            raise ValueError("browser key controls are disabled; use the approved task flow or manual takeover")
         if action == "scroll":
             delta_x = int(command.get("delta_x") or 0)
             delta_y = int(command.get("delta_y") or 0)

@@ -8,6 +8,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+trap {
+  Write-Error $_
+  exit 1
+}
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 
 function Resolve-SmokeArtifactPath {
@@ -340,7 +344,7 @@ if ($CheckPortable -and (Test-Path $PortableExePath)) {
   Assert-DesktopSmokeLog -ExistingLog $PortableLog -ExpectedPythonRoot $null -Label 'Portable smoke'
   Write-Host "Portable smoke passed. QA capture: $PortableCapturePath"
 } elseif ($CheckPortable) {
-  Write-Host "Portable exe not found, skipped: $PortableExePath"
+  throw "Portable exe not found: $PortableExePath"
 } else {
   Write-Host "Portable smoke skipped. Current delivery target is the verified directory免安装版: outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe"
 }

@@ -403,9 +403,9 @@ def test_agent_console_rejects_untargeted_browser_controls(tmp_path, monkeypatch
     assert typed["ok"] is False
     assert pressed["ok"] is False
     assert clicked["reason"] == "browser_control_failed"
-    assert "selector-based control" in clicked["error"]
-    assert "selector-based control" in typed["error"]
-    assert "selector-based control" in pressed["error"]
+    assert "approved task flow or manual takeover" in clicked["error"]
+    assert "approved task flow or manual takeover" in typed["error"]
+    assert "approved task flow or manual takeover" in pressed["error"]
     assert fake_page.mouse.clicks == []
     assert fake_page.keyboard.typed == []
     assert fake_page.keyboard.pressed == []
@@ -431,7 +431,7 @@ def test_agent_console_successful_browser_control_clears_stale_error(tmp_path, m
     assert service.status()["action_events"][-1]["status"] == "ok"
 
 
-def test_agent_console_controls_live_browser_by_selector_and_records_actions(tmp_path, monkeypatch):
+def test_agent_console_rejects_selector_browser_controls_until_guarded(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
     monkeypatch.setattr(agent_console_module, "SCREENSHOT_ROOT", tmp_path / "screenshots")
     service = AgentConsoleService()
@@ -445,14 +445,17 @@ def test_agent_console_controls_live_browser_by_selector_and_records_actions(tmp
     clicked = service.control_browser({"action": "selector_click", "selector": "[data-testid='title']"})
     filled = service.control_browser({"action": "selector_fill", "selector": "[name='title']", "text": "DXM edited title"})
 
-    assert clicked["ok"] is True
-    assert filled["ok"] is True
-    assert fake_page.locator_calls == ["[data-testid='title']", "[name='title']"]
-    assert fake_page.locators["[data-testid='title']"].clicks == [8000]
-    assert fake_page.locators["[name='title']"].fills == [("DXM edited title", 8000)]
+    assert clicked["ok"] is False
+    assert filled["ok"] is False
+    assert clicked["reason"] == "browser_control_failed"
+    assert filled["reason"] == "browser_control_failed"
+    assert "selector browser controls are disabled" in clicked["error"]
+    assert "selector browser controls are disabled" in filled["error"]
+    assert fake_page.locator_calls == []
     status = service.status()
     assert status["action_events"][-1]["type"] == "browser_control"
     assert status["action_events"][-1]["action"] == "selector_fill"
+    assert status["action_events"][-1]["status"] == "error"
     assert status["action_events"][-1]["target"] == "[name='title']"
     assert status["action_events"][-1]["value"] == "16 chars"
 
@@ -507,12 +510,12 @@ def test_agent_console_rejects_high_risk_selector_controls(tmp_path, monkeypatch
 
     assert result["ok"] is False
     assert result["reason"] == "browser_control_failed"
-    assert "blocked selector target" in result["error"]
+    assert "selector browser controls are disabled" in result["error"]
     assert fake_page.locator_calls == []
     assert service.status()["action_events"][-1]["status"] == "error"
 
 
-def test_agent_console_selector_fill_preserves_user_text_spacing(tmp_path, monkeypatch):
+def test_agent_console_rejected_selector_fill_preserves_user_text_length_in_audit(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
     monkeypatch.setattr(agent_console_module, "SCREENSHOT_ROOT", tmp_path / "screenshots")
     service = AgentConsoleService()
@@ -525,9 +528,10 @@ def test_agent_console_selector_fill_preserves_user_text_spacing(tmp_path, monke
 
     result = service.control_browser({"action": "selector_fill", "selector": "[name='title']", "text": "  DXM title  "})
 
-    assert result["ok"] is True
-    assert fake_page.locators["[name='title']"].fills == [("  DXM title  ", 8000)]
-    assert result["control_result"]["text_length"] == 13
+    assert result["ok"] is False
+    assert result["reason"] == "browser_control_failed"
+    assert "text_length=13" in result["error"]
+    assert fake_page.locator_calls == []
     assert service.status()["action_events"][-1]["value"] == "13 chars"
 
 
@@ -567,7 +571,7 @@ def test_agent_console_api_rejects_untargeted_browser_control(tmp_path, monkeypa
     assert payload["reason"] == "browser_control_failed"
     assert payload["action_events"][-1]["action"] == "type"
     assert payload["action_events"][-1]["status"] == "error"
-    assert "selector-based control" in payload["error"]
+    assert "approved task flow or manual takeover" in payload["error"]
     assert fake_page.keyboard.typed == []
     service.stop()
 

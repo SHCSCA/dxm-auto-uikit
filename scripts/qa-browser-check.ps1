@@ -1398,7 +1398,7 @@ const result = {
       && consoleText.includes(text.browserControlWindowScope))
       || (consoleDomText.includes('\u63a7\u5236\u53f0 Agent \u6a21\u5f0f')
         && consoleDomText.includes('\u9875\u9762\u52a8\u4f5c\u6765\u81ea\u4efb\u52a1\u914d\u7f6e\u548c\u4eba\u5de5\u653e\u884c')),
-    consoleRuntimeLogPreviewVisible: (consoleRuntimeLogState.previewVisible === true || consoleRuntimeLogState.hasRuntimeLogView === true)
+    consoleRuntimeLogPreviewVisible: consoleRuntimeLogState.previewVisible === true
       && consoleRuntimeLogState.previewText.includes('\u8fd0\u884c\u65e5\u5fd7')
       && (consoleRuntimeLogState.previewText.includes('\u6b63\u5728\u5b9e\u65f6\u5237\u65b0')
         || consoleRuntimeLogState.previewText.includes('\u754c\u9762\u5237\u65b0')),

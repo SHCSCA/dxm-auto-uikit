@@ -210,6 +210,8 @@ def test_verify_desktop_package_smoke_script_checks_packaged_exe_logs():
     source = VERIFY_DESKTOP_PACKAGE.read_text(encoding="utf-8")
 
     assert "DXM Agent Console packaged smoke" in source
+    assert "trap {" in source
+    assert "exit 1" in source[source.index("trap {"):source.index("$RepoRoot =")]
     assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
     assert "DXM-Agent-Console-Portable-0.1.0.exe" in source
     assert "[switch]$CheckPortable" in source
@@ -244,6 +246,7 @@ def test_verify_desktop_package_smoke_script_checks_packaged_exe_logs():
     assert "$CheckPortable -and $WaitSeconds -lt 90" in source
     assert "$WaitSeconds = 90" in source
     assert "Portable QA capture was not created" in source
+    assert 'throw "Portable exe not found' in source
     assert "Portable smoke passed" in source
     assert "Portable smoke skipped. Current delivery target is the verified directory免安装版" in source
 

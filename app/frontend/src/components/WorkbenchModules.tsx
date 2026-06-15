@@ -3437,7 +3437,7 @@ export function ExecutionConsole({
         />
       )}
 
-      <details className="module-card span-1 console-log-card console-log-card--compact inline-disclosure">
+      <details className="module-card span-1 console-log-card console-log-card--compact inline-disclosure" open>
         <summary>实时日志（自动刷新）</summary>
         <ModuleHead title="实时日志" meta={`${runtimeLogCount} 条，每 1.5 秒刷新`} />
         <RuntimeLogPreview
@@ -3446,7 +3446,7 @@ export function ExecutionConsole({
           error={runtimeLogError}
           onSourceChange={onRuntimeLogSourceChange}
         />
-        <small>日志默认收起，打开后可看最近刷新结果；筛选和搜索保留在下方“更多诊断与维护”。</small>
+        <small>最近日志默认显示；筛选和搜索保留在下方“更多诊断与维护”。</small>
       </details>
 
       <L2RunnerStatePanel

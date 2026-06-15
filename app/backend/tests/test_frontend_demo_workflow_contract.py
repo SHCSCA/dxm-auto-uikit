@@ -739,7 +739,7 @@ def test_browser_qa_verifies_config_center_task_override_controls():
     assert "consoleBrowserControlPad" in source
     assert "consoleRuntimeLogState" in source
     assert "consoleRuntimeLogPreviewVisible" in source
-    assert "consoleRuntimeLogState.hasRuntimeLogView === true" in source
+    assert "consoleRuntimeLogState.previewVisible === true" in source
     assert "'\\u754c\\u9762\\u5237\\u65b0'" in source
     assert "consoleRuntimeLogSourcesVisible" in source
     assert "browserControlPad" in source
@@ -1209,11 +1209,11 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "控制台只控制独立真实浏览器；证据文件只在报告中留档，不替代实时操控。" in workbench_source
     assert "控制台不播放截图；截图只作为证据路径，不会启动保存或发布。" not in workbench_source
     assert "'module-card span-2 agent-console-stage'" in console_section
-    assert '<details className="module-card span-1 console-log-card console-log-card--compact inline-disclosure">' in console_section
+    assert '<details className="module-card span-1 console-log-card console-log-card--compact inline-disclosure" open>' in console_section
     assert "<summary>实时日志（自动刷新）</summary>" in console_section
     assert "title=\"实时日志\"" in console_section
     assert "RuntimeLogPreview" in console_section
-    assert "日志默认收起，打开后可看最近刷新结果；筛选和搜索保留在下方“更多诊断与维护”。" in console_section
+    assert "最近日志默认显示；筛选和搜索保留在下方“更多诊断与维护”。" in console_section
     assert "<summary>更多诊断与维护</summary>" in console_section
     assert "console-diagnostics-drawer" in console_section
     assert "console-diagnostics-grid" in console_section
@@ -1379,9 +1379,9 @@ def test_execution_console_surfaces_operator_decision_and_collapses_live_logs_by
     assert "<strong>阻断原因</strong>" in focus_section
     assert "<strong>下一步</strong>" in focus_section
     assert "primaryPath.reason" in focus_section
-    assert '<details className="module-card span-1 console-log-card console-log-card--compact inline-disclosure">' in console_section
+    assert '<details className="module-card span-1 console-log-card console-log-card--compact inline-disclosure" open>' in console_section
     assert "<summary>实时日志（自动刷新）</summary>" in console_section
-    assert "日志默认收起，打开后可看最近刷新结果；筛选和搜索保留在下方“更多诊断与维护”。" in console_section
+    assert "最近日志默认显示；筛选和搜索保留在下方“更多诊断与维护”。" in console_section
     assert ".console-focus-panel__decision-grid" in styles_source
     assert ".console-log-card.inline-disclosure > summary" in styles_source
 
@@ -2111,7 +2111,7 @@ def test_execution_console_default_log_summary_hides_absolute_paths():
     login_form_section = source[source.index("function DxmLoginInlineForm"):source.index("function RegressionGateGrid")]
     log_summary_section = source[source.index("function RuntimeLogPreview"):source.index("function RuntimeLogPanel")]
 
-    assert "日志默认收起，打开后可看最近刷新结果；筛选和搜索保留在下方“更多诊断与维护”" in console_section
+    assert "最近日志默认显示；筛选和搜索保留在下方“更多诊断与维护”" in console_section
     assert "humanConsoleCodeLabel(step.state)" in console_section
     assert "humanConsoleCodeLabel((hasConsoleHud ? hud?.state ?? hud?.code : null) ?? activeStep?.code ?? 'WAITING')" in source
     assert "PRECHECK_CONFIG: '启动前配置校验'" in source
