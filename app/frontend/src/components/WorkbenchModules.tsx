@@ -5374,7 +5374,8 @@ export function ReportCenter({
   finalCheck,
   onShowEvidence,
   onShowConsole,
-}: CommonProps & { finalCheck: FinalDeliveryCheckSummary | null; onShowEvidence: () => void; onShowConsole: () => void }) {
+  onShowExceptions,
+}: CommonProps & { finalCheck: FinalDeliveryCheckSummary | null; onShowEvidence: () => void; onShowConsole: () => void; onShowExceptions: () => void }) {
   const reports = selectedTask ? workspace.reports.filter((item) => item.task_id === selectedTask.id) : workspace.reports
   const reportSummary = workspace.reportSummary
   const l2ProbePlan = workspace.l2ProbePlan
@@ -5403,6 +5404,17 @@ export function ReportCenter({
         {realWriteExpectedBlocked && (
           <p className="delivery-check-card__warning">人工确认前不要求生成新的真实保存证据；0 条代表当前自动化真实保存按规则暂停。</p>
         )}
+      </div>
+      <div className="module-card span-3 report-followup-actions" aria-label="复核与后续处理">
+        <div>
+          <strong>复核与后续处理</strong>
+          <span>任务结束后优先看保存证据；有阻断再处理问题；需要继续执行回控制台。</span>
+        </div>
+        <div className="toolbar">
+          <button className="button button--secondary" type="button" data-section="evidence" onClick={onShowEvidence}>查看保存证据</button>
+          <button className="button button--quiet" type="button" data-section="exceptions" onClick={onShowExceptions}>处理问题</button>
+          <button className="button button--quiet" type="button" data-section="console" onClick={onShowConsole}>回到执行控制台</button>
+        </div>
       </div>
       <div className="module-card span-3">
         <ModuleHead title="报告中心" meta={`${reports.length} 份报告`} />

@@ -6380,6 +6380,31 @@ tr:last-child td {
   color: var(--muted);
 }
 
+.report-followup-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+
+.report-followup-actions > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: min(100%, 360px);
+}
+
+.report-followup-actions strong {
+  font-size: 14px;
+}
+
+.report-followup-actions span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .delivery-check-card__body p {
   margin: 0;
   line-height: 1.6;
@@ -6706,6 +6731,11 @@ tr:last-child td {
 
   .service-recovery-panel__actions {
     justify-content: flex-start;
+  }
+
+  .report-followup-actions {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .console-diagnostics-grid,

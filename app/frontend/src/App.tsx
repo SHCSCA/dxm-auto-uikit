@@ -1162,7 +1162,7 @@ export default function App() {
       case 'exceptions':
         return <ExceptionQueue workspace={workspace} selectedTask={selectedTask} />
       case 'reports':
-        return <ReportCenter workspace={workspace} selectedTask={selectedTask} finalCheck={finalCheck} onShowEvidence={() => setActiveSection('evidence')} onShowConsole={() => setActiveSection('console')} />
+        return <ReportCenter workspace={workspace} selectedTask={selectedTask} finalCheck={finalCheck} onShowEvidence={() => setActiveSection('evidence')} onShowConsole={() => setActiveSection('console')} onShowExceptions={() => setActiveSection('exceptions')} />
       case 'dashboard':
       default:
         return <Dashboard workspace={workspace} selectedTask={selectedTask} />

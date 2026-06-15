@@ -979,7 +979,9 @@ def test_guide_center_can_start_real_dxm_login_without_l2_gate():
     assert "currentUrlMatchesDxmTarget(settledStatus.current_url, target)" in navigate_section
     assert "店小秘当前停留在" in navigate_section
     assert "compactDxmUrl(settledStatus.current_url)" in navigate_section
-    assert "await postJson('/api/dxm/navigate', { target })" in navigate_section
+    assert "const navigationResult = await postJson<Record<string, unknown>>('/api/dxm/navigate', { target })" in navigate_section
+    assert "navigationStage.includes('failed')" in navigate_section
+    assert "humanDxmNavigationNotice(navigationResult, `进入${targetLabel}失败`)" in navigate_section
     assert "真实浏览器已进入" in navigate_section
     assert "执行浏览器" not in navigate_section
     assert "已请求店小秘登录流进入" in navigate_section
@@ -3403,7 +3405,7 @@ def test_frontend_first_screen_names_dxm_automation_delivery():
     assert "系统状态与验收详情" not in safety_bar
     assert "safety-bar__meta-details inline-disclosure" in safety_bar
     assert "真实保存已阻断" not in safety_bar
-    assert "开始 / 配置 / 任务 / 浏览器 / 结果" in shell
+    assert "开始 / 配置 / 任务 / 执行 / 结果" in shell
     assert "\\u0044\\u0058\\u004d \\u81ea\\u52a8\\u5316\\u5de5\\u4f5c\\u53f0" in qa_source
     assert "initialText.includes(text.overview) || initialText.includes('\\u5f00\\u59cb\\u4f7f\\u7528')" in qa_source
     assert "\\u73b0\\u5728\\u53ea\\u505a\\u8fd9\\u4e00\\u6b65" in qa_source
@@ -3430,6 +3432,25 @@ def test_sidebar_copy_names_save_only_agent_flow_without_ambiguous_browser_wordi
     assert "报告中心" not in shell
     assert "异常池" not in shell
     assert "系统总览" not in shell
+
+
+def test_report_center_keeps_evidence_exception_and_console_followup_reachable_after_sidebar_simplification():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    report_center_section = source[source.index("export function ReportCenter"):source.index("function FinalDeliveryCheckCard")]
+
+    assert "onShowExceptions" in report_center_section
+    assert "onShowExceptions: () => void" in report_center_section
+    assert "report-followup-actions" in report_center_section
+    assert "复核与后续处理" in report_center_section
+    assert "查看保存证据" in report_center_section
+    assert "处理问题" in report_center_section
+    assert "回到执行控制台" in report_center_section
+    assert "data-section=\"evidence\"" in report_center_section
+    assert "data-section=\"exceptions\"" in report_center_section
+    assert "onShowExceptions={() => setActiveSection('exceptions')}" in app_source
+    assert ".report-followup-actions" in styles_source
 
 
 def test_agent_console_l2_state_has_single_precheck_cta_before_advanced_details():
