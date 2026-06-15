@@ -21,6 +21,8 @@ $browserQaJson = Join-Path $browserQaOutDir "qa-browser-check.json"
 $postFinalReportQaJson = Join-Path $browserQaOutDir "qa-final-report-check.json"
 $summaryPath = Join-Path $absoluteOutDir "final-delivery-check.md"
 $jsonPath = Join-Path $absoluteOutDir "final-delivery-check.json"
+$packagedDesktopSmokeCapturePath = Join-Path $absoluteOutDir "packaged-desktop-smoke.png"
+$packagedDesktopCredentialSmokePath = Join-Path $absoluteOutDir "packaged-desktop-credential-smoke.json"
 $l2AllowlistReviewTemplateMarkdownPath = Join-Path $absoluteOutDir "l2-allowlist-review-template.md"
 $l2AllowlistReviewTemplateJsonPath = Join-Path $absoluteOutDir "l2-allowlist-review-template.json"
 $qaProcesses = @()
@@ -803,6 +805,12 @@ $commands += Invoke-CapturedCommand `
   -WorkingDirectory $frontendDir `
   -TimeoutSeconds 180
 $commands += Invoke-CapturedCommand `
+  -Name "Packaged desktop smoke" `
+  -FilePath "powershell.exe" `
+  -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts\verify-desktop-package.ps1", "-WaitSeconds", "20", "-CapturePath", $packagedDesktopSmokeCapturePath, "-CredentialSmokePath", $packagedDesktopCredentialSmokePath) `
+  -WorkingDirectory $root `
+  -TimeoutSeconds 180
+$commands += Invoke-CapturedCommand `
   -Name "L1 selector replay" `
   -FilePath $pythonExe `
   -Arguments @("tools/probes/l1_selector_replay.py", "--output-dir", $l1ReplayOutDir) `
@@ -1118,6 +1126,8 @@ $result = [pscustomobject]@{
   artifacts = @{
     summary = $summaryPath
     json = $jsonPath
+    packagedDesktopSmokeCapture = $packagedDesktopSmokeCapturePath
+    packagedDesktopCredentialSmoke = $packagedDesktopCredentialSmokePath
     l2AllowlistReviewTemplateMarkdown = $l2AllowlistReviewTemplateMarkdownPath
     l2AllowlistReviewTemplateJson = $l2AllowlistReviewTemplateJsonPath
     l1SelectorReplayDir = $l1ReplayOutDir
@@ -1333,6 +1343,12 @@ foreach ($command in $commands) {
   $summaryLines.Add("  - stderr: $($command.stderrLog)")
 }
 $summaryLines.Add("")
+$packagedDesktopSmokeCommand = $commands | Where-Object { $_.name -eq "Packaged desktop smoke" } | Select-Object -Last 1
+$summaryLines.Add("## Packaged Desktop Smoke")
+$summaryLines.Add("- Packaged desktop smoke: $(if ($packagedDesktopSmokeCommand -and $packagedDesktopSmokeCommand.ok) { "PASS" } else { "FAIL/MISSING" })")
+$summaryLines.Add("- Packaged desktop capture: $($result.artifacts.packagedDesktopSmokeCapture)")
+$summaryLines.Add("- Packaged credential smoke: $($result.artifacts.packagedDesktopCredentialSmoke)")
+$summaryLines.Add("")
 $summaryLines.Add("## Browser QA")
 $summaryLines.Add("- Browser QA: $(if ($browserQa -and $browserQa.ok -eq $true) { "PASS" } elseif ($SkipBrowserQA) { "SKIPPED" } else { "FAIL/MISSING" })")
 if ($browserQa -and $browserQa.assertions) {
@@ -1351,6 +1367,8 @@ if ($postFinalReportQa -and $postFinalReportQa.assertions) {
 $summaryLines.Add("")
 $summaryLines.Add("## Artifacts")
 $summaryLines.Add("- JSON: $jsonPath")
+$summaryLines.Add("- Packaged desktop smoke capture: $($result.artifacts.packagedDesktopSmokeCapture)")
+$summaryLines.Add("- Packaged credential smoke: $($result.artifacts.packagedDesktopCredentialSmoke)")
 $summaryLines.Add("- Browser QA JSON: $($result.artifacts.browserQaJson)")
 $summaryLines.Add("- Browser QA Markdown: $($result.artifacts.browserQaMarkdown)")
 $summaryLines.Add("- Final report QA JSON: $($result.artifacts.postFinalReportQaJson)")

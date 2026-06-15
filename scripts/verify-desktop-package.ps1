@@ -1,18 +1,40 @@
 param(
   [int]$WaitSeconds = 25,
   [switch]$CheckPortable,
-  [int]$PortableMinTempFreeMB = 1024
+  [int]$PortableMinTempFreeMB = 1024,
+  [string]$CapturePath = "",
+  [string]$CredentialSmokePath = ""
 )
 
 $ErrorActionPreference = 'Stop'
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
+
+function Resolve-SmokeArtifactPath {
+  param(
+    [string]$Path
+  )
+
+  $FullPath = [System.IO.Path]::GetFullPath($Path)
+  $Parent = Split-Path -Parent $FullPath
+  if ($Parent -and !(Test-Path -LiteralPath $Parent)) {
+    New-Item -ItemType Directory -Force -Path $Parent | Out-Null
+  }
+  return $FullPath
+}
+
 $ExePath = Join-Path $RepoRoot 'outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe'
 $PortableExePath = Join-Path $RepoRoot 'outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe'
 $LogPath = Join-Path $env:APPDATA 'DXM Agent Console\data\desktop-main.log'
 $LegacyLogPath = Join-Path $env:APPDATA 'dxm-agent-desktop\data\desktop-main.log'
-$CapturePath = Join-Path $env:TEMP 'dxm-agent-console-packaged-smoke.png'
 $PortableCapturePath = Join-Path $env:TEMP 'dxm-agent-console-portable-smoke.png'
-$CredentialSmokePath = Join-Path $env:TEMP 'dxm-agent-console-credential-smoke.json'
+if ([string]::IsNullOrWhiteSpace($CapturePath)) {
+  $CapturePath = Join-Path $env:TEMP 'dxm-agent-console-packaged-smoke.png'
+}
+if ([string]::IsNullOrWhiteSpace($CredentialSmokePath)) {
+  $CredentialSmokePath = Join-Path $env:TEMP 'dxm-agent-console-credential-smoke.json'
+}
+$CapturePath = Resolve-SmokeArtifactPath -Path $CapturePath
+$CredentialSmokePath = Resolve-SmokeArtifactPath -Path $CredentialSmokePath
 
 Write-Host 'DXM Agent Console packaged smoke'
 Write-Host "Exe: $ExePath"

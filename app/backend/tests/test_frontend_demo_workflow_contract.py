@@ -994,6 +994,9 @@ def test_guide_center_can_start_real_dxm_login_without_l2_gate():
     assert "action: '打开登录页'" in workbench_source
     assert "验证码已完成，检测登录态" in workbench_source
     assert "进入采集箱" in workbench_source
+    assert "进入采集页" in workbench_source
+    assert "onNavigateDxmTarget('data_acquisition')" in workbench_source
+    assert "onNavigateDxmTarget('draft_box')" in workbench_source
     assert "onAction: onOpenDxmLogin" in workbench_source
     assert "可见的独立店小秘浏览器窗口" in workbench_source
     assert "账号密码可保存到本机加密存储" in workbench_source
@@ -1271,6 +1274,29 @@ def test_execution_console_makes_l2_precheck_action_and_purpose_visible():
     assert "ctaLabel: READONLY_PRECHECK_CTA" in primary_path_section
     assert "预检证据已过期，请点击“${READONLY_PRECHECK_CTA}”刷新后再继续。" in workbench_source
     assert "运行只读页面检查（不保存）" not in primary_path_section
+
+
+def test_execution_console_running_task_keeps_primary_action_on_current_execution():
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    focus_section = workbench_source[
+        workbench_source.index("function ConsoleFocusPanel"):
+        workbench_source.index("function AgentBrowserFrame")
+    ]
+    build_primary_path_section = workbench_source[
+        workbench_source.index("function buildConsolePrimaryPath"):
+        workbench_source.index("function FinalCheckFreshnessRow")
+    ]
+    primary_path_section = build_primary_path_section[
+        build_primary_path_section.index("if (selectedTask.status === 'running')"):
+        build_primary_path_section.index("if (selectedTask.status !== 'draft')")
+    ]
+
+    assert "action: 'current_execution'" in primary_path_section
+    assert "ctaLabel: '查看当前执行'" in primary_path_section
+    assert "查看检查计划" not in primary_path_section
+    assert "action: 'reports'" not in primary_path_section
+    assert "primaryPath.action === 'current_execution'" in focus_section
+    assert "onRuntimeLogSourceChange('agent')" in focus_section
 
 
 def test_execution_console_keeps_focus_panel_single_action_first():

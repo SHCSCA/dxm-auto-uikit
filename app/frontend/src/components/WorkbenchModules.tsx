@@ -77,7 +77,7 @@ type ConsolePrimaryPath = {
   detail: string
   next: string
   ctaLabel: string
-  action: 'tasks' | 'config' | 'run_l2' | 'reports' | 'start_browser' | 'launcher_logs'
+  action: 'tasks' | 'config' | 'run_l2' | 'reports' | 'start_browser' | 'launcher_logs' | 'current_execution'
   browserStatus: string
   blocksBrowserStart: boolean
   saveBlocked: boolean
@@ -343,8 +343,8 @@ export function GuideCenter({
       onAction: onOpenDxmLogin,
       secondaryAction: dxmLoggedIn ? '进入采集箱' : '验证码已完成，检测登录态',
       onSecondaryAction: dxmLoggedIn ? () => onNavigateDxmTarget('draft_box') : onContinueDxmLogin,
-      tertiaryAction: '查看控制台',
-      onTertiaryAction: onShowConsole,
+      tertiaryAction: dxmLoggedIn ? '进入采集页' : '查看控制台',
+      onTertiaryAction: dxmLoggedIn ? () => onNavigateDxmTarget('data_acquisition') : onShowConsole,
     },
     {
       id: 'store',
@@ -4143,6 +4143,7 @@ function ConsoleFocusPanel({
   const primaryAction = () => {
     if (primaryPath.action === 'reports') return onShowReports()
     if (primaryPath.action === 'config') return onShowConfig()
+    if (primaryPath.action === 'current_execution') return onRuntimeLogSourceChange('agent')
     if (primaryPath.action === 'launcher_logs') return onRuntimeLogSourceChange('launcher')
     if (primaryPath.action === 'run_l2') return onRuntimeControl('run_l2_readonly_probe')
     if (primaryPath.action === 'start_browser') return onStartAgentConsole()
@@ -6217,8 +6218,8 @@ function buildConsolePrimaryPath({
       reason: '任务已经启动，避免重复启动 Agent 执行浏览器。',
       detail: '查看当前执行浏览器、运行日志和自动操作轨迹。',
       next: '等待当前任务完成',
-      ctaLabel: '查看检查计划',
-      action: 'reports',
+      ctaLabel: '查看当前执行',
+      action: 'current_execution',
       browserStatus: '任务运行中',
       blocksBrowserStart: true,
       saveBlocked: false,

@@ -298,3 +298,31 @@ def test_final_delivery_check_captures_final_report_center_after_final_json_writ
     center_section = script[post_final_qa:stop_qa]
     assert "$postFinalReportStateQaCommand.ok" in state_section
     assert "$postFinalReportCenterQaCommand.ok" in center_section
+
+
+def test_final_delivery_check_includes_packaged_desktop_smoke_in_delivery_gate():
+    script = FINAL_DELIVERY_CHECK.read_text(encoding="utf-8")
+    smoke_script = (REPO_ROOT / "scripts" / "verify-desktop-package.ps1").read_text(encoding="utf-8")
+
+    assert "[string]$CapturePath" in smoke_script
+    assert "[string]$CredentialSmokePath" in smoke_script
+    assert "Resolve-SmokeArtifactPath" in smoke_script
+    assert "$CapturePath = Resolve-SmokeArtifactPath -Path $CapturePath" in smoke_script
+    assert "$CredentialSmokePath = Resolve-SmokeArtifactPath -Path $CredentialSmokePath" in smoke_script
+    assert "$packagedDesktopSmokeCapturePath" in script
+    assert "$packagedDesktopCredentialSmokePath" in script
+    assert "verify-desktop-package.ps1" in script
+    assert '-Name "Packaged desktop smoke"' in script
+    assert '"-CapturePath", $packagedDesktopSmokeCapturePath' in script
+    assert '"-CredentialSmokePath", $packagedDesktopCredentialSmokePath' in script
+    assert "packagedDesktopSmokeCapture" in script
+    assert "packagedDesktopCredentialSmoke" in script
+    assert "## Packaged Desktop Smoke" in script
+    assert "Packaged desktop smoke:" in script
+    assert "Packaged desktop capture:" in script
+    assert "Packaged credential smoke:" in script
+
+    build = script.index('-Name "Frontend production build"')
+    smoke = script.index('-Name "Packaged desktop smoke"')
+    result = script.index("$result = [pscustomobject]@{")
+    assert build < smoke < result
