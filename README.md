@@ -41,7 +41,7 @@ outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe
 outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
 ```
 
-portable 首次启动会解包 Electron 与 Python 运行时，`%TEMP%` 所在磁盘建议至少保留 1GB 可用空间；空间不足时会出现启动即退出、没有日志的现象。真实用户优先使用目录免安装版，单文件 portable 用于需要单 exe 分发的场景。
+portable 首次启动会解包 Electron 与 Python 运行时，`%TEMP%` 所在磁盘建议至少保留 1GB 可用空间；空间不足时会出现启动即退出、没有日志的现象。真实用户优先使用桌面目录免安装版，单文件 portable 用于需要单 exe 分发的场景。
 
 源码开发态可用下面命令启动桌面壳：
 
@@ -263,7 +263,7 @@ scripts\final-delivery-check.bat
 
 它会串行运行 Windows 启动前检查、后端全量测试、前端生产构建、L1 selector replay、`git diff --check`、浏览器 QA，并输出 `outputs/final-delivery-check/final-delivery-check.md` / `.json`。最终自检模式下，浏览器 QA 截图和 sidecar 文件位于 `outputs\final-delivery-check\browser-checks\`。浏览器 QA 会临时启动隔离的当前源码后端和前端预览服务，避免误测 8000/5173 上的旧进程；检查模式可能安装前端依赖，但不会访问店小秘、不会执行真实保存。报告顶部会分别显示“自动化工作台自检结果”和“真实 DXM 写入放行状态”。
 
-当前源码包验收成功标准：`Local workbench check: PASS`、`Browser QA: PASS`、`Final report center QA: PASS`、`Source package check: PASS`，并按 L2/L3 门禁计算 `Real DXM write readiness`。2026-06-11 12:31（Asia/Shanghai）已重新取得真实 L2 双目标只读证据，`run_id=l2-real-20260611T123109Z-4ad75b53`，并在 `-ExpectedRealDxmWriteReadiness READY` 下通过最终自检，`okScope=local_workbench_and_controlled_single_save_ready`。正式源码包交付时仍必须重新运行 `-RequireCleanWorktree` 模式，具体 Git HEAD 以 `outputs/final-delivery-check/final-delivery-check.json` 的 `gitHead` 字段为准。如果未来因 L2 证据过期或 L3 未放行显示 `BLOCKED`，表示真实写入不可启动，不表示自动化工作台本地功能失败。
+当前源码包验收成功标准：`Local workbench check: PASS`、`Browser QA: PASS`、`Final report center QA: PASS`、`Source package check: PASS`，并按 L2/L3 门禁计算 `Real DXM write readiness`。2026-06-15 11:00（Asia/Shanghai）已重新取得真实 L2 双目标只读证据，`run_id=l2-real-20260615T110011Z`；2026-06-15 11:16 最终自检在 `-RequireCleanWorktree -CheckPortableDesktop -ExpectedRealDxmWriteReadiness READY` 下通过，`okScope=local_workbench_and_controlled_single_save_ready`，Git HEAD 为 `e9c5f63a3709d97b8d6ed8072849d2fa89c8e179`。当前报告位于 `outputs/final-delivery-check-current-ready-final/final-delivery-check.md` / `.json`。正式源码包交付时仍必须重新运行 `-RequireCleanWorktree` 模式，具体 Git HEAD 以最新 `final-delivery-check.json` 的 `gitHead` 字段为准。如果未来因 L2 证据过期或 L3 未放行显示 `BLOCKED`，表示真实写入不可启动，不表示自动化工作台本地功能失败。
 
 自动化或管理摘要读取 `final-delivery-check.json` 时，不能只读取 `ok`。当前 `ok: true` 只代表 `okScope` 所声明的范围通过；若 `okScope` 为 `local_workbench_only` 且 `realDxmMutationAllowed` 为 `false`，结论仍然是自动化工作台可交付、真实 DXM 写入不可启动。
 
@@ -300,11 +300,11 @@ scripts\final-delivery-check.bat --help
 ## 下一步重点
 
 1. 保持 `config/l2_readonly_allowlist.json` 的最小只读范围；继续禁止写方法、WebSocket、EventSource 和 action 端点。
-2. 将 2026-06-11 受控单商品只保存证据和 READY 结论纳入交付归档，并在源码发布包前运行 `scripts\final-delivery-check.bat -RequireCleanWorktree`。
+2. 将 2026-06-15 受控单商品只保存 READY 结论纳入交付归档，并在源码发布包前运行 `scripts\final-delivery-check.bat -RequireCleanWorktree`。
 3. 若要扩大到认领或批量保存，必须为对应范围重新建立只读页面检查、人工批准和保存/回滚证据，不复用单商品只保存结论。
 4. 批量、无人值守和发布必须单独设计门禁、人工批准和回滚策略。
 
-免安装版快速使用说明见 `docs/product/免安装版快速使用说明-20260611.md`。历史 clean worktree 验收记录见 `docs/product/最终交付验收记录-20260603.md`；当前分支已通过本地工作台和受控 single_save READY 自检，源码包发布前仍必须重新跑 clean worktree 最终自检。
+免安装版快速使用说明见 `docs/product/免安装版快速使用说明-20260615.md`。当前 clean worktree 验收记录见 `docs/product/最终交付验收记录-20260615.md`；当前分支已通过本地工作台、portable 桌面 smoke 和受控 single_save READY 自检，源码包发布前仍必须重新跑 clean worktree 最终自检。
 
 ---
 
