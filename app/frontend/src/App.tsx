@@ -269,7 +269,7 @@ export default function App() {
         kind: 'degraded',
         title: taskMissing ? '当前任务需要重新选择' : '工作台服务连接异常',
         detail: taskMissing
-          ? '上次选择的任务已不存在或已归档。请在任务中心重新选择或创建单商品只保存任务；真实保存前仍会重新校验。'
+        ? '上次选择的任务已不存在或已归档。请在“当前任务”重新选择或创建单商品只保存任务；真实保存前仍会重新校验。'
           : humanWorkspaceFetchError(firstFailure?.message),
       })
     } else {
@@ -560,7 +560,7 @@ export default function App() {
         return
       }
       const firstProduct = products[0]
-      const modeLabel = request.mode === 'probe' ? '只读页面检查' : '单商品只保存'
+      const modeLabel = request.mode === 'probe' ? '真实只读检查' : '单商品只保存'
       const task = await postJson<Task>('/api/tasks', {
         name: `${modeLabel} - ${store.name} - ${products.length} 件商品`,
         store_id: store.id,
@@ -704,7 +704,7 @@ export default function App() {
       return
     }
     if (!dxmLoginDraft.password) {
-      setOperationError('请先在页面内填写店小秘密码；密码只用于本次真实登录请求，不写入配置中心。')
+      setOperationError('请先在页面内填写店小秘密码；密码只用于本次真实登录请求，不写入编辑页配置。')
       setActiveSection('guide')
       return
     }
@@ -884,7 +884,7 @@ export default function App() {
     }
     const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
     if (l2Gate?.status !== 'passed') {
-      const message = `真实只读检查未通过，Agent 执行浏览器不可启动：${l2Gate?.detail ?? '真实页面只读检查未通过'}`
+      const message = `真实只读检查未通过，Agent 执行浏览器不可启动：${l2Gate?.detail ?? '真实页面检查未通过'}`
       setAgentConsoleError(message)
       setOperationError(message)
       setActiveSection('console')
@@ -1234,7 +1234,7 @@ function runtimeControlSuccessMessage(action: RuntimeControlAction) {
     mark_real_task_manual_review: '已将真实写入任务转入人工复核。不会取消真实浏览器进程，请查看任务日志确认现场。',
     restart_backend: '已提交后端重启请求，请查看启动器日志。',
     restart_frontend: '已提交前端重启请求，请查看启动器日志。',
-    run_l2_readonly_probe: '已启动真实只读检查，请在执行控制台查看实时日志。',
+    run_l2_readonly_probe: '已启动真实只读检查，请在真实浏览器控制台查看实时日志。',
   } as Record<RuntimeControlAction, string>)[action]
 }
 
@@ -1245,10 +1245,10 @@ function humanOperationError(message: string) {
     return `真实只读检查组件未安装完整，请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${checkedPathHint(message)}`
   }
   if (message.includes('L2 readonly probe runner is missing')) {
-    return `真实只读检查组件未安装完整：缺少只读页面检查启动器。请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
+    return `真实只读检查组件未安装完整：缺少真实只读检查启动器。请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
   }
   if (message.includes('L2 readonly probe script is missing')) {
-    return `真实只读检查组件未安装完整：缺少只读页面检查脚本。请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
+    return `真实只读检查组件未安装完整：缺少真实只读检查脚本。请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
   }
   return message
 }
@@ -1264,7 +1264,7 @@ function humanWorkspaceFetchError(message?: string) {
   ) {
     return '暂时无法读取完整任务数据。请重新打开 DXM Agent Console 免安装版；开发模式请确认后端服务正在运行。真实保存不会启动或发布。'
   }
-  return '暂时无法读取完整任务数据。请查看执行控制台日志；系统不会用本地演示结果替代真实保存。'
+  return '暂时无法读取完整任务数据。请查看真实浏览器控制台日志；系统不会用本地演示结果替代真实保存。'
 }
 
 function humanRuntimeStatusError(message: string) {
@@ -1319,7 +1319,7 @@ function humanDxmLoginError(message: string) {
 
 function humanAgentConsoleError(message: string) {
   const normalized = message.toLowerCase()
-  const commonTail = '执行浏览器只会在预检和人工确认通过后接入真实店小秘页面；不会自动发布。'
+  const commonTail = '执行浏览器只会在真实只读检查和人工确认通过后接入真实店小秘页面；不会自动发布。'
   if (
     message.includes('Internal Server Error')
     || normalized.includes('post /api/agent-console/start failed')
@@ -1331,7 +1331,7 @@ function humanAgentConsoleError(message: string) {
     || message.includes('Target page, context or browser has been closed')
     || normalized.includes('context or browser has been closed')
   ) {
-    return `真实执行浏览器已关闭或启动后立即退出。请保留新打开的真实浏览器窗口，或关闭旧进程后重新打开执行控制台。${commonTail}`
+    return `真实执行浏览器已关闭或启动后立即退出。请保留新打开的真实浏览器窗口，或关闭旧进程后重新打开真实浏览器控制台。${commonTail}`
   }
   if (
     normalized.includes('user data directory is already in use')
@@ -1345,7 +1345,7 @@ function humanAgentConsoleError(message: string) {
     || normalized.includes('playwright')
     || normalized.includes('chromium')
   ) {
-    return `真实执行浏览器依赖缺失或不可启动。请重新打开完整免安装目录版，并查看执行控制台实时日志。${commonTail}`
+    return `真实执行浏览器依赖缺失或不可启动。请重新打开完整免安装目录版，并查看真实浏览器控制台实时日志。${commonTail}`
   }
   return message
 }
@@ -1404,13 +1404,13 @@ function pickDefaultTaskId(deliveryWorkspace: DeliveryWorkspaceResponse | null, 
   const deliveryTask = typeof deliveryTaskId === 'number'
     ? tasks.find((task) => task.id === deliveryTaskId)
     : null
-  if (deliveryTask && deliveryTask.status !== 'completed') {
+  if (deliveryTask && isDefaultSelectableSingleSaveTask(deliveryTask) && deliveryTask.status !== 'completed') {
     return deliveryTaskId
   }
   return tasks.find(isActionableSingleSaveTask)?.id
-    ?? deliveryTask?.id
+    ?? (deliveryTask && isDefaultSelectableSingleSaveTask(deliveryTask) ? deliveryTask.id : undefined)
     ?? tasks.find((task) => task.mode === 'single_save')?.id
-    ?? tasks[0]?.id
+    ?? tasks.find(isSafeDefaultFallbackTask)?.id
     ?? null
 }
 
@@ -1418,10 +1418,18 @@ function isActionableSingleSaveTask(task: Task) {
   return task.mode === 'single_save' && !['completed', 'cancelled', 'archived'].includes(String(task.status || ''))
 }
 
+function isDefaultSelectableSingleSaveTask(task: Task) {
+  return task.mode === 'single_save' && !['cancelled', 'archived'].includes(String(task.status || ''))
+}
+
+function isSafeDefaultFallbackTask(task: Task) {
+  return !UNRELEASED_REAL_DXM_MUTATION_MODES.has(String(task.mode))
+}
+
 function buildAgentConsoleHudStep(workspace: DeliveryWorkspace, selectedTask: Task): AgentConsoleSession['hud'] {
   const storeName = String(selectedTask.payload.store_name ?? workspace.stores[0]?.name ?? '等待真实店铺')
   return {
-    title: '只读页面检查待命',
+    title: '真实只读检查待命',
     state: 'READONLY_DIAGNOSTIC',
     action: '打开真实店小秘浏览器，不启动保存',
     next_step: '复核只读证据和人工确认',

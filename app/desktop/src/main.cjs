@@ -35,6 +35,13 @@ function getQaCredentialSmokePath() {
   return outputPath || null
 }
 
+function getQaVisibleSmokePath() {
+  const arg = process.argv.find((value) => value.startsWith('--qa-visible-smoke='))
+  if (!arg) return null
+  const outputPath = arg.slice('--qa-visible-smoke='.length).trim()
+  return outputPath || null
+}
+
 function getQaUserDataDir() {
   const arg = process.argv.find((value) => value.startsWith('--qa-user-data-dir='))
   if (!arg) return null
@@ -433,7 +440,9 @@ async function createWindow() {
     appendDesktopLog(`Desktop app starting packaged=${app.isPackaged} resourcesPath=${process.resourcesPath}`)
     const qaCapturePath = getQaCapturePath()
     const qaCredentialSmokePath = getQaCredentialSmokePath()
+    const qaVisibleSmokePath = getQaVisibleSmokePath()
     runtimeInfo.qaCapturePath = qaCapturePath
+    runtimeInfo.qaVisibleSmokePath = qaVisibleSmokePath
     const repoRoot = resolveRepoRoot()
     runtimeInfo.repoRoot = repoRoot
     const port = await findFreePort(8000)
@@ -482,6 +491,28 @@ async function createWindow() {
       const image = await mainWindow.webContents.capturePage()
       fs.writeFileSync(qaCapturePath, image.toPNG())
       appendDesktopLog(`QA capture written: ${qaCapturePath}`)
+      app.quit()
+    }
+    if (qaVisibleSmokePath) {
+      await new Promise((resolve) => setTimeout(resolve, 900))
+      const result = {
+        ok: Boolean(mainWindow && mainWindow.isVisible()),
+        windowVisible: Boolean(mainWindow && mainWindow.isVisible()),
+        windowFocused: Boolean(mainWindow && mainWindow.isFocused()),
+        windowBounds: mainWindow ? mainWindow.getBounds() : null,
+        backendPort: runtimeInfo.backendPort,
+        apiBase: runtimeInfo.apiBase,
+        frontendPath: runtimeInfo.frontendPath,
+        desktopLogPath: runtimeInfo.desktopLogPath,
+        backendLogPath: runtimeInfo.backendLogPath,
+        checkedAt: new Date().toISOString(),
+      }
+      fs.mkdirSync(path.dirname(qaVisibleSmokePath), { recursive: true })
+      fs.writeFileSync(qaVisibleSmokePath, JSON.stringify(result, null, 2))
+      appendDesktopLog(`QA visible smoke written: ${qaVisibleSmokePath} visible=${result.windowVisible}`)
+      if (!result.ok) {
+        app.exit(1)
+      }
       app.quit()
     }
   } catch (error) {

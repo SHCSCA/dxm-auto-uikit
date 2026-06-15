@@ -76,7 +76,10 @@ def test_desktop_main_starts_backend_hidden_and_loads_frontend_with_api_base():
     assert "will-quit" in source
     assert "function getQaCapturePath()" in source
     assert "--qa-capture=" in source
+    assert "--qa-visible-smoke=" in source
     assert "show: !qaCapturePath" in source
+    assert "windowVisible: Boolean(mainWindow && mainWindow.isVisible())" in source
+    assert "QA visible smoke written" in source
     assert "webContents.capturePage()" in source
 
 

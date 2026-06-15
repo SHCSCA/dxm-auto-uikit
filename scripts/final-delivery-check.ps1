@@ -28,6 +28,8 @@ $packagedDesktopSmokeUserDataDir = Join-Path $absoluteOutDir "packaged-desktop-s
 $portableDesktopSmokeCapturePath = Join-Path $absoluteOutDir "portable-desktop-smoke.png"
 $portableDesktopSmokeUserDataDir = Join-Path $absoluteOutDir "portable-desktop-smoke-user-data"
 $packagedDesktopCredentialSmokePath = Join-Path $absoluteOutDir "packaged-desktop-credential-smoke.json"
+$packagedDesktopVisibleSmokePath = Join-Path $absoluteOutDir "packaged-desktop-visible-smoke.json"
+$packagedDesktopVisibleSmokeUserDataDir = Join-Path $absoluteOutDir "packaged-desktop-visible-smoke-user-data"
 $l2AllowlistReviewTemplateMarkdownPath = Join-Path $absoluteOutDir "l2-allowlist-review-template.md"
 $l2AllowlistReviewTemplateJsonPath = Join-Path $absoluteOutDir "l2-allowlist-review-template.json"
 $qaProcesses = @()
@@ -888,7 +890,11 @@ $packagedDesktopSmokeArgs = @(
   "-PortableSmokeUserDataDir",
   $portableDesktopSmokeUserDataDir,
   "-CredentialSmokePath",
-  $packagedDesktopCredentialSmokePath
+  $packagedDesktopCredentialSmokePath,
+  "-VisibleSmokePath",
+  $packagedDesktopVisibleSmokePath,
+  "-VisibleSmokeUserDataDir",
+  $packagedDesktopVisibleSmokeUserDataDir
 )
 if ($CheckPortableDesktop) {
   $packagedDesktopSmokeArgs += "-CheckPortable"
@@ -1234,6 +1240,8 @@ $result = [pscustomobject]@{
     portableDesktopSmokeCapture = $portableDesktopSmokeCapturePath
     portableDesktopSmokeUserDataDir = $portableDesktopSmokeUserDataDir
     packagedDesktopCredentialSmoke = $packagedDesktopCredentialSmokePath
+    packagedDesktopVisibleSmoke = $packagedDesktopVisibleSmokePath
+    packagedDesktopVisibleSmokeUserDataDir = $packagedDesktopVisibleSmokeUserDataDir
     l2AllowlistReviewTemplateMarkdown = $l2AllowlistReviewTemplateMarkdownPath
     l2AllowlistReviewTemplateJson = $l2AllowlistReviewTemplateJsonPath
     l1SelectorReplayDir = $l1ReplayOutDir
@@ -1455,6 +1463,8 @@ $summaryLines.Add("- Packaged desktop smoke: $(if ($packagedDesktopSmokeCommand 
 $summaryLines.Add("- Portable desktop smoke: $(if ($CheckPortableDesktop) { "ENABLED" } else { "SKIPPED" })")
 $summaryLines.Add("- Packaged desktop capture: $($result.artifacts.packagedDesktopSmokeCapture)")
 $summaryLines.Add("- Packaged desktop user data: $($result.artifacts.packagedDesktopSmokeUserDataDir)")
+$summaryLines.Add("- Packaged visible window smoke: $($result.artifacts.packagedDesktopVisibleSmoke)")
+$summaryLines.Add("- Packaged visible window user data: $($result.artifacts.packagedDesktopVisibleSmokeUserDataDir)")
 $summaryLines.Add("- Portable desktop capture: $($result.artifacts.portableDesktopSmokeCapture)")
 $summaryLines.Add("- Portable desktop user data: $($result.artifacts.portableDesktopSmokeUserDataDir)")
 $summaryLines.Add("- Packaged credential smoke: $($result.artifacts.packagedDesktopCredentialSmoke)")
@@ -1479,6 +1489,8 @@ $summaryLines.Add("## Artifacts")
 $summaryLines.Add("- JSON: $jsonPath")
 $summaryLines.Add("- Packaged desktop smoke capture: $($result.artifacts.packagedDesktopSmokeCapture)")
 $summaryLines.Add("- Packaged desktop user data: $($result.artifacts.packagedDesktopSmokeUserDataDir)")
+$summaryLines.Add("- Packaged visible window smoke: $($result.artifacts.packagedDesktopVisibleSmoke)")
+$summaryLines.Add("- Packaged visible window user data: $($result.artifacts.packagedDesktopVisibleSmokeUserDataDir)")
 $summaryLines.Add("- Portable desktop smoke capture: $($result.artifacts.portableDesktopSmokeCapture)")
 $summaryLines.Add("- Portable desktop user data: $($result.artifacts.portableDesktopSmokeUserDataDir)")
 $summaryLines.Add("- Packaged credential smoke: $($result.artifacts.packagedDesktopCredentialSmoke)")

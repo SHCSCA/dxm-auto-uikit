@@ -245,16 +245,16 @@ export function buildMockWorkspace(): DeliveryWorkspace {
     },
   }]
   const logs: LogItem[] = [
-    { id: 1, task_id: 19, job_id: 31, level: 'info', message: '配置已完成预检，等待 L2/L3 门禁复核', context: {}, created_at: '2026-05-22T09:00:00+08:00' },
+    { id: 1, task_id: 19, job_id: 31, level: 'info', message: '配置检查已完成，等待真实只读检查和人工确认复核', context: {}, created_at: '2026-05-22T09:00:00+08:00' },
     { id: 2, task_id: 19, job_id: 31, level: 'warning', message: '后端 /api/delivery/workspace 未接入时，前端使用工作台默认数据', context: {}, created_at: '2026-05-22T09:01:00+08:00' },
   ]
   const evidences: Evidence[] = [
-    { id: 676, task_id: 19, job_id: 31, evidence_type: 'state_snapshot', file_path: 'data/screenshots/v1_task_19_job_31_PRECHECK_CONFIG.txt', meta: { grade: 'A', title: '配置预检快照', acceptance: '可追溯到模板与店铺配置' }, created_at: '2026-05-22T01:55:49Z' },
+    { id: 676, task_id: 19, job_id: 31, evidence_type: 'state_snapshot', file_path: 'data/screenshots/v1_task_19_job_31_PRECHECK_CONFIG.txt', meta: { grade: 'A', title: '配置检查快照', acceptance: '可追溯到模板与店铺配置' }, created_at: '2026-05-22T01:55:49Z' },
     { id: 677, task_id: 19, job_id: 31, evidence_type: 'workflow_action', file_path: '/artifacts/screenshots/dianxiaomi_save_only.png', meta: { grade: 'B', title: '本地演示截图占位', acceptance: '仅用于降级页面布局，不作为真实 DXM 保存证据' }, created_at: '2026-05-22T01:56:56Z' },
     { id: 680, task_id: 19, job_id: 31, evidence_type: 'workflow_action', file_path: '/artifacts/screenshots/dianxiaomi_verify_not_published.png', meta: { grade: 'C', title: '演示结果隔离核验', acceptance: '缺少真实 L3 金丝雀与独立审计人复核记录' }, created_at: '2026-05-22T01:57:14Z' },
   ]
   const exceptions: ExceptionItem[] = [
-    { id: 1, task_id: 19, job_id: 31, error_code: 'GAP-A1', field_domain: 'evidence', title: 'A级证据仍缺浏览器会话指纹', detail: '保存截图已有，但没有浏览器环境、账号、批次三者的同屏绑定。', suggestion: '报告中心需要补充会话摘要和截图哈希。', status: 'open' },
+    { id: 1, task_id: 19, job_id: 31, error_code: 'GAP-A1', field_domain: 'evidence', title: 'A级证据仍缺浏览器会话指纹', detail: '保存截图已有，但没有浏览器环境、账号、批次三者的同屏绑定。', suggestion: '报告与证据需要补充会话摘要和截图哈希。', status: 'open' },
     { id: 2, task_id: 19, job_id: 31, error_code: 'GAP-B2', field_domain: 'template_trace', title: '引用模板命中需要逐段回显', detail: '已展示 dxm_reference_templates 映射，但真实页面选择结果仍需逐段记录。', suggestion: '把 attribute_info、freight、service 等结果写入报告摘要。', status: 'open' },
   ]
   const reports: Report[] = [{
@@ -269,7 +269,7 @@ export function buildMockWorkspace(): DeliveryWorkspace {
     published: false,
   }]
   const deliverySteps: RunStep[] = [
-    { state: 'PRECHECK_CONFIG', label: '配置预检', field_domain: 'config', status: 'completed', has_evidence: true, evidence_count: 1 },
+    { state: 'PRECHECK_CONFIG', label: '配置检查', field_domain: 'config', status: 'completed', has_evidence: true, evidence_count: 1 },
     { state: 'FILL_MEDIA', label: '图片与营销图', field_domain: 'media', status: 'pending', has_evidence: false, evidence_count: 0 },
     { state: 'L3_SAVE_GATE', label: 'L3 保存门禁', field_domain: 'save', status: 'pending', has_evidence: false, evidence_count: 0 },
     { state: 'VERIFY_NOT_PUBLISHED', label: '未发布校验', field_domain: 'publish_guard', status: 'pending', has_evidence: false, evidence_count: 0 },
@@ -756,7 +756,7 @@ function buildAcceptanceGaps(
       title: '缺少可交付验收报告',
       severity: 'risk' as const,
       owner: 'report',
-      detail: '报告中心需要汇总配置命中、执行步骤、证据等级和未完成缺口。',
+      detail: '报告与证据需要汇总配置命中、执行步骤、证据等级和未完成缺口。',
       evidenceLevel: 'B' as const,
     }] : []),
     {

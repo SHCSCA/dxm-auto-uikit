@@ -268,6 +268,7 @@ def test_final_delivery_check_captures_final_report_center_after_final_json_writ
     assert "finalReportCenterQaTextVisible" in qa_script
     assert "hasExpectedPostFinalReportQa" in qa_script[qa_script.index("assertions: {"):qa_script.index("finalReportApiIsFinal")]
     assert "'最终报告中心 QA '" not in qa_script
+    assert "\\u6700\\u7ec8\\u62a5\\u544a\\u4e0e\\u8bc1\\u636e QA" in qa_script
     assert "finalReportCenterScreenshotDomPath" in qa_script
     assert "expectedLockedEvidence" in qa_script
     assert "finalReportExpectedLockedEvidenceRows" in qa_script
@@ -341,13 +342,18 @@ def test_final_delivery_check_includes_packaged_desktop_smoke_in_delivery_gate()
     assert "[string]$CapturePath" in smoke_script
     assert "[string]$PortableCapturePath" in smoke_script
     assert "[string]$CredentialSmokePath" in smoke_script
+    assert "[string]$VisibleSmokePath" in smoke_script
+    assert "[string]$VisibleSmokeUserDataDir" in smoke_script
     assert "[string]$PortableSmokeUserDataDir" in smoke_script
     assert "[Console]::Error.WriteLine([string]$_)" in smoke_script
     assert "Resolve-SmokeArtifactPath" in smoke_script
     assert "$CapturePath = Resolve-SmokeArtifactPath -Path $CapturePath" in smoke_script
     assert "$PortableCapturePath = Resolve-SmokeArtifactPath -Path $PortableCapturePath" in smoke_script
     assert "$CredentialSmokePath = Resolve-SmokeArtifactPath -Path $CredentialSmokePath" in smoke_script
+    assert "$VisibleSmokePath = Resolve-SmokeArtifactPath -Path $VisibleSmokePath" in smoke_script
     assert 'Get-DesktopSmokeLog -UserDataDir $PortableSmokeUserDataDir' in smoke_script
+    assert '"--qa-visible-smoke=$VisibleSmokePath"' in smoke_script
+    assert 'Assert-VisibleSmoke -Path $VisibleSmokePath' in smoke_script
     assert '"--qa-user-data-dir=$PortableSmokeUserDataDir"' in smoke_script
     assert "$packagedDesktopSmokeArgs" in script
     assert '$packagedDesktopSmokeArgs += "-CheckPortable"' in script
@@ -379,6 +385,10 @@ def test_final_delivery_check_includes_packaged_desktop_smoke_in_delivery_gate()
     assert "$portableDesktopSmokeUserDataDir" in packaged_smoke_args
     assert '"-CredentialSmokePath"' in packaged_smoke_args
     assert "$packagedDesktopCredentialSmokePath" in packaged_smoke_args
+    assert '"-VisibleSmokePath"' in packaged_smoke_args
+    assert "$packagedDesktopVisibleSmokePath" in packaged_smoke_args
+    assert '"-VisibleSmokeUserDataDir"' in packaged_smoke_args
+    assert "$packagedDesktopVisibleSmokeUserDataDir" in packaged_smoke_args
     assert "checkPortableDesktop" in script
     assert "packagedDesktopSmokeCapture" in script
     assert "packagedDesktopSmokeUserDataDir" in script
@@ -393,6 +403,7 @@ def test_final_delivery_check_includes_packaged_desktop_smoke_in_delivery_gate()
     assert "Portable desktop capture:" in script
     assert "Portable desktop user data:" in script
     assert "Packaged credential smoke:" in script
+    assert "Packaged visible window smoke:" in script
 
     build = script.index('-Name "Frontend production build"')
     desktop_build = script.index('-Name "Desktop production build"')

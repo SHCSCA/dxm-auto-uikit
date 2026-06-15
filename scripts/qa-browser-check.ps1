@@ -497,9 +497,10 @@ async function ensureRealMutationTask() {
     : await postJson('/api/stores/connect', { name: 'Dang Kang', platform: 'AliExpress' });
   let products = await fetchJson('/api/products');
   if (!Array.isArray(products)) products = [];
-  if (!products.length) {
-    products = await postJson('/api/products/import', { rows: [{
-      title: 'QA guarded product',
+  let qaProduct = products.find(item => item?.title === 'QA guarded single-save product') || null;
+  if (!qaProduct) {
+    const imported = await postJson('/api/products/import', { rows: [{
+      title: 'QA guarded single-save product',
       source: 'qa',
       category_name: 'QA_CATEGORY',
       price: 7.01,
@@ -508,21 +509,28 @@ async function ensureRealMutationTask() {
       image_count: 1,
       image: 'qa-product.jpg',
     }] });
+    qaProduct = Array.isArray(imported)
+      ? imported.find(item => item?.title === 'QA guarded single-save product') || imported[0]
+      : imported;
   }
   const existingTasks = await fetchJson('/api/tasks').catch(() => []);
-  const reusableTask = findReusableQaTask(existingTasks, 'QA local gated single_save fixture', 'single_save');
+  const reusableTask = Array.isArray(existingTasks)
+    ? existingTasks.find(task => task?.name === 'QA local gated single_save one product fixture'
+      && task?.mode === 'single_save'
+      && Number(task?.total_jobs) === 1)
+    : null;
   if (reusableTask) return reusableTask;
   return await postJson('/api/tasks', {
-    name: 'QA local gated single_save fixture',
+    name: 'QA local gated single_save one product fixture',
     store_id: store.id,
     mode: 'single_save',
     publish_scene: 'SMT_SEMI_MANAGED_SAVE_ONLY',
-    product_ids: products.map(item => item.id),
+    product_ids: [qaProduct.id],
     claim_mark: 'QA_CLAIM',
     payload: {
       store_name: store.name,
-      category_name: products[0]?.category_name ?? 'QA_CATEGORY',
-      image: products[0]?.image ?? 'qa-product.jpg',
+      category_name: qaProduct?.category_name ?? 'QA_CATEGORY',
+      image: qaProduct?.image ?? 'qa-product.jpg',
     },
   });
 }
@@ -707,7 +715,7 @@ const text = {
   sourceAcceptanceCommand: '\u6e90\u7801\u5305\u9a8c\u6536\u547d\u4ee4',
   localWorkbenchLabel: '\u81ea\u52a8\u5316\u5de5\u4f5c\u53f0',
   browserQaLabel: '\u6d4f\u89c8\u5668 QA',
-  finalReportCenterQa: '\u6700\u7ec8\u62a5\u544a\u4e2d\u5fc3 QA',
+  finalReportCenterQa: '\u6700\u7ec8\u62a5\u544a\u4e0e\u8bc1\u636e QA',
   sourcePackageLabel: '\u6e90\u7801\u5305\u9a8c\u6536',
   sourcePackageNotRequired: '\u6e90\u7801\u5305\u9a8c\u6536 NOT_REQUIRED',
   sourcePackageNotRequiredCopy: '\u9ed8\u8ba4\u672c\u5730\u9a8c\u6536\u4e0d\u8981\u6c42\u6e90\u7801\u5305 clean',
@@ -987,7 +995,9 @@ const defaultCurrentTask = defaultWorkspacePayload?.current_task || null;
 const defaultWorkspaceTasks = Array.isArray(defaultWorkspacePayload?.tasks) ? defaultWorkspacePayload.tasks : [];
 const defaultCurrentTaskId = defaultCurrentTask?.id ?? null;
 const defaultCurrentTaskName = String(defaultCurrentTask?.name || '');
+const defaultCurrentTaskMode = String(defaultCurrentTask?.mode || '');
 const defaultCurrentTaskCompleted = defaultCurrentTask?.status === 'completed';
+const defaultCurrentTaskUnreleased = ['claim_only', 'batch_save'].includes(defaultCurrentTaskMode);
 const defaultActionableSingleSaveTask = defaultWorkspaceTasks.find(task =>
   task?.mode === 'single_save' && !['completed', 'cancelled', 'archived'].includes(String(task?.status || ''))
 ) || null;
@@ -999,6 +1009,8 @@ const defaultCurrentTaskText = await bodyText();
 const defaultTaskSelectionState = {
   apiCurrentTaskId: defaultCurrentTaskId,
   apiCurrentTaskName: defaultCurrentTaskName,
+  apiCurrentTaskMode: defaultCurrentTaskMode,
+  apiCurrentTaskUnreleased: defaultCurrentTaskUnreleased,
   deliveryCurrentTaskCompleted: defaultCurrentTaskCompleted,
   actionableSingleSaveTaskId: defaultActionableSingleSaveTask?.id ?? null,
   expectedCurrentTaskMarker: defaultCurrentTaskMarker,
@@ -1014,7 +1026,6 @@ const defaultTaskSelectionState = {
     || defaultCurrentTaskText.includes(defaultActionableTaskAlternateMarker)
   )),
   avoidsLatestUnreleasedDefault: !unreleasedRealModeTask?.id
-    || defaultCurrentTaskId === unreleasedRealModeTask.id
     || !defaultCurrentTaskText.includes(text.currentTaskPrefix + unreleasedRealModeTask.id),
 };
 const clickedConfig = await clickSelector('[data-section="config"]') || await clickText(text.config);
@@ -1059,7 +1070,6 @@ defaultTaskSelectionState.usesActionableSingleSaveWhenCurrentCompleted = Boolean
   || defaultCurrentTaskText.includes(defaultActionableTaskAlternateMarker) || taskDefaultText.includes(defaultActionableTaskAlternateMarker)
 ));
 defaultTaskSelectionState.avoidsLatestUnreleasedDefault = !unreleasedRealModeTask?.id
-  || defaultCurrentTaskId === unreleasedRealModeTask.id
   || !taskDefaultText.includes(text.currentTaskPrefix + unreleasedRealModeTask.id);
 const taskDrawerState = await evalValue('(() => { const support = document.querySelector(".task-support-drawer"); const create = document.querySelector(".task-create-drawer"); const release = document.querySelector(".task-release-drawer"); const history = document.querySelector(".task-history-drawer"); return { hasCurrentPanel: Boolean(document.querySelector(".task-current-panel")), hasSupportDrawer: Boolean(support), supportOpen: support ? support.open === true : null, hasCreateDrawer: Boolean(create), createOpen: create ? create.open === true : null, hasReleaseDrawer: Boolean(release), releaseOpen: release ? release.open === true : null, hasHistoryDrawer: Boolean(history), historyOpen: history ? history.open === true : null, taskHistoryDrawer: Boolean(history), releaseBoundaryDrawer: Boolean(release), defaultText: document.body.innerText || "" }; })()');
 const taskQuickActionsState = await evalValue('(() => { const quick = document.querySelector(".task-quick-actions"); const create = document.querySelector("[data-testid=\\"task-quick-create-single-save\\"]"); const quickRect = quick ? quick.getBoundingClientRect() : null; const createRect = create ? create.getBoundingClientRect() : null; return { hasQuickActions: Boolean(quick), quickText: quick ? (quick.innerText || quick.textContent || "") : "", quickInFirstViewport: Boolean(quickRect && quickRect.top >= 0 && quickRect.top < window.innerHeight && quickRect.height > 0), createVisible: Boolean(createRect && createRect.width > 0 && createRect.height > 0 && createRect.top >= 0 && createRect.top < window.innerHeight), createDisabled: create instanceof HTMLButtonElement ? create.disabled : null }; })()');

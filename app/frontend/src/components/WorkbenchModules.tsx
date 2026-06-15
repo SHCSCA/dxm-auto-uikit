@@ -215,12 +215,12 @@ export function Dashboard({ workspace, selectedTask }: CommonProps) {
   const nextAction = selectedTask?.status === 'completed'
     ? '查看报告'
     : !selectedTask
-    ? '去任务中心准备数据'
+    ? '去“当前任务”准备数据'
     : l2Gate?.status !== 'passed'
-      ? '查看只读检查'
+      ? '查看真实只读检查'
       : requiresManualApproval(selectedTask)
         ? '等待人工批准'
-        : '打开执行控制台'
+        : '打开真实浏览器控制台'
 
   return (
     <section className="dashboard-grid" aria-label="Dashboard">
@@ -251,7 +251,7 @@ export function Dashboard({ workspace, selectedTask }: CommonProps) {
         <ModuleHead title="当前状态" meta={realWriteReady ? '可申请单商品只保存' : '等待人工确认'} />
         <div className="check-list">
           <CheckRow label="真实店铺/商品已读取" ok={workspace.stores.length > 0 && workspace.products.length > 0} />
-          <CheckRow label="只读页面检查通过" ok={l2Gate?.status === 'passed'} />
+          <CheckRow label="真实只读检查通过" ok={l2Gate?.status === 'passed'} />
           <CheckRow label="仅单商品只保存放行" ok />
           <CheckRow label="发布入口隔离" ok={workspace.publishGuardState?.publish_allowed === false || workspace.publishGuardState?.safe === true} />
         </div>
@@ -276,7 +276,7 @@ function OperationGuide({ workspace, selectedTask }: CommonProps) {
   const steps = [
     { label: '配置店铺、类目、图片和半托管参数', ok: workspace.stores.length > 0 && workspace.products.length > 0 },
     { label: '选择单商品只保存任务', ok: selectedTask?.mode === 'single_save' },
-    { label: '确认只读页面检查通过', ok: l2Gate?.status === 'passed' },
+    { label: '确认真实只读检查通过', ok: l2Gate?.status === 'passed' },
     { label: '人工批准后启动真实浏览器保存', ok: l3Gate?.status === 'passed' || selectedTask?.status === 'completed' },
   ]
   return (
@@ -352,7 +352,7 @@ export function GuideCenter({
       done: selectedTaskCompleted || hasStore,
       detail: hasStore ? `当前店铺：${workspace.stores[0]?.name}` : '还没有可用店铺。',
       reason: hasStore ? '' : '请先创建或连接店铺。',
-      action: '去配置中心',
+      action: '去编辑页配置',
       onAction: onShowConfig,
     },
     {
@@ -361,7 +361,7 @@ export function GuideCenter({
       done: selectedTaskCompleted || hasProducts,
       detail: hasProducts ? `商品队列 ${workspace.products.length} 个。` : '还没有待处理商品。',
       reason: hasProducts ? '' : '请先导入真实商品或创建任务商品。',
-      action: '去任务中心',
+      action: '去当前任务',
       onAction: onShowTasks,
     },
     {
@@ -392,8 +392,8 @@ export function GuideCenter({
         ? '当前任务已完成，继续查看报告与证据。'
         : canRequestSave
           ? '可以申请只保存一个商品，仍不会发布。'
-          : '配置、任务模式、任务状态和只读检查通过后才可申请。',
-      reason: selectedTaskCompleted || canRequestSave ? '' : `任务 ${selectedTask ? humanTaskModeLabel(selectedTask.mode) : '未选择'} / 状态 ${selectedTask?.status ?? '未选择'} / 配置 ${configOk ? '完整' : '未完整'} / 只读检查 ${humanGateStateLabel(l2Gate?.status ?? 'not_run')}`,
+          : '配置、任务模式、任务状态和真实只读检查通过后才可申请。',
+      reason: selectedTaskCompleted || canRequestSave ? '' : `任务 ${selectedTask ? humanTaskModeLabel(selectedTask.mode) : '未选择'} / 状态 ${selectedTask?.status ?? '未选择'} / 配置 ${configOk ? '完整' : '未完整'} / 真实只读检查 ${humanGateStateLabel(l2Gate?.status ?? 'not_run')}`,
       action: selectedTaskCompleted ? '查看报告' : canRequestSave ? '申请并启动单商品只保存' : '选择任务',
       onAction: selectedTaskCompleted ? onShowReports : canRequestSave ? onStartTask : onShowTasks,
     },
@@ -401,7 +401,7 @@ export function GuideCenter({
       id: 'observe',
       title: '进入控制台操控真实浏览器',
       done: Boolean(runtimeStatus?.agentConsole?.active || selectedTask?.status === 'completed'),
-      detail: runtimeStatus?.agentConsole?.active ? '真实浏览器会话已接入控制台。' : '启动后在执行控制台查看会话状态、步骤、日志，并在需要时人工接管真实浏览器。',
+      detail: runtimeStatus?.agentConsole?.active ? '真实浏览器会话已接入控制台。' : '启动后在真实浏览器控制台查看会话状态、步骤、日志，并在需要时人工接管真实浏览器。',
       reason: runtimeStatus?.agentConsole?.active || selectedTask?.status === 'completed' ? '' : '等待任务启动后接入真实浏览器会话。',
       action: '进入控制台',
       onAction: onShowConsole,
@@ -414,7 +414,7 @@ export function GuideCenter({
       reason: reportReady ? '' : '报告、保存回包或未发布证明尚未齐全。',
       action: '查看报告',
       onAction: onShowReports,
-      secondaryAction: '查看证据中心',
+      secondaryAction: '查看保存证据',
       onSecondaryAction: onShowEvidence,
     },
   ].map((step, index, steps) => {
@@ -425,14 +425,14 @@ export function GuideCenter({
   const guidePathSummary = [
     { label: '登录', status: guideSteps[0]?.status ?? 'blocked' },
     { label: '配置', status: (guideSteps[1]?.done && guideSteps[2]?.done && guideSteps[3]?.done) ? 'done' : guideSteps.slice(1, 4).some((step) => step.status === 'current') ? 'current' : 'blocked' },
-    { label: '只读检查', status: guideSteps[4]?.status ?? 'blocked' },
+    { label: '真实只读检查', status: guideSteps[4]?.status ?? 'blocked' },
     { label: '真实保存', status: (guideSteps[5]?.done && guideSteps[6]?.done) ? 'done' : guideSteps.slice(5, 7).some((step) => step.status === 'current') ? 'current' : 'blocked' },
     { label: '报告', status: guideSteps[7]?.status ?? 'blocked' },
   ]
   const guideAutomationPath = [
     { title: '登录真实店小秘', detail: '打开独立浏览器，人工完成验证码和登录。', status: guidePathSummary[0]?.status ?? 'blocked' },
     { title: '核对编辑页配置', detail: '按店小秘编辑页分区确认本次任务取值。', status: guidePathSummary[1]?.status ?? 'blocked' },
-    { title: '只读页面检查', detail: '先验证采集页和采集箱真实可达，不写入。', status: guidePathSummary[2]?.status ?? 'blocked' },
+    { title: '真实只读检查', detail: '先验证采集页和采集箱真实可达，不写入。', status: guidePathSummary[2]?.status ?? 'blocked' },
     { title: '单商品只保存', detail: '人工批准后只保存一个商品，不发布。', status: guidePathSummary[3]?.status ?? 'blocked' },
     { title: '报告复核', detail: '检查保存回包、未发布证明和浏览器记录。', status: guidePathSummary[4]?.status ?? 'blocked' },
   ]
@@ -440,7 +440,7 @@ export function GuideCenter({
   const nextGuideStep = guideSteps.find((step) => !step.done) ?? guideSteps[guideSteps.length - 1]
   const guideHeroTitle = selectedTaskCompleted ? '当前任务已完成' : '从启动到真实保存'
   const guideHeroCopy = selectedTaskCompleted
-    ? '后续只需要复核报告、证据和真实浏览器记录；要处理新商品时再回到任务中心创建任务。'
+    ? '后续只需要复核报告、证据和真实浏览器记录；要处理新商品时再回到“当前任务”创建任务。'
     : '先处理当前最靠前的一步；完整流程放在下方详情里，避免你一进来就被所有状态淹没。'
   const guideFocusTitle = selectedTaskCompleted ? '完成后复核' : '现在只做这一步'
   const guideFocusMeta = selectedTaskCompleted
@@ -465,7 +465,7 @@ export function GuideCenter({
       onAction: onShowConfig,
     },
     {
-      label: '只读检查',
+      label: '真实只读检查',
       value: l2Passed ? '通过' : humanGateStateLabel(l2Gate?.status ?? 'not_run'),
       ok: l2Passed,
       action: l2Passed ? '任务' : '检查',
@@ -517,9 +517,9 @@ export function GuideCenter({
           ) : (
             <div className="guide-step__actions">
               {nextGuideStep.id === 'l2' && (
-                <div className="guide-precheck-brief guide-precheck-brief--compact" aria-label="预检说明">
+                <div className="guide-precheck-brief guide-precheck-brief--compact" aria-label="真实只读检查说明">
                   <span>
-                    <strong>预检会做</strong>
+                    <strong>真实只读检查会做</strong>
                     <small>{READONLY_PRECHECK_PURPOSE}</small>
                   </span>
                   <span>
@@ -635,10 +635,10 @@ export function GuideCenter({
             <details className="inline-disclosure">
               <summary>常用入口</summary>
               <div className="guide-quick-actions">
-                <button className="button button--quiet" type="button" onClick={onShowTasks}>任务中心</button>
-                <button className="button button--quiet" type="button" onClick={onShowConfig}>配置中心</button>
-                <button className="button button--quiet" type="button" onClick={onShowConsole}>执行控制台</button>
-                <button className="button button--quiet" type="button" onClick={onShowReports}>报告中心</button>
+                <button className="button button--quiet" type="button" onClick={onShowTasks}>当前任务</button>
+                <button className="button button--quiet" type="button" onClick={onShowConfig}>编辑页配置</button>
+                <button className="button button--quiet" type="button" onClick={onShowConsole}>真实浏览器控制台</button>
+                <button className="button button--quiet" type="button" onClick={onShowReports}>报告与证据</button>
               </div>
             </details>
           </div>
@@ -810,7 +810,7 @@ function humanDxmLoginState(runtimeStatus?: RuntimeStatus | null, runtimeStatusE
       tone: 'ok',
       label: status === 'workflow_navigation' ? 'DXM 已进入业务页' : 'DXM 已登录',
       detail: currentUrl ? `真实浏览器停留在：${currentUrl}` : '真实店小秘登录态已可用。',
-      next: '下一步：进入采集箱或运行只读页面检查。',
+      next: '下一步：进入采集箱或运行真实只读检查。',
     }
   }
   if (status === 'waiting_captcha') {
@@ -2168,9 +2168,9 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   }
 
   return (
-    <section className="module-layout" aria-label="配置中心">
+    <section className="module-layout" aria-label="编辑页配置">
       <div className="module-card span-3 config-focus-card">
-        <ModuleHead title="配置中心" meta={configPreviewError ? '配置检查接口异常' : configPreviewLoading ? '正在检查配置' : `${enabledTemplates.length} 个启用模板`} />
+        <ModuleHead title="编辑页配置" meta={configPreviewError ? '配置检查接口异常' : configPreviewLoading ? '正在检查配置' : `${enabledTemplates.length} 个启用模板`} />
         <div className="content-density-summary config-density-summary" data-config-density-summary>
           <div>
             <strong>{configPreviewError ? '配置检查接口不可用' : configPreview?.ok ? '配置已通过本次任务检查' : `先补：${nextConfigSection.title}`}</strong>
@@ -2186,7 +2186,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
             <span className={`status-pill ${configPreview?.ok ? 'ok' : 'warn'}`}>
               {configPreview?.ok ? '可用于当前任务' : `${incompleteGroups.length || sectionsBlockingStart.length} 个分区待补`}
             </span>
-            <small>{selectedTask ? `当前任务 #${selectedTask.id}` : '先到任务中心选择任务后，可保存为本次任务覆盖。'}</small>
+            <small>{selectedTask ? `当前任务 #${selectedTask.id}` : '先到“当前任务”选择任务后，可保存为本次任务覆盖。'}</small>
             {configPreview?.ok && advisoryGapCount > 0 && <small>{advisoryGapCount} 个分区有辅助字段待补</small>}
             <small>当前模板范围：{currentTemplateScopeLabel}</small>
           </div>
@@ -2200,7 +2200,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
           <div className="config-precheck-action__buttons">
             {!selectedTask && (
               <button className="button button--primary" type="button" onClick={onShowTasks}>
-                去任务中心选择任务
+                去当前任务选择任务
               </button>
             )}
             <button
@@ -2806,7 +2806,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
   const taskActionDiagnosis = {
     create: quickCreateSingleSaveDisabledReason || '可创建单商品只保存任务',
     history: historyTaskHint,
-    start: startDisabled ? startLabel : '可进入执行控制台启动',
+    start: startDisabled ? startLabel : '可进入真实浏览器控制台启动',
   }
 
   useEffect(() => {
@@ -2858,7 +2858,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
   }
 
   return (
-    <section className="module-layout" aria-label="任务中心">
+    <section className="module-layout" aria-label="当前任务">
       <div className="module-card span-1 task-quick-actions" aria-label="任务操作台">
         <ModuleHead title="任务操作台" meta="现在只做这三件事" />
         <div className="task-quick-actions__buttons">
@@ -2912,7 +2912,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
       </div>
 
       <div className="module-card span-2">
-        <ModuleHead title="任务中心" meta={showAllTasks ? `${workspace.tasks.length} 个批次` : `${visibleTaskRows.length} 个常用批次`} />
+        <ModuleHead title="当前任务" meta={showAllTasks ? `${workspace.tasks.length} 个批次` : `${visibleTaskRows.length} 个常用批次`} />
         <TaskCurrentActionPanel
           selectedTask={selectedTask}
           workspace={workspace}
@@ -2953,7 +2953,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
             <span>{configPreviewError ? `请先确认本机后端仍在运行，再重新检查配置：${configPreviewError}` : configPreviewTaskMismatch ? '请重新检查本次任务配置，避免沿用上一任务的配置结果。' : configPreviewLoading ? '正在读取当前任务的 DXM 编辑页字段来源。' : `请先补齐：${configPreviewForSelectedTask?.missing.slice(0, 6).join('、') || 'DXM 编辑页配置'}`}</span>
             {(configBlocksStart || configPreviewTaskMismatch) && (
               <div className="next-step-actions">
-                <button className="button button--secondary" type="button" onClick={onShowConfig}>去配置中心</button>
+                <button className="button button--secondary" type="button" onClick={onShowConfig}>去编辑页配置</button>
               </div>
             )}
           </div>
@@ -2977,8 +2977,8 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
         {!l2BlocksStart && l3BlocksStart && (
           <div className="gate-note gate-note--danger">
             <strong>真实保存已阻断</strong>
-            <span>{humanGateDetail(l2Gate?.detail) ?? '需要商品采集页与草稿箱页两个只读检查均通过。'}</span>
-            <span>只读检查未通过或人工确认未完成前，不启动认领、批量保存或真实保存。</span>
+            <span>{humanGateDetail(l2Gate?.detail) ?? '需要商品采集页与草稿箱页两个真实只读检查均通过。'}</span>
+            <span>真实只读检查未通过或人工确认未完成前，不启动认领、批量保存或真实保存。</span>
             <div className="next-step-actions">
               <button className="button button--secondary" type="button" onClick={onShowConsole}>查看阻断说明</button>
               <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看评审与检查计划</button>
@@ -2988,7 +2988,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
         )}
         {l2BlocksStart && l2DiagnosticSummaries.length > 0 && (
           <details className="inline-disclosure l2-block-summary">
-            <summary>只读检查诊断摘要</summary>
+            <summary>真实只读检查诊断摘要</summary>
             {l2DiagnosticSummaries.slice(0, 2).map((item) => (
               <span key={item.target}>{item.targetLabel}：{humanDiagnosticNavigation(item.navigation)}，{item.failedChecks.slice(0, 2).map(humanFailedCheckLabel).join(' / ') || '页面检查未满足'}。下一步：{item.nextAction}</span>
             ))}
@@ -3038,7 +3038,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
                 </label>
                 <div className="real-task-mode" role="radiogroup" aria-label="执行模式">
                   <button className={draftMode === 'probe' ? 'is-selected' : ''} type="button" onClick={() => setDraftMode('probe')} aria-pressed={draftMode === 'probe'}>
-                    <strong>只读页面检查</strong>
+                    <strong>真实只读检查</strong>
                     <span>不保存，只检查页面</span>
                   </button>
                   <button className={draftMode === 'single_save' ? 'is-selected' : ''} type="button" onClick={() => setDraftMode('single_save')} aria-pressed={draftMode === 'single_save'}>
@@ -3058,7 +3058,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
               )}
               {singleSaveProductCountInvalid && (
                 <div className="guard-note guard-note--warn">
-                  单商品只保存一次只能选择 1 个商品；当前已选 {selectedDraftProducts.length} 个。只读页面检查可多选，真实保存请保留 1 个商品。
+                  单商品只保存一次只能选择 1 个商品；当前已选 {selectedDraftProducts.length} 个。真实只读检查可多选，真实保存请保留 1 个商品。
                 </div>
               )}
               <div className="real-task-products" aria-label="选择商品">
@@ -3166,7 +3166,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
               <ModuleHead title="任务验收口径" meta="运营可读" />
               <div className="acceptance-strip">
                 <span>先验证配置完整性</span>
-                <span>只读检查通过后才允许人工确认保存</span>
+                <span>真实只读检查通过后才允许人工确认保存</span>
                 <span>保留截图与结构化证据</span>
                 <span>异常进入人工池</span>
                 <span>最后生成报告</span>
@@ -3177,7 +3177,7 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
             <summary>启动条件说明</summary>
             <div className="gate-decision">
               <DecisionRow
-                label="只读页面检查"
+                label="真实只读检查"
                 status={l2Gate?.status ?? 'not_run'}
                 detail="只有真实页面检查通过后，才允许进入真实保存启动判断；离线证据、部分通过、失败或未运行都不能启动真实保存。"
               />
@@ -3233,11 +3233,11 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
                   </div>
                   <article className="l2-diagnostic-card">
                     <div className="l2-diagnostic-card__title">
-                      <strong>只读检查未通过</strong>
+                      <strong>真实只读检查未通过</strong>
                       <span>{l2Gate?.status ?? 'not_run'}</span>
                     </div>
                     <ul>
-                      <li>{l2Gate?.detail ?? '缺少真实只读页面检查证据。'}</li>
+                      <li>{l2Gate?.detail ?? '缺少真实只读检查证据。'}</li>
                       <li>需要商品采集页与草稿箱页双目标真实通过后，才可进入保存判断。</li>
                     </ul>
                   </article>
@@ -3247,11 +3247,11 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
                 label="单商品只保存"
                 status={l3Gate?.status ?? 'not_run'}
                 detail={l3Gate?.status === 'blocked'
-                  ? '只读检查未通过或人工确认未完成前，不启动认领、批量保存或真实保存。'
+                  ? '真实只读检查未通过或人工确认未完成前，不启动认领、批量保存或真实保存。'
                   : '真实写操作仍需要人工批准令牌；待批准不等于已通过。'}
               />
               <div className="gate-note">
-                当前按钮策略：只读检查未通过或人工确认未完成时保持阻断；单商品只保存仍需后端人工批准；认领和批量保存当前未开放。
+                当前按钮策略：真实只读检查未通过或人工确认未完成时保持阻断；单商品只保存仍需后端人工批准；认领和批量保存当前未开放。
               </div>
             </div>
           </details>
@@ -3331,7 +3331,7 @@ export function ExecutionConsole({
   const compactCompletedReview = selectedTaskCompleted && !agentConsole?.active
 
   return (
-    <section className="agent-console-layout" aria-label="执行控制台">
+    <section className="agent-console-layout" aria-label="真实浏览器控制台">
       <ConsoleFocusPanel
         selectedTask={selectedTask}
         activeStep={activeStep}
@@ -3512,7 +3512,7 @@ export function ExecutionConsole({
                 <LogRow key={log.id} log={log} />
               ))}
               {!taskLogs.length && (
-                <EmptyState title="暂无执行日志" detail="当前仅可查看只读诊断与证据；只读检查未通过时禁止启动真实保存。" />
+                <EmptyState title="暂无执行日志" detail="当前仅可查看真实只读诊断与证据；真实只读检查未通过时禁止启动真实保存。" />
               )}
             </div>
           </section>
@@ -3632,7 +3632,7 @@ function AgentStagePanel({
             <summary>查看当前阻断详情</summary>
             <span>{realSaveBlockReason}</span>
             <div className="next-step-actions">
-              <button className="button button--secondary" type="button" onClick={onShowTasks}>回到任务中心</button>
+              <button className="button button--secondary" type="button" onClick={onShowTasks}>回到当前任务</button>
               <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看只读评审与检查计划</button>
               <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
             </div>
@@ -3678,7 +3678,7 @@ function ConsoleCompletedReviewPanel({
       <div className="console-review-panel__body">
         <div>
           <strong>下一步只复核结果</strong>
-          <span>查看报告、未发布证明和真实浏览器记录；如要处理新商品，回到任务中心创建新任务。</span>
+          <span>查看报告、未发布证明和真实浏览器记录；如要处理新商品，回到当前任务创建新任务。</span>
         </div>
         <div className="console-review-panel__facts">
           <span><b>报告</b><strong>优先查看</strong></span>
@@ -3693,7 +3693,7 @@ function ConsoleCompletedReviewPanel({
       </div>
       <details className="inline-disclosure console-review-panel__browser">
         <summary>继续操作真实浏览器</summary>
-        <small>仅在需要重新登录、补做只读页面检查或人工排查时展开；完成态默认不展示浏览器操控细节。</small>
+        <small>仅在需要重新登录、补做真实只读检查或人工排查时展开；完成态默认不展示浏览器操控细节。</small>
         {children}
       </details>
     </div>
@@ -3791,8 +3791,8 @@ function getL2ProbeResourceState(runtimeStatus: RuntimeStatus | null) {
   if (!runtimeStatus || !runtimeStatus.dependencies) {
     return {
       blocked: true,
-      title: '只读页面检查依赖状态未知，请先刷新运行状态或重新打开免安装版。',
-      detail: '只读页面检查依赖状态未知，请先刷新运行状态或重新打开免安装版。',
+      title: '真实只读检查依赖状态未知，请先刷新运行状态或重新打开免安装版。',
+      detail: '真实只读检查依赖状态未知，请先刷新运行状态或重新打开免安装版。',
       repairSteps: [
         '刷新运行状态，确认后端已经由免安装版接管。',
         '如果仍未知，关闭旧的 DXM Agent Console 或后台旧进程。',
@@ -3807,23 +3807,23 @@ function getL2ProbeResourceState(runtimeStatus: RuntimeStatus | null) {
     const taskId = runtimeStatus.l2ReadonlyProbe.taskId ? ` / 任务 #${runtimeStatus.l2ReadonlyProbe.taskId}` : ''
     return {
       blocked: true,
-      title: `预检正在运行：${runId}${taskId}`,
-      detail: `预检正在运行：${runId}${taskId}。请等待完成或查看实时日志；完成前不会启动第二个预检。`,
+      title: `真实只读检查正在运行：${runId}${taskId}`,
+      detail: `真实只读检查正在运行：${runId}${taskId}。请等待完成或查看实时日志；完成前不会启动第二个检查。`,
       repairSteps: [],
       checkedPathPreview: [],
     }
   }
   const dependencies = runtimeStatus?.dependencies ?? {}
   const required = [
-    ['只读页面检查启动器', dependencies.l2_readonly_probe_runner],
-    ['只读页面检查脚本', dependencies.l2_readonly_probe_script],
+    ['真实只读检查启动器', dependencies.l2_readonly_probe_runner],
+    ['真实只读检查脚本', dependencies.l2_readonly_probe_script],
     ['只读 allowlist', dependencies.l2_readonly_probe_allowlist],
   ] as const
   const missing = required.filter(([, item]) => item?.status === 'missing')
   if (!missing.length) {
     return {
       blocked: false,
-      title: '运行双目标真实只读页面检查；不会保存、不会发布。',
+      title: '运行双目标真实只读检查；不会保存、不会发布。',
       detail: '',
       repairSteps: [],
       checkedPathPreview: [],
@@ -3856,8 +3856,8 @@ function getL2ProbeResourceState(runtimeStatus: RuntimeStatus | null) {
 function L2ProbeResourceRepairPanel({ l2ProbeResourceState }: { l2ProbeResourceState: ReturnType<typeof getL2ProbeResourceState> }) {
   if (!l2ProbeResourceState.blocked || (!l2ProbeResourceState.repairSteps.length && !l2ProbeResourceState.checkedPathPreview.length)) return null
   return (
-    <div className="l2-probe-repair-panel" aria-label="只读页面检查资源修复步骤">
-      <strong>只读页面检查资源修复步骤</strong>
+    <div className="l2-probe-repair-panel" aria-label="真实只读检查资源修复步骤">
+      <strong>真实只读检查资源修复步骤</strong>
       {l2ProbeResourceState.repairSteps.length > 0 && (
         <ol>
           {l2ProbeResourceState.repairSteps.map((step) => <li key={step}>{step}</li>)}
@@ -3881,8 +3881,8 @@ function RuntimeControlResultSummary({ result }: { result: RuntimeControlRespons
   }
   if (result.action === 'run_l2_readonly_probe') {
     return (
-      <div className="runtime-control-result" aria-label="预检启动结果">
-        <strong>预检已启动</strong>
+      <div className="runtime-control-result" aria-label="真实只读检查启动结果">
+        <strong>真实只读检查已启动</strong>
         <span>run-id：{result.runId ?? '等待返回'}</span>
         <span>检查目标：{formatL2ProbeTargets(result.targets)}</span>
         <span>日志：{result.logPath ?? '启动器日志'}</span>
@@ -4170,7 +4170,7 @@ function ConsoleFocusPanel({
           <p>{active ? activeStep?.detail ?? primaryPath.detail : primaryPath.detail}</p>
           {primaryPath.action === 'run_l2' && !active && (
             <div className="console-precheck-explainer" role="note">
-              <strong>预检做什么</strong>
+              <strong>真实只读检查做什么</strong>
               <span>{READONLY_PRECHECK_PURPOSE}</span>
             </div>
           )}
@@ -4327,7 +4327,7 @@ function ConsolePrimaryBlockerCard({
         {primaryPath.code === 'select_task' && (
           <div className="console-primary-blocker-card__task-path" aria-label="任务准备路径">
             <span><b>1 创建或选择任务</b><small>只处理单商品只保存任务；批量和发布入口保持关闭。</small></span>
-            <span><b>2 确认店铺和商品</b><small>至少有真实店铺和 1 个商品，配置中心才知道本次取值。</small></span>
+            <span><b>2 确认店铺和商品</b><small>至少有真实店铺和 1 个商品，编辑页配置才知道本次取值。</small></span>
             <span><b>3 回到配置和检查</b><small>任务选中后再补配置、运行真实只读检查、人工确认保存。</small></span>
           </div>
         )}
@@ -4645,8 +4645,8 @@ function AgentConsoleControls({
         )}
       </div>
       {l2ProbeResourceState.blocked && (
-        <div className="agent-console-resource-alert" role="alert" aria-label="只读页面检查资源缺失">
-          <strong>只读页面检查暂不可运行</strong>
+        <div className="agent-console-resource-alert" role="alert" aria-label="真实只读检查资源缺失">
+          <strong>真实只读检查暂不可运行</strong>
           <span>{l2ProbeResourceState.detail}</span>
           <small>处理：关闭当前旧窗口或后台旧进程，重新打开桌面上的 DXM-Agent-Console-免安装版\\DXM-Agent-Console.exe；完整目录必须保留 resources 文件夹。</small>
           <L2ProbeResourceRepairPanel l2ProbeResourceState={l2ProbeResourceState} />
@@ -4654,7 +4654,7 @@ function AgentConsoleControls({
       )}
       <div className="agent-console-controls__mission">
         <strong>控制台 Agent 模式</strong>
-        <span>登录浏览器用于人工登录；执行浏览器只在配置、只读检查和人工确认通过后由 Agent 操控。控制台只控制独立真实浏览器；证据文件只在报告中留档，不替代实时操控。</span>
+        <span>登录浏览器用于人工登录；执行浏览器只在配置、真实只读检查和人工确认通过后由 Agent 操控。控制台只控制独立真实浏览器；证据文件只在报告中留档，不替代实时操控。</span>
         <div>
           <b>1 登录/接入</b>
           <b>2 只读定位</b>
@@ -4934,7 +4934,7 @@ function L2PrecheckFailureAdvice({
   const visibleSummaries = summaries.slice(0, 2)
 
   return (
-    <div className="l2-precheck-failure-advice" aria-label="预检失败处理建议">
+    <div className="l2-precheck-failure-advice" aria-label="真实只读检查失败处理建议">
       <strong>真实只读检查失败处理建议</strong>
       {visibleSummaries.length ? (
         visibleSummaries.map((item) => (
@@ -4965,7 +4965,7 @@ function L2PrecheckRunbook({
   onShowReports: () => void
 }) {
   const nextAction = state.status === 'passed'
-    ? '真实只读检查通过后，回到任务中心填写批准人，再启动单商品只保存。'
+    ? '真实只读检查通过后，回到当前任务填写批准人，再启动单商品只保存。'
     : state.status === 'running'
       ? '真实只读检查运行中，请查看启动器日志等待完成结果。'
       : state.status === 'failed'
@@ -4977,7 +4977,7 @@ function L2PrecheckRunbook({
       <strong>真实只读检查操作引导</strong>
       <div className="l2-precheck-runbook__steps">
         <span><b>1 打开真实店小秘页面</b><small>确认已登录，能访问商品采集页。</small></span>
-        <span><b>2 只读检查两个页面</b><small>商品采集页 + 采集箱/草稿箱；不会领取、不会保存、不会发布。</small></span>
+        <span><b>2 检查两个页面</b><small>商品采集页 + 采集箱/草稿箱；不会领取、不会保存、不会发布。</small></span>
         <span><b>3 通过后人工确认保存</b><small>只读通过不等于保存，仍需人工确认单商品只保存。</small></span>
       </div>
       <small>{nextAction}</small>
@@ -5241,7 +5241,7 @@ export function EvidenceTimeline({
   const evidencePoints = filterEvidencePointsForTask(workspace.evidencePoints, evidences, reports, selectedTask)
 
   return (
-    <section className="module-layout" aria-label="证据中心">
+    <section className="module-layout" aria-label="报告与证据">
       <div className="module-card span-3">
         <ModuleHead title="交付证据摘要" meta={`等级 ${workspace.evidenceGrade?.grade ?? 'C'}`} />
         <div className="evidence-point-grid">
@@ -5254,8 +5254,8 @@ export function EvidenceTimeline({
               detail="当前真实写入未放行时，保存结果、未发布证明和网络/HAR 为 0 条是预期阻断；只有单商品只保存完成后才生成可验收证据等级。"
               actions={(
                 <>
-                  <button className="button button--secondary" type="button" onClick={onShowTasks}>查看任务门禁</button>
-                  <button className="button button--quiet" type="button" onClick={onShowConsole}>查看只读证据</button>
+                  <button className="button button--secondary" type="button" onClick={onShowTasks}>查看当前任务门禁</button>
+                  <button className="button button--quiet" type="button" onClick={onShowConsole}>查看真实只读证据</button>
                 </>
               )}
             />
@@ -5299,7 +5299,7 @@ export function ExceptionQueue({ workspace, selectedTask }: CommonProps) {
   const exceptions = selectedTask ? workspace.exceptions.filter((item) => item.task_id === selectedTask.id) : workspace.exceptions
   const presentedAcceptanceGaps = presentAcceptanceGaps(workspace.acceptanceGaps, isRealWriteExpectedBlocked(workspace))
   const emptyExceptionDetail = selectedTask?.status === 'completed'
-    ? '当前任务暂无异常记录；如需复核保存链路，请查看报告中心和证据中心。'
+    ? '当前任务暂无异常记录；如需复核保存链路，请查看报告与证据。'
     : '未执行不代表通过；执行失败、字段缺失和门禁阻断会进入异常池。'
   return (
     <section className="module-layout" aria-label="异常池">
@@ -5355,7 +5355,7 @@ export function ReportCenter({
   )
 
   return (
-    <section className="module-layout" aria-label="报告中心" data-testid="report-center-section">
+    <section className="module-layout" aria-label="报告与证据" data-testid="report-center-section">
       <FinalDeliveryCheckCard finalCheck={finalCheck} />
       <div className="module-card span-3">
         <ModuleHead title="保存隔离摘要" meta={humanPublishGuardStatus(workspace.publishGuardState?.status)} />
@@ -5377,11 +5377,11 @@ export function ReportCenter({
         <div className="toolbar">
           <button className="button button--secondary" type="button" data-section="evidence" onClick={onShowEvidence}>查看保存证据</button>
           <button className="button button--quiet" type="button" data-section="exceptions" onClick={onShowExceptions}>处理问题</button>
-          <button className="button button--quiet" type="button" data-section="console" onClick={onShowConsole}>回到执行控制台</button>
+          <button className="button button--quiet" type="button" data-section="console" onClick={onShowConsole}>回到真实浏览器控制台</button>
         </div>
       </div>
       <div className="module-card span-3">
-        <ModuleHead title="报告中心" meta={`${reports.length} 份报告`} />
+        <ModuleHead title="报告与证据" meta={`${reports.length} 份报告`} />
         <div className="report-grid">
           {reports.map((report) => (
             <ReportCard key={report.id} report={report} />
@@ -5391,11 +5391,11 @@ export function ReportCenter({
               title={realWriteExpectedBlocked ? '真实保存报告待人工确认' : '暂无报告'}
               detail={realWriteExpectedBlocked
                 ? '真实写入未确认前不要求生成业务保存报告；自动化工作台验收摘要见上方。'
-                : '单商品只保存完成并生成未发布证明后，这里会展示报告和证据路径。当前可先查看只读诊断和证据缺口。'}
+                : '单商品只保存完成并生成未发布证明后，这里会展示报告和证据路径。当前可先查看真实只读诊断和证据缺口。'}
               actions={(
                 <>
                   <button className="button button--secondary" type="button" onClick={onShowEvidence}>查看证据缺口</button>
-                  <button className="button button--quiet" type="button" onClick={onShowConsole}>查看只读证据</button>
+                  <button className="button button--quiet" type="button" onClick={onShowConsole}>查看真实只读证据</button>
                 </>
               )}
             />
@@ -5404,7 +5404,7 @@ export function ReportCenter({
       </div>
       <details className="module-card span-3 disclosure-card l2-next-step-card">
         <summary>
-          重新验证只读检查
+          重新验证真实只读检查
           <span>高级复核，需人工批准</span>
         </summary>
         <div className="l2-allowlist-review">
@@ -5412,7 +5412,7 @@ export function ReportCenter({
             <strong>L2 allowlist 候选处理</strong>
             <span>先评审，再复跑 L2</span>
           </div>
-          <p>review_only=true / allowlist_applied=false。未完成人工评审前，不运行下方只读页面检查命令。</p>
+          <p>review_only=true / allowlist_applied=false。未完成人工评审前，不运行下方真实只读检查命令。</p>
           {l2AllowlistReviewItems.length > 0 ? (
             <ul>
               {l2AllowlistReviewItems.slice(0, 8).map((item) => (
@@ -5478,15 +5478,15 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
     : runtimeGateStale && isReadyReadiness(readiness)
       ? '最终验收报告待刷新；当前运行门禁已按最新 L2/L3 覆盖为可申请单商品只保存，源码包交付前仍需重新运行最终验收。'
       : runtimeGateStale
-        ? '最终验收报告待刷新；请先重新运行只读页面检查和本地验收。'
+        ? '最终验收报告待刷新；请先重新运行真实只读检查和本地验收。'
       : isReadyReadiness(readiness)
       ? '单商品只保存路径已有验收记录；执行前仍需人工确认，批量、无人值守和发布仍保持关闭。'
       : isBlockedReadiness(readiness)
         ? '自动化工作台可继续查看和检查；真实保存暂不启动。'
-        : '当前真实写入状态未知，不可执行真实写入；请先重新运行本地验收并复核只读检查。'
+        : '当前真实写入状态未知，不可执行真实写入；请先重新运行本地验收并复核真实只读检查。'
   const nextStepText = isReadyReadiness(readiness)
     ? '复核当前任务、批准人和报告链路后，再启动单商品只保存。'
-    : `先点击任务中心的“${READONLY_PRECHECK_CTA}”，通过后再进行人工确认保存。`
+    : `先在当前任务点击“${READONLY_PRECHECK_CTA}”，通过后再进行人工确认保存。`
 
   return (
     <div className="module-card span-3 delivery-check-card">
@@ -5524,7 +5524,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
             <SourcePackageCheckRow finalCheck={finalCheck} />
             <CheckRow label={`浏览器 QA ${finalCheck?.browser_qa_ok === true ? 'PASS' : finalCheck?.browser_qa_ok === false ? 'FAIL' : '待刷新/未运行'}`} ok={finalCheck?.browser_qa_ok === true} />
             <CheckRow
-              label={`最终报告中心 QA ${postFinalReportQaState}`}
+              label={`最终报告与证据 QA ${postFinalReportQaState}`}
               ok={finalCheck?.post_final_report_qa_ok === true}
               testId="final-report-center-qa"
               state={postFinalReportQaState}
@@ -5701,7 +5701,7 @@ function TaskCurrentActionPanel({
       </div>
       {showPrecheckRecoveryActions && (
         <div className="task-current-panel__precheck-actions" aria-label="真实只读检查未通过处理">
-          <span>真实只读检查没有通过，不能启动真实保存。先运行真实只读检查；如果仍失败，到执行控制台看日志，再查看检查计划。</span>
+          <span>真实只读检查没有通过，不能启动真实保存。先运行真实只读检查；如果仍失败，到真实浏览器控制台看日志，再查看检查计划。</span>
           <div>
             <button
               className="button button--secondary"
@@ -5712,7 +5712,7 @@ function TaskCurrentActionPanel({
             >
               运行真实只读检查
             </button>
-            <button className="button button--quiet" type="button" onClick={onShowConsole}>查看执行控制台</button>
+            <button className="button button--quiet" type="button" onClick={onShowConsole}>查看真实浏览器控制台</button>
             <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">查看检查计划</button>
           </div>
           {l2ProbeResourceState.blocked && <small>{l2ProbeResourceState.detail}</small>}
@@ -5724,7 +5724,7 @@ function TaskCurrentActionPanel({
           <b>{configCheckLabel}</b>
         </span>
         <span className={l2CheckOk ? 'is-ok' : 'is-warn'}>
-          <strong>只读检查</strong>
+          <strong>真实只读检查</strong>
           <b>{l2CheckLabel}</b>
         </span>
         <span className={l3CheckOk ? 'is-ok' : 'is-warn'}>
@@ -5734,7 +5734,7 @@ function TaskCurrentActionPanel({
       </div>
       <div className="task-current-panel__actions">
         <button className="button button--quiet" type="button" onClick={onShowConfig}>补齐配置</button>
-        <button className="button button--quiet" type="button" onClick={onShowConsole}>打开执行控制台复核</button>
+        <button className="button button--quiet" type="button" onClick={onShowConsole}>打开真实浏览器控制台复核</button>
         <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">查看检查计划</button>
       </div>
     </div>
@@ -5772,14 +5772,14 @@ function ReadonlyRecheckHelpCard({
     <div className="readonly-recheck-help" data-testid="readonly-recheck-help">
       <div className="readonly-recheck-help__main">
         <div>
-          <strong>只读页面检查未通过，真实保存先暂停</strong>
-          <span>{humanGateDetail(l2Gate?.detail) ?? '需要商品采集页与草稿箱页两个只读检查均通过。'}</span>
+          <strong>真实只读检查未通过，真实保存先暂停</strong>
+          <span>{humanGateDetail(l2Gate?.detail) ?? '需要商品采集页与草稿箱页两个真实只读检查均通过。'}</span>
         </div>
         <span className="guard-chip guard-chip--danger">当前状态：{humanGateStateLabel(l2Gate?.status ?? 'not_run')}</span>
       </div>
-      <div className="readonly-recheck-help__facts" aria-label="只读页面检查说明">
+      <div className="readonly-recheck-help__facts" aria-label="真实只读检查说明">
         <span>
-          <strong>预检做什么</strong>
+          <strong>真实只读检查做什么</strong>
           <small>检查商品采集页和草稿箱页是否能正常打开。</small>
         </span>
         <span>
@@ -5873,17 +5873,17 @@ function SingleSaveRecoveryGuide({
     },
     {
       title: '补齐 DXM 编辑页配置',
-      detail: configBlocksStart ? '当前任务配置检查未通过，先回配置中心补字段。' : '配置检查未阻断当前任务。',
+      detail: configBlocksStart ? '当前任务配置检查未通过，先回编辑页配置补字段。' : '配置检查未阻断当前任务。',
       done: !configBlocksStart,
     },
     {
-      title: '刷新只读页面检查',
-      detail: l2BlocksStart ? '商品采集页与草稿箱页必须同一轮检查、不过期、无写请求。' : '只读页面检查当前未阻断启动判断。',
+      title: '刷新真实只读检查',
+      detail: l2BlocksStart ? '商品采集页与草稿箱页必须同一轮检查、不过期、无写请求。' : '真实只读检查当前未阻断启动判断。',
       done: !l2BlocksStart,
     },
     {
       title: '填写批准人并启动保存',
-      detail: l3BlocksStart ? '只读检查通过后再填写批准人，只启动一个单商品只保存任务。' : '通过后仍需页面内填写批准人。',
+      detail: l3BlocksStart ? '真实只读检查通过后再填写批准人，只启动一个单商品只保存任务。' : '通过后仍需页面内填写批准人。',
       done: !l3BlocksStart,
     },
   ]
@@ -6060,7 +6060,7 @@ function taskStartDecision({
     return {
       scope: '等待当前任务运行',
       reason: '任务正在运行，避免重复启动。',
-      next: '到执行控制台查看真实浏览器、日志和步骤。',
+      next: '到真实浏览器控制台查看真实浏览器、日志和步骤。',
       tone: 'ok',
     }
   }
@@ -6084,7 +6084,7 @@ function taskStartDecision({
     return {
       scope: '先补配置',
       reason: '当前任务配置检查未通过。',
-      next: '去配置中心补齐 DXM 编辑页必填字段。',
+      next: '去编辑页配置补齐 DXM 编辑页必填字段。',
       tone: 'warn',
     }
   }
@@ -6114,8 +6114,8 @@ function taskStartDecision({
   }
   return {
     scope: startLabel.includes('保存') || startLabel.includes('批准') ? '可申请单商品只保存' : '可启动当前任务',
-    reason: '配置、只读检查和人工确认当前未阻断。',
-    next: '点击主按钮后，在执行控制台查看真实浏览器执行。',
+    reason: '配置、真实只读检查和人工确认当前未阻断。',
+    next: '点击主按钮后，在真实浏览器控制台查看真实浏览器执行。',
     tone: 'ok',
   }
 }
@@ -6151,9 +6151,9 @@ function buildConsolePrimaryPath({
       code: 'select_task',
       title: '先选择或创建任务',
       reason: '当前没有选中的单商品只保存任务。',
-      detail: '先在任务中心创建或选择一个单商品只保存任务，再进入配置、只读检查和 Agent 执行浏览器。',
-      next: '去任务中心选择任务',
-      ctaLabel: '去任务中心选择任务',
+      detail: '先在当前任务创建或选择一个单商品只保存任务，再进入配置、真实只读检查和 Agent 执行浏览器。',
+      next: '去当前任务选择任务',
+      ctaLabel: '去当前任务选择任务',
       action: 'tasks',
       browserStatus: '未选择任务，Agent 执行浏览器暂不启动',
       blocksBrowserStart: true,
@@ -6194,7 +6194,7 @@ function buildConsolePrimaryPath({
       title: '当前任务不可启动',
       reason: '当前任务不是草稿状态。',
       detail: '请选择草稿任务，或重新创建单商品只保存任务。',
-      next: '回到任务中心选择草稿任务',
+      next: '回到当前任务选择草稿任务',
       ctaLabel: '选择草稿任务',
       action: 'tasks',
       browserStatus: '任务状态不可启动，Agent 执行浏览器暂不启动',
@@ -6208,7 +6208,7 @@ function buildConsolePrimaryPath({
       title: '当前模式未放行',
       reason: `${humanTaskModeLabel(selectedTask.mode)} 当前未放行。`,
       detail: '认领、批量保存和无人值守仍需单独验收；当前只开放单商品只保存路径。',
-      next: '回到任务中心创建单商品只保存任务',
+      next: '回到当前任务创建单商品只保存任务',
       ctaLabel: '创建单商品只保存任务',
       action: 'tasks',
       browserStatus: '当前模式未放行，Agent 执行浏览器暂不启动',
@@ -6222,8 +6222,8 @@ function buildConsolePrimaryPath({
       title: '配置检查接口不可用',
       reason: '配置检查接口不可用，不能判断当前任务字段是否完整。',
       detail: `请先确认本机后端仍在运行，再重新检查配置：${configPreviewError}`,
-      next: '去配置中心重新检查',
-      ctaLabel: '去配置中心重新检查',
+      next: '去编辑页配置重新检查',
+      ctaLabel: '去编辑页配置重新检查',
       action: 'config',
       browserStatus: '配置检查接口异常，Agent 执行浏览器暂不启动',
       blocksBrowserStart: true,
@@ -6234,10 +6234,10 @@ function buildConsolePrimaryPath({
     return {
       code: 'config',
       title: '正在校验本次任务配置',
-      reason: '正在读取配置中心保存的本次任务取值。',
+      reason: '正在读取编辑页配置保存的本次任务取值。',
       detail: '系统正在确认店铺、类目、图片、物流和半托管字段；校验完成前不会启动真实保存。',
       next: '等待配置校验完成',
-      ctaLabel: '查看配置中心',
+      ctaLabel: '查看编辑页配置',
       action: 'config',
       browserStatus: '配置校验中，Agent 执行浏览器暂不启动',
       blocksBrowserStart: true,
@@ -6251,9 +6251,9 @@ function buildConsolePrimaryPath({
       reason: configPreview ? '当前任务配置检查未通过。' : '尚未完成本次任务配置检查。',
       detail: configPreview?.missing.length
         ? `请先补齐：${configPreview.missing.slice(0, 4).join('、')}`
-        : '请先到配置中心检查本次任务配置，确认店铺、类目、图片、物流和半托管字段。',
-      next: '去配置中心补齐配置',
-      ctaLabel: '去配置中心补齐配置',
+        : '请先到编辑页配置检查本次任务配置，确认店铺、类目、图片、物流和半托管字段。',
+      next: '去编辑页配置补齐配置',
+      ctaLabel: '去编辑页配置补齐配置',
       action: 'config',
       browserStatus: '配置未完成，Agent 执行浏览器暂不启动',
       blocksBrowserStart: true,
@@ -6264,7 +6264,7 @@ function buildConsolePrimaryPath({
     return {
       code: 'l2_resource',
       title: '真实只读检查组件未就绪',
-      reason: '只读页面检查暂不可运行。',
+      reason: '真实只读检查暂不可运行。',
       detail: l2ProbeResourceState.detail,
       next: '查看启动器日志，按提示恢复完整免安装目录后再运行真实只读检查。',
       ctaLabel: '查看启动器日志',
@@ -6293,9 +6293,9 @@ function buildConsolePrimaryPath({
       code: 'l3',
       title: '等待人工确认保存',
       reason: '真实保存前还没有完成人工批准。',
-      detail: l3Detail ?? '只读检查通过后，仍需要人工确认批准，只启动单商品只保存。',
-      next: '去任务中心填写批准人并启动',
-      ctaLabel: '去任务中心人工确认',
+      detail: l3Detail ?? '真实只读检查通过后，仍需要人工确认批准，只启动单商品只保存。',
+      next: '去当前任务填写批准人并启动',
+      ctaLabel: '去当前任务人工确认',
       action: 'tasks',
       browserStatus: '等待人工确认，Agent 执行浏览器暂不启动',
       blocksBrowserStart: true,
@@ -6319,7 +6319,7 @@ function buildConsolePrimaryPath({
   return {
     code: 'ready',
     title: '可以打开执行浏览器',
-    reason: '配置、只读检查和人工确认当前未阻断。',
+    reason: '配置、真实只读检查和人工确认当前未阻断。',
     detail: '将打开独立 Agent 执行浏览器窗口；保存前仍需确认，不会发布。',
     next: '打开执行浏览器（不保存）',
     ctaLabel: '打开执行浏览器（不保存）',
@@ -6555,7 +6555,7 @@ function humanEvidencePointTitle(point: EvidencePoint) {
     ITEM_LOCKING: '创建任务锁',
     FIND_PRODUCT: '定位目标商品',
     OPEN_DRAFT_LIST: '进入采集箱',
-    PRECHECK_PUBLISH_GUARD: '发布隔离预检',
+    PRECHECK_PUBLISH_GUARD: '发布隔离检查',
     PRECHECK_SESSION: '检查登录态',
     PRECHECK_CONFIG: '启动前配置校验',
   }
@@ -6800,7 +6800,7 @@ function l2DiagnosticNextAction({
   if (appShellOnly) {
     return '页面停留在加载壳，等待真实页面加载完成或重开浏览器后复跑。'
   }
-  return '查看启动器日志中的 blocked requests，修正页面阻断后复跑预检。'
+  return '查看启动器日志中的 blocked requests，修正页面阻断后复跑真实只读检查。'
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -7012,7 +7012,7 @@ function isRealDxmMutationTask(task: Task) {
 
 function humanTaskModeLabel(mode?: string | null) {
   const labels: Record<string, string> = {
-    probe: '只读页面检查',
+    probe: '真实只读检查',
     single_save: '单商品只保存',
     claim_only: '认领未开放',
     batch_save: '批量保存未开放',
@@ -7047,22 +7047,22 @@ function humanGateDetail(detail?: string | null) {
     || detail.includes('age')
     || detail.includes('expired')
   ) {
-    return `预检证据已过期，请点击“${READONLY_PRECHECK_CTA}”刷新后再继续。`
+    return `真实只读检查证据已过期，请点击“${READONLY_PRECHECK_CTA}”刷新后再继续。`
   }
   if (detail.includes('data_acquisition') || detail.includes('draft_box')) {
     return detail
       .split('data_acquisition').join('商品采集页')
       .split('draft_box').join('草稿箱页')
-      .split('L2').join('预检')
+      .split('L2').join('真实只读检查')
       .split('L3').join('真实保存')
       .split('passed').join('通过')
-      .split('probe').join('预检')
+      .split('probe').join('真实只读检查')
   }
   return detail
-    .split('L2').join('预检')
+    .split('L2').join('真实只读检查')
     .split('L3').join('真实保存')
     .split('passed').join('通过')
-    .split('probe').join('预检')
+    .split('probe').join('真实只读检查')
 }
 
 function humanL2PrecheckError(message: string) {
@@ -7070,10 +7070,10 @@ function humanL2PrecheckError(message: string) {
     return '真实只读检查组件未安装完整：请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
   }
   if (message.includes('L2 readonly probe runner is missing')) {
-    return '真实只读检查组件未安装完整：缺少只读页面检查启动器。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
+    return '真实只读检查组件未安装完整：缺少真实只读检查启动器。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
   }
   if (message.includes('L2 readonly probe script is missing')) {
-    return '真实只读检查组件未安装完整：缺少只读页面检查脚本。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
+    return '真实只读检查组件未安装完整：缺少真实只读检查脚本。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
   }
   return message
 }
@@ -7120,7 +7120,7 @@ function humanConsoleCodeLabel(code?: string | null) {
   const labels: Record<string, string> = {
     PRECHECK_CONFIG: '启动前配置校验',
     PRECHECK_SESSION: '检查登录态',
-    PRECHECK_PUBLISH_GUARD: '发布隔离预检',
+    PRECHECK_PUBLISH_GUARD: '发布隔离检查',
     OPEN_DRAFT_LIST: '进入采集箱',
     OPEN_EDIT_PAGE: '打开编辑页',
     SAVE_ONLY: '只保存',
@@ -7141,7 +7141,7 @@ function humanConsoleText(value?: string | null) {
     .split('SAVE_ONLY').join('只保存')
     .split('L3_SAVE_GATE').join('只保存')
     .split('SAVE_GATE').join('只保存')
-    .split('L2').join('只读检查')
+    .split('L2').join('真实只读检查')
     .split('L3').join('真实保存')
 }
 

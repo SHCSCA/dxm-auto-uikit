@@ -5,7 +5,9 @@ param(
   [string]$CapturePath = "",
   [string]$PortableCapturePath = "",
   [string]$CredentialSmokePath = "",
+  [string]$VisibleSmokePath = "",
   [string]$SmokeUserDataDir = "",
+  [string]$VisibleSmokeUserDataDir = "",
   [string]$PortableSmokeUserDataDir = ""
 )
 
@@ -40,8 +42,14 @@ if ([string]::IsNullOrWhiteSpace($CapturePath)) {
 if ([string]::IsNullOrWhiteSpace($CredentialSmokePath)) {
   $CredentialSmokePath = Join-Path $env:TEMP 'dxm-agent-console-credential-smoke.json'
 }
+if ([string]::IsNullOrWhiteSpace($VisibleSmokePath)) {
+  $VisibleSmokePath = Join-Path $env:TEMP 'dxm-agent-console-visible-smoke.json'
+}
 if ([string]::IsNullOrWhiteSpace($SmokeUserDataDir)) {
   $SmokeUserDataDir = Join-Path $env:TEMP 'dxm-agent-console-packaged-smoke-user-data'
+}
+if ([string]::IsNullOrWhiteSpace($VisibleSmokeUserDataDir)) {
+  $VisibleSmokeUserDataDir = Join-Path $env:TEMP 'dxm-agent-console-visible-smoke-user-data'
 }
 if ([string]::IsNullOrWhiteSpace($PortableSmokeUserDataDir)) {
   $PortableSmokeUserDataDir = Join-Path $env:TEMP 'dxm-agent-console-portable-smoke-user-data'
@@ -53,7 +61,9 @@ if ($CheckPortable -and $WaitSeconds -lt 180) {
 $CapturePath = Resolve-SmokeArtifactPath -Path $CapturePath
 $PortableCapturePath = Resolve-SmokeArtifactPath -Path $PortableCapturePath
 $CredentialSmokePath = Resolve-SmokeArtifactPath -Path $CredentialSmokePath
+$VisibleSmokePath = Resolve-SmokeArtifactPath -Path $VisibleSmokePath
 $SmokeUserDataDir = [System.IO.Path]::GetFullPath($SmokeUserDataDir)
+$VisibleSmokeUserDataDir = [System.IO.Path]::GetFullPath($VisibleSmokeUserDataDir)
 $PortableSmokeUserDataDir = [System.IO.Path]::GetFullPath($PortableSmokeUserDataDir)
 
 Write-Host 'DXM Agent Console packaged smoke'
@@ -183,6 +193,22 @@ function Assert-CredentialSmoke {
   }
   if ($Result.available -ne $true -or $Result.saved -ne $true -or $Result.loaded -ne $true -or $Result.cleared -ne $true -or $Result.restored -ne $true) {
     throw "Credential smoke did not prove save/load/clear/restore: $($Result | ConvertTo-Json -Compress)"
+  }
+}
+
+function Assert-VisibleSmoke {
+  param(
+    [string]$Path
+  )
+  if (!(Test-Path -LiteralPath $Path)) {
+    throw "Visible smoke result was not created: $Path"
+  }
+  $Result = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+  if ($Result.ok -ne $true -or $Result.windowVisible -ne $true) {
+    throw "Visible smoke did not prove a visible Electron window: $($Result | ConvertTo-Json -Compress)"
+  }
+  if (-not $Result.backendPort -or -not ([string]$Result.apiBase).StartsWith('http://127.0.0.1:')) {
+    throw "Visible smoke did not include backend runtime details: $($Result | ConvertTo-Json -Compress)"
   }
 }
 
@@ -336,6 +362,22 @@ Get-Process | Where-Object { $_.Path -like '*desktop-build*DXM-Agent-Console.exe
 Write-Host "Packaged smoke passed. Log: $ExistingLog"
 Write-Host "QA capture: $CapturePath"
 Write-Host "Credential smoke passed. Result: $CredentialSmokePath"
+
+$VisibleProcess = Start-Process -FilePath $ExePath -WorkingDirectory (Split-Path $ExePath) -ArgumentList @("--qa-visible-smoke=$VisibleSmokePath", "--qa-user-data-dir=$VisibleSmokeUserDataDir") -PassThru
+if (!$VisibleProcess.WaitForExit($WaitSeconds * 1000)) {
+  try {
+    Stop-Process -Id $VisibleProcess.Id -Force
+  } catch {}
+  throw "Visible window smoke timed out after $WaitSeconds seconds"
+}
+if ($VisibleProcess.ExitCode -ne 0) {
+  throw "Visible window smoke failed: exit code $($VisibleProcess.ExitCode)"
+}
+Assert-VisibleSmoke -Path $VisibleSmokePath
+$VisibleLog = Get-DesktopSmokeLog -UserDataDir $VisibleSmokeUserDataDir
+Assert-DesktopSmokeLog -ExistingLog $VisibleLog -ExpectedPythonRoot (Split-Path $ExePath) -Label 'Visible window smoke'
+Assert-PackagedRuntimeClean -ExePath $ExePath
+Write-Host "Visible window smoke passed. Result: $VisibleSmokePath"
 
 if ($CheckPortable -and (Test-Path $PortableExePath)) {
   Write-Host "Portable exe: $PortableExePath"
