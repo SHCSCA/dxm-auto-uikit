@@ -17,7 +17,7 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
     summary: '登录、配置、预检',
     items: [
       { id: 'guide', label: '开始使用', short: '起', hint: '登录与下一步' },
-      { id: 'config', label: '配置模板', short: '配', hint: '填写编辑页' },
+      { id: 'config', label: '配置中心', short: '配', hint: '模板与本次任务配置' },
     ],
   },
   {
@@ -44,7 +44,7 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
 const sectionLabels: Record<WorkbenchSection, string> = {
   guide: '开始使用',
   dashboard: '状态',
-  config: '配置模板',
+  config: '配置中心',
   tasks: '任务',
   console: '执行控制台',
   evidence: '证据',

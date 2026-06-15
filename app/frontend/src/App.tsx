@@ -423,9 +423,9 @@ export default function App() {
       setL2RunnerState({ status: 'passed', runId, exitCode, message: '预检通过，已刷新门禁', line, updatedAt: new Date().toISOString() })
       return
     }
-    const message = runnerSucceeded ? '预检完成，但门禁仍未通过' : '预检失败，真实保存仍阻断'
+    const message = runnerSucceeded ? '预检已运行，但门禁未刷新通过' : '预检失败，真实保存仍阻断'
     setL2RunnerState({ status: 'failed', runId, exitCode, message, line: `${line}${gateDetail}`, updatedAt: new Date().toISOString() })
-    setOperationError(`${message}；请查看启动器日志和检查计划。`)
+    setOperationError(`${message}；请先查看页面里的门禁原因，再查看启动器日志或检查计划。`)
   }, [refreshRuntimeStatus, refreshWorkspace])
 
   useEffect(() => {

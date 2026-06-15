@@ -86,8 +86,8 @@ def test_config_center_explains_precheck_and_disabled_save_continue():
 
     assert "onRefreshConfigPreview" in source
     assert "onRefreshConfigPreview={async () => { await refreshConfigPreview(); await refreshWorkspace() }}" in app_source
-    assert "运行配置预检" in config_section
-    assert "刷新配置预检" in config_section
+    assert "检查本次配置" in config_section
+    assert "刷新配置检查" in config_section
     assert "去任务中心选择任务" in config_section
     assert "onShowTasks" in source
     assert "onShowTasks={() => setActiveSection('tasks')}" in app_source
@@ -97,7 +97,8 @@ def test_config_center_explains_precheck_and_disabled_save_continue():
     assert "先选择任务" in editable_card
     assert "先运行本次任务配置检查" in editable_card
     assert "不能继续的原因" in editable_card
-    assert "配置预检" in config_section
+    assert "配置检查" in config_section
+    assert "配置预检" not in config_section
     assert "等待检查" in config_copy_source
     assert "等待预检" not in config_copy_source
     assert "启动预检" not in config_copy_source
@@ -735,7 +736,7 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "type WorkbenchPrimaryArea" in shell_source
     assert "summary: '登录、配置、预检'" in shell_source
     assert "{ id: 'guide', label: '开始使用', short: '起', hint: '登录与下一步' }" in shell_source
-    assert "{ id: 'config', label: '配置模板', short: '配', hint: '填写编辑页' }" in shell_source
+    assert "{ id: 'config', label: '配置中心', short: '配', hint: '模板与本次任务配置' }" in shell_source
     assert "const sectionLabels: Record<WorkbenchSection, string>" in shell_source
     assert "evidence: '证据'" in shell_source
     assert "exceptions: '问题处理'" in shell_source
@@ -940,7 +941,7 @@ def test_sidebar_primary_navigation_keeps_only_user_main_path():
 
     assert primary_area_section.count("{ id: '") == 5
     assert "{ id: 'guide', label: '开始使用'" in primary_area_section
-    assert "{ id: 'config', label: '配置模板'" in primary_area_section
+    assert "{ id: 'config', label: '配置中心'" in primary_area_section
     assert "{ id: 'tasks', label: '任务'" in primary_area_section
     assert "{ id: 'console', label: '执行控制台'" in primary_area_section
     assert "{ id: 'reports', label: '结果报告'" in primary_area_section
@@ -2925,7 +2926,9 @@ def test_frontend_refreshes_workspace_after_l2_runner_finishes():
     assert "const refreshedWorkspace = await refreshWorkspace()" in runner_observer
     assert "const refreshedL2Gate = refreshedWorkspace.regressionGates.find((gate) => gate.level === 'L2')" in runner_observer
     assert "runnerSucceeded && refreshedL2Gate?.status === 'passed'" in runner_observer
-    assert "预检完成，但门禁仍未通过" in runner_observer
+    assert "预检已运行，但门禁未刷新通过" in runner_observer
+    assert "runnerSucceeded ? '预检已运行，但门禁未刷新通过' : '预检失败，真实保存仍阻断'" in runner_observer
+    assert "请先查看页面里的门禁原因，再查看启动器日志或检查计划" in runner_observer
     assert "void handleL2RunnerFinished({" in runner_observer
     assert "void refreshWorkspace()" not in runner_observer
 
@@ -2941,14 +2944,14 @@ def test_execution_console_surfaces_l2_runner_result_not_just_start_message():
     assert "exit_code=0" in app_source
     assert "exit_code=" in app_source
     assert "setL2RunnerState({ status: 'failed'" in app_source
-    assert "setOperationError(`${message}；请查看启动器日志和检查计划。`)" in app_source
+    assert "setOperationError(`${message}；请先查看页面里的门禁原因，再查看启动器日志或检查计划。`)" in app_source
     assert "l2RunnerState={l2RunnerState}" in app_source
     assert "L2RunnerStatePanel" in workbench_source
     assert "预检状态" in workbench_source
     assert "正在运行双目标预检" in workbench_source
     assert "预检通过，已刷新门禁" in workbench_source
     assert "预检失败，真实保存仍阻断" in workbench_source
-    assert "预检完成，但门禁仍未通过" in app_source
+    assert "预检已运行，但门禁未刷新通过" in app_source
     assert ".l2-runner-state" in styles_source
 
 
@@ -3328,6 +3331,24 @@ def test_safety_bar_has_explicit_service_recovery_state_when_backend_is_unavaila
     assert "primaryActionLabel = selectedTaskCompleted" in safety_bar
     assert "runtimeStatusUnavailable" in safety_bar[safety_bar.index("const primaryActionLabel"):safety_bar.index("const handlePrimaryAction")]
     assert "runtimeStatusUnavailable" in safety_bar[safety_bar.index("const handlePrimaryAction"):safety_bar.index("return (")]
+
+
+def test_safety_bar_uses_operator_precheck_copy_before_technical_l2_terms():
+    safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
+    visible_status_section = safety_bar[
+        safety_bar.index("const gateStatusLine"):
+        safety_bar.index("const gateDetails")
+    ]
+    detail_chip_section = safety_bar[
+        safety_bar.index("const detailChips"):
+        safety_bar.index("const boundaryChips")
+    ]
+
+    assert "只读预检" in visible_status_section
+    assert "L2 页面核验" not in visible_status_section
+    assert "只读预检：" in detail_chip_section
+    assert "L2 页面核验：" not in detail_chip_section
+    assert "L2 页面核验：" in safety_bar[safety_bar.index("const gateDetails"):safety_bar.index("const blockerDetails")]
 
 
 def test_execution_console_surfaces_desktop_log_paths_when_service_is_unavailable():

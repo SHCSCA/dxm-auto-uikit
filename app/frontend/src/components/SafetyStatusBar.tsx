@@ -69,7 +69,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
     : runtimeStatusUnavailable
       ? '工作台服务连接异常'
       : nextHeadline
-  const gateStatusLine = `L2 页面核验 ${humanGateStatus(l2Gate?.status ?? workspace.safety.l2Status ?? 'not_run')}，人工确认 ${humanGateStatus(l3Gate?.status ?? 'not_run')}`
+  const gateStatusLine = `只读预检 ${humanGateStatus(l2Gate?.status ?? workspace.safety.l2Status ?? 'not_run')}，人工确认 ${humanGateStatus(l3Gate?.status ?? 'not_run')}`
   const statusLine = `当前任务 ${activeTaskLabel}，${tone === 'danger' ? `保存前置条件未完成：${gateStatusLine}` : gateStatusLine}`
   const gateDetails = [
     l2Gate ? `L2 页面核验：${l2Gate.detail}` : 'L2 页面核验：缺少真实页面核验状态',
@@ -125,7 +125,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
       { label: `后端日志：${desktopRuntime.backendLogPath ?? '待生成 backend.log'}`, tone: 'muted' },
     ] : []),
     ...(backendPortMismatch ? [{ label: '桌面后端端口与接口端口不一致', tone: 'danger' }] : []),
-    { label: `L2 页面核验：${humanGateStatus(l2Gate?.status ?? 'not_run')}`, tone: l2BlocksRealSave ? 'danger' : 'ok' },
+    { label: `只读预检：${humanGateStatus(l2Gate?.status ?? 'not_run')}`, tone: l2BlocksRealSave ? 'danger' : 'ok' },
     { label: `人工确认：${l3NeedsApproval ? `不可启动 / ${humanGateStatus(l3Gate?.status ?? 'not_run')}` : humanGateStatus(l3Gate?.status ?? 'not_run')}`, tone: l3BlocksRealSave ? 'danger' : l3NeedsApproval ? 'warn' : 'ok' },
     ...visibleBlockerGaps.slice(0, 2).map((gap) => ({ label: `阻断项：${gap.title}`, tone: 'danger' })),
     ...(l3PostEvidenceGapCount > 0 ? [{ label: `保存后证据：${l3PostEvidenceGapCount} 项预期阻断`, tone: 'warn' }] : []),
