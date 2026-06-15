@@ -35,6 +35,10 @@ if ([string]::IsNullOrWhiteSpace($CredentialSmokePath)) {
 if ([string]::IsNullOrWhiteSpace($SmokeUserDataDir)) {
   $SmokeUserDataDir = Join-Path $env:TEMP 'dxm-agent-console-packaged-smoke-user-data'
 }
+if ($CheckPortable -and $WaitSeconds -lt 90) {
+  Write-Host "Portable smoke requires a longer first-launch wait; raising WaitSeconds from $WaitSeconds to 90."
+  $WaitSeconds = 90
+}
 $CapturePath = Resolve-SmokeArtifactPath -Path $CapturePath
 $CredentialSmokePath = Resolve-SmokeArtifactPath -Path $CredentialSmokePath
 $SmokeUserDataDir = [System.IO.Path]::GetFullPath($SmokeUserDataDir)

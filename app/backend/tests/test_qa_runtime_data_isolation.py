@@ -304,20 +304,31 @@ def test_final_delivery_check_includes_packaged_desktop_smoke_in_delivery_gate()
     script = FINAL_DELIVERY_CHECK.read_text(encoding="utf-8")
     smoke_script = (REPO_ROOT / "scripts" / "verify-desktop-package.ps1").read_text(encoding="utf-8")
 
+    assert "[switch]$CheckPortableDesktop" in script
+    assert "-CheckPortableDesktop" in script
     assert "[string]$CapturePath" in smoke_script
     assert "[string]$CredentialSmokePath" in smoke_script
     assert "Resolve-SmokeArtifactPath" in smoke_script
     assert "$CapturePath = Resolve-SmokeArtifactPath -Path $CapturePath" in smoke_script
     assert "$CredentialSmokePath = Resolve-SmokeArtifactPath -Path $CredentialSmokePath" in smoke_script
+    assert "$packagedDesktopSmokeArgs" in script
+    assert '$packagedDesktopSmokeArgs += "-CheckPortable"' in script
     assert "$packagedDesktopSmokeCapturePath" in script
     assert "$packagedDesktopCredentialSmokePath" in script
     assert "verify-desktop-package.ps1" in script
     assert '-Name "Packaged desktop smoke"' in script
-    assert '"-CapturePath", $packagedDesktopSmokeCapturePath' in script
-    assert '"-CredentialSmokePath", $packagedDesktopCredentialSmokePath' in script
+    packaged_smoke_args = script[
+        script.index("$packagedDesktopSmokeArgs = @("):script.index('if ($CheckPortableDesktop)')
+    ]
+    assert '"-CapturePath"' in packaged_smoke_args
+    assert "$packagedDesktopSmokeCapturePath" in packaged_smoke_args
+    assert '"-CredentialSmokePath"' in packaged_smoke_args
+    assert "$packagedDesktopCredentialSmokePath" in packaged_smoke_args
+    assert "checkPortableDesktop" in script
     assert "packagedDesktopSmokeCapture" in script
     assert "packagedDesktopCredentialSmoke" in script
     assert "## Packaged Desktop Smoke" in script
+    assert "Portable desktop smoke:" in script
     assert "Packaged desktop smoke:" in script
     assert "Packaged desktop capture:" in script
     assert "Packaged credential smoke:" in script

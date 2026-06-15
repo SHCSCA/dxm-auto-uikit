@@ -1,6 +1,7 @@
 param(
   [switch]$SkipBrowserQA,
   [switch]$RequireCleanWorktree,
+  [switch]$CheckPortableDesktop,
   [switch]$Help,
   [string]$ExpectedRealDxmWriteReadiness = "READY",
   [string]$OutDir = "outputs/final-delivery-check"
@@ -40,6 +41,7 @@ if ($Help) {
   Write-Host ""
   Write-Host "Options:"
   Write-Host "  -RequireCleanWorktree  Require pre/post git status to be clean for source package acceptance."
+  Write-Host "  -CheckPortableDesktop  Also verify the portable no-install desktop exe during packaged desktop smoke."
   Write-Host "  -SkipBrowserQA         Developer-only shortcut; do not use for formal delivery acceptance."
   Write-Host "  -ExpectedRealDxmWriteReadiness <BLOCKED|READY|UNKNOWN>  Expected real DXM write readiness for this acceptance run; default READY."
   Write-Host "  -OutDir <path>         Write reports, logs, screenshots and sidecars to a custom directory."
@@ -804,10 +806,26 @@ $commands += Invoke-CapturedCommand `
   -Arguments @("run", "build") `
   -WorkingDirectory $frontendDir `
   -TimeoutSeconds 180
+$packagedDesktopSmokeArgs = @(
+  "-NoProfile",
+  "-ExecutionPolicy",
+  "Bypass",
+  "-File",
+  "scripts\verify-desktop-package.ps1",
+  "-WaitSeconds",
+  "20",
+  "-CapturePath",
+  $packagedDesktopSmokeCapturePath,
+  "-CredentialSmokePath",
+  $packagedDesktopCredentialSmokePath
+)
+if ($CheckPortableDesktop) {
+  $packagedDesktopSmokeArgs += "-CheckPortable"
+}
 $commands += Invoke-CapturedCommand `
   -Name "Packaged desktop smoke" `
   -FilePath "powershell.exe" `
-  -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts\verify-desktop-package.ps1", "-WaitSeconds", "20", "-CapturePath", $packagedDesktopSmokeCapturePath, "-CredentialSmokePath", $packagedDesktopCredentialSmokePath) `
+  -Arguments $packagedDesktopSmokeArgs `
   -WorkingDirectory $root `
   -TimeoutSeconds 180
 $commands += Invoke-CapturedCommand `
@@ -1096,6 +1114,7 @@ $result = [pscustomobject]@{
   postSourcePackageReadiness = $postSourcePackageReadiness
   requireCleanWorktree = [bool]$RequireCleanWorktree
   sourcePackageCheck = $sourcePackageCheck
+  checkPortableDesktop = [bool]$CheckPortableDesktop
   gateEvidenceCheck = if ($gateEvidenceOk) { "PASS" } else { "FAIL" }
   deliverableMode = "DXM semi-managed automation workbench"
   realDxmWrites = if ($realDxmWriteReadiness -eq "READY") { "controlled single_save is ready only after L2/L3 evidence review and explicit manual canary approval; batch/unattended/publish remain separately gated" } elseif ($realDxmWriteReadiness -eq "UNKNOWN") { "unknown because L2/L3 gates could not be read; writes remain blocked" } else { "blocked until fresh real L2 data_acquisition and draft_box pass, followed by L3 manual canary evidence" }
@@ -1346,6 +1365,7 @@ $summaryLines.Add("")
 $packagedDesktopSmokeCommand = $commands | Where-Object { $_.name -eq "Packaged desktop smoke" } | Select-Object -Last 1
 $summaryLines.Add("## Packaged Desktop Smoke")
 $summaryLines.Add("- Packaged desktop smoke: $(if ($packagedDesktopSmokeCommand -and $packagedDesktopSmokeCommand.ok) { "PASS" } else { "FAIL/MISSING" })")
+$summaryLines.Add("- Portable desktop smoke: $(if ($CheckPortableDesktop) { "ENABLED" } else { "SKIPPED" })")
 $summaryLines.Add("- Packaged desktop capture: $($result.artifacts.packagedDesktopSmokeCapture)")
 $summaryLines.Add("- Packaged credential smoke: $($result.artifacts.packagedDesktopCredentialSmoke)")
 $summaryLines.Add("")

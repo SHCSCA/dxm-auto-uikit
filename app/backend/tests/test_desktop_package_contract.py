@@ -240,6 +240,9 @@ def test_verify_desktop_package_smoke_script_checks_packaged_exe_logs():
     assert "Portable TEMP space OK" in source
     assert "Clean old %TEMP%" in source
     assert "portable extraction folders" in source
+    assert "Portable smoke requires a longer first-launch wait" in source
+    assert "$CheckPortable -and $WaitSeconds -lt 90" in source
+    assert "$WaitSeconds = 90" in source
     assert "Portable QA capture was not created" in source
     assert "Portable smoke passed" in source
     assert "Portable smoke skipped. Current delivery target is the verified directory免安装版" in source
