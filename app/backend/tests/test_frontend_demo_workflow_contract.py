@@ -175,6 +175,9 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert ".config-template-console__quick-status" not in styles_source
     assert ".config-save-state" in styles_source
     assert "configDefaultTemplatePackVisible" in qa_source
+    assert "configTemplateAdvancedState" in qa_source
+    assert "defaultQuickPresent" in qa_source
+    assert "defaultActionCount >= 2" in qa_source
     assert "configTemplateSelectorVisible" in qa_source
     assert "只展示当前分区；常用分区在上方，低频字段收进“更多编辑页分区”。" in config_section
     assert "otherConfigSections.map" not in config_section
@@ -613,6 +616,9 @@ def test_config_center_uses_compact_density_and_collapsed_assist_drawer():
     assert "configDensityCompact" in qa_source
     assert "configAssistDrawerCollapsed" in qa_source
     assert "configEditorNearFirstViewport" in qa_source
+    assert "focusedEditorTop" in qa_source
+    assert "focusedEditorFieldCount >= 1" in qa_source
+    assert 'document.querySelector(".editable-config-grid--focused")' in qa_source
 
 
 def test_config_center_template_lookup_matches_backend_binding_aliases():
