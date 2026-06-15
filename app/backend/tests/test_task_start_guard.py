@@ -204,6 +204,38 @@ def test_create_single_save_rejects_multiple_products(tmp_path, monkeypatch):
     assert "single_save requires exactly one product" in response.json()["detail"]
 
 
+def test_create_task_api_rejects_unreleased_real_modes(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    store = repo.create_store("Dang Kang", "AliExpress")
+    product = repo.create_product(
+        {
+            "title": "ACG Stand Product",
+            "source": "test",
+            "category_name": "立牌类谷子",
+            "price": 7.01,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {},
+        }
+    )
+
+    for mode in ("claim_only", "batch_save"):
+        response = client.post(
+            "/api/tasks",
+            json={
+                "name": f"blocked {mode}",
+                "store_id": store["id"],
+                "mode": mode,
+                "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+                "product_ids": [product["id"]],
+            },
+        )
+
+        assert response.status_code == 403
+        assert "Only controlled single_save is released" in response.json()["detail"]
+
+
 def test_start_single_save_rejects_historical_multiple_products(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     store = repo.create_store("Dang Kang", "AliExpress")
@@ -614,12 +646,27 @@ def test_agent_console_start_requires_passed_l2_gate(tmp_path, monkeypatch):
     import src.main as main
 
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "failed"})
-    task = _create_task(repo, mode="dry_run")
+    task = _create_task(repo, mode="single_save")
 
     response = client.post("/api/agent-console/start", json={"task_id": task["id"], "launch_browser": True})
 
     assert response.status_code == 403
     assert "Agent console browser start requires passed L2" in response.json()["detail"]
+
+
+def test_agent_console_execution_browser_rejects_unreleased_and_non_real_modes(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+
+    for mode in ("dry_run", "claim_only", "batch_save"):
+        task = _create_task(repo, mode=mode)
+
+        response = client.post("/api/agent-console/start", json={"task_id": task["id"], "launch_browser": True})
+
+        assert response.status_code == 403
+        assert "Only controlled single_save is released" in response.json()["detail"]
 
 
 def test_runtime_logs_tail_known_log_sources(tmp_path, monkeypatch):

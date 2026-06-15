@@ -764,9 +764,18 @@ def get_agent_console_status():
 
 @app.post('/api/agent-console/start')
 def start_agent_console(payload: AgentConsoleStartRequest):
-    if payload.task_id is not None and repo.get_task(payload.task_id) is None:
+    task = repo.get_task(payload.task_id) if payload.task_id is not None else None
+    if payload.task_id is not None and task is None:
         raise HTTPException(status_code=404, detail='Task not found')
     if payload.launch_browser:
+        if task is None:
+            raise HTTPException(
+                status_code=403,
+                detail='Agent execution browser start requires a selected controlled single_save task',
+            )
+        mode = str(task.get('mode') or (task.get('payload') or {}).get('execution_mode') or '')
+        if mode not in RELEASED_REAL_DXM_MUTATION_MODES:
+            raise HTTPException(status_code=403, detail=UNRELEASED_REAL_DXM_MODE_DETAIL)
         l2_gate = l2_real_probe_gate()
         if l2_gate.get('status') != 'passed':
             raise HTTPException(
@@ -1701,6 +1710,8 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
 
 def _assert_task_create_scope(payload: TaskCreate) -> None:
     mode = str(payload.mode or '').strip()
+    if mode in REAL_DXM_MUTATION_MODES and mode not in RELEASED_REAL_DXM_MUTATION_MODES:
+        raise HTTPException(status_code=403, detail=UNRELEASED_REAL_DXM_MODE_DETAIL)
     if mode == 'single_save':
         _assert_single_save_product_count({'product_ids': payload.product_ids}, status_code=400)
 

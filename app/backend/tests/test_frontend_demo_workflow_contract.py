@@ -782,9 +782,8 @@ def test_frontend_has_stateful_operation_guide_entry():
 
     assert "useState<WorkbenchSection>('guide')" in app_source
     assert "type WorkbenchPrimaryArea" in shell_source
-    assert "summary: '登录、配置任务'" in shell_source
-    assert "{ id: 'guide', label: '操作引导', short: '导', hint: '登录与下一步' }" in shell_source
-    assert "{ id: 'config', label: '编辑页配置', short: '配', hint: '模板与本次任务配置' }" in shell_source
+    assert "{ id: 'guide', label: '引导', short: '导', hint: '登录与下一步' }" in shell_source
+    assert "{ id: 'config', label: '配置', short: '配', hint: '编辑页模板与本次任务配置' }" in shell_source
     assert "const sectionLabels: Record<WorkbenchSection, string>" in shell_source
     assert "evidence: '证据'" in shell_source
     assert "exceptions: '问题处理'" in shell_source
@@ -987,17 +986,17 @@ def test_sidebar_primary_navigation_keeps_only_user_main_path():
     shell_source = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
     primary_area_section = shell_source[shell_source.index("const primaryAreas"):shell_source.index("const sectionLabels")]
 
-    assert primary_area_section.count("{ id: '") == 5
-    assert "{ id: 'guide', label: '操作引导'" in primary_area_section
-    assert "{ id: 'config', label: '编辑页配置'" in primary_area_section
-    assert "{ id: 'tasks', label: '当前任务'" in primary_area_section
-    assert "{ id: 'console', label: '真实浏览器控制台'" in primary_area_section
-    assert "{ id: 'reports', label: '报告与证据'" in primary_area_section
-    assert "id: 'evidence'" not in primary_area_section
-    assert "id: 'exceptions'" not in primary_area_section
+    assert primary_area_section.count("{ id: '") == 7
+    assert "{ id: 'guide', label: '引导'" in primary_area_section
+    assert "{ id: 'config', label: '配置'" in primary_area_section
+    assert "{ id: 'tasks', label: '任务'" in primary_area_section
+    assert "{ id: 'console', label: '浏览器'" in primary_area_section
+    assert "{ id: 'reports', label: '报告'" in primary_area_section
+    assert "{ id: 'evidence', label: '证据'" in primary_area_section
+    assert "{ id: 'exceptions', label: '问题'" in primary_area_section
     assert "id: 'dashboard'" not in primary_area_section
     assert "label: '更多'" not in primary_area_section
-    assert "操作引导 / 编辑页配置 / 当前任务 / 真实浏览器控制台 / 报告与证据" in shell_source
+    assert "引导 / 配置 / 任务 / 浏览器 / 报告 / 证据 / 问题" in shell_source
 
 
 def test_guide_center_can_start_real_dxm_login_without_l2_gate():
@@ -1218,7 +1217,7 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "处理任务门禁" not in workbench_source
     assert "控制台只控制独立真实浏览器；证据文件只在报告中留档，不替代实时操控。" in workbench_source
     assert "控制台不播放截图；截图只作为证据路径，不会启动保存或发布。" not in workbench_source
-    assert "'module-card span-2 agent-console-stage'" in console_section
+    assert "'module-card agent-console-stage'" in console_section
     assert '<details className="module-card span-1 console-log-card console-log-card--compact inline-disclosure" open>' in console_section
     assert "<summary>实时日志（自动刷新）</summary>" in console_section
     assert "title=\"实时日志\"" in console_section
@@ -1231,11 +1230,10 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "summary>辅助面板：运行维护 / 自动操作轨迹</summary>" not in console_section
     assert "summary>执行步骤明细</summary>" not in console_section
     assert "summary>任务执行日志</summary>" not in console_section
-    assert "登录/人工处理真实浏览器" in workbench_source
-    assert "agent-console-controls__primary-operator" in workbench_source
+    assert "1 登录真实店小秘" in workbench_source
+    assert "agent-login-panel" in workbench_source
     assert "DxmLoginInlineForm" in workbench_source
-    assert "登录浏览器：打开真实店小秘登录页" in workbench_source
-    assert "只负责登录、验证码和人工导航；L2 未通过也可以打开，不会保存、不发布。" in workbench_source
+    assert "先打开可见浏览器完成人工登录和验证码；这里只做登录，不保存、不发布。" in workbench_source
     assert "验证码已完成，检测登录态" in workbench_source
     assert "进入采集箱" in workbench_source
     assert "登录浏览器用于人工登录；执行浏览器只在配置、真实只读检查和人工确认通过后由 Agent 操控。" in workbench_source
@@ -1519,7 +1517,7 @@ def test_execution_console_surfaces_real_browser_takeover_state_before_details()
     assert "aria-label=\"真实浏览器接管状态\"" in visible_before_details
     assert "console-focus-panel__takeover-state" in visible_before_details
     assert "<strong>DXM 登录</strong>" in visible_before_details
-    assert "loginState.title" in visible_before_details
+    assert "loginState?.label ?? '未检测'" in visible_before_details
     assert "<strong>浏览器窗口</strong>" in visible_before_details
     assert "browserLabel" in visible_before_details
     assert "<strong>Agent 操控</strong>" in visible_before_details
@@ -1570,12 +1568,17 @@ def test_execution_console_primary_blocker_card_shows_precheck_recovery_path():
 def test_execution_console_distinguishes_login_browser_from_agent_execution_browser():
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     app_source = (REPO_ROOT / "app" / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+    stage_section = workbench_source[workbench_source.index("function AgentStagePanel"):workbench_source.index("function AgentLoginPanel")]
+    login_section = workbench_source[workbench_source.index("function AgentLoginPanel"):workbench_source.index("function AgentBrowserFrame")]
     console_section = workbench_source[workbench_source.index("function AgentConsoleControls"):workbench_source.index("function BrowserControlPad")]
     primary_path_section = workbench_source[workbench_source.index("function buildConsolePrimaryPath"):workbench_source.index("function FinalCheckFreshnessRow")]
 
     assert 'title="Agent 控制真实浏览器"' in workbench_source
-    assert "<strong>登录浏览器：打开真实店小秘登录页</strong>" in console_section
-    assert "只负责登录、验证码和人工导航；L2 未通过也可以打开，不会保存、不发布。" in console_section
+    assert "<AgentLoginPanel" in stage_section
+    assert "<AgentConsoleControls" in stage_section
+    assert stage_section.index("<AgentLoginPanel") < stage_section.index("<AgentConsoleControls")
+    assert "<strong>1 登录真实店小秘</strong>" in login_section
+    assert "先打开可见浏览器完成人工登录和验证码；这里只做登录，不保存、不发布。" in login_section
     assert "登录浏览器用于人工登录；执行浏览器只在配置、真实只读检查和人工确认通过后由 Agent 操控。" in console_section
     assert "打开执行浏览器（不保存）" in console_section
     assert "Agent 执行浏览器启动中" in console_section
@@ -1590,20 +1593,23 @@ def test_execution_console_distinguishes_login_browser_from_agent_execution_brow
 
 def test_execution_console_collapses_operator_forms_inside_real_browser_details():
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    stage_section = workbench_source[workbench_source.index("function AgentStagePanel"):workbench_source.index("function AgentLoginPanel")]
+    login_section = workbench_source[workbench_source.index("function AgentLoginPanel"):workbench_source.index("function AgentBrowserFrame")]
     controls_section = workbench_source[workbench_source.index("function AgentConsoleControls"):workbench_source.index("function BrowserControlPad")]
     drawer_section = controls_section[controls_section.index("<summary>执行浏览器操作细节</summary>"):controls_section.index("{agentConsoleError")]
-    primary_section = controls_section[
-        controls_section.index("agent-console-controls__primary-operator"):
-        controls_section.index("<details className=\"agent-console-controls__advanced agent-console-controls__operator-drawer")
-    ]
 
-    assert "DxmLoginInlineForm" in primary_section
-    assert "READONLY_PRECHECK_CTA" in primary_section
+    assert "<AgentLoginPanel" in stage_section
+    assert stage_section.index("<AgentLoginPanel") < stage_section.index("<AgentConsoleControls")
+    assert "DxmLoginInlineForm" in login_section
+    assert "READONLY_PRECHECK_CTA" in controls_section
+    assert "DxmLoginInlineForm" not in controls_section
+    assert "dxmLoginDraft" not in controls_section
+    assert "onOpenDxmLogin" not in controls_section
     assert "DxmLoginInlineForm" not in drawer_section
     assert "<summary>Agent 执行浏览器会话生命周期</summary>" in drawer_section
     assert "<summary>高级浏览器控制</summary>" in drawer_section
     assert "<summary>技术详情</summary>" in drawer_section
-    assert primary_section.index("DxmLoginInlineForm") < primary_section.index("agent-console-controls__actions")
+    assert controls_section.index("READONLY_PRECHECK_CTA") < controls_section.index("agent-console-controls__actions")
     assert controls_section.index("agent-console-controls__actions") < controls_section.index("<summary>执行浏览器操作细节</summary>")
 
 
@@ -3525,7 +3531,7 @@ def test_frontend_first_screen_names_dxm_automation_delivery():
     assert "系统状态与验收详情" not in safety_bar
     assert "safety-bar__meta-details inline-disclosure" in safety_bar
     assert "真实保存已阻断" not in safety_bar
-    assert "操作引导 / 编辑页配置 / 当前任务 / 真实浏览器控制台 / 报告与证据" in shell
+    assert "引导 / 配置 / 任务 / 浏览器 / 报告 / 证据 / 问题" in shell
     assert "\\u0044\\u0058\\u004d \\u81ea\\u52a8\\u5316\\u5de5\\u4f5c\\u53f0" in qa_source
     assert "initialText.includes(text.overview) || initialText.includes('\\u767b\\u5f55\\u3001\\u914d\\u7f6e\\u4efb\\u52a1') || initialText.includes('\\u5f00\\u59cb\\u4f7f\\u7528')" in qa_source
     assert "\\u73b0\\u5728\\u53ea\\u505a\\u8fd9\\u4e00\\u6b65" in qa_source
@@ -3538,12 +3544,11 @@ def test_sidebar_copy_names_save_only_agent_flow_without_ambiguous_browser_wordi
     shell = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
 
     assert "只保存自动化" in shell
-    assert "操作引导 / 编辑页配置 / 当前任务 / 真实浏览器控制台 / 报告与证据" in shell
-    assert "任务、只读检查、浏览器" in shell
-    assert "{ id: 'console', label: '真实浏览器控制台', short: '控', hint: '登录、真实只读检查、真实浏览器' }" in shell
+    assert "引导 / 配置 / 任务 / 浏览器 / 报告 / 证据 / 问题" in shell
+    assert "真实浏览器执行" in shell
+    assert "{ id: 'console', label: '浏览器', short: '控', hint: '登录、真实只读检查、真实浏览器' }" in shell
     assert "真实店小秘操作在登录浏览器和执行浏览器中完成" in shell
 
-    assert "真实浏览器自动化" not in shell
     assert "配置 / 任务 / 真实浏览器执行" not in shell
     assert "Agent 控制台与真实浏览器" not in shell
     assert "hint: '真实浏览器'" not in shell

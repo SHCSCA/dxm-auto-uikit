@@ -1399,16 +1399,16 @@ function humanDxmNavigationNotice(result: Record<string, unknown>, fallback: str
   return `${summary} 下一步：${next}${rawError ? ` 诊断：${rawError}` : ''}`.trim()
 }
 
-function pickDefaultTaskId(deliveryWorkspace: DeliveryWorkspaceResponse | null, tasks: Task[]) {
+function pickDefaultTaskId(deliveryWorkspace: DeliveryWorkspaceResponse | null, tasks: Task[]): number | null {
   const deliveryTaskId = deliveryWorkspace?.current_task?.id
   const deliveryTask = typeof deliveryTaskId === 'number'
     ? tasks.find((task) => task.id === deliveryTaskId)
     : null
   if (deliveryTask && isDefaultSelectableSingleSaveTask(deliveryTask) && deliveryTask.status !== 'completed') {
-    return deliveryTaskId
+    return deliveryTask.id
   }
   return tasks.find(isActionableSingleSaveTask)?.id
-    ?? (deliveryTask && isDefaultSelectableSingleSaveTask(deliveryTask) ? deliveryTask.id : undefined)
+    ?? (deliveryTask && isDefaultSelectableSingleSaveTask(deliveryTask) ? deliveryTask.id : null)
     ?? tasks.find((task) => task.mode === 'single_save')?.id
     ?? tasks.find(isSafeDefaultFallbackTask)?.id
     ?? null

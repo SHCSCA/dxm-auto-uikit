@@ -5,38 +5,36 @@ type WorkbenchPrimaryArea = {
   id: 'execute' | 'prepare' | 'review'
   label: string
   short: string
-  summary: string
   items: Array<{ id: WorkbenchSection; label: string; short: string; hint: string }>
 }
 
 const primaryAreas: WorkbenchPrimaryArea[] = [
   {
     id: 'prepare',
-    label: '开始',
+    label: '准备',
     short: '1',
-    summary: '登录、配置任务',
     items: [
-      { id: 'guide', label: '操作引导', short: '导', hint: '登录与下一步' },
-      { id: 'config', label: '编辑页配置', short: '配', hint: '模板与本次任务配置' },
+      { id: 'guide', label: '引导', short: '导', hint: '登录与下一步' },
+      { id: 'config', label: '配置', short: '配', hint: '编辑页模板与本次任务配置' },
     ],
   },
   {
     id: 'execute',
     label: '执行',
     short: '2',
-    summary: '任务、只读检查、浏览器',
     items: [
-      { id: 'tasks', label: '当前任务', short: '任', hint: '选择商品与批准' },
-      { id: 'console', label: '真实浏览器控制台', short: '控', hint: '登录、真实只读检查、真实浏览器' },
+      { id: 'tasks', label: '任务', short: '任', hint: '选择商品与批准' },
+      { id: 'console', label: '浏览器', short: '控', hint: '登录、真实只读检查、真实浏览器' },
     ],
   },
   {
     id: 'review',
     label: '结果',
     short: '3',
-    summary: '报告与问题',
     items: [
-      { id: 'reports', label: '报告与证据', short: '报', hint: '保存结果与交付验收' },
+      { id: 'reports', label: '报告', short: '报', hint: '保存结果与交付验收' },
+      { id: 'evidence', label: '证据', short: '证', hint: '保存、未发布与网络证据' },
+      { id: 'exceptions', label: '问题', short: '异', hint: '问题与人工处理' },
     ],
   },
 ]
@@ -86,9 +84,9 @@ export function AppShell({
           <div className="brand-mark" aria-hidden="true">DX</div>
           {!sidebarCollapsed && (
             <div>
-              <strong>DXM Agent</strong>
-              <span>只保存自动化</span>
-              <span className="sr-only">操作引导 / 编辑页配置 / 当前任务 / 真实浏览器控制台 / 报告与证据</span>
+              <strong>DXM 只保存自动化</strong>
+              <span>真实浏览器执行</span>
+              <span className="sr-only">引导 / 配置 / 任务 / 浏览器 / 报告 / 证据 / 问题</span>
             </div>
           )}
           <button className="icon-button" type="button" onClick={onToggleSidebar} aria-label="切换侧边栏">
@@ -106,7 +104,6 @@ export function AppShell({
                 {!sidebarCollapsed && (
                   <span>
                     <strong>{area.label}</strong>
-                    <small className="sr-only">{area.summary}</small>
                   </span>
                 )}
                 {sidebarCollapsed && <span aria-hidden="true">{area.short}</span>}

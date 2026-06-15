@@ -75,7 +75,7 @@ a:hover {
 
 .sidebar {
   min-height: 100vh;
-  padding: 10px 9px;
+  padding: 9px 8px;
   background: var(--rail);
   color: #f9fbff;
   display: grid;
@@ -86,7 +86,7 @@ a:hover {
 }
 
 .sidebar__brand {
-  min-height: 40px;
+  min-height: 38px;
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr);
   align-items: center;
@@ -173,13 +173,13 @@ a:focus-visible {
 .nav-list {
   display: grid;
   align-content: start;
-  gap: 7px;
+  gap: 5px;
 }
 
 .nav-section {
   display: grid;
-  gap: 3px;
-  padding: 5px 0;
+  gap: 2px;
+  padding: 4px 0;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -214,7 +214,7 @@ a:focus-visible {
 }
 
 .nav-item {
-  min-height: 36px;
+  min-height: 32px;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -228,9 +228,9 @@ a:focus-visible {
 }
 
 .nav-subitem {
-  min-height: 31px;
+  min-height: 28px;
   margin-left: 0;
-  padding: 6px 8px;
+  padding: 5px 8px;
   display: flex;
   gap: 6px;
   align-items: center;
@@ -273,7 +273,7 @@ a:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 760;
 }
 
@@ -4254,10 +4254,10 @@ tr:last-child td {
 
 .console-focus-panel {
   display: grid;
-  grid-template-columns: minmax(340px, 0.82fr) minmax(420px, 1.18fr);
-  gap: 14px;
-  align-items: center;
-  padding: 14px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 12px;
 }
 
 .console-focus-panel__main {
@@ -5303,36 +5303,35 @@ tr:last-child td {
   line-height: 1.2;
 }
 
-.agent-console-controls__primary-operator {
-  grid-column: 1 / -1;
+.agent-login-panel {
   min-width: 0;
   display: grid;
-  gap: 9px;
+  gap: 8px;
   padding: 10px;
   border: 1px solid #bfddce;
   border-radius: 7px;
   background: #f7fcf9;
 }
 
-.agent-console-controls__primary-copy {
+.agent-login-panel__copy {
   min-width: 0;
   display: grid;
-  gap: 4px;
+  gap: 3px;
 }
 
-.agent-console-controls__primary-copy strong {
+.agent-login-panel__copy strong {
   color: var(--text);
   font-size: 13px;
-  line-height: 1.3;
+  line-height: 1.25;
 }
 
-.agent-console-controls__primary-copy span {
+.agent-login-panel__copy span {
   color: var(--muted);
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 1.4;
 }
 
-.agent-console-controls__primary-operator > .operator-inline-form {
+.agent-login-panel > .operator-inline-form {
   margin-top: 0;
   background: #fff;
 }

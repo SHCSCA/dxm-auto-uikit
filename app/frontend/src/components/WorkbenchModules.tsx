@@ -3332,25 +3332,6 @@ export function ExecutionConsole({
 
   return (
     <section className="agent-console-layout" aria-label="真实浏览器控制台">
-      <ConsoleFocusPanel
-        selectedTask={selectedTask}
-        activeStep={activeStep}
-        agentConsole={agentConsole}
-        primaryPath={consolePrimaryPath}
-        runtimeStatus={runtimeStatus}
-        runtimeStatusError={runtimeStatusError}
-        runtimeLogSource={runtimeLogSource}
-        runtimeLogCount={runtimeLogCount}
-        onStartAgentConsole={onStartAgentConsole}
-        onShowTasks={onShowTasks}
-        onShowConfig={onShowConfig}
-        onShowReports={onShowReports}
-        onRuntimeControl={onRuntimeControl}
-        onRuntimeLogSourceChange={onRuntimeLogSourceChange}
-        onOpenDxmLogin={onOpenDxmLogin}
-        onContinueDxmLogin={onContinueDxmLogin}
-      />
-
       {runtimeStatusError && (
         <ServiceRecoveryPanel
           runtimeStatusError={runtimeStatusError}
@@ -3377,6 +3358,7 @@ export function ExecutionConsole({
             agentConsole={agentConsole}
             agentConsoleError={agentConsoleError}
             runtimeStatus={runtimeStatus}
+            runtimeStatusError={runtimeStatusError}
             busy={busy}
             realSaveBlocked={realSaveBlocked}
             realSaveBlockReason={realSaveBlockReason}
@@ -3437,6 +3419,25 @@ export function ExecutionConsole({
           onShowReports={onShowReports}
         />
       )}
+
+      <ConsoleFocusPanel
+        selectedTask={selectedTask}
+        activeStep={activeStep}
+        agentConsole={agentConsole}
+        primaryPath={consolePrimaryPath}
+        runtimeStatus={runtimeStatus}
+        runtimeStatusError={runtimeStatusError}
+        runtimeLogSource={runtimeLogSource}
+        runtimeLogCount={runtimeLogCount}
+        onStartAgentConsole={onStartAgentConsole}
+        onShowTasks={onShowTasks}
+        onShowConfig={onShowConfig}
+        onShowReports={onShowReports}
+        onRuntimeControl={onRuntimeControl}
+        onRuntimeLogSourceChange={onRuntimeLogSourceChange}
+        onOpenDxmLogin={onOpenDxmLogin}
+        onContinueDxmLogin={onContinueDxmLogin}
+      />
 
       <details className="module-card span-1 console-log-card console-log-card--compact inline-disclosure" open>
         <summary>实时日志（自动刷新）</summary>
@@ -3590,10 +3591,21 @@ function AgentStagePanel({
   onShowReports: () => void
 }) {
   return (
-    <div className={embedded ? 'agent-console-stage agent-console-stage--embedded' : 'module-card span-2 agent-console-stage'}>
+    <div className={embedded ? 'agent-console-stage agent-console-stage--embedded' : 'module-card agent-console-stage'}>
       <ModuleHead
         title="Agent 控制真实浏览器"
         meta={agentConsole?.active ? '执行浏览器运行中' : '登录浏览器可先打开，执行浏览器需通过门禁'}
+      />
+      <AgentLoginPanel
+        dxmLoginDraft={dxmLoginDraft}
+        dxmCredentialState={dxmCredentialState}
+        runtimeStatus={runtimeStatus}
+        runtimeStatusError={runtimeStatusError}
+        busy={busy}
+        onDxmLoginDraftChange={onDxmLoginDraftChange}
+        onClearSavedDxmCredential={onClearSavedDxmCredential}
+        onOpenDxmLogin={onOpenDxmLogin}
+        onContinueDxmLogin={onContinueDxmLogin}
       />
       <p className="agent-stage-control-summary">
         真实店小秘页面内操控仅开放受限导航和滚动；填写、点击和保存动作必须来自任务流或人工接管，避免绕过门禁。
@@ -3610,13 +3622,7 @@ function AgentStagePanel({
         primaryPath={primaryPath}
         browserStartBlocked={browserStartBlocked}
         browserStartBlockReason={browserStartBlockReason}
-        dxmLoginDraft={dxmLoginDraft}
-        dxmCredentialState={dxmCredentialState}
         onStartAgentConsole={onStartAgentConsole}
-        onDxmLoginDraftChange={onDxmLoginDraftChange}
-        onClearSavedDxmCredential={onClearSavedDxmCredential}
-        onOpenDxmLogin={onOpenDxmLogin}
-        onContinueDxmLogin={onContinueDxmLogin}
         onNavigateDxmTarget={onNavigateDxmTarget}
         onStopAgentConsole={onStopAgentConsole}
         onSnapshotAgentConsole={onSnapshotAgentConsole}
@@ -4161,7 +4167,7 @@ function ConsoleFocusPanel({
     agent: '浏览器 Agent',
   } as Record<RuntimeLogSource, string>)[runtimeLogSource]
   return (
-    <div className="module-card span-3 console-focus-panel">
+    <div className="module-card span-2 console-focus-panel">
       <div className="console-focus-panel__main">
         <span className={`console-focus-panel__dot ${primaryPath.saveBlocked ? 'is-warn' : active ? 'is-live' : ''}`} aria-hidden="true" />
         <div>
@@ -4197,7 +4203,7 @@ function ConsoleFocusPanel({
       <div className="console-focus-panel__takeover-state" aria-label="真实浏览器接管状态">
         <span>
           <strong>DXM 登录</strong>
-          <b>{loginState.title}</b>
+          <b>{loginState?.label ?? '未检测'}</b>
         </span>
         <span>
           <strong>浏览器窗口</strong>
@@ -4347,6 +4353,49 @@ function ConsolePrimaryBlockerCard({
           </div>
         )}
       </details>
+    </div>
+  )
+}
+
+function AgentLoginPanel({
+  dxmLoginDraft,
+  dxmCredentialState,
+  runtimeStatus,
+  runtimeStatusError,
+  busy,
+  onDxmLoginDraftChange,
+  onClearSavedDxmCredential,
+  onOpenDxmLogin,
+  onContinueDxmLogin,
+}: {
+  dxmLoginDraft: DxmLoginDraft
+  dxmCredentialState: DxmCredentialState
+  runtimeStatus: RuntimeStatus | null
+  runtimeStatusError: string | null
+  busy: boolean
+  onDxmLoginDraftChange: (draft: DxmLoginDraft) => void
+  onClearSavedDxmCredential: () => void
+  onOpenDxmLogin: () => void
+  onContinueDxmLogin: () => void
+}) {
+  return (
+    <div className="agent-login-panel" aria-label="登录真实店小秘首步操作">
+      <div className="agent-login-panel__copy">
+        <strong>1 登录真实店小秘</strong>
+        <span>先打开可见浏览器完成人工登录和验证码；这里只做登录，不保存、不发布。</span>
+      </div>
+      <DxmLoginInlineForm
+        draft={dxmLoginDraft}
+        credentialState={dxmCredentialState}
+        runtimeStatus={runtimeStatus}
+        runtimeStatusError={runtimeStatusError}
+        busy={busy}
+        onDraftChange={onDxmLoginDraftChange}
+        onClearSavedCredential={onClearSavedDxmCredential}
+        onSubmit={onOpenDxmLogin}
+        onContinue={onContinueDxmLogin}
+        compact
+      />
     </div>
   )
 }
@@ -4506,13 +4555,7 @@ function AgentConsoleControls({
   primaryPath,
   browserStartBlocked,
   browserStartBlockReason,
-  dxmLoginDraft,
-  dxmCredentialState,
   onStartAgentConsole,
-  onDxmLoginDraftChange,
-  onClearSavedDxmCredential,
-  onOpenDxmLogin,
-  onContinueDxmLogin,
   onNavigateDxmTarget,
   onStopAgentConsole,
   onSnapshotAgentConsole,
@@ -4532,13 +4575,7 @@ function AgentConsoleControls({
   primaryPath: ConsolePrimaryPath
   browserStartBlocked: boolean
   browserStartBlockReason: string
-  dxmLoginDraft: DxmLoginDraft
-  dxmCredentialState: DxmCredentialState
   onStartAgentConsole: () => void
-  onDxmLoginDraftChange: (draft: DxmLoginDraft) => void
-  onClearSavedDxmCredential: () => void
-  onOpenDxmLogin: () => void
-  onContinueDxmLogin: () => void
   onNavigateDxmTarget: (target: 'data_acquisition' | 'draft_box') => void
   onStopAgentConsole: () => void
   onSnapshotAgentConsole: () => void
@@ -4660,24 +4697,6 @@ function AgentConsoleControls({
           <b>2 只读定位</b>
           <b>3 人工放行后只保存</b>
         </div>
-      </div>
-      <div className="agent-console-controls__primary-operator" aria-label="登录浏览器首步操作">
-        <div className="agent-console-controls__primary-copy">
-          <strong>登录浏览器：打开真实店小秘登录页</strong>
-          <span>只负责登录、验证码和人工导航；L2 未通过也可以打开，不会保存、不发布。</span>
-        </div>
-        <DxmLoginInlineForm
-          draft={dxmLoginDraft}
-          credentialState={dxmCredentialState}
-          runtimeStatus={runtimeStatus}
-          runtimeStatusError={runtimeStatusError}
-          busy={busy}
-          onDraftChange={onDxmLoginDraftChange}
-          onClearSavedCredential={onClearSavedDxmCredential}
-          onSubmit={onOpenDxmLogin}
-          onContinue={onContinueDxmLogin}
-          compact
-        />
       </div>
       <div className="agent-console-controls__actions">
         {primaryPath.code !== 'l2' && (
