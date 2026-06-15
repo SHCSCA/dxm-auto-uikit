@@ -3,13 +3,15 @@ param(
   [switch]$CheckPortable,
   [int]$PortableMinTempFreeMB = 1024,
   [string]$CapturePath = "",
+  [string]$PortableCapturePath = "",
   [string]$CredentialSmokePath = "",
-  [string]$SmokeUserDataDir = ""
+  [string]$SmokeUserDataDir = "",
+  [string]$PortableSmokeUserDataDir = ""
 )
 
 $ErrorActionPreference = 'Stop'
 trap {
-  Write-Error $_
+  [Console]::Error.WriteLine([string]$_)
   exit 1
 }
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
@@ -29,7 +31,9 @@ function Resolve-SmokeArtifactPath {
 
 $ExePath = Join-Path $RepoRoot 'outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe'
 $PortableExePath = Join-Path $RepoRoot 'outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe'
-$PortableCapturePath = Join-Path $env:TEMP 'dxm-agent-console-portable-smoke.png'
+if ([string]::IsNullOrWhiteSpace($PortableCapturePath)) {
+  $PortableCapturePath = Join-Path $env:TEMP 'dxm-agent-console-portable-smoke.png'
+}
 if ([string]::IsNullOrWhiteSpace($CapturePath)) {
   $CapturePath = Join-Path $env:TEMP 'dxm-agent-console-packaged-smoke.png'
 }
@@ -39,15 +43,18 @@ if ([string]::IsNullOrWhiteSpace($CredentialSmokePath)) {
 if ([string]::IsNullOrWhiteSpace($SmokeUserDataDir)) {
   $SmokeUserDataDir = Join-Path $env:TEMP 'dxm-agent-console-packaged-smoke-user-data'
 }
-if ($CheckPortable -and $WaitSeconds -lt 90) {
-  Write-Host "Portable smoke requires a longer first-launch wait; raising WaitSeconds from $WaitSeconds to 90."
-  $WaitSeconds = 90
+if ([string]::IsNullOrWhiteSpace($PortableSmokeUserDataDir)) {
+  $PortableSmokeUserDataDir = Join-Path $env:TEMP 'dxm-agent-console-portable-smoke-user-data'
+}
+if ($CheckPortable -and $WaitSeconds -lt 180) {
+  Write-Host "Portable smoke requires a longer first-launch wait; raising WaitSeconds from $WaitSeconds to 180."
+  $WaitSeconds = 180
 }
 $CapturePath = Resolve-SmokeArtifactPath -Path $CapturePath
+$PortableCapturePath = Resolve-SmokeArtifactPath -Path $PortableCapturePath
 $CredentialSmokePath = Resolve-SmokeArtifactPath -Path $CredentialSmokePath
 $SmokeUserDataDir = [System.IO.Path]::GetFullPath($SmokeUserDataDir)
-$LogPath = Join-Path $SmokeUserDataDir 'data\desktop-main.log'
-$LegacyLogPath = Join-Path $SmokeUserDataDir 'legacy-data\desktop-main.log'
+$PortableSmokeUserDataDir = [System.IO.Path]::GetFullPath($PortableSmokeUserDataDir)
 
 Write-Host 'DXM Agent Console packaged smoke'
 Write-Host "Exe: $ExePath"
@@ -73,6 +80,9 @@ if (Test-Path $SmokeUserDataDir) {
   Remove-Item -LiteralPath $SmokeUserDataDir -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path $SmokeUserDataDir | Out-Null
+if (Test-Path $PortableSmokeUserDataDir) {
+  Remove-Item -LiteralPath $PortableSmokeUserDataDir -Recurse -Force
+}
 
 if (Test-Path $CapturePath) {
   Remove-Item -LiteralPath $CapturePath -Force
@@ -122,7 +132,13 @@ function Assert-PortableTempSpace {
 }
 
 function Get-DesktopSmokeLog {
-  $LogCandidates = @($LogPath, $LegacyLogPath)
+  param(
+    [string]$UserDataDir = $SmokeUserDataDir
+  )
+  $LogCandidates = @(
+    (Join-Path $UserDataDir 'data\desktop-main.log'),
+    (Join-Path $UserDataDir 'legacy-data\desktop-main.log')
+  )
   $ExistingLog = $LogCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
   if (!$ExistingLog) {
     throw "desktop-main.log was not created. Checked: $($LogCandidates -join ', ')"
@@ -301,7 +317,7 @@ if (!(Test-Path $CapturePath)) {
 }
 Assert-CredentialSmoke -Path $CredentialSmokePath
 
-$ExistingLog = Get-DesktopSmokeLog
+$ExistingLog = Get-DesktopSmokeLog -UserDataDir $SmokeUserDataDir
 Assert-DesktopSmokeLog -ExistingLog $ExistingLog -ExpectedPythonRoot (Split-Path $ExePath) -Label 'Packaged smoke'
 Assert-PackagedRuntimeClean -ExePath $ExePath
 
@@ -324,7 +340,7 @@ Write-Host "Credential smoke passed. Result: $CredentialSmokePath"
 if ($CheckPortable -and (Test-Path $PortableExePath)) {
   Write-Host "Portable exe: $PortableExePath"
   Assert-PortableTempSpace -RequiredMB $PortableMinTempFreeMB
-  $PortableProcess = Start-Process -FilePath $PortableExePath -ArgumentList "--qa-capture=$PortableCapturePath" -WindowStyle Hidden -PassThru
+  $PortableProcess = Start-Process -FilePath $PortableExePath -ArgumentList @("--qa-capture=$PortableCapturePath", "--qa-user-data-dir=$PortableSmokeUserDataDir") -WindowStyle Hidden -PassThru
   if (!(Wait-ForFile -Path $PortableCapturePath -TimeoutSeconds $WaitSeconds)) {
     try {
       Stop-Process -Id $PortableProcess.Id -Force
@@ -340,9 +356,10 @@ if ($CheckPortable -and (Test-Path $PortableExePath)) {
       Stop-Process -Id $PortableProcess.Id -Force
     } catch {}
   }
-  $PortableLog = Get-DesktopSmokeLog
+  $PortableLog = Get-DesktopSmokeLog -UserDataDir $PortableSmokeUserDataDir
   Assert-DesktopSmokeLog -ExistingLog $PortableLog -ExpectedPythonRoot $null -Label 'Portable smoke'
   Write-Host "Portable smoke passed. QA capture: $PortableCapturePath"
+  Write-Host "Portable smoke log: $PortableLog"
 } elseif ($CheckPortable) {
   throw "Portable exe not found: $PortableExePath"
 } else {

@@ -153,7 +153,7 @@ def test_desktop_credential_smoke_verifies_safe_storage_without_destroying_user_
     assert "--qa-credential-smoke=$CredentialSmokePath" in verify_source
     assert "[string]$SmokeUserDataDir" in verify_source
     assert "dxm-agent-console-packaged-smoke-user-data" in verify_source
-    assert "$LogPath = Join-Path $SmokeUserDataDir 'data\\desktop-main.log'" in verify_source
+    assert "Get-DesktopSmokeLog -UserDataDir $SmokeUserDataDir" in verify_source
     assert "--qa-user-data-dir=$SmokeUserDataDir" in verify_source
     assert "Credential smoke passed" in verify_source
 
@@ -243,9 +243,11 @@ def test_verify_desktop_package_smoke_script_checks_packaged_exe_logs():
     assert "Clean old %TEMP%" in source
     assert "portable extraction folders" in source
     assert "Portable smoke requires a longer first-launch wait" in source
-    assert "$CheckPortable -and $WaitSeconds -lt 90" in source
-    assert "$WaitSeconds = 90" in source
+    assert "$CheckPortable -and $WaitSeconds -lt 180" in source
+    assert "$WaitSeconds = 180" in source
     assert "Portable QA capture was not created" in source
+    assert "Get-DesktopSmokeLog -UserDataDir $PortableSmokeUserDataDir" in source
+    assert "--qa-user-data-dir=$PortableSmokeUserDataDir" in source
     assert 'throw "Portable exe not found' in source
     assert "Portable smoke passed" in source
     assert "Portable smoke skipped. Current delivery target is the verified directory免安装版" in source

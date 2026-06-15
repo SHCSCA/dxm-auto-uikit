@@ -7,6 +7,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FINAL_DELIVERY_CHECK = REPO_ROOT / "scripts" / "final-delivery-check.ps1"
 QA_BROWSER_CHECK = REPO_ROOT / "scripts" / "qa-browser-check.ps1"
+VERIFY_DESKTOP_PACKAGE = REPO_ROOT / "scripts" / "verify-desktop-package.ps1"
 WORKBENCH_MODULES = REPO_ROOT / "app" / "frontend" / "src" / "components" / "WorkbenchModules.tsx"
 APP_SHELL = REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx"
 USER_DELIVERY_GUIDE = REPO_ROOT / "docs" / "product" / "用户交付使用说明-20260526.md"
@@ -76,6 +77,13 @@ def test_final_delivery_check_seeds_qa_runtime_from_authoritative_data_before_ba
 def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     script = FINAL_DELIVERY_CHECK.read_text(encoding="utf-8")
 
+    assert "Test-CapturedPowerShellError" in script
+    assert "FullyQualifiedErrorId" in script
+    assert "WriteErrorException" in script
+    assert "Command output contained a PowerShell error record" in script
+    assert "Test-PackagedDesktopSmokeError" in script
+    assert "Portable smoke requires at least" in script
+    assert "Packaged desktop smoke output contained a smoke failure" in script
     assert "Invoke-JsonUtf8" in script
     assert "Invoke-RestMethod -Uri \"$workspaceApiBase/api/delivery/workspace\"" not in script
     assert "Get-JsonObjectPropertyCount $l2Gate.latest.realTargets" in script
@@ -137,6 +145,19 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "PASS only means L2/L3 records were readable; it is not an L2/L3 gate pass" in script
     assert "L2/L3 gate records available" not in script
     assert "Gate evidence check:" not in script
+
+
+def test_desktop_portable_smoke_has_long_enough_timeout_budget():
+    final_check = FINAL_DELIVERY_CHECK.read_text(encoding="utf-8")
+    verify_script = VERIFY_DESKTOP_PACKAGE.read_text(encoding="utf-8")
+
+    packaged_smoke_section = final_check[
+        final_check.index('-Name "Packaged desktop smoke"'):
+        final_check.index('-Name "L1 selector replay"')
+    ]
+    assert "-TimeoutSeconds 360" in packaged_smoke_section
+    assert "$CheckPortable -and $WaitSeconds -lt 180" in verify_script
+    assert "raising WaitSeconds from $WaitSeconds to 180" in verify_script
 
 
 def test_user_delivery_guide_explains_l2_allowlist_review_packet():
@@ -318,14 +339,25 @@ def test_final_delivery_check_includes_packaged_desktop_smoke_in_delivery_gate()
     assert "[switch]$CheckPortableDesktop" in script
     assert "-CheckPortableDesktop" in script
     assert "[string]$CapturePath" in smoke_script
+    assert "[string]$PortableCapturePath" in smoke_script
     assert "[string]$CredentialSmokePath" in smoke_script
+    assert "[string]$PortableSmokeUserDataDir" in smoke_script
+    assert "[Console]::Error.WriteLine([string]$_)" in smoke_script
     assert "Resolve-SmokeArtifactPath" in smoke_script
     assert "$CapturePath = Resolve-SmokeArtifactPath -Path $CapturePath" in smoke_script
+    assert "$PortableCapturePath = Resolve-SmokeArtifactPath -Path $PortableCapturePath" in smoke_script
     assert "$CredentialSmokePath = Resolve-SmokeArtifactPath -Path $CredentialSmokePath" in smoke_script
+    assert 'Get-DesktopSmokeLog -UserDataDir $PortableSmokeUserDataDir' in smoke_script
+    assert '"--qa-user-data-dir=$PortableSmokeUserDataDir"' in smoke_script
     assert "$packagedDesktopSmokeArgs" in script
     assert '$packagedDesktopSmokeArgs += "-CheckPortable"' in script
     assert "$packagedDesktopSmokeCapturePath" in script
+    assert "$portableDesktopSmokeCapturePath" in script
+    assert "$portableDesktopSmokeUserDataDir" in script
     assert "$packagedDesktopCredentialSmokePath" in script
+    assert "Portable desktop smoke evidence missing" in script
+    assert "Expected capture: $portableDesktopSmokeCapturePath" in script
+    assert 'Join-Path $portableDesktopSmokeUserDataDir "data\\desktop-main.log"' in script
     assert "verify-desktop-package.ps1" in script
     assert '-Name "Desktop production build"' in script
     assert '$desktopBuildScript = if ($CheckPortableDesktop) { "build:portable" } else { "build" }' in script
@@ -338,15 +370,23 @@ def test_final_delivery_check_includes_packaged_desktop_smoke_in_delivery_gate()
     ]
     assert '"-CapturePath"' in packaged_smoke_args
     assert "$packagedDesktopSmokeCapturePath" in packaged_smoke_args
+    assert '"-PortableCapturePath"' in packaged_smoke_args
+    assert "$portableDesktopSmokeCapturePath" in packaged_smoke_args
+    assert '"-PortableSmokeUserDataDir"' in packaged_smoke_args
+    assert "$portableDesktopSmokeUserDataDir" in packaged_smoke_args
     assert '"-CredentialSmokePath"' in packaged_smoke_args
     assert "$packagedDesktopCredentialSmokePath" in packaged_smoke_args
     assert "checkPortableDesktop" in script
     assert "packagedDesktopSmokeCapture" in script
+    assert "portableDesktopSmokeCapture" in script
+    assert "portableDesktopSmokeUserDataDir" in script
     assert "packagedDesktopCredentialSmoke" in script
     assert "## Packaged Desktop Smoke" in script
     assert "Portable desktop smoke:" in script
     assert "Packaged desktop smoke:" in script
     assert "Packaged desktop capture:" in script
+    assert "Portable desktop capture:" in script
+    assert "Portable desktop user data:" in script
     assert "Packaged credential smoke:" in script
 
     build = script.index('-Name "Frontend production build"')

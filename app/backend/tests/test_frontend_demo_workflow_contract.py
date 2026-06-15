@@ -737,6 +737,8 @@ def test_browser_qa_verifies_config_center_task_override_controls():
     assert "consoleLoginFormDomState" in source
     assert "passwordType === 'password'" in source
     assert "rememberCredential" in source
+    assert "rememberChecked" in source
+    assert "rememberChecked === false" in source
     assert "credentialStateText" in source
     assert "consoleRealBrowserLoginEntry" in source
     assert "consoleBrowserControlPad" in source
@@ -1083,7 +1085,8 @@ def test_real_operator_inputs_are_inline_not_browser_prompts():
     assert "saveDxmCredential" in app_source
     assert "clearDxmCredential" in app_source
     assert "setDxmLoginDraft((current) => ({ ...current, rememberCredential: false }))" in app_source
-    assert "setDxmLoginDraft((current) => ({ ...current, rememberCredential: Boolean(result.available) }))" in app_source
+    assert "useState({ username: '', password: '', rememberCredential: false })" in app_source
+    assert "setDxmLoginDraft((current) => ({ ...current, rememberCredential: Boolean(result.available) }))" not in app_source
     assert "l3ApprovedBy" in app_source
     assert "useState('ops-owner')" not in app_source
     assert "rememberCredential: true" in app_source

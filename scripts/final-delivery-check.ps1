@@ -24,6 +24,8 @@ $postFinalReportQaJson = Join-Path $browserQaOutDir "qa-final-report-check.json"
 $summaryPath = Join-Path $absoluteOutDir "final-delivery-check.md"
 $jsonPath = Join-Path $absoluteOutDir "final-delivery-check.json"
 $packagedDesktopSmokeCapturePath = Join-Path $absoluteOutDir "packaged-desktop-smoke.png"
+$portableDesktopSmokeCapturePath = Join-Path $absoluteOutDir "portable-desktop-smoke.png"
+$portableDesktopSmokeUserDataDir = Join-Path $absoluteOutDir "portable-desktop-smoke-user-data"
 $packagedDesktopCredentialSmokePath = Join-Path $absoluteOutDir "packaged-desktop-credential-smoke.json"
 $l2AllowlistReviewTemplateMarkdownPath = Join-Path $absoluteOutDir "l2-allowlist-review-template.md"
 $l2AllowlistReviewTemplateJsonPath = Join-Path $absoluteOutDir "l2-allowlist-review-template.json"
@@ -475,6 +477,31 @@ process.stdout.write(JSON.stringify(slim));
   }
 }
 
+function Test-CapturedPowerShellError {
+  param([string]$Output)
+
+  if ([string]::IsNullOrWhiteSpace($Output)) {
+    return $false
+  }
+  return $Output -match '(?m)^\s*\+\s+CategoryInfo\s*:' `
+    -or $Output -match '(?m)^\s*\+\s+FullyQualifiedErrorId\s*:' `
+    -or $Output -match 'WriteErrorException'
+}
+
+function Test-PackagedDesktopSmokeError {
+  param([string]$Output)
+
+  if ([string]::IsNullOrWhiteSpace($Output)) {
+    return $false
+  }
+  return $Output -match 'Portable smoke requires at least' `
+    -or $Output -match 'Portable QA capture was not created' `
+    -or $Output -match 'Portable smoke failed' `
+    -or $Output -match 'Portable exe not found' `
+    -or $Output -match 'Packaged smoke failed' `
+    -or $Output -match 'Credential smoke failed'
+}
+
 function Invoke-CapturedCommand {
   param(
     [string]$Name,
@@ -511,8 +538,17 @@ function Invoke-CapturedCommand {
   if ($null -eq $stdout) { $stdout = "" }
   if ($null -eq $stderr) { $stderr = "" }
   $exitCode = if ($exited -and $process.HasExited) { [int]$process.ExitCode } else { 124 }
+  $combinedOutput = $stdout + "`n" + $stderr
   if ($Name -eq "Backend pytest" -and (($stdout + "`n" + $stderr) -match '(?m)(=+ FAILURES =+|=+ ERRORS =+|[1-9][0-9]* failed|[1-9][0-9]* error)')) {
     $exitCode = 1
+  }
+  if ($exitCode -eq 0 -and (Test-CapturedPowerShellError -Output $combinedOutput)) {
+    $exitCode = 1
+    $stderr = ($stderr.TrimEnd() + "`nCommand output contained a PowerShell error record; treating command as failed.").TrimStart()
+  }
+  if ($Name -eq "Packaged desktop smoke" -and $exitCode -eq 0 -and (Test-PackagedDesktopSmokeError -Output $combinedOutput)) {
+    $exitCode = 1
+    $stderr = ($stderr.TrimEnd() + "`nPackaged desktop smoke output contained a smoke failure; treating command as failed.").TrimStart()
   }
 
   if ($stdout.Trim()) {
@@ -844,18 +880,35 @@ $packagedDesktopSmokeArgs = @(
   "20",
   "-CapturePath",
   $packagedDesktopSmokeCapturePath,
+  "-PortableCapturePath",
+  $portableDesktopSmokeCapturePath,
+  "-PortableSmokeUserDataDir",
+  $portableDesktopSmokeUserDataDir,
   "-CredentialSmokePath",
   $packagedDesktopCredentialSmokePath
 )
 if ($CheckPortableDesktop) {
   $packagedDesktopSmokeArgs += "-CheckPortable"
 }
-$commands += Invoke-CapturedCommand `
+$packagedDesktopSmokeCommand = Invoke-CapturedCommand `
   -Name "Packaged desktop smoke" `
   -FilePath "powershell.exe" `
   -Arguments $packagedDesktopSmokeArgs `
   -WorkingDirectory $root `
-  -TimeoutSeconds 180
+  -TimeoutSeconds 360
+if ($CheckPortableDesktop -and $packagedDesktopSmokeCommand.ok) {
+  $portableDesktopSmokeLogPath = Join-Path $portableDesktopSmokeUserDataDir "data\desktop-main.log"
+  if (!(Test-Path -LiteralPath $portableDesktopSmokeCapturePath) -or !(Test-Path -LiteralPath $portableDesktopSmokeLogPath)) {
+    $packagedDesktopSmokeCommand.exitCode = 1
+    $packagedDesktopSmokeCommand.ok = $false
+    $packagedDesktopSmokeCommand.stderrTail = @(
+      "Portable desktop smoke evidence missing.",
+      "Expected capture: $portableDesktopSmokeCapturePath",
+      "Expected log: $portableDesktopSmokeLogPath"
+    )
+  }
+}
+$commands += $packagedDesktopSmokeCommand
 $commands += Invoke-CapturedCommand `
   -Name "L1 selector replay" `
   -FilePath $pythonExe `
@@ -1174,6 +1227,8 @@ $result = [pscustomobject]@{
     summary = $summaryPath
     json = $jsonPath
     packagedDesktopSmokeCapture = $packagedDesktopSmokeCapturePath
+    portableDesktopSmokeCapture = $portableDesktopSmokeCapturePath
+    portableDesktopSmokeUserDataDir = $portableDesktopSmokeUserDataDir
     packagedDesktopCredentialSmoke = $packagedDesktopCredentialSmokePath
     l2AllowlistReviewTemplateMarkdown = $l2AllowlistReviewTemplateMarkdownPath
     l2AllowlistReviewTemplateJson = $l2AllowlistReviewTemplateJsonPath
@@ -1395,6 +1450,8 @@ $summaryLines.Add("## Packaged Desktop Smoke")
 $summaryLines.Add("- Packaged desktop smoke: $(if ($packagedDesktopSmokeCommand -and $packagedDesktopSmokeCommand.ok) { "PASS" } else { "FAIL/MISSING" })")
 $summaryLines.Add("- Portable desktop smoke: $(if ($CheckPortableDesktop) { "ENABLED" } else { "SKIPPED" })")
 $summaryLines.Add("- Packaged desktop capture: $($result.artifacts.packagedDesktopSmokeCapture)")
+$summaryLines.Add("- Portable desktop capture: $($result.artifacts.portableDesktopSmokeCapture)")
+$summaryLines.Add("- Portable desktop user data: $($result.artifacts.portableDesktopSmokeUserDataDir)")
 $summaryLines.Add("- Packaged credential smoke: $($result.artifacts.packagedDesktopCredentialSmoke)")
 $summaryLines.Add("")
 $summaryLines.Add("## Browser QA")
@@ -1416,6 +1473,8 @@ $summaryLines.Add("")
 $summaryLines.Add("## Artifacts")
 $summaryLines.Add("- JSON: $jsonPath")
 $summaryLines.Add("- Packaged desktop smoke capture: $($result.artifacts.packagedDesktopSmokeCapture)")
+$summaryLines.Add("- Portable desktop smoke capture: $($result.artifacts.portableDesktopSmokeCapture)")
+$summaryLines.Add("- Portable desktop user data: $($result.artifacts.portableDesktopSmokeUserDataDir)")
 $summaryLines.Add("- Packaged credential smoke: $($result.artifacts.packagedDesktopCredentialSmoke)")
 $summaryLines.Add("- Browser QA JSON: $($result.artifacts.browserQaJson)")
 $summaryLines.Add("- Browser QA Markdown: $($result.artifacts.browserQaMarkdown)")

@@ -169,7 +169,7 @@ export default function App() {
   const [configPreview, setConfigPreview] = useState<ConfigPreview | null>(null)
   const [configPreviewError, setConfigPreviewError] = useState<string | null>(null)
   const [configPreviewLoading, setConfigPreviewLoading] = useState(false)
-  const [dxmLoginDraft, setDxmLoginDraft] = useState({ username: '', password: '', rememberCredential: true })
+  const [dxmLoginDraft, setDxmLoginDraft] = useState({ username: '', password: '', rememberCredential: false })
   const [dxmCredentialState, setDxmCredentialState] = useState<DxmCredentialState>({
     available: false,
     loaded: false,
@@ -520,7 +520,7 @@ export default function App() {
           saved: false,
           message: result.available ? '可记住账号密码；密码会写入本机加密存储。' : '本机加密存储不可用；不会保存密码。',
         })
-        setDxmLoginDraft((current) => ({ ...current, rememberCredential: Boolean(result.available) }))
+        setDxmLoginDraft((current) => ({ ...current, rememberCredential: false }))
       } catch (error) {
         if (cancelled) return
         setDxmLoginDraft((current) => ({ ...current, rememberCredential: false }))
