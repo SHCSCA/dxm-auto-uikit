@@ -263,9 +263,9 @@ scripts\final-delivery-check.bat
 
 它会串行运行 Windows 启动前检查、后端全量测试、前端生产构建、L1 selector replay、`git diff --check`、浏览器 QA，并输出 `outputs/final-delivery-check/final-delivery-check.md` / `.json`。最终自检模式下，浏览器 QA 截图和 sidecar 文件位于 `outputs\final-delivery-check\browser-checks\`。浏览器 QA 会临时启动隔离的当前源码后端和前端预览服务，避免误测 8000/5173 上的旧进程；检查模式可能安装前端依赖，但不会访问店小秘、不会执行真实保存。报告顶部会分别显示“自动化工作台自检结果”和“真实 DXM 写入放行状态”。
 
-当前源码包验收成功标准：`Local workbench check: PASS`、`Browser QA: PASS`、`Final report evidence QA: PASS`、`Source package check: PASS`，并按 L2/L3 门禁计算 `Real DXM write readiness`。截至最新本地验收，自动化工作台、桌面 portable 构建、packaged/portable smoke、Browser QA 和最终报告与证据 QA 均可通过；真实 DXM 写入因 L2 真实只读证据已过期应显示 `BLOCKED`，`okScope=local_workbench_only`，`realDxmMutationAllowed=false`。正式源码包交付时必须重新运行 `-RequireCleanWorktree -CheckPortableDesktop -ExpectedRealDxmWriteReadiness BLOCKED`，或先重新取得同一 run-id 的 L2 双目标真实只读证据并完成 L3 人工金丝雀后，再按 `READY` 验收。`BLOCKED` 表示真实写入不可启动，不表示自动化工作台本地功能失败。
+当前源码包验收成功标准：`Local workbench check: PASS`、`Browser QA: PASS`、`Final report evidence QA: PASS`、`Source package check: PASS`，并按 L2/L3 门禁计算 `Real DXM write readiness`。截至 2026-06-15 最新 clean worktree 验收，自动化工作台、桌面 portable 构建、packaged/portable smoke、Browser QA 和最终报告与证据 QA 均已通过；真实 DXM 写入状态为 `READY`，范围仅限 `controlled_single_save_only`，即受控单商品只保存。正式源码包交付命令为 `-RequireCleanWorktree -CheckPortableDesktop -ExpectedRealDxmWriteReadiness READY`。`READY` 不代表批量、无人值守、认领或发布放行。
 
-自动化或管理摘要读取 `final-delivery-check.json` 时，不能只读取 `ok`。当前 `ok: true` 只代表 `okScope` 所声明的范围通过；若 `okScope` 为 `local_workbench_only` 且 `realDxmMutationAllowed` 为 `false`，结论仍然是自动化工作台可交付、真实 DXM 写入不可启动。
+自动化或管理摘要读取 `final-delivery-check.json` 时，不能只读取 `ok`。当前 `ok: true` 只代表 `okScope` 所声明的范围通过；若 `okScope` 为 `local_workbench_and_controlled_single_save_ready` 且 `realDxmMutationScope` 为 `controlled_single_save_only`，结论是工作台可交付且仅单商品只保存可按门禁启动。
 
 启动工作台后，报告与证据会显示最近一次交付自检摘要和报告路径，方便验收人直接确认自动化工作台 PASS、真实写入门禁状态与源码包状态。
 
@@ -304,7 +304,7 @@ scripts\final-delivery-check.bat --help
 3. 若要扩大到认领或批量保存，必须为对应范围重新建立真实只读检查、人工批准和保存/回滚证据，不复用单商品只保存结论。
 4. 批量、无人值守和发布必须单独设计门禁、人工批准和回滚策略。
 
-免安装版快速使用说明见 `docs/product/免安装版快速使用说明-20260615.md`。当前验收记录见 `docs/product/最终交付验收记录-20260615.md`；当前分支已通过本地工作台、portable 桌面 smoke 和 BLOCKED 门禁自检。真实写入需要重新取得新鲜 L2/L3 证据后才能从 `BLOCKED` 切到受控 `single_save READY`。
+免安装版快速使用说明见 `docs/product/免安装版快速使用说明-20260615.md`。当前验收记录见 `docs/product/最终交付验收记录-20260615.md`；当前分支已通过本地工作台、portable 桌面 smoke 和 `READY` 门禁自检。真实写入放行范围仅为受控 `single_save`，批量、无人值守、认领和发布仍需单独证据链。
 
 ---
 
