@@ -566,6 +566,8 @@ a:focus-visible {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+  box-shadow: var(--shadow);
+  pointer-events: auto;
 }
 
 .workspace-alert--degraded {

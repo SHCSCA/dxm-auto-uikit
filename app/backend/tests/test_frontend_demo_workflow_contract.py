@@ -1766,11 +1766,15 @@ def test_operation_feedback_uses_floating_toast_stack_not_page_flow_alerts():
     shell_section = app_source[app_source.index("<AppShell"):app_source.index("{content}")]
 
     assert 'className="operation-toast-stack"' in shell_section
+    assert "{workspaceNotice && (" in shell_section
     assert "{operationError && (" in shell_section
     assert "{operationNotice && (" in shell_section
+    assert shell_section.index('className="operation-toast-stack"') < shell_section.index("{workspaceNotice && (")
     assert shell_section.index('className="operation-toast-stack"') < shell_section.index("{operationError && (")
     assert shell_section.index('className="operation-toast-stack"') < shell_section.index("{operationNotice && (")
+    assert shell_section.index("{workspaceNotice && (") < shell_section.index("{operationError && (")
     assert "data-testid=\"operation-notice\"" in shell_section
+    assert "data-testid=\"workspace-notice\"" in shell_section
     assert ".operation-toast-stack" in styles_source
     toast_styles = styles_source[styles_source.index(".operation-toast-stack {"):styles_source.index(".operation-alert {")]
     assert "position: fixed;" in toast_styles
@@ -1779,6 +1783,9 @@ def test_operation_feedback_uses_floating_toast_stack_not_page_flow_alerts():
     assert "z-index: 60;" in toast_styles
     assert "pointer-events: none;" in toast_styles
     assert "pointer-events: auto;" in styles_source[styles_source.index(".operation-alert {"):styles_source.index(".operation-alert--ok {")]
+    workspace_alert_styles = styles_source[styles_source.index(".workspace-alert {"):styles_source.index(".workspace-alert--degraded {")]
+    assert "pointer-events: auto;" in workspace_alert_styles
+    assert "box-shadow: var(--shadow);" in workspace_alert_styles
     assert "browser_control: '控制'" in workbench_source
     assert "fill: '填写'" in workbench_source
     assert ".runtime-control-panel" in styles_source

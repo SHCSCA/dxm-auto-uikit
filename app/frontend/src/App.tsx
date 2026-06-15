@@ -1192,13 +1192,13 @@ export default function App() {
         onShowTasks={() => setActiveSection('tasks')}
         onShowConsole={() => setActiveSection('console')}
       />
-      {workspaceNotice && (
-        <div className={`workspace-alert workspace-alert--${workspaceNotice.kind}`} role={workspaceNotice.kind === 'degraded' ? 'alert' : 'status'}>
-          <strong>{workspaceNotice.title}</strong>
-          <span>{workspaceNotice.detail}</span>
-        </div>
-      )}
       <div className="operation-toast-stack" aria-live="polite">
+        {workspaceNotice && (
+          <div className={`workspace-alert workspace-alert--${workspaceNotice.kind}`} role={workspaceNotice.kind === 'degraded' ? 'alert' : 'status'} data-testid="workspace-notice">
+            <strong>{workspaceNotice.title}</strong>
+            <span>{workspaceNotice.detail}</span>
+          </div>
+        )}
         {operationError && (
           <div className="operation-alert" role="alert">
             <strong>操作需要重试</strong>
