@@ -3661,6 +3661,42 @@ def test_config_and_console_primary_screens_keep_diagnostics_secondary():
     assert "visibleRuntimeLogItems = filteredRuntimeLogItems.slice(0, 10)" in source
 
 
+def test_frontend_translates_failed_execution_technical_errors_for_operators():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    report_summary_section = source[source.index("function humanReportSummary"):source.index("function formatTime")]
+    gate_detail_section = source[source.index("function humanGateDetail"):source.index("function humanL2PrecheckError")]
+    report_card_section = source[source.index("function ReportCard"):source.index("function GradeCard")]
+
+    assert "humanOperatorMessage" in source
+    assert "Cannot switch to a different thread" in source
+    assert "greenlet" in source
+    assert "浏览器连接异常" in source
+    assert "请关闭旧浏览器窗口，重新打开真实浏览器后再重试当前任务" in source
+    assert "保存没有完成" in source
+    assert "humanOperatorMessage" in report_summary_section
+    assert "return String(summary.blocked_reason" not in report_summary_section
+    assert "humanOperatorMessage" in gate_detail_section
+    assert "reportStatusTone(report.status)" in report_card_section
+    assert "humanReportStatus(report.status)" in report_card_section
+    assert 'className="status-pill ok"' not in report_card_section
+
+
+def test_failed_task_primary_path_guides_retry_instead_of_non_draft_jargon():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    build_primary_path_section = source[
+        source.index("function buildConsolePrimaryPath"):
+        source.index("function FinalCheckFreshnessRow")
+    ]
+    task_center_section = source[source.index("export function TaskCenter"):source.index("export function ExecutionConsole")]
+
+    assert "selectedTask.status === 'failed'" in build_primary_path_section
+    assert "上次执行失败" in build_primary_path_section
+    assert "重新创建单商品只保存任务" in build_primary_path_section
+    start_label_section = task_center_section[task_center_section.index("const startLabel"):task_center_section.index("const historyTaskHint")]
+    assert start_label_section.index("selectedTask.status === 'failed'") < start_label_section.index("selectedTask.status !== 'draft'")
+    assert "上次执行失败，重新创建任务" in task_center_section
+
+
 def test_report_center_keeps_evidence_exception_and_console_followup_reachable_after_sidebar_simplification():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     app_source = APP_TSX.read_text(encoding="utf-8")

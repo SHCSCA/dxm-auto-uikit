@@ -105,7 +105,13 @@ title_ai_service = TitleAIService()
 selector_profile_service = SelectorProfileService()
 agent_console_service = AgentConsoleService()
 config_preview_service = ConfigPreviewService()
-runner = V1TaskRunner(repo, manager, workflow_adapter=workflow_adapter, agent_console=agent_console_service)
+runner = V1TaskRunner(
+    repo,
+    manager,
+    workflow_adapter=workflow_adapter,
+    agent_console=agent_console_service,
+    workflow_executor=login_flow_executor,
+)
 
 REAL_DXM_MUTATION_MODES = {'claim_only', 'single_save', 'batch_save'}
 RELEASED_REAL_DXM_MUTATION_MODES = {'single_save'}

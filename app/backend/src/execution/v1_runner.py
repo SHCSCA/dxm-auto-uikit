@@ -59,12 +59,13 @@ class V1TaskRunner:
         manager,
         workflow_adapter: Any | None = None,
         agent_console: Any | None = None,
+        workflow_executor: ThreadPoolExecutor | None = None,
     ) -> None:
         self.repo = repo
         self.manager = manager
         self.workflow_adapter = workflow_adapter
         self.agent_console = agent_console
-        self._workflow_executor = ThreadPoolExecutor(max_workers=1) if workflow_adapter is not None else None
+        self._workflow_executor = workflow_executor or (ThreadPoolExecutor(max_workers=1) if workflow_adapter is not None else None)
         self.live = DxmLiveClient()
         self.publish_guard = PublishGuardService()
         self.config_validation = ConfigValidationService()

@@ -1,5 +1,7 @@
 import asyncio
 import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -103,6 +105,16 @@ class FakeWorkflowAdapter:
         if "dxm_reference_template_results" in evidence:
             result["dxm_reference_template_results"] = evidence["dxm_reference_template_results"]
         return result
+
+
+class ThreadRecordingWorkflowAdapter(FakeWorkflowAdapter):
+    def __init__(self):
+        super().__init__()
+        self.thread_names = []
+
+    def _record(self, action, *args):
+        self.thread_names.append(threading.current_thread().name)
+        return super()._record(action, *args)
 
 
 class FakeAgentConsole:
@@ -763,6 +775,27 @@ def test_save_only_missing_save_result_fails_job(v1_db):
     assert reports[0]["status"] == "failed"
     assert reports[0]["published"] is False
     assert "save_result" in reports[0]["summary"]["blocked_reason"]
+
+
+def test_runner_uses_injected_workflow_executor_for_thread_bound_login_flow(v1_db):
+    repo = Repository()
+    task = _create_task(repo, mode="single_save", product_count=1)
+    manager = DummyManager()
+    adapter = ThreadRecordingWorkflowAdapter()
+
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="dxm-login-flow") as executor:
+        asyncio.run(
+            V1TaskRunner(
+                repo,
+                manager,
+                workflow_adapter=adapter,
+                workflow_executor=executor,
+            ).run_task(task["id"])
+        )
+
+    assert adapter.thread_names
+    assert all(name.startswith("dxm-login-flow") for name in adapter.thread_names)
+    assert repo.get_task(task["id"])["status"] == "completed"
 
 
 def test_single_save_without_workflow_adapter_fails(v1_db):

@@ -2768,6 +2768,8 @@ export function TaskCenter({ workspace, selectedTask, configPreview, configPrevi
       ? '任务已完成，查看报告'
       : selectedTask.status === 'running'
         ? '任务运行中'
+        : selectedTask.status === 'failed'
+          ? '上次执行失败，重新创建任务'
         : selectedTask.status !== 'draft'
           ? '任务非草稿，禁止启动'
           : selectedTaskIsUnreleasedRealMode
@@ -6218,6 +6220,20 @@ function buildConsolePrimaryPath({
       saveBlocked: false,
     }
   }
+  if (selectedTask.status === 'failed') {
+    return {
+      code: 'not_draft',
+      title: '上次执行失败',
+      reason: '上次保存没有完成，系统没有拿到保存成功证明。',
+      detail: '请先查看报告里的失败原因；确认店小秘浏览器可用后，重新创建单商品只保存任务再执行。',
+      next: '重新创建单商品只保存任务',
+      ctaLabel: '重新创建任务',
+      action: 'tasks',
+      browserStatus: '上次执行失败，Agent 执行浏览器暂不启动',
+      blocksBrowserStart: true,
+      saveBlocked: true,
+    }
+  }
   if (selectedTask.status !== 'draft') {
     return {
       code: 'not_draft',
@@ -6626,7 +6642,7 @@ function ReportCard({ report }: { report: Report }) {
     <article className="report-card">
       <div className="report-card__head">
         <strong>{String(report.title ?? report.report_type ?? `报告 #${report.id}`)}</strong>
-        <span className="status-pill ok">{String(report.status ?? 'draft')}</span>
+        <span className={`status-pill ${reportStatusTone(report.status)}`}>{humanReportStatus(report.status)}</span>
       </div>
       <p>{humanReportSummary(report)}</p>
       <div className="report-card__footer">
@@ -6654,7 +6670,7 @@ function GapList({ gaps }: { gaps: AcceptanceGap[] }) {
         <article key={gap.id} className={`gap-row severity-${gap.severity}`} data-gap-id={gap.id} data-severity={gap.severity}>
           <div>
             <strong>{gap.title}</strong>
-            <span>{gap.detail}</span>
+            <span>{humanGateDetail(gap.detail) ?? gap.detail}</span>
           </div>
           <small>{gap.owner} / 证据 {gap.evidenceLevel}</small>
         </article>
@@ -7067,6 +7083,8 @@ function humanGateStateLabel(status: string) {
 
 function humanGateDetail(detail?: string | null) {
   if (!detail) return null
+  const operatorMessage = humanOperatorMessage(detail)
+  if (operatorMessage !== detail) return operatorMessage
   const resourceMessage = humanL2PrecheckError(detail)
   if (resourceMessage !== detail) return resourceMessage
   if (
@@ -7182,10 +7200,52 @@ function displaySafeLogMessage(message: string) {
 }
 
 function humanReportSummary(report: Report) {
-  if (typeof report.summary === 'string') return report.summary
+  if (typeof report.summary === 'string') return humanOperatorMessage(report.summary)
   const summary = report.summary && typeof report.summary === 'object' ? report.summary as Record<string, unknown> : {}
   const saveResult = report.save_result && typeof report.save_result === 'object' ? report.save_result as Record<string, unknown> : {}
-  return String(summary.blocked_reason ?? summary.status ?? saveResult.message ?? saveResult.msg ?? '等待执行结果补齐')
+  const message = summary.blocked_reason ?? summary.status ?? saveResult.message ?? saveResult.msg ?? '等待执行结果补齐'
+  return humanOperatorMessage(String(message))
+}
+
+function humanOperatorMessage(message: string) {
+  if (
+    message.includes('Cannot switch to a different thread')
+    || message.includes('greenlet')
+    || message.includes('Playwright Sync API')
+  ) {
+    return '浏览器连接异常：请关闭旧浏览器窗口，重新打开真实浏览器后再重试当前任务。'
+  }
+  if (
+    message.includes('save_result')
+    || message.includes('published=false')
+    || message.includes('network/HAR')
+    || message.includes('save screenshot')
+    || message.includes('unpublished screenshot')
+  ) {
+    return '保存没有完成：系统没有拿到保存成功、未发布证明和网络回包。请确认店小秘页面正常后，重新创建单商品只保存任务。'
+  }
+  if (message.includes('当前任务不是草稿状态')) {
+    return '这条任务已经执行过或失败，不能直接再次启动。请选择草稿任务，或重新创建单商品只保存任务。'
+  }
+  return message
+}
+
+function humanReportStatus(status?: string | null) {
+  const labels: Record<string, string> = {
+    success: '成功',
+    failed: '失败',
+    partial_success: '部分成功',
+    running: '运行中',
+    draft: '待执行',
+  }
+  return labels[String(status || 'draft')] ?? String(status || '待执行')
+}
+
+function reportStatusTone(status?: string | null) {
+  if (status === 'success') return 'ok'
+  if (status === 'failed') return 'danger'
+  if (status === 'running') return 'warn'
+  return 'muted'
 }
 
 function formatTime(value: string) {

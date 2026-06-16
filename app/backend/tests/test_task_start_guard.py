@@ -10,6 +10,8 @@ from src.execution.v1_runner import V1TaskRunner
 from src.main import app
 from src.repository import Repository
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 class DummyRunner:
     def __init__(self):
@@ -202,6 +204,14 @@ def test_create_single_save_rejects_multiple_products(tmp_path, monkeypatch):
 
     assert response.status_code == 400
     assert "single_save requires exactly one product" in response.json()["detail"]
+
+
+def test_main_runner_reuses_login_flow_executor_for_thread_bound_playwright():
+    main_source = (REPO_ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    runner_section = main_source[main_source.index("runner = V1TaskRunner("):main_source.index("REAL_DXM_MUTATION_MODES")]
+
+    assert "login_flow_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='dxm-login-flow')" in main_source
+    assert "workflow_executor=login_flow_executor" in runner_section
 
 
 def test_create_task_api_rejects_unreleased_real_modes(tmp_path, monkeypatch):
