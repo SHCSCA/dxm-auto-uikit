@@ -240,6 +240,41 @@ class DummyPage:
         return self.text
 
 
+class DummyLoggedInHomePage:
+    url = 'https://www.dianxiaomi.com/web/home'
+
+    def __init__(self):
+        self.screenshot_calls = []
+
+    def locator(self, selector: str):
+        assert selector == 'body'
+        return self
+
+    def inner_text(self, timeout: int = 0):
+        return '店小秘 首页 产品 订单 客服 采购 仓库 物流 数据 财务 托管'
+
+    def title(self):
+        return '店小秘--首页'
+
+    def wait_for_timeout(self, timeout):
+        return None
+
+    def screenshot(self, path, full_page=True):
+        self.screenshot_calls.append((path, full_page))
+
+
+class DummyCookieContext:
+    def cookies(self):
+        return [
+            {
+                'name': 'dxm-session',
+                'value': 'session-value',
+                'domain': '.dianxiaomi.com',
+                'path': '/',
+            }
+        ]
+
+
 class DummyDraftPage:
     url = 'https://www.dianxiaomi.com/web/smt/smtProductList/draft'
 
@@ -1242,6 +1277,74 @@ def test_dxm_login_flow_continue_success_keeps_visible_browser_for_next_steps(mo
     assert '数据采集' in state['next_action']
     assert '采集箱' in state['next_action']
     assert close_calls == []
+
+
+def test_submit_login_after_captcha_accepts_already_logged_in_visible_home(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=False)
+    live_client.cookie_file = tmp_path / 'cookies.json'
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    page = DummyLoggedInHomePage()
+    flow._context = DummyCookieContext()
+
+    monkeypatch.setattr(flow, '_ensure_page', lambda: page)
+    monkeypatch.setattr(flow, '_click_first_available', lambda *args, **kwargs: pytest.fail('should not click login controls when page is already logged in'))
+
+    state = flow._submit_login_after_captcha()
+
+    assert state['page_title'] == '店小秘--首页'
+    assert state['page_url'] == 'https://www.dianxiaomi.com/web/home'
+    assert live_client.cookie_file.exists()
+    assert 'dxm-session' in live_client.cookie_file.read_text(encoding='utf-8')
+    assert page.screenshot_calls
+
+
+def test_continue_login_uses_visible_home_when_headless_cookie_probe_hits_asyncio_guard(monkeypatch, tmp_path):
+    class AsyncioGuardLiveClient(DummyLiveClient):
+        def probe_session(self):
+            self.probed = True
+            raise RuntimeError('It looks like you are using Playwright Sync API inside the asyncio loop. Please use the Async API instead.')
+
+    live_client = AsyncioGuardLiveClient(logged_in=False)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    close_calls = []
+
+    monkeypatch.setattr(flow, '_submit_login_after_captcha', lambda: {
+        'page_title': '店小秘--首页',
+        'page_url': 'https://www.dianxiaomi.com/web/home',
+        'screenshot_url': '/artifacts/screenshots/login-result.png',
+        'visible_logged_in': True,
+    })
+    monkeypatch.setattr(flow, '_close_browser_session', lambda: close_calls.append('closed'))
+    monkeypatch.setattr(flow, '_is_headless', lambda: False)
+
+    state = flow.continue_login()
+
+    assert live_client.probed is True
+    assert state['stage'] == 'login_success'
+    assert state['requires_user_action'] is False
+    assert state['browser_visible'] is True
+    assert state['page_url'] == 'https://www.dianxiaomi.com/web/home'
+    assert '登录成功' in state['message']
+    assert close_calls == []
+
+
+def test_continue_login_prefers_visible_home_over_stale_cookie_probe(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=False)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+
+    monkeypatch.setattr(flow, '_submit_login_after_captcha', lambda: {
+        'page_title': '店小秘--首页',
+        'page_url': 'https://www.dianxiaomi.com/web/home',
+        'screenshot_url': '/artifacts/screenshots/login-result.png',
+        'visible_logged_in': True,
+    })
+    monkeypatch.setattr(flow, '_is_headless', lambda: False)
+
+    state = flow.continue_login()
+
+    assert live_client.probed is True
+    assert state['stage'] == 'login_success'
+    assert state['page_url'] == 'https://www.dianxiaomi.com/web/home'
 
 
 def test_dxm_login_flow_navigate_updates_runtime_state(monkeypatch, tmp_path):

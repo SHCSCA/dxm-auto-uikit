@@ -119,8 +119,23 @@ class DxmLoginFlow:
     def continue_login(self) -> dict[str, Any]:
         try:
             submit_state = self._submit_login_after_captcha()
+        except Exception as exc:
+            state = self._error_state(
+                stage='login_failed',
+                label='继续失败',
+                message=f'继续登录失败：{exc}',
+                next_action='真实浏览器窗口会保留；请确认验证码是否完成，必要时在窗口内修正后再次检测，或重新打开官网登录页。',
+            )
+            state['browser_visible'] = not self._is_headless()
+            self._write_state(state)
+            return state
+        try:
             live_status = self.live_client.probe_session()
         except Exception as exc:
+            if self._submit_state_looks_logged_in(submit_state):
+                state = self._login_success_state_from_submit(submit_state)
+                self._write_state(state)
+                return state
             state = self._error_state(
                 stage='login_failed',
                 label='继续失败',
@@ -143,6 +158,8 @@ class DxmLoginFlow:
                 'browser_visible': not self._is_headless(),
                 'updated_at': now_iso(),
             }
+        elif self._submit_state_looks_logged_in(submit_state):
+            state = self._login_success_state_from_submit(submit_state)
         else:
             state = {
                 'stage': 'login_failed',
@@ -396,25 +413,65 @@ class DxmLoginFlow:
 
     def _submit_login_after_captcha(self) -> dict[str, Any]:
         page = self._ensure_page()
-        self._click_first_available(page, [
-            'label:has-text("记住密码")',
-            'input[type="checkbox"]',
-            'text=记住密码',
-        ])
-        self._click_first_available(page, [
-            'button:has-text("登录")',
-            'input[type="submit"]',
-            'text=登录',
-        ])
+        if not self._page_looks_logged_in(page):
+            self._click_first_available(page, [
+                'label:has-text("记住密码")',
+                'input[type="checkbox"]',
+                'text=记住密码',
+            ])
+            self._click_first_available(page, [
+                'button:has-text("登录")',
+                'input[type="submit"]',
+                'text=登录',
+            ])
         page.wait_for_timeout(4000)
         page.screenshot(path=str(LOGIN_RESULT_SCREENSHOT_FILE), full_page=True)
-        if self._context is not None:
-            cookies = self._context.cookies()
-            self.live_client.cookie_file.write_text(json.dumps(cookies, ensure_ascii=False, indent=2), encoding='utf-8')
+        self._persist_visible_browser_cookies()
         return {
             'page_title': page.title(),
             'page_url': page.url,
             'screenshot_url': self._artifact_url(LOGIN_RESULT_SCREENSHOT_FILE),
+            'visible_logged_in': self._page_looks_logged_in(page),
+        }
+
+    def _persist_visible_browser_cookies(self) -> None:
+        if self._context is None:
+            return
+        cookies = self._context.cookies()
+        self.live_client.cookie_file.write_text(json.dumps(cookies, ensure_ascii=False, indent=2), encoding='utf-8')
+
+    def _page_looks_logged_in(self, page: Page) -> bool:
+        url = str(getattr(page, 'url', '') or '').lower()
+        if '/web/home' in url or 'index.htm' in url:
+            try:
+                body_text = page.locator('body').inner_text(timeout=2000)
+            except Exception:
+                body_text = ''
+            normalized = ''.join(str(body_text or '').split())
+            if '欢迎登录' in normalized:
+                return False
+            return any(term in normalized for term in ('首页', '产品', '订单', '仓库', '物流', '数据'))
+        return False
+
+    def _submit_state_looks_logged_in(self, submit_state: dict[str, Any]) -> bool:
+        if submit_state.get('visible_logged_in') is True:
+            return True
+        url = str(submit_state.get('page_url') or '').lower()
+        title = str(submit_state.get('page_title') or '')
+        return ('/web/home' in url or 'index.htm' in url) and '登录' not in title
+
+    def _login_success_state_from_submit(self, submit_state: dict[str, Any]) -> dict[str, Any]:
+        return {
+            'stage': 'login_success',
+            'label': '已登录',
+            'message': '登录成功，已进入真实店小秘后台。',
+            'next_action': '真实浏览器窗口会保留；可继续进入数据采集、采集箱和编辑流程。',
+            'requires_user_action': False,
+            'page_title': submit_state.get('page_title') or '店小秘首页',
+            'page_url': submit_state.get('page_url') or 'https://www.dianxiaomi.com/web/home',
+            'screenshot_url': submit_state.get('screenshot_url'),
+            'browser_visible': not self._is_headless(),
+            'updated_at': now_iso(),
         }
 
     def _navigate_in_session(self, target: str) -> dict[str, Any]:
