@@ -828,12 +828,12 @@ def test_frontend_has_stateful_operation_guide_entry():
 
     assert "useState<WorkbenchSection>('guide')" in app_source
     assert "type WorkbenchPrimaryArea" in shell_source
-    assert "{ id: 'guide', label: '引导', short: '导', hint: '登录与下一步' }" in shell_source
-    assert "{ id: 'config', label: '配置', short: '配', hint: '编辑页模板与本次任务配置' }" in shell_source
+    assert "{ id: 'guide', label: '操作引导与账号登录', short: '导', hint: '登录店小秘、查看当前下一步' }" in shell_source
+    assert "{ id: 'config', label: '编辑页配置与模板', short: '配', hint: '按 DXM 编辑页分区填写本次任务取值' }" in shell_source
     assert "const sectionLabels: Record<WorkbenchSection, string>" in shell_source
-    assert "evidence: '证据'" in shell_source
+    assert "evidence: '证据与问题'" in shell_source
     assert "exceptions: '问题处理'" in shell_source
-    assert "reports: '报告与证据'" in shell_source
+    assert "reports: '结果报告'" in shell_source
     assert "sectionLabels[activeSection] ?? '工作台'" in shell_source
     assert "case 'guide'" in app_source
     assert "GuideCenter" in app_source
@@ -975,7 +975,7 @@ def test_first_screen_keeps_status_and_precheck_guidance_compact():
 
     assert "真实保存已阻断" not in safety_visible
     assert "系统状态与验收详情" not in safety_visible
-    assert "<summary>状态详情</summary>" in safety_bar
+    assert "<summary>状态详情与技术诊断</summary>" in safety_bar
     assert "min-height: 168px" not in guide_primary_styles
     assert "grid-template-columns: repeat(3, minmax(0, 1fr));" not in precheck_styles
     assert "guide-step__summary-line" in guide_primary
@@ -1032,17 +1032,17 @@ def test_sidebar_primary_navigation_keeps_only_user_main_path():
     shell_source = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
     primary_area_section = shell_source[shell_source.index("const primaryAreas"):shell_source.index("const sectionLabels")]
 
-    assert primary_area_section.count("{ id: '") == 7
-    assert "{ id: 'guide', label: '引导'" in primary_area_section
-    assert "{ id: 'config', label: '配置'" in primary_area_section
-    assert "{ id: 'tasks', label: '任务'" in primary_area_section
-    assert "{ id: 'console', label: '浏览器'" in primary_area_section
-    assert "{ id: 'reports', label: '报告'" in primary_area_section
-    assert "{ id: 'evidence', label: '证据'" in primary_area_section
-    assert "{ id: 'exceptions', label: '问题'" in primary_area_section
+    assert primary_area_section.count("{ id: '") == 6
+    assert "{ id: 'guide', label: '操作引导与账号登录'" in primary_area_section
+    assert "{ id: 'config', label: '编辑页配置与模板'" in primary_area_section
+    assert "{ id: 'tasks', label: '当前任务'" in primary_area_section
+    assert "{ id: 'console', label: '真实浏览器'" in primary_area_section
+    assert "{ id: 'reports', label: '结果报告'" in primary_area_section
+    assert "{ id: 'evidence', label: '证据与问题'" in primary_area_section
+    assert "{ id: 'exceptions', label: '问题'" not in primary_area_section
     assert "id: 'dashboard'" not in primary_area_section
     assert "label: '更多'" not in primary_area_section
-    assert "引导 / 配置 / 任务 / 浏览器 / 报告 / 证据 / 问题" in shell_source
+    assert "准备 / 配置 / 执行 / 复盘" in shell_source
 
 
 def test_guide_center_can_start_real_dxm_login_without_l2_gate():
@@ -2843,7 +2843,8 @@ def test_frontend_surfaces_runtime_status_and_log_filters():
     assert "encodeURIComponent(window.location.origin)" in app_source
     assert "runtimeStatus={runtimeStatus}" in app_source
     assert "`后端：${runtimeStatus.backend.status === 'ok' ? '运行中' : '异常'}`" in safety_bar
-    assert "`前端：${runtimeStatus.frontend.status === 'ok' ? '运行中' : '异常'}`" in safety_bar
+    assert "`前端：${frontendRuntimeLabel(runtimeStatus.frontend)}`" in safety_bar
+    assert "桌面内置页面" in safety_bar
     assert "runtimeEndpointLine" in safety_bar
     assert "dxmReadySessionStatuses" in safety_bar
     assert "dxmLoginTone(runtimeStatus.dxmLogin.status)" in safety_bar
@@ -3597,7 +3598,7 @@ def test_frontend_first_screen_names_dxm_automation_delivery():
     assert "系统状态与验收详情" not in safety_bar
     assert "safety-bar__meta-details inline-disclosure" in safety_bar
     assert "真实保存已阻断" not in safety_bar
-    assert "引导 / 配置 / 任务 / 浏览器 / 报告 / 证据 / 问题" in shell
+    assert "准备 / 配置 / 执行 / 复盘" in shell
     assert "\\u0044\\u0058\\u004d \\u53ea\\u4fdd\\u5b58\\u81ea\\u52a8\\u5316" in qa_source
     assert "initialText.includes(text.overview) || initialText.includes('\\u767b\\u5f55\\u3001\\u914d\\u7f6e\\u4efb\\u52a1') || initialText.includes('\\u5f00\\u59cb\\u4f7f\\u7528')" in qa_source
     assert "\\u73b0\\u5728\\u53ea\\u505a\\u8fd9\\u4e00\\u6b65" in qa_source
@@ -3610,9 +3611,15 @@ def test_sidebar_copy_names_save_only_agent_flow_without_ambiguous_browser_wordi
     shell = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
 
     assert "只保存自动化" in shell
-    assert "引导 / 配置 / 任务 / 浏览器 / 报告 / 证据 / 问题" in shell
+    assert "准备 / 配置 / 执行 / 复盘" in shell
+    assert "操作引导与账号登录" in shell
+    assert "编辑页配置与模板" in shell
+    assert "当前任务" in shell
+    assert "真实浏览器" in shell
+    assert "结果报告" in shell
+    assert "证据与问题" in shell
     assert "真实浏览器执行" in shell
-    assert "{ id: 'console', label: '浏览器', short: '控', hint: '登录、真实只读检查、真实浏览器' }" in shell
+    assert "{ id: 'console', label: '真实浏览器', short: '览', hint: '登录、只读检查、Agent 执行浏览器' }" in shell
     assert "真实店小秘操作在登录浏览器和执行浏览器中完成" in shell
 
     assert "配置 / 任务 / 真实浏览器执行" not in shell
@@ -3623,6 +3630,35 @@ def test_sidebar_copy_names_save_only_agent_flow_without_ambiguous_browser_wordi
     assert "报告中心" not in shell
     assert "异常池" not in shell
     assert "系统总览" not in shell
+
+
+def test_frontend_uses_four_stage_sidebar_and_hides_operator_diagnostics_by_default():
+    shell = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
+    safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+
+    assert "id: 'prepare'" in shell
+    assert "id: 'configure'" in shell
+    assert "id: 'execute'" in shell
+    assert "id: 'review'" in shell
+    assert "状态详情与技术诊断" in safety_bar
+    visible_bar = safety_bar[safety_bar.index("return ("):safety_bar.index("<details className=\"safety-bar__meta-details")]
+    assert "run-id" not in visible_bar
+    assert "L2 页面核验" not in visible_bar
+    assert "完整日志" not in visible_bar
+    assert "真实只读检查通过，已刷新门禁" in source
+    assert "真实只读检查通过后，继续人工确认单商品只保存。" in source
+
+
+def test_config_and_console_primary_screens_keep_diagnostics_secondary():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+
+    assert "config-template-console__default-actions is-secondary" in source
+    assert "真实执行前必须核对当前商品字段" in source
+    assert "agent-browser-shell is-diagnostic" in source
+    assert "独立浏览器窗口才是真实操作现场" in source
+    assert "关键日志" in source
+    assert "visibleRuntimeLogItems = filteredRuntimeLogItems.slice(0, 10)" in source
 
 
 def test_report_center_keeps_evidence_exception_and_console_followup_reachable_after_sidebar_simplification():

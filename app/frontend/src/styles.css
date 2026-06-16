@@ -2944,6 +2944,10 @@ tr:last-child td {
   flex: 0 0 auto;
 }
 
+.config-template-console__default-actions.is-secondary {
+  opacity: 0.88;
+}
+
 .config-template-console__default-actions .button {
   min-height: 30px;
   padding: 5px 8px;
@@ -5778,6 +5782,21 @@ tr:last-child td {
   color: #d9e3ee;
 }
 
+.runtime-log-full-drawer {
+  margin-top: 8px;
+}
+
+.runtime-log-full-drawer > summary {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.runtime-log-view--full {
+  margin-top: 8px;
+  max-height: 360px;
+}
+
 .runtime-log-line {
   min-width: 0;
   display: grid;
@@ -6032,6 +6051,24 @@ tr:last-child td {
   position: relative;
   min-height: 520px;
   background: #eef1f4;
+}
+
+.agent-browser-shell.is-diagnostic {
+  box-shadow: none;
+}
+
+.agent-browser-shell.is-diagnostic .agent-browser__viewport {
+  min-height: 220px;
+}
+
+.agent-browser-shell.is-diagnostic .browser-live-surface {
+  min-height: 220px;
+  gap: 10px;
+  padding: 18px;
+}
+
+.agent-browser-shell.is-diagnostic .browser-live-surface strong {
+  font-size: 15px;
 }
 
 .browser-live-surface {

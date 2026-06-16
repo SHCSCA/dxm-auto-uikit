@@ -841,6 +841,19 @@ def test_runtime_status_reports_services_agent_and_dependencies(tmp_path, monkey
     assert payload["dependencies"]["python"]["status"] == "ok"
 
 
+def test_runtime_status_treats_electron_file_frontend_as_desktop_page(tmp_path, monkeypatch):
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+
+    response = client.get("/api/runtime/status?frontend_url=file%3A%2F%2F")
+
+    assert response.status_code == 200
+    frontend = response.json()["frontend"]
+    assert frontend["status"] == "ok"
+    assert frontend["url"] == "file://"
+    assert frontend["port"] is None
+    assert "桌面内置页面" in frontend["detail"]
+
+
 def test_runtime_status_uses_login_page_url_for_current_url(tmp_path, monkeypatch):
     import src.main as main
 

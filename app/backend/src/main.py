@@ -1395,6 +1395,13 @@ def _write_runtime_control_command(action: str, task_id: int | None) -> dict:
 
 
 def _runtime_http_service_status(name: str, url: str) -> dict:
+    if url.startswith('file://'):
+        return {
+            'status': 'ok',
+            'url': url,
+            'port': None,
+            'detail': f'{name} 使用 Electron 桌面内置页面，无需监听前端端口。',
+        }
     port = _url_port(url)
     reachable = _port_open('127.0.0.1', port) if port else False
     return {

@@ -2292,7 +2292,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
               <strong>使用之前测试通过的数据配置</strong>
               <span>{defaultTemplatePackState}</span>
             </div>
-            <div className="config-template-console__default-actions">
+            <div className="config-template-console__default-actions is-secondary">
               <button
                 className="button button--quiet"
                 type="button"
@@ -2310,6 +2310,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
                 {savingSection === 'template:default-pack' ? '保存测试模板中...' : '写入测试模板到当前范围'}
               </button>
             </div>
+            <small>默认测试模板只是辅助入口；真实执行前必须核对当前商品字段，再保存为本次任务或店铺模板。</small>
           </div>
           <div className={`config-save-state config-save-state--compact is-${activeSectionStatus}`} aria-label="当前分区保存状态">
             <b>{activeSectionStatusTitle}</b>
@@ -4427,7 +4428,7 @@ function AgentBrowserFrame({
   const browserLaunchFailure = Boolean(agentConsole?.last_error && !browserLaunching && !agentConsole?.browser_visible)
 
   return (
-    <div className="agent-browser">
+    <div className="agent-browser agent-browser-shell is-diagnostic">
       <div className="agent-browser__chrome">
         <div className="traffic-lights" aria-hidden="true">
           <span />
@@ -4453,6 +4454,7 @@ function AgentBrowserFrame({
                   : '浏览器状态已连接；人工接管或窗口未显示时，控制面板会保持只读/禁用。'
                 : '点击上方按钮后，会使用独立 Profile 打开真实 dianxiaomi.com。'}
             </span>
+            <small>独立浏览器窗口才是真实操作现场；这里仅显示状态、下一步和诊断，不在网页内保存或发布。</small>
             <small>控制台不渲染本地截图；截图只作为报告证据路径保存，避免把历史图片误当成实时浏览器。</small>
           </div>
           <dl>
@@ -4982,7 +4984,7 @@ function L2PrecheckRunbook({
   onShowReports: () => void
 }) {
   const nextAction = state.status === 'passed'
-    ? '真实只读检查通过后，回到当前任务填写批准人，再启动单商品只保存。'
+    ? '真实只读检查通过后，继续人工确认单商品只保存。'
     : state.status === 'running'
       ? '真实只读检查运行中，请查看启动器日志等待完成结果。'
       : state.status === 'failed'
@@ -5126,6 +5128,8 @@ function RuntimeLogPanel({
   const labels = runtimeLogSourceLabels()
 
   const items: RuntimeLogItem[] = current?.items ?? current?.lines.map((line) => ({ line, level: 'info', tags: [] })) ?? []
+  const filteredRuntimeLogItems = items
+  const visibleRuntimeLogItems = filteredRuntimeLogItems.slice(0, 10)
   const refreshMeta = runtimeLogRefreshMeta(current, items.length)
 
   useEffect(() => {
@@ -5199,10 +5203,19 @@ function RuntimeLogPanel({
       </div>
       {error && <div className="console-error">{error}</div>}
       <div ref={logViewRef} className="runtime-log-view" aria-live="polite" data-testid="runtime-log-view" onScroll={handleLogScroll}>
-        {items.length
-          ? items.map((item, index) => <RuntimeLogLine key={`${source}-${index}`} item={item} />)
+        {visibleRuntimeLogItems.length
+          ? visibleRuntimeLogItems.map((item, index) => <RuntimeLogLine key={`${source}-${index}`} item={item} />)
           : <span>{current?.exists === false ? '日志文件尚未生成，启动服务后会自动出现。' : '等待日志刷新...'}</span>}
       </div>
+      <small>关键日志：默认显示最近 {visibleRuntimeLogItems.length} 条；完整日志在下方诊断区展开查看。</small>
+      <details className="inline-disclosure runtime-log-full-drawer">
+        <summary>完整日志（{filteredRuntimeLogItems.length} 条）</summary>
+        <div className="runtime-log-view runtime-log-view--full">
+          {filteredRuntimeLogItems.length
+            ? filteredRuntimeLogItems.map((item, index) => <RuntimeLogLine key={`${source}-full-${index}`} item={item} />)
+            : <span>暂无完整日志。</span>}
+        </div>
+      </details>
       <small>日志来源：{labels[source]} / 标签：启动、登录检测、配置校验、打开 DXM、点击、填写、保存、网络响应、报告生成</small>
     </div>
   )

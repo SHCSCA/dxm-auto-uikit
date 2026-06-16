@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from src.core.config import DATA_DIR
 from src.execution.v1_runner import MODE_LAST_STATE, V1_STEPS
 from src.repository import Repository
 from src.services.publish_guard import PublishGuardService
@@ -27,6 +28,7 @@ REFERENCE_SECTION_LABELS = {
 
 ROOT = Path(__file__).resolve().parents[4]
 L1_REPLAY_DIR = ROOT / "data" / "l1_selector_replay"
+L2_RUNTIME_PROBE_DIR = DATA_DIR / "l2_readonly_probe"
 L2_PROBE_DIR = ROOT / "data" / "l2_readonly_probe"
 L2_PROBE_SCRIPT = "tools\\probes\\l2_readonly_probe.py"
 L2_PROBE_PYTHON = "app\\backend\\.venv\\Scripts\\python.exe"
@@ -889,9 +891,16 @@ def _l2_probe_gate(now: datetime | None = None) -> dict[str, Any]:
 
 def _latest_l2_probe_results_by_target() -> dict[str, dict[str, dict[str, Any]]]:
     grouped: dict[str, dict[str, dict[str, Any]]] = {"real": {}, "mock": {}}
-    if not L2_PROBE_DIR.exists():
-        return grouped
-    candidates = sorted(L2_PROBE_DIR.rglob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+    candidates = sorted(
+        (
+            path
+            for directory in _l2_probe_result_dirs()
+            if directory.exists()
+            for path in directory.rglob("*.json")
+        ),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
     real_candidates: list[dict[str, Any]] = []
     mock_candidates: list[dict[str, Any]] = []
     for path in candidates:
@@ -913,6 +922,22 @@ def _latest_l2_probe_results_by_target() -> dict[str, dict[str, dict[str, Any]]]
     grouped["real"] = _latest_complete_l2_real_target_group(real_candidates) or _latest_l2_results_by_target(real_candidates)
     grouped["mock"] = _latest_l2_results_by_target(mock_candidates)
     return grouped
+
+
+def _l2_probe_result_dirs() -> list[Path]:
+    directories = [L2_RUNTIME_PROBE_DIR, L2_PROBE_DIR]
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for directory in directories:
+        try:
+            key = str(directory.resolve())
+        except OSError:
+            key = str(directory)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(directory)
+    return unique
 
 
 def _latest_l2_results_by_target(results: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -1132,7 +1157,7 @@ def _resolve_l2_evidence_path(path_value: Any) -> Path | None:
         resolved = path.resolve()
     except OSError:
         return None
-    allowed_roots = [ROOT / "data", L2_PROBE_DIR]
+    allowed_roots = [ROOT / "data", L2_PROBE_DIR, L2_RUNTIME_PROBE_DIR]
     if any(_path_is_relative_to(resolved, root) for root in allowed_roots):
         return resolved
     return None

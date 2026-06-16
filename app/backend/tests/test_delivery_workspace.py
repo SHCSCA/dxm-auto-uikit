@@ -257,6 +257,7 @@ def _client_with_temp_repo(tmp_path, monkeypatch):
     db_path = tmp_path / "delivery-workspace.db"
     monkeypatch.setattr(db, "DB_PATH", db_path)
     monkeypatch.setattr(delivery_workspace, "L1_REPLAY_DIR", tmp_path / "l1_selector_replay")
+    monkeypatch.setattr(delivery_workspace, "L2_RUNTIME_PROBE_DIR", tmp_path / "runtime_l2_readonly_probe")
     monkeypatch.setattr(delivery_workspace, "L2_PROBE_DIR", tmp_path / "l2_readonly_probe")
     db.init_db()
     repo = Repository()
@@ -465,6 +466,35 @@ def test_delivery_workspace_exposes_canonical_l2_probe_plan(tmp_path, monkeypatc
     assert all("--output-dir data\\l2_readonly_probe" in command for command in plan["commands"][1:])
     assert any("同一 run-id" in item for item in plan["acceptanceCriteria"])
     assert any("不自动放行 L3" in item for item in plan["safetyNotes"])
+
+
+def test_delivery_workspace_reads_l2_probe_from_runtime_data_dir(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_delivery_fixture(repo, with_network=True)
+    runtime_l2_dir = tmp_path / "runtime_data" / "l2_readonly_probe"
+    monkeypatch.setattr(delivery_workspace, "L2_RUNTIME_PROBE_DIR", runtime_l2_dir, raising=False)
+    created_at = _fresh_l2_created_at()
+    _write_l2_probe_result(
+        runtime_l2_dir,
+        "data_acquisition",
+        target_url="https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
+        created_at=created_at,
+    )
+    _write_l2_probe_result(
+        runtime_l2_dir,
+        "draft_box",
+        target_url="https://www.dianxiaomi.com/web/smt/smtProductList/draft",
+        created_at=created_at,
+    )
+
+    response = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}")
+
+    assert response.status_code == 200
+    data = response.json()
+    l2_gate = next(gate for gate in data["regression_gates"] if gate["level"] == "L2")
+    assert l2_gate["status"] == "passed"
+    assert data["evidence_grade"]["blocked_by_l2"] is False
+    assert data["safety"]["l2Status"] == "passed"
 
 
 def test_delivery_workspace_evidence_points_are_isolated_to_requested_task(tmp_path, monkeypatch):

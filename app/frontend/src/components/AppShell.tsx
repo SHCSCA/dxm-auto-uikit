@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, type ReactNode } from 'react'
 import type { WorkbenchSection } from '../types'
 
 type WorkbenchPrimaryArea = {
-  id: 'execute' | 'prepare' | 'review'
+  id: 'prepare' | 'configure' | 'execute' | 'review'
   label: string
   short: string
   items: Array<{ id: WorkbenchSection; label: string; short: string; hint: string }>
@@ -14,27 +14,33 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
     label: '准备',
     short: '1',
     items: [
-      { id: 'guide', label: '引导', short: '导', hint: '登录与下一步' },
-      { id: 'config', label: '配置', short: '配', hint: '编辑页模板与本次任务配置' },
+      { id: 'guide', label: '操作引导与账号登录', short: '导', hint: '登录店小秘、查看当前下一步' },
+    ],
+  },
+  {
+    id: 'configure',
+    label: '配置',
+    short: '2',
+    items: [
+      { id: 'config', label: '编辑页配置与模板', short: '配', hint: '按 DXM 编辑页分区填写本次任务取值' },
     ],
   },
   {
     id: 'execute',
     label: '执行',
-    short: '2',
+    short: '3',
     items: [
-      { id: 'tasks', label: '任务', short: '任', hint: '选择商品与批准' },
-      { id: 'console', label: '浏览器', short: '控', hint: '登录、真实只读检查、真实浏览器' },
+      { id: 'tasks', label: '当前任务', short: '任', hint: '选择商品、确认单商品只保存、填写人工批准' },
+      { id: 'console', label: '真实浏览器', short: '览', hint: '登录、只读检查、Agent 执行浏览器' },
     ],
   },
   {
     id: 'review',
-    label: '结果',
-    short: '3',
+    label: '复盘',
+    short: '4',
     items: [
-      { id: 'reports', label: '报告', short: '报', hint: '保存结果与交付验收' },
-      { id: 'evidence', label: '证据', short: '证', hint: '保存、未发布与网络证据' },
-      { id: 'exceptions', label: '问题', short: '异', hint: '问题与人工处理' },
+      { id: 'reports', label: '结果报告', short: '报', hint: '保存结果、未发布证明与最终验收' },
+      { id: 'evidence', label: '证据与问题', short: '证', hint: '保存证据、网络证据和异常处理入口' },
     ],
   },
 ]
@@ -44,10 +50,10 @@ const sectionLabels: Record<WorkbenchSection, string> = {
   dashboard: '状态',
   config: '编辑页配置',
   tasks: '当前任务',
-  console: '真实浏览器控制台',
-  evidence: '证据',
+  console: '真实浏览器',
+  evidence: '证据与问题',
   exceptions: '问题处理',
-  reports: '报告与证据',
+  reports: '结果报告',
 }
 
 type AppShellProps = {
@@ -86,7 +92,7 @@ export function AppShell({
             <div>
               <strong>DXM 只保存自动化</strong>
               <span>真实浏览器执行</span>
-              <span className="sr-only">引导 / 配置 / 任务 / 浏览器 / 报告 / 证据 / 问题</span>
+              <span className="sr-only">准备 / 配置 / 执行 / 复盘</span>
             </div>
           )}
           <button className="icon-button" type="button" onClick={onToggleSidebar} aria-label="切换侧边栏">
