@@ -92,7 +92,8 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "l2AllowlistReviewCandidates" in script
     assert "l2AllowlistReviewTemplate" in script
     assert "l2AllowlistReviewTemplateHashes" in script
-    assert "Get-FileHash -LiteralPath $l2AllowlistReviewTemplateMarkdownPath" in script
+    assert "function Get-FileSha256" in script
+    assert "Get-FileSha256 -Path $l2AllowlistReviewTemplateMarkdownPath" in script
     assert "markdown_sha256" in script
     assert "json_sha256" in script
     assert "l2ProbePlan" in script

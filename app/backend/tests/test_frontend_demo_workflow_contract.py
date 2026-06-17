@@ -124,22 +124,24 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
 
     assert "demoTemplateSeeds" in source
     assert "applyDefaultTemplatePack" in config_section
-    assert "默认测试模板" in config_section
-    assert "使用之前测试通过的数据配置" in config_section
+    assert "默认配置模板" in config_section
+    assert "默认测试模板" not in config_section
+    assert "使用内置默认配置" in config_section
+    assert "使用之前测试通过的数据配置" not in config_section
     assert "config-template-console__primary-actions" in config_section
     assert "config-template-console__default-status" in config_section
     assert "config-template-console__default-quick" not in config_section
     assert config_section.index("config-template-console__primary-actions") < config_section.index("config-template-console__details")
-    assert config_section.index("使用之前测试通过的数据配置") < config_section.index("config-template-console__details")
-    assert "写入测试模板到当前范围" in config_section
+    assert config_section.index("使用内置默认配置") < config_section.index("config-template-console__details")
+    assert "写入默认配置到当前范围" in config_section
     common_selector = config_section[config_section.index("<select"):config_section.index("</select>")]
     assert "__default_test__" not in common_selector
-    assert "填入当前分区示例值" in config_section
+    assert "填入当前分区默认值" in config_section
     assert "模板状态与高级匹配说明" in config_section
     assert "保存/覆盖当前店铺模板" not in config_section
     assert "覆盖当前店铺/类目下全部分区" in config_section
     assert "defaultTemplatePackState" in config_section
-    assert "默认测试模板已保存到店铺模板" in config_section
+    assert "默认配置模板已保存到店铺模板" in config_section
     assert "setSectionSaveState(() => Object.fromEntries" in config_section
     assert "config-template-console" in config_section
     assert "config-template-console--compact" in config_section
@@ -168,9 +170,10 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "选择模板不会改表单，点击套用后才会填入当前分区" in config_section
     assert "function handleTemplateSelection(section: EditableConfigSection, templateId: string)" in config_section
     assert "applyTemplateToDraft(section, templateId)" not in config_section[config_section.index("function handleTemplateSelection"):config_section.index("async function applyDefaultTemplatePack")]
-    assert "确认写入默认测试模板包" in config_section
-    assert "示例值" in config_section
-    assert "将保存默认测试模板包到当前店铺/类目范围" in config_section
+    assert "确认写入默认配置模板包" in config_section
+    assert "默认值" in config_section
+    assert "示例值" not in config_section
+    assert "将保存默认配置模板包到当前店铺/类目范围" in config_section
     assert "精确店铺/类目模板优先" in config_section
     assert "全局模板只作为读取候选，不会被保存覆盖" in config_section
     assert "sectionSaveState" in config_section
@@ -281,12 +284,13 @@ def test_config_center_default_template_is_first_screen_primary_action():
     ]
 
     assert "config-template-console__primary-actions" in template_console
-    assert "默认测试模板" in template_console
-    assert "填入当前分区示例值" in template_console
-    assert "写入测试模板到当前范围" in template_console
+    assert "默认配置模板" in template_console
+    assert "默认测试模板" not in template_console
+    assert "填入当前分区默认值" in template_console
+    assert "写入默认配置到当前范围" in template_console
     assert "defaultTemplatePackState" in template_console
     assert "当前分区保存状态" in template_console
-    assert "模板状态、默认测试模板与高级设置" not in config_section
+    assert "模板状态、默认配置模板与高级设置" not in config_section
     assert "模板状态与高级匹配说明" in config_section
     assert ".config-template-console__primary-actions" in styles_source
     assert ".config-template-console__default-status" in styles_source
@@ -399,7 +403,7 @@ def test_config_center_default_template_pack_tracks_each_saved_template():
     assert "nextLastSavedTemplates[section.code]" in default_pack_section
     assert "setSelectedTemplateBySection(nextSelectedTemplates)" in default_pack_section
     assert "setLastSavedTemplateBySection(nextLastSavedTemplates)" in default_pack_section
-    assert "默认测试模板已保存；保存时间 ${savedAt}；已生成 ${Object.keys(nextLastSavedTemplates).length} 套分区模板" in default_pack_section
+    assert "默认配置模板已保存；保存时间 ${savedAt}；已生成 ${Object.keys(nextLastSavedTemplates).length} 套分区模板" in default_pack_section
 
 
 def test_config_center_keeps_template_source_details_out_of_first_viewport():
@@ -447,7 +451,7 @@ def test_config_center_resets_transient_template_state_when_task_scope_changes()
     assert "setSelectedTemplateBySection({} as Record<ConfigSectionCode, string>)" in config_section
     assert "setSectionSaveState({} as Record<ConfigSectionCode, ConfigSectionSaveState>)" in config_section
     assert "setConfigMessage(null)" in config_section
-    assert "setDefaultTemplatePackState('尚未套用默认测试模板')" in config_section
+    assert "setDefaultTemplatePackState('尚未套用默认配置模板')" in config_section
     assert "}, [configContextKey])" in config_section
 
 
@@ -567,8 +571,10 @@ def test_config_center_exposes_default_template_pack_and_save_state():
 
     assert "demoTemplateSeeds" in source
     assert "applyDefaultTemplatePack" in config_section
-    assert "默认测试模板" in config_section
-    assert "使用之前测试通过的数据配置" in config_section
+    assert "默认配置模板" in config_section
+    assert "默认测试模板" not in config_section
+    assert "使用内置默认配置" in config_section
+    assert "使用之前测试通过的数据配置" not in config_section
     assert "defaultTemplatePackState" in config_section
     assert "config-template-console" in config_section
     assert "config-template-console--compact" in config_section
@@ -581,7 +587,7 @@ def test_config_center_exposes_default_template_pack_and_save_state():
     assert "applyTemplateToDraft" in config_section
     assert "套用到表单" in config_section
     assert "重新套用到表单" not in config_section
-    assert "写入测试模板到当前范围" in config_section
+    assert "写入默认配置到当前范围" in config_section
     assert "精确店铺/类目模板优先" in config_section
     assert "全局模板只作为读取候选，不会被保存覆盖" in config_section
     assert "sectionSaveState" in config_section
@@ -2069,9 +2075,9 @@ def test_report_center_shows_allowlist_review_before_l2_recheck_commands():
     report_center_section = source[source.index("export function ReportCenter"):source.index("function FinalDeliveryCheckCard")]
 
     assert "l2AllowlistReviewItems" in report_center_section
-    assert "L2 allowlist 候选处理" in report_center_section
-    assert "先评审，再复跑 L2" in report_center_section
-    assert "review_only=true / allowlist_applied=false" in report_center_section
+    assert "真实只读异常候选处理" in report_center_section
+    assert "先评审，再重新检查" in report_center_section
+    assert "当前只生成候选清单，不自动放行" in report_center_section
     assert "未完成人工评审前，不运行下方真实只读检查命令" in report_center_section
     assert "l2_allowlist_review_template_state" in source
     assert "l2_allowlist_review_template_markdown_path" in source
@@ -2083,8 +2089,8 @@ def test_report_center_shows_allowlist_review_before_l2_recheck_commands():
     assert "real_dxm_write_blocked_reason" in source
     assert "expected_real_dxm_write_readiness" in source
     assert "real_dxm_write_readiness_matches_expected" in source
-    assert "预期真实写入" in source
-    assert "真实写入允许 false" in source
+    assert "预期真实写入" not in report_center_section
+    assert "真实写入允许 false" not in report_center_section
 
 
 def test_final_delivery_card_explains_blocked_to_ready_prerequisites():
@@ -2093,10 +2099,11 @@ def test_final_delivery_card_explains_blocked_to_ready_prerequisites():
     qa_script = QA_BROWSER_CHECK.read_text(encoding="utf-8")
 
     assert "真实写入放行前置" in final_card_section
-    assert "L2 双目标真实只读通过" in source
-    assert "人工批准 L3 金丝雀" in source
-    assert "保存成功、未发布证明、截图和 network/HAR" in source
-    assert "不能用 allowlist 模板替代 L2 通过" in source
+    assert "真实只读检查通过" in source
+    assert "人工确认单商品只保存" in source
+    assert "保存结果必须可核对" in source
+    assert "保存成功、未发布证明、截图和 network/HAR" not in source
+    assert "不能用 allowlist 模板替代 L2 通过" not in source
     assert "delivery-check-card__release-gates" in final_card_section
     assert "realWriteReleasePrerequisites" in source
     assert "reportRealWriteReleasePrerequisites" in qa_script
@@ -2108,7 +2115,7 @@ def test_report_center_keeps_final_check_engineering_details_in_appendix():
 
     assert "ModuleHead title=\"最近自动化验收\"" in final_card_section
     assert "最终验收报告${localWorkbenchOk ? '通过' : '待刷新'}" in final_card_section
-    assert "最终验收报告待刷新；当前运行门禁已按最新 L2/L3 覆盖为可申请单商品只保存" in final_card_section
+    assert "最终验收报告待刷新；当前运行门禁已按最新真实检查结果覆盖为可申请单商品只保存" in final_card_section
     assert "历史验收结果已过期，请先重新运行只读复验和本地验收。" not in final_card_section
     assert "humanReadinessLabel(readiness)" in final_card_section
     assert "humanGateDetail(blockedReason)" in final_card_section
@@ -2228,11 +2235,13 @@ def test_report_center_treats_missing_l3_evidence_as_expected_when_real_write_bl
     assert "PostL3ReportCheckRow" in report_center_section
     assert "humanPublishGuardStatus(workspace.publishGuardState?.status)" in report_center_section
     assert source.index("function humanPublishGuardStatus") < source.index("export function ReportCenter")
+    assert "empty: '等待执行'" in source
     assert "safe_unpublished: '保存后未发布'" in source
     assert "meta={workspace.publishGuardState?.status" not in report_center_section
     assert "label=\"保存结果\"" in source
     assert "label=\"未发布证明\"" in source
-    assert "label=\"网络/HAR\"" in source
+    assert "label=\"保存回包\"" in source
+    assert "网络/HAR" not in report_center_section
     assert "业务保存报告 0 份（真实保存后，预期阻断）" in source
     assert "（预期阻断）" in source
     assert "state={'locked'}" in source
@@ -2298,7 +2307,7 @@ def test_task_and_evidence_center_describe_l3_blocked_as_expected_lock():
     assert "不启动认领、批量保存或真实保存" in task_center_section
     assert "当前按钮策略：真实只读检查未通过或人工确认未完成时保持阻断" in task_center_section
     assert "人工确认未完成，禁止启动" in task_center_section
-    assert "当前真实写入未放行时" in evidence_timeline_section
+    assert "当前真实保存未放行时" in evidence_timeline_section
     assert "0 条是预期阻断" in evidence_timeline_section
     assert "只有单商品只保存完成后才生成可验收证据等级" in evidence_timeline_section
     assert "evidence-raw-disclosure" in evidence_timeline_section
@@ -2707,7 +2716,7 @@ def test_task_center_surfaces_l2_allowlist_review_candidates_as_manual_review_on
     assert "reviewCandidateRequests" in source
     assert "只读依赖人工评审清单" in source
     assert "仅人工评审，不自动放行真实保存" in source
-    assert "allowlist_applied=false" in source
+    assert "当前只生成候选清单，不自动放行" in source
     assert "不自动放行真实保存" in source
     assert "onShowReports" in source
     assert "查看只读评审与检查计划" in source
@@ -2825,7 +2834,8 @@ def test_frontend_does_not_expose_developer_fallback_copy():
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
 
     assert "前端使用工作台 fallback 数据" not in workspace_source
-    assert "前端使用工作台默认数据" in workspace_source
+    assert "前端使用工作台默认数据" not in workspace_source
+    assert "const fallback = buildEmptyWorkspace()" in workspace_source
     assert "section.source === 'legacy' ? '旧字段兼容' : 'fallback'" not in workbench_source
     assert "默认规则" in workbench_source
     qa_source = QA_BROWSER_CHECK.read_text(encoding="utf-8")
@@ -3487,7 +3497,8 @@ def test_safety_bar_uses_operator_precheck_copy_before_technical_l2_terms():
     assert "L2 页面核验" not in visible_status_section
     assert "真实只读检查：" in detail_chip_section
     assert "L2 页面核验：" not in detail_chip_section
-    assert "L2 页面核验：" in safety_bar[safety_bar.index("const gateDetails"):safety_bar.index("const blockerDetails")]
+    assert "真实只读检查：" in safety_bar[safety_bar.index("const gateDetails"):safety_bar.index("const blockerDetails")]
+    assert "L2 页面核验：" not in safety_bar[safety_bar.index("const gateDetails"):safety_bar.index("const blockerDetails")]
 
 
 def test_execution_console_surfaces_desktop_log_paths_when_service_is_unavailable():
@@ -3726,18 +3737,15 @@ def test_agent_console_l2_state_has_single_precheck_cta_before_advanced_details(
     assert "人工确认后打开执行浏览器" in controls
 
 
-def test_mock_workspace_uses_dry_run_demo_language_not_real_single_save():
+def test_workspace_fallback_does_not_ship_demo_tasks_or_reports():
     workspace_source = (REPO_ROOT / "app" / "frontend" / "src" / "workspace.ts").read_text(encoding="utf-8")
-    mock_section = workspace_source[workspace_source.index("export function buildMockWorkspace"):workspace_source.index("function buildRegressionGates")]
+    compose_section = workspace_source[workspace_source.index("export function composeWorkspace"):workspace_source.index("export function buildEmptyWorkspace")]
 
-    assert "name: '本地演示保存核验批次 #19'" in mock_section
-    assert "mode: 'dry_run'" in mock_section
-    assert "演示截图占位" in mock_section
-    assert "本地演示保存核验报告 #19" in mock_section
-    assert "buildRegressionGates(null, evidenceGradeValue, [])" in mock_section
-    assert "file:///mock/l2.html" not in mock_section
-    assert "mode: 'single_save'" not in mock_section
-    assert "保存动作截图" not in mock_section
+    assert "const fallback = buildEmptyWorkspace()" in compose_section
+    assert "buildMockWorkspace" not in workspace_source
+    assert "本地演示保存核验批次" not in workspace_source
+    assert "本地演示保存核验报告" not in workspace_source
+    assert "演示截图占位" not in workspace_source
 
 
 def test_frontend_labels_mock_l2_as_evidence_not_passed():

@@ -304,7 +304,7 @@ scripts\final-delivery-check.bat --help
 3. 若要扩大到认领或批量保存，必须为对应范围重新建立真实只读检查、人工批准和保存/回滚证据，不复用单商品只保存结论。
 4. 批量、无人值守和发布必须单独设计门禁、人工批准和回滚策略。
 
-免安装版快速使用说明见 `docs/product/免安装版快速使用说明-20260615.md`。当前验收记录见 `docs/product/最终交付验收记录-20260615.md`；当前分支 `8f61df2` 已通过 clean worktree、本地工作台、portable 桌面 smoke 和 `READY` 门禁自检，报告目录为 `outputs\final-delivery-check-current-ui-polish-clean`。真实写入放行范围仅为受控 `single_save`，批量、无人值守、认领和发布仍需单独证据链。
+免安装版快速使用说明见 `docs/product/免安装版快速使用说明-20260615.md`。当前验收记录见 `docs/product/最终交付验收记录-20260615.md`；当前分支 `8f61df2` 已通过 clean worktree、本地工作台、portable 桌面 smoke 和 `READY` 门禁自检，报告目录为 `outputs\final-delivery-check-current-ui-polish-clean`。真实写入放行范围仅为受控 `single_save`，需要保留受控单商品只保存证据；批量、无人值守、认领和发布仍需单独证据链。
 
 ---
 

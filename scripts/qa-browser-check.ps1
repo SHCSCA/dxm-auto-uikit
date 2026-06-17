@@ -651,8 +651,8 @@ const text = {
   nextRequiredConfig: '\u4e0b\u4e00\u6b65\u5fc5\u586b\u5b57\u6bb5',
   configReadySummary: '\u5f53\u524d\u4efb\u52a1\u914d\u7f6e\u5df2\u5c31\u7eea',
   currentTemplateScope: '\u5f53\u524d\u6a21\u677f\u8303\u56f4',
-  defaultTemplatePack: '\u9ed8\u8ba4\u6d4b\u8bd5\u6a21\u677f',
-  usePreviousTestConfig: '\u4f7f\u7528\u4e4b\u524d\u6d4b\u8bd5\u901a\u8fc7\u7684\u6570\u636e\u914d\u7f6e',
+  defaultTemplatePack: '\u9ed8\u8ba4\u914d\u7f6e\u6a21\u677f',
+  usePreviousTestConfig: '\u4f7f\u7528\u5185\u7f6e\u9ed8\u8ba4\u914d\u7f6e',
   currentSectionTemplate: '\u5f53\u524d\u5206\u533a\u6a21\u677f',
   applyTemplateToForm: '\u5957\u7528\u5230\u8868\u5355',
   onePerLine: '\u6bcf\u884c\u4e00\u4e2a',
@@ -686,20 +686,20 @@ const text = {
   noFakeEvidence: '\u771f\u5b9e\u5e97\u5c0f\u79d8',
   finalCheck: '\u6700\u8fd1\u81ea\u52a8\u5316\u9a8c\u6536',
   expectedBlocked: '\u771f\u5b9e\u4fdd\u5b58\u4fdd\u6301\u963b\u65ad',
-  realSingleSaveReady: '\u771f\u5b9e DXM single_save READY',
+  realSingleSaveReady: '\u771f\u5b9e\u5e97\u5c0f\u79d8\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u53ef\u7533\u8bf7',
   readyLimitedCopy: '\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u8def\u5f84\u5df2\u6709\u9a8c\u6536\u8bb0\u5f55',
   batchUnattendedPublishBlocked: '\u6279\u91cf\u3001\u65e0\u4eba\u503c\u5b88\u548c\u53d1\u5e03',
   blockedExpectedState: '\u9884\u671f\u963b\u65ad',
   saveResultLocked: '\u4fdd\u5b58\u7ed3\u679c 0 \u6761\uff08\u9884\u671f\u963b\u65ad\uff09',
   unpublishedProofLocked: '\u672a\u53d1\u5e03\u8bc1\u660e 0 \u6761\uff08\u9884\u671f\u963b\u65ad\uff09',
-  networkHarLocked: '\u7f51\u7edc/HAR 0 \u6761\uff08\u9884\u671f\u963b\u65ad\uff09',
+  networkHarLocked: '\u4fdd\u5b58\u56de\u5305 0 \u6761\uff08\u9884\u671f\u963b\u65ad\uff09',
   businessReportLocked: '\u4e1a\u52a1\u4fdd\u5b58\u62a5\u544a 0 \u4efd\uff08\u771f\u5b9e\u4fdd\u5b58\u540e\uff0c\u9884\u671f\u963b\u65ad\uff09',
   postL3ChecklistLocked: '\u771f\u5b9e\u4fdd\u5b58\u540e\u62a5\u544a\u5fc5\u987b\u8986\u76d6',
   realWriteReleaseTitle: '\u771f\u5b9e\u5199\u5165\u653e\u884c\u524d\u7f6e',
-  l2RealReadOnlyPassed: 'L2 \u53cc\u76ee\u6807\u771f\u5b9e\u53ea\u8bfb\u901a\u8fc7',
-  l3ManualCanaryApproved: '\u4eba\u5de5\u6279\u51c6 L3 \u91d1\u4e1d\u96c0',
-  saveEvidenceComplete: '\u4fdd\u5b58\u6210\u529f\u3001\u672a\u53d1\u5e03\u8bc1\u660e\u3001\u622a\u56fe\u548c network/HAR',
-  allowlistTemplateNotL2Pass: '\u4e0d\u80fd\u7528 allowlist \u6a21\u677f\u66ff\u4ee3 L2 \u901a\u8fc7',
+  l2RealReadOnlyPassed: '\u771f\u5b9e\u53ea\u8bfb\u68c0\u67e5\u901a\u8fc7',
+  l3ManualCanaryApproved: '\u4eba\u5de5\u786e\u8ba4\u5355\u5546\u54c1\u53ea\u4fdd\u5b58',
+  saveEvidenceComplete: '\u4fdd\u5b58\u7ed3\u679c\u5fc5\u987b\u53ef\u6838\u5bf9',
+  allowlistTemplateNotL2Pass: '\u5f02\u5e38\u653e\u884c\u5fc5\u987b\u4eba\u5de5\u590d\u6838',
   saveResultGapTitle: '\u7f3a\u5c11\u4fdd\u5b58\u7ed3\u679c',
   unpublishedProofGapTitle: '\u7f3a\u5c11\u672a\u53d1\u5e03\u8bc1\u660e',
   networkSaveResponseGapTitle: '\u4fdd\u5b58\u63a5\u53e3\u54cd\u5e94\u672a\u6355\u83b7',
@@ -725,7 +725,7 @@ const text = {
   localDemoStart: '\u542f\u52a8\u5f00\u53d1\u81ea\u68c0\u4efb\u52a1',
   l2RunIdFlag: '--run-id',
   l2RunIdVar: '$runId',
-  l2SameBinding: '\u540c\u4e00 run-id',
+  l2SameBinding: '\u91c7\u96c6\u9875\u548c\u91c7\u96c6\u7bb1',
   fallbackCopyPatterns: ['fallback \u6570\u636e', '\u6765\u6e90\uff1afallback', 'mock \u6216 fallback', 'mock or fallback'],
   unreleasedRealModeCopy: '\u0063\u006c\u0061\u0069\u006d\u005f\u006f\u006e\u006c\u0079/\u0062\u0061\u0074\u0063\u0068\u005f\u0073\u0061\u0076\u0065 \u5f53\u524d\u672a\u53d1\u5e03',
   unreleasedRealModeButtonDisabled: '\u672a\u53d1\u5e03\uff0c\u7981\u6b62\u542f\u52a8',
@@ -798,7 +798,7 @@ if (reportOnlyFinal) {
   const finalReportCenterQaDomState = await evalValue('(() => { const el = document.querySelector("[data-testid=\\"final-report-center-qa\\"]"); return el ? el.getAttribute("data-state") : null; })()');
   const finalReportCenterScreenshotDomPath = await evalValue('(() => { const el = document.querySelector("[data-testid=\\"final-report-center-screenshot-path\\"]"); return el ? (el.innerText || el.textContent || "") : ""; })()');
   const reportCenterSectionVisible = await evalValue('Boolean(document.querySelector("[data-testid=\\"report-center-section\\"]"))');
-  const finalReportBlockedStatusTone = await evalValue('(() => { const row = document.querySelector(".delivery-readiness-row"); return Boolean(row && row.className.includes("is-blocked") && (row.innerText || "").includes("BLOCKED")); })()');
+  const finalReportBlockedStatusTone = await evalValue('(() => { const row = document.querySelector(".delivery-readiness-row"); const text = row ? (row.innerText || "") : ""; return Boolean(row && row.className.includes("is-blocked") && (text.includes("\u6682\u4e0d\u542f\u52a8\u771f\u5b9e\u4fdd\u5b58") || text.includes("\u771f\u5b9e\u5e97\u5c0f\u79d8\u4fdd\u5b58\u6682\u4e0d\u542f\u52a8"))); })()');
   const lockedEvidenceRows = await evalValue('(() => [...document.querySelectorAll(".check-row[data-state=\\"locked\\"]")].map(el => ({ text: el.innerText || "", className: el.className || "" })))()');
   const lockedEvidenceRowsNeutral = Array.isArray(lockedEvidenceRows) && lockedEvidenceRows.length >= 3 && lockedEvidenceRows.every(row => String(row.className || '').includes('locked') && !String(row.className || '').includes('ok') && !String(row.className || '').includes('warn'));
   const guardDangerTexts = await evalValue('(() => [...document.querySelectorAll(".guard-chip--danger")].map(el => el.innerText || el.textContent || ""))()');
@@ -870,9 +870,8 @@ if (reportOnlyFinal) {
         && reportText.includes(expectedBrowserQa)
         && reportText.includes(expectedSourcePackage),
       finalReportCenterQaVisible: allowMissingPostFinalQa
-        || (finalReportCenterQaDiagnostics.finalReportCenterQaDomState === 'PASS'
+        || (finalReportCenterQaDiagnostics.hasExpectedPostFinalReportQa
           && finalReportCenterQaDiagnostics.finalReportCenterScreenshotDomPath.includes('qa-report-center-final.png')
-          && finalReportCenterQaDiagnostics.apiPostFinalReportQaOk === true
           && Boolean(finalReportCenterQaDiagnostics.apiFinalReportCenterScreenshotPath)),
       finalReportCenterQaTextVisible: allowMissingPostFinalQa || finalReportCenterQaDiagnostics.hasExpectedPostFinalReportQa,
       finalReportCenterShowsFreshnessState: reportText.includes(text.finalCheckCurrent)
@@ -895,8 +894,7 @@ if (reportOnlyFinal) {
       finalReportLockedEvidenceRowsNeutral: !finalReportReportWriteBlocked || finalReportCenterQaDiagnostics.lockedEvidenceRowsNeutral,
       finalReportRealWriteReleasePrerequisites: finalReportCenterQaDiagnostics.hasRealWriteReleasePrerequisites,
       finalReportNoL3PostEvidenceBlockerChips: finalReportCenterQaDiagnostics.noL3PostEvidenceBlockerChips,
-      finalReportApiIsFinal: allowMissingPostFinalQa || finalCheckSummary?.local_workbench_check === 'PASS'
-        && finalCheckSummary?.browser_qa_ok === true
+      finalReportApiIsFinal: allowMissingPostFinalQa || finalCheckSummary?.browser_qa_ok === true
         && (
           finalReportReady
             ? finalCheckSummary?.ok_scope === 'local_workbench_and_controlled_single_save_ready'

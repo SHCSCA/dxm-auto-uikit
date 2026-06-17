@@ -123,20 +123,20 @@ const READONLY_PRECHECK_PURPOSE = '真实只读检查会打开店小秘采集页
 
 const realWriteReleasePrerequisites = [
   {
-    title: 'L2 双目标真实只读通过',
-    detail: 'data_acquisition 与 draft_box 必须使用同一 run-id；无写请求、非只读请求、禁用 URL、WebSocket 或登录态异常。',
+    title: '真实只读检查通过',
+    detail: '采集页和采集箱都要完成只读检查；检查过程中不能出现领取、保存、发布或异常跳转。',
   },
   {
-    title: 'allowlist 只能来自人工评审',
-    detail: '不能用 allowlist 模板替代 L2 通过；批准后仍要改代码/配置并复跑同一批真实 L2。',
+    title: '异常放行必须人工复核',
+    detail: '如果页面出现新接口或新按钮，必须先人工确认风险并重新检查，不能自动绕过。',
   },
   {
-    title: '人工批准 L3 金丝雀',
-    detail: '只有 L2 双目标 passed 后，才允许服务端批准单商品 save-only 金丝雀。',
+    title: '人工确认单商品只保存',
+    detail: '只有真实只读检查通过后，才允许启动一次单商品只保存。',
   },
   {
-    title: 'L3 证据补齐后再更新结论',
-    detail: '保存成功、未发布证明、截图和 network/HAR 必须齐全，才能把真实写入从 BLOCKED 改为 READY。',
+    title: '保存结果必须可核对',
+    detail: '需要拿到店小秘保存成功、未发布和页面记录后，才认为本次只保存完成。',
   },
 ]
 
@@ -1362,7 +1362,7 @@ function templateFilterReason(template: Template, binding: TemplateBinding) {
 }
 
 function templateMatchSummary(template: Template | undefined, binding: TemplateBinding) {
-  if (!template) return '尚未选择已保存模板；可先使用默认测试模板或保存当前分区。'
+  if (!template) return '尚未选择已保存模板；可先使用默认配置模板或保存当前分区。'
   if (!templateBindingRecord(template)) return '当前命中全局模板，未限制店铺、类目或平台。'
   const score = templateBindingSpecificity(template, binding)
   return score > 0
@@ -1421,7 +1421,7 @@ function defaultTemplatePayloadForSection(section: EditableConfigSection, bindin
     task_basic: {
       store_name: binding.store_name || 'Dang Kang',
       category_name: binding.category_name || '立牌类谷子',
-      claim_mark: 'DXM 单商品只保存测试',
+      claim_mark: 'DXM 单商品只保存',
     },
     category: {
       category_name: binding.category_name || '立牌类谷子',
@@ -1440,7 +1440,7 @@ function defaultTemplatePayloadForSection(section: EditableConfigSection, bindin
       supply_price: '5.20',
       declared_value: '1',
       stock: '200',
-      price_strategy: '按测试模板固定价',
+      price_strategy: '按默认配置固定价',
     },
     image: {
       source: '图片银行（速卖通）',
@@ -1825,7 +1825,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   const [configDraft, setConfigDraft] = useState(initialConfigDraft)
   const [savingSection, setSavingSection] = useState<string | null>(null)
   const [configMessage, setConfigMessage] = useState<string | null>(null)
-  const [defaultTemplatePackState, setDefaultTemplatePackState] = useState<string>('尚未套用默认测试模板')
+  const [defaultTemplatePackState, setDefaultTemplatePackState] = useState<string>('尚未套用默认配置模板')
   const [selectedTemplateBySection, setSelectedTemplateBySection] = useState<Record<ConfigSectionCode, string>>({} as Record<ConfigSectionCode, string>)
   const [lastSavedTemplateBySection, setLastSavedTemplateBySection] = useState<Record<ConfigSectionCode, { id: number; name: string; savedAt: string }>>({} as Record<ConfigSectionCode, { id: number; name: string; savedAt: string }>)
   const [sectionSaveState, setSectionSaveState] = useState<Record<ConfigSectionCode, ConfigSectionSaveState>>({} as Record<ConfigSectionCode, ConfigSectionSaveState>)
@@ -1862,7 +1862,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   const activeTemplateSourceName = templateSourceNameFromPreview(selectedConfigSection.preview)
   const activeSectionAlreadyPersisted = Boolean(selectedConfigSection.preview?.templatePresent)
   const activeSelectedTemplateLabel = activeSelectedTemplateId === '__default_test__'
-    ? '默认测试模板（当前分区）'
+    ? '默认配置模板（当前分区）'
     : activeSelectedTemplate
       ? templateOptionLabel(activeSelectedTemplate)
       : '未选择模板'
@@ -1909,7 +1909,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
       ? '当前分区有改动，尚未保存。'
       : activeSectionAlreadyPersisted
         ? '当前分区来自已保存模板或任务覆盖，未修改。'
-        : '当前分区还没有已保存模板，请套用默认模板或手动保存。')
+        : '当前分区还没有已保存模板，请套用默认配置模板或手动保存。')
   const configCoverageLabels = ['店铺与任务基础', '类目与标题', 'SKU / 价格 / 库存', '价格策略', '图片与素材', '包装物流', '合规 / 海关', '半托管', '店小秘引用模板']
   const effectivePreviewTitle = '本次任务实际取值预览'
   const sourcePriorityLabels = ['任务覆盖', '商品 payload', '店铺/类目模板', '系统默认值']
@@ -1943,7 +1943,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
     setLastSavedTemplateBySection({} as Record<ConfigSectionCode, { id: number; name: string; savedAt: string }>)
     setSectionSaveState({} as Record<ConfigSectionCode, ConfigSectionSaveState>)
     setConfigMessage(null)
-    setDefaultTemplatePackState('尚未套用默认测试模板')
+    setDefaultTemplatePackState('尚未套用默认配置模板')
   }, [configContextKey])
 
   function updateConfigField(sectionCode: ConfigSectionCode, fieldName: string, value: string) {
@@ -2083,7 +2083,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
       ...current,
       [section.code]: {
         status: 'dirty',
-        message: templateId === '__default_test__' ? '已套用默认测试模板，尚未保存' : '已套用模板，尚未保存',
+        message: templateId === '__default_test__' ? '已套用默认配置模板，尚未保存' : '已套用模板，尚未保存',
       },
     }))
   }
@@ -2098,13 +2098,13 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
       setConfigMessage('先选择任务，避免误存为全店/全类目模板。')
       return
     }
-    const confirmMessage = `确认写入默认测试模板包？将保存默认测试模板包到当前店铺/类目范围：${currentTemplateScopeLabel}。会覆盖或新建 ${editableConfigSections.length} 个分区模板，影响后续匹配当前范围的任务。`
+    const confirmMessage = `确认写入默认配置模板包？将保存默认配置模板包到当前店铺/类目范围：${currentTemplateScopeLabel}。会覆盖或新建 ${editableConfigSections.length} 个分区模板，影响后续匹配当前范围的任务。`
     if (!window.confirm(confirmMessage)) {
-      setDefaultTemplatePackState('已取消写入默认测试模板包')
+      setDefaultTemplatePackState('已取消写入默认配置模板包')
       return
     }
     setSavingSection('template:default-pack')
-    setDefaultTemplatePackState('正在写入默认测试模板...')
+    setDefaultTemplatePackState('正在写入默认配置模板...')
     setConfigMessage(null)
     try {
       const nextDraft = { ...configDraft }
@@ -2116,7 +2116,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
         const existing = findExactScopedTemplate(workspace.templates, section.templateType, currentTemplateBinding)
         const body = {
           template_type: section.templateType,
-          template_name: `默认测试模板 / ${section.title}`,
+          template_name: `默认配置模板 / ${section.title}`,
           binding_scope: currentTemplateScopeLabel,
           payload: withTemplateBinding(payload, currentTemplateBinding),
           is_enabled: true,
@@ -2142,16 +2142,16 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
             status: 'saved',
             scope: '店铺模板',
             savedAt,
-            message: `默认测试模板已保存到店铺模板；保存时间 ${savedAt}`,
+            message: `默认配置模板已保存到店铺模板；保存时间 ${savedAt}`,
           },
         ]),
       ) as Record<ConfigSectionCode, ConfigSectionSaveState>)
-      setDefaultTemplatePackState(`默认测试模板已保存；保存时间 ${savedAt}；已生成 ${Object.keys(nextLastSavedTemplates).length} 套分区模板`)
-      setConfigMessage(`默认测试模板已写入当前店铺/类目范围：${currentTemplateScopeLabel}。这些是示例值，真实执行前请按当前商品继续核对分区字段。`)
+      setDefaultTemplatePackState(`默认配置模板已保存；保存时间 ${savedAt}；已生成 ${Object.keys(nextLastSavedTemplates).length} 套分区模板`)
+      setConfigMessage(`默认配置模板已写入当前店铺/类目范围：${currentTemplateScopeLabel}。这些是默认值，真实执行前请按当前商品继续核对分区字段。`)
       await onConfigSaved()
     } catch (error) {
-      setDefaultTemplatePackState('默认测试模板保存失败')
-      setConfigMessage(error instanceof Error ? error.message : '默认测试模板保存失败')
+      setDefaultTemplatePackState('默认配置模板保存失败')
+      setConfigMessage(error instanceof Error ? error.message : '默认配置模板保存失败')
     } finally {
       setSavingSection(null)
     }
@@ -2286,10 +2286,10 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
               套用到表单
             </button>
           </div>
-          <div className="config-template-console__primary-actions" aria-label="默认测试模板">
+          <div className="config-template-console__primary-actions" aria-label="默认配置模板">
             <div className="config-template-console__default-status">
-              <b>默认测试模板</b>
-              <strong>使用之前测试通过的数据配置</strong>
+              <b>默认配置模板</b>
+              <strong>使用内置默认配置</strong>
               <span>{defaultTemplatePackState}</span>
             </div>
             <div className="config-template-console__default-actions is-secondary">
@@ -2298,7 +2298,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
                 type="button"
                 onClick={() => applyTemplateToDraft(selectedConfigSection.section, '__default_test__')}
               >
-                填入当前分区示例值
+                填入当前分区默认值
               </button>
               <button
                 className="button button--secondary"
@@ -2307,10 +2307,10 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
                 disabled={savingSection === 'template:default-pack' || templateSaveDisabled}
                 title={templateSaveDisabled ? '先选择任务，避免误存为全店/全类目模板。' : '保存为店铺模板会影响后续匹配当前店铺/类目的任务。'}
               >
-                {savingSection === 'template:default-pack' ? '保存测试模板中...' : '写入测试模板到当前范围'}
+                {savingSection === 'template:default-pack' ? '保存默认配置中...' : '写入默认配置到当前范围'}
               </button>
             </div>
-            <small>默认测试模板只是辅助入口；真实执行前必须核对当前商品字段，再保存为本次任务或店铺模板。</small>
+            <small>默认配置模板用于快速补齐常用字段；真实执行前必须核对当前商品字段，再保存为本次任务或店铺模板。</small>
           </div>
           <div className={`config-save-state config-save-state--compact is-${activeSectionStatus}`} aria-label="当前分区保存状态">
             <b>{activeSectionStatusTitle}</b>
@@ -2326,7 +2326,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
               <span><b>保存状态</b><small>{activeSectionStatusTitle}</small></span>
               <span><b>保存范围</b><small>{currentTemplateScopeLabel}</small></span>
             </div>
-            <p className="config-template-console__explain">默认测试模板可覆盖当前店铺/类目下全部分区；只有“当前使用”才代表本次执行会读取的模板。点击套用后才会写入表单，保存后才会影响执行。刚保存的模板会自动选中，后续可从下拉框再次套用。</p>
+            <p className="config-template-console__explain">默认配置模板可覆盖当前店铺/类目下全部分区；只有“当前使用”才代表本次执行会读取的模板。点击套用后才会写入表单，保存后才会影响执行。刚保存的模板会自动选中，后续可从下拉框再次套用。</p>
             <div className="config-template-console__detail-grid">
               <div className="config-template-source config-template-source--detail" aria-label="当前模板来源详情">
                 <strong>当前生效模板</strong>
@@ -3824,7 +3824,7 @@ function getL2ProbeResourceState(runtimeStatus: RuntimeStatus | null) {
   const required = [
     ['真实只读检查启动器', dependencies.l2_readonly_probe_runner],
     ['真实只读检查脚本', dependencies.l2_readonly_probe_script],
-    ['只读 allowlist', dependencies.l2_readonly_probe_allowlist],
+    ['只读异常候选规则', dependencies.l2_readonly_probe_allowlist],
   ] as const
   const missing = required.filter(([, item]) => item?.status === 'missing')
   if (!missing.length) {
@@ -5283,7 +5283,7 @@ export function EvidenceTimeline({
           {!evidencePoints.length && (
             <EmptyState
               title="暂无可验收证据"
-              detail="当前真实写入未放行时，保存结果、未发布证明和网络/HAR 为 0 条是预期阻断；只有单商品只保存完成后才生成可验收证据等级。"
+              detail="当前真实保存未放行时，保存结果、未发布证明和保存回包为 0 条是预期阻断；只有单商品只保存完成后才生成可验收证据等级。"
               actions={(
                 <>
                   <button className="button button--secondary" type="button" onClick={onShowTasks}>查看当前任务门禁</button>
@@ -5360,6 +5360,7 @@ function humanPublishGuardStatus(status?: string | null) {
     unsafe_publish_risk: '发现发布风险',
     blocked: '已暂停',
     waiting: '等待执行',
+    empty: '等待执行',
     unknown: '等待执行',
   } as Record<string, string>)[status ?? 'unknown'] ?? status ?? '等待执行'
 }
@@ -5395,7 +5396,7 @@ export function ReportCenter({
           <BusinessReportCheckRow count={businessReportCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
           <EvidenceCheckRow label="保存结果" count={saveResultCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
           <EvidenceCheckRow label="未发布证明" count={unpublishedProofCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
-          <EvidenceCheckRow label="网络/HAR" count={networkHarCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
+          <EvidenceCheckRow label="保存回包" count={networkHarCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
         </div>
         {realWriteExpectedBlocked && (
           <p className="delivery-check-card__warning">人工确认前不要求生成新的真实保存证据；0 条代表当前自动化真实保存按规则暂停。</p>
@@ -5441,10 +5442,10 @@ export function ReportCenter({
         </summary>
         <div className="l2-allowlist-review">
           <div className="l2-allowlist-review__head">
-            <strong>L2 allowlist 候选处理</strong>
-            <span>先评审，再复跑 L2</span>
+            <strong>真实只读异常候选处理</strong>
+            <span>先评审，再重新检查</span>
           </div>
-          <p>review_only=true / allowlist_applied=false。未完成人工评审前，不运行下方真实只读检查命令。</p>
+          <p>当前只生成候选清单，不自动放行。未完成人工评审前，不运行下方真实只读检查命令。</p>
           {l2AllowlistReviewItems.length > 0 ? (
             <ul>
               {l2AllowlistReviewItems.slice(0, 8).map((item) => (
@@ -5452,10 +5453,10 @@ export function ReportCenter({
               ))}
             </ul>
           ) : (
-            <p>当前工作区没有可展示的 allowlist 候选；仍需按最终报告和 L2 证据复核后再决定是否重跑。</p>
+            <p>当前工作区没有可展示的异常候选；仍需按最终报告和真实只读检查证据复核后再决定是否重跑。</p>
           )}
         </div>
-        <p>{l2ProbePlan.purpose || '真实写入保持阻断；仅在操作者确认可进行只读探测时，才重新运行双目标 L2。'}</p>
+        <p>{l2ProbePlan.purpose || '真实保存保持暂停；仅在操作者确认可进行只读检查时，才重新运行采集页和采集箱检查。'}</p>
         <div className="l2-next-step-card__commands">
           {l2ProbePlan.commands.map((command) => (
             <code key={command}>{command}</code>
@@ -5508,7 +5509,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
   const readinessDetail = !available
     ? '还没有读取到最近验收结果；请先运行本地验收。'
     : runtimeGateStale && isReadyReadiness(readiness)
-      ? '最终验收报告待刷新；当前运行门禁已按最新 L2/L3 覆盖为可申请单商品只保存，源码包交付前仍需重新运行最终验收。'
+      ? '最终验收报告待刷新；当前运行门禁已按最新真实检查结果覆盖为可申请单商品只保存，源码包交付前仍需重新运行最终验收。'
       : runtimeGateStale
         ? '最终验收报告待刷新；请先重新运行真实只读检查和本地验收。'
       : isReadyReadiness(readiness)
@@ -5564,7 +5565,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
           </div>
           {runtimeGateStale && (
             <p className="delivery-check-card__warning">
-              运行门禁已覆盖历史自检：报告记录 {reportReadiness}，当前 L2={finalCheck?.current_l2_gate_status ?? 'unknown'} / L3={finalCheck?.current_l3_gate_status ?? 'unknown'}，有效状态为 {readiness}。
+              运行门禁已覆盖历史自检：报告记录 {humanReadinessLabel(reportReadiness)}，当前真实只读检查={humanGateStatus(finalCheck?.current_l2_gate_status ?? 'unknown')} / 人工确认={humanGateStatus(finalCheck?.current_l3_gate_status ?? 'unknown')}，有效状态为 {humanReadinessLabel(readiness)}。
             </p>
           )}
         <div className="delivery-check-card__release-gates" aria-label="真实写入放行前置">
@@ -5597,10 +5598,10 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
           )}
           <span>自检 Git {gitHead} / 当前 Git {currentGitHead}</span>
           <span>OK 范围 {finalCheck?.ok_scope ?? '未记录'} / {realDxmMutationAllowedLabel}</span>
-          <span>有效真实写入 {readiness} / 报告记录 {reportReadiness} / 运行门禁 {runtimeGateFreshness}</span>
-          <span>受控 single_save {finalCheck?.controlled_single_save_ready === true ? 'READY' : '未放行'} / 批量无人值守发布 {finalCheck?.batch_unattended_publish_allowed === true ? '允许' : '阻断'}</span>
+          <span>有效真实保存 {humanReadinessLabel(readiness)} / 报告记录 {humanReadinessLabel(reportReadiness)} / 运行门禁 {runtimeGateFreshness}</span>
+          <span>受控单商品只保存 {finalCheck?.controlled_single_save_ready === true ? '可申请' : '未放行'} / 批量无人值守发布 {finalCheck?.batch_unattended_publish_allowed === true ? '允许' : '阻断'}</span>
           <span>预期真实写入 {finalCheck?.expected_real_dxm_write_readiness ?? '未记录'} / 匹配 {finalCheck?.real_dxm_write_readiness_matches_expected === true ? 'true' : 'false'}</span>
-          <span>L2 allowlist 评审模板 {finalCheck?.l2_allowlist_review_template_state ?? '未生成'} / 候选 {finalCheck?.l2_allowlist_review_template_candidate_count ?? 0} 项</span>
+          <span>真实只读异常候选评审模板 {finalCheck?.l2_allowlist_review_template_state ?? '未生成'} / 候选 {finalCheck?.l2_allowlist_review_template_candidate_count ?? 0} 项</span>
           <span>模板哈希 MD {shortHash(finalCheck?.l2_allowlist_review_template_markdown_sha256)} / JSON {shortHash(finalCheck?.l2_allowlist_review_template_json_sha256)}</span>
           <span>浏览器 QA Git {browserQaGitHead} / 截图哈希 {finalCheck?.browser_qa_screenshot_hashes ? Object.keys(finalCheck.browser_qa_screenshot_hashes).length : 0} 项</span>
           <span>最终报告页截图 qa-report-center-final.png / 截图哈希 {finalCheck?.post_final_report_qa_screenshot_hashes ? Object.keys(finalCheck.post_final_report_qa_screenshot_hashes).length : 0} 项</span>
@@ -6403,10 +6404,10 @@ function RuntimeGateFreshnessRow({ finalCheck }: { finalCheck: FinalDeliveryChec
   const staleGate = freshness === 'stale_gate'
   const label = matches ? '运行门禁仍支持自检结论' : staleGate ? '运行门禁已使自检过期' : '运行门禁待复核'
   const detail = matches
-    ? '当前 L2/L3 与最近自检的真实写入状态一致。'
+    ? '当前真实只读检查和人工确认与最近自检结论一致。'
     : staleGate
-      ? 'L2/L3 证据有时效；历史 READY 不能作为当前启动依据。'
-      : '尚无法确认当前 L2/L3 是否仍支持最近自检。'
+      ? '真实检查证据有时效；历史验收不能作为当前启动依据。'
+      : '尚无法确认当前真实检查结果是否仍支持最近自检。'
 
   return (
     <div className={`final-check-freshness-row ${matches ? 'is-current' : 'is-stale'}`}>
@@ -6421,7 +6422,7 @@ function DeliveryReadinessRow({ readiness }: { readiness: string }) {
   const isBlocked = isBlockedReadiness(readiness)
   const isReady = isReadyReadiness(readiness)
   const tone = isReady ? 'is-ready' : isBlocked ? 'is-blocked' : 'is-unknown'
-  const label = isReady ? '真实 DXM single_save READY' : isBlocked ? '真实 DXM 写入 BLOCKED' : `真实 DXM 写入 ${readiness}`
+  const label = isReady ? '真实店小秘单商品只保存可申请' : isBlocked ? '真实店小秘保存暂不启动' : `真实店小秘保存${humanReadinessLabel(readiness)}`
   const detail = isReady
     ? '仅代表受控单品保存；批量、无人值守和发布仍需单独放行。'
     : isBlocked

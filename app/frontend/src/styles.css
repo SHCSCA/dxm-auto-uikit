@@ -3465,12 +3465,12 @@ tr:last-child td {
 .editable-config-section__fields input,
 .editable-config-section__fields textarea {
   width: 100%;
-  min-height: 32px;
+  min-height: 28px;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: #fff;
   color: var(--text);
-  padding: 5px 8px;
+  padding: 4px 8px;
 }
 
 .editable-config-section__fields textarea {
@@ -3493,6 +3493,12 @@ tr:last-child td {
 
 .config-focus-card {
   min-height: 0;
+  padding: 8px;
+  gap: 6px;
+}
+
+.config-focus-card > .module-head {
+  display: none;
 }
 
 .content-density-summary {

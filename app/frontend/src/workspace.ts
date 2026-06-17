@@ -213,135 +213,6 @@ export function buildEmptyWorkspace(): DeliveryWorkspace {
   }
 }
 
-export function buildMockWorkspace(): DeliveryWorkspace {
-  const stores: Store[] = [{ id: 1, name: 'Dang Kang', platform: 'AliExpress', status: 'connected' }]
-  const templates: Template[] = demoTemplateSeeds.map((item, index) => ({ id: index + 1, ...item }))
-  const products: Product[] = [{
-    id: 101,
-    title: seedRows[0].title,
-    category_name: seedRows[0].category_name,
-    price: seedRows[0].price,
-    currency: 'USD',
-    sku_count: seedRows[0].sku_count,
-    image_count: seedRows[0].image_count,
-    status: 'ready',
-    image: seedRows[0].image,
-  }]
-  const tasks: Task[] = [{
-    id: 19,
-    name: '本地演示保存核验批次 #19',
-    status: 'draft',
-    mode: 'dry_run',
-    publish_scene: 'SMT_SEMI_MANAGED_SAVE_ONLY',
-    total_jobs: 1,
-    completed_jobs: 0,
-    failed_jobs: 0,
-    payload: {
-      product_ids: [101],
-      store_name: 'Dang Kang',
-      category_name: '立牌类谷子',
-      image: seedRows[0].image,
-      dxm_reference_templates: demoDxmReferenceTemplates,
-    },
-  }]
-  const logs: LogItem[] = [
-    { id: 1, task_id: 19, job_id: 31, level: 'info', message: '配置检查已完成，等待真实只读检查和人工确认复核', context: {}, created_at: '2026-05-22T09:00:00+08:00' },
-    { id: 2, task_id: 19, job_id: 31, level: 'warning', message: '后端 /api/delivery/workspace 未接入时，前端使用工作台默认数据', context: {}, created_at: '2026-05-22T09:01:00+08:00' },
-  ]
-  const evidences: Evidence[] = [
-    { id: 676, task_id: 19, job_id: 31, evidence_type: 'state_snapshot', file_path: 'data/screenshots/v1_task_19_job_31_PRECHECK_CONFIG.txt', meta: { grade: 'A', title: '配置检查快照', acceptance: '可追溯到模板与店铺配置' }, created_at: '2026-05-22T01:55:49Z' },
-    { id: 677, task_id: 19, job_id: 31, evidence_type: 'workflow_action', file_path: '/artifacts/screenshots/dianxiaomi_save_only.png', meta: { grade: 'B', title: '本地演示截图占位', acceptance: '仅用于降级页面布局，不作为真实 DXM 保存证据' }, created_at: '2026-05-22T01:56:56Z' },
-    { id: 680, task_id: 19, job_id: 31, evidence_type: 'workflow_action', file_path: '/artifacts/screenshots/dianxiaomi_verify_not_published.png', meta: { grade: 'C', title: '演示结果隔离核验', acceptance: '缺少真实 L3 金丝雀与独立审计人复核记录' }, created_at: '2026-05-22T01:57:14Z' },
-  ]
-  const exceptions: ExceptionItem[] = [
-    { id: 1, task_id: 19, job_id: 31, error_code: 'GAP-A1', field_domain: 'evidence', title: 'A级证据仍缺浏览器会话指纹', detail: '保存截图已有，但没有浏览器环境、账号、批次三者的同屏绑定。', suggestion: '报告与证据需要补充会话摘要和截图哈希。', status: 'open' },
-    { id: 2, task_id: 19, job_id: 31, error_code: 'GAP-B2', field_domain: 'template_trace', title: '引用模板命中需要逐段回显', detail: '已展示 dxm_reference_templates 映射，但真实页面选择结果仍需逐段记录。', suggestion: '把 attribute_info、freight、service 等结果写入报告摘要。', status: 'open' },
-  ]
-  const reports: Report[] = [{
-    id: 11,
-    task_id: 19,
-    title: '本地演示保存核验报告 #19',
-    status: 'draft',
-    report_type: 'save_only_acceptance',
-    summary: '已建立本地演示报告框架，等待真实 L2/L3 放行后补齐执行结果。',
-    file_path: null,
-    created_at: '2026-05-22T01:57:14Z',
-    published: false,
-  }]
-  const deliverySteps: RunStep[] = [
-    { state: 'PRECHECK_CONFIG', label: '配置检查', field_domain: 'config', status: 'completed', has_evidence: true, evidence_count: 1 },
-    { state: 'FILL_MEDIA', label: '图片与营销图', field_domain: 'media', status: 'pending', has_evidence: false, evidence_count: 0 },
-    { state: 'L3_SAVE_GATE', label: 'L3 保存门禁', field_domain: 'save', status: 'pending', has_evidence: false, evidence_count: 0 },
-    { state: 'VERIFY_NOT_PUBLISHED', label: '未发布校验', field_domain: 'publish_guard', status: 'pending', has_evidence: false, evidence_count: 0 },
-  ]
-  const evidencePoints: EvidencePoint[] = evidences.map((evidence) => ({
-    kind: evidence.evidence_type,
-    id: evidence.id,
-    job_id: evidence.job_id,
-    state: String(evidence.meta?.state ?? ''),
-    file_path: evidence.file_path,
-    created_at: evidence.created_at,
-  }))
-  const reportSummary: ReportSummary = {
-    total_reports: reports.length,
-    success_count: 0,
-    failed_count: 0,
-    published_count: 0,
-    latest_report: reports[0],
-    save_results: [],
-    network_save_results: [],
-    har_summaries: [],
-    published_proofs: [],
-    dxm_reference_fields: {},
-  }
-  const publishGuardState: SafetyGuardState = {
-    status: 'waiting_for_execution',
-    safe: true,
-    published: false,
-    publish_allowed: false,
-    report_published_all_false: true,
-    has_unpublished_proof: false,
-    reasons: [],
-  }
-  const evidenceGradeValue = { grade: 'C' as EvidenceGrade, has_network_or_har_save_response: false }
-  const regressionGates = buildRegressionGates(null, evidenceGradeValue, [])
-
-  return {
-    source: 'mock',
-    stores,
-    templates,
-    products,
-    tasks,
-    logs,
-    evidences,
-    exceptions,
-    reports,
-    liveEvents: [],
-    deliverySteps,
-    evidencePoints,
-    reportSummary,
-    templateResolution: {
-      dxm_reference_templates_resolved: demoDxmReferenceTemplates,
-      dxm_reference_template_results: {},
-      template_trace: [],
-      resolved_defaults: {},
-    },
-    publishGuardState,
-    evidenceGrade: evidenceGradeValue,
-    regressionGates,
-    l2ProbePlan: buildL2ProbePlan(),
-    realModeReleasePlan: buildRealModeReleasePlan(),
-    dxmReferenceTemplates: normalizeReferenceSections(undefined, templates, reports),
-    acceptanceGaps: buildAcceptanceGaps(exceptions, evidences, reports, evidenceGradeValue),
-    safety: {
-      mode: 'dry_run',
-      guarantee: '本地演示 dry_run：工作台不提供任何上架入口，真实写入仍需 L2/L3 放行。',
-      forbiddenActions: ['立即上架', '继续上架', '保存并上架', '批量上架'],
-      lastCheckedAt: '2026-05-22 09:00',
-    },
-  }
-}
-
 function buildRegressionGates(
   reportSummary: ReportSummary | null,
   grade: { grade: EvidenceGrade; [key: string]: unknown } | null,
@@ -407,7 +278,7 @@ function buildL2ProbePlan(): L2ProbePlan {
   return {
     schema: 'dxm_l2_readonly_probe_plan.v1',
     requiresApproval: true,
-    purpose: '真实店小秘双目标 L2 页面核验；不领取、不备注、不保存、不发布。',
+    purpose: '真实店小秘采集页和采集箱只读检查；不领取、不备注、不保存、不发布。',
     runIdCommand,
     pythonCommand,
     scriptPath,
@@ -425,8 +296,8 @@ function buildL2ProbePlan(): L2ProbePlan {
       '只读网络计数必须全为 0。',
     ],
     safetyNotes: [
-      '运行前必须由操作者明确批准真实 L2 只读探测。',
-      'L2 只读探测失败或只产生 mock 证据时不自动放行 L3。',
+      '运行前必须由操作者明确批准真实只读检查。',
+      '真实只读检查失败或只有离线证据时，不自动放行真实保存。',
     ],
   }
 }
@@ -461,28 +332,28 @@ export function buildRealModeReleasePlan(): RealModeReleasePlan {
     modes: [
       {
         mode: 'single_save',
-        label: '受控 single_save 已放行',
+        label: '受控单商品只保存已放行',
         status: 'released_controlled',
         allowed: true,
         release_scope: 'single product save-only canary',
         required_evidence: [
-          'L2 双目标真实只读通过',
-          '保存接口 code=0',
-          'published=false 未发布证明',
-          '截图与 network/HAR 证据',
+          '采集页和采集箱真实只读检查通过',
+          '店小秘返回保存成功',
+          '未发布状态证明',
+          '保存成功回包和页面记录',
         ],
         required_controls: sharedControls,
         blockers: [],
         readiness_checklist: [
-          checklist('l2_dual_target', 'L2 双目标真实只读通过', 'passed'),
-          checklist('l3_single_canary', 'single_save 金丝雀保存证据', 'passed'),
-          checklist('published_false', 'published=false 未发布证明', 'passed'),
+          checklist('l2_dual_target', '采集页和采集箱真实只读检查通过', 'passed'),
+          checklist('l3_single_canary', '单商品只保存证据', 'passed'),
+          checklist('published_false', '未发布状态证明', 'passed'),
           checklist('publish_guard', '发布隔离无风险信号', 'passed'),
         ],
       },
       {
         mode: 'claim_only',
-        label: 'claim_only 当前未发布',
+        label: '只认领当前未开放',
         status: 'blocked_unreleased',
         allowed: false,
         release_scope: 'not released',
@@ -511,15 +382,15 @@ export function buildRealModeReleasePlan(): RealModeReleasePlan {
       },
       {
         mode: 'batch_save',
-        label: 'batch_save 当前未发布',
+        label: '批量只保存当前未开放',
         status: 'blocked_unreleased',
         allowed: false,
         release_scope: 'not released',
         required_evidence: [
-          '独立 batch_save L2/L3 证据',
-          'batch size limit proof',
-          '逐商品保存结果与 published=false',
-          '逐商品 network/HAR 证据',
+          '独立批量真实检查和保存验收',
+          '批量数量上限证明',
+          '逐商品保存结果和未发布证明',
+          '逐商品保存成功回包和页面记录',
           '部分失败报告与重试边界',
         ],
         required_controls: [
@@ -534,9 +405,9 @@ export function buildRealModeReleasePlan(): RealModeReleasePlan {
           '缺少批量大小上限、回滚和部分失败验收',
         ],
         readiness_checklist: [
-          checklist('dedicated_l2_l3', '独立 batch_save L2/L3 证据', 'missing', 'cannot reuse single_save evidence', '批量行为必须单独验证，不能用单品证据替代。'),
+          checklist('dedicated_l2_l3', '独立批量真实检查和保存验收', 'missing', 'cannot reuse single_save evidence', '批量行为必须单独验证，不能用单品证据替代。'),
           checklist('batch_size_limit', '批量大小上限', 'missing', 'missing batch size cap acceptance', 'UI 和 runner 都必须强制小批量上限。'),
-          checklist('per_job_save_and_unpublished', '逐商品保存结果与 published=false', 'missing', 'missing per-job evidence', '每个 job 都需要保存结果、未发布证明和报告链路。'),
+          checklist('per_job_save_and_unpublished', '逐商品保存结果和未发布证明', 'missing', 'missing per-job evidence', '每个商品都需要保存结果、未发布证明和报告链路。'),
           checklist('partial_failure_rollback', '部分失败报告与回滚/人工接管', 'missing', 'missing partial failure rollback proof', '任一失败必须安全停止并给出接管路径。'),
         ],
       },
