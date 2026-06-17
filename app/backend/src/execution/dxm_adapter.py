@@ -6,9 +6,25 @@ class DxmWorkflowAdapter:
         self.login_flow = login_flow
 
     def check_login_state(self) -> dict[str, Any]:
+        visible_state = self._visible_logged_in_state()
+        if visible_state is not None:
+            return self._result('check_login_state', visible_state)
         live_client = getattr(self.login_flow, 'live_client', None)
         if live_client is not None and hasattr(live_client, 'probe_session'):
-            return self._result('check_login_state', self._state_from_live_probe(live_client.probe_session()))
+            try:
+                return self._result('check_login_state', self._state_from_live_probe(live_client.probe_session()))
+            except Exception as exc:
+                saved_state = self.login_flow.get_state()
+                if self._state_looks_logged_in(saved_state):
+                    return self._result(
+                        'check_login_state',
+                        {
+                            **saved_state,
+                            'stage': saved_state.get('stage') or 'login_success',
+                            'live_probe_error': str(exc),
+                        },
+                    )
+                raise
         return self._result('check_login_state', self.login_flow.get_state())
 
     def open_draft_box(self) -> dict[str, Any]:
@@ -235,3 +251,23 @@ class DxmWorkflowAdapter:
             'screenshot_url': probe.get('home_screenshot_url') or probe.get('home_screenshot'),
             'live_probe': probe,
         }
+
+    def _visible_logged_in_state(self) -> dict[str, Any] | None:
+        has_visible_session = bool(
+            getattr(self.login_flow, '_page', None)
+            or getattr(self.login_flow, '_browser', None)
+            or getattr(self.login_flow, '_context', None)
+        )
+        if not has_visible_session:
+            return None
+        state = self.login_flow.get_state()
+        if self._state_looks_logged_in(state):
+            return state
+        return None
+
+    def _state_looks_logged_in(self, state: dict[str, Any]) -> bool:
+        if state.get('stage') == 'login_success':
+            return True
+        page_url = str(state.get('page_url') or '')
+        page_title = str(state.get('page_title') or '')
+        return 'dianxiaomi.com/web/' in page_url and '登录' not in page_title

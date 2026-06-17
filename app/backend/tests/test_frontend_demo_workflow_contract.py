@@ -1257,7 +1257,7 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "hasBrowserSession && currentUrl ? shortUrl(currentUrl) : '等待启动执行浏览器'" in workbench_source
     assert "可在生命周期区接管" in workbench_source
     assert "可在会话管理中接管" not in workbench_source
-    assert "buildConsolePrimaryPath({ selectedTask, configPreview, configPreviewError, configPreviewLoading, l2Gate, l3Gate, runtimeStatus, busy })" in workbench_source
+    assert "buildConsolePrimaryPath({ selectedTask, reports: workspace.reports, configPreview, configPreviewError, configPreviewLoading, l2Gate, l3Gate, runtimeStatus, busy })" in workbench_source
     assert "primaryPath={consolePrimaryPath}" in console_section
     assert "primaryPath.action === 'config'" in workbench_source
     assert "primaryPath.action === 'run_l2'" in workbench_source
@@ -2953,7 +2953,7 @@ def test_console_primary_path_blocks_l2_when_probe_runner_is_missing():
     assert "title: '真实只读检查组件未就绪'" in primary_path_section
     assert "ctaLabel: '查看启动器日志'" in primary_path_section
     assert "action: 'launcher_logs'" in primary_path_section
-    assert "buildConsolePrimaryPath({ selectedTask, configPreview, configPreviewError, configPreviewLoading, l2Gate, l3Gate, runtimeStatus, busy })" in console_section
+    assert "buildConsolePrimaryPath({ selectedTask, reports: workspace.reports, configPreview, configPreviewError, configPreviewLoading, l2Gate, l3Gate, runtimeStatus, busy })" in console_section
     assert "if (primaryPath.action === 'launcher_logs') return onRuntimeLogSourceChange('launcher')" in focus_section
     assert "primaryPath.action === 'run_l2' && l2ProbeResourceState.blocked" not in focus_section
 
@@ -3572,7 +3572,7 @@ def test_execution_console_uses_unified_primary_path_before_rendering():
     assert "function buildConsolePrimaryPath" in source
     assert "configPreview: ConfigPreview | null" in source
     assert "configPreviewLoading: boolean" in source
-    assert "const consolePrimaryPath = buildConsolePrimaryPath({ selectedTask, configPreview, configPreviewError, configPreviewLoading, l2Gate, l3Gate, runtimeStatus, busy })" in console_section
+    assert "const consolePrimaryPath = buildConsolePrimaryPath({ selectedTask, reports: workspace.reports, configPreview, configPreviewError, configPreviewLoading, l2Gate, l3Gate, runtimeStatus, busy })" in console_section
     assert "const realSaveBlocked = consolePrimaryPath.saveBlocked" in console_section
     assert "const browserStartBlocked = consolePrimaryPath.blocksBrowserStart" in console_section
     assert "const diagnosticBlockReason" not in console_section
@@ -3702,7 +3702,10 @@ def test_failed_task_primary_path_guides_retry_instead_of_non_draft_jargon():
 
     assert "selectedTask.status === 'failed'" in build_primary_path_section
     assert "上次执行失败" in build_primary_path_section
+    assert "humanTaskFailureMessage(selectedTask, reports)" in build_primary_path_section
+    assert "failedJob?.error_message" in build_primary_path_section
     assert "重新创建单商品只保存任务" in build_primary_path_section
+    assert "系统没有执行保存。请保持真实店小秘登录窗口可用" in build_primary_path_section
     start_label_section = task_center_section[task_center_section.index("const startLabel"):task_center_section.index("const historyTaskHint")]
     assert start_label_section.index("selectedTask.status === 'failed'") < start_label_section.index("selectedTask.status !== 'draft'")
     assert "上次执行失败，重新创建任务" in task_center_section

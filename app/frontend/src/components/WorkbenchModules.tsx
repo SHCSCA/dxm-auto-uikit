@@ -3319,7 +3319,7 @@ export function ExecutionConsole({
   const browserFrame = getBrowserFrame(workspace, selectedTask, agentConsole)
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
   const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
-  const consolePrimaryPath = buildConsolePrimaryPath({ selectedTask, configPreview, configPreviewError, configPreviewLoading, l2Gate, l3Gate, runtimeStatus, busy })
+  const consolePrimaryPath = buildConsolePrimaryPath({ selectedTask, reports: workspace.reports, configPreview, configPreviewError, configPreviewLoading, l2Gate, l3Gate, runtimeStatus, busy })
   const realSaveBlocked = consolePrimaryPath.saveBlocked
   const realSaveBlockReason = consolePrimaryPath.detail
   const browserStartBlocked = consolePrimaryPath.blocksBrowserStart
@@ -6155,6 +6155,7 @@ function taskStartDecision({
 
 function buildConsolePrimaryPath({
   selectedTask,
+  reports,
   configPreview,
   configPreviewError,
   configPreviewLoading,
@@ -6164,6 +6165,7 @@ function buildConsolePrimaryPath({
   busy,
 }: {
   selectedTask: Task | null
+  reports: Report[]
   configPreview: ConfigPreview | null
   configPreviewError: string | null
   configPreviewLoading: boolean
@@ -6222,11 +6224,12 @@ function buildConsolePrimaryPath({
     }
   }
   if (selectedTask.status === 'failed') {
+    const failure = humanTaskFailureMessage(selectedTask, reports)
     return {
       code: 'not_draft',
       title: '上次执行失败',
-      reason: '上次保存没有完成，系统没有拿到保存成功证明。',
-      detail: '请先查看报告里的失败原因；确认店小秘浏览器可用后，重新创建单商品只保存任务再执行。',
+      reason: failure.reason,
+      detail: failure.detail,
       next: '重新创建单商品只保存任务',
       ctaLabel: '重新创建任务',
       action: 'tasks',
@@ -6374,6 +6377,25 @@ function buildConsolePrimaryPath({
     browserStatus: 'Agent 执行浏览器待启动',
     blocksBrowserStart: false,
     saveBlocked: false,
+  }
+}
+
+function humanTaskFailureMessage(selectedTask: Task, reports: Report[]) {
+  const failedJob = selectedTask.jobs?.find((job) => job.status === 'failed' && job.error_message)
+  const taskReport = reports.find((report) => Number(report.task_id) === selectedTask.id)
+  const reportSummary = taskReport?.summary && typeof taskReport.summary === 'object' ? taskReport.summary as Record<string, unknown> : {}
+  const saveResult = taskReport?.save_result && typeof taskReport.save_result === 'object' ? taskReport.save_result as Record<string, unknown> : {}
+  const raw = failedJob?.error_message
+    ?? reportSummary.blocked_reason
+    ?? saveResult.message
+    ?? saveResult.msg
+    ?? '上次保存没有完成，系统没有拿到保存成功证明。'
+  const reason = humanOperatorMessage(String(raw))
+  return {
+    reason,
+    detail: reason.includes('浏览器连接异常')
+      ? '系统没有执行保存。请保持真实店小秘登录窗口可用，关闭旧执行浏览器或重启控制台后重新创建单商品只保存任务。'
+      : '请先查看报告里的失败原因；确认店小秘浏览器可用后，重新创建单商品只保存任务再执行。',
   }
 }
 

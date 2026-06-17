@@ -59,6 +59,23 @@ class FakeLoginFlowWithLiveProbe(FakeLoginFlow):
         self.live_client = FakeLiveClient(logged_in=logged_in)
 
 
+class FailingLiveClient:
+    def __init__(self):
+        self.probed = False
+
+    def probe_session(self):
+        self.probed = True
+        raise RuntimeError('It looks like you are using Playwright Sync API inside the asyncio loop. Please use the Async API instead.')
+
+
+class FakeVisibleLoginFlow(FakeLoginFlow):
+    def __init__(self, stage='login_success'):
+        super().__init__(stage=stage)
+        self.live_client = FailingLiveClient()
+        self._page = object()
+        self._browser = object()
+
+
 def test_check_login_state_delegates_to_login_flow_get_state():
     flow = FakeLoginFlow()
     result = DxmWorkflowAdapter(flow).check_login_state()
@@ -88,6 +105,30 @@ def test_check_login_state_live_probe_failure_blocks_workflow():
     assert result['ok'] is False
     assert result['stage'] == 'login_failed'
     assert result['evidence']['live_probe']['reason'] == 'cookie_expired'
+
+
+def test_check_login_state_reuses_visible_logged_in_browser_before_headless_probe():
+    flow = FakeVisibleLoginFlow(stage='login_success')
+
+    result = DxmWorkflowAdapter(flow).check_login_state()
+
+    assert flow.live_client.probed is False
+    assert flow.calls == [('get_state',)]
+    assert result['ok'] is True
+    assert result['stage'] == 'login_success'
+
+
+def test_check_login_state_falls_back_to_saved_login_state_when_probe_hits_sync_guard():
+    flow = FakeLoginFlow(stage='login_success')
+    flow.live_client = FailingLiveClient()
+
+    result = DxmWorkflowAdapter(flow).check_login_state()
+
+    assert flow.live_client.probed is True
+    assert flow.calls == [('get_state',)]
+    assert result['ok'] is True
+    assert result['stage'] == 'login_success'
+    assert 'Playwright Sync API' in result['evidence']['live_probe_error']
 
 
 def test_open_draft_box_delegates_to_login_flow_navigation():
