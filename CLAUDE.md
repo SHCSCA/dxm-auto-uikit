@@ -102,7 +102,7 @@ L2 真实只读 probe 需要**真实登录 cookie + 人工审批**,不由 `final
 - `config_preview.py` 内有一大批 `_` 前缀的**死方法**(复刻 `ConfigDefaultsResolver`),`build()` 从不调用——重构陷阱。
 - `pause/resume/stop` 对真实写入模式基本禁用(409);`resume` 永远 409;`clear_stuck_tasks` 跳过真实写入任务(`real_write_protected`)——operator 无法中途取消重置一个真实保存。
 - SQLite **无 FK 约束**,引用完整性只在应用层;每请求独立开关连接(无连接池),`check_same_thread=False`;迁移仅 `_ensure_columns` 增量 `ALTER ADD COLUMN`,无降级。
-- 登录(验证码)需**可见**浏览器窗口(`continue_login` 依赖人工解码后提交);cookie 步骤与 `probe_session` 跑无头。
+- 登录(验证码)需**可见**浏览器窗口(`continue_login` 依赖人工解码后提交);`DxmWorkflowAdapter.check_login_state()` 必须先复用这个可见登录浏览器的已登录状态，再降级到 `DxmLiveClient.probe_session()`。不要在可见 Playwright 会话仍活着时另起同步 probe，否则容易触发 `Playwright Sync API inside the asyncio loop` / greenlet 线程错误并误报“登录未通过”。
 - `start-mvp` 后端端口 **8000 硬占用,被占即失败**(前端 5173 会自动顺延);`delivery_workspace.py` 为 L2 探针命令硬编码了 Windows 反斜杠路径,**隐含面向 Windows**。
 - 正式验收**不要**用 `final-delivery-check.bat -SkipBrowserQA`(开发专用,跳过 403 阻断断言)。`-RequireCleanWorktree` 下有未提交改动会把 `Source package check` 标 FAIL。
 
