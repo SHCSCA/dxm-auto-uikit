@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -50,6 +50,33 @@ MODE_LAST_STATE = {
     "claim_only": StateName.VERIFY_LIST_OWNERSHIP,
     "single_save": StateName.RELEASE_LOCK,
     "batch_save": StateName.RELEASE_LOCK,
+}
+
+HUD_STEP_COPY = {
+    StateName.PRECHECK_CONFIG: ("启动前检查", "检查任务配置", "正在校验店铺、模式和模板配置"),
+    StateName.PRECHECK_SESSION: ("启动前检查", "检查店小秘登录", "正在确认店小秘登录态可用"),
+    StateName.PRECHECK_PUBLISH_GUARD: ("启动前检查", "确认只保存不发布", "正在复核发布隔离规则"),
+    StateName.OPEN_DRAFT_LIST: ("采集箱定位", "打开采集箱", "正在进入速卖通采集箱"),
+    StateName.FIND_PRODUCT: ("采集箱定位", "定位目标商品", "正在查找本次任务商品"),
+    StateName.ITEM_LOCKING: ("采集箱定位", "锁定任务商品", "正在创建商品归属锁"),
+    StateName.CLAIM_PRODUCT: ("采集箱定位", "写入领取备注", "正在写入本次任务专属备注"),
+    StateName.VERIFY_LIST_OWNERSHIP: ("采集箱定位", "确认采集箱归属", "正在确认只处理本任务商品"),
+    StateName.OPEN_EDIT_PAGE: ("编辑商品", "打开编辑页", "正在打开普通编辑页"),
+    StateName.VERIFY_EDIT_OWNERSHIP: ("编辑商品", "确认编辑页归属", "正在确认编辑页商品匹配"),
+    StateName.FILL_BASE_INFO: ("编辑商品", "填写标题和基础信息", "正在填写标题、类目和基础属性"),
+    StateName.FILL_VARIANTS: ("编辑商品", "填写 SKU / 价格 / 库存", "正在填写 SKU、价格和库存"),
+    StateName.FILL_MEDIA: ("编辑商品", "处理图片素材", "正在处理商品图片和详情素材"),
+    StateName.FILL_COMPLIANCE: ("编辑商品", "填写合规 / 海关", "正在填写合规、海关和详情字段"),
+    StateName.ENABLE_SEMI_MANAGED: ("半托管", "开启半托管服务", "正在勾选半托管服务"),
+    StateName.OPEN_SEMI_MANAGED_PAGE: ("半托管", "打开半托管页", "正在进入半托管编辑页"),
+    StateName.FILL_SEMI_GOODS: ("半托管", "填写半托管信息", "正在填写半托管货品信息"),
+    StateName.FILL_SEMI_VARIANTS: ("半托管", "填写半托管变种", "正在填写半托管 SKU 信息"),
+    StateName.PRE_SAVE_GUARD_CHECK: ("保存前复核", "复核保存安全", "正在确认保存动作不会发布"),
+    StateName.SAVE_ONLY: ("保存前复核", "点击保存", "正在点击保存，保存到待发布，不执行发布"),
+    StateName.VERIFY_SAVE_RESULT: ("保存后确认", "确认保存成功", "正在确认店小秘返回保存成功"),
+    StateName.VERIFY_NOT_PUBLISHED: ("保存后确认", "确认未发布", "正在确认商品仍未发布"),
+    StateName.WRITE_REPORT: ("任务收尾", "生成结果报告", "正在生成本次执行结果报告"),
+    StateName.RELEASE_LOCK: ("任务收尾", "完成任务", "正在释放任务锁并完成收尾"),
 }
 
 class V1TaskRunner:
@@ -144,6 +171,7 @@ class V1TaskRunner:
         workflow_results: list[dict[str, Any]] = []
         agent_console_events: list[dict[str, Any]] = []
         agent_action_events: list[dict[str, Any]] = []
+        live_browser_hud_events: list[dict[str, Any]] = []
         last_state = MODE_LAST_STATE[mode]
 
         self.repo.update_job(job_id, status="running", current_step_code="PRECHECK_CONFIG", current_step_name="启动前配置校验")
@@ -169,6 +197,17 @@ class V1TaskRunner:
                 )
                 if agent_console_event:
                     agent_console_events.append(agent_console_event)
+                live_browser_hud_event = self._sync_live_browser_hud(
+                    task,
+                    job,
+                    mode,
+                    state_name,
+                    step_name,
+                    field_domain,
+                    str(evidence_path),
+                )
+                if live_browser_hud_event:
+                    live_browser_hud_events.append(live_browser_hud_event)
                 evidence_meta = {
                     "state": state_name.value,
                     "field_domain": field_domain,
@@ -176,6 +215,8 @@ class V1TaskRunner:
                 }
                 if agent_console_event:
                     evidence_meta["agent_console"] = agent_console_event
+                if live_browser_hud_event:
+                    evidence_meta["live_browser_hud"] = live_browser_hud_event
                 self.repo.add_evidence(task_id, job_id, "state_snapshot", str(evidence_path), evidence_meta)
                 self.repo.add_log(task_id, job_id, "info", f"执行步骤：{step_name}", {
                     "state": state_name.value,
@@ -291,6 +332,7 @@ class V1TaskRunner:
                 execution_defaults,
                 agent_console_events=agent_console_events,
                 agent_action_events=agent_action_events,
+                live_browser_hud_events=live_browser_hud_events,
             )
             save_result = self._save_result_for_mode(mode, workflow_results)
             self.repo.add_report(task_id, job_id, product_id, "success", False, save_result, summary)
@@ -345,6 +387,7 @@ class V1TaskRunner:
                     blocked_reason=error.detail,
                     agent_console_events=agent_console_events,
                     agent_action_events=agent_action_events,
+                    live_browser_hud_events=live_browser_hud_events,
                 ),
             )
             self.repo.add_log(task_id, job_id, "error", error.title, {"error_code": error.error_code, "detail": error.detail})
@@ -368,18 +411,7 @@ class V1TaskRunner:
         if self.agent_console is None:
             return None
         try:
-            result = self.agent_console.update_task_step(
-                task_id=task["id"],
-                job_id=job["id"],
-                product_id=job.get("product_id"),
-                step_code=state_name.value,
-                step_name=step_name,
-                field_domain=field_domain,
-                mode=mode,
-                store_name=self._store_name(task),
-                next_step=self._next_step_name(mode, state_name),
-                screenshot_path=screenshot_path,
-            )
+            result = self.agent_console.update_task_step(**self._hud_step_payload(task, job, mode, state_name, step_name, field_domain, screenshot_path))
         except Exception as exc:
             result = {
                 "ok": False,
@@ -390,6 +422,104 @@ class V1TaskRunner:
         if result.get("reason") == "agent_console_inactive":
             return None
         return self._agent_console_summary(result)
+
+    def _sync_live_browser_hud(
+        self,
+        task: dict[str, Any],
+        job: dict[str, Any],
+        mode: str,
+        state_name: StateName,
+        step_name: str,
+        field_domain: str,
+        screenshot_path: str,
+    ) -> dict[str, Any] | None:
+        updater = getattr(self.workflow_adapter, "update_live_hud", None)
+        if not callable(updater):
+            return None
+        payload = self._hud_step_payload(task, job, mode, state_name, step_name, field_domain, screenshot_path)
+        try:
+            if self._workflow_executor is not None:
+                result = self._workflow_executor.submit(updater, payload).result(timeout=8)
+            else:
+                result = updater(payload)
+        except FutureTimeoutError:
+            result = {
+                "ok": False,
+                "updated": False,
+                "reason": "live_browser_hud_timeout",
+                "error": "live browser HUD update timed out",
+            }
+        except Exception as exc:
+            result = {
+                "ok": False,
+                "updated": False,
+                "reason": "live_browser_hud_exception",
+                "error": str(exc),
+            }
+        hud = result.get("hud") if isinstance(result.get("hud"), Mapping) else payload
+        return {
+            "ok": bool(result.get("ok", True)),
+            "updated": bool(result.get("updated")),
+            "reason": result.get("reason"),
+            "task_id": task["id"],
+            "job_id": job["id"],
+            "product_id": job.get("product_id"),
+            "current_url": result.get("current_url"),
+            "page_title": result.get("page_title"),
+            "last_step_code": state_name.value,
+            "last_step_name": step_name,
+            "hud": {
+                "title": hud.get("title") or step_name,
+                "state": hud.get("state") or state_name.value,
+                "action": hud.get("action"),
+                "next_step": hud.get("next_step"),
+                "store_name": hud.get("store_name"),
+                "guard": hud.get("guard"),
+                "phase": hud.get("phase"),
+                "progress_index": hud.get("progress_index"),
+                "progress_total": hud.get("progress_total"),
+                "severity": hud.get("severity"),
+                "human_title": hud.get("human_title"),
+                "human_action": hud.get("human_action"),
+                "human_next": hud.get("human_next"),
+                "requires_user_action": hud.get("requires_user_action"),
+            },
+            "screenshot": result.get("screenshot"),
+            "updated_at": result.get("updated_at"),
+            "last_error": result.get("last_error") or result.get("error"),
+        }
+
+    def _hud_step_payload(
+        self,
+        task: dict[str, Any],
+        job: dict[str, Any],
+        mode: str,
+        state_name: StateName,
+        step_name: str,
+        field_domain: str,
+        screenshot_path: str,
+    ) -> dict[str, Any]:
+        return {
+            "task_id": task["id"],
+            "job_id": job["id"],
+            "product_id": job.get("product_id"),
+            "step_code": state_name.value,
+            "step_name": step_name,
+            "field_domain": field_domain,
+            "mode": mode,
+            "store_name": self._store_name(task),
+            "next_step": self._next_step_name(mode, state_name),
+            "screenshot_path": screenshot_path,
+            "guard": "只保存不发布",
+            "phase": self._hud_phase(state_name),
+            "progress_index": self._progress_index(mode, state_name),
+            "progress_total": self._progress_total(mode),
+            "severity": "info",
+            "human_title": self._human_title(state_name, step_name),
+            "human_action": self._human_action(state_name, field_domain, mode),
+            "human_next": self._human_next(mode, state_name),
+            "requires_user_action": False,
+        }
 
     def _agent_console_summary(self, result: Mapping[str, Any]) -> dict[str, Any]:
         hud = result.get("hud") if isinstance(result.get("hud"), Mapping) else {}
@@ -412,6 +542,15 @@ class V1TaskRunner:
                 "next_step": hud.get("next_step"),
                 "store_name": hud.get("store_name"),
                 "guard": hud.get("guard"),
+                "phase": hud.get("phase"),
+                "progress_index": hud.get("progress_index"),
+                "progress_total": hud.get("progress_total"),
+                "severity": hud.get("severity"),
+                "human_title": hud.get("human_title"),
+                "human_action": hud.get("human_action"),
+                "human_next": hud.get("human_next"),
+                "recent_actions": hud.get("recent_actions"),
+                "requires_user_action": hud.get("requires_user_action"),
             },
             "screenshot": result.get("screenshot"),
             "updated_at": result.get("updated_at"),
@@ -519,6 +658,41 @@ class V1TaskRunner:
                     return steps[index + 1][1]
                 return None
         return None
+
+    def _progress_index(self, mode: str, current_state: StateName) -> int | None:
+        for index, (state_name, _step_name, _field_domain) in enumerate(self._steps_for_mode(mode), start=1):
+            if state_name == current_state:
+                return index
+        return None
+
+    def _progress_total(self, mode: str) -> int:
+        return self._progress_index(mode, MODE_LAST_STATE[mode]) or len(self._steps_for_mode(mode))
+
+    def _hud_phase(self, state_name: StateName) -> str:
+        return HUD_STEP_COPY.get(state_name, ("业务进度", state_name.value, "正在推进任务"))[0]
+
+    def _human_title(self, state_name: StateName, fallback: str) -> str:
+        return HUD_STEP_COPY.get(state_name, ("业务进度", fallback, "正在推进任务"))[1]
+
+    def _human_action(self, state_name: StateName, field_domain: str | None, mode: str) -> str:
+        configured = HUD_STEP_COPY.get(state_name)
+        if configured:
+            return configured[2]
+        parts = [part for part in (field_domain, mode) if part]
+        return "正在推进：" + " / ".join(parts) if parts else "正在推进任务"
+
+    def _human_next(self, mode: str, current_state: StateName) -> str:
+        steps = self._steps_for_mode(mode)
+        for index, (state_name, step_name, _field_domain) in enumerate(steps):
+            if state_name != current_state:
+                continue
+            if state_name == MODE_LAST_STATE[mode]:
+                return "任务收尾与报告"
+            if index + 1 < len(steps):
+                next_state = steps[index + 1][0]
+                return self._human_title(next_state, steps[index + 1][1])
+            return "等待下一步"
+        return "等待下一步"
 
     def _guard_step(
         self,
@@ -707,9 +881,7 @@ class V1TaskRunner:
             raise V1ExecutionError(error_code, error_title, f"{action_name}: {exc}") from exc
 
         if not result.get("ok"):
-            stage = result.get("stage") or "unknown_stage"
-            page_url = result.get("page_url") or "unknown_url"
-            raise V1ExecutionError(error_code, error_title, f"{action_name} failed at {stage}: {page_url}")
+            raise V1ExecutionError(error_code, error_title, self._workflow_failure_detail(action_name, result))
         if state_name == StateName.CLAIM_PRODUCT and result.get("evidence", {}).get("note_verified") is False:
             raise V1ExecutionError(error_code, error_title, f"{action_name} note_verified false")
         if state_name == StateName.SAVE_ONLY:
@@ -717,6 +889,51 @@ class V1TaskRunner:
             if not save_result or save_result.get("ok") is not True:
                 raise V1ExecutionError(error_code, error_title, f"{action_name} save_result missing or false")
         return result
+
+    def _workflow_failure_detail(self, action_name: str, result: Mapping[str, Any]) -> str:
+        stage = result.get("stage") or "unknown_stage"
+        page_url = result.get("page_url") or "unknown_url"
+        parts = [f"{action_name} failed at {stage}: {page_url}"]
+
+        for value in (result.get("message"), result.get("reason"), result.get("error")):
+            if value:
+                parts.append(str(value))
+
+        evidence = result.get("evidence") if isinstance(result.get("evidence"), Mapping) else {}
+        for value in (evidence.get("message"), evidence.get("reason"), evidence.get("error")):
+            if value:
+                parts.append(str(value))
+
+        save_result = self._extract_save_result(dict(result)) if action_name == "save_only" else None
+        if isinstance(save_result, Mapping):
+            for value in (save_result.get("message"), save_result.get("reason"), save_result.get("success_text")):
+                if value:
+                    parts.append(f"保存结果：{value}")
+            network_result = save_result.get("network_save_result")
+            if isinstance(network_result, Mapping):
+                network_bits = [
+                    network_result.get("message"),
+                    network_result.get("msg"),
+                    network_result.get("reason"),
+                    f"status={network_result.get('status')}" if network_result.get("status") is not None else None,
+                    f"code={network_result.get('code')}" if network_result.get("code") is not None else None,
+                ]
+                network_text = " ".join(str(item) for item in network_bits if item)
+                if network_text:
+                    parts.append(f"保存接口：{network_text}")
+            events = save_result.get("network_events")
+            if isinstance(events, list):
+                parts.append(f"保存接口捕获 {len(events)} 条")
+
+        seen: set[str] = set()
+        compact_parts: list[str] = []
+        for part in parts:
+            text = str(part).strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            compact_parts.append(text)
+        return "; ".join(compact_parts)[:1200]
 
     async def _run_workflow_action_async(
         self,
@@ -780,9 +997,11 @@ class V1TaskRunner:
         blocked_reason: str | None = None,
         agent_console_events: list[dict[str, Any]] | None = None,
         agent_action_events: list[dict[str, Any]] | None = None,
+        live_browser_hud_events: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         console_events = agent_console_events or []
         action_events = agent_action_events or []
+        live_hud_events = live_browser_hud_events or []
         return {
             "task_id": task["id"],
             "job_id": job["id"],
@@ -806,6 +1025,8 @@ class V1TaskRunner:
             "agent_console_events": console_events,
             "agent_console": console_events[-1] if console_events else None,
             "agent_action_events": action_events,
+            "live_browser_hud_events": live_hud_events,
+            "live_browser_hud": live_hud_events[-1] if live_hud_events else None,
             "published": False,
         }
 

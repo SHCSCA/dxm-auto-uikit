@@ -212,6 +212,15 @@ export type AgentConsoleHud = {
   action?: string
   detail?: string
   next_step?: string
+  phase?: string
+  progress_index?: number
+  progress_total?: number
+  severity?: 'info' | 'success' | 'warning' | 'error' | string
+  human_title?: string
+  human_action?: string
+  human_next?: string
+  recent_actions?: string[]
+  requires_user_action?: boolean
   store_name?: string
   guard?: string
   updated_at?: string
@@ -306,6 +315,7 @@ export type FinalDeliveryCheckSummary = {
   effective_real_dxm_write_blocked_reason?: string | null
   effective_real_dxm_mutation_allowed?: boolean | null
   effective_real_dxm_mutation_scope?: string | null
+  effective_real_dxm_write_readiness_matches_expected?: boolean | null
   production_real_write_ready?: boolean | null
   real_dxm_write_blocked_reason?: string | null
   l3_evidence_readiness?: Record<string, unknown> | null
@@ -349,6 +359,14 @@ export type FinalDeliveryCheckSummary = {
   error?: string | null
 }
 export type WorkbenchSection =
+  | 'home'
+  | 'dxm_access'
+  | 'product_tasks'
+  | 'edit_config'
+  | 'agent_execution'
+  | 'results'
+  | 'issues'
+  | 'settings'
   | 'dashboard'
   | 'guide'
   | 'config'

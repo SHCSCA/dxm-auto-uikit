@@ -121,10 +121,38 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
 
 
 def _default_delivery_task_id(repo: Repository, tasks: list[dict[str, Any]]) -> int:
+    latest_delivery_report_task_id: int | None = None
     for report in repo.list_reports():
         if _report_has_delivery_evidence(report):
-            return int(report["task_id"])
+            latest_delivery_report_task_id = int(report["task_id"])
+            break
+
+    for task in tasks:
+        if _is_active_delivery_task(task):
+            return int(task["id"])
+    for task in tasks:
+        if _is_draft_delivery_task(task):
+            if latest_delivery_report_task_id is None or int(task["id"]) > latest_delivery_report_task_id:
+                return int(task["id"])
+            break
+    if latest_delivery_report_task_id is not None:
+        return latest_delivery_report_task_id
+    for task in tasks:
+        if _is_draft_delivery_task(task):
+            return int(task["id"])
     return int(tasks[0]["id"])
+
+
+def _is_active_delivery_task(task: Mapping[str, Any]) -> bool:
+    if task.get("mode") != "single_save":
+        return False
+    return str(task.get("status") or "").lower() in {"running", "paused", "needs_manual_review"}
+
+
+def _is_draft_delivery_task(task: Mapping[str, Any]) -> bool:
+    if task.get("mode") != "single_save":
+        return False
+    return str(task.get("status") or "").lower() == "draft"
 
 
 def _report_has_delivery_evidence(report: Mapping[str, Any]) -> bool:
@@ -890,17 +918,22 @@ def _l2_probe_gate(now: datetime | None = None) -> dict[str, Any]:
 
 
 def _latest_l2_probe_results_by_target() -> dict[str, dict[str, dict[str, Any]]]:
+    for directory in _l2_probe_result_dirs():
+        if not directory.exists():
+            continue
+        candidates = sorted(
+            directory.rglob("*.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        grouped = _group_l2_probe_results_by_target(candidates)
+        if grouped["real"] or grouped["mock"]:
+            return grouped
+    return {"real": {}, "mock": {}}
+
+
+def _group_l2_probe_results_by_target(candidates: list[Path]) -> dict[str, dict[str, dict[str, Any]]]:
     grouped: dict[str, dict[str, dict[str, Any]]] = {"real": {}, "mock": {}}
-    candidates = sorted(
-        (
-            path
-            for directory in _l2_probe_result_dirs()
-            if directory.exists()
-            for path in directory.rglob("*.json")
-        ),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
     real_candidates: list[dict[str, Any]] = []
     mock_candidates: list[dict[str, Any]] = []
     for path in candidates:
@@ -1547,20 +1580,25 @@ def _network_event_save_response_seen(payload: Mapping[str, Any]) -> bool:
 def _looks_like_save_network_response(payload: Mapping[str, Any], url: str) -> bool:
     if "save" in url:
         return True
-    if not url.endswith("/api/popchoiceproduct/add.json"):
+    save_add_endpoints = (
+        "/api/popchoiceproduct/add.json",
+        "/api/smtproduct/add.json",
+    )
+    if not any(url.endswith(endpoint) for endpoint in save_add_endpoints):
         return False
-    response_code = payload.get("code")
-    response_text = " ".join(_strings_from_value(payload.get("msg")) + _strings_from_value(payload.get("message")))
+    response_codes = _strings_from_value(payload.get("code"))
+    response_text_values = _strings_from_value(payload.get("msg")) + _strings_from_value(payload.get("message"))
     nested_json = payload.get("json")
     if isinstance(nested_json, Mapping):
-        response_code = nested_json.get("code", response_code)
-        response_text = " ".join(
-            [
-                response_text,
-                *(_strings_from_value(nested_json.get("msg")) + _strings_from_value(nested_json.get("message"))),
-            ]
-        )
-    return str(response_code) == "0" and ("保存成功" in response_text or "编辑保存成功" in response_text)
+        response_codes.extend(_strings_from_value(nested_json.get("code")))
+        response_text_values.extend(_strings_from_value(nested_json.get("msg")) + _strings_from_value(nested_json.get("message")))
+        nested_data = nested_json.get("data")
+        if isinstance(nested_data, Mapping):
+            response_codes.extend(_strings_from_value(nested_data.get("code")))
+            response_text_values.extend(_strings_from_value(nested_data.get("msg")) + _strings_from_value(nested_data.get("message")))
+    response_text = " ".join(response_text_values)
+    success_text_seen = any(term in response_text for term in ("保存成功", "编辑保存成功", "编辑成功"))
+    return "0" in {str(code) for code in response_codes} and success_text_seen
 
 
 def _collect_publish_scan_inputs(payload: Mapping[str, Any], publish_scan: dict[str, list[str]]) -> None:

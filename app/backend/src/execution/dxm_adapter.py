@@ -218,6 +218,12 @@ class DxmWorkflowAdapter:
             ),
         )
 
+    def update_live_hud(self, hud: dict[str, Any]) -> dict[str, Any]:
+        updater = getattr(self.login_flow, 'update_live_hud', None)
+        if not callable(updater):
+            return {'ok': True, 'updated': False, 'reason': 'live_hud_unavailable'}
+        return updater(hud)
+
     def _result(self, action: str, evidence: dict[str, Any]) -> dict[str, Any]:
         stage = evidence.get('stage')
         return {

@@ -250,6 +250,7 @@ def dxm_draft_box_action(payload: DraftBoxActionRequest):
         note_text=payload.note_text,
         product_query=payload.product_query,
         store_name=payload.store_name,
+        target_source_urls=payload.target_source_urls or None,
     )
     return normalize_artifact_paths(result)
 
@@ -262,6 +263,7 @@ def dxm_workflow_claim_product(payload: DraftBoxActionRequest):
         payload.note_text or 'AI认领',
         product_query=payload.product_query,
         store_name=payload.store_name,
+        target_source_urls=payload.target_source_urls,
     ))
 
 
@@ -582,7 +584,7 @@ def _runtime_control_restart_block_detail() -> str:
 
 @app.get('/api/runtime/status')
 def runtime_status(frontend_url: str | None = None):
-    frontend_url = frontend_url or os.environ.get('DXM_FRONTEND_URL') or f"http://127.0.0.1:{os.environ.get('DXM_FRONTEND_PORT', '5173')}"
+    frontend_url = _runtime_frontend_url(frontend_url)
     backend_url = os.environ.get('DXM_BACKEND_URL') or f"http://127.0.0.1:{os.environ.get('DXM_BACKEND_PORT', '8000')}"
     agent_status = agent_console_service.status()
     dxm_state = normalize_artifact_paths(login_flow.get_state())
@@ -629,6 +631,17 @@ def runtime_status(frontend_url: str | None = None):
             'detail': _runtime_control_detail(),
         },
     }
+
+
+def _runtime_frontend_url(frontend_url: str | None = None) -> str:
+    if frontend_url:
+        return frontend_url
+    env_frontend_url = os.environ.get('DXM_FRONTEND_URL')
+    if env_frontend_url:
+        return env_frontend_url
+    if RUNTIME_DESKTOP_MODE:
+        return 'file://'
+    return f"http://127.0.0.1:{os.environ.get('DXM_FRONTEND_PORT', '5173')}"
 
 
 @app.post('/api/runtime/control')
@@ -782,6 +795,11 @@ def start_agent_console(payload: AgentConsoleStartRequest):
         mode = str(task.get('mode') or (task.get('payload') or {}).get('execution_mode') or '')
         if mode not in RELEASED_REAL_DXM_MUTATION_MODES:
             raise HTTPException(status_code=403, detail=UNRELEASED_REAL_DXM_MODE_DETAIL)
+        task_status = str(task.get('status') or '')
+        if task_status == 'running':
+            raise HTTPException(status_code=409, detail='Task is already running')
+        if task_status != 'draft':
+            raise HTTPException(status_code=409, detail=f'Task cannot start execution browser from status: {task_status}')
         l2_gate = l2_real_probe_gate()
         if l2_gate.get('status') != 'passed':
             raise HTTPException(
@@ -1467,6 +1485,22 @@ def _read_final_delivery_check_summary():
     browser_qa_git_head = browser_qa_manifest.get('gitHead')
     report_readiness = payload.get('realDxmWriteReadiness')
     current_readiness = current_gate.get('readiness')
+    matches_current = (
+        bool(report_git_head)
+        and report_git_head == current_git.get('head')
+        and current_git.get('is_dirty') is False
+    )
+    final_check_freshness = _final_check_freshness(report_git_head, current_git)
+    dirty_worktree_is_source_package_only = (
+        final_check_freshness == 'dirty_worktree'
+        and payload.get('requireCleanWorktree') is not True
+        and payload.get('sourcePackageCheck') == 'NOT_REQUIRED'
+    )
+    stale_final_check_reason = (
+        None
+        if matches_current or dirty_worktree_is_source_package_only
+        else _final_check_stale_blocked_reason(final_check_freshness)
+    )
     runtime_gate_matches_report = bool(report_readiness and current_readiness and report_readiness == current_readiness)
     runtime_gate_freshness = (
         'current'
@@ -1475,18 +1509,24 @@ def _read_final_delivery_check_summary():
         if report_readiness == 'READY' and current_readiness == 'BLOCKED'
         else 'unknown'
     )
-    effective_readiness = current_readiness or report_readiness
-    effective_blocked_reason = (
-        current_gate.get('blocked_reason')
-        if effective_readiness == 'BLOCKED' and current_gate.get('blocked_reason')
-        else payload.get('realDxmWriteBlockedReason')
-    )
-    effective_mutation_allowed = payload.get('realDxmMutationAllowed') is True and effective_readiness == 'READY'
+    if stale_final_check_reason:
+        effective_readiness = 'BLOCKED'
+        effective_blocked_reason = stale_final_check_reason
+        effective_mutation_allowed = False
+    else:
+        effective_readiness = current_readiness or report_readiness
+        effective_blocked_reason = (
+            current_gate.get('blocked_reason')
+            if effective_readiness == 'BLOCKED' and current_gate.get('blocked_reason')
+            else payload.get('realDxmWriteBlockedReason')
+        )
+        effective_mutation_allowed = payload.get('realDxmMutationAllowed') is True and effective_readiness == 'READY'
     effective_mutation_scope = payload.get('realDxmMutationScope') if effective_mutation_allowed else 'none'
-    matches_current = (
-        bool(report_git_head)
-        and report_git_head == current_git.get('head')
-        and current_git.get('is_dirty') is False
+    expected_readiness = payload.get('expectedRealDxmWriteReadiness') or report_readiness
+    effective_readiness_matches_expected = (
+        None
+        if not expected_readiness or not effective_readiness
+        else effective_readiness == expected_readiness
     )
     return {
         'status': 'available',
@@ -1512,8 +1552,9 @@ def _read_final_delivery_check_summary():
         'controlled_single_save_ready': payload.get('controlledSingleSaveReady'),
         'batch_unattended_publish_allowed': payload.get('batchUnattendedPublishAllowed'),
         'real_mode_release_plan': payload.get('realModeReleasePlan'),
-        'expected_real_dxm_write_readiness': payload.get('expectedRealDxmWriteReadiness'),
+        'expected_real_dxm_write_readiness': expected_readiness,
         'real_dxm_write_readiness_matches_expected': payload.get('realDxmWriteReadinessMatchesExpected'),
+        'effective_real_dxm_write_readiness_matches_expected': effective_readiness_matches_expected,
         'source_package_readiness': payload.get('sourcePackageReadiness'),
         'source_package_check': payload.get('sourcePackageCheck'),
         'require_clean_worktree': payload.get('requireCleanWorktree'),
@@ -1522,7 +1563,7 @@ def _read_final_delivery_check_summary():
         'current_git_status_short': current_git.get('status_short'),
         'current_git_is_dirty': current_git.get('is_dirty'),
         'final_check_matches_current_worktree': matches_current,
-        'final_check_freshness': _final_check_freshness(report_git_head, current_git),
+        'final_check_freshness': final_check_freshness,
         'browser_qa_ok': browser_qa.get('ok'),
         'browser_qa_checked_at': browser_qa.get('checkedAt'),
         'browser_qa_git_head': browser_qa_git_head,
@@ -1640,6 +1681,14 @@ def _final_check_freshness(report_git_head, current_git):
     if current_git.get('is_dirty') is False:
         return 'current'
     return 'unknown'
+
+
+def _final_check_stale_blocked_reason(freshness: str) -> str:
+    if freshness == 'dirty_worktree':
+        return '最终验收未覆盖当前代码：当前工作区还有未提交改动，请重新运行最终验收后再启动真实保存。'
+    if freshness == 'stale_head':
+        return '最终验收未覆盖当前代码：报告对应的代码版本不是当前版本，请重新运行最终验收后再启动真实保存。'
+    return '最终验收未覆盖当前代码：无法确认报告与当前代码一致，请重新运行最终验收后再启动真实保存。'
 
 
 def _assert_task_can_receive_manual_approval(task_id: int, request: TaskManualApprovalRequest) -> None:

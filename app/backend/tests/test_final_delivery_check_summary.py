@@ -244,6 +244,7 @@ def test_final_delivery_check_summary_marks_ready_report_stale_when_live_l2_expi
     assert payload["effective_real_dxm_write_blocked_reason"].startswith("L2 gate is failed")
     assert payload["effective_real_dxm_mutation_allowed"] is False
     assert payload["effective_real_dxm_mutation_scope"] == "none"
+    assert payload["effective_real_dxm_write_readiness_matches_expected"] is False
 
 
 def test_final_delivery_check_summary_flags_stale_report_git_head(tmp_path, monkeypatch):
@@ -283,3 +284,169 @@ def test_final_delivery_check_summary_flags_stale_report_git_head(tmp_path, monk
     assert payload["current_git_is_dirty"] is False
     assert payload["final_check_matches_current_worktree"] is False
     assert payload["final_check_freshness"] == "stale_head"
+
+
+def test_final_delivery_check_summary_blocks_effective_ready_when_report_git_head_is_stale(tmp_path, monkeypatch):
+    import src.main as main
+
+    report_path = tmp_path / "final-delivery-check.json"
+    report_path.write_text(json.dumps({
+        "checkedAt": "2026-05-25T09:18:34Z",
+        "localWorkbenchCheck": "PASS",
+        "realDxmWriteReadiness": "READY",
+        "realDxmMutationAllowed": True,
+        "realDxmMutationScope": "controlled_single_save_only",
+        "sourcePackageReadiness": "CLEAN",
+        "sourcePackageCheck": "PASS",
+        "requireCleanWorktree": True,
+        "gitHead": "old-head",
+        "browserQa": {"ok": True, "manifest": {"gitHead": "old-head", "gitStatusShort": ""}},
+        "artifacts": {"summary": "outputs/final-delivery-check/final-delivery-check.md"},
+    }), encoding="utf-8")
+    monkeypatch.setattr(main, "FINAL_DELIVERY_CHECK_JSON", report_path)
+    monkeypatch.setattr(
+        main,
+        "_current_git_summary",
+        lambda: {
+            "head": "new-head",
+            "status_short": "",
+            "is_dirty": False,
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main,
+        "_current_real_dxm_gate_summary",
+        lambda: {
+            "readiness": "READY",
+            "blocked_reason": "",
+            "l2_status": "passed",
+            "l3_status": "passed",
+            "delivery_ready": True,
+        },
+        raising=False,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/delivery/final-check")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["real_dxm_write_readiness"] == "READY"
+    assert payload["current_real_dxm_write_readiness"] == "READY"
+    assert payload["final_check_matches_current_worktree"] is False
+    assert payload["final_check_freshness"] == "stale_head"
+    assert payload["effective_real_dxm_write_readiness"] == "BLOCKED"
+    assert payload["effective_real_dxm_mutation_allowed"] is False
+    assert payload["effective_real_dxm_mutation_scope"] == "none"
+    assert "最终验收未覆盖当前代码" in payload["effective_real_dxm_write_blocked_reason"]
+
+
+def test_final_delivery_check_summary_blocks_effective_ready_when_current_worktree_is_dirty(tmp_path, monkeypatch):
+    import src.main as main
+
+    report_path = tmp_path / "final-delivery-check.json"
+    report_path.write_text(json.dumps({
+        "checkedAt": "2026-05-25T09:18:34Z",
+        "localWorkbenchCheck": "PASS",
+        "realDxmWriteReadiness": "READY",
+        "realDxmMutationAllowed": True,
+        "realDxmMutationScope": "controlled_single_save_only",
+        "sourcePackageReadiness": "CLEAN",
+        "sourcePackageCheck": "PASS",
+        "requireCleanWorktree": True,
+        "gitHead": "abc123",
+        "browserQa": {"ok": True, "manifest": {"gitHead": "abc123", "gitStatusShort": ""}},
+        "artifacts": {"summary": "outputs/final-delivery-check/final-delivery-check.md"},
+    }), encoding="utf-8")
+    monkeypatch.setattr(main, "FINAL_DELIVERY_CHECK_JSON", report_path)
+    monkeypatch.setattr(
+        main,
+        "_current_git_summary",
+        lambda: {
+            "head": "abc123",
+            "status_short": " M app/frontend/src/App.tsx",
+            "is_dirty": True,
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main,
+        "_current_real_dxm_gate_summary",
+        lambda: {
+            "readiness": "READY",
+            "blocked_reason": "",
+            "l2_status": "passed",
+            "l3_status": "passed",
+            "delivery_ready": True,
+        },
+        raising=False,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/delivery/final-check")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["final_check_matches_current_worktree"] is False
+    assert payload["final_check_freshness"] == "dirty_worktree"
+    assert payload["effective_real_dxm_write_readiness"] == "BLOCKED"
+    assert payload["effective_real_dxm_mutation_allowed"] is False
+    assert "最终验收未覆盖当前代码" in payload["effective_real_dxm_write_blocked_reason"]
+
+
+def test_final_delivery_check_summary_keeps_local_ready_when_dirty_source_package_not_required(tmp_path, monkeypatch):
+    import src.main as main
+
+    report_path = tmp_path / "final-delivery-check.json"
+    report_path.write_text(json.dumps({
+        "checkedAt": "2026-05-25T09:18:34Z",
+        "localWorkbenchCheck": "PASS",
+        "realDxmWriteReadiness": "READY",
+        "realDxmMutationAllowed": True,
+        "realDxmMutationScope": "controlled_single_save_only",
+        "controlledSingleSaveReady": True,
+        "okScope": "local_workbench_and_controlled_single_save_ready",
+        "sourcePackageReadiness": "DIRTY",
+        "sourcePackageCheck": "NOT_REQUIRED",
+        "requireCleanWorktree": False,
+        "gitHead": "abc123",
+        "browserQa": {"ok": True, "manifest": {"gitHead": "abc123", "gitStatusShort": " M app/frontend/src/App.tsx"}},
+        "artifacts": {"summary": "outputs/final-delivery-check/final-delivery-check.md"},
+    }), encoding="utf-8")
+    monkeypatch.setattr(main, "FINAL_DELIVERY_CHECK_JSON", report_path)
+    monkeypatch.setattr(
+        main,
+        "_current_git_summary",
+        lambda: {
+            "head": "abc123",
+            "status_short": " M app/frontend/src/App.tsx",
+            "is_dirty": True,
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main,
+        "_current_real_dxm_gate_summary",
+        lambda: {
+            "readiness": "READY",
+            "blocked_reason": "",
+            "l2_status": "passed",
+            "l3_status": "passed",
+            "delivery_ready": True,
+        },
+        raising=False,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/delivery/final-check")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["final_check_matches_current_worktree"] is False
+    assert payload["final_check_freshness"] == "dirty_worktree"
+    assert payload["source_package_check"] == "NOT_REQUIRED"
+    assert payload["effective_real_dxm_write_readiness"] == "READY"
+    assert payload["effective_real_dxm_mutation_allowed"] is True
+    assert payload["effective_real_dxm_mutation_scope"] == "controlled_single_save_only"
+    assert payload["effective_real_dxm_write_blocked_reason"] in (None, "")

@@ -15,12 +15,13 @@ type SafetyStatusBarProps = {
   desktopRuntime?: DesktopRuntimeInfo | null
   busy: boolean
   onRefresh: () => void
+  onShowDxmAccess: () => void
   onShowConfig: () => void
   onShowTasks: () => void
   onShowConsole: () => void
 }
 
-export function SafetyStatusBar({ workspace, selectedTask, configPreview, configPreviewError, configPreviewLoading, runtimeStatus, runtimeStatusError, desktopRuntime, busy, onRefresh, onShowConfig, onShowTasks, onShowConsole }: SafetyStatusBarProps) {
+export function SafetyStatusBar({ workspace, selectedTask, configPreview, configPreviewError, configPreviewLoading, runtimeStatus, runtimeStatusError, desktopRuntime, busy, onRefresh, onShowDxmAccess, onShowConfig, onShowTasks, onShowConsole }: SafetyStatusBarProps) {
   const activeTaskLabel = selectedTask ? `#${selectedTask.id}` : '未选择任务'
   const activeTaskStatusLabel = selectedTask ? humanTaskStatus(selectedTask.status) : ''
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
@@ -93,7 +94,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
       ? '后端未连接不是账号、配置或店小秘页面问题；请查看实时日志、刷新状态或重启免安装版。'
       : '工作台只会执行受控“只保存”，发布和批量无人值守仍保持关闭。'
     : selectedTaskCompleted
-      ? `任务 ${activeTaskLabel} ${activeTaskStatusLabel}，继续查看报告、证据或打开真实浏览器控制台复核。`
+      ? `任务 ${activeTaskLabel} ${activeTaskStatusLabel}，继续查看结果报告、证据或打开真实浏览器复核。`
       : '按操作引导继续：选择任务、补配置、真实登录、真实只读检查、人工确认后才启动保存。'
   const runtimeEndpointLine = runtimeStatus
     ? `服务端 ${runtimeStatus.backend.url ?? `端口 ${runtimeStatus.backend.port ?? '未知'}`} / 前端 ${runtimeStatus.frontend.url ?? `端口 ${runtimeStatus.frontend.port ?? '未知'}`}`
@@ -165,13 +166,15 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
       ? onShowConsole
     : taskBlocksRealSave
       ? onShowTasks
-      : configBlocksRealSave
-        ? onShowConfig
-      : !dxmLoggedIn
+    : configBlocksRealSave
+      ? onShowConfig
+    : !dxmLoggedIn
+      ? onShowDxmAccess
+      : l2BlocksRealSave
         ? onShowConsole
-      : l2BlocksRealSave || l3NeedsApproval
-        ? onShowTasks
-        : onShowConsole
+        : l3NeedsApproval
+          ? onShowTasks
+          : onShowConsole
 
   return (
     <section className={`safety-bar safety-bar--${tone}`} aria-label="工作台当前状态">
@@ -188,7 +191,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
           {primaryActionLabel}
         </button>
         <details className="safety-bar__meta-details inline-disclosure">
-          <summary>状态详情与技术诊断</summary>
+          <summary>查看状态详情</summary>
           <p className="safety-bar__compact-detail">{conciseDetail}</p>
           <div>
             <span className="guard-chip guard-chip--muted">{runtimeEndpointLine}</span>

@@ -7,7 +7,7 @@ L1 replay 用本地 HTML fixture 验证关键页面信号，不访问店小秘�
 ## 运行命令
 
 ```powershell
-cd C:\Users\wz\Desktop\py\dxm-auto-uikit
+cd D:\Desktop\py\dxm-auto-uikit
 app\backend\.venv\Scripts\python.exe tools\probes\l1_selector_replay.py
 ```
 

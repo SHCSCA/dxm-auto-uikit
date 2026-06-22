@@ -4,6 +4,7 @@ import time
 
 import pytest
 from fastapi.testclient import TestClient
+from playwright.sync_api import sync_playwright
 
 from src.execution import dxm_login_flow as dxm_login_flow_module
 from src.execution.dxm_adapter import DxmWorkflowAdapter
@@ -348,6 +349,14 @@ class DummySourceUrlDraftPage(DummyDraftPage):
         return super().evaluate(script, arg)
 
 
+def _is_dismiss_blocking_modals_script(script):
+    return isinstance(script, str) and 'notice-list-modal' in script and 'guide-overlay' in script
+
+
+def _is_visible_blocking_modal_state_script(script):
+    return isinstance(script, str) and '__DXM_BLOCKING_MODAL_STATE__' in script
+
+
 class DummySemiPage:
     url = 'https://www.dianxiaomi.com/web/smt/semi?id=123'
 
@@ -358,6 +367,10 @@ class DummySemiPage:
         return '半托管信息'
 
     def evaluate(self, script, arg=None):
+        if _is_dismiss_blocking_modals_script(script):
+            return {'visible': False}
+        if _is_visible_blocking_modal_state_script(script):
+            return {'visible': False}
         return self.save_result
 
     def wait_for_timeout(self, timeout):
@@ -373,6 +386,10 @@ class DummySaveOnlyScriptPage(DummySemiPage):
         self.script = ''
 
     def evaluate(self, script, arg=None):
+        if _is_dismiss_blocking_modals_script(script):
+            return {'visible': False}
+        if _is_visible_blocking_modal_state_script(script):
+            return {'visible': False}
         self.script = script
         return self.save_result
 
@@ -447,6 +464,10 @@ class DummySaveOnlyVerifyPage(DummySemiPage):
         self.evaluate_calls = 0
 
     def evaluate(self, script, arg=None):
+        if _is_dismiss_blocking_modals_script(script):
+            return {'visible': False}
+        if _is_visible_blocking_modal_state_script(script):
+            return {'visible': False}
         self.evaluate_calls += 1
         if self.evaluate_calls == 1:
             return self.save_result
@@ -489,6 +510,10 @@ class DummySaveOnlyNetworkPage(DummySemiPage):
         self.response_handler = handler
 
     def evaluate(self, script, arg=None):
+        if _is_dismiss_blocking_modals_script(script):
+            return {'visible': False}
+        if _is_visible_blocking_modal_state_script(script):
+            return {'visible': False}
         self.evaluate_calls += 1
         if self.evaluate_calls == 1:
             return self.save_result
@@ -520,6 +545,68 @@ class DummyGuideOverlayPage:
             'rect': {'x': 10, 'y': 20, 'w': 30, 'h': 40},
             'text': '安装店小秘采集插件 1/5 下一步 跳过',
         }
+
+    def wait_for_timeout(self, timeout):
+        return None
+
+
+class DummyImportantReminderModalPage:
+    def __init__(self):
+        self.clicked = False
+
+    def evaluate(self, script, arg=None):
+        if self.clicked:
+            return {'visible': False}
+        return {
+            'visible': True,
+            'clicked': '忽略提示',
+            'rect': {'x': 983, 'y': 315, 'w': 72, 'h': 15},
+            'text': '重要提醒 您购买的 图片空间 将在2天后 过期，超出的图片空间将被冻结 查看详情 >> 忽略提示',
+        }
+
+    def wait_for_timeout(self, timeout):
+        return None
+
+
+class DummyReminderDropdownPage:
+    def __init__(self):
+        self.clicked = False
+
+    def evaluate(self, script, arg=None):
+        if self.clicked:
+            return {'visible': False}
+        return {
+            'visible': True,
+            'clicked': 'dropdown:2天内不提示',
+            'rect': {'x': 1000, 'y': 345, 'w': 90, 'h': 24},
+            'text': '关闭提示 2天内不提示',
+        }
+
+    def wait_for_timeout(self, timeout):
+        return None
+
+
+class DummyPersistentModalUntilEscapePage:
+    def __init__(self):
+        self.closed = False
+        self.clicks = []
+        self.presses = []
+        self.keyboard = self
+
+    def evaluate(self, script, arg=None):
+        if self.closed:
+            return {'visible': False}
+        return {
+            'visible': True,
+            'clicked': 'modal-close',
+            'rect': {'x': 120, 'y': 20, 'w': 24, 'h': 24},
+            'text': '距离活动结束仅剩 我知道了',
+        }
+
+    def press(self, key):
+        self.presses.append(key)
+        if key == 'Escape':
+            self.closed = True
 
     def wait_for_timeout(self, timeout):
         return None
@@ -563,18 +650,21 @@ class DummyReadyWaitPage:
 class DummyNoteVerifyScriptPage:
     url = 'https://www.dianxiaomi.com/web/smt/smtProductList/draft'
 
-    def __init__(self):
+    def __init__(self, menu_label='备注'):
         self.evaluate_calls = 0
         self.verify_script = ''
         self.note_visible_after_search = False
+        self.menu_label = menu_label
 
     def wait_for_timeout(self, timeout):
         return None
 
     def evaluate(self, script, arg=None):
         self.evaluate_calls += 1
+        if 'safeRemark' in script:
+            return {'ok': True, 'text': self.menu_label, 'rect': {'x': 1, 'y': 2, 'w': 3, 'h': 4}}
         if 'li.ant-dropdown-menu-item' in script:
-            return {'rect': {'x': 1, 'y': 2, 'w': 3, 'h': 4}}
+            return {'ok': True, 'text': self.menu_label, 'rect': {'x': 1, 'y': 2, 'w': 3, 'h': 4}}
         if '未找到备注弹窗' in script:
             return {'ok': True}
         if 'rowTexts' in script:
@@ -740,6 +830,9 @@ class DummyBankMenuScriptPage(DummyMediaNoEntryPage):
         self.ready_after_missing_menu = False
 
     def evaluate(self, script, arg=None):
+        if 'dangerousTerms' in script:
+            self.scripts.append(script)
+            return {'visible': False}
         self.calls += 1
         self.scripts.append(script)
         if self.calls == 1:
@@ -1149,11 +1242,15 @@ def test_workflow_claim_product_uses_adapter_contract_after_guard_passes(monkeyp
     monkeypatch.setattr('src.main._assert_direct_real_dxm_mutation_allowed', lambda payload: None)
 
     client = TestClient(app)
-    response = client.post('/api/dxm/workflow/claim-product', json={'action': 'remark', 'note_text': 'AI认领-1'})
+    source_urls = ['https://detail.1688.com/offer/1013604102950.html']
+    response = client.post(
+        '/api/dxm/workflow/claim-product',
+        json={'action': 'remark', 'note_text': 'AI认领-1', 'target_source_urls': source_urls},
+    )
 
     assert response.status_code == 200
     data = response.json()
-    assert flow.performed_action == ('remark', 'AI认领-1', None, None, None)
+    assert flow.performed_action == ('remark', 'AI认领-1', None, None, source_urls)
     assert data['action'] == 'claim_product'
     assert data['evidence']['note_text'] == 'AI认领-1'
 
@@ -1419,6 +1516,27 @@ def test_dxm_login_flow_perform_draft_box_action_updates_state(monkeypatch, tmp_
     assert '备注: AI认领' in state['target_row_text']
 
 
+def test_dxm_login_flow_perform_draft_box_action_keeps_browser_session_on_success(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    close_calls = []
+
+    monkeypatch.setattr(flow, '_perform_draft_box_action', lambda action, note_text=None, product_query=None, store_name=None, target_source_urls=None: {
+        'page_title': '速卖通采集箱',
+        'page_url': 'https://www.dianxiaomi.com/web/smt/smtProductList/draft',
+        'screenshot_url': '/artifacts/screenshots/remark.png',
+        'action': action,
+        'note_text': note_text,
+        'note_verified': True,
+    })
+    monkeypatch.setattr(flow, '_close_browser_session', lambda: close_calls.append('closed'))
+
+    state = flow.perform_draft_box_action('remark', note_text='AI认领')
+
+    assert state['stage'] == 'draft_box_action'
+    assert close_calls == []
+
+
 def test_dxm_login_flow_edit_action_enters_editor_page(monkeypatch, tmp_path):
     live_client = DummyLiveClient(logged_in=True)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
@@ -1633,6 +1751,54 @@ def test_find_draft_box_row_can_match_source_url_when_title_changed(tmp_path):
     assert page.find_arg['targetSourceUrls'] == ['https://detail.1688.com/offer/1013604102950.html']
 
 
+def test_find_draft_box_row_does_not_fallback_when_target_source_url_misses(tmp_path):
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as exc:
+        pytest.skip(f'Playwright unavailable: {exc}')
+
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    html = '''
+    <html>
+      <head>
+        <style>
+          button, a { display: inline-block; width: 72px; height: 24px; }
+        </style>
+      </head>
+      <body>
+        <table>
+          <tbody>
+            <tr class="vxe-body--row">
+              <td>Visible Matched Title 「Dang Kang」</td>
+              <td><a href="https://detail.1688.com/offer/111.html">来源</a></td>
+              <td><button>编辑</button><button>更多</button></td>
+            </tr>
+            <tr class="vxe-body--row">
+              <td>Another Product 「Dang Kang」</td>
+              <td><a href="https://detail.1688.com/offer/222.html">来源</a></td>
+              <td><button>编辑</button><button>更多</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </body>
+    </html>
+    '''
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={'width': 1280, 'height': 800})
+        page.set_content(html)
+        with pytest.raises(RuntimeError, match='未找到目标商品行'):
+            flow._find_draft_box_row(
+                page,
+                product_query='Visible Matched Title',
+                store_name='Dang Kang',
+                target_source_urls=['https://detail.1688.com/offer/999.html'],
+            )
+        browser.close()
+
+
 def test_add_note_verifies_only_target_row(monkeypatch, tmp_path):
     live_client = DummyLiveClient(logged_in=True)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
@@ -1650,6 +1816,23 @@ def test_add_note_verifies_only_target_row(monkeypatch, tmp_path):
     assert result['verified'] is False
     assert 'rowTexts.find' not in page.verify_script
     assert clicks[0] == {'x': 5, 'y': 6, 'w': 7, 'h': 8}
+
+
+def test_add_note_accepts_modify_remark_menu_label(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    page = DummyNoteVerifyScriptPage(menu_label='修改备注')
+    clicks = []
+
+    monkeypatch.setattr(flow, '_click_rect_center', lambda target_page, rect: clicks.append(rect))
+
+    flow._add_note_to_draft_row(
+        page,
+        {'rowIndex': 2, 'actions': [{'txt': '更多', 'tag': 'A', 'cls': 'ant-dropdown-trigger', 'rect': {'x': 5, 'y': 6, 'w': 7, 'h': 8}}]},
+        'AI认领-12-34',
+    )
+
+    assert clicks[1] == {'x': 1, 'y': 2, 'w': 3, 'h': 4}
 
 
 def test_add_note_falls_back_to_store_search_when_current_filter_is_empty(monkeypatch, tmp_path):
@@ -1700,6 +1883,128 @@ def test_open_editor_from_draft_box_clicks_target_row_edit(monkeypatch, tmp_path
     assert clicked == [{'x': 10, 'y': 20, 'w': 30, 'h': 40}]
 
 
+def test_open_editor_from_draft_box_finds_editor_page_when_popup_is_home(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    page = DummyDraftPage({'ok': True})
+    popup_home = DummyDraftPage({'ok': True})
+    popup_home.url = 'https://www.dianxiaomi.com/'
+    popup_home.wait_for_load_state = lambda *args, **kwargs: None
+    editor_page = DummyDraftPage({'ok': True})
+    editor_page.url = 'https://www.dianxiaomi.com/web/smt/edit?id=123'
+
+    class NewPageInfo:
+        value = popup_home
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class Context:
+        def __init__(self):
+            self.pages = [page]
+
+        def expect_page(self, timeout=0):
+            return NewPageInfo()
+
+    context = Context()
+    flow._context = context
+
+    def fake_click(target_page, rect):
+        context.pages.extend([popup_home, editor_page])
+
+    monkeypatch.setattr(flow, '_click_rect_center', fake_click)
+
+    result = flow._open_editor_from_draft_box(
+        page,
+        row_info={'actions': [{'txt': '编辑', 'tag': 'A', 'rect': {'x': 10, 'y': 20, 'w': 30, 'h': 40}}]},
+    )
+
+    assert result is editor_page
+
+
+def test_open_editor_from_draft_box_prefers_dom_edit_event(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    page = DummyDraftPage({'ok': True})
+    editor_page = DummyDraftPage({'ok': True})
+    editor_page.url = 'https://www.dianxiaomi.com/web/smt/edit?id=123'
+
+    class Context:
+        def __init__(self):
+            self.pages = [page]
+
+    context = Context()
+    flow._context = context
+    clicked = []
+
+    def fake_dispatch(target_page, row_info):
+        context.pages.append(editor_page)
+        return {'ok': True, 'strategy': 'dom_mouse_event'}
+
+    monkeypatch.setattr(flow, '_dispatch_draft_row_edit_event', fake_dispatch)
+    monkeypatch.setattr(flow, '_click_rect_center', lambda target_page, rect: clicked.append(rect))
+
+    result = flow._open_editor_from_draft_box(
+        page,
+        row_info={'rowIndex': 3, 'rowText': '目标商品 编辑', 'actions': [{'txt': '编辑', 'tag': 'A', 'rect': {'x': 10, 'y': 20, 'w': 30, 'h': 40}}]},
+    )
+
+    assert result is editor_page
+    assert clicked == []
+
+
+def test_dispatch_draft_row_edit_event_ignores_stale_row_index_for_text_match(tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    row_text = (
+        '1688 ENHYPEN Cute Cartoon Acrylic Keychain '
+        '备注:AI认领-177-2643 「Dang Kang」 移入待发布 编辑 发布 更多'
+    )
+    filler = ''.join(
+        '<div style="width:10px;height:10px"></div>'
+        for _ in range(70)
+    )
+    html = f'''
+    <html><body>
+      {filler}
+      <div class="target-row">
+        {row_text}
+        <a href="javascript:" onclick="window.__editClicked = true">编辑</a>
+      </div>
+    </body></html>
+    '''
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={'width': 1440, 'height': 900})
+            page.set_content(html)
+
+            result = flow._dispatch_draft_row_edit_event(
+                page,
+                {
+                    'rowIndex': 60,
+                    'rowText': row_text,
+                    'actions': [
+                        {
+                            'txt': '编辑',
+                            'tag': 'A',
+                            'href': 'javascript:',
+                            'rect': {'x': 1, 'y': 2, 'w': 3, 'h': 4},
+                        }
+                    ],
+                },
+            )
+
+            assert result['ok'] is True
+            assert page.evaluate('window.__editClicked === true') is True
+        finally:
+            browser.close()
+
+
 def test_dxm_login_flow_perform_editor_action_updates_state(monkeypatch, tmp_path):
     live_client = DummyLiveClient(logged_in=True)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
@@ -1725,6 +2030,29 @@ def test_dxm_login_flow_perform_editor_action_updates_state(monkeypatch, tmp_pat
     assert state['product_query'] == '崩坏3钥匙扣'
     assert state['store_name'] == 'Dang Kang'
     assert state['semi_managed_enabled'] is True
+
+
+def test_dxm_login_flow_perform_editor_action_keeps_browser_session_on_success(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    close_calls = []
+    flow._write_state({
+        'stage': 'editor_page',
+        'page_url': 'https://www.dianxiaomi.com/web/smt/edit?id=123',
+    })
+
+    monkeypatch.setattr(flow, '_perform_editor_action', lambda action, defaults=None, product_query=None, store_name=None: {
+        'stage': action,
+        'page_title': '店小秘--编辑速卖通产品',
+        'page_url': 'https://www.dianxiaomi.com/web/smt/edit?id=123',
+        'screenshot_url': '/artifacts/screenshots/editor.png',
+    })
+    monkeypatch.setattr(flow, '_close_browser_session', lambda: close_calls.append('closed'))
+
+    state = flow.perform_editor_action('fill_editor_required_defaults')
+
+    assert state['stage'] == 'fill_editor_required_defaults'
+    assert close_calls == []
 
 
 def test_verify_edit_ownership_receives_target_source_urls_from_draft_row(monkeypatch, tmp_path):
@@ -1756,6 +2084,39 @@ def test_verify_edit_ownership_receives_target_source_urls_from_draft_row(monkey
 
     assert result['stage'] == 'edit_ownership_verified'
     assert seen['expected_source_urls'] == ['https://mobile.yangkeduo.com/goods2.html?goods_id=917858747237']
+
+
+def test_perform_editor_action_reuses_current_editor_page_without_reload(monkeypatch, tmp_path):
+    class CurrentEditorPage(DummyOpenSemiPage):
+        def __init__(self):
+            super().__init__()
+            self.gotos = []
+
+        def goto(self, url, **kwargs):
+            self.gotos.append(url)
+            self.url = url
+
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    flow._write_state({
+        'stage': 'editor_page',
+        'page_url': 'https://www.dianxiaomi.com/web/smt/edit?id=123',
+    })
+    page = CurrentEditorPage()
+
+    monkeypatch.setattr(flow, '_ensure_page_with_cookies', lambda: page)
+    monkeypatch.setattr(flow, '_wait_for_body_text', lambda page, terms, timeout=15000: True)
+    monkeypatch.setattr(flow, '_dismiss_blocking_modals', lambda page: 0)
+    monkeypatch.setattr(flow, '_fill_editor_variants_on_page', lambda page, defaults=None: {
+        'stage': 'editor_variants_filled',
+        'page_url': page.url,
+        'published': False,
+    })
+
+    result = flow._perform_editor_action('fill_editor_variants')
+
+    assert result['stage'] == 'editor_variants_filled'
+    assert page.gotos == []
 
 
 def test_dxm_login_flow_perform_editor_action_allows_verify_not_published(monkeypatch, tmp_path):
@@ -1792,6 +2153,30 @@ def test_open_semi_managed_page_records_source_editor_url(monkeypatch, tmp_path)
 
     assert state['stage'] == 'semi_managed_page'
     assert state['source_editor_url'] == 'https://www.dianxiaomi.com/web/smt/edit?id=123'
+
+
+def test_semi_managed_page_state_accepts_inline_semi_managed_fields(tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    html = '''
+    <html><body>
+      <section>基本信息 产品信息 编辑半托管信息</section>
+      <section>半托管商品信息 包装尺寸 物流属性 重量 发货期</section>
+    </body></html>
+    '''
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            page.set_content(html)
+
+            state = flow._semi_managed_page_state(page)
+
+            assert state['blocked'] is False
+            assert state['is_semi_page'] is True
+        finally:
+            browser.close()
 
 
 def test_open_semi_managed_page_allows_second_media_deferred_after_prior_eu_verified(monkeypatch, tmp_path):
@@ -2069,6 +2454,36 @@ def test_verify_not_published_accepts_prior_save_success_without_publish_risk(tm
     assert state['published'] is False
 
 
+def test_verify_not_published_ignores_ambient_online_text_after_save_success(tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    page = DummySemiPage({
+        'ok': False,
+        'save_only_term': '待发布',
+        'publish_risk_term': '已上架',
+        'published': True,
+        'body_excerpt': '产品菜单 已上架 下架 待发布 保存',
+    })
+
+    state = flow._verify_not_published_on_page(
+        page,
+        product_query='崩坏3钥匙扣',
+        store_name='Dang Kang',
+        prior_save_result={
+            'ok': True,
+            'published': False,
+            'success_text': '编辑成功',
+            'network_save_result': {'ok': True, 'url': 'https://www.dianxiaomi.com/api/smtProduct/add.json'},
+        },
+    )
+
+    assert state['stage'] == 'not_published_verified'
+    assert state['message'] == '待发布'
+    assert state['published'] is False
+    assert state['fill_result']['ignored_ambient_publish_risk_term'] == '已上架'
+    assert state['fill_result']['publish_risk_term'] is None
+
+
 def test_dismiss_blocking_modals_rejects_publish_confirmation(tmp_path):
     live_client = DummyLiveClient(logged_in=True)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
@@ -2093,6 +2508,336 @@ def test_dismiss_blocking_modals_skips_collection_plugin_guide(monkeypatch, tmp_
 
     assert dismissed == 1
     assert clicks == [{'x': 10, 'y': 20, 'w': 30, 'h': 40}]
+
+
+def test_dismiss_blocking_modals_skips_important_reminder(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    page = DummyImportantReminderModalPage()
+    clicks = []
+
+    def fake_click(_page, rect):
+        clicks.append(rect)
+        page.clicked = True
+
+    monkeypatch.setattr(flow, '_click_rect_center', fake_click)
+
+    dismissed = flow._dismiss_blocking_modals(page)
+
+    assert dismissed == 1
+    assert clicks == [{'x': 983, 'y': 315, 'w': 72, 'h': 15}]
+
+
+def test_dismiss_blocking_modals_skips_reminder_dropdown(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    page = DummyReminderDropdownPage()
+    clicks = []
+
+    def fake_click(_page, rect):
+        clicks.append(rect)
+        page.clicked = True
+
+    monkeypatch.setattr(flow, '_click_rect_center', fake_click)
+
+    dismissed = flow._dismiss_blocking_modals(page)
+
+    assert dismissed == 1
+    assert clicks == [{'x': 1000, 'y': 345, 'w': 90, 'h': 24}]
+
+
+def test_dismiss_blocking_modals_uses_escape_when_same_close_click_repeats(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    page = DummyPersistentModalUntilEscapePage()
+    clicks = []
+
+    def fake_click(_page, rect):
+        clicks.append(rect)
+
+    monkeypatch.setattr(flow, '_click_rect_center', fake_click)
+
+    dismissed = flow._dismiss_blocking_modals(page)
+
+    assert dismissed == 3
+    assert clicks == [
+        {'x': 120, 'y': 20, 'w': 24, 'h': 24},
+        {'x': 120, 'y': 20, 'w': 24, 'h': 24},
+    ]
+    assert page.presses == ['Escape']
+    assert flow._last_dismiss_blocking_modals_trace[-1]['fallback'] == 'escape_after_repeated_click'
+
+
+def test_dismiss_blocking_modals_prefers_ignore_prompt_over_close_button(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    clicks = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(viewport={'width': 500, 'height': 260})
+        page.set_content(
+            '''
+            <div class="ant-modal-wrap" style="position:fixed;left:0;top:0;width:420px;height:220px;background:white;display:block">
+              <button class="ant-modal-close" style="position:absolute;left:360px;top:10px;width:20px;height:20px"></button>
+              <div style="padding:50px">距离活动结束仅剩 1 小时</div>
+              <button id="ignore" style="position:absolute;left:40px;top:140px;width:90px;height:30px">忽略提示</button>
+            </div>
+            '''
+        )
+
+        def fake_click(target_page, rect):
+            clicks.append(rect)
+            target_page.evaluate("document.querySelector('.ant-modal-wrap')?.remove()")
+
+        monkeypatch.setattr(flow, '_click_rect_center', fake_click)
+
+        dismissed = flow._dismiss_blocking_modals(page)
+        browser.close()
+
+    assert dismissed == 1
+    assert clicks[0]['x'] == pytest.approx(40, abs=2)
+    assert clicks[0]['w'] == pytest.approx(90, abs=2)
+
+
+def test_dismiss_blocking_modals_handles_standalone_ignore_prompt(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    clicks = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(viewport={'width': 900, 'height': 500})
+        page.set_content(
+            '''
+            <div class="activity-popover" style="position:fixed;left:300px;top:180px;width:320px;height:60px;background:white;z-index:9999">
+              <div id="ignore" style="position:absolute;left:20px;top:16px;width:110px;height:28px">忽略提示</div>
+            </div>
+            '''
+        )
+
+        def fake_click(target_page, rect):
+            clicks.append(rect)
+            target_page.evaluate("document.querySelector('.activity-popover')?.remove()")
+
+        monkeypatch.setattr(flow, '_click_rect_center', fake_click)
+
+        dismissed = flow._dismiss_blocking_modals(page)
+        browser.close()
+
+    assert dismissed == 1
+    assert clicks[0]['x'] == pytest.approx(320, abs=2)
+    assert flow._last_dismiss_blocking_modals_trace[0]['clicked'] in {'忽略提示', 'standalone:忽略提示'}
+
+
+def test_dismiss_blocking_modals_handles_dxm_campaign_next_step(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    clicks = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(viewport={'width': 1200, 'height': 800})
+        page.set_content(
+            '''
+            <div class="dxm-campaign-layer" style="position:fixed;left:240px;top:120px;width:620px;height:280px;background:white;z-index:9999">
+              <h3>重要提醒</h3>
+              <div>您的活动权益即将结束，查看最新特惠</div>
+              <button id="next" style="position:absolute;right:24px;bottom:18px;width:80px;height:32px">下一步</button>
+            </div>
+            '''
+        )
+
+        def fake_click(target_page, rect):
+            clicks.append(rect)
+            target_page.evaluate("document.querySelector('.dxm-campaign-layer')?.remove()")
+
+        monkeypatch.setattr(flow, '_click_rect_center', fake_click)
+
+        dismissed = flow._dismiss_blocking_modals(page)
+        browser.close()
+
+    assert dismissed == 1
+    assert clicks[0]['x'] == pytest.approx(756, abs=4)
+    assert flow._last_dismiss_blocking_modals_trace[0]['clicked'] in {'下一步', 'standalone:下一步'}
+
+
+def test_dismiss_blocking_modals_skips_ant_modal_mask_and_uses_dialog(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    clicks = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(viewport={'width': 900, 'height': 520})
+        page.set_content(
+            '''
+            <div class="ant-modal-root">
+              <div class="ant-modal-mask" style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:99998"></div>
+              <div class="ant-modal-wrap comm-vip-tips-modal important-remind comm-modal" role="dialog"
+                   style="position:fixed;left:120px;top:80px;width:620px;height:220px;background:white;z-index:99999">
+                <div class="ant-modal-content">
+                  <div class="ant-modal-title">重要提醒</div>
+                  <div>您购买的 图片空间 将在 <span>2天后</span> 过期</div>
+                  <a class="ant-dropdown-link ant-dropdown-trigger" style="position:absolute;left:480px;top:170px;width:90px;height:24px">忽略提示</a>
+                </div>
+              </div>
+            </div>
+            '''
+        )
+
+        def fake_click(target_page, rect):
+            clicks.append(rect)
+            target_page.evaluate("document.querySelector('.ant-modal-root')?.remove()")
+
+        monkeypatch.setattr(flow, '_click_rect_center', fake_click)
+
+        dismissed = flow._dismiss_blocking_modals(page)
+        browser.close()
+
+    assert dismissed == 1
+    assert clicks[0]['x'] == pytest.approx(600, abs=4)
+    assert flow._last_dismiss_blocking_modals_trace[0]['clicked'] in {'忽略提示', 'standalone:忽略提示'}
+
+
+def test_dismiss_blocking_modals_skips_mask_for_notice_next_button(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    clicks = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(viewport={'width': 900, 'height': 520})
+        page.set_content(
+            '''
+            <div class="ant-modal-root">
+              <div class="ant-modal-mask" style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:99998"></div>
+              <div class="ant-modal-wrap bullet-layer notice-list-modal" role="dialog"
+                   style="position:fixed;left:160px;top:70px;width:520px;height:280px;background:white;z-index:99999">
+                <div class="notice-list-modal__header">重要通知</div>
+                <div class="notice-content__title">店小秘618钜惠今日启动</div>
+                <button id="next" style="position:absolute;right:16px;bottom:14px;width:72px;height:28px">下一条</button>
+              </div>
+            </div>
+            '''
+        )
+
+        def fake_click(target_page, rect):
+            clicks.append(rect)
+            target_page.evaluate("document.querySelector('.ant-modal-root')?.remove()")
+
+        monkeypatch.setattr(flow, '_click_rect_center', fake_click)
+
+        dismissed = flow._dismiss_blocking_modals(page)
+        browser.close()
+
+    assert dismissed == 1
+    assert clicks[0]['x'] == pytest.approx(592, abs=4)
+    assert flow._last_dismiss_blocking_modals_trace[0]['clicked'] == '下一条'
+
+
+def test_dismiss_blocking_modals_ignores_inline_logistics_notice(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    clicks = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(viewport={'width': 900, 'height': 520})
+        page.set_content(
+            '''
+            <div class="logistics-attr-notice" style="position:relative;width:600px;height:40px">
+              新增说明：平台物流属性更新，点击此处跳转设置
+            </div>
+            <div class="ant-modal-root">
+              <div class="ant-modal-mask" style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:99998"></div>
+              <div class="ant-modal-wrap bullet-layer notice-list-modal" role="dialog"
+                   style="position:fixed;left:160px;top:70px;width:520px;height:280px;background:white;z-index:99999">
+                <div class="notice-list-modal__header">重要通知</div>
+                <button id="next" style="position:absolute;right:16px;bottom:14px;width:72px;height:28px">下一条</button>
+              </div>
+            </div>
+            '''
+        )
+
+        def fake_click(target_page, rect):
+            clicks.append(rect)
+            target_page.evaluate("document.querySelector('.ant-modal-root')?.remove()")
+
+        monkeypatch.setattr(flow, '_click_rect_center', fake_click)
+
+        dismissed = flow._dismiss_blocking_modals(page)
+        browser.close()
+
+    assert dismissed == 1
+    assert clicks[0]['x'] == pytest.approx(592, abs=4)
+    assert flow._last_dismiss_blocking_modals_trace[0]['clicked'] == '下一条'
+
+
+def test_dismiss_blocking_modals_prefers_small_clickable_standalone_prompt(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    clicks = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(viewport={'width': 900, 'height': 520})
+        page.set_content(
+            '''
+            <div class="important-remind" style="position:fixed;left:120px;top:80px;width:620px;height:220px;background:white;z-index:99999">
+              <div>重要提醒</div>
+              <div id="wide-footer" style="position:absolute;left:220px;top:170px;width:360px;height:26px">
+                <a id="ignore" style="display:inline-block;width:90px;height:24px">忽略提示</a>
+              </div>
+            </div>
+            '''
+        )
+
+        def fake_click(target_page, rect):
+            clicks.append(rect)
+            target_page.evaluate("document.querySelector('.important-remind')?.remove()")
+
+        monkeypatch.setattr(flow, '_click_rect_center', fake_click)
+
+        dismissed = flow._dismiss_blocking_modals(page)
+        browser.close()
+
+    assert dismissed == 1
+    assert clicks[0]['x'] == pytest.approx(340, abs=4)
+    assert clicks[0]['w'] == pytest.approx(90, abs=4)
+
+
+def test_dismiss_blocking_modals_prefers_text_span_inside_wide_prompt(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    clicks = []
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(viewport={'width': 900, 'height': 520})
+        page.set_content(
+            '''
+            <div class="important-remind" style="position:fixed;left:80px;top:80px;width:720px;height:220px;background:white;z-index:99999">
+              <div>重要提醒</div>
+              <a id="wide-ignore" style="position:absolute;left:300px;top:170px;width:360px;height:26px">
+                <span id="ignore-text" style="display:inline-block;width:64px;height:24px">忽略提示</span>
+              </a>
+            </div>
+            '''
+        )
+
+        def fake_click(target_page, rect):
+            clicks.append(rect)
+            target_page.evaluate("document.querySelector('.important-remind')?.remove()")
+
+        monkeypatch.setattr(flow, '_click_rect_center', fake_click)
+
+        dismissed = flow._dismiss_blocking_modals(page)
+        browser.close()
+
+    assert dismissed == 1
+    assert clicks[0]['x'] == pytest.approx(380, abs=4)
+    assert clicks[0]['w'] == pytest.approx(64, abs=4)
 
 
 def test_wait_for_page_ready_loops_until_loading_disappears(tmp_path):
@@ -2289,6 +3034,93 @@ def test_apply_dxm_reference_templates_records_label_select_sections(monkeypatch
     }
 
 
+def test_click_ant_option_near_rect_falls_back_to_visible_options(monkeypatch, tmp_path):
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as exc:
+        pytest.skip(f'Playwright unavailable: {exc}')
+
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    html = '''
+    <html>
+      <head>
+        <style>
+          .ant-select-dropdown { position: fixed; left: 20px; top: 20px; width: 220px; }
+          .ant-select-item-option { height: 28px; padding: 4px 8px; }
+        </style>
+      </head>
+      <body>
+        <div class="ant-select-dropdown">
+          <div class="ant-select-item-option" role="option">万代立牌</div>
+          <div class="ant-select-item-option" role="option">bilibili动漫周边</div>
+        </div>
+      </body>
+    </html>
+    '''
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={'width': 1280, 'height': 800})
+        page.set_content(html)
+        result = flow._click_ant_option_near_rect(
+            page,
+            ['万代立牌'],
+            {'x': 900, 'y': 650, 'w': 180, 'h': 32},
+        )
+        browser.close()
+
+    assert result['ok'] is True
+    assert result['text'] == '万代立牌'
+    assert result['strategy'] == 'global_visible_options'
+
+
+def test_click_ant_option_near_rect_reopens_after_modal_dismissed(monkeypatch, tmp_path):
+    class AntDropdownBlockedPage:
+        def __init__(self):
+            self.evaluate_calls = 0
+            self.clicked = []
+            self.timeouts = []
+
+        def evaluate(self, script, arg=None):
+            self.evaluate_calls += 1
+            if self.evaluate_calls == 1:
+                return {'no_match': True, 'options': [], 'candidate_count': 0, 'option_count': 0}
+            return {
+                'text': '万代立牌',
+                'rect': {'x': 10, 'y': 20, 'w': 80, 'h': 30},
+                'strategy': 'global_visible_options',
+            }
+
+        @property
+        def mouse(self):
+            return self
+
+        def click(self, x, y):
+            self.clicked.append((x, y))
+
+        def wait_for_timeout(self, timeout):
+            self.timeouts.append(timeout)
+
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    page = AntDropdownBlockedPage()
+    dismissed = []
+
+    monkeypatch.setattr(flow, '_dismiss_blocking_modals', lambda target_page: dismissed.append(True) or 1)
+
+    result = flow._click_ant_option_near_rect(
+        page,
+        ['万代立牌'],
+        {'x': 100, 'y': 200, 'w': 120, 'h': 32},
+    )
+
+    assert result['ok'] is True
+    assert result['text'] == '万代立牌'
+    assert len(page.clicked) == 2
+    assert dismissed == [True]
+
+
 def test_fill_editor_required_defaults_fails_when_required_description_template_missing(monkeypatch, tmp_path):
     live_client = DummyLiveClient(logged_in=True)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
@@ -2320,6 +3152,57 @@ def test_fill_editor_required_defaults_fails_when_required_description_template_
     assert 'dxm_reference_templates.description' in state['fill_result']['missing']
     assert state['fill_result']['dxm_reference_template_results']['description']['ok'] is False
     assert '描述' in state['fill_result']['dxm_reference_template_results']['description']['reason']
+
+
+def test_fill_editor_required_defaults_defers_missing_attribute_template_to_filled_attributes(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    page = DummySemiPage({
+        'title': True,
+        'remaining_chinese_attributes': [],
+    })
+
+    reference_results = {
+        'attribute_info': {
+            'ok': False,
+            'reason': '未找到匹配选项',
+            'options': [],
+            'section': 'attribute_info',
+            'names': ['万代立牌'],
+            'required': True,
+        },
+        'freight': {'ok': True, 'section': 'freight', 'names': ['40g普货包裹'], 'required': True},
+        'service': {'ok': True, 'section': 'service', 'names': ['Service Template for New Sellers'], 'required': True},
+    }
+
+    monkeypatch.setattr(flow, '_select_editor_category', lambda *args, **kwargs: {'ok': True})
+    monkeypatch.setattr(flow, '_dismiss_blocking_modals', lambda page: None)
+    monkeypatch.setattr(flow, '_apply_dxm_reference_templates_on_page', lambda page, values: reference_results)
+    monkeypatch.setattr(flow, '_fill_text_inputs_near_label', lambda *args, **kwargs: {'ok': True})
+    monkeypatch.setattr(flow, '_fill_packaging_info', lambda *args, **kwargs: {'ok': True})
+    monkeypatch.setattr(flow, '_fill_category_required_attributes', lambda page: {'ok': True, 'filled': ['attribute-fields']})
+    monkeypatch.setattr(flow, '_check_choice_by_text', lambda page, text: {'ok': True})
+    monkeypatch.setattr(flow, '_choose_ant_select_near_label', lambda page, label, names: {'ok': True, 'text': names[0] if names else label})
+    monkeypatch.setattr(flow, '_fill_customs_supervision_attribute', lambda page, names: {'ok': True})
+    monkeypatch.setattr(flow, '_editor_required_defaults_state', lambda page: {'missing': []})
+
+    state = flow._fill_editor_required_defaults_on_page(
+        page,
+        {
+            'dxm_reference_templates_resolved': {
+                'attribute_info': {'names': ['万代立牌'], 'required': True},
+                'freight': {'names': ['40g普货包裹'], 'required': True},
+                'service': {'names': ['Service Template for New Sellers'], 'required': True},
+            },
+        },
+    )
+
+    assert state['stage'] == 'editor_required_defaults_filled'
+    assert state['fill_result']['missing'] == []
+    attribute_info = state['fill_result']['dxm_reference_template_results']['attribute_info']
+    assert attribute_info['ok'] is True
+    assert attribute_info['deferred_to_category_attributes'] is True
+    assert attribute_info['original_reason'] == '未找到匹配选项'
 
 
 def test_fill_editor_required_defaults_defers_downstream_owned_fields(monkeypatch, tmp_path):
@@ -2581,6 +3464,68 @@ def test_fill_semi_managed_defaults_writes_real_table_dom(monkeypatch, tmp_path)
         'goods_barcode': '',
         'stock': '100',
     }
+
+
+def test_fill_semi_managed_defaults_accepts_retail_price_and_original_box_select(tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    html = '''
+    <html>
+      <body>
+        <table>
+          <thead>
+            <tr>
+              <th>颜色</th><th>零售价(CNY)</th><th>库存</th><th>重量(kg)</th>
+              <th>包装尺寸(cm)</th><th>是否原箱</th><th>物流属性</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>白色</td>
+              <td><input data-field="price" placeholder="零售价" value="58.82" /></td>
+              <td><input data-field="stock" placeholder="库存" value="99" /></td>
+              <td><input data-field="weight" placeholder="重量" value="0.04" /></td>
+              <td>
+                <input data-field="length" value="" />
+                <input data-field="width" value="" />
+                <input data-field="height" value="" />
+              </td>
+              <td>
+                <select data-field="original_box">
+                  <option value="">请选择</option>
+                  <option value="1" selected>否</option>
+                  <option value="2">是</option>
+                </select>
+              </td>
+              <td>普货</td>
+            </tr>
+          </tbody>
+        </table>
+      </body>
+    </html>
+    '''
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={'width': 1280, 'height': 900})
+            page.set_content(html)
+
+            state = flow._fill_semi_managed_defaults_on_page(
+                page,
+                {'semi_managed': {'jit_stock': '100', 'product_price': '49.00', 'is_original_box': '否'}},
+            )
+            values = page.evaluate('''() => Object.fromEntries(
+              Array.from(document.querySelectorAll('[data-field]')).map(el => [el.dataset.field, el.value])
+            )''')
+        finally:
+            browser.close()
+
+    assert state['stage'] == 'semi_managed_defaults_filled'
+    assert state['fill_result']['missing'] == []
+    assert state['fill_result']['original_box']['ok'] is True
+    assert values['price'] == '49.00'
+    assert values['original_box'] == '1'
 
 
 def test_should_generate_marketing_images_from_image_template(tmp_path):
@@ -2968,19 +3913,42 @@ def test_eu_outer_package_rejects_cdn_only_row_without_selection_evidence(monkey
     assert result['reason'] == f'欧盟外包装图未匹配配置文件名：{filename}'
 
 
-def test_fill_media_assets_requires_verified_eu_outer_package_image(tmp_path):
+def test_fill_media_assets_marks_eu_outer_package_manual_required_when_picker_is_unavailable(tmp_path):
     live_client = DummyLiveClient(logged_in=True)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
     page = DummyMediaNoEntryPage()
 
     state = flow._fill_media_assets_on_page(page, {'eu_outer_package_filename': '微信图片_202504092228421.jpg'})
 
-    assert state['stage'] == 'fill_media_assets_failed'
+    assert state['stage'] == 'media_assets_filled'
     assert state['published'] is False
-    assert '欧盟外包装图槽位没有可点击的图片选择入口' in state['message']
+    assert '发布前需人工补齐' in state['message']
+    eu_result = state['fill_result']['eu_outer_package_image']
+    assert eu_result['ok'] is True
+    assert eu_result['manual_required'] is True
+    assert eu_result['publish_ready'] is False
+    assert '发布前需人工补齐' in eu_result['reason']
     joined_scripts = '\n'.join(page.scripts)
     assert '外包装/标签实拍图-欧盟' in joined_scripts
     assert '图片银行' in joined_scripts
+
+
+def test_manual_required_eu_outer_package_is_not_publish_ready_verification(tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+
+    verified = flow._media_result_has_verified_eu_outer_package({
+        'fill_result': {
+            'eu_outer_package_image': {
+                'ok': True,
+                'manual_required': True,
+                'publish_ready': False,
+                'reason': '发布前需人工补齐',
+            }
+        }
+    })
+
+    assert verified is False
 
 
 def test_image_slot_picker_does_not_click_existing_preview_images(tmp_path):
@@ -3025,6 +3993,113 @@ def test_eu_image_slot_flow_requires_smt_image_bank_menu(monkeypatch, tmp_path):
     assert result['ok'] is True
     assert any('requireMenu' in script for script in page.scripts)
     assert result['image_bank']['clicked']['text'] == '图片银行（速卖通）'
+
+
+def test_image_slot_picker_retries_after_notice_modal_dismissed(monkeypatch, tmp_path):
+    class NoticeBlockedImageSlotPage(DummyMediaNoEntryPage):
+        def __init__(self):
+            super().__init__()
+            self.click_count = 0
+            self.clicked = []
+
+        def evaluate(self, script, arg=None):
+            self.scripts.append(script)
+            if 'labelCandidates' in script:
+                return {'ok': True, 'rect': {'x': 10, 'y': 20, 'w': 30, 'h': 40}}
+            if 'hasBankMenu' in script:
+                return {
+                    'ok': self.click_count >= 2,
+                    'has_bank_menu': self.click_count >= 2,
+                    'has_image_dialog': False,
+                    'body_excerpt': '重要提醒 下一条 忽略提示',
+                }
+            return {'ok': False, 'reason': 'unexpected script'}
+
+        @property
+        def mouse(self):
+            return self
+
+        def click(self, x, y):
+            self.click_count += 1
+            self.clicked.append((x, y))
+
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    page = NoticeBlockedImageSlotPage()
+    dismiss_calls = []
+
+    monkeypatch.setattr(flow, '_dismiss_blocking_modals', lambda target_page: dismiss_calls.append(True) or (1 if len(dismiss_calls) == 1 else 0))
+
+    result = flow._open_image_slot_picker(page, '外包装/标签实拍图-欧盟')
+
+    assert result['ok'] is True
+    assert page.click_count == 2
+    assert len(dismiss_calls) == 2
+
+
+def test_image_slot_picker_does_not_treat_image_space_notice_as_image_bank(tmp_path):
+    class ImageSpaceNoticePage(DummyMediaNoEntryPage):
+        def __init__(self):
+            super().__init__()
+            self.clicked = []
+            self.opened_script = ''
+
+        def evaluate(self, script, arg=None):
+            self.scripts.append(script)
+            if 'labelCandidates' in script:
+                return {'ok': True, 'rect': {'x': 10, 'y': 20, 'w': 30, 'h': 40}}
+            if 'dangerousTerms' in script:
+                return {'visible': False}
+            if 'hasBankMenu' in script:
+                self.opened_script = script
+                return {
+                    'ok': False,
+                    'has_bank_menu': False,
+                    'has_image_dialog': False,
+                    'body_excerpt': '重要提醒 您购买的 图片空间 将在2天后 过期 忽略提示',
+                }
+            return {'ok': False, 'reason': 'unexpected script'}
+
+        @property
+        def mouse(self):
+            return self
+
+        def click(self, x, y):
+            self.clicked.append((x, y))
+
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    page = ImageSpaceNoticePage()
+
+    result = flow._open_image_slot_picker(page, '外包装/标签实拍图-欧盟')
+
+    assert result['ok'] is False
+    assert "text.includes('图片') || text.includes('上传')" not in page.opened_script
+    assert "text.includes('请输入图片名称')" in page.opened_script
+
+
+def test_image_slot_asset_reopens_slot_when_bank_menu_is_blocked_by_notice(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    page = DummyMediaNoEntryPage()
+    open_calls = []
+    bank_results = [
+        {'ok': False, 'reason': '未看到图片银行（速卖通）菜单'},
+        {'ok': True, 'clicked': {'text': '图片银行（速卖通）'}},
+    ]
+    dismiss_calls = []
+
+    monkeypatch.setattr(flow, '_open_image_slot_picker', lambda target_page, slot_label: open_calls.append(slot_label) or {'ok': True, 'target': {'text': '添加图片'}})
+    monkeypatch.setattr(flow, '_open_smt_image_bank_from_picker', lambda target_page, require_menu=False: bank_results.pop(0))
+    monkeypatch.setattr(flow, '_select_image_bank_asset_by_filename', lambda target_page, filename: {'ok': True, 'filename': filename})
+    monkeypatch.setattr(flow, '_dismiss_blocking_modals', lambda target_page: dismiss_calls.append(True) or 1)
+
+    result = flow._fill_image_slot_asset_by_filename(page, '外包装/标签实拍图-欧盟', '微信图片_202504092228421.jpg')
+
+    assert result['ok'] is True
+    assert open_calls == ['外包装/标签实拍图-欧盟', '外包装/标签实拍图-欧盟']
+    assert result['picker']['retried_after_missing_bank_menu'] is True
+    assert dismiss_calls
 
 
 def test_open_smt_image_bank_requires_menu_or_existing_bank_dialog(tmp_path):
@@ -3159,6 +4234,42 @@ def test_save_only_rejects_publish_buttons(monkeypatch, tmp_path):
     assert '保存并发布' in state['message']
 
 
+def test_save_only_dismisses_blocking_modals_before_locating_save(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    page = DummySaveOnlyNetworkPage()
+    calls = []
+
+    monkeypatch.setattr(flow, '_dismiss_blocking_modals', lambda target_page: calls.append('dismiss') or 1)
+
+    state = flow._save_only_on_page(page)
+
+    assert state['stage'] == 'save_only'
+    assert calls == ['dismiss']
+    assert page.evaluate_calls == 2
+
+
+def test_save_only_stops_when_blocking_modal_remains_after_dismiss(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    page = DummySaveOnlyNetworkPage()
+    flow._last_dismiss_blocking_modals_trace = [{'clicked': 'modal-close'}]
+
+    monkeypatch.setattr(flow, '_dismiss_blocking_modals', lambda target_page: 10)
+    monkeypatch.setattr(
+        flow,
+        '_visible_blocking_modal_state',
+        lambda target_page: {'visible': True, 'text': '距离活动结束仅剩 我知道了'},
+    )
+
+    state = flow._save_only_on_page(page)
+
+    assert state['stage'] == 'save_only_failed'
+    assert page.clicks == []
+    assert state['save_result']['reason'] == '保存前弹窗未能关闭'
+    assert state['save_result']['blocking_modal']['visible'] is True
+
+
 def test_save_only_script_checks_publish_risk_before_clicking_save(tmp_path):
     live_client = DummyLiveClient(logged_in=True)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
@@ -3236,3 +4347,27 @@ def test_save_only_records_network_success_as_save_evidence(tmp_path):
     assert state['save_result']['network_events'][0]['method'] == 'POST'
     assert state['save_result']['network_events'][0]['status'] == 200
     assert state['save_result']['network_events'][0]['json']['msg'] == '产品已保存到「待发布」'
+
+
+def test_network_save_result_prefers_real_add_json_over_related_history_calls(tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+
+    result = flow._network_save_result([
+        {
+            'url': 'https://www.dianxiaomi.com/api/smtProduct/add.json',
+            'method': 'POST',
+            'status': 200,
+            'json': {'code': 0, 'msg': 'Successful', 'data': {'msg': '您的产品编辑成功！', 'code': 0}},
+        },
+        {
+            'url': 'https://www.dianxiaomi.com/api/smtProduct/addProductBrandHistory.json',
+            'method': 'POST',
+            'status': 200,
+            'json': {'code': 0, 'msg': 'Successful', 'data': 123},
+        },
+    ])
+
+    assert result['ok'] is True
+    assert result['url'] == 'https://www.dianxiaomi.com/api/smtProduct/add.json'
+    assert result['msg'] == '您的产品编辑成功！'
