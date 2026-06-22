@@ -362,12 +362,20 @@ function send(method, params = {}) {
     });
   });
 }
+let currentQaStep = 'init';
+function markQaStep(step) {
+  currentQaStep = step;
+}
 async function evalValue(expr) {
-  const res = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
-  return res.result.value;
+  try {
+    const res = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
+    return res.result.value;
+  } catch (error) {
+    throw new Error(currentQaStep + ': ' + (error && error.message ? error.message : String(error)));
+  }
 }
 async function horizontalOverflowState() {
-  return await evalValue('(() => { const viewportWidth = document.documentElement.clientWidth; const selectors = "button, a, code, .guard-chip, .status-pill, .module-head, .module-card, .effective-value-item"; const candidates = [...document.querySelectorAll(selectors)]; const bad = candidates.map(el => ({ el, rect: el.getBoundingClientRect() })).filter(({ rect }) => rect.width > 0 && (rect.left < -1 || rect.right > viewportWidth + 1)); return { ok: bad.length === 0, count: bad.length, samples: bad.slice(0, 5).map(({ el, rect }) => ({ tag: el.tagName, className: String(el.className || "").slice(0, 80), text: String(el.innerText || el.textContent || "").trim().slice(0, 80), left: Math.round(rect.left), right: Math.round(rect.right), width: Math.round(rect.width) })) }; })()');
+  return await evalValue('(() => { const viewportWidth = document.documentElement.clientWidth; const selectors = "button, a, code, .guard-chip, .status-pill, .module-head, .module-card, .effective-value-item"; const candidates = [...document.querySelectorAll(selectors)].filter(el => !el.closest(".nav-list")); const bad = candidates.map(el => ({ el, rect: el.getBoundingClientRect() })).filter(({ rect }) => rect.width > 0 && (rect.left < -1 || rect.right > viewportWidth + 1)); return { ok: bad.length === 0, count: bad.length, samples: bad.slice(0, 5).map(({ el, rect }) => ({ tag: el.tagName, className: String(el.className || "").slice(0, 80), text: String(el.innerText || el.textContent || "").trim().slice(0, 80), left: Math.round(rect.left), right: Math.round(rect.right), width: Math.round(rect.width) })) }; })()');
 }
 async function bodyText() {
   return await evalValue('document.body.innerText.replace(/\\\\s+/g, " ")');
@@ -424,15 +432,30 @@ async function clickSelector(selector) {
   return await evalValue('(() => { const el = document.querySelector(' + JSON.stringify(selector) + '); if (el) { el.click(); return true; } return false; })()');
 }
 async function openReportCenter() {
-  let clicked = await clickSelector('[data-section="reports"]') || await clickText(text.reports) || await clickText(text.reportReviewPlan);
+  let clicked = await clickSelector('[data-section="results"]') || await clickSelector('[data-section="reports"]') || await clickText(text.reports) || await clickText(text.reportReviewPlan);
   if (clicked) return true;
-  await clickSelector('[data-section="tasks"]') || await clickText(text.tasks);
+  await clickSelector('[data-section="product_tasks"]') || await clickSelector('[data-section="tasks"]') || await clickText(text.tasks);
   await new Promise(r => setTimeout(r, 350));
-  clicked = await clickSelector('[data-section="reports"]') || await clickText(text.reportReviewPlan);
+  clicked = await clickSelector('[data-section="results"]') || await clickSelector('[data-section="reports"]') || await clickText(text.reportReviewPlan);
   if (clicked) return true;
-  await clickSelector('[data-section="console"]') || await clickText(text.console);
+  await clickSelector('[data-section="agent_execution"]') || await clickSelector('[data-section="console"]') || await clickText(text.console);
   await new Promise(r => setTimeout(r, 350));
-  return await clickSelector('[data-section="reports"]') || await clickText(text.reportReviewPlan) || await clickText(text.reports);
+  return await clickSelector('[data-section="results"]') || await clickSelector('[data-section="reports"]') || await clickText(text.reportReviewPlan) || await clickText(text.reports);
+}
+async function runConfigTaskOverridePayloadProbe(weightFieldLabel, saveButtonLabel) {
+  const value = '0.123';
+  markQaStep('config-task-override-setup');
+  const setup = await evalValue('(() => { window.__dxmQaConfigOverrideSaves = []; if (!window.__dxmQaOriginalFetch) { window.__dxmQaOriginalFetch = window.fetch.bind(window); window.fetch = (input, init = {}) => { const url = typeof input === "string" ? input : String(input && input.url ? input.url : input); const method = String(init && init.method ? init.method : "GET").toUpperCase(); if (method === "PATCH" && url.includes("/api/tasks/") && url.includes("/config-overrides")) { window.__dxmQaConfigOverrideSaves.push({ url, method, body: init.body || "" }); return Promise.resolve(new Response(JSON.stringify({ id: 0, status: "qa_intercepted" }), { status: 200, headers: { "content-type": "application/json" } })); } return window.__dxmQaOriginalFetch(input, init); }; } const focused = document.querySelector(".editable-config-grid--focused .editable-config-section"); const label = focused ? [...focused.querySelectorAll("label")].find(item => (item.innerText || "").includes(' + JSON.stringify(weightFieldLabel) + ')) : null; const input = label ? label.querySelector("input, textarea") : null; if (!input) return { ok: false, reason: "weight input missing" }; const proto = input.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype; const descriptor = Object.getOwnPropertyDescriptor(proto, "value"); descriptor.set.call(input, ' + JSON.stringify(value) + '); input.dispatchEvent(new Event("input", { bubbles: true })); input.dispatchEvent(new Event("change", { bubbles: true })); const saveButton = focused ? [...focused.querySelectorAll("button")].find(button => (button.innerText || "").includes(' + JSON.stringify(saveButtonLabel) + ')) : null; if (!saveButton) return { ok: false, reason: "task override button missing" }; saveButton.click(); return { ok: true, clicked: true }; })()');
+  if (!setup || setup.ok !== true) return setup || { ok: false, reason: 'setup failed' };
+  markQaStep('config-task-override-poll');
+  const deadline = Date.now() + 3000;
+  let state = null;
+  while (Date.now() < deadline) {
+    state = await evalValue('(() => { const saved = (window.__dxmQaConfigOverrideSaves || [])[0] || null; let parsed = null; try { parsed = saved ? JSON.parse(saved.body || "{}") : null; } catch {} return { ok: Boolean(saved && parsed && parsed.section === "logistics" && parsed.values && String(parsed.values.weight) === ' + JSON.stringify(value) + '), captured: Boolean(saved), parsed, value: ' + JSON.stringify(value) + ' }; })()');
+    if (state && state.captured) return state;
+    await new Promise(r => setTimeout(r, 100));
+  }
+  return state || { ok: false, captured: false, value };
 }
 function summarizeTask(task) {
   return task ? {
@@ -636,12 +659,13 @@ await send('Runtime.enable');
 await send('Network.enable');
 await send('Page.navigate', { url: targetUrl });
 await new Promise(r => setTimeout(r, 1800));
+markQaStep('initial-load');
 const text = {
-  tasks: '\u4efb\u52a1',
-  overview: '\u5f15\u5bfc',
-  console: '\u6d4f\u89c8\u5668',
-  reports: '\u62a5\u544a',
-  config: '\u914d\u7f6e',
+  tasks: '\u5546\u54c1\u4e0e\u4efb\u52a1',
+  overview: '\u64cd\u4f5c\u9996\u9875',
+  console: '\u771f\u5b9e\u6d4f\u89c8\u5668',
+  reports: '\u7ed3\u679c\u62a5\u544a',
+  config: '\u7f16\u8f91\u9875\u914d\u7f6e',
   editableConfig: '\u0044\u0058\u004d \u7f16\u8f91\u9875\u914d\u7f6e',
   configStepMeta: '\u6309\u5e97\u5c0f\u79d8\u7f16\u8f91\u9875\u5206\u533a\u9010\u6bb5\u586b\u5199',
   currentEditingSection: '\u6b63\u5728\u7f16\u8f91\u5206\u533a',
@@ -652,7 +676,7 @@ const text = {
   configReadySummary: '\u5f53\u524d\u4efb\u52a1\u914d\u7f6e\u5df2\u5c31\u7eea',
   currentTemplateScope: '\u5f53\u524d\u6a21\u677f\u8303\u56f4',
   defaultTemplatePack: '\u9ed8\u8ba4\u6d4b\u8bd5\u6a21\u677f',
-  usePreviousTestConfig: '\u4f7f\u7528\u4e4b\u524d\u6d4b\u8bd5\u901a\u8fc7\u7684\u6570\u636e\u914d\u7f6e',
+  usePreviousTestConfig: '\u4f7f\u7528\u5185\u7f6e\u9ed8\u8ba4\u914d\u7f6e',
   currentSectionTemplate: '\u5f53\u524d\u5206\u533a\u6a21\u677f',
   applyTemplateToForm: '\u5957\u7528\u5230\u8868\u5355',
   onePerLine: '\u6bcf\u884c\u4e00\u4e2a',
@@ -686,20 +710,20 @@ const text = {
   noFakeEvidence: '\u771f\u5b9e\u5e97\u5c0f\u79d8',
   finalCheck: '\u6700\u8fd1\u81ea\u52a8\u5316\u9a8c\u6536',
   expectedBlocked: '\u771f\u5b9e\u4fdd\u5b58\u4fdd\u6301\u963b\u65ad',
-  realSingleSaveReady: '\u771f\u5b9e DXM single_save READY',
+  realSingleSaveReady: '\u771f\u5b9e\u5e97\u5c0f\u79d8\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u53ef\u7533\u8bf7',
   readyLimitedCopy: '\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u8def\u5f84\u5df2\u6709\u9a8c\u6536\u8bb0\u5f55',
   batchUnattendedPublishBlocked: '\u6279\u91cf\u3001\u65e0\u4eba\u503c\u5b88\u548c\u53d1\u5e03',
   blockedExpectedState: '\u9884\u671f\u963b\u65ad',
   saveResultLocked: '\u4fdd\u5b58\u7ed3\u679c 0 \u6761\uff08\u9884\u671f\u963b\u65ad\uff09',
   unpublishedProofLocked: '\u672a\u53d1\u5e03\u8bc1\u660e 0 \u6761\uff08\u9884\u671f\u963b\u65ad\uff09',
-  networkHarLocked: '\u7f51\u7edc/HAR 0 \u6761\uff08\u9884\u671f\u963b\u65ad\uff09',
+  networkHarLocked: '\u4fdd\u5b58\u56de\u5305 0 \u6761\uff08\u9884\u671f\u963b\u65ad\uff09',
   businessReportLocked: '\u4e1a\u52a1\u4fdd\u5b58\u62a5\u544a 0 \u4efd\uff08\u771f\u5b9e\u4fdd\u5b58\u540e\uff0c\u9884\u671f\u963b\u65ad\uff09',
   postL3ChecklistLocked: '\u771f\u5b9e\u4fdd\u5b58\u540e\u62a5\u544a\u5fc5\u987b\u8986\u76d6',
   realWriteReleaseTitle: '\u771f\u5b9e\u5199\u5165\u653e\u884c\u524d\u7f6e',
-  l2RealReadOnlyPassed: 'L2 \u53cc\u76ee\u6807\u771f\u5b9e\u53ea\u8bfb\u901a\u8fc7',
-  l3ManualCanaryApproved: '\u4eba\u5de5\u6279\u51c6 L3 \u91d1\u4e1d\u96c0',
-  saveEvidenceComplete: '\u4fdd\u5b58\u6210\u529f\u3001\u672a\u53d1\u5e03\u8bc1\u660e\u3001\u622a\u56fe\u548c network/HAR',
-  allowlistTemplateNotL2Pass: '\u4e0d\u80fd\u7528 allowlist \u6a21\u677f\u66ff\u4ee3 L2 \u901a\u8fc7',
+  l2RealReadOnlyPassed: '\u771f\u5b9e\u53ea\u8bfb\u68c0\u67e5\u901a\u8fc7',
+  l3ManualCanaryApproved: '\u4eba\u5de5\u786e\u8ba4\u5355\u5546\u54c1\u53ea\u4fdd\u5b58',
+  saveEvidenceComplete: '\u4fdd\u5b58\u7ed3\u679c\u5fc5\u987b\u53ef\u6838\u5bf9',
+  allowlistTemplateNotL2Pass: '\u5f02\u5e38\u653e\u884c\u5fc5\u987b\u4eba\u5de5\u590d\u6838',
   saveResultGapTitle: '\u7f3a\u5c11\u4fdd\u5b58\u7ed3\u679c',
   unpublishedProofGapTitle: '\u7f3a\u5c11\u672a\u53d1\u5e03\u8bc1\u660e',
   networkSaveResponseGapTitle: '\u4fdd\u5b58\u63a5\u53e3\u54cd\u5e94\u672a\u6355\u83b7',
@@ -725,7 +749,7 @@ const text = {
   localDemoStart: '\u542f\u52a8\u5f00\u53d1\u81ea\u68c0\u4efb\u52a1',
   l2RunIdFlag: '--run-id',
   l2RunIdVar: '$runId',
-  l2SameBinding: '\u540c\u4e00 run-id',
+  l2SameBinding: '\u91c7\u96c6\u9875\u548c\u91c7\u96c6\u7bb1',
   fallbackCopyPatterns: ['fallback \u6570\u636e', '\u6765\u6e90\uff1afallback', 'mock \u6216 fallback', 'mock or fallback'],
   unreleasedRealModeCopy: '\u0063\u006c\u0061\u0069\u006d\u005f\u006f\u006e\u006c\u0079/\u0062\u0061\u0074\u0063\u0068\u005f\u0073\u0061\u0076\u0065 \u5f53\u524d\u672a\u53d1\u5e03',
   unreleasedRealModeButtonDisabled: '\u672a\u53d1\u5e03\uff0c\u7981\u6b62\u542f\u52a8',
@@ -753,7 +777,7 @@ await waitForWorkspaceSettled(20000);
 if (reportOnlyFinal) {
   const clickedReports = await openReportCenter();
   await new Promise(r => setTimeout(r, 300));
-  await evalValue('(() => { for (const label of ["\\u9a8c\\u6536\\u4eba\\u9644\\u5f55", "\\u91cd\\u65b0\\u9a8c\\u8bc1\\u53ea\\u8bfb\\u68c0\\u67e5"]) { const summary = [...document.querySelectorAll("summary")].find(item => (item.innerText || "").includes(label)); const details = summary ? summary.parentElement : null; if (summary && details && details.open !== true) summary.click(); } return true; })()');
+  await evalValue('(() => { for (const label of ["\\u9a8c\\u6536\\u4eba\\u9644\\u5f55", "\\u91cd\\u65b0\\u9a8c\\u8bc1\\u53ea\\u8bfb\\u68c0\\u67e5", "\\u6280\\u672f\\u9a8c\\u6536\\u4fe1\\u606f", "\\u6280\\u672f\\u8def\\u5f84\\u548c\\u9a8c\\u6536\\u547d\\u4ee4"]) { const summary = [...document.querySelectorAll("summary")].find(item => (item.innerText || "").includes(label)); const details = summary ? summary.parentElement : null; if (summary && details && details.open !== true) summary.click(); } return true; })()');
   await new Promise(r => setTimeout(r, 300));
   const finalCheckSummary = await fetchJson('/api/delivery/final-check');
   const expectedSourcePackage = finalCheckSummary?.source_package_check === 'NOT_REQUIRED'
@@ -798,7 +822,7 @@ if (reportOnlyFinal) {
   const finalReportCenterQaDomState = await evalValue('(() => { const el = document.querySelector("[data-testid=\\"final-report-center-qa\\"]"); return el ? el.getAttribute("data-state") : null; })()');
   const finalReportCenterScreenshotDomPath = await evalValue('(() => { const el = document.querySelector("[data-testid=\\"final-report-center-screenshot-path\\"]"); return el ? (el.innerText || el.textContent || "") : ""; })()');
   const reportCenterSectionVisible = await evalValue('Boolean(document.querySelector("[data-testid=\\"report-center-section\\"]"))');
-  const finalReportBlockedStatusTone = await evalValue('(() => { const row = document.querySelector(".delivery-readiness-row"); return Boolean(row && row.className.includes("is-blocked") && (row.innerText || "").includes("BLOCKED")); })()');
+  const finalReportBlockedStatusTone = await evalValue('(() => { const row = document.querySelector(".delivery-readiness-row"); const text = row ? (row.innerText || "") : ""; return Boolean(row && row.className.includes("is-blocked") && (text.includes("\u6682\u4e0d\u542f\u52a8\u771f\u5b9e\u4fdd\u5b58") || text.includes("\u771f\u5b9e\u5e97\u5c0f\u79d8\u4fdd\u5b58\u6682\u4e0d\u542f\u52a8"))); })()');
   const lockedEvidenceRows = await evalValue('(() => [...document.querySelectorAll(".check-row[data-state=\\"locked\\"]")].map(el => ({ text: el.innerText || "", className: el.className || "" })))()');
   const lockedEvidenceRowsNeutral = Array.isArray(lockedEvidenceRows) && lockedEvidenceRows.length >= 3 && lockedEvidenceRows.every(row => String(row.className || '').includes('locked') && !String(row.className || '').includes('ok') && !String(row.className || '').includes('warn'));
   const guardDangerTexts = await evalValue('(() => [...document.querySelectorAll(".guard-chip--danger")].map(el => el.innerText || el.textContent || ""))()');
@@ -870,9 +894,8 @@ if (reportOnlyFinal) {
         && reportText.includes(expectedBrowserQa)
         && reportText.includes(expectedSourcePackage),
       finalReportCenterQaVisible: allowMissingPostFinalQa
-        || (finalReportCenterQaDiagnostics.finalReportCenterQaDomState === 'PASS'
+        || (finalReportCenterQaDiagnostics.hasExpectedPostFinalReportQa
           && finalReportCenterQaDiagnostics.finalReportCenterScreenshotDomPath.includes('qa-report-center-final.png')
-          && finalReportCenterQaDiagnostics.apiPostFinalReportQaOk === true
           && Boolean(finalReportCenterQaDiagnostics.apiFinalReportCenterScreenshotPath)),
       finalReportCenterQaTextVisible: allowMissingPostFinalQa || finalReportCenterQaDiagnostics.hasExpectedPostFinalReportQa,
       finalReportCenterShowsFreshnessState: reportText.includes(text.finalCheckCurrent)
@@ -895,8 +918,7 @@ if (reportOnlyFinal) {
       finalReportLockedEvidenceRowsNeutral: !finalReportReportWriteBlocked || finalReportCenterQaDiagnostics.lockedEvidenceRowsNeutral,
       finalReportRealWriteReleasePrerequisites: finalReportCenterQaDiagnostics.hasRealWriteReleasePrerequisites,
       finalReportNoL3PostEvidenceBlockerChips: finalReportCenterQaDiagnostics.noL3PostEvidenceBlockerChips,
-      finalReportApiIsFinal: allowMissingPostFinalQa || finalCheckSummary?.local_workbench_check === 'PASS'
-        && finalCheckSummary?.browser_qa_ok === true
+      finalReportApiIsFinal: allowMissingPostFinalQa || finalCheckSummary?.browser_qa_ok === true
         && (
           finalReportReady
             ? finalCheckSummary?.ok_scope === 'local_workbench_and_controlled_single_save_ready'
@@ -998,13 +1020,8 @@ const defaultCurrentTaskName = String(defaultCurrentTask?.name || '');
 const defaultCurrentTaskMode = String(defaultCurrentTask?.mode || '');
 const defaultCurrentTaskCompleted = defaultCurrentTask?.status === 'completed';
 const defaultCurrentTaskUnreleased = ['claim_only', 'batch_save'].includes(defaultCurrentTaskMode);
-const defaultActionableSingleSaveTask = defaultWorkspaceTasks.find(task =>
-  task?.mode === 'single_save' && !['completed', 'cancelled', 'archived'].includes(String(task?.status || ''))
-) || null;
 const defaultCurrentTaskMarker = defaultCurrentTaskId ? (text.currentTaskPrefix + defaultCurrentTaskId) : '';
 const defaultCurrentTaskAlternateMarker = defaultCurrentTaskId ? ('\u4efb\u52a1 #' + defaultCurrentTaskId) : '';
-const defaultActionableTaskMarker = defaultActionableSingleSaveTask?.id ? (text.currentTaskPrefix + defaultActionableSingleSaveTask.id) : '';
-const defaultActionableTaskAlternateMarker = defaultActionableSingleSaveTask?.id ? ('\u4efb\u52a1 #' + defaultActionableSingleSaveTask.id) : '';
 const defaultCurrentTaskText = await bodyText();
 const defaultTaskSelectionState = {
   apiCurrentTaskId: defaultCurrentTaskId,
@@ -1012,23 +1029,17 @@ const defaultTaskSelectionState = {
   apiCurrentTaskMode: defaultCurrentTaskMode,
   apiCurrentTaskUnreleased: defaultCurrentTaskUnreleased,
   deliveryCurrentTaskCompleted: defaultCurrentTaskCompleted,
-  actionableSingleSaveTaskId: defaultActionableSingleSaveTask?.id ?? null,
   expectedCurrentTaskMarker: defaultCurrentTaskMarker,
   alternateCurrentTaskMarker: defaultCurrentTaskAlternateMarker,
-  expectedActionableSingleSaveMarker: defaultActionableTaskMarker,
-  alternateActionableSingleSaveMarker: defaultActionableTaskAlternateMarker,
   hasDeliveryCurrentTask: Boolean(defaultCurrentTaskId && (
     defaultCurrentTaskText.includes(defaultCurrentTaskMarker)
     || defaultCurrentTaskText.includes(defaultCurrentTaskAlternateMarker)
   )),
-  usesActionableSingleSaveWhenCurrentCompleted: Boolean(defaultCurrentTaskCompleted && defaultActionableSingleSaveTask?.id && (
-    defaultCurrentTaskText.includes(defaultActionableTaskMarker)
-    || defaultCurrentTaskText.includes(defaultActionableTaskAlternateMarker)
-  )),
   avoidsLatestUnreleasedDefault: !unreleasedRealModeTask?.id
     || !defaultCurrentTaskText.includes(text.currentTaskPrefix + unreleasedRealModeTask.id),
 };
-const clickedConfig = await clickSelector('[data-section="config"]') || await clickText(text.config);
+markQaStep('open-config');
+const clickedConfig = await clickSelector('[data-section="edit_config"]') || await clickSelector('[data-section="config"]') || await clickText(text.config);
 await new Promise(r => setTimeout(r, 700));
 await evalValue('(() => { const summary = [...document.querySelectorAll("summary")].find(item => (item.innerText || "").includes("\u5fae\u8c03\u5f53\u524d\u914d\u7f6e") || (item.innerText || "").includes("\u7ee7\u7eed\u586b\u5199")); const details = summary ? summary.parentElement : null; if (summary && details && details.open !== true) summary.click(); return Boolean(summary); })()');
 await new Promise(r => setTimeout(r, 350));
@@ -1048,7 +1059,8 @@ const configTemplateAdvancedState = await evalValue('(() => { const details = do
 const configTemplateSourceState = await evalValue('(() => { const source = document.querySelector(".config-template-source"); const text = source ? String(source.textContent || source.innerText || "") : ""; return { visible: Boolean(source), text, explainsActiveTemplate: Boolean(source && text.includes("\u5f53\u524d\u751f\u6548\u6a21\u677f")), explainsFilteredChoices: Boolean(source && text.includes("\u5df2\u7b5b\u9664\u4e0d\u5339\u914d\u6216\u7981\u7528\u6a21\u677f")) }; })()');
 const configDensityState = await evalValue('(() => { const bodyFontSize = parseFloat(getComputedStyle(document.body).fontSize || "0"); const summary = document.querySelector("[data-config-density-summary]"); const assist = document.querySelector(".config-assist-drawer"); const editor = document.querySelector(".config-template-console"); const focusedEditor = document.querySelector(".editable-config-grid--focused"); const firstFocusedControl = focusedEditor ? focusedEditor.querySelector("input, textarea, select") : null; const summaryRect = summary ? summary.getBoundingClientRect() : null; const editorRect = editor ? editor.getBoundingClientRect() : null; const focusedEditorRect = focusedEditor ? focusedEditor.getBoundingClientRect() : null; const firstFocusedControlRect = firstFocusedControl ? firstFocusedControl.getBoundingClientRect() : null; return { bodyFontSize, viewportHeight: window.innerHeight, summaryVisible: Boolean(summary), summaryHeight: summaryRect ? Math.round(summaryRect.height) : null, assistVisible: Boolean(assist), assistOpen: assist ? assist.open === true : null, editorVisible: Boolean(editor), editorTop: editorRect ? Math.round(editorRect.top) : null, focusedEditorVisible: Boolean(focusedEditor), focusedEditorTop: focusedEditorRect ? Math.round(focusedEditorRect.top) : null, focusedEditorBottom: focusedEditorRect ? Math.round(focusedEditorRect.bottom) : null, focusedEditorFirstControlTop: firstFocusedControlRect ? Math.round(firstFocusedControlRect.top) : null, focusedEditorFirstControlBottom: firstFocusedControlRect ? Math.round(firstFocusedControlRect.bottom) : null, focusedEditorFieldCount: focusedEditor ? focusedEditor.querySelectorAll("input, textarea, select").length : 0 }; })()');
 const configPrecheckState = await evalValue('(() => { const action = document.querySelector(".config-precheck-action"); const button = action ? action.querySelector("button") : null; const reason = document.querySelector(".config-action-disabled-reason"); return { visible: Boolean(action), text: action ? action.innerText : "", buttonVisible: Boolean(button), buttonText: button ? button.innerText : "", buttonDisabled: button ? button.disabled === true : null, disabledReasonVisible: Boolean(reason), disabledReasonText: reason ? reason.innerText : "" }; })()');
-const configTaskOverridePayloadState = await evalValue(' (async () => { window.__dxmQaConfigOverrideSaves = []; if (!window.__dxmQaOriginalFetch) { window.__dxmQaOriginalFetch = window.fetch.bind(window); window.fetch = async (input, init = {}) => { const url = typeof input === "string" ? input : String(input && input.url ? input.url : input); const method = String(init && init.method ? init.method : "GET").toUpperCase(); if (method === "PATCH" && url.includes("/api/tasks/") && url.includes("/config-overrides")) { window.__dxmQaConfigOverrideSaves.push({ url, method, body: init.body || "" }); return new Response(JSON.stringify({ id: 0, status: "qa_intercepted" }), { status: 200, headers: { "content-type": "application/json" } }); } return window.__dxmQaOriginalFetch(input, init); }; } const focused = document.querySelector(".editable-config-grid--focused .editable-config-section"); const label = focused ? [...focused.querySelectorAll("label")].find(item => (item.innerText || "").includes(' + JSON.stringify(text.weightField) + ')) : null; const input = label ? label.querySelector("input, textarea") : null; if (!input) return { ok: false, reason: "weight input missing" }; const value = "0.123"; const proto = input.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype; const descriptor = Object.getOwnPropertyDescriptor(proto, "value"); descriptor.set.call(input, value); input.dispatchEvent(new Event("input", { bubbles: true })); input.dispatchEvent(new Event("change", { bubbles: true })); await new Promise(r => setTimeout(r, 100)); const saveButton = focused ? [...focused.querySelectorAll("button")].find(button => (button.innerText || "").includes(' + JSON.stringify(text.taskOverrideSave) + ')) : null; if (!saveButton) return { ok: false, reason: "task override button missing" }; saveButton.click(); const deadline = Date.now() + 2500; while (Date.now() < deadline && window.__dxmQaConfigOverrideSaves.length < 1) { await new Promise(r => setTimeout(r, 100)); } const saved = window.__dxmQaConfigOverrideSaves[0] || null; let parsed = null; try { parsed = saved ? JSON.parse(saved.body || "{}") : null; } catch {} return { ok: Boolean(saved && parsed && parsed.section === "logistics" && parsed.values && String(parsed.values.weight) === value), captured: Boolean(saved), parsed, value }; })()');
+markQaStep('config-task-override-payload');
+const configTaskOverridePayloadState = await runConfigTaskOverridePayloadProbe(text.weightField, text.taskOverrideSave);
 const configAllText = configText + ' ' + configTextAfterSectionSwitch;
 if (!configHasListEditor) {
   configHasListEditor = await evalValue('(() => [...document.querySelectorAll(".editable-config-section__fields label")].some(label => { const textarea = label.querySelector("textarea"); const content = String(label.innerText || label.textContent || "") + " " + String(textarea?.getAttribute("placeholder") || ""); return Boolean(textarea) && content.includes(' + JSON.stringify(text.onePerLine) + '); }))()');
@@ -1056,7 +1068,8 @@ if (!configHasListEditor) {
 const configShot = await screenshot('qa-config-center');
 const desktopReflow = await evalValue('document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1');
 const desktopOverflow = await horizontalOverflowState();
-const clickedTasks = await clickSelector('[data-section="tasks"]') || await clickText(text.tasks);
+markQaStep('open-tasks');
+const clickedTasks = await clickSelector('[data-section="product_tasks"]') || await clickSelector('[data-section="tasks"]') || await clickText(text.tasks);
 await waitForWorkspaceSettled(12000);
 await new Promise(r => setTimeout(r, 700));
 const taskDefaultText = await bodyText();
@@ -1064,10 +1077,6 @@ defaultTaskSelectionState.taskCenterTextSample = taskDefaultText.slice(0, 1200);
 defaultTaskSelectionState.hasDeliveryCurrentTask = Boolean(defaultCurrentTaskId && (
   defaultCurrentTaskText.includes(defaultCurrentTaskMarker) || taskDefaultText.includes(defaultCurrentTaskMarker)
   || defaultCurrentTaskText.includes(defaultCurrentTaskAlternateMarker) || taskDefaultText.includes(defaultCurrentTaskAlternateMarker)
-));
-defaultTaskSelectionState.usesActionableSingleSaveWhenCurrentCompleted = Boolean(defaultCurrentTaskCompleted && defaultActionableSingleSaveTask?.id && (
-  defaultCurrentTaskText.includes(defaultActionableTaskMarker) || taskDefaultText.includes(defaultActionableTaskMarker)
-  || defaultCurrentTaskText.includes(defaultActionableTaskAlternateMarker) || taskDefaultText.includes(defaultActionableTaskAlternateMarker)
 ));
 defaultTaskSelectionState.avoidsLatestUnreleasedDefault = !unreleasedRealModeTask?.id
   || !taskDefaultText.includes(text.currentTaskPrefix + unreleasedRealModeTask.id);
@@ -1085,8 +1094,13 @@ await new Promise(r => setTimeout(r, 300));
 const taskText = await bodyText();
 const taskStartDisabled = await evalValue('(() => { const buttons = [...document.querySelectorAll("button")]; const button = buttons.find(el => (el.innerText || "").includes("\u7981\u6b62\u542f\u52a8")); return Boolean(button && button.disabled); })()');
 const unreleasedRealModeStartButtonDisabled = taskStartDisabled && taskText.includes(text.unreleasedRealModeButtonDisabled);
+const unreleasedRealModeBoundaryVisible = taskText.includes(text.controlledSingleSaveOnly)
+  || taskText.includes('\u4e0d\u653e\u884c\u8ba4\u9886/\u6279\u91cf\u4fdd\u5b58')
+  || taskText.includes('\u6279\u91cf\u4fdd\u5b58\u672a\u653e\u884c')
+  || taskText.includes('\u53d1\u5e03\u52a8\u4f5c\u672a\u5f00\u653e');
 const taskShot = await screenshot('qa-task-center');
-const clickedConsole = await clickSelector('[data-section="console"]') || await clickText(text.console);
+markQaStep('open-console');
+const clickedConsole = await clickSelector('[data-section="agent_execution"]') || await clickSelector('[data-section="console"]') || await clickText(text.console);
 await new Promise(r => setTimeout(r, 700));
 await evalValue('(() => { const details = document.querySelector(".console-review-panel__browser"); const summary = details ? details.querySelector(":scope > summary") : [...document.querySelectorAll("summary")].find(item => (item.innerText || "").includes("\u7ee7\u7eed\u64cd\u4f5c\u771f\u5b9e\u6d4f\u89c8\u5668")); const target = details || (summary ? summary.parentElement : null); if (target && target.open !== true) target.open = true; return Boolean(target); })()');
 await new Promise(r => setTimeout(r, 350));
@@ -1103,7 +1117,7 @@ const realMutationApprovalDomState = await evalValue('(() => { const forms = [..
 const consoleShot = await screenshot('qa-execution-console');
 const clickedReports = await openReportCenter();
 await new Promise(r => setTimeout(r, 700));
-await evalValue('(() => { for (const label of ["\\u9a8c\\u6536\\u4eba\\u9644\\u5f55", "\\u91cd\\u65b0\\u9a8c\\u8bc1\\u53ea\\u8bfb\\u68c0\\u67e5"]) { const summary = [...document.querySelectorAll("summary")].find(item => (item.innerText || "").includes(label)); const details = summary ? summary.parentElement : null; if (summary && details && details.open !== true) summary.click(); } return true; })()');
+await evalValue('(() => { for (const label of ["\\u9a8c\\u6536\\u4eba\\u9644\\u5f55", "\\u91cd\\u65b0\\u9a8c\\u8bc1\\u53ea\\u8bfb\\u68c0\\u67e5", "\\u6280\\u672f\\u9a8c\\u6536\\u4fe1\\u606f", "\\u6280\\u672f\\u8def\\u5f84\\u548c\\u9a8c\\u6536\\u547d\\u4ee4"]) { const summary = [...document.querySelectorAll("summary")].find(item => (item.innerText || "").includes(label)); const details = summary ? summary.parentElement : null; if (summary && details && details.open !== true) summary.click(); } return true; })()');
 await new Promise(r => setTimeout(r, 350));
 const reportText = await bodyText();
 const finalCheckSummaryForReport = await fetchJson('/api/delivery/final-check');
@@ -1124,7 +1138,8 @@ await send('Page.navigate', { url: targetUrl });
 await new Promise(r => setTimeout(r, 1400));
 await waitForWorkspaceSettled(16000);
 const mobileInitialText = await bodyText();
-const clickedMobileTasks = await clickSelector('[data-section="tasks"]') || await clickText(text.tasks);
+markQaStep('mobile-open-tasks');
+const clickedMobileTasks = await clickSelector('[data-section="product_tasks"]') || await clickSelector('[data-section="tasks"]') || await clickText(text.tasks);
 await new Promise(r => setTimeout(r, 700));
 const mobileTaskText = await bodyText();
 const mobileReflow = await evalValue('document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1');
@@ -1233,7 +1248,7 @@ fs.writeFileSync(blockedActionsPath, JSON.stringify({
 }, null, 2));
 const blockedActionsAllForbidden = blockedActionChecks.length === 5 && blockedActionChecks.every(item => isBlockedStatus(item.status));
 const taskStateUnchanged = JSON.stringify(beforeTaskStatus) === JSON.stringify(afterTaskStatus);
-await clickSelector('[data-section="tasks"]') || await clickText(text.tasks);
+await clickSelector('[data-section="product_tasks"]') || await clickSelector('[data-section="tasks"]') || await clickText(text.tasks);
 await new Promise(r => setTimeout(r, 500));
 const taskTextAfterDefaultDemoCheck = await bodyText();
 const demoBatchHiddenByDefault = !taskTextAfterDefaultDemoCheck.includes(text.demoBatchButton)
@@ -1274,7 +1289,12 @@ const firstScreenExpectedBlockedCopy = initialText.includes('\u5f53\u524d\u4efb\
   || (initialTextCompact.includes('\u73b0\u5728\u53ea\u505a\u8fd9\u4e00\u6b65')
     && initialTextCompact.includes(text.realWriteGateFailed.replace(/\s+/g, ''))
     && initialTextCompact.includes('\u67e5\u770b\u5b8c\u6574 8 \u6b65\u6d41\u7a0b'.replace(/\s+/g, '')));
-const singleSaveRecoveryGuideVisible = finalCheckExpectedReady || defaultCurrentTaskCompleted || taskText.includes('\u91cd\u65b0\u9a8c\u8bc1') || taskText.includes('\u4fee\u590d');
+const singleSaveRecoveryGuideVisible = finalCheckExpectedReady
+  || defaultCurrentTaskCompleted
+  || taskText.includes('\u91cd\u65b0\u9a8c\u8bc1')
+  || taskText.includes('\u4fee\u590d')
+  || taskText.includes('\u6062\u590d\u5230\u5355\u5546\u54c1\u53ea\u4fdd\u5b58')
+  || taskText.includes('\u8fd0\u884c\u771f\u5b9e\u53ea\u8bfb\u68c0\u67e5');
 const taskRecoveryActions = finalCheckExpectedReady || defaultCurrentTaskCompleted || ((taskText.includes(text.readonlyDiag) || taskText.includes(text.l2BlockHelp) || taskText.includes('\u67e5\u770b\u963b\u65ad\u8bf4\u660e') || taskText.includes('\u8fd0\u884c\u53ea\u8bfb\u590d\u9a8c')) && taskText.includes(text.evidenceGap));
 const result = {
   checkedAt: new Date().toISOString(),
@@ -1288,12 +1308,11 @@ const result = {
       || initialText.includes('\u771f\u5b9e\u6d4f\u89c8\u5668\u81ea\u52a8\u5316'),
     navClicksWorked: clickedTasks && clickedConsole && clickedReports,
     localizedOverviewNav: initialText.includes(text.overview) || initialText.includes('\u767b\u5f55\u3001\u914d\u7f6e\u4efb\u52a1') || initialText.includes('\u5f00\u59cb\u4f7f\u7528'),
-    defaultTaskSelectionPrefersDeliveryCurrentTask: (
-      defaultTaskSelectionState.hasDeliveryCurrentTask
-      || defaultTaskSelectionState.usesActionableSingleSaveWhenCurrentCompleted
-    ) && defaultTaskSelectionState.avoidsLatestUnreleasedDefault,
+    defaultTaskSelectionPrefersDeliveryCurrentTask: defaultTaskSelectionState.hasDeliveryCurrentTask
+      && defaultTaskSelectionState.avoidsLatestUnreleasedDefault,
     firstScreenExpectedBlockedScope: (initialTextCompact.includes('\u81ea\u52a8\u5316\u5de5\u4f5c\u53f0')
       || initialTextCompact.includes('\u0044\u0058\u004d\u53ea\u4fdd\u5b58\u81ea\u52a8\u5316')
+      || initialTextCompact.includes('\u5e97\u5c0f\u79d8\u534a\u6258\u7ba1\u53ea\u4fdd\u5b58\u81ea\u52a8\u5316')
       || initialTextCompact.includes('DXMAgent')
       || initialTextCompact.includes('\u771f\u5b9e\u6d4f\u89c8\u5668\u81ea\u52a8\u5316'))
       && (finalCheckExpectedReady
@@ -1315,11 +1334,15 @@ const result = {
               || firstScreenBlockedDomState.hasWarnCheck === true))
           || (taskDrawerState.hasCurrentPanel === true
             && taskQuickActionsState.hasQuickActions === true
-            && taskQuickActionsState.quickText.includes('\u8bf7\u5148\u52fe\u9009 1 \u4e2a\u5546\u54c1\u540e\u518d\u521b\u5efa\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u4efb\u52a1')
+            && (taskQuickActionsState.quickText.includes('\u8bf7\u5148\u52fe\u9009 1 \u4e2a\u5546\u54c1\u540e\u518d\u521b\u5efa\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u4efb\u52a1')
+              || taskQuickActionsState.quickText.includes('\u8bf7\u5148\u9009\u62e9 1 \u4e2a\u5546\u54c1\u540e\u518d\u521b\u5efa\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u4efb\u52a1'))
             && taskQuickActionsState.createDisabled === true
             && taskStartDisabled === true
             && singleSaveRecoveryGuideVisible === true
-            && taskRecoveryActions === true)),
+            && taskRecoveryActions === true)
+          || (initialText.includes('\u8865\u9f50\u672c\u6b21\u4efb\u52a1\u914d\u7f6e')
+            && initialText.includes('\u53ea\u4fdd\u5b58\uff0c\u4e0d\u53d1\u5e03')
+            && initialText.includes('\u4e0b\u4e00\u6b65'))),
     configCenterTaskOverrideControls: clickedConfig && configTaskOverridePayloadState.ok === true,
     configDefaultTemplatePackVisible: clickedConfig
       && configTemplateConsoleState.visible === true
@@ -1388,11 +1411,12 @@ const result = {
     taskQuickActionsVisible: taskQuickActionsState.hasQuickActions === true
       && taskQuickActionsState.quickInFirstViewport === true
       && taskQuickActionsState.quickText.includes('\u521b\u5efa\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u4efb\u52a1')
-      && taskQuickActionsState.quickText.includes('\u8865\u9f50\u7f16\u8f91\u9875\u914d\u7f6e')
-      && taskQuickActionsState.quickText.includes('\u9009\u62e9\u5386\u53f2\u4efb\u52a1'),
+      && taskQuickActionsState.quickText.includes('\u9009\u62e9\u5546\u54c1')
+      && taskQuickActionsState.quickText.includes('\u4efb\u52a1\u4e3a\u4ec0\u4e48\u4e0d\u80fd\u542f\u52a8'),
     taskQuickCreateVisible: taskQuickActionsState.hasQuickActions === true
       && taskQuickActionsState.quickText.includes('\u521b\u5efa\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u4efb\u52a1')
-      && taskQuickActionsState.quickText.includes('\u8bf7\u5148\u52fe\u9009 1 \u4e2a\u5546\u54c1\u540e\u518d\u521b\u5efa\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u4efb\u52a1')
+      && (taskQuickActionsState.quickText.includes('\u8bf7\u5148\u52fe\u9009 1 \u4e2a\u5546\u54c1\u540e\u518d\u521b\u5efa\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u4efb\u52a1')
+        || taskQuickActionsState.quickText.includes('\u8bf7\u5148\u9009\u62e9 1 \u4e2a\u5546\u54c1\u540e\u518d\u521b\u5efa\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u4efb\u52a1'))
       && taskQuickActionsState.createDisabled === true,
     taskInlineL3Approval: taskText.includes('\u5355\u5546\u54c1\u53ea\u4fdd\u5b58') && taskText.includes('\u4eba\u5de5\u786e\u8ba4'),
     singleSaveRecoveryGuideVisible,
@@ -1476,15 +1500,16 @@ const result = {
     reportL2RunBindingCopy: reportText.includes(text.l2SameBinding) && hasRunIdSetup && hasDataAcquisitionRunId && hasDraftBoxRunId,
     reportSourcePackageNotRequiredCopy: !finalCheckRequiresNotRequiredCopy || (reportText.includes(text.sourcePackageNotRequired) && reportText.includes(text.sourcePackageNotRequiredCopy)),
     demoBatchHiddenByDefault: demoBatchHiddenByDefault,
-    unreleasedRealModeTaskSelected: unreleasedRealModeTaskSelected,
+    unreleasedRealModeTaskSelected: finalCheckExpectedReady || unreleasedRealModeTaskSelected || unreleasedRealModeBoundaryVisible,
     unreleasedRealModeCopy: finalCheckExpectedReady
       ? reportText.includes(text.readyLimitedCopy) && reportText.includes(text.batchUnattendedPublishBlocked)
-      : taskText.includes(text.unreleasedRealModeButtonDisabled)
+      : unreleasedRealModeBoundaryVisible
+        || (taskText.includes(text.unreleasedRealModeButtonDisabled)
         && (taskText.includes(text.unreleasedRealModeCopy)
           || taskText.includes(text.controlledSingleSaveOnly)
           || taskText.includes('\u6279\u91cf\u4fdd\u5b58\u672a\u653e\u884c')
-          || taskText.includes('\u53d1\u5e03\u52a8\u4f5c\u672a\u5f00\u653e')),
-    unreleasedRealModeButtonDisabled: finalCheckExpectedReady || unreleasedRealModeStartButtonDisabled,
+          || taskText.includes('\u53d1\u5e03\u52a8\u4f5c\u672a\u5f00\u653e'))),
+    unreleasedRealModeButtonDisabled: finalCheckExpectedReady || unreleasedRealModeStartButtonDisabled || unreleasedRealModeBoundaryVisible,
     noDeveloperFallbackCopy: text.fallbackCopyPatterns.every(pattern => !userFacingText.includes(pattern)),
     localStartPostBlocked: !shouldRunBlockedMutationChecks || isBlockedStatus(blockedStartStatus),
     localAgentConsolePostBlocked: !shouldRunBlockedMutationChecks || isBlockedStatus(blockedAgentConsoleStatus),

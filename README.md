@@ -4,7 +4,7 @@ DXM 半托管自动化工作台，面向真实店小秘账号、真实浏览器�
 
 当前用户路径是：启动工作台、登录真实店小秘、补齐编辑页配置、创建单商品只保存任务，并在真实浏览器中完成“只保存不发布”的保存核验。它不是本地演示页，也不是安全诊断工具。
 
-普通用户主流程：进入“操作引导”打开真实店小秘浏览器，回到“编辑页配置”按分区补齐字段，再到“当前任务”执行模式选择“单商品只保存”，填写批准人后点击“申请并启动单商品只保存”，最后在“真实浏览器控制台”观察真实浏览器自动保存。
+普通用户主流程：从“操作首页”查看下一步，到“账号登录”打开真实店小秘浏览器并登录，回到“编辑页配置”按分区补齐字段，再到“商品与任务”创建单商品只保存任务，执行模式选择“单商品只保存”，最后在“真实浏览器”中运行真实只读检查、申请并启动单商品只保存、人工确认并观察真实浏览器自动保存。
 
 当前可用范围：
 - 已验证受控单商品只保存；最终动作只保存，不发布。
@@ -19,29 +19,27 @@ DXM 半托管自动化工作台，面向真实店小秘账号、真实浏览器�
 
 交付用户优先使用桌面版，不需要分别打开后端和前端两个控制台窗口。
 
-已打包免安装运行版：
+当前给用户的免安装 EXE：
 
 ```text
-C:\Users\wz\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console.exe
-outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe
-```
-
-当前默认交付使用目录免安装版：
-
-```text
-C:\Users\wz\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console.exe
-outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe
-```
-
-使用目录版时必须保留整个文件夹和 `resources` 目录，不能只复制 exe 文件。
-
-单文件 portable 也已通过本机 smoke，位置是：
-
-```text
+D:\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console-Portable-0.1.0.exe
 outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
 ```
 
-portable 首次启动会解包 Electron 与 Python 运行时，`%TEMP%` 所在磁盘建议至少保留 1GB 可用空间；空间不足时会出现启动即退出、没有日志的现象。真实用户优先使用桌面目录免安装版，单文件 portable 用于需要单 exe 分发的场景。
+2026-06-18 本机 portable smoke 已通过，文件 SHA-256：
+
+```text
+61B57C6EE39E6D2E6874CB7BB9F575D327EB274B87BC637E9CB6B19FC85E79FC
+```
+
+仓库内也保留同源构建产物：
+
+```text
+outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe
+outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
+```
+
+目录版必须保留整个文件夹和 `resources` 目录，不能只复制 exe 文件。portable 首次启动会解包 Electron 与 Python 运行时，`%TEMP%` 所在磁盘建议至少保留 1GB 可用空间；空间不足时会出现启动即退出、没有日志的现象。
 
 源码开发态可用下面命令启动桌面壳：
 
@@ -71,19 +69,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-desktop-packa
 1. 在 Windows PowerShell 或 CMD 中进入项目根目录。
 
 ```bat
-cd /d C:\Users\wz\Desktop\py\dxm-auto-uikit
+cd /d D:\Desktop\py\dxm-auto-uikit
 scripts\start-mvp.bat --check
 scripts\start-mvp.bat
 ```
 
 2. 保留启动器窗口。启动器会托管后端和前端，并把后端/前端新日志实时转发到这一个窗口；关闭该窗口或按 `Ctrl+C` 会停止服务。
 3. 等启动器显示 `STARTED_OK` 后，使用自动打开的工作台页面；如果 5173 被占用，启动器会选择附近空闲端口并在日志中写出实际 URL。
-4. 进入工作台的“操作引导”，在“打开真实 DXM 浏览器并确认登录”步骤点击“打开登录页”。系统会打开可见的独立店小秘浏览器窗口，用户可直接输入验证码、查看错误并手动调整；桌面版可勾选“记住账号密码”，账号密码只保存在本机加密存储中。
+4. 进入工作台的“账号登录”，点击“打开真实登录页”。系统会打开可见的独立店小秘浏览器窗口，用户可直接输入验证码、查看错误并手动调整；桌面版可勾选“记住账号密码”，账号密码只保存在本机加密存储中。
 5. 回到“编辑页配置”，按店小秘编辑页分区补齐：店铺与任务基础、类目与标题、SKU/价格/库存、价格策略、图片与素材、包装物流、合规/海关、半托管、店小秘引用模板。保存时可选“仅本次任务使用”或“保存为店铺模板”。
-6. 进入“当前任务”，选择真实店铺和商品，执行模式选择“单商品只保存”，点击“创建真实任务”。
+6. 进入“商品与任务”，选择真实店铺和商品，执行模式选择“单商品只保存”，点击“创建真实任务”。
 7. 只有真实只读检查通过、配置检查通过且人工批准完成后，才能在页面内填写批准人标识并点击“申请并启动单商品只保存”。
-8. 进入“真实浏览器控制台”观察真实浏览器会话状态、网络响应和实时日志。真实店小秘浏览器是独立窗口；控制台默认只显示主操作和日志，“会话管理”“高级浏览器控制”“运行维护 / 自动操作轨迹”按需展开。控制台不把本地截图渲染成实时画面，截图只作为报告证据路径保存。
-9. 任务完成后，到“报告与证据”核对保存响应、未发布证明、截图和结构化报告。验收结论必须是保存成功且 `published=false`。
+8. 进入“真实浏览器”观察真实浏览器会话状态、页面左上角黑色中文任务进度窗、网络响应和实时日志。真实店小秘浏览器是独立窗口；控制台默认只显示主操作和关键日志，账号密码、会话管理、高级浏览器控制、运行维护和自动操作轨迹按需展开。控制台不把本地截图渲染成实时画面，截图只作为报告证据路径保存。
+9. 任务完成后，到“结果报告”核对保存响应、未发布证明、截图和结构化报告；如有失败或阻断，到“问题处理”查看原因和下一步。验收结论必须是保存成功且 `published=false`。
 
 不要用开发自检批次代替真实保存结果；真实用户只按上面的单商品只保存路径执行。
 
@@ -99,7 +97,7 @@ scripts\start-mvp.bat
 - `.hermes/plans/2026-04-20_133500-dxm-auto-uikit-mvp-implementation-plan.md`
 
 ### 工程层
-- `app/backend/`：FastAPI + SQLite + WebSocket + 任务模拟执行器
+- `app/backend/`：FastAPI + SQLite + WebSocket + 真实浏览器任务执行引擎与受控门禁
 - `app/frontend/`：React + Vite 控制台
 - `app/desktop/`：Electron 桌面壳
 - `data/`：数据库、证据、截图、日志目录
@@ -111,14 +109,14 @@ scripts\start-mvp.bat
 
 ### 已实现：DXM 半托管自动化工作台
 - 店铺与商品队列展示
-- 模板中心基础 CRUD
+- 编辑页配置与店铺模板管理
 - 商品导入
 - 真实只读检查 / 单商品只保存任务创建
 - Task/Job 状态流转
 - WebSocket 实时执行事件
-- 真实浏览器控制台、真实浏览器会话状态、折叠式页面内操控和日志中心
+- 真实浏览器页、执行浏览器会话状态、页面内中文进度 HUD、折叠式页面内操控和日志中心
 - 证据面板
-- 异常池（当前框架已接入，演示流程暂未主动制造异常）
+- 问题处理页（真实失败按问题卡展示，技术诊断默认折叠）
 - Playwright 主引擎骨架
 - POP 保存待发布链路（真实单商品只保存已具备受控证据；批量、无人值守和发布仍不放行）
 
@@ -147,27 +145,27 @@ scripts\start-mvp.bat
 
 推荐给真实用户的入口是桌面版。
 
-已打包免安装运行版：
+当前给用户的免安装 EXE：
 
 ```bat
-C:\Users\wz\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console.exe
-outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe
-```
-
-当前交付入口是目录免安装版：
-
-```bat
-C:\Users\wz\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console.exe
-outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe
-```
-
-单文件 portable 已通过本机 smoke：
-
-```bat
+D:\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console-Portable-0.1.0.exe
 outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
 ```
 
-portable 需要 `%TEMP%` 所在磁盘至少约 1GB 可用空间用于解包；空间不足时请清理旧的 `%TEMP%\ns*.tmp` 解包残留，或改用上面的目录免安装版。
+2026-06-18 本机 portable smoke 已通过，文件 SHA-256：
+
+```bat
+61B57C6EE39E6D2E6874CB7BB9F575D327EB274B87BC637E9CB6B19FC85E79FC
+```
+
+仓库内同源构建产物：
+
+```bat
+outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe
+outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
+```
+
+目录版必须保留整个文件夹和 `resources` 目录。portable 需要 `%TEMP%` 所在磁盘至少约 1GB 可用空间用于解包；空间不足时请清理旧的 `%TEMP%\ns*.tmp` 解包残留。
 
 源码开发态启动桌面版：
 
@@ -263,11 +261,11 @@ scripts\final-delivery-check.bat
 
 它会串行运行 Windows 启动前检查、后端全量测试、前端生产构建、L1 selector replay、`git diff --check`、浏览器 QA，并输出 `outputs/final-delivery-check/final-delivery-check.md` / `.json`。最终自检模式下，浏览器 QA 截图和 sidecar 文件位于 `outputs\final-delivery-check\browser-checks\`。浏览器 QA 会临时启动隔离的当前源码后端和前端预览服务，避免误测 8000/5173 上的旧进程；检查模式可能安装前端依赖，但不会访问店小秘、不会执行真实保存。报告顶部会分别显示“自动化工作台自检结果”和“真实 DXM 写入放行状态”。
 
-当前源码包验收成功标准：`Local workbench check: PASS`、`Browser QA: PASS`、`Final report center QA: PASS`、`Source package check: PASS`，并按 L2/L3 门禁计算 `Real DXM write readiness`。截至 2026-06-15 19:15（Asia/Shanghai）最新 clean worktree 验收，自动化工作台、桌面 portable 构建、packaged/portable smoke、Browser QA 和最终报告中心 QA 均已通过；后端全量测试为 `585 passed`；Git HEAD 为 `8f61df27639036bb925a192324fb1ebe28caba97`；报告目录为 `outputs\final-delivery-check-current-ui-polish-clean`。真实 DXM 写入状态为 `READY`，范围仅限 `controlled_single_save_only`，即受控单商品只保存。正式源码包交付命令为 `-RequireCleanWorktree -CheckPortableDesktop -ExpectedRealDxmWriteReadiness READY`。`READY` 不代表批量、无人值守、认领或发布放行。
+当前源码包验收成功标准：`Local workbench check: PASS`、`Browser QA: PASS`、`Final report center QA: PASS`、`Source package check: PASS`，并按 L2/L3 门禁计算 `Real DXM write readiness`。当前最新本地工作台验收为 2026-06-18 21:28（Asia/Shanghai）：自动化工作台、桌面 portable 构建、packaged smoke、Browser QA 和最终报告中心 QA 均已通过；后端全量测试为 `674 passed`；Git HEAD 为 `f99dc38b5cfbe79833a9b9c52d8c36e32a739826`；报告目录为 `outputs\final-delivery-check`；`Source package check=NOT_REQUIRED`、`Source package readiness=DIRTY`。正式源码包交付仍必须重新运行 `-RequireCleanWorktree -CheckPortableDesktop -ExpectedRealDxmWriteReadiness READY`，并让报告 Git HEAD 与提交后的源码一致。`READY` 只代表受控单商品只保存，不代表批量、无人值守、认领或发布放行。
 
 自动化或管理摘要读取 `final-delivery-check.json` 时，不能只读取 `ok`。当前 `ok: true` 只代表 `okScope` 所声明的范围通过；必须同时读取 `realDxmMutationAllowed` 与 `realDxmMutationScope`。若 `okScope` 为 `local_workbench_and_controlled_single_save_ready`、`realDxmMutationAllowed` 为 `true` 且 `realDxmMutationScope` 为 `controlled_single_save_only`，结论是工作台可交付且仅单商品只保存可按门禁启动。
 
-启动工作台后，报告与证据会显示交付自检摘要和报告路径，方便验收人直接确认自动化工作台 PASS、真实写入门禁状态与源码包状态。
+启动工作台后，结果报告会显示交付自检摘要和报告路径，方便验收人直接确认自动化工作台 PASS、真实写入门禁状态与源码包状态。
 
 开发自检入口只在 `?dev=1` 或显式启用 `VITE_DXM_ENABLE_DEMO=1` 时可用；它只创建本地 `dry_run` 自检任务，不触达 DXM，不能作为真实交付验收依据。真实用户交付路径是 `single_save`，且只在当前 L2/L3 READY、人工批准令牌和金丝雀证据链约束下放行；真实 `claim_only` / `batch_save`、批量无人值守和发布仍保持阻断。
 
@@ -304,7 +302,7 @@ scripts\final-delivery-check.bat --help
 3. 若要扩大到认领或批量保存，必须为对应范围重新建立真实只读检查、人工批准和保存/回滚证据，不复用单商品只保存结论。
 4. 批量、无人值守和发布必须单独设计门禁、人工批准和回滚策略。
 
-免安装版快速使用说明见 `docs/product/免安装版快速使用说明-20260615.md`。当前验收记录见 `docs/product/最终交付验收记录-20260615.md`；当前分支 `8f61df2` 已通过 clean worktree、本地工作台、portable 桌面 smoke 和 `READY` 门禁自检，报告目录为 `outputs\final-delivery-check-current-ui-polish-clean`。真实写入放行范围仅为受控 `single_save`，批量、无人值守、认领和发布仍需单独证据链。
+免安装版快速使用说明见 `docs/product/免安装版快速使用说明-20260615.md`。当前本地交付记录见 `docs/product/最终交付验收记录-20260618.md`；2026-06-17 clean worktree 验收记录仍保留为历史源码包记录。当前源码有新改动时，交付前必须重新跑 clean worktree 验收。真实写入放行范围仅为受控 `single_save`，需要保留受控单商品只保存证据；批量、无人值守、认领和发布仍需单独证据链。
 
 ---
 

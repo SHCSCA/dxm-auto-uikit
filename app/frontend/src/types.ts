@@ -55,7 +55,8 @@ export type DxmReferenceTemplateSection = {
 }
 export type Template = { id: number; template_type: string; template_name: string; binding_scope: string; payload: Record<string, unknown>; is_enabled: boolean }
 export type Product = { id: number; title: string; category_name: string; price: number; currency: string; sku_count: number; image_count: number; status: string; image?: { eu_outer_package_filename?: string } }
-export type Task = { id: number; name: string; status: string; mode: string; publish_scene: string; store_id?: number | null; total_jobs: number; completed_jobs: number; failed_jobs: number; payload: { product_ids?: number[]; store_name?: string; category_name?: string; image?: { eu_outer_package_filename?: string }; [key: string]: unknown } }
+export type TaskJob = { id: number; task_id?: number; product_id?: number | null; status: string; current_step_code?: string | null; current_step_name?: string | null; error_code?: string | null; error_message?: string | null; [key: string]: unknown }
+export type Task = { id: number; name: string; status: string; mode: string; publish_scene: string; store_id?: number | null; total_jobs: number; completed_jobs: number; failed_jobs: number; payload: { product_ids?: number[]; store_name?: string; category_name?: string; image?: { eu_outer_package_filename?: string }; [key: string]: unknown }; jobs?: TaskJob[] }
 export type RealTaskCreateRequest = { storeId: number; mode: 'probe' | 'single_save'; productIds: number[] }
 export type LogItem = { id: number; task_id: number; job_id: number | null; level: string; message: string; context: Record<string, unknown>; created_at: string }
 export type RuntimeLogSource = 'backend' | 'frontend' | 'launcher' | 'npm' | 'task' | 'agent'
@@ -211,6 +212,15 @@ export type AgentConsoleHud = {
   action?: string
   detail?: string
   next_step?: string
+  phase?: string
+  progress_index?: number
+  progress_total?: number
+  severity?: 'info' | 'success' | 'warning' | 'error' | string
+  human_title?: string
+  human_action?: string
+  human_next?: string
+  recent_actions?: string[]
+  requires_user_action?: boolean
   store_name?: string
   guard?: string
   updated_at?: string
@@ -305,6 +315,7 @@ export type FinalDeliveryCheckSummary = {
   effective_real_dxm_write_blocked_reason?: string | null
   effective_real_dxm_mutation_allowed?: boolean | null
   effective_real_dxm_mutation_scope?: string | null
+  effective_real_dxm_write_readiness_matches_expected?: boolean | null
   production_real_write_ready?: boolean | null
   real_dxm_write_blocked_reason?: string | null
   l3_evidence_readiness?: Record<string, unknown> | null
@@ -348,6 +359,14 @@ export type FinalDeliveryCheckSummary = {
   error?: string | null
 }
 export type WorkbenchSection =
+  | 'home'
+  | 'dxm_access'
+  | 'product_tasks'
+  | 'edit_config'
+  | 'agent_execution'
+  | 'results'
+  | 'issues'
+  | 'settings'
   | 'dashboard'
   | 'guide'
   | 'config'

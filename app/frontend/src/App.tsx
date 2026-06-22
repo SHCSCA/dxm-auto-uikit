@@ -2,16 +2,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getJson, getJsonOrDefault, postJson } from './api'
 import { AppShell } from './components/AppShell'
 import { SafetyStatusBar } from './components/SafetyStatusBar'
+import { AgentExecutionPage as ExecutionConsole } from './components/workbench/AgentExecutionPage'
+import { EditConfigPage as ConfigCenter } from './components/workbench/EditConfigPage'
+import { HomePage as Dashboard } from './components/workbench/HomePage'
+import { ProductTasksPage as TaskCenter } from './components/workbench/ProductTasksPage'
 import {
-  ConfigCenter,
-  Dashboard,
+  DxmAccessPage,
   EvidenceTimeline,
   ExceptionQueue,
-  ExecutionConsole,
-  GuideCenter,
   ReportCenter,
-  TaskCenter,
+  SystemSettings,
 } from './components/WorkbenchModules'
+import { humanOperatorMessage } from './components/workbench/workbenchCopy'
 import type { AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, DxmCredentialSaveResult, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
 import { composeWorkspace, demoTemplateSeeds, seedRows } from './workspace'
 
@@ -122,6 +124,19 @@ function syncSelectedTaskIdUrl(taskId: number | null) {
   window.history.replaceState(window.history.state, '', url.toString())
 }
 
+function normalizeWorkbenchSection(section: WorkbenchSection): WorkbenchSection {
+  const aliases: Partial<Record<WorkbenchSection, WorkbenchSection>> = {
+    dashboard: 'home',
+    guide: 'dxm_access',
+    tasks: 'product_tasks',
+    config: 'edit_config',
+    console: 'agent_execution',
+    reports: 'results',
+    exceptions: 'issues',
+  }
+  return aliases[section] ?? section
+}
+
 export default function App() {
   const [workspace, setWorkspace] = useState<DeliveryWorkspace>(() => composeWorkspace({
     stores: [],
@@ -133,7 +148,7 @@ export default function App() {
     exceptions: [],
     reports: [],
   }))
-  const [activeSection, setActiveSection] = useState<WorkbenchSection>('guide')
+  const [activeSection, setActiveSection] = useState<WorkbenchSection>('home')
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(initialTaskIdFromUrl)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -261,7 +276,7 @@ export default function App() {
       setSelectedTaskId(recoveredTaskId)
       syncSelectedTaskIdUrl(recoveredTaskId)
     } else {
-      setSelectedTaskId((current) => current ?? pickDefaultTaskId(deliveryWorkspace, nextWorkspace.tasks))
+      setSelectedTaskId((current) => pickTaskIdForOperatorPath(current, deliveryWorkspace, nextWorkspace.tasks))
     }
     if (failures.length) {
       const firstFailure = failures[0]
@@ -269,7 +284,7 @@ export default function App() {
         kind: 'degraded',
         title: taskMissing ? '当前任务需要重新选择' : '工作台服务连接异常',
         detail: taskMissing
-        ? '上次选择的任务已不存在或已归档。请在“当前任务”重新选择或创建单商品只保存任务；真实保存前仍会重新校验。'
+        ? '上次选择的任务已不存在或已归档。请在“商品任务”重新选择或创建单商品只保存任务；真实保存前仍会重新校验。'
           : humanWorkspaceFetchError(firstFailure?.message),
       })
     } else {
@@ -295,7 +310,7 @@ export default function App() {
       setConfigPreviewError(null)
       return preview
     } catch (error) {
-      setConfigPreviewError(error instanceof Error ? error.message : '配置检查接口不可用')
+      setConfigPreviewError(humanConfigPreviewError(error instanceof Error ? error.message : '配置检查接口不可用'))
       setConfigPreview(null)
       return null
     } finally {
@@ -324,11 +339,12 @@ export default function App() {
 
   useEffect(() => {
     if (!agentConsole?.active) return
+    const shouldRefreshFrame = normalizeWorkbenchSection(activeSection) === 'agent_execution' && Boolean(agentConsole?.browser_visible)
     const timer = window.setInterval(() => {
-      void refreshAgentConsole(Boolean(agentConsole?.browser_visible))
+      void refreshAgentConsole(shouldRefreshFrame)
     }, 3500)
     return () => window.clearInterval(timer)
-  }, [agentConsole?.active, agentConsole?.browser_visible, refreshAgentConsole])
+  }, [activeSection, agentConsole?.active, agentConsole?.browser_visible, refreshAgentConsole])
 
   const refreshRuntimeLogs = useCallback(async () => {
     const loaded = await Promise.all(runtimeLogSources.map(async (source) => {
@@ -418,14 +434,14 @@ export default function App() {
     await refreshRuntimeStatus()
     const refreshedL2Gate = refreshedWorkspace.regressionGates.find((gate) => gate.level === 'L2')
     const gatePassed = runnerSucceeded && refreshedL2Gate?.status === 'passed'
-    const gateDetail = refreshedL2Gate?.detail ? `；${refreshedL2Gate.detail}` : ''
     if (gatePassed) {
       setL2RunnerState({ status: 'passed', runId, exitCode, message: '真实只读检查通过，已刷新门禁', line, updatedAt: new Date().toISOString() })
       return
     }
     const message = runnerSucceeded ? '真实只读检查已运行，但门禁未刷新通过' : '真实只读检查失败，真实保存仍阻断'
-    setL2RunnerState({ status: 'failed', runId, exitCode, message, line: `${line}${gateDetail}`, updatedAt: new Date().toISOString() })
-    setOperationError(`${message}；请先查看页面里的门禁原因，再查看启动器日志或检查计划。`)
+    const userLine = '真实只读检查未通过：请确认已登录并能打开商品采集页、草稿箱页后重试。'
+    setL2RunnerState({ status: 'failed', runId, exitCode, message, line: userLine, updatedAt: new Date().toISOString() })
+    setOperationError(`${message}；请确认真实店小秘已登录，再重新运行真实只读检查。系统不会保存或发布。`)
   }, [refreshRuntimeStatus, refreshWorkspace])
 
   useEffect(() => {
@@ -546,17 +562,17 @@ export default function App() {
       const products = workspace.products.filter((item) => request.productIds.includes(item.id))
       if (!store) {
         setOperationError('请先连接真实店铺，再创建任务。')
-        setActiveSection('tasks')
+        setActiveSection('product_tasks')
         return
       }
       if (!products.length) {
         setOperationError('请至少选择一个真实商品。')
-        setActiveSection('tasks')
+        setActiveSection('product_tasks')
         return
       }
       if (request.mode === 'single_save' && products.length !== 1) {
         setOperationError(`单商品只保存一次只能选择 1 个商品；当前已选 ${products.length} 个。请取消多余商品后再创建。`)
-        setActiveSection('tasks')
+        setActiveSection('product_tasks')
         return
       }
       const firstProduct = products[0]
@@ -578,11 +594,12 @@ export default function App() {
       })
       setSelectedTaskId(task.id)
       syncSelectedTaskIdUrl(task.id)
-      setActiveSection('tasks')
+      setActiveSection('product_tasks')
       await refreshWorkspace()
       await refreshConfigPreview(task.id)
     } catch (error) {
-      setOperationError(error instanceof Error ? error.message : '创建真实任务失败')
+      const message = error instanceof Error ? error.message : '创建真实任务失败'
+      setOperationError(humanTaskCreateError(message))
     } finally {
       setBusy(false)
     }
@@ -631,10 +648,11 @@ export default function App() {
       })
       setSelectedTaskId(task.id)
       syncSelectedTaskIdUrl(task.id)
-      setActiveSection('tasks')
+      setActiveSection('product_tasks')
       await refreshWorkspace()
     } catch (error) {
-      setOperationError(error instanceof Error ? error.message : '准备演示数据失败')
+      const message = error instanceof Error ? error.message : '准备演示数据失败'
+      setOperationError(humanTaskCreateError(message))
     } finally {
       setBusy(false)
     }
@@ -659,19 +677,19 @@ export default function App() {
         const dxmLoginStatus = latestRuntimeStatus.dxmLogin?.status ?? ''
         if (!DXM_READY_SESSION_STATUSES.has(dxmLoginStatus)) {
           setOperationError(`请先完成真实 DXM 登录；当前登录状态：${dxmLoginStatus || '未知'}。`)
-          setActiveSection('guide')
+          setActiveSection('dxm_access')
           return
         }
         const latestConfigPreview = await refreshConfigPreview(selectedTask.id)
         if (!latestConfigPreview || !latestConfigPreview.ok) {
           setOperationError(`配置检查未通过：${latestConfigPreview?.missing.slice(0, 6).join('、') || '请补齐 DXM 编辑页配置'}`)
-          setActiveSection('config')
+          setActiveSection('edit_config')
           return
         }
         const approvedBy = l3ApprovedBy.trim()
         if (!approvedBy) {
           setOperationError('请填写批准人标识；将只启动单商品只保存任务，不会发布。')
-          setActiveSection('guide')
+          setActiveSection('product_tasks')
           return
         }
         const approval = await postJson<ManualApprovalResponse>(`/api/tasks/${selectedTask.id}/manual-approval`, {
@@ -687,7 +705,7 @@ export default function App() {
       } else {
         await postJson(`/api/tasks/${selectedTask.id}/start`, {})
       }
-      setActiveSection('console')
+      setActiveSection('agent_execution')
       await refreshWorkspace()
     } catch (error) {
       setOperationError(humanOperationError(error instanceof Error ? error.message : '启动保存核验任务失败'))
@@ -700,12 +718,12 @@ export default function App() {
     const username = dxmLoginDraft.username.trim()
     if (!username) {
       setOperationError('请先在页面内填写店小秘账号，再打开真实店小秘登录页。')
-      setActiveSection('guide')
+      setActiveSection('dxm_access')
       return
     }
     if (!dxmLoginDraft.password) {
       setOperationError('请先在页面内填写店小秘密码；密码只用于本次真实登录请求，不写入编辑页配置。')
-      setActiveSection('guide')
+      setActiveSection('dxm_access')
       return
     }
     setBusy(true)
@@ -736,7 +754,7 @@ export default function App() {
         setDxmLoginDraft((current) => ({ ...current, password: '' }))
       }
       const stage = String(loginStart.stage ?? '')
-      setActiveSection(stage === 'waiting_captcha' ? 'guide' : 'console')
+      setActiveSection(stage === 'waiting_captcha' ? 'dxm_access' : 'agent_execution')
       await refreshRuntimeStatus()
       await refreshRuntimeLogs()
       await refreshWorkspace()
@@ -804,10 +822,10 @@ export default function App() {
       const loginFailed = stage === 'login_failed' || stage.includes('failed')
       if (loginFailed) {
         setOperationError(message)
-        setActiveSection('guide')
+        setActiveSection('dxm_access')
       } else {
         setOperationNotice(message)
-        setActiveSection(stage === 'waiting_captcha' ? 'guide' : 'console')
+        setActiveSection(stage === 'waiting_captcha' ? 'dxm_access' : 'agent_execution')
       }
       await refreshRuntimeStatus()
       await refreshRuntimeLogs()
@@ -838,8 +856,9 @@ export default function App() {
         setAgentConsole(status)
         if (status.ok === false) {
           const message = status.error || status.reason || `真实浏览器进入${targetLabel}失败`
-          setAgentConsoleError(message)
-          setOperationError(message)
+          const humanMessage = humanDxmNavigationError(message, targetLabel)
+          setAgentConsoleError(humanMessage)
+          setOperationError(humanMessage)
           return
         }
         await waitForAgentConsoleNavigationSettle()
@@ -855,18 +874,19 @@ export default function App() {
         const navigationStage = String(navigationResult.stage ?? '')
         if (navigationStage.includes('failed')) {
           setOperationError(humanDxmNavigationNotice(navigationResult, `进入${targetLabel}失败`))
-          setActiveSection('console')
+          setActiveSection('agent_execution')
           return
         }
         setOperationNotice(`已请求店小秘登录流进入${targetLabel}`)
       }
-      setActiveSection('console')
+      setActiveSection('agent_execution')
       await refreshAgentConsole(true)
       await refreshRuntimeStatus()
       await refreshRuntimeLogs()
       await refreshWorkspace()
     } catch (error) {
-      setOperationError(error instanceof Error ? error.message : '进入店小秘业务页失败')
+      const message = error instanceof Error ? error.message : '进入店小秘业务页失败'
+      setOperationError(humanDxmNavigationError(message, targetLabel))
       setOperationNotice(null)
       await refreshAgentConsole(true)
       await refreshRuntimeStatus()
@@ -879,15 +899,15 @@ export default function App() {
   async function startAgentConsole() {
     if (!selectedTask) {
       setAgentConsoleError('请先选择一个保存核验任务')
-      setActiveSection('console')
+      setActiveSection('agent_execution')
       return
     }
     const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
     if (l2Gate?.status !== 'passed') {
-      const message = `真实只读检查未通过，Agent 执行浏览器不可启动：${l2Gate?.detail ?? '真实页面检查未通过'}`
+      const message = '真实只读检查未通过，暂不能启动执行浏览器。请先运行真实只读检查；系统不会保存或发布。'
       setAgentConsoleError(message)
       setOperationError(message)
-      setActiveSection('console')
+      setActiveSection('agent_execution')
       return
     }
     const step = buildAgentConsoleHudStep(workspace, selectedTask)
@@ -903,7 +923,7 @@ export default function App() {
       setAgentConsole(status)
       const hudStatus = await postJson<AgentConsoleSession>('/api/agent-console/hud', { step })
       setAgentConsole(hudStatus)
-      setActiveSection('console')
+      setActiveSection('agent_execution')
     } catch (error) {
       const message = error instanceof Error ? error.message : '打开 Agent Console 失败'
       const humanMessage = humanAgentConsoleError(message)
@@ -923,8 +943,9 @@ export default function App() {
       setAgentConsole(status)
     } catch (error) {
       const message = error instanceof Error ? error.message : '关闭 Agent Console 失败'
-      setAgentConsoleError(message)
-      setOperationError(message)
+      const humanMessage = humanAgentConsoleError(message)
+      setAgentConsoleError(humanMessage)
+      setOperationError(humanMessage)
       await refreshAgentConsole()
     } finally {
       setBusy(false)
@@ -939,8 +960,9 @@ export default function App() {
       setAgentConsole(status)
     } catch (error) {
       const message = error instanceof Error ? error.message : '抓取 Agent Console 截图失败'
-      setAgentConsoleError(message)
-      setOperationError(message)
+      const humanMessage = humanAgentConsoleError(message)
+      setAgentConsoleError(humanMessage)
+      setOperationError(humanMessage)
       await refreshAgentConsole()
     } finally {
       setBusy(false)
@@ -1052,43 +1074,36 @@ export default function App() {
   async function runL2ReadonlyProbe() {
     setRuntimeLogSource('launcher')
     setL2RunnerState({ status: 'running', runId: null, exitCode: null, message: '正在运行双目标真实只读检查', line: null, updatedAt: new Date().toISOString() })
-    setActiveSection('console')
+    setActiveSection('agent_execution')
     await runRuntimeControl('run_l2_readonly_probe')
   }
 
+  const currentSection = normalizeWorkbenchSection(activeSection)
+  const setWorkbenchSection = useCallback((section: WorkbenchSection) => {
+    setActiveSection(normalizeWorkbenchSection(section))
+  }, [])
+
   const content = (() => {
-    switch (activeSection) {
-      case 'config':
-        return <ConfigCenter workspace={workspace} selectedTask={selectedTask} configPreview={configPreview} configPreviewError={configPreviewError} configPreviewLoading={configPreviewLoading} onConfigSaved={async () => { await refreshWorkspace(); await refreshConfigPreview() }} onRefreshConfigPreview={async () => { await refreshConfigPreview(); await refreshWorkspace() }} onShowTasks={() => setActiveSection('tasks')} />
-      case 'guide':
+    switch (currentSection) {
+      case 'edit_config':
+        return <ConfigCenter workspace={workspace} selectedTask={selectedTask} configPreview={configPreview} configPreviewError={configPreviewError} configPreviewLoading={configPreviewLoading} onConfigSaved={async () => { await refreshWorkspace(); await refreshConfigPreview() }} onRefreshConfigPreview={async () => { await refreshConfigPreview(); await refreshWorkspace() }} onShowTasks={() => setActiveSection('product_tasks')} />
+      case 'dxm_access':
         return (
-          <GuideCenter
-            workspace={workspace}
-            selectedTask={selectedTask}
-            configPreview={configPreview}
+          <DxmAccessPage
             runtimeStatus={runtimeStatus}
             runtimeStatusError={runtimeStatusError}
             dxmLoginDraft={dxmLoginDraft}
             dxmCredentialState={dxmCredentialState}
-            l3ApprovedBy={l3ApprovedBy}
             busy={busy}
             onDxmLoginDraftChange={setDxmLoginDraft}
             onClearSavedDxmCredential={() => { void clearSavedDxmCredential() }}
-            onL3ApprovedByChange={setL3ApprovedBy}
-            onRunL2Probe={runL2ReadonlyProbe}
             onOpenDxmLogin={openDxmLogin}
             onContinueDxmLogin={continueDxmLogin}
             onNavigateDxmTarget={navigateDxmTarget}
-            onStartTask={startSelectedTask}
-            onShowConfig={() => setActiveSection('config')}
-            onShowTasks={() => setActiveSection('tasks')}
-            onShowConsole={() => setActiveSection('console')}
-            onShowEvidence={() => setActiveSection('evidence')}
-            onShowReports={() => setActiveSection('reports')}
-            onShowExceptions={() => setActiveSection('exceptions')}
+            onShowConsole={() => setActiveSection('agent_execution')}
           />
         )
-      case 'tasks':
+      case 'product_tasks':
         return (
           <TaskCenter
             workspace={workspace}
@@ -1111,13 +1126,13 @@ export default function App() {
             onCreateRealTask={createRealTask}
             onBootstrapDemo={bootstrapDemo}
             onStartTask={startSelectedTask}
-            onShowConfig={() => setActiveSection('config')}
-            onShowConsole={() => setActiveSection('console')}
+            onShowConfig={() => setActiveSection('edit_config')}
+            onShowConsole={() => setActiveSection('agent_execution')}
             onShowEvidence={() => setActiveSection('evidence')}
-            onShowReports={() => setActiveSection('reports')}
+            onShowReports={() => setActiveSection('results')}
           />
         )
-      case 'console':
+      case 'agent_execution':
         return (
           <ExecutionConsole
             workspace={workspace}
@@ -1155,28 +1170,42 @@ export default function App() {
             onReleaseAgentConsoleTakeover={releaseAgentConsoleTakeover}
             onControlAgentConsoleBrowser={controlAgentConsoleBrowser}
             onRuntimeControl={runRuntimeControl}
-            onShowTasks={() => setActiveSection('tasks')}
-            onShowConfig={() => setActiveSection('config')}
+            onShowTasks={() => setActiveSection('product_tasks')}
+            onShowConfig={() => setActiveSection('edit_config')}
             onShowEvidence={() => setActiveSection('evidence')}
-            onShowReports={() => setActiveSection('reports')}
+            onShowReports={() => setActiveSection('results')}
           />
         )
       case 'evidence':
-        return <EvidenceTimeline workspace={workspace} selectedTask={selectedTask} onShowTasks={() => setActiveSection('tasks')} onShowConsole={() => setActiveSection('console')} />
-      case 'exceptions':
+        return <EvidenceTimeline workspace={workspace} selectedTask={selectedTask} onShowTasks={() => setActiveSection('product_tasks')} onShowConsole={() => setActiveSection('agent_execution')} />
+      case 'issues':
         return <ExceptionQueue workspace={workspace} selectedTask={selectedTask} />
-      case 'reports':
-        return <ReportCenter workspace={workspace} selectedTask={selectedTask} finalCheck={finalCheck} onShowEvidence={() => setActiveSection('evidence')} onShowConsole={() => setActiveSection('console')} onShowExceptions={() => setActiveSection('exceptions')} />
-      case 'dashboard':
+      case 'results':
+        return <ReportCenter workspace={workspace} selectedTask={selectedTask} finalCheck={finalCheck} onShowEvidence={() => setActiveSection('evidence')} onShowConsole={() => setActiveSection('agent_execution')} onShowExceptions={() => setActiveSection('issues')} />
+      case 'settings':
+        return <SystemSettings workspace={workspace} selectedTask={selectedTask} finalCheck={finalCheck} runtimeStatus={runtimeStatus} desktopRuntime={desktopRuntime} />
+      case 'home':
       default:
-        return <Dashboard workspace={workspace} selectedTask={selectedTask} />
+        return (
+          <Dashboard
+            workspace={workspace}
+            selectedTask={selectedTask}
+            configPreview={configPreview}
+            runtimeStatus={runtimeStatus}
+            onShowDxmAccess={() => setActiveSection('dxm_access')}
+            onShowTasks={() => setActiveSection('product_tasks')}
+            onShowConfig={() => setActiveSection('edit_config')}
+            onShowConsole={() => setActiveSection('agent_execution')}
+            onShowReports={() => setActiveSection('results')}
+          />
+        )
     }
   })()
 
   return (
     <AppShell
-      activeSection={activeSection}
-      onSectionChange={setActiveSection}
+      activeSection={currentSection}
+      onSectionChange={setWorkbenchSection}
       sidebarCollapsed={sidebarCollapsed}
       onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
       sourceLabel={sourceLabels[workspace.source]}
@@ -1192,9 +1221,10 @@ export default function App() {
         desktopRuntime={desktopRuntime}
         busy={busy}
         onRefresh={() => { void refreshWorkspace(); void refreshRuntimeStatus(); void refreshRuntimeLogs(); void refreshConfigPreview() }}
-        onShowConfig={() => setActiveSection('config')}
-        onShowTasks={() => setActiveSection('tasks')}
-        onShowConsole={() => setActiveSection('console')}
+        onShowDxmAccess={() => setActiveSection('dxm_access')}
+        onShowConfig={() => setActiveSection('edit_config')}
+        onShowTasks={() => setActiveSection('product_tasks')}
+        onShowConsole={() => setActiveSection('agent_execution')}
       />
       <div className="operation-toast-stack" aria-live="polite">
         {workspaceNotice && (
@@ -1245,7 +1275,7 @@ function runtimeControlSuccessMessage(action: RuntimeControlAction) {
     mark_real_task_manual_review: '已将真实写入任务转入人工复核。不会取消真实浏览器进程，请查看任务日志确认现场。',
     restart_backend: '已提交后端重启请求，请查看启动器日志。',
     restart_frontend: '已提交前端重启请求，请查看启动器日志。',
-    run_l2_readonly_probe: '已启动真实只读检查，请在真实浏览器控制台查看实时日志。',
+    run_l2_readonly_probe: '已启动真实只读检查，请在“真实浏览器”查看实时日志。',
   } as Record<RuntimeControlAction, string>)[action]
 }
 
@@ -1264,6 +1294,22 @@ function humanOperationError(message: string) {
   return message
 }
 
+function humanConfigPreviewError(message: string) {
+  const runtimeStatusMessage = humanRuntimeStatusError(message)
+  if (runtimeStatusMessage !== message) return `配置检查失败：${runtimeStatusMessage}`
+  const operatorMessage = humanOperatorMessage(message)
+  if (operatorMessage !== message) return `配置检查失败：${operatorMessage}`
+  const normalized = message.toLowerCase()
+  if (
+    normalized.includes('failed to fetch')
+    || normalized.includes('networkerror')
+    || normalized.includes('load failed')
+  ) {
+    return '配置检查失败：本机工作台服务暂时不可用，请重新打开免安装版或确认后端服务正在运行。'
+  }
+  return message
+}
+
 function humanWorkspaceFetchError(message?: string) {
   const normalized = (message ?? '').toLowerCase()
   if (
@@ -1275,7 +1321,7 @@ function humanWorkspaceFetchError(message?: string) {
   ) {
     return '暂时无法读取完整任务数据。请重新打开 DXM Agent Console 免安装版；开发模式请确认后端服务正在运行。真实保存不会启动或发布。'
   }
-  return '暂时无法读取完整任务数据。请查看真实浏览器控制台日志；系统不会用本地演示结果替代真实保存。'
+  return '暂时无法读取完整任务数据。请查看“真实浏览器”的实时日志；系统不会用本地演示结果替代真实保存。'
 }
 
 function humanRuntimeStatusError(message: string) {
@@ -1291,9 +1337,44 @@ function humanRuntimeStatusError(message: string) {
   return message
 }
 
+function humanTaskCreateError(message: string) {
+  const normalized = message.toLowerCase()
+  if (
+    normalized.includes('internal server error')
+    || normalized.includes('failed to fetch')
+    || normalized.includes('networkerror')
+    || normalized.includes('load failed')
+    || normalized.includes('traceback')
+  ) {
+    return '任务创建失败：请确认本机工作台服务正常、店铺和商品数据完整后重试；真实保存不会启动。'
+  }
+  if (normalized.includes('publish') || message.includes('发布')) {
+    return '任务创建失败：当前只允许单商品只保存，不开放发布、批量或无人值守。'
+  }
+  return message
+}
+
+function humanDxmNavigationError(message: string, targetLabel: string) {
+  const browserRuntimeMessage = humanBrowserRuntimeError(message)
+  if (browserRuntimeMessage) {
+    return `真实浏览器进入${targetLabel}失败：${browserRuntimeMessage}系统不会保存或发布。`
+  }
+  const normalized = message.toLowerCase()
+  if (
+    normalized.includes('failed to fetch')
+    || normalized.includes('networkerror')
+    || normalized.includes('load failed')
+  ) {
+    return `真实浏览器进入${targetLabel}失败：本机后端暂时不可用，请重新打开 DXM Agent Console 免安装版后重试。系统不会保存或发布。`
+  }
+  return `真实浏览器进入${targetLabel}失败：请确认店小秘窗口仍打开且已登录；必要时关闭旧控制台后重试。系统不会保存或发布。`
+}
+
 function humanDxmLoginError(message: string) {
   const normalized = message.toLowerCase()
   const commonTail = '账号密码不会用于保存或发布；可在右侧实时日志查看后端和启动器细节。'
+  const browserRuntimeMessage = humanBrowserRuntimeError(message)
+  if (browserRuntimeMessage) return `${browserRuntimeMessage}${commonTail}`
   if (
     message.includes('Internal Server Error')
     || normalized.includes('post /api/dxm/login/start failed')
@@ -1331,6 +1412,8 @@ function humanDxmLoginError(message: string) {
 function humanAgentConsoleError(message: string) {
   const normalized = message.toLowerCase()
   const commonTail = '执行浏览器只会在真实只读检查和人工确认通过后接入真实店小秘页面；不会自动发布。'
+  const browserRuntimeMessage = humanBrowserRuntimeError(message)
+  if (browserRuntimeMessage) return `${browserRuntimeMessage}${commonTail}`
   if (
     message.includes('Internal Server Error')
     || normalized.includes('post /api/agent-console/start failed')
@@ -1342,7 +1425,7 @@ function humanAgentConsoleError(message: string) {
     || message.includes('Target page, context or browser has been closed')
     || normalized.includes('context or browser has been closed')
   ) {
-    return `真实执行浏览器已关闭或启动后立即退出。请保留新打开的真实浏览器窗口，或关闭旧进程后重新打开真实浏览器控制台。${commonTail}`
+    return `真实执行浏览器已关闭或启动后立即退出。请保留新打开的真实浏览器窗口，或关闭旧进程后重新打开“真实浏览器”。${commonTail}`
   }
   if (
     normalized.includes('user data directory is already in use')
@@ -1356,9 +1439,34 @@ function humanAgentConsoleError(message: string) {
     || normalized.includes('playwright')
     || normalized.includes('chromium')
   ) {
-    return `真实执行浏览器依赖缺失或不可启动。请重新打开完整免安装目录版，并查看真实浏览器控制台实时日志。${commonTail}`
+    return `真实执行浏览器依赖缺失或不可启动。请重新打开完整免安装目录版，并查看“真实浏览器”的实时日志。${commonTail}`
   }
   return message
+}
+
+function humanBrowserRuntimeError(message: string) {
+  const normalized = message.toLowerCase()
+  if (
+    message.includes('Cannot switch to a different thread')
+    || message.includes('Playwright Sync API')
+    || normalized.includes('greenlet')
+  ) {
+    return '浏览器会话冲突：请保留当前真实店小秘窗口，关闭旧的 DXM Agent Console 或旧浏览器进程后重新检测。'
+  }
+  if (
+    normalized.includes('browser has been closed')
+    || message.includes('Target page, context or browser has been closed')
+    || normalized.includes('context or browser has been closed')
+  ) {
+    return '真实浏览器窗口已关闭或被旧进程接管：请重新打开真实登录页，完成登录后再检测。'
+  }
+  if (
+    normalized.includes('internal server error')
+    || normalized.includes('failed (500)')
+  ) {
+    return '本机后端执行失败：请关闭旧进程后重新打开 DXM Agent Console 免安装版，再继续当前流程。'
+  }
+  return ''
 }
 
 function searchedPathHint(message: string) {
@@ -1407,7 +1515,8 @@ function humanDxmNavigationNotice(result: Record<string, unknown>, fallback: str
   const rawError = String(result.raw_error ?? '').trim()
   const summary = message || '真实店小秘业务页进入失败。'
   const next = nextAction || '请确认真实浏览器窗口仍然打开且已登录；必要时重新打开真实登录页。'
-  return `${summary} 下一步：${next}${rawError ? ` 诊断：${rawError}` : ''}`.trim()
+  const rawRecovery = rawError ? humanBrowserRuntimeError(rawError) : ''
+  return `${summary} 下一步：${next}${rawRecovery ? ` 处理：${rawRecovery}` : ''}`.trim()
 }
 
 function pickDefaultTaskId(deliveryWorkspace: DeliveryWorkspaceResponse | null, tasks: Task[]): number | null {
@@ -1415,7 +1524,7 @@ function pickDefaultTaskId(deliveryWorkspace: DeliveryWorkspaceResponse | null, 
   const deliveryTask = typeof deliveryTaskId === 'number'
     ? tasks.find((task) => task.id === deliveryTaskId)
     : null
-  if (deliveryTask && isDefaultSelectableSingleSaveTask(deliveryTask) && deliveryTask.status !== 'completed') {
+  if (deliveryTask && isDefaultSelectableSingleSaveTask(deliveryTask)) {
     return deliveryTask.id
   }
   return tasks.find(isActionableSingleSaveTask)?.id
@@ -1423,6 +1532,12 @@ function pickDefaultTaskId(deliveryWorkspace: DeliveryWorkspaceResponse | null, 
     ?? tasks.find((task) => task.mode === 'single_save')?.id
     ?? tasks.find(isSafeDefaultFallbackTask)?.id
     ?? null
+}
+
+function pickTaskIdForOperatorPath(currentTaskId: number | null, deliveryWorkspace: DeliveryWorkspaceResponse | null, tasks: Task[]): number | null {
+  const currentTask = currentTaskId ? tasks.find((task) => task.id === currentTaskId) : null
+  if (currentTask && isActionableSingleSaveTask(currentTask)) return currentTask.id
+  return pickDefaultTaskId(deliveryWorkspace, tasks)
 }
 
 function isActionableSingleSaveTask(task: Task) {

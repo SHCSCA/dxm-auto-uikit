@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from pathlib import Path
 import sys
 import threading
 import time
@@ -248,6 +249,99 @@ def test_agent_console_updates_task_step_without_launching_browser(tmp_path, mon
     assert status["step_history"][-1]["screenshot_path"] == "data/screenshots/save.txt"
 
 
+def test_agent_console_hud_extends_old_payload_with_chinese_defaults(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+
+    status = service.start(
+        task_id=7,
+        launch_browser=False,
+        step={"state": "SAVE_ONLY", "action": "等待保存证据", "next_step": "确认未发布"},
+    )
+
+    hud = status["hud"]
+    assert hud["title"] == "Agent Console 待命"
+    assert hud["state"] == "SAVE_ONLY"
+    assert hud["phase"] == "业务进度"
+    assert hud["severity"] == "info"
+    assert hud["human_title"] == "Agent Console 待命"
+    assert hud["human_action"] == "等待保存证据"
+    assert hud["human_next"] == "确认未发布"
+    assert hud["recent_actions"] == []
+    assert hud["requires_user_action"] is False
+
+
+def test_agent_console_hud_script_renders_black_top_left_business_progress():
+    script = agent_console_module.HUD_INIT_SCRIPT
+
+    assert "'left:14px'" in script
+    assert "'top:14px'" in script
+    assert "'background:rgba(13,17,23,.94)'" in script
+    assert "'right:18px'" not in script
+    assert "human_title" in script
+    assert "human_action" in script
+    assert "human_next" in script
+    assert "recent_actions" in script
+    assert "progress_index" in script
+    assert "progress_total" in script
+    assert "DXM Agent" in script
+    assert "自动执行中" in script
+    assert "等待人工处理" in script
+    assert "只保存不发布" in script
+
+
+def test_agent_console_hud_persists_latest_business_progress_across_navigation():
+    script = agent_console_module.HUD_INIT_SCRIPT
+    source = (Path(__file__).resolve().parents[1] / "src" / "services" / "agent_console.py").read_text(encoding="utf-8")
+
+    assert "__dxmAgentHudPersistedState" in script
+    assert "sessionStorage.getItem('__dxmAgentHudPersistedState')" in script
+    assert "sessionStorage.setItem('__dxmAgentHudPersistedState'" in source
+    assert "window.__dxmAgentHudState = persisted || window.__dxmAgentHudState || {}" in script
+
+
+def test_agent_console_records_recent_actions_on_hud(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+
+    for index in range(5):
+        service.record_action_event(
+            task_id=7,
+            action=f"fill_field_{index}",
+            label=f"填写字段 {index}",
+            state="FILL_BASE_INFO",
+            status="ok",
+        )
+
+    hud = service.status()["hud"]
+    assert hud["recent_actions"] == ["填写字段 2", "填写字段 3", "填写字段 4"]
+
+
+def test_agent_console_hud_maps_required_user_actions_to_business_copy(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+
+    captcha = service.update_hud({"state": "WAITING_CAPTCHA"})["hud"]
+    assert captcha["requires_user_action"] is True
+    assert captcha["severity"] == "warning"
+    assert captcha["human_title"] == "需要你处理验证码"
+    assert captcha["human_action"] == "请在真实店小秘浏览器里完成验证码或二次确认"
+
+    approval = service.update_hud({"state": "MANUAL_APPROVAL_REQUIRED"})["hud"]
+    assert approval["requires_user_action"] is True
+    assert approval["severity"] == "warning"
+    assert approval["human_title"] == "需要你人工确认只保存"
+    assert approval["human_next"] == "确认后才会启动真实浏览器保存"
+
+    takeover = service.update_hud({"state": "MANUAL_TAKEOVER"})["hud"]
+    assert takeover["requires_user_action"] is True
+    assert takeover["severity"] == "warning"
+    assert takeover["human_title"] == "需要你接管真实浏览器"
+    assert takeover["human_next"] == "处理完成后在控制台交还 Agent"
+
+
 def test_agent_console_records_bounded_action_events(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
     service = AgentConsoleService()
@@ -335,12 +429,16 @@ def test_agent_console_manual_takeover_brings_real_browser_to_front(tmp_path, mo
     assert takeover["manual_takeover_started_at"] is not None
     assert fake_page.brought_to_front is True
     assert takeover["action_events"][-1]["type"] == "manual_takeover"
+    assert takeover["hud"]["state"] == "MANUAL_TAKEOVER"
+    assert takeover["hud"]["requires_user_action"] is True
+    assert takeover["hud"]["human_title"] == "需要你接管真实浏览器"
 
     released = service.release_manual_takeover()
 
     assert released["manual_takeover"] is False
     assert released["manual_takeover_started_at"] is None
     assert released["action_events"][-1]["action"] == "release_agent"
+    assert released["hud"]["requires_user_action"] is False
 
 
 def test_agent_console_rejects_browser_control_without_live_page(tmp_path, monkeypatch):

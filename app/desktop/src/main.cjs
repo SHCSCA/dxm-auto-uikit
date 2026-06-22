@@ -252,8 +252,31 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;')
 }
 
+function rawStartupErrorDetail(error) {
+  return error instanceof Error ? error.stack || error.message : String(error)
+}
+
+function userStartupErrorMessage(error) {
+  const raw = rawStartupErrorDetail(error)
+  const normalized = raw.toLowerCase()
+  if (normalized.includes('packaged backend python is missing') || normalized.includes('resources')) {
+    return '免安装目录不完整，后端运行资源没有找到。请重新解压或重新复制完整的 DXM Agent Console 免安装版目录后再启动。'
+  }
+  if (normalized.includes('no free loopback port') || normalized.includes('eaddrinuse')) {
+    return '本机服务端口被占用。请关闭旧的 DXM Agent Console 窗口或后台进程，然后重新打开。'
+  }
+  if (normalized.includes('frontend') || normalized.includes('index.html')) {
+    return '桌面页面资源没有加载成功。请确认免安装目录没有缺文件，并重新打开程序。'
+  }
+  if (normalized.includes('backend') || normalized.includes('uvicorn') || normalized.includes('python')) {
+    return '后端服务启动失败。请关闭旧窗口后重试；如果仍失败，把日志文件发给维护人员排查。'
+  }
+  return '工作台启动失败。系统没有执行保存或发布动作；请关闭旧窗口后重新打开，如果仍失败请查看日志文件。'
+}
+
 function createStartupErrorWindow(error) {
-  const message = error instanceof Error ? error.stack || error.message : String(error)
+  appendDesktopLog(`Startup failure detail: ${rawStartupErrorDetail(error)}`)
+  const message = userStartupErrorMessage(error)
   const logPath = runtimeInfo.desktopLogPath || 'desktop-main.log'
   mainWindow = new BrowserWindow({
     width: 860,
@@ -277,23 +300,34 @@ function createStartupErrorWindow(error) {
       main { max-width: 760px; margin: 0 auto; display: grid; gap: 16px; }
       h1 { margin: 0; font-size: 24px; }
       p { margin: 0; line-height: 1.7; color: #4b5563; }
+      ol { margin: 0; padding-left: 20px; color: #374151; line-height: 1.8; }
       code, pre { border: 1px solid #d1d5db; border-radius: 8px; background: #fff; }
       code { display: block; padding: 10px 12px; overflow-wrap: anywhere; }
-      pre { max-height: 260px; overflow: auto; padding: 12px; white-space: pre-wrap; }
+      .notice { border: 1px solid #fecaca; background: #fff1f2; color: #991b1b; border-radius: 10px; padding: 14px; }
+      .muted { color: #64748b; font-size: 13px; }
     </style>
   </head>
   <body>
     <main>
       <h1>DXM Agent Console 启动失败</h1>
-      <p>桌面壳已启动，但后端服务或前端资源没有成功加载。请把下面日志路径和错误内容用于排查。</p>
+      <p>桌面壳已启动，但后端服务或前端资源没有成功加载。</p>
+      <section class="notice">
+        <strong>发生了什么</strong>
+        <p>${escapeHtml(message)}</p>
+      </section>
+      <section>
+        <strong>处理步骤</strong>
+        <ol>
+          <li>先关闭当前窗口。</li>
+          <li>确认没有旧的 DXM Agent Console 或旧浏览器后台进程。</li>
+          <li>重新打开完整的免安装版 exe；如果仍失败，把下面日志文件发给维护人员。</li>
+        </ol>
+      </section>
       <section>
         <strong>日志文件</strong>
         <code>${escapeHtml(logPath)}</code>
       </section>
-      <section>
-        <strong>错误详情</strong>
-        <pre>${escapeHtml(message)}</pre>
-      </section>
+      <p class="muted">原始错误已写入日志文件，页面不直接显示技术堆栈，避免普通用户被无关细节干扰。</p>
     </main>
   </body>
 </html>`

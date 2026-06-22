@@ -9,6 +9,9 @@ from src import db
 from src.execution.v1_runner import V1TaskRunner
 from src.main import app
 from src.repository import Repository
+from src.services.config_defaults import ConfigDefaultsResolver
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class DummyRunner:
@@ -21,10 +24,17 @@ class DummyRunner:
 
 class DummyDxmLoginFlow:
     def __init__(self):
-        self.draft_box_actions: list[tuple[str, str | None, str | None, str | None]] = []
+        self.draft_box_actions: list[tuple[str, str | None, str | None, str | None, list[str] | None]] = []
 
-    def perform_draft_box_action(self, action, note_text=None, product_query=None, store_name=None):
-        self.draft_box_actions.append((action, note_text, product_query, store_name))
+    def perform_draft_box_action(
+        self,
+        action,
+        note_text=None,
+        product_query=None,
+        store_name=None,
+        target_source_urls=None,
+    ):
+        self.draft_box_actions.append((action, note_text, product_query, store_name, target_source_urls))
         return {"stage": "draft_box_action", "action": action}
 
 
@@ -202,6 +212,14 @@ def test_create_single_save_rejects_multiple_products(tmp_path, monkeypatch):
 
     assert response.status_code == 400
     assert "single_save requires exactly one product" in response.json()["detail"]
+
+
+def test_main_runner_reuses_login_flow_executor_for_thread_bound_playwright():
+    main_source = (REPO_ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    runner_section = main_source[main_source.index("runner = V1TaskRunner("):main_source.index("REAL_DXM_MUTATION_MODES")]
+
+    assert "login_flow_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='dxm-login-flow')" in main_source
+    assert "workflow_executor=login_flow_executor" in runner_section
 
 
 def test_create_task_api_rejects_unreleased_real_modes(tmp_path, monkeypatch):
@@ -654,6 +672,20 @@ def test_agent_console_start_requires_passed_l2_gate(tmp_path, monkeypatch):
     assert "Agent console browser start requires passed L2" in response.json()["detail"]
 
 
+def test_agent_console_execution_browser_rejects_non_draft_real_task(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_task(repo, mode="single_save")
+    repo.update_task_status(task["id"], "failed")
+
+    response = client.post("/api/agent-console/start", json={"task_id": task["id"], "launch_browser": True})
+
+    assert response.status_code == 409
+    assert "Task cannot start execution browser from status: failed" in response.json()["detail"]
+
+
 def test_agent_console_execution_browser_rejects_unreleased_and_non_real_modes(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
@@ -839,6 +871,36 @@ def test_runtime_status_reports_services_agent_and_dependencies(tmp_path, monkey
     assert payload["agentConsole"]["status"] in {"idle", "running"}
     assert "dxmLogin" in payload
     assert payload["dependencies"]["python"]["status"] == "ok"
+
+
+def test_runtime_status_treats_electron_file_frontend_as_desktop_page(tmp_path, monkeypatch):
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+
+    response = client.get("/api/runtime/status?frontend_url=file%3A%2F%2F")
+
+    assert response.status_code == 200
+    frontend = response.json()["frontend"]
+    assert frontend["status"] == "ok"
+    assert frontend["url"] == "file://"
+    assert frontend["port"] is None
+    assert "桌面内置页面" in frontend["detail"]
+
+
+def test_runtime_status_defaults_to_desktop_frontend_in_desktop_mode(tmp_path, monkeypatch):
+    import src.main as main
+
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(main, "RUNTIME_DESKTOP_MODE", True)
+    monkeypatch.delenv("DXM_FRONTEND_URL", raising=False)
+
+    response = client.get("/api/runtime/status")
+
+    assert response.status_code == 200
+    frontend = response.json()["frontend"]
+    assert frontend["status"] == "ok"
+    assert frontend["url"] == "file://"
+    assert frontend["port"] is None
+    assert "桌面内置页面" in frontend["detail"]
 
 
 def test_runtime_status_uses_login_page_url_for_current_url(tmp_path, monkeypatch):
@@ -1477,6 +1539,96 @@ def test_config_preview_does_not_mark_other_store_template_present(tmp_path, mon
     assert "logistics" in preview["missing"]
     assert logistics_fields["logistics.weight"]["value"] == ""
     assert logistics_fields["logistics.weight"]["source"] == "未设置"
+
+
+def test_config_preview_and_runner_prefer_specific_template_over_global_template(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo, store_name="Dang Kang")
+    product = repo.list_products()[0]
+    repo.create_template(
+        {
+            "template_type": "category",
+            "template_name": "全局类目模板",
+            "binding_scope": "全部店铺",
+            "payload": {
+                "category": {
+                    "category_keyword": "global-keyword",
+                    "template_category_id": "global-category",
+                }
+            },
+            "is_enabled": True,
+        }
+    )
+    repo.create_template(
+        {
+            "template_type": "category",
+            "template_name": "Dang Kang 立牌类谷子模板",
+            "binding_scope": "Dang Kang / 立牌类谷子",
+            "payload": {
+                "binding": {"store_name": "Dang Kang", "category_name": "立牌类谷子", "platform": "AliExpress"},
+                "category": {
+                    "category_keyword": "specific-keyword",
+                    "template_category_id": "specific-category",
+                },
+            },
+            "is_enabled": True,
+        }
+    )
+
+    preview = client.get(f"/api/config/preview?task_id={task['id']}").json()
+    runner_defaults = V1TaskRunner(repo, object())._execution_defaults(repo.get_task_private(task["id"]), product)
+    category_group = {group["section"]: group for group in preview["fieldGroups"]}["category"]
+    fields = {field["path"]: field for field in category_group["fields"]}
+
+    assert fields["category.category_keyword"]["value"] == "specific-keyword"
+    assert fields["category.category_keyword"]["source"] == "模板：Dang Kang 立牌类谷子模板"
+    assert preview["resolvedDefaults"]["category"]["template_category_id"] == "specific-category"
+    assert runner_defaults["category"]["template_category_id"] == "specific-category"
+    assert [item["template_name"] for item in preview["templateTrace"] if item["template_type"] == "category"] == [
+        "全局类目模板",
+        "Dang Kang 立牌类谷子模板",
+    ]
+
+
+def test_config_defaults_resolver_prefers_specific_template_even_when_input_order_is_unstable():
+    resolver = ConfigDefaultsResolver()
+    task = {
+        "id": 1,
+        "name": "single save task",
+        "platform": "AliExpress",
+        "payload": {"store_name": "Dang Kang", "category_name": "立牌类谷子"},
+    }
+    product = {"id": 1, "title": "ACG Stand", "category_name": "立牌类谷子", "payload": {}}
+    templates = [
+        {
+            "id": 1,
+            "template_type": "category",
+            "template_name": "全局类目模板",
+            "binding_scope": "全部店铺",
+            "payload": {"category": {"category_keyword": "global-keyword", "template_category_id": "global-category"}},
+            "is_enabled": True,
+        },
+        {
+            "id": 2,
+            "template_type": "category",
+            "template_name": "Dang Kang 立牌类谷子模板",
+            "binding_scope": "Dang Kang / 立牌类谷子",
+            "payload": {
+                "binding": {"store_name": "Dang Kang", "category_name": "立牌类谷子", "platform": "AliExpress"},
+                "category": {"category_keyword": "specific-keyword", "template_category_id": "specific-category"},
+            },
+            "is_enabled": True,
+        },
+    ]
+
+    result = resolver.resolve(templates, task, product)
+
+    assert result.defaults["category"]["category_keyword"] == "specific-keyword"
+    assert result.sources["category"]["category_keyword"] == "模板：Dang Kang 立牌类谷子模板"
+    assert [item["template_name"] for item in result.template_trace] == [
+        "全局类目模板",
+        "Dang Kang 立牌类谷子模板",
+    ]
 
 
 def test_config_preview_covers_dxm_edit_page_sections_and_reference_templates(tmp_path, monkeypatch):

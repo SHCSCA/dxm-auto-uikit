@@ -37,7 +37,8 @@ class ConfigDefaultsResolver:
         defaults: dict[str, Any] = {}
         sources: dict[str, Any] = {}
         template_trace: list[dict[str, Any]] = []
-        for template in reversed(templates):
+        applicable_templates: list[tuple[int, int, str, Mapping[str, Any]]] = []
+        for index, template in enumerate(templates):
             if not template.get("is_enabled", True):
                 continue
             if not self.template_applies_to(template, task, product):
@@ -45,6 +46,13 @@ class ConfigDefaultsResolver:
             template_type = self.normalize_template_type(template.get("template_type"))
             if template_type not in DEFAULT_TEMPLATE_TYPES:
                 continue
+            applicable_templates.append((
+                self.template_binding_specificity(template, task, product),
+                self.template_sort_id(template, index),
+                template_type,
+                template,
+            ))
+        for _specificity, _sort_id, template_type, template in sorted(applicable_templates, key=lambda item: (item[0], item[1])):
             payload = template.get("payload") or {}
             if isinstance(payload, Mapping):
                 label = f"模板：{template.get('template_name') or template_type}"
@@ -90,21 +98,66 @@ class ConfigDefaultsResolver:
         if not isinstance(binding, Mapping):
             return True
 
+        context = self.template_binding_context(task, product)
+        return (
+            self.matches_binding(binding, ("store_name", "store", "stores", "store_names"), context["store_name"])
+            and self.matches_binding(binding, ("category_name", "category", "categories", "category_names"), context["category_name"])
+            and self.matches_binding(binding, ("platform", "platforms"), context["platform"])
+        )
+
+    def template_binding_context(
+        self,
+        task: Mapping[str, Any],
+        product: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
         task_payload = task.get("payload") or {}
         product_payload = (product or {}).get("payload") or {}
-        actual_store = task_payload.get("store_name") or "Dang Kang"
-        actual_category = (
-            (product or {}).get("category_name")
-            or product_payload.get("category_name")
-            or task_payload.get("category_name")
-            or task_payload.get("category")
-        )
-        actual_platform = task_payload.get("platform") or task.get("platform") or "AliExpress"
+        return {
+            "store_name": task_payload.get("store_name") or "Dang Kang",
+            "category_name": (
+                (product or {}).get("category_name")
+                or product_payload.get("category_name")
+                or task_payload.get("category_name")
+                or task_payload.get("category")
+            ),
+            "platform": task_payload.get("platform") or task.get("platform") or "AliExpress",
+        }
+
+    def template_binding_specificity(
+        self,
+        template: Mapping[str, Any],
+        task: Mapping[str, Any],
+        product: Mapping[str, Any] | None,
+    ) -> int:
+        payload = template.get("payload") or {}
+        if not isinstance(payload, Mapping):
+            return 0
+        binding = payload.get("binding") or payload.get("applies_to") or payload.get("match")
+        if not isinstance(binding, Mapping):
+            return 0
+        context = self.template_binding_context(task, product)
         return (
-            self.matches_binding(binding, ("store_name", "store", "stores", "store_names"), actual_store)
-            and self.matches_binding(binding, ("category_name", "category", "categories", "category_names"), actual_category)
-            and self.matches_binding(binding, ("platform", "platforms"), actual_platform)
+            self.binding_specificity_value(binding, ("store_name", "store", "stores", "store_names"), context["store_name"])
+            + self.binding_specificity_value(binding, ("category_name", "category", "categories", "category_names"), context["category_name"])
+            + self.binding_specificity_value(binding, ("platform", "platforms"), context["platform"])
         )
+
+    def binding_specificity_value(self, binding: Mapping[str, Any], keys: tuple[str, ...], actual: Any) -> int:
+        expected = next((binding.get(key) for key in keys if key in binding), None)
+        if expected is None or expected == "":
+            return 0
+        actual_text = str(actual or "").strip().lower()
+        values = expected if isinstance(expected, (list, tuple, set)) else [expected]
+        normalized = [str(value or "").strip().lower() for value in values]
+        if "*" in normalized or "all" in normalized:
+            return 0
+        return 1 if actual_text in normalized else 0
+
+    def template_sort_id(self, template: Mapping[str, Any], index: int) -> int:
+        try:
+            return int(template.get("id"))
+        except (TypeError, ValueError):
+            return index
 
     def matches_binding(self, binding: Mapping[str, Any], keys: tuple[str, ...], actual: Any) -> bool:
         expected = next((binding.get(key) for key in keys if key in binding), None)

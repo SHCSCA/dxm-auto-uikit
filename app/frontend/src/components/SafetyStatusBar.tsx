@@ -15,12 +15,13 @@ type SafetyStatusBarProps = {
   desktopRuntime?: DesktopRuntimeInfo | null
   busy: boolean
   onRefresh: () => void
+  onShowDxmAccess: () => void
   onShowConfig: () => void
   onShowTasks: () => void
   onShowConsole: () => void
 }
 
-export function SafetyStatusBar({ workspace, selectedTask, configPreview, configPreviewError, configPreviewLoading, runtimeStatus, runtimeStatusError, desktopRuntime, busy, onRefresh, onShowConfig, onShowTasks, onShowConsole }: SafetyStatusBarProps) {
+export function SafetyStatusBar({ workspace, selectedTask, configPreview, configPreviewError, configPreviewLoading, runtimeStatus, runtimeStatusError, desktopRuntime, busy, onRefresh, onShowDxmAccess, onShowConfig, onShowTasks, onShowConsole }: SafetyStatusBarProps) {
   const activeTaskLabel = selectedTask ? `#${selectedTask.id}` : '未选择任务'
   const activeTaskStatusLabel = selectedTask ? humanTaskStatus(selectedTask.status) : ''
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
@@ -37,6 +38,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
   const l2BlocksRealSave = l2Gate?.status !== 'passed'
   const l3BlocksRealSave = l3Gate?.status === 'blocked'
   const l3NeedsApproval = l3Gate?.status !== 'passed'
+  const taskBlocksRealSave = !selectedTask && workspace.tasks.length > 0
   const realWriteExpectedBlocked = l2BlocksRealSave || l3NeedsApproval
   const blockerGaps = workspace.acceptanceGaps.filter((gap) => gap.severity === 'blocker')
   const noTaskSelected = !selectedTask && workspace.tasks.length === 0
@@ -55,10 +57,12 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
     : l2BlocksRealSave || l3NeedsApproval || workspace.source === 'mock' || workspace.evidenceGrade?.grade === 'C'
       ? 'warn'
       : 'ok'
-  const nextHeadline = !dxmLoggedIn
-    ? '继续下一步：打开真实店小秘登录'
+  const nextHeadline = taskBlocksRealSave
+    ? '继续下一步：选择单商品只保存任务'
     : configBlocksRealSave
       ? '继续下一步：补齐本次任务配置'
+      : !dxmLoggedIn
+      ? '继续下一步：打开真实店小秘登录'
       : l2BlocksRealSave
       ? '继续下一步：运行真实只读检查'
       : l3NeedsApproval
@@ -72,7 +76,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
   const gateStatusLine = `真实只读检查 ${humanGateStatus(l2Gate?.status ?? workspace.safety.l2Status ?? 'not_run')}，人工确认 ${humanGateStatus(l3Gate?.status ?? 'not_run')}`
   const statusLine = `当前任务 ${activeTaskLabel}，${tone === 'danger' ? `保存前置条件未完成：${gateStatusLine}` : gateStatusLine}`
   const gateDetails = [
-    l2Gate ? `L2 页面核验：${l2Gate.detail}` : 'L2 页面核验：缺少真实页面核验状态',
+    l2Gate ? `真实只读检查：${l2Gate.detail}` : '真实只读检查：缺少页面检查状态',
     l3Gate ? `人工确认保存：${l3Gate.detail}` : '人工确认保存：缺少真实保存门禁状态',
   ]
   const blockerDetails = [
@@ -90,8 +94,8 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
       ? '后端未连接不是账号、配置或店小秘页面问题；请查看实时日志、刷新状态或重启免安装版。'
       : '工作台只会执行受控“只保存”，发布和批量无人值守仍保持关闭。'
     : selectedTaskCompleted
-      ? `任务 ${activeTaskLabel} ${activeTaskStatusLabel}，继续查看报告、证据或打开真实浏览器控制台复核。`
-      : '按操作引导继续：真实登录、配置、真实只读检查、人工确认后才启动保存。'
+      ? `任务 ${activeTaskLabel} ${activeTaskStatusLabel}，继续查看结果报告、证据或打开真实浏览器复核。`
+      : '按操作引导继续：选择任务、补配置、真实登录、真实只读检查、人工确认后才启动保存。'
   const runtimeEndpointLine = runtimeStatus
     ? `服务端 ${runtimeStatus.backend.url ?? `端口 ${runtimeStatus.backend.port ?? '未知'}`} / 前端 ${runtimeStatus.frontend.url ?? `端口 ${runtimeStatus.frontend.port ?? '未知'}`}`
     : runtimeStatusUnavailable
@@ -109,7 +113,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
     ? [
       { label: `启动来源：${runtimeOwnerChip}`, tone: runtimeOwner === 'direct' ? 'warn' : 'ok' },
       { label: `后端：${runtimeStatus.backend.status === 'ok' ? '运行中' : '异常'}`, tone: runtimeStatus.backend.status === 'ok' ? 'ok' : 'danger' },
-      { label: `前端：${runtimeStatus.frontend.status === 'ok' ? '运行中' : '异常'}`, tone: runtimeStatus.frontend.status === 'ok' ? 'ok' : 'danger' },
+      { label: `前端：${frontendRuntimeLabel(runtimeStatus.frontend)}`, tone: runtimeStatus.frontend.status === 'ok' ? 'ok' : 'danger' },
       { label: `后端端口：${runtimeStatus.backend.port ?? '未知'}`, tone: runtimeStatus.backend.status === 'ok' ? 'ok' : 'danger' },
       { label: `前端端口：${runtimeStatus.frontend.port ?? '未知'}`, tone: runtimeStatus.frontend.status === 'ok' ? 'ok' : 'danger' },
       { label: `自动浏览器：${runtimeStatus.agentConsole.active ? '运行中' : '待命'}`, tone: runtimeStatus.agentConsole.active ? 'ok' : 'warn' },
@@ -140,6 +144,10 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
     ? '当前任务已完成'
     : runtimeStatusUnavailable
     ? '状态接口异常'
+    : taskBlocksRealSave
+    ? '等待选择任务'
+    : configBlocksRealSave
+    ? '等待补齐配置'
     : !dxmLoggedIn
     ? '等待真实登录'
     : l2BlocksRealSave
@@ -156,13 +164,17 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
     ? onShowConsole
     : runtimeStatusUnavailable
       ? onShowConsole
+    : taskBlocksRealSave
+      ? onShowTasks
+    : configBlocksRealSave
+      ? onShowConfig
     : !dxmLoggedIn
-      ? onShowConsole
-      : configBlocksRealSave
-        ? onShowConfig
-      : l2BlocksRealSave || l3NeedsApproval
-        ? onShowTasks
-        : onShowConsole
+      ? onShowDxmAccess
+      : l2BlocksRealSave
+        ? onShowConsole
+        : l3NeedsApproval
+          ? onShowTasks
+          : onShowConsole
 
   return (
     <section className={`safety-bar safety-bar--${tone}`} aria-label="工作台当前状态">
@@ -179,7 +191,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
           {primaryActionLabel}
         </button>
         <details className="safety-bar__meta-details inline-disclosure">
-          <summary>状态详情</summary>
+          <summary>查看状态详情</summary>
           <p className="safety-bar__compact-detail">{conciseDetail}</p>
           <div>
             <span className="guard-chip guard-chip--muted">{runtimeEndpointLine}</span>
@@ -210,6 +222,13 @@ function runtimeOwnerLabel(owner: string, managedByDesktop: boolean) {
   if (owner === 'desktop' || managedByDesktop) return '免安装版已接管'
   if (owner === 'start_mvp') return 'start-mvp 已接管'
   return '旧进程/直接启动'
+}
+
+function frontendRuntimeLabel(frontend: RuntimeStatus['frontend']) {
+  if (frontend.url?.startsWith('file://') || frontend.detail?.includes('桌面内置页面')) {
+    return '桌面内置页面'
+  }
+  return frontend.status === 'ok' ? '运行中' : '异常'
 }
 
 function humanGateStatus(status: string) {

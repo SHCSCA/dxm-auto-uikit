@@ -92,7 +92,8 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "l2AllowlistReviewCandidates" in script
     assert "l2AllowlistReviewTemplate" in script
     assert "l2AllowlistReviewTemplateHashes" in script
-    assert "Get-FileHash -LiteralPath $l2AllowlistReviewTemplateMarkdownPath" in script
+    assert "function Get-FileSha256" in script
+    assert "Get-FileSha256 -Path $l2AllowlistReviewTemplateMarkdownPath" in script
     assert "markdown_sha256" in script
     assert "json_sha256" in script
     assert "l2ProbePlan" in script
@@ -182,7 +183,7 @@ def test_user_delivery_guide_explains_l2_allowlist_review_packet():
 def test_user_delivery_guide_has_current_acceptance_checklist():
     guide = USER_DELIVERY_GUIDE.read_text(encoding="utf-8")
 
-    assert "# 用户交付使用说明 - 2026-06-15" in guide
+    assert "# 用户交付使用说明 - 2026-06-18" in guide
     assert "## 验收人快速判定清单" in guide
     assert "自动化工作台验收通过" in guide
     assert "`Local workbench check: PASS`" in guide
@@ -213,7 +214,7 @@ def test_readme_next_steps_focus_on_allowlist_l2_l3_reverification():
     assert "认领或批量保存" in next_steps
     assert "批量、无人值守和发布" in next_steps
     assert "实现真实 `DxmAdapter`" not in next_steps
-    assert "最终交付验收记录-20260615.md" in readme
+    assert "最终交付验收记录" in readme
 
 
 def test_readme_explains_final_check_ok_scope_for_machine_consumers():
@@ -251,6 +252,7 @@ def test_final_delivery_check_captures_final_report_center_after_final_json_writ
     script = FINAL_DELIVERY_CHECK.read_text(encoding="utf-8")
     qa_script = QA_BROWSER_CHECK.read_text(encoding="utf-8")
     workbench_modules = WORKBENCH_MODULES.read_text(encoding="utf-8")
+    results_page = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "workbench" / "ResultsPage.tsx").read_text(encoding="utf-8")
     app_shell = APP_SHELL.read_text(encoding="utf-8")
     frontend_css = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
 
@@ -294,14 +296,14 @@ def test_final_delivery_check_captures_final_report_center_after_final_json_writ
     assert "post_final_report_qa_ok" in qa_script
     assert "final_report_center_screenshot_path" in qa_script
     assert "qa-report-center-final" in qa_script
-    assert 'testId="final-report-center-qa"' in workbench_modules
-    assert "state={postFinalReportQaState}" in workbench_modules
-    assert "data-testid={testId}" in workbench_modules
-    assert "data-state={state}" in workbench_modules
+    assert 'testId="final-report-center-qa"' in results_page
+    assert "state={postFinalReportQaState}" in results_page
+    assert "data-testid={testId}" in results_page
+    assert "data-state={state}" in results_page
     assert ".l2-review-candidates" in frontend_css
     assert "overflow-wrap: anywhere" in frontend_css
-    assert 'data-testid="final-report-center-screenshot-path"' in workbench_modules
-    assert 'data-testid="report-center-section"' in workbench_modules
+    assert 'data-testid="final-report-center-screenshot-path"' in results_page
+    assert 'data-testid="report-center-section"' in results_page
     assert ".replaceAll(" not in workbench_modules
     assert "data-section={item.id}" in app_shell
     assert "Final report state QA" in script

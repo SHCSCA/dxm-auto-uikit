@@ -79,6 +79,15 @@ class AgentConsoleStep(BaseModel):
     next_step: str | None = None
     store_name: str | None = None
     guard: str | None = None
+    phase: str | None = None
+    progress_index: int | None = None
+    progress_total: int | None = None
+    severity: str | None = None
+    human_title: str | None = None
+    human_action: str | None = None
+    human_next: str | None = None
+    recent_actions: list[str] | None = None
+    requires_user_action: bool | None = None
 
 
 class AgentConsoleStartRequest(BaseModel):
@@ -126,6 +135,7 @@ class DraftBoxActionRequest(BaseModel):
     note_text: str | None = None
     product_query: str | None = None
     store_name: str | None = None
+    target_source_urls: list[str] = Field(default_factory=list)
     task_id: int | None = None
     manual_approval: bool = False
     approval_token: str | None = None

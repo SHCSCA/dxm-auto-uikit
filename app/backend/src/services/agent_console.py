@@ -16,6 +16,7 @@ SCREENSHOT_ROOT = DATA_DIR / "screenshots" / "agent_console"
 DEFAULT_TARGET_URL = "https://www.dianxiaomi.com/"
 MAX_NETWORK_EVENTS = 120
 MAX_ACTION_EVENTS = 160
+MAX_RECENT_ACTIONS = 3
 BLOCKED_SELECTOR_CONTROL_KEYWORDS = (
     "publish",
     "submitpublish",
@@ -35,6 +36,29 @@ BLOCKED_SELECTOR_CONTROL_KEYWORDS = (
     "刊登",
     "上架",
 )
+USER_ACTION_HUD_COPY = {
+    "WAITING_CAPTCHA": {
+        "phase": "等待人工处理",
+        "severity": "warning",
+        "human_title": "需要你处理验证码",
+        "human_action": "请在真实店小秘浏览器里完成验证码或二次确认",
+        "human_next": "完成后回到控制台检测登录状态",
+    },
+    "MANUAL_APPROVAL_REQUIRED": {
+        "phase": "等待人工确认",
+        "severity": "warning",
+        "human_title": "需要你人工确认只保存",
+        "human_action": "请确认本次任务只保存、不发布",
+        "human_next": "确认后才会启动真实浏览器保存",
+    },
+    "MANUAL_TAKEOVER": {
+        "phase": "人工接管中",
+        "severity": "warning",
+        "human_title": "需要你接管真实浏览器",
+        "human_action": "请在真实浏览器里检查或修正当前页面",
+        "human_next": "处理完成后在控制台交还 Agent",
+    },
+}
 
 
 class AgentConsoleService:
@@ -144,7 +168,12 @@ class AgentConsoleService:
             self._state["hud"] = self._hud_state(step)
             self._state["last_error"] = None
             self._state["updated_at"] = _now()
-            return dict(self._state)
+            page = self._page
+            hud = dict(self._state["hud"])
+
+        if page is not None:
+            self._apply_hud_safely(page, hud)
+        return self.status()
 
     def stop(self) -> dict[str, Any]:
         self._close_current_browser()
@@ -175,6 +204,15 @@ class AgentConsoleService:
         store_name: str | None = None,
         next_step: str | None = None,
         screenshot_path: str | None = None,
+        phase: str | None = None,
+        progress_index: int | None = None,
+        progress_total: int | None = None,
+        severity: str | None = None,
+        human_title: str | None = None,
+        human_action: str | None = None,
+        human_next: str | None = None,
+        recent_actions: list[str] | None = None,
+        requires_user_action: bool | None = None,
     ) -> dict[str, Any]:
         with self._lock:
             if not self._state.get("active"):
@@ -197,6 +235,7 @@ class AgentConsoleService:
             if current_task_id is None:
                 self._state["task_id"] = task_id
 
+            current_hud = dict(self._state.get("hud") or {})
             hud = self._hud_state({
                 "title": step_name,
                 "state": step_code,
@@ -204,6 +243,15 @@ class AgentConsoleService:
                 "next_step": next_step or "等待状态机推进",
                 "store_name": store_name or "Dang Kang",
                 "guard": "只保存不发布",
+                "phase": phase,
+                "progress_index": progress_index,
+                "progress_total": progress_total,
+                "severity": severity,
+                "human_title": human_title,
+                "human_action": human_action,
+                "human_next": human_next,
+                "recent_actions": recent_actions if recent_actions is not None else current_hud.get("recent_actions"),
+                "requires_user_action": requires_user_action,
             })
             event = {
                 "task_id": task_id,
@@ -311,12 +359,20 @@ class AgentConsoleService:
             events = list(self._state.get("action_events") or [])
             events.append({key: value for key, value in event.items() if value is not None})
             self._state["action_events"] = events[-MAX_ACTION_EVENTS:]
+            self._state["hud"] = self._hud_state({
+                **dict(self._state.get("hud") or {}),
+                "recent_actions": _recent_action_labels(events),
+            })
             if page_url:
                 self._state["current_url"] = page_url
             if screenshot_url:
                 self._state["screenshot"] = screenshot_url
             self._state["updated_at"] = _now()
+            page = self._page
+            hud = dict(self._state["hud"])
 
+        if page is not None:
+            self._apply_hud_safely(page, hud)
         return {**self._compact_status(), "ok": True, "updated": True, "reason": "action_recorded"}
 
     def snapshot(self) -> dict[str, Any]:
@@ -328,12 +384,19 @@ class AgentConsoleService:
                 return {**dict(self._state), "ok": False, "reason": "agent_console_inactive"}
             self._state["manual_takeover"] = True
             self._state["manual_takeover_started_at"] = _now()
+            current_hud = dict(self._state.get("hud") or {})
+            self._state["hud"] = self._hud_state({
+                "state": "MANUAL_TAKEOVER",
+                "recent_actions": current_hud.get("recent_actions"),
+            })
             self._state["updated_at"] = _now()
             page = self._page
+            hud = dict(self._state["hud"])
 
         if page is not None:
             try:
                 self._run_browser_op(lambda: page.bring_to_front())
+                self._run_browser_op(lambda: self._apply_hud(page, hud))
             except Exception as exc:
                 with self._lock:
                     self._state["last_error"] = str(exc)
@@ -347,7 +410,26 @@ class AgentConsoleService:
                 return {**dict(self._state), "ok": False, "reason": "agent_console_inactive"}
             self._state["manual_takeover"] = False
             self._state["manual_takeover_started_at"] = None
+            self._state["hud"] = self._hud_state({
+                **dict(self._state.get("hud") or {}),
+                "state": "AGENT_RESUMED",
+                "phase": "Agent 继续执行",
+                "severity": "info",
+                "human_title": "Agent 继续执行",
+                "human_action": "真实浏览器已交还给 Agent",
+                "human_next": "继续按任务流程只保存、不发布",
+                "requires_user_action": False,
+            })
             self._state["updated_at"] = _now()
+            page = self._page
+            hud = dict(self._state["hud"])
+        if page is not None:
+            try:
+                self._run_browser_op(lambda: self._apply_hud(page, hud))
+            except Exception as exc:
+                with self._lock:
+                    self._state["last_error"] = str(exc)
+                    self._state["updated_at"] = _now()
         return self._record_manual_takeover_event(action="release_agent", label="交还 Agent")
 
     def refresh_frame(self) -> dict[str, Any]:
@@ -480,7 +562,16 @@ class AgentConsoleService:
             events = list(self._state.get("action_events") or [])
             events.append({key: value for key, value in event.items() if value is not None})
             self._state["action_events"] = events[-MAX_ACTION_EVENTS:]
+            self._state["hud"] = self._hud_state({
+                **dict(self._state.get("hud") or {}),
+                "recent_actions": _recent_action_labels(events),
+            })
             self._state["updated_at"] = _now()
+            page = self._page
+            hud = dict(self._state["hud"])
+
+        if page is not None:
+            self._apply_hud_safely(page, hud)
 
     def _record_manual_takeover_event(self, *, action: str, label: str) -> dict[str, Any]:
         with self._lock:
@@ -578,11 +669,22 @@ class AgentConsoleService:
             """
             (hud) => {
               window.__dxmAgentHudState = hud;
+              try {
+                window.sessionStorage.setItem('__dxmAgentHudPersistedState', JSON.stringify(hud));
+              } catch (error) {}
               if (window.__dxmRenderAgentHud) window.__dxmRenderAgentHud();
             }
             """,
             hud,
         )
+
+    def _apply_hud_safely(self, page, hud: dict[str, Any]) -> None:
+        try:
+            self._run_browser_op(lambda: self._apply_hud(page, hud))
+        except Exception as exc:
+            with self._lock:
+                self._state["last_error"] = str(exc)
+                self._state["updated_at"] = _now()
 
     def _close_current_browser(self) -> None:
         with self._lock:
@@ -611,13 +713,33 @@ class AgentConsoleService:
 
     def _hud_state(self, step: dict[str, Any] | None) -> dict[str, Any]:
         step = step or {}
+        title = step.get("title") or step.get("label") or "Agent Console 待命"
+        state = step.get("state") or step.get("code") or "WAITING"
+        user_action_copy = USER_ACTION_HUD_COPY.get(str(state).upper())
+        if user_action_copy and not step.get("title") and not step.get("label"):
+            title = user_action_copy["human_title"]
+        action = step.get("action") or step.get("detail") or (user_action_copy or {}).get("human_action") or "等待后端状态机推送"
+        next_step = step.get("next_step") or (user_action_copy or {}).get("human_next") or "等待下一步"
+        recent_actions = step.get("recent_actions")
+        requires_user_action = step.get("requires_user_action")
+        if requires_user_action is None and user_action_copy:
+            requires_user_action = True
         return {
-            "title": step.get("title") or step.get("label") or "Agent Console 待命",
-            "state": step.get("state") or step.get("code") or "WAITING",
-            "action": step.get("action") or step.get("detail") or "等待后端状态机推送",
-            "next_step": step.get("next_step") or "等待下一步",
+            "title": title,
+            "state": state,
+            "action": action,
+            "next_step": next_step,
             "store_name": step.get("store_name") or "Dang Kang",
             "guard": step.get("guard") or "只保存不发布",
+            "phase": step.get("phase") or (user_action_copy or {}).get("phase") or "业务进度",
+            "progress_index": step.get("progress_index"),
+            "progress_total": step.get("progress_total"),
+            "severity": step.get("severity") or (user_action_copy or {}).get("severity") or "info",
+            "human_title": step.get("human_title") or (user_action_copy or {}).get("human_title") or title,
+            "human_action": step.get("human_action") or (user_action_copy or {}).get("human_action") or action,
+            "human_next": step.get("human_next") or (user_action_copy or {}).get("human_next") or next_step,
+            "recent_actions": list(recent_actions or [])[-MAX_RECENT_ACTIONS:],
+            "requires_user_action": bool(requires_user_action) if requires_user_action is not None else False,
             "updated_at": _now(),
         }
 
@@ -687,6 +809,17 @@ def _step_action(field_domain: str | None, mode: str | None) -> str:
     return " / ".join(parts) if parts else "状态机步骤推进"
 
 
+def _recent_action_labels(events: list[dict[str, Any]]) -> list[str]:
+    labels: list[str] = []
+    for event in reversed(events):
+        label = str(event.get("label") or event.get("action") or "").strip()
+        if label:
+            labels.append(label)
+        if len(labels) >= MAX_RECENT_ACTIONS:
+            break
+    return list(reversed(labels))
+
+
 def _required_int(command: dict[str, Any], key: str) -> int:
     value = command.get(key)
     if value is None:
@@ -752,7 +885,13 @@ def _browser_control_value(action: str, command: dict[str, Any]) -> str | None:
 HUD_INIT_SCRIPT = """
 (() => {
   const ID = 'dxm-agent-console-hud';
-  window.__dxmAgentHudState = window.__dxmAgentHudState || {};
+  let persisted = null;
+  try {
+    persisted = JSON.parse(window.sessionStorage.getItem('__dxmAgentHudPersistedState') || 'null');
+  } catch (error) {
+    persisted = null;
+  }
+  window.__dxmAgentHudState = persisted || window.__dxmAgentHudState || {};
   window.__dxmRenderAgentHud = () => {
     const hud = window.__dxmAgentHudState || {};
     let root = document.getElementById(ID);
@@ -761,37 +900,60 @@ HUD_INIT_SCRIPT = """
       root.id = ID;
       root.style.cssText = [
         'position:fixed',
-        'top:18px',
-        'right:18px',
+        'top:14px',
+        'left:14px',
         'z-index:2147483647',
-        'width:360px',
-        'max-width:calc(100vw - 36px)',
-        'font:13px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif',
-        'color:#1d252d',
-        'background:rgba(255,255,255,.96)',
-        'border:1px solid rgba(25,37,51,.18)',
-        'border-left:5px solid #2563eb',
+        'width:330px',
+        'max-width:calc(100vw - 28px)',
+        'font:12px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif',
+        'color:#f8fafc',
+        'background:rgba(13,17,23,.94)',
+        'border:1px solid rgba(148,163,184,.32)',
         'border-radius:8px',
-        'box-shadow:0 18px 42px rgba(21,26,33,.22)',
-        'padding:13px',
+        'box-shadow:0 18px 46px rgba(0,0,0,.36)',
+        'padding:12px',
+        'backdrop-filter:blur(8px)',
         'pointer-events:none'
       ].join(';');
       document.documentElement.appendChild(root);
     }
     const safe = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const progressIndex = Number(hud.progress_index || 0);
+    const progressTotal = Number(hud.progress_total || 0);
+    const progressReady = progressIndex > 0 && progressTotal > 0;
+    const percent = progressReady ? Math.max(3, Math.min(100, Math.round(progressIndex / progressTotal * 100))) : 0;
+    const progressText = progressReady ? `${progressIndex}/${progressTotal}` : safe(hud.phase || '等待');
+    const recentActions = Array.isArray(hud.recent_actions) ? hud.recent_actions.slice(-3) : [];
+    const severityColor = hud.severity === 'error' ? '#fb7185' : hud.severity === 'warning' ? '#fbbf24' : hud.severity === 'success' ? '#34d399' : '#60a5fa';
+    const userBadge = hud.requires_user_action ? '<span style="color:#fbbf24;font-weight:800">等待人工处理</span>' : '<span style="color:#93c5fd;font-weight:800">自动执行中</span>';
+    const recentHtml = recentActions.length
+      ? `<div style="margin-top:9px;display:grid;gap:4px">${recentActions.map((item) => `<div style="color:#cbd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">• ${safe(item)}</div>`).join('')}</div>`
+      : '';
     root.innerHTML = `
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-        <span style="width:12px;height:12px;border-radius:50%;background:#2563eb;box-shadow:0 0 0 5px #e7efff"></span>
-        <strong>${safe(hud.title || 'Agent Console')}</strong>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px">
+        <div style="display:flex;align-items:center;gap:7px;min-width:0">
+          <span style="width:10px;height:10px;border-radius:50%;background:${severityColor};box-shadow:0 0 0 5px rgba(96,165,250,.16)"></span>
+          <strong style="white-space:nowrap">DXM Agent</strong>
+        </div>
+        ${userBadge}
       </div>
-      <div style="display:grid;gap:7px">
-        <div><span style="color:#66717f">店铺</span><div style="font-weight:750">${safe(hud.store_name || 'Dang Kang')}</div></div>
-        <div><span style="color:#66717f">当前状态</span><div style="font-weight:750">${safe(hud.state || 'WAITING')}</div></div>
-        <div><span style="color:#66717f">正在执行</span><div style="font-weight:750">${safe(hud.action || '等待状态机')}</div></div>
-        <div><span style="color:#66717f">下一步</span><div style="font-weight:750">${safe(hud.next_step || '等待下一步')}</div></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;color:#94a3b8;margin-bottom:6px">
+        <span>${safe(hud.phase || '业务进度')}</span>
+        <strong style="color:#e2e8f0">${progressText}</strong>
       </div>
-      <div style="margin-top:10px;padding-top:10px;border-top:1px solid #d8dde5;display:flex;justify-content:space-between;gap:10px">
-        <span style="color:#66717f">发布隔离</span><strong>${safe(hud.guard || '只保存不发布')}</strong>
+      <div style="height:5px;border-radius:999px;background:rgba(148,163,184,.22);overflow:hidden;margin-bottom:10px">
+        <i style="display:block;height:100%;width:${percent}%;background:${severityColor};border-radius:999px"></i>
+      </div>
+      <div style="display:grid;gap:6px">
+        <div style="font-size:16px;font-weight:850;line-height:1.28">${safe(hud.human_title || hud.title || '等待任务')}</div>
+        <div style="color:#e2e8f0;font-weight:700">${safe(hud.human_action || hud.action || '等待任务开始')}</div>
+        ${recentHtml}
+        <div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(148,163,184,.28);display:grid;grid-template-columns:54px minmax(0,1fr);gap:8px">
+          <span style="color:#94a3b8">下一步</span>
+          <strong style="color:#f8fafc">${safe(hud.human_next || hud.next_step || '等待下一步')}</strong>
+          <span style="color:#94a3b8">范围</span>
+          <strong style="color:#bbf7d0">${safe(hud.guard || '只保存不发布')}</strong>
+        </div>
       </div>
     `;
   };

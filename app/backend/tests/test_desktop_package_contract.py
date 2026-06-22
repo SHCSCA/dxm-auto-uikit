@@ -110,12 +110,21 @@ def test_desktop_backend_health_check_requires_ok_json_response():
 
 def test_desktop_main_surfaces_startup_failures_in_visible_window():
     source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    startup_error_section = source[
+        source.index("function createStartupErrorWindow"):
+        source.index("function findFreePort")
+    ]
 
     assert "function createStartupErrorWindow(error)" in source
     assert "DXM Agent Console startup failed" in source
     assert "desktop-main.log" in source
     assert "loadURL(`data:text/html" in source
     assert "killBackendProcess()" in source
+    assert "function userStartupErrorMessage" in source
+    assert "appendDesktopLog(`Startup failure detail:" in startup_error_section
+    assert "const message = userStartupErrorMessage(error)" in startup_error_section
+    assert "error.stack || error.message" not in startup_error_section
+    assert "处理步骤" in startup_error_section
 
 
 def test_desktop_preload_exposes_readonly_runtime_metadata():
@@ -262,10 +271,10 @@ def test_user_docs_present_desktop_exe_as_primary_delivery_entry():
 
     for source in (readme, user_guide):
         assert "DXM Agent Console 桌面版" in source
-        assert "C:\\Users\\wz\\Desktop\\DXM-Agent-Console-免安装版\\DXM-Agent-Console.exe" in source
+        assert "D:\\Desktop\\DXM-Agent-Console-免安装版\\DXM-Agent-Console-Portable-0.1.0.exe" in source
         assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
-        assert "当前默认交付使用目录免安装版" in source
         assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in source
+        assert "61B57C6EE39E6D2E6874CB7BB9F575D327EB274B87BC637E9CB6B19FC85E79FC" in source
         assert "portable 首次启动会解包 Electron 与 Python 运行时" in source
         assert "%TEMP%` 所在磁盘建议至少保留 1GB 可用空间" in source
         assert "scripts\\start-desktop.bat" in source
@@ -276,10 +285,11 @@ def test_user_docs_present_desktop_exe_as_primary_delivery_entry():
 def test_portable_quick_guide_uses_verified_portable_entry():
     source = PORTABLE_QUICK_GUIDE.read_text(encoding="utf-8")
 
-    assert "C:\\Users\\wz\\Desktop\\DXM-Agent-Console-免安装版\\DXM-Agent-Console.exe" in source
+    assert "D:\\Desktop\\DXM-Agent-Console-免安装版\\DXM-Agent-Console-Portable-0.1.0.exe" in source
     assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
     assert "使用目录版时必须保留整个文件夹和 `resources` 目录" in source
     assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in source
+    assert "61B57C6EE39E6D2E6874CB7BB9F575D327EB274B87BC637E9CB6B19FC85E79FC" in source
     assert "至少建议保留 1GB 可用空间" in source
 
 
@@ -298,18 +308,17 @@ def test_app_shell_presents_agent_console_as_user_first_navigation():
     assert "const primaryAreas" in source
     assert "label: '执行'" in source
     assert "label: '准备'" in source
-    assert "label: '结果'" in source
+    assert "label: '复盘'" in source
     assert "label: '更多'" not in source
     assert "真实浏览器" in source
-    assert "真实浏览器执行" in source
-    assert "报告与证据" in source
+    assert "登录、只读检查、执行浏览器" in source
+    assert "结果报告" in source
     assert "问题处理" in source
-    assert "证据" in source
+    assert "证据中心" in source
     assert "id: 'dashboard'" not in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
-    assert "{ id: 'evidence', label: '证据'" in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
-    assert "{ id: 'exceptions', label: '问题'" in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
-    assert "{ id: 'console', label: '浏览器', short: '控', hint: '登录、真实只读检查、真实浏览器' }" in source
-    assert "证据中心" not in source
+    assert "{ id: 'evidence', label: '证据中心'" in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
+    assert "{ id: 'exceptions', label: '问题'" not in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
+    assert "{ id: 'agent_execution', label: '真实浏览器', short: '览', hint: '登录、只读检查、执行浏览器' }" in source
     assert "报告中心" not in source
     assert "异常池" not in source
     assert "nav-section" in source
@@ -321,18 +330,20 @@ def test_execution_console_focus_panel_keeps_primary_summary_small():
     source = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "WorkbenchModules.tsx").read_text(encoding="utf-8")
     focus_section = source[source.index("function ConsoleFocusPanel"):source.index("function AgentBrowserFrame")]
 
-    assert "console-focus-panel__primary-facts" in focus_section
+    assert "console-focus-panel__status-strip" in focus_section
     assert "console-focus-panel__details" in focus_section
     primary_section = focus_section[
-        focus_section.index("console-focus-panel__primary-facts"):
+        focus_section.index("console-focus-panel__status-strip"):
         focus_section.index("<details className=\"console-focus-panel__details")
     ]
-    assert primary_section.count("<span><strong>") == 4
-    assert "<strong>任务</strong><b>" in primary_section
-    assert "<strong>执行浏览器</strong><b>" in primary_section
-    assert "<strong>当前步骤</strong><b>" in primary_section
-    assert "<strong>下一步</strong><b>" in primary_section
+    assert primary_section.count("<span>") == 4
+    assert "<strong>DXM 登录</strong>" in primary_section
+    assert "<strong>真实只读检查</strong>" in primary_section
+    assert "<strong>人工确认</strong>" in primary_section
+    assert "<strong>执行浏览器</strong>" in primary_section
     assert "<summary>技术状态</summary>" in focus_section
+    assert "<strong>任务</strong><b>" in focus_section
+    assert "<strong>当前步骤</strong><b>" in focus_section
     assert "<strong>当前页面</strong><b>" in focus_section
     assert "<strong>日志</strong><b>" in focus_section
 

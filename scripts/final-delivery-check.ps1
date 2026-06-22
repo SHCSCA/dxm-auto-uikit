@@ -78,6 +78,25 @@ function Write-JsonNoBomFile {
   Write-Utf8NoBomFile -Path $Path -Value ($Value | ConvertTo-Json -Depth $Depth)
 }
 
+function Get-FileSha256 {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path
+  )
+
+  $stream = [System.IO.File]::OpenRead($Path)
+  try {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      $hashBytes = $sha.ComputeHash($stream)
+      return ([System.BitConverter]::ToString($hashBytes)).Replace("-", "").ToLowerInvariant()
+    } finally {
+      $sha.Dispose()
+    }
+  } finally {
+    $stream.Dispose()
+  }
+}
+
 function Invoke-JsonUtf8 {
   param(
     [string]$Uri,
@@ -1173,8 +1192,8 @@ $l2ReviewTemplateLines.Add("- Real L2 must be rerun after any code/config change
 Set-Content -LiteralPath $l2AllowlistReviewTemplateMarkdownPath -Encoding UTF8 -Value ($l2ReviewTemplateLines -join "`n")
 
 $l2AllowlistReviewTemplateHashes = [pscustomobject]@{
-  markdown_sha256 = (Get-FileHash -LiteralPath $l2AllowlistReviewTemplateMarkdownPath -Algorithm SHA256).Hash.ToLowerInvariant()
-  json_sha256 = (Get-FileHash -LiteralPath $l2AllowlistReviewTemplateJsonPath -Algorithm SHA256).Hash.ToLowerInvariant()
+  markdown_sha256 = Get-FileSha256 -Path $l2AllowlistReviewTemplateMarkdownPath
+  json_sha256 = Get-FileSha256 -Path $l2AllowlistReviewTemplateJsonPath
 }
 
 $result = [pscustomobject]@{

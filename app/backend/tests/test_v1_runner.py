@@ -1,5 +1,7 @@
 import asyncio
 import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -29,6 +31,7 @@ class FakeWorkflowAdapter:
         self.note_verified = note_verified
         self.save_result = save_result or {"ok": True, "code": 0, "msg": "真实保存成功", "published": False}
         self.include_save_result = include_save_result
+        self.live_hud_calls = []
 
     def check_login_state(self):
         return self._record("check_login_state")
@@ -72,6 +75,18 @@ class FakeWorkflowAdapter:
     def verify_not_published(self, product_query=None, store_name=None):
         return self._record("verify_not_published", product_query, store_name)
 
+    def update_live_hud(self, hud):
+        self.live_hud_calls.append(hud)
+        return {
+            "ok": True,
+            "updated": True,
+            "reason": "live_browser_hud_updated",
+            "current_url": "https://www.dianxiaomi.com/web/smt/edit",
+            "page_title": "店小秘--编辑速卖通产品",
+            "hud": hud,
+            "updated_at": "2026-05-22T00:00:02+00:00",
+        }
+
     def _record(self, action, *args):
         self.calls.append((action, *args))
         evidence = {"action": action}
@@ -103,6 +118,21 @@ class FakeWorkflowAdapter:
         if "dxm_reference_template_results" in evidence:
             result["dxm_reference_template_results"] = evidence["dxm_reference_template_results"]
         return result
+
+
+class ThreadRecordingWorkflowAdapter(FakeWorkflowAdapter):
+    def __init__(self):
+        super().__init__()
+        self.thread_names = []
+        self.hud_thread_names = []
+
+    def _record(self, action, *args):
+        self.thread_names.append(threading.current_thread().name)
+        return super()._record(action, *args)
+
+    def update_live_hud(self, hud):
+        self.hud_thread_names.append(threading.current_thread().name)
+        return super().update_live_hud(hud)
 
 
 class FakeAgentConsole:
@@ -394,6 +424,18 @@ def test_single_save_syncs_agent_console_hud_without_changing_workflow_order(v1_
     assert "VERIFY_NOT_PUBLISHED" in states
     assert "WRITE_REPORT" in states
     assert "RELEASE_LOCK" in states
+    precheck_config = next(call for call in console.calls if call["step_code"] == "PRECHECK_CONFIG")
+    save_only = next(call for call in console.calls if call["step_code"] == "SAVE_ONLY")
+    release_lock = next(call for call in console.calls if call["step_code"] == "RELEASE_LOCK")
+    assert precheck_config["human_title"] == "检查任务配置"
+    assert precheck_config["phase"] == "启动前检查"
+    assert save_only["human_title"] == "点击保存"
+    assert save_only["human_action"] == "正在点击保存，保存到待发布，不执行发布"
+    assert release_lock["human_title"] == "完成任务"
+    assert release_lock["progress_index"] == 24
+    assert release_lock["progress_total"] == 24
+    assert all(call["severity"] == "info" for call in console.calls)
+    assert all(call["requires_user_action"] is False for call in console.calls)
     assert all(call["store_name"] == "Dang Kang" for call in console.calls)
     assert console.start_calls == []
     assert [call["action"] for call in console.action_calls] == [call[0] for call in adapter.calls]
@@ -420,6 +462,37 @@ def test_single_save_syncs_agent_console_hud_without_changing_workflow_order(v1_
     assert any(
         evidence["evidence_type"] == "workflow_action"
         and evidence["meta"].get("agent_action", {}).get("action") == "save_only"
+        for evidence in repo.list_evidences(task["id"])
+    )
+
+
+def test_single_save_updates_live_browser_hud_without_agent_console(v1_db):
+    repo = Repository()
+    task = _create_task(repo, mode="single_save", product_count=1)
+    manager = DummyManager()
+    adapter = FakeWorkflowAdapter()
+
+    asyncio.run(V1TaskRunner(repo, manager, workflow_adapter=adapter).run_task(task["id"]))
+
+    states = [call["step_code"] for call in adapter.live_hud_calls]
+    assert "PRECHECK_CONFIG" in states
+    assert "FILL_BASE_INFO" in states
+    assert "SAVE_ONLY" in states
+    assert "VERIFY_NOT_PUBLISHED" in states
+    save_only = next(call for call in adapter.live_hud_calls if call["step_code"] == "SAVE_ONLY")
+    assert save_only["human_title"] == "点击保存"
+    assert save_only["human_action"] == "正在点击保存，保存到待发布，不执行发布"
+    assert save_only["store_name"] == "Dang Kang"
+    assert save_only["requires_user_action"] is False
+
+    report = repo.list_reports(task["id"])[0]
+    assert report["summary"]["agent_console_events"] == []
+    assert report["summary"]["agent_console"] is None
+    assert report["summary"]["live_browser_hud_events"]
+    assert report["summary"]["live_browser_hud"]["last_step_code"] == "RELEASE_LOCK"
+    assert report["summary"]["live_browser_hud"]["hud"]["guard"] == "只保存不发布"
+    assert any(
+        evidence["meta"].get("live_browser_hud", {}).get("hud", {}).get("human_title") == "点击保存"
         for evidence in repo.list_evidences(task["id"])
     )
 
@@ -763,6 +836,55 @@ def test_save_only_missing_save_result_fails_job(v1_db):
     assert reports[0]["status"] == "failed"
     assert reports[0]["published"] is False
     assert "save_result" in reports[0]["summary"]["blocked_reason"]
+
+
+def test_save_only_failure_report_includes_save_result_reason(v1_db):
+    repo = Repository()
+    task = _create_task(repo, mode="single_save", product_count=1)
+    manager = DummyManager()
+    adapter = FakeWorkflowAdapter(
+        fail_action="save_only",
+        save_result={
+            "ok": False,
+            "message": "保存按钮已点击但未成功",
+            "reason": "未检测到保存成功提示",
+            "published": False,
+            "network_save_result": {"ok": False, "reason": "未捕获保存相关接口响应"},
+            "network_events": [],
+        },
+    )
+
+    asyncio.run(V1TaskRunner(repo, manager, workflow_adapter=adapter).run_task(task["id"]))
+
+    report = repo.list_reports(task["id"])[0]
+    assert report["status"] == "failed"
+    assert "未检测到保存成功提示" in report["summary"]["blocked_reason"]
+    assert "未捕获保存相关接口响应" in report["summary"]["blocked_reason"]
+    assert "保存接口捕获 0 条" in report["summary"]["blocked_reason"]
+    assert "未检测到保存成功提示" in report["save_result"]["message"]
+
+
+def test_runner_uses_injected_workflow_executor_for_thread_bound_login_flow(v1_db):
+    repo = Repository()
+    task = _create_task(repo, mode="single_save", product_count=1)
+    manager = DummyManager()
+    adapter = ThreadRecordingWorkflowAdapter()
+
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="dxm-login-flow") as executor:
+        asyncio.run(
+            V1TaskRunner(
+                repo,
+                manager,
+                workflow_adapter=adapter,
+                workflow_executor=executor,
+            ).run_task(task["id"])
+        )
+
+    assert adapter.thread_names
+    assert all(name.startswith("dxm-login-flow") for name in adapter.thread_names)
+    assert adapter.hud_thread_names
+    assert all(name.startswith("dxm-login-flow") for name in adapter.hud_thread_names)
+    assert repo.get_task(task["id"])["status"] == "completed"
 
 
 def test_single_save_without_workflow_adapter_fails(v1_db):

@@ -257,6 +257,7 @@ def _client_with_temp_repo(tmp_path, monkeypatch):
     db_path = tmp_path / "delivery-workspace.db"
     monkeypatch.setattr(db, "DB_PATH", db_path)
     monkeypatch.setattr(delivery_workspace, "L1_REPLAY_DIR", tmp_path / "l1_selector_replay")
+    monkeypatch.setattr(delivery_workspace, "L2_RUNTIME_PROBE_DIR", tmp_path / "runtime_l2_readonly_probe")
     monkeypatch.setattr(delivery_workspace, "L2_PROBE_DIR", tmp_path / "l2_readonly_probe")
     db.init_db()
     repo = Repository()
@@ -467,6 +468,84 @@ def test_delivery_workspace_exposes_canonical_l2_probe_plan(tmp_path, monkeypatc
     assert any("不自动放行 L3" in item for item in plan["safetyNotes"])
 
 
+def test_delivery_workspace_reads_l2_probe_from_runtime_data_dir(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_delivery_fixture(repo, with_network=True)
+    runtime_l2_dir = tmp_path / "runtime_data" / "l2_readonly_probe"
+    monkeypatch.setattr(delivery_workspace, "L2_RUNTIME_PROBE_DIR", runtime_l2_dir, raising=False)
+    created_at = _fresh_l2_created_at()
+    _write_l2_probe_result(
+        runtime_l2_dir,
+        "data_acquisition",
+        target_url="https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
+        created_at=created_at,
+    )
+    _write_l2_probe_result(
+        runtime_l2_dir,
+        "draft_box",
+        target_url="https://www.dianxiaomi.com/web/smt/smtProductList/draft",
+        created_at=created_at,
+    )
+
+    response = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}")
+
+    assert response.status_code == 200
+    data = response.json()
+    l2_gate = next(gate for gate in data["regression_gates"] if gate["level"] == "L2")
+    assert l2_gate["status"] == "passed"
+    assert data["evidence_grade"]["blocked_by_l2"] is False
+    assert data["safety"]["l2Status"] == "passed"
+
+
+def test_delivery_workspace_prioritizes_runtime_l2_over_repo_l2(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_delivery_fixture(repo, with_network=True)
+    runtime_l2_dir = tmp_path / "runtime_data" / "l2_readonly_probe"
+    repo_l2_dir = tmp_path / "repo_data" / "l2_readonly_probe"
+    monkeypatch.setattr(delivery_workspace, "L2_RUNTIME_PROBE_DIR", runtime_l2_dir, raising=False)
+    monkeypatch.setattr(delivery_workspace, "L2_PROBE_DIR", repo_l2_dir, raising=False)
+    created_at = _fresh_l2_created_at()
+    _write_l2_probe_result(
+        runtime_l2_dir,
+        "data_acquisition",
+        target_url="https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
+        created_at=created_at,
+    )
+    _write_l2_probe_result(
+        runtime_l2_dir,
+        "draft_box",
+        target_url="https://www.dianxiaomi.com/web/smt/smtProductList/draft",
+        created_at=created_at,
+    )
+    _write_l2_probe_result(
+        repo_l2_dir,
+        "data_acquisition",
+        target_url="https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
+        created_at=_fresh_l2_created_at(60),
+        ok=False,
+        network={"write_request_count": 1, "non_read_request_count": 1},
+    )
+    _write_l2_probe_result(
+        repo_l2_dir,
+        "draft_box",
+        target_url="https://www.dianxiaomi.com/web/smt/smtProductList/draft",
+        created_at=_fresh_l2_created_at(60),
+        ok=False,
+        network={"write_request_count": 1, "non_read_request_count": 1},
+    )
+
+    response = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}")
+
+    assert response.status_code == 200
+    l2_gate = next(gate for gate in response.json()["regression_gates"] if gate["level"] == "L2")
+    assert l2_gate["status"] == "passed"
+    assert set(l2_gate["latest"]["realTargets"]) == {"data_acquisition", "draft_box"}
+    assert all(
+        target["json_path"].startswith(str(runtime_l2_dir))
+        for target in l2_gate["latest"]["realTargets"].values()
+    )
+
+
 def test_delivery_workspace_evidence_points_are_isolated_to_requested_task(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     requested = _create_delivery_fixture(repo, with_network=True)
@@ -537,6 +616,121 @@ def test_delivery_workspace_without_task_id_prefers_task_with_delivery_evidence_
     assert data["current_task"]["id"] == fixture["task"]["id"]
     assert data["report_summary"]["latest_report"]["task_id"] == fixture["task"]["id"]
     assert data["publish_guard_state"]["status"] == "safe_unpublished"
+
+
+def test_delivery_workspace_without_task_id_prefers_newer_actionable_single_save_over_completed_evidence(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_delivery_fixture(repo, with_network=True)
+    store = repo.create_store("Dang Kang", "AliExpress")
+    product = repo.create_product(
+        {
+            "title": "QA actionable single save product",
+            "source": "qa",
+            "category_name": "QA_CATEGORY",
+            "price": 8.01,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {"source_title": "QA actionable single save product"},
+        }
+    )
+    newer_draft = repo.create_task(
+        {
+            "name": "单商品只保存 - Dang Kang - 1 件商品",
+            "store_id": store["id"],
+            "mode": "single_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "product_ids": [product["id"]],
+            "claim_mark": "AI认领",
+            "payload": {"store_name": store["name"], "category_name": product["category_name"]},
+        }
+    )
+
+    response = client.get("/api/delivery/workspace")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert newer_draft["id"] > fixture["task"]["id"]
+    assert data["current_task"]["id"] == newer_draft["id"]
+    assert data["report_summary"]["latest_report"] is None
+    assert any(task["id"] == fixture["task"]["id"] for task in data["tasks"])
+
+
+def test_delivery_workspace_without_task_id_prefers_success_evidence_over_newer_failed_task(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_delivery_fixture(repo, with_network=True)
+    store = repo.create_store("Dang Kang", "AliExpress")
+    product = repo.create_product(
+        {
+            "title": "QA failed single save product",
+            "source": "qa",
+            "category_name": "QA_CATEGORY",
+            "price": 8.01,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {"source_title": "QA failed single save product"},
+        }
+    )
+    failed_task = repo.create_task(
+        {
+            "name": "单商品只保存 - Dang Kang - 上次失败",
+            "store_id": store["id"],
+            "mode": "single_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "product_ids": [product["id"]],
+            "claim_mark": "AI认领",
+            "payload": {"store_name": store["name"], "category_name": product["category_name"]},
+        }
+    )
+    repo.update_task_status(failed_task["id"], "failed", completed_jobs=0, failed_jobs=1)
+
+    response = client.get("/api/delivery/workspace")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert failed_task["id"] > fixture["task"]["id"]
+    assert data["tasks"][0]["id"] == failed_task["id"]
+    assert data["current_task"]["id"] == fixture["task"]["id"]
+    assert data["report_summary"]["latest_report"]["task_id"] == fixture["task"]["id"]
+    assert data["publish_guard_state"]["status"] == "safe_unpublished"
+
+
+def test_delivery_workspace_without_task_id_ignores_older_draft_when_newer_success_evidence_exists(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    store = repo.create_store("Dang Kang", "AliExpress")
+    product = repo.create_product(
+        {
+            "title": "QA stale draft product",
+            "source": "qa",
+            "category_name": "QA_CATEGORY",
+            "price": 8.01,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {"source_title": "QA stale draft product"},
+        }
+    )
+    older_draft = repo.create_task(
+        {
+            "name": "单商品只保存 - Dang Kang - 旧草稿",
+            "store_id": store["id"],
+            "mode": "single_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "product_ids": [product["id"]],
+            "claim_mark": "AI认领",
+            "payload": {"store_name": store["name"], "category_name": product["category_name"]},
+        }
+    )
+    fixture = _create_delivery_fixture(repo, with_network=True)
+
+    response = client.get("/api/delivery/workspace")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert older_draft["id"] < fixture["task"]["id"]
+    assert data["current_task"]["id"] == fixture["task"]["id"]
+    assert data["report_summary"]["latest_report"]["task_id"] == fixture["task"]["id"]
 
 
 def test_delivery_workspace_exposes_publish_guard_and_dxm_reference_fields(tmp_path, monkeypatch):
@@ -624,6 +818,66 @@ def test_delivery_workspace_accepts_dxm_add_json_code_zero_as_save_response(tmp_
     assert data["delivery_readiness"]["jobs"][0]["has_network_or_har_save_response"] is True
     assert data["evidence_grade"]["has_network_or_har_save_response"] is True
     assert any(point["kind"] == "network_save_result" for point in data["evidence_points"])
+
+
+def test_delivery_workspace_accepts_smt_add_json_nested_success_as_save_response(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_delivery_fixture(repo, with_network=False)
+    report = repo.list_reports(fixture["task"]["id"])[0]
+    save_result = report["save_result"]
+    save_result["network_save_result"] = {
+        "ok": True,
+        "url": "https://www.dianxiaomi.com/api/smtProduct/add.json",
+        "method": "POST",
+        "status": 200,
+        "code": 0,
+        "msg": "您的产品编辑成功！",
+        "raw": {
+            "code": 0,
+            "msg": "Successful",
+            "data": {
+                "msg": "您的产品编辑成功！",
+                "code": 0,
+                "productId": "130658341327045576",
+            },
+        },
+    }
+    save_result["network_events"] = [
+        {
+            "url": "https://www.dianxiaomi.com/api/smtProduct/add.json",
+            "method": "POST",
+            "resource_type": "xhr",
+            "status": 200,
+            "json": {
+                "code": 0,
+                "msg": "Successful",
+                "data": {
+                    "msg": "您的产品编辑成功！",
+                    "code": 0,
+                    "productId": "130658341327045576",
+                },
+            },
+        }
+    ]
+    repo.add_report(
+        fixture["task"]["id"],
+        fixture["job"]["id"],
+        report["product_id"],
+        "success",
+        False,
+        save_result,
+        report["summary"],
+    )
+
+    data = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}").json()
+
+    assert data["delivery_readiness"]["jobs"][0]["has_network_or_har_save_response"] is True
+    assert data["evidence_grade"]["has_network_or_har_save_response"] is True
+    assert any(
+        point["kind"] == "network_save_result"
+        and point["network_save_result"]["url"].endswith("/api/smtProduct/add.json")
+        for point in data["evidence_points"]
+    )
 
 
 def test_delivery_workspace_marks_acceptance_blocked_when_l2_not_passed(tmp_path, monkeypatch):

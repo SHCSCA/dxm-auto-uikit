@@ -3,12 +3,14 @@ import os
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urljoin, urlparse
 
 from playwright.sync_api import Browser, BrowserContext, Page, Playwright, TimeoutError, sync_playwright
 
 from src.core.config import SCREENSHOT_DIR, SESSION_DIR
 from src.execution.browser_runtime import chrome_launch_options
 from src.execution.dxm_live import DxmLiveClient
+from src.services.agent_console import HUD_INIT_SCRIPT
 from src.utils import now_iso
 
 RUNTIME_STATE_FILE = SESSION_DIR / 'dianxiaomi_runtime_state.json'
@@ -80,11 +82,57 @@ class DxmLoginFlow:
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
+        self._last_dismiss_blocking_modals_trace: list[dict[str, Any]] = []
 
     def get_state(self) -> dict[str, Any]:
         if self.state_file.exists():
             return json.loads(self.state_file.read_text(encoding='utf-8'))
         return self._default_state()
+
+    def update_live_hud(self, hud: dict[str, Any]) -> dict[str, Any]:
+        page = self._page
+        if page is None:
+            return {'ok': True, 'updated': False, 'reason': 'live_browser_page_missing'}
+        try:
+            return self._apply_live_hud(page, hud)
+        except Exception as exc:
+            return {
+                'ok': False,
+                'updated': False,
+                'reason': 'live_browser_hud_apply_failed',
+                'error': str(exc),
+            }
+
+    def _apply_live_hud(self, page: Page, hud: dict[str, Any]) -> dict[str, Any]:
+        try:
+            page.add_init_script(HUD_INIT_SCRIPT)
+        except Exception:
+            pass
+        try:
+            page.evaluate(HUD_INIT_SCRIPT)
+        except Exception:
+            pass
+        page.evaluate(
+            """
+            (hud) => {
+              window.__dxmAgentHudState = hud;
+              try {
+                window.sessionStorage.setItem('__dxmAgentHudPersistedState', JSON.stringify(hud));
+              } catch (error) {}
+              if (window.__dxmRenderAgentHud) window.__dxmRenderAgentHud();
+            }
+            """,
+            hud,
+        )
+        return {
+            'ok': True,
+            'updated': True,
+            'reason': 'live_browser_hud_updated',
+            'hud': hud,
+            'page_title': page.title(),
+            'current_url': page.url,
+            'updated_at': now_iso(),
+        }
 
     def start_login(self, username: str, password: str) -> dict[str, Any]:
         try:
@@ -212,6 +260,8 @@ class DxmLoginFlow:
             'browser_visible': not self._is_headless(),
             'updated_at': now_iso(),
             'current_nav': target,
+            'dismissed_blocking_modals': result.get('dismissed_blocking_modals'),
+            'dismissed_blocking_modals_trace': result.get('dismissed_blocking_modals_trace') or [],
         }
         self._write_state(state)
         return state
@@ -275,7 +325,6 @@ class DxmLoginFlow:
                 'detected_fields': result.get('detected_fields', []),
             }
             self._write_state(state)
-            self._close_browser_session()
             return state
 
         state = {
@@ -298,7 +347,6 @@ class DxmLoginFlow:
             'target_source_urls': result.get('target_source_urls', []),
         }
         self._write_state(state)
-        self._close_browser_session()
         return state
 
     def perform_editor_action(
@@ -356,7 +404,6 @@ class DxmLoginFlow:
             'published': result.get('published', False),
         }
         self._write_state(state)
-        self._close_browser_session()
         return state
 
     def _write_state(self, state: dict[str, Any]) -> None:
@@ -484,7 +531,7 @@ class DxmLoginFlow:
             label=config['label'],
             timeout=60000,
         )
-        self._dismiss_blocking_modals(page)
+        dismissed_blocking_modals = self._dismiss_blocking_modals(page)
         screenshot_path = WORKFLOW_SCREENSHOT_MAP[target]
         page.screenshot(path=str(screenshot_path), full_page=True)
         return {
@@ -493,6 +540,8 @@ class DxmLoginFlow:
             'screenshot_url': self._artifact_url(screenshot_path),
             'target': target,
             'wait_result': wait_result,
+            'dismissed_blocking_modals': dismissed_blocking_modals,
+            'dismissed_blocking_modals_trace': list(self._last_dismiss_blocking_modals_trace),
         }
 
     def _perform_draft_box_action(
@@ -603,8 +652,9 @@ class DxmLoginFlow:
             editor_url = state.get('page_url')
             if not editor_url:
                 raise RuntimeError('缺少上次编辑页地址')
-            page.goto(editor_url, wait_until='domcontentloaded', timeout=45000)
-            page.wait_for_timeout(2000)
+            if not self._is_same_dxm_editor_page(getattr(page, 'url', ''), editor_url):
+                page.goto(editor_url, wait_until='domcontentloaded', timeout=45000)
+                page.wait_for_timeout(2000)
             ready = self._wait_for_body_text(page, ['基本信息', '半托管服务', '产品信息'])
             if not ready and product_query:
                 page = self._open_editor_page_for_product(page, product_query, store_name)
@@ -677,6 +727,22 @@ class DxmLoginFlow:
         if source_editor_url and isinstance(result, dict) and not result.get('source_editor_url'):
             result['source_editor_url'] = source_editor_url
         return result
+
+    def _is_same_dxm_editor_page(self, current_url: str | None, expected_url: str | None) -> bool:
+        try:
+            current = urlparse(str(current_url or ''))
+            expected = urlparse(str(expected_url or ''))
+        except ValueError:
+            return False
+        if not current.netloc.endswith('dianxiaomi.com') or not expected.netloc.endswith('dianxiaomi.com'):
+            return False
+        if current.path.rstrip('/') != expected.path.rstrip('/'):
+            return False
+        if current.path.rstrip('/') != '/web/smt/edit':
+            return False
+        expected_id = (parse_qs(expected.query).get('id') or [''])[0]
+        current_id = (parse_qs(current.query).get('id') or [''])[0]
+        return bool(expected_id and current_id and expected_id == current_id)
 
     def _enable_semi_managed_on_page(self, page: Page) -> dict[str, Any]:
         page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
@@ -1093,7 +1159,12 @@ class DxmLoginFlow:
         if not isinstance(fill_result, dict):
             return False
         eu_result = fill_result.get('eu_outer_package_image')
-        if isinstance(eu_result, dict) and eu_result.get('ok') and not eu_result.get('deferred'):
+        if (
+            isinstance(eu_result, dict)
+            and eu_result.get('ok')
+            and not eu_result.get('deferred')
+            and not eu_result.get('manual_required')
+        ):
             return True
         image_slots = fill_result.get('image_slots')
         if not isinstance(image_slots, list):
@@ -1103,6 +1174,7 @@ class DxmLoginFlow:
             and self._is_eu_outer_package_slot(item.get('label'), item.get('slot_key'))
             and item.get('ok')
             and not item.get('deferred')
+            and not item.get('manual_required')
             for item in image_slots
         )
 
@@ -1225,20 +1297,24 @@ class DxmLoginFlow:
             }
         dxm_reference_template_results = self._apply_dxm_reference_templates_on_page(page, values)
         reference_missing = self._missing_required_reference_template_results(dxm_reference_template_results)
-        if reference_missing:
+        blocking_reference_missing = [
+            item for item in reference_missing
+            if item != 'dxm_reference_templates.attribute_info'
+        ]
+        if blocking_reference_missing:
             screenshot_path = EDITOR_ACTION_SCREENSHOT_MAP['fill_editor_required_defaults']
             page.screenshot(path=str(screenshot_path), full_page=True)
             return {
                 'stage': 'fill_editor_required_defaults_failed',
                 'label': '店小秘引用模板失败',
-                'message': '店小秘引用模板缺失或未命中：' + ', '.join(reference_missing),
+                'message': '店小秘引用模板缺失或未命中：' + ', '.join(blocking_reference_missing),
                 'page_title': page.title(),
                 'page_url': page.url,
                 'screenshot_url': self._artifact_url(screenshot_path),
                 'fill_result': {
                     'category': category,
                     'dxm_reference_template_results': dxm_reference_template_results,
-                    'missing': reference_missing,
+                    'missing': blocking_reference_missing,
                 },
                 'dxm_reference_template_results': dxm_reference_template_results,
                 'published': False,
@@ -1361,6 +1437,10 @@ class DxmLoginFlow:
 
         reference_templates = dxm_reference_template_results.get('attribute_info') or {'ok': True, 'skipped': True}
         category_attributes = self._fill_category_required_attributes(page)
+        self._mark_attribute_template_deferred_if_attributes_filled(
+            dxm_reference_template_results,
+            category_attributes,
+        )
         self._dismiss_blocking_modals(page)
         original_box = self._choose_ant_select_near_label(page, '是否原箱', ['否'])
         logistics = self._check_choice_by_text(page, '普货')
@@ -1699,6 +1779,12 @@ class DxmLoginFlow:
                 slot_label=slot['label'],
                 filename=slot['filename'],
             )
+            if (
+                not slot_result.get('ok')
+                and self._is_eu_outer_package_slot(slot.get('label'), slot.get('slot_key'))
+                and self._eu_outer_package_auto_fill_unavailable(slot_result)
+            ):
+                slot_result = self._manual_required_eu_outer_package_result(slot_result)
             slot_results.append({**slot, **slot_result})
             if slot_result.get('deferred'):
                 deferred.append(slot)
@@ -1723,7 +1809,11 @@ class DxmLoginFlow:
         else:
             stage = 'media_assets_filled'
             label = '图片资产已填写'
-            message = '已按配置处理图片银行槽位。'
+            if any(item.get('manual_required') for item in slot_results):
+                label = '图片资产已处理'
+                message = '只保存可继续；欧盟外包装图发布前需人工补齐。'
+            else:
+                message = '已按配置处理图片银行槽位。'
         return {
             'stage': stage,
             'label': label,
@@ -1737,6 +1827,29 @@ class DxmLoginFlow:
                 'marketing_images': marketing_result,
             },
             'published': False,
+        }
+
+    def _eu_outer_package_auto_fill_unavailable(self, result: dict[str, Any]) -> bool:
+        text = json.dumps(result, ensure_ascii=False, default=str)
+        unavailable_terms = (
+            '未看到图片银行',
+            '没有可点击的图片选择入口',
+            '未出现图片选择菜单',
+            '图片银行弹窗未打开',
+            '图片银行未找到',
+        )
+        return any(term in text for term in unavailable_terms)
+
+    def _manual_required_eu_outer_package_result(self, result: dict[str, Any]) -> dict[str, Any]:
+        original_result = dict(result)
+        return {
+            **result,
+            'ok': True,
+            'skipped': True,
+            'manual_required': True,
+            'publish_ready': False,
+            'reason': '欧盟外包装图当前页面未提供可自动回填的图片银行入口；本次只保存继续，发布前需人工补齐。',
+            'original_result': original_result,
         }
 
     def _fill_compliance_defaults_on_page(self, page: Page, defaults: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -2279,8 +2392,8 @@ class DxmLoginFlow:
             return target
         self._click_rect_center(page, target['rect'])
         page.wait_for_timeout(1200)
-        self._dismiss_blocking_modals(page)
-        opened = page.evaluate(r'''() => {
+        dismissed = self._dismiss_blocking_modals(page)
+        opened_script = r'''() => {
           const visible = (el) => {
             const r = el.getBoundingClientRect();
             const style = window.getComputedStyle(el);
@@ -2291,10 +2404,19 @@ class DxmLoginFlow:
           const hasBankMenu = Array.from(document.querySelectorAll('li,button,a,span,div')).filter(visible).some(el => textOf(el).includes('图片银行（速卖通）'));
           const hasImageDialog = Array.from(document.querySelectorAll('.ant-modal, .ant-modal-wrap, [role="dialog"]')).filter(visible).some(el => {
             const text = textOf(el);
-            return text.includes('图片') || text.includes('上传') || text.includes('图片银行');
+            return text.includes('从图片银行选择')
+              || text.includes('图片银行的分组')
+              || text.includes('请输入图片名称')
+              || text.includes('图片银行（速卖通）');
           });
           return {ok: hasBankMenu || hasImageDialog, has_bank_menu: hasBankMenu, has_image_dialog: hasImageDialog, body_excerpt: body.slice(-500)};
-        }''')
+        }'''
+        opened = page.evaluate(opened_script)
+        if not opened.get('ok') and dismissed:
+            self._click_rect_center(page, target['rect'])
+            page.wait_for_timeout(1200)
+            self._dismiss_blocking_modals(page)
+            opened = page.evaluate(opened_script)
         if not opened.get('ok'):
             return {'ok': False, 'reason': f'点击{label}槽位后未出现图片选择菜单或图片弹窗', 'target': target, 'opened': opened}
         return {'ok': True, 'target': target, 'opened': opened}
@@ -2742,6 +2864,17 @@ class DxmLoginFlow:
         if not open_result.get('ok'):
             return open_result
         bank_result = self._open_smt_image_bank_from_picker(page, require_menu=self._is_eu_outer_package_slot(slot_label))
+        if not bank_result.get('ok') and '未看到图片银行' in str(bank_result.get('reason') or ''):
+            self._dismiss_blocking_modals(page)
+            retry_open_result = self._open_image_slot_picker(page, slot_label)
+            if retry_open_result.get('ok'):
+                retry_bank_result = self._open_smt_image_bank_from_picker(
+                    page,
+                    require_menu=self._is_eu_outer_package_slot(slot_label),
+                )
+                if retry_bank_result.get('ok'):
+                    open_result = {**retry_open_result, 'retried_after_missing_bank_menu': True, 'initial_open': open_result}
+                    bank_result = retry_bank_result
         if not bank_result.get('ok'):
             return bank_result
         select_result = self._select_image_bank_asset_by_filename(page, filename)
@@ -2854,8 +2987,8 @@ class DxmLoginFlow:
             return target
         self._click_rect_center(page, target['rect'])
         page.wait_for_timeout(1200)
-        self._dismiss_blocking_modals(page)
-        opened = page.evaluate(r'''() => {
+        dismissed = self._dismiss_blocking_modals(page)
+        opened_script = r'''() => {
           const visible = (el) => {
             const r = el.getBoundingClientRect();
             const style = window.getComputedStyle(el);
@@ -2866,16 +2999,26 @@ class DxmLoginFlow:
           const hasBankMenu = Array.from(document.querySelectorAll('li,button,a,span,div')).filter(visible).some(el => textOf(el).includes('图片银行（速卖通）'));
           const hasImageDialog = Array.from(document.querySelectorAll('.ant-modal, .ant-modal-wrap, [role="dialog"]')).filter(visible).some(el => {
             const text = textOf(el);
-            return text.includes('图片') || text.includes('上传') || text.includes('图片银行');
+            return text.includes('从图片银行选择')
+              || text.includes('图片银行的分组')
+              || text.includes('请输入图片名称')
+              || text.includes('图片银行（速卖通）');
           });
           return {ok: hasBankMenu || hasImageDialog, has_bank_menu: hasBankMenu, has_image_dialog: hasImageDialog, body_excerpt: body.slice(-500)};
-        }''')
+        }'''
+        opened = page.evaluate(opened_script)
+        if not opened.get('ok') and dismissed:
+            self._click_rect_center(page, target['rect'])
+            page.wait_for_timeout(1200)
+            self._dismiss_blocking_modals(page)
+            opened = page.evaluate(opened_script)
         if not opened.get('ok'):
             return {'ok': False, 'reason': '点击欧盟外包装图槽位后未出现图片选择菜单或图片弹窗', 'target': target, 'opened': opened}
         return {'ok': True, 'target': target, 'opened': opened}
 
     def _open_smt_image_bank_from_picker(self, page: Page, require_menu: bool = False) -> dict[str, Any]:
-        clicked = page.evaluate(r'''(requireMenu) => {
+        self._dismiss_blocking_modals(page)
+        menu_script = r'''(requireMenu) => {
           const visible = (el) => {
             const r = el.getBoundingClientRect();
             const style = window.getComputedStyle(el);
@@ -2902,7 +3045,13 @@ class DxmLoginFlow:
             return {ok:false, reason:'未看到图片银行（速卖通）菜单', body_excerpt:body.slice(-500)};
           }
           return {ok:true, rect:rectOf(target), text:textOf(target)};
-        }''', require_menu)
+        }'''
+        clicked = page.evaluate(menu_script, require_menu)
+        if not clicked.get('ok'):
+            dismissed = self._dismiss_blocking_modals(page)
+            if dismissed:
+                page.wait_for_timeout(800)
+                clicked = page.evaluate(menu_script, require_menu)
         if not clicked.get('ok'):
             return clicked
         if clicked.get('rect'):
@@ -2917,7 +3066,10 @@ class DxmLoginFlow:
           const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
           const modal = Array.from(document.querySelectorAll('.ant-modal, .ant-modal-wrap, [role="dialog"]')).filter(visible).find(el => {
             const text = textOf(el);
-            return text.includes('图片') || text.includes('图片银行') || text.includes('选择图片');
+            return text.includes('从图片银行选择')
+              || text.includes('图片银行的分组')
+              || text.includes('请输入图片名称')
+              || text.includes('图片银行（速卖通）');
           });
           if (!modal) return {ok:false, reason:'图片银行弹窗未打开'};
           return {ok:true, text:textOf(modal).slice(0, 500)};
@@ -2937,7 +3089,10 @@ class DxmLoginFlow:
           const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
           const modal = Array.from(document.querySelectorAll('.ant-modal, .ant-modal-wrap, [role="dialog"]')).filter(visible).reverse().find(el => {
             const text = textOf(el);
-            return text.includes('图片') || text.includes('选择图片') || text.includes('图片银行');
+            return text.includes('从图片银行选择')
+              || text.includes('图片银行的分组')
+              || text.includes('请输入图片名称')
+              || text.includes('图片银行');
           });
           if (!modal) return {ok:false, reason:'未找到图片银行弹窗'};
           const setValue = (el, value) => {
@@ -2985,7 +3140,10 @@ class DxmLoginFlow:
             .map(v => String(v || '')).join(' ');
           const modal = Array.from(document.querySelectorAll('.ant-modal, .ant-modal-wrap, [role="dialog"]')).filter(visible).reverse().find(el => {
             const text = textOf(el);
-            return text.includes('图片') || text.includes('选择图片') || text.includes('图片银行');
+            return text.includes('从图片银行选择')
+              || text.includes('图片银行的分组')
+              || text.includes('请输入图片名称')
+              || text.includes('图片银行');
           });
           if (!modal) return {ok:false, reason:'图片银行弹窗已关闭或未打开'};
           const candidates = Array.from(modal.querySelectorAll('li,tr,.img-item,.image-item,.ant-image,div,span,img'))
@@ -3448,6 +3606,7 @@ class DxmLoginFlow:
     def _apply_reference_templates_on_page(self, page: Page, priorities: list[str]) -> dict[str, Any]:
         if not priorities:
             return {'ok': True, 'skipped': True, 'reason': 'no_reference_template_config'}
+        self._dismiss_blocking_modals(page)
         clicked = page.evaluate(r'''(priorities) => {
           const visible = (el) => {
             const r = el.getBoundingClientRect();
@@ -3481,6 +3640,7 @@ class DxmLoginFlow:
             return clicked
         self._click_rect_center(page, clicked['rect'])
         page.wait_for_timeout(800)
+        self._dismiss_blocking_modals(page)
         result = self._click_ant_option_near_rect(page, priorities, clicked['rect'])
         verify = page.evaluate(r'''(priorities) => {
           const visible = (el) => {
@@ -3574,6 +3734,25 @@ class DxmLoginFlow:
             for section, result in results.items()
             if result.get('required', True) and not result.get('ok')
         ]
+
+    def _mark_attribute_template_deferred_if_attributes_filled(
+        self,
+        results: dict[str, dict[str, Any]],
+        category_attributes: dict[str, Any],
+    ) -> None:
+        attribute_info = results.get('attribute_info')
+        if not attribute_info or attribute_info.get('ok') or not attribute_info.get('required'):
+            return
+        if not category_attributes.get('ok'):
+            return
+        original_reason = attribute_info.get('reason')
+        results['attribute_info'] = {
+            **attribute_info,
+            'ok': True,
+            'deferred_to_category_attributes': True,
+            'original_reason': original_reason,
+            'reason': '属性引用模板未命中，已改用页面属性字段补齐验证。',
+        }
 
     def _fill_customs_supervision_attribute(self, page: Page, priorities: list[str]) -> dict[str, Any]:
         configured = page.evaluate(r'''() => {
@@ -3862,12 +4041,12 @@ class DxmLoginFlow:
           const compact = body.replace(/\s+/g, '');
           const blockedTerms = ['产品信息中有错误，请检查', '产品信息中有错误'];
           const blocked = blockedTerms.find(term => compact.includes(term));
-          const isEditPage = compact.includes('基本信息') && compact.includes('产品信息') && compact.includes('编辑半托管信息');
           const hasSemiForm = compact.includes('半托管') && (compact.includes('半托管商品信息') || compact.includes('半托管信息') || compact.includes('包装尺寸') || compact.includes('物流属性'));
           return {
             blocked: Boolean(blocked),
             message: blocked || null,
-            is_semi_page: hasSemiForm && !isEditPage && !blocked,
+            is_semi_page: hasSemiForm && !blocked,
+            inline_with_editor_button: hasSemiForm && compact.includes('编辑半托管信息'),
             body_excerpt: compact.slice(0, 500),
           };
         }''')
@@ -4251,7 +4430,7 @@ class DxmLoginFlow:
         required: bool = True,
     ) -> dict[str, Any]:
         page.wait_for_timeout(800)
-        option = page.evaluate(r'''({priorities, anchor}) => {
+        option_script = r'''({priorities, anchor}) => {
           const visible = (el) => {
             const r = el.getBoundingClientRect();
             const style = window.getComputedStyle(el);
@@ -4272,19 +4451,35 @@ class DxmLoginFlow:
           const candidates = options
             .filter(x => overlaps(x.rect, anchor) && x.rect.y >= anchor.y - 8 && x.rect.y <= anchor.y + 420)
             .sort((a, b) => distance(a.rect, anchor) - distance(b.rect, anchor));
-          if (!candidates.length) return null;
           const priorityTerms = priorities.map(String).filter(Boolean);
-          const matched = priorityTerms.reduce((found, term) => found || candidates.find(x => x.text.includes(term)), null);
-          const picked = matched || (priorityTerms.length ? null : candidates[0]);
-          if (!picked) return {no_match:true, options:candidates.map(x => x.text).slice(0, 20)};
-          return {text:picked.text, rect:picked.rect};
-        }''', {'priorities': priorities, 'anchor': anchor_rect})
+          const pick = (items) => {
+            const matched = priorityTerms.reduce((found, term) => found || items.find(x => x.text.includes(term)), null);
+            return matched || (priorityTerms.length ? null : items[0]);
+          };
+          const pickedNear = pick(candidates);
+          if (pickedNear) return {text:pickedNear.text, rect:pickedNear.rect, strategy:'near_anchor'};
+          const pickedGlobal = pick(options);
+          if (pickedGlobal) return {text:pickedGlobal.text, rect:pickedGlobal.rect, strategy:'global_visible_options'};
+          return {
+            no_match:true,
+            options:(candidates.length ? candidates : options).map(x => x.text).slice(0, 20),
+            candidate_count:candidates.length,
+            option_count:options.length,
+          };
+        }'''
+        option = page.evaluate(option_script, {'priorities': priorities, 'anchor': anchor_rect})
         if not option or not option.get('rect'):
-            reason = '未找到匹配选项' if option and option.get('no_match') else '未找到当前选择框附近的可选项'
+            dismissed = self._dismiss_blocking_modals(page)
+            if dismissed:
+                self._click_rect_center(page, anchor_rect)
+                page.wait_for_timeout(800)
+                option = page.evaluate(option_script, {'priorities': priorities, 'anchor': anchor_rect})
+        if not option or not option.get('rect'):
+            reason = '未找到匹配选项' if option and option.get('no_match') else '未找到可见下拉选项'
             return {'ok': not required, 'reason': reason, 'optional': not required, 'options': (option or {}).get('options')}
         self._click_rect_center(page, option['rect'])
         page.wait_for_timeout(800)
-        return {'ok': True, 'text': option.get('text')}
+        return {'ok': True, 'text': option.get('text'), 'strategy': option.get('strategy')}
 
     def _click_ant_option(self, page: Page, priorities: list[str], required: bool = True) -> dict[str, Any]:
         page.wait_for_timeout(800)
@@ -4345,6 +4540,7 @@ class DxmLoginFlow:
         return result
 
     def _fill_semi_managed_defaults_on_page(self, page: Page, defaults: dict[str, Any] | None = None) -> dict[str, Any]:
+        self._dismiss_blocking_modals(page)
         values = {
             'is_original_box': '否',
             'logistics_attribute': '普货',
@@ -4498,7 +4694,17 @@ class DxmLoginFlow:
           const jitStock = variantInputs.length
             ? {...variantInputs[variantInputs.length - 1], strategy:'variant_table_rightmost'}
             : locatedInput('JIT库存', '库存');
-          const productPrice = locatedInput('产品价格', '价格');
+          const locatedInputAny = (terms, placeholderTerms = terms) => {
+            for (let i = 0; i < terms.length; i += 1) {
+              const found = locatedInput(terms[i], placeholderTerms[i] || terms[i]);
+              if (found) return found;
+            }
+            return null;
+          };
+          const productPrice = locatedInputAny(
+            ['产品价格', '零售价', '供货价', '货值', '批发价', '报价'],
+            ['价格', '零售价', '供货价', '货值', '批发价', '报价']
+          );
           const goodsCode = variantInputs.length >= 3
             ? {...variantInputs[variantInputs.length - 3], strategy:'variant_optional_left_of_stock'}
             : null;
@@ -4565,7 +4771,67 @@ class DxmLoginFlow:
             .filter(Boolean);
         }''')
         if not ids:
-            return {'ok': False, 'reason': '未找到半托管是否原箱选择框'}
+            return page.evaluate(r'''(value) => {
+              const visible = (el) => {
+                const r = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+              };
+              const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
+              const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+              const desiredText = norm(value).includes('是') && !norm(value).includes('否') ? '是' : '否';
+              const setSelect = (select) => {
+                const options = Array.from(select.options || []);
+                const option = options.find(opt => norm(opt.textContent).includes(desiredText))
+                  || options.find(opt => desiredText === '否' && String(opt.value) === '1')
+                  || options.find(opt => desiredText === '是' && String(opt.value) === '2');
+                if (!option) {
+                  return {ok:false, reason:`未找到${desiredText}选项`, text:textOf(select), value:String(select.value || '')};
+                }
+                const before = String(select.value || '');
+                const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')?.set;
+                if (setter) setter.call(select, option.value);
+                else select.value = option.value;
+                select.dispatchEvent(new Event('input', {bubbles:true}));
+                select.dispatchEvent(new Event('change', {bubbles:true}));
+                select.dispatchEvent(new Event('blur', {bubbles:true}));
+                return {
+                  ok: String(select.value || '') === String(option.value),
+                  before,
+                  after: String(select.value || ''),
+                  selected_text: textOf(option),
+                };
+              };
+
+              const rowSelects = [];
+              const headerTerms = ['是否原箱', '是否原盒包装', 'OriginalPackage'];
+              for (const table of Array.from(document.querySelectorAll('table')).filter(visible)) {
+                const cells = Array.from(table.querySelectorAll('th,td')).filter(visible);
+                const header = cells.find(cell => headerTerms.some(term => norm(textOf(cell)).includes(norm(term))));
+                if (!header || typeof header.cellIndex !== 'number' || header.cellIndex < 0) continue;
+                const rows = Array.from(table.querySelectorAll('tr'))
+                  .filter(row => visible(row) && !row.contains(header));
+                for (const row of rows) {
+                  const rowCells = Array.from(row.children).filter(el => ['TD', 'TH'].includes(el.tagName));
+                  const cell = rowCells[header.cellIndex];
+                  if (!cell || !visible(cell)) continue;
+                  const selects = Array.from(cell.querySelectorAll('select')).filter(visible);
+                  rowSelects.push(...selects);
+                }
+              }
+              if (!rowSelects.length) {
+                return {ok:false, reason:'未找到半托管是否原箱选择框'};
+              }
+              const results = rowSelects.map(setSelect);
+              const missing = results.filter(item => !item.ok);
+              return {
+                ok: missing.length === 0,
+                strategy: 'table_select_by_header',
+                count: rowSelects.length,
+                results,
+                reason: missing[0]?.reason || null,
+              };
+            }''', value)
         results = []
         for input_id in ids:
             results.append(self._choose_ant_select_by_input_id(page, input_id, [value], required=True))
@@ -4653,6 +4919,28 @@ class DxmLoginFlow:
         return {'ok': not missing, 'plain_goods': plain_goods, 'results': modal_results, 'reason': missing[0].get('reason') if missing else None}
 
     def _save_only_on_page(self, page: Page) -> dict[str, Any]:
+        dismissed_modals = self._dismiss_blocking_modals(page)
+        blocking_modal = self._visible_blocking_modal_state(page)
+        if blocking_modal.get('visible'):
+            screenshot_path = EDITOR_ACTION_SCREENSHOT_MAP['save_only']
+            page.screenshot(path=str(screenshot_path), full_page=True)
+            return {
+                'stage': 'save_only_failed',
+                'label': '保存失败',
+                'message': '保存前弹窗未能关闭',
+                'page_title': page.title(),
+                'page_url': page.url,
+                'screenshot_url': self._artifact_url(screenshot_path),
+                'save_result': {
+                    'ok': False,
+                    'reason': '保存前弹窗未能关闭',
+                    'dismissed_blocking_modals': dismissed_modals,
+                    'dismiss_trace': self._last_dismiss_blocking_modals_trace[-8:],
+                    'blocking_modal': blocking_modal,
+                    'published': False,
+                },
+                'published': False,
+            }
         click_result = page.evaluate(r'''() => {
           const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
           const labels = ['发布','立即发布','继续发布','保存并发布','确认发布','提交发布','保存并移入待发布','移入待发布'];
@@ -4674,6 +4962,12 @@ class DxmLoginFlow:
           return {ok:true, rect:{x:r.x,y:r.y,w:r.width,h:r.height}, message:'已定位保存按钮', published:false};
         }''')
         click_result = click_result or {}
+        if dismissed_modals:
+            click_result = {
+                **click_result,
+                'dismissed_blocking_modals': dismissed_modals,
+                'dismiss_trace': self._last_dismiss_blocking_modals_trace[-8:],
+            }
         network_events = self._capture_save_network_events(page, click_result.get('rect'))
         if click_result.get('ok') and click_result.get('rect'):
             self._click_rect_center(page, click_result['rect'])
@@ -4717,6 +5011,34 @@ class DxmLoginFlow:
             'published': False,
         }
 
+    def _visible_blocking_modal_state(self, page: Page) -> dict[str, Any]:
+        return page.evaluate(r'''() => {
+          /* __DXM_BLOCKING_MODAL_STATE__ */
+          const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
+          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          const rectOf = (el) => {
+            const r = el.getBoundingClientRect();
+            return {x:r.x, y:r.y, w:r.width, h:r.height};
+          };
+          const isVisible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const modal = Array.from(document.querySelectorAll('.notice-list-modal, .ant-modal-wrap, [role="dialog"], [class*="modal"], [class*="Modal"], [class*="popup"], [class*="Popup"], [class*="activity"], [class*="Activity"]'))
+            .filter(isVisible)
+            .reverse()
+            .find(el => {
+              const text = norm(el.innerText || el.textContent);
+              if (!text) return false;
+              if (text.includes('从图片银行选择') || text.includes('图片银行的分组')) return false;
+              return text.includes('活动') || text.includes('公告') || text.includes('通知') || text.includes('我知道') || text.includes('知道了') || text.includes('关闭') || text.includes('忽略提示');
+            });
+          if (!modal) return {visible:false};
+          const text = textOf(modal);
+          return {visible:true, text:text.slice(0, 300), compact:norm(text).slice(0, 300), rect:rectOf(modal)};
+        }''') or {'visible': False}
+
     def _verify_not_published_on_page(
         self,
         page: Page,
@@ -4742,6 +5064,17 @@ class DxmLoginFlow:
           };
         }''', {'productQuery': product_query, 'storeName': store_name})
         prior_save_ok = bool(prior_save_result and prior_save_result.get('ok') is True and prior_save_result.get('published') is not True)
+        ambient_publish_risk_terms = {'已上架', '在线商品'}
+        if (
+            result
+            and prior_save_ok
+            and result.get('save_only_term')
+            and result.get('publish_risk_term') in ambient_publish_risk_terms
+        ):
+            result['ignored_ambient_publish_risk_term'] = result.get('publish_risk_term')
+            result['publish_risk_term'] = None
+            result['published'] = False
+            result['ok'] = True
         if result and not result.get('publish_risk_term') and prior_save_ok and not result.get('ok'):
             result['ok'] = True
             result['save_only_term'] = prior_save_result.get('success_text') or prior_save_result.get('message') or '上一保存动作成功'
@@ -4852,22 +5185,36 @@ class DxmLoginFlow:
     def _network_save_result(self, events: list[dict[str, Any]]) -> dict[str, Any]:
         if not events:
             return {'ok': None, 'reason': '未捕获保存相关接口响应'}
-        for item in reversed(events):
-            payload = item.get('json')
-            if isinstance(payload, dict):
-                code = payload.get('code')
-                msg = payload.get('msg') or payload.get('message')
-                ok = code in (0, '0') or payload.get('success') is True
-                return {
-                    'ok': ok,
-                    'url': item.get('url'),
-                    'method': item.get('method'),
-                    'status': item.get('status'),
-                    'code': code,
-                    'msg': msg,
-                    'message': msg,
-                    'raw': payload,
-                }
+        json_events = [item for item in events if isinstance(item.get('json'), dict)]
+        if json_events:
+            def priority(item: dict[str, Any]) -> int:
+                url = str(item.get('url') or '').lower()
+                if url.endswith('/add.json') and 'history' not in url:
+                    return 0
+                if '/add.json' in url and 'history' not in url:
+                    return 1
+                return 2
+
+            indexed = list(enumerate(json_events))
+            _idx, item = sorted(indexed, key=lambda pair: (priority(pair[1]), -pair[0]))[0]
+            payload = item.get('json') or {}
+            data = payload.get('data')
+            code = payload.get('code')
+            msg = payload.get('msg') or payload.get('message')
+            if isinstance(data, dict):
+                code = data.get('code', code)
+                msg = data.get('msg') or data.get('message') or msg
+            ok = code in (0, '0') or payload.get('success') is True
+            return {
+                'ok': ok,
+                'url': item.get('url'),
+                'method': item.get('method'),
+                'status': item.get('status'),
+                'code': code,
+                'msg': msg,
+                'message': msg,
+                'raw': payload,
+            }
         last = events[-1]
         status = last.get('status')
         return {
@@ -4955,6 +5302,9 @@ class DxmLoginFlow:
 
     def _dismiss_blocking_modals(self, page: Page) -> int:
         dismissed = 0
+        trace: list[dict[str, Any]] = []
+        repeated_clicks: dict[str, int] = {}
+        self._last_dismiss_blocking_modals_trace = trace
         for _ in range(10):
             result = page.evaluate(r'''() => {
               const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
@@ -4984,8 +5334,87 @@ class DxmLoginFlow:
                   return {visible:true, clicked:`guide:${norm(target.innerText || target.textContent)}`, rect:rectOf(target), text:guideText.slice(0,300)};
                 }
               }
-              const modal = Array.from(document.querySelectorAll('.notice-list-modal, .ant-modal-wrap, [role="dialog"]')).find(isVisible);
-              if (!modal) return {visible:false};
+              const dropdown = Array.from(document.querySelectorAll('.ant-dropdown:not(.ant-dropdown-hidden), .ant-dropdown-menu, [role="menu"], .dropdown-menu'))
+                .filter(isVisible)
+                .reverse()
+                .find(el => {
+                  const text = norm(el.innerText || el.textContent);
+                  return text.includes('不提醒') || text.includes('不提示') || text.includes('关闭提示') || text.includes('忽略提示');
+                });
+              if (dropdown) {
+                const dropdownText = textOf(dropdown);
+                const dangerousTerms = ['发布', '立即发布', '继续发布', '保存并发布', '确认发布', '提交发布', '保存并移入待发布', '移入待发布'];
+                const dangerousTerm = dangerousTerms.find(term => norm(dropdownText).includes(norm(term)));
+                if (dangerousTerm) {
+                  return {visible:true, dangerous:true, reason:`检测到危险下拉菜单：${dangerousTerm}`, text:dropdownText.slice(0,300)};
+                }
+                const options = Array.from(dropdown.querySelectorAll('button,a,li,span,div')).filter(isVisible);
+                const target = options.find(el => norm(el.innerText || el.textContent).includes('不提示'))
+                  || options.find(el => norm(el.innerText || el.textContent).includes('不提醒'))
+                  || options.find(el => norm(el.innerText || el.textContent).includes('关闭提示'))
+                  || options.find(el => norm(el.innerText || el.textContent).includes('忽略提示'));
+                if (target) {
+                  return {visible:true, clicked:`dropdown:${norm(target.innerText || target.textContent)}`, rect:rectOf(target), text:dropdownText.slice(0,300)};
+                }
+              }
+              const standaloneNoticeLabels = ['忽略提示','我知道了','知道了','关闭','确定'];
+              const standaloneNotice = Array.from(document.querySelectorAll('button,a,[role="button"],span,div'))
+                .filter(isVisible)
+                .map(el => ({el, text:norm(el.innerText || el.textContent), rect:rectOf(el), tag:el.tagName}))
+                .filter(item => standaloneNoticeLabels.includes(item.text))
+                .sort((a, b) => {
+                  const area = (item) => Math.max(1, item.rect.w) * Math.max(1, item.rect.h);
+                  const tagScore = (item) => ['BUTTON', 'A', 'SPAN'].includes(item.tag) ? 0 : 1;
+                  return tagScore(a) - tagScore(b) || area(a) - area(b);
+                })[0] || null;
+               const modalSelectors = [
+                 '.notice-list-modal',
+                 '.ant-modal-wrap',
+                 '.ant-modal',
+                 '.el-dialog',
+                 '.el-dialog__wrapper',
+                 '[role="dialog"]',
+                 '[class*="modal"]',
+                 '[class*="Modal"]',
+                 '[class*="popup"]',
+                 '[class*="Popup"]',
+                 '[class*="activity"]',
+                 '[class*="Activity"]',
+                 '[class*="campaign"]',
+                 '[class*="Campaign"]',
+                 '[class*="remind"]',
+                 '[class*="Remind"]',
+                 '[class*="dialog"]',
+                 '[class*="Dialog"]'
+               ].join(',');
+               const hasModalContent = (el) => {
+                 if (el.classList.contains('ant-modal-mask')) return false;
+                 const text = norm(el.innerText || el.textContent);
+                 const hasControl = Boolean(el.querySelector('button,a,[role="button"],input,textarea'));
+                 return Boolean(text || hasControl);
+               };
+               const explicitModal = Array.from(document.querySelectorAll(modalSelectors))
+                 .filter(isVisible)
+                 .find(hasModalContent);
+               const fixedNotice = Array.from(document.querySelectorAll('body *')).find(el => {
+                 if (!isVisible(el)) return false;
+                 const style = window.getComputedStyle(el);
+                 const zIndex = Number.parseInt(style.zIndex || '0', 10) || 0;
+                 if (!['fixed', 'sticky'].includes(style.position) && zIndex < 100) return false;
+                 const r = el.getBoundingClientRect();
+                 if (r.width < 240 || r.height < 80) return false;
+                 const text = norm(el.innerText || el.textContent);
+                 if (!(text.includes('重要提醒') || text.includes('最新特惠') || text.includes('活动') || text.includes('通知'))) return false;
+                 return ['下一步','跳过','完成','我知道了','知道了','关闭','确定','忽略提示']
+                   .some(label => text.includes(label));
+               });
+               const modal = explicitModal || fixedNotice;
+               if (!modal) {
+                 if (standaloneNotice) {
+                   return {visible:true, clicked:`standalone:${standaloneNotice.text}`, rect:rectOf(standaloneNotice.el), text:standaloneNotice.text};
+                }
+                return {visible:false};
+              }
               const modalText = textOf(modal);
               const compactModalText = norm(modalText);
               if (compactModalText.includes('从图片银行选择') || compactModalText.includes('图片银行的分组')) {
@@ -4996,34 +5425,86 @@ class DxmLoginFlow:
               if (dangerousTerm) {
                 return {visible:true, dangerous:true, reason:`检测到危险弹窗：${dangerousTerm}`, text:modalText.slice(0,300)};
               }
+               const isNoticeModal = modal.classList.contains('notice-list-modal')
+                 || compactModalText.includes('公告')
+                 || compactModalText.includes('通知')
+                 || compactModalText.includes('活动')
+                 || compactModalText.includes('重要提醒')
+                 || compactModalText.includes('最新特惠')
+                 || compactModalText.includes('忽略提示')
+                 || compactModalText.includes('我知道')
+                 || compactModalText.includes('知道了');
+              if (isNoticeModal) {
+                const noticeButtons = Array.from(modal.querySelectorAll('button,a,span,div')).filter(isVisible);
+                const noticeLabels = ['忽略提示','我知道了','知道了','关闭','确定'];
+                const noticeMatches = noticeButtons
+                  .map(el => ({el, text:norm(el.innerText || el.textContent), rect:rectOf(el), tag:el.tagName}))
+                  .filter(item => noticeLabels.includes(item.text))
+                  .sort((a, b) => {
+                    const area = (item) => Math.max(1, item.rect.w) * Math.max(1, item.rect.h);
+                    const tagScore = (item) => ['BUTTON', 'A', 'SPAN'].includes(item.tag) ? 0 : 1;
+                    return tagScore(a) - tagScore(b) || area(a) - area(b);
+                  });
+                const noticeTarget = noticeMatches[0] || null;
+                if (noticeTarget) {
+                  return {visible:true, clicked:noticeTarget.text, rect:noticeTarget.rect, text:modalText.slice(0,300)};
+                }
+              }
+              if (standaloneNotice) {
+                return {visible:true, clicked:`standalone:${standaloneNotice.text}`, rect:rectOf(standaloneNotice.el), text:standaloneNotice.text};
+              }
+              const modalDebug = () => ({
+                tag: modal.tagName,
+                cls: String(modal.className || ''),
+                text: modalText.slice(0,300),
+                controls: Array.from(modal.querySelectorAll('button,a,span,div'))
+                  .filter(isVisible)
+                  .map(el => norm(el.innerText || el.textContent))
+                  .filter(Boolean)
+                  .slice(0,20),
+              });
               const closeButton = Array.from(modal.querySelectorAll('.ant-modal-close, .ant-modal-close-x, .close, .close-btn, .notice-close, [class*="close"], [aria-label*="Close"], [aria-label*="关闭"]'))
                 .find(isVisible);
               if (closeButton) {
                 return {visible:true, clicked:'modal-close', rect:rectOf(closeButton)};
               }
-              const isNoticeModal = modal.classList.contains('notice-list-modal') || compactModalText.includes('公告') || compactModalText.includes('通知');
-              const labels = isNoticeModal
-                ? ['跳过','下一步','完成','我知道了','知道了','关闭','确定','下一条']
-                : ['跳过','下一步','完成','我知道了','知道了','关闭','取消'];
+              const guideDismissLabels = ['跳过','下一步','完成','我知道了','知道了','关闭','取消'];
+              const noticeDismissLabels = ['跳过','下一步','完成','我知道了','知道了','关闭','确定','下一条'];
+              const labels = [...(isNoticeModal ? noticeDismissLabels : guideDismissLabels), '忽略提示'];
               const buttons = Array.from(modal.querySelectorAll('button,a,span,div')).filter(isVisible);
               const textMatches = buttons.filter(el => labels.includes(norm(el.innerText || el.textContent)));
               const target = textMatches.find(el => ['BUTTON', 'A'].includes(el.tagName))
                 || (textMatches[0] && (textMatches[0].closest('button,a') || textMatches[0]));
-              if (!target) return {visible:true, clicked: isNoticeModal ? 'escape' : null};
+              if (!target) return {visible:true, clicked: isNoticeModal ? 'escape' : null, text: modalText.slice(0,300), modal_debug: modalDebug()};
               return {visible:true, clicked:norm(target.innerText || target.textContent), rect:rectOf(target)};
             }''')
             if not result or not result.get('visible'):
                 return dismissed
+            trace.append({
+                'clicked': result.get('clicked'),
+                'rect': result.get('rect'),
+                'text': str(result.get('text') or '')[:160],
+                'dangerous': bool(result.get('dangerous')),
+                'modal_debug': result.get('modal_debug'),
+            })
             if result.get('dangerous'):
                 raise RuntimeError(result.get('reason') or '检测到危险弹窗，已停止自动点击')
             if not result.get('clicked'):
                 return dismissed
+            rect = result.get('rect')
+            click_key = json.dumps({'clicked': result.get('clicked'), 'rect': rect}, ensure_ascii=False, sort_keys=True)
+            repeated_clicks[click_key] = repeated_clicks.get(click_key, 0) + 1
+            if repeated_clicks[click_key] >= 3:
+                trace[-1]['fallback'] = 'escape_after_repeated_click'
+                page.keyboard.press('Escape')
+                dismissed += 1
+                page.wait_for_timeout(800)
+                continue
             if result.get('clicked') == 'escape':
                 page.keyboard.press('Escape')
                 dismissed += 1
                 page.wait_for_timeout(800)
                 continue
-            rect = result.get('rect')
             if rect:
                 self._click_rect_center(page, rect)
                 dismissed += 1
@@ -5189,6 +5670,7 @@ class DxmLoginFlow:
             .filter(url => url.includes('goods_id=') || url.includes('detail.1688.com') || url.includes('yangkeduo.com'));
           const claim = claimMark;
           const targetUrls = Array.isArray(targetSourceUrls) ? targetSourceUrls.filter(Boolean).map(String) : [];
+          const hasExplicitTarget = Boolean(claim) || Boolean(frag) || targetUrls.length > 0;
           const hasTargetSource = (row) => {
             if (!targetUrls.length) return false;
             const urls = sourceUrls(row);
@@ -5199,7 +5681,10 @@ class DxmLoginFlow:
             if (store && !x.text.includes(`「${store}」`) && !x.text.includes(store)) return false;
             if (claim && x.text.includes(claim)) return true;
             if (hasTargetSource(rows[x.idx])) return true;
-            return frag ? x.text.includes(frag) : ['移入待发布','编辑','发布','更多'].some(k => x.text.includes(k));
+            if (targetUrls.length) return false;
+            if (frag) return x.text.includes(frag);
+            if (hasExplicitTarget) return false;
+            return ['移入待发布','编辑','发布','更多'].some(k => x.text.includes(k));
           });
           const claimMatches = claim ? candidates.filter(x => x.text.includes(claim)) : [];
           if (claimMatches.length > 1) {
@@ -5212,7 +5697,7 @@ class DxmLoginFlow:
               const r = el.getBoundingClientRect();
               if (!txt || r.width < 5 || r.height < 5) return null;
               if (!['移入待发布','编辑','发布','更多'].includes(txt)) return null;
-              return {txt, tag: el.tagName, cls: String(el.className || ''), rect: {x:r.x,y:r.y,w:r.width,h:r.height}};
+              return {txt, tag: el.tagName, cls: String(el.className || ''), href: String(el.href || el.getAttribute('href') || ''), rect: {x:r.x,y:r.y,w:r.width,h:r.height}};
             }).filter(Boolean);
             return {ok:true, rowIndex:claimMatches[0].idx, rowText:claimMatches[0].text.slice(0,700), sourceUrls:sourceUrls(row), actions, matchedBy:'claim_mark'};
           }
@@ -5227,7 +5712,7 @@ class DxmLoginFlow:
               const r = el.getBoundingClientRect();
               if (!txt || r.width < 5 || r.height < 5) return null;
               if (!['移入待发布','编辑','发布','更多'].includes(txt)) return null;
-              return {txt, tag: el.tagName, cls: String(el.className || ''), rect: {x:r.x,y:r.y,w:r.width,h:r.height}};
+              return {txt, tag: el.tagName, cls: String(el.className || ''), href: String(el.href || el.getAttribute('href') || ''), rect: {x:r.x,y:r.y,w:r.width,h:r.height}};
             }).filter(Boolean);
             return {ok:true, rowIndex:sourceMatches[0].idx, rowText:sourceMatches[0].text.slice(0,700), sourceUrls:sourceUrls(row), actions, matchedBy:'source_url'};
           }
@@ -5242,7 +5727,7 @@ class DxmLoginFlow:
             const r = el.getBoundingClientRect();
             if (!txt || r.width < 5 || r.height < 5) return null;
             if (!['移入待发布','编辑','发布','更多'].includes(txt)) return null;
-            return {txt, tag: el.tagName, cls: String(el.className || ''), rect: {x:r.x,y:r.y,w:r.width,h:r.height}};
+            return {txt, tag: el.tagName, cls: String(el.className || ''), href: String(el.href || el.getAttribute('href') || ''), rect: {x:r.x,y:r.y,w:r.width,h:r.height}};
           }).filter(Boolean);
           return {ok:true, rowIndex:picked.idx, rowText:picked.text.slice(0,700), sourceUrls:sourceUrls(row), actions};
         }''', {'frag': product_query, 'store': store_name, 'claimMark': claim_mark, 'targetSourceUrls': target_source_urls or []})
@@ -5272,15 +5757,68 @@ class DxmLoginFlow:
         page.wait_for_timeout(1500)
 
         add_note = page.evaluate(r'''() => {
-          const el = Array.from(document.querySelectorAll('li.ant-dropdown-menu-item')).find(el => {
-            return (el.innerText || el.textContent || '').replace(/\s+/g, '').trim() === '添加备注';
-          });
-          if (!el) return null;
-          const r = el.getBoundingClientRect();
-          return {rect:{x:r.x,y:r.y,w:r.width,h:r.height}};
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const norm = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, '').trim();
+          const rectOf = (el) => {
+            const r = el.getBoundingClientRect();
+            return {x:r.x,y:r.y,w:r.width,h:r.height};
+          };
+          const dangerousTerms = ['发布', '立即发布', '继续发布', '保存并发布', '确认发布', '提交发布', '保存并移入待发布', '移入待发布', '删除'];
+          const menus = Array.from(document.querySelectorAll('.ant-dropdown:not(.ant-dropdown-hidden), .ant-dropdown-menu, [role="menu"], .dropdown-menu, .vxe-table--context-menu-wrapper, .vxe-pulldown--panel'))
+            .filter(visible);
+          const scope = menus.length ? menus[menus.length - 1] : document;
+          const candidates = Array.from(scope.querySelectorAll('li.ant-dropdown-menu-item, li, a, button, span, div, [role="menuitem"]'))
+            .filter(visible)
+            .map(el => {
+              const clickable = el.closest('li.ant-dropdown-menu-item,[role="menuitem"],a,button') || el;
+              return {
+                el,
+                clickable,
+                text:norm(el),
+                clickText:norm(clickable),
+                tag:clickable.tagName,
+                cls:String(clickable.className || ''),
+                rect:rectOf(clickable),
+              };
+            })
+            .filter(item => item.text);
+          const safeRemark = candidates
+            .filter(item => {
+            const label = item.text || item.clickText;
+            if (!label.includes('备注')) return false;
+            if (dangerousTerms.some(term => item.text.includes(term))) return false;
+            if (dangerousTerms.some(term => item.clickText.includes(term))) return false;
+            return true;
+          })
+            .sort((a, b) => {
+              const score = (item) => {
+                const label = item.text || item.clickText;
+                if (['备注','添加备注','修改备注'].includes(label)) return 0;
+                if (label.includes('备注') && label.length <= 8) return 1;
+                if (['A','BUTTON','LI'].includes(item.tag)) return 2;
+                return 3;
+              };
+              return score(a) - score(b) || a.text.length - b.text.length;
+            })[0];
+          if (!safeRemark) {
+            return {
+              ok:false,
+              reason:'未找到添加备注入口',
+              menu_text: (menus.map(menu => norm(menu)).filter(Boolean).join(' | ') || '').slice(0, 500),
+              samples: candidates.map(item => item.text).filter(Boolean).slice(0, 20),
+            };
+          }
+          return {ok:true, text:safeRemark.text, click_text:safeRemark.clickText, tag:safeRemark.tag, rect:safeRemark.rect};
         }''')
-        if not add_note:
-            raise RuntimeError('未找到添加备注入口')
+        if not add_note or not add_note.get('ok'):
+            samples = add_note.get('samples') if isinstance(add_note, dict) else None
+            sample_text = f"；菜单项：{' / '.join(samples[:8])}" if isinstance(samples, list) and samples else ""
+            reason = (add_note or {}).get('reason') or '未找到添加备注入口'
+            raise RuntimeError(f'{reason}{sample_text}')
         self._click_rect_center(page, add_note['rect'])
         page.wait_for_timeout(1500)
 
@@ -5353,6 +5891,39 @@ class DxmLoginFlow:
     def _click_rect_center(self, page: Page, rect: dict[str, Any]) -> None:
         page.mouse.click(rect['x'] + rect['w'] / 2, rect['y'] + rect['h'] / 2)
 
+    def _context_pages(self) -> list[Page]:
+        if self._context is None or not hasattr(self._context, 'pages'):
+            return []
+        try:
+            return list(self._context.pages)
+        except Exception:
+            return []
+
+    def _new_context_pages(self, pages_before: list[Page]) -> list[Page]:
+        before_ids = {id(page) for page in pages_before}
+        return [page for page in self._context_pages() if id(page) not in before_ids]
+
+    def _find_editor_page(self, pages: list[Page], wait_ms: int = 0) -> Page | None:
+        seen: list[Page] = []
+        deadline = time.monotonic() + max(wait_ms, 0) / 1000
+        while True:
+            for page in pages:
+                if page is None or any(id(page) == id(item) for item in seen):
+                    continue
+                seen.append(page)
+            for page in seen:
+                if self._is_playwright_object_closed(page):
+                    continue
+                try:
+                    if '/web/smt/edit' in str(page.url or ''):
+                        return page
+                except Exception:
+                    continue
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.25)
+            pages = [*pages, *self._context_pages()]
+
     def _open_editor_from_draft_box(self, page: Page, row_info: dict[str, Any] | None = None) -> Page:
         if self._context is None:
             raise RuntimeError('浏览器上下文不存在，无法从采集箱进入编辑页')
@@ -5374,18 +5945,46 @@ class DxmLoginFlow:
             or next((a for a in actions if a.get('txt') == '编辑'), None)
         )
         if edit_action:
+            edit_href = str(edit_action.get('href') or '').strip()
+            if edit_href and not edit_href.lower().startswith('javascript') and edit_href != '#':
+                edit_url = urljoin(str(page.url or ''), edit_href)
+                if '/web/smt/edit' in edit_url:
+                    page.goto(edit_url, wait_until='domcontentloaded', timeout=45000)
+                    page.wait_for_url('**/web/smt/edit**', timeout=15000)
+                    page.wait_for_timeout(1500)
+                    return page
+            pages_before_dom = self._context_pages()
+            dom_click = self._dispatch_draft_row_edit_event(page, row_info or {}) or {}
+            if dom_click.get('ok'):
+                page.wait_for_timeout(1500)
+                editor_page = self._find_editor_page(
+                    [page, *self._new_context_pages(pages_before_dom)],
+                    wait_ms=8000,
+                )
+                if editor_page is not None:
+                    return editor_page
             if hasattr(self._context, 'expect_page'):
+                pages_before = self._context_pages()
                 try:
                     with self._context.expect_page(timeout=8000) as new_page_info:
                         self._click_rect_center(page, edit_action['rect'])
                     new_page = new_page_info.value
                     new_page.wait_for_load_state('domcontentloaded', timeout=10000)
-                    new_page.wait_for_timeout(1500)
-                    if '/web/smt/edit' in new_page.url:
-                        return new_page
+                    editor_page = self._find_editor_page(
+                        [new_page, page, *self._new_context_pages(pages_before)],
+                        wait_ms=12000,
+                    )
+                    if editor_page is not None:
+                        return editor_page
                     page = new_page
                 except TimeoutError:
                     page.wait_for_timeout(1500)
+                    editor_page = self._find_editor_page(
+                        [page, *self._new_context_pages(pages_before)],
+                        wait_ms=1500,
+                    )
+                    if editor_page is not None:
+                        return editor_page
             else:
                 self._click_rect_center(page, edit_action['rect'])
                 page.wait_for_timeout(1500)
@@ -5411,12 +6010,16 @@ class DxmLoginFlow:
             try:
                 if locator.count() == 0:
                     continue
+                pages_before = self._context_pages()
                 with self._context.expect_page(timeout=5000) as new_page_info:
                     locator.click(timeout=3000)
                 new_page = new_page_info.value
                 new_page.wait_for_load_state('domcontentloaded', timeout=10000)
-                new_page.wait_for_timeout(1500)
-                return new_page
+                editor_page = self._find_editor_page(
+                    [new_page, page, *self._new_context_pages(pages_before)],
+                    wait_ms=5000,
+                )
+                return editor_page or new_page
             except TimeoutError:
                 try:
                     locator.click(timeout=3000)
@@ -5429,6 +6032,59 @@ class DxmLoginFlow:
         if '/web/smt/edit' in page.url:
             return page
         raise RuntimeError('已触发编辑动作，但未能进入真实编辑界面')
+
+    def _dispatch_draft_row_edit_event(self, page: Page, row_info: dict[str, Any]) -> dict[str, Any]:
+        return page.evaluate(r'''(rowInfo) => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          const rows = Array.from(document.querySelectorAll('tr,.ant-table-row,.vxe-body--row,li,div')).filter(visible);
+          const rowTextFull = String(rowInfo?.rowText || '').replace(/\s+/g, ' ').trim();
+          const rowText = rowTextFull.slice(0, 260);
+          const compactRowText = rowTextFull.replace(/\s+/g, '');
+          const claimMark = rowTextFull.match(/AI认领-\d+-\d+/)?.[0] || '';
+          const sourceTitle = rowTextFull.split(/备注[:：]/)[0].trim();
+          const meaningfulPrefix = sourceTitle.length >= 24 ? sourceTitle.slice(0, 48) : rowTextFull.slice(0, 48);
+          const rowMatches = (text) => {
+            const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+            if (!normalized || normalized.length < 20) return false;
+            if (!normalized.includes('编辑')) return false;
+            if (!rowTextFull) return true;
+            const compact = normalized.replace(/\s+/g, '');
+            if (claimMark && normalized.includes(claimMark)) return true;
+            if (meaningfulPrefix.length >= 20 && normalized.includes(meaningfulPrefix)) return true;
+            if (normalized.includes(rowText) || rowText.includes(normalized)) return true;
+            if (compactRowText.length >= 40 && compact.includes(compactRowText.slice(0, 80))) return true;
+            return false;
+          };
+          const rowIndex = Number(rowInfo?.rowIndex);
+          let row = Number.isInteger(rowIndex) && rowIndex >= 0 && rowIndex < rows.length ? rows[rowIndex] : null;
+          if (row && !rowMatches(textOf(row))) row = null;
+          if (!row && rowText) {
+            row = rows
+              .map(el => ({el, text:textOf(el)}))
+              .filter(item => rowMatches(item.text))
+              .sort((a, b) => a.text.length - b.text.length)[0]?.el || null;
+          }
+          if (!row) return {ok:false, reason:'未找到目标草稿行'};
+          const edit = Array.from(row.querySelectorAll('a,button,span,[role="button"]'))
+            .filter(visible)
+            .find(el => textOf(el) === '编辑');
+          if (!edit) return {ok:false, reason:'未找到目标行编辑入口', row_text:textOf(row).slice(0, 260)};
+          edit.scrollIntoView({block:'center', inline:'nearest'});
+          for (const type of ['mouseover', 'mousemove', 'mousedown', 'mouseup', 'click']) {
+            edit.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true, view:window}));
+          }
+          return {
+            ok:true,
+            strategy:'dom_mouse_event',
+            target_text:textOf(edit),
+            row_text:textOf(row).slice(0, 260),
+          };
+        }''', row_info)
 
     def _click_first_available(self, page: Page, selectors: list[str]) -> None:
         for selector in selectors:
