@@ -2371,6 +2371,34 @@ tr:last-child td {
   overflow-wrap: anywhere;
 }
 
+.delivery-check-card__decision {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.delivery-check-card__decision span {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #fecdd3;
+  border-radius: 10px;
+  background: #fff1f2;
+}
+
+.delivery-check-card__decision strong {
+  color: #9f1239;
+  font-size: 0.82rem;
+}
+
+.delivery-check-card__decision small {
+  color: #475569;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .task-current-panel__precheck-actions {
   display: grid;
   gap: 8px;
@@ -7119,7 +7147,7 @@ tr:last-child td {
 .business-result-summary__facts {
   min-width: 0;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 8px;
 }
 
@@ -7145,6 +7173,7 @@ tr:last-child td {
 
 .business-result-summary__facts strong {
   font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .business-result-summary__actions {

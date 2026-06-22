@@ -1291,6 +1291,8 @@ function humanOperationError(message: string) {
   if (message.includes('L2 readonly probe script is missing')) {
     return `真实只读检查组件未安装完整：缺少真实只读检查脚本。请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
   }
+  const operatorMessage = humanOperatorMessage(message)
+  if (operatorMessage !== message) return operatorMessage
   return message
 }
 

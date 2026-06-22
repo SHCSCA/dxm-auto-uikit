@@ -35,7 +35,7 @@
 - Modify: `app/frontend/src/components/AppShell.tsx`
 - Modify: `app/backend/tests/test_frontend_demo_workflow_contract.py`
 
-- [ ] **Step 1: Update contract assertions**
+- [x] **Step 1: Update contract assertions**
 
 Add or adjust assertions so the sidebar exposes these business labels:
 
@@ -62,7 +62,7 @@ cd app\backend
 
 Expected before implementation: fails on missing old/new sidebar labels.
 
-- [ ] **Step 2: Rename AppShell menu labels**
+- [x] **Step 2: Rename AppShell menu labels**
 
 Change `primaryAreas` to these user-facing groups:
 
@@ -90,7 +90,7 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
 ]
 ```
 
-- [ ] **Step 3: Run focused test**
+- [x] **Step 3: Run focused test**
 
 Run:
 
@@ -108,11 +108,11 @@ Expected after implementation: pass.
 - Modify: `app/frontend/src/styles.css`
 - Modify: `app/backend/tests/test_frontend_demo_workflow_contract.py`
 
-- [ ] **Step 1: Add contract for one visible primary action**
+- [x] **Step 1: Add contract for one visible primary action**
 
 Assert `HomePage.tsx` contains `现在只做这一步`, `登录店小秘`, `选择商品`, `填写编辑页`, `开始只保存`, `保存结果`, and does not put `run-id` or `HAR` in the first command section.
 
-- [ ] **Step 2: Adjust copy**
+- [x] **Step 2: Adjust copy**
 
 Map `nextAction` CTAs to route labels:
 
@@ -124,7 +124,7 @@ goRun: '去开始只保存'
 goResult: '查看保存结果'
 ```
 
-- [ ] **Step 3: Run focused test and frontend build**
+- [x] **Step 3: Run focused test and frontend build**
 
 Run:
 
@@ -145,11 +145,11 @@ Expected: test pass and Vite build pass.
 - Modify: `app/frontend/src/components/workbench/IssuesPage.tsx`
 - Test: `app/backend/tests/test_frontend_api_error_contract.py`
 
-- [ ] **Step 1: Extend raw technical error sanitizer**
+- [x] **Step 1: Extend raw technical error sanitizer**
 
 Add mappings for `L2 readonly probe`, `L3`, `run_id`, `save_result`, `network/HAR`, and `Cannot switch to a different thread`.
 
-- [ ] **Step 2: Make blocking cards use three-part shape**
+- [x] **Step 2: Make blocking cards use three-part shape**
 
 Each visible failure card must include:
 
@@ -159,7 +159,7 @@ Each visible failure card must include:
 下一步
 ```
 
-- [ ] **Step 3: Run tests**
+- [x] **Step 3: Run tests**
 
 ```bat
 cd app\backend
@@ -175,15 +175,15 @@ Expected: pass.
 - Modify: `app/frontend/src/styles.css`
 - Modify: `app/backend/tests/test_frontend_demo_workflow_contract.py`
 
-- [ ] **Step 1: Add first-screen contract**
+- [x] **Step 1: Add first-screen contract**
 
 Assert the first results section shows `保存成功了吗`, `有没有发布`, `商品`, `完成时间`, and `下一步`.
 
-- [ ] **Step 2: Move technical evidence lower**
+- [x] **Step 2: Move technical evidence lower**
 
 Keep L2/L3, run binding, screenshot hashes, HAR paths and QA service details inside details blocks or technical sections.
 
-- [ ] **Step 3: Run build and QA script**
+- [x] **Step 3: Run build and QA script**
 
 ```bat
 cd app\frontend
@@ -199,7 +199,7 @@ Expected: build pass and Browser QA pass.
 **Files:**
 - Temporary only outside repo for Playwright screenshot scripts.
 
-- [ ] **Step 1: Start current app**
+- [x] **Step 1: Start current app**
 
 Use the repo startup path that matches the validation target:
 
@@ -213,7 +213,7 @@ or use the isolated final QA script when avoiding existing ports:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\qa-browser-check.ps1
 ```
 
-- [ ] **Step 2: Validate rendered flow**
+- [x] **Step 2: Validate rendered flow**
 
 The flow under test is: app loads -> sidebar navigation -> homepage next action -> product task/config/run/result labels render without exposing technical terms in the default first viewport.
 
@@ -225,10 +225,9 @@ Required evidence:
 - Desktop first viewport has one obvious primary action.
 - Mobile viewport has no horizontal overflow.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bat
 git add app/frontend app/backend/tests docs/superpowers/plans/2026-06-22-dxm-user-experience-main-path.md
 git commit -m "Polish DXM user main path"
 ```
-

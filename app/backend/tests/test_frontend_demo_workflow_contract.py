@@ -1546,7 +1546,7 @@ def test_execution_console_surfaces_operator_decision_and_collapses_live_logs_by
     assert "aria-label=\"控制台当前决策\"" in focus_section
     assert "console-focus-panel__decision-grid" in focus_section
     assert "<strong>当前动作</strong>" in focus_section
-    assert "<strong>阻断原因</strong>" in focus_section
+    assert "<strong>为什么不能继续</strong>" in focus_section
     assert "<strong>下一步</strong>" in focus_section
     assert "primaryPath.reason" in focus_section
     assert '<details className="module-card span-1 console-log-card console-log-card--compact inline-disclosure">' in console_section
@@ -1575,8 +1575,8 @@ def test_execution_console_surfaces_single_primary_blocker_card():
     assert "ConsolePrimaryBlockerCard" in focus_section
     assert "primaryPath={primaryPath}" in focus_section
     assert "当前只处理这一项" in blocker_card_section
-    assert "主因" in blocker_card_section
-    assert "为什么" in blocker_card_section
+    assert "发生了什么" in blocker_card_section
+    assert "为什么不能继续" in blocker_card_section
     assert "下一步" in blocker_card_section
     assert "primaryPath.code" in blocker_card_section
     assert "primaryPath.reason" in blocker_card_section
@@ -2253,6 +2253,11 @@ def test_report_center_keeps_final_check_engineering_details_in_appendix():
     assert "历史验收结果已过期，请先重新运行只读复验和本地验收。" not in final_card_section
     assert "humanReadinessLabel(readiness)" in final_card_section
     assert "humanGateDetail(blockedReason)" in final_card_section
+    assert 'className="delivery-check-card__decision"' in final_card_section
+    assert 'aria-label="验收阻断说明"' in final_card_section
+    assert "<strong>发生了什么</strong>" in final_card_section
+    assert "<strong>为什么不能继续</strong>" in final_card_section
+    assert "<strong>下一步</strong>" in final_card_section
     assert '<details className="disclosure-card delivery-check-card__appendix">' in final_card_section
     assert "技术验收信息" in final_card_section
     assert "维护人员使用" in final_card_section
@@ -2428,6 +2433,30 @@ def test_report_center_treats_missing_l3_evidence_as_expected_when_real_write_bl
     assert "CheckRow label={`报告 ${reportSummary?.total_reports ?? reports.length} 份`}" not in report_center_section
 
 
+def test_results_page_first_screen_answers_operator_result_questions():
+    source = results_page_source()
+    business_summary = source[
+        source.index("function BusinessResultSummaryCard"):
+        source.index("function EmptyState")
+    ]
+    visible_fact_markup = business_summary[
+        business_summary.index('<div className="business-result-summary__facts">'):
+        business_summary.index('<div className="report-followup-actions business-result-summary__actions"')
+    ]
+
+    assert "保存成功了吗" in visible_fact_markup
+    assert "有没有发布" in visible_fact_markup
+    assert "<b>商品</b>" in visible_fact_markup
+    assert "<b>完成时间</b>" in visible_fact_markup
+    assert "<b>下一步</b>" in visible_fact_markup
+    assert "taskProductLabel(selectedTask)" in business_summary
+    assert "latestReport?.created_at" in business_summary
+    assert "查看保存证据，确认未发布。" in business_summary
+    assert "回到开始只保存，完成安全检查和人工确认。" in business_summary
+    assert "保存回包" not in visible_fact_markup
+    assert "network/HAR" not in visible_fact_markup
+
+
 def test_safety_bar_downgrades_l3_post_evidence_gaps_when_real_write_blocked():
     source = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
 
@@ -2581,8 +2610,11 @@ def test_task_center_explains_l2_recheck_before_real_save():
     assert "l2ProbeResourceState.blocked" in current_panel_section
     assert "task-current-panel__precheck-actions" in styles_source
     assert "真实只读检查未通过，真实保存先暂停" in recheck_card_section
-    assert "检查商品采集页和草稿箱页" in recheck_card_section
-    assert "不领取、不备注、不保存、不发布" in recheck_card_section
+    assert "<strong>发生了什么</strong>" in recheck_card_section
+    assert "<strong>为什么不能继续</strong>" in recheck_card_section
+    assert "<strong>下一步</strong>" in recheck_card_section
+    assert "确认商品采集页和草稿箱页能正常打开" in recheck_card_section
+    assert "不会领取、备注、保存或发布" in recheck_card_section
     assert "当前状态：{humanGateStateLabel(l2Gate?.status ?? 'not_run')}" in recheck_card_section
     assert "READONLY_PRECHECK_CTA" in recheck_card_section
     assert "readonly-recheck-help__optional-actions" in recheck_card_section
@@ -2609,7 +2641,9 @@ def test_task_center_l2_diagnostics_include_actionable_failure_details():
     assert "先在真实登录浏览器完成登录" in source
     assert "检查目标页面是否跳到首页/登录页" in source
     assert "把只读依赖候选交给人工评审" in source
-    assert "查看启动器日志中的 blocked requests" in source
+    assert "查看启动器日志中的请求拦截记录" in source
+    assert "blocked requests" not in task_center_section
+    assert "probe 未通过" not in task_center_section
     assert "<strong>最终地址</strong>" in task_center_section
     assert "<strong>失败检查</strong>" in task_center_section
     assert "<strong>下一步</strong>" in task_center_section
@@ -2643,8 +2677,8 @@ def test_task_center_defaults_to_current_task_first_and_collapses_setup_noise():
     assert "task-current-panel__task-id" in current_panel_section
     assert "aria-label=\"启动判定\"" in current_panel_section
     assert "taskStartDecision" in current_panel_section
-    assert "<strong>当前能做</strong>" in current_panel_section
-    assert "<strong>原因</strong>" in current_panel_section
+    assert "<strong>发生了什么</strong>" in current_panel_section
+    assert "<strong>为什么不能继续</strong>" in current_panel_section
     assert "<strong>下一步</strong>" in current_panel_section
     assert "去填写编辑页补齐 DXM 编辑页必填字段" in panels_source
     assert "${READONLY_PRECHECK_CTA}，确认商品采集页和草稿箱页均无写入风险" in panels_source
@@ -4002,6 +4036,7 @@ def test_execution_console_shows_current_decision_before_browser_controls():
 
 def test_frontend_translates_failed_execution_technical_errors_for_operators():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    results_source = RESULTS_PAGE_TSX.read_text(encoding="utf-8")
     copy_source = WORKBENCH_COPY_TS.read_text(encoding="utf-8")
     report_summary_section = source[source.index("function humanReportSummary"):source.index("function formatTime")]
     gate_detail_section = source[source.index("function humanGateDetail"):source.index("function humanL2PrecheckError")]
@@ -4015,20 +4050,40 @@ def test_frontend_translates_failed_execution_technical_errors_for_operators():
     assert "humanReportTitle" in source
     assert "Cannot switch to a different thread" in copy_source
     assert "greenlet" in copy_source
+    assert "L2 readonly probe" in copy_source
+    assert "normalized.includes('l2 readonly')" in copy_source
+    assert "message.includes('L3')" in copy_source
+    assert "normalized.includes('run_id')" in copy_source
+    assert "message.includes('save_result')" in copy_source
+    assert "message.includes('network/HAR')" in copy_source
     assert "浏览器连接异常" in copy_source
     assert "请关闭旧浏览器窗口，重新打开真实浏览器后再重试当前任务" in copy_source
+    assert "真实只读检查没有完成" in copy_source
+    assert "人工确认还没有完成" in copy_source
+    assert "检查记录没有对齐" in copy_source
     assert "保存没有完成" in copy_source
+    assert "const operatorMessage = humanOperatorMessage(message)" in (REPO_ROOT / "app" / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+    assert "if (operatorMessage !== message) return operatorMessage" in (REPO_ROOT / "app" / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
     assert "保存任务未完成" in source
     assert "humanOperatorMessage" in report_summary_section
     assert "humanOperatorTitle(raw" in source
     assert "return String(summary.blocked_reason" not in report_summary_section
     assert "humanOperatorMessage" in gate_detail_section
+    assert "blocked requests" not in source[source.index("function l2DiagnosticNextAction"):source.index("function l2CheckLabel")]
+    assert "probe 未通过" not in source[source.index("function l2CheckLabel"):source.index("function humanBlockedRequestSummary")]
+    assert "blocked requests" not in results_source[results_source.index("function l2DiagnosticNextAction"):results_source.index("function l2CheckLabel")]
+    assert "probe 未通过" not in results_source[results_source.index("function l2CheckLabel"):results_source.index("function numberValue")]
     assert "const title = humanReportTitle(report)" in report_card_section
     assert "reportStatusTone(report.status)" in report_card_section
     assert "humanReportStatus(report.status)" in report_card_section
     assert 'className="status-pill ok"' not in report_card_section
     assert "humanOperatorMessage(item.detail" in exception_card_section
     assert "humanOperatorTitle(item.title" in exception_card_section
+    assert "为什么不能继续" in exception_card_section
+    assert "下一步" in exception_card_section
+    assert "原始标题：{item.title}" not in exception_card_section
+    assert "原始详情：{item.detail}" not in exception_card_section
+    assert "原始建议：{item.suggestion}" not in exception_card_section
 
 
 def test_extracted_pages_do_not_fallback_to_raw_gate_details():
@@ -4052,8 +4107,10 @@ def test_issue_queue_problem_cards_use_what_why_next_structure():
     exception_card_section = source[source.index("function ExceptionCard"):source.index("function buildProblemCardCopy")]
 
     assert "发生了什么" in exception_card_section
-    assert "为什么阻断" in exception_card_section
-    assert "下一步点哪里" in exception_card_section
+    assert "为什么不能继续" in exception_card_section
+    assert "下一步" in exception_card_section
+    assert "为什么阻断" not in source
+    assert "下一步点哪里" not in source
     assert "buildProblemCardCopy" in source
     assert "humanOperatorMessage(item.detail" in source
     assert "<p>{item.detail}</p>" not in exception_card_section

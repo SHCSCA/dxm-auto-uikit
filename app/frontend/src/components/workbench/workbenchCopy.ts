@@ -13,9 +13,34 @@ export function humanOperatorMessage(message: string) {
     return '浏览器连接异常：请关闭旧浏览器窗口，重新打开真实浏览器后再重试当前任务。'
   }
   if (
+    message.includes('L2 readonly probe')
+    || normalized.includes('l2 readonly')
+    || normalized.includes('readonly probe')
+    || normalized.includes('probe runner')
+    || normalized.includes('probe resources')
+  ) {
+    return '真实只读检查没有完成：请在“开始只保存”重新运行真实只读检查；通过前系统不会保存或发布。'
+  }
+  if (
+    message.includes('L3')
+    || normalized.includes('manual canary')
+    || normalized.includes('manual approval')
+    || normalized.includes('approval_required')
+  ) {
+    return '人工确认还没有完成：请确认只保存、不发布，并填写批准人后再继续。'
+  }
+  if (
+    normalized.includes('run_id')
+    || normalized.includes('run-id')
+    || normalized.includes('run binding')
+  ) {
+    return '检查记录没有对齐：请重新运行真实只读检查，让商品采集页和草稿箱页使用同一轮检查记录。'
+  }
+  if (
     message.includes('save_result')
     || message.includes('published=false')
     || message.includes('network/HAR')
+    || normalized.includes('network har')
     || message.includes('save screenshot')
     || message.includes('unpublished screenshot')
   ) {

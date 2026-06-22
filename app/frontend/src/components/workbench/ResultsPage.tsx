@@ -247,7 +247,20 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
       <div className="delivery-check-card__body">
         <p>{readinessDetail}</p>
         {blockedReason && (
-          <p className="delivery-check-card__warning">当前原因：{humanGateDetail(blockedReason)}</p>
+          <div className="delivery-check-card__decision" aria-label="验收阻断说明">
+            <span>
+              <strong>发生了什么</strong>
+              <small>真实保存暂时不能启动。</small>
+            </span>
+            <span>
+              <strong>为什么不能继续</strong>
+              <small>{humanGateDetail(blockedReason)}</small>
+            </span>
+            <span>
+              <strong>下一步</strong>
+              <small>{nextStepText}</small>
+            </span>
+          </div>
         )}
         <div className="delivery-check-card__next-step">
           <strong>下一步</strong>
@@ -389,6 +402,27 @@ function BusinessResultSummaryCard({
   const reportSuccess = latestReport?.status === 'success'
   const hasSaveProof = saveResultCount > 0 && unpublishedProofCount > 0 && networkHarCount > 0
   const ok = taskDone && reportSuccess && hasSaveProof && publishGuardStatus === 'safe_unpublished'
+  const saveQuestion = ok
+    ? '已保存'
+    : taskDone && reportSuccess
+      ? '保存已返回，证据待补齐'
+      : '等待保存'
+  const publishQuestion = publishGuardStatus === 'safe_unpublished' || unpublishedProofCount > 0
+    ? '没有发布'
+    : ok
+      ? '没有发布'
+      : '等待未发布证明'
+  const productLabel = taskProductLabel(selectedTask)
+  const completedAt = latestReport?.created_at
+    ? formatTime(latestReport.created_at)
+    : taskDone
+      ? '等待报告时间'
+      : '等待完成'
+  const nextStep = ok
+    ? '查看保存证据，确认未发布。'
+    : realWriteExpectedBlocked
+      ? '回到开始只保存，完成安全检查和人工确认。'
+      : '处理问题或回到开始只保存重试。'
   const title = ok
     ? '本次只保存已完成'
     : realWriteExpectedBlocked
@@ -412,9 +446,11 @@ function BusinessResultSummaryCard({
           {latestReport && <small>最新报告：{humanReportTitle(latestReport)} / {humanReportStatus(latestReport.status)}</small>}
         </div>
         <div className="business-result-summary__facts">
-          <span className={saveResultCount > 0 ? 'is-ok' : 'is-warn'}><b>保存结果</b><strong>{saveResultCount > 0 ? '已取得' : '等待'}</strong></span>
-          <span className={unpublishedProofCount > 0 ? 'is-ok' : 'is-warn'}><b>未发布证明</b><strong>{unpublishedProofCount > 0 ? '已取得' : '等待'}</strong></span>
-          <span className={networkHarCount > 0 ? 'is-ok' : 'is-warn'}><b>保存回包</b><strong>{networkHarCount > 0 ? '已取得' : '等待'}</strong></span>
+          <span className={saveResultCount > 0 || ok ? 'is-ok' : 'is-warn'}><b>保存成功了吗</b><strong>{saveQuestion}</strong></span>
+          <span className={publishGuardStatus === 'safe_unpublished' || unpublishedProofCount > 0 ? 'is-ok' : 'is-warn'}><b>有没有发布</b><strong>{publishQuestion}</strong></span>
+          <span><b>商品</b><strong>{productLabel}</strong></span>
+          <span><b>完成时间</b><strong>{completedAt}</strong></span>
+          <span><b>下一步</b><strong>{nextStep}</strong></span>
         </div>
       </div>
       <div className="report-followup-actions business-result-summary__actions" aria-label="本次结果后续动作">
@@ -433,6 +469,28 @@ function EmptyState({ title, detail, actions }: { title: string; detail: string;
       {actions && <div className="next-step-actions">{actions}</div>}
     </div>
   )
+}
+
+function taskProductLabel(task: Task | null) {
+  if (!task) return '等待选择商品'
+  const payload = task.payload ?? {}
+  const directTitle = textValue(payload.product_title)
+    || textValue(payload.product_name)
+    || textValue(payload.title)
+    || textValue(payload.name)
+  if (directTitle) return directTitle
+  const titles = Array.isArray(payload.product_titles)
+    ? payload.product_titles.map(textValue).filter(Boolean)
+    : []
+  if (titles.length > 0) return titles.slice(0, 2).join(' / ')
+  const productIds = Array.isArray(payload.product_ids) ? payload.product_ids : []
+  const count = productIds.length || task.total_jobs || 0
+  if (count > 0) return `${task.name} / ${count} 件商品`
+  return task.name || '当前任务商品'
+}
+
+function textValue(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : ''
 }
 
 function CheckRow({ label, ok, testId, state }: { label: string; ok: boolean; testId?: string; state?: string }) {
@@ -795,12 +853,12 @@ function l2DiagnosticNextAction({
   if (appShellOnly) {
     return '页面停留在加载壳，等待真实页面加载完成或重开浏览器后复跑。'
   }
-  return '查看启动器日志中的 blocked requests，修正页面阻断后复跑真实只读检查。'
+  return '查看启动器日志中的请求拦截记录，修正页面阻断后复跑真实只读检查。'
 }
 
 function l2CheckLabel(key: string) {
   return ({
-    ok: 'probe 未通过',
+    ok: '真实只读检查未通过',
     safety_ok: '安全断言失败',
     target_url_matches: '目标 URL 不匹配',
     final_url_matches: '最终路径偏离',

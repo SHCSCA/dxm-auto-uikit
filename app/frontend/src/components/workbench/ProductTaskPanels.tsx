@@ -117,16 +117,16 @@ export function ReadonlyRecheckHelpCard({
       </div>
       <div className="readonly-recheck-help__facts" aria-label="真实只读检查说明">
         <span>
-          <strong>真实只读检查做什么</strong>
-          <small>检查商品采集页和草稿箱页是否能正常打开。</small>
+          <strong>发生了什么</strong>
+          <small>真实只读检查还没有通过，需要确认商品采集页和草稿箱页能正常打开。</small>
         </span>
         <span>
-          <strong>不会做什么</strong>
-          <small>不领取、不备注、不保存、不发布。</small>
+          <strong>为什么不能继续</strong>
+          <small>通过前系统不会领取、备注、保存或发布。</small>
         </span>
         <span>
-          <strong>通过后做什么</strong>
-          <small>再回到单商品只保存，由人工确认后启动。</small>
+          <strong>下一步</strong>
+          <small>运行真实只读检查；通过后再人工确认并只保存。</small>
         </span>
       </div>
       {l3BlocksStart && <span className="readonly-recheck-help__note">真实只读检查未通过或人工确认未完成前，不启动认领、批量保存或真实保存。</span>}
@@ -231,11 +231,11 @@ export function TaskCurrentActionPanel({
       </div>
       <div className={`task-current-panel__decision task-current-panel__decision--${decision.tone}`} aria-label="启动判定">
         <span>
-          <strong>当前能做</strong>
+          <strong>发生了什么</strong>
           <b>{decision.scope}</b>
         </span>
         <span>
-          <strong>原因</strong>
+          <strong>为什么不能继续</strong>
           <b>{decision.reason}</b>
         </span>
         <span>

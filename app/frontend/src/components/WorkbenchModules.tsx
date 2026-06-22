@@ -3849,7 +3849,7 @@ function ConsoleFocusPanel({
           <p>{active ? activeStep?.detail ?? primaryPath.detail : primaryPath.detail}</p>
           {primaryPath.action === 'run_l2' && !active && (
             <div className="console-precheck-explainer" role="note">
-              <strong>真实只读检查做什么</strong>
+              <strong>发生了什么</strong>
               <span>{READONLY_PRECHECK_PURPOSE}</span>
             </div>
           )}
@@ -3857,7 +3857,7 @@ function ConsoleFocusPanel({
       </div>
       <div className="console-focus-panel__decision-grid" aria-label="控制台当前决策">
         <span><strong>当前动作</strong><b>{active ? activeStep?.title ?? primaryPath.title : primaryPath.title}</b></span>
-        <span><strong>阻断原因</strong><b>{primaryPath.saveBlocked ? primaryPath.reason : '当前未发现保存阻断'}</b></span>
+        <span><strong>为什么不能继续</strong><b>{primaryPath.saveBlocked ? primaryPath.reason : '当前未发现保存阻断'}</b></span>
         <span><strong>下一步</strong><b>{consoleNext}</b></span>
       </div>
       <ConsolePrimaryBlockerCard
@@ -3964,11 +3964,11 @@ function ConsolePrimaryBlockerCard({
         <summary>原因与处理细节</summary>
         <div className="console-primary-blocker-card__facts">
           <span>
-            <b>主因</b>
+            <b>发生了什么</b>
             <small>{primaryPath.reason}</small>
           </span>
           <span>
-            <b>为什么</b>
+            <b>为什么不能继续</b>
             <small>{primaryPath.detail}</small>
           </span>
           <span>
@@ -5592,11 +5592,11 @@ function ExceptionCard({ item }: { item: ExceptionItem }) {
           <small>{problem.what}</small>
         </span>
         <span>
-          <strong>为什么阻断</strong>
+          <strong>为什么不能继续</strong>
           <small>{problem.why}</small>
         </span>
         <span>
-          <strong>下一步点哪里</strong>
+          <strong>下一步</strong>
           <small>{problem.next}</small>
         </span>
       </div>
@@ -5604,9 +5604,9 @@ function ExceptionCard({ item }: { item: ExceptionItem }) {
         <summary>技术诊断</summary>
         <small>错误码：{item.error_code}</small>
         <small>领域：{item.field_domain}</small>
-        <small>原始标题：{item.title}</small>
-        <small>原始详情：{item.detail}</small>
-        <small>原始建议：{item.suggestion}</small>
+        <small>诊断摘要：{humanOperatorMessage(item.title || item.detail || item.error_code)}</small>
+        <small>处理建议：{humanOperatorMessage(item.suggestion || '请查看实时日志或诊断文件后重试。')}</small>
+        <small>完整原始信息请查看实时日志或诊断文件。</small>
       </details>
     </article>
   )
@@ -5905,7 +5905,7 @@ function l2DiagnosticNextAction({
   if (appShellOnly) {
     return '页面停留在加载壳，等待真实页面加载完成或重开浏览器后复跑。'
   }
-  return '查看启动器日志中的 blocked requests，修正页面阻断后复跑真实只读检查。'
+  return '查看启动器日志中的请求拦截记录，修正页面阻断后复跑真实只读检查。'
 }
 
 function humanBlockedRequestSummary(blockedGroupCount: number, reviewCandidateCount: number) {
@@ -5935,7 +5935,7 @@ function numberValue(value: unknown) {
 
 function l2CheckLabel(key: string) {
   return ({
-    ok: 'probe 未通过',
+    ok: '真实只读检查未通过',
     safety_ok: '安全断言失败',
     target_url_matches: '目标 URL 不匹配',
     final_url_matches: '最终路径偏离',

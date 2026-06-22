@@ -73,11 +73,11 @@ export function IssuesPage({ workspace, selectedTask }: IssuesPageProps) {
                         <small>{card.what}</small>
                       </span>
                       <span>
-                        <strong>为什么阻断</strong>
+                        <strong>为什么不能继续</strong>
                         <small>{card.why}</small>
                       </span>
                       <span>
-                        <strong>下一步点哪里</strong>
+                        <strong>下一步</strong>
                         <small>{card.next}</small>
                       </span>
                     </div>
@@ -110,11 +110,11 @@ function ExceptionCard({ item }: { item: ExceptionItem }) {
           <small>{problem.what}</small>
         </span>
         <span>
-          <strong>为什么阻断</strong>
+          <strong>为什么不能继续</strong>
           <small>{problem.why}</small>
         </span>
         <span>
-          <strong>下一步点哪里</strong>
+          <strong>下一步</strong>
           <small>{problem.next}</small>
         </span>
       </div>
