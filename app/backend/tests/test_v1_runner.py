@@ -425,12 +425,21 @@ def test_single_save_syncs_agent_console_hud_without_changing_workflow_order(v1_
     assert "WRITE_REPORT" in states
     assert "RELEASE_LOCK" in states
     precheck_config = next(call for call in console.calls if call["step_code"] == "PRECHECK_CONFIG")
+    base_info = next(call for call in console.calls if call["step_code"] == "FILL_BASE_INFO")
+    variants = next(call for call in console.calls if call["step_code"] == "FILL_VARIANTS")
+    media = next(call for call in console.calls if call["step_code"] == "FILL_MEDIA")
+    semi_goods = next(call for call in console.calls if call["step_code"] == "FILL_SEMI_GOODS")
     save_only = next(call for call in console.calls if call["step_code"] == "SAVE_ONLY")
     release_lock = next(call for call in console.calls if call["step_code"] == "RELEASE_LOCK")
     assert precheck_config["human_title"] == "检查任务配置"
     assert precheck_config["phase"] == "启动前检查"
-    assert save_only["human_title"] == "点击保存"
-    assert save_only["human_action"] == "正在点击保存，保存到待发布，不执行发布"
+    assert base_info["human_title"] == "输入标题/选择分类"
+    assert base_info["human_action"] == "正在输入标题、选择分类并填写基础属性"
+    assert variants["human_title"] == "设置 SKU / 价格 / 库存"
+    assert media["human_title"] == "处理商品图片"
+    assert semi_goods["human_title"] == "设置包装/物流/货品信息"
+    assert save_only["human_title"] == "只点击保存"
+    assert save_only["human_action"] == "正在只点击保存，保存到待发布，不点击发布"
     assert release_lock["human_title"] == "完成任务"
     assert release_lock["progress_index"] == 24
     assert release_lock["progress_total"] == 24
@@ -480,8 +489,8 @@ def test_single_save_updates_live_browser_hud_without_agent_console(v1_db):
     assert "SAVE_ONLY" in states
     assert "VERIFY_NOT_PUBLISHED" in states
     save_only = next(call for call in adapter.live_hud_calls if call["step_code"] == "SAVE_ONLY")
-    assert save_only["human_title"] == "点击保存"
-    assert save_only["human_action"] == "正在点击保存，保存到待发布，不执行发布"
+    assert save_only["human_title"] == "只点击保存"
+    assert save_only["human_action"] == "正在只点击保存，保存到待发布，不点击发布"
     assert save_only["store_name"] == "Dang Kang"
     assert save_only["requires_user_action"] is False
 
@@ -492,7 +501,7 @@ def test_single_save_updates_live_browser_hud_without_agent_console(v1_db):
     assert report["summary"]["live_browser_hud"]["last_step_code"] == "RELEASE_LOCK"
     assert report["summary"]["live_browser_hud"]["hud"]["guard"] == "只保存不发布"
     assert any(
-        evidence["meta"].get("live_browser_hud", {}).get("hud", {}).get("human_title") == "点击保存"
+        evidence["meta"].get("live_browser_hud", {}).get("hud", {}).get("human_title") == "只点击保存"
         for evidence in repo.list_evidences(task["id"])
     )
 

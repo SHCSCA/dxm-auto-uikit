@@ -3679,6 +3679,24 @@ def test_frontend_humanizes_agent_console_browser_start_failures():
     assert "setOperationError(humanMessage)" in start_console_section
 
 
+def test_frontend_agent_console_initial_hud_matches_single_save_user_flow():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    hud_builder = app_source[
+        app_source.index("function buildAgentConsoleHudStep"):
+    ]
+
+    assert "准备开始只保存" in hud_builder
+    assert "READY_FOR_SINGLE_SAVE" in hud_builder
+    assert "开始任务" in hud_builder
+    assert "真实浏览器已打开，Agent 将按步骤操作店小秘编辑页" in hud_builder
+    assert "人工确认后开始输入标题、选择分类、设置价格库存并只保存" in hud_builder
+    assert "只保存，不发布" in hud_builder
+    assert "requires_user_action: true" in hud_builder
+    assert "severity: 'warning'" in hud_builder
+    assert "真实只读检查待命" not in hud_builder
+    assert "只读观察" not in hud_builder
+
+
 def test_frontend_humanizes_agent_console_takeover_and_control_failures():
     app_source = APP_TSX.read_text(encoding="utf-8")
     stop_section = app_source[

@@ -1557,11 +1557,19 @@ function isSafeDefaultFallbackTask(task: Task) {
 function buildAgentConsoleHudStep(workspace: DeliveryWorkspace, selectedTask: Task): AgentConsoleSession['hud'] {
   const storeName = String(selectedTask.payload.store_name ?? workspace.stores[0]?.name ?? '等待真实店铺')
   return {
-    title: '真实只读检查待命',
-    state: 'READONLY_DIAGNOSTIC',
-    action: '打开真实店小秘浏览器，不启动保存',
-    next_step: '复核只读证据和人工确认',
+    title: '准备开始只保存',
+    state: 'READY_FOR_SINGLE_SAVE',
+    action: '真实浏览器已打开，等待按任务流程执行',
+    next_step: '人工确认后由 Agent 输入编辑页内容并只点击保存',
     store_name: storeName,
-    guard: '只读观察，不保存不发布',
+    guard: '只保存，不发布',
+    phase: '开始任务',
+    progress_index: 1,
+    progress_total: 6,
+    human_title: '准备开始只保存',
+    human_action: '真实浏览器已打开，Agent 将按步骤操作店小秘编辑页',
+    human_next: '人工确认后开始输入标题、选择分类、设置价格库存并只保存',
+    requires_user_action: true,
+    severity: 'warning',
   }
 }
