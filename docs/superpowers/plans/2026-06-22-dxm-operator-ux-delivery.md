@@ -166,7 +166,7 @@ Verification completed on 2026-06-22:
 - Modify only if needed: `scripts/verify-desktop-package.ps1`
 - Output: portable EXE under the user-facing delivery directory
 
-- [ ] **Step 1: Run backend and frontend gates**
+- [x] **Step 1: Run backend and frontend gates**
 
 ```powershell
 cd D:\Desktop\py\dxm-auto-uikit\app\backend
@@ -175,14 +175,14 @@ cd D:\Desktop\py\dxm-auto-uikit\app\frontend
 npm run build
 ```
 
-- [ ] **Step 2: Run desktop package gate**
+- [x] **Step 2: Run desktop package gate**
 
 ```powershell
 cd D:\Desktop\py\dxm-auto-uikit
 .\scripts\final-delivery-check.bat -RequireCleanWorktree -CheckPortableDesktop -ExpectedRealDxmWriteReadiness READY
 ```
 
-- [ ] **Step 3: Verify user path**
+- [x] **Step 3: Verify user path**
 
 From the portable EXE:
 
@@ -196,3 +196,34 @@ finish with saved=true and published=false
 ```
 
 Completion requires current evidence for this path, not only static tests.
+
+Verification completed on 2026-06-22:
+- Backend full suite: `app/backend/.venv/Scripts/python.exe -m pytest -q` passed with `677 passed`.
+- Frontend production build: `cd app/frontend && npm run build` passed.
+- Fresh real L2 readonly evidence was refreshed with run id `l2-real-20260622T150321Z`:
+  - `data_acquisition` ok=true, final path `/web/productCrawl/dataAcquisition`, write/non-read/blocked/forbidden/WebSocket counts all `0`.
+  - `draft_box` ok=true, final path `/web/smt/smtProductList/draft`, write/non-read/blocked/forbidden/WebSocket counts all `0`.
+- Delivery workspace after refresh: L2 passed, L3 passed, evidence grade A, `delivery_readiness.ready=true`, publish guard `safe_unpublished`.
+- Formal command passed:
+  `scripts/final-delivery-check.bat -RequireCleanWorktree -CheckPortableDesktop -ExpectedRealDxmWriteReadiness READY`
+- Formal result:
+  - OK scope: `local_workbench_and_controlled_single_save_ready`
+  - Real DXM write readiness: `READY`
+  - Controlled single_save ready: `True`
+  - Allowed modes: `single_save`
+  - Blocked modes: `claim_only`, `batch_save`
+  - Batch/unattended/publish allowed: `False`
+  - L2: passed
+  - L3: passed
+  - Source package readiness: `CLEAN`
+  - Worktree pre/post: clean
+- Desktop packaging:
+  - Packaged desktop smoke passed.
+  - Credential smoke passed.
+  - Visible window smoke passed.
+  - Portable desktop smoke passed.
+- Browser QA and final report QA passed with no console errors, no failed network requests, local-only GET checks, and desktop/mobile no horizontal overflow.
+- Current user-facing no-install exe was copied to:
+  `D:\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console-Portable-0.1.0.exe`
+  with SHA256 `7B66012F880700F46E964C7BA45E68A42A625B05E731EA83E20C70BEC462B3C5`.
+- No additional real save was executed during Task 4. The release gate uses the accepted L3 controlled single-save canary evidence plus fresh L2 readonly evidence to avoid unnecessary duplicate real DXM mutation.
