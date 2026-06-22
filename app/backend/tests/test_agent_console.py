@@ -274,10 +274,17 @@ def test_agent_console_hud_extends_old_payload_with_chinese_defaults(tmp_path, m
 def test_agent_console_hud_script_renders_black_top_left_business_progress():
     script = agent_console_module.HUD_INIT_SCRIPT
 
-    assert "'left:14px'" in script
-    assert "'top:14px'" in script
+    assert "'left:12px'" in script
+    assert "'top:max(86px, env(safe-area-inset-top, 0px))'" in script
+    assert "'width:min(280px, calc(100vw - 24px))'" in script
+    assert "'max-height:min(230px, calc(100vh - 110px))'" in script
+    assert "'box-sizing:border-box'" in script
+    assert "'overflow:hidden'" in script
     assert "'background:rgba(13,17,23,.94)'" in script
     assert "'right:18px'" not in script
+    assert "'top:14px'" not in script
+    assert "'width:330px'" not in script
+    assert "pointer-events:none" in script
     assert "human_title" in script
     assert "human_action" in script
     assert "human_next" in script

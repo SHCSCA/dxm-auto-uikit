@@ -900,11 +900,13 @@ HUD_INIT_SCRIPT = """
       root.id = ID;
       root.style.cssText = [
         'position:fixed',
-        'top:14px',
-        'left:14px',
+        'top:max(86px, env(safe-area-inset-top, 0px))',
+        'left:12px',
         'z-index:2147483647',
-        'width:330px',
-        'max-width:calc(100vw - 28px)',
+        'width:min(280px, calc(100vw - 24px))',
+        'max-height:min(230px, calc(100vh - 110px))',
+        'box-sizing:border-box',
+        'overflow:hidden',
         'font:12px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif',
         'color:#f8fafc',
         'background:rgba(13,17,23,.94)',

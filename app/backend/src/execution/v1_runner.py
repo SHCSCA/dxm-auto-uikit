@@ -52,31 +52,77 @@ MODE_LAST_STATE = {
     "batch_save": StateName.RELEASE_LOCK,
 }
 
+HUD_PROGRESS_TOTAL = 10
+
+HUD_PROGRESS_INDEX = {
+    StateName.PRECHECK_CONFIG: 1,
+    StateName.PRECHECK_SESSION: 1,
+    StateName.PRECHECK_PUBLISH_GUARD: 1,
+    StateName.OPEN_DRAFT_LIST: 2,
+    StateName.FIND_PRODUCT: 3,
+    StateName.ITEM_LOCKING: 3,
+    StateName.CLAIM_PRODUCT: 3,
+    StateName.VERIFY_LIST_OWNERSHIP: 3,
+    StateName.OPEN_EDIT_PAGE: 4,
+    StateName.VERIFY_EDIT_OWNERSHIP: 4,
+    StateName.FILL_BASE_INFO: 4,
+    StateName.FILL_VARIANTS: 6,
+    StateName.FILL_MEDIA: 7,
+    StateName.FILL_COMPLIANCE: 8,
+    StateName.ENABLE_SEMI_MANAGED: 8,
+    StateName.OPEN_SEMI_MANAGED_PAGE: 8,
+    StateName.FILL_SEMI_GOODS: 8,
+    StateName.FILL_SEMI_VARIANTS: 8,
+    StateName.PRE_SAVE_GUARD_CHECK: 8,
+    StateName.SAVE_ONLY: 9,
+    StateName.VERIFY_SAVE_RESULT: 9,
+    StateName.VERIFY_NOT_PUBLISHED: 10,
+    StateName.WRITE_REPORT: 10,
+    StateName.RELEASE_LOCK: 10,
+}
+
 HUD_STEP_COPY = {
-    StateName.PRECHECK_CONFIG: ("启动前检查", "检查任务配置", "正在校验店铺、模式和模板配置"),
-    StateName.PRECHECK_SESSION: ("启动前检查", "检查店小秘登录", "正在确认店小秘登录态可用"),
-    StateName.PRECHECK_PUBLISH_GUARD: ("启动前检查", "确认只保存不发布", "正在复核发布隔离规则"),
-    StateName.OPEN_DRAFT_LIST: ("采集箱定位", "打开采集箱", "正在进入速卖通采集箱"),
-    StateName.FIND_PRODUCT: ("采集箱定位", "定位目标商品", "正在查找本次任务商品"),
-    StateName.ITEM_LOCKING: ("采集箱定位", "锁定任务商品", "正在创建商品归属锁"),
-    StateName.CLAIM_PRODUCT: ("采集箱定位", "写入领取备注", "正在写入本次任务专属备注"),
-    StateName.VERIFY_LIST_OWNERSHIP: ("采集箱定位", "确认采集箱归属", "正在确认只处理本任务商品"),
-    StateName.OPEN_EDIT_PAGE: ("编辑商品", "打开编辑页", "正在打开店小秘商品编辑页"),
-    StateName.VERIFY_EDIT_OWNERSHIP: ("编辑商品", "确认编辑页归属", "正在确认编辑页商品匹配"),
-    StateName.FILL_BASE_INFO: ("编辑商品", "输入标题/选择分类", "正在输入标题、选择分类并填写基础属性"),
-    StateName.FILL_VARIANTS: ("编辑商品", "设置 SKU / 价格 / 库存", "正在填写 SKU、价格、库存和普通货品信息"),
-    StateName.FILL_MEDIA: ("编辑商品", "处理商品图片", "正在整理商品图片、营销图和详情图"),
-    StateName.FILL_COMPLIANCE: ("编辑商品", "填写合规 / 海关", "正在填写合规责任人、海关和详情字段"),
-    StateName.ENABLE_SEMI_MANAGED: ("半托管", "选择半托管服务", "正在选择半托管服务，不触碰发布入口"),
-    StateName.OPEN_SEMI_MANAGED_PAGE: ("半托管", "打开半托管页", "正在进入半托管编辑页"),
-    StateName.FILL_SEMI_GOODS: ("半托管", "设置包装/物流/货品信息", "正在填写重量、尺寸、物流和半托管货品信息"),
-    StateName.FILL_SEMI_VARIANTS: ("半托管", "设置半托管 SKU / 库存", "正在填写半托管 SKU、价格和库存"),
-    StateName.PRE_SAVE_GUARD_CHECK: ("保存前复核", "保存前检查", "正在确认页面只有保存动作，不会发布"),
-    StateName.SAVE_ONLY: ("保存前复核", "只点击保存", "正在只点击保存，保存到待发布，不点击发布"),
-    StateName.VERIFY_SAVE_RESULT: ("保存后确认", "读取保存成功提示", "正在确认店小秘返回保存成功"),
-    StateName.VERIFY_NOT_PUBLISHED: ("保存后确认", "确认没有发布", "正在确认商品仍未发布"),
-    StateName.WRITE_REPORT: ("任务收尾", "生成结果报告", "正在生成本次执行结果报告"),
-    StateName.RELEASE_LOCK: ("任务收尾", "完成任务", "正在释放任务锁并完成收尾"),
+    StateName.PRECHECK_CONFIG: ("开始任务", "开始任务", "正在检查任务、店铺登录和只保存边界"),
+    StateName.PRECHECK_SESSION: ("开始任务", "开始任务", "正在确认店小秘已经登录"),
+    StateName.PRECHECK_PUBLISH_GUARD: ("开始任务", "开始任务", "正在确认本次只保存，不发布"),
+    StateName.OPEN_DRAFT_LIST: ("打开草稿箱", "打开草稿箱", "正在打开店小秘草稿箱"),
+    StateName.FIND_PRODUCT: ("查找商品", "查找商品", "正在查找本次要保存的商品"),
+    StateName.ITEM_LOCKING: ("查找商品", "查找商品", "正在锁定本次商品，避免误操作其他商品"),
+    StateName.CLAIM_PRODUCT: ("查找商品", "查找商品", "正在标记本次任务商品"),
+    StateName.VERIFY_LIST_OWNERSHIP: ("查找商品", "查找商品", "正在确认只处理本次商品"),
+    StateName.OPEN_EDIT_PAGE: ("输入标题", "输入标题", "正在打开编辑页，准备填写标题"),
+    StateName.VERIFY_EDIT_OWNERSHIP: ("输入标题", "输入标题", "正在确认编辑页商品匹配"),
+    StateName.FILL_BASE_INFO: ("输入标题", "输入标题", "正在输入标题并选择分类"),
+    StateName.FILL_VARIANTS: ("填写价格库存", "填写价格库存", "正在填写 SKU、价格和库存"),
+    StateName.FILL_MEDIA: ("处理图片", "处理图片", "正在整理商品主图、营销图和详情图"),
+    StateName.FILL_COMPLIANCE: ("设置包装物流", "设置包装物流", "正在填写合规、海关和商品补充信息"),
+    StateName.ENABLE_SEMI_MANAGED: ("设置包装物流", "设置包装物流", "正在选择半托管服务，不触碰发布入口"),
+    StateName.OPEN_SEMI_MANAGED_PAGE: ("设置包装物流", "设置包装物流", "正在进入半托管编辑页"),
+    StateName.FILL_SEMI_GOODS: ("设置包装物流", "设置包装物流", "正在填写重量、尺寸和物流信息"),
+    StateName.FILL_SEMI_VARIANTS: ("设置包装物流", "设置包装物流", "正在填写半托管 SKU、价格和库存"),
+    StateName.PRE_SAVE_GUARD_CHECK: ("设置包装物流", "设置包装物流", "正在做保存前检查，确认不会发布"),
+    StateName.SAVE_ONLY: ("点击保存", "点击保存", "正在点击保存按钮，不点击发布"),
+    StateName.VERIFY_SAVE_RESULT: ("点击保存", "点击保存", "正在确认店小秘返回保存成功"),
+    StateName.VERIFY_NOT_PUBLISHED: ("确认未发布", "确认未发布", "正在确认商品没有发布"),
+    StateName.WRITE_REPORT: ("确认未发布", "确认未发布", "正在记录保存结果和未发布证明"),
+    StateName.RELEASE_LOCK: ("确认未发布", "确认未发布", "正在完成收尾，保持只保存状态"),
+}
+
+HUD_NEXT_OVERRIDE = {
+    StateName.FILL_BASE_INFO: "选择分类",
+}
+
+HUD_VIRTUAL_STAGE_AFTER = {
+    StateName.FILL_BASE_INFO: {
+        "step_code": "SELECT_CATEGORY",
+        "step_name": "选择分类",
+        "phase": "选择分类",
+        "progress_index": 5,
+        "human_title": "选择分类",
+        "human_action": "正在确认商品分类已选择",
+        "human_next": "填写价格库存",
+        "next_step": "填写价格库存",
+    },
 }
 
 class V1TaskRunner:
@@ -273,6 +319,44 @@ class V1TaskRunner:
                         workflow_meta["agent_action"] = agent_action_event
                     self.repo.add_evidence(task_id, job_id, "workflow_action", workflow_result.get("screenshot_url"), workflow_meta)
 
+                virtual_hud = HUD_VIRTUAL_STAGE_AFTER.get(state_name)
+                if virtual_hud:
+                    agent_console_event = self._sync_agent_console(
+                        task,
+                        job,
+                        mode,
+                        state_name,
+                        step_name,
+                        field_domain,
+                        str(evidence_path),
+                        hud_override=virtual_hud,
+                    )
+                    if agent_console_event:
+                        agent_console_events.append(agent_console_event)
+                    live_browser_hud_event = self._sync_live_browser_hud(
+                        task,
+                        job,
+                        mode,
+                        state_name,
+                        step_name,
+                        field_domain,
+                        str(evidence_path),
+                        hud_override=virtual_hud,
+                    )
+                    if live_browser_hud_event:
+                        live_browser_hud_events.append(live_browser_hud_event)
+                    virtual_meta = {
+                        "state": virtual_hud["step_code"],
+                        "field_domain": field_domain,
+                        "mode": mode,
+                        "source_state": state_name.value,
+                    }
+                    if agent_console_event:
+                        virtual_meta["agent_console"] = agent_console_event
+                    if live_browser_hud_event:
+                        virtual_meta["live_browser_hud"] = live_browser_hud_event
+                    self.repo.add_evidence(task_id, job_id, "state_snapshot", str(evidence_path), virtual_meta)
+
                 if state_name in {
                     StateName.FILL_BASE_INFO,
                     StateName.FILL_VARIANTS,
@@ -407,11 +491,21 @@ class V1TaskRunner:
         step_name: str,
         field_domain: str,
         screenshot_path: str,
+        hud_override: Mapping[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         if self.agent_console is None:
             return None
         try:
-            result = self.agent_console.update_task_step(**self._hud_step_payload(task, job, mode, state_name, step_name, field_domain, screenshot_path))
+            result = self.agent_console.update_task_step(**self._hud_step_payload(
+                task,
+                job,
+                mode,
+                state_name,
+                step_name,
+                field_domain,
+                screenshot_path,
+                hud_override=hud_override,
+            ))
         except Exception as exc:
             result = {
                 "ok": False,
@@ -432,11 +526,21 @@ class V1TaskRunner:
         step_name: str,
         field_domain: str,
         screenshot_path: str,
+        hud_override: Mapping[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         updater = getattr(self.workflow_adapter, "update_live_hud", None)
         if not callable(updater):
             return None
-        payload = self._hud_step_payload(task, job, mode, state_name, step_name, field_domain, screenshot_path)
+        payload = self._hud_step_payload(
+            task,
+            job,
+            mode,
+            state_name,
+            step_name,
+            field_domain,
+            screenshot_path,
+            hud_override=hud_override,
+        )
         try:
             if self._workflow_executor is not None:
                 result = self._workflow_executor.submit(updater, payload).result(timeout=8)
@@ -466,11 +570,11 @@ class V1TaskRunner:
             "product_id": job.get("product_id"),
             "current_url": result.get("current_url"),
             "page_title": result.get("page_title"),
-            "last_step_code": state_name.value,
-            "last_step_name": step_name,
+            "last_step_code": payload.get("step_code") or state_name.value,
+            "last_step_name": payload.get("step_name") or step_name,
             "hud": {
-                "title": hud.get("title") or step_name,
-                "state": hud.get("state") or state_name.value,
+                "title": hud.get("title") or payload.get("step_name") or step_name,
+                "state": hud.get("state") or payload.get("step_code") or state_name.value,
                 "action": hud.get("action"),
                 "next_step": hud.get("next_step"),
                 "store_name": hud.get("store_name"),
@@ -498,26 +602,30 @@ class V1TaskRunner:
         step_name: str,
         field_domain: str,
         screenshot_path: str,
+        hud_override: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        override = hud_override or {}
+        resolved_step_code = str(override.get("step_code") or state_name.value)
+        resolved_step_name = str(override.get("step_name") or step_name)
         return {
             "task_id": task["id"],
             "job_id": job["id"],
             "product_id": job.get("product_id"),
-            "step_code": state_name.value,
-            "step_name": step_name,
+            "step_code": resolved_step_code,
+            "step_name": resolved_step_name,
             "field_domain": field_domain,
             "mode": mode,
             "store_name": self._store_name(task),
-            "next_step": self._next_step_name(mode, state_name),
+            "next_step": override.get("next_step") or self._next_step_name(mode, state_name),
             "screenshot_path": screenshot_path,
             "guard": "只保存不发布",
-            "phase": self._hud_phase(state_name),
-            "progress_index": self._progress_index(mode, state_name),
+            "phase": override.get("phase") or self._hud_phase(state_name),
+            "progress_index": override.get("progress_index") or self._progress_index(mode, state_name),
             "progress_total": self._progress_total(mode),
             "severity": "info",
-            "human_title": self._human_title(state_name, step_name),
-            "human_action": self._human_action(state_name, field_domain, mode),
-            "human_next": self._human_next(mode, state_name),
+            "human_title": override.get("human_title") or self._human_title(state_name, step_name),
+            "human_action": override.get("human_action") or self._human_action(state_name, field_domain, mode),
+            "human_next": override.get("human_next") or self._human_next(mode, state_name),
             "requires_user_action": False,
         }
 
@@ -660,13 +768,10 @@ class V1TaskRunner:
         return None
 
     def _progress_index(self, mode: str, current_state: StateName) -> int | None:
-        for index, (state_name, _step_name, _field_domain) in enumerate(self._steps_for_mode(mode), start=1):
-            if state_name == current_state:
-                return index
-        return None
+        return HUD_PROGRESS_INDEX.get(current_state)
 
     def _progress_total(self, mode: str) -> int:
-        return self._progress_index(mode, MODE_LAST_STATE[mode]) or len(self._steps_for_mode(mode))
+        return HUD_PROGRESS_TOTAL
 
     def _hud_phase(self, state_name: StateName) -> str:
         return HUD_STEP_COPY.get(state_name, ("业务进度", state_name.value, "正在推进任务"))[0]
@@ -682,6 +787,8 @@ class V1TaskRunner:
         return "正在推进：" + " / ".join(parts) if parts else "正在推进任务"
 
     def _human_next(self, mode: str, current_state: StateName) -> str:
+        if current_state in HUD_NEXT_OVERRIDE:
+            return HUD_NEXT_OVERRIDE[current_state]
         steps = self._steps_for_mode(mode)
         for index, (state_name, step_name, _field_domain) in enumerate(steps):
             if state_name != current_state:

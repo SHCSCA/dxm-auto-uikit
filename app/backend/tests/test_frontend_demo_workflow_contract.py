@@ -3704,6 +3704,7 @@ def test_frontend_agent_console_initial_hud_matches_single_save_user_flow():
     assert "准备开始只保存" in hud_builder
     assert "READY_FOR_SINGLE_SAVE" in hud_builder
     assert "开始任务" in hud_builder
+    assert "progress_total: 10" in hud_builder
     assert "真实浏览器已打开，Agent 将按步骤操作店小秘编辑页" in hud_builder
     assert "人工确认后开始输入标题、选择分类、设置价格库存并只保存" in hud_builder
     assert "只保存，不发布" in hud_builder

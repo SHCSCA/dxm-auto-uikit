@@ -1590,7 +1590,7 @@ function buildAgentConsoleHudStep(workspace: DeliveryWorkspace, selectedTask: Ta
     guard: '只保存，不发布',
     phase: '开始任务',
     progress_index: 1,
-    progress_total: 6,
+    progress_total: 10,
     human_title: '准备开始只保存',
     human_action: '真实浏览器已打开，Agent 将按步骤操作店小秘编辑页',
     human_next: '人工确认后开始输入标题、选择分类、设置价格库存并只保存',

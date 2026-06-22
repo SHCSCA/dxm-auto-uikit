@@ -118,7 +118,7 @@ Result: all focused contract checks, build, and browser QA passed. Completed tas
 - Modify: `app/backend/tests/test_v1_runner.py`
 - Modify: `app/backend/tests/test_agent_console.py`
 
-- [ ] **Step 1: Standardize progress phrases**
+- [x] **Step 1: Standardize progress phrases**
 
 Use short operator phrases:
 
@@ -135,13 +135,29 @@ Use short operator phrases:
 确认未发布
 ```
 
-- [ ] **Step 2: Keep the browser overlay visible and non-blocking**
+- [x] **Step 2: Keep the browser overlay visible and non-blocking**
 
 The overlay should sit in the browser top-left, use Chinese progress text, and never cover the DXM main navigation or critical form controls.
 
-- [ ] **Step 3: Verify with browser evidence**
+- [x] **Step 3: Verify with browser evidence**
 
 Use DOM/text evidence or a targeted browser screenshot. Do not rely on whole-screen screenshots if the user is using the machine.
+
+Verification completed on 2026-06-22:
+- RED confirmed first:
+  `app/backend/.venv/Scripts/python.exe -m pytest tests/test_v1_runner.py::test_single_save_syncs_agent_console_hud_without_changing_workflow_order tests/test_v1_runner.py::test_single_save_updates_live_browser_hud_without_agent_console tests/test_agent_console.py::test_agent_console_hud_script_renders_black_top_left_business_progress tests/test_frontend_demo_workflow_contract.py::test_frontend_agent_console_initial_hud_matches_single_save_user_flow -q`
+  failed on old HUD copy/layout.
+- GREEN:
+  `app/backend/.venv/Scripts/python.exe -m pytest tests/test_v1_runner.py tests/test_agent_console.py tests/test_frontend_demo_workflow_contract.py -q`
+  passed: `235 passed`.
+- Frontend:
+  `cd app/frontend && npm run build`
+  passed.
+- Browser QA:
+  `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/qa-browser-check.ps1 -Url http://127.0.0.1:15195`
+  passed with no console errors, no network failures, and no desktop/mobile horizontal overflow.
+- Targeted HUD DOM evidence:
+  headless Playwright injection of `HUD_INIT_SCRIPT` showed text `选择分类 / 5/10 / 填写价格库存 / 只保存不发布`, `left=12`, `top=86`, `width=280`, `pointer-events=none`, and no overlap with a simulated DXM top navigation.
 
 ### Task 4: Final Portable Delivery Gate
 

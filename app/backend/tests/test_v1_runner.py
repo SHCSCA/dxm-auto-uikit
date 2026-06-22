@@ -420,29 +420,72 @@ def test_single_save_syncs_agent_console_hud_without_changing_workflow_order(v1_
     states = [call["step_code"] for call in console.calls]
     assert "PRECHECK_CONFIG" in states
     assert "PRECHECK_PUBLISH_GUARD" in states
+    assert "SELECT_CATEGORY" in states
     assert "SAVE_ONLY" in states
     assert "VERIFY_NOT_PUBLISHED" in states
     assert "WRITE_REPORT" in states
     assert "RELEASE_LOCK" in states
     precheck_config = next(call for call in console.calls if call["step_code"] == "PRECHECK_CONFIG")
+    open_draft = next(call for call in console.calls if call["step_code"] == "OPEN_DRAFT_LIST")
+    find_product = next(call for call in console.calls if call["step_code"] == "FIND_PRODUCT")
     base_info = next(call for call in console.calls if call["step_code"] == "FILL_BASE_INFO")
     variants = next(call for call in console.calls if call["step_code"] == "FILL_VARIANTS")
     media = next(call for call in console.calls if call["step_code"] == "FILL_MEDIA")
     semi_goods = next(call for call in console.calls if call["step_code"] == "FILL_SEMI_GOODS")
+    select_category = next(call for call in console.calls if call["step_code"] == "SELECT_CATEGORY")
     save_only = next(call for call in console.calls if call["step_code"] == "SAVE_ONLY")
+    verify_not_published = next(call for call in console.calls if call["step_code"] == "VERIFY_NOT_PUBLISHED")
     release_lock = next(call for call in console.calls if call["step_code"] == "RELEASE_LOCK")
-    assert precheck_config["human_title"] == "检查任务配置"
-    assert precheck_config["phase"] == "启动前检查"
-    assert base_info["human_title"] == "输入标题/选择分类"
-    assert base_info["human_action"] == "正在输入标题、选择分类并填写基础属性"
-    assert variants["human_title"] == "设置 SKU / 价格 / 库存"
-    assert media["human_title"] == "处理商品图片"
-    assert semi_goods["human_title"] == "设置包装/物流/货品信息"
-    assert save_only["human_title"] == "只点击保存"
-    assert save_only["human_action"] == "正在只点击保存，保存到待发布，不点击发布"
-    assert release_lock["human_title"] == "完成任务"
-    assert release_lock["progress_index"] == 24
-    assert release_lock["progress_total"] == 24
+    assert precheck_config["human_title"] == "开始任务"
+    assert precheck_config["phase"] == "开始任务"
+    assert open_draft["human_title"] == "打开草稿箱"
+    assert find_product["human_title"] == "查找商品"
+    assert base_info["human_title"] == "输入标题"
+    assert base_info["human_action"] == "正在输入标题并选择分类"
+    assert base_info["human_next"] == "选择分类"
+    assert select_category["human_title"] == "选择分类"
+    assert select_category["human_action"] == "正在确认商品分类已选择"
+    assert select_category["progress_index"] == 5
+    assert select_category["progress_total"] == 10
+    assert variants["human_title"] == "填写价格库存"
+    assert media["human_title"] == "处理图片"
+    assert semi_goods["human_title"] == "设置包装物流"
+    assert save_only["human_title"] == "点击保存"
+    assert save_only["human_action"] == "正在点击保存按钮，不点击发布"
+    assert verify_not_published["human_title"] == "确认未发布"
+    assert release_lock["human_title"] == "确认未发布"
+    assert release_lock["progress_index"] == 10
+    assert release_lock["progress_total"] == 10
+    operator_phrases = [
+        "开始任务",
+        "打开草稿箱",
+        "查找商品",
+        "输入标题",
+        "选择分类",
+        "填写价格库存",
+        "处理图片",
+        "设置包装物流",
+        "点击保存",
+        "确认未发布",
+    ]
+    hud_text = "\n".join(
+        str(call.get(key) or "")
+        for call in console.calls
+        for key in ("phase", "human_title", "human_action", "human_next")
+    )
+    for phrase in operator_phrases:
+        assert phrase in hud_text
+    assert all(call["progress_total"] == 10 for call in console.calls if call.get("progress_total"))
+    compact_titles = []
+    compact_progress = []
+    for call in console.calls:
+        title = call.get("human_title")
+        if not title or title == (compact_titles[-1] if compact_titles else None):
+            continue
+        compact_titles.append(title)
+        compact_progress.append(call.get("progress_index"))
+    assert compact_titles == operator_phrases
+    assert compact_progress == list(range(1, 11))
     assert all(call["severity"] == "info" for call in console.calls)
     assert all(call["requires_user_action"] is False for call in console.calls)
     assert all(call["store_name"] == "Dang Kang" for call in console.calls)
@@ -486,11 +529,17 @@ def test_single_save_updates_live_browser_hud_without_agent_console(v1_db):
     states = [call["step_code"] for call in adapter.live_hud_calls]
     assert "PRECHECK_CONFIG" in states
     assert "FILL_BASE_INFO" in states
+    assert "SELECT_CATEGORY" in states
     assert "SAVE_ONLY" in states
     assert "VERIFY_NOT_PUBLISHED" in states
+    select_category = next(call for call in adapter.live_hud_calls if call["step_code"] == "SELECT_CATEGORY")
+    assert select_category["human_title"] == "选择分类"
+    assert select_category["progress_index"] == 5
+    assert select_category["progress_total"] == 10
     save_only = next(call for call in adapter.live_hud_calls if call["step_code"] == "SAVE_ONLY")
-    assert save_only["human_title"] == "只点击保存"
-    assert save_only["human_action"] == "正在只点击保存，保存到待发布，不点击发布"
+    assert save_only["human_title"] == "点击保存"
+    assert save_only["human_action"] == "正在点击保存按钮，不点击发布"
+    assert save_only["progress_total"] == 10
     assert save_only["store_name"] == "Dang Kang"
     assert save_only["requires_user_action"] is False
 
@@ -501,7 +550,7 @@ def test_single_save_updates_live_browser_hud_without_agent_console(v1_db):
     assert report["summary"]["live_browser_hud"]["last_step_code"] == "RELEASE_LOCK"
     assert report["summary"]["live_browser_hud"]["hud"]["guard"] == "只保存不发布"
     assert any(
-        evidence["meta"].get("live_browser_hud", {}).get("hud", {}).get("human_title") == "只点击保存"
+        evidence["meta"].get("live_browser_hud", {}).get("hud", {}).get("human_title") == "点击保存"
         for evidence in repo.list_evidences(task["id"])
     )
 
