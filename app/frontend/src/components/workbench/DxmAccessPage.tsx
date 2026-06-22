@@ -52,7 +52,7 @@ export function DxmAccessPage({
     next: '先打开真实登录页，完成验证码后再检测登录态。',
   }
   return (
-    <section className="module-layout dxm-access-layout" aria-label="账号登录">
+    <section className="module-layout dxm-access-layout" aria-label="登录店小秘">
       <div className="module-card span-2 dxm-access-card">
         <ModuleHead title="登录真实店小秘" meta="只做登录，不保存、不发布" />
         <div className="dxm-access-steps" aria-label="登录步骤">

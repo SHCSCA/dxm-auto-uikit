@@ -1786,9 +1786,9 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   }
 
   return (
-    <section className="module-layout" aria-label="编辑页配置">
+    <section className="module-layout" aria-label="填写编辑页">
       <div className="module-card span-3 config-focus-card">
-        <ModuleHead title="编辑配置" meta={configPreviewError ? '配置检查接口异常' : configPreviewLoading ? '正在检查配置' : `${enabledTemplates.length} 个启用模板`} />
+        <ModuleHead title="填写编辑页" meta={configPreviewError ? '配置检查接口异常' : configPreviewLoading ? '正在检查配置' : `${enabledTemplates.length} 个启用模板`} />
         <div className="content-density-summary config-density-summary" data-config-density-summary>
           <div>
             <strong>{configPreviewError ? '配置检查接口不可用' : configPreview?.ok ? '配置已通过本次任务检查' : `先补：${nextConfigSection.title}`}</strong>
@@ -1796,7 +1796,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
               {configPreviewError
                 ? '请先确认本机后端仍在运行，再重新检查配置。'
                 : configPreview?.ok
-                ? '下方可直接微调 DXM 编辑页配置；详情和下一步字段已收起。'
+                ? '下方可直接微调填写编辑页取值；详情和下一步字段已收起。'
                 : previewSummary(nextConfigSection, nextConfigPreview)}
             </span>
           </div>
@@ -1804,7 +1804,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
             <span className={`status-pill ${configPreview?.ok ? 'ok' : 'warn'}`}>
               {configPreview?.ok ? '可用于当前任务' : `${incompleteGroups.length || sectionsBlockingStart.length} 个分区待补`}
             </span>
-            <small>{selectedTask ? `当前任务 #${selectedTask.id}` : '先到“商品与任务”选择任务后，可保存为本次任务覆盖。'}</small>
+            <small>{selectedTask ? `当前任务 #${selectedTask.id}` : '先到“选择商品”选择任务后，可保存为本次任务覆盖。'}</small>
             {configPreview?.ok && advisoryGapCount > 0 && <small>{advisoryGapCount} 个分区有辅助字段待补</small>}
             <small>当前模板范围：{currentTemplateScopeLabel}</small>
           </div>
@@ -1818,7 +1818,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
           <div className="config-precheck-action__buttons">
             {!selectedTask && (
               <button className="button button--primary" type="button" onClick={onShowTasks}>
-                去商品任务
+                去选择商品
               </button>
             )}
             <button
@@ -1875,7 +1875,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
       </div>
 
       <div className="module-card span-3">
-        <ModuleHead title="DXM 编辑配置" meta="按店小秘编辑页分区逐段填写，当前只展开一个分区" />
+        <ModuleHead title="填写编辑页" meta="按店小秘编辑页分区逐段填写，当前只展开一个分区" />
         <div className="config-template-console config-template-console--compact" aria-label="配置模板控制台">
           <div className="config-template-console__production-status" aria-label="配置中心生产状态">
             <span><b>当前模板</b><strong>{currentTemplateDisplayLabel}</strong></span>
@@ -2445,7 +2445,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
   const taskActionDiagnosis = {
     create: quickCreateSingleSaveDisabledReason || '可创建单商品只保存任务',
     history: historyTaskHint,
-    start: startDisabled ? startLabel : '可进入真实浏览器启动',
+    start: startDisabled ? startLabel : '可开始只保存',
   }
 
   useEffect(() => {
@@ -2493,7 +2493,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
   }
 
   return (
-    <section className="module-layout" aria-label="当前任务">
+    <section className="module-layout" aria-label="选择商品">
       <div className="module-card span-1 task-quick-actions" aria-label="任务操作台">
         <ModuleHead title="选择商品" meta="首屏只处理任务选择" />
         <div className="task-product-selection" aria-label="选择商品">
@@ -2577,7 +2577,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
       </div>
 
       <div className="module-card span-2">
-        <ModuleHead title="当前任务" meta={showAllTasks ? `${workspace.tasks.length} 个批次` : `${visibleTaskRows.length} 个常用批次`} />
+        <ModuleHead title="选择商品" meta={showAllTasks ? `${workspace.tasks.length} 个批次` : `${visibleTaskRows.length} 个常用批次`} />
         <TaskCurrentActionPanel
           selectedTask={selectedTask}
           workspace={workspace}
@@ -2616,10 +2616,10 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
         {(configBlocksStart || configPreviewLoading || configPreviewError || configPreviewTaskMismatch) && (
           <div className={`gate-note ${configBlocksStart ? 'gate-note--danger' : ''}`}>
             <strong>{configPreviewError ? '配置检查接口不可用' : configPreviewTaskMismatch ? '配置属于其它任务' : configPreviewLoading ? '正在检查配置' : '配置检查未通过'}</strong>
-            <span>{configPreviewError ? humanConfigError(configPreviewError) : configPreviewTaskMismatch ? '请重新检查本次任务配置，避免沿用上一任务的配置结果。' : configPreviewLoading ? '正在读取当前任务的 DXM 编辑页字段来源。' : `请先补齐：${configPreviewForSelectedTask?.missing.slice(0, 6).join('、') || 'DXM 编辑页配置'}`}</span>
+            <span>{configPreviewError ? humanConfigError(configPreviewError) : configPreviewTaskMismatch ? '请重新检查本次任务配置，避免沿用上一任务的配置结果。' : configPreviewLoading ? '正在读取当前任务的 DXM 编辑页字段来源。' : `请先补齐：${configPreviewForSelectedTask?.missing.slice(0, 6).join('、') || '填写编辑页配置'}`}</span>
             {(configBlocksStart || configPreviewTaskMismatch) && (
               <div className="next-step-actions">
-                <button className="button button--secondary" type="button" onClick={onShowConfig}>去编辑页配置</button>
+                <button className="button button--secondary" type="button" onClick={onShowConfig}>去填写编辑页</button>
               </div>
             )}
           </div>
@@ -3030,7 +3030,7 @@ export function ExecutionConsole({
   )
 
   return (
-    <section className="agent-console-layout" aria-label="真实浏览器">
+    <section className="agent-console-layout" aria-label="开始只保存">
       {runtimeStatusError && (
         <ServiceRecoveryPanel
           runtimeStatusError={runtimeStatusError}
@@ -3322,7 +3322,7 @@ function AgentStagePanel({
             <summary>查看阻断详情</summary>
             <span>{realSaveBlockReason}</span>
             <div className="next-step-actions">
-              <button className="button button--secondary" type="button" onClick={onShowTasks}>回到商品与任务</button>
+              <button className="button button--secondary" type="button" onClick={onShowTasks}>回到选择商品</button>
               <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看只读评审与检查计划</button>
               <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
             </div>
@@ -3368,7 +3368,7 @@ function ConsoleCompletedReviewPanel({
       <div className="console-review-panel__body">
         <div>
           <strong>下一步只复核结果</strong>
-          <span>查看报告、未发布证明和真实浏览器记录；如要处理新商品，回到商品与任务创建新任务。</span>
+          <span>查看报告、未发布证明和真实浏览器记录；如要处理新商品，回到选择商品创建新任务。</span>
         </div>
         <div className="console-review-panel__facts">
           <span><b>报告</b><strong>优先查看</strong></span>
@@ -5020,7 +5020,7 @@ export function EvidenceTimeline({
   const evidencePoints = filterEvidencePointsForTask(workspace.evidencePoints, evidences, reports, selectedTask)
 
   return (
-    <section className="module-layout" aria-label="结果报告">
+    <section className="module-layout" aria-label="保存证据">
       <div className="module-card span-3">
         <ModuleHead title="交付证据摘要" meta={`等级 ${workspace.evidenceGrade?.grade ?? 'C'}`} />
         <div className="evidence-point-grid">
@@ -5033,7 +5033,7 @@ export function EvidenceTimeline({
               detail="当前真实保存未放行时，保存结果、未发布证明和保存回包为 0 条是预期阻断；只有单商品只保存完成后才生成可验收证据等级。"
               actions={(
                 <>
-                  <button className="button button--secondary" type="button" onClick={onShowTasks}>查看商品与任务门禁</button>
+                  <button className="button button--secondary" type="button" onClick={onShowTasks}>查看选择商品门禁</button>
                   <button className="button button--quiet" type="button" onClick={onShowConsole}>查看真实只读证据</button>
                 </>
               )}
@@ -5119,9 +5119,9 @@ function buildConsolePrimaryPath({
       code: 'select_task',
       title: '需要选择任务',
       reason: '当前没有选中的单商品只保存任务。',
-      detail: '先在商品与任务创建或选择一个单商品只保存任务，再进入配置、真实只读检查和执行浏览器。',
-      next: '去商品与任务选择任务',
-      ctaLabel: '去商品与任务',
+      detail: '先在选择商品页创建或选择一个单商品只保存任务，再进入填写编辑页、真实只读检查和执行浏览器。',
+      next: '去选择商品页选择任务',
+      ctaLabel: '去选择商品',
       action: 'tasks',
       browserStatus: '未选择任务，执行浏览器暂不启动',
       blocksBrowserStart: true,
@@ -5191,7 +5191,7 @@ function buildConsolePrimaryPath({
       title: '需要选择任务',
       reason: '当前任务不是草稿状态。',
       detail: '请选择草稿任务，或重新创建单商品只保存任务。',
-      next: '回到商品与任务选择草稿任务',
+      next: '回到选择商品页选择草稿任务',
       ctaLabel: '选择草稿任务',
       action: 'tasks',
       browserStatus: '任务状态不可启动，执行浏览器暂不启动',
@@ -5205,7 +5205,7 @@ function buildConsolePrimaryPath({
       title: '当前模式未放行',
       reason: `${humanTaskModeLabel(selectedTask.mode)} 当前未放行。`,
       detail: '认领、批量保存和无人值守仍需单独验收；当前只开放单商品只保存路径。',
-      next: '回到商品与任务创建单商品只保存任务',
+      next: '回到选择商品页创建单商品只保存任务',
       ctaLabel: '创建单商品只保存任务',
       action: 'tasks',
       browserStatus: '当前模式未放行，执行浏览器暂不启动',
@@ -5219,8 +5219,8 @@ function buildConsolePrimaryPath({
       title: '需要补配置',
       reason: '配置检查接口不可用，不能判断当前任务字段是否完整。',
       detail: humanConfigError(configPreviewError),
-      next: '去编辑页配置重新检查',
-      ctaLabel: '去编辑页配置重新检查',
+      next: '去填写编辑页重新检查',
+      ctaLabel: '去填写编辑页重新检查',
       action: 'config',
       browserStatus: '配置检查接口异常，执行浏览器暂不启动',
       blocksBrowserStart: true,
@@ -5234,7 +5234,7 @@ function buildConsolePrimaryPath({
       reason: '正在读取编辑页配置保存的本次任务取值。',
       detail: '系统正在确认店铺、类目、图片、物流和半托管字段；校验完成前不会启动真实保存。',
       next: '等待配置校验完成',
-      ctaLabel: '查看编辑页配置',
+      ctaLabel: '查看填写编辑页',
       action: 'config',
       browserStatus: '配置校验中，执行浏览器暂不启动',
       blocksBrowserStart: true,
@@ -5248,9 +5248,9 @@ function buildConsolePrimaryPath({
       reason: configPreview ? '当前任务配置检查未通过。' : '尚未完成本次任务配置检查。',
       detail: configPreview?.missing.length
         ? `请先补齐：${configPreview.missing.slice(0, 4).join('、')}`
-        : '请先到编辑页配置检查本次任务配置，确认店铺、类目、图片、物流和半托管字段。',
-      next: '去编辑页配置补齐配置',
-      ctaLabel: '去编辑页配置补齐配置',
+        : '请先到填写编辑页检查本次任务配置，确认店铺、类目、图片、物流和半托管字段。',
+      next: '去填写编辑页补齐配置',
+      ctaLabel: '去填写编辑页补齐配置',
       action: 'config',
       browserStatus: '配置未完成，执行浏览器暂不启动',
       blocksBrowserStart: true,
@@ -5291,8 +5291,8 @@ function buildConsolePrimaryPath({
       title: '需要人工确认只保存',
       reason: '真实保存前还没有完成人工批准。',
       detail: l3Detail ?? '真实只读检查通过后，仍需要人工确认批准，只启动单商品只保存。',
-      next: '去商品与任务填写批准人并启动',
-      ctaLabel: '去商品与任务人工确认',
+      next: '去选择商品页填写批准人并启动',
+      ctaLabel: '去选择商品页人工确认',
       action: 'tasks',
       browserStatus: '等待人工确认，执行浏览器暂不启动',
       blocksBrowserStart: true,
@@ -5623,7 +5623,7 @@ function buildProblemCardCopy(item: ExceptionItem) {
       title: '店小秘还没登录',
       what: '系统还没有确认真实店小秘浏览器处于已登录状态。',
       why: '没有登录态时不会打开执行浏览器，也不会保存或发布。',
-      next: '点“账号登录”，打开真实登录页，完成验证码后再点“检测登录状态”。',
+      next: '点“登录店小秘”，打开真实登录页，完成验证码后再点“检测登录状态”。',
     }
   }
   if (raw.includes('L2') || raw.toLowerCase().includes('probe') || raw.includes('真实只读检查')) {
@@ -5639,7 +5639,7 @@ function buildProblemCardCopy(item: ExceptionItem) {
       title: '这条任务已经执行过或失败',
       what: message,
       why: '已经执行过的任务不能直接重复启动，避免重复操作真实店小秘。',
-      next: '点“商品与任务”，重新创建单商品只保存任务。',
+      next: '点“选择商品”，重新创建单商品只保存任务。',
     }
   }
   if (message.includes('保存没有完成') || raw.includes('save_result')) {
@@ -5647,7 +5647,7 @@ function buildProblemCardCopy(item: ExceptionItem) {
       title: '保存没有完成',
       what: message,
       why: '系统没有拿到保存成功、未发布证明和保存接口回包。',
-      next: '先查看结果报告；确认真实浏览器可用后，重新创建单商品只保存任务。',
+      next: '先查看保存结果；确认真实浏览器可用后，重新创建单商品只保存任务。',
     }
   }
   if (message.includes('浏览器连接异常')) {
@@ -5728,7 +5728,7 @@ export function GapList({ gaps }: { gaps: AcceptanceGap[] }) {
 function humanAcceptanceGapOwner(owner: string) {
   const labels: Record<string, string> = {
     evidence: '保存证据',
-    report: '结果报告',
+    report: '保存结果',
     'ops-review': '人工复核',
     qa: '验收检查',
     runtime: '执行过程',
@@ -5951,7 +5951,7 @@ function l2CheckLabel(key: string) {
 
 function l2FinalPathLabel(value: string) {
   return ({
-    home: '回到首页',
+    home: '回到今天做什么',
     login: '登录页',
     target: '目标页',
     other: '其他路径',
@@ -5995,7 +5995,7 @@ function buildConsoleSteps(selectedTask: Task | null, logs: LogItem[]) {
     { title: '只读页面核验', detail: '核对真实页面、字段和证据路径', state: active ? 'current' : completed ? 'done' : 'pending' },
     { title: '只读复核', detail: '确认双目标同轮次只读证据', state: completed ? 'done' : 'pending' },
     { title: '真实保存确认', detail: '需要人工批准与明确保存回包证据', state: completed ? 'done' : 'pending' },
-    { title: '报告复盘', detail: '证据等级、问题处理、验收缺口归档', state: completed ? 'done' : 'pending' },
+    { title: '保存复盘', detail: '证据等级、失败处理、验收缺口归档', state: completed ? 'done' : 'pending' },
   ]
 }
 

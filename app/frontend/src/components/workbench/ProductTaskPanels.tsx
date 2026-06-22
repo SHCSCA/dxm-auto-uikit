@@ -245,7 +245,7 @@ export function TaskCurrentActionPanel({
       </div>
       {showPrecheckRecoveryActions && (
         <div className="task-current-panel__precheck-actions" aria-label="真实只读检查未通过处理">
-          <span>真实只读检查没有通过，不能启动真实保存。先运行真实只读检查；如果仍失败，到“真实浏览器”看日志，再查看检查计划。</span>
+          <span>真实只读检查没有通过，不能启动真实保存。先运行真实只读检查；如果仍失败，到“开始只保存”看日志，再查看检查计划。</span>
           <div>
             <button
               className="button button--secondary"
@@ -261,7 +261,7 @@ export function TaskCurrentActionPanel({
           <details className="inline-disclosure task-current-panel__optional-actions">
             <summary>可选处理：查看阻断说明 / 查看证据缺口 / 检查计划</summary>
             <div className="next-step-actions">
-              <button className="button button--quiet" type="button" onClick={onShowConsole}>查看真实浏览器</button>
+              <button className="button button--quiet" type="button" onClick={onShowConsole}>查看开始只保存</button>
               <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
               <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">查看检查计划</button>
             </div>
@@ -286,7 +286,7 @@ export function TaskCurrentActionPanel({
         <summary>可选处理：查看阻断说明 / 查看证据缺口 / 检查计划</summary>
         <div className="next-step-actions">
         <button className="button button--quiet" type="button" onClick={onShowConfig}>补齐配置</button>
-        <button className="button button--quiet" type="button" onClick={onShowConsole}>打开真实浏览器复核</button>
+        <button className="button button--quiet" type="button" onClick={onShowConsole}>打开开始只保存复核</button>
         <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
         <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">查看检查计划</button>
         </div>
@@ -332,8 +332,8 @@ export function SingleSaveRecoveryGuide({
       done: Boolean(selectedTask?.mode === 'single_save' && !selectedTaskIsUnreleasedRealMode),
     },
     {
-      title: '补齐 DXM 编辑页配置',
-      detail: configBlocksStart ? '当前任务配置检查未通过，先回编辑页配置补字段。' : '配置检查未阻断当前任务。',
+      title: '填写 DXM 编辑页',
+      detail: configBlocksStart ? '当前任务配置检查未通过，先回填写编辑页补字段。' : '配置检查未阻断当前任务。',
       done: !configBlocksStart,
     },
     {
@@ -401,7 +401,7 @@ export function SingleSaveRecoveryGuide({
         )}
         {configBlocksStart && (
           <button className="button button--quiet" type="button" onClick={onShowConfig}>
-            去补配置
+            去填写编辑页
           </button>
         )}
         {(l2BlocksStart || l3BlocksStart) && (
@@ -621,7 +621,7 @@ function taskStartDecision({
   }
   if (selectedTask.status === 'completed') {
     return {
-      scope: '查看结果报告',
+      scope: '查看保存结果',
       reason: '当前任务已完成，不需要再次启动。',
       next: '查看保存结果、未发布证明和检查计划。',
       tone: 'ok',
@@ -631,7 +631,7 @@ function taskStartDecision({
     return {
       scope: '等待当前任务运行',
       reason: '任务正在运行，避免重复启动。',
-      next: '到“真实浏览器”查看真实浏览器、日志和步骤。',
+      next: '到“开始只保存”查看真实浏览器、日志和步骤。',
       tone: 'ok',
     }
   }
@@ -655,7 +655,7 @@ function taskStartDecision({
     return {
       scope: '先补配置',
       reason: '当前任务配置检查未通过。',
-      next: '去编辑页配置补齐 DXM 编辑页必填字段。',
+      next: '去填写编辑页补齐 DXM 编辑页必填字段。',
       tone: 'warn',
     }
   }
@@ -686,7 +686,7 @@ function taskStartDecision({
   return {
     scope: startLabel.includes('保存') || startLabel.includes('批准') ? '可申请单商品只保存' : '可启动当前任务',
     reason: '配置、真实只读检查和人工确认当前未阻断。',
-    next: '点击主按钮后，在“真实浏览器”查看执行。',
+    next: '点击主按钮后，在“开始只保存”查看执行。',
     tone: 'ok',
   }
 }

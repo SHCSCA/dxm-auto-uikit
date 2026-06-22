@@ -662,7 +662,7 @@ await new Promise(r => setTimeout(r, 1800));
 markQaStep('initial-load');
 const text = {
   tasks: '\u5546\u54c1\u4e0e\u4efb\u52a1',
-  overview: '\u64cd\u4f5c\u9996\u9875',
+  overview: '\u4eca\u5929\u505a\u4ec0\u4e48',
   console: '\u771f\u5b9e\u6d4f\u89c8\u5668',
   reports: '\u7ed3\u679c\u62a5\u544a',
   config: '\u7f16\u8f91\u9875\u914d\u7f6e',
@@ -1307,7 +1307,7 @@ const result = {
       || initialText.includes('\u0044\u0058\u004d \u53ea\u4fdd\u5b58')
       || initialText.includes('\u771f\u5b9e\u6d4f\u89c8\u5668\u81ea\u52a8\u5316'),
     navClicksWorked: clickedTasks && clickedConsole && clickedReports,
-    localizedOverviewNav: initialText.includes(text.overview) || initialText.includes('\u767b\u5f55\u3001\u914d\u7f6e\u4efb\u52a1') || initialText.includes('\u5f00\u59cb\u4f7f\u7528'),
+    localizedOverviewNav: initialText.includes(text.overview) || initialText.includes('\u767b\u5f55\u5e97\u5c0f\u79d8') || initialText.includes('\u5f00\u59cb\u53ea\u4fdd\u5b58'),
     defaultTaskSelectionPrefersDeliveryCurrentTask: defaultTaskSelectionState.hasDeliveryCurrentTask
       && defaultTaskSelectionState.avoidsLatestUnreleasedDefault,
     firstScreenExpectedBlockedScope: (initialTextCompact.includes('\u81ea\u52a8\u5316\u5de5\u4f5c\u53f0')

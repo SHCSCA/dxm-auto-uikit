@@ -94,7 +94,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
       ? '后端未连接不是账号、配置或店小秘页面问题；请查看实时日志、刷新状态或重启免安装版。'
       : '工作台只会执行受控“只保存”，发布和批量无人值守仍保持关闭。'
     : selectedTaskCompleted
-      ? `任务 ${activeTaskLabel} ${activeTaskStatusLabel}，继续查看结果报告、证据或打开真实浏览器复核。`
+      ? `任务 ${activeTaskLabel} ${activeTaskStatusLabel}，继续查看保存结果、证据或打开开始只保存复核。`
       : '按操作引导继续：选择任务、补配置、真实登录、真实只读检查、人工确认后才启动保存。'
   const runtimeEndpointLine = runtimeStatus
     ? `服务端 ${runtimeStatus.backend.url ?? `端口 ${runtimeStatus.backend.port ?? '未知'}`} / 前端 ${runtimeStatus.frontend.url ?? `端口 ${runtimeStatus.frontend.port ?? '未知'}`}`

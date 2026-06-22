@@ -18,25 +18,25 @@ export function IssuesPage({ workspace, selectedTask }: IssuesPageProps) {
       title: '店小秘还没登录',
       what: '真实店小秘浏览器还没有确认登录成功。',
       why: '没有登录态时，执行浏览器不会启动，也不会保存或发布。',
-      next: '去“账号登录”，打开真实登录页，完成验证码后检测登录状态。',
+      next: '去“登录店小秘”，打开真实登录页，完成验证码后检测登录状态。',
     },
     {
       title: '真实只读检查没有通过',
       what: '商品采集页和草稿箱页还没有完成只读检查。',
       why: '只读检查未通过前，系统不能确认页面安全，所以不会启动真实保存。',
-      next: `去“真实浏览器”，点击“${READONLY_PRECHECK_CTA}”。`,
+      next: `去“开始只保存”，点击“${READONLY_PRECHECK_CTA}”。`,
     },
     {
       title: '这条任务已经执行过或失败',
       what: '当前任务不是可启动的草稿任务。',
       why: '已经执行过的任务不能重复启动，避免重复操作真实店小秘。',
-      next: '去“商品与任务”，重新创建单商品只保存任务。',
+      next: '去“选择商品”，重新创建单商品只保存任务。',
     },
     {
       title: '保存没有完成',
       what: '系统没有拿到保存成功、未发布证明和保存接口回包。',
       why: '证据不完整时不能当作交付成功。',
-      next: '去“结果报告”查看失败原因，再重新创建单商品只保存任务。',
+      next: '去“保存结果”查看失败原因，再重新创建单商品只保存任务。',
     },
     {
       title: '浏览器连接异常',
@@ -46,13 +46,13 @@ export function IssuesPage({ workspace, selectedTask }: IssuesPageProps) {
     },
   ]
   const emptyExceptionDetail = selectedTask?.status === 'completed'
-    ? '当前任务暂无问题记录；如需复核保存链路，请查看结果报告。'
-    : '未执行不代表通过；执行失败、字段缺失和保存阻断会进入问题处理。'
+    ? '当前任务暂无问题记录；如需复核保存链路，请查看保存结果。'
+    : '未执行不代表通过；执行失败、字段缺失和保存阻断会进入失败处理。'
 
   return (
-    <section className="module-layout" aria-label="问题处理">
+    <section className="module-layout" aria-label="失败处理">
       <div className="module-card span-2">
-        <ModuleHead title="问题处理" meta={`${exceptions.length} 条待处理`} />
+        <ModuleHead title="失败处理" meta={`${exceptions.length} 条待处理`} />
         <div className="exception-list">
           {exceptions.map((item) => (
             <ExceptionCard key={item.id} item={item} />
@@ -141,7 +141,7 @@ function buildProblemCardCopy(item: ExceptionItem) {
       title: '店小秘还没登录',
       what: '系统还没有确认真实店小秘浏览器处于已登录状态。',
       why: '没有登录态时不会打开执行浏览器，也不会保存或发布。',
-      next: '点“账号登录”，打开真实登录页，完成验证码后再点“检测登录状态”。',
+      next: '点“登录店小秘”，打开真实登录页，完成验证码后再点“检测登录状态”。',
     }
   }
   if (raw.includes('L2') || raw.toLowerCase().includes('probe') || raw.includes('真实只读检查')) {
@@ -157,7 +157,7 @@ function buildProblemCardCopy(item: ExceptionItem) {
       title: '这条任务已经执行过或失败',
       what: message,
       why: '已经执行过的任务不能直接重复启动，避免重复操作真实店小秘。',
-      next: '点“商品与任务”，重新创建单商品只保存任务。',
+      next: '点“选择商品”，重新创建单商品只保存任务。',
     }
   }
   if (message.includes('保存没有完成') || raw.includes('save_result')) {
@@ -165,7 +165,7 @@ function buildProblemCardCopy(item: ExceptionItem) {
       title: '保存没有完成',
       what: message,
       why: '系统没有拿到保存成功、未发布证明和保存接口回包。',
-      next: '先查看结果报告；确认真实浏览器可用后，重新创建单商品只保存任务。',
+      next: '先查看保存结果；确认真实浏览器可用后，重新创建单商品只保存任务。',
     }
   }
   if (message.includes('浏览器连接异常')) {
@@ -225,7 +225,7 @@ function isRealWriteExpectedBlocked(workspace: DeliveryWorkspace) {
 function humanAcceptanceGapOwner(owner: string) {
   const labels: Record<string, string> = {
     evidence: '保存证据',
-    report: '结果报告',
+    report: '保存结果',
     'ops-review': '人工复核',
     qa: '验收检查',
     runtime: '执行过程',

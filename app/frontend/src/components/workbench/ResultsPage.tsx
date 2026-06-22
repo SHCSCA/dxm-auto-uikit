@@ -75,7 +75,7 @@ export function ResultsPage({
   )
 
   return (
-    <section className="module-layout" aria-label="结果报告" data-testid="report-center-section">
+    <section className="module-layout" aria-label="保存结果" data-testid="report-center-section">
       <BusinessResultSummaryCard
         selectedTask={selectedTask}
         latestReport={reportSummary?.latest_report ?? reports[0] ?? null}
@@ -102,16 +102,16 @@ export function ResultsPage({
       <div className="module-card span-3 report-followup-actions" aria-label="复核与后续处理">
         <div>
           <strong>复核与后续处理</strong>
-          <span>任务结束后优先看保存证据；有阻断再处理问题；需要继续执行回“真实浏览器”。</span>
+          <span>任务结束后优先看保存证据；有阻断再处理问题；需要继续执行回“开始只保存”。</span>
         </div>
         <div className="toolbar">
           <button className="button button--secondary" type="button" data-section="evidence" onClick={onShowEvidence}>查看保存证据</button>
           <button className="button button--quiet" type="button" data-section="exceptions" onClick={onShowExceptions}>处理问题</button>
-          <button className="button button--quiet" type="button" data-section="console" onClick={onShowConsole}>回到真实浏览器</button>
+          <button className="button button--quiet" type="button" data-section="console" onClick={onShowConsole}>回到开始只保存</button>
         </div>
       </div>
       <div className="module-card span-3">
-        <ModuleHead title="结果报告" meta={`${reports.length} 份报告`} />
+        <ModuleHead title="保存结果" meta={`${reports.length} 份报告`} />
         <div className="report-grid">
           {reports.map((report) => (
             <ReportCard key={report.id} report={report} />
@@ -400,7 +400,7 @@ function BusinessResultSummaryCard({
     ? '系统已拿到保存成功、未发布证明和保存接口回包。'
     : realWriteExpectedBlocked
       ? '真实保存不会自动启动；完成登录、配置、安全检查和人工确认后再执行。'
-      : '请先查看保存证据或回到浏览器执行页处理当前阻断。'
+      : '请先查看保存证据或回到开始只保存页处理当前阻断。'
 
   return (
     <div className={`module-card span-3 business-result-summary ${ok ? 'is-ok' : realWriteExpectedBlocked ? 'is-waiting' : 'is-warn'}`} aria-label="本次保存结果">
@@ -419,7 +419,7 @@ function BusinessResultSummaryCard({
       </div>
       <div className="report-followup-actions business-result-summary__actions" aria-label="本次结果后续动作">
         <button className="button button--secondary" type="button" onClick={onShowEvidence}>查看保存证据</button>
-        <button className="button button--quiet" type="button" onClick={onShowConsole}>回到浏览器执行</button>
+        <button className="button button--quiet" type="button" onClick={onShowConsole}>回到开始只保存</button>
       </div>
     </div>
   )
@@ -816,7 +816,7 @@ function l2CheckLabel(key: string) {
 
 function l2FinalPathLabel(value: string) {
   return ({
-    home: '回到首页',
+    home: '回到今天做什么',
     login: '登录页',
     target: '目标页',
     other: '其他路径',

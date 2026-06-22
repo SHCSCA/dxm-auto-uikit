@@ -38,9 +38,9 @@ export function SystemSettingsPage({
     : '最近验收：未读取'
 
   return (
-    <section className="module-layout" aria-label="运行设置">
+    <section className="module-layout" aria-label="帮助与设置">
       <div className="module-card span-3">
-        <ModuleHead title="运行设置" meta="普通使用无需修改" />
+        <ModuleHead title="帮助与设置" meta="普通使用无需修改" />
         <div className="settings-summary-grid">
           <div className="settings-summary-card">
             <span>当前可执行范围</span>
@@ -50,7 +50,7 @@ export function SystemSettingsPage({
           <div className="settings-summary-card">
             <span>当前任务</span>
             <strong>{selectedTask ? displayTaskName(selectedTask) : '未选择任务'}</strong>
-            <small>{selectedTask ? humanTaskStatus(selectedTask.status) : '请先在商品与任务中创建或选择任务'}</small>
+            <small>{selectedTask ? humanTaskStatus(selectedTask.status) : '请先在选择商品中创建或选择任务'}</small>
           </div>
           <div className="settings-summary-card">
             <span>真实浏览器</span>
