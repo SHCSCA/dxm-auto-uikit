@@ -306,23 +306,25 @@ def test_app_shell_presents_agent_console_as_user_first_navigation():
     assert "DXM Agent Console" in index_html
     assert "type WorkbenchPrimaryArea" in source
     assert "const primaryAreas" in source
-    assert "label: '开始'" in source
-    assert "label: '准备商品'" in source
-    assert "label: '执行保存'" in source
-    assert "label: '复盘'" in source
-    assert "label: '支持'" in source
+    assert "label: '日常流程'" in source
+    assert "label: '结果复盘'" in source
+    assert "label: '帮助与系统'" in source
     assert "label: '更多'" not in source
-    assert "真实浏览器" in source
-    assert "页面检查、人工确认、启动真实浏览器只保存" in source
+    assert "今日任务" in source
+    assert "登录店小秘" in source
+    assert "选择商品" in source
+    assert "填写编辑页" in source
+    assert "开始只保存" in source
     assert "保存结果" in source
-    assert "失败处理" in source
-    assert "保存证据" in source
+    assert "问题处理" in source
+    assert "证据归档" not in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
     assert "使用帮助" in source
     assert "系统设置" in source
     assert "id: 'dashboard'" not in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
-    assert "{ id: 'evidence', label: '保存证据'" in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
+    assert "{ id: 'start_save', label: '开始只保存'" in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
     assert "{ id: 'exceptions', label: '问题'" not in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
-    assert "{ id: 'agent_execution', label: '开始只保存', short: '存', hint: '页面检查、人工确认、启动真实浏览器只保存' }" in source
+    assert "{ id: 'preflight', label: '运行前检查'" not in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
+    assert "{ id: 'real_browser', label: '真实浏览器'" not in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
     assert "报告中心" not in source
     assert "异常池" not in source
     assert "nav-section" in source
@@ -375,10 +377,10 @@ def test_frontend_surfaces_electron_desktop_runtime_metadata():
     assert "window.dxmDesktop?.getRuntimeInfo" in app_source
     assert "desktopRuntime={desktopRuntime}" in app_source
     assert "desktopRuntime?: DesktopRuntimeInfo | null" in safety_source
-    assert "DXM Agent Console 桌面模式" in safety_source
-    assert "desktopRuntime.desktopLogPath" in safety_source
-    assert "desktopRuntime.backendLogPath" in safety_source
-    assert "桌面日志" in safety_source
+    assert "免安装版：已接入本机服务" in safety_source
+    assert "desktopRuntime.desktopLogPath" not in safety_source
+    assert "desktopRuntime.backendLogPath" not in safety_source
+    assert "桌面日志" not in safety_source
 
 
 def test_frontend_explains_runtime_ownership_for_desktop_exe_users():
@@ -389,11 +391,11 @@ def test_frontend_explains_runtime_ownership_for_desktop_exe_users():
     assert "owner?: 'start_mvp' | 'desktop' | 'direct' | string" in types_source
     assert "managedByDesktop?: boolean" in types_source
     assert "runtimeOwnerLabel" in safety_source
-    assert "启动来源" in safety_source
+    assert "启动方式" in safety_source
     assert "免安装版已接管" in safety_source
     assert "旧进程/直接启动" in safety_source
     assert "backendPortMismatch" in safety_source
-    assert "桌面后端端口与接口端口不一致" in safety_source
+    assert "桌面服务与当前接口不一致" in safety_source
     assert "DXM Agent Console 免安装版" in workbench_source
     assert "关闭并重新打开免安装版 exe" in workbench_source
     assert "请确认是通过 scripts/start-mvp.bat 启动" not in workbench_source

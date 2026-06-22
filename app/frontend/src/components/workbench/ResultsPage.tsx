@@ -88,7 +88,7 @@ export function ResultsPage({
         onShowConsole={onShowConsole}
       />
       <div className="module-card span-3">
-        <ModuleHead title="保存隔离摘要" meta={humanPublishGuardStatus(workspace.publishGuardState?.status)} />
+        <ModuleHead title="保存后核对" meta={humanPublishGuardStatus(workspace.publishGuardState?.status)} />
         <div className="report-check-grid">
           <BusinessReportCheckRow count={businessReportCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
           <EvidenceCheckRow label="保存结果" count={saveResultCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
@@ -155,7 +155,7 @@ export function ResultsPage({
           )}
         </div>
         <p>{l2ProbePlan.purpose || '真实保存保持暂停；仅在操作者确认可进行只读检查时，才重新运行采集页和采集箱检查。'}</p>
-        <p>采集页和采集箱必须使用同一个 run-id 复验，确保双目标证据绑定到同一次人工批准的真实只读检查。</p>
+        <p>采集页和采集箱必须使用同一次检查记录复验，确保双目标证据绑定到同一次人工批准的真实只读检查。</p>
         <div className="l2-next-step-card__commands">
           {l2ProbePlan.commands.map((command) => (
             <code key={command}>{command}</code>
@@ -172,7 +172,7 @@ export function ResultsPage({
         <div className="report-check-grid">
           <PostL3ReportCheckRow label="配置模板命中" ok={workspace.dxmReferenceTemplates.some((item) => item.templateNames.length)} realWriteExpectedBlocked={realWriteExpectedBlocked} />
           <PostL3ReportCheckRow label="执行步骤与结果" ok={workspace.logs.length > 0} realWriteExpectedBlocked={realWriteExpectedBlocked} />
-          <PostL3ReportCheckRow label="证据等级 A/B/C" ok={workspace.evidences.length > 0} realWriteExpectedBlocked={realWriteExpectedBlocked} />
+          <PostL3ReportCheckRow label="证明强度 A/B/C" ok={workspace.evidences.length > 0} realWriteExpectedBlocked={realWriteExpectedBlocked} />
           <PostL3ReportCheckRow label="验收缺口已列明" ok={workspace.acceptanceGaps.length > 0} realWriteExpectedBlocked={realWriteExpectedBlocked} />
         </div>
       </details>
@@ -232,7 +232,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
 
   return (
     <div className="module-card span-3 delivery-check-card">
-      <ModuleHead title="最近自动化验收" meta={available ? checkedAt : '尚未运行'} />
+      <ModuleHead title="维护人员验收信息" meta={available ? checkedAt : '尚未运行'} />
       <div className="report-check-grid">
         <CheckRow
           label={`最终验收报告${localWorkbenchOk ? '通过' : '待刷新'}`}

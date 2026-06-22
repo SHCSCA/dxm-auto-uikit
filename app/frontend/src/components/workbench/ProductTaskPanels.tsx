@@ -188,6 +188,11 @@ export function TaskCurrentActionPanel({
   const selectedTaskCompleted = selectedTask?.status === 'completed'
   const primaryDisabled = busy || (!selectedTaskCompleted && startDisabled)
   const primaryAction = selectedTaskCompleted ? onShowReports : onStartTask
+  const primaryButtonLabel = !selectedTaskCompleted && startDisabled
+    ? startLabel.includes('禁止启动') || startLabel.startsWith('暂不能启动')
+      ? startLabel
+      : `暂不能启动只保存：${startLabel}`
+    : startLabel
   const configCheckOk = selectedTaskCompleted || configOk
   const l2CheckOk = selectedTaskCompleted || l2Ready
   const l3CheckOk = selectedTaskCompleted || l3Ready
@@ -226,7 +231,7 @@ export function TaskCurrentActionPanel({
           data-start-disabled={primaryDisabled ? 'true' : 'false'}
           data-section={selectedTaskCompleted ? 'reports' : undefined}
         >
-          {startLabel}
+          {primaryButtonLabel}
         </button>
       </div>
       <div className={`task-current-panel__decision task-current-panel__decision--${decision.tone}`} aria-label="启动判定">

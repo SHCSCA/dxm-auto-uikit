@@ -5,7 +5,6 @@ import {
   DXM_LOGGED_IN_STATUSES,
   GapList,
   ModuleHead,
-  RegressionGateGrid,
   displayTaskName,
   isRealWriteExpectedBlocked,
   l3PostEvidenceGapIds,
@@ -39,6 +38,14 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
   const l2Passed = l2Gate?.status === 'passed'
   const l3Passed = l3Gate?.status === 'passed'
   const realWriteReady = !realWriteExpectedBlocked
+  const agentActive = runtimeStatus?.agentConsole.active === true
+  const waitingForManualConfirm = Boolean(selectedTask && requiresManualApproval(selectedTask) && l2Passed && !l3Passed && !selectedTaskCompleted)
+  const controlOwner = agentActive ? 'Agent 操作中' : waitingForManualConfirm ? '系统等待确认' : '用户操作中'
+  const controlOwnerDetail = agentActive
+    ? '请看真实浏览器左上角进度；需要处理验证码或弹窗时再人工接管。'
+    : waitingForManualConfirm
+      ? '页面检查已过，启动保存前需要你确认只保存、不发布。'
+      : '当前由你选择下一步，系统不会自动保存或发布。'
   const nextAction = selectedTaskCompleted
     ? { label: '查看本次保存结果', detail: '复核报告、未发布证明和真实浏览器记录。', cta: '查看保存结果', action: onShowReports }
     : !dxmLoggedIn
@@ -58,6 +65,7 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
     { label: '填写编辑页', value: configReady ? '已就绪' : '待补齐', ok: configReady, detail: configReady ? '执行取值已可核对' : '按店小秘编辑页分区补字段' },
     { label: '保存前检查', value: selectedTaskCompleted ? '已完成' : l2Passed ? '已通过' : '待运行', ok: selectedTaskCompleted || l2Passed, detail: selectedTaskCompleted ? '本次任务已结束，优先复核保存结果' : l2Passed ? '页面读取检查已通过' : '通过后才能启动执行浏览器' },
     { label: '人工确认', value: selectedTaskCompleted ? '已完成' : l3Passed ? '已确认' : '待确认', ok: selectedTaskCompleted || l3Passed, detail: '只保存，不发布；批量和无人值守关闭' },
+    { label: '当前控制权', value: controlOwner, ok: !agentActive || runtimeStatus?.agentConsole.browserVisible === true, detail: controlOwnerDetail },
   ]
   const homeMenuGroups = [
     {
@@ -94,9 +102,9 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
     },
     {
       title: '复盘',
-      menu: '保存结果 / 保存证据 / 失败处理',
+      menu: '保存结果 / 问题处理',
       ok: selectedTaskCompleted || workspace.reports.length > 0,
-      detail: selectedTaskCompleted ? '查看保存结果、未发布证明和失败原因。' : '执行完成后在这里核对报告和证据。',
+      detail: selectedTaskCompleted ? '查看保存结果、未发布证明和问题处理建议。' : '执行完成后在这里先看业务结果，必要时再展开证据。',
       cta: '查看保存结果',
       action: onShowReports,
     },
@@ -137,7 +145,7 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
       </div>
 
       <div className="module-card span-3 home-menu-map">
-        <ModuleHead title="按菜单推进" meta="普通用户每次只处理一个入口" />
+        <ModuleHead title="单商品只保存流程" meta="普通用户每次只处理一个入口" />
         <div className="home-menu-map__grid">
           {homeMenuGroups.map((group) => (
             <article key={group.title} className={group.ok ? 'is-ok' : 'is-current'}>
@@ -157,7 +165,7 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
       </div>
 
       <details className="module-card span-3 disclosure-card">
-        <summary>查看验收详情和证据缺口</summary>
+          <summary>维护人员查看状态详情</summary>
         <div className="check-list check-list--inline">
           <CheckRow label="真实店铺/商品已读取" ok={workspace.stores.length > 0 && workspace.products.length > 0} />
           <CheckRow label="真实只读检查通过" ok={l2Gate?.status === 'passed'} />
@@ -165,7 +173,6 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
           <CheckRow label="发布入口隔离" ok={workspace.publishGuardState?.publish_allowed === false || workspace.publishGuardState?.safe === true} />
           <CheckRow label={`证据等级 ${grade} / 待处理 ${blockerCount} 项${l3PostEvidenceCount ? ` / 保存后补齐 ${l3PostEvidenceCount} 项` : ''}`} ok={grade === 'A'} />
         </div>
-        <RegressionGateGrid gates={workspace.regressionGates} />
         <GapList gaps={presentedAcceptanceGaps.slice(0, 4)} />
       </details>
     </section>

@@ -21,6 +21,9 @@
   --violet-soft: #f1ecff;
   --radius: 8px;
   --shadow: 0 12px 36px rgba(29, 37, 45, 0.08);
+  --font-size-body: 12px;
+  --font-size-title: 22px;
+  --font-size-panel-title: 16px;
   --font-body: 12px;
   --font-panel-title: 16px;
   --font-section-title: 13px;
@@ -428,6 +431,13 @@ a:focus-visible {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.safety-bar__details-title {
+  flex: 0 0 100%;
+  color: var(--muted);
+  font-size: var(--font-compact);
+  letter-spacing: 0;
 }
 
 .safety-bar__main strong,
@@ -859,7 +869,7 @@ a:focus-visible {
 }
 
 .home-command__status-grid {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .home-command__status-grid span {
@@ -1179,6 +1189,30 @@ a:focus-visible {
 .dxm-access-status-card__body strong {
   font-size: 16px;
   line-height: 1.3;
+}
+
+.dxm-access-status-card__facts {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.dxm-access-status-card__facts span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.dxm-access-status-card__facts b,
+.dxm-access-status-card__facts small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dxm-access-status-card__actions {
@@ -3619,7 +3653,7 @@ tr:last-child td {
   background: #f7fcf9;
 }
 
-.config-save-state.is-error {
+.config-save-state.is-failed {
   border-color: #f3b8bf;
   background: #fff6f7;
 }
@@ -3806,6 +3840,17 @@ tr:last-child td {
   background: #eef4ff;
   color: var(--brand);
   font-size: 12px;
+}
+
+.section-execution-preview__technical {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.section-execution-preview__technical > summary {
+  cursor: pointer;
+  font-weight: 750;
 }
 
 .editable-config-grid--focused {
@@ -4478,7 +4523,7 @@ tr:last-child td {
   background: #f7fcf9;
 }
 
-.config-section-save-receipt.is-error {
+.config-section-save-receipt.is-failed {
   border-color: #f3b8bf;
   background: #fff6f7;
 }
@@ -4915,6 +4960,34 @@ tr:last-child td {
   min-height: 56px;
   border-color: color-mix(in srgb, var(--accent) 22%, var(--line));
   background: color-mix(in srgb, var(--accent) 6%, var(--surface-alt));
+}
+
+.console-focus-panel__log {
+  display: grid;
+  gap: 6px;
+}
+
+.console-focus-panel__log > small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.console-focus-panel__log .runtime-log-preview {
+  max-height: 170px;
+}
+
+.console-review-panel__log {
+  display: grid;
+  gap: 6px;
+}
+
+.console-review-panel__log > small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.console-review-panel__log .runtime-log-preview {
+  max-height: 170px;
 }
 
 .console-primary-blocker-card {

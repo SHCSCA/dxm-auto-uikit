@@ -445,6 +445,42 @@ def test_delivery_workspace_exposes_unreleased_real_mode_release_plan(tmp_path, 
     assert any(item["id"] == "batch_size_limit" for item in modes["batch_save"]["readiness_checklist"])
 
 
+def test_delivery_workspace_delivery_scope_remains_controlled_single_save_only(tmp_path, monkeypatch):
+    l2_dir = tmp_path / "l2_readonly_probe"
+    _write_l2_probe_result(
+        l2_dir,
+        "data_acquisition",
+        target_url="https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
+    )
+    _write_l2_probe_result(
+        l2_dir,
+        "draft_box",
+        target_url="https://www.dianxiaomi.com/web/smt/smtProductList/draft",
+        created_at=_fresh_l2_created_at(-30),
+    )
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(delivery_workspace, "L2_PROBE_DIR", l2_dir)
+    fixture = _create_delivery_fixture(repo, with_network=True)
+
+    response = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}")
+
+    assert response.status_code == 200
+    data = response.json()
+    plan = data["real_mode_release_plan"]
+    modes = {item["mode"]: item for item in plan["modes"]}
+    assert plan["scope"] == "controlled_single_save_only"
+    assert plan["publish_allowed"] is False
+    assert plan["batch_unattended_publish_allowed"] is False
+    assert modes["single_save"]["allowed"] is True
+    assert modes["single_save"]["status"] == "released_controlled"
+    assert modes["single_save"]["release_scope"] == "single product save-only canary"
+    assert modes["claim_only"]["allowed"] is False
+    assert modes["claim_only"]["status"] == "blocked_unreleased"
+    assert modes["batch_save"]["allowed"] is False
+    assert modes["batch_save"]["status"] == "blocked_unreleased"
+    assert data["publish_guard_state"]["publish_allowed"] is False
+
+
 def test_delivery_workspace_exposes_canonical_l2_probe_plan(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     fixture = _create_delivery_fixture(repo, with_network=False, with_verify_proof=False)

@@ -10,7 +10,7 @@ export function humanOperatorMessage(message: string) {
     || message.includes('greenlet')
     || message.includes('Playwright Sync API')
   ) {
-    return '浏览器连接异常：请关闭旧浏览器窗口，重新打开真实浏览器后再重试当前任务。'
+    return '浏览器会话异常：当前浏览器自动化会话已经失效，系统没有继续保存。请关闭当前执行浏览器，重新打开真实浏览器后再运行任务。'
   }
   if (
     message.includes('L2 readonly probe')
@@ -19,7 +19,7 @@ export function humanOperatorMessage(message: string) {
     || normalized.includes('probe runner')
     || normalized.includes('probe resources')
   ) {
-    return '真实只读检查没有完成：请在“开始只保存”重新运行真实只读检查；通过前系统不会保存或发布。'
+    return '运行前检查未通过：系统还没有确认店小秘页面可以安全读取。请到“运行前检查”点击“运行真实只读检查”；通过前系统不会保存或发布。'
   }
   if (
     message.includes('L3')
@@ -44,7 +44,7 @@ export function humanOperatorMessage(message: string) {
     || message.includes('save screenshot')
     || message.includes('unpublished screenshot')
   ) {
-    return '保存没有完成：系统没有拿到保存成功、未发布证明和网络回包。请确认店小秘页面正常后，重新创建单商品只保存任务。'
+    return '保存结果证据不完整：系统没有拿到足够证据证明保存成功且未发布。请先查看保存结果；如店小秘页面已保存，请重新创建任务补齐证据。'
   }
   if (message.includes('当前任务不是草稿状态')) {
     return '这条任务已经执行过或失败，不能直接再次启动。请选择草稿任务，或重新创建单商品只保存任务。'

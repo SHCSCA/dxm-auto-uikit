@@ -52,7 +52,22 @@ MODE_LAST_STATE = {
     "batch_save": StateName.RELEASE_LOCK,
 }
 
-HUD_PROGRESS_TOTAL = 10
+SINGLE_SAVE_PROGRESS_STEPS = [
+    ("start_task", "开始任务", "准备打开店小秘草稿箱"),
+    ("open_draft_box", "打开草稿箱", "进入店小秘商品草稿箱"),
+    ("find_product", "查找商品", "按商品来源和标题定位草稿"),
+    ("open_editor", "打开编辑页", "进入当前商品编辑页"),
+    ("fill_title", "输入标题", "填写商品标题和卖点"),
+    ("choose_category", "选择分类", "确认商品类目和属性"),
+    ("fill_price_stock", "填写价格库存", "填写价格、库存和 SKU 信息"),
+    ("handle_images", "处理图片", "检查主图、营销图和外包装图"),
+    ("set_logistics", "设置包装物流", "填写重量尺寸和物流模板"),
+    ("click_save", "点击保存", "只点击保存，不点击发布"),
+    ("verify_unpublished", "确认未发布", "检查商品仍未发布"),
+    ("done", "任务完成", "保存成功并确认未发布"),
+]
+
+HUD_PROGRESS_TOTAL = len(SINGLE_SAVE_PROGRESS_STEPS)
 
 HUD_PROGRESS_INDEX = {
     StateName.PRECHECK_CONFIG: 1,
@@ -65,20 +80,20 @@ HUD_PROGRESS_INDEX = {
     StateName.VERIFY_LIST_OWNERSHIP: 3,
     StateName.OPEN_EDIT_PAGE: 4,
     StateName.VERIFY_EDIT_OWNERSHIP: 4,
-    StateName.FILL_BASE_INFO: 4,
-    StateName.FILL_VARIANTS: 6,
-    StateName.FILL_MEDIA: 7,
-    StateName.FILL_COMPLIANCE: 8,
-    StateName.ENABLE_SEMI_MANAGED: 8,
-    StateName.OPEN_SEMI_MANAGED_PAGE: 8,
-    StateName.FILL_SEMI_GOODS: 8,
-    StateName.FILL_SEMI_VARIANTS: 8,
-    StateName.PRE_SAVE_GUARD_CHECK: 8,
-    StateName.SAVE_ONLY: 9,
-    StateName.VERIFY_SAVE_RESULT: 9,
-    StateName.VERIFY_NOT_PUBLISHED: 10,
-    StateName.WRITE_REPORT: 10,
-    StateName.RELEASE_LOCK: 10,
+    StateName.FILL_BASE_INFO: 5,
+    StateName.FILL_VARIANTS: 7,
+    StateName.FILL_MEDIA: 8,
+    StateName.FILL_COMPLIANCE: 9,
+    StateName.ENABLE_SEMI_MANAGED: 9,
+    StateName.OPEN_SEMI_MANAGED_PAGE: 9,
+    StateName.FILL_SEMI_GOODS: 9,
+    StateName.FILL_SEMI_VARIANTS: 9,
+    StateName.PRE_SAVE_GUARD_CHECK: 9,
+    StateName.SAVE_ONLY: 10,
+    StateName.VERIFY_SAVE_RESULT: 10,
+    StateName.VERIFY_NOT_PUBLISHED: 11,
+    StateName.WRITE_REPORT: 12,
+    StateName.RELEASE_LOCK: 12,
 }
 
 HUD_STEP_COPY = {
@@ -90,9 +105,9 @@ HUD_STEP_COPY = {
     StateName.ITEM_LOCKING: ("查找商品", "查找商品", "正在锁定本次商品，避免误操作其他商品"),
     StateName.CLAIM_PRODUCT: ("查找商品", "查找商品", "正在标记本次任务商品"),
     StateName.VERIFY_LIST_OWNERSHIP: ("查找商品", "查找商品", "正在确认只处理本次商品"),
-    StateName.OPEN_EDIT_PAGE: ("输入标题", "输入标题", "正在打开编辑页，准备填写标题"),
-    StateName.VERIFY_EDIT_OWNERSHIP: ("输入标题", "输入标题", "正在确认编辑页商品匹配"),
-    StateName.FILL_BASE_INFO: ("输入标题", "输入标题", "正在输入标题并选择分类"),
+    StateName.OPEN_EDIT_PAGE: ("打开编辑页", "打开编辑页", "正在进入当前商品编辑页"),
+    StateName.VERIFY_EDIT_OWNERSHIP: ("打开编辑页", "打开编辑页", "正在确认编辑页商品匹配"),
+    StateName.FILL_BASE_INFO: ("输入标题", "输入标题", "正在输入商品标题和卖点"),
     StateName.FILL_VARIANTS: ("填写价格库存", "填写价格库存", "正在填写 SKU、价格和库存"),
     StateName.FILL_MEDIA: ("处理图片", "处理图片", "正在整理商品主图、营销图和详情图"),
     StateName.FILL_COMPLIANCE: ("设置包装物流", "设置包装物流", "正在填写合规、海关和商品补充信息"),
@@ -104,8 +119,8 @@ HUD_STEP_COPY = {
     StateName.SAVE_ONLY: ("点击保存", "点击保存", "正在点击保存按钮，不点击发布"),
     StateName.VERIFY_SAVE_RESULT: ("点击保存", "点击保存", "正在确认店小秘返回保存成功"),
     StateName.VERIFY_NOT_PUBLISHED: ("确认未发布", "确认未发布", "正在确认商品没有发布"),
-    StateName.WRITE_REPORT: ("确认未发布", "确认未发布", "正在记录保存结果和未发布证明"),
-    StateName.RELEASE_LOCK: ("确认未发布", "确认未发布", "正在完成收尾，保持只保存状态"),
+    StateName.WRITE_REPORT: ("任务完成", "任务完成", "正在记录保存结果和未发布证明"),
+    StateName.RELEASE_LOCK: ("任务完成", "任务完成", "保存成功并确认未发布"),
 }
 
 HUD_NEXT_OVERRIDE = {
@@ -117,7 +132,7 @@ HUD_VIRTUAL_STAGE_AFTER = {
         "step_code": "SELECT_CATEGORY",
         "step_name": "选择分类",
         "phase": "选择分类",
-        "progress_index": 5,
+        "progress_index": 6,
         "human_title": "选择分类",
         "human_action": "正在确认商品分类已选择",
         "human_next": "填写价格库存",

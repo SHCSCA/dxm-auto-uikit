@@ -24,7 +24,7 @@ export function IssuesPage({ workspace, selectedTask }: IssuesPageProps) {
       title: '真实只读检查没有通过',
       what: '商品采集页和草稿箱页还没有完成只读检查。',
       why: '只读检查未通过前，系统不能确认页面安全，所以不会启动真实保存。',
-      next: `去“开始只保存”，点击“${READONLY_PRECHECK_CTA}”。`,
+      next: `去“运行前检查”，点击“${READONLY_PRECHECK_CTA}”。`,
     },
     {
       title: '这条任务已经执行过或失败',
@@ -33,13 +33,13 @@ export function IssuesPage({ workspace, selectedTask }: IssuesPageProps) {
       next: '去“选择商品”，重新创建单商品只保存任务。',
     },
     {
-      title: '保存没有完成',
+      title: '保存结果证据不完整',
       what: '系统没有拿到保存成功、未发布证明和保存接口回包。',
       why: '证据不完整时不能当作交付成功。',
       next: '去“保存结果”查看失败原因，再重新创建单商品只保存任务。',
     },
     {
-      title: '浏览器连接异常',
+      title: '浏览器会话异常',
       what: '真实浏览器会话不可用或旧进程仍占用。',
       why: '系统无法确认当前页面状态时，会暂停真实保存。',
       next: '关闭旧窗口或后台旧进程后，再重新打开免安装版。',
@@ -47,12 +47,12 @@ export function IssuesPage({ workspace, selectedTask }: IssuesPageProps) {
   ]
   const emptyExceptionDetail = selectedTask?.status === 'completed'
     ? '当前任务暂无问题记录；如需复核保存链路，请查看保存结果。'
-    : '未执行不代表通过；执行失败、字段缺失和保存阻断会进入失败处理。'
+    : '未执行不代表通过；执行失败、字段缺失和保存阻断会进入问题处理。'
 
   return (
-    <section className="module-layout" aria-label="失败处理">
+    <section className="module-layout" aria-label="问题处理">
       <div className="module-card span-2">
-        <ModuleHead title="失败处理" meta={`${exceptions.length} 条待处理`} />
+        <ModuleHead title="问题处理" meta={`${exceptions.length} 条待处理`} />
         <div className="exception-list">
           {exceptions.map((item) => (
             <ExceptionCard key={item.id} item={item} />
@@ -89,7 +89,7 @@ export function IssuesPage({ workspace, selectedTask }: IssuesPageProps) {
         </div>
       </div>
       <div className="module-card">
-        <ModuleHead title="真实验收缺口" meta={`${presentedAcceptanceGaps.length} 项`} />
+        <ModuleHead title="还缺哪些证明" meta={`${presentedAcceptanceGaps.length} 项`} />
         <GapList gaps={presentedAcceptanceGaps} />
       </div>
     </section>
@@ -119,11 +119,12 @@ function ExceptionCard({ item }: { item: ExceptionItem }) {
         </span>
       </div>
       <details className="inline-disclosure">
-        <summary>技术诊断</summary>
+        <summary>维护人员查看技术细节</summary>
         <small>错误码：{item.error_code}</small>
         <small>领域：{item.field_domain}</small>
         <small>诊断摘要：{humanOperatorMessage(item.title || item.detail || item.error_code)}</small>
         <small>处理建议：{humanOperatorMessage(item.suggestion || '请查看实时日志或诊断文件后重试。')}</small>
+        <pre>{item.detail || item.title || item.error_code}</pre>
         <small>完整原始信息请查看实时日志或诊断文件。</small>
       </details>
     </article>
@@ -160,17 +161,17 @@ function buildProblemCardCopy(item: ExceptionItem) {
       next: '点“选择商品”，重新创建单商品只保存任务。',
     }
   }
-  if (message.includes('保存没有完成') || raw.includes('save_result')) {
+  if (message.includes('保存结果证据不完整') || raw.includes('save_result')) {
     return {
-      title: '保存没有完成',
+      title: '保存结果证据不完整',
       what: message,
       why: '系统没有拿到保存成功、未发布证明和保存接口回包。',
       next: '先查看保存结果；确认真实浏览器可用后，重新创建单商品只保存任务。',
     }
   }
-  if (message.includes('浏览器连接异常')) {
+  if (message.includes('浏览器会话异常')) {
     return {
-      title: '浏览器连接异常',
+      title: '浏览器会话异常',
       what: message,
       why: '当前执行浏览器会话不可用，继续执行可能无法确认真实页面状态。',
       next: '关闭旧浏览器窗口或后台旧进程，重新打开免安装版，再启动真实浏览器。',
@@ -193,7 +194,7 @@ function GapList({ gaps }: { gaps: AcceptanceGap[] }) {
             <strong>{gap.title}</strong>
             <span>{humanGateDetail(gap.detail) ?? gap.detail}</span>
           </div>
-          <small>负责处理：{humanAcceptanceGapOwner(gap.owner)} / 证据等级：{gap.evidenceLevel}</small>
+          <small>负责处理：{humanAcceptanceGapOwner(gap.owner)} / 证明强度：{gap.evidenceLevel}</small>
         </article>
       ))}
     </div>

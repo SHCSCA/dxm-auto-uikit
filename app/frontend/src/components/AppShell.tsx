@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, type ReactNode } from 'react'
 import type { WorkbenchSection } from '../types'
 
 type WorkbenchPrimaryArea = {
-  id: 'start' | 'task' | 'run' | 'review' | 'system'
+  id: 'daily_flow' | 'review' | 'system'
   label: string
   short: string
   items: Array<{ id: WorkbenchSection; label: string; short: string; hint: string }>
@@ -10,70 +10,60 @@ type WorkbenchPrimaryArea = {
 
 const primaryAreas: WorkbenchPrimaryArea[] = [
   {
-    id: 'start',
-    label: '开始',
+    id: 'daily_flow',
+    label: '日常流程',
     short: '1',
     items: [
-      { id: 'home', label: '今天做什么', short: '今', hint: '看当前进度和唯一下一步' },
-      { id: 'dxm_access', label: '登录店小秘', short: '登', hint: '打开真实店小秘并检测登录状态' },
-    ],
-  },
-  {
-    id: 'task',
-    label: '准备商品',
-    short: '2',
-    items: [
-      { id: 'product_tasks', label: '选择商品', short: '选', hint: '选择一个商品并创建单商品只保存任务' },
-      { id: 'edit_config', label: '填写编辑页', short: '填', hint: '按店小秘编辑页分区填写本次任务取值' },
-    ],
-  },
-  {
-    id: 'run',
-    label: '执行保存',
-    short: '3',
-    items: [
-      { id: 'agent_execution', label: '开始只保存', short: '存', hint: '页面检查、人工确认、启动真实浏览器只保存' },
+      { id: 'home', label: '今日任务', short: '今', hint: '看今天当前该做哪一步' },
+      { id: 'dxm_access', label: '登录店小秘', short: '登', hint: '登录真实店小秘并保存本机账号' },
+      { id: 'product_tasks', label: '选择商品', short: '选', hint: '选择一个商品创建只保存任务' },
+      { id: 'edit_config', label: '填写编辑页', short: '填', hint: '告诉 Agent 到店小秘编辑页怎么填' },
+      { id: 'start_save', label: '开始只保存', short: '存', hint: '运行检查、人工确认并启动真实浏览器' },
     ],
   },
   {
     id: 'review',
-    label: '复盘',
-    short: '4',
+    label: '结果复盘',
+    short: '2',
     items: [
-      { id: 'results', label: '保存结果', short: '果', hint: '查看保存成功、未发布证明和验收报告' },
-      { id: 'evidence', label: '保存证据', short: '证', hint: '核对只保存、未发布和浏览器证据' },
-      { id: 'issues', label: '失败处理', short: '错', hint: '查看失败原因、阻断说明和处理建议' },
+      { id: 'results', label: '保存结果', short: '果', hint: '确认保存成功且未发布' },
+      { id: 'issues', label: '问题处理', short: '问', hint: '按失败原因恢复' },
     ],
   },
   {
     id: 'system',
-    label: '支持',
-    short: '5',
+    label: '帮助与系统',
+    short: '3',
     items: [
-      { id: 'help', label: '使用帮助', short: '帮', hint: '按步骤查看首次使用、日常只保存和失败恢复' },
-      { id: 'settings', label: '系统设置', short: '设', hint: '查看服务状态、日志路径和高级诊断' },
+      { id: 'help', label: '使用帮助', short: '帮', hint: '普通用户操作说明' },
+      { id: 'settings', label: '系统设置', short: '设', hint: '日志、服务、维护诊断' },
     ],
   },
 ]
 
 const sectionLabels: Record<WorkbenchSection, string> = {
-  home: '今天做什么',
+  home: '今日任务',
   dxm_access: '登录店小秘',
   product_tasks: '选择商品',
+  current_task: '当前任务',
+  task_history: '历史任务',
   edit_config: '填写编辑页',
-  agent_execution: '开始只保存',
+  config_basic: '基础信息',
+  config_category_title: '类目与标题',
+  config_price_stock: '价格库存',
+  config_images: '图片素材',
+  config_logistics: '包装物流',
+  config_compliance: '合规海关',
+  template_management: '模板管理',
+  start_save: '开始只保存',
+  preflight: '运行前检查',
+  real_browser: '真实浏览器',
+  manual_takeover: '人工接管',
   results: '保存结果',
-  issues: '失败处理',
+  issues: '问题处理',
+  evidence: '证据归档',
   help: '使用帮助',
   settings: '系统设置',
-  guide: '使用帮助',
-  dashboard: '状态',
-  config: '填写编辑页',
-  tasks: '当前任务',
-  console: '浏览器执行',
-  evidence: '保存证据',
-  exceptions: '失败处理',
-  reports: '保存结果',
 }
 
 type AppShellProps = {
@@ -110,9 +100,9 @@ export function AppShell({
           <div className="brand-mark" aria-hidden="true">DX</div>
           {!sidebarCollapsed && (
             <div>
-              <strong>DXM 只保存自动化</strong>
-              <span>真实店小秘只保存</span>
-              <span className="sr-only">今天做什么 / 登录店小秘 / 选择商品 / 填写编辑页 / 开始只保存 / 保存结果 / 保存证据 / 失败处理 / 使用帮助 / 系统设置</span>
+              <strong>DXM 单商品只保存 Agent</strong>
+              <span>只保存当前商品，不发布</span>
+              <span className="sr-only">今日任务 / 登录店小秘 / 选择商品 / 填写编辑页 / 开始只保存 / 保存结果 / 问题处理 / 使用帮助 / 系统设置</span>
             </div>
           )}
           <button className="icon-button" type="button" onClick={onToggleSidebar} aria-label="切换侧边栏">
@@ -141,7 +131,8 @@ export function AppShell({
                     type="button"
                     className={`nav-item nav-subitem ${activeSection === item.id ? 'is-active' : ''}`}
                     onClick={() => onSectionChange(item.id)}
-                    title={`${area.label} / ${item.label}：${item.hint}`}
+                    title={`${item.label}：${item.hint}`}
+                    aria-label={`${item.label}：${item.hint}`}
                     aria-current={activeSection === item.id ? 'page' : undefined}
                     data-section={item.id}
                   >

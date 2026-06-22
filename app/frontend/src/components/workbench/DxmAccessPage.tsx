@@ -45,11 +45,13 @@ export function DxmAccessPage({
   onShowConsole,
 }: DxmAccessPageProps) {
   const dxmLoggedIn = !runtimeStatusError && DXM_LOGGED_IN_STATUSES.has(runtimeStatus?.dxmLogin?.status ?? '')
+  const loginLocation = compactDxmLoginUrl(runtimeStatus?.dxmLogin?.currentUrl) || '等待打开真实登录页'
+  const loginPhase = humanDxmLoginPhase(runtimeStatus, runtimeStatusError)
   const loginState = humanDxmLoginState(runtimeStatus, runtimeStatusError) ?? {
     tone: 'warn',
     label: '等待登录状态',
     detail: '还没有拿到店小秘登录检测结果。',
-    next: '先打开真实登录页，完成验证码后再检测登录态。',
+    next: '先打开真实登录页，完成验证码后再检测登录状态。',
   }
   return (
     <section className="module-layout dxm-access-layout" aria-label="登录店小秘">
@@ -58,14 +60,14 @@ export function DxmAccessPage({
         <div className="dxm-access-steps" aria-label="登录步骤">
           <span className={dxmLoginDraft.username && dxmLoginDraft.password ? 'is-done' : 'is-current'}>
             <b>1 填写店小秘账号和店小秘密码</b>
-            <small>可勾选记住账号密码；凭据只保存在本机加密存储。</small>
+            <small>可勾选记住账号密码；凭据只做本机加密保存。</small>
           </span>
           <span className={dxmLoggedIn ? 'is-done' : 'is-current'}>
             <b>2 打开真实登录页</b>
             <small>系统会打开可见的独立店小秘浏览器窗口。</small>
           </span>
           <span className={dxmLoggedIn ? 'is-done' : 'is-current'}>
-            <b>3 验证码已完成，检测登录态</b>
+            <b>3 验证码完成后检测登录状态</b>
             <small>验证码、二次确认和账号选择都在真实浏览器内处理。</small>
           </span>
         </div>
@@ -88,6 +90,11 @@ export function DxmAccessPage({
           <span className={`status-pill ${loginState.tone}`}>{loginState.label}</span>
           <strong>{dxmLoggedIn ? '已登录，继续下一步' : '先完成真实店小秘登录'}</strong>
           <small>{loginState.detail}</small>
+          <div className="dxm-access-status-card__facts" aria-label="登录状态摘要">
+            <span><b>当前状态</b><small>{loginPhase}</small></span>
+            <span><b>真实浏览器停留位置</b><small>{loginLocation}</small></span>
+            <span><b>下一步</b><small>{loginState.next}</small></span>
+          </div>
         </div>
         <div className="dxm-access-status-card__actions">
           <button className="button button--secondary" type="button" onClick={dxmLoggedIn ? onShowConsole : onOpenDxmLogin} disabled={busy}>
@@ -202,7 +209,7 @@ function DxmLoginInlineForm({
         打开真实登录页
       </button>
       <button className="button button--quiet" type="button" onClick={onContinue} disabled={busy}>
-        验证码已完成，检测登录态
+        验证码完成后检测登录状态
       </button>
       <button className="button button--quiet" type="button" onClick={onClearSavedCredential} disabled={busy || !credentialState.loaded}>
         清除已记住账号
@@ -228,7 +235,7 @@ function LoginRecoverySteps({ loginState }: { loginState: ReturnType<typeof huma
   const steps = [
     '保持真实浏览器窗口打开',
     '修正验证码或账号密码',
-    '再次点击“验证码已完成，检测登录态”',
+    '再次点击“验证码完成后检测登录状态”',
     '仍失败时重新点击“打开真实登录页”',
   ]
   return (
@@ -244,7 +251,7 @@ function LoginRecoverySteps({ loginState }: { loginState: ReturnType<typeof huma
 function CredentialStorageFacts({ credentialState }: { credentialState: DxmCredentialState }) {
   const facts = credentialState.available
     ? [
-        ['存储', '本机加密存储可用'],
+        ['存储', '本机加密保存可用'],
         ['下次', credentialState.saved ? '下次打开免安装版会自动填入' : '勾选后下次打开免安装版会自动填入'],
         ['范围', '只保存在当前 Windows 用户目录'],
       ]
@@ -282,7 +289,7 @@ function humanDxmLoginState(runtimeStatus?: RuntimeStatus | null, runtimeStatusE
     return {
       tone: 'ok',
       label: status === 'workflow_navigation' ? 'DXM 已进入业务页' : 'DXM 已登录',
-      detail: currentUrl ? `真实浏览器停留在：${currentUrl}` : '真实店小秘登录态已可用。',
+      detail: currentUrl ? `真实浏览器停留位置：${currentUrl}` : '真实店小秘登录态已可用。',
       next: '下一步：进入采集箱或运行真实只读检查。',
     }
   }
@@ -291,7 +298,7 @@ function humanDxmLoginState(runtimeStatus?: RuntimeStatus | null, runtimeStatusE
       tone: 'warn',
       label: '登录还没完成，不是系统故障',
       detail: currentUrl ? `请保持真实浏览器打开并继续处理：${currentUrl}` : '账号密码已填入真实浏览器，等待你完成验证码。',
-      next: '完成验证码后点击“验证码已完成，检测登录态”。',
+      next: '完成验证码后点击“验证码完成后检测登录状态”。',
     }
   }
   if (status === 'login_failed' || status.includes('failed')) {
@@ -300,16 +307,26 @@ function humanDxmLoginState(runtimeStatus?: RuntimeStatus | null, runtimeStatusE
       label: '登录未通过',
       detail: runtimeStatus?.dxmLogin?.lastError
         ? humanOperatorMessage(runtimeStatus?.dxmLogin?.lastError)
-        : (currentUrl ? `真实浏览器停留在：${currentUrl}` : '未检测到有效登录态。'),
+        : (currentUrl ? `真实浏览器停留位置：${currentUrl}` : '未检测到有效登录态。'),
       next: '真实浏览器窗口会保留；如果验证码已完成仍失败，请修正验证码或账号密码后再次检测；重新打开登录页会复用当前账号输入。',
     }
   }
   return {
     tone: 'warn',
     label: `DXM 状态：${status}`,
-    detail: currentUrl ? `真实浏览器停留在：${currentUrl}` : '登录状态还未完成确认。',
-    next: '按当前页面提示继续登录，完成后检测登录态。',
+      detail: currentUrl ? `真实浏览器停留位置：${currentUrl}` : '登录状态还未完成确认。',
+    next: '按当前页面提示继续登录，完成后检测登录状态。',
   }
+}
+
+function humanDxmLoginPhase(runtimeStatus?: RuntimeStatus | null, runtimeStatusError?: string | null) {
+  if (runtimeStatusError) return '未登录'
+  const status = runtimeStatus?.dxmLogin?.status
+  if (!status) return '未登录'
+  if (DXM_LOGGED_IN_STATUSES.has(status) || status === 'workflow_navigation') return '已登录'
+  if (status === 'waiting_captcha') return '等待验证码'
+  if (status === 'login_failed' || status.includes('failed')) return '登录失败'
+  return '未登录'
 }
 
 function compactDxmLoginUrl(url?: string | null) {

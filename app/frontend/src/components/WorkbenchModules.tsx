@@ -99,7 +99,7 @@ type ConsolePrimaryPath = {
 }
 
 type ConfigSectionSaveState = {
-  status: 'clean' | 'dirty' | 'saving' | 'saved' | 'error'
+  status: 'clean' | 'dirty' | 'saving' | 'saved' | 'failed'
   scope?: string
   savedAt?: string
   message?: string
@@ -296,7 +296,7 @@ function DxmLoginInlineForm({
         打开真实登录页
       </button>
       <button className="button button--quiet" type="button" onClick={onContinue} disabled={busy}>
-        验证码已完成，检测登录态
+        验证码完成后检测登录状态
       </button>
       <button className="button button--quiet" type="button" onClick={onClearSavedCredential} disabled={busy || !credentialState.loaded}>
         清除已记住账号
@@ -340,7 +340,7 @@ function LoginRecoverySteps({ loginState }: { loginState: ReturnType<typeof huma
   const steps = [
     '保持真实浏览器窗口打开',
     '修正验证码或账号密码',
-    '再次点击“验证码已完成，检测登录态”',
+    '再次点击“验证码完成后检测登录状态”',
     '仍失败时重新点击“打开真实登录页”',
   ]
   return (
@@ -356,7 +356,7 @@ function LoginRecoverySteps({ loginState }: { loginState: ReturnType<typeof huma
 function CredentialStorageFacts({ credentialState }: { credentialState: DxmCredentialState }) {
   const facts = credentialState.available
     ? [
-        ['存储', '本机加密存储可用'],
+        ['存储', '本机加密保存可用'],
         ['下次', credentialState.saved ? '下次打开免安装版会自动填入' : '勾选后下次打开免安装版会自动填入'],
         ['范围', '只保存在当前 Windows 用户目录'],
       ]
@@ -394,7 +394,7 @@ function humanDxmLoginState(runtimeStatus?: RuntimeStatus | null, runtimeStatusE
     return {
       tone: 'ok',
       label: status === 'workflow_navigation' ? 'DXM 已进入业务页' : 'DXM 已登录',
-      detail: currentUrl ? `真实浏览器停留在：${currentUrl}` : '真实店小秘登录态已可用。',
+      detail: currentUrl ? `真实浏览器停留位置：${currentUrl}` : '真实店小秘登录态已可用。',
       next: '下一步：进入采集箱或运行真实只读检查。',
     }
   }
@@ -403,22 +403,22 @@ function humanDxmLoginState(runtimeStatus?: RuntimeStatus | null, runtimeStatusE
       tone: 'warn',
       label: '登录还没完成，不是系统故障',
       detail: currentUrl ? `请保持真实浏览器打开并继续处理：${currentUrl}` : '账号密码已填入真实浏览器，等待你完成验证码。',
-      next: '完成验证码后点击“验证码已完成，检测登录态”。',
+      next: '完成验证码后点击“验证码完成后检测登录状态”。',
     }
   }
   if (status === 'login_failed' || status.includes('failed')) {
     return {
       tone: 'danger',
       label: '登录未通过',
-      detail: runtimeStatus?.dxmLogin?.lastError || (currentUrl ? `真实浏览器停留在：${currentUrl}` : '未检测到有效登录态。'),
+      detail: runtimeStatus?.dxmLogin?.lastError || (currentUrl ? `真实浏览器停留位置：${currentUrl}` : '未检测到有效登录态。'),
       next: '真实浏览器窗口会保留；如果验证码已完成仍失败，请修正验证码或账号密码后再次检测；重新打开登录页会复用当前账号输入。',
     }
   }
   return {
     tone: 'warn',
     label: `DXM 状态：${status}`,
-    detail: currentUrl ? `真实浏览器停留在：${currentUrl}` : '登录状态还未完成确认。',
-    next: '按当前页面提示继续登录，完成后检测登录态。',
+    detail: currentUrl ? `真实浏览器停留位置：${currentUrl}` : '登录状态还未完成确认。',
+    next: '按当前页面提示继续登录，完成后检测登录状态。',
   }
 }
 
@@ -468,7 +468,7 @@ function L3ApprovalInlineForm({
       </label>
       <div className="operator-inline-form__actions">
         <button className="button button--primary" type="submit" disabled={busy || !approvedBy.trim()}>
-          申请并启动单商品只保存
+          {disabledReason ? `暂不能启动只保存：${disabledReason}` : '申请并启动单商品只保存'}
         </button>
         {disabledReason && <small>{disabledReason}</small>}
       </div>
@@ -1263,7 +1263,11 @@ function EffectiveValuePreview({
               <span>{field.groupLabel}</span>
               <strong>{field.label}</strong>
               <code>{formatPreviewValue(field.value)}</code>
-              <small>{sourceBadgeText(field.source)} / {field.path}</small>
+              <small>{sourceBadgeText(field.source)}</small>
+              <details className="section-execution-preview__technical">
+                <summary>字段来源详情</summary>
+                <small>{field.path}</small>
+              </details>
             </div>
           ))}
         </div>
@@ -1290,7 +1294,7 @@ function fieldPreview(preview: ConfigPreviewGroup | undefined, field: EditableCo
 
 function fieldSourceText(field: ReturnType<typeof fieldPreview>) {
   if (!field) return '来源：等待检查'
-  if (field.missing) return `缺失：${field.path}`
+  if (field.missing) return `缺失：${field.label}`
   const value = field.value === undefined || field.value === null || String(field.value).trim() === '' ? '空' : String(field.value)
   return `当前值：${value} / ${sourceBadgeText(field.source)}`
 }
@@ -1493,19 +1497,19 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   }
   const activeSectionStatus = activeSectionSaveState?.status ?? (activeSectionDirty ? 'dirty' : 'clean')
   const activeSectionStatusTitle = activeSectionStatus === 'dirty'
-    ? '未保存修改'
+    ? '未保存的修改'
     : activeSectionStatus === 'saved'
       ? '已保存'
       : activeSectionStatus === 'saving'
         ? '保存中'
-        : activeSectionStatus === 'error'
+        : activeSectionStatus === 'failed'
           ? '保存失败'
           : activeSectionAlreadyPersisted
             ? '已保存模板'
             : '未保存模板'
   const activeSectionStatusMessage = activeSectionSaveState?.message
     ?? (activeSectionStatus === 'dirty'
-      ? '当前分区有改动，尚未保存；未保存修改不会进入执行。'
+      ? '当前分区有改动，尚未保存；未保存的修改不会进入执行。'
       : activeSectionAlreadyPersisted
         ? '当前分区来自已保存模板或任务覆盖，未修改。'
         : '当前分区还没有已保存模板，请套用默认测试模板或手动保存。')
@@ -1519,9 +1523,9 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
           ? '店铺模板'
           : '默认测试模板'
   const executionValueStatusLabel = activeSectionDirty
-    ? '未保存修改不会进入执行'
+    ? '未保存的修改不会进入执行'
     : selectedTask
-      ? '将使用已保存配置'
+      ? '执行会使用这些值'
       : '选择任务后核对执行取值'
   const configCoverageLabels = ['店铺与任务基础', '类目与标题', 'SKU / 价格 / 库存', '价格策略', '图片与素材', '包装物流', '合规 / 海关', '半托管', '店小秘引用模板']
   const effectivePreviewTitle = '本次任务实际取值预览'
@@ -1571,7 +1575,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
       ...current,
       [sectionCode]: {
         status: 'dirty',
-        message: '未保存修改',
+        message: '未保存的修改',
       },
     }))
   }
@@ -1669,7 +1673,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
       setSectionSaveState((current) => ({
         ...current,
         [section.code]: {
-          status: 'error',
+          status: 'failed',
           scope: scope === 'task' ? '本次任务' : '店铺模板',
           message,
         },
@@ -1789,7 +1793,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   return (
     <section className="module-layout" aria-label="填写编辑页">
       <div className="module-card span-3 config-focus-card">
-        <ModuleHead title="填写编辑页" meta={configPreviewError ? '配置检查接口异常' : configPreviewLoading ? '正在检查配置' : `${enabledTemplates.length} 个启用模板`} />
+        <ModuleHead title="填写编辑页" meta={configPreviewError ? '配置检查接口异常' : configPreviewLoading ? '正在检查配置' : '告诉 Agent 到店小秘编辑页怎么填'} />
         <div className="content-density-summary config-density-summary" data-config-density-summary>
           <div>
             <strong>{configPreviewError ? '配置检查接口不可用' : configPreview?.ok ? '配置已通过本次任务检查' : `先补：${nextConfigSection.title}`}</strong>
@@ -1876,12 +1880,12 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
       </div>
 
       <div className="module-card span-3">
-        <ModuleHead title="填写编辑页" meta="按店小秘编辑页分区逐段填写，当前只展开一个分区" />
+        <ModuleHead title="填写编辑页" meta="告诉 Agent 到店小秘编辑页怎么填，当前只展开一个分区" />
         <div className="config-template-console config-template-console--compact" aria-label="配置模板控制台">
           <div className="config-template-console__production-status" aria-label="配置中心生产状态">
-            <span><b>当前模板</b><strong>{currentTemplateDisplayLabel}</strong></span>
+            <span><b>当前使用模板</b><strong>{currentTemplateDisplayLabel}</strong></span>
             <span><b>保存状态</b><strong>{activeSectionStatusTitle}</strong></span>
-            <span title={activeSectionDirty ? '执行取值：未保存修改不会进入执行，请先保存为本次任务或店铺模板。' : '执行取值：将使用已保存配置。'}><b>执行取值</b><strong>{executionValueStatusLabel}</strong></span>
+            <span title={activeSectionDirty ? '执行取值：未保存的修改不会进入执行，请先保存为本次任务或店铺模板。' : '执行取值：执行会使用这些值，来自已保存配置。'}><b>执行取值</b><strong>{executionValueStatusLabel}</strong></span>
           </div>
           <div className={`config-save-state config-save-state--compact is-${activeSectionStatus}`} aria-label="当前分区保存状态">
             <b>{activeSectionStatusTitle}</b>
@@ -1897,7 +1901,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
                 onChange={(event) => handleTemplateSelection(selectedConfigSection.section, event.target.value)}
                 data-config-template-selector={selectedConfigSection.section.code}
               >
-                <option value="">选择已保存模板</option>
+                <option value="" disabled>请选择要套用的模板</option>
                 {activeSectionTemplateOptions.map((template) => (
                   <option key={template.id} value={template.id}>
                     {templateOptionLabel(template)}
@@ -2125,7 +2129,11 @@ function SectionExecutionValuePreview({
             <div key={field.path} className={field.missing ? 'section-execution-preview__item is-missing' : 'section-execution-preview__item'}>
               <span>{field.label}</span>
               <code>{formatPreviewValue(field.value)}</code>
-              <small>{sourceBadgeText(field.source)} / {field.path}</small>
+              <small>{sourceBadgeText(field.source)}</small>
+              <details className="section-execution-preview__technical">
+                <summary>字段来源详情</summary>
+                <small>{field.path}</small>
+              </details>
             </div>
           ))}
         </div>
@@ -2176,12 +2184,12 @@ function EditableConfigSectionCard({
   const continueDisabled = taskSaveDisabled || !preview
   const receiptStatus = saveState?.status ?? 'clean'
   const receiptTitle = receiptStatus === 'dirty'
-    ? '有未保存修改'
+    ? '有未保存的修改'
     : receiptStatus === 'saving'
       ? '正在保存'
       : receiptStatus === 'saved'
         ? '最近一次保存成功'
-        : receiptStatus === 'error'
+        : receiptStatus === 'failed'
           ? '最近一次保存失败'
           : '等待保存'
   const receiptMessage = saveState?.message ?? '保存后这里会显示最近一次保存结果。'
@@ -2444,10 +2452,15 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
     : workspace.tasks.length
       ? '当前已显示可用任务。'
       : '暂无历史任务；先创建单商品只保存任务。'
+  const blockedStartButtonLabel = startDisabled
+    ? startLabel.includes('禁止启动')
+      ? startLabel
+      : `暂不能启动只保存：${startLabel}`
+    : '可开始只保存'
   const taskActionDiagnosis = {
     create: quickCreateSingleSaveDisabledReason || '可创建单商品只保存任务',
     history: historyTaskHint,
-    start: startDisabled ? startLabel : '可开始只保存',
+    start: blockedStartButtonLabel,
   }
 
   useEffect(() => {
@@ -3021,6 +3034,8 @@ export function ExecutionConsole({
       runtimeStatusError={runtimeStatusError}
       runtimeLogSource={runtimeLogSource}
       runtimeLogCount={runtimeLogCount}
+      runtimeLogs={runtimeLogs}
+      runtimeLogError={runtimeLogError}
       onStartAgentConsole={onStartAgentConsole}
       onShowTasks={onShowTasks}
       onShowConfig={onShowConfig}
@@ -3049,6 +3064,9 @@ export function ExecutionConsole({
           selectedTask={selectedTask}
           runtimeLogSource={runtimeLogSource}
           runtimeLogCount={runtimeLogCount}
+          runtimeLogs={runtimeLogs}
+          runtimeLogError={runtimeLogError}
+          onRuntimeLogSourceChange={onRuntimeLogSourceChange}
           onShowReports={onShowReports}
           onShowEvidence={onShowEvidence}
           onShowTasks={onShowTasks}
@@ -3124,18 +3142,6 @@ export function ExecutionConsole({
         />
       )}
 
-      <details className="module-card span-1 console-log-card console-log-card--compact inline-disclosure">
-        <summary>运行日志（排障时展开）</summary>
-        <ModuleHead title="运行日志" meta={`${runtimeLogCount} 条，自动刷新`} />
-        <RuntimeLogPreview
-          logs={runtimeLogs}
-          source={runtimeLogSource}
-          error={runtimeLogError}
-          onSourceChange={onRuntimeLogSourceChange}
-        />
-        <small>排查问题时展开查看；完整筛选和搜索保留在下方“更多诊断与维护”。</small>
-      </details>
-
       {!compactCompletedReview && (
         <L2RunnerStatePanel
           state={l2RunnerState}
@@ -3151,8 +3157,8 @@ export function ExecutionConsole({
       <details className="module-card span-3 disclosure-card console-advanced console-diagnostics-drawer">
         <summary>更多诊断与维护</summary>
         <div className="console-diagnostics-grid">
-          <section className="console-diagnostics-panel console-diagnostics-panel--wide" aria-label="完整日志中心">
-            <ModuleHead title="完整日志中心" meta={`${runtimeLogCount} 条，每 1.5 秒刷新`} />
+          <section className="console-diagnostics-panel console-diagnostics-panel--wide" aria-label="完整日志与维护诊断">
+            <ModuleHead title="完整日志与维护诊断" meta="按需展开查看" />
             <RuntimeLogPanel
               logs={runtimeLogs}
               source={runtimeLogSource}
@@ -3351,6 +3357,9 @@ function ConsoleCompletedReviewPanel({
   selectedTask,
   runtimeLogSource,
   runtimeLogCount,
+  runtimeLogs,
+  runtimeLogError,
+  onRuntimeLogSourceChange,
   onShowReports,
   onShowEvidence,
   onShowTasks,
@@ -3359,6 +3368,9 @@ function ConsoleCompletedReviewPanel({
   selectedTask: Task | null
   runtimeLogSource: RuntimeLogSource
   runtimeLogCount: number
+  runtimeLogs: Record<RuntimeLogSource, RuntimeLogResponse | null>
+  runtimeLogError: string | null
+  onRuntimeLogSourceChange: (source: RuntimeLogSource) => void
   onShowReports: () => void
   onShowEvidence: () => void
   onShowTasks: () => void
@@ -3383,6 +3395,15 @@ function ConsoleCompletedReviewPanel({
         <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看保存结果</button>
         <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看保存证据</button>
         <button className="button button--quiet" type="button" onClick={onShowTasks}>创建/选择任务</button>
+      </div>
+      <div className="console-review-panel__log" aria-label="最近日志">
+        <RuntimeLogPreview
+          logs={runtimeLogs}
+          source={runtimeLogSource}
+          error={runtimeLogError}
+          onSourceChange={onRuntimeLogSourceChange}
+        />
+        <small>完整日志在下方“更多诊断与维护”。</small>
       </div>
       <details className="inline-disclosure console-review-panel__browser">
         <summary>继续操作真实浏览器</summary>
@@ -3754,6 +3775,8 @@ function ConsoleFocusPanel({
   runtimeStatusError,
   runtimeLogSource,
   runtimeLogCount,
+  runtimeLogs,
+  runtimeLogError,
   onStartAgentConsole,
   onShowTasks,
   onShowConfig,
@@ -3773,6 +3796,8 @@ function ConsoleFocusPanel({
   runtimeStatusError?: string | null
   runtimeLogSource: RuntimeLogSource
   runtimeLogCount: number
+  runtimeLogs: Record<RuntimeLogSource, RuntimeLogResponse | null>
+  runtimeLogError: string | null
   onStartAgentConsole: () => void
   onShowTasks: () => void
   onShowConfig: () => void
@@ -3894,6 +3919,15 @@ function ConsoleFocusPanel({
           <b>{browserLabel}</b>
         </span>
       </div>
+      <div className="console-focus-panel__log" aria-label="最近日志">
+        <RuntimeLogPreview
+          logs={runtimeLogs}
+          source={runtimeLogSource}
+          error={runtimeLogError}
+          onSourceChange={onRuntimeLogSourceChange}
+        />
+        <small>完整日志在下方“更多诊断与维护”。</small>
+      </div>
       <details className="console-focus-panel__details inline-disclosure">
         <summary>维护人员查看技术状态</summary>
         <div className="console-focus-panel__facts">
@@ -4011,9 +4045,9 @@ function ConsolePrimaryBlockerCard({
             <small>{loginState.next}</small>
             <span><b>1 保持真实浏览器</b><small>真实店小秘窗口不要关闭，先看验证码、账号或密码提示。</small></span>
             <span><b>2 修正验证码或账号密码</b><small>登录未通过时先在可见浏览器里处理，再回控制台检测。</small></span>
-            <span><b>3 检测登录态</b><small>完成验证码后点击检测；仍失败再重新打开登录页。</small></span>
+            <span><b>3 检测登录状态</b><small>完成验证码后点击检测；仍失败再重新打开登录页。</small></span>
             <button className="button button--quiet" type="button" onClick={onContinueDxmLogin}>
-              验证码已完成，检测登录态
+              验证码完成后检测登录状态
             </button>
             <button className="button button--quiet" type="button" onClick={onOpenDxmLogin}>
               重新打开登录页
@@ -4752,7 +4786,7 @@ function RuntimeLogPreview({
   return (
     <div className="runtime-log-preview" aria-live="polite">
       <div className="runtime-log-preview__head">
-        <strong>运行日志</strong>
+        <strong>最近日志</strong>
         <span className={`runtime-log-refresh runtime-log-refresh--${refreshMeta.tone}`}>
           {refreshMeta.status}
         </span>
@@ -4780,7 +4814,7 @@ function RuntimeLogPreview({
       ) : (
         <span>{current?.exists === false ? '日志文件尚未生成。' : '等待服务写入日志...'}</span>
       )}
-      <small>日志来源：{labels[source]} / 界面自动刷新</small>
+      <small>正在实时刷新；切换来源只影响当前预览。</small>
     </div>
   )
 }
@@ -4836,8 +4870,8 @@ function RuntimeLogPanel({
   return (
     <div className="runtime-log-panel">
       <div className="runtime-log-toolbar">
-        <strong>实时日志中心</strong>
-        <span>后端、前端、启动器、任务和浏览器 Agent 日志会每 1.5 秒增量刷新。</span>
+        <strong>完整日志与维护诊断</strong>
+        <span>后端、前端、启动器、任务和浏览器 Agent 日志会自动增量刷新。</span>
         <span className={`runtime-log-toolbar__refresh runtime-log-toolbar__refresh--${refreshMeta.tone}`}>
           {refreshMeta.status} · {refreshMeta.detail}
         </span>
@@ -4889,16 +4923,16 @@ function RuntimeLogPanel({
           ? visibleRuntimeLogItems.map((item, index) => <RuntimeLogSummaryLine key={`${source}-${index}`} item={item} />)
           : <span>{current?.exists === false ? '日志文件尚未生成，启动服务后会自动出现。' : '等待日志刷新...'}</span>}
       </div>
-      <small>关键日志：默认显示最近 {visibleRuntimeLogItems.length} 条；完整日志在下方诊断区展开查看。</small>
+      <small>最近日志：默认只显示关键近几条；完整日志在下方维护诊断区展开查看。</small>
       <details className="inline-disclosure runtime-log-full-drawer">
-        <summary>完整原始日志（{filteredRuntimeLogItems.length} 条）</summary>
+        <summary>查看完整日志与维护诊断</summary>
         <div className="runtime-log-view runtime-log-view--full">
           {filteredRuntimeLogItems.length
             ? filteredRuntimeLogItems.map((item, index) => <RuntimeLogLine key={`${source}-full-${index}`} item={item} />)
             : <span>暂无完整日志。</span>}
         </div>
       </details>
-      <small>日志来源：{labels[source]} / 标签：启动、登录检测、配置校验、打开 DXM、点击、填写、保存、网络响应、报告生成</small>
+      <small>维护诊断：日志来源 {labels[source]}，当前筛选后 {filteredRuntimeLogItems.length} 条；标签包含启动、登录检测、配置校验、打开 DXM、点击、填写、保存、网络响应、报告生成。</small>
     </div>
   )
 }
@@ -4950,7 +4984,7 @@ function humanRuntimeLogLine(item: RuntimeLogItem) {
   const operatorMessage = humanOperatorMessage(line)
   if (operatorMessage !== line) return operatorMessage
   if (line.includes('Cannot switch to a different thread') || normalized.includes('greenlet') || line.includes('Playwright Sync API') || line.includes('Playwright')) {
-    return '浏览器连接异常：请关闭旧浏览器窗口，重新打开真实浏览器后重试。'
+    return '浏览器会话异常：当前浏览器自动化会话已经失效，系统没有继续保存。请关闭当前执行浏览器，重新打开真实浏览器后再运行任务。'
   }
   if (normalized.includes('internal server error') || normalized.includes('traceback')) {
     return '系统执行失败：请确认本机服务和真实浏览器正常后重试。'
@@ -5339,11 +5373,11 @@ function humanTaskFailureMessage(selectedTask: Task, reports: Report[]) {
     ?? reportSummary.blocked_reason
     ?? saveResult.message
     ?? saveResult.msg
-    ?? '上次保存没有完成，系统没有拿到保存成功证明。'
+    ?? '上次保存结果证据不完整，系统没有拿到保存成功证明。'
   const reason = humanOperatorMessage(String(raw))
   return {
     reason,
-    detail: reason.includes('浏览器连接异常')
+    detail: reason.includes('浏览器会话异常')
       ? '系统没有执行保存。请保持真实店小秘登录窗口可用，关闭旧执行浏览器或重启控制台后重新创建单商品只保存任务。'
       : '请先查看报告里的失败原因；确认店小秘浏览器可用后，重新创建单商品只保存任务再执行。',
   }
@@ -5604,11 +5638,12 @@ function ExceptionCard({ item }: { item: ExceptionItem }) {
         </span>
       </div>
       <details className="inline-disclosure">
-        <summary>技术诊断</summary>
+        <summary>维护人员查看技术细节</summary>
         <small>错误码：{item.error_code}</small>
         <small>领域：{item.field_domain}</small>
         <small>诊断摘要：{humanOperatorMessage(item.title || item.detail || item.error_code)}</small>
         <small>处理建议：{humanOperatorMessage(item.suggestion || '请查看实时日志或诊断文件后重试。')}</small>
+        <pre>{item.detail || item.title || item.error_code}</pre>
         <small>完整原始信息请查看实时日志或诊断文件。</small>
       </details>
     </article>
@@ -5645,17 +5680,17 @@ function buildProblemCardCopy(item: ExceptionItem) {
       next: '点“选择商品”，重新创建单商品只保存任务。',
     }
   }
-  if (message.includes('保存没有完成') || raw.includes('save_result')) {
+  if (message.includes('保存结果证据不完整') || raw.includes('save_result')) {
     return {
-      title: '保存没有完成',
+      title: '保存结果证据不完整',
       what: message,
       why: '系统没有拿到保存成功、未发布证明和保存接口回包。',
       next: '先查看保存结果；确认真实浏览器可用后，重新创建单商品只保存任务。',
     }
   }
-  if (message.includes('浏览器连接异常')) {
+  if (message.includes('浏览器会话异常')) {
     return {
-      title: '浏览器连接异常',
+      title: '浏览器会话异常',
       what: message,
       why: '当前执行浏览器会话不可用，继续执行可能无法确认真实页面状态。',
       next: '关闭旧浏览器窗口或后台旧进程，重新打开免安装版，再启动真实浏览器。',
@@ -5721,7 +5756,7 @@ export function GapList({ gaps }: { gaps: AcceptanceGap[] }) {
             <strong>{gap.title}</strong>
             <span>{humanGateDetail(gap.detail) ?? gap.detail}</span>
           </div>
-          <small>负责处理：{humanAcceptanceGapOwner(gap.owner)} / 证据等级：{gap.evidenceLevel}</small>
+          <small>负责处理：{humanAcceptanceGapOwner(gap.owner)} / 证明强度：{gap.evidenceLevel}</small>
         </article>
       ))}
     </div>
@@ -5998,7 +6033,7 @@ function buildConsoleSteps(selectedTask: Task | null, logs: LogItem[]) {
     { title: '只读页面核验', detail: '核对真实页面、字段和证据路径', state: active ? 'current' : completed ? 'done' : 'pending' },
     { title: '只读复核', detail: '确认双目标同轮次只读证据', state: completed ? 'done' : 'pending' },
     { title: '真实保存确认', detail: '需要人工批准与明确保存回包证据', state: completed ? 'done' : 'pending' },
-    { title: '保存复盘', detail: '证据等级、失败处理、验收缺口归档', state: completed ? 'done' : 'pending' },
+    { title: '保存复盘', detail: '证明强度、问题处理、验收缺口归档', state: completed ? 'done' : 'pending' },
   ]
 }
 

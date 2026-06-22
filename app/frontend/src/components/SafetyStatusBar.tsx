@@ -97,14 +97,6 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
     : selectedTaskCompleted
       ? `任务 ${activeTaskLabel} ${activeTaskStatusLabel}，继续查看保存结果和未发布证明。`
       : '按操作引导继续：选择任务、补配置、真实登录、真实只读检查、人工确认后才启动保存。'
-  const runtimeEndpointLine = runtimeStatus
-    ? `服务端 ${runtimeStatus.backend.url ?? `端口 ${runtimeStatus.backend.port ?? '未知'}`} / 前端 ${runtimeStatus.frontend.url ?? `端口 ${runtimeStatus.frontend.port ?? '未知'}`}`
-    : runtimeStatusUnavailable
-      ? `运行状态接口不可用：${runtimeStatusError}`
-      : '服务端与前端地址待检测'
-  const desktopRuntimeLine = desktopRuntime
-    ? `DXM Agent Console 桌面模式 / 后端 ${desktopRuntime.apiBase ?? `端口 ${desktopRuntime.backendPort ?? '未知'}`}`
-    : null
   const runtimeOwner = runtimeStatus?.runtimeControl?.owner ?? 'direct'
   const runtimeOwnerChip = runtimeOwnerLabel(runtimeOwner, Boolean(runtimeStatus?.runtimeControl?.managedByDesktop))
   const backendPortMismatch = typeof desktopRuntime?.backendPort === 'number'
@@ -112,24 +104,18 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
     && desktopRuntime.backendPort !== runtimeStatus.backend.port
   const runtimeChips = runtimeStatus
     ? [
-      { label: `启动来源：${runtimeOwnerChip}`, tone: runtimeOwner === 'direct' ? 'warn' : 'ok' },
-      { label: `后端：${runtimeStatus.backend.status === 'ok' ? '运行中' : '异常'}`, tone: runtimeStatus.backend.status === 'ok' ? 'ok' : 'danger' },
-      { label: `前端：${frontendRuntimeLabel(runtimeStatus.frontend)}`, tone: runtimeStatus.frontend.status === 'ok' ? 'ok' : 'danger' },
-      { label: `后端端口：${runtimeStatus.backend.port ?? '未知'}`, tone: runtimeStatus.backend.status === 'ok' ? 'ok' : 'danger' },
-      { label: `前端端口：${runtimeStatus.frontend.port ?? '未知'}`, tone: runtimeStatus.frontend.status === 'ok' ? 'ok' : 'danger' },
-      { label: `自动浏览器：${runtimeStatus.agentConsole.active ? '运行中' : '待命'}`, tone: runtimeStatus.agentConsole.active ? 'ok' : 'warn' },
-      { label: `DXM 登录：${runtimeStatus.dxmLogin.status}`, tone: dxmLoginTone(runtimeStatus.dxmLogin.status) },
+      { label: `启动方式：${runtimeOwnerChip}`, tone: runtimeOwner === 'direct' ? 'warn' : 'ok' },
+      { label: `本机服务：${runtimeStatus.backend.status === 'ok' ? '正常' : '异常'}`, tone: runtimeStatus.backend.status === 'ok' ? 'ok' : 'danger' },
+      { label: `主窗口：${frontendRuntimeLabel(runtimeStatus.frontend)}`, tone: runtimeStatus.frontend.status === 'ok' ? 'ok' : 'danger' },
+      { label: `真实浏览器：${runtimeStatus.agentConsole.active ? '运行中' : '待命'}`, tone: runtimeStatus.agentConsole.active ? 'ok' : 'warn' },
+      { label: `店小秘登录：${humanDxmLoginStatus(runtimeStatus.dxmLogin.status)}`, tone: dxmLoginTone(runtimeStatus.dxmLogin.status) },
     ]
     : []
   const detailChips = [
     ...(runtimeStatusUnavailable ? [{ label: '状态接口异常', tone: 'danger' }] : []),
     ...runtimeChips,
-    ...(desktopRuntime ? [
-      { label: 'DXM Agent Console 桌面模式', tone: 'ok' },
-      { label: `桌面日志：${desktopRuntime.desktopLogPath ?? '待生成 desktop-main.log'}`, tone: desktopRuntime.lastError ? 'danger' : 'muted' },
-      { label: `后端日志：${desktopRuntime.backendLogPath ?? '待生成 backend.log'}`, tone: 'muted' },
-    ] : []),
-    ...(backendPortMismatch ? [{ label: '桌面后端端口与接口端口不一致', tone: 'danger' }] : []),
+    ...(desktopRuntime ? [{ label: '免安装版：已接入本机服务', tone: desktopRuntime.lastError ? 'danger' : 'ok' }] : []),
+    ...(backendPortMismatch ? [{ label: '桌面服务与当前接口不一致', tone: 'danger' }] : []),
     { label: `真实只读检查：${humanGateStatus(l2Gate?.status ?? 'not_run')}`, tone: l2BlocksRealSave ? 'danger' : 'ok' },
     { label: `人工确认：${l3NeedsApproval ? `不可启动 / ${humanGateStatus(l3Gate?.status ?? 'not_run')}` : humanGateStatus(l3Gate?.status ?? 'not_run')}`, tone: l3BlocksRealSave ? 'danger' : l3NeedsApproval ? 'warn' : 'ok' },
     ...visibleBlockerGaps.slice(0, 2).map((gap) => ({ label: `阻断项：${gap.title}`, tone: 'danger' })),
@@ -192,11 +178,10 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
           {primaryActionLabel}
         </button>
         <details className="safety-bar__meta-details inline-disclosure">
-          <summary>查看状态详情</summary>
+          <summary>状态详情</summary>
           <p className="safety-bar__compact-detail">{conciseDetail}</p>
           <div>
-            <span className="guard-chip guard-chip--muted">{runtimeEndpointLine}</span>
-            {desktopRuntimeLine && <span className="guard-chip guard-chip--ok">{desktopRuntimeLine}</span>}
+            <strong className="safety-bar__details-title">状态说明</strong>
             {boundaryChips.map((chip) => (
               <span key={chip.label} className={`guard-chip guard-chip--${chip.tone}`}>{chip.label}</span>
             ))}
@@ -217,6 +202,14 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
 function dxmLoginTone(status: string) {
   if (dxmReadySessionStatuses.has(status)) return 'ok'
   return status.includes('error') ? 'danger' : 'warn'
+}
+
+function humanDxmLoginStatus(status: string) {
+  if (dxmReadySessionStatuses.has(status)) return '已登录'
+  if (status === 'waiting_captcha') return '等待验证码'
+  if (status === 'login_failed') return '登录未通过'
+  if (status.includes('error')) return '异常'
+  return '待确认'
 }
 
 function runtimeOwnerLabel(owner: string, managedByDesktop: boolean) {

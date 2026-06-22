@@ -40,7 +40,7 @@ export function SystemSettingsPage({
   return (
     <section className="module-layout" aria-label="系统设置">
       <div className="module-card span-3">
-        <ModuleHead title="系统设置" meta="服务状态、日志路径和高级诊断" />
+        <ModuleHead title="系统设置" meta="服务状态、日志路径和技术诊断" />
         <div className="settings-summary-grid">
           <div className="settings-summary-card">
             <span>当前可执行范围</span>
@@ -84,7 +84,7 @@ export function SystemSettingsPage({
 
       <details className="module-card span-3 disclosure-card">
         <summary>
-          高级诊断
+          技术诊断
           <span>维护人员使用</span>
         </summary>
         <RegressionGateGrid gates={workspace.regressionGates} />

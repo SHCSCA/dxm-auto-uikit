@@ -15,7 +15,7 @@ import {
   SystemSettings,
 } from './components/WorkbenchModules'
 import { humanOperatorMessage } from './components/workbench/workbenchCopy'
-import type { AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, DxmCredentialSaveResult, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
+import type { AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, DxmCredentialSaveResult, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LegacyWorkbenchSection, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
 import { composeWorkspace, demoTemplateSeeds, seedRows } from './workspace'
 
 const AGENT_CONSOLE_TARGET_URL = 'https://www.dianxiaomi.com/'
@@ -50,7 +50,6 @@ const sourceLabels: Record<DeliveryWorkspace['source'], string> = {
   fallback: '本机工作台服务部分连接',
   mock: '正在连接本机工作台服务',
 }
-
 type DeliveryWorkspaceResponse = Partial<DeliveryWorkspace> & {
   current_task?: Task | null
 }
@@ -99,7 +98,6 @@ function compactDxmUrl(value: string | null | undefined) {
     return value
   }
 }
-
 function currentUrlMatchesDxmTarget(value: string | null | undefined, target: keyof typeof DXM_TARGET_URLS) {
   if (!value) return false
   try {
@@ -125,17 +123,23 @@ function syncSelectedTaskIdUrl(taskId: number | null) {
   window.history.replaceState(window.history.state, '', url.toString())
 }
 
-function normalizeWorkbenchSection(section: WorkbenchSection): WorkbenchSection {
-  const aliases: Partial<Record<WorkbenchSection, WorkbenchSection>> = {
+function normalizeWorkbenchSection(section: WorkbenchSection | LegacyWorkbenchSection): WorkbenchSection {
+  const sectionAliases: Partial<Record<string, WorkbenchSection>> = {
+    agent_execution: 'start_save',
+    browser: 'start_save',
     dashboard: 'home',
     guide: 'help',
     tasks: 'product_tasks',
     config: 'edit_config',
-    console: 'agent_execution',
+    console: 'start_save',
+    preflight: 'start_save',
+    real_browser: 'start_save',
+    manual_takeover: 'start_save',
+    evidence: 'results',
     reports: 'results',
     exceptions: 'issues',
   }
-  return aliases[section] ?? section
+  return sectionAliases[String(section)] ?? section as WorkbenchSection
 }
 
 export default function App() {
@@ -350,7 +354,8 @@ export default function App() {
 
   useEffect(() => {
     if (!agentConsole?.active) return
-    const shouldRefreshFrame = normalizeWorkbenchSection(activeSection) === 'agent_execution' && Boolean(agentConsole?.browser_visible)
+    const normalizedSection = normalizeWorkbenchSection(activeSection)
+    const shouldRefreshFrame = normalizedSection === 'start_save' && Boolean(agentConsole?.browser_visible)
     const timer = window.setInterval(() => {
       void refreshAgentConsole(shouldRefreshFrame)
     }, 3500)
@@ -537,7 +542,7 @@ export default function App() {
             available: result.available,
             loaded: true,
             saved: true,
-            message: `已从本机加密存储载入账号${result.credential.updatedAt ? `，保存时间 ${new Date(result.credential.updatedAt).toLocaleString()}` : ''}。`,
+            message: `已从本机加密保存载入账号${result.credential.updatedAt ? `，保存时间 ${new Date(result.credential.updatedAt).toLocaleString()}` : ''}。`,
           })
           return
         }
@@ -545,7 +550,7 @@ export default function App() {
           available: result.available,
           loaded: false,
           saved: false,
-          message: result.available ? '可记住账号密码；密码会写入本机加密存储。' : '本机加密存储不可用；不会保存密码。',
+          message: result.available ? '可记住账号密码；密码会写入本机加密保存。' : '本机加密保存不可用；不会保存密码。',
         })
         setDxmLoginDraft((current) => ({ ...current, rememberCredential: false }))
       } catch (error) {
@@ -716,7 +721,7 @@ export default function App() {
       } else {
         await postJson(`/api/tasks/${selectedTask.id}/start`, {})
       }
-      setActiveSection('agent_execution')
+      setActiveSection('start_save')
       await refreshWorkspace()
     } catch (error) {
       setOperationError(humanOperationError(error instanceof Error ? error.message : '启动保存核验任务失败'))
@@ -765,7 +770,7 @@ export default function App() {
         setDxmLoginDraft((current) => ({ ...current, password: '' }))
       }
       const stage = String(loginStart.stage ?? '')
-      setActiveSection(stage === 'waiting_captcha' ? 'dxm_access' : 'agent_execution')
+      setActiveSection(stage === 'waiting_captcha' ? 'dxm_access' : 'start_save')
       await refreshRuntimeStatus()
       await refreshRuntimeLogs()
       await refreshWorkspace()
@@ -789,7 +794,7 @@ export default function App() {
         available: result.available,
         loaded: true,
         saved: true,
-        message: `账号密码已保存到本机加密存储${result.updatedAt ? `，保存时间 ${new Date(result.updatedAt).toLocaleString()}` : ''}。`,
+        message: `账号密码已保存到本机加密保存${result.updatedAt ? `，保存时间 ${new Date(result.updatedAt).toLocaleString()}` : ''}。`,
       }
     }
     return {
@@ -836,7 +841,7 @@ export default function App() {
         setActiveSection('dxm_access')
       } else {
         setOperationNotice(message)
-        setActiveSection(stage === 'waiting_captcha' ? 'dxm_access' : 'agent_execution')
+        setActiveSection(stage === 'waiting_captcha' ? 'dxm_access' : 'start_save')
       }
       await refreshRuntimeStatus()
       await refreshRuntimeLogs()
@@ -885,12 +890,12 @@ export default function App() {
         const navigationStage = String(navigationResult.stage ?? '')
         if (navigationStage.includes('failed')) {
           setOperationError(humanDxmNavigationNotice(navigationResult, `进入${targetLabel}失败`))
-          setActiveSection('agent_execution')
+          setActiveSection('start_save')
           return
         }
         setOperationNotice(`已请求店小秘登录流进入${targetLabel}`)
       }
-      setActiveSection('agent_execution')
+      setActiveSection('start_save')
       await refreshAgentConsole(true)
       await refreshRuntimeStatus()
       await refreshRuntimeLogs()
@@ -910,7 +915,7 @@ export default function App() {
   async function startAgentConsole() {
     if (!selectedTask) {
       setAgentConsoleError('请先选择一个保存核验任务')
-      setActiveSection('agent_execution')
+      setActiveSection('start_save')
       return
     }
     const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
@@ -918,7 +923,7 @@ export default function App() {
       const message = '真实只读检查未通过，暂不能启动执行浏览器。请先运行真实只读检查；系统不会保存或发布。'
       setAgentConsoleError(message)
       setOperationError(message)
-      setActiveSection('agent_execution')
+      setActiveSection('start_save')
       return
     }
     const step = buildAgentConsoleHudStep(workspace, selectedTask)
@@ -934,7 +939,7 @@ export default function App() {
       setAgentConsole(status)
       const hudStatus = await postJson<AgentConsoleSession>('/api/agent-console/hud', { step })
       setAgentConsole(hudStatus)
-      setActiveSection('agent_execution')
+      setActiveSection('start_save')
     } catch (error) {
       const message = error instanceof Error ? error.message : '打开 Agent Console 失败'
       const humanMessage = humanAgentConsoleError(message)
@@ -1085,7 +1090,7 @@ export default function App() {
   async function runL2ReadonlyProbe() {
     setRuntimeLogSource('launcher')
     setL2RunnerState({ status: 'running', runId: null, exitCode: null, message: '正在运行双目标真实只读检查', line: null, updatedAt: new Date().toISOString() })
-    setActiveSection('agent_execution')
+    setActiveSection('start_save')
     await runRuntimeControl('run_l2_readonly_probe')
   }
 
@@ -1097,6 +1102,13 @@ export default function App() {
   const content = (() => {
     switch (currentSection) {
       case 'edit_config':
+      case 'config_basic':
+      case 'config_category_title':
+      case 'config_price_stock':
+      case 'config_images':
+      case 'config_logistics':
+      case 'config_compliance':
+      case 'template_management':
         return <ConfigCenter workspace={workspace} selectedTask={selectedTask} configPreview={configPreview} configPreviewError={configPreviewError} configPreviewLoading={configPreviewLoading} onConfigSaved={async () => { await refreshWorkspace(); await refreshConfigPreview() }} onRefreshConfigPreview={async () => { await refreshConfigPreview(); await refreshWorkspace() }} onShowTasks={() => setActiveSection('product_tasks')} />
       case 'dxm_access':
         return (
@@ -1111,10 +1123,12 @@ export default function App() {
             onOpenDxmLogin={openDxmLogin}
             onContinueDxmLogin={continueDxmLogin}
             onNavigateDxmTarget={navigateDxmTarget}
-            onShowConsole={() => setActiveSection('agent_execution')}
+            onShowConsole={() => setActiveSection('start_save')}
           />
         )
       case 'product_tasks':
+      case 'current_task':
+      case 'task_history':
         return (
           <TaskCenter
             workspace={workspace}
@@ -1138,12 +1152,15 @@ export default function App() {
             onBootstrapDemo={bootstrapDemo}
             onStartTask={startSelectedTask}
             onShowConfig={() => setActiveSection('edit_config')}
-            onShowConsole={() => setActiveSection('agent_execution')}
-            onShowEvidence={() => setActiveSection('evidence')}
+            onShowConsole={() => setActiveSection('start_save')}
+            onShowEvidence={() => setActiveSection('results')}
             onShowReports={() => setActiveSection('results')}
           />
         )
-      case 'agent_execution':
+      case 'start_save':
+      case 'preflight':
+      case 'real_browser':
+      case 'manual_takeover':
         return (
           <ExecutionConsole
             workspace={workspace}
@@ -1183,16 +1200,16 @@ export default function App() {
             onRuntimeControl={runRuntimeControl}
             onShowTasks={() => setActiveSection('product_tasks')}
             onShowConfig={() => setActiveSection('edit_config')}
-            onShowEvidence={() => setActiveSection('evidence')}
+            onShowEvidence={() => setActiveSection('results')}
             onShowReports={() => setActiveSection('results')}
           />
         )
       case 'evidence':
-        return <EvidenceTimeline workspace={workspace} selectedTask={selectedTask} onShowTasks={() => setActiveSection('product_tasks')} onShowConsole={() => setActiveSection('agent_execution')} />
+        return <EvidenceTimeline workspace={workspace} selectedTask={selectedTask} onShowTasks={() => setActiveSection('product_tasks')} onShowConsole={() => setActiveSection('start_save')} />
       case 'issues':
         return <ExceptionQueue workspace={workspace} selectedTask={selectedTask} />
       case 'results':
-        return <ReportCenter workspace={workspace} selectedTask={selectedTask} finalCheck={finalCheck} onShowEvidence={() => setActiveSection('evidence')} onShowConsole={() => setActiveSection('agent_execution')} onShowExceptions={() => setActiveSection('issues')} />
+        return <ReportCenter workspace={workspace} selectedTask={selectedTask} finalCheck={finalCheck} onShowEvidence={() => setActiveSection('results')} onShowConsole={() => setActiveSection('start_save')} onShowExceptions={() => setActiveSection('issues')} />
       case 'help':
         return (
           <HelpPage
@@ -1201,7 +1218,7 @@ export default function App() {
             onShowDxmAccess={() => setActiveSection('dxm_access')}
             onShowTasks={() => setActiveSection('product_tasks')}
             onShowConfig={() => setActiveSection('edit_config')}
-            onShowConsole={() => setActiveSection('agent_execution')}
+            onShowConsole={() => setActiveSection('start_save')}
             onShowResults={() => setActiveSection('results')}
             onShowIssues={() => setActiveSection('issues')}
           />
@@ -1219,7 +1236,7 @@ export default function App() {
             onShowDxmAccess={() => setActiveSection('dxm_access')}
             onShowTasks={() => setActiveSection('product_tasks')}
             onShowConfig={() => setActiveSection('edit_config')}
-            onShowConsole={() => setActiveSection('agent_execution')}
+            onShowConsole={() => setActiveSection('start_save')}
             onShowReports={() => setActiveSection('results')}
           />
         )
@@ -1248,7 +1265,7 @@ export default function App() {
         onShowDxmAccess={() => setActiveSection('dxm_access')}
         onShowConfig={() => setActiveSection('edit_config')}
         onShowTasks={() => setActiveSection('product_tasks')}
-        onShowConsole={() => setActiveSection('agent_execution')}
+        onShowConsole={() => setActiveSection('start_save')}
         onShowReports={() => setActiveSection('results')}
       />
       <div className="operation-toast-stack" aria-live="polite">
@@ -1431,7 +1448,7 @@ function humanDxmLoginError(message: string) {
     return `真实店小秘登录浏览器依赖缺失或不可启动。请重新打开完整免安装目录版，并查看实时日志中的依赖安装结果。${commonTail}`
   }
   if (normalized.includes('login_failed')) {
-    return `真实店小秘登录未完成。请在可见浏览器窗口内修正验证码或账号密码，再点击“验证码已完成，检测登录态”。${commonTail}`
+    return `真实店小秘登录未完成。请在可见浏览器窗口内修正验证码或账号密码，再点击“验证码完成后检测登录状态”。${commonTail}`
   }
   return message
 }
@@ -1527,7 +1544,7 @@ function humanDxmLoginFlowNotice(result: Record<string, unknown>, fallback: stri
   const message = String(result.message ?? '').trim()
   const nextAction = String(result.next_action ?? '').trim()
   if (stage === 'waiting_captcha') {
-    return '等待验证码不是失败：已打开可见浏览器窗口；请在真实店小秘页面完成验证码。下一步：完成后点击“验证码已完成，检测登录态”。'
+    return '等待验证码不是失败：已打开可见浏览器窗口；请在真实店小秘页面完成验证码。下一步：完成后点击“验证码完成后检测登录状态”。'
   }
   if (stage === 'login_failed' || stage.includes('failed')) {
     return `登录还没完成，不是系统故障：${message || '未检测到有效登录态。'} 下一步：${nextAction || '请打开着真实浏览器，修正验证码或账号密码后再次检测。'}`
@@ -1590,7 +1607,7 @@ function buildAgentConsoleHudStep(workspace: DeliveryWorkspace, selectedTask: Ta
     guard: '只保存，不发布',
     phase: '开始任务',
     progress_index: 1,
-    progress_total: 10,
+    progress_total: 12,
     human_title: '准备开始只保存',
     human_action: '真实浏览器已打开，Agent 将按步骤操作店小秘编辑页',
     human_next: '人工确认后开始输入标题、选择分类、设置价格库存并只保存',

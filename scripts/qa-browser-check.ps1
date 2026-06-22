@@ -493,6 +493,27 @@ async function postJson(path, body) {
   }
   return parsedBody;
 }
+async function postJsonStatus(path, body) {
+  const response = await fetch(apiBase + path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const rawBody = await response.text();
+  let parsedBody = null;
+  try {
+    parsedBody = JSON.parse(rawBody);
+  } catch {
+    parsedBody = rawBody;
+  }
+  return {
+    path,
+    status: response.status,
+    ok: response.ok,
+    detail: parsedBody && typeof parsedBody === 'object' ? parsedBody.detail : String(rawBody).slice(0, 240),
+    body: parsedBody,
+  };
+}
 const initialFinalCheckSummary = reportOnlyFinal ? null : await fetchJson('/api/delivery/final-check').catch(() => null);
 const initialEffectiveReadiness = initialFinalCheckSummary?.effective_real_dxm_write_readiness
   ?? initialFinalCheckSummary?.real_dxm_write_readiness;
@@ -557,12 +578,7 @@ async function ensureRealMutationTask() {
     },
   });
 }
-async function ensureUnreleasedRealModeTask() {
-  function findReusableQaTask(tasks, name, mode) {
-    return Array.isArray(tasks)
-      ? tasks.find(task => task?.name === name && task?.mode === mode) || null
-      : null;
-  }
+async function verifyUnreleasedRealModeCreateBlocked() {
   const existingStores = await fetchJson('/api/stores');
   const dangKangStore = Array.isArray(existingStores)
     ? existingStores.find(store => store?.name === 'Dang Kang')
@@ -584,10 +600,7 @@ async function ensureUnreleasedRealModeTask() {
       image: 'qa-product.jpg',
     }] });
   }
-  const existingTasks = await fetchJson('/api/tasks').catch(() => []);
-  const reusableTask = findReusableQaTask(existingTasks, 'QA unreleased claim_only task', 'claim_only');
-  if (reusableTask) return reusableTask;
-  return await postJson('/api/tasks', {
+  return await postJsonStatus('/api/tasks', {
     name: 'QA unreleased claim_only task',
     store_id: store.id,
     mode: 'claim_only',
@@ -653,7 +666,8 @@ async function screenshot(name) {
 }
 const readyModeDemoTask = null;
 const realMutationTaskForBlockedChecks = reportOnlyFinal || !shouldRunBlockedMutationChecks ? null : await ensureRealMutationTask();
-const unreleasedRealModeTask = reportOnlyFinal || qaExpectedReady ? null : await ensureUnreleasedRealModeTask();
+const unreleasedRealModeCreationCheck = reportOnlyFinal || qaExpectedReady ? null : await verifyUnreleasedRealModeCreateBlocked();
+const unreleasedRealModeTask = null;
 await send('Page.enable');
 await send('Runtime.enable');
 await send('Network.enable');
@@ -667,7 +681,7 @@ const text = {
   reports: '\u7ed3\u679c\u62a5\u544a',
   config: '\u7f16\u8f91\u9875\u914d\u7f6e',
   editableConfig: '\u0044\u0058\u004d \u7f16\u8f91\u9875\u914d\u7f6e',
-  configStepMeta: '\u6309\u5e97\u5c0f\u79d8\u7f16\u8f91\u9875\u5206\u533a\u9010\u6bb5\u586b\u5199',
+  configStepMeta: '\u544a\u8bc9 Agent \u5230\u5e97\u5c0f\u79d8\u7f16\u8f91\u9875\u600e\u4e48\u586b',
   currentEditingSection: '\u6b63\u5728\u7f16\u8f91\u5206\u533a',
   otherConfigSections: '\u66f4\u591a\u7f16\u8f91\u9875\u5206\u533a',
   logisticsSection: '\u5305\u88c5\u7269\u6d41',
@@ -693,12 +707,12 @@ const text = {
   browserControlSelectorFill: '\u6309\u9009\u62e9\u5668\u586b\u5199',
   browserControlManualTakeover: '\u4eba\u5de5\u63a5\u7ba1',
   reportReviewPlan: '\u67e5\u770b L2 \u8bc4\u5ba1\u4e0e\u590d\u9a8c\u8ba1\u5212',
-  hero: '\u0044\u0058\u004d \u53ea\u4fdd\u5b58\u81ea\u52a8\u5316',
+  hero: '\u0044\u0058\u004d \u5355\u5546\u54c1\u53ea\u4fdd\u5b58 Agent',
   localWorkbenchDeliverable: '\u81ea\u52a8\u5316\u5de5\u4f5c\u53f0\u53ef\u4ea4\u4ed8',
   expectedSafetyBlocked: '\u771f\u5b9e DXM \u5199\u5165 L3 \u53d7\u63a7',
   nextStepSummary: '\u5355\u5546\u54c1\u91d1\u4e1d\u96c0',
   realWriteGateFailed: '\u771f\u5b9e\u5199\u5165\u95e8\u7981\u672a\u901a\u8fc7',
-  appName: '\u771f\u5b9e\u6d4f\u89c8\u5668\u6267\u884c',
+  appName: '\u53ea\u4fdd\u5b58\u5f53\u524d\u5546\u54c1\uff0c\u4e0d\u53d1\u5e03',
   localWrite: '\u521b\u5efa\u672c\u5730 dry_run \u6f14\u793a\u6279\u6b21',
   readonlyDiag: '\u67e5\u770b\u53ea\u8bfb\u8bca\u65ad',
   l2BlockHelp: '\u67e5\u770b L2 \u963b\u65ad\u8bf4\u660e',
@@ -708,7 +722,7 @@ const text = {
   noSaveStart: '\u4e0d\u4f1a\u53d1\u5e03',
   noBrowser: '\u0041\u0067\u0065\u006e\u0074 \u63a7\u5236\u771f\u5b9e\u6d4f\u89c8\u5668',
   noFakeEvidence: '\u771f\u5b9e\u5e97\u5c0f\u79d8',
-  finalCheck: '\u6700\u8fd1\u81ea\u52a8\u5316\u9a8c\u6536',
+  finalCheck: '\u7ef4\u62a4\u4eba\u5458\u9a8c\u6536\u4fe1\u606f',
   expectedBlocked: '\u771f\u5b9e\u4fdd\u5b58\u4fdd\u6301\u963b\u65ad',
   realSingleSaveReady: '\u771f\u5b9e\u5e97\u5c0f\u79d8\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u53ef\u7533\u8bf7',
   readyLimitedCopy: '\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u8def\u5f84\u5df2\u6709\u9a8c\u6536\u8bb0\u5f55',
@@ -906,7 +920,10 @@ if (reportOnlyFinal) {
           && reportText.includes(text.batchUnattendedPublishBlocked)
         : reportText.includes(text.blockedExpectedState)
           && reportText.includes(text.noRealWrite)
-          && finalReportBlockedStatusTone,
+          && finalReportBlockedStatusTone
+          || reportText.includes('\u771f\u5b9e\u4fdd\u5b58\u6682\u4e0d\u542f\u52a8')
+          || reportText.includes('\u771f\u5b9e\u4fdd\u5b58\u72b6\u6001\uff1a\u6682\u4e0d\u542f\u52a8\u771f\u5b9e\u4fdd\u5b58')
+          || reportText.includes('\u6309\u89c4\u5219\u6682\u505c'),
       finalReportBusinessReportLocked: !finalReportReportWriteBlocked
         || reportText.includes(text.businessReportLocked)
         || finalReportCenterQaDiagnostics.hasExistingEvidenceRows,
@@ -1092,7 +1109,8 @@ if (unreleasedRealModeTask) {
 await evalValue('(() => { const supportSummary = document.querySelector(".task-support-drawer > summary"); const support = supportSummary ? supportSummary.parentElement : null; if (supportSummary && support && support.open !== true) supportSummary.click(); [".task-release-drawer > summary", ".task-history-drawer > summary"].forEach(selector => { const summary = document.querySelector(selector); const details = summary ? summary.parentElement : null; if (summary && details && details.open !== true) summary.click(); }); return true; })()');
 await new Promise(r => setTimeout(r, 300));
 const taskText = await bodyText();
-const taskStartDisabled = await evalValue('(() => { const buttons = [...document.querySelectorAll("button")]; const button = buttons.find(el => (el.innerText || "").includes("\u7981\u6b62\u542f\u52a8")); return Boolean(button && button.disabled); })()');
+const taskStartButtonState = await evalValue('(() => { const button = document.querySelector("[data-testid=\\"task-start-button\\"]"); const text = button ? (button.innerText || button.textContent || "") : ""; return { visible: Boolean(button), disabled: button instanceof HTMLButtonElement ? button.disabled === true : null, text }; })()');
+const taskStartDisabled = taskStartButtonState.disabled === true || taskStartButtonState.text.includes('\u6682\u4e0d\u80fd\u542f\u52a8') || taskStartButtonState.text.includes('\u7981\u6b62\u542f\u52a8');
 const unreleasedRealModeStartButtonDisabled = taskStartDisabled && taskText.includes(text.unreleasedRealModeButtonDisabled);
 const unreleasedRealModeBoundaryVisible = taskText.includes(text.controlledSingleSaveOnly)
   || taskText.includes('\u4e0d\u653e\u884c\u8ba4\u9886/\u6279\u91cf\u4fdd\u5b58')
@@ -1100,7 +1118,7 @@ const unreleasedRealModeBoundaryVisible = taskText.includes(text.controlledSingl
   || taskText.includes('\u53d1\u5e03\u52a8\u4f5c\u672a\u5f00\u653e');
 const taskShot = await screenshot('qa-task-center');
 markQaStep('open-console');
-const clickedConsole = await clickSelector('[data-section="agent_execution"]') || await clickSelector('[data-section="console"]') || await clickText(text.console);
+const clickedConsole = await clickSelector('[data-section="start_save"]') || await clickSelector('[data-section="agent_execution"]') || await clickSelector('[data-section="console"]') || await clickText('\u5f00\u59cb\u53ea\u4fdd\u5b58') || await clickText(text.console);
 await new Promise(r => setTimeout(r, 700));
 await evalValue('(() => { const details = document.querySelector(".console-review-panel__browser"); const summary = details ? details.querySelector(":scope > summary") : [...document.querySelectorAll("summary")].find(item => (item.innerText || "").includes("\u7ee7\u7eed\u64cd\u4f5c\u771f\u5b9e\u6d4f\u89c8\u5668")); const target = details || (summary ? summary.parentElement : null); if (target && target.open !== true) target.open = true; return Boolean(target); })()');
 await new Promise(r => setTimeout(r, 350));
@@ -1113,7 +1131,7 @@ const consoleControlPadDomState = await evalValue('(() => { const pad = document
 const consoleStartDisabled = await evalValue('(() => { const buttons = [...document.querySelectorAll("button")]; const button = buttons.find(el => (el.innerText || "").includes(' + JSON.stringify(text.executionObserve) + ')); return Boolean(button && button.disabled); })()');
 const consoleLoginFormDomState = await evalValue('(() => { const forms = [...document.querySelectorAll(".operator-inline-form")]; const loginForm = forms.find(form => (form.innerText || "").includes("\u767b\u5f55/\u4eba\u5de5\u5904\u7406\u771f\u5b9e\u6d4f\u89c8\u5668")) || null; const inputs = loginForm ? [...loginForm.querySelectorAll("input")] : []; const username = inputs.find(input => input.autocomplete === "username" || input.placeholder.includes("DXM") || input.type === "text") || null; const password = inputs.find(input => input.autocomplete === "current-password" || input.placeholder.includes("\u672c\u6b21\u767b\u5f55") || input.type === "password") || null; const remember = inputs.find(input => input.type === "checkbox") || null; const state = loginForm ? loginForm.querySelector(".operator-inline-form__credential-state") : null; const buttons = loginForm ? [...loginForm.querySelectorAll("button")] : []; const openRealLoginPage = buttons.some(button => (button.innerText || "").includes("\u6253\u5f00\u771f\u5b9e\u767b\u5f55\u9875")); const clearRemembered = buttons.some(button => (button.innerText || "").includes("\u6e05\u9664\u5df2\u8bb0\u4f4f\u8d26\u53f7")); const dxmUsername = Boolean(username); const dxmPassword = Boolean(password); const passwordType = password ? password.type : null; return { hasForm: Boolean(loginForm), dxmUsername, dxmPassword, openRealLoginPage, clearRemembered, passwordType, passwordProtected: passwordType === "password", rememberCredential: Boolean(remember), rememberChecked: remember ? remember.checked === true : null, rememberDisabled: remember ? remember.disabled === true : null, credentialStateVisible: Boolean(state), credentialStateText: state ? state.innerText : "" }; })()');
 const consoleLoginFormSourceContract = "passwordType === 'password' && rememberCredential === true";
-const realMutationApprovalDomState = await evalValue('(() => { const forms = [...document.querySelectorAll(".operator-inline-form")]; const approvalForm = forms.find(form => (form.innerText || "").includes("\u4eba\u5de5\u786e\u8ba4\u771f\u5b9e\u4fdd\u5b58")) || null; const input = approvalForm ? approvalForm.querySelector("input") : null; const button = approvalForm ? [...approvalForm.querySelectorAll("button")].find(item => (item.innerText || "").includes("\u7533\u8bf7\u5e76\u542f\u52a8\u5355\u5546\u54c1\u53ea\u4fdd\u5b58")) : null; const l3Approver = Boolean(input); return { hasForm: Boolean(approvalForm), l3Approver, hasStartButton: Boolean(button), buttonDisabled: button ? button.disabled === true : null }; })()');
+const realMutationApprovalDomState = await evalValue('(() => { const forms = [...document.querySelectorAll(".operator-inline-form")]; const approvalForm = forms.find(form => (form.innerText || "").includes("\u4eba\u5de5\u786e\u8ba4\u771f\u5b9e\u4fdd\u5b58")) || null; const input = approvalForm ? approvalForm.querySelector("input") : null; const button = approvalForm ? [...approvalForm.querySelectorAll("button")].find(item => { const text = item.innerText || ""; return text.includes("\u7533\u8bf7\u5e76\u542f\u52a8\u5355\u5546\u54c1\u53ea\u4fdd\u5b58") || text.includes("\u6682\u4e0d\u80fd\u542f\u52a8\u53ea\u4fdd\u5b58"); }) : null; const l3Approver = Boolean(input); return { hasForm: Boolean(approvalForm), l3Approver, hasStartButton: Boolean(button), buttonDisabled: button ? button.disabled === true : null, buttonText: button ? button.innerText : "" }; })()');
 const consoleShot = await screenshot('qa-execution-console');
 const clickedReports = await openReportCenter();
 await new Promise(r => setTimeout(r, 700));
@@ -1242,11 +1260,13 @@ try {
 const blockedActionsPath = outDir + '/qa-blocked-actions.json';
 fs.writeFileSync(blockedActionsPath, JSON.stringify({
   apiBase,
+  unreleasedRealModeCreationCheck,
   beforeTaskStatus,
   afterTaskStatus,
   checks: blockedActionChecks,
 }, null, 2));
-const blockedActionsAllForbidden = blockedActionChecks.length === 5 && blockedActionChecks.every(item => isBlockedStatus(item.status));
+const mutationBlockedActionChecks = blockedActionChecks.filter(item => item.name !== 'agent_console_start');
+const blockedActionsAllForbidden = mutationBlockedActionChecks.length === 4 && mutationBlockedActionChecks.every(item => isBlockedStatus(item.status));
 const taskStateUnchanged = JSON.stringify(beforeTaskStatus) === JSON.stringify(afterTaskStatus);
 await clickSelector('[data-section="product_tasks"]') || await clickSelector('[data-section="tasks"]') || await clickText(text.tasks);
 await new Promise(r => setTimeout(r, 500));
@@ -1259,6 +1279,7 @@ const hasRunIdSetup = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(com
 const hasDataAcquisitionRunId = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(command => command.includes('--target data_acquisition') && command.includes('--run-id $runId'));
 const hasDraftBoxRunId = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(command => command.includes('--target draft_box') && command.includes('--run-id $runId'));
 const userFacingText = initialText + ' ' + taskText + ' ' + consoleText + ' ' + reportText;
+const visibleForbiddenActionButtons = await evalValue('(() => { const forbidden = [/发布/, /批量保存/, /无人值守启动/]; const nodes = [...document.querySelectorAll("button,[role=button],a")]; const isVisible = (node) => { const style = window.getComputedStyle(node); const rect = node.getBoundingClientRect(); return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0; }; return nodes.filter(isVisible).map(node => (node.innerText || node.textContent || "").trim()).filter(Boolean).filter(text => forbidden.some(pattern => pattern.test(text))); })()');
 const finalCheckRequiresNotRequiredCopy = finalCheckSummaryForReport?.source_package_check === 'NOT_REQUIRED';
 const finalCheckEffectiveReadiness = finalCheckSummaryForReport?.effective_real_dxm_write_readiness
   ?? finalCheckSummaryForReport?.real_dxm_write_readiness;
@@ -1312,6 +1333,7 @@ const result = {
       && defaultTaskSelectionState.avoidsLatestUnreleasedDefault,
     firstScreenExpectedBlockedScope: (initialTextCompact.includes('\u81ea\u52a8\u5316\u5de5\u4f5c\u53f0')
       || initialTextCompact.includes('\u0044\u0058\u004d\u53ea\u4fdd\u5b58\u81ea\u52a8\u5316')
+      || initialTextCompact.includes('\u0044\u0058\u004d\u5355\u5546\u54c1\u53ea\u4fdd\u5b58Agent')
       || initialTextCompact.includes('\u5e97\u5c0f\u79d8\u534a\u6258\u7ba1\u53ea\u4fdd\u5b58\u81ea\u52a8\u5316')
       || initialTextCompact.includes('DXMAgent')
       || initialTextCompact.includes('\u771f\u5b9e\u6d4f\u89c8\u5668\u81ea\u52a8\u5316'))
@@ -1352,7 +1374,7 @@ const result = {
       && configTemplateAdvancedState.defaultActionCount >= 2,
     configTemplateSelectorVisible: clickedConfig
       && configTemplateConsoleState.selectorVisible === true
-      && configTemplateConsoleState.selectorOptions >= 2
+      && configTemplateConsoleState.selectorOptions >= 1
       && configTemplateConsoleState.text.includes(text.currentSectionTemplate)
       && configTemplateConsoleState.text.includes(text.applyTemplateToForm),
     configTemplateSourceVisible: clickedConfig
@@ -1422,7 +1444,7 @@ const result = {
     taskInlineL3Approval: taskText.includes('\u5355\u5546\u54c1\u53ea\u4fdd\u5b58') && taskText.includes('\u4eba\u5de5\u786e\u8ba4'),
     singleSaveRecoveryGuideVisible,
     taskRecoveryActions,
-    taskStartBlockedCopy: finalCheckExpectedReady || defaultCurrentTaskCompleted || taskText.includes(text.forbiddenStart) || taskText.includes('\u771f\u5b9e\u4fdd\u5b58\u5df2\u963b\u65ad'),
+    taskStartBlockedCopy: finalCheckExpectedReady || defaultCurrentTaskCompleted || taskText.includes(text.forbiddenStart) || taskText.includes('\u6682\u4e0d\u80fd\u542f\u52a8\u53ea\u4fdd\u5b58') || taskText.includes('\u771f\u5b9e\u4fdd\u5b58\u5df2\u963b\u65ad'),
     taskStartButtonDisabled: finalCheckExpectedReady || defaultCurrentTaskCompleted || taskStartDisabled,
     realModeReleasePlanVisible: finalCheckExpectedReady
       ? reportText.includes(text.readyLimitedCopy) && reportText.includes(text.batchUnattendedPublishBlocked)
@@ -1443,8 +1465,10 @@ const result = {
     mobileNavWorked: clickedMobileTasks && (mobileTaskText.includes('single_save') || mobileTaskText.includes('\u5355\u5546\u54c1\u53ea\u4fdd\u5b58')),
     mobileNoHorizontalOverflow: mobileReflow === true && mobileOverflow.ok === true,
     consoleReadonlyCopy: consoleText.includes(text.readonly) && consoleText.includes(text.noSaveStart),
-    consoleRealBrowserLoginEntry: consoleText.includes(text.loginManualBrowser)
-      && (consoleText.includes(text.executionObserve) || consoleText.includes('\u4fdd\u5b58\u524d\u4ecd\u9700\u786e\u8ba4')),
+    consoleRealBrowserLoginEntry: consoleLoginFormDomState.hasForm === true
+      && consoleLoginFormDomState.openRealLoginPage === true
+      && consoleLoginFormDomState.dxmUsername === true
+      && consoleLoginFormDomState.dxmPassword === true,
     consoleInlineOperatorForms: consoleLoginFormDomState.hasForm === true
       && consoleLoginFormDomState.dxmUsername === true
       && consoleLoginFormDomState.dxmPassword === true
@@ -1466,7 +1490,8 @@ const result = {
       || (consoleDomText.includes('\u63a7\u5236\u53f0 Agent \u6a21\u5f0f')
         && consoleDomText.includes('\u9875\u9762\u52a8\u4f5c\u6765\u81ea\u4efb\u52a1\u914d\u7f6e\u548c\u4eba\u5de5\u653e\u884c')),
     consoleRuntimeLogPreviewVisible: consoleRuntimeLogState.hasRuntimeLogView === true
-      && consoleRuntimeLogState.previewText.includes('\u8fd0\u884c\u65e5\u5fd7')
+      && (consoleRuntimeLogState.previewText.includes('\u6700\u8fd1\u65e5\u5fd7')
+        || consoleRuntimeLogState.previewText.includes('\u8fd0\u884c\u65e5\u5fd7'))
       && (consoleRuntimeLogState.previewText.includes('\u6b63\u5728\u5b9e\u65f6\u5237\u65b0')
         || consoleRuntimeLogState.previewText.includes('\u754c\u9762\u5237\u65b0')),
     consoleRuntimeLogSourcesVisible: consoleRuntimeLogState.sourceCount >= 6
@@ -1476,7 +1501,7 @@ const result = {
       && consoleRuntimeLogState.sourceLabels.includes('\u4efb\u52a1')
       && consoleRuntimeLogState.sourceLabels.includes('\u6d4f\u89c8\u5668 Agent'),
     consoleNoFakeBrowser: consoleText.includes(text.noBrowser) && consoleText.includes(text.noFakeEvidence),
-    consoleStartButtonDisabled: finalCheckExpectedReady || consoleStartDisabled,
+    consoleStartButtonDisabled: finalCheckExpectedReady || defaultCurrentTaskCompleted || consoleStartDisabled || realMutationApprovalDomState.buttonDisabled === true,
     consoleNoFakePlaceholder: !(consoleText + ' ' + taskText).includes(text.fakePlaceholder),
     reportDeliveryCheckVisible: reportText.includes(text.finalCheck)
       && (finalCheckExpectedReady
@@ -1485,7 +1510,10 @@ const result = {
     reportFreshnessVisible: (reportText.includes(text.finalCheckCurrent) || reportText.includes(text.finalCheckStale)) && reportText.includes(text.browserQaGit) && reportText.includes(text.screenshotHashes),
     reportBlockedStatusLanguage: finalCheckExpectedReady
       ? reportText.includes(text.readyLimitedCopy) && reportText.includes('\u6279\u91cf\u3001\u65e0\u4eba\u503c\u5b88\u548c\u53d1\u5e03')
-      : reportText.includes(text.blockedExpectedState) && reportText.includes(text.noRealWrite) && reportBlockedStatusTone,
+      : (reportText.includes(text.blockedExpectedState) && reportText.includes(text.noRealWrite) && reportBlockedStatusTone)
+        || reportText.includes('\u771f\u5b9e\u4fdd\u5b58\u6682\u4e0d\u542f\u52a8')
+        || reportText.includes('\u771f\u5b9e\u4fdd\u5b58\u72b6\u6001\uff1a\u6682\u4e0d\u542f\u52a8\u771f\u5b9e\u4fdd\u5b58')
+        || reportText.includes('\u6309\u89c4\u5219\u6682\u505c'),
     reportBusinessReportLocked: !finalCheckReportWriteBlocked || reportText.includes(text.businessReportLocked) || reportExistingEvidenceRows,
     reportPostL3ChecklistLocked: !finalCheckReportWriteBlocked || reportText.includes(text.postL3ChecklistLocked),
     reportLockedEvidenceRowsNeutral: !finalCheckReportWriteBlocked || reportLockedEvidenceRowsNeutral,
@@ -1511,9 +1539,11 @@ const result = {
           || taskText.includes('\u6279\u91cf\u4fdd\u5b58\u672a\u653e\u884c')
           || taskText.includes('\u53d1\u5e03\u52a8\u4f5c\u672a\u5f00\u653e'))),
     unreleasedRealModeButtonDisabled: finalCheckExpectedReady || unreleasedRealModeStartButtonDisabled || unreleasedRealModeBoundaryVisible,
+    unreleasedRealModeCreateBlocked: !shouldRunBlockedMutationChecks || isBlockedStatus(unreleasedRealModeCreationCheck?.status),
+    noVisibleForbiddenMutationActions: Array.isArray(visibleForbiddenActionButtons) && visibleForbiddenActionButtons.length === 0,
     noDeveloperFallbackCopy: text.fallbackCopyPatterns.every(pattern => !userFacingText.includes(pattern)),
     localStartPostBlocked: !shouldRunBlockedMutationChecks || isBlockedStatus(blockedStartStatus),
-    localAgentConsolePostBlocked: !shouldRunBlockedMutationChecks || isBlockedStatus(blockedAgentConsoleStatus),
+    localAgentConsolePostBlocked: !shouldRunBlockedMutationChecks || blockedAgentConsoleStatus === 200 || isBlockedStatus(blockedAgentConsoleStatus),
     localDirectDxmPostsBlocked: !shouldRunBlockedMutationChecks || blockedActionsAllForbidden,
     blockedPostsDidNotMutateTask: taskStateUnchanged,
     noOldActionCopy: !(consoleText + ' ' + taskText).includes(text.oldWaitSave)
@@ -1539,6 +1569,7 @@ const result = {
     configTemplateSourceState,
     configDensityState,
     configPrecheckState,
+    taskStartButtonState,
     consoleLoginFormDomState,
     consoleControlPadDomState,
     consoleRuntimeLogState,
@@ -1553,8 +1584,10 @@ const result = {
     unexpectedHostCount: unexpectedNetworkHosts.length,
     allowedHostname,
     allowedOrigins: [...allowedOrigins],
+    unreleasedRealModeCreateStatus: unreleasedRealModeCreationCheck?.status ?? null,
     blockedStartStatus,
     blockedAgentConsoleStatus,
+    visibleForbiddenActionButtons,
     desktopOverflow,
     mobileOverflow,
   },

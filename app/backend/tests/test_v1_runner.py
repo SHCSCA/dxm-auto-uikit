@@ -428,6 +428,7 @@ def test_single_save_syncs_agent_console_hud_without_changing_workflow_order(v1_
     precheck_config = next(call for call in console.calls if call["step_code"] == "PRECHECK_CONFIG")
     open_draft = next(call for call in console.calls if call["step_code"] == "OPEN_DRAFT_LIST")
     find_product = next(call for call in console.calls if call["step_code"] == "FIND_PRODUCT")
+    open_editor = next(call for call in console.calls if call["step_code"] == "OPEN_EDIT_PAGE")
     base_info = next(call for call in console.calls if call["step_code"] == "FILL_BASE_INFO")
     variants = next(call for call in console.calls if call["step_code"] == "FILL_VARIANTS")
     media = next(call for call in console.calls if call["step_code"] == "FILL_MEDIA")
@@ -440,26 +441,28 @@ def test_single_save_syncs_agent_console_hud_without_changing_workflow_order(v1_
     assert precheck_config["phase"] == "开始任务"
     assert open_draft["human_title"] == "打开草稿箱"
     assert find_product["human_title"] == "查找商品"
+    assert open_editor["human_title"] == "打开编辑页"
     assert base_info["human_title"] == "输入标题"
-    assert base_info["human_action"] == "正在输入标题并选择分类"
+    assert base_info["human_action"] == "正在输入商品标题和卖点"
     assert base_info["human_next"] == "选择分类"
     assert select_category["human_title"] == "选择分类"
     assert select_category["human_action"] == "正在确认商品分类已选择"
-    assert select_category["progress_index"] == 5
-    assert select_category["progress_total"] == 10
+    assert select_category["progress_index"] == 6
+    assert select_category["progress_total"] == 12
     assert variants["human_title"] == "填写价格库存"
     assert media["human_title"] == "处理图片"
     assert semi_goods["human_title"] == "设置包装物流"
     assert save_only["human_title"] == "点击保存"
     assert save_only["human_action"] == "正在点击保存按钮，不点击发布"
     assert verify_not_published["human_title"] == "确认未发布"
-    assert release_lock["human_title"] == "确认未发布"
-    assert release_lock["progress_index"] == 10
-    assert release_lock["progress_total"] == 10
+    assert release_lock["human_title"] == "任务完成"
+    assert release_lock["progress_index"] == 12
+    assert release_lock["progress_total"] == 12
     operator_phrases = [
         "开始任务",
         "打开草稿箱",
         "查找商品",
+        "打开编辑页",
         "输入标题",
         "选择分类",
         "填写价格库存",
@@ -467,6 +470,7 @@ def test_single_save_syncs_agent_console_hud_without_changing_workflow_order(v1_
         "设置包装物流",
         "点击保存",
         "确认未发布",
+        "任务完成",
     ]
     hud_text = "\n".join(
         str(call.get(key) or "")
@@ -475,7 +479,7 @@ def test_single_save_syncs_agent_console_hud_without_changing_workflow_order(v1_
     )
     for phrase in operator_phrases:
         assert phrase in hud_text
-    assert all(call["progress_total"] == 10 for call in console.calls if call.get("progress_total"))
+    assert all(call["progress_total"] == 12 for call in console.calls if call.get("progress_total"))
     compact_titles = []
     compact_progress = []
     for call in console.calls:
@@ -485,7 +489,7 @@ def test_single_save_syncs_agent_console_hud_without_changing_workflow_order(v1_
         compact_titles.append(title)
         compact_progress.append(call.get("progress_index"))
     assert compact_titles == operator_phrases
-    assert compact_progress == list(range(1, 11))
+    assert compact_progress == list(range(1, 13))
     assert all(call["severity"] == "info" for call in console.calls)
     assert all(call["requires_user_action"] is False for call in console.calls)
     assert all(call["store_name"] == "Dang Kang" for call in console.calls)
@@ -534,12 +538,12 @@ def test_single_save_updates_live_browser_hud_without_agent_console(v1_db):
     assert "VERIFY_NOT_PUBLISHED" in states
     select_category = next(call for call in adapter.live_hud_calls if call["step_code"] == "SELECT_CATEGORY")
     assert select_category["human_title"] == "选择分类"
-    assert select_category["progress_index"] == 5
-    assert select_category["progress_total"] == 10
+    assert select_category["progress_index"] == 6
+    assert select_category["progress_total"] == 12
     save_only = next(call for call in adapter.live_hud_calls if call["step_code"] == "SAVE_ONLY")
     assert save_only["human_title"] == "点击保存"
     assert save_only["human_action"] == "正在点击保存按钮，不点击发布"
-    assert save_only["progress_total"] == 10
+    assert save_only["progress_total"] == 12
     assert save_only["store_name"] == "Dang Kang"
     assert save_only["requires_user_action"] is False
 
