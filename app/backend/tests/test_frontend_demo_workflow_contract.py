@@ -1025,7 +1025,7 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "const primaryActionLabel = primaryPath.ctaLabel" in workbench_source
     assert ".filter(isStartableSingleSaveTask)" in workbench_source
     assert "selectedTask.status === 'completed'" in workbench_source
-    assert "任务已完成，查看报告" in workbench_source
+    assert "任务已完成，查看保存结果" in workbench_source
     assert "const primaryDisabled = busy || (!selectedTaskCompleted && startDisabled)" in task_panel_source
     assert "const primaryAction = selectedTaskCompleted ? onShowReports : onStartTask" in task_panel_source
     assert "data-section={selectedTaskCompleted ? 'reports' : undefined}" in task_panel_source
@@ -1202,8 +1202,12 @@ def test_guide_center_can_start_real_dxm_login_without_l2_gate():
     assert "onNavigateDxmTarget: (target: 'data_acquisition' | 'draft_box') => void" in workbench_source
     assert "打开真实登录页" in dxm_access_source
     assert "验证码已完成，检测登录态" in dxm_access_source
+    assert "已登录，继续下一步" in dxm_access_source
+    assert "继续到开始只保存" in dxm_access_source
+    assert "可选：打开店小秘页面或日志" in dxm_access_source
     assert "进入采集箱" in dxm_access_source
     assert "进入采集页" in dxm_access_source
+    assert "查看登录日志" in dxm_access_source
     assert "onNavigateDxmTarget('data_acquisition')" in dxm_access_source
     assert "onNavigateDxmTarget('draft_box')" in dxm_access_source
     assert "onSubmit={onOpenDxmLogin}" in dxm_access_source
@@ -1350,9 +1354,12 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "compactCompletedReview" in console_section
     assert "selectedTaskCompleted && !agentConsole?.active" in console_section
     assert "ConsoleCompletedReviewPanel" in console_section
+    assert "{compactCompletedReview && consoleFocusPanel}" not in console_section
+    assert "{!compactCompletedReview && (" in console_section
+    assert "<L2RunnerStatePanel" in console_section
     assert "任务已完成" in workbench_source
     assert "下一步只复核结果" in workbench_source
-    assert "查看报告、未发布证明和真实浏览器记录" in workbench_source
+    assert "查看保存结果、未发布证明和真实浏览器记录" in workbench_source
     assert "<summary>继续操作真实浏览器</summary>" in workbench_source
     assert "完成态默认不展示浏览器操控细节" in workbench_source
     assert "embedded" in workbench_source
@@ -1380,8 +1387,8 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "控制台不播放截图；截图只作为证据路径，不会启动保存或发布。" not in workbench_source
     assert "'module-card agent-console-stage'" in console_section
     assert '<details className="module-card span-1 console-log-card console-log-card--compact inline-disclosure">' in console_section
-    assert "<summary>实时日志（自动刷新）</summary>" in console_section
-    assert "title=\"实时日志\"" in console_section
+    assert "<summary>运行日志（排障时展开）</summary>" in console_section
+    assert "title=\"运行日志\"" in console_section
     assert "RuntimeLogPreview" in console_section
     assert "排查问题时展开查看；完整筛选和搜索保留在下方“更多诊断与维护”。" in console_section
     assert "<summary>更多诊断与维护</summary>" in console_section
@@ -1522,7 +1529,7 @@ def test_execution_console_keeps_focus_panel_single_action_first():
 
     assert "console-focus-panel__status-strip" in focus_section
     assert "aria-label=\"执行摘要\"" not in visible_before_details
-    assert "<summary>技术状态</summary>" in details_section
+    assert "<summary>维护人员查看技术状态</summary>" in details_section
     assert "aria-label=\"执行浏览器首屏状态\"" in visible_before_details
     assert "<strong>DXM 登录</strong>" in visible_before_details
     assert "<strong>真实只读检查</strong>" in visible_before_details
@@ -1553,7 +1560,7 @@ def test_execution_console_surfaces_operator_decision_and_collapses_live_logs_by
     assert "<strong>下一步</strong>" in focus_section
     assert "primaryPath.reason" in focus_section
     assert '<details className="module-card span-1 console-log-card console-log-card--compact inline-disclosure">' in console_section
-    assert "<summary>实时日志（自动刷新）</summary>" in console_section
+    assert "<summary>运行日志（排障时展开）</summary>" in console_section
     assert "排查问题时展开查看；完整筛选和搜索保留在下方“更多诊断与维护”。" in console_section
     assert ".console-focus-panel__decision-grid" in styles_source
     assert ".console-log-card.inline-disclosure > summary" in styles_source
@@ -1628,7 +1635,7 @@ def test_execution_console_primary_blocker_details_are_collapsed_by_default():
 
     assert "console-primary-blocker-card__summary" in blocker_card_section
     assert '<details className="console-primary-blocker-card__details inline-disclosure">' in blocker_card_section
-    assert "<summary>原因与处理细节</summary>" in blocker_card_section
+    assert "<summary>查看原因与下一步</summary>" in blocker_card_section
     assert "console-primary-blocker-card__facts" in blocker_card_section
     assert blocker_card_section.index("console-primary-blocker-card__action") < blocker_card_section.index("console-primary-blocker-card__details")
     assert blocker_card_section.index("console-primary-blocker-card__explain") > blocker_card_section.index("console-primary-blocker-card__details")
@@ -2032,12 +2039,15 @@ def test_operation_feedback_uses_floating_toast_stack_not_page_flow_alerts():
 
     assert 'className="operation-toast-stack"' in shell_section
     assert "{workspaceNotice && (" in shell_section
-    assert "{operationError && (" in shell_section
+    assert "{visibleOperationError && (" in shell_section
     assert "{operationNotice && (" in shell_section
+    assert "const visibleOperationError = selectedTaskCompleted && operationError?.includes('真实只读检查')" in app_source
+    assert "if (selectedTaskCompleted && operationError?.includes('真实只读检查'))" in app_source
+    assert "setOperationError(null)" in app_source
     assert shell_section.index('className="operation-toast-stack"') < shell_section.index("{workspaceNotice && (")
-    assert shell_section.index('className="operation-toast-stack"') < shell_section.index("{operationError && (")
+    assert shell_section.index('className="operation-toast-stack"') < shell_section.index("{visibleOperationError && (")
     assert shell_section.index('className="operation-toast-stack"') < shell_section.index("{operationNotice && (")
-    assert shell_section.index("{workspaceNotice && (") < shell_section.index("{operationError && (")
+    assert shell_section.index("{workspaceNotice && (") < shell_section.index("{visibleOperationError && (")
     assert "data-testid=\"operation-notice\"" in shell_section
     assert "data-testid=\"workspace-notice\"" in shell_section
     assert ".operation-toast-stack" in styles_source
@@ -2062,7 +2072,7 @@ def test_workspace_notice_is_collapsed_to_compact_drawer_by_default():
     app_source = APP_TSX.read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
     shell_section = app_source[app_source.index("<AppShell"):app_source.index("{content}")]
-    notice_section = shell_section[shell_section.index("{workspaceNotice && ("):shell_section.index("{operationError && (")]
+    notice_section = shell_section[shell_section.index("{workspaceNotice && ("):shell_section.index("{visibleOperationError && (")]
 
     assert "<details" in notice_section
     assert "workspace-alert__summary" in notice_section
@@ -2664,7 +2674,7 @@ def test_task_center_defaults_to_current_task_first_and_collapses_setup_noise():
 
     assert "TaskCurrentActionPanel" in task_center_section
     assert "task-quick-actions" in task_center_section
-    assert "aria-label=\"任务操作台\"" in task_center_section
+    assert "aria-label=\"选择商品主操作\"" in task_center_section
     assert "首屏只处理任务选择" in task_center_section
     assert "创建单商品只保存任务" in task_center_section
     assert "data-testid=\"task-quick-create-single-save\"" in task_center_section
@@ -2673,7 +2683,9 @@ def test_task_center_defaults_to_current_task_first_and_collapses_setup_noise():
     assert task_center_section.index("task-quick-actions__buttons") < task_center_section.index("task-quick-actions__status")
     assert task_center_section.index("task-quick-actions") < task_center_section.index("TaskCurrentActionPanel")
     assert "onShowConsole={onShowConsole}" in task_center_section
-    assert "打开开始只保存复核" in current_panel_section
+    assert "完成后可选处理" in current_panel_section
+    assert "查看保存结果" in current_panel_section
+    assert "查看保存证据" in current_panel_section
     assert "onShowConsole: () => void" in panels_source
     assert "aria-label=\"当前任务执行\"" in current_panel_section
     assert "当前任务 #${selectedTask.id}" in current_panel_section
@@ -2810,8 +2822,9 @@ def test_task_center_explains_quick_action_availability_in_first_screen():
     assert "startDisabled ? startLabel : '可开始只保存'" in task_center_section
     assert "暂无历史任务；先创建单商品只保存任务。" in task_center_section
     assert "aria-label=\"任务按钮不可点击原因\"" in quick_actions_section
+    assert "<summary>为什么不能开始只保存</summary>" in quick_actions_section
     assert "<strong>创建任务</strong>" in quick_actions_section
-    assert "<strong>任务为什么不能启动</strong>" in quick_actions_section
+    assert "<strong>开始只保存</strong>" in quick_actions_section
     assert "taskActionDiagnosis.create" in quick_actions_section
     assert "taskActionDiagnosis.start" in quick_actions_section
     assert ".task-quick-actions__diagnosis" in styles_source
@@ -3302,7 +3315,7 @@ def test_safety_status_bar_does_not_duplicate_completed_task_status():
 
     assert "const activeTaskLabel = selectedTask ? `#${selectedTask.id}` : '未选择任务'" in safety_bar
     assert "const activeTaskStatusLabel = selectedTask ? humanTaskStatus(selectedTask.status) : ''" in safety_bar
-    assert "任务 ${activeTaskLabel} ${activeTaskStatusLabel}，继续查看保存结果、证据或打开开始只保存复核。" in safety_bar
+    assert "任务 ${activeTaskLabel} ${activeTaskStatusLabel}，继续查看保存结果和未发布证明。" in safety_bar
     assert "`#${selectedTask.id} ${humanTaskStatus(selectedTask.status)}`" not in safety_bar
 
 
@@ -3905,11 +3918,11 @@ def test_frontend_first_screen_names_dxm_automation_delivery():
     safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
     qa_source = QA_BROWSER_CHECK.read_text(encoding="utf-8")
 
-    assert "店小秘半托管只保存自动化" in source
-    assert "按真实店铺、真实商品和填写编辑页推进" in source
+    assert "今天先做哪一步" in source
+    assert "按真实店铺、真实商品和编辑页配置推进" in source
     assert "不会发布；批量和无人值守保存仍保持关闭" in source
-    assert "aria-label=\"验收结论\"" in source
-    assert "工作台</strong><b>可使用" in source
+    assert "aria-label=\"保存边界\"" in source
+    assert "当前模式</strong><b>只保存" in source
     assert "保存范围</strong><b>{realWriteReady ? '单商品只保存可执行' : '等待人工确认'}" in source
     assert "当前范围' : '下一步'" in source
     assert "只保存，不发布" in source
@@ -4055,7 +4068,9 @@ def test_execution_console_shows_current_decision_before_browser_controls():
     assert "const consoleFocusPanel = (" in console_section
     assert "{!compactCompletedReview && consoleFocusPanel}" in return_section
     assert return_section.index("{!compactCompletedReview && consoleFocusPanel}") < return_section.index("<AgentStagePanel")
-    assert "{compactCompletedReview && consoleFocusPanel}" in return_section
+    assert "{compactCompletedReview && consoleFocusPanel}" not in return_section
+    assert "{!compactCompletedReview && (" in return_section
+    assert return_section.index("{!compactCompletedReview && (") > return_section.index("console-log-card")
 
 
 def test_frontend_translates_failed_execution_technical_errors_for_operators():
@@ -4230,6 +4245,8 @@ def test_dxm_access_page_is_extracted_from_workbench_modules():
     assert "aria-label=\"登录店小秘\"" in dxm_access_source
     assert "登录真实店小秘" in dxm_access_source
     assert "打开真实登录页" in dxm_access_source
+    assert "继续到开始只保存" in dxm_access_source
+    assert "可选：打开店小秘页面或日志" in dxm_access_source
     assert "验证码已完成，检测登录态" in dxm_access_source
     assert "CredentialStorageFacts" in dxm_access_source
     assert "LoginRecoverySteps" in dxm_access_source
@@ -4250,7 +4267,7 @@ def test_product_tasks_page_is_extracted_from_workbench_modules():
     assert "return <TaskCenterView {...props} />" in product_tasks_source
     assert "export function TaskCenterView" in source
     assert "aria-label=\"选择商品\"" in source
-    assert "aria-label=\"任务操作台\"" in source
+    assert "aria-label=\"选择商品主操作\"" in source
     assert "创建单商品只保存任务" in source
     assert "export function TaskCenter(" not in source
 

@@ -56,7 +56,7 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
     { label: '店小秘登录', value: dxmLoggedIn ? '已登录' : '待登录', ok: dxmLoggedIn, detail: dxmLoggedIn ? '真实浏览器登录态可用' : '先打开真实浏览器登录' },
     { label: '当前任务', value: selectedTask ? humanTaskStatus(selectedTask.status) : '待创建', ok: Boolean(selectedTask), detail: selectedTask ? displayTaskName(selectedTask) : '选择一个商品创建只保存任务' },
     { label: '填写编辑页', value: configReady ? '已就绪' : '待补齐', ok: configReady, detail: configReady ? '执行取值已可核对' : '按店小秘编辑页分区补字段' },
-    { label: '真实只读检查', value: l2Passed ? '已通过' : '待运行', ok: l2Passed, detail: l2Passed ? '页面读取检查已通过' : '通过后才能启动执行浏览器' },
+    { label: '保存前检查', value: selectedTaskCompleted ? '已完成' : l2Passed ? '已通过' : '待运行', ok: selectedTaskCompleted || l2Passed, detail: selectedTaskCompleted ? '本次任务已结束，优先复核保存结果' : l2Passed ? '页面读取检查已通过' : '通过后才能启动执行浏览器' },
     { label: '人工确认', value: selectedTaskCompleted ? '已完成' : l3Passed ? '已确认' : '待确认', ok: selectedTaskCompleted || l3Passed, detail: '只保存，不发布；批量和无人值守关闭' },
   ]
   const homeMenuGroups = [
@@ -83,12 +83,14 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
     {
       title: '执行保存',
       menu: '开始只保存',
-      ok: l2Passed && (l3Passed || selectedTaskCompleted),
-      detail: l2Passed
+      ok: selectedTaskCompleted || (l2Passed && l3Passed),
+      detail: selectedTaskCompleted
+        ? '本次保存任务已完成，当前只需要复核保存结果和未发布证明。'
+        : l2Passed
         ? '只读检查已通过，按人工确认后启动执行浏览器。'
         : '先运行真实只读检查，不领取、不保存、不发布。',
-      cta: '去开始只保存',
-      action: onShowConsole,
+      cta: selectedTaskCompleted ? '查看保存结果' : '去开始只保存',
+      action: selectedTaskCompleted ? onShowReports : onShowConsole,
     },
     {
       title: '复盘',
@@ -104,8 +106,8 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
     <section className="dashboard-grid" aria-label="今天做什么">
       <div className="hero-panel home-command">
         <div>
-          <h1>店小秘半托管只保存自动化</h1>
-          <p>按真实店铺、真实商品和填写编辑页推进：登录店小秘、选择商品、补齐配置、只读检查、人工确认后，只执行单商品保存。</p>
+          <h1>今天先做哪一步</h1>
+          <p>按真实店铺、真实商品和编辑页配置推进：登录店小秘、选择商品、补齐配置、只读检查、人工确认后，只执行单商品保存。</p>
           <p className="hero-panel__note">不会发布；批量和无人值守保存仍保持关闭，验收详情放在下方折叠区。</p>
           <div className="hero-panel__outcomes home-command__status-grid" aria-label="当前流程状态">
             {homeStatusCards.map((card) => (
@@ -116,8 +118,8 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
               </span>
             ))}
           </div>
-          <div className="home-command__boundary" aria-label="验收结论">
-            <span><strong>工作台</strong><b>可使用</b></span>
+          <div className="home-command__boundary" aria-label="保存边界">
+            <span><strong>当前模式</strong><b>只保存</b></span>
             <span><strong>保存范围</strong><b>{realWriteReady ? '单商品只保存可执行' : '等待人工确认'}</b></span>
             <span><strong>{realWriteReady ? '当前范围' : '下一步'}</strong><b>{realWriteReady ? '只保存，不发布' : '完成页面检查'}</b></span>
           </div>

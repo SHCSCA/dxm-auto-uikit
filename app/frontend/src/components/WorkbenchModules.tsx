@@ -2343,6 +2343,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
   const selectedRealDxmMutationTask = Boolean(selectedTask && isRealDxmMutationTask(selectedTask))
   const dxmLoggedIn = !runtimeStatusError && DXM_LOGGED_IN_STATUSES.has(runtimeStatus?.dxmLogin?.status ?? '')
   const selectedTaskIsUnreleasedRealMode = selectedTask ? isUnreleasedRealDxmMutationTask(selectedTask) : false
+  const selectedTaskCompleted = selectedTask?.status === 'completed'
   const selectedTaskNotDraft = Boolean(selectedTask && selectedTask.status !== 'draft')
   const l2BlocksStart = needsRealL2 && l2Gate?.status !== 'passed'
   const l3BlocksStart = needsRealL2 && l3Gate?.status === 'blocked'
@@ -2404,7 +2405,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
   const startLabel = !selectedTask
     ? '请选择任务'
     : selectedTask.status === 'completed'
-      ? '任务已完成，查看报告'
+      ? '任务已完成，查看保存结果'
       : selectedTask.status === 'running'
         ? '任务运行中'
         : selectedTask.status === 'failed'
@@ -2495,7 +2496,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
 
   return (
     <section className="module-layout" aria-label="选择商品">
-      <div className="module-card span-1 task-quick-actions" aria-label="任务操作台">
+      <div className="module-card span-1 task-quick-actions" aria-label="选择商品主操作">
         <ModuleHead title="选择商品" meta="首屏只处理任务选择" />
         <div className="task-product-selection" aria-label="选择商品">
           <div className="task-product-selection__head">
@@ -2555,16 +2556,17 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
             </small>
           )}
         </div>
-        <div className="task-quick-actions__diagnosis" aria-label="任务按钮不可点击原因">
+        <details className="task-quick-actions__diagnosis inline-disclosure" aria-label="任务按钮不可点击原因">
+          <summary>为什么不能开始只保存</summary>
           <span>
             <strong>创建任务</strong>
             <small>{taskActionDiagnosis.create}</small>
           </span>
           <span>
-            <strong>任务为什么不能启动</strong>
+            <strong>开始只保存</strong>
             <small>{taskActionDiagnosis.start}</small>
           </span>
-        </div>
+        </details>
         <div className="task-quick-actions__status">
           <span>当前任务</span>
           <strong>{selectedTask ? displayTaskName(selectedTask) : '未选择任务'}</strong>
@@ -2578,7 +2580,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
       </div>
 
       <div className="module-card span-2">
-        <ModuleHead title="选择商品" meta={showAllTasks ? `${workspace.tasks.length} 个批次` : `${visibleTaskRows.length} 个常用批次`} />
+        <ModuleHead title="当前任务" meta={showAllTasks ? `${workspace.tasks.length} 个批次` : `${visibleTaskRows.length} 个常用批次`} />
         <TaskCurrentActionPanel
           selectedTask={selectedTask}
           workspace={workspace}
@@ -2596,7 +2598,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
           onShowEvidence={onShowEvidence}
           onShowReports={onShowReports}
         />
-        {needsSingleSaveRecovery && (
+        {!selectedTaskCompleted && needsSingleSaveRecovery && (
           <SingleSaveRecoveryGuide
             selectedTask={selectedTask}
             latestSingleSaveTask={latestSingleSaveTask}
@@ -2614,7 +2616,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
             onShowReports={onShowReports}
           />
         )}
-        {(configBlocksStart || configPreviewLoading || configPreviewError || configPreviewTaskMismatch) && (
+        {!selectedTaskCompleted && (configBlocksStart || configPreviewLoading || configPreviewError || configPreviewTaskMismatch) && (
           <div className={`gate-note ${configBlocksStart ? 'gate-note--danger' : ''}`}>
             <strong>{configPreviewError ? '配置检查接口不可用' : configPreviewTaskMismatch ? '配置属于其它任务' : configPreviewLoading ? '正在检查配置' : '配置检查未通过'}</strong>
             <span>{configPreviewError ? humanConfigError(configPreviewError) : configPreviewTaskMismatch ? '请重新检查本次任务配置，避免沿用上一任务的配置结果。' : configPreviewLoading ? '正在读取当前任务的 DXM 编辑页字段来源。' : `请先补齐：${configPreviewForSelectedTask?.missing.slice(0, 6).join('、') || '填写编辑页配置'}`}</span>
@@ -2625,7 +2627,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
             )}
           </div>
         )}
-        {l2BlocksStart && (
+        {!selectedTaskCompleted && l2BlocksStart && (
           <ReadonlyRecheckHelpCard
             l2Gate={l2Gate}
             l3BlocksStart={l3BlocksStart}
@@ -2641,7 +2643,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
             onShowReports={onShowReports}
           />
         )}
-        {!l2BlocksStart && l3BlocksStart && (
+        {!selectedTaskCompleted && !l2BlocksStart && l3BlocksStart && (
           <div className="gate-note gate-note--danger">
             <strong>真实保存已阻断</strong>
             <span>{humanGateDetail(l2Gate?.detail) ?? '需要商品采集页与草稿箱页两个真实只读检查均通过。'}</span>
@@ -2653,7 +2655,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
             </div>
           </div>
         )}
-        {l2BlocksStart && l2DiagnosticSummaries.length > 0 && (
+        {!selectedTaskCompleted && l2BlocksStart && l2DiagnosticSummaries.length > 0 && (
           <details className="inline-disclosure l2-block-summary">
             <summary>真实只读检查诊断摘要</summary>
             {l2DiagnosticSummaries.slice(0, 2).map((item) => (
@@ -2661,7 +2663,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
             ))}
           </details>
         )}
-        {needsApproval && !selectedTaskNotDraft && (
+        {!selectedTaskCompleted && needsApproval && !selectedTaskNotDraft && (
           <div className="gate-note">
             <span>单商品只保存会先请求后端批准令牌，再启动真实浏览器保存；认领和批量保存当前未开放。</span>
             <L3ApprovalInlineForm
@@ -3122,11 +3124,9 @@ export function ExecutionConsole({
         />
       )}
 
-      {compactCompletedReview && consoleFocusPanel}
-
       <details className="module-card span-1 console-log-card console-log-card--compact inline-disclosure">
-        <summary>实时日志（自动刷新）</summary>
-        <ModuleHead title="实时日志" meta={`${runtimeLogCount} 条，自动刷新`} />
+        <summary>运行日志（排障时展开）</summary>
+        <ModuleHead title="运行日志" meta={`${runtimeLogCount} 条，自动刷新`} />
         <RuntimeLogPreview
           logs={runtimeLogs}
           source={runtimeLogSource}
@@ -3136,15 +3136,17 @@ export function ExecutionConsole({
         <small>排查问题时展开查看；完整筛选和搜索保留在下方“更多诊断与维护”。</small>
       </details>
 
-      <L2RunnerStatePanel
-        state={l2RunnerState}
-        l2Gate={l2Gate}
-        runtimeStatus={runtimeStatus}
-        busy={busy}
-        onRunPrecheck={() => onRuntimeControl('run_l2_readonly_probe')}
-        onLogSourceChange={onRuntimeLogSourceChange}
-        onShowReports={onShowReports}
-      />
+      {!compactCompletedReview && (
+        <L2RunnerStatePanel
+          state={l2RunnerState}
+          l2Gate={l2Gate}
+          runtimeStatus={runtimeStatus}
+          busy={busy}
+          onRunPrecheck={() => onRuntimeControl('run_l2_readonly_probe')}
+          onLogSourceChange={onRuntimeLogSourceChange}
+          onShowReports={onShowReports}
+        />
+      )}
 
       <details className="module-card span-3 disclosure-card console-advanced console-diagnostics-drawer">
         <summary>更多诊断与维护</summary>
@@ -3369,17 +3371,17 @@ function ConsoleCompletedReviewPanel({
       <div className="console-review-panel__body">
         <div>
           <strong>下一步只复核结果</strong>
-          <span>查看报告、未发布证明和真实浏览器记录；如要处理新商品，回到选择商品创建新任务。</span>
+          <span>查看保存结果、未发布证明和真实浏览器记录；如要处理新商品，回到选择商品创建新任务。</span>
         </div>
         <div className="console-review-panel__facts">
-          <span><b>报告</b><strong>优先查看</strong></span>
-          <span><b>证据</b><strong>核对未发布</strong></span>
+          <span><b>结果</b><strong>优先查看</strong></span>
+          <span><b>保存证据</b><strong>核对未发布</strong></span>
           <span><b>日志</b><strong>{sourceLabel} {runtimeLogCount} 条</strong></span>
         </div>
       </div>
       <div className="console-review-panel__actions">
-        <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看报告</button>
-        <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据</button>
+        <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看保存结果</button>
+        <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看保存证据</button>
         <button className="button button--quiet" type="button" onClick={onShowTasks}>创建/选择任务</button>
       </div>
       <details className="inline-disclosure console-review-panel__browser">
@@ -3845,7 +3847,7 @@ function ConsoleFocusPanel({
       <div className="console-focus-panel__main">
         <span className={`console-focus-panel__dot ${primaryPath.saveBlocked ? 'is-warn' : active ? 'is-live' : ''}`} aria-hidden="true" />
         <div>
-          <ModuleHead title="当前执行" meta={selectedTask ? `任务 #${selectedTask.id}` : '未选择任务'} />
+          <ModuleHead title="现在只做哪一步" meta={selectedTask ? `任务 #${selectedTask.id}` : '未选择任务'} />
           <h1>{active ? activeStep?.title ?? primaryPath.title : primaryPath.title}</h1>
           <p>{active ? activeStep?.detail ?? primaryPath.detail : primaryPath.detail}</p>
           {primaryPath.action === 'run_l2' && !active && (
@@ -3893,7 +3895,7 @@ function ConsoleFocusPanel({
         </span>
       </div>
       <details className="console-focus-panel__details inline-disclosure">
-        <summary>技术状态</summary>
+        <summary>维护人员查看技术状态</summary>
         <div className="console-focus-panel__facts">
           <span><strong>任务</strong><b>{selectedTask ? `${displayTaskName(selectedTask)} / ${humanTaskStatus(selectedTask.status)}` : '待选择'}</b></span>
           <span><strong>当前步骤</strong><b>{activeStep?.title ?? '等待任务'}</b></span>
@@ -3962,7 +3964,7 @@ function ConsolePrimaryBlockerCard({
         {primaryActionLabel}
       </button>
       <details className="console-primary-blocker-card__details inline-disclosure">
-        <summary>原因与处理细节</summary>
+        <summary>查看原因与下一步</summary>
         <div className="console-primary-blocker-card__facts">
           <span>
             <b>发生了什么</b>
@@ -5135,8 +5137,8 @@ function buildConsolePrimaryPath({
       title: '保存成功',
       reason: '当前任务已完成。',
       detail: '继续复核保存结果、未发布证明、日志和证据。',
-      next: '查看报告与未发布证明',
-      ctaLabel: '查看报告',
+      next: '查看保存结果与未发布证明',
+      ctaLabel: '查看保存结果',
       action: 'reports',
       browserStatus: '任务已完成',
       blocksBrowserStart: true,

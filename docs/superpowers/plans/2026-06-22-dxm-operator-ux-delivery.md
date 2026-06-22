@@ -73,7 +73,7 @@ Expected: the frontend contract suite passes.
 - Modify: `app/frontend/src/components/workbench/ProductTasksPage.tsx`
 - Modify: `app/frontend/src/components/workbench/AgentExecutionPage.tsx`
 
-- [ ] **Step 1: Make each page answer one question**
+- [x] **Step 1: Make each page answer one question**
 
 Each page title should map to a user decision:
 
@@ -85,11 +85,11 @@ Each page title should map to a user decision:
 开始只保存
 ```
 
-- [ ] **Step 2: Keep one primary action per page**
+- [x] **Step 2: Keep one primary action per page**
 
 The first screen should show only the next main button. Secondary diagnostics stay in details/drawers.
 
-- [ ] **Step 3: Rewrite blockers into operator language**
+- [x] **Step 3: Rewrite blockers into operator language**
 
 Every blocker should follow:
 
@@ -99,9 +99,16 @@ Every blocker should follow:
 下一步点哪里
 ```
 
-- [ ] **Step 4: Verify visually**
+- [x] **Step 4: Verify visually**
 
 Run the app and confirm the first screen is understandable without reading diagnostic details.
+
+Verification completed on 2026-06-22:
+- `app/backend/.venv/Scripts/python.exe -m pytest tests/test_frontend_demo_workflow_contract.py tests/test_desktop_package_contract.py::test_execution_console_focus_panel_keeps_primary_summary_small tests/test_desktop_package_contract.py::test_app_shell_presents_agent_console_as_user_first_navigation -q`
+- `cd app/frontend && npm run build`
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/qa-browser-check.ps1 -Url http://127.0.0.1:15195`
+
+Result: all focused contract checks, build, and browser QA passed. Completed tasks now route to save results, stale read-only-check errors are hidden and cleared for completed tasks, and task-center quick actions stay visible in the first viewport.
 
 ### Task 3: Browser Progress Overlay Maturity
 

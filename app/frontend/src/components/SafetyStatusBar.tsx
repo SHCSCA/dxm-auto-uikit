@@ -19,9 +19,10 @@ type SafetyStatusBarProps = {
   onShowConfig: () => void
   onShowTasks: () => void
   onShowConsole: () => void
+  onShowReports: () => void
 }
 
-export function SafetyStatusBar({ workspace, selectedTask, configPreview, configPreviewError, configPreviewLoading, runtimeStatus, runtimeStatusError, desktopRuntime, busy, onRefresh, onShowDxmAccess, onShowConfig, onShowTasks, onShowConsole }: SafetyStatusBarProps) {
+export function SafetyStatusBar({ workspace, selectedTask, configPreview, configPreviewError, configPreviewLoading, runtimeStatus, runtimeStatusError, desktopRuntime, busy, onRefresh, onShowDxmAccess, onShowConfig, onShowTasks, onShowConsole, onShowReports }: SafetyStatusBarProps) {
   const activeTaskLabel = selectedTask ? `#${selectedTask.id}` : '未选择任务'
   const activeTaskStatusLabel = selectedTask ? humanTaskStatus(selectedTask.status) : ''
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
@@ -69,7 +70,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
         ? '继续下一步：人工确认单商品只保存'
         : '当前可执行：单商品只保存自动化'
   const headline = selectedTaskCompleted
-    ? '当前任务已完成，可查看执行记录'
+    ? '当前任务已完成，可查看保存结果'
     : runtimeStatusUnavailable
       ? '工作台服务连接异常'
       : nextHeadline
@@ -94,7 +95,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
       ? '后端未连接不是账号、配置或店小秘页面问题；请查看实时日志、刷新状态或重启免安装版。'
       : '工作台只会执行受控“只保存”，发布和批量无人值守仍保持关闭。'
     : selectedTaskCompleted
-      ? `任务 ${activeTaskLabel} ${activeTaskStatusLabel}，继续查看保存结果、证据或打开开始只保存复核。`
+      ? `任务 ${activeTaskLabel} ${activeTaskStatusLabel}，继续查看保存结果和未发布证明。`
       : '按操作引导继续：选择任务、补配置、真实登录、真实只读检查、人工确认后才启动保存。'
   const runtimeEndpointLine = runtimeStatus
     ? `服务端 ${runtimeStatus.backend.url ?? `端口 ${runtimeStatus.backend.port ?? '未知'}`} / 前端 ${runtimeStatus.frontend.url ?? `端口 ${runtimeStatus.frontend.port ?? '未知'}`}`
@@ -156,12 +157,12 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
       ? '等待人工确认'
       : '可启动只保存'
   const primaryActionLabel = selectedTaskCompleted
-    ? '查看执行记录'
+    ? '查看保存结果'
     : runtimeStatusUnavailable
       ? '查看日志'
     : '下一步'
   const handlePrimaryAction = selectedTaskCompleted
-    ? onShowConsole
+    ? onShowReports
     : runtimeStatusUnavailable
       ? onShowConsole
     : taskBlocksRealSave

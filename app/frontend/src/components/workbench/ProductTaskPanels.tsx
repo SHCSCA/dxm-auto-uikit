@@ -282,15 +282,25 @@ export function TaskCurrentActionPanel({
           <b>{l3CheckLabel}</b>
         </span>
       </div>
-      <details className="inline-disclosure task-current-panel__optional-actions">
-        <summary>可选处理：查看阻断说明 / 查看证据缺口 / 检查计划</summary>
-        <div className="next-step-actions">
-        <button className="button button--quiet" type="button" onClick={onShowConfig}>补齐配置</button>
-        <button className="button button--quiet" type="button" onClick={onShowConsole}>打开开始只保存复核</button>
-        <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
-        <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">查看检查计划</button>
-        </div>
-      </details>
+      {selectedTaskCompleted ? (
+        <details className="inline-disclosure task-current-panel__optional-actions">
+          <summary>完成后可选处理</summary>
+          <div className="next-step-actions">
+            <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">查看保存结果</button>
+            <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看保存证据</button>
+          </div>
+        </details>
+      ) : (
+        <details className="inline-disclosure task-current-panel__optional-actions">
+          <summary>可选处理：查看阻断说明 / 查看证据缺口 / 检查计划</summary>
+          <div className="next-step-actions">
+            <button className="button button--quiet" type="button" onClick={onShowConfig}>补齐配置</button>
+            <button className="button button--quiet" type="button" onClick={onShowConsole}>查看运行详情</button>
+            <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
+            <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">查看检查计划</button>
+          </div>
+        </details>
+      )}
     </div>
   )
 }

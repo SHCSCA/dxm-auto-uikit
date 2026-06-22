@@ -212,6 +212,16 @@ export default function App() {
     () => workspace.tasks.find((task) => task.id === selectedTaskId) ?? workspace.tasks[0] ?? null,
     [selectedTaskId, workspace.tasks],
   )
+  const selectedTaskCompleted = selectedTask?.status === 'completed'
+  const visibleOperationError = selectedTaskCompleted && operationError?.includes('真实只读检查')
+    ? null
+    : operationError
+
+  useEffect(() => {
+    if (selectedTaskCompleted && operationError?.includes('真实只读检查')) {
+      setOperationError(null)
+    }
+  }, [operationError, selectedTaskCompleted])
 
   const refreshWorkspace = useCallback(async () => {
     const deliveryPath = selectedTaskId ? `/api/delivery/workspace?task_id=${selectedTaskId}` : '/api/delivery/workspace'
@@ -1239,6 +1249,7 @@ export default function App() {
         onShowConfig={() => setActiveSection('edit_config')}
         onShowTasks={() => setActiveSection('product_tasks')}
         onShowConsole={() => setActiveSection('agent_execution')}
+        onShowReports={() => setActiveSection('results')}
       />
       <div className="operation-toast-stack" aria-live="polite">
         {workspaceNotice && (
@@ -1258,10 +1269,10 @@ export default function App() {
             </div>
           </details>
         )}
-        {operationError && (
+        {visibleOperationError && (
           <div className="operation-alert" role="alert">
             <strong>操作需要重试</strong>
-            <span>{operationError}</span>
+            <span>{visibleOperationError}</span>
             <button className="button button--quiet" type="button" onClick={() => setOperationError(null)}>
               知道了
             </button>

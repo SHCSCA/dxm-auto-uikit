@@ -86,23 +86,28 @@ export function DxmAccessPage({
         <ModuleHead title="登录状态" meta={dxmLoggedIn ? 'DXM 已登录' : '等待真实登录'} />
         <div className="dxm-access-status-card__body">
           <span className={`status-pill ${loginState.tone}`}>{loginState.label}</span>
-          <strong>{dxmLoggedIn ? '可以进入采集箱或采集页' : '先完成真实店小秘登录'}</strong>
+          <strong>{dxmLoggedIn ? '已登录，继续下一步' : '先完成真实店小秘登录'}</strong>
           <small>{loginState.detail}</small>
         </div>
         <div className="dxm-access-status-card__actions">
-          <button className="button button--secondary" type="button" onClick={() => onNavigateDxmTarget('draft_box')} disabled={!dxmLoggedIn || busy}>
-            进入采集箱
-          </button>
-          <button className="button button--quiet" type="button" onClick={() => onNavigateDxmTarget('data_acquisition')} disabled={!dxmLoggedIn || busy}>
-            进入采集页
-          </button>
-          <button className="button button--quiet" type="button" onClick={onShowConsole}>
-            查看登录日志
+          <button className="button button--secondary" type="button" onClick={dxmLoggedIn ? onShowConsole : onOpenDxmLogin} disabled={busy}>
+            {dxmLoggedIn ? '继续到开始只保存' : '打开真实登录页'}
           </button>
         </div>
         <details className="inline-disclosure">
-          <summary>登录页说明</summary>
+          <summary>可选：打开店小秘页面或日志</summary>
           <small>登录浏览器只用于人工登录和验证码处理；执行浏览器只在配置、真实只读检查和人工确认通过后由 Agent 操控。</small>
+          <div className="dxm-access-status-card__actions">
+            <button className="button button--quiet" type="button" onClick={() => onNavigateDxmTarget('draft_box')} disabled={!dxmLoggedIn || busy}>
+              进入采集箱
+            </button>
+            <button className="button button--quiet" type="button" onClick={() => onNavigateDxmTarget('data_acquisition')} disabled={!dxmLoggedIn || busy}>
+              进入采集页
+            </button>
+            <button className="button button--quiet" type="button" onClick={onShowConsole}>
+              查看登录日志
+            </button>
+          </div>
         </details>
       </div>
     </section>

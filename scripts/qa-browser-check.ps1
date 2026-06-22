@@ -1412,7 +1412,8 @@ const result = {
       && taskQuickActionsState.quickInFirstViewport === true
       && taskQuickActionsState.quickText.includes('\u521b\u5efa\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u4efb\u52a1')
       && taskQuickActionsState.quickText.includes('\u9009\u62e9\u5546\u54c1')
-      && taskQuickActionsState.quickText.includes('\u4efb\u52a1\u4e3a\u4ec0\u4e48\u4e0d\u80fd\u542f\u52a8'),
+      && taskQuickActionsState.quickText.includes('\u4e3a\u4ec0\u4e48\u4e0d\u80fd\u5f00\u59cb\u53ea\u4fdd\u5b58')
+      && taskQuickActionsState.quickText.includes('\u5f00\u59cb\u53ea\u4fdd\u5b58'),
     taskQuickCreateVisible: taskQuickActionsState.hasQuickActions === true
       && taskQuickActionsState.quickText.includes('\u521b\u5efa\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u4efb\u52a1')
       && (taskQuickActionsState.quickText.includes('\u8bf7\u5148\u52fe\u9009 1 \u4e2a\u5546\u54c1\u540e\u518d\u521b\u5efa\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u4efb\u52a1')

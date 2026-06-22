@@ -345,7 +345,7 @@ def test_execution_console_focus_panel_keeps_primary_summary_small():
     assert "<strong>真实只读检查</strong>" in primary_section
     assert "<strong>人工确认</strong>" in primary_section
     assert "<strong>执行浏览器</strong>" in primary_section
-    assert "<summary>技术状态</summary>" in focus_section
+    assert "<summary>维护人员查看技术状态</summary>" in focus_section
     assert "<strong>任务</strong><b>" in focus_section
     assert "<strong>当前步骤</strong><b>" in focus_section
     assert "<strong>当前页面</strong><b>" in focus_section
