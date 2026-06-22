@@ -306,19 +306,23 @@ def test_app_shell_presents_agent_console_as_user_first_navigation():
     assert "DXM Agent Console" in index_html
     assert "type WorkbenchPrimaryArea" in source
     assert "const primaryAreas" in source
-    assert "label: '执行'" in source
-    assert "label: '准备'" in source
+    assert "label: '开始'" in source
+    assert "label: '准备商品'" in source
+    assert "label: '执行保存'" in source
     assert "label: '复盘'" in source
+    assert "label: '支持'" in source
     assert "label: '更多'" not in source
     assert "真实浏览器" in source
-    assert "登录、只读检查、执行浏览器" in source
-    assert "结果报告" in source
-    assert "问题处理" in source
-    assert "证据中心" in source
+    assert "页面检查、人工确认、启动真实浏览器只保存" in source
+    assert "保存结果" in source
+    assert "失败处理" in source
+    assert "保存证据" in source
+    assert "使用帮助" in source
+    assert "系统设置" in source
     assert "id: 'dashboard'" not in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
-    assert "{ id: 'evidence', label: '证据中心'" in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
+    assert "{ id: 'evidence', label: '保存证据'" in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
     assert "{ id: 'exceptions', label: '问题'" not in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
-    assert "{ id: 'agent_execution', label: '真实浏览器', short: '览', hint: '登录、只读检查、执行浏览器' }" in source
+    assert "{ id: 'agent_execution', label: '开始只保存', short: '存', hint: '页面检查、人工确认、启动真实浏览器只保存' }" in source
     assert "报告中心" not in source
     assert "异常池" not in source
     assert "nav-section" in source

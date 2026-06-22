@@ -47,10 +47,11 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
   },
   {
     id: 'system',
-    label: '帮助',
+    label: '支持',
     short: '5',
     items: [
-      { id: 'settings', label: '帮助与设置', short: '帮', hint: '查看使用范围、服务状态和高级诊断入口' },
+      { id: 'help', label: '使用帮助', short: '帮', hint: '按步骤查看首次使用、日常只保存和失败恢复' },
+      { id: 'settings', label: '系统设置', short: '设', hint: '查看服务状态、日志路径和高级诊断' },
     ],
   },
 ]
@@ -63,8 +64,9 @@ const sectionLabels: Record<WorkbenchSection, string> = {
   agent_execution: '开始只保存',
   results: '保存结果',
   issues: '失败处理',
-  settings: '帮助与设置',
-  guide: '操作引导',
+  help: '使用帮助',
+  settings: '系统设置',
+  guide: '使用帮助',
   dashboard: '状态',
   config: '填写编辑页',
   tasks: '当前任务',
@@ -110,7 +112,7 @@ export function AppShell({
             <div>
               <strong>DXM 只保存自动化</strong>
               <span>真实店小秘只保存</span>
-              <span className="sr-only">今天做什么 / 登录店小秘 / 选择商品 / 填写编辑页 / 开始只保存 / 保存结果 / 保存证据 / 失败处理 / 帮助与设置</span>
+              <span className="sr-only">今天做什么 / 登录店小秘 / 选择商品 / 填写编辑页 / 开始只保存 / 保存结果 / 保存证据 / 失败处理 / 使用帮助 / 系统设置</span>
             </div>
           )}
           <button className="icon-button" type="button" onClick={onToggleSidebar} aria-label="切换侧边栏">

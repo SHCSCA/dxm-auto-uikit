@@ -4,6 +4,7 @@ import { AppShell } from './components/AppShell'
 import { SafetyStatusBar } from './components/SafetyStatusBar'
 import { AgentExecutionPage as ExecutionConsole } from './components/workbench/AgentExecutionPage'
 import { EditConfigPage as ConfigCenter } from './components/workbench/EditConfigPage'
+import { HelpPage } from './components/workbench/HelpPage'
 import { HomePage as Dashboard } from './components/workbench/HomePage'
 import { ProductTasksPage as TaskCenter } from './components/workbench/ProductTasksPage'
 import {
@@ -127,7 +128,7 @@ function syncSelectedTaskIdUrl(taskId: number | null) {
 function normalizeWorkbenchSection(section: WorkbenchSection): WorkbenchSection {
   const aliases: Partial<Record<WorkbenchSection, WorkbenchSection>> = {
     dashboard: 'home',
-    guide: 'dxm_access',
+    guide: 'help',
     tasks: 'product_tasks',
     config: 'edit_config',
     console: 'agent_execution',
@@ -1182,6 +1183,19 @@ export default function App() {
         return <ExceptionQueue workspace={workspace} selectedTask={selectedTask} />
       case 'results':
         return <ReportCenter workspace={workspace} selectedTask={selectedTask} finalCheck={finalCheck} onShowEvidence={() => setActiveSection('evidence')} onShowConsole={() => setActiveSection('agent_execution')} onShowExceptions={() => setActiveSection('issues')} />
+      case 'help':
+        return (
+          <HelpPage
+            selectedTask={selectedTask}
+            runtimeStatus={runtimeStatus}
+            onShowDxmAccess={() => setActiveSection('dxm_access')}
+            onShowTasks={() => setActiveSection('product_tasks')}
+            onShowConfig={() => setActiveSection('edit_config')}
+            onShowConsole={() => setActiveSection('agent_execution')}
+            onShowResults={() => setActiveSection('results')}
+            onShowIssues={() => setActiveSection('issues')}
+          />
+        )
       case 'settings':
         return <SystemSettings workspace={workspace} selectedTask={selectedTask} finalCheck={finalCheck} runtimeStatus={runtimeStatus} desktopRuntime={desktopRuntime} />
       case 'home':

@@ -7,6 +7,7 @@ WORKSPACE_TS = REPO_ROOT / "app" / "frontend" / "src" / "workspace.ts"
 WORKBENCH_MODULES_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "WorkbenchModules.tsx"
 WORKBENCH_COPY_TS = REPO_ROOT / "app" / "frontend" / "src" / "components" / "workbench" / "workbenchCopy.ts"
 SYSTEM_SETTINGS_PAGE_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "workbench" / "SystemSettingsPage.tsx"
+HELP_PAGE_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "workbench" / "HelpPage.tsx"
 RESULTS_PAGE_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "workbench" / "ResultsPage.tsx"
 ISSUES_PAGE_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "workbench" / "IssuesPage.tsx"
 DXM_ACCESS_PAGE_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "workbench" / "DxmAccessPage.tsx"
@@ -978,7 +979,7 @@ def test_frontend_has_stateful_operation_guide_entry():
 
     assert "useState<WorkbenchSection>('home')" in app_source
     assert "function normalizeWorkbenchSection" in app_source
-    assert "guide: 'dxm_access'" in app_source
+    assert "guide: 'help'" in app_source
     assert "config: 'edit_config'" in app_source
     assert "tasks: 'product_tasks'" in app_source
     assert "console: 'agent_execution'" in app_source
@@ -989,6 +990,7 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "const sectionLabels: Record<WorkbenchSection, string>" in shell_source
     assert "home: '今天做什么'" in shell_source
     assert "dxm_access: '登录店小秘'" in shell_source
+    assert "help: '使用帮助'" in shell_source
     assert "agent_execution: '开始只保存'" in shell_source
     assert "evidence: '保存证据'" in shell_source
     assert "exceptions: '失败处理'" in shell_source
@@ -1140,7 +1142,7 @@ def test_sidebar_primary_navigation_keeps_only_user_main_path():
     shell_source = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
     primary_area_section = shell_source[shell_source.index("const primaryAreas"):shell_source.index("const sectionLabels")]
 
-    assert primary_area_section.count("{ id: '") == 9
+    assert primary_area_section.count("{ id: '") == 10
     assert "{ id: 'home', label: '今天做什么'" in primary_area_section
     assert "{ id: 'dxm_access', label: '登录店小秘'" in primary_area_section
     assert "{ id: 'product_tasks', label: '选择商品'" in primary_area_section
@@ -1149,11 +1151,12 @@ def test_sidebar_primary_navigation_keeps_only_user_main_path():
     assert "{ id: 'results', label: '保存结果'" in primary_area_section
     assert "{ id: 'evidence', label: '保存证据'" in primary_area_section
     assert "{ id: 'issues', label: '失败处理'" in primary_area_section
-    assert "{ id: 'settings', label: '帮助与设置'" in primary_area_section
+    assert "{ id: 'help', label: '使用帮助'" in primary_area_section
+    assert "{ id: 'settings', label: '系统设置'" in primary_area_section
     assert "{ id: 'exceptions', label: '问题'" not in primary_area_section
     assert "id: 'dashboard'" not in primary_area_section
     assert "label: '更多'" not in primary_area_section
-    assert "今天做什么 / 登录店小秘 / 选择商品 / 填写编辑页 / 开始只保存 / 保存结果 / 保存证据 / 失败处理 / 帮助与设置" in shell_source
+    assert "今天做什么 / 登录店小秘 / 选择商品 / 填写编辑页 / 开始只保存 / 保存结果 / 保存证据 / 失败处理 / 使用帮助 / 系统设置" in shell_source
 
 
 def test_guide_center_can_start_real_dxm_login_without_l2_gate():
@@ -3917,7 +3920,7 @@ def test_frontend_first_screen_names_dxm_automation_delivery():
     assert "系统状态与验收详情" not in safety_bar
     assert "safety-bar__meta-details inline-disclosure" in safety_bar
     assert "真实保存已阻断" not in safety_bar
-    assert "今天做什么 / 登录店小秘 / 选择商品 / 填写编辑页 / 开始只保存 / 保存结果 / 保存证据 / 失败处理 / 帮助与设置" in shell
+    assert "今天做什么 / 登录店小秘 / 选择商品 / 填写编辑页 / 开始只保存 / 保存结果 / 保存证据 / 失败处理 / 使用帮助 / 系统设置" in shell
     assert "\\u0044\\u0058\\u004d \\u53ea\\u4fdd\\u5b58\\u81ea\\u52a8\\u5316" in qa_source
     assert "initialText.includes(text.overview) || initialText.includes('\\u767b\\u5f55\\u5e97\\u5c0f\\u79d8') || initialText.includes('\\u5f00\\u59cb\\u53ea\\u4fdd\\u5b58')" in qa_source
     assert "\\u73b0\\u5728\\u53ea\\u505a\\u8fd9\\u4e00\\u6b65" in qa_source
@@ -3938,7 +3941,9 @@ def test_sidebar_copy_names_save_only_agent_flow_without_ambiguous_browser_wordi
     assert "保存结果" in shell
     assert "保存证据" in shell
     assert "失败处理" in shell
-    assert "帮助与设置" in shell
+    assert "使用帮助" in shell
+    assert "系统设置" in shell
+    assert "帮助与设置" not in shell
     assert "真实店小秘只保存" in shell
     assert "{ id: 'agent_execution', label: '开始只保存', short: '存', hint: '页面检查、人工确认、启动真实浏览器只保存' }" in shell
     assert "真实店小秘操作在登录店小秘和开始只保存中完成" in shell
@@ -3970,6 +3975,7 @@ def test_frontend_uses_business_sidebar_groups_and_hides_operator_diagnostics_by
     assert "id: 'agent_execution'" in shell
     assert "id: 'results'" in shell
     assert "id: 'issues'" in shell
+    assert "id: 'help'" in shell
     assert "id: 'settings'" in shell
     assert "查看状态详情" in safety_bar
     visible_bar = safety_bar[safety_bar.index("return ("):safety_bar.index("<details className=\"safety-bar__meta-details")]
@@ -4149,14 +4155,41 @@ def test_system_settings_page_is_extracted_from_workbench_modules():
     settings_source = SYSTEM_SETTINGS_PAGE_TSX.read_text(encoding="utf-8")
 
     assert "export function SystemSettingsPage" in settings_source
-    assert "aria-label=\"帮助与设置\"" in settings_source
+    assert "aria-label=\"系统设置\"" in settings_source
+    assert "title=\"系统设置\"" in settings_source
     assert "当前可执行范围" in settings_source
     assert "真实浏览器" in settings_source
     assert "高级诊断" in settings_source
     assert "RegressionGateGrid" in settings_source
+    assert "帮助与设置" not in settings_source
     assert "export { SystemSettingsPage as SystemSettings }" in source
     assert "from './workbench/SystemSettingsPage'" in source
     assert "export function SystemSettings(" not in source
+
+
+def test_help_page_is_operator_guide_not_diagnostics():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    help_source = HELP_PAGE_TSX.read_text(encoding="utf-8")
+
+    assert "import { HelpPage } from './components/workbench/HelpPage'" in app_source
+    assert "guide: 'help'" in app_source
+    assert "case 'help':" in app_source
+    assert "export function HelpPage" in help_source
+    assert "aria-label=\"使用帮助\"" in help_source
+    assert "第一次使用怎么走" in help_source
+    assert "每次只保存怎么走" in help_source
+    assert "失败后先看哪里" in help_source
+    assert "系统不会做什么" in help_source
+    assert "从登录开始" in help_source
+    assert "去选择商品" in help_source
+    assert "只点击保存，不发布" in help_source
+    assert "真实浏览器左上角进度" in help_source
+    assert "export { HelpPage as HelpCenter }" in source
+    assert "L2" not in help_source
+    assert "HAR" not in help_source
+    assert "run-id" not in help_source
+    assert "probe" not in help_source
 
 
 def test_results_page_is_extracted_from_workbench_modules():

@@ -366,6 +366,7 @@ export type WorkbenchSection =
   | 'agent_execution'
   | 'results'
   | 'issues'
+  | 'help'
   | 'settings'
   | 'dashboard'
   | 'guide'

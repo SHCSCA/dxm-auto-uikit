@@ -49,7 +49,8 @@ expected_labels = [
     "保存结果",
     "保存证据",
     "失败处理",
-    "帮助与设置",
+    "使用帮助",
+    "系统设置",
 ]
 ```
 
@@ -84,8 +85,9 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
     { id: 'evidence', label: '保存证据', short: '证', hint: '核对只保存、未发布和浏览器证据' },
     { id: 'issues', label: '失败处理', short: '错', hint: '查看失败原因、阻断说明和处理建议' },
   ] },
-  { id: 'system', label: '帮助', short: '5', items: [
-    { id: 'settings', label: '帮助与设置', short: '帮', hint: '查看使用范围、服务状态和高级诊断入口' },
+  { id: 'system', label: '支持', short: '5', items: [
+    { id: 'help', label: '使用帮助', short: '帮', hint: '按步骤查看首次使用、日常只保存和失败恢复' },
+    { id: 'settings', label: '系统设置', short: '设', hint: '查看服务状态、日志路径和高级诊断' },
   ] },
 ]
 ```

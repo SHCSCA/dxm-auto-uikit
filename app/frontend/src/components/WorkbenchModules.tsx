@@ -40,6 +40,7 @@ import {
 } from './workbench/ProductTaskPanels'
 import { humanOperatorMessage, humanOperatorTitle } from './workbench/workbenchCopy'
 export { DxmAccessPage } from './workbench/DxmAccessPage'
+export { HelpPage as HelpCenter } from './workbench/HelpPage'
 export { IssuesPage as ExceptionQueue } from './workbench/IssuesPage'
 export { ResultsPage as ReportCenter } from './workbench/ResultsPage'
 export { SystemSettingsPage as SystemSettings } from './workbench/SystemSettingsPage'

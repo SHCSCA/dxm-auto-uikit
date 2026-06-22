@@ -38,9 +38,9 @@ export function SystemSettingsPage({
     : '最近验收：未读取'
 
   return (
-    <section className="module-layout" aria-label="帮助与设置">
+    <section className="module-layout" aria-label="系统设置">
       <div className="module-card span-3">
-        <ModuleHead title="帮助与设置" meta="普通使用无需修改" />
+        <ModuleHead title="系统设置" meta="服务状态、日志路径和高级诊断" />
         <div className="settings-summary-grid">
           <div className="settings-summary-card">
             <span>当前可执行范围</span>
