@@ -250,7 +250,8 @@ def test_frontend_defaults_to_delivery_current_task_even_after_success():
     assert "if (deliveryTask && isDefaultSelectableSingleSaveTask(deliveryTask))" in picker
     assert "deliveryTask.status !== 'completed'" not in picker
     assert picker.index("if (deliveryTask && isDefaultSelectableSingleSaveTask(deliveryTask))") < picker.index("tasks.find(isActionableSingleSaveTask)")
-    assert "选择商品" in source
+    assert "数据采集认领" in source
+    assert "采集箱编辑保存" in source
     assert "请在“商品与任务”" not in source
 
 
@@ -2639,6 +2640,8 @@ def test_runtime_log_default_views_humanize_lines_and_keep_raw_lines_in_diagnost
     assert "真实浏览器窗口已关闭，请重新打开执行浏览器。" in source
     assert "正在把选中的商品认领到采集箱。" in source
     assert "正在点击店小秘“保存”，不会发布。" in source
+    assert "保存步骤失败：系统没有继续发布" in source
+    assert source.index("保存步骤失败：系统没有继续发布") < source.index("正在点击店小秘“保存”，不会发布。")
     assert "runtime-log-preview__body" in preview_section
     assert ".runtime-log-preview__body" in styles_source
     assert "overflow-y: auto" in styles_source[styles_source.index(".runtime-log-preview__body"):styles_source.index(".runtime-log-refresh")]
@@ -4122,10 +4125,12 @@ def test_frontend_recovers_from_stale_task_id_in_url():
     app_source = APP_TSX.read_text(encoding="utf-8")
 
     assert "function syncSelectedTaskIdUrl(taskId: number | null)" in app_source
-    assert "const taskMissing = failures.some((failure) => failure.path.startsWith('/api/delivery/workspace') && /task not found/i.test(failure.message))" in app_source
-    assert "const recoveredTaskId = pickDefaultTaskId(null, nextWorkspace.tasks)" in app_source
+    assert "Boolean(deliveryWorkspace?.requested_task_missing)" in app_source
+    assert "failures.some((failure) => failure.path.startsWith('/api/delivery/workspace') && /task not found/i.test(failure.message))" in app_source
+    assert "const recoveredTaskId = pickDefaultTaskId(deliveryWorkspace, nextWorkspace.tasks)" in app_source
     assert "setSelectedTaskId(recoveredTaskId)" in app_source
     assert "syncSelectedTaskIdUrl(recoveredTaskId)" in app_source
+    assert "系统已切回当前可用任务" in app_source
     assert "} else {\n      setSelectedTaskId((current) => pickTaskIdForOperatorPath(current, deliveryWorkspace, nextWorkspace.tasks))" in app_source
     assert "syncSelectedTaskIdUrl(taskId)" in app_source
 
@@ -4307,6 +4312,18 @@ def test_config_and_console_primary_screens_keep_diagnostics_secondary():
     assert "独立浏览器窗口才是真实操作现场" in source
     assert "最近日志：默认只显示关键业务进度" in source
     assert "visibleRuntimeLogItems = businessRuntimeLogItems(filteredRuntimeLogItems).slice(-6)" in source
+
+
+def test_app_consumes_recoverable_missing_task_workspace_flag():
+    source = APP_TSX.read_text(encoding="utf-8")
+    refresh_section = source[source.index("const refreshWorkspace = useCallback"):source.index("useEffect(() => {\n    void refreshWorkspace()")]
+
+    assert "requested_task_missing?: boolean" in source
+    assert "requested_task_id?: number | null" in source
+    assert "Boolean(deliveryWorkspace?.requested_task_missing)" in refresh_section
+    assert "pickDefaultTaskId(deliveryWorkspace, nextWorkspace.tasks)" in refresh_section
+    assert "syncSelectedTaskIdUrl(recoveredTaskId)" in refresh_section
+    assert "上次选择的任务已不存在或已归档。系统已切回当前可用任务" in refresh_section
 
 
 def test_execution_console_compact_login_keeps_account_fields_in_drawer():

@@ -5076,6 +5076,21 @@ function humanRuntimeLogLine(item: RuntimeLogItem) {
   const normalized = line.toLowerCase()
   const operatorMessage = humanOperatorMessage(line)
   if (operatorMessage !== line) return operatorMessage
+  if (String(item.level || '').toLowerCase() === 'error' || normalized.includes('failed') || normalized.includes('error') || normalized.includes('失败')) {
+    if (normalized.includes('save_only') || normalized.includes('add.json') || normalized.includes('保存')) {
+      return '保存步骤失败：系统没有继续发布，请按页面提示检查真实浏览器后重试。'
+    }
+    if (normalized.includes('claim_to_draft_box') || normalized.includes('认领')) {
+      return '采集认领失败：系统没有继续保存，请检查目标商品和真实浏览器状态后重试。'
+    }
+    if (normalized.includes('open_data_acquisition')) {
+      return '数据采集页打开失败：请确认店小秘已登录并能访问数据采集页。'
+    }
+    if (normalized.includes('open_edit_page') || normalized.includes('open_editor')) {
+      return '编辑页打开失败：请确认商品已进入采集箱后重试。'
+    }
+    return '当前步骤失败，请展开完整原始日志查看细节。'
+  }
   if (normalized.includes('browser_closed') || normalized.includes('browser_window_not_visible') || line.includes('真实浏览器窗口已关闭')) {
     return '真实浏览器窗口已关闭，请重新打开执行浏览器。'
   }
@@ -5138,9 +5153,6 @@ function humanRuntimeLogLine(item: RuntimeLogItem) {
   }
   if (normalized.includes('json_path') || normalized.includes('markdown_path') || normalized.includes('screenshot') || normalized.includes('dom_sha256')) {
     return '诊断证据已记录。'
-  }
-  if (normalized.includes('failed') || normalized.includes('error') || item.level === 'error') {
-    return '当前步骤失败，请展开完整原始日志查看细节。'
   }
   return stripRuntimeLogPrefix(line)
 }

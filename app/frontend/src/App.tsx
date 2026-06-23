@@ -55,6 +55,8 @@ const sourceLabels: Record<DeliveryWorkspace['source'], string> = {
 }
 type DeliveryWorkspaceResponse = Partial<DeliveryWorkspace> & {
   current_task?: Task | null
+  requested_task_missing?: boolean
+  requested_task_id?: number | null
 }
 
 type ApiFailure = {
@@ -300,22 +302,27 @@ export default function App() {
     setWorkspace(nextWorkspace)
     setAgentConsole(consoleStatus)
     setFinalCheck(finalCheckSummary)
-    const taskMissing = failures.some((failure) => failure.path.startsWith('/api/delivery/workspace') && /task not found/i.test(failure.message))
+    const taskMissing = Boolean(deliveryWorkspace?.requested_task_missing)
+      || failures.some((failure) => failure.path.startsWith('/api/delivery/workspace') && /task not found/i.test(failure.message))
     if (taskMissing) {
-      const recoveredTaskId = pickDefaultTaskId(null, nextWorkspace.tasks)
+      const recoveredTaskId = pickDefaultTaskId(deliveryWorkspace, nextWorkspace.tasks)
       setSelectedTaskId(recoveredTaskId)
       syncSelectedTaskIdUrl(recoveredTaskId)
     } else {
       setSelectedTaskId((current) => pickTaskIdForOperatorPath(current, deliveryWorkspace, nextWorkspace.tasks))
     }
-    if (failures.length) {
+    if (taskMissing) {
+      setWorkspaceNotice({
+        kind: 'degraded',
+        title: '当前任务需要重新选择',
+        detail: '上次选择的任务已不存在或已归档。系统已切回当前可用任务；如仍不能继续，请在“数据采集认领”或“采集箱编辑保存”重新创建任务。',
+      })
+    } else if (failures.length) {
       const firstFailure = failures[0]
       setWorkspaceNotice({
         kind: 'degraded',
-        title: taskMissing ? '当前任务需要重新选择' : '工作台服务连接异常',
-        detail: taskMissing
-        ? '上次选择的任务已不存在或已归档。请在“选择商品”重新选择或创建单商品只保存任务；真实保存前仍会重新校验。'
-          : humanWorkspaceFetchError(firstFailure?.message),
+        title: '工作台服务连接异常',
+        detail: humanWorkspaceFetchError(firstFailure?.message),
       })
     } else {
       setWorkspaceNotice(null)
