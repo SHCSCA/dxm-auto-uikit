@@ -56,7 +56,7 @@ const fallbackTemplateCenterMetadata: TemplateCenterMetadata = {
     ] },
   ],
   source_priority: ['本次任务覆盖', '手动选择模板', '类目默认模板', '店铺默认模板', '系统默认模板', '商品原始数据'],
-  actions: ['仅本次任务使用', '保存为店铺模板', '另存为新模板', '套用默认测试模板'],
+  actions: ['仅本次任务使用', '设为店铺默认模板', '设为类目默认模板', '另存为新模板', '套用默认测试模板'],
 }
 
 export function TemplateCenterPage({
@@ -128,15 +128,17 @@ export function TemplateCenterPage({
     })
   }
 
-  async function saveAsStoreTemplate(copy = false) {
-    await saveWithState(copy ? '正在另存为新模板' : '正在保存店铺模板', async () => {
+  async function saveAsDefaultTemplate(scope: 'store' | 'category', copy = false) {
+    const defaultLabel = scope === 'category' ? '类目默认模板' : '店铺默认模板'
+    await saveWithState(copy ? '正在另存为新模板' : `正在设为${defaultLabel}`, async () => {
       const body = {
         template_type: activeSection.template_type,
-        template_name: copy ? `${templateName || activeSection.label} 副本` : templateName || `${activeSection.label}模板`,
+        template_name: copy ? `${templateName || activeSection.label} 副本` : templateName || `${activeSection.label}${defaultLabel}`,
         binding_scope: bindingScope,
         payload: {
           [activeSection.template_type]: parseSectionValues(activeSection, draftValues),
-          binding: { store_name: currentStore, category_name: currentCategory, platform: 'AliExpress' },
+          binding: defaultBinding(scope, currentStore, currentCategory),
+          template_scope: scope,
         },
         is_enabled: true,
       }
@@ -144,7 +146,12 @@ export function TemplateCenterPage({
         ? await patchJson<Template>(`/api/templates/${activeTemplate.id}`, body)
         : await postJson<Template>('/api/templates', body)
       setSelectedTemplateId(String(saved.id))
-      setSaveState({ status: copy ? '已另存为新模板' : '已保存为店铺模板', detail: `模板 #${saved.id} ${saved.template_name} 已保存，后续匹配当前店铺/类目的任务可复用。` })
+      setSaveState({
+        status: copy ? '已另存为新模板' : `已设为${defaultLabel}`,
+        detail: scope === 'category'
+          ? `模板 #${saved.id} ${saved.template_name} 已保存；类目默认会优先用于当前店铺和类目的任务。`
+          : `模板 #${saved.id} ${saved.template_name} 已保存；店铺默认会用于当前店铺下没有类目默认的任务。`,
+      })
     })
   }
 
@@ -268,8 +275,9 @@ export function TemplateCenterPage({
 
         <div className="action-row">
           <button className="button button--secondary" type="button" onClick={() => { void saveForTask() }} disabled={!selectedTask}>仅本次任务使用</button>
-          <button className="button button--primary" type="button" onClick={() => { void saveAsStoreTemplate(false) }}>保存为店铺模板</button>
-          <button className="button button--quiet" type="button" onClick={() => { void saveAsStoreTemplate(true) }}>另存为新模板</button>
+          <button className="button button--primary" type="button" onClick={() => { void saveAsDefaultTemplate('store') }}>设为店铺默认模板</button>
+          <button className="button button--primary" type="button" onClick={() => { void saveAsDefaultTemplate('category') }}>设为类目默认模板</button>
+          <button className="button button--quiet" type="button" onClick={() => { void saveAsDefaultTemplate('category', true) }}>另存为新模板</button>
           <button className="button button--quiet" type="button" onClick={() => { void disableCurrentTemplate() }} disabled={!activeTemplate}>停用当前模板</button>
         </div>
 
@@ -306,6 +314,17 @@ function parseSectionValues(section: TemplateCenterSection, values: Record<strin
     }
     return [field.key, raw]
   }))
+}
+
+function defaultBinding(scope: 'store' | 'category', storeName: string, categoryName: string) {
+  const binding: Record<string, string> = {
+    store_name: storeName,
+    platform: 'AliExpress',
+  }
+  if (scope === 'category') {
+    binding.category_name = categoryName
+  }
+  return binding
 }
 
 function defaultValuesForSection(section: TemplateCenterSection) {

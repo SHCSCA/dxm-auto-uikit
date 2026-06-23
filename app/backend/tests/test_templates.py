@@ -46,4 +46,5 @@ def test_template_center_metadata_exposes_chinese_edit_page_sections():
     assert "店铺与任务基础" in section_labels
     assert "店小秘引用模板" in section_labels
     assert "仅本次任务使用" in data["actions"]
-    assert "保存为店铺模板" in data["actions"]
+    assert "设为店铺默认模板" in data["actions"]
+    assert "设为类目默认模板" in data["actions"]

@@ -6,6 +6,14 @@ from typing import Any
 
 TemplateLike = Mapping[str, Any] | None
 
+SOURCE_SCOPE_LABELS = {
+    "本次任务覆盖": "仅本次任务",
+    "手动选择模板": "手动选择",
+    "类目默认模板": "当前类目默认",
+    "店铺默认模板": "当前店铺默认",
+    "系统默认模板": "系统默认",
+}
+
 
 def editable_sections() -> list[dict[str, Any]]:
     return [
@@ -108,13 +116,17 @@ def resolve_template(
     ]
     for source_label, template in candidates:
         if template:
-            return {**dict(template), "source_label": source_label}
-    return {"id": None, "name": "未选择模板", "source_label": "未配置"}
+            return {
+                **dict(template),
+                "source_label": source_label,
+                "scope_label": SOURCE_SCOPE_LABELS[source_label],
+            }
+    return {"id": None, "name": "未选择模板", "source_label": "未配置", "scope_label": "未配置"}
 
 
 def template_center_metadata() -> dict[str, Any]:
     return {
         "sections": editable_sections(),
         "source_priority": ["本次任务覆盖", "手动选择模板", "类目默认模板", "店铺默认模板", "系统默认模板", "商品原始数据"],
-        "actions": ["仅本次任务使用", "保存为店铺模板", "另存为新模板", "套用默认测试模板"],
+        "actions": ["仅本次任务使用", "设为店铺默认模板", "设为类目默认模板", "另存为新模板", "套用默认测试模板"],
     }

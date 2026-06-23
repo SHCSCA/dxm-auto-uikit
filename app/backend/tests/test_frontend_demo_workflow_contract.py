@@ -155,7 +155,8 @@ def test_template_center_page_presents_multi_template_chinese_section_workflow()
         "保存状态",
         "执行取值",
         "仅本次任务使用",
-        "保存为店铺模板",
+        "设为店铺默认模板",
+        "设为类目默认模板",
         "另存为新模板",
         "停用当前模板",
         "套用默认测试模板",
@@ -4573,6 +4574,18 @@ def test_edit_config_page_entry_is_extracted_from_workbench_modules():
     assert "ConfigCenterView" in edit_config_source
     assert "return <ConfigCenterView {...props} />" in edit_config_source
     assert "export { ConfigCenter as ConfigCenterView }" in source
+
+
+def test_template_center_exposes_store_and_category_default_actions():
+    source = TEMPLATE_CENTER_PAGE_TSX.read_text(encoding="utf-8")
+
+    for label in [
+        "设为店铺默认模板",
+        "设为类目默认模板",
+        "店铺默认会用于当前店铺下没有类目默认的任务",
+        "类目默认会优先用于当前店铺和类目的任务",
+    ]:
+        assert label in source
 
 
 def test_agent_execution_page_entry_is_extracted_from_workbench_modules():
