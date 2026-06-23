@@ -72,14 +72,22 @@ ACTION_TO_STATES = {
 
 def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> dict[str, Any] | None:
     tasks = repo.list_tasks()
+    requested_task_id = task_id
+    requested_task_missing = False
     if task_id is None:
         if not tasks:
-            return None
+            return _empty_delivery_workspace(repo)
         task_id = _default_delivery_task_id(repo, tasks)
 
     task = repo.get_task(task_id)
     if not task:
-        return None
+        requested_task_missing = requested_task_id is not None
+        if not tasks:
+            return _empty_delivery_workspace(repo, requested_task_id=requested_task_id, requested_task_missing=requested_task_missing)
+        task_id = _default_delivery_task_id(repo, tasks)
+        task = repo.get_task(task_id)
+        if not task:
+            return _empty_delivery_workspace(repo, requested_task_id=requested_task_id, requested_task_missing=requested_task_missing)
 
     reports = repo.list_reports(task_id)
     evidences = repo.list_evidences(task_id)
@@ -93,7 +101,7 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
     l2_gate = _l2_probe_gate()
     delivery_readiness = _delivery_readiness(task, reports, evidences)
 
-    return {
+    workspace = {
         "baseline": _baseline(),
         "current_task": _current_task(task),
         "stores": repo.list_stores(),
@@ -118,6 +126,65 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
         "logs": logs,
         "exceptions": exceptions,
     }
+    if requested_task_missing:
+        workspace["requested_task_missing"] = True
+        workspace["requested_task_id"] = requested_task_id
+    return workspace
+
+
+def _empty_delivery_workspace(
+    repo: Repository,
+    *,
+    requested_task_id: int | None = None,
+    requested_task_missing: bool = False,
+) -> dict[str, Any]:
+    extracted = _extract_delivery_evidence([], [])
+    l2_gate = _l2_probe_gate()
+    delivery_readiness = {
+        "ready": False,
+        "has_l3_evidence": False,
+        "total_job_count": 0,
+        "complete_job_count": 0,
+        "jobs": [],
+    }
+    workspace = {
+        "baseline": _baseline(),
+        "current_task": None,
+        "stores": repo.list_stores(),
+        "templates": repo.list_templates(),
+        "products": repo.list_products(),
+        "tasks": [],
+        "steps": [],
+        "evidences": [],
+        "evidence_points": [],
+        "reports": [],
+        "report_summary": _report_summary([], extracted),
+        "template_resolution": _template_resolution(None),
+        "dxmReferenceTemplates": _dxm_reference_sections(None),
+        "publish_guard_state": _publish_guard_state([], extracted),
+        "evidence_grade": _evidence_grade(extracted, l2_gate, delivery_readiness),
+        "regression_gates": _regression_gates(extracted, l2_gate, delivery_readiness),
+        "delivery_readiness": delivery_readiness,
+        "real_mode_release_plan": _real_mode_release_plan(l2_gate, delivery_readiness),
+        "acceptanceGaps": [
+            {
+                "id": "empty-workspace",
+                "title": "还没有可执行任务",
+                "severity": "blocker",
+                "owner": "task_selection",
+                "detail": "请先在“数据采集认领”或“采集箱编辑保存”中创建任务；没有任务时不会启动真实保存。",
+                "evidenceLevel": "C",
+            }
+        ],
+        "safety": _safety_state(extracted, l2_gate, delivery_readiness),
+        "l2_probe_plan": _l2_probe_plan(),
+        "logs": [],
+        "exceptions": [],
+    }
+    if requested_task_missing:
+        workspace["requested_task_missing"] = True
+        workspace["requested_task_id"] = requested_task_id
+    return workspace
 
 
 def _default_delivery_task_id(repo: Repository, tasks: list[dict[str, Any]]) -> int:

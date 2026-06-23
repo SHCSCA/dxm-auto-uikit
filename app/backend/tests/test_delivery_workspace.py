@@ -646,6 +646,34 @@ def test_delivery_workspace_without_task_id_uses_latest_task(tmp_path, monkeypat
     assert data["publish_guard_state"]["publish_allowed"] is False
 
 
+def test_delivery_workspace_without_tasks_returns_recoverable_empty_workspace(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+
+    response = client.get("/api/delivery/workspace")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["current_task"] is None
+    assert data["tasks"] == []
+    assert data["reports"] == []
+    assert data["evidences"] == []
+    assert data["delivery_readiness"]["ready"] is False
+    assert any(gap["id"] == "empty-workspace" for gap in data["acceptanceGaps"])
+
+
+def test_delivery_workspace_missing_requested_task_falls_back_without_api_error(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_delivery_fixture(repo, with_network=True)
+
+    response = client.get("/api/delivery/workspace?task_id=999999")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["current_task"]["id"] == fixture["task"]["id"]
+    assert data["requested_task_missing"] is True
+    assert data["requested_task_id"] == 999999
+
+
 def test_delivery_workspace_without_task_id_prefers_task_with_delivery_evidence_over_newer_draft(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     fixture = _create_delivery_fixture(repo, with_network=True)
