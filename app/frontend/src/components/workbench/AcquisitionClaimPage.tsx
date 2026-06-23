@@ -9,7 +9,15 @@ type AcquisitionClaimPageProps = {
   onCreateClaimRequest: (request: AcquisitionClaimCreateRequest) => void
   onNavigateDataAcquisition: () => void
   onShowDraftEdit: () => void
+  onShowExecutionConsole: () => void
 }
+
+const claimSteps = [
+  { title: '选择店铺与平台', detail: '确认这次认领使用哪个真实店小秘店铺。' },
+  { title: '填写采集商品线索', detail: '填写关键词、类目和认领标记，便于 Agent 定位商品。' },
+  { title: '启动真实浏览器认领', detail: '到执行浏览器启动 Agent，只做认领，不会保存、不会发布。' },
+  { title: '确认商品进入采集箱', detail: '认领完成后再进入第二段采集箱编辑保存。' },
+]
 
 export function AcquisitionClaimPage({
   stores,
@@ -19,6 +27,7 @@ export function AcquisitionClaimPage({
   onCreateClaimRequest,
   onNavigateDataAcquisition,
   onShowDraftEdit,
+  onShowExecutionConsole,
 }: AcquisitionClaimPageProps) {
   const defaultStoreId = stores[0]?.id ? String(stores[0].id) : ''
   const [storeId, setStoreId] = useState(defaultStoreId)
@@ -51,12 +60,22 @@ export function AcquisitionClaimPage({
           <div>
             <span className="eyebrow">第一段</span>
             <h2>从店小秘数据采集认领到采集箱</h2>
-            <p>这里只创建认领请求和打开真实数据采集页，不会进入编辑页，也不会保存或发布。</p>
+            <p>先创建认领任务，再到执行浏览器启动 Agent。这里只认领到采集箱，不会进入编辑页，不会保存，不会发布。</p>
           </div>
           <button className="button button--secondary" type="button" onClick={onNavigateDataAcquisition} disabled={busy}>
-            打开数据采集页
+            打开真实数据采集页
           </button>
         </div>
+
+        <ol className="operation-guide" aria-label="数据采集认领四步">
+          {claimSteps.map((step, index) => (
+            <li key={step.title} className={lastRequest && index === 0 ? 'is-done' : ''}>
+              <span>{index + 1}</span>
+              <strong>{step.title}</strong>
+              <small>{step.detail}</small>
+            </li>
+          ))}
+        </ol>
 
         <div className="config-grid">
           <label>
@@ -99,8 +118,13 @@ export function AcquisitionClaimPage({
           <button className="button button--primary" type="button" onClick={submit} disabled={busy || !canSubmit}>
             创建采集认领请求
           </button>
+          {lastRequest && (
+            <button className="button button--secondary" type="button" onClick={onShowExecutionConsole} disabled={busy}>
+              去执行浏览器启动认领
+            </button>
+          )}
           <button className="button button--quiet" type="button" onClick={onShowDraftEdit}>
-            去编辑保存
+            去采集箱编辑保存
           </button>
         </div>
       </div>
@@ -113,11 +137,12 @@ export function AcquisitionClaimPage({
         {lastRequest ? (
           <div className="status-grid">
             <span><strong>店铺</strong><b>{selectedStore?.name ?? lastRequest.store_id}</b></span>
-            <span><strong>阶段</strong><b>等待认领到采集箱</b></span>
+            <span><strong>阶段</strong><b>等待启动真实浏览器认领</b></span>
             <span><strong>标记</strong><b>{lastRequest.claim_mark}</b></span>
+            <span><strong>下一步</strong><b>去执行浏览器启动认领</b></span>
           </div>
         ) : (
-          <p>创建后，Agent 会按该请求进入真实店小秘数据采集页处理认领。</p>
+          <p>创建后，Agent 会按该请求进入真实店小秘数据采集页处理认领；认领完成前不会保存或发布。</p>
         )}
       </div>
     </section>

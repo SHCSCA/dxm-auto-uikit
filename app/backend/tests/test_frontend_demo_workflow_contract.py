@@ -78,6 +78,19 @@ def test_acquisition_claim_page_uses_claim_request_api_not_legacy_task_center():
     assert "选择商品" not in page_source
 
 
+def test_acquisition_claim_page_presents_four_step_real_claim_path():
+    page_source = ACQUISITION_CLAIM_PAGE_TSX.read_text(encoding="utf-8")
+
+    for label in ["选择店铺与平台", "填写采集商品线索", "启动真实浏览器认领", "确认商品进入采集箱"]:
+        assert label in page_source
+
+    for label in ["不会保存", "不会发布", "认领标记", "去执行浏览器启动认领"]:
+        assert label in page_source
+
+    for forbidden in ["QA guarded product", "测试商品", "本地商品", "创建单商品只保存任务"]:
+        assert forbidden not in page_source
+
+
 def test_draft_edit_save_page_starts_from_claimed_product_without_technical_gate_copy():
     app_source = APP_TSX.read_text(encoding="utf-8")
     page_source = DRAFT_EDIT_SAVE_PAGE_TSX.read_text(encoding="utf-8")

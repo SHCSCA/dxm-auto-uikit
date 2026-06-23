@@ -1189,6 +1189,7 @@ export default function App() {
             onCreateClaimRequest={(request) => { void createAcquisitionClaimRequest(request) }}
             onNavigateDataAcquisition={() => { void navigateDxmTarget('data_acquisition') }}
             onShowDraftEdit={() => setActiveSection('draft_edit_save')}
+            onShowExecutionConsole={() => setActiveSection('start_save')}
           />
         )
       case 'product_tasks':
