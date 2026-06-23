@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 整个系统的核心价值与全部复杂度都在一件事上:**在能操作真实卖家账号的前提下,用分层证据门禁(L0→L1→L2→L3)把「真实写入」死死锁住,使得唯一被放行的真实变更只有「单店(Dang Kang)、单商品、save-only、带服务端一次性审批令牌、且有新鲜只读探针证据」的受控金丝雀**。改动本仓库时,默认假设你正在靠近这套门禁——任何让真实写入/发布更容易发生的改动都是高危改动。
 
-当前交付阶段:`realDxmWriteReadiness = READY`,但范围严格为 `controlled_single_save_only`。`claim_only` / `batch_save` / 批量 / 无人值守 / 任何发布动作**均未放行**。
+最新归档交付记录为 `docs/product/最终交付验收记录-20260622.md`，当次 `realDxmWriteReadiness = READY`，但范围严格为 `controlled_single_save_only`。L2 真实只读证据有新鲜度窗口；实时状态必须以当前工作台或最新 `final-delivery-check` 为准。`claim_only` / `batch_save` / 批量 / 无人值守 / 任何发布动作**均未放行**。
 
 ## 仓库布局(顶层)
 

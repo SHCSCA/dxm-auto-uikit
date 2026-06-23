@@ -26,10 +26,10 @@ D:\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console-Portable-0.1.0.exe
 outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
 ```
 
-2026-06-18 本机 portable smoke 已通过，文件 SHA-256：
+2026-06-22 本机 packaged/portable smoke 已通过，文件 SHA-256：
 
 ```text
-61B57C6EE39E6D2E6874CB7BB9F575D327EB274B87BC637E9CB6B19FC85E79FC
+24319C572777C40D9B1C3B2D46CD8582859ED0FE834EE204E1FAC51C5E15FFA4
 ```
 
 仓库内也保留同源构建产物：
@@ -152,10 +152,10 @@ D:\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console-Portable-0.1.0.exe
 outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
 ```
 
-2026-06-18 本机 portable smoke 已通过，文件 SHA-256：
+2026-06-22 本机 packaged/portable smoke 已通过，文件 SHA-256：
 
 ```bat
-61B57C6EE39E6D2E6874CB7BB9F575D327EB274B87BC637E9CB6B19FC85E79FC
+24319C572777C40D9B1C3B2D46CD8582859ED0FE834EE204E1FAC51C5E15FFA4
 ```
 
 仓库内同源构建产物：
@@ -261,7 +261,7 @@ scripts\final-delivery-check.bat
 
 它会串行运行 Windows 启动前检查、后端全量测试、前端生产构建、L1 selector replay、`git diff --check`、浏览器 QA，并输出 `outputs/final-delivery-check/final-delivery-check.md` / `.json`。最终自检模式下，浏览器 QA 截图和 sidecar 文件位于 `outputs\final-delivery-check\browser-checks\`。浏览器 QA 会临时启动隔离的当前源码后端和前端预览服务，避免误测 8000/5173 上的旧进程；检查模式可能安装前端依赖，但不会访问店小秘、不会执行真实保存。报告顶部会分别显示“自动化工作台自检结果”和“真实 DXM 写入放行状态”。
 
-当前源码包验收成功标准：`Local workbench check: PASS`、`Browser QA: PASS`、`Final report center QA: PASS`、`Source package check: PASS`，并按 L2/L3 门禁计算 `Real DXM write readiness`。当前最新本地工作台验收为 2026-06-18 21:28（Asia/Shanghai）：自动化工作台、桌面 portable 构建、packaged smoke、Browser QA 和最终报告中心 QA 均已通过；后端全量测试为 `674 passed`；Git HEAD 为 `f99dc38b5cfbe79833a9b9c52d8c36e32a739826`；报告目录为 `outputs\final-delivery-check`；`Source package check=NOT_REQUIRED`、`Source package readiness=DIRTY`。正式源码包交付仍必须重新运行 `-RequireCleanWorktree -CheckPortableDesktop -ExpectedRealDxmWriteReadiness READY`，并让报告 Git HEAD 与提交后的源码一致。`READY` 只代表受控单商品只保存，不代表批量、无人值守、认领或发布放行。
+当前源码包验收成功标准：`Local workbench check: PASS`、`Browser QA: PASS`、`Final report center QA: PASS`、`Source package check: PASS`，并按 L2/L3 门禁计算 `Real DXM write readiness`。当前最新归档本地工作台验收为 2026-06-22 18:14（Asia/Shanghai）：自动化工作台、桌面 portable 构建、packaged smoke、Browser QA 和最终报告中心 QA 均已通过；后端全量测试为 `678 passed`；报告内 Git HEAD 为 `4e555da7080ac1e5423d89ad86a2d290cda446c7`，本轮最终提交并推送为 `83537919cd3a3f3366caaff69032b1f01231b047`；报告目录为 `outputs\final-delivery-check`；`Source package check=NOT_REQUIRED`、`Source package readiness=DIRTY`。正式源码包交付仍必须重新运行 `-RequireCleanWorktree -CheckPortableDesktop -ExpectedRealDxmWriteReadiness READY`，并让报告 Git HEAD 与提交后的源码一致。`READY` 只代表受控单商品只保存，不代表批量、无人值守、认领或发布放行；L2 真实只读证据有新鲜度窗口，不能把历史 READY 当永久授权。
 
 自动化或管理摘要读取 `final-delivery-check.json` 时，不能只读取 `ok`。当前 `ok: true` 只代表 `okScope` 所声明的范围通过；必须同时读取 `realDxmMutationAllowed` 与 `realDxmMutationScope`。若 `okScope` 为 `local_workbench_and_controlled_single_save_ready`、`realDxmMutationAllowed` 为 `true` 且 `realDxmMutationScope` 为 `controlled_single_save_only`，结论是工作台可交付且仅单商品只保存可按门禁启动。
 
@@ -302,7 +302,7 @@ scripts\final-delivery-check.bat --help
 3. 若要扩大到认领或批量保存，必须为对应范围重新建立真实只读检查、人工批准和保存/回滚证据，不复用单商品只保存结论。
 4. 批量、无人值守和发布必须单独设计门禁、人工批准和回滚策略。
 
-免安装版快速使用说明见 `docs/product/免安装版快速使用说明-20260615.md`。当前本地交付记录见 `docs/product/最终交付验收记录-20260618.md`；2026-06-17 clean worktree 验收记录仍保留为历史源码包记录。当前源码有新改动时，交付前必须重新跑 clean worktree 验收。真实写入放行范围仅为受控 `single_save`，需要保留受控单商品只保存证据；批量、无人值守、认领和发布仍需单独证据链。
+免安装版快速使用说明见 `docs/product/免安装版快速使用说明-20260615.md`。当前本地交付记录见 `docs/product/最终交付验收记录-20260622.md`；2026-06-18 与 2026-06-17 记录保留为历史验收记录。当前源码有新改动或 L2/L3 证据过期时，交付前必须重新跑 clean worktree 验收或新鲜门禁。真实写入放行范围仅为受控 `single_save`，需要保留受控单商品只保存证据；批量、无人值守、认领和发布仍需单独证据链。
 
 ---
 
