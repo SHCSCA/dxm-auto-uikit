@@ -13,6 +13,7 @@ ISSUES_PAGE_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "workb
 DXM_ACCESS_PAGE_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "workbench" / "DxmAccessPage.tsx"
 ACQUISITION_CLAIM_PAGE_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "workbench" / "AcquisitionClaimPage.tsx"
 DRAFT_EDIT_SAVE_PAGE_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "workbench" / "DraftEditSavePage.tsx"
+TEMPLATE_CENTER_PAGE_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "workbench" / "TemplateCenterPage.tsx"
 PRODUCT_TASKS_PAGE_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "workbench" / "ProductTasksPage.tsx"
 PRODUCT_TASK_PANELS_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "workbench" / "ProductTaskPanels.tsx"
 EDIT_CONFIG_PAGE_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "workbench" / "EditConfigPage.tsx"
@@ -128,6 +129,38 @@ def test_draft_edit_save_page_starts_from_claimed_product_without_technical_gate
     assert "probe" not in page_source
     assert "QA" not in page_source
     for forbidden in ["QA guarded product", "测试商品", "本地商品", "创建单商品只保存任务"]:
+        assert forbidden not in page_source
+
+
+def test_template_center_page_presents_multi_template_chinese_section_workflow():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    page_source = TEMPLATE_CENTER_PAGE_TSX.read_text(encoding="utf-8")
+    route_section = app_source[app_source.index("case 'template_center'"):app_source.index("case 'dxm_access'")]
+
+    assert "TemplateCenterPage" in app_source
+    assert "<TemplateCenterPage" in route_section
+    assert "<ConfigCenter" not in route_section
+    for label in [
+        "多套模板管理与执行取值",
+        "模板清单",
+        "店铺与任务基础",
+        "类目与标题",
+        "SKU / 价格 / 库存",
+        "图片与素材",
+        "包装物流",
+        "合规 / 海关",
+        "半托管",
+        "店小秘引用模板",
+        "当前模板",
+        "保存状态",
+        "执行取值",
+        "仅本次任务使用",
+        "保存为店铺模板",
+        "另存为新模板",
+        "套用默认测试模板",
+    ]:
+        assert label in page_source
+    for forbidden in ["配置中心", "L2", "run-id", "probe", "QA guarded product"]:
         assert forbidden not in page_source
 
 
@@ -4490,8 +4523,10 @@ def test_edit_config_page_entry_is_extracted_from_workbench_modules():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     edit_config_source = EDIT_CONFIG_PAGE_TSX.read_text(encoding="utf-8")
 
-    assert "EditConfigPage as ConfigCenter" in app_source
-    assert "from './components/workbench/EditConfigPage'" in app_source
+    assert "TemplateCenterPage" in app_source
+    assert "from './components/workbench/TemplateCenterPage'" in app_source
+    assert "EditConfigPage as ConfigCenter" not in app_source
+    assert "from './components/workbench/EditConfigPage'" not in app_source
     assert "export function EditConfigPage" in edit_config_source
     assert "ConfigCenterView" in edit_config_source
     assert "return <ConfigCenterView {...props} />" in edit_config_source

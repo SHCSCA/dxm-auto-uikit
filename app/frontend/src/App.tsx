@@ -5,10 +5,10 @@ import { SafetyStatusBar } from './components/SafetyStatusBar'
 import { AgentExecutionPage as ExecutionConsole } from './components/workbench/AgentExecutionPage'
 import { AcquisitionClaimPage } from './components/workbench/AcquisitionClaimPage'
 import { DraftEditSavePage } from './components/workbench/DraftEditSavePage'
-import { EditConfigPage as ConfigCenter } from './components/workbench/EditConfigPage'
 import { HelpPage } from './components/workbench/HelpPage'
 import { HomePage as Dashboard } from './components/workbench/HomePage'
 import { ProductTasksPage as TaskCenter } from './components/workbench/ProductTasksPage'
+import { TemplateCenterPage } from './components/workbench/TemplateCenterPage'
 import {
   DxmAccessPage,
   EvidenceTimeline,
@@ -1162,7 +1162,18 @@ export default function App() {
       case 'config_compliance':
       case 'template_center':
       case 'template_management':
-        return <ConfigCenter workspace={workspace} selectedTask={selectedTask} configPreview={configPreview} configPreviewError={configPreviewError} configPreviewLoading={configPreviewLoading} onConfigSaved={async () => { await refreshWorkspace(); await refreshConfigPreview() }} onRefreshConfigPreview={async () => { await refreshConfigPreview(); await refreshWorkspace() }} onShowTasks={() => setActiveSection('product_tasks')} />
+        return (
+          <TemplateCenterPage
+            workspace={workspace}
+            selectedTask={selectedTask}
+            configPreview={configPreview}
+            configPreviewError={configPreviewError}
+            configPreviewLoading={configPreviewLoading}
+            onConfigSaved={async () => { await refreshWorkspace(); await refreshConfigPreview() }}
+            onRefreshConfigPreview={async () => { await refreshConfigPreview(); await refreshWorkspace() }}
+            onShowDraftEdit={() => setActiveSection('draft_edit_save')}
+          />
+        )
       case 'dxm_access':
         return (
           <DxmAccessPage

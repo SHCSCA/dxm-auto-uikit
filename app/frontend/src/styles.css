@@ -3166,6 +3166,123 @@ tr:last-child td {
   align-items: stretch;
 }
 
+.template-center-page .module-head h2 {
+  font-size: 20px;
+}
+
+.template-center-receipt {
+  display: block;
+  margin-top: -2px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.template-library-panel,
+.template-editor-panel {
+  align-content: start;
+}
+
+.template-library-panel label {
+  display: grid;
+  gap: 5px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.template-library-panel input,
+.template-field-grid input {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  padding: 0 10px;
+}
+
+.template-list {
+  display: grid;
+  gap: 8px;
+}
+
+.template-list button {
+  min-height: 62px;
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.template-list button.is-selected {
+  border-color: var(--green);
+  background: var(--green-soft);
+}
+
+.template-list button span {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.template-section-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.template-section-tabs button {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-alt);
+  color: var(--muted);
+  padding: 0 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.template-section-tabs button.is-active {
+  border-color: var(--brand);
+  background: #eaf2ff;
+  color: var(--brand);
+}
+
+.template-field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+}
+
+.template-field-grid label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+}
+
+.template-field-grid label span {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.template-field-grid label small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .real-task-product {
   min-height: 58px;
   display: grid;

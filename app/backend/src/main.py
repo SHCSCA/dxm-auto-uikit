@@ -57,6 +57,7 @@ from src.services.selector_profile import SelectorProfileService
 from src.services.delivery_workspace import build_delivery_workspace, l2_real_probe_gate
 from src.services.agent_console import AgentConsoleService
 from src.services.config_preview import ConfigPreviewService
+from src.services.template_center import template_center_metadata
 from src.ws import ConnectionManager
 
 @asynccontextmanager
@@ -313,6 +314,11 @@ def create_store(payload: StoreCreate):
 @app.get('/api/templates')
 def list_templates():
     return repo.list_templates()
+
+
+@app.get('/api/template-center/metadata')
+def get_template_center_metadata():
+    return template_center_metadata()
 
 
 @app.post('/api/templates')

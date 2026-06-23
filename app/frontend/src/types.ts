@@ -55,6 +55,23 @@ export type DxmReferenceTemplateSection = {
   source: 'new' | 'legacy' | 'fallback'
 }
 export type Template = { id: number; template_type: string; template_name: string; binding_scope: string; payload: Record<string, unknown>; is_enabled: boolean }
+export type TemplateCenterField = {
+  key: string
+  label: string
+  required: boolean
+  value_kind?: 'text' | 'number' | 'list' | string
+}
+export type TemplateCenterSection = {
+  id: string
+  label: string
+  template_type: string
+  fields: TemplateCenterField[]
+}
+export type TemplateCenterMetadata = {
+  sections: TemplateCenterSection[]
+  source_priority: string[]
+  actions: string[]
+}
 export type Product = { id: number; title: string; category_name: string; price: number; currency: string; sku_count: number; image_count: number; status: string; image?: { eu_outer_package_filename?: string } }
 export type TaskJob = { id: number; task_id?: number; product_id?: number | null; status: string; current_step_code?: string | null; current_step_name?: string | null; error_code?: string | null; error_message?: string | null; [key: string]: unknown }
 export type Task = { id: number; name: string; status: string; mode: string; publish_scene: string; store_id?: number | null; total_jobs: number; completed_jobs: number; failed_jobs: number; payload: { product_ids?: number[]; store_name?: string; category_name?: string; image?: { eu_outer_package_filename?: string }; [key: string]: unknown }; jobs?: TaskJob[] }
