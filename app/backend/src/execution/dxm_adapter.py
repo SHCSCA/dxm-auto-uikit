@@ -30,6 +30,43 @@ class DxmWorkflowAdapter:
     def open_draft_box(self) -> dict[str, Any]:
         return self._result('open_draft_box', self.login_flow.navigate_post_login('draft_box'))
 
+    def open_data_acquisition(self) -> dict[str, Any]:
+        return self._result('open_data_acquisition', self.login_flow.navigate_post_login('data_acquisition'))
+
+    def claim_from_data_acquisition(
+        self,
+        claim_mark: str,
+        product_query: str | None = None,
+        category_name: str | None = None,
+        store_name: str | None = None,
+    ) -> dict[str, Any]:
+        return self._result(
+            'claim_from_data_acquisition',
+            self.login_flow.claim_from_data_acquisition(
+                claim_mark=claim_mark,
+                product_query=product_query,
+                category_name=category_name,
+                store_name=store_name,
+            ),
+        )
+
+    def verify_draft_box_claim(
+        self,
+        claim_mark: str,
+        product_query: str | None = None,
+        category_name: str | None = None,
+        store_name: str | None = None,
+    ) -> dict[str, Any]:
+        return self._result(
+            'verify_draft_box_claim',
+            self.login_flow.verify_draft_box_claim(
+                claim_mark=claim_mark,
+                product_query=product_query,
+                category_name=category_name,
+                store_name=store_name,
+            ),
+        )
+
     def claim_product(
         self,
         note_text: str,

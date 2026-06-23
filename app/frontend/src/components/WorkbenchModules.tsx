@@ -2349,17 +2349,19 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
   const needsRealL2 = selectedTask ? requiresRealL2(selectedTask) : false
   const selectedTaskIsDryRun = selectedTask?.mode === 'dry_run'
   const selectedRealDxmMutationTask = Boolean(selectedTask && isRealDxmMutationTask(selectedTask))
+  const selectedTaskNeedsEditConfig = selectedTask?.mode === 'single_save'
   const dxmLoggedIn = !runtimeStatusError && DXM_LOGGED_IN_STATUSES.has(runtimeStatus?.dxmLogin?.status ?? '')
   const selectedTaskIsUnreleasedRealMode = selectedTask ? isUnreleasedRealDxmMutationTask(selectedTask) : false
   const selectedTaskCompleted = selectedTask?.status === 'completed'
   const selectedTaskNotDraft = Boolean(selectedTask && selectedTask.status !== 'draft')
   const l2BlocksStart = needsRealL2 && l2Gate?.status !== 'passed'
-  const l3BlocksStart = needsRealL2 && l3Gate?.status === 'blocked'
+  const l3BlocksStart = selectedTaskNeedsEditConfig && needsRealL2 && l3Gate?.status === 'blocked'
   const loginBlocksStart = selectedRealDxmMutationTask && !dxmLoggedIn
   const configPreviewForSelectedTask = selectedTask && configPreview?.taskId === selectedTask.id ? configPreview : null
   const configPreviewTaskMismatch = Boolean(selectedTask && configPreview && configPreview.taskId !== selectedTask.id)
-  const configUnknownBlocksStart = selectedRealDxmMutationTask && !configPreviewForSelectedTask && !configPreviewLoading
-  const configBlocksStart = Boolean(selectedTask && isRealDxmMutationTask(selectedTask) && configPreviewForSelectedTask && !configPreviewForSelectedTask.ok)
+  const configPreviewLoadingBlocksStart = Boolean(selectedTaskNeedsEditConfig && configPreviewLoading)
+  const configUnknownBlocksStart = Boolean(selectedTaskNeedsEditConfig && !configPreviewForSelectedTask && !configPreviewLoading)
+  const configBlocksStart = Boolean(selectedTaskNeedsEditConfig && configPreviewForSelectedTask && !configPreviewForSelectedTask.ok)
   const l2DiagnosticSummaries = summarizeL2Diagnostics(l2Gate)
   const selectedStore = uniqueStoreOptions.find((store) => String(store.id) === draftStoreId)
   const draftProductIdSet = new Set(draftProductIds)
@@ -2408,8 +2410,8 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
   const hiddenTaskCount = Math.max(workspace.tasks.length - visibleTaskRows.length, 0)
   const canToggleTaskHistory = workspace.tasks.length > visibleTaskRows.length || showAllTasks
   const canCreateRealTask = Boolean(selectedStore && selectedDraftProducts.length > 0 && !busy && !storeBlocksSingleSave && !singleSaveProductCountInvalid)
-  const needsSingleSaveRecovery = Boolean(selectedTask && !selectedTaskNotDraft && (selectedTaskIsUnreleasedRealMode || loginBlocksStart || configUnknownBlocksStart || configPreviewLoading || configBlocksStart || l2BlocksStart || l3BlocksStart))
-  const startDisabled = busy || !selectedTask || selectedTaskNotDraft || selectedTaskIsUnreleasedRealMode || loginBlocksStart || configUnknownBlocksStart || configPreviewLoading || configBlocksStart || l2BlocksStart || l3BlocksStart
+  const needsSingleSaveRecovery = Boolean(selectedTask && !selectedTaskNotDraft && (selectedTaskIsUnreleasedRealMode || loginBlocksStart || configUnknownBlocksStart || configPreviewLoadingBlocksStart || configBlocksStart || l2BlocksStart || l3BlocksStart))
+  const startDisabled = busy || !selectedTask || selectedTaskNotDraft || selectedTaskIsUnreleasedRealMode || loginBlocksStart || configUnknownBlocksStart || configPreviewLoadingBlocksStart || configBlocksStart || l2BlocksStart || l3BlocksStart
   const startLabel = !selectedTask
     ? '请选择任务'
     : selectedTask.status === 'completed'
@@ -2432,7 +2434,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
                 ? '配置检查接口不可用'
               : configUnknownBlocksStart
                 ? '先检查本次任务配置'
-                : configPreviewLoading
+                : configPreviewLoadingBlocksStart
                   ? '正在检查配置，稍候启动'
                   : configBlocksStart
                     ? '配置未完成，禁止启动'
@@ -2440,6 +2442,8 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
                       ? l2StartLabel(l2Gate?.status)
                       : l3BlocksStart
                         ? '人工确认未完成，禁止启动'
+                        : selectedTask?.mode === 'claim_only'
+                          ? '启动采集认领'
                         : needsApproval
                           ? '批准并启动单商品只保存'
                           : needsRealL2
@@ -2660,7 +2664,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
           <div className="gate-note gate-note--danger">
             <strong>真实保存已阻断</strong>
             <span>{humanGateDetail(l2Gate?.detail) ?? '需要商品采集页与草稿箱页两个真实只读检查均通过。'}</span>
-            <span>真实只读检查未通过或人工确认未完成前，不启动认领、批量保存或真实保存。</span>
+            <span>真实只读检查通过后才启动采集认领；人工确认未完成前不启动单商品只保存；批量保存当前未开放。</span>
             <div className="next-step-actions">
               <button className="button button--secondary" type="button" onClick={onShowConsole}>查看阻断说明</button>
               <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看评审与检查计划</button>
@@ -2678,7 +2682,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
         )}
         {!selectedTaskCompleted && needsApproval && !selectedTaskNotDraft && (
           <div className="gate-note">
-            <span>单商品只保存会先请求后端批准令牌，再启动真实浏览器保存；认领和批量保存当前未开放。</span>
+            <span>采集认领可直接启动第一段流程；单商品只保存会先请求后端批准令牌；批量保存当前未开放。</span>
             <L3ApprovalInlineForm
               approvedBy={l3ApprovedBy}
               busy={busy || startDisabled}
@@ -2940,11 +2944,11 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
                 label="单商品只保存"
                 status={l3Gate?.status ?? 'not_run'}
                 detail={l3Gate?.status === 'blocked'
-                  ? '真实只读检查未通过或人工确认未完成前，不启动认领、批量保存或真实保存。'
+                  ? '真实只读检查通过后才启动采集认领；人工确认未完成前不启动单商品只保存；批量保存当前未开放。'
                   : '真实写操作仍需要人工批准令牌；待批准不等于已通过。'}
               />
               <div className="gate-note">
-                当前按钮策略：真实只读检查未通过或人工确认未完成时保持阻断；单商品只保存仍需后端人工批准；认领和批量保存当前未开放。
+                当前按钮策略：真实只读检查未通过时保持阻断；采集认领可启动第一段流程；单商品只保存仍需后端人工批准；批量保存当前未开放。
               </div>
             </div>
           </details>
@@ -5245,7 +5249,7 @@ function buildConsolePrimaryPath({
       code: 'unreleased',
       title: '当前模式未放行',
       reason: `${humanTaskModeLabel(selectedTask.mode)} 当前未放行。`,
-      detail: '认领、批量保存和无人值守仍需单独验收；当前只开放单商品只保存路径。',
+      detail: '批量保存和无人值守仍需单独验收；当前开放采集认领和单商品只保存路径。',
       next: '回到选择商品页创建单商品只保存任务',
       ctaLabel: '创建单商品只保存任务',
       action: 'tasks',
@@ -6118,7 +6122,7 @@ function numberFromUnknown(value: unknown) {
 }
 
 export function requiresManualApproval(task: Task) {
-  return isReleasedRealDxmMutationTask(task)
+  return task.mode === 'single_save'
 }
 
 function requiresRealL2(task: Task) {
@@ -6159,11 +6163,11 @@ function isStartableSingleSaveTask(task: Task) {
 }
 
 function isReleasedRealDxmMutationTask(task: Task) {
-  return task.mode === 'single_save'
+  return task.mode === 'claim_only' || task.mode === 'single_save'
 }
 
 function isUnreleasedRealDxmMutationTask(task: Task) {
-  return task.mode === 'claim_only' || task.mode === 'batch_save'
+  return task.mode === 'batch_save'
 }
 
 function isRealDxmMutationTask(task: Task) {
@@ -6174,7 +6178,7 @@ function humanTaskModeLabel(mode?: string | null) {
   const labels: Record<string, string> = {
     probe: '真实只读检查',
     single_save: '单商品只保存',
-    claim_only: '认领未开放',
+    claim_only: '采集认领',
     batch_save: '批量保存未开放',
     dry_run: '开发自检',
   }

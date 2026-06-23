@@ -59,6 +59,7 @@ def _create_task(
     approval: dict | None = None,
     product_title: str = "ACG Stand Product",
     product_status: str = "claimed_to_draft",
+    publish_scene: str = "SMT_SEMI_MANAGED_SAVE_ONLY",
 ):
     store = repo.create_store(store_name, "AliExpress")
     product = repo.create_product(
@@ -82,10 +83,23 @@ def _create_task(
             "name": "guarded task",
             "store_id": store["id"],
             "mode": mode,
-            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "publish_scene": publish_scene,
             "claim_mark": "AI认领",
             "product_ids": [product["id"]],
             "payload": payload,
+        }
+    )
+
+
+def _create_claim_request(repo: Repository, *, store_name: str = "Dang Kang"):
+    store = repo.create_store(store_name, "AliExpress")
+    return repo.create_acquisition_claim_request(
+        {
+            "store_id": store["id"],
+            "keyword": "Hazbin Hotel 立牌",
+            "category_name": "立牌类谷子",
+            "claim_mark": "AI认领",
+            "template_id": None,
         }
     )
 
@@ -231,7 +245,7 @@ def test_main_runner_reuses_login_flow_executor_for_thread_bound_playwright():
     assert "workflow_executor=login_flow_executor" in runner_section
 
 
-def test_create_task_api_rejects_unreleased_real_modes(tmp_path, monkeypatch):
+def test_create_task_api_rejects_unreleased_or_wrong_scene_real_modes(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     store = repo.create_store("Dang Kang", "AliExpress")
     product = repo.create_product(
@@ -247,20 +261,63 @@ def test_create_task_api_rejects_unreleased_real_modes(tmp_path, monkeypatch):
         }
     )
 
-    for mode in ("claim_only", "batch_save"):
-        response = client.post(
-            "/api/tasks",
-            json={
-                "name": f"blocked {mode}",
-                "store_id": store["id"],
-                "mode": mode,
-                "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
-                "product_ids": [product["id"]],
-            },
-        )
+    claim_response = client.post(
+        "/api/tasks",
+        json={
+            "name": "wrong scene claim",
+            "store_id": store["id"],
+            "mode": "claim_only",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "product_ids": [product["id"]],
+        },
+    )
+    assert claim_response.status_code == 403
+    assert "claim-to-draft scene" in claim_response.json()["detail"]
 
-        assert response.status_code == 403
-        assert "Only controlled single_save is released" in response.json()["detail"]
+    batch_response = client.post(
+        "/api/tasks",
+        json={
+            "name": "blocked batch",
+            "store_id": store["id"],
+            "mode": "batch_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "product_ids": [product["id"]],
+        },
+    )
+    assert batch_response.status_code == 403
+    assert "Only controlled claim_only and single_save are released" in batch_response.json()["detail"]
+
+
+def test_create_task_api_rejects_claim_only_with_existing_product_ids(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    store = repo.create_store("Dang Kang", "AliExpress")
+    product = repo.create_product(
+        {
+            "title": "ACG Stand Product",
+            "source": "dxm_data_acquisition",
+            "status": "claimed_to_draft",
+            "category_name": "立牌类谷子",
+            "price": 7.01,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {},
+        }
+    )
+
+    response = client.post(
+        "/api/tasks",
+        json={
+            "name": "wrong claim task",
+            "store_id": store["id"],
+            "mode": "claim_only",
+            "publish_scene": "CONTROLLED_CLAIM_TO_DRAFT_ONLY",
+            "product_ids": [product["id"]],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "without existing product_ids" in response.json()["detail"]
 
 
 def test_start_single_save_rejects_historical_multiple_products(tmp_path, monkeypatch):
@@ -319,19 +376,63 @@ def test_single_save_start_rejects_legacy_non_claimed_product_before_real_browse
     assert runner.calls == []
 
 
-def test_claim_only_start_requires_same_real_mutation_gate(tmp_path, monkeypatch):
+def test_claim_only_start_requires_l2_readonly_gate(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "not_run"})
-    task = _create_task(repo, mode="claim_only")
+    task = _create_claim_request(repo)
 
     response = client.post(f"/api/tasks/{task['id']}/start", json={})
 
     assert response.status_code == 403
-    detail = response.json()["detail"].lower()
-    assert "controlled single_save" in detail
-    assert "released" in detail
+    assert "L2 readonly probe gate is not passed: not_run" in response.json()["detail"]
+    assert runner.calls == []
+
+
+def test_claim_only_start_is_released_for_controlled_acquisition_claim(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_claim_request(repo)
+
+    response = client.post(f"/api/tasks/{task['id']}/start", json={})
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert runner.calls == [task["id"]]
+
+
+def test_claim_only_start_rejects_existing_product_job_shape(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_task(
+        repo,
+        mode="claim_only",
+        publish_scene="CONTROLLED_CLAIM_TO_DRAFT_ONLY",
+    )
+
+    response = client.post(f"/api/tasks/{task['id']}/start", json={})
+
+    assert response.status_code == 409
+    assert "cannot use existing product_ids" in response.json()["detail"]
+    assert runner.calls == []
+
+
+def test_claim_only_start_rejects_unreleased_store(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_claim_request(repo, store_name="Other Store")
+
+    response = client.post(f"/api/tasks/{task['id']}/start", json={})
+
+    assert response.status_code == 403
+    assert "Dang Kang store" in response.json()["detail"]
     assert runner.calls == []
 
 
@@ -341,7 +442,7 @@ def test_unreleased_real_modes_reject_manual_approval(tmp_path, monkeypatch):
 
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
 
-    for mode in ("claim_only", "batch_save"):
+    for mode in ("batch_save",):
         task = _create_task(repo, mode=mode)
 
         response = client.post(
@@ -351,7 +452,7 @@ def test_unreleased_real_modes_reject_manual_approval(tmp_path, monkeypatch):
 
         assert response.status_code == 403
         detail = response.json()["detail"].lower()
-        assert "controlled single_save" in detail
+        assert "controlled claim_only and single_save" in detail
         assert "released" in detail
 
 
@@ -361,7 +462,7 @@ def test_unreleased_real_modes_cannot_start_after_approval_and_l2_passed(tmp_pat
 
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
 
-    for mode in ("claim_only", "batch_save"):
+    for mode in ("batch_save",):
         task = _create_task(repo, mode=mode)
         _approve_task(repo, task["id"], f"{mode}-token")
 
@@ -377,7 +478,7 @@ def test_unreleased_real_modes_cannot_start_after_approval_and_l2_passed(tmp_pat
 
         assert response.status_code == 403
         detail = response.json()["detail"].lower()
-        assert "controlled single_save" in detail
+        assert "controlled claim_only and single_save" in detail
         assert "released" in detail
         assert task["id"] not in runner.calls
     assert runner.calls == []
@@ -773,13 +874,51 @@ def test_agent_console_execution_browser_rejects_unreleased_and_non_real_modes(t
 
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
 
-    for mode in ("dry_run", "claim_only", "batch_save"):
+    for mode in ("dry_run", "batch_save"):
         task = _create_task(repo, mode=mode)
 
         response = client.post("/api/agent-console/start", json={"task_id": task["id"], "launch_browser": True})
 
         assert response.status_code == 403
-        assert "Only controlled single_save is released" in response.json()["detail"]
+        assert "Only controlled claim_only and single_save are released" in response.json()["detail"]
+
+
+def test_agent_console_execution_browser_allows_controlled_claim_only_task(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    class DummyAgentConsoleService:
+        def start(self, **payload):
+            return {"active": True, **payload}
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    monkeypatch.setattr(main, "agent_console_service", DummyAgentConsoleService())
+    task = _create_claim_request(repo)
+
+    response = client.post("/api/agent-console/start", json={"task_id": task["id"], "launch_browser": True})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["active"] is True
+    assert payload["task_id"] == task["id"]
+
+
+def test_agent_console_execution_browser_rejects_claim_only_unreleased_store(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    class DummyAgentConsoleService:
+        def start(self, **payload):
+            raise AssertionError("agent console should not start")
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    monkeypatch.setattr(main, "agent_console_service", DummyAgentConsoleService())
+    task = _create_claim_request(repo, store_name="Other Store")
+
+    response = client.post("/api/agent-console/start", json={"task_id": task["id"], "launch_browser": True})
+
+    assert response.status_code == 403
+    assert "Dang Kang store" in response.json()["detail"]
 
 
 def test_runtime_logs_tail_known_log_sources(tmp_path, monkeypatch):
@@ -2399,7 +2538,7 @@ def test_direct_real_dxm_mutation_rejects_unreleased_modes_even_after_l2_and_app
         "/api/dxm/workflow/claim-product",
         "/api/dxm/workflow/open-editor",
     )
-    for mode in ("claim_only", "batch_save"):
+    for mode in ("batch_save",):
         task = _create_task(repo, mode=mode)
         token = f"{mode}-direct-token"
         _approve_task(repo, task["id"], token)
@@ -2420,7 +2559,7 @@ def test_direct_real_dxm_mutation_rejects_unreleased_modes_even_after_l2_and_app
 
             assert response.status_code == 403
             detail = response.json()["detail"].lower()
-            assert "controlled single_save" in detail
+            assert "controlled claim_only and single_save" in detail
             assert "released" in detail
     assert flow.draft_box_actions == []
 

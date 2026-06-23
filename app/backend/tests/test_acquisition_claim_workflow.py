@@ -43,6 +43,9 @@ def test_acquisition_claim_request_creates_claim_stage_task(tmp_path, monkeypatc
 
     task = repo.get_task_private(data["task_id"])
     assert task["mode"] == "claim_only"
+    assert task["total_jobs"] == 1
+    assert len(task["jobs"]) == 1
+    assert task["jobs"][0]["product_id"] is None
     assert task["payload"]["stage"] == "pending_acquisition_claim"
     assert task["payload"]["status"] == "pending"
 

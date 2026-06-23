@@ -150,6 +150,17 @@ class Repository:
             'product_ids': [],
             'payload': payload,
         })
+        now = now_iso()
+        with connection() as conn:
+            conn.execute(
+                "UPDATE tasks SET total_jobs=1, updated_at=? WHERE id=?",
+                (now, task['id']),
+            )
+            conn.execute(
+                "INSERT INTO jobs (task_id, product_id, status, created_at, updated_at) VALUES (?, NULL, 'pending', ?, ?)",
+                (task['id'], now, now),
+            )
+        task = self.get_task_private(task['id'])
         task['payload'] = self._public_task_payload(task.get('payload') or {})
         return task
 

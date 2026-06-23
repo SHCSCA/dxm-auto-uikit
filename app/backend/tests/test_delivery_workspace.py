@@ -411,7 +411,7 @@ def test_delivery_workspace_exposes_unreleased_real_mode_release_plan(tmp_path, 
 
     assert response.status_code == 200
     plan = response.json()["real_mode_release_plan"]
-    assert plan["scope"] == "controlled_single_save_only"
+    assert plan["scope"] == "controlled_claim_and_single_save"
     assert plan["batch_unattended_publish_allowed"] is False
     assert plan["publish_allowed"] is False
     modes = {item["mode"]: item for item in plan["modes"]}
@@ -424,28 +424,31 @@ def test_delivery_workspace_exposes_unreleased_real_mode_release_plan(tmp_path, 
     assert single_save_checklist["l2_dual_target"]["blocker"] == "fresh L2 dual-target readonly proof is missing or stale"
     assert single_save_checklist["l3_single_canary"]["status"] == "passed"
     assert "historical single_save canary" in single_save_checklist["l3_single_canary"]["label"]
-    assert modes["claim_only"]["status"] == "blocked_unreleased"
+    assert modes["claim_only"]["status"] == "blocked_stale_l2"
     assert modes["claim_only"]["allowed"] is False
-    assert modes["claim_only"]["release_scope"] == "not released"
+    assert modes["claim_only"]["release_scope"] == "controlled claim to draft box"
     assert modes["batch_save"]["status"] == "blocked_unreleased"
     assert modes["batch_save"]["allowed"] is False
     assert modes["batch_save"]["release_scope"] == "not released"
-    assert any("claim ownership proof" in item for item in modes["claim_only"]["required_evidence"])
+    assert any("claim to draft box proof" in item for item in modes["claim_only"]["required_evidence"])
     assert any("batch size limit" in item for item in modes["batch_save"]["required_evidence"])
     assert any("rollback" in item for item in modes["batch_save"]["required_controls"])
-    assert any("cannot reuse single_save" in item for item in modes["claim_only"]["blockers"])
+    assert modes["claim_only"]["blockers"]
     assert any("cannot reuse single_save" in item for item in modes["batch_save"]["blockers"])
-    for mode in ("claim_only", "batch_save"):
+    for mode in ("batch_save",):
         checklist = modes[mode]["readiness_checklist"]
         assert checklist
         assert all({"id", "label", "required", "status", "evidence_source", "blocker", "detail"} <= set(item) for item in checklist)
         assert all(item["status"] == "missing" for item in checklist)
         assert any(item["blocker"] == "cannot reuse single_save evidence" for item in checklist)
-    assert any(item["id"] == "claim_ownership_proof" for item in modes["claim_only"]["readiness_checklist"])
+    claim_checklist = {item["id"]: item for item in modes["claim_only"]["readiness_checklist"]}
+    assert claim_checklist["l2_dual_target"]["status"] == "blocked"
+    assert claim_checklist["claim_ownership_proof"]["status"] == "blocked"
+    assert claim_checklist["no_editor_or_save"]["status"] == "passed"
     assert any(item["id"] == "batch_size_limit" for item in modes["batch_save"]["readiness_checklist"])
 
 
-def test_delivery_workspace_delivery_scope_remains_controlled_single_save_only(tmp_path, monkeypatch):
+def test_delivery_workspace_delivery_scope_releases_claim_and_single_save_only(tmp_path, monkeypatch):
     l2_dir = tmp_path / "l2_readonly_probe"
     _write_l2_probe_result(
         l2_dir,
@@ -468,14 +471,14 @@ def test_delivery_workspace_delivery_scope_remains_controlled_single_save_only(t
     data = response.json()
     plan = data["real_mode_release_plan"]
     modes = {item["mode"]: item for item in plan["modes"]}
-    assert plan["scope"] == "controlled_single_save_only"
+    assert plan["scope"] == "controlled_claim_and_single_save"
     assert plan["publish_allowed"] is False
     assert plan["batch_unattended_publish_allowed"] is False
     assert modes["single_save"]["allowed"] is True
     assert modes["single_save"]["status"] == "released_controlled"
     assert modes["single_save"]["release_scope"] == "single product save-only canary"
-    assert modes["claim_only"]["allowed"] is False
-    assert modes["claim_only"]["status"] == "blocked_unreleased"
+    assert modes["claim_only"]["allowed"] is True
+    assert modes["claim_only"]["status"] == "released_controlled"
     assert modes["batch_save"]["allowed"] is False
     assert modes["batch_save"]["status"] == "blocked_unreleased"
     assert data["publish_guard_state"]["publish_allowed"] is False

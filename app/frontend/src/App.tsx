@@ -35,8 +35,8 @@ const DXM_TARGET_LABELS: Record<keyof typeof DXM_TARGET_URLS, string> = {
 }
 const AGENT_CONSOLE_NAVIGATION_SETTLE_MS = 2500
 const REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save', 'batch_save'])
-const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['single_save'])
-const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'batch_save'])
+const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save'])
+const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['batch_save'])
 const CLAIMED_DRAFT_PRODUCT_STATUSES = new Set(['claimed_to_draft', 'ready_for_edit'])
 const DXM_READY_SESSION_STATUSES = new Set(['login_success', 'logged_in', 'not_published_verified', 'workflow_navigation'])
 const L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
@@ -711,7 +711,7 @@ export default function App() {
     try {
       if (REAL_DXM_MUTATION_MODES.has(selectedTask.mode)) {
         if (UNRELEASED_REAL_DXM_MUTATION_MODES.has(selectedTask.mode)) {
-          setOperationError('当前仅开放单商品只保存；认领和批量保存必须重新验收后再放行。')
+          setOperationError('当前仅开放采集认领和单商品只保存；批量保存必须重新验收后再放行。')
           return
         }
         if (!RELEASED_REAL_DXM_MUTATION_MODES.has(selectedTask.mode)) {
@@ -724,6 +724,12 @@ export default function App() {
         if (!DXM_READY_SESSION_STATUSES.has(dxmLoginStatus)) {
           setOperationError(`请先完成真实 DXM 登录；当前登录状态：${dxmLoginStatus || '未知'}。`)
           setActiveSection('dxm_access')
+          return
+        }
+        if (selectedTask.mode === 'claim_only') {
+          await postJson(`/api/tasks/${selectedTask.id}/start`, {})
+          setActiveSection('acquisition_claim')
+          await refreshWorkspace()
           return
         }
         const latestConfigPreview = await refreshConfigPreview(selectedTask.id)

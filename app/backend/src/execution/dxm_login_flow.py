@@ -35,6 +35,10 @@ DRAFT_ACTION_SCREENSHOT_MAP = {
     'remark': SCREENSHOT_DIR / 'dianxiaomi_draft_box_remark.png',
     'edit': SCREENSHOT_DIR / 'dianxiaomi_draft_box_edit.png',
 }
+ACQUISITION_ACTION_SCREENSHOT_MAP = {
+    'claim': SCREENSHOT_DIR / 'dianxiaomi_data_acquisition_claim.png',
+    'verify': SCREENSHOT_DIR / 'dianxiaomi_draft_box_claim_verified.png',
+}
 EDITOR_ACTION_SCREENSHOT_MAP = {
     'fill_editor_required_defaults': SCREENSHOT_DIR / 'dianxiaomi_fill_editor_required_defaults.png',
     'verify_edit_ownership': SCREENSHOT_DIR / 'dianxiaomi_verify_edit_ownership.png',
@@ -349,6 +353,94 @@ class DxmLoginFlow:
         self._write_state(state)
         return state
 
+    def claim_from_data_acquisition(
+        self,
+        claim_mark: str,
+        product_query: str | None = None,
+        category_name: str | None = None,
+        store_name: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            result = self._perform_data_acquisition_claim(
+                claim_mark=claim_mark,
+                product_query=product_query,
+                category_name=category_name,
+                store_name=store_name,
+            )
+        except Exception as exc:
+            state = self._error_state(
+                stage='data_acquisition_claim_failed',
+                label='认领失败',
+                message=f'从数据采集认领到采集箱失败：{exc}',
+                next_action='请确认真实浏览器停留在店小秘数据采集页，商品筛选唯一，再重新认领。',
+            )
+            self._write_state(state)
+            return state
+
+        state = {
+            'stage': 'data_acquisition_claim',
+            'label': '已提交认领',
+            'message': result.get('message') or '已在真实店小秘数据采集页提交认领。',
+            'next_action': '继续打开采集箱确认该商品已经出现。',
+            'requires_user_action': False,
+            'page_title': result.get('page_title'),
+            'page_url': result.get('page_url'),
+            'screenshot_url': result.get('screenshot_url'),
+            'updated_at': now_iso(),
+            'current_nav': 'data_acquisition',
+            'claim_mark': claim_mark,
+            'product_query': product_query,
+            'category_name': category_name,
+            'store_name': store_name,
+            'claimed_product': result.get('claimed_product'),
+        }
+        self._write_state(state)
+        return state
+
+    def verify_draft_box_claim(
+        self,
+        claim_mark: str,
+        product_query: str | None = None,
+        category_name: str | None = None,
+        store_name: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            result = self._verify_draft_box_claim(
+                claim_mark=claim_mark,
+                product_query=product_query,
+                category_name=category_name,
+                store_name=store_name,
+            )
+        except Exception as exc:
+            state = self._error_state(
+                stage='draft_box_claim_verify_failed',
+                label='采集箱确认失败',
+                message=f'确认采集箱商品失败：{exc}',
+                next_action='请打开采集箱检查认领商品是否出现，必要时回到数据采集重新认领。',
+            )
+            self._write_state(state)
+            return state
+
+        state = {
+            'stage': 'draft_box_claim_verified',
+            'label': '采集箱已确认',
+            'message': '已确认真实商品进入采集箱。',
+            'next_action': '可以进入编辑保存，选择模板后只保存。',
+            'requires_user_action': False,
+            'page_title': result.get('page_title'),
+            'page_url': result.get('page_url'),
+            'screenshot_url': result.get('screenshot_url'),
+            'updated_at': now_iso(),
+            'current_nav': 'draft_box',
+            'claim_mark': claim_mark,
+            'product_query': product_query,
+            'category_name': category_name,
+            'store_name': store_name,
+            'claimed_product': result.get('claimed_product'),
+        }
+        self._write_state(state)
+        return state
+
     def perform_editor_action(
         self,
         action: str,
@@ -629,6 +721,348 @@ class DxmLoginFlow:
             'note_verified': note_result.get('verified'),
             'target_row_text': note_result.get('rowText') or row_info.get('rowText'),
             'target_source_urls': row_info.get('sourceUrls', []),
+        }
+
+    def _perform_data_acquisition_claim(
+        self,
+        claim_mark: str,
+        product_query: str | None = None,
+        category_name: str | None = None,
+        store_name: str | None = None,
+    ) -> dict[str, Any]:
+        page = self._ensure_page_with_cookies()
+        page.goto(WORKFLOW_TARGETS['data_acquisition']['url'], wait_until='domcontentloaded', timeout=45000)
+        self._wait_for_page_ready(
+            page,
+            WORKFLOW_READY_TERMS['data_acquisition'],
+            label='数据采集',
+            timeout=60000,
+        )
+        self._dismiss_blocking_modals(page)
+        self._search_data_acquisition(
+            page,
+            product_query=product_query,
+            category_name=category_name,
+            store_name=store_name,
+        )
+        target = self._find_data_acquisition_claim_target(
+            page,
+            product_query=product_query,
+            category_name=category_name,
+            store_name=store_name,
+        )
+        if not target.get('ok'):
+            raise RuntimeError(target.get('reason') or '未找到可认领的采集商品')
+
+        self._click_rect_center(page, target['actionRect'])
+        page.wait_for_timeout(1500)
+        dialog_result = self._complete_data_acquisition_claim_dialog(
+            page,
+            category_name=category_name,
+            store_name=store_name,
+        )
+        if not dialog_result.get('ok'):
+            raise RuntimeError(dialog_result.get('reason') or '认领确认失败')
+        page.wait_for_timeout(2500)
+        self._dismiss_blocking_modals(page)
+        screenshot_path = ACQUISITION_ACTION_SCREENSHOT_MAP['claim']
+        page.screenshot(path=str(screenshot_path), full_page=True)
+        claimed_product = {
+            'title': target.get('title') or product_query or category_name or '店小秘采集商品',
+            'category_name': target.get('categoryName') or category_name,
+            'source_url': (target.get('sourceUrls') or [None])[0],
+            'row_text': target.get('rowText'),
+        }
+        return {
+            'page_title': page.title(),
+            'page_url': page.url,
+            'screenshot_url': self._artifact_url(screenshot_path),
+            'message': '已在数据采集页提交认领到采集箱。',
+            'claim_mark': claim_mark,
+            'product_query': product_query,
+            'category_name': category_name,
+            'store_name': store_name,
+            'claimed_product': claimed_product,
+            'claim_target': target,
+            'claim_dialog': dialog_result,
+            'published': False,
+        }
+
+    def _search_data_acquisition(
+        self,
+        page: Page,
+        product_query: str | None = None,
+        category_name: str | None = None,
+        store_name: str | None = None,
+    ) -> None:
+        query = str(product_query or category_name or '').strip()
+        if not query and not store_name:
+            return
+        result = page.evaluate(r'''({query, store}) => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
+          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          if (store) {
+            const storeTarget = Array.from(document.querySelectorAll('button,a,span,div,li'))
+              .filter(visible)
+              .find(el => norm(textOf(el)) === norm(store) || norm(textOf(el)).includes(norm(store)));
+            if (storeTarget) storeTarget.dispatchEvent(new MouseEvent('click', {bubbles:true}));
+          }
+          let filled = false;
+          if (query) {
+            const inputs = Array.from(document.querySelectorAll('input, textarea')).filter(el => {
+              if (!visible(el) || el.disabled || el.readOnly) return false;
+              const r = el.getBoundingClientRect();
+              return r.width > 140 && r.height > 18;
+            });
+            const input = inputs.find(el => {
+              const label = norm([el.placeholder, el.getAttribute('aria-label'), el.getAttribute('name')].join(' '));
+              return label.includes('搜索') || label.includes('标题') || label.includes('产品') || label.includes('关键词') || label.includes('内容');
+            }) || inputs[0];
+            if (input) {
+              input.value = query;
+              input.dispatchEvent(new Event('input', {bubbles:true}));
+              input.dispatchEvent(new Event('change', {bubbles:true}));
+              filled = true;
+            }
+          }
+          const search = Array.from(document.querySelectorAll('button,a,span,div'))
+            .filter(visible)
+            .find(el => ['搜索','查询','筛选'].includes(norm(textOf(el))));
+          if (search) search.dispatchEvent(new MouseEvent('click', {bubbles:true}));
+          return {filled, clicked_search: Boolean(search)};
+        }''', {'query': query, 'store': store_name})
+        if result.get('filled') or result.get('clicked_search') or store_name:
+            page.wait_for_timeout(1800)
+            self._wait_for_page_ready(
+                page,
+                ['数据采集', '认领', '采集箱', '暂无数据'],
+                label='数据采集搜索结果',
+                timeout=30000,
+            )
+            self._dismiss_blocking_modals(page)
+
+    def _find_data_acquisition_claim_target(
+        self,
+        page: Page,
+        product_query: str | None = None,
+        category_name: str | None = None,
+        store_name: str | None = None,
+    ) -> dict[str, Any]:
+        return page.evaluate(r'''({productQuery, categoryName, storeName}) => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const rectOf = (el) => {
+            const r = el.getBoundingClientRect();
+            return {x:r.x, y:r.y, w:r.width, h:r.height};
+          };
+          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
+          const forbidden = ['发布','立即发布','继续发布','保存并发布','保存并移入待发布','移入待发布','批量发布'];
+          const sourceUrls = (row) => Array.from(row.querySelectorAll('a[href]'))
+            .map(a => String(a.href || a.getAttribute('href') || ''))
+            .filter(url => url.includes('detail.1688.com') || url.includes('yangkeduo.com') || url.includes('http'));
+          const rows = Array.from(document.querySelectorAll(
+            'tr.vxe-body--row, tr.ant-table-row, tr.el-table__row, tr, .ant-table-row, .el-table__row, .vxe-body--row, [class*="table-row"], [class*="list-item"]'
+          )).filter(visible);
+          const query = String(productQuery || '').trim();
+          const category = String(categoryName || '').trim();
+          const store = String(storeName || '').trim();
+          const candidates = [];
+          rows.forEach((row, index) => {
+            const rowText = textOf(row);
+            if (!rowText || forbidden.some(term => norm(rowText).includes(norm(term)))) return;
+            if (store && rowText.includes(store) === false && norm(rowText).includes(norm(store)) === false) {
+              // 数据采集页通常不直接展示店铺，店铺可能在认领弹窗里选择，因此不强制过滤。
+            }
+            const actions = Array.from(row.querySelectorAll('button,a,[role="button"],span,div'))
+              .filter(visible)
+              .map(el => ({
+                el,
+                text: norm(textOf(el)),
+                title: norm([el.getAttribute('title'), el.getAttribute('aria-label')].join(' ')),
+                cls: String(el.className || ''),
+                disabled: Boolean(el.disabled || el.getAttribute('aria-disabled') === 'true' || String(el.className || '').includes('disabled')),
+                rect: rectOf(el),
+              }))
+              .filter(item => {
+                const hay = `${item.text} ${item.title} ${item.cls}`;
+                if (item.disabled) return false;
+                if (forbidden.some(term => norm(hay).includes(norm(term)))) return false;
+                if (item.text.includes('已认领') || item.text.includes('已领取')) return false;
+                return item.text === '认领'
+                  || item.text === '领取'
+                  || item.text.includes('认领到采集箱')
+                  || item.text.includes('领取到采集箱')
+                  || item.title.includes('认领')
+                  || item.title.includes('领取');
+              })
+              .sort((a, b) => (a.rect.w * a.rect.h) - (b.rect.w * b.rect.h));
+            if (!actions.length) return;
+            const compact = norm(rowText);
+            const queryMatched = query ? (rowText.includes(query) || compact.includes(norm(query))) : false;
+            const categoryMatched = category ? (rowText.includes(category) || compact.includes(norm(category))) : false;
+            if (query && !queryMatched) return;
+            if (!query && category && !categoryMatched) return;
+            const lines = rowText.split(/\s{2,}|\n/).map(s => s.trim()).filter(Boolean);
+            candidates.push({
+              ok: true,
+              rowIndex: index,
+              rowText: rowText.slice(0, 900),
+              title: lines.find(line => !/(认领|领取|采集箱|操作|来源|店铺)/.test(line)) || query || category || rowText.slice(0, 80),
+              categoryName: categoryMatched ? category : null,
+              sourceUrls: sourceUrls(row),
+              actionText: actions[0].text || actions[0].title,
+              actionRect: actions[0].rect,
+              matchedBy: queryMatched ? 'product_query' : (categoryMatched ? 'category_name' : 'first_claimable'),
+            });
+          });
+          if (!candidates.length) {
+            return {
+              ok: false,
+              reason: query
+                ? `未找到包含“${query}”且可认领的采集商品`
+                : '未找到可认领的采集商品；请先筛选到唯一商品',
+            };
+          }
+          if (!query && candidates.length > 1) {
+            return {
+              ok: false,
+              reason: '当前采集结果不唯一，请先输入商品关键词或选择具体商品后再认领',
+              matches: candidates.slice(0, 5).map(item => ({rowIndex:item.rowIndex, rowText:item.rowText.slice(0, 260)})),
+            };
+          }
+          if (query && candidates.length > 1) {
+            const exact = candidates.filter(item => norm(item.rowText).includes(norm(query)));
+            if (exact.length === 1) return exact[0];
+            return {
+              ok: false,
+              reason: `商品关键词“${query}”匹配到多个可认领结果，请先缩小筛选范围`,
+              matches: candidates.slice(0, 5).map(item => ({rowIndex:item.rowIndex, rowText:item.rowText.slice(0, 260)})),
+            };
+          }
+          return candidates[0];
+        }''', {'productQuery': product_query, 'categoryName': category_name, 'storeName': store_name})
+
+    def _complete_data_acquisition_claim_dialog(
+        self,
+        page: Page,
+        category_name: str | None = None,
+        store_name: str | None = None,
+    ) -> dict[str, Any]:
+        return page.evaluate(r'''({categoryName, storeName}) => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
+          const forbidden = ['发布','立即发布','继续发布','保存并发布','保存并移入待发布','移入待发布','批量发布'];
+          const containers = Array.from(document.querySelectorAll('.ant-modal, .ant-modal-wrap, .el-dialog, [role="dialog"], .modal, .layui-layer'))
+            .filter(visible)
+            .filter(el => {
+              const text = textOf(el);
+              return text.includes('认领') || text.includes('领取') || text.includes('采集箱');
+            });
+          const dialog = containers[containers.length - 1];
+          if (!dialog) return {ok:true, skipped:true, reason:'未出现认领确认弹窗'};
+          const dialogText = textOf(dialog);
+          if (forbidden.some(term => norm(dialogText).includes(norm(term)))) {
+            return {ok:false, reason:'认领弹窗中检测到发布相关动作，已停止'};
+          }
+          const clickedOptions = [];
+          for (const label of [storeName, categoryName].filter(Boolean)) {
+            const option = Array.from(dialog.querySelectorAll('button,a,li,span,div,label'))
+              .filter(visible)
+              .find(el => norm(textOf(el)) === norm(label) || norm(textOf(el)).includes(norm(label)));
+            if (option) {
+              option.dispatchEvent(new MouseEvent('click', {bubbles:true}));
+              clickedOptions.push(label);
+            }
+          }
+          const buttons = Array.from(dialog.querySelectorAll('button,a,[role="button"],span,div'))
+            .filter(visible)
+            .map(el => ({
+              el,
+              text: norm(textOf(el)),
+              cls: String(el.className || ''),
+              disabled: Boolean(el.disabled || el.getAttribute('aria-disabled') === 'true' || String(el.className || '').includes('disabled')),
+            }))
+            .filter(item => !item.disabled && !forbidden.some(term => norm(`${item.text} ${item.cls}`).includes(norm(term))));
+          const submit = buttons.find(item => ['确定','确认','提交','开始认领','认领','领取'].includes(item.text))
+            || buttons.find(item => item.text.includes('认领') || item.text.includes('领取'));
+          if (!submit) {
+            return {ok:false, reason:'认领弹窗已打开，但未找到安全确认按钮', dialog_text:dialogText.slice(0, 400), clicked_options: clickedOptions};
+          }
+          submit.el.dispatchEvent(new MouseEvent('click', {bubbles:true}));
+          return {ok:true, submitted:true, submit_text:submit.text, clicked_options: clickedOptions};
+        }''', {'categoryName': category_name, 'storeName': store_name})
+
+    def _verify_draft_box_claim(
+        self,
+        claim_mark: str,
+        product_query: str | None = None,
+        category_name: str | None = None,
+        store_name: str | None = None,
+    ) -> dict[str, Any]:
+        state = self.get_state()
+        claimed = state.get('claimed_product') if isinstance(state.get('claimed_product'), dict) else {}
+        product_query = product_query or claimed.get('title')
+        category_name = category_name or claimed.get('category_name')
+        target_source_urls = [claimed.get('source_url')] if claimed.get('source_url') else []
+        page = self._ensure_page_with_cookies()
+        page.goto(WORKFLOW_TARGETS['draft_box']['url'], wait_until='domcontentloaded', timeout=45000)
+        self._wait_for_page_ready(
+            page,
+            WORKFLOW_READY_TERMS['draft_box'],
+            label='速卖通采集箱',
+            timeout=60000,
+        )
+        self._dismiss_blocking_modals(page)
+        self._search_draft_box(page, product_query=product_query, store_name=store_name)
+        try:
+            row_info = self._find_draft_box_row(
+                page,
+                product_query,
+                store_name=store_name,
+                claim_mark=claim_mark,
+                target_source_urls=target_source_urls,
+            )
+        except RuntimeError:
+            self._search_draft_box(page, product_query=category_name, store_name=store_name)
+            row_info = self._find_draft_box_row(
+                page,
+                category_name or product_query,
+                store_name=store_name,
+                target_source_urls=target_source_urls,
+            )
+        screenshot_path = ACQUISITION_ACTION_SCREENSHOT_MAP['verify']
+        page.screenshot(path=str(screenshot_path), full_page=True)
+        return {
+            'page_title': page.title(),
+            'page_url': page.url,
+            'screenshot_url': self._artifact_url(screenshot_path),
+            'product_query': product_query,
+            'category_name': category_name,
+            'store_name': store_name,
+            'claim_mark': claim_mark,
+            'target_row_text': row_info.get('rowText'),
+            'target_source_urls': row_info.get('sourceUrls', []),
+            'claimed_product': {
+                'title': product_query or claimed.get('title') or category_name or '店小秘采集商品',
+                'category_name': category_name,
+                'source_url': (row_info.get('sourceUrls') or target_source_urls or [None])[0],
+                'row_text': row_info.get('rowText'),
+            },
+            'published': False,
         }
 
     def _perform_editor_action(

@@ -44,10 +44,19 @@ V1_STEPS = [
     (StateName.RELEASE_LOCK, "释放商品归属锁", "ownership"),
 ]
 
+CLAIM_ONLY_STEPS = [
+    (StateName.PRECHECK_CONFIG, "启动前配置校验", "config"),
+    (StateName.PRECHECK_SESSION, "检查店小秘登录态", "session"),
+    (StateName.PRECHECK_PUBLISH_GUARD, "发布隔离预检", "publish_guard"),
+    (StateName.OPEN_DATA_ACQUISITION, "打开数据采集", "navigation"),
+    (StateName.CLAIM_TO_DRAFT_BOX, "认领到采集箱", "acquisition"),
+    (StateName.VERIFY_DRAFT_BOX_CLAIM, "确认采集箱商品", "acquisition"),
+]
+
 MODE_LAST_STATE = {
     "probe": StateName.PRECHECK_PUBLISH_GUARD,
     "dry_run": StateName.PRECHECK_CONFIG,
-    "claim_only": StateName.VERIFY_LIST_OWNERSHIP,
+    "claim_only": StateName.VERIFY_DRAFT_BOX_CLAIM,
     "single_save": StateName.RELEASE_LOCK,
     "batch_save": StateName.RELEASE_LOCK,
 }
@@ -73,6 +82,9 @@ HUD_PROGRESS_INDEX = {
     StateName.PRECHECK_CONFIG: 1,
     StateName.PRECHECK_SESSION: 1,
     StateName.PRECHECK_PUBLISH_GUARD: 1,
+    StateName.OPEN_DATA_ACQUISITION: 2,
+    StateName.CLAIM_TO_DRAFT_BOX: 3,
+    StateName.VERIFY_DRAFT_BOX_CLAIM: 3,
     StateName.OPEN_DRAFT_LIST: 2,
     StateName.FIND_PRODUCT: 3,
     StateName.ITEM_LOCKING: 3,
@@ -100,6 +112,9 @@ HUD_STEP_COPY = {
     StateName.PRECHECK_CONFIG: ("开始任务", "开始任务", "正在检查任务、店铺登录和只保存边界"),
     StateName.PRECHECK_SESSION: ("开始任务", "开始任务", "正在确认店小秘已经登录"),
     StateName.PRECHECK_PUBLISH_GUARD: ("开始任务", "开始任务", "正在确认本次只保存，不发布"),
+    StateName.OPEN_DATA_ACQUISITION: ("打开数据采集", "打开数据采集", "正在打开店小秘数据采集页"),
+    StateName.CLAIM_TO_DRAFT_BOX: ("认领到采集箱", "认领到采集箱", "正在把真实商品认领到采集箱"),
+    StateName.VERIFY_DRAFT_BOX_CLAIM: ("确认采集箱", "确认采集箱", "正在确认商品已经进入采集箱"),
     StateName.OPEN_DRAFT_LIST: ("打开草稿箱", "打开草稿箱", "正在打开店小秘草稿箱"),
     StateName.FIND_PRODUCT: ("查找商品", "查找商品", "正在查找本次要保存的商品"),
     StateName.ITEM_LOCKING: ("查找商品", "查找商品", "正在锁定本次商品，避免误操作其他商品"),
@@ -306,6 +321,8 @@ class V1TaskRunner:
 
                 workflow_result = await self._run_workflow_action_async(task, job, state_name, claim_mark, execution_defaults)
                 if workflow_result:
+                    if mode == "claim_only" and state_name == StateName.VERIFY_DRAFT_BOX_CLAIM:
+                        self._record_claimed_product_from_acquisition(task, workflow_result, claim_mark)
                     agent_action_event = self._sync_agent_action(
                         task,
                         job,
@@ -495,6 +512,8 @@ class V1TaskRunner:
     def _steps_for_mode(self, mode: str):
         if mode == "dry_run":
             return [V1_STEPS[0]]
+        if mode == "claim_only":
+            return CLAIM_ONLY_STEPS
         return V1_STEPS
 
     def _sync_agent_console(
@@ -750,7 +769,7 @@ class V1TaskRunner:
             return "save"
         if action_name == "fill_media_assets":
             return "upload"
-        if action_name.startswith("fill_") or action_name == "claim_product":
+        if action_name.startswith("fill_") or action_name in {"claim_product", "claim_from_data_acquisition"}:
             return "fill"
         if action_name in {"enable_semi_managed"}:
             return "select"
@@ -765,6 +784,8 @@ class V1TaskRunner:
             return "保存"
         if action_name == "claim_product":
             return "领取备注"
+        if action_name == "claim_from_data_acquisition":
+            return "认领到采集箱"
         if action_name.startswith("fill_"):
             return str(workflow_result.get("product_query") or "编辑页字段")
         if action_name.startswith("open_"):
@@ -832,7 +853,7 @@ class V1TaskRunner:
                 raise V1ExecutionError(validation["error_code"] or "E302", "启动前配置校验失败", detail)
             if mode in {"single_save", "batch_save"} and task.get("publish_scene") != "SMT_SEMI_MANAGED_SAVE_ONLY":
                 raise V1ExecutionError("E999", "任务发布场景不安全", "V1 只允许 SMT_SEMI_MANAGED_SAVE_ONLY")
-        if state_name == StateName.CLAIM_PRODUCT and not claim_mark:
+        if state_name in {StateName.CLAIM_PRODUCT, StateName.CLAIM_TO_DRAFT_BOX, StateName.VERIFY_DRAFT_BOX_CLAIM} and not claim_mark:
             raise V1ExecutionError("E202", "领取标记为空", "任务缺少 claim_mark")
         if state_name == StateName.SAVE_ONLY:
             result = self.publish_guard.check(intended_action="save", target_text="保存")
@@ -851,10 +872,35 @@ class V1TaskRunner:
             return None
 
         product_query = self._source_title(job.get("product_id"))
+        acquisition_query = self._acquisition_product_query(task, job)
+        acquisition_category = self._acquisition_category_name(task)
         target_source_urls = self._source_urls(job.get("product_id"))
         store_name = self._store_name(task)
         actions = {
             StateName.PRECHECK_SESSION: ("check_login_state", "E101", "店小秘登录态检查失败", lambda: self.workflow_adapter.check_login_state()),
+            StateName.OPEN_DATA_ACQUISITION: ("open_data_acquisition", "E201", "进入数据采集失败", lambda: self.workflow_adapter.open_data_acquisition()),
+            StateName.CLAIM_TO_DRAFT_BOX: (
+                "claim_from_data_acquisition",
+                "E202",
+                "认领到采集箱失败",
+                lambda: self.workflow_adapter.claim_from_data_acquisition(
+                    claim_mark,
+                    product_query=acquisition_query,
+                    category_name=acquisition_category,
+                    store_name=store_name,
+                ),
+            ),
+            StateName.VERIFY_DRAFT_BOX_CLAIM: (
+                "verify_draft_box_claim",
+                "E202",
+                "采集箱确认失败",
+                lambda: self.workflow_adapter.verify_draft_box_claim(
+                    claim_mark,
+                    product_query=acquisition_query,
+                    category_name=acquisition_category,
+                    store_name=store_name,
+                ),
+            ),
             StateName.OPEN_DRAFT_LIST: ("open_draft_box", "E201", "进入采集箱失败", lambda: self.workflow_adapter.open_draft_box()),
             StateName.CLAIM_PRODUCT: (
                 "claim_product",
@@ -1309,6 +1355,58 @@ class V1TaskRunner:
 
     def _normalize_template_type(self, value: Any) -> str:
         return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+    def _acquisition_product_query(self, task: Mapping[str, Any], job: Mapping[str, Any]) -> str:
+        payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+        for value in (payload.get("keyword"), payload.get("source_title"), payload.get("title")):
+            if str(value or "").strip():
+                return str(value).strip()
+        return self._source_title(job.get("product_id"))
+
+    def _acquisition_category_name(self, task: Mapping[str, Any]) -> str | None:
+        payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+        value = payload.get("category_name") or payload.get("category")
+        return str(value).strip() if str(value or "").strip() else None
+
+    def _record_claimed_product_from_acquisition(
+        self,
+        task: Mapping[str, Any],
+        workflow_result: Mapping[str, Any],
+        claim_mark: str,
+    ) -> dict[str, Any]:
+        evidence = workflow_result.get("evidence") if isinstance(workflow_result.get("evidence"), Mapping) else {}
+        claimed = evidence.get("claimed_product") if isinstance(evidence.get("claimed_product"), Mapping) else {}
+        payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+        title = (
+            claimed.get("title")
+            or workflow_result.get("product_query")
+            or payload.get("keyword")
+            or payload.get("category_name")
+            or "店小秘采集认领商品"
+        )
+        category_name = claimed.get("category_name") or payload.get("category_name") or "未分类"
+        source_url = claimed.get("source_url") or evidence.get("source_url") or payload.get("source_url")
+        product_payload = {
+            "source": "dxm_data_acquisition",
+            "source_url": source_url,
+            "source_title": title,
+            "claim_mark": claim_mark,
+            "claim_task_id": task.get("id"),
+            "draft_box_verified": True,
+            "draft_box_url": workflow_result.get("page_url"),
+            "template_id": payload.get("template_id"),
+        }
+        return self.repo.create_product({
+            "title": str(title),
+            "source": "dxm_data_acquisition",
+            "status": "claimed_to_draft",
+            "category_name": str(category_name),
+            "price": 0,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 0,
+            "payload": {key: value for key, value in product_payload.items() if value is not None},
+        })
 
     def _source_title(self, product_id: int | None) -> str:
         if product_id is None:

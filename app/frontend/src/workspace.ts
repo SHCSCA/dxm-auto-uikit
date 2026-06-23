@@ -326,7 +326,7 @@ export function buildRealModeReleasePlan(): RealModeReleasePlan {
   ]
   return {
     schema: 'dxm_real_mode_release_plan.v1',
-    scope: 'controlled_single_save_only',
+    scope: 'controlled_claim_and_single_save',
     publish_allowed: false,
     batch_unattended_publish_allowed: false,
     modes: [
@@ -353,31 +353,29 @@ export function buildRealModeReleasePlan(): RealModeReleasePlan {
       },
       {
         mode: 'claim_only',
-        label: '只认领当前未开放',
-        status: 'blocked_unreleased',
+        label: '受控采集认领待后端确认',
+        status: 'blocked_stale_l2',
         allowed: false,
-        release_scope: 'not released',
+        release_scope: 'controlled claim to draft box',
         required_evidence: [
-          '独立 claim_only L2/L3 证据',
-          'claim ownership proof',
+          '采集页和采集箱真实只读检查通过',
+          '采集商品唯一命中证明',
+          '认领到采集箱成功证明',
           '不打开编辑页、不触发保存请求证明',
-          '领取锁定与释放审计链',
         ],
         required_controls: [
           ...sharedControls,
-          'claim 标记可回退',
-          '人工释放/恢复计划',
+          '只认领到采集箱，不保存、不发布',
+          '失败时人工接管',
         ],
         blockers: [
-          'cannot reuse single_save evidence',
-          '不能复用 single_save 证据',
-          '缺少 claim ownership proof',
+          '等待后端真实 L2 只读检查结果',
         ],
         readiness_checklist: [
-          checklist('dedicated_l2_l3', '独立 claim_only L2/L3 证据', 'missing', 'cannot reuse single_save evidence', 'claim_only 会改变草稿归属状态，不能复用 single_save 金丝雀。'),
-          checklist('claim_ownership_proof', 'claim ownership proof', 'missing', 'missing claim ownership proof', '需要证明命中的是目标店铺、目标商品和目标来源链接。'),
-          checklist('no_editor_or_save', '不打开编辑页、不触发保存请求证明', 'missing', 'missing negative save proof', 'claim_only 不能触发编辑页保存接口。'),
-          checklist('rollback_release', '归属释放或人工回滚路径', 'missing', 'missing ownership rollback proof', '误领或中断时必须有人工恢复路径。'),
+          checklist('l2_dual_target', '采集页和采集箱真实只读检查通过', 'missing', '等待后端真实 L2 只读检查结果'),
+          checklist('claim_target_unique', '采集商品唯一命中证明', 'missing', '等待真实认领任务生成证据'),
+          checklist('claim_to_draft', '认领到采集箱成功证明', 'missing', '等待真实认领任务生成证据'),
+          checklist('no_editor_or_save', '不打开编辑页、不触发保存请求证明', 'missing', '等待真实认领任务生成证据'),
         ],
       },
       {

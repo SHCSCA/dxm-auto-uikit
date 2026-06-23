@@ -340,7 +340,7 @@ export function SingleSaveRecoveryGuide({
     {
       title: '回到单商品只保存',
       detail: selectedTaskIsUnreleasedRealMode
-        ? `${humanTaskModeLabel(selectedTask?.mode)} 当前未发布；不能复用认领/批量保存证据。`
+        ? `${humanTaskModeLabel(selectedTask?.mode)} 当前未放行；不能复用其它模式证据。`
         : latestSingleSaveTask
           ? `可继续使用最近单商品只保存任务：#${latestSingleSaveTask.id} ${displayTaskName(latestSingleSaveTask)}`
           : '还没有可用单商品只保存任务，需要用当前店铺和商品创建一个。',
@@ -444,20 +444,20 @@ export function SingleSaveRecoveryGuide({
 export function RealModeReleasePlanPanel({ items }: { items: DeliveryWorkspace['realModeReleasePlan']['modes'] }) {
   if (!items.length) return null
   return (
-    <div className="real-mode-release-panel" aria-label="未发布真实模式放行准备清单">
+    <div className="real-mode-release-panel" aria-label="真实模式放行准备清单">
       <div className="real-mode-release-panel__head">
         <div>
-          <strong>认领 / 批量保存放行准备</strong>
-          <span>认领当前未发布；批量保存当前未发布；不能复用单商品只保存证据。</span>
+          <strong>真实模式放行准备</strong>
+          <span>采集认领和单商品只保存受控开放；批量保存仍需单独验收。</span>
         </div>
-        <span className="guard-chip guard-chip--danger">仅受控单商品只保存</span>
+        <span className="guard-chip guard-chip--danger">受控认领 + 单商品只保存</span>
       </div>
       <div className="real-mode-release-panel__grid">
         {items.map((item) => (
           <article key={item.mode} className="real-mode-release-item" data-mode={item.mode} data-status={item.status}>
             <div className="real-mode-release-item__title">
-              <strong>{item.label || `${item.mode} 当前未发布`}</strong>
-              <span>{item.allowed ? '可启动' : '未发布/阻断'}</span>
+              <strong>{item.label || `${item.mode} 当前未放行`}</strong>
+              <span>{item.allowed ? '可启动' : '未放行/阻断'}</span>
             </div>
             <ul>
               {(item.readiness_checklist ?? []).slice(0, 4).map((check) => (
@@ -490,7 +490,7 @@ function humanTaskModeLabel(mode?: string | null) {
   const labels: Record<string, string> = {
     probe: '真实只读检查',
     single_save: '单商品只保存',
-    claim_only: '认领未开放',
+    claim_only: '采集认领',
     batch_save: '批量保存未开放',
     dry_run: '开发自检',
   }
@@ -498,11 +498,11 @@ function humanTaskModeLabel(mode?: string | null) {
 }
 
 function isReleasedRealDxmMutationTask(task: Task) {
-  return task.mode === 'single_save'
+  return task.mode === 'claim_only' || task.mode === 'single_save'
 }
 
 function isUnreleasedRealDxmMutationTask(task: Task) {
-  return task.mode === 'claim_only' || task.mode === 'batch_save'
+  return task.mode === 'batch_save'
 }
 
 function isRealDxmMutationTask(task: Task) {

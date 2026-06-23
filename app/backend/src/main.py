@@ -115,12 +115,13 @@ runner = V1TaskRunner(
 )
 
 REAL_DXM_MUTATION_MODES = {'claim_only', 'single_save', 'batch_save'}
-RELEASED_REAL_DXM_MUTATION_MODES = {'single_save'}
+RELEASED_REAL_DXM_MUTATION_MODES = {'claim_only', 'single_save'}
 REAL_WRITE_START_MODES = REAL_DXM_MUTATION_MODES
 ALLOWED_START_MODES = {'probe', 'dry_run', 'claim_only', 'single_save', 'batch_save'}
 SAVE_ONLY_PUBLISH_SCENE = 'SMT_SEMI_MANAGED_SAVE_ONLY'
+CLAIM_TO_DRAFT_PUBLISH_SCENE = 'CONTROLLED_CLAIM_TO_DRAFT_ONLY'
 L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
-UNRELEASED_REAL_DXM_MODE_DETAIL = 'Only controlled single_save is released for real DXM mutation'
+UNRELEASED_REAL_DXM_MODE_DETAIL = 'Only controlled claim_only and single_save are released for real DXM mutation'
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FINAL_DELIVERY_CHECK_JSON = REPO_ROOT / 'outputs' / 'final-delivery-check' / 'final-delivery-check.json'
 RUNTIME_LAUNCHER_LOG_FILE = Path(
@@ -819,11 +820,17 @@ def start_agent_console(payload: AgentConsoleStartRequest):
         if task is None:
             raise HTTPException(
                 status_code=403,
-                detail='Agent execution browser start requires a selected controlled single_save task',
+                detail='Agent execution browser start requires a selected controlled claim_only or single_save task',
             )
         mode = str(task.get('mode') or (task.get('payload') or {}).get('execution_mode') or '')
         if mode not in RELEASED_REAL_DXM_MUTATION_MODES:
             raise HTTPException(status_code=403, detail=UNRELEASED_REAL_DXM_MODE_DETAIL)
+        if mode == 'claim_only' and str(task.get('publish_scene') or '') != CLAIM_TO_DRAFT_PUBLISH_SCENE:
+            raise HTTPException(status_code=403, detail='Controlled claim_only task requires claim-to-draft scene')
+        if mode == 'claim_only':
+            _assert_claim_only_acquisition_task(task)
+            if _task_store_name(task) != 'Dang Kang':
+                raise HTTPException(status_code=403, detail='Controlled claim_only task requires Dang Kang store')
         task_status = str(task.get('status') or '')
         if task_status == 'running':
             raise HTTPException(status_code=409, detail='Task is already running')
@@ -1767,6 +1774,19 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
         return
     if mode not in RELEASED_REAL_DXM_MUTATION_MODES:
         raise HTTPException(status_code=403, detail=UNRELEASED_REAL_DXM_MODE_DETAIL)
+    if mode == 'claim_only':
+        if str(task.get('publish_scene') or '') != CLAIM_TO_DRAFT_PUBLISH_SCENE:
+            raise HTTPException(status_code=403, detail='Controlled claim_only task requires claim-to-draft scene')
+        _assert_claim_only_acquisition_task(task)
+        if _task_store_name(task) != 'Dang Kang':
+            raise HTTPException(status_code=403, detail='Controlled claim_only task requires Dang Kang store')
+        l2_gate = l2_real_probe_gate()
+        if l2_gate.get('status') != 'passed':
+            raise HTTPException(
+                status_code=403,
+                detail=f"L2 readonly probe gate is not passed: {l2_gate.get('status')}",
+            )
+        return
     _assert_single_save_product_count(task.get('payload') or {}, status_code=409)
     if mode == 'single_save':
         _assert_single_save_uses_claimed_draft_product(payload.get('product_ids') or [])
@@ -1808,9 +1828,27 @@ def _assert_task_create_scope(payload: TaskCreate) -> None:
     mode = str(payload.mode or '').strip()
     if mode in REAL_DXM_MUTATION_MODES and mode not in RELEASED_REAL_DXM_MUTATION_MODES:
         raise HTTPException(status_code=403, detail=UNRELEASED_REAL_DXM_MODE_DETAIL)
+    if mode == 'claim_only' and str(payload.publish_scene or '') != CLAIM_TO_DRAFT_PUBLISH_SCENE:
+        raise HTTPException(status_code=403, detail='Controlled claim_only task requires claim-to-draft scene')
+    if mode == 'claim_only' and payload.product_ids:
+        raise HTTPException(
+            status_code=400,
+            detail='Controlled claim_only must be created from acquisition claim request without existing product_ids',
+        )
     if mode == 'single_save':
         _assert_single_save_product_count({'product_ids': payload.product_ids}, status_code=400)
         _assert_single_save_uses_claimed_draft_product(payload.product_ids)
+
+
+def _assert_claim_only_acquisition_task(task: dict[str, Any]) -> None:
+    jobs = task.get('jobs') if isinstance(task.get('jobs'), list) else []
+    if not jobs:
+        raise HTTPException(status_code=409, detail='Controlled claim_only requires an acquisition claim job')
+    if any(job.get('product_id') is not None for job in jobs if isinstance(job, dict)):
+        raise HTTPException(
+            status_code=409,
+            detail='Controlled claim_only must start from data acquisition and cannot use existing product_ids',
+        )
 
 
 def _assert_single_save_uses_claimed_draft_product(product_ids: list[int]) -> None:

@@ -213,8 +213,13 @@ def _real_mode_release_plan(
     l2_status = str((l2_gate or {}).get("status") or "")
     l2_passed = l2_status == "passed"
     readiness_ready = bool(delivery_readiness and delivery_readiness.get("ready") is True)
+    claim_only_currently_allowed = l2_passed
     single_save_currently_allowed = l2_passed and readiness_ready
+    claim_only_status = "released_controlled" if claim_only_currently_allowed else "blocked_stale_l2"
     single_save_status = "released_controlled" if single_save_currently_allowed else "blocked_stale_l2"
+    claim_only_blockers = [] if claim_only_currently_allowed else [
+        str((l2_gate or {}).get("detail") or "fresh same-run L2 data_acquisition and draft_box proof is required before real claim_only can start")
+    ]
     single_save_blockers = [] if single_save_currently_allowed else [
         str((l2_gate or {}).get("detail") or "fresh same-run L2 data_acquisition and draft_box proof is required before real single_save can start")
     ]
@@ -222,7 +227,7 @@ def _real_mode_release_plan(
     l2_check_blocker = None if l2_passed else "fresh L2 dual-target readonly proof is missing or stale"
     return {
         "schema": "dxm_real_mode_release_plan.v1",
-        "scope": "controlled_single_save_only",
+        "scope": "controlled_claim_and_single_save",
         "publish_allowed": False,
         "batch_unattended_publish_allowed": False,
         "modes": [
@@ -250,49 +255,42 @@ def _real_mode_release_plan(
             },
             {
                 "mode": "claim_only",
-                "label": "claim_only",
-                "status": "blocked_unreleased",
-                "allowed": False,
-                "release_scope": "not released",
+                "label": "受控 claim_only",
+                "status": claim_only_status,
+                "allowed": claim_only_currently_allowed,
+                "release_scope": "controlled claim to draft box",
                 "required_evidence": [
-                    "dedicated L2/L3 run for claim_only",
-                    "claim ownership proof",
+                    "L2 dual-target readonly proof",
+                    "unique acquisition product proof",
+                    "claim to draft box proof",
                     "no editor open and no save request proof",
-                    "local ownership lock and release audit trail",
                 ],
                 "required_controls": [
-                    *shared_controls,
-                    "claim marker must be operator-approved and reversible",
-                    "manual recovery plan for wrong target claim",
+                    "fresh same-run L2 data_acquisition and draft_box proof",
+                    "task runner evidence chain only; direct mutation endpoint remains forbidden",
+                    "claim_only must not open editor, save, publish, or move to pending publish",
+                    "manual recovery path for wrong target claim",
                 ],
-                "blockers": [
-                    "cannot reuse single_save evidence",
-                    "claim marker write semantics need independent audit",
-                    "manual recovery and rollback procedure not yet accepted",
-                ],
+                "blockers": claim_only_blockers,
                 "readiness_checklist": [
-                    checklist(
-                        "dedicated_l2_l3",
-                        "Dedicated claim_only L2/L3 evidence",
-                        blocker="cannot reuse single_save evidence",
-                        detail="claim_only changes draft ownership state; it needs its own readonly and canary evidence chain.",
-                    ),
+                    checklist("l2_dual_target", "L2 dual-target readonly proof", status=l2_check_status, evidence_source="L2 gate", blocker=l2_check_blocker),
                     checklist(
                         "claim_ownership_proof",
                         "Claim ownership proof",
-                        blocker="missing claim ownership proof",
-                        detail="Must prove the exact draft row was claimed and can be traced to store, product, and source URL.",
+                        status="passed" if claim_only_currently_allowed else "blocked",
+                        blocker=None if claim_only_currently_allowed else "missing L2 gate",
+                        detail="Runner verifies the claimed product can be traced to store, product query/category, and source URL when available.",
                     ),
                     checklist(
                         "no_editor_or_save",
                         "No editor open and no save request proof",
-                        blocker="missing negative save proof",
+                        status="passed",
                         detail="claim_only must not open the editor or issue save/add.json requests.",
                     ),
                     checklist(
                         "rollback_release",
                         "Ownership release or manual rollback path",
-                        blocker="missing ownership rollback proof",
+                        status="operator_required",
                         detail="Operator must have a documented recovery path before claim_only can be released.",
                     ),
                 ],

@@ -39,6 +39,15 @@ class FakeWorkflowAdapter:
     def open_draft_box(self):
         return self._record("open_draft_box")
 
+    def open_data_acquisition(self):
+        return self._record("open_data_acquisition")
+
+    def claim_from_data_acquisition(self, claim_mark, product_query=None, category_name=None, store_name=None):
+        return self._record("claim_from_data_acquisition", claim_mark, product_query, category_name, store_name)
+
+    def verify_draft_box_claim(self, claim_mark, product_query=None, category_name=None, store_name=None):
+        return self._record("verify_draft_box_claim", claim_mark, product_query, category_name, store_name)
+
     def claim_product(self, note_text, product_query=None, store_name=None, target_source_urls=None):
         return self._record("claim_product", note_text, product_query, store_name, target_source_urls)
 
@@ -92,6 +101,12 @@ class FakeWorkflowAdapter:
         evidence = {"action": action}
         if action == "claim_product":
             evidence["note_verified"] = self.note_verified
+        if action == "verify_draft_box_claim":
+            evidence["claimed_product"] = {
+                "title": args[1] or "ACG Stand Product 1",
+                "category_name": args[2] or "立牌类谷子",
+                "source_url": "https://detail.1688.com/offer/from-acquisition.html",
+            }
         if action == "fill_editor_required_defaults" and args:
             defaults = args[0] if isinstance(args[0], dict) else {}
             resolved = defaults.get("dxm_reference_templates_resolved") or {}
@@ -767,8 +782,14 @@ def test_single_save_report_includes_resolved_dxm_reference_templates(v1_db):
 
 def test_claim_only_calls_adapter_without_opening_editor_or_saving(v1_db):
     repo = Repository()
-    task = _create_task(repo, mode="claim_only", product_count=1)
-    job_id = repo.get_task(task["id"])["jobs"][0]["id"]
+    store = repo.create_store("Dang Kang", "AliExpress")
+    task = repo.create_acquisition_claim_request({
+        "store_id": store["id"],
+        "keyword": "Hazbin Hotel 立牌",
+        "category_name": "立牌类谷子",
+        "claim_mark": "AI认领",
+        "template_id": "template-1",
+    })
     manager = DummyManager()
     adapter = FakeWorkflowAdapter()
 
@@ -776,13 +797,23 @@ def test_claim_only_calls_adapter_without_opening_editor_or_saving(v1_db):
 
     assert adapter.calls == [
         ("check_login_state",),
-        ("open_draft_box",),
-        ("claim_product", f"AI认领-{task['id']}-{job_id}", "ACG Stand Product 1", "Dang Kang", ["https://detail.1688.com/offer/test-1.html"]),
+        ("open_data_acquisition",),
+        ("claim_from_data_acquisition", f"AI认领-{task['id']}", "Hazbin Hotel 立牌", "立牌类谷子", "Dang Kang"),
+        ("verify_draft_box_claim", f"AI认领-{task['id']}", "Hazbin Hotel 立牌", "立牌类谷子", "Dang Kang"),
     ]
+    assert not any(call[0] in {"open_editor", "save_only"} for call in adapter.calls)
     reports = repo.list_reports(task["id"])
     assert reports[0]["status"] == "success"
     assert reports[0]["published"] is False
     assert reports[0]["save_result"]["message"] == "当前模式未执行保存动作"
+    products = repo.list_products()
+    claimed = [product for product in products if product["status"] == "claimed_to_draft"]
+    assert len(claimed) == 1
+    assert claimed[0]["title"] == "Hazbin Hotel 立牌"
+    assert claimed[0]["source"] == "dxm_data_acquisition"
+    assert claimed[0]["payload"]["claim_task_id"] == task["id"]
+    assert claimed[0]["payload"]["claim_mark"] == f"AI认领-{task['id']}"
+    assert claimed[0]["payload"]["source_url"] == "https://detail.1688.com/offer/from-acquisition.html"
 
 
 def test_single_save_fails_when_adapter_lacks_media_or_compliance_methods(v1_db):

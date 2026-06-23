@@ -125,7 +125,7 @@ def test_task_center_does_not_apply_l3_real_write_block_to_dry_run_tasks():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     panels_source = PRODUCT_TASK_PANELS_TSX.read_text(encoding="utf-8")
 
-    assert "const l3BlocksStart = needsRealL2 && l3Gate?.status === 'blocked'" in source
+    assert "const l3BlocksStart = selectedTaskNeedsEditConfig && needsRealL2 && l3Gate?.status === 'blocked'" in source
     assert "启动开发自检任务" in source
     assert "真实保存仍以单商品只保存规则为准" in panels_source
     assert "普通模式不展示本地自检入口" in source
@@ -2642,9 +2642,9 @@ def test_task_and_evidence_center_describe_l3_blocked_as_expected_lock():
     assert "解除发布隔离风险" not in task_center_section
     assert "齐全后才会形成 A/B/C 证据等级" not in evidence_timeline_section
 
-    assert "只读检查未通过或人工确认未完成前" in task_center_section
-    assert "不启动认领、批量保存或真实保存" in task_center_section
-    assert "当前按钮策略：真实只读检查未通过或人工确认未完成时保持阻断" in task_center_section
+    assert "真实只读检查通过后才启动采集认领" in task_center_section
+    assert "人工确认未完成前不启动单商品只保存" in task_center_section
+    assert "当前按钮策略：真实只读检查未通过时保持阻断" in task_center_section
     assert "人工确认未完成，禁止启动" in task_center_section
     assert "当前真实保存未放行时" in evidence_timeline_section
     assert "0 条是预期阻断" in evidence_timeline_section
@@ -3126,20 +3126,20 @@ def test_frontend_blocks_unreleased_real_modes_before_l3_manual_approval():
     no_old_action_copy_start = qa_source.index("noOldActionCopy:")
     no_old_action_copy_section = qa_source[no_old_action_copy_start:qa_source.index("noConsoleErrors:", no_old_action_copy_start)]
 
-    assert "const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['single_save'])" in source
-    assert "const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'batch_save'])" in source
+    assert "const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save'])" in source
+    assert "const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['batch_save'])" in source
     assert "UNRELEASED_REAL_DXM_MUTATION_MODES.has(selectedTask.mode)" in start_section
-    assert "当前仅开放单商品只保存" in start_section
-    assert "认领和批量保存必须重新验收后再放行" in start_section
+    assert "当前仅开放采集认领和单商品只保存" in start_section
+    assert "批量保存必须重新验收后再放行" in start_section
     assert "将只启动单商品只保存任务，不会发布" in start_section
     assert "将只启动 save-only/claim-only 受控任务" not in start_section
     assert "const selectedTaskIsUnreleasedRealMode = selectedTask ? isUnreleasedRealDxmMutationTask(selectedTask) : false" in workbench_source
-    assert "startDisabled = busy || !selectedTask || selectedTaskNotDraft || selectedTaskIsUnreleasedRealMode || loginBlocksStart || configUnknownBlocksStart || configPreviewLoading || configBlocksStart || l2BlocksStart || l3BlocksStart" in workbench_source
+    assert "startDisabled = busy || !selectedTask || selectedTaskNotDraft || selectedTaskIsUnreleasedRealMode || loginBlocksStart || configUnknownBlocksStart || configPreviewLoadingBlocksStart || configBlocksStart || l2BlocksStart || l3BlocksStart" in workbench_source
     assert "const selectedTaskNotDraft = Boolean(selectedTask && selectedTask.status !== 'draft')" in workbench_source
     assert "未发布，禁止启动" in workbench_source
     assert "function isReleasedRealDxmMutationTask" in workbench_source
     assert "function isUnreleasedRealDxmMutationTask" in workbench_source
-    assert "当前按钮策略：真实只读检查未通过或人工确认未完成时保持阻断；单商品只保存仍需后端人工批准；认领和批量保存当前未开放。" in workbench_source
+    assert "当前按钮策略：真实只读检查未通过时保持阻断；采集认领可启动第一段流程；单商品只保存仍需后端人工批准；批量保存当前未开放。" in workbench_source
     assert "unreleasedRealModeCopy" in qa_source
     assert "unreleasedRealModeButtonDisabled" in qa_source
     assert "async function verifyUnreleasedRealModeCreateBlocked()" in qa_source
@@ -3182,9 +3182,11 @@ def test_task_center_start_button_matches_real_start_prechecks():
     assert "const loginBlocksStart = selectedRealDxmMutationTask && !dxmLoggedIn" in task_center_section
     assert "const configPreviewForSelectedTask = selectedTask && configPreview?.taskId === selectedTask.id ? configPreview : null" in task_center_section
     assert "const configPreviewTaskMismatch = Boolean(selectedTask && configPreview && configPreview.taskId !== selectedTask.id)" in task_center_section
-    assert "const configUnknownBlocksStart = selectedRealDxmMutationTask && !configPreviewForSelectedTask && !configPreviewLoading" in task_center_section
-    assert "const configBlocksStart = Boolean(selectedTask && isRealDxmMutationTask(selectedTask) && configPreviewForSelectedTask && !configPreviewForSelectedTask.ok)" in task_center_section
-    assert "startDisabled = busy || !selectedTask || selectedTaskNotDraft || selectedTaskIsUnreleasedRealMode || loginBlocksStart || configUnknownBlocksStart || configPreviewLoading || configBlocksStart || l2BlocksStart || l3BlocksStart" in task_center_section
+    assert "const selectedTaskNeedsEditConfig = selectedTask?.mode === 'single_save'" in task_center_section
+    assert "const configPreviewLoadingBlocksStart = Boolean(selectedTaskNeedsEditConfig && configPreviewLoading)" in task_center_section
+    assert "const configUnknownBlocksStart = Boolean(selectedTaskNeedsEditConfig && !configPreviewForSelectedTask && !configPreviewLoading)" in task_center_section
+    assert "const configBlocksStart = Boolean(selectedTaskNeedsEditConfig && configPreviewForSelectedTask && !configPreviewForSelectedTask.ok)" in task_center_section
+    assert "startDisabled = busy || !selectedTask || selectedTaskNotDraft || selectedTaskIsUnreleasedRealMode || loginBlocksStart || configUnknownBlocksStart || configPreviewLoadingBlocksStart || configBlocksStart || l2BlocksStart || l3BlocksStart" in task_center_section
     assert "DXM 未登录，先打开真实浏览器登录" in task_center_section
     assert "配置属于其它任务，重新检查本次任务" in task_center_section
     assert "先检查本次任务配置" in task_center_section
@@ -3206,20 +3208,20 @@ def test_task_center_surfaces_real_mode_release_readiness_without_releasing_mode
     assert "normalizeReadinessChecklistItem" in workspace_source
     assert "readiness_checklist" in workspace_source
     assert "RealModeReleasePlanPanel" in task_center_section
-    assert "认领 / 批量保存放行准备" in panels_source
-    assert "认领当前未发布" in panels_source
-    assert "批量保存当前未发布" in panels_source
-    assert "不能复用单商品只保存证据" in panels_source
+    assert "真实模式放行准备" in panels_source
+    assert "采集认领和单商品只保存受控开放" in panels_source
+    assert "批量保存仍需单独验收" in panels_source
+    assert "不能复用其它模式证据" in panels_source
     assert "批量大小上限" in panels_source
     assert "回滚/人工接管" in panels_source
     assert "批量保存不启动真实浏览器保存" in panels_source
-    assert "仅受控单商品只保存" in panels_source
+    assert "受控认领 + 单商品只保存" in panels_source
     assert "humanReadinessCheckLabel" in panels_source
     assert "humanReleaseBlocker" in panels_source
     assert "独立只读与真实保存证据链" in panels_source
     assert "目标草稿领取归属证明" in panels_source
     assert "逐商品保存结果与 published=false" in panels_source
-    assert "RELEASED_REAL_DXM_MUTATION_MODES = new Set(['single_save'])" in (REPO_ROOT / "app" / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+    assert "RELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save'])" in (REPO_ROOT / "app" / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
     assert "real-mode-release-panel" in styles_source
     assert "real-mode-release-panel__grid" in styles_source
     assert "realModeReleasePlanVisible" in qa_source
@@ -4451,7 +4453,7 @@ def test_product_task_panels_are_extracted_from_workbench_modules():
     panels_source = PRODUCT_TASK_PANELS_TSX.read_text(encoding="utf-8")
 
     assert "export function RealModeReleasePlanPanel" in panels_source
-    assert "认领 / 批量保存放行准备" in panels_source
+    assert "真实模式放行准备" in panels_source
     assert "function humanReadinessCheckLabel" in panels_source
     assert "function humanReleaseBlocker" in panels_source
     assert "from './workbench/ProductTaskPanels'" in source
