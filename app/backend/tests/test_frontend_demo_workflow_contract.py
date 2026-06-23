@@ -106,10 +106,29 @@ def test_draft_edit_save_page_starts_from_claimed_product_without_technical_gate
     assert "ready_for_edit" in app_source
     assert "采集箱商品" in page_source
     assert "只保存，不发布" in page_source
+    for label in [
+        "选择已进入采集箱的商品",
+        "确认本次使用的模板",
+        "人工确认只保存",
+        "启动 Agent 保存",
+        "查看保存结果",
+    ]:
+        assert label in page_source
+    for label in [
+        "只允许从采集箱商品开始",
+        "本功能只点击“保存”",
+        "发布”“保存并发布”“移入待发布",
+        "去数据采集认领",
+        "去模板中心",
+        "去执行浏览器",
+    ]:
+        assert label in page_source
     assert "L2" not in page_source
     assert "run-id" not in page_source
     assert "probe" not in page_source
     assert "QA" not in page_source
+    for forbidden in ["QA guarded product", "测试商品", "本地商品", "创建单商品只保存任务"]:
+        assert forbidden not in page_source
 
 
 def results_page_source() -> str:
