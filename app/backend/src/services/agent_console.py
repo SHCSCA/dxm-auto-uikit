@@ -9,6 +9,7 @@ from typing import Any
 
 from src.core.config import DATA_DIR
 from src.execution.browser_runtime import chrome_launch_options
+from src.services.browser_agent_status import build_browser_hud
 
 
 PROFILE_ROOT = DATA_DIR / "browser_profiles" / "agent_console"
@@ -202,6 +203,9 @@ class AgentConsoleService:
         field_domain: str | None = None,
         mode: str | None = None,
         store_name: str | None = None,
+        title: str | None = None,
+        line1: str | None = None,
+        line2: str | None = None,
         next_step: str | None = None,
         screenshot_path: str | None = None,
         phase: str | None = None,
@@ -214,6 +218,7 @@ class AgentConsoleService:
         recent_actions: list[str] | None = None,
         requires_user_action: bool | None = None,
         guard: str | None = None,
+        maintenance_detail: str | None = None,
     ) -> dict[str, Any]:
         with self._lock:
             if not self._state.get("active"):
@@ -238,9 +243,11 @@ class AgentConsoleService:
 
             current_hud = dict(self._state.get("hud") or {})
             hud = self._hud_state({
-                "title": step_name,
+                "title": title or step_name,
                 "state": step_code,
                 "action": _step_action(field_domain, mode),
+                "line1": line1,
+                "line2": line2,
                 "next_step": next_step or "等待状态机推进",
                 "store_name": store_name or "Dang Kang",
                 "guard": guard or "只保存不发布",
@@ -253,6 +260,7 @@ class AgentConsoleService:
                 "human_next": human_next,
                 "recent_actions": recent_actions if recent_actions is not None else current_hud.get("recent_actions"),
                 "requires_user_action": requires_user_action,
+                "maintenance_detail": maintenance_detail,
             })
             event = {
                 "task_id": task_id,
@@ -718,13 +726,33 @@ class AgentConsoleService:
 
     def _hud_state(self, step: dict[str, Any] | None) -> dict[str, Any]:
         step = step or {}
-        title = step.get("title") or step.get("label") or "Agent Console 待命"
         state = step.get("state") or step.get("code") or "WAITING"
+        mapped = None
+        if str(state).upper() != "WAITING":
+            mapped = build_browser_hud({
+                "step": state,
+                "status": step.get("status") or step.get("severity") or "running",
+                "task_name": step.get("task_name"),
+                "store_name": step.get("store_name"),
+                "guard": step.get("guard"),
+                "phase": step.get("phase"),
+                "progress_index": step.get("progress_index"),
+                "progress_total": step.get("progress_total"),
+                "human_title": step.get("human_title"),
+                "human_action": step.get("human_action"),
+                "human_next": step.get("human_next") or step.get("next_step"),
+                "line1": step.get("line1"),
+                "line2": step.get("line2"),
+                "maintenance_detail": step.get("maintenance_detail"),
+            })
+        title = step.get("title") or step.get("label") or (mapped or {}).get("title") or "Agent Console 待命"
         user_action_copy = USER_ACTION_HUD_COPY.get(str(state).upper())
         if user_action_copy and not step.get("title") and not step.get("label"):
             title = user_action_copy["human_title"]
-        action = step.get("action") or step.get("detail") or (user_action_copy or {}).get("human_action") or "等待后端状态机推送"
-        next_step = step.get("next_step") or (user_action_copy or {}).get("human_next") or "等待下一步"
+        action = step.get("action") or step.get("detail") or (mapped or {}).get("line1") or (user_action_copy or {}).get("human_action") or "等待后端状态机推送"
+        next_step = step.get("next_step") or (mapped or {}).get("human_next") or (user_action_copy or {}).get("human_next") or "等待下一步"
+        line1 = step.get("line1") or (mapped or {}).get("line1") or action
+        line2 = step.get("line2") or (mapped or {}).get("line2")
         recent_actions = step.get("recent_actions")
         requires_user_action = step.get("requires_user_action")
         if requires_user_action is None and user_action_copy:
@@ -733,18 +761,21 @@ class AgentConsoleService:
             "title": title,
             "state": state,
             "action": action,
+            "line1": line1,
+            "line2": line2,
             "next_step": next_step,
             "store_name": step.get("store_name") or "Dang Kang",
             "guard": step.get("guard") or "只保存不发布",
-            "phase": step.get("phase") or (user_action_copy or {}).get("phase") or "业务进度",
-            "progress_index": step.get("progress_index"),
-            "progress_total": step.get("progress_total"),
-            "severity": step.get("severity") or (user_action_copy or {}).get("severity") or "info",
+            "phase": step.get("phase") or (mapped or {}).get("phase") or (user_action_copy or {}).get("phase") or "业务进度",
+            "progress_index": step.get("progress_index") or (mapped or {}).get("progress_index"),
+            "progress_total": step.get("progress_total") or (mapped or {}).get("progress_total"),
+            "severity": step.get("severity") or (mapped or {}).get("severity") or (user_action_copy or {}).get("severity") or "info",
             "human_title": step.get("human_title") or (user_action_copy or {}).get("human_title") or title,
-            "human_action": step.get("human_action") or (user_action_copy or {}).get("human_action") or action,
-            "human_next": step.get("human_next") or (user_action_copy or {}).get("human_next") or next_step,
+            "human_action": step.get("human_action") or step.get("action") or (mapped or {}).get("human_action") or (user_action_copy or {}).get("human_action") or action,
+            "human_next": step.get("human_next") or step.get("next_step") or (mapped or {}).get("human_next") or (user_action_copy or {}).get("human_next") or next_step,
             "recent_actions": list(recent_actions or [])[-MAX_RECENT_ACTIONS:],
             "requires_user_action": bool(requires_user_action) if requires_user_action is not None else False,
+            "maintenance_detail": step.get("maintenance_detail") or (mapped or {}).get("maintenance_detail"),
             "updated_at": _now(),
         }
 

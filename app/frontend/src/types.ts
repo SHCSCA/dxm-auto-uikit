@@ -239,6 +239,8 @@ export type AgentConsoleHud = {
   code?: string
   action?: string
   detail?: string
+  line1?: string
+  line2?: string
   next_step?: string
   phase?: string
   progress_index?: number
@@ -249,6 +251,7 @@ export type AgentConsoleHud = {
   human_next?: string
   recent_actions?: string[]
   requires_user_action?: boolean
+  maintenance_detail?: string
   store_name?: string
   guard?: string
   updated_at?: string

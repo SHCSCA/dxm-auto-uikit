@@ -192,11 +192,24 @@ def test_agent_console_api_lifecycle_uses_preview_mode(tmp_path, monkeypatch):
 
     hud_response = client.post(
         "/api/agent-console/hud",
-        json={"step": {"state": "OPEN_DRAFT_BOX", "action": "打开采集箱", "next_step": "定位备注商品"}},
+        json={
+            "step": {
+                "state": "OPEN_DRAFT_BOX",
+                "action": "打开采集箱",
+                "line1": "进入店小秘采集箱",
+                "line2": "店铺：Dang Kang",
+                "next_step": "定位备注商品",
+                "maintenance_detail": "api accepted extended hud fields",
+            }
+        },
     )
 
     assert hud_response.status_code == 200
-    assert hud_response.json()["hud"]["state"] == "OPEN_DRAFT_BOX"
+    hud = hud_response.json()["hud"]
+    assert hud["state"] == "OPEN_DRAFT_BOX"
+    assert hud["line1"] == "进入店小秘采集箱"
+    assert hud["line2"] == "店铺：Dang Kang"
+    assert hud["maintenance_detail"] == "api accepted extended hud fields"
 
     status_response = client.get("/api/agent-console/status")
     assert status_response.status_code == 200
@@ -261,11 +274,12 @@ def test_agent_console_hud_extends_old_payload_with_chinese_defaults(tmp_path, m
     )
 
     hud = status["hud"]
-    assert hud["title"] == "Agent Console 待命"
+    assert hud["title"] == "正在只保存"
     assert hud["state"] == "SAVE_ONLY"
-    assert hud["phase"] == "业务进度"
-    assert hud["severity"] == "info"
-    assert hud["human_title"] == "Agent Console 待命"
+    assert hud["phase"] == "第二段：采集箱编辑保存"
+    assert hud["severity"] == "running"
+    assert hud["line1"] == "只点击保存，不发布"
+    assert hud["human_title"] == "正在只保存"
     assert hud["human_action"] == "等待保存证据"
     assert hud["human_next"] == "确认未发布"
     assert hud["recent_actions"] == []

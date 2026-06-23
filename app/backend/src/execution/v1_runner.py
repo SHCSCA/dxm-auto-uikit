@@ -9,6 +9,7 @@ from typing import Any
 from src.core.config import SCREENSHOT_DIR
 from src.execution.dxm_live import DxmLiveClient
 from src.repository import Repository
+from src.services.browser_agent_status import build_browser_hud
 from src.services.config_defaults import DEFAULT_TEMPLATE_TYPES, ConfigDefaultsResolver
 from src.services.config_validation import ConfigValidationService
 from src.services.ownership_lock import OwnershipLockService
@@ -146,12 +147,7 @@ HUD_VIRTUAL_STAGE_AFTER = {
     StateName.FILL_BASE_INFO: {
         "step_code": "SELECT_CATEGORY",
         "step_name": "选择分类",
-        "phase": "选择分类",
         "progress_index": 6,
-        "human_title": "选择分类",
-        "human_action": "正在确认商品分类已选择",
-        "human_next": "填写价格库存",
-        "next_step": "填写价格库存",
     },
 }
 
@@ -610,6 +606,8 @@ class V1TaskRunner:
                 "title": hud.get("title") or payload.get("step_name") or step_name,
                 "state": hud.get("state") or payload.get("step_code") or state_name.value,
                 "action": hud.get("action"),
+                "line1": hud.get("line1") or payload.get("line1"),
+                "line2": hud.get("line2") or payload.get("line2"),
                 "next_step": hud.get("next_step"),
                 "store_name": hud.get("store_name"),
                 "guard": hud.get("guard"),
@@ -621,6 +619,7 @@ class V1TaskRunner:
                 "human_action": hud.get("human_action"),
                 "human_next": hud.get("human_next"),
                 "requires_user_action": hud.get("requires_user_action"),
+                "maintenance_detail": hud.get("maintenance_detail") or payload.get("maintenance_detail"),
             },
             "screenshot": result.get("screenshot"),
             "updated_at": result.get("updated_at"),
@@ -641,6 +640,20 @@ class V1TaskRunner:
         override = hud_override or {}
         resolved_step_code = str(override.get("step_code") or state_name.value)
         resolved_step_name = str(override.get("step_name") or step_name)
+        store_name = self._store_name(task)
+        hud = build_browser_hud({
+            "task_name": "数据采集认领" if mode == "claim_only" else "采集箱编辑保存",
+            "step": resolved_step_code,
+            "status": "running",
+            "store_name": store_name,
+            "guard": "只保存不发布",
+            "phase": override.get("phase"),
+            "progress_index": override.get("progress_index") or self._progress_index(mode, state_name),
+            "progress_total": self._progress_total(mode),
+            "human_title": override.get("human_title"),
+            "human_action": override.get("human_action"),
+            "human_next": override.get("human_next") or override.get("next_step"),
+        })
         return {
             "task_id": task["id"],
             "job_id": job["id"],
@@ -649,18 +662,22 @@ class V1TaskRunner:
             "step_name": resolved_step_name,
             "field_domain": field_domain,
             "mode": mode,
-            "store_name": self._store_name(task),
-            "next_step": override.get("next_step") or self._next_step_name(mode, state_name),
+            "store_name": store_name,
+            "title": hud["title"],
+            "line1": hud["line1"],
+            "line2": hud["line2"],
+            "next_step": hud["next_step"] or self._next_step_name(mode, state_name),
             "screenshot_path": screenshot_path,
-            "guard": "只保存不发布",
-            "phase": override.get("phase") or self._hud_phase(state_name),
-            "progress_index": override.get("progress_index") or self._progress_index(mode, state_name),
-            "progress_total": self._progress_total(mode),
-            "severity": "info",
-            "human_title": override.get("human_title") or self._human_title(state_name, step_name),
-            "human_action": override.get("human_action") or self._human_action(state_name, field_domain, mode),
-            "human_next": override.get("human_next") or self._human_next(mode, state_name),
-            "requires_user_action": False,
+            "guard": hud["guard"],
+            "phase": hud["phase"],
+            "progress_index": hud["progress_index"],
+            "progress_total": hud["progress_total"],
+            "severity": hud["severity"],
+            "human_title": hud["human_title"],
+            "human_action": hud["human_action"],
+            "human_next": hud["human_next"],
+            "requires_user_action": hud["requires_user_action"],
+            "maintenance_detail": hud.get("maintenance_detail"),
         }
 
     def _agent_console_summary(self, result: Mapping[str, Any]) -> dict[str, Any]:
@@ -681,6 +698,8 @@ class V1TaskRunner:
                 "title": hud.get("title"),
                 "state": hud.get("state"),
                 "action": hud.get("action"),
+                "line1": hud.get("line1"),
+                "line2": hud.get("line2"),
                 "next_step": hud.get("next_step"),
                 "store_name": hud.get("store_name"),
                 "guard": hud.get("guard"),
@@ -693,6 +712,7 @@ class V1TaskRunner:
                 "human_next": hud.get("human_next"),
                 "recent_actions": hud.get("recent_actions"),
                 "requires_user_action": hud.get("requires_user_action"),
+                "maintenance_detail": hud.get("maintenance_detail"),
             },
             "screenshot": result.get("screenshot"),
             "updated_at": result.get("updated_at"),
