@@ -86,6 +86,7 @@ class DxmLoginFlow:
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
+        self._latest_live_hud: dict[str, Any] | None = None
         self._last_dismiss_blocking_modals_trace: list[dict[str, Any]] = []
 
     def get_state(self) -> dict[str, Any]:
@@ -94,6 +95,7 @@ class DxmLoginFlow:
         return self._default_state()
 
     def update_live_hud(self, hud: dict[str, Any]) -> dict[str, Any]:
+        self._latest_live_hud = dict(hud)
         page = self._page
         if page is None:
             return {'ok': True, 'updated': False, 'reason': 'live_browser_page_missing'}
@@ -137,6 +139,18 @@ class DxmLoginFlow:
             'current_url': page.url,
             'updated_at': now_iso(),
         }
+
+    def _reapply_live_hud_if_available(self, page: Page) -> None:
+        if not self._latest_live_hud:
+            return
+        try:
+            self._apply_live_hud(page, self._latest_live_hud)
+        except Exception:
+            pass
+
+    def _goto_with_live_hud(self, page: Page, url: str, *, wait_until: str = 'domcontentloaded', timeout: int = 45000) -> None:
+        page.goto(url, wait_until=wait_until, timeout=timeout)
+        self._reapply_live_hud_if_available(page)
 
     def start_login(self, username: str, password: str) -> dict[str, Any]:
         try:
@@ -529,7 +543,7 @@ class DxmLoginFlow:
 
     def _open_login_page_and_fill(self, username: str, password: str) -> dict[str, Any]:
         page = self._ensure_page()
-        page.goto('https://www.dianxiaomi.com/', wait_until='domcontentloaded', timeout=45000)
+        self._goto_with_live_hud(page, 'https://www.dianxiaomi.com/', wait_until='domcontentloaded', timeout=45000)
         page.wait_for_timeout(1500)
         self._fill_first_available(page, [
             'input[placeholder="请输入用户名"]',
@@ -616,7 +630,7 @@ class DxmLoginFlow:
     def _navigate_in_session(self, target: str) -> dict[str, Any]:
         config = WORKFLOW_TARGETS[target]
         page = self._ensure_page_with_cookies()
-        page.goto(config['url'], wait_until='domcontentloaded', timeout=45000)
+        self._goto_with_live_hud(page, config['url'], wait_until='domcontentloaded', timeout=45000)
         wait_result = self._wait_for_page_ready(
             page,
             WORKFLOW_READY_TERMS.get(target, [config['label']]),
@@ -646,7 +660,7 @@ class DxmLoginFlow:
     ) -> dict[str, Any]:
         page = self._ensure_page_with_cookies()
         draft_url = WORKFLOW_TARGETS['draft_box']['url']
-        page.goto(draft_url, wait_until='domcontentloaded', timeout=45000)
+        self._goto_with_live_hud(page, draft_url, wait_until='domcontentloaded', timeout=45000)
         self._wait_for_page_ready(
             page,
             WORKFLOW_READY_TERMS['draft_box'],
@@ -731,7 +745,7 @@ class DxmLoginFlow:
         store_name: str | None = None,
     ) -> dict[str, Any]:
         page = self._ensure_page_with_cookies()
-        page.goto(WORKFLOW_TARGETS['data_acquisition']['url'], wait_until='domcontentloaded', timeout=45000)
+        self._goto_with_live_hud(page, WORKFLOW_TARGETS['data_acquisition']['url'], wait_until='domcontentloaded', timeout=45000)
         self._wait_for_page_ready(
             page,
             WORKFLOW_READY_TERMS['data_acquisition'],
@@ -1019,7 +1033,7 @@ class DxmLoginFlow:
         category_name = category_name or claimed.get('category_name')
         target_source_urls = [claimed.get('source_url')] if claimed.get('source_url') else []
         page = self._ensure_page_with_cookies()
-        page.goto(WORKFLOW_TARGETS['draft_box']['url'], wait_until='domcontentloaded', timeout=45000)
+        self._goto_with_live_hud(page, WORKFLOW_TARGETS['draft_box']['url'], wait_until='domcontentloaded', timeout=45000)
         self._wait_for_page_ready(
             page,
             WORKFLOW_READY_TERMS['draft_box'],
@@ -1087,7 +1101,7 @@ class DxmLoginFlow:
             if not editor_url:
                 raise RuntimeError('缺少上次编辑页地址')
             if not self._is_same_dxm_editor_page(getattr(page, 'url', ''), editor_url):
-                page.goto(editor_url, wait_until='domcontentloaded', timeout=45000)
+                self._goto_with_live_hud(page, editor_url, wait_until='domcontentloaded', timeout=45000)
                 page.wait_for_timeout(2000)
             ready = self._wait_for_body_text(page, ['基本信息', '半托管服务', '产品信息'])
             if not ready and product_query:
@@ -1119,7 +1133,7 @@ class DxmLoginFlow:
         source_editor_url = state.get('source_editor_url') or state.get('editor_page_url')
         needs_source_reopen = bool(source_editor_url and 'editFromSmt' in str(semi_url) and '?' not in str(semi_url))
         if needs_source_reopen:
-            page.goto(source_editor_url, wait_until='domcontentloaded', timeout=45000)
+            self._goto_with_live_hud(page, source_editor_url, wait_until='domcontentloaded', timeout=45000)
             page.wait_for_timeout(2000)
             self._wait_for_body_text(page, ['基本信息', '半托管服务', '产品信息'])
             self._dismiss_blocking_modals(page)
@@ -1137,7 +1151,7 @@ class DxmLoginFlow:
                     'source_editor_url': source_editor_url,
                 }
         elif 'editFromSmt' not in str(page.url or ''):
-            page.goto(semi_url, wait_until='domcontentloaded', timeout=45000)
+            self._goto_with_live_hud(page, semi_url, wait_until='domcontentloaded', timeout=45000)
             page.wait_for_timeout(2000)
         self._wait_for_body_text(page, ['半托管', '重量', '包装尺寸', '物流属性'])
         self._dismiss_blocking_modals(page)
@@ -5666,11 +5680,13 @@ class DxmLoginFlow:
         self._page = None
         if self._context is not None and not self._is_playwright_object_closed(self._context):
             self._page = self._context.new_page()
+            self._reapply_live_hud_if_available(self._page)
             return self._page
         self._context = None
         if self._browser is not None and self._is_browser_connected(self._browser):
             self._context = self._new_browser_context(self._browser)
             self._page = self._context.new_page()
+            self._reapply_live_hud_if_available(self._page)
             return self._page
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(
@@ -5678,6 +5694,7 @@ class DxmLoginFlow:
         )
         self._context = self._new_browser_context(self._browser)
         self._page = self._context.new_page()
+        self._reapply_live_hud_if_available(self._page)
         return self._page
 
     def _new_browser_context(self, browser: Browser) -> BrowserContext:
@@ -6019,7 +6036,7 @@ class DxmLoginFlow:
 
     def _open_editor_page_for_product(self, page: Page, product_query: str, store_name: str | None = None) -> Page:
         draft_url = WORKFLOW_TARGETS['draft_box']['url']
-        page.goto(draft_url, wait_until='domcontentloaded', timeout=45000)
+        self._goto_with_live_hud(page, draft_url, wait_until='domcontentloaded', timeout=45000)
         self._wait_for_page_ready(
             page,
             WORKFLOW_READY_TERMS['draft_box'],
@@ -6038,6 +6055,7 @@ class DxmLoginFlow:
             row_info = self._find_draft_box_row(page, product_query, store_name=store_name, claim_mark=claim_mark)
         editor_page = self._open_editor_from_draft_box(page, row_info=row_info)
         editor_page.wait_for_timeout(1500)
+        self._reapply_live_hud_if_available(editor_page)
         return editor_page
 
     def _current_claim_mark(self, product_query: str | None = None, store_name: str | None = None) -> str | None:
@@ -6383,9 +6401,10 @@ class DxmLoginFlow:
             if edit_href and not edit_href.lower().startswith('javascript') and edit_href != '#':
                 edit_url = urljoin(str(page.url or ''), edit_href)
                 if '/web/smt/edit' in edit_url:
-                    page.goto(edit_url, wait_until='domcontentloaded', timeout=45000)
+                    self._goto_with_live_hud(page, edit_url, wait_until='domcontentloaded', timeout=45000)
                     page.wait_for_url('**/web/smt/edit**', timeout=15000)
                     page.wait_for_timeout(1500)
+                    self._reapply_live_hud_if_available(page)
                     return page
             pages_before_dom = self._context_pages()
             dom_click = self._dispatch_draft_row_edit_event(page, row_info or {}) or {}
@@ -6396,6 +6415,7 @@ class DxmLoginFlow:
                     wait_ms=8000,
                 )
                 if editor_page is not None:
+                    self._reapply_live_hud_if_available(editor_page)
                     return editor_page
             if hasattr(self._context, 'expect_page'):
                 pages_before = self._context_pages()
@@ -6409,6 +6429,7 @@ class DxmLoginFlow:
                         wait_ms=12000,
                     )
                     if editor_page is not None:
+                        self._reapply_live_hud_if_available(editor_page)
                         return editor_page
                     page = new_page
                 except TimeoutError:
@@ -6418,6 +6439,7 @@ class DxmLoginFlow:
                         wait_ms=1500,
                     )
                     if editor_page is not None:
+                        self._reapply_live_hud_if_available(editor_page)
                         return editor_page
             else:
                 self._click_rect_center(page, edit_action['rect'])
@@ -6453,7 +6475,9 @@ class DxmLoginFlow:
                     [new_page, page, *self._new_context_pages(pages_before)],
                     wait_ms=5000,
                 )
-                return editor_page or new_page
+                final_page = editor_page or new_page
+                self._reapply_live_hud_if_available(final_page)
+                return final_page
             except TimeoutError:
                 try:
                     locator.click(timeout=3000)

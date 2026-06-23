@@ -309,6 +309,91 @@ class DummyDraftPage:
         return None
 
 
+class DummyHudPage:
+    def __init__(self):
+        self.url = 'https://www.dianxiaomi.com/web/home'
+        self.init_scripts = []
+        self.evaluations = []
+        self.hud_payloads = []
+        self.goto_calls = []
+
+    def add_init_script(self, script):
+        self.init_scripts.append(script)
+
+    def evaluate(self, script, arg=None):
+        self.evaluations.append((script, arg))
+        if isinstance(arg, dict) and arg.get('state'):
+            self.hud_payloads.append(arg)
+        return None
+
+    def goto(self, url, *, wait_until, timeout):
+        self.goto_calls.append((url, wait_until, timeout))
+        self.url = url
+        self.hud_payloads.clear()
+
+    def title(self):
+        return '店小秘--测试页'
+
+
+def test_live_browser_hud_reapplies_after_navigation():
+    flow = DxmLoginFlow(DummyLiveClient())
+    page = DummyHudPage()
+    flow._page = page
+
+    result = flow.update_live_hud({
+        'state': 'SAVE_ONLY',
+        'human_title': '正在只保存',
+        'human_action': '只点击保存，不发布',
+    })
+    assert result['updated'] is True
+    assert page.hud_payloads[-1]['state'] == 'SAVE_ONLY'
+
+    flow._goto_with_live_hud(
+        page,
+        'https://www.dianxiaomi.com/web/smt/smtProductList/draft?status=0',
+        wait_until='domcontentloaded',
+        timeout=45000,
+    )
+
+    assert page.goto_calls[-1][0].endswith('/web/smt/smtProductList/draft?status=0')
+    assert page.hud_payloads[-1]['state'] == 'SAVE_ONLY'
+    assert page.hud_payloads[-1]['human_action'] == '只点击保存，不发布'
+
+
+def test_live_browser_hud_reapplies_to_new_page_from_cached_state():
+    flow = DxmLoginFlow(DummyLiveClient())
+    old_page = DummyHudPage()
+    new_page = DummyHudPage()
+    flow._page = old_page
+
+    flow.update_live_hud({
+        'state': 'OPEN_EDIT_PAGE',
+        'human_title': '正在打开编辑页',
+        'human_action': '进入采集箱商品编辑页',
+    })
+    flow._reapply_live_hud_if_available(new_page)
+
+    assert new_page.hud_payloads[-1]['state'] == 'OPEN_EDIT_PAGE'
+    assert new_page.hud_payloads[-1]['human_title'] == '正在打开编辑页'
+
+
+def test_live_browser_hud_caches_status_before_page_exists():
+    flow = DxmLoginFlow(DummyLiveClient())
+    result = flow.update_live_hud({
+        'state': 'OPEN_DATA_ACQUISITION',
+        'human_title': '正在打开数据采集',
+        'human_action': '进入店小秘数据采集页',
+    })
+    assert result['updated'] is False
+    assert result['reason'] == 'live_browser_page_missing'
+
+    page = DummyHudPage()
+    flow._reapply_live_hud_if_available(page)
+
+    assert page.hud_payloads[-1]['state'] == 'OPEN_DATA_ACQUISITION'
+    assert page.hud_payloads[-1]['human_action'] == '进入店小秘数据采集页'
+
+
 class DummyClaimMarkDraftPage(DummyDraftPage):
     def __init__(self):
         super().__init__({'ok': False, 'matches': []})
