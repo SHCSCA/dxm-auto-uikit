@@ -6228,6 +6228,7 @@ tr:last-child td {
 
 .runtime-log-preview {
   min-width: 0;
+  min-height: 0;
   display: grid;
   gap: 5px;
   padding: 10px;
@@ -6235,6 +6236,17 @@ tr:last-child td {
   border-radius: var(--radius);
   background: #111820;
   color: #d9e3ee;
+  overflow: hidden;
+}
+
+.runtime-log-preview__body {
+  min-width: 0;
+  min-height: 0;
+  max-height: 116px;
+  overflow-y: auto;
+  display: grid;
+  gap: 5px;
+  padding-right: 2px;
 }
 
 .runtime-log-refresh {

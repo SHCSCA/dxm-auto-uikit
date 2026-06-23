@@ -50,6 +50,7 @@ def test_desktop_build_patches_portable_launcher_exec_quoting():
 
 def test_desktop_main_starts_backend_hidden_and_loads_frontend_with_api_base():
     source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    kill_backend_section = source[source.index("function killBackendProcess"):source.index("async function createWindow")]
 
     assert "app.setName('DXM Agent Console')" in source
     assert "function resolveRepoRoot()" in source
@@ -81,6 +82,10 @@ def test_desktop_main_starts_backend_hidden_and_loads_frontend_with_api_base():
     assert "windowVisible: Boolean(mainWindow && mainWindow.isVisible())" in source
     assert "QA visible smoke written" in source
     assert "webContents.capturePage()" in source
+    assert "taskkill.exe" in kill_backend_section
+    assert "'/T'" in kill_backend_section
+    assert "'/F'" in kill_backend_section
+    assert "appendDesktopLog(`Stopping backend process tree" in kill_backend_section
 
 
 def test_desktop_main_logs_packaged_probe_resource_status_before_backend_start():
@@ -93,7 +98,7 @@ def test_desktop_main_logs_packaged_probe_resource_status_before_backend_start()
     assert "config/l2_readonly_allowlist.json" in source
     assert "Packaged resource status:" in source
     assert "logPackagedResourceStatus(repoRoot)" in startup_section
-    assert startup_section.index("logPackagedResourceStatus(repoRoot)") < startup_section.index("startBackend(repoRoot, port)")
+    assert startup_section.index("logPackagedResourceStatus(repoRoot)") < startup_section.index("startBackend(repoRoot, port, backendInstanceId)")
     assert "QA capture written" in source
 
 
@@ -104,8 +109,22 @@ def test_desktop_backend_health_check_requires_ok_json_response():
     assert "const chunks = []" in health_section
     assert "JSON.parse(raw)" in health_section
     assert "payload.status === 'ok'" in health_section
+    assert "expectedInstanceId" in health_section
+    assert "payload.instanceId === expectedInstanceId" in health_section
+    assert "different backend instance" in health_section
     assert "response.statusCode >= 200 && response.statusCode < 300" in health_section
     assert "response.statusCode < 500" not in health_section
+
+
+def test_desktop_backend_start_sets_unique_instance_id_for_health_handshake():
+    source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    startup_section = source[source.index("async function createWindow"):source.index("ipcMain.handle")]
+    start_backend_section = source[source.index("function startBackend"):source.index("function waitForHealth")]
+
+    assert "function createBackendInstanceId()" in source
+    assert "const backendInstanceId = createBackendInstanceId()" in startup_section
+    assert "DXM_BACKEND_INSTANCE_ID: backendInstanceId" in start_backend_section
+    assert "waitForHealth(runtimeInfo.apiBase, 45000, backendInstanceId)" in startup_section
 
 
 def test_desktop_main_surfaces_startup_failures_in_visible_window():
@@ -274,7 +293,7 @@ def test_user_docs_present_desktop_exe_as_primary_delivery_entry():
         assert "D:\\Desktop\\DXM-Agent-Console-免安装版\\DXM-Agent-Console-Portable-0.1.0.exe" in source
         assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
         assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in source
-        assert "61B57C6EE39E6D2E6874CB7BB9F575D327EB274B87BC637E9CB6B19FC85E79FC" in source
+        assert "28E0FC7FC4FC14D56F444043F81603B5545A6549DC66350D6524CAE70811918E" in source
         assert "portable 首次启动会解包 Electron 与 Python 运行时" in source
         assert "%TEMP%` 所在磁盘建议至少保留 1GB 可用空间" in source
         assert "scripts\\start-desktop.bat" in source
@@ -289,7 +308,7 @@ def test_portable_quick_guide_uses_verified_portable_entry():
     assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
     assert "使用目录版时必须保留整个文件夹和 `resources` 目录" in source
     assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in source
-    assert "61B57C6EE39E6D2E6874CB7BB9F575D327EB274B87BC637E9CB6B19FC85E79FC" in source
+    assert "28E0FC7FC4FC14D56F444043F81603B5545A6549DC66350D6524CAE70811918E" in source
     assert "至少建议保留 1GB 可用空间" in source
 
 
@@ -373,11 +392,15 @@ def test_frontend_surfaces_electron_desktop_runtime_metadata():
     assert "export type DesktopRuntimeInfo" in types_source
     assert "dxmDesktop?: {" in types_source
     assert "getRuntimeInfo: () => Promise<DesktopRuntimeInfo>" in types_source
+    assert "backendInstanceId?: string | null" in types_source
+    assert "instanceId?: string | null" in types_source
     assert "const [desktopRuntime, setDesktopRuntime]" in app_source
     assert "window.dxmDesktop?.getRuntimeInfo" in app_source
     assert "desktopRuntime={desktopRuntime}" in app_source
     assert "desktopRuntime?: DesktopRuntimeInfo | null" in safety_source
     assert "免安装版：已接入本机服务" in safety_source
+    assert "backendInstanceMismatch" in safety_source
+    assert "桌面服务实例不一致" in safety_source
     assert "desktopRuntime.desktopLogPath" not in safety_source
     assert "desktopRuntime.backendLogPath" not in safety_source
     assert "桌面日志" not in safety_source

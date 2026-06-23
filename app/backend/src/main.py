@@ -137,6 +137,7 @@ RUNTIME_CONTROL_COMMAND_FILE = Path(
 )
 RUNTIME_CONTROL_MANAGED_BY_LAUNCHER = bool(os.environ.get('DXM_RUNTIME_CONTROL_COMMAND_FILE'))
 RUNTIME_DESKTOP_MODE = bool(os.environ.get('DXM_DESKTOP'))
+RUNTIME_BACKEND_INSTANCE_ID = os.environ.get('DXM_BACKEND_INSTANCE_ID')
 RUNTIME_VIRTUAL_LOG_SOURCES = {'task', 'agent'}
 RUNTIME_LOG_LEVELS = {'info', 'warning', 'error'}
 RUNTIME_LOG_STALE_SECONDS = 30 * 60
@@ -168,9 +169,9 @@ RUNTIME_LOG_TAG_PATTERNS = {
 }
 
 
-@app.get('/health', response_model=HealthResponse)
+@app.get('/health', response_model=HealthResponse, response_model_exclude_none=True)
 def health():
-    return HealthResponse(status='ok')
+    return HealthResponse(status='ok', instanceId=RUNTIME_BACKEND_INSTANCE_ID)
 
 
 @app.get('/api/engine')
@@ -593,6 +594,7 @@ def runtime_status(frontend_url: str | None = None):
             'status': 'ok',
             'url': backend_url,
             'port': _url_port(backend_url),
+            'instanceId': RUNTIME_BACKEND_INSTANCE_ID,
             'detail': 'Backend API is responding',
         },
         'frontend': _runtime_http_service_status('frontend', frontend_url),
@@ -629,6 +631,14 @@ def runtime_status(frontend_url: str | None = None):
             'restartAvailable': RUNTIME_CONTROL_MANAGED_BY_LAUNCHER,
             'commandFile': str(RUNTIME_CONTROL_COMMAND_FILE),
             'detail': _runtime_control_detail(),
+        },
+        'paths': {
+            'data_dir': str(DATA_DIR),
+            'dataDir': str(DATA_DIR),
+            'l2_readonly_probe_dir': str(L2_READONLY_PROBE_OUTPUT_DIR),
+            'l2ReadonlyProbeDir': str(L2_READONLY_PROBE_OUTPUT_DIR),
+            'resource_root': str(REPO_ROOT),
+            'resourceRoot': str(REPO_ROOT),
         },
     }
 
@@ -1194,11 +1204,12 @@ def _resource_dependency_user_info(relative_path: str) -> dict[str, Any]:
     return {
         'label': label,
         'requiredFor': '运行真实只读检查（只读，不保存）',
-        'repairAction': '重新打开完整免安装版',
+        'repairAction': '关闭旧后台进程后重新打开免安装版',
         'repairSteps': [
-            '关闭旧的 DXM Agent Console 或后台旧进程。',
-            '打开桌面免安装目录里的 DXM-Agent-Console.exe。',
-            '不要只复制 exe，必须保留 resources 文件夹。',
+            '关闭所有旧的 DXM Agent Console 窗口。',
+            '如果任务管理器里仍有 python.exe、uvicorn 或 DXM-Agent-Console，结束旧后台进程。',
+            '使用 Portable 单文件版时，直接重新打开 exe；不要继续操作残留窗口。',
+            '使用目录版时，必须保留同目录 resources 文件夹。',
             '如果仍缺失，请重新打包免安装版后再启动。',
         ],
     }
@@ -1706,6 +1717,7 @@ def _assert_task_can_receive_manual_approval(task_id: int, request: TaskManualAp
         raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')
     if _task_store_name(task) != 'Dang Kang':
         raise HTTPException(status_code=403, detail='Real DXM mutation task requires Dang Kang store')
+    _assert_real_task_uses_non_fixture_products(task)
     if not request.approved_by or not request.approved_by.strip():
         raise HTTPException(status_code=400, detail='approved_by is required')
     if request.confirmation != L3_CONFIRMATION:
@@ -1742,6 +1754,7 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
         raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')
     if _task_store_name(task) != 'Dang Kang':
         raise HTTPException(status_code=403, detail='Real DXM mutation task requires Dang Kang store')
+    _assert_real_task_uses_non_fixture_products(task)
 
     approval = payload.get('manual_approval') or {}
     if not isinstance(approval, dict):
@@ -1786,6 +1799,66 @@ def _assert_single_save_product_count(payload: dict[str, Any], *, status_code: i
             status_code=status_code,
             detail=f'single_save requires exactly one product; got {product_count}',
         )
+
+
+def _assert_real_task_uses_non_fixture_products(task: dict[str, Any]) -> None:
+    fixture_names = _real_task_fixture_product_names(task)
+    if fixture_names:
+        names = '、'.join(fixture_names[:3])
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f'当前任务选择的是测试/示例商品，不能启动真实店小秘保存：{names}。'
+                '请在“选择商品”中选择真实采集商品，或重新创建单商品只保存任务。'
+            ),
+        )
+
+
+def _real_task_fixture_product_names(task: dict[str, Any]) -> list[str]:
+    payload = task.get('payload') or {}
+    product_ids = payload.get('product_ids') if isinstance(payload, dict) else []
+    if not isinstance(product_ids, list):
+        product_ids = []
+    wanted_ids: set[int] = set()
+    for raw_id in product_ids:
+        try:
+            wanted_ids.add(int(raw_id))
+        except (TypeError, ValueError):
+            continue
+    names: list[str] = []
+    for product in repo.list_products():
+        if wanted_ids and int(product.get('id') or 0) not in wanted_ids:
+            continue
+        if _looks_like_real_task_fixture_product(product):
+            names.append(str(product.get('title') or f"product#{product.get('id')}"))
+    task_name = str(task.get('name') or '')
+    if _looks_like_fixture_text(task_name):
+        names.append(task_name)
+    return list(dict.fromkeys(name for name in names if name))
+
+
+def _looks_like_real_task_fixture_product(product: dict[str, Any]) -> bool:
+    title = str(product.get('title') or '')
+    source = str(product.get('source') or '')
+    payload = product.get('payload') or {}
+    payload_source = str(payload.get('source') or '') if isinstance(payload, dict) else ''
+    return (
+        _looks_like_fixture_text(title)
+        or (source == 'test' and 'qa guarded' in title.casefold())
+        or (payload_source == 'demo' and _looks_like_fixture_text(title))
+    )
+
+
+def _looks_like_fixture_text(value: str) -> bool:
+    normalized = value.casefold()
+    return any(marker in normalized for marker in (
+        'qa guarded product',
+        'qa guarded real mutation task',
+        'qa local gated single_save fixture',
+        '本地演示',
+        '测试商品',
+        '示例商品',
+    ))
 
 
 def _assert_direct_real_dxm_mutation_allowed(payload: DraftBoxActionRequest) -> None:

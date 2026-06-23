@@ -26,10 +26,10 @@ D:\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console-Portable-0.1.0.exe
 outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
 ```
 
-2026-06-22 本机 packaged/portable smoke 已通过，文件 SHA-256：
+2026-06-23 本机 packaged/portable smoke 已通过，文件 SHA-256：
 
 ```text
-24319C572777C40D9B1C3B2D46CD8582859ED0FE834EE204E1FAC51C5E15FFA4
+28E0FC7FC4FC14D56F444043F81603B5545A6549DC66350D6524CAE70811918E
 ```
 
 仓库内也保留同源构建产物：
@@ -152,10 +152,10 @@ D:\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console-Portable-0.1.0.exe
 outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
 ```
 
-2026-06-22 本机 packaged/portable smoke 已通过，文件 SHA-256：
+2026-06-23 本机 packaged/portable smoke 已通过，文件 SHA-256：
 
 ```bat
-24319C572777C40D9B1C3B2D46CD8582859ED0FE834EE204E1FAC51C5E15FFA4
+28E0FC7FC4FC14D56F444043F81603B5545A6549DC66350D6524CAE70811918E
 ```
 
 仓库内同源构建产物：

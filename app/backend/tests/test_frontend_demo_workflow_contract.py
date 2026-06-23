@@ -2447,6 +2447,7 @@ def test_execution_console_default_log_summary_hides_absolute_paths():
 
 def test_runtime_log_default_views_humanize_lines_and_keep_raw_lines_in_diagnostics():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
     preview_section = source[source.index("function RuntimeLogPreview"):source.index("function RuntimeLogPanel")]
     panel_section = source[source.index("function RuntimeLogPanel"):source.index("function runtimeLogRefreshMeta")]
     summary_line_section = source[source.index("function RuntimeLogSummaryLine"):source.index("function RuntimeLogLine")]
@@ -2466,6 +2467,10 @@ def test_runtime_log_default_views_humanize_lines_and_keep_raw_lines_in_diagnost
     assert "function technicalRuntimeLogHint(line: string)" in source
     assert "greenlet" in source
     assert "Playwright" in source
+    assert "runtime-log-preview__body" in preview_section
+    assert ".runtime-log-preview__body" in styles_source
+    assert "overflow-y: auto" in styles_source[styles_source.index(".runtime-log-preview__body"):styles_source.index(".runtime-log-refresh")]
+    assert ".replace(/^(INFO|WARNING|ERROR)\\s+task#\\d+(?:\\s+job#\\d+)?:\\s*/i, '')" in source
 
 
 def test_report_center_treats_missing_l3_evidence_as_expected_when_real_write_blocked():

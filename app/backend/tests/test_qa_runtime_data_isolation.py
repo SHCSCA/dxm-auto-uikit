@@ -183,7 +183,7 @@ def test_user_delivery_guide_explains_l2_allowlist_review_packet():
 def test_user_delivery_guide_has_current_acceptance_checklist():
     guide = USER_DELIVERY_GUIDE.read_text(encoding="utf-8")
 
-    assert "# 用户交付使用说明 - 2026-06-18" in guide
+    assert "# 用户交付使用说明 - 2026-06-23" in guide
     assert "## 验收人快速判定清单" in guide
     assert "自动化工作台验收通过" in guide
     assert "`Local workbench check: PASS`" in guide

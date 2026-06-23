@@ -102,6 +102,11 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
   const backendPortMismatch = typeof desktopRuntime?.backendPort === 'number'
     && typeof runtimeStatus?.backend.port === 'number'
     && desktopRuntime.backendPort !== runtimeStatus.backend.port
+  const backendInstanceMismatch = Boolean(
+    desktopRuntime?.backendInstanceId
+    && runtimeStatus
+    && runtimeStatus.backend.instanceId !== desktopRuntime.backendInstanceId,
+  )
   const runtimeChips = runtimeStatus
     ? [
       { label: `启动方式：${runtimeOwnerChip}`, tone: runtimeOwner === 'direct' ? 'warn' : 'ok' },
@@ -116,6 +121,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
     ...runtimeChips,
     ...(desktopRuntime ? [{ label: '免安装版：已接入本机服务', tone: desktopRuntime.lastError ? 'danger' : 'ok' }] : []),
     ...(backendPortMismatch ? [{ label: '桌面服务与当前接口不一致', tone: 'danger' }] : []),
+    ...(backendInstanceMismatch ? [{ label: '桌面服务实例不一致', tone: 'danger' }] : []),
     { label: `真实只读检查：${humanGateStatus(l2Gate?.status ?? 'not_run')}`, tone: l2BlocksRealSave ? 'danger' : 'ok' },
     { label: `人工确认：${l3NeedsApproval ? `不可启动 / ${humanGateStatus(l3Gate?.status ?? 'not_run')}` : humanGateStatus(l3Gate?.status ?? 'not_run')}`, tone: l3BlocksRealSave ? 'danger' : l3NeedsApproval ? 'warn' : 'ok' },
     ...visibleBlockerGaps.slice(0, 2).map((gap) => ({ label: `阻断项：${gap.title}`, tone: 'danger' })),

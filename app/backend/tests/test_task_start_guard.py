@@ -51,11 +51,18 @@ def _client_with_temp_repo(tmp_path, monkeypatch):
     return TestClient(app), repo, runner
 
 
-def _create_task(repo: Repository, *, mode: str = "single_save", store_name: str = "Dang Kang", approval: dict | None = None):
+def _create_task(
+    repo: Repository,
+    *,
+    mode: str = "single_save",
+    store_name: str = "Dang Kang",
+    approval: dict | None = None,
+    product_title: str = "ACG Stand Product",
+):
     store = repo.create_store(store_name, "AliExpress")
     product = repo.create_product(
         {
-            "title": "ACG Stand Product",
+            "title": product_title,
             "source": "test",
             "category_name": "立牌类谷子",
             "price": 7.01,
@@ -382,6 +389,30 @@ def test_single_save_start_accepts_matching_manual_approval_token(tmp_path, monk
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert repo.get_task(task["id"])["status"] == "running"
+
+
+def test_single_save_start_rejects_qa_fixture_product_before_real_browser(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_task(repo, product_title="QA guarded product")
+    _approve_task(repo, task["id"], "l3-token")
+
+    response = client.post(
+        f"/api/tasks/{task['id']}/start",
+        json={
+            "manual_approval": True,
+            "approval_token": "l3-token",
+            "approved_by": "ops-owner",
+            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
+        },
+    )
+
+    assert response.status_code == 409
+    assert "测试/示例商品" in response.json()["detail"]
+    assert "真实采集商品" in response.json()["detail"]
+    assert runner.calls == []
 
 
 def test_single_save_start_accepts_task_template_overrides_for_required_fields(tmp_path, monkeypatch):
@@ -873,6 +904,21 @@ def test_runtime_status_reports_services_agent_and_dependencies(tmp_path, monkey
     assert payload["dependencies"]["python"]["status"] == "ok"
 
 
+def test_runtime_status_exposes_backend_data_dir_and_instance_id(tmp_path, monkeypatch):
+    import src.main as main
+
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(main, "RUNTIME_BACKEND_INSTANCE_ID", "desktop-instance-test")
+
+    response = client.get("/api/runtime/status?frontend_url=http://127.0.0.1:9")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["backend"]["instanceId"] == "desktop-instance-test"
+    assert payload["paths"]["data_dir"] == str(main.DATA_DIR)
+    assert payload["paths"]["l2_readonly_probe_dir"] == str(main.L2_READONLY_PROBE_OUTPUT_DIR)
+
+
 def test_runtime_status_treats_electron_file_frontend_as_desktop_page(tmp_path, monkeypatch):
     client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
 
@@ -1153,8 +1199,9 @@ def test_runtime_status_reports_l2_probe_checked_paths_when_resource_missing(tmp
     assert runner["label"] == "只读页面检查启动器"
     assert runner["requiredFor"] == "运行真实只读检查（只读，不保存）"
     assert runner["userMessage"] == "真实只读检查组件未安装完整：缺少只读页面检查启动器。"
-    assert runner["repairAction"] == "重新打开完整免安装版"
-    assert "不要只复制 exe，必须保留 resources 文件夹。" in runner["repairSteps"]
+    assert runner["repairAction"] == "关闭旧后台进程后重新打开免安装版"
+    assert "使用 Portable 单文件版时，直接重新打开 exe；不要继续操作残留窗口。" in runner["repairSteps"]
+    assert "使用目录版时，必须保留同目录 resources 文件夹。" in runner["repairSteps"]
 
 
 def test_runtime_status_reports_l2_probe_runner_lock_state(tmp_path, monkeypatch):

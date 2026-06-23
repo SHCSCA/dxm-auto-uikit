@@ -3,7 +3,8 @@ const path = require('node:path')
 const fs = require('node:fs')
 const net = require('node:net')
 const http = require('node:http')
-const { spawn } = require('node:child_process')
+const crypto = require('node:crypto')
+const { spawn, execFileSync } = require('node:child_process')
 
 app.setName('DXM Agent Console')
 
@@ -13,6 +14,7 @@ let backendProcess = null
 const runtimeInfo = {
   repoRoot: null,
   backendPort: null,
+  backendInstanceId: null,
   apiBase: null,
   frontendPath: null,
   backendLogPath: null,
@@ -358,6 +360,10 @@ function findFreePort(preferredPort, maxAttempts = 80) {
   })
 }
 
+function createBackendInstanceId() {
+  return `desktop-${Date.now().toString(36)}-${crypto.randomBytes(6).toString('hex')}`
+}
+
 function resolvePythonPath(repoRoot) {
   const bundledVenvPython = path.join(repoRoot, 'app', 'backend', '.venv', 'Scripts', 'python.exe')
   // Contract path: app/backend/.venv/Scripts/python.exe
@@ -370,7 +376,7 @@ function resolvePythonPath(repoRoot) {
   return process.platform === 'win32' ? 'python' : 'python3'
 }
 
-function startBackend(repoRoot, port) {
+function startBackend(repoRoot, port, backendInstanceId) {
   const backendDir = path.join(repoRoot, 'app', 'backend')
   const dataDir = ensureDataDir(repoRoot)
   const backendLogPath = path.join(dataDir, 'backend.log')
@@ -391,6 +397,7 @@ function startBackend(repoRoot, port) {
       DXM_LAUNCHER_LOG_FILE: runtimeInfo.desktopLogPath,
       DXM_BACKEND_PORT: String(port),
       DXM_BACKEND_URL: `http://127.0.0.1:${port}`,
+      DXM_BACKEND_INSTANCE_ID: backendInstanceId,
       // Desktop mode contract: DXM_DESKTOP=1
       DXM_DESKTOP: '1',
       PYTHONIOENCODING: 'utf-8',
@@ -412,7 +419,7 @@ function startBackend(repoRoot, port) {
   })
 }
 
-function waitForHealth(apiBase, timeoutMs = 45000) {
+function waitForHealth(apiBase, timeoutMs = 45000, expectedInstanceId = null) {
   const startedAt = Date.now()
   return new Promise((resolve, reject) => {
     const poll = () => {
@@ -424,6 +431,11 @@ function waitForHealth(apiBase, timeoutMs = 45000) {
             const raw = Buffer.concat(chunks).toString('utf8')
             const payload = JSON.parse(raw)
             if (response.statusCode && response.statusCode >= 200 && response.statusCode < 300 && payload.status === 'ok') {
+              const instanceMatches = !expectedInstanceId || payload.instanceId === expectedInstanceId
+              if (!instanceMatches) {
+                reject(new Error(`Backend health check reached a different backend instance at ${apiBase}/health`))
+                return
+              }
               resolve()
               return
             }
@@ -463,9 +475,21 @@ function resolveFrontendPath(repoRoot) {
 
 function killBackendProcess() {
   if (!backendProcess || backendProcess.killed) return
-  appendDesktopLog('Stopping backend process')
-  backendProcess.kill()
+  const processToStop = backendProcess
   backendProcess = null
+  appendDesktopLog(`Stopping backend process tree pid=${processToStop.pid ?? 'unknown'}`)
+  if (process.platform === 'win32' && processToStop.pid) {
+    try {
+      execFileSync('taskkill.exe', ['/PID', String(processToStop.pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      })
+      return
+    } catch (error) {
+      appendDesktopLog(`taskkill backend process tree failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+  processToStop.kill()
 }
 
 async function createWindow() {
@@ -480,11 +504,13 @@ async function createWindow() {
     const repoRoot = resolveRepoRoot()
     runtimeInfo.repoRoot = repoRoot
     const port = await findFreePort(8000)
+    const backendInstanceId = createBackendInstanceId()
     runtimeInfo.backendPort = port
+    runtimeInfo.backendInstanceId = backendInstanceId
     runtimeInfo.apiBase = `http://127.0.0.1:${port}`
     logPackagedResourceStatus(repoRoot)
-    startBackend(repoRoot, port)
-    await waitForHealth(runtimeInfo.apiBase)
+    startBackend(repoRoot, port, backendInstanceId)
+    await waitForHealth(runtimeInfo.apiBase, 45000, backendInstanceId)
 
     const frontendPath = resolveFrontendPath(repoRoot)
     runtimeInfo.frontendPath = frontendPath

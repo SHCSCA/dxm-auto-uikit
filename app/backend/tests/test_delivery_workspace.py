@@ -533,6 +533,34 @@ def test_delivery_workspace_reads_l2_probe_from_runtime_data_dir(tmp_path, monke
     assert data["safety"]["l2Status"] == "passed"
 
 
+def test_delivery_workspace_l2_gate_reports_probe_source_dir(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_delivery_fixture(repo, with_network=True)
+    runtime_l2_dir = tmp_path / "runtime_data" / "l2_readonly_probe"
+    monkeypatch.setattr(delivery_workspace, "L2_RUNTIME_PROBE_DIR", runtime_l2_dir, raising=False)
+    created_at = _fresh_l2_created_at()
+    _write_l2_probe_result(
+        runtime_l2_dir,
+        "data_acquisition",
+        target_url="https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
+        created_at=created_at,
+    )
+    _write_l2_probe_result(
+        runtime_l2_dir,
+        "draft_box",
+        target_url="https://www.dianxiaomi.com/web/smt/smtProductList/draft",
+        created_at=created_at,
+    )
+
+    response = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}")
+
+    assert response.status_code == 200
+    l2_gate = next(gate for gate in response.json()["regression_gates"] if gate["level"] == "L2")
+    assert l2_gate["status"] == "passed"
+    assert l2_gate["latest"]["selectedProbeResultDir"] == str(runtime_l2_dir)
+    assert l2_gate["latest"]["probeResultDirs"][0]["path"] == str(runtime_l2_dir)
+
+
 def test_delivery_workspace_prioritizes_runtime_l2_over_repo_l2(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     fixture = _create_delivery_fixture(repo, with_network=True)

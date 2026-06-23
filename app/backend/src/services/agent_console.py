@@ -213,6 +213,7 @@ class AgentConsoleService:
         human_next: str | None = None,
         recent_actions: list[str] | None = None,
         requires_user_action: bool | None = None,
+        guard: str | None = None,
     ) -> dict[str, Any]:
         with self._lock:
             if not self._state.get("active"):
@@ -242,7 +243,7 @@ class AgentConsoleService:
                 "action": _step_action(field_domain, mode),
                 "next_step": next_step or "等待状态机推进",
                 "store_name": store_name or "Dang Kang",
-                "guard": "只保存不发布",
+                "guard": guard or "只保存不发布",
                 "phase": phase,
                 "progress_index": progress_index,
                 "progress_total": progress_total,
@@ -665,6 +666,10 @@ class AgentConsoleService:
             pass
 
     def _apply_hud(self, page, hud: dict[str, Any]) -> None:
+        try:
+            page.evaluate(HUD_INIT_SCRIPT)
+        except Exception:
+            pass
         page.evaluate(
             """
             (hud) => {
@@ -959,6 +964,14 @@ HUD_INIT_SCRIPT = """
       </div>
     `;
   };
+  if (!window.__dxmAgentHudObserver) {
+    window.__dxmAgentHudObserver = new MutationObserver(() => {
+      if (!document.getElementById(ID) && window.__dxmRenderAgentHud) {
+        window.__dxmRenderAgentHud();
+      }
+    });
+    window.__dxmAgentHudObserver.observe(document.documentElement, { childList: true, subtree: true });
+  }
   window.__dxmRenderAgentHud();
 })();
 """

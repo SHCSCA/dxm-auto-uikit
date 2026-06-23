@@ -4807,13 +4807,15 @@ function RuntimeLogPreview({
         <small>{refreshMeta.detail}</small>
       </div>
       {error && <div className="console-error">{error}</div>}
-      {visibleItems.length ? (
-        visibleItems.map((item, index) => (
-          <RuntimeLogSummaryLine key={`${source}-preview-${index}`} item={item} compact />
-        ))
-      ) : (
-        <span>{current?.exists === false ? '日志文件尚未生成。' : '等待服务写入日志...'}</span>
-      )}
+      <div className="runtime-log-preview__body">
+        {visibleItems.length ? (
+          visibleItems.map((item, index) => (
+            <RuntimeLogSummaryLine key={`${source}-preview-${index}`} item={item} compact />
+          ))
+        ) : (
+          <span>{current?.exists === false ? '日志文件尚未生成。' : '等待服务写入日志...'}</span>
+        )}
+      </div>
       <small>正在实时刷新；切换来源只影响当前预览。</small>
     </div>
   )
@@ -5030,6 +5032,8 @@ function technicalRuntimeLogHint(line: string) {
 function stripRuntimeLogPrefix(line: string) {
   return line
     .replace(/^\[[^\]]+\]\s*/, '')
+    .replace(/^(INFO|WARNING|ERROR)\s+task#\d+(?:\s+job#\d+)?:\s*/i, '')
+    .replace(/^(INFO|WARNING|ERROR)\s+/i, '')
     .replace(/^\d{8,}[\w-]*\s+/, '')
     .slice(0, 180)
 }

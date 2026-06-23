@@ -2,6 +2,7 @@ export type Store = { id: number; name: string; platform: string; status: string
 export type DesktopRuntimeInfo = {
   repoRoot?: string | null
   backendPort?: number | null
+  backendInstanceId?: string | null
   apiBase?: string | null
   frontendPath?: string | null
   backendLogPath?: string | null
@@ -63,7 +64,7 @@ export type RuntimeLogSource = 'backend' | 'frontend' | 'launcher' | 'npm' | 'ta
 export type RuntimeLogItem = { line: string; level: 'info' | 'warning' | 'error' | string; tags: string[] }
 export type RuntimeLogResponse = { source: string; path: string; exists: boolean; cursor: number; nextCursor: number; lines: string[]; items?: RuntimeLogItem[]; truncated?: boolean; modifiedAt?: string | null; ageSeconds?: number | null; stale?: boolean; fetchedAt?: string; error?: string }
 export type RuntimeStatus = {
-  backend: { status: string; url?: string; port?: number | null; detail?: string }
+  backend: { status: string; url?: string; port?: number | null; instanceId?: string | null; detail?: string }
   frontend: { status: string; url?: string; port?: number | null; detail?: string }
   agentConsole: { status: string; active: boolean; browserVisible: boolean; browserLaunching?: boolean; currentUrl?: string | null; profileDir?: string | null; lastError?: string | null }
   dxmLogin: { status: string; currentUrl?: string | null; lastError?: string | null }
@@ -84,6 +85,14 @@ export type RuntimeStatus = {
     restartAvailable: boolean
     commandFile?: string | null
     detail?: string | null
+  }
+  paths?: {
+    data_dir?: string
+    dataDir?: string
+    l2_readonly_probe_dir?: string
+    l2ReadonlyProbeDir?: string
+    resource_root?: string
+    resourceRoot?: string
   }
 }
 export type RuntimeControlAction = 'stop_agent_console' | 'clear_stuck_tasks' | 'mark_real_task_manual_review' | 'restart_backend' | 'restart_frontend' | 'run_l2_readonly_probe'

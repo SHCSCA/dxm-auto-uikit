@@ -841,6 +841,8 @@ def _l2_probe_gate(now: datetime | None = None) -> dict[str, Any]:
             target for target in REQUIRED_L2_TARGETS
             if target not in real_targets
         ],
+        "probeResultDirs": grouped.get("probeResultDirs", []),
+        "selectedProbeResultDir": grouped.get("selectedProbeResultDir"),
     }
 
     if real_targets:
@@ -917,7 +919,8 @@ def _l2_probe_gate(now: datetime | None = None) -> dict[str, Any]:
     }
 
 
-def _latest_l2_probe_results_by_target() -> dict[str, dict[str, dict[str, Any]]]:
+def _latest_l2_probe_results_by_target() -> dict[str, Any]:
+    probe_dirs = _l2_probe_result_dir_statuses()
     for directory in _l2_probe_result_dirs():
         if not directory.exists():
             continue
@@ -928,8 +931,20 @@ def _latest_l2_probe_results_by_target() -> dict[str, dict[str, dict[str, Any]]]
         )
         grouped = _group_l2_probe_results_by_target(candidates)
         if grouped["real"] or grouped["mock"]:
+            grouped["probeResultDirs"] = probe_dirs
+            grouped["selectedProbeResultDir"] = str(directory)
             return grouped
-    return {"real": {}, "mock": {}}
+    return {"real": {}, "mock": {}, "probeResultDirs": probe_dirs, "selectedProbeResultDir": None}
+
+
+def _l2_probe_result_dir_statuses() -> list[dict[str, Any]]:
+    return [
+        {
+            "path": str(directory),
+            "exists": directory.exists(),
+        }
+        for directory in _l2_probe_result_dirs()
+    ]
 
 
 def _group_l2_probe_results_by_target(candidates: list[Path]) -> dict[str, dict[str, dict[str, Any]]]:

@@ -236,6 +236,7 @@ def test_agent_console_updates_task_step_without_launching_browser(tmp_path, mon
         store_name="Dang Kang",
         next_step="记录未发布证明",
         screenshot_path="data/screenshots/save.txt",
+        guard="只保存不发布",
     )
 
     assert result["updated"] is True
@@ -305,6 +306,9 @@ def test_agent_console_hud_persists_latest_business_progress_across_navigation()
     assert "sessionStorage.getItem('__dxmAgentHudPersistedState')" in script
     assert "sessionStorage.setItem('__dxmAgentHudPersistedState'" in source
     assert "window.__dxmAgentHudState = persisted || window.__dxmAgentHudState || {}" in script
+    assert "window.__dxmAgentHudObserver" in script
+    assert "new MutationObserver" in script
+    assert "page.evaluate(HUD_INIT_SCRIPT)" in source
 
 
 def test_agent_console_records_recent_actions_on_hud(tmp_path, monkeypatch):

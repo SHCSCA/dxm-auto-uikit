@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 class HealthResponse(BaseModel):
     status: str
+    instanceId: str | None = None
 
 
 class StoreCreate(BaseModel):
