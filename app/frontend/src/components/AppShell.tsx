@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, type ReactNode } from 'react'
 import type { WorkbenchSection } from '../types'
 
 type WorkbenchPrimaryArea = {
-  id: 'daily_flow' | 'review' | 'system'
+  id: 'prepare' | 'workflow' | 'review' | 'system'
   label: string
   short: string
   items: Array<{ id: WorkbenchSection; label: string; short: string; hint: string }>
@@ -10,47 +10,54 @@ type WorkbenchPrimaryArea = {
 
 const primaryAreas: WorkbenchPrimaryArea[] = [
   {
-    id: 'daily_flow',
-    label: '日常流程',
+    id: 'prepare',
+    label: '准备',
     short: '1',
     items: [
-      { id: 'home', label: '今日任务', short: '今', hint: '看今天该处理哪一步' },
-      { id: 'dxm_access', label: '登录店小秘', short: '登', hint: '打开真实店小秘并确认登录' },
-      { id: 'acquisition_claim', label: '采集认领', short: '采', hint: '从数据采集认领到采集箱' },
-      { id: 'draft_edit_save', label: '编辑保存', short: '编', hint: '从采集箱打开编辑页并只保存' },
+      { id: 'home', label: '首页', short: '首', hint: '看当前该做什么' },
+      { id: 'dxm_access', label: '店小秘登录', short: '登', hint: '打开真实店小秘并确认登录' },
+    ],
+  },
+  {
+    id: 'workflow',
+    label: '两段流程',
+    short: '2',
+    items: [
+      { id: 'acquisition_claim', label: '数据采集认领', short: '采', hint: '从数据采集认领到采集箱' },
+      { id: 'draft_edit_save', label: '采集箱编辑保存', short: '编', hint: '从采集箱打开编辑页并只保存' },
       { id: 'template_center', label: '模板中心', short: '模', hint: '管理店铺和类目模板' },
+      { id: 'start_save', label: '执行浏览器', short: '执', hint: '查看真实浏览器和 Agent 执行状态' },
     ],
   },
   {
     id: 'review',
-    label: '结果复盘',
-    short: '2',
+    label: '复盘',
+    short: '3',
     items: [
-      { id: 'results', label: '保存结果', short: '果', hint: '确认保存成功且未发布' },
+      { id: 'results', label: '结果报告', short: '报', hint: '确认保存成功且未发布' },
       { id: 'issues', label: '问题处理', short: '问', hint: '按失败原因恢复' },
     ],
   },
   {
     id: 'system',
-    label: '帮助与系统',
-    short: '3',
+    label: '系统',
+    short: '4',
     items: [
-      { id: 'help', label: '使用帮助', short: '帮', hint: '普通用户操作说明' },
       { id: 'settings', label: '系统设置', short: '设', hint: '日志、服务、维护诊断' },
     ],
   },
 ]
 
 const sectionLabels: Record<WorkbenchSection, string> = {
-  home: '今日任务',
-  dxm_access: '登录店小秘',
-  acquisition_claim: '采集认领',
-  draft_edit_save: '编辑保存',
+  home: '首页',
+  dxm_access: '店小秘登录',
+  acquisition_claim: '数据采集认领',
+  draft_edit_save: '采集箱编辑保存',
   template_center: '模板中心',
-  product_tasks: '商品任务',
-  current_task: '当前任务',
-  task_history: '历史任务',
-  edit_config: '填写编辑页',
+  product_tasks: '数据采集认领',
+  current_task: '数据采集认领',
+  task_history: '数据采集认领',
+  edit_config: '模板中心',
   config_basic: '基础信息',
   config_category_title: '类目与标题',
   config_price_stock: '价格库存',
@@ -58,11 +65,11 @@ const sectionLabels: Record<WorkbenchSection, string> = {
   config_logistics: '包装物流',
   config_compliance: '合规海关',
   template_management: '模板管理',
-  start_save: '开始只保存',
+  start_save: '执行浏览器',
   preflight: '运行前检查',
-  real_browser: '真实浏览器',
+  real_browser: '执行浏览器',
   manual_takeover: '人工接管',
-  results: '保存结果',
+  results: '结果报告',
   issues: '问题处理',
   evidence: '证据归档',
   help: '使用帮助',
@@ -104,8 +111,8 @@ export function AppShell({
           {!sidebarCollapsed && (
             <div>
               <strong>DXM 只保存自动化</strong>
-              <span>采集认领后只保存，不发布</span>
-              <span className="sr-only">今日任务 / 登录店小秘 / 采集认领 / 编辑保存 / 模板中心 / 保存结果 / 问题处理 / 使用帮助 / 系统设置</span>
+              <span>数据采集认领后只保存，不发布</span>
+              <span className="sr-only">首页 / 店小秘登录 / 数据采集认领 / 采集箱编辑保存 / 模板中心 / 执行浏览器 / 结果报告 / 问题处理 / 系统设置</span>
             </div>
           )}
           <button className="icon-button" type="button" onClick={onToggleSidebar} aria-label="切换侧边栏">
@@ -152,7 +159,7 @@ export function AppShell({
             </section>
           ))}
         </nav>
-        <span className="sr-only">数据连接状态：{sourceLabel}。真实店小秘操作分为采集认领和编辑保存两段完成。</span>
+        <span className="sr-only">数据连接状态：{sourceLabel}。真实店小秘操作分为数据采集认领和采集箱编辑保存两段完成。</span>
       </aside>
       <main ref={mainRef} className="workspace" tabIndex={-1} aria-label={`${activeLabel}主内容`}>
         <span className="sr-only" aria-live="polite">当前页面：{activeLabel}</span>
