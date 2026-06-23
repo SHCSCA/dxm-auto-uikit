@@ -1113,13 +1113,13 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "export function HomePage" in home_page_source
     assert "现在只做这一步" in home_page_source
     assert "登录真实店小秘" in home_page_source
-    assert "创建单商品只保存任务" in home_page_source
-    assert "填写编辑页配置" in home_page_source
+    assert "创建数据采集认领任务" in home_page_source
+    assert "填写模板中心配置" in home_page_source
     assert "运行真实只读检查" in home_page_source
     assert "人工确认只保存" in home_page_source
     assert "启动执行浏览器" in home_page_source
     assert "function OperationGuide" in home_page_source
-    assert "选择单商品只保存任务" in home_page_source
+    assert "数据采集认领到采集箱" in home_page_source
     assert "确认真实只读检查通过" in home_page_source
     assert "打开真实登录页" in dxm_access_source
     assert "验证码完成后检测登录状态" in dxm_access_source
@@ -1208,10 +1208,10 @@ def test_first_screen_keeps_status_and_precheck_guidance_compact():
     assert "现在只做这一步" in home_page_source
     assert "home-command__status-grid" in home_page_source
     assert "grid-template-columns: repeat(3, minmax(0, 1fr));" in home_command_styles
-    assert "当前控制权" in home_page_source
+    assert "为什么不能继续" in home_page_source
     assert "用户操作中" in home_page_source
     assert "Agent 操作中" in home_page_source
-    assert "系统等待确认" in home_page_source
+    assert "等待人工确认" in home_page_source
     assert "DxmLoginInlineForm" in dxm_access_source
     assert "operator-inline-form" in dxm_access_source
     assert ".guide-step__summary-line" in styles_source
@@ -2449,7 +2449,7 @@ def test_dashboard_and_guide_default_copy_hide_gate_codes():
         assert "single_save 任务" not in section
         assert "运行 L2 页面核验" not in section
         assert "运行 L2 复验" not in section
-    assert "选择单商品只保存任务" in operation_guide_section
+    assert "数据采集认领到采集箱" in operation_guide_section
     assert "确认真实只读检查通过" in operation_guide_section
     assert "打开真实登录页" in dxm_access_source
     assert "AgentStagePanel" in console_section
@@ -4069,9 +4069,10 @@ def test_frontend_first_screen_names_dxm_automation_delivery():
     safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
     qa_source = QA_BROWSER_CHECK.read_text(encoding="utf-8")
 
-    assert "今天先做哪一步" in source
-    assert "按真实店铺、真实商品和编辑页配置推进" in source
-    assert "不会发布；批量和无人值守保存仍保持关闭" in source
+    assert "首页" in source
+    assert "按两段真实流程推进" in source
+    assert "不会发布；批量和无人值守保存保持关闭" in source
+    assert "首页决策：现在该做什么 / 为什么不能继续 / 下一步" in source
     assert "aria-label=\"保存边界\"" in source
     assert "当前模式</strong><b>只保存" in source
     assert "保存范围</strong><b>{realWriteReady ? '单商品只保存可执行' : '等待人工确认'}" in source
@@ -4178,8 +4179,8 @@ def test_home_dashboard_is_operator_command_center_not_static_metrics():
     assert "onShowReports" in dashboard_section
     assert "现在只做这一步" in dashboard_section
     assert "登录真实店小秘" in dashboard_section
-    assert "创建单商品只保存任务" in dashboard_section
-    assert "填写编辑页配置" in dashboard_section
+    assert "创建数据采集认领任务" in dashboard_section
+    assert "填写模板中心配置" in dashboard_section
     assert "运行真实只读检查" in dashboard_section
     assert "人工确认只保存" in dashboard_section
     assert "启动执行浏览器" in dashboard_section
@@ -4192,6 +4193,19 @@ def test_home_dashboard_is_operator_command_center_not_static_metrics():
     assert "onShowReports={() => setActiveSection('results')}" in app_source
     assert ".home-command__status-grid" in styles_source
     assert ".home-command__next button" in styles_source
+
+
+def test_home_page_default_path_is_three_decision_cards_without_gate_jargon():
+    source = HOME_PAGE_TSX.read_text(encoding="utf-8")
+    dashboard_section = source[source.index("<div className=\"hero-panel home-command\">"):source.index("<details className=\"module-card span-3 disclosure-card\">")]
+
+    for label in ["现在该做什么", "为什么不能继续", "下一步"]:
+        assert label in dashboard_section
+
+    for forbidden in ["L2", "L3", "probe", "run-id", "HAR", "greenlet"]:
+        assert forbidden not in dashboard_section
+
+    assert "维护人员查看技术状态" in source
 
 
 def test_config_and_console_primary_screens_keep_diagnostics_secondary():
