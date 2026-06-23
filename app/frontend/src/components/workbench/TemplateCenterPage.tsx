@@ -148,6 +148,18 @@ export function TemplateCenterPage({
     })
   }
 
+  async function disableCurrentTemplate() {
+    if (!activeTemplate) {
+      setSaveState({ status: '不能停用', detail: '当前分区还没有选中的已保存模板。' })
+      return
+    }
+    await saveWithState('正在停用当前模板', async () => {
+      await patchJson<Template>(`/api/templates/${activeTemplate.id}`, { is_enabled: false })
+      setSelectedTemplateId('')
+      setSaveState({ status: '已停用当前模板', detail: `${activeTemplate.template_name} 已停用；不会再作为后续任务的启用模板。` })
+    })
+  }
+
   function applyDefaultTemplate() {
     setDraftValues(defaultValuesForSection(activeSection))
     setTemplateName(`默认测试模板 - ${activeSection.label}`)
@@ -187,7 +199,7 @@ export function TemplateCenterPage({
       <div className="module-card span-1 template-library-panel">
         <div className="module-head">
           <h2>模板清单</h2>
-          <span>{workspace.templates.length} 套模板</span>
+          <span>{workspace.templates.length} 套模板 / 当前分区 {sectionTemplates.length} 套启用模板</span>
         </div>
         <label>
           <span>模板名称</span>
@@ -258,6 +270,7 @@ export function TemplateCenterPage({
           <button className="button button--secondary" type="button" onClick={() => { void saveForTask() }} disabled={!selectedTask}>仅本次任务使用</button>
           <button className="button button--primary" type="button" onClick={() => { void saveAsStoreTemplate(false) }}>保存为店铺模板</button>
           <button className="button button--quiet" type="button" onClick={() => { void saveAsStoreTemplate(true) }}>另存为新模板</button>
+          <button className="button button--quiet" type="button" onClick={() => { void disableCurrentTemplate() }} disabled={!activeTemplate}>停用当前模板</button>
         </div>
 
         <details className="inline-disclosure">

@@ -157,7 +157,9 @@ def test_template_center_page_presents_multi_template_chinese_section_workflow()
         "仅本次任务使用",
         "保存为店铺模板",
         "另存为新模板",
+        "停用当前模板",
         "套用默认测试模板",
+        "当前分区 {sectionTemplates.length} 套启用模板",
     ]:
         assert label in page_source
     for forbidden in ["配置中心", "L2", "run-id", "probe", "QA guarded product"]:
