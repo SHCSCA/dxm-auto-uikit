@@ -4782,8 +4782,8 @@ function RuntimeLogPreview({
   onSourceChange: (source: RuntimeLogSource) => void
 }) {
   const current = logs[source]
-  const items: RuntimeLogItem[] = current?.items ?? current?.lines.map((line) => ({ line, level: 'info', tags: [] })) ?? []
-  const visibleItems = items.slice(-7)
+  const items = normalizeRuntimeLogItems(current)
+  const visibleItems = businessRuntimeLogItems(items).slice(-5)
   const labels = runtimeLogSourceLabels()
   const refreshMeta = runtimeLogRefreshMeta(current, items.length)
 
@@ -4817,7 +4817,7 @@ function RuntimeLogPreview({
             <RuntimeLogSummaryLine key={`${source}-preview-${index}`} item={item} compact />
           ))
         ) : (
-          <span>{current?.exists === false ? '日志文件尚未生成。' : '等待服务写入日志...'}</span>
+          <span>{current?.exists === false ? '日志文件尚未生成。' : '暂无关键业务日志，完整日志在维护诊断中查看。'}</span>
         )}
       </div>
       <small>正在实时刷新；切换来源只影响当前预览。</small>
@@ -4849,9 +4849,9 @@ function RuntimeLogPanel({
   const [autoFollow, setAutoFollow] = useState(true)
   const labels = runtimeLogSourceLabels()
 
-  const items: RuntimeLogItem[] = current?.items ?? current?.lines.map((line) => ({ line, level: 'info', tags: [] })) ?? []
-  const filteredRuntimeLogItems = items
-  const visibleRuntimeLogItems = filteredRuntimeLogItems.slice(-10)
+  const items = normalizeRuntimeLogItems(current)
+  const filteredRuntimeLogItems = filterRuntimeLogItems(items, level, query)
+  const visibleRuntimeLogItems = businessRuntimeLogItems(filteredRuntimeLogItems).slice(-6)
   const refreshMeta = runtimeLogRefreshMeta(current, items.length)
 
   useEffect(() => {
@@ -4927,9 +4927,9 @@ function RuntimeLogPanel({
       <div ref={logViewRef} className="runtime-log-view" aria-live="polite" data-testid="runtime-log-view" onScroll={handleLogScroll}>
         {visibleRuntimeLogItems.length
           ? visibleRuntimeLogItems.map((item, index) => <RuntimeLogSummaryLine key={`${source}-${index}`} item={item} />)
-          : <span>{current?.exists === false ? '日志文件尚未生成，启动服务后会自动出现。' : '等待日志刷新...'}</span>}
+          : <span>{current?.exists === false ? '日志文件尚未生成，启动服务后会自动出现。' : '暂无关键业务日志，完整原始日志在下方展开。'}</span>}
       </div>
-      <small>最近日志：默认只显示关键近几条；完整日志在下方维护诊断区展开查看。</small>
+      <small>最近日志：默认只显示关键业务进度；完整原始日志在下方维护诊断区展开查看。</small>
       <details className="inline-disclosure runtime-log-full-drawer">
         <summary>查看完整日志与维护诊断</summary>
         <div className="runtime-log-view runtime-log-view--full">
@@ -4938,9 +4938,92 @@ function RuntimeLogPanel({
             : <span>暂无完整日志。</span>}
         </div>
       </details>
-      <small>维护诊断：日志来源 {labels[source]}，当前筛选后 {filteredRuntimeLogItems.length} 条；标签包含启动、登录检测、配置校验、打开 DXM、点击、填写、保存、网络响应、报告生成。</small>
+      <small>维护诊断：日志来源 {labels[source]}，当前筛选后 {filteredRuntimeLogItems.length} 条；原始技术细节只在展开区显示。</small>
     </div>
   )
+}
+
+function normalizeRuntimeLogItems(current: RuntimeLogResponse | null | undefined): RuntimeLogItem[] {
+  return current?.items ?? current?.lines.map((line) => ({ line, level: 'info', tags: [] })) ?? []
+}
+
+function filterRuntimeLogItems(items: RuntimeLogItem[], level: 'all' | 'info' | 'warning' | 'error', query: string) {
+  const normalizedQuery = query.trim().toLowerCase()
+  return items.filter((item) => {
+    const normalizedLevel = String(item.level || 'info').toLowerCase()
+    if (level !== 'all' && normalizedLevel !== level) return false
+    if (!normalizedQuery) return true
+    const haystack = `${item.line} ${item.tags.join(' ')}`.toLowerCase()
+    return haystack.includes(normalizedQuery)
+  })
+}
+
+function businessRuntimeLogItems(items: RuntimeLogItem[]) {
+  const selected: RuntimeLogItem[] = []
+  const seen = new Set<string>()
+
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index]
+    const summary = humanRuntimeLogLine(item)
+    if (!isBusinessRuntimeLogItem(item, summary)) continue
+    const key = `${String(item.level || 'info').toLowerCase()}::${summary}`
+    if (seen.has(key)) continue
+    selected.push(item)
+    seen.add(key)
+    if (selected.length >= 12) break
+  }
+
+  return selected.reverse()
+}
+
+function isBusinessRuntimeLogItem(item: RuntimeLogItem, summary: string) {
+  const raw = `${item.line} ${item.tags.join(' ')}`.toLowerCase()
+  const level = String(item.level || 'info').toLowerCase()
+  if (level === 'warning' || level === 'error') return true
+  if (summary.includes('诊断证据已记录')) return false
+  if (summary.includes('技术路径和接口细节')) return false
+  return [
+    '执行步骤',
+    '店小秘',
+    '登录',
+    '真实只读检查',
+    '采集页',
+    '采集箱',
+    '认领',
+    '编辑页',
+    '填写',
+    '图片',
+    '物流',
+    '保存',
+    '未发布',
+    '浏览器',
+    '任务',
+    '失败',
+    '阻断',
+  ].some((keyword) => summary.includes(keyword))
+    || [
+      'step=',
+      'task#',
+      'open_data_acquisition',
+      'claim_to_draft_box',
+      'verify_draft_box_claim',
+      'open_edit_page',
+      'open_editor',
+      'fill_base_info',
+      'fill_title',
+      'fill_media',
+      'fill_images',
+      'fill_logistics',
+      'save_only',
+      'verify_not_published',
+      'browser_closed',
+      'live_browser',
+      'target page',
+      'greenlet',
+      'cannot switch',
+      'failed',
+      'error',
+    ].some((keyword) => raw.includes(keyword))
 }
 
 function runtimeLogRefreshMeta(current: RuntimeLogResponse | null | undefined, itemCount: number) {
@@ -4974,14 +5057,18 @@ function RuntimeLogSummaryLine({ item, compact = false }: { item: RuntimeLogItem
   const hint = technicalRuntimeLogHint(item.line)
   return (
     <div className={`runtime-log-summary-line runtime-log-summary-line--${item.level} ${compact ? 'runtime-log-preview__line' : ''}`}>
-      <span>{item.level.toUpperCase()}</span>
+      <span>{runtimeLogLevelLabel(item.level)}</span>
       <strong>{humanRuntimeLogLine(item)}</strong>
       {hint && <small>{hint}</small>}
-      {item.tags.length > 0 && (
-        <small>{item.tags.slice(0, 3).map((tag) => <b key={tag}>{tag}</b>)}</small>
-      )}
     </div>
   )
+}
+
+function runtimeLogLevelLabel(level: string) {
+  const normalized = String(level || 'info').toLowerCase()
+  if (normalized === 'error') return '失败'
+  if (normalized === 'warning' || normalized === 'warn') return '注意'
+  return '提示'
 }
 
 function humanRuntimeLogLine(item: RuntimeLogItem) {
@@ -4989,8 +5076,47 @@ function humanRuntimeLogLine(item: RuntimeLogItem) {
   const normalized = line.toLowerCase()
   const operatorMessage = humanOperatorMessage(line)
   if (operatorMessage !== line) return operatorMessage
+  if (normalized.includes('browser_closed') || normalized.includes('browser_window_not_visible') || line.includes('真实浏览器窗口已关闭')) {
+    return '真实浏览器窗口已关闭，请重新打开执行浏览器。'
+  }
+  if (normalized.includes('target page, context or browser has been closed') || normalized.includes('live_browser_page_missing')) {
+    return '真实浏览器窗口不可用：请保持执行浏览器打开，再重新启动当前步骤。'
+  }
+  if (normalized.includes('live_browser_hud_apply_failed')) {
+    return '浏览器进度浮窗暂未挂上：请保持真实浏览器打开，系统会继续保护性暂停。'
+  }
   if (line.includes('Cannot switch to a different thread') || normalized.includes('greenlet') || line.includes('Playwright Sync API') || line.includes('Playwright')) {
     return '浏览器会话异常：当前浏览器自动化会话已经失效，系统没有继续保存。请关闭当前执行浏览器，重新打开真实浏览器后再运行任务。'
+  }
+  if (normalized.includes('open_data_acquisition')) {
+    return '正在打开店小秘数据采集页。'
+  }
+  if (normalized.includes('claim_to_draft_box')) {
+    return '正在把选中的商品认领到采集箱。'
+  }
+  if (normalized.includes('verify_draft_box_claim')) {
+    return '正在确认商品已经进入采集箱。'
+  }
+  if (normalized.includes('open_edit_page') || normalized.includes('open_editor')) {
+    return '正在打开店小秘商品编辑页。'
+  }
+  if (normalized.includes('fill_base_info') || normalized.includes('fill_title')) {
+    return '正在填写标题、类目和基础信息。'
+  }
+  if (normalized.includes('fill_media') || normalized.includes('fill_images')) {
+    return '正在处理商品图片和素材。'
+  }
+  if (normalized.includes('fill_logistics')) {
+    return '正在填写物流与包裹信息。'
+  }
+  if (normalized.includes('save_only')) {
+    return '正在点击店小秘“保存”，不会发布。'
+  }
+  if (normalized.includes('verify_not_published')) {
+    return '正在确认商品保存后没有发布。'
+  }
+  if (normalized.includes('release_lock')) {
+    return '本次任务已结束，正在释放任务占用。'
   }
   if (normalized.includes('internal server error') || normalized.includes('traceback')) {
     return '系统执行失败：请确认本机服务和真实浏览器正常后重试。'
@@ -5036,6 +5162,7 @@ function technicalRuntimeLogHint(line: string) {
 function stripRuntimeLogPrefix(line: string) {
   return line
     .replace(/^\[[^\]]+\]\s*/, '')
+    .replace(/^(INFO|WARNING|ERROR)\s+(INFO|WARNING|ERROR)\s+/i, '$2 ')
     .replace(/^(INFO|WARNING|ERROR)\s+task#\d+(?:\s+job#\d+)?:\s*/i, '')
     .replace(/^(INFO|WARNING|ERROR)\s+/i, '')
     .replace(/^\d{8,}[\w-]*\s+/, '')

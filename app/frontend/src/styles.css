@@ -6487,7 +6487,7 @@ tr:last-child td {
 .runtime-log-preview__line {
   min-width: 0;
   display: grid;
-  grid-template-columns: 50px minmax(0, 1fr);
+  grid-template-columns: 42px minmax(0, 1fr);
   gap: 7px;
   align-items: start;
 }
@@ -6517,7 +6517,7 @@ tr:last-child td {
 .runtime-log-summary-line {
   min-width: 0;
   display: grid;
-  grid-template-columns: 54px minmax(0, 1fr);
+  grid-template-columns: 44px minmax(0, 1fr);
   gap: 7px 8px;
   align-items: start;
 }
@@ -6549,9 +6549,11 @@ tr:last-child td {
   color: inherit;
   font-size: 12px;
   line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .runtime-log-summary-line small {
@@ -6559,7 +6561,7 @@ tr:last-child td {
 }
 
 .runtime-log-preview code,
-.runtime-log-preview > span {
+.runtime-log-preview__body > span {
   color: inherit;
   font-size: 12px;
   line-height: 1.45;
@@ -6627,8 +6629,8 @@ tr:last-child td {
 }
 
 .runtime-log-view {
-  min-height: 300px;
-  max-height: 420px;
+  min-height: 180px;
+  max-height: 280px;
   overflow: auto;
   display: flex;
   flex-direction: column;
@@ -6701,7 +6703,7 @@ tr:last-child td {
 }
 
 .runtime-log-line code,
-.runtime-log-view span {
+.runtime-log-view > span {
   color: inherit;
   font-size: 12px;
   line-height: 1.45;

@@ -2076,8 +2076,8 @@ def test_execution_console_log_center_autofollows_and_surfaces_sources():
     assert "launcher: '启动器'" in focus_panel_section
     assert "task: '任务'" in focus_panel_section
     assert "agent: '浏览器 Agent'" in focus_panel_section
-    assert "打开 DXM" in workbench_source
-    assert "网络响应" in workbench_source
+    assert "正在打开店小秘数据采集页。" in workbench_source
+    assert "原始技术细节只在展开区显示" in workbench_source
     assert ".console-log-card--live" in styles_source
     assert ".runtime-log-toolbar" in styles_source
     assert ".runtime-log-preview__head > .runtime-log-refresh--warn" in styles_source
@@ -2584,7 +2584,7 @@ def test_execution_console_default_log_summary_hides_absolute_paths():
     assert "正在实时刷新；切换来源只影响当前预览。" in log_summary_section
     assert "onSourceChange(item)" in log_summary_section
     assert "runtime-log-tabs--compact" in log_summary_section
-    assert "items.slice(-7)" in log_summary_section
+    assert "businessRuntimeLogItems(items).slice(-5)" in log_summary_section
     assert "runtimeLogRefreshMeta(current, items.length)" in log_summary_section
     assert "正在实时刷新；切换来源只影响当前预览。" in log_summary_section
     assert "日志来源：{labels[source]} / 正在实时刷新" not in log_summary_section
@@ -2609,18 +2609,41 @@ def test_runtime_log_default_views_humanize_lines_and_keep_raw_lines_in_diagnost
     assert "RuntimeLogSummaryLine" in panel_section
     assert "humanRuntimeLogLine(item)" in summary_line_section
     assert "technicalRuntimeLogHint(item.line)" in summary_line_section
+    assert "businessRuntimeLogItems(items).slice(-5)" in preview_section
+    assert "businessRuntimeLogItems(filteredRuntimeLogItems).slice(-6)" in panel_section
+    assert "filterRuntimeLogItems(items, level, query)" in panel_section
+    assert "runtimeLogLevelLabel(item.level)" in summary_line_section
+    assert "<span>{item.level.toUpperCase()}</span>" not in summary_line_section
+    assert "暂无关键业务日志，完整日志在维护诊断中查看。" in preview_section
+    assert "暂无关键业务日志，完整原始日志在下方展开。" in panel_section
+    assert "最近日志：默认只显示关键业务进度" in panel_section
     assert "<code>{item.line}</code>" not in preview_section
     assert "<code>{item.line}</code>" not in panel_section[:panel_section.index('<details className="inline-disclosure runtime-log-full-drawer">')]
     assert "查看完整日志与维护诊断" in full_log_drawer
     assert "RuntimeLogLine" in full_log_drawer
     assert "<code>{item.line}</code>" in raw_line_section
     assert "function humanRuntimeLogLine(item: RuntimeLogItem)" in source
+    assert "function businessRuntimeLogItems(items: RuntimeLogItem[])" in source
+    assert "function isBusinessRuntimeLogItem(item: RuntimeLogItem, summary: string)" in source
     assert "function technicalRuntimeLogHint(line: string)" in source
     assert "greenlet" in source
     assert "Playwright" in source
+    assert "browser_window_not_visible" in source
+    assert "target page, context or browser has been closed" in source
+    assert "OPEN_DATA_ACQUISITION".lower() in source.lower()
+    assert "CLAIM_TO_DRAFT_BOX".lower() in source.lower()
+    assert "SAVE_ONLY".lower() in source.lower()
+    assert "VERIFY_NOT_PUBLISHED".lower() in source.lower()
+    assert "真实浏览器窗口已关闭，请重新打开执行浏览器。" in source
+    assert "正在把选中的商品认领到采集箱。" in source
+    assert "正在点击店小秘“保存”，不会发布。" in source
     assert "runtime-log-preview__body" in preview_section
     assert ".runtime-log-preview__body" in styles_source
     assert "overflow-y: auto" in styles_source[styles_source.index(".runtime-log-preview__body"):styles_source.index(".runtime-log-refresh")]
+    assert "grid-template-columns: 44px minmax(0, 1fr)" in styles_source[styles_source.index(".runtime-log-summary-line"):styles_source.index(".runtime-log-summary-line > span")]
+    assert ".runtime-log-view > span" in styles_source
+    assert ".runtime-log-view span {" not in styles_source
+    assert "min-height: 180px" in styles_source[styles_source.index(".runtime-log-view {"):styles_source.index(".runtime-log-full-drawer")]
     assert ".replace(/^(INFO|WARNING|ERROR)\\s+task#\\d+(?:\\s+job#\\d+)?:\\s*/i, '')" in source
 
 
@@ -4280,8 +4303,8 @@ def test_config_and_console_primary_screens_keep_diagnostics_secondary():
     assert "真实执行前必须核对当前商品字段" in source
     assert "agent-browser-shell is-diagnostic" in source
     assert "独立浏览器窗口才是真实操作现场" in source
-    assert "最近日志：默认只显示关键近几条" in source
-    assert "visibleRuntimeLogItems = filteredRuntimeLogItems.slice(-10)" in source
+    assert "最近日志：默认只显示关键业务进度" in source
+    assert "visibleRuntimeLogItems = businessRuntimeLogItems(filteredRuntimeLogItems).slice(-6)" in source
 
 
 def test_execution_console_compact_login_keeps_account_fields_in_drawer():
