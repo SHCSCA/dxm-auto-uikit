@@ -51,6 +51,7 @@ def test_agent_console_can_launch_real_browser_in_background(tmp_path, monkeypat
         assert state["target_url"] == "https://www.dianxiaomi.com/"
         launch_release.wait(timeout=5)
         with service._lock:
+            service._page = _FakePage()
             service._state["browser_launching"] = False
             service._state["browser_visible"] = True
             service._state["current_url"] = state["target_url"]
@@ -437,6 +438,51 @@ def test_agent_console_status_uses_cached_browser_state(tmp_path, monkeypatch):
     assert status["last_error"] is None
 
 
+def test_agent_console_status_marks_closed_browser_not_visible(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+    fake_page = _FakePage()
+    fake_page.closed = True
+
+    with service._lock:
+        service._page = fake_page
+        service._state["active"] = True
+        service._state["browser_visible"] = True
+        service._state["browser_launching"] = False
+        service._state["last_error"] = None
+
+    status = service.status()
+
+    assert status["active"] is True
+    assert status["browser_visible"] is False
+    assert status["browser_launching"] is False
+    assert "真实浏览器窗口已关闭" in status["last_error"]
+    assert status["hud"]["state"] == "BROWSER_CLOSED"
+    assert status["hud"]["requires_user_action"] is True
+    assert status["hud"]["human_next"] == "回到执行浏览器重新打开"
+
+
+def test_agent_console_rejects_browser_control_after_window_closes(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+    fake_page = _FakePage()
+    fake_page.closed = True
+
+    with service._lock:
+        service._page = fake_page
+        service._state["active"] = True
+        service._state["browser_visible"] = True
+
+    result = service.control_browser({"action": "scroll", "delta_y": 360})
+
+    assert result["ok"] is False
+    assert result["reason"] == "browser_window_not_visible"
+    assert result["browser_visible"] is False
+    assert fake_page.mouse.wheels == []
+
+
 def test_agent_console_manual_takeover_brings_real_browser_to_front(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
     service = AgentConsoleService()
@@ -802,6 +848,10 @@ class _FakePage:
         self.locator_calls = []
         self.locators = {}
         self.screenshot_full_page = None
+        self.closed = False
+
+    def is_closed(self):
+        return self.closed
 
     def title(self):
         return "店小秘 Home"

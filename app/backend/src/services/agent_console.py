@@ -18,6 +18,7 @@ DEFAULT_TARGET_URL = "https://www.dianxiaomi.com/"
 MAX_NETWORK_EVENTS = 120
 MAX_ACTION_EVENTS = 160
 MAX_RECENT_ACTIONS = 3
+BROWSER_CLOSED_MESSAGE = "真实浏览器窗口已关闭，请重新打开执行浏览器。"
 BLOCKED_SELECTOR_CONTROL_KEYWORDS = (
     "publish",
     "submitpublish",
@@ -59,6 +60,13 @@ USER_ACTION_HUD_COPY = {
         "human_action": "请在真实浏览器里检查或修正当前页面",
         "human_next": "处理完成后在控制台交还 Agent",
     },
+    "BROWSER_CLOSED": {
+        "phase": "真实浏览器已关闭",
+        "severity": "error",
+        "human_title": "真实浏览器窗口已关闭",
+        "human_action": "请重新打开执行浏览器后继续任务",
+        "human_next": "回到执行浏览器重新打开",
+    },
 }
 
 
@@ -72,6 +80,7 @@ class AgentConsoleService:
         self._browser_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="agent-console")
 
     def status(self) -> dict[str, Any]:
+        self._refresh_browser_liveness()
         with self._lock:
             return dict(self._state)
 
@@ -442,6 +451,7 @@ class AgentConsoleService:
         return self._record_manual_takeover_event(action="release_agent", label="交还 Agent")
 
     def refresh_frame(self) -> dict[str, Any]:
+        self._refresh_browser_liveness()
         with self._lock:
             page = self._page
             session_id = self._state.get("session_id")
@@ -473,6 +483,7 @@ class AgentConsoleService:
         return self.status()
 
     def control_browser(self, command: dict[str, Any]) -> dict[str, Any]:
+        self._refresh_browser_liveness()
         action = str(command.get("action") or "").strip().lower()
         with self._lock:
             if not self._state.get("active"):
@@ -720,6 +731,46 @@ class AgentConsoleService:
                     obj.close()
             except Exception:
                 pass
+
+    def _refresh_browser_liveness(self) -> None:
+        with self._lock:
+            if not self._state.get("active"):
+                return
+            page = self._page
+            context = self._context
+            visible = bool(self._state.get("browser_visible"))
+            launching = bool(self._state.get("browser_launching"))
+        if not visible and not launching:
+            return
+        if page is None:
+            closed = visible
+        else:
+            closed = self._object_is_closed(page) or self._object_is_closed(context)
+        if not closed:
+            return
+        with self._lock:
+            self._state["browser_visible"] = False
+            self._state["browser_launching"] = False
+            self._state["last_error"] = BROWSER_CLOSED_MESSAGE
+            self._state["hud"] = self._hud_state({
+                **dict(self._state.get("hud") or {}),
+                "state": "BROWSER_CLOSED",
+                "next_step": "回到执行浏览器重新打开",
+                "human_next": "回到执行浏览器重新打开",
+                "requires_user_action": True,
+            })
+            self._state["updated_at"] = _now()
+
+    def _object_is_closed(self, value) -> bool:
+        if value is None:
+            return False
+        is_closed = getattr(value, "is_closed", None)
+        if callable(is_closed):
+            try:
+                return bool(is_closed())
+            except Exception:
+                return True
+        return False
 
     def _run_browser_op(self, operation):
         return self._browser_executor.submit(operation).result(timeout=90)
