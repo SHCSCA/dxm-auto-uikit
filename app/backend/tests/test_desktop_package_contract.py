@@ -293,7 +293,7 @@ def test_user_docs_present_desktop_exe_as_primary_delivery_entry():
         assert "D:\\Desktop\\DXM-Agent-Console-免安装版\\DXM-Agent-Console-Portable-0.1.0.exe" in source
         assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
         assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in source
-        assert "28E0FC7FC4FC14D56F444043F81603B5545A6549DC66350D6524CAE70811918E" in source
+        assert "715B4B2CE8D2512542E23837F6FA35F71A34A3B035BC67F7D758B0C6CCB25657" in source
         assert "portable 首次启动会解包 Electron 与 Python 运行时" in source
         assert "%TEMP%` 所在磁盘建议至少保留 1GB 可用空间" in source
         assert "scripts\\start-desktop.bat" in source
@@ -308,7 +308,7 @@ def test_portable_quick_guide_uses_verified_portable_entry():
     assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
     assert "使用目录版时必须保留整个文件夹和 `resources` 目录" in source
     assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in source
-    assert "28E0FC7FC4FC14D56F444043F81603B5545A6549DC66350D6524CAE70811918E" in source
+    assert "715B4B2CE8D2512542E23837F6FA35F71A34A3B035BC67F7D758B0C6CCB25657" in source
     assert "至少建议保留 1GB 可用空间" in source
 
 
@@ -325,22 +325,23 @@ def test_app_shell_presents_agent_console_as_user_first_navigation():
     assert "DXM Agent Console" in index_html
     assert "type WorkbenchPrimaryArea" in source
     assert "const primaryAreas" in source
-    assert "label: '日常流程'" in source
-    assert "label: '结果复盘'" in source
-    assert "label: '帮助与系统'" in source
+    assert "label: '准备'" in source
+    assert "label: '两段流程'" in source
+    assert "label: '复盘'" in source
+    assert "label: '系统'" in source
     assert "label: '更多'" not in source
-    assert "今日任务" in source
-    assert "登录店小秘" in source
-    assert "选择商品" in source
-    assert "填写编辑页" in source
-    assert "开始只保存" in source
-    assert "保存结果" in source
+    assert "首页" in source
+    assert "店小秘登录" in source
+    assert "数据采集认领" in source
+    assert "采集箱编辑保存" in source
+    assert "模板中心" in source
+    assert "执行浏览器" in source
+    assert "结果报告" in source
     assert "问题处理" in source
     assert "证据归档" not in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
-    assert "使用帮助" in source
     assert "系统设置" in source
     assert "id: 'dashboard'" not in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
-    assert "{ id: 'start_save', label: '开始只保存'" in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
+    assert "{ id: 'start_save', label: '执行浏览器'" in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
     assert "{ id: 'exceptions', label: '问题'" not in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
     assert "{ id: 'preflight', label: '运行前检查'" not in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
     assert "{ id: 'real_browser', label: '真实浏览器'" not in source[source.index("const primaryAreas"):source.index("const sectionLabels")]

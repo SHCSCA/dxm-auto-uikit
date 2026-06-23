@@ -1520,8 +1520,9 @@ def test_user_docs_keep_real_operation_path_before_self_check_appendix():
     for forbidden in ("L3 single_save", "申请并启动 single_save", "真实 single_save 操作流程", "批准并启动真实金丝雀"):
         assert forbidden not in readme_head
         assert forbidden not in guide_head
-    assert "执行模式选择“单商品只保存”" in readme_head
-    assert "申请并启动单商品只保存" in readme_head
+    assert "数据采集认领" in readme_head
+    assert "采集箱编辑保存" in readme_head
+    assert "模板中心" in readme_head
     assert "验收人附录：当前证据态与源码包验收" in user_guide
     assert "验收人附录：自检命令" in user_guide
 
