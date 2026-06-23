@@ -58,18 +58,20 @@ def _create_task(
     store_name: str = "Dang Kang",
     approval: dict | None = None,
     product_title: str = "ACG Stand Product",
+    product_status: str = "claimed_to_draft",
 ):
     store = repo.create_store(store_name, "AliExpress")
     product = repo.create_product(
         {
             "title": product_title,
-            "source": "test",
+            "source": "dxm_data_acquisition",
+            "status": product_status,
             "category_name": "立牌类谷子",
             "price": 7.01,
             "currency": "USD",
             "sku_count": 1,
             "image_count": 1,
-            "payload": {},
+            "payload": {"source": "dxm_data_acquisition", "draft_box_verified": product_status == "claimed_to_draft"},
         }
     )
     payload = {"store_name": store_name}
@@ -304,6 +306,19 @@ def test_single_save_start_requires_manual_approval(tmp_path, monkeypatch):
     assert runner.calls == []
 
 
+def test_single_save_start_rejects_legacy_non_claimed_product_before_real_browser(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo, product_status="draft")
+
+    response = client.post(f"/api/tasks/{task['id']}/start", json={})
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert "采集认领" in detail
+    assert "采集箱" in detail
+    assert runner.calls == []
+
+
 def test_claim_only_start_requires_same_real_mutation_gate(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
@@ -413,6 +428,41 @@ def test_single_save_start_rejects_qa_fixture_product_before_real_browser(tmp_pa
     assert "测试/示例商品" in response.json()["detail"]
     assert "真实采集商品" in response.json()["detail"]
     assert runner.calls == []
+
+
+def test_products_api_hides_fixture_products_in_production(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    repo.create_product(
+        {
+            "title": "QA guarded product",
+            "source": "test",
+            "category_name": "QA_CATEGORY",
+            "price": 1,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {"fixture": True},
+        }
+    )
+    repo.create_product(
+        {
+            "title": "真实采集商品 A",
+            "source": "dxm_data_acquisition",
+            "category_name": "立牌类谷子",
+            "price": 9.9,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {"source": "dxm_data_acquisition"},
+        }
+    )
+
+    response = client.get("/api/products")
+
+    assert response.status_code == 200
+    titles = [item["title"] for item in response.json()]
+    assert "真实采集商品 A" in titles
+    assert "QA guarded product" not in titles
 
 
 def test_single_save_start_accepts_task_template_overrides_for_required_fields(tmp_path, monkeypatch):

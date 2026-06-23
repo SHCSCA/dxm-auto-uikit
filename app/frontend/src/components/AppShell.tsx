@@ -14,11 +14,11 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
     label: '日常流程',
     short: '1',
     items: [
-      { id: 'home', label: '今日任务', short: '今', hint: '看今天当前该做哪一步' },
-      { id: 'dxm_access', label: '登录店小秘', short: '登', hint: '登录真实店小秘并保存本机账号' },
-      { id: 'product_tasks', label: '选择商品', short: '选', hint: '选择一个商品创建只保存任务' },
-      { id: 'edit_config', label: '填写编辑页', short: '填', hint: '告诉 Agent 到店小秘编辑页怎么填' },
-      { id: 'start_save', label: '开始只保存', short: '存', hint: '运行检查、人工确认并启动真实浏览器' },
+      { id: 'home', label: '今日任务', short: '今', hint: '看今天该处理哪一步' },
+      { id: 'dxm_access', label: '登录店小秘', short: '登', hint: '打开真实店小秘并确认登录' },
+      { id: 'acquisition_claim', label: '采集认领', short: '采', hint: '从数据采集认领到采集箱' },
+      { id: 'draft_edit_save', label: '编辑保存', short: '编', hint: '从采集箱打开编辑页并只保存' },
+      { id: 'template_center', label: '模板中心', short: '模', hint: '管理店铺和类目模板' },
     ],
   },
   {
@@ -44,7 +44,10 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
 const sectionLabels: Record<WorkbenchSection, string> = {
   home: '今日任务',
   dxm_access: '登录店小秘',
-  product_tasks: '选择商品',
+  acquisition_claim: '采集认领',
+  draft_edit_save: '编辑保存',
+  template_center: '模板中心',
+  product_tasks: '商品任务',
   current_task: '当前任务',
   task_history: '历史任务',
   edit_config: '填写编辑页',
@@ -100,9 +103,9 @@ export function AppShell({
           <div className="brand-mark" aria-hidden="true">DX</div>
           {!sidebarCollapsed && (
             <div>
-              <strong>DXM 单商品只保存 Agent</strong>
-              <span>只保存当前商品，不发布</span>
-              <span className="sr-only">今日任务 / 登录店小秘 / 选择商品 / 填写编辑页 / 开始只保存 / 保存结果 / 问题处理 / 使用帮助 / 系统设置</span>
+              <strong>DXM 只保存自动化</strong>
+              <span>采集认领后只保存，不发布</span>
+              <span className="sr-only">今日任务 / 登录店小秘 / 采集认领 / 编辑保存 / 模板中心 / 保存结果 / 问题处理 / 使用帮助 / 系统设置</span>
             </div>
           )}
           <button className="icon-button" type="button" onClick={onToggleSidebar} aria-label="切换侧边栏">
@@ -149,7 +152,7 @@ export function AppShell({
             </section>
           ))}
         </nav>
-        <span className="sr-only">数据连接状态：{sourceLabel}。真实店小秘操作在登录店小秘和开始只保存中完成。</span>
+        <span className="sr-only">数据连接状态：{sourceLabel}。真实店小秘操作分为采集认领和编辑保存两段完成。</span>
       </aside>
       <main ref={mainRef} className="workspace" tabIndex={-1} aria-label={`${activeLabel}主内容`}>
         <span className="sr-only" aria-live="polite">当前页面：{activeLabel}</span>

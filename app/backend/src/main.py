@@ -28,6 +28,7 @@ from src.execution.playwright_engine import PlaywrightEngine
 from src.execution.v1_runner import V1TaskRunner
 from src.models import (
     AIConfigUpdateRequest,
+    AcquisitionClaimRequest,
     AgentConsoleControlRequest,
     AgentConsoleHudRequest,
     AgentConsoleStartRequest,
@@ -353,6 +354,24 @@ def create_product(payload: ProductCreate):
 @app.post('/api/products/import')
 def import_products(payload: ProductImportRequest):
     return repo.bulk_import_products(payload.rows)
+
+
+@app.post('/api/acquisition/claim-requests')
+def create_acquisition_claim_request(payload: AcquisitionClaimRequest):
+    task = repo.create_acquisition_claim_request(payload.model_dump())
+    task_payload = task.get('payload') or {}
+    return {
+        'id': task.get('id'),
+        'task_id': task.get('id'),
+        'stage': task_payload.get('stage') or 'pending_acquisition_claim',
+        'status': task_payload.get('status') or 'pending',
+        'store_id': task_payload.get('store_id'),
+        'keyword': task_payload.get('keyword'),
+        'category_name': task_payload.get('category_name'),
+        'claim_mark': task_payload.get('claim_mark'),
+        'template_id': task_payload.get('template_id'),
+        'task_status': task.get('status'),
+    }
 
 
 @app.get('/api/tasks')
@@ -1749,6 +1768,8 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
     if mode not in RELEASED_REAL_DXM_MUTATION_MODES:
         raise HTTPException(status_code=403, detail=UNRELEASED_REAL_DXM_MODE_DETAIL)
     _assert_single_save_product_count(task.get('payload') or {}, status_code=409)
+    if mode == 'single_save':
+        _assert_single_save_uses_claimed_draft_product(payload.get('product_ids') or [])
 
     if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
         raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')
@@ -1789,6 +1810,23 @@ def _assert_task_create_scope(payload: TaskCreate) -> None:
         raise HTTPException(status_code=403, detail=UNRELEASED_REAL_DXM_MODE_DETAIL)
     if mode == 'single_save':
         _assert_single_save_product_count({'product_ids': payload.product_ids}, status_code=400)
+        _assert_single_save_uses_claimed_draft_product(payload.product_ids)
+
+
+def _assert_single_save_uses_claimed_draft_product(product_ids: list[int]) -> None:
+    product_id = int(product_ids[0])
+    product = repo.get_product(product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail=f'Product not found: {product_id}')
+    status = str(product.get('status') or '')
+    if status not in {'claimed_to_draft', 'ready_for_edit'}:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                '编辑保存必须从采集箱里的真实商品开始。'
+                '请先完成“采集认领”，确认商品已进入采集箱后，再创建单商品只保存任务。'
+            ),
+        )
 
 
 def _assert_single_save_product_count(payload: dict[str, Any], *, status_code: int) -> None:
@@ -1826,7 +1864,7 @@ def _real_task_fixture_product_names(task: dict[str, Any]) -> list[str]:
         except (TypeError, ValueError):
             continue
     names: list[str] = []
-    for product in repo.list_products():
+    for product in repo.list_products(include_fixtures=True):
         if wanted_ids and int(product.get('id') or 0) not in wanted_ids:
             continue
         if _looks_like_real_task_fixture_product(product):

@@ -3,6 +3,8 @@ import { getJson, getJsonOrDefault, postJson } from './api'
 import { AppShell } from './components/AppShell'
 import { SafetyStatusBar } from './components/SafetyStatusBar'
 import { AgentExecutionPage as ExecutionConsole } from './components/workbench/AgentExecutionPage'
+import { AcquisitionClaimPage } from './components/workbench/AcquisitionClaimPage'
+import { DraftEditSavePage } from './components/workbench/DraftEditSavePage'
 import { EditConfigPage as ConfigCenter } from './components/workbench/EditConfigPage'
 import { HelpPage } from './components/workbench/HelpPage'
 import { HomePage as Dashboard } from './components/workbench/HomePage'
@@ -15,7 +17,7 @@ import {
   SystemSettings,
 } from './components/WorkbenchModules'
 import { humanOperatorMessage } from './components/workbench/workbenchCopy'
-import type { AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, DxmCredentialSaveResult, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LegacyWorkbenchSection, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
+import type { AcquisitionClaimCreateRequest, AcquisitionClaimResponse, AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, DxmCredentialSaveResult, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LegacyWorkbenchSection, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
 import { composeWorkspace, demoTemplateSeeds, seedRows } from './workspace'
 
 const AGENT_CONSOLE_TARGET_URL = 'https://www.dianxiaomi.com/'
@@ -35,6 +37,7 @@ const AGENT_CONSOLE_NAVIGATION_SETTLE_MS = 2500
 const REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save', 'batch_save'])
 const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['single_save'])
 const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'batch_save'])
+const CLAIMED_DRAFT_PRODUCT_STATUSES = new Set(['claimed_to_draft', 'ready_for_edit'])
 const DXM_READY_SESSION_STATUSES = new Set(['login_success', 'logged_in', 'not_published_verified', 'workflow_navigation'])
 const L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
 const DEMO_ENABLED = new URLSearchParams(window.location.search).get('dev') === '1'
@@ -162,6 +165,7 @@ export default function App() {
   const [agentConsoleError, setAgentConsoleError] = useState<string | null>(null)
   const [operationError, setOperationError] = useState<string | null>(null)
   const [operationNotice, setOperationNotice] = useState<string | null>(null)
+  const [lastAcquisitionClaimRequest, setLastAcquisitionClaimRequest] = useState<AcquisitionClaimResponse | null>(null)
   const [runtimeLogSource, setRuntimeLogSource] = useState<RuntimeLogSource>('backend')
   const [runtimeLogs, setRuntimeLogs] = useState<Record<RuntimeLogSource, RuntimeLogResponse | null>>({
     backend: null,
@@ -610,12 +614,38 @@ export default function App() {
       })
       setSelectedTaskId(task.id)
       syncSelectedTaskIdUrl(task.id)
-      setActiveSection('product_tasks')
+      setActiveSection(request.mode === 'single_save' ? 'draft_edit_save' : 'product_tasks')
       await refreshWorkspace()
       await refreshConfigPreview(task.id)
     } catch (error) {
       const message = error instanceof Error ? error.message : '创建真实任务失败'
       setOperationError(humanTaskCreateError(message))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function createAcquisitionClaimRequest(request: AcquisitionClaimCreateRequest) {
+    setBusy(true)
+    setOperationError(null)
+    setOperationNotice(null)
+    try {
+      const result = await postJson<AcquisitionClaimResponse>('/api/acquisition/claim-requests', {
+        store_id: request.storeId,
+        keyword: request.keyword,
+        category_name: request.categoryName,
+        claim_mark: request.claimMark,
+        template_id: request.templateId ?? null,
+      })
+      setLastAcquisitionClaimRequest(result)
+      if (result.task_id) {
+        setSelectedTaskId(result.task_id)
+        syncSelectedTaskIdUrl(result.task_id)
+      }
+      setOperationNotice('采集认领请求已创建。请打开真实数据采集页，按认领标记处理商品到采集箱。')
+      await refreshWorkspace()
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : '创建采集认领请求失败')
     } finally {
       setBusy(false)
     }
@@ -1098,6 +1128,11 @@ export default function App() {
   const setWorkbenchSection = useCallback((section: WorkbenchSection) => {
     setActiveSection(normalizeWorkbenchSection(section))
   }, [])
+  const claimedDraftProducts = useMemo(
+    () => workspace.products.filter((product) => CLAIMED_DRAFT_PRODUCT_STATUSES.has(product.status)),
+    [workspace.products],
+  )
+  const selectedEditSaveTask = selectedTask?.mode === 'single_save' ? selectedTask : null
 
   const content = (() => {
     switch (currentSection) {
@@ -1108,6 +1143,7 @@ export default function App() {
       case 'config_images':
       case 'config_logistics':
       case 'config_compliance':
+      case 'template_center':
       case 'template_management':
         return <ConfigCenter workspace={workspace} selectedTask={selectedTask} configPreview={configPreview} configPreviewError={configPreviewError} configPreviewLoading={configPreviewLoading} onConfigSaved={async () => { await refreshWorkspace(); await refreshConfigPreview() }} onRefreshConfigPreview={async () => { await refreshConfigPreview(); await refreshWorkspace() }} onShowTasks={() => setActiveSection('product_tasks')} />
       case 'dxm_access':
@@ -1124,6 +1160,18 @@ export default function App() {
             onContinueDxmLogin={continueDxmLogin}
             onNavigateDxmTarget={navigateDxmTarget}
             onShowConsole={() => setActiveSection('start_save')}
+          />
+        )
+      case 'acquisition_claim':
+        return (
+          <AcquisitionClaimPage
+            stores={workspace.stores}
+            templates={workspace.templates}
+            busy={busy}
+            lastRequest={lastAcquisitionClaimRequest}
+            onCreateClaimRequest={(request) => { void createAcquisitionClaimRequest(request) }}
+            onNavigateDataAcquisition={() => { void navigateDxmTarget('data_acquisition') }}
+            onShowDraftEdit={() => setActiveSection('draft_edit_save')}
           />
         )
       case 'product_tasks':
@@ -1155,6 +1203,26 @@ export default function App() {
             onShowConsole={() => setActiveSection('start_save')}
             onShowEvidence={() => setActiveSection('results')}
             onShowReports={() => setActiveSection('results')}
+          />
+        )
+      case 'draft_edit_save':
+        return (
+          <DraftEditSavePage
+            claimedProducts={claimedDraftProducts}
+            selectedTask={selectedEditSaveTask}
+            busy={busy}
+            onCreateSaveTask={(productId) => {
+              const storeId = workspace.stores[0]?.id
+              if (!storeId) {
+                setOperationError('请先登录并连接真实店铺，再创建编辑保存任务。')
+                setActiveSection('dxm_access')
+                return
+              }
+              void createRealTask({ storeId, mode: 'single_save', productIds: [productId] })
+            }}
+            onShowAcquisition={() => setActiveSection('acquisition_claim')}
+            onShowTemplates={() => setActiveSection('template_center')}
+            onShowExecutionConsole={() => setActiveSection('start_save')}
           />
         )
       case 'start_save':

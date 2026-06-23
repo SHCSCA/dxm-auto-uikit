@@ -59,6 +59,8 @@ export type Product = { id: number; title: string; category_name: string; price:
 export type TaskJob = { id: number; task_id?: number; product_id?: number | null; status: string; current_step_code?: string | null; current_step_name?: string | null; error_code?: string | null; error_message?: string | null; [key: string]: unknown }
 export type Task = { id: number; name: string; status: string; mode: string; publish_scene: string; store_id?: number | null; total_jobs: number; completed_jobs: number; failed_jobs: number; payload: { product_ids?: number[]; store_name?: string; category_name?: string; image?: { eu_outer_package_filename?: string }; [key: string]: unknown }; jobs?: TaskJob[] }
 export type RealTaskCreateRequest = { storeId: number; mode: 'probe' | 'single_save'; productIds: number[] }
+export type AcquisitionClaimCreateRequest = { storeId: number; keyword?: string; categoryName?: string; claimMark: string; templateId?: number | null }
+export type AcquisitionClaimResponse = { id: number; task_id: number; stage: string; status: string; store_id: number; keyword?: string | null; category_name?: string | null; claim_mark: string; template_id?: number | null; task_status?: string | null }
 export type LogItem = { id: number; task_id: number; job_id: number | null; level: string; message: string; context: Record<string, unknown>; created_at: string }
 export type RuntimeLogSource = 'backend' | 'frontend' | 'launcher' | 'npm' | 'task' | 'agent'
 export type RuntimeLogItem = { line: string; level: 'info' | 'warning' | 'error' | string; tags: string[] }
@@ -370,6 +372,14 @@ export type FinalDeliveryCheckSummary = {
 export type WorkbenchSection =
   | 'home'
   | 'dxm_access'
+  | 'acquisition_claim'
+  | 'draft_edit_save'
+  | 'template_center'
+  | 'start_save'
+  | 'results'
+  | 'issues'
+  | 'help'
+  | 'settings'
   | 'product_tasks'
   | 'current_task'
   | 'task_history'
@@ -381,15 +391,10 @@ export type WorkbenchSection =
   | 'config_logistics'
   | 'config_compliance'
   | 'template_management'
-  | 'start_save'
   | 'preflight'
   | 'real_browser'
   | 'manual_takeover'
-  | 'results'
-  | 'issues'
   | 'evidence'
-  | 'help'
-  | 'settings'
 
 export type LegacyWorkbenchSection =
   | 'agent_execution'

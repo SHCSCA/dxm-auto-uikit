@@ -7,6 +7,29 @@ from src.db import connection, dumps, loads
 from src.utils import now_iso
 
 
+def _is_fixture_product(row: dict[str, Any]) -> bool:
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    payload_text = " ".join(str(value or "") for value in payload.values()).casefold()
+    product_text = " ".join(
+        str(value or "")
+        for value in (
+            row.get("title"),
+            row.get("category_name"),
+            row.get("source"),
+            payload_text,
+        )
+    ).casefold()
+    fixture_markers = (
+        "qa guarded",
+        "qa_category",
+        "fixture",
+        "测试商品",
+        "示例商品",
+        "本地演示",
+    )
+    return any(marker in product_text for marker in fixture_markers)
+
+
 class Repository:
     def list_stores(self):
         with connection() as conn:
@@ -79,23 +102,56 @@ class Repository:
             row['is_enabled'] = bool(row['is_enabled'])
             return row
 
-    def list_products(self):
+    def list_products(self, *, include_fixtures: bool = False):
         with connection() as conn:
             rows = conn.execute("SELECT * FROM products ORDER BY id DESC").fetchall()
             for row in rows:
                 row['payload'] = loads(row.pop('payload_json'), {})
-            return rows
+            if include_fixtures:
+                return rows
+            return [row for row in rows if not _is_fixture_product(row)]
+
+    def get_product(self, product_id: int):
+        with connection() as conn:
+            row = conn.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
+            if not row:
+                return None
+            row['payload'] = loads(row.pop('payload_json'), {})
+            return row
 
     def create_product(self, data: dict[str, Any]):
         now = now_iso()
+        status = str(data.get('status') or 'draft')
         with connection() as conn:
             cur = conn.execute(
-                "INSERT INTO products (title, source, status, category_name, price, currency, sku_count, image_count, payload_json, created_at, updated_at) VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?)",
-                (data['title'], data.get('source', 'manual'), data['category_name'], data['price'], data['currency'], data['sku_count'], data['image_count'], dumps(data['payload']), now, now),
+                "INSERT INTO products (title, source, status, category_name, price, currency, sku_count, image_count, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (data['title'], data.get('source', 'manual'), status, data['category_name'], data['price'], data['currency'], data['sku_count'], data['image_count'], dumps(data['payload']), now, now),
             )
             row = conn.execute("SELECT * FROM products WHERE id=?", (cur.lastrowid,)).fetchone()
             row['payload'] = loads(row.pop('payload_json'), {})
             return row
+
+    def create_acquisition_claim_request(self, data: dict[str, Any]):
+        payload = {
+            'stage': 'pending_acquisition_claim',
+            'status': 'pending',
+            'store_id': data['store_id'],
+            'keyword': data.get('keyword'),
+            'category_name': data.get('category_name'),
+            'claim_mark': data['claim_mark'],
+            'template_id': data.get('template_id'),
+        }
+        task = self.create_task({
+            'name': f"采集认领 - {payload.get('keyword') or payload.get('category_name') or '待选择商品'}",
+            'store_id': payload['store_id'],
+            'mode': 'claim_only',
+            'publish_scene': 'CONTROLLED_CLAIM_TO_DRAFT_ONLY',
+            'claim_mark': payload['claim_mark'],
+            'product_ids': [],
+            'payload': payload,
+        })
+        task['payload'] = self._public_task_payload(task.get('payload') or {})
+        return task
 
     def bulk_import_products(self, rows: list[dict[str, Any]]):
         created = []

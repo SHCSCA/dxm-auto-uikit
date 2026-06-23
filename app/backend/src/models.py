@@ -38,6 +38,14 @@ class ProductCreate(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class AcquisitionClaimRequest(BaseModel):
+    store_id: int
+    keyword: str | None = None
+    category_name: str | None = None
+    claim_mark: str
+    template_id: int | None = None
+
+
 class TaskCreate(BaseModel):
     name: str
     store_id: int | None = None
