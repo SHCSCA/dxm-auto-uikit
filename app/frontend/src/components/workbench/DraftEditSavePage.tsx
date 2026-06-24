@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { Product, Task } from '../../types'
 
 type DraftEditSavePageProps = {
@@ -26,6 +26,17 @@ export function DraftEditSavePage({
     [claimedProducts, selectedProductId],
   )
   const canCreateTask = Boolean(selectedProduct)
+
+  useEffect(() => {
+    if (!claimedProducts.length) {
+      if (selectedProductId) setSelectedProductId('')
+      return
+    }
+    if (!claimedProducts.some((product) => String(product.id) === selectedProductId)) {
+      setSelectedProductId(String(claimedProducts[0].id))
+    }
+  }, [claimedProducts, selectedProductId])
+
   const saveSteps = [
     {
       title: '选择已进入采集箱的商品',

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { AcquisitionClaimCreateRequest, AcquisitionClaimResponse, Store, Template } from '../../types'
 
 type AcquisitionClaimPageProps = {
@@ -41,6 +41,16 @@ export function AcquisitionClaimPage({
   )
   const enabledTemplates = templates.filter((template) => template.is_enabled)
   const canSubmit = Boolean(selectedStore && claimMark.trim())
+
+  useEffect(() => {
+    if (!stores.length) {
+      if (storeId) setStoreId('')
+      return
+    }
+    if (!stores.some((store) => String(store.id) === storeId)) {
+      setStoreId(String(stores[0].id))
+    }
+  }, [storeId, stores])
 
   function submit() {
     if (!selectedStore || !canSubmit) return

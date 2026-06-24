@@ -32,7 +32,7 @@ def test_sidebar_uses_two_stage_production_workflow():
     assert "采集认领" in shell
     assert "编辑保存" in shell
     assert "模板中心" in shell
-    assert "结果报告" in shell
+    assert "结果与问题" in shell
     assert "选择商品" not in shell
     assert "QA" not in shell
     assert "L2" not in shell
@@ -51,15 +51,13 @@ def test_sidebar_exposes_production_two_stage_workflow_only():
         "采集箱编辑保存",
         "模板中心",
         "执行浏览器",
-        "结果报告",
-        "问题处理",
-        "系统设置",
+        "结果与问题",
     ]
     for label in expected_labels:
         assert label in primary_area_section
 
     assert primary_area_section.count("{ id: '") == len(expected_labels)
-    for label in ["Agent 控制台", "证据中心", "异常池", "任务中心", "配置中心", "使用帮助"]:
+    for label in ["Agent 控制台", "证据中心", "异常池", "任务中心", "配置中心", "使用帮助", "问题处理", "系统设置"]:
         assert label not in primary_area_section
 
 
@@ -90,6 +88,18 @@ def test_acquisition_claim_page_presents_four_step_real_claim_path():
 
     for forbidden in ["QA guarded product", "测试商品", "本地商品", "创建单商品只保存任务"]:
         assert forbidden not in page_source
+
+
+def test_two_stage_pages_select_loaded_store_and_claimed_product_by_default():
+    acquisition_source = ACQUISITION_CLAIM_PAGE_TSX.read_text(encoding="utf-8")
+    draft_source = DRAFT_EDIT_SAVE_PAGE_TSX.read_text(encoding="utf-8")
+
+    assert "useEffect" in acquisition_source
+    assert "setStoreId(String(stores[0].id))" in acquisition_source
+    assert "stores.some((store) => String(store.id) === storeId)" in acquisition_source
+    assert "useEffect" in draft_source
+    assert "setSelectedProductId(String(claimedProducts[0].id))" in draft_source
+    assert "claimedProducts.some((product) => String(product.id) === selectedProductId)" in draft_source
 
 
 def test_draft_edit_save_page_starts_from_claimed_product_without_technical_gate_copy():
@@ -1341,12 +1351,10 @@ def test_sidebar_primary_navigation_keeps_only_user_main_path():
         "采集箱编辑保存",
         "模板中心",
         "执行浏览器",
-        "结果报告",
-        "问题处理",
-        "系统设置",
+        "结果与问题",
     ]
 
-    assert primary_area_section.count("{ id: '") == 9
+    assert primary_area_section.count("{ id: '") == 7
     for label in expected_sidebar_labels:
         assert label in primary_area_section or label in shell_source
     assert "{ id: 'acquisition_claim', label: '数据采集认领'" in primary_area_section
@@ -1360,10 +1368,12 @@ def test_sidebar_primary_navigation_keeps_only_user_main_path():
     assert "{ id: 'manual_takeover', label: '人工接管'" not in primary_area_section
     assert "{ id: 'evidence', label: '证据归档'" not in primary_area_section
     assert "{ id: 'exceptions', label: '问题'" not in primary_area_section
+    assert "{ id: 'issues', label: '问题处理'" not in primary_area_section
+    assert "{ id: 'settings', label: '系统设置'" not in primary_area_section
     assert "id: 'dashboard'" not in primary_area_section
     assert "id: 'agent_execution'" not in primary_area_section
     assert "label: '更多'" not in primary_area_section
-    assert "首页 / 店小秘登录 / 数据采集认领 / 采集箱编辑保存 / 模板中心 / 执行浏览器 / 结果报告 / 问题处理 / 系统设置" in shell_source
+    assert "首页 / 店小秘登录 / 数据采集认领 / 采集箱编辑保存 / 模板中心 / 执行浏览器 / 结果与问题" in shell_source
     forbidden_default_labels = ["Agent Console", "L2", "L3", "probe", "HAR", "run-id"]
     for label in forbidden_default_labels:
         assert label not in primary_area_section
@@ -2705,7 +2715,7 @@ def test_results_page_first_screen_answers_operator_result_questions():
     assert "taskProductLabel(selectedTask)" in business_summary
     assert "latestReport?.created_at" in business_summary
     assert "查看保存证据，确认未发布。" in business_summary
-    assert "回到开始只保存，完成安全检查和人工确认。" in business_summary
+    assert "回到执行浏览器，完成安全检查和人工确认。" in business_summary
     assert "保存回包" not in visible_fact_markup
     assert "network/HAR" not in visible_fact_markup
 
@@ -4183,7 +4193,7 @@ def test_frontend_first_screen_names_dxm_automation_delivery():
     assert "系统状态与验收详情" not in safety_bar
     assert "safety-bar__meta-details inline-disclosure" in safety_bar
     assert "真实保存已阻断" not in safety_bar
-    assert "首页 / 店小秘登录 / 数据采集认领 / 采集箱编辑保存 / 模板中心 / 执行浏览器 / 结果报告 / 问题处理 / 系统设置" in shell
+    assert "首页 / 店小秘登录 / 数据采集认领 / 采集箱编辑保存 / 模板中心 / 执行浏览器 / 结果与问题" in shell
     assert "\\u0044\\u0058\\u004d \\u5355\\u5546\\u54c1\\u53ea\\u4fdd\\u5b58 Agent" in qa_source
     assert "initialText.includes(text.overview) || initialText.includes('\\u767b\\u5f55\\u5e97\\u5c0f\\u79d8') || initialText.includes('\\u5f00\\u59cb\\u53ea\\u4fdd\\u5b58')" in qa_source
     assert "\\u73b0\\u5728\\u53ea\\u505a\\u8fd9\\u4e00\\u6b65" in qa_source
@@ -4203,11 +4213,11 @@ def test_sidebar_copy_names_save_only_agent_flow_without_ambiguous_browser_wordi
     assert "采集箱编辑保存" in shell
     assert "模板中心" in shell
     assert "执行浏览器" in shell
-    assert "结果报告" in shell
+    assert "结果与问题" in shell
     assert "证据归档" not in shell[shell.index("const primaryAreas"):shell.index("const sectionLabels")]
-    assert "问题处理" in shell
+    assert "问题处理" not in primary_area_section
     assert "使用帮助" not in primary_area_section
-    assert "系统设置" in shell
+    assert "系统设置" not in primary_area_section
     assert "帮助与设置" not in shell
     assert "数据采集认领后只保存，不发布" in shell
     assert "{ id: 'acquisition_claim', label: '数据采集认领', short: '采', hint: '从数据采集认领到采集箱' }" in shell
@@ -4233,7 +4243,7 @@ def test_frontend_uses_business_sidebar_groups_and_hides_operator_diagnostics_by
     assert "id: 'prepare'" in shell
     assert "id: 'workflow'" in shell
     assert "id: 'review'" in shell
-    assert "id: 'system'" in shell
+    assert "id: 'system'" not in shell
     assert "复盘与设置" not in shell
     assert "id: 'home'" in shell
     assert "id: 'dxm_access'" in shell
@@ -4248,10 +4258,11 @@ def test_frontend_uses_business_sidebar_groups_and_hides_operator_diagnostics_by
     assert "id: 'real_browser'" not in primary_area_section
     assert "id: 'manual_takeover'" not in primary_area_section
     assert "id: 'results'" in shell
-    assert "id: 'issues'" in shell
+    assert "id: 'issues'" not in primary_area_section
     assert "id: 'help'" not in primary_area_section
     assert "help: '使用帮助'" in shell
-    assert "id: 'settings'" in shell
+    assert "id: 'settings'" not in primary_area_section
+    assert "settings: '系统设置'" in shell
     assert "状态详情" in safety_bar
     visible_bar = safety_bar[safety_bar.index("return ("):safety_bar.index("<details className=\"safety-bar__meta-details")]
     assert "技术诊断" not in visible_bar
@@ -4502,7 +4513,7 @@ def test_results_page_is_extracted_from_workbench_modules():
     results_source = RESULTS_PAGE_TSX.read_text(encoding="utf-8")
 
     assert "export function ResultsPage" in results_source
-    assert "aria-label=\"保存结果\"" in results_source
+    assert "aria-label=\"结果与问题\"" in results_source
     assert "保存后核对" in results_source
     assert "复核与后续处理" in results_source
     assert "维护人员验收信息" in results_source
@@ -4722,10 +4733,10 @@ def test_report_center_keeps_evidence_exception_and_console_followup_reachable_a
     assert "复核与后续处理" in report_center_section
     assert "查看保存证据" in report_center_section
     assert "处理问题" in report_center_section
-    assert "回到开始只保存" in report_center_section
+    assert "回到执行浏览器" in report_center_section
     assert "data-section=\"evidence\"" in report_center_section
     assert "data-section=\"exceptions\"" in report_center_section
-    assert "onShowExceptions={() => setActiveSection('issues')}" in app_source
+    assert "onShowExceptions={() => setActiveSection('results')}" in app_source
     assert ".report-followup-actions" in styles_source
 
 

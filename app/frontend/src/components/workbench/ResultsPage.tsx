@@ -75,7 +75,7 @@ export function ResultsPage({
   )
 
   return (
-    <section className="module-layout" aria-label="保存结果" data-testid="report-center-section">
+    <section className="module-layout" aria-label="结果与问题" data-testid="report-center-section">
       <BusinessResultSummaryCard
         selectedTask={selectedTask}
         latestReport={reportSummary?.latest_report ?? reports[0] ?? null}
@@ -102,12 +102,12 @@ export function ResultsPage({
       <div className="module-card span-3 report-followup-actions" aria-label="复核与后续处理">
         <div>
           <strong>复核与后续处理</strong>
-          <span>任务结束后优先看保存证据；有阻断再处理问题；需要继续执行回“开始只保存”。</span>
+          <span>任务结束后优先看保存证据；有阻断就在本页处理问题；需要继续执行回“执行浏览器”。</span>
         </div>
         <div className="toolbar">
           <button className="button button--secondary" type="button" data-section="evidence" onClick={onShowEvidence}>查看保存证据</button>
           <button className="button button--quiet" type="button" data-section="exceptions" onClick={onShowExceptions}>处理问题</button>
-          <button className="button button--quiet" type="button" data-section="console" onClick={onShowConsole}>回到开始只保存</button>
+          <button className="button button--quiet" type="button" data-section="console" onClick={onShowConsole}>回到执行浏览器</button>
         </div>
       </div>
       <div className="module-card span-3">
@@ -421,8 +421,8 @@ function BusinessResultSummaryCard({
   const nextStep = ok
     ? '查看保存证据，确认未发布。'
     : realWriteExpectedBlocked
-      ? '回到开始只保存，完成安全检查和人工确认。'
-      : '处理问题或回到开始只保存重试。'
+      ? '回到执行浏览器，完成安全检查和人工确认。'
+      : '处理问题或回到执行浏览器重试。'
   const title = ok
     ? '本次只保存已完成'
     : realWriteExpectedBlocked
@@ -434,7 +434,7 @@ function BusinessResultSummaryCard({
     ? '系统已拿到保存成功、未发布证明和保存接口回包。'
     : realWriteExpectedBlocked
       ? '真实保存不会自动启动；完成登录、配置、安全检查和人工确认后再执行。'
-      : '请先查看保存证据或回到开始只保存页处理当前阻断。'
+      : '请先查看保存证据或回到执行浏览器处理当前阻断。'
 
   return (
     <div className={`module-card span-3 business-result-summary ${ok ? 'is-ok' : realWriteExpectedBlocked ? 'is-waiting' : 'is-warn'}`} aria-label="本次保存结果">
@@ -455,7 +455,7 @@ function BusinessResultSummaryCard({
       </div>
       <div className="report-followup-actions business-result-summary__actions" aria-label="本次结果后续动作">
         <button className="button button--secondary" type="button" onClick={onShowEvidence}>查看保存证据</button>
-        <button className="button button--quiet" type="button" onClick={onShowConsole}>回到开始只保存</button>
+        <button className="button button--quiet" type="button" onClick={onShowConsole}>回到执行浏览器</button>
       </div>
     </div>
   )

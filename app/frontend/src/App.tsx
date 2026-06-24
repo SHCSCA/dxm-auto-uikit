@@ -153,7 +153,7 @@ function normalizeWorkbenchSection(section: WorkbenchSection | LegacyWorkbenchSe
     manual_takeover: 'start_save',
     evidence: 'results',
     reports: 'results',
-    exceptions: 'issues',
+    exceptions: 'results',
   }
   return sectionAliases[String(section)] ?? section as WorkbenchSection
 }
@@ -1313,7 +1313,7 @@ export default function App() {
       case 'issues':
         return <ExceptionQueue workspace={workspace} selectedTask={selectedTask} />
       case 'results':
-        return <ReportCenter workspace={workspace} selectedTask={selectedTask} finalCheck={finalCheck} onShowEvidence={() => setActiveSection('results')} onShowConsole={() => setActiveSection('start_save')} onShowExceptions={() => setActiveSection('issues')} />
+        return <ReportCenter workspace={workspace} selectedTask={selectedTask} finalCheck={finalCheck} onShowEvidence={() => setActiveSection('results')} onShowConsole={() => setActiveSection('start_save')} onShowExceptions={() => setActiveSection('results')} />
       case 'help':
         return (
           <HelpPage
@@ -1324,7 +1324,7 @@ export default function App() {
             onShowConfig={() => setActiveSection('edit_config')}
             onShowConsole={() => setActiveSection('start_save')}
             onShowResults={() => setActiveSection('results')}
-            onShowIssues={() => setActiveSection('issues')}
+            onShowIssues={() => setActiveSection('results')}
           />
         )
       case 'settings':

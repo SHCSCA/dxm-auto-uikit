@@ -34,16 +34,7 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
     label: '复盘',
     short: '3',
     items: [
-      { id: 'results', label: '结果报告', short: '报', hint: '确认保存成功且未发布' },
-      { id: 'issues', label: '问题处理', short: '问', hint: '按失败原因恢复' },
-    ],
-  },
-  {
-    id: 'system',
-    label: '系统',
-    short: '4',
-    items: [
-      { id: 'settings', label: '系统设置', short: '设', hint: '日志、服务、维护诊断' },
+      { id: 'results', label: '结果与问题', short: '结', hint: '确认保存结果并按失败原因恢复' },
     ],
   },
 ]
@@ -69,8 +60,8 @@ const sectionLabels: Record<WorkbenchSection, string> = {
   preflight: '运行前检查',
   real_browser: '执行浏览器',
   manual_takeover: '人工接管',
-  results: '结果报告',
-  issues: '问题处理',
+  results: '结果与问题',
+  issues: '结果与问题',
   evidence: '证据归档',
   help: '使用帮助',
   settings: '系统设置',
@@ -112,7 +103,7 @@ export function AppShell({
             <div>
               <strong>DXM 只保存自动化</strong>
               <span>数据采集认领后只保存，不发布</span>
-              <span className="sr-only">首页 / 店小秘登录 / 数据采集认领 / 采集箱编辑保存 / 模板中心 / 执行浏览器 / 结果报告 / 问题处理 / 系统设置</span>
+              <span className="sr-only">首页 / 店小秘登录 / 数据采集认领 / 采集箱编辑保存 / 模板中心 / 执行浏览器 / 结果与问题</span>
             </div>
           )}
           <button className="icon-button" type="button" onClick={onToggleSidebar} aria-label="切换侧边栏">
