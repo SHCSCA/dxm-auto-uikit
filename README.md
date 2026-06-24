@@ -29,10 +29,10 @@ outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
 2026-06-24 当前分支 packaged/portable smoke 已通过，文件 SHA-256：
 
 ```text
-96348443EE8A5D47664002958D53ECBE647ACEC034DF0CC5B24402B1E8232AA3
+150467D3B468368B2E8DA95FA5B91C8DDC262F7D4331913E2C58BA27EAFEB011
 ```
 
-本轮桌面包验收记录：`docs/product/最终交付验收记录-20260623-桌面包.md`。该记录已更新为 2026-06-24 `7d7ab4d` 新包证据，证明当前分支免安装包可启动，并包含“采集认领 -> 采集箱编辑保存”的主路径桥接修复；真实店小秘“两段式端到端验收”仍需现场跑通后再标记最终生产交付。
+本轮桌面包验收记录：`docs/product/最终交付验收记录-20260623-桌面包.md`。该记录已更新为 2026-06-24 `6d8e3e5` 新包证据，证明当前分支免安装包可启动，并包含“采集认领 -> 采集箱编辑保存”的主路径桥接、真实浏览器 HUD 保活、测试商品阻断和模板中心默认配置主路径优化；真实店小秘“两段式端到端验收”仍需现场跑通后再标记最终生产交付。
 
 仓库内也保留同源构建产物：
 
@@ -157,7 +157,7 @@ outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
 2026-06-24 当前分支 packaged/portable smoke 已通过，文件 SHA-256：
 
 ```bat
-96348443EE8A5D47664002958D53ECBE647ACEC034DF0CC5B24402B1E8232AA3
+150467D3B468368B2E8DA95FA5B91C8DDC262F7D4331913E2C58BA27EAFEB011
 ```
 
 仓库内同源构建产物：
