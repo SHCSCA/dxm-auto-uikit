@@ -102,7 +102,20 @@ export type RuntimeStatus = {
   backend: { status: string; url?: string; port?: number | null; instanceId?: string | null; detail?: string }
   frontend: { status: string; url?: string; port?: number | null; detail?: string }
   agentConsole: { status: string; active: boolean; browserVisible: boolean; browserLaunching?: boolean; currentUrl?: string | null; profileDir?: string | null; lastError?: string | null }
-  dxmLogin: { status: string; currentUrl?: string | null; lastError?: string | null }
+  realBrowser: {
+    status: string
+    active: boolean
+    browserVisible: boolean
+    browserLaunching?: boolean
+    source?: 'dxm_flow' | 'agent_console' | 'none' | string
+    currentUrl?: string | null
+    pageTitle?: string | null
+    currentStep?: string | null
+    lastError?: string | null
+    message?: string | null
+    nextAction?: string | null
+  }
+  dxmLogin: { status: string; currentUrl?: string | null; pageTitle?: string | null; browserVisible?: boolean; lastError?: string | null; message?: string | null; nextAction?: string | null }
   l2ReadonlyProbe?: {
     running: boolean
     stale?: boolean

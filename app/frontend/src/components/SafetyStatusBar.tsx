@@ -53,7 +53,18 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
   const hasBlocker = visibleBlockerGaps.length > 0
   const runtimeStatusUnavailable = Boolean(runtimeStatusError)
   const dxmLoggedIn = runtimeStatus ? dxmReadySessionStatuses.has(runtimeStatus.dxmLogin.status) : false
-  const agentActive = runtimeStatus?.agentConsole.active === true
+  const realBrowser = runtimeStatus?.realBrowser ?? (runtimeStatus
+    ? {
+      status: runtimeStatus.agentConsole.status,
+      active: runtimeStatus.agentConsole.active,
+      browserVisible: runtimeStatus.agentConsole.browserVisible,
+      browserLaunching: runtimeStatus.agentConsole.browserLaunching,
+      source: 'agent_console',
+      currentUrl: runtimeStatus.agentConsole.currentUrl,
+      lastError: runtimeStatus.agentConsole.lastError,
+    }
+    : null)
+  const agentActive = realBrowser?.active === true
   const tone = runtimeStatusUnavailable || l3BlocksRealSave || hasBlocker || publishGuardReasons.length > 0
     ? 'danger'
     : l2BlocksRealSave || l3NeedsApproval || workspace.source === 'mock' || workspace.evidenceGrade?.grade === 'C'
@@ -113,7 +124,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
       { label: `启动方式：${runtimeOwnerChip}`, tone: runtimeOwner === 'direct' ? 'warn' : 'ok' },
       { label: `本机服务：${runtimeStatus.backend.status === 'ok' ? '正常' : '异常'}`, tone: runtimeStatus.backend.status === 'ok' ? 'ok' : 'danger' },
       { label: `主窗口：${frontendRuntimeLabel(runtimeStatus.frontend)}`, tone: runtimeStatus.frontend.status === 'ok' ? 'ok' : 'danger' },
-      { label: `真实浏览器：${runtimeStatus.agentConsole.active ? '运行中' : '待命'}`, tone: runtimeStatus.agentConsole.active ? 'ok' : 'warn' },
+      { label: `真实浏览器：${humanRealBrowserStatus(realBrowser)}`, tone: realBrowser?.active ? 'ok' : realBrowser?.browserLaunching ? 'warn' : 'warn' },
       { label: `店小秘登录：${humanDxmLoginStatus(runtimeStatus.dxmLogin.status)}`, tone: dxmLoginTone(runtimeStatus.dxmLogin.status) },
     ]
     : []
@@ -164,7 +175,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
     : l3NeedsApproval
       ? '保存前需要人工确认。'
       : agentActive
-        ? 'Agent 正在真实浏览器中执行。'
+        ? '真实浏览器正在执行。'
         : '没有阻断。'
   const primaryActionLabel = selectedTaskCompleted
     ? '查看保存结果'
@@ -235,6 +246,14 @@ function humanDxmLoginStatus(status: string) {
   if (status === 'login_failed') return '登录未通过'
   if (status.includes('error')) return '异常'
   return '待确认'
+}
+
+function humanRealBrowserStatus(browser: RuntimeStatus['realBrowser'] | null | undefined) {
+  if (!browser) return '待确认'
+  if (browser.browserLaunching) return '启动中'
+  if (browser.active && browser.browserVisible) return browser.source === 'dxm_flow' ? '业务窗口已打开' : '运行中'
+  if (browser.active) return '会话已建立'
+  return '待命'
 }
 
 function runtimeOwnerLabel(owner: string, managedByDesktop: boolean) {

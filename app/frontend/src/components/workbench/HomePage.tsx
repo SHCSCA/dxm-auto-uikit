@@ -38,7 +38,7 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
   const l2Passed = l2Gate?.status === 'passed'
   const l3Passed = l3Gate?.status === 'passed'
   const realWriteReady = !realWriteExpectedBlocked
-  const agentActive = runtimeStatus?.agentConsole.active === true
+  const agentActive = runtimeStatus?.realBrowser?.active === true
   const waitingForManualConfirm = Boolean(selectedTask && requiresManualApproval(selectedTask) && l2Passed && !l3Passed && !selectedTaskCompleted)
   const controlOwner = agentActive ? 'Agent 操作中' : waitingForManualConfirm ? '等待人工确认' : '用户操作中'
   const controlOwnerDetail = agentActive

@@ -635,6 +635,7 @@ def runtime_status(frontend_url: str | None = None):
     backend_url = os.environ.get('DXM_BACKEND_URL') or f"http://127.0.0.1:{os.environ.get('DXM_BACKEND_PORT', '8000')}"
     agent_status = agent_console_service.status()
     dxm_state = normalize_artifact_paths(login_flow.get_state())
+    real_browser_status = _runtime_real_browser_status(agent_status, dxm_state)
     return {
         'backend': {
             'status': 'ok',
@@ -653,10 +654,15 @@ def runtime_status(frontend_url: str | None = None):
             'profileDir': agent_status.get('profile_dir'),
             'lastError': agent_status.get('last_error'),
         },
+        'realBrowser': real_browser_status,
         'dxmLogin': {
             'status': str(dxm_state.get('status') or dxm_state.get('stage') or 'unknown'),
             'currentUrl': dxm_state.get('current_url') or dxm_state.get('url') or dxm_state.get('page_url'),
+            'pageTitle': dxm_state.get('page_title') or dxm_state.get('title'),
+            'browserVisible': bool(dxm_state.get('browser_visible')),
             'lastError': dxm_state.get('last_error') or dxm_state.get('error'),
+            'message': dxm_state.get('message'),
+            'nextAction': dxm_state.get('next_action'),
         },
         'l2ReadonlyProbe': _l2_probe_lock_status(),
         'dependencies': {
@@ -686,6 +692,64 @@ def runtime_status(frontend_url: str | None = None):
             'resource_root': str(REPO_ROOT),
             'resourceRoot': str(REPO_ROOT),
         },
+    }
+
+
+def _runtime_real_browser_status(agent_status: dict[str, Any], dxm_state: dict[str, Any]) -> dict[str, Any]:
+    dxm_stage = str(dxm_state.get('stage') or dxm_state.get('status') or '').strip()
+    dxm_url = dxm_state.get('current_url') or dxm_state.get('url') or dxm_state.get('page_url')
+    dxm_browser_visible = bool(dxm_state.get('browser_visible'))
+    dxm_business_state_seen = bool(
+        dxm_stage
+        and dxm_stage not in {'opening_login_page', 'unknown'}
+        and (dxm_browser_visible or (isinstance(dxm_url, str) and 'dianxiaomi.com' in dxm_url))
+    )
+    if dxm_browser_visible or dxm_business_state_seen:
+        return {
+            'status': 'running' if dxm_browser_visible else 'known',
+            'active': dxm_browser_visible,
+            'browserVisible': dxm_browser_visible,
+            'browserLaunching': False,
+            'source': 'dxm_flow',
+            'currentUrl': dxm_url,
+            'pageTitle': dxm_state.get('page_title') or dxm_state.get('title'),
+            'currentStep': dxm_state.get('label') or dxm_stage,
+            'lastError': dxm_state.get('last_error') or dxm_state.get('error'),
+            'message': dxm_state.get('message'),
+            'nextAction': dxm_state.get('next_action'),
+        }
+
+    agent_active = bool(agent_status.get('active'))
+    agent_visible = bool(agent_status.get('browser_visible'))
+    agent_launching = bool(agent_status.get('browser_launching'))
+    if agent_active or agent_visible or agent_launching:
+        hud = agent_status.get('hud') if isinstance(agent_status.get('hud'), dict) else {}
+        return {
+            'status': 'launching' if agent_launching else 'running' if agent_active else 'known',
+            'active': agent_active,
+            'browserVisible': agent_visible,
+            'browserLaunching': agent_launching,
+            'source': 'agent_console',
+            'currentUrl': agent_status.get('current_url') or agent_status.get('target_url'),
+            'pageTitle': agent_status.get('page_title'),
+            'currentStep': hud.get('title') or hud.get('label') or agent_status.get('last_step_name'),
+            'lastError': agent_status.get('last_error'),
+            'message': hud.get('action') or hud.get('detail'),
+            'nextAction': hud.get('next_step'),
+        }
+
+    return {
+        'status': 'idle',
+        'active': False,
+        'browserVisible': False,
+        'browserLaunching': False,
+        'source': 'none',
+        'currentUrl': dxm_url or agent_status.get('target_url') or 'https://www.dianxiaomi.com/',
+        'pageTitle': dxm_state.get('page_title') or dxm_state.get('title') or agent_status.get('page_title'),
+        'currentStep': dxm_state.get('label') or dxm_stage or '待启动',
+        'lastError': dxm_state.get('last_error') or dxm_state.get('error') or agent_status.get('last_error'),
+        'message': dxm_state.get('message'),
+        'nextAction': dxm_state.get('next_action'),
     }
 
 

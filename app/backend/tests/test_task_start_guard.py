@@ -1154,6 +1154,43 @@ def test_runtime_status_uses_login_page_url_for_current_url(tmp_path, monkeypatc
     assert response.json()["dxmLogin"]["currentUrl"] == "https://www.dianxiaomi.com/login.htm"
 
 
+def test_runtime_status_unifies_visible_dxm_flow_browser_even_when_agent_console_idle(tmp_path, monkeypatch):
+    import src.main as main
+
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(main.login_flow, "get_state", lambda: {
+        "stage": "workflow_navigation",
+        "label": "数据采集",
+        "message": "已进入数据采集页，可以继续认领产品。",
+        "next_action": "继续切换到速卖通采集箱或执行认领。",
+        "page_title": "店小秘--数据采集",
+        "page_url": "https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
+        "browser_visible": True,
+        "last_error": None,
+    })
+    monkeypatch.setattr(main.agent_console_service, "status", lambda: {
+        "active": False,
+        "browser_visible": False,
+        "browser_launching": False,
+        "target_url": "https://www.dianxiaomi.com/",
+        "current_url": None,
+        "profile_dir": None,
+        "last_error": None,
+    })
+
+    response = client.get("/api/runtime/status?frontend_url=http://127.0.0.1:9")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["agentConsole"]["active"] is False
+    assert payload["realBrowser"]["active"] is True
+    assert payload["realBrowser"]["browserVisible"] is True
+    assert payload["realBrowser"]["source"] == "dxm_flow"
+    assert payload["realBrowser"]["currentUrl"].endswith("/web/productCrawl/dataAcquisition")
+    assert payload["realBrowser"]["pageTitle"] == "店小秘--数据采集"
+    assert payload["realBrowser"]["currentStep"] == "数据采集"
+
+
 def test_runtime_status_exposes_agent_browser_launch_diagnostics(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     task = _create_task(repo, mode="dry_run")

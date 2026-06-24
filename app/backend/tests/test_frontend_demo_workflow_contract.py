@@ -3445,6 +3445,9 @@ def test_frontend_surfaces_runtime_status_and_log_filters():
     assert "dxmReadySessionStatuses" in safety_bar
     assert "dxmLoginTone(runtimeStatus.dxmLogin.status)" in safety_bar
     assert "if (dxmReadySessionStatuses.has(status)) return 'ok'" in safety_bar
+    assert "runtimeStatus?.realBrowser" in safety_bar
+    assert "humanRealBrowserStatus(realBrowser)" in safety_bar
+    assert "`真实浏览器：${humanRealBrowserStatus(realBrowser)}`" in safety_bar
     assert "后端端口" not in safety_bar
     assert "前端端口" not in safety_bar
     assert "safety-bar__meta-details" in safety_bar
@@ -3480,6 +3483,8 @@ def test_frontend_surfaces_runtime_status_and_log_filters():
     assert "getL2ProbeResourceState(runtimeStatus)" in workbench_source
     focus_panel_section = workbench_source[workbench_source.index("function ConsoleFocusPanel"):workbench_source.index("function AgentBrowserFrame")]
     assert "runtimeStatus: RuntimeStatus | null" in focus_panel_section
+    assert "const realBrowser = runtimeStatus?.realBrowser" in focus_panel_section
+    assert "realBrowser?.nextAction ?? agentConsole?.hud?.next_step" in focus_panel_section
     assert "primaryPath.action === 'launcher_logs'" in focus_panel_section
     assert "onRuntimeLogSourceChange('launcher')" in focus_panel_section
     assert "primaryActionDisabled={false}" in focus_panel_section
@@ -3493,6 +3498,30 @@ def test_frontend_surfaces_runtime_status_and_log_filters():
     assert "item?.repairSteps" in workbench_source
     assert "真实只读检查组件未安装完整" in workbench_source
     assert "真实只读检查依赖状态未知，请先刷新运行状态或重新打开免安装版。" in workbench_source
+
+
+def test_frontend_uses_unified_real_browser_status_for_primary_browser_state():
+    types_source = (REPO_ROOT / "app" / "frontend" / "src" / "types.ts").read_text(encoding="utf-8")
+    safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
+    home_source = HOME_PAGE_TSX.read_text(encoding="utf-8")
+    settings_source = SYSTEM_SETTINGS_PAGE_TSX.read_text(encoding="utf-8")
+    workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    frame_section = workbench_source[workbench_source.index("function AgentBrowserFrame"):workbench_source.index("function AgentConsoleControls")]
+    browser_frame_helper = workbench_source[workbench_source.index("function getBrowserFrame"):workbench_source.index("function getTaskDisplayKey")]
+
+    assert "realBrowser: {" in types_source
+    assert "source?: 'dxm_flow' | 'agent_console' | 'none' | string" in types_source
+    assert "const realBrowser = runtimeStatus?.realBrowser" in safety_bar
+    assert "runtimeStatus?.realBrowser?.active === true" in home_source
+    assert "runtimeStatus?.realBrowser?.browserVisible" in settings_source
+    assert "真实业务浏览器已打开" in settings_source
+    assert "runtimeStatus={runtimeStatus}" in workbench_source
+    assert "runtimeStatus: RuntimeStatus | null" in frame_section
+    assert "const realBrowser = runtimeStatus?.realBrowser" in frame_section
+    assert "realBrowser?.source === 'dxm_flow'" in frame_section
+    assert "真实业务浏览器已连接" in frame_section
+    assert "runtimeStatus?.realBrowser?.active" in browser_frame_helper
+    assert "来自真实 DXM 业务浏览器会话" in browser_frame_helper
     assert "checkedPaths" in (REPO_ROOT / "app" / "frontend" / "src" / "types.ts").read_text(encoding="utf-8")
     assert "已检查：" in workbench_source
     assert ".slice(0, 4)" in workbench_source

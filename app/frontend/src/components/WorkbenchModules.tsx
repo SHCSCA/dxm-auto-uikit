@@ -3014,7 +3014,7 @@ export function ExecutionConsole({
     })
     : buildConsoleSteps(selectedTask, workspace.logs)
   const activeStep = steps.find((step) => step.state === 'current' || step.state === 'blocked') ?? steps.find((step) => step.state === 'pending') ?? steps[0]
-  const browserFrame = getBrowserFrame(workspace, selectedTask, agentConsole)
+  const browserFrame = getBrowserFrame(workspace, selectedTask, agentConsole, runtimeStatus)
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
   const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
   const consolePrimaryPath = buildConsolePrimaryPath({ selectedTask, reports: workspace.reports, configPreview, configPreviewError, configPreviewLoading, l2Gate, l3Gate, runtimeStatus, busy })
@@ -3353,6 +3353,7 @@ function AgentStagePanel({
             activeStep={activeStep}
             browserFrame={browserFrame}
             agentConsole={agentConsole}
+            runtimeStatus={runtimeStatus}
           />
         </details>
       </details>
@@ -3816,12 +3817,13 @@ function ConsoleFocusPanel({
   onOpenDxmLogin: () => void
   onContinueDxmLogin: () => void
 }) {
-  const active = Boolean(agentConsole?.active)
-  const hasBrowserSession = Boolean(agentConsole?.active || agentConsole?.updated_at)
-  const browserLaunching = Boolean(agentConsole?.browser_launching)
-  const browserVisible = Boolean(agentConsole?.browser_visible)
+  const realBrowser = runtimeStatus?.realBrowser
+  const active = Boolean(realBrowser?.active || agentConsole?.active)
+  const hasBrowserSession = Boolean(realBrowser?.active || agentConsole?.active || agentConsole?.updated_at)
+  const browserLaunching = Boolean(realBrowser?.browserLaunching || agentConsole?.browser_launching)
+  const browserVisible = Boolean(realBrowser?.browserVisible || agentConsole?.browser_visible)
   const manualTakeover = Boolean(agentConsole?.manual_takeover)
-  const currentUrl = agentConsole?.current_url ?? agentConsole?.target_url
+  const currentUrl = realBrowser?.currentUrl ?? agentConsole?.current_url ?? agentConsole?.target_url
   const selectedTaskCompleted = selectedTask?.status === 'completed'
   const guardLabel = selectedTaskCompleted
     ? '任务已完成'
@@ -3852,7 +3854,7 @@ function ConsoleFocusPanel({
       : active
         ? browserLaunching
           ? '等待独立真实浏览器启动完成'
-          : humanConsoleText(agentConsole?.hud?.next_step ?? '按当前步骤继续操作真实浏览器')
+          : humanConsoleText(realBrowser?.nextAction ?? agentConsole?.hud?.next_step ?? '按当前步骤继续操作真实浏览器')
       : primaryPath.next
   const primaryActionLabel = primaryPath.ctaLabel
   const loginState = humanDxmLoginState(runtimeStatus, runtimeStatusError)
@@ -4118,27 +4120,32 @@ function AgentBrowserFrame({
   activeStep,
   browserFrame,
   agentConsole,
+  runtimeStatus,
 }: {
   workspace: DeliveryWorkspace
   selectedTask: Task | null
   activeStep?: { title: string; code?: string; detail: string; state: string }
   browserFrame: { url: string; evidencePath: string; source: string }
   agentConsole: AgentConsoleSession | null
+  runtimeStatus: RuntimeStatus | null
 }) {
+  const realBrowser = runtimeStatus?.realBrowser
   const nextStep = nextPendingStep(workspace.deliverySteps, activeStep?.code)
-  const hasConsoleHud = Boolean(agentConsole?.active || agentConsole?.updated_at)
+  const hasConsoleHud = Boolean(realBrowser?.active || agentConsole?.active || agentConsole?.updated_at)
   const hud = agentConsole?.hud
   const storeName = (hasConsoleHud ? hud?.store_name : null) ?? selectedTask?.payload.store_name ?? workspace.stores[0]?.name ?? '等待真实店铺'
-  const hudTitle = (hasConsoleHud ? hud?.title ?? hud?.label : null) ?? activeStep?.title ?? '等待任务'
+  const hudTitle = realBrowser?.currentStep ?? (hasConsoleHud ? hud?.title ?? hud?.label : null) ?? activeStep?.title ?? '等待任务'
   const hudState = humanConsoleCodeLabel((hasConsoleHud ? hud?.state ?? hud?.code : null) ?? activeStep?.code ?? 'WAITING')
-  const hudAction = humanConsoleText((hasConsoleHud ? hud?.action ?? hud?.detail : null) ?? activeStep?.detail ?? '等待后端推送步骤')
-  const hudNext = humanConsoleText((hasConsoleHud ? hud?.next_step : null) ?? nextStep?.label ?? '等待状态机推进')
+  const hudAction = humanConsoleText(realBrowser?.message ?? (hasConsoleHud ? hud?.action ?? hud?.detail : null) ?? activeStep?.detail ?? '等待后端推送步骤')
+  const hudNext = humanConsoleText(realBrowser?.nextAction ?? (hasConsoleHud ? hud?.next_step : null) ?? nextStep?.label ?? '等待状态机推进')
   const hudGuard = (hasConsoleHud ? hud?.guard : null) ?? (workspace.publishGuardState?.safe ? '通过' : '等待证明')
-  const hudDotState = agentConsole?.last_error ? 'blocked' : agentConsole?.active ? 'current' : activeStep?.state ?? 'pending'
+  const hudDotState = realBrowser?.lastError || agentConsole?.last_error ? 'blocked' : realBrowser?.active || agentConsole?.active ? 'current' : activeStep?.state ?? 'pending'
   const recentNetworkEvents = getRecentNetworkEvents(agentConsole)
-  const browserLaunching = Boolean(agentConsole?.browser_launching)
+  const browserLaunching = Boolean(realBrowser?.browserLaunching || agentConsole?.browser_launching)
+  const realBrowserVisible = Boolean(realBrowser?.browserVisible || agentConsole?.browser_visible)
+  const realBrowserActive = Boolean(realBrowser?.active || agentConsole?.active)
   const canControl = Boolean(agentConsole?.active && agentConsole?.browser_visible && !agentConsole?.manual_takeover)
-  const browserLaunchFailure = Boolean(agentConsole?.last_error && !browserLaunching && !agentConsole?.browser_visible)
+  const browserLaunchFailure = Boolean((realBrowser?.lastError || agentConsole?.last_error) && !browserLaunching && !realBrowserVisible)
 
   return (
     <div className="agent-browser agent-browser-shell is-diagnostic">
@@ -4150,21 +4157,23 @@ function AgentBrowserFrame({
         </div>
         <div className="browser-tab">店小秘自动浏览器</div>
         <div className="browser-url">{browserFrame.url}</div>
-        <span className={`status-pill ${agentConsole?.browser_visible ? 'ok' : browserLaunching ? 'warn' : 'muted'}`}>
-          {agentConsole?.browser_visible ? '可见浏览器' : browserLaunching ? '正在启动' : '独立浏览器待命'}
+        <span className={`status-pill ${realBrowserVisible ? 'ok' : browserLaunching ? 'warn' : 'muted'}`}>
+          {realBrowserVisible ? '可见浏览器' : browserLaunching ? '正在启动' : '独立浏览器待命'}
         </span>
       </div>
       <div className="agent-browser__viewport">
         <div className="browser-live-surface">
           <div>
-            <strong>{agentConsole?.active || agentConsole?.updated_at ? '店小秘真实浏览器正在执行' : '尚未打开店小秘真实浏览器'}</strong>
+            <strong>{realBrowserActive || agentConsole?.updated_at ? '店小秘真实浏览器正在执行' : '尚未打开店小秘真实浏览器'}</strong>
             <span>
-              {agentConsole?.active || agentConsole?.updated_at
+              {realBrowserActive || agentConsole?.updated_at
                 ? browserLaunching
                   ? '正在启动独立真实浏览器；状态会自动刷新，期间不会触发保存或发布。'
                   : canControl
                   ? '可通过下方控制面板滚动或导航当前独立浏览器窗口。'
-                  : '浏览器状态已连接；人工接管或窗口未显示时，控制面板会保持只读/禁用。'
+                  : realBrowser?.source === 'dxm_flow'
+                    ? '真实业务浏览器已连接；任务进度以真实店小秘窗口左上角提示为准。'
+                    : '浏览器状态已连接；人工接管或窗口未显示时，控制面板会保持只读/禁用。'
                 : '点击上方按钮后，会使用独立 Profile 打开真实 dianxiaomi.com。'}
             </span>
             <small>独立浏览器窗口才是真实操作现场；这里仅显示状态和下一步，不在网页内发布。</small>
@@ -4176,11 +4185,11 @@ function AgentBrowserFrame({
             </div>
             <div>
               <dt>控制状态</dt>
-              <dd>{canControl ? 'Agent 可控' : agentConsole?.manual_takeover ? '人工接管中' : browserLaunching ? '浏览器启动中' : '等待可见窗口'}</dd>
+              <dd>{canControl ? 'Agent 可控' : agentConsole?.manual_takeover ? '人工接管中' : browserLaunching ? '浏览器启动中' : realBrowserVisible ? '真实窗口可见' : '等待可见窗口'}</dd>
             </div>
             <div>
               <dt>下一步</dt>
-              <dd>{agentConsole?.active ? hudNext : '启动真实浏览器后在独立窗口操作店小秘'}</dd>
+              <dd>{realBrowserActive ? hudNext : '启动真实浏览器后在独立窗口操作店小秘'}</dd>
             </div>
           </dl>
           <small className="browser-live-surface__control-note">
@@ -4189,7 +4198,7 @@ function AgentBrowserFrame({
           {browserLaunchFailure && (
             <div className="browser-launch-diagnostic" role="alert" aria-label="真实浏览器启动失败诊断">
               <strong>真实浏览器启动失败</strong>
-              <span>{agentConsole?.last_error}</span>
+              <span>{realBrowser?.lastError || agentConsole?.last_error}</span>
               <small>处理：关闭旧的 DXM Agent Console 或旧浏览器进程后重试；浏览器 Profile：{agentConsole?.profile_dir || '等待后端返回 Profile 目录'}。</small>
             </div>
           )}
@@ -6197,7 +6206,16 @@ function buildConsoleSteps(selectedTask: Task | null, logs: LogItem[]) {
   ]
 }
 
-function getBrowserFrame(workspace: DeliveryWorkspace, selectedTask: Task | null, agentConsole?: AgentConsoleSession | null) {
+function getBrowserFrame(workspace: DeliveryWorkspace, selectedTask: Task | null, agentConsole?: AgentConsoleSession | null, runtimeStatus?: RuntimeStatus | null) {
+  if (runtimeStatus?.realBrowser?.active) {
+    return {
+      url: runtimeStatus.realBrowser.currentUrl || agentConsole?.current_url || agentConsole?.target_url || 'https://www.dianxiaomi.com/',
+      evidencePath: agentConsole?.screenshot_url ?? agentConsole?.screenshot ?? '',
+      source: runtimeStatus.realBrowser.source === 'dxm_flow'
+        ? '来自真实 DXM 业务浏览器会话'
+        : runtimeStatus.realBrowser.browserVisible ? '来自可见独立 Profile 浏览器会话' : '浏览器会话已创建，等待窗口可见',
+    }
+  }
   if (agentConsole?.active) {
     return {
       url: agentConsole.current_url || agentConsole.target_url || 'https://www.dianxiaomi.com/',
