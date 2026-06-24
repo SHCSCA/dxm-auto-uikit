@@ -105,20 +105,33 @@ export function DraftEditSavePage({
 
         {claimedProducts.length ? (
           <div className="real-task-products" aria-label="采集箱商品">
-            {claimedProducts.map((product) => (
-              <button
-                key={product.id}
-                className={`task-product-choice ${selectedProduct?.id === product.id ? 'is-selected' : ''}`}
-                type="button"
-                onClick={() => setSelectedProductId(String(product.id))}
-                disabled={busy}
-                aria-pressed={selectedProduct?.id === product.id}
-              >
-                <strong>{product.title}</strong>
-                <span>{product.category_name || '未指定类目'}</span>
-                <small>SKU {product.sku_count}，图片 {product.image_count}，{humanProductStatus(product.status)}</small>
-              </button>
-            ))}
+            {claimedProducts.map((product) => {
+              const payload = productPayload(product)
+              const draftBoxVerified = payload.draft_box_verified === true
+              const sourceUrl = textValue(payload.source_url) || textValue(payload.url)
+              const claimTaskId = textValue(payload.claim_task_id)
+              const sourceLabel = textValue(payload.source ?? product.source) === 'dxm_data_acquisition'
+                ? '真实数据采集'
+                : '等待来源确认'
+              return (
+                <button
+                  key={product.id}
+                  className={`task-product-choice ${selectedProduct?.id === product.id ? 'is-selected' : ''}`}
+                  type="button"
+                  onClick={() => setSelectedProductId(String(product.id))}
+                  disabled={busy}
+                  aria-pressed={selectedProduct?.id === product.id}
+                >
+                  <strong>{product.title}</strong>
+                  <span>{product.category_name || '未指定类目'}</span>
+                  <small>SKU {product.sku_count}，图片 {product.image_count}，{humanProductStatus(product.status)}</small>
+                  <small>采集箱验证：{draftBoxVerified ? '已通过采集箱验证' : '等待验证'}</small>
+                  <small>商品来源：{sourceLabel}</small>
+                  <small>来源链接：{sourceUrl || '等待来源链接'}</small>
+                  <small>认领任务：{claimTaskId ? `#${claimTaskId}` : '等待认领任务'}</small>
+                </button>
+              )
+            })}
           </div>
         ) : (
           <div className="gate-note">
@@ -177,4 +190,12 @@ function humanProductStatus(status: string) {
     ready_for_edit: '已确认可编辑保存',
     draft: '等待采集认领',
   } as Record<string, string>)[status] ?? '等待处理'
+}
+
+function productPayload(product: Product): Record<string, unknown> {
+  return product.payload && typeof product.payload === 'object' ? product.payload : {}
+}
+
+function textValue(value: unknown): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : ''
 }

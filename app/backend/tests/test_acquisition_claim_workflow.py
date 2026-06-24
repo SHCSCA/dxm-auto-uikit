@@ -201,3 +201,49 @@ def test_single_save_task_accepts_claimed_draft_product(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["mode"] == "single_save"
+
+
+def test_single_save_task_snapshots_acquisition_claim_proof(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    store = repo.create_store("Dang Kang", "AliExpress")
+    product = repo.create_product(
+        {
+            "title": "真实采集商品 A",
+            "source": "dxm_data_acquisition",
+            "status": "claimed_to_draft",
+            "category_name": "立牌类谷子",
+            "price": 9.9,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {
+                "source": "dxm_data_acquisition",
+                "source_url": "https://detail.1688.com/offer/1013604102950.html",
+                "claim_task_id": 42,
+                "draft_box_verified": True,
+            },
+        }
+    )
+
+    response = client.post(
+        "/api/tasks",
+        json={
+            "name": "单商品只保存 - Dang Kang - 1 件商品",
+            "mode": "single_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "store_id": store["id"],
+            "product_ids": [product["id"]],
+            "payload": {"store_name": "Dang Kang", "category_name": "立牌类谷子"},
+        },
+    )
+
+    assert response.status_code == 200
+    task_payload = response.json()["payload"]
+    assert task_payload["claimed_product_id"] == product["id"]
+    assert task_payload["claimed_product_title"] == "真实采集商品 A"
+    assert task_payload["claimed_product_status"] == "claimed_to_draft"
+    assert task_payload["claimed_product_source"] == "dxm_data_acquisition"
+    assert task_payload["claimed_product_source_url"] == "https://detail.1688.com/offer/1013604102950.html"
+    assert task_payload["claimed_product_category_name"] == "立牌类谷子"
+    assert task_payload["claim_task_id"] == 42
+    assert task_payload["draft_box_verified"] is True

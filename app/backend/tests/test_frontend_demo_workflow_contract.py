@@ -164,9 +164,20 @@ def test_draft_edit_save_page_starts_from_claimed_product_without_technical_gate
         "只允许从采集箱商品开始",
         "本功能只点击“保存”",
         "发布”“保存并发布”“移入待发布",
+        "采集箱验证",
+        "已通过采集箱验证",
+        "来源链接",
+        "真实数据采集",
+        "认领任务",
         "去数据采集认领",
         "检查编辑页模板",
         "开始编辑并只保存",
+    ]:
+        assert label in page_source
+    for label in [
+        "payload.draft_box_verified",
+        "payload.source_url",
+        "payload.claim_task_id",
     ]:
         assert label in page_source
     assert "L2" not in page_source

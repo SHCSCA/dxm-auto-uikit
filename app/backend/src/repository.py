@@ -211,6 +211,8 @@ class Repository:
             'max_count': len(data.get('product_ids', [])),
         })
         with connection() as conn:
+            if data.get('mode') == 'single_save':
+                self._attach_single_save_claim_proof(conn, payload, data.get('product_ids', []))
             cur = conn.execute(
                 "INSERT INTO tasks (name, store_id, status, mode, publish_scene, total_jobs, payload_json, created_at, updated_at) VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?)",
                 (data['name'], data.get('store_id'), data['mode'], data['publish_scene'], len(data.get('product_ids', [])), dumps(payload), now, now),
@@ -224,6 +226,41 @@ class Repository:
             task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
             task['payload'] = loads(task.pop('payload_json'), {})
             return task
+
+    def _attach_single_save_claim_proof(self, conn: Any, payload: dict[str, Any], product_ids: list[int]) -> None:
+        if len(product_ids) != 1:
+            return
+        product = conn.execute("SELECT * FROM products WHERE id=?", (int(product_ids[0]),)).fetchone()
+        if not product:
+            return
+        product_payload = loads(product.get('payload_json'), {})
+        source = str(product_payload.get('source') or product.get('source') or '').strip()
+        source_url = self._first_source_url(product_payload)
+        payload.update({
+            'stage': 'draft_edit_save',
+            'claimed_product_id': product.get('id'),
+            'claimed_product_title': product.get('title'),
+            'claimed_product_status': product.get('status'),
+            'claimed_product_source': source or None,
+            'claimed_product_source_url': source_url,
+            'claimed_product_category_name': product.get('category_name'),
+            'claim_task_id': product_payload.get('claim_task_id'),
+            'draft_box_verified': product_payload.get('draft_box_verified') is True,
+        })
+        if source_url:
+            payload['source_url'] = source_url
+
+    def _first_source_url(self, payload: dict[str, Any]) -> str | None:
+        for key in ('source_url', 'url'):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        values = payload.get('source_urls')
+        if isinstance(values, list):
+            for value in values:
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        return None
 
     def set_task_manual_approval(self, task_id: int, *, approved: bool, token: str, approved_by: str = "system"):
         now = now_iso()
