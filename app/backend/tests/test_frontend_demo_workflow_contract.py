@@ -2485,7 +2485,7 @@ def test_report_center_uses_backend_l2_probe_plan_contract():
     report_center_section = results_page_main_section()
 
     assert "details className=\"module-card span-3 disclosure-card l2-next-step-card\"" in report_center_section
-    assert "重新验证真实只读检查" in report_center_section
+    assert "维护人员：重新验证保存前安全检查" in report_center_section
     assert "高级复核，需人工批准" in report_center_section
     assert "workspace.l2ProbePlan" in report_center_section
     assert "l2ProbePlan.commands.map" in report_center_section
@@ -2503,10 +2503,10 @@ def test_report_center_shows_allowlist_review_before_l2_recheck_commands():
     report_center_section = results_page_main_section()
 
     assert "l2AllowlistReviewItems" in report_center_section
-    assert "真实只读异常候选处理" in report_center_section
+    assert "保存前安全检查候选处理" in report_center_section
     assert "先评审，再重新检查" in report_center_section
     assert "当前只生成候选清单，不自动放行" in report_center_section
-    assert "未完成人工评审前，不运行下方真实只读检查命令" in report_center_section
+    assert "未完成人工评审前，不运行下方安全检查命令" in report_center_section
     assert "l2_allowlist_review_template_state" in results_source
     assert "l2_allowlist_review_template_markdown_path" in results_source
     assert "l2_allowlist_review_template_markdown_sha256" in results_source
@@ -2529,7 +2529,7 @@ def test_final_delivery_card_explains_blocked_to_ready_prerequisites():
     qa_script = QA_BROWSER_CHECK.read_text(encoding="utf-8")
 
     assert "真实写入放行前置" in final_card_section
-    assert "真实只读检查通过" in source
+    assert "保存前安全检查通过" in source
     assert "人工确认单商品只保存" in source
     assert "保存结果必须可核对" in source
     assert "保存成功、未发布证明、截图和 network/HAR" not in source
@@ -2542,9 +2542,9 @@ def test_final_delivery_card_explains_blocked_to_ready_prerequisites():
 def test_report_center_keeps_final_check_engineering_details_in_appendix():
     final_card_section = final_delivery_card_section()
 
-    assert "ModuleHead title=\"维护人员验收信息\"" in final_card_section
+    assert "ModuleHead title=\"交付检查状态\"" in final_card_section
     assert "最终验收报告${localWorkbenchOk ? '通过' : '待刷新'}" in final_card_section
-    assert "最终验收报告待刷新；当前运行门禁已按最新真实检查结果覆盖为可申请单商品只保存" in final_card_section
+    assert "交付检查报告待刷新；当前运行状态已按最新真实检查结果覆盖为可申请单商品只保存" in final_card_section
     assert "历史验收结果已过期，请先重新运行只读复验和本地验收。" not in final_card_section
     assert "humanReadinessLabel(readiness)" in final_card_section
     assert "humanGateDetail(blockedReason)" in final_card_section
@@ -2554,7 +2554,7 @@ def test_report_center_keeps_final_check_engineering_details_in_appendix():
     assert "<strong>为什么不能继续</strong>" in final_card_section
     assert "<strong>下一步</strong>" in final_card_section
     assert '<details className="disclosure-card delivery-check-card__appendix">' in final_card_section
-    assert "技术验收信息" in final_card_section
+    assert "维护验收信息" in final_card_section
     assert "维护人员使用" in final_card_section
     assert "delivery-check-card__qa-summary" in final_card_section
     assert "浏览器 QA Git" in final_card_section
@@ -2783,7 +2783,7 @@ def test_results_page_first_screen_answers_operator_result_questions():
     assert "taskProductLabel(selectedTask)" in business_summary
     assert "latestReport?.created_at" in business_summary
     assert "查看保存证据，确认未发布。" in business_summary
-    assert "回到执行浏览器，完成安全检查和人工确认。" in business_summary
+    assert "回到浏览器现场，完成安全检查和人工确认。" in business_summary
     assert "保存回包" not in visible_fact_markup
     assert "network/HAR" not in visible_fact_markup
 
@@ -4598,7 +4598,7 @@ def test_issue_queue_problem_cards_use_what_why_next_structure():
     assert "原始建议：{item.suggestion}" not in exception_card_section
     assert "查看实时日志或诊断文件" in exception_card_section
     assert "店小秘还没登录" in source
-    assert "真实只读检查没有通过" in source
+    assert "保存前安全检查没有通过" in source
     assert "这条任务已经执行过或失败" in source
     assert "保存结果证据不完整" in source
     assert "浏览器会话异常" in source
@@ -4655,7 +4655,7 @@ def test_results_page_is_extracted_from_workbench_modules():
     assert "aria-label=\"结果与问题\"" in results_source
     assert "保存后核对" in results_source
     assert "复核与后续处理" in results_source
-    assert "维护人员验收信息" in results_source
+    assert "交付检查状态" in results_source
     assert "ReportCard" in results_source
     assert "FinalDeliveryCheckCard" in results_source
     assert "export { ResultsPage as ReportCenter }" in source
@@ -4872,7 +4872,7 @@ def test_report_center_keeps_evidence_exception_and_console_followup_reachable_a
     assert "复核与后续处理" in report_center_section
     assert "查看保存证据" in report_center_section
     assert "处理问题" in report_center_section
-    assert "回到执行浏览器" in report_center_section
+    assert "回到浏览器现场" in report_center_section
     assert "data-section=\"evidence\"" in report_center_section
     assert "data-section=\"exceptions\"" in report_center_section
     assert "onShowExceptions={() => setActiveSection('results')}" in app_source
