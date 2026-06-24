@@ -1883,12 +1883,30 @@ def _assert_single_save_uses_claimed_draft_product(product_ids: list[int]) -> No
     if not product:
         raise HTTPException(status_code=404, detail=f'Product not found: {product_id}')
     status = str(product.get('status') or '')
+    payload = product.get('payload') if isinstance(product.get('payload'), dict) else {}
+    source = str(payload.get('source') or product.get('source') or '').strip()
     if status not in {'claimed_to_draft', 'ready_for_edit'}:
         raise HTTPException(
             status_code=409,
             detail=(
                 '编辑保存必须从采集箱里的真实商品开始。'
                 '请先完成“采集认领”，确认商品已进入采集箱后，再创建单商品只保存任务。'
+            ),
+        )
+    if source != 'dxm_data_acquisition':
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                '编辑保存必须从真实数据采集认领进入采集箱的商品开始。'
+                '请先完成“数据采集认领”，不要使用手工创建或本地导入商品。'
+            ),
+        )
+    if payload.get('draft_box_verified') is not True:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                '编辑保存必须先通过采集箱验证。'
+                '请确认商品已进入采集箱后，再创建单商品只保存任务。'
             ),
         )
 

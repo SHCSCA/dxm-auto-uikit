@@ -104,6 +104,72 @@ def test_single_save_task_requires_claimed_draft_product(tmp_path, monkeypatch):
     assert "采集箱" in detail
 
 
+def test_single_save_task_rejects_spoofed_claimed_status_without_dxm_source(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    store = repo.create_store("Dang Kang", "AliExpress")
+    product = repo.create_product(
+        {
+            "title": "手工伪造采集箱状态商品",
+            "source": "manual_import",
+            "status": "claimed_to_draft",
+            "category_name": "立牌类谷子",
+            "price": 9.9,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {"source": "manual_import", "draft_box_verified": True},
+        }
+    )
+
+    response = client.post(
+        "/api/tasks",
+        json={
+            "name": "单商品只保存 - Dang Kang - 1 件商品",
+            "mode": "single_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "store_id": store["id"],
+            "product_ids": [product["id"]],
+            "payload": {"store_name": "Dang Kang", "category_name": "立牌类谷子"},
+        },
+    )
+
+    assert response.status_code == 409
+    assert "真实数据采集认领" in response.json()["detail"]
+
+
+def test_single_save_task_rejects_claimed_product_without_draft_box_verification(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    store = repo.create_store("Dang Kang", "AliExpress")
+    product = repo.create_product(
+        {
+            "title": "未验证采集箱商品",
+            "source": "dxm_data_acquisition",
+            "status": "claimed_to_draft",
+            "category_name": "立牌类谷子",
+            "price": 9.9,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {"source": "dxm_data_acquisition", "draft_box_verified": False},
+        }
+    )
+
+    response = client.post(
+        "/api/tasks",
+        json={
+            "name": "单商品只保存 - Dang Kang - 1 件商品",
+            "mode": "single_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "store_id": store["id"],
+            "product_ids": [product["id"]],
+            "payload": {"store_name": "Dang Kang", "category_name": "立牌类谷子"},
+        },
+    )
+
+    assert response.status_code == 409
+    assert "采集箱验证" in response.json()["detail"]
+
+
 def test_single_save_task_accepts_claimed_draft_product(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     store = repo.create_store("Dang Kang", "AliExpress")

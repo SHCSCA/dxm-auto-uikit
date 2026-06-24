@@ -48,6 +48,13 @@ const initialTaskIdFromUrl = (() => {
   return Number.isInteger(taskId) && taskId > 0 ? taskId : null
 })()
 
+function isVerifiedClaimedDraftProduct(product: Product) {
+  const payload = product.payload ?? {}
+  return CLAIMED_DRAFT_PRODUCT_STATUSES.has(product.status)
+    && String(payload.source ?? product.source ?? '') === 'dxm_data_acquisition'
+    && payload.draft_box_verified === true
+}
+
 const sourceLabels: Record<DeliveryWorkspace['source'], string> = {
   api: '工作台数据已连接',
   fallback: '本机工作台服务部分连接',
@@ -1154,7 +1161,7 @@ export default function App() {
     setActiveSection(normalizeWorkbenchSection(section))
   }, [])
   const claimedDraftProducts = useMemo(
-    () => workspace.products.filter((product) => CLAIMED_DRAFT_PRODUCT_STATUSES.has(product.status)),
+    () => workspace.products.filter(isVerifiedClaimedDraftProduct),
     [workspace.products],
   )
   const persistedAcquisitionClaimRequest = useMemo(
