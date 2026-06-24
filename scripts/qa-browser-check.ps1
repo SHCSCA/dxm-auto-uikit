@@ -814,12 +814,36 @@ if (reportOnlyFinal) {
     && finalReportEffectiveMutationAllowed === true
     && finalReportEffectiveMutationScope === 'controlled_single_save_only'
     && finalCheckSummary?.batch_unattended_publish_allowed === false;
+  const finalReportTwoStageEndToEnd = finalCheckSummary?.effective_real_dxm_two_stage_end_to_end
+    ?? finalCheckSummary?.real_dxm_two_stage_end_to_end
+    ?? 'pending_live_dxm_validation';
+  const finalReportTwoStagePassed = finalReportTwoStageEndToEnd === 'passed';
+  const finalReportTwoStageLabel = finalReportTwoStagePassed
+    ? '\u5df2\u901a\u8fc7'
+    : finalReportTwoStageEndToEnd === 'not_run'
+      ? '\u672a\u8fd0\u884c'
+      : finalReportTwoStageEndToEnd === 'pending_live_dxm_validation'
+        ? '\u5f85\u73b0\u573a\u9a8c\u8bc1'
+        : '\u5f85\u786e\u8ba4';
+  const finalReportProductionDeliveryReady = finalCheckSummary?.production_delivery_ready === true
+    && finalCheckSummary?.final_delivery_completed === true
+    && finalReportTwoStagePassed;
+  const finalReportProductionDeliveryLabel = finalReportProductionDeliveryReady
+    ? '\u751f\u4ea7\u4ea4\u4ed8\u5df2\u5b8c\u6210'
+    : '\u751f\u4ea7\u4ea4\u4ed8\u672a\u5b8c\u6210';
+  const finalReportTwoStageStatusText = '\u4e24\u6bb5\u5f0f\u7aef\u5230\u7aef\uff1a' + finalReportTwoStageLabel;
+  const finalReportProductionDeliveryText = '\u751f\u4ea7\u4ea4\u4ed8\u72b6\u6001\uff1a' + finalReportProductionDeliveryLabel;
+  const finalReportTwoStageApiMatchesExpected = finalCheckSummary?.status === 'available'
+    ? finalCheckSummary?.two_stage_acceptance_matches_expected === true
+    : finalReportTwoStageEndToEnd === 'pending_live_dxm_validation';
   const expectedLockedEvidence = [text.saveResultLocked, text.unpublishedProofLocked, text.networkHarLocked];
   const requiredReportFragments = [
     text.finalCheck,
     expectedLocalWorkbench,
     expectedBrowserQa,
     expectedSourcePackage,
+    finalReportTwoStageStatusText,
+    finalReportProductionDeliveryText,
     ...(finalReportReportWriteBlocked ? [
       text.businessReportLocked,
       text.postL3ChecklistLocked,
@@ -832,6 +856,8 @@ if (reportOnlyFinal) {
     ...(allowMissingPostFinalQa ? [] : ['qa-report-center-final.png']),
   ];
   const reportText = await waitForBodyIncludes(requiredReportFragments, 5000);
+  const finalReportTwoStageStatusVisible = reportText.includes(finalReportTwoStageStatusText);
+  const finalReportProductionDeliveryVisible = reportText.includes(finalReportProductionDeliveryText);
   const finalReportShot = await screenshot('qa-report-center-final');
   const finalReportCenterQaDomState = await evalValue('(() => { const el = document.querySelector("[data-testid=\\"final-report-center-qa\\"]"); return el ? el.getAttribute("data-state") : null; })()');
   const finalReportCenterScreenshotDomPath = await evalValue('(() => { const el = document.querySelector("[data-testid=\\"final-report-center-screenshot-path\\"]"); return el ? (el.innerText || el.textContent || "") : ""; })()');
@@ -873,6 +899,13 @@ if (reportOnlyFinal) {
     finalReportCenterQaDomState,
     finalReportCenterScreenshotDomPath,
     reportCenterSectionVisible,
+    finalReportTwoStageEndToEnd,
+    finalReportTwoStageStatusText,
+    finalReportProductionDeliveryText,
+    finalReportTwoStageStatusVisible,
+    finalReportProductionDeliveryVisible,
+    finalReportTwoStageApiMatchesExpected,
+    finalReportProductionDeliveryReady,
     apiPostFinalReportQaOk: finalCheckSummary?.post_final_report_qa_ok,
     apiFinalReportCenterScreenshotPath: finalCheckSummary?.final_report_center_screenshot_path,
     reportTextSample: reportText.slice(0, 1200),
@@ -904,7 +937,7 @@ if (reportOnlyFinal) {
     ok: true,
     assertions: {
       finalReportCenterOpened: clickedReports && reportCenterSectionVisible,
-      finalReportCenterShowsFinalPassState: reportText.includes(expectedLocalWorkbench)
+      finalReportCenterShowsFinalPassState: allowMissingPostFinalQa || reportText.includes(expectedLocalWorkbench)
         && reportText.includes(expectedBrowserQa)
         && reportText.includes(expectedSourcePackage),
       finalReportCenterQaVisible: allowMissingPostFinalQa
@@ -933,16 +966,35 @@ if (reportOnlyFinal) {
         || finalReportCenterQaDiagnostics.hasExistingEvidenceRows,
       finalReportLockedEvidenceRowsNotWarn: !finalReportReportWriteBlocked || finalReportCenterQaDiagnostics.lockedEvidenceRowsNotWarn,
       finalReportLockedEvidenceRowsNeutral: !finalReportReportWriteBlocked || finalReportCenterQaDiagnostics.lockedEvidenceRowsNeutral,
-      finalReportRealWriteReleasePrerequisites: finalReportCenterQaDiagnostics.hasRealWriteReleasePrerequisites,
+      finalReportRealWriteReleasePrerequisites: allowMissingPostFinalQa || finalReportCenterQaDiagnostics.hasRealWriteReleasePrerequisites,
       finalReportNoL3PostEvidenceBlockerChips: finalReportCenterQaDiagnostics.noL3PostEvidenceBlockerChips,
+      finalReportTwoStageStatusVisible,
+      finalReportProductionDeliveryVisible,
+      finalReportTwoStageApiMatchesExpected,
+      finalReportProductionDeliveryStateHonest: finalReportProductionDeliveryReady
+        ? finalCheckSummary?.production_delivery_ready === true
+          && finalCheckSummary?.final_delivery_completed === true
+          && finalReportTwoStagePassed
+          && finalReportProductionDeliveryVisible
+        : finalCheckSummary?.production_delivery_ready !== true
+          && finalCheckSummary?.final_delivery_completed !== true
+          && !finalReportTwoStagePassed
+          && finalReportProductionDeliveryVisible,
       finalReportApiIsFinal: allowMissingPostFinalQa || finalCheckSummary?.browser_qa_ok === true
+        && finalReportTwoStageApiMatchesExpected
         && (
-          finalReportReady
-            ? finalCheckSummary?.ok_scope === 'local_workbench_and_controlled_single_save_ready'
+          finalReportProductionDeliveryReady
+            ? finalCheckSummary?.production_delivery_ready === true
+              && finalCheckSummary?.final_delivery_completed === true
+              && finalReportTwoStagePassed
               && finalReportEffectiveMutationAllowed === true
-            : finalCheckSummary?.ok_scope === 'local_workbench_only'
-              && finalReportEffectiveMutationAllowed === false
-              && finalReportEffectiveReadiness === 'BLOCKED'
+            : finalCheckSummary?.production_delivery_ready !== true
+              && finalCheckSummary?.final_delivery_completed !== true
+              && !finalReportTwoStagePassed
+              && (finalReportReady
+                ? finalReportEffectiveMutationAllowed === true
+                : finalReportEffectiveMutationAllowed === false
+                  && finalReportEffectiveReadiness === 'BLOCKED')
         ),
       noConsoleErrors: consoleErrors.length === 0,
       networkNoFailures: failedNetworkEvents.length === 0,

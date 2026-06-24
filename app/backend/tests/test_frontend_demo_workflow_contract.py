@@ -2593,6 +2593,36 @@ def test_final_delivery_card_surfaces_two_stage_production_status():
     assert "single_save" not in visible_section
 
 
+def test_browser_qa_final_report_requires_two_stage_production_status():
+    qa_source = QA_BROWSER_CHECK.read_text(encoding="utf-8")
+    final_report_section = qa_source[qa_source.index("if (reportOnlyFinal) {"):qa_source.index("const finalResult = {")]
+    final_assertions_section = qa_source[qa_source.index("const finalResult = {"):qa_source.index("consoleErrors,", qa_source.index("const finalResult = {"))]
+
+    assert "finalReportTwoStageEndToEnd" in final_report_section
+    assert "effective_real_dxm_two_stage_end_to_end" in final_report_section
+    assert "real_dxm_two_stage_end_to_end" in final_report_section
+    assert "finalReportTwoStagePassed" in final_report_section
+    assert "finalReportProductionDeliveryReady" in final_report_section
+    assert "production_delivery_ready" in final_report_section
+    assert "final_delivery_completed" in final_report_section
+    assert "two_stage_acceptance_matches_expected" in final_report_section
+    assert "finalReportTwoStageStatusVisible" in final_report_section
+    assert "finalReportProductionDeliveryVisible" in final_report_section
+    assert "finalReportTwoStageApiMatchesExpected" in final_assertions_section
+    assert "finalReportProductionDeliveryStateHonest" in final_assertions_section
+    assert "finalReportTwoStageStatusVisible" in final_assertions_section
+    assert "finalReportProductionDeliveryVisible" in final_assertions_section
+    assert "finalReportCenterShowsFinalPassState: allowMissingPostFinalQa || reportText.includes(expectedLocalWorkbench)" in final_assertions_section
+    assert "finalReportRealWriteReleasePrerequisites: allowMissingPostFinalQa || finalReportCenterQaDiagnostics.hasRealWriteReleasePrerequisites" in final_assertions_section
+    assert "const finalReportTwoStageStatusText = '\\u4e24\\u6bb5\\u5f0f\\u7aef\\u5230\\u7aef\\uff1a' + finalReportTwoStageLabel;" in final_report_section
+    assert "const finalReportProductionDeliveryText = '\\u751f\\u4ea7\\u4ea4\\u4ed8\\u72b6\\u6001\\uff1a' + finalReportProductionDeliveryLabel;" in final_report_section
+    assert "`${finalReportTwoStageLabel}`" not in final_report_section
+    assert "`${finalReportProductionDeliveryLabel}`" not in final_report_section
+    assert final_report_section.index("const reportText = await waitForBodyIncludes") < final_report_section.index("const finalReportTwoStageStatusVisible")
+    assert final_report_section.index("const reportText = await waitForBodyIncludes") < final_report_section.index("const finalReportProductionDeliveryVisible")
+    assert "ok_scope === 'local_workbench_and_controlled_single_save_ready'" not in final_assertions_section
+
+
 def test_report_center_keeps_final_check_engineering_details_in_appendix():
     final_card_section = final_delivery_card_section()
 
