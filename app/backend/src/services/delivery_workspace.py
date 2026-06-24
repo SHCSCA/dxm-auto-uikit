@@ -71,7 +71,7 @@ ACTION_TO_STATES = {
 
 
 def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> dict[str, Any] | None:
-    tasks = repo.list_tasks()
+    tasks = _visible_operator_tasks(repo, repo.list_tasks())
     requested_task_id = task_id
     requested_task_missing = False
     if task_id is None:
@@ -80,12 +80,16 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
         task_id = _default_delivery_task_id(repo, tasks)
 
     task = repo.get_task(task_id)
+    if task and _is_legacy_fixture_single_save_task(repo, task):
+        task = None
     if not task:
         requested_task_missing = requested_task_id is not None
         if not tasks:
             return _empty_delivery_workspace(repo, requested_task_id=requested_task_id, requested_task_missing=requested_task_missing)
         task_id = _default_delivery_task_id(repo, tasks)
         task = repo.get_task(task_id)
+        if task and _is_legacy_fixture_single_save_task(repo, task):
+            return _empty_delivery_workspace(repo, requested_task_id=requested_task_id, requested_task_missing=True)
         if not task:
             return _empty_delivery_workspace(repo, requested_task_id=requested_task_id, requested_task_missing=requested_task_missing)
 
@@ -185,6 +189,74 @@ def _empty_delivery_workspace(
         workspace["requested_task_missing"] = True
         workspace["requested_task_id"] = requested_task_id
     return workspace
+
+
+_FIXTURE_TASK_MARKERS = (
+    "qa guarded",
+    "fixture",
+    "测试商品",
+    "示例商品",
+    "本地演示",
+)
+
+
+def _visible_operator_tasks(repo: Repository, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [task for task in tasks if not _is_legacy_fixture_single_save_task(repo, task)]
+
+
+def _is_legacy_fixture_single_save_task(repo: Repository, task: Mapping[str, Any]) -> bool:
+    if task.get("mode") != "single_save":
+        return False
+    payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+    if _looks_like_fixture_text(task.get("name")) or _looks_like_fixture_text(payload):
+        return True
+    for product_id in _task_product_ids(task):
+        product = repo.get_product(product_id)
+        if product and _looks_like_fixture_product(product):
+            return True
+    return False
+
+
+def _task_product_ids(task: Mapping[str, Any]) -> list[int]:
+    payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+    raw_values = payload.get("product_ids")
+    if not isinstance(raw_values, list):
+        raw_values = []
+    jobs = task.get("jobs")
+    if isinstance(jobs, list):
+        raw_values = [*raw_values, *(job.get("product_id") for job in jobs if isinstance(job, Mapping))]
+    product_ids: list[int] = []
+    for value in raw_values:
+        try:
+            product_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if product_id > 0:
+            product_ids.append(product_id)
+    return list(dict.fromkeys(product_ids))
+
+
+def _looks_like_fixture_product(product: Mapping[str, Any]) -> bool:
+    payload = product.get("payload") if isinstance(product.get("payload"), Mapping) else {}
+    return _looks_like_fixture_text(
+        [
+            product.get("title"),
+            product.get("category_name"),
+            product.get("source"),
+            payload,
+        ]
+    )
+
+
+def _looks_like_fixture_text(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        text = " ".join(str(item or "") for item in value.values())
+    elif isinstance(value, (list, tuple, set)):
+        text = " ".join(str(item or "") for item in value)
+    else:
+        text = str(value or "")
+    normalized = text.casefold()
+    return any(marker in normalized for marker in _FIXTURE_TASK_MARKERS)
 
 
 def _default_delivery_task_id(repo: Repository, tasks: list[dict[str, Any]]) -> int:

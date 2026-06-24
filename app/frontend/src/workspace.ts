@@ -114,9 +114,10 @@ export function composeWorkspace(bundle: WorkspaceApiBundle): DeliveryWorkspace 
   const stores = chooseList(workspace?.stores, bundle.stores, fallback.stores, Boolean(workspace), apiHasData)
   const templates = chooseList(workspace?.templates, bundle.templates, fallback.templates, Boolean(workspace), apiHasData)
   const products = chooseList(workspace?.products, bundle.products, fallback.products, Boolean(workspace), apiHasData)
+  const deliveryTasks = Array.isArray(workspace?.tasks) ? workspace.tasks : undefined
   const tasks = mergeCurrentTaskIntoTasks(
     currentTask,
-    chooseList(nonEmptyList(workspace?.tasks), currentTask ? [currentTask, ...bundle.tasks] : bundle.tasks, fallback.tasks, Boolean(workspace), apiHasData),
+    chooseList(deliveryTasks, currentTask ? [currentTask, ...bundle.tasks] : bundle.tasks, fallback.tasks, Boolean(workspace), apiHasData),
   )
   const logs = chooseList(workspace?.logs, bundle.logs, fallback.logs, Boolean(workspace), apiHasData)
   const evidences = chooseList(workspace?.evidences, bundle.evidences, fallback.evidences, Boolean(workspace), apiHasData)
@@ -664,10 +665,6 @@ function normalizeTask(value: Task | null | undefined): Task | null {
     failed_jobs: Number(value.failed_jobs ?? 0),
     payload: value.payload ?? {},
   }
-}
-
-function nonEmptyList<T>(value: T[] | undefined): T[] | undefined {
-  return Array.isArray(value) && value.length > 0 ? value : undefined
 }
 
 function mergeCurrentTaskIntoTasks(currentTask: Task | null, tasks: Task[]): Task[] {

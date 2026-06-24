@@ -661,6 +661,44 @@ def test_delivery_workspace_without_tasks_returns_recoverable_empty_workspace(tm
     assert any(gap["id"] == "empty-workspace" for gap in data["acceptanceGaps"])
 
 
+def test_delivery_workspace_does_not_select_legacy_fixture_single_save_task(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    store = repo.create_store("Dang Kang", "AliExpress")
+    product = repo.create_product(
+        {
+            "title": "QA guarded product",
+            "source": "test",
+            "status": "draft",
+            "category_name": "QA_CATEGORY",
+            "price": 1,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {"fixture": True},
+        }
+    )
+    repo.create_task(
+        {
+            "name": "单商品只保存 - Dang Kang - 1 件商品",
+            "store_id": store["id"],
+            "mode": "single_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "product_ids": [product["id"]],
+            "claim_mark": "AI认领",
+            "payload": {"store_name": store["name"], "category_name": product["category_name"]},
+        }
+    )
+
+    response = client.get("/api/delivery/workspace")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["current_task"] is None
+    assert data["products"] == []
+    assert data["tasks"] == []
+    assert any(gap["id"] == "empty-workspace" for gap in data["acceptanceGaps"])
+
+
 def test_delivery_workspace_missing_requested_task_falls_back_without_api_error(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     fixture = _create_delivery_fixture(repo, with_network=True)

@@ -3288,7 +3288,8 @@ def test_app_defaults_to_delivery_current_task_even_when_completed():
     assert "!UNRELEASED_REAL_DXM_MUTATION_MODES.has(String(task.mode))" in app_source
     assert "setSelectedTaskId((current) => pickTaskIdForOperatorPath(current, deliveryWorkspace, nextWorkspace.tasks))" in app_source
     assert "mergeCurrentTaskIntoTasks(" in workspace_source
-    assert "nonEmptyList(workspace?.tasks)" in workspace_source
+    assert "const deliveryTasks = Array.isArray(workspace?.tasks) ? workspace.tasks : undefined" in workspace_source
+    assert "chooseList(deliveryTasks" in workspace_source
     assert "currentTask ? [currentTask, ...bundle.tasks] : bundle.tasks" in workspace_source
     assert "defaultTaskSelectionPrefersDeliveryCurrentTask" in qa_source
     assert "const defaultWorkspacePayload = await fetchJson('/api/delivery/workspace');" in qa_source
@@ -4938,6 +4939,15 @@ def test_workspace_fallback_does_not_ship_demo_tasks_or_reports():
     assert "本地演示保存核验批次" not in workspace_source
     assert "本地演示保存核验报告" not in workspace_source
     assert "演示截图占位" not in workspace_source
+
+
+def test_workspace_compose_honors_empty_delivery_task_list_as_authoritative():
+    workspace_source = (REPO_ROOT / "app" / "frontend" / "src" / "workspace.ts").read_text(encoding="utf-8")
+    compose_section = workspace_source[workspace_source.index("export function composeWorkspace"):workspace_source.index("export function buildEmptyWorkspace")]
+
+    assert "const deliveryTasks = Array.isArray(workspace?.tasks) ? workspace.tasks : undefined" in compose_section
+    assert "chooseList(deliveryTasks" in compose_section
+    assert "nonEmptyList(workspace?.tasks)" not in compose_section
 
 
 def test_frontend_labels_mock_l2_as_evidence_not_passed():
