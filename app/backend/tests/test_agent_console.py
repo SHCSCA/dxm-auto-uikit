@@ -323,6 +323,10 @@ def test_agent_console_hud_persists_latest_business_progress_across_navigation()
     assert "window.__dxmAgentHudState = persisted || window.__dxmAgentHudState || {}" in script
     assert "window.__dxmAgentHudObserver" in script
     assert "new MutationObserver" in script
+    assert "window.__dxmAgentHudWatchdog" in script
+    assert "window.setInterval" in script
+    assert "root.dataset.dxmAgentHud = 'active'" in script
+    assert "root.dataset.dxmAgentHud !== 'active'" in script
     assert "page.evaluate(HUD_INIT_SCRIPT)" in source
 
 
@@ -461,6 +465,32 @@ def test_agent_console_status_marks_closed_browser_not_visible(tmp_path, monkeyp
     assert status["hud"]["state"] == "BROWSER_CLOSED"
     assert status["hud"]["requires_user_action"] is True
     assert status["hud"]["human_next"] == "回到执行浏览器重新打开"
+
+
+def test_agent_console_browser_close_event_marks_closed_immediately(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+    fake_context = _FakeLifecycleTarget()
+    fake_page = _FakeLifecyclePage()
+
+    with service._lock:
+        service._context = fake_context
+        service._page = fake_page
+        service._state["active"] = True
+        service._state["browser_visible"] = True
+        service._state["browser_launching"] = False
+        service._state["last_error"] = None
+
+    service._attach_browser_lifecycle_listeners(fake_context, fake_page)
+    fake_page.emit("close")
+    status = service.status()
+
+    assert status["browser_visible"] is False
+    assert status["browser_launching"] is False
+    assert status["last_error"] == "真实浏览器窗口已关闭，请重新打开执行浏览器。"
+    assert status["hud"]["state"] == "BROWSER_CLOSED"
+    assert status["hud"]["human_title"] == "真实浏览器窗口已关闭"
 
 
 def test_agent_console_rejects_browser_control_after_window_closes(tmp_path, monkeypatch):
@@ -878,6 +908,24 @@ class _FakePage:
             locator = _FakeLocator()
             self.locators[selector] = locator
         return locator
+
+
+class _FakeLifecycleTarget:
+    def __init__(self):
+        self.handlers = {}
+
+    def on(self, event_name, callback):
+        self.handlers.setdefault(event_name, []).append(callback)
+
+    def emit(self, event_name):
+        for callback in self.handlers.get(event_name, []):
+            callback()
+
+
+class _FakeLifecyclePage(_FakePage, _FakeLifecycleTarget):
+    def __init__(self):
+        _FakePage.__init__(self)
+        _FakeLifecycleTarget.__init__(self)
 
 
 class _ThreadBoundFakePage:

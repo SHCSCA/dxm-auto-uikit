@@ -630,6 +630,7 @@ class AgentConsoleService:
             )
             page = context.pages[0] if context.pages else context.new_page()
             self._attach_network_listeners(page)
+            self._attach_browser_lifecycle_listeners(context, page)
             page.add_init_script(HUD_INIT_SCRIPT)
             page.goto(state["target_url"], wait_until="domcontentloaded", timeout=45000)
             self._apply_hud(page, state["hud"])
@@ -683,6 +684,16 @@ class AgentConsoleService:
             page.on("response", on_response)
         except Exception:
             pass
+
+    def _attach_browser_lifecycle_listeners(self, context, page) -> None:
+        def on_closed() -> None:
+            self._mark_browser_closed(BROWSER_CLOSED_MESSAGE)
+
+        for target in (context, page):
+            try:
+                target.on("close", lambda *args: on_closed())
+            except Exception:
+                pass
 
     def _apply_hud(self, page, hud: dict[str, Any]) -> None:
         try:
@@ -748,14 +759,23 @@ class AgentConsoleService:
             closed = self._object_is_closed(page) or self._object_is_closed(context)
         if not closed:
             return
+        self._mark_browser_closed(BROWSER_CLOSED_MESSAGE)
+
+    def _mark_browser_closed(self, message: str) -> None:
         with self._lock:
+            if not self._state.get("active"):
+                return
             self._state["browser_visible"] = False
             self._state["browser_launching"] = False
-            self._state["last_error"] = BROWSER_CLOSED_MESSAGE
+            self._state["last_error"] = message
             self._state["hud"] = self._hud_state({
                 **dict(self._state.get("hud") or {}),
                 "state": "BROWSER_CLOSED",
+                "title": "真实浏览器窗口已关闭",
+                "action": "请重新打开执行浏览器后继续任务",
                 "next_step": "回到执行浏览器重新打开",
+                "human_title": "真实浏览器窗口已关闭",
+                "human_action": "请重新打开执行浏览器后继续任务",
                 "human_next": "回到执行浏览器重新打开",
                 "requires_user_action": True,
             })
@@ -985,6 +1005,7 @@ HUD_INIT_SCRIPT = """
     if (!root) {
       root = document.createElement('div');
       root.id = ID;
+      root.dataset.dxmAgentHud = 'active';
       root.style.cssText = [
         'position:fixed',
         'top:max(86px, env(safe-area-inset-top, 0px))',
@@ -1006,6 +1027,7 @@ HUD_INIT_SCRIPT = """
       ].join(';');
       document.documentElement.appendChild(root);
     }
+    root.dataset.dxmAgentHud = 'active';
     const safe = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const progressIndex = Number(hud.progress_index || 0);
     const progressTotal = Number(hud.progress_total || 0);
@@ -1053,6 +1075,14 @@ HUD_INIT_SCRIPT = """
       }
     });
     window.__dxmAgentHudObserver.observe(document.documentElement, { childList: true, subtree: true });
+  }
+  if (!window.__dxmAgentHudWatchdog) {
+    window.__dxmAgentHudWatchdog = window.setInterval(() => {
+      const root = document.getElementById(ID);
+      if (!root || root.dataset.dxmAgentHud !== 'active') {
+        window.__dxmRenderAgentHud();
+      }
+    }, 1000);
   }
   window.__dxmRenderAgentHud();
 })();
