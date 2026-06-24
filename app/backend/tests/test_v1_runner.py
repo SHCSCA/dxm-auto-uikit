@@ -823,6 +823,9 @@ def test_claim_only_calls_adapter_without_opening_editor_or_saving(v1_db):
     assert refreshed_task["payload"]["stage"] == "claimed_to_draft"
     assert refreshed_task["payload"]["status"] == "completed"
     assert refreshed_task["payload"]["claimed_product_id"] == claimed[0]["id"]
+    assert refreshed_task["payload"]["claimed_product_source_url"] == "https://detail.1688.com/offer/from-acquisition.html"
+    assert refreshed_task["payload"]["claimed_product_category_name"] == "立牌类谷子"
+    assert refreshed_task["payload"]["draft_box_verified"] is True
     assert "采集箱编辑保存" in refreshed_task["payload"]["next_step"]
 
 

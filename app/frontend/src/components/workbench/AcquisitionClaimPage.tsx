@@ -50,6 +50,10 @@ export function AcquisitionClaimPage({
       || lastRequest.claimed_product_id
     ),
   )
+  const draftBoxVerified = lastRequest?.draft_box_verified === true
+  const claimedSourceLabel = lastRequest?.claimed_product_source === 'dxm_data_acquisition'
+    ? '真实数据采集'
+    : lastRequest?.claimed_product_source || '等待认领完成'
 
   useEffect(() => {
     if (!stores.length) {
@@ -165,6 +169,10 @@ export function AcquisitionClaimPage({
             <span><strong>标记</strong><b>{lastRequest.claim_mark}</b></span>
             <span><strong>下一步</strong><b>{claimCompleted ? '进入采集箱编辑保存' : '开始认领到采集箱'}</b></span>
             {claimCompleted && <span><strong>采集箱商品</strong><b>{lastRequest.claimed_product_title || `商品 #${lastRequest.claimed_product_id}`}</b></span>}
+            {claimCompleted && <span><strong>采集箱验证</strong><b>{draftBoxVerified ? '已通过采集箱验证' : '等待采集箱验证'}</b></span>}
+            {claimCompleted && <span><strong>商品来源</strong><b>{claimedSourceLabel}</b></span>}
+            {claimCompleted && <span><strong>认领类目</strong><b>{lastRequest.claimed_product_category_name || lastRequest.category_name || '等待类目'}</b></span>}
+            {claimCompleted && <span><strong>来源链接</strong><b>{lastRequest.claimed_product_source_url || '等待来源链接'}</b></span>}
           </div>
         ) : (
           <p>创建后，系统会按该请求进入真实店小秘数据采集页处理认领；认领完成前不会保存或发布。</p>

@@ -90,6 +90,10 @@ export type AcquisitionClaimResponse = {
   claimed_product_id?: number | null
   claimed_product_title?: string | null
   claimed_product_status?: string | null
+  claimed_product_source?: string | null
+  claimed_product_source_url?: string | null
+  claimed_product_category_name?: string | null
+  draft_box_verified?: boolean | null
   next_step?: string | null
   completed_at?: string | null
   task_status?: string | null

@@ -92,9 +92,13 @@ def test_acquisition_claim_page_presents_four_step_real_claim_path():
 
     for label in ["不会保存", "不会发布", "认领标记", "开始认领到采集箱", "进入采集箱编辑保存", "商品已进入采集箱"]:
         assert label in page_source
+    for label in ["采集箱验证", "来源链接", "真实数据采集", "已通过采集箱验证"]:
+        assert label in page_source
     assert "setActiveSection('start_save')" in app_source
     assert "下一步在浏览器现场启动 Agent" in app_source
     assert "claimed_product_title" in page_source
+    assert "claimed_product_source_url" in page_source
+    assert "draft_box_verified" in page_source
 
     for forbidden in ["QA guarded product", "测试商品", "本地商品", "创建单商品只保存任务"]:
         assert forbidden not in page_source

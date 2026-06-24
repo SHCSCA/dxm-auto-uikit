@@ -321,12 +321,17 @@ class Repository:
             if not task:
                 return None
             payload = loads(task['payload_json'], {})
+            claimed_payload = claimed_product.get('payload') if isinstance(claimed_product.get('payload'), dict) else {}
             payload.update({
                 'stage': 'claimed_to_draft',
                 'status': 'completed',
                 'claimed_product_id': claimed_product.get('id'),
                 'claimed_product_title': claimed_product.get('title'),
                 'claimed_product_status': claimed_product.get('status'),
+                'claimed_product_source': claimed_product.get('source'),
+                'claimed_product_source_url': claimed_payload.get('source_url'),
+                'claimed_product_category_name': claimed_product.get('category_name'),
+                'draft_box_verified': claimed_payload.get('draft_box_verified') is True,
                 'completed_at': now,
                 'next_step': '进入“采集箱编辑保存”，选择该商品创建单商品只保存任务。',
             })

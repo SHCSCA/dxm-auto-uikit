@@ -30,7 +30,7 @@ const DXM_TARGET_PATHS: Record<keyof typeof DXM_TARGET_URLS, string> = {
   draft_box: '/web/smt/smtProductList/draft',
 }
 const DXM_TARGET_LABELS: Record<keyof typeof DXM_TARGET_URLS, string> = {
-  data_acquisition: '采集页',
+  data_acquisition: '商品采集页',
   draft_box: '采集箱',
 }
 const AGENT_CONSOLE_NAVIGATION_SETTLE_MS = 2500
@@ -1781,6 +1781,10 @@ function taskToAcquisitionClaimResponse(task: Task | null): AcquisitionClaimResp
     claimed_product_id: typeof payload.claimed_product_id === 'number' ? payload.claimed_product_id : null,
     claimed_product_title: typeof payload.claimed_product_title === 'string' ? payload.claimed_product_title : null,
     claimed_product_status: typeof payload.claimed_product_status === 'string' ? payload.claimed_product_status : null,
+    claimed_product_source: typeof payload.claimed_product_source === 'string' ? payload.claimed_product_source : null,
+    claimed_product_source_url: typeof payload.claimed_product_source_url === 'string' ? payload.claimed_product_source_url : null,
+    claimed_product_category_name: typeof payload.claimed_product_category_name === 'string' ? payload.claimed_product_category_name : null,
+    draft_box_verified: typeof payload.draft_box_verified === 'boolean' ? payload.draft_box_verified : null,
     next_step: typeof payload.next_step === 'string' ? payload.next_step : null,
     completed_at: typeof payload.completed_at === 'string' ? payload.completed_at : null,
     task_status: task.status,
