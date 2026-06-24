@@ -206,7 +206,12 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
   const runtimeGateFreshness = finalCheck?.final_check_runtime_gate_freshness ?? 'unknown'
   const runtimeGateStale = runtimeGateFreshness === 'stale_gate'
   const realDxmMutationAllowed = finalCheck?.effective_real_dxm_mutation_allowed ?? (isReadyReadiness(readiness) && finalCheck?.real_dxm_mutation_allowed === true)
-  const realDxmMutationScope = finalCheck?.effective_real_dxm_mutation_scope ?? (realDxmMutationAllowed ? finalCheck?.real_dxm_mutation_scope ?? 'controlled_single_save_only' : 'none')
+  const realDxmMutationScope = finalCheck?.effective_real_dxm_mutation_scope ?? (realDxmMutationAllowed ? finalCheck?.real_dxm_mutation_scope ?? '单商品只保存' : 'none')
+  const twoStageEndToEnd = finalCheck?.effective_real_dxm_two_stage_end_to_end ?? finalCheck?.real_dxm_two_stage_end_to_end ?? 'pending_live_dxm_validation'
+  const twoStagePassed = twoStageEndToEnd === 'passed'
+  const twoStageEndToEndLabel = humanTwoStageEndToEndLabel(twoStageEndToEnd)
+  const productionDeliveryReady = finalCheck?.production_delivery_ready === true && finalCheck?.final_delivery_completed === true && twoStagePassed
+  const productionDeliveryLabel = productionDeliveryReady ? '生产交付已完成' : '生产交付未完成'
   const reportWriteExpectedBlocked = isBlockedReadiness(finalCheck?.real_dxm_write_readiness ?? '') && finalCheck?.real_dxm_mutation_allowed !== true
   const realDxmMutationAllowedLabel = realDxmMutationAllowed
     ? `真实写入允许 true / ${realDxmMutationScope}`
@@ -219,12 +224,16 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
       : runtimeGateStale
         ? '交付检查报告待刷新；请先重新运行保存前安全检查和本地验收。'
       : isReadyReadiness(readiness)
-      ? '单商品只保存路径已有验收记录；执行前仍需人工确认，批量、无人值守和发布仍保持关闭。'
+      ? twoStagePassed
+        ? '两段式端到端已验收；执行前仍需人工确认，批量、无人值守和发布仍保持关闭。'
+        : '受控保存能力已有验收记录，但两段式端到端还未完成；不能标记为生产交付完成。'
       : isBlockedReadiness(readiness)
         ? '自动化工作台可继续查看和检查；真实保存暂不启动。'
         : '当前真实写入状态未知，不可执行真实写入；请先重新运行本地验收并复核保存前安全检查。'
   const nextStepText = isReadyReadiness(readiness)
-    ? '复核当前任务、批准人和报告链路后，再启动单商品只保存。'
+    ? twoStagePassed
+      ? '复核当前任务、批准人和报告链路后，再启动采集箱编辑保存。'
+      : '先完成真实数据采集认领到采集箱，再执行采集箱编辑保存并核对未发布证明。'
     : `先在当前任务点击“${READONLY_PRECHECK_CTA}”，通过后再进行人工确认保存。`
   const browserQaScreenshotCount = finalCheck?.browser_qa_screenshot_hashes
     ? Object.keys(finalCheck.browser_qa_screenshot_hashes).length
@@ -234,7 +243,9 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
   const reportEvidenceCheckLabel = `保存证据检查${finalCheck?.post_final_report_qa_ok === true ? '已通过' : finalCheck?.post_final_report_qa_ok === false ? '未通过' : '待刷新'}`
   const localWorkbenchLabel = `自动化工作台 ${finalCheck?.local_workbench_check ?? '未检查'}`
   const readinessBoundaryCopy = isReadyReadiness(readiness)
-    ? '真实店小秘单商品只保存可申请；单商品只保存路径已有验收记录；批量、无人值守和发布仍保持关闭。'
+    ? twoStagePassed
+      ? '真实店小秘两段式端到端已通过；批量、无人值守和发布仍保持关闭。'
+      : '真实店小秘保存能力可申请；两段式端到端仍未完成，不能标记为生产交付。'
     : '预期阻断：不可执行真实写入；真实保存暂不启动。'
 
   return (
@@ -249,6 +260,16 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
           label={`真实保存状态：${humanReadinessLabel(readiness)}`}
           ok={isReadyReadiness(readiness)}
           state={isBlockedReadiness(readiness) ? 'locked' : undefined}
+        />
+        <CheckRow
+          label={`两段式端到端：${twoStageEndToEndLabel}`}
+          ok={twoStagePassed}
+          state={twoStagePassed ? undefined : 'locked'}
+        />
+        <CheckRow
+          label={`生产交付状态：${productionDeliveryLabel}`}
+          ok={productionDeliveryReady}
+          state={productionDeliveryReady ? undefined : 'locked'}
         />
       </div>
       <div className="delivery-check-card__body">
@@ -350,6 +371,8 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
             <span>自检 Git {gitHead} / 当前 Git {currentGitHead}</span>
             <span>OK 范围 {finalCheck?.ok_scope ?? '未记录'} / {realDxmMutationAllowedLabel}</span>
             <span>有效真实保存 {humanReadinessLabel(readiness)} / 报告记录 {humanReadinessLabel(reportReadiness)} / 运行门禁 {runtimeGateFreshness}</span>
+            <span>两段式端到端 {twoStageEndToEndLabel} / 预期 {finalCheck?.expected_real_dxm_two_stage_end_to_end ?? '未记录'} / 匹配 {finalCheck?.two_stage_acceptance_matches_expected === true ? 'true' : 'false'}</span>
+            <span>生产交付状态 {productionDeliveryLabel} / 当前两段式 {finalCheck?.current_two_stage_status ?? '未记录'}</span>
             <span>受控单商品只保存 {finalCheck?.controlled_single_save_ready === true ? '可申请' : '未放行'} / 批量无人值守发布 {finalCheck?.batch_unattended_publish_allowed === true ? '允许' : '阻断'}</span>
             <span>预期真实写入 {finalCheck?.expected_real_dxm_write_readiness ?? '未记录'} / 有效预期匹配 {finalCheck?.effective_real_dxm_write_readiness_matches_expected === true ? 'true' : 'false'} / 报告记录匹配 {finalCheck?.real_dxm_write_readiness_matches_expected === true ? 'true' : 'false'}</span>
             <span>保存前安全检查候选评审模板 {finalCheck?.l2_allowlist_review_template_state ?? '未生成'} / 候选 {finalCheck?.l2_allowlist_review_template_candidate_count ?? 0} 项</span>
@@ -802,6 +825,13 @@ function humanReadinessLabel(readiness: string) {
   if (isReadyReadiness(readiness)) return '可申请单商品只保存'
   if (isBlockedReadiness(readiness)) return '暂不启动真实保存'
   if (readiness === '未检查') return '待验收'
+  return '待确认'
+}
+
+function humanTwoStageEndToEndLabel(status: string) {
+  if (status === 'passed') return '已通过'
+  if (status === 'pending_live_dxm_validation') return '待现场验证'
+  if (status === 'not_run') return '未运行'
   return '待确认'
 }
 

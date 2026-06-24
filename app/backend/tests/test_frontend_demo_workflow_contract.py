@@ -2573,6 +2573,26 @@ def test_final_delivery_card_explains_blocked_to_ready_prerequisites():
     assert "reportRealWriteReleasePrerequisites" in qa_script
 
 
+def test_final_delivery_card_surfaces_two_stage_production_status():
+    types_source = (REPO_ROOT / "app" / "frontend" / "src" / "types.ts").read_text(encoding="utf-8")
+    final_card_section = final_delivery_card_section()
+
+    assert "real_dxm_two_stage_end_to_end?: string | null" in types_source
+    assert "effective_real_dxm_two_stage_end_to_end?: string | null" in types_source
+    assert "production_delivery_ready?: boolean | null" in types_source
+    assert "final_delivery_completed?: boolean | null" in types_source
+    assert "two_stage_acceptance_matches_expected?: boolean | null" in types_source
+    assert "expected_real_dxm_two_stage_end_to_end?: string | null" in types_source
+    assert "两段式端到端" in final_card_section
+    assert "生产交付状态" in final_card_section
+    assert "productionDeliveryLabel" in final_card_section
+    assert "twoStageEndToEndLabel" in final_card_section
+    visible_section = final_card_section[:final_card_section.index('<details className="disclosure-card delivery-check-card__appendix">')]
+    assert "受控单商品只保存" not in visible_section
+    assert "controlled_single_save_only" not in visible_section
+    assert "single_save" not in visible_section
+
+
 def test_report_center_keeps_final_check_engineering_details_in_appendix():
     final_card_section = final_delivery_card_section()
 

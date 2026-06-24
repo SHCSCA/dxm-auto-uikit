@@ -379,6 +379,14 @@ export type FinalDeliveryCheckSummary = {
   effective_real_dxm_write_blocked_reason?: string | null
   effective_real_dxm_mutation_allowed?: boolean | null
   effective_real_dxm_mutation_scope?: string | null
+  real_dxm_two_stage_end_to_end?: string | null
+  expected_real_dxm_two_stage_end_to_end?: string | null
+  effective_real_dxm_two_stage_end_to_end?: string | null
+  two_stage_acceptance_matches_expected?: boolean | null
+  current_two_stage_ready?: boolean | null
+  current_two_stage_status?: string | null
+  production_delivery_ready?: boolean | null
+  final_delivery_completed?: boolean | null
   effective_real_dxm_write_readiness_matches_expected?: boolean | null
   production_real_write_ready?: boolean | null
   real_dxm_write_blocked_reason?: string | null
