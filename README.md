@@ -29,7 +29,7 @@ outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
 2026-06-24 当前分支 packaged/portable smoke 已通过，文件 SHA-256：
 
 ```text
-F6C9679ECEA998FFF2D1173927ECEE724514D274D49D38A5D11EEE296D0654C9
+EC4E0DF8EC77A17C53159FACD46A115D88C98AE5657687072ED780A88D016CF1
 ```
 
 本轮桌面包验收记录：`docs/product/最终交付验收记录-20260623-桌面包.md`。该记录已更新为 2026-06-24 新包证据，证明当前分支免安装包可启动；真实店小秘“两段式端到端验收”仍需现场跑通后再标记最终生产交付。
@@ -157,7 +157,7 @@ outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
 2026-06-24 当前分支 packaged/portable smoke 已通过，文件 SHA-256：
 
 ```bat
-F6C9679ECEA998FFF2D1173927ECEE724514D274D49D38A5D11EEE296D0654C9
+EC4E0DF8EC77A17C53159FACD46A115D88C98AE5657687072ED780A88D016CF1
 ```
 
 仓库内同源构建产物：
