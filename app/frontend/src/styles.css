@@ -6630,6 +6630,7 @@ tr:last-child td {
   display: grid;
   gap: 5px;
   padding-right: 2px;
+  overscroll-behavior: contain;
 }
 
 .runtime-log-refresh {
@@ -6717,6 +6718,12 @@ tr:last-child td {
   grid-template-columns: 44px minmax(0, 1fr);
   gap: 7px 8px;
   align-items: start;
+  padding: 6px;
+  border: 1px solid rgba(148, 163, 184, .14);
+  border-radius: 7px;
+  background: rgba(15, 23, 42, .72);
+  overflow: hidden;
+  contain: layout paint;
 }
 
 .runtime-log-summary-line > span {
@@ -6755,6 +6762,12 @@ tr:last-child td {
 
 .runtime-log-summary-line small {
   grid-column: 2;
+  min-width: 0;
+  max-height: 2.7em;
+  overflow: hidden;
+  color: #9fb2c7;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .runtime-log-preview code,

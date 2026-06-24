@@ -202,6 +202,44 @@ def test_agent_console_preview_for_other_task_does_not_close_or_rebind_visible_b
     assert "已有真实浏览器正在执行任务 #42" in preview["last_error"]
 
 
+def test_agent_console_launch_for_other_task_does_not_close_visible_browser(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+
+    initial = service.start(
+        task_id=42,
+        target_url="https://www.dianxiaomi.com/",
+        launch_browser=False,
+        step={"state": "CLAIM_TO_DRAFT_BOX"},
+    )
+    fake_page = _FakePage()
+    with service._lock:
+        service._state["browser_visible"] = True
+        service._state["browser_launching"] = False
+        service._state["current_url"] = "https://www.dianxiaomi.com/web/home"
+        service._page = fake_page
+
+    close_calls = []
+    monkeypatch.setattr(service, "_close_current_browser", lambda: close_calls.append("closed"))
+
+    blocked = service.start(
+        task_id=99,
+        target_url="https://www.dianxiaomi.com/web/home",
+        launch_browser=True,
+        step={"state": "SAVE_ONLY"},
+    )
+
+    assert close_calls == []
+    assert blocked["session_id"] == initial["session_id"]
+    assert blocked["task_id"] == 42
+    assert blocked["browser_visible"] is True
+    assert blocked["browser_launching"] is False
+    assert blocked["hud"]["state"] == "BROWSER_BUSY"
+    assert blocked["hud"]["requires_user_action"] is True
+    assert "已有真实浏览器正在执行任务 #42" in blocked["last_error"]
+    assert fake_page.evaluate_calls
+
+
 def test_agent_console_status_does_not_wait_for_slow_launch_title(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
     monkeypatch.setattr(agent_console_module, "chrome_launch_options", lambda headless: {})
@@ -398,6 +436,17 @@ def test_agent_console_hud_persists_latest_business_progress_across_navigation()
     assert "window.setInterval" in script
     assert "root.dataset.dxmAgentHud = 'active'" in script
     assert "root.dataset.dxmAgentHud !== 'active'" in script
+    assert "root.style.cssText = rootStyle" in script
+    assert "const hudNeedsRepair" in script
+    assert "window.getComputedStyle(root)" in script
+    assert "root.getBoundingClientRect()" in script
+    assert "style.display === 'none'" in script
+    assert "style.visibility === 'hidden'" in script
+    assert "Number(style.opacity || 0) < 0.1" in script
+    assert "zIndex < 2147483000" in script
+    assert "rect.width < 120" in script
+    assert "rect.height < 60" in script
+    assert "if (root) root.remove()" in script
     assert "page.evaluate(HUD_INIT_SCRIPT)" in source
 
 

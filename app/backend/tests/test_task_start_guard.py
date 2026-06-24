@@ -1012,6 +1012,33 @@ def test_runtime_logs_filter_by_level_and_query_with_tags(tmp_path, monkeypatch)
     assert "保存" in payload["items"][0]["tags"]
 
 
+def test_runtime_logs_tag_access_polling_noise_without_losing_raw_line(tmp_path, monkeypatch):
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    backend_log = tmp_path / "backend.log"
+    backend_log.write_text(
+        "\n".join([
+            'INFO:     127.0.0.1:2292 - "GET /api/runtime/logs?source=backend&cursor=1&limit=120 HTTP/1.1" 200 OK',
+            'INFO:     127.0.0.1:2292 - "GET /api/tasks HTTP/1.1" 200 OK',
+            "ERROR failed add.json save",
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(main, "RUNTIME_LOG_SOURCES", {"backend": backend_log})
+
+    response = client.get("/api/runtime/logs?source=backend&limit=5")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"][0]["line"].startswith("INFO:")
+    assert "access" in payload["items"][0]["tags"]
+    assert "polling" in payload["items"][0]["tags"]
+    assert "access" in payload["items"][1]["tags"]
+    assert "polling" not in payload["items"][1]["tags"]
+    assert payload["items"][2]["level"] == "error"
+
+
 def test_runtime_logs_expose_task_job_logs_with_cursor_and_filter(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     task = _create_task(repo, mode="dry_run")

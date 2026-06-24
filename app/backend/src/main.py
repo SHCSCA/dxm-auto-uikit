@@ -1085,7 +1085,23 @@ def _runtime_log_item(line: str) -> dict:
         for tag, patterns in RUNTIME_LOG_TAG_PATTERNS.items()
         if any(pattern.lower() in normalized for pattern in patterns)
     ]
+    if _is_runtime_access_log(line):
+        tags.append('access')
+    if _is_runtime_log_poll_noise(line):
+        tags.append('polling')
     return {'line': line, 'level': level, 'tags': tags}
+
+
+def _is_runtime_access_log(line: str) -> bool:
+    return line.startswith('INFO:') and '"GET /api/' in line and 'HTTP/1.1"' in line
+
+
+def _is_runtime_log_poll_noise(line: str) -> bool:
+    return _is_runtime_access_log(line) and (
+        '/api/runtime/logs?' in line
+        or '/api/runtime/status?' in line
+        or '/api/agent-console/status' in line
+    )
 
 
 def _runtime_task_logs(task_id: int | None, cursor: int, limit: int, level: str | None, query: str) -> dict:

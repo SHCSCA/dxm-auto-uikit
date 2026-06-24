@@ -109,6 +109,12 @@ class AgentConsoleService:
         )
         if preview is not None:
             return preview
+        protected = self._protect_visible_browser_for_other_task(
+            task_id=task_id,
+            launch_browser=launch_browser,
+        )
+        if protected is not None:
+            return protected
 
         self._close_current_browser()
         with self._lock:
@@ -238,6 +244,47 @@ class AgentConsoleService:
             hud = dict(self._state.get("hud") or {})
 
         if page is not None and step is not None:
+            self._apply_hud_safely(page, hud)
+        return self.status()
+
+    def _protect_visible_browser_for_other_task(
+        self,
+        *,
+        task_id: int | None,
+        launch_browser: bool,
+    ) -> dict[str, Any] | None:
+        if not launch_browser or task_id is None:
+            return None
+        with self._lock:
+            current_task_id = self._state.get("task_id")
+            has_visible_browser = (
+                self._state.get("active")
+                and self._state.get("browser_visible")
+                and self._page is not None
+            )
+            if not has_visible_browser or current_task_id is None or current_task_id == task_id:
+                return None
+            message = (
+                f"已有真实浏览器正在执行任务 #{current_task_id}；"
+                f"没有关闭当前浏览器现场，也没有切换到任务 #{task_id}。"
+                "请先停止当前浏览器现场，再打开新的执行浏览器。"
+            )
+            self._state["last_error"] = message
+            self._state["hud"] = self._hud_state({
+                **dict(self._state.get("hud") or {}),
+                "state": "BROWSER_BUSY",
+                "phase": "等待人工处理",
+                "severity": "warning",
+                "human_title": "已有真实浏览器任务正在进行",
+                "human_action": f"当前浏览器属于任务 #{current_task_id}，系统没有关闭它。",
+                "human_next": "先停止当前浏览器现场，再打开新的任务",
+                "requires_user_action": True,
+            })
+            self._state["updated_at"] = _now()
+            page = self._page
+            hud = dict(self._state["hud"])
+
+        if page is not None:
             self._apply_hud_safely(page, hud)
         return self.status()
 
@@ -1148,32 +1195,36 @@ HUD_INIT_SCRIPT = """
   window.__dxmRenderAgentHud = () => {
     const hud = window.__dxmAgentHudState || {};
     let root = document.getElementById(ID);
+    const rootStyle = [
+      'position:fixed',
+      'top:max(86px, env(safe-area-inset-top, 0px))',
+      'left:12px',
+      'z-index:2147483647',
+      'width:min(280px, calc(100vw - 24px))',
+      'max-height:min(230px, calc(100vh - 110px))',
+      'box-sizing:border-box',
+      'overflow:hidden',
+      'font:12px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif',
+      'color:#f8fafc',
+      'background:rgba(13,17,23,.94)',
+      'border:1px solid rgba(148,163,184,.32)',
+      'border-radius:8px',
+      'box-shadow:0 18px 46px rgba(0,0,0,.36)',
+      'padding:12px',
+      'backdrop-filter:blur(8px)',
+      'pointer-events:none',
+      'display:block',
+      'visibility:visible',
+      'opacity:1'
+    ].join(';');
     if (!root) {
       root = document.createElement('div');
       root.id = ID;
       root.dataset.dxmAgentHud = 'active';
-      root.style.cssText = [
-        'position:fixed',
-        'top:max(86px, env(safe-area-inset-top, 0px))',
-        'left:12px',
-        'z-index:2147483647',
-        'width:min(280px, calc(100vw - 24px))',
-        'max-height:min(230px, calc(100vh - 110px))',
-        'box-sizing:border-box',
-        'overflow:hidden',
-        'font:12px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif',
-        'color:#f8fafc',
-        'background:rgba(13,17,23,.94)',
-        'border:1px solid rgba(148,163,184,.32)',
-        'border-radius:8px',
-        'box-shadow:0 18px 46px rgba(0,0,0,.36)',
-        'padding:12px',
-        'backdrop-filter:blur(8px)',
-        'pointer-events:none'
-      ].join(';');
       document.documentElement.appendChild(root);
     }
     root.dataset.dxmAgentHud = 'active';
+    root.style.cssText = rootStyle;
     const safe = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const progressIndex = Number(hud.progress_index || 0);
     const progressTotal = Number(hud.progress_total || 0);
@@ -1214,20 +1265,36 @@ HUD_INIT_SCRIPT = """
       </div>
     `;
   };
+  const hudNeedsRepair = () => {
+    const root = document.getElementById(ID);
+    if (!root || root.dataset.dxmAgentHud !== 'active' || !root.innerHTML.trim()) return true;
+    const style = window.getComputedStyle(root);
+    const rect = root.getBoundingClientRect();
+    const zIndex = Number(style.zIndex || 0);
+    return style.display === 'none'
+      || style.visibility === 'hidden'
+      || Number(style.opacity || 0) < 0.1
+      || zIndex < 2147483000
+      || rect.width < 120
+      || rect.height < 60
+      || rect.right <= 0
+      || rect.bottom <= 0;
+  };
+  const repairHudIfNeeded = () => {
+    if (!hudNeedsRepair()) return;
+    const root = document.getElementById(ID);
+    if (root) root.remove();
+    if (window.__dxmRenderAgentHud) window.__dxmRenderAgentHud();
+  };
   if (!window.__dxmAgentHudObserver) {
     window.__dxmAgentHudObserver = new MutationObserver(() => {
-      if (!document.getElementById(ID) && window.__dxmRenderAgentHud) {
-        window.__dxmRenderAgentHud();
-      }
+      repairHudIfNeeded();
     });
     window.__dxmAgentHudObserver.observe(document.documentElement, { childList: true, subtree: true });
   }
   if (!window.__dxmAgentHudWatchdog) {
     window.__dxmAgentHudWatchdog = window.setInterval(() => {
-      const root = document.getElementById(ID);
-      if (!root || root.dataset.dxmAgentHud !== 'active') {
-        window.__dxmRenderAgentHud();
-      }
+      repairHudIfNeeded();
     }, 1000);
   }
   window.__dxmRenderAgentHud();

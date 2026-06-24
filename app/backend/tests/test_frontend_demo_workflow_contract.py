@@ -2806,8 +2806,13 @@ def test_runtime_log_default_views_humanize_lines_and_keep_raw_lines_in_diagnost
     assert "<summary>原始技术日志</summary>" in raw_line_section
     assert "<span>{item.level.toUpperCase()}</span>" not in raw_line_section
     assert "function humanRuntimeLogLine(item: RuntimeLogItem)" in source
+    assert "function shouldUseOperatorMessageForRuntimeLog(item: RuntimeLogItem)" in source
+    assert "if (isRuntimeLogPollingNoise(item)) return false" in source
+    assert "shouldUseOperatorMessageForRuntimeLog(item)" in source
     assert "function businessRuntimeLogItems(items: RuntimeLogItem[])" in source
     assert "function isBusinessRuntimeLogItem(item: RuntimeLogItem, summary: string)" in source
+    assert "function isRuntimeLogPollingNoise(item: RuntimeLogItem)" in source
+    assert "if (!normalizedQuery && level === 'all' && isRuntimeLogPollingNoise(item)) return false" in source
     assert "function technicalRuntimeLogHint(line: string)" in source
     assert "greenlet" in source
     assert "Playwright" in source
@@ -2824,10 +2829,23 @@ def test_runtime_log_default_views_humanize_lines_and_keep_raw_lines_in_diagnost
     assert source.index("保存步骤失败：系统没有继续发布") < source.index("正在点击店小秘“保存”，不会发布。")
     assert "runtime-log-preview__body" in preview_section
     assert ".runtime-log-preview__body" in styles_source
-    assert "overflow-y: auto" in styles_source[styles_source.index(".runtime-log-preview__body"):styles_source.index(".runtime-log-refresh")]
+    runtime_log_preview_body_styles = styles_source[styles_source.index(".runtime-log-preview__body"):styles_source.index(".runtime-log-refresh")]
+    assert "overflow-y: auto" in runtime_log_preview_body_styles
+    assert "overscroll-behavior: contain;" in runtime_log_preview_body_styles
+    runtime_log_summary_styles = styles_source[styles_source.index(".runtime-log-summary-line {"):styles_source.index(".runtime-log-summary-line > span")]
     assert "grid-template-columns: 44px minmax(0, 1fr)" in styles_source[styles_source.index(".runtime-log-summary-line"):styles_source.index(".runtime-log-summary-line > span")]
+    assert "padding: 6px;" in runtime_log_summary_styles
+    assert "overflow: hidden;" in runtime_log_summary_styles
+    assert "contain: layout paint;" in runtime_log_summary_styles
+    runtime_log_summary_hint_styles = styles_source[styles_source.index(".runtime-log-summary-line small"):styles_source.index(".runtime-log-preview code")]
+    assert "max-height: 2.7em;" in runtime_log_summary_hint_styles
+    assert "overflow-wrap: anywhere;" in runtime_log_summary_hint_styles
     assert ".runtime-log-view > span" in styles_source
     assert ".runtime-log-view span {" not in styles_source
+    assert "humanOperatorMessage(line)" in source
+    human_runtime_log_line_section = source[source.index("function humanRuntimeLogLine"):source.index("function shouldUseOperatorMessageForRuntimeLog")]
+    assert "if (shouldUseOperatorMessageForRuntimeLog(item)) {" in human_runtime_log_line_section
+    assert human_runtime_log_line_section.index("if (shouldUseOperatorMessageForRuntimeLog(item)) {") < human_runtime_log_line_section.index("humanOperatorMessage(line)")
     runtime_log_view_styles = styles_source[styles_source.index(".runtime-log-view {"):styles_source.index(".runtime-log-full-drawer")]
     assert "min-height: 132px;" in runtime_log_view_styles
     assert "max-height: 220px;" in runtime_log_view_styles

@@ -4957,10 +4957,17 @@ function filterRuntimeLogItems(items: RuntimeLogItem[], level: 'all' | 'info' | 
   return items.filter((item) => {
     const normalizedLevel = String(item.level || 'info').toLowerCase()
     if (level !== 'all' && normalizedLevel !== level) return false
+    if (!normalizedQuery && level === 'all' && isRuntimeLogPollingNoise(item)) return false
     if (!normalizedQuery) return true
     const haystack = `${item.line} ${item.tags.join(' ')}`.toLowerCase()
     return haystack.includes(normalizedQuery)
   })
+}
+
+function isRuntimeLogPollingNoise(item: RuntimeLogItem) {
+  if (item.tags.includes('polling')) return true
+  const line = item.line.toLowerCase()
+  return line.includes('/api/runtime/logs?') || line.includes('/api/runtime/status?') || line.includes('/api/agent-console/status')
 }
 
 function businessRuntimeLogItems(items: RuntimeLogItem[]) {
@@ -4984,6 +4991,7 @@ function businessRuntimeLogItems(items: RuntimeLogItem[]) {
 function isBusinessRuntimeLogItem(item: RuntimeLogItem, summary: string) {
   const raw = `${item.line} ${item.tags.join(' ')}`.toLowerCase()
   const level = String(item.level || 'info').toLowerCase()
+  if (isRuntimeLogPollingNoise(item)) return false
   if (level === 'warning' || level === 'error') return true
   if (summary.includes('诊断证据已记录')) return false
   if (summary.includes('技术路径和接口细节')) return false
@@ -5079,8 +5087,10 @@ function runtimeLogLevelLabel(level: string) {
 function humanRuntimeLogLine(item: RuntimeLogItem) {
   const line = item.line.trim()
   const normalized = line.toLowerCase()
-  const operatorMessage = humanOperatorMessage(line)
-  if (operatorMessage !== line) return operatorMessage
+  if (shouldUseOperatorMessageForRuntimeLog(item)) {
+    const operatorMessage = humanOperatorMessage(line)
+    if (operatorMessage !== line) return operatorMessage
+  }
   if (String(item.level || '').toLowerCase() === 'error' || normalized.includes('failed') || normalized.includes('error') || normalized.includes('失败')) {
     if (normalized.includes('save_only') || normalized.includes('add.json') || normalized.includes('保存')) {
       return '保存步骤失败：系统没有继续发布，请按页面提示检查真实浏览器后重试。'
@@ -5160,6 +5170,30 @@ function humanRuntimeLogLine(item: RuntimeLogItem) {
     return '诊断证据已记录。'
   }
   return stripRuntimeLogPrefix(line)
+}
+
+function shouldUseOperatorMessageForRuntimeLog(item: RuntimeLogItem) {
+  if (isRuntimeLogPollingNoise(item)) return false
+  const line = item.line
+  const normalized = line.toLowerCase()
+  const level = String(item.level || 'info').toLowerCase()
+  if (level === 'error' || level === 'warning' || level === 'warn') return true
+  return Boolean(
+    line.includes('Cannot switch to a different thread')
+    || line.includes('greenlet')
+    || line.includes('Playwright Sync API')
+    || normalized.includes('traceback')
+    || normalized.includes('internal server error')
+    || normalized.includes('manual approval')
+    || normalized.includes('approval_required')
+    || normalized.includes('save_result')
+    || line.includes('published=false')
+    || line.includes('network/HAR')
+    || normalized.includes('network har')
+    || normalized.includes('probe resources')
+    || normalized.includes('probe runner is missing')
+    || normalized.includes('probe runner missing')
+  )
 }
 
 function technicalRuntimeLogHint(line: string) {
