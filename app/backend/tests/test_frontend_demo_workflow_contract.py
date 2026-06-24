@@ -4028,6 +4028,26 @@ def test_frontend_agent_console_initial_hud_matches_single_save_user_flow():
     assert "只读观察" not in hud_builder
 
 
+def test_app_silently_refreshes_workspace_while_task_is_running():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    refresh_signature = app_source[
+        app_source.index("const refreshWorkspace = useCallback"):
+        app_source.index("useEffect(() => {\n    void refreshWorkspace()")
+    ]
+    running_poll_section = app_source[
+        app_source.index("const workspaceHasRunningTask"):
+        app_source.index("const refreshConfigPreview = useCallback")
+    ]
+
+    assert "options?: { silent?: boolean }" in refresh_signature
+    assert "!options?.silent" in refresh_signature
+    assert "workspace.tasks.some" in running_poll_section
+    assert "task.status === 'running'" in running_poll_section
+    assert "window.setInterval(() =>" in running_poll_section
+    assert "void refreshWorkspace({ silent: true })" in running_poll_section
+    assert "1500" in running_poll_section
+
+
 def test_frontend_humanizes_agent_console_takeover_and_control_failures():
     app_source = APP_TSX.read_text(encoding="utf-8")
     stop_section = app_source[

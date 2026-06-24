@@ -956,8 +956,9 @@ def test_save_only_failure_report_includes_save_result_reason(v1_db):
             "network_events": [],
         },
     )
+    console = FakeAgentConsole()
 
-    asyncio.run(V1TaskRunner(repo, manager, workflow_adapter=adapter).run_task(task["id"]))
+    asyncio.run(V1TaskRunner(repo, manager, workflow_adapter=adapter, agent_console=console).run_task(task["id"]))
 
     report = repo.list_reports(task["id"])[0]
     assert report["status"] == "failed"
@@ -965,6 +966,16 @@ def test_save_only_failure_report_includes_save_result_reason(v1_db):
     assert "未捕获保存相关接口响应" in report["summary"]["blocked_reason"]
     assert "保存接口捕获 0 条" in report["summary"]["blocked_reason"]
     assert "未检测到保存成功提示" in report["save_result"]["message"]
+    failure_console_call = console.calls[-1]
+    assert failure_console_call["step_code"] == "TASK_FAILED"
+    assert failure_console_call["severity"] == "error"
+    assert failure_console_call["requires_user_action"] is True
+    assert "查看结果与问题" in failure_console_call["human_next"]
+    failure_live_hud = adapter.live_hud_calls[-1]
+    assert failure_live_hud["step_code"] == "TASK_FAILED"
+    assert failure_live_hud["severity"] == "error"
+    assert failure_live_hud["requires_user_action"] is True
+    assert "真实保存不会继续" in failure_live_hud["human_action"]
 
 
 def test_runner_uses_injected_workflow_executor_for_thread_bound_login_flow(v1_db):

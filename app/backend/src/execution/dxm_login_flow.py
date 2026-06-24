@@ -162,8 +162,8 @@ class DxmLoginFlow:
                 message=f'打开店小秘官网并填写账号密码失败：{exc}',
                 next_action='检查本机 Chrome、网络或页面结构后重试。',
             )
+            self._keep_visible_browser_for_recovery(state)
             self._write_state(state)
-            self._close_browser_session()
             return state
         state = {
             'stage': 'waiting_captcha',
@@ -259,10 +259,10 @@ class DxmLoginFlow:
                 stage='workflow_navigation_failed',
                 label='导航失败',
                 message=f'进入业务页失败：{exc}',
-                next_action='确认登录态有效，必要时重新登录后再试。',
+                next_action='确认登录态有效，必要时在真实浏览器内修正页面后再试。',
             )
+            self._keep_visible_browser_for_recovery(state)
             self._write_state(state)
-            self._close_browser_session()
             return state
 
         config = WORKFLOW_TARGETS[target]
@@ -316,8 +316,8 @@ class DxmLoginFlow:
                 message=f'执行采集箱动作失败：{exc}',
                 next_action='确认已进入采集箱且页面结构未变，再重试动作。',
             )
+            self._keep_visible_browser_for_recovery(state)
             self._write_state(state)
-            self._close_browser_session()
             return state
 
         if action == 'edit':
@@ -388,6 +388,7 @@ class DxmLoginFlow:
                 message=f'从数据采集认领到采集箱失败：{exc}',
                 next_action='请确认真实浏览器停留在店小秘数据采集页，商品筛选唯一，再重新认领。',
             )
+            self._keep_visible_browser_for_recovery(state)
             self._write_state(state)
             return state
 
@@ -432,6 +433,7 @@ class DxmLoginFlow:
                 message=f'确认采集箱商品失败：{exc}',
                 next_action='请打开采集箱检查认领商品是否出现，必要时回到数据采集重新认领。',
             )
+            self._keep_visible_browser_for_recovery(state)
             self._write_state(state)
             return state
 
@@ -485,8 +487,8 @@ class DxmLoginFlow:
                 message=f'执行编辑页动作失败：{exc}',
                 next_action='确认编辑页或半托管页仍可访问，且页面结构未变。',
             )
+            self._keep_visible_browser_for_recovery(state)
             self._write_state(state)
-            self._close_browser_session()
             return state
 
         state = {
@@ -540,6 +542,23 @@ class DxmLoginFlow:
             'screenshot_url': None,
             'updated_at': now_iso(),
         }
+
+    def _keep_visible_browser_for_recovery(self, state: dict[str, Any]) -> dict[str, Any]:
+        state['browser_visible'] = not self._is_headless()
+        next_action = str(state.get('next_action') or '').strip()
+        if '真实浏览器窗口会保留' not in next_action:
+            state['next_action'] = f'真实浏览器窗口会保留；{next_action}'
+        page = self._page
+        if page is not None:
+            try:
+                state['page_url'] = page.url
+            except Exception:
+                pass
+            try:
+                state['page_title'] = page.title()
+            except Exception:
+                pass
+        return state
 
     def _open_login_page_and_fill(self, username: str, password: str) -> dict[str, Any]:
         page = self._ensure_page()

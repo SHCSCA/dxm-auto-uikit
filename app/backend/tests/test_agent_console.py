@@ -330,6 +330,16 @@ def test_agent_console_hud_persists_latest_business_progress_across_navigation()
     assert "page.evaluate(HUD_INIT_SCRIPT)" in source
 
 
+def test_agent_console_reinjects_hud_on_new_pages_and_navigation():
+    source = (Path(__file__).resolve().parents[1] / "src" / "services" / "agent_console.py").read_text(encoding="utf-8")
+
+    assert 'context.on("page"' in source
+    assert '"framenavigated"' in source
+    assert '"domcontentloaded"' in source
+    assert "_reapply_hud_to_page" in source
+    assert "_attach_page_runtime_listeners" in source
+
+
 def test_agent_console_records_recent_actions_on_hud(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
     service = AgentConsoleService()

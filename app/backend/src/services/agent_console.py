@@ -631,6 +631,7 @@ class AgentConsoleService:
             page = context.pages[0] if context.pages else context.new_page()
             self._attach_network_listeners(page)
             self._attach_browser_lifecycle_listeners(context, page)
+            self._attach_page_runtime_listeners(context, page)
             page.add_init_script(HUD_INIT_SCRIPT)
             page.goto(state["target_url"], wait_until="domcontentloaded", timeout=45000)
             self._apply_hud(page, state["hud"])
@@ -694,6 +695,43 @@ class AgentConsoleService:
                 target.on("close", lambda *args: on_closed())
             except Exception:
                 pass
+
+    def _attach_page_runtime_listeners(self, context, page) -> None:
+        def attach_page(target_page) -> None:
+            try:
+                self._attach_network_listeners(target_page)
+            except Exception:
+                pass
+            for event_name in ("framenavigated", "domcontentloaded"):
+                try:
+                    target_page.on(event_name, lambda *args, p=target_page: self._reapply_hud_to_page(p))
+                except Exception:
+                    pass
+            try:
+                target_page.on("close", lambda *args: self._mark_browser_closed(BROWSER_CLOSED_MESSAGE))
+            except Exception:
+                pass
+            self._reapply_hud_to_page(target_page)
+
+        attach_page(page)
+        try:
+            context.on("page", lambda new_page: attach_page(new_page))
+        except Exception:
+            pass
+
+    def _reapply_hud_to_page(self, page) -> None:
+        with self._lock:
+            if not self._state.get("active"):
+                return
+            hud = dict(self._state.get("hud") or {})
+        if not hud:
+            return
+        try:
+            self._apply_hud(page, hud)
+        except Exception as exc:
+            with self._lock:
+                self._state["last_error"] = str(exc)
+                self._state["updated_at"] = _now()
 
     def _apply_hud(self, page, hud: dict[str, Any]) -> None:
         try:

@@ -251,7 +251,7 @@ export default function App() {
     }
   }, [operationError, selectedTaskCompleted])
 
-  const refreshWorkspace = useCallback(async () => {
+  const refreshWorkspace = useCallback(async (options?: { silent?: boolean }) => {
     const deliveryPath = selectedTaskId ? `/api/delivery/workspace?task_id=${selectedTaskId}` : '/api/delivery/workspace'
     const failures: ApiFailure[] = []
     const loadOrFallback = async <T,>(path: string, fallback: T): Promise<T> => {
@@ -263,13 +263,15 @@ export default function App() {
       }
     }
 
-    setWorkspaceNotice((current) => current?.kind === 'degraded'
-      ? current
-      : {
-        kind: 'loading',
-        title: '正在加载 DXM 自动化工作台',
-        detail: '正在读取任务、店铺、商品、证据和报告状态。',
-      })
+    if (!options?.silent) {
+      setWorkspaceNotice((current) => current?.kind === 'degraded'
+        ? current
+        : {
+          kind: 'loading',
+          title: '正在加载 DXM 自动化工作台',
+          detail: '正在读取任务、店铺、商品、证据和报告状态。',
+        })
+    }
     const [
       deliveryWorkspace,
       stores,
@@ -340,6 +342,16 @@ export default function App() {
   useEffect(() => {
     void refreshWorkspace()
   }, [refreshWorkspace])
+
+  const workspaceHasRunningTask = workspace.tasks.some((task) => task.status === 'running')
+
+  useEffect(() => {
+    if (!workspaceHasRunningTask && !agentConsole?.active) return
+    const timer = window.setInterval(() => {
+      void refreshWorkspace({ silent: true })
+    }, 1500)
+    return () => window.clearInterval(timer)
+  }, [agentConsole?.active, refreshWorkspace, workspaceHasRunningTask])
 
   const refreshConfigPreview = useCallback(async (taskId: number | null = selectedTask?.id ?? null) => {
     if (!taskId) {

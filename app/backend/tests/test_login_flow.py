@@ -1396,6 +1396,26 @@ def test_dxm_login_flow_start_persists_browser_snapshot(monkeypatch, tmp_path):
     assert Path(tmp_path / 'runtime.json').exists()
 
 
+def test_dxm_login_flow_start_failure_keeps_open_browser_for_recovery(monkeypatch, tmp_path):
+    live_client = DummyLiveClient()
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    close_calls = []
+    flow._page = DummyHudPage()
+
+    monkeypatch.setattr(flow, '_open_login_page_and_fill', lambda username, password: (_ for _ in ()).throw(RuntimeError('login form changed')))
+    monkeypatch.setattr(flow, '_close_browser_session', lambda: close_calls.append('closed'))
+    monkeypatch.setattr(flow, '_is_headless', lambda: False)
+
+    state = flow.start_login('master', 'secret-123')
+
+    assert state['stage'] == 'login_failed'
+    assert state['requires_user_action'] is True
+    assert state['browser_visible'] is True
+    assert state['page_url'] == 'https://www.dianxiaomi.com/web/home'
+    assert '真实浏览器窗口会保留' in state['next_action']
+    assert close_calls == []
+
+
 def test_dxm_login_flow_continue_records_login_failure(monkeypatch, tmp_path):
     live_client = DummyLiveClient(logged_in=False)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
@@ -1567,6 +1587,24 @@ def test_dxm_login_flow_navigate_keeps_visible_browser_for_operator(monkeypatch,
 
     assert state['stage'] == 'workflow_navigation'
     assert state['current_nav'] == 'data_acquisition'
+    assert state['browser_visible'] is True
+    assert '真实浏览器窗口会保留' in state['next_action']
+    assert close_calls == []
+
+
+def test_dxm_login_flow_navigation_failure_keeps_visible_browser_for_recovery(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    close_calls = []
+
+    monkeypatch.setattr(flow, '_navigate_in_session', lambda target: (_ for _ in ()).throw(RuntimeError('page changed')))
+    monkeypatch.setattr(flow, '_close_browser_session', lambda: close_calls.append('closed'))
+    monkeypatch.setattr(flow, '_is_headless', lambda: False)
+
+    state = flow.navigate_post_login('data_acquisition')
+
+    assert state['stage'] == 'workflow_navigation_failed'
+    assert state['requires_user_action'] is True
     assert state['browser_visible'] is True
     assert '真实浏览器窗口会保留' in state['next_action']
     assert close_calls == []
@@ -1766,6 +1804,24 @@ def test_dxm_login_flow_remark_action_reports_missing_target(monkeypatch, tmp_pa
 
     assert state['stage'] == 'draft_box_action_failed'
     assert '未找到目标商品行' in state['message']
+
+
+def test_dxm_login_flow_draft_box_action_failure_keeps_visible_browser_for_recovery(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    close_calls = []
+
+    monkeypatch.setattr(flow, '_perform_draft_box_action', lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('target row missing')))
+    monkeypatch.setattr(flow, '_close_browser_session', lambda: close_calls.append('closed'))
+    monkeypatch.setattr(flow, '_is_headless', lambda: False)
+
+    state = flow.perform_draft_box_action('remark', note_text='AI-OPS', product_query='真实商品')
+
+    assert state['stage'] == 'draft_box_action_failed'
+    assert state['requires_user_action'] is True
+    assert state['browser_visible'] is True
+    assert '真实浏览器窗口会保留' in state['next_action']
+    assert close_calls == []
 
 
 def test_remark_action_treats_existing_note_as_verified(monkeypatch, tmp_path):
@@ -2137,6 +2193,24 @@ def test_dxm_login_flow_perform_editor_action_keeps_browser_session_on_success(m
     state = flow.perform_editor_action('fill_editor_required_defaults')
 
     assert state['stage'] == 'fill_editor_required_defaults'
+    assert close_calls == []
+
+
+def test_dxm_login_flow_editor_action_failure_keeps_visible_browser_for_recovery(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    close_calls = []
+
+    monkeypatch.setattr(flow, '_perform_editor_action', lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('save button changed')))
+    monkeypatch.setattr(flow, '_close_browser_session', lambda: close_calls.append('closed'))
+    monkeypatch.setattr(flow, '_is_headless', lambda: False)
+
+    state = flow.perform_editor_action('save_only')
+
+    assert state['stage'] == 'save_only_failed'
+    assert state['requires_user_action'] is True
+    assert state['browser_visible'] is True
+    assert '真实浏览器窗口会保留' in state['next_action']
     assert close_calls == []
 
 

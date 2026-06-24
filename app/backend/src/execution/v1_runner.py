@@ -246,6 +246,9 @@ class V1TaskRunner:
         live_browser_hud_events: list[dict[str, Any]] = []
         claimed_product: dict[str, Any] | None = None
         last_state = MODE_LAST_STATE[mode]
+        current_state_name = StateName.PRECHECK_CONFIG
+        current_step_name = "启动前配置校验"
+        current_field_domain = "precheck"
 
         self.repo.update_job(job_id, status="running", current_step_code="PRECHECK_CONFIG", current_step_name="启动前配置校验")
         self.repo.add_log(task_id, job_id, "info", "V1 执行开始", {"mode": mode, "product_id": product_id})
@@ -255,6 +258,9 @@ class V1TaskRunner:
                 raise V1ExecutionError("E901", "缺少真实工作流适配器", f"{mode} requires workflow_adapter")
 
             for state_name, step_name, field_domain in self._steps_for_mode(mode):
+                current_state_name = state_name
+                current_step_name = step_name
+                current_field_domain = field_domain
                 self._guard_step(task, job, state_name, claim_mark, product)
                 self.repo.update_job(job_id, status="running", current_step_code=state_name.value, current_step_name=step_name)
                 evidence_path = self._write_evidence(task_id, job_id, state_name)
@@ -465,6 +471,32 @@ class V1TaskRunner:
             if lock_token:
                 self.ownership_lock.release_lock(lock_token)
             error = exc if isinstance(exc, V1ExecutionError) else V1ExecutionError("E999", "V1 执行失败", str(exc))
+            failure_override = self._failure_hud_override(error)
+            failure_evidence_path = evidence_paths[-1] if evidence_paths else ""
+            agent_console_event = self._sync_agent_console(
+                task,
+                job,
+                mode,
+                current_state_name,
+                current_step_name,
+                current_field_domain,
+                failure_evidence_path,
+                hud_override=failure_override,
+            )
+            if agent_console_event:
+                agent_console_events.append(agent_console_event)
+            live_browser_hud_event = self._sync_live_browser_hud(
+                task,
+                job,
+                mode,
+                current_state_name,
+                current_step_name,
+                current_field_domain,
+                failure_evidence_path,
+                hud_override=failure_override,
+            )
+            if live_browser_hud_event:
+                live_browser_hud_events.append(live_browser_hud_event)
             self.repo.update_job(
                 job_id,
                 status="failed",
@@ -647,7 +679,10 @@ class V1TaskRunner:
         hud = build_browser_hud({
             "task_name": "数据采集认领" if mode == "claim_only" else "采集箱编辑保存",
             "step": resolved_step_code,
-            "status": "running",
+            "status": override.get("status") or "running",
+            "severity": override.get("severity"),
+            "requires_user_action": override.get("requires_user_action"),
+            "maintenance_detail": override.get("maintenance_detail"),
             "store_name": store_name,
             "guard": "只保存不发布",
             "phase": override.get("phase"),
@@ -681,6 +716,20 @@ class V1TaskRunner:
             "human_next": hud["human_next"],
             "requires_user_action": hud["requires_user_action"],
             "maintenance_detail": hud.get("maintenance_detail"),
+        }
+
+    def _failure_hud_override(self, error: V1ExecutionError) -> dict[str, Any]:
+        return {
+            "step_code": "TASK_FAILED",
+            "step_name": "当前步骤失败",
+            "status": "failed",
+            "severity": "error",
+            "phase": "需要人工处理",
+            "human_title": "当前步骤失败",
+            "human_action": "请按页面提示处理后重试，真实保存不会继续",
+            "human_next": "查看结果与问题，确认原因后重试",
+            "requires_user_action": True,
+            "maintenance_detail": f"{error.error_code}: {error.detail}",
         }
 
     def _agent_console_summary(self, result: Mapping[str, Any]) -> dict[str, Any]:

@@ -206,6 +206,14 @@ STEP_COPY: dict[str, dict[str, Any]] = {
         "next": "查看结果报告",
         "progress_index": 12,
     },
+    "TASK_FAILED": {
+        "phase": "需要人工处理",
+        "title": "当前步骤失败",
+        "line1": "请按页面提示处理后重试，真实保存不会继续",
+        "next": "查看结果与问题",
+        "progress_index": 12,
+        "severity": "error",
+    },
 }
 
 STEP_ALIASES = {

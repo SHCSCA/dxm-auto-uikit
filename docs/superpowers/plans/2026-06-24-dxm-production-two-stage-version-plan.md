@@ -10,6 +10,32 @@
 
 ---
 
+## 0. Current Execution Index
+
+**Authoritative product plan:** `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\docs\product\DXM-Agent-Console-生产级版本计划-20260624.md`
+
+**Current branch:** `feature/dxm-production-two-stage`
+
+**Current product completion estimate:** 68%
+
+**Already completed in this branch:**
+
+- Production sidebar is moving toward user-facing two-stage workflow language.
+- The template center has been changed from a dense configuration screen into sectioned Chinese forms.
+- Default test/template values are exposed as a selectable starting template, not as proof of real production readiness.
+- Template metadata is aligned with config preview fields.
+- Frontend build and focused backend template/frontend contract tests passed after the template-center slice.
+
+**Next implementation task:** continue with V1.4 real browser Agent stability:
+
+1. Confirm whether the task browser and Agent Console browser use the same persistent session.
+2. Keep the main window polling task state while a task is running.
+3. Preserve browser state on Agent failure instead of allowing a silent close.
+4. Keep the in-browser Chinese HUD resident through navigation and page changes.
+5. Hide raw technical errors from the normal user path and move them into maintenance diagnostics.
+
+---
+
 ## 1. 版本总目标
 
 ### V0.9 交付壳收口版
