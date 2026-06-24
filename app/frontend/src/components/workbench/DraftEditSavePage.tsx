@@ -45,7 +45,7 @@ export function DraftEditSavePage({
     },
     {
       title: '确认本次使用的模板',
-      detail: '到模板中心确认标题、类目、价格、图片、物流和合规字段的最终取值。',
+      detail: '检查编辑页模板，确认标题、类目、价格、图片、物流和合规字段的最终取值。',
       state: selectedTask ? '待确认' : '待创建任务',
     },
     {
@@ -54,9 +54,9 @@ export function DraftEditSavePage({
       state: selectedTask ? '等待确认' : '待创建任务',
     },
     {
-      title: '启动 Agent 保存',
-      detail: '打开真实浏览器，Agent 从采集箱进入编辑页并执行填写。',
-      state: selectedTask ? '可前往执行浏览器' : '待创建任务',
+      title: '开始编辑并只保存',
+      detail: '打开真实浏览器，从采集箱进入编辑页并按模板填写。',
+      state: selectedTask ? '可前往浏览器现场' : '待创建任务',
     },
     {
       title: '查看保存结果',
@@ -80,7 +80,7 @@ export function DraftEditSavePage({
             <p>只允许从采集箱商品开始。编辑保存只接受第一段已经认领到采集箱的真实商品；当前模式：只保存，不发布。</p>
           </div>
           <button className="button button--secondary" type="button" onClick={onShowTemplates}>
-            去模板中心
+            检查编辑页模板
           </button>
         </div>
 
@@ -140,7 +140,7 @@ export function DraftEditSavePage({
             创建采集箱编辑保存任务
           </button>
           <button className="button button--secondary" type="button" onClick={onShowExecutionConsole} disabled={!selectedTask}>
-            去执行浏览器
+            开始编辑并只保存
           </button>
         </div>
       </div>
@@ -152,18 +152,18 @@ export function DraftEditSavePage({
         </div>
         <ol className="plain-list">
           <li>确认采集箱商品正确。</li>
-          <li>去模板中心确认编辑页取值。</li>
-          <li>人工确认后去执行浏览器启动 Agent 保存。</li>
+          <li>检查编辑页模板并确认最终取值。</li>
+          <li>人工确认后进入浏览器现场开始只保存。</li>
         </ol>
         <div className="action-row action-row--stacked">
           <button className="button button--secondary" type="button" onClick={onShowAcquisition}>
             去数据采集认领
           </button>
           <button className="button button--secondary" type="button" onClick={onShowTemplates}>
-            去模板中心
+            检查编辑页模板
           </button>
           <button className="button button--primary" type="button" onClick={onShowExecutionConsole} disabled={!selectedTask}>
-            去执行浏览器
+            开始编辑并只保存
           </button>
         </div>
       </div>

@@ -14,8 +14,8 @@ type AcquisitionClaimPageProps = {
 
 const claimSteps = [
   { title: '选择店铺与平台', detail: '确认这次认领使用哪个真实店小秘店铺。' },
-  { title: '填写采集商品线索', detail: '填写关键词、类目和认领标记，便于 Agent 定位商品。' },
-  { title: '启动真实浏览器认领', detail: '到执行浏览器启动 Agent，只做认领，不会保存、不会发布。' },
+  { title: '填写采集商品线索', detail: '填写关键词、类目和认领标记，便于定位商品。' },
+  { title: '开始认领到采集箱', detail: '打开浏览器现场处理认领，只认领，不保存、不发布。' },
   { title: '确认商品进入采集箱', detail: '认领完成后再进入第二段采集箱编辑保存。' },
 ]
 
@@ -79,7 +79,7 @@ export function AcquisitionClaimPage({
           <div>
             <span className="eyebrow">第一段</span>
             <h2>从店小秘数据采集认领到采集箱</h2>
-            <p>先创建认领任务，再到执行浏览器启动 Agent。这里只认领到采集箱，不会进入编辑页，不会保存，不会发布。</p>
+            <p>先创建认领任务，再到浏览器现场开始认领。这里只认领到采集箱，不会进入编辑页，不会保存，不会发布。</p>
           </div>
           <button className="button button--secondary" type="button" onClick={onNavigateDataAcquisition} disabled={busy}>
             打开真实数据采集页
@@ -123,7 +123,7 @@ export function AcquisitionClaimPage({
           <label>
             <span>后续模板</span>
             <select value={templateId} onChange={(event) => setTemplateId(event.target.value)} disabled={busy}>
-              <option value="">稍后在模板中心选择</option>
+              <option value="">稍后在编辑页模板选择</option>
               {enabledTemplates.map((template) => (
                 <option key={template.id} value={template.id}>
                   {template.template_name}
@@ -133,7 +133,7 @@ export function AcquisitionClaimPage({
           </label>
         </div>
         {!hasProductHint && (
-          <p className="form-hint">请至少填写搜索关键词或认领类目，否则 Agent 无法定位真实采集商品。</p>
+          <p className="form-hint">请至少填写搜索关键词或认领类目，否则无法定位真实采集商品。</p>
         )}
 
         <div className="action-row">
@@ -142,7 +142,7 @@ export function AcquisitionClaimPage({
           </button>
           {lastRequest && (
             <button className="button button--secondary" type="button" onClick={onShowExecutionConsole} disabled={busy}>
-              {claimCompleted ? '查看执行记录' : '去执行浏览器启动认领'}
+              {claimCompleted ? '查看执行记录' : '开始认领到采集箱'}
             </button>
           )}
           {claimCompleted && (
@@ -163,11 +163,11 @@ export function AcquisitionClaimPage({
             <span><strong>店铺</strong><b>{selectedStore?.name ?? lastRequest.store_id}</b></span>
             <span><strong>阶段</strong><b>{claimCompleted ? '商品已进入采集箱' : '等待启动真实浏览器认领'}</b></span>
             <span><strong>标记</strong><b>{lastRequest.claim_mark}</b></span>
-            <span><strong>下一步</strong><b>{claimCompleted ? '进入采集箱编辑保存' : '去执行浏览器启动认领'}</b></span>
+            <span><strong>下一步</strong><b>{claimCompleted ? '进入采集箱编辑保存' : '开始认领到采集箱'}</b></span>
             {claimCompleted && <span><strong>采集箱商品</strong><b>{lastRequest.claimed_product_title || `商品 #${lastRequest.claimed_product_id}`}</b></span>}
           </div>
         ) : (
-          <p>创建后，Agent 会按该请求进入真实店小秘数据采集页处理认领；认领完成前不会保存或发布。</p>
+          <p>创建后，系统会按该请求进入真实店小秘数据采集页处理认领；认领完成前不会保存或发布。</p>
         )}
       </div>
     </section>

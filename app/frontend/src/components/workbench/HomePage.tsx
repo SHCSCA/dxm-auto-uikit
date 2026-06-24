@@ -40,7 +40,7 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
   const realWriteReady = !realWriteExpectedBlocked
   const agentActive = runtimeStatus?.realBrowser?.active === true
   const waitingForManualConfirm = Boolean(selectedTask && requiresManualApproval(selectedTask) && l2Passed && !l3Passed && !selectedTaskCompleted)
-  const controlOwner = agentActive ? 'Agent 操作中' : waitingForManualConfirm ? '等待人工确认' : '用户操作中'
+  const controlOwner = agentActive ? '自动助手操作中' : waitingForManualConfirm ? '等待人工确认' : '用户操作中'
   const controlOwnerDetail = agentActive
     ? '真实浏览器正在执行，请看浏览器左上角进度。'
     : waitingForManualConfirm
@@ -53,14 +53,14 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
       : !selectedTask
         ? { label: '创建数据采集认领任务', detail: '先从数据采集把真实商品认领到采集箱。', cta: '去数据采集认领', action: onShowTasks }
         : selectedTask.mode === 'claim_only' && selectedTask.status !== 'completed'
-          ? { label: '运行数据采集认领', detail: '打开真实浏览器，把商品认领到采集箱。', cta: '去执行浏览器', action: onShowConsole }
+          ? { label: '运行数据采集认领', detail: '打开真实浏览器，把商品认领到采集箱。', cta: '去浏览器现场', action: onShowConsole }
         : !configReady
-          ? { label: '填写模板中心配置', detail: '确认本次编辑保存会读取哪些字段值。', cta: '去模板中心', action: onShowConfig }
+          ? { label: '检查编辑页模板', detail: '确认本次编辑保存会读取哪些字段值。', cta: '去编辑页模板', action: onShowConfig }
           : !l2Passed
-            ? { label: '运行真实只读检查', detail: '先读取店小秘页面，确认不会领取、保存或发布。', cta: '去执行浏览器', action: onShowConsole }
+            ? { label: '运行保存前安全检查', detail: '先读取店小秘页面，确认不会领取、保存或发布。', cta: '去浏览器现场', action: onShowConsole }
             : requiresManualApproval(selectedTask) && !l3Passed
-              ? { label: '人工确认只保存', detail: '确认只保存、不发布后才能启动执行浏览器。', cta: '去执行浏览器', action: onShowConsole }
-              : { label: '启动执行浏览器', detail: '系统将操控独立真实浏览器，只保存当前单商品。', cta: '去执行浏览器', action: onShowConsole }
+              ? { label: '人工确认只保存', detail: '确认只保存、不发布后才能启动浏览器现场。', cta: '去浏览器现场', action: onShowConsole }
+              : { label: '打开浏览器现场', detail: '系统将操控独立真实浏览器，只保存当前单商品。', cta: '去浏览器现场', action: onShowConsole }
   const blockerReason = selectedTaskCompleted
     ? '任务已完成，当前只需要复核结果。'
     : !dxmLoggedIn
@@ -70,13 +70,13 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
         : selectedTask.mode === 'claim_only' && selectedTask.status !== 'completed'
           ? '采集认领还没有完成。'
           : !configReady
-            ? '模板中心配置还没有补齐。'
+            ? '编辑页模板还没有补齐。'
             : !l2Passed
-              ? '真实只读检查还没有通过。'
+            ? '保存前安全检查还没有通过。'
               : waitingForManualConfirm
                 ? '保存前还没有完成人工确认。'
                 : agentActive
-                  ? 'Agent 正在真实浏览器中执行。'
+                  ? '自动助手正在真实浏览器中执行。'
                   : '没有阻断。'
   const decisionCards = [
     { label: '现在该做什么', value: nextAction.label, detail: nextAction.detail, ok: selectedTaskCompleted || (!agentActive && blockerReason === '没有阻断。') },
@@ -123,8 +123,8 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
         <div className="home-menu-map__grid home-menu-map__grid--compact">
           <button className="button button--quiet" type="button" onClick={onShowDxmAccess}>店小秘登录</button>
           <button className="button button--quiet" type="button" onClick={onShowTasks}>数据采集认领</button>
-          <button className="button button--quiet" type="button" onClick={onShowConfig}>模板中心</button>
-          <button className="button button--quiet" type="button" onClick={onShowConsole}>执行浏览器</button>
+          <button className="button button--quiet" type="button" onClick={onShowConfig}>编辑页模板</button>
+          <button className="button button--quiet" type="button" onClick={onShowConsole}>浏览器现场</button>
           <button className="button button--quiet" type="button" onClick={onShowReports}>结果与问题</button>
         </div>
         <details className="inline-disclosure home-menu-map__guide">
@@ -137,7 +137,7 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
           <summary>维护人员查看技术状态</summary>
         <div className="check-list check-list--inline">
           <CheckRow label="真实店铺/商品已读取" ok={workspace.stores.length > 0 && workspace.products.length > 0} />
-          <CheckRow label="真实只读检查通过" ok={l2Gate?.status === 'passed'} />
+          <CheckRow label="保存前安全检查通过" ok={l2Gate?.status === 'passed'} />
           <CheckRow label="仅单商品只保存放行" ok />
           <CheckRow label="发布入口隔离" ok={workspace.publishGuardState?.publish_allowed === false || workspace.publishGuardState?.safe === true} />
           <CheckRow label={`证据等级 ${grade} / 待处理 ${blockerCount} 项${l3PostEvidenceCount ? ` / 保存后补齐 ${l3PostEvidenceCount} 项` : ''}`} ok={grade === 'A'} />
@@ -155,7 +155,7 @@ function OperationGuide({ workspace, selectedTask }: { workspace: DeliveryWorksp
     { label: '登录店小秘', ok: workspace.stores.length > 0 },
     { label: '数据采集认领到采集箱', ok: selectedTask?.mode === 'claim_only' || selectedTask?.mode === 'single_save' },
     { label: '采集箱商品套用模板', ok: selectedTask?.mode === 'single_save' },
-    { label: '确认真实只读检查通过', ok: l2Gate?.status === 'passed' },
+    { label: '确认保存前安全检查通过', ok: l2Gate?.status === 'passed' },
     { label: '人工批准后启动真实浏览器保存', ok: l3Gate?.status === 'passed' || selectedTask?.status === 'completed' },
   ]
   return (

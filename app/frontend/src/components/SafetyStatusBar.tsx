@@ -77,7 +77,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
       : !dxmLoggedIn
       ? '继续下一步：打开真实店小秘登录'
       : l2BlocksRealSave
-      ? '继续下一步：运行真实只读检查'
+      ? '继续下一步：运行保存前安全检查'
       : l3NeedsApproval
         ? '继续下一步：人工确认单商品只保存'
         : '当前可执行：单商品只保存自动化'
@@ -86,7 +86,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
     : runtimeStatusUnavailable
       ? '工作台服务连接异常'
       : nextHeadline
-  const gateStatusLine = `真实只读检查 ${humanGateStatus(l2Gate?.status ?? workspace.safety.l2Status ?? 'not_run')}，人工确认 ${humanGateStatus(l3Gate?.status ?? 'not_run')}`
+  const gateStatusLine = `保存前安全检查 ${humanGateStatus(l2Gate?.status ?? workspace.safety.l2Status ?? 'not_run')}，人工确认 ${humanGateStatus(l3Gate?.status ?? 'not_run')}`
   const statusLine = `当前任务 ${activeTaskLabel}，${tone === 'danger' ? `保存前置条件未完成：${gateStatusLine}` : gateStatusLine}`
   const gateDetails = [
     l2Gate ? `真实只读检查：${l2Gate.detail}` : '真实只读检查：缺少页面检查状态',
@@ -108,7 +108,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
       : '工作台只会执行受控“只保存”，发布和批量无人值守仍保持关闭。'
     : selectedTaskCompleted
       ? `任务 ${activeTaskLabel} ${activeTaskStatusLabel}，继续查看保存结果和未发布证明。`
-      : '按操作引导继续：选择任务、补配置、真实登录、真实只读检查、人工确认后才启动保存。'
+      : '按操作引导继续：选择任务、补配置、真实登录、保存前安全检查、人工确认后才启动保存。'
   const runtimeOwner = runtimeStatus?.runtimeControl?.owner ?? 'direct'
   const runtimeOwnerChip = runtimeOwnerLabel(runtimeOwner, Boolean(runtimeStatus?.runtimeControl?.managedByDesktop))
   const backendPortMismatch = typeof desktopRuntime?.backendPort === 'number'
@@ -134,7 +134,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
     ...(desktopRuntime ? [{ label: '免安装版：已接入本机服务', tone: desktopRuntime.lastError ? 'danger' : 'ok' }] : []),
     ...(backendPortMismatch ? [{ label: '桌面服务与当前接口不一致', tone: 'danger' }] : []),
     ...(backendInstanceMismatch ? [{ label: '桌面服务实例不一致', tone: 'danger' }] : []),
-    { label: `真实只读检查：${humanGateStatus(l2Gate?.status ?? 'not_run')}`, tone: l2BlocksRealSave ? 'danger' : 'ok' },
+    { label: `保存前安全检查：${humanGateStatus(l2Gate?.status ?? 'not_run')}`, tone: l2BlocksRealSave ? 'danger' : 'ok' },
     { label: `人工确认：${l3NeedsApproval ? `不可启动 / ${humanGateStatus(l3Gate?.status ?? 'not_run')}` : humanGateStatus(l3Gate?.status ?? 'not_run')}`, tone: l3BlocksRealSave ? 'danger' : l3NeedsApproval ? 'warn' : 'ok' },
     ...visibleBlockerGaps.slice(0, 2).map((gap) => ({ label: `阻断项：${gap.title}`, tone: 'danger' })),
     ...(l3PostEvidenceGapCount > 0 ? [{ label: `保存后证据：${l3PostEvidenceGapCount} 项预期阻断`, tone: 'warn' }] : []),
@@ -156,7 +156,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
     : !dxmLoggedIn
     ? '等待真实登录'
     : l2BlocksRealSave
-    ? '先完成只读检查'
+    ? '先完成安全检查'
     : l3NeedsApproval
       ? '等待人工确认'
       : '可启动只保存'
@@ -171,7 +171,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
     : !dxmLoggedIn
     ? '店小秘未登录或登录状态未确认。'
     : l2BlocksRealSave
-    ? '真实只读检查未通过。'
+    ? '保存前安全检查未通过。'
     : l3NeedsApproval
       ? '保存前需要人工确认。'
       : agentActive
@@ -214,10 +214,10 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
           {primaryActionLabel}
         </button>
         <details className="safety-bar__meta-details inline-disclosure">
-          <summary>状态详情</summary>
+          <summary>维护详情</summary>
           <p className="safety-bar__compact-detail">{conciseDetail}</p>
           <div>
-            <strong className="safety-bar__details-title">状态说明</strong>
+            <strong className="safety-bar__details-title">维护状态说明</strong>
             {boundaryChips.map((chip) => (
               <span key={chip.label} className={`guard-chip guard-chip--${chip.tone}`}>{chip.label}</span>
             ))}
