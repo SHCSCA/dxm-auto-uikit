@@ -94,7 +94,7 @@ const fallbackTemplateCenterMetadata: TemplateCenterMetadata = {
     ] },
   ],
   source_priority: ['本次任务覆盖', '手动选择模板', '类目默认模板', '店铺默认模板', '系统默认模板', '商品原始数据'],
-  actions: ['仅本次任务使用', '设为店铺默认模板', '设为类目默认模板', '另存为新模板', '套用预置配置模板'],
+  actions: ['仅本次任务使用', '设为店铺默认模板', '设为类目默认模板', '另存为新模板', '套用默认配置模板'],
 }
 
 export function TemplateCenterPage({
@@ -126,7 +126,6 @@ export function TemplateCenterPage({
   const currentStore = selectedTask?.payload?.store_name || workspace.stores.find((store) => store.id === selectedTask?.store_id)?.name || workspace.stores[0]?.name || '未选择店铺'
   const currentCategory = selectedProduct?.category_name || selectedTask?.payload?.category_name || '未选择类目'
   const bindingScope = `${currentStore} / ${currentCategory} / AliExpress`
-  const activeTemplateName = activeTemplate?.template_name || templateName || '未选择模板'
   const previewGroup = configPreview?.fieldGroups.find((group) => group.templateType === activeSection.template_type || group.section === activeSection.template_type)
   const originalValues = useMemo(
     () => Object.fromEntries(activeSection.fields.map((field) => [field.key, templateFieldValue(activeTemplate, activeSection, field.key)])),
@@ -198,7 +197,7 @@ export function TemplateCenterPage({
 
   function applyTemplateChoice() {
     if (!templateChoice) {
-      setSaveState({ status: '无法套用模板', detail: '当前分区还没有可用模板；可以套用预置配置模板后保存。' })
+      setSaveState({ status: '无法套用模板', detail: '当前分区还没有可用模板；可以套用默认配置模板后保存。' })
       return
     }
     pendingTemplateApplyNotice.current = true
@@ -260,8 +259,8 @@ export function TemplateCenterPage({
 
   function applyDefaultTemplate() {
     setDraftValues(defaultValuesForSection(activeSection))
-    setTemplateName(`预置配置模板 - ${activeSection.label}`)
-    setSaveState({ status: '已套用预置配置模板', detail: '已填入常用默认值；执行前仍需按当前真实商品核对并保存。' })
+    setTemplateName(`默认配置模板 - ${activeSection.label}`)
+    setSaveState({ status: '已套用默认配置模板', detail: '已填入常用默认值；执行前仍需按当前真实商品核对并保存。' })
   }
 
   async function saveWithState(label: string, action: () => Promise<void>) {
@@ -286,19 +285,17 @@ export function TemplateCenterPage({
           </div>
           <button className="button button--primary" type="button" onClick={onShowDraftEdit}>回到采集箱编辑保存</button>
         </div>
-        <div className="status-grid">
+        <div className="template-topline" aria-label="模板中心首屏摘要">
           <span><strong>当前任务</strong><b>{selectedTask?.name || '尚未选择保存任务'}</b></span>
           <span><strong>当前分区</strong><b>{activeSection.label}</b></span>
-          <span><strong>表单正在编辑</strong><b>{activeTemplateName}</b></span>
-          <span><strong>当前实际使用</strong><b>{activeTemplate ? activeTemplate.template_name : '当前分区暂无模板'}</b></span>
-          <span><strong>保存状态</strong><b>{saveState.status}</b></span>
-          <span><strong>执行取值</strong><b>{executionStatus}</b></span>
+          <span><strong>可用模板</strong><b>{sectionTemplates.length} 套</b></span>
+          <span><strong>保存状态</strong><b>{hasUnsavedChanges ? '有未保存修改' : saveState.status}</b></span>
         </div>
         <div className="template-usage-confirmation" aria-label="模板使用确认">
           <span>
             <strong>当前实际使用</strong>
             <b>{activeTemplate ? activeTemplate.template_name : '还没有保存模板'}</b>
-            <small>{activeTemplate ? `本次执行会使用：${activeSection.label} / ${activeTemplate.template_name}` : '请先套用示例或填写表单，再保存为模板。'}</small>
+            <small>{activeTemplate ? `本次执行会使用：${activeSection.label} / ${activeTemplate.template_name}` : '请先套用默认配置模板或填写表单，再保存为模板。'}</small>
           </span>
           <span>
             <strong>保存状态</strong>
@@ -344,7 +341,7 @@ export function TemplateCenterPage({
           <div>
             <span className="eyebrow">当前分区表单</span>
             <h2>{activeSection.label}</h2>
-            <span>范围：{bindingScope} · 已填写 {activeFilledCount}/{activeSection.fields.length}，必填 {activeFilledRequiredCount}/{activeRequiredCount || 0}</span>
+            <span>表单正在编辑：{activeSection.label} · 范围：{bindingScope} · 已填写 {activeFilledCount}/{activeSection.fields.length}，必填 {activeFilledRequiredCount}/{activeRequiredCount || 0}</span>
           </div>
         </div>
 
@@ -364,7 +361,11 @@ export function TemplateCenterPage({
             <input value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="例如 Dang Kang 立牌类目模板" />
           </label>
           <button className="button button--secondary" type="button" onClick={applyTemplateChoice} disabled={!templateChoice}>套用到表单</button>
-          <button className="button button--quiet" type="button" onClick={applyDefaultTemplate}>套用预置配置模板</button>
+          <button className="button button--quiet" type="button" onClick={applyDefaultTemplate}>套用默认配置模板</button>
+        </div>
+        <div className="template-default-note">
+          <strong>默认配置模板</strong>
+          <span>基于验收样例值快速填充分区字段，只作为起点；保存前仍需要按当前真实商品核对。旧版“预置配置模板”等同于这里的默认配置模板。</span>
         </div>
 
         <div className="template-field-grid">
@@ -436,7 +437,7 @@ export function TemplateCenterPage({
             )) : (
               <div className="empty-state">
                 <strong>当前分区还没有模板</strong>
-                <span>可套用预置配置模板后另存，或直接填写字段保存。</span>
+                <span>可套用默认配置模板后另存，或直接填写字段保存。</span>
               </div>
             )}
           </div>

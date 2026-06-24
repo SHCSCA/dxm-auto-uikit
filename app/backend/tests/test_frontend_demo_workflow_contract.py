@@ -204,15 +204,18 @@ def test_template_center_page_presents_multi_template_chinese_section_workflow()
     assert "<ConfigCenter" not in route_section
     for label in [
         "当前任务配置摘要",
+        "模板中心首屏摘要",
         "模板使用确认",
         "编辑页分区",
         "当前分区表单",
         "表单正在编辑",
         "当前实际使用",
+        "可用模板",
         "未保存修改不会进入执行",
         "点击保存后才会进入真实执行",
         "选择要编辑的模板",
         "套用到表单",
+        "默认配置模板",
         "当前分区执行取值核对",
         "更多模板管理与模板清单",
         "店铺与任务基础",
@@ -231,7 +234,8 @@ def test_template_center_page_presents_multi_template_chinese_section_workflow()
         "保存为类目模板",
         "另存为新模板",
         "停用当前模板",
-        "套用预置配置模板",
+        "套用默认配置模板",
+        "旧版“预置配置模板”",
         "一次只编辑一个分区",
     ]:
         assert label in page_source

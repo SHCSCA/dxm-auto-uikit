@@ -3189,6 +3189,36 @@ tr:last-child td {
   line-height: 1.45;
 }
 
+.template-topline {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.4fr) repeat(3, minmax(120px, 0.8fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.template-topline span {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+}
+
+.template-topline strong {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.template-topline b {
+  min-width: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .template-usage-confirmation {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -3305,6 +3335,27 @@ tr:last-child td {
 
 .template-active-source select {
   appearance: auto;
+}
+
+.template-default-note {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+  padding: 9px 10px;
+  border: 1px solid #fed7aa;
+  border-radius: var(--radius);
+  background: #fff7ed;
+}
+
+.template-default-note strong {
+  color: #9a3412;
+  font-size: 13px;
+}
+
+.template-default-note span {
+  color: #7c2d12;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .template-list {
@@ -8022,6 +8073,7 @@ tr:last-child td {
   }
 
   .home-menu-map__grid,
+  .template-topline,
   .template-usage-confirmation,
   .template-active-source,
   .check-list--inline {
@@ -8111,6 +8163,7 @@ tr:last-child td {
   .task-current-panel__main,
   .task-current-panel__checks,
   .task-row,
+  .template-topline,
   .template-usage-confirmation,
   .template-active-source,
   .template-execution-preview > div:first-child,
