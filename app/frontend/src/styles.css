@@ -405,6 +405,16 @@ a:focus-visible {
   white-space: nowrap;
 }
 
+.safety-bar__blocker {
+  max-width: clamp(180px, 24vw, 360px);
+  overflow: hidden;
+  color: #365347;
+  font-size: 12px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .safety-bar__meta-details summary {
   min-height: 32px;
   border: 1px solid var(--line);

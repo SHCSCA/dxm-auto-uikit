@@ -53,6 +53,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
   const hasBlocker = visibleBlockerGaps.length > 0
   const runtimeStatusUnavailable = Boolean(runtimeStatusError)
   const dxmLoggedIn = runtimeStatus ? dxmReadySessionStatuses.has(runtimeStatus.dxmLogin.status) : false
+  const agentActive = runtimeStatus?.agentConsole.active === true
   const tone = runtimeStatusUnavailable || l3BlocksRealSave || hasBlocker || publishGuardReasons.length > 0
     ? 'danger'
     : l2BlocksRealSave || l3NeedsApproval || workspace.source === 'mock' || workspace.evidenceGrade?.grade === 'C'
@@ -148,6 +149,23 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
     : l3NeedsApproval
       ? '等待人工确认'
       : '可启动只保存'
+  const visibleBlockerReason = selectedTaskCompleted
+    ? '任务已完成，下一步复核保存结果。'
+    : runtimeStatusUnavailable
+    ? '服务连接异常，请刷新状态或查看日志。'
+    : taskBlocksRealSave
+    ? '已有任务但未选择，请先选择任务。'
+    : configBlocksRealSave
+    ? '本次任务配置未补齐。'
+    : !dxmLoggedIn
+    ? '店小秘未登录或登录状态未确认。'
+    : l2BlocksRealSave
+    ? '真实只读检查未通过。'
+    : l3NeedsApproval
+      ? '保存前需要人工确认。'
+      : agentActive
+        ? 'Agent 正在真实浏览器中执行。'
+        : '没有阻断。'
   const primaryActionLabel = selectedTaskCompleted
     ? '查看保存结果'
     : runtimeStatusUnavailable
@@ -180,6 +198,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
       <div className="safety-bar__meta" aria-label="当前操作">
         <span className={`guard-chip guard-chip--${tone === 'danger' ? 'danger' : tone === 'warn' ? 'warn' : 'ok'}`}>{primaryStatus}</span>
         <span className="guard-chip guard-chip--ok">只保存，不发布</span>
+        <span className="safety-bar__blocker" title={visibleBlockerReason}>{visibleBlockerReason}</span>
         <button className="button button--secondary safety-bar__primary-action" type="button" onClick={handlePrimaryAction} disabled={busy}>
           {primaryActionLabel}
         </button>

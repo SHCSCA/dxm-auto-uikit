@@ -1306,6 +1306,8 @@ def test_first_screen_keeps_status_and_precheck_guidance_compact():
 
     assert "真实保存已阻断" not in safety_visible
     assert "系统状态与验收详情" not in safety_visible
+    assert "safety-bar__blocker" in safety_visible
+    assert "{visibleBlockerReason}" in safety_visible
     assert "<summary>状态详情</summary>" in safety_bar
     assert "safety-bar__details-title" in safety_bar
     assert "状态说明" in safety_bar[safety_bar.index('<details className="safety-bar__meta-details'):]
@@ -3590,6 +3592,8 @@ def test_safety_status_bar_keeps_long_guidance_inside_details_drawer():
     assert "min-height: 42px;" in safety_styles
     assert "padding: 6px 10px;" in safety_styles
     assert "gap: 10px;" in safety_styles
+    assert ".safety-bar__blocker" in styles_source
+    assert "text-overflow: ellipsis;" in styles_source
     assert "padding: 8px 12px;" not in safety_styles
 
 
