@@ -98,7 +98,7 @@ export function DxmAccessPage({
         </div>
         <div className="dxm-access-status-card__actions">
           <button className="button button--secondary" type="button" onClick={dxmLoggedIn ? onShowConsole : onOpenDxmLogin} disabled={busy}>
-            {dxmLoggedIn ? '继续到开始只保存' : '打开真实登录页'}
+            {dxmLoggedIn ? '继续到执行浏览器' : '打开真实登录页'}
           </button>
         </div>
         <details className="inline-disclosure">

@@ -19,7 +19,7 @@ export function humanOperatorMessage(message: string) {
     || normalized.includes('probe runner')
     || normalized.includes('probe resources')
   ) {
-    return '运行前检查未通过：系统还没有确认店小秘页面可以安全读取。请到“运行前检查”点击“运行真实只读检查”；通过前系统不会保存或发布。'
+    return '真实只读检查未通过：系统还没有确认店小秘页面可以安全读取。请到“执行浏览器”点击“运行真实只读检查”；通过前系统不会保存或发布。'
   }
   if (
     message.includes('L3')

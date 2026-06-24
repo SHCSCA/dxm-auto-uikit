@@ -625,7 +625,7 @@ function buildAcceptanceGaps(
       title: '缺少可交付验收报告',
       severity: 'risk' as const,
       owner: 'report',
-      detail: '结果报告需要汇总配置命中、执行步骤、证据等级和未完成缺口。',
+      detail: '结果与问题需要汇总配置命中、执行步骤、证据等级和未完成缺口。',
       evidenceLevel: 'B' as const,
     }] : []),
     {

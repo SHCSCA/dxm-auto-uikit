@@ -24,7 +24,7 @@ export function IssuesPage({ workspace, selectedTask }: IssuesPageProps) {
       title: '真实只读检查没有通过',
       what: '商品采集页和草稿箱页还没有完成只读检查。',
       why: '只读检查未通过前，系统不能确认页面安全，所以不会启动真实保存。',
-      next: `去“运行前检查”，点击“${READONLY_PRECHECK_CTA}”。`,
+      next: `去“执行浏览器”，点击“${READONLY_PRECHECK_CTA}”。`,
     },
     {
       title: '这条任务已经执行过或失败',
@@ -47,12 +47,12 @@ export function IssuesPage({ workspace, selectedTask }: IssuesPageProps) {
   ]
   const emptyExceptionDetail = selectedTask?.status === 'completed'
     ? '当前任务暂无问题记录；如需复核保存链路，请查看保存结果。'
-    : '未执行不代表通过；执行失败、字段缺失和保存阻断会进入问题处理。'
+    : '未执行不代表通过；执行失败、字段缺失和保存阻断会进入结果与问题。'
 
   return (
-    <section className="module-layout" aria-label="问题处理">
+    <section className="module-layout" aria-label="结果与问题">
       <div className="module-card span-2">
-        <ModuleHead title="问题处理" meta={`${exceptions.length} 条待处理`} />
+        <ModuleHead title="结果与问题" meta={`${exceptions.length} 条待处理`} />
         <div className="exception-list">
           {exceptions.map((item) => (
             <ExceptionCard key={item.id} item={item} />

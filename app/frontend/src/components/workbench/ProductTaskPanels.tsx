@@ -250,7 +250,7 @@ export function TaskCurrentActionPanel({
       </div>
       {showPrecheckRecoveryActions && (
         <div className="task-current-panel__precheck-actions" aria-label="真实只读检查未通过处理">
-          <span>真实只读检查没有通过，不能启动真实保存。先运行真实只读检查；如果仍失败，到“开始只保存”看日志，再查看检查计划。</span>
+          <span>真实只读检查没有通过，不能启动真实保存。先运行真实只读检查；如果仍失败，到“执行浏览器”看日志，再查看检查计划。</span>
           <div>
             <button
               className="button button--secondary"
@@ -266,7 +266,7 @@ export function TaskCurrentActionPanel({
           <details className="inline-disclosure task-current-panel__optional-actions">
             <summary>可选处理：查看阻断说明 / 查看证据缺口 / 检查计划</summary>
             <div className="next-step-actions">
-              <button className="button button--quiet" type="button" onClick={onShowConsole}>查看开始只保存</button>
+              <button className="button button--quiet" type="button" onClick={onShowConsole}>查看执行浏览器</button>
               <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
               <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">查看检查计划</button>
             </div>
@@ -646,7 +646,7 @@ function taskStartDecision({
     return {
       scope: '等待当前任务运行',
       reason: '任务正在运行，避免重复启动。',
-      next: '到“开始只保存”查看真实浏览器、日志和步骤。',
+      next: '到“执行浏览器”查看真实浏览器、日志和步骤。',
       tone: 'ok',
     }
   }
@@ -701,7 +701,7 @@ function taskStartDecision({
   return {
     scope: startLabel.includes('保存') || startLabel.includes('批准') ? '可申请单商品只保存' : '可启动当前任务',
     reason: '配置、真实只读检查和人工确认当前未阻断。',
-    next: '点击主按钮后，在“开始只保存”查看执行。',
+    next: '点击主按钮后，在“执行浏览器”查看执行。',
     tone: 'ok',
   }
 }

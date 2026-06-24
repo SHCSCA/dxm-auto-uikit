@@ -57,7 +57,7 @@ const sectionLabels: Record<WorkbenchSection, string> = {
   config_compliance: '合规海关',
   template_management: '模板管理',
   start_save: '执行浏览器',
-  preflight: '运行前检查',
+  preflight: '真实只读检查',
   real_browser: '执行浏览器',
   manual_takeover: '人工接管',
   results: '结果与问题',

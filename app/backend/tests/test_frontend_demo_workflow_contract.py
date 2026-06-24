@@ -1179,7 +1179,7 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "draft_edit_save: '采集箱编辑保存'" in shell_source
     assert "template_center: '模板中心'" in shell_source
     assert "help: '使用帮助'" in shell_source
-    assert "preflight: '运行前检查'" in shell_source
+    assert "preflight: '真实只读检查'" in shell_source
     assert "real_browser: '执行浏览器'" in shell_source
     assert "evidence: '证据归档'" in shell_source
     assert "sectionLabels[activeSection] ?? '工作台'" in shell_source
@@ -1423,7 +1423,7 @@ def test_guide_center_can_start_real_dxm_login_without_l2_gate():
     assert "打开真实登录页" in dxm_access_source
     assert "验证码完成后检测登录状态" in dxm_access_source
     assert "已登录，继续下一步" in dxm_access_source
-    assert "继续到开始只保存" in dxm_access_source
+    assert "继续到执行浏览器" in dxm_access_source
     assert "可选：打开店小秘页面或日志" in dxm_access_source
     assert "进入采集箱" in dxm_access_source
     assert "进入采集页" in dxm_access_source
@@ -2218,7 +2218,7 @@ def test_execution_console_exposes_runtime_control_and_agent_action_timeline():
     assert "setOperationNotice(result.message ?? runtimeControlSuccessMessage(action))" in app_source
     assert "data-testid=\"operation-notice\"" in app_source
     assert "runtimeStatus={runtimeStatus}" in app_source
-    assert "已启动真实只读检查，请在“开始只保存”查看实时日志。" in app_source
+    assert "已启动真实只读检查，请在“执行浏览器”查看实时日志。" in app_source
     assert ".operation-alert--ok" in styles_source
     assert "runtimeControl?: {" in types_source
     assert "owner?: 'start_mvp' | 'desktop' | 'direct' | string" in types_source
@@ -2750,8 +2750,8 @@ def test_dashboard_and_exception_gap_lists_present_l3_post_evidence_as_locked_sc
     assert "emptyExceptionDetail" in exception_section
     assert "当前任务暂无问题记录" in exception_section
     assert "请查看保存结果" in exception_section
-    assert 'aria-label="问题处理"' in exception_section
-    assert 'ModuleHead title="问题处理"' in exception_section
+    assert 'aria-label="结果与问题"' in exception_section
+    assert 'ModuleHead title="结果与问题"' in exception_section
     assert "GapList gaps={presentedAcceptanceGaps" in dashboard_section
     assert "GapList gaps={presentedAcceptanceGaps}" in exception_section
     assert "真实保存后补齐：" in source
@@ -2866,7 +2866,7 @@ def test_task_center_explains_l2_recheck_before_real_save():
     assert "运行真实只读检查" in current_panel_section
     assert "task-current-panel__optional-actions" in current_panel_section
     assert "可选处理" in current_panel_section
-    assert "查看开始只保存" in current_panel_section
+    assert "查看执行浏览器" in current_panel_section
     assert "查看证据缺口" in current_panel_section
     assert "查看检查计划" in current_panel_section
     assert "task-current-panel__actions" not in current_panel_section
@@ -2947,7 +2947,7 @@ def test_task_center_defaults_to_current_task_first_and_collapses_setup_noise():
     assert "<strong>下一步</strong>" in current_panel_section
     assert "去填写编辑页补齐 DXM 编辑页必填字段" in panels_source
     assert "${READONLY_PRECHECK_CTA}，确认商品采集页和草稿箱页均无写入风险" in panels_source
-    assert "点击主按钮后，在“开始只保存”查看执行。" in panels_source
+    assert "点击主按钮后，在“执行浏览器”查看执行。" in panels_source
     assert "先选择或创建单商品只保存任务" in current_panel_section
     assert "先选择或创建 single_save 任务" not in panels_source
     assert "默认只展示真实自动化主路径" in current_panel_section
@@ -3073,9 +3073,9 @@ def test_task_center_explains_quick_action_availability_in_first_screen():
     assert "start: blockedStartButtonLabel" in task_center_section
     assert "暂无历史任务；先创建单商品只保存任务。" in task_center_section
     assert "aria-label=\"任务按钮不可点击原因\"" in quick_actions_section
-    assert "<summary>为什么不能开始只保存</summary>" in quick_actions_section
+    assert "<summary>为什么不能启动执行浏览器</summary>" in quick_actions_section
     assert "<strong>创建任务</strong>" in quick_actions_section
-    assert "<strong>开始只保存</strong>" in quick_actions_section
+    assert "<strong>执行浏览器</strong>" in quick_actions_section
     assert "taskActionDiagnosis.create" in quick_actions_section
     assert "taskActionDiagnosis.start" in quick_actions_section
     assert ".task-quick-actions__diagnosis" in styles_source
@@ -3955,7 +3955,7 @@ def test_frontend_agent_console_initial_hud_matches_single_save_user_flow():
         app_source.index("function buildAgentConsoleHudStep"):
     ]
 
-    assert "准备开始只保存" in hud_builder
+    assert "准备执行只保存" in hud_builder
     assert "READY_FOR_SINGLE_SAVE" in hud_builder
     assert "开始任务" in hud_builder
     assert "progress_total: 12" in hud_builder
@@ -4397,7 +4397,7 @@ def test_frontend_translates_failed_execution_technical_errors_for_operators():
     assert "message.includes('network/HAR')" in copy_source
     assert "浏览器会话异常" in copy_source
     assert "请关闭当前执行浏览器，重新打开真实浏览器后再运行任务" in copy_source
-    assert "运行前检查未通过" in copy_source
+    assert "真实只读检查未通过" in copy_source
     assert "人工确认还没有完成" in copy_source
     assert "检查记录没有对齐" in copy_source
     assert "保存结果证据不完整" in copy_source
@@ -4529,7 +4529,7 @@ def test_issues_page_is_extracted_from_workbench_modules():
     issues_source = ISSUES_PAGE_TSX.read_text(encoding="utf-8")
 
     assert "export function IssuesPage" in issues_source
-    assert "aria-label=\"问题处理\"" in issues_source
+    assert "aria-label=\"结果与问题\"" in issues_source
     assert "默认问题恢复卡" in issues_source
     assert "GapList gaps={presentedAcceptanceGaps}" in issues_source
     assert "ExceptionCard" in issues_source
@@ -4546,7 +4546,7 @@ def test_dxm_access_page_is_extracted_from_workbench_modules():
     assert "aria-label=\"登录店小秘\"" in dxm_access_source
     assert "登录真实店小秘" in dxm_access_source
     assert "打开真实登录页" in dxm_access_source
-    assert "继续到开始只保存" in dxm_access_source
+    assert "继续到执行浏览器" in dxm_access_source
     assert "可选：打开店小秘页面或日志" in dxm_access_source
     assert "验证码完成后检测登录状态" in dxm_access_source
     assert "CredentialStorageFacts" in dxm_access_source

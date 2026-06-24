@@ -1882,7 +1882,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
       <div className="module-card span-3">
         <ModuleHead title="填写编辑页" meta="告诉 Agent 到店小秘编辑页怎么填，当前只展开一个分区" />
         <div className="config-template-console config-template-console--compact" aria-label="配置模板控制台">
-          <div className="config-template-console__production-status" aria-label="配置中心生产状态">
+          <div className="config-template-console__production-status" aria-label="模板中心生产状态">
             <span><b>当前使用模板</b><strong>{currentTemplateDisplayLabel}</strong></span>
             <span><b>保存状态</b><strong>{activeSectionStatusTitle}</strong></span>
             <span title={activeSectionDirty ? '执行取值：未保存的修改不会进入执行，请先保存为本次任务或店铺模板。' : '执行取值：执行会使用这些值，来自已保存配置。'}><b>执行取值</b><strong>{executionValueStatusLabel}</strong></span>
@@ -2460,7 +2460,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
     ? startLabel.includes('禁止启动')
       ? startLabel
       : `暂不能启动只保存：${startLabel}`
-    : '可开始只保存'
+    : '可启动执行浏览器'
   const taskActionDiagnosis = {
     create: quickCreateSingleSaveDisabledReason || '可创建单商品只保存任务',
     history: historyTaskHint,
@@ -2574,13 +2574,13 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
           )}
         </div>
         <details className="task-quick-actions__diagnosis inline-disclosure" aria-label="任务按钮不可点击原因">
-          <summary>为什么不能开始只保存</summary>
+          <summary>为什么不能启动执行浏览器</summary>
           <span>
             <strong>创建任务</strong>
             <small>{taskActionDiagnosis.create}</small>
           </span>
           <span>
-            <strong>开始只保存</strong>
+            <strong>执行浏览器</strong>
             <small>{taskActionDiagnosis.start}</small>
           </span>
         </details>
@@ -3052,7 +3052,7 @@ export function ExecutionConsole({
   )
 
   return (
-    <section className="agent-console-layout" aria-label="开始只保存">
+    <section className="agent-console-layout" aria-label="执行浏览器">
       {runtimeStatusError && (
         <ServiceRecoveryPanel
           runtimeStatusError={runtimeStatusError}
@@ -5735,7 +5735,7 @@ function humanEvidencePointTitle(point: EvidencePoint) {
   const normalized = raw.toUpperCase()
   const labels: Record<string, string> = {
     RELEASE_LOCK: '完成任务',
-    WRITE_REPORT: '生成结果报告',
+    WRITE_REPORT: '生成保存结果',
     VERIFY_NOT_PUBLISHED: '确认未发布',
     VERIFY_SAVE_RESULT: '确认保存成功',
     SAVE_ONLY: '点击保存',
@@ -6180,7 +6180,7 @@ function buildConsoleSteps(selectedTask: Task | null, logs: LogItem[]) {
     { title: '只读页面核验', detail: '核对真实页面、字段和证据路径', state: active ? 'current' : completed ? 'done' : 'pending' },
     { title: '只读复核', detail: '确认双目标同轮次只读证据', state: completed ? 'done' : 'pending' },
     { title: '真实保存确认', detail: '需要人工批准与明确保存回包证据', state: completed ? 'done' : 'pending' },
-    { title: '保存复盘', detail: '证明强度、问题处理、验收缺口归档', state: completed ? 'done' : 'pending' },
+    { title: '保存复盘', detail: '证明强度、失败恢复、验收缺口归档', state: completed ? 'done' : 'pending' },
   ]
 }
 

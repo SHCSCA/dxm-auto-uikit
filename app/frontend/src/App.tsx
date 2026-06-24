@@ -1421,7 +1421,7 @@ function runtimeControlSuccessMessage(action: RuntimeControlAction) {
     mark_real_task_manual_review: '已将真实写入任务转入人工复核。不会取消真实浏览器进程，请查看任务日志确认现场。',
     restart_backend: '已提交后端重启请求，请查看启动器日志。',
     restart_frontend: '已提交前端重启请求，请查看启动器日志。',
-    run_l2_readonly_probe: '已启动真实只读检查，请在“开始只保存”查看实时日志。',
+    run_l2_readonly_probe: '已启动真实只读检查，请在“执行浏览器”查看实时日志。',
   } as Record<RuntimeControlAction, string>)[action]
 }
 
@@ -1469,7 +1469,7 @@ function humanWorkspaceFetchError(message?: string) {
   ) {
     return '暂时无法读取完整任务数据。请重新打开 DXM Agent Console 免安装版；开发模式请确认后端服务正在运行。真实保存不会启动或发布。'
   }
-  return '暂时无法读取完整任务数据。请查看“开始只保存”的实时日志；系统不会用本地演示结果替代真实保存。'
+  return '暂时无法读取完整任务数据。请查看“执行浏览器”的实时日志；系统不会用本地演示结果替代真实保存。'
 }
 
 function humanRuntimeStatusError(message: string) {
@@ -1573,7 +1573,7 @@ function humanAgentConsoleError(message: string) {
     || message.includes('Target page, context or browser has been closed')
     || normalized.includes('context or browser has been closed')
   ) {
-    return `真实执行浏览器已关闭或启动后立即退出。请保留新打开的真实浏览器窗口，或关闭旧进程后回到“开始只保存”重新打开。${commonTail}`
+    return `真实执行浏览器已关闭或启动后立即退出。请保留新打开的真实浏览器窗口，或关闭旧进程后回到“执行浏览器”重新打开。${commonTail}`
   }
   if (
     normalized.includes('user data directory is already in use')
@@ -1587,7 +1587,7 @@ function humanAgentConsoleError(message: string) {
     || normalized.includes('playwright')
     || normalized.includes('chromium')
   ) {
-    return `真实执行浏览器依赖缺失或不可启动。请重新打开完整免安装目录版，并查看“开始只保存”的实时日志。${commonTail}`
+    return `真实执行浏览器依赖缺失或不可启动。请重新打开完整免安装目录版，并查看“执行浏览器”的实时日志。${commonTail}`
   }
   return message
 }
@@ -1703,7 +1703,7 @@ function isSafeDefaultFallbackTask(task: Task) {
 function buildAgentConsoleHudStep(workspace: DeliveryWorkspace, selectedTask: Task): AgentConsoleSession['hud'] {
   const storeName = String(selectedTask.payload.store_name ?? workspace.stores[0]?.name ?? '等待真实店铺')
   return {
-    title: '准备开始只保存',
+    title: '准备执行只保存',
     state: 'READY_FOR_SINGLE_SAVE',
     action: '真实浏览器已打开，等待按任务流程执行',
     next_step: '人工确认后由 Agent 输入编辑页内容并只点击保存',
@@ -1712,7 +1712,7 @@ function buildAgentConsoleHudStep(workspace: DeliveryWorkspace, selectedTask: Ta
     phase: '开始任务',
     progress_index: 1,
     progress_total: 12,
-    human_title: '准备开始只保存',
+    human_title: '准备执行只保存',
     human_action: '真实浏览器已打开，Agent 将按步骤操作店小秘编辑页',
     human_next: '人工确认后开始输入标题、选择分类、设置价格库存并只保存',
     requires_user_action: true,
