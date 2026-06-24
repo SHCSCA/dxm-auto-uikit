@@ -44,20 +44,20 @@ def test_sidebar_exposes_production_two_stage_workflow_only():
     shell = source.read_text(encoding="utf-8")
     primary_area_section = shell[shell.index("const primaryAreas"):shell.index("const sectionLabels")]
 
-    expected_labels = [
-        "首页",
-        "店小秘登录",
-        "数据采集认领",
-        "采集箱编辑保存",
-        "模板中心",
-        "执行浏览器",
-        "结果与问题",
+    expected_items = [
+        "{ id: 'home', label: '首页'",
+        "{ id: 'dxm_access', label: '店小秘登录'",
+        "{ id: 'acquisition_claim', label: '数据采集认领'",
+        "{ id: 'draft_edit_save', label: '采集箱编辑保存'",
+        "{ id: 'template_center', label: '模板中心'",
+        "{ id: 'start_save', label: '执行浏览器'",
+        "{ id: 'results', label: '结果与问题'",
+        "{ id: 'settings', label: '系统设置'",
     ]
-    for label in expected_labels:
-        assert label in primary_area_section
+    for item in expected_items:
+        assert item in primary_area_section
 
-    assert primary_area_section.count("{ id: '") == len(expected_labels)
-    for label in ["Agent 控制台", "证据中心", "异常池", "任务中心", "配置中心", "使用帮助", "问题处理", "系统设置"]:
+    for label in ["Agent 控制台", "证据中心", "异常池", "任务中心", "配置中心", "使用帮助", "问题处理"]:
         assert label not in primary_area_section
 
 
@@ -1377,9 +1377,10 @@ def test_sidebar_primary_navigation_keeps_only_user_main_path():
         "模板中心",
         "执行浏览器",
         "结果与问题",
+        "系统设置",
     ]
 
-    assert primary_area_section.count("{ id: '") == 7
+    assert primary_area_section.count("{ id: '") == 8
     for label in expected_sidebar_labels:
         assert label in primary_area_section or label in shell_source
     assert "{ id: 'acquisition_claim', label: '数据采集认领'" in primary_area_section
@@ -1394,11 +1395,11 @@ def test_sidebar_primary_navigation_keeps_only_user_main_path():
     assert "{ id: 'evidence', label: '证据归档'" not in primary_area_section
     assert "{ id: 'exceptions', label: '问题'" not in primary_area_section
     assert "{ id: 'issues', label: '问题处理'" not in primary_area_section
-    assert "{ id: 'settings', label: '系统设置'" not in primary_area_section
+    assert "{ id: 'settings', label: '系统设置'" in primary_area_section
     assert "id: 'dashboard'" not in primary_area_section
     assert "id: 'agent_execution'" not in primary_area_section
     assert "label: '更多'" not in primary_area_section
-    assert "首页 / 店小秘登录 / 数据采集认领 / 采集箱编辑保存 / 模板中心 / 执行浏览器 / 结果与问题" in shell_source
+    assert "首页 / 店小秘登录 / 数据采集认领 / 采集箱编辑保存 / 模板中心 / 执行浏览器 / 结果与问题 / 系统设置" in shell_source
     forbidden_default_labels = ["Agent Console", "L2", "L3", "probe", "HAR", "run-id"]
     for label in forbidden_default_labels:
         assert label not in primary_area_section
@@ -4242,16 +4243,18 @@ def test_sidebar_copy_names_save_only_agent_flow_without_ambiguous_browser_wordi
     assert "模板中心" in shell
     assert "执行浏览器" in shell
     assert "结果与问题" in shell
+    assert "系统设置" in shell
     assert "证据归档" not in shell[shell.index("const primaryAreas"):shell.index("const sectionLabels")]
     assert "问题处理" not in primary_area_section
     assert "使用帮助" not in primary_area_section
-    assert "系统设置" not in primary_area_section
+    assert "系统设置" in primary_area_section
     assert "帮助与设置" not in shell
     assert "数据采集认领后只保存，不发布" in shell
     assert "{ id: 'acquisition_claim', label: '数据采集认领', short: '采', hint: '从数据采集认领到采集箱' }" in shell
     assert "{ id: 'draft_edit_save', label: '采集箱编辑保存', short: '编', hint: '从采集箱打开编辑页并只保存' }" in shell
     assert "{ id: 'template_center', label: '模板中心', short: '模', hint: '管理店铺和类目模板' }" in shell
     assert "{ id: 'start_save', label: '执行浏览器', short: '执', hint: '查看真实浏览器和 Agent 执行状态' }" in shell
+    assert "{ id: 'settings', label: '系统设置', short: '设', hint: '查看运行环境、日志路径和维护设置' }" in shell
     assert "真实店小秘操作分为数据采集认领和采集箱编辑保存两段完成" in shell
 
     assert "配置 / 任务 / 真实浏览器执行" not in shell
@@ -4271,7 +4274,7 @@ def test_frontend_uses_business_sidebar_groups_and_hides_operator_diagnostics_by
     assert "id: 'prepare'" in shell
     assert "id: 'workflow'" in shell
     assert "id: 'review'" in shell
-    assert "id: 'system'" not in shell
+    assert "id: 'system'" in shell
     assert "复盘与设置" not in shell
     assert "id: 'home'" in shell
     assert "id: 'dxm_access'" in shell
@@ -4289,7 +4292,7 @@ def test_frontend_uses_business_sidebar_groups_and_hides_operator_diagnostics_by
     assert "id: 'issues'" not in primary_area_section
     assert "id: 'help'" not in primary_area_section
     assert "help: '使用帮助'" in shell
-    assert "id: 'settings'" not in primary_area_section
+    assert "id: 'settings'" in primary_area_section
     assert "settings: '系统设置'" in shell
     assert "状态详情" in safety_bar
     visible_bar = safety_bar[safety_bar.index("return ("):safety_bar.index("<details className=\"safety-bar__meta-details")]

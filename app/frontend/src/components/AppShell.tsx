@@ -37,6 +37,14 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
       { id: 'results', label: '结果与问题', short: '结', hint: '确认保存结果并按失败原因恢复' },
     ],
   },
+  {
+    id: 'system',
+    label: '系统',
+    short: '4',
+    items: [
+      { id: 'settings', label: '系统设置', short: '设', hint: '查看运行环境、日志路径和维护设置' },
+    ],
+  },
 ]
 
 const sectionLabels: Record<WorkbenchSection, string> = {
@@ -103,7 +111,7 @@ export function AppShell({
             <div>
               <strong>DXM 只保存自动化</strong>
               <span>数据采集认领后只保存，不发布</span>
-              <span className="sr-only">首页 / 店小秘登录 / 数据采集认领 / 采集箱编辑保存 / 模板中心 / 执行浏览器 / 结果与问题</span>
+              <span className="sr-only">首页 / 店小秘登录 / 数据采集认领 / 采集箱编辑保存 / 模板中心 / 执行浏览器 / 结果与问题 / 系统设置</span>
             </div>
           )}
           <button className="icon-button" type="button" onClick={onToggleSidebar} aria-label="切换侧边栏">

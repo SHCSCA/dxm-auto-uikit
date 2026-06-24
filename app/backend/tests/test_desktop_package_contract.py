@@ -345,6 +345,7 @@ def test_app_shell_presents_agent_console_as_user_first_navigation():
     assert "label: '准备'" in source
     assert "label: '两段流程'" in source
     assert "label: '复盘'" in source
+    assert "label: '系统'" in source
     assert "label: '更多'" not in source
     assert "首页" in source
     assert "店小秘登录" in source
@@ -353,7 +354,6 @@ def test_app_shell_presents_agent_console_as_user_first_navigation():
     assert "模板中心" in source
     assert "执行浏览器" in source
     assert "结果与问题" in source
-    assert "label: '系统'" not in primary_block
     assert "证据归档" not in primary_block
     assert "系统设置" in source
     assert "id: 'dashboard'" not in primary_block
