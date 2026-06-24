@@ -3,6 +3,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from src.services.config_preview import DXM_REFERENCE_LABELS, FIELD_GROUPS
+from src.services.dxm_reference_templates import REFERENCE_TEMPLATE_SECTIONS
+
 
 TemplateLike = Mapping[str, Any] | None
 
@@ -16,87 +19,57 @@ SOURCE_SCOPE_LABELS = {
 
 
 def editable_sections() -> list[dict[str, Any]]:
+    sections: list[dict[str, Any]] = []
+    for group in FIELD_GROUPS:
+        section = str(group["section"])
+        template_type = str(group["templateType"])
+        fields = _dxm_reference_fields() if section == "dxm_reference" else [
+            {
+                "key": str(field["field"]),
+                "label": str(field["label"]),
+                "required": bool(field["required"]),
+                "value_kind": _value_kind_for_field(str(field["field"])),
+            }
+            for field in group["fields"]
+        ]
+        sections.append({
+            "id": section,
+            "label": str(group["label"]),
+            "template_type": template_type,
+            "fields": fields,
+        })
+    return sections
+
+
+def _dxm_reference_fields() -> list[dict[str, Any]]:
     return [
         {
-            "id": "basis",
-            "label": "店铺与任务基础",
-            "template_type": "task_basic",
-            "fields": [
-                {"key": "store_name", "label": "店铺", "required": True, "value_kind": "text"},
-                {"key": "category_name", "label": "绑定类目", "required": True, "value_kind": "text"},
-                {"key": "claim_mark", "label": "认领标记", "required": True, "value_kind": "text"},
-            ],
-        },
-        {
-            "id": "title",
-            "label": "类目与标题",
-            "template_type": "category",
-            "fields": [
-                {"key": "title_prefix", "label": "标题前缀", "required": False, "value_kind": "text"},
-                {"key": "title_suffix", "label": "标题后缀", "required": False, "value_kind": "text"},
-                {"key": "title_cleaning_rule", "label": "标题清洗规则", "required": False, "value_kind": "text"},
-            ],
-        },
-        {
-            "id": "sku_price_stock",
-            "label": "SKU / 价格 / 库存",
-            "template_type": "sku",
-            "fields": [
-                {"key": "stock", "label": "库存", "required": False, "value_kind": "number"},
-                {"key": "price_strategy", "label": "价格策略", "required": False, "value_kind": "text"},
-                {"key": "price_multiplier", "label": "价格倍率", "required": False, "value_kind": "number"},
-            ],
-        },
-        {
-            "id": "media",
-            "label": "图片与素材",
-            "template_type": "image",
-            "fields": [
-                {"key": "main_image_policy", "label": "主图处理", "required": False, "value_kind": "text"},
-                {"key": "eu_outer_package_image", "label": "欧盟外包装图", "required": True, "value_kind": "text"},
-                {"key": "marketing_images_strategy", "label": "营销图策略", "required": False, "value_kind": "text"},
-            ],
-        },
-        {
-            "id": "logistics",
-            "label": "包装物流",
-            "template_type": "logistics",
-            "fields": [
-                {"key": "logistics_type", "label": "物流属性", "required": True, "value_kind": "text"},
-                {"key": "package_weight", "label": "包裹重量", "required": False, "value_kind": "number"},
-                {"key": "freight_template", "label": "运费模板", "required": False, "value_kind": "text"},
-            ],
-        },
-        {
-            "id": "compliance",
-            "label": "合规 / 海关",
-            "template_type": "compliance",
-            "fields": [
-                {"key": "customs_cn_name", "label": "海关中文名", "required": False, "value_kind": "text"},
-                {"key": "customs_en_name", "label": "海关英文名", "required": False, "value_kind": "text"},
-                {"key": "brand", "label": "品牌", "required": False, "value_kind": "text"},
-            ],
-        },
-        {
-            "id": "semi_managed",
-            "label": "半托管",
-            "template_type": "semi_managed",
-            "fields": [
-                {"key": "semi_managed_template", "label": "半托管模板", "required": True, "value_kind": "text"},
-                {"key": "supply_price", "label": "供货价", "required": False, "value_kind": "number"},
-            ],
-        },
-        {
-            "id": "dxm_reference",
-            "label": "店小秘引用模板",
-            "template_type": "dxm_reference",
-            "fields": [
-                {"key": "dxm_product_template_name", "label": "产品引用模板", "required": False, "value_kind": "text"},
-                {"key": "dxm_logistics_template_name", "label": "物流引用模板", "required": False, "value_kind": "text"},
-                {"key": "dxm_service_template_name", "label": "服务引用模板", "required": False, "value_kind": "text"},
-            ],
-        },
+            "key": f"dxm_reference_templates.{section}.names",
+            "label": DXM_REFERENCE_LABELS.get(section, section),
+            "required": True,
+            "value_kind": "list",
+        }
+        for section in REFERENCE_TEMPLATE_SECTIONS
     ]
+
+
+def _value_kind_for_field(field: str) -> str:
+    if field in {
+        "stock",
+        "jit_stock",
+        "normal_stock",
+        "product_price",
+        "supply_price",
+        "price_multiplier",
+        "fixed_price",
+        "weight",
+        "length",
+        "width",
+        "height",
+        "package_gross_weight",
+    }:
+        return "number"
+    return "text"
 
 
 def resolve_template(

@@ -179,8 +179,13 @@ def test_template_center_page_presents_multi_template_chinese_section_workflow()
     assert "<TemplateCenterPage" in route_section
     assert "<ConfigCenter" not in route_section
     for label in [
-        "多套模板管理与执行取值",
-        "模板清单",
+        "当前任务配置摘要",
+        "编辑页分区",
+        "当前分区表单",
+        "表单正在编辑",
+        "点击保存后才会进入真实执行",
+        "选择要编辑的模板",
+        "更多模板管理与模板清单",
         "店铺与任务基础",
         "类目与标题",
         "SKU / 价格 / 库存",
@@ -193,16 +198,31 @@ def test_template_center_page_presents_multi_template_chinese_section_workflow()
         "保存状态",
         "执行取值",
         "仅本次任务使用",
-        "设为店铺默认模板",
-        "设为类目默认模板",
+        "保存为店铺模板",
+        "保存为类目模板",
         "另存为新模板",
         "停用当前模板",
         "套用预置配置模板",
-        "当前分区 {sectionTemplates.length} 套启用模板",
+        "一次只编辑一个分区",
     ]:
         assert label in page_source
+    assert "className=\"template-section-list\"" in page_source
+    assert "className=\"template-active-source\"" in page_source
+    assert "template-library-details" in page_source
+    assert "dxm_reference_templates.attribute_info.names" in page_source
+    assert "field.value_kind === 'list'" in page_source
+    assert "function setPathValue" in page_source
+    assert ".split(/\\r?\\n|[，,；;]/)" in page_source
+    assert "本次执行会使用" not in page_source
     for forbidden in ["配置中心", "默认测试模板", "测试用", "L2", "run-id", "probe", "QA guarded product"]:
         assert forbidden not in page_source
+
+
+def test_screen_reader_only_text_cannot_intercept_sidebar_clicks():
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+    sr_only_section = styles_source[styles_source.index(".sr-only {"):styles_source.index(".icon-button {")]
+
+    assert "pointer-events: none;" in sr_only_section
 
 
 def results_page_source() -> str:

@@ -142,6 +142,7 @@ a:hover {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+  pointer-events: none;
 }
 
 .icon-button {
@@ -3188,11 +3189,52 @@ tr:last-child td {
   line-height: 1.45;
 }
 
-.template-library-panel,
+.template-section-panel,
 .template-editor-panel {
   align-content: start;
 }
 
+.template-section-list {
+  display: grid;
+  gap: 8px;
+}
+
+.template-section-list button {
+  min-height: 54px;
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.template-section-list button.is-active {
+  border-color: var(--brand);
+  background: #eaf2ff;
+}
+
+.template-section-list button strong {
+  font-size: 13px;
+}
+
+.template-section-list button span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.template-active-source {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.template-active-source label,
 .template-library-panel label {
   display: grid;
   gap: 5px;
@@ -3201,7 +3243,10 @@ tr:last-child td {
   font-weight: 800;
 }
 
+.template-active-source input,
+.template-active-source select,
 .template-library-panel input,
+.template-field-grid textarea,
 .template-field-grid input {
   width: 100%;
   min-height: 38px;
@@ -3210,6 +3255,16 @@ tr:last-child td {
   background: var(--surface);
   color: var(--text);
   padding: 0 10px;
+}
+
+.template-field-grid textarea {
+  min-height: 76px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.template-active-source select {
+  appearance: auto;
 }
 
 .template-list {
@@ -3239,6 +3294,14 @@ tr:last-child td {
   color: var(--muted);
   font-size: 12px;
   overflow-wrap: anywhere;
+}
+
+.template-library-details {
+  margin-top: 12px;
+}
+
+.template-library-details .template-list {
+  margin: 10px 0;
 }
 
 .template-section-tabs {

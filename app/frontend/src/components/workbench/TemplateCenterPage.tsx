@@ -15,44 +15,82 @@ type TemplateCenterPageProps = {
 
 const fallbackTemplateCenterMetadata: TemplateCenterMetadata = {
   sections: [
-    { id: 'basis', label: '店铺与任务基础', template_type: 'task_basic', fields: [
+    { id: 'task_basic', label: '店铺与任务基础', template_type: 'task_basic', fields: [
       { key: 'store_name', label: '店铺', required: true, value_kind: 'text' },
-      { key: 'category_name', label: '绑定类目', required: true, value_kind: 'text' },
-      { key: 'claim_mark', label: '认领标记', required: true, value_kind: 'text' },
+      { key: 'execution_mode', label: '任务模式', required: true, value_kind: 'text' },
+      { key: 'category_name', label: '绑定类目', required: false, value_kind: 'text' },
+      { key: 'claim_mark', label: '认领标记', required: false, value_kind: 'text' },
     ] },
-    { id: 'title', label: '类目与标题', template_type: 'category', fields: [
-      { key: 'title_prefix', label: '标题前缀', required: false, value_kind: 'text' },
-      { key: 'title_suffix', label: '标题后缀', required: false, value_kind: 'text' },
+    { id: 'category', label: '类目与标题', template_type: 'category', fields: [
+      { key: 'category_name', label: '目标类目', required: false, value_kind: 'text' },
+      { key: 'template_category_id', label: '目标类目 ID', required: false, value_kind: 'text' },
+      { key: 'category_keyword', label: '类目关键词', required: true, value_kind: 'text' },
+      { key: 'title_strategy', label: '标题策略', required: false, value_kind: 'text' },
+      { key: 'title_override', label: '标题覆盖值', required: false, value_kind: 'text' },
       { key: 'title_cleaning_rule', label: '标题清洗规则', required: false, value_kind: 'text' },
     ] },
-    { id: 'sku_price_stock', label: 'SKU / 价格 / 库存', template_type: 'sku', fields: [
+    { id: 'sku', label: 'SKU / 价格 / 库存', template_type: 'sku', fields: [
+      { key: 'sku_code', label: 'SKU 编码', required: false, value_kind: 'text' },
       { key: 'stock', label: '库存', required: false, value_kind: 'number' },
-      { key: 'price_strategy', label: '价格策略', required: false, value_kind: 'text' },
-      { key: 'price_multiplier', label: '价格倍率', required: false, value_kind: 'number' },
+      { key: 'jit_stock', label: 'JIT 库存', required: false, value_kind: 'number' },
+      { key: 'normal_stock', label: '普通库存', required: false, value_kind: 'number' },
+      { key: 'template_sku_rule', label: 'SKU 规则', required: false, value_kind: 'text' },
+      { key: 'sku_attribute_strategy', label: 'SKU 属性策略', required: false, value_kind: 'text' },
+      { key: 'variant_strategy', label: '变体处理策略', required: false, value_kind: 'text' },
     ] },
-    { id: 'media', label: '图片与素材', template_type: 'image', fields: [
-      { key: 'main_image_policy', label: '主图处理', required: false, value_kind: 'text' },
-      { key: 'eu_outer_package_image', label: '欧盟外包装图', required: true, value_kind: 'text' },
-      { key: 'marketing_images_strategy', label: '营销图策略', required: false, value_kind: 'text' },
+    { id: 'pricing', label: '价格策略', template_type: 'pricing', fields: [
+      { key: 'product_price', label: '商品价', required: false, value_kind: 'number' },
+      { key: 'supply_price', label: '供货价', required: false, value_kind: 'number' },
+      { key: 'price_source', label: '价格来源', required: false, value_kind: 'text' },
+      { key: 'price_multiplier', label: '价格倍率', required: false, value_kind: 'number' },
+      { key: 'fixed_price', label: '固定价', required: false, value_kind: 'number' },
+      { key: 'price_strategy', label: '价格策略', required: false, value_kind: 'text' },
+    ] },
+    { id: 'image', label: '图片与素材', template_type: 'image', fields: [
+      { key: 'eu_outer_package_filename', label: 'EU 外包装图', required: true, value_kind: 'text' },
+      { key: 'marketing_images_strategy', label: '营销图策略', required: true, value_kind: 'text' },
+      { key: 'main_image_strategy', label: '主图策略', required: false, value_kind: 'text' },
+      { key: 'fallback_strategy', label: '图片不足 fallback', required: false, value_kind: 'text' },
+      { key: 'invalid_image_strategy', label: '无效图片处理', required: false, value_kind: 'text' },
+      { key: 'local_asset_path', label: '本地素材路径', required: false, value_kind: 'text' },
     ] },
     { id: 'logistics', label: '包装物流', template_type: 'logistics', fields: [
-      { key: 'logistics_type', label: '物流属性', required: true, value_kind: 'text' },
-      { key: 'package_weight', label: '包裹重量', required: false, value_kind: 'number' },
+      { key: 'weight', label: '重量 kg', required: true, value_kind: 'number' },
+      { key: 'length', label: '长 cm', required: true, value_kind: 'number' },
+      { key: 'width', label: '宽 cm', required: true, value_kind: 'number' },
+      { key: 'height', label: '高 cm', required: true, value_kind: 'number' },
+      { key: 'logistics_attribute', label: '物流属性', required: false, value_kind: 'text' },
       { key: 'freight_template', label: '运费模板', required: false, value_kind: 'text' },
+      { key: 'service_template', label: '服务模板', required: false, value_kind: 'text' },
+      { key: 'package_gross_weight', label: '包装毛重', required: false, value_kind: 'number' },
     ] },
     { id: 'compliance', label: '合规 / 海关', template_type: 'compliance', fields: [
-      { key: 'customs_cn_name', label: '海关中文名', required: false, value_kind: 'text' },
-      { key: 'customs_en_name', label: '海关英文名', required: false, value_kind: 'text' },
+      { key: 'customs_name', label: '报关品名', required: false, value_kind: 'text' },
+      { key: 'material', label: '材质', required: false, value_kind: 'text' },
+      { key: 'purpose', label: '用途', required: false, value_kind: 'text' },
       { key: 'brand', label: '品牌', required: false, value_kind: 'text' },
+      { key: 'statement', label: '合规声明', required: false, value_kind: 'text' },
     ] },
     { id: 'semi_managed', label: '半托管', template_type: 'semi_managed', fields: [
-      { key: 'semi_managed_template', label: '半托管模板', required: true, value_kind: 'text' },
+      { key: 'product_price', label: '商品价', required: false, value_kind: 'number' },
       { key: 'supply_price', label: '供货价', required: false, value_kind: 'number' },
+      { key: 'jit_stock', label: 'JIT 库存', required: true, value_kind: 'number' },
+      { key: 'is_original_box', label: '是否原包装', required: true, value_kind: 'text' },
+      { key: 'length', label: '半托管长 cm', required: true, value_kind: 'number' },
+      { key: 'width', label: '半托管宽 cm', required: true, value_kind: 'number' },
+      { key: 'height', label: '半托管高 cm', required: true, value_kind: 'number' },
+      { key: 'goods_code_strategy', label: '货号策略', required: true, value_kind: 'text' },
+      { key: 'barcode_strategy', label: '条码策略', required: true, value_kind: 'text' },
     ] },
     { id: 'dxm_reference', label: '店小秘引用模板', template_type: 'dxm_reference', fields: [
-      { key: 'dxm_product_template_name', label: '产品引用模板', required: false, value_kind: 'text' },
-      { key: 'dxm_logistics_template_name', label: '物流引用模板', required: false, value_kind: 'text' },
-      { key: 'dxm_service_template_name', label: '服务引用模板', required: false, value_kind: 'text' },
+      { key: 'dxm_reference_templates.attribute_info.names', label: '属性信息模板', required: true, value_kind: 'list' },
+      { key: 'dxm_reference_templates.description.names', label: '描述模板', required: true, value_kind: 'list' },
+      { key: 'dxm_reference_templates.freight.names', label: '运费模板', required: true, value_kind: 'list' },
+      { key: 'dxm_reference_templates.service.names', label: '服务模板', required: true, value_kind: 'list' },
+      { key: 'dxm_reference_templates.eu_responsible.names', label: '欧盟责任人', required: true, value_kind: 'list' },
+      { key: 'dxm_reference_templates.manufacturer.names', label: '制造商', required: true, value_kind: 'list' },
+      { key: 'dxm_reference_templates.compliance.names', label: '合规模板', required: true, value_kind: 'list' },
+      { key: 'dxm_reference_templates.semi_managed.names', label: '半托管模板', required: true, value_kind: 'list' },
     ] },
   ],
   source_priority: ['本次任务覆盖', '手动选择模板', '类目默认模板', '店铺默认模板', '系统默认模板', '商品原始数据'],
@@ -85,12 +123,29 @@ export function TemplateCenterPage({
   const currentStore = selectedTask?.payload?.store_name || workspace.stores.find((store) => store.id === selectedTask?.store_id)?.name || workspace.stores[0]?.name || '未选择店铺'
   const currentCategory = selectedProduct?.category_name || selectedTask?.payload?.category_name || '未选择类目'
   const bindingScope = `${currentStore} / ${currentCategory} / AliExpress`
+  const activeTemplateName = activeTemplate?.template_name || templateName || '未选择模板'
   const previewGroup = configPreview?.fieldGroups.find((group) => group.templateType === activeSection.template_type || group.section === activeSection.template_type)
   const executionStatus = configPreviewLoading
     ? '正在检查执行取值'
     : configPreview?.ok
       ? '执行取值已就绪'
       : configPreviewError || '存在缺失字段'
+  const sectionSummaries = useMemo(
+    () => metadata.sections.map((section) => {
+      const templates = workspace.templates.filter((template) => template.template_type === section.template_type && template.is_enabled).length
+      const requiredFields = section.fields.filter((field) => field.required).length
+      const filledRequiredFields = section.fields.filter((field) => field.required && templateFieldValue(
+        workspace.templates.find((template) => template.template_type === section.template_type && template.is_enabled) ?? null,
+        section,
+        field.key,
+      ).trim()).length
+      return { section, templates, requiredFields, filledRequiredFields }
+    }),
+    [metadata.sections, workspace.templates],
+  )
+  const activeFilledCount = activeSection.fields.filter((field) => String(draftValues[field.key] ?? '').trim()).length
+  const activeRequiredCount = activeSection.fields.filter((field) => field.required).length
+  const activeFilledRequiredCount = activeSection.fields.filter((field) => field.required && String(draftValues[field.key] ?? '').trim()).length
 
   useEffect(() => {
     void getJsonOrDefault<TemplateCenterMetadata>('/api/template-center/metadata', fallbackTemplateCenterMetadata).then(setMetadata)
@@ -190,69 +245,65 @@ export function TemplateCenterPage({
         <div className="module-head">
           <div>
             <span className="eyebrow">模板中心</span>
-            <h2>多套模板管理与执行取值</h2>
-            <p>按店小秘编辑页分区维护模板。执行前请确认当前任务使用哪套模板、是否已保存、最终会填写哪些值。</p>
+            <h2>当前任务配置摘要</h2>
+            <p>按店小秘编辑页分区维护多套模板。执行前只确认三件事：当前任务用哪套模板、修改是否已保存、最终会填写哪些值。</p>
           </div>
           <button className="button button--primary" type="button" onClick={onShowDraftEdit}>回到采集箱编辑保存</button>
         </div>
         <div className="status-grid">
-          <span><strong>当前模板</strong><b>{activeTemplate?.template_name || templateName || '未选择模板'}</b></span>
+          <span><strong>当前任务</strong><b>{selectedTask?.name || '尚未选择保存任务'}</b></span>
+          <span><strong>当前分区</strong><b>{activeSection.label}</b></span>
+          <span><strong>表单正在编辑</strong><b>{activeTemplateName}</b></span>
           <span><strong>保存状态</strong><b>{saveState.status}</b></span>
           <span><strong>执行取值</strong><b>{executionStatus}</b></span>
         </div>
-        <small className="template-center-receipt">{saveState.detail}</small>
+        <small className="template-center-receipt">{saveState.detail} 选择或修改模板只会影响当前表单，点击保存后才会进入真实执行。</small>
       </div>
 
-      <div className="module-card span-1 template-library-panel">
+      <div className="module-card span-1 template-section-panel">
         <div className="module-head">
-          <h2>模板清单</h2>
-          <span>{workspace.templates.length} 套模板 / 当前分区 {sectionTemplates.length} 套启用模板</span>
+          <h2>编辑页分区</h2>
+          <span>一次只编辑一个分区</span>
         </div>
-        <label>
-          <span>模板名称</span>
-          <input value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="例如 Dang Kang 立牌类目模板" />
-        </label>
-        <div className="template-list">
-          {sectionTemplates.length ? sectionTemplates.map((template) => (
+        <div className="template-section-list" aria-label="店小秘编辑页分区">
+          {sectionSummaries.map(({ section, templates, requiredFields, filledRequiredFields }) => (
             <button
-              key={template.id}
+              key={section.id}
               type="button"
-              className={String(template.id) === String(activeTemplate?.id) ? 'is-selected' : ''}
-              onClick={() => setSelectedTemplateId(String(template.id))}
+              className={section.id === activeSection.id ? 'is-active' : ''}
+              onClick={() => setActiveSectionId(section.id)}
             >
-              <strong>{template.template_name}</strong>
-              <span>{template.binding_scope}</span>
+              <strong>{section.label}</strong>
+              <span>{templates} 套模板 · 必填 {filledRequiredFields}/{requiredFields || 0}</span>
             </button>
-          )) : (
-            <div className="empty-state">
-              <strong>当前分区还没有模板</strong>
-              <span>可套用预置配置模板后另存，或直接填写字段保存。</span>
-            </div>
-          )}
+          ))}
         </div>
       </div>
 
       <div className="module-card span-2 template-editor-panel">
-        <div className="template-section-tabs" role="tablist" aria-label="店小秘编辑页分区">
-          {metadata.sections.map((section) => (
-            <button
-              key={section.id}
-              type="button"
-              role="tab"
-              aria-selected={section.id === activeSection.id}
-              className={section.id === activeSection.id ? 'is-active' : ''}
-              onClick={() => setActiveSectionId(section.id)}
-            >
-              {section.label}
-            </button>
-          ))}
-        </div>
-
         <div className="module-head">
           <div>
+            <span className="eyebrow">当前分区表单</span>
             <h2>{activeSection.label}</h2>
-            <span>范围：{bindingScope}</span>
+            <span>范围：{bindingScope} · 已填写 {activeFilledCount}/{activeSection.fields.length}，必填 {activeFilledRequiredCount}/{activeRequiredCount || 0}</span>
           </div>
+        </div>
+
+        <div className="template-active-source" aria-label="当前模板选择">
+          <label>
+            <span>选择要编辑的模板</span>
+            <select value={activeTemplate ? String(activeTemplate.id) : ''} onChange={(event) => setSelectedTemplateId(event.target.value)} disabled={!sectionTemplates.length}>
+              {sectionTemplates.length ? sectionTemplates.map((template) => (
+                <option value={String(template.id)} key={template.id}>{template.template_name}</option>
+              )) : (
+                <option value="">当前分区暂无模板</option>
+              )}
+            </select>
+          </label>
+          <label>
+            <span>模板名称</span>
+            <input value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="例如 Dang Kang 立牌类目模板" />
+          </label>
           <button className="button button--quiet" type="button" onClick={applyDefaultTemplate}>套用预置配置模板</button>
         </div>
 
@@ -262,11 +313,20 @@ export function TemplateCenterPage({
             return (
               <label key={field.key}>
                 <span>{field.label}{field.required ? ' *' : ''}</span>
-                <input
-                  value={draftValues[field.key] ?? ''}
-                  onChange={(event) => updateValue(field.key, event.target.value)}
-                  placeholder={`填写${field.label}`}
-                />
+                {field.value_kind === 'list' ? (
+                  <textarea
+                    value={draftValues[field.key] ?? ''}
+                    onChange={(event) => updateValue(field.key, event.target.value)}
+                    placeholder={`每行填写一个${field.label}`}
+                    rows={3}
+                  />
+                ) : (
+                  <input
+                    value={draftValues[field.key] ?? ''}
+                    onChange={(event) => updateValue(field.key, event.target.value)}
+                    placeholder={`填写${field.label}`}
+                  />
+                )}
                 <small>{previewField ? `执行取值：${formatValue(previewField.value)} / ${previewField.source}` : '执行取值：等待配置检查'}</small>
               </label>
             )
@@ -275,11 +335,33 @@ export function TemplateCenterPage({
 
         <div className="action-row">
           <button className="button button--secondary" type="button" onClick={() => { void saveForTask() }} disabled={!selectedTask}>仅本次任务使用</button>
-          <button className="button button--primary" type="button" onClick={() => { void saveAsDefaultTemplate('store') }}>设为店铺默认模板</button>
-          <button className="button button--primary" type="button" onClick={() => { void saveAsDefaultTemplate('category') }}>设为类目默认模板</button>
+          <button className="button button--primary" type="button" onClick={() => { void saveAsDefaultTemplate('store') }}>保存为店铺模板</button>
+          <button className="button button--primary" type="button" onClick={() => { void saveAsDefaultTemplate('category') }}>保存为类目模板</button>
           <button className="button button--quiet" type="button" onClick={() => { void saveAsDefaultTemplate('category', true) }}>另存为新模板</button>
-          <button className="button button--quiet" type="button" onClick={() => { void disableCurrentTemplate() }} disabled={!activeTemplate}>停用当前模板</button>
         </div>
+
+        <details className="inline-disclosure template-library-details">
+          <summary>更多模板管理与模板清单（共 {workspace.templates.length} 套）</summary>
+          <div className="template-list">
+            {sectionTemplates.length ? sectionTemplates.map((template) => (
+              <button
+                key={template.id}
+                type="button"
+                className={String(template.id) === String(activeTemplate?.id) ? 'is-selected' : ''}
+                onClick={() => setSelectedTemplateId(String(template.id))}
+              >
+                <strong>{template.template_name}</strong>
+                <span>{template.binding_scope}</span>
+              </button>
+            )) : (
+              <div className="empty-state">
+                <strong>当前分区还没有模板</strong>
+                <span>可套用预置配置模板后另存，或直接填写字段保存。</span>
+              </div>
+            )}
+          </div>
+          <button className="button button--quiet" type="button" onClick={() => { void disableCurrentTemplate() }} disabled={!activeTemplate}>停用当前模板</button>
+        </details>
 
         <details className="inline-disclosure">
           <summary>执行取值优先级</summary>
@@ -300,20 +382,34 @@ function selectedTaskProduct(workspace: DeliveryWorkspace, selectedTask: Task | 
 function templateFieldValue(template: Template | null, section: TemplateCenterSection, key: string) {
   const payload = template?.payload || {}
   const grouped = payload[section.template_type]
-  if (isRecord(grouped) && grouped[key] != null) return String(grouped[key])
-  if (payload[key] != null) return String(payload[key])
+  if (isRecord(grouped)) {
+    const groupedValue = pathValue(grouped, key)
+    if (groupedValue != null) return draftValueText(groupedValue)
+    if (grouped[key] != null) return draftValueText(grouped[key])
+  }
+  const payloadValue = pathValue(payload, key)
+  if (payloadValue != null) return draftValueText(payloadValue)
+  if (payload[key] != null) return draftValueText(payload[key])
   return ''
 }
 
 function parseSectionValues(section: TemplateCenterSection, values: Record<string, string>) {
-  return Object.fromEntries(section.fields.map((field) => {
+  const parsed: Record<string, unknown> = {}
+  for (const field of section.fields) {
     const raw = values[field.key] ?? ''
+    let value: unknown = raw
     if (field.value_kind === 'number') {
       const numberValue = Number(raw)
-      return [field.key, Number.isFinite(numberValue) && raw.trim() !== '' ? numberValue : raw]
+      value = Number.isFinite(numberValue) && raw.trim() !== '' ? numberValue : raw
+    } else if (field.value_kind === 'list') {
+      value = raw
+        .split(/\r?\n|[，,；;]/)
+        .map((item) => item.trim())
+        .filter(Boolean)
     }
-    return [field.key, raw]
-  }))
+    setPathValue(parsed, field.key, value)
+  }
+  return parsed
 }
 
 function defaultBinding(scope: 'store' | 'category', storeName: string, categoryName: string) {
@@ -334,14 +430,42 @@ function defaultValuesForSection(section: TemplateCenterSection) {
 function defaultValueForField(label: string) {
   const defaults: Record<string, string> = {
     店铺: 'Dang Kang',
+    任务模式: '单商品只保存',
     绑定类目: '立牌类谷子',
+    目标类目: '立牌类谷子',
+    类目关键词: '立牌',
     认领标记: 'AI-OPS',
-    主图处理: '保留合格 800x800 主图，异常图自动修复',
-    欧盟外包装图: 'template-eu.jpg',
+    库存: '200',
+    'JIT 库存': '100',
+    普通库存: '100',
+    商品价: '7.99',
+    供货价: '5.20',
+    'EU 外包装图': '微信图片_202504092228421.jpg',
+    营销图策略: '使用商品图补齐 3:4',
+    主图策略: '保留合格 800x800 主图，异常图自动修复',
+    重量: '0.03',
+    '重量 kg': '0.03',
+    '长 cm': '10',
+    '宽 cm': '10',
+    '高 cm': '2',
     物流属性: '普货',
-    半托管模板: 'SMT 半托管只保存模板',
-    海关中文名: '亚克力立牌',
-    海关英文名: 'Acrylic stand',
+    报关品名: 'Acrylic stand',
+    材质: 'Acrylic',
+    用途: 'Decoration',
+    是否原包装: '否',
+    '半托管长 cm': '10',
+    '半托管宽 cm': '10',
+    '半托管高 cm': '2',
+    货号策略: '使用 SKU',
+    条码策略: '留空',
+    属性信息模板: '立牌类谷子属性模板',
+    描述模板: '详情描述模板-ACG立牌',
+    运费模板: '石油40g普货包裹.\n40g普货包裹',
+    服务模板: 'Service Template for New Sellers',
+    欧盟责任人: 'Jacqueiline Marti',
+    制造商: 'jiyang county thunder\nJiyang County thunder',
+    合规模板: '合规模板\n钥匙扣\nkeychain',
+    半托管模板: '半托管模板',
   }
   return defaults[label] ?? ''
 }
@@ -359,4 +483,33 @@ function formatValue(value: unknown) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function pathValue(payload: Record<string, unknown>, path: string) {
+  let current: unknown = payload
+  for (const part of path.split('.')) {
+    if (!isRecord(current)) return undefined
+    current = current[part]
+  }
+  return current
+}
+
+function draftValueText(value: unknown) {
+  if (Array.isArray(value)) return value.join('\n')
+  if (value == null) return ''
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
+function setPathValue(target: Record<string, unknown>, path: string, value: unknown) {
+  const parts = path.split('.')
+  let current = target
+  for (const part of parts.slice(0, -1)) {
+    const existing = current[part]
+    if (!isRecord(existing)) {
+      current[part] = {}
+    }
+    current = current[part] as Record<string, unknown>
+  }
+  current[parts[parts.length - 1]] = value
 }

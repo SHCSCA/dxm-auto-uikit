@@ -1,3 +1,5 @@
+from src.services.config_preview import FIELD_GROUPS
+from src.services.dxm_reference_templates import REFERENCE_TEMPLATE_SECTIONS
 from src.services.template_center import editable_sections, resolve_template
 
 
@@ -54,8 +56,29 @@ def test_template_fields_have_chinese_labels_and_store_edit_page_sections():
     ]:
         assert required_section in section_labels
 
-    for required_label in ["店铺", "绑定类目", "认领标记", "主图处理", "物流属性", "海关中文名", "半托管模板"]:
+    for required_label in ["店铺", "绑定类目", "认领标记", "主图策略", "物流属性", "报关品名", "半托管模板"]:
         assert required_label in labels
 
     assert all("_" not in field["label"] for section in sections for field in section["fields"])
     assert all(field["key"] for section in sections for field in section["fields"])
+
+
+def test_template_center_fields_match_config_preview_execution_fields():
+    sections = {section["template_type"]: section for section in editable_sections()}
+
+    for group in FIELD_GROUPS:
+        template_type = group["templateType"]
+        assert template_type in sections
+        if template_type == "dxm_reference":
+            continue
+        template_keys = {field["key"] for field in sections[template_type]["fields"]}
+        preview_fields = {field["field"] for field in group["fields"]}
+        assert preview_fields.issubset(template_keys)
+
+
+def test_template_center_exposes_all_dxm_reference_template_sections():
+    sections = {section["template_type"]: section for section in editable_sections()}
+    reference_keys = {field["key"] for field in sections["dxm_reference"]["fields"]}
+
+    for section in REFERENCE_TEMPLATE_SECTIONS:
+        assert f"dxm_reference_templates.{section}.names" in reference_keys
