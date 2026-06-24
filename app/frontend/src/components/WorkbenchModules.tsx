@@ -1810,7 +1810,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
             <span className={`status-pill ${configPreview?.ok ? 'ok' : 'warn'}`}>
               {configPreview?.ok ? '可用于当前任务' : `${incompleteGroups.length || sectionsBlockingStart.length} 个分区待补`}
             </span>
-            <small>{selectedTask ? `当前任务 #${selectedTask.id}` : '先到“选择商品”选择任务后，可保存为本次任务覆盖。'}</small>
+            <small>{selectedTask ? `当前任务 #${selectedTask.id}` : '先到“采集箱只保存”创建任务后，可保存为本次任务覆盖。'}</small>
             {configPreview?.ok && advisoryGapCount > 0 && <small>{advisoryGapCount} 个分区有辅助字段待补</small>}
             <small>当前模板范围：{currentTemplateScopeLabel}</small>
           </div>
@@ -1824,7 +1824,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
           <div className="config-precheck-action__buttons">
             {!selectedTask && (
               <button className="button button--primary" type="button" onClick={onShowTasks}>
-                去选择商品
+                去采集箱只保存
               </button>
             )}
             <button
@@ -2376,10 +2376,10 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
     ? '正在处理当前操作，请稍候。'
     : !selectedStore
       ? '请选择真实店铺。'
-      : selectedDraftProducts.length === 0
-        ? '请先选择 1 个商品后再创建单商品只保存任务。'
+    : selectedDraftProducts.length === 0
+        ? '请先选择 1 个采集箱商品后再创建只保存任务。'
         : selectedDraftProducts.length !== 1
-        ? `单商品只保存一次只能选 1 个商品；当前已选 ${selectedDraftProducts.length} 个。`
+        ? `采集箱只保存一次只能选 1 个商品；当前已选 ${selectedDraftProducts.length} 个。`
         : storeBlocksSingleSave
           ? '当前版本仅放行 Dang Kang；其它店铺需联系管理员完成店铺放行配置。'
           : ''
@@ -2420,7 +2420,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
       : selectedTask.status === 'running'
         ? '任务运行中'
         : selectedTask.status === 'failed'
-          ? '重新创建单商品只保存任务'
+          ? '重新创建采集箱只保存任务'
         : selectedTask.status !== 'draft'
           ? '任务非草稿，禁止启动'
           : selectedTaskIsUnreleasedRealMode
@@ -2456,14 +2456,14 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
       : `还有 ${hiddenTaskCount} 个历史任务可展开。`
     : workspace.tasks.length
       ? '当前已显示可用任务。'
-      : '暂无历史任务；先创建单商品只保存任务。'
+      : '暂无历史任务；先从数据采集认领，再创建采集箱只保存任务。'
   const blockedStartButtonLabel = startDisabled
     ? startLabel.includes('禁止启动')
       ? startLabel
       : `暂不能启动只保存：${startLabel}`
     : '可启动浏览器现场'
   const taskActionDiagnosis = {
-    create: quickCreateSingleSaveDisabledReason || '可创建单商品只保存任务',
+    create: quickCreateSingleSaveDisabledReason || '可创建采集箱只保存任务',
     history: historyTaskHint,
     start: blockedStartButtonLabel,
   }
@@ -2513,14 +2513,14 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
   }
 
   return (
-    <section className="module-layout" aria-label="选择商品">
-      <div className="module-card span-1 task-quick-actions" aria-label="选择商品主操作">
-        <ModuleHead title="选择商品" meta="首屏只处理任务选择" />
-        <div className="task-product-selection" aria-label="选择商品">
+    <section className="module-layout" aria-label="任务与记录">
+      <div className="module-card span-1 task-quick-actions" aria-label="采集箱只保存主操作">
+        <ModuleHead title="从采集箱创建只保存" meta="首屏只处理第二段保存任务" />
+        <div className="task-product-selection" aria-label="选择采集箱商品">
           <div className="task-product-selection__head">
-            <span>选择商品</span>
-            <strong>{selectedDraftProducts[0]?.title ?? '请先选择 1 个商品'}</strong>
-            <small>当前交付只允许单商品只保存；点击候选会替换本次选择，不会启动批量、发布或无人值守。</small>
+            <span>采集箱商品</span>
+            <strong>{selectedDraftProducts[0]?.title ?? '请先选择 1 个采集箱商品'}</strong>
+            <small>当前交付只允许从采集箱商品创建只保存任务；点击候选会替换本次选择，不会启动批量、发布或无人值守。</small>
           </div>
           <label className="task-product-selection__store">
             <span>店铺</span>
@@ -2552,7 +2552,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
           </div>
           {uniqueProductOptions.length > primaryProductCandidates.length && (
             <small className="task-product-selection__more">
-              还有 {uniqueProductOptions.length - primaryProductCandidates.length} 个商品在下方“查看更多商品”里；本次只选择 1 个商品创建任务。
+              还有 {uniqueProductOptions.length - primaryProductCandidates.length} 个商品在下方“查看更多商品”里；本次只选择 1 个采集箱商品创建任务。
             </small>
           )}
         </div>
@@ -2566,7 +2566,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
             title={quickCreateSingleSaveDisabledReason || undefined}
             data-testid="task-quick-create-single-save"
           >
-            创建单商品只保存任务
+            创建采集箱只保存任务
           </button>
           {quickCreateSingleSaveDisabledReason && (
             <small id="task-quick-create-single-save-reason" className="task-quick-actions__reason">
@@ -2588,7 +2588,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
         <div className="task-quick-actions__status">
           <span>当前任务</span>
           <strong>{selectedTask ? displayTaskName(selectedTask) : '未选择任务'}</strong>
-          <small>{selectedTask ? `${humanTaskModeLabel(selectedTask.mode)} / ${humanTaskStatus(selectedTask.status)}` : '先创建单商品只保存任务'}</small>
+          <small>{selectedTask ? `${humanTaskModeLabel(selectedTask.mode)} / ${humanTaskStatus(selectedTask.status)}` : '先从数据采集认领，再创建采集箱只保存任务'}</small>
         </div>
         <p>
           {!quickCreateSingleSaveDisabledReason
@@ -2702,7 +2702,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
         </summary>
         <div className="task-support-drawer__content">
           <details className="inline-disclosure task-create-drawer">
-            <summary>创建真实任务</summary>
+            <summary>创建采集箱只保存任务</summary>
             <div className="real-task-card" aria-label="创建真实任务" data-publish-scene="SMT_SEMI_MANAGED_SAVE_ONLY">
               <div className="real-task-card__head">
                 <div>
@@ -2741,10 +2741,10 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
               )}
               {singleSaveProductCountInvalid && (
                 <div className="guard-note guard-note--warn">
-                  单商品只保存一次只能选择 1 个商品；当前已选 {selectedDraftProducts.length} 个。保存前安全检查可多选，真实保存请保留 1 个商品。
+                  采集箱只保存一次只能选择 1 个商品；当前已选 {selectedDraftProducts.length} 个。保存前安全检查可多选，真实保存请保留 1 个商品。
                 </div>
               )}
-              <div className="real-task-products" aria-label="选择商品">
+              <div className="real-task-products" aria-label="选择采集箱商品">
                 {uniqueProductOptions.slice(0, 6).map((product) => (
                   <label key={product.id} className="real-task-product">
                     <input
@@ -2771,7 +2771,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
                 >
                   创建真实任务
                 </button>
-                <span className="toolbar-note">{selectedDraftProducts.length ? `已选择 ${selectedDraftProducts.length} 个商品` : '先选择商品'}</span>
+                <span className="toolbar-note">{selectedDraftProducts.length ? `已选择 ${selectedDraftProducts.length} 个采集箱商品` : '先选择采集箱商品'}</span>
               </div>
             </div>
             {demoEnabled && (
@@ -2822,7 +2822,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
                 </button>
               ))}
               {!workspace.tasks.length && (
-                <EmptyState title="暂无真实任务" detail={demoEnabled ? '开发模式可创建本地自检批次；普通使用请先导入商品并创建单商品只保存任务。' : '请先导入商品并创建单商品只保存任务，普通模式不展示本地自检入口。'} />
+                <EmptyState title="暂无真实任务" detail={demoEnabled ? '开发模式可创建本地自检批次；普通使用请先从数据采集认领商品，再创建采集箱只保存任务。' : '请先从数据采集认领商品，再创建采集箱只保存任务，普通模式不展示本地自检入口。'} />
               )}
             </div>
           </details>
@@ -3338,7 +3338,7 @@ function AgentStagePanel({
             <summary>查看阻断详情</summary>
             <span>{realSaveBlockReason}</span>
             <div className="next-step-actions">
-              <button className="button button--secondary" type="button" onClick={onShowTasks}>回到选择商品</button>
+              <button className="button button--secondary" type="button" onClick={onShowTasks}>回到采集箱只保存</button>
               <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看只读评审与检查计划</button>
               <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
             </div>
@@ -3391,7 +3391,7 @@ function ConsoleCompletedReviewPanel({
       <div className="console-review-panel__body">
         <div>
           <strong>下一步只复核结果</strong>
-          <span>查看保存结果、未发布证明和真实浏览器记录；如要处理新商品，回到选择商品创建新任务。</span>
+          <span>查看保存结果、未发布证明和真实浏览器记录；如要处理新商品，先做数据采集认领，再回到采集箱只保存创建新任务。</span>
         </div>
         <div className="console-review-panel__facts">
           <span><b>结果</b><strong>优先查看</strong></span>
@@ -5238,7 +5238,7 @@ export function EvidenceTimeline({
               detail="当前真实保存未放行时，保存结果、未发布证明和保存回包为 0 条是预期阻断；只有单商品只保存完成后才生成可验收证据等级。"
               actions={(
                 <>
-                  <button className="button button--secondary" type="button" onClick={onShowTasks}>查看选择商品门禁</button>
+                  <button className="button button--secondary" type="button" onClick={onShowTasks}>查看任务门禁</button>
                   <button className="button button--quiet" type="button" onClick={onShowConsole}>查看真实只读证据</button>
                 </>
               )}
@@ -5326,7 +5326,7 @@ function buildConsolePrimaryPath({
       code: 'select_task',
       title: '需要选择任务',
       reason: '当前没有选中的数据采集认领或采集箱编辑保存任务。',
-      detail: '先从数据采集创建认领任务；认领进采集箱后，再创建单商品只保存任务。',
+      detail: '先从数据采集创建认领任务；认领进采集箱后，再创建采集箱只保存任务。',
       next: '去数据采集认领',
       ctaLabel: '去数据采集认领',
       action: 'tasks',
@@ -5342,7 +5342,7 @@ function buildConsolePrimaryPath({
       title: claimCompleted ? '采集认领完成' : '保存成功',
       reason: '当前任务已完成。',
       detail: claimCompleted
-        ? '商品已进入采集箱；下一步到“采集箱编辑保存”创建单商品只保存任务。'
+        ? '商品已进入采集箱；下一步到“采集箱只保存”创建只保存任务。'
         : '继续复核保存结果、未发布证明、日志和证据。',
       next: claimCompleted ? '进入采集箱编辑保存' : '查看保存结果与未发布证明',
       ctaLabel: claimCompleted ? '进入采集箱编辑保存' : '查看保存结果',
@@ -5373,8 +5373,8 @@ function buildConsolePrimaryPath({
       title: '保存失败，需处理',
       reason: failure.reason,
       detail: failure.detail,
-      next: '重新创建单商品只保存任务',
-      ctaLabel: '重新创建单商品只保存任务',
+      next: '重新创建采集箱只保存任务',
+      ctaLabel: '重新创建采集箱只保存任务',
       action: 'tasks',
       browserStatus: '上次执行失败，浏览器现场暂不启动',
       blocksBrowserStart: true,
@@ -5400,8 +5400,8 @@ function buildConsolePrimaryPath({
       code: 'not_draft',
       title: '需要选择任务',
       reason: '当前任务不是草稿状态。',
-      detail: '请选择草稿任务，或重新创建单商品只保存任务。',
-      next: '回到选择商品页选择草稿任务',
+      detail: '请选择草稿任务，或重新创建采集箱只保存任务。',
+      next: '回到采集箱只保存页选择草稿任务',
       ctaLabel: '选择草稿任务',
       action: 'tasks',
       browserStatus: '任务状态不可启动，浏览器现场暂不启动',
@@ -5415,8 +5415,8 @@ function buildConsolePrimaryPath({
       title: '当前模式未放行',
       reason: `${humanTaskModeLabel(selectedTask.mode)} 当前未放行。`,
       detail: '批量保存和无人值守仍需单独验收；当前开放采集认领和单商品只保存路径。',
-      next: '回到选择商品页创建单商品只保存任务',
-      ctaLabel: '创建单商品只保存任务',
+      next: '回到采集箱只保存页创建只保存任务',
+      ctaLabel: '创建采集箱只保存任务',
       action: 'tasks',
       browserStatus: '当前模式未放行，浏览器现场暂不启动',
       blocksBrowserStart: true,
@@ -5501,8 +5501,8 @@ function buildConsolePrimaryPath({
       title: '需要人工确认只保存',
       reason: '真实保存前还没有完成人工批准。',
       detail: l3Detail ?? '保存前安全检查通过后，仍需要人工确认批准，只启动单商品只保存。',
-      next: '去选择商品页填写批准人并启动',
-      ctaLabel: '去选择商品页人工确认',
+      next: '去采集箱只保存页填写批准人并启动',
+      ctaLabel: '去采集箱只保存页人工确认',
       action: 'tasks',
       browserStatus: '等待人工确认，浏览器现场暂不启动',
       blocksBrowserStart: true,
@@ -5553,8 +5553,8 @@ function humanTaskFailureMessage(selectedTask: Task, reports: Report[]) {
   return {
     reason,
     detail: reason.includes('浏览器会话异常')
-      ? '系统没有执行保存。请保持真实店小秘登录窗口可用，关闭旧浏览器现场或重启控制台后重新创建单商品只保存任务。'
-      : '请先查看报告里的失败原因；确认店小秘浏览器可用后，重新创建单商品只保存任务再执行。',
+      ? '系统没有执行保存。请保持真实店小秘登录窗口可用，关闭旧浏览器现场或重启控制台后重新创建采集箱只保存任务。'
+      : '请先查看报告里的失败原因；确认店小秘浏览器可用后，重新创建采集箱只保存任务再执行。',
   }
 }
 
@@ -5852,7 +5852,7 @@ function buildProblemCardCopy(item: ExceptionItem) {
       title: '这条任务已经执行过或失败',
       what: message,
       why: '已经执行过的任务不能直接重复启动，避免重复操作真实店小秘。',
-      next: '点“选择商品”，重新创建单商品只保存任务。',
+      next: '点“采集箱只保存”，重新创建采集箱只保存任务。',
     }
   }
   if (message.includes('保存结果证据不完整') || raw.includes('save_result')) {
@@ -5860,7 +5860,7 @@ function buildProblemCardCopy(item: ExceptionItem) {
       title: '保存结果证据不完整',
       what: message,
       why: '系统没有拿到保存成功、未发布证明和保存接口回包。',
-      next: '先查看保存结果；确认真实浏览器可用后，重新创建单商品只保存任务。',
+      next: '先查看保存结果；确认真实浏览器可用后，重新创建采集箱只保存任务。',
     }
   }
   if (message.includes('浏览器会话异常')) {

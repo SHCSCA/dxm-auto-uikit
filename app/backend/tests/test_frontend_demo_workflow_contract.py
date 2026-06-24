@@ -30,15 +30,15 @@ def test_sidebar_uses_two_stage_production_workflow():
     shell = source.read_text(encoding="utf-8")
 
     assert "采集认领" in shell
-    assert "编辑保存" in shell
-    assert "账号与浏览器" in shell
-    assert "模板中心" in shell
-    assert "任务记录" in shell
-    assert "报告与证据" in shell
-    assert "系统维护" in shell
-    assert "浏览器现场" in shell
-    assert "第一段：采集入箱" in shell
-    assert "第二段：编辑只保存" in shell
+    assert "采集箱只保存" in shell
+    assert "登录店小秘" in shell
+    assert "编辑页模板" in shell
+    assert "任务与记录" in shell
+    assert "保存结果" in shell
+    assert "系统状态" in shell
+    assert "实时浏览器" in shell
+    assert "第一段：采集认领" in shell
+    assert "第二段：采集箱只保存" in shell
     assert "选择商品" not in shell
     assert "QA" not in shell
     assert "L2" not in shell
@@ -51,20 +51,20 @@ def test_sidebar_exposes_production_two_stage_workflow_only():
     primary_area_section = shell[shell.index("const primaryAreas"):shell.index("const sectionLabels")]
 
     expected_items = [
-        "{ id: 'home', label: '首页'",
-        "{ id: 'dxm_access', label: '账号与浏览器'",
+        "{ id: 'home', label: '操作引导'",
+        "{ id: 'dxm_access', label: '登录店小秘'",
         "{ id: 'acquisition_claim', label: '数据采集认领'",
-        "{ id: 'draft_edit_save', label: '采集箱编辑保存'",
-        "{ id: 'template_center', label: '模板中心'",
-        "{ id: 'start_save', label: '浏览器现场'",
-        "{ id: 'task_history', label: '任务记录'",
-        "{ id: 'results', label: '报告与证据'",
-        "{ id: 'settings', label: '系统维护'",
+        "{ id: 'template_center', label: '编辑页模板'",
+        "{ id: 'draft_edit_save', label: '采集箱只保存'",
+        "{ id: 'start_save', label: '实时浏览器'",
+        "{ id: 'task_history', label: '任务与记录'",
+        "{ id: 'results', label: '保存结果'",
+        "{ id: 'settings', label: '系统状态'",
     ]
     for item in expected_items:
         assert item in primary_area_section
 
-    for label in ["Agent 控制台", "证据中心", "异常池", "任务中心", "配置中心", "使用帮助", "问题处理", "店小秘登录", "编辑页模板", "结果与问题", "系统设置"]:
+    for label in ["Agent 控制台", "证据中心", "异常池", "任务中心", "配置中心", "使用帮助", "问题处理", "结果与问题", "系统设置"]:
         assert label not in primary_area_section
 
 
@@ -99,7 +99,7 @@ def test_acquisition_claim_page_presents_four_step_real_claim_path():
     for label in ["采集箱验证", "来源链接", "真实数据采集", "已通过采集箱验证"]:
         assert label in page_source
     assert "setActiveSection('start_save')" in app_source
-    assert "下一步在浏览器现场启动 Agent" in app_source
+    assert "下一步在实时浏览器启动 Agent" in app_source
     assert "claimed_product_title" in page_source
     assert "claimed_product_source_url" in page_source
     assert "draft_box_verified" in page_source
@@ -298,7 +298,7 @@ def test_demo_batch_creation_is_dev_only_and_never_real_user_path():
 
     assert "if (!DEMO_ENABLED)" in bootstrap_section
     assert "开发自检数据只在 dev=1 模式可用" in bootstrap_section
-    assert "真实使用请创建单商品只保存任务并运行保存前安全检查" in bootstrap_section
+    assert "真实使用请先从数据采集认领商品，再创建采集箱只保存任务并运行保存前安全检查" in bootstrap_section
     assert "mode: 'dry_run'" in bootstrap_section
     assert "mode: 'single_save'" not in bootstrap_section
     assert "本地演示核验批次" in bootstrap_section
@@ -390,7 +390,7 @@ def test_config_center_explains_precheck_and_disabled_save_continue():
     assert "onRefreshConfigPreview={async () => { await refreshConfigPreview(); await refreshWorkspace() }}" in app_source
     assert "检查本次配置" in config_section
     assert "刷新配置检查" in config_section
-    assert "去选择商品" in config_section
+    assert "去采集箱只保存" in config_section
     assert "onShowTasks" in source
     assert "onShowTasks={() => setActiveSection('product_tasks')}" in app_source
     assert "读取当前任务、店铺、商品和模板" in config_section
@@ -1251,24 +1251,24 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "console: 'start_save'" in app_source
     assert "evidence: 'results'" in app_source
     assert "type WorkbenchPrimaryArea" in shell_source
-    assert "{ id: 'home', label: '首页', short: '首', hint: '看当前该做什么' }" in shell_source
-    assert "{ id: 'dxm_access', label: '账号与浏览器', short: '账', hint: '记住账号并打开真实店小秘浏览器' }" in shell_source
+    assert "{ id: 'home', label: '操作引导', short: '导', hint: '按当前步骤完成真实店小秘只保存' }" in shell_source
+    assert "{ id: 'dxm_access', label: '登录店小秘', short: '登', hint: '记住账号并打开真实店小秘浏览器' }" in shell_source
     assert "{ id: 'acquisition_claim', label: '数据采集认领', short: '采', hint: '从数据采集认领到采集箱' }" in shell_source
-    assert "{ id: 'draft_edit_save', label: '采集箱编辑保存', short: '编', hint: '从采集箱打开编辑页并只保存' }" in shell_source
-    assert "{ id: 'template_center', label: '模板中心', short: '模', hint: '管理多套店铺和类目模板' }" in shell_source
-    assert "{ id: 'start_save', label: '浏览器现场', short: '场', hint: '查看真实浏览器和自动助手执行状态' }" in shell_source
-    assert "{ id: 'task_history', label: '任务记录', short: '记', hint: '查看历史任务和失败恢复入口' }" in shell_source
+    assert "{ id: 'template_center', label: '编辑页模板', short: '模', hint: '按店小秘编辑页分区管理多套模板' }" in shell_source
+    assert "{ id: 'draft_edit_save', label: '采集箱只保存', short: '存', hint: '从采集箱商品创建只保存任务' }" in shell_source
+    assert "{ id: 'start_save', label: '实时浏览器', short: '览', hint: '查看真实浏览器和自动助手执行状态' }" in shell_source
+    assert "{ id: 'task_history', label: '任务与记录', short: '记', hint: '查看历史任务和失败恢复入口' }" in shell_source
     assert "const sectionLabels: Record<WorkbenchSection, string>" in shell_source
-    assert "home: '首页'" in shell_source
-    assert "dxm_access: '账号与浏览器'" in shell_source
+    assert "home: '操作引导'" in shell_source
+    assert "dxm_access: '登录店小秘'" in shell_source
     assert "acquisition_claim: '数据采集认领'" in shell_source
-    assert "draft_edit_save: '采集箱编辑保存'" in shell_source
-    assert "template_center: '模板中心'" in shell_source
-    assert "task_history: '任务记录'" in shell_source
+    assert "draft_edit_save: '采集箱只保存'" in shell_source
+    assert "template_center: '编辑页模板'" in shell_source
+    assert "task_history: '任务与记录'" in shell_source
     assert "help: '使用帮助'" in shell_source
-    assert "preflight: '浏览器现场'" in shell_source
-    assert "real_browser: '浏览器现场'" in shell_source
-    assert "evidence: '报告与证据'" in shell_source
+    assert "preflight: '实时浏览器'" in shell_source
+    assert "real_browser: '实时浏览器'" in shell_source
+    assert "evidence: '保存结果'" in shell_source
     assert "sectionLabels[activeSection] ?? '工作台'" in shell_source
     assert "case 'dxm_access'" in app_source
     assert "DxmAccessPage" in app_source
@@ -1279,8 +1279,8 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "export function HomePage" in home_page_source
     assert "现在只做这一步" in home_page_source
     assert "登录真实店小秘" in home_page_source
-    assert "创建数据采集认领任务" in home_page_source
-    assert "检查模板中心" in home_page_source
+    assert "开始数据采集认领" in home_page_source
+    assert "检查编辑页模板" in home_page_source
     assert "运行保存前安全检查" in home_page_source
     assert "人工确认只保存" in home_page_source
     assert "打开浏览器现场" in home_page_source
@@ -1434,25 +1434,25 @@ def test_sidebar_primary_navigation_keeps_only_user_main_path():
     primary_area_section = shell_source[shell_source.index("const primaryAreas"):shell_source.index("const sectionLabels")]
 
     expected_sidebar_labels = [
-        "首页",
-        "账号与浏览器",
+        "操作引导",
+        "登录店小秘",
         "数据采集认领",
-        "采集箱编辑保存",
-        "模板中心",
-        "浏览器现场",
-        "任务记录",
-        "报告与证据",
-        "系统维护",
+        "编辑页模板",
+        "采集箱只保存",
+        "实时浏览器",
+        "任务与记录",
+        "保存结果",
+        "系统状态",
     ]
 
     assert primary_area_section.count("{ id: '") == 9
     for label in expected_sidebar_labels:
         assert label in primary_area_section or label in shell_source
     assert "{ id: 'acquisition_claim', label: '数据采集认领'" in primary_area_section
-    assert "{ id: 'draft_edit_save', label: '采集箱编辑保存'" in primary_area_section
-    assert "{ id: 'template_center', label: '模板中心'" in primary_area_section
-    assert "{ id: 'start_save', label: '浏览器现场'" in primary_area_section
-    assert "{ id: 'task_history', label: '任务记录'" in primary_area_section
+    assert "{ id: 'template_center', label: '编辑页模板'" in primary_area_section
+    assert "{ id: 'draft_edit_save', label: '采集箱只保存'" in primary_area_section
+    assert "{ id: 'start_save', label: '实时浏览器'" in primary_area_section
+    assert "{ id: 'task_history', label: '任务与记录'" in primary_area_section
     assert "{ id: 'product_tasks'" not in primary_area_section
     assert "{ id: 'edit_config'" not in primary_area_section
     assert "{ id: 'preflight', label: '运行前检查'" not in primary_area_section
@@ -1461,12 +1461,12 @@ def test_sidebar_primary_navigation_keeps_only_user_main_path():
     assert "{ id: 'evidence', label: '证据归档'" not in primary_area_section
     assert "{ id: 'exceptions', label: '问题'" not in primary_area_section
     assert "{ id: 'issues', label: '问题处理'" not in primary_area_section
-    assert "{ id: 'settings', label: '系统维护'" in primary_area_section
+    assert "{ id: 'settings', label: '系统状态'" in primary_area_section
     assert "id: 'dashboard'" not in primary_area_section
     assert "id: 'agent_execution'" not in primary_area_section
     assert "label: '更多'" not in primary_area_section
-    assert "首页 / 账号与浏览器 / 数据采集认领 / 采集箱编辑保存 / 模板中心 / 浏览器现场 / 任务记录 / 报告与证据 / 系统维护" in shell_source
-    forbidden_default_labels = ["Agent Console", "L2", "L3", "probe", "HAR", "run-id", "店小秘登录", "编辑页模板", "结果与问题", "系统设置"]
+    assert "操作引导 / 登录店小秘 / 数据采集认领 / 编辑页模板 / 采集箱只保存 / 实时浏览器 / 任务与记录 / 保存结果 / 系统状态" in shell_source
+    forbidden_default_labels = ["Agent Console", "L2", "L3", "probe", "HAR", "run-id", "结果与问题", "系统设置"]
     for label in forbidden_default_labels:
         assert label not in primary_area_section
 
@@ -1648,7 +1648,7 @@ def test_default_shell_copy_does_not_present_demo_as_user_path():
     assert "连接状态" in shell_source
     assert "数据连接状态：{sourceLabel}" in shell_source
     assert "<strong>{sourceLabel}</strong>" not in shell_source
-    assert "真实店小秘操作分为第一段数据采集认领和第二段采集箱编辑保存" in shell_source
+    assert "真实店小秘操作分为第一段数据采集认领和第二段采集箱只保存" in shell_source
     assert "真实接口优先" not in shell_source
     assert "不伪造保存结果" not in shell_source
     assert "演示数据仅开发模式可用" not in shell_source
@@ -2310,7 +2310,7 @@ def test_execution_console_exposes_runtime_control_and_agent_action_timeline():
     assert "setOperationNotice(result.message ?? runtimeControlSuccessMessage(action))" in app_source
     assert "data-testid=\"operation-notice\"" in app_source
     assert "runtimeStatus={runtimeStatus}" in app_source
-    assert "已启动保存前安全检查，请在“浏览器现场”查看实时日志。" in app_source
+    assert "已启动保存前安全检查，请在“实时浏览器”查看实时日志。" in app_source
     assert ".operation-alert--ok" in styles_source
     assert "runtimeControl?: {" in types_source
     assert "owner?: 'start_mvp' | 'desktop' | 'direct' | string" in types_source
@@ -3026,11 +3026,11 @@ def test_task_center_defaults_to_current_task_first_and_collapses_setup_noise():
 
     assert "TaskCurrentActionPanel" in task_center_section
     assert "task-quick-actions" in task_center_section
-    assert "aria-label=\"选择商品主操作\"" in task_center_section
-    assert "首屏只处理任务选择" in task_center_section
-    assert "创建单商品只保存任务" in task_center_section
+    assert "aria-label=\"采集箱只保存主操作\"" in task_center_section
+    assert "首屏只处理第二段保存任务" in task_center_section
+    assert "创建采集箱只保存任务" in task_center_section
     assert "data-testid=\"task-quick-create-single-save\"" in task_center_section
-    assert "选择商品" in task_center_section
+    assert "采集箱商品" in task_center_section
     assert "历史任务、更多商品和高级诊断继续折叠，不抢占首屏" in task_center_section
     assert task_center_section.index("task-quick-actions__buttons") < task_center_section.index("task-quick-actions__status")
     assert task_center_section.index("task-quick-actions") < task_center_section.index("TaskCurrentActionPanel")
@@ -3064,7 +3064,7 @@ def test_task_center_defaults_to_current_task_first_and_collapses_setup_noise():
     assert "const l3CheckLabel = selectedTaskCompleted ? '已完成'" in current_panel_section
     assert "更多任务操作与记录" in task_center_section
     assert "历史任务、更多商品和高级诊断继续折叠，不抢占首屏" in task_center_section
-    assert "<summary>创建真实任务</summary>" in task_center_section
+    assert "<summary>创建采集箱只保存任务</summary>" in task_center_section
     assert "<summary>查看未发布模式边界</summary>" in task_center_section
     assert "<summary>选择其它任务 / 历史批次</summary>" in task_center_section
     assert "<summary>查看更多商品</summary>" in task_center_section
@@ -3112,13 +3112,13 @@ def test_task_center_first_screen_selects_one_product_for_single_save_main_path(
     assert "const primaryProductCandidates = uniqueProductOptions.slice(0, 4)" in task_center_section
     assert "function selectSingleDraftProduct(productId: number)" in task_center_section
     assert "setDraftProductIds([productId])" in task_center_section
-    assert "aria-label=\"选择商品\"" in first_screen_section
+    assert "aria-label=\"选择采集箱商品\"" in first_screen_section
     assert "task-product-selection" in first_screen_section
     assert "task-product-choice" in first_screen_section
-    assert "选择商品" in first_screen_section
-    assert "创建单商品只保存任务" in first_screen_section
-    assert first_screen_section.index("选择商品") < first_screen_section.index("创建单商品只保存任务")
-    assert "请先选择 1 个商品" in first_screen_section
+    assert "采集箱商品" in first_screen_section
+    assert "创建采集箱只保存任务" in first_screen_section
+    assert first_screen_section.index("采集箱商品") < first_screen_section.index("创建采集箱只保存任务")
+    assert "请先选择 1 个采集箱商品" in first_screen_section
     assert "selectedDraftProducts[0]?.id === product.id" in first_screen_section
     assert "selectSingleDraftProduct(product.id)" in first_screen_section
     assert "补齐编辑页配置" not in first_screen_section
@@ -3139,7 +3139,7 @@ def test_task_center_explains_disabled_single_save_actions():
     assert "aria-describedby={quickCreateSingleSaveDisabledReason ? 'task-quick-create-single-save-reason' : undefined}" in task_center_section
     assert "title={quickCreateSingleSaveDisabledReason || undefined}" in task_center_section
     assert "请选择真实店铺" in task_center_section
-    assert "请先选择 1 个商品后再创建单商品只保存任务。" in task_center_section
+    assert "请先选择 1 个采集箱商品后再创建只保存任务。" in task_center_section
     assert "当前已选 ${selectedDraftProducts.length} 个" in task_center_section
     assert "当前版本仅放行 Dang Kang；其它店铺需联系管理员完成店铺放行配置。" in task_center_section
     assert "const [draftProductIds, setDraftProductIds] = useState<number[]>([])" in task_center_section
@@ -3170,10 +3170,10 @@ def test_task_center_explains_quick_action_availability_in_first_screen():
 
     assert "const taskActionDiagnosis =" in task_center_section
     assert "const historyTaskHint =" in task_center_section
-    assert "quickCreateSingleSaveDisabledReason || '可创建单商品只保存任务'" in task_center_section
+    assert "quickCreateSingleSaveDisabledReason || '可创建采集箱只保存任务'" in task_center_section
     assert "const blockedStartButtonLabel =" in task_center_section
     assert "start: blockedStartButtonLabel" in task_center_section
-    assert "暂无历史任务；先创建单商品只保存任务。" in task_center_section
+    assert "暂无历史任务；先从数据采集认领，再创建采集箱只保存任务。" in task_center_section
     assert "aria-label=\"任务按钮不可点击原因\"" in quick_actions_section
     assert "<summary>为什么不能启动浏览器现场</summary>" in quick_actions_section
     assert "<strong>创建任务</strong>" in quick_actions_section
@@ -4345,10 +4345,10 @@ def test_frontend_first_screen_names_dxm_automation_delivery():
     safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
     qa_source = QA_BROWSER_CHECK.read_text(encoding="utf-8")
 
-    assert "首页" in source
+    assert "操作引导" in source
     assert "按两段真实流程推进" in source
     assert "不会发布；批量和无人值守保存保持关闭" in source
-    assert "首页决策：现在该做什么 / 为什么不能继续 / 下一步" in source
+    assert "操作引导决策：现在该做什么 / 为什么不能继续 / 下一步" in source
     assert "aria-label=\"保存边界\"" in source
     assert "当前模式</strong><b>只保存" in source
     assert "保存范围</strong><b>{realWriteReady ? '单商品只保存可执行' : '等待人工确认'}" in source
@@ -4362,7 +4362,7 @@ def test_frontend_first_screen_names_dxm_automation_delivery():
     assert "系统状态与验收详情" not in safety_bar
     assert "safety-bar__meta-details inline-disclosure" in safety_bar
     assert "真实保存已阻断" not in safety_bar
-    assert "首页 / 账号与浏览器 / 数据采集认领 / 采集箱编辑保存 / 模板中心 / 浏览器现场 / 任务记录 / 报告与证据 / 系统维护" in shell
+    assert "操作引导 / 登录店小秘 / 数据采集认领 / 编辑页模板 / 采集箱只保存 / 实时浏览器 / 任务与记录 / 保存结果 / 系统状态" in shell
     assert "\\u0044\\u0058\\u004d \\u5355\\u5546\\u54c1\\u53ea\\u4fdd\\u5b58 Agent" in qa_source
     assert "initialText.includes(text.overview) || initialText.includes('\\u767b\\u5f55\\u5e97\\u5c0f\\u79d8') || initialText.includes('\\u5f00\\u59cb\\u53ea\\u4fdd\\u5b58')" in qa_source
     assert "\\u73b0\\u5728\\u53ea\\u505a\\u8fd9\\u4e00\\u6b65" in qa_source
@@ -4376,28 +4376,28 @@ def test_sidebar_copy_names_save_only_agent_flow_without_ambiguous_browser_wordi
     primary_area_section = shell[shell.index("const primaryAreas"):shell.index("const sectionLabels")]
 
     assert "DXM 只保存自动化" in shell
-    assert "首页" in shell
-    assert "账号与浏览器" in shell
+    assert "操作引导" in shell
+    assert "登录店小秘" in shell
     assert "数据采集认领" in shell
-    assert "采集箱编辑保存" in shell
-    assert "模板中心" in shell
-    assert "浏览器现场" in shell
-    assert "任务记录" in shell
-    assert "报告与证据" in shell
-    assert "系统维护" in shell
+    assert "采集箱只保存" in shell
+    assert "编辑页模板" in shell
+    assert "实时浏览器" in shell
+    assert "任务与记录" in shell
+    assert "保存结果" in shell
+    assert "系统状态" in shell
     assert "证据归档" not in shell[shell.index("const primaryAreas"):shell.index("const sectionLabels")]
     assert "问题处理" not in primary_area_section
     assert "使用帮助" not in primary_area_section
-    assert "系统维护" in primary_area_section
+    assert "系统状态" in primary_area_section
     assert "帮助与设置" not in shell
-    assert "数据采集认领后只保存，不发布" in shell
+    assert "采集认领到采集箱，再只保存" in shell
     assert "{ id: 'acquisition_claim', label: '数据采集认领', short: '采', hint: '从数据采集认领到采集箱' }" in shell
-    assert "{ id: 'draft_edit_save', label: '采集箱编辑保存', short: '编', hint: '从采集箱打开编辑页并只保存' }" in shell
-    assert "{ id: 'template_center', label: '模板中心', short: '模', hint: '管理多套店铺和类目模板' }" in shell
-    assert "{ id: 'start_save', label: '浏览器现场', short: '场', hint: '查看真实浏览器和自动助手执行状态' }" in shell
-    assert "{ id: 'task_history', label: '任务记录', short: '记', hint: '查看历史任务和失败恢复入口' }" in shell
-    assert "{ id: 'settings', label: '系统维护', short: '维', hint: '查看运行环境、日志路径和维护设置' }" in shell
-    assert "真实店小秘操作分为第一段数据采集认领和第二段采集箱编辑保存" in shell
+    assert "{ id: 'template_center', label: '编辑页模板', short: '模', hint: '按店小秘编辑页分区管理多套模板' }" in shell
+    assert "{ id: 'draft_edit_save', label: '采集箱只保存', short: '存', hint: '从采集箱商品创建只保存任务' }" in shell
+    assert "{ id: 'start_save', label: '实时浏览器', short: '览', hint: '查看真实浏览器和自动助手执行状态' }" in shell
+    assert "{ id: 'task_history', label: '任务与记录', short: '记', hint: '查看历史任务和失败恢复入口' }" in shell
+    assert "{ id: 'settings', label: '系统状态', short: '维', hint: '查看运行环境、日志路径和维护设置' }" in shell
+    assert "真实店小秘操作分为第一段数据采集认领和第二段采集箱只保存" in shell
 
     assert "配置 / 任务 / 真实浏览器执行" not in shell
     assert "Agent 控制台与真实浏览器" not in shell
@@ -4416,7 +4416,7 @@ def test_frontend_uses_business_sidebar_groups_and_hides_operator_diagnostics_by
     assert "id: 'prepare'" in shell
     assert "id: 'claim'" in shell
     assert "id: 'save'" in shell
-    assert "id: 'field'" in shell
+    assert "id: 'field'" not in shell
     assert "id: 'review'" in shell
     assert "id: 'system'" in shell
     assert "复盘与设置" not in shell
@@ -4437,7 +4437,7 @@ def test_frontend_uses_business_sidebar_groups_and_hides_operator_diagnostics_by
     assert "id: 'help'" not in primary_area_section
     assert "help: '使用帮助'" in shell
     assert "id: 'settings'" in primary_area_section
-    assert "settings: '系统维护'" in shell
+    assert "settings: '系统状态'" in shell
     assert "维护详情" in safety_bar
     visible_bar = safety_bar[safety_bar.index("return ("):safety_bar.index("<details className=\"safety-bar__meta-details")]
     assert "技术诊断" not in visible_bar
@@ -4456,20 +4456,24 @@ def test_home_dashboard_is_operator_command_center_not_static_metrics():
 
     assert "type HomePageProps" in source
     assert "onShowDxmAccess" in dashboard_section
+    assert "onShowAcquisition" in dashboard_section
+    assert "onShowDraftEdit" in dashboard_section
     assert "onShowTasks" in dashboard_section
     assert "onShowConfig" in dashboard_section
     assert "onShowConsole" in dashboard_section
     assert "onShowReports" in dashboard_section
     assert "现在只做这一步" in dashboard_section
     assert "登录真实店小秘" in dashboard_section
-    assert "创建数据采集认领任务" in dashboard_section
-    assert "检查模板中心" in dashboard_section
+    assert "开始数据采集认领" in dashboard_section
+    assert "检查编辑页模板" in dashboard_section
     assert "运行保存前安全检查" in dashboard_section
     assert "人工确认只保存" in dashboard_section
     assert "打开浏览器现场" in dashboard_section
     assert "home-command__status-grid" in dashboard_section
     assert "home-command__boundary" in dashboard_section
     assert "onShowDxmAccess={() => setActiveSection('dxm_access')}" in app_source
+    assert "onShowAcquisition={() => setActiveSection('acquisition_claim')}" in app_source
+    assert "onShowDraftEdit={() => setActiveSection('draft_edit_save')}" in app_source
     assert "onShowTasks={() => setActiveSection('product_tasks')}" in app_source
     assert "onShowConfig={() => setActiveSection('edit_config')}" in app_source
     assert "onShowConsole={() => setActiveSection('start_save')}" in app_source
@@ -4742,9 +4746,9 @@ def test_product_tasks_page_is_extracted_from_workbench_modules():
     assert "TaskCenterView" in product_tasks_source
     assert "return <TaskCenterView {...props} />" in product_tasks_source
     assert "export function TaskCenterView" in source
-    assert "aria-label=\"选择商品\"" in source
-    assert "aria-label=\"选择商品主操作\"" in source
-    assert "创建单商品只保存任务" in source
+    assert "aria-label=\"任务与记录\"" in source
+    assert "aria-label=\"采集箱只保存主操作\"" in source
+    assert "创建采集箱只保存任务" in source
     assert "export function TaskCenter(" not in source
 
 
@@ -4867,12 +4871,12 @@ def test_failed_task_primary_path_guides_retry_instead_of_non_draft_jargon():
     assert "保存失败，需处理" in build_primary_path_section
     assert "humanTaskFailureMessage(selectedTask, reports)" in build_primary_path_section
     assert "failedJob?.error_message" in build_primary_path_section
-    assert "重新创建单商品只保存任务" in build_primary_path_section
-    assert "ctaLabel: '重新创建单商品只保存任务'" in build_primary_path_section
+    assert "重新创建采集箱只保存任务" in build_primary_path_section
+    assert "ctaLabel: '重新创建采集箱只保存任务'" in build_primary_path_section
     assert "系统没有执行保存。请保持真实店小秘登录窗口可用" in build_primary_path_section
     start_label_section = task_center_section[task_center_section.index("const startLabel"):task_center_section.index("const historyTaskHint")]
     assert start_label_section.index("selectedTask.status === 'failed'") < start_label_section.index("selectedTask.status !== 'draft'")
-    assert "重新创建单商品只保存任务" in start_label_section
+    assert "重新创建采集箱只保存任务" in start_label_section
 
 
 def test_agent_execution_primary_path_uses_user_visible_state_labels():

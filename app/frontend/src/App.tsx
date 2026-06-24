@@ -701,7 +701,7 @@ export default function App() {
         syncSelectedTaskIdUrl(result.task_id)
       }
       setActiveSection('start_save')
-      setOperationNotice('采集认领任务已创建。下一步在浏览器现场启动 Agent，将商品从数据采集认领到采集箱。')
+        setOperationNotice('采集认领任务已创建。下一步在实时浏览器启动 Agent，将商品从数据采集认领到采集箱。')
       await refreshWorkspace()
     } catch (error) {
       setOperationError(error instanceof Error ? error.message : '创建采集认领请求失败')
@@ -712,7 +712,7 @@ export default function App() {
 
   async function bootstrapDemo() {
     if (!DEMO_ENABLED) {
-      setOperationError('开发自检数据只在 dev=1 模式可用；真实使用请创建单商品只保存任务并运行保存前安全检查。')
+      setOperationError('开发自检数据只在 dev=1 模式可用；真实使用请先从数据采集认领商品，再创建采集箱只保存任务并运行保存前安全检查。')
       return
     }
     const confirmed = window.confirm('这会向本地后端写入演示店铺、模板、商品和本地演示核验批次；不会访问店小秘，也不会启动真实保存。继续？')
@@ -1385,6 +1385,8 @@ export default function App() {
             configPreview={configPreview}
             runtimeStatus={runtimeStatus}
             onShowDxmAccess={() => setActiveSection('dxm_access')}
+            onShowAcquisition={() => setActiveSection('acquisition_claim')}
+            onShowDraftEdit={() => setActiveSection('draft_edit_save')}
             onShowTasks={() => setActiveSection('product_tasks')}
             onShowConfig={() => setActiveSection('edit_config')}
             onShowConsole={() => setActiveSection('start_save')}
@@ -1468,7 +1470,7 @@ function runtimeControlSuccessMessage(action: RuntimeControlAction) {
     mark_real_task_manual_review: '已将真实写入任务转入人工复核。不会取消真实浏览器进程，请查看任务日志确认现场。',
     restart_backend: '已提交后端重启请求，请查看启动器日志。',
     restart_frontend: '已提交前端重启请求，请查看启动器日志。',
-    run_l2_readonly_probe: '已启动保存前安全检查，请在“浏览器现场”查看实时日志。',
+    run_l2_readonly_probe: '已启动保存前安全检查，请在“实时浏览器”查看实时日志。',
   } as Record<RuntimeControlAction, string>)[action]
 }
 
@@ -1516,7 +1518,7 @@ function humanWorkspaceFetchError(message?: string) {
   ) {
     return '暂时无法读取完整任务数据。请重新打开 DXM Agent Console 免安装版；开发模式请确认后端服务正在运行。真实保存不会启动或发布。'
   }
-  return '暂时无法读取完整任务数据。请查看“浏览器现场”的实时日志；系统不会用本地演示结果替代真实保存。'
+  return '暂时无法读取完整任务数据。请查看“实时浏览器”的实时日志；系统不会用本地演示结果替代真实保存。'
 }
 
 function humanRuntimeStatusError(message: string) {
