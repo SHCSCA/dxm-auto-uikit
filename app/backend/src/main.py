@@ -923,8 +923,6 @@ def start_agent_console(payload: AgentConsoleStartRequest):
             raise HTTPException(status_code=403, detail='Controlled claim_only task requires claim-to-draft scene')
         if mode == 'claim_only':
             _assert_claim_only_acquisition_task(task)
-            if _task_store_name(task) != 'Dang Kang':
-                raise HTTPException(status_code=403, detail='Controlled claim_only task requires Dang Kang store')
         task_status = str(task.get('status') or '')
         if task_status == 'running':
             raise HTTPException(status_code=409, detail='Task is already running')
@@ -1875,8 +1873,6 @@ def _assert_task_can_receive_manual_approval(task_id: int, request: TaskManualAp
         raise HTTPException(status_code=409, detail=f"Task cannot be approved from status: {task.get('status')}")
     if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
         raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')
-    if _task_store_name(task) != 'Dang Kang':
-        raise HTTPException(status_code=403, detail='Real DXM mutation task requires Dang Kang store')
     _assert_real_task_uses_non_fixture_products(task)
     if not request.approved_by or not request.approved_by.strip():
         raise HTTPException(status_code=400, detail='approved_by is required')
@@ -1912,8 +1908,6 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
         if str(task.get('publish_scene') or '') != CLAIM_TO_DRAFT_PUBLISH_SCENE:
             raise HTTPException(status_code=403, detail='Controlled claim_only task requires claim-to-draft scene')
         _assert_claim_only_acquisition_task(task)
-        if _task_store_name(task) != 'Dang Kang':
-            raise HTTPException(status_code=403, detail='Controlled claim_only task requires Dang Kang store')
         l2_gate = l2_real_probe_gate()
         if l2_gate.get('status') != 'passed':
             raise HTTPException(
@@ -1927,8 +1921,6 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
 
     if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
         raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')
-    if _task_store_name(task) != 'Dang Kang':
-        raise HTTPException(status_code=403, detail='Real DXM mutation task requires Dang Kang store')
     _assert_real_task_uses_non_fixture_products(task)
 
     approval = payload.get('manual_approval') or {}

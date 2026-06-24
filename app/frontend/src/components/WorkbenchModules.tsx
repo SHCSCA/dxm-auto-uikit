@@ -121,7 +121,6 @@ type DxmAccessPageProps = {
 
 export const l3PostEvidenceGapIds = new Set(['gap-save-result', 'gap-unpublished-proof', 'gap-network-save-response'])
 const LEGACY_QA_REAL_MUTATION_TASK_NAME = ['QA guarded', 'real mutation task'].join(' ')
-const RELEASED_SINGLE_SAVE_STORE_NAMES = new Set(['Dang Kang'])
 export const DXM_LOGGED_IN_STATUSES = new Set(['login_success', 'logged_in', 'not_published_verified', 'workflow_navigation'])
 const READONLY_PRECHECK_CTA = '运行保存前安全检查'
 const READONLY_PRECHECK_PURPOSE = '保存前安全检查会打开店小秘采集页和采集箱，只读取页面，不领取、不保存、不发布；通过后才能打开浏览器现场。'
@@ -2368,10 +2367,8 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
   const draftProductIdSet = new Set(draftProductIds)
   const selectedDraftProducts = uniqueProductOptions.filter((product) => draftProductIdSet.has(product.id))
   const primaryProductCandidates = uniqueProductOptions.slice(0, 4)
-  const selectedStoreReleasedForSingleSave = Boolean(selectedStore && RELEASED_SINGLE_SAVE_STORE_NAMES.has(selectedStore.name))
-  const storeBlocksSingleSave = Boolean(selectedStore && draftMode !== 'probe' && !selectedStoreReleasedForSingleSave)
   const singleSaveProductCountInvalid = draftMode === 'single_save' && selectedDraftProducts.length !== 1
-  const canCreateSingleSaveTask = Boolean(selectedStore && selectedDraftProducts.length === 1 && !busy && !storeBlocksSingleSave)
+  const canCreateSingleSaveTask = Boolean(selectedStore && selectedDraftProducts.length === 1 && !busy)
   const quickCreateSingleSaveDisabledReason = busy
     ? '正在处理当前操作，请稍候。'
     : !selectedStore
@@ -2380,9 +2377,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
         ? '请先选择 1 个采集箱商品后再创建只保存任务。'
         : selectedDraftProducts.length !== 1
         ? `采集箱只保存一次只能选 1 个商品；当前已选 ${selectedDraftProducts.length} 个。`
-        : storeBlocksSingleSave
-          ? '当前版本仅放行 Dang Kang；其它店铺需联系管理员完成店铺放行配置。'
-          : ''
+        : ''
   const unreleasedReleaseItems = workspace.realModeReleasePlan.modes.filter((item) => item.mode === 'claim_only' || item.mode === 'batch_save')
   const latestSingleSaveTask = [...workspace.tasks]
     .filter(isStartableSingleSaveTask)
@@ -2410,7 +2405,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
   const collapsedTaskCount = Math.max(workspace.tasks.length - compactTaskRows.length, 0)
   const hiddenTaskCount = Math.max(workspace.tasks.length - visibleTaskRows.length, 0)
   const canToggleTaskHistory = workspace.tasks.length > visibleTaskRows.length || showAllTasks
-  const canCreateRealTask = Boolean(selectedStore && selectedDraftProducts.length > 0 && !busy && !storeBlocksSingleSave && !singleSaveProductCountInvalid)
+  const canCreateRealTask = Boolean(selectedStore && selectedDraftProducts.length > 0 && !busy && !singleSaveProductCountInvalid)
   const needsSingleSaveRecovery = Boolean(selectedTask && !selectedTaskNotDraft && (selectedTaskIsUnreleasedRealMode || loginBlocksStart || configUnknownBlocksStart || configPreviewLoadingBlocksStart || configBlocksStart || l2BlocksStart || l3BlocksStart))
   const startDisabled = busy || !selectedTask || selectedTaskNotDraft || selectedTaskIsUnreleasedRealMode || loginBlocksStart || configUnknownBlocksStart || configPreviewLoadingBlocksStart || configBlocksStart || l2BlocksStart || l3BlocksStart
   const startLabel = !selectedTask
@@ -2527,7 +2522,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
             <select value={draftStoreId} onChange={(event) => setDraftStoreId(event.target.value)} disabled={busy || uniqueStoreOptions.length === 0}>
               {uniqueStoreOptions.map((store) => (
                 <option key={store.id} value={store.id}>
-                  {store.name} / {store.platform}{RELEASED_SINGLE_SAVE_STORE_NAMES.has(store.name) ? '' : '（未放行单商品只保存）'}
+                  {store.name} / {store.platform}
                 </option>
               ))}
               {!uniqueStoreOptions.length && <option value="">等待真实店铺</option>}
@@ -2717,7 +2712,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
                   <select value={draftStoreId} onChange={(event) => setDraftStoreId(event.target.value)} disabled={busy || uniqueStoreOptions.length === 0}>
                     {uniqueStoreOptions.map((store) => (
                       <option key={store.id} value={store.id}>
-                        {store.name} / {store.platform}{RELEASED_SINGLE_SAVE_STORE_NAMES.has(store.name) ? '' : '（未放行单商品只保存）'}
+                        {store.name} / {store.platform}
                       </option>
                     ))}
                     {!uniqueStoreOptions.length && <option value="">等待真实店铺</option>}
@@ -2734,11 +2729,6 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
                   </button>
                 </div>
               </div>
-              {draftMode !== 'probe' && storeBlocksSingleSave && (
-                <div className="guard-note guard-note--warn">
-                  单商品只保存当前只放行 {Array.from(RELEASED_SINGLE_SAVE_STORE_NAMES).join('、')}；其它店铺需联系管理员完成店铺放行配置，保存前安全检查只生成证据，不会自动解锁店铺。
-                </div>
-              )}
               {singleSaveProductCountInvalid && (
                 <div className="guard-note guard-note--warn">
                   采集箱只保存一次只能选择 1 个商品；当前已选 {selectedDraftProducts.length} 个。保存前安全检查可多选，真实保存请保留 1 个商品。
@@ -6331,11 +6321,9 @@ function isAuxiliaryTask(task: Pick<Task, 'name' | 'mode'>) {
 }
 
 function isStartableSingleSaveTask(task: Task) {
-  const storeName = String(task.payload.store_name ?? '')
   return task.mode === 'single_save'
     && task.status === 'draft'
     && !isAuxiliaryTask(task)
-    && RELEASED_SINGLE_SAVE_STORE_NAMES.has(storeName)
 }
 
 function isReleasedRealDxmMutationTask(task: Task) {

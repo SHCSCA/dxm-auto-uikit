@@ -422,7 +422,7 @@ def test_claim_only_start_rejects_existing_product_job_shape(tmp_path, monkeypat
     assert runner.calls == []
 
 
-def test_claim_only_start_rejects_unreleased_store(tmp_path, monkeypatch):
+def test_claim_only_start_allows_any_real_store_after_l2_gate(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
@@ -431,9 +431,9 @@ def test_claim_only_start_rejects_unreleased_store(tmp_path, monkeypatch):
 
     response = client.post(f"/api/tasks/{task['id']}/start", json={})
 
-    assert response.status_code == 403
-    assert "Dang Kang store" in response.json()["detail"]
-    assert runner.calls == []
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert repo.get_task(task["id"])["status"] == "running"
 
 
 def test_unreleased_real_modes_reject_manual_approval(tmp_path, monkeypatch):
@@ -629,7 +629,7 @@ def test_manual_approval_endpoint_generates_server_token_and_start_accepts_it(tm
     import src.main as main
 
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
-    task = _create_task(repo)
+    task = _create_task(repo, store_name="Other Store")
 
     approval_response = client.post(
         f"/api/tasks/{task['id']}/manual-approval",
@@ -905,13 +905,13 @@ def test_agent_console_execution_browser_allows_controlled_claim_only_task(tmp_p
     assert payload["task_id"] == task["id"]
 
 
-def test_agent_console_execution_browser_rejects_claim_only_unreleased_store(tmp_path, monkeypatch):
+def test_agent_console_execution_browser_allows_claim_only_for_any_real_store(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
     class DummyAgentConsoleService:
         def start(self, **payload):
-            raise AssertionError("agent console should not start")
+            return {"active": True, **payload}
 
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
     monkeypatch.setattr(main, "agent_console_service", DummyAgentConsoleService())
@@ -919,8 +919,10 @@ def test_agent_console_execution_browser_rejects_claim_only_unreleased_store(tmp
 
     response = client.post("/api/agent-console/start", json={"task_id": task["id"], "launch_browser": True})
 
-    assert response.status_code == 403
-    assert "Dang Kang store" in response.json()["detail"]
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["active"] is True
+    assert payload["task_id"] == task["id"]
 
 
 def test_runtime_logs_tail_known_log_sources(tmp_path, monkeypatch):
@@ -2645,9 +2647,13 @@ def test_direct_open_editor_rejects_without_guarded_runner(tmp_path, monkeypatch
     assert flow.draft_box_actions == []
 
 
-def test_single_save_start_rejects_non_dang_kang_store(tmp_path, monkeypatch):
+def test_single_save_start_allows_any_real_store_after_approval_and_l2_gate(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
-    task = _create_task(repo, store_name="Other Store", approval={"approved": True, "token": "l3-token"})
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_task(repo, store_name="Other Store")
+    _approve_task(repo, task["id"], "l3-token")
 
     response = client.post(
         f"/api/tasks/{task['id']}/start",
@@ -2659,8 +2665,9 @@ def test_single_save_start_rejects_non_dang_kang_store(tmp_path, monkeypatch):
         },
     )
 
-    assert response.status_code == 403
-    assert runner.calls == []
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert repo.get_task(task["id"])["status"] == "running"
 
 
 def test_dry_run_can_start_without_manual_approval(tmp_path, monkeypatch):
