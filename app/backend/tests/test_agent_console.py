@@ -574,6 +574,62 @@ def test_agent_console_browser_close_event_marks_closed_immediately(tmp_path, mo
     assert status["hud"]["human_title"] == "真实浏览器窗口已关闭"
 
 
+def test_agent_console_rebinds_current_page_when_dxm_opens_new_page(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False, step={"state": "OPEN_DRAFT_LIST"})
+    fake_context = _FakeLifecycleTarget()
+    old_page = _FakeLifecyclePage()
+    new_page = _FakeLifecyclePage()
+    new_page.url = "https://www.dianxiaomi.com/web/smt/smtProductList/draft?status=0"
+
+    with service._lock:
+        service._context = fake_context
+        service._page = old_page
+        service._state["active"] = True
+        service._state["browser_visible"] = True
+        service._state["browser_launching"] = False
+        service._state["last_error"] = None
+
+    service._attach_page_runtime_listeners(fake_context, old_page)
+    fake_context.emit("page", new_page)
+    status = service.status()
+
+    assert service._page is new_page
+    assert status["browser_visible"] is True
+    assert status["current_url"] == new_page.url
+    assert new_page.evaluate_calls
+    assert status["last_error"] is None
+
+
+def test_agent_console_does_not_mark_browser_closed_when_old_page_closes_after_rebind(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False, step={"state": "OPEN_DRAFT_LIST"})
+    fake_context = _FakeLifecycleTarget()
+    old_page = _FakeLifecyclePage()
+    new_page = _FakeLifecyclePage()
+
+    with service._lock:
+        service._context = fake_context
+        service._page = old_page
+        service._state["active"] = True
+        service._state["browser_visible"] = True
+        service._state["browser_launching"] = False
+        service._state["last_error"] = None
+
+    service._attach_page_runtime_listeners(fake_context, old_page)
+    fake_context.emit("page", new_page)
+    old_page.closed = True
+    old_page.emit("close")
+    status = service.status()
+
+    assert service._page is new_page
+    assert status["browser_visible"] is True
+    assert status["last_error"] is None
+    assert status["hud"]["state"] != "BROWSER_CLOSED"
+
+
 def test_agent_console_rejects_browser_control_after_window_closes(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
     service = AgentConsoleService()
@@ -982,6 +1038,15 @@ class _FakePage:
     def wait_for_timeout(self, milliseconds: int):
         assert milliseconds >= 0
 
+    def add_init_script(self, script):
+        assert script
+
+    def evaluate(self, script, payload=None):
+        if not hasattr(self, "evaluate_calls"):
+            self.evaluate_calls = []
+        self.evaluate_calls.append((script, payload))
+        return None
+
     def locator(self, selector: str):
         self.locator_calls.append(selector)
         locator = self.locators.get(selector)
@@ -998,9 +1063,9 @@ class _FakeLifecycleTarget:
     def on(self, event_name, callback):
         self.handlers.setdefault(event_name, []).append(callback)
 
-    def emit(self, event_name):
+    def emit(self, event_name, *args):
         for callback in self.handlers.get(event_name, []):
-            callback()
+            callback(*args)
 
 
 class _FakeLifecyclePage(_FakePage, _FakeLifecycleTarget):

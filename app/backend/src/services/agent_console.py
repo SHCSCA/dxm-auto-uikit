@@ -743,37 +743,66 @@ class AgentConsoleService:
             pass
 
     def _attach_browser_lifecycle_listeners(self, context, page) -> None:
-        def on_closed() -> None:
+        def on_context_closed() -> None:
             self._mark_browser_closed(BROWSER_CLOSED_MESSAGE)
 
-        for target in (context, page):
-            try:
-                target.on("close", lambda *args: on_closed())
-            except Exception:
-                pass
+        try:
+            context.on("close", lambda *args: on_context_closed())
+        except Exception:
+            pass
+        try:
+            page.on("close", lambda *args, p=page: self._mark_page_closed(p, BROWSER_CLOSED_MESSAGE))
+        except Exception:
+            pass
 
     def _attach_page_runtime_listeners(self, context, page) -> None:
-        def attach_page(target_page) -> None:
+        def attach_page(target_page, *, make_current: bool = False) -> None:
             try:
                 self._attach_network_listeners(target_page)
             except Exception:
                 pass
             for event_name in ("framenavigated", "domcontentloaded"):
                 try:
-                    target_page.on(event_name, lambda *args, p=target_page: self._reapply_hud_to_page(p))
+                    target_page.on(event_name, lambda *args, p=target_page: self._refresh_and_reapply_hud_to_page(p))
                 except Exception:
                     pass
             try:
-                target_page.on("close", lambda *args: self._mark_browser_closed(BROWSER_CLOSED_MESSAGE))
+                target_page.on("close", lambda *args, p=target_page: self._mark_page_closed(p, BROWSER_CLOSED_MESSAGE))
             except Exception:
                 pass
+            if make_current:
+                self._bind_current_page(target_page)
             self._reapply_hud_to_page(target_page)
 
         attach_page(page)
         try:
-            context.on("page", lambda new_page: attach_page(new_page))
+            context.on("page", lambda new_page: attach_page(new_page, make_current=True))
         except Exception:
             pass
+
+    def _bind_current_page(self, page) -> None:
+        with self._lock:
+            if not self._state.get("active"):
+                return
+            self._page = page
+            self._state["browser_visible"] = True
+            self._state["browser_launching"] = False
+            self._state["current_url"] = self._safe_page_url(page) or self._state.get("current_url")
+            self._state["page_title"] = self._safe_page_title(page) or self._state.get("page_title")
+            self._state["last_error"] = None
+            self._state["updated_at"] = _now()
+
+    def _refresh_and_reapply_hud_to_page(self, page) -> None:
+        self._refresh_current_page_cache(page)
+        self._reapply_hud_to_page(page)
+
+    def _refresh_current_page_cache(self, page) -> None:
+        with self._lock:
+            if self._page is not page:
+                return
+            self._state["current_url"] = self._safe_page_url(page) or self._state.get("current_url")
+            self._state["page_title"] = self._safe_page_title(page) or self._state.get("page_title")
+            self._state["updated_at"] = _now()
 
     def _reapply_hud_to_page(self, page) -> None:
         with self._lock:
@@ -788,6 +817,12 @@ class AgentConsoleService:
             with self._lock:
                 self._state["last_error"] = str(exc)
                 self._state["updated_at"] = _now()
+
+    def _mark_page_closed(self, page, message: str) -> None:
+        with self._lock:
+            if self._page is not page:
+                return
+        self._mark_browser_closed(message)
 
     def _apply_hud(self, page, hud: dict[str, Any]) -> None:
         try:
@@ -885,6 +920,23 @@ class AgentConsoleService:
             except Exception:
                 return True
         return False
+
+    def _safe_page_url(self, page) -> str | None:
+        try:
+            value = getattr(page, "url", None)
+            return str(value) if value else None
+        except Exception:
+            return None
+
+    def _safe_page_title(self, page) -> str | None:
+        title = getattr(page, "title", None)
+        if not callable(title):
+            return None
+        try:
+            value = title()
+            return str(value) if value else None
+        except Exception:
+            return None
 
     def _run_browser_op(self, operation):
         return self._browser_executor.submit(operation).result(timeout=90)
