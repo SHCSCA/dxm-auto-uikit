@@ -125,7 +125,7 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
           <button className="button button--quiet" type="button" onClick={onShowTasks}>数据采集认领</button>
           <button className="button button--quiet" type="button" onClick={onShowConfig}>模板中心</button>
           <button className="button button--quiet" type="button" onClick={onShowConsole}>执行浏览器</button>
-          <button className="button button--quiet" type="button" onClick={onShowReports}>结果报告</button>
+          <button className="button button--quiet" type="button" onClick={onShowReports}>结果与问题</button>
         </div>
         <details className="inline-disclosure home-menu-map__guide">
           <summary>查看完整路径</summary>
