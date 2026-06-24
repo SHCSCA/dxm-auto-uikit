@@ -93,7 +93,7 @@ def test_acquisition_claim_page_presents_four_step_real_claim_path():
     for label in ["不会保存", "不会发布", "认领标记", "开始认领到采集箱", "进入采集箱编辑保存", "商品已进入采集箱"]:
         assert label in page_source
     assert "setActiveSection('start_save')" in app_source
-    assert "下一步在执行浏览器启动 Agent" in app_source
+    assert "下一步在浏览器现场启动 Agent" in app_source
     assert "claimed_product_title" in page_source
 
     for forbidden in ["QA guarded product", "测试商品", "本地商品", "创建单商品只保存任务"]:
@@ -268,7 +268,7 @@ def test_demo_batch_creation_is_dev_only_and_never_real_user_path():
 
     assert "if (!DEMO_ENABLED)" in bootstrap_section
     assert "开发自检数据只在 dev=1 模式可用" in bootstrap_section
-    assert "真实使用请创建单商品只保存任务并运行真实只读检查" in bootstrap_section
+    assert "真实使用请创建单商品只保存任务并运行保存前安全检查" in bootstrap_section
     assert "mode: 'dry_run'" in bootstrap_section
     assert "mode: 'single_save'" not in bootstrap_section
     assert "本地演示核验批次" in bootstrap_section
@@ -1275,11 +1275,11 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "needsApproval && !selectedTaskNotDraft" in workbench_source
     assert "人工确认真实保存" in workbench_source
     assert "申请并启动单商品只保存" in workbench_source
-    assert "可以启动执行浏览器" in workbench_source
+    assert "可以启动浏览器现场" in workbench_source
     assert "function isStartableSingleSaveTask" in workbench_source
     assert "task.status === 'draft'" in workbench_source
     assert "RELEASED_SINGLE_SAVE_STORE_NAMES.has(storeName)" in workbench_source
-    assert "执行浏览器待启动" in workbench_source
+    assert "浏览器现场待启动" in workbench_source
     assert "查看报告与未发布证明" in workbench_source
     assert "查看保存证据" in results_source
     assert "处理问题" in results_source
@@ -1470,7 +1470,7 @@ def test_guide_center_can_start_real_dxm_login_without_l2_gate():
     assert "navigationStage.includes('failed')" in navigate_section
     assert "humanDxmNavigationNotice(navigationResult, `进入${targetLabel}失败`)" in navigate_section
     assert "真实浏览器已进入" in navigate_section
-    assert "执行浏览器" not in navigate_section
+    assert "浏览器现场" not in navigate_section
     assert "已请求店小秘登录流进入" in navigate_section
     assert "onOpenDxmLogin={openDxmLogin}" in app_source
     assert "onContinueDxmLogin={continueDxmLogin}" in app_source
@@ -1481,7 +1481,7 @@ def test_guide_center_can_start_real_dxm_login_without_l2_gate():
     assert "打开真实登录页" in dxm_access_source
     assert "验证码完成后检测登录状态" in dxm_access_source
     assert "已登录，继续下一步" in dxm_access_source
-    assert "继续到执行浏览器" in dxm_access_source
+    assert "继续到浏览器现场" in dxm_access_source
     assert "可选：打开店小秘页面或日志" in dxm_access_source
     assert "进入采集箱" in dxm_access_source
     assert "进入采集页" in dxm_access_source
@@ -1644,12 +1644,12 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "embedded" in workbench_source
     assert "agent-console-stage--embedded" in workbench_source
     assert "title=\"店小秘操作窗口\"" in console_section
-    assert "<strong>执行浏览器</strong>" in workbench_source
+    assert "<strong>浏览器现场</strong>" in workbench_source
     assert "<strong>当前页面</strong>" in workbench_source
     assert "<strong>操控状态</strong>" in workbench_source
     assert "<strong>人工接管</strong>" in workbench_source
     assert "<strong>下一步</strong>" in workbench_source
-    assert "hasBrowserSession && currentUrl ? shortUrl(currentUrl) : '等待启动执行浏览器'" in workbench_source
+    assert "hasBrowserSession && currentUrl ? shortUrl(currentUrl) : '等待启动浏览器现场'" in workbench_source
     assert "可在生命周期区接管" in workbench_source
     assert "可在会话管理中接管" not in workbench_source
     assert "buildConsolePrimaryPath({ selectedTask, reports: workspace.reports, configPreview, configPreviewError, configPreviewLoading, l2Gate, l3Gate, runtimeStatus, busy })" in workbench_source
@@ -1658,8 +1658,8 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "primaryPath.action === 'run_l2'" in workbench_source
     assert "primaryPath.action === 'start_browser'" in workbench_source
     assert "去填写编辑页补齐配置" in workbench_source
-    assert "运行真实只读检查" in workbench_source
-    assert "可以启动执行浏览器" in workbench_source
+    assert "运行保存前安全检查" in workbench_source
+    assert "可以启动浏览器现场" in workbench_source
     assert "处理只读检查与确认" not in workbench_source
     assert "处理任务门禁" not in workbench_source
     assert "控制台操控独立真实浏览器；截图仅用于报告证据。" in workbench_source
@@ -1682,28 +1682,28 @@ def test_execution_console_defaults_to_operator_focus_and_collapses_advanced_noi
     assert "先打开可见浏览器完成人工登录和验证码；这里只做登录，不保存、不发布。" in workbench_source
     assert "验证码完成后检测登录状态" in workbench_source
     assert "进入采集箱" in workbench_source
-    assert "登录浏览器用于人工登录和验证码。执行浏览器在配置、真实只读检查和人工确认通过后由 Agent 操作。控制台操控独立真实浏览器；截图仅用于报告证据。" in workbench_source
+    assert "登录浏览器用于人工登录和验证码。浏览器现场在配置、保存前安全检查和人工确认通过后由 Agent 操作。控制台操控独立真实浏览器；截图仅用于报告证据。" in workbench_source
     assert "控制台操控独立真实浏览器；截图仅用于报告证据。" in workbench_source
-    assert "aria-label=\"执行浏览器会话生命周期\"" in workbench_source
-    assert "未选择任务，执行浏览器暂不启动" in workbench_source
-    assert "配置未完成，执行浏览器暂不启动" in workbench_source
-    assert "真实只读检查未通过，执行浏览器暂不启动" in workbench_source
-    assert "等待人工确认，执行浏览器暂不启动" in workbench_source
+    assert "aria-label=\"浏览器现场会话生命周期\"" in workbench_source
+    assert "未选择任务，浏览器现场暂不启动" in workbench_source
+    assert "配置未完成，浏览器现场暂不启动" in workbench_source
+    assert "保存前安全检查未通过，浏览器现场暂不启动" in workbench_source
+    assert "等待人工确认，浏览器现场暂不启动" in workbench_source
     assert "先打开可见浏览器完成人工登录和验证码" in workbench_source
     assert "启动后可接管" in workbench_source
     assert "const takeoverStateLabel = !active" in workbench_source
-    assert "打开执行浏览器（不保存）" in workbench_source
+    assert "打开浏览器现场（不保存）" in workbench_source
     assert "disabled={busy || !selectedTask || browserStartBlocked || active || launching}" in workbench_source
-    assert "执行浏览器启动中" in workbench_source
-    assert "? '执行浏览器启动中'" in workbench_source
-    assert "? '执行浏览器已打开'" in workbench_source
-    assert "? '人工确认后打开执行浏览器'" in workbench_source
-    assert ": '打开执行浏览器（不保存）'}" in workbench_source
-    assert "当前执行浏览器会话正在运行。" in workbench_source
-    assert "<summary>执行浏览器操作细节</summary>" in workbench_source
+    assert "浏览器现场启动中" in workbench_source
+    assert "? '浏览器现场启动中'" in workbench_source
+    assert "? '浏览器现场已打开'" in workbench_source
+    assert "? '人工确认后打开浏览器现场'" in workbench_source
+    assert ": '打开浏览器现场（不保存）'}" in workbench_source
+    assert "当前浏览器现场会话正在运行。" in workbench_source
+    assert "<summary>浏览器现场操作细节</summary>" in workbench_source
     assert "agent-console-controls__operator-drawer" in workbench_source
     assert "agent-console-controls__operator-grid" in workbench_source
-    assert "<summary>执行浏览器会话生命周期</summary>" in workbench_source
+    assert "<summary>浏览器现场会话生命周期</summary>" in workbench_source
     assert "控制台只控制真实浏览器，不会启动保存或发布" in workbench_source
     assert "<summary>会话管理</summary>" not in workbench_source
     assert "<summary>高级浏览器控制</summary>" in workbench_source
@@ -1757,16 +1757,16 @@ def test_execution_console_makes_l2_precheck_action_and_purpose_visible():
         workbench_source.index("function FinalCheckFreshnessRow")
     ]
 
-    assert "const READONLY_PRECHECK_CTA = '运行真实只读检查'" in workbench_source
-    assert "const READONLY_PRECHECK_PURPOSE = '真实只读检查会打开店小秘采集页和采集箱，只读取页面，不领取、不保存、不发布；通过后才能打开执行浏览器。'" in workbench_source
+    assert "const READONLY_PRECHECK_CTA = '运行保存前安全检查'" in workbench_source
+    assert "const READONLY_PRECHECK_PURPOSE = '保存前安全检查会打开店小秘采集页和采集箱，只读取页面，不领取、不保存、不发布；通过后才能打开浏览器现场。'" in workbench_source
     assert "primaryPath.action === 'run_l2'" in focus_section
     assert "console-precheck-explainer" in focus_section
     assert "READONLY_PRECHECK_PURPOSE" in focus_section
     assert "READONLY_PRECHECK_CTA" in primary_path_section
-    assert "title: '需要运行真实只读检查'" in primary_path_section
+    assert "title: '需要运行保存前安全检查'" in primary_path_section
     assert "next: READONLY_PRECHECK_CTA" in primary_path_section
     assert "ctaLabel: READONLY_PRECHECK_CTA" in primary_path_section
-    assert "真实只读检查证据已过期，请点击“${READONLY_PRECHECK_CTA}”刷新后再继续。" in workbench_source
+    assert "保存前安全检查证据已过期，请点击“${READONLY_PRECHECK_CTA}”刷新后再继续。" in workbench_source
     assert "运行只读页面检查（不保存）" not in primary_path_section
 
 
@@ -1807,12 +1807,12 @@ def test_execution_console_keeps_focus_panel_single_action_first():
 
     assert "console-focus-panel__status-strip" in focus_section
     assert "aria-label=\"执行摘要\"" not in visible_before_details
-    assert "<summary>维护人员查看技术状态</summary>" in details_section
-    assert "aria-label=\"执行浏览器首屏状态\"" in visible_before_details
+    assert "<summary>维护人员查看运行状态</summary>" in details_section
+    assert "aria-label=\"浏览器现场首屏状态\"" in visible_before_details
     assert "<strong>DXM 登录</strong>" in visible_before_details
-    assert "<strong>真实只读检查</strong>" in visible_before_details
+    assert "<strong>保存前安全检查</strong>" in visible_before_details
     assert "<strong>人工确认</strong>" in visible_before_details
-    assert "<strong>执行浏览器</strong>" in visible_before_details
+    assert "<strong>浏览器现场</strong>" in visible_before_details
     assert "<strong>任务</strong>" in details_section
     assert "<strong>当前步骤</strong>" in details_section
     assert "<strong>下一步</strong>" in visible_before_details
@@ -1965,15 +1965,15 @@ def test_execution_console_surfaces_business_execution_state_before_details():
 
     details_section = focus_section[focus_section.index("<details className=\"console-focus-panel__details inline-disclosure\">"):]
 
-    assert "aria-label=\"执行浏览器首屏状态\"" in visible_before_details
+    assert "aria-label=\"浏览器现场首屏状态\"" in visible_before_details
     assert "console-focus-panel__status-strip" in visible_before_details
     assert "<strong>DXM 登录</strong>" in visible_before_details
     assert "loginState?.label ?? '未检测'" in visible_before_details
-    assert "<strong>真实只读检查</strong>" in visible_before_details
+    assert "<strong>保存前安全检查</strong>" in visible_before_details
     assert "l2StatusLabel" in visible_before_details
     assert "<strong>人工确认</strong>" in visible_before_details
     assert "l3StatusLabel" in visible_before_details
-    assert "<strong>执行浏览器</strong>" in visible_before_details
+    assert "<strong>浏览器现场</strong>" in visible_before_details
     assert "browserLabel" in visible_before_details
     assert "<strong>操控状态</strong>" in details_section
     assert "controlLabel" in details_section
@@ -2005,14 +2005,14 @@ def test_execution_console_primary_blocker_card_shows_precheck_recovery_path():
     assert "onRuntimeLogSourceChange={onRuntimeLogSourceChange}" in focus_section
     assert "onRuntimeLogSourceChange: (source: RuntimeLogSource) => void" in focus_section
     assert "onShowReports={onShowReports}" in focus_section
-    assert "aria-label=\"真实只读检查失败恢复路径\"" in blocker_card_section
+    assert "aria-label=\"保存前安全检查失败恢复路径\"" in blocker_card_section
     assert "console-primary-blocker-card__recovery" in blocker_card_section
     assert "1 确认登录" in blocker_card_section
     assert "2 打开目标页" in blocker_card_section
     assert "3 重新检查" in blocker_card_section
     assert "真实浏览器已登录，验证码或账号密码错误先在登录窗口修正。" in blocker_card_section
     assert "能打开商品采集页和采集箱；打不开先处理页面权限或网络。" in blocker_card_section
-    assert "无写入风险后，再点击运行真实只读检查。" in blocker_card_section
+    assert "无写入风险后，再点击运行保存前安全检查。" in blocker_card_section
     assert "onRuntimeLogSourceChange('launcher')" in blocker_card_section
     assert "查看启动器日志" in blocker_card_section
     assert "onShowReports" in blocker_card_section
@@ -2034,12 +2034,12 @@ def test_execution_console_distinguishes_login_browser_from_agent_execution_brow
     assert stage_section.index("<AgentLoginPanel") < stage_section.index("<AgentConsoleControls")
     assert "<strong>1 登录真实店小秘</strong>" in login_section
     assert "先打开可见浏览器完成人工登录和验证码；这里只做登录，不保存、不发布。" in login_section
-    assert "登录浏览器用于人工登录和验证码。执行浏览器在配置、真实只读检查和人工确认通过后由 Agent 操作。控制台操控独立真实浏览器；截图仅用于报告证据。" in console_section
-    assert "打开执行浏览器（不保存）" in console_section
-    assert "执行浏览器启动中" in console_section
-    assert "执行浏览器已打开" in console_section
-    assert "执行浏览器暂不启动" in primary_path_section
-    assert "真实只读检查未通过，暂不能启动执行浏览器。请先运行真实只读检查；系统不会保存或发布。" in app_source
+    assert "登录浏览器用于人工登录和验证码。浏览器现场在配置、保存前安全检查和人工确认通过后由 Agent 操作。控制台操控独立真实浏览器；截图仅用于报告证据。" in console_section
+    assert "打开浏览器现场（不保存）" in console_section
+    assert "浏览器现场启动中" in console_section
+    assert "浏览器现场已打开" in console_section
+    assert "浏览器现场暂不启动" in primary_path_section
+    assert "保存前安全检查未通过，暂不能启动浏览器现场。请先运行保存前安全检查；系统不会保存或发布。" in app_source
 
     assert "首步：打开真实店小秘登录页" not in console_section
     assert "只读检查未通过，真实浏览器暂不启动" not in primary_path_section
@@ -2051,7 +2051,7 @@ def test_execution_console_collapses_operator_forms_inside_real_browser_details(
     stage_section = workbench_source[workbench_source.index("function AgentStagePanel"):workbench_source.index("function AgentLoginPanel")]
     login_section = workbench_source[workbench_source.index("function AgentLoginPanel"):workbench_source.index("function AgentBrowserFrame")]
     controls_section = workbench_source[workbench_source.index("function AgentConsoleControls"):workbench_source.index("function BrowserControlPad")]
-    drawer_section = controls_section[controls_section.index("<summary>执行浏览器操作细节</summary>"):controls_section.index("{agentConsoleError")]
+    drawer_section = controls_section[controls_section.index("<summary>浏览器现场操作细节</summary>"):controls_section.index("{agentConsoleError")]
 
     assert "<AgentLoginPanel" in stage_section
     assert stage_section.index("<AgentLoginPanel") < stage_section.index("<AgentConsoleControls")
@@ -2061,11 +2061,11 @@ def test_execution_console_collapses_operator_forms_inside_real_browser_details(
     assert "dxmLoginDraft" not in controls_section
     assert "onOpenDxmLogin" not in controls_section
     assert "DxmLoginInlineForm" not in drawer_section
-    assert "<summary>执行浏览器会话生命周期</summary>" in drawer_section
+    assert "<summary>浏览器现场会话生命周期</summary>" in drawer_section
     assert "<summary>高级浏览器控制</summary>" in drawer_section
-    assert "<summary>技术详情</summary>" in drawer_section
+    assert "<summary>维护详情</summary>" in drawer_section
     assert controls_section.index("READONLY_PRECHECK_CTA") < controls_section.index("agent-console-controls__actions")
-    assert controls_section.index("agent-console-controls__actions") < controls_section.index("<summary>执行浏览器操作细节</summary>")
+    assert controls_section.index("agent-console-controls__actions") < controls_section.index("<summary>浏览器现场操作细节</summary>")
 
 
 def test_execution_console_keeps_agent_mode_explanation_collapsed_after_primary_actions():
@@ -2077,7 +2077,7 @@ def test_execution_console_keeps_agent_mode_explanation_collapsed_after_primary_
     assert "<summary>模式说明与安全边界</summary>" in controls_section
     assert controls_section.index("agent-console-controls__actions") < controls_section.index("agent-console-controls__mission-drawer")
     assert controls_section.index("agent-console-controls__mission-drawer") < controls_section.index("agent-console-controls__operator-drawer")
-    assert "登录浏览器用于人工登录和验证码。执行浏览器在配置、真实只读检查和人工确认通过后由 Agent 操作。" in controls_section
+    assert "登录浏览器用于人工登录和验证码。浏览器现场在配置、保存前安全检查和人工确认通过后由 Agent 操作。" in controls_section
     assert ".agent-console-controls__mission-drawer" in styles_source
     assert ".agent-console-controls__mission-drawer[open]" in styles_source
 
@@ -2087,7 +2087,7 @@ def test_execution_console_explains_disabled_session_controls():
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
     controls_section = workbench_source[workbench_source.index("function AgentConsoleControls"):workbench_source.index("function BrowserControlPad")]
     session_section = controls_section[
-        controls_section.index("<summary>执行浏览器会话生命周期</summary>"):
+        controls_section.index("<summary>浏览器现场会话生命周期</summary>"):
         controls_section.index("<summary>高级浏览器控制</summary>")
     ]
     lifecycle_section = controls_section[
@@ -2096,9 +2096,9 @@ def test_execution_console_explains_disabled_session_controls():
     ]
 
     assert "const sessionDisabledReason" in controls_section
-    assert "先打开执行浏览器，才能刷新、接管、交还或关闭。" in controls_section
+    assert "先打开浏览器现场，才能刷新、接管、交还或关闭。" in controls_section
     assert "当前已人工接管，处理完成后点击交还 Agent。" in controls_section
-    assert "aria-label=\"执行浏览器会话按钮不可用原因\"" in lifecycle_section
+    assert "aria-label=\"浏览器现场会话按钮不可用原因\"" in lifecycle_section
     assert "aria-label=\"会话按钮不可用原因\"" in session_section
     assert "title={snapshotDisabledReason || undefined}" in session_section
     assert "title={takeoverDisabledReason || undefined}" in session_section
@@ -2276,7 +2276,7 @@ def test_execution_console_exposes_runtime_control_and_agent_action_timeline():
     assert "setOperationNotice(result.message ?? runtimeControlSuccessMessage(action))" in app_source
     assert "data-testid=\"operation-notice\"" in app_source
     assert "runtimeStatus={runtimeStatus}" in app_source
-    assert "已启动真实只读检查，请在“执行浏览器”查看实时日志。" in app_source
+    assert "已启动保存前安全检查，请在“浏览器现场”查看实时日志。" in app_source
     assert ".operation-alert--ok" in styles_source
     assert "runtimeControl?: {" in types_source
     assert "owner?: 'start_mvp' | 'desktop' | 'direct' | string" in types_source
@@ -2318,8 +2318,8 @@ def test_operation_feedback_uses_floating_toast_stack_not_page_flow_alerts():
     assert "{workspaceNotice && (" in shell_section
     assert "{visibleOperationError && (" in shell_section
     assert "{operationNotice && (" in shell_section
-    assert "const visibleOperationError = selectedTaskCompleted && operationError?.includes('真实只读检查')" in app_source
-    assert "if (selectedTaskCompleted && operationError?.includes('真实只读检查'))" in app_source
+    assert "const visibleOperationError = selectedTaskCompleted && operationError?.includes('保存前安全检查')" in app_source
+    assert "if (selectedTaskCompleted && operationError?.includes('保存前安全检查'))" in app_source
     assert "setOperationError(null)" in app_source
     assert shell_section.index('className="operation-toast-stack"') < shell_section.index("{workspaceNotice && (")
     assert shell_section.index('className="operation-toast-stack"') < shell_section.index("{visibleOperationError && (")
@@ -2595,7 +2595,7 @@ def test_dashboard_and_guide_default_copy_hide_gate_codes():
     assert "确认保存前安全检查通过" in operation_guide_section
     assert "打开真实登录页" in dxm_access_source
     assert "AgentStagePanel" in console_section
-    assert "运行真实只读检查" in source
+    assert "运行保存前安全检查" in source
     assert "READONLY_PRECHECK_CTA" in source
     assert "可申请 single_save" not in source
     assert "可申请单商品只保存" in source
@@ -2714,7 +2714,7 @@ def test_runtime_log_default_views_humanize_lines_and_keep_raw_lines_in_diagnost
     assert "CLAIM_TO_DRAFT_BOX".lower() in source.lower()
     assert "SAVE_ONLY".lower() in source.lower()
     assert "VERIFY_NOT_PUBLISHED".lower() in source.lower()
-    assert "真实浏览器窗口已关闭，请重新打开执行浏览器。" in source
+    assert "真实浏览器窗口已关闭，请重新打开浏览器现场。" in source
     assert "正在把选中的商品认领到采集箱。" in source
     assert "正在点击店小秘“保存”，不会发布。" in source
     assert "保存步骤失败：系统没有继续发布" in source
@@ -2840,9 +2840,9 @@ def test_task_and_evidence_center_describe_l3_blocked_as_expected_lock():
     assert "解除发布隔离风险" not in task_center_section
     assert "齐全后才会形成 A/B/C 证据等级" not in evidence_timeline_section
 
-    assert "真实只读检查通过后才启动采集认领" in task_center_section
+    assert "保存前安全检查通过后才启动采集认领" in task_center_section
     assert "人工确认未完成前不启动单商品只保存" in task_center_section
-    assert "当前按钮策略：真实只读检查未通过时保持阻断" in task_center_section
+    assert "当前按钮策略：保存前安全检查未通过时保持阻断" in task_center_section
     assert "人工确认未完成，禁止启动" in task_center_section
     assert "当前真实保存未放行时" in evidence_timeline_section
     assert "0 条是预期阻断" in evidence_timeline_section
@@ -2878,7 +2878,7 @@ def test_task_center_exposes_real_task_creation_instead_of_demo_first_flow():
 
     assert "onCreateRealTask" in task_center_section
     assert "创建真实任务" in task_center_section
-    assert "真实只读检查" in task_center_section
+    assert "保存前安全检查" in task_center_section
     assert "单商品只保存" in task_center_section
     assert "批量保存未放行" in task_center_section
     assert "发布动作未开放" in task_center_section
@@ -2906,7 +2906,7 @@ def test_task_center_surfaces_single_save_recovery_guide_for_blocked_real_tasks(
     assert "当前任务不可直接启动时，按这里回到真实自动化可执行路径。" in panels_source
     assert "选择最近单商品只保存任务" in panels_source
     assert "创建新的单商品只保存任务" in panels_source
-    assert "运行真实只读检查" in panels_source
+    assert "运行保存前安全检查" in panels_source
     assert "查看检查计划" in panels_source
     assert "onRunL2Probe={onRunL2Probe}" in task_center_section
     assert "不放行认领/批量保存" in panels_source
@@ -2929,22 +2929,22 @@ def test_task_center_explains_l2_recheck_before_real_save():
     assert "onRunL2Probe={onRunL2Probe}" in task_center_section
     assert "l2ProbeResourceState={l2ProbeResourceState}" in task_center_section
     assert "const showPrecheckRecoveryActions =" in current_panel_section
-    assert "aria-label=\"真实只读检查未通过处理\"" in current_panel_section
-    assert "真实只读检查没有通过，不能启动真实保存。" in current_panel_section
-    assert "运行真实只读检查" in current_panel_section
+    assert "aria-label=\"保存前安全检查未通过处理\"" in current_panel_section
+    assert "保存前安全检查没有通过，不能启动真实保存。" in current_panel_section
+    assert "运行保存前安全检查" in current_panel_section
     assert "task-current-panel__optional-actions" in current_panel_section
     assert "可选处理" in current_panel_section
-    assert "查看执行浏览器" in current_panel_section
+    assert "查看浏览器现场" in current_panel_section
     assert "查看证据缺口" in current_panel_section
     assert "查看检查计划" in current_panel_section
     assert "task-current-panel__actions" not in current_panel_section
     assert "l2ProbeResourceState.blocked" in current_panel_section
     assert "task-current-panel__precheck-actions" in styles_source
-    assert "真实只读检查未通过，真实保存先暂停" in recheck_card_section
+    assert "保存前安全检查未通过，真实保存先暂停" in recheck_card_section
     assert "<strong>发生了什么</strong>" in recheck_card_section
     assert "<strong>为什么不能继续</strong>" in recheck_card_section
     assert "<strong>下一步</strong>" in recheck_card_section
-    assert "确认商品采集页和草稿箱页能正常打开" in recheck_card_section
+    assert "确认商品采集页和采集箱页能正常打开" in recheck_card_section
     assert "不会领取、备注、保存或发布" in recheck_card_section
     assert "当前状态：{humanGateStateLabel(l2Gate?.status ?? 'not_run')}" in recheck_card_section
     assert "READONLY_PRECHECK_CTA" in recheck_card_section
@@ -3014,15 +3014,15 @@ def test_task_center_defaults_to_current_task_first_and_collapses_setup_noise():
     assert "<strong>为什么不能继续</strong>" in current_panel_section
     assert "<strong>下一步</strong>" in current_panel_section
     assert "去填写编辑页补齐 DXM 编辑页必填字段" in panels_source
-    assert "${READONLY_PRECHECK_CTA}，确认商品采集页和草稿箱页均无写入风险" in panels_source
-    assert "点击主按钮后，在“执行浏览器”查看执行。" in panels_source
+    assert "${READONLY_PRECHECK_CTA}，确认商品采集页和采集箱页均无写入风险" in panels_source
+    assert "点击主按钮后，在“浏览器现场”查看执行。" in panels_source
     assert "先选择或创建单商品只保存任务" in current_panel_section
     assert "先选择或创建 single_save 任务" not in panels_source
     assert "默认只展示真实自动化主路径" in current_panel_section
     assert "humanTaskModeLabel(selectedTask.mode)" in current_panel_section
     assert "humanGateDetail(l2Gate?.detail)" in source
     assert "单商品只保存核验任务" in source
-    assert "<strong>真实只读检查</strong>" in current_panel_section
+    assert "<strong>保存前安全检查</strong>" in current_panel_section
     assert "<strong>人工确认</strong>" in current_panel_section
     assert "humanGateStateLabel(l2Gate?.status ?? 'not_run')" in current_panel_section
     assert "humanGateStateLabel(l3Gate?.status ?? 'blocked')" in current_panel_section
@@ -3141,9 +3141,9 @@ def test_task_center_explains_quick_action_availability_in_first_screen():
     assert "start: blockedStartButtonLabel" in task_center_section
     assert "暂无历史任务；先创建单商品只保存任务。" in task_center_section
     assert "aria-label=\"任务按钮不可点击原因\"" in quick_actions_section
-    assert "<summary>为什么不能启动执行浏览器</summary>" in quick_actions_section
+    assert "<summary>为什么不能启动浏览器现场</summary>" in quick_actions_section
     assert "<strong>创建任务</strong>" in quick_actions_section
-    assert "<strong>执行浏览器</strong>" in quick_actions_section
+    assert "<strong>浏览器现场</strong>" in quick_actions_section
     assert "taskActionDiagnosis.create" in quick_actions_section
     assert "taskActionDiagnosis.start" in quick_actions_section
     assert ".task-quick-actions__diagnosis" in styles_source
@@ -3210,7 +3210,7 @@ def test_task_center_hides_raw_l2_diagnostics_behind_disclosure():
     visible_l2_diagnostics = decision_drawer[:decision_drawer.index('<details className="inline-disclosure l2-raw-request-drawer">')]
 
     assert '<details className="inline-disclosure l2-block-summary">' in task_center_section
-    assert "<summary>真实只读检查诊断摘要</summary>" in task_center_section
+    assert "<summary>保存前安全检查诊断摘要</summary>" in task_center_section
     assert "humanDiagnosticNavigation(item.navigation)" in task_center_section
     assert "humanFailedCheckLabel" in source
     assert "requestSummary: string" in source
@@ -3340,7 +3340,7 @@ def test_frontend_blocks_unreleased_real_modes_before_l3_manual_approval():
     assert "未发布，禁止启动" in workbench_source
     assert "function isReleasedRealDxmMutationTask" in workbench_source
     assert "function isUnreleasedRealDxmMutationTask" in workbench_source
-    assert "当前按钮策略：真实只读检查未通过时保持阻断；采集认领可启动第一段流程；单商品只保存仍需后端人工批准；批量保存当前未开放。" in workbench_source
+    assert "当前按钮策略：保存前安全检查未通过时保持阻断；采集认领可启动第一段流程；单商品只保存仍需后端人工批准；批量保存当前未开放。" in workbench_source
     assert "unreleasedRealModeCopy" in qa_source
     assert "unreleasedRealModeButtonDisabled" in qa_source
     assert "async function verifyUnreleasedRealModeCreateBlocked()" in qa_source
@@ -3509,8 +3509,8 @@ def test_frontend_surfaces_runtime_status_and_log_filters():
     assert "repairSteps" in (REPO_ROOT / "app" / "frontend" / "src" / "types.ts").read_text(encoding="utf-8")
     assert "item?.userMessage" in workbench_source
     assert "item?.repairSteps" in workbench_source
-    assert "真实只读检查组件未安装完整" in workbench_source
-    assert "真实只读检查依赖状态未知，请先刷新运行状态或重新打开免安装版。" in workbench_source
+    assert "保存前安全检查组件未安装完整" in workbench_source
+    assert "保存前安全检查依赖状态未知，请先刷新运行状态或重新打开免安装版。" in workbench_source
 
 
 def test_frontend_uses_unified_real_browser_status_for_primary_browser_state():
@@ -3540,7 +3540,7 @@ def test_frontend_uses_unified_real_browser_status_for_primary_browser_state():
     assert "已检查：" in workbench_source
     assert ".slice(0, 4)" in workbench_source
     assert "agent-console-resource-alert" in workbench_source
-    assert "真实只读检查组件未安装完整，请关闭旧进程并重新打开完整免安装目录版" in workbench_source
+    assert "保存前安全检查组件未安装完整，请关闭旧进程并重新打开完整免安装目录版" in workbench_source
     assert "DXM-Agent-Console-免安装版\\\\DXM-Agent-Console.exe" in workbench_source
     assert "task: '任务'" in workbench_source
     assert "agent: '浏览器 Agent'" in workbench_source
@@ -3593,7 +3593,7 @@ def test_console_primary_path_blocks_l2_when_probe_runner_is_missing():
     assert "runtimeStatus: RuntimeStatus | null" in primary_path_section
     assert "const l2ProbeResourceState = getL2ProbeResourceState(runtimeStatus)" in primary_path_section
     assert "if (requiresRealL2(selectedTask) && !l2Ready && l2ProbeResourceState.blocked)" in primary_path_section
-    assert "title: '需要运行真实只读检查'" in primary_path_section
+    assert "title: '需要运行保存前安全检查'" in primary_path_section
     assert "ctaLabel: '查看启动器日志'" in primary_path_section
     assert "action: 'launcher_logs'" in primary_path_section
     assert "buildConsolePrimaryPath({ selectedTask, reports: workspace.reports, configPreview, configPreviewError, configPreviewLoading, l2Gate, l3Gate, runtimeStatus, busy })" in console_section
@@ -3620,7 +3620,7 @@ def test_l2_probe_resource_blocker_shows_repair_steps_and_checked_paths():
     assert "不要只复制 exe，必须保留 resources 文件夹" in resource_state
     assert "L2ProbeResourceRepairPanel" in readonly_card
     assert "L2ProbeResourceRepairPanel" in console_controls
-    assert "真实只读检查资源修复步骤" in repair_panel
+    assert "保存前安全检查资源修复步骤" in repair_panel
     assert "l2ProbeResourceState.repairSteps.map" in repair_panel
     assert "l2ProbeResourceState.checkedPathPreview.map" in repair_panel
     assert ".l2-probe-repair-panel" in styles_source
@@ -3637,10 +3637,10 @@ def test_execution_console_disables_l2_probe_when_runner_lock_is_active():
     assert "l2ReadonlyProbe?: {" in types_source
     assert "running: boolean" in types_source
     assert "runtimeStatus.l2ReadonlyProbe?.running" in l2_state_function
-    assert "真实只读检查正在运行" in l2_state_function
+    assert "保存前安全检查正在运行" in l2_state_function
     assert "runId" in l2_state_function
     assert "请等待完成或查看实时日志" in l2_state_function
-    assert "真实只读检查正在运行，请等待完成。" in l2_state_function
+    assert "保存前安全检查正在运行，请等待完成。" in l2_state_function
     assert "关闭旧窗口或后台旧进程后，再重新打开免安装版。" in l2_state_function
 
 
@@ -3719,9 +3719,9 @@ def test_frontend_refreshes_workspace_after_l2_runner_finishes():
     assert "const refreshedWorkspace = await refreshWorkspace()" in runner_observer
     assert "const refreshedL2Gate = refreshedWorkspace.regressionGates.find((gate) => gate.level === 'L2')" in runner_observer
     assert "runnerSucceeded && refreshedL2Gate?.status === 'passed'" in runner_observer
-    assert "真实只读检查已运行，但门禁未刷新通过" in runner_observer
-    assert "runnerSucceeded ? '真实只读检查已运行，但门禁未刷新通过' : '真实只读检查失败，真实保存仍阻断'" in runner_observer
-    assert "真实只读检查未通过：请确认已登录并能打开商品采集页、草稿箱页后重试。" in runner_observer
+    assert "保存前安全检查已运行，但状态未刷新通过" in runner_observer
+    assert "runnerSucceeded ? '保存前安全检查已运行，但状态未刷新通过' : '保存前安全检查失败，真实保存仍阻断'" in runner_observer
+    assert "保存前安全检查未通过：请确认已登录并能打开商品采集页、采集箱页后重试。" in runner_observer
     assert "系统不会保存或发布" in runner_observer
     assert "void handleL2RunnerFinished({" in runner_observer
     assert "void refreshWorkspace()" not in runner_observer
@@ -3738,19 +3738,19 @@ def test_execution_console_surfaces_l2_runner_result_not_just_start_message():
     assert "exit_code=0" in app_source
     assert "exit_code=" in app_source
     assert "setL2RunnerState({ status: 'failed'" in app_source
-    assert "setOperationError(`${message}；请确认真实店小秘已登录，再重新运行真实只读检查。系统不会保存或发布。`)" in app_source
+    assert "setOperationError(`${message}；请确认真实店小秘已登录，再重新运行保存前安全检查。系统不会保存或发布。`)" in app_source
     assert "l2RunnerState={l2RunnerState}" in app_source
     assert "L2RunnerStatePanel" in workbench_source
-    assert "真实只读检查" in workbench_source
-    assert "正在运行双目标真实只读检查" in workbench_source
-    assert "真实只读检查通过，已刷新门禁" in workbench_source
-    assert "真实只读检查失败，真实保存仍阻断" in workbench_source
-    assert "真实只读检查已运行，但门禁未刷新通过" in app_source
+    assert "保存前安全检查" in workbench_source
+    assert "正在运行双目标保存前安全检查" in workbench_source
+    assert "保存前安全检查通过，已刷新状态" in workbench_source
+    assert "保存前安全检查失败，真实保存仍阻断" in workbench_source
+    assert "保存前安全检查已运行，但状态未刷新通过" in app_source
     runner_panel = workbench_source[workbench_source.index("function L2RunnerStatePanel"):workbench_source.index("function L2PrecheckFailureAdvice")]
     assert "<summary>排障日志</summary>" in runner_panel
     assert "run-id：" in runner_panel
     assert "退出码：" in runner_panel
-    assert "请确认已登录并能打开商品采集页、草稿箱页后重试。" in runner_panel
+    assert "请确认已登录并能打开商品采集页、采集箱页后重试。" in runner_panel
     assert ".l2-runner-state" in styles_source
 
 
@@ -3762,19 +3762,19 @@ def test_execution_console_explains_l2_precheck_runbook_and_next_action():
 
     assert "L2PrecheckRunbook" in console_section
     assert "function L2PrecheckRunbook" in workbench_source
-    assert "aria-label=\"真实只读检查操作引导\"" in runner_panel
+    assert "aria-label=\"保存前安全检查操作引导\"" in runner_panel
     assert "安全检查说明" in runner_panel
     assert "1 打开真实店小秘页面" in runner_panel
     assert "2 检查两个页面" in runner_panel
     assert "3 通过后人工确认保存" in runner_panel
     assert "商品采集页" in runner_panel
-    assert "采集箱/草稿箱" in runner_panel
+    assert "采集箱" in runner_panel
     assert "不会领取、不会保存、不会发布" in runner_panel
     assert "onLogSourceChange('launcher')" in runner_panel
     assert "查看排障日志" in runner_panel
     assert "onShowReports" in runner_panel
     assert "查看检查计划" in runner_panel
-    assert "真实只读检查失败后怎么办" in runner_panel
+    assert "保存前安全检查失败后怎么办" in runner_panel
     assert "l2-precheck-runbook" in styles_source
     assert ".l2-precheck-runbook__steps" in styles_source
 
@@ -3790,7 +3790,7 @@ def test_execution_console_places_primary_precheck_action_in_l2_state_card():
     assert "busy={busy}" in console_section
     assert "const l2ProbeResourceState = getL2ProbeResourceState(runtimeStatus)" in runner_panel
     assert "const precheckDisabled = busy || state.status === 'running' || l2ProbeResourceState.blocked" in runner_panel
-    assert "aria-label=\"运行真实只读检查主操作\"" in runner_panel
+    assert "aria-label=\"运行保存前安全检查主操作\"" in runner_panel
     assert "onLogSourceChange('launcher')" in runner_panel
     assert "onRunPrecheck()" in runner_panel
     assert "{state.status === 'running' ? '安全检查运行中' : READONLY_PRECHECK_CTA}" in runner_panel
@@ -3808,8 +3808,8 @@ def test_execution_console_shows_l2_failure_advice_in_precheck_card():
     assert "function L2PrecheckFailureAdvice" in workbench_source
     assert "gateStatus?: RegressionGate['status']" in workbench_source
     assert "if (state.status !== 'failed' && gateStatus !== 'blocked') return null" in workbench_source
-    assert "aria-label=\"真实只读检查失败处理建议\"" in workbench_source
-    assert "真实只读检查失败处理建议" in workbench_source
+    assert "aria-label=\"保存前安全检查失败处理建议\"" in workbench_source
+    assert "保存前安全检查失败处理建议" in workbench_source
     assert "失败页面" in workbench_source
     assert "失败检查" in workbench_source
     assert "下一步处理" in workbench_source
@@ -3859,13 +3859,13 @@ def test_l2_precheck_start_receipt_shows_run_id_targets_and_log_path():
     assert "runId: result.runId" in run_runtime_control
     assert "line: result.logPath ?? null" in run_runtime_control
     assert "result.action === 'run_l2_readonly_probe'" in result_summary
-    assert "真实只读检查已启动" in result_summary
+    assert "保存前安全检查已启动" in result_summary
     assert "run-id：{result.runId ?? '等待返回'}" in result_summary
     assert "检查目标：{formatL2ProbeTargets(result.targets)}" in result_summary
     assert "日志：{result.logPath ?? '启动器日志'}" in result_summary
     assert "function formatL2ProbeTargets" in workbench_source
     assert "data_acquisition: '商品采集页'" in workbench_source
-    assert "draft_box: '采集箱/草稿箱'" in workbench_source
+    assert "draft_box: '采集箱'" in workbench_source
 
 
 def test_execution_console_can_mark_real_task_for_manual_review():
@@ -3889,9 +3889,9 @@ def test_frontend_humanizes_l2_runner_missing_error():
 
     assert "function humanOperationError" in app_source
     assert "L2 readonly probe resources are missing" in app_source
-    assert "真实只读检查组件未安装完整，请关闭旧进程并重新打开完整免安装目录版。" in app_source
+    assert "保存前安全检查组件未安装完整，请关闭旧进程并重新打开完整免安装目录版。" in app_source
     assert "L2 readonly probe runner is missing" in app_source
-    assert "真实只读检查组件未安装完整：缺少真实只读检查启动器。" in app_source
+    assert "保存前安全检查组件未安装完整：缺少安全检查启动器。" in app_source
     assert "function searchedPathHint(message: string)" in app_source
     assert "const marker = 'Searched:'" in app_source
     assert ".slice(0, 3)" in app_source
@@ -3913,7 +3913,7 @@ def test_execution_console_hides_raw_l2_runner_missing_in_gate_and_state_message
 
     assert "humanL2PrecheckError" in workbench_source
     assert "L2 readonly probe runner is missing" in gate_detail_function
-    assert "缺少真实只读检查启动器" in gate_detail_function
+    assert "缺少安全检查启动器" in gate_detail_function
     assert "humanL2PrecheckError(state.line)" in runner_state_panel
     assert "{state.line && <code>{state.line}</code>}" not in runner_state_panel
 
@@ -4054,7 +4054,7 @@ def test_frontend_humanizes_agent_console_browser_start_failures():
     ]
 
     assert "function humanAgentConsoleError(message: string)" in app_source
-    assert "真实执行浏览器启动失败" in app_source
+    assert "真实浏览器现场启动失败" in app_source
     assert "请关闭旧的 DXM Agent Console 或旧浏览器进程后重试" in app_source
     assert "browser has been closed" in app_source
     assert "user data directory is already in use" in app_source
@@ -4078,7 +4078,7 @@ def test_frontend_agent_console_initial_hud_matches_single_save_user_flow():
     assert "只保存，不发布" in hud_builder
     assert "requires_user_action: true" in hud_builder
     assert "severity: 'warning'" in hud_builder
-    assert "真实只读检查待命" not in hud_builder
+    assert "保存前安全检查待命" not in hud_builder
     assert "只读观察" not in hud_builder
 
 
@@ -4152,7 +4152,7 @@ def test_frontend_marks_l2_runner_failed_when_start_request_fails():
     assert "if (action === 'run_l2_readonly_probe')" in run_runtime_control
     assert "setL2RunnerState({" in run_runtime_control
     assert "status: 'failed'" in run_runtime_control
-    assert "真实只读检查启动失败，真实保存仍阻断" in run_runtime_control
+    assert "保存前安全检查启动失败，真实保存仍阻断" in run_runtime_control
     assert "humanOperationError(message)" in run_runtime_control
     assert "setOperationError(humanMessage)" in run_runtime_control
 
@@ -4211,7 +4211,7 @@ def test_safety_bar_uses_operator_precheck_copy_before_technical_l2_terms():
     assert "L2 页面核验" not in visible_status_section
     assert "保存前安全检查：" in detail_chip_section
     assert "L2 页面核验：" not in detail_chip_section
-    assert "真实只读检查：" in safety_bar[safety_bar.index("const gateDetails"):safety_bar.index("const blockerDetails")]
+    assert "保存前安全检查：" in safety_bar[safety_bar.index("const gateDetails"):safety_bar.index("const blockerDetails")]
     assert "L2 页面核验：" not in safety_bar[safety_bar.index("const gateDetails"):safety_bar.index("const blockerDetails")]
 
 
@@ -4298,11 +4298,11 @@ def test_execution_console_uses_unified_primary_path_before_rendering():
     assert "需要补配置" in source
     assert "configPreviewLoading || configPreview?.taskId !== selectedTask.id" in source
     assert "去填写编辑页补齐配置" in source
-    assert "需要运行真实只读检查" in source
+    assert "需要运行保存前安全检查" in source
     assert "需要人工确认只保存" in source
-    assert "可以启动执行浏览器" in source
+    assert "可以启动浏览器现场" in source
     assert "最新证据年龄" in source
-    assert "真实只读检查证据已过期，请点击“${READONLY_PRECHECK_CTA}”刷新后再继续。" in source
+    assert "保存前安全检查证据已过期，请点击“${READONLY_PRECHECK_CTA}”刷新后再继续。" in source
 
 
 def test_frontend_first_screen_names_dxm_automation_delivery():
@@ -4408,8 +4408,8 @@ def test_frontend_uses_business_sidebar_groups_and_hides_operator_diagnostics_by
     assert "run-id" not in visible_bar
     assert "L2 页面核验" not in visible_bar
     assert "完整日志" not in visible_bar
-    assert "真实只读检查通过，已刷新门禁" in source
-    assert "真实只读检查通过后，继续人工确认单商品只保存。" in source
+    assert "保存前安全检查通过，已刷新状态" in source
+    assert "保存前安全检查通过后，继续人工确认单商品只保存。" in source
 
 
 def test_home_dashboard_is_operator_command_center_not_static_metrics():
@@ -4452,7 +4452,7 @@ def test_home_page_default_path_is_three_decision_cards_without_gate_jargon():
     for forbidden in ["L2", "L3", "probe", "run-id", "HAR", "greenlet"]:
         assert forbidden not in dashboard_section
 
-    assert "维护人员查看技术状态" in source
+    assert "维护人员查看运行状态" in source
 
 
 def test_config_and_console_primary_screens_keep_diagnostics_secondary():
@@ -4535,8 +4535,8 @@ def test_frontend_translates_failed_execution_technical_errors_for_operators():
     assert "message.includes('save_result')" in copy_source
     assert "message.includes('network/HAR')" in copy_source
     assert "浏览器会话异常" in copy_source
-    assert "请关闭当前执行浏览器，重新打开真实浏览器后再运行任务" in copy_source
-    assert "真实只读检查未通过" in copy_source
+    assert "请关闭当前浏览器现场窗口，重新打开真实浏览器后再运行任务" in copy_source
+    assert "保存前安全检查未通过" in copy_source
     assert "人工确认还没有完成" in copy_source
     assert "检查记录没有对齐" in copy_source
     assert "保存结果证据不完整" in copy_source
@@ -4576,8 +4576,8 @@ def test_extracted_pages_do_not_fallback_to_raw_gate_details():
         assert "return detail" not in section
     assert "function safeGateDetailFallback(detail: string)" in panels_source
     assert "function safeGateDetailFallback(detail: string)" in results_source
-    assert "原始诊断已收进技术详情" in panels_source
-    assert "原始诊断已收进技术详情" in results_source
+    assert "原始诊断已收进维护详情" in panels_source
+    assert "原始诊断已收进维护详情" in results_source
 
 
 def test_issue_queue_problem_cards_use_what_why_next_structure():
@@ -4685,7 +4685,7 @@ def test_dxm_access_page_is_extracted_from_workbench_modules():
     assert "aria-label=\"登录店小秘\"" in dxm_access_source
     assert "登录真实店小秘" in dxm_access_source
     assert "打开真实登录页" in dxm_access_source
-    assert "继续到执行浏览器" in dxm_access_source
+    assert "继续到浏览器现场" in dxm_access_source
     assert "可选：打开店小秘页面或日志" in dxm_access_source
     assert "验证码完成后检测登录状态" in dxm_access_source
     assert "CredentialStorageFacts" in dxm_access_source
@@ -4789,7 +4789,7 @@ def test_single_save_recovery_guide_is_extracted_to_product_task_panels():
     assert "当前任务不可直接启动时，按这里回到真实自动化可执行路径。" in panels_source
     assert "选择最近单商品只保存任务" in panels_source
     assert "创建新的单商品只保存任务" in panels_source
-    assert "运行真实只读检查" in panels_source
+    assert "运行保存前安全检查" in panels_source
     assert "function SingleSaveRecoveryGuide(" not in source
 
 
@@ -4801,7 +4801,7 @@ def test_task_current_action_panel_is_extracted_to_product_task_panels():
     assert "function taskStartDecision" in panels_source
     assert "aria-label=\"当前任务执行\"" in panels_source
     assert "data-testid=\"task-start-button\"" in panels_source
-    assert "真实只读检查没有通过，不能启动真实保存。" in panels_source
+    assert "保存前安全检查没有通过，不能启动真实保存。" in panels_source
     assert "from './workbench/ProductTaskPanels'" in source
     assert "function TaskCurrentActionPanel(" not in source
     assert "function taskStartDecision(" not in source
@@ -4813,8 +4813,8 @@ def test_readonly_recheck_panels_are_extracted_to_product_task_panels():
 
     assert "export function ReadonlyRecheckHelpCard" in panels_source
     assert "export function L2ProbeResourceRepairPanel" in panels_source
-    assert "真实只读检查未通过，真实保存先暂停" in panels_source
-    assert "真实只读检查资源修复步骤" in panels_source
+    assert "保存前安全检查未通过，真实保存先暂停" in panels_source
+    assert "保存前安全检查资源修复步骤" in panels_source
     assert "function ReadonlyRecheckHelpCard(" not in source
     assert "function L2ProbeResourceRepairPanel(" not in source
 
@@ -4850,9 +4850,9 @@ def test_agent_execution_primary_path_uses_user_visible_state_labels():
         "需要登录店小秘",
         "需要选择任务",
         "需要补配置",
-        "需要运行真实只读检查",
+        "需要运行保存前安全检查",
         "需要人工确认只保存",
-        "可以启动执行浏览器",
+        "可以启动浏览器现场",
         "正在执行",
         "保存成功",
         "保存失败，需处理",
@@ -4886,7 +4886,7 @@ def test_agent_console_l2_state_has_single_precheck_cta_before_advanced_details(
 
     assert "{primaryPath.code !== 'l2' && (" in primary_actions
     assert primary_actions.count("{READONLY_PRECHECK_CTA}") == 1
-    assert "人工确认后打开执行浏览器" in controls
+    assert "人工确认后打开浏览器现场" in controls
 
 
 def test_workspace_fallback_does_not_ship_demo_tasks_or_reports():

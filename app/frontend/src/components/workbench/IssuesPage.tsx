@@ -22,7 +22,7 @@ export function IssuesPage({ workspace, selectedTask }: IssuesPageProps) {
     },
     {
       title: '保存前安全检查没有通过',
-      what: '商品采集页和草稿箱页还没有完成安全检查。',
+      what: '商品采集页和采集箱页还没有完成安全检查。',
       why: '安全检查未通过前，系统不能确认页面安全，所以不会启动真实保存。',
       next: `去“浏览器现场”，点击“${READONLY_PRECHECK_CTA}”。`,
     },
@@ -145,11 +145,11 @@ function buildProblemCardCopy(item: ExceptionItem) {
       next: '点“登录店小秘”，打开真实登录页，完成验证码后再点“检测登录状态”。',
     }
   }
-  if (raw.includes('L2') || raw.toLowerCase().includes('probe') || raw.includes('真实只读检查')) {
+  if (raw.includes('L2') || raw.toLowerCase().includes('probe') || raw.includes('真实只读检查') || raw.includes('保存前安全检查')) {
     return {
       title: '保存前安全检查没有通过',
       what: message,
-      why: '商品采集页和草稿箱页没有完成安全检查前，系统不会启动真实保存。',
+      why: '商品采集页和采集箱页没有完成安全检查前，系统不会启动真实保存。',
       next: `点“${READONLY_PRECHECK_CTA}”；如果提示正在运行，就等待完成后刷新。`,
     }
   }
@@ -248,33 +248,33 @@ function humanGateDetail(detail?: string | null) {
     || detail.includes('age')
     || detail.includes('expired')
   ) {
-    return `真实只读检查证据已过期，请点击“${READONLY_PRECHECK_CTA}”刷新后再继续。`
+    return `保存前安全检查证据已过期，请点击“${READONLY_PRECHECK_CTA}”刷新后再继续。`
   }
   if (detail.includes('data_acquisition') || detail.includes('draft_box')) {
     return detail
       .split('data_acquisition').join('商品采集页')
-      .split('draft_box').join('草稿箱页')
-      .split('L2').join('真实只读检查')
+      .split('draft_box').join('采集箱页')
+      .split('L2').join('保存前安全检查')
       .split('L3').join('真实保存')
       .split('passed').join('通过')
-      .split('probe').join('真实只读检查')
+      .split('probe').join('保存前安全检查')
   }
   return detail
-    .split('L2').join('真实只读检查')
+    .split('L2').join('保存前安全检查')
     .split('L3').join('真实保存')
     .split('passed').join('通过')
-    .split('probe').join('真实只读检查')
+    .split('probe').join('保存前安全检查')
 }
 
 function humanL2PrecheckError(message: string) {
   if (message.includes('L2 readonly probe resources are missing')) {
-    return '真实只读检查组件未安装完整：请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
+    return '保存前安全检查组件未安装完整：请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
   }
   if (message.includes('L2 readonly probe runner is missing')) {
-    return '真实只读检查组件未安装完整：缺少真实只读检查启动器。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
+    return '保存前安全检查组件未安装完整：缺少安全检查启动器。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
   }
   if (message.includes('L2 readonly probe script is missing')) {
-    return '真实只读检查组件未安装完整：缺少真实只读检查脚本。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
+    return '保存前安全检查组件未安装完整：缺少安全检查脚本。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
   }
   return message
 }

@@ -202,7 +202,7 @@ export default function App() {
     status: 'idle',
     runId: null,
     exitCode: null,
-    message: '等待运行真实只读检查',
+    message: '等待运行保存前安全检查',
     line: null,
     updatedAt: null,
   })
@@ -241,12 +241,12 @@ export default function App() {
     [selectedTaskId, workspace.tasks],
   )
   const selectedTaskCompleted = selectedTask?.status === 'completed'
-  const visibleOperationError = selectedTaskCompleted && operationError?.includes('真实只读检查')
+  const visibleOperationError = selectedTaskCompleted && operationError?.includes('保存前安全检查')
     ? null
     : operationError
 
   useEffect(() => {
-    if (selectedTaskCompleted && operationError?.includes('真实只读检查')) {
+    if (selectedTaskCompleted && operationError?.includes('保存前安全检查')) {
       setOperationError(null)
     }
   }, [operationError, selectedTaskCompleted])
@@ -492,13 +492,13 @@ export default function App() {
     const refreshedL2Gate = refreshedWorkspace.regressionGates.find((gate) => gate.level === 'L2')
     const gatePassed = runnerSucceeded && refreshedL2Gate?.status === 'passed'
     if (gatePassed) {
-      setL2RunnerState({ status: 'passed', runId, exitCode, message: '真实只读检查通过，已刷新门禁', line, updatedAt: new Date().toISOString() })
+      setL2RunnerState({ status: 'passed', runId, exitCode, message: '保存前安全检查通过，已刷新状态', line, updatedAt: new Date().toISOString() })
       return
     }
-    const message = runnerSucceeded ? '真实只读检查已运行，但门禁未刷新通过' : '真实只读检查失败，真实保存仍阻断'
-    const userLine = '真实只读检查未通过：请确认已登录并能打开商品采集页、草稿箱页后重试。'
+    const message = runnerSucceeded ? '保存前安全检查已运行，但状态未刷新通过' : '保存前安全检查失败，真实保存仍阻断'
+    const userLine = '保存前安全检查未通过：请确认已登录并能打开商品采集页、采集箱页后重试。'
     setL2RunnerState({ status: 'failed', runId, exitCode, message, line: userLine, updatedAt: new Date().toISOString() })
-    setOperationError(`${message}；请确认真实店小秘已登录，再重新运行真实只读检查。系统不会保存或发布。`)
+    setOperationError(`${message}；请确认真实店小秘已登录，再重新运行保存前安全检查。系统不会保存或发布。`)
   }, [refreshRuntimeStatus, refreshWorkspace])
 
   useEffect(() => {
@@ -527,7 +527,7 @@ export default function App() {
     }
 
     if (runnerEvent.line.includes('[l2-readonly-runner] started')) {
-      setL2RunnerState({ status: 'running', runId, exitCode: null, message: '正在运行双目标真实只读检查', line: runnerEvent.line, updatedAt: new Date().toISOString() })
+      setL2RunnerState({ status: 'running', runId, exitCode: null, message: '正在运行双目标保存前安全检查', line: runnerEvent.line, updatedAt: new Date().toISOString() })
     }
   }, [handleL2RunnerFinished, runtimeLogs.launcher])
 
@@ -633,7 +633,7 @@ export default function App() {
         return
       }
       const firstProduct = products[0]
-      const modeLabel = request.mode === 'probe' ? '真实只读检查' : '单商品只保存'
+      const modeLabel = request.mode === 'probe' ? '保存前安全检查' : '单商品只保存'
       const task = await postJson<Task>('/api/tasks', {
         name: `${modeLabel} - ${store.name} - ${products.length} 件商品`,
         store_id: store.id,
@@ -680,7 +680,7 @@ export default function App() {
         syncSelectedTaskIdUrl(result.task_id)
       }
       setActiveSection('start_save')
-      setOperationNotice('采集认领任务已创建。下一步在执行浏览器启动 Agent，将商品从数据采集认领到采集箱。')
+      setOperationNotice('采集认领任务已创建。下一步在浏览器现场启动 Agent，将商品从数据采集认领到采集箱。')
       await refreshWorkspace()
     } catch (error) {
       setOperationError(error instanceof Error ? error.message : '创建采集认领请求失败')
@@ -691,7 +691,7 @@ export default function App() {
 
   async function bootstrapDemo() {
     if (!DEMO_ENABLED) {
-      setOperationError('开发自检数据只在 dev=1 模式可用；真实使用请创建单商品只保存任务并运行真实只读检查。')
+      setOperationError('开发自检数据只在 dev=1 模式可用；真实使用请创建单商品只保存任务并运行保存前安全检查。')
       return
     }
     const confirmed = window.confirm('这会向本地后端写入演示店铺、模板、商品和本地演示核验批次；不会访问店小秘，也不会启动真实保存。继续？')
@@ -994,7 +994,7 @@ export default function App() {
     }
     const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
     if (l2Gate?.status !== 'passed') {
-      const message = '真实只读检查未通过，暂不能启动执行浏览器。请先运行真实只读检查；系统不会保存或发布。'
+      const message = '保存前安全检查未通过，暂不能启动浏览器现场。请先运行保存前安全检查；系统不会保存或发布。'
       setAgentConsoleError(message)
       setOperationError(message)
       setActiveSection('start_save')
@@ -1129,7 +1129,7 @@ export default function App() {
           status: 'running',
           runId: result.runId,
           exitCode: null,
-          message: '正在运行双目标真实只读检查',
+          message: '正在运行双目标保存前安全检查',
           line: result.logPath ?? null,
           updatedAt: new Date().toISOString(),
         })
@@ -1146,7 +1146,7 @@ export default function App() {
           status: 'failed',
           runId: null,
           exitCode: null,
-          message: '真实只读检查启动失败，真实保存仍阻断',
+          message: '保存前安全检查启动失败，真实保存仍阻断',
           line: humanMessage,
           updatedAt: new Date().toISOString(),
         })
@@ -1163,7 +1163,7 @@ export default function App() {
 
   async function runL2ReadonlyProbe() {
     setRuntimeLogSource('launcher')
-    setL2RunnerState({ status: 'running', runId: null, exitCode: null, message: '正在运行双目标真实只读检查', line: null, updatedAt: new Date().toISOString() })
+    setL2RunnerState({ status: 'running', runId: null, exitCode: null, message: '正在运行双目标保存前安全检查', line: null, updatedAt: new Date().toISOString() })
     setActiveSection('start_save')
     await runRuntimeControl('run_l2_readonly_probe')
   }
@@ -1447,7 +1447,7 @@ function runtimeControlSuccessMessage(action: RuntimeControlAction) {
     mark_real_task_manual_review: '已将真实写入任务转入人工复核。不会取消真实浏览器进程，请查看任务日志确认现场。',
     restart_backend: '已提交后端重启请求，请查看启动器日志。',
     restart_frontend: '已提交前端重启请求，请查看启动器日志。',
-    run_l2_readonly_probe: '已启动真实只读检查，请在“执行浏览器”查看实时日志。',
+    run_l2_readonly_probe: '已启动保存前安全检查，请在“浏览器现场”查看实时日志。',
   } as Record<RuntimeControlAction, string>)[action]
 }
 
@@ -1455,13 +1455,13 @@ function humanOperationError(message: string) {
   const runtimeStatusMessage = humanRuntimeStatusError(message)
   if (runtimeStatusMessage !== message) return runtimeStatusMessage
   if (message.includes('L2 readonly probe resources are missing')) {
-    return `真实只读检查组件未安装完整，请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${checkedPathHint(message)}`
+    return `保存前安全检查组件未安装完整，请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${checkedPathHint(message)}`
   }
   if (message.includes('L2 readonly probe runner is missing')) {
-    return `真实只读检查组件未安装完整：缺少真实只读检查启动器。请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
+    return `保存前安全检查组件未安装完整：缺少安全检查启动器。请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
   }
   if (message.includes('L2 readonly probe script is missing')) {
-    return `真实只读检查组件未安装完整：缺少真实只读检查脚本。请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
+    return `保存前安全检查组件未安装完整：缺少安全检查脚本。请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
   }
   const operatorMessage = humanOperatorMessage(message)
   if (operatorMessage !== message) return operatorMessage
@@ -1495,7 +1495,7 @@ function humanWorkspaceFetchError(message?: string) {
   ) {
     return '暂时无法读取完整任务数据。请重新打开 DXM Agent Console 免安装版；开发模式请确认后端服务正在运行。真实保存不会启动或发布。'
   }
-  return '暂时无法读取完整任务数据。请查看“执行浏览器”的实时日志；系统不会用本地演示结果替代真实保存。'
+  return '暂时无法读取完整任务数据。请查看“浏览器现场”的实时日志；系统不会用本地演示结果替代真实保存。'
 }
 
 function humanRuntimeStatusError(message: string) {
@@ -1585,35 +1585,35 @@ function humanDxmLoginError(message: string) {
 
 function humanAgentConsoleError(message: string) {
   const normalized = message.toLowerCase()
-  const commonTail = '执行浏览器只会在真实只读检查和人工确认通过后接入真实店小秘页面；不会自动发布。'
+  const commonTail = '浏览器现场只会在保存前安全检查和人工确认通过后接入真实店小秘页面；不会自动发布。'
   const browserRuntimeMessage = humanBrowserRuntimeError(message)
   if (browserRuntimeMessage) return `${browserRuntimeMessage}${commonTail}`
   if (
     message.includes('Internal Server Error')
     || normalized.includes('post /api/agent-console/start failed')
   ) {
-    return `真实执行浏览器启动失败：本机后端返回异常。请关闭旧的 DXM Agent Console 或旧浏览器进程后重试；如果仍失败，重开免安装 EXE。${commonTail}`
+    return `真实浏览器现场启动失败：本机后端返回异常。请关闭旧的 DXM Agent Console 或旧浏览器进程后重试；如果仍失败，重开免安装 EXE。${commonTail}`
   }
   if (
     normalized.includes('browser has been closed')
     || message.includes('Target page, context or browser has been closed')
     || normalized.includes('context or browser has been closed')
   ) {
-    return `真实执行浏览器已关闭或启动后立即退出。请保留新打开的真实浏览器窗口，或关闭旧进程后回到“执行浏览器”重新打开。${commonTail}`
+    return `真实浏览器现场已关闭或启动后立即退出。请保留新打开的真实浏览器窗口，或关闭旧进程后回到“浏览器现场”重新打开。${commonTail}`
   }
   if (
     normalized.includes('user data directory is already in use')
     || normalized.includes('profile')
     || normalized.includes('locked')
   ) {
-    return `真实执行浏览器数据目录被旧进程占用。请关闭旧的 DXM Agent Console 或旧浏览器进程后重试。${commonTail}`
+    return `真实浏览器现场数据目录被旧进程占用。请关闭旧的 DXM Agent Console 或旧浏览器进程后重试。${commonTail}`
   }
   if (
     normalized.includes('executable')
     || normalized.includes('playwright')
     || normalized.includes('chromium')
   ) {
-    return `真实执行浏览器依赖缺失或不可启动。请重新打开完整免安装目录版，并查看“执行浏览器”的实时日志。${commonTail}`
+    return `真实浏览器现场依赖缺失或不可启动。请重新打开完整免安装目录版，并查看“浏览器现场”的实时日志。${commonTail}`
   }
   return message
 }

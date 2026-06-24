@@ -549,7 +549,7 @@ function RuntimeGateFreshnessRow({ finalCheck }: { finalCheck: FinalDeliveryChec
   const staleGate = freshness === 'stale_gate'
   const label = matches ? '运行门禁仍支持自检结论' : staleGate ? '运行门禁已使自检过期' : '运行门禁待复核'
   const detail = matches
-    ? '当前真实只读检查和人工确认与最近自检结论一致。'
+    ? '当前保存前安全检查和人工确认与最近自检结论一致。'
     : staleGate
       ? '真实检查证据有时效；历史验收不能作为当前启动依据。'
       : '尚无法确认当前真实检查结果是否仍支持最近自检。'
@@ -774,22 +774,22 @@ function humanGateDetail(detail?: string | null) {
     || detail.includes('age')
     || detail.includes('expired')
   ) {
-    return `真实只读检查证据已过期，请点击“${READONLY_PRECHECK_CTA}”刷新后再继续。`
+    return `保存前安全检查证据已过期，请点击“${READONLY_PRECHECK_CTA}”刷新后再继续。`
   }
   if (detail.includes('data_acquisition') || detail.includes('draft_box')) {
     return safeDetail
       .split('data_acquisition').join('商品采集页')
-      .split('draft_box').join('草稿箱页')
-      .split('L2').join('真实只读检查')
+      .split('draft_box').join('采集箱页')
+      .split('L2').join('保存前安全检查')
       .split('L3').join('真实保存')
       .split('passed').join('通过')
-      .split('probe').join('真实只读检查')
+      .split('probe').join('保存前安全检查')
   }
   return safeDetail
-    .split('L2').join('真实只读检查')
+    .split('L2').join('保存前安全检查')
     .split('L3').join('真实保存')
     .split('passed').join('通过')
-    .split('probe').join('真实只读检查')
+    .split('probe').join('保存前安全检查')
 }
 
 function safeGateDetailFallback(detail: string) {
@@ -805,20 +805,20 @@ function safeGateDetailFallback(detail: string) {
     || normalized.includes('playwright')
     || normalized.includes('internal server error')
   ) {
-    return '真实只读检查未通过；原始诊断已收进技术详情，请按页面提示处理后重新检查。'
+    return '保存前安全检查未通过；原始诊断已收进维护详情，请按页面提示处理后重新检查。'
   }
   return String(detail)
 }
 
 function humanL2PrecheckError(message: string) {
   if (message.includes('L2 readonly probe resources are missing')) {
-    return '真实只读检查组件未安装完整：请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
+    return '保存前安全检查组件未安装完整：请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
   }
   if (message.includes('L2 readonly probe runner is missing')) {
-    return '真实只读检查组件未安装完整：缺少真实只读检查启动器。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
+    return '保存前安全检查组件未安装完整：缺少安全检查启动器。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
   }
   if (message.includes('L2 readonly probe script is missing')) {
-    return '真实只读检查组件未安装完整：缺少真实只读检查脚本。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
+    return '保存前安全检查组件未安装完整：缺少安全检查脚本。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
   }
   return message
 }
@@ -826,7 +826,7 @@ function humanL2PrecheckError(message: string) {
 function humanL2TargetLabel(target: string) {
   return ({
     data_acquisition: '商品采集页',
-    draft_box: '采集箱/草稿箱',
+    draft_box: '采集箱',
   } as Record<string, string>)[target] ?? target
 }
 
@@ -842,10 +842,10 @@ function l2DiagnosticNextAction({
   appShellOnly: boolean
 }) {
   if (failedCheckKeys.includes('cookies_loaded') || failedCheckKeys.includes('not_login_page') || finalClass === 'login') {
-    return '先在真实登录浏览器完成登录，再重新运行真实只读检查。'
+    return '先在真实登录浏览器完成登录，再重新运行保存前安全检查。'
   }
   if (failedCheckKeys.includes('final_url_matches') || failedCheckKeys.includes('target_url_matches') || finalClass === 'home' || finalClass === 'other') {
-    return '检查目标页面是否跳到首页/登录页，必要时重新进入采集页或草稿箱后复跑。'
+    return '检查目标页面是否跳到首页/登录页，必要时重新进入采集页或采集箱后复跑。'
   }
   if (reviewCandidateCount > 0) {
     return '把只读依赖候选交给人工评审；未评审前不要放行真实保存。'
@@ -853,12 +853,12 @@ function l2DiagnosticNextAction({
   if (appShellOnly) {
     return '页面停留在加载壳，等待真实页面加载完成或重开浏览器后复跑。'
   }
-  return '查看启动器日志中的请求拦截记录，修正页面阻断后复跑真实只读检查。'
+  return '查看启动器日志中的请求拦截记录，修正页面阻断后复跑保存前安全检查。'
 }
 
 function l2CheckLabel(key: string) {
   return ({
-    ok: '真实只读检查未通过',
+    ok: '保存前安全检查未通过',
     safety_ok: '安全断言失败',
     target_url_matches: '目标 URL 不匹配',
     final_url_matches: '最终路径偏离',

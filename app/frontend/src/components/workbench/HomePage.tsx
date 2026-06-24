@@ -134,7 +134,7 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
       </div>
 
       <details className="module-card span-3 disclosure-card">
-          <summary>维护人员查看技术状态</summary>
+          <summary>维护人员查看运行状态</summary>
         <div className="check-list check-list--inline">
           <CheckRow label="真实店铺/商品已读取" ok={workspace.stores.length > 0 && workspace.products.length > 0} />
           <CheckRow label="保存前安全检查通过" ok={l2Gate?.status === 'passed'} />

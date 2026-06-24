@@ -89,7 +89,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
   const gateStatusLine = `保存前安全检查 ${humanGateStatus(l2Gate?.status ?? workspace.safety.l2Status ?? 'not_run')}，人工确认 ${humanGateStatus(l3Gate?.status ?? 'not_run')}`
   const statusLine = `当前任务 ${activeTaskLabel}，${tone === 'danger' ? `保存前置条件未完成：${gateStatusLine}` : gateStatusLine}`
   const gateDetails = [
-    l2Gate ? `真实只读检查：${l2Gate.detail}` : '真实只读检查：缺少页面检查状态',
+    l2Gate ? `保存前安全检查：${l2Gate.detail}` : '保存前安全检查：缺少页面检查状态',
     l3Gate ? `人工确认保存：${l3Gate.detail}` : '人工确认保存：缺少真实保存门禁状态',
   ]
   const blockerDetails = [

@@ -98,12 +98,12 @@ export function DxmAccessPage({
         </div>
         <div className="dxm-access-status-card__actions">
           <button className="button button--secondary" type="button" onClick={dxmLoggedIn ? onShowConsole : onOpenDxmLogin} disabled={busy}>
-            {dxmLoggedIn ? '继续到执行浏览器' : '打开真实登录页'}
+            {dxmLoggedIn ? '继续到浏览器现场' : '打开真实登录页'}
           </button>
         </div>
         <details className="inline-disclosure">
           <summary>可选：打开店小秘页面或日志</summary>
-          <small>登录浏览器只用于人工登录和验证码处理；执行浏览器只在配置、真实只读检查和人工确认通过后由 Agent 操控。</small>
+          <small>登录浏览器只用于人工登录和验证码处理；浏览器现场只在配置、保存前安全检查和人工确认通过后由 Agent 操控。</small>
           <div className="dxm-access-status-card__actions">
             <button className="button button--quiet" type="button" onClick={() => onNavigateDxmTarget('draft_box')} disabled={!dxmLoggedIn || busy}>
               进入采集箱
@@ -290,7 +290,7 @@ function humanDxmLoginState(runtimeStatus?: RuntimeStatus | null, runtimeStatusE
       tone: 'ok',
       label: status === 'workflow_navigation' ? 'DXM 已进入业务页' : 'DXM 已登录',
       detail: currentUrl ? `真实浏览器停留位置：${currentUrl}` : '真实店小秘登录态已可用。',
-      next: '下一步：进入采集箱或运行真实只读检查。',
+      next: '下一步：进入采集箱或运行保存前安全检查。',
     }
   }
   if (status === 'waiting_captcha') {

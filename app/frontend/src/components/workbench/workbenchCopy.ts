@@ -10,7 +10,7 @@ export function humanOperatorMessage(message: string) {
     || message.includes('greenlet')
     || message.includes('Playwright Sync API')
   ) {
-    return '浏览器会话异常：当前浏览器自动化会话已经失效，系统没有继续保存。请关闭当前执行浏览器，重新打开真实浏览器后再运行任务。'
+    return '浏览器会话异常：当前浏览器自动化会话已经失效，系统没有继续保存。请关闭当前浏览器现场窗口，重新打开真实浏览器后再运行任务。'
   }
   if (
     message.includes('L2 readonly probe')
@@ -19,7 +19,7 @@ export function humanOperatorMessage(message: string) {
     || normalized.includes('probe runner')
     || normalized.includes('probe resources')
   ) {
-    return '真实只读检查未通过：系统还没有确认店小秘页面可以安全读取。请到“执行浏览器”点击“运行真实只读检查”；通过前系统不会保存或发布。'
+    return '保存前安全检查未通过：系统还没有确认店小秘页面可以安全读取。请到“浏览器现场”点击“运行保存前安全检查”；通过前系统不会保存或发布。'
   }
   if (
     message.includes('L3')
@@ -34,7 +34,7 @@ export function humanOperatorMessage(message: string) {
     || normalized.includes('run-id')
     || normalized.includes('run binding')
   ) {
-    return '检查记录没有对齐：请重新运行真实只读检查，让商品采集页和草稿箱页使用同一轮检查记录。'
+    return '检查记录没有对齐：请重新运行保存前安全检查，让商品采集页和采集箱页使用同一轮检查记录。'
   }
   if (
     message.includes('save_result')
