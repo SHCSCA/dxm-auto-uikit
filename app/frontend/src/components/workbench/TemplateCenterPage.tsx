@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { getJsonOrDefault, patchJson, postJson } from '../../api'
 import type { ConfigPreview, DeliveryWorkspace, Task, Template, TemplateCenterMetadata, TemplateCenterSection } from '../../types'
 
@@ -50,7 +50,7 @@ const fallbackTemplateCenterMetadata: TemplateCenterMetadata = {
       { key: 'eu_outer_package_filename', label: 'EU 外包装图', required: true, value_kind: 'text' },
       { key: 'marketing_images_strategy', label: '营销图策略', required: true, value_kind: 'text' },
       { key: 'main_image_strategy', label: '主图策略', required: false, value_kind: 'text' },
-      { key: 'fallback_strategy', label: '图片不足 fallback', required: false, value_kind: 'text' },
+      { key: 'fallback_strategy', label: '图片不足时处理方式', required: false, value_kind: 'text' },
       { key: 'invalid_image_strategy', label: '无效图片处理', required: false, value_kind: 'text' },
       { key: 'local_asset_path', label: '本地素材路径', required: false, value_kind: 'text' },
     ] },
@@ -110,26 +110,46 @@ export function TemplateCenterPage({
   const [metadata, setMetadata] = useState<TemplateCenterMetadata>(fallbackTemplateCenterMetadata)
   const [activeSectionId, setActiveSectionId] = useState(fallbackTemplateCenterMetadata.sections[0].id)
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
+  const [templateChoiceId, setTemplateChoiceId] = useState('')
   const [draftValues, setDraftValues] = useState<Record<string, string>>({})
   const [templateName, setTemplateName] = useState('')
   const [saveState, setSaveState] = useState({ status: '等待填写', detail: '选择分区后可保存为本次任务或店铺模板。' })
+  const pendingTemplateApplyNotice = useRef(false)
   const activeSection = metadata.sections.find((section) => section.id === activeSectionId) ?? metadata.sections[0]
   const sectionTemplates = useMemo(
     () => workspace.templates.filter((template) => template.template_type === activeSection.template_type && template.is_enabled),
     [activeSection.template_type, workspace.templates],
   )
   const activeTemplate = sectionTemplates.find((template) => String(template.id) === selectedTemplateId) ?? sectionTemplates[0] ?? null
+  const templateChoice = sectionTemplates.find((template) => String(template.id) === templateChoiceId) ?? activeTemplate
   const selectedProduct = useMemo(() => selectedTaskProduct(workspace, selectedTask), [workspace, selectedTask])
   const currentStore = selectedTask?.payload?.store_name || workspace.stores.find((store) => store.id === selectedTask?.store_id)?.name || workspace.stores[0]?.name || '未选择店铺'
   const currentCategory = selectedProduct?.category_name || selectedTask?.payload?.category_name || '未选择类目'
   const bindingScope = `${currentStore} / ${currentCategory} / AliExpress`
   const activeTemplateName = activeTemplate?.template_name || templateName || '未选择模板'
   const previewGroup = configPreview?.fieldGroups.find((group) => group.templateType === activeSection.template_type || group.section === activeSection.template_type)
+  const originalValues = useMemo(
+    () => Object.fromEntries(activeSection.fields.map((field) => [field.key, templateFieldValue(activeTemplate, activeSection, field.key)])),
+    [activeSection, activeTemplate],
+  )
+  const hasUnsavedChanges = activeSection.fields.some((field) => String(draftValues[field.key] ?? '') !== String(originalValues[field.key] ?? ''))
+    || Boolean(activeTemplate && templateName.trim() && templateName.trim() !== activeTemplate.template_name)
+  const executionPreviewFields = previewGroup?.fields.slice(0, 6) ?? []
   const executionStatus = configPreviewLoading
     ? '正在检查执行取值'
     : configPreview?.ok
       ? '执行取值已就绪'
       : configPreviewError || '存在缺失字段'
+  const executionSummary = configPreviewLoading
+    ? '正在读取本次任务最终取值'
+    : configPreview?.ok
+      ? `本次执行会使用 ${previewGroup?.fields.length ?? 0} 个已校验字段`
+      : '本次执行仍有缺失字段，请先补齐并保存'
+  const nextTemplateStep = hasUnsavedChanges
+    ? '先保存当前分区，保存后才会进入真实执行'
+    : configPreview?.ok
+      ? '可回到采集箱编辑保存'
+      : '补齐缺失字段后保存'
   const sectionSummaries = useMemo(
     () => metadata.sections.map((section) => {
       const templates = workspace.templates.filter((template) => template.template_type === section.template_type && template.is_enabled).length
@@ -152,7 +172,9 @@ export function TemplateCenterPage({
   }, [])
 
   useEffect(() => {
-    setSelectedTemplateId(sectionTemplates[0]?.id ? String(sectionTemplates[0].id) : '')
+    const firstTemplateId = sectionTemplates[0]?.id ? String(sectionTemplates[0].id) : ''
+    setSelectedTemplateId(firstTemplateId)
+    setTemplateChoiceId(firstTemplateId)
   }, [activeSection.id, sectionTemplates])
 
   useEffect(() => {
@@ -161,12 +183,26 @@ export function TemplateCenterPage({
     )
     setDraftValues(nextValues)
     setTemplateName(activeTemplate?.template_name || `${activeSection.label}模板`)
+    if (pendingTemplateApplyNotice.current) {
+      pendingTemplateApplyNotice.current = false
+      setSaveState({ status: '已套用到表单', detail: '未保存修改不会进入执行；请核对字段后保存为本次任务或模板。' })
+      return
+    }
     setSaveState({ status: activeTemplate ? '已选择模板' : '等待填写', detail: activeTemplate ? `当前套用：${activeTemplate.template_name}` : '当前分区还没有已保存模板。' })
   }, [activeSection, activeTemplate])
 
   function updateValue(key: string, value: string) {
     setDraftValues((current) => ({ ...current, [key]: value }))
     setSaveState({ status: '未保存修改', detail: '修改后需要保存，执行才会读取最新值。' })
+  }
+
+  function applyTemplateChoice() {
+    if (!templateChoice) {
+      setSaveState({ status: '无法套用模板', detail: '当前分区还没有可用模板；可以套用预置配置模板后保存。' })
+      return
+    }
+    pendingTemplateApplyNotice.current = true
+    setSelectedTemplateId(String(templateChoice.id))
   }
 
   async function saveForTask() {
@@ -254,8 +290,31 @@ export function TemplateCenterPage({
           <span><strong>当前任务</strong><b>{selectedTask?.name || '尚未选择保存任务'}</b></span>
           <span><strong>当前分区</strong><b>{activeSection.label}</b></span>
           <span><strong>表单正在编辑</strong><b>{activeTemplateName}</b></span>
+          <span><strong>当前实际使用</strong><b>{activeTemplate ? activeTemplate.template_name : '当前分区暂无模板'}</b></span>
           <span><strong>保存状态</strong><b>{saveState.status}</b></span>
           <span><strong>执行取值</strong><b>{executionStatus}</b></span>
+        </div>
+        <div className="template-usage-confirmation" aria-label="模板使用确认">
+          <span>
+            <strong>当前实际使用</strong>
+            <b>{activeTemplate ? activeTemplate.template_name : '还没有保存模板'}</b>
+            <small>{activeTemplate ? `本次执行会使用：${activeSection.label} / ${activeTemplate.template_name}` : '请先套用示例或填写表单，再保存为模板。'}</small>
+          </span>
+          <span>
+            <strong>保存状态</strong>
+            <b>{hasUnsavedChanges ? '有未保存修改' : saveState.status}</b>
+            <small>未保存修改不会进入执行。</small>
+          </span>
+          <span>
+            <strong>执行取值</strong>
+            <b>{executionStatus}</b>
+            <small>{executionSummary}</small>
+          </span>
+          <span>
+            <strong>下一步</strong>
+            <b>{nextTemplateStep}</b>
+            <small>发布、批量和无人值守仍保持关闭。</small>
+          </span>
         </div>
         <small className="template-center-receipt">{saveState.detail} 选择或修改模板只会影响当前表单，点击保存后才会进入真实执行。</small>
       </div>
@@ -292,7 +351,7 @@ export function TemplateCenterPage({
         <div className="template-active-source" aria-label="当前模板选择">
           <label>
             <span>选择要编辑的模板</span>
-            <select value={activeTemplate ? String(activeTemplate.id) : ''} onChange={(event) => setSelectedTemplateId(event.target.value)} disabled={!sectionTemplates.length}>
+            <select value={templateChoice ? String(templateChoice.id) : ''} onChange={(event) => setTemplateChoiceId(event.target.value)} disabled={!sectionTemplates.length}>
               {sectionTemplates.length ? sectionTemplates.map((template) => (
                 <option value={String(template.id)} key={template.id}>{template.template_name}</option>
               )) : (
@@ -304,6 +363,7 @@ export function TemplateCenterPage({
             <span>模板名称</span>
             <input value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="例如 Dang Kang 立牌类目模板" />
           </label>
+          <button className="button button--secondary" type="button" onClick={applyTemplateChoice} disabled={!templateChoice}>套用到表单</button>
           <button className="button button--quiet" type="button" onClick={applyDefaultTemplate}>套用预置配置模板</button>
         </div>
 
@@ -331,6 +391,26 @@ export function TemplateCenterPage({
               </label>
             )
           })}
+        </div>
+
+        <div className="template-execution-preview" aria-label="当前分区执行取值核对">
+          <div>
+            <strong>当前分区执行取值核对</strong>
+            <span>{executionPreviewFields.length ? '保存前请核对这些最终会写入店小秘编辑页的值。' : '等待配置检查后展示本次执行最终取值。'}</span>
+          </div>
+          {executionPreviewFields.length ? (
+            <div className="template-execution-preview__grid">
+              {executionPreviewFields.map((field) => (
+                <span key={field.path}>
+                  <strong>{field.label}</strong>
+                  <b>{formatValue(field.value)}</b>
+                  <small>{field.source}</small>
+                </span>
+              ))}
+            </div>
+          ) : (
+            <small>本次执行会使用已保存模板和本次任务覆盖值；当前分区还没有可展示的配置预览。</small>
+          )}
         </div>
 
         <div className="action-row">

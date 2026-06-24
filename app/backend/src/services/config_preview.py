@@ -67,7 +67,7 @@ FIELD_GROUPS = [
             {"path": "image.eu_outer_package_filename", "field": "eu_outer_package_filename", "label": "EU 外包装图", "required": True},
             {"path": "image.marketing_images_strategy", "field": "marketing_images_strategy", "label": "营销图策略", "required": True},
             {"path": "image.main_image_strategy", "field": "main_image_strategy", "label": "主图策略", "required": False},
-            {"path": "image.fallback_strategy", "field": "fallback_strategy", "label": "图片不足 fallback", "required": False},
+            {"path": "image.fallback_strategy", "field": "fallback_strategy", "label": "图片不足时处理方式", "required": False},
             {"path": "image.invalid_image_strategy", "field": "invalid_image_strategy", "label": "无效图片处理", "required": False},
             {"path": "image.local_asset_path", "field": "local_asset_path", "label": "本地素材路径", "required": False},
         ],

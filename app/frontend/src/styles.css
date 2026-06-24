@@ -3189,6 +3189,46 @@ tr:last-child td {
   line-height: 1.45;
 }
 
+.template-usage-confirmation {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.template-usage-confirmation span {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+}
+
+.template-usage-confirmation strong,
+.template-execution-preview strong {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.template-usage-confirmation b,
+.template-execution-preview b {
+  min-width: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.template-usage-confirmation small,
+.template-execution-preview small,
+.template-execution-preview span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .template-section-panel,
 .template-editor-panel {
   align-content: start;
@@ -3228,7 +3268,7 @@ tr:last-child td {
 
 .template-active-source {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto auto;
   gap: 10px;
   align-items: end;
   margin-bottom: 12px;
@@ -3354,6 +3394,39 @@ tr:last-child td {
   font-size: 12px;
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+.template-execution-preview {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.template-execution-preview > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.template-execution-preview__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.template-execution-preview__grid span {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-alt);
 }
 
 .real-task-product {
@@ -7949,6 +8022,8 @@ tr:last-child td {
   }
 
   .home-menu-map__grid,
+  .template-usage-confirmation,
+  .template-active-source,
   .check-list--inline {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -8036,6 +8111,9 @@ tr:last-child td {
   .task-current-panel__main,
   .task-current-panel__checks,
   .task-row,
+  .template-usage-confirmation,
+  .template-active-source,
+  .template-execution-preview > div:first-child,
   .guide-step,
   .decision-row,
   .evidence-row,

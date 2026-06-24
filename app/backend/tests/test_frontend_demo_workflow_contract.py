@@ -183,11 +183,16 @@ def test_template_center_page_presents_multi_template_chinese_section_workflow()
     assert "<ConfigCenter" not in route_section
     for label in [
         "当前任务配置摘要",
+        "模板使用确认",
         "编辑页分区",
         "当前分区表单",
         "表单正在编辑",
+        "当前实际使用",
+        "未保存修改不会进入执行",
         "点击保存后才会进入真实执行",
         "选择要编辑的模板",
+        "套用到表单",
+        "当前分区执行取值核对",
         "更多模板管理与模板清单",
         "店铺与任务基础",
         "类目与标题",
@@ -216,7 +221,7 @@ def test_template_center_page_presents_multi_template_chinese_section_workflow()
     assert "field.value_kind === 'list'" in page_source
     assert "function setPathValue" in page_source
     assert ".split(/\\r?\\n|[，,；;]/)" in page_source
-    assert "本次执行会使用" not in page_source
+    assert "本次执行会使用" in page_source
     for forbidden in ["配置中心", "默认测试模板", "测试用", "L2", "run-id", "probe", "QA guarded product"]:
         assert forbidden not in page_source
 

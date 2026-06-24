@@ -16,7 +16,7 @@
 
 **Current branch:** `feature/dxm-production-two-stage`
 
-**Current product completion estimate:** 68%
+**Current product completion estimate:** 70%
 
 **Already completed in this branch:**
 
@@ -26,13 +26,13 @@
 - Template metadata is aligned with config preview fields.
 - Frontend build and focused backend template/frontend contract tests passed after the template-center slice.
 
-**Next implementation task:** continue with V1.4 real browser Agent stability:
+**Next implementation task:** execute the V1.0/V1.1 production path before repackaging:
 
-1. Confirm whether the task browser and Agent Console browser use the same persistent session.
-2. Keep the main window polling task state while a task is running.
-3. Preserve browser state on Agent failure instead of allowing a silent close.
-4. Keep the in-browser Chinese HUD resident through navigation and page changes.
-5. Hide raw technical errors from the normal user path and move them into maintenance diagnostics.
+1. Close the first stage: real DXM data acquisition claim into the draft box.
+2. Close the second stage: draft-box edit page fill and save-only execution.
+3. Productionize the template center: multiple Chinese templates, saved-state feedback, and final execution value preview.
+4. Stabilize the visible browser Agent: persistent browser, resident Chinese HUD, and recoverable failures.
+5. Rebuild the portable EXE only after the full two-stage path is verified.
 
 ---
 
@@ -584,7 +584,7 @@ def test_template_center_fields_are_chinese_for_customer_ui():
 <button>仅本次任务使用</button>
 <button>保存为店铺模板</button>
 <button>另存为新模板</button>
-<button>套用默认测试模板</button>
+<button>套用默认示例模板</button>
 ```
 
 - [ ] **Step 6: 验证**
