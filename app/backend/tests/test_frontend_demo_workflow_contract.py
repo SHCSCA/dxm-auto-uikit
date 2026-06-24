@@ -2689,9 +2689,12 @@ def test_runtime_log_default_views_humanize_lines_and_keep_raw_lines_in_diagnost
     assert "最近日志：默认只显示关键业务进度" in panel_section
     assert "<code>{item.line}</code>" not in preview_section
     assert "<code>{item.line}</code>" not in panel_section[:panel_section.index('<details className="inline-disclosure runtime-log-full-drawer">')]
-    assert "查看完整日志与维护诊断" in full_log_drawer
+    assert "维护人员查看原始日志" in full_log_drawer
     assert "RuntimeLogLine" in full_log_drawer
     assert "<code>{item.line}</code>" in raw_line_section
+    assert "<strong>{humanRuntimeLogLine(item)}</strong>" in raw_line_section
+    assert "<summary>原始技术日志</summary>" in raw_line_section
+    assert "<span>{item.level.toUpperCase()}</span>" not in raw_line_section
     assert "function humanRuntimeLogLine(item: RuntimeLogItem)" in source
     assert "function businessRuntimeLogItems(items: RuntimeLogItem[])" in source
     assert "function isBusinessRuntimeLogItem(item: RuntimeLogItem, summary: string)" in source
@@ -2715,7 +2718,10 @@ def test_runtime_log_default_views_humanize_lines_and_keep_raw_lines_in_diagnost
     assert "grid-template-columns: 44px minmax(0, 1fr)" in styles_source[styles_source.index(".runtime-log-summary-line"):styles_source.index(".runtime-log-summary-line > span")]
     assert ".runtime-log-view > span" in styles_source
     assert ".runtime-log-view span {" not in styles_source
-    assert "min-height: 180px" in styles_source[styles_source.index(".runtime-log-view {"):styles_source.index(".runtime-log-full-drawer")]
+    runtime_log_view_styles = styles_source[styles_source.index(".runtime-log-view {"):styles_source.index(".runtime-log-full-drawer")]
+    assert "min-height: 132px;" in runtime_log_view_styles
+    assert "max-height: 220px;" in runtime_log_view_styles
+    assert "isolation: isolate;" in runtime_log_view_styles
     assert ".replace(/^(INFO|WARNING|ERROR)\\s+task#\\d+(?:\\s+job#\\d+)?:\\s*/i, '')" in source
 
 
@@ -3506,6 +3512,7 @@ def test_frontend_uses_unified_real_browser_status_for_primary_browser_state():
     home_source = HOME_PAGE_TSX.read_text(encoding="utf-8")
     settings_source = SYSTEM_SETTINGS_PAGE_TSX.read_text(encoding="utf-8")
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
     frame_section = workbench_source[workbench_source.index("function AgentBrowserFrame"):workbench_source.index("function AgentConsoleControls")]
     browser_frame_helper = workbench_source[workbench_source.index("function getBrowserFrame"):workbench_source.index("function getTaskDisplayKey")]
 
@@ -3533,6 +3540,17 @@ def test_frontend_uses_unified_real_browser_status_for_primary_browser_state():
     assert "级别" in workbench_source
     assert "搜索" in workbench_source
     assert "item.tags.slice(0, 3)" in workbench_source
+    runtime_log_line_section = workbench_source[workbench_source.index("function RuntimeLogLine"):workbench_source.index("export function EvidenceTimeline")]
+    assert "<strong>{humanRuntimeLogLine(item)}</strong>" in runtime_log_line_section
+    assert "<summary>原始技术日志</summary>" in runtime_log_line_section
+    assert "<code>{item.line}</code>" in runtime_log_line_section
+    assert "<span>{item.level.toUpperCase()}</span>" not in runtime_log_line_section
+    assert "维护人员查看原始日志" in workbench_source
+    runtime_log_view_styles = styles_source[styles_source.index(".runtime-log-view {"):styles_source.index(".runtime-log-full-drawer {")]
+    assert "min-height: 132px;" in runtime_log_view_styles
+    assert "max-height: 220px;" in runtime_log_view_styles
+    assert "isolation: isolate;" in runtime_log_view_styles
+    assert ".runtime-log-line__raw > summary" in styles_source
 
 
 def test_task_center_precheck_buttons_share_resource_gate():

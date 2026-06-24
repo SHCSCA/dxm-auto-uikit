@@ -4946,7 +4946,7 @@ function RuntimeLogPanel({
       </div>
       <small>最近日志：默认只显示关键业务进度；完整原始日志在下方维护诊断区展开查看。</small>
       <details className="inline-disclosure runtime-log-full-drawer">
-        <summary>查看完整日志与维护诊断</summary>
+        <summary>维护人员查看原始日志</summary>
         <div className="runtime-log-view runtime-log-view--full">
           {filteredRuntimeLogItems.length
             ? filteredRuntimeLogItems.map((item, index) => <RuntimeLogLine key={`${source}-full-${index}`} item={item} />)
@@ -5197,10 +5197,16 @@ function stripRuntimeLogPrefix(line: string) {
 }
 
 function RuntimeLogLine({ item }: { item: RuntimeLogItem }) {
+  const hint = technicalRuntimeLogHint(item.line)
   return (
     <div className={`runtime-log-line runtime-log-line--${item.level}`}>
-      <span>{item.level.toUpperCase()}</span>
-      <code>{item.line}</code>
+      <span>{runtimeLogLevelLabel(item.level)}</span>
+      <strong>{humanRuntimeLogLine(item)}</strong>
+      {hint && <small className="runtime-log-line__hint">{hint}</small>}
+      <details className="runtime-log-line__raw">
+        <summary>原始技术日志</summary>
+        <code>{item.line}</code>
+      </details>
       {item.tags.length > 0 && (
         <small>{item.tags.slice(0, 3).map((tag) => <b key={tag}>{tag}</b>)}</small>
       )}

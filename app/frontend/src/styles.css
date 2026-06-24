@@ -6702,8 +6702,8 @@ tr:last-child td {
 }
 
 .runtime-log-view {
-  min-height: 180px;
-  max-height: 280px;
+  min-height: 132px;
+  max-height: 220px;
   overflow: auto;
   display: flex;
   flex-direction: column;
@@ -6713,6 +6713,8 @@ tr:last-child td {
   border-radius: var(--radius);
   background: #111820;
   color: #d9e3ee;
+  position: relative;
+  isolation: isolate;
 }
 
 .runtime-log-full-drawer {
@@ -6727,7 +6729,7 @@ tr:last-child td {
 
 .runtime-log-view--full {
   margin-top: 8px;
-  max-height: 360px;
+  max-height: 320px;
 }
 
 .runtime-log-line {
@@ -6767,6 +6769,31 @@ tr:last-child td {
   gap: 4px;
 }
 
+.runtime-log-line strong {
+  min-width: 0;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.runtime-log-line__hint {
+  color: #9fb2c7;
+}
+
+.runtime-log-line__raw {
+  grid-column: 2;
+  min-width: 0;
+}
+
+.runtime-log-line__raw > summary {
+  width: fit-content;
+  color: #9fb2c7;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
 .runtime-log-line b {
   border-radius: 999px;
   background: #20384f;
@@ -6775,7 +6802,7 @@ tr:last-child td {
   font-size: 10px;
 }
 
-.runtime-log-line code,
+.runtime-log-line__raw code,
 .runtime-log-view > span {
   color: inherit;
   font-size: 12px;
