@@ -50,6 +50,25 @@ def test_acquisition_claim_request_creates_claim_stage_task(tmp_path, monkeypatc
     assert task["payload"]["status"] == "pending"
 
 
+def test_acquisition_claim_request_requires_product_hint(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    store = repo.create_store("Dang Kang", "AliExpress")
+
+    response = client.post(
+        "/api/acquisition/claim-requests",
+        json={
+            "store_id": store["id"],
+            "keyword": "   ",
+            "category_name": "",
+            "claim_mark": "AI-OPS",
+            "template_id": None,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "搜索关键词或认领类目" in response.json()["detail"]
+
+
 def test_single_save_task_requires_claimed_draft_product(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     store = repo.create_store("Dang Kang", "AliExpress")

@@ -40,7 +40,8 @@ export function AcquisitionClaimPage({
     [stores, storeId],
   )
   const enabledTemplates = templates.filter((template) => template.is_enabled)
-  const canSubmit = Boolean(selectedStore && claimMark.trim())
+  const hasProductHint = Boolean(keyword.trim() || categoryName.trim())
+  const canSubmit = Boolean(selectedStore && claimMark.trim() && hasProductHint)
   const claimCompleted = Boolean(
     lastRequest && (
       lastRequest.stage === 'claimed_to_draft'
@@ -131,6 +132,9 @@ export function AcquisitionClaimPage({
             </select>
           </label>
         </div>
+        {!hasProductHint && (
+          <p className="form-hint">请至少填写搜索关键词或认领类目，否则 Agent 无法定位真实采集商品。</p>
+        )}
 
         <div className="action-row">
           <button className="button button--primary" type="button" onClick={submit} disabled={busy || !canSubmit}>

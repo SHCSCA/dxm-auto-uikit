@@ -365,7 +365,7 @@ def import_products(payload: ProductImportRequest):
 
 @app.post('/api/acquisition/claim-requests')
 def create_acquisition_claim_request(payload: AcquisitionClaimRequest):
-    task = repo.create_acquisition_claim_request(payload.model_dump())
+    task = repo.create_acquisition_claim_request(_normalize_acquisition_claim_request(payload))
     task_payload = task.get('payload') or {}
     return {
         'id': task.get('id'),
@@ -384,6 +384,21 @@ def create_acquisition_claim_request(payload: AcquisitionClaimRequest):
         'completed_at': task_payload.get('completed_at'),
         'task_status': task.get('status'),
     }
+
+
+def _normalize_acquisition_claim_request(payload: AcquisitionClaimRequest) -> dict[str, Any]:
+    data = payload.model_dump()
+    keyword = str(data.get('keyword') or '').strip()
+    category_name = str(data.get('category_name') or '').strip()
+    claim_mark = str(data.get('claim_mark') or '').strip()
+    if not claim_mark:
+        raise HTTPException(status_code=400, detail='请填写认领标记。')
+    if not keyword and not category_name:
+        raise HTTPException(status_code=400, detail='请填写搜索关键词或认领类目，Agent 才能定位真实采集商品。')
+    data['keyword'] = keyword or None
+    data['category_name'] = category_name or None
+    data['claim_mark'] = claim_mark
+    return data
 
 
 @app.get('/api/tasks')

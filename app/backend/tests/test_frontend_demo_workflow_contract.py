@@ -73,6 +73,9 @@ def test_acquisition_claim_page_uses_claim_request_api_not_legacy_task_center():
     assert "数据采集" in page_source
     assert "采集箱" in page_source
     assert "创建采集认领请求" in page_source
+    assert "const hasProductHint = Boolean(keyword.trim() || categoryName.trim())" in page_source
+    assert "请至少填写搜索关键词或认领类目" in page_source
+    assert "无法定位真实采集商品" in page_source
     assert "创建单商品只保存任务" not in page_source
     assert "选择商品" not in page_source
 
