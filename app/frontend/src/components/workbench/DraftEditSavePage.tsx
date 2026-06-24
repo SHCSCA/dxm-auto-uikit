@@ -116,7 +116,7 @@ export function DraftEditSavePage({
               >
                 <strong>{product.title}</strong>
                 <span>{product.category_name || '未指定类目'}</span>
-                <small>SKU {product.sku_count}，图片 {product.image_count}，状态 {product.status}</small>
+                <small>SKU {product.sku_count}，图片 {product.image_count}，{humanProductStatus(product.status)}</small>
               </button>
             ))}
           </div>
@@ -169,4 +169,12 @@ export function DraftEditSavePage({
       </div>
     </section>
   )
+}
+
+function humanProductStatus(status: string) {
+  return ({
+    claimed_to_draft: '已进入采集箱，可编辑保存',
+    ready_for_edit: '已确认可编辑保存',
+    draft: '等待采集认领',
+  } as Record<string, string>)[status] ?? '等待处理'
 }

@@ -805,7 +805,7 @@ def test_claim_only_calls_adapter_without_opening_editor_or_saving(v1_db):
     reports = repo.list_reports(task["id"])
     assert reports[0]["status"] == "success"
     assert reports[0]["published"] is False
-    assert reports[0]["save_result"]["message"] == "当前模式未执行保存动作"
+    assert reports[0]["save_result"]["message"] == "采集认领已完成，商品已进入采集箱"
     products = repo.list_products()
     claimed = [product for product in products if product["status"] == "claimed_to_draft"]
     assert len(claimed) == 1
@@ -814,6 +814,16 @@ def test_claim_only_calls_adapter_without_opening_editor_or_saving(v1_db):
     assert claimed[0]["payload"]["claim_task_id"] == task["id"]
     assert claimed[0]["payload"]["claim_mark"] == f"AI认领-{task['id']}"
     assert claimed[0]["payload"]["source_url"] == "https://detail.1688.com/offer/from-acquisition.html"
+    assert reports[0]["product_id"] == claimed[0]["id"]
+    assert reports[0]["save_result"]["claimed_product_id"] == claimed[0]["id"]
+    assert reports[0]["summary"]["claimed_product"]["id"] == claimed[0]["id"]
+    assert "采集箱编辑保存" in reports[0]["summary"]["next_action"]
+
+    refreshed_task = repo.get_task_private(task["id"])
+    assert refreshed_task["payload"]["stage"] == "claimed_to_draft"
+    assert refreshed_task["payload"]["status"] == "completed"
+    assert refreshed_task["payload"]["claimed_product_id"] == claimed[0]["id"]
+    assert "采集箱编辑保存" in refreshed_task["payload"]["next_step"]
 
 
 def test_single_save_fails_when_adapter_lacks_media_or_compliance_methods(v1_db):

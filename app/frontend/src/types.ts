@@ -77,7 +77,23 @@ export type TaskJob = { id: number; task_id?: number; product_id?: number | null
 export type Task = { id: number; name: string; status: string; mode: string; publish_scene: string; store_id?: number | null; total_jobs: number; completed_jobs: number; failed_jobs: number; payload: { product_ids?: number[]; store_name?: string; category_name?: string; image?: { eu_outer_package_filename?: string }; [key: string]: unknown }; jobs?: TaskJob[] }
 export type RealTaskCreateRequest = { storeId: number; mode: 'probe' | 'single_save'; productIds: number[] }
 export type AcquisitionClaimCreateRequest = { storeId: number; keyword?: string; categoryName?: string; claimMark: string; templateId?: number | null }
-export type AcquisitionClaimResponse = { id: number; task_id: number; stage: string; status: string; store_id: number; keyword?: string | null; category_name?: string | null; claim_mark: string; template_id?: number | null; task_status?: string | null }
+export type AcquisitionClaimResponse = {
+  id: number
+  task_id: number
+  stage: string
+  status: string
+  store_id: number
+  keyword?: string | null
+  category_name?: string | null
+  claim_mark: string
+  template_id?: number | null
+  claimed_product_id?: number | null
+  claimed_product_title?: string | null
+  claimed_product_status?: string | null
+  next_step?: string | null
+  completed_at?: string | null
+  task_status?: string | null
+}
 export type LogItem = { id: number; task_id: number; job_id: number | null; level: string; message: string; context: Record<string, unknown>; created_at: string }
 export type RuntimeLogSource = 'backend' | 'frontend' | 'launcher' | 'npm' | 'task' | 'agent'
 export type RuntimeLogItem = { line: string; level: 'info' | 'warning' | 'error' | string; tags: string[] }

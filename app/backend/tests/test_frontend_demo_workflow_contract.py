@@ -78,16 +78,37 @@ def test_acquisition_claim_page_uses_claim_request_api_not_legacy_task_center():
 
 
 def test_acquisition_claim_page_presents_four_step_real_claim_path():
+    app_source = APP_TSX.read_text(encoding="utf-8")
     page_source = ACQUISITION_CLAIM_PAGE_TSX.read_text(encoding="utf-8")
 
     for label in ["选择店铺与平台", "填写采集商品线索", "启动真实浏览器认领", "确认商品进入采集箱"]:
         assert label in page_source
 
-    for label in ["不会保存", "不会发布", "认领标记", "去执行浏览器启动认领"]:
+    for label in ["不会保存", "不会发布", "认领标记", "去执行浏览器启动认领", "进入采集箱编辑保存", "商品已进入采集箱"]:
         assert label in page_source
+    assert "setActiveSection('start_save')" in app_source
+    assert "下一步在执行浏览器启动 Agent" in app_source
+    assert "claimed_product_title" in page_source
 
     for forbidden in ["QA guarded product", "测试商品", "本地商品", "创建单商品只保存任务"]:
         assert forbidden not in page_source
+
+
+def test_execution_console_does_not_require_edit_config_or_l3_for_claim_only():
+    source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    build_primary_path_section = source[
+        source.index("function buildConsolePrimaryPath"):
+        source.index("function humanTaskFailureMessage")
+    ]
+
+    assert "const selectedTaskNeedsEditConfig = selectedTask?.mode === 'single_save'" in build_primary_path_section
+    assert "const selectedTaskNeedsManualApproval = selectedTask ? requiresManualApproval(selectedTask) : false" in build_primary_path_section
+    assert "if (selectedTaskNeedsEditConfig && configPreviewError)" in build_primary_path_section
+    assert "if (selectedTaskNeedsEditConfig && (configPreviewLoading || configPreview?.taskId !== selectedTask.id))" in build_primary_path_section
+    assert "if (selectedTaskNeedsEditConfig && !configOk)" in build_primary_path_section
+    assert "if (selectedTaskNeedsManualApproval && !l3Ready)" in build_primary_path_section
+    assert "selectedTask.mode === 'claim_only' ? '启动采集认领'" in build_primary_path_section
+    assert "不会进入编辑页、不会保存、不会发布" in build_primary_path_section
 
 
 def test_two_stage_pages_select_loaded_store_and_claimed_product_by_default():
@@ -256,11 +277,15 @@ def test_frontend_loads_config_preview_and_blocks_real_start_when_incomplete():
 def test_frontend_defaults_to_delivery_current_task_even_after_success():
     source = APP_TSX.read_text(encoding="utf-8")
     picker = source[source.index("function pickDefaultTaskId"):source.index("function pickTaskIdForOperatorPath")]
+    operator_picker = source[source.index("function pickTaskIdForOperatorPath"):source.index("function isActionableClaimTask")]
 
     assert "const deliveryTaskId = deliveryWorkspace?.current_task?.id" in picker
-    assert "if (deliveryTask && isDefaultSelectableSingleSaveTask(deliveryTask))" in picker
+    assert "if (deliveryTask && isDefaultSelectableOperatorTask(deliveryTask))" in picker
+    assert "tasks.find(isActionableClaimTask)" in picker
+    assert "isDefaultSelectableClaimTask" in picker
+    assert "if (currentTask && isDefaultSelectableOperatorTask(currentTask)) return currentTask.id" in operator_picker
     assert "deliveryTask.status !== 'completed'" not in picker
-    assert picker.index("if (deliveryTask && isDefaultSelectableSingleSaveTask(deliveryTask))") < picker.index("tasks.find(isActionableSingleSaveTask)")
+    assert picker.index("if (deliveryTask && isDefaultSelectableOperatorTask(deliveryTask))") < picker.index("tasks.find(isActionableClaimTask)")
     assert "数据采集认领" in source
     assert "采集箱编辑保存" in source
     assert "请在“商品与任务”" not in source
@@ -1880,16 +1905,16 @@ def test_execution_console_select_task_state_explains_task_preparation_path():
 
     assert "code: 'select_task'" in primary_path_section
     assert "title: '需要选择任务'" in primary_path_section
-    assert "ctaLabel: '去选择商品'" in primary_path_section
+    assert "ctaLabel: '去数据采集认领'" in primary_path_section
     assert "primaryPath.code === 'select_task'" in blocker_card_section
     assert "aria-label=\"任务准备路径\"" in blocker_card_section
     assert "console-primary-blocker-card__task-path" in blocker_card_section
-    assert "1 创建或选择任务" in blocker_card_section
-    assert "只处理单商品只保存任务" in blocker_card_section
-    assert "2 确认店铺和商品" in blocker_card_section
-    assert "至少有真实店铺和 1 个商品" in blocker_card_section
-    assert "3 回到配置和检查" in blocker_card_section
-    assert "任务选中后再补配置、运行真实只读检查、人工确认保存。" in blocker_card_section
+    assert "1 创建采集认领任务" in blocker_card_section
+    assert "先从店小秘数据采集把真实商品认领到采集箱。" in blocker_card_section
+    assert "2 从采集箱创建保存任务" in blocker_card_section
+    assert "认领完成后，选择已进入采集箱的商品创建单商品只保存。" in blocker_card_section
+    assert "3 再确认配置并保存" in blocker_card_section
+    assert "第二段才补编辑页配置、人工确认只保存；批量和发布入口保持关闭。" in blocker_card_section
     assert ".console-primary-blocker-card__task-path" in styles_source
 
 
@@ -3175,9 +3200,12 @@ def test_app_defaults_to_delivery_current_task_even_when_completed():
     assert "function pickDefaultTaskId(" in app_source
     assert "deliveryWorkspace?.current_task?.id" in app_source
     assert "function isActionableSingleSaveTask(" in app_source
-    assert "deliveryTask && isDefaultSelectableSingleSaveTask(deliveryTask)" in app_source
+    assert "deliveryTask && isDefaultSelectableOperatorTask(deliveryTask)" in app_source
     assert "deliveryTask.status !== 'completed'" not in app_source
+    assert "tasks.find(isActionableClaimTask)" in app_source
     assert "tasks.find(isActionableSingleSaveTask)" in app_source
+    assert "function isDefaultSelectableOperatorTask(" in app_source
+    assert "function isDefaultSelectableClaimTask(" in app_source
     assert "function isDefaultSelectableSingleSaveTask(" in app_source
     assert "function isSafeDefaultFallbackTask(" in app_source
     assert "!UNRELEASED_REAL_DXM_MUTATION_MODES.has(String(task.mode))" in app_source

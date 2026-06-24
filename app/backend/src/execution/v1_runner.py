@@ -244,6 +244,7 @@ class V1TaskRunner:
         agent_console_events: list[dict[str, Any]] = []
         agent_action_events: list[dict[str, Any]] = []
         live_browser_hud_events: list[dict[str, Any]] = []
+        claimed_product: dict[str, Any] | None = None
         last_state = MODE_LAST_STATE[mode]
 
         self.repo.update_job(job_id, status="running", current_step_code="PRECHECK_CONFIG", current_step_name="启动前配置校验")
@@ -318,7 +319,7 @@ class V1TaskRunner:
                 workflow_result = await self._run_workflow_action_async(task, job, state_name, claim_mark, execution_defaults)
                 if workflow_result:
                     if mode == "claim_only" and state_name == StateName.VERIFY_DRAFT_BOX_CLAIM:
-                        self._record_claimed_product_from_acquisition(task, workflow_result, claim_mark)
+                        claimed_product = self._record_claimed_product_from_acquisition(task, workflow_result, claim_mark)
                     agent_action_event = self._sync_agent_action(
                         task,
                         job,
@@ -445,9 +446,11 @@ class V1TaskRunner:
                 agent_console_events=agent_console_events,
                 agent_action_events=agent_action_events,
                 live_browser_hud_events=live_browser_hud_events,
+                claimed_product=claimed_product,
             )
-            save_result = self._save_result_for_mode(mode, workflow_results)
-            self.repo.add_report(task_id, job_id, product_id, "success", False, save_result, summary)
+            save_result = self._save_result_for_mode(mode, workflow_results, claimed_product=claimed_product)
+            report_product_id = int(claimed_product["id"]) if mode == "claim_only" and claimed_product and claimed_product.get("id") else product_id
+            self.repo.add_report(task_id, job_id, report_product_id, "success", False, save_result, summary)
             self.repo.update_job(
                 job_id,
                 status="succeeded",
@@ -1186,14 +1189,19 @@ class V1TaskRunner:
         agent_console_events: list[dict[str, Any]] | None = None,
         agent_action_events: list[dict[str, Any]] | None = None,
         live_browser_hud_events: list[dict[str, Any]] | None = None,
+        claimed_product: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         console_events = agent_console_events or []
         action_events = agent_action_events or []
         live_hud_events = live_browser_hud_events or []
+        summary_product_id = claimed_product.get("id") if claimed_product else job.get("product_id")
+        next_action = None
+        if mode == "claim_only" and claimed_product:
+            next_action = "进入“采集箱编辑保存”，选择该商品创建单商品只保存任务。"
         return {
             "task_id": task["id"],
             "job_id": job["id"],
-            "product_id": job.get("product_id"),
+            "product_id": summary_product_id,
             "store_name": self._store_name(task),
             "source_title": self._source_title(job.get("product_id")),
             "category": self._summary_category(task, job, execution_defaults),
@@ -1215,6 +1223,8 @@ class V1TaskRunner:
             "agent_action_events": action_events,
             "live_browser_hud_events": live_hud_events,
             "live_browser_hud": live_hud_events[-1] if live_hud_events else None,
+            "claimed_product": dict(claimed_product) if claimed_product else None,
+            "next_action": next_action,
             "published": False,
         }
 
@@ -1256,8 +1266,29 @@ class V1TaskRunner:
             if not str(key).startswith("_")
         }
 
-    def _save_result_for_mode(self, mode: str, workflow_results: list[dict[str, Any]]) -> dict[str, Any]:
-        if mode in {"probe", "dry_run", "claim_only"}:
+    def _save_result_for_mode(
+        self,
+        mode: str,
+        workflow_results: list[dict[str, Any]],
+        *,
+        claimed_product: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if mode == "claim_only":
+            result = {
+                "ok": True,
+                "mode": mode,
+                "message": "采集认领已完成，商品已进入采集箱",
+                "published": False,
+                "next_action": "进入“采集箱编辑保存”，选择该商品创建单商品只保存任务。",
+            }
+            if claimed_product:
+                result.update({
+                    "claimed_product_id": claimed_product.get("id"),
+                    "claimed_product_title": claimed_product.get("title"),
+                    "claimed_product_status": claimed_product.get("status"),
+                })
+            return result
+        if mode in {"probe", "dry_run"}:
             return {"ok": True, "mode": mode, "message": "当前模式未执行保存动作", "published": False}
         save_result = next((self._extract_save_result(result) for result in reversed(workflow_results) if result.get("action") == "save_only"), None)
         if not save_result:
@@ -1416,7 +1447,7 @@ class V1TaskRunner:
             "draft_box_url": workflow_result.get("page_url"),
             "template_id": payload.get("template_id"),
         }
-        return self.repo.create_product({
+        product = self.repo.create_product({
             "title": str(title),
             "source": "dxm_data_acquisition",
             "status": "claimed_to_draft",
@@ -1427,6 +1458,8 @@ class V1TaskRunner:
             "image_count": 0,
             "payload": {key: value for key, value in product_payload.items() if value is not None},
         })
+        self.repo.mark_acquisition_claim_completed(int(task["id"]), product)
+        return product
 
     def _source_title(self, product_id: int | None) -> str:
         if product_id is None:

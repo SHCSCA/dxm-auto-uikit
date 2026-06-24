@@ -41,6 +41,14 @@ export function AcquisitionClaimPage({
   )
   const enabledTemplates = templates.filter((template) => template.is_enabled)
   const canSubmit = Boolean(selectedStore && claimMark.trim())
+  const claimCompleted = Boolean(
+    lastRequest && (
+      lastRequest.stage === 'claimed_to_draft'
+      || lastRequest.status === 'completed'
+      || lastRequest.task_status === 'completed'
+      || lastRequest.claimed_product_id
+    ),
+  )
 
   useEffect(() => {
     if (!stores.length) {
@@ -79,7 +87,7 @@ export function AcquisitionClaimPage({
 
         <ol className="operation-guide" aria-label="数据采集认领四步">
           {claimSteps.map((step, index) => (
-            <li key={step.title} className={lastRequest && index === 0 ? 'is-done' : ''}>
+            <li key={step.title} className={claimCompleted || (lastRequest && index < 2) ? 'is-done' : ''}>
               <span>{index + 1}</span>
               <strong>{step.title}</strong>
               <small>{step.detail}</small>
@@ -130,12 +138,14 @@ export function AcquisitionClaimPage({
           </button>
           {lastRequest && (
             <button className="button button--secondary" type="button" onClick={onShowExecutionConsole} disabled={busy}>
-              去执行浏览器启动认领
+              {claimCompleted ? '查看执行记录' : '去执行浏览器启动认领'}
             </button>
           )}
-          <button className="button button--quiet" type="button" onClick={onShowDraftEdit}>
-            去采集箱编辑保存
-          </button>
+          {claimCompleted && (
+            <button className="button button--primary" type="button" onClick={onShowDraftEdit}>
+              进入采集箱编辑保存
+            </button>
+          )}
         </div>
       </div>
 
@@ -147,9 +157,10 @@ export function AcquisitionClaimPage({
         {lastRequest ? (
           <div className="status-grid">
             <span><strong>店铺</strong><b>{selectedStore?.name ?? lastRequest.store_id}</b></span>
-            <span><strong>阶段</strong><b>等待启动真实浏览器认领</b></span>
+            <span><strong>阶段</strong><b>{claimCompleted ? '商品已进入采集箱' : '等待启动真实浏览器认领'}</b></span>
             <span><strong>标记</strong><b>{lastRequest.claim_mark}</b></span>
-            <span><strong>下一步</strong><b>去执行浏览器启动认领</b></span>
+            <span><strong>下一步</strong><b>{claimCompleted ? '进入采集箱编辑保存' : '去执行浏览器启动认领'}</b></span>
+            {claimCompleted && <span><strong>采集箱商品</strong><b>{lastRequest.claimed_product_title || `商品 #${lastRequest.claimed_product_id}`}</b></span>}
           </div>
         ) : (
           <p>创建后，Agent 会按该请求进入真实店小秘数据采集页处理认领；认领完成前不会保存或发布。</p>

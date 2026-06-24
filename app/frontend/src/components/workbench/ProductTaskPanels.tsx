@@ -666,7 +666,7 @@ function taskStartDecision({
       tone: 'warn',
     }
   }
-  if (isRealDxmMutationTask(selectedTask) && !configOk) {
+  if (selectedTask.mode === 'single_save' && !configOk) {
     return {
       scope: '先补配置',
       reason: '当前任务配置检查未通过。',
@@ -682,7 +682,7 @@ function taskStartDecision({
       tone: 'warn',
     }
   }
-  if (requiresRealL2(selectedTask) && !l3Ready) {
+  if (selectedTask.mode === 'single_save' && !l3Ready) {
     return {
       scope: '等待人工确认',
       reason: '真实保存前还没有完成批准人确认。',

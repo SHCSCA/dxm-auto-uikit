@@ -377,6 +377,11 @@ def create_acquisition_claim_request(payload: AcquisitionClaimRequest):
         'category_name': task_payload.get('category_name'),
         'claim_mark': task_payload.get('claim_mark'),
         'template_id': task_payload.get('template_id'),
+        'claimed_product_id': task_payload.get('claimed_product_id'),
+        'claimed_product_title': task_payload.get('claimed_product_title'),
+        'claimed_product_status': task_payload.get('claimed_product_status'),
+        'next_step': task_payload.get('next_step'),
+        'completed_at': task_payload.get('completed_at'),
         'task_status': task.get('status'),
     }
 

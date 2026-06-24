@@ -314,6 +314,28 @@ class Repository:
                 (status, completed_jobs if completed_jobs is not None else existing['completed_jobs'], failed_jobs if failed_jobs is not None else existing['failed_jobs'], now, task_id),
             )
 
+    def mark_acquisition_claim_completed(self, task_id: int, claimed_product: dict[str, Any]):
+        now = now_iso()
+        with connection() as conn:
+            task = conn.execute("SELECT payload_json FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if not task:
+                return None
+            payload = loads(task['payload_json'], {})
+            payload.update({
+                'stage': 'claimed_to_draft',
+                'status': 'completed',
+                'claimed_product_id': claimed_product.get('id'),
+                'claimed_product_title': claimed_product.get('title'),
+                'claimed_product_status': claimed_product.get('status'),
+                'completed_at': now,
+                'next_step': '进入“采集箱编辑保存”，选择该商品创建单商品只保存任务。',
+            })
+            conn.execute(
+                "UPDATE tasks SET payload_json=?, updated_at=? WHERE id=?",
+                (dumps(payload), now, task_id),
+            )
+        return self.get_task(task_id)
+
     def try_start_task(self, task_id: int) -> bool:
         now = now_iso()
         with connection() as conn:

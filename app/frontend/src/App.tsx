@@ -660,7 +660,8 @@ export default function App() {
         setSelectedTaskId(result.task_id)
         syncSelectedTaskIdUrl(result.task_id)
       }
-      setOperationNotice('采集认领请求已创建。请打开真实数据采集页，按认领标记处理商品到采集箱。')
+      setActiveSection('start_save')
+      setOperationNotice('采集认领任务已创建。下一步在执行浏览器启动 Agent，将商品从数据采集认领到采集箱。')
       await refreshWorkspace()
     } catch (error) {
       setOperationError(error instanceof Error ? error.message : '创建采集认领请求失败')
@@ -1156,6 +1157,11 @@ export default function App() {
     () => workspace.products.filter((product) => CLAIMED_DRAFT_PRODUCT_STATUSES.has(product.status)),
     [workspace.products],
   )
+  const persistedAcquisitionClaimRequest = useMemo(
+    () => taskToAcquisitionClaimResponse(pickLatestAcquisitionClaimTask(workspace.tasks)),
+    [workspace.tasks],
+  )
+  const visibleAcquisitionClaimRequest = persistedAcquisitionClaimRequest ?? lastAcquisitionClaimRequest
   const selectedEditSaveTask = selectedTask?.mode === 'single_save' ? selectedTask : null
 
   const content = (() => {
@@ -1203,7 +1209,7 @@ export default function App() {
             stores={workspace.stores}
             templates={workspace.templates}
             busy={busy}
-            lastRequest={lastAcquisitionClaimRequest}
+            lastRequest={visibleAcquisitionClaimRequest}
             onCreateClaimRequest={(request) => { void createAcquisitionClaimRequest(request) }}
             onNavigateDataAcquisition={() => { void navigateDxmTarget('data_acquisition') }}
             onShowDraftEdit={() => setActiveSection('draft_edit_save')}
@@ -1303,6 +1309,7 @@ export default function App() {
             onControlAgentConsoleBrowser={controlAgentConsoleBrowser}
             onRuntimeControl={runRuntimeControl}
             onShowTasks={() => setActiveSection('product_tasks')}
+            onShowDraftEdit={() => setActiveSection('draft_edit_save')}
             onShowConfig={() => setActiveSection('edit_config')}
             onShowEvidence={() => setActiveSection('results')}
             onShowReports={() => setActiveSection('results')}
@@ -1672,24 +1679,39 @@ function pickDefaultTaskId(deliveryWorkspace: DeliveryWorkspaceResponse | null, 
   const deliveryTask = typeof deliveryTaskId === 'number'
     ? tasks.find((task) => task.id === deliveryTaskId)
     : null
-  if (deliveryTask && isDefaultSelectableSingleSaveTask(deliveryTask)) {
+  if (deliveryTask && isDefaultSelectableOperatorTask(deliveryTask)) {
     return deliveryTask.id
   }
-  return tasks.find(isActionableSingleSaveTask)?.id
-    ?? (deliveryTask && isDefaultSelectableSingleSaveTask(deliveryTask) ? deliveryTask.id : null)
+  return tasks.find(isActionableClaimTask)?.id
+    ?? tasks.find(isActionableSingleSaveTask)?.id
+    ?? (deliveryTask && isDefaultSelectableOperatorTask(deliveryTask) ? deliveryTask.id : null)
     ?? tasks.find((task) => task.mode === 'single_save')?.id
+    ?? tasks.find(isDefaultSelectableClaimTask)?.id
     ?? tasks.find(isSafeDefaultFallbackTask)?.id
     ?? null
 }
 
 function pickTaskIdForOperatorPath(currentTaskId: number | null, deliveryWorkspace: DeliveryWorkspaceResponse | null, tasks: Task[]): number | null {
   const currentTask = currentTaskId ? tasks.find((task) => task.id === currentTaskId) : null
+  if (currentTask && isDefaultSelectableOperatorTask(currentTask)) return currentTask.id
   if (currentTask && isActionableSingleSaveTask(currentTask)) return currentTask.id
   return pickDefaultTaskId(deliveryWorkspace, tasks)
 }
 
+function isActionableClaimTask(task: Task) {
+  return task.mode === 'claim_only' && !['completed', 'cancelled', 'archived'].includes(String(task.status || ''))
+}
+
 function isActionableSingleSaveTask(task: Task) {
   return task.mode === 'single_save' && !['completed', 'cancelled', 'archived'].includes(String(task.status || ''))
+}
+
+function isDefaultSelectableOperatorTask(task: Task) {
+  return (task.mode === 'claim_only' || task.mode === 'single_save') && !['cancelled', 'archived'].includes(String(task.status || ''))
+}
+
+function isDefaultSelectableClaimTask(task: Task) {
+  return task.mode === 'claim_only' && !['cancelled', 'archived'].includes(String(task.status || ''))
 }
 
 function isDefaultSelectableSingleSaveTask(task: Task) {
@@ -1717,5 +1739,31 @@ function buildAgentConsoleHudStep(workspace: DeliveryWorkspace, selectedTask: Ta
     human_next: '人工确认后开始输入标题、选择分类、设置价格库存并只保存',
     requires_user_action: true,
     severity: 'warning',
+  }
+}
+
+function pickLatestAcquisitionClaimTask(tasks: Task[]): Task | null {
+  return tasks.find((task) => task.mode === 'claim_only' && !['cancelled', 'archived'].includes(String(task.status || ''))) ?? null
+}
+
+function taskToAcquisitionClaimResponse(task: Task | null): AcquisitionClaimResponse | null {
+  if (!task || task.mode !== 'claim_only') return null
+  const payload = task.payload ?? {}
+  return {
+    id: task.id,
+    task_id: task.id,
+    stage: String(payload.stage ?? 'pending_acquisition_claim'),
+    status: String(payload.status ?? task.status ?? 'pending'),
+    store_id: Number(task.store_id ?? payload.store_id ?? 0),
+    keyword: typeof payload.keyword === 'string' ? payload.keyword : null,
+    category_name: typeof payload.category_name === 'string' ? payload.category_name : null,
+    claim_mark: String(payload.claim_mark ?? 'AI-OPS'),
+    template_id: typeof payload.template_id === 'number' ? payload.template_id : null,
+    claimed_product_id: typeof payload.claimed_product_id === 'number' ? payload.claimed_product_id : null,
+    claimed_product_title: typeof payload.claimed_product_title === 'string' ? payload.claimed_product_title : null,
+    claimed_product_status: typeof payload.claimed_product_status === 'string' ? payload.claimed_product_status : null,
+    next_step: typeof payload.next_step === 'string' ? payload.next_step : null,
+    completed_at: typeof payload.completed_at === 'string' ? payload.completed_at : null,
+    task_status: task.status,
   }
 }

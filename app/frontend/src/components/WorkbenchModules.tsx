@@ -92,7 +92,7 @@ type ConsolePrimaryPath = {
   detail: string
   next: string
   ctaLabel: string
-  action: 'dxm_login' | 'tasks' | 'config' | 'run_l2' | 'reports' | 'start_browser' | 'launcher_logs' | 'current_execution'
+  action: 'dxm_login' | 'tasks' | 'draft_edit_save' | 'config' | 'run_l2' | 'reports' | 'start_browser' | 'launcher_logs' | 'current_execution'
   browserStatus: string
   blocksBrowserStart: boolean
   saveBlocked: boolean
@@ -201,6 +201,7 @@ type ExecutionConsoleProps = CommonProps & {
   onControlAgentConsoleBrowser: (command: AgentConsoleControlCommand) => void
   onRuntimeControl: (action: RuntimeControlAction) => void
   onShowTasks: () => void
+  onShowDraftEdit: () => void
   onShowConfig: () => void
   onShowEvidence: () => void
   onShowReports: () => void
@@ -2994,6 +2995,7 @@ export function ExecutionConsole({
   onControlAgentConsoleBrowser,
   onRuntimeControl,
   onShowTasks,
+  onShowDraftEdit,
   onShowConfig,
   onShowEvidence,
   onShowReports,
@@ -3042,6 +3044,7 @@ export function ExecutionConsole({
       runtimeLogError={runtimeLogError}
       onStartAgentConsole={onStartAgentConsole}
       onShowTasks={onShowTasks}
+      onShowDraftEdit={onShowDraftEdit}
       onShowConfig={onShowConfig}
       onShowReports={onShowReports}
       onRuntimeControl={onRuntimeControl}
@@ -3783,6 +3786,7 @@ function ConsoleFocusPanel({
   runtimeLogError,
   onStartAgentConsole,
   onShowTasks,
+  onShowDraftEdit,
   onShowConfig,
   onShowReports,
   onRuntimeControl,
@@ -3804,6 +3808,7 @@ function ConsoleFocusPanel({
   runtimeLogError: string | null
   onStartAgentConsole: () => void
   onShowTasks: () => void
+  onShowDraftEdit: () => void
   onShowConfig: () => void
   onShowReports: () => void
   onRuntimeControl: (action: RuntimeControlAction) => void
@@ -3854,6 +3859,7 @@ function ConsoleFocusPanel({
   const primaryAction = () => {
     if (primaryPath.action === 'dxm_login') return onOpenDxmLogin()
     if (primaryPath.action === 'reports') return onShowReports()
+    if (primaryPath.action === 'draft_edit_save') return onShowDraftEdit()
     if (primaryPath.action === 'config') return onShowConfig()
     if (primaryPath.action === 'current_execution') return onRuntimeLogSourceChange('agent')
     if (primaryPath.action === 'launcher_logs') return onRuntimeLogSourceChange('launcher')
@@ -4038,9 +4044,9 @@ function ConsolePrimaryBlockerCard({
         )}
         {primaryPath.code === 'select_task' && (
           <div className="console-primary-blocker-card__task-path" aria-label="任务准备路径">
-            <span><b>1 创建或选择任务</b><small>只处理单商品只保存任务；批量和发布入口保持关闭。</small></span>
-            <span><b>2 确认店铺和商品</b><small>至少有真实店铺和 1 个商品，编辑页配置才知道本次取值。</small></span>
-            <span><b>3 回到配置和检查</b><small>任务选中后再补配置、运行真实只读检查、人工确认保存。</small></span>
+            <span><b>1 创建采集认领任务</b><small>先从店小秘数据采集把真实商品认领到采集箱。</small></span>
+            <span><b>2 从采集箱创建保存任务</b><small>认领完成后，选择已进入采集箱的商品创建单商品只保存。</small></span>
+            <span><b>3 再确认配置并保存</b><small>第二段才补编辑页配置、人工确认只保存；批量和发布入口保持关闭。</small></span>
           </div>
         )}
         {showLoginRecovery && (
@@ -5297,15 +5303,17 @@ function buildConsolePrimaryPath({
   const l2ProbeResourceState = getL2ProbeResourceState(runtimeStatus)
   const l2Detail = humanGateDetail(l2Gate?.detail)
   const l3Detail = humanGateDetail(l3Gate?.detail)
+  const selectedTaskNeedsEditConfig = selectedTask?.mode === 'single_save'
+  const selectedTaskNeedsManualApproval = selectedTask ? requiresManualApproval(selectedTask) : false
 
   if (!selectedTask) {
     return {
       code: 'select_task',
       title: '需要选择任务',
-      reason: '当前没有选中的单商品只保存任务。',
-      detail: '先在选择商品页创建或选择一个单商品只保存任务，再进入填写编辑页、真实只读检查和执行浏览器。',
-      next: '去选择商品页选择任务',
-      ctaLabel: '去选择商品',
+      reason: '当前没有选中的数据采集认领或采集箱编辑保存任务。',
+      detail: '先从数据采集创建认领任务；认领进采集箱后，再创建单商品只保存任务。',
+      next: '去数据采集认领',
+      ctaLabel: '去数据采集认领',
       action: 'tasks',
       browserStatus: '未选择任务，执行浏览器暂不启动',
       blocksBrowserStart: true,
@@ -5313,14 +5321,17 @@ function buildConsolePrimaryPath({
     }
   }
   if (selectedTask.status === 'completed') {
+    const claimCompleted = selectedTask.mode === 'claim_only'
     return {
       code: 'completed',
-      title: '保存成功',
+      title: claimCompleted ? '采集认领完成' : '保存成功',
       reason: '当前任务已完成。',
-      detail: '继续复核保存结果、未发布证明、日志和证据。',
-      next: '查看保存结果与未发布证明',
-      ctaLabel: '查看保存结果',
-      action: 'reports',
+      detail: claimCompleted
+        ? '商品已进入采集箱；下一步到“采集箱编辑保存”创建单商品只保存任务。'
+        : '继续复核保存结果、未发布证明、日志和证据。',
+      next: claimCompleted ? '进入采集箱编辑保存' : '查看保存结果与未发布证明',
+      ctaLabel: claimCompleted ? '进入采集箱编辑保存' : '查看保存结果',
+      action: claimCompleted ? 'draft_edit_save' : 'reports',
       browserStatus: '任务已完成',
       blocksBrowserStart: true,
       saveBlocked: false,
@@ -5397,7 +5408,7 @@ function buildConsolePrimaryPath({
       saveBlocked: true,
     }
   }
-  if (isRealDxmMutationTask(selectedTask) && configPreviewError) {
+  if (selectedTaskNeedsEditConfig && configPreviewError) {
     return {
       code: 'config',
       title: '需要补配置',
@@ -5411,7 +5422,7 @@ function buildConsolePrimaryPath({
       saveBlocked: true,
     }
   }
-  if (isRealDxmMutationTask(selectedTask) && (configPreviewLoading || configPreview?.taskId !== selectedTask.id)) {
+  if (selectedTaskNeedsEditConfig && (configPreviewLoading || configPreview?.taskId !== selectedTask.id)) {
     return {
       code: 'config',
       title: '需要补配置',
@@ -5425,7 +5436,7 @@ function buildConsolePrimaryPath({
       saveBlocked: true,
     }
   }
-  if (isRealDxmMutationTask(selectedTask) && !configOk) {
+  if (selectedTaskNeedsEditConfig && !configOk) {
     return {
       code: 'config',
       title: '需要补配置',
@@ -5469,7 +5480,7 @@ function buildConsolePrimaryPath({
       saveBlocked: true,
     }
   }
-  if (requiresRealL2(selectedTask) && !l3Ready) {
+  if (selectedTaskNeedsManualApproval && !l3Ready) {
     return {
       code: 'l3',
       title: '需要人工确认只保存',
@@ -5500,10 +5511,12 @@ function buildConsolePrimaryPath({
   return {
     code: 'ready',
     title: '可以启动执行浏览器',
-    reason: '配置、真实只读检查和人工确认当前未阻断。',
-    detail: '将打开独立执行浏览器窗口；保存前仍需确认，不会发布。',
-    next: '打开执行浏览器（不保存）',
-    ctaLabel: '打开执行浏览器（不保存）',
+    reason: selectedTask.mode === 'claim_only' ? '店小秘登录和真实只读检查当前未阻断。' : '配置、真实只读检查和人工确认当前未阻断。',
+    detail: selectedTask.mode === 'claim_only'
+      ? '将打开独立执行浏览器窗口，只执行数据采集认领到采集箱，不会进入编辑页、不会保存、不会发布。'
+      : '将打开独立执行浏览器窗口；保存前仍需确认，不会发布。',
+    next: selectedTask.mode === 'claim_only' ? '启动采集认领' : '打开执行浏览器（不保存）',
+    ctaLabel: selectedTask.mode === 'claim_only' ? '启动采集认领' : '打开执行浏览器（不保存）',
     action: 'start_browser',
     browserStatus: '执行浏览器待启动',
     blocksBrowserStart: false,
