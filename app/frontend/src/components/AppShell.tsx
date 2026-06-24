@@ -15,12 +15,12 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
     short: '1',
     items: [
       { id: 'home', label: '首页', short: '首', hint: '看当前该做什么' },
-      { id: 'dxm_access', label: '店小秘登录', short: '登', hint: '打开真实店小秘并确认登录' },
+      { id: 'dxm_access', label: '账号与浏览器', short: '账', hint: '记住账号并打开真实店小秘浏览器' },
     ],
   },
   {
     id: 'claim',
-    label: '第一段：采集认领',
+    label: '第一段：采集入箱',
     short: '2',
     items: [
       { id: 'acquisition_claim', label: '数据采集认领', short: '采', hint: '从数据采集认领到采集箱' },
@@ -28,11 +28,11 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
   },
   {
     id: 'save',
-    label: '第二段：编辑保存',
+    label: '第二段：编辑只保存',
     short: '3',
     items: [
       { id: 'draft_edit_save', label: '采集箱编辑保存', short: '编', hint: '从采集箱打开编辑页并只保存' },
-      { id: 'template_center', label: '编辑页模板', short: '模', hint: '管理店铺和类目模板' },
+      { id: 'template_center', label: '模板中心', short: '模', hint: '管理多套店铺和类目模板' },
     ],
   },
   {
@@ -48,29 +48,30 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
     label: '复盘',
     short: '5',
     items: [
-      { id: 'results', label: '结果与问题', short: '结', hint: '确认保存结果并按失败原因恢复' },
+      { id: 'task_history', label: '任务记录', short: '记', hint: '查看历史任务和失败恢复入口' },
+      { id: 'results', label: '报告与证据', short: '证', hint: '确认保存结果、截图和未发布证明' },
     ],
   },
   {
     id: 'system',
-    label: '系统',
+    label: '维护',
     short: '6',
     items: [
-      { id: 'settings', label: '系统设置', short: '设', hint: '查看运行环境、日志路径和维护设置' },
+      { id: 'settings', label: '系统维护', short: '维', hint: '查看运行环境、日志路径和维护设置' },
     ],
   },
 ]
 
 const sectionLabels: Record<WorkbenchSection, string> = {
   home: '首页',
-  dxm_access: '店小秘登录',
+  dxm_access: '账号与浏览器',
   acquisition_claim: '数据采集认领',
   draft_edit_save: '采集箱编辑保存',
-  template_center: '编辑页模板',
-  product_tasks: '数据采集认领',
-  current_task: '数据采集认领',
-  task_history: '数据采集认领',
-  edit_config: '编辑页模板',
+  template_center: '模板中心',
+  product_tasks: '任务记录',
+  current_task: '任务记录',
+  task_history: '任务记录',
+  edit_config: '模板中心',
   config_basic: '基础信息',
   config_category_title: '类目与标题',
   config_price_stock: '价格库存',
@@ -79,14 +80,14 @@ const sectionLabels: Record<WorkbenchSection, string> = {
   config_compliance: '合规海关',
   template_management: '模板管理',
   start_save: '浏览器现场',
-  preflight: '保存前安全检查',
+  preflight: '浏览器现场',
   real_browser: '浏览器现场',
   manual_takeover: '人工接管',
-  results: '结果与问题',
-  issues: '结果与问题',
-  evidence: '证据归档',
+  results: '报告与证据',
+  issues: '报告与证据',
+  evidence: '报告与证据',
   help: '使用帮助',
-  settings: '系统设置',
+  settings: '系统维护',
 }
 
 type AppShellProps = {
@@ -125,7 +126,7 @@ export function AppShell({
             <div>
               <strong>DXM 只保存自动化</strong>
               <span>数据采集认领后只保存，不发布</span>
-              <span className="sr-only">首页 / 店小秘登录 / 数据采集认领 / 采集箱编辑保存 / 编辑页模板 / 浏览器现场 / 结果与问题 / 系统设置</span>
+              <span className="sr-only">首页 / 账号与浏览器 / 数据采集认领 / 采集箱编辑保存 / 模板中心 / 浏览器现场 / 任务记录 / 报告与证据 / 系统维护</span>
             </div>
           )}
           <button className="icon-button" type="button" onClick={onToggleSidebar} aria-label="切换侧边栏">

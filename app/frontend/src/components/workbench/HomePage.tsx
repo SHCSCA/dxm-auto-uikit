@@ -55,7 +55,7 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
         : selectedTask.mode === 'claim_only' && selectedTask.status !== 'completed'
           ? { label: '运行数据采集认领', detail: '打开真实浏览器，把商品认领到采集箱。', cta: '去浏览器现场', action: onShowConsole }
         : !configReady
-          ? { label: '检查编辑页模板', detail: '确认本次编辑保存会读取哪些字段值。', cta: '去编辑页模板', action: onShowConfig }
+          ? { label: '检查模板中心', detail: '确认本次编辑保存会读取哪套模板和字段值。', cta: '去模板中心', action: onShowConfig }
           : !l2Passed
             ? { label: '运行保存前安全检查', detail: '先读取店小秘页面，确认不会领取、保存或发布。', cta: '去浏览器现场', action: onShowConsole }
             : requiresManualApproval(selectedTask) && !l3Passed
@@ -70,7 +70,7 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
         : selectedTask.mode === 'claim_only' && selectedTask.status !== 'completed'
           ? '采集认领还没有完成。'
           : !configReady
-            ? '编辑页模板还没有补齐。'
+            ? '模板中心还没有补齐。'
             : !l2Passed
             ? '保存前安全检查还没有通过。'
               : waitingForManualConfirm
@@ -121,11 +121,11 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
       <div className="module-card span-3 home-menu-map">
         <ModuleHead title="两段式操作入口" meta="普通用户只按当前按钮推进" />
         <div className="home-menu-map__grid home-menu-map__grid--compact">
-          <button className="button button--quiet" type="button" onClick={onShowDxmAccess}>店小秘登录</button>
+          <button className="button button--quiet" type="button" onClick={onShowDxmAccess}>账号与浏览器</button>
           <button className="button button--quiet" type="button" onClick={onShowTasks}>数据采集认领</button>
-          <button className="button button--quiet" type="button" onClick={onShowConfig}>编辑页模板</button>
+          <button className="button button--quiet" type="button" onClick={onShowConfig}>模板中心</button>
           <button className="button button--quiet" type="button" onClick={onShowConsole}>浏览器现场</button>
-          <button className="button button--quiet" type="button" onClick={onShowReports}>结果与问题</button>
+          <button className="button button--quiet" type="button" onClick={onShowReports}>报告与证据</button>
         </div>
         <details className="inline-disclosure home-menu-map__guide">
           <summary>查看完整路径</summary>

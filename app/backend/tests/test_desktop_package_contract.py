@@ -343,21 +343,24 @@ def test_app_shell_presents_agent_console_as_user_first_navigation():
     assert "const primaryAreas" in source
     primary_block = source[source.index("const primaryAreas"):source.index("const sectionLabels")]
     assert "label: '准备'" in source
-    assert "label: '两段流程'" in source
+    assert "label: '第一段：采集入箱'" in source
+    assert "label: '第二段：编辑只保存'" in source
     assert "label: '复盘'" in source
-    assert "label: '系统'" in source
+    assert "label: '维护'" in source
     assert "label: '更多'" not in source
     assert "首页" in source
-    assert "店小秘登录" in source
+    assert "账号与浏览器" in source
     assert "数据采集认领" in source
     assert "采集箱编辑保存" in source
     assert "模板中心" in source
-    assert "执行浏览器" in source
-    assert "结果与问题" in source
+    assert "浏览器现场" in source
+    assert "任务记录" in source
+    assert "报告与证据" in source
     assert "证据归档" not in primary_block
-    assert "系统设置" in source
+    assert "系统维护" in source
     assert "id: 'dashboard'" not in primary_block
-    assert "{ id: 'start_save', label: '执行浏览器'" in primary_block
+    assert "{ id: 'start_save', label: '浏览器现场'" in primary_block
+    assert "{ id: 'task_history', label: '任务记录'" in primary_block
     assert "{ id: 'exceptions', label: '问题'" not in primary_block
     assert "{ id: 'preflight', label: '运行前检查'" not in primary_block
     assert "{ id: 'real_browser', label: '真实浏览器'" not in primary_block
@@ -380,10 +383,10 @@ def test_execution_console_focus_panel_keeps_primary_summary_small():
     ]
     assert primary_section.count("<span>") == 4
     assert "<strong>DXM 登录</strong>" in primary_section
-    assert "<strong>真实只读检查</strong>" in primary_section
+    assert "<strong>保存前安全检查</strong>" in primary_section
     assert "<strong>人工确认</strong>" in primary_section
-    assert "<strong>执行浏览器</strong>" in primary_section
-    assert "<summary>维护人员查看技术状态</summary>" in focus_section
+    assert "<strong>浏览器现场</strong>" in primary_section
+    assert "<summary>维护人员查看运行状态</summary>" in focus_section
     assert "<strong>任务</strong><b>" in focus_section
     assert "<strong>当前步骤</strong><b>" in focus_section
     assert "<strong>当前页面</strong><b>" in focus_section
