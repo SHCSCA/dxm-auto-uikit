@@ -101,6 +101,14 @@ class AgentConsoleService:
         )
         if reused is not None:
             return reused
+        preview = self._preserve_visible_browser_for_preview(
+            task_id=task_id,
+            target_url=target_url,
+            launch_browser=launch_browser,
+            step=step,
+        )
+        if preview is not None:
+            return preview
 
         self._close_current_browser()
         with self._lock:
@@ -182,6 +190,54 @@ class AgentConsoleService:
             hud = dict(self._state["hud"])
 
         if page is not None:
+            self._apply_hud_safely(page, hud)
+        return self.status()
+
+    def _preserve_visible_browser_for_preview(
+        self,
+        *,
+        task_id: int | None,
+        target_url: str | None,
+        launch_browser: bool,
+        step: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if launch_browser:
+            return None
+        with self._lock:
+            current_task_id = self._state.get("task_id")
+            has_visible_browser = (
+                self._state.get("active")
+                and self._state.get("browser_visible")
+                and self._page is not None
+            )
+            if not has_visible_browser:
+                return None
+
+            same_task = task_id is None or current_task_id is None or current_task_id == task_id
+            if not same_task:
+                self._state["last_error"] = (
+                    f"已有真实浏览器正在执行任务 #{current_task_id}；"
+                    "未切换任务，也未关闭当前浏览器现场。"
+                )
+                self._state["updated_at"] = _now()
+                return dict(self._state)
+
+            if current_task_id is None and task_id is not None:
+                self._state["task_id"] = task_id
+            if target_url:
+                self._state["target_url"] = target_url
+                if not self._state.get("current_url"):
+                    self._state["current_url"] = target_url
+            if step is not None:
+                self._state["hud"] = self._hud_state(step)
+            self._state["launch_browser"] = True
+            self._state["browser_launching"] = False
+            self._state["last_error"] = None
+            self._state["updated_at"] = _now()
+            page = self._page
+            hud = dict(self._state.get("hud") or {})
+
+        if page is not None and step is not None:
             self._apply_hud_safely(page, hud)
         return self.status()
 

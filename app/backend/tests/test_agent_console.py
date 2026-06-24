@@ -131,6 +131,77 @@ def test_agent_console_start_reuses_visible_browser_for_same_task(tmp_path, monk
     assert reused["hud"]["action"] == "真实浏览器已打开"
 
 
+def test_agent_console_preview_update_preserves_visible_browser_for_same_task(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+
+    initial = service.start(
+        task_id=42,
+        target_url="https://www.dianxiaomi.com/",
+        launch_browser=False,
+        step={"state": "WAITING", "action": "等待启动真实浏览器"},
+    )
+    with service._lock:
+        service._state["browser_visible"] = True
+        service._state["browser_launching"] = False
+        service._state["current_url"] = "https://www.dianxiaomi.com/web/home"
+        service._page = _FakePage()
+
+    close_calls = []
+    monkeypatch.setattr(service, "_close_current_browser", lambda: close_calls.append("closed"))
+
+    preview = service.start(
+        task_id=42,
+        target_url="https://www.dianxiaomi.com/web/home",
+        launch_browser=False,
+        step={"state": "SAVE_ONLY", "action": "等待人工确认只保存"},
+    )
+
+    assert close_calls == []
+    assert preview["session_id"] == initial["session_id"]
+    assert preview["profile_dir"] == initial["profile_dir"]
+    assert preview["task_id"] == 42
+    assert preview["browser_visible"] is True
+    assert preview["browser_launching"] is False
+    assert preview["current_url"] == "https://www.dianxiaomi.com/web/home"
+    assert preview["hud"]["state"] == "SAVE_ONLY"
+    assert preview["hud"]["human_action"] == "等待人工确认只保存"
+
+
+def test_agent_console_preview_for_other_task_does_not_close_or_rebind_visible_browser(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+
+    initial = service.start(
+        task_id=42,
+        target_url="https://www.dianxiaomi.com/",
+        launch_browser=False,
+        step={"state": "CLAIM_TO_DRAFT_BOX"},
+    )
+    with service._lock:
+        service._state["browser_visible"] = True
+        service._state["browser_launching"] = False
+        service._state["current_url"] = "https://www.dianxiaomi.com/web/home"
+        service._page = _FakePage()
+
+    close_calls = []
+    monkeypatch.setattr(service, "_close_current_browser", lambda: close_calls.append("closed"))
+
+    preview = service.start(
+        task_id=99,
+        target_url="https://www.dianxiaomi.com/web/home",
+        launch_browser=False,
+        step={"state": "SAVE_ONLY"},
+    )
+
+    assert close_calls == []
+    assert preview["session_id"] == initial["session_id"]
+    assert preview["task_id"] == 42
+    assert preview["browser_visible"] is True
+    assert preview["hud"]["state"] == "CLAIM_TO_DRAFT_BOX"
+    assert "已有真实浏览器正在执行任务 #42" in preview["last_error"]
+
+
 def test_agent_console_status_does_not_wait_for_slow_launch_title(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
     monkeypatch.setattr(agent_console_module, "chrome_launch_options", lambda headless: {})
