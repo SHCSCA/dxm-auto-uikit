@@ -48,3 +48,5 @@ def test_template_center_metadata_exposes_chinese_edit_page_sections():
     assert "仅本次任务使用" in data["actions"]
     assert "设为店铺默认模板" in data["actions"]
     assert "设为类目默认模板" in data["actions"]
+    assert "套用预置配置模板" in data["actions"]
+    assert "套用默认测试模板" not in data["actions"]

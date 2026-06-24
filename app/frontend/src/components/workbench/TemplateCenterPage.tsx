@@ -56,7 +56,7 @@ const fallbackTemplateCenterMetadata: TemplateCenterMetadata = {
     ] },
   ],
   source_priority: ['本次任务覆盖', '手动选择模板', '类目默认模板', '店铺默认模板', '系统默认模板', '商品原始数据'],
-  actions: ['仅本次任务使用', '设为店铺默认模板', '设为类目默认模板', '另存为新模板', '套用默认测试模板'],
+  actions: ['仅本次任务使用', '设为店铺默认模板', '设为类目默认模板', '另存为新模板', '套用预置配置模板'],
 }
 
 export function TemplateCenterPage({
@@ -169,8 +169,8 @@ export function TemplateCenterPage({
 
   function applyDefaultTemplate() {
     setDraftValues(defaultValuesForSection(activeSection))
-    setTemplateName(`默认测试模板 - ${activeSection.label}`)
-    setSaveState({ status: '已套用默认测试模板', detail: '这是之前测试用的示例值，执行前仍需按真实商品确认。' })
+    setTemplateName(`预置配置模板 - ${activeSection.label}`)
+    setSaveState({ status: '已套用预置配置模板', detail: '已填入常用默认值；执行前仍需按当前真实商品核对并保存。' })
   }
 
   async function saveWithState(label: string, action: () => Promise<void>) {
@@ -226,7 +226,7 @@ export function TemplateCenterPage({
           )) : (
             <div className="empty-state">
               <strong>当前分区还没有模板</strong>
-              <span>可套用默认测试模板后另存，或直接填写字段保存。</span>
+              <span>可套用预置配置模板后另存，或直接填写字段保存。</span>
             </div>
           )}
         </div>
@@ -253,7 +253,7 @@ export function TemplateCenterPage({
             <h2>{activeSection.label}</h2>
             <span>范围：{bindingScope}</span>
           </div>
-          <button className="button button--quiet" type="button" onClick={applyDefaultTemplate}>套用默认测试模板</button>
+          <button className="button button--quiet" type="button" onClick={applyDefaultTemplate}>套用预置配置模板</button>
         </div>
 
         <div className="template-field-grid">

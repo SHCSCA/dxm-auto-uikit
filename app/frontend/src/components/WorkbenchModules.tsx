@@ -892,11 +892,11 @@ function exactScopedTemplatesForSection(templates: Template[], section: Editable
 }
 
 function defaultTestTemplateName(section: EditableConfigSection) {
-  return `默认测试模板 / ${section.title}`
+  return `预置配置模板 / ${section.title}`
 }
 
 function isDefaultTestTemplate(template: Template) {
-  return String(template.template_name || '').startsWith('默认测试模板')
+  return String(template.template_name || '').startsWith('预置配置模板')
 }
 
 function templateBindingSpecificity(template: Template, binding: TemplateBinding) {
@@ -959,7 +959,7 @@ function templateFilterReason(template: Template, binding: TemplateBinding) {
 }
 
 function templateMatchSummary(template: Template | undefined, binding: TemplateBinding) {
-  if (!template) return '尚未选择已保存模板；可先套用默认测试模板或保存当前分区。'
+  if (!template) return '尚未选择已保存模板；可先套用预置配置模板或保存当前分区。'
   if (!templateBindingRecord(template)) return '当前命中全局模板，未限制店铺、类目或平台。'
   const score = templateBindingSpecificity(template, binding)
   return score > 0
@@ -1212,9 +1212,9 @@ function sourceBadgeText(source: string) {
   if (source.startsWith('任务：') || source.startsWith('任务覆盖')) return '执行取值来自：本次任务'
   if (source.startsWith('商品：') || source.includes('商品 payload')) return '执行取值来自：商品原始数据'
   if (source.startsWith('模板：')) {
-    return source.includes('默认测试模板') ? '执行取值来自：默认测试模板' : '执行取值来自：店铺模板'
+    return source.includes('预置配置模板') ? '执行取值来自：预置配置模板' : '执行取值来自：店铺模板'
   }
-  if (source === '系统默认值') return '执行取值来自：默认测试模板'
+  if (source === '系统默认值') return '执行取值来自：预置配置模板'
   return source ? `执行取值来自：${source}` : '执行取值来自：未设置'
 }
 
@@ -1428,7 +1428,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   const [configDraft, setConfigDraft] = useState(initialConfigDraft)
   const [savingSection, setSavingSection] = useState<string | null>(null)
   const [configMessage, setConfigMessage] = useState<string | null>(null)
-  const [defaultTemplatePackState, setDefaultTemplatePackState] = useState<string>('尚未套用默认测试模板')
+  const [defaultTemplatePackState, setDefaultTemplatePackState] = useState<string>('尚未套用预置配置模板')
   const [selectedTemplateBySection, setSelectedTemplateBySection] = useState<Record<ConfigSectionCode, string>>({} as Record<ConfigSectionCode, string>)
   const [lastSavedTemplateBySection, setLastSavedTemplateBySection] = useState<Record<ConfigSectionCode, { id: number; name: string; savedAt: string }>>({} as Record<ConfigSectionCode, { id: number; name: string; savedAt: string }>)
   const [sectionSaveState, setSectionSaveState] = useState<Record<ConfigSectionCode, ConfigSectionSaveState>>({} as Record<ConfigSectionCode, ConfigSectionSaveState>)
@@ -1465,7 +1465,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   const activeTemplateSourceName = templateSourceNameFromPreview(selectedConfigSection.preview)
   const activeSectionAlreadyPersisted = Boolean(selectedConfigSection.preview?.templatePresent)
   const activeSelectedTemplateLabel = activeSelectedTemplateId === '__default_test__'
-    ? '默认测试模板（当前分区）'
+    ? '预置配置模板（当前分区）'
     : activeSelectedTemplate
       ? templateOptionLabel(activeSelectedTemplate)
       : '未选择模板'
@@ -1512,16 +1512,16 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
       ? '当前分区有改动，尚未保存；未保存的修改不会进入执行。'
       : activeSectionAlreadyPersisted
         ? '当前分区来自已保存模板或任务覆盖，未修改。'
-        : '当前分区还没有已保存模板，请套用默认测试模板或手动保存。')
+        : '当前分区还没有已保存模板，请套用预置配置模板或手动保存。')
   const currentTemplateDisplayLabel = activeTaskOverrideFieldCount > 0
     ? '本次任务覆盖'
     : activeTemplateSourceName
-      ? activeTemplateSourceName.includes('默认测试模板') ? '默认测试模板' : '店铺模板'
+      ? activeTemplateSourceName.includes('预置配置模板') ? '预置配置模板' : '店铺模板'
       : activeSelectedTemplateId === '__default_test__'
-        ? '默认测试模板'
+        ? '预置配置模板'
         : activeSectionAlreadyPersisted
           ? '店铺模板'
-          : '默认测试模板'
+          : '预置配置模板'
   const executionValueStatusLabel = activeSectionDirty
     ? '未保存的修改不会进入执行'
     : selectedTask
@@ -1529,7 +1529,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
       : '选择任务后核对执行取值'
   const configCoverageLabels = ['店铺与任务基础', '类目与标题', 'SKU / 价格 / 库存', '价格策略', '图片与素材', '包装物流', '合规 / 海关', '半托管', '店小秘引用模板']
   const effectivePreviewTitle = '本次任务实际取值预览'
-  const sourcePriorityLabels = ['本次任务', '店铺模板', '默认测试模板', '商品原始数据']
+  const sourcePriorityLabels = ['本次任务', '店铺模板', '预置配置模板', '商品原始数据']
   const fieldUsageLegend = ['执行取值', '模板匹配', '辅助配置']
   const configReadyForReview = Boolean(configPreview?.ok)
   const configCoverageFieldIds = [
@@ -1560,7 +1560,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
     setLastSavedTemplateBySection({} as Record<ConfigSectionCode, { id: number; name: string; savedAt: string }>)
     setSectionSaveState({} as Record<ConfigSectionCode, ConfigSectionSaveState>)
     setConfigMessage(null)
-    setDefaultTemplatePackState('尚未套用默认测试模板')
+    setDefaultTemplatePackState('尚未套用预置配置模板')
   }, [configContextKey])
 
   function updateConfigField(sectionCode: ConfigSectionCode, fieldName: string, value: string) {
@@ -1701,7 +1701,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
       ...current,
       [section.code]: {
         status: 'dirty',
-        message: templateId === '__default_test__' ? '已套用默认测试模板，尚未保存' : '已套用模板，尚未保存',
+        message: templateId === '__default_test__' ? '已套用预置配置模板，尚未保存' : '已套用模板，尚未保存',
       },
     }))
   }
@@ -1716,13 +1716,13 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
       setConfigMessage('先选择任务，避免误存为全店/全类目模板。')
       return
     }
-    const confirmMessage = `确认套用默认测试模板？将默认测试模板单独保存到当前店铺/类目范围：${currentTemplateScopeLabel}。它是示例/测试模板，不代表已配置完成；不会覆盖已有正式店铺模板，如已有默认测试模板则更新默认测试模板。`
+    const confirmMessage = `确认套用预置配置模板？将预置配置模板单独保存到当前店铺/类目范围：${currentTemplateScopeLabel}。它是预置样例模板，不代表已配置完成；不会覆盖已有正式店铺模板，如已有预置配置模板则更新预置配置模板。`
     if (!window.confirm(confirmMessage)) {
-      setDefaultTemplatePackState('已取消套用默认测试模板')
+      setDefaultTemplatePackState('已取消套用预置配置模板')
       return
     }
     setSavingSection('template:default-pack')
-    setDefaultTemplatePackState('正在保存默认测试模板...')
+    setDefaultTemplatePackState('正在保存预置配置模板...')
     setConfigMessage(null)
     try {
       const nextDraft = { ...configDraft }
@@ -1764,16 +1764,16 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
             status: 'saved',
             scope: '店铺模板',
             savedAt,
-            message: `默认测试模板已单独保存；保存时间 ${savedAt}`,
+            message: `预置配置模板已单独保存；保存时间 ${savedAt}`,
           },
         ]),
       ) as Record<ConfigSectionCode, ConfigSectionSaveState>)
-      setDefaultTemplatePackState(`默认测试模板已保存；保存时间 ${savedAt}；已生成 ${Object.keys(nextLastSavedTemplates).length} 套分区模板`)
-      setConfigMessage(`默认测试模板已写入当前店铺/类目范围：${currentTemplateScopeLabel}。这些是示例值，不代表已配置完成；真实执行前请按当前商品继续核对分区字段。${preservedFormalTemplateCount ? `已保留 ${preservedFormalTemplateCount} 套已有正式模板未覆盖。` : ''}`)
+      setDefaultTemplatePackState(`预置配置模板已保存；保存时间 ${savedAt}；已生成 ${Object.keys(nextLastSavedTemplates).length} 套分区模板`)
+      setConfigMessage(`预置配置模板已写入当前店铺/类目范围：${currentTemplateScopeLabel}。这些是示例值，不代表已配置完成；真实执行前请按当前商品继续核对分区字段。${preservedFormalTemplateCount ? `已保留 ${preservedFormalTemplateCount} 套已有正式模板未覆盖。` : ''}`)
       await onConfigSaved()
     } catch (error) {
-      const message = humanConfigError(error instanceof Error ? error.message : '默认测试模板保存失败')
-      setDefaultTemplatePackState('默认测试模板保存失败')
+      const message = humanConfigError(error instanceof Error ? error.message : '预置配置模板保存失败')
+      setDefaultTemplatePackState('预置配置模板保存失败')
       setConfigMessage(message)
     } finally {
       setSavingSection(null)
@@ -1892,7 +1892,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
             <span>{activeSectionStatusMessage}</span>
           </div>
           <details className="inline-disclosure config-template-console__template-drawer">
-            <summary>模板选择与示例/测试工具：当前分区模板 / 套用到表单 / 默认测试模板</summary>
+            <summary>模板选择与预置模板工具：当前分区模板 / 套用到表单 / 预置配置模板</summary>
           <div className="config-template-console__main">
             <label>
               <span>当前分区模板</span>
@@ -1920,10 +1920,10 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
               套用到表单
             </button>
           </div>
-          <div className="config-template-console__primary-actions" aria-label="默认测试模板">
+          <div className="config-template-console__primary-actions" aria-label="预置配置模板">
             <div className="config-template-console__default-status">
-              <b>默认测试模板</b>
-              <strong>示例/测试模板</strong>
+              <b>预置配置模板</b>
+              <strong>预置样例模板</strong>
               <span>{defaultTemplatePackState}</span>
             </div>
             <div className="config-template-console__default-actions is-secondary">
@@ -1932,7 +1932,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
                 type="button"
                 onClick={() => applyTemplateToDraft(selectedConfigSection.section, '__default_test__')}
               >
-                套用默认测试模板
+                套用预置配置模板
               </button>
               <button
                 className="button button--secondary"
@@ -1941,10 +1941,10 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
                 disabled={savingSection === 'template:default-pack' || templateSaveDisabled}
                 title={templateSaveDisabled ? '先选择任务，避免误存为全店/全类目模板。' : '保存为店铺模板会影响后续匹配当前店铺/类目的任务。'}
               >
-                {savingSection === 'template:default-pack' ? '保存默认测试模板中...' : '保存默认测试模板'}
+                {savingSection === 'template:default-pack' ? '保存预置配置模板中...' : '保存预置配置模板'}
               </button>
             </div>
-            <small>默认测试模板只用于快速试填示例字段，不代表已配置完成；真实执行前必须核对当前商品字段，再保存为本次任务或店铺模板。</small>
+            <small>预置配置模板只用于快速试填示例字段，不代表已配置完成；真实执行前必须核对当前商品字段，再保存为本次任务或店铺模板。</small>
           </div>
           </details>
           <details className="inline-disclosure config-template-console__details">
@@ -1957,7 +1957,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
               <span><b>保存状态</b><small>{activeSectionStatusTitle}</small></span>
               <span><b>保存范围</b><small>{currentTemplateScopeLabel}</small></span>
             </div>
-            <p className="config-template-console__explain">默认测试模板会单独保存到当前店铺/类目范围，不会覆盖已有正式店铺模板；它是示例/测试模板，不代表已配置完成。只有“当前使用”才代表本次执行会读取的模板。点击套用后才会写入表单，保存后才会影响执行。刚保存的模板会自动选中，后续可从下拉框再次套用。</p>
+            <p className="config-template-console__explain">预置配置模板会单独保存到当前店铺/类目范围，不会覆盖已有正式店铺模板；它是预置样例模板，不代表已配置完成。只有“当前使用”才代表本次执行会读取的模板。点击套用后才会写入表单，保存后才会影响执行。刚保存的模板会自动选中，后续可从下拉框再次套用。</p>
             <div className="config-template-console__detail-grid">
               <div className="config-template-source config-template-source--detail" aria-label="当前模板来源详情">
                 <strong>当前生效模板</strong>
@@ -2314,9 +2314,9 @@ function EditableConfigSectionCard({
           className="button button--quiet"
           type="button"
           onClick={() => onApplyDefaultTemplate(section, '__default_test__')}
-          title="默认测试模板是示例/测试模板，不代表已配置完成。"
+          title="预置配置模板是预置样例模板，不代表已配置完成。"
         >
-          套用默认测试模板
+          套用预置配置模板
         </button>
       </div>
       <div className={`config-section-save-receipt is-${receiptStatus}`} aria-label="当前分区保存回执">

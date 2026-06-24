@@ -169,11 +169,11 @@ def test_template_center_page_presents_multi_template_chinese_section_workflow()
         "设为类目默认模板",
         "另存为新模板",
         "停用当前模板",
-        "套用默认测试模板",
+        "套用预置配置模板",
         "当前分区 {sectionTemplates.length} 套启用模板",
     ]:
         assert label in page_source
-    for forbidden in ["配置中心", "L2", "run-id", "probe", "QA guarded product"]:
+    for forbidden in ["配置中心", "默认测试模板", "测试用", "L2", "run-id", "probe", "QA guarded product"]:
         assert forbidden not in page_source
 
 
@@ -342,24 +342,24 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
 
     assert "demoTemplateSeeds" in source
     assert "applyDefaultTemplatePack" in config_section
-    assert "默认测试模板" in config_section
+    assert "预置配置模板" in config_section
     assert "默认配置模板" not in config_section
-    assert "示例/测试模板" in config_section
+    assert "预置样例模板" in config_section
     assert "使用之前测试通过的数据配置" not in config_section
     assert "config-template-console__primary-actions" in config_section
     assert "config-template-console__default-status" in config_section
     assert "config-template-console__default-quick" not in config_section
     assert config_section.index("config-template-console__primary-actions") < config_section.index("config-template-console__details")
-    assert config_section.index("示例/测试模板") < config_section.index("config-template-console__details")
-    assert "套用默认测试模板" in config_section
+    assert config_section.index("预置样例模板") < config_section.index("config-template-console__details")
+    assert "套用预置配置模板" in config_section
     common_selector = config_section[config_section.index("<select"):config_section.index("</select>")]
     assert "__default_test__" not in common_selector
-    assert "套用默认测试模板" in config_section
+    assert "套用预置配置模板" in config_section
     assert "模板匹配详情" in config_section
     assert "保存/覆盖当前店铺模板" not in config_section
     assert "不会覆盖已有正式店铺模板" in config_section
     assert "defaultTemplatePackState" in config_section
-    assert "默认测试模板已单独保存" in config_section
+    assert "预置配置模板已单独保存" in config_section
     assert "setSectionSaveState(() => Object.fromEntries" in config_section
     assert "config-template-console" in config_section
     assert "config-template-console--compact" in config_section
@@ -388,10 +388,10 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "选择模板不会改表单，点击套用后才会填入当前分区" in config_section
     assert "function handleTemplateSelection(section: EditableConfigSection, templateId: string)" in config_section
     assert "applyTemplateToDraft(section, templateId)" not in config_section[config_section.index("function handleTemplateSelection"):config_section.index("async function applyDefaultTemplatePack")]
-    assert "确认套用默认测试模板" in config_section
+    assert "确认套用预置配置模板" in config_section
     assert "示例值" in config_section
     assert "不代表已配置完成" in config_section
-    assert "将默认测试模板单独保存到当前店铺/类目范围" in config_section
+    assert "将预置配置模板单独保存到当前店铺/类目范围" in config_section
     assert "精确店铺/类目模板优先" in config_section
     assert "全局模板只作为读取候选，不会被保存覆盖" in config_section
     assert "sectionSaveState" in config_section
@@ -513,11 +513,11 @@ def test_config_center_default_template_is_first_screen_primary_action():
     ]
 
     assert "config-template-console__primary-actions" in template_console
-    assert "默认测试模板" in template_console
+    assert "预置配置模板" in template_console
     assert "默认配置模板" not in template_console
-    assert "示例/测试模板" in template_console
+    assert "预置样例模板" in template_console
     assert "不代表已配置完成" in template_console
-    assert "套用默认测试模板" in template_console
+    assert "套用预置配置模板" in template_console
     assert "defaultTemplatePackState" in template_console
     assert "当前分区保存状态" in template_console
     assert "模板状态、默认配置模板与高级设置" not in config_section
@@ -547,13 +547,13 @@ def test_config_center_production_ux_contract_for_task_five():
     assert "执行会使用这些值" in template_console
     assert "未保存的修改不会进入执行" in template_console
     assert "将使用当前表单值（尚未保存）" not in config_section
-    assert "默认测试模板" in template_console
-    assert "示例/测试模板" in template_console
+    assert "预置配置模板" in template_console
+    assert "预置样例模板" in template_console
     assert "不代表已配置完成" in template_console
-    assert "套用默认测试模板" in template_console
+    assert "套用预置配置模板" in template_console
     assert "仅本次任务使用" in editable_card
     assert "保存为店铺模板" in editable_card
-    assert "套用默认测试模板" in editable_card
+    assert "套用预置配置模板" in editable_card
     assert "onApplyDefaultTemplate(section, '__default_test__')" in editable_card
     assert "onApplyDefaultTemplate={applyTemplateToDraft}" in config_section
     assert "更多编辑页分区" in config_section
@@ -562,7 +562,7 @@ def test_config_center_production_ux_contract_for_task_five():
     assert "执行取值来自：" in source
     assert "本次任务" in source
     assert "店铺模板" in source
-    assert "默认测试模板" in source
+    assert "预置配置模板" in source
     assert "商品原始数据" in source
     for forbidden_default_copy in [
         "template_trace",
@@ -703,7 +703,7 @@ def test_config_center_default_template_pack_tracks_each_saved_template():
     assert "nextLastSavedTemplates[section.code]" in default_pack_section
     assert "setSelectedTemplateBySection(nextSelectedTemplates)" in default_pack_section
     assert "setLastSavedTemplateBySection(nextLastSavedTemplates)" in default_pack_section
-    assert "默认测试模板已保存；保存时间 ${savedAt}；已生成 ${Object.keys(nextLastSavedTemplates).length} 套分区模板" in default_pack_section
+    assert "预置配置模板已保存；保存时间 ${savedAt}；已生成 ${Object.keys(nextLastSavedTemplates).length} 套分区模板" in default_pack_section
 
 
 def test_config_center_default_template_pack_never_overwrites_formal_scoped_templates():
@@ -771,7 +771,7 @@ def test_config_center_resets_transient_template_state_when_task_scope_changes()
     assert "setSelectedTemplateBySection({} as Record<ConfigSectionCode, string>)" in config_section
     assert "setSectionSaveState({} as Record<ConfigSectionCode, ConfigSectionSaveState>)" in config_section
     assert "setConfigMessage(null)" in config_section
-    assert "setDefaultTemplatePackState('尚未套用默认测试模板')" in config_section
+    assert "setDefaultTemplatePackState('尚未套用预置配置模板')" in config_section
     assert "}, [configContextKey])" in config_section
 
 
@@ -814,7 +814,7 @@ def test_config_center_matches_dxm_edit_page_sections_and_value_preview():
     assert "本次任务" in config_section
     assert "商品原始数据" in config_section
     assert "店铺模板" in config_section
-    assert "默认测试模板" in config_section
+    assert "预置配置模板" in config_section
     assert "dxm_reference_templates.attribute_info.names" in config_section
     assert "dxm_reference_templates.freight.names" in config_section
     assert "dxm_reference_templates.service.names" in config_section
@@ -891,9 +891,9 @@ def test_config_center_exposes_default_template_pack_and_save_state():
 
     assert "demoTemplateSeeds" in source
     assert "applyDefaultTemplatePack" in config_section
-    assert "默认测试模板" in config_section
+    assert "预置配置模板" in config_section
     assert "默认配置模板" not in config_section
-    assert "示例/测试模板" in config_section
+    assert "预置样例模板" in config_section
     assert "使用之前测试通过的数据配置" not in config_section
     assert "defaultTemplatePackState" in config_section
     assert "config-template-console" in config_section
@@ -907,8 +907,8 @@ def test_config_center_exposes_default_template_pack_and_save_state():
     assert "applyTemplateToDraft" in config_section
     assert "套用到表单" in config_section
     assert "重新套用到表单" not in config_section
-    assert "保存默认测试模板" in config_section
-    assert "保存默认测试模板为店铺模板" not in config_section
+    assert "保存预置配置模板" in config_section
+    assert "保存预置配置模板为店铺模板" not in config_section
     assert "精确店铺/类目模板优先" in config_section
     assert "全局模板只作为读取候选，不会被保存覆盖" in config_section
     assert "sectionSaveState" in config_section

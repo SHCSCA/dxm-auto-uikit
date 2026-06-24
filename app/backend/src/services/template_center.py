@@ -128,5 +128,5 @@ def template_center_metadata() -> dict[str, Any]:
     return {
         "sections": editable_sections(),
         "source_priority": ["本次任务覆盖", "手动选择模板", "类目默认模板", "店铺默认模板", "系统默认模板", "商品原始数据"],
-        "actions": ["仅本次任务使用", "设为店铺默认模板", "设为类目默认模板", "另存为新模板", "套用默认测试模板"],
+        "actions": ["仅本次任务使用", "设为店铺默认模板", "设为类目默认模板", "另存为新模板", "套用预置配置模板"],
     }
