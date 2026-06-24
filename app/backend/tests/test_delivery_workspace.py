@@ -180,6 +180,142 @@ def _create_delivery_fixture(
     return {"task": task, "job": job, "report": report}
 
 
+def _create_two_stage_delivery_fixture(repo: Repository) -> dict:
+    store = repo.create_store("Dang Kang", "AliExpress")
+    claim_task = repo.create_acquisition_claim_request(
+        {
+            "store_id": store["id"],
+            "keyword": "Hazbin Hotel 立牌",
+            "category_name": "立牌类谷子",
+            "claim_mark": "AI-OPS",
+            "template_id": None,
+        }
+    )
+    claim_job = repo.get_task(claim_task["id"])["jobs"][0]
+    product = repo.create_product(
+        {
+            "title": "真实采集商品 A",
+            "source": "dxm_data_acquisition",
+            "status": "claimed_to_draft",
+            "category_name": "立牌类谷子",
+            "price": 9.9,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {
+                "source": "dxm_data_acquisition",
+                "source_url": "https://detail.1688.com/offer/1013604102950.html",
+                "claim_task_id": claim_task["id"],
+                "claim_mark": "AI-OPS",
+                "draft_box_verified": True,
+            },
+        }
+    )
+    repo.mark_acquisition_claim_completed(claim_task["id"], product)
+    claim_save_result = {
+        "ok": True,
+        "message": "采集认领已完成，商品已进入采集箱",
+        "claimed_product_id": product["id"],
+        "draft_box_verified": True,
+        "published": False,
+    }
+    claim_summary = {
+        "stage": "claimed_to_draft",
+        "status": "success",
+        "claimed_product": {
+            "id": product["id"],
+            "title": product["title"],
+            "source": "dxm_data_acquisition",
+            "source_url": "https://detail.1688.com/offer/1013604102950.html",
+            "draft_box_verified": True,
+        },
+        "next_action": "进入采集箱编辑保存",
+    }
+    claim_report = repo.add_report(
+        claim_task["id"],
+        claim_job["id"],
+        product["id"],
+        "success",
+        False,
+        claim_save_result,
+        claim_summary,
+    )
+    repo.update_task_status(claim_task["id"], "completed", completed_jobs=1, failed_jobs=0)
+
+    save_task = repo.create_task(
+        {
+            "name": "单商品只保存 - Dang Kang - 1 件商品",
+            "store_id": store["id"],
+            "mode": "single_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "claim_mark": "AI-OPS",
+            "product_ids": [product["id"]],
+            "payload": {"store_name": "Dang Kang", "category_name": "立牌类谷子"},
+        }
+    )
+    save_job = repo.get_task(save_task["id"])["jobs"][0]
+    save_result = {
+        "ok": True,
+        "message": "已点击保存",
+        "success_text": "编辑成功",
+        "published": False,
+        "network_save_result": {
+            "ok": True,
+            "method": "POST",
+            "url": "https://www.dianxiaomi.com/api/popChoiceProduct/add.json",
+            "status": 200,
+            "code": 0,
+            "msg": "您的产品编辑保存成功！",
+        },
+    }
+    save_summary = {
+        "stage": "draft_edit_save",
+        "status": "success",
+        "product_id": product["id"],
+        "claim_task_id": claim_task["id"],
+        "claimed_product_id": product["id"],
+        "workflow_actions": ["save_only", "verify_not_published"],
+        "workflow_results": [
+            {
+                "action": "save_only",
+                "ok": True,
+                "save_result": save_result,
+                "screenshot_url": "/artifacts/screenshots/save.png",
+            },
+            {
+                "action": "verify_not_published",
+                "ok": True,
+                "published": False,
+                "screenshot_url": "/artifacts/screenshots/not_published.png",
+            },
+        ],
+        "published": False,
+    }
+    repo.add_evidence(
+        save_task["id"],
+        save_job["id"],
+        "workflow_action",
+        "/artifacts/screenshots/save.png",
+        {"state": "SAVE_ONLY", "action": "save_only", "save_result": save_result},
+    )
+    repo.add_evidence(
+        save_task["id"],
+        save_job["id"],
+        "workflow_action",
+        "/artifacts/screenshots/not_published.png",
+        {"state": "VERIFY_NOT_PUBLISHED", "action": "verify_not_published", "published": False},
+    )
+    save_report = repo.add_report(save_task["id"], save_job["id"], product["id"], "success", False, save_result, save_summary)
+    return {
+        "claim_task": claim_task,
+        "claim_report": claim_report,
+        "save_task": save_task,
+        "save_job": save_job,
+        "save_report": save_report,
+        "product": product,
+    }
+
+
 def _create_delivery_fixture_with_missing_second_job(repo: Repository) -> dict:
     store = repo.create_store("Dang Kang", "AliExpress")
     products = [
@@ -1058,6 +1194,94 @@ def test_delivery_workspace_marks_batch_incomplete_when_any_job_lacks_delivery_e
     job_gap = next(gap for gap in data["acceptanceGaps"] if gap["id"].startswith("gap-job-"))
     assert job_gap["severity"] == "blocker"
     assert "缺少" in job_gap["detail"]
+
+
+def test_delivery_workspace_two_stage_acceptance_requires_acquisition_claim_chain(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    store = repo.create_store("Dang Kang", "AliExpress")
+    product = repo.create_product(
+        {
+            "title": "真实采集商品未关联认领任务",
+            "source": "dxm_data_acquisition",
+            "status": "claimed_to_draft",
+            "category_name": "立牌类谷子",
+            "price": 9.9,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {
+                "source": "dxm_data_acquisition",
+                "source_url": "https://detail.1688.com/offer/1013604102950.html",
+                "draft_box_verified": True,
+            },
+        }
+    )
+    task = repo.create_task(
+        {
+            "name": "单商品只保存 - Dang Kang - 1 件商品",
+            "store_id": store["id"],
+            "mode": "single_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "claim_mark": "AI-OPS",
+            "product_ids": [product["id"]],
+            "payload": {"store_name": "Dang Kang", "category_name": "立牌类谷子"},
+        }
+    )
+    job = repo.get_task(task["id"])["jobs"][0]
+    save_result = {
+        "ok": True,
+        "message": "已点击保存",
+        "success_text": "编辑成功",
+        "published": False,
+        "network_save_result": {
+            "ok": True,
+            "method": "POST",
+            "url": "https://www.dianxiaomi.com/api/popChoiceProduct/add.json",
+            "status": 200,
+            "code": 0,
+            "msg": "您的产品编辑保存成功！",
+        },
+    }
+    summary = {
+        "status": "success",
+        "workflow_results": [
+            {"action": "save_only", "ok": True, "save_result": save_result},
+            {"action": "verify_not_published", "ok": True, "published": False},
+        ],
+        "published": False,
+    }
+    repo.add_report(task["id"], job["id"], product["id"], "success", False, save_result, summary)
+
+    data = client.get(f"/api/delivery/workspace?task_id={task['id']}").json()
+
+    acceptance = data["two_stage_acceptance"]
+    assert acceptance["passed"] is False
+    assert acceptance["status"] == "missing_claim_stage"
+    assert "claim_task_id" in acceptance["missing_codes"]
+    assert "数据采集认领" in acceptance["user_message"]
+    assert "采集箱" in acceptance["user_message"]
+
+
+def test_delivery_workspace_two_stage_acceptance_passes_when_claim_and_save_share_product(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_two_stage_delivery_fixture(repo)
+
+    data = client.get(f"/api/delivery/workspace?task_id={fixture['save_task']['id']}").json()
+
+    acceptance = data["two_stage_acceptance"]
+    assert acceptance["passed"] is True
+    assert acceptance["status"] == "passed"
+    assert acceptance["claim_task_id"] == fixture["claim_task"]["id"]
+    assert acceptance["save_task_id"] == fixture["save_task"]["id"]
+    assert acceptance["claimed_product_id"] == fixture["product"]["id"]
+    assert acceptance["checks"]["claim_completed"] is True
+    assert acceptance["checks"]["draft_box_verified"] is True
+    assert acceptance["checks"]["single_save_linked_to_claim"] is True
+    assert acceptance["checks"]["save_success"] is True
+    assert acceptance["checks"]["unpublished_proof"] is True
+    assert acceptance["checks"]["publish_guard_safe"] is True
+    assert acceptance["missing_codes"] == []
+    assert "两段式" in acceptance["user_message"]
 
 
 def test_delivery_workspace_blocks_publish_network_signal(tmp_path, monkeypatch):

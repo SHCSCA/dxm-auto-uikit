@@ -22,6 +22,7 @@ import type {
   Task,
   TemplateResolutionResult,
   Template,
+  TwoStageAcceptance,
 } from './types'
 
 export type WorkspaceApiBundle = {
@@ -47,6 +48,7 @@ type DeliveryWorkspaceApi = Partial<DeliveryWorkspace> & {
   regression_gates?: RegressionGate[]
   l2_probe_plan?: L2ProbePlan
   real_mode_release_plan?: RealModeReleasePlan
+  two_stage_acceptance?: unknown
 }
 
 export const seedRows = [
@@ -111,6 +113,7 @@ export function composeWorkspace(bundle: WorkspaceApiBundle): DeliveryWorkspace 
   const regressionGates = firstList(workspace?.regressionGates, workspace?.regression_gates, fallback.regressionGates)
   const l2ProbePlan = normalizeL2ProbePlan(workspace?.l2ProbePlan ?? workspace?.l2_probe_plan, fallback.l2ProbePlan)
   const realModeReleasePlan = normalizeRealModeReleasePlan(workspace?.realModeReleasePlan ?? workspace?.real_mode_release_plan, fallback.realModeReleasePlan)
+  const twoStageAcceptance = normalizeTwoStageAcceptance(workspace?.twoStageAcceptance ?? workspace?.two_stage_acceptance, fallback.twoStageAcceptance)
   const stores = chooseList(workspace?.stores, bundle.stores, fallback.stores, Boolean(workspace), apiHasData)
   const templates = chooseList(workspace?.templates, bundle.templates, fallback.templates, Boolean(workspace), apiHasData)
   const products = chooseList(workspace?.products, bundle.products, fallback.products, Boolean(workspace), apiHasData)
@@ -144,6 +147,7 @@ export function composeWorkspace(bundle: WorkspaceApiBundle): DeliveryWorkspace 
     regressionGates,
     l2ProbePlan,
     realModeReleasePlan,
+    twoStageAcceptance,
     dxmReferenceTemplates: normalizeReferenceSections(workspace?.dxmReferenceTemplates, templates, reports, templateResolution),
     acceptanceGaps: firstList(workspace?.acceptanceGaps, buildAcceptanceGaps(exceptions, evidences, reports, evidenceGradeValue), fallback.acceptanceGaps),
     safety: workspace?.safety ?? safetyFromGuard(publishGuardState, evidenceGradeValue) ?? fallback.safety,
@@ -196,6 +200,7 @@ export function buildEmptyWorkspace(): DeliveryWorkspace {
     regressionGates: buildRegressionGates(null, { grade: 'C' }, []),
     l2ProbePlan: buildL2ProbePlan(),
     realModeReleasePlan: buildRealModeReleasePlan(),
+    twoStageAcceptance: buildEmptyTwoStageAcceptance(),
     dxmReferenceTemplates: normalizeReferenceSections(undefined, [], [], null),
     acceptanceGaps: [{
       id: 'empty-workspace',
@@ -491,6 +496,53 @@ function normalizeReadinessChecklistItem(
   }
 }
 
+function buildEmptyTwoStageAcceptance(): TwoStageAcceptance {
+  return {
+    schema: 'dxm_two_stage_acceptance.v1',
+    passed: false,
+    status: 'no_task',
+    userMessage: '请选择真实数据采集商品，并完成采集认领到采集箱后，再执行单商品只保存。',
+    claimTaskId: null,
+    saveTaskId: null,
+    claimedProductId: null,
+    missingCodes: ['task'],
+    checks: {
+      claim_task_present: false,
+      claim_completed: false,
+      claimed_product_present: false,
+      claim_product_matches: false,
+      draft_box_verified: false,
+      single_save_linked_to_claim: false,
+      save_success: false,
+      unpublished_proof: false,
+      publish_guard_safe: false,
+    },
+  }
+}
+
+function normalizeTwoStageAcceptance(value: unknown, fallback: TwoStageAcceptance): TwoStageAcceptance {
+  const item = asRecord(value)
+  const checks = asRecord(item.checks)
+  return {
+    ...fallback,
+    schema: stringOr(item.schema, fallback.schema),
+    passed: typeof item.passed === 'boolean' ? item.passed : fallback.passed,
+    status: stringOr(item.status, fallback.status),
+    userMessage: stringOr(item.userMessage ?? item.user_message, fallback.userMessage),
+    claimTaskId: numberOrNull(item.claimTaskId ?? item.claim_task_id, fallback.claimTaskId),
+    saveTaskId: numberOrNull(item.saveTaskId ?? item.save_task_id, fallback.saveTaskId),
+    claimedProductId: numberOrNull(item.claimedProductId ?? item.claimed_product_id, fallback.claimedProductId),
+    missingCodes: Array.isArray(item.missingCodes)
+      ? item.missingCodes.map(String).filter(Boolean)
+      : Array.isArray(item.missing_codes)
+        ? item.missing_codes.map(String).filter(Boolean)
+        : fallback.missingCodes,
+    checks: Object.fromEntries(
+      Object.entries({ ...fallback.checks, ...checks }).map(([key, raw]) => [key, raw === true]),
+    ),
+  }
+}
+
 export function humanTaskStatus(status: string) {
   return ({
     draft: '待启动',
@@ -723,4 +775,10 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function stringOr(value: unknown, fallback: string) {
   return typeof value === 'string' && value ? value : fallback
+}
+
+function numberOrNull(value: unknown, fallback: number | null) {
+  if (value === null || value === undefined || value === '') return fallback
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : fallback
 }

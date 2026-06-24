@@ -527,6 +527,29 @@ export type RealModeReleasePlan = {
   modes: RealModeReleaseItem[]
 }
 
+export type TwoStageAcceptance = {
+  schema: string
+  passed: boolean
+  status: string
+  userMessage: string
+  claimTaskId: number | null
+  saveTaskId: number | null
+  claimedProductId: number | null
+  missingCodes: string[]
+  checks: {
+    claim_task_present?: boolean
+    claim_completed?: boolean
+    claimed_product_present?: boolean
+    claim_product_matches?: boolean
+    draft_box_verified?: boolean
+    single_save_linked_to_claim?: boolean
+    save_success?: boolean
+    unpublished_proof?: boolean
+    publish_guard_safe?: boolean
+    [key: string]: boolean | undefined
+  }
+}
+
 export type DeliveryWorkspace = {
   source: 'api' | 'fallback' | 'mock'
   stores: Store[]
@@ -547,6 +570,7 @@ export type DeliveryWorkspace = {
   regressionGates: RegressionGate[]
   l2ProbePlan: L2ProbePlan
   realModeReleasePlan: RealModeReleasePlan
+  twoStageAcceptance: TwoStageAcceptance
   dxmReferenceTemplates: DxmReferenceTemplateSection[]
   acceptanceGaps: AcceptanceGap[]
   safety: {

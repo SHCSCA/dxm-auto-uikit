@@ -6,6 +6,7 @@ import type {
   RegressionGate,
   Report,
   Task,
+  TwoStageAcceptance,
 } from '../../types'
 import { toArtifactUrl } from '../../workspace'
 import { humanOperatorMessage, humanOperatorTitle } from './workbenchCopy'
@@ -86,6 +87,11 @@ export function ResultsPage({
         realWriteExpectedBlocked={realWriteExpectedBlocked}
         onShowEvidence={onShowEvidence}
         onShowConsole={onShowConsole}
+      />
+      <TwoStageAcceptanceCard
+        acceptance={workspace.twoStageAcceptance}
+        onShowConsole={onShowConsole}
+        onShowEvidence={onShowEvidence}
       />
       <div className="module-card span-3">
         <ModuleHead title="保存后核对" meta={humanPublishGuardStatus(workspace.publishGuardState?.status)} />
@@ -377,6 +383,48 @@ function ModuleHead({ title, meta }: { title: string; meta: string }) {
   )
 }
 
+function TwoStageAcceptanceCard({
+  acceptance,
+  onShowConsole,
+  onShowEvidence,
+}: {
+  acceptance: TwoStageAcceptance
+  onShowConsole: () => void
+  onShowEvidence: () => void
+}) {
+  const checks = acceptance.checks ?? {}
+  const claimReady = checks.claim_task_present === true && checks.claim_completed === true && checks.claim_product_matches === true
+  const draftReady = checks.claimed_product_present === true && checks.draft_box_verified === true && checks.single_save_linked_to_claim === true
+  const saveReady = checks.save_success === true && checks.unpublished_proof === true && checks.publish_guard_safe === true
+  const title = acceptance.passed ? '真实两段式已完成' : humanTwoStageAcceptanceStatus(acceptance.status)
+  const nextAction = acceptance.passed
+    ? '查看保存证据，确认未发布。'
+    : humanTwoStageNextAction(acceptance.status)
+
+  return (
+    <div className="module-card span-3 two-stage-acceptance-card">
+      <ModuleHead title="完整流程完成度" meta={title} />
+      <p>{acceptance.userMessage}</p>
+      <div className="report-check-grid">
+        <CheckRow label="数据采集认领" ok={claimReady} state={claimReady ? 'present' : 'missing'} />
+        <CheckRow label="采集箱只保存" ok={draftReady} state={draftReady ? 'present' : 'missing'} />
+        <CheckRow label="保存成功" ok={saveReady} state={saveReady ? 'present' : 'missing'} />
+        <CheckRow label="未发布" ok={checks.publish_guard_safe === true} state={checks.publish_guard_safe === true ? 'present' : 'missing'} />
+      </div>
+      <div className="report-followup-actions business-result-summary__actions">
+        <div>
+          <strong>下一步</strong>
+          <span>{nextAction}</span>
+        </div>
+        <div className="toolbar">
+          <button className="button button--secondary" type="button" onClick={onShowConsole}>回到浏览器现场</button>
+          <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看保存证据</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function BusinessResultSummaryCard({
   selectedTask,
   latestReport,
@@ -459,6 +507,28 @@ function BusinessResultSummaryCard({
       </div>
     </div>
   )
+}
+
+function humanTwoStageAcceptanceStatus(status: string) {
+  return ({
+    no_task: '等待创建真实任务',
+    missing_claim_stage: '等待数据采集认领',
+    missing_draft_box_stage: '等待采集箱商品确认',
+    missing_save_stage: '等待采集箱只保存',
+    missing_unpublished_proof: '等待未发布证明',
+    incomplete: '流程证据不完整',
+  } as Record<string, string>)[status] ?? '流程证据不完整'
+}
+
+function humanTwoStageNextAction(status: string) {
+  return ({
+    no_task: '先到“数据采集认领”创建认领任务。',
+    missing_claim_stage: '先从店小秘数据采集认领真实商品到采集箱。',
+    missing_draft_box_stage: '确认选择的是刚进入采集箱的真实商品。',
+    missing_save_stage: '回到浏览器现场，启动单商品只保存。',
+    missing_unpublished_proof: '查看保存结果和未发布证明，确认没有发布。',
+    incomplete: '按页面提示补齐缺失步骤后重试。',
+  } as Record<string, string>)[status] ?? '按页面提示补齐缺失步骤后重试。'
 }
 
 function EmptyState({ title, detail, actions }: { title: string; detail: string; actions?: ReactNode }) {

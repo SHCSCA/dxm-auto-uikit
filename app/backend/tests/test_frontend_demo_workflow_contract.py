@@ -2822,6 +2822,22 @@ def test_results_page_first_screen_answers_operator_result_questions():
     assert "network/HAR" not in visible_fact_markup
 
 
+def test_results_page_surfaces_two_stage_acceptance_in_operator_language():
+    types_source = (REPO_ROOT / "app" / "frontend" / "src" / "types.ts").read_text(encoding="utf-8")
+    workspace_source = WORKSPACE_TS.read_text(encoding="utf-8")
+    results_source = results_page_source()
+
+    assert "export type TwoStageAcceptance" in types_source
+    assert "twoStageAcceptance: TwoStageAcceptance" in types_source
+    assert "two_stage_acceptance" in workspace_source
+    assert "normalizeTwoStageAcceptance" in workspace_source
+    assert "twoStageAcceptance" in results_source
+    assert "完整流程完成度" in results_source
+    assert "数据采集认领" in results_source
+    assert "采集箱只保存" in results_source
+    assert "真实两段式已完成" in results_source
+
+
 def test_safety_bar_downgrades_l3_post_evidence_gaps_when_real_write_blocked():
     source = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
 
