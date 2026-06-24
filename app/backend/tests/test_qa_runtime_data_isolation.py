@@ -101,6 +101,16 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "realDxmMutationAllowed" in script
     assert "$ExpectedRealDxmWriteReadiness = \"BLOCKED\"" in script
     assert "default BLOCKED" in script
+    assert "$ExpectedRealDxmTwoStageEndToEnd = \"pending_live_dxm_validation\"" in script
+    assert "Get-TwoStageAcceptanceReadiness" in script
+    assert "twoStageAcceptance" in script
+    assert "twoStageAcceptanceReadiness" in script
+    assert "realDxmTwoStageEndToEnd" in script
+    assert "expectedRealDxmTwoStageEndToEnd" in script
+    assert "twoStageAcceptanceMatchesExpected" in script
+    assert "productionDeliveryReady" in script
+    assert "$overallOk = $localWorkbenchOk -and $gateEvidenceOk -and $realDxmWriteReadinessMatchesExpected -and $twoStageAcceptanceMatchesExpected" in script
+    assert "Real DXM two-stage end-to-end" in script
     assert "realDxmWriteReadinessMatchesExpected" in script
     assert "productionRealWriteReady" in script
     assert "realDxmWriteBlockedReason" in script
@@ -183,13 +193,17 @@ def test_user_delivery_guide_explains_l2_allowlist_review_packet():
 def test_user_delivery_guide_has_current_acceptance_checklist():
     guide = USER_DELIVERY_GUIDE.read_text(encoding="utf-8")
 
-    assert "# 用户交付使用说明 - 2026-06-23" in guide
+    assert "# 用户交付使用说明 - 2026-06-24" in guide
     assert "## 验收人快速判定清单" in guide
     assert "自动化工作台验收通过" in guide
     assert "`Local workbench check: PASS`" in guide
     assert "`Browser QA: PASS`" in guide
     assert "`Real DXM write readiness: BLOCKED`" in guide
     assert "`Real DXM write readiness: READY`" in guide
+    assert "`Real DXM two-stage end-to-end: pending_live_dxm_validation`" in guide
+    assert "`Real DXM two-stage end-to-end: passed`" in guide
+    assert "`Production delivery ready: True`" in guide
+    assert "`twoStageAcceptance.passed=true`" in guide
     assert "`okScope=local_workbench_only`" in guide
     assert "`okScope=local_workbench_and_controlled_single_save_ready`" in guide
     assert "`realDxmMutationAllowed`" in guide
@@ -200,6 +214,8 @@ def test_user_delivery_guide_has_current_acceptance_checklist():
     assert "源码包交付通过" in guide
     assert "`Source package check: PASS`" in guide
     assert "`scripts\\final-delivery-check.bat -RequireCleanWorktree`" in guide
+    assert "-ExpectedRealDxmTwoStageEndToEnd pending_live_dxm_validation" in guide
+    assert "-ExpectedRealDxmTwoStageEndToEnd passed" in guide
     assert "报告 JSON 中 `gitHead` 对应" in guide
     assert "真实单商品只保存仍只能按只读页面检查、人工批准和保存证据链启动" in guide
     assert "不能只看 `ok: true`" in guide

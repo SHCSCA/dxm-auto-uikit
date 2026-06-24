@@ -1610,6 +1610,16 @@ def _read_final_delivery_check_summary():
     l2_allowlist_review_template = payload.get('l2AllowlistReviewTemplate') if isinstance(payload.get('l2AllowlistReviewTemplate'), dict) else {}
     l2_allowlist_review_candidates = l2_allowlist_review_template.get('candidates')
     l2_allowlist_review_template_hashes = payload.get('l2AllowlistReviewTemplateHashes') if isinstance(payload.get('l2AllowlistReviewTemplateHashes'), dict) else {}
+    two_stage_acceptance = payload.get('twoStageAcceptance') if isinstance(payload.get('twoStageAcceptance'), dict) else {}
+    two_stage_acceptance_readiness = payload.get('twoStageAcceptanceReadiness') if isinstance(payload.get('twoStageAcceptanceReadiness'), dict) else {}
+    report_two_stage_end_to_end = (
+        payload.get('realDxmTwoStageEndToEnd')
+        or ('passed' if two_stage_acceptance.get('passed') is True else 'pending_live_dxm_validation')
+    )
+    expected_two_stage_end_to_end = payload.get('expectedRealDxmTwoStageEndToEnd') or report_two_stage_end_to_end
+    two_stage_acceptance_matches_expected = payload.get('twoStageAcceptanceMatchesExpected')
+    if two_stage_acceptance_matches_expected is None and expected_two_stage_end_to_end:
+        two_stage_acceptance_matches_expected = report_two_stage_end_to_end == expected_two_stage_end_to_end
     current_git = _current_git_summary()
     current_gate = _current_real_dxm_gate_summary()
     report_git_head = payload.get('gitHead')
@@ -1644,6 +1654,7 @@ def _read_final_delivery_check_summary():
         effective_readiness = 'BLOCKED'
         effective_blocked_reason = stale_final_check_reason
         effective_mutation_allowed = False
+        effective_two_stage_end_to_end = 'pending_live_dxm_validation'
     else:
         effective_readiness = current_readiness or report_readiness
         effective_blocked_reason = (
@@ -1652,12 +1663,22 @@ def _read_final_delivery_check_summary():
             else payload.get('realDxmWriteBlockedReason')
         )
         effective_mutation_allowed = payload.get('realDxmMutationAllowed') is True and effective_readiness == 'READY'
+        effective_two_stage_end_to_end = (
+            'passed'
+            if report_two_stage_end_to_end == 'passed' and current_gate.get('two_stage_ready') is True
+            else 'pending_live_dxm_validation'
+        )
     effective_mutation_scope = payload.get('realDxmMutationScope') if effective_mutation_allowed else 'none'
     expected_readiness = payload.get('expectedRealDxmWriteReadiness') or report_readiness
     effective_readiness_matches_expected = (
         None
         if not expected_readiness or not effective_readiness
         else effective_readiness == expected_readiness
+    )
+    production_delivery_ready = (
+        payload.get('productionDeliveryReady') is True
+        and effective_two_stage_end_to_end == 'passed'
+        and effective_readiness == 'READY'
     )
     return {
         'status': 'available',
@@ -1674,6 +1695,16 @@ def _read_final_delivery_check_summary():
         'effective_real_dxm_write_blocked_reason': effective_blocked_reason,
         'effective_real_dxm_mutation_allowed': effective_mutation_allowed,
         'effective_real_dxm_mutation_scope': effective_mutation_scope,
+        'real_dxm_two_stage_end_to_end': report_two_stage_end_to_end,
+        'expected_real_dxm_two_stage_end_to_end': expected_two_stage_end_to_end,
+        'effective_real_dxm_two_stage_end_to_end': effective_two_stage_end_to_end,
+        'two_stage_acceptance': two_stage_acceptance,
+        'two_stage_acceptance_readiness': two_stage_acceptance_readiness,
+        'two_stage_acceptance_matches_expected': two_stage_acceptance_matches_expected,
+        'current_two_stage_ready': current_gate.get('two_stage_ready'),
+        'current_two_stage_status': current_gate.get('two_stage_status'),
+        'production_delivery_ready': production_delivery_ready,
+        'final_delivery_completed': production_delivery_ready,
         'production_real_write_ready': payload.get('productionRealWriteReady'),
         'real_dxm_write_blocked_reason': payload.get('realDxmWriteBlockedReason'),
         'l3_evidence_readiness': payload.get('l3EvidenceReadiness'),
@@ -1761,12 +1792,17 @@ def _current_real_dxm_gate_summary():
             'l2_status': None,
             'l3_status': None,
             'delivery_ready': None,
+            'two_stage_ready': None,
+            'two_stage_status': None,
         }
     gates = workspace.get('regression_gates') if isinstance(workspace, dict) else []
     l2_gate = _workspace_gate(gates, 'L2')
     l3_gate = _workspace_gate(gates, 'L3')
     delivery_readiness = workspace.get('delivery_readiness') if isinstance(workspace, dict) else {}
     delivery_ready = delivery_readiness.get('ready') is True if isinstance(delivery_readiness, dict) else False
+    two_stage_acceptance = workspace.get('two_stage_acceptance') if isinstance(workspace, dict) else {}
+    two_stage_ready = two_stage_acceptance.get('passed') is True if isinstance(two_stage_acceptance, dict) else False
+    two_stage_status = two_stage_acceptance.get('status') if isinstance(two_stage_acceptance, dict) else None
     l2_status = l2_gate.get('status') if l2_gate else None
     l3_status = l3_gate.get('status') if l3_gate else None
     if l2_status == 'passed' and l3_status == 'passed' and delivery_ready:
@@ -1776,6 +1812,8 @@ def _current_real_dxm_gate_summary():
             'l2_status': l2_status,
             'l3_status': l3_status,
             'delivery_ready': delivery_ready,
+            'two_stage_ready': two_stage_ready,
+            'two_stage_status': two_stage_status,
         }
     if not l2_gate or not l3_gate:
         reason = '当前运行门禁缺少 L2/L3 记录；不可依据旧自检报告启动真实写入。'
@@ -1791,6 +1829,8 @@ def _current_real_dxm_gate_summary():
         'l2_status': l2_status,
         'l3_status': l3_status,
         'delivery_ready': delivery_ready,
+        'two_stage_ready': two_stage_ready,
+        'two_stage_status': two_stage_status,
     }
 
 
