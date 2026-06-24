@@ -6318,7 +6318,7 @@ function getTaskDisplayKey(task: Task) {
 
 export function displayTaskName(task: Pick<Task, 'name' | 'mode'>) {
   if (task.mode === 'single_save' && task.name === LEGACY_QA_REAL_MUTATION_TASK_NAME) {
-    return 'QA local gated single_save fixture'
+    return '旧版单商品只保存核验任务'
   }
   if (task.mode === 'single_save' && task.name.toLowerCase().includes('l3 canary save-only')) {
     return '单商品只保存核验任务'

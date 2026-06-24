@@ -2412,7 +2412,11 @@ def test_task_center_sanitizes_legacy_qa_fixture_names_from_user_visible_rows():
     focus_panel_section = source[source.index("function ConsoleFocusPanel"):source.index("function AgentBrowserFrame")]
 
     assert "function displayTaskName(" in source
-    assert "QA local gated single_save fixture" in source
+    assert "旧版单商品只保存核验任务" in source
+    assert "旧版单商品只保存核验任务" in panels_source
+    assert "QA local gated single_save fixture" not in source
+    assert "QA local gated single_save fixture" not in home_page_source
+    assert "QA local gated single_save fixture" not in panels_source
     assert "LEGACY_QA_REAL_MUTATION_TASK_NAME" in source
     assert "['QA guarded', 'real mutation task'].join(' ')" in source
     assert "<strong>{displayTaskName(task)}</strong>" in task_center_section
