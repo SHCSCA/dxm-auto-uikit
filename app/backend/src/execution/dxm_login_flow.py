@@ -87,6 +87,8 @@ class DxmLoginFlow:
         self._context: BrowserContext | None = None
         self._page: Page | None = None
         self._latest_live_hud: dict[str, Any] | None = None
+        self._live_hud_bound_page_ids: set[int] = set()
+        self._live_hud_bound_context_ids: set[int] = set()
         self._last_dismiss_blocking_modals_trace: list[dict[str, Any]] = []
 
     def get_state(self) -> dict[str, Any]:
@@ -110,6 +112,7 @@ class DxmLoginFlow:
             }
 
     def _apply_live_hud(self, page: Page, hud: dict[str, Any]) -> dict[str, Any]:
+        self._attach_live_hud_runtime_hooks(page)
         try:
             page.add_init_script(HUD_INIT_SCRIPT)
         except Exception:
@@ -140,6 +143,42 @@ class DxmLoginFlow:
             'updated_at': now_iso(),
         }
 
+    def _attach_live_hud_runtime_hooks(self, page: Page | None) -> None:
+        if page is None:
+            return
+        page_id = id(page)
+        if page_id not in self._live_hud_bound_page_ids:
+            self._live_hud_bound_page_ids.add(page_id)
+            try:
+                page.add_init_script(HUD_INIT_SCRIPT)
+            except Exception:
+                pass
+            for event_name in ('framenavigated', 'domcontentloaded'):
+                try:
+                    page.on(event_name, lambda *args, p=page: self._reapply_live_hud_if_available(p))
+                except Exception:
+                    pass
+
+        context = getattr(page, 'context', None)
+        if context is None:
+            return
+        context_id = id(context)
+        if context_id in self._live_hud_bound_context_ids:
+            return
+        self._live_hud_bound_context_ids.add(context_id)
+        try:
+            context.add_init_script(HUD_INIT_SCRIPT)
+        except Exception:
+            pass
+        try:
+            context.on('page', lambda new_page: self._attach_and_reapply_live_hud_page(new_page))
+        except Exception:
+            pass
+
+    def _attach_and_reapply_live_hud_page(self, page: Page) -> None:
+        self._attach_live_hud_runtime_hooks(page)
+        self._reapply_live_hud_if_available(page)
+
     def _reapply_live_hud_if_available(self, page: Page) -> None:
         if not self._latest_live_hud:
             return
@@ -149,6 +188,7 @@ class DxmLoginFlow:
             pass
 
     def _goto_with_live_hud(self, page: Page, url: str, *, wait_until: str = 'domcontentloaded', timeout: int = 45000) -> None:
+        self._attach_live_hud_runtime_hooks(page)
         page.goto(url, wait_until=wait_until, timeout=timeout)
         self._reapply_live_hud_if_available(page)
 

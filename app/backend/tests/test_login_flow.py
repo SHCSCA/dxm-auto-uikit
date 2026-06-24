@@ -309,16 +309,41 @@ class DummyDraftPage:
         return None
 
 
-class DummyHudPage:
+class DummyHudContext:
     def __init__(self):
+        self.handlers = {}
+        self.init_scripts = []
+
+    def add_init_script(self, script):
+        self.init_scripts.append(script)
+
+    def on(self, event_name, callback):
+        self.handlers.setdefault(event_name, []).append(callback)
+
+    def emit(self, event_name, *args):
+        for callback in self.handlers.get(event_name, []):
+            callback(*args)
+
+
+class DummyHudPage:
+    def __init__(self, context=None):
         self.url = 'https://www.dianxiaomi.com/web/home'
+        self.context = context
         self.init_scripts = []
         self.evaluations = []
         self.hud_payloads = []
         self.goto_calls = []
+        self.handlers = {}
 
     def add_init_script(self, script):
         self.init_scripts.append(script)
+
+    def on(self, event_name, callback):
+        self.handlers.setdefault(event_name, []).append(callback)
+
+    def emit(self, event_name, *args):
+        for callback in self.handlers.get(event_name, []):
+            callback(*args)
 
     def evaluate(self, script, arg=None):
         self.evaluations.append((script, arg))
@@ -375,6 +400,36 @@ def test_live_browser_hud_reapplies_to_new_page_from_cached_state():
 
     assert new_page.hud_payloads[-1]['state'] == 'OPEN_EDIT_PAGE'
     assert new_page.hud_payloads[-1]['human_title'] == '正在打开编辑页'
+
+
+def test_live_browser_hud_reinjects_on_page_events_and_new_pages():
+    flow = DxmLoginFlow(DummyLiveClient())
+    context = DummyHudContext()
+    page = DummyHudPage(context=context)
+    flow._page = page
+
+    flow.update_live_hud({
+        'state': 'CLAIM_TO_COLLECTION_BOX',
+        'human_title': '正在认领到采集箱',
+        'human_action': '从数据采集认领商品',
+    })
+
+    assert 'framenavigated' in page.handlers
+    assert 'domcontentloaded' in page.handlers
+    assert 'page' in context.handlers
+
+    page.hud_payloads.clear()
+    page.emit('framenavigated')
+    assert page.hud_payloads[-1]['state'] == 'CLAIM_TO_COLLECTION_BOX'
+
+    page.hud_payloads.clear()
+    page.emit('domcontentloaded')
+    assert page.hud_payloads[-1]['human_action'] == '从数据采集认领商品'
+
+    new_page = DummyHudPage(context=context)
+    context.emit('page', new_page)
+    assert 'framenavigated' in new_page.handlers
+    assert new_page.hud_payloads[-1]['human_title'] == '正在认领到采集箱'
 
 
 def test_live_browser_hud_caches_status_before_page_exists():
