@@ -1950,6 +1950,14 @@ def _assert_single_save_uses_claimed_draft_product(product_ids: list[int]) -> No
     product = repo.get_product(product_id)
     if not product:
         raise HTTPException(status_code=404, detail=f'Product not found: {product_id}')
+    if _looks_like_real_task_fixture_product(product):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                '当前选择的商品是测试/示例数据，不能用于真实店小秘保存。'
+                '请先在“数据采集”认领真实商品到采集箱，再从“采集箱编辑保存”创建任务。'
+            ),
+        )
     status = str(product.get('status') or '')
     payload = product.get('payload') if isinstance(product.get('payload'), dict) else {}
     source = str(payload.get('source') or product.get('source') or '').strip()

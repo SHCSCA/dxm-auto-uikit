@@ -153,6 +153,8 @@ def test_draft_edit_save_page_starts_from_claimed_product_without_technical_gate
     assert "function isVerifiedClaimedDraftProduct(product: Product)" in app_source
     assert "payload.source ?? product.source" in app_source
     assert "payload.draft_box_verified === true" in app_source
+    assert "function isFixtureLikeProduct(product: Product)" in app_source
+    assert "&& !isFixtureLikeProduct(product)" in app_source
     assert "workspace.products.filter(isVerifiedClaimedDraftProduct)" in app_source
     assert "采集箱商品" in page_source
     assert "只保存，不发布" in page_source

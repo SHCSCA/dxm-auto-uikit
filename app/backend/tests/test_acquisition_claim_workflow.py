@@ -203,6 +203,46 @@ def test_single_save_task_accepts_claimed_draft_product(tmp_path, monkeypatch):
     assert response.json()["mode"] == "single_save"
 
 
+def test_single_save_task_rejects_fixture_even_when_claimed_flags_present(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    store = repo.create_store("Dang Kang", "AliExpress")
+    product = repo.create_product(
+        {
+            "title": "QA guarded product",
+            "source": "dxm_data_acquisition",
+            "status": "claimed_to_draft",
+            "category_name": "立牌类谷子",
+            "price": 9.9,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {
+                "source": "dxm_data_acquisition",
+                "source_url": "https://detail.1688.com/offer/fixture.html",
+                "draft_box_verified": True,
+            },
+        }
+    )
+
+    response = client.post(
+        "/api/tasks",
+        json={
+            "name": "单商品只保存 - Dang Kang - 1 件商品",
+            "mode": "single_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "store_id": store["id"],
+            "product_ids": [product["id"]],
+            "payload": {"store_name": "Dang Kang", "category_name": "立牌类谷子"},
+        },
+    )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert "测试/示例数据" in detail
+    assert "数据采集" in detail
+    assert "采集箱编辑保存" in detail
+
+
 def test_single_save_task_snapshots_acquisition_claim_proof(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     store = repo.create_store("Dang Kang", "AliExpress")

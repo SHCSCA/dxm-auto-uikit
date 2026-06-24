@@ -526,8 +526,10 @@ def test_single_save_start_rejects_qa_fixture_product_before_real_browser(tmp_pa
     )
 
     assert response.status_code == 409
-    assert "测试/示例商品" in response.json()["detail"]
-    assert "真实采集商品" in response.json()["detail"]
+    detail = response.json()["detail"]
+    assert "测试/示例数据" in detail
+    assert "数据采集" in detail
+    assert "采集箱编辑保存" in detail
     assert runner.calls == []
 
 

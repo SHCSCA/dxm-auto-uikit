@@ -38,6 +38,7 @@ const REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save', 'batch_sav
 const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save'])
 const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['batch_save'])
 const CLAIMED_DRAFT_PRODUCT_STATUSES = new Set(['claimed_to_draft', 'ready_for_edit'])
+const FIXTURE_PRODUCT_MARKERS = ['qa guarded', 'qa_category', 'fixture', '本地演示', '测试商品', '示例商品']
 const DXM_READY_SESSION_STATUSES = new Set(['login_success', 'logged_in', 'not_published_verified', 'workflow_navigation'])
 const L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
 const DEMO_ENABLED = new URLSearchParams(window.location.search).get('dev') === '1'
@@ -53,6 +54,26 @@ function isVerifiedClaimedDraftProduct(product: Product) {
   return CLAIMED_DRAFT_PRODUCT_STATUSES.has(product.status)
     && String(payload.source ?? product.source ?? '') === 'dxm_data_acquisition'
     && payload.draft_box_verified === true
+    && !isFixtureLikeProduct(product)
+}
+
+function isFixtureLikeProduct(product: Product) {
+  const payload = product.payload ?? {}
+  const text = [
+    product.title,
+    product.category_name,
+    product.source,
+    stringifyProductPayload(payload),
+  ].join(' ').toLowerCase()
+  return FIXTURE_PRODUCT_MARKERS.some((marker) => text.includes(marker))
+}
+
+function stringifyProductPayload(payload: Record<string, unknown>) {
+  try {
+    return JSON.stringify(payload) ?? ''
+  } catch {
+    return ''
+  }
 }
 
 const sourceLabels: Record<DeliveryWorkspace['source'], string> = {
