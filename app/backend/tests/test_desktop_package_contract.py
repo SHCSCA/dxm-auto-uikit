@@ -293,7 +293,7 @@ def test_user_docs_present_desktop_exe_as_primary_delivery_entry():
         assert "D:\\Desktop\\DXM-Agent-Console-免安装版\\DXM-Agent-Console-Portable-0.1.0.exe" in source
         assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
         assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in source
-        assert "EC4E0DF8EC77A17C53159FACD46A115D88C98AE5657687072ED780A88D016CF1" in source
+        assert "96348443EE8A5D47664002958D53ECBE647ACEC034DF0CC5B24402B1E8232AA3" in source
         assert "portable 首次启动会解包 Electron 与 Python 运行时" in source
         assert "%TEMP%` 所在磁盘建议至少保留 1GB 可用空间" in source
         assert "scripts\\start-desktop.bat" in source
@@ -308,8 +308,24 @@ def test_portable_quick_guide_uses_verified_portable_entry():
     assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
     assert "使用目录版时必须保留整个文件夹和 `resources` 目录" in source
     assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in source
-    assert "EC4E0DF8EC77A17C53159FACD46A115D88C98AE5657687072ED780A88D016CF1" in source
+    assert "96348443EE8A5D47664002958D53ECBE647ACEC034DF0CC5B24402B1E8232AA3" in source
     assert "至少建议保留 1GB 可用空间" in source
+
+
+def test_delivery_docs_describe_two_stage_real_browser_scope():
+    docs = [
+        README,
+        PORTABLE_QUICK_GUIDE,
+        USER_GUIDE,
+    ]
+    for path in docs:
+        source = path.read_text(encoding="utf-8")
+        assert "数据采集认领" in source
+        assert "采集箱编辑保存" in source
+        assert "只保存" in source
+        assert "不发布" in source
+        assert "真实浏览器" in source
+        assert "本地测试商品" not in source
 
 
 def test_frontend_vite_build_uses_relative_base_for_electron_file_loading():
