@@ -1295,10 +1295,11 @@ export default function App() {
             selectedTask={selectedEditSaveTask}
             busy={busy}
             onCreateSaveTask={(productId) => {
-              const storeId = workspace.stores[0]?.id
+              const product = workspace.products.find((item) => item.id === productId) ?? null
+              const storeId = storeIdForClaimedProduct(product, workspace.stores)
               if (!storeId) {
-                setOperationError('请先登录并连接真实店铺，再创建编辑保存任务。')
-                setActiveSection('dxm_access')
+                setOperationError('该采集箱商品缺少原始店铺信息，不能创建编辑保存任务。请重新从“商品采集”认领到采集箱后再继续。')
+                setActiveSection('acquisition_claim')
                 return
               }
               void createRealTask({ storeId, mode: 'single_save', productIds: [productId] })
@@ -1813,4 +1814,15 @@ function taskToAcquisitionClaimResponse(task: Task | null): AcquisitionClaimResp
     completed_at: typeof payload.completed_at === 'string' ? payload.completed_at : null,
     task_status: task.status,
   }
+}
+
+function storeIdForClaimedProduct(product: Product | null, stores: Store[]): number | null {
+  if (!product) return null
+  const payload = product.payload ?? {}
+  const rawStoreId = payload.store_id ?? payload.claim_store_id ?? payload.dxm_store_id
+  const parsedStoreId = Number(rawStoreId)
+  if (Number.isInteger(parsedStoreId) && parsedStoreId > 0) {
+    return stores.some((store) => store.id === parsedStoreId) ? parsedStoreId : null
+  }
+  return stores.length === 1 ? stores[0].id : null
 }

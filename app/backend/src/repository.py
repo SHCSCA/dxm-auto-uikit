@@ -132,10 +132,12 @@ class Repository:
             return row
 
     def create_acquisition_claim_request(self, data: dict[str, Any]):
+        store_name = str(data.get('store_name') or self._store_name_for_id(data['store_id']) or '').strip()
         payload = {
             'stage': 'pending_acquisition_claim',
             'status': 'pending',
             'store_id': data['store_id'],
+            'store_name': store_name or None,
             'keyword': data.get('keyword'),
             'category_name': data.get('category_name'),
             'claim_mark': data['claim_mark'],
@@ -163,6 +165,11 @@ class Repository:
         task = self.get_task_private(task['id'])
         task['payload'] = self._public_task_payload(task.get('payload') or {})
         return task
+
+    def _store_name_for_id(self, store_id: Any) -> str | None:
+        with connection() as conn:
+            row = conn.execute("SELECT name FROM stores WHERE id=?", (store_id,)).fetchone()
+            return str(row['name']) if row and row.get('name') else None
 
     def bulk_import_products(self, rows: list[dict[str, Any]]):
         created = []

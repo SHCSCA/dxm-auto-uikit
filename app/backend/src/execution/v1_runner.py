@@ -1488,6 +1488,8 @@ class V1TaskRunner:
         source_url = claimed.get("source_url") or evidence.get("source_url") or payload.get("source_url")
         product_payload = {
             "source": "dxm_data_acquisition",
+            "store_id": task.get("store_id") or payload.get("store_id"),
+            "store_name": self._store_name(dict(task)),
             "source_url": source_url,
             "source_title": title,
             "claim_mark": claim_mark,

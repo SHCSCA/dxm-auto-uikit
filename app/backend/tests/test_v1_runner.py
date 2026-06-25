@@ -811,6 +811,8 @@ def test_claim_only_calls_adapter_without_opening_editor_or_saving(v1_db):
     assert len(claimed) == 1
     assert claimed[0]["title"] == "Hazbin Hotel 立牌"
     assert claimed[0]["source"] == "dxm_data_acquisition"
+    assert claimed[0]["payload"]["store_id"] == store["id"]
+    assert claimed[0]["payload"]["store_name"] == "Dang Kang"
     assert claimed[0]["payload"]["claim_task_id"] == task["id"]
     assert claimed[0]["payload"]["claim_mark"] == f"AI认领-{task['id']}"
     assert claimed[0]["payload"]["source_url"] == "https://detail.1688.com/offer/from-acquisition.html"

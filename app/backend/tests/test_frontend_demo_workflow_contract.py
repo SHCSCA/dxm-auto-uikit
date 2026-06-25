@@ -183,6 +183,17 @@ def test_draft_edit_save_page_starts_from_claimed_product_without_technical_gate
         "查看保存结果",
     ]:
         assert label in page_source
+
+
+def test_draft_edit_save_uses_claimed_product_store_instead_of_first_store():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+    page_source = DRAFT_EDIT_SAVE_PAGE_TSX.read_text(encoding="utf-8")
+    route_section = app_source[app_source.index("case 'draft_edit_save'"):app_source.index("case 'start_save'")]
+
+    assert "function storeIdForClaimedProduct" in app_source
+    assert "const storeId = storeIdForClaimedProduct(product, workspace.stores)" in route_section
+    assert "workspace.stores[0]?.id" not in route_section
+    assert "该采集箱商品缺少原始店铺信息" in route_section
     for label in [
         "只允许从采集箱商品开始",
         "本功能只点击“保存”",
@@ -3847,6 +3858,16 @@ def test_safety_status_bar_prioritizes_config_block_before_l2_precheck():
     assert "configPreviewError={configPreviewError}" in app_source
     assert "configPreviewLoading={configPreviewLoading}" in app_source
     assert "onShowConfig={() => setActiveSection('edit_config')}" in app_source
+
+
+def test_safety_status_bar_does_not_config_block_acquisition_claim_tasks():
+    safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
+    config_block_section = safety_bar[safety_bar.index("const configBlocksRealSave"):safety_bar.index("const publishGuardReasons")]
+
+    assert "const selectedTaskNeedsEditConfig = selectedTask?.mode === 'single_save'" in safety_bar
+    assert "&& selectedTaskNeedsEditConfig" in config_block_section
+    assert "selectedRealDxmMutationTask" not in config_block_section
+    assert "claim_only" not in config_block_section
 
 
 def test_frontend_refreshes_workspace_after_l2_runner_finishes():

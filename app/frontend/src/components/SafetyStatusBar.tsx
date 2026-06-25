@@ -28,10 +28,10 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
   const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
   const selectedTaskCompleted = selectedTask?.status === 'completed'
-  const selectedRealDxmMutationTask = Boolean(selectedTask && ['claim_only', 'single_save', 'batch_save'].includes(selectedTask.mode))
+  const selectedTaskNeedsEditConfig = selectedTask?.mode === 'single_save'
   const configBlocksRealSave = Boolean(
     selectedTask
-    && selectedRealDxmMutationTask
+    && selectedTaskNeedsEditConfig
     && !selectedTaskCompleted
     && (configPreviewError || configPreviewLoading || !configPreview || configPreview.taskId !== selectedTask.id || !configPreview.ok)
   )
