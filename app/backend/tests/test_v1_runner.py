@@ -268,7 +268,12 @@ def v1_db(tmp_path, monkeypatch):
     return db_path
 
 
-def _create_task(repo: Repository, mode: str = "single_save", product_count: int = 1):
+def _create_task(
+    repo: Repository,
+    mode: str = "single_save",
+    product_count: int = 1,
+    manual_approval: bool = True,
+):
     store = repo.create_store("Dang Kang", "AliExpress")
     dxm_reference_templates = {
         "attribute_info": {"names": ["立牌类谷子"]},
@@ -370,7 +375,7 @@ def _create_task(repo: Repository, mode: str = "single_save", product_count: int
         if claim_task:
             repo.mark_acquisition_claim_completed(claim_task["id"], product)
         product_ids.append(product["id"])
-    return repo.create_task(
+    task = repo.create_task(
         {
             "name": "V1 半托管保存任务",
             "store_id": store["id"],
@@ -388,6 +393,9 @@ def _create_task(repo: Repository, mode: str = "single_save", product_count: int
             },
         }
     )
+    if mode in {"single_save", "batch_save"} and manual_approval:
+        return repo.set_task_manual_approval(task["id"], approved=True, token="runner-approval-token", approved_by="ops-owner")
+    return task
 
 
 def test_single_save_generates_success_report_and_never_publishes(v1_db):
@@ -1157,6 +1165,21 @@ def test_claim_product_unverified_note_fails_before_open_editor(v1_db):
     reports = repo.list_reports(task["id"])
     assert reports[0]["status"] == "failed"
     assert "note_verified" in reports[0]["summary"]["blocked_reason"]
+
+
+def test_single_save_runner_requires_server_manual_approval_immediately_before_save(v1_db):
+    repo = Repository()
+    task = _create_task(repo, mode="single_save", product_count=1, manual_approval=False)
+    manager = DummyManager()
+    adapter = FakeWorkflowAdapter()
+
+    asyncio.run(V1TaskRunner(repo, manager, workflow_adapter=adapter).run_task(task["id"]))
+
+    assert "save_only" not in [call[0] for call in adapter.calls]
+    reports = repo.list_reports(task["id"])
+    assert reports[0]["status"] == "failed"
+    assert reports[0]["published"] is False
+    assert "人工确认" in reports[0]["summary"]["blocked_reason"]
 
 
 def test_save_only_false_save_result_fails_job(v1_db):

@@ -1160,6 +1160,8 @@ class V1TaskRunner:
                 error_title,
                 f"{action_name} adapter method unavailable",
             )
+        if state_name == StateName.SAVE_ONLY:
+            self._assert_manual_approval_before_save(task)
         try:
             result = call()
         except Exception as exc:
@@ -1174,6 +1176,24 @@ class V1TaskRunner:
             if not save_result or save_result.get("ok") is not True:
                 raise V1ExecutionError(error_code, error_title, f"{action_name} save_result missing or false")
         return result
+
+    def _assert_manual_approval_before_save(self, task: Mapping[str, Any]) -> None:
+        current_task = self.repo.get_task_private(int(task["id"])) if task.get("id") is not None else None
+        payload = (current_task or task).get("payload") if isinstance((current_task or task).get("payload"), Mapping) else {}
+        approval = payload.get("manual_approval") if isinstance(payload, Mapping) else {}
+        if not isinstance(approval, Mapping):
+            approval = {}
+        if (
+            approval.get("approved") is True
+            and approval.get("source") == "server"
+            and bool(str(approval.get("approved_by") or "").strip())
+        ):
+            return
+        raise V1ExecutionError(
+            "E999",
+            "缺少人工确认",
+            "保存前人工确认未完成：请在控制台填写批准人，确认只保存、不发布后再启动单商品只保存。",
+        )
 
     def _workflow_exception_detail(self, action_name: str, exc: Exception) -> str:
         operator_detail = self._operator_claim_failure_detail(action_name)
