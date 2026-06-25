@@ -1262,6 +1262,102 @@ def test_delivery_workspace_two_stage_acceptance_requires_acquisition_claim_chai
     assert "采集箱" in acceptance["user_message"]
 
 
+def test_delivery_workspace_two_stage_acceptance_rejects_completed_non_claim_task(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    store = repo.create_store("Dang Kang", "AliExpress")
+    fake_claim_task = repo.create_task(
+        {
+            "name": "伪造认领完成任务",
+            "store_id": store["id"],
+            "mode": "dry_run",
+            "publish_scene": "DRY_RUN",
+            "claim_mark": "AI-OPS",
+            "product_ids": [],
+            "payload": {
+                "stage": "claimed_to_draft",
+                "status": "completed",
+                "draft_box_verified": True,
+            },
+        }
+    )
+    product = repo.create_product(
+        {
+            "title": "真实采集商品但认领任务类型不正确",
+            "source": "dxm_data_acquisition",
+            "status": "claimed_to_draft",
+            "category_name": "立牌类谷子",
+            "price": 9.9,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {
+                "source": "dxm_data_acquisition",
+                "source_url": "https://detail.1688.com/offer/1013604102950.html",
+                "claim_task_id": fake_claim_task["id"],
+                "draft_box_verified": True,
+            },
+        }
+    )
+    with db.connection() as conn:
+        payload = dict(fake_claim_task["payload"])
+        payload.update(
+            {
+                "stage": "claimed_to_draft",
+                "status": "completed",
+                "claimed_product_id": product["id"],
+                "draft_box_verified": True,
+            }
+        )
+        conn.execute(
+            "UPDATE tasks SET status='completed', completed_jobs=1, failed_jobs=0, payload_json=? WHERE id=?",
+            (json.dumps(payload, ensure_ascii=False), fake_claim_task["id"]),
+        )
+    save_task = repo.create_task(
+        {
+            "name": "单商品只保存 - Dang Kang - 1 件商品",
+            "store_id": store["id"],
+            "mode": "single_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "claim_mark": "AI-OPS",
+            "product_ids": [product["id"]],
+            "payload": {"store_name": "Dang Kang", "category_name": "立牌类谷子"},
+        }
+    )
+    job = repo.get_task(save_task["id"])["jobs"][0]
+    save_result = {
+        "ok": True,
+        "message": "已点击保存",
+        "success_text": "编辑成功",
+        "published": False,
+        "network_save_result": {
+            "ok": True,
+            "method": "POST",
+            "url": "https://www.dianxiaomi.com/api/popChoiceProduct/add.json",
+            "status": 200,
+            "code": 0,
+            "msg": "您的产品编辑保存成功！",
+        },
+    }
+    summary = {
+        "status": "success",
+        "workflow_results": [
+            {"action": "save_only", "ok": True, "save_result": save_result},
+            {"action": "verify_not_published", "ok": True, "published": False},
+        ],
+        "published": False,
+    }
+    repo.add_report(save_task["id"], job["id"], product["id"], "success", False, save_result, summary)
+
+    data = client.get(f"/api/delivery/workspace?task_id={save_task['id']}").json()
+
+    acceptance = data["two_stage_acceptance"]
+    assert acceptance["passed"] is False
+    assert acceptance["status"] == "missing_claim_stage"
+    assert "claim_completed" in acceptance["missing_codes"]
+    assert acceptance["checks"]["claim_task_present"] is True
+    assert acceptance["checks"]["claim_completed"] is False
+
+
 def test_delivery_workspace_two_stage_acceptance_passes_when_claim_and_save_share_product(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     fixture = _create_two_stage_delivery_fixture(repo)

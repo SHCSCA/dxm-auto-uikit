@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -329,24 +330,45 @@ def _create_task(repo: Repository, mode: str = "single_save", product_count: int
         )
     product_ids = []
     for idx in range(product_count):
+        source_url = f"https://detail.1688.com/offer/test-{idx + 1}.html"
+        claim_task = None
+        if mode == "single_save":
+            claim_task = repo.create_acquisition_claim_request(
+                {
+                    "store_id": store["id"],
+                    "source_url": source_url,
+                    "keyword": f"ACG Stand Product {idx + 1}",
+                    "category_name": "立牌类谷子",
+                    "claim_mark": "AI认领",
+                    "template_id": None,
+                }
+            )
         product = repo.create_product(
             {
                 "title": f"ACG Stand Product {idx + 1}",
-                "source": "test",
+                "source": "dxm_data_acquisition" if mode == "single_save" else "test",
+                "status": "claimed_to_draft" if mode == "single_save" else "draft",
                 "category_name": "立牌类谷子",
                 "price": 7.01,
                 "currency": "USD",
                 "sku_count": 8,
                 "image_count": 8,
                 "payload": {
+                    "source": "dxm_data_acquisition" if mode == "single_save" else "test",
                     "source_title": f"ACG Stand Product {idx + 1}",
-                    "source_url": f"https://detail.1688.com/offer/test-{idx + 1}.html",
+                    "source_url": source_url,
+                    "source_urls": [source_url],
+                    "claim_task_id": claim_task["id"] if claim_task else None,
+                    "draft_box_verified": mode == "single_save",
+                    "store_name": "Dang Kang",
                     "category": {"template_category_id": f"product-cat-{idx + 1}"},
                     "image": {"eu_outer_package_filename": f"product-eu-{idx + 1}.jpg"},
                     "compliance": {"battery": "none"},
                 },
             }
         )
+        if claim_task:
+            repo.mark_acquisition_claim_completed(claim_task["id"], product)
         product_ids.append(product["id"])
     return repo.create_task(
         {
@@ -1083,6 +1105,43 @@ def test_save_only_false_save_result_fails_job(v1_db):
     assert reports[0]["status"] == "failed"
     assert reports[0]["published"] is False
     assert "save_result" in reports[0]["summary"]["blocked_reason"]
+
+
+def test_single_save_runner_rejects_product_that_lost_claimed_status_before_browser(v1_db):
+    repo = Repository()
+    task = _create_task(repo, mode="single_save", product_count=1)
+    product_id = task["payload"]["product_ids"][0]
+    with sqlite3.connect(v1_db) as conn:
+        conn.execute("UPDATE products SET status='draft' WHERE id=?", (product_id,))
+    manager = DummyManager()
+    adapter = FakeWorkflowAdapter()
+
+    asyncio.run(V1TaskRunner(repo, manager, workflow_adapter=adapter).run_task(task["id"]))
+
+    assert adapter.calls == []
+    reports = repo.list_reports(task["id"])
+    assert reports[0]["status"] == "failed"
+    assert "已认领的采集箱商品" in reports[0]["summary"]["blocked_reason"]
+
+
+def test_single_save_runner_rejects_product_without_draft_box_verification_before_browser(v1_db):
+    repo = Repository()
+    task = _create_task(repo, mode="single_save", product_count=1)
+    product_id = task["payload"]["product_ids"][0]
+    with sqlite3.connect(v1_db) as conn:
+        row = conn.execute("SELECT payload_json FROM products WHERE id=?", (product_id,)).fetchone()
+        payload = json.loads(row[0])
+        payload["draft_box_verified"] = False
+        conn.execute("UPDATE products SET payload_json=? WHERE id=?", (json.dumps(payload, ensure_ascii=False), product_id))
+    manager = DummyManager()
+    adapter = FakeWorkflowAdapter()
+
+    asyncio.run(V1TaskRunner(repo, manager, workflow_adapter=adapter).run_task(task["id"]))
+
+    assert adapter.calls == []
+    reports = repo.list_reports(task["id"])
+    assert reports[0]["status"] == "failed"
+    assert "采集箱验证" in reports[0]["summary"]["blocked_reason"]
 
 
 def test_save_only_missing_save_result_fails_job(v1_db):

@@ -925,12 +925,55 @@ class V1TaskRunner:
                 raise V1ExecutionError(validation["error_code"] or "E302", "启动前配置校验失败", detail)
             if mode in {"single_save", "batch_save"} and task.get("publish_scene") != "SMT_SEMI_MANAGED_SAVE_ONLY":
                 raise V1ExecutionError("E999", "任务发布场景不安全", "V1 只允许 SMT_SEMI_MANAGED_SAVE_ONLY")
+            if mode == "single_save":
+                self._guard_single_save_claimed_product(product)
         if state_name in {StateName.CLAIM_PRODUCT, StateName.CLAIM_TO_DRAFT_BOX, StateName.VERIFY_DRAFT_BOX_CLAIM} and not claim_mark:
             raise V1ExecutionError("E202", "领取标记为空", "任务缺少 claim_mark")
         if state_name == StateName.SAVE_ONLY:
             result = self.publish_guard.check(intended_action="save", target_text="保存")
             if not result["allowed"]:
                 raise V1ExecutionError("E999", "保存动作被发布隔离器阻断", "; ".join(result["reasons"]))
+
+    def _guard_single_save_claimed_product(self, product: Mapping[str, Any] | None) -> None:
+        if not product:
+            raise V1ExecutionError(
+                "E202",
+                "保存任务缺少采集箱商品",
+                "单商品只保存必须从已认领并通过采集箱验证的真实商品启动；系统不会打开编辑页或保存。",
+            )
+        status = str(product.get("status") or "")
+        payload = product.get("payload") if isinstance(product.get("payload"), Mapping) else {}
+        source = str(payload.get("source") or product.get("source") or "").strip()
+        if status not in {"claimed_to_draft", "ready_for_edit"}:
+            raise V1ExecutionError(
+                "E202",
+                "保存任务商品未进入采集箱",
+                "当前商品还不是已认领的采集箱商品；请先从数据采集认领并确认采集箱后再启动只保存。",
+            )
+        if source != "dxm_data_acquisition":
+            raise V1ExecutionError(
+                "E202",
+                "保存任务商品来源不正确",
+                "单商品只保存只能处理从店小秘数据采集认领到采集箱的真实商品；手工导入或测试商品不会启动真实保存。",
+            )
+        if payload.get("draft_box_verified") is not True:
+            raise V1ExecutionError(
+                "E202",
+                "采集箱验证未完成",
+                "当前商品尚未通过采集箱验证；请先确认商品已进入采集箱后再启动只保存。",
+            )
+        if not self._payload_source_urls(payload):
+            raise V1ExecutionError(
+                "E202",
+                "缺少源商品链接",
+                "单商品只保存必须带有真实源商品链接，便于匹配同一个采集箱商品；系统不会打开编辑页或保存。",
+            )
+        if not self.repo.product_has_completed_claim_provenance(dict(product)):
+            raise V1ExecutionError(
+                "E202",
+                "采集认领任务链不完整",
+                "单商品只保存必须能追溯到已完成的数据采集认领任务；请重新完成认领到采集箱后再启动只保存。",
+            )
 
     def _run_workflow_action(
         self,
@@ -1597,7 +1640,12 @@ class V1TaskRunner:
             source_urls = payload.get("source_urls")
             if isinstance(source_urls, (list, tuple)):
                 values.extend(source_urls)
-        return [str(value).strip() for value in values if str(value or "").strip()]
+        urls: list[str] = []
+        for value in values:
+            text = str(value or "").strip()
+            if text and text not in urls:
+                urls.append(text)
+        return urls
 
     def _product(self, product_id: int | None) -> dict[str, Any] | None:
         if product_id is None:

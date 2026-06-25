@@ -1061,16 +1061,23 @@ def _claim_stage_completed(
     claim_reports: list[dict[str, Any]],
     claimed_product_id: int | None,
 ) -> bool:
-    if not claim_task:
+    if not claim_task or claimed_product_id is None:
         return False
-    if claim_task.get("status") == "completed":
-        return True
-    if claim_payload.get("status") == "completed" and claim_payload.get("stage") == "claimed_to_draft":
-        return True
-    return any(
-        report.get("status") == "success" and _claim_report_mentions_product(report, claimed_product_id)
-        for report in claim_reports
+    if claim_task.get("mode") != "claim_only":
+        return False
+    claim_payload_product_id = _int_or_none(claim_payload.get("claimed_product_id"))
+    claim_payload_complete = (
+        claim_task.get("status") == "completed"
+        and claim_payload.get("status") == "completed"
+        and claim_payload.get("stage") == "claimed_to_draft"
+        and claim_payload.get("draft_box_verified") is True
+        and claim_payload_product_id == claimed_product_id
     )
+    if not claim_payload_complete:
+        return False
+    if not claim_reports:
+        return True
+    return any(report.get("status") == "success" and _claim_report_mentions_product(report, claimed_product_id) for report in claim_reports)
 
 
 def _claim_reports_match_product(claim_reports: list[dict[str, Any]], claimed_product_id: int | None) -> bool:

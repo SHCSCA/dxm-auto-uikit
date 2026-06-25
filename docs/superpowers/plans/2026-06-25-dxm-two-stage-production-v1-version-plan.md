@@ -208,6 +208,8 @@ npm run build
 
 ### V0.10.0 - Edit Save From Verified Collection Product
 
+**Status:** Save-stage provenance gate complete in API, runner, and delivery acceptance; remaining edit-fill/save evidence tasks and real save-only canary are pending.
+
 **Goal:** Stage B starts only from a Stage A verified product.
 
 **User outcome:**
@@ -233,7 +235,7 @@ npm run build
 
 **Implementation tasks:**
 
-- [ ] Block `single_save` if product status is not claimed and verified.
+- [x] Block `single_save` if product status is not claimed and verified.
 - [ ] Pass source URL/title/store into draft-box row matching.
 - [ ] Fill edit page using selected template final values.
 - [ ] Require manual approval immediately before save.
