@@ -208,7 +208,7 @@ npm run build
 
 ### V0.10.0 - Edit Save From Verified Collection Product
 
-**Status:** Save-stage provenance gate complete in API, runner, and delivery acceptance; remaining edit-fill/save evidence tasks and real save-only canary are pending.
+**Status:** Save-stage provenance gate and selected-template execution defaults are complete in API, runner, and delivery acceptance; remaining save approval/evidence tasks and real save-only canary are pending.
 
 **Goal:** Stage B starts only from a Stage A verified product.
 
@@ -237,12 +237,18 @@ npm run build
 
 - [x] Block `single_save` if product status is not claimed and verified.
 - [x] Pass source URL/title/store into draft-box row matching.
-- [ ] Fill edit page using selected template final values.
+- [x] Fill edit page using selected template final values.
 - [ ] Require manual approval immediately before save.
 - [ ] Capture save network response.
 - [ ] Capture unpublished proof.
 - [ ] Map failures to business-language cards.
 - [ ] Run one real save-only canary from a product produced by V0.9.9.
+
+**Latest verification:**
+
+- `tests\test_v1_runner.py::test_single_save_fill_actions_use_manually_selected_template_over_store_default` proves a task-level `template_id` is applied to all edit/save fill actions even when its binding does not match the default store/category template.
+- `tests\test_v1_runner.py tests\test_task_start_guard.py tests\test_config_defaults.py -q` passed with `133 passed`.
+- `app\frontend npm run build` passed.
 
 **Acceptance commands:**
 

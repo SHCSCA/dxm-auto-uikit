@@ -485,6 +485,72 @@ def test_single_save_calls_workflow_adapter_in_complete_save_order(v1_db):
     assert "_template_trace" not in reports[0]["summary"]["resolved_defaults"]
 
 
+def test_single_save_fill_actions_use_manually_selected_template_over_store_default(v1_db):
+    repo = Repository()
+    store_template = repo.create_template(
+        {
+            "template_type": "logistics",
+            "template_name": "Dang Kang 店铺包装模板",
+            "binding_scope": "Dang Kang",
+            "payload": {
+                "binding": {"store_name": "Dang Kang", "category_name": "立牌类谷子", "platform": "AliExpress"},
+                "logistics": {"weight": "0.03", "length": "10", "width": "10", "height": "2"},
+            },
+            "is_enabled": True,
+        }
+    )
+    selected_template = repo.create_template(
+        {
+            "template_type": "logistics",
+            "template_name": "本次选择包装模板",
+            "binding_scope": "手动选择",
+            "payload": {
+                "binding": {"store_name": "Other Store", "category_name": "Other Category", "platform": "AliExpress"},
+                "logistics": {"weight": "0.09", "length": "18", "width": "12", "height": "4"},
+            },
+            "is_enabled": True,
+        }
+    )
+    task = _create_task(repo, mode="single_save", product_count=1)
+    payload = dict(task["payload"])
+    payload["template_id"] = selected_template["id"]
+    payload.pop("template_overrides", None)
+    with db.connection() as conn:
+        conn.execute(
+            "UPDATE tasks SET payload_json=? WHERE id=?",
+            (db.dumps(payload), task["id"]),
+        )
+    manager = DummyManager()
+    adapter = FakeWorkflowAdapter()
+
+    asyncio.run(V1TaskRunner(repo, manager, workflow_adapter=adapter).run_task(task["id"]))
+
+    fill_defaults = next(call[1] for call in adapter.calls if call[0] == "fill_editor_required_defaults")
+    assert fill_defaults["logistics"]["weight"] == "0.09"
+    assert fill_defaults["logistics"]["length"] == "18"
+    assert fill_defaults["logistics"]["width"] == "12"
+    assert fill_defaults["logistics"]["height"] == "4"
+    fill_action_defaults = [
+        call[1]
+        for call in adapter.calls
+        if call[0]
+        in {
+            "fill_editor_required_defaults",
+            "fill_editor_variants",
+            "fill_media_assets",
+            "fill_compliance_defaults",
+            "open_semi_managed_page",
+            "fill_semi_managed_defaults",
+            "save_only",
+        }
+    ]
+    assert fill_action_defaults
+    assert all(defaults["logistics"]["weight"] == "0.09" for defaults in fill_action_defaults)
+    reports = repo.list_reports(task["id"])
+    trace_names = [item["template_name"] for item in reports[0]["summary"]["template_trace"]]
+    assert trace_names.index(store_template["template_name"]) < trace_names.index(selected_template["template_name"])
+
+
 def test_single_save_syncs_agent_console_hud_without_changing_workflow_order(v1_db):
     repo = Repository()
     task = _create_task(repo, mode="single_save", product_count=1)

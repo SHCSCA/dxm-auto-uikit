@@ -37,14 +37,25 @@ class ConfigDefaultsResolver:
         defaults: dict[str, Any] = {}
         sources: dict[str, Any] = {}
         template_trace: list[dict[str, Any]] = []
+        task_payload = task.get("payload") or {}
+        if not isinstance(task_payload, Mapping):
+            task_payload = {}
+        product_payload = (product or {}).get("payload") or {}
+        if not isinstance(product_payload, Mapping):
+            product_payload = {}
+        selected_template_id = self.selected_template_id(task_payload, product_payload)
         applicable_templates: list[tuple[int, int, str, Mapping[str, Any]]] = []
+        selected_templates: list[tuple[int, str, Mapping[str, Any]]] = []
         for index, template in enumerate(templates):
             if not template.get("is_enabled", True):
                 continue
-            if not self.template_applies_to(template, task, product):
-                continue
             template_type = self.normalize_template_type(template.get("template_type"))
             if template_type not in DEFAULT_TEMPLATE_TYPES:
+                continue
+            if selected_template_id and self.template_id_matches(template, selected_template_id):
+                selected_templates.append((self.template_sort_id(template, index), template_type, template))
+                continue
+            if not self.template_applies_to(template, task, product):
                 continue
             applicable_templates.append((
                 self.template_binding_specificity(template, task, product),
@@ -64,13 +75,24 @@ class ConfigDefaultsResolver:
                     "binding_scope": template.get("binding_scope"),
                 })
 
-        product_payload = (product or {}).get("payload") or {}
-        if isinstance(product_payload, Mapping):
+        if product_payload:
             product_label = f"商品：{(product or {}).get('title') or (product or {}).get('id')}"
             self.merge_payload(defaults, sources, product_payload, product_label)
 
-        task_payload = task.get("payload") or {}
-        if isinstance(task_payload, Mapping):
+        for _sort_id, template_type, template in sorted(selected_templates, key=lambda item: item[0]):
+            payload = template.get("payload") or {}
+            if isinstance(payload, Mapping):
+                label = f"模板：{template.get('template_name') or template_type}"
+                self.merge_template_payload(defaults, sources, template_type, payload, label)
+                template_trace.append({
+                    "template_id": template.get("id"),
+                    "template_type": template_type,
+                    "template_name": template.get("template_name"),
+                    "binding_scope": template.get("binding_scope"),
+                    "selected": True,
+                })
+
+        if task_payload:
             task_label = f"任务：{task.get('name') or task.get('id')}"
             self.merge_payload(defaults, sources, task_payload, task_label, skip_keys={"template_overrides"})
             overrides = task_payload.get("template_overrides")
@@ -84,6 +106,20 @@ class ConfigDefaultsResolver:
         defaults["dxm_reference_templates_resolved"] = resolve_dxm_reference_templates(defaults)
         defaults["_template_trace"] = template_trace
         return ConfigDefaultsResult(defaults=defaults, sources=sources, template_trace=template_trace)
+
+    def selected_template_id(
+        self,
+        task_payload: Mapping[str, Any],
+        product_payload: Mapping[str, Any],
+    ) -> str | None:
+        value = task_payload.get("template_id")
+        if value is None or value == "":
+            value = product_payload.get("template_id")
+        text = str(value or "").strip()
+        return text or None
+
+    def template_id_matches(self, template: Mapping[str, Any], selected_template_id: str) -> bool:
+        return str(template.get("id") or "").strip() == selected_template_id
 
     def template_applies_to(
         self,
