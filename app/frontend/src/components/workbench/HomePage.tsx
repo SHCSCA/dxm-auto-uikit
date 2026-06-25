@@ -40,7 +40,7 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
       ? '保存前需要确认只保存、不发布。'
       : '当前由你选择下一步，系统不会自动保存或发布。'
   const nextAction = claimTaskCompleted
-    ? { label: '创建采集箱只保存任务', detail: '选择已进入采集箱的真实商品，确认模板后只保存。', cta: '去采集箱只保存', action: onShowDraftEdit }
+    ? { label: '选择采集箱商品并只保存', detail: '选择已进入采集箱的真实商品，确认模板后只保存。', cta: '去采集箱商品只保存', action: onShowDraftEdit }
     : selectedTaskCompleted
     ? { label: '查看本次保存结果', detail: '复核报告、未发布证明和真实浏览器记录。', cta: '查看保存结果', action: onShowReports }
     : !dxmLoggedIn
@@ -114,6 +114,16 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
           <button className="button button--secondary" type="button" onClick={nextAction.action}>{nextAction.cta}</button>
         </div>
       </div>
+      <div className="module-card home-flow-card">
+        <div className="module-head">
+          <div>
+            <h2>两段真实流程</h2>
+            <p>先认领，再编辑保存。系统不会跳过采集箱直接保存。</p>
+          </div>
+          <span>{controlOwner}</span>
+        </div>
+        <OperationGuide workspace={workspace} selectedTask={selectedTask} />
+      </div>
     </section>
   )
 }
@@ -123,8 +133,8 @@ function OperationGuide({ workspace, selectedTask }: { workspace: DeliveryWorksp
   const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
   const steps = [
     { label: '登录店小秘', ok: workspace.stores.length > 0 },
-    { label: '数据采集认领到采集箱', ok: selectedTask?.mode === 'claim_only' || selectedTask?.mode === 'single_save' },
-    { label: '确认编辑页模板', ok: selectedTask?.mode === 'single_save' },
+    { label: '第一段：数据采集认领到采集箱', ok: selectedTask?.mode === 'claim_only' || selectedTask?.mode === 'single_save' },
+    { label: '第二段：确认编辑页模板', ok: selectedTask?.mode === 'single_save' },
     { label: '确认保存前安全检查通过', ok: l2Gate?.status === 'passed' },
     { label: '人工确认后只保存', ok: l3Gate?.status === 'passed' || selectedTask?.status === 'completed' },
   ]
