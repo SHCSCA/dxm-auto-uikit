@@ -240,6 +240,8 @@ function humanGateDetail(detail?: string | null) {
   if (operatorMessage !== detail) return operatorMessage
   const resourceMessage = humanL2PrecheckError(detail)
   if (resourceMessage !== detail) return resourceMessage
+  const safeDetail = safeGateDetailFallback(detail)
+  if (safeDetail !== detail) return safeDetail
   if (
     detail.includes('时效')
     || detail.includes('过期')
@@ -251,7 +253,7 @@ function humanGateDetail(detail?: string | null) {
     return `保存前安全检查证据已过期，请点击“${READONLY_PRECHECK_CTA}”刷新后再继续。`
   }
   if (detail.includes('data_acquisition') || detail.includes('draft_box')) {
-    return detail
+    return safeDetail
       .split('data_acquisition').join('商品采集页')
       .split('draft_box').join('采集箱页')
       .split('L2').join('保存前安全检查')
@@ -259,11 +261,29 @@ function humanGateDetail(detail?: string | null) {
       .split('passed').join('通过')
       .split('probe').join('保存前安全检查')
   }
-  return detail
+  return safeDetail
     .split('L2').join('保存前安全检查')
     .split('L3').join('真实保存')
     .split('passed').join('通过')
     .split('probe').join('保存前安全检查')
+}
+
+function safeGateDetailFallback(detail: string) {
+  const normalized = detail.toLowerCase()
+  if (
+    normalized.includes('/api/')
+    || normalized.includes(' get ')
+    || normalized.includes(' post ')
+    || normalized.includes(' x')
+    || normalized.includes('blocked requests')
+    || normalized.includes('traceback')
+    || normalized.includes('greenlet')
+    || normalized.includes('playwright')
+    || normalized.includes('internal server error')
+  ) {
+    return '保存前安全检查未通过；原始诊断已收进维护详情，请按页面提示处理后重新检查。'
+  }
+  return String(detail)
 }
 
 function humanL2PrecheckError(message: string) {

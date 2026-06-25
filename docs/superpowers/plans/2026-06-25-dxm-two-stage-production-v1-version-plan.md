@@ -208,7 +208,7 @@ npm run build
 
 ### V0.10.0 - Edit Save From Verified Collection Product
 
-**Status:** Save-stage provenance gate, selected-template execution defaults, runner-level save-time manual approval, save network response capture, and unpublished proof capture are complete in API, runner, and delivery acceptance; remaining failure-card UX cleanup and real save-only canary are pending.
+**Status:** Save-stage provenance gate, selected-template execution defaults, runner-level save-time manual approval, save network response capture, unpublished proof capture, and operator-facing failure copy are complete in API, runner, delivery acceptance, and frontend contract coverage; remaining real save-only canary is pending.
 
 **Goal:** Stage B starts only from a Stage A verified product.
 
@@ -241,7 +241,7 @@ npm run build
 - [x] Require manual approval immediately before save.
 - [x] Capture save network response.
 - [x] Capture unpublished proof.
-- [ ] Map failures to business-language cards.
+- [x] Map failures to business-language cards.
 - [ ] Run one real save-only canary from a product produced by V0.9.9.
 
 **Latest verification:**
@@ -252,10 +252,13 @@ npm run build
 - `tests\test_login_flow.py::test_network_save_result_prefers_real_add_json_over_related_history_calls` proves the real save add endpoint is preferred over history requests.
 - `tests\test_login_flow.py::test_verify_not_published_accepts_prior_save_success_without_publish_risk` and `tests\test_login_flow.py::test_verify_not_published_ignores_ambient_online_text_after_save_success` prove unpublished verification can use save-success evidence while ignoring ambient published-menu text.
 - `tests\test_delivery_workspace.py::test_delivery_workspace_accepts_dxm_add_json_code_zero_as_save_response`, `tests\test_delivery_workspace.py::test_delivery_workspace_accepts_smt_add_json_nested_success_as_save_response`, and `tests\test_delivery_workspace.py::test_delivery_workspace_report_published_false_is_not_unpublished_proof_without_verify` prove delivery readiness recognizes real save network responses and still requires explicit unpublished proof.
+- `tests\test_frontend_demo_workflow_contract.py::test_frontend_translates_failed_execution_technical_errors_for_operators` and `tests\test_frontend_demo_workflow_contract.py::test_extracted_pages_do_not_fallback_to_raw_gate_details` prove normal operator surfaces translate technical failures and keep raw diagnostics out of default view.
 - `tests\test_v1_runner.py -q` passed with `33 passed`.
 - `tests\test_task_start_guard.py tests\test_config_defaults.py -q` passed with `101 passed`.
+- `tests\test_frontend_demo_workflow_contract.py -q` passed with `205 passed`.
 - Selected save evidence tests passed with `7 passed`.
 - `app\frontend npm run build` passed.
+- Headless Chrome against `http://127.0.0.1:4179/` loaded the app shell, showed the two-stage sidebar, and did not expose `greenlet`, `workflow_adapter`, or `save_result` in the visible fallback UI.
 
 **Acceptance commands:**
 

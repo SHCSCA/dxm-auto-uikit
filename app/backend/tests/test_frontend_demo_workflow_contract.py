@@ -4813,8 +4813,11 @@ def test_frontend_translates_failed_execution_technical_errors_for_operators():
     assert "normalized.includes('run_id')" in copy_source
     assert "message.includes('save_result')" in copy_source
     assert "message.includes('network/HAR')" in copy_source
+    assert "normalized.includes('workflow_adapter')" in copy_source
+    assert "normalized.includes('adapter method unavailable')" in copy_source
     assert "浏览器会话异常" in copy_source
     assert "请关闭当前浏览器现场窗口，重新打开真实浏览器后再运行任务" in copy_source
+    assert "浏览器执行组件未就绪" in copy_source
     assert "保存前安全检查未通过" in copy_source
     assert "人工确认还没有完成" in copy_source
     assert "检查记录没有对齐" in copy_source
@@ -4847,16 +4850,20 @@ def test_frontend_translates_failed_execution_technical_errors_for_operators():
 def test_extracted_pages_do_not_fallback_to_raw_gate_details():
     panels_source = PRODUCT_TASK_PANELS_TSX.read_text(encoding="utf-8")
     results_source = RESULTS_PAGE_TSX.read_text(encoding="utf-8")
+    issues_source = ISSUES_PAGE_TSX.read_text(encoding="utf-8")
     panels_gate_detail = panels_source[panels_source.index("function humanGateDetail"):panels_source.index("function humanL2PrecheckError")]
     results_gate_detail = results_source[results_source.index("function humanGateDetail"):results_source.index("function humanL2PrecheckError")]
+    issues_gate_detail = issues_source[issues_source.index("function humanGateDetail"):issues_source.index("function humanL2PrecheckError")]
 
-    for section in (panels_gate_detail, results_gate_detail):
+    for section in (panels_gate_detail, results_gate_detail, issues_gate_detail):
         assert "safeGateDetailFallback(detail)" in section
         assert "return detail" not in section
     assert "function safeGateDetailFallback(detail: string)" in panels_source
     assert "function safeGateDetailFallback(detail: string)" in results_source
+    assert "function safeGateDetailFallback(detail: string)" in issues_source
     assert "原始诊断已收进维护详情" in panels_source
     assert "原始诊断已收进维护详情" in results_source
+    assert "原始诊断已收进维护详情" in issues_source
 
 
 def test_issue_queue_problem_cards_use_what_why_next_structure():

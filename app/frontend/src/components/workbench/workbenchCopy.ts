@@ -13,6 +13,12 @@ export function humanOperatorMessage(message: string) {
     return '浏览器会话异常：当前浏览器自动化会话已经失效，系统没有继续保存。请关闭当前浏览器现场窗口，重新打开真实浏览器后再运行任务。'
   }
   if (
+    normalized.includes('workflow_adapter')
+    || normalized.includes('adapter method unavailable')
+  ) {
+    return '浏览器执行组件未就绪：当前任务没有拿到可用的真实浏览器执行组件。请重新打开免安装版，保持真实浏览器窗口打开后再运行任务；系统没有保存或发布。'
+  }
+  if (
     message.includes('L2 readonly probe')
     || normalized.includes('l2 readonly')
     || normalized.includes('readonly probe')
@@ -69,6 +75,8 @@ export function looksTechnicalOperatorMessage(message: string) {
     || normalized.includes('har')
     || normalized.includes('playwright')
     || normalized.includes('greenlet')
+    || normalized.includes('workflow_adapter')
+    || normalized.includes('adapter method unavailable')
     || normalized.includes('traceback')
     || normalized.includes('internal server error')
     || normalized.includes('/api/')
