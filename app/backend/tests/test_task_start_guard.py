@@ -1816,6 +1816,44 @@ def test_config_preview_shows_effective_values_and_sources(tmp_path, monkeypatch
     assert logistics_fields["logistics.length"]["source"] == "模板：包装物流模板"
 
 
+def test_config_preview_returns_customer_template_priority_and_chinese_sections(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    task = _create_task(repo)
+    repo.create_template(
+        {
+            "template_type": "logistics",
+            "template_name": "店铺包装模板",
+            "binding_scope": "Dang Kang / AliExpress",
+            "payload": {
+                "logistics": {"weight": "0.03", "length": "10", "width": "10", "height": "2"},
+                "binding": {"store_name": "Dang Kang", "platform": "AliExpress"},
+            },
+            "is_enabled": True,
+        }
+    )
+    repo.update_task_template_override(task["id"], "logistics", {"weight": "0.05"})
+
+    response = client.get(f"/api/config/preview?task_id={task['id']}")
+
+    assert response.status_code == 200
+    preview = response.json()
+    assert preview["templatePriority"] == [
+        "本次任务覆盖",
+        "手动选择模板",
+        "类目默认模板",
+        "店铺默认模板",
+        "系统默认模板",
+    ]
+    sections = {section["section"]: section for section in preview["executionSections"]}
+    assert "logistics" in sections
+    assert sections["logistics"]["label"] == "包装物流"
+    fields = {field["label"]: field for field in sections["logistics"]["fields"]}
+    assert fields["重量 kg"]["value"] == "0.05"
+    assert fields["重量 kg"]["source"] == "来自本次任务"
+    assert fields["长 cm"]["value"] == "10"
+    assert fields["长 cm"]["source"] == "来自模板：店铺包装模板"
+
+
 def test_config_preview_does_not_mark_other_store_template_present(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     task = _create_task(repo, store_name="Dang Kang")

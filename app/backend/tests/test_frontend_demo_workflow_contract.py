@@ -259,11 +259,14 @@ def test_template_center_page_presents_multi_template_chinese_section_workflow()
     assert "className=\"template-section-list\"" in page_source
     assert "className=\"template-active-source\"" in page_source
     assert "template-library-details" in page_source
-    assert "dxm_reference_templates.attribute_info.names" in page_source
+    assert "referenceFieldKey('attribute_info')" in page_source
+    assert "dxm_reference_templates.attribute_info.names" not in page_source
     assert "field.value_kind === 'list'" in page_source
     assert "function setPathValue" in page_source
     assert ".split(/\\r?\\n|[，,；;]/)" in page_source
     assert "本次执行会使用" in page_source
+    assert "executionSections" in page_source
+    assert "当前分区执行取值核对" in page_source
     for forbidden in ["配置中心", "默认测试模板", "测试用", "L2", "run-id", "probe", "QA guarded product"]:
         assert forbidden not in page_source
 

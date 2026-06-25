@@ -83,14 +83,14 @@ const fallbackTemplateCenterMetadata: TemplateCenterMetadata = {
       { key: 'barcode_strategy', label: '条码策略', required: true, value_kind: 'text' },
     ] },
     { id: 'dxm_reference', label: '店小秘引用模板', template_type: 'dxm_reference', fields: [
-      { key: 'dxm_reference_templates.attribute_info.names', label: '属性信息模板', required: true, value_kind: 'list' },
-      { key: 'dxm_reference_templates.description.names', label: '描述模板', required: true, value_kind: 'list' },
-      { key: 'dxm_reference_templates.freight.names', label: '运费模板', required: true, value_kind: 'list' },
-      { key: 'dxm_reference_templates.service.names', label: '服务模板', required: true, value_kind: 'list' },
-      { key: 'dxm_reference_templates.eu_responsible.names', label: '欧盟责任人', required: true, value_kind: 'list' },
-      { key: 'dxm_reference_templates.manufacturer.names', label: '制造商', required: true, value_kind: 'list' },
-      { key: 'dxm_reference_templates.compliance.names', label: '合规模板', required: true, value_kind: 'list' },
-      { key: 'dxm_reference_templates.semi_managed.names', label: '半托管模板', required: true, value_kind: 'list' },
+      { key: referenceFieldKey('attribute_info'), label: '属性信息模板', required: true, value_kind: 'list' },
+      { key: referenceFieldKey('description'), label: '描述模板', required: true, value_kind: 'list' },
+      { key: referenceFieldKey('freight'), label: '运费模板', required: true, value_kind: 'list' },
+      { key: referenceFieldKey('service'), label: '服务模板', required: true, value_kind: 'list' },
+      { key: referenceFieldKey('eu_responsible'), label: '欧盟责任人', required: true, value_kind: 'list' },
+      { key: referenceFieldKey('manufacturer'), label: '制造商', required: true, value_kind: 'list' },
+      { key: referenceFieldKey('compliance'), label: '合规模板', required: true, value_kind: 'list' },
+      { key: referenceFieldKey('semi_managed'), label: '半托管模板', required: true, value_kind: 'list' },
     ] },
   ],
   source_priority: ['本次任务覆盖', '手动选择模板', '类目默认模板', '店铺默认模板', '系统默认模板', '商品原始数据'],
@@ -127,13 +127,14 @@ export function TemplateCenterPage({
   const currentCategory = selectedProduct?.category_name || selectedTask?.payload?.category_name || '未选择类目'
   const bindingScope = `${currentStore} / ${currentCategory} / AliExpress`
   const previewGroup = configPreview?.fieldGroups.find((group) => group.templateType === activeSection.template_type || group.section === activeSection.template_type)
+  const executionSection = configPreview?.executionSections?.find((section) => section.section === activeSection.id || section.section === activeSection.template_type)
   const originalValues = useMemo(
     () => Object.fromEntries(activeSection.fields.map((field) => [field.key, templateFieldValue(activeTemplate, activeSection, field.key)])),
     [activeSection, activeTemplate],
   )
   const hasUnsavedChanges = activeSection.fields.some((field) => String(draftValues[field.key] ?? '') !== String(originalValues[field.key] ?? ''))
     || Boolean(activeTemplate && templateName.trim() && templateName.trim() !== activeTemplate.template_name)
-  const executionPreviewFields = previewGroup?.fields.slice(0, 6) ?? []
+  const executionPreviewFields = executionSection?.fields.slice(0, 6) ?? previewGroup?.fields.slice(0, 6) ?? []
   const executionStatus = configPreviewLoading
     ? '正在检查执行取值'
     : configPreview?.ok
@@ -401,8 +402,8 @@ export function TemplateCenterPage({
           </div>
           {executionPreviewFields.length ? (
             <div className="template-execution-preview__grid">
-              {executionPreviewFields.map((field) => (
-                <span key={field.path}>
+              {executionPreviewFields.map((field, index) => (
+                <span key={`${field.label}-${index}`}>
                   <strong>{field.label}</strong>
                   <b>{formatValue(field.value)}</b>
                   <small>{field.source}</small>
@@ -453,6 +454,10 @@ export function TemplateCenterPage({
       </div>
     </section>
   )
+}
+
+function referenceFieldKey(section: string) {
+  return `dxm_reference_templates.${section}.names`
 }
 
 function selectedTaskProduct(workspace: DeliveryWorkspace, selectedTask: Task | null) {

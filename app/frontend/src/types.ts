@@ -180,6 +180,21 @@ export type ConfigPreviewGroup = {
   missing: string[]
   fields: ConfigPreviewField[]
 }
+export type ConfigExecutionField = {
+  label: string
+  value: unknown
+  source: string
+  required: boolean
+  missing: boolean
+}
+export type ConfigExecutionSection = {
+  section: string
+  label: string
+  complete: boolean
+  required: boolean
+  missing: string[]
+  fields: ConfigExecutionField[]
+}
 export type ConfigPreview = {
   ok: boolean
   mode: string | null
@@ -188,6 +203,8 @@ export type ConfigPreview = {
   missing: string[]
   warnings: string[]
   fieldGroups: ConfigPreviewGroup[]
+  templatePriority: string[]
+  executionSections: ConfigExecutionSection[]
   templateTrace: Array<Record<string, unknown>>
   resolvedDefaults: Record<string, unknown>
 }
