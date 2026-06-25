@@ -236,7 +236,7 @@ npm run build
 **Implementation tasks:**
 
 - [x] Block `single_save` if product status is not claimed and verified.
-- [ ] Pass source URL/title/store into draft-box row matching.
+- [x] Pass source URL/title/store into draft-box row matching.
 - [ ] Fill edit page using selected template final values.
 - [ ] Require manual approval immediately before save.
 - [ ] Capture save network response.
