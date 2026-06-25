@@ -71,13 +71,13 @@ export function DraftEditSavePage({
   }
 
   return (
-    <section className="module-layout" aria-label="编辑保存">
+    <section className="module-layout" aria-label="采集箱商品">
       <div className="module-card span-2">
         <div className="module-head">
           <div>
             <span className="eyebrow">第二段</span>
-            <h2>从采集箱选择要编辑保存的商品</h2>
-            <p>这里只显示第一段已认领并通过采集箱确认的真实商品。当前模式：只保存，不发布。</p>
+            <h2>采集箱商品</h2>
+            <p>这里只显示第一段已认领并通过采集箱确认的真实商品。选择商品后，再创建编辑保存任务；当前模式：只保存，不发布。</p>
           </div>
           <button className="button button--secondary" type="button" onClick={onShowTemplates}>
             检查编辑页模板
@@ -152,7 +152,7 @@ export function DraftEditSavePage({
 
         <div className="action-row">
           <button className="button button--primary" type="button" onClick={createSaveTask} disabled={busy || !canCreateTask}>
-            创建采集箱编辑保存任务
+            创建编辑保存任务
           </button>
           <button className="button button--secondary" type="button" onClick={onShowExecutionConsole} disabled={!selectedTask}>
             开始编辑并只保存
