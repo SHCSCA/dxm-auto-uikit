@@ -677,10 +677,10 @@ export default function App() {
         syncSelectedTaskIdUrl(result.task_id)
       }
       setActiveSection('start_save')
-        setOperationNotice('采集认领任务已创建。下一步在实时浏览器启动 Agent，将商品从数据采集认领到采集箱。')
+      setOperationNotice('采集认领任务已创建。下一步在实时浏览器启动 Agent，将商品从数据采集认领到采集箱。')
       await refreshWorkspace()
     } catch (error) {
-      setOperationError(error instanceof Error ? error.message : '创建采集认领请求失败')
+      setOperationError(humanAcquisitionClaimError(error instanceof Error ? error.message : '创建采集认领请求失败'))
     } finally {
       setBusy(false)
     }
@@ -1522,6 +1522,20 @@ function humanTaskCreateError(message: string) {
     return '任务创建失败：当前只允许单商品只保存，不开放发布、批量或无人值守。'
   }
   return message
+}
+
+function humanAcquisitionClaimError(message: string) {
+  const normalized = message.toLowerCase()
+  if (
+    normalized.includes('internal server error')
+    || normalized.includes('failed to fetch')
+    || normalized.includes('networkerror')
+    || normalized.includes('load failed')
+    || normalized.includes('traceback')
+  ) {
+    return '采集认领请求创建失败：请确认本机工作台服务正常、店铺信息已读取，并重新填写来源链接、关键词或认领类目后重试；系统不会保存或发布。'
+  }
+  return message || '采集认领请求创建失败：请重新检查店铺和商品线索后重试；系统不会保存或发布。'
 }
 
 function humanDxmNavigationError(message: string, targetLabel: string) {

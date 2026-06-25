@@ -132,6 +132,10 @@ def test_acquisition_claim_page_uses_claim_request_api_not_legacy_task_center():
     assert "source_url: request.sourceUrl" in app_source
     assert "请至少填写来源链接、搜索关键词或认领类目" in page_source
     assert "无法定位真实采集商品" in page_source
+    assert "setOperationError(humanAcquisitionClaimError(error instanceof Error ? error.message : '创建采集认领请求失败'))" in app_source
+    assert "function humanAcquisitionClaimError(message: string)" in app_source
+    assert "采集认领请求创建失败：请确认本机工作台服务正常" in app_source
+    assert "系统不会保存或发布" in app_source
     assert "创建单商品只保存任务" not in page_source
     assert "选择商品" not in page_source
     assert "onShowDraftEdit={() => setActiveSection('draft_edit_save')}" in route_section

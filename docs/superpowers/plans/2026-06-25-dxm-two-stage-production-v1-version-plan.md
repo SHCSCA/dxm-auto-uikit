@@ -19,7 +19,8 @@
 **Current shipped direction:**
 
 - V0.9.7 production navigation is complete and pushed.
-- V0.9.8 production data model/provenance work is in progress.
+- V0.9.8 production data model/provenance work is complete and pushed.
+- V0.9.9 source-URL claim, claimed-product handoff, and operator-facing claim failure copy are complete in code; fresh real DXM canary evidence is still required.
 - Current product boundary remains controlled single-product save-only.
 - The old path "choose a local/test product and save" is invalid for production.
 
@@ -100,7 +101,7 @@ Everything else goes into a drawer, details block, or maintenance diagnostics.
 
 ### V0.9.8 - Claimed Product Data Model And Provenance Gate
 
-**Status:** In progress.
+**Status:** Complete in code, pushed as `fff4ca7` plus UI semantics follow-up `94b9129`.
 
 **Goal:** The save stage can only start from a real product produced by a completed claim task.
 
@@ -126,13 +127,13 @@ Everything else goes into a drawer, details block, or maintenance diagnostics.
 
 **Implementation tasks:**
 
-- [ ] Add lifecycle fields to product API responses.
-- [ ] Require completed `claim_only` provenance for claimed products.
-- [ ] Require completed `claim_only` provenance before creating `single_save`.
-- [ ] Update task guard tests that intentionally create valid claimed products.
-- [ ] Update frontend product cards to use top-level Chinese lifecycle fields.
-- [ ] Run focused backend and frontend contract tests.
-- [ ] Commit and push as `feat: harden claimed product data model`.
+- [x] Add lifecycle fields to product API responses.
+- [x] Require completed `claim_only` provenance for claimed products.
+- [x] Require completed `claim_only` provenance before creating `single_save`.
+- [x] Update task guard tests that intentionally create valid claimed products.
+- [x] Update frontend product cards to use top-level Chinese lifecycle fields.
+- [x] Run focused backend and frontend contract tests.
+- [x] Commit and push as `feat: harden claimed product data model`.
 
 **Acceptance commands:**
 
@@ -151,6 +152,8 @@ npm run build
 - Main UI does not show QA/test product as saveable.
 
 ### V0.9.9 - Real Data Acquisition Claim Automation
+
+**Status:** Source-level implementation and UX handoff complete; pending fresh real DXM canary.
 
 **Goal:** Stage A becomes a real browser automation path.
 
@@ -177,11 +180,12 @@ npm run build
 
 **Implementation tasks:**
 
-- [ ] Add source URL matching to Data Acquisition claim flow.
-- [ ] Add collection-box verification after claim.
-- [ ] Store source URL, store, platform, claim mark, claimed title, and verification timestamp.
-- [ ] Convert browser exceptions to user-facing failure cards.
-- [ ] Remove any save-stage CTA from the Stage A page.
+- [x] Add source URL matching to Data Acquisition claim flow.
+- [x] Add collection-box verification after claim.
+- [x] Store source URL, store, platform, claim mark, claimed title, and verification timestamp.
+- [x] Convert claim browser failures to user-facing failure cards.
+- [x] Remove any save-stage CTA from the Stage A page.
+- [x] Send completed claim users to `采集箱商品` before save task creation.
 - [ ] Add read-only/click-safety checks before claim action.
 - [ ] Run one real controlled claim canary.
 
@@ -562,17 +566,17 @@ Each version must be committed separately. UI and browser changes require live b
 
 ## 6. Current Next Action
 
-Continue V0.9.8:
+Continue V0.9.9:
 
-- Fix any failing `test_task_start_guard.py` cases caused by the new completed-claim-provenance requirement.
-- Rerun V0.9.8 acceptance commands.
-- Build frontend.
-- Commit and push V0.9.8.
+- Review claim-only read-only/click-safety checks before the actual claim click.
+- Run one real controlled claim canary from Data Acquisition to collection box.
+- Record the claim evidence and verify the UI moves the operator to `采集箱商品` rather than directly to save.
 
-After that, start V0.9.9 with subagents split as:
+After that, start V0.10.0 with subagents split as:
 
 - Backend automation agent: real Data Acquisition claim and collection-box verification.
-- Frontend UX agent: `采集认领` and `采集箱商品` user flow.
+- Backend save agent: collection-box product edit/save-only path.
+- Frontend UX agent: `编辑保存` and save result handoff.
 - Browser/HUD agent: persistent in-browser progress window.
 - Reviewer/main agent: contract tests, browser verification, and release boundary review.
 
