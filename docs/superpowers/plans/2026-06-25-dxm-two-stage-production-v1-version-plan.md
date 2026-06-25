@@ -20,7 +20,7 @@
 
 - V0.9.7 production navigation is complete and pushed.
 - V0.9.8 production data model/provenance work is complete and pushed.
-- V0.9.9 source-URL claim, claimed-product handoff, and operator-facing claim failure copy are complete in code; fresh real DXM canary evidence is still required.
+- V0.9.9 source-URL claim, claimed-product handoff, operator-facing claim failure copy, and claim click-safety checks are complete in code; fresh real DXM canary evidence is still required.
 - Current product boundary remains controlled single-product save-only.
 - The old path "choose a local/test product and save" is invalid for production.
 
@@ -153,7 +153,7 @@ npm run build
 
 ### V0.9.9 - Real Data Acquisition Claim Automation
 
-**Status:** Source-level implementation and UX handoff complete; pending fresh real DXM canary.
+**Status:** Source-level implementation, UX handoff, and claim click-safety checks complete; pending fresh real DXM canary.
 
 **Goal:** Stage A becomes a real browser automation path.
 
@@ -186,7 +186,7 @@ npm run build
 - [x] Convert claim browser failures to user-facing failure cards.
 - [x] Remove any save-stage CTA from the Stage A page.
 - [x] Send completed claim users to `采集箱商品` before save task creation.
-- [ ] Add read-only/click-safety checks before claim action.
+- [x] Add read-only/click-safety checks before claim action.
 - [ ] Run one real controlled claim canary.
 
 **Acceptance commands:**

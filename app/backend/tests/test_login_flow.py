@@ -2039,6 +2039,92 @@ def test_find_data_acquisition_claim_target_prefers_source_url_when_query_text_m
     assert row['matchedBy'] == 'source_url'
 
 
+def test_data_acquisition_claim_click_safety_allows_claim_button(tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    html = '''
+    <html>
+      <head>
+        <style>
+          button, a { display: inline-block; width: 96px; height: 28px; }
+        </style>
+      </head>
+      <body>
+        <section>数据采集 <span>采集箱</span></section>
+        <table>
+          <tbody>
+            <tr class="vxe-body--row">
+              <td>真实采集商品</td>
+              <td><a href="https://detail.1688.com/offer/1013604102950.html">来源</a></td>
+              <td><button>认领</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </body>
+    </html>
+    '''
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={'width': 1280, 'height': 800})
+        page.set_content(html)
+        target = flow._find_data_acquisition_claim_target(
+            page,
+            product_query='真实采集商品',
+            target_source_urls=['https://detail.1688.com/offer/1013604102950.html'],
+        )
+        result = flow._assert_data_acquisition_claim_click_safe(page, target)
+        browser.close()
+
+    assert result['ok'] is True
+    assert '认领' in result['action_text']
+
+
+def test_data_acquisition_claim_click_safety_blocks_save_button_misclick(tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    html = '''
+    <html>
+      <head>
+        <style>
+          button { display: inline-block; width: 120px; height: 28px; }
+        </style>
+      </head>
+      <body>
+        <section>商品编辑页</section>
+        <button id="save">保存</button>
+      </body>
+    </html>
+    '''
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={'width': 1280, 'height': 800})
+        page.set_content(html)
+        rect = page.locator('#save').bounding_box()
+        target = {
+            'rowText': '真实采集商品 认领',
+            'actionText': '认领',
+            'actionRect': {'x': rect['x'], 'y': rect['y'], 'w': rect['width'], 'h': rect['height']},
+        }
+        with pytest.raises(RuntimeError, match='保存、发布或待发布动作'):
+            flow._assert_data_acquisition_claim_click_safe(page, target)
+        browser.close()
+
+
+def test_data_acquisition_claim_click_safety_blocks_forbidden_target_row(tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    target = {
+        'rowText': '真实采集商品 保存并移入待发布 发布',
+        'actionText': '认领',
+        'actionRect': {'x': 1, 'y': 1, 'w': 96, 'h': 24},
+    }
+
+    with pytest.raises(RuntimeError, match='目标商品行包含保存、发布或待发布动作'):
+        flow._assert_data_acquisition_claim_click_safe(None, target)
+
+
 def test_search_data_acquisition_prefers_target_source_url_input(tmp_path):
     live_client = DummyLiveClient(logged_in=True)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')

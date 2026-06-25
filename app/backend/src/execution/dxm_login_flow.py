@@ -39,6 +39,17 @@ ACQUISITION_ACTION_SCREENSHOT_MAP = {
     'claim': SCREENSHOT_DIR / 'dianxiaomi_data_acquisition_claim.png',
     'verify': SCREENSHOT_DIR / 'dianxiaomi_draft_box_claim_verified.png',
 }
+DATA_ACQUISITION_CLAIM_FORBIDDEN_TERMS = (
+    '保存',
+    '发布',
+    '立即发布',
+    '继续发布',
+    '保存并发布',
+    '保存并移入待发布',
+    '移入待发布',
+    '批量发布',
+)
+DATA_ACQUISITION_CLAIM_ACTION_TERMS = ('认领', '领取')
 EDITOR_ACTION_SCREENSHOT_MAP = {
     'fill_editor_required_defaults': SCREENSHOT_DIR / 'dianxiaomi_fill_editor_required_defaults.png',
     'verify_edit_ownership': SCREENSHOT_DIR / 'dianxiaomi_verify_edit_ownership.png',
@@ -844,6 +855,7 @@ class DxmLoginFlow:
         if not target.get('ok'):
             raise RuntimeError(target.get('reason') or '未找到可认领的采集商品')
 
+        safety_result = self._assert_data_acquisition_claim_click_safe(page, target)
         self._click_rect_center(page, target['actionRect'])
         page.wait_for_timeout(1500)
         dialog_result = self._complete_data_acquisition_claim_dialog(
@@ -877,8 +889,95 @@ class DxmLoginFlow:
             'claimed_product': claimed_product,
             'claim_target': target,
             'claim_dialog': dialog_result,
+            'claim_click_safety': safety_result,
             'published': False,
         }
+
+    def _assert_data_acquisition_claim_click_safe(self, page: Page, target: dict[str, Any]) -> dict[str, Any]:
+        target_row_text = str(target.get('rowText') or '')
+        target_action_text = str(target.get('actionText') or '')
+        action_rect = target.get('actionRect') if isinstance(target.get('actionRect'), dict) else {}
+        target_context = f'{target_row_text} {target_action_text}'
+        if self._contains_data_acquisition_claim_forbidden_term(target_context):
+            raise RuntimeError('数据采集认领安全检查未通过：目标商品行包含保存、发布或待发布动作，系统已停止；不会保存或发布。')
+        if not any(term in target_action_text for term in DATA_ACQUISITION_CLAIM_ACTION_TERMS):
+            raise RuntimeError('数据采集认领安全检查未通过：当前点击目标不是认领按钮，系统已停止；不会保存或发布。')
+        if not self._rect_has_clickable_area(action_rect):
+            raise RuntimeError('数据采集认领安全检查未通过：没有拿到可点击的认领按钮位置，系统已停止；不会保存或发布。')
+
+        live_context = page.evaluate(r'''({actionRect}) => {
+          const visible = (el) => {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const textOf = (el) => (el ? (el.innerText || el.textContent || '') : '').replace(/\s+/g, ' ').trim();
+          const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
+          const forbidden = ['保存','发布','立即发布','继续发布','保存并发布','保存并移入待发布','移入待发布','批量发布'];
+          const claimTerms = ['认领', '领取'];
+          const url = String(window.location.href || '');
+          const isDxmPage = /dianxiaomi\.com/i.test(url);
+          const isDataAcquisitionUrl = /dataAcquisition|productCrawl/i.test(url);
+          if (isDxmPage && !isDataAcquisitionUrl) {
+            return {
+              ok: false,
+              reason: '当前页面不是店小秘数据采集页',
+              page_url: url,
+            };
+          }
+          const rect = actionRect || {};
+          const x = Number(rect.x || 0) + Number(rect.w || 0) / 2;
+          const y = Number(rect.y || 0) + Number(rect.h || 0) / 2;
+          const hit = document.elementFromPoint(x, y);
+          if (!visible(hit)) {
+            return {ok:false, reason:'当前认领按钮位置不可见', page_url:url};
+          }
+          const action = hit.closest('button,a,[role="button"]') || hit;
+          const row = hit.closest('tr.vxe-body--row, tr.ant-table-row, tr.el-table__row, tr, .ant-table-row, .el-table__row, .vxe-body--row, [class*="table-row"], [class*="list-item"]');
+          const actionText = textOf(action);
+          const rowText = textOf(row || action);
+          const actionContext = norm(`${actionText} ${action.getAttribute?.('title') || ''} ${action.getAttribute?.('aria-label') || ''} ${action.className || ''}`);
+          const rowContext = norm(rowText);
+          if (forbidden.some(term => actionContext.includes(norm(term)) || rowContext.includes(norm(term)))) {
+            return {
+              ok: false,
+              reason: '点击区域包含保存、发布或待发布动作',
+              action_text: actionText.slice(0, 120),
+              row_text: rowText.slice(0, 260),
+              page_url: url,
+            };
+          }
+          if (!claimTerms.some(term => actionContext.includes(norm(term)))) {
+            return {
+              ok: false,
+              reason: '当前点击目标不是认领按钮',
+              action_text: actionText.slice(0, 120),
+              row_text: rowText.slice(0, 260),
+              page_url: url,
+            };
+          }
+          return {
+            ok: true,
+            action_text: actionText.slice(0, 120),
+            row_text: rowText.slice(0, 260),
+            page_url: url,
+          };
+        }''', {'actionRect': action_rect})
+        if not isinstance(live_context, dict) or not live_context.get('ok'):
+            reason = (live_context or {}).get('reason') if isinstance(live_context, dict) else None
+            raise RuntimeError(f'数据采集认领安全检查未通过：{reason or "当前页面不适合执行认领"}，系统已停止；不会保存或发布。')
+        return live_context
+
+    def _contains_data_acquisition_claim_forbidden_term(self, text: str) -> bool:
+        normalized = ''.join(str(text or '').split())
+        return any(''.join(term.split()) in normalized for term in DATA_ACQUISITION_CLAIM_FORBIDDEN_TERMS)
+
+    def _rect_has_clickable_area(self, rect: dict[str, Any]) -> bool:
+        try:
+            return float(rect.get('w') or 0) > 0 and float(rect.get('h') or 0) > 0
+        except (TypeError, ValueError):
+            return False
 
     def _search_data_acquisition(
         self,
