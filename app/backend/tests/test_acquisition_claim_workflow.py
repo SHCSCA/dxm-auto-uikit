@@ -48,6 +48,36 @@ def test_acquisition_claim_request_creates_claim_stage_task(tmp_path, monkeypatc
     assert task["jobs"][0]["product_id"] is None
     assert task["payload"]["stage"] == "pending_acquisition_claim"
     assert task["payload"]["status"] == "pending"
+    assert repo.list_products(include_fixtures=True) == []
+
+
+def test_acquisition_claim_request_accepts_source_url_hint(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    store = repo.create_store("Dang Kang", "AliExpress")
+    source_url = "https://detail.1688.com/offer/1013604102950.html"
+
+    response = client.post(
+        "/api/acquisition/claim-requests",
+        json={
+            "store_id": store["id"],
+            "source_url": source_url,
+            "claim_mark": "AI-OPS",
+            "template_id": None,
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source_url"] == source_url
+    assert data["keyword"] is None
+    assert data["category_name"] is None
+    assert data["stage"] == "pending_acquisition_claim"
+
+    task = repo.get_task_private(data["task_id"])
+    assert task["mode"] == "claim_only"
+    assert task["jobs"][0]["product_id"] is None
+    assert task["payload"]["source_url"] == source_url
+    assert repo.list_products(include_fixtures=True) == []
 
 
 def test_acquisition_claim_request_requires_product_hint(tmp_path, monkeypatch):
@@ -66,7 +96,7 @@ def test_acquisition_claim_request_requires_product_hint(tmp_path, monkeypatch):
     )
 
     assert response.status_code == 400
-    assert "搜索关键词或认领类目" in response.json()["detail"]
+    assert "源商品链接、搜索关键词或认领类目" in response.json()["detail"]
 
 
 def test_single_save_task_requires_claimed_draft_product(tmp_path, monkeypatch):
@@ -183,7 +213,11 @@ def test_single_save_task_accepts_claimed_draft_product(tmp_path, monkeypatch):
             "currency": "USD",
             "sku_count": 1,
             "image_count": 1,
-            "payload": {"source": "dxm_data_acquisition", "draft_box_verified": True},
+            "payload": {
+                "source": "dxm_data_acquisition",
+                "source_url": "https://detail.1688.com/offer/1013604102950.html",
+                "draft_box_verified": True,
+            },
         }
     )
 
@@ -349,6 +383,25 @@ def test_claimed_products_endpoint_returns_only_verified_real_claimed_products(t
             "sku_count": 1,
             "image_count": 1,
             "payload": {"source": "dxm_data_acquisition", "draft_box_verified": True},
+        }
+    )
+    repo.create_product(
+        {
+            "title": "无源链接采集商品",
+            "source": "dxm_data_acquisition",
+            "status": "claimed_to_draft",
+            "category_name": "立牌类谷子",
+            "price": 9.9,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {
+                "source": "dxm_data_acquisition",
+                "store_id": store["id"],
+                "store_name": "Dang Kang",
+                "claim_task_id": 43,
+                "draft_box_verified": True,
+            },
         }
     )
 

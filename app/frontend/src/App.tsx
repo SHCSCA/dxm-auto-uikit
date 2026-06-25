@@ -668,6 +668,7 @@ export default function App() {
         store_id: request.storeId,
         keyword: request.keyword,
         category_name: request.categoryName,
+        source_url: request.sourceUrl,
         claim_mark: request.claimMark,
         template_id: request.templateId ?? null,
       })
@@ -1224,7 +1225,6 @@ export default function App() {
             lastRequest={visibleAcquisitionClaimRequest}
             onCreateClaimRequest={(request) => { void createAcquisitionClaimRequest(request) }}
             onNavigateDataAcquisition={() => { void navigateDxmTarget('data_acquisition') }}
-            onShowDraftEdit={() => setActiveSection('draft_edit_save')}
             onShowExecutionConsole={() => setActiveSection('start_save')}
           />
         )

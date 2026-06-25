@@ -946,7 +946,7 @@ class V1TaskRunner:
         product_query = self._source_title(job.get("product_id"))
         acquisition_query = self._acquisition_product_query(task, job)
         acquisition_category = self._acquisition_category_name(task)
-        target_source_urls = self._source_urls(job.get("product_id"))
+        target_source_urls = self._target_source_urls(task, job)
         store_name = self._store_name(task)
         actions = {
             StateName.PRECHECK_SESSION: ("check_login_state", "E101", "店小秘登录态检查失败", lambda: self.workflow_adapter.check_login_state()),
@@ -960,6 +960,7 @@ class V1TaskRunner:
                     product_query=acquisition_query,
                     category_name=acquisition_category,
                     store_name=store_name,
+                    target_source_urls=target_source_urls,
                 ),
             ),
             StateName.VERIFY_DRAFT_BOX_CLAIM: (
@@ -971,6 +972,7 @@ class V1TaskRunner:
                     product_query=acquisition_query,
                     category_name=acquisition_category,
                     store_name=store_name,
+                    target_source_urls=target_source_urls,
                 ),
             ),
             StateName.OPEN_DRAFT_LIST: ("open_draft_box", "E201", "进入采集箱失败", lambda: self.workflow_adapter.open_draft_box()),
@@ -1458,7 +1460,7 @@ class V1TaskRunner:
 
     def _acquisition_product_query(self, task: Mapping[str, Any], job: Mapping[str, Any]) -> str:
         payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
-        for value in (payload.get("keyword"), payload.get("source_title"), payload.get("title")):
+        for value in (payload.get("keyword"), payload.get("source_url"), payload.get("url"), payload.get("source_title"), payload.get("title")):
             if str(value or "").strip():
                 return str(value).strip()
         return self._source_title(job.get("product_id"))
@@ -1475,7 +1477,9 @@ class V1TaskRunner:
         claim_mark: str,
     ) -> dict[str, Any]:
         evidence = workflow_result.get("evidence") if isinstance(workflow_result.get("evidence"), Mapping) else {}
-        claimed = evidence.get("claimed_product") if isinstance(evidence.get("claimed_product"), Mapping) else {}
+        claimed = evidence.get("claimed_product") if isinstance(evidence.get("claimed_product"), Mapping) else None
+        if not claimed:
+            raise V1ExecutionError("E202", "采集认领缺少真实商品证据", "draft-box verification did not return claimed_product evidence")
         payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
         title = (
             claimed.get("title")
@@ -1485,7 +1489,9 @@ class V1TaskRunner:
             or "店小秘采集认领商品"
         )
         category_name = claimed.get("category_name") or payload.get("category_name") or "未分类"
-        source_url = claimed.get("source_url") or evidence.get("source_url") or payload.get("source_url")
+        source_url = str(claimed.get("source_url") or "").strip()
+        if not source_url:
+            raise V1ExecutionError("E202", "采集认领缺少源商品链接", "draft-box verification did not return claimed_product.source_url")
         product_payload = {
             "source": "dxm_data_acquisition",
             "store_id": task.get("store_id") or payload.get("store_id"),
@@ -1524,6 +1530,16 @@ class V1TaskRunner:
     def _source_urls(self, product_id: int | None) -> list[str]:
         product = self._product(product_id)
         payload = (product or {}).get("payload") or {}
+        return self._payload_source_urls(payload)
+
+    def _target_source_urls(self, task: Mapping[str, Any], job: Mapping[str, Any]) -> list[str]:
+        product_urls = self._source_urls(job.get("product_id"))
+        if product_urls:
+            return product_urls
+        payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+        return self._payload_source_urls(payload)
+
+    def _payload_source_urls(self, payload: Mapping[str, Any] | dict[str, Any]) -> list[str]:
         values: list[Any] = []
         if isinstance(payload, Mapping):
             values.extend([payload.get("source_url"), payload.get("url")])

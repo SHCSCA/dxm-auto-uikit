@@ -42,11 +42,39 @@ class FakeWorkflowAdapter:
     def open_data_acquisition(self):
         return self._record("open_data_acquisition")
 
-    def claim_from_data_acquisition(self, claim_mark, product_query=None, category_name=None, store_name=None):
-        return self._record("claim_from_data_acquisition", claim_mark, product_query, category_name, store_name)
+    def claim_from_data_acquisition(
+        self,
+        claim_mark,
+        product_query=None,
+        category_name=None,
+        store_name=None,
+        target_source_urls=None,
+    ):
+        return self._record(
+            "claim_from_data_acquisition",
+            claim_mark,
+            product_query,
+            category_name,
+            store_name,
+            target_source_urls,
+        )
 
-    def verify_draft_box_claim(self, claim_mark, product_query=None, category_name=None, store_name=None):
-        return self._record("verify_draft_box_claim", claim_mark, product_query, category_name, store_name)
+    def verify_draft_box_claim(
+        self,
+        claim_mark,
+        product_query=None,
+        category_name=None,
+        store_name=None,
+        target_source_urls=None,
+    ):
+        return self._record(
+            "verify_draft_box_claim",
+            claim_mark,
+            product_query,
+            category_name,
+            store_name,
+            target_source_urls,
+        )
 
     def claim_product(self, note_text, product_query=None, store_name=None, target_source_urls=None):
         return self._record("claim_product", note_text, product_query, store_name, target_source_urls)
@@ -787,6 +815,7 @@ def test_claim_only_calls_adapter_without_opening_editor_or_saving(v1_db):
         "store_id": store["id"],
         "keyword": "Hazbin Hotel 立牌",
         "category_name": "立牌类谷子",
+        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
         "claim_mark": "AI认领",
         "template_id": "template-1",
     })
@@ -798,8 +827,22 @@ def test_claim_only_calls_adapter_without_opening_editor_or_saving(v1_db):
     assert adapter.calls == [
         ("check_login_state",),
         ("open_data_acquisition",),
-        ("claim_from_data_acquisition", f"AI认领-{task['id']}", "Hazbin Hotel 立牌", "立牌类谷子", "Dang Kang"),
-        ("verify_draft_box_claim", f"AI认领-{task['id']}", "Hazbin Hotel 立牌", "立牌类谷子", "Dang Kang"),
+        (
+            "claim_from_data_acquisition",
+            f"AI认领-{task['id']}",
+            "Hazbin Hotel 立牌",
+            "立牌类谷子",
+            "Dang Kang",
+            ["https://detail.1688.com/offer/from-acquisition.html"],
+        ),
+        (
+            "verify_draft_box_claim",
+            f"AI认领-{task['id']}",
+            "Hazbin Hotel 立牌",
+            "立牌类谷子",
+            "Dang Kang",
+            ["https://detail.1688.com/offer/from-acquisition.html"],
+        ),
     ]
     assert not any(call[0] in {"open_editor", "save_only"} for call in adapter.calls)
     reports = repo.list_reports(task["id"])
@@ -829,6 +872,69 @@ def test_claim_only_calls_adapter_without_opening_editor_or_saving(v1_db):
     assert refreshed_task["payload"]["claimed_product_category_name"] == "立牌类谷子"
     assert refreshed_task["payload"]["draft_box_verified"] is True
     assert "采集箱编辑保存" in refreshed_task["payload"]["next_step"]
+
+
+def test_claim_only_does_not_record_claimed_product_without_source_url(v1_db):
+    class MissingSourceUrlAdapter(FakeWorkflowAdapter):
+        def _record(self, action, *args):
+            result = super()._record(action, *args)
+            if action == "verify_draft_box_claim":
+                evidence = result.get("evidence") or {}
+                claimed_product = evidence.get("claimed_product") or {}
+                claimed_product.pop("source_url", None)
+            return result
+
+    repo = Repository()
+    store = repo.create_store("Dang Kang", "AliExpress")
+    task = repo.create_acquisition_claim_request({
+        "store_id": store["id"],
+        "keyword": "Hazbin Hotel 立牌",
+        "category_name": "立牌类谷子",
+        "claim_mark": "AI认领",
+        "template_id": "template-1",
+    })
+    manager = DummyManager()
+    adapter = MissingSourceUrlAdapter()
+
+    asyncio.run(V1TaskRunner(repo, manager, workflow_adapter=adapter).run_task(task["id"]))
+
+    refreshed = repo.get_task_private(task["id"])
+    assert refreshed["status"] == "failed"
+    assert repo.list_claimed_draft_products() == []
+    assert repo.list_products(include_fixtures=True) == []
+
+
+def test_claim_only_uses_source_url_as_acquisition_query_when_no_keyword(v1_db):
+    repo = Repository()
+    store = repo.create_store("Dang Kang", "AliExpress")
+    source_url = "https://detail.1688.com/offer/from-acquisition.html"
+    task = repo.create_acquisition_claim_request({
+        "store_id": store["id"],
+        "source_url": source_url,
+        "claim_mark": "AI认领",
+        "template_id": "template-1",
+    })
+    manager = DummyManager()
+    adapter = FakeWorkflowAdapter()
+
+    asyncio.run(V1TaskRunner(repo, manager, workflow_adapter=adapter).run_task(task["id"]))
+
+    assert adapter.calls[2] == (
+        "claim_from_data_acquisition",
+        f"AI认领-{task['id']}",
+        source_url,
+        None,
+        "Dang Kang",
+        [source_url],
+    )
+    assert adapter.calls[3] == (
+        "verify_draft_box_claim",
+        f"AI认领-{task['id']}",
+        source_url,
+        None,
+        "Dang Kang",
+        [source_url],
+    )
 
 
 def test_single_save_fails_when_adapter_lacks_media_or_compliance_methods(v1_db):

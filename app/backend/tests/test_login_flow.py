@@ -1995,6 +1995,50 @@ def test_find_draft_box_row_does_not_fallback_when_target_source_url_misses(tmp_
         browser.close()
 
 
+def test_find_data_acquisition_claim_target_prefers_source_url_when_query_text_misses(tmp_path):
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as exc:
+        pytest.skip(f'Playwright unavailable: {exc}')
+
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    html = '''
+    <html>
+      <head>
+        <style>
+          button, a { display: inline-block; width: 96px; height: 24px; }
+        </style>
+      </head>
+      <body>
+        <table>
+          <tbody>
+            <tr class="vxe-body--row">
+              <td>店小秘页面标题可能已被平台改写</td>
+              <td><a href="https://detail.1688.com/offer/1013604102950.html">来源</a></td>
+              <td><button>认领</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </body>
+    </html>
+    '''
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={'width': 1280, 'height': 800})
+        page.set_content(html)
+        row = flow._find_data_acquisition_claim_target(
+            page,
+            product_query='未指定商品',
+            target_source_urls=['https://detail.1688.com/offer/1013604102950.html'],
+        )
+        browser.close()
+
+    assert row['ok'] is True
+    assert row['matchedBy'] == 'source_url'
+
+
 def test_add_note_verifies_only_target_row(monkeypatch, tmp_path):
     live_client = DummyLiveClient(logged_in=True)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')

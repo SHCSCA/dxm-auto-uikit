@@ -378,6 +378,7 @@ def create_acquisition_claim_request(payload: AcquisitionClaimRequest):
         'stage': task_payload.get('stage') or 'pending_acquisition_claim',
         'status': task_payload.get('status') or 'pending',
         'store_id': task_payload.get('store_id'),
+        'source_url': task_payload.get('source_url'),
         'keyword': task_payload.get('keyword'),
         'category_name': task_payload.get('category_name'),
         'claim_mark': task_payload.get('claim_mark'),
@@ -397,13 +398,15 @@ def create_acquisition_claim_request(payload: AcquisitionClaimRequest):
 
 def _normalize_acquisition_claim_request(payload: AcquisitionClaimRequest) -> dict[str, Any]:
     data = payload.model_dump()
+    source_url = str(data.get('source_url') or '').strip()
     keyword = str(data.get('keyword') or '').strip()
     category_name = str(data.get('category_name') or '').strip()
     claim_mark = str(data.get('claim_mark') or '').strip()
     if not claim_mark:
         raise HTTPException(status_code=400, detail='请填写认领标记。')
-    if not keyword and not category_name:
-        raise HTTPException(status_code=400, detail='请填写搜索关键词或认领类目，Agent 才能定位真实采集商品。')
+    if not source_url and not keyword and not category_name:
+        raise HTTPException(status_code=400, detail='请填写源商品链接、搜索关键词或认领类目，Agent 才能定位真实采集商品。')
+    data['source_url'] = source_url or None
     data['keyword'] = keyword or None
     data['category_name'] = category_name or None
     data['claim_mark'] = claim_mark
@@ -2036,6 +2039,24 @@ def _assert_single_save_uses_claimed_draft_product(product_ids: list[int]) -> No
             detail=(
                 '编辑保存必须先通过采集箱验证。'
                 '请确认商品已进入采集箱后，再创建单商品只保存任务。'
+            ),
+        )
+    source_url = ''
+    for key in ('source_url', 'url'):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            source_url = value.strip()
+            break
+    if not source_url:
+        values = payload.get('source_urls')
+        if isinstance(values, list):
+            source_url = next((str(value).strip() for value in values if str(value or '').strip()), '')
+    if not source_url:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                '编辑保存必须带有真实源商品链接。'
+                '请先完成“数据采集认领”，并确认采集箱验证返回源商品链接后再创建任务。'
             ),
         )
 

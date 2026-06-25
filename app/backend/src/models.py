@@ -40,6 +40,7 @@ class ProductCreate(BaseModel):
 
 class AcquisitionClaimRequest(BaseModel):
     store_id: int
+    source_url: str | None = None
     keyword: str | None = None
     category_name: str | None = None
     claim_mark: str

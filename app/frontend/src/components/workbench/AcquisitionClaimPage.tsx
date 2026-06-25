@@ -8,7 +8,6 @@ type AcquisitionClaimPageProps = {
   lastRequest: AcquisitionClaimResponse | null
   onCreateClaimRequest: (request: AcquisitionClaimCreateRequest) => void
   onNavigateDataAcquisition: () => void
-  onShowDraftEdit: () => void
   onShowExecutionConsole: () => void
 }
 
@@ -26,13 +25,13 @@ export function AcquisitionClaimPage({
   lastRequest,
   onCreateClaimRequest,
   onNavigateDataAcquisition,
-  onShowDraftEdit,
   onShowExecutionConsole,
 }: AcquisitionClaimPageProps) {
   const defaultStoreId = stores[0]?.id ? String(stores[0].id) : ''
   const [storeId, setStoreId] = useState(defaultStoreId)
   const [keyword, setKeyword] = useState('')
   const [categoryName, setCategoryName] = useState('')
+  const [sourceUrl, setSourceUrl] = useState('')
   const [claimMark, setClaimMark] = useState('AI-OPS')
   const [templateId, setTemplateId] = useState('')
   const selectedStore = useMemo(
@@ -40,7 +39,7 @@ export function AcquisitionClaimPage({
     [stores, storeId],
   )
   const enabledTemplates = templates.filter((template) => template.is_enabled)
-  const hasProductHint = Boolean(keyword.trim() || categoryName.trim())
+  const hasProductHint = Boolean(keyword.trim() || categoryName.trim() || sourceUrl.trim())
   const canSubmit = Boolean(selectedStore && claimMark.trim() && hasProductHint)
   const claimCompleted = Boolean(
     lastRequest && (
@@ -71,6 +70,7 @@ export function AcquisitionClaimPage({
       storeId: selectedStore.id,
       keyword: keyword.trim() || undefined,
       categoryName: categoryName.trim() || undefined,
+      sourceUrl: sourceUrl.trim() || undefined,
       claimMark: claimMark.trim(),
       templateId: templateId ? Number(templateId) : null,
     })
@@ -117,6 +117,10 @@ export function AcquisitionClaimPage({
             <input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="用于在数据采集中定位商品" disabled={busy} />
           </label>
           <label>
+            <span>来源链接</span>
+            <input value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="1688、Temu 或其他采集来源链接" disabled={busy} />
+          </label>
+          <label>
             <span>认领类目</span>
             <input value={categoryName} onChange={(event) => setCategoryName(event.target.value)} placeholder="例如：立牌类谷子" disabled={busy} />
           </label>
@@ -137,7 +141,7 @@ export function AcquisitionClaimPage({
           </label>
         </div>
         {!hasProductHint && (
-          <p className="form-hint">请至少填写搜索关键词或认领类目，否则无法定位真实采集商品。</p>
+          <p className="form-hint">请至少填写来源链接、搜索关键词或认领类目，否则无法定位真实采集商品。</p>
         )}
 
         <div className="action-row">
@@ -147,11 +151,6 @@ export function AcquisitionClaimPage({
           {lastRequest && (
             <button className="button button--secondary" type="button" onClick={onShowExecutionConsole} disabled={busy}>
               {claimCompleted ? '查看执行记录' : '开始认领到采集箱'}
-            </button>
-          )}
-          {claimCompleted && (
-            <button className="button button--primary" type="button" onClick={onShowDraftEdit}>
-              进入采集箱编辑保存
             </button>
           )}
         </div>
@@ -167,7 +166,7 @@ export function AcquisitionClaimPage({
             <span><strong>店铺</strong><b>{selectedStore?.name ?? lastRequest.store_id}</b></span>
             <span><strong>阶段</strong><b>{claimCompleted ? '商品已进入采集箱' : '等待启动真实浏览器认领'}</b></span>
             <span><strong>标记</strong><b>{lastRequest.claim_mark}</b></span>
-            <span><strong>下一步</strong><b>{claimCompleted ? '进入采集箱编辑保存' : '开始认领到采集箱'}</b></span>
+            <span><strong>下一步</strong><b>{claimCompleted ? '去“采集箱商品”选择该商品' : '开始认领到采集箱'}</b></span>
             {claimCompleted && <span><strong>采集箱商品</strong><b>{lastRequest.claimed_product_title || `商品 #${lastRequest.claimed_product_id}`}</b></span>}
             {claimCompleted && <span><strong>采集箱验证</strong><b>{draftBoxVerified ? '已通过采集箱验证' : '等待采集箱验证'}</b></span>}
             {claimCompleted && <span><strong>商品来源</strong><b>{claimedSourceLabel}</b></span>}

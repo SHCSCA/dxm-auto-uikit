@@ -76,7 +76,7 @@ export type Product = { id: number; title: string; category_name: string; price:
 export type TaskJob = { id: number; task_id?: number; product_id?: number | null; status: string; current_step_code?: string | null; current_step_name?: string | null; error_code?: string | null; error_message?: string | null; [key: string]: unknown }
 export type Task = { id: number; name: string; status: string; mode: string; publish_scene: string; store_id?: number | null; total_jobs: number; completed_jobs: number; failed_jobs: number; payload: { product_ids?: number[]; store_name?: string; category_name?: string; image?: { eu_outer_package_filename?: string }; [key: string]: unknown }; jobs?: TaskJob[] }
 export type RealTaskCreateRequest = { storeId: number; mode: 'probe' | 'single_save'; productIds: number[] }
-export type AcquisitionClaimCreateRequest = { storeId: number; keyword?: string; categoryName?: string; claimMark: string; templateId?: number | null }
+export type AcquisitionClaimCreateRequest = { storeId: number; keyword?: string; categoryName?: string; sourceUrl?: string; claimMark: string; templateId?: number | null }
 export type AcquisitionClaimResponse = {
   id: number
   task_id: number
@@ -85,6 +85,7 @@ export type AcquisitionClaimResponse = {
   store_id: number
   keyword?: string | null
   category_name?: string | null
+  source_url?: string | null
   claim_mark: string
   template_id?: number | null
   claimed_product_id?: number | null

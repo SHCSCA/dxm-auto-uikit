@@ -39,6 +39,7 @@ class DxmWorkflowAdapter:
         product_query: str | None = None,
         category_name: str | None = None,
         store_name: str | None = None,
+        target_source_urls: list[str] | None = None,
     ) -> dict[str, Any]:
         return self._result(
             'claim_from_data_acquisition',
@@ -47,6 +48,7 @@ class DxmWorkflowAdapter:
                 product_query=product_query,
                 category_name=category_name,
                 store_name=store_name,
+                target_source_urls=target_source_urls,
             ),
         )
 
@@ -56,6 +58,7 @@ class DxmWorkflowAdapter:
         product_query: str | None = None,
         category_name: str | None = None,
         store_name: str | None = None,
+        target_source_urls: list[str] | None = None,
     ) -> dict[str, Any]:
         return self._result(
             'verify_draft_box_claim',
@@ -64,6 +67,7 @@ class DxmWorkflowAdapter:
                 product_query=product_query,
                 category_name=category_name,
                 store_name=store_name,
+                target_source_urls=target_source_urls,
             ),
         )
 

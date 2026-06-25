@@ -413,6 +413,7 @@ class DxmLoginFlow:
         product_query: str | None = None,
         category_name: str | None = None,
         store_name: str | None = None,
+        target_source_urls: list[str] | None = None,
     ) -> dict[str, Any]:
         try:
             result = self._perform_data_acquisition_claim(
@@ -420,6 +421,7 @@ class DxmLoginFlow:
                 product_query=product_query,
                 category_name=category_name,
                 store_name=store_name,
+                target_source_urls=target_source_urls,
             )
         except Exception as exc:
             state = self._error_state(
@@ -447,6 +449,7 @@ class DxmLoginFlow:
             'product_query': product_query,
             'category_name': category_name,
             'store_name': store_name,
+            'target_source_urls': result.get('target_source_urls', []),
             'claimed_product': result.get('claimed_product'),
         }
         self._write_state(state)
@@ -458,6 +461,7 @@ class DxmLoginFlow:
         product_query: str | None = None,
         category_name: str | None = None,
         store_name: str | None = None,
+        target_source_urls: list[str] | None = None,
     ) -> dict[str, Any]:
         try:
             result = self._verify_draft_box_claim(
@@ -465,6 +469,7 @@ class DxmLoginFlow:
                 product_query=product_query,
                 category_name=category_name,
                 store_name=store_name,
+                target_source_urls=target_source_urls,
             )
         except Exception as exc:
             state = self._error_state(
@@ -492,6 +497,7 @@ class DxmLoginFlow:
             'product_query': product_query,
             'category_name': category_name,
             'store_name': store_name,
+            'target_source_urls': result.get('target_source_urls', []),
             'claimed_product': result.get('claimed_product'),
         }
         self._write_state(state)
@@ -802,6 +808,7 @@ class DxmLoginFlow:
         product_query: str | None = None,
         category_name: str | None = None,
         store_name: str | None = None,
+        target_source_urls: list[str] | None = None,
     ) -> dict[str, Any]:
         page = self._ensure_page_with_cookies()
         self._goto_with_live_hud(page, WORKFLOW_TARGETS['data_acquisition']['url'], wait_until='domcontentloaded', timeout=45000)
@@ -823,6 +830,7 @@ class DxmLoginFlow:
             product_query=product_query,
             category_name=category_name,
             store_name=store_name,
+            target_source_urls=target_source_urls,
         )
         if not target.get('ok'):
             raise RuntimeError(target.get('reason') or '未找到可认领的采集商品')
@@ -855,6 +863,7 @@ class DxmLoginFlow:
             'product_query': product_query,
             'category_name': category_name,
             'store_name': store_name,
+            'target_source_urls': target.get('sourceUrls', []) or target_source_urls or [],
             'claimed_product': claimed_product,
             'claim_target': target,
             'claim_dialog': dialog_result,
@@ -925,8 +934,9 @@ class DxmLoginFlow:
         product_query: str | None = None,
         category_name: str | None = None,
         store_name: str | None = None,
+        target_source_urls: list[str] | None = None,
     ) -> dict[str, Any]:
-        return page.evaluate(r'''({productQuery, categoryName, storeName}) => {
+        return page.evaluate(r'''({productQuery, categoryName, storeName, targetSourceUrls}) => {
           const visible = (el) => {
             const r = el.getBoundingClientRect();
             const style = window.getComputedStyle(el);
@@ -942,6 +952,12 @@ class DxmLoginFlow:
           const sourceUrls = (row) => Array.from(row.querySelectorAll('a[href]'))
             .map(a => String(a.href || a.getAttribute('href') || ''))
             .filter(url => url.includes('detail.1688.com') || url.includes('yangkeduo.com') || url.includes('http'));
+          const targetUrls = Array.isArray(targetSourceUrls) ? targetSourceUrls.filter(Boolean).map(String) : [];
+          const hasTargetSource = (row) => {
+            if (!targetUrls.length) return false;
+            const urls = sourceUrls(row);
+            return urls.some(url => targetUrls.some(target => url === target || url.includes(target) || target.includes(url)));
+          };
           const rows = Array.from(document.querySelectorAll(
             'tr.vxe-body--row, tr.ant-table-row, tr.el-table__row, tr, .ant-table-row, .el-table__row, .vxe-body--row, [class*="table-row"], [class*="list-item"]'
           )).filter(visible);
@@ -982,8 +998,13 @@ class DxmLoginFlow:
             const compact = norm(rowText);
             const queryMatched = query ? (rowText.includes(query) || compact.includes(norm(query))) : false;
             const categoryMatched = category ? (rowText.includes(category) || compact.includes(norm(category))) : false;
-            if (query && !queryMatched) return;
-            if (!query && category && !categoryMatched) return;
+            const sourceMatched = hasTargetSource(row);
+            if (targetUrls.length) {
+              if (!sourceMatched) return;
+            } else {
+              if (query && !queryMatched) return;
+              if (!query && category && !categoryMatched) return;
+            }
             const lines = rowText.split(/\s{2,}|\n/).map(s => s.trim()).filter(Boolean);
             candidates.push({
               ok: true,
@@ -994,7 +1015,7 @@ class DxmLoginFlow:
               sourceUrls: sourceUrls(row),
               actionText: actions[0].text || actions[0].title,
               actionRect: actions[0].rect,
-              matchedBy: queryMatched ? 'product_query' : (categoryMatched ? 'category_name' : 'first_claimable'),
+              matchedBy: sourceMatched ? 'source_url' : (queryMatched ? 'product_query' : (categoryMatched ? 'category_name' : 'first_claimable')),
             });
           });
           if (!candidates.length) {
@@ -1022,7 +1043,7 @@ class DxmLoginFlow:
             };
           }
           return candidates[0];
-        }''', {'productQuery': product_query, 'categoryName': category_name, 'storeName': store_name})
+        }''', {'productQuery': product_query, 'categoryName': category_name, 'storeName': store_name, 'targetSourceUrls': target_source_urls or []})
 
     def _complete_data_acquisition_claim_dialog(
         self,
@@ -1085,12 +1106,15 @@ class DxmLoginFlow:
         product_query: str | None = None,
         category_name: str | None = None,
         store_name: str | None = None,
+        target_source_urls: list[str] | None = None,
     ) -> dict[str, Any]:
         state = self.get_state()
         claimed = state.get('claimed_product') if isinstance(state.get('claimed_product'), dict) else {}
         product_query = product_query or claimed.get('title')
         category_name = category_name or claimed.get('category_name')
-        target_source_urls = [claimed.get('source_url')] if claimed.get('source_url') else []
+        resolved_target_source_urls = list(target_source_urls or [])
+        if claimed.get('source_url'):
+            resolved_target_source_urls.append(claimed.get('source_url'))
         page = self._ensure_page_with_cookies()
         self._goto_with_live_hud(page, WORKFLOW_TARGETS['draft_box']['url'], wait_until='domcontentloaded', timeout=45000)
         self._wait_for_page_ready(
@@ -1107,7 +1131,7 @@ class DxmLoginFlow:
                 product_query,
                 store_name=store_name,
                 claim_mark=claim_mark,
-                target_source_urls=target_source_urls,
+                target_source_urls=resolved_target_source_urls,
             )
         except RuntimeError:
             self._search_draft_box(page, product_query=category_name, store_name=store_name)
@@ -1115,7 +1139,7 @@ class DxmLoginFlow:
                 page,
                 category_name or product_query,
                 store_name=store_name,
-                target_source_urls=target_source_urls,
+                target_source_urls=resolved_target_source_urls,
             )
         screenshot_path = ACQUISITION_ACTION_SCREENSHOT_MAP['verify']
         page.screenshot(path=str(screenshot_path), full_page=True)
@@ -1132,7 +1156,7 @@ class DxmLoginFlow:
             'claimed_product': {
                 'title': product_query or claimed.get('title') or category_name or '店小秘采集商品',
                 'category_name': category_name,
-                'source_url': (row_info.get('sourceUrls') or target_source_urls or [None])[0],
+                'source_url': (row_info.get('sourceUrls') or resolved_target_source_urls or [None])[0],
                 'row_text': row_info.get('rowText'),
             },
             'published': False,

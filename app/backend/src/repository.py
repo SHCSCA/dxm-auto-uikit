@@ -118,11 +118,14 @@ class Repository:
         for product in products:
             payload = product.get('payload') if isinstance(product.get('payload'), dict) else {}
             source = str(payload.get('source') or product.get('source') or '').strip()
+            source_url = self._first_source_url(payload)
             if product.get('status') not in claimed_statuses:
                 continue
             if source != 'dxm_data_acquisition':
                 continue
             if payload.get('draft_box_verified') is not True:
+                continue
+            if not source_url:
                 continue
             eligible.append(product)
         return eligible
@@ -154,6 +157,7 @@ class Repository:
             'status': 'pending',
             'store_id': data['store_id'],
             'store_name': store_name or None,
+            'source_url': data.get('source_url'),
             'keyword': data.get('keyword'),
             'category_name': data.get('category_name'),
             'claim_mark': data['claim_mark'],

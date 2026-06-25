@@ -2,50 +2,52 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 把 DXM Agent Console 从测试型工作台升级为客户可交付的生产级两段式真实浏览器自动化产品。
+**Goal:** 把 DXM Agent Console 交付为生产级真实店小秘两段式自动化产品：第一段从数据采集认领到采集箱，第二段从采集箱编辑商品并只保存。
 
-**Architecture:** 保持现有 React/Vite/Electron/FastAPI/Playwright 架构。产品主路径固定为两段：第一段从店小秘数据采集认领到采集箱，第二段从采集箱编辑商品并只保存；普通用户界面只展示业务动作，L2、probe、HAR、run-id、路径、原始异常等全部下沉到维护诊断。
+**Architecture:** 保持现有 React/Vite/Electron/FastAPI/SQLite/Playwright 架构，不重写技术栈。产品主路径按业务阶段拆分，普通用户只看到“登录、数据采集认领、采集箱商品、模板、只保存、结果”，`claim_only`、`single_save`、L2、probe、run-id、HAR、原始异常等工程概念只进入维护诊断。
 
-**Tech Stack:** React 18 + TypeScript + Vite, Electron portable desktop, FastAPI, SQLite repository, Playwright headed browser automation, pytest contract tests, PowerShell delivery verification.
+**Tech Stack:** React 18 + TypeScript + Vite, Electron portable desktop, FastAPI, SQLite repository, Playwright headed browser automation, pytest contract tests, PowerShell desktop package verification.
 
 ---
 
-## 0. 当前判断
-
-**当前分支:** `feature/dxm-production-two-stage`
+## 0. 当前状态
 
 **当前有效工作树:** `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage`
 
-**当前完成度判断:** 约 72%。这不是交付结论，只表示核心方向和部分代码已转向两段式。距离“客户可正常使用”仍缺少真实两段式端到端验收、模板中心生产化、浏览器 Agent 常驻稳定、免安装包重新验收。
+**当前分支:** `feature/dxm-production-two-stage`
 
-**已经具备:**
-- 前端已有两段式菜单雏形。
-- 后端已有 `claim_only` 和 `single_save` 两类任务。
-- 已有 `/api/acquisition/claimed-products` 用于从真实认领商品进入第二段。
-- 模板中心已有中文分区和执行取值预览基础。
-- Electron 免安装包已有构建基础。
+**最近已完成提交:**
 
-**主要缺口:**
-- 真实业务逻辑还没有完全按“数据采集认领 -> 采集箱编辑保存”收口。
-- QA 脚本和部分文案仍残留 `single_save` 直接创建、测试商品、L2/probe 等工程概念。
-- 模板中心还不像成熟产品，用户不清楚当前用哪套模板、是否已保存、执行实际取哪个值。
-- 浏览器 Agent 需要常开、可见、可接管，HUD 需要跨页面常驻。
-- 结果、日志、失败原因仍偏技术，不适合客户自助使用。
-- 免安装 EXE 需要基于当前分支重新打包、验证、给出路径和 hash。
+- `bd24b1e test: align browser QA with two-stage workflow`
+- `1de8a88 feat: simplify two-stage production navigation`
 
-## 1. 产品边界
+**当前完成度:** 约 74%。这不是可交付结论，只表示方向、导航、QA 脚本和部分两段式底座已转向生产路径。
 
-### 允许范围
+**现在最重要的事实:**
 
-1. 打开真实店小秘浏览器。
-2. 用户登录或本机记住账号密码后自动填充。
-3. 第一段：在店小秘数据采集页认领真实商品到采集箱。
-4. 第二段：从已认领的采集箱商品打开编辑页。
-5. 按用户选择的模板填写编辑页。
-6. 人工确认后只点击“保存”。
-7. 检查保存成功和未发布证明。
+1. 正确业务逻辑不是“本地选测试商品然后保存”，而是“店小秘数据采集认领到采集箱，再从采集箱编辑保存”。
+2. 第一段页面不能出现第二段保存入口；认领完成后只能提示“去采集箱商品页选择已认领商品”。
+3. 第二段只能从真实采集箱确认商品创建保存任务，不能从 fixture、手工导入、旧失败任务、伪造 payload 启动。
+4. 认领完成必须有 `source_url`、店铺、认领标记、采集箱验证证据；缺任一关键证据不能生成可保存商品。
+5. 浏览器必须显式常开，HUD 必须常驻显示中文业务进度，失败时保留现场并允许人工接管。
+6. 模板中心必须是可维护的多套中文模板系统，不是写死配置或英文 key 表单。
 
-### 禁止范围
+## 1. 最终交付边界
+
+### 1.1 允许交付
+
+1. 免安装 EXE 启动 DXM Agent Console。
+2. 打开真实店小秘浏览器。
+3. 本机加密记住店小秘账号密码。
+4. 用户人工处理验证码、登录异常和必要确认。
+5. 第一段：在真实店小秘数据采集页定位商品并认领到采集箱。
+6. 第一段完成后：记录真实 claimed product、来源链接、店铺、认领标记、采集箱确认。
+7. 第二段：从已确认的采集箱商品创建单商品只保存任务。
+8. 模板中心：按店小秘编辑页分区填写，支持多套模板和执行取值预览。
+9. 真实浏览器 Agent 填写编辑页字段，只点击“保存”。
+10. 结果页展示保存成功和未发布证明。
+
+### 1.2 禁止交付
 
 1. 发布。
 2. 保存并发布。
@@ -53,168 +55,250 @@
 4. 批量保存。
 5. 无人值守写入。
 6. 测试商品冒充真实商品。
-7. 未经采集箱确认直接进入只保存。
+7. 手工导入商品直接启动真实保存。
+8. 未完成采集箱确认就进入第二段。
+9. 失败任务复用为成功证据。
 
-## 2. 版本路线图
+### 1.3 完成判定
 
-### V0.9.1 状态可信和测试残留清理版
+只有全部满足以下条件，才算达到“可交付客户正常使用”：
 
-**目标:** 当前界面和脚本不再误导用户，不再从测试商品或直接 `single_save` 开始。
+1. 双击免安装 EXE 可启动，不需要两个命令行窗口。
+2. 主窗口首屏只显示当前步骤、能不能继续、为什么阻断、下一步按钮。
+3. 店小秘真实浏览器显式打开，并且 Agent 失败时不闪退。
+4. 浏览器左上角 HUD 常驻，中文显示实时动作。
+5. 第一段真实跑通：数据采集认领到采集箱。
+6. 第二段真实跑通：采集箱编辑商品并只保存。
+7. 保存成功证据存在。
+8. 未发布证明存在。
+9. 模板中心支持多套模板、中文分区、保存状态、执行取值预览。
+10. 普通用户主路径不暴露 `L2`、`probe`、`run-id`、`HAR`、`greenlet`、`Internal Server Error`。
+11. 发布、批量、无人值守在 UI 和 API 双层阻断。
+12. 后端 focused tests 通过。
+13. 前端 build 通过。
+14. 桌面 portable package 验证通过。
+15. 最终验收报告、Git HEAD、EXE SHA-256、真实验收证据一致。
 
-**交付内容:**
-- QA/browser 脚本改为两段式检查，不再创建 `QA local gated single_save one product fixture`。
-- 默认当前任务不从旧测试任务补回。
-- 普通界面不显示 `QA guarded product`、`single_save READY`、`L2 probe`、`run-id` 等工程词。
-- 首页和顶部状态条只表达：当前要做什么、为什么不能继续、下一步点哪里。
-- 当前任务必须区分第一段认领任务和第二段保存任务。
+## 2. 产品信息架构
+
+### 2.1 主菜单
+
+| 分组 | 菜单 | 用户理解 | 子功能 |
+| --- | --- | --- | --- |
+| 准备 | 首页 | 今天先做什么 | 当前步骤、阻断原因、下一步按钮、最近结果 |
+| 准备 | 店小秘登录 | 连接真实店小秘 | 账号密码、记住账号、打开登录页、检测登录状态 |
+| 第一段：采集认领 | 数据采集认领 | 把数据采集商品放进采集箱 | 店铺平台、来源链接、关键词、类目、认领标记、启动认领 |
+| 第一段：采集认领 | 采集箱商品 | 管理已认领商品 | 已认领列表、来源链接、采集箱标题、可保存状态 |
+| 第二段：编辑保存 | 模板中心 | 管理填写规则 | 多模板、中文分区表单、默认模板、执行取值预览 |
+| 第二段：编辑保存 | 只保存任务 | 启动编辑保存 | 选择已认领商品、人工确认、启动保存、安全边界 |
+| 现场执行 | 真实浏览器 | 看 Agent 操作现场 | 浏览器状态、HUD、人工接管、重试 |
+| 结果复盘 | 结果与问题 | 看结果和处理失败 | 保存结果、未发布证明、恢复动作、维护诊断 |
+| 系统维护 | 系统设置 | 管理本机运行环境 | 数据目录、日志、资源自检、版本信息 |
+
+### 2.2 需要下沉的技术概念
+
+这些内容不能作为普通用户一级菜单或首屏主文案：
+
+- Agent 控制台
+- 证据中心
+- 异常池
+- 任务中心
+- 配置中心
+- L2 / L3
+- probe
+- run-id
+- HAR
+- greenlet
+- Playwright
+- Internal Server Error
+
+保留位置：`结果与问题 -> 维护人员查看技术状态` 或 `系统设置 -> 诊断信息`。
+
+## 3. 版本路线图
+
+### V0.9.2 已完成：QA 与导航转向两段式
+
+**状态:** 已提交。
+
+**已交付:**
+
+- QA/browser 脚本不再把测试 single_save 当作生产路径。
+- 侧边栏和首屏开始转向两段式业务语言。
+- 当前分支已有“数据采集认领”和“采集箱编辑保存”的用户路径雏形。
+
+**剩余风险:**
+
+- 前端旧模块中仍有工程词和跨阶段跳转残留。
+- 第一段页面仍能直接跳到第二段保存页面。
+- 部分状态判断仍可能被旧任务、旧报告或缺证据数据污染。
+
+### V0.9.3 当前优先版：第一段证据可信修复
+
+**目标:** 第一段“数据采集认领”成为可信生产入口，不再产生弱证据或跨阶段误导。
+
+**必须完成:**
+
+1. `AcquisitionClaimRequest` 增加 `source_url`。
+2. 来源链接、关键词、类目三者至少一个可作为商品线索。
+3. 创建认领请求时不创建本地商品。
+4. `claim_only` 执行完成时必须记录 `source_url`。
+5. 缺 `source_url`、缺 claimed product、缺 draft box verification 时，认领任务失败且不能生成可保存商品。
+6. 第一段 UI 删除“进入采集箱编辑保存”按钮。
+7. 第一段完成后只显示“去采集箱商品页选择已认领商品”。
 
 **验收标准:**
-- `scripts\qa-browser-check.ps1` 不再直接创建 fake `single_save`。
-- 前端契约测试确认主路径不出现测试商品。
+
+- `pytest tests\test_acquisition_claim_workflow.py tests\test_v1_runner.py -q` 通过。
+- `pytest tests\test_frontend_demo_workflow_contract.py -q` 通过。
 - `npm run build` 通过。
-- 后端 focused tests 通过。
+- UI 源码中 `AcquisitionClaimPage.tsx` 不再包含 `onShowDraftEdit`。
 
-**建议完成度目标:** 从 72% 提升到 78%。
+**完成度目标:** 74% -> 81%。
 
-### V1.0 真实两段式主路径版
+### V1.0 真实两段式可跑通版
 
-**目标:** 单店单商品完成真实 DXM 生产路径。
+**目标:** 单店单商品完成真实 DXM 生产主路径。
 
 **用户路径:**
-1. 打开免安装 EXE。
-2. 登录店小秘。
-3. 进入“数据采集认领”。
-4. 输入或选择商品线索。
-5. Agent 在真实浏览器认领商品到采集箱。
-6. 进入“采集箱商品”选择已认领商品。
-7. 进入“编辑保存”创建只保存任务。
-8. 人工确认只保存。
-9. Agent 打开真实编辑页，填写字段，只点击保存。
-10. 结果页显示保存成功和未发布证明。
 
-**交付内容:**
-- 第一段 `claim_only` 完整闭环：创建任务、打开数据采集、定位商品、认领、采集箱确认、记录 claimed product。
-- 第二段 `single_save` 只能从 claimed product 创建。
-- 后端启动门禁必须阻止未认领商品进入保存。
-- 保存报告必须关联同一个 claimed product。
-- publish guard 在 UI 和 API 两层生效。
+1. 打开免安装 EXE。
+2. 店小秘登录成功。
+3. 在“数据采集认领”输入来源链接、关键词或类目。
+4. Agent 打开真实数据采集页。
+5. Agent 定位商品并认领到采集箱。
+6. 系统打开采集箱确认同一个商品。
+7. 用户进入“采集箱商品”选择已认领商品。
+8. 用户进入“只保存任务”确认模板。
+9. 用户人工批准“只保存，不发布”。
+10. Agent 打开真实编辑页并填写字段。
+11. Agent 只点击保存。
+12. 结果页显示保存成功和未发布证明。
 
 **验收标准:**
-- 真实店小秘跑通一次 `数据采集认领 -> 采集箱确认`。
-- 真实店小秘跑通一次 `采集箱编辑 -> 只保存 -> 未发布证明`。
-- 证据里能看到同一商品的 source_url、claim result、draft box row、save result。
-- 出现发布相关按钮或请求时自动停止。
 
-**建议完成度目标:** 从 78% 提升到 86%。
+- 真实店小秘完成一次 `数据采集认领 -> 采集箱确认`。
+- 真实店小秘完成一次 `采集箱编辑 -> 只保存 -> 未发布证明`。
+- 报告能关联同一商品的 `source_url`、claim result、draft box row、save result。
+- 任何发布按钮、发布接口、保存并发布入口都会停止。
+
+**完成度目标:** 81% -> 88%。
 
 ### V1.1 模板中心生产版
 
-**目标:** 配置中心从“字段堆叠”升级为客户可维护的多模板系统。
+**目标:** 配置中心升级为运营可维护的多模板中心。
 
-**菜单和页面:**
-- `模板中心`
-  - 当前模板
-  - 店铺模板
-  - 类目模板
-  - 本次任务覆盖
-  - 默认示例模板
-  - 执行取值预览
+**模板类型:**
 
-**分区表单:**
-1. 店铺与任务基础
-2. 类目与标题
-3. SKU / 价格 / 库存
-4. 图片与素材
-5. 包装物流
-6. 合规 / 海关
-7. 半托管
-8. 店小秘引用模板
-9. 执行策略
-
-**每个分区固定动作:**
-- 仅本次任务使用
-- 保存为店铺模板
-- 保存为类目模板
-- 另存为新模板
-- 套用默认示例模板
+1. 系统默认模板。
+2. 默认测试模板。
+3. 店铺默认模板。
+4. 类目默认模板。
+5. 手动选择模板。
+6. 本次任务覆盖。
 
 **取值优先级:**
-1. 本次任务覆盖
-2. 手动选择模板
-3. 类目默认模板
-4. 店铺默认模板
-5. 系统默认模板
-6. 商品原始数据
+
+1. 本次任务覆盖。
+2. 手动选择模板。
+3. 类目默认模板。
+4. 店铺默认模板。
+5. 默认测试模板。
+6. 系统默认模板。
+7. 商品原始数据。
+
+**分区表单:**
+
+1. 店铺与任务基础。
+2. 类目与标题。
+3. SKU / 价格 / 库存。
+4. 图片与素材。
+5. 包装物流。
+6. 合规 / 海关。
+7. 半托管。
+8. 店小秘引用模板。
+9. 执行策略。
+
+**每个分区动作:**
+
+- 仅本次任务使用。
+- 保存为店铺模板。
+- 保存为类目模板。
+- 另存为新模板。
+- 套用默认测试模板。
 
 **验收标准:**
+
 - 用户能保存多套模板。
 - 用户能看懂当前正在使用哪套模板。
 - 修改字段后有明确“未保存/已保存”状态。
-- 启动保存前能预览最终执行值。
-- 普通用户界面不暴露英文 key。
+- 启动保存前能预览最终执行值和来源。
+- 普通界面不显示英文 key。
 
-**建议完成度目标:** 从 86% 提升到 91%。
+**完成度目标:** 88% -> 93%。
 
-### V1.2 真实浏览器 Agent 和 HUD 稳定版
+### V1.2 浏览器 Agent 和 HUD 稳定版
 
-**目标:** 用户能看见 Agent 正在真实店小秘浏览器里做什么，失败后能接管。
+**目标:** 用户能看到 Agent 正在真实店小秘浏览器里做什么，失败后可接管。
 
 **浏览器要求:**
-- 必须显式打开。
-- 必须保持在线。
-- 失败时保留现场，不直接闪退。
-- 用户可以手动接管。
 
-**浏览器 HUD 要求:**
+- 显式打开。
+- 常开。
+- 失败保留现场。
+- 用户可人工接管。
+- 不因任务失败直接关闭浏览器。
+
+**HUD 要求:**
+
 - 位于浏览器左上角。
-- 深色小窗，常驻。
-- 中文实时刷新任务进度。
+- 黑色小窗。
+- 中文实时刷新。
 - 页面跳转、刷新、新标签页后自动重注入。
 
-**HUD 步骤示例:**
-- 准备打开店小秘
-- 检查登录状态
-- 打开数据采集
-- 搜索商品
-- 定位目标商品
-- 认领到采集箱
-- 确认采集箱商品
-- 打开编辑页
-- 填写标题
-- 选择分类
-- 设置 SKU / 价格 / 库存
-- 处理图片
-- 选择包装物流
-- 只点击保存
-- 检查未发布
-- 完成
+**HUD 业务步骤:**
+
+- 准备打开店小秘。
+- 检查登录状态。
+- 打开数据采集。
+- 搜索商品。
+- 定位目标商品。
+- 认领到采集箱。
+- 确认采集箱商品。
+- 打开编辑页。
+- 填写标题。
+- 选择分类。
+- 设置 SKU / 价格 / 库存。
+- 处理图片。
+- 选择包装物流。
+- 只点击保存。
+- 检查未发布。
+- 完成。
 
 **验收标准:**
+
 - HUD 经历至少 5 次页面跳转仍常驻。
 - 浏览器关闭、验证码等待、页面加载失败、Agent 异常都有中文恢复提示。
 - 主窗口状态、HUD 状态、后台任务状态一致。
-- Agent 运行失败不导致浏览器无提示闪退。
 
-**建议完成度目标:** 从 91% 提升到 95%。
+**完成度目标:** 93% -> 96%。
 
-### V1.3 用户自助和问题恢复版
+### V1.3 客户自助与问题恢复版
 
-**目标:** 普通运营用户不看技术日志，也能知道怎么继续。
+**目标:** 普通运营用户不看技术日志也能继续处理。
 
-**交付内容:**
-- 所有失败卡片统一为：
-  - 发生了什么
-  - 为什么停止
-  - 下一步怎么做
-  - 维护人员查看技术状态
-- 实时日志默认只显示业务事件 5 到 10 条。
-- 完整日志进入诊断抽屉。
-- 结果页按业务复盘展示，不显示原始异常为主信息。
+**统一失败结构:**
+
+1. 发生了什么。
+2. 为什么停止。
+3. 下一步怎么做。
+4. 维护人员查看技术状态。
 
 **覆盖失败场景:**
+
 - 未登录。
 - 验证码未处理。
 - 未选择真实商品。
+- 来源链接无法匹配。
 - 找不到商品。
 - 多个商品匹配。
 - 认领失败。
@@ -225,299 +309,601 @@
 - 检测到发布风险。
 
 **验收标准:**
-- 主路径不出现 `Internal Server Error`、`greenlet`、`Playwright`、`HAR`、`run-id`。
-- 每个失败都有一个明确按钮或下一步。
-- 页面内容不重叠，不需要下滑很远才能看到主操作。
 
-**建议完成度目标:** 从 95% 提升到 97%。
+- 主路径不出现 `Internal Server Error`、`greenlet`、`Cannot switch to a different thread`。
+- 每个失败都有明确按钮或下一步。
+- 实时日志默认只显示业务事件 5 到 10 条。
+- 完整日志进入维护诊断。
+
+**完成度目标:** 96% -> 98%。
 
 ### V1.4 免安装客户交付版
 
 **目标:** 输出客户可直接使用的 Windows 免安装目录。
 
-**交付目录:**
+**交付目录必须包含:**
+
 - `DXM-Agent-Console-Portable-0.1.0.exe`
 - `resources`
-- 快速使用说明
-- 常见问题与恢复说明
-- 真实验收报告
-- 版本说明
-- EXE SHA-256
-- Git HEAD
-
-**启动要求:**
-- 双击 EXE 后进入控制台。
-- 不需要用户手动启动前端或后端窗口。
-- 后端、前端、浏览器 Agent 生命周期由 Electron 托管。
-- 本机账号密码加密保存。
-- 资源缺失、端口占用、浏览器依赖缺失时给中文提示。
+- 快速使用说明。
+- 常见问题与恢复说明。
+- 真实验收报告。
+- 版本说明。
+- EXE SHA-256。
+- Git HEAD。
 
 **验收标准:**
+
 - `scripts\verify-desktop-package.ps1` 通过。
 - `scripts\final-delivery-check.ps1` 通过。
 - 真实两段式 DXM canary 通过。
-- 最终 EXE 路径、Git HEAD、SHA-256、验收报告一致。
+- EXE 路径、Git HEAD、SHA-256、验收报告一致。
 
-**建议完成度目标:** 从 97% 提升到 100%。
+**完成度目标:** 98% -> 100%。
 
-## 3. 推荐菜单结构
+## 4. 实施任务
 
-### 一级分组
-
-1. 准备
-2. 第一段：采集认领
-3. 第二段：编辑保存
-4. 现场执行
-5. 结果复盘
-6. 系统维护
-
-### 菜单明细
-
-| 分组 | 菜单 | 用户理解 | 子功能 |
-| --- | --- | --- | --- |
-| 准备 | 首页 | 今天先做什么 | 当前步骤、阻断原因、下一步按钮、最近结果 |
-| 准备 | 店小秘登录 | 连接真实店小秘 | 账号密码、记住账号、打开登录页、检测登录状态 |
-| 第一段：采集认领 | 数据采集认领 | 把商品放进采集箱 | 店铺平台、商品线索、搜索定位、认领、采集箱确认 |
-| 第一段：采集认领 | 采集箱商品 | 管理已认领商品 | 已认领列表、来源链接、采集箱标题、可保存状态 |
-| 第二段：编辑保存 | 模板中心 | 管理填写规则 | 多模板、中文分区表单、默认模板、执行取值预览 |
-| 第二段：编辑保存 | 只保存任务 | 启动编辑保存 | 选择已认领商品、人工确认、启动保存、保存边界 |
-| 现场执行 | 真实浏览器 | 看 Agent 操作现场 | 浏览器状态、HUD、人工接管、重试 |
-| 结果复盘 | 结果报告 | 看保存结果 | 保存成功、未发布证明、证据摘要 |
-| 结果复盘 | 问题处理 | 处理失败 | 失败原因、恢复动作、维护诊断 |
-| 系统维护 | 系统设置 | 管理本机运行环境 | 数据目录、日志、资源自检、版本信息 |
-
-### 不建议继续作为一级菜单
-
-- Agent 控制台
-- 任务中心
-- 配置中心
-- 证据中心
-- 异常池
-- L2 / L3
-- 只读 Probe
-
-这些技术概念可以保留，但只能放在“维护人员查看技术状态”里。
-
-## 4. 模块拆分
-
-### 4.1 店小秘登录模块
-
-**功能:**
-- 本机加密保存账号密码。
-- 打开真实店小秘登录页。
-- 检测是否已登录。
-- 验证码或二次验证时等待用户处理。
-- 登录成功后同步主窗口状态。
-
-**必须修复的问题:**
-- 浏览器已登录但控制台仍显示未登录。
-- 登录失败时只显示技术异常。
-- 重复打开登录页导致多个浏览器会话混乱。
-
-### 4.2 数据采集认领模块
-
-**功能:**
-- 选择店铺和平台。
-- 输入来源链接、关键词或商品线索。
-- 打开店小秘数据采集页。
-- 搜索或定位目标商品。
-- 唯一匹配确认。
-- 认领到采集箱。
-- 打开采集箱确认。
-
-**记录字段:**
-- 店铺
-- 平台
-- 商品标题
-- 来源链接
-- 采集箱标题
-- 认领标记
-- 认领时间
-- 认领证据
-
-**阻断:**
-- 未登录不能认领。
-- 找不到商品不能认领。
-- 多个匹配必须人工确认。
-- 认领失败不能进入第二段。
-
-### 4.3 采集箱商品模块
-
-**功能:**
-- 展示已认领商品列表。
-- 展示来源链接和采集箱匹配关系。
-- 标记哪些商品可进入编辑保存。
-- 标记失败、过期、测试、未确认商品。
-
-**阻断:**
-- 非采集箱确认商品不能保存。
-- 测试商品不能保存。
-- 旧失败任务不能复用为新保存证据。
-
-### 4.4 模板中心模块
-
-**功能:**
-- 多套模板管理。
-- 店铺默认模板。
-- 类目默认模板。
-- 手动选择模板。
-- 本次任务覆盖。
-- 默认示例模板。
-- 最终执行取值预览。
-
-**页面原则:**
-- 首屏只显示当前模板、保存状态、可启动状态。
-- 默认只展开一个分区。
-- 模板匹配解释默认折叠。
-- 英文字段 key 不出现在普通用户界面。
-
-### 4.5 只保存任务模块
-
-**功能:**
-- 从采集箱商品创建保存任务。
-- 选择模板。
-- 展示最终执行取值。
-- 人工确认只保存。
-- 启动真实浏览器 Agent。
-- 保存成功后生成报告。
-
-**阻断:**
-- 未认领不能启动。
-- 未确认采集箱不能启动。
-- 模板缺失不能启动。
-- 未人工确认不能启动。
-- 发布风险出现立即停止。
-
-### 4.6 真实浏览器模块
-
-**功能:**
-- 显示真实浏览器状态。
-- 显示 Agent 状态。
-- 显示 HUD 在线状态。
-- 支持人工接管。
-- 支持保留现场。
-- 支持失败后重试。
-
-**核心原则:**
-- 浏览器显式。
-- 现场可见。
-- 失败不闪退。
-- 状态可恢复。
-
-### 4.7 结果与问题模块
-
-**功能:**
-- 保存成功报告。
-- 未发布证明。
-- 认领失败报告。
-- 保存失败报告。
-- 恢复建议。
-- 维护诊断。
-
-**报告字段:**
-- 商品标题
-- 店铺
-- 平台
-- 来源链接
-- 采集箱确认状态
-- 模板名称
-- 保存结果
-- 未发布状态
-- 操作时间
-- 证据摘要
-
-## 5. 代码实施计划
-
-### Task 1: QA 脚本两段式化
+### Task 1: V0.9.3 第一段来源链接和证据硬化
 
 **Files:**
-- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\scripts\qa-browser-check.ps1`
-- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\tests\test_qa_runtime_data_isolation.py`
-- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\tests\test_frontend_demo_workflow_contract.py`
 
-- [ ] 写测试：脚本不能包含 `QA local gated single_save one product fixture`。
-- [ ] 写测试：脚本必须使用 `/api/acquisition/claim-requests`。
-- [ ] 写测试：脚本必须使用 `/api/acquisition/claimed-products` 检查第二段候选。
-- [ ] 删除脚本中直接创建 fake `single_save` 的逻辑。
-- [ ] 把 QA 验证改成：无真实 claimed product 时验证第一段路径和空态，不伪造生产保存任务。
-- [ ] 运行 `pytest tests\test_qa_runtime_data_isolation.py tests\test_frontend_demo_workflow_contract.py -q`。
-- [ ] 运行 `npm run build`。
-- [ ] 提交：`test: align browser QA script with two-stage workflow`。
-
-### Task 2: 导航和首屏收口
-
-**Files:**
-- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend\src\components\AppShell.tsx`
-- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend\src\components\SafetyStatusBar.tsx`
-- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend\src\components\workbench\HomePage.tsx`
-- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend\src\styles.css`
-
-- [ ] 按本计划第 3 节重做侧边栏。
-- [ ] 顶部状态条只保留一个主结论、一个主按钮、一个阻断原因。
-- [ ] `状态详情` 改为折叠或右侧抽屉。
-- [ ] 首页只显示当前步骤、为什么不能继续、下一步。
-- [ ] 技术字段进入维护诊断。
-- [ ] Playwright 或浏览器 DOM 检查首屏无技术术语。
-- [ ] 提交：`feat: simplify two-stage production navigation`。
-
-### Task 3: 第一段数据采集认领闭环
-
-**Files:**
-- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend\src\components\workbench\AcquisitionClaimPage.tsx`
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\models.py`
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\main.py`
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\repository.py`
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\execution\v1_runner.py`
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\execution\dxm_adapter.py`
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\execution\dxm_login_flow.py`
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\tests\test_acquisition_claim_workflow.py`
-
-- [ ] 测试：创建认领任务时不创建 fake 商品。
-- [ ] 测试：认领完成后记录 claimed product、source_url、store、claim_mark。
-- [ ] 测试：认领失败时不能进入第二段。
-- [ ] UI：数据采集认领页只表达第一段，不出现保存入口。
-- [ ] 真实浏览器：认领后打开采集箱确认。
-- [ ] 运行 `pytest tests\test_acquisition_claim_workflow.py tests\test_v1_runner.py -q`。
-- [ ] 提交：`feat: complete acquisition claim stage`。
-
-### Task 4: 第二段采集箱编辑保存闭环
-
-**Files:**
-- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend\src\components\workbench\DraftEditSavePage.tsx`
-- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\main.py`
-- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\execution\v1_runner.py`
-- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\execution\dxm_login_flow.py`
-- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\tests\test_task_start_guard.py`
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\tests\test_v1_runner.py`
 
-- [ ] 测试：`single_save` 必须绑定 claimed product。
-- [ ] 测试：未人工确认不能启动。
-- [ ] 测试：发布风险按钮出现时停止。
-- [ ] UI：采集箱编辑保存页五步清晰展示。
-- [ ] 后端：保存报告关联第一段 claimed product。
-- [ ] 真实浏览器：执行只保存并验证未发布。
-- [ ] 运行 `pytest tests\test_task_start_guard.py tests\test_v1_runner.py -q`。
-- [ ] 提交：`feat: complete draft edit save stage`。
+- [ ] **Step 1: 写来源链接输入测试**
 
-### Task 5: 模板中心生产化
+Add to `app/backend/tests/test_acquisition_claim_workflow.py`:
+
+```python
+def test_acquisition_claim_request_accepts_source_url_hint(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    store = repo.create_store("Dang Kang", "AliExpress")
+
+    response = client.post(
+        "/api/acquisition/claim-requests",
+        json={
+            "store_id": store["id"],
+            "keyword": "",
+            "category_name": "",
+            "source_url": "https://detail.1688.com/offer/1013604102950.html",
+            "claim_mark": "AI-OPS",
+            "template_id": None,
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source_url"] == "https://detail.1688.com/offer/1013604102950.html"
+    assert data["task_id"] > 0
+    assert repo.list_products(include_fixtures=True) == []
+```
+
+- [ ] **Step 2: 写缺来源链接失败测试**
+
+Add to `app/backend/tests/test_v1_runner.py`:
+
+```python
+def test_claim_only_does_not_record_claimed_product_without_source_url(v1_db):
+    repo = Repository()
+    store = repo.create_store("Dang Kang", "AliExpress")
+    task = repo.create_acquisition_claim_request({
+        "store_id": store["id"],
+        "keyword": "Hazbin Hotel",
+        "category_name": "立牌类谷子",
+        "claim_mark": "AI-OPS",
+        "template_id": None,
+    })
+
+    class MissingSourceUrlAdapter(FakeWorkflowAdapter):
+        def _record(self, action, *args):
+            result = super()._record(action, *args)
+            if action == "verify_draft_box_claim":
+                result["evidence"]["claimed_product"].pop("source_url", None)
+            return result
+
+    asyncio.run(V1TaskRunner(repo, DummyManager(), workflow_adapter=MissingSourceUrlAdapter()).run_task(task["id"]))
+
+    assert repo.get_task(task["id"])["status"] == "failed"
+    assert repo.list_claimed_draft_products() == []
+```
+
+- [ ] **Step 3: 实现 `source_url` 模型字段**
+
+In `app/backend/src/models.py`:
+
+```python
+class AcquisitionClaimRequest(BaseModel):
+    store_id: int
+    keyword: str | None = None
+    category_name: str | None = None
+    source_url: str | None = None
+    claim_mark: str
+    template_id: int | None = None
+```
+
+- [ ] **Step 4: 规范化认领请求**
+
+In `app/backend/src/main.py`, normalize source URL:
+
+```python
+source_url = str(payload.source_url or "").strip()
+if not keyword and not category_name and not source_url:
+    raise HTTPException(status_code=400, detail="请填写来源链接、搜索关键词或认领类目，用于定位真实采集商品")
+data["source_url"] = source_url or None
+```
+
+- [ ] **Step 5: 仓储保存来源链接**
+
+In `app/backend/src/repository.py`, include:
+
+```python
+"source_url": data.get("source_url"),
+```
+
+in the acquisition claim task payload and response.
+
+- [ ] **Step 6: runner 传递来源链接**
+
+In `app/backend/src/execution/v1_runner.py`, add:
+
+```python
+def _acquisition_source_urls(self, task: Mapping[str, Any]) -> list[str]:
+    payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+    values = [payload.get("source_url"), payload.get("url")]
+    source_urls = payload.get("source_urls")
+    if isinstance(source_urls, (list, tuple)):
+        values.extend(source_urls)
+    return [str(value).strip() for value in values if isinstance(value, str) and value.strip()]
+```
+
+Then pass `target_source_urls=self._acquisition_source_urls(task)` to both `claim_from_data_acquisition` and `verify_draft_box_claim`.
+
+- [ ] **Step 7: 认领完成记录必须强制证据完整**
+
+Before `repo.create_product(...)` in `_record_claimed_product_from_acquisition`:
+
+```python
+if not isinstance(claimed, Mapping) or not claimed:
+    raise V1ExecutionError("E202", "采集箱确认失败", "缺少采集箱商品证据，未记录可保存商品")
+source_url = claimed.get("source_url") or evidence.get("source_url") or payload.get("source_url")
+if not isinstance(source_url, str) or not source_url.strip():
+    raise V1ExecutionError("E202", "采集箱确认失败", "缺少来源链接，不能证明采集箱商品来自本次数据采集认领")
+```
+
+- [ ] **Step 8: DXM 浏览器动作支持来源链接匹配**
+
+In `dxm_adapter.py` and `dxm_login_flow.py`, add `target_source_urls` to `claim_from_data_acquisition` and `verify_draft_box_claim`; in `_find_data_acquisition_claim_target`, match row source links first when URL hint exists.
+
+- [ ] **Step 9: 验证**
+
+Run:
+
+```powershell
+cd D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend
+.\.venv\Scripts\python.exe -m pytest tests\test_acquisition_claim_workflow.py tests\test_v1_runner.py -q
+```
+
+Expected: all selected tests pass.
+
+- [ ] **Step 10: 提交**
+
+```powershell
+git add app/backend/src app/backend/tests
+git commit -m "feat: harden acquisition claim evidence"
+```
+
+### Task 2: V0.9.3 第一段 UI 去除保存入口
 
 **Files:**
+
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend\src\components\workbench\AcquisitionClaimPage.tsx`
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend\src\App.tsx`
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend\src\types.ts`
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\tests\test_frontend_demo_workflow_contract.py`
+
+- [ ] **Step 1: 写 UI 合同测试**
+
+Add to `app/backend/tests/test_frontend_demo_workflow_contract.py`:
+
+```python
+def test_acquisition_claim_page_does_not_offer_save_stage_entry():
+    source = ACQUISITION_CLAIM_PAGE_TSX.read_text(encoding="utf-8")
+    assert "从店小秘数据采集认领到采集箱" in source
+    assert "不会进入编辑页" in source
+    assert "不会保存" in source
+    assert "不会发布" in source
+    assert "onShowDraftEdit" not in source
+    assert "进入采集箱编辑保存" not in source
+```
+
+- [ ] **Step 2: 增加来源链接输入**
+
+In `AcquisitionClaimPage.tsx`:
+
+```tsx
+const [sourceUrl, setSourceUrl] = useState('')
+const hasProductHint = Boolean(keyword.trim() || categoryName.trim() || sourceUrl.trim())
+```
+
+Add field:
+
+```tsx
+<label>
+  <span>来源链接</span>
+  <input value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="1688、Temu 或其他采集来源链接" disabled={busy} />
+</label>
+```
+
+- [ ] **Step 3: submit 传递来源链接**
+
+```tsx
+onCreateClaimRequest({
+  storeId: selectedStore.id,
+  keyword: keyword.trim() || undefined,
+  categoryName: categoryName.trim() || undefined,
+  sourceUrl: sourceUrl.trim() || undefined,
+  claimMark: claimMark.trim(),
+  templateId: templateId ? Number(templateId) : null,
+})
+```
+
+- [ ] **Step 4: 删除跨阶段跳转 prop**
+
+Remove `onShowDraftEdit` from:
+
+- `AcquisitionClaimPageProps`
+- component arguments
+- `App.tsx` invocation
+- all buttons inside `AcquisitionClaimPage.tsx`
+
+Replace completion next step with:
+
+```tsx
+<span><strong>下一步</strong><b>去“采集箱商品”选择该商品</b></span>
+```
+
+- [ ] **Step 5: 更新前端类型**
+
+In `types.ts`:
+
+```ts
+export type AcquisitionClaimCreateRequest = {
+  storeId: number
+  keyword?: string
+  categoryName?: string
+  sourceUrl?: string
+  claimMark: string
+  templateId?: number | null
+}
+```
+
+- [ ] **Step 6: 验证**
+
+Run:
+
+```powershell
+cd D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend
+.\.venv\Scripts\python.exe -m pytest tests\test_frontend_demo_workflow_contract.py -q
+cd ..\frontend
+npm run build
+```
+
+Expected: contract tests and build pass.
+
+- [ ] **Step 7: 提交**
+
+```powershell
+git add app/frontend/src app/backend/tests/test_frontend_demo_workflow_contract.py
+git commit -m "feat: keep acquisition claim UI in first stage"
+```
+
+### Task 3: V1.0 采集箱商品页和第二段入口
+
+**Files:**
+
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend\src\components\workbench\DraftEditSavePage.tsx`
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend\src\App.tsx`
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\main.py`
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\repository.py`
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\tests\test_acquisition_claim_workflow.py`
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\tests\test_task_start_guard.py`
+
+- [ ] **Step 1: 写可保存商品过滤测试**
+
+Add to `test_acquisition_claim_workflow.py`:
+
+```python
+def test_claimed_products_requires_source_url_and_draft_box_verification(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    store = repo.create_store("Dang Kang", "AliExpress")
+    valid = repo.create_product({
+        "title": "真实采集商品 A",
+        "source": "dxm_data_acquisition",
+        "status": "claimed_to_draft",
+        "category_name": "立牌类谷子",
+        "price": 9.9,
+        "currency": "USD",
+        "sku_count": 1,
+        "image_count": 1,
+        "payload": {
+            "source": "dxm_data_acquisition",
+            "store_id": store["id"],
+            "store_name": "Dang Kang",
+            "source_url": "https://detail.1688.com/offer/1013604102950.html",
+            "claim_task_id": 42,
+            "draft_box_verified": True,
+        },
+    })
+    repo.create_product({
+        "title": "缺来源链接商品",
+        "source": "dxm_data_acquisition",
+        "status": "claimed_to_draft",
+        "category_name": "立牌类谷子",
+        "price": 9.9,
+        "currency": "USD",
+        "sku_count": 1,
+        "image_count": 1,
+        "payload": {"source": "dxm_data_acquisition", "draft_box_verified": True},
+    })
+
+    response = client.get("/api/acquisition/claimed-products")
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == [valid["id"]]
+```
+
+- [ ] **Step 2: 后端过滤必须要求 source_url**
+
+In `Repository.list_claimed_draft_products()`:
+
+```python
+source_url = self._first_source_url(payload)
+if not source_url:
+    continue
+```
+
+- [ ] **Step 3: 第二段页面展示采集箱商品**
+
+In `DraftEditSavePage.tsx`, first screen must show:
+
+```tsx
+<h2>从采集箱选择要编辑保存的商品</h2>
+<p>这里只显示第一段已认领并通过采集箱确认的真实商品。</p>
+```
+
+Each item must show:
+
+- 店铺。
+- 商品标题。
+- 来源链接。
+- 认领标记。
+- 采集箱验证状态。
+- 创建只保存任务按钮。
+
+- [ ] **Step 4: 创建保存任务时带 claimed proof**
+
+When creating `single_save`, request payload must include the selected claimed product id only; backend attaches claim proof from product payload.
+
+- [ ] **Step 5: 验证**
+
+Run:
+
+```powershell
+cd D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend
+.\.venv\Scripts\python.exe -m pytest tests\test_acquisition_claim_workflow.py tests\test_task_start_guard.py -q
+cd ..\frontend
+npm run build
+```
+
+- [ ] **Step 6: 提交**
+
+```powershell
+git add app/frontend/src app/backend/src app/backend/tests
+git commit -m "feat: gate save stage on verified claimed products"
+```
+
+### Task 4: V1.0 真实只保存执行闭环
+
+**Files:**
+
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\execution\v1_runner.py`
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\execution\dxm_login_flow.py`
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\services\delivery_workspace.py`
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend\src\components\workbench\ResultsPage.tsx`
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\tests\test_v1_runner.py`
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\tests\test_delivery_workspace.py`
+
+- [ ] **Step 1: 写保存结果证据测试**
+
+Add to `test_v1_runner.py`:
+
+```python
+def test_single_save_report_keeps_claim_source_and_unpublished_proof(v1_db):
+    repo = Repository()
+    store = repo.create_store("Dang Kang", "AliExpress")
+    claimed = repo.create_product({
+        "title": "真实采集商品 A",
+        "source": "dxm_data_acquisition",
+        "status": "claimed_to_draft",
+        "category_name": "立牌类谷子",
+        "price": 9.9,
+        "currency": "USD",
+        "sku_count": 1,
+        "image_count": 1,
+        "payload": {
+            "source": "dxm_data_acquisition",
+            "source_url": "https://detail.1688.com/offer/1013604102950.html",
+            "draft_box_verified": True,
+            "claim_mark": "AI-OPS",
+        },
+    })
+    task = repo.create_task({
+        "name": "单商品只保存 - Dang Kang - 1 件商品",
+        "store_id": store["id"],
+        "mode": "single_save",
+        "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+        "claim_mark": "AI-OPS",
+        "product_ids": [claimed["id"]],
+        "payload": {"store_name": "Dang Kang", "category_name": "立牌类谷子"},
+    })
+
+    asyncio.run(V1TaskRunner(repo, DummyManager(), workflow_adapter=FakeWorkflowAdapter()).run_task(task["id"]))
+
+    assert repo.get_task(task["id"])["status"] == "completed"
+    report = repo.list_reports(task["id"])[0]
+    assert report["published"] is False
+    assert report["summary"]["claimed_product_source_url"] == "https://detail.1688.com/offer/1013604102950.html"
+```
+
+- [ ] **Step 2: 保存入口继续要求人工批准**
+
+Ensure `_assert_task_can_start` rejects `single_save` without `manual_approval`.
+
+- [ ] **Step 3: publish guard 保持硬阻断**
+
+If DXM page contains publish actions or network publish URLs, fail with customer-facing message:
+
+```text
+页面出现发布风险，系统已停止。请人工确认当前页面只保留“保存”操作后再重试。
+```
+
+- [ ] **Step 4: 结果页必须按业务展示**
+
+`ResultsPage.tsx` visible summary:
+
+- 保存状态。
+- 是否发布。
+- 商品。
+- 来源链接。
+- 使用模板。
+- 保存时间。
+- 下一步建议。
+
+- [ ] **Step 5: 验证**
+
+Run:
+
+```powershell
+cd D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend
+.\.venv\Scripts\python.exe -m pytest tests\test_v1_runner.py tests\test_delivery_workspace.py -q
+cd ..\frontend
+npm run build
+```
+
+- [ ] **Step 6: 提交**
+
+```powershell
+git add app/backend/src app/backend/tests app/frontend/src
+git commit -m "feat: complete controlled draft edit save flow"
+```
+
+### Task 5: V1.1 模板中心多模板和中文分区
+
+**Files:**
+
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\services\template_center.py`
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\services\config_preview.py`
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend\src\components\workbench\TemplateCenterPage.tsx`
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend\src\types.ts`
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\tests\test_template_center_contract.py`
 
-- [ ] 测试：模板取值优先级正确。
-- [ ] 测试：普通用户字段全部中文。
-- [ ] 测试：多模板保存、复制、停用、设默认。
-- [ ] UI：顶部固定显示当前模板、保存状态、执行取值状态。
-- [ ] UI：默认只展开一个分区。
-- [ ] UI：分区动作固定为仅本次、店铺默认、类目默认、另存、套用示例。
-- [ ] 运行 `pytest tests\test_template_center_contract.py -q`。
-- [ ] 运行 `npm run build`。
-- [ ] 提交：`feat: productionize customer templates`。
+- [ ] **Step 1: 写模板优先级测试**
 
-### Task 6: 浏览器 Agent 常驻和 HUD
+Add:
+
+```python
+def test_template_priority_prefers_task_selected_category_store_system():
+    from src.services.template_center import resolve_template_priority
+
+    result = resolve_template_priority({
+        "task_override": {"template_name": "本次任务覆盖"},
+        "selected": {"template_name": "手动选择模板"},
+        "category_default": {"template_name": "类目默认模板"},
+        "store_default": {"template_name": "店铺默认模板"},
+        "sample_default": {"template_name": "默认测试模板"},
+        "system_default": {"template_name": "系统默认模板"},
+    })
+
+    assert result["template_name"] == "本次任务覆盖"
+    assert result["source_label"] == "本次任务覆盖"
+```
+
+- [ ] **Step 2: 写中文字段测试**
+
+Add:
+
+```python
+def test_template_sections_use_customer_chinese_labels():
+    from src.services.template_center import editable_template_sections
+
+    sections = editable_template_sections()
+    labels = [section["label"] for section in sections]
+
+    for label in ["店铺与任务基础", "类目与标题", "SKU / 价格 / 库存", "图片与素材", "包装物流", "合规 / 海关", "半托管", "店小秘引用模板", "执行策略"]:
+        assert label in labels
+    for section in sections:
+        for field in section["fields"]:
+            assert field["label"]
+            assert "_" not in field["label"]
+```
+
+- [ ] **Step 3: UI 顶部固定模板状态**
+
+In `TemplateCenterPage.tsx`:
+
+```tsx
+<div className="template-status-strip">
+  <span>当前模板：{currentTemplateName}</span>
+  <span>保存状态：{dirty ? '有未保存修改' : '已保存'}</span>
+  <span>执行取值：{previewReady ? '已生成预览' : '等待填写'}</span>
+</div>
+```
+
+- [ ] **Step 4: 默认只展开一个分区**
+
+```tsx
+const [activeSectionId, setActiveSectionId] = useState(sections[0]?.id ?? 'task_basic')
+const activeSection = sections.find((section) => section.id === activeSectionId) ?? sections[0]
+```
+
+- [ ] **Step 5: 每个分区固定动作**
+
+```tsx
+<button>仅本次任务使用</button>
+<button>保存为店铺模板</button>
+<button>保存为类目模板</button>
+<button>另存为新模板</button>
+<button>套用默认测试模板</button>
+```
+
+- [ ] **Step 6: 验证**
+
+Run:
+
+```powershell
+cd D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend
+.\.venv\Scripts\python.exe -m pytest tests\test_template_center_contract.py tests\test_config_validation.py -q
+cd ..\frontend
+npm run build
+```
+
+- [ ] **Step 7: 提交**
+
+```powershell
+git add app/backend/src app/backend/tests app/frontend/src
+git commit -m "feat: productionize Chinese template center"
+```
+
+### Task 6: V1.2 浏览器 Agent 常开和 HUD 常驻
 
 **Files:**
+
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\services\agent_console.py`
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\services\browser_agent_status.py`
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\execution\dxm_login_flow.py`
@@ -525,115 +911,314 @@
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\tests\test_agent_console.py`
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\tests\test_browser_agent_status.py`
 
-- [ ] 测试：HUD 中文业务步骤映射。
-- [ ] 测试：HUD 注入脚本包含固定 root id 和高 z-index。
-- [ ] 实现：页面跳转后重注入 HUD。
-- [ ] 实现：Agent 异常时不主动关闭浏览器。
-- [ ] 实现：主窗口显示浏览器、Agent、HUD 三个状态。
-- [ ] 使用真实浏览器验证 HUD 常驻。
-- [ ] 提交：`feat: keep browser agent visible and recoverable`。
+- [ ] **Step 1: 写 HUD 中文映射测试**
 
-### Task 7: 日志和错误用户化
+Add:
+
+```python
+def test_hud_step_copy_uses_business_chinese():
+    from src.services.browser_agent_status import build_browser_hud
+
+    hud = build_browser_hud({"step": "CLAIM_TO_DRAFT_BOX", "status": "running"})
+
+    assert hud["title"] == "正在认领商品"
+    assert hud["line1"] == "把当前商品认领到采集箱"
+    assert hud["severity"] == "running"
+```
+
+- [ ] **Step 2: 写 HUD 注入脚本测试**
+
+Add:
+
+```python
+def test_hud_injection_uses_persistent_mount():
+    from src.services.agent_console import build_hud_injection_script
+
+    script = build_hud_injection_script({"title": "正在认领商品", "line1": "把当前商品认领到采集箱"})
+
+    assert "dxm-agent-hud-root" in script
+    assert "position: fixed" in script
+    assert "z-index" in script
+```
+
+- [ ] **Step 3: 实现业务步骤映射**
+
+In `browser_agent_status.py`:
+
+```python
+STEP_COPY = {
+    "OPEN_DATA_ACQUISITION": ("正在打开数据采集", "进入店小秘数据采集页"),
+    "CLAIM_TO_DRAFT_BOX": ("正在认领商品", "把当前商品认领到采集箱"),
+    "VERIFY_DRAFT_BOX_CLAIM": ("正在确认采集箱", "检查商品是否已进入采集箱"),
+    "OPEN_EDITOR": ("正在打开编辑页", "进入采集箱商品编辑页"),
+    "FILL_TITLE": ("正在填写标题", "按当前模板填写商品标题"),
+    "FILL_SKU_PRICE_STOCK": ("正在填写 SKU、价格和库存", "按当前模板写入销售信息"),
+    "FILL_IMAGES": ("正在处理图片", "检查并补齐商品图片"),
+    "SAVE_ONLY": ("正在只保存", "只点击保存，不发布"),
+    "VERIFY_NOT_PUBLISHED": ("正在检查未发布", "确认商品没有发布"),
+}
+```
+
+- [ ] **Step 4: 页面跳转后重注入**
+
+After navigation or page switch in `dxm_login_flow.py`:
+
+```python
+self._ensure_browser_hud(page, self._current_hud_payload())
+```
+
+- [ ] **Step 5: Agent 异常不关闭浏览器**
+
+On task failure, keep browser session open and set state:
+
+```python
+"browser_state": "open_needs_user_attention"
+```
+
+- [ ] **Step 6: 验证**
+
+Run:
+
+```powershell
+cd D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend
+.\.venv\Scripts\python.exe -m pytest tests\test_agent_console.py tests\test_browser_agent_status.py -q
+cd ..\frontend
+npm run build
+```
+
+- [ ] **Step 7: 提交**
+
+```powershell
+git add app/backend/src app/backend/tests app/frontend/src
+git commit -m "feat: keep browser agent visible and recoverable"
+```
+
+### Task 7: V1.3 用户化错误、日志和恢复
 
 **Files:**
-- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend\src\components\workbench\ResultsPage.tsx`
-- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend\src\components\workbench\IssuesPage.tsx`
-- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend\src\components\workbench\AgentExecutionPage.tsx`
+
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\main.py`
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend\src\api.ts`
-- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\tests\test_frontend_api_error_contract.py`
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend\src\components\workbench\IssuesPage.tsx`
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend\src\components\workbench\ResultsPage.tsx`
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend\src\components\workbench\AgentExecutionPage.tsx`
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\tests\test_frontend_demo_workflow_contract.py`
 
-- [ ] 测试：主界面不暴露原始技术异常。
-- [ ] 实现：错误结构为发生了什么、为什么停止、下一步怎么做。
-- [ ] 实现：实时日志默认只显示业务事件。
-- [ ] 实现：完整原始日志进入维护诊断。
-- [ ] 验证：用户截图中的日志重叠问题消失。
-- [ ] 提交：`feat: make runtime failures customer actionable`。
+- [ ] **Step 1: 写错误结构测试**
 
-### Task 8: 免安装包和最终验收
+Add:
+
+```python
+def test_customer_error_copy_uses_recovery_structure():
+    source = (FRONTEND_SRC / "components" / "workbench" / "IssuesPage.tsx").read_text(encoding="utf-8")
+    for required in ["发生了什么", "为什么停止", "下一步怎么做", "维护人员查看技术状态"]:
+        assert required in source
+    for forbidden in ["Internal Server Error", "Cannot switch to a different thread", "greenlet"]:
+        assert forbidden not in source
+```
+
+- [ ] **Step 2: 后端统一用户问题结构**
+
+In `main.py`:
+
+```python
+def user_problem(title: str, what: str, why: str, next_step: str, maintenance_detail: str | None = None) -> dict[str, str | None]:
+    return {
+        "title": title,
+        "what": what,
+        "why": why,
+        "next": next_step,
+        "maintenanceDetail": maintenance_detail,
+    }
+```
+
+- [ ] **Step 3: 前端默认只显示业务日志**
+
+In `AgentExecutionPage.tsx`:
+
+```tsx
+const visibleLogTags = new Set(['任务', '浏览器 Agent'])
+const visibleLogs = logs.filter((item) => visibleLogTags.has(item.tag)).slice(0, 8)
+```
+
+- [ ] **Step 4: 完整日志进入诊断折叠**
+
+```tsx
+<details className="maintenance-details">
+  <summary>维护人员查看技术状态</summary>
+  <FullRuntimeLog logs={logs} />
+</details>
+```
+
+- [ ] **Step 5: 验证**
+
+Run:
+
+```powershell
+cd D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend
+.\.venv\Scripts\python.exe -m pytest tests\test_frontend_demo_workflow_contract.py -q
+cd ..\frontend
+npm run build
+```
+
+- [ ] **Step 6: 提交**
+
+```powershell
+git add app/backend/src app/backend/tests app/frontend/src
+git commit -m "feat: make runtime failures recoverable for users"
+```
+
+### Task 8: V1.4 免安装包和真实验收
 
 **Files:**
+
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\scripts\verify-desktop-package.ps1`
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\scripts\final-delivery-check.ps1`
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\docs\product\最终交付验收记录-20260625-两段式生产版.md`
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\docs\product\免安装版快速使用说明-20260625.md`
 
-- [ ] 运行后端 focused tests。
-- [ ] 运行前端 `npm run build`。
-- [ ] 运行桌面 `npm run build:portable`。
-- [ ] 覆盖 `D:\Desktop\DXM-Agent-Console-免安装版`。
-- [ ] 运行 `scripts\verify-desktop-package.ps1`。
-- [ ] 打开 EXE 做真实 DXM 两段式验收。
-- [ ] 记录 Git HEAD、EXE SHA-256、真实验收证据。
-- [ ] 提交：`docs: record production two-stage portable acceptance`。
-- [ ] 推送分支。
+- [ ] **Step 1: 后端 focused tests**
 
-## 6. 测试矩阵
-
-### 后端
+Run:
 
 ```powershell
 cd D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend
-.\.venv\Scripts\python.exe -m pytest tests\test_acquisition_claim_workflow.py tests\test_v1_runner.py tests\test_task_start_guard.py tests\test_delivery_workspace.py tests\test_template_center_contract.py -q
+.\.venv\Scripts\python.exe -m pytest tests\test_acquisition_claim_workflow.py tests\test_v1_runner.py tests\test_task_start_guard.py tests\test_delivery_workspace.py tests\test_template_center_contract.py tests\test_agent_console.py tests\test_browser_agent_status.py -q
 ```
 
-### 前端构建
+- [ ] **Step 2: 前端构建**
+
+Run:
 
 ```powershell
 cd D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend
 npm run build
 ```
 
-### 桌面打包
+- [ ] **Step 3: 桌面打包**
+
+Run:
 
 ```powershell
 cd D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\desktop
 npm run build:portable
 ```
 
-### 免安装包验证
+- [ ] **Step 4: 覆盖免安装目录**
+
+Copy the generated portable package to:
+
+```text
+D:\Desktop\DXM-Agent-Console-免安装版
+```
+
+The directory must include the EXE and the `resources` directory.
+
+- [ ] **Step 5: package 验证**
+
+Run:
 
 ```powershell
 cd D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-desktop-package.ps1 -CheckPortable -WaitSeconds 180
 ```
 
-### 真实验收
+- [ ] **Step 6: 真实 DXM 验收**
+
+Manual acceptance:
 
 ```text
-1. 双击免安装 EXE。
-2. 登录店小秘。
-3. 第一段：创建数据采集认领任务。
-4. 真实浏览器认领商品到采集箱。
-5. 第二段：选择采集箱商品。
-6. 确认模板和执行取值。
-7. 人工确认只保存。
-8. 真实浏览器执行保存。
-9. 结果页显示保存成功。
-10. 结果页显示未发布证明。
+1. 打开免安装 EXE。
+2. 确认店小秘账号自动填充或可手动登录。
+3. 在“数据采集认领”输入真实来源链接、关键词或类目。
+4. 真实浏览器完成认领到采集箱。
+5. 在“采集箱商品”选择已认领商品。
+6. 在“模板中心”确认模板和最终执行取值。
+7. 在“只保存任务”人工批准。
+8. Agent 在真实浏览器执行只保存。
+9. “结果与问题”显示保存成功和未发布证明。
+10. 发布、批量、无人值守入口仍不可用。
 ```
 
-## 7. 完成判定
+- [ ] **Step 7: 生成验收报告字段**
 
-只有全部满足以下条件，才算项目完成到客户可交付状态：
+Run:
 
-1. 双击免安装 EXE 可启动，不需要两个命令行窗口。
-2. 店小秘真实浏览器显式打开并保持在线。
-3. 浏览器 HUD 常驻，中文显示实时步骤。
-4. 第一段真实完成：数据采集认领到采集箱。
-5. 第二段真实完成：采集箱编辑商品并只保存。
-6. 保存成功证据存在。
-7. 未发布证明存在。
-8. 模板中心支持多套模板、中文分区、保存状态、执行取值预览。
-9. 普通用户主路径不暴露工程术语。
-10. 失败时用户能看懂下一步怎么处理。
-11. 发布、批量、无人值守在 UI 和 API 双层阻断。
-12. 后端 focused tests 通过。
-13. 前端 build 通过。
-14. 桌面 package 验证通过。
-15. 真实验收报告、Git HEAD、EXE SHA-256 三者一致。
+```powershell
+cd D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage
+$gitHead = git rev-parse HEAD
+$exePath = "D:\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console-Portable-0.1.0.exe"
+$sha = (Get-FileHash -LiteralPath $exePath -Algorithm SHA256).Hash
+Write-Output "git_head=$gitHead"
+Write-Output "portable_exe_sha256=$sha"
+Write-Output "portable_exe_path=$exePath"
+```
 
-## 8. 当前最优下一步
+Create `docs/product/最终交付验收记录-20260625-两段式生产版.md` and record the exact command output plus:
 
-不要先继续做视觉微调。下一步应先做 **Task 1: QA 脚本两段式化**，因为当前脚本仍残留直接创建 `single_save` 的测试路径。这会持续污染验收、误导界面状态，也会让客户以为系统是从测试商品开始，而不是从真实数据采集认领开始。
+```json
+{
+  "scope": "controlled_two_stage_single_product_save_only",
+  "claim_to_draft": "passed",
+  "draft_edit_save": "passed",
+  "published": false,
+  "batch_unattended_publish_allowed": false
+}
+```
 
-完成 Task 1 后，再推进导航和首屏收口。原因是只有底层脚本和任务来源可信，UI 收口才不会继续围绕错误状态做补丁。
+- [ ] **Step 8: 提交并推送**
+
+Run:
+
+```powershell
+git add scripts docs/product
+git commit -m "docs: record two-stage DXM portable acceptance"
+git push
+```
+
+## 5. 测试矩阵
+
+### 每个后端任务后
+
+```powershell
+cd D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend
+.\.venv\Scripts\python.exe -m pytest tests\test_acquisition_claim_workflow.py tests\test_v1_runner.py tests\test_task_start_guard.py -q
+```
+
+### 每个前端任务后
+
+```powershell
+cd D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend
+npm run build
+```
+
+### 免安装包任务后
+
+```powershell
+cd D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-desktop-package.ps1 -CheckPortable -WaitSeconds 180
+```
+
+### 最终验收前
+
+```powershell
+cd D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend
+.\.venv\Scripts\python.exe -m pytest -q
+cd ..\frontend
+npm run build
+cd ..\desktop
+npm run build:portable
+```
+
+## 6. 执行顺序
+
+1. V0.9.3 Task 1：第一段来源链接和证据硬化。
+2. V0.9.3 Task 2：第一段 UI 去除保存入口。
+3. V1.0 Task 3：采集箱商品页和第二段入口。
+4. V1.0 Task 4：真实只保存执行闭环。
+5. V1.1 Task 5：模板中心多模板和中文分区。
+6. V1.2 Task 6：浏览器 Agent 常开和 HUD 常驻。
+7. V1.3 Task 7：用户化错误、日志和恢复。
+8. V1.4 Task 8：免安装包和真实验收。
+
+每个 Task 独立提交一次。涉及 UI 的 Task 必须用运行项目或浏览器验证可见效果；不能只凭代码猜测。涉及真实店小秘流程的 Task 必须保留真实浏览器、日志和证据路径。
