@@ -1940,12 +1940,12 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
             )
         return
     _assert_single_save_product_count(task.get('payload') or {}, status_code=409)
+    _assert_real_task_uses_non_fixture_products(task)
     if mode == 'single_save':
         _assert_single_save_uses_claimed_draft_product(payload.get('product_ids') or [])
 
     if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
         raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')
-    _assert_real_task_uses_non_fixture_products(task)
 
     approval = payload.get('manual_approval') or {}
     if not isinstance(approval, dict):
@@ -2059,6 +2059,14 @@ def _assert_single_save_uses_claimed_draft_product(product_ids: list[int]) -> No
                 '请先完成“数据采集认领”，并确认采集箱验证返回源商品链接后再创建任务。'
             ),
         )
+    if not repo.product_has_completed_claim_provenance(product):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                '编辑保存必须能追溯到已完成的采集认领任务链。'
+                '请先从“采集认领”完成真实认领，并确认商品进入采集箱后再创建任务。'
+            ),
+        )
 
 
 def _assert_single_save_product_count(payload: dict[str, Any], *, status_code: int) -> None:
@@ -2079,7 +2087,7 @@ def _assert_real_task_uses_non_fixture_products(task: dict[str, Any]) -> None:
             status_code=409,
             detail=(
                 f'当前任务选择的是测试/示例商品，不能启动真实店小秘保存：{names}。'
-                '请在“选择商品”中选择真实采集商品，或重新创建单商品只保存任务。'
+                '请先在“采集认领”完成真实商品认领，再到“采集箱商品”选择该商品创建编辑保存任务。'
             ),
         )
 

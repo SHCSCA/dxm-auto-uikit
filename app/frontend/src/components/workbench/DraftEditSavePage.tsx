@@ -107,12 +107,14 @@ export function DraftEditSavePage({
           <div className="real-task-products" aria-label="采集箱商品">
             {claimedProducts.map((product) => {
               const payload = productPayload(product)
-              const draftBoxVerified = payload.draft_box_verified === true
-              const sourceUrl = textValue(payload.source_url) || textValue(payload.url)
-              const claimTaskId = textValue(payload.claim_task_id)
-              const sourceLabel = textValue(payload.source ?? product.source) === 'dxm_data_acquisition'
+              const draftBoxVerified = product.draft_box_verified === true || payload.draft_box_verified === true
+              const sourceUrl = textValue(product.source_url) || textValue(payload.source_url) || textValue(payload.url)
+              const claimTaskId = textValue(product.claim_task_id) || textValue(payload.claim_task_id)
+              const sourceLabel = textValue(product.source_status_label) || (textValue(payload.source ?? product.source) === 'dxm_data_acquisition'
                 ? '真实数据采集'
-                : '等待来源确认'
+                : '等待来源确认')
+              const lifecycleLabel = textValue(product.lifecycle_label) || humanProductStatus(product.status)
+              const draftBoxVerificationLabel = textValue(product.draft_box_verification_label) || (draftBoxVerified ? '已通过采集箱验证' : '等待验证')
               return (
                 <button
                   key={product.id}
@@ -124,8 +126,8 @@ export function DraftEditSavePage({
                 >
                   <strong>{product.title}</strong>
                   <span>{product.category_name || '未指定类目'}</span>
-                  <small>SKU {product.sku_count}，图片 {product.image_count}，{humanProductStatus(product.status)}</small>
-                  <small>采集箱验证：{draftBoxVerified ? '已通过采集箱验证' : '等待验证'}</small>
+                  <small>SKU {product.sku_count}，图片 {product.image_count}，{lifecycleLabel}</small>
+                  <small>采集箱验证：{draftBoxVerificationLabel}</small>
                   <small>商品来源：{sourceLabel}</small>
                   <small>来源链接：{sourceUrl || '等待来源链接'}</small>
                   <small>认领任务：{claimTaskId ? `#${claimTaskId}` : '等待认领任务'}</small>

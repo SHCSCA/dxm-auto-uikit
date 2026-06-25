@@ -63,6 +63,20 @@ def _create_task(
     source_url: str = "https://detail.1688.com/offer/1013604102950.html",
 ):
     store = repo.create_store(store_name, "AliExpress")
+    claim_task = None
+    product_is_fixture = "qa guarded product" in product_title.casefold()
+    if mode == "single_save" and product_status == "claimed_to_draft" and not product_is_fixture:
+        claim_task = repo.create_acquisition_claim_request(
+            {
+                "store_id": store["id"],
+                "store_name": store_name,
+                "source_url": source_url,
+                "keyword": product_title,
+                "category_name": "立牌类谷子",
+                "claim_mark": "AI认领",
+                "template_id": None,
+            }
+        )
     product = repo.create_product(
         {
             "title": product_title,
@@ -76,11 +90,17 @@ def _create_task(
             "image_count": 1,
             "payload": {
                 "source": "dxm_data_acquisition",
+                "store_id": store["id"],
+                "store_name": store_name,
                 "source_url": source_url,
+                "claim_task_id": claim_task["id"] if claim_task else None,
+                "claim_mark": "AI认领",
                 "draft_box_verified": product_status == "claimed_to_draft",
             },
         }
     )
+    if claim_task:
+        repo.mark_acquisition_claim_completed(claim_task["id"], product)
     payload = {"store_name": store_name}
     if approval is not None:
         payload["manual_approval"] = approval
@@ -533,9 +553,9 @@ def test_single_save_start_rejects_qa_fixture_product_before_real_browser(tmp_pa
 
     assert response.status_code == 409
     detail = response.json()["detail"]
-    assert "测试/示例数据" in detail
-    assert "数据采集" in detail
-    assert "采集箱编辑保存" in detail
+    assert "测试/示例商品" in detail
+    assert "采集认领" in detail
+    assert "采集箱商品" in detail
     assert runner.calls == []
 
 

@@ -243,6 +243,11 @@ def test_draft_edit_save_uses_claimed_product_store_instead_of_first_store():
         "payload.draft_box_verified",
         "payload.source_url",
         "payload.claim_task_id",
+        "product.lifecycle_label",
+        "product.source_status_label",
+        "product.draft_box_verification_label",
+        "product.source_url",
+        "product.claim_task_id",
     ]:
         assert label in page_source
     assert "L2" not in page_source

@@ -107,6 +107,7 @@ class Repository:
             rows = conn.execute("SELECT * FROM products ORDER BY id DESC").fetchall()
             for row in rows:
                 row['payload'] = loads(row.pop('payload_json'), {})
+                self._attach_product_lifecycle(row)
             if include_fixtures:
                 return rows
             return [row for row in rows if not _is_fixture_product(row)]
@@ -127,6 +128,8 @@ class Repository:
                 continue
             if not source_url:
                 continue
+            if not self.product_has_completed_claim_provenance(product):
+                continue
             eligible.append(product)
         return eligible
 
@@ -136,6 +139,7 @@ class Repository:
             if not row:
                 return None
             row['payload'] = loads(row.pop('payload_json'), {})
+            self._attach_product_lifecycle(row)
             return row
 
     def create_product(self, data: dict[str, Any]):
@@ -148,6 +152,7 @@ class Repository:
             )
             row = conn.execute("SELECT * FROM products WHERE id=?", (cur.lastrowid,)).fetchone()
             row['payload'] = loads(row.pop('payload_json'), {})
+            self._attach_product_lifecycle(row)
             return row
 
     def create_acquisition_claim_request(self, data: dict[str, Any]):
@@ -289,6 +294,88 @@ class Repository:
                     return value.strip()
         return None
 
+    def _attach_product_lifecycle(self, product: dict[str, Any]) -> None:
+        payload = product.get('payload') if isinstance(product.get('payload'), dict) else {}
+        source = str(payload.get('source') or product.get('source') or '').strip()
+        source_url = self._first_source_url(payload)
+        status = str(product.get('status') or '').strip().lower()
+        draft_box_verified = payload.get('draft_box_verified') is True
+        is_fixture = _is_fixture_product(product)
+
+        if status in {'saved', 'save_completed', 'completed'}:
+            lifecycle_state = 'saved'
+            lifecycle_label = '已保存结果'
+        elif status == 'ready_for_edit' or (
+            status == 'claimed_to_draft'
+            and source == 'dxm_data_acquisition'
+            and draft_box_verified
+            and bool(source_url)
+        ):
+            lifecycle_state = 'editable'
+            lifecycle_label = '可编辑商品'
+        elif status in {'claimed_to_draft', 'claimed'} or payload.get('claim_task_id'):
+            lifecycle_state = 'claimed'
+            lifecycle_label = '已认领商品'
+        else:
+            lifecycle_state = 'awaiting_claim'
+            lifecycle_label = '待认领商品'
+
+        if is_fixture:
+            source_status_label = '测试/示例数据'
+        elif source == 'dxm_data_acquisition':
+            source_status_label = '真实数据采集'
+        elif source in {'manual', 'manual_import'}:
+            source_status_label = '手工/导入商品'
+        else:
+            source_status_label = '等待来源确认'
+
+        if draft_box_verified:
+            draft_box_verification_label = '已通过采集箱验证'
+        elif lifecycle_state in {'claimed', 'editable'}:
+            draft_box_verification_label = '等待采集箱验证'
+        else:
+            draft_box_verification_label = '未进入采集箱'
+
+        product.update({
+            'lifecycle_state': lifecycle_state,
+            'lifecycle_label': lifecycle_label,
+            'source_status_label': source_status_label,
+            'draft_box_verification_label': draft_box_verification_label,
+            'source_url': source_url,
+            'claim_task_id': payload.get('claim_task_id'),
+            'store_id': payload.get('store_id'),
+            'store_name': payload.get('store_name'),
+            'claimed_at': payload.get('claimed_at') or payload.get('completed_at'),
+            'draft_box_verified': draft_box_verified,
+        })
+
+    def product_has_completed_claim_provenance(self, product: dict[str, Any]) -> bool:
+        payload = product.get('payload') if isinstance(product.get('payload'), dict) else {}
+        claim_task_id = payload.get('claim_task_id') or product.get('claim_task_id')
+        try:
+            claim_task_id_int = int(claim_task_id)
+        except (TypeError, ValueError):
+            return False
+        task = self.get_task_private(claim_task_id_int)
+        if not task:
+            return False
+        if task.get('mode') != 'claim_only':
+            return False
+        if task.get('status') != 'completed':
+            return False
+        task_payload = task.get('payload') if isinstance(task.get('payload'), dict) else {}
+        if task_payload.get('status') != 'completed':
+            return False
+        try:
+            claimed_product_id = int(task_payload.get('claimed_product_id'))
+            product_id = int(product.get('id'))
+        except (TypeError, ValueError):
+            return False
+        return (
+            claimed_product_id == product_id
+            and task_payload.get('draft_box_verified') is True
+        )
+
     def set_task_manual_approval(self, task_id: int, *, approved: bool, token: str, approved_by: str = "system"):
         now = now_iso()
         with connection() as conn:
@@ -400,7 +487,7 @@ class Repository:
                 'next_step': '进入“采集箱编辑保存”，选择该商品创建单商品只保存任务。',
             })
             conn.execute(
-                "UPDATE tasks SET payload_json=?, updated_at=? WHERE id=?",
+                "UPDATE tasks SET status='completed', completed_jobs=1, failed_jobs=0, payload_json=?, updated_at=? WHERE id=?",
                 (dumps(payload), now, task_id),
             )
         return self.get_task(task_id)
