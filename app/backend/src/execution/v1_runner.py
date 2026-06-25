@@ -1120,7 +1120,7 @@ class V1TaskRunner:
         try:
             result = call()
         except Exception as exc:
-            raise V1ExecutionError(error_code, error_title, f"{action_name}: {exc}") from exc
+            raise V1ExecutionError(error_code, error_title, self._workflow_exception_detail(action_name, exc)) from exc
 
         if not result.get("ok"):
             raise V1ExecutionError(error_code, error_title, self._workflow_failure_detail(action_name, result))
@@ -1132,7 +1132,17 @@ class V1TaskRunner:
                 raise V1ExecutionError(error_code, error_title, f"{action_name} save_result missing or false")
         return result
 
+    def _workflow_exception_detail(self, action_name: str, exc: Exception) -> str:
+        operator_detail = self._operator_claim_failure_detail(action_name)
+        if operator_detail:
+            return operator_detail
+        return f"{action_name}: {exc}"
+
     def _workflow_failure_detail(self, action_name: str, result: Mapping[str, Any]) -> str:
+        operator_detail = self._operator_claim_failure_detail(action_name)
+        if operator_detail:
+            return operator_detail
+
         stage = result.get("stage") or "unknown_stage"
         page_url = result.get("page_url") or "unknown_url"
         parts = [f"{action_name} failed at {stage}: {page_url}"]
@@ -1176,6 +1186,19 @@ class V1TaskRunner:
             seen.add(text)
             compact_parts.append(text)
         return "; ".join(compact_parts)[:1200]
+
+    def _operator_claim_failure_detail(self, action_name: str) -> str | None:
+        if action_name == "claim_from_data_acquisition":
+            return (
+                "数据采集认领没有完成。请保持真实店小秘浏览器打开，"
+                "检查来源链接、搜索关键词、店铺和验证码后重试；系统没有进入编辑页，不会保存或发布。"
+            )
+        if action_name == "verify_draft_box_claim":
+            return (
+                "采集箱商品确认没有完成。请在真实店小秘采集箱确认商品是否已经进入采集箱后重试；"
+                "系统没有进入编辑页，不会保存或发布。"
+            )
+        return None
 
     async def _run_workflow_action_async(
         self,

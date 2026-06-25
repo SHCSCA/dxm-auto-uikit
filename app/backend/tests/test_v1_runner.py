@@ -891,6 +891,36 @@ def test_claim_only_calls_adapter_without_opening_editor_or_saving(v1_db):
     assert "采集箱编辑保存" in refreshed_task["payload"]["next_step"]
 
 
+def test_claim_only_failure_uses_operator_chinese_detail(v1_db):
+    repo = Repository()
+    store = repo.create_store("Dang Kang", "AliExpress")
+    task = repo.create_acquisition_claim_request({
+        "store_id": store["id"],
+        "keyword": "Hazbin Hotel 立牌",
+        "category_name": "立牌类谷子",
+        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
+        "claim_mark": "AI认领",
+        "template_id": "template-1",
+    })
+    manager = DummyManager()
+    adapter = FakeWorkflowAdapter(fail_action="claim_from_data_acquisition")
+
+    asyncio.run(V1TaskRunner(repo, manager, workflow_adapter=adapter).run_task(task["id"]))
+
+    report = repo.list_reports(task["id"])[0]
+    detail = report["save_result"]["message"]
+    blocked_reason = report["summary"]["blocked_reason"]
+    refreshed_task = repo.get_task_private(task["id"])
+    job_error = refreshed_task["jobs"][0]["error_message"]
+    exception = repo.list_exceptions()[0]
+
+    for value in [detail, blocked_reason, job_error, exception["detail"]]:
+        assert "数据采集认领" in value
+        assert "不会保存或发布" in value
+        assert "claim_from_data_acquisition" not in value
+        assert "dianxiaomi.com" not in value
+
+
 def test_claim_only_does_not_record_claimed_product_without_source_url(v1_db):
     class MissingSourceUrlAdapter(FakeWorkflowAdapter):
         def _record(self, action, *args):

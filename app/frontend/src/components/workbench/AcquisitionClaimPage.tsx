@@ -8,6 +8,7 @@ type AcquisitionClaimPageProps = {
   lastRequest: AcquisitionClaimResponse | null
   onCreateClaimRequest: (request: AcquisitionClaimCreateRequest) => void
   onNavigateDataAcquisition: () => void
+  onShowDraftEdit: () => void
   onShowExecutionConsole: () => void
 }
 
@@ -25,6 +26,7 @@ export function AcquisitionClaimPage({
   lastRequest,
   onCreateClaimRequest,
   onNavigateDataAcquisition,
+  onShowDraftEdit,
   onShowExecutionConsole,
 }: AcquisitionClaimPageProps) {
   const defaultStoreId = stores[0]?.id ? String(stores[0].id) : ''
@@ -148,10 +150,20 @@ export function AcquisitionClaimPage({
           <button className="button button--primary" type="button" onClick={submit} disabled={busy || !canSubmit}>
             创建采集认领请求
           </button>
-          {lastRequest && (
+          {lastRequest && !claimCompleted && (
             <button className="button button--secondary" type="button" onClick={onShowExecutionConsole} disabled={busy}>
-              {claimCompleted ? '查看执行记录' : '开始认领到采集箱'}
+              开始认领到采集箱
             </button>
+          )}
+          {lastRequest && claimCompleted && (
+            <>
+              <button className="button button--primary" type="button" onClick={onShowDraftEdit} disabled={busy}>
+                查看采集箱商品
+              </button>
+              <button className="button button--secondary" type="button" onClick={onShowExecutionConsole} disabled={busy}>
+                查看执行记录
+              </button>
+            </>
           )}
         </div>
       </div>

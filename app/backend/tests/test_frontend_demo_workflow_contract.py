@@ -134,7 +134,7 @@ def test_acquisition_claim_page_uses_claim_request_api_not_legacy_task_center():
     assert "无法定位真实采集商品" in page_source
     assert "创建单商品只保存任务" not in page_source
     assert "选择商品" not in page_source
-    assert "onShowDraftEdit" not in route_section
+    assert "onShowDraftEdit={() => setActiveSection('draft_edit_save')}" in route_section
 
 
 def test_acquisition_claim_page_presents_four_step_real_claim_path():
@@ -144,7 +144,7 @@ def test_acquisition_claim_page_presents_four_step_real_claim_path():
     for label in ["选择店铺与平台", "填写采集商品线索", "开始认领到采集箱", "确认商品进入采集箱"]:
         assert label in page_source
 
-    for label in ["不会保存", "不会发布", "认领标记", "开始认领到采集箱", "商品已进入采集箱", "去“采集箱商品”选择该商品"]:
+    for label in ["不会保存", "不会发布", "认领标记", "开始认领到采集箱", "商品已进入采集箱", "去“采集箱商品”选择该商品", "查看采集箱商品"]:
         assert label in page_source
     for label in ["采集箱验证", "来源链接", "真实数据采集", "已通过采集箱验证"]:
         assert label in page_source
@@ -154,7 +154,7 @@ def test_acquisition_claim_page_presents_four_step_real_claim_path():
     assert "claimed_product_source_url" in page_source
     assert "draft_box_verified" in page_source
 
-    for forbidden in ["QA guarded product", "测试商品", "本地商品", "创建单商品只保存任务", "进入采集箱编辑保存", "onShowDraftEdit"]:
+    for forbidden in ["QA guarded product", "测试商品", "本地商品", "创建单商品只保存任务", "进入采集箱编辑保存"]:
         assert forbidden not in page_source
 
 
