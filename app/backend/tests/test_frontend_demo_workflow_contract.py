@@ -196,6 +196,8 @@ def test_draft_edit_save_page_starts_from_claimed_product_without_technical_gate
     assert "claimedProducts," in app_source
     assert "setClaimedDraftProducts(claimedProducts)" in app_source
     assert "采集箱商品" in page_source
+    assert "从采集箱选择要编辑保存的商品" in page_source
+    assert "这里只显示第一段已认领并通过采集箱确认的真实商品" in page_source
     assert "只保存，不发布" in page_source
     for label in [
         "选择已进入采集箱的商品",
@@ -217,16 +219,16 @@ def test_draft_edit_save_uses_claimed_product_store_instead_of_first_store():
     assert "workspace.stores[0]?.id" not in route_section
     assert "该采集箱商品缺少原始店铺信息" in route_section
     for label in [
-        "只允许从采集箱商品开始",
-        "本功能只点击“保存”",
-        "发布”“保存并发布”“移入待发布",
+        "从采集箱选择要编辑保存的商品",
+        "这里只显示第一段已认领并通过采集箱确认的真实商品",
+        "当前模式：只保存，不发布",
         "采集箱验证",
         "已通过采集箱验证",
         "来源链接",
         "真实数据采集",
-        "认领任务",
-        "去数据采集认领",
-        "检查编辑页模板",
+        "确认采集箱商品正确",
+        "确认本次使用的模板",
+        "人工确认只保存",
         "开始编辑并只保存",
     ]:
         assert label in page_source

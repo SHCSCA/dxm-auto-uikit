@@ -60,19 +60,25 @@ def _create_task(
     product_title: str = "ACG Stand Product",
     product_status: str = "claimed_to_draft",
     publish_scene: str = "SMT_SEMI_MANAGED_SAVE_ONLY",
+    source_url: str = "https://detail.1688.com/offer/1013604102950.html",
 ):
     store = repo.create_store(store_name, "AliExpress")
     product = repo.create_product(
         {
             "title": product_title,
             "source": "dxm_data_acquisition",
+            "source_url": source_url,
             "status": product_status,
             "category_name": "立牌类谷子",
             "price": 7.01,
             "currency": "USD",
             "sku_count": 1,
             "image_count": 1,
-            "payload": {"source": "dxm_data_acquisition", "draft_box_verified": product_status == "claimed_to_draft"},
+            "payload": {
+                "source": "dxm_data_acquisition",
+                "source_url": source_url,
+                "draft_box_verified": product_status == "claimed_to_draft",
+            },
         }
     )
     payload = {"store_name": store_name}

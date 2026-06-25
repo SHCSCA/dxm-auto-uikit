@@ -76,8 +76,8 @@ export function DraftEditSavePage({
         <div className="module-head">
           <div>
             <span className="eyebrow">第二段</span>
-            <h2>采集箱编辑保存</h2>
-            <p>只允许从采集箱商品开始。编辑保存只接受第一段已经认领到采集箱的真实商品；当前模式：只保存，不发布。</p>
+            <h2>从采集箱选择要编辑保存的商品</h2>
+            <p>这里只显示第一段已认领并通过采集箱确认的真实商品。当前模式：只保存，不发布。</p>
           </div>
           <button className="button button--secondary" type="button" onClick={onShowTemplates}>
             检查编辑页模板
