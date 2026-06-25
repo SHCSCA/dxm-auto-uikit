@@ -450,3 +450,155 @@ def test_final_delivery_check_summary_keeps_local_ready_when_dirty_source_packag
     assert payload["effective_real_dxm_mutation_allowed"] is True
     assert payload["effective_real_dxm_mutation_scope"] == "controlled_single_save_only"
     assert payload["effective_real_dxm_write_blocked_reason"] in (None, "")
+
+
+def test_final_delivery_check_summary_does_not_treat_single_save_ready_as_production_delivery(tmp_path, monkeypatch):
+    import src.main as main
+
+    report_path = tmp_path / "final-delivery-check.json"
+    report_path.write_text(json.dumps({
+        "checkedAt": "2026-06-24T09:18:34Z",
+        "localWorkbenchCheck": "PASS",
+        "realDxmWriteReadiness": "READY",
+        "realDxmMutationAllowed": True,
+        "realDxmMutationScope": "controlled_single_save_only",
+        "controlledSingleSaveReady": True,
+        "realDxmTwoStageEndToEnd": "pending_live_dxm_validation",
+        "expectedRealDxmTwoStageEndToEnd": "pending_live_dxm_validation",
+        "twoStageAcceptanceMatchesExpected": True,
+        "productionDeliveryReady": False,
+        "twoStageAcceptance": {
+            "passed": False,
+            "status": "missing_claim_stage",
+            "missing_codes": ["claim_task_missing"],
+        },
+        "twoStageAcceptanceReadiness": {
+            "ready": False,
+            "status": "missing_claim_stage",
+            "missing": ["claim_task_missing"],
+        },
+        "sourcePackageReadiness": "CLEAN",
+        "sourcePackageCheck": "PASS",
+        "requireCleanWorktree": True,
+        "gitHead": "abc123",
+        "browserQa": {"ok": True, "manifest": {"gitHead": "abc123", "gitStatusShort": ""}},
+        "artifacts": {"summary": "outputs/final-delivery-check/final-delivery-check.md"},
+    }), encoding="utf-8")
+    monkeypatch.setattr(main, "FINAL_DELIVERY_CHECK_JSON", report_path)
+    monkeypatch.setattr(
+        main,
+        "_current_git_summary",
+        lambda: {
+            "head": "abc123",
+            "status_short": "",
+            "is_dirty": False,
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main,
+        "_current_real_dxm_gate_summary",
+        lambda: {
+            "readiness": "READY",
+            "blocked_reason": "",
+            "l2_status": "passed",
+            "l3_status": "passed",
+            "delivery_ready": True,
+            "two_stage_ready": False,
+            "two_stage_status": "missing_claim_stage",
+        },
+        raising=False,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/delivery/final-check")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["effective_real_dxm_write_readiness"] == "READY"
+    assert payload["effective_real_dxm_mutation_allowed"] is True
+    assert payload["real_dxm_two_stage_end_to_end"] == "pending_live_dxm_validation"
+    assert payload["expected_real_dxm_two_stage_end_to_end"] == "pending_live_dxm_validation"
+    assert payload["effective_real_dxm_two_stage_end_to_end"] == "pending_live_dxm_validation"
+    assert payload["two_stage_acceptance"]["passed"] is False
+    assert payload["two_stage_acceptance_readiness"]["ready"] is False
+    assert payload["two_stage_acceptance_matches_expected"] is True
+    assert payload["current_two_stage_ready"] is False
+    assert payload["current_two_stage_status"] == "missing_claim_stage"
+    assert payload["production_delivery_ready"] is False
+    assert payload["final_delivery_completed"] is False
+
+
+def test_final_delivery_check_summary_exposes_two_stage_production_completion(tmp_path, monkeypatch):
+    import src.main as main
+
+    report_path = tmp_path / "final-delivery-check.json"
+    report_path.write_text(json.dumps({
+        "checkedAt": "2026-06-24T09:18:34Z",
+        "localWorkbenchCheck": "PASS",
+        "realDxmWriteReadiness": "READY",
+        "realDxmMutationAllowed": True,
+        "realDxmMutationScope": "controlled_single_save_only",
+        "controlledSingleSaveReady": True,
+        "realDxmTwoStageEndToEnd": "passed",
+        "expectedRealDxmTwoStageEndToEnd": "passed",
+        "twoStageAcceptanceMatchesExpected": True,
+        "productionDeliveryReady": True,
+        "twoStageAcceptance": {
+            "passed": True,
+            "status": "passed",
+            "missing_codes": [],
+        },
+        "twoStageAcceptanceReadiness": {
+            "ready": True,
+            "status": "passed",
+            "missing": [],
+        },
+        "sourcePackageReadiness": "CLEAN",
+        "sourcePackageCheck": "PASS",
+        "requireCleanWorktree": True,
+        "gitHead": "abc123",
+        "browserQa": {"ok": True, "manifest": {"gitHead": "abc123", "gitStatusShort": ""}},
+        "artifacts": {"summary": "outputs/final-delivery-check/final-delivery-check.md"},
+    }), encoding="utf-8")
+    monkeypatch.setattr(main, "FINAL_DELIVERY_CHECK_JSON", report_path)
+    monkeypatch.setattr(
+        main,
+        "_current_git_summary",
+        lambda: {
+            "head": "abc123",
+            "status_short": "",
+            "is_dirty": False,
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        main,
+        "_current_real_dxm_gate_summary",
+        lambda: {
+            "readiness": "READY",
+            "blocked_reason": "",
+            "l2_status": "passed",
+            "l3_status": "passed",
+            "delivery_ready": True,
+            "two_stage_ready": True,
+            "two_stage_status": "passed",
+        },
+        raising=False,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/delivery/final-check")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["real_dxm_two_stage_end_to_end"] == "passed"
+    assert payload["expected_real_dxm_two_stage_end_to_end"] == "passed"
+    assert payload["effective_real_dxm_two_stage_end_to_end"] == "passed"
+    assert payload["two_stage_acceptance"]["passed"] is True
+    assert payload["two_stage_acceptance_readiness"]["ready"] is True
+    assert payload["two_stage_acceptance_matches_expected"] is True
+    assert payload["current_two_stage_ready"] is True
+    assert payload["current_two_stage_status"] == "passed"
+    assert payload["production_delivery_ready"] is True
+    assert payload["final_delivery_completed"] is True

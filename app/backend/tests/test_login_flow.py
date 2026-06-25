@@ -309,6 +309,146 @@ class DummyDraftPage:
         return None
 
 
+class DummyHudContext:
+    def __init__(self):
+        self.handlers = {}
+        self.init_scripts = []
+
+    def add_init_script(self, script):
+        self.init_scripts.append(script)
+
+    def on(self, event_name, callback):
+        self.handlers.setdefault(event_name, []).append(callback)
+
+    def emit(self, event_name, *args):
+        for callback in self.handlers.get(event_name, []):
+            callback(*args)
+
+
+class DummyHudPage:
+    def __init__(self, context=None):
+        self.url = 'https://www.dianxiaomi.com/web/home'
+        self.context = context
+        self.init_scripts = []
+        self.evaluations = []
+        self.hud_payloads = []
+        self.goto_calls = []
+        self.handlers = {}
+
+    def add_init_script(self, script):
+        self.init_scripts.append(script)
+
+    def on(self, event_name, callback):
+        self.handlers.setdefault(event_name, []).append(callback)
+
+    def emit(self, event_name, *args):
+        for callback in self.handlers.get(event_name, []):
+            callback(*args)
+
+    def evaluate(self, script, arg=None):
+        self.evaluations.append((script, arg))
+        if isinstance(arg, dict) and arg.get('state'):
+            self.hud_payloads.append(arg)
+        return None
+
+    def goto(self, url, *, wait_until, timeout):
+        self.goto_calls.append((url, wait_until, timeout))
+        self.url = url
+        self.hud_payloads.clear()
+
+    def title(self):
+        return '店小秘--测试页'
+
+
+def test_live_browser_hud_reapplies_after_navigation():
+    flow = DxmLoginFlow(DummyLiveClient())
+    page = DummyHudPage()
+    flow._page = page
+
+    result = flow.update_live_hud({
+        'state': 'SAVE_ONLY',
+        'human_title': '正在只保存',
+        'human_action': '只点击保存，不发布',
+    })
+    assert result['updated'] is True
+    assert page.hud_payloads[-1]['state'] == 'SAVE_ONLY'
+
+    flow._goto_with_live_hud(
+        page,
+        'https://www.dianxiaomi.com/web/smt/smtProductList/draft?status=0',
+        wait_until='domcontentloaded',
+        timeout=45000,
+    )
+
+    assert page.goto_calls[-1][0].endswith('/web/smt/smtProductList/draft?status=0')
+    assert page.hud_payloads[-1]['state'] == 'SAVE_ONLY'
+    assert page.hud_payloads[-1]['human_action'] == '只点击保存，不发布'
+
+
+def test_live_browser_hud_reapplies_to_new_page_from_cached_state():
+    flow = DxmLoginFlow(DummyLiveClient())
+    old_page = DummyHudPage()
+    new_page = DummyHudPage()
+    flow._page = old_page
+
+    flow.update_live_hud({
+        'state': 'OPEN_EDIT_PAGE',
+        'human_title': '正在打开编辑页',
+        'human_action': '进入采集箱商品编辑页',
+    })
+    flow._reapply_live_hud_if_available(new_page)
+
+    assert new_page.hud_payloads[-1]['state'] == 'OPEN_EDIT_PAGE'
+    assert new_page.hud_payloads[-1]['human_title'] == '正在打开编辑页'
+
+
+def test_live_browser_hud_reinjects_on_page_events_and_new_pages():
+    flow = DxmLoginFlow(DummyLiveClient())
+    context = DummyHudContext()
+    page = DummyHudPage(context=context)
+    flow._page = page
+
+    flow.update_live_hud({
+        'state': 'CLAIM_TO_COLLECTION_BOX',
+        'human_title': '正在认领到采集箱',
+        'human_action': '从数据采集认领商品',
+    })
+
+    assert 'framenavigated' in page.handlers
+    assert 'domcontentloaded' in page.handlers
+    assert 'page' in context.handlers
+
+    page.hud_payloads.clear()
+    page.emit('framenavigated')
+    assert page.hud_payloads[-1]['state'] == 'CLAIM_TO_COLLECTION_BOX'
+
+    page.hud_payloads.clear()
+    page.emit('domcontentloaded')
+    assert page.hud_payloads[-1]['human_action'] == '从数据采集认领商品'
+
+    new_page = DummyHudPage(context=context)
+    context.emit('page', new_page)
+    assert 'framenavigated' in new_page.handlers
+    assert new_page.hud_payloads[-1]['human_title'] == '正在认领到采集箱'
+
+
+def test_live_browser_hud_caches_status_before_page_exists():
+    flow = DxmLoginFlow(DummyLiveClient())
+    result = flow.update_live_hud({
+        'state': 'OPEN_DATA_ACQUISITION',
+        'human_title': '正在打开数据采集',
+        'human_action': '进入店小秘数据采集页',
+    })
+    assert result['updated'] is False
+    assert result['reason'] == 'live_browser_page_missing'
+
+    page = DummyHudPage()
+    flow._reapply_live_hud_if_available(page)
+
+    assert page.hud_payloads[-1]['state'] == 'OPEN_DATA_ACQUISITION'
+    assert page.hud_payloads[-1]['human_action'] == '进入店小秘数据采集页'
+
+
 class DummyClaimMarkDraftPage(DummyDraftPage):
     def __init__(self):
         super().__init__({'ok': False, 'matches': []})
@@ -1311,6 +1451,26 @@ def test_dxm_login_flow_start_persists_browser_snapshot(monkeypatch, tmp_path):
     assert Path(tmp_path / 'runtime.json').exists()
 
 
+def test_dxm_login_flow_start_failure_keeps_open_browser_for_recovery(monkeypatch, tmp_path):
+    live_client = DummyLiveClient()
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    close_calls = []
+    flow._page = DummyHudPage()
+
+    monkeypatch.setattr(flow, '_open_login_page_and_fill', lambda username, password: (_ for _ in ()).throw(RuntimeError('login form changed')))
+    monkeypatch.setattr(flow, '_close_browser_session', lambda: close_calls.append('closed'))
+    monkeypatch.setattr(flow, '_is_headless', lambda: False)
+
+    state = flow.start_login('master', 'secret-123')
+
+    assert state['stage'] == 'login_failed'
+    assert state['requires_user_action'] is True
+    assert state['browser_visible'] is True
+    assert state['page_url'] == 'https://www.dianxiaomi.com/web/home'
+    assert '真实浏览器窗口会保留' in state['next_action']
+    assert close_calls == []
+
+
 def test_dxm_login_flow_continue_records_login_failure(monkeypatch, tmp_path):
     live_client = DummyLiveClient(logged_in=False)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
@@ -1482,6 +1642,24 @@ def test_dxm_login_flow_navigate_keeps_visible_browser_for_operator(monkeypatch,
 
     assert state['stage'] == 'workflow_navigation'
     assert state['current_nav'] == 'data_acquisition'
+    assert state['browser_visible'] is True
+    assert '真实浏览器窗口会保留' in state['next_action']
+    assert close_calls == []
+
+
+def test_dxm_login_flow_navigation_failure_keeps_visible_browser_for_recovery(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    close_calls = []
+
+    monkeypatch.setattr(flow, '_navigate_in_session', lambda target: (_ for _ in ()).throw(RuntimeError('page changed')))
+    monkeypatch.setattr(flow, '_close_browser_session', lambda: close_calls.append('closed'))
+    monkeypatch.setattr(flow, '_is_headless', lambda: False)
+
+    state = flow.navigate_post_login('data_acquisition')
+
+    assert state['stage'] == 'workflow_navigation_failed'
+    assert state['requires_user_action'] is True
     assert state['browser_visible'] is True
     assert '真实浏览器窗口会保留' in state['next_action']
     assert close_calls == []
@@ -1681,6 +1859,24 @@ def test_dxm_login_flow_remark_action_reports_missing_target(monkeypatch, tmp_pa
 
     assert state['stage'] == 'draft_box_action_failed'
     assert '未找到目标商品行' in state['message']
+
+
+def test_dxm_login_flow_draft_box_action_failure_keeps_visible_browser_for_recovery(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    close_calls = []
+
+    monkeypatch.setattr(flow, '_perform_draft_box_action', lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('target row missing')))
+    monkeypatch.setattr(flow, '_close_browser_session', lambda: close_calls.append('closed'))
+    monkeypatch.setattr(flow, '_is_headless', lambda: False)
+
+    state = flow.perform_draft_box_action('remark', note_text='AI-OPS', product_query='真实商品')
+
+    assert state['stage'] == 'draft_box_action_failed'
+    assert state['requires_user_action'] is True
+    assert state['browser_visible'] is True
+    assert '真实浏览器窗口会保留' in state['next_action']
+    assert close_calls == []
 
 
 def test_remark_action_treats_existing_note_as_verified(monkeypatch, tmp_path):
@@ -2052,6 +2248,24 @@ def test_dxm_login_flow_perform_editor_action_keeps_browser_session_on_success(m
     state = flow.perform_editor_action('fill_editor_required_defaults')
 
     assert state['stage'] == 'fill_editor_required_defaults'
+    assert close_calls == []
+
+
+def test_dxm_login_flow_editor_action_failure_keeps_visible_browser_for_recovery(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    close_calls = []
+
+    monkeypatch.setattr(flow, '_perform_editor_action', lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('save button changed')))
+    monkeypatch.setattr(flow, '_close_browser_session', lambda: close_calls.append('closed'))
+    monkeypatch.setattr(flow, '_is_headless', lambda: False)
+
+    state = flow.perform_editor_action('save_only')
+
+    assert state['stage'] == 'save_only_failed'
+    assert state['requires_user_action'] is True
+    assert state['browser_visible'] is True
+    assert '真实浏览器窗口会保留' in state['next_action']
     assert close_calls == []
 
 

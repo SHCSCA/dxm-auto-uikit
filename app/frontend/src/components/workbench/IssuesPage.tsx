@@ -7,7 +7,7 @@ type IssuesPageProps = {
   selectedTask: Task | null
 }
 
-const READONLY_PRECHECK_CTA = '运行真实只读检查'
+const READONLY_PRECHECK_CTA = '运行保存前安全检查'
 const l3PostEvidenceGapIds = new Set(['gap-save-result', 'gap-unpublished-proof', 'gap-network-save-response'])
 
 export function IssuesPage({ workspace, selectedTask }: IssuesPageProps) {
@@ -17,20 +17,20 @@ export function IssuesPage({ workspace, selectedTask }: IssuesPageProps) {
     {
       title: '店小秘还没登录',
       what: '真实店小秘浏览器还没有确认登录成功。',
-      why: '没有登录态时，执行浏览器不会启动，也不会保存或发布。',
+      why: '没有登录态时，浏览器现场不会启动保存动作，也不会保存或发布。',
       next: '去“登录店小秘”，打开真实登录页，完成验证码后检测登录状态。',
     },
     {
-      title: '真实只读检查没有通过',
-      what: '商品采集页和草稿箱页还没有完成只读检查。',
-      why: '只读检查未通过前，系统不能确认页面安全，所以不会启动真实保存。',
-      next: `去“运行前检查”，点击“${READONLY_PRECHECK_CTA}”。`,
+      title: '保存前安全检查没有通过',
+      what: '商品采集页和采集箱页还没有完成安全检查。',
+      why: '安全检查未通过前，系统不能确认页面安全，所以不会启动真实保存。',
+      next: `去“浏览器现场”，点击“${READONLY_PRECHECK_CTA}”。`,
     },
     {
       title: '这条任务已经执行过或失败',
       what: '当前任务不是可启动的草稿任务。',
       why: '已经执行过的任务不能重复启动，避免重复操作真实店小秘。',
-      next: '去“选择商品”，重新创建单商品只保存任务。',
+      next: '去“采集箱编辑保存”，重新创建单商品只保存任务。',
     },
     {
       title: '保存结果证据不完整',
@@ -47,12 +47,12 @@ export function IssuesPage({ workspace, selectedTask }: IssuesPageProps) {
   ]
   const emptyExceptionDetail = selectedTask?.status === 'completed'
     ? '当前任务暂无问题记录；如需复核保存链路，请查看保存结果。'
-    : '未执行不代表通过；执行失败、字段缺失和保存阻断会进入问题处理。'
+    : '未执行不代表通过；执行失败、字段缺失和保存阻断会进入结果与问题。'
 
   return (
-    <section className="module-layout" aria-label="问题处理">
+    <section className="module-layout" aria-label="结果与问题">
       <div className="module-card span-2">
-        <ModuleHead title="问题处理" meta={`${exceptions.length} 条待处理`} />
+        <ModuleHead title="结果与问题" meta={`${exceptions.length} 条待处理`} />
         <div className="exception-list">
           {exceptions.map((item) => (
             <ExceptionCard key={item.id} item={item} />
@@ -141,15 +141,15 @@ function buildProblemCardCopy(item: ExceptionItem) {
     return {
       title: '店小秘还没登录',
       what: '系统还没有确认真实店小秘浏览器处于已登录状态。',
-      why: '没有登录态时不会打开执行浏览器，也不会保存或发布。',
+      why: '没有登录态时不会打开浏览器现场执行保存，也不会保存或发布。',
       next: '点“登录店小秘”，打开真实登录页，完成验证码后再点“检测登录状态”。',
     }
   }
-  if (raw.includes('L2') || raw.toLowerCase().includes('probe') || raw.includes('真实只读检查')) {
+  if (raw.includes('L2') || raw.toLowerCase().includes('probe') || raw.includes('真实只读检查') || raw.includes('保存前安全检查')) {
     return {
-      title: '真实只读检查没有通过',
+      title: '保存前安全检查没有通过',
       what: message,
-      why: '商品采集页和草稿箱页没有完成只读验证前，系统不会启动真实保存。',
+      why: '商品采集页和采集箱页没有完成安全检查前，系统不会启动真实保存。',
       next: `点“${READONLY_PRECHECK_CTA}”；如果提示正在运行，就等待完成后刷新。`,
     }
   }
@@ -158,7 +158,7 @@ function buildProblemCardCopy(item: ExceptionItem) {
       title: '这条任务已经执行过或失败',
       what: message,
       why: '已经执行过的任务不能直接重复启动，避免重复操作真实店小秘。',
-      next: '点“选择商品”，重新创建单商品只保存任务。',
+      next: '点“采集箱编辑保存”，重新创建单商品只保存任务。',
     }
   }
   if (message.includes('保存结果证据不完整') || raw.includes('save_result')) {
@@ -173,7 +173,7 @@ function buildProblemCardCopy(item: ExceptionItem) {
     return {
       title: '浏览器会话异常',
       what: message,
-      why: '当前执行浏览器会话不可用，继续执行可能无法确认真实页面状态。',
+      why: '当前浏览器现场会话不可用，继续执行可能无法确认真实页面状态。',
       next: '关闭旧浏览器窗口或后台旧进程，重新打开免安装版，再启动真实浏览器。',
     }
   }
@@ -248,33 +248,33 @@ function humanGateDetail(detail?: string | null) {
     || detail.includes('age')
     || detail.includes('expired')
   ) {
-    return `真实只读检查证据已过期，请点击“${READONLY_PRECHECK_CTA}”刷新后再继续。`
+    return `保存前安全检查证据已过期，请点击“${READONLY_PRECHECK_CTA}”刷新后再继续。`
   }
   if (detail.includes('data_acquisition') || detail.includes('draft_box')) {
     return detail
       .split('data_acquisition').join('商品采集页')
-      .split('draft_box').join('草稿箱页')
-      .split('L2').join('真实只读检查')
+      .split('draft_box').join('采集箱页')
+      .split('L2').join('保存前安全检查')
       .split('L3').join('真实保存')
       .split('passed').join('通过')
-      .split('probe').join('真实只读检查')
+      .split('probe').join('保存前安全检查')
   }
   return detail
-    .split('L2').join('真实只读检查')
+    .split('L2').join('保存前安全检查')
     .split('L3').join('真实保存')
     .split('passed').join('通过')
-    .split('probe').join('真实只读检查')
+    .split('probe').join('保存前安全检查')
 }
 
 function humanL2PrecheckError(message: string) {
   if (message.includes('L2 readonly probe resources are missing')) {
-    return '真实只读检查组件未安装完整：请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
+    return '保存前安全检查组件未安装完整：请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
   }
   if (message.includes('L2 readonly probe runner is missing')) {
-    return '真实只读检查组件未安装完整：缺少真实只读检查启动器。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
+    return '保存前安全检查组件未安装完整：缺少安全检查启动器。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
   }
   if (message.includes('L2 readonly probe script is missing')) {
-    return '真实只读检查组件未安装完整：缺少真实只读检查脚本。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
+    return '保存前安全检查组件未安装完整：缺少安全检查脚本。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
   }
   return message
 }

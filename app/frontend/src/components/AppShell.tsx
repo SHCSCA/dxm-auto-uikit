@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, type ReactNode } from 'react'
 import type { WorkbenchSection } from '../types'
 
 type WorkbenchPrimaryArea = {
-  id: 'daily_flow' | 'review' | 'system'
+  id: 'prepare' | 'claim' | 'save' | 'execute' | 'diagnose' | 'system'
   label: string
   short: string
   items: Array<{ id: WorkbenchSection; label: string; short: string; hint: string }>
@@ -10,44 +10,69 @@ type WorkbenchPrimaryArea = {
 
 const primaryAreas: WorkbenchPrimaryArea[] = [
   {
-    id: 'daily_flow',
-    label: '日常流程',
-    short: '1',
+    id: 'prepare',
+    label: '准备',
+    short: '0',
     items: [
-      { id: 'home', label: '今日任务', short: '今', hint: '看今天当前该做哪一步' },
-      { id: 'dxm_access', label: '登录店小秘', short: '登', hint: '登录真实店小秘并保存本机账号' },
-      { id: 'product_tasks', label: '选择商品', short: '选', hint: '选择一个商品创建只保存任务' },
-      { id: 'edit_config', label: '填写编辑页', short: '填', hint: '告诉 Agent 到店小秘编辑页怎么填' },
-      { id: 'start_save', label: '开始只保存', short: '存', hint: '运行检查、人工确认并启动真实浏览器' },
+      { id: 'home', label: '首页', short: '首', hint: '查看当前步骤和下一步操作' },
+      { id: 'dxm_access', label: '店小秘登录', short: '登', hint: '记住账号并打开真实店小秘浏览器' },
     ],
   },
   {
-    id: 'review',
-    label: '结果复盘',
+    id: 'claim',
+    label: '第一段：采集认领',
+    short: '1',
+    items: [
+      { id: 'acquisition_claim', label: '数据采集认领', short: '采', hint: '从数据采集认领到采集箱' },
+    ],
+  },
+  {
+    id: 'save',
+    label: '第二段：编辑保存',
     short: '2',
     items: [
-      { id: 'results', label: '保存结果', short: '果', hint: '确认保存成功且未发布' },
-      { id: 'issues', label: '问题处理', short: '问', hint: '按失败原因恢复' },
+      { id: 'template_center', label: '模板中心', short: '模', hint: '按店小秘编辑页分区管理多套模板' },
+      { id: 'draft_edit_save', label: '采集箱编辑保存', short: '编', hint: '从采集箱商品创建只保存任务' },
+      { id: 'product_tasks', label: '当前任务', short: '任', hint: '查看当前任务、人工确认和恢复入口' },
+    ],
+  },
+  {
+    id: 'execute',
+    label: '现场执行',
+    short: '3',
+    items: [
+      { id: 'start_save', label: '真实浏览器', short: '览', hint: '查看真实浏览器、中文进度窗和人工接管' },
+    ],
+  },
+  {
+    id: 'diagnose',
+    label: '结果复盘',
+    short: '4',
+    items: [
+      { id: 'results', label: '结果报告', short: '报', hint: '查看保存结果和未发布证明' },
+      { id: 'issues', label: '问题处理', short: '问', hint: '查看阻断原因和恢复建议' },
     ],
   },
   {
     id: 'system',
-    label: '帮助与系统',
-    short: '3',
+    label: '系统',
+    short: '5',
     items: [
-      { id: 'help', label: '使用帮助', short: '帮', hint: '普通用户操作说明' },
-      { id: 'settings', label: '系统设置', short: '设', hint: '日志、服务、维护诊断' },
+      { id: 'settings', label: '系统设置', short: '设', hint: '查看运行环境、日志路径和维护设置' },
     ],
   },
 ]
 
 const sectionLabels: Record<WorkbenchSection, string> = {
-  home: '今日任务',
-  dxm_access: '登录店小秘',
-  product_tasks: '选择商品',
+  home: '首页',
+  dxm_access: '店小秘登录',
+  acquisition_claim: '数据采集认领',
+  draft_edit_save: '采集箱编辑保存',
+  template_center: '模板中心',
+  product_tasks: '当前任务',
   current_task: '当前任务',
-  task_history: '历史任务',
-  edit_config: '填写编辑页',
+  task_history: '当前任务',
+  edit_config: '模板中心',
   config_basic: '基础信息',
   config_category_title: '类目与标题',
   config_price_stock: '价格库存',
@@ -55,13 +80,13 @@ const sectionLabels: Record<WorkbenchSection, string> = {
   config_logistics: '包装物流',
   config_compliance: '合规海关',
   template_management: '模板管理',
-  start_save: '开始只保存',
-  preflight: '运行前检查',
+  start_save: '真实浏览器',
+  preflight: '真实浏览器',
   real_browser: '真实浏览器',
   manual_takeover: '人工接管',
-  results: '保存结果',
+  results: '结果报告',
   issues: '问题处理',
-  evidence: '证据归档',
+  evidence: '结果报告',
   help: '使用帮助',
   settings: '系统设置',
 }
@@ -100,9 +125,9 @@ export function AppShell({
           <div className="brand-mark" aria-hidden="true">DX</div>
           {!sidebarCollapsed && (
             <div>
-              <strong>DXM 单商品只保存 Agent</strong>
-              <span>只保存当前商品，不发布</span>
-              <span className="sr-only">今日任务 / 登录店小秘 / 选择商品 / 填写编辑页 / 开始只保存 / 保存结果 / 问题处理 / 使用帮助 / 系统设置</span>
+              <strong>DXM 只保存自动化</strong>
+              <span>采集认领到采集箱，再只保存</span>
+              <span className="sr-only">首页 / 店小秘登录 / 数据采集认领 / 模板中心 / 采集箱编辑保存 / 当前任务 / 真实浏览器 / 结果报告 / 问题处理 / 系统设置</span>
             </div>
           )}
           <button className="icon-button" type="button" onClick={onToggleSidebar} aria-label="切换侧边栏">
@@ -149,7 +174,7 @@ export function AppShell({
             </section>
           ))}
         </nav>
-        <span className="sr-only">数据连接状态：{sourceLabel}。真实店小秘操作在登录店小秘和开始只保存中完成。</span>
+        <span className="sr-only">数据连接状态：{sourceLabel}。真实店小秘操作分为第一段数据采集认领和第二段采集箱编辑保存。</span>
       </aside>
       <main ref={mainRef} className="workspace" tabIndex={-1} aria-label={`${activeLabel}主内容`}>
         <span className="sr-only" aria-live="polite">当前页面：{activeLabel}</span>

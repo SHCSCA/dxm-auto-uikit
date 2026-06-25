@@ -293,7 +293,7 @@ def test_user_docs_present_desktop_exe_as_primary_delivery_entry():
         assert "D:\\Desktop\\DXM-Agent-Console-免安装版\\DXM-Agent-Console-Portable-0.1.0.exe" in source
         assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
         assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in source
-        assert "28E0FC7FC4FC14D56F444043F81603B5545A6549DC66350D6524CAE70811918E" in source
+        assert "82CF223A673BB657237ACA1A586212F6F0F4FA45B125B44A9C502F565BE0934C" in source
         assert "portable 首次启动会解包 Electron 与 Python 运行时" in source
         assert "%TEMP%` 所在磁盘建议至少保留 1GB 可用空间" in source
         assert "scripts\\start-desktop.bat" in source
@@ -308,8 +308,24 @@ def test_portable_quick_guide_uses_verified_portable_entry():
     assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
     assert "使用目录版时必须保留整个文件夹和 `resources` 目录" in source
     assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in source
-    assert "28E0FC7FC4FC14D56F444043F81603B5545A6549DC66350D6524CAE70811918E" in source
+    assert "82CF223A673BB657237ACA1A586212F6F0F4FA45B125B44A9C502F565BE0934C" in source
     assert "至少建议保留 1GB 可用空间" in source
+
+
+def test_delivery_docs_describe_two_stage_real_browser_scope():
+    docs = [
+        README,
+        PORTABLE_QUICK_GUIDE,
+        USER_GUIDE,
+    ]
+    for path in docs:
+        source = path.read_text(encoding="utf-8")
+        assert "数据采集认领" in source
+        assert "采集箱编辑保存" in source
+        assert "只保存" in source
+        assert "不发布" in source
+        assert "真实浏览器" in source
+        assert "本地测试商品" not in source
 
 
 def test_frontend_vite_build_uses_relative_base_for_electron_file_loading():
@@ -325,25 +341,29 @@ def test_app_shell_presents_agent_console_as_user_first_navigation():
     assert "DXM Agent Console" in index_html
     assert "type WorkbenchPrimaryArea" in source
     assert "const primaryAreas" in source
-    assert "label: '日常流程'" in source
-    assert "label: '结果复盘'" in source
-    assert "label: '帮助与系统'" in source
+    primary_block = source[source.index("const primaryAreas"):source.index("const sectionLabels")]
+    assert "label: '准备'" in source
+    assert "label: '第一段：采集认领'" in source
+    assert "label: '第二段：采集箱编辑保存'" in source
+    assert "label: '复盘'" in source
+    assert "label: '维护'" in source
     assert "label: '更多'" not in source
-    assert "今日任务" in source
-    assert "登录店小秘" in source
-    assert "选择商品" in source
-    assert "填写编辑页" in source
-    assert "开始只保存" in source
-    assert "保存结果" in source
-    assert "问题处理" in source
-    assert "证据归档" not in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
-    assert "使用帮助" in source
-    assert "系统设置" in source
-    assert "id: 'dashboard'" not in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
-    assert "{ id: 'start_save', label: '开始只保存'" in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
-    assert "{ id: 'exceptions', label: '问题'" not in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
-    assert "{ id: 'preflight', label: '运行前检查'" not in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
-    assert "{ id: 'real_browser', label: '真实浏览器'" not in source[source.index("const primaryAreas"):source.index("const sectionLabels")]
+    assert "首页" in source
+    assert "账号与浏览器" in source
+    assert "数据采集认领" in source
+    assert "采集箱编辑保存" in source
+    assert "模板中心" in source
+    assert "浏览器现场" in source
+    assert "任务记录" in source
+    assert "报告与证据" in source
+    assert "证据归档" not in primary_block
+    assert "系统维护" in source
+    assert "id: 'dashboard'" not in primary_block
+    assert "{ id: 'start_save', label: '浏览器现场'" in primary_block
+    assert "{ id: 'task_history', label: '任务记录'" in primary_block
+    assert "{ id: 'exceptions', label: '问题'" not in primary_block
+    assert "{ id: 'preflight', label: '运行前检查'" not in primary_block
+    assert "{ id: 'real_browser', label: '真实浏览器'" not in primary_block
     assert "报告中心" not in source
     assert "异常池" not in source
     assert "nav-section" in source
@@ -363,10 +383,10 @@ def test_execution_console_focus_panel_keeps_primary_summary_small():
     ]
     assert primary_section.count("<span>") == 4
     assert "<strong>DXM 登录</strong>" in primary_section
-    assert "<strong>真实只读检查</strong>" in primary_section
+    assert "<strong>保存前安全检查</strong>" in primary_section
     assert "<strong>人工确认</strong>" in primary_section
-    assert "<strong>执行浏览器</strong>" in primary_section
-    assert "<summary>维护人员查看技术状态</summary>" in focus_section
+    assert "<strong>浏览器现场</strong>" in primary_section
+    assert "<summary>维护人员查看运行状态</summary>" in focus_section
     assert "<strong>任务</strong><b>" in focus_section
     assert "<strong>当前步骤</strong><b>" in focus_section
     assert "<strong>当前页面</strong><b>" in focus_section

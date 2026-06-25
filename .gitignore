@@ -30,6 +30,7 @@ app/backend/data/
 # Local agent/workspace metadata
 .codex/
 .hermes/
+.worktrees/
 
 # Local probe junk should live under tools/probes/, not root
 /tmp_*.py

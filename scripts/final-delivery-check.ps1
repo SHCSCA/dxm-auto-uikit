@@ -4,6 +4,7 @@ param(
   [switch]$CheckPortableDesktop,
   [switch]$Help,
   [string]$ExpectedRealDxmWriteReadiness = "BLOCKED",
+  [string]$ExpectedRealDxmTwoStageEndToEnd = "pending_live_dxm_validation",
   [string]$OutDir = "outputs/final-delivery-check"
 )
 
@@ -50,6 +51,7 @@ if ($Help) {
   Write-Host "  -CheckPortableDesktop  Also verify the portable no-install desktop exe during packaged desktop smoke."
   Write-Host "  -SkipBrowserQA         Developer-only shortcut; do not use for formal delivery acceptance."
   Write-Host "  -ExpectedRealDxmWriteReadiness <BLOCKED|READY|UNKNOWN>  Expected real DXM write readiness for this acceptance run; default BLOCKED."
+  Write-Host "  -ExpectedRealDxmTwoStageEndToEnd <pending_live_dxm_validation|passed>  Expected two-stage real DXM end-to-end state; default pending_live_dxm_validation."
   Write-Host "  -OutDir <path>         Write reports, logs, screenshots and sidecars to a custom directory."
   Write-Host ""
   exit 0
@@ -226,6 +228,46 @@ function Get-L3EvidenceReadiness {
   }
 }
 
+function Get-TwoStageAcceptanceReadiness {
+  param(
+    [object]$WorkspaceSnapshot
+  )
+
+  $missing = New-Object System.Collections.Generic.List[string]
+  $acceptance = if ($WorkspaceSnapshot) { $WorkspaceSnapshot.two_stage_acceptance } else { $null }
+  $status = "missing"
+
+  if (!$acceptance) {
+    $missing.Add("two_stage_acceptance unavailable")
+  } else {
+    if ($acceptance.status) {
+      $status = [string]$acceptance.status
+    }
+    if ($acceptance.passed -ne $true) {
+      if ($status -eq "missing") {
+        $status = "not_passed"
+      }
+      $missing.Add("two-stage acceptance not passed: $status")
+      foreach ($code in @($acceptance.missing_codes)) {
+        if (![string]::IsNullOrWhiteSpace([string]$code)) {
+          $missing.Add([string]$code)
+        }
+      }
+    }
+  }
+
+  if ($missing.Count -eq 0) {
+    $status = "passed"
+  }
+
+  [pscustomobject]@{
+    ready = $missing.Count -eq 0
+    status = $status
+    missing = @($missing)
+    acceptance = $acceptance
+  }
+}
+
 function Convert-RealModeReleasePlanForFinalCheck {
   param(
     [object]$WorkspaceSnapshot
@@ -356,6 +398,7 @@ function Write-ProvisionalDeliveryCheckReport {
   $provisionalL2Gate = Get-WorkspaceGate -WorkspaceSnapshot $WorkspaceSnapshot -Level "L2"
   $provisionalL3Gate = Get-WorkspaceGate -WorkspaceSnapshot $WorkspaceSnapshot -Level "L3"
   $provisionalL3EvidenceReadiness = Get-L3EvidenceReadiness -WorkspaceSnapshot $WorkspaceSnapshot
+  $provisionalTwoStageAcceptanceReadiness = Get-TwoStageAcceptanceReadiness -WorkspaceSnapshot $WorkspaceSnapshot
   $provisionalReadiness = Get-RealDxmWriteReadiness -L2Gate $provisionalL2Gate -L3Gate $provisionalL3Gate -L3EvidenceReadiness $provisionalL3EvidenceReadiness
   $provisionalBlockedReason = Get-RealDxmWriteBlockedReason -L2Gate $provisionalL2Gate -L3Gate $provisionalL3Gate -L3EvidenceReadiness $provisionalL3EvidenceReadiness
   # Provisional report must be BLOCKED when gates are unavailable; Browser QA needs a fail-closed current-run state.
@@ -364,6 +407,9 @@ function Write-ProvisionalDeliveryCheckReport {
   }
   $provisionalControlledSingleSaveReady = $provisionalReadiness -eq "READY"
   $provisionalRealDxmMutationScope = if ($provisionalControlledSingleSaveReady) { "controlled_single_save_only" } else { "none" }
+  $provisionalRealDxmTwoStageEndToEnd = if ($provisionalTwoStageAcceptanceReadiness.ready -eq $true) { "passed" } else { "pending_live_dxm_validation" }
+  $provisionalTwoStageAcceptanceMatchesExpected = $provisionalRealDxmTwoStageEndToEnd -eq $ExpectedRealDxmTwoStageEndToEnd
+  $provisionalProductionDeliveryReady = $provisionalControlledSingleSaveReady -and ($provisionalTwoStageAcceptanceReadiness.ready -eq $true)
   $provisionalRealModeReleasePlan = Convert-RealModeReleasePlanForFinalCheck -WorkspaceSnapshot $WorkspaceSnapshot
   $sourceReadiness = if ([string]::IsNullOrWhiteSpace($provisionalGitStatus)) { "CLEAN" } else { "DIRTY" }
 
@@ -379,6 +425,12 @@ function Write-ProvisionalDeliveryCheckReport {
     realModeReleasePlan = $provisionalRealModeReleasePlan
     expectedRealDxmWriteReadiness = $ExpectedRealDxmWriteReadiness
     realDxmWriteReadinessMatchesExpected = $provisionalReadiness -eq $ExpectedRealDxmWriteReadiness
+    realDxmTwoStageEndToEnd = $provisionalRealDxmTwoStageEndToEnd
+    expectedRealDxmTwoStageEndToEnd = $ExpectedRealDxmTwoStageEndToEnd
+    twoStageAcceptanceMatchesExpected = $provisionalTwoStageAcceptanceMatchesExpected
+    twoStageAcceptanceReadiness = $provisionalTwoStageAcceptanceReadiness
+    twoStageAcceptance = $provisionalTwoStageAcceptanceReadiness.acceptance
+    productionDeliveryReady = $provisionalProductionDeliveryReady
     status = "final_delivery_check_in_progress_for_browser_qa"
     localWorkbenchCheck = "IN_PROGRESS"
     realDxmWriteReadiness = $provisionalReadiness
@@ -1099,6 +1151,7 @@ if (!$SkipBrowserQA -and (!$browserQa -or $browserQa.ok -ne $true)) {
   $localWorkbenchOk = $false
 }
 $l3EvidenceReadiness = Get-L3EvidenceReadiness -WorkspaceSnapshot $workspaceSnapshot
+$twoStageAcceptanceReadiness = Get-TwoStageAcceptanceReadiness -WorkspaceSnapshot $workspaceSnapshot
 $realDxmWriteReadiness = Get-RealDxmWriteReadiness -L2Gate $l2Gate -L3Gate $l3Gate -L3EvidenceReadiness $l3EvidenceReadiness
 $realDxmWriteBlockedReason = Get-RealDxmWriteBlockedReason -L2Gate $l2Gate -L3Gate $l3Gate -L3EvidenceReadiness $l3EvidenceReadiness
 $preSourcePackageReadiness = if ([string]::IsNullOrWhiteSpace($preGitStatus)) { "CLEAN" } else { "DIRTY" }
@@ -1112,7 +1165,10 @@ $batchUnattendedPublishAllowed = $false
 $realModeReleasePlan = Convert-RealModeReleasePlanForFinalCheck -WorkspaceSnapshot $workspaceSnapshot
 $okScope = if ($controlledSingleSaveReady) { "local_workbench_and_controlled_single_save_ready" } else { "local_workbench_only" }
 $realDxmWriteReadinessMatchesExpected = $realDxmWriteReadiness -eq $ExpectedRealDxmWriteReadiness
-$overallOk = $localWorkbenchOk -and $gateEvidenceOk -and $realDxmWriteReadinessMatchesExpected -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")
+$realDxmTwoStageEndToEnd = if ($twoStageAcceptanceReadiness.ready -eq $true) { "passed" } else { "pending_live_dxm_validation" }
+$twoStageAcceptanceMatchesExpected = $realDxmTwoStageEndToEnd -eq $ExpectedRealDxmTwoStageEndToEnd
+$productionDeliveryReady = $localWorkbenchOk -and $gateEvidenceOk -and $controlledSingleSaveReady -and ($twoStageAcceptanceReadiness.ready -eq $true) -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")
+$overallOk = $localWorkbenchOk -and $gateEvidenceOk -and $realDxmWriteReadinessMatchesExpected -and $twoStageAcceptanceMatchesExpected -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")
 
 $l2AllowlistReviewTemplate = [pscustomobject]@{
   schema = "dxm_l2_allowlist_review_template.v1"
@@ -1208,6 +1264,12 @@ $result = [pscustomobject]@{
   realModeReleasePlan = $realModeReleasePlan
   expectedRealDxmWriteReadiness = $ExpectedRealDxmWriteReadiness
   realDxmWriteReadinessMatchesExpected = $realDxmWriteReadinessMatchesExpected
+  realDxmTwoStageEndToEnd = $realDxmTwoStageEndToEnd
+  expectedRealDxmTwoStageEndToEnd = $ExpectedRealDxmTwoStageEndToEnd
+  twoStageAcceptanceMatchesExpected = $twoStageAcceptanceMatchesExpected
+  twoStageAcceptanceReadiness = $twoStageAcceptanceReadiness
+  twoStageAcceptance = $twoStageAcceptanceReadiness.acceptance
+  productionDeliveryReady = $productionDeliveryReady
   status = if ($overallOk) {
     if ($RequireCleanWorktree) { "local_workbench_source_package_check_pass" } else { "local_workbench_check_pass" }
   } else {
@@ -1300,7 +1362,8 @@ if (!$SkipBrowserQA) {
   if (!$postFinalReportStateQaCommand.ok -or !$postFinalReportQa -or $postFinalReportQa.ok -ne $true) {
     $localWorkbenchOk = $false
   }
-  $overallOk = $localWorkbenchOk -and $gateEvidenceOk -and $realDxmWriteReadinessMatchesExpected -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")
+  $productionDeliveryReady = $localWorkbenchOk -and $gateEvidenceOk -and $controlledSingleSaveReady -and ($twoStageAcceptanceReadiness.ready -eq $true) -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")
+  $overallOk = $localWorkbenchOk -and $gateEvidenceOk -and $realDxmWriteReadinessMatchesExpected -and $twoStageAcceptanceMatchesExpected -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")
   $result.ok = $overallOk
   $result.status = if ($overallOk) {
     if ($RequireCleanWorktree) { "local_workbench_source_package_check_pass" } else { "local_workbench_check_pass" }
@@ -1308,6 +1371,7 @@ if (!$SkipBrowserQA) {
     if ($RequireCleanWorktree -and $sourcePackageCheck -eq "FAIL") { "source_package_check_fail" } else { "local_workbench_check_fail" }
   }
   $result.localWorkbenchCheck = if ($localWorkbenchOk) { "PASS" } else { "FAIL" }
+  $result.productionDeliveryReady = $productionDeliveryReady
   $result.commands = $commands
   $result.postFinalReportQa = $postFinalReportQa
   Write-JsonNoBomFile -Path $jsonPath -Value $result
@@ -1327,7 +1391,8 @@ if (!$SkipBrowserQA) {
   if (!$postFinalReportCenterQaCommand.ok -or !$postFinalReportQa -or $postFinalReportQa.ok -ne $true) {
     $localWorkbenchOk = $false
   }
-  $overallOk = $localWorkbenchOk -and $gateEvidenceOk -and $realDxmWriteReadinessMatchesExpected -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")
+  $productionDeliveryReady = $localWorkbenchOk -and $gateEvidenceOk -and $controlledSingleSaveReady -and ($twoStageAcceptanceReadiness.ready -eq $true) -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")
+  $overallOk = $localWorkbenchOk -and $gateEvidenceOk -and $realDxmWriteReadinessMatchesExpected -and $twoStageAcceptanceMatchesExpected -and (!$RequireCleanWorktree -or $sourcePackageCheck -eq "PASS")
   $result.ok = $overallOk
   $result.status = if ($overallOk) {
     if ($RequireCleanWorktree) { "local_workbench_source_package_check_pass" } else { "local_workbench_check_pass" }
@@ -1335,6 +1400,7 @@ if (!$SkipBrowserQA) {
     if ($RequireCleanWorktree -and $sourcePackageCheck -eq "FAIL") { "source_package_check_fail" } else { "local_workbench_check_fail" }
   }
   $result.localWorkbenchCheck = if ($localWorkbenchOk) { "PASS" } else { "FAIL" }
+  $result.productionDeliveryReady = $productionDeliveryReady
   $result.commands = $commands
   $result.postFinalReportQa = $postFinalReportQa
   Write-JsonNoBomFile -Path $jsonPath -Value $result
@@ -1348,6 +1414,10 @@ $summaryLines.Add("- OK scope: $($result.okScope)")
 $summaryLines.Add("- Real DXM mutation allowed: $($result.realDxmMutationAllowed)")
 $summaryLines.Add("- Real DXM mutation scope: $($result.realDxmMutationScope)")
 $summaryLines.Add("- Controlled single_save ready: $($result.controlledSingleSaveReady)")
+$summaryLines.Add("- Real DXM two-stage end-to-end: $($result.realDxmTwoStageEndToEnd)")
+$summaryLines.Add("- Expected real DXM two-stage end-to-end: $($result.expectedRealDxmTwoStageEndToEnd)")
+$summaryLines.Add("- Two-stage acceptance matches expected: $($result.twoStageAcceptanceMatchesExpected)")
+$summaryLines.Add("- Production delivery ready: $($result.productionDeliveryReady)")
 $summaryLines.Add("- Batch/unattended/publish allowed: $($result.batchUnattendedPublishAllowed)")
 $summaryLines.Add("- Production batch/unattended/publish ready: $($result.productionRealWriteReady)")
 $summaryLines.Add("- Real DXM write blocked reason: $($result.realDxmWriteBlockedReason)")

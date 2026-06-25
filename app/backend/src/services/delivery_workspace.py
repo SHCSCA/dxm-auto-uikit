@@ -71,15 +71,27 @@ ACTION_TO_STATES = {
 
 
 def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> dict[str, Any] | None:
-    tasks = repo.list_tasks()
+    tasks = _visible_operator_tasks(repo, repo.list_tasks())
+    requested_task_id = task_id
+    requested_task_missing = False
     if task_id is None:
         if not tasks:
-            return None
+            return _empty_delivery_workspace(repo)
         task_id = _default_delivery_task_id(repo, tasks)
 
     task = repo.get_task(task_id)
+    if task and _is_legacy_fixture_single_save_task(repo, task):
+        task = None
     if not task:
-        return None
+        requested_task_missing = requested_task_id is not None
+        if not tasks:
+            return _empty_delivery_workspace(repo, requested_task_id=requested_task_id, requested_task_missing=requested_task_missing)
+        task_id = _default_delivery_task_id(repo, tasks)
+        task = repo.get_task(task_id)
+        if task and _is_legacy_fixture_single_save_task(repo, task):
+            return _empty_delivery_workspace(repo, requested_task_id=requested_task_id, requested_task_missing=True)
+        if not task:
+            return _empty_delivery_workspace(repo, requested_task_id=requested_task_id, requested_task_missing=requested_task_missing)
 
     reports = repo.list_reports(task_id)
     evidences = repo.list_evidences(task_id)
@@ -92,8 +104,9 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
     extracted = _extract_delivery_evidence(reports, evidences)
     l2_gate = _l2_probe_gate()
     delivery_readiness = _delivery_readiness(task, reports, evidences)
+    two_stage_acceptance = _two_stage_acceptance(repo, task, reports, evidences, extracted)
 
-    return {
+    workspace = {
         "baseline": _baseline(),
         "current_task": _current_task(task),
         "stores": repo.list_stores(),
@@ -111,6 +124,7 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
         "evidence_grade": _evidence_grade(extracted, l2_gate, delivery_readiness),
         "regression_gates": _regression_gates(extracted, l2_gate, delivery_readiness),
         "delivery_readiness": delivery_readiness,
+        "two_stage_acceptance": two_stage_acceptance,
         "real_mode_release_plan": _real_mode_release_plan(l2_gate, delivery_readiness),
         "acceptanceGaps": _acceptance_gaps(exceptions, extracted, l2_gate, delivery_readiness),
         "safety": _safety_state(extracted, l2_gate, delivery_readiness),
@@ -118,6 +132,134 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
         "logs": logs,
         "exceptions": exceptions,
     }
+    if requested_task_missing:
+        workspace["requested_task_missing"] = True
+        workspace["requested_task_id"] = requested_task_id
+    return workspace
+
+
+def _empty_delivery_workspace(
+    repo: Repository,
+    *,
+    requested_task_id: int | None = None,
+    requested_task_missing: bool = False,
+) -> dict[str, Any]:
+    extracted = _extract_delivery_evidence([], [])
+    l2_gate = _l2_probe_gate()
+    delivery_readiness = {
+        "ready": False,
+        "has_l3_evidence": False,
+        "total_job_count": 0,
+        "complete_job_count": 0,
+        "jobs": [],
+    }
+    workspace = {
+        "baseline": _baseline(),
+        "current_task": None,
+        "stores": repo.list_stores(),
+        "templates": repo.list_templates(),
+        "products": repo.list_products(),
+        "tasks": [],
+        "steps": [],
+        "evidences": [],
+        "evidence_points": [],
+        "reports": [],
+        "report_summary": _report_summary([], extracted),
+        "template_resolution": _template_resolution(None),
+        "dxmReferenceTemplates": _dxm_reference_sections(None),
+        "publish_guard_state": _publish_guard_state([], extracted),
+        "evidence_grade": _evidence_grade(extracted, l2_gate, delivery_readiness),
+        "regression_gates": _regression_gates(extracted, l2_gate, delivery_readiness),
+        "delivery_readiness": delivery_readiness,
+        "two_stage_acceptance": _empty_two_stage_acceptance(),
+        "real_mode_release_plan": _real_mode_release_plan(l2_gate, delivery_readiness),
+        "acceptanceGaps": [
+            {
+                "id": "empty-workspace",
+                "title": "还没有可执行任务",
+                "severity": "blocker",
+                "owner": "task_selection",
+                "detail": "请先在“数据采集认领”或“采集箱编辑保存”中创建任务；没有任务时不会启动真实保存。",
+                "evidenceLevel": "C",
+            }
+        ],
+        "safety": _safety_state(extracted, l2_gate, delivery_readiness),
+        "l2_probe_plan": _l2_probe_plan(),
+        "logs": [],
+        "exceptions": [],
+    }
+    if requested_task_missing:
+        workspace["requested_task_missing"] = True
+        workspace["requested_task_id"] = requested_task_id
+    return workspace
+
+
+_FIXTURE_TASK_MARKERS = (
+    "qa guarded",
+    "fixture",
+    "测试商品",
+    "示例商品",
+    "本地演示",
+)
+
+
+def _visible_operator_tasks(repo: Repository, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [task for task in tasks if not _is_legacy_fixture_single_save_task(repo, task)]
+
+
+def _is_legacy_fixture_single_save_task(repo: Repository, task: Mapping[str, Any]) -> bool:
+    if task.get("mode") != "single_save":
+        return False
+    payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+    if _looks_like_fixture_text(task.get("name")) or _looks_like_fixture_text(payload):
+        return True
+    for product_id in _task_product_ids(task):
+        product = repo.get_product(product_id)
+        if product and _looks_like_fixture_product(product):
+            return True
+    return False
+
+
+def _task_product_ids(task: Mapping[str, Any]) -> list[int]:
+    payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+    raw_values = payload.get("product_ids")
+    if not isinstance(raw_values, list):
+        raw_values = []
+    jobs = task.get("jobs")
+    if isinstance(jobs, list):
+        raw_values = [*raw_values, *(job.get("product_id") for job in jobs if isinstance(job, Mapping))]
+    product_ids: list[int] = []
+    for value in raw_values:
+        try:
+            product_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if product_id > 0:
+            product_ids.append(product_id)
+    return list(dict.fromkeys(product_ids))
+
+
+def _looks_like_fixture_product(product: Mapping[str, Any]) -> bool:
+    payload = product.get("payload") if isinstance(product.get("payload"), Mapping) else {}
+    return _looks_like_fixture_text(
+        [
+            product.get("title"),
+            product.get("category_name"),
+            product.get("source"),
+            payload,
+        ]
+    )
+
+
+def _looks_like_fixture_text(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        text = " ".join(str(item or "") for item in value.values())
+    elif isinstance(value, (list, tuple, set)):
+        text = " ".join(str(item or "") for item in value)
+    else:
+        text = str(value or "")
+    normalized = text.casefold()
+    return any(marker in normalized for marker in _FIXTURE_TASK_MARKERS)
 
 
 def _default_delivery_task_id(repo: Repository, tasks: list[dict[str, Any]]) -> int:
@@ -213,8 +355,13 @@ def _real_mode_release_plan(
     l2_status = str((l2_gate or {}).get("status") or "")
     l2_passed = l2_status == "passed"
     readiness_ready = bool(delivery_readiness and delivery_readiness.get("ready") is True)
+    claim_only_currently_allowed = l2_passed
     single_save_currently_allowed = l2_passed and readiness_ready
+    claim_only_status = "released_controlled" if claim_only_currently_allowed else "blocked_stale_l2"
     single_save_status = "released_controlled" if single_save_currently_allowed else "blocked_stale_l2"
+    claim_only_blockers = [] if claim_only_currently_allowed else [
+        str((l2_gate or {}).get("detail") or "fresh same-run L2 data_acquisition and draft_box proof is required before real claim_only can start")
+    ]
     single_save_blockers = [] if single_save_currently_allowed else [
         str((l2_gate or {}).get("detail") or "fresh same-run L2 data_acquisition and draft_box proof is required before real single_save can start")
     ]
@@ -222,7 +369,7 @@ def _real_mode_release_plan(
     l2_check_blocker = None if l2_passed else "fresh L2 dual-target readonly proof is missing or stale"
     return {
         "schema": "dxm_real_mode_release_plan.v1",
-        "scope": "controlled_single_save_only",
+        "scope": "controlled_claim_and_single_save",
         "publish_allowed": False,
         "batch_unattended_publish_allowed": False,
         "modes": [
@@ -250,49 +397,42 @@ def _real_mode_release_plan(
             },
             {
                 "mode": "claim_only",
-                "label": "claim_only",
-                "status": "blocked_unreleased",
-                "allowed": False,
-                "release_scope": "not released",
+                "label": "受控 claim_only",
+                "status": claim_only_status,
+                "allowed": claim_only_currently_allowed,
+                "release_scope": "controlled claim to draft box",
                 "required_evidence": [
-                    "dedicated L2/L3 run for claim_only",
-                    "claim ownership proof",
+                    "L2 dual-target readonly proof",
+                    "unique acquisition product proof",
+                    "claim to draft box proof",
                     "no editor open and no save request proof",
-                    "local ownership lock and release audit trail",
                 ],
                 "required_controls": [
-                    *shared_controls,
-                    "claim marker must be operator-approved and reversible",
-                    "manual recovery plan for wrong target claim",
+                    "fresh same-run L2 data_acquisition and draft_box proof",
+                    "task runner evidence chain only; direct mutation endpoint remains forbidden",
+                    "claim_only must not open editor, save, publish, or move to pending publish",
+                    "manual recovery path for wrong target claim",
                 ],
-                "blockers": [
-                    "cannot reuse single_save evidence",
-                    "claim marker write semantics need independent audit",
-                    "manual recovery and rollback procedure not yet accepted",
-                ],
+                "blockers": claim_only_blockers,
                 "readiness_checklist": [
-                    checklist(
-                        "dedicated_l2_l3",
-                        "Dedicated claim_only L2/L3 evidence",
-                        blocker="cannot reuse single_save evidence",
-                        detail="claim_only changes draft ownership state; it needs its own readonly and canary evidence chain.",
-                    ),
+                    checklist("l2_dual_target", "L2 dual-target readonly proof", status=l2_check_status, evidence_source="L2 gate", blocker=l2_check_blocker),
                     checklist(
                         "claim_ownership_proof",
                         "Claim ownership proof",
-                        blocker="missing claim ownership proof",
-                        detail="Must prove the exact draft row was claimed and can be traced to store, product, and source URL.",
+                        status="passed" if claim_only_currently_allowed else "blocked",
+                        blocker=None if claim_only_currently_allowed else "missing L2 gate",
+                        detail="Runner verifies the claimed product can be traced to store, product query/category, and source URL when available.",
                     ),
                     checklist(
                         "no_editor_or_save",
                         "No editor open and no save request proof",
-                        blocker="missing negative save proof",
+                        status="passed",
                         detail="claim_only must not open the editor or issue save/add.json requests.",
                     ),
                     checklist(
                         "rollback_release",
                         "Ownership release or manual rollback path",
-                        blocker="missing ownership rollback proof",
+                        status="operator_required",
                         detail="Operator must have a documented recovery path before claim_only can be released.",
                     ),
                 ],
@@ -771,6 +911,216 @@ def _delivery_readiness(
         "complete_job_count": complete_count,
         "jobs": job_results,
     }
+
+
+def _empty_two_stage_acceptance() -> dict[str, Any]:
+    return {
+        "schema": "dxm_two_stage_acceptance.v1",
+        "passed": False,
+        "status": "no_task",
+        "user_message": "请选择真实数据采集商品，并完成采集认领到采集箱后，再执行单商品只保存。",
+        "claim_task_id": None,
+        "save_task_id": None,
+        "claimed_product_id": None,
+        "missing_codes": ["task"],
+        "checks": {
+            "claim_task_present": False,
+            "claim_completed": False,
+            "claimed_product_present": False,
+            "draft_box_verified": False,
+            "single_save_linked_to_claim": False,
+            "save_success": False,
+            "unpublished_proof": False,
+            "publish_guard_safe": False,
+        },
+    }
+
+
+def _two_stage_acceptance(
+    repo: Repository,
+    task: Mapping[str, Any],
+    reports: list[dict[str, Any]],
+    evidences: list[dict[str, Any]],
+    extracted: dict[str, Any],
+) -> dict[str, Any]:
+    payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+    jobs = list(task.get("jobs") or [])
+    save_task_id = _int_or_none(task.get("id"))
+    product_ids = [
+        value
+        for value in [_int_or_none(payload.get("claimed_product_id")), *[_int_or_none(job.get("product_id")) for job in jobs]]
+        if value is not None
+    ]
+    claimed_product_id = product_ids[0] if product_ids else None
+    product = repo.get_product(claimed_product_id) if claimed_product_id is not None else None
+    product_payload = product.get("payload") if isinstance((product or {}).get("payload"), Mapping) else {}
+    claim_task_id = _int_or_none(payload.get("claim_task_id")) or _int_or_none(product_payload.get("claim_task_id"))
+    claim_task = repo.get_task_private(claim_task_id) if claim_task_id is not None else None
+    claim_payload = claim_task.get("payload") if isinstance((claim_task or {}).get("payload"), Mapping) else {}
+    claim_reports = repo.list_reports(claim_task_id) if claim_task_id is not None else []
+    publish_guard = _publish_guard_state(reports, extracted)
+
+    claim_completed = _claim_stage_completed(claim_task, claim_payload, claim_reports, claimed_product_id)
+    claim_product_matches = _claim_reports_match_product(claim_reports, claimed_product_id) or (
+        _int_or_none(claim_payload.get("claimed_product_id")) == claimed_product_id
+    )
+    product_source = str(
+        payload.get("claimed_product_source")
+        or product_payload.get("source")
+        or ((product or {}).get("source"))
+        or ""
+    ).strip()
+    product_status = str((product or {}).get("status") or payload.get("claimed_product_status") or "").strip()
+    draft_box_verified = payload.get("draft_box_verified") is True or product_payload.get("draft_box_verified") is True
+    job_product_ids = {_int_or_none(job.get("product_id")) for job in jobs}
+    single_save_linked = (
+        task.get("mode") == "single_save"
+        and claimed_product_id is not None
+        and job_product_ids == {claimed_product_id}
+        and product_source == "dxm_data_acquisition"
+        and product_status in {"claimed_to_draft", "ready_for_edit"}
+        and draft_box_verified
+    )
+    save_success = any(_report_has_successful_save(report) for report in reports)
+    unpublished_proof = bool(extracted.get("published_proofs"))
+    publish_guard_safe = publish_guard.get("safe") is True
+
+    checks = {
+        "claim_task_present": claim_task is not None,
+        "claim_completed": claim_completed,
+        "claimed_product_present": product is not None and claimed_product_id is not None,
+        "claim_product_matches": claim_product_matches,
+        "draft_box_verified": draft_box_verified,
+        "single_save_linked_to_claim": single_save_linked,
+        "save_success": save_success,
+        "unpublished_proof": unpublished_proof,
+        "publish_guard_safe": publish_guard_safe,
+    }
+    missing_codes: list[str] = []
+    if claim_task_id is None:
+        missing_codes.append("claim_task_id")
+    if claim_task is None:
+        missing_codes.append("claim_task")
+    if not claim_completed:
+        missing_codes.append("claim_completed")
+    if not claim_product_matches:
+        missing_codes.append("claim_product_match")
+    if product is None or claimed_product_id is None:
+        missing_codes.append("claimed_product")
+    if product_source != "dxm_data_acquisition":
+        missing_codes.append("claimed_product_source")
+    if not draft_box_verified:
+        missing_codes.append("draft_box_verified")
+    if not single_save_linked:
+        missing_codes.append("single_save_linked_to_claim")
+    if not save_success:
+        missing_codes.append("save_success")
+    if not unpublished_proof:
+        missing_codes.append("unpublished_proof")
+    if not publish_guard_safe:
+        missing_codes.append("publish_guard_safe")
+
+    if not missing_codes:
+        status = "passed"
+        user_message = "真实两段式已完成：商品已从数据采集认领到采集箱，并完成单商品只保存且未发布。"
+    elif any(code in missing_codes for code in ("claim_task_id", "claim_task", "claim_completed", "claim_product_match")):
+        status = "missing_claim_stage"
+        user_message = "还没有完整的数据采集认领证据。请先从店小秘数据采集认领真实商品到采集箱，再创建单商品只保存任务。"
+    elif any(code in missing_codes for code in ("claimed_product", "claimed_product_source", "draft_box_verified", "single_save_linked_to_claim")):
+        status = "missing_draft_box_stage"
+        user_message = "采集箱商品链路不完整。请确认本次保存任务选择的是刚认领进入采集箱的真实商品。"
+    elif "save_success" in missing_codes:
+        status = "missing_save_stage"
+        user_message = "采集箱编辑保存还没有成功证据。请启动单商品只保存，并等待保存成功。"
+    elif "unpublished_proof" in missing_codes or "publish_guard_safe" in missing_codes:
+        status = "missing_unpublished_proof"
+        user_message = "保存后还缺少未发布证明，或检测到发布风险。请确认只保存成功且商品没有发布。"
+    else:
+        status = "incomplete"
+        user_message = "两段式验收证据不完整，请按页面提示补齐后重试。"
+
+    return {
+        "schema": "dxm_two_stage_acceptance.v1",
+        "passed": status == "passed",
+        "status": status,
+        "user_message": user_message,
+        "claim_task_id": claim_task_id,
+        "save_task_id": save_task_id,
+        "claimed_product_id": claimed_product_id,
+        "missing_codes": missing_codes,
+        "checks": checks,
+        "claim_report_count": len(claim_reports),
+        "save_report_count": len(reports),
+        "evidence_count": len(evidences),
+    }
+
+
+def _claim_stage_completed(
+    claim_task: Mapping[str, Any] | None,
+    claim_payload: Mapping[str, Any],
+    claim_reports: list[dict[str, Any]],
+    claimed_product_id: int | None,
+) -> bool:
+    if not claim_task:
+        return False
+    if claim_task.get("status") == "completed":
+        return True
+    if claim_payload.get("status") == "completed" and claim_payload.get("stage") == "claimed_to_draft":
+        return True
+    return any(
+        report.get("status") == "success" and _claim_report_mentions_product(report, claimed_product_id)
+        for report in claim_reports
+    )
+
+
+def _claim_reports_match_product(claim_reports: list[dict[str, Any]], claimed_product_id: int | None) -> bool:
+    return any(_claim_report_mentions_product(report, claimed_product_id) for report in claim_reports)
+
+
+def _claim_report_mentions_product(report: Mapping[str, Any], claimed_product_id: int | None) -> bool:
+    if claimed_product_id is None:
+        return False
+    if _int_or_none(report.get("product_id")) == claimed_product_id:
+        return True
+    for payload in (report.get("save_result"), report.get("summary")):
+        if _payload_mentions_product(payload, claimed_product_id):
+            return True
+    return False
+
+
+def _payload_mentions_product(payload: Any, product_id: int) -> bool:
+    if isinstance(payload, Mapping):
+        if _int_or_none(payload.get("claimed_product_id")) == product_id:
+            return True
+        if _int_or_none(payload.get("product_id")) == product_id:
+            return True
+        nested = payload.get("claimed_product")
+        if isinstance(nested, Mapping) and _int_or_none(nested.get("id")) == product_id:
+            return True
+        return any(_payload_mentions_product(value, product_id) for value in payload.values())
+    if isinstance(payload, list):
+        return any(_payload_mentions_product(item, product_id) for item in payload)
+    return False
+
+
+def _report_has_successful_save(report: Mapping[str, Any]) -> bool:
+    return (
+        report.get("status") == "success"
+        and _parse_bool(report.get("published")) is False
+        and (
+            _payload_has_save_result(report.get("save_result"))
+            or _payload_has_save_result(report.get("summary"))
+        )
+    )
+
+
+def _int_or_none(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _payload_has_save_result(payload: Any) -> bool:

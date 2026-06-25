@@ -9,6 +9,7 @@ from typing import Any
 
 from src.core.config import DATA_DIR
 from src.execution.browser_runtime import chrome_launch_options
+from src.services.browser_agent_status import build_browser_hud
 
 
 PROFILE_ROOT = DATA_DIR / "browser_profiles" / "agent_console"
@@ -17,6 +18,7 @@ DEFAULT_TARGET_URL = "https://www.dianxiaomi.com/"
 MAX_NETWORK_EVENTS = 120
 MAX_ACTION_EVENTS = 160
 MAX_RECENT_ACTIONS = 3
+BROWSER_CLOSED_MESSAGE = "真实浏览器窗口已关闭，请重新打开执行浏览器。"
 BLOCKED_SELECTOR_CONTROL_KEYWORDS = (
     "publish",
     "submitpublish",
@@ -58,6 +60,13 @@ USER_ACTION_HUD_COPY = {
         "human_action": "请在真实浏览器里检查或修正当前页面",
         "human_next": "处理完成后在控制台交还 Agent",
     },
+    "BROWSER_CLOSED": {
+        "phase": "真实浏览器已关闭",
+        "severity": "error",
+        "human_title": "真实浏览器窗口已关闭",
+        "human_action": "请重新打开执行浏览器后继续任务",
+        "human_next": "回到执行浏览器重新打开",
+    },
 }
 
 
@@ -71,6 +80,7 @@ class AgentConsoleService:
         self._browser_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="agent-console")
 
     def status(self) -> dict[str, Any]:
+        self._refresh_browser_liveness()
         with self._lock:
             return dict(self._state)
 
@@ -91,6 +101,20 @@ class AgentConsoleService:
         )
         if reused is not None:
             return reused
+        preview = self._preserve_visible_browser_for_preview(
+            task_id=task_id,
+            target_url=target_url,
+            launch_browser=launch_browser,
+            step=step,
+        )
+        if preview is not None:
+            return preview
+        protected = self._protect_visible_browser_for_other_task(
+            task_id=task_id,
+            launch_browser=launch_browser,
+        )
+        if protected is not None:
+            return protected
 
         self._close_current_browser()
         with self._lock:
@@ -175,6 +199,95 @@ class AgentConsoleService:
             self._apply_hud_safely(page, hud)
         return self.status()
 
+    def _preserve_visible_browser_for_preview(
+        self,
+        *,
+        task_id: int | None,
+        target_url: str | None,
+        launch_browser: bool,
+        step: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if launch_browser:
+            return None
+        with self._lock:
+            current_task_id = self._state.get("task_id")
+            has_visible_browser = (
+                self._state.get("active")
+                and self._state.get("browser_visible")
+                and self._page is not None
+            )
+            if not has_visible_browser:
+                return None
+
+            same_task = task_id is None or current_task_id is None or current_task_id == task_id
+            if not same_task:
+                self._state["last_error"] = (
+                    f"已有真实浏览器正在执行任务 #{current_task_id}；"
+                    "未切换任务，也未关闭当前浏览器现场。"
+                )
+                self._state["updated_at"] = _now()
+                return dict(self._state)
+
+            if current_task_id is None and task_id is not None:
+                self._state["task_id"] = task_id
+            if target_url:
+                self._state["target_url"] = target_url
+                if not self._state.get("current_url"):
+                    self._state["current_url"] = target_url
+            if step is not None:
+                self._state["hud"] = self._hud_state(step)
+            self._state["launch_browser"] = True
+            self._state["browser_launching"] = False
+            self._state["last_error"] = None
+            self._state["updated_at"] = _now()
+            page = self._page
+            hud = dict(self._state.get("hud") or {})
+
+        if page is not None and step is not None:
+            self._apply_hud_safely(page, hud)
+        return self.status()
+
+    def _protect_visible_browser_for_other_task(
+        self,
+        *,
+        task_id: int | None,
+        launch_browser: bool,
+    ) -> dict[str, Any] | None:
+        if not launch_browser or task_id is None:
+            return None
+        with self._lock:
+            current_task_id = self._state.get("task_id")
+            has_visible_browser = (
+                self._state.get("active")
+                and self._state.get("browser_visible")
+                and self._page is not None
+            )
+            if not has_visible_browser or current_task_id is None or current_task_id == task_id:
+                return None
+            message = (
+                f"已有真实浏览器正在执行任务 #{current_task_id}；"
+                f"没有关闭当前浏览器现场，也没有切换到任务 #{task_id}。"
+                "请先停止当前浏览器现场，再打开新的执行浏览器。"
+            )
+            self._state["last_error"] = message
+            self._state["hud"] = self._hud_state({
+                **dict(self._state.get("hud") or {}),
+                "state": "BROWSER_BUSY",
+                "phase": "等待人工处理",
+                "severity": "warning",
+                "human_title": "已有真实浏览器任务正在进行",
+                "human_action": f"当前浏览器属于任务 #{current_task_id}，系统没有关闭它。",
+                "human_next": "先停止当前浏览器现场，再打开新的任务",
+                "requires_user_action": True,
+            })
+            self._state["updated_at"] = _now()
+            page = self._page
+            hud = dict(self._state["hud"])
+
+        if page is not None:
+            self._apply_hud_safely(page, hud)
+        return self.status()
+
     def stop(self) -> dict[str, Any]:
         self._close_current_browser()
         with self._lock:
@@ -202,6 +315,9 @@ class AgentConsoleService:
         field_domain: str | None = None,
         mode: str | None = None,
         store_name: str | None = None,
+        title: str | None = None,
+        line1: str | None = None,
+        line2: str | None = None,
         next_step: str | None = None,
         screenshot_path: str | None = None,
         phase: str | None = None,
@@ -214,6 +330,7 @@ class AgentConsoleService:
         recent_actions: list[str] | None = None,
         requires_user_action: bool | None = None,
         guard: str | None = None,
+        maintenance_detail: str | None = None,
     ) -> dict[str, Any]:
         with self._lock:
             if not self._state.get("active"):
@@ -238,9 +355,11 @@ class AgentConsoleService:
 
             current_hud = dict(self._state.get("hud") or {})
             hud = self._hud_state({
-                "title": step_name,
+                "title": title or step_name,
                 "state": step_code,
                 "action": _step_action(field_domain, mode),
+                "line1": line1,
+                "line2": line2,
                 "next_step": next_step or "等待状态机推进",
                 "store_name": store_name or "Dang Kang",
                 "guard": guard or "只保存不发布",
@@ -253,6 +372,7 @@ class AgentConsoleService:
                 "human_next": human_next,
                 "recent_actions": recent_actions if recent_actions is not None else current_hud.get("recent_actions"),
                 "requires_user_action": requires_user_action,
+                "maintenance_detail": maintenance_detail,
             })
             event = {
                 "task_id": task_id,
@@ -434,6 +554,7 @@ class AgentConsoleService:
         return self._record_manual_takeover_event(action="release_agent", label="交还 Agent")
 
     def refresh_frame(self) -> dict[str, Any]:
+        self._refresh_browser_liveness()
         with self._lock:
             page = self._page
             session_id = self._state.get("session_id")
@@ -465,6 +586,7 @@ class AgentConsoleService:
         return self.status()
 
     def control_browser(self, command: dict[str, Any]) -> dict[str, Any]:
+        self._refresh_browser_liveness()
         action = str(command.get("action") or "").strip().lower()
         with self._lock:
             if not self._state.get("active"):
@@ -611,6 +733,8 @@ class AgentConsoleService:
             )
             page = context.pages[0] if context.pages else context.new_page()
             self._attach_network_listeners(page)
+            self._attach_browser_lifecycle_listeners(context, page)
+            self._attach_page_runtime_listeners(context, page)
             page.add_init_script(HUD_INIT_SCRIPT)
             page.goto(state["target_url"], wait_until="domcontentloaded", timeout=45000)
             self._apply_hud(page, state["hud"])
@@ -665,6 +789,88 @@ class AgentConsoleService:
         except Exception:
             pass
 
+    def _attach_browser_lifecycle_listeners(self, context, page) -> None:
+        def on_context_closed() -> None:
+            self._mark_browser_closed(BROWSER_CLOSED_MESSAGE)
+
+        try:
+            context.on("close", lambda *args: on_context_closed())
+        except Exception:
+            pass
+        try:
+            page.on("close", lambda *args, p=page: self._mark_page_closed(p, BROWSER_CLOSED_MESSAGE))
+        except Exception:
+            pass
+
+    def _attach_page_runtime_listeners(self, context, page) -> None:
+        def attach_page(target_page, *, make_current: bool = False) -> None:
+            try:
+                self._attach_network_listeners(target_page)
+            except Exception:
+                pass
+            for event_name in ("framenavigated", "domcontentloaded"):
+                try:
+                    target_page.on(event_name, lambda *args, p=target_page: self._refresh_and_reapply_hud_to_page(p))
+                except Exception:
+                    pass
+            try:
+                target_page.on("close", lambda *args, p=target_page: self._mark_page_closed(p, BROWSER_CLOSED_MESSAGE))
+            except Exception:
+                pass
+            if make_current:
+                self._bind_current_page(target_page)
+            self._reapply_hud_to_page(target_page)
+
+        attach_page(page)
+        try:
+            context.on("page", lambda new_page: attach_page(new_page, make_current=True))
+        except Exception:
+            pass
+
+    def _bind_current_page(self, page) -> None:
+        with self._lock:
+            if not self._state.get("active"):
+                return
+            self._page = page
+            self._state["browser_visible"] = True
+            self._state["browser_launching"] = False
+            self._state["current_url"] = self._safe_page_url(page) or self._state.get("current_url")
+            self._state["page_title"] = self._safe_page_title(page) or self._state.get("page_title")
+            self._state["last_error"] = None
+            self._state["updated_at"] = _now()
+
+    def _refresh_and_reapply_hud_to_page(self, page) -> None:
+        self._refresh_current_page_cache(page)
+        self._reapply_hud_to_page(page)
+
+    def _refresh_current_page_cache(self, page) -> None:
+        with self._lock:
+            if self._page is not page:
+                return
+            self._state["current_url"] = self._safe_page_url(page) or self._state.get("current_url")
+            self._state["page_title"] = self._safe_page_title(page) or self._state.get("page_title")
+            self._state["updated_at"] = _now()
+
+    def _reapply_hud_to_page(self, page) -> None:
+        with self._lock:
+            if not self._state.get("active"):
+                return
+            hud = dict(self._state.get("hud") or {})
+        if not hud:
+            return
+        try:
+            self._apply_hud(page, hud)
+        except Exception as exc:
+            with self._lock:
+                self._state["last_error"] = str(exc)
+                self._state["updated_at"] = _now()
+
+    def _mark_page_closed(self, page, message: str) -> None:
+        with self._lock:
+            if self._page is not page:
+                return
+        self._mark_browser_closed(message)
+
     def _apply_hud(self, page, hud: dict[str, Any]) -> None:
         try:
             page.evaluate(HUD_INIT_SCRIPT)
@@ -713,18 +919,104 @@ class AgentConsoleService:
             except Exception:
                 pass
 
+    def _refresh_browser_liveness(self) -> None:
+        with self._lock:
+            if not self._state.get("active"):
+                return
+            page = self._page
+            context = self._context
+            visible = bool(self._state.get("browser_visible"))
+            launching = bool(self._state.get("browser_launching"))
+        if not visible and not launching:
+            return
+        if page is None:
+            closed = visible
+        else:
+            closed = self._object_is_closed(page) or self._object_is_closed(context)
+        if not closed:
+            return
+        self._mark_browser_closed(BROWSER_CLOSED_MESSAGE)
+
+    def _mark_browser_closed(self, message: str) -> None:
+        with self._lock:
+            if not self._state.get("active"):
+                return
+            self._state["browser_visible"] = False
+            self._state["browser_launching"] = False
+            self._state["last_error"] = message
+            self._state["hud"] = self._hud_state({
+                **dict(self._state.get("hud") or {}),
+                "state": "BROWSER_CLOSED",
+                "title": "真实浏览器窗口已关闭",
+                "action": "请重新打开执行浏览器后继续任务",
+                "next_step": "回到执行浏览器重新打开",
+                "human_title": "真实浏览器窗口已关闭",
+                "human_action": "请重新打开执行浏览器后继续任务",
+                "human_next": "回到执行浏览器重新打开",
+                "requires_user_action": True,
+            })
+            self._state["updated_at"] = _now()
+
+    def _object_is_closed(self, value) -> bool:
+        if value is None:
+            return False
+        is_closed = getattr(value, "is_closed", None)
+        if callable(is_closed):
+            try:
+                return bool(is_closed())
+            except Exception:
+                return True
+        return False
+
+    def _safe_page_url(self, page) -> str | None:
+        try:
+            value = getattr(page, "url", None)
+            return str(value) if value else None
+        except Exception:
+            return None
+
+    def _safe_page_title(self, page) -> str | None:
+        title = getattr(page, "title", None)
+        if not callable(title):
+            return None
+        try:
+            value = title()
+            return str(value) if value else None
+        except Exception:
+            return None
+
     def _run_browser_op(self, operation):
         return self._browser_executor.submit(operation).result(timeout=90)
 
     def _hud_state(self, step: dict[str, Any] | None) -> dict[str, Any]:
         step = step or {}
-        title = step.get("title") or step.get("label") or "Agent Console 待命"
         state = step.get("state") or step.get("code") or "WAITING"
+        mapped = None
+        if str(state).upper() != "WAITING":
+            mapped = build_browser_hud({
+                "step": state,
+                "status": step.get("status") or step.get("severity") or "running",
+                "task_name": step.get("task_name"),
+                "store_name": step.get("store_name"),
+                "guard": step.get("guard"),
+                "phase": step.get("phase"),
+                "progress_index": step.get("progress_index"),
+                "progress_total": step.get("progress_total"),
+                "human_title": step.get("human_title"),
+                "human_action": step.get("human_action"),
+                "human_next": step.get("human_next") or step.get("next_step"),
+                "line1": step.get("line1"),
+                "line2": step.get("line2"),
+                "maintenance_detail": step.get("maintenance_detail"),
+            })
+        title = step.get("title") or step.get("label") or (mapped or {}).get("title") or "Agent Console 待命"
         user_action_copy = USER_ACTION_HUD_COPY.get(str(state).upper())
         if user_action_copy and not step.get("title") and not step.get("label"):
             title = user_action_copy["human_title"]
-        action = step.get("action") or step.get("detail") or (user_action_copy or {}).get("human_action") or "等待后端状态机推送"
-        next_step = step.get("next_step") or (user_action_copy or {}).get("human_next") or "等待下一步"
+        action = step.get("action") or step.get("detail") or (mapped or {}).get("line1") or (user_action_copy or {}).get("human_action") or "等待后端状态机推送"
+        next_step = step.get("next_step") or (mapped or {}).get("human_next") or (user_action_copy or {}).get("human_next") or "等待下一步"
+        line1 = step.get("line1") or (mapped or {}).get("line1") or action
+        line2 = step.get("line2") or (mapped or {}).get("line2")
         recent_actions = step.get("recent_actions")
         requires_user_action = step.get("requires_user_action")
         if requires_user_action is None and user_action_copy:
@@ -733,18 +1025,21 @@ class AgentConsoleService:
             "title": title,
             "state": state,
             "action": action,
+            "line1": line1,
+            "line2": line2,
             "next_step": next_step,
             "store_name": step.get("store_name") or "Dang Kang",
             "guard": step.get("guard") or "只保存不发布",
-            "phase": step.get("phase") or (user_action_copy or {}).get("phase") or "业务进度",
-            "progress_index": step.get("progress_index"),
-            "progress_total": step.get("progress_total"),
-            "severity": step.get("severity") or (user_action_copy or {}).get("severity") or "info",
+            "phase": step.get("phase") or (mapped or {}).get("phase") or (user_action_copy or {}).get("phase") or "业务进度",
+            "progress_index": step.get("progress_index") or (mapped or {}).get("progress_index"),
+            "progress_total": step.get("progress_total") or (mapped or {}).get("progress_total"),
+            "severity": step.get("severity") or (mapped or {}).get("severity") or (user_action_copy or {}).get("severity") or "info",
             "human_title": step.get("human_title") or (user_action_copy or {}).get("human_title") or title,
-            "human_action": step.get("human_action") or (user_action_copy or {}).get("human_action") or action,
-            "human_next": step.get("human_next") or (user_action_copy or {}).get("human_next") or next_step,
+            "human_action": step.get("human_action") or step.get("action") or (mapped or {}).get("human_action") or (user_action_copy or {}).get("human_action") or action,
+            "human_next": step.get("human_next") or step.get("next_step") or (mapped or {}).get("human_next") or (user_action_copy or {}).get("human_next") or next_step,
             "recent_actions": list(recent_actions or [])[-MAX_RECENT_ACTIONS:],
             "requires_user_action": bool(requires_user_action) if requires_user_action is not None else False,
+            "maintenance_detail": step.get("maintenance_detail") or (mapped or {}).get("maintenance_detail"),
             "updated_at": _now(),
         }
 
@@ -900,30 +1195,36 @@ HUD_INIT_SCRIPT = """
   window.__dxmRenderAgentHud = () => {
     const hud = window.__dxmAgentHudState || {};
     let root = document.getElementById(ID);
+    const rootStyle = [
+      'position:fixed',
+      'top:max(86px, env(safe-area-inset-top, 0px))',
+      'left:12px',
+      'z-index:2147483647',
+      'width:min(280px, calc(100vw - 24px))',
+      'max-height:min(230px, calc(100vh - 110px))',
+      'box-sizing:border-box',
+      'overflow:hidden',
+      'font:12px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif',
+      'color:#f8fafc',
+      'background:rgba(13,17,23,.94)',
+      'border:1px solid rgba(148,163,184,.32)',
+      'border-radius:8px',
+      'box-shadow:0 18px 46px rgba(0,0,0,.36)',
+      'padding:12px',
+      'backdrop-filter:blur(8px)',
+      'pointer-events:none',
+      'display:block',
+      'visibility:visible',
+      'opacity:1'
+    ].join(';');
     if (!root) {
       root = document.createElement('div');
       root.id = ID;
-      root.style.cssText = [
-        'position:fixed',
-        'top:max(86px, env(safe-area-inset-top, 0px))',
-        'left:12px',
-        'z-index:2147483647',
-        'width:min(280px, calc(100vw - 24px))',
-        'max-height:min(230px, calc(100vh - 110px))',
-        'box-sizing:border-box',
-        'overflow:hidden',
-        'font:12px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,Microsoft YaHei,sans-serif',
-        'color:#f8fafc',
-        'background:rgba(13,17,23,.94)',
-        'border:1px solid rgba(148,163,184,.32)',
-        'border-radius:8px',
-        'box-shadow:0 18px 46px rgba(0,0,0,.36)',
-        'padding:12px',
-        'backdrop-filter:blur(8px)',
-        'pointer-events:none'
-      ].join(';');
+      root.dataset.dxmAgentHud = 'active';
       document.documentElement.appendChild(root);
     }
+    root.dataset.dxmAgentHud = 'active';
+    root.style.cssText = rootStyle;
     const safe = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const progressIndex = Number(hud.progress_index || 0);
     const progressTotal = Number(hud.progress_total || 0);
@@ -964,13 +1265,37 @@ HUD_INIT_SCRIPT = """
       </div>
     `;
   };
+  const hudNeedsRepair = () => {
+    const root = document.getElementById(ID);
+    if (!root || root.dataset.dxmAgentHud !== 'active' || !root.innerHTML.trim()) return true;
+    const style = window.getComputedStyle(root);
+    const rect = root.getBoundingClientRect();
+    const zIndex = Number(style.zIndex || 0);
+    return style.display === 'none'
+      || style.visibility === 'hidden'
+      || Number(style.opacity || 0) < 0.1
+      || zIndex < 2147483000
+      || rect.width < 120
+      || rect.height < 60
+      || rect.right <= 0
+      || rect.bottom <= 0;
+  };
+  const repairHudIfNeeded = () => {
+    if (!hudNeedsRepair()) return;
+    const root = document.getElementById(ID);
+    if (root) root.remove();
+    if (window.__dxmRenderAgentHud) window.__dxmRenderAgentHud();
+  };
   if (!window.__dxmAgentHudObserver) {
     window.__dxmAgentHudObserver = new MutationObserver(() => {
-      if (!document.getElementById(ID) && window.__dxmRenderAgentHud) {
-        window.__dxmRenderAgentHud();
-      }
+      repairHudIfNeeded();
     });
     window.__dxmAgentHudObserver.observe(document.documentElement, { childList: true, subtree: true });
+  }
+  if (!window.__dxmAgentHudWatchdog) {
+    window.__dxmAgentHudWatchdog = window.setInterval(() => {
+      repairHudIfNeeded();
+    }, 1000);
   }
   window.__dxmRenderAgentHud();
 })();

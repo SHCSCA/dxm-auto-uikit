@@ -1,7 +1,7 @@
 import type { ConfigPreview, DeliveryWorkspace, RegressionGate, Task } from '../../types'
 import { humanOperatorMessage } from './workbenchCopy'
 
-const READONLY_PRECHECK_CTA = '运行真实只读检查'
+const READONLY_PRECHECK_CTA = '运行保存前安全检查'
 const LEGACY_QA_REAL_MUTATION_TASK_NAME = ['QA guarded', 'real mutation task'].join(' ')
 
 type L2ProbeResourceState = {
@@ -73,8 +73,8 @@ type ReadonlyRecheckHelpCardProps = {
 export function L2ProbeResourceRepairPanel({ l2ProbeResourceState }: { l2ProbeResourceState: L2ProbeResourceState }) {
   if (!l2ProbeResourceState.blocked || (!l2ProbeResourceState.repairSteps.length && !l2ProbeResourceState.checkedPathPreview.length)) return null
   return (
-    <div className="l2-probe-repair-panel" aria-label="真实只读检查资源修复步骤">
-      <strong>真实只读检查资源修复步骤</strong>
+    <div className="l2-probe-repair-panel" aria-label="保存前安全检查资源修复步骤">
+      <strong>保存前安全检查资源修复步骤</strong>
       {l2ProbeResourceState.repairSteps.length > 0 && (
         <ol>
           {l2ProbeResourceState.repairSteps.map((step) => <li key={step}>{step}</li>)}
@@ -110,15 +110,15 @@ export function ReadonlyRecheckHelpCard({
     <div className="readonly-recheck-help" data-testid="readonly-recheck-help">
       <div className="readonly-recheck-help__main">
         <div>
-          <strong>真实只读检查未通过，真实保存先暂停</strong>
-          <span>{humanGateDetail(l2Gate?.detail) ?? '需要商品采集页与草稿箱页两个真实只读检查均通过。'}</span>
+          <strong>保存前安全检查未通过，真实保存先暂停</strong>
+          <span>{humanGateDetail(l2Gate?.detail) ?? '需要商品采集页与采集箱页两个页面检查均通过。'}</span>
         </div>
         <span className="guard-chip guard-chip--danger">当前状态：{humanGateStateLabel(l2Gate?.status ?? 'not_run')}</span>
       </div>
-      <div className="readonly-recheck-help__facts" aria-label="真实只读检查说明">
+      <div className="readonly-recheck-help__facts" aria-label="保存前安全检查说明">
         <span>
           <strong>发生了什么</strong>
-          <small>真实只读检查还没有通过，需要确认商品采集页和草稿箱页能正常打开。</small>
+          <small>保存前安全检查还没有通过，需要确认商品采集页和采集箱页能正常打开。</small>
         </span>
         <span>
           <strong>为什么不能继续</strong>
@@ -126,10 +126,10 @@ export function ReadonlyRecheckHelpCard({
         </span>
         <span>
           <strong>下一步</strong>
-          <small>运行真实只读检查；通过后再人工确认并只保存。</small>
+          <small>运行保存前安全检查；通过后再人工确认并只保存。</small>
         </span>
       </div>
-      {l3BlocksStart && <span className="readonly-recheck-help__note">真实只读检查未通过或人工确认未完成前，不启动认领、批量保存或真实保存。</span>}
+      {l3BlocksStart && <span className="readonly-recheck-help__note">保存前安全检查未通过或人工确认未完成前，不启动认领、批量保存或真实保存。</span>}
       {demoEnabled && selectedTaskIsDryRun && selectedTask?.status === 'draft' && <span className="readonly-recheck-help__note">开发自检批次不触达店小秘；真实保存仍以单商品只保存规则为准。</span>}
       {!selectedTaskIsDryRun && selectedTask?.status === 'draft' && <span className="readonly-recheck-help__note">当前真实任务保持门禁控制，请先处理上方阻断原因。</span>}
       <div className="next-step-actions">
@@ -157,7 +157,7 @@ export function ReadonlyRecheckHelpCard({
         <summary>查看诊断摘要</summary>
         {summaries.length > 0 ? summaries.slice(0, 2).map((item) => (
           <span key={item.target}>{item.targetLabel}：{humanDiagnosticNavigation(item.navigation)}，{item.failedChecks.slice(0, 2).map(humanFailedCheckLabel).join(' / ') || '页面检查未满足'}。下一步：{item.nextAction}</span>
-        )) : <span>暂无诊断明细；先运行真实只读检查生成结果。</span>}
+        )) : <span>暂无诊断明细；先运行保存前安全检查生成结果。</span>}
       </details>
     </div>
   )
@@ -249,8 +249,8 @@ export function TaskCurrentActionPanel({
         </span>
       </div>
       {showPrecheckRecoveryActions && (
-        <div className="task-current-panel__precheck-actions" aria-label="真实只读检查未通过处理">
-          <span>真实只读检查没有通过，不能启动真实保存。先运行真实只读检查；如果仍失败，到“开始只保存”看日志，再查看检查计划。</span>
+        <div className="task-current-panel__precheck-actions" aria-label="保存前安全检查未通过处理">
+          <span>保存前安全检查没有通过，不能启动真实保存。先运行保存前安全检查；如果仍失败，到“浏览器现场”看日志，再查看检查计划。</span>
           <div>
             <button
               className="button button--secondary"
@@ -259,14 +259,14 @@ export function TaskCurrentActionPanel({
               disabled={busy || l2ProbeResourceState.blocked}
               title={l2ProbeResourceState.title}
             >
-              运行真实只读检查
+              运行保存前安全检查
             </button>
           </div>
           {l2ProbeResourceState.blocked && <small>{l2ProbeResourceState.detail}</small>}
           <details className="inline-disclosure task-current-panel__optional-actions">
             <summary>可选处理：查看阻断说明 / 查看证据缺口 / 检查计划</summary>
             <div className="next-step-actions">
-              <button className="button button--quiet" type="button" onClick={onShowConsole}>查看开始只保存</button>
+              <button className="button button--quiet" type="button" onClick={onShowConsole}>查看浏览器现场</button>
               <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
               <button className="button button--quiet" type="button" onClick={onShowReports} data-section="reports">查看检查计划</button>
             </div>
@@ -279,7 +279,7 @@ export function TaskCurrentActionPanel({
           <b>{configCheckLabel}</b>
         </span>
         <span className={l2CheckOk ? 'is-ok' : 'is-warn'}>
-          <strong>真实只读检查</strong>
+          <strong>保存前安全检查</strong>
           <b>{l2CheckLabel}</b>
         </span>
         <span className={l3CheckOk ? 'is-ok' : 'is-warn'}>
@@ -340,7 +340,7 @@ export function SingleSaveRecoveryGuide({
     {
       title: '回到单商品只保存',
       detail: selectedTaskIsUnreleasedRealMode
-        ? `${humanTaskModeLabel(selectedTask?.mode)} 当前未发布；不能复用认领/批量保存证据。`
+        ? `${humanTaskModeLabel(selectedTask?.mode)} 当前未放行；不能复用其它模式证据。`
         : latestSingleSaveTask
           ? `可继续使用最近单商品只保存任务：#${latestSingleSaveTask.id} ${displayTaskName(latestSingleSaveTask)}`
           : '还没有可用单商品只保存任务，需要用当前店铺和商品创建一个。',
@@ -352,13 +352,13 @@ export function SingleSaveRecoveryGuide({
       done: !configBlocksStart,
     },
     {
-      title: '刷新真实只读检查',
-      detail: l2BlocksStart ? '商品采集页与草稿箱页必须同一轮检查、不过期、无写请求。' : '真实只读检查当前未阻断启动判断。',
+      title: '刷新保存前安全检查',
+      detail: l2BlocksStart ? '商品采集页与采集箱页必须同一轮检查、不过期、无写请求。' : '保存前安全检查当前未阻断启动判断。',
       done: !l2BlocksStart,
     },
     {
       title: '填写批准人并启动保存',
-      detail: l3BlocksStart ? '真实只读检查通过后再填写批准人，只启动一个单商品只保存任务。' : '通过后仍需页面内填写批准人。',
+      detail: l3BlocksStart ? '保存前安全检查通过后再填写批准人，只启动一个单商品只保存任务。' : '通过后仍需页面内填写批准人。',
       done: !l3BlocksStart,
     },
   ]
@@ -444,20 +444,20 @@ export function SingleSaveRecoveryGuide({
 export function RealModeReleasePlanPanel({ items }: { items: DeliveryWorkspace['realModeReleasePlan']['modes'] }) {
   if (!items.length) return null
   return (
-    <div className="real-mode-release-panel" aria-label="未发布真实模式放行准备清单">
+    <div className="real-mode-release-panel" aria-label="真实模式放行准备清单">
       <div className="real-mode-release-panel__head">
         <div>
-          <strong>认领 / 批量保存放行准备</strong>
-          <span>认领当前未发布；批量保存当前未发布；不能复用单商品只保存证据。</span>
+          <strong>真实模式放行准备</strong>
+          <span>采集认领和单商品只保存受控开放；批量保存仍需单独验收。</span>
         </div>
-        <span className="guard-chip guard-chip--danger">仅受控单商品只保存</span>
+        <span className="guard-chip guard-chip--danger">受控认领 + 单商品只保存</span>
       </div>
       <div className="real-mode-release-panel__grid">
         {items.map((item) => (
           <article key={item.mode} className="real-mode-release-item" data-mode={item.mode} data-status={item.status}>
             <div className="real-mode-release-item__title">
-              <strong>{item.label || `${item.mode} 当前未发布`}</strong>
-              <span>{item.allowed ? '可启动' : '未发布/阻断'}</span>
+              <strong>{item.label || `${item.mode} 当前未放行`}</strong>
+              <span>{item.allowed ? '可启动' : '未放行/阻断'}</span>
             </div>
             <ul>
               {(item.readiness_checklist ?? []).slice(0, 4).map((check) => (
@@ -478,7 +478,7 @@ export function RealModeReleasePlanPanel({ items }: { items: DeliveryWorkspace['
 
 function displayTaskName(task: Pick<Task, 'name' | 'mode'>) {
   if (task.mode === 'single_save' && task.name === LEGACY_QA_REAL_MUTATION_TASK_NAME) {
-    return 'QA local gated single_save fixture'
+    return '旧版单商品只保存核验任务'
   }
   if (task.mode === 'single_save' && task.name.toLowerCase().includes('l3 canary save-only')) {
     return '单商品只保存核验任务'
@@ -488,9 +488,9 @@ function displayTaskName(task: Pick<Task, 'name' | 'mode'>) {
 
 function humanTaskModeLabel(mode?: string | null) {
   const labels: Record<string, string> = {
-    probe: '真实只读检查',
+    probe: '保存前安全检查',
     single_save: '单商品只保存',
-    claim_only: '认领未开放',
+    claim_only: '采集认领',
     batch_save: '批量保存未开放',
     dry_run: '开发自检',
   }
@@ -498,11 +498,11 @@ function humanTaskModeLabel(mode?: string | null) {
 }
 
 function isReleasedRealDxmMutationTask(task: Task) {
-  return task.mode === 'single_save'
+  return task.mode === 'claim_only' || task.mode === 'single_save'
 }
 
 function isUnreleasedRealDxmMutationTask(task: Task) {
-  return task.mode === 'claim_only' || task.mode === 'batch_save'
+  return task.mode === 'batch_save'
 }
 
 function isRealDxmMutationTask(task: Task) {
@@ -543,22 +543,22 @@ function humanGateDetail(detail?: string | null) {
     || detail.includes('age')
     || detail.includes('expired')
   ) {
-    return `真实只读检查证据已过期，请点击“${READONLY_PRECHECK_CTA}”刷新后再继续。`
+    return `保存前安全检查证据已过期，请点击“${READONLY_PRECHECK_CTA}”刷新后再继续。`
   }
   if (detail.includes('data_acquisition') || detail.includes('draft_box')) {
     return safeDetail
       .split('data_acquisition').join('商品采集页')
-      .split('draft_box').join('草稿箱页')
-      .split('L2').join('真实只读检查')
+      .split('draft_box').join('采集箱页')
+      .split('L2').join('保存前安全检查')
       .split('L3').join('真实保存')
       .split('passed').join('通过')
-      .split('probe').join('真实只读检查')
+      .split('probe').join('保存前安全检查')
   }
   return safeDetail
-    .split('L2').join('真实只读检查')
+    .split('L2').join('保存前安全检查')
     .split('L3').join('真实保存')
     .split('passed').join('通过')
-    .split('probe').join('真实只读检查')
+    .split('probe').join('保存前安全检查')
 }
 
 function safeGateDetailFallback(detail: string) {
@@ -574,20 +574,20 @@ function safeGateDetailFallback(detail: string) {
     || normalized.includes('playwright')
     || normalized.includes('internal server error')
   ) {
-    return '真实只读检查未通过；原始诊断已收进技术详情，请按页面提示处理后重新检查。'
+    return '保存前安全检查未通过；原始诊断已收进维护详情，请按页面提示处理后重新检查。'
   }
   return String(detail)
 }
 
 function humanL2PrecheckError(message: string) {
   if (message.includes('L2 readonly probe resources are missing')) {
-    return '真实只读检查组件未安装完整：请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
+    return '保存前安全检查组件未安装完整：请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
   }
   if (message.includes('L2 readonly probe runner is missing')) {
-    return '真实只读检查组件未安装完整：缺少真实只读检查启动器。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
+    return '保存前安全检查组件未安装完整：缺少安全检查启动器。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
   }
   if (message.includes('L2 readonly probe script is missing')) {
-    return '真实只读检查组件未安装完整：缺少真实只读检查脚本。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
+    return '保存前安全检查组件未安装完整：缺少安全检查脚本。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
   }
   return message
 }
@@ -595,9 +595,9 @@ function humanL2PrecheckError(message: string) {
 function humanDiagnosticNavigation(value: string) {
   return value
     .split('data_acquisition').join('商品采集页')
-    .split('draft_box').join('草稿箱页')
+    .split('draft_box').join('采集箱页')
     .replace(/\/web\/productCrawl\/dataAcquisition/g, '商品采集页')
-    .replace(/\/web\/smt\/smtProductList\/draft/g, '草稿箱页')
+    .replace(/\/web\/smt\/smtProductList\/draft/g, '采集箱页')
 }
 
 function humanFailedCheckLabel(value: string) {
@@ -646,7 +646,7 @@ function taskStartDecision({
     return {
       scope: '等待当前任务运行',
       reason: '任务正在运行，避免重复启动。',
-      next: '到“开始只保存”查看真实浏览器、日志和步骤。',
+      next: '到“浏览器现场”查看真实浏览器、日志和步骤。',
       tone: 'ok',
     }
   }
@@ -666,7 +666,7 @@ function taskStartDecision({
       tone: 'warn',
     }
   }
-  if (isRealDxmMutationTask(selectedTask) && !configOk) {
+  if (selectedTask.mode === 'single_save' && !configOk) {
     return {
       scope: '先补配置',
       reason: '当前任务配置检查未通过。',
@@ -676,13 +676,13 @@ function taskStartDecision({
   }
   if (requiresRealL2(selectedTask) && !l2Ready) {
     return {
-      scope: '先做真实只读检查',
-      reason: '真实只读检查未通过或已过期。',
-      next: `${READONLY_PRECHECK_CTA}，确认商品采集页和草稿箱页均无写入风险。`,
+      scope: '先做保存前安全检查',
+      reason: '保存前安全检查未通过或已过期。',
+      next: `${READONLY_PRECHECK_CTA}，确认商品采集页和采集箱页均无写入风险。`,
       tone: 'warn',
     }
   }
-  if (requiresRealL2(selectedTask) && !l3Ready) {
+  if (selectedTask.mode === 'single_save' && !l3Ready) {
     return {
       scope: '等待人工确认',
       reason: '真实保存前还没有完成批准人确认。',
@@ -700,8 +700,8 @@ function taskStartDecision({
   }
   return {
     scope: startLabel.includes('保存') || startLabel.includes('批准') ? '可申请单商品只保存' : '可启动当前任务',
-    reason: '配置、真实只读检查和人工确认当前未阻断。',
-    next: '点击主按钮后，在“开始只保存”查看执行。',
+    reason: '配置、保存前安全检查和人工确认当前未阻断。',
+    next: '点击主按钮后，在“浏览器现场”查看执行。',
     tone: 'ok',
   }
 }

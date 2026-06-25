@@ -22,6 +22,7 @@ import type {
   Task,
   TemplateResolutionResult,
   Template,
+  TwoStageAcceptance,
 } from './types'
 
 export type WorkspaceApiBundle = {
@@ -47,6 +48,7 @@ type DeliveryWorkspaceApi = Partial<DeliveryWorkspace> & {
   regression_gates?: RegressionGate[]
   l2_probe_plan?: L2ProbePlan
   real_mode_release_plan?: RealModeReleasePlan
+  two_stage_acceptance?: unknown
 }
 
 export const seedRows = [
@@ -111,12 +113,14 @@ export function composeWorkspace(bundle: WorkspaceApiBundle): DeliveryWorkspace 
   const regressionGates = firstList(workspace?.regressionGates, workspace?.regression_gates, fallback.regressionGates)
   const l2ProbePlan = normalizeL2ProbePlan(workspace?.l2ProbePlan ?? workspace?.l2_probe_plan, fallback.l2ProbePlan)
   const realModeReleasePlan = normalizeRealModeReleasePlan(workspace?.realModeReleasePlan ?? workspace?.real_mode_release_plan, fallback.realModeReleasePlan)
+  const twoStageAcceptance = normalizeTwoStageAcceptance(workspace?.twoStageAcceptance ?? workspace?.two_stage_acceptance, fallback.twoStageAcceptance)
   const stores = chooseList(workspace?.stores, bundle.stores, fallback.stores, Boolean(workspace), apiHasData)
   const templates = chooseList(workspace?.templates, bundle.templates, fallback.templates, Boolean(workspace), apiHasData)
   const products = chooseList(workspace?.products, bundle.products, fallback.products, Boolean(workspace), apiHasData)
+  const deliveryTasks = Array.isArray(workspace?.tasks) ? workspace.tasks : undefined
   const tasks = mergeCurrentTaskIntoTasks(
     currentTask,
-    chooseList(nonEmptyList(workspace?.tasks), currentTask ? [currentTask, ...bundle.tasks] : bundle.tasks, fallback.tasks, Boolean(workspace), apiHasData),
+    chooseList(deliveryTasks, currentTask ? [currentTask, ...bundle.tasks] : bundle.tasks, fallback.tasks, Boolean(workspace), apiHasData),
   )
   const logs = chooseList(workspace?.logs, bundle.logs, fallback.logs, Boolean(workspace), apiHasData)
   const evidences = chooseList(workspace?.evidences, bundle.evidences, fallback.evidences, Boolean(workspace), apiHasData)
@@ -143,6 +147,7 @@ export function composeWorkspace(bundle: WorkspaceApiBundle): DeliveryWorkspace 
     regressionGates,
     l2ProbePlan,
     realModeReleasePlan,
+    twoStageAcceptance,
     dxmReferenceTemplates: normalizeReferenceSections(workspace?.dxmReferenceTemplates, templates, reports, templateResolution),
     acceptanceGaps: firstList(workspace?.acceptanceGaps, buildAcceptanceGaps(exceptions, evidences, reports, evidenceGradeValue), fallback.acceptanceGaps),
     safety: workspace?.safety ?? safetyFromGuard(publishGuardState, evidenceGradeValue) ?? fallback.safety,
@@ -195,6 +200,7 @@ export function buildEmptyWorkspace(): DeliveryWorkspace {
     regressionGates: buildRegressionGates(null, { grade: 'C' }, []),
     l2ProbePlan: buildL2ProbePlan(),
     realModeReleasePlan: buildRealModeReleasePlan(),
+    twoStageAcceptance: buildEmptyTwoStageAcceptance(),
     dxmReferenceTemplates: normalizeReferenceSections(undefined, [], [], null),
     acceptanceGaps: [{
       id: 'empty-workspace',
@@ -326,7 +332,7 @@ export function buildRealModeReleasePlan(): RealModeReleasePlan {
   ]
   return {
     schema: 'dxm_real_mode_release_plan.v1',
-    scope: 'controlled_single_save_only',
+    scope: 'controlled_claim_and_single_save',
     publish_allowed: false,
     batch_unattended_publish_allowed: false,
     modes: [
@@ -353,31 +359,29 @@ export function buildRealModeReleasePlan(): RealModeReleasePlan {
       },
       {
         mode: 'claim_only',
-        label: '只认领当前未开放',
-        status: 'blocked_unreleased',
+        label: '受控采集认领待后端确认',
+        status: 'blocked_stale_l2',
         allowed: false,
-        release_scope: 'not released',
+        release_scope: 'controlled claim to draft box',
         required_evidence: [
-          '独立 claim_only L2/L3 证据',
-          'claim ownership proof',
+          '采集页和采集箱真实只读检查通过',
+          '采集商品唯一命中证明',
+          '认领到采集箱成功证明',
           '不打开编辑页、不触发保存请求证明',
-          '领取锁定与释放审计链',
         ],
         required_controls: [
           ...sharedControls,
-          'claim 标记可回退',
-          '人工释放/恢复计划',
+          '只认领到采集箱，不保存、不发布',
+          '失败时人工接管',
         ],
         blockers: [
-          'cannot reuse single_save evidence',
-          '不能复用 single_save 证据',
-          '缺少 claim ownership proof',
+          '等待后端真实 L2 只读检查结果',
         ],
         readiness_checklist: [
-          checklist('dedicated_l2_l3', '独立 claim_only L2/L3 证据', 'missing', 'cannot reuse single_save evidence', 'claim_only 会改变草稿归属状态，不能复用 single_save 金丝雀。'),
-          checklist('claim_ownership_proof', 'claim ownership proof', 'missing', 'missing claim ownership proof', '需要证明命中的是目标店铺、目标商品和目标来源链接。'),
-          checklist('no_editor_or_save', '不打开编辑页、不触发保存请求证明', 'missing', 'missing negative save proof', 'claim_only 不能触发编辑页保存接口。'),
-          checklist('rollback_release', '归属释放或人工回滚路径', 'missing', 'missing ownership rollback proof', '误领或中断时必须有人工恢复路径。'),
+          checklist('l2_dual_target', '采集页和采集箱真实只读检查通过', 'missing', '等待后端真实 L2 只读检查结果'),
+          checklist('claim_target_unique', '采集商品唯一命中证明', 'missing', '等待真实认领任务生成证据'),
+          checklist('claim_to_draft', '认领到采集箱成功证明', 'missing', '等待真实认领任务生成证据'),
+          checklist('no_editor_or_save', '不打开编辑页、不触发保存请求证明', 'missing', '等待真实认领任务生成证据'),
         ],
       },
       {
@@ -489,6 +493,53 @@ function normalizeReadinessChecklistItem(
     evidence_source: stringOr(item.evidence_source, safeFallback.evidence_source),
     blocker: item.blocker === null ? null : stringOr(item.blocker, safeFallback.blocker ?? ''),
     detail: stringOr(item.detail, safeFallback.detail),
+  }
+}
+
+function buildEmptyTwoStageAcceptance(): TwoStageAcceptance {
+  return {
+    schema: 'dxm_two_stage_acceptance.v1',
+    passed: false,
+    status: 'no_task',
+    userMessage: '请选择真实数据采集商品，并完成采集认领到采集箱后，再执行单商品只保存。',
+    claimTaskId: null,
+    saveTaskId: null,
+    claimedProductId: null,
+    missingCodes: ['task'],
+    checks: {
+      claim_task_present: false,
+      claim_completed: false,
+      claimed_product_present: false,
+      claim_product_matches: false,
+      draft_box_verified: false,
+      single_save_linked_to_claim: false,
+      save_success: false,
+      unpublished_proof: false,
+      publish_guard_safe: false,
+    },
+  }
+}
+
+function normalizeTwoStageAcceptance(value: unknown, fallback: TwoStageAcceptance): TwoStageAcceptance {
+  const item = asRecord(value)
+  const checks = asRecord(item.checks)
+  return {
+    ...fallback,
+    schema: stringOr(item.schema, fallback.schema),
+    passed: typeof item.passed === 'boolean' ? item.passed : fallback.passed,
+    status: stringOr(item.status, fallback.status),
+    userMessage: stringOr(item.userMessage ?? item.user_message, fallback.userMessage),
+    claimTaskId: numberOrNull(item.claimTaskId ?? item.claim_task_id, fallback.claimTaskId),
+    saveTaskId: numberOrNull(item.saveTaskId ?? item.save_task_id, fallback.saveTaskId),
+    claimedProductId: numberOrNull(item.claimedProductId ?? item.claimed_product_id, fallback.claimedProductId),
+    missingCodes: Array.isArray(item.missingCodes)
+      ? item.missingCodes.map(String).filter(Boolean)
+      : Array.isArray(item.missing_codes)
+        ? item.missing_codes.map(String).filter(Boolean)
+        : fallback.missingCodes,
+    checks: Object.fromEntries(
+      Object.entries({ ...fallback.checks, ...checks }).map(([key, raw]) => [key, raw === true]),
+    ),
   }
 }
 
@@ -627,7 +678,7 @@ function buildAcceptanceGaps(
       title: '缺少可交付验收报告',
       severity: 'risk' as const,
       owner: 'report',
-      detail: '结果报告需要汇总配置命中、执行步骤、证据等级和未完成缺口。',
+      detail: '结果与问题需要汇总配置命中、执行步骤、证据等级和未完成缺口。',
       evidenceLevel: 'B' as const,
     }] : []),
     {
@@ -666,10 +717,6 @@ function normalizeTask(value: Task | null | undefined): Task | null {
     failed_jobs: Number(value.failed_jobs ?? 0),
     payload: value.payload ?? {},
   }
-}
-
-function nonEmptyList<T>(value: T[] | undefined): T[] | undefined {
-  return Array.isArray(value) && value.length > 0 ? value : undefined
 }
 
 function mergeCurrentTaskIntoTasks(currentTask: Task | null, tasks: Task[]): Task[] {
@@ -728,4 +775,10 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function stringOr(value: unknown, fallback: string) {
   return typeof value === 'string' && value ? value : fallback
+}
+
+function numberOrNull(value: unknown, fallback: number | null) {
+  if (value === null || value === undefined || value === '') return fallback
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : fallback
 }

@@ -38,6 +38,14 @@ class ProductCreate(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class AcquisitionClaimRequest(BaseModel):
+    store_id: int
+    keyword: str | None = None
+    category_name: str | None = None
+    claim_mark: str
+    template_id: int | None = None
+
+
 class TaskCreate(BaseModel):
     name: str
     store_id: int | None = None
@@ -77,6 +85,8 @@ class AgentConsoleStep(BaseModel):
     code: str | None = None
     action: str | None = None
     detail: str | None = None
+    line1: str | None = None
+    line2: str | None = None
     next_step: str | None = None
     store_name: str | None = None
     guard: str | None = None
@@ -89,6 +99,7 @@ class AgentConsoleStep(BaseModel):
     human_next: str | None = None
     recent_actions: list[str] | None = None
     requires_user_action: bool | None = None
+    maintenance_detail: str | None = None
 
 
 class AgentConsoleStartRequest(BaseModel):

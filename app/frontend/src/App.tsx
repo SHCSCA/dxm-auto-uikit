@@ -3,10 +3,12 @@ import { getJson, getJsonOrDefault, postJson } from './api'
 import { AppShell } from './components/AppShell'
 import { SafetyStatusBar } from './components/SafetyStatusBar'
 import { AgentExecutionPage as ExecutionConsole } from './components/workbench/AgentExecutionPage'
-import { EditConfigPage as ConfigCenter } from './components/workbench/EditConfigPage'
+import { AcquisitionClaimPage } from './components/workbench/AcquisitionClaimPage'
+import { DraftEditSavePage } from './components/workbench/DraftEditSavePage'
 import { HelpPage } from './components/workbench/HelpPage'
 import { HomePage as Dashboard } from './components/workbench/HomePage'
 import { ProductTasksPage as TaskCenter } from './components/workbench/ProductTasksPage'
+import { TemplateCenterPage } from './components/workbench/TemplateCenterPage'
 import {
   DxmAccessPage,
   EvidenceTimeline,
@@ -15,7 +17,7 @@ import {
   SystemSettings,
 } from './components/WorkbenchModules'
 import { humanOperatorMessage } from './components/workbench/workbenchCopy'
-import type { AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, DxmCredentialSaveResult, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LegacyWorkbenchSection, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
+import type { AcquisitionClaimCreateRequest, AcquisitionClaimResponse, AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, DxmCredentialSaveResult, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LegacyWorkbenchSection, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
 import { composeWorkspace, demoTemplateSeeds, seedRows } from './workspace'
 
 const AGENT_CONSOLE_TARGET_URL = 'https://www.dianxiaomi.com/'
@@ -28,13 +30,13 @@ const DXM_TARGET_PATHS: Record<keyof typeof DXM_TARGET_URLS, string> = {
   draft_box: '/web/smt/smtProductList/draft',
 }
 const DXM_TARGET_LABELS: Record<keyof typeof DXM_TARGET_URLS, string> = {
-  data_acquisition: '采集页',
+  data_acquisition: '商品采集页',
   draft_box: '采集箱',
 }
 const AGENT_CONSOLE_NAVIGATION_SETTLE_MS = 2500
 const REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save', 'batch_save'])
-const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['single_save'])
-const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'batch_save'])
+const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save'])
+const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['batch_save'])
 const DXM_READY_SESSION_STATUSES = new Set(['login_success', 'logged_in', 'not_published_verified', 'workflow_navigation'])
 const L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
 const DEMO_ENABLED = new URLSearchParams(window.location.search).get('dev') === '1'
@@ -52,6 +54,8 @@ const sourceLabels: Record<DeliveryWorkspace['source'], string> = {
 }
 type DeliveryWorkspaceResponse = Partial<DeliveryWorkspace> & {
   current_task?: Task | null
+  requested_task_missing?: boolean
+  requested_task_id?: number | null
 }
 
 type ApiFailure = {
@@ -130,7 +134,18 @@ function normalizeWorkbenchSection(section: WorkbenchSection | LegacyWorkbenchSe
     dashboard: 'home',
     guide: 'help',
     tasks: 'product_tasks',
-    config: 'edit_config',
+    product_tasks: 'product_tasks',
+    current_task: 'product_tasks',
+    task_history: 'product_tasks',
+    config: 'template_center',
+    edit_config: 'template_center',
+    config_basic: 'template_center',
+    config_category_title: 'template_center',
+    config_price_stock: 'template_center',
+    config_images: 'template_center',
+    config_logistics: 'template_center',
+    config_compliance: 'template_center',
+    template_management: 'template_center',
     console: 'start_save',
     preflight: 'start_save',
     real_browser: 'start_save',
@@ -138,6 +153,7 @@ function normalizeWorkbenchSection(section: WorkbenchSection | LegacyWorkbenchSe
     evidence: 'results',
     reports: 'results',
     exceptions: 'issues',
+    issues: 'issues',
   }
   return sectionAliases[String(section)] ?? section as WorkbenchSection
 }
@@ -162,6 +178,8 @@ export default function App() {
   const [agentConsoleError, setAgentConsoleError] = useState<string | null>(null)
   const [operationError, setOperationError] = useState<string | null>(null)
   const [operationNotice, setOperationNotice] = useState<string | null>(null)
+  const [lastAcquisitionClaimRequest, setLastAcquisitionClaimRequest] = useState<AcquisitionClaimResponse | null>(null)
+  const [claimedDraftProducts, setClaimedDraftProducts] = useState<Product[]>([])
   const [runtimeLogSource, setRuntimeLogSource] = useState<RuntimeLogSource>('backend')
   const [runtimeLogs, setRuntimeLogs] = useState<Record<RuntimeLogSource, RuntimeLogResponse | null>>({
     backend: null,
@@ -178,7 +196,7 @@ export default function App() {
     status: 'idle',
     runId: null,
     exitCode: null,
-    message: '等待运行真实只读检查',
+    message: '等待运行保存前安全检查',
     line: null,
     updatedAt: null,
   })
@@ -217,17 +235,17 @@ export default function App() {
     [selectedTaskId, workspace.tasks],
   )
   const selectedTaskCompleted = selectedTask?.status === 'completed'
-  const visibleOperationError = selectedTaskCompleted && operationError?.includes('真实只读检查')
+  const visibleOperationError = selectedTaskCompleted && operationError?.includes('保存前安全检查')
     ? null
     : operationError
 
   useEffect(() => {
-    if (selectedTaskCompleted && operationError?.includes('真实只读检查')) {
+    if (selectedTaskCompleted && operationError?.includes('保存前安全检查')) {
       setOperationError(null)
     }
   }, [operationError, selectedTaskCompleted])
 
-  const refreshWorkspace = useCallback(async () => {
+  const refreshWorkspace = useCallback(async (options?: { silent?: boolean }) => {
     const deliveryPath = selectedTaskId ? `/api/delivery/workspace?task_id=${selectedTaskId}` : '/api/delivery/workspace'
     const failures: ApiFailure[] = []
     const loadOrFallback = async <T,>(path: string, fallback: T): Promise<T> => {
@@ -239,18 +257,21 @@ export default function App() {
       }
     }
 
-    setWorkspaceNotice((current) => current?.kind === 'degraded'
-      ? current
-      : {
-        kind: 'loading',
-        title: '正在加载 DXM 自动化工作台',
-        detail: '正在读取任务、店铺、商品、证据和报告状态。',
-      })
+    if (!options?.silent) {
+      setWorkspaceNotice((current) => current?.kind === 'degraded'
+        ? current
+        : {
+          kind: 'loading',
+          title: '正在加载 DXM 自动化工作台',
+          detail: '正在读取任务、店铺、商品、证据和报告状态。',
+        })
+    }
     const [
       deliveryWorkspace,
       stores,
       templates,
       products,
+      claimedProducts,
       tasks,
       logs,
       evidences,
@@ -263,6 +284,7 @@ export default function App() {
       loadOrFallback<Store[]>('/api/stores', []),
       loadOrFallback<Template[]>('/api/templates', []),
       loadOrFallback<Product[]>('/api/products', []),
+      loadOrFallback<Product[]>('/api/acquisition/claimed-products', []),
       loadOrFallback<Task[]>('/api/tasks', []),
       loadOrFallback<LogItem[]>('/api/logs', []),
       loadOrFallback<Evidence[]>('/api/evidences', []),
@@ -283,24 +305,30 @@ export default function App() {
       reports,
     })
     setWorkspace(nextWorkspace)
+    setClaimedDraftProducts(claimedProducts)
     setAgentConsole(consoleStatus)
     setFinalCheck(finalCheckSummary)
-    const taskMissing = failures.some((failure) => failure.path.startsWith('/api/delivery/workspace') && /task not found/i.test(failure.message))
+    const taskMissing = Boolean(deliveryWorkspace?.requested_task_missing)
+      || failures.some((failure) => failure.path.startsWith('/api/delivery/workspace') && /task not found/i.test(failure.message))
     if (taskMissing) {
-      const recoveredTaskId = pickDefaultTaskId(null, nextWorkspace.tasks)
+      const recoveredTaskId = pickDefaultTaskId(deliveryWorkspace, nextWorkspace.tasks)
       setSelectedTaskId(recoveredTaskId)
       syncSelectedTaskIdUrl(recoveredTaskId)
     } else {
       setSelectedTaskId((current) => pickTaskIdForOperatorPath(current, deliveryWorkspace, nextWorkspace.tasks))
     }
-    if (failures.length) {
+    if (taskMissing) {
+      setWorkspaceNotice({
+        kind: 'degraded',
+        title: '当前任务需要重新选择',
+        detail: '上次选择的任务已不存在或已归档。系统已切回当前可用任务；如仍不能继续，请在“数据采集认领”或“采集箱编辑保存”重新创建任务。',
+      })
+    } else if (failures.length) {
       const firstFailure = failures[0]
       setWorkspaceNotice({
         kind: 'degraded',
-        title: taskMissing ? '当前任务需要重新选择' : '工作台服务连接异常',
-        detail: taskMissing
-        ? '上次选择的任务已不存在或已归档。请在“选择商品”重新选择或创建单商品只保存任务；真实保存前仍会重新校验。'
-          : humanWorkspaceFetchError(firstFailure?.message),
+        title: '工作台服务连接异常',
+        detail: humanWorkspaceFetchError(firstFailure?.message),
       })
     } else {
       setWorkspaceNotice(null)
@@ -311,6 +339,16 @@ export default function App() {
   useEffect(() => {
     void refreshWorkspace()
   }, [refreshWorkspace])
+
+  const workspaceHasRunningTask = workspace.tasks.some((task) => task.status === 'running')
+
+  useEffect(() => {
+    if (!workspaceHasRunningTask && !agentConsole?.active) return
+    const timer = window.setInterval(() => {
+      void refreshWorkspace({ silent: true })
+    }, 1500)
+    return () => window.clearInterval(timer)
+  }, [agentConsole?.active, refreshWorkspace, workspaceHasRunningTask])
 
   const refreshConfigPreview = useCallback(async (taskId: number | null = selectedTask?.id ?? null) => {
     if (!taskId) {
@@ -451,13 +489,13 @@ export default function App() {
     const refreshedL2Gate = refreshedWorkspace.regressionGates.find((gate) => gate.level === 'L2')
     const gatePassed = runnerSucceeded && refreshedL2Gate?.status === 'passed'
     if (gatePassed) {
-      setL2RunnerState({ status: 'passed', runId, exitCode, message: '真实只读检查通过，已刷新门禁', line, updatedAt: new Date().toISOString() })
+      setL2RunnerState({ status: 'passed', runId, exitCode, message: '保存前安全检查通过，已刷新状态', line, updatedAt: new Date().toISOString() })
       return
     }
-    const message = runnerSucceeded ? '真实只读检查已运行，但门禁未刷新通过' : '真实只读检查失败，真实保存仍阻断'
-    const userLine = '真实只读检查未通过：请确认已登录并能打开商品采集页、草稿箱页后重试。'
+    const message = runnerSucceeded ? '保存前安全检查已运行，但状态未刷新通过' : '保存前安全检查失败，真实保存仍阻断'
+    const userLine = '保存前安全检查未通过：请确认已登录并能打开商品采集页、采集箱页后重试。'
     setL2RunnerState({ status: 'failed', runId, exitCode, message, line: userLine, updatedAt: new Date().toISOString() })
-    setOperationError(`${message}；请确认真实店小秘已登录，再重新运行真实只读检查。系统不会保存或发布。`)
+    setOperationError(`${message}；请确认真实店小秘已登录，再重新运行保存前安全检查。系统不会保存或发布。`)
   }, [refreshRuntimeStatus, refreshWorkspace])
 
   useEffect(() => {
@@ -486,7 +524,7 @@ export default function App() {
     }
 
     if (runnerEvent.line.includes('[l2-readonly-runner] started')) {
-      setL2RunnerState({ status: 'running', runId, exitCode: null, message: '正在运行双目标真实只读检查', line: runnerEvent.line, updatedAt: new Date().toISOString() })
+      setL2RunnerState({ status: 'running', runId, exitCode: null, message: '正在运行双目标保存前安全检查', line: runnerEvent.line, updatedAt: new Date().toISOString() })
     }
   }, [handleL2RunnerFinished, runtimeLogs.launcher])
 
@@ -592,7 +630,7 @@ export default function App() {
         return
       }
       const firstProduct = products[0]
-      const modeLabel = request.mode === 'probe' ? '真实只读检查' : '单商品只保存'
+      const modeLabel = request.mode === 'probe' ? '保存前安全检查' : '单商品只保存'
       const task = await postJson<Task>('/api/tasks', {
         name: `${modeLabel} - ${store.name} - ${products.length} 件商品`,
         store_id: store.id,
@@ -610,7 +648,7 @@ export default function App() {
       })
       setSelectedTaskId(task.id)
       syncSelectedTaskIdUrl(task.id)
-      setActiveSection('product_tasks')
+      setActiveSection(request.mode === 'single_save' ? 'draft_edit_save' : 'product_tasks')
       await refreshWorkspace()
       await refreshConfigPreview(task.id)
     } catch (error) {
@@ -621,9 +659,36 @@ export default function App() {
     }
   }
 
+  async function createAcquisitionClaimRequest(request: AcquisitionClaimCreateRequest) {
+    setBusy(true)
+    setOperationError(null)
+    setOperationNotice(null)
+    try {
+      const result = await postJson<AcquisitionClaimResponse>('/api/acquisition/claim-requests', {
+        store_id: request.storeId,
+        keyword: request.keyword,
+        category_name: request.categoryName,
+        claim_mark: request.claimMark,
+        template_id: request.templateId ?? null,
+      })
+      setLastAcquisitionClaimRequest(result)
+      if (result.task_id) {
+        setSelectedTaskId(result.task_id)
+        syncSelectedTaskIdUrl(result.task_id)
+      }
+      setActiveSection('start_save')
+        setOperationNotice('采集认领任务已创建。下一步在实时浏览器启动 Agent，将商品从数据采集认领到采集箱。')
+      await refreshWorkspace()
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : '创建采集认领请求失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function bootstrapDemo() {
     if (!DEMO_ENABLED) {
-      setOperationError('开发自检数据只在 dev=1 模式可用；真实使用请创建单商品只保存任务并运行真实只读检查。')
+      setOperationError('开发自检数据只在 dev=1 模式可用；真实使用请先从数据采集认领商品，再创建采集箱只保存任务并运行保存前安全检查。')
       return
     }
     const confirmed = window.confirm('这会向本地后端写入演示店铺、模板、商品和本地演示核验批次；不会访问店小秘，也不会启动真实保存。继续？')
@@ -681,7 +746,7 @@ export default function App() {
     try {
       if (REAL_DXM_MUTATION_MODES.has(selectedTask.mode)) {
         if (UNRELEASED_REAL_DXM_MUTATION_MODES.has(selectedTask.mode)) {
-          setOperationError('当前仅开放单商品只保存；认领和批量保存必须重新验收后再放行。')
+          setOperationError('当前仅开放采集认领和单商品只保存；批量保存必须重新验收后再放行。')
           return
         }
         if (!RELEASED_REAL_DXM_MUTATION_MODES.has(selectedTask.mode)) {
@@ -694,6 +759,12 @@ export default function App() {
         if (!DXM_READY_SESSION_STATUSES.has(dxmLoginStatus)) {
           setOperationError(`请先完成真实 DXM 登录；当前登录状态：${dxmLoginStatus || '未知'}。`)
           setActiveSection('dxm_access')
+          return
+        }
+        if (selectedTask.mode === 'claim_only') {
+          await postJson(`/api/tasks/${selectedTask.id}/start`, {})
+          setActiveSection('acquisition_claim')
+          await refreshWorkspace()
           return
         }
         const latestConfigPreview = await refreshConfigPreview(selectedTask.id)
@@ -920,7 +991,7 @@ export default function App() {
     }
     const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
     if (l2Gate?.status !== 'passed') {
-      const message = '真实只读检查未通过，暂不能启动执行浏览器。请先运行真实只读检查；系统不会保存或发布。'
+      const message = '保存前安全检查未通过，暂不能启动浏览器现场。请先运行保存前安全检查；系统不会保存或发布。'
       setAgentConsoleError(message)
       setOperationError(message)
       setActiveSection('start_save')
@@ -1055,7 +1126,7 @@ export default function App() {
           status: 'running',
           runId: result.runId,
           exitCode: null,
-          message: '正在运行双目标真实只读检查',
+          message: '正在运行双目标保存前安全检查',
           line: result.logPath ?? null,
           updatedAt: new Date().toISOString(),
         })
@@ -1072,7 +1143,7 @@ export default function App() {
           status: 'failed',
           runId: null,
           exitCode: null,
-          message: '真实只读检查启动失败，真实保存仍阻断',
+          message: '保存前安全检查启动失败，真实保存仍阻断',
           line: humanMessage,
           updatedAt: new Date().toISOString(),
         })
@@ -1089,7 +1160,7 @@ export default function App() {
 
   async function runL2ReadonlyProbe() {
     setRuntimeLogSource('launcher')
-    setL2RunnerState({ status: 'running', runId: null, exitCode: null, message: '正在运行双目标真实只读检查', line: null, updatedAt: new Date().toISOString() })
+    setL2RunnerState({ status: 'running', runId: null, exitCode: null, message: '正在运行双目标保存前安全检查', line: null, updatedAt: new Date().toISOString() })
     setActiveSection('start_save')
     await runRuntimeControl('run_l2_readonly_probe')
   }
@@ -1098,6 +1169,12 @@ export default function App() {
   const setWorkbenchSection = useCallback((section: WorkbenchSection) => {
     setActiveSection(normalizeWorkbenchSection(section))
   }, [])
+  const persistedAcquisitionClaimRequest = useMemo(
+    () => taskToAcquisitionClaimResponse(pickLatestAcquisitionClaimTask(workspace.tasks)),
+    [workspace.tasks],
+  )
+  const visibleAcquisitionClaimRequest = persistedAcquisitionClaimRequest ?? lastAcquisitionClaimRequest
+  const selectedEditSaveTask = selectedTask?.mode === 'single_save' ? selectedTask : null
 
   const content = (() => {
     switch (currentSection) {
@@ -1108,8 +1185,20 @@ export default function App() {
       case 'config_images':
       case 'config_logistics':
       case 'config_compliance':
+      case 'template_center':
       case 'template_management':
-        return <ConfigCenter workspace={workspace} selectedTask={selectedTask} configPreview={configPreview} configPreviewError={configPreviewError} configPreviewLoading={configPreviewLoading} onConfigSaved={async () => { await refreshWorkspace(); await refreshConfigPreview() }} onRefreshConfigPreview={async () => { await refreshConfigPreview(); await refreshWorkspace() }} onShowTasks={() => setActiveSection('product_tasks')} />
+        return (
+          <TemplateCenterPage
+            workspace={workspace}
+            selectedTask={selectedTask}
+            configPreview={configPreview}
+            configPreviewError={configPreviewError}
+            configPreviewLoading={configPreviewLoading}
+            onConfigSaved={async () => { await refreshWorkspace(); await refreshConfigPreview() }}
+            onRefreshConfigPreview={async () => { await refreshConfigPreview(); await refreshWorkspace() }}
+            onShowDraftEdit={() => setActiveSection('draft_edit_save')}
+          />
+        )
       case 'dxm_access':
         return (
           <DxmAccessPage
@@ -1124,6 +1213,19 @@ export default function App() {
             onContinueDxmLogin={continueDxmLogin}
             onNavigateDxmTarget={navigateDxmTarget}
             onShowConsole={() => setActiveSection('start_save')}
+          />
+        )
+      case 'acquisition_claim':
+        return (
+          <AcquisitionClaimPage
+            stores={workspace.stores}
+            templates={workspace.templates}
+            busy={busy}
+            lastRequest={visibleAcquisitionClaimRequest}
+            onCreateClaimRequest={(request) => { void createAcquisitionClaimRequest(request) }}
+            onNavigateDataAcquisition={() => { void navigateDxmTarget('data_acquisition') }}
+            onShowDraftEdit={() => setActiveSection('draft_edit_save')}
+            onShowExecutionConsole={() => setActiveSection('start_save')}
           />
         )
       case 'product_tasks':
@@ -1155,6 +1257,27 @@ export default function App() {
             onShowConsole={() => setActiveSection('start_save')}
             onShowEvidence={() => setActiveSection('results')}
             onShowReports={() => setActiveSection('results')}
+          />
+        )
+      case 'draft_edit_save':
+        return (
+          <DraftEditSavePage
+            claimedProducts={claimedDraftProducts}
+            selectedTask={selectedEditSaveTask}
+            busy={busy}
+            onCreateSaveTask={(productId) => {
+              const product = workspace.products.find((item) => item.id === productId) ?? null
+              const storeId = storeIdForClaimedProduct(product, workspace.stores)
+              if (!storeId) {
+                setOperationError('该采集箱商品缺少原始店铺信息，不能创建编辑保存任务。请重新从“商品采集”认领到采集箱后再继续。')
+                setActiveSection('acquisition_claim')
+                return
+              }
+              void createRealTask({ storeId, mode: 'single_save', productIds: [productId] })
+            }}
+            onShowAcquisition={() => setActiveSection('acquisition_claim')}
+            onShowTemplates={() => setActiveSection('template_center')}
+            onShowExecutionConsole={() => setActiveSection('start_save')}
           />
         )
       case 'start_save':
@@ -1199,6 +1322,7 @@ export default function App() {
             onControlAgentConsoleBrowser={controlAgentConsoleBrowser}
             onRuntimeControl={runRuntimeControl}
             onShowTasks={() => setActiveSection('product_tasks')}
+            onShowDraftEdit={() => setActiveSection('draft_edit_save')}
             onShowConfig={() => setActiveSection('edit_config')}
             onShowEvidence={() => setActiveSection('results')}
             onShowReports={() => setActiveSection('results')}
@@ -1234,6 +1358,8 @@ export default function App() {
             configPreview={configPreview}
             runtimeStatus={runtimeStatus}
             onShowDxmAccess={() => setActiveSection('dxm_access')}
+            onShowAcquisition={() => setActiveSection('acquisition_claim')}
+            onShowDraftEdit={() => setActiveSection('draft_edit_save')}
             onShowTasks={() => setActiveSection('product_tasks')}
             onShowConfig={() => setActiveSection('edit_config')}
             onShowConsole={() => setActiveSection('start_save')}
@@ -1317,7 +1443,7 @@ function runtimeControlSuccessMessage(action: RuntimeControlAction) {
     mark_real_task_manual_review: '已将真实写入任务转入人工复核。不会取消真实浏览器进程，请查看任务日志确认现场。',
     restart_backend: '已提交后端重启请求，请查看启动器日志。',
     restart_frontend: '已提交前端重启请求，请查看启动器日志。',
-    run_l2_readonly_probe: '已启动真实只读检查，请在“开始只保存”查看实时日志。',
+    run_l2_readonly_probe: '已启动保存前安全检查，请在“实时浏览器”查看实时日志。',
   } as Record<RuntimeControlAction, string>)[action]
 }
 
@@ -1325,13 +1451,13 @@ function humanOperationError(message: string) {
   const runtimeStatusMessage = humanRuntimeStatusError(message)
   if (runtimeStatusMessage !== message) return runtimeStatusMessage
   if (message.includes('L2 readonly probe resources are missing')) {
-    return `真实只读检查组件未安装完整，请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${checkedPathHint(message)}`
+    return `保存前安全检查组件未安装完整，请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${checkedPathHint(message)}`
   }
   if (message.includes('L2 readonly probe runner is missing')) {
-    return `真实只读检查组件未安装完整：缺少真实只读检查启动器。请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
+    return `保存前安全检查组件未安装完整：缺少安全检查启动器。请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
   }
   if (message.includes('L2 readonly probe script is missing')) {
-    return `真实只读检查组件未安装完整：缺少真实只读检查脚本。请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
+    return `保存前安全检查组件未安装完整：缺少安全检查脚本。请关闭旧进程并重新打开完整免安装目录版。已阻止真实保存，不会发布。${searchedPathHint(message)}`
   }
   const operatorMessage = humanOperatorMessage(message)
   if (operatorMessage !== message) return operatorMessage
@@ -1365,7 +1491,7 @@ function humanWorkspaceFetchError(message?: string) {
   ) {
     return '暂时无法读取完整任务数据。请重新打开 DXM Agent Console 免安装版；开发模式请确认后端服务正在运行。真实保存不会启动或发布。'
   }
-  return '暂时无法读取完整任务数据。请查看“开始只保存”的实时日志；系统不会用本地演示结果替代真实保存。'
+  return '暂时无法读取完整任务数据。请查看“实时浏览器”的实时日志；系统不会用本地演示结果替代真实保存。'
 }
 
 function humanRuntimeStatusError(message: string) {
@@ -1455,35 +1581,35 @@ function humanDxmLoginError(message: string) {
 
 function humanAgentConsoleError(message: string) {
   const normalized = message.toLowerCase()
-  const commonTail = '执行浏览器只会在真实只读检查和人工确认通过后接入真实店小秘页面；不会自动发布。'
+  const commonTail = '浏览器现场只会在保存前安全检查和人工确认通过后接入真实店小秘页面；不会自动发布。'
   const browserRuntimeMessage = humanBrowserRuntimeError(message)
   if (browserRuntimeMessage) return `${browserRuntimeMessage}${commonTail}`
   if (
     message.includes('Internal Server Error')
     || normalized.includes('post /api/agent-console/start failed')
   ) {
-    return `真实执行浏览器启动失败：本机后端返回异常。请关闭旧的 DXM Agent Console 或旧浏览器进程后重试；如果仍失败，重开免安装 EXE。${commonTail}`
+    return `真实浏览器现场启动失败：本机后端返回异常。请关闭旧的 DXM Agent Console 或旧浏览器进程后重试；如果仍失败，重开免安装 EXE。${commonTail}`
   }
   if (
     normalized.includes('browser has been closed')
     || message.includes('Target page, context or browser has been closed')
     || normalized.includes('context or browser has been closed')
   ) {
-    return `真实执行浏览器已关闭或启动后立即退出。请保留新打开的真实浏览器窗口，或关闭旧进程后回到“开始只保存”重新打开。${commonTail}`
+    return `真实浏览器现场已关闭或启动后立即退出。请保留新打开的真实浏览器窗口，或关闭旧进程后回到“浏览器现场”重新打开。${commonTail}`
   }
   if (
     normalized.includes('user data directory is already in use')
     || normalized.includes('profile')
     || normalized.includes('locked')
   ) {
-    return `真实执行浏览器数据目录被旧进程占用。请关闭旧的 DXM Agent Console 或旧浏览器进程后重试。${commonTail}`
+    return `真实浏览器现场数据目录被旧进程占用。请关闭旧的 DXM Agent Console 或旧浏览器进程后重试。${commonTail}`
   }
   if (
     normalized.includes('executable')
     || normalized.includes('playwright')
     || normalized.includes('chromium')
   ) {
-    return `真实执行浏览器依赖缺失或不可启动。请重新打开完整免安装目录版，并查看“开始只保存”的实时日志。${commonTail}`
+    return `真实浏览器现场依赖缺失或不可启动。请重新打开完整免安装目录版，并查看“浏览器现场”的实时日志。${commonTail}`
   }
   return message
 }
@@ -1568,24 +1694,39 @@ function pickDefaultTaskId(deliveryWorkspace: DeliveryWorkspaceResponse | null, 
   const deliveryTask = typeof deliveryTaskId === 'number'
     ? tasks.find((task) => task.id === deliveryTaskId)
     : null
-  if (deliveryTask && isDefaultSelectableSingleSaveTask(deliveryTask)) {
+  if (deliveryTask && isDefaultSelectableOperatorTask(deliveryTask)) {
     return deliveryTask.id
   }
-  return tasks.find(isActionableSingleSaveTask)?.id
-    ?? (deliveryTask && isDefaultSelectableSingleSaveTask(deliveryTask) ? deliveryTask.id : null)
+  return tasks.find(isActionableClaimTask)?.id
+    ?? tasks.find(isActionableSingleSaveTask)?.id
+    ?? (deliveryTask && isDefaultSelectableOperatorTask(deliveryTask) ? deliveryTask.id : null)
     ?? tasks.find((task) => task.mode === 'single_save')?.id
+    ?? tasks.find(isDefaultSelectableClaimTask)?.id
     ?? tasks.find(isSafeDefaultFallbackTask)?.id
     ?? null
 }
 
 function pickTaskIdForOperatorPath(currentTaskId: number | null, deliveryWorkspace: DeliveryWorkspaceResponse | null, tasks: Task[]): number | null {
   const currentTask = currentTaskId ? tasks.find((task) => task.id === currentTaskId) : null
+  if (currentTask && isDefaultSelectableOperatorTask(currentTask)) return currentTask.id
   if (currentTask && isActionableSingleSaveTask(currentTask)) return currentTask.id
   return pickDefaultTaskId(deliveryWorkspace, tasks)
 }
 
+function isActionableClaimTask(task: Task) {
+  return task.mode === 'claim_only' && !['completed', 'cancelled', 'archived'].includes(String(task.status || ''))
+}
+
 function isActionableSingleSaveTask(task: Task) {
   return task.mode === 'single_save' && !['completed', 'cancelled', 'archived'].includes(String(task.status || ''))
+}
+
+function isDefaultSelectableOperatorTask(task: Task) {
+  return (task.mode === 'claim_only' || task.mode === 'single_save') && !['cancelled', 'archived'].includes(String(task.status || ''))
+}
+
+function isDefaultSelectableClaimTask(task: Task) {
+  return task.mode === 'claim_only' && !['cancelled', 'archived'].includes(String(task.status || ''))
 }
 
 function isDefaultSelectableSingleSaveTask(task: Task) {
@@ -1599,7 +1740,7 @@ function isSafeDefaultFallbackTask(task: Task) {
 function buildAgentConsoleHudStep(workspace: DeliveryWorkspace, selectedTask: Task): AgentConsoleSession['hud'] {
   const storeName = String(selectedTask.payload.store_name ?? workspace.stores[0]?.name ?? '等待真实店铺')
   return {
-    title: '准备开始只保存',
+    title: '准备执行只保存',
     state: 'READY_FOR_SINGLE_SAVE',
     action: '真实浏览器已打开，等待按任务流程执行',
     next_step: '人工确认后由 Agent 输入编辑页内容并只点击保存',
@@ -1608,10 +1749,51 @@ function buildAgentConsoleHudStep(workspace: DeliveryWorkspace, selectedTask: Ta
     phase: '开始任务',
     progress_index: 1,
     progress_total: 12,
-    human_title: '准备开始只保存',
+    human_title: '准备执行只保存',
     human_action: '真实浏览器已打开，Agent 将按步骤操作店小秘编辑页',
     human_next: '人工确认后开始输入标题、选择分类、设置价格库存并只保存',
     requires_user_action: true,
     severity: 'warning',
   }
+}
+
+function pickLatestAcquisitionClaimTask(tasks: Task[]): Task | null {
+  return tasks.find((task) => task.mode === 'claim_only' && !['cancelled', 'archived'].includes(String(task.status || ''))) ?? null
+}
+
+function taskToAcquisitionClaimResponse(task: Task | null): AcquisitionClaimResponse | null {
+  if (!task || task.mode !== 'claim_only') return null
+  const payload = task.payload ?? {}
+  return {
+    id: task.id,
+    task_id: task.id,
+    stage: String(payload.stage ?? 'pending_acquisition_claim'),
+    status: String(payload.status ?? task.status ?? 'pending'),
+    store_id: Number(task.store_id ?? payload.store_id ?? 0),
+    keyword: typeof payload.keyword === 'string' ? payload.keyword : null,
+    category_name: typeof payload.category_name === 'string' ? payload.category_name : null,
+    claim_mark: String(payload.claim_mark ?? 'AI-OPS'),
+    template_id: typeof payload.template_id === 'number' ? payload.template_id : null,
+    claimed_product_id: typeof payload.claimed_product_id === 'number' ? payload.claimed_product_id : null,
+    claimed_product_title: typeof payload.claimed_product_title === 'string' ? payload.claimed_product_title : null,
+    claimed_product_status: typeof payload.claimed_product_status === 'string' ? payload.claimed_product_status : null,
+    claimed_product_source: typeof payload.claimed_product_source === 'string' ? payload.claimed_product_source : null,
+    claimed_product_source_url: typeof payload.claimed_product_source_url === 'string' ? payload.claimed_product_source_url : null,
+    claimed_product_category_name: typeof payload.claimed_product_category_name === 'string' ? payload.claimed_product_category_name : null,
+    draft_box_verified: typeof payload.draft_box_verified === 'boolean' ? payload.draft_box_verified : null,
+    next_step: typeof payload.next_step === 'string' ? payload.next_step : null,
+    completed_at: typeof payload.completed_at === 'string' ? payload.completed_at : null,
+    task_status: task.status,
+  }
+}
+
+function storeIdForClaimedProduct(product: Product | null, stores: Store[]): number | null {
+  if (!product) return null
+  const payload = product.payload ?? {}
+  const rawStoreId = payload.store_id ?? payload.claim_store_id ?? payload.dxm_store_id
+  const parsedStoreId = Number(rawStoreId)
+  if (Number.isInteger(parsedStoreId) && parsedStoreId > 0) {
+    return stores.some((store) => store.id === parsedStoreId) ? parsedStoreId : null
+  }
+  return stores.length === 1 ? stores[0].id : null
 }

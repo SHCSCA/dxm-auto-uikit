@@ -28,6 +28,7 @@ from src.execution.playwright_engine import PlaywrightEngine
 from src.execution.v1_runner import V1TaskRunner
 from src.models import (
     AIConfigUpdateRequest,
+    AcquisitionClaimRequest,
     AgentConsoleControlRequest,
     AgentConsoleHudRequest,
     AgentConsoleStartRequest,
@@ -56,6 +57,7 @@ from src.services.selector_profile import SelectorProfileService
 from src.services.delivery_workspace import build_delivery_workspace, l2_real_probe_gate
 from src.services.agent_console import AgentConsoleService
 from src.services.config_preview import ConfigPreviewService
+from src.services.template_center import template_center_metadata
 from src.ws import ConnectionManager
 
 @asynccontextmanager
@@ -114,12 +116,13 @@ runner = V1TaskRunner(
 )
 
 REAL_DXM_MUTATION_MODES = {'claim_only', 'single_save', 'batch_save'}
-RELEASED_REAL_DXM_MUTATION_MODES = {'single_save'}
+RELEASED_REAL_DXM_MUTATION_MODES = {'claim_only', 'single_save'}
 REAL_WRITE_START_MODES = REAL_DXM_MUTATION_MODES
 ALLOWED_START_MODES = {'probe', 'dry_run', 'claim_only', 'single_save', 'batch_save'}
 SAVE_ONLY_PUBLISH_SCENE = 'SMT_SEMI_MANAGED_SAVE_ONLY'
+CLAIM_TO_DRAFT_PUBLISH_SCENE = 'CONTROLLED_CLAIM_TO_DRAFT_ONLY'
 L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
-UNRELEASED_REAL_DXM_MODE_DETAIL = 'Only controlled single_save is released for real DXM mutation'
+UNRELEASED_REAL_DXM_MODE_DETAIL = 'Only controlled claim_only and single_save are released for real DXM mutation'
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FINAL_DELIVERY_CHECK_JSON = REPO_ROOT / 'outputs' / 'final-delivery-check' / 'final-delivery-check.json'
 RUNTIME_LAUNCHER_LOG_FILE = Path(
@@ -313,6 +316,11 @@ def list_templates():
     return repo.list_templates()
 
 
+@app.get('/api/template-center/metadata')
+def get_template_center_metadata():
+    return template_center_metadata()
+
+
 @app.post('/api/templates')
 def create_template(payload: TemplateCreate):
     data = payload.model_dump()
@@ -345,6 +353,11 @@ def list_products():
     return repo.list_products()
 
 
+@app.get('/api/acquisition/claimed-products')
+def list_acquisition_claimed_products():
+    return repo.list_claimed_draft_products()
+
+
 @app.post('/api/products')
 def create_product(payload: ProductCreate):
     return repo.create_product(payload.model_dump())
@@ -353,6 +366,48 @@ def create_product(payload: ProductCreate):
 @app.post('/api/products/import')
 def import_products(payload: ProductImportRequest):
     return repo.bulk_import_products(payload.rows)
+
+
+@app.post('/api/acquisition/claim-requests')
+def create_acquisition_claim_request(payload: AcquisitionClaimRequest):
+    task = repo.create_acquisition_claim_request(_normalize_acquisition_claim_request(payload))
+    task_payload = task.get('payload') or {}
+    return {
+        'id': task.get('id'),
+        'task_id': task.get('id'),
+        'stage': task_payload.get('stage') or 'pending_acquisition_claim',
+        'status': task_payload.get('status') or 'pending',
+        'store_id': task_payload.get('store_id'),
+        'keyword': task_payload.get('keyword'),
+        'category_name': task_payload.get('category_name'),
+        'claim_mark': task_payload.get('claim_mark'),
+        'template_id': task_payload.get('template_id'),
+        'claimed_product_id': task_payload.get('claimed_product_id'),
+        'claimed_product_title': task_payload.get('claimed_product_title'),
+        'claimed_product_status': task_payload.get('claimed_product_status'),
+        'claimed_product_source': task_payload.get('claimed_product_source'),
+        'claimed_product_source_url': task_payload.get('claimed_product_source_url'),
+        'claimed_product_category_name': task_payload.get('claimed_product_category_name'),
+        'draft_box_verified': task_payload.get('draft_box_verified'),
+        'next_step': task_payload.get('next_step'),
+        'completed_at': task_payload.get('completed_at'),
+        'task_status': task.get('status'),
+    }
+
+
+def _normalize_acquisition_claim_request(payload: AcquisitionClaimRequest) -> dict[str, Any]:
+    data = payload.model_dump()
+    keyword = str(data.get('keyword') or '').strip()
+    category_name = str(data.get('category_name') or '').strip()
+    claim_mark = str(data.get('claim_mark') or '').strip()
+    if not claim_mark:
+        raise HTTPException(status_code=400, detail='请填写认领标记。')
+    if not keyword and not category_name:
+        raise HTTPException(status_code=400, detail='请填写搜索关键词或认领类目，Agent 才能定位真实采集商品。')
+    data['keyword'] = keyword or None
+    data['category_name'] = category_name or None
+    data['claim_mark'] = claim_mark
+    return data
 
 
 @app.get('/api/tasks')
@@ -589,6 +644,7 @@ def runtime_status(frontend_url: str | None = None):
     backend_url = os.environ.get('DXM_BACKEND_URL') or f"http://127.0.0.1:{os.environ.get('DXM_BACKEND_PORT', '8000')}"
     agent_status = agent_console_service.status()
     dxm_state = normalize_artifact_paths(login_flow.get_state())
+    real_browser_status = _runtime_real_browser_status(agent_status, dxm_state)
     return {
         'backend': {
             'status': 'ok',
@@ -607,10 +663,15 @@ def runtime_status(frontend_url: str | None = None):
             'profileDir': agent_status.get('profile_dir'),
             'lastError': agent_status.get('last_error'),
         },
+        'realBrowser': real_browser_status,
         'dxmLogin': {
             'status': str(dxm_state.get('status') or dxm_state.get('stage') or 'unknown'),
             'currentUrl': dxm_state.get('current_url') or dxm_state.get('url') or dxm_state.get('page_url'),
+            'pageTitle': dxm_state.get('page_title') or dxm_state.get('title'),
+            'browserVisible': bool(dxm_state.get('browser_visible')),
             'lastError': dxm_state.get('last_error') or dxm_state.get('error'),
+            'message': dxm_state.get('message'),
+            'nextAction': dxm_state.get('next_action'),
         },
         'l2ReadonlyProbe': _l2_probe_lock_status(),
         'dependencies': {
@@ -640,6 +701,64 @@ def runtime_status(frontend_url: str | None = None):
             'resource_root': str(REPO_ROOT),
             'resourceRoot': str(REPO_ROOT),
         },
+    }
+
+
+def _runtime_real_browser_status(agent_status: dict[str, Any], dxm_state: dict[str, Any]) -> dict[str, Any]:
+    dxm_stage = str(dxm_state.get('stage') or dxm_state.get('status') or '').strip()
+    dxm_url = dxm_state.get('current_url') or dxm_state.get('url') or dxm_state.get('page_url')
+    dxm_browser_visible = bool(dxm_state.get('browser_visible'))
+    dxm_business_state_seen = bool(
+        dxm_stage
+        and dxm_stage not in {'opening_login_page', 'unknown'}
+        and (dxm_browser_visible or (isinstance(dxm_url, str) and 'dianxiaomi.com' in dxm_url))
+    )
+    if dxm_browser_visible or dxm_business_state_seen:
+        return {
+            'status': 'running' if dxm_browser_visible else 'known',
+            'active': dxm_browser_visible,
+            'browserVisible': dxm_browser_visible,
+            'browserLaunching': False,
+            'source': 'dxm_flow',
+            'currentUrl': dxm_url,
+            'pageTitle': dxm_state.get('page_title') or dxm_state.get('title'),
+            'currentStep': dxm_state.get('label') or dxm_stage,
+            'lastError': dxm_state.get('last_error') or dxm_state.get('error'),
+            'message': dxm_state.get('message'),
+            'nextAction': dxm_state.get('next_action'),
+        }
+
+    agent_active = bool(agent_status.get('active'))
+    agent_visible = bool(agent_status.get('browser_visible'))
+    agent_launching = bool(agent_status.get('browser_launching'))
+    if agent_active or agent_visible or agent_launching:
+        hud = agent_status.get('hud') if isinstance(agent_status.get('hud'), dict) else {}
+        return {
+            'status': 'launching' if agent_launching else 'running' if agent_active else 'known',
+            'active': agent_active,
+            'browserVisible': agent_visible,
+            'browserLaunching': agent_launching,
+            'source': 'agent_console',
+            'currentUrl': agent_status.get('current_url') or agent_status.get('target_url'),
+            'pageTitle': agent_status.get('page_title'),
+            'currentStep': hud.get('title') or hud.get('label') or agent_status.get('last_step_name'),
+            'lastError': agent_status.get('last_error'),
+            'message': hud.get('action') or hud.get('detail'),
+            'nextAction': hud.get('next_step'),
+        }
+
+    return {
+        'status': 'idle',
+        'active': False,
+        'browserVisible': False,
+        'browserLaunching': False,
+        'source': 'none',
+        'currentUrl': dxm_url or agent_status.get('target_url') or 'https://www.dianxiaomi.com/',
+        'pageTitle': dxm_state.get('page_title') or dxm_state.get('title') or agent_status.get('page_title'),
+        'currentStep': dxm_state.get('label') or dxm_stage or '待启动',
+        'lastError': dxm_state.get('last_error') or dxm_state.get('error') or agent_status.get('last_error'),
+        'message': dxm_state.get('message'),
+        'nextAction': dxm_state.get('next_action'),
     }
 
 
@@ -800,11 +919,15 @@ def start_agent_console(payload: AgentConsoleStartRequest):
         if task is None:
             raise HTTPException(
                 status_code=403,
-                detail='Agent execution browser start requires a selected controlled single_save task',
+                detail='Agent execution browser start requires a selected controlled claim_only or single_save task',
             )
         mode = str(task.get('mode') or (task.get('payload') or {}).get('execution_mode') or '')
         if mode not in RELEASED_REAL_DXM_MUTATION_MODES:
             raise HTTPException(status_code=403, detail=UNRELEASED_REAL_DXM_MODE_DETAIL)
+        if mode == 'claim_only' and str(task.get('publish_scene') or '') != CLAIM_TO_DRAFT_PUBLISH_SCENE:
+            raise HTTPException(status_code=403, detail='Controlled claim_only task requires claim-to-draft scene')
+        if mode == 'claim_only':
+            _assert_claim_only_acquisition_task(task)
         task_status = str(task.get('status') or '')
         if task_status == 'running':
             raise HTTPException(status_code=409, detail='Task is already running')
@@ -967,7 +1090,23 @@ def _runtime_log_item(line: str) -> dict:
         for tag, patterns in RUNTIME_LOG_TAG_PATTERNS.items()
         if any(pattern.lower() in normalized for pattern in patterns)
     ]
+    if _is_runtime_access_log(line):
+        tags.append('access')
+    if _is_runtime_log_poll_noise(line):
+        tags.append('polling')
     return {'line': line, 'level': level, 'tags': tags}
+
+
+def _is_runtime_access_log(line: str) -> bool:
+    return line.startswith('INFO:') and '"GET /api/' in line and 'HTTP/1.1"' in line
+
+
+def _is_runtime_log_poll_noise(line: str) -> bool:
+    return _is_runtime_access_log(line) and (
+        '/api/runtime/logs?' in line
+        or '/api/runtime/status?' in line
+        or '/api/agent-console/status' in line
+    )
 
 
 def _runtime_task_logs(task_id: int | None, cursor: int, limit: int, level: str | None, query: str) -> dict:
@@ -1490,6 +1629,16 @@ def _read_final_delivery_check_summary():
     l2_allowlist_review_template = payload.get('l2AllowlistReviewTemplate') if isinstance(payload.get('l2AllowlistReviewTemplate'), dict) else {}
     l2_allowlist_review_candidates = l2_allowlist_review_template.get('candidates')
     l2_allowlist_review_template_hashes = payload.get('l2AllowlistReviewTemplateHashes') if isinstance(payload.get('l2AllowlistReviewTemplateHashes'), dict) else {}
+    two_stage_acceptance = payload.get('twoStageAcceptance') if isinstance(payload.get('twoStageAcceptance'), dict) else {}
+    two_stage_acceptance_readiness = payload.get('twoStageAcceptanceReadiness') if isinstance(payload.get('twoStageAcceptanceReadiness'), dict) else {}
+    report_two_stage_end_to_end = (
+        payload.get('realDxmTwoStageEndToEnd')
+        or ('passed' if two_stage_acceptance.get('passed') is True else 'pending_live_dxm_validation')
+    )
+    expected_two_stage_end_to_end = payload.get('expectedRealDxmTwoStageEndToEnd') or report_two_stage_end_to_end
+    two_stage_acceptance_matches_expected = payload.get('twoStageAcceptanceMatchesExpected')
+    if two_stage_acceptance_matches_expected is None and expected_two_stage_end_to_end:
+        two_stage_acceptance_matches_expected = report_two_stage_end_to_end == expected_two_stage_end_to_end
     current_git = _current_git_summary()
     current_gate = _current_real_dxm_gate_summary()
     report_git_head = payload.get('gitHead')
@@ -1524,6 +1673,7 @@ def _read_final_delivery_check_summary():
         effective_readiness = 'BLOCKED'
         effective_blocked_reason = stale_final_check_reason
         effective_mutation_allowed = False
+        effective_two_stage_end_to_end = 'pending_live_dxm_validation'
     else:
         effective_readiness = current_readiness or report_readiness
         effective_blocked_reason = (
@@ -1532,12 +1682,22 @@ def _read_final_delivery_check_summary():
             else payload.get('realDxmWriteBlockedReason')
         )
         effective_mutation_allowed = payload.get('realDxmMutationAllowed') is True and effective_readiness == 'READY'
+        effective_two_stage_end_to_end = (
+            'passed'
+            if report_two_stage_end_to_end == 'passed' and current_gate.get('two_stage_ready') is True
+            else 'pending_live_dxm_validation'
+        )
     effective_mutation_scope = payload.get('realDxmMutationScope') if effective_mutation_allowed else 'none'
     expected_readiness = payload.get('expectedRealDxmWriteReadiness') or report_readiness
     effective_readiness_matches_expected = (
         None
         if not expected_readiness or not effective_readiness
         else effective_readiness == expected_readiness
+    )
+    production_delivery_ready = (
+        payload.get('productionDeliveryReady') is True
+        and effective_two_stage_end_to_end == 'passed'
+        and effective_readiness == 'READY'
     )
     return {
         'status': 'available',
@@ -1554,6 +1714,16 @@ def _read_final_delivery_check_summary():
         'effective_real_dxm_write_blocked_reason': effective_blocked_reason,
         'effective_real_dxm_mutation_allowed': effective_mutation_allowed,
         'effective_real_dxm_mutation_scope': effective_mutation_scope,
+        'real_dxm_two_stage_end_to_end': report_two_stage_end_to_end,
+        'expected_real_dxm_two_stage_end_to_end': expected_two_stage_end_to_end,
+        'effective_real_dxm_two_stage_end_to_end': effective_two_stage_end_to_end,
+        'two_stage_acceptance': two_stage_acceptance,
+        'two_stage_acceptance_readiness': two_stage_acceptance_readiness,
+        'two_stage_acceptance_matches_expected': two_stage_acceptance_matches_expected,
+        'current_two_stage_ready': current_gate.get('two_stage_ready'),
+        'current_two_stage_status': current_gate.get('two_stage_status'),
+        'production_delivery_ready': production_delivery_ready,
+        'final_delivery_completed': production_delivery_ready,
         'production_real_write_ready': payload.get('productionRealWriteReady'),
         'real_dxm_write_blocked_reason': payload.get('realDxmWriteBlockedReason'),
         'l3_evidence_readiness': payload.get('l3EvidenceReadiness'),
@@ -1641,12 +1811,17 @@ def _current_real_dxm_gate_summary():
             'l2_status': None,
             'l3_status': None,
             'delivery_ready': None,
+            'two_stage_ready': None,
+            'two_stage_status': None,
         }
     gates = workspace.get('regression_gates') if isinstance(workspace, dict) else []
     l2_gate = _workspace_gate(gates, 'L2')
     l3_gate = _workspace_gate(gates, 'L3')
     delivery_readiness = workspace.get('delivery_readiness') if isinstance(workspace, dict) else {}
     delivery_ready = delivery_readiness.get('ready') is True if isinstance(delivery_readiness, dict) else False
+    two_stage_acceptance = workspace.get('two_stage_acceptance') if isinstance(workspace, dict) else {}
+    two_stage_ready = two_stage_acceptance.get('passed') is True if isinstance(two_stage_acceptance, dict) else False
+    two_stage_status = two_stage_acceptance.get('status') if isinstance(two_stage_acceptance, dict) else None
     l2_status = l2_gate.get('status') if l2_gate else None
     l3_status = l3_gate.get('status') if l3_gate else None
     if l2_status == 'passed' and l3_status == 'passed' and delivery_ready:
@@ -1656,6 +1831,8 @@ def _current_real_dxm_gate_summary():
             'l2_status': l2_status,
             'l3_status': l3_status,
             'delivery_ready': delivery_ready,
+            'two_stage_ready': two_stage_ready,
+            'two_stage_status': two_stage_status,
         }
     if not l2_gate or not l3_gate:
         reason = '当前运行门禁缺少 L2/L3 记录；不可依据旧自检报告启动真实写入。'
@@ -1671,6 +1848,8 @@ def _current_real_dxm_gate_summary():
         'l2_status': l2_status,
         'l3_status': l3_status,
         'delivery_ready': delivery_ready,
+        'two_stage_ready': two_stage_ready,
+        'two_stage_status': two_stage_status,
     }
 
 
@@ -1715,8 +1894,6 @@ def _assert_task_can_receive_manual_approval(task_id: int, request: TaskManualAp
         raise HTTPException(status_code=409, detail=f"Task cannot be approved from status: {task.get('status')}")
     if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
         raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')
-    if _task_store_name(task) != 'Dang Kang':
-        raise HTTPException(status_code=403, detail='Real DXM mutation task requires Dang Kang store')
     _assert_real_task_uses_non_fixture_products(task)
     if not request.approved_by or not request.approved_by.strip():
         raise HTTPException(status_code=400, detail='approved_by is required')
@@ -1748,12 +1925,23 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
         return
     if mode not in RELEASED_REAL_DXM_MUTATION_MODES:
         raise HTTPException(status_code=403, detail=UNRELEASED_REAL_DXM_MODE_DETAIL)
+    if mode == 'claim_only':
+        if str(task.get('publish_scene') or '') != CLAIM_TO_DRAFT_PUBLISH_SCENE:
+            raise HTTPException(status_code=403, detail='Controlled claim_only task requires claim-to-draft scene')
+        _assert_claim_only_acquisition_task(task)
+        l2_gate = l2_real_probe_gate()
+        if l2_gate.get('status') != 'passed':
+            raise HTTPException(
+                status_code=403,
+                detail=f"L2 readonly probe gate is not passed: {l2_gate.get('status')}",
+            )
+        return
     _assert_single_save_product_count(task.get('payload') or {}, status_code=409)
+    if mode == 'single_save':
+        _assert_single_save_uses_claimed_draft_product(payload.get('product_ids') or [])
 
     if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
         raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')
-    if _task_store_name(task) != 'Dang Kang':
-        raise HTTPException(status_code=403, detail='Real DXM mutation task requires Dang Kang store')
     _assert_real_task_uses_non_fixture_products(task)
 
     approval = payload.get('manual_approval') or {}
@@ -1787,8 +1975,69 @@ def _assert_task_create_scope(payload: TaskCreate) -> None:
     mode = str(payload.mode or '').strip()
     if mode in REAL_DXM_MUTATION_MODES and mode not in RELEASED_REAL_DXM_MUTATION_MODES:
         raise HTTPException(status_code=403, detail=UNRELEASED_REAL_DXM_MODE_DETAIL)
+    if mode == 'claim_only' and str(payload.publish_scene or '') != CLAIM_TO_DRAFT_PUBLISH_SCENE:
+        raise HTTPException(status_code=403, detail='Controlled claim_only task requires claim-to-draft scene')
+    if mode == 'claim_only' and payload.product_ids:
+        raise HTTPException(
+            status_code=400,
+            detail='Controlled claim_only must be created from acquisition claim request without existing product_ids',
+        )
     if mode == 'single_save':
         _assert_single_save_product_count({'product_ids': payload.product_ids}, status_code=400)
+        _assert_single_save_uses_claimed_draft_product(payload.product_ids)
+
+
+def _assert_claim_only_acquisition_task(task: dict[str, Any]) -> None:
+    jobs = task.get('jobs') if isinstance(task.get('jobs'), list) else []
+    if not jobs:
+        raise HTTPException(status_code=409, detail='Controlled claim_only requires an acquisition claim job')
+    if any(job.get('product_id') is not None for job in jobs if isinstance(job, dict)):
+        raise HTTPException(
+            status_code=409,
+            detail='Controlled claim_only must start from data acquisition and cannot use existing product_ids',
+        )
+
+
+def _assert_single_save_uses_claimed_draft_product(product_ids: list[int]) -> None:
+    product_id = int(product_ids[0])
+    product = repo.get_product(product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail=f'Product not found: {product_id}')
+    if _looks_like_real_task_fixture_product(product):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                '当前选择的商品是测试/示例数据，不能用于真实店小秘保存。'
+                '请先在“数据采集”认领真实商品到采集箱，再从“采集箱编辑保存”创建任务。'
+            ),
+        )
+    status = str(product.get('status') or '')
+    payload = product.get('payload') if isinstance(product.get('payload'), dict) else {}
+    source = str(payload.get('source') or product.get('source') or '').strip()
+    if status not in {'claimed_to_draft', 'ready_for_edit'}:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                '编辑保存必须从采集箱里的真实商品开始。'
+                '请先完成“采集认领”，确认商品已进入采集箱后，再创建单商品只保存任务。'
+            ),
+        )
+    if source != 'dxm_data_acquisition':
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                '编辑保存必须从真实数据采集认领进入采集箱的商品开始。'
+                '请先完成“数据采集认领”，不要使用手工创建或本地导入商品。'
+            ),
+        )
+    if payload.get('draft_box_verified') is not True:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                '编辑保存必须先通过采集箱验证。'
+                '请确认商品已进入采集箱后，再创建单商品只保存任务。'
+            ),
+        )
 
 
 def _assert_single_save_product_count(payload: dict[str, Any], *, status_code: int) -> None:
@@ -1826,7 +2075,7 @@ def _real_task_fixture_product_names(task: dict[str, Any]) -> list[str]:
         except (TypeError, ValueError):
             continue
     names: list[str] = []
-    for product in repo.list_products():
+    for product in repo.list_products(include_fixtures=True):
         if wanted_ids and int(product.get('id') or 0) not in wanted_ids:
             continue
         if _looks_like_real_task_fixture_product(product):

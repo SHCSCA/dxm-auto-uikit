@@ -55,10 +55,49 @@ export type DxmReferenceTemplateSection = {
   source: 'new' | 'legacy' | 'fallback'
 }
 export type Template = { id: number; template_type: string; template_name: string; binding_scope: string; payload: Record<string, unknown>; is_enabled: boolean }
-export type Product = { id: number; title: string; category_name: string; price: number; currency: string; sku_count: number; image_count: number; status: string; image?: { eu_outer_package_filename?: string } }
+export type TemplateCenterField = {
+  key: string
+  label: string
+  required: boolean
+  value_kind?: 'text' | 'number' | 'list' | string
+}
+export type TemplateCenterSection = {
+  id: string
+  label: string
+  template_type: string
+  fields: TemplateCenterField[]
+}
+export type TemplateCenterMetadata = {
+  sections: TemplateCenterSection[]
+  source_priority: string[]
+  actions: string[]
+}
+export type Product = { id: number; title: string; category_name: string; price: number; currency: string; sku_count: number; image_count: number; status: string; source?: string | null; payload?: Record<string, unknown>; image?: { eu_outer_package_filename?: string } }
 export type TaskJob = { id: number; task_id?: number; product_id?: number | null; status: string; current_step_code?: string | null; current_step_name?: string | null; error_code?: string | null; error_message?: string | null; [key: string]: unknown }
 export type Task = { id: number; name: string; status: string; mode: string; publish_scene: string; store_id?: number | null; total_jobs: number; completed_jobs: number; failed_jobs: number; payload: { product_ids?: number[]; store_name?: string; category_name?: string; image?: { eu_outer_package_filename?: string }; [key: string]: unknown }; jobs?: TaskJob[] }
 export type RealTaskCreateRequest = { storeId: number; mode: 'probe' | 'single_save'; productIds: number[] }
+export type AcquisitionClaimCreateRequest = { storeId: number; keyword?: string; categoryName?: string; claimMark: string; templateId?: number | null }
+export type AcquisitionClaimResponse = {
+  id: number
+  task_id: number
+  stage: string
+  status: string
+  store_id: number
+  keyword?: string | null
+  category_name?: string | null
+  claim_mark: string
+  template_id?: number | null
+  claimed_product_id?: number | null
+  claimed_product_title?: string | null
+  claimed_product_status?: string | null
+  claimed_product_source?: string | null
+  claimed_product_source_url?: string | null
+  claimed_product_category_name?: string | null
+  draft_box_verified?: boolean | null
+  next_step?: string | null
+  completed_at?: string | null
+  task_status?: string | null
+}
 export type LogItem = { id: number; task_id: number; job_id: number | null; level: string; message: string; context: Record<string, unknown>; created_at: string }
 export type RuntimeLogSource = 'backend' | 'frontend' | 'launcher' | 'npm' | 'task' | 'agent'
 export type RuntimeLogItem = { line: string; level: 'info' | 'warning' | 'error' | string; tags: string[] }
@@ -67,7 +106,20 @@ export type RuntimeStatus = {
   backend: { status: string; url?: string; port?: number | null; instanceId?: string | null; detail?: string }
   frontend: { status: string; url?: string; port?: number | null; detail?: string }
   agentConsole: { status: string; active: boolean; browserVisible: boolean; browserLaunching?: boolean; currentUrl?: string | null; profileDir?: string | null; lastError?: string | null }
-  dxmLogin: { status: string; currentUrl?: string | null; lastError?: string | null }
+  realBrowser: {
+    status: string
+    active: boolean
+    browserVisible: boolean
+    browserLaunching?: boolean
+    source?: 'dxm_flow' | 'agent_console' | 'none' | string
+    currentUrl?: string | null
+    pageTitle?: string | null
+    currentStep?: string | null
+    lastError?: string | null
+    message?: string | null
+    nextAction?: string | null
+  }
+  dxmLogin: { status: string; currentUrl?: string | null; pageTitle?: string | null; browserVisible?: boolean; lastError?: string | null; message?: string | null; nextAction?: string | null }
   l2ReadonlyProbe?: {
     running: boolean
     stale?: boolean
@@ -128,6 +180,21 @@ export type ConfigPreviewGroup = {
   missing: string[]
   fields: ConfigPreviewField[]
 }
+export type ConfigExecutionField = {
+  label: string
+  value: unknown
+  source: string
+  required: boolean
+  missing: boolean
+}
+export type ConfigExecutionSection = {
+  section: string
+  label: string
+  complete: boolean
+  required: boolean
+  missing: string[]
+  fields: ConfigExecutionField[]
+}
 export type ConfigPreview = {
   ok: boolean
   mode: string | null
@@ -136,6 +203,8 @@ export type ConfigPreview = {
   missing: string[]
   warnings: string[]
   fieldGroups: ConfigPreviewGroup[]
+  templatePriority: string[]
+  executionSections: ConfigExecutionSection[]
   templateTrace: Array<Record<string, unknown>>
   resolvedDefaults: Record<string, unknown>
 }
@@ -220,6 +289,8 @@ export type AgentConsoleHud = {
   code?: string
   action?: string
   detail?: string
+  line1?: string
+  line2?: string
   next_step?: string
   phase?: string
   progress_index?: number
@@ -230,6 +301,7 @@ export type AgentConsoleHud = {
   human_next?: string
   recent_actions?: string[]
   requires_user_action?: boolean
+  maintenance_detail?: string
   store_name?: string
   guard?: string
   updated_at?: string
@@ -324,6 +396,14 @@ export type FinalDeliveryCheckSummary = {
   effective_real_dxm_write_blocked_reason?: string | null
   effective_real_dxm_mutation_allowed?: boolean | null
   effective_real_dxm_mutation_scope?: string | null
+  real_dxm_two_stage_end_to_end?: string | null
+  expected_real_dxm_two_stage_end_to_end?: string | null
+  effective_real_dxm_two_stage_end_to_end?: string | null
+  two_stage_acceptance_matches_expected?: boolean | null
+  current_two_stage_ready?: boolean | null
+  current_two_stage_status?: string | null
+  production_delivery_ready?: boolean | null
+  final_delivery_completed?: boolean | null
   effective_real_dxm_write_readiness_matches_expected?: boolean | null
   production_real_write_ready?: boolean | null
   real_dxm_write_blocked_reason?: string | null
@@ -370,6 +450,14 @@ export type FinalDeliveryCheckSummary = {
 export type WorkbenchSection =
   | 'home'
   | 'dxm_access'
+  | 'acquisition_claim'
+  | 'draft_edit_save'
+  | 'template_center'
+  | 'start_save'
+  | 'results'
+  | 'issues'
+  | 'help'
+  | 'settings'
   | 'product_tasks'
   | 'current_task'
   | 'task_history'
@@ -381,15 +469,10 @@ export type WorkbenchSection =
   | 'config_logistics'
   | 'config_compliance'
   | 'template_management'
-  | 'start_save'
   | 'preflight'
   | 'real_browser'
   | 'manual_takeover'
-  | 'results'
-  | 'issues'
   | 'evidence'
-  | 'help'
-  | 'settings'
 
 export type LegacyWorkbenchSection =
   | 'agent_execution'
@@ -469,6 +552,29 @@ export type RealModeReleasePlan = {
   modes: RealModeReleaseItem[]
 }
 
+export type TwoStageAcceptance = {
+  schema: string
+  passed: boolean
+  status: string
+  userMessage: string
+  claimTaskId: number | null
+  saveTaskId: number | null
+  claimedProductId: number | null
+  missingCodes: string[]
+  checks: {
+    claim_task_present?: boolean
+    claim_completed?: boolean
+    claimed_product_present?: boolean
+    claim_product_matches?: boolean
+    draft_box_verified?: boolean
+    single_save_linked_to_claim?: boolean
+    save_success?: boolean
+    unpublished_proof?: boolean
+    publish_guard_safe?: boolean
+    [key: string]: boolean | undefined
+  }
+}
+
 export type DeliveryWorkspace = {
   source: 'api' | 'fallback' | 'mock'
   stores: Store[]
@@ -489,6 +595,7 @@ export type DeliveryWorkspace = {
   regressionGates: RegressionGate[]
   l2ProbePlan: L2ProbePlan
   realModeReleasePlan: RealModeReleasePlan
+  twoStageAcceptance: TwoStageAcceptance
   dxmReferenceTemplates: DxmReferenceTemplateSection[]
   acceptanceGaps: AcceptanceGap[]
   safety: {

@@ -28,10 +28,10 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
   const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
   const selectedTaskCompleted = selectedTask?.status === 'completed'
-  const selectedRealDxmMutationTask = Boolean(selectedTask && ['claim_only', 'single_save', 'batch_save'].includes(selectedTask.mode))
+  const selectedTaskNeedsEditConfig = selectedTask?.mode === 'single_save'
   const configBlocksRealSave = Boolean(
     selectedTask
-    && selectedRealDxmMutationTask
+    && selectedTaskNeedsEditConfig
     && !selectedTaskCompleted
     && (configPreviewError || configPreviewLoading || !configPreview || configPreview.taskId !== selectedTask.id || !configPreview.ok)
   )
@@ -53,6 +53,18 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
   const hasBlocker = visibleBlockerGaps.length > 0
   const runtimeStatusUnavailable = Boolean(runtimeStatusError)
   const dxmLoggedIn = runtimeStatus ? dxmReadySessionStatuses.has(runtimeStatus.dxmLogin.status) : false
+  const realBrowser = runtimeStatus?.realBrowser ?? (runtimeStatus
+    ? {
+      status: runtimeStatus.agentConsole.status,
+      active: runtimeStatus.agentConsole.active,
+      browserVisible: runtimeStatus.agentConsole.browserVisible,
+      browserLaunching: runtimeStatus.agentConsole.browserLaunching,
+      source: 'agent_console',
+      currentUrl: runtimeStatus.agentConsole.currentUrl,
+      lastError: runtimeStatus.agentConsole.lastError,
+    }
+    : null)
+  const agentActive = realBrowser?.active === true
   const tone = runtimeStatusUnavailable || l3BlocksRealSave || hasBlocker || publishGuardReasons.length > 0
     ? 'danger'
     : l2BlocksRealSave || l3NeedsApproval || workspace.source === 'mock' || workspace.evidenceGrade?.grade === 'C'
@@ -65,7 +77,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
       : !dxmLoggedIn
       ? '继续下一步：打开真实店小秘登录'
       : l2BlocksRealSave
-      ? '继续下一步：运行真实只读检查'
+      ? '继续下一步：运行保存前安全检查'
       : l3NeedsApproval
         ? '继续下一步：人工确认单商品只保存'
         : '当前可执行：单商品只保存自动化'
@@ -74,10 +86,10 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
     : runtimeStatusUnavailable
       ? '工作台服务连接异常'
       : nextHeadline
-  const gateStatusLine = `真实只读检查 ${humanGateStatus(l2Gate?.status ?? workspace.safety.l2Status ?? 'not_run')}，人工确认 ${humanGateStatus(l3Gate?.status ?? 'not_run')}`
+  const gateStatusLine = `保存前安全检查 ${humanGateStatus(l2Gate?.status ?? workspace.safety.l2Status ?? 'not_run')}，人工确认 ${humanGateStatus(l3Gate?.status ?? 'not_run')}`
   const statusLine = `当前任务 ${activeTaskLabel}，${tone === 'danger' ? `保存前置条件未完成：${gateStatusLine}` : gateStatusLine}`
   const gateDetails = [
-    l2Gate ? `真实只读检查：${l2Gate.detail}` : '真实只读检查：缺少页面检查状态',
+    l2Gate ? `保存前安全检查：${l2Gate.detail}` : '保存前安全检查：缺少页面检查状态',
     l3Gate ? `人工确认保存：${l3Gate.detail}` : '人工确认保存：缺少真实保存门禁状态',
   ]
   const blockerDetails = [
@@ -96,7 +108,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
       : '工作台只会执行受控“只保存”，发布和批量无人值守仍保持关闭。'
     : selectedTaskCompleted
       ? `任务 ${activeTaskLabel} ${activeTaskStatusLabel}，继续查看保存结果和未发布证明。`
-      : '按操作引导继续：选择任务、补配置、真实登录、真实只读检查、人工确认后才启动保存。'
+      : '按操作引导继续：选择任务、补配置、真实登录、保存前安全检查、人工确认后才启动保存。'
   const runtimeOwner = runtimeStatus?.runtimeControl?.owner ?? 'direct'
   const runtimeOwnerChip = runtimeOwnerLabel(runtimeOwner, Boolean(runtimeStatus?.runtimeControl?.managedByDesktop))
   const backendPortMismatch = typeof desktopRuntime?.backendPort === 'number'
@@ -112,7 +124,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
       { label: `启动方式：${runtimeOwnerChip}`, tone: runtimeOwner === 'direct' ? 'warn' : 'ok' },
       { label: `本机服务：${runtimeStatus.backend.status === 'ok' ? '正常' : '异常'}`, tone: runtimeStatus.backend.status === 'ok' ? 'ok' : 'danger' },
       { label: `主窗口：${frontendRuntimeLabel(runtimeStatus.frontend)}`, tone: runtimeStatus.frontend.status === 'ok' ? 'ok' : 'danger' },
-      { label: `真实浏览器：${runtimeStatus.agentConsole.active ? '运行中' : '待命'}`, tone: runtimeStatus.agentConsole.active ? 'ok' : 'warn' },
+      { label: `真实浏览器：${humanRealBrowserStatus(realBrowser)}`, tone: realBrowser?.active ? 'ok' : realBrowser?.browserLaunching ? 'warn' : 'warn' },
       { label: `店小秘登录：${humanDxmLoginStatus(runtimeStatus.dxmLogin.status)}`, tone: dxmLoginTone(runtimeStatus.dxmLogin.status) },
     ]
     : []
@@ -122,7 +134,7 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
     ...(desktopRuntime ? [{ label: '免安装版：已接入本机服务', tone: desktopRuntime.lastError ? 'danger' : 'ok' }] : []),
     ...(backendPortMismatch ? [{ label: '桌面服务与当前接口不一致', tone: 'danger' }] : []),
     ...(backendInstanceMismatch ? [{ label: '桌面服务实例不一致', tone: 'danger' }] : []),
-    { label: `真实只读检查：${humanGateStatus(l2Gate?.status ?? 'not_run')}`, tone: l2BlocksRealSave ? 'danger' : 'ok' },
+    { label: `保存前安全检查：${humanGateStatus(l2Gate?.status ?? 'not_run')}`, tone: l2BlocksRealSave ? 'danger' : 'ok' },
     { label: `人工确认：${l3NeedsApproval ? `不可启动 / ${humanGateStatus(l3Gate?.status ?? 'not_run')}` : humanGateStatus(l3Gate?.status ?? 'not_run')}`, tone: l3BlocksRealSave ? 'danger' : l3NeedsApproval ? 'warn' : 'ok' },
     ...visibleBlockerGaps.slice(0, 2).map((gap) => ({ label: `阻断项：${gap.title}`, tone: 'danger' })),
     ...(l3PostEvidenceGapCount > 0 ? [{ label: `保存后证据：${l3PostEvidenceGapCount} 项预期阻断`, tone: 'warn' }] : []),
@@ -144,10 +156,27 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
     : !dxmLoggedIn
     ? '等待真实登录'
     : l2BlocksRealSave
-    ? '先完成只读检查'
+    ? '先完成安全检查'
     : l3NeedsApproval
       ? '等待人工确认'
       : '可启动只保存'
+  const visibleBlockerReason = selectedTaskCompleted
+    ? '任务已完成，下一步复核保存结果。'
+    : runtimeStatusUnavailable
+    ? '服务连接异常，请刷新状态或查看日志。'
+    : taskBlocksRealSave
+    ? '已有任务但未选择，请先选择任务。'
+    : configBlocksRealSave
+    ? '本次任务配置未补齐。'
+    : !dxmLoggedIn
+    ? '店小秘未登录或登录状态未确认。'
+    : l2BlocksRealSave
+    ? '保存前安全检查未通过。'
+    : l3NeedsApproval
+      ? '保存前需要人工确认。'
+      : agentActive
+        ? '真实浏览器正在执行。'
+        : '没有阻断。'
   const primaryActionLabel = selectedTaskCompleted
     ? '查看保存结果'
     : runtimeStatusUnavailable
@@ -175,30 +204,14 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
         <span className="safety-dot" aria-hidden="true" />
         <div>
           <strong>{headline}</strong>
+          <span className="safety-bar__blocker" title={visibleBlockerReason}>
+            {visibleBlockerReason}；只保存，不发布。
+          </span>
         </div>
       </div>
       <div className="safety-bar__meta" aria-label="当前操作">
-        <span className={`guard-chip guard-chip--${tone === 'danger' ? 'danger' : tone === 'warn' ? 'warn' : 'ok'}`}>{primaryStatus}</span>
-        <span className="guard-chip guard-chip--ok">只保存，不发布</span>
         <button className="button button--secondary safety-bar__primary-action" type="button" onClick={handlePrimaryAction} disabled={busy}>
           {primaryActionLabel}
-        </button>
-        <details className="safety-bar__meta-details inline-disclosure">
-          <summary>状态详情</summary>
-          <p className="safety-bar__compact-detail">{conciseDetail}</p>
-          <div>
-            <strong className="safety-bar__details-title">状态说明</strong>
-            {boundaryChips.map((chip) => (
-              <span key={chip.label} className={`guard-chip guard-chip--${chip.tone}`}>{chip.label}</span>
-            ))}
-            {detailChips.map((chip) => (
-              <span key={chip.label} className={`guard-chip guard-chip--${chip.tone}`}>{chip.label}</span>
-            ))}
-          </div>
-          <span>{detail}</span>
-        </details>
-        <button className="button button--quiet" type="button" onClick={onRefresh} disabled={busy}>
-          {runtimeStatusUnavailable ? '刷新状态' : '刷新'}
         </button>
       </div>
     </section>
@@ -216,6 +229,14 @@ function humanDxmLoginStatus(status: string) {
   if (status === 'login_failed') return '登录未通过'
   if (status.includes('error')) return '异常'
   return '待确认'
+}
+
+function humanRealBrowserStatus(browser: RuntimeStatus['realBrowser'] | null | undefined) {
+  if (!browser) return '待确认'
+  if (browser.browserLaunching) return '启动中'
+  if (browser.active && browser.browserVisible) return browser.source === 'dxm_flow' ? '业务窗口已打开' : '运行中'
+  if (browser.active) return '会话已建立'
+  return '待命'
 }
 
 function runtimeOwnerLabel(owner: string, managedByDesktop: boolean) {

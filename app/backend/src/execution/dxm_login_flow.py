@@ -35,6 +35,10 @@ DRAFT_ACTION_SCREENSHOT_MAP = {
     'remark': SCREENSHOT_DIR / 'dianxiaomi_draft_box_remark.png',
     'edit': SCREENSHOT_DIR / 'dianxiaomi_draft_box_edit.png',
 }
+ACQUISITION_ACTION_SCREENSHOT_MAP = {
+    'claim': SCREENSHOT_DIR / 'dianxiaomi_data_acquisition_claim.png',
+    'verify': SCREENSHOT_DIR / 'dianxiaomi_draft_box_claim_verified.png',
+}
 EDITOR_ACTION_SCREENSHOT_MAP = {
     'fill_editor_required_defaults': SCREENSHOT_DIR / 'dianxiaomi_fill_editor_required_defaults.png',
     'verify_edit_ownership': SCREENSHOT_DIR / 'dianxiaomi_verify_edit_ownership.png',
@@ -82,6 +86,9 @@ class DxmLoginFlow:
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
+        self._latest_live_hud: dict[str, Any] | None = None
+        self._live_hud_bound_page_ids: set[int] = set()
+        self._live_hud_bound_context_ids: set[int] = set()
         self._last_dismiss_blocking_modals_trace: list[dict[str, Any]] = []
 
     def get_state(self) -> dict[str, Any]:
@@ -90,6 +97,7 @@ class DxmLoginFlow:
         return self._default_state()
 
     def update_live_hud(self, hud: dict[str, Any]) -> dict[str, Any]:
+        self._latest_live_hud = dict(hud)
         page = self._page
         if page is None:
             return {'ok': True, 'updated': False, 'reason': 'live_browser_page_missing'}
@@ -104,6 +112,7 @@ class DxmLoginFlow:
             }
 
     def _apply_live_hud(self, page: Page, hud: dict[str, Any]) -> dict[str, Any]:
+        self._attach_live_hud_runtime_hooks(page)
         try:
             page.add_init_script(HUD_INIT_SCRIPT)
         except Exception:
@@ -134,6 +143,55 @@ class DxmLoginFlow:
             'updated_at': now_iso(),
         }
 
+    def _attach_live_hud_runtime_hooks(self, page: Page | None) -> None:
+        if page is None:
+            return
+        page_id = id(page)
+        if page_id not in self._live_hud_bound_page_ids:
+            self._live_hud_bound_page_ids.add(page_id)
+            try:
+                page.add_init_script(HUD_INIT_SCRIPT)
+            except Exception:
+                pass
+            for event_name in ('framenavigated', 'domcontentloaded'):
+                try:
+                    page.on(event_name, lambda *args, p=page: self._reapply_live_hud_if_available(p))
+                except Exception:
+                    pass
+
+        context = getattr(page, 'context', None)
+        if context is None:
+            return
+        context_id = id(context)
+        if context_id in self._live_hud_bound_context_ids:
+            return
+        self._live_hud_bound_context_ids.add(context_id)
+        try:
+            context.add_init_script(HUD_INIT_SCRIPT)
+        except Exception:
+            pass
+        try:
+            context.on('page', lambda new_page: self._attach_and_reapply_live_hud_page(new_page))
+        except Exception:
+            pass
+
+    def _attach_and_reapply_live_hud_page(self, page: Page) -> None:
+        self._attach_live_hud_runtime_hooks(page)
+        self._reapply_live_hud_if_available(page)
+
+    def _reapply_live_hud_if_available(self, page: Page) -> None:
+        if not self._latest_live_hud:
+            return
+        try:
+            self._apply_live_hud(page, self._latest_live_hud)
+        except Exception:
+            pass
+
+    def _goto_with_live_hud(self, page: Page, url: str, *, wait_until: str = 'domcontentloaded', timeout: int = 45000) -> None:
+        self._attach_live_hud_runtime_hooks(page)
+        page.goto(url, wait_until=wait_until, timeout=timeout)
+        self._reapply_live_hud_if_available(page)
+
     def start_login(self, username: str, password: str) -> dict[str, Any]:
         try:
             browser_state = self._open_login_page_and_fill(username, password)
@@ -144,8 +202,8 @@ class DxmLoginFlow:
                 message=f'打开店小秘官网并填写账号密码失败：{exc}',
                 next_action='检查本机 Chrome、网络或页面结构后重试。',
             )
+            self._keep_visible_browser_for_recovery(state)
             self._write_state(state)
-            self._close_browser_session()
             return state
         state = {
             'stage': 'waiting_captcha',
@@ -241,10 +299,10 @@ class DxmLoginFlow:
                 stage='workflow_navigation_failed',
                 label='导航失败',
                 message=f'进入业务页失败：{exc}',
-                next_action='确认登录态有效，必要时重新登录后再试。',
+                next_action='确认登录态有效，必要时在真实浏览器内修正页面后再试。',
             )
+            self._keep_visible_browser_for_recovery(state)
             self._write_state(state)
-            self._close_browser_session()
             return state
 
         config = WORKFLOW_TARGETS[target]
@@ -298,8 +356,8 @@ class DxmLoginFlow:
                 message=f'执行采集箱动作失败：{exc}',
                 next_action='确认已进入采集箱且页面结构未变，再重试动作。',
             )
+            self._keep_visible_browser_for_recovery(state)
             self._write_state(state)
-            self._close_browser_session()
             return state
 
         if action == 'edit':
@@ -349,6 +407,96 @@ class DxmLoginFlow:
         self._write_state(state)
         return state
 
+    def claim_from_data_acquisition(
+        self,
+        claim_mark: str,
+        product_query: str | None = None,
+        category_name: str | None = None,
+        store_name: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            result = self._perform_data_acquisition_claim(
+                claim_mark=claim_mark,
+                product_query=product_query,
+                category_name=category_name,
+                store_name=store_name,
+            )
+        except Exception as exc:
+            state = self._error_state(
+                stage='data_acquisition_claim_failed',
+                label='认领失败',
+                message=f'从数据采集认领到采集箱失败：{exc}',
+                next_action='请确认真实浏览器停留在店小秘数据采集页，商品筛选唯一，再重新认领。',
+            )
+            self._keep_visible_browser_for_recovery(state)
+            self._write_state(state)
+            return state
+
+        state = {
+            'stage': 'data_acquisition_claim',
+            'label': '已提交认领',
+            'message': result.get('message') or '已在真实店小秘数据采集页提交认领。',
+            'next_action': '继续打开采集箱确认该商品已经出现。',
+            'requires_user_action': False,
+            'page_title': result.get('page_title'),
+            'page_url': result.get('page_url'),
+            'screenshot_url': result.get('screenshot_url'),
+            'updated_at': now_iso(),
+            'current_nav': 'data_acquisition',
+            'claim_mark': claim_mark,
+            'product_query': product_query,
+            'category_name': category_name,
+            'store_name': store_name,
+            'claimed_product': result.get('claimed_product'),
+        }
+        self._write_state(state)
+        return state
+
+    def verify_draft_box_claim(
+        self,
+        claim_mark: str,
+        product_query: str | None = None,
+        category_name: str | None = None,
+        store_name: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            result = self._verify_draft_box_claim(
+                claim_mark=claim_mark,
+                product_query=product_query,
+                category_name=category_name,
+                store_name=store_name,
+            )
+        except Exception as exc:
+            state = self._error_state(
+                stage='draft_box_claim_verify_failed',
+                label='采集箱确认失败',
+                message=f'确认采集箱商品失败：{exc}',
+                next_action='请打开采集箱检查认领商品是否出现，必要时回到数据采集重新认领。',
+            )
+            self._keep_visible_browser_for_recovery(state)
+            self._write_state(state)
+            return state
+
+        state = {
+            'stage': 'draft_box_claim_verified',
+            'label': '采集箱已确认',
+            'message': '已确认真实商品进入采集箱。',
+            'next_action': '可以进入编辑保存，选择模板后只保存。',
+            'requires_user_action': False,
+            'page_title': result.get('page_title'),
+            'page_url': result.get('page_url'),
+            'screenshot_url': result.get('screenshot_url'),
+            'updated_at': now_iso(),
+            'current_nav': 'draft_box',
+            'claim_mark': claim_mark,
+            'product_query': product_query,
+            'category_name': category_name,
+            'store_name': store_name,
+            'claimed_product': result.get('claimed_product'),
+        }
+        self._write_state(state)
+        return state
+
     def perform_editor_action(
         self,
         action: str,
@@ -379,8 +527,8 @@ class DxmLoginFlow:
                 message=f'执行编辑页动作失败：{exc}',
                 next_action='确认编辑页或半托管页仍可访问，且页面结构未变。',
             )
+            self._keep_visible_browser_for_recovery(state)
             self._write_state(state)
-            self._close_browser_session()
             return state
 
         state = {
@@ -435,9 +583,26 @@ class DxmLoginFlow:
             'updated_at': now_iso(),
         }
 
+    def _keep_visible_browser_for_recovery(self, state: dict[str, Any]) -> dict[str, Any]:
+        state['browser_visible'] = not self._is_headless()
+        next_action = str(state.get('next_action') or '').strip()
+        if '真实浏览器窗口会保留' not in next_action:
+            state['next_action'] = f'真实浏览器窗口会保留；{next_action}'
+        page = self._page
+        if page is not None:
+            try:
+                state['page_url'] = page.url
+            except Exception:
+                pass
+            try:
+                state['page_title'] = page.title()
+            except Exception:
+                pass
+        return state
+
     def _open_login_page_and_fill(self, username: str, password: str) -> dict[str, Any]:
         page = self._ensure_page()
-        page.goto('https://www.dianxiaomi.com/', wait_until='domcontentloaded', timeout=45000)
+        self._goto_with_live_hud(page, 'https://www.dianxiaomi.com/', wait_until='domcontentloaded', timeout=45000)
         page.wait_for_timeout(1500)
         self._fill_first_available(page, [
             'input[placeholder="请输入用户名"]',
@@ -524,7 +689,7 @@ class DxmLoginFlow:
     def _navigate_in_session(self, target: str) -> dict[str, Any]:
         config = WORKFLOW_TARGETS[target]
         page = self._ensure_page_with_cookies()
-        page.goto(config['url'], wait_until='domcontentloaded', timeout=45000)
+        self._goto_with_live_hud(page, config['url'], wait_until='domcontentloaded', timeout=45000)
         wait_result = self._wait_for_page_ready(
             page,
             WORKFLOW_READY_TERMS.get(target, [config['label']]),
@@ -554,7 +719,7 @@ class DxmLoginFlow:
     ) -> dict[str, Any]:
         page = self._ensure_page_with_cookies()
         draft_url = WORKFLOW_TARGETS['draft_box']['url']
-        page.goto(draft_url, wait_until='domcontentloaded', timeout=45000)
+        self._goto_with_live_hud(page, draft_url, wait_until='domcontentloaded', timeout=45000)
         self._wait_for_page_ready(
             page,
             WORKFLOW_READY_TERMS['draft_box'],
@@ -631,6 +796,348 @@ class DxmLoginFlow:
             'target_source_urls': row_info.get('sourceUrls', []),
         }
 
+    def _perform_data_acquisition_claim(
+        self,
+        claim_mark: str,
+        product_query: str | None = None,
+        category_name: str | None = None,
+        store_name: str | None = None,
+    ) -> dict[str, Any]:
+        page = self._ensure_page_with_cookies()
+        self._goto_with_live_hud(page, WORKFLOW_TARGETS['data_acquisition']['url'], wait_until='domcontentloaded', timeout=45000)
+        self._wait_for_page_ready(
+            page,
+            WORKFLOW_READY_TERMS['data_acquisition'],
+            label='数据采集',
+            timeout=60000,
+        )
+        self._dismiss_blocking_modals(page)
+        self._search_data_acquisition(
+            page,
+            product_query=product_query,
+            category_name=category_name,
+            store_name=store_name,
+        )
+        target = self._find_data_acquisition_claim_target(
+            page,
+            product_query=product_query,
+            category_name=category_name,
+            store_name=store_name,
+        )
+        if not target.get('ok'):
+            raise RuntimeError(target.get('reason') or '未找到可认领的采集商品')
+
+        self._click_rect_center(page, target['actionRect'])
+        page.wait_for_timeout(1500)
+        dialog_result = self._complete_data_acquisition_claim_dialog(
+            page,
+            category_name=category_name,
+            store_name=store_name,
+        )
+        if not dialog_result.get('ok'):
+            raise RuntimeError(dialog_result.get('reason') or '认领确认失败')
+        page.wait_for_timeout(2500)
+        self._dismiss_blocking_modals(page)
+        screenshot_path = ACQUISITION_ACTION_SCREENSHOT_MAP['claim']
+        page.screenshot(path=str(screenshot_path), full_page=True)
+        claimed_product = {
+            'title': target.get('title') or product_query or category_name or '店小秘采集商品',
+            'category_name': target.get('categoryName') or category_name,
+            'source_url': (target.get('sourceUrls') or [None])[0],
+            'row_text': target.get('rowText'),
+        }
+        return {
+            'page_title': page.title(),
+            'page_url': page.url,
+            'screenshot_url': self._artifact_url(screenshot_path),
+            'message': '已在数据采集页提交认领到采集箱。',
+            'claim_mark': claim_mark,
+            'product_query': product_query,
+            'category_name': category_name,
+            'store_name': store_name,
+            'claimed_product': claimed_product,
+            'claim_target': target,
+            'claim_dialog': dialog_result,
+            'published': False,
+        }
+
+    def _search_data_acquisition(
+        self,
+        page: Page,
+        product_query: str | None = None,
+        category_name: str | None = None,
+        store_name: str | None = None,
+    ) -> None:
+        query = str(product_query or category_name or '').strip()
+        if not query and not store_name:
+            return
+        result = page.evaluate(r'''({query, store}) => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
+          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          if (store) {
+            const storeTarget = Array.from(document.querySelectorAll('button,a,span,div,li'))
+              .filter(visible)
+              .find(el => norm(textOf(el)) === norm(store) || norm(textOf(el)).includes(norm(store)));
+            if (storeTarget) storeTarget.dispatchEvent(new MouseEvent('click', {bubbles:true}));
+          }
+          let filled = false;
+          if (query) {
+            const inputs = Array.from(document.querySelectorAll('input, textarea')).filter(el => {
+              if (!visible(el) || el.disabled || el.readOnly) return false;
+              const r = el.getBoundingClientRect();
+              return r.width > 140 && r.height > 18;
+            });
+            const input = inputs.find(el => {
+              const label = norm([el.placeholder, el.getAttribute('aria-label'), el.getAttribute('name')].join(' '));
+              return label.includes('搜索') || label.includes('标题') || label.includes('产品') || label.includes('关键词') || label.includes('内容');
+            }) || inputs[0];
+            if (input) {
+              input.value = query;
+              input.dispatchEvent(new Event('input', {bubbles:true}));
+              input.dispatchEvent(new Event('change', {bubbles:true}));
+              filled = true;
+            }
+          }
+          const search = Array.from(document.querySelectorAll('button,a,span,div'))
+            .filter(visible)
+            .find(el => ['搜索','查询','筛选'].includes(norm(textOf(el))));
+          if (search) search.dispatchEvent(new MouseEvent('click', {bubbles:true}));
+          return {filled, clicked_search: Boolean(search)};
+        }''', {'query': query, 'store': store_name})
+        if result.get('filled') or result.get('clicked_search') or store_name:
+            page.wait_for_timeout(1800)
+            self._wait_for_page_ready(
+                page,
+                ['数据采集', '认领', '采集箱', '暂无数据'],
+                label='数据采集搜索结果',
+                timeout=30000,
+            )
+            self._dismiss_blocking_modals(page)
+
+    def _find_data_acquisition_claim_target(
+        self,
+        page: Page,
+        product_query: str | None = None,
+        category_name: str | None = None,
+        store_name: str | None = None,
+    ) -> dict[str, Any]:
+        return page.evaluate(r'''({productQuery, categoryName, storeName}) => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const rectOf = (el) => {
+            const r = el.getBoundingClientRect();
+            return {x:r.x, y:r.y, w:r.width, h:r.height};
+          };
+          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
+          const forbidden = ['发布','立即发布','继续发布','保存并发布','保存并移入待发布','移入待发布','批量发布'];
+          const sourceUrls = (row) => Array.from(row.querySelectorAll('a[href]'))
+            .map(a => String(a.href || a.getAttribute('href') || ''))
+            .filter(url => url.includes('detail.1688.com') || url.includes('yangkeduo.com') || url.includes('http'));
+          const rows = Array.from(document.querySelectorAll(
+            'tr.vxe-body--row, tr.ant-table-row, tr.el-table__row, tr, .ant-table-row, .el-table__row, .vxe-body--row, [class*="table-row"], [class*="list-item"]'
+          )).filter(visible);
+          const query = String(productQuery || '').trim();
+          const category = String(categoryName || '').trim();
+          const store = String(storeName || '').trim();
+          const candidates = [];
+          rows.forEach((row, index) => {
+            const rowText = textOf(row);
+            if (!rowText || forbidden.some(term => norm(rowText).includes(norm(term)))) return;
+            if (store && rowText.includes(store) === false && norm(rowText).includes(norm(store)) === false) {
+              // 数据采集页通常不直接展示店铺，店铺可能在认领弹窗里选择，因此不强制过滤。
+            }
+            const actions = Array.from(row.querySelectorAll('button,a,[role="button"],span,div'))
+              .filter(visible)
+              .map(el => ({
+                el,
+                text: norm(textOf(el)),
+                title: norm([el.getAttribute('title'), el.getAttribute('aria-label')].join(' ')),
+                cls: String(el.className || ''),
+                disabled: Boolean(el.disabled || el.getAttribute('aria-disabled') === 'true' || String(el.className || '').includes('disabled')),
+                rect: rectOf(el),
+              }))
+              .filter(item => {
+                const hay = `${item.text} ${item.title} ${item.cls}`;
+                if (item.disabled) return false;
+                if (forbidden.some(term => norm(hay).includes(norm(term)))) return false;
+                if (item.text.includes('已认领') || item.text.includes('已领取')) return false;
+                return item.text === '认领'
+                  || item.text === '领取'
+                  || item.text.includes('认领到采集箱')
+                  || item.text.includes('领取到采集箱')
+                  || item.title.includes('认领')
+                  || item.title.includes('领取');
+              })
+              .sort((a, b) => (a.rect.w * a.rect.h) - (b.rect.w * b.rect.h));
+            if (!actions.length) return;
+            const compact = norm(rowText);
+            const queryMatched = query ? (rowText.includes(query) || compact.includes(norm(query))) : false;
+            const categoryMatched = category ? (rowText.includes(category) || compact.includes(norm(category))) : false;
+            if (query && !queryMatched) return;
+            if (!query && category && !categoryMatched) return;
+            const lines = rowText.split(/\s{2,}|\n/).map(s => s.trim()).filter(Boolean);
+            candidates.push({
+              ok: true,
+              rowIndex: index,
+              rowText: rowText.slice(0, 900),
+              title: lines.find(line => !/(认领|领取|采集箱|操作|来源|店铺)/.test(line)) || query || category || rowText.slice(0, 80),
+              categoryName: categoryMatched ? category : null,
+              sourceUrls: sourceUrls(row),
+              actionText: actions[0].text || actions[0].title,
+              actionRect: actions[0].rect,
+              matchedBy: queryMatched ? 'product_query' : (categoryMatched ? 'category_name' : 'first_claimable'),
+            });
+          });
+          if (!candidates.length) {
+            return {
+              ok: false,
+              reason: query
+                ? `未找到包含“${query}”且可认领的采集商品`
+                : '未找到可认领的采集商品；请先筛选到唯一商品',
+            };
+          }
+          if (!query && candidates.length > 1) {
+            return {
+              ok: false,
+              reason: '当前采集结果不唯一，请先输入商品关键词或选择具体商品后再认领',
+              matches: candidates.slice(0, 5).map(item => ({rowIndex:item.rowIndex, rowText:item.rowText.slice(0, 260)})),
+            };
+          }
+          if (query && candidates.length > 1) {
+            const exact = candidates.filter(item => norm(item.rowText).includes(norm(query)));
+            if (exact.length === 1) return exact[0];
+            return {
+              ok: false,
+              reason: `商品关键词“${query}”匹配到多个可认领结果，请先缩小筛选范围`,
+              matches: candidates.slice(0, 5).map(item => ({rowIndex:item.rowIndex, rowText:item.rowText.slice(0, 260)})),
+            };
+          }
+          return candidates[0];
+        }''', {'productQuery': product_query, 'categoryName': category_name, 'storeName': store_name})
+
+    def _complete_data_acquisition_claim_dialog(
+        self,
+        page: Page,
+        category_name: str | None = None,
+        store_name: str | None = None,
+    ) -> dict[str, Any]:
+        return page.evaluate(r'''({categoryName, storeName}) => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
+          const forbidden = ['发布','立即发布','继续发布','保存并发布','保存并移入待发布','移入待发布','批量发布'];
+          const containers = Array.from(document.querySelectorAll('.ant-modal, .ant-modal-wrap, .el-dialog, [role="dialog"], .modal, .layui-layer'))
+            .filter(visible)
+            .filter(el => {
+              const text = textOf(el);
+              return text.includes('认领') || text.includes('领取') || text.includes('采集箱');
+            });
+          const dialog = containers[containers.length - 1];
+          if (!dialog) return {ok:true, skipped:true, reason:'未出现认领确认弹窗'};
+          const dialogText = textOf(dialog);
+          if (forbidden.some(term => norm(dialogText).includes(norm(term)))) {
+            return {ok:false, reason:'认领弹窗中检测到发布相关动作，已停止'};
+          }
+          const clickedOptions = [];
+          for (const label of [storeName, categoryName].filter(Boolean)) {
+            const option = Array.from(dialog.querySelectorAll('button,a,li,span,div,label'))
+              .filter(visible)
+              .find(el => norm(textOf(el)) === norm(label) || norm(textOf(el)).includes(norm(label)));
+            if (option) {
+              option.dispatchEvent(new MouseEvent('click', {bubbles:true}));
+              clickedOptions.push(label);
+            }
+          }
+          const buttons = Array.from(dialog.querySelectorAll('button,a,[role="button"],span,div'))
+            .filter(visible)
+            .map(el => ({
+              el,
+              text: norm(textOf(el)),
+              cls: String(el.className || ''),
+              disabled: Boolean(el.disabled || el.getAttribute('aria-disabled') === 'true' || String(el.className || '').includes('disabled')),
+            }))
+            .filter(item => !item.disabled && !forbidden.some(term => norm(`${item.text} ${item.cls}`).includes(norm(term))));
+          const submit = buttons.find(item => ['确定','确认','提交','开始认领','认领','领取'].includes(item.text))
+            || buttons.find(item => item.text.includes('认领') || item.text.includes('领取'));
+          if (!submit) {
+            return {ok:false, reason:'认领弹窗已打开，但未找到安全确认按钮', dialog_text:dialogText.slice(0, 400), clicked_options: clickedOptions};
+          }
+          submit.el.dispatchEvent(new MouseEvent('click', {bubbles:true}));
+          return {ok:true, submitted:true, submit_text:submit.text, clicked_options: clickedOptions};
+        }''', {'categoryName': category_name, 'storeName': store_name})
+
+    def _verify_draft_box_claim(
+        self,
+        claim_mark: str,
+        product_query: str | None = None,
+        category_name: str | None = None,
+        store_name: str | None = None,
+    ) -> dict[str, Any]:
+        state = self.get_state()
+        claimed = state.get('claimed_product') if isinstance(state.get('claimed_product'), dict) else {}
+        product_query = product_query or claimed.get('title')
+        category_name = category_name or claimed.get('category_name')
+        target_source_urls = [claimed.get('source_url')] if claimed.get('source_url') else []
+        page = self._ensure_page_with_cookies()
+        self._goto_with_live_hud(page, WORKFLOW_TARGETS['draft_box']['url'], wait_until='domcontentloaded', timeout=45000)
+        self._wait_for_page_ready(
+            page,
+            WORKFLOW_READY_TERMS['draft_box'],
+            label='速卖通采集箱',
+            timeout=60000,
+        )
+        self._dismiss_blocking_modals(page)
+        self._search_draft_box(page, product_query=product_query, store_name=store_name)
+        try:
+            row_info = self._find_draft_box_row(
+                page,
+                product_query,
+                store_name=store_name,
+                claim_mark=claim_mark,
+                target_source_urls=target_source_urls,
+            )
+        except RuntimeError:
+            self._search_draft_box(page, product_query=category_name, store_name=store_name)
+            row_info = self._find_draft_box_row(
+                page,
+                category_name or product_query,
+                store_name=store_name,
+                target_source_urls=target_source_urls,
+            )
+        screenshot_path = ACQUISITION_ACTION_SCREENSHOT_MAP['verify']
+        page.screenshot(path=str(screenshot_path), full_page=True)
+        return {
+            'page_title': page.title(),
+            'page_url': page.url,
+            'screenshot_url': self._artifact_url(screenshot_path),
+            'product_query': product_query,
+            'category_name': category_name,
+            'store_name': store_name,
+            'claim_mark': claim_mark,
+            'target_row_text': row_info.get('rowText'),
+            'target_source_urls': row_info.get('sourceUrls', []),
+            'claimed_product': {
+                'title': product_query or claimed.get('title') or category_name or '店小秘采集商品',
+                'category_name': category_name,
+                'source_url': (row_info.get('sourceUrls') or target_source_urls or [None])[0],
+                'row_text': row_info.get('rowText'),
+            },
+            'published': False,
+        }
+
     def _perform_editor_action(
         self,
         action: str,
@@ -653,7 +1160,7 @@ class DxmLoginFlow:
             if not editor_url:
                 raise RuntimeError('缺少上次编辑页地址')
             if not self._is_same_dxm_editor_page(getattr(page, 'url', ''), editor_url):
-                page.goto(editor_url, wait_until='domcontentloaded', timeout=45000)
+                self._goto_with_live_hud(page, editor_url, wait_until='domcontentloaded', timeout=45000)
                 page.wait_for_timeout(2000)
             ready = self._wait_for_body_text(page, ['基本信息', '半托管服务', '产品信息'])
             if not ready and product_query:
@@ -685,7 +1192,7 @@ class DxmLoginFlow:
         source_editor_url = state.get('source_editor_url') or state.get('editor_page_url')
         needs_source_reopen = bool(source_editor_url and 'editFromSmt' in str(semi_url) and '?' not in str(semi_url))
         if needs_source_reopen:
-            page.goto(source_editor_url, wait_until='domcontentloaded', timeout=45000)
+            self._goto_with_live_hud(page, source_editor_url, wait_until='domcontentloaded', timeout=45000)
             page.wait_for_timeout(2000)
             self._wait_for_body_text(page, ['基本信息', '半托管服务', '产品信息'])
             self._dismiss_blocking_modals(page)
@@ -703,7 +1210,7 @@ class DxmLoginFlow:
                     'source_editor_url': source_editor_url,
                 }
         elif 'editFromSmt' not in str(page.url or ''):
-            page.goto(semi_url, wait_until='domcontentloaded', timeout=45000)
+            self._goto_with_live_hud(page, semi_url, wait_until='domcontentloaded', timeout=45000)
             page.wait_for_timeout(2000)
         self._wait_for_body_text(page, ['半托管', '重量', '包装尺寸', '物流属性'])
         self._dismiss_blocking_modals(page)
@@ -5232,11 +5739,13 @@ class DxmLoginFlow:
         self._page = None
         if self._context is not None and not self._is_playwright_object_closed(self._context):
             self._page = self._context.new_page()
+            self._reapply_live_hud_if_available(self._page)
             return self._page
         self._context = None
         if self._browser is not None and self._is_browser_connected(self._browser):
             self._context = self._new_browser_context(self._browser)
             self._page = self._context.new_page()
+            self._reapply_live_hud_if_available(self._page)
             return self._page
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(
@@ -5244,6 +5753,7 @@ class DxmLoginFlow:
         )
         self._context = self._new_browser_context(self._browser)
         self._page = self._context.new_page()
+        self._reapply_live_hud_if_available(self._page)
         return self._page
 
     def _new_browser_context(self, browser: Browser) -> BrowserContext:
@@ -5585,7 +6095,7 @@ class DxmLoginFlow:
 
     def _open_editor_page_for_product(self, page: Page, product_query: str, store_name: str | None = None) -> Page:
         draft_url = WORKFLOW_TARGETS['draft_box']['url']
-        page.goto(draft_url, wait_until='domcontentloaded', timeout=45000)
+        self._goto_with_live_hud(page, draft_url, wait_until='domcontentloaded', timeout=45000)
         self._wait_for_page_ready(
             page,
             WORKFLOW_READY_TERMS['draft_box'],
@@ -5604,6 +6114,7 @@ class DxmLoginFlow:
             row_info = self._find_draft_box_row(page, product_query, store_name=store_name, claim_mark=claim_mark)
         editor_page = self._open_editor_from_draft_box(page, row_info=row_info)
         editor_page.wait_for_timeout(1500)
+        self._reapply_live_hud_if_available(editor_page)
         return editor_page
 
     def _current_claim_mark(self, product_query: str | None = None, store_name: str | None = None) -> str | None:
@@ -5949,9 +6460,10 @@ class DxmLoginFlow:
             if edit_href and not edit_href.lower().startswith('javascript') and edit_href != '#':
                 edit_url = urljoin(str(page.url or ''), edit_href)
                 if '/web/smt/edit' in edit_url:
-                    page.goto(edit_url, wait_until='domcontentloaded', timeout=45000)
+                    self._goto_with_live_hud(page, edit_url, wait_until='domcontentloaded', timeout=45000)
                     page.wait_for_url('**/web/smt/edit**', timeout=15000)
                     page.wait_for_timeout(1500)
+                    self._reapply_live_hud_if_available(page)
                     return page
             pages_before_dom = self._context_pages()
             dom_click = self._dispatch_draft_row_edit_event(page, row_info or {}) or {}
@@ -5962,6 +6474,7 @@ class DxmLoginFlow:
                     wait_ms=8000,
                 )
                 if editor_page is not None:
+                    self._reapply_live_hud_if_available(editor_page)
                     return editor_page
             if hasattr(self._context, 'expect_page'):
                 pages_before = self._context_pages()
@@ -5975,6 +6488,7 @@ class DxmLoginFlow:
                         wait_ms=12000,
                     )
                     if editor_page is not None:
+                        self._reapply_live_hud_if_available(editor_page)
                         return editor_page
                     page = new_page
                 except TimeoutError:
@@ -5984,6 +6498,7 @@ class DxmLoginFlow:
                         wait_ms=1500,
                     )
                     if editor_page is not None:
+                        self._reapply_live_hud_if_available(editor_page)
                         return editor_page
             else:
                 self._click_rect_center(page, edit_action['rect'])
@@ -6019,7 +6534,9 @@ class DxmLoginFlow:
                     [new_page, page, *self._new_context_pages(pages_before)],
                     wait_ms=5000,
                 )
-                return editor_page or new_page
+                final_page = editor_page or new_page
+                self._reapply_live_hud_if_available(final_page)
+                return final_page
             except TimeoutError:
                 try:
                     locator.click(timeout=3000)

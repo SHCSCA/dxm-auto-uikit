@@ -6,6 +6,7 @@ import type {
   RegressionGate,
   Report,
   Task,
+  TwoStageAcceptance,
 } from '../../types'
 import { toArtifactUrl } from '../../workspace'
 import { humanOperatorMessage, humanOperatorTitle } from './workbenchCopy'
@@ -19,12 +20,12 @@ type ResultsPageProps = {
   onShowExceptions: () => void
 }
 
-const READONLY_PRECHECK_CTA = '运行真实只读检查'
+const READONLY_PRECHECK_CTA = '运行保存前安全检查'
 
 const realWriteReleasePrerequisites = [
   {
-    title: '真实只读检查通过',
-    detail: '采集页和采集箱都要完成只读检查；检查过程中不能出现领取、保存、发布或异常跳转。',
+    title: '保存前安全检查通过',
+    detail: '采集页和采集箱都要完成安全检查；检查过程中不能出现领取、保存、发布或异常跳转。',
   },
   {
     title: '异常放行必须人工复核',
@@ -32,7 +33,7 @@ const realWriteReleasePrerequisites = [
   },
   {
     title: '人工确认单商品只保存',
-    detail: '只有真实只读检查通过后，才允许启动一次单商品只保存。',
+    detail: '只有保存前安全检查通过后，才允许启动一次单商品只保存。',
   },
   {
     title: '保存结果必须可核对',
@@ -75,7 +76,7 @@ export function ResultsPage({
   )
 
   return (
-    <section className="module-layout" aria-label="保存结果" data-testid="report-center-section">
+    <section className="module-layout" aria-label="结果与问题" data-testid="report-center-section">
       <BusinessResultSummaryCard
         selectedTask={selectedTask}
         latestReport={reportSummary?.latest_report ?? reports[0] ?? null}
@@ -86,6 +87,11 @@ export function ResultsPage({
         realWriteExpectedBlocked={realWriteExpectedBlocked}
         onShowEvidence={onShowEvidence}
         onShowConsole={onShowConsole}
+      />
+      <TwoStageAcceptanceCard
+        acceptance={workspace.twoStageAcceptance}
+        onShowConsole={onShowConsole}
+        onShowEvidence={onShowEvidence}
       />
       <div className="module-card span-3">
         <ModuleHead title="保存后核对" meta={humanPublishGuardStatus(workspace.publishGuardState?.status)} />
@@ -102,12 +108,12 @@ export function ResultsPage({
       <div className="module-card span-3 report-followup-actions" aria-label="复核与后续处理">
         <div>
           <strong>复核与后续处理</strong>
-          <span>任务结束后优先看保存证据；有阻断再处理问题；需要继续执行回“开始只保存”。</span>
+          <span>任务结束后优先看保存证据；有阻断就在本页处理问题；需要继续执行回“浏览器现场”。</span>
         </div>
         <div className="toolbar">
           <button className="button button--secondary" type="button" data-section="evidence" onClick={onShowEvidence}>查看保存证据</button>
           <button className="button button--quiet" type="button" data-section="exceptions" onClick={onShowExceptions}>处理问题</button>
-          <button className="button button--quiet" type="button" data-section="console" onClick={onShowConsole}>回到开始只保存</button>
+          <button className="button button--quiet" type="button" data-section="console" onClick={onShowConsole}>回到浏览器现场</button>
         </div>
       </div>
       <div className="module-card span-3">
@@ -121,11 +127,11 @@ export function ResultsPage({
               title={realWriteExpectedBlocked ? '真实保存报告待人工确认' : '暂无报告'}
               detail={realWriteExpectedBlocked
                 ? '真实写入未确认前不要求生成业务保存报告；自动化工作台验收摘要见上方。'
-                : '单商品只保存完成并生成未发布证明后，这里会展示报告和证据路径。当前可先查看真实只读诊断和证据缺口。'}
+                : '单商品只保存完成并生成未发布证明后，这里会展示报告和证据路径。当前可先查看安全检查记录和证据缺口。'}
               actions={(
                 <>
                   <button className="button button--secondary" type="button" onClick={onShowEvidence}>查看证据缺口</button>
-                  <button className="button button--quiet" type="button" onClick={onShowConsole}>查看真实只读证据</button>
+                  <button className="button button--quiet" type="button" onClick={onShowConsole}>查看安全检查记录</button>
                 </>
               )}
             />
@@ -135,15 +141,15 @@ export function ResultsPage({
       <FinalDeliveryCheckCard finalCheck={finalCheck} />
       <details className="module-card span-3 disclosure-card l2-next-step-card">
         <summary>
-          重新验证真实只读检查
+          维护人员：重新验证保存前安全检查
           <span>高级复核，需人工批准</span>
         </summary>
         <div className="l2-allowlist-review">
           <div className="l2-allowlist-review__head">
-            <strong>真实只读异常候选处理</strong>
+            <strong>保存前安全检查候选处理</strong>
             <span>先评审，再重新检查</span>
           </div>
-          <p>当前只生成候选清单，不自动放行。未完成人工评审前，不运行下方真实只读检查命令。</p>
+          <p>当前只生成候选清单，不自动放行。未完成人工评审前，不运行下方安全检查命令。</p>
           {l2AllowlistReviewItems.length > 0 ? (
             <ul>
               {l2AllowlistReviewItems.slice(0, 8).map((item) => (
@@ -151,11 +157,11 @@ export function ResultsPage({
               ))}
             </ul>
           ) : (
-            <p>当前工作区没有可展示的异常候选；仍需按最终报告和真实只读检查证据复核后再决定是否重跑。</p>
+            <p>当前工作区没有可展示的异常候选；仍需按最终报告和安全检查记录复核后再决定是否重跑。</p>
           )}
         </div>
         <p>{l2ProbePlan.purpose || '真实保存保持暂停；仅在操作者确认可进行只读检查时，才重新运行采集页和采集箱检查。'}</p>
-        <p>采集页和采集箱必须使用同一次检查记录复验，确保双目标证据绑定到同一次人工批准的真实只读检查。</p>
+        <p>采集页和采集箱必须使用同一次检查记录复验，确保双目标证据绑定到同一次人工批准的安全检查。</p>
         <div className="l2-next-step-card__commands">
           {l2ProbePlan.commands.map((command) => (
             <code key={command}>{command}</code>
@@ -200,7 +206,12 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
   const runtimeGateFreshness = finalCheck?.final_check_runtime_gate_freshness ?? 'unknown'
   const runtimeGateStale = runtimeGateFreshness === 'stale_gate'
   const realDxmMutationAllowed = finalCheck?.effective_real_dxm_mutation_allowed ?? (isReadyReadiness(readiness) && finalCheck?.real_dxm_mutation_allowed === true)
-  const realDxmMutationScope = finalCheck?.effective_real_dxm_mutation_scope ?? (realDxmMutationAllowed ? finalCheck?.real_dxm_mutation_scope ?? 'controlled_single_save_only' : 'none')
+  const realDxmMutationScope = finalCheck?.effective_real_dxm_mutation_scope ?? (realDxmMutationAllowed ? finalCheck?.real_dxm_mutation_scope ?? '单商品只保存' : 'none')
+  const twoStageEndToEnd = finalCheck?.effective_real_dxm_two_stage_end_to_end ?? finalCheck?.real_dxm_two_stage_end_to_end ?? 'pending_live_dxm_validation'
+  const twoStagePassed = twoStageEndToEnd === 'passed'
+  const twoStageEndToEndLabel = humanTwoStageEndToEndLabel(twoStageEndToEnd)
+  const productionDeliveryReady = finalCheck?.production_delivery_ready === true && finalCheck?.final_delivery_completed === true && twoStagePassed
+  const productionDeliveryLabel = productionDeliveryReady ? '生产交付已完成' : '生产交付未完成'
   const reportWriteExpectedBlocked = isBlockedReadiness(finalCheck?.real_dxm_write_readiness ?? '') && finalCheck?.real_dxm_mutation_allowed !== true
   const realDxmMutationAllowedLabel = realDxmMutationAllowed
     ? `真实写入允许 true / ${realDxmMutationScope}`
@@ -209,30 +220,37 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
   const readinessDetail = !available
     ? '还没有读取到最近验收结果；请先运行本地验收。'
     : runtimeGateStale && isReadyReadiness(readiness)
-      ? '最终验收报告待刷新；当前运行门禁已按最新真实检查结果覆盖为可申请单商品只保存，源码包交付前仍需重新运行最终验收。'
+      ? '交付检查报告待刷新；当前运行状态已按最新真实检查结果覆盖为可申请单商品只保存，源码包交付前仍需重新运行最终验收。'
       : runtimeGateStale
-        ? '最终验收报告待刷新；请先重新运行真实只读检查和本地验收。'
+        ? '交付检查报告待刷新；请先重新运行保存前安全检查和本地验收。'
       : isReadyReadiness(readiness)
-      ? '单商品只保存路径已有验收记录；执行前仍需人工确认，批量、无人值守和发布仍保持关闭。'
+      ? twoStagePassed
+        ? '两段式端到端已验收；执行前仍需人工确认，批量、无人值守和发布仍保持关闭。'
+        : '受控保存能力已有验收记录，但两段式端到端还未完成；不能标记为生产交付完成。'
       : isBlockedReadiness(readiness)
         ? '自动化工作台可继续查看和检查；真实保存暂不启动。'
-        : '当前真实写入状态未知，不可执行真实写入；请先重新运行本地验收并复核真实只读检查。'
+        : '当前真实写入状态未知，不可执行真实写入；请先重新运行本地验收并复核保存前安全检查。'
   const nextStepText = isReadyReadiness(readiness)
-    ? '复核当前任务、批准人和报告链路后，再启动单商品只保存。'
+    ? twoStagePassed
+      ? '复核当前任务、批准人和报告链路后，再启动采集箱编辑保存。'
+      : '先完成真实数据采集认领到采集箱，再执行采集箱编辑保存并核对未发布证明。'
     : `先在当前任务点击“${READONLY_PRECHECK_CTA}”，通过后再进行人工确认保存。`
   const browserQaScreenshotCount = finalCheck?.browser_qa_screenshot_hashes
     ? Object.keys(finalCheck.browser_qa_screenshot_hashes).length
     : 0
   const freshnessLabel = finalCheckMatchesCurrent ? '自检覆盖当前代码' : '自检未覆盖当前代码'
-  const browserQaLabel = `浏览器 QA ${finalCheck?.browser_qa_ok === true ? 'PASS' : finalCheck?.browser_qa_ok === false ? 'FAIL' : '待刷新/未运行'}`
+  const browserCheckLabel = `浏览器检查${finalCheck?.browser_qa_ok === true ? '已通过' : finalCheck?.browser_qa_ok === false ? '未通过' : '待刷新'}`
+  const reportEvidenceCheckLabel = `保存证据检查${finalCheck?.post_final_report_qa_ok === true ? '已通过' : finalCheck?.post_final_report_qa_ok === false ? '未通过' : '待刷新'}`
   const localWorkbenchLabel = `自动化工作台 ${finalCheck?.local_workbench_check ?? '未检查'}`
   const readinessBoundaryCopy = isReadyReadiness(readiness)
-    ? '真实店小秘单商品只保存可申请；单商品只保存路径已有验收记录；批量、无人值守和发布仍保持关闭。'
+    ? twoStagePassed
+      ? '真实店小秘两段式端到端已通过；批量、无人值守和发布仍保持关闭。'
+      : '真实店小秘保存能力可申请；两段式端到端仍未完成，不能标记为生产交付。'
     : '预期阻断：不可执行真实写入；真实保存暂不启动。'
 
   return (
     <div className="module-card span-3 delivery-check-card">
-      <ModuleHead title="维护人员验收信息" meta={available ? checkedAt : '尚未运行'} />
+      <ModuleHead title="交付检查状态" meta={available ? checkedAt : '尚未运行'} />
       <div className="report-check-grid">
         <CheckRow
           label={`最终验收报告${localWorkbenchOk ? '通过' : '待刷新'}`}
@@ -242,6 +260,16 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
           label={`真实保存状态：${humanReadinessLabel(readiness)}`}
           ok={isReadyReadiness(readiness)}
           state={isBlockedReadiness(readiness) ? 'locked' : undefined}
+        />
+        <CheckRow
+          label={`两段式端到端：${twoStageEndToEndLabel}`}
+          ok={twoStagePassed}
+          state={twoStagePassed ? undefined : 'locked'}
+        />
+        <CheckRow
+          label={`生产交付状态：${productionDeliveryLabel}`}
+          ok={productionDeliveryReady}
+          state={productionDeliveryReady ? undefined : 'locked'}
         />
       </div>
       <div className="delivery-check-card__body">
@@ -266,12 +294,11 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
           <strong>下一步</strong>
           <span>{nextStepText}</span>
         </div>
-        <div className="delivery-check-card__visible-qa" aria-label="交付验收摘要">
+        <div className="delivery-check-card__visible-qa" aria-label="交付检查摘要">
           <span>{localWorkbenchLabel}</span>
-          <span>{browserQaLabel}</span>
-          <span>最终报告与证据 QA {postFinalReportQaState}</span>
+          <span>{browserCheckLabel}</span>
+          <span>{reportEvidenceCheckLabel}</span>
           <span>{freshnessLabel}</span>
-          <span>浏览器 QA Git {browserQaGitHead} / 截图哈希 {browserQaScreenshotCount} 项</span>
           <span>{readinessBoundaryCopy}</span>
         </div>
         {reportWriteExpectedBlocked && (
@@ -295,7 +322,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
         </div>
         <details className="disclosure-card delivery-check-card__appendix">
           <summary>
-            技术验收信息
+            维护验收信息
             <span className="delivery-check-card__qa-summary">
               维护人员使用
             </span>
@@ -316,7 +343,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
           </div>
           {runtimeGateStale && (
             <p className="delivery-check-card__warning">
-              运行门禁已覆盖历史自检：报告记录 {humanReadinessLabel(reportReadiness)}，当前真实只读检查={humanGateStatus(finalCheck?.current_l2_gate_status ?? 'unknown')} / 人工确认={humanGateStatus(finalCheck?.current_l3_gate_status ?? 'unknown')}，有效状态为 {humanReadinessLabel(readiness)}。
+              运行状态已覆盖历史自检：报告记录 {humanReadinessLabel(reportReadiness)}，当前保存前安全检查={humanGateStatus(finalCheck?.current_l2_gate_status ?? 'unknown')} / 人工确认={humanGateStatus(finalCheck?.current_l3_gate_status ?? 'unknown')}，有效状态为 {humanReadinessLabel(readiness)}。
             </p>
           )}
         {available && !finalCheckMatchesCurrent && (
@@ -344,9 +371,11 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
             <span>自检 Git {gitHead} / 当前 Git {currentGitHead}</span>
             <span>OK 范围 {finalCheck?.ok_scope ?? '未记录'} / {realDxmMutationAllowedLabel}</span>
             <span>有效真实保存 {humanReadinessLabel(readiness)} / 报告记录 {humanReadinessLabel(reportReadiness)} / 运行门禁 {runtimeGateFreshness}</span>
+            <span>两段式端到端 {twoStageEndToEndLabel} / 预期 {finalCheck?.expected_real_dxm_two_stage_end_to_end ?? '未记录'} / 匹配 {finalCheck?.two_stage_acceptance_matches_expected === true ? 'true' : 'false'}</span>
+            <span>生产交付状态 {productionDeliveryLabel} / 当前两段式 {finalCheck?.current_two_stage_status ?? '未记录'}</span>
             <span>受控单商品只保存 {finalCheck?.controlled_single_save_ready === true ? '可申请' : '未放行'} / 批量无人值守发布 {finalCheck?.batch_unattended_publish_allowed === true ? '允许' : '阻断'}</span>
             <span>预期真实写入 {finalCheck?.expected_real_dxm_write_readiness ?? '未记录'} / 有效预期匹配 {finalCheck?.effective_real_dxm_write_readiness_matches_expected === true ? 'true' : 'false'} / 报告记录匹配 {finalCheck?.real_dxm_write_readiness_matches_expected === true ? 'true' : 'false'}</span>
-            <span>真实只读异常候选评审模板 {finalCheck?.l2_allowlist_review_template_state ?? '未生成'} / 候选 {finalCheck?.l2_allowlist_review_template_candidate_count ?? 0} 项</span>
+            <span>保存前安全检查候选评审模板 {finalCheck?.l2_allowlist_review_template_state ?? '未生成'} / 候选 {finalCheck?.l2_allowlist_review_template_candidate_count ?? 0} 项</span>
             <span>模板哈希 MD {shortHash(finalCheck?.l2_allowlist_review_template_markdown_sha256)} / JSON {shortHash(finalCheck?.l2_allowlist_review_template_json_sha256)}</span>
             <span>浏览器 QA Git {browserQaGitHead} / 截图哈希 {finalCheck?.browser_qa_screenshot_hashes ? Object.keys(finalCheck.browser_qa_screenshot_hashes).length : 0} 项</span>
             <span>最终报告页截图 qa-report-center-final.png / 截图哈希 {finalCheck?.post_final_report_qa_screenshot_hashes ? Object.keys(finalCheck.post_final_report_qa_screenshot_hashes).length : 0} 项</span>
@@ -373,6 +402,48 @@ function ModuleHead({ title, meta }: { title: string; meta: string }) {
     <div className="module-head">
       <h2>{title}</h2>
       <span>{meta}</span>
+    </div>
+  )
+}
+
+function TwoStageAcceptanceCard({
+  acceptance,
+  onShowConsole,
+  onShowEvidence,
+}: {
+  acceptance: TwoStageAcceptance
+  onShowConsole: () => void
+  onShowEvidence: () => void
+}) {
+  const checks = acceptance.checks ?? {}
+  const claimReady = checks.claim_task_present === true && checks.claim_completed === true && checks.claim_product_matches === true
+  const draftReady = checks.claimed_product_present === true && checks.draft_box_verified === true && checks.single_save_linked_to_claim === true
+  const saveReady = checks.save_success === true && checks.unpublished_proof === true && checks.publish_guard_safe === true
+  const title = acceptance.passed ? '真实两段式已完成' : humanTwoStageAcceptanceStatus(acceptance.status)
+  const nextAction = acceptance.passed
+    ? '查看保存证据，确认未发布。'
+    : humanTwoStageNextAction(acceptance.status)
+
+  return (
+    <div className="module-card span-3 two-stage-acceptance-card">
+      <ModuleHead title="完整流程完成度" meta={title} />
+      <p>{acceptance.userMessage}</p>
+      <div className="report-check-grid">
+        <CheckRow label="数据采集认领" ok={claimReady} state={claimReady ? 'present' : 'missing'} />
+        <CheckRow label="采集箱只保存" ok={draftReady} state={draftReady ? 'present' : 'missing'} />
+        <CheckRow label="保存成功" ok={saveReady} state={saveReady ? 'present' : 'missing'} />
+        <CheckRow label="未发布" ok={checks.publish_guard_safe === true} state={checks.publish_guard_safe === true ? 'present' : 'missing'} />
+      </div>
+      <div className="report-followup-actions business-result-summary__actions">
+        <div>
+          <strong>下一步</strong>
+          <span>{nextAction}</span>
+        </div>
+        <div className="toolbar">
+          <button className="button button--secondary" type="button" onClick={onShowConsole}>回到浏览器现场</button>
+          <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看保存证据</button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -421,8 +492,8 @@ function BusinessResultSummaryCard({
   const nextStep = ok
     ? '查看保存证据，确认未发布。'
     : realWriteExpectedBlocked
-      ? '回到开始只保存，完成安全检查和人工确认。'
-      : '处理问题或回到开始只保存重试。'
+      ? '回到浏览器现场，完成安全检查和人工确认。'
+      : '处理问题或回到浏览器现场重试。'
   const title = ok
     ? '本次只保存已完成'
     : realWriteExpectedBlocked
@@ -434,7 +505,7 @@ function BusinessResultSummaryCard({
     ? '系统已拿到保存成功、未发布证明和保存接口回包。'
     : realWriteExpectedBlocked
       ? '真实保存不会自动启动；完成登录、配置、安全检查和人工确认后再执行。'
-      : '请先查看保存证据或回到开始只保存页处理当前阻断。'
+      : '请先查看保存证据或回到浏览器现场处理当前阻断。'
 
   return (
     <div className={`module-card span-3 business-result-summary ${ok ? 'is-ok' : realWriteExpectedBlocked ? 'is-waiting' : 'is-warn'}`} aria-label="本次保存结果">
@@ -455,10 +526,32 @@ function BusinessResultSummaryCard({
       </div>
       <div className="report-followup-actions business-result-summary__actions" aria-label="本次结果后续动作">
         <button className="button button--secondary" type="button" onClick={onShowEvidence}>查看保存证据</button>
-        <button className="button button--quiet" type="button" onClick={onShowConsole}>回到开始只保存</button>
+        <button className="button button--quiet" type="button" onClick={onShowConsole}>回到浏览器现场</button>
       </div>
     </div>
   )
+}
+
+function humanTwoStageAcceptanceStatus(status: string) {
+  return ({
+    no_task: '等待创建真实任务',
+    missing_claim_stage: '等待数据采集认领',
+    missing_draft_box_stage: '等待采集箱商品确认',
+    missing_save_stage: '等待采集箱只保存',
+    missing_unpublished_proof: '等待未发布证明',
+    incomplete: '流程证据不完整',
+  } as Record<string, string>)[status] ?? '流程证据不完整'
+}
+
+function humanTwoStageNextAction(status: string) {
+  return ({
+    no_task: '先到“数据采集认领”创建认领任务。',
+    missing_claim_stage: '先从店小秘数据采集认领真实商品到采集箱。',
+    missing_draft_box_stage: '确认选择的是刚进入采集箱的真实商品。',
+    missing_save_stage: '回到浏览器现场，启动单商品只保存。',
+    missing_unpublished_proof: '查看保存结果和未发布证明，确认没有发布。',
+    incomplete: '按页面提示补齐缺失步骤后重试。',
+  } as Record<string, string>)[status] ?? '按页面提示补齐缺失步骤后重试。'
 }
 
 function EmptyState({ title, detail, actions }: { title: string; detail: string; actions?: ReactNode }) {
@@ -549,7 +642,7 @@ function RuntimeGateFreshnessRow({ finalCheck }: { finalCheck: FinalDeliveryChec
   const staleGate = freshness === 'stale_gate'
   const label = matches ? '运行门禁仍支持自检结论' : staleGate ? '运行门禁已使自检过期' : '运行门禁待复核'
   const detail = matches
-    ? '当前真实只读检查和人工确认与最近自检结论一致。'
+    ? '当前保存前安全检查和人工确认与最近自检结论一致。'
     : staleGate
       ? '真实检查证据有时效；历史验收不能作为当前启动依据。'
       : '尚无法确认当前真实检查结果是否仍支持最近自检。'
@@ -735,6 +828,13 @@ function humanReadinessLabel(readiness: string) {
   return '待确认'
 }
 
+function humanTwoStageEndToEndLabel(status: string) {
+  if (status === 'passed') return '已通过'
+  if (status === 'pending_live_dxm_validation') return '待现场验证'
+  if (status === 'not_run') return '未运行'
+  return '待确认'
+}
+
 function shortHash(value?: string | null) {
   return value ? value.slice(0, 12) : '未记录'
 }
@@ -774,22 +874,22 @@ function humanGateDetail(detail?: string | null) {
     || detail.includes('age')
     || detail.includes('expired')
   ) {
-    return `真实只读检查证据已过期，请点击“${READONLY_PRECHECK_CTA}”刷新后再继续。`
+    return `保存前安全检查证据已过期，请点击“${READONLY_PRECHECK_CTA}”刷新后再继续。`
   }
   if (detail.includes('data_acquisition') || detail.includes('draft_box')) {
     return safeDetail
       .split('data_acquisition').join('商品采集页')
-      .split('draft_box').join('草稿箱页')
-      .split('L2').join('真实只读检查')
+      .split('draft_box').join('采集箱页')
+      .split('L2').join('保存前安全检查')
       .split('L3').join('真实保存')
       .split('passed').join('通过')
-      .split('probe').join('真实只读检查')
+      .split('probe').join('保存前安全检查')
   }
   return safeDetail
-    .split('L2').join('真实只读检查')
+    .split('L2').join('保存前安全检查')
     .split('L3').join('真实保存')
     .split('passed').join('通过')
-    .split('probe').join('真实只读检查')
+    .split('probe').join('保存前安全检查')
 }
 
 function safeGateDetailFallback(detail: string) {
@@ -805,20 +905,20 @@ function safeGateDetailFallback(detail: string) {
     || normalized.includes('playwright')
     || normalized.includes('internal server error')
   ) {
-    return '真实只读检查未通过；原始诊断已收进技术详情，请按页面提示处理后重新检查。'
+    return '保存前安全检查未通过；原始诊断已收进维护详情，请按页面提示处理后重新检查。'
   }
   return String(detail)
 }
 
 function humanL2PrecheckError(message: string) {
   if (message.includes('L2 readonly probe resources are missing')) {
-    return '真实只读检查组件未安装完整：请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
+    return '保存前安全检查组件未安装完整：请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
   }
   if (message.includes('L2 readonly probe runner is missing')) {
-    return '真实只读检查组件未安装完整：缺少真实只读检查启动器。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
+    return '保存前安全检查组件未安装完整：缺少安全检查启动器。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
   }
   if (message.includes('L2 readonly probe script is missing')) {
-    return '真实只读检查组件未安装完整：缺少真实只读检查脚本。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
+    return '保存前安全检查组件未安装完整：缺少安全检查脚本。请关闭旧进程并重新打开完整免安装目录版；系统已阻止真实保存，不会发布。'
   }
   return message
 }
@@ -826,7 +926,7 @@ function humanL2PrecheckError(message: string) {
 function humanL2TargetLabel(target: string) {
   return ({
     data_acquisition: '商品采集页',
-    draft_box: '采集箱/草稿箱',
+    draft_box: '采集箱',
   } as Record<string, string>)[target] ?? target
 }
 
@@ -842,10 +942,10 @@ function l2DiagnosticNextAction({
   appShellOnly: boolean
 }) {
   if (failedCheckKeys.includes('cookies_loaded') || failedCheckKeys.includes('not_login_page') || finalClass === 'login') {
-    return '先在真实登录浏览器完成登录，再重新运行真实只读检查。'
+    return '先在真实登录浏览器完成登录，再重新运行保存前安全检查。'
   }
   if (failedCheckKeys.includes('final_url_matches') || failedCheckKeys.includes('target_url_matches') || finalClass === 'home' || finalClass === 'other') {
-    return '检查目标页面是否跳到首页/登录页，必要时重新进入采集页或草稿箱后复跑。'
+    return '检查目标页面是否跳到首页/登录页，必要时重新进入采集页或采集箱后复跑。'
   }
   if (reviewCandidateCount > 0) {
     return '把只读依赖候选交给人工评审；未评审前不要放行真实保存。'
@@ -853,12 +953,12 @@ function l2DiagnosticNextAction({
   if (appShellOnly) {
     return '页面停留在加载壳，等待真实页面加载完成或重开浏览器后复跑。'
   }
-  return '查看启动器日志中的请求拦截记录，修正页面阻断后复跑真实只读检查。'
+  return '查看启动器日志中的请求拦截记录，修正页面阻断后复跑保存前安全检查。'
 }
 
 function l2CheckLabel(key: string) {
   return ({
-    ok: '真实只读检查未通过',
+    ok: '保存前安全检查未通过',
     safety_ok: '安全断言失败',
     target_url_matches: '目标 URL 不匹配',
     final_url_matches: '最终路径偏离',

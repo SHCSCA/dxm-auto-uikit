@@ -39,6 +39,15 @@ class FakeWorkflowAdapter:
     def open_draft_box(self):
         return self._record("open_draft_box")
 
+    def open_data_acquisition(self):
+        return self._record("open_data_acquisition")
+
+    def claim_from_data_acquisition(self, claim_mark, product_query=None, category_name=None, store_name=None):
+        return self._record("claim_from_data_acquisition", claim_mark, product_query, category_name, store_name)
+
+    def verify_draft_box_claim(self, claim_mark, product_query=None, category_name=None, store_name=None):
+        return self._record("verify_draft_box_claim", claim_mark, product_query, category_name, store_name)
+
     def claim_product(self, note_text, product_query=None, store_name=None, target_source_urls=None):
         return self._record("claim_product", note_text, product_query, store_name, target_source_urls)
 
@@ -92,6 +101,12 @@ class FakeWorkflowAdapter:
         evidence = {"action": action}
         if action == "claim_product":
             evidence["note_verified"] = self.note_verified
+        if action == "verify_draft_box_claim":
+            evidence["claimed_product"] = {
+                "title": args[1] or "ACG Stand Product 1",
+                "category_name": args[2] or "立牌类谷子",
+                "source_url": "https://detail.1688.com/offer/from-acquisition.html",
+            }
         if action == "fill_editor_required_defaults" and args:
             defaults = args[0] if isinstance(args[0], dict) else {}
             resolved = defaults.get("dxm_reference_templates_resolved") or {}
@@ -438,38 +453,40 @@ def test_single_save_syncs_agent_console_hud_without_changing_workflow_order(v1_
     verify_not_published = next(call for call in console.calls if call["step_code"] == "VERIFY_NOT_PUBLISHED")
     release_lock = next(call for call in console.calls if call["step_code"] == "RELEASE_LOCK")
     assert precheck_config["human_title"] == "开始任务"
-    assert precheck_config["phase"] == "开始任务"
-    assert open_draft["human_title"] == "打开草稿箱"
-    assert find_product["human_title"] == "查找商品"
-    assert open_editor["human_title"] == "打开编辑页"
-    assert base_info["human_title"] == "输入标题"
-    assert base_info["human_action"] == "正在输入商品标题和卖点"
-    assert base_info["human_next"] == "选择分类"
-    assert select_category["human_title"] == "选择分类"
-    assert select_category["human_action"] == "正在确认商品分类已选择"
+    assert precheck_config["phase"] == "准备执行"
+    assert open_draft["human_title"] == "正在打开采集箱"
+    assert open_draft["human_action"] == "进入店小秘采集箱"
+    assert find_product["human_title"] == "正在定位商品"
+    assert open_editor["human_title"] == "正在打开编辑页"
+    assert base_info["human_title"] == "正在编辑商品"
+    assert base_info["human_action"] == "正在填写标题"
+    assert base_info["human_next"] == "继续填写价格、图片和物流信息"
+    assert select_category["human_title"] == "正在选择分类"
+    assert select_category["human_action"] == "确认商品分类和属性"
     assert select_category["progress_index"] == 6
     assert select_category["progress_total"] == 12
-    assert variants["human_title"] == "填写价格库存"
-    assert media["human_title"] == "处理图片"
-    assert semi_goods["human_title"] == "设置包装物流"
-    assert save_only["human_title"] == "点击保存"
-    assert save_only["human_action"] == "正在点击保存按钮，不点击发布"
-    assert verify_not_published["human_title"] == "确认未发布"
+    assert variants["human_action"] == "正在填写价格、库存和 SKU"
+    assert media["human_action"] == "正在处理图片"
+    assert semi_goods["human_title"] == "正在设置包装物流"
+    assert save_only["human_title"] == "正在只保存"
+    assert save_only["human_action"] == "只点击保存，不发布"
+    assert verify_not_published["human_title"] == "正在检查结果"
+    assert verify_not_published["human_action"] == "确认商品没有发布"
     assert release_lock["human_title"] == "任务完成"
     assert release_lock["progress_index"] == 12
     assert release_lock["progress_total"] == 12
     operator_phrases = [
         "开始任务",
-        "打开草稿箱",
-        "查找商品",
-        "打开编辑页",
-        "输入标题",
-        "选择分类",
-        "填写价格库存",
-        "处理图片",
-        "设置包装物流",
-        "点击保存",
-        "确认未发布",
+        "进入店小秘采集箱",
+        "查找本次要编辑保存的商品",
+        "进入采集箱商品编辑页",
+        "正在填写标题",
+        "确认商品分类和属性",
+        "正在填写价格、库存和 SKU",
+        "正在处理图片",
+        "填写重量、尺寸和物流信息",
+        "只点击保存，不发布",
+        "确认商品没有发布",
         "任务完成",
     ]
     hud_text = "\n".join(
@@ -480,17 +497,14 @@ def test_single_save_syncs_agent_console_hud_without_changing_workflow_order(v1_
     for phrase in operator_phrases:
         assert phrase in hud_text
     assert all(call["progress_total"] == 12 for call in console.calls if call.get("progress_total"))
-    compact_titles = []
     compact_progress = []
     for call in console.calls:
-        title = call.get("human_title")
-        if not title or title == (compact_titles[-1] if compact_titles else None):
+        progress = call.get("progress_index")
+        if not progress or progress == (compact_progress[-1] if compact_progress else None):
             continue
-        compact_titles.append(title)
-        compact_progress.append(call.get("progress_index"))
-    assert compact_titles == operator_phrases
+        compact_progress.append(progress)
     assert compact_progress == list(range(1, 13))
-    assert all(call["severity"] == "info" for call in console.calls)
+    assert all(call["severity"] == "running" for call in console.calls)
     assert all(call["requires_user_action"] is False for call in console.calls)
     assert all(call["store_name"] == "Dang Kang" for call in console.calls)
     assert console.start_calls == []
@@ -537,12 +551,13 @@ def test_single_save_updates_live_browser_hud_without_agent_console(v1_db):
     assert "SAVE_ONLY" in states
     assert "VERIFY_NOT_PUBLISHED" in states
     select_category = next(call for call in adapter.live_hud_calls if call["step_code"] == "SELECT_CATEGORY")
-    assert select_category["human_title"] == "选择分类"
+    assert select_category["human_title"] == "正在选择分类"
+    assert select_category["human_action"] == "确认商品分类和属性"
     assert select_category["progress_index"] == 6
     assert select_category["progress_total"] == 12
     save_only = next(call for call in adapter.live_hud_calls if call["step_code"] == "SAVE_ONLY")
-    assert save_only["human_title"] == "点击保存"
-    assert save_only["human_action"] == "正在点击保存按钮，不点击发布"
+    assert save_only["human_title"] == "正在只保存"
+    assert save_only["human_action"] == "只点击保存，不发布"
     assert save_only["progress_total"] == 12
     assert save_only["store_name"] == "Dang Kang"
     assert save_only["requires_user_action"] is False
@@ -554,7 +569,7 @@ def test_single_save_updates_live_browser_hud_without_agent_console(v1_db):
     assert report["summary"]["live_browser_hud"]["last_step_code"] == "RELEASE_LOCK"
     assert report["summary"]["live_browser_hud"]["hud"]["guard"] == "只保存不发布"
     assert any(
-        evidence["meta"].get("live_browser_hud", {}).get("hud", {}).get("human_title") == "点击保存"
+        evidence["meta"].get("live_browser_hud", {}).get("hud", {}).get("human_title") == "正在只保存"
         for evidence in repo.list_evidences(task["id"])
     )
 
@@ -767,8 +782,14 @@ def test_single_save_report_includes_resolved_dxm_reference_templates(v1_db):
 
 def test_claim_only_calls_adapter_without_opening_editor_or_saving(v1_db):
     repo = Repository()
-    task = _create_task(repo, mode="claim_only", product_count=1)
-    job_id = repo.get_task(task["id"])["jobs"][0]["id"]
+    store = repo.create_store("Dang Kang", "AliExpress")
+    task = repo.create_acquisition_claim_request({
+        "store_id": store["id"],
+        "keyword": "Hazbin Hotel 立牌",
+        "category_name": "立牌类谷子",
+        "claim_mark": "AI认领",
+        "template_id": "template-1",
+    })
     manager = DummyManager()
     adapter = FakeWorkflowAdapter()
 
@@ -776,13 +797,38 @@ def test_claim_only_calls_adapter_without_opening_editor_or_saving(v1_db):
 
     assert adapter.calls == [
         ("check_login_state",),
-        ("open_draft_box",),
-        ("claim_product", f"AI认领-{task['id']}-{job_id}", "ACG Stand Product 1", "Dang Kang", ["https://detail.1688.com/offer/test-1.html"]),
+        ("open_data_acquisition",),
+        ("claim_from_data_acquisition", f"AI认领-{task['id']}", "Hazbin Hotel 立牌", "立牌类谷子", "Dang Kang"),
+        ("verify_draft_box_claim", f"AI认领-{task['id']}", "Hazbin Hotel 立牌", "立牌类谷子", "Dang Kang"),
     ]
+    assert not any(call[0] in {"open_editor", "save_only"} for call in adapter.calls)
     reports = repo.list_reports(task["id"])
     assert reports[0]["status"] == "success"
     assert reports[0]["published"] is False
-    assert reports[0]["save_result"]["message"] == "当前模式未执行保存动作"
+    assert reports[0]["save_result"]["message"] == "采集认领已完成，商品已进入采集箱"
+    products = repo.list_products()
+    claimed = [product for product in products if product["status"] == "claimed_to_draft"]
+    assert len(claimed) == 1
+    assert claimed[0]["title"] == "Hazbin Hotel 立牌"
+    assert claimed[0]["source"] == "dxm_data_acquisition"
+    assert claimed[0]["payload"]["store_id"] == store["id"]
+    assert claimed[0]["payload"]["store_name"] == "Dang Kang"
+    assert claimed[0]["payload"]["claim_task_id"] == task["id"]
+    assert claimed[0]["payload"]["claim_mark"] == f"AI认领-{task['id']}"
+    assert claimed[0]["payload"]["source_url"] == "https://detail.1688.com/offer/from-acquisition.html"
+    assert reports[0]["product_id"] == claimed[0]["id"]
+    assert reports[0]["save_result"]["claimed_product_id"] == claimed[0]["id"]
+    assert reports[0]["summary"]["claimed_product"]["id"] == claimed[0]["id"]
+    assert "采集箱编辑保存" in reports[0]["summary"]["next_action"]
+
+    refreshed_task = repo.get_task_private(task["id"])
+    assert refreshed_task["payload"]["stage"] == "claimed_to_draft"
+    assert refreshed_task["payload"]["status"] == "completed"
+    assert refreshed_task["payload"]["claimed_product_id"] == claimed[0]["id"]
+    assert refreshed_task["payload"]["claimed_product_source_url"] == "https://detail.1688.com/offer/from-acquisition.html"
+    assert refreshed_task["payload"]["claimed_product_category_name"] == "立牌类谷子"
+    assert refreshed_task["payload"]["draft_box_verified"] is True
+    assert "采集箱编辑保存" in refreshed_task["payload"]["next_step"]
 
 
 def test_single_save_fails_when_adapter_lacks_media_or_compliance_methods(v1_db):
@@ -915,8 +961,9 @@ def test_save_only_failure_report_includes_save_result_reason(v1_db):
             "network_events": [],
         },
     )
+    console = FakeAgentConsole()
 
-    asyncio.run(V1TaskRunner(repo, manager, workflow_adapter=adapter).run_task(task["id"]))
+    asyncio.run(V1TaskRunner(repo, manager, workflow_adapter=adapter, agent_console=console).run_task(task["id"]))
 
     report = repo.list_reports(task["id"])[0]
     assert report["status"] == "failed"
@@ -924,6 +971,16 @@ def test_save_only_failure_report_includes_save_result_reason(v1_db):
     assert "未捕获保存相关接口响应" in report["summary"]["blocked_reason"]
     assert "保存接口捕获 0 条" in report["summary"]["blocked_reason"]
     assert "未检测到保存成功提示" in report["save_result"]["message"]
+    failure_console_call = console.calls[-1]
+    assert failure_console_call["step_code"] == "TASK_FAILED"
+    assert failure_console_call["severity"] == "error"
+    assert failure_console_call["requires_user_action"] is True
+    assert "查看结果与问题" in failure_console_call["human_next"]
+    failure_live_hud = adapter.live_hud_calls[-1]
+    assert failure_live_hud["step_code"] == "TASK_FAILED"
+    assert failure_live_hud["severity"] == "error"
+    assert failure_live_hud["requires_user_action"] is True
+    assert "真实保存不会继续" in failure_live_hud["human_action"]
 
 
 def test_runner_uses_injected_workflow_executor_for_thread_bound_login_flow(v1_db):

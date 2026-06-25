@@ -7,6 +7,29 @@ from src.db import connection, dumps, loads
 from src.utils import now_iso
 
 
+def _is_fixture_product(row: dict[str, Any]) -> bool:
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    payload_text = " ".join(str(value or "") for value in payload.values()).casefold()
+    product_text = " ".join(
+        str(value or "")
+        for value in (
+            row.get("title"),
+            row.get("category_name"),
+            row.get("source"),
+            payload_text,
+        )
+    ).casefold()
+    fixture_markers = (
+        "qa guarded",
+        "qa_category",
+        "fixture",
+        "测试商品",
+        "示例商品",
+        "本地演示",
+    )
+    return any(marker in product_text for marker in fixture_markers)
+
+
 class Repository:
     def list_stores(self):
         with connection() as conn:
@@ -79,23 +102,90 @@ class Repository:
             row['is_enabled'] = bool(row['is_enabled'])
             return row
 
-    def list_products(self):
+    def list_products(self, *, include_fixtures: bool = False):
         with connection() as conn:
             rows = conn.execute("SELECT * FROM products ORDER BY id DESC").fetchall()
             for row in rows:
                 row['payload'] = loads(row.pop('payload_json'), {})
-            return rows
+            if include_fixtures:
+                return rows
+            return [row for row in rows if not _is_fixture_product(row)]
+
+    def list_claimed_draft_products(self):
+        products = self.list_products()
+        claimed_statuses = {'claimed_to_draft', 'ready_for_edit'}
+        eligible = []
+        for product in products:
+            payload = product.get('payload') if isinstance(product.get('payload'), dict) else {}
+            source = str(payload.get('source') or product.get('source') or '').strip()
+            if product.get('status') not in claimed_statuses:
+                continue
+            if source != 'dxm_data_acquisition':
+                continue
+            if payload.get('draft_box_verified') is not True:
+                continue
+            eligible.append(product)
+        return eligible
+
+    def get_product(self, product_id: int):
+        with connection() as conn:
+            row = conn.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
+            if not row:
+                return None
+            row['payload'] = loads(row.pop('payload_json'), {})
+            return row
 
     def create_product(self, data: dict[str, Any]):
         now = now_iso()
+        status = str(data.get('status') or 'draft')
         with connection() as conn:
             cur = conn.execute(
-                "INSERT INTO products (title, source, status, category_name, price, currency, sku_count, image_count, payload_json, created_at, updated_at) VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?)",
-                (data['title'], data.get('source', 'manual'), data['category_name'], data['price'], data['currency'], data['sku_count'], data['image_count'], dumps(data['payload']), now, now),
+                "INSERT INTO products (title, source, status, category_name, price, currency, sku_count, image_count, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (data['title'], data.get('source', 'manual'), status, data['category_name'], data['price'], data['currency'], data['sku_count'], data['image_count'], dumps(data['payload']), now, now),
             )
             row = conn.execute("SELECT * FROM products WHERE id=?", (cur.lastrowid,)).fetchone()
             row['payload'] = loads(row.pop('payload_json'), {})
             return row
+
+    def create_acquisition_claim_request(self, data: dict[str, Any]):
+        store_name = str(data.get('store_name') or self._store_name_for_id(data['store_id']) or '').strip()
+        payload = {
+            'stage': 'pending_acquisition_claim',
+            'status': 'pending',
+            'store_id': data['store_id'],
+            'store_name': store_name or None,
+            'keyword': data.get('keyword'),
+            'category_name': data.get('category_name'),
+            'claim_mark': data['claim_mark'],
+            'template_id': data.get('template_id'),
+        }
+        task = self.create_task({
+            'name': f"采集认领 - {payload.get('keyword') or payload.get('category_name') or '待选择商品'}",
+            'store_id': payload['store_id'],
+            'mode': 'claim_only',
+            'publish_scene': 'CONTROLLED_CLAIM_TO_DRAFT_ONLY',
+            'claim_mark': payload['claim_mark'],
+            'product_ids': [],
+            'payload': payload,
+        })
+        now = now_iso()
+        with connection() as conn:
+            conn.execute(
+                "UPDATE tasks SET total_jobs=1, updated_at=? WHERE id=?",
+                (now, task['id']),
+            )
+            conn.execute(
+                "INSERT INTO jobs (task_id, product_id, status, created_at, updated_at) VALUES (?, NULL, 'pending', ?, ?)",
+                (task['id'], now, now),
+            )
+        task = self.get_task_private(task['id'])
+        task['payload'] = self._public_task_payload(task.get('payload') or {})
+        return task
+
+    def _store_name_for_id(self, store_id: Any) -> str | None:
+        with connection() as conn:
+            row = conn.execute("SELECT name FROM stores WHERE id=?", (store_id,)).fetchone()
+            return str(row['name']) if row and row.get('name') else None
 
     def bulk_import_products(self, rows: list[dict[str, Any]]):
         created = []
@@ -144,6 +234,8 @@ class Repository:
             'max_count': len(data.get('product_ids', [])),
         })
         with connection() as conn:
+            if data.get('mode') == 'single_save':
+                self._attach_single_save_claim_proof(conn, payload, data.get('product_ids', []))
             cur = conn.execute(
                 "INSERT INTO tasks (name, store_id, status, mode, publish_scene, total_jobs, payload_json, created_at, updated_at) VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?)",
                 (data['name'], data.get('store_id'), data['mode'], data['publish_scene'], len(data.get('product_ids', [])), dumps(payload), now, now),
@@ -157,6 +249,41 @@ class Repository:
             task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
             task['payload'] = loads(task.pop('payload_json'), {})
             return task
+
+    def _attach_single_save_claim_proof(self, conn: Any, payload: dict[str, Any], product_ids: list[int]) -> None:
+        if len(product_ids) != 1:
+            return
+        product = conn.execute("SELECT * FROM products WHERE id=?", (int(product_ids[0]),)).fetchone()
+        if not product:
+            return
+        product_payload = loads(product.get('payload_json'), {})
+        source = str(product_payload.get('source') or product.get('source') or '').strip()
+        source_url = self._first_source_url(product_payload)
+        payload.update({
+            'stage': 'draft_edit_save',
+            'claimed_product_id': product.get('id'),
+            'claimed_product_title': product.get('title'),
+            'claimed_product_status': product.get('status'),
+            'claimed_product_source': source or None,
+            'claimed_product_source_url': source_url,
+            'claimed_product_category_name': product.get('category_name'),
+            'claim_task_id': product_payload.get('claim_task_id'),
+            'draft_box_verified': product_payload.get('draft_box_verified') is True,
+        })
+        if source_url:
+            payload['source_url'] = source_url
+
+    def _first_source_url(self, payload: dict[str, Any]) -> str | None:
+        for key in ('source_url', 'url'):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        values = payload.get('source_urls')
+        if isinstance(values, list):
+            for value in values:
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        return None
 
     def set_task_manual_approval(self, task_id: int, *, approved: bool, token: str, approved_by: str = "system"):
         now = now_iso()
@@ -246,6 +373,33 @@ class Repository:
                 "UPDATE tasks SET status=?, completed_jobs=?, failed_jobs=?, updated_at=? WHERE id=?",
                 (status, completed_jobs if completed_jobs is not None else existing['completed_jobs'], failed_jobs if failed_jobs is not None else existing['failed_jobs'], now, task_id),
             )
+
+    def mark_acquisition_claim_completed(self, task_id: int, claimed_product: dict[str, Any]):
+        now = now_iso()
+        with connection() as conn:
+            task = conn.execute("SELECT payload_json FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if not task:
+                return None
+            payload = loads(task['payload_json'], {})
+            claimed_payload = claimed_product.get('payload') if isinstance(claimed_product.get('payload'), dict) else {}
+            payload.update({
+                'stage': 'claimed_to_draft',
+                'status': 'completed',
+                'claimed_product_id': claimed_product.get('id'),
+                'claimed_product_title': claimed_product.get('title'),
+                'claimed_product_status': claimed_product.get('status'),
+                'claimed_product_source': claimed_product.get('source'),
+                'claimed_product_source_url': claimed_payload.get('source_url'),
+                'claimed_product_category_name': claimed_product.get('category_name'),
+                'draft_box_verified': claimed_payload.get('draft_box_verified') is True,
+                'completed_at': now,
+                'next_step': '进入“采集箱编辑保存”，选择该商品创建单商品只保存任务。',
+            })
+            conn.execute(
+                "UPDATE tasks SET payload_json=?, updated_at=? WHERE id=?",
+                (dumps(payload), now, task_id),
+            )
+        return self.get_task(task_id)
 
     def try_start_task(self, task_id: int) -> bool:
         now = now_iso()

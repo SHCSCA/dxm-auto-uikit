@@ -27,6 +27,9 @@ class StateName(StrEnum):
     PRECHECK_SESSION = "PRECHECK_SESSION"
     PRECHECK_SELECTOR_PROFILE = "PRECHECK_SELECTOR_PROFILE"
     PRECHECK_PUBLISH_GUARD = "PRECHECK_PUBLISH_GUARD"
+    OPEN_DATA_ACQUISITION = "OPEN_DATA_ACQUISITION"
+    CLAIM_TO_DRAFT_BOX = "CLAIM_TO_DRAFT_BOX"
+    VERIFY_DRAFT_BOX_CLAIM = "VERIFY_DRAFT_BOX_CLAIM"
     OPEN_DRAFT_LIST = "OPEN_DRAFT_LIST"
     FIND_PRODUCT = "FIND_PRODUCT"
     ITEM_LOCKING = "ITEM_LOCKING"
@@ -121,6 +124,32 @@ def build_v1_state_specs() -> dict[StateName, StateNodeSpec]:
             preconditions=("session is usable",),
             actions=("verify forbidden publish modes and visible publish risks",),
             failure_code="E999",
+            ownership_required=False,
+        ),
+        StateName.OPEN_DATA_ACQUISITION: StateNodeSpec(
+            state_name=StateName.OPEN_DATA_ACQUISITION,
+            preconditions=("session is usable", "publish guard passed"),
+            actions=("open dianxiaomi data acquisition page",),
+            expected_url=("/web/productCrawl/dataAcquisition",),
+            expected_text=("数据采集", "认领"),
+            failure_code="E201",
+            ownership_required=False,
+        ),
+        StateName.CLAIM_TO_DRAFT_BOX: StateNodeSpec(
+            state_name=StateName.CLAIM_TO_DRAFT_BOX,
+            preconditions=("data acquisition page is open", "target acquisition product is unique"),
+            actions=("claim target acquisition product to draft box",),
+            expected_text=("认领", "采集箱"),
+            failure_code="E202",
+            ownership_required=False,
+        ),
+        StateName.VERIFY_DRAFT_BOX_CLAIM: StateNodeSpec(
+            state_name=StateName.VERIFY_DRAFT_BOX_CLAIM,
+            preconditions=("claim to draft box completed",),
+            actions=("open draft box and verify claimed product exists",),
+            expected_url=("/web/smt/smtProductList/draft",),
+            expected_dom=("unique claimed draft row",),
+            failure_code="E202",
             ownership_required=False,
         ),
         StateName.OPEN_DRAFT_LIST: StateNodeSpec(

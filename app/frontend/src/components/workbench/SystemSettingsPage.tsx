@@ -28,10 +28,12 @@ export function SystemSettingsPage({
   const releasedMode = workspace.realModeReleasePlan.modes.find((mode) => mode.allowed)
   const backendStatus = runtimeStatus?.backend?.status ?? 'unknown'
   const frontendStatus = runtimeStatus?.frontend?.status ?? (desktopRuntime?.frontendPath ? 'desktop_file' : 'unknown')
-  const browserStatus = runtimeStatus?.agentConsole?.browserVisible
-    ? '真实浏览器已打开'
-    : runtimeStatus?.agentConsole?.browserLaunching
+  const browserStatus = runtimeStatus?.realBrowser?.browserVisible
+    ? runtimeStatus.realBrowser.source === 'dxm_flow' ? '真实业务浏览器已打开' : '真实浏览器已打开'
+    : runtimeStatus?.realBrowser?.browserLaunching
       ? '真实浏览器启动中'
+      : runtimeStatus?.realBrowser?.active
+        ? '真实浏览器会话已建立'
       : '真实浏览器未打开'
   const finalCheckStatus = finalCheck?.status === 'available'
     ? `最近验收：${finalCheck.checked_at ? new Date(finalCheck.checked_at).toLocaleString('zh-CN', { hour12: false }) : '已读取'}`
@@ -139,7 +141,7 @@ function RegressionGateGrid({ gates }: { gates: RegressionGate[] }) {
 
 function displayTaskName(task: Pick<Task, 'name' | 'mode'>) {
   if (task.mode === 'single_save' && task.name === LEGACY_QA_REAL_MUTATION_TASK_NAME) {
-    return 'QA local gated single_save fixture'
+    return '旧版单商品只保存核验任务'
   }
   if (task.mode === 'single_save' && task.name.toLowerCase().includes('l3 canary save-only')) {
     return '单商品只保存核验任务'

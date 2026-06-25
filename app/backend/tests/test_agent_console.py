@@ -51,6 +51,7 @@ def test_agent_console_can_launch_real_browser_in_background(tmp_path, monkeypat
         assert state["target_url"] == "https://www.dianxiaomi.com/"
         launch_release.wait(timeout=5)
         with service._lock:
+            service._page = _FakePage()
             service._state["browser_launching"] = False
             service._state["browser_visible"] = True
             service._state["current_url"] = state["target_url"]
@@ -130,6 +131,115 @@ def test_agent_console_start_reuses_visible_browser_for_same_task(tmp_path, monk
     assert reused["hud"]["action"] == "真实浏览器已打开"
 
 
+def test_agent_console_preview_update_preserves_visible_browser_for_same_task(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+
+    initial = service.start(
+        task_id=42,
+        target_url="https://www.dianxiaomi.com/",
+        launch_browser=False,
+        step={"state": "WAITING", "action": "等待启动真实浏览器"},
+    )
+    with service._lock:
+        service._state["browser_visible"] = True
+        service._state["browser_launching"] = False
+        service._state["current_url"] = "https://www.dianxiaomi.com/web/home"
+        service._page = _FakePage()
+
+    close_calls = []
+    monkeypatch.setattr(service, "_close_current_browser", lambda: close_calls.append("closed"))
+
+    preview = service.start(
+        task_id=42,
+        target_url="https://www.dianxiaomi.com/web/home",
+        launch_browser=False,
+        step={"state": "SAVE_ONLY", "action": "等待人工确认只保存"},
+    )
+
+    assert close_calls == []
+    assert preview["session_id"] == initial["session_id"]
+    assert preview["profile_dir"] == initial["profile_dir"]
+    assert preview["task_id"] == 42
+    assert preview["browser_visible"] is True
+    assert preview["browser_launching"] is False
+    assert preview["current_url"] == "https://www.dianxiaomi.com/web/home"
+    assert preview["hud"]["state"] == "SAVE_ONLY"
+    assert preview["hud"]["human_action"] == "等待人工确认只保存"
+
+
+def test_agent_console_preview_for_other_task_does_not_close_or_rebind_visible_browser(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+
+    initial = service.start(
+        task_id=42,
+        target_url="https://www.dianxiaomi.com/",
+        launch_browser=False,
+        step={"state": "CLAIM_TO_DRAFT_BOX"},
+    )
+    with service._lock:
+        service._state["browser_visible"] = True
+        service._state["browser_launching"] = False
+        service._state["current_url"] = "https://www.dianxiaomi.com/web/home"
+        service._page = _FakePage()
+
+    close_calls = []
+    monkeypatch.setattr(service, "_close_current_browser", lambda: close_calls.append("closed"))
+
+    preview = service.start(
+        task_id=99,
+        target_url="https://www.dianxiaomi.com/web/home",
+        launch_browser=False,
+        step={"state": "SAVE_ONLY"},
+    )
+
+    assert close_calls == []
+    assert preview["session_id"] == initial["session_id"]
+    assert preview["task_id"] == 42
+    assert preview["browser_visible"] is True
+    assert preview["hud"]["state"] == "CLAIM_TO_DRAFT_BOX"
+    assert "已有真实浏览器正在执行任务 #42" in preview["last_error"]
+
+
+def test_agent_console_launch_for_other_task_does_not_close_visible_browser(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+
+    initial = service.start(
+        task_id=42,
+        target_url="https://www.dianxiaomi.com/",
+        launch_browser=False,
+        step={"state": "CLAIM_TO_DRAFT_BOX"},
+    )
+    fake_page = _FakePage()
+    with service._lock:
+        service._state["browser_visible"] = True
+        service._state["browser_launching"] = False
+        service._state["current_url"] = "https://www.dianxiaomi.com/web/home"
+        service._page = fake_page
+
+    close_calls = []
+    monkeypatch.setattr(service, "_close_current_browser", lambda: close_calls.append("closed"))
+
+    blocked = service.start(
+        task_id=99,
+        target_url="https://www.dianxiaomi.com/web/home",
+        launch_browser=True,
+        step={"state": "SAVE_ONLY"},
+    )
+
+    assert close_calls == []
+    assert blocked["session_id"] == initial["session_id"]
+    assert blocked["task_id"] == 42
+    assert blocked["browser_visible"] is True
+    assert blocked["browser_launching"] is False
+    assert blocked["hud"]["state"] == "BROWSER_BUSY"
+    assert blocked["hud"]["requires_user_action"] is True
+    assert "已有真实浏览器正在执行任务 #42" in blocked["last_error"]
+    assert fake_page.evaluate_calls
+
+
 def test_agent_console_status_does_not_wait_for_slow_launch_title(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
     monkeypatch.setattr(agent_console_module, "chrome_launch_options", lambda headless: {})
@@ -192,11 +302,24 @@ def test_agent_console_api_lifecycle_uses_preview_mode(tmp_path, monkeypatch):
 
     hud_response = client.post(
         "/api/agent-console/hud",
-        json={"step": {"state": "OPEN_DRAFT_BOX", "action": "打开采集箱", "next_step": "定位备注商品"}},
+        json={
+            "step": {
+                "state": "OPEN_DRAFT_BOX",
+                "action": "打开采集箱",
+                "line1": "进入店小秘采集箱",
+                "line2": "店铺：Dang Kang",
+                "next_step": "定位备注商品",
+                "maintenance_detail": "api accepted extended hud fields",
+            }
+        },
     )
 
     assert hud_response.status_code == 200
-    assert hud_response.json()["hud"]["state"] == "OPEN_DRAFT_BOX"
+    hud = hud_response.json()["hud"]
+    assert hud["state"] == "OPEN_DRAFT_BOX"
+    assert hud["line1"] == "进入店小秘采集箱"
+    assert hud["line2"] == "店铺：Dang Kang"
+    assert hud["maintenance_detail"] == "api accepted extended hud fields"
 
     status_response = client.get("/api/agent-console/status")
     assert status_response.status_code == 200
@@ -261,11 +384,12 @@ def test_agent_console_hud_extends_old_payload_with_chinese_defaults(tmp_path, m
     )
 
     hud = status["hud"]
-    assert hud["title"] == "Agent Console 待命"
+    assert hud["title"] == "正在只保存"
     assert hud["state"] == "SAVE_ONLY"
-    assert hud["phase"] == "业务进度"
-    assert hud["severity"] == "info"
-    assert hud["human_title"] == "Agent Console 待命"
+    assert hud["phase"] == "第二段：采集箱编辑保存"
+    assert hud["severity"] == "running"
+    assert hud["line1"] == "只点击保存，不发布"
+    assert hud["human_title"] == "正在只保存"
     assert hud["human_action"] == "等待保存证据"
     assert hud["human_next"] == "确认未发布"
     assert hud["recent_actions"] == []
@@ -308,7 +432,32 @@ def test_agent_console_hud_persists_latest_business_progress_across_navigation()
     assert "window.__dxmAgentHudState = persisted || window.__dxmAgentHudState || {}" in script
     assert "window.__dxmAgentHudObserver" in script
     assert "new MutationObserver" in script
+    assert "window.__dxmAgentHudWatchdog" in script
+    assert "window.setInterval" in script
+    assert "root.dataset.dxmAgentHud = 'active'" in script
+    assert "root.dataset.dxmAgentHud !== 'active'" in script
+    assert "root.style.cssText = rootStyle" in script
+    assert "const hudNeedsRepair" in script
+    assert "window.getComputedStyle(root)" in script
+    assert "root.getBoundingClientRect()" in script
+    assert "style.display === 'none'" in script
+    assert "style.visibility === 'hidden'" in script
+    assert "Number(style.opacity || 0) < 0.1" in script
+    assert "zIndex < 2147483000" in script
+    assert "rect.width < 120" in script
+    assert "rect.height < 60" in script
+    assert "if (root) root.remove()" in script
     assert "page.evaluate(HUD_INIT_SCRIPT)" in source
+
+
+def test_agent_console_reinjects_hud_on_new_pages_and_navigation():
+    source = (Path(__file__).resolve().parents[1] / "src" / "services" / "agent_console.py").read_text(encoding="utf-8")
+
+    assert 'context.on("page"' in source
+    assert '"framenavigated"' in source
+    assert '"domcontentloaded"' in source
+    assert "_reapply_hud_to_page" in source
+    assert "_attach_page_runtime_listeners" in source
 
 
 def test_agent_console_records_recent_actions_on_hud(tmp_path, monkeypatch):
@@ -421,6 +570,133 @@ def test_agent_console_status_uses_cached_browser_state(tmp_path, monkeypatch):
     assert status["current_url"] == "https://www.dianxiaomi.com/web/home"
     assert status["page_title"] == "店小秘 Home"
     assert status["last_error"] is None
+
+
+def test_agent_console_status_marks_closed_browser_not_visible(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+    fake_page = _FakePage()
+    fake_page.closed = True
+
+    with service._lock:
+        service._page = fake_page
+        service._state["active"] = True
+        service._state["browser_visible"] = True
+        service._state["browser_launching"] = False
+        service._state["last_error"] = None
+
+    status = service.status()
+
+    assert status["active"] is True
+    assert status["browser_visible"] is False
+    assert status["browser_launching"] is False
+    assert "真实浏览器窗口已关闭" in status["last_error"]
+    assert status["hud"]["state"] == "BROWSER_CLOSED"
+    assert status["hud"]["requires_user_action"] is True
+    assert status["hud"]["human_next"] == "回到执行浏览器重新打开"
+
+
+def test_agent_console_browser_close_event_marks_closed_immediately(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+    fake_context = _FakeLifecycleTarget()
+    fake_page = _FakeLifecyclePage()
+
+    with service._lock:
+        service._context = fake_context
+        service._page = fake_page
+        service._state["active"] = True
+        service._state["browser_visible"] = True
+        service._state["browser_launching"] = False
+        service._state["last_error"] = None
+
+    service._attach_browser_lifecycle_listeners(fake_context, fake_page)
+    fake_page.emit("close")
+    status = service.status()
+
+    assert status["browser_visible"] is False
+    assert status["browser_launching"] is False
+    assert status["last_error"] == "真实浏览器窗口已关闭，请重新打开执行浏览器。"
+    assert status["hud"]["state"] == "BROWSER_CLOSED"
+    assert status["hud"]["human_title"] == "真实浏览器窗口已关闭"
+
+
+def test_agent_console_rebinds_current_page_when_dxm_opens_new_page(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False, step={"state": "OPEN_DRAFT_LIST"})
+    fake_context = _FakeLifecycleTarget()
+    old_page = _FakeLifecyclePage()
+    new_page = _FakeLifecyclePage()
+    new_page.url = "https://www.dianxiaomi.com/web/smt/smtProductList/draft?status=0"
+
+    with service._lock:
+        service._context = fake_context
+        service._page = old_page
+        service._state["active"] = True
+        service._state["browser_visible"] = True
+        service._state["browser_launching"] = False
+        service._state["last_error"] = None
+
+    service._attach_page_runtime_listeners(fake_context, old_page)
+    fake_context.emit("page", new_page)
+    status = service.status()
+
+    assert service._page is new_page
+    assert status["browser_visible"] is True
+    assert status["current_url"] == new_page.url
+    assert new_page.evaluate_calls
+    assert status["last_error"] is None
+
+
+def test_agent_console_does_not_mark_browser_closed_when_old_page_closes_after_rebind(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False, step={"state": "OPEN_DRAFT_LIST"})
+    fake_context = _FakeLifecycleTarget()
+    old_page = _FakeLifecyclePage()
+    new_page = _FakeLifecyclePage()
+
+    with service._lock:
+        service._context = fake_context
+        service._page = old_page
+        service._state["active"] = True
+        service._state["browser_visible"] = True
+        service._state["browser_launching"] = False
+        service._state["last_error"] = None
+
+    service._attach_page_runtime_listeners(fake_context, old_page)
+    fake_context.emit("page", new_page)
+    old_page.closed = True
+    old_page.emit("close")
+    status = service.status()
+
+    assert service._page is new_page
+    assert status["browser_visible"] is True
+    assert status["last_error"] is None
+    assert status["hud"]["state"] != "BROWSER_CLOSED"
+
+
+def test_agent_console_rejects_browser_control_after_window_closes(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_console_module, "PROFILE_ROOT", tmp_path / "profiles")
+    service = AgentConsoleService()
+    service.start(task_id=7, launch_browser=False)
+    fake_page = _FakePage()
+    fake_page.closed = True
+
+    with service._lock:
+        service._page = fake_page
+        service._state["active"] = True
+        service._state["browser_visible"] = True
+
+    result = service.control_browser({"action": "scroll", "delta_y": 360})
+
+    assert result["ok"] is False
+    assert result["reason"] == "browser_window_not_visible"
+    assert result["browser_visible"] is False
+    assert fake_page.mouse.wheels == []
 
 
 def test_agent_console_manual_takeover_brings_real_browser_to_front(tmp_path, monkeypatch):
@@ -788,6 +1064,10 @@ class _FakePage:
         self.locator_calls = []
         self.locators = {}
         self.screenshot_full_page = None
+        self.closed = False
+
+    def is_closed(self):
+        return self.closed
 
     def title(self):
         return "店小秘 Home"
@@ -807,6 +1087,15 @@ class _FakePage:
     def wait_for_timeout(self, milliseconds: int):
         assert milliseconds >= 0
 
+    def add_init_script(self, script):
+        assert script
+
+    def evaluate(self, script, payload=None):
+        if not hasattr(self, "evaluate_calls"):
+            self.evaluate_calls = []
+        self.evaluate_calls.append((script, payload))
+        return None
+
     def locator(self, selector: str):
         self.locator_calls.append(selector)
         locator = self.locators.get(selector)
@@ -814,6 +1103,24 @@ class _FakePage:
             locator = _FakeLocator()
             self.locators[selector] = locator
         return locator
+
+
+class _FakeLifecycleTarget:
+    def __init__(self):
+        self.handlers = {}
+
+    def on(self, event_name, callback):
+        self.handlers.setdefault(event_name, []).append(callback)
+
+    def emit(self, event_name, *args):
+        for callback in self.handlers.get(event_name, []):
+            callback(*args)
+
+
+class _FakeLifecyclePage(_FakePage, _FakeLifecycleTarget):
+    def __init__(self):
+        _FakePage.__init__(self)
+        _FakeLifecycleTarget.__init__(self)
 
 
 class _ThreadBoundFakePage:

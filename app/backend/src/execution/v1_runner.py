@@ -9,6 +9,7 @@ from typing import Any
 from src.core.config import SCREENSHOT_DIR
 from src.execution.dxm_live import DxmLiveClient
 from src.repository import Repository
+from src.services.browser_agent_status import build_browser_hud
 from src.services.config_defaults import DEFAULT_TEMPLATE_TYPES, ConfigDefaultsResolver
 from src.services.config_validation import ConfigValidationService
 from src.services.ownership_lock import OwnershipLockService
@@ -44,10 +45,19 @@ V1_STEPS = [
     (StateName.RELEASE_LOCK, "释放商品归属锁", "ownership"),
 ]
 
+CLAIM_ONLY_STEPS = [
+    (StateName.PRECHECK_CONFIG, "启动前配置校验", "config"),
+    (StateName.PRECHECK_SESSION, "检查店小秘登录态", "session"),
+    (StateName.PRECHECK_PUBLISH_GUARD, "发布隔离预检", "publish_guard"),
+    (StateName.OPEN_DATA_ACQUISITION, "打开数据采集", "navigation"),
+    (StateName.CLAIM_TO_DRAFT_BOX, "认领到采集箱", "acquisition"),
+    (StateName.VERIFY_DRAFT_BOX_CLAIM, "确认采集箱商品", "acquisition"),
+]
+
 MODE_LAST_STATE = {
     "probe": StateName.PRECHECK_PUBLISH_GUARD,
     "dry_run": StateName.PRECHECK_CONFIG,
-    "claim_only": StateName.VERIFY_LIST_OWNERSHIP,
+    "claim_only": StateName.VERIFY_DRAFT_BOX_CLAIM,
     "single_save": StateName.RELEASE_LOCK,
     "batch_save": StateName.RELEASE_LOCK,
 }
@@ -73,6 +83,9 @@ HUD_PROGRESS_INDEX = {
     StateName.PRECHECK_CONFIG: 1,
     StateName.PRECHECK_SESSION: 1,
     StateName.PRECHECK_PUBLISH_GUARD: 1,
+    StateName.OPEN_DATA_ACQUISITION: 2,
+    StateName.CLAIM_TO_DRAFT_BOX: 3,
+    StateName.VERIFY_DRAFT_BOX_CLAIM: 3,
     StateName.OPEN_DRAFT_LIST: 2,
     StateName.FIND_PRODUCT: 3,
     StateName.ITEM_LOCKING: 3,
@@ -100,6 +113,9 @@ HUD_STEP_COPY = {
     StateName.PRECHECK_CONFIG: ("开始任务", "开始任务", "正在检查任务、店铺登录和只保存边界"),
     StateName.PRECHECK_SESSION: ("开始任务", "开始任务", "正在确认店小秘已经登录"),
     StateName.PRECHECK_PUBLISH_GUARD: ("开始任务", "开始任务", "正在确认本次只保存，不发布"),
+    StateName.OPEN_DATA_ACQUISITION: ("打开数据采集", "打开数据采集", "正在打开店小秘数据采集页"),
+    StateName.CLAIM_TO_DRAFT_BOX: ("认领到采集箱", "认领到采集箱", "正在把真实商品认领到采集箱"),
+    StateName.VERIFY_DRAFT_BOX_CLAIM: ("确认采集箱", "确认采集箱", "正在确认商品已经进入采集箱"),
     StateName.OPEN_DRAFT_LIST: ("打开草稿箱", "打开草稿箱", "正在打开店小秘草稿箱"),
     StateName.FIND_PRODUCT: ("查找商品", "查找商品", "正在查找本次要保存的商品"),
     StateName.ITEM_LOCKING: ("查找商品", "查找商品", "正在锁定本次商品，避免误操作其他商品"),
@@ -131,12 +147,7 @@ HUD_VIRTUAL_STAGE_AFTER = {
     StateName.FILL_BASE_INFO: {
         "step_code": "SELECT_CATEGORY",
         "step_name": "选择分类",
-        "phase": "选择分类",
         "progress_index": 6,
-        "human_title": "选择分类",
-        "human_action": "正在确认商品分类已选择",
-        "human_next": "填写价格库存",
-        "next_step": "填写价格库存",
     },
 }
 
@@ -233,7 +244,11 @@ class V1TaskRunner:
         agent_console_events: list[dict[str, Any]] = []
         agent_action_events: list[dict[str, Any]] = []
         live_browser_hud_events: list[dict[str, Any]] = []
+        claimed_product: dict[str, Any] | None = None
         last_state = MODE_LAST_STATE[mode]
+        current_state_name = StateName.PRECHECK_CONFIG
+        current_step_name = "启动前配置校验"
+        current_field_domain = "precheck"
 
         self.repo.update_job(job_id, status="running", current_step_code="PRECHECK_CONFIG", current_step_name="启动前配置校验")
         self.repo.add_log(task_id, job_id, "info", "V1 执行开始", {"mode": mode, "product_id": product_id})
@@ -243,6 +258,9 @@ class V1TaskRunner:
                 raise V1ExecutionError("E901", "缺少真实工作流适配器", f"{mode} requires workflow_adapter")
 
             for state_name, step_name, field_domain in self._steps_for_mode(mode):
+                current_state_name = state_name
+                current_step_name = step_name
+                current_field_domain = field_domain
                 self._guard_step(task, job, state_name, claim_mark, product)
                 self.repo.update_job(job_id, status="running", current_step_code=state_name.value, current_step_name=step_name)
                 evidence_path = self._write_evidence(task_id, job_id, state_name)
@@ -306,6 +324,8 @@ class V1TaskRunner:
 
                 workflow_result = await self._run_workflow_action_async(task, job, state_name, claim_mark, execution_defaults)
                 if workflow_result:
+                    if mode == "claim_only" and state_name == StateName.VERIFY_DRAFT_BOX_CLAIM:
+                        claimed_product = self._record_claimed_product_from_acquisition(task, workflow_result, claim_mark)
                     agent_action_event = self._sync_agent_action(
                         task,
                         job,
@@ -432,9 +452,11 @@ class V1TaskRunner:
                 agent_console_events=agent_console_events,
                 agent_action_events=agent_action_events,
                 live_browser_hud_events=live_browser_hud_events,
+                claimed_product=claimed_product,
             )
-            save_result = self._save_result_for_mode(mode, workflow_results)
-            self.repo.add_report(task_id, job_id, product_id, "success", False, save_result, summary)
+            save_result = self._save_result_for_mode(mode, workflow_results, claimed_product=claimed_product)
+            report_product_id = int(claimed_product["id"]) if mode == "claim_only" and claimed_product and claimed_product.get("id") else product_id
+            self.repo.add_report(task_id, job_id, report_product_id, "success", False, save_result, summary)
             self.repo.update_job(
                 job_id,
                 status="succeeded",
@@ -449,6 +471,32 @@ class V1TaskRunner:
             if lock_token:
                 self.ownership_lock.release_lock(lock_token)
             error = exc if isinstance(exc, V1ExecutionError) else V1ExecutionError("E999", "V1 执行失败", str(exc))
+            failure_override = self._failure_hud_override(error)
+            failure_evidence_path = evidence_paths[-1] if evidence_paths else ""
+            agent_console_event = self._sync_agent_console(
+                task,
+                job,
+                mode,
+                current_state_name,
+                current_step_name,
+                current_field_domain,
+                failure_evidence_path,
+                hud_override=failure_override,
+            )
+            if agent_console_event:
+                agent_console_events.append(agent_console_event)
+            live_browser_hud_event = self._sync_live_browser_hud(
+                task,
+                job,
+                mode,
+                current_state_name,
+                current_step_name,
+                current_field_domain,
+                failure_evidence_path,
+                hud_override=failure_override,
+            )
+            if live_browser_hud_event:
+                live_browser_hud_events.append(live_browser_hud_event)
             self.repo.update_job(
                 job_id,
                 status="failed",
@@ -495,6 +543,8 @@ class V1TaskRunner:
     def _steps_for_mode(self, mode: str):
         if mode == "dry_run":
             return [V1_STEPS[0]]
+        if mode == "claim_only":
+            return CLAIM_ONLY_STEPS
         return V1_STEPS
 
     def _sync_agent_console(
@@ -591,6 +641,8 @@ class V1TaskRunner:
                 "title": hud.get("title") or payload.get("step_name") or step_name,
                 "state": hud.get("state") or payload.get("step_code") or state_name.value,
                 "action": hud.get("action"),
+                "line1": hud.get("line1") or payload.get("line1"),
+                "line2": hud.get("line2") or payload.get("line2"),
                 "next_step": hud.get("next_step"),
                 "store_name": hud.get("store_name"),
                 "guard": hud.get("guard"),
@@ -602,6 +654,7 @@ class V1TaskRunner:
                 "human_action": hud.get("human_action"),
                 "human_next": hud.get("human_next"),
                 "requires_user_action": hud.get("requires_user_action"),
+                "maintenance_detail": hud.get("maintenance_detail") or payload.get("maintenance_detail"),
             },
             "screenshot": result.get("screenshot"),
             "updated_at": result.get("updated_at"),
@@ -622,6 +675,23 @@ class V1TaskRunner:
         override = hud_override or {}
         resolved_step_code = str(override.get("step_code") or state_name.value)
         resolved_step_name = str(override.get("step_name") or step_name)
+        store_name = self._store_name(task)
+        hud = build_browser_hud({
+            "task_name": "数据采集认领" if mode == "claim_only" else "采集箱编辑保存",
+            "step": resolved_step_code,
+            "status": override.get("status") or "running",
+            "severity": override.get("severity"),
+            "requires_user_action": override.get("requires_user_action"),
+            "maintenance_detail": override.get("maintenance_detail"),
+            "store_name": store_name,
+            "guard": "只保存不发布",
+            "phase": override.get("phase"),
+            "progress_index": override.get("progress_index") or self._progress_index(mode, state_name),
+            "progress_total": self._progress_total(mode),
+            "human_title": override.get("human_title"),
+            "human_action": override.get("human_action"),
+            "human_next": override.get("human_next") or override.get("next_step"),
+        })
         return {
             "task_id": task["id"],
             "job_id": job["id"],
@@ -630,18 +700,36 @@ class V1TaskRunner:
             "step_name": resolved_step_name,
             "field_domain": field_domain,
             "mode": mode,
-            "store_name": self._store_name(task),
-            "next_step": override.get("next_step") or self._next_step_name(mode, state_name),
+            "store_name": store_name,
+            "title": hud["title"],
+            "line1": hud["line1"],
+            "line2": hud["line2"],
+            "next_step": hud["next_step"] or self._next_step_name(mode, state_name),
             "screenshot_path": screenshot_path,
-            "guard": "只保存不发布",
-            "phase": override.get("phase") or self._hud_phase(state_name),
-            "progress_index": override.get("progress_index") or self._progress_index(mode, state_name),
-            "progress_total": self._progress_total(mode),
-            "severity": "info",
-            "human_title": override.get("human_title") or self._human_title(state_name, step_name),
-            "human_action": override.get("human_action") or self._human_action(state_name, field_domain, mode),
-            "human_next": override.get("human_next") or self._human_next(mode, state_name),
-            "requires_user_action": False,
+            "guard": hud["guard"],
+            "phase": hud["phase"],
+            "progress_index": hud["progress_index"],
+            "progress_total": hud["progress_total"],
+            "severity": hud["severity"],
+            "human_title": hud["human_title"],
+            "human_action": hud["human_action"],
+            "human_next": hud["human_next"],
+            "requires_user_action": hud["requires_user_action"],
+            "maintenance_detail": hud.get("maintenance_detail"),
+        }
+
+    def _failure_hud_override(self, error: V1ExecutionError) -> dict[str, Any]:
+        return {
+            "step_code": "TASK_FAILED",
+            "step_name": "当前步骤失败",
+            "status": "failed",
+            "severity": "error",
+            "phase": "需要人工处理",
+            "human_title": "当前步骤失败",
+            "human_action": "请按页面提示处理后重试，真实保存不会继续",
+            "human_next": "查看结果与问题，确认原因后重试",
+            "requires_user_action": True,
+            "maintenance_detail": f"{error.error_code}: {error.detail}",
         }
 
     def _agent_console_summary(self, result: Mapping[str, Any]) -> dict[str, Any]:
@@ -662,6 +750,8 @@ class V1TaskRunner:
                 "title": hud.get("title"),
                 "state": hud.get("state"),
                 "action": hud.get("action"),
+                "line1": hud.get("line1"),
+                "line2": hud.get("line2"),
                 "next_step": hud.get("next_step"),
                 "store_name": hud.get("store_name"),
                 "guard": hud.get("guard"),
@@ -674,6 +764,7 @@ class V1TaskRunner:
                 "human_next": hud.get("human_next"),
                 "recent_actions": hud.get("recent_actions"),
                 "requires_user_action": hud.get("requires_user_action"),
+                "maintenance_detail": hud.get("maintenance_detail"),
             },
             "screenshot": result.get("screenshot"),
             "updated_at": result.get("updated_at"),
@@ -750,7 +841,7 @@ class V1TaskRunner:
             return "save"
         if action_name == "fill_media_assets":
             return "upload"
-        if action_name.startswith("fill_") or action_name == "claim_product":
+        if action_name.startswith("fill_") or action_name in {"claim_product", "claim_from_data_acquisition"}:
             return "fill"
         if action_name in {"enable_semi_managed"}:
             return "select"
@@ -765,6 +856,8 @@ class V1TaskRunner:
             return "保存"
         if action_name == "claim_product":
             return "领取备注"
+        if action_name == "claim_from_data_acquisition":
+            return "认领到采集箱"
         if action_name.startswith("fill_"):
             return str(workflow_result.get("product_query") or "编辑页字段")
         if action_name.startswith("open_"):
@@ -832,7 +925,7 @@ class V1TaskRunner:
                 raise V1ExecutionError(validation["error_code"] or "E302", "启动前配置校验失败", detail)
             if mode in {"single_save", "batch_save"} and task.get("publish_scene") != "SMT_SEMI_MANAGED_SAVE_ONLY":
                 raise V1ExecutionError("E999", "任务发布场景不安全", "V1 只允许 SMT_SEMI_MANAGED_SAVE_ONLY")
-        if state_name == StateName.CLAIM_PRODUCT and not claim_mark:
+        if state_name in {StateName.CLAIM_PRODUCT, StateName.CLAIM_TO_DRAFT_BOX, StateName.VERIFY_DRAFT_BOX_CLAIM} and not claim_mark:
             raise V1ExecutionError("E202", "领取标记为空", "任务缺少 claim_mark")
         if state_name == StateName.SAVE_ONLY:
             result = self.publish_guard.check(intended_action="save", target_text="保存")
@@ -851,10 +944,35 @@ class V1TaskRunner:
             return None
 
         product_query = self._source_title(job.get("product_id"))
+        acquisition_query = self._acquisition_product_query(task, job)
+        acquisition_category = self._acquisition_category_name(task)
         target_source_urls = self._source_urls(job.get("product_id"))
         store_name = self._store_name(task)
         actions = {
             StateName.PRECHECK_SESSION: ("check_login_state", "E101", "店小秘登录态检查失败", lambda: self.workflow_adapter.check_login_state()),
+            StateName.OPEN_DATA_ACQUISITION: ("open_data_acquisition", "E201", "进入数据采集失败", lambda: self.workflow_adapter.open_data_acquisition()),
+            StateName.CLAIM_TO_DRAFT_BOX: (
+                "claim_from_data_acquisition",
+                "E202",
+                "认领到采集箱失败",
+                lambda: self.workflow_adapter.claim_from_data_acquisition(
+                    claim_mark,
+                    product_query=acquisition_query,
+                    category_name=acquisition_category,
+                    store_name=store_name,
+                ),
+            ),
+            StateName.VERIFY_DRAFT_BOX_CLAIM: (
+                "verify_draft_box_claim",
+                "E202",
+                "采集箱确认失败",
+                lambda: self.workflow_adapter.verify_draft_box_claim(
+                    claim_mark,
+                    product_query=acquisition_query,
+                    category_name=acquisition_category,
+                    store_name=store_name,
+                ),
+            ),
             StateName.OPEN_DRAFT_LIST: ("open_draft_box", "E201", "进入采集箱失败", lambda: self.workflow_adapter.open_draft_box()),
             StateName.CLAIM_PRODUCT: (
                 "claim_product",
@@ -1120,14 +1238,19 @@ class V1TaskRunner:
         agent_console_events: list[dict[str, Any]] | None = None,
         agent_action_events: list[dict[str, Any]] | None = None,
         live_browser_hud_events: list[dict[str, Any]] | None = None,
+        claimed_product: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         console_events = agent_console_events or []
         action_events = agent_action_events or []
         live_hud_events = live_browser_hud_events or []
+        summary_product_id = claimed_product.get("id") if claimed_product else job.get("product_id")
+        next_action = None
+        if mode == "claim_only" and claimed_product:
+            next_action = "进入“采集箱编辑保存”，选择该商品创建单商品只保存任务。"
         return {
             "task_id": task["id"],
             "job_id": job["id"],
-            "product_id": job.get("product_id"),
+            "product_id": summary_product_id,
             "store_name": self._store_name(task),
             "source_title": self._source_title(job.get("product_id")),
             "category": self._summary_category(task, job, execution_defaults),
@@ -1149,6 +1272,8 @@ class V1TaskRunner:
             "agent_action_events": action_events,
             "live_browser_hud_events": live_hud_events,
             "live_browser_hud": live_hud_events[-1] if live_hud_events else None,
+            "claimed_product": dict(claimed_product) if claimed_product else None,
+            "next_action": next_action,
             "published": False,
         }
 
@@ -1190,8 +1315,29 @@ class V1TaskRunner:
             if not str(key).startswith("_")
         }
 
-    def _save_result_for_mode(self, mode: str, workflow_results: list[dict[str, Any]]) -> dict[str, Any]:
-        if mode in {"probe", "dry_run", "claim_only"}:
+    def _save_result_for_mode(
+        self,
+        mode: str,
+        workflow_results: list[dict[str, Any]],
+        *,
+        claimed_product: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if mode == "claim_only":
+            result = {
+                "ok": True,
+                "mode": mode,
+                "message": "采集认领已完成，商品已进入采集箱",
+                "published": False,
+                "next_action": "进入“采集箱编辑保存”，选择该商品创建单商品只保存任务。",
+            }
+            if claimed_product:
+                result.update({
+                    "claimed_product_id": claimed_product.get("id"),
+                    "claimed_product_title": claimed_product.get("title"),
+                    "claimed_product_status": claimed_product.get("status"),
+                })
+            return result
+        if mode in {"probe", "dry_run"}:
             return {"ok": True, "mode": mode, "message": "当前模式未执行保存动作", "published": False}
         save_result = next((self._extract_save_result(result) for result in reversed(workflow_results) if result.get("action") == "save_only"), None)
         if not save_result:
@@ -1309,6 +1455,62 @@ class V1TaskRunner:
 
     def _normalize_template_type(self, value: Any) -> str:
         return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+    def _acquisition_product_query(self, task: Mapping[str, Any], job: Mapping[str, Any]) -> str:
+        payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+        for value in (payload.get("keyword"), payload.get("source_title"), payload.get("title")):
+            if str(value or "").strip():
+                return str(value).strip()
+        return self._source_title(job.get("product_id"))
+
+    def _acquisition_category_name(self, task: Mapping[str, Any]) -> str | None:
+        payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+        value = payload.get("category_name") or payload.get("category")
+        return str(value).strip() if str(value or "").strip() else None
+
+    def _record_claimed_product_from_acquisition(
+        self,
+        task: Mapping[str, Any],
+        workflow_result: Mapping[str, Any],
+        claim_mark: str,
+    ) -> dict[str, Any]:
+        evidence = workflow_result.get("evidence") if isinstance(workflow_result.get("evidence"), Mapping) else {}
+        claimed = evidence.get("claimed_product") if isinstance(evidence.get("claimed_product"), Mapping) else {}
+        payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+        title = (
+            claimed.get("title")
+            or workflow_result.get("product_query")
+            or payload.get("keyword")
+            or payload.get("category_name")
+            or "店小秘采集认领商品"
+        )
+        category_name = claimed.get("category_name") or payload.get("category_name") or "未分类"
+        source_url = claimed.get("source_url") or evidence.get("source_url") or payload.get("source_url")
+        product_payload = {
+            "source": "dxm_data_acquisition",
+            "store_id": task.get("store_id") or payload.get("store_id"),
+            "store_name": self._store_name(dict(task)),
+            "source_url": source_url,
+            "source_title": title,
+            "claim_mark": claim_mark,
+            "claim_task_id": task.get("id"),
+            "draft_box_verified": True,
+            "draft_box_url": workflow_result.get("page_url"),
+            "template_id": payload.get("template_id"),
+        }
+        product = self.repo.create_product({
+            "title": str(title),
+            "source": "dxm_data_acquisition",
+            "status": "claimed_to_draft",
+            "category_name": str(category_name),
+            "price": 0,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 0,
+            "payload": {key: value for key, value in product_payload.items() if value is not None},
+        })
+        self.repo.mark_acquisition_claim_completed(int(task["id"]), product)
+        return product
 
     def _source_title(self, product_id: int | None) -> str:
         if product_id is None:

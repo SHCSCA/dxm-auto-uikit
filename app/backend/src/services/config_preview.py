@@ -67,7 +67,7 @@ FIELD_GROUPS = [
             {"path": "image.eu_outer_package_filename", "field": "eu_outer_package_filename", "label": "EU 外包装图", "required": True},
             {"path": "image.marketing_images_strategy", "field": "marketing_images_strategy", "label": "营销图策略", "required": True},
             {"path": "image.main_image_strategy", "field": "main_image_strategy", "label": "主图策略", "required": False},
-            {"path": "image.fallback_strategy", "field": "fallback_strategy", "label": "图片不足 fallback", "required": False},
+            {"path": "image.fallback_strategy", "field": "fallback_strategy", "label": "图片不足时处理方式", "required": False},
             {"path": "image.invalid_image_strategy", "field": "invalid_image_strategy", "label": "无效图片处理", "required": False},
             {"path": "image.local_asset_path", "field": "local_asset_path", "label": "本地素材路径", "required": False},
         ],
@@ -134,6 +134,8 @@ DXM_REFERENCE_LABELS = {
     "semi_managed": "半托管模板",
 }
 
+CUSTOMER_TEMPLATE_PRIORITY = ["本次任务覆盖", "手动选择模板", "类目默认模板", "店铺默认模板", "系统默认模板"]
+
 
 class ConfigPreviewService:
     def __init__(self):
@@ -144,6 +146,7 @@ class ConfigPreviewService:
         templates = repo.list_templates()
         task = self._task(repo, task_id)
         if not task:
+            field_groups = self._field_groups({}, {}, ["task"], templates)
             return {
                 "ok": False,
                 "mode": None,
@@ -151,7 +154,9 @@ class ConfigPreviewService:
                 "productId": None,
                 "missing": ["task"],
                 "warnings": ["未选择任务，无法预览真实执行取值"],
-                "fieldGroups": self._field_groups({}, {}, ["task"], templates),
+                "fieldGroups": field_groups,
+                "templatePriority": CUSTOMER_TEMPLATE_PRIORITY,
+                "executionSections": self._execution_sections(field_groups),
                 "templateTrace": [],
                 "resolvedDefaults": {},
             }
@@ -161,6 +166,7 @@ class ConfigPreviewService:
         validation = self.validation.validate_task(task, applicable_templates, product=product)
         defaults, source_tree, template_trace = self._effective_defaults(templates, task, product)
         missing = list(validation.get("missing") or [])
+        field_groups = self._field_groups(defaults, source_tree, missing, applicable_templates)
         return {
             "ok": bool(validation.get("ok")),
             "mode": validation.get("mode"),
@@ -168,7 +174,9 @@ class ConfigPreviewService:
             "productId": product.get("id") if isinstance(product, Mapping) else None,
             "missing": missing,
             "warnings": list(validation.get("warnings") or []),
-            "fieldGroups": self._field_groups(defaults, source_tree, missing, applicable_templates),
+            "fieldGroups": field_groups,
+            "templatePriority": CUSTOMER_TEMPLATE_PRIORITY,
+            "executionSections": self._execution_sections(field_groups),
             "templateTrace": template_trace,
             "resolvedDefaults": defaults,
         }
@@ -241,6 +249,42 @@ class ConfigPreviewService:
                 "fields": fields,
             })
         return groups
+
+    def _execution_sections(self, field_groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        sections: list[dict[str, Any]] = []
+        for group in field_groups:
+            sections.append({
+                "section": group["section"],
+                "label": group["label"],
+                "complete": group["complete"],
+                "required": group["required"],
+                "missing": group["missing"],
+                "fields": [
+                    {
+                        "label": field["label"],
+                        "value": field["value"],
+                        "source": self._customer_source_label(field.get("source")),
+                        "required": field["required"],
+                        "missing": field["missing"],
+                    }
+                    for field in group["fields"]
+                ],
+            })
+        return sections
+
+    def _customer_source_label(self, source: Any) -> str:
+        text = str(source or "").strip()
+        if not text or text == "未设置":
+            return "未填写"
+        if text == "任务覆盖" or text.startswith("任务："):
+            return "来自本次任务"
+        if text.startswith("模板："):
+            return f"来自{text}"
+        if text.startswith("商品："):
+            return "来自商品原始数据"
+        if text.startswith("系统"):
+            return "来自系统默认"
+        return f"来自{text}"
 
     def _missing_for_group(self, section: str, missing: set[str]) -> set[str]:
         aliases = {

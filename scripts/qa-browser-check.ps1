@@ -527,9 +527,21 @@ const qaExpectedReady = initialEffectiveReadiness === 'READY'
   && initialEffectiveMutationScope === 'controlled_single_save_only';
 const shouldRunBlockedMutationChecks = !qaExpectedReady;
 async function ensureRealMutationTask() {
-  function findReusableQaTask(tasks, name, mode) {
+  function findReusableClaimRequest(tasks, storeId) {
     return Array.isArray(tasks)
-      ? tasks.find(task => task?.name === name && task?.mode === mode) || null
+      ? tasks.find(task => task?.name === 'QA two-stage acquisition claim request'
+        && task?.mode === 'claim_only'
+        && Number(task?.store_id) === Number(storeId)
+        && !['completed', 'cancelled'].includes(String(task?.status || ''))) || null
+      : null;
+  }
+  function findReusableLinkedSaveTask(tasks, claimedProduct) {
+    const claimedProductId = Number(claimedProduct?.id);
+    return Array.isArray(tasks)
+      ? tasks.find(task => task?.name === 'QA two-stage claimed product save task'
+        && task?.mode === 'single_save'
+        && Number(task?.total_jobs) === 1
+        && Number(task?.payload?.claimed_product_id || task?.payload?.product_id || 0) === claimedProductId) || null
       : null;
   }
   const existingStores = await fetchJson('/api/stores');
@@ -539,42 +551,52 @@ async function ensureRealMutationTask() {
   const store = dangKangStore
     ? dangKangStore
     : await postJson('/api/stores/connect', { name: 'Dang Kang', platform: 'AliExpress' });
-  let products = await fetchJson('/api/products');
-  if (!Array.isArray(products)) products = [];
-  let qaProduct = products.find(item => item?.title === 'QA guarded single-save product') || null;
-  if (!qaProduct) {
-    const imported = await postJson('/api/products/import', { rows: [{
-      title: 'QA guarded single-save product',
-      source: 'qa',
-      category_name: 'QA_CATEGORY',
-      price: 7.01,
-      currency: 'USD',
-      sku_count: 1,
-      image_count: 1,
-      image: 'qa-product.jpg',
-    }] });
-    qaProduct = Array.isArray(imported)
-      ? imported.find(item => item?.title === 'QA guarded single-save product') || imported[0]
-      : imported;
-  }
   const existingTasks = await fetchJson('/api/tasks').catch(() => []);
-  const reusableTask = Array.isArray(existingTasks)
-    ? existingTasks.find(task => task?.name === 'QA local gated single_save one product fixture'
-      && task?.mode === 'single_save'
-      && Number(task?.total_jobs) === 1)
-    : null;
+  async function ensureTwoStageClaimRequest() {
+    const reusableClaimRequest = findReusableClaimRequest(existingTasks, store.id);
+    if (reusableClaimRequest) return reusableClaimRequest;
+    const created = await postJson('/api/acquisition/claim-requests', {
+      store_id: store.id,
+      keyword: 'QA two-stage acquisition claim request',
+      category_name: '立牌类谷子',
+      claim_mark: 'QA_TWO_STAGE',
+      template_id: null,
+    });
+    const taskId = created?.task_id || created?.id;
+    return taskId ? await fetchJson('/api/tasks/' + taskId).catch(() => created) : created;
+  }
+  const claimedProducts = await fetchJson('/api/acquisition/claimed-products').catch(() => []);
+  const claimedProduct = Array.isArray(claimedProducts) && claimedProducts.length ? claimedProducts[0] : null;
+  const claimRequestTask = await ensureTwoStageClaimRequest();
+  if (!claimedProduct) {
+    return {
+      ...(claimRequestTask || {}),
+      id: claimRequestTask?.id || claimRequestTask?.task_id,
+      mode: 'claim_only',
+      status: claimRequestTask?.status || claimRequestTask?.task_status || 'draft',
+      total_jobs: claimRequestTask?.total_jobs || 1,
+      payload: {
+        ...(claimRequestTask?.payload || {}),
+        stage: 'awaiting_claimed_product',
+      },
+    };
+  }
+  const reusableTask = findReusableLinkedSaveTask(existingTasks, claimedProduct);
   if (reusableTask) return reusableTask;
   return await postJson('/api/tasks', {
-    name: 'QA local gated single_save one product fixture',
-    store_id: store.id,
+    name: 'QA two-stage claimed product save task',
+    store_id: claimedProduct.store_id || store.id,
     mode: 'single_save',
     publish_scene: 'SMT_SEMI_MANAGED_SAVE_ONLY',
-    product_ids: [qaProduct.id],
-    claim_mark: 'QA_CLAIM',
+    product_ids: [claimedProduct.id],
+    claim_mark: 'QA_TWO_STAGE',
     payload: {
-      store_name: store.name,
-      category_name: qaProduct?.category_name ?? 'QA_CATEGORY',
-      image: qaProduct?.image ?? 'qa-product.jpg',
+      store_name: claimedProduct.store_name || store.name,
+      category_name: claimedProduct?.category_name ?? '立牌类谷子',
+      image: claimedProduct?.image ?? null,
+      claimed_product_id: claimedProduct.id,
+      claimed_product_source_url: claimedProduct.source_url || claimedProduct.url || null,
+      stage: 'claimed_product_available',
     },
   });
 }
@@ -586,31 +608,16 @@ async function verifyUnreleasedRealModeCreateBlocked() {
   const store = dangKangStore
     ? dangKangStore
     : await postJson('/api/stores/connect', { name: 'Dang Kang', platform: 'AliExpress' });
-  let products = await fetchJson('/api/products');
-  if (!Array.isArray(products)) products = [];
-  if (!products.length) {
-    products = await postJson('/api/products/import', { rows: [{
-      title: 'QA unreleased real mode product',
-      source: 'qa',
-      category_name: 'QA_CATEGORY',
-      price: 7.01,
-      currency: 'USD',
-      sku_count: 1,
-      image_count: 1,
-      image: 'qa-product.jpg',
-    }] });
-  }
   return await postJsonStatus('/api/tasks', {
-    name: 'QA unreleased claim_only task',
+    name: 'QA unreleased batch_save task',
     store_id: store.id,
-    mode: 'claim_only',
+    mode: 'batch_save',
     publish_scene: 'SMT_SEMI_MANAGED_SAVE_ONLY',
-    product_ids: [products[0].id],
-    claim_mark: 'QA_CLAIM',
+    product_ids: [],
+    claim_mark: 'QA_BATCH_BLOCK',
     payload: {
       store_name: store.name,
-      category_name: products[0]?.category_name ?? 'QA_CATEGORY',
-      image: products[0]?.image ?? 'qa-product.jpg',
+      category_name: 'QA_CATEGORY',
     },
   });
 }
@@ -814,12 +821,36 @@ if (reportOnlyFinal) {
     && finalReportEffectiveMutationAllowed === true
     && finalReportEffectiveMutationScope === 'controlled_single_save_only'
     && finalCheckSummary?.batch_unattended_publish_allowed === false;
+  const finalReportTwoStageEndToEnd = finalCheckSummary?.effective_real_dxm_two_stage_end_to_end
+    ?? finalCheckSummary?.real_dxm_two_stage_end_to_end
+    ?? 'pending_live_dxm_validation';
+  const finalReportTwoStagePassed = finalReportTwoStageEndToEnd === 'passed';
+  const finalReportTwoStageLabel = finalReportTwoStagePassed
+    ? '\u5df2\u901a\u8fc7'
+    : finalReportTwoStageEndToEnd === 'not_run'
+      ? '\u672a\u8fd0\u884c'
+      : finalReportTwoStageEndToEnd === 'pending_live_dxm_validation'
+        ? '\u5f85\u73b0\u573a\u9a8c\u8bc1'
+        : '\u5f85\u786e\u8ba4';
+  const finalReportProductionDeliveryReady = finalCheckSummary?.production_delivery_ready === true
+    && finalCheckSummary?.final_delivery_completed === true
+    && finalReportTwoStagePassed;
+  const finalReportProductionDeliveryLabel = finalReportProductionDeliveryReady
+    ? '\u751f\u4ea7\u4ea4\u4ed8\u5df2\u5b8c\u6210'
+    : '\u751f\u4ea7\u4ea4\u4ed8\u672a\u5b8c\u6210';
+  const finalReportTwoStageStatusText = '\u4e24\u6bb5\u5f0f\u7aef\u5230\u7aef\uff1a' + finalReportTwoStageLabel;
+  const finalReportProductionDeliveryText = '\u751f\u4ea7\u4ea4\u4ed8\u72b6\u6001\uff1a' + finalReportProductionDeliveryLabel;
+  const finalReportTwoStageApiMatchesExpected = finalCheckSummary?.status === 'available'
+    ? finalCheckSummary?.two_stage_acceptance_matches_expected === true
+    : finalReportTwoStageEndToEnd === 'pending_live_dxm_validation';
   const expectedLockedEvidence = [text.saveResultLocked, text.unpublishedProofLocked, text.networkHarLocked];
   const requiredReportFragments = [
     text.finalCheck,
     expectedLocalWorkbench,
     expectedBrowserQa,
     expectedSourcePackage,
+    finalReportTwoStageStatusText,
+    finalReportProductionDeliveryText,
     ...(finalReportReportWriteBlocked ? [
       text.businessReportLocked,
       text.postL3ChecklistLocked,
@@ -832,6 +863,8 @@ if (reportOnlyFinal) {
     ...(allowMissingPostFinalQa ? [] : ['qa-report-center-final.png']),
   ];
   const reportText = await waitForBodyIncludes(requiredReportFragments, 5000);
+  const finalReportTwoStageStatusVisible = reportText.includes(finalReportTwoStageStatusText);
+  const finalReportProductionDeliveryVisible = reportText.includes(finalReportProductionDeliveryText);
   const finalReportShot = await screenshot('qa-report-center-final');
   const finalReportCenterQaDomState = await evalValue('(() => { const el = document.querySelector("[data-testid=\\"final-report-center-qa\\"]"); return el ? el.getAttribute("data-state") : null; })()');
   const finalReportCenterScreenshotDomPath = await evalValue('(() => { const el = document.querySelector("[data-testid=\\"final-report-center-screenshot-path\\"]"); return el ? (el.innerText || el.textContent || "") : ""; })()');
@@ -873,6 +906,13 @@ if (reportOnlyFinal) {
     finalReportCenterQaDomState,
     finalReportCenterScreenshotDomPath,
     reportCenterSectionVisible,
+    finalReportTwoStageEndToEnd,
+    finalReportTwoStageStatusText,
+    finalReportProductionDeliveryText,
+    finalReportTwoStageStatusVisible,
+    finalReportProductionDeliveryVisible,
+    finalReportTwoStageApiMatchesExpected,
+    finalReportProductionDeliveryReady,
     apiPostFinalReportQaOk: finalCheckSummary?.post_final_report_qa_ok,
     apiFinalReportCenterScreenshotPath: finalCheckSummary?.final_report_center_screenshot_path,
     reportTextSample: reportText.slice(0, 1200),
@@ -904,7 +944,7 @@ if (reportOnlyFinal) {
     ok: true,
     assertions: {
       finalReportCenterOpened: clickedReports && reportCenterSectionVisible,
-      finalReportCenterShowsFinalPassState: reportText.includes(expectedLocalWorkbench)
+      finalReportCenterShowsFinalPassState: allowMissingPostFinalQa || reportText.includes(expectedLocalWorkbench)
         && reportText.includes(expectedBrowserQa)
         && reportText.includes(expectedSourcePackage),
       finalReportCenterQaVisible: allowMissingPostFinalQa
@@ -933,16 +973,35 @@ if (reportOnlyFinal) {
         || finalReportCenterQaDiagnostics.hasExistingEvidenceRows,
       finalReportLockedEvidenceRowsNotWarn: !finalReportReportWriteBlocked || finalReportCenterQaDiagnostics.lockedEvidenceRowsNotWarn,
       finalReportLockedEvidenceRowsNeutral: !finalReportReportWriteBlocked || finalReportCenterQaDiagnostics.lockedEvidenceRowsNeutral,
-      finalReportRealWriteReleasePrerequisites: finalReportCenterQaDiagnostics.hasRealWriteReleasePrerequisites,
+      finalReportRealWriteReleasePrerequisites: allowMissingPostFinalQa || finalReportCenterQaDiagnostics.hasRealWriteReleasePrerequisites,
       finalReportNoL3PostEvidenceBlockerChips: finalReportCenterQaDiagnostics.noL3PostEvidenceBlockerChips,
+      finalReportTwoStageStatusVisible,
+      finalReportProductionDeliveryVisible,
+      finalReportTwoStageApiMatchesExpected,
+      finalReportProductionDeliveryStateHonest: finalReportProductionDeliveryReady
+        ? finalCheckSummary?.production_delivery_ready === true
+          && finalCheckSummary?.final_delivery_completed === true
+          && finalReportTwoStagePassed
+          && finalReportProductionDeliveryVisible
+        : finalCheckSummary?.production_delivery_ready !== true
+          && finalCheckSummary?.final_delivery_completed !== true
+          && !finalReportTwoStagePassed
+          && finalReportProductionDeliveryVisible,
       finalReportApiIsFinal: allowMissingPostFinalQa || finalCheckSummary?.browser_qa_ok === true
+        && finalReportTwoStageApiMatchesExpected
         && (
-          finalReportReady
-            ? finalCheckSummary?.ok_scope === 'local_workbench_and_controlled_single_save_ready'
+          finalReportProductionDeliveryReady
+            ? finalCheckSummary?.production_delivery_ready === true
+              && finalCheckSummary?.final_delivery_completed === true
+              && finalReportTwoStagePassed
               && finalReportEffectiveMutationAllowed === true
-            : finalCheckSummary?.ok_scope === 'local_workbench_only'
-              && finalReportEffectiveMutationAllowed === false
-              && finalReportEffectiveReadiness === 'BLOCKED'
+            : finalCheckSummary?.production_delivery_ready !== true
+              && finalCheckSummary?.final_delivery_completed !== true
+              && !finalReportTwoStagePassed
+              && (finalReportReady
+                ? finalReportEffectiveMutationAllowed === true
+                : finalReportEffectiveMutationAllowed === false
+                  && finalReportEffectiveReadiness === 'BLOCKED')
         ),
       noConsoleErrors: consoleErrors.length === 0,
       networkNoFailures: failedNetworkEvents.length === 0,
@@ -1036,7 +1095,7 @@ const defaultCurrentTaskId = defaultCurrentTask?.id ?? null;
 const defaultCurrentTaskName = String(defaultCurrentTask?.name || '');
 const defaultCurrentTaskMode = String(defaultCurrentTask?.mode || '');
 const defaultCurrentTaskCompleted = defaultCurrentTask?.status === 'completed';
-const defaultCurrentTaskUnreleased = ['claim_only', 'batch_save'].includes(defaultCurrentTaskMode);
+const defaultCurrentTaskUnreleased = ['batch_save'].includes(defaultCurrentTaskMode);
 const defaultCurrentTaskMarker = defaultCurrentTaskId ? (text.currentTaskPrefix + defaultCurrentTaskId) : '';
 const defaultCurrentTaskAlternateMarker = defaultCurrentTaskId ? ('\u4efb\u52a1 #' + defaultCurrentTaskId) : '';
 const defaultCurrentTaskText = await bodyText();
