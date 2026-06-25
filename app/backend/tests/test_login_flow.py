@@ -2039,6 +2039,164 @@ def test_find_data_acquisition_claim_target_prefers_source_url_when_query_text_m
     assert row['matchedBy'] == 'source_url'
 
 
+def test_search_data_acquisition_prefers_target_source_url_input(tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    source_url = 'https://detail.1688.com/offer/1013604102950.html'
+    html = '''
+    <html>
+      <head>
+        <style>
+          input, button { display: inline-block; width: 220px; height: 28px; }
+        </style>
+      </head>
+      <body>
+        <section>数据采集 <button>搜索</button></section>
+        <input id="title" placeholder="搜索标题或关键词" />
+        <input id="source" placeholder="来源链接 / URL" />
+        <table><tr><td>认领</td><td>采集箱</td></tr></table>
+      </body>
+    </html>
+    '''
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={'width': 1280, 'height': 800})
+        page.set_content(html)
+
+        result = flow._search_data_acquisition(
+            page,
+            product_query='错误标题不应用于 URL 模式',
+            target_source_urls=[source_url],
+        )
+
+        title_value = page.locator('#title').input_value()
+        source_value = page.locator('#source').input_value()
+        browser.close()
+
+    assert result['query_source'] == 'target_source_url'
+    assert result['query'] == source_url
+    assert source_value == source_url
+    assert title_value == ''
+
+
+def test_data_acquisition_claim_state_keeps_search_and_target_evidence(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    claim_target = {
+        'matchedBy': 'source_url',
+        'rowText': '真实采集商品行 来源 1013604102950 认领',
+        'sourceUrls': ['https://detail.1688.com/offer/1013604102950.html'],
+    }
+    search_result = {
+        'query': 'https://detail.1688.com/offer/1013604102950.html',
+        'query_source': 'target_source_url',
+        'filled': True,
+        'clicked_search': True,
+    }
+
+    monkeypatch.setattr(flow, '_perform_data_acquisition_claim', lambda **kwargs: {
+        'page_title': '数据采集',
+        'page_url': 'https://www.dianxiaomi.com/web/smt/collect/index.htm',
+        'screenshot_url': '/artifacts/screenshots/claim.png',
+        'message': '已在数据采集页提交认领到采集箱。',
+        'target_source_urls': ['https://detail.1688.com/offer/1013604102950.html'],
+        'search_result': search_result,
+        'claim_target': claim_target,
+        'claimed_product': {
+            'title': '真实采集商品',
+            'category_name': '立牌类谷子',
+            'source_url': 'https://detail.1688.com/offer/1013604102950.html',
+        },
+    })
+
+    state = flow.claim_from_data_acquisition(
+        'AI-OPS-1',
+        target_source_urls=['https://detail.1688.com/offer/1013604102950.html'],
+    )
+
+    assert state['stage'] == 'data_acquisition_claim'
+    assert state['search_result']['query_source'] == 'target_source_url'
+    assert state['claim_target']['matchedBy'] == 'source_url'
+    assert '真实采集商品行' in state['claim_target']['rowText']
+
+
+def test_draft_box_claim_verification_carries_data_acquisition_target(monkeypatch, tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    flow._write_state({
+        'stage': 'data_acquisition_claim',
+        'claimed_product': {
+            'title': '真实采集商品',
+            'category_name': '立牌类谷子',
+            'source_url': 'https://detail.1688.com/offer/1013604102950.html',
+        },
+        'claim_target': {
+            'matchedBy': 'source_url',
+            'rowText': '真实采集商品行 来源 1013604102950 认领',
+            'sourceUrls': ['https://detail.1688.com/offer/1013604102950.html'],
+        },
+    })
+    monkeypatch.setattr(flow, '_verify_draft_box_claim', lambda **kwargs: {
+        'page_title': '速卖通采集箱',
+        'page_url': 'https://www.dianxiaomi.com/web/smt/smtProductList/draft',
+        'screenshot_url': '/artifacts/screenshots/verify.png',
+        'target_source_urls': ['https://detail.1688.com/offer/1013604102950.html'],
+        'claimed_product': {
+            'title': '真实采集商品',
+            'category_name': '立牌类谷子',
+            'source_url': 'https://detail.1688.com/offer/1013604102950.html',
+            'row_text': '采集箱商品行 真实采集商品 AI-OPS-1',
+        },
+    })
+
+    state = flow.verify_draft_box_claim('AI-OPS-1')
+
+    assert state['stage'] == 'draft_box_claim_verified'
+    assert state['claim_target']['matchedBy'] == 'source_url'
+    assert '真实采集商品行' in state['claim_target']['rowText']
+    assert '采集箱商品行' in state['claimed_product']['row_text']
+
+
+def test_find_data_acquisition_claim_target_rejects_title_match_when_target_source_url_misses(tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    html = '''
+    <html>
+      <head>
+        <style>
+          button, a { display: inline-block; width: 96px; height: 24px; }
+        </style>
+      </head>
+      <body>
+        <table>
+          <tbody>
+            <tr class="vxe-body--row">
+              <td>Visible Matched Title</td>
+              <td><a href="https://detail.1688.com/offer/111.html">来源</a></td>
+              <td><button>认领</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </body>
+    </html>
+    '''
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={'width': 1280, 'height': 800})
+        page.set_content(html)
+        row = flow._find_data_acquisition_claim_target(
+            page,
+            product_query='Visible Matched Title',
+            target_source_urls=['https://detail.1688.com/offer/999.html'],
+        )
+        browser.close()
+
+    assert row['ok'] is False
+    assert '未找到' in row['reason']
+
+
 def test_add_note_verifies_only_target_row(monkeypatch, tmp_path):
     live_client = DummyLiveClient(logged_in=True)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')

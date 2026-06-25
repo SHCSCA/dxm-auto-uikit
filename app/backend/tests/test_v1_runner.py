@@ -134,6 +134,18 @@ class FakeWorkflowAdapter:
                 "title": args[1] or "ACG Stand Product 1",
                 "category_name": args[2] or "立牌类谷子",
                 "source_url": "https://detail.1688.com/offer/from-acquisition.html",
+                "row_text": "采集箱商品行 ACG Stand Product 1 AI认领",
+            }
+            evidence["claim_target"] = {
+                "matchedBy": "source_url",
+                "rowText": "数据采集商品行 ACG Stand Product 1 认领",
+                "sourceUrls": ["https://detail.1688.com/offer/from-acquisition.html"],
+            }
+            evidence["search_result"] = {
+                "query": "https://detail.1688.com/offer/from-acquisition.html",
+                "query_source": "target_source_url",
+                "filled": True,
+                "clicked_search": True,
             }
         if action == "fill_editor_required_defaults" and args:
             defaults = args[0] if isinstance(args[0], dict) else {}
@@ -859,6 +871,11 @@ def test_claim_only_calls_adapter_without_opening_editor_or_saving(v1_db):
     assert claimed[0]["payload"]["claim_task_id"] == task["id"]
     assert claimed[0]["payload"]["claim_mark"] == f"AI认领-{task['id']}"
     assert claimed[0]["payload"]["source_url"] == "https://detail.1688.com/offer/from-acquisition.html"
+    assert claimed[0]["payload"]["source_urls"] == ["https://detail.1688.com/offer/from-acquisition.html"]
+    assert claimed[0]["payload"]["data_acquisition_match"] == "source_url"
+    assert "数据采集商品行" in claimed[0]["payload"]["data_acquisition_row_text"]
+    assert "采集箱商品行" in claimed[0]["payload"]["draft_box_row_text"]
+    assert claimed[0]["payload"]["acquisition_search"]["query_source"] == "target_source_url"
     assert reports[0]["product_id"] == claimed[0]["id"]
     assert reports[0]["save_result"]["claimed_product_id"] == claimed[0]["id"]
     assert reports[0]["summary"]["claimed_product"]["id"] == claimed[0]["id"]

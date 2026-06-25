@@ -1492,16 +1492,29 @@ class V1TaskRunner:
         source_url = str(claimed.get("source_url") or "").strip()
         if not source_url:
             raise V1ExecutionError("E202", "采集认领缺少源商品链接", "draft-box verification did not return claimed_product.source_url")
+        claim_target = evidence.get("claim_target") if isinstance(evidence.get("claim_target"), Mapping) else {}
+        search_result = evidence.get("search_result") if isinstance(evidence.get("search_result"), Mapping) else {}
+        source_urls = self._unique_source_urls(
+            source_url,
+            claimed.get("source_urls"),
+            evidence.get("target_source_urls"),
+            claim_target.get("sourceUrls") if isinstance(claim_target, Mapping) else None,
+        )
         product_payload = {
             "source": "dxm_data_acquisition",
             "store_id": task.get("store_id") or payload.get("store_id"),
             "store_name": self._store_name(dict(task)),
             "source_url": source_url,
+            "source_urls": source_urls,
             "source_title": title,
             "claim_mark": claim_mark,
             "claim_task_id": task.get("id"),
             "draft_box_verified": True,
             "draft_box_url": workflow_result.get("page_url"),
+            "data_acquisition_row_text": claim_target.get("rowText") if isinstance(claim_target, Mapping) else None,
+            "data_acquisition_match": claim_target.get("matchedBy") if isinstance(claim_target, Mapping) else None,
+            "draft_box_row_text": claimed.get("row_text") or evidence.get("target_row_text"),
+            "acquisition_search": dict(search_result) if search_result else None,
             "template_id": payload.get("template_id"),
         }
         product = self.repo.create_product({
@@ -1538,6 +1551,21 @@ class V1TaskRunner:
             return product_urls
         payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
         return self._payload_source_urls(payload)
+
+    def _unique_source_urls(self, *values: Any) -> list[str]:
+        urls: list[str] = []
+        for value in values:
+            if isinstance(value, str):
+                candidates = [value]
+            elif isinstance(value, (list, tuple, set)):
+                candidates = list(value)
+            else:
+                candidates = []
+            for candidate in candidates:
+                text = str(candidate or '').strip()
+                if text and text not in urls:
+                    urls.append(text)
+        return urls
 
     def _payload_source_urls(self, payload: Mapping[str, Any] | dict[str, Any]) -> list[str]:
         values: list[Any] = []

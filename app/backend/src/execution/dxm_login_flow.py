@@ -452,8 +452,10 @@ class DxmLoginFlow:
             'product_query': product_query,
             'category_name': category_name,
             'store_name': store_name,
+            'search_result': result.get('search_result'),
             'target_source_urls': result.get('target_source_urls', []),
             'claimed_product': result.get('claimed_product'),
+            'claim_target': result.get('claim_target'),
         }
         self._write_state(state)
         return state
@@ -466,6 +468,7 @@ class DxmLoginFlow:
         store_name: str | None = None,
         target_source_urls: list[str] | None = None,
     ) -> dict[str, Any]:
+        previous_state = self.get_state()
         try:
             result = self._verify_draft_box_claim(
                 claim_mark=claim_mark,
@@ -485,6 +488,7 @@ class DxmLoginFlow:
             self._write_state(state)
             return state
 
+        previous_claim_target = previous_state.get('claim_target') if isinstance(previous_state.get('claim_target'), dict) else None
         state = {
             'stage': 'draft_box_claim_verified',
             'label': '采集箱已确认',
@@ -502,6 +506,7 @@ class DxmLoginFlow:
             'store_name': store_name,
             'target_source_urls': result.get('target_source_urls', []),
             'claimed_product': result.get('claimed_product'),
+            'claim_target': result.get('claim_target') or previous_claim_target,
         }
         self._write_state(state)
         return state
@@ -822,11 +827,12 @@ class DxmLoginFlow:
             timeout=60000,
         )
         self._dismiss_blocking_modals(page)
-        self._search_data_acquisition(
+        search_result = self._search_data_acquisition(
             page,
             product_query=product_query,
             category_name=category_name,
             store_name=store_name,
+            target_source_urls=target_source_urls,
         )
         target = self._find_data_acquisition_claim_target(
             page,
@@ -866,6 +872,7 @@ class DxmLoginFlow:
             'product_query': product_query,
             'category_name': category_name,
             'store_name': store_name,
+            'search_result': search_result,
             'target_source_urls': target.get('sourceUrls', []) or target_source_urls or [],
             'claimed_product': claimed_product,
             'claim_target': target,
@@ -879,11 +886,24 @@ class DxmLoginFlow:
         product_query: str | None = None,
         category_name: str | None = None,
         store_name: str | None = None,
-    ) -> None:
-        query = str(product_query or category_name or '').strip()
+        target_source_urls: list[str] | None = None,
+    ) -> dict[str, Any]:
+        source_query = next((str(value).strip() for value in (target_source_urls or []) if str(value or '').strip()), '')
+        if source_query:
+            query = source_query
+            query_source = 'target_source_url'
+        elif str(product_query or '').strip():
+            query = str(product_query or '').strip()
+            query_source = 'product_query'
+        elif str(category_name or '').strip():
+            query = str(category_name or '').strip()
+            query_source = 'category_name'
+        else:
+            query = ''
+            query_source = 'none'
         if not query and not store_name:
-            return
-        result = page.evaluate(r'''({query, store}) => {
+            return {'query': '', 'query_source': query_source, 'filled': False, 'clicked_search': False}
+        result = page.evaluate(r'''({query, store, querySource}) => {
           const visible = (el) => {
             const r = el.getBoundingClientRect();
             const style = window.getComputedStyle(el);
@@ -904,10 +924,15 @@ class DxmLoginFlow:
               const r = el.getBoundingClientRect();
               return r.width > 140 && r.height > 18;
             });
-            const input = inputs.find(el => {
+            const urlInput = inputs.find(el => {
+              const label = norm([el.placeholder, el.getAttribute('aria-label'), el.getAttribute('name'), el.id, el.className].join(' '));
+              return label.includes('来源链接') || label.includes('商品链接') || label.includes('链接') || label.includes('网址') || label.includes('来源') || label.includes('url') || label.includes('source');
+            });
+            const genericInput = inputs.find(el => {
               const label = norm([el.placeholder, el.getAttribute('aria-label'), el.getAttribute('name')].join(' '));
               return label.includes('搜索') || label.includes('标题') || label.includes('产品') || label.includes('关键词') || label.includes('内容');
             }) || inputs[0];
+            const input = querySource === 'target_source_url' ? (urlInput || genericInput) : (genericInput || urlInput);
             if (input) {
               input.value = query;
               input.dispatchEvent(new Event('input', {bubbles:true}));
@@ -920,7 +945,13 @@ class DxmLoginFlow:
             .find(el => ['搜索','查询','筛选'].includes(norm(textOf(el))));
           if (search) search.dispatchEvent(new MouseEvent('click', {bubbles:true}));
           return {filled, clicked_search: Boolean(search)};
-        }''', {'query': query, 'store': store_name})
+        }''', {'query': query, 'store': store_name, 'querySource': query_source})
+        result = {
+            **(result or {}),
+            'query': query,
+            'query_source': query_source,
+            'target_source_urls': list(target_source_urls or []),
+        }
         if result.get('filled') or result.get('clicked_search') or store_name:
             page.wait_for_timeout(1800)
             self._wait_for_page_ready(
@@ -930,6 +961,7 @@ class DxmLoginFlow:
                 timeout=30000,
             )
             self._dismiss_blocking_modals(page)
+        return result
 
     def _find_data_acquisition_claim_target(
         self,
