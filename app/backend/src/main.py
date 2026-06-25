@@ -353,6 +353,11 @@ def list_products():
     return repo.list_products()
 
 
+@app.get('/api/acquisition/claimed-products')
+def list_acquisition_claimed_products():
+    return repo.list_claimed_draft_products()
+
+
 @app.post('/api/products')
 def create_product(payload: ProductCreate):
     return repo.create_product(payload.model_dump())

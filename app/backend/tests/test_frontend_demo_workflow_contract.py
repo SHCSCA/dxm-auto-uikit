@@ -165,14 +165,10 @@ def test_draft_edit_save_page_starts_from_claimed_product_without_technical_gate
     assert "selectedTask={selectedEditSaveTask}" in route_section
     assert "selectedTask={selectedTask}" not in route_section
     assert "<ExecutionConsole" not in route_section
-    assert "claimed_to_draft" in app_source
-    assert "ready_for_edit" in app_source
-    assert "function isVerifiedClaimedDraftProduct(product: Product)" in app_source
-    assert "payload.source ?? product.source" in app_source
-    assert "payload.draft_box_verified === true" in app_source
-    assert "function isFixtureLikeProduct(product: Product)" in app_source
-    assert "&& !isFixtureLikeProduct(product)" in app_source
-    assert "workspace.products.filter(isVerifiedClaimedDraftProduct)" in app_source
+    assert "loadOrFallback<Product[]>('/api/acquisition/claimed-products', [])" in app_source
+    assert "const [claimedDraftProducts, setClaimedDraftProducts] = useState<Product[]>([])" in app_source
+    assert "claimedProducts," in app_source
+    assert "setClaimedDraftProducts(claimedProducts)" in app_source
     assert "采集箱商品" in page_source
     assert "只保存，不发布" in page_source
     for label in [
@@ -220,6 +216,15 @@ def test_draft_edit_save_uses_claimed_product_store_instead_of_first_store():
     assert "QA" not in page_source
     for forbidden in ["QA guarded product", "测试商品", "本地商品", "创建单商品只保存任务"]:
         assert forbidden not in page_source
+
+
+def test_frontend_loads_claimed_draft_products_from_explicit_acquisition_api():
+    app_source = APP_TSX.read_text(encoding="utf-8")
+
+    assert "loadOrFallback<Product[]>('/api/acquisition/claimed-products', [])" in app_source
+    assert "setClaimedDraftProducts" in app_source
+    assert "workspace.products.filter(isVerifiedClaimedDraftProduct)" not in app_source
+    assert "function isVerifiedClaimedDraftProduct" not in app_source
 
 
 def test_template_center_page_presents_multi_template_chinese_section_workflow():

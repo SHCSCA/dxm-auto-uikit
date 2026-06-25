@@ -37,8 +37,6 @@ const AGENT_CONSOLE_NAVIGATION_SETTLE_MS = 2500
 const REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save', 'batch_save'])
 const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save'])
 const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['batch_save'])
-const CLAIMED_DRAFT_PRODUCT_STATUSES = new Set(['claimed_to_draft', 'ready_for_edit'])
-const FIXTURE_PRODUCT_MARKERS = ['qa guarded', 'qa_category', 'fixture', '本地演示', '测试商品', '示例商品']
 const DXM_READY_SESSION_STATUSES = new Set(['login_success', 'logged_in', 'not_published_verified', 'workflow_navigation'])
 const L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
 const DEMO_ENABLED = new URLSearchParams(window.location.search).get('dev') === '1'
@@ -48,33 +46,6 @@ const initialTaskIdFromUrl = (() => {
   const taskId = Number(rawTaskId)
   return Number.isInteger(taskId) && taskId > 0 ? taskId : null
 })()
-
-function isVerifiedClaimedDraftProduct(product: Product) {
-  const payload = product.payload ?? {}
-  return CLAIMED_DRAFT_PRODUCT_STATUSES.has(product.status)
-    && String(payload.source ?? product.source ?? '') === 'dxm_data_acquisition'
-    && payload.draft_box_verified === true
-    && !isFixtureLikeProduct(product)
-}
-
-function isFixtureLikeProduct(product: Product) {
-  const payload = product.payload ?? {}
-  const text = [
-    product.title,
-    product.category_name,
-    product.source,
-    stringifyProductPayload(payload),
-  ].join(' ').toLowerCase()
-  return FIXTURE_PRODUCT_MARKERS.some((marker) => text.includes(marker))
-}
-
-function stringifyProductPayload(payload: Record<string, unknown>) {
-  try {
-    return JSON.stringify(payload) ?? ''
-  } catch {
-    return ''
-  }
-}
 
 const sourceLabels: Record<DeliveryWorkspace['source'], string> = {
   api: '工作台数据已连接',
@@ -208,6 +179,7 @@ export default function App() {
   const [operationError, setOperationError] = useState<string | null>(null)
   const [operationNotice, setOperationNotice] = useState<string | null>(null)
   const [lastAcquisitionClaimRequest, setLastAcquisitionClaimRequest] = useState<AcquisitionClaimResponse | null>(null)
+  const [claimedDraftProducts, setClaimedDraftProducts] = useState<Product[]>([])
   const [runtimeLogSource, setRuntimeLogSource] = useState<RuntimeLogSource>('backend')
   const [runtimeLogs, setRuntimeLogs] = useState<Record<RuntimeLogSource, RuntimeLogResponse | null>>({
     backend: null,
@@ -299,6 +271,7 @@ export default function App() {
       stores,
       templates,
       products,
+      claimedProducts,
       tasks,
       logs,
       evidences,
@@ -311,6 +284,7 @@ export default function App() {
       loadOrFallback<Store[]>('/api/stores', []),
       loadOrFallback<Template[]>('/api/templates', []),
       loadOrFallback<Product[]>('/api/products', []),
+      loadOrFallback<Product[]>('/api/acquisition/claimed-products', []),
       loadOrFallback<Task[]>('/api/tasks', []),
       loadOrFallback<LogItem[]>('/api/logs', []),
       loadOrFallback<Evidence[]>('/api/evidences', []),
@@ -331,6 +305,7 @@ export default function App() {
       reports,
     })
     setWorkspace(nextWorkspace)
+    setClaimedDraftProducts(claimedProducts)
     setAgentConsole(consoleStatus)
     setFinalCheck(finalCheckSummary)
     const taskMissing = Boolean(deliveryWorkspace?.requested_task_missing)
@@ -1194,10 +1169,6 @@ export default function App() {
   const setWorkbenchSection = useCallback((section: WorkbenchSection) => {
     setActiveSection(normalizeWorkbenchSection(section))
   }, [])
-  const claimedDraftProducts = useMemo(
-    () => workspace.products.filter(isVerifiedClaimedDraftProduct),
-    [workspace.products],
-  )
   const persistedAcquisitionClaimRequest = useMemo(
     () => taskToAcquisitionClaimResponse(pickLatestAcquisitionClaimTask(workspace.tasks)),
     [workspace.tasks],

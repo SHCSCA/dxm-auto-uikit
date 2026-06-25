@@ -287,3 +287,76 @@ def test_single_save_task_snapshots_acquisition_claim_proof(tmp_path, monkeypatc
     assert task_payload["claimed_product_category_name"] == "立牌类谷子"
     assert task_payload["claim_task_id"] == 42
     assert task_payload["draft_box_verified"] is True
+
+
+def test_claimed_products_endpoint_returns_only_verified_real_claimed_products(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    store = repo.create_store("Dang Kang", "AliExpress")
+    valid = repo.create_product(
+        {
+            "title": "真实采集商品 A",
+            "source": "dxm_data_acquisition",
+            "status": "claimed_to_draft",
+            "category_name": "立牌类谷子",
+            "price": 9.9,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {
+                "source": "dxm_data_acquisition",
+                "store_id": store["id"],
+                "store_name": "Dang Kang",
+                "source_url": "https://detail.1688.com/offer/1013604102950.html",
+                "claim_task_id": 42,
+                "draft_box_verified": True,
+            },
+        }
+    )
+    repo.create_product(
+        {
+            "title": "手工伪造采集箱状态商品",
+            "source": "manual_import",
+            "status": "claimed_to_draft",
+            "category_name": "立牌类谷子",
+            "price": 9.9,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {"source": "manual_import", "draft_box_verified": True},
+        }
+    )
+    repo.create_product(
+        {
+            "title": "未验证采集箱商品",
+            "source": "dxm_data_acquisition",
+            "status": "claimed_to_draft",
+            "category_name": "立牌类谷子",
+            "price": 9.9,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {"source": "dxm_data_acquisition", "draft_box_verified": False},
+        }
+    )
+    repo.create_product(
+        {
+            "title": "QA guarded product",
+            "source": "dxm_data_acquisition",
+            "status": "claimed_to_draft",
+            "category_name": "QA_CATEGORY",
+            "price": 9.9,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {"source": "dxm_data_acquisition", "draft_box_verified": True},
+        }
+    )
+
+    response = client.get("/api/acquisition/claimed-products")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert [item["id"] for item in data] == [valid["id"]]
+    assert data[0]["payload"]["store_id"] == store["id"]
+    assert data[0]["payload"]["store_name"] == "Dang Kang"
+    assert data[0]["payload"]["draft_box_verified"] is True

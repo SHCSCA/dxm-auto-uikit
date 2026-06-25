@@ -111,6 +111,22 @@ class Repository:
                 return rows
             return [row for row in rows if not _is_fixture_product(row)]
 
+    def list_claimed_draft_products(self):
+        products = self.list_products()
+        claimed_statuses = {'claimed_to_draft', 'ready_for_edit'}
+        eligible = []
+        for product in products:
+            payload = product.get('payload') if isinstance(product.get('payload'), dict) else {}
+            source = str(payload.get('source') or product.get('source') or '').strip()
+            if product.get('status') not in claimed_statuses:
+                continue
+            if source != 'dxm_data_acquisition':
+                continue
+            if payload.get('draft_box_verified') is not True:
+                continue
+            eligible.append(product)
+        return eligible
+
     def get_product(self, product_id: int):
         with connection() as conn:
             row = conn.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
