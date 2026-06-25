@@ -208,7 +208,7 @@ npm run build
 
 ### V0.10.0 - Edit Save From Verified Collection Product
 
-**Status:** Save-stage provenance gate, selected-template execution defaults, and runner-level save-time manual approval are complete in API, runner, and delivery acceptance; remaining save evidence tasks and real save-only canary are pending.
+**Status:** Save-stage provenance gate, selected-template execution defaults, runner-level save-time manual approval, save network response capture, and unpublished proof capture are complete in API, runner, and delivery acceptance; remaining failure-card UX cleanup and real save-only canary are pending.
 
 **Goal:** Stage B starts only from a Stage A verified product.
 
@@ -239,8 +239,8 @@ npm run build
 - [x] Pass source URL/title/store into draft-box row matching.
 - [x] Fill edit page using selected template final values.
 - [x] Require manual approval immediately before save.
-- [ ] Capture save network response.
-- [ ] Capture unpublished proof.
+- [x] Capture save network response.
+- [x] Capture unpublished proof.
 - [ ] Map failures to business-language cards.
 - [ ] Run one real save-only canary from a product produced by V0.9.9.
 
@@ -248,8 +248,13 @@ npm run build
 
 - `tests\test_v1_runner.py::test_single_save_fill_actions_use_manually_selected_template_over_store_default` proves a task-level `template_id` is applied to all edit/save fill actions even when its binding does not match the default store/category template.
 - `tests\test_v1_runner.py::test_single_save_runner_requires_server_manual_approval_immediately_before_save` proves the runner cannot reach `save_only` without server-generated manual approval.
+- `tests\test_login_flow.py::test_save_only_records_network_success_as_save_evidence` proves the save action records `network_save_result` and related network events.
+- `tests\test_login_flow.py::test_network_save_result_prefers_real_add_json_over_related_history_calls` proves the real save add endpoint is preferred over history requests.
+- `tests\test_login_flow.py::test_verify_not_published_accepts_prior_save_success_without_publish_risk` and `tests\test_login_flow.py::test_verify_not_published_ignores_ambient_online_text_after_save_success` prove unpublished verification can use save-success evidence while ignoring ambient published-menu text.
+- `tests\test_delivery_workspace.py::test_delivery_workspace_accepts_dxm_add_json_code_zero_as_save_response`, `tests\test_delivery_workspace.py::test_delivery_workspace_accepts_smt_add_json_nested_success_as_save_response`, and `tests\test_delivery_workspace.py::test_delivery_workspace_report_published_false_is_not_unpublished_proof_without_verify` prove delivery readiness recognizes real save network responses and still requires explicit unpublished proof.
 - `tests\test_v1_runner.py -q` passed with `33 passed`.
 - `tests\test_task_start_guard.py tests\test_config_defaults.py -q` passed with `101 passed`.
+- Selected save evidence tests passed with `7 passed`.
 - `app\frontend npm run build` passed.
 
 **Acceptance commands:**
