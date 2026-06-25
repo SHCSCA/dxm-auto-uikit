@@ -854,24 +854,24 @@ def test_delivery_workspace_without_task_id_prefers_task_with_delivery_evidence_
     store = repo.create_store("Dang Kang QA", "AliExpress")
     product = repo.create_product(
         {
-            "title": "QA unreleased real mode product",
+            "title": "QA unreleased batch save product",
             "source": "qa",
             "category_name": "QA_CATEGORY",
             "price": 7.01,
             "currency": "USD",
             "sku_count": 1,
             "image_count": 1,
-            "payload": {"source_title": "QA unreleased real mode product"},
+            "payload": {"source_title": "QA unreleased batch save product"},
         }
     )
     newer_draft = repo.create_task(
         {
-            "name": "QA unreleased claim_only task",
+            "name": "QA unreleased batch_save task",
             "store_id": store["id"],
-            "mode": "claim_only",
+            "mode": "batch_save",
             "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
             "product_ids": [product["id"]],
-            "claim_mark": "QA_CLAIM",
+            "claim_mark": "QA_BATCH_BLOCK",
             "payload": {"store_name": store["name"], "category_name": product["category_name"]},
         }
     )

@@ -527,9 +527,21 @@ const qaExpectedReady = initialEffectiveReadiness === 'READY'
   && initialEffectiveMutationScope === 'controlled_single_save_only';
 const shouldRunBlockedMutationChecks = !qaExpectedReady;
 async function ensureRealMutationTask() {
-  function findReusableQaTask(tasks, name, mode) {
+  function findReusableClaimRequest(tasks, storeId) {
     return Array.isArray(tasks)
-      ? tasks.find(task => task?.name === name && task?.mode === mode) || null
+      ? tasks.find(task => task?.name === 'QA two-stage acquisition claim request'
+        && task?.mode === 'claim_only'
+        && Number(task?.store_id) === Number(storeId)
+        && !['completed', 'cancelled'].includes(String(task?.status || ''))) || null
+      : null;
+  }
+  function findReusableLinkedSaveTask(tasks, claimedProduct) {
+    const claimedProductId = Number(claimedProduct?.id);
+    return Array.isArray(tasks)
+      ? tasks.find(task => task?.name === 'QA two-stage claimed product save task'
+        && task?.mode === 'single_save'
+        && Number(task?.total_jobs) === 1
+        && Number(task?.payload?.claimed_product_id || task?.payload?.product_id || 0) === claimedProductId) || null
       : null;
   }
   const existingStores = await fetchJson('/api/stores');
@@ -539,42 +551,52 @@ async function ensureRealMutationTask() {
   const store = dangKangStore
     ? dangKangStore
     : await postJson('/api/stores/connect', { name: 'Dang Kang', platform: 'AliExpress' });
-  let products = await fetchJson('/api/products');
-  if (!Array.isArray(products)) products = [];
-  let qaProduct = products.find(item => item?.title === 'QA guarded single-save product') || null;
-  if (!qaProduct) {
-    const imported = await postJson('/api/products/import', { rows: [{
-      title: 'QA guarded single-save product',
-      source: 'qa',
-      category_name: 'QA_CATEGORY',
-      price: 7.01,
-      currency: 'USD',
-      sku_count: 1,
-      image_count: 1,
-      image: 'qa-product.jpg',
-    }] });
-    qaProduct = Array.isArray(imported)
-      ? imported.find(item => item?.title === 'QA guarded single-save product') || imported[0]
-      : imported;
-  }
   const existingTasks = await fetchJson('/api/tasks').catch(() => []);
-  const reusableTask = Array.isArray(existingTasks)
-    ? existingTasks.find(task => task?.name === 'QA local gated single_save one product fixture'
-      && task?.mode === 'single_save'
-      && Number(task?.total_jobs) === 1)
-    : null;
+  async function ensureTwoStageClaimRequest() {
+    const reusableClaimRequest = findReusableClaimRequest(existingTasks, store.id);
+    if (reusableClaimRequest) return reusableClaimRequest;
+    const created = await postJson('/api/acquisition/claim-requests', {
+      store_id: store.id,
+      keyword: 'QA two-stage acquisition claim request',
+      category_name: '立牌类谷子',
+      claim_mark: 'QA_TWO_STAGE',
+      template_id: null,
+    });
+    const taskId = created?.task_id || created?.id;
+    return taskId ? await fetchJson('/api/tasks/' + taskId).catch(() => created) : created;
+  }
+  const claimedProducts = await fetchJson('/api/acquisition/claimed-products').catch(() => []);
+  const claimedProduct = Array.isArray(claimedProducts) && claimedProducts.length ? claimedProducts[0] : null;
+  const claimRequestTask = await ensureTwoStageClaimRequest();
+  if (!claimedProduct) {
+    return {
+      ...(claimRequestTask || {}),
+      id: claimRequestTask?.id || claimRequestTask?.task_id,
+      mode: 'claim_only',
+      status: claimRequestTask?.status || claimRequestTask?.task_status || 'draft',
+      total_jobs: claimRequestTask?.total_jobs || 1,
+      payload: {
+        ...(claimRequestTask?.payload || {}),
+        stage: 'awaiting_claimed_product',
+      },
+    };
+  }
+  const reusableTask = findReusableLinkedSaveTask(existingTasks, claimedProduct);
   if (reusableTask) return reusableTask;
   return await postJson('/api/tasks', {
-    name: 'QA local gated single_save one product fixture',
-    store_id: store.id,
+    name: 'QA two-stage claimed product save task',
+    store_id: claimedProduct.store_id || store.id,
     mode: 'single_save',
     publish_scene: 'SMT_SEMI_MANAGED_SAVE_ONLY',
-    product_ids: [qaProduct.id],
-    claim_mark: 'QA_CLAIM',
+    product_ids: [claimedProduct.id],
+    claim_mark: 'QA_TWO_STAGE',
     payload: {
-      store_name: store.name,
-      category_name: qaProduct?.category_name ?? 'QA_CATEGORY',
-      image: qaProduct?.image ?? 'qa-product.jpg',
+      store_name: claimedProduct.store_name || store.name,
+      category_name: claimedProduct?.category_name ?? '立牌类谷子',
+      image: claimedProduct?.image ?? null,
+      claimed_product_id: claimedProduct.id,
+      claimed_product_source_url: claimedProduct.source_url || claimedProduct.url || null,
+      stage: 'claimed_product_available',
     },
   });
 }
@@ -586,31 +608,16 @@ async function verifyUnreleasedRealModeCreateBlocked() {
   const store = dangKangStore
     ? dangKangStore
     : await postJson('/api/stores/connect', { name: 'Dang Kang', platform: 'AliExpress' });
-  let products = await fetchJson('/api/products');
-  if (!Array.isArray(products)) products = [];
-  if (!products.length) {
-    products = await postJson('/api/products/import', { rows: [{
-      title: 'QA unreleased real mode product',
-      source: 'qa',
-      category_name: 'QA_CATEGORY',
-      price: 7.01,
-      currency: 'USD',
-      sku_count: 1,
-      image_count: 1,
-      image: 'qa-product.jpg',
-    }] });
-  }
   return await postJsonStatus('/api/tasks', {
-    name: 'QA unreleased claim_only task',
+    name: 'QA unreleased batch_save task',
     store_id: store.id,
-    mode: 'claim_only',
+    mode: 'batch_save',
     publish_scene: 'SMT_SEMI_MANAGED_SAVE_ONLY',
-    product_ids: [products[0].id],
-    claim_mark: 'QA_CLAIM',
+    product_ids: [],
+    claim_mark: 'QA_BATCH_BLOCK',
     payload: {
       store_name: store.name,
-      category_name: products[0]?.category_name ?? 'QA_CATEGORY',
-      image: products[0]?.image ?? 'qa-product.jpg',
+      category_name: 'QA_CATEGORY',
     },
   });
 }
@@ -1088,7 +1095,7 @@ const defaultCurrentTaskId = defaultCurrentTask?.id ?? null;
 const defaultCurrentTaskName = String(defaultCurrentTask?.name || '');
 const defaultCurrentTaskMode = String(defaultCurrentTask?.mode || '');
 const defaultCurrentTaskCompleted = defaultCurrentTask?.status === 'completed';
-const defaultCurrentTaskUnreleased = ['claim_only', 'batch_save'].includes(defaultCurrentTaskMode);
+const defaultCurrentTaskUnreleased = ['batch_save'].includes(defaultCurrentTaskMode);
 const defaultCurrentTaskMarker = defaultCurrentTaskId ? (text.currentTaskPrefix + defaultCurrentTaskId) : '';
 const defaultCurrentTaskAlternateMarker = defaultCurrentTaskId ? ('\u4efb\u52a1 #' + defaultCurrentTaskId) : '';
 const defaultCurrentTaskText = await bodyText();

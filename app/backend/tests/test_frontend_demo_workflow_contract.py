@@ -2459,24 +2459,33 @@ def test_browser_qa_verifies_demo_is_hidden_from_default_user_path():
     assert "/api/delivery/workspace" not in ensure_section
 
 
-def test_browser_qa_reuses_existing_qa_tasks_instead_of_creating_duplicates():
+def test_browser_qa_uses_two_stage_acquisition_path_instead_of_fake_single_save_fixture():
     source = QA_BROWSER_CHECK.read_text(encoding="utf-8")
     ensure_section = source[source.index("async function ensureRealMutationTask"):source.index("async function verifyUnreleasedRealModeCreateBlocked")]
     qa_task_section = source[source.index("async function ensureRealMutationTask"):source.index("async function screenshot")]
 
-    assert "function findReusableQaTask(" in ensure_section
     assert "fetchJson('/api/tasks')" in ensure_section
-    assert "QA local gated single_save one product fixture" in ensure_section
+    assert "fetchJson('/api/acquisition/claimed-products')" in ensure_section
+    assert "postJson('/api/acquisition/claim-requests'" in ensure_section
+    assert "ensureTwoStageClaimRequest" in ensure_section
+    assert "findReusableClaimRequest" in ensure_section
+    assert "QA two-stage acquisition claim request" in ensure_section
+    assert "QA local gated single_save one product fixture" not in source
+    assert "QA guarded single-save product" not in source
+    assert "QA guarded product" not in ensure_section
+    assert "QA guarded real mutation task" not in source
+    assert "product_ids: [claimedProduct.id]" in ensure_section
+    assert "product_ids: [qaProduct.id]" not in ensure_section
+    assert "postJsonStatus('/api/tasks'" not in ensure_section
+    assert "function findReusableQaTask(" not in ensure_section
+    assert "claimedProducts.length" in ensure_section
+    assert "stage: 'awaiting_claimed_product'" in ensure_section
+    assert "stage: 'claimed_product_available'" in ensure_section
     assert "QA guarded real mutation task" not in source
     assert "async function verifyUnreleasedRealModeCreateBlocked()" in qa_task_section
     assert "return await postJsonStatus('/api/tasks'" in qa_task_section
-    assert "QA guarded single-save product" in ensure_section
-    assert "QA local gated single_save one product fixture" in ensure_section
-    assert "Number(task?.total_jobs) === 1" in ensure_section
-    assert "product_ids: [qaProduct.id]" in ensure_section
     assert "product_ids: products.map(item => item.id)" not in ensure_section
     assert "findReusableQaTask(existingTasks, '\\u672c\\u5730\\u6f14\\u793a\\u6838\\u9a8c\\u6279\\u6b21', 'dry_run')" in qa_task_section
-    assert "if (reusableTask) return reusableTask" in ensure_section
 
 
 def test_task_center_sanitizes_legacy_qa_fixture_names_from_user_visible_rows():
@@ -3424,7 +3433,7 @@ def test_app_defaults_to_delivery_current_task_even_when_completed():
     assert "expectedCurrentTaskMarker: defaultCurrentTaskMarker" in qa_source
     assert "apiCurrentTaskMode: defaultCurrentTaskMode" in qa_source
     assert "apiCurrentTaskUnreleased: defaultCurrentTaskUnreleased" in qa_source
-    assert "const defaultCurrentTaskUnreleased = ['claim_only', 'batch_save'].includes(defaultCurrentTaskMode);" in qa_source
+    assert "const defaultCurrentTaskUnreleased = ['batch_save'].includes(defaultCurrentTaskMode);" in qa_source
     assert "defaultTaskSelectionState.taskCenterTextSample = taskDefaultText.slice(0, 1200)" in qa_source
     assert "defaultCurrentTaskText.includes(defaultCurrentTaskMarker) || taskDefaultText.includes(defaultCurrentTaskMarker)" in qa_source
     assert "defaultActionableSingleSaveTask" not in qa_source
@@ -3506,8 +3515,9 @@ def test_frontend_blocks_unreleased_real_modes_before_l3_manual_approval():
     assert "async function verifyUnreleasedRealModeCreateBlocked()" in qa_source
     assert "const unreleasedRealModeCreationCheck = reportOnlyFinal || qaExpectedReady ? null : await verifyUnreleasedRealModeCreateBlocked();" in qa_source
     assert "const unreleasedRealModeTask = null;" in qa_source
-    assert "mode: 'claim_only'" in qa_source
-    assert "QA unreleased claim_only task" in qa_source
+    assert "mode: 'batch_save'" in qa_source
+    assert "QA unreleased batch_save task" in qa_source
+    assert "QA unreleased claim_only task" not in qa_source
     assert "unreleasedRealModeCreateBlocked" in qa_source
     assert "isBlockedStatus(unreleasedRealModeCreationCheck?.status)" in qa_source
     assert "显示全部历史任务" in qa_source

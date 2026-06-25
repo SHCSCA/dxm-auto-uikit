@@ -264,6 +264,21 @@ def test_browser_qa_disables_extensions_and_bounds_cdp_commands():
     assert "pending.delete(msgId)" in script
 
 
+def test_browser_qa_bootstraps_two_stage_flow_without_fake_single_save_products():
+    script = QA_BROWSER_CHECK.read_text(encoding="utf-8")
+    ensure_section = script[script.index("async function ensureRealMutationTask"):script.index("async function verifyUnreleasedRealModeCreateBlocked")]
+
+    assert "/api/acquisition/claim-requests" in ensure_section
+    assert "/api/acquisition/claimed-products" in ensure_section
+    assert "QA two-stage acquisition claim request" in ensure_section
+    assert "QA local gated single_save one product fixture" not in script
+    assert "QA guarded single-save product" not in script
+    assert "QA unreleased claim_only task" not in script
+    assert "product_ids: [claimedProduct.id]" in ensure_section
+    assert "source: 'qa'" not in ensure_section
+    assert "product_ids: [qaProduct.id]" not in ensure_section
+
+
 def test_final_delivery_check_captures_final_report_center_after_final_json_write():
     script = FINAL_DELIVERY_CHECK.read_text(encoding="utf-8")
     qa_script = QA_BROWSER_CHECK.read_text(encoding="utf-8")
