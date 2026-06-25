@@ -128,6 +128,9 @@ class DxmLoginFlow:
               try {
                 window.sessionStorage.setItem('__dxmAgentHudPersistedState', JSON.stringify(hud));
               } catch (error) {}
+              try {
+                window.localStorage.setItem('__dxmAgentHudPersistedState', JSON.stringify(hud));
+              } catch (error) {}
               if (window.__dxmRenderAgentHud) window.__dxmRenderAgentHud();
             }
             """,

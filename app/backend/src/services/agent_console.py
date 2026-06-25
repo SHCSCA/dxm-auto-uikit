@@ -883,6 +883,9 @@ class AgentConsoleService:
               try {
                 window.sessionStorage.setItem('__dxmAgentHudPersistedState', JSON.stringify(hud));
               } catch (error) {}
+              try {
+                window.localStorage.setItem('__dxmAgentHudPersistedState', JSON.stringify(hud));
+              } catch (error) {}
               if (window.__dxmRenderAgentHud) window.__dxmRenderAgentHud();
             }
             """,
@@ -1190,6 +1193,13 @@ HUD_INIT_SCRIPT = """
     persisted = JSON.parse(window.sessionStorage.getItem('__dxmAgentHudPersistedState') || 'null');
   } catch (error) {
     persisted = null;
+  }
+  if (!persisted) {
+    try {
+      persisted = JSON.parse(window.localStorage.getItem('__dxmAgentHudPersistedState') || 'null');
+    } catch (error) {
+      persisted = null;
+    }
   }
   window.__dxmAgentHudState = persisted || window.__dxmAgentHudState || {};
   window.__dxmRenderAgentHud = () => {

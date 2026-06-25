@@ -428,7 +428,9 @@ def test_agent_console_hud_persists_latest_business_progress_across_navigation()
 
     assert "__dxmAgentHudPersistedState" in script
     assert "sessionStorage.getItem('__dxmAgentHudPersistedState')" in script
+    assert "localStorage.getItem('__dxmAgentHudPersistedState')" in script
     assert "sessionStorage.setItem('__dxmAgentHudPersistedState'" in source
+    assert "localStorage.setItem('__dxmAgentHudPersistedState'" in source
     assert "window.__dxmAgentHudState = persisted || window.__dxmAgentHudState || {}" in script
     assert "window.__dxmAgentHudObserver" in script
     assert "new MutationObserver" in script

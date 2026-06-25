@@ -83,6 +83,26 @@ def test_browser_agent_status_maps_save_steps_to_chinese_hud():
     assert verify["human_next"] == "查看保存结果和未发布证明"
 
 
+def test_browser_agent_status_tells_user_browser_stays_open_after_terminal_states():
+    done = build_browser_hud({
+        "task_name": "采集箱编辑保存",
+        "step": "RELEASE_LOCK",
+        "status": "success",
+    })
+    assert done["title"] == "任务完成"
+    assert "真实浏览器保持打开" in done["human_next"]
+    assert done["requires_user_action"] is False
+
+    failed = build_browser_hud({
+        "task_name": "采集箱编辑保存",
+        "step": "TASK_FAILED",
+        "status": "failed",
+    })
+    assert failed["title"] == "当前步骤失败"
+    assert "真实浏览器保持打开" in failed["human_next"]
+    assert failed["requires_user_action"] is True
+
+
 def test_browser_agent_status_does_not_put_step_code_in_maintenance_detail_for_normal_steps():
     hud = build_browser_hud({
         "task_name": "采集箱编辑保存",
