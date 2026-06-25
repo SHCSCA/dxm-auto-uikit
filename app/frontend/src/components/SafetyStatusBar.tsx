@@ -204,31 +204,14 @@ export function SafetyStatusBar({ workspace, selectedTask, configPreview, config
         <span className="safety-dot" aria-hidden="true" />
         <div>
           <strong>{headline}</strong>
+          <span className="safety-bar__blocker" title={visibleBlockerReason}>
+            {visibleBlockerReason}；只保存，不发布。
+          </span>
         </div>
       </div>
       <div className="safety-bar__meta" aria-label="当前操作">
-        <span className={`guard-chip guard-chip--${tone === 'danger' ? 'danger' : tone === 'warn' ? 'warn' : 'ok'}`}>{primaryStatus}</span>
-        <span className="guard-chip guard-chip--ok">只保存，不发布</span>
-        <span className="safety-bar__blocker" title={visibleBlockerReason}>{visibleBlockerReason}</span>
         <button className="button button--secondary safety-bar__primary-action" type="button" onClick={handlePrimaryAction} disabled={busy}>
           {primaryActionLabel}
-        </button>
-        <details className="safety-bar__meta-details inline-disclosure">
-          <summary>维护详情</summary>
-          <p className="safety-bar__compact-detail">{conciseDetail}</p>
-          <div>
-            <strong className="safety-bar__details-title">维护状态说明</strong>
-            {boundaryChips.map((chip) => (
-              <span key={chip.label} className={`guard-chip guard-chip--${chip.tone}`}>{chip.label}</span>
-            ))}
-            {detailChips.map((chip) => (
-              <span key={chip.label} className={`guard-chip guard-chip--${chip.tone}`}>{chip.label}</span>
-            ))}
-          </div>
-          <span>{detail}</span>
-        </details>
-        <button className="button button--quiet" type="button" onClick={onRefresh} disabled={busy}>
-          {runtimeStatusUnavailable ? '刷新状态' : '刷新'}
         </button>
       </div>
     </section>

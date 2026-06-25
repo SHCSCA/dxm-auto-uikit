@@ -29,14 +29,15 @@ def test_sidebar_uses_two_stage_production_workflow():
     source = REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx"
     shell = source.read_text(encoding="utf-8")
 
-    assert "采集认领" in shell
-    assert "采集箱编辑" in shell
-    assert "账号登录" in shell
+    assert "数据采集认领" in shell
+    assert "采集箱编辑保存" in shell
+    assert "店小秘登录" in shell
+    assert "当前任务" in shell
     assert "模板中心" in shell
-    assert "执行记录" in shell
-    assert "问题诊断" in shell
-    assert "系统维护" in shell
-    assert "浏览器执行" in shell
+    assert "结果报告" in shell
+    assert "问题处理" in shell
+    assert "系统设置" in shell
+    assert "真实浏览器" in shell
     assert "第一段：采集认领" in shell
     assert "第二段：编辑保存" in shell
     assert "选择商品" not in shell
@@ -52,19 +53,20 @@ def test_sidebar_exposes_production_two_stage_workflow_only():
 
     expected_items = [
         "{ id: 'home', label: '首页'",
-        "{ id: 'dxm_access', label: '账号登录'",
-        "{ id: 'acquisition_claim', label: '商品采集'",
+        "{ id: 'dxm_access', label: '店小秘登录'",
+        "{ id: 'acquisition_claim', label: '数据采集认领'",
         "{ id: 'template_center', label: '模板中心'",
-        "{ id: 'draft_edit_save', label: '采集箱编辑'",
-        "{ id: 'start_save', label: '浏览器执行'",
-        "{ id: 'product_tasks', label: '执行记录'",
-        "{ id: 'issues', label: '问题诊断'",
-        "{ id: 'settings', label: '系统维护'",
+        "{ id: 'draft_edit_save', label: '采集箱编辑保存'",
+        "{ id: 'product_tasks', label: '当前任务'",
+        "{ id: 'start_save', label: '真实浏览器'",
+        "{ id: 'results', label: '结果报告'",
+        "{ id: 'issues', label: '问题处理'",
+        "{ id: 'settings', label: '系统设置'",
     ]
     for item in expected_items:
         assert item in primary_area_section
 
-    for label in ["Agent 控制台", "证据中心", "异常池", "任务中心", "配置中心", "使用帮助", "问题处理", "结果与问题", "报告与证据", "任务记录", "系统设置"]:
+    for label in ["Agent 控制台", "证据中心", "异常池", "任务中心", "配置中心", "使用帮助", "问题诊断", "结果与问题", "报告与证据", "任务记录", "执行记录", "系统维护", "浏览器执行", "商品采集", "采集箱编辑'"]:
         assert label not in primary_area_section
 
 
@@ -83,6 +85,28 @@ def test_sidebar_routes_business_entries_to_reachable_pages():
     assert "issues: 'results'" not in normalize_section
     assert "onShowExceptions={() => setActiveSection('issues')}" in app_source
     assert "onShowIssues={() => setActiveSection('issues')}" in app_source
+
+
+def test_home_first_screen_uses_user_decision_language_without_technical_terms():
+    source = HOME_PAGE_TSX.read_text(encoding="utf-8")
+    hero_section = source[source.index('<div className="hero-panel home-command">'):source.index("function OperationGuide")]
+
+    for label in ["现在该做什么", "为什么不能继续", "下一步", "数据采集认领", "采集箱", "只保存", "不会发布"]:
+        assert label in hero_section
+    for forbidden in ["L2", "L3", "probe", "run-id", "HAR", "single_save", "claim_only", "Agent 控制台"]:
+        assert forbidden not in hero_section
+    for removed_first_screen_block in ["home-menu-map", "两段式操作入口", "维护人员查看运行状态", "证据等级"]:
+        assert removed_first_screen_block not in hero_section
+
+
+def test_safety_status_bar_visible_row_hides_gate_jargon_and_maintenance_details():
+    source = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
+    visible_row = source[source.index('<section className={`safety-bar'):source.index("</section>")]
+
+    for label in ["只保存，不发布", "下一步", "当前任务已完成", "等待真实登录"]:
+        assert label in source
+    for forbidden in ["L2", "L3", "probe", "run-id", "HAR", "single_save", "claim_only", "维护详情", "维护状态说明"]:
+        assert forbidden not in visible_row
 
 
 def test_acquisition_claim_page_uses_claim_request_api_not_legacy_task_center():
@@ -1288,26 +1312,28 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "evidence: 'results'" in app_source
     assert "type WorkbenchPrimaryArea" in shell_source
     assert "{ id: 'home', label: '首页', short: '首', hint: '查看当前步骤和下一步操作' }" in shell_source
-    assert "{ id: 'dxm_access', label: '账号登录', short: '登', hint: '记住账号并打开真实店小秘浏览器' }" in shell_source
-    assert "{ id: 'acquisition_claim', label: '商品采集', short: '采', hint: '从数据采集认领到采集箱' }" in shell_source
+    assert "{ id: 'dxm_access', label: '店小秘登录', short: '登', hint: '记住账号并打开真实店小秘浏览器' }" in shell_source
+    assert "{ id: 'acquisition_claim', label: '数据采集认领', short: '采', hint: '从数据采集认领到采集箱' }" in shell_source
     assert "{ id: 'template_center', label: '模板中心', short: '模', hint: '按店小秘编辑页分区管理多套模板' }" in shell_source
-    assert "{ id: 'draft_edit_save', label: '采集箱编辑', short: '编', hint: '从采集箱商品创建只保存任务' }" in shell_source
-    assert "{ id: 'start_save', label: '浏览器执行', short: '览', hint: '查看真实浏览器和自动助手执行状态' }" in shell_source
-    assert "{ id: 'product_tasks', label: '执行记录', short: '记', hint: '查看当前任务、历史任务和恢复入口' }" in shell_source
-    assert "{ id: 'issues', label: '问题诊断', short: '诊', hint: '查看阻断原因和恢复建议' }" in shell_source
+    assert "{ id: 'draft_edit_save', label: '采集箱编辑保存', short: '编', hint: '从采集箱商品创建只保存任务' }" in shell_source
+    assert "{ id: 'product_tasks', label: '当前任务', short: '任', hint: '查看当前任务、人工确认和恢复入口' }" in shell_source
+    assert "{ id: 'start_save', label: '真实浏览器', short: '览', hint: '查看真实浏览器、中文进度窗和人工接管' }" in shell_source
+    assert "{ id: 'results', label: '结果报告', short: '报', hint: '查看保存结果和未发布证明' }" in shell_source
+    assert "{ id: 'issues', label: '问题处理', short: '问', hint: '查看阻断原因和恢复建议' }" in shell_source
+    assert "{ id: 'settings', label: '系统设置', short: '设', hint: '查看运行环境、日志路径和维护设置' }" in shell_source
     assert "const sectionLabels: Record<WorkbenchSection, string>" in shell_source
     assert "home: '首页'" in shell_source
-    assert "dxm_access: '账号登录'" in shell_source
-    assert "acquisition_claim: '商品采集'" in shell_source
-    assert "draft_edit_save: '采集箱编辑'" in shell_source
+    assert "dxm_access: '店小秘登录'" in shell_source
+    assert "acquisition_claim: '数据采集认领'" in shell_source
+    assert "draft_edit_save: '采集箱编辑保存'" in shell_source
     assert "template_center: '模板中心'" in shell_source
-    assert "product_tasks: '执行记录'" in shell_source
-    assert "task_history: '执行记录'" in shell_source
-    assert "issues: '问题诊断'" in shell_source
+    assert "product_tasks: '当前任务'" in shell_source
+    assert "task_history: '当前任务'" in shell_source
+    assert "issues: '问题处理'" in shell_source
     assert "help: '使用帮助'" in shell_source
-    assert "preflight: '浏览器执行'" in shell_source
-    assert "real_browser: '浏览器执行'" in shell_source
-    assert "evidence: '执行记录'" in shell_source
+    assert "preflight: '真实浏览器'" in shell_source
+    assert "real_browser: '真实浏览器'" in shell_source
+    assert "evidence: '结果报告'" in shell_source
     assert "sectionLabels[activeSection] ?? '工作台'" in shell_source
     assert "case 'dxm_access'" in app_source
     assert "DxmAccessPage" in app_source
@@ -1398,7 +1424,7 @@ def test_first_screen_keeps_status_and_precheck_guidance_compact():
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
     safety_visible = safety_bar[
         safety_bar.index("<section className={`safety-bar"):
-        safety_bar.index('<details className="safety-bar__meta-details')
+        safety_bar.index("</section>")
     ]
     home_command_styles = styles_source[
         styles_source.index(".home-command__status-grid {"):
@@ -1409,9 +1435,9 @@ def test_first_screen_keeps_status_and_precheck_guidance_compact():
     assert "系统状态与验收详情" not in safety_visible
     assert "safety-bar__blocker" in safety_visible
     assert "{visibleBlockerReason}" in safety_visible
-    assert "<summary>维护详情</summary>" in safety_bar
-    assert "safety-bar__details-title" in safety_bar
-    assert "维护状态说明" in safety_bar[safety_bar.index('<details className="safety-bar__meta-details'):]
+    assert "维护详情" not in safety_visible
+    assert "维护状态说明" not in safety_visible
+    assert "detailChips.map" not in safety_visible
     assert "现在只做这一步" in home_page_source
     assert "home-command__status-grid" in home_page_source
     assert "grid-template-columns: repeat(3, minmax(0, 1fr));" in home_command_styles
@@ -1474,37 +1500,39 @@ def test_sidebar_primary_navigation_keeps_only_user_main_path():
 
     expected_sidebar_labels = [
         "首页",
-        "账号登录",
-        "商品采集",
+        "店小秘登录",
+        "数据采集认领",
         "模板中心",
-        "采集箱编辑",
-        "浏览器执行",
-        "执行记录",
-        "问题诊断",
-        "系统维护",
+        "采集箱编辑保存",
+        "当前任务",
+        "真实浏览器",
+        "结果报告",
+        "问题处理",
+        "系统设置",
     ]
 
-    assert primary_area_section.count("{ id: '") == 9
+    assert primary_area_section.count("{ id: '") == 10
     for label in expected_sidebar_labels:
         assert label in primary_area_section or label in shell_source
-    assert "{ id: 'acquisition_claim', label: '商品采集'" in primary_area_section
+    assert "{ id: 'acquisition_claim', label: '数据采集认领'" in primary_area_section
     assert "{ id: 'template_center', label: '模板中心'" in primary_area_section
-    assert "{ id: 'draft_edit_save', label: '采集箱编辑'" in primary_area_section
-    assert "{ id: 'start_save', label: '浏览器执行'" in primary_area_section
-    assert "{ id: 'product_tasks', label: '执行记录'" in primary_area_section
+    assert "{ id: 'draft_edit_save', label: '采集箱编辑保存'" in primary_area_section
+    assert "{ id: 'product_tasks', label: '当前任务'" in primary_area_section
+    assert "{ id: 'start_save', label: '真实浏览器'" in primary_area_section
+    assert "{ id: 'results', label: '结果报告'" in primary_area_section
     assert "{ id: 'edit_config'" not in primary_area_section
     assert "{ id: 'preflight', label: '运行前检查'" not in primary_area_section
-    assert "{ id: 'real_browser', label: '真实浏览器'" not in primary_area_section
+    assert "{ id: 'real_browser'" not in primary_area_section
     assert "{ id: 'manual_takeover', label: '人工接管'" not in primary_area_section
     assert "{ id: 'evidence', label: '证据归档'" not in primary_area_section
     assert "{ id: 'exceptions', label: '问题'" not in primary_area_section
-    assert "{ id: 'issues', label: '问题诊断'" in primary_area_section
-    assert "{ id: 'settings', label: '系统维护'" in primary_area_section
+    assert "{ id: 'issues', label: '问题处理'" in primary_area_section
+    assert "{ id: 'settings', label: '系统设置'" in primary_area_section
     assert "id: 'dashboard'" not in primary_area_section
     assert "id: 'agent_execution'" not in primary_area_section
     assert "label: '更多'" not in primary_area_section
-    assert "首页 / 账号登录 / 商品采集 / 采集箱编辑 / 模板中心 / 浏览器执行 / 执行记录 / 问题诊断 / 系统维护" in shell_source
-    forbidden_default_labels = ["Agent Console", "L2", "L3", "probe", "HAR", "run-id", "结果与问题", "系统设置"]
+    assert "首页 / 店小秘登录 / 数据采集认领 / 模板中心 / 采集箱编辑保存 / 当前任务 / 真实浏览器 / 结果报告 / 问题处理 / 系统设置" in shell_source
+    forbidden_default_labels = ["Agent Console", "L2", "L3", "probe", "HAR", "run-id", "结果与问题", "系统维护", "问题诊断"]
     for label in forbidden_default_labels:
         assert label not in primary_area_section
 
@@ -2978,14 +3006,14 @@ def test_dashboard_and_exception_gap_lists_present_l3_post_evidence_as_locked_sc
     assert "presentAcceptanceGaps" in source
     assert "isRealWriteExpectedBlocked" in source
     assert "l3PostEvidenceGapIds" in source
-    assert "presentedAcceptanceGaps" in dashboard_section
+    assert "presentedAcceptanceGaps" not in dashboard_section
     assert "presentedAcceptanceGaps" in exception_section
     assert "emptyExceptionDetail" in exception_section
     assert "当前任务暂无问题记录" in exception_section
     assert "请查看保存结果" in exception_section
     assert 'aria-label="结果与问题"' in exception_section
     assert 'ModuleHead title="结果与问题"' in exception_section
-    assert "GapList gaps={presentedAcceptanceGaps" in dashboard_section
+    assert "GapList gaps={presentedAcceptanceGaps" not in dashboard_section
     assert "GapList gaps={presentedAcceptanceGaps}" in exception_section
     assert "真实保存后补齐：" in source
     assert "真实写入放行后再补齐" in source
@@ -3633,22 +3661,21 @@ def test_frontend_surfaces_runtime_status_and_log_filters():
     assert "`真实浏览器：${humanRealBrowserStatus(realBrowser)}`" in safety_bar
     assert "后端端口" not in safety_bar
     assert "前端端口" not in safety_bar
-    assert "safety-bar__meta-details" in safety_bar
     assert "真实浏览器" in safety_bar
     assert "店小秘登录" in safety_bar
-    assert "safety-bar__meta-details" in safety_bar
     assert "primaryStatus" in safety_bar
     assert "primaryActionLabel" in safety_bar
     assert "onShowTasks" in safety_bar
     visible_meta = safety_bar[
         safety_bar.index('<div className="safety-bar__meta"'):
-        safety_bar.index('<details className="safety-bar__meta-details')
+        safety_bar.index("</section>")
     ]
     assert "启动方式" not in visible_meta
     assert "runtimeOwnerChip" not in visible_meta
-    details_section = safety_bar[safety_bar.index('<details className="safety-bar__meta-details'):]
+    assert "safety-bar__meta-details" not in safety_bar
+    assert "detailChips.map" not in visible_meta
     assert "启动方式" in safety_bar
-    assert "detailChips.map" in details_section
+    assert "detailChips" in safety_bar
     assert "runtimeLogLevel" in app_source
     assert "runtimeLogQuery" in app_source
     assert "RuntimeLogSource" in app_source
@@ -3826,20 +3853,20 @@ def test_task_center_precheck_cards_receive_resource_state_prop():
     assert "l2ProbeResourceState," in recovery_params
 
 
-def test_safety_status_bar_keeps_long_guidance_inside_details_drawer():
+def test_safety_status_bar_keeps_long_guidance_out_of_visible_top_bar():
     safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
     main_section = safety_bar[
         safety_bar.index('<div className="safety-bar__main">'):
         safety_bar.index('<div className="safety-bar__meta"')
     ]
-    details_section = safety_bar[safety_bar.index('<details className="safety-bar__meta-details'):]
     safety_styles = styles_source[styles_source.index(".safety-bar {"):styles_source.index(".safety-bar--warn {")]
 
     assert "<strong>{headline}</strong>" in main_section
+    assert "{visibleBlockerReason}；只保存，不发布。" in main_section
     assert "conciseDetail" not in main_section
-    assert "safety-bar__compact-detail" in details_section
-    assert "{conciseDetail}" in details_section
+    assert "safety-bar__meta-details" not in safety_bar
+    assert "safety-bar__compact-detail" not in main_section
     assert "min-height: 42px;" in safety_styles
     assert "padding: 6px 10px;" in safety_styles
     assert "gap: 10px;" in safety_styles
@@ -4503,12 +4530,12 @@ def test_frontend_first_screen_names_dxm_automation_delivery():
     assert "完成页面检查" in source
     assert "继续下一步：打开真实店小秘登录" in safety_bar
     assert "当前可执行：单商品只保存自动化" in safety_bar
-    assert "维护详情" in safety_bar
-    assert "维护状态说明" in safety_bar[safety_bar.index('<details className="safety-bar__meta-details'):]
+    assert "维护详情" not in safety_bar
+    assert "维护状态说明" not in safety_bar
     assert "系统状态与验收详情" not in safety_bar
-    assert "safety-bar__meta-details inline-disclosure" in safety_bar
+    assert "safety-bar__meta-details inline-disclosure" not in safety_bar
     assert "真实保存已阻断" not in safety_bar
-    assert "首页 / 账号登录 / 商品采集 / 采集箱编辑 / 模板中心 / 浏览器执行 / 执行记录 / 问题诊断 / 系统维护" in shell
+    assert "首页 / 店小秘登录 / 数据采集认领 / 模板中心 / 采集箱编辑保存 / 当前任务 / 真实浏览器 / 结果报告 / 问题处理 / 系统设置" in shell
     assert "\\u0044\\u0058\\u004d \\u5355\\u5546\\u54c1\\u53ea\\u4fdd\\u5b58 Agent" in qa_source
     assert "initialText.includes(text.overview) || initialText.includes('\\u767b\\u5f55\\u5e97\\u5c0f\\u79d8') || initialText.includes('\\u5f00\\u59cb\\u53ea\\u4fdd\\u5b58')" in qa_source
     assert "\\u73b0\\u5728\\u53ea\\u505a\\u8fd9\\u4e00\\u6b65" in qa_source
@@ -4523,27 +4550,28 @@ def test_sidebar_copy_names_save_only_agent_flow_without_ambiguous_browser_wordi
 
     assert "DXM 只保存自动化" in shell
     assert "首页" in shell
-    assert "账号登录" in shell
-    assert "商品采集" in shell
-    assert "采集箱编辑" in shell
+    assert "店小秘登录" in shell
+    assert "数据采集认领" in shell
+    assert "采集箱编辑保存" in shell
     assert "模板中心" in shell
-    assert "浏览器执行" in shell
-    assert "执行记录" in shell
-    assert "问题诊断" in shell
-    assert "系统维护" in shell
+    assert "真实浏览器" in shell
+    assert "当前任务" in shell
+    assert "结果报告" in shell
+    assert "问题处理" in shell
+    assert "系统设置" in shell
     assert "证据归档" not in shell[shell.index("const primaryAreas"):shell.index("const sectionLabels")]
-    assert "问题处理" not in primary_area_section
     assert "使用帮助" not in primary_area_section
-    assert "系统维护" in primary_area_section
+    assert "系统维护" not in primary_area_section
     assert "帮助与设置" not in shell
     assert "采集认领到采集箱，再只保存" in shell
-    assert "{ id: 'acquisition_claim', label: '商品采集', short: '采', hint: '从数据采集认领到采集箱' }" in shell
+    assert "{ id: 'acquisition_claim', label: '数据采集认领', short: '采', hint: '从数据采集认领到采集箱' }" in shell
     assert "{ id: 'template_center', label: '模板中心', short: '模', hint: '按店小秘编辑页分区管理多套模板' }" in shell
-    assert "{ id: 'draft_edit_save', label: '采集箱编辑', short: '编', hint: '从采集箱商品创建只保存任务' }" in shell
-    assert "{ id: 'start_save', label: '浏览器执行', short: '览', hint: '查看真实浏览器和自动助手执行状态' }" in shell
-    assert "{ id: 'product_tasks', label: '执行记录', short: '记', hint: '查看当前任务、历史任务和恢复入口' }" in shell
-    assert "{ id: 'issues', label: '问题诊断', short: '诊', hint: '查看阻断原因和恢复建议' }" in shell
-    assert "{ id: 'settings', label: '系统维护', short: '维', hint: '查看运行环境、日志路径和维护设置' }" in shell
+    assert "{ id: 'draft_edit_save', label: '采集箱编辑保存', short: '编', hint: '从采集箱商品创建只保存任务' }" in shell
+    assert "{ id: 'product_tasks', label: '当前任务', short: '任', hint: '查看当前任务、人工确认和恢复入口' }" in shell
+    assert "{ id: 'start_save', label: '真实浏览器', short: '览', hint: '查看真实浏览器、中文进度窗和人工接管' }" in shell
+    assert "{ id: 'results', label: '结果报告', short: '报', hint: '查看保存结果和未发布证明' }" in shell
+    assert "{ id: 'issues', label: '问题处理', short: '问', hint: '查看阻断原因和恢复建议' }" in shell
+    assert "{ id: 'settings', label: '系统设置', short: '设', hint: '查看运行环境、日志路径和维护设置' }" in shell
     assert "真实店小秘操作分为第一段数据采集认领和第二段采集箱编辑保存" in shell
 
     assert "配置 / 任务 / 真实浏览器执行" not in shell
@@ -4581,15 +4609,15 @@ def test_frontend_uses_business_sidebar_groups_and_hides_operator_diagnostics_by
     assert "id: 'preflight'" not in primary_area_section
     assert "id: 'real_browser'" not in primary_area_section
     assert "id: 'manual_takeover'" not in primary_area_section
-    assert "results: '执行记录'" in shell
-    assert "id: 'results'" not in primary_area_section
+    assert "results: '结果报告'" in shell
+    assert "id: 'results'" in primary_area_section
     assert "id: 'issues'" in primary_area_section
     assert "id: 'help'" not in primary_area_section
     assert "help: '使用帮助'" in shell
     assert "id: 'settings'" in primary_area_section
-    assert "settings: '系统维护'" in shell
-    assert "维护详情" in safety_bar
-    visible_bar = safety_bar[safety_bar.index("return ("):safety_bar.index("<details className=\"safety-bar__meta-details")]
+    assert "settings: '系统设置'" in shell
+    assert "维护详情" not in safety_bar
+    visible_bar = safety_bar[safety_bar.index("return ("):safety_bar.index("</section>")]
     assert "技术诊断" not in visible_bar
     assert "run-id" not in visible_bar
     assert "L2 页面核验" not in visible_bar
@@ -4634,7 +4662,7 @@ def test_home_dashboard_is_operator_command_center_not_static_metrics():
 
 def test_home_page_default_path_is_three_decision_cards_without_gate_jargon():
     source = HOME_PAGE_TSX.read_text(encoding="utf-8")
-    dashboard_section = source[source.index("<div className=\"hero-panel home-command\">"):source.index("<details className=\"module-card span-3 disclosure-card\">")]
+    dashboard_section = source[source.index("<div className=\"hero-panel home-command\">"):source.index("function OperationGuide")]
 
     for label in ["现在该做什么", "为什么不能继续", "下一步"]:
         assert label in dashboard_section
@@ -4642,7 +4670,8 @@ def test_home_page_default_path_is_three_decision_cards_without_gate_jargon():
     for forbidden in ["L2", "L3", "probe", "run-id", "HAR", "greenlet"]:
         assert forbidden not in dashboard_section
 
-    assert "维护人员查看运行状态" in source
+    assert "维护人员查看运行状态" not in dashboard_section
+    assert "home-menu-map" not in dashboard_section
 
 
 def test_config_and_console_primary_screens_keep_diagnostics_secondary():

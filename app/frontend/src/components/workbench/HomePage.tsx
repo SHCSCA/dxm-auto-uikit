@@ -1,14 +1,8 @@
 import type { ConfigPreview, DeliveryWorkspace, RuntimeStatus, Task } from '../../types'
-import { humanTaskStatus } from '../../workspace'
 import {
-  CheckRow,
   DXM_LOGGED_IN_STATUSES,
-  GapList,
-  ModuleHead,
   displayTaskName,
   isRealWriteExpectedBlocked,
-  l3PostEvidenceGapIds,
-  presentAcceptanceGaps,
   requiresManualApproval,
 } from '../WorkbenchModules'
 
@@ -28,10 +22,6 @@ type HomePageProps = {
 
 export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus, onShowDxmAccess, onShowAcquisition, onShowDraftEdit, onShowTasks, onShowConfig, onShowConsole, onShowReports }: HomePageProps) {
   const realWriteExpectedBlocked = isRealWriteExpectedBlocked(workspace)
-  const presentedAcceptanceGaps = presentAcceptanceGaps(workspace.acceptanceGaps, realWriteExpectedBlocked)
-  const blockerCount = presentedAcceptanceGaps.filter((gap) => gap.severity === 'blocker').length
-  const l3PostEvidenceCount = presentedAcceptanceGaps.filter((gap) => l3PostEvidenceGapIds.has(gap.id)).length
-  const grade = workspace.evidenceGrade?.grade ?? 'C'
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
   const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
   const selectedTaskCompleted = selectedTask?.status === 'completed'
@@ -124,34 +114,6 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
           <button className="button button--secondary" type="button" onClick={nextAction.action}>{nextAction.cta}</button>
         </div>
       </div>
-
-      <div className="module-card span-3 home-menu-map">
-        <ModuleHead title="两段式操作入口" meta="普通用户只按当前按钮推进" />
-        <div className="home-menu-map__grid home-menu-map__grid--compact">
-          <button className="button button--quiet" type="button" onClick={onShowDxmAccess}>登录店小秘</button>
-          <button className="button button--quiet" type="button" onClick={onShowAcquisition}>数据采集认领</button>
-          <button className="button button--quiet" type="button" onClick={onShowConfig}>编辑页模板</button>
-          <button className="button button--quiet" type="button" onClick={onShowDraftEdit}>采集箱只保存</button>
-          <button className="button button--quiet" type="button" onClick={onShowConsole}>实时浏览器</button>
-          <button className="button button--quiet" type="button" onClick={onShowReports}>保存结果</button>
-        </div>
-        <details className="inline-disclosure home-menu-map__guide">
-          <summary>查看完整路径</summary>
-          <OperationGuide workspace={workspace} selectedTask={selectedTask} />
-        </details>
-      </div>
-
-      <details className="module-card span-3 disclosure-card">
-          <summary>维护人员查看运行状态</summary>
-        <div className="check-list check-list--inline">
-          <CheckRow label="真实店铺/商品已读取" ok={workspace.stores.length > 0 && workspace.products.length > 0} />
-          <CheckRow label="保存前安全检查通过" ok={l2Gate?.status === 'passed'} />
-          <CheckRow label="仅单商品只保存放行" ok />
-          <CheckRow label="发布入口隔离" ok={workspace.publishGuardState?.publish_allowed === false || workspace.publishGuardState?.safe === true} />
-          <CheckRow label={`证据等级 ${grade} / 待处理 ${blockerCount} 项${l3PostEvidenceCount ? ` / 保存后补齐 ${l3PostEvidenceCount} 项` : ''}`} ok={grade === 'A'} />
-        </div>
-        <GapList gaps={presentedAcceptanceGaps.slice(0, 4)} />
-      </details>
     </section>
   )
 }
