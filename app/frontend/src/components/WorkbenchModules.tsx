@@ -2508,9 +2508,9 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
   }
 
   return (
-    <section className="module-layout" aria-label="任务与记录">
-      <div className="module-card span-1 task-quick-actions" aria-label="采集箱只保存主操作">
-        <ModuleHead title="从采集箱创建只保存" meta="首屏只处理第二段保存任务" />
+    <section className="module-layout" aria-label="编辑保存">
+      <div className="module-card span-1 task-quick-actions" aria-label="编辑保存主操作">
+        <ModuleHead title="编辑保存" meta="从采集箱商品创建第二段只保存任务" />
         <div className="task-product-selection" aria-label="选择采集箱商品">
           <div className="task-product-selection__head">
             <span>采集箱商品</span>
@@ -2561,7 +2561,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
             title={quickCreateSingleSaveDisabledReason || undefined}
             data-testid="task-quick-create-single-save"
           >
-            创建采集箱只保存任务
+            创建编辑保存任务
           </button>
           {quickCreateSingleSaveDisabledReason && (
             <small id="task-quick-create-single-save-reason" className="task-quick-actions__reason">

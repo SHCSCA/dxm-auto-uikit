@@ -138,7 +138,7 @@ export function DraftEditSavePage({
             <strong>还没有可编辑的采集箱商品</strong>
             <span>请先完成采集认领，确认商品进入采集箱后再创建编辑保存任务。</span>
             <button className="button button--primary" type="button" onClick={onShowAcquisition}>
-              去数据采集认领
+              去采集认领
             </button>
           </div>
         )}
@@ -170,7 +170,7 @@ export function DraftEditSavePage({
         </ol>
         <div className="action-row action-row--stacked">
           <button className="button button--secondary" type="button" onClick={onShowAcquisition}>
-            去数据采集认领
+            去采集认领
           </button>
           <button className="button button--secondary" type="button" onClick={onShowTemplates}>
             检查编辑页模板

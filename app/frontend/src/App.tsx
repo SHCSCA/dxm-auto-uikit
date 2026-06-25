@@ -145,7 +145,6 @@ function normalizeWorkbenchSection(section: WorkbenchSection | LegacyWorkbenchSe
     config_images: 'template_center',
     config_logistics: 'template_center',
     config_compliance: 'template_center',
-    template_management: 'template_center',
     console: 'start_save',
     preflight: 'start_save',
     real_browser: 'start_save',
