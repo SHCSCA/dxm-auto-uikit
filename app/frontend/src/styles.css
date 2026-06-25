@@ -3358,6 +3358,44 @@ tr:last-child td {
   line-height: 1.45;
 }
 
+.template-default-pack {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.2fr) minmax(220px, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: var(--radius);
+  background: #f8fbff;
+}
+
+.template-default-pack span {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.template-default-pack strong {
+  color: var(--brand);
+  font-size: 12px;
+}
+
+.template-default-pack b {
+  min-width: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.template-default-pack small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .template-list {
   display: grid;
   gap: 8px;

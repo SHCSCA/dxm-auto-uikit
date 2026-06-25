@@ -315,6 +315,37 @@ def test_template_center_page_presents_multi_template_chinese_section_workflow()
         assert forbidden not in page_source
 
 
+def test_template_center_exposes_default_template_pack_as_customer_safe_starting_point():
+    page_source = TEMPLATE_CENTER_PAGE_TSX.read_text(encoding="utf-8")
+    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
+
+    for label in [
+        "默认配置模板套装",
+        "一套验收样例默认值",
+        "已覆盖全部编辑页分区",
+        "生成默认模板草稿",
+        "保存全部分区为店铺模板",
+        "defaultTemplatePackState",
+        "applyDefaultTemplatePack",
+        "saveDefaultTemplatePackAsStoreTemplates",
+        "defaultDraftPack",
+        "默认配置只是起点",
+        "不会自动进入真实执行",
+        "不覆盖已有正式店铺模板",
+        "重复保存会更新默认配置模板套装",
+        "existingDefaultTemplate",
+    ]:
+        assert label in page_source
+    assert "metadata.sections.reduce" in page_source
+    assert "setDraftValues(defaultDraftPack[activeSection.id]" in page_source
+    assert "Promise.all(metadata.sections.map" in page_source
+    assert "template_name: `默认配置模板 - ${section.label}`" in page_source
+    assert "existingDefaultTemplate ? patchJson<Template>" in page_source
+    assert "default_template_pack: true" in page_source
+    assert ".template-default-pack" in styles_source
+    assert "grid-template-columns: minmax(260px, 1.2fr) minmax(220px, 1fr) auto auto;" in styles_source
+
+
 def test_screen_reader_only_text_cannot_intercept_sidebar_clicks():
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
     sr_only_section = styles_source[styles_source.index(".sr-only {"):styles_source.index(".icon-button {")]
