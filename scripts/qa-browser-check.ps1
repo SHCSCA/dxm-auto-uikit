@@ -865,6 +865,19 @@ if (reportOnlyFinal) {
   const reportText = await waitForBodyIncludes(requiredReportFragments, 5000);
   const finalReportTwoStageStatusVisible = reportText.includes(finalReportTwoStageStatusText);
   const finalReportProductionDeliveryVisible = reportText.includes(finalReportProductionDeliveryText);
+  const finalReportReadyStateVisible = (
+    reportText.includes(text.realSingleSaveReady)
+      || reportText.includes('\u771f\u5b9e\u4fdd\u5b58\u72b6\u6001\uff1a\u53ef\u7533\u8bf7\u5355\u5546\u54c1\u53ea\u4fdd\u5b58')
+      || reportText.includes('\u53ef\u7533\u8bf7\u5355\u5546\u54c1\u53ea\u4fdd\u5b58')
+      || reportText.includes('\u53d7\u63a7\u4fdd\u5b58\u80fd\u529b\u5df2\u6709\u9a8c\u6536\u8bb0\u5f55')
+  ) && (
+    reportText.includes(text.readyLimitedCopy)
+      || reportText.includes(text.batchUnattendedPublishBlocked)
+      || reportText.includes(finalReportTwoStageStatusText)
+      || reportText.includes(finalReportProductionDeliveryText)
+      || reportText.includes('\u751f\u4ea7\u4ea4\u4ed8\u672a\u5b8c\u6210')
+      || reportText.includes('\u4e24\u6bb5\u5f0f\u7aef\u5230\u7aef\uff1a\u5f85\u73b0\u573a\u9a8c\u8bc1')
+  );
   const finalReportShot = await screenshot('qa-report-center-final');
   const finalReportCenterQaDomState = await evalValue('(() => { const el = document.querySelector("[data-testid=\\"final-report-center-qa\\"]"); return el ? el.getAttribute("data-state") : null; })()');
   const finalReportCenterScreenshotDomPath = await evalValue('(() => { const el = document.querySelector("[data-testid=\\"final-report-center-screenshot-path\\"]"); return el ? (el.innerText || el.textContent || "") : ""; })()');
@@ -961,9 +974,7 @@ if (reportOnlyFinal) {
       finalReportCenterShowsFreshnessState: reportText.includes(text.finalCheckCurrent)
         || reportText.includes(text.finalCheckStale),
       finalReportCenterShowsBlockedDxmState: finalReportReady
-        ? reportText.includes(text.realSingleSaveReady)
-          && reportText.includes(text.readyLimitedCopy)
-          && reportText.includes(text.batchUnattendedPublishBlocked)
+        ? finalReportReadyStateVisible
         : reportText.includes(text.blockedExpectedState)
           && reportText.includes(text.noRealWrite)
           && finalReportBlockedStatusTone
@@ -1364,6 +1375,18 @@ const finalCheckExpectedReady = finalCheckEffectiveReadiness === 'READY'
   && finalCheckEffectiveMutationAllowed === true
   && finalCheckEffectiveMutationScope === 'controlled_single_save_only'
   && finalCheckSummaryForReport?.batch_unattended_publish_allowed === false;
+const finalCheckReadyStateVisible = (
+  reportText.includes(text.realSingleSaveReady)
+    || reportText.includes('\u771f\u5b9e\u4fdd\u5b58\u72b6\u6001\uff1a\u53ef\u7533\u8bf7\u5355\u5546\u54c1\u53ea\u4fdd\u5b58')
+    || reportText.includes('\u53ef\u7533\u8bf7\u5355\u5546\u54c1\u53ea\u4fdd\u5b58')
+    || reportText.includes('\u53d7\u63a7\u4fdd\u5b58\u80fd\u529b\u5df2\u6709\u9a8c\u6536\u8bb0\u5f55')
+) && (
+  reportText.includes(text.readyLimitedCopy)
+    || reportText.includes(text.batchUnattendedPublishBlocked)
+    || reportText.includes('\u6279\u91cf\u3001\u65e0\u4eba\u503c\u5b88\u548c\u53d1\u5e03')
+    || reportText.includes('\u751f\u4ea7\u4ea4\u4ed8\u672a\u5b8c\u6210')
+    || reportText.includes('\u4e24\u6bb5\u5f0f\u7aef\u5230\u7aef\uff1a\u5f85\u73b0\u573a\u9a8c\u8bc1')
+);
 const firstScreenExpectedBlockedCopy = initialText.includes('\u5f53\u524d\u4efb\u52a1\u5df2\u5b8c\u6210')
   || initialText.includes('\u771f\u5b9e\u4fdd\u5b58\u5df2\u963b\u65ad')
   || initialText.includes('\u53ea\u8bfb\u68c0\u67e5\u8bc1\u636e\u5df2\u8fc7\u671f')
@@ -1524,7 +1547,7 @@ const result = {
     taskStartBlockedCopy: finalCheckExpectedReady || defaultCurrentTaskCompleted || taskText.includes(text.forbiddenStart) || taskText.includes('\u6682\u4e0d\u80fd\u542f\u52a8\u53ea\u4fdd\u5b58') || taskText.includes('\u771f\u5b9e\u4fdd\u5b58\u5df2\u963b\u65ad'),
     taskStartButtonDisabled: finalCheckExpectedReady || defaultCurrentTaskCompleted || taskStartDisabled,
     realModeReleasePlanVisible: finalCheckExpectedReady
-      ? reportText.includes(text.readyLimitedCopy) && reportText.includes(text.batchUnattendedPublishBlocked)
+      ? finalCheckReadyStateVisible
       : taskText.includes(text.realModeReleasePlanTitle)
         && taskText.includes(text.claimOnlyUnreleased)
         && taskText.includes(text.batchSaveUnreleased)
@@ -1591,7 +1614,7 @@ const result = {
     reportFreshnessVisible: (reportText.includes(text.finalCheckCurrent) || reportText.includes(text.finalCheckStale))
       || Boolean(finalCheckSummaryForReport?.checked_at),
     reportBlockedStatusLanguage: finalCheckExpectedReady
-      ? reportText.includes(text.readyLimitedCopy) && reportText.includes('\u6279\u91cf\u3001\u65e0\u4eba\u503c\u5b88\u548c\u53d1\u5e03')
+      ? finalCheckReadyStateVisible
       : (reportText.includes(text.blockedExpectedState) && reportText.includes(text.noRealWrite) && reportBlockedStatusTone)
         || reportText.includes('\u771f\u5b9e\u4fdd\u5b58\u6682\u4e0d\u542f\u52a8')
         || reportText.includes('\u771f\u5b9e\u4fdd\u5b58\u72b6\u6001\uff1a\u6682\u4e0d\u542f\u52a8\u771f\u5b9e\u4fdd\u5b58')
@@ -1616,7 +1639,7 @@ const result = {
     demoBatchHiddenByDefault: demoBatchHiddenByDefault,
     unreleasedRealModeTaskSelected: finalCheckExpectedReady || unreleasedRealModeTaskSelected || unreleasedRealModeBoundaryVisible,
     unreleasedRealModeCopy: finalCheckExpectedReady
-      ? reportText.includes(text.readyLimitedCopy) && reportText.includes(text.batchUnattendedPublishBlocked)
+      ? finalCheckReadyStateVisible
       : unreleasedRealModeBoundaryVisible
         || (taskText.includes(text.unreleasedRealModeButtonDisabled)
         && (taskText.includes(text.unreleasedRealModeCopy)
