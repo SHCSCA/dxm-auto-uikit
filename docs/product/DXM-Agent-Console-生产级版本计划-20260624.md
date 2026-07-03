@@ -59,7 +59,7 @@ DXM Agent Console 是面向普通店小秘运营用户的真实浏览器自动�
 - 当本机只有旧示例商品和示例只保存任务时，工作台返回空主路径，引导用户重新从“待认领商品”开始。
 - 前端 `composeWorkspace` 现在尊重 delivery workspace 返回的空任务列表，不再用 `/api/tasks` 的历史任务把旧示例任务补回界面。
 - 已验证首页、待认领商品页和商品箱编辑保存页不再出现 `QA guarded product`、旧“选择商品”入口或 run-id 技术字段。
-- 已在 main 合并后重新构建并覆盖免安装 EXE：`D:\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console-Portable-0.1.0.exe`，构建基准 Git HEAD `8dde686f9ae1680779ea7cef82b8bb88e856ec9c` + 当前文档同步改动，SHA-256 `2EF477C4BE80A299559AD11F03AEC70371D9507F979980CB95EE5A7080ACDD37`。
+- 已在 main clean worktree 下重新构建并覆盖免安装 EXE：`D:\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console-Portable-0.1.0.exe`，构建基准 Git HEAD `a1f9c77678417434319660725785cd7e0c214a64`，SHA-256 `87FF78089190226C2E98FAA1B4BA60DA25E25C320901B9FD7C0A6207F9C140F8`。
 
 注意：本轮免安装 EXE 只证明桌面包可启动并包含上述修复；真实店小秘“两段式端到端流程”仍需现场验收。
 

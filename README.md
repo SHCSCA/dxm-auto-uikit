@@ -26,13 +26,13 @@ D:\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console-Portable-0.1.0.exe
 outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
 ```
 
-2026-07-04 04:41（Asia/Shanghai）main 合并后 packaged/portable smoke 已通过，文件 SHA-256：
+2026-07-04 05:43（Asia/Shanghai）main 构建后 packaged/portable smoke 已通过，文件 SHA-256：
 
 ```text
-2EF477C4BE80A299559AD11F03AEC70371D9507F979980CB95EE5A7080ACDD37
+87FF78089190226C2E98FAA1B4BA60DA25E25C320901B9FD7C0A6207F9C140F8
 ```
 
-本轮桌面包验收记录：`docs/product/最终交付验收记录-20260623-桌面包.md`。当前 2026-07-04 05:25（Asia/Shanghai）验收已通过 backend pytest、frontend production build、desktop production build、packaged smoke、portable smoke、browser workbench QA 和 final report center QA；L2 双目标真实只读检查 run-id `l2-real-20260704T050647Z` 已通过，受控单商品只保存门禁为 `READY`。这只证明当前分支免安装包可启动，并包含“待认领商品 -> 商品箱编辑保存”的主路径桥接、结果页两段式生产交付状态、真实浏览器 HUD 保活、测试商品阻断、模板中心默认配置主路径优化，以及新版两段式菜单与操作引导；真实店小秘“两段式端到端验收”仍需现场跑通后再标记最终生产交付。
+本轮桌面包验收记录：`docs/product/最终交付验收记录-20260623-桌面包.md`。当前 2026-07-04 05:47（Asia/Shanghai）最新验收已通过；L2 双目标真实只读检查 run-id `l2-real-20260704T050647Z` 已通过，受控单商品只保存门禁为 `READY`。这只证明当前分支免安装包可启动，并包含“待认领商品 -> 商品箱编辑保存”的主路径桥接、结果页两段式生产交付状态、真实浏览器 HUD 保活、测试商品阻断、模板中心默认配置主路径优化，以及新版两段式菜单与操作引导；真实店小秘“两段式端到端验收”仍需现场跑通后再标记最终生产交付。
 
 仓库内也保留同源构建产物：
 
@@ -154,10 +154,10 @@ D:\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console-Portable-0.1.0.exe
 outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
 ```
 
-2026-07-04 04:41（Asia/Shanghai）main 合并后 packaged/portable smoke 已通过，文件 SHA-256：
+2026-07-04 05:43（Asia/Shanghai）main clean worktree 构建后 packaged/portable smoke 已通过，文件 SHA-256：
 
 ```bat
-2EF477C4BE80A299559AD11F03AEC70371D9507F979980CB95EE5A7080ACDD37
+87FF78089190226C2E98FAA1B4BA60DA25E25C320901B9FD7C0A6207F9C140F8
 ```
 
 仓库内同源构建产物：
@@ -263,7 +263,7 @@ scripts\final-delivery-check.bat
 
 它会串行运行 Windows 启动前检查、后端全量测试、前端生产构建、L1 selector replay、`git diff --check`、浏览器 QA，并输出 `outputs/final-delivery-check/final-delivery-check.md` / `.json`。最终自检模式下，浏览器 QA 截图和 sidecar 文件位于 `outputs\final-delivery-check\browser-checks\`。浏览器 QA 会临时启动隔离的当前源码后端和前端预览服务，避免误测 8000/5173 上的旧进程；检查模式可能安装前端依赖，但不会访问店小秘、不会执行真实保存。报告顶部会分别显示“自动化工作台自检结果”和“真实 DXM 写入放行状态”。
 
-当前源码包验收成功标准：`Local workbench check: PASS`、`Browser QA: PASS`、`Final report center QA: PASS`、`Source package check: PASS`，并按 L2/L3 门禁计算 `Real DXM write readiness`。2026-07-04 05:25（Asia/Shanghai）主干最终检查已通过本地工作台、后端 `997 passed`、前端生产构建、桌面构建、packaged smoke、浏览器工作台 QA 和最终报告中心 QA；报告目录为 `outputs\final-delivery-check-l2refreshed-fixed`。当次真实写入状态为 `Real DXM write readiness: READY`，范围仅为 `controlled_single_save_only`；L2 双目标真实只读检查 run-id 为 `l2-real-20260704T050647Z`，两个目标写入、拦截、禁词和 WebSocket 计数均为 0。`Production delivery ready: False`，因为当前两段式真实端到端仍缺少“待认领商品 -> 商品箱 -> 编辑只保存 -> 保存成功 -> 未发布证明”的现场闭环验收。
+当前源码包验收成功标准：`Local workbench check: PASS`、`Browser QA: PASS`、`Final report center QA: PASS`、`Source package check: PASS`，并按 L2/L3 门禁计算 `Real DXM write readiness`。2026-07-04 05:47（Asia/Shanghai）主干 clean worktree 最终检查已通过本地工作台、后端 `997 passed`、前端生产构建、桌面构建、packaged smoke、浏览器工作台 QA 和最终报告中心 QA；报告目录为 `outputs\final-delivery-check-clean-ready`。当次真实写入状态为 `Real DXM write readiness: READY`，范围仅为 `controlled_single_save_only`；L2 双目标真实只读检查 run-id 为 `l2-real-20260704T050647Z`，两个目标写入、拦截、禁词和 WebSocket 计数均为 0。`Production delivery ready: False`，因为当前两段式真实端到端仍缺少“待认领商品 -> 商品箱 -> 编辑只保存 -> 保存成功 -> 未发布证明”的现场闭环验收。
 
 自动化或管理摘要读取 `final-delivery-check.json` 时，不能只读取 `ok`。当前 `ok: true` 只代表 `okScope` 所声明的范围通过；必须同时读取 `realDxmMutationAllowed`、`realDxmMutationScope` 与当次验收记录。若 `okScope` 为 `local_workbench_and_controlled_single_save_ready`、`realDxmMutationAllowed` 为 `true` 且 `realDxmMutationScope` 为 `controlled_single_save_only`，结论只支持保存阶段可按门禁启动；两段式生产交付还必须额外具备已有待认领商品进入商品箱的真实验收记录。
 
