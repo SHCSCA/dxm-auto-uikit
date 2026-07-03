@@ -191,7 +191,7 @@ class ConfigValidationService:
             task_payload,
             product_payload,
             templates,
-            ("image.marketing_images_strategy", "image.marketing_strategy"),
+            ("image.marketing_images_strategy", "image.marketing_strategy", "marketing_images_strategy", "marketing_strategy"),
         ) and check_domain("image"):
             missing.append("image.marketing_images_strategy")
         if not self._has_any_domain_value(

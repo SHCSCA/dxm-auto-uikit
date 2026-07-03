@@ -7,6 +7,7 @@ import type {
   Task,
 } from '../../types'
 import { humanTaskStatus } from '../../workspace'
+import { humanTaskDisplayName } from './workbenchCopy'
 
 type SystemSettingsPageProps = {
   workspace: DeliveryWorkspace
@@ -15,8 +16,6 @@ type SystemSettingsPageProps = {
   runtimeStatus: RuntimeStatus | null
   desktopRuntime: DesktopRuntimeInfo | null
 }
-
-const LEGACY_QA_REAL_MUTATION_TASK_NAME = ['QA guarded', 'real mutation task'].join(' ')
 
 export function SystemSettingsPage({
   workspace,
@@ -140,13 +139,7 @@ function RegressionGateGrid({ gates }: { gates: RegressionGate[] }) {
 }
 
 function displayTaskName(task: Pick<Task, 'name' | 'mode'>) {
-  if (task.mode === 'single_save' && task.name === LEGACY_QA_REAL_MUTATION_TASK_NAME) {
-    return '旧版单商品只保存核验任务'
-  }
-  if (task.mode === 'single_save' && task.name.toLowerCase().includes('l3 canary save-only')) {
-    return '单商品只保存核验任务'
-  }
-  return task.name
+  return humanTaskDisplayName(task)
 }
 
 function humanRuntimeServiceStatus(status?: string | null) {

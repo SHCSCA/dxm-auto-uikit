@@ -114,6 +114,7 @@ export function TemplateCenterPage({
   const [draftValues, setDraftValues] = useState<Record<string, string>>({})
   const [templateName, setTemplateName] = useState('')
   const [saveState, setSaveState] = useState({ status: '等待填写', detail: '选择分区后可保存为本次任务或店铺模板。' })
+  const [defaultTemplatePackState, setDefaultTemplatePackState] = useState('尚未生成默认配置模板套装')
   const pendingTemplateApplyNotice = useRef(false)
   const activeSection = metadata.sections.find((section) => section.id === activeSectionId) ?? metadata.sections[0]
   const sectionTemplates = useMemo(
@@ -148,7 +149,7 @@ export function TemplateCenterPage({
   const nextTemplateStep = hasUnsavedChanges
     ? '先保存当前分区，保存后才会进入真实执行'
     : configPreview?.ok
-      ? '可回到采集箱编辑保存'
+      ? '可回到商品箱编辑保存'
       : '补齐缺失字段后保存'
   const sectionSummaries = useMemo(
     () => metadata.sections.map((section) => {
@@ -166,6 +167,13 @@ export function TemplateCenterPage({
   const activeFilledCount = activeSection.fields.filter((field) => String(draftValues[field.key] ?? '').trim()).length
   const activeRequiredCount = activeSection.fields.filter((field) => field.required).length
   const activeFilledRequiredCount = activeSection.fields.filter((field) => field.required && String(draftValues[field.key] ?? '').trim()).length
+  const defaultDraftPack = useMemo(
+    () => metadata.sections.reduce<Record<string, Record<string, string>>>((pack, section) => {
+      pack[section.id] = defaultValuesForSection(section)
+      return pack
+    }, {}),
+    [metadata.sections],
+  )
 
   useEffect(() => {
     void getJsonOrDefault<TemplateCenterMetadata>('/api/template-center/metadata', fallbackTemplateCenterMetadata).then(setMetadata)
@@ -207,7 +215,7 @@ export function TemplateCenterPage({
 
   async function saveForTask() {
     if (!selectedTask) {
-      setSaveState({ status: '不能保存', detail: '请先在采集箱编辑保存页创建或选择任务。' })
+      setSaveState({ status: '不能保存', detail: '请先在商品箱编辑保存页创建或选择任务。' })
       return
     }
     await saveWithState('正在保存到本次任务', async () => {
@@ -264,6 +272,45 @@ export function TemplateCenterPage({
     setSaveState({ status: '已套用默认配置模板', detail: '已填入常用默认值；执行前仍需按当前真实商品核对并保存。' })
   }
 
+  function applyDefaultTemplatePack() {
+    setDraftValues(defaultDraftPack[activeSection.id] ?? defaultValuesForSection(activeSection))
+    setTemplateName(`默认配置模板 - ${activeSection.label}`)
+    setDefaultTemplatePackState(`已生成默认模板草稿；已覆盖全部编辑页分区 ${metadata.sections.length} 个。`)
+    setSaveState({ status: '已生成默认模板草稿', detail: '默认配置只是起点，不会自动进入真实执行；请按当前真实商品核对后保存。' })
+  }
+
+  async function saveDefaultTemplatePackAsStoreTemplates() {
+    await saveWithState('正在保存默认配置模板套装', async () => {
+      const savedTemplates = await Promise.all(metadata.sections.map((section) => {
+        const existingDefaultTemplate = workspace.templates.find((template) => (
+          template.template_type === section.template_type
+          && template.binding_scope === bindingScope
+          && template.template_name === `默认配置模板 - ${section.label}`
+          && template.payload?.default_template_pack === true
+        ))
+        const body = {
+          template_type: section.template_type,
+          template_name: `默认配置模板 - ${section.label}`,
+          binding_scope: bindingScope,
+          payload: {
+            [section.template_type]: parseSectionValues(section, defaultDraftPack[section.id] ?? defaultValuesForSection(section)),
+            binding: defaultBinding('store', currentStore, currentCategory),
+            template_scope: 'store',
+            default_template_pack: true,
+          },
+          is_enabled: true,
+        }
+        return existingDefaultTemplate ? patchJson<Template>(`/api/templates/${existingDefaultTemplate.id}`, body) : postJson<Template>('/api/templates', body)
+      }))
+      const activeSavedTemplate = savedTemplates.find((template) => template.template_type === activeSection.template_type)
+      if (activeSavedTemplate) {
+        setSelectedTemplateId(String(activeSavedTemplate.id))
+      }
+      setDefaultTemplatePackState(`默认配置模板套装已保存；已生成 ${savedTemplates.length} 套店铺模板。`)
+      setSaveState({ status: '默认配置模板套装已保存', detail: '默认配置只是起点，不会自动进入真实执行；重复保存会更新默认配置模板套装，不覆盖已有正式店铺模板。' })
+    })
+  }
+
   async function saveWithState(label: string, action: () => Promise<void>) {
     setSaveState({ status: label, detail: '请等待当前保存动作完成。' })
     try {
@@ -284,7 +331,7 @@ export function TemplateCenterPage({
             <h2>当前任务配置摘要</h2>
             <p>按店小秘编辑页分区维护多套模板。执行前只确认三件事：当前任务用哪套模板、修改是否已保存、最终会填写哪些值。</p>
           </div>
-          <button className="button button--primary" type="button" onClick={onShowDraftEdit}>回到采集箱编辑保存</button>
+          <button className="button button--primary" type="button" onClick={onShowDraftEdit}>回到商品箱编辑保存</button>
         </div>
         <div className="template-topline" aria-label="模板中心首屏摘要">
           <span><strong>当前任务</strong><b>{selectedTask?.name || '尚未选择保存任务'}</b></span>
@@ -315,6 +362,29 @@ export function TemplateCenterPage({
           </span>
         </div>
         <small className="template-center-receipt">{saveState.detail} 选择或修改模板只会影响当前表单，点击保存后才会进入真实执行。</small>
+        <details className="template-default-pack" aria-label="默认配置模板套装">
+          <summary>
+            <span>
+              <strong>默认配置模板套装</strong>
+              <b>{defaultTemplatePackState}</b>
+            </span>
+            <em>展开管理</em>
+          </summary>
+          <div className="template-default-pack__body">
+            <span>
+              <strong>用途</strong>
+              <b>生成全部分区草稿</b>
+              <small>一套验收样例默认值，只作为起点；不会自动进入真实执行。</small>
+            </span>
+            <span>
+              <strong>覆盖范围</strong>
+              <b>已覆盖全部编辑页分区</b>
+              <small>{metadata.sections.map((section) => section.label).join(' / ')}。重复保存会更新默认配置模板套装，不覆盖已有正式店铺模板。</small>
+            </span>
+            <button className="button button--secondary" type="button" onClick={applyDefaultTemplatePack}>生成默认模板草稿</button>
+            <button className="button button--quiet" type="button" onClick={() => { void saveDefaultTemplatePackAsStoreTemplates() }}>保存全部分区为店铺模板</button>
+          </div>
+        </details>
       </div>
 
       <div className="module-card span-1 template-section-panel">

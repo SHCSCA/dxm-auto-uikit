@@ -9,7 +9,7 @@ import type {
   TwoStageAcceptance,
 } from '../../types'
 import { toArtifactUrl } from '../../workspace'
-import { humanOperatorMessage, humanOperatorTitle } from './workbenchCopy'
+import { humanOperatorMessage, humanOperatorTitle, humanTaskDisplayName } from './workbenchCopy'
 
 type ResultsPageProps = {
   workspace: DeliveryWorkspace
@@ -25,7 +25,7 @@ const READONLY_PRECHECK_CTA = '运行保存前安全检查'
 const realWriteReleasePrerequisites = [
   {
     title: '保存前安全检查通过',
-    detail: '采集页和采集箱都要完成安全检查；检查过程中不能出现领取、保存、发布或异常跳转。',
+    detail: '已有待认领列表和商品箱都要完成安全检查；检查过程中不能出现认领、保存、发布或异常跳转。',
   },
   {
     title: '异常放行必须人工复核',
@@ -160,8 +160,8 @@ export function ResultsPage({
             <p>当前工作区没有可展示的异常候选；仍需按最终报告和安全检查记录复核后再决定是否重跑。</p>
           )}
         </div>
-        <p>{l2ProbePlan.purpose || '真实保存保持暂停；仅在操作者确认可进行只读检查时，才重新运行采集页和采集箱检查。'}</p>
-        <p>采集页和采集箱必须使用同一次检查记录复验，确保双目标证据绑定到同一次人工批准的安全检查。</p>
+        <p>{l2ProbePlan.purpose || '真实保存保持暂停；仅在操作者确认可进行只读检查时，才重新运行已有待认领列表和商品箱检查。'}</p>
+        <p>已有待认领列表和商品箱必须使用同一次检查记录复验，确保双目标证据绑定到同一次人工批准的安全检查。</p>
         <div className="l2-next-step-card__commands">
           {l2ProbePlan.commands.map((command) => (
             <code key={command}>{command}</code>
@@ -232,8 +232,8 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
         : '当前真实写入状态未知，不可执行真实写入；请先重新运行本地验收并复核保存前安全检查。'
   const nextStepText = isReadyReadiness(readiness)
     ? twoStagePassed
-      ? '复核当前任务、批准人和报告链路后，再启动采集箱编辑保存。'
-      : '先完成真实数据采集认领到采集箱，再执行采集箱编辑保存并核对未发布证明。'
+      ? '复核当前任务、批准人和报告链路后，再启动商品箱编辑保存。'
+      : '先完成待认领商品进入商品箱，再执行商品箱编辑保存并核对未发布证明。'
     : `先在当前任务点击“${READONLY_PRECHECK_CTA}”，通过后再进行人工确认保存。`
   const browserQaScreenshotCount = finalCheck?.browser_qa_screenshot_hashes
     ? Object.keys(finalCheck.browser_qa_screenshot_hashes).length
@@ -298,6 +298,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
           <span>{localWorkbenchLabel}</span>
           <span>{browserCheckLabel}</span>
           <span>{reportEvidenceCheckLabel}</span>
+          <span>{`最终报告与证据 QA ${postFinalReportQaState}`}</span>
           <span>{freshnessLabel}</span>
           <span>{readinessBoundaryCopy}</span>
         </div>
@@ -429,8 +430,8 @@ function TwoStageAcceptanceCard({
       <ModuleHead title="完整流程完成度" meta={title} />
       <p>{acceptance.userMessage}</p>
       <div className="report-check-grid">
-        <CheckRow label="数据采集认领" ok={claimReady} state={claimReady ? 'present' : 'missing'} />
-        <CheckRow label="采集箱只保存" ok={draftReady} state={draftReady ? 'present' : 'missing'} />
+        <CheckRow label="待认领商品" ok={claimReady} state={claimReady ? 'present' : 'missing'} />
+        <CheckRow label="商品箱编辑保存" ok={draftReady} state={draftReady ? 'present' : 'missing'} />
         <CheckRow label="保存成功" ok={saveReady} state={saveReady ? 'present' : 'missing'} />
         <CheckRow label="未发布" ok={checks.publish_guard_safe === true} state={checks.publish_guard_safe === true ? 'present' : 'missing'} />
       </div>
@@ -535,9 +536,9 @@ function BusinessResultSummaryCard({
 function humanTwoStageAcceptanceStatus(status: string) {
   return ({
     no_task: '等待创建真实任务',
-    missing_claim_stage: '等待数据采集认领',
-    missing_draft_box_stage: '等待采集箱商品确认',
-    missing_save_stage: '等待采集箱只保存',
+    missing_claim_stage: '等待待认领商品处理',
+    missing_draft_box_stage: '等待商品箱商品确认',
+    missing_save_stage: '等待商品箱编辑保存',
     missing_unpublished_proof: '等待未发布证明',
     incomplete: '流程证据不完整',
   } as Record<string, string>)[status] ?? '流程证据不完整'
@@ -545,9 +546,9 @@ function humanTwoStageAcceptanceStatus(status: string) {
 
 function humanTwoStageNextAction(status: string) {
   return ({
-    no_task: '先到“数据采集认领”创建认领任务。',
-    missing_claim_stage: '先从店小秘数据采集认领真实商品到采集箱。',
-    missing_draft_box_stage: '确认选择的是刚进入采集箱的真实商品。',
+    no_task: '先到“待认领商品”创建认领任务。',
+    missing_claim_stage: '先从店小秘已有待认领列表把真实商品认领到商品箱。',
+    missing_draft_box_stage: '确认选择的是刚进入商品箱的真实商品。',
     missing_save_stage: '回到浏览器现场，启动单商品只保存。',
     missing_unpublished_proof: '查看保存结果和未发布证明，确认没有发布。',
     incomplete: '按页面提示补齐缺失步骤后重试。',
@@ -578,8 +579,9 @@ function taskProductLabel(task: Task | null) {
   if (titles.length > 0) return titles.slice(0, 2).join(' / ')
   const productIds = Array.isArray(payload.product_ids) ? payload.product_ids : []
   const count = productIds.length || task.total_jobs || 0
-  if (count > 0) return `${task.name} / ${count} 件商品`
-  return task.name || '当前任务商品'
+  const taskName = humanTaskDisplayName(task)
+  if (count > 0) return `${taskName} / ${count} 件商品`
+  return taskName || '当前任务商品'
 }
 
 function textValue(value: unknown) {
@@ -878,8 +880,8 @@ function humanGateDetail(detail?: string | null) {
   }
   if (detail.includes('data_acquisition') || detail.includes('draft_box')) {
     return safeDetail
-      .split('data_acquisition').join('商品采集页')
-      .split('draft_box').join('采集箱页')
+      .split('data_acquisition').join('已有待认领列表')
+      .split('draft_box').join('商品箱页')
       .split('L2').join('保存前安全检查')
       .split('L3').join('真实保存')
       .split('passed').join('通过')
@@ -925,8 +927,8 @@ function humanL2PrecheckError(message: string) {
 
 function humanL2TargetLabel(target: string) {
   return ({
-    data_acquisition: '商品采集页',
-    draft_box: '采集箱',
+    data_acquisition: '已有待认领列表',
+    draft_box: '商品箱',
   } as Record<string, string>)[target] ?? target
 }
 
@@ -945,7 +947,7 @@ function l2DiagnosticNextAction({
     return '先在真实登录浏览器完成登录，再重新运行保存前安全检查。'
   }
   if (failedCheckKeys.includes('final_url_matches') || failedCheckKeys.includes('target_url_matches') || finalClass === 'home' || finalClass === 'other') {
-    return '检查目标页面是否跳到首页/登录页，必要时重新进入采集页或采集箱后复跑。'
+    return '检查目标页面是否跳到首页/登录页，必要时重新进入待认领列表或商品箱后复跑。'
   }
   if (reviewCandidateCount > 0) {
     return '把只读依赖候选交给人工评审；未评审前不要放行真实保存。'

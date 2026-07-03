@@ -64,7 +64,7 @@ L2 真实只读 probe 需要**真实登录 cookie + 人工审批**,不由 `final
 - `execution/v1_runner.py` 的 `V1_STEPS` 是 24 步流水线;`MODE_LAST_STATE` 决定每种模式跑到哪一步就停:`dry_run` 只跑 `PRECHECK_CONFIG`;`probe` 停在 `PRECHECK_PUBLISH_GUARD`;`claim_only` 停在 `VERIFY_LIST_OWNERSHIP`(物理上永不开编辑器、永不发 `add.json`);`single_save`/`batch_save` 跑到 `RELEASE_LOCK`。这是「爆炸半径」的结构性边界。
 - **真假分流的唯一开关是 `workflow_adapter`**。Runner 把特定状态映射成 `DxmWorkflowAdapter` 的真实浏览器动作,放在 **1 线程 ThreadPoolExecutor** 上跑(Playwright 同步 API 不能在 asyncio loop 上跑)。adapter 转发进 `dxm_login_flow.py`(5400 行,唯一真正驱动浏览器的地方)。若 `workflow_adapter is None`,真实写入模式直接 E901,而 probe/dry_run 仍作为纯骨架「成功」——生产 `main.py` 始终传真实 adapter。
 - **步间状态只通过磁盘文件 `dianxiaomi_runtime_state.json` 传递**(page_url / source_editor_url / target_source_urls / save_result)。`DxmLoginFlow` 每个动作都**新开并关闭一整个浏览器**、重新注入 cookie、导航到上一步保存的 URL。没有跨步长存的 page,所以 state 文件缺失/过期会直接打断编辑/半托管步骤。
-- **save 是双重判定且文字精确**:`_save_only_on_page` 只点规范化文本**恰为「保存」**的按钮,若发现任何发布类按钮则中止;保存成功要同时满足 DOM 出现「保存成功/编辑保存成功」**且** POP 接口 `.../api/popchoiceproduct/add.json` 返回 `code==0`(`_looks_like_save_network_response`,显式排除 publish/release/online URL)。report/log 全程 `published=false`。
+- **save 判定以真实保存证据为准且文字精确**:`_save_only_on_page` 只点规范化文本**恰为「保存」**的按钮,若发现任何发布类按钮则中止;保存成功接受 DOM 出现「保存成功/编辑保存成功/编辑成功」或保存接口回包成功。真实接口包括 `.../api/smtProduct/add.json` / `.../api/popChoiceProduct/add.json`,必须是 POST、2xx、`code==0` 且成功文案命中;显式排除 publish/release/online/history URL。report/log 全程 `published=false`。
 
 ### 安全门禁——这是本仓库最该读懂的部分
 两套正交机制叠加,详见 `services/delivery_workspace.py`(定义/计算 L0–L3 与严格 L2 闸门)、`main.py`(执行强制点)、`services/publish_guard.py`(内容扫描)。

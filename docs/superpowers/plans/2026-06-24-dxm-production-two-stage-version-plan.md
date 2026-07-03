@@ -1,8 +1,10 @@
 # DXM Production Two Stage Version Plan Implementation Plan
 
+> **2026-07-02 状态:** 本计划已被 `2026-06-25-dxm-production-two-stage-version-plan.md` 取代。历史正文里出现的 `数据采集认领`、`采集认领`、`采集箱编辑保存` 仅代表旧命名；当前产品语言统一为 `待认领商品`、`商品箱商品`、`商品箱编辑保存`。系统不采集商品、不填写产品网址、不点击“开始采集”。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 把 DXM Agent Console 做成生产级两段式真实店小秘自动化产品：第一段从数据采集认领到采集箱，第二段从采集箱编辑商品并只保存。
+**Goal:** 把 DXM Agent Console 做成生产级两段式真实店小秘自动化产品：第一段从店小秘已有待认领商品放入商品箱，第二段从商品箱编辑商品并只保存。
 
 **Architecture:** 继续使用现有 React/Vite/Electron/FastAPI/Playwright 架构，不重写技术栈。产品层按业务阶段拆分，普通用户只看到“登录、认领、配置、保存、结果”，技术门禁、日志、路径、run-id 和证据细节统一下沉到维护诊断。
 
@@ -28,8 +30,8 @@
 
 **Next implementation task:** execute the V1.0/V1.1 production path before repackaging:
 
-1. Close the first stage: real DXM data acquisition claim into the draft box.
-2. Close the second stage: draft-box edit page fill and save-only execution.
+1. Close the first stage: move an existing DXM pending-claim product into the product box.
+2. Close the second stage: product-box edit page fill and save-only execution.
 3. Productionize the template center: multiple Chinese templates, saved-state feedback, and final execution value preview.
 4. Stabilize the visible browser Agent: persistent browser, resident Chinese HUD, and recoverable failures.
 5. Rebuild the portable EXE only after the full two-stage path is verified.
@@ -58,14 +60,14 @@
 **目的:** 用真实店小秘浏览器完成可验收的主路径。
 
 **用户可感知结果:**
-- 菜单固定为：`首页`、`店小秘登录`、`数据采集认领`、`采集箱编辑保存`、`模板中心`、`执行浏览器`、`结果与问题`、`系统设置`。
-- 第一段只负责从数据采集页把商品认领到采集箱。
-- 第二段只负责从采集箱打开商品编辑页并只点击保存。
+- 菜单固定为：`首页`、`店小秘登录`、`待认领商品`、`商品箱商品`、`模板中心`、`执行浏览器`、`结果与问题`、`系统设置`。
+- 第一段只负责把店小秘已有待认领商品放入商品箱。
+- 第二段只负责从商品箱打开商品编辑页并只点击保存。
 - 任何发布、批量、无人值守入口都不可见且后端继续阻断。
 
 **验收标准:**
-- 真实浏览器完成一次：数据采集认领 -> 采集箱确认。
-- 真实浏览器完成一次：采集箱商品打开编辑页 -> 按模板填写 -> 只保存 -> 未发布证明。
+- 真实浏览器完成一次：已有待认领商品 -> 商品箱确认。
+- 真实浏览器完成一次：商品箱商品打开编辑页 -> 按模板填写 -> 只保存 -> 未发布证明。
 - 报告能关联同一个商品的第一段和第二段证据。
 
 ### V1.1 模板中心生产版
@@ -235,8 +237,8 @@ Replace old scope with:
 
 ```text
 当前交付范围：真实店小秘两段式受控单商品只保存。
-第一段：从数据采集页认领真实商品到采集箱。
-第二段：从采集箱打开编辑页，按模板填写后只点击保存。
+第一段：从店小秘已有待认领商品放入商品箱。
+第二段：从商品箱打开编辑页，按模板填写后只点击保存。
 禁止范围：发布、保存并发布、移入待发布、批量无人值守。
 ```
 

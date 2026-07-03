@@ -68,6 +68,9 @@ def test_desktop_main_starts_backend_hidden_and_loads_frontend_with_api_base():
     assert "DXM_BACKEND_PORT: String(port)" in source
     assert "DXM_BACKEND_URL: `http://127.0.0.1:${port}`" in source
     assert "DXM_DESKTOP=1" in source
+    assert "DXM_WORKFLOW_ACTION_RUNTIME: 'browser_agent'" in source
+    assert "DXM_WORKFLOW_PROFILE_DIR: path.join(dataDir, 'browser_profiles', 'dxm_workflow')" in source
+    assert "DXM_WORKFLOW_PERSISTENT_PROFILE: '1'" in source
     assert "PYTHONDONTWRITEBYTECODE" in source
     assert "windowsHide: true" in source
     assert "data/desktop-main.log" in source
@@ -293,7 +296,7 @@ def test_user_docs_present_desktop_exe_as_primary_delivery_entry():
         assert "D:\\Desktop\\DXM-Agent-Console-免安装版\\DXM-Agent-Console-Portable-0.1.0.exe" in source
         assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
         assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in source
-        assert "82CF223A673BB657237ACA1A586212F6F0F4FA45B125B44A9C502F565BE0934C" in source
+        assert "83F162F579A1F45971ADDA7ABC93EB2FF206BC25FA6E0DB965872EEC5B9C0F75" in source
         assert "portable 首次启动会解包 Electron 与 Python 运行时" in source
         assert "%TEMP%` 所在磁盘建议至少保留 1GB 可用空间" in source
         assert "scripts\\start-desktop.bat" in source
@@ -308,7 +311,7 @@ def test_portable_quick_guide_uses_verified_portable_entry():
     assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
     assert "使用目录版时必须保留整个文件夹和 `resources` 目录" in source
     assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in source
-    assert "82CF223A673BB657237ACA1A586212F6F0F4FA45B125B44A9C502F565BE0934C" in source
+    assert "83F162F579A1F45971ADDA7ABC93EB2FF206BC25FA6E0DB965872EEC5B9C0F75" in source
     assert "至少建议保留 1GB 可用空间" in source
 
 
@@ -320,8 +323,8 @@ def test_delivery_docs_describe_two_stage_real_browser_scope():
     ]
     for path in docs:
         source = path.read_text(encoding="utf-8")
-        assert "数据采集认领" in source
-        assert "采集箱编辑保存" in source
+        assert "待认领商品" in source
+        assert "商品箱编辑保存" in source
         assert "只保存" in source
         assert "不发布" in source
         assert "真实浏览器" in source
@@ -334,6 +337,17 @@ def test_frontend_vite_build_uses_relative_base_for_electron_file_loading():
     assert "base: './'" in source
 
 
+def test_frontend_vite_proxy_uses_runtime_backend_target_for_isolated_qa():
+    source = FRONTEND_VITE_CONFIG.read_text(encoding="utf-8")
+
+    assert "const backendTarget =" in source
+    assert "process.env.DXM_BACKEND_URL" in source
+    assert "process.env.DXM_BACKEND_PORT" in source
+    assert "target: backendTarget" in source
+    assert "target: 'http://127.0.0.1:8000'" not in source
+    assert "target: 'ws://127.0.0.1:8000'" not in source
+
+
 def test_app_shell_presents_agent_console_as_user_first_navigation():
     source = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
     index_html = (REPO_ROOT / "app" / "frontend" / "index.html").read_text(encoding="utf-8")
@@ -343,15 +357,15 @@ def test_app_shell_presents_agent_console_as_user_first_navigation():
     assert "const primaryAreas" in source
     primary_block = source[source.index("const primaryAreas"):source.index("const sectionLabels")]
     assert "label: '准备'" in source
-    assert "label: '第一段：采集认领'" in source
-    assert "label: '第二段：采集箱编辑保存'" in source
+    assert "label: '第一段：待认领商品'" in source
+    assert "label: '第二段：编辑只保存'" in source
     assert "label: '复盘'" in source
     assert "label: '维护'" in source
     assert "label: '更多'" not in source
     assert "首页" in source
     assert "账号与浏览器" in source
-    assert "数据采集认领" in source
-    assert "采集箱编辑保存" in source
+    assert "待认领商品" in source
+    assert "商品箱编辑保存" in source
     assert "模板中心" in source
     assert "浏览器现场" in source
     assert "任务记录" in source

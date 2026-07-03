@@ -14,9 +14,9 @@ type AcquisitionClaimPageProps = {
 
 const claimSteps = [
   { title: '选择店铺与平台', detail: '确认这次认领使用哪个真实店小秘店铺。' },
-  { title: '填写采集商品线索', detail: '填写关键词、类目和认领标记，便于定位商品。' },
-  { title: '开始认领到采集箱', detail: '打开浏览器现场处理认领，只认领，不保存、不发布。' },
-  { title: '确认商品进入采集箱', detail: '认领完成后再进入第二段采集箱编辑保存。' },
+  { title: '筛选已有待认领商品', detail: '填写关键词或类目，只筛选店小秘已有列表。' },
+  { title: '认领到商品箱', detail: '打开浏览器现场处理认领，完成后进入第二段编辑保存。' },
+  { title: '确认进入商品箱', detail: '认领完成后再进入第二段商品编辑保存。' },
 ]
 
 export function AcquisitionClaimPage({
@@ -52,7 +52,7 @@ export function AcquisitionClaimPage({
   )
   const draftBoxVerified = lastRequest?.draft_box_verified === true
   const claimedSourceLabel = lastRequest?.claimed_product_source === 'dxm_data_acquisition'
-    ? '真实数据采集'
+    ? '店小秘已有待认领商品'
     : lastRequest?.claimed_product_source || '等待认领完成'
 
   useEffect(() => {
@@ -77,20 +77,20 @@ export function AcquisitionClaimPage({
   }
 
   return (
-    <section className="module-layout" aria-label="采集认领">
+    <section className="module-layout" aria-label="待认领商品">
       <div className="module-card span-2">
         <div className="module-head">
           <div>
             <span className="eyebrow">第一段</span>
-            <h2>从店小秘数据采集认领到采集箱</h2>
-            <p>先创建认领任务，再到浏览器现场开始认领。这里只认领到采集箱，不会进入编辑页，不会保存，不会发布。</p>
+            <h2>把已有待认领商品放进商品箱</h2>
+            <p>只处理店小秘里已经存在的待认领商品。系统会筛选列表并点击认领，不会填写产品网址，也不会创建新的来源商品。</p>
           </div>
           <button className="button button--secondary" type="button" onClick={onNavigateDataAcquisition} disabled={busy}>
-            打开真实数据采集页
+            打开待认领商品页
           </button>
         </div>
 
-        <ol className="operation-guide" aria-label="数据采集认领四步">
+        <ol className="operation-guide" aria-label="待认领商品四步">
           {claimSteps.map((step, index) => (
             <li key={step.title} className={claimCompleted || (lastRequest && index < 2) ? 'is-done' : ''}>
               <span>{index + 1}</span>
@@ -113,11 +113,11 @@ export function AcquisitionClaimPage({
             </select>
           </label>
           <label>
-            <span>搜索关键词</span>
-            <input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="用于在数据采集中定位商品" disabled={busy} />
+            <span>商品关键词</span>
+            <input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="筛选已有待认领列表" disabled={busy} />
           </label>
           <label>
-            <span>认领类目</span>
+            <span>商品类目</span>
             <input value={categoryName} onChange={(event) => setCategoryName(event.target.value)} placeholder="例如：立牌类谷子" disabled={busy} />
           </label>
           <label>
@@ -137,22 +137,27 @@ export function AcquisitionClaimPage({
           </label>
         </div>
         {!hasProductHint && (
-          <p className="form-hint">请至少填写搜索关键词或认领类目，否则无法定位真实采集商品。</p>
+          <p className="form-hint">请至少填写商品关键词或商品类目，用来定位店小秘已有待认领商品。</p>
         )}
 
         <div className="action-row">
           <button className="button button--primary" type="button" onClick={submit} disabled={busy || !canSubmit}>
-            创建采集认领请求
+            创建商品认领任务
           </button>
-          {lastRequest && (
+          {lastRequest && !claimCompleted && (
             <button className="button button--secondary" type="button" onClick={onShowExecutionConsole} disabled={busy}>
-              {claimCompleted ? '查看执行记录' : '开始认领到采集箱'}
+              开始认领到商品箱
             </button>
           )}
-          {claimCompleted && (
-            <button className="button button--primary" type="button" onClick={onShowDraftEdit}>
-              进入采集箱编辑保存
-            </button>
+          {lastRequest && claimCompleted && (
+            <>
+              <button className="button button--primary" type="button" onClick={onShowDraftEdit} disabled={busy}>
+                查看商品箱商品
+              </button>
+              <button className="button button--secondary" type="button" onClick={onShowExecutionConsole} disabled={busy}>
+                查看执行记录
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -165,17 +170,17 @@ export function AcquisitionClaimPage({
         {lastRequest ? (
           <div className="status-grid">
             <span><strong>店铺</strong><b>{selectedStore?.name ?? lastRequest.store_id}</b></span>
-            <span><strong>阶段</strong><b>{claimCompleted ? '商品已进入采集箱' : '等待启动真实浏览器认领'}</b></span>
+            <span><strong>阶段</strong><b>{claimCompleted ? '商品已进入商品箱' : '等待启动真实浏览器认领'}</b></span>
             <span><strong>标记</strong><b>{lastRequest.claim_mark}</b></span>
-            <span><strong>下一步</strong><b>{claimCompleted ? '进入采集箱编辑保存' : '开始认领到采集箱'}</b></span>
-            {claimCompleted && <span><strong>采集箱商品</strong><b>{lastRequest.claimed_product_title || `商品 #${lastRequest.claimed_product_id}`}</b></span>}
-            {claimCompleted && <span><strong>采集箱验证</strong><b>{draftBoxVerified ? '已通过采集箱验证' : '等待采集箱验证'}</b></span>}
+            <span><strong>下一步</strong><b>{claimCompleted ? '去“商品箱编辑保存”选择该商品' : '认领到商品箱'}</b></span>
+            {claimCompleted && <span><strong>商品箱商品</strong><b>{lastRequest.claimed_product_title || `商品 #${lastRequest.claimed_product_id}`}</b></span>}
+            {claimCompleted && <span><strong>商品箱验证</strong><b>{draftBoxVerified ? '已确认进入商品箱' : '等待商品箱验证'}</b></span>}
             {claimCompleted && <span><strong>商品来源</strong><b>{claimedSourceLabel}</b></span>}
             {claimCompleted && <span><strong>认领类目</strong><b>{lastRequest.claimed_product_category_name || lastRequest.category_name || '等待类目'}</b></span>}
-            {claimCompleted && <span><strong>来源链接</strong><b>{lastRequest.claimed_product_source_url || '等待来源链接'}</b></span>}
+            {claimCompleted && <span><strong>商品箱身份</strong><b>{lastRequest.claimed_product_id ? `商品 #${lastRequest.claimed_product_id}` : '等待商品箱确认'}</b></span>}
           </div>
         ) : (
-          <p>创建后，系统会按该请求进入真实店小秘数据采集页处理认领；认领完成前不会保存或发布。</p>
+          <p>创建后，系统会进入店小秘已有待认领列表处理认领；认领完成前不会进入编辑保存。</p>
         )}
       </div>
     </section>

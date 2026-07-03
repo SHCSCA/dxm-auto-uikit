@@ -688,3 +688,41 @@ def test_repository_allowlist_covers_vip_active_time_readonly_bootstrap_request(
     assert summary["blocked_request_count"] == 0
     assert summary["allowlisted_request_count"] == 1
     assert summary["allowlisted_requests"][0]["allowlist_id"] == "dxm-bootstrap-vip-active-time"
+
+
+def test_repository_allowlist_covers_current_static_publish_detection_script_without_allowing_publish_api():
+    module = _load_probe_module()
+    repo_root = Path(__file__).resolve().parents[3]
+    allowlist_file = repo_root / "config" / "l2_readonly_allowlist.json"
+
+    entries, errors, resolved = module.load_allowlist(allowlist_file)
+    guard = module.ReadOnlyProbeGuard(
+        allowlist_entries=entries,
+        allowlist_file=resolved,
+        allowlist_errors=errors,
+        strict_active_requests=True,
+    )
+
+    static_route = FakeRoute(FakeRequest(
+        "GET",
+        "https://s1.dianxiaomi.com/dxm-web/2026-07/assets/publishDetection-CSebd4RX.js",
+        "script",
+    ))
+    publish_api_route = FakeRoute(FakeRequest(
+        "POST",
+        "https://www.dianxiaomi.com/api/product/submitPublish.json",
+        "xhr",
+    ))
+
+    guard._route(static_route)
+    guard._route(publish_api_route)
+
+    summary = guard.summary()
+    assert errors == []
+    assert static_route.continued is True
+    assert static_route.aborted is False
+    assert publish_api_route.aborted is True
+    assert summary["allowlisted_request_count"] == 1
+    assert summary["allowlisted_requests"][0]["allowlist_id"] == "dxm-static-publish-detection-script"
+    assert summary["blocked_request_count"] == 1
+    assert summary["blocked_requests"][0]["url"] == "https://www.dianxiaomi.com/api/product/submitPublish.json"

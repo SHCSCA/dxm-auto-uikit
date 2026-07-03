@@ -58,7 +58,7 @@ USER_ACTION_HUD_COPY = {
         "severity": "warning",
         "human_title": "需要你接管真实浏览器",
         "human_action": "请在真实浏览器里检查或修正当前页面",
-        "human_next": "处理完成后在控制台交还 Agent",
+        "human_next": "处理完成后在控制台交还自动浏览器",
     },
     "BROWSER_CLOSED": {
         "phase": "真实浏览器已关闭",
@@ -551,7 +551,7 @@ class AgentConsoleService:
                 with self._lock:
                     self._state["last_error"] = str(exc)
                     self._state["updated_at"] = _now()
-        return self._record_manual_takeover_event(action="release_agent", label="交还 Agent")
+        return self._record_manual_takeover_event(action="release_agent", label="交还自动浏览器")
 
     def refresh_frame(self) -> dict[str, Any]:
         self._refresh_browser_liveness()
@@ -883,6 +883,9 @@ class AgentConsoleService:
               try {
                 window.sessionStorage.setItem('__dxmAgentHudPersistedState', JSON.stringify(hud));
               } catch (error) {}
+              try {
+                window.localStorage.setItem('__dxmAgentHudPersistedState', JSON.stringify(hud));
+              } catch (error) {}
               if (window.__dxmRenderAgentHud) window.__dxmRenderAgentHud();
             }
             """,
@@ -1190,6 +1193,13 @@ HUD_INIT_SCRIPT = """
     persisted = JSON.parse(window.sessionStorage.getItem('__dxmAgentHudPersistedState') || 'null');
   } catch (error) {
     persisted = null;
+  }
+  if (!persisted) {
+    try {
+      persisted = JSON.parse(window.localStorage.getItem('__dxmAgentHudPersistedState') || 'null');
+    } catch (error) {
+      persisted = null;
+    }
   }
   window.__dxmAgentHudState = persisted || window.__dxmAgentHudState || {};
   window.__dxmRenderAgentHud = () => {

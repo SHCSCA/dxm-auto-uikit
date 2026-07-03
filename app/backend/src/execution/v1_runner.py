@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import subprocess
+import sys
+import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from src.core.config import SCREENSHOT_DIR
+from src.core.config import DATA_DIR, SCREENSHOT_DIR
+from src.execution.browser_agent_protocol import BrowserAgentCommand, browser_agent_command_from_worker_request
 from src.execution.dxm_live import DxmLiveClient
 from src.repository import Repository
 from src.services.browser_agent_status import build_browser_hud
@@ -22,11 +28,11 @@ V1_STEPS = [
     (StateName.PRECHECK_CONFIG, "启动前配置校验", "config"),
     (StateName.PRECHECK_SESSION, "检查店小秘登录态", "session"),
     (StateName.PRECHECK_PUBLISH_GUARD, "发布隔离预检", "publish_guard"),
-    (StateName.OPEN_DRAFT_LIST, "进入速卖通采集箱", "navigation"),
+    (StateName.OPEN_DRAFT_LIST, "进入商品箱", "navigation"),
     (StateName.FIND_PRODUCT, "定位目标商品", "ownership"),
     (StateName.ITEM_LOCKING, "创建商品归属锁", "ownership"),
     (StateName.CLAIM_PRODUCT, "写入领取备注", "ownership"),
-    (StateName.VERIFY_LIST_OWNERSHIP, "校验采集箱归属", "ownership"),
+    (StateName.VERIFY_LIST_OWNERSHIP, "校验商品箱归属", "ownership"),
     (StateName.OPEN_EDIT_PAGE, "打开普通编辑页", "editor"),
     (StateName.VERIFY_EDIT_OWNERSHIP, "校验编辑页归属", "ownership"),
     (StateName.FILL_BASE_INFO, "输入标题/选择分类", "base_info"),
@@ -45,13 +51,19 @@ V1_STEPS = [
     (StateName.RELEASE_LOCK, "释放商品归属锁", "ownership"),
 ]
 
+SINGLE_SAVE_STEPS = [
+    step
+    for step in V1_STEPS
+    if step[0] not in {StateName.CLAIM_PRODUCT, StateName.VERIFY_LIST_OWNERSHIP}
+]
+
 CLAIM_ONLY_STEPS = [
     (StateName.PRECHECK_CONFIG, "启动前配置校验", "config"),
     (StateName.PRECHECK_SESSION, "检查店小秘登录态", "session"),
     (StateName.PRECHECK_PUBLISH_GUARD, "发布隔离预检", "publish_guard"),
-    (StateName.OPEN_DATA_ACQUISITION, "打开数据采集", "navigation"),
-    (StateName.CLAIM_TO_DRAFT_BOX, "认领到采集箱", "acquisition"),
-    (StateName.VERIFY_DRAFT_BOX_CLAIM, "确认采集箱商品", "acquisition"),
+    (StateName.OPEN_DATA_ACQUISITION, "打开已有待认领列表", "navigation"),
+    (StateName.CLAIM_TO_DRAFT_BOX, "认领到商品箱", "acquisition"),
+    (StateName.VERIFY_DRAFT_BOX_CLAIM, "确认商品箱商品", "acquisition"),
 ]
 
 MODE_LAST_STATE = {
@@ -78,6 +90,7 @@ SINGLE_SAVE_PROGRESS_STEPS = [
 ]
 
 HUD_PROGRESS_TOTAL = len(SINGLE_SAVE_PROGRESS_STEPS)
+DEFAULT_WORKFLOW_ACTION_TIMEOUT_SECONDS = 180.0
 
 HUD_PROGRESS_INDEX = {
     StateName.PRECHECK_CONFIG: 1,
@@ -113,9 +126,9 @@ HUD_STEP_COPY = {
     StateName.PRECHECK_CONFIG: ("开始任务", "开始任务", "正在检查任务、店铺登录和只保存边界"),
     StateName.PRECHECK_SESSION: ("开始任务", "开始任务", "正在确认店小秘已经登录"),
     StateName.PRECHECK_PUBLISH_GUARD: ("开始任务", "开始任务", "正在确认本次只保存，不发布"),
-    StateName.OPEN_DATA_ACQUISITION: ("打开数据采集", "打开数据采集", "正在打开店小秘数据采集页"),
-    StateName.CLAIM_TO_DRAFT_BOX: ("认领到采集箱", "认领到采集箱", "正在把真实商品认领到采集箱"),
-    StateName.VERIFY_DRAFT_BOX_CLAIM: ("确认采集箱", "确认采集箱", "正在确认商品已经进入采集箱"),
+    StateName.OPEN_DATA_ACQUISITION: ("打开已有待认领列表", "打开已有待认领列表", "正在打开店小秘已有待认领列表"),
+    StateName.CLAIM_TO_DRAFT_BOX: ("认领到商品箱", "认领到商品箱", "正在把真实商品认领到商品箱"),
+    StateName.VERIFY_DRAFT_BOX_CLAIM: ("确认商品箱", "确认商品箱", "正在确认商品已经进入商品箱"),
     StateName.OPEN_DRAFT_LIST: ("打开草稿箱", "打开草稿箱", "正在打开店小秘草稿箱"),
     StateName.FIND_PRODUCT: ("查找商品", "查找商品", "正在查找本次要保存的商品"),
     StateName.ITEM_LOCKING: ("查找商品", "查找商品", "正在锁定本次商品，避免误操作其他商品"),
@@ -151,6 +164,27 @@ HUD_VIRTUAL_STAGE_AFTER = {
     },
 }
 
+WORKFLOW_BROWSER_ACTION_STATES = {
+    StateName.PRECHECK_SESSION,
+    StateName.OPEN_DATA_ACQUISITION,
+    StateName.CLAIM_TO_DRAFT_BOX,
+    StateName.VERIFY_DRAFT_BOX_CLAIM,
+    StateName.OPEN_DRAFT_LIST,
+    StateName.CLAIM_PRODUCT,
+    StateName.OPEN_EDIT_PAGE,
+    StateName.VERIFY_EDIT_OWNERSHIP,
+    StateName.FILL_BASE_INFO,
+    StateName.FILL_VARIANTS,
+    StateName.FILL_MEDIA,
+    StateName.FILL_COMPLIANCE,
+    StateName.ENABLE_SEMI_MANAGED,
+    StateName.OPEN_SEMI_MANAGED_PAGE,
+    StateName.FILL_SEMI_GOODS,
+    StateName.FILL_SEMI_VARIANTS,
+    StateName.SAVE_ONLY,
+    StateName.VERIFY_NOT_PUBLISHED,
+}
+
 class V1TaskRunner:
     def __init__(
         self,
@@ -158,18 +192,72 @@ class V1TaskRunner:
         manager,
         workflow_adapter: Any | None = None,
         agent_console: Any | None = None,
+        browser_agent_runtime: Any | None = None,
         workflow_executor: ThreadPoolExecutor | None = None,
+        workflow_action_timeout_seconds: float | None = None,
     ) -> None:
         self.repo = repo
         self.manager = manager
         self.workflow_adapter = workflow_adapter
         self.agent_console = agent_console
+        self.browser_agent_runtime = browser_agent_runtime
         self._workflow_executor = workflow_executor or (ThreadPoolExecutor(max_workers=1) if workflow_adapter is not None else None)
+        self.workflow_action_timeout_seconds = (
+            float(workflow_action_timeout_seconds)
+            if workflow_action_timeout_seconds is not None
+            else self._workflow_action_timeout_from_env()
+        )
+        self.workflow_runtime_unhealthy_reason: str | None = None
         self.live = DxmLiveClient()
         self.publish_guard = PublishGuardService()
         self.config_validation = ConfigValidationService()
         self.defaults_resolver = ConfigDefaultsResolver()
         self.ownership_lock = OwnershipLockService()
+
+    def _workflow_action_timeout_from_env(self) -> float:
+        raw = os.getenv("DXM_WORKFLOW_ACTION_TIMEOUT_SECONDS")
+        if raw:
+            try:
+                value = float(raw)
+                if value > 0:
+                    return value
+            except ValueError:
+                pass
+        return DEFAULT_WORKFLOW_ACTION_TIMEOUT_SECONDS
+
+    def _workflow_action_runtime_from_env(self) -> str:
+        raw = (os.getenv("DXM_WORKFLOW_ACTION_RUNTIME") or "auto").strip().lower()
+        if raw in {"auto", "thread", "process", "browser_agent"}:
+            return raw
+        return "auto"
+
+    def _use_browser_agent_runtime(self) -> bool:
+        if self.browser_agent_runtime is None:
+            return False
+        runtime = self._workflow_action_runtime_from_env()
+        if runtime == "browser_agent":
+            return True
+        if runtime in {"thread", "process"}:
+            return False
+        adapter = self.workflow_adapter
+        if adapter is None:
+            return False
+        adapter_class = adapter.__class__
+        return adapter_class.__name__ == "DxmWorkflowAdapter" and adapter_class.__module__.endswith("dxm_adapter")
+
+    def _use_process_workflow_runtime(self) -> bool:
+        runtime = self._workflow_action_runtime_from_env()
+        if runtime == "browser_agent":
+            return False
+        if runtime == "thread":
+            return False
+        if runtime == "process":
+            return True
+        adapter = self.workflow_adapter
+        if adapter is None:
+            return False
+        adapter_class = adapter.__class__
+        return adapter_class.__name__ == "DxmWorkflowAdapter" and adapter_class.__module__.endswith("dxm_adapter")
 
     async def run_task(self, task_id: int) -> None:
         task = self.repo.get_task(task_id)
@@ -545,6 +633,8 @@ class V1TaskRunner:
             return [V1_STEPS[0]]
         if mode == "claim_only":
             return CLAIM_ONLY_STEPS
+        if mode == "single_save":
+            return SINGLE_SAVE_STEPS
         return V1_STEPS
 
     def _sync_agent_console(
@@ -607,11 +697,37 @@ class V1TaskRunner:
             hud_override=hud_override,
         )
         try:
-            if self._workflow_executor is not None:
+            if self._use_browser_agent_runtime() and self.browser_agent_runtime is not None:
+                runtime_status: Mapping[str, Any] = {}
+                status_reader = getattr(self.browser_agent_runtime, "status", None)
+                if callable(status_reader):
+                    try:
+                        status_payload = status_reader()
+                        if isinstance(status_payload, Mapping):
+                            runtime_status = status_payload
+                    except Exception:
+                        runtime_status = {}
+                if runtime_status.get("healthy") is False:
+                    result = {
+                        "ok": False,
+                        "updated": False,
+                        "reason": "live_browser_hud_runtime_unhealthy",
+                        "error": runtime_status.get("lastError") or runtime_status.get("unhealthyReason"),
+                    }
+                else:
+                    result = {
+                        "ok": True,
+                        "updated": False,
+                        "reason": "live_browser_hud_deferred_to_browser_agent",
+                        "current_url": runtime_status.get("currentUrl") or runtime_status.get("current_url"),
+                        "page_title": runtime_status.get("pageTitle") or runtime_status.get("page_title"),
+                        "hud": payload,
+                    }
+            elif self._workflow_executor is not None:
                 result = self._workflow_executor.submit(updater, payload).result(timeout=8)
             else:
                 result = updater(payload)
-        except FutureTimeoutError:
+        except (FutureTimeoutError, TimeoutError):
             result = {
                 "ok": False,
                 "updated": False,
@@ -677,7 +793,7 @@ class V1TaskRunner:
         resolved_step_name = str(override.get("step_name") or step_name)
         store_name = self._store_name(task)
         hud = build_browser_hud({
-            "task_name": "数据采集认领" if mode == "claim_only" else "采集箱编辑保存",
+            "task_name": "待认领商品" if mode == "claim_only" else "商品箱编辑保存",
             "step": resolved_step_code,
             "status": override.get("status") or "running",
             "severity": override.get("severity"),
@@ -857,7 +973,7 @@ class V1TaskRunner:
         if action_name == "claim_product":
             return "领取备注"
         if action_name == "claim_from_data_acquisition":
-            return "认领到采集箱"
+            return "认领到商品箱"
         if action_name.startswith("fill_"):
             return str(workflow_result.get("product_query") or "编辑页字段")
         if action_name.startswith("open_"):
@@ -925,12 +1041,490 @@ class V1TaskRunner:
                 raise V1ExecutionError(validation["error_code"] or "E302", "启动前配置校验失败", detail)
             if mode in {"single_save", "batch_save"} and task.get("publish_scene") != "SMT_SEMI_MANAGED_SAVE_ONLY":
                 raise V1ExecutionError("E999", "任务发布场景不安全", "V1 只允许 SMT_SEMI_MANAGED_SAVE_ONLY")
+            if mode == "single_save":
+                self._guard_single_save_claimed_product(product)
         if state_name in {StateName.CLAIM_PRODUCT, StateName.CLAIM_TO_DRAFT_BOX, StateName.VERIFY_DRAFT_BOX_CLAIM} and not claim_mark:
             raise V1ExecutionError("E202", "领取标记为空", "任务缺少 claim_mark")
         if state_name == StateName.SAVE_ONLY:
             result = self.publish_guard.check(intended_action="save", target_text="保存")
             if not result["allowed"]:
                 raise V1ExecutionError("E999", "保存动作被发布隔离器阻断", "; ".join(result["reasons"]))
+
+    def _guard_single_save_claimed_product(self, product: Mapping[str, Any] | None) -> None:
+        if not product:
+            raise V1ExecutionError(
+                "E202",
+                "保存任务缺少商品箱商品",
+                "单商品只保存必须从已认领并通过商品箱验证的真实商品启动；系统不会打开编辑页或保存。",
+            )
+        status = str(product.get("status") or "")
+        payload = product.get("payload") if isinstance(product.get("payload"), Mapping) else {}
+        source = str(payload.get("source") or product.get("source") or "").strip()
+        if status not in {"claimed_to_draft", "ready_for_edit"}:
+            raise V1ExecutionError(
+                "E202",
+                "保存任务商品未进入商品箱",
+                "当前商品还不是已认领的商品箱商品；请先从店小秘已有待认领列表认领并确认商品箱后再启动只保存。",
+            )
+        if source != "dxm_data_acquisition":
+            raise V1ExecutionError(
+                "E202",
+                "保存任务商品来源不正确",
+                "单商品只保存只能处理从店小秘已有待认领列表进入商品箱的真实商品；手工导入或测试商品不会启动真实保存。",
+            )
+        if payload.get("draft_box_verified") is not True:
+            raise V1ExecutionError(
+                "E202",
+                "商品箱验证未完成",
+                "当前商品尚未通过商品箱验证；请先确认商品已进入商品箱后再启动只保存。",
+            )
+        if not self._payload_source_urls(payload):
+            raise V1ExecutionError(
+                "E202",
+                "商品箱身份校验证据不足",
+                "单商品只保存必须确认商品箱中能唯一匹配本次商品；系统不会打开编辑页或保存。",
+            )
+        if not self.repo.product_has_completed_claim_provenance(dict(product)):
+            raise V1ExecutionError(
+                "E202",
+                "待认领商品任务链不完整",
+                "单商品只保存必须能追溯到已完成的待认领商品任务；请重新完成认领到商品箱后再启动只保存。",
+            )
+
+    def _workflow_action_worker_request(
+        self,
+        task: dict[str, Any],
+        job: dict[str, Any],
+        state_name: StateName,
+        claim_mark: str,
+        defaults: dict[str, Any],
+    ) -> tuple[str, str, str, dict[str, Any]] | None:
+        product_query = self._source_title(job.get("product_id"))
+        acquisition_query = self._acquisition_product_query(task, job) or None
+        acquisition_category = self._acquisition_category_name(task)
+        target_source_urls = self._target_source_urls(task, job)
+        store_name = self._store_name(task)
+        specs: dict[StateName, tuple[str, str, str, dict[str, Any]]] = {
+            StateName.PRECHECK_SESSION: (
+                "check_login_state",
+                "E101",
+                "店小秘登录态检查失败",
+                {},
+            ),
+            StateName.OPEN_DATA_ACQUISITION: (
+                "open_data_acquisition",
+                "E201",
+                "进入已有待认领列表失败",
+                {},
+            ),
+            StateName.CLAIM_TO_DRAFT_BOX: (
+                "claim_from_data_acquisition",
+                "E202",
+                "认领到商品箱失败",
+                {
+                    "claim_mark": claim_mark,
+                    "product_query": acquisition_query,
+                    "category_name": acquisition_category,
+                    "store_name": store_name,
+                    "target_source_urls": target_source_urls,
+                },
+            ),
+            StateName.VERIFY_DRAFT_BOX_CLAIM: (
+                "verify_draft_box_claim",
+                "E202",
+                "商品箱确认失败",
+                {
+                    "claim_mark": claim_mark,
+                    "product_query": acquisition_query,
+                    "category_name": acquisition_category,
+                    "store_name": store_name,
+                    "target_source_urls": target_source_urls,
+                },
+            ),
+            StateName.OPEN_DRAFT_LIST: (
+                "open_draft_box",
+                "E201",
+                "进入商品箱失败",
+                {},
+            ),
+            StateName.CLAIM_PRODUCT: (
+                "claim_product",
+                "E202",
+                "写入领取备注失败",
+                {
+                    "note_text": claim_mark,
+                    "product_query": product_query,
+                    "store_name": store_name,
+                    "target_source_urls": target_source_urls,
+                },
+            ),
+            StateName.OPEN_EDIT_PAGE: (
+                "open_editor",
+                "E901",
+                "打开编辑页失败",
+                {
+                    "note_text": claim_mark,
+                    "product_query": product_query,
+                    "store_name": store_name,
+                    "target_source_urls": target_source_urls,
+                },
+            ),
+            StateName.VERIFY_EDIT_OWNERSHIP: (
+                "verify_edit_ownership",
+                "E202",
+                "编辑页归属校验失败",
+                {
+                    "product_query": product_query,
+                    "store_name": store_name,
+                    "target_source_urls": target_source_urls,
+                },
+            ),
+            StateName.FILL_BASE_INFO: (
+                "fill_editor_required_defaults",
+                "E901",
+                "填写普通编辑页必填项失败",
+                {
+                    "defaults": defaults,
+                    "product_query": product_query,
+                    "store_name": store_name,
+                },
+            ),
+            StateName.FILL_VARIANTS: (
+                "fill_editor_variants",
+                "E901",
+                "填写普通变种表格失败",
+                {
+                    "defaults": defaults,
+                    "product_query": product_query,
+                    "store_name": store_name,
+                },
+            ),
+            StateName.FILL_MEDIA: (
+                "fill_media_assets",
+                "E901",
+                "处理图片素材失败",
+                {
+                    "defaults": defaults,
+                    "product_query": product_query,
+                    "store_name": store_name,
+                },
+            ),
+            StateName.FILL_COMPLIANCE: (
+                "fill_compliance_defaults",
+                "E901",
+                "填写合规信息失败",
+                {
+                    "defaults": defaults,
+                    "product_query": product_query,
+                    "store_name": store_name,
+                },
+            ),
+            StateName.ENABLE_SEMI_MANAGED: (
+                "enable_semi_managed",
+                "E901",
+                "勾选半托管服务失败",
+                {
+                    "product_query": product_query,
+                    "store_name": store_name,
+                },
+            ),
+            StateName.OPEN_SEMI_MANAGED_PAGE: (
+                "open_semi_managed_page",
+                "E901",
+                "打开半托管编辑页失败",
+                {
+                    "defaults": defaults,
+                    "product_query": product_query,
+                    "store_name": store_name,
+                },
+            ),
+            StateName.FILL_SEMI_GOODS: (
+                "fill_semi_managed_defaults",
+                "E901",
+                "填写半托管货品信息失败",
+                {
+                    "defaults": defaults,
+                    "product_query": product_query,
+                    "store_name": store_name,
+                },
+            ),
+            StateName.FILL_SEMI_VARIANTS: (
+                "fill_semi_managed_defaults",
+                "E901",
+                "填写半托管变种信息失败",
+                {
+                    "defaults": defaults,
+                    "product_query": product_query,
+                    "store_name": store_name,
+                },
+            ),
+            StateName.SAVE_ONLY: (
+                "save_only",
+                "E999",
+                "只保存失败",
+                {
+                    "defaults": defaults,
+                    "product_query": product_query,
+                    "store_name": store_name,
+                },
+            ),
+            StateName.VERIFY_NOT_PUBLISHED: (
+                "verify_not_published",
+                "E999",
+                "未发布状态校验失败",
+                {
+                    "product_query": product_query,
+                    "store_name": store_name,
+                },
+            ),
+        }
+        return specs.get(state_name)
+
+    def _run_workflow_action_process(
+        self,
+        task: dict[str, Any],
+        job: dict[str, Any],
+        state_name: StateName,
+        claim_mark: str,
+        defaults: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        spec = self._workflow_action_worker_request(task, job, state_name, claim_mark, defaults)
+        if spec is None:
+            return None
+        action_name, error_code, error_title, params = spec
+        if state_name == StateName.SAVE_ONLY:
+            self._assert_manual_approval_before_save(task)
+
+        request = {
+            "task_id": task.get("id"),
+            "job_id": job.get("id"),
+            "state": state_name.value,
+            "action": action_name,
+            "params": params,
+        }
+        result = self._invoke_workflow_worker(
+            request=request,
+            state_name=state_name,
+            action_name=action_name,
+            error_code=error_code,
+            error_title=error_title,
+        )
+        result["workflow_runtime"] = "process"
+        return self._validate_workflow_action_result(
+            state_name=state_name,
+            action_name=action_name,
+            error_code=error_code,
+            error_title=error_title,
+            result=result,
+        )
+
+    def _run_workflow_action_browser_agent(
+        self,
+        task: dict[str, Any],
+        job: dict[str, Any],
+        state_name: StateName,
+        claim_mark: str,
+        defaults: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if self.browser_agent_runtime is None:
+            return None
+        spec = self._workflow_action_worker_request(task, job, state_name, claim_mark, defaults)
+        if spec is None:
+            return None
+        action_name, error_code, error_title, params = spec
+        if state_name == StateName.SAVE_ONLY:
+            self._assert_manual_approval_before_save(task)
+
+        request = {
+            "task_id": task.get("id"),
+            "job_id": job.get("id"),
+            "state": state_name.value,
+            "action": action_name,
+            "params": params,
+        }
+        command = browser_agent_command_from_worker_request(
+            request,
+            step_label=self._workflow_step_label(state_name),
+        )
+        try:
+            result = self.browser_agent_runtime.run(
+                command,
+                timeout_seconds=self.workflow_action_timeout_seconds,
+            )
+        except TimeoutError as exc:
+            detail = self._browser_agent_timeout_detail(state_name)
+            self.workflow_runtime_unhealthy_reason = detail
+            raise V1ExecutionError(
+                "E901",
+                "真实浏览器操作超时",
+                detail,
+            ) from exc
+        except Exception as exc:
+            detail = self._workflow_exception_detail(action_name, exc)
+            self.workflow_runtime_unhealthy_reason = detail
+            raise V1ExecutionError(error_code, error_title, detail) from exc
+        result = dict(result)
+        result["workflow_runtime"] = "browser_agent"
+        result.setdefault("browser_agent_command", command.to_payload())
+        return self._validate_workflow_action_result(
+            state_name=state_name,
+            action_name=action_name,
+            error_code=error_code,
+            error_title=error_title,
+            result=result,
+        )
+
+    def _invoke_workflow_worker(
+        self,
+        *,
+        request: dict[str, Any],
+        state_name: StateName,
+        action_name: str,
+        error_code: str,
+        error_title: str,
+    ) -> dict[str, Any]:
+        task_id = request.get("task_id") or "task"
+        job_id = request.get("job_id") or "job"
+        worker_dir = DATA_DIR / "workflow_worker"
+        worker_dir.mkdir(parents=True, exist_ok=True)
+        file_stem = f"task_{task_id}_job_{job_id}_{state_name.value}_{uuid.uuid4().hex}"
+        request_file = worker_dir / f"{file_stem}.request.json"
+        result_file = worker_dir / f"{file_stem}.result.json"
+        trace_file = worker_dir / f"{file_stem}.trace.jsonl"
+        request_file.write_text(json.dumps(request, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        backend_dir = Path(__file__).resolve().parents[2]
+        command = [
+            sys.executable,
+            "-m",
+            "src.execution.workflow_worker",
+            "--request-file",
+            str(request_file),
+            "--result-file",
+            str(result_file),
+        ]
+        env = os.environ.copy()
+        env["DXM_WORKFLOW_TRACE_FILE"] = str(trace_file)
+        env.setdefault("DXM_WORKFLOW_PERSISTENT_PROFILE", "1")
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=str(backend_dir),
+                env=env,
+                text=True,
+                capture_output=True,
+                timeout=self.workflow_action_timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            trace_tail = self._workflow_trace_tail(trace_file)
+            detail = self._workflow_action_timeout_detail(state_name)
+            if trace_tail:
+                detail = f"{detail} 最近执行轨迹：{trace_tail}"
+            raise V1ExecutionError(
+                "E901",
+                "真实浏览器操作超时",
+                detail,
+            ) from exc
+
+        if not result_file.exists():
+            detail = self._workflow_worker_process_detail(
+                action_name=action_name,
+                completed=completed,
+                fallback="执行器没有写回结果文件。",
+            )
+            raise V1ExecutionError(error_code, error_title, detail)
+
+        try:
+            payload = json.loads(result_file.read_text(encoding="utf-8"))
+        except Exception as exc:
+            detail = self._workflow_worker_process_detail(
+                action_name=action_name,
+                completed=completed,
+                fallback=f"执行器结果文件无法读取：{exc}",
+            )
+            raise V1ExecutionError(error_code, error_title, detail) from exc
+
+        if payload.get("ok") is not True:
+            error_text = " ".join(
+                str(value or "")
+                for value in (
+                    payload.get("error"),
+                    payload.get("traceback"),
+                    completed.stderr,
+                    completed.stdout,
+                )
+                if value
+            )
+            browser_detail = self._operator_browser_failure_detail(error_text)
+            detail = browser_detail or f"{action_name}: {error_text or '真实浏览器执行器返回失败'}"
+            raise V1ExecutionError(error_code, error_title, detail[:1200])
+
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            detail = self._workflow_worker_process_detail(
+                action_name=action_name,
+                completed=completed,
+                fallback="执行器结果格式不正确。",
+            )
+            raise V1ExecutionError(error_code, error_title, detail)
+        result.setdefault("worker_request_file", str(request_file))
+        result.setdefault("worker_result_file", str(result_file))
+        result.setdefault("worker_trace_file", str(trace_file))
+        result.setdefault("worker_exit_code", completed.returncode)
+        return result
+
+    def _workflow_trace_tail(self, trace_file: Path, limit: int = 5) -> str:
+        if not trace_file.exists():
+            return ""
+        try:
+            lines = trace_file.read_text(encoding="utf-8").splitlines()[-limit:]
+        except Exception:
+            return str(trace_file)
+        events: list[str] = []
+        for line in lines:
+            try:
+                item = json.loads(line)
+            except Exception:
+                events.append(line[:200])
+                continue
+            event = str(item.get("event") or "")
+            url = str(item.get("current_url") or item.get("url") or "")
+            events.append(f"{event} {url}".strip())
+        return " / ".join(events)[:1200]
+
+    def _workflow_worker_process_detail(
+        self,
+        *,
+        action_name: str,
+        completed: subprocess.CompletedProcess[str],
+        fallback: str,
+    ) -> str:
+        parts = [f"{action_name}: {fallback}", f"exit_code={completed.returncode}"]
+        if completed.stderr:
+            parts.append(f"stderr={completed.stderr.strip()[:800]}")
+        if completed.stdout:
+            parts.append(f"stdout={completed.stdout.strip()[:800]}")
+        return "; ".join(parts)[:1200]
+
+    def _validate_workflow_action_result(
+        self,
+        *,
+        state_name: StateName,
+        action_name: str,
+        error_code: str,
+        error_title: str,
+        result: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        result_dict = dict(result)
+        if not result_dict.get("ok"):
+            raise V1ExecutionError(error_code, error_title, self._workflow_failure_detail(action_name, result_dict))
+        if state_name == StateName.CLAIM_PRODUCT and result_dict.get("evidence", {}).get("note_verified") is False:
+            raise V1ExecutionError(error_code, error_title, f"{action_name} note_verified false")
+        if state_name == StateName.SAVE_ONLY:
+            save_result = self._extract_save_result(result_dict)
+            if not save_result or save_result.get("ok") is not True:
+                raise V1ExecutionError(error_code, error_title, f"{action_name} save_result missing or false")
+        return result_dict
 
     def _run_workflow_action(
         self,
@@ -944,36 +1538,38 @@ class V1TaskRunner:
             return None
 
         product_query = self._source_title(job.get("product_id"))
-        acquisition_query = self._acquisition_product_query(task, job)
+        acquisition_query = self._acquisition_product_query(task, job) or None
         acquisition_category = self._acquisition_category_name(task)
-        target_source_urls = self._source_urls(job.get("product_id"))
+        target_source_urls = self._target_source_urls(task, job)
         store_name = self._store_name(task)
         actions = {
             StateName.PRECHECK_SESSION: ("check_login_state", "E101", "店小秘登录态检查失败", lambda: self.workflow_adapter.check_login_state()),
-            StateName.OPEN_DATA_ACQUISITION: ("open_data_acquisition", "E201", "进入数据采集失败", lambda: self.workflow_adapter.open_data_acquisition()),
+            StateName.OPEN_DATA_ACQUISITION: ("open_data_acquisition", "E201", "进入已有待认领列表失败", lambda: self.workflow_adapter.open_data_acquisition()),
             StateName.CLAIM_TO_DRAFT_BOX: (
                 "claim_from_data_acquisition",
                 "E202",
-                "认领到采集箱失败",
+                "认领到商品箱失败",
                 lambda: self.workflow_adapter.claim_from_data_acquisition(
                     claim_mark,
                     product_query=acquisition_query,
                     category_name=acquisition_category,
                     store_name=store_name,
+                    target_source_urls=target_source_urls,
                 ),
             ),
             StateName.VERIFY_DRAFT_BOX_CLAIM: (
                 "verify_draft_box_claim",
                 "E202",
-                "采集箱确认失败",
+                "商品箱确认失败",
                 lambda: self.workflow_adapter.verify_draft_box_claim(
                     claim_mark,
                     product_query=acquisition_query,
                     category_name=acquisition_category,
                     store_name=store_name,
+                    target_source_urls=target_source_urls,
                 ),
             ),
-            StateName.OPEN_DRAFT_LIST: ("open_draft_box", "E201", "进入采集箱失败", lambda: self.workflow_adapter.open_draft_box()),
+            StateName.OPEN_DRAFT_LIST: ("open_draft_box", "E201", "进入商品箱失败", lambda: self.workflow_adapter.open_draft_box()),
             StateName.CLAIM_PRODUCT: (
                 "claim_product",
                 "E202",
@@ -993,6 +1589,7 @@ class V1TaskRunner:
                     product_query=product_query,
                     store_name=store_name,
                     note_text=claim_mark,
+                    target_source_urls=target_source_urls,
                 ),
             ),
             StateName.VERIFY_EDIT_OWNERSHIP: (
@@ -1002,6 +1599,7 @@ class V1TaskRunner:
                 lambda: self.workflow_adapter.verify_edit_ownership(
                     product_query=product_query,
                     store_name=store_name,
+                    target_source_urls=target_source_urls,
                 ),
             ),
             StateName.FILL_BASE_INFO: (
@@ -1115,22 +1713,65 @@ class V1TaskRunner:
                 error_title,
                 f"{action_name} adapter method unavailable",
             )
+        if state_name == StateName.SAVE_ONLY:
+            self._assert_manual_approval_before_save(task)
         try:
             result = call()
         except Exception as exc:
-            raise V1ExecutionError(error_code, error_title, f"{action_name}: {exc}") from exc
+            raise V1ExecutionError(error_code, error_title, self._workflow_exception_detail(action_name, exc)) from exc
 
-        if not result.get("ok"):
-            raise V1ExecutionError(error_code, error_title, self._workflow_failure_detail(action_name, result))
-        if state_name == StateName.CLAIM_PRODUCT and result.get("evidence", {}).get("note_verified") is False:
-            raise V1ExecutionError(error_code, error_title, f"{action_name} note_verified false")
-        if state_name == StateName.SAVE_ONLY:
-            save_result = self._extract_save_result(result)
-            if not save_result or save_result.get("ok") is not True:
-                raise V1ExecutionError(error_code, error_title, f"{action_name} save_result missing or false")
-        return result
+        return self._validate_workflow_action_result(
+            state_name=state_name,
+            action_name=action_name,
+            error_code=error_code,
+            error_title=error_title,
+            result=result,
+        )
+
+    def _assert_manual_approval_before_save(self, task: Mapping[str, Any]) -> None:
+        current_task = self.repo.get_task_private(int(task["id"])) if task.get("id") is not None else None
+        payload = (current_task or task).get("payload") if isinstance((current_task or task).get("payload"), Mapping) else {}
+        approval = payload.get("manual_approval") if isinstance(payload, Mapping) else {}
+        if not isinstance(approval, Mapping):
+            approval = {}
+        if (
+            approval.get("approved") is True
+            and approval.get("source") == "server"
+            and bool(str(approval.get("approved_by") or "").strip())
+        ):
+            return
+        raise V1ExecutionError(
+            "E999",
+            "缺少人工确认",
+            "保存前人工确认未完成：请在控制台填写批准人，确认只保存、不发布后再启动单商品只保存。",
+        )
+
+    def _workflow_exception_detail(self, action_name: str, exc: Exception) -> str:
+        operator_detail = self._operator_claim_failure_detail(action_name)
+        if operator_detail:
+            return operator_detail
+        browser_detail = self._operator_browser_failure_detail(str(exc))
+        if browser_detail:
+            return browser_detail
+        return f"{action_name}: {exc}"
 
     def _workflow_failure_detail(self, action_name: str, result: Mapping[str, Any]) -> str:
+        operator_detail = self._operator_claim_failure_detail(action_name)
+        if operator_detail:
+            return operator_detail
+
+        evidence = result.get("evidence") if isinstance(result.get("evidence"), Mapping) else {}
+        browser_detail = self._operator_browser_failure_detail(
+            result.get("message"),
+            result.get("reason"),
+            result.get("error"),
+            evidence.get("message"),
+            evidence.get("reason"),
+            evidence.get("error"),
+        )
+        if browser_detail:
+            return browser_detail
+
         stage = result.get("stage") or "unknown_stage"
         page_url = result.get("page_url") or "unknown_url"
         parts = [f"{action_name} failed at {stage}: {page_url}"]
@@ -1139,7 +1780,6 @@ class V1TaskRunner:
             if value:
                 parts.append(str(value))
 
-        evidence = result.get("evidence") if isinstance(result.get("evidence"), Mapping) else {}
         for value in (evidence.get("message"), evidence.get("reason"), evidence.get("error")):
             if value:
                 parts.append(str(value))
@@ -1175,6 +1815,37 @@ class V1TaskRunner:
             compact_parts.append(text)
         return "; ".join(compact_parts)[:1200]
 
+    def _operator_browser_failure_detail(self, *values: Any) -> str | None:
+        text = " ".join(str(value or "") for value in values)
+        lowered = text.casefold()
+        browser_failure_terms = (
+            "target page, context or browser has been closed",
+            "browser has been closed",
+            "page.evaluate",
+            "cannot switch to a different thread",
+            "playwright sync api inside the asyncio loop",
+            "greenlet",
+        )
+        if not any(term in lowered for term in browser_failure_terms):
+            return None
+        return (
+            "真实浏览器窗口已关闭或失去连接，本次任务已停止，不会保存或发布。"
+            "请关闭残留的店小秘浏览器和旧后台进程，重新打开执行浏览器后再重试。"
+        )
+
+    def _operator_claim_failure_detail(self, action_name: str) -> str | None:
+        if action_name == "claim_from_data_acquisition":
+            return (
+                "待认领商品处理没有完成。请保持真实店小秘浏览器打开，"
+                "检查搜索关键词、商品类目、店铺和验证码后重试；系统没有进入编辑页，不会保存或发布。"
+            )
+        if action_name == "verify_draft_box_claim":
+            return (
+                "商品箱商品确认没有完成。请在真实店小秘商品箱确认商品是否已经进入商品箱后重试；"
+                "系统没有进入编辑页，不会保存或发布。"
+            )
+        return None
+
     async def _run_workflow_action_async(
         self,
         task: dict[str, Any],
@@ -1185,16 +1856,134 @@ class V1TaskRunner:
     ) -> dict[str, Any] | None:
         if self.workflow_adapter is None:
             return None
+        task_id = int(task["id"])
+        job_id = int(job["id"])
+        label = self._workflow_step_label(state_name)
+        should_log_browser_action = state_name in WORKFLOW_BROWSER_ACTION_STATES
+        runtime_setting = self._workflow_action_runtime_from_env()
+        if runtime_setting == "browser_agent" and self.browser_agent_runtime is None:
+            raise V1ExecutionError(
+                "E901",
+                "自动浏览器未配置",
+                "当前已指定使用持久在线真实浏览器，但后端没有装配自动浏览器运行时；系统已停止任务，不会保存或发布。",
+            )
+        use_browser_agent_runtime = self._use_browser_agent_runtime()
+        use_process_runtime = (not use_browser_agent_runtime) and self._use_process_workflow_runtime()
+        runtime_name = "browser_agent" if use_browser_agent_runtime else "process" if use_process_runtime else "thread"
+        if should_log_browser_action:
+            self.repo.add_log(task_id, job_id, "info", f"真实浏览器动作开始：{label}", {
+                "state": state_name.value,
+                "timeout_seconds": self.workflow_action_timeout_seconds,
+                "runtime": runtime_name,
+            })
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            self._workflow_executor,
-            self._run_workflow_action,
-            task,
-            job,
-            state_name,
-            claim_mark,
-            defaults,
+        if use_browser_agent_runtime:
+            future = loop.run_in_executor(
+                None,
+                self._run_workflow_action_browser_agent,
+                task,
+                job,
+                state_name,
+                claim_mark,
+                defaults,
+            )
+            wait_timeout = self.workflow_action_timeout_seconds + 10
+        elif use_process_runtime:
+            future = loop.run_in_executor(
+                None,
+                self._run_workflow_action_process,
+                task,
+                job,
+                state_name,
+                claim_mark,
+                defaults,
+            )
+            wait_timeout = self.workflow_action_timeout_seconds + 10
+        else:
+            future = loop.run_in_executor(
+                self._workflow_executor,
+                self._run_workflow_action,
+                task,
+                job,
+                state_name,
+                claim_mark,
+                defaults,
+            )
+            wait_timeout = self.workflow_action_timeout_seconds
+        try:
+            result = await asyncio.wait_for(future, timeout=wait_timeout)
+            if should_log_browser_action and result:
+                self.repo.add_log(task_id, job_id, "success", f"真实浏览器动作完成：{label}", {
+                    "state": state_name.value,
+                    "action": result.get("action"),
+                    "stage": result.get("stage"),
+                    "page_url": result.get("page_url"),
+                    "ok": result.get("ok"),
+                    "runtime": runtime_name,
+                })
+            return result
+        except asyncio.TimeoutError as exc:
+            detail = self._workflow_action_timeout_detail(state_name)
+            self.workflow_runtime_unhealthy_reason = detail
+            if should_log_browser_action:
+                self.repo.add_log(task_id, job_id, "error", f"真实浏览器动作超时：{label}", {
+                    "state": state_name.value,
+                    "timeout_seconds": self.workflow_action_timeout_seconds,
+                    "detail": detail,
+                    "runtime": runtime_name,
+                })
+            raise V1ExecutionError(
+                "E901",
+                "真实浏览器操作超时",
+                detail,
+            ) from exc
+        except V1ExecutionError as exc:
+            if should_log_browser_action:
+                self.repo.add_log(task_id, job_id, "error", f"真实浏览器动作失败：{label}", {
+                    "state": state_name.value,
+                    "error_code": exc.error_code,
+                    "detail": exc.detail,
+                    "runtime": runtime_name,
+                })
+            raise
+
+    def _workflow_action_timeout_detail(self, state_name: StateName) -> str:
+        step_label = self._workflow_step_label(state_name)
+        seconds = int(self.workflow_action_timeout_seconds)
+        return (
+            f"真实浏览器操作超时：当前步骤「{step_label}」超过 {seconds} 秒没有完成，"
+            "系统已停止本次任务，不会保存或发布。请关闭旧的执行浏览器或后台进程，"
+            "重新打开执行浏览器后再重试。"
         )
+
+    def _browser_agent_timeout_detail(self, state_name: StateName) -> str:
+        detail = self._workflow_action_timeout_detail(state_name)
+        internal_step = self._browser_agent_internal_step()
+        if internal_step and internal_step not in detail:
+            detail = f"{detail} 最后停在：{internal_step}。"
+        return detail
+
+    def _browser_agent_internal_step(self) -> str | None:
+        if self.browser_agent_runtime is None:
+            return None
+        try:
+            status = self.browser_agent_runtime.status()
+        except Exception:
+            return None
+        if not isinstance(status, dict):
+            return None
+        event = status.get("lastWorkflowEvent")
+        if isinstance(event, dict):
+            for key in ("human_step", "step", "label", "event"):
+                value = str(event.get(key) or "").strip()
+                if value:
+                    return value
+        value = str(status.get("currentStep") or "").strip()
+        return value or None
+
+    def _workflow_step_label(self, state_name: StateName) -> str:
+        copy = HUD_STEP_COPY.get(state_name)
+        return copy[0] if copy else state_name.value
 
     def _noop_workflow_result(self, action_name: str, product_query: str, store_name: str) -> dict[str, Any]:
         return {
@@ -1246,7 +2035,7 @@ class V1TaskRunner:
         summary_product_id = claimed_product.get("id") if claimed_product else job.get("product_id")
         next_action = None
         if mode == "claim_only" and claimed_product:
-            next_action = "进入“采集箱编辑保存”，选择该商品创建单商品只保存任务。"
+            next_action = "进入“商品箱编辑保存”，选择该商品创建单商品只保存任务。"
         return {
             "task_id": task["id"],
             "job_id": job["id"],
@@ -1326,9 +2115,9 @@ class V1TaskRunner:
             result = {
                 "ok": True,
                 "mode": mode,
-                "message": "采集认领已完成，商品已进入采集箱",
+                "message": "待认领商品处理已完成，商品已进入商品箱",
                 "published": False,
-                "next_action": "进入“采集箱编辑保存”，选择该商品创建单商品只保存任务。",
+                "next_action": "进入“商品箱编辑保存”，选择该商品创建单商品只保存任务。",
             }
             if claimed_product:
                 result.update({
@@ -1461,6 +2250,8 @@ class V1TaskRunner:
         for value in (payload.get("keyword"), payload.get("source_title"), payload.get("title")):
             if str(value or "").strip():
                 return str(value).strip()
+        if job.get("product_id") is None:
+            return ""
         return self._source_title(job.get("product_id"))
 
     def _acquisition_category_name(self, task: Mapping[str, Any]) -> str | None:
@@ -1475,27 +2266,48 @@ class V1TaskRunner:
         claim_mark: str,
     ) -> dict[str, Any]:
         evidence = workflow_result.get("evidence") if isinstance(workflow_result.get("evidence"), Mapping) else {}
-        claimed = evidence.get("claimed_product") if isinstance(evidence.get("claimed_product"), Mapping) else {}
+        claimed = evidence.get("claimed_product") if isinstance(evidence.get("claimed_product"), Mapping) else None
+        if not claimed:
+            raise V1ExecutionError("E202", "待认领商品缺少真实商品证据", "draft-box verification did not return claimed_product evidence")
         payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
         title = (
             claimed.get("title")
             or workflow_result.get("product_query")
             or payload.get("keyword")
             or payload.get("category_name")
-            or "店小秘采集认领商品"
+            or "店小秘已有待认领商品"
         )
         category_name = claimed.get("category_name") or payload.get("category_name") or "未分类"
-        source_url = claimed.get("source_url") or evidence.get("source_url") or payload.get("source_url")
+        source_url = str(claimed.get("source_url") or "").strip()
+        if not source_url:
+            raise V1ExecutionError(
+                "E202",
+                "待认领商品缺少商品箱身份校验证据",
+                "商品箱验证没有返回可唯一确认本次商品的身份信息。",
+            )
+        claim_target = evidence.get("claim_target") if isinstance(evidence.get("claim_target"), Mapping) else {}
+        search_result = evidence.get("search_result") if isinstance(evidence.get("search_result"), Mapping) else {}
+        source_urls = self._unique_source_urls(
+            source_url,
+            claimed.get("source_urls"),
+            evidence.get("target_source_urls"),
+            claim_target.get("sourceUrls") if isinstance(claim_target, Mapping) else None,
+        )
         product_payload = {
             "source": "dxm_data_acquisition",
             "store_id": task.get("store_id") or payload.get("store_id"),
             "store_name": self._store_name(dict(task)),
             "source_url": source_url,
+            "source_urls": source_urls,
             "source_title": title,
             "claim_mark": claim_mark,
             "claim_task_id": task.get("id"),
             "draft_box_verified": True,
             "draft_box_url": workflow_result.get("page_url"),
+            "data_acquisition_row_text": claim_target.get("rowText") if isinstance(claim_target, Mapping) else None,
+            "data_acquisition_match": claim_target.get("matchedBy") if isinstance(claim_target, Mapping) else None,
+            "draft_box_row_text": claimed.get("row_text") or evidence.get("target_row_text"),
+            "acquisition_search": dict(search_result) if search_result else None,
             "template_id": payload.get("template_id"),
         }
         product = self.repo.create_product({
@@ -1524,13 +2336,43 @@ class V1TaskRunner:
     def _source_urls(self, product_id: int | None) -> list[str]:
         product = self._product(product_id)
         payload = (product or {}).get("payload") or {}
+        return self._payload_source_urls(payload)
+
+    def _target_source_urls(self, task: Mapping[str, Any], job: Mapping[str, Any]) -> list[str]:
+        product_urls = self._source_urls(job.get("product_id"))
+        if product_urls:
+            return product_urls
+        payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+        return self._payload_source_urls(payload)
+
+    def _unique_source_urls(self, *values: Any) -> list[str]:
+        urls: list[str] = []
+        for value in values:
+            if isinstance(value, str):
+                candidates = [value]
+            elif isinstance(value, (list, tuple, set)):
+                candidates = list(value)
+            else:
+                candidates = []
+            for candidate in candidates:
+                text = str(candidate or '').strip()
+                if text and text not in urls:
+                    urls.append(text)
+        return urls
+
+    def _payload_source_urls(self, payload: Mapping[str, Any] | dict[str, Any]) -> list[str]:
         values: list[Any] = []
         if isinstance(payload, Mapping):
             values.extend([payload.get("source_url"), payload.get("url")])
             source_urls = payload.get("source_urls")
             if isinstance(source_urls, (list, tuple)):
                 values.extend(source_urls)
-        return [str(value).strip() for value in values if str(value or "").strip()]
+        urls: list[str] = []
+        for value in values:
+            text = str(value or "").strip()
+            if text and text not in urls:
+                urls.append(text)
+        return urls
 
     def _product(self, product_id: int | None) -> dict[str, Any] | None:
         if product_id is None:

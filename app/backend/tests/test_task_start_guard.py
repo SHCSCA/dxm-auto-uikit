@@ -10,6 +10,7 @@ from src.execution.v1_runner import V1TaskRunner
 from src.main import app
 from src.repository import Repository
 from src.services.config_defaults import ConfigDefaultsResolver
+from src.services.config_validation import ConfigValidationService
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -17,6 +18,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 class DummyRunner:
     def __init__(self):
         self.calls: list[int] = []
+        self.workflow_adapter = None
+        self._workflow_executor = None
+        self.workflow_runtime_unhealthy_reason: str | None = None
 
     async def run_task(self, task_id: int):
         self.calls.append(task_id)
@@ -60,21 +64,47 @@ def _create_task(
     product_title: str = "ACG Stand Product",
     product_status: str = "claimed_to_draft",
     publish_scene: str = "SMT_SEMI_MANAGED_SAVE_ONLY",
+    source_url: str = "https://detail.1688.com/offer/1013604102950.html",
 ):
     store = repo.create_store(store_name, "AliExpress")
+    claim_task = None
+    product_is_fixture = "qa guarded product" in product_title.casefold()
+    if mode == "single_save" and product_status == "claimed_to_draft" and not product_is_fixture:
+        claim_task = repo.create_acquisition_claim_request(
+            {
+                "store_id": store["id"],
+                "store_name": store_name,
+                "source_url": source_url,
+                "keyword": product_title,
+                "category_name": "立牌类谷子",
+                "claim_mark": "AI认领",
+                "template_id": None,
+            }
+        )
     product = repo.create_product(
         {
             "title": product_title,
             "source": "dxm_data_acquisition",
+            "source_url": source_url,
             "status": product_status,
             "category_name": "立牌类谷子",
             "price": 7.01,
             "currency": "USD",
             "sku_count": 1,
             "image_count": 1,
-            "payload": {"source": "dxm_data_acquisition", "draft_box_verified": product_status == "claimed_to_draft"},
+            "payload": {
+                "source": "dxm_data_acquisition",
+                "store_id": store["id"],
+                "store_name": store_name,
+                "source_url": source_url,
+                "claim_task_id": claim_task["id"] if claim_task else None,
+                "claim_mark": "AI认领",
+                "draft_box_verified": product_status == "claimed_to_draft",
+            },
         }
     )
+    if claim_task:
+        repo.mark_acquisition_claim_completed(claim_task["id"], product)
     payload = {"store_name": store_name}
     if approval is not None:
         payload["manual_approval"] = approval
@@ -371,8 +401,8 @@ def test_single_save_start_rejects_legacy_non_claimed_product_before_real_browse
 
     assert response.status_code == 409
     detail = response.json()["detail"]
-    assert "采集认领" in detail
-    assert "采集箱" in detail
+    assert "待认领商品" in detail or "已有待认领" in detail
+    assert "商品箱" in detail
     assert runner.calls == []
 
 
@@ -418,7 +448,8 @@ def test_claim_only_start_rejects_existing_product_job_shape(tmp_path, monkeypat
     response = client.post(f"/api/tasks/{task['id']}/start", json={})
 
     assert response.status_code == 409
-    assert "cannot use existing product_ids" in response.json()["detail"]
+    assert "待认领商品" in response.json()["detail"]
+    assert "不能直接绑定本地商品" in response.json()["detail"]
     assert runner.calls == []
 
 
@@ -527,9 +558,9 @@ def test_single_save_start_rejects_qa_fixture_product_before_real_browser(tmp_pa
 
     assert response.status_code == 409
     detail = response.json()["detail"]
-    assert "测试/示例数据" in detail
-    assert "数据采集" in detail
-    assert "采集箱编辑保存" in detail
+    assert "测试/示例商品" in detail
+    assert "待认领商品" in detail or "已有待认领" in detail
+    assert "商品箱" in detail
     assert runner.calls == []
 
 
@@ -549,7 +580,7 @@ def test_products_api_hides_fixture_products_in_production(tmp_path, monkeypatch
     )
     repo.create_product(
         {
-            "title": "真实采集商品 A",
+            "title": "真实待认领商品 A",
             "source": "dxm_data_acquisition",
             "category_name": "立牌类谷子",
             "price": 9.9,
@@ -564,7 +595,7 @@ def test_products_api_hides_fixture_products_in_production(tmp_path, monkeypatch
 
     assert response.status_code == 200
     titles = [item["title"] for item in response.json()]
-    assert "真实采集商品 A" in titles
+    assert "真实待认领商品 A" in titles
     assert "QA guarded product" not in titles
 
 
@@ -1259,7 +1290,7 @@ def test_runtime_control_stops_agent_console_and_records_log(tmp_path, monkeypat
     assert payload["action"] == "stop_agent_console"
     assert payload["agentConsole"]["active"] is False
     logs = repo.list_logs(task["id"])
-    assert any("运行时控制：已停止浏览器 Agent" in item["message"] for item in logs)
+    assert any("运行时控制：已停止自动浏览器" in item["message"] for item in logs)
 
 
 def test_runtime_control_clears_only_non_real_stuck_tasks(tmp_path, monkeypatch):
@@ -1306,6 +1337,270 @@ def test_runtime_control_marks_real_task_for_manual_review_without_cancelling_wo
     assert repo.get_task(task["id"])["status"] == "needs_manual_review"
     logs = repo.list_logs(task["id"])
     assert any("运行时控制：真实写入任务已转人工复核" in item["message"] for item in logs)
+
+
+def test_startup_recovery_moves_orphaned_real_tasks_to_manual_review(tmp_path, monkeypatch):
+    import src.main as main
+
+    _client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    dry_run = _create_task(repo, mode="dry_run")
+    single_save = _create_task(repo, mode="single_save")
+    dry_job = repo.get_task(dry_run["id"])["jobs"][0]
+    real_job = repo.get_task(single_save["id"])["jobs"][0]
+    repo.update_task_status(dry_run["id"], "running")
+    repo.update_task_status(single_save["id"], "running")
+    repo.update_job(dry_job["id"], status="running")
+    repo.update_job(real_job["id"], status="running")
+
+    result = main._recover_orphaned_runtime_tasks()
+
+    assert result == {"recovered": [single_save["id"]], "cancelled": [dry_run["id"]]}
+    refreshed_dry = repo.get_task(dry_run["id"])
+    refreshed_real = repo.get_task(single_save["id"])
+    assert refreshed_dry["status"] == "cancelled"
+    assert refreshed_dry["jobs"][0]["status"] == "cancelled"
+    assert refreshed_real["status"] == "needs_manual_review"
+    assert refreshed_real["jobs"][0]["status"] == "failed"
+    assert "没有正常结束" in refreshed_real["jobs"][0]["error_message"]
+    assert any("启动恢复：真实任务已转人工复核" in item["message"] for item in repo.list_logs(single_save["id"]))
+
+
+def test_real_task_start_rejects_when_workflow_runtime_unhealthy(tmp_path, monkeypatch):
+    import src.main as main
+
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    runner.workflow_runtime_unhealthy_reason = "真实浏览器操作超时：请重新打开执行浏览器后再重试。"
+    store = repo.create_store("Dang Kang", "AliExpress")
+    task = repo.create_acquisition_claim_request({
+        "store_id": store["id"],
+        "keyword": "Hazbin Hotel 立牌",
+        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
+        "claim_mark": "AI认领",
+    })
+
+    response = client.post(f"/api/tasks/{task['id']}/start", json={})
+
+    assert response.status_code == 409
+    assert "真实浏览器执行器需要重启" in response.json()["detail"]
+    assert "重新打开执行浏览器" in response.json()["detail"]
+    assert runner.calls == []
+    assert repo.get_task(task["id"])["status"] == "draft"
+
+
+def test_runtime_status_reports_unhealthy_workflow_runtime(tmp_path, monkeypatch):
+    client, _repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    runner.workflow_runtime_unhealthy_reason = "真实浏览器操作超时：请重新打开执行浏览器后再重试。"
+
+    response = client.get("/api/runtime/status?frontend_url=file://")
+
+    assert response.status_code == 200
+    workflow_runtime = response.json()["workflowRuntime"]
+    assert workflow_runtime["status"] == "needs_restart"
+    assert workflow_runtime["healthy"] is False
+    assert workflow_runtime["resetAction"] == "reset_workflow_runtime"
+    assert "真实浏览器操作超时" in workflow_runtime["unhealthyReason"]
+    assert "重启" in workflow_runtime["nextAction"]
+
+
+def test_runtime_status_reports_persistent_browser_agent(tmp_path, monkeypatch):
+    import src.main as main
+
+    class DummyBrowserAgentRuntime:
+        def status(self):
+            return {
+                "status": "running",
+                "healthy": True,
+                "active": True,
+                "browserVisible": True,
+                "currentUrl": "https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
+                "pageTitle": "店小秘数据采集",
+                "currentStep": "认领到采集箱",
+                "lastError": None,
+                "lastEventAt": "2026-06-26T00:00:00+00:00",
+                "manualTakeover": False,
+                "events": [
+                    {
+                        "action": "claim_from_data_acquisition",
+                        "step": "认领到采集箱",
+                        "status": "running",
+                    }
+                ],
+            }
+
+    original_runtime = main.browser_agent_runtime
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(main, "browser_agent_runtime", DummyBrowserAgentRuntime())
+    try:
+        response = client.get("/api/runtime/status?frontend_url=file://")
+    finally:
+        monkeypatch.setattr(main, "browser_agent_runtime", original_runtime)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["browserAgent"]["status"] == "running"
+    assert payload["browserAgent"]["active"] is True
+    assert payload["browserAgent"]["browserVisible"] is True
+    assert payload["browserAgent"]["currentStep"] == "认领到采集箱"
+    assert payload["browserAgent"]["events"][0]["action"] == "claim_from_data_acquisition"
+    assert payload["realBrowser"]["source"] == "browser_agent"
+    assert payload["realBrowser"]["currentStep"] == "认领到采集箱"
+
+
+def test_real_task_start_rejects_when_browser_agent_runtime_unhealthy(tmp_path, monkeypatch):
+    import src.main as main
+
+    class DummyBrowserAgentRuntime:
+        def status(self):
+            return {
+                "status": "failed",
+                "healthy": False,
+                "active": False,
+                "browserVisible": True,
+                "currentStep": "认领到采集箱",
+                "lastError": "Browser Agent command timed out: claim_from_data_acquisition",
+                "events": [],
+            }
+
+    original_runtime = main.browser_agent_runtime
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    monkeypatch.setattr(main, "browser_agent_runtime", DummyBrowserAgentRuntime())
+    store = repo.create_store("Dang Kang", "AliExpress")
+    task = repo.create_acquisition_claim_request({
+        "store_id": store["id"],
+        "keyword": "Hazbin Hotel 立牌",
+        "category_name": "立牌类谷子",
+        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
+        "claim_mark": "AI认领",
+    })
+
+    try:
+        response = client.post(f"/api/tasks/{task['id']}/start", json={})
+    finally:
+        monkeypatch.setattr(main, "browser_agent_runtime", original_runtime)
+
+    assert response.status_code == 409
+    assert "真实浏览器执行器需要重启" in response.json()["detail"]
+    assert "Browser Agent command timed out" in response.json()["detail"]
+    assert runner.calls == []
+    assert repo.get_task(task["id"])["status"] == "draft"
+
+
+def test_runtime_control_resets_unhealthy_workflow_runtime(tmp_path, monkeypatch):
+    import src.main as main
+
+    class DummyExecutor:
+        def __init__(self, name: str):
+            self.name = name
+            self.shutdown_calls: list[dict[str, object]] = []
+
+        def shutdown(self, wait=False, cancel_futures=False):
+            self.shutdown_calls.append({"wait": wait, "cancel_futures": cancel_futures})
+
+    class DummyLoginFlowForReset:
+        def __init__(self, live_client):
+            self.live_client = live_client
+
+    client, _repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    old_executor = DummyExecutor("old")
+    new_executor = DummyExecutor("new")
+    created_flows: list[DummyLoginFlowForReset] = []
+    original_login_flow = main.login_flow
+    original_workflow_adapter = main.workflow_adapter
+    original_login_flow_executor = main.login_flow_executor
+
+    def make_login_flow(live_client):
+        flow = DummyLoginFlowForReset(live_client)
+        created_flows.append(flow)
+        return flow
+
+    monkeypatch.setattr(main, "login_flow_executor", old_executor)
+    monkeypatch.setattr(main, "DxmLoginFlow", make_login_flow)
+    monkeypatch.setattr(main, "ThreadPoolExecutor", lambda **_kwargs: new_executor)
+    runner.workflow_runtime_unhealthy_reason = "真实浏览器操作超时：请重新打开执行浏览器后再重试。"
+
+    try:
+        response = client.post("/api/runtime/control", json={"action": "reset_workflow_runtime"})
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["ok"] is True
+        assert payload["action"] == "reset_workflow_runtime"
+        assert payload["previousUnhealthyReason"].startswith("真实浏览器操作超时")
+        assert payload["workflowRuntime"]["status"] == "ready"
+        assert payload["workflowRuntime"]["healthy"] is True
+        assert payload["oldRuntimeDetached"] is True
+        assert old_executor.shutdown_calls == [{"wait": False, "cancel_futures": True}]
+        assert main.login_flow is created_flows[0]
+        assert main.login_flow_executor is new_executor
+        assert runner.workflow_adapter is main.workflow_adapter
+        assert runner._workflow_executor is new_executor
+        assert runner.workflow_runtime_unhealthy_reason is None
+    finally:
+        main.login_flow = original_login_flow
+        main.workflow_adapter = original_workflow_adapter
+        main.login_flow_executor = original_login_flow_executor
+
+
+def test_runtime_control_browser_agent_takeover_and_resume(tmp_path, monkeypatch):
+    import src.main as main
+
+    class DummyBrowserAgentRuntime:
+        def __init__(self):
+            self.calls: list[str] = []
+
+        def status(self):
+            return {
+                "status": "idle",
+                "healthy": True,
+                "active": False,
+                "browserVisible": True,
+                "manualTakeover": False,
+                "events": [],
+            }
+
+        def request_manual_takeover(self):
+            self.calls.append("takeover")
+            return {
+                "status": "manual_takeover",
+                "healthy": True,
+                "active": True,
+                "browserVisible": True,
+                "manualTakeover": True,
+                "currentStep": "人工接管中",
+                "events": [],
+            }
+
+        def resume(self):
+            self.calls.append("resume")
+            return {
+                "status": "idle",
+                "healthy": True,
+                "active": False,
+                "browserVisible": True,
+                "manualTakeover": False,
+                "currentStep": "等待继续执行",
+                "events": [],
+            }
+
+    runtime = DummyBrowserAgentRuntime()
+    original_runtime = main.browser_agent_runtime
+    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(main, "browser_agent_runtime", runtime)
+    try:
+        takeover = client.post("/api/runtime/control", json={"action": "browser_agent_takeover"})
+        resume = client.post("/api/runtime/control", json={"action": "browser_agent_resume"})
+    finally:
+        monkeypatch.setattr(main, "browser_agent_runtime", original_runtime)
+
+    assert takeover.status_code == 200
+    assert takeover.json()["action"] == "browser_agent_takeover"
+    assert takeover.json()["browserAgent"]["manualTakeover"] is True
+    assert resume.status_code == 200
+    assert resume.json()["action"] == "browser_agent_resume"
+    assert resume.json()["browserAgent"]["manualTakeover"] is False
+    assert runtime.calls == ["takeover", "resume"]
 
 
 def test_runtime_control_queues_launcher_managed_backend_restart(tmp_path, monkeypatch):
@@ -1971,6 +2266,78 @@ def test_config_defaults_resolver_prefers_specific_template_even_when_input_orde
         "全局类目模板",
         "Dang Kang 立牌类谷子模板",
     ]
+
+
+def test_create_single_save_task_seeds_starter_templates_for_claimed_product_category(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    store = repo.create_store("Dang Kang", "AliExpress")
+    claim_task = repo.create_acquisition_claim_request(
+        {
+            "store_id": store["id"],
+            "store_name": "Dang Kang",
+            "source_url": "https://mobile.yangkeduo.com/goods2.html?goods_id=893543996663",
+            "keyword": "宝可梦精灵球",
+            "category_name": "立牌类谷子",
+            "claim_mark": "AI-OPS",
+            "template_id": None,
+        }
+    )
+    product = repo.create_product(
+        {
+            "title": "宝可梦精灵球玩具模型周边礼物",
+            "source": "dxm_data_acquisition",
+            "status": "claimed_to_draft",
+            "category_name": "立牌类谷子",
+            "price": 0,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 0,
+            "payload": {
+                "source": "dxm_data_acquisition",
+                "store_id": store["id"],
+                "store_name": "Dang Kang",
+                "source_url": "https://mobile.yangkeduo.com/goods2.html?goods_id=893543996663",
+                "claim_task_id": claim_task["id"],
+                "claim_mark": "AI-OPS",
+                "draft_box_verified": True,
+            },
+        }
+    )
+    repo.mark_acquisition_claim_completed(claim_task["id"], product)
+
+    response = client.post(
+        "/api/tasks",
+        json={
+            "name": "单商品只保存 - 宝可梦精灵球",
+            "store_id": store["id"],
+            "mode": "single_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "product_ids": [product["id"]],
+            "claim_mark": "AI-OPS",
+            "payload": {"store_name": "Dang Kang", "category_name": "立牌类谷子"},
+        },
+    )
+
+    assert response.status_code == 200
+    task = repo.get_task_private(response.json()["id"])
+    templates = repo.list_templates()
+    template_types = {template["template_type"] for template in templates}
+    assert {
+        "category",
+        "sku",
+        "pricing",
+        "logistics",
+        "image",
+        "compliance",
+        "semi_managed",
+        "dxm_reference",
+    }.issubset(template_types)
+    assert all("QA_CATEGORY" not in template["binding_scope"] for template in templates)
+
+    validation = ConfigValidationService().validate_task(task, templates, repo.get_product(product["id"]))
+    assert validation["ok"] is True
+    defaults = ConfigDefaultsResolver().resolve(templates, task, repo.get_product(product["id"]))
+    assert any("立牌类谷子" in str(item["template_name"]) for item in defaults.template_trace)
 
 
 def test_config_preview_covers_dxm_edit_page_sections_and_reference_templates(tmp_path, monkeypatch):

@@ -22,7 +22,7 @@ export function IssuesPage({ workspace, selectedTask }: IssuesPageProps) {
     },
     {
       title: '保存前安全检查没有通过',
-      what: '商品采集页和采集箱页还没有完成安全检查。',
+      what: '已有待认领列表和商品箱页面还没有完成安全检查。',
       why: '安全检查未通过前，系统不能确认页面安全，所以不会启动真实保存。',
       next: `去“浏览器现场”，点击“${READONLY_PRECHECK_CTA}”。`,
     },
@@ -30,7 +30,7 @@ export function IssuesPage({ workspace, selectedTask }: IssuesPageProps) {
       title: '这条任务已经执行过或失败',
       what: '当前任务不是可启动的草稿任务。',
       why: '已经执行过的任务不能重复启动，避免重复操作真实店小秘。',
-      next: '去“采集箱编辑保存”，重新创建单商品只保存任务。',
+      next: '去“商品箱编辑保存”，重新创建单商品只保存任务。',
     },
     {
       title: '保存结果证据不完整',
@@ -149,7 +149,7 @@ function buildProblemCardCopy(item: ExceptionItem) {
     return {
       title: '保存前安全检查没有通过',
       what: message,
-      why: '商品采集页和采集箱页没有完成安全检查前，系统不会启动真实保存。',
+      why: '已有待认领列表和商品箱页没有完成安全检查前，系统不会启动真实保存。',
       next: `点“${READONLY_PRECHECK_CTA}”；如果提示正在运行，就等待完成后刷新。`,
     }
   }
@@ -158,7 +158,7 @@ function buildProblemCardCopy(item: ExceptionItem) {
       title: '这条任务已经执行过或失败',
       what: message,
       why: '已经执行过的任务不能直接重复启动，避免重复操作真实店小秘。',
-      next: '点“采集箱编辑保存”，重新创建单商品只保存任务。',
+      next: '点“商品箱编辑保存”，重新创建单商品只保存任务。',
     }
   }
   if (message.includes('保存结果证据不完整') || raw.includes('save_result')) {
@@ -240,6 +240,8 @@ function humanGateDetail(detail?: string | null) {
   if (operatorMessage !== detail) return operatorMessage
   const resourceMessage = humanL2PrecheckError(detail)
   if (resourceMessage !== detail) return resourceMessage
+  const safeDetail = safeGateDetailFallback(detail)
+  if (safeDetail !== detail) return safeDetail
   if (
     detail.includes('时效')
     || detail.includes('过期')
@@ -251,19 +253,37 @@ function humanGateDetail(detail?: string | null) {
     return `保存前安全检查证据已过期，请点击“${READONLY_PRECHECK_CTA}”刷新后再继续。`
   }
   if (detail.includes('data_acquisition') || detail.includes('draft_box')) {
-    return detail
-      .split('data_acquisition').join('商品采集页')
-      .split('draft_box').join('采集箱页')
+    return safeDetail
+      .split('data_acquisition').join('已有待认领列表')
+      .split('draft_box').join('商品箱页')
       .split('L2').join('保存前安全检查')
       .split('L3').join('真实保存')
       .split('passed').join('通过')
       .split('probe').join('保存前安全检查')
   }
-  return detail
+  return safeDetail
     .split('L2').join('保存前安全检查')
     .split('L3').join('真实保存')
     .split('passed').join('通过')
     .split('probe').join('保存前安全检查')
+}
+
+function safeGateDetailFallback(detail: string) {
+  const normalized = detail.toLowerCase()
+  if (
+    normalized.includes('/api/')
+    || normalized.includes(' get ')
+    || normalized.includes(' post ')
+    || normalized.includes(' x')
+    || normalized.includes('blocked requests')
+    || normalized.includes('traceback')
+    || normalized.includes('greenlet')
+    || normalized.includes('playwright')
+    || normalized.includes('internal server error')
+  ) {
+    return '保存前安全检查未通过；原始诊断已收进维护详情，请按页面提示处理后重新检查。'
+  }
+  return String(detail)
 }
 
 function humanL2PrecheckError(message: string) {

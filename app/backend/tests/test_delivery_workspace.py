@@ -194,7 +194,7 @@ def _create_two_stage_delivery_fixture(repo: Repository) -> dict:
     claim_job = repo.get_task(claim_task["id"])["jobs"][0]
     product = repo.create_product(
         {
-            "title": "真实采集商品 A",
+            "title": "真实待认领商品 A",
             "source": "dxm_data_acquisition",
             "status": "claimed_to_draft",
             "category_name": "立牌类谷子",
@@ -214,7 +214,7 @@ def _create_two_stage_delivery_fixture(repo: Repository) -> dict:
     repo.mark_acquisition_claim_completed(claim_task["id"], product)
     claim_save_result = {
         "ok": True,
-        "message": "采集认领已完成，商品已进入采集箱",
+        "message": "已有商品认领已完成，商品已进入采集箱",
         "claimed_product_id": product["id"],
         "draft_box_verified": True,
         "published": False,
@@ -557,7 +557,7 @@ def test_delivery_workspace_exposes_unreleased_real_mode_release_plan(tmp_path, 
     assert modes["single_save"]["blockers"]
     single_save_checklist = {item["id"]: item for item in modes["single_save"]["readiness_checklist"]}
     assert single_save_checklist["l2_dual_target"]["status"] == "blocked"
-    assert single_save_checklist["l2_dual_target"]["blocker"] == "fresh L2 dual-target readonly proof is missing or stale"
+    assert single_save_checklist["l2_dual_target"]["blocker"] == "fresh L2 existing-claim-list and draft-box readonly proof is missing or stale"
     assert single_save_checklist["l3_single_canary"]["status"] == "passed"
     assert "historical single_save canary" in single_save_checklist["l3_single_canary"]["label"]
     assert modes["claim_only"]["status"] == "blocked_stale_l2"
@@ -568,6 +568,11 @@ def test_delivery_workspace_exposes_unreleased_real_mode_release_plan(tmp_path, 
     assert modes["batch_save"]["release_scope"] == "not released"
     assert any("claim to draft box proof" in item for item in modes["claim_only"]["required_evidence"])
     assert any("batch size limit" in item for item in modes["batch_save"]["required_evidence"])
+    operator_release_text = json.dumps(plan, ensure_ascii=False)
+    assert "data_acquisition" not in operator_release_text
+    assert "unique acquisition product proof" not in operator_release_text
+    assert "已有待认领列表" in operator_release_text
+    assert "受控待认领商品处理" in operator_release_text
     assert any("rollback" in item for item in modes["batch_save"]["required_controls"])
     assert modes["claim_only"]["blockers"]
     assert any("cannot reuse single_save" in item for item in modes["batch_save"]["blockers"])
@@ -620,6 +625,62 @@ def test_delivery_workspace_delivery_scope_releases_claim_and_single_save_only(t
     assert data["publish_guard_state"]["publish_allowed"] is False
 
 
+def test_delivery_workspace_releases_single_save_start_after_l2_even_before_save_evidence(tmp_path, monkeypatch):
+    l2_dir = tmp_path / "l2_readonly_probe"
+    _write_l2_probe_result(
+        l2_dir,
+        "data_acquisition",
+        target_url="https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
+    )
+    _write_l2_probe_result(
+        l2_dir,
+        "draft_box",
+        target_url="https://www.dianxiaomi.com/web/smt/smtProductList/draft",
+        created_at=_fresh_l2_created_at(-30),
+    )
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(delivery_workspace, "L2_PROBE_DIR", l2_dir)
+    store = repo.create_store("Dang Kang", "AliExpress")
+    product = repo.create_product(
+        {
+            "title": "待保存商品",
+            "source": "dxm_draft_box",
+            "status": "claimed_to_draft",
+            "category_name": "立牌类谷子",
+            "price": 9.9,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {"draft_box_verified": True},
+        }
+    )
+    task = repo.create_task(
+        {
+            "name": "单商品只保存 - Dang Kang - 1 件商品",
+            "store_id": store["id"],
+            "mode": "single_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "claim_mark": "AI-OPS",
+            "product_ids": [product["id"]],
+            "payload": {"store_name": "Dang Kang", "category_name": "立牌类谷子"},
+        }
+    )
+
+    response = client.get(f"/api/delivery/workspace?task_id={task['id']}")
+
+    assert response.status_code == 200
+    data = response.json()
+    modes = {item["mode"]: item for item in data["real_mode_release_plan"]["modes"]}
+    assert data["delivery_readiness"]["ready"] is False
+    assert data["regression_gates"][2]["status"] == "passed"
+    assert data["regression_gates"][3]["status"] == "approval_required"
+    assert modes["single_save"]["allowed"] is True
+    assert modes["single_save"]["status"] == "released_controlled"
+    assert modes["single_save"]["blockers"] == []
+    assert modes["claim_only"]["allowed"] is True
+    assert modes["batch_save"]["allowed"] is False
+
+
 def test_delivery_workspace_exposes_canonical_l2_probe_plan(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     fixture = _create_delivery_fixture(repo, with_network=False, with_verify_proof=False)
@@ -630,17 +691,23 @@ def test_delivery_workspace_exposes_canonical_l2_probe_plan(tmp_path, monkeypatc
     plan = response.json()["l2_probe_plan"]
     assert plan["schema"] == "dxm_l2_readonly_probe_plan.v1"
     assert plan["requiresApproval"] is True
+    assert "已有待认领列表" in plan["purpose"]
+    assert "不认领、不备注、不保存、不发布" in plan["purpose"]
     assert plan["runIdCommand"].startswith('$runId = "l2-real-"')
     assert plan["outputDir"] == r"data\l2_readonly_probe"
     assert plan["cookieFile"] == r"data\sessions\dianxiaomi_cookies.json"
+    assert plan["desktopCookieFile"] == r"%APPDATA%\DXM Agent Console\data\sessions\dianxiaomi_cookies.json"
+    assert "DXM Agent Console\\data\\sessions\\dianxiaomi_cookies.json" in plan["commands"][1]
+    assert plan["cookieFileCommand"] == plan["commands"][2]
     assert [target["id"] for target in plan["targets"]] == ["data_acquisition", "draft_box"]
     assert any("--target data_acquisition" in command and "--run-id $runId" in command for command in plan["commands"])
     assert any("--target draft_box" in command and "--run-id $runId" in command for command in plan["commands"])
-    assert all("--headed" in command for command in plan["commands"][1:])
-    assert all("--cookie-file data\\sessions\\dianxiaomi_cookies.json" in command for command in plan["commands"][1:])
-    assert all("--output-dir data\\l2_readonly_probe" in command for command in plan["commands"][1:])
+    assert all("--headed" in command for command in plan["commands"][3:])
+    assert all("--cookie-file $cookieFile" in command for command in plan["commands"][3:])
+    assert all("--output-dir data\\l2_readonly_probe" in command for command in plan["commands"][3:])
     assert any("同一 run-id" in item for item in plan["acceptanceCriteria"])
-    assert any("不自动放行 L3" in item for item in plan["safetyNotes"])
+    assert not any("数据采集" in item or "采集页" in item for item in [plan["purpose"], *plan["safetyNotes"]])
+    assert any("不自动放行真实保存" in item for item in plan["safetyNotes"])
 
 
 def test_delivery_workspace_reads_l2_probe_from_runtime_data_dir(tmp_path, monkeypatch):
@@ -831,6 +898,66 @@ def test_delivery_workspace_does_not_select_legacy_fixture_single_save_task(tmp_
     data = response.json()
     assert data["current_task"] is None
     assert data["products"] == []
+    assert data["tasks"] == []
+    assert any(gap["id"] == "empty-workspace" for gap in data["acceptanceGaps"])
+
+
+def test_delivery_workspace_does_not_select_qa_two_stage_fixture_tasks(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    store = repo.create_store("Dang Kang", "AliExpress")
+    product = repo.create_product(
+        {
+            "title": "ACG Stand Product 1",
+            "source": "dxm_data_acquisition",
+            "status": "claimed_to_draft",
+            "category_name": "立牌类谷子",
+            "price": 1,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {
+                "source_url": "https://detail.1688.com/offer/test-1.html",
+                "source_urls": ["https://detail.1688.com/offer/test-1.html"],
+                "draft_box_verified": True,
+            },
+        }
+    )
+    repo.create_task(
+        {
+            "name": "待认领商品 - QA two-stage acquisition claim request",
+            "store_id": store["id"],
+            "mode": "claim_only",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "claim_mark": "QA_TWO_STAGE",
+            "payload": {
+                "keyword": "QA two-stage acquisition claim request",
+                "claim_mark": "QA_TWO_STAGE",
+            },
+        }
+    )
+    repo.create_task(
+        {
+            "name": "QA two-stage claimed product save task",
+            "store_id": store["id"],
+            "mode": "single_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "product_ids": [product["id"]],
+            "claim_mark": "QA_TWO_STAGE",
+            "payload": {
+                "store_name": store["name"],
+                "category_name": product["category_name"],
+                "product_ids": [product["id"]],
+                "claim_mark": "QA_TWO_STAGE",
+                "source_url": "https://detail.1688.com/offer/test-1.html",
+            },
+        }
+    )
+
+    response = client.get("/api/delivery/workspace")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["current_task"] is None
     assert data["tasks"] == []
     assert any(gap["id"] == "empty-workspace" for gap in data["acceptanceGaps"])
 
@@ -1201,7 +1328,7 @@ def test_delivery_workspace_two_stage_acceptance_requires_acquisition_claim_chai
     store = repo.create_store("Dang Kang", "AliExpress")
     product = repo.create_product(
         {
-            "title": "真实采集商品未关联认领任务",
+            "title": "真实待认领商品未关联认领任务",
             "source": "dxm_data_acquisition",
             "status": "claimed_to_draft",
             "category_name": "立牌类谷子",
@@ -1258,8 +1385,104 @@ def test_delivery_workspace_two_stage_acceptance_requires_acquisition_claim_chai
     assert acceptance["passed"] is False
     assert acceptance["status"] == "missing_claim_stage"
     assert "claim_task_id" in acceptance["missing_codes"]
-    assert "数据采集认领" in acceptance["user_message"]
-    assert "采集箱" in acceptance["user_message"]
+    assert "待认领商品" in acceptance["user_message"] or "已有待认领" in acceptance["user_message"]
+    assert "商品箱" in acceptance["user_message"]
+
+
+def test_delivery_workspace_two_stage_acceptance_rejects_completed_non_claim_task(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    store = repo.create_store("Dang Kang", "AliExpress")
+    fake_claim_task = repo.create_task(
+        {
+            "name": "伪造认领完成任务",
+            "store_id": store["id"],
+            "mode": "dry_run",
+            "publish_scene": "DRY_RUN",
+            "claim_mark": "AI-OPS",
+            "product_ids": [],
+            "payload": {
+                "stage": "claimed_to_draft",
+                "status": "completed",
+                "draft_box_verified": True,
+            },
+        }
+    )
+    product = repo.create_product(
+        {
+            "title": "真实待认领商品但认领任务类型不正确",
+            "source": "dxm_data_acquisition",
+            "status": "claimed_to_draft",
+            "category_name": "立牌类谷子",
+            "price": 9.9,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 1,
+            "payload": {
+                "source": "dxm_data_acquisition",
+                "source_url": "https://detail.1688.com/offer/1013604102950.html",
+                "claim_task_id": fake_claim_task["id"],
+                "draft_box_verified": True,
+            },
+        }
+    )
+    with db.connection() as conn:
+        payload = dict(fake_claim_task["payload"])
+        payload.update(
+            {
+                "stage": "claimed_to_draft",
+                "status": "completed",
+                "claimed_product_id": product["id"],
+                "draft_box_verified": True,
+            }
+        )
+        conn.execute(
+            "UPDATE tasks SET status='completed', completed_jobs=1, failed_jobs=0, payload_json=? WHERE id=?",
+            (json.dumps(payload, ensure_ascii=False), fake_claim_task["id"]),
+        )
+    save_task = repo.create_task(
+        {
+            "name": "单商品只保存 - Dang Kang - 1 件商品",
+            "store_id": store["id"],
+            "mode": "single_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "claim_mark": "AI-OPS",
+            "product_ids": [product["id"]],
+            "payload": {"store_name": "Dang Kang", "category_name": "立牌类谷子"},
+        }
+    )
+    job = repo.get_task(save_task["id"])["jobs"][0]
+    save_result = {
+        "ok": True,
+        "message": "已点击保存",
+        "success_text": "编辑成功",
+        "published": False,
+        "network_save_result": {
+            "ok": True,
+            "method": "POST",
+            "url": "https://www.dianxiaomi.com/api/popChoiceProduct/add.json",
+            "status": 200,
+            "code": 0,
+            "msg": "您的产品编辑保存成功！",
+        },
+    }
+    summary = {
+        "status": "success",
+        "workflow_results": [
+            {"action": "save_only", "ok": True, "save_result": save_result},
+            {"action": "verify_not_published", "ok": True, "published": False},
+        ],
+        "published": False,
+    }
+    repo.add_report(save_task["id"], job["id"], product["id"], "success", False, save_result, summary)
+
+    data = client.get(f"/api/delivery/workspace?task_id={save_task['id']}").json()
+
+    acceptance = data["two_stage_acceptance"]
+    assert acceptance["passed"] is False
+    assert acceptance["status"] == "missing_claim_stage"
+    assert "claim_completed" in acceptance["missing_codes"]
+    assert acceptance["checks"]["claim_task_present"] is True
+    assert acceptance["checks"]["claim_completed"] is False
 
 
 def test_delivery_workspace_two_stage_acceptance_passes_when_claim_and_save_share_product(tmp_path, monkeypatch):

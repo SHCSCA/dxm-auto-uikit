@@ -79,7 +79,7 @@ def test_final_delivery_check_summary_reads_latest_report(tmp_path, monkeypatch)
         "localWorkbenchCheck": "PASS",
         "realDxmWriteReadiness": "BLOCKED",
         "productionRealWriteReady": False,
-        "realDxmWriteBlockedReason": "L2 gate is failed; real DXM writes require data_acquisition and draft_box real readonly pass in the same run.",
+        "realDxmWriteBlockedReason": "L2 gate is failed; real DXM writes require existing-claim-list and draft-box readonly pass in the same run.",
         "l3EvidenceReadiness": {"ready": False, "missing": ["L3 manual canary evidence missing"]},
         "sourcePackageReadiness": "CLEAN",
         "sourcePackageCheck": "PASS",

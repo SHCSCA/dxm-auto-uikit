@@ -7,8 +7,53 @@ from src.db import connection, dumps, loads
 from src.utils import now_iso
 
 
+def _first_source_url_from_payload(payload: dict[str, Any]) -> str | None:
+    for key in ('source_url', 'url'):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    values = payload.get('source_urls')
+    if isinstance(values, list):
+        for value in values:
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
+def _has_verified_dxm_claim_evidence(row: dict[str, Any], payload: dict[str, Any]) -> bool:
+    source = str(payload.get('source') or row.get('source') or '').strip()
+    status = str(row.get('status') or '').strip().lower()
+    return (
+        source == 'dxm_data_acquisition'
+        and status in {'claimed_to_draft', 'ready_for_edit', 'saved', 'save_completed', 'completed'}
+        and payload.get('draft_box_verified') is True
+        and bool(payload.get('claim_task_id'))
+        and bool(_first_source_url_from_payload(payload))
+    )
+
+
 def _is_fixture_product(row: dict[str, Any]) -> bool:
     payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    title_text = str(row.get("title") or "").casefold()
+    source_text = str(row.get("source") or "").casefold()
+    payload_source = str(payload.get("source") or "").casefold()
+    if _has_verified_dxm_claim_evidence(row, payload):
+        hard_fixture_markers = (
+            "qa guarded product",
+            "qa guarded real mutation task",
+            "qa local gated single_save fixture",
+            "fixture",
+            "测试商品",
+            "示例商品",
+            "本地演示",
+        )
+        if not (
+            payload.get("fixture") is True
+            or source_text in {"test", "demo"}
+            or payload_source == "demo"
+            or any(marker in title_text for marker in hard_fixture_markers)
+        ):
+            return False
     payload_text = " ".join(str(value or "") for value in payload.values()).casefold()
     product_text = " ".join(
         str(value or "")
@@ -107,6 +152,7 @@ class Repository:
             rows = conn.execute("SELECT * FROM products ORDER BY id DESC").fetchall()
             for row in rows:
                 row['payload'] = loads(row.pop('payload_json'), {})
+                self._attach_product_lifecycle(row)
             if include_fixtures:
                 return rows
             return [row for row in rows if not _is_fixture_product(row)]
@@ -118,11 +164,16 @@ class Repository:
         for product in products:
             payload = product.get('payload') if isinstance(product.get('payload'), dict) else {}
             source = str(payload.get('source') or product.get('source') or '').strip()
+            source_url = self._first_source_url(payload)
             if product.get('status') not in claimed_statuses:
                 continue
             if source != 'dxm_data_acquisition':
                 continue
             if payload.get('draft_box_verified') is not True:
+                continue
+            if not source_url:
+                continue
+            if not self.product_has_completed_claim_provenance(product):
                 continue
             eligible.append(product)
         return eligible
@@ -133,6 +184,7 @@ class Repository:
             if not row:
                 return None
             row['payload'] = loads(row.pop('payload_json'), {})
+            self._attach_product_lifecycle(row)
             return row
 
     def create_product(self, data: dict[str, Any]):
@@ -145,6 +197,7 @@ class Repository:
             )
             row = conn.execute("SELECT * FROM products WHERE id=?", (cur.lastrowid,)).fetchone()
             row['payload'] = loads(row.pop('payload_json'), {})
+            self._attach_product_lifecycle(row)
             return row
 
     def create_acquisition_claim_request(self, data: dict[str, Any]):
@@ -154,13 +207,14 @@ class Repository:
             'status': 'pending',
             'store_id': data['store_id'],
             'store_name': store_name or None,
+            'source_url': data.get('source_url'),
             'keyword': data.get('keyword'),
             'category_name': data.get('category_name'),
             'claim_mark': data['claim_mark'],
             'template_id': data.get('template_id'),
         }
         task = self.create_task({
-            'name': f"采集认领 - {payload.get('keyword') or payload.get('category_name') or '待选择商品'}",
+            'name': f"待认领商品 - {payload.get('keyword') or payload.get('category_name') or '待选择商品'}",
             'store_id': payload['store_id'],
             'mode': 'claim_only',
             'publish_scene': 'CONTROLLED_CLAIM_TO_DRAFT_ONLY',
@@ -274,16 +328,89 @@ class Repository:
             payload['source_url'] = source_url
 
     def _first_source_url(self, payload: dict[str, Any]) -> str | None:
-        for key in ('source_url', 'url'):
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        values = payload.get('source_urls')
-        if isinstance(values, list):
-            for value in values:
-                if isinstance(value, str) and value.strip():
-                    return value.strip()
-        return None
+        return _first_source_url_from_payload(payload)
+
+    def _attach_product_lifecycle(self, product: dict[str, Any]) -> None:
+        payload = product.get('payload') if isinstance(product.get('payload'), dict) else {}
+        source = str(payload.get('source') or product.get('source') or '').strip()
+        source_url = self._first_source_url(payload)
+        status = str(product.get('status') or '').strip().lower()
+        draft_box_verified = payload.get('draft_box_verified') is True
+        is_fixture = _is_fixture_product(product)
+
+        if status in {'saved', 'save_completed', 'completed'}:
+            lifecycle_state = 'saved'
+            lifecycle_label = '已保存结果'
+        elif status == 'ready_for_edit' or (
+            status == 'claimed_to_draft'
+            and source == 'dxm_data_acquisition'
+            and draft_box_verified
+            and bool(source_url)
+        ):
+            lifecycle_state = 'editable'
+            lifecycle_label = '可编辑商品'
+        elif status in {'claimed_to_draft', 'claimed'} or payload.get('claim_task_id'):
+            lifecycle_state = 'claimed'
+            lifecycle_label = '已认领商品'
+        else:
+            lifecycle_state = 'awaiting_claim'
+            lifecycle_label = '待认领商品'
+
+        if is_fixture:
+            source_status_label = '测试/示例数据'
+        elif source == 'dxm_data_acquisition':
+            source_status_label = '店小秘已有待认领商品'
+        elif source in {'manual', 'manual_import'}:
+            source_status_label = '手工/导入商品'
+        else:
+            source_status_label = '等待来源确认'
+
+        if draft_box_verified:
+            draft_box_verification_label = '已确认进入商品箱'
+        elif lifecycle_state in {'claimed', 'editable'}:
+            draft_box_verification_label = '等待确认商品箱'
+        else:
+            draft_box_verification_label = '未进入商品箱'
+
+        product.update({
+            'lifecycle_state': lifecycle_state,
+            'lifecycle_label': lifecycle_label,
+            'source_status_label': source_status_label,
+            'draft_box_verification_label': draft_box_verification_label,
+            'source_url': source_url,
+            'claim_task_id': payload.get('claim_task_id'),
+            'store_id': payload.get('store_id'),
+            'store_name': payload.get('store_name'),
+            'claimed_at': payload.get('claimed_at') or payload.get('completed_at'),
+            'draft_box_verified': draft_box_verified,
+        })
+
+    def product_has_completed_claim_provenance(self, product: dict[str, Any]) -> bool:
+        payload = product.get('payload') if isinstance(product.get('payload'), dict) else {}
+        claim_task_id = payload.get('claim_task_id') or product.get('claim_task_id')
+        try:
+            claim_task_id_int = int(claim_task_id)
+        except (TypeError, ValueError):
+            return False
+        task = self.get_task_private(claim_task_id_int)
+        if not task:
+            return False
+        if task.get('mode') != 'claim_only':
+            return False
+        if task.get('status') != 'completed':
+            return False
+        task_payload = task.get('payload') if isinstance(task.get('payload'), dict) else {}
+        if task_payload.get('status') != 'completed':
+            return False
+        try:
+            claimed_product_id = int(task_payload.get('claimed_product_id'))
+            product_id = int(product.get('id'))
+        except (TypeError, ValueError):
+            return False
+        return (
+            claimed_product_id == product_id
+            and task_payload.get('draft_box_verified') is True
+        )
 
     def set_task_manual_approval(self, task_id: int, *, approved: bool, token: str, approved_by: str = "system"):
         now = now_iso()
@@ -393,11 +520,24 @@ class Repository:
                 'claimed_product_category_name': claimed_product.get('category_name'),
                 'draft_box_verified': claimed_payload.get('draft_box_verified') is True,
                 'completed_at': now,
-                'next_step': '进入“采集箱编辑保存”，选择该商品创建单商品只保存任务。',
+                'next_step': '进入“商品箱编辑保存”，选择该商品创建单商品只保存任务。',
             })
             conn.execute(
-                "UPDATE tasks SET payload_json=?, updated_at=? WHERE id=?",
+                "UPDATE tasks SET status='completed', completed_jobs=1, failed_jobs=0, payload_json=?, updated_at=? WHERE id=?",
                 (dumps(payload), now, task_id),
+            )
+            conn.execute(
+                """
+                UPDATE jobs
+                   SET status='completed',
+                       current_step_code='VERIFY_DRAFT_BOX_CLAIM',
+                       current_step_name='确认商品箱商品',
+                       error_code=NULL,
+                       error_message=NULL,
+                       updated_at=?
+                 WHERE task_id=? AND product_id IS NULL
+                """,
+                (now, task_id),
             )
         return self.get_task(task_id)
 

@@ -1,8 +1,7 @@
 import type { ConfigPreview, DeliveryWorkspace, RegressionGate, Task } from '../../types'
-import { humanOperatorMessage } from './workbenchCopy'
+import { humanOperatorMessage, humanTaskDisplayName } from './workbenchCopy'
 
 const READONLY_PRECHECK_CTA = '运行保存前安全检查'
-const LEGACY_QA_REAL_MUTATION_TASK_NAME = ['QA guarded', 'real mutation task'].join(' ')
 
 type L2ProbeResourceState = {
   blocked: boolean
@@ -111,18 +110,18 @@ export function ReadonlyRecheckHelpCard({
       <div className="readonly-recheck-help__main">
         <div>
           <strong>保存前安全检查未通过，真实保存先暂停</strong>
-          <span>{humanGateDetail(l2Gate?.detail) ?? '需要商品采集页与采集箱页两个页面检查均通过。'}</span>
+          <span>{humanGateDetail(l2Gate?.detail) ?? '需要已有待认领列表与商品箱页两个页面检查均通过。'}</span>
         </div>
         <span className="guard-chip guard-chip--danger">当前状态：{humanGateStateLabel(l2Gate?.status ?? 'not_run')}</span>
       </div>
       <div className="readonly-recheck-help__facts" aria-label="保存前安全检查说明">
         <span>
           <strong>发生了什么</strong>
-          <small>保存前安全检查还没有通过，需要确认商品采集页和采集箱页能正常打开。</small>
+          <small>保存前安全检查还没有通过，需要确认已有待认领列表和商品箱页能正常打开。</small>
         </span>
         <span>
           <strong>为什么不能继续</strong>
-          <small>通过前系统不会领取、备注、保存或发布。</small>
+          <small>通过前系统不会认领、备注、保存或发布。</small>
         </span>
         <span>
           <strong>下一步</strong>
@@ -336,15 +335,18 @@ export function SingleSaveRecoveryGuide({
     : !canCreateRealTask
       ? '请先确认有真实店铺和 1 个商品，再创建单商品只保存任务。'
       : ''
+  const selectedTaskCannotRestart = Boolean(selectedTask && selectedTask.status !== 'draft' && selectedTask.status !== 'running' && selectedTask.status !== 'completed')
   const steps = [
     {
       title: '回到单商品只保存',
-      detail: selectedTaskIsUnreleasedRealMode
+      detail: selectedTaskCannotRestart
+        ? '当前任务不是草稿，不能直接启动；请选择草稿任务，或用当前商品创建新的单商品只保存任务。'
+        : selectedTaskIsUnreleasedRealMode
         ? `${humanTaskModeLabel(selectedTask?.mode)} 当前未放行；不能复用其它模式证据。`
         : latestSingleSaveTask
           ? `可继续使用最近单商品只保存任务：#${latestSingleSaveTask.id} ${displayTaskName(latestSingleSaveTask)}`
           : '还没有可用单商品只保存任务，需要用当前店铺和商品创建一个。',
-      done: Boolean(selectedTask?.mode === 'single_save' && !selectedTaskIsUnreleasedRealMode),
+      done: Boolean(selectedTask?.mode === 'single_save' && !selectedTaskIsUnreleasedRealMode && !selectedTaskCannotRestart),
     },
     {
       title: '填写 DXM 编辑页',
@@ -353,7 +355,7 @@ export function SingleSaveRecoveryGuide({
     },
     {
       title: '刷新保存前安全检查',
-      detail: l2BlocksStart ? '商品采集页与采集箱页必须同一轮检查、不过期、无写请求。' : '保存前安全检查当前未阻断启动判断。',
+      detail: l2BlocksStart ? '已有待认领列表与商品箱页必须同一轮检查、不过期、无写请求。' : '保存前安全检查当前未阻断启动判断。',
       done: !l2BlocksStart,
     },
     {
@@ -370,7 +372,7 @@ export function SingleSaveRecoveryGuide({
           <strong>恢复到单商品只保存</strong>
           <span>当前任务不可直接启动时，按这里回到真实自动化可执行路径。</span>
         </div>
-        <span className="guard-chip guard-chip--danger">不放行认领/批量保存</span>
+        <span className="guard-chip guard-chip--danger">批量/发布不放行</span>
       </div>
       <div className="single-save-recovery-guide__steps">
         {steps.map((step, index) => (
@@ -448,7 +450,7 @@ export function RealModeReleasePlanPanel({ items }: { items: DeliveryWorkspace['
       <div className="real-mode-release-panel__head">
         <div>
           <strong>真实模式放行准备</strong>
-          <span>采集认领和单商品只保存受控开放；批量保存仍需单独验收。</span>
+          <span>待认领商品处理和单商品只保存受控开放；批量保存仍需单独验收。</span>
         </div>
         <span className="guard-chip guard-chip--danger">受控认领 + 单商品只保存</span>
       </div>
@@ -477,20 +479,14 @@ export function RealModeReleasePlanPanel({ items }: { items: DeliveryWorkspace['
 }
 
 function displayTaskName(task: Pick<Task, 'name' | 'mode'>) {
-  if (task.mode === 'single_save' && task.name === LEGACY_QA_REAL_MUTATION_TASK_NAME) {
-    return '旧版单商品只保存核验任务'
-  }
-  if (task.mode === 'single_save' && task.name.toLowerCase().includes('l3 canary save-only')) {
-    return '单商品只保存核验任务'
-  }
-  return task.name
+  return humanTaskDisplayName(task)
 }
 
 function humanTaskModeLabel(mode?: string | null) {
   const labels: Record<string, string> = {
     probe: '保存前安全检查',
     single_save: '单商品只保存',
-    claim_only: '采集认领',
+    claim_only: '待认领商品',
     batch_save: '批量保存未开放',
     dry_run: '开发自检',
   }
@@ -547,8 +543,8 @@ function humanGateDetail(detail?: string | null) {
   }
   if (detail.includes('data_acquisition') || detail.includes('draft_box')) {
     return safeDetail
-      .split('data_acquisition').join('商品采集页')
-      .split('draft_box').join('采集箱页')
+      .split('data_acquisition').join('已有待认领列表')
+      .split('draft_box').join('商品箱页')
       .split('L2').join('保存前安全检查')
       .split('L3').join('真实保存')
       .split('passed').join('通过')
@@ -594,10 +590,10 @@ function humanL2PrecheckError(message: string) {
 
 function humanDiagnosticNavigation(value: string) {
   return value
-    .split('data_acquisition').join('商品采集页')
-    .split('draft_box').join('采集箱页')
-    .replace(/\/web\/productCrawl\/dataAcquisition/g, '商品采集页')
-    .replace(/\/web\/smt\/smtProductList\/draft/g, '采集箱页')
+    .split('data_acquisition').join('已有待认领列表')
+    .split('draft_box').join('商品箱页')
+    .replace(/\/web\/productCrawl\/dataAcquisition/g, '已有待认领列表')
+    .replace(/\/web\/smt\/smtProductList\/draft/g, '商品箱页')
 }
 
 function humanFailedCheckLabel(value: string) {
@@ -662,7 +658,7 @@ function taskStartDecision({
     return {
       scope: '不可启动',
       reason: `${humanTaskModeLabel(selectedTask.mode)} 当前未放行。`,
-      next: '回到单商品只保存路径；认领和批量保存需要单独验收。',
+      next: '回到两段式主路径；待认领商品处理只走第一段入口，批量保存需要单独验收。',
       tone: 'warn',
     }
   }
@@ -678,7 +674,7 @@ function taskStartDecision({
     return {
       scope: '先做保存前安全检查',
       reason: '保存前安全检查未通过或已过期。',
-      next: `${READONLY_PRECHECK_CTA}，确认商品采集页和采集箱页均无写入风险。`,
+      next: `${READONLY_PRECHECK_CTA}，确认已有待认领列表和商品箱页均无写入风险。`,
       tone: 'warn',
     }
   }
@@ -709,7 +705,7 @@ function taskStartDecision({
 function humanReadinessCheckLabel(id: string, fallback: string) {
   return ({
     dedicated_l2_l3: '独立只读与真实保存证据链',
-    claim_ownership_proof: '目标草稿领取归属证明',
+    claim_ownership_proof: '目标商品认领归属证明',
     no_editor_or_save: '不打开编辑页、不触发保存请求证明',
     rollback_release: '归属释放或人工回滚路径',
     batch_size_limit: '批量大小上限',
@@ -721,7 +717,7 @@ function humanReadinessCheckLabel(id: string, fallback: string) {
 function humanReleaseBlocker(value?: string) {
   if (!value) return '需要独立验收后放行'
   if (value.includes('cannot reuse single_save')) return '不能复用单商品只保存证据'
-  if (value.includes('claim marker')) return '领取标记写入语义需独立审计'
+  if (value.includes('claim marker')) return '认领标记写入语义需独立审计'
   if (value.includes('rollback')) return '回滚/人工接管流程未验收'
   if (value.includes('batch failure')) return '批量失败隔离与回滚未验收'
   if (value.includes('unattended')) return '无人值守执行仍未开放'

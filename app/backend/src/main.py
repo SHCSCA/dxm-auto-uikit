@@ -24,6 +24,7 @@ from src.db import init_db
 from src.execution.dxm_live import DxmLiveClient
 from src.execution.dxm_adapter import DxmWorkflowAdapter
 from src.execution.dxm_login_flow import DxmLoginFlow
+from src.execution.browser_agent_worker import BrowserAgentRuntime
 from src.execution.playwright_engine import PlaywrightEngine
 from src.execution.v1_runner import V1TaskRunner
 from src.models import (
@@ -58,23 +59,33 @@ from src.services.delivery_workspace import build_delivery_workspace, l2_real_pr
 from src.services.agent_console import AgentConsoleService
 from src.services.config_preview import ConfigPreviewService
 from src.services.template_center import template_center_metadata
+from src.services.starter_templates import build_starter_templates, starter_template_matches
 from src.ws import ConnectionManager
 
 @asynccontextmanager
 async def app_lifespan(_app: FastAPI):
     _append_backend_runtime_log(f'DXM backend runtime started pid={os.getpid()} owner={_runtime_control_owner()}')
     try:
+        recovery = _recover_orphaned_runtime_tasks()
+        if recovery.get('recovered') or recovery.get('cancelled'):
+            _append_backend_runtime_log(
+                f"startup task recovery recovered={','.join(map(str, recovery.get('recovered', []))) or 'none'} "
+                f"cancelled={','.join(map(str, recovery.get('cancelled', []))) or 'none'}"
+            )
+    except Exception as exc:
+        _append_backend_runtime_log(f'Startup task recovery failed: {exc}')
+    try:
         yield
     finally:
         _append_backend_runtime_log('DXM backend runtime stopping; closing visible browser sessions')
         try:
-            login_flow._close_browser_session()
-        except Exception as exc:
-            _append_backend_runtime_log(f'Login browser cleanup failed: {exc}')
-        try:
             agent_console_service.stop()
         except Exception as exc:
             _append_backend_runtime_log(f'Agent console cleanup failed: {exc}')
+        try:
+            browser_agent_runtime.shutdown()
+        except Exception as exc:
+            _append_backend_runtime_log(f'Browser Agent cleanup failed: {exc}')
 
 
 app = FastAPI(title='dxm-auto-uikit backend', version='0.1.0', lifespan=app_lifespan)
@@ -103,6 +114,7 @@ live_client = DxmLiveClient()
 login_flow = DxmLoginFlow(live_client)
 login_flow_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='dxm-login-flow')
 workflow_adapter = DxmWorkflowAdapter(login_flow)
+browser_agent_runtime = BrowserAgentRuntime(workflow_adapter)
 title_ai_service = TitleAIService()
 selector_profile_service = SelectorProfileService()
 agent_console_service = AgentConsoleService()
@@ -112,6 +124,7 @@ runner = V1TaskRunner(
     manager,
     workflow_adapter=workflow_adapter,
     agent_console=agent_console_service,
+    browser_agent_runtime=browser_agent_runtime,
     workflow_executor=login_flow_executor,
 )
 
@@ -146,11 +159,14 @@ RUNTIME_LOG_LEVELS = {'info', 'warning', 'error'}
 RUNTIME_LOG_STALE_SECONDS = 30 * 60
 RUNTIME_CONTROL_ACTIONS = {
     'stop_agent_console',
+    'reset_workflow_runtime',
     'clear_stuck_tasks',
     'mark_real_task_manual_review',
     'restart_backend',
     'restart_frontend',
     'run_l2_readonly_probe',
+    'browser_agent_takeover',
+    'browser_agent_resume',
 }
 L2_READONLY_PROBE_RUNNER = REPO_ROOT / 'tools' / 'probes' / 'l2_readonly_probe_runner.py'
 L2_READONLY_PROBE_SCRIPT = REPO_ROOT / 'tools' / 'probes' / 'l2_readonly_probe.py'
@@ -170,6 +186,67 @@ RUNTIME_LOG_TAG_PATTERNS = {
     '网络响应': ('http/', 'response', 'status', 'network', 'har'),
     '报告生成': ('report', '报告'),
 }
+
+
+def _recover_orphaned_runtime_tasks() -> dict[str, list[int]]:
+    recovered: list[int] = []
+    cancelled: list[int] = []
+    for task in repo.list_tasks():
+        previous_status = str(task.get('status') or '')
+        if previous_status not in {'running', 'paused'}:
+            continue
+        task_id = int(task['id'])
+        full_task = repo.get_task_private(task_id) or task
+        mode = str(task.get('mode') or (task.get('payload') or {}).get('execution_mode') or '')
+        if mode in REAL_WRITE_START_MODES:
+            repo.update_task_status(task_id, 'needs_manual_review')
+            _mark_unfinished_jobs_after_runtime_recovery(
+                full_task,
+                status='failed',
+                error_code='E901',
+                error_message='上次真实浏览器任务没有正常结束，已停止自动执行并转入人工复核；请确认店小秘页面状态后重新打开执行浏览器再重试。',
+            )
+            repo.add_log(task_id, None, 'warning', '启动恢复：真实任务已转人工复核', {
+                'previous_status': previous_status,
+                'mode': mode,
+                'reason': 'backend_restarted_while_task_active',
+            })
+            recovered.append(task_id)
+            continue
+        repo.update_task_status(task_id, 'cancelled')
+        _mark_unfinished_jobs_after_runtime_recovery(
+            full_task,
+            status='cancelled',
+            error_code='E901',
+            error_message='上次任务随后台重启中断，已自动取消；请重新创建或启动任务。',
+        )
+        repo.add_log(task_id, None, 'warning', '启动恢复：已取消上次未结束任务', {
+            'previous_status': previous_status,
+            'mode': mode,
+            'reason': 'backend_restarted_while_task_active',
+        })
+        cancelled.append(task_id)
+    return {'recovered': recovered, 'cancelled': cancelled}
+
+
+def _mark_unfinished_jobs_after_runtime_recovery(
+    task: dict[str, Any],
+    *,
+    status: str,
+    error_code: str,
+    error_message: str,
+) -> None:
+    for job in task.get('jobs') or []:
+        if str(job.get('status') or '') not in {'running', 'pending'}:
+            continue
+        repo.update_job(
+            int(job['id']),
+            status=status,
+            current_step_code='RUNTIME_RECOVERY',
+            current_step_name='后台重启恢复',
+            error_code=error_code,
+            error_message=error_message,
+        )
 
 
 @app.get('/health', response_model=HealthResponse, response_model_exclude_none=True)
@@ -378,6 +455,7 @@ def create_acquisition_claim_request(payload: AcquisitionClaimRequest):
         'stage': task_payload.get('stage') or 'pending_acquisition_claim',
         'status': task_payload.get('status') or 'pending',
         'store_id': task_payload.get('store_id'),
+        'source_url': task_payload.get('source_url'),
         'keyword': task_payload.get('keyword'),
         'category_name': task_payload.get('category_name'),
         'claim_mark': task_payload.get('claim_mark'),
@@ -397,13 +475,15 @@ def create_acquisition_claim_request(payload: AcquisitionClaimRequest):
 
 def _normalize_acquisition_claim_request(payload: AcquisitionClaimRequest) -> dict[str, Any]:
     data = payload.model_dump()
+    source_url = str(data.get('source_url') or '').strip()
     keyword = str(data.get('keyword') or '').strip()
     category_name = str(data.get('category_name') or '').strip()
     claim_mark = str(data.get('claim_mark') or '').strip()
     if not claim_mark:
         raise HTTPException(status_code=400, detail='请填写认领标记。')
     if not keyword and not category_name:
-        raise HTTPException(status_code=400, detail='请填写搜索关键词或认领类目，Agent 才能定位真实采集商品。')
+        raise HTTPException(status_code=400, detail='请填写商品关键词或商品类目，自动浏览器才能在店小秘已有待认领商品中定位目标。')
+    data['source_url'] = source_url or None
     data['keyword'] = keyword or None
     data['category_name'] = category_name or None
     data['claim_mark'] = claim_mark
@@ -423,7 +503,57 @@ def get_task(task_id: int):
 @app.post('/api/tasks')
 def create_task(payload: TaskCreate):
     _assert_task_create_scope(payload)
-    return repo.create_task(payload.model_dump())
+    data = payload.model_dump()
+    _ensure_single_save_starter_templates(data)
+    return repo.create_task(data)
+
+
+def _ensure_single_save_starter_templates(data: dict[str, Any]) -> None:
+    if data.get('mode') != 'single_save':
+        return
+    product_ids = data.get('product_ids') or []
+    if len(product_ids) != 1:
+        return
+    product = repo.get_product(int(product_ids[0]))
+    if not product:
+        return
+    task_payload = data.get('payload') if isinstance(data.get('payload'), dict) else {}
+    product_payload = product.get('payload') if isinstance(product.get('payload'), dict) else {}
+    store_name = str(
+        task_payload.get('store_name')
+        or product_payload.get('store_name')
+        or repo._store_name_for_id(data.get('store_id'))  # noqa: SLF001 - repository owns store lookup.
+        or ''
+    ).strip()
+    category_name = str(
+        product.get('category_name')
+        or product_payload.get('category_name')
+        or task_payload.get('category_name')
+        or ''
+    ).strip()
+    platform = str(task_payload.get('platform') or product_payload.get('platform') or 'AliExpress').strip()
+    if not store_name or not category_name:
+        return
+
+    existing_templates = repo.list_templates()
+    for starter_template in build_starter_templates(
+        store_name=store_name,
+        category_name=category_name,
+        platform=platform or 'AliExpress',
+    ):
+        template_type = str(starter_template.get('template_type') or '').strip().lower()
+        if any(
+            starter_template_matches(
+                template,
+                template_type=template_type,
+                store_name=store_name,
+                category_name=category_name,
+                platform=platform or 'AliExpress',
+            )
+            for template in existing_templates
+        ):
+            continue
+        existing_templates.append(repo.create_template(starter_template))
 
 
 @app.patch('/api/tasks/{task_id}/config-overrides')
@@ -663,6 +793,7 @@ def runtime_status(frontend_url: str | None = None):
             'profileDir': agent_status.get('profile_dir'),
             'lastError': agent_status.get('last_error'),
         },
+        'browserAgent': browser_agent_runtime.status(),
         'realBrowser': real_browser_status,
         'dxmLogin': {
             'status': str(dxm_state.get('status') or dxm_state.get('stage') or 'unknown'),
@@ -693,6 +824,7 @@ def runtime_status(frontend_url: str | None = None):
             'commandFile': str(RUNTIME_CONTROL_COMMAND_FILE),
             'detail': _runtime_control_detail(),
         },
+        'workflowRuntime': _workflow_runtime_status(),
         'paths': {
             'data_dir': str(DATA_DIR),
             'dataDir': str(DATA_DIR),
@@ -705,6 +837,24 @@ def runtime_status(frontend_url: str | None = None):
 
 
 def _runtime_real_browser_status(agent_status: dict[str, Any], dxm_state: dict[str, Any]) -> dict[str, Any]:
+    browser_agent_status = browser_agent_runtime.status()
+    browser_agent_active = bool(browser_agent_status.get('active'))
+    browser_agent_visible = bool(browser_agent_status.get('browserVisible'))
+    if browser_agent_active or browser_agent_visible or str(browser_agent_status.get('status') or '') not in {'idle', 'stopped'}:
+        return {
+            'status': browser_agent_status.get('status') or 'known',
+            'active': browser_agent_active,
+            'browserVisible': browser_agent_visible,
+            'browserLaunching': False,
+            'source': 'browser_agent',
+            'currentUrl': browser_agent_status.get('currentUrl'),
+            'pageTitle': browser_agent_status.get('pageTitle'),
+            'currentStep': browser_agent_status.get('currentStep'),
+            'lastError': browser_agent_status.get('lastError'),
+            'message': browser_agent_status.get('message'),
+            'nextAction': browser_agent_status.get('nextAction'),
+        }
+
     dxm_stage = str(dxm_state.get('stage') or dxm_state.get('status') or '').strip()
     dxm_url = dxm_state.get('current_url') or dxm_state.get('url') or dxm_state.get('page_url')
     dxm_browser_visible = bool(dxm_state.get('browser_visible'))
@@ -773,6 +923,70 @@ def _runtime_frontend_url(frontend_url: str | None = None) -> str:
     return f"http://127.0.0.1:{os.environ.get('DXM_FRONTEND_PORT', '5173')}"
 
 
+def _workflow_runtime_status() -> dict[str, Any]:
+    reason = str(getattr(runner, 'workflow_runtime_unhealthy_reason', '') or '').strip() or _browser_agent_unhealthy_reason()
+    if reason:
+        return {
+            'status': 'needs_restart',
+            'healthy': False,
+            'unhealthyReason': reason,
+            'resetAction': 'reset_workflow_runtime',
+            'message': '真实浏览器执行器需要重启后才能继续真实认领或保存任务。',
+            'nextAction': '点击“重启真实浏览器执行器”，再重新打开执行浏览器后重试。',
+        }
+    return {
+        'status': 'ready',
+        'healthy': True,
+        'unhealthyReason': None,
+        'resetAction': None,
+        'message': '真实浏览器执行器可用。',
+        'nextAction': None,
+    }
+
+
+def _browser_agent_unhealthy_reason() -> str:
+    try:
+        status = browser_agent_runtime.status()
+    except Exception as exc:
+        return f'自动浏览器状态无法读取：{exc}'
+    if status.get('healthy') is False:
+        return str(status.get('lastError') or '自动浏览器运行时不可用，需要重启后继续。')
+    return ''
+
+
+def _shutdown_executor_without_wait(executor: ThreadPoolExecutor | None) -> None:
+    if executor is None:
+        return
+    try:
+        executor.shutdown(wait=False, cancel_futures=True)
+    except TypeError:
+        executor.shutdown(wait=False)
+
+
+def _reset_workflow_runtime() -> dict[str, Any]:
+    global login_flow, workflow_adapter, login_flow_executor
+
+    previous_reason = str(getattr(runner, 'workflow_runtime_unhealthy_reason', '') or '').strip() or _browser_agent_unhealthy_reason()
+    old_executor = login_flow_executor
+    _shutdown_executor_without_wait(old_executor)
+
+    login_flow = DxmLoginFlow(live_client)
+    login_flow_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='dxm-login-flow')
+    workflow_adapter = DxmWorkflowAdapter(login_flow)
+    browser_agent_runtime.reset(workflow_adapter)
+    runner.workflow_adapter = workflow_adapter
+    runner._workflow_executor = login_flow_executor
+    runner.browser_agent_runtime = browser_agent_runtime
+    runner.workflow_runtime_unhealthy_reason = None
+
+    return {
+        'workflowRuntime': _workflow_runtime_status(),
+        'browserAgent': browser_agent_runtime.status(),
+        'previousUnhealthyReason': previous_reason or None,
+        'oldRuntimeDetached': bool(previous_reason),
+    }
+
+
 @app.post('/api/runtime/control')
 def runtime_control(payload: RuntimeControlRequest):
     action = payload.action.strip().lower()
@@ -808,7 +1022,7 @@ def runtime_control(payload: RuntimeControlRequest):
         result = agent_console_service.stop()
         task_id = before.get('task_id')
         if isinstance(task_id, int):
-            repo.add_log(task_id, before.get('job_id'), 'info', '运行时控制：已停止浏览器 Agent', {
+            repo.add_log(task_id, before.get('job_id'), 'info', '运行时控制：已停止自动浏览器', {
                 'action': action,
                 'session_id': before.get('session_id'),
             })
@@ -817,7 +1031,39 @@ def runtime_control(payload: RuntimeControlRequest):
             'ok': True,
             'action': action,
             'agentConsole': result,
-            'message': '浏览器 Agent 已停止',
+            'message': '自动浏览器已停止',
+        })
+
+    if action == 'browser_agent_takeover':
+        result = browser_agent_runtime.request_manual_takeover()
+        _append_runtime_control_log("browser_agent_takeover")
+        return normalize_artifact_paths({
+            'ok': True,
+            'action': action,
+            'browserAgent': result,
+            'message': '已进入人工接管；请在真实浏览器里检查或修正当前页面',
+        })
+
+    if action == 'browser_agent_resume':
+        result = browser_agent_runtime.resume()
+        _append_runtime_control_log("browser_agent_resume")
+        return normalize_artifact_paths({
+            'ok': True,
+            'action': action,
+            'browserAgent': result,
+            'message': '真实浏览器已交还自动浏览器，可继续执行',
+        })
+
+    if action == 'reset_workflow_runtime':
+        result = _reset_workflow_runtime()
+        _append_runtime_control_log(
+            f"reset_workflow_runtime previous_unhealthy={result.get('previousUnhealthyReason') or 'none'}"
+        )
+        return normalize_artifact_paths({
+            'ok': True,
+            'action': action,
+            **result,
+            'message': '真实浏览器执行器已重启；请重新打开执行浏览器后再启动任务',
         })
 
     if action == 'clear_stuck_tasks':
@@ -1923,6 +2169,7 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
 
     if mode not in REAL_DXM_MUTATION_MODES:
         return
+    _assert_workflow_runtime_healthy()
     if mode not in RELEASED_REAL_DXM_MUTATION_MODES:
         raise HTTPException(status_code=403, detail=UNRELEASED_REAL_DXM_MODE_DETAIL)
     if mode == 'claim_only':
@@ -1937,12 +2184,12 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
             )
         return
     _assert_single_save_product_count(task.get('payload') or {}, status_code=409)
+    _assert_real_task_uses_non_fixture_products(task)
     if mode == 'single_save':
         _assert_single_save_uses_claimed_draft_product(payload.get('product_ids') or [])
 
     if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
         raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')
-    _assert_real_task_uses_non_fixture_products(task)
 
     approval = payload.get('manual_approval') or {}
     if not isinstance(approval, dict):
@@ -1971,6 +2218,16 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
         )
 
 
+def _assert_workflow_runtime_healthy() -> None:
+    reason = str(getattr(runner, 'workflow_runtime_unhealthy_reason', '') or '').strip() or _browser_agent_unhealthy_reason()
+    if not reason:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail=f'真实浏览器执行器需要重启：{reason}',
+    )
+
+
 def _assert_task_create_scope(payload: TaskCreate) -> None:
     mode = str(payload.mode or '').strip()
     if mode in REAL_DXM_MUTATION_MODES and mode not in RELEASED_REAL_DXM_MUTATION_MODES:
@@ -1990,11 +2247,11 @@ def _assert_task_create_scope(payload: TaskCreate) -> None:
 def _assert_claim_only_acquisition_task(task: dict[str, Any]) -> None:
     jobs = task.get('jobs') if isinstance(task.get('jobs'), list) else []
     if not jobs:
-        raise HTTPException(status_code=409, detail='Controlled claim_only requires an acquisition claim job')
+        raise HTTPException(status_code=409, detail='待认领商品任务缺少认领作业，请重新创建任务。')
     if any(job.get('product_id') is not None for job in jobs if isinstance(job, dict)):
         raise HTTPException(
             status_code=409,
-            detail='Controlled claim_only must start from data acquisition and cannot use existing product_ids',
+            detail='待认领商品处理必须从店小秘已有待认领列表开始，不能直接绑定本地商品。',
         )
 
 
@@ -2008,7 +2265,7 @@ def _assert_single_save_uses_claimed_draft_product(product_ids: list[int]) -> No
             status_code=409,
             detail=(
                 '当前选择的商品是测试/示例数据，不能用于真实店小秘保存。'
-                '请先在“数据采集”认领真实商品到采集箱，再从“采集箱编辑保存”创建任务。'
+                '请先从店小秘“已有待认领列表”认领真实商品到商品箱，再从“商品箱编辑保存”创建任务。'
             ),
         )
     status = str(product.get('status') or '')
@@ -2018,24 +2275,50 @@ def _assert_single_save_uses_claimed_draft_product(product_ids: list[int]) -> No
         raise HTTPException(
             status_code=409,
             detail=(
-                '编辑保存必须从采集箱里的真实商品开始。'
-                '请先完成“采集认领”，确认商品已进入采集箱后，再创建单商品只保存任务。'
+                '编辑保存必须从商品箱里的真实商品开始。'
+                '请先完成“待认领商品”，确认商品已进入商品箱后，再创建单商品只保存任务。'
             ),
         )
     if source != 'dxm_data_acquisition':
         raise HTTPException(
             status_code=409,
             detail=(
-                '编辑保存必须从真实数据采集认领进入采集箱的商品开始。'
-                '请先完成“数据采集认领”，不要使用手工创建或本地导入商品。'
+                '编辑保存必须从店小秘已有待认领商品进入商品箱的商品开始。'
+                '请先完成“待认领商品”，不要使用手工创建或本地导入商品。'
             ),
         )
     if payload.get('draft_box_verified') is not True:
         raise HTTPException(
             status_code=409,
             detail=(
-                '编辑保存必须先通过采集箱验证。'
-                '请确认商品已进入采集箱后，再创建单商品只保存任务。'
+                '编辑保存必须先确认商品已进入商品箱。'
+                '请确认商品已进入商品箱后，再创建单商品只保存任务。'
+            ),
+        )
+    source_url = ''
+    for key in ('source_url', 'url'):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            source_url = value.strip()
+            break
+    if not source_url:
+        values = payload.get('source_urls')
+        if isinstance(values, list):
+            source_url = next((str(value).strip() for value in values if str(value or '').strip()), '')
+    if not source_url:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                '编辑保存缺少商品箱身份校验证据。'
+                '请重新完成“待认领商品”，并确认商品箱中能唯一匹配本次商品后再创建任务。'
+            ),
+        )
+    if not repo.product_has_completed_claim_provenance(product):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                '编辑保存必须能追溯到已完成的待认领商品任务链。'
+                '请先从“待认领商品”完成真实认领，并确认商品进入商品箱后再创建任务。'
             ),
         )
 
@@ -2058,7 +2341,7 @@ def _assert_real_task_uses_non_fixture_products(task: dict[str, Any]) -> None:
             status_code=409,
             detail=(
                 f'当前任务选择的是测试/示例商品，不能启动真实店小秘保存：{names}。'
-                '请在“选择商品”中选择真实采集商品，或重新创建单商品只保存任务。'
+                '请先在“待认领商品”完成真实商品认领，再到“商品箱编辑保存”选择该商品创建编辑保存任务。'
             ),
         )
 

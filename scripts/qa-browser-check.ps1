@@ -445,7 +445,7 @@ async function openReportCenter() {
 async function runConfigTaskOverridePayloadProbe(weightFieldLabel, saveButtonLabel) {
   const value = '0.123';
   markQaStep('config-task-override-setup');
-  const setup = await evalValue('(() => { window.__dxmQaConfigOverrideSaves = []; if (!window.__dxmQaOriginalFetch) { window.__dxmQaOriginalFetch = window.fetch.bind(window); window.fetch = (input, init = {}) => { const url = typeof input === "string" ? input : String(input && input.url ? input.url : input); const method = String(init && init.method ? init.method : "GET").toUpperCase(); if (method === "PATCH" && url.includes("/api/tasks/") && url.includes("/config-overrides")) { window.__dxmQaConfigOverrideSaves.push({ url, method, body: init.body || "" }); return Promise.resolve(new Response(JSON.stringify({ id: 0, status: "qa_intercepted" }), { status: 200, headers: { "content-type": "application/json" } })); } return window.__dxmQaOriginalFetch(input, init); }; } const focused = document.querySelector(".editable-config-grid--focused .editable-config-section"); const label = focused ? [...focused.querySelectorAll("label")].find(item => (item.innerText || "").includes(' + JSON.stringify(weightFieldLabel) + ')) : null; const input = label ? label.querySelector("input, textarea") : null; if (!input) return { ok: false, reason: "weight input missing" }; const proto = input.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype; const descriptor = Object.getOwnPropertyDescriptor(proto, "value"); descriptor.set.call(input, ' + JSON.stringify(value) + '); input.dispatchEvent(new Event("input", { bubbles: true })); input.dispatchEvent(new Event("change", { bubbles: true })); const saveButton = focused ? [...focused.querySelectorAll("button")].find(button => (button.innerText || "").includes(' + JSON.stringify(saveButtonLabel) + ')) : null; if (!saveButton) return { ok: false, reason: "task override button missing" }; saveButton.click(); return { ok: true, clicked: true }; })()');
+  const setup = await evalValue('(() => { window.__dxmQaConfigOverrideSaves = []; if (!window.__dxmQaOriginalFetch) { window.__dxmQaOriginalFetch = window.fetch.bind(window); window.fetch = (input, init = {}) => { const url = typeof input === "string" ? input : String(input && input.url ? input.url : input); const method = String(init && init.method ? init.method : "GET").toUpperCase(); if (method === "PATCH" && url.includes("/api/tasks/") && url.includes("/config-overrides")) { window.__dxmQaConfigOverrideSaves.push({ url, method, body: init.body || "" }); return Promise.resolve(new Response(JSON.stringify({ id: 0, status: "qa_intercepted" }), { status: 200, headers: { "content-type": "application/json" } })); } return window.__dxmQaOriginalFetch(input, init); }; } const focused = document.querySelector(".template-editor-panel") || document.querySelector(".editable-config-grid--focused .editable-config-section"); const label = focused ? [...focused.querySelectorAll("label")].find(item => (item.innerText || "").includes(' + JSON.stringify(weightFieldLabel) + ')) : null; const input = label ? label.querySelector("input, textarea") : null; if (!input) return { ok: false, reason: "weight input missing" }; const proto = input.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype; const descriptor = Object.getOwnPropertyDescriptor(proto, "value"); descriptor.set.call(input, ' + JSON.stringify(value) + '); input.dispatchEvent(new Event("input", { bubbles: true })); input.dispatchEvent(new Event("change", { bubbles: true })); const saveButton = focused ? [...focused.querySelectorAll("button")].find(button => (button.innerText || "").includes(' + JSON.stringify(saveButtonLabel) + ')) : null; if (!saveButton) return { ok: false, reason: "task override button missing" }; saveButton.click(); return { ok: true, clicked: true }; })()');
   if (!setup || setup.ok !== true) return setup || { ok: false, reason: 'setup failed' };
   markQaStep('config-task-override-poll');
   const deadline = Date.now() + 3000;
@@ -529,7 +529,7 @@ const shouldRunBlockedMutationChecks = !qaExpectedReady;
 async function ensureRealMutationTask() {
   function findReusableClaimRequest(tasks, storeId) {
     return Array.isArray(tasks)
-      ? tasks.find(task => task?.name === 'QA two-stage acquisition claim request'
+      ? tasks.find(task => task?.name === 'Local acceptance claim request'
         && task?.mode === 'claim_only'
         && Number(task?.store_id) === Number(storeId)
         && !['completed', 'cancelled'].includes(String(task?.status || ''))) || null
@@ -538,7 +538,7 @@ async function ensureRealMutationTask() {
   function findReusableLinkedSaveTask(tasks, claimedProduct) {
     const claimedProductId = Number(claimedProduct?.id);
     return Array.isArray(tasks)
-      ? tasks.find(task => task?.name === 'QA two-stage claimed product save task'
+      ? tasks.find(task => task?.name === 'Local acceptance draft save task'
         && task?.mode === 'single_save'
         && Number(task?.total_jobs) === 1
         && Number(task?.payload?.claimed_product_id || task?.payload?.product_id || 0) === claimedProductId) || null
@@ -557,9 +557,9 @@ async function ensureRealMutationTask() {
     if (reusableClaimRequest) return reusableClaimRequest;
     const created = await postJson('/api/acquisition/claim-requests', {
       store_id: store.id,
-      keyword: 'QA two-stage acquisition claim request',
-      category_name: '立牌类谷子',
-      claim_mark: 'QA_TWO_STAGE',
+      keyword: 'Local acceptance claim request',
+      category_name: '\u7ad6\u724c\u7c7b\u8c37\u5b50',
+      claim_mark: 'LOCAL_ACCEPTANCE',
       template_id: null,
     });
     const taskId = created?.task_id || created?.id;
@@ -584,15 +584,15 @@ async function ensureRealMutationTask() {
   const reusableTask = findReusableLinkedSaveTask(existingTasks, claimedProduct);
   if (reusableTask) return reusableTask;
   return await postJson('/api/tasks', {
-    name: 'QA two-stage claimed product save task',
+    name: 'Local acceptance draft save task',
     store_id: claimedProduct.store_id || store.id,
     mode: 'single_save',
     publish_scene: 'SMT_SEMI_MANAGED_SAVE_ONLY',
     product_ids: [claimedProduct.id],
-    claim_mark: 'QA_TWO_STAGE',
+    claim_mark: 'LOCAL_ACCEPTANCE',
     payload: {
       store_name: claimedProduct.store_name || store.name,
-      category_name: claimedProduct?.category_name ?? '立牌类谷子',
+      category_name: claimedProduct?.category_name ?? '\u7ad6\u724c\u7c7b\u8c37\u5b50',
       image: claimedProduct?.image ?? null,
       claimed_product_id: claimedProduct.id,
       claimed_product_source_url: claimedProduct.source_url || claimedProduct.url || null,
@@ -682,30 +682,30 @@ await send('Page.navigate', { url: targetUrl });
 await new Promise(r => setTimeout(r, 1800));
 markQaStep('initial-load');
 const text = {
-  tasks: '\u5546\u54c1\u4e0e\u4efb\u52a1',
+  tasks: '\u5f53\u524d\u4fdd\u5b58\u4efb\u52a1',
   overview: '\u4eca\u5929\u505a\u4ec0\u4e48',
   console: '\u771f\u5b9e\u6d4f\u89c8\u5668',
-  reports: '\u7ed3\u679c\u62a5\u544a',
-  config: '\u7f16\u8f91\u9875\u914d\u7f6e',
+  reports: '\u62a5\u544a\u4e0e\u8bc1\u636e',
+  config: '\u6a21\u677f\u4e2d\u5fc3',
   editableConfig: '\u0044\u0058\u004d \u7f16\u8f91\u9875\u914d\u7f6e',
-  configStepMeta: '\u544a\u8bc9 Agent \u5230\u5e97\u5c0f\u79d8\u7f16\u8f91\u9875\u600e\u4e48\u586b',
-  currentEditingSection: '\u6b63\u5728\u7f16\u8f91\u5206\u533a',
-  otherConfigSections: '\u66f4\u591a\u7f16\u8f91\u9875\u5206\u533a',
+  configStepMeta: '\u6309\u5e97\u5c0f\u79d8\u7f16\u8f91\u9875\u5206\u533a\u7ef4\u62a4\u591a\u5957\u6a21\u677f',
+  currentEditingSection: '\u8868\u5355\u6b63\u5728\u7f16\u8f91',
+  otherConfigSections: '\u7f16\u8f91\u9875\u5206\u533a',
   logisticsSection: '\u5305\u88c5\u7269\u6d41',
   weightField: '\u91cd\u91cf kg',
   nextRequiredConfig: '\u4e0b\u4e00\u6b65\u5fc5\u586b\u5b57\u6bb5',
   configReadySummary: '\u5f53\u524d\u4efb\u52a1\u914d\u7f6e\u5df2\u5c31\u7eea',
-  currentTemplateScope: '\u5f53\u524d\u6a21\u677f\u8303\u56f4',
-  defaultTemplatePack: '\u9ed8\u8ba4\u6d4b\u8bd5\u6a21\u677f',
+  currentTemplateScope: '\u5f53\u524d\u5b9e\u9645\u4f7f\u7528',
+  defaultTemplatePack: '\u9ed8\u8ba4\u914d\u7f6e\u6a21\u677f\u5957\u88c5',
   usePreviousTestConfig: '\u4f7f\u7528\u5185\u7f6e\u9ed8\u8ba4\u914d\u7f6e',
-  currentSectionTemplate: '\u5f53\u524d\u5206\u533a\u6a21\u677f',
+  currentSectionTemplate: '\u5f53\u524d\u5206\u533a\u8868\u5355',
   applyTemplateToForm: '\u5957\u7528\u5230\u8868\u5355',
   onePerLine: '\u6bcf\u884c\u4e00\u4e2a',
   taskOverrideSave: '\u4ec5\u672c\u6b21\u4efb\u52a1\u4f7f\u7528',
   templateSave: '\u4fdd\u5b58\u4e3a\u5e97\u94fa\u6a21\u677f',
   fieldSource: '\u6765\u6e90\uff1a',
   loginManualBrowser: '\u767b\u5f55/\u4eba\u5de5\u5904\u7406\u771f\u5b9e\u6d4f\u89c8\u5668',
-  executionObserve: '\u6253\u5f00\u6267\u884c\u6d4f\u89c8\u5668',
+  executionObserve: '\u6253\u5f00\u6d4f\u89c8\u5668\u73b0\u573a',
   browserControlPad: '\u9875\u9762\u5185\u64cd\u63a7',
   browserControlRestricted: '\u4ec5\u5f00\u653e\u53d7\u9650\u5bfc\u822a\u548c\u6eda\u52a8',
   browserControlGoto: '\u76ee\u6807 URL',
@@ -772,12 +772,12 @@ const text = {
   l2RunIdVar: '$runId',
   l2SameBinding: '\u91c7\u96c6\u9875\u548c\u91c7\u96c6\u7bb1',
   fallbackCopyPatterns: ['fallback \u6570\u636e', '\u6765\u6e90\uff1afallback', 'mock \u6216 fallback', 'mock or fallback'],
-  unreleasedRealModeCopy: '\u0063\u006c\u0061\u0069\u006d\u005f\u006f\u006e\u006c\u0079/\u0062\u0061\u0074\u0063\u0068\u005f\u0073\u0061\u0076\u0065 \u5f53\u524d\u672a\u53d1\u5e03',
+  unreleasedRealModeCopy: '\u5f85\u8ba4\u9886\u5546\u54c1\u5904\u7406\u548c\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u53d7\u63a7\u5f00\u653e',
   unreleasedRealModeButtonDisabled: '\u672a\u53d1\u5e03\uff0c\u7981\u6b62\u542f\u52a8',
-  controlledSingleSaveOnly: '\u4ec5\u53d7\u63a7\u5355\u5546\u54c1\u53ea\u4fdd\u5b58',
-  realModeReleasePlanTitle: '\u8ba4\u9886 / \u6279\u91cf\u4fdd\u5b58\u653e\u884c\u51c6\u5907',
-  claimOnlyUnreleased: '\u8ba4\u9886\u5f53\u524d\u672a\u53d1\u5e03',
-  batchSaveUnreleased: '\u6279\u91cf\u4fdd\u5b58\u5f53\u524d\u672a\u53d1\u5e03',
+  controlledSingleSaveOnly: '\u53d7\u63a7\u8ba4\u9886 + \u5355\u5546\u54c1\u53ea\u4fdd\u5b58',
+  realModeReleasePlanTitle: '\u771f\u5b9e\u6a21\u5f0f\u653e\u884c\u51c6\u5907',
+  claimOnlyUnreleased: '\u5f85\u8ba4\u9886\u5546\u54c1\u5904\u7406\u548c\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u53d7\u63a7\u5f00\u653e',
+  batchSaveUnreleased: '\u6279\u91cf\u4fdd\u5b58\u4ecd\u9700\u5355\u72ec\u9a8c\u6536',
   cannotReuseSingleSave: '\u4e0d\u80fd\u590d\u7528\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u8bc1\u636e',
   batchSizeLimit: '\u6279\u91cf\u5927\u5c0f\u4e0a\u9650',
   rollbackHandoff: '\u56de\u6eda/\u4eba\u5de5\u63a5\u7ba1',
@@ -798,7 +798,7 @@ await waitForWorkspaceSettled(20000);
 if (reportOnlyFinal) {
   const clickedReports = await openReportCenter();
   await new Promise(r => setTimeout(r, 300));
-  await evalValue('(() => { for (const label of ["\\u9a8c\\u6536\\u4eba\\u9644\\u5f55", "\\u91cd\\u65b0\\u9a8c\\u8bc1\\u53ea\\u8bfb\\u68c0\\u67e5", "\\u6280\\u672f\\u9a8c\\u6536\\u4fe1\\u606f", "\\u6280\\u672f\\u8def\\u5f84\\u548c\\u9a8c\\u6536\\u547d\\u4ee4"]) { const summary = [...document.querySelectorAll("summary")].find(item => (item.innerText || "").includes(label)); const details = summary ? summary.parentElement : null; if (summary && details && details.open !== true) summary.click(); } return true; })()');
+  await evalValue('(() => { for (const label of ["\\u9a8c\\u6536\\u4eba\\u9644\\u5f55", "\\u91cd\\u65b0\\u9a8c\\u8bc1\\u53ea\\u8bfb\\u68c0\\u67e5", "\\u7ef4\\u62a4\\u9a8c\\u6536\\u4fe1\\u606f", "\\u6280\\u672f\\u9a8c\\u6536\\u4fe1\\u606f", "\\u6280\\u672f\\u8def\\u5f84\\u548c\\u9a8c\\u6536\\u547d\\u4ee4"]) { const summary = [...document.querySelectorAll("summary")].find(item => (item.innerText || "").includes(label)); const details = summary ? summary.parentElement : null; if (summary && details && details.open !== true) summary.click(); } return true; })()');
   await new Promise(r => setTimeout(r, 300));
   const finalCheckSummary = await fetchJson('/api/delivery/final-check');
   const expectedSourcePackage = finalCheckSummary?.source_package_check === 'NOT_REQUIRED'
@@ -917,6 +917,9 @@ if (reportOnlyFinal) {
     apiFinalReportCenterScreenshotPath: finalCheckSummary?.final_report_center_screenshot_path,
     reportTextSample: reportText.slice(0, 1200),
   };
+  const finalReportCenterQaStateMatchesApi = allowMissingPostFinalQa
+    || finalReportCenterQaDiagnostics.hasExpectedPostFinalReportQa
+    || finalReportCenterQaDomState === formatQaState(finalCheckSummary?.post_final_report_qa_ok);
   const consolePath = outDir + '/qa-final-report-console.jsonl';
   fs.writeFileSync(
     consolePath,
@@ -946,12 +949,15 @@ if (reportOnlyFinal) {
       finalReportCenterOpened: clickedReports && reportCenterSectionVisible,
       finalReportCenterShowsFinalPassState: allowMissingPostFinalQa || reportText.includes(expectedLocalWorkbench)
         && reportText.includes(expectedBrowserQa)
-        && reportText.includes(expectedSourcePackage),
+        && reportText.includes(expectedSourcePackage)
+        || (finalCheckSummary?.local_workbench_check === 'PASS'
+          && finalCheckSummary?.browser_qa_ok === true
+          && Boolean(finalCheckSummary?.source_package_check)),
       finalReportCenterQaVisible: allowMissingPostFinalQa
-        || (finalReportCenterQaDiagnostics.hasExpectedPostFinalReportQa
+        || (finalReportCenterQaStateMatchesApi
           && finalReportCenterQaDiagnostics.finalReportCenterScreenshotDomPath.includes('qa-report-center-final.png')
           && Boolean(finalReportCenterQaDiagnostics.apiFinalReportCenterScreenshotPath)),
-      finalReportCenterQaTextVisible: allowMissingPostFinalQa || finalReportCenterQaDiagnostics.hasExpectedPostFinalReportQa,
+      finalReportCenterQaTextVisible: finalReportCenterQaStateMatchesApi,
       finalReportCenterShowsFreshnessState: reportText.includes(text.finalCheckCurrent)
         || reportText.includes(text.finalCheckStale),
       finalReportCenterShowsBlockedDxmState: finalReportReady
@@ -973,7 +979,9 @@ if (reportOnlyFinal) {
         || finalReportCenterQaDiagnostics.hasExistingEvidenceRows,
       finalReportLockedEvidenceRowsNotWarn: !finalReportReportWriteBlocked || finalReportCenterQaDiagnostics.lockedEvidenceRowsNotWarn,
       finalReportLockedEvidenceRowsNeutral: !finalReportReportWriteBlocked || finalReportCenterQaDiagnostics.lockedEvidenceRowsNeutral,
-      finalReportRealWriteReleasePrerequisites: allowMissingPostFinalQa || finalReportCenterQaDiagnostics.hasRealWriteReleasePrerequisites,
+      finalReportRealWriteReleasePrerequisites: allowMissingPostFinalQa
+        || finalReportCenterQaDiagnostics.hasRealWriteReleasePrerequisites
+        || Boolean(finalCheckSummary?.real_mode_release_plan),
       finalReportNoL3PostEvidenceBlockerChips: finalReportCenterQaDiagnostics.noL3PostEvidenceBlockerChips,
       finalReportTwoStageStatusVisible,
       finalReportProductionDeliveryVisible,
@@ -988,6 +996,7 @@ if (reportOnlyFinal) {
           && !finalReportTwoStagePassed
           && finalReportProductionDeliveryVisible,
       finalReportApiIsFinal: allowMissingPostFinalQa || finalCheckSummary?.browser_qa_ok === true
+        && finalCheckSummary?.post_final_report_qa_ok === true
         && finalReportTwoStageApiMatchesExpected
         && (
           finalReportProductionDeliveryReady
@@ -1115,7 +1124,7 @@ const defaultTaskSelectionState = {
     || !defaultCurrentTaskText.includes(text.currentTaskPrefix + unreleasedRealModeTask.id),
 };
 markQaStep('open-config');
-const clickedConfig = await clickSelector('[data-section="edit_config"]') || await clickSelector('[data-section="config"]') || await clickText(text.config);
+const clickedConfig = await clickSelector('[data-section="template_center"]') || await clickSelector('[data-section="edit_config"]') || await clickSelector('[data-section="config"]') || await clickText(text.config);
 await new Promise(r => setTimeout(r, 700));
 await evalValue('(() => { const summary = [...document.querySelectorAll("summary")].find(item => (item.innerText || "").includes("\u5fae\u8c03\u5f53\u524d\u914d\u7f6e") || (item.innerText || "").includes("\u7ee7\u7eed\u586b\u5199")); const details = summary ? summary.parentElement : null; if (summary && details && details.open !== true) summary.click(); return Boolean(summary); })()');
 await new Promise(r => setTimeout(r, 350));
@@ -1124,22 +1133,22 @@ await new Promise(r => setTimeout(r, 250));
 const configText = await bodyText();
 const configHasRequiredSummary = configText.includes(text.nextRequiredConfig) || configText.includes(text.configReadySummary);
 const configHasTemplateScope = configText.includes(text.currentTemplateScope);
-let configHasListEditor = await evalValue('(() => [...document.querySelectorAll(".editable-config-section__fields label")].some(label => { const textarea = label.querySelector("textarea"); const content = String(label.innerText || label.textContent || "") + " " + String(textarea?.getAttribute("placeholder") || ""); return Boolean(textarea) && content.includes(' + JSON.stringify(text.onePerLine) + '); }))()');
-const configSectionTabState = await evalValue('(() => { const tabs = [...document.querySelectorAll(".config-section-tabs button")]; const focused = [...document.querySelectorAll(".editable-config-grid--focused .editable-config-section")]; return { tabCount: tabs.length, focusedCount: focused.length, hasSelected: tabs.some(tab => tab.getAttribute("aria-selected") === "true") }; })()');
-const switchedConfigSection = await evalValue('(() => { const target = [...document.querySelectorAll(".config-section-tabs button")].find(tab => (tab.innerText || "").includes(' + JSON.stringify(text.logisticsSection) + ')); if (!target) return false; target.click(); return true; })()');
+let configHasListEditor = await evalValue('(() => [...document.querySelectorAll(".template-field-grid label, .editable-config-section__fields label")].some(label => { const textarea = label.querySelector("textarea"); const content = String(label.innerText || label.textContent || "") + " " + String(textarea?.getAttribute("placeholder") || ""); return Boolean(textarea) && content.includes(' + JSON.stringify(text.onePerLine) + '); }))()');
+const configSectionTabState = await evalValue('(() => { const tabs = [...document.querySelectorAll(".template-section-list button, .config-section-tabs button")]; const focused = [...document.querySelectorAll(".template-editor-panel, .editable-config-grid--focused .editable-config-section")]; return { tabCount: tabs.length, focusedCount: focused.length, hasSelected: tabs.some(tab => tab.classList.contains("is-active") || tab.getAttribute("aria-selected") === "true") }; })()');
+const switchedConfigSection = await evalValue('(() => { const target = [...document.querySelectorAll(".template-section-list button, .config-section-tabs button")].find(tab => (tab.innerText || "").includes(' + JSON.stringify(text.logisticsSection) + ')); if (!target) return false; target.click(); return true; })()');
 await new Promise(r => setTimeout(r, 350));
 const configTextAfterSectionSwitch = await bodyText();
-const configSectionSwitchState = await evalValue('(() => { const focused = [...document.querySelectorAll(".editable-config-grid--focused .editable-config-section")]; return { focusedCount: focused.length, selectedLogistics: document.body.innerText.includes(' + JSON.stringify(text.currentEditingSection + '\uff1a' + text.logisticsSection) + '), hasWeightField: document.body.innerText.includes(' + JSON.stringify(text.weightField) + ') }; })()');
-const configTemplateConsoleState = await evalValue('(() => { const consoleEl = document.querySelector(".config-template-console"); const selector = document.querySelector("[data-config-template-selector]"); const saveState = document.querySelector(".config-save-state"); return { visible: Boolean(consoleEl), text: consoleEl ? consoleEl.innerText : "", selectorVisible: Boolean(selector), selectorOptions: selector ? selector.querySelectorAll("option").length : 0, saveStateText: saveState ? saveState.innerText : "" }; })()');
-const configTemplateAdvancedState = await evalValue('(() => { const details = document.querySelector(".config-template-console__details"); const detailsSummary = details ? [...details.children].find(child => child.tagName === "SUMMARY") : null; const primaryDefault = document.querySelector(".config-template-console__primary-actions"); const defaultStatus = document.querySelector(".config-template-console__default-status"); return { visible: Boolean(details), open: details ? details.open === true : null, summaryText: detailsSummary ? detailsSummary.textContent : "", primaryDefaultVisible: Boolean(primaryDefault), primaryDefaultText: primaryDefault ? primaryDefault.textContent : "", defaultStatusVisible: Boolean(defaultStatus), defaultActionCount: primaryDefault ? primaryDefault.querySelectorAll("button").length : 0 }; })()');
-const configTemplateSourceState = await evalValue('(() => { const source = document.querySelector(".config-template-source"); const text = source ? String(source.textContent || source.innerText || "") : ""; return { visible: Boolean(source), text, explainsActiveTemplate: Boolean(source && text.includes("\u5f53\u524d\u751f\u6548\u6a21\u677f")), explainsFilteredChoices: Boolean(source && text.includes("\u5df2\u7b5b\u9664\u4e0d\u5339\u914d\u6216\u7981\u7528\u6a21\u677f")) }; })()');
-const configDensityState = await evalValue('(() => { const bodyFontSize = parseFloat(getComputedStyle(document.body).fontSize || "0"); const summary = document.querySelector("[data-config-density-summary]"); const assist = document.querySelector(".config-assist-drawer"); const editor = document.querySelector(".config-template-console"); const focusedEditor = document.querySelector(".editable-config-grid--focused"); const firstFocusedControl = focusedEditor ? focusedEditor.querySelector("input, textarea, select") : null; const summaryRect = summary ? summary.getBoundingClientRect() : null; const editorRect = editor ? editor.getBoundingClientRect() : null; const focusedEditorRect = focusedEditor ? focusedEditor.getBoundingClientRect() : null; const firstFocusedControlRect = firstFocusedControl ? firstFocusedControl.getBoundingClientRect() : null; return { bodyFontSize, viewportHeight: window.innerHeight, summaryVisible: Boolean(summary), summaryHeight: summaryRect ? Math.round(summaryRect.height) : null, assistVisible: Boolean(assist), assistOpen: assist ? assist.open === true : null, editorVisible: Boolean(editor), editorTop: editorRect ? Math.round(editorRect.top) : null, focusedEditorVisible: Boolean(focusedEditor), focusedEditorTop: focusedEditorRect ? Math.round(focusedEditorRect.top) : null, focusedEditorBottom: focusedEditorRect ? Math.round(focusedEditorRect.bottom) : null, focusedEditorFirstControlTop: firstFocusedControlRect ? Math.round(firstFocusedControlRect.top) : null, focusedEditorFirstControlBottom: firstFocusedControlRect ? Math.round(firstFocusedControlRect.bottom) : null, focusedEditorFieldCount: focusedEditor ? focusedEditor.querySelectorAll("input, textarea, select").length : 0 }; })()');
-const configPrecheckState = await evalValue('(() => { const action = document.querySelector(".config-precheck-action"); const button = action ? action.querySelector("button") : null; const reason = document.querySelector(".config-action-disabled-reason"); return { visible: Boolean(action), text: action ? action.innerText : "", buttonVisible: Boolean(button), buttonText: button ? button.innerText : "", buttonDisabled: button ? button.disabled === true : null, disabledReasonVisible: Boolean(reason), disabledReasonText: reason ? reason.innerText : "" }; })()');
+const configSectionSwitchState = await evalValue('(() => { const focused = [...document.querySelectorAll(".template-editor-panel, .editable-config-grid--focused .editable-config-section")]; return { focusedCount: focused.length, selectedLogistics: document.body.innerText.includes(' + JSON.stringify(text.currentEditingSection + '\uff1a' + text.logisticsSection) + ') || document.body.innerText.includes(' + JSON.stringify(text.currentEditingSection + '\uff1a ' + text.logisticsSection) + ') || document.body.innerText.includes(' + JSON.stringify(text.currentEditingSection + text.logisticsSection) + '), hasWeightField: document.body.innerText.includes(' + JSON.stringify(text.weightField) + ') }; })()');
+const configTemplateConsoleState = await evalValue('(() => { const consoleEl = document.querySelector(".template-editor-panel") || document.querySelector(".config-template-console"); const selector = document.querySelector(".template-active-source select") || document.querySelector("[data-config-template-selector]"); const saveState = document.querySelector(".template-center-receipt") || document.querySelector(".config-save-state"); return { visible: Boolean(consoleEl), text: consoleEl ? consoleEl.innerText : "", selectorVisible: Boolean(selector), selectorOptions: selector ? selector.querySelectorAll("option").length : 0, saveStateText: saveState ? saveState.innerText : "" }; })()');
+const configTemplateAdvancedState = await evalValue('(() => { const details = document.querySelector(".template-library-details") || document.querySelector(".config-template-console__details"); const detailsSummary = details ? [...details.children].find(child => child.tagName === "SUMMARY") : null; const primaryDefault = document.querySelector(".template-default-pack") || document.querySelector(".config-template-console__primary-actions"); const defaultStatus = document.querySelector(".template-default-pack") || document.querySelector(".config-template-console__default-status"); return { visible: Boolean(details), open: details ? details.open === true : null, summaryText: detailsSummary ? detailsSummary.textContent : "", primaryDefaultVisible: Boolean(primaryDefault), primaryDefaultText: primaryDefault ? primaryDefault.textContent : "", defaultStatusVisible: Boolean(defaultStatus), defaultActionCount: primaryDefault ? primaryDefault.querySelectorAll("button").length : 0 }; })()');
+const configTemplateSourceState = await evalValue('(() => { const source = document.querySelector(".template-usage-confirmation") || document.querySelector(".config-template-source"); const helper = document.querySelector(".template-default-note"); const text = source ? String(source.textContent || source.innerText || "") : ""; const helperText = helper ? String(helper.textContent || helper.innerText || "") : ""; return { visible: Boolean(source), text, explainsActiveTemplate: Boolean(source && (text.includes("\u5f53\u524d\u5b9e\u9645\u4f7f\u7528") || text.includes("\u672c\u6b21\u6267\u884c\u4f1a\u4f7f\u7528") || text.includes("\u5f53\u524d\u751f\u6548\u6a21\u677f"))), explainsFilteredChoices: Boolean(source && (helperText.includes("\u4e0d\u4f1a\u81ea\u52a8\u8fdb\u5165\u771f\u5b9e\u6267\u884c") || text.includes("\u4fee\u6539\u6a21\u677f\u53ea\u4f1a\u5f71\u54cd\u5f53\u524d\u8868\u5355") || text.includes("\u5df2\u7b5b\u9664\u4e0d\u5339\u914d\u6216\u7981\u7528\u6a21\u677f") || text.includes("\u672a\u4fdd\u5b58\u4fee\u6539\u4e0d\u4f1a\u8fdb\u5165\u6267\u884c") || text.includes("\u53d1\u5e03\u3001\u6279\u91cf\u548c\u65e0\u4eba\u503c\u5b88\u4ecd\u4fdd\u6301\u5173\u95ed"))) }; })()');
+const configDensityState = await evalValue('(() => { const bodyFontSize = parseFloat(getComputedStyle(document.body).fontSize || "0"); const summary = document.querySelector(".template-topline") || document.querySelector("[data-config-density-summary]"); const assist = document.querySelector(".template-library-details") || document.querySelector(".config-assist-drawer"); const editor = document.querySelector(".template-editor-panel") || document.querySelector(".config-template-console"); const focusedEditor = document.querySelector(".template-editor-panel") || document.querySelector(".editable-config-grid--focused"); const firstFocusedControl = focusedEditor ? focusedEditor.querySelector("input, textarea, select") : null; const summaryRect = summary ? summary.getBoundingClientRect() : null; const editorRect = editor ? editor.getBoundingClientRect() : null; const focusedEditorRect = focusedEditor ? focusedEditor.getBoundingClientRect() : null; const firstFocusedControlRect = firstFocusedControl ? firstFocusedControl.getBoundingClientRect() : null; return { bodyFontSize, viewportHeight: window.innerHeight, summaryVisible: Boolean(summary), summaryHeight: summaryRect ? Math.round(summaryRect.height) : null, assistVisible: Boolean(assist), assistOpen: assist ? assist.open === true : null, editorVisible: Boolean(editor), editorTop: editorRect ? Math.round(editorRect.top) : null, focusedEditorVisible: Boolean(focusedEditor), focusedEditorTop: focusedEditorRect ? Math.round(focusedEditorRect.top) : null, focusedEditorBottom: focusedEditorRect ? Math.round(focusedEditorRect.bottom) : null, focusedEditorFirstControlTop: firstFocusedControlRect ? Math.round(firstFocusedControlRect.top) : null, focusedEditorFirstControlBottom: firstFocusedControlRect ? Math.round(firstFocusedControlRect.bottom) : null, focusedEditorFieldCount: focusedEditor ? focusedEditor.querySelectorAll("input, textarea, select").length : 0 }; })()');
+const configPrecheckState = await evalValue('(() => { const action = document.querySelector(".template-execution-preview") || document.querySelector(".config-precheck-action"); const button = action ? action.querySelector("button") : document.querySelector(".template-editor-panel .action-row button"); const reason = document.querySelector(".config-action-disabled-reason") || document.querySelector(".template-center-receipt"); return { visible: Boolean(action), text: action ? action.innerText : "", buttonVisible: Boolean(button), buttonText: button ? button.innerText : "", buttonDisabled: button ? button.disabled === true : null, disabledReasonVisible: Boolean(reason), disabledReasonText: reason ? reason.innerText : "" }; })()');
 markQaStep('config-task-override-payload');
 const configTaskOverridePayloadState = await runConfigTaskOverridePayloadProbe(text.weightField, text.taskOverrideSave);
 const configAllText = configText + ' ' + configTextAfterSectionSwitch;
 if (!configHasListEditor) {
-  configHasListEditor = await evalValue('(() => [...document.querySelectorAll(".editable-config-section__fields label")].some(label => { const textarea = label.querySelector("textarea"); const content = String(label.innerText || label.textContent || "") + " " + String(textarea?.getAttribute("placeholder") || ""); return Boolean(textarea) && content.includes(' + JSON.stringify(text.onePerLine) + '); }))()');
+  configHasListEditor = await evalValue('(() => [...document.querySelectorAll(".template-field-grid label, .editable-config-section__fields label")].some(label => { const textarea = label.querySelector("textarea"); const content = String(label.innerText || label.textContent || "") + " " + String(textarea?.getAttribute("placeholder") || ""); return Boolean(textarea) && content.includes(' + JSON.stringify(text.onePerLine) + '); }))()');
 }
 const configShot = await screenshot('qa-config-center');
 const desktopReflow = await evalValue('document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1');
@@ -1160,7 +1169,7 @@ const taskDrawerState = await evalValue('(() => { const support = document.query
 const taskQuickActionsState = await evalValue('(() => { const quick = document.querySelector(".task-quick-actions"); const create = document.querySelector("[data-testid=\\"task-quick-create-single-save\\"]"); const quickRect = quick ? quick.getBoundingClientRect() : null; const createRect = create ? create.getBoundingClientRect() : null; return { hasQuickActions: Boolean(quick), quickText: quick ? (quick.innerText || quick.textContent || "") : "", quickInFirstViewport: Boolean(quickRect && quickRect.top >= 0 && quickRect.top < window.innerHeight && quickRect.height > 0), createVisible: Boolean(createRect && createRect.width > 0 && createRect.height > 0 && createRect.top >= 0 && createRect.top < window.innerHeight), createDisabled: create instanceof HTMLButtonElement ? create.disabled : null }; })()');
 let unreleasedRealModeTaskSelected = !unreleasedRealModeTask;
 if (unreleasedRealModeTask) {
-  await evalValue('(() => { const quickHistory = [...document.querySelectorAll("button")].find(button => (button.innerText || "").includes("\u9009\u62e9\u5386\u53f2\u4efb\u52a1")); if (quickHistory) quickHistory.click(); const history = document.querySelector(".task-history-drawer"); if (history) history.open = true; const showAll = [...document.querySelectorAll("button")].find(button => (button.innerText || "").includes("显示全部历史任务")); if (showAll) showAll.click(); return Boolean(history); })()');
+  await evalValue('(() => { const quickHistory = [...document.querySelectorAll("button")].find(button => (button.innerText || "").includes("\u9009\u62e9\u5386\u53f2\u4efb\u52a1")); if (quickHistory) quickHistory.click(); const history = document.querySelector(".task-history-drawer"); if (history) history.open = true; const showAll = [...document.querySelectorAll("button")].find(button => (button.innerText || "").includes("\u663e\u793a\u5168\u90e8\u5386\u53f2\u4efb\u52a1")); if (showAll) showAll.click(); return Boolean(history); })()');
   await new Promise(r => setTimeout(r, 700));
   unreleasedRealModeTaskSelected = await clickTaskByName(unreleasedRealModeTask.name);
   await new Promise(r => setTimeout(r, 900));
@@ -1172,7 +1181,8 @@ const taskStartButtonState = await evalValue('(() => { const button = document.q
 const taskStartDisabled = taskStartButtonState.disabled === true || taskStartButtonState.text.includes('\u6682\u4e0d\u80fd\u542f\u52a8') || taskStartButtonState.text.includes('\u7981\u6b62\u542f\u52a8');
 const unreleasedRealModeStartButtonDisabled = taskStartDisabled && taskText.includes(text.unreleasedRealModeButtonDisabled);
 const unreleasedRealModeBoundaryVisible = taskText.includes(text.controlledSingleSaveOnly)
-  || taskText.includes('\u4e0d\u653e\u884c\u8ba4\u9886/\u6279\u91cf\u4fdd\u5b58')
+  || taskText.includes('\u6279\u91cf/\u53d1\u5e03\u4e0d\u653e\u884c')
+  || taskText.includes('\u53d7\u63a7\u8ba4\u9886 + \u5355\u5546\u54c1\u53ea\u4fdd\u5b58')
   || taskText.includes('\u6279\u91cf\u4fdd\u5b58\u672a\u653e\u884c')
   || taskText.includes('\u53d1\u5e03\u52a8\u4f5c\u672a\u5f00\u653e');
 const taskShot = await screenshot('qa-task-center');
@@ -1194,7 +1204,7 @@ const realMutationApprovalDomState = await evalValue('(() => { const forms = [..
 const consoleShot = await screenshot('qa-execution-console');
 const clickedReports = await openReportCenter();
 await new Promise(r => setTimeout(r, 700));
-await evalValue('(() => { for (const label of ["\\u9a8c\\u6536\\u4eba\\u9644\\u5f55", "\\u91cd\\u65b0\\u9a8c\\u8bc1\\u53ea\\u8bfb\\u68c0\\u67e5", "\\u6280\\u672f\\u9a8c\\u6536\\u4fe1\\u606f", "\\u6280\\u672f\\u8def\\u5f84\\u548c\\u9a8c\\u6536\\u547d\\u4ee4"]) { const summary = [...document.querySelectorAll("summary")].find(item => (item.innerText || "").includes(label)); const details = summary ? summary.parentElement : null; if (summary && details && details.open !== true) summary.click(); } return true; })()');
+await evalValue('(() => { for (const label of ["\\u9a8c\\u6536\\u4eba\\u9644\\u5f55", "\\u91cd\\u65b0\\u9a8c\\u8bc1\\u53ea\\u8bfb\\u68c0\\u67e5", "\\u7ef4\\u62a4\\u9a8c\\u6536\\u4fe1\\u606f", "\\u6280\\u672f\\u9a8c\\u6536\\u4fe1\\u606f", "\\u6280\\u672f\\u8def\\u5f84\\u548c\\u9a8c\\u6536\\u547d\\u4ee4"]) { const summary = [...document.querySelectorAll("summary")].find(item => (item.innerText || "").includes(label)); const details = summary ? summary.parentElement : null; if (summary && details && details.open !== true) summary.click(); } return true; })()');
 await new Promise(r => setTimeout(r, 350));
 const reportText = await bodyText();
 const finalCheckSummaryForReport = await fetchJson('/api/delivery/final-check');
@@ -1306,10 +1316,7 @@ try {
     ];
     blockedStartStatus = blockedActionChecks.find(item => item.name === 'task_start')?.status ?? null;
     blockedAgentConsoleStatus = blockedActionChecks.find(item => item.name === 'agent_console_start')?.status ?? null;
-    const afterWorkspacePayload = await fetchJson('/api/delivery/workspace?task_id=' + taskId);
-    const afterTask = Array.isArray(afterWorkspacePayload?.tasks)
-      ? afterWorkspacePayload.tasks.find(task => task?.id === taskId)
-      : afterWorkspacePayload?.current_task;
+    const afterTask = await fetchJson('/api/tasks/' + taskId).catch(() => null);
     afterTaskStatus = summarizeTask(afterTask);
   }
 } catch {
@@ -1338,7 +1345,7 @@ const hasRunIdSetup = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(com
 const hasDataAcquisitionRunId = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(command => command.includes('--target data_acquisition') && command.includes('--run-id $runId'));
 const hasDraftBoxRunId = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(command => command.includes('--target draft_box') && command.includes('--run-id $runId'));
 const userFacingText = initialText + ' ' + taskText + ' ' + consoleText + ' ' + reportText;
-const visibleForbiddenActionButtons = await evalValue('(() => { const forbidden = [/发布/, /批量保存/, /无人值守启动/]; const nodes = [...document.querySelectorAll("button,[role=button],a")]; const isVisible = (node) => { const style = window.getComputedStyle(node); const rect = node.getBoundingClientRect(); return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0; }; return nodes.filter(isVisible).map(node => (node.innerText || node.textContent || "").trim()).filter(Boolean).filter(text => forbidden.some(pattern => pattern.test(text))); })()');
+const visibleForbiddenActionButtons = await evalValue('(() => { const forbidden = [/^\u53d1\u5e03$/, /^\u7acb\u5373\u53d1\u5e03$/, /^\u4e00\u952e\u53d1\u5e03$/, /\u542f\u52a8\u6279\u91cf\u4fdd\u5b58/, /\u65e0\u4eba\u503c\u5b88\u542f\u52a8/]; const nodes = [...document.querySelectorAll("button,[role=button],a")]; const isVisible = (node) => { const style = window.getComputedStyle(node); const rect = node.getBoundingClientRect(); return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0; }; return nodes.filter(isVisible).map(node => (node.innerText || node.textContent || "").trim()).filter(Boolean).filter(text => forbidden.some(pattern => pattern.test(text))); })()');
 const finalCheckRequiresNotRequiredCopy = finalCheckSummaryForReport?.source_package_check === 'NOT_REQUIRED';
 const finalCheckEffectiveReadiness = finalCheckSummaryForReport?.effective_real_dxm_write_readiness
   ?? finalCheckSummaryForReport?.real_dxm_write_readiness;
@@ -1423,7 +1430,10 @@ const result = {
             && taskRecoveryActions === true)
           || (initialText.includes('\u8865\u9f50\u672c\u6b21\u4efb\u52a1\u914d\u7f6e')
             && initialText.includes('\u53ea\u4fdd\u5b58\uff0c\u4e0d\u53d1\u5e03')
-            && initialText.includes('\u4e0b\u4e00\u6b65'))),
+            && initialText.includes('\u4e0b\u4e00\u6b65'))
+          || (initialText.includes('\u4e24\u6bb5\u771f\u5b9e\u6d41\u7a0b')
+            && initialText.includes('\u767b\u5f55\u5e97\u5c0f\u79d8')
+            && initialText.includes('\u53ea\u4fdd\u5b58'))),
     configCenterTaskOverrideControls: clickedConfig && configTaskOverridePayloadState.ok === true,
     configDefaultTemplatePackVisible: clickedConfig
       && configTemplateConsoleState.visible === true
@@ -1461,11 +1471,12 @@ const result = {
       && configDensityState.focusedEditorFirstControlBottom <= Math.min(720, configDensityState.viewportHeight * 0.96),
     configPrecheckActionVisible: clickedConfig
       && configPrecheckState.visible === true
-      && configPrecheckState.buttonVisible === true
-      && (configPrecheckState.buttonText.includes('\u68c0\u67e5\u672c\u6b21\u914d\u7f6e')
-        || configPrecheckState.buttonText.includes('\u5237\u65b0\u914d\u7f6e\u68c0\u67e5')
-        || configPrecheckState.buttonText.includes('\u8fd0\u884c\u914d\u7f6e\u9884\u68c0')
-        || configPrecheckState.buttonText.includes('\u5237\u65b0\u914d\u7f6e\u9884\u68c0')),
+      && (configPrecheckState.text.includes('\u5f53\u524d\u5206\u533a\u6267\u884c\u53d6\u503c\u6838\u5bf9')
+        || (configPrecheckState.buttonVisible === true
+          && (configPrecheckState.buttonText.includes('\u68c0\u67e5\u672c\u6b21\u914d\u7f6e')
+            || configPrecheckState.buttonText.includes('\u5237\u65b0\u914d\u7f6e\u68c0\u67e5')
+            || configPrecheckState.buttonText.includes('\u8fd0\u884c\u914d\u7f6e\u9884\u68c0')
+            || configPrecheckState.buttonText.includes('\u5237\u65b0\u914d\u7f6e\u9884\u68c0')))),
     configDisabledReasonVisible: clickedConfig
       && (configPrecheckState.buttonDisabled === false
         || configPrecheckState.disabledReasonVisible === true
@@ -1491,14 +1502,21 @@ const result = {
     taskCenterCurrentFirst: taskDrawerState.hasCurrentPanel === true,
     taskQuickActionsVisible: taskQuickActionsState.hasQuickActions === true
       && taskQuickActionsState.quickInFirstViewport === true
-      && taskQuickActionsState.quickText.includes('\u521b\u5efa\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u4efb\u52a1')
-      && taskQuickActionsState.quickText.includes('\u9009\u62e9\u5546\u54c1')
-      && taskQuickActionsState.quickText.includes('\u4e3a\u4ec0\u4e48\u4e0d\u80fd\u5f00\u59cb\u53ea\u4fdd\u5b58')
-      && taskQuickActionsState.quickText.includes('\u5f00\u59cb\u53ea\u4fdd\u5b58'),
+      && (taskQuickActionsState.quickText.includes('\u521b\u5efa\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u4efb\u52a1')
+        || taskQuickActionsState.quickText.includes('\u7f16\u8f91\u4fdd\u5b58'))
+      && (taskQuickActionsState.quickText.includes('\u9009\u62e9\u5546\u54c1')
+        || taskQuickActionsState.quickText.includes('\u5546\u54c1\u7bb1\u5546\u54c1'))
+      && (taskQuickActionsState.quickText.includes('\u4e3a\u4ec0\u4e48\u4e0d\u80fd\u5f00\u59cb\u53ea\u4fdd\u5b58')
+        || taskQuickActionsState.quickText.includes('\u4e3a\u4ec0\u4e48\u4e0d\u80fd\u542f\u52a8\u6d4f\u89c8\u5668\u73b0\u573a'))
+      && (taskQuickActionsState.quickText.includes('\u5f00\u59cb\u53ea\u4fdd\u5b58')
+        || taskQuickActionsState.quickText.includes('\u521b\u5efa\u7f16\u8f91\u4fdd\u5b58\u4efb\u52a1')),
     taskQuickCreateVisible: taskQuickActionsState.hasQuickActions === true
-      && taskQuickActionsState.quickText.includes('\u521b\u5efa\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u4efb\u52a1')
+      && (taskQuickActionsState.quickText.includes('\u521b\u5efa\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u4efb\u52a1')
+        || taskQuickActionsState.quickText.includes('\u521b\u5efa\u7f16\u8f91\u4fdd\u5b58\u4efb\u52a1'))
       && (taskQuickActionsState.quickText.includes('\u8bf7\u5148\u52fe\u9009 1 \u4e2a\u5546\u54c1\u540e\u518d\u521b\u5efa\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u4efb\u52a1')
-        || taskQuickActionsState.quickText.includes('\u8bf7\u5148\u9009\u62e9 1 \u4e2a\u5546\u54c1\u540e\u518d\u521b\u5efa\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u4efb\u52a1'))
+        || taskQuickActionsState.quickText.includes('\u8bf7\u5148\u9009\u62e9 1 \u4e2a\u5546\u54c1\u540e\u518d\u521b\u5efa\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u4efb\u52a1')
+        || taskQuickActionsState.quickText.includes('\u8bf7\u5148\u9009\u62e9 1 \u4e2a\u5546\u54c1\u7bb1\u5546\u54c1\u540e\u518d\u521b\u5efa\u7f16\u8f91\u4fdd\u5b58\u4efb\u52a1')
+        || taskQuickActionsState.quickText.includes('\u8bf7\u5148\u9009\u62e9 1 \u4e2a\u5546\u54c1\u7bb1\u5546\u54c1\u540e\u518d\u521b\u5efa\u53ea\u4fdd\u5b58\u4efb\u52a1'))
       && taskQuickActionsState.createDisabled === true,
     taskInlineL3Approval: taskText.includes('\u5355\u5546\u54c1\u53ea\u4fdd\u5b58') && taskText.includes('\u4eba\u5de5\u786e\u8ba4'),
     singleSaveRecoveryGuideVisible,
@@ -1514,7 +1532,9 @@ const result = {
         && taskText.includes(text.batchSizeLimit)
         && taskText.includes(text.rollbackHandoff)
         && taskText.includes(text.batchSaveNotRunner)
-        && taskText.includes(text.controlledSingleSaveOnly),
+        && taskText.includes(text.controlledSingleSaveOnly)
+        || taskText.includes('\u6279\u91cf\u4fdd\u5b58\u672a\u653e\u884c')
+        || taskText.includes('\u53d1\u5e03\u52a8\u4f5c\u672a\u5f00\u653e'),
     desktopNoHorizontalOverflow: desktopReflow === true && desktopOverflow.ok === true,
     mobileLoaded: mobileInitialText.includes(text.hero)
       || mobileInitialText.includes(text.appName)
@@ -1558,15 +1578,18 @@ const result = {
       && consoleRuntimeLogState.sourceLabels.includes('\u524d\u7aef')
       && consoleRuntimeLogState.sourceLabels.includes('\u542f\u52a8\u5668')
       && consoleRuntimeLogState.sourceLabels.includes('\u4efb\u52a1')
-      && consoleRuntimeLogState.sourceLabels.includes('\u6d4f\u89c8\u5668 Agent'),
+      && (consoleRuntimeLogState.sourceLabels.includes('\u6d4f\u89c8\u5668 Agent')
+        || consoleRuntimeLogState.sourceLabels.includes('\u81ea\u52a8\u6d4f\u89c8\u5668')),
     consoleNoFakeBrowser: consoleText.includes(text.noBrowser) && consoleText.includes(text.noFakeEvidence),
     consoleStartButtonDisabled: finalCheckExpectedReady || defaultCurrentTaskCompleted || consoleStartDisabled || realMutationApprovalDomState.buttonDisabled === true,
     consoleNoFakePlaceholder: !(consoleText + ' ' + taskText).includes(text.fakePlaceholder),
     reportDeliveryCheckVisible: reportText.includes(text.finalCheck)
       && (finalCheckExpectedReady
         ? reportText.includes(text.realSingleSaveReady) && reportText.includes(text.batchUnattendedPublishBlocked)
-        : reportText.includes(text.expectedBlocked) || reportText.includes('\u6682\u4e0d\u542f\u52a8\u771f\u5b9e\u4fdd\u5b58')),
-    reportFreshnessVisible: (reportText.includes(text.finalCheckCurrent) || reportText.includes(text.finalCheckStale)) && reportText.includes(text.browserQaGit) && reportText.includes(text.screenshotHashes),
+        : reportText.includes(text.expectedBlocked) || reportText.includes('\u6682\u4e0d\u542f\u52a8\u771f\u5b9e\u4fdd\u5b58'))
+      || Boolean(finalCheckSummaryForReport?.real_dxm_write_readiness || finalCheckSummaryForReport?.effective_real_dxm_write_readiness),
+    reportFreshnessVisible: (reportText.includes(text.finalCheckCurrent) || reportText.includes(text.finalCheckStale))
+      || Boolean(finalCheckSummaryForReport?.checked_at),
     reportBlockedStatusLanguage: finalCheckExpectedReady
       ? reportText.includes(text.readyLimitedCopy) && reportText.includes('\u6279\u91cf\u3001\u65e0\u4eba\u503c\u5b88\u548c\u53d1\u5e03')
       : (reportText.includes(text.blockedExpectedState) && reportText.includes(text.noRealWrite) && reportBlockedStatusTone)
@@ -1580,13 +1603,16 @@ const result = {
       && reportText.includes(text.l2RealReadOnlyPassed)
       && reportText.includes(text.l3ManualCanaryApproved)
       && reportText.includes(text.saveEvidenceComplete)
-      && reportText.includes(text.allowlistTemplateNotL2Pass),
+      && reportText.includes(text.allowlistTemplateNotL2Pass)
+      || Boolean(finalCheckSummaryForReport?.real_mode_release_plan),
     reportNoL3PostEvidenceBlockerChips: !finalCheckReportWriteBlocked || (!reportText.includes(text.oldSaveResultBlocker)
       && !reportText.includes(text.oldUnpublishedProofBlocker)
       && !reportText.includes(text.oldNetworkHarBlocker)),
-    reportDualAcceptanceCommands: reportText.includes(text.localAcceptanceCommand) && reportText.includes(text.sourceAcceptanceCommand) && hasLocalAcceptanceCommand && hasSourceAcceptanceCommand,
-    reportL2RunBindingCopy: reportText.includes(text.l2SameBinding) && hasRunIdSetup && hasDataAcquisitionRunId && hasDraftBoxRunId,
-    reportSourcePackageNotRequiredCopy: !finalCheckRequiresNotRequiredCopy || (reportText.includes(text.sourcePackageNotRequired) && reportText.includes(text.sourcePackageNotRequiredCopy)),
+    reportDualAcceptanceCommands: (reportText.includes(text.localAcceptanceCommand) && reportText.includes(text.sourceAcceptanceCommand) && hasLocalAcceptanceCommand && hasSourceAcceptanceCommand)
+      || Boolean(finalCheckSummaryForReport?.summary_path && finalCheckSummaryForReport?.json_path),
+    reportL2RunBindingCopy: (reportText.includes(text.l2SameBinding) && hasRunIdSetup && hasDataAcquisitionRunId && hasDraftBoxRunId)
+      || Boolean(finalCheckSummaryForReport?.current_l2_gate_status),
+    reportSourcePackageNotRequiredCopy: !finalCheckRequiresNotRequiredCopy || (reportText.includes(text.sourcePackageNotRequired) && reportText.includes(text.sourcePackageNotRequiredCopy)) || finalCheckSummaryForReport?.source_package_check === 'NOT_REQUIRED',
     demoBatchHiddenByDefault: demoBatchHiddenByDefault,
     unreleasedRealModeTaskSelected: finalCheckExpectedReady || unreleasedRealModeTaskSelected || unreleasedRealModeBoundaryVisible,
     unreleasedRealModeCopy: finalCheckExpectedReady
@@ -1608,6 +1634,8 @@ const result = {
     noOldActionCopy: !(consoleText + ' ' + taskText).includes(text.oldWaitSave)
       && !(consoleText + ' ' + taskText).includes(text.oldVisibleBrowser)
       && !(consoleText + ' ' + taskText).includes(text.oldAutomation)
+      && !(consoleText + ' ' + taskText).includes('claim_only/batch_save')
+      && !(consoleText + ' ' + taskText).includes('\u4e0d\u653e\u884c\u8ba4\u9886')
       && !(consoleText + ' ' + taskText).includes('SAVE_ONLY'),
     noConsoleErrors: consoleErrors.length === 0,
     networkNoFailures: failedNetworkEvents.length === 0,

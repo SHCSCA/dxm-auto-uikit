@@ -30,8 +30,8 @@ const DXM_TARGET_PATHS: Record<keyof typeof DXM_TARGET_URLS, string> = {
   draft_box: '/web/smt/smtProductList/draft',
 }
 const DXM_TARGET_LABELS: Record<keyof typeof DXM_TARGET_URLS, string> = {
-  data_acquisition: '商品采集页',
-  draft_box: '采集箱',
+  data_acquisition: '已有待认领列表',
+  draft_box: '商品箱',
 }
 const AGENT_CONSOLE_NAVIGATION_SETTLE_MS = 2500
 const REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save', 'batch_save'])
@@ -145,7 +145,6 @@ function normalizeWorkbenchSection(section: WorkbenchSection | LegacyWorkbenchSe
     config_images: 'template_center',
     config_logistics: 'template_center',
     config_compliance: 'template_center',
-    template_management: 'template_center',
     console: 'start_save',
     preflight: 'start_save',
     real_browser: 'start_save',
@@ -321,7 +320,7 @@ export default function App() {
       setWorkspaceNotice({
         kind: 'degraded',
         title: '当前任务需要重新选择',
-        detail: '上次选择的任务已不存在或已归档。系统已切回当前可用任务；如仍不能继续，请在“数据采集认领”或“采集箱编辑保存”重新创建任务。',
+        detail: '上次选择的任务已不存在或已归档。系统已切回当前可用任务；如仍不能继续，请在“待认领商品”或“商品箱编辑保存”重新创建任务。',
       })
     } else if (failures.length) {
       const firstFailure = failures[0]
@@ -493,7 +492,7 @@ export default function App() {
       return
     }
     const message = runnerSucceeded ? '保存前安全检查已运行，但状态未刷新通过' : '保存前安全检查失败，真实保存仍阻断'
-    const userLine = '保存前安全检查未通过：请确认已登录并能打开商品采集页、采集箱页后重试。'
+    const userLine = '保存前安全检查未通过：请确认已登录并能打开已有待认领列表、商品箱页面后重试。'
     setL2RunnerState({ status: 'failed', runId, exitCode, message, line: userLine, updatedAt: new Date().toISOString() })
     setOperationError(`${message}；请确认真实店小秘已登录，再重新运行保存前安全检查。系统不会保存或发布。`)
   }, [refreshRuntimeStatus, refreshWorkspace])
@@ -677,10 +676,10 @@ export default function App() {
         syncSelectedTaskIdUrl(result.task_id)
       }
       setActiveSection('start_save')
-        setOperationNotice('采集认领任务已创建。下一步在实时浏览器启动 Agent，将商品从数据采集认领到采集箱。')
+      setOperationNotice('商品认领任务已创建。下一步在浏览器现场启动自动浏览器，将店小秘已有待认领商品认领到商品箱。')
       await refreshWorkspace()
     } catch (error) {
-      setOperationError(error instanceof Error ? error.message : '创建采集认领请求失败')
+      setOperationError(humanAcquisitionClaimError(error instanceof Error ? error.message : '创建认领任务失败'))
     } finally {
       setBusy(false)
     }
@@ -688,7 +687,7 @@ export default function App() {
 
   async function bootstrapDemo() {
     if (!DEMO_ENABLED) {
-      setOperationError('开发自检数据只在 dev=1 模式可用；真实使用请先从数据采集认领商品，再创建采集箱只保存任务并运行保存前安全检查。')
+      setOperationError('开发自检数据只在 dev=1 模式可用；真实使用请先把店小秘已有待认领商品认领到商品箱，再创建单商品只保存任务并运行保存前安全检查。')
       return
     }
     const confirmed = window.confirm('这会向本地后端写入演示店铺、模板、商品和本地演示核验批次；不会访问店小秘，也不会启动真实保存。继续？')
@@ -746,7 +745,7 @@ export default function App() {
     try {
       if (REAL_DXM_MUTATION_MODES.has(selectedTask.mode)) {
         if (UNRELEASED_REAL_DXM_MUTATION_MODES.has(selectedTask.mode)) {
-          setOperationError('当前仅开放采集认领和单商品只保存；批量保存必须重新验收后再放行。')
+          setOperationError('当前仅开放待认领商品处理和单商品只保存；批量保存必须重新验收后再放行。')
           return
         }
         if (!RELEASED_REAL_DXM_MUTATION_MODES.has(selectedTask.mode)) {
@@ -1080,7 +1079,7 @@ export default function App() {
       const status = await postJson<AgentConsoleSession>('/api/agent-console/release', {})
       setAgentConsole(status)
     } catch (error) {
-      const message = error instanceof Error ? error.message : '交还 Agent 失败'
+      const message = error instanceof Error ? error.message : '交还自动浏览器失败'
       const humanMessage = humanAgentConsoleError(message)
       setAgentConsoleError(humanMessage)
       setOperationError(humanMessage)
@@ -1269,7 +1268,7 @@ export default function App() {
               const product = workspace.products.find((item) => item.id === productId) ?? null
               const storeId = storeIdForClaimedProduct(product, workspace.stores)
               if (!storeId) {
-                setOperationError('该采集箱商品缺少原始店铺信息，不能创建编辑保存任务。请重新从“商品采集”认领到采集箱后再继续。')
+                setOperationError('该商品箱商品缺少原始店铺信息，不能创建编辑保存任务。请重新从“待认领商品”把店小秘已有待认领商品认领到商品箱后再继续。')
                 setActiveSection('acquisition_claim')
                 return
               }
@@ -1438,7 +1437,10 @@ export default function App() {
 
 function runtimeControlSuccessMessage(action: RuntimeControlAction) {
   return ({
-    stop_agent_console: '浏览器 Agent 已停止。',
+    stop_agent_console: '自动浏览器已停止。',
+    reset_workflow_runtime: '真实浏览器执行器已重启，请重新打开执行浏览器后再启动任务。',
+    browser_agent_takeover: '已进入人工接管；请在真实浏览器里检查或修正当前页面。',
+    browser_agent_resume: '真实浏览器已交还自动浏览器，可继续执行。',
     clear_stuck_tasks: '已提交清理卡住任务请求。',
     mark_real_task_manual_review: '已将真实写入任务转入人工复核。不会取消真实浏览器进程，请查看任务日志确认现场。',
     restart_backend: '已提交后端重启请求，请查看启动器日志。',
@@ -1522,6 +1524,20 @@ function humanTaskCreateError(message: string) {
     return '任务创建失败：当前只允许单商品只保存，不开放发布、批量或无人值守。'
   }
   return message
+}
+
+function humanAcquisitionClaimError(message: string) {
+  const normalized = message.toLowerCase()
+  if (
+    normalized.includes('internal server error')
+    || normalized.includes('failed to fetch')
+    || normalized.includes('networkerror')
+    || normalized.includes('load failed')
+    || normalized.includes('traceback')
+  ) {
+    return '商品认领任务创建失败：请确认本机工作台服务正常、店铺信息已读取，并重新填写已有待认领商品条件后重试；系统只处理已有待认领商品，不会保存或发布。'
+  }
+  return message || '商品认领任务创建失败：请重新检查店铺和已有待认领商品条件后重试；系统只处理已有待认领商品，不会保存或发布。'
 }
 
 function humanDxmNavigationError(message: string, targetLabel: string) {
@@ -1743,14 +1759,14 @@ function buildAgentConsoleHudStep(workspace: DeliveryWorkspace, selectedTask: Ta
     title: '准备执行只保存',
     state: 'READY_FOR_SINGLE_SAVE',
     action: '真实浏览器已打开，等待按任务流程执行',
-    next_step: '人工确认后由 Agent 输入编辑页内容并只点击保存',
+    next_step: '人工确认后由自动浏览器输入编辑页内容并只点击保存',
     store_name: storeName,
     guard: '只保存，不发布',
     phase: '开始任务',
     progress_index: 1,
     progress_total: 12,
     human_title: '准备执行只保存',
-    human_action: '真实浏览器已打开，Agent 将按步骤操作店小秘编辑页',
+    human_action: '真实浏览器已打开，自动浏览器将按步骤操作店小秘编辑页',
     human_next: '人工确认后开始输入标题、选择分类、设置价格库存并只保存',
     requires_user_action: true,
     severity: 'warning',

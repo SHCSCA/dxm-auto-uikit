@@ -1,3 +1,4 @@
+import os
 from typing import Any
 
 
@@ -5,7 +6,26 @@ class DxmWorkflowAdapter:
     def __init__(self, login_flow: Any) -> None:
         self.login_flow = login_flow
 
+    def set_workflow_event_listener(self, listener: Any | None) -> None:
+        setter = getattr(self.login_flow, 'set_workflow_event_listener', None)
+        if callable(setter):
+            setter(listener)
+
+    def recent_workflow_events(self, limit: int = 20) -> list[dict[str, Any]]:
+        recent = getattr(self.login_flow, 'recent_workflow_events', None)
+        if not callable(recent):
+            return []
+        try:
+            events = recent(limit)
+        except TypeError:
+            events = recent()
+        return events if isinstance(events, list) else []
+
     def check_login_state(self) -> dict[str, Any]:
+        if self._requires_visible_execution_browser_login_check():
+            visible_checker = getattr(self.login_flow, 'check_visible_login_state', None)
+            if callable(visible_checker):
+                return self._result('check_login_state', visible_checker())
         visible_state = self._visible_logged_in_state()
         if visible_state is not None:
             return self._result('check_login_state', visible_state)
@@ -39,6 +59,7 @@ class DxmWorkflowAdapter:
         product_query: str | None = None,
         category_name: str | None = None,
         store_name: str | None = None,
+        target_source_urls: list[str] | None = None,
     ) -> dict[str, Any]:
         return self._result(
             'claim_from_data_acquisition',
@@ -47,6 +68,7 @@ class DxmWorkflowAdapter:
                 product_query=product_query,
                 category_name=category_name,
                 store_name=store_name,
+                target_source_urls=target_source_urls,
             ),
         )
 
@@ -56,6 +78,7 @@ class DxmWorkflowAdapter:
         product_query: str | None = None,
         category_name: str | None = None,
         store_name: str | None = None,
+        target_source_urls: list[str] | None = None,
     ) -> dict[str, Any]:
         return self._result(
             'verify_draft_box_claim',
@@ -64,6 +87,7 @@ class DxmWorkflowAdapter:
                 product_query=product_query,
                 category_name=category_name,
                 store_name=store_name,
+                target_source_urls=target_source_urls,
             ),
         )
 
@@ -90,6 +114,7 @@ class DxmWorkflowAdapter:
         product_query: str | None = None,
         store_name: str | None = None,
         note_text: str | None = None,
+        target_source_urls: list[str] | None = None,
     ) -> dict[str, Any]:
         return self._result(
             'open_editor',
@@ -98,6 +123,7 @@ class DxmWorkflowAdapter:
                 note_text,
                 product_query=product_query,
                 store_name=store_name,
+                target_source_urls=target_source_urls,
             ),
         )
 
@@ -151,6 +177,7 @@ class DxmWorkflowAdapter:
         self,
         product_query: str | None = None,
         store_name: str | None = None,
+        target_source_urls: list[str] | None = None,
     ) -> dict[str, Any]:
         return self._result(
             'verify_edit_ownership',
@@ -158,6 +185,7 @@ class DxmWorkflowAdapter:
                 'verify_edit_ownership',
                 product_query=product_query,
                 store_name=store_name,
+                target_source_urls=target_source_urls,
             ),
         )
 
@@ -261,9 +289,14 @@ class DxmWorkflowAdapter:
             return {'ok': True, 'updated': False, 'reason': 'live_hud_unavailable'}
         return updater(hud)
 
+    def close_browser_session(self) -> None:
+        closer = getattr(self.login_flow, '_close_browser_session', None)
+        if callable(closer):
+            closer()
+
     def _result(self, action: str, evidence: dict[str, Any]) -> dict[str, Any]:
         stage = evidence.get('stage')
-        return {
+        result = {
             'ok': not str(stage).endswith('_failed'),
             'stage': stage,
             'page_title': evidence.get('page_title'),
@@ -276,6 +309,10 @@ class DxmWorkflowAdapter:
             'fill_result': evidence.get('fill_result'),
             'evidence': evidence,
         }
+        events = self.recent_workflow_events(240)
+        if events:
+            result['workflow_events'] = events
+        return result
 
     def _state_from_live_probe(self, probe: dict[str, Any]) -> dict[str, Any]:
         if probe.get('logged_in'):
@@ -314,3 +351,13 @@ class DxmWorkflowAdapter:
         page_url = str(state.get('page_url') or '')
         page_title = str(state.get('page_title') or '')
         return 'dianxiaomi.com/web/' in page_url and '登录' not in page_title
+
+    def _requires_visible_execution_browser_login_check(self) -> bool:
+        return any(
+            str(os.getenv(name) or '').strip().lower() in {'1', 'true', 'yes', 'on', 'browser_agent'}
+            for name in (
+                'DXM_DESKTOP',
+                'DXM_WORKFLOW_PERSISTENT_PROFILE',
+                'DXM_WORKFLOW_ACTION_RUNTIME',
+            )
+        )

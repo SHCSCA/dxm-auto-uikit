@@ -72,7 +72,29 @@ export type TemplateCenterMetadata = {
   source_priority: string[]
   actions: string[]
 }
-export type Product = { id: number; title: string; category_name: string; price: number; currency: string; sku_count: number; image_count: number; status: string; source?: string | null; payload?: Record<string, unknown>; image?: { eu_outer_package_filename?: string } }
+export type Product = {
+  id: number
+  title: string
+  category_name: string
+  price: number
+  currency: string
+  sku_count: number
+  image_count: number
+  status: string
+  source?: string | null
+  payload?: Record<string, unknown>
+  image?: { eu_outer_package_filename?: string }
+  lifecycle_state?: string | null
+  lifecycle_label?: string | null
+  source_status_label?: string | null
+  draft_box_verification_label?: string | null
+  source_url?: string | null
+  claim_task_id?: number | string | null
+  store_id?: number | null
+  store_name?: string | null
+  claimed_at?: string | null
+  draft_box_verified?: boolean | null
+}
 export type TaskJob = { id: number; task_id?: number; product_id?: number | null; status: string; current_step_code?: string | null; current_step_name?: string | null; error_code?: string | null; error_message?: string | null; [key: string]: unknown }
 export type Task = { id: number; name: string; status: string; mode: string; publish_scene: string; store_id?: number | null; total_jobs: number; completed_jobs: number; failed_jobs: number; payload: { product_ids?: number[]; store_name?: string; category_name?: string; image?: { eu_outer_package_filename?: string }; [key: string]: unknown }; jobs?: TaskJob[] }
 export type RealTaskCreateRequest = { storeId: number; mode: 'probe' | 'single_save'; productIds: number[] }
@@ -85,6 +107,7 @@ export type AcquisitionClaimResponse = {
   store_id: number
   keyword?: string | null
   category_name?: string | null
+  source_url?: string | null
   claim_mark: string
   template_id?: number | null
   claimed_product_id?: number | null
@@ -106,6 +129,22 @@ export type RuntimeStatus = {
   backend: { status: string; url?: string; port?: number | null; instanceId?: string | null; detail?: string }
   frontend: { status: string; url?: string; port?: number | null; detail?: string }
   agentConsole: { status: string; active: boolean; browserVisible: boolean; browserLaunching?: boolean; currentUrl?: string | null; profileDir?: string | null; lastError?: string | null }
+  browserAgent?: {
+    status: string
+    healthy?: boolean
+    active: boolean
+    browserVisible: boolean
+    currentUrl?: string | null
+    pageTitle?: string | null
+    currentStep?: string | null
+    lastError?: string | null
+    lastEventAt?: string | null
+    manualTakeover?: boolean
+    message?: string | null
+    nextAction?: string | null
+    hud?: Record<string, unknown> | null
+    events?: Array<Record<string, unknown>>
+  }
   realBrowser: {
     status: string
     active: boolean
@@ -138,6 +177,14 @@ export type RuntimeStatus = {
     commandFile?: string | null
     detail?: string | null
   }
+  workflowRuntime?: {
+    status: 'ready' | 'needs_restart' | string
+    healthy: boolean
+    unhealthyReason?: string | null
+    resetAction?: 'reset_workflow_runtime' | string | null
+    message?: string | null
+    nextAction?: string | null
+  }
   paths?: {
     data_dir?: string
     dataDir?: string
@@ -147,7 +194,7 @@ export type RuntimeStatus = {
     resourceRoot?: string
   }
 }
-export type RuntimeControlAction = 'stop_agent_console' | 'clear_stuck_tasks' | 'mark_real_task_manual_review' | 'restart_backend' | 'restart_frontend' | 'run_l2_readonly_probe'
+export type RuntimeControlAction = 'stop_agent_console' | 'reset_workflow_runtime' | 'clear_stuck_tasks' | 'mark_real_task_manual_review' | 'restart_backend' | 'restart_frontend' | 'run_l2_readonly_probe' | 'browser_agent_takeover' | 'browser_agent_resume'
 export type RuntimeControlResponse = {
   ok: boolean
   action: RuntimeControlAction | string
@@ -160,6 +207,7 @@ export type RuntimeControlResponse = {
   logPath?: string
   targets?: string[]
   agentConsole?: AgentConsoleSession
+  browserAgent?: RuntimeStatus['browserAgent']
 }
 export type ConfigPreviewField = {
   path: string
@@ -518,6 +566,8 @@ export type L2ProbePlan = {
   pythonCommand: string
   scriptPath: string
   cookieFile: string
+  desktopCookieFile?: string
+  cookieFileCommand?: string
   outputDir: string
   allowlistFile?: string
   targets: Array<{ id: string; url: string; required: boolean }>

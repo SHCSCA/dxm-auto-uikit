@@ -1141,7 +1141,7 @@ sourcePackageReadiness=READY
 - L2 真实只读证据读取：优先读取桌面运行期 `DATA_DIR/l2_readonly_probe`，兼容旧仓库 `data/l2_readonly_probe`。
 - Electron `file://` 模式识别：桌面内置页面显示为正常桌面模式，不再误报 `前端异常`。
 - DXM 登录态检测：优先复用可见真实浏览器会话；失败时给用户恢复动作，不暴露 greenlet / Playwright 原始异常。
-- 保存后证据识别：`popChoiceProduct/add.json` 且 `code=0`、保存成功文案才能作为 save-only 证据。
+- 保存后证据识别：`smtProduct/add.json` / `popChoiceProduct/add.json` 的 POST 2xx 且 `code=0`、保存成功/编辑成功文案才能作为 save-only 证据。
 - 发布风险误报收敛：页面普通按钮文案不应误判为用户真的执行了发布动作。
 
 **验收证据:**

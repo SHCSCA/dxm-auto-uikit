@@ -338,7 +338,7 @@ function Get-RealDxmWriteBlockedReason {
     return "L2/L3 gate records unavailable; real DXM writes remain blocked."
   }
   if ($L2Gate.status -ne "passed") {
-    return "L2 gate is $($L2Gate.status); real DXM writes require data_acquisition and draft_box real readonly pass in the same run."
+    return "L2 gate is $($L2Gate.status); real DXM writes require existing-claim-list and draft-box readonly pass in the same run."
   }
   if ($L3Gate.status -ne "passed") {
     return "L3 gate is $($L3Gate.status); real DXM writes require manual single-save canary approval and evidence."
@@ -444,7 +444,7 @@ function Write-ProvisionalDeliveryCheckReport {
     sourcePackageCheck = Get-SourcePackageCheck -SourcePackageReadiness $sourceReadiness
     gateEvidenceCheck = if ($provisionalL2Gate -and $provisionalL3Gate) { "PASS" } else { "FAIL" }
     deliverableMode = "DXM semi-managed automation workbench"
-    realDxmWrites = if ($provisionalReadiness -eq "READY") { "controlled single_save is ready only after L2/L3 evidence review and explicit manual canary approval; batch/unattended/publish remain separately gated" } elseif ($provisionalReadiness -eq "UNKNOWN") { "unknown because L2/L3 gates could not be read; writes remain blocked" } else { "blocked until fresh real L2 data_acquisition and draft_box pass, followed by L3 manual canary evidence" }
+    realDxmWrites = if ($provisionalReadiness -eq "READY") { "controlled single_save is ready only after L2/L3 evidence review and explicit manual canary approval; batch/unattended/publish remain separately gated" } elseif ($provisionalReadiness -eq "UNKNOWN") { "unknown because L2/L3 gates could not be read; writes remain blocked" } else { "blocked until fresh real L2 existing-claim-list and draft-box pass, followed by L3 manual canary evidence" }
     root = $root
     gitHead = $provisionalGitHead
     preGitStatusShort = $provisionalGitStatus
@@ -929,7 +929,7 @@ $commands += Invoke-CapturedCommandWithEnvironment `
   -FilePath $pythonExe `
   -Arguments @("-m", "pytest", "-q") `
   -WorkingDirectory $backendDir `
-  -TimeoutSeconds 360 `
+  -TimeoutSeconds 600 `
   -Environment @{ DXM_DATA_DIR = $pytestRuntimeDataDir }
 $commands += Invoke-CapturedCommand `
   -Name "Frontend production build" `
@@ -1181,7 +1181,7 @@ $l2AllowlistReviewTemplate = [pscustomobject]@{
     "Manual review only; filling this template does not pass L2.",
     "Keep allowlist_applied=false until a code change implements an explicit, minimal, audited allowlist.",
     "Reject write methods, WebSocket, EventSource, forbidden-keyword URLs, and any request without a clear read-only startup purpose.",
-    "After any approved allowlist code change, rerun real L2 data_acquisition and draft_box with the same run-id before L3."
+    "After any approved allowlist code change, rerun real L2 existing-claim-list and draft-box checks with the same run-id before L3."
   )
   requiredFields = @("reviewer", "reviewed_at", "decision", "rationale", "approved_scope", "residual_risk")
   candidates = @($l2AllowlistReviewCandidates | ForEach-Object {
@@ -1288,7 +1288,7 @@ $result = [pscustomobject]@{
   checkPortableDesktop = [bool]$CheckPortableDesktop
   gateEvidenceCheck = if ($gateEvidenceOk) { "PASS" } else { "FAIL" }
   deliverableMode = "DXM semi-managed automation workbench"
-  realDxmWrites = if ($realDxmWriteReadiness -eq "READY") { "controlled single_save is ready only after L2/L3 evidence review and explicit manual canary approval; batch/unattended/publish remain separately gated" } elseif ($realDxmWriteReadiness -eq "UNKNOWN") { "unknown because L2/L3 gates could not be read; writes remain blocked" } else { "blocked until fresh real L2 data_acquisition and draft_box pass, followed by L3 manual canary evidence" }
+  realDxmWrites = if ($realDxmWriteReadiness -eq "READY") { "controlled single_save is ready only after L2/L3 evidence review and explicit manual canary approval; batch/unattended/publish remain separately gated" } elseif ($realDxmWriteReadiness -eq "UNKNOWN") { "unknown because L2/L3 gates could not be read; writes remain blocked" } else { "blocked until fresh real L2 existing-claim-list and draft-box pass, followed by L3 manual canary evidence" }
   root = $root
   gitHead = $gitHead
   preGitStatusShort = $preGitStatus

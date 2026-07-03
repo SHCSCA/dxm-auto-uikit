@@ -38,7 +38,7 @@ import {
   SingleSaveRecoveryGuide,
   TaskCurrentActionPanel,
 } from './workbench/ProductTaskPanels'
-import { humanOperatorMessage, humanOperatorTitle } from './workbench/workbenchCopy'
+import { humanOperatorMessage, humanOperatorTitle, humanTaskDisplayName } from './workbench/workbenchCopy'
 export { DxmAccessPage } from './workbench/DxmAccessPage'
 export { HelpPage as HelpCenter } from './workbench/HelpPage'
 export { IssuesPage as ExceptionQueue } from './workbench/IssuesPage'
@@ -120,15 +120,14 @@ type DxmAccessPageProps = {
 }
 
 export const l3PostEvidenceGapIds = new Set(['gap-save-result', 'gap-unpublished-proof', 'gap-network-save-response'])
-const LEGACY_QA_REAL_MUTATION_TASK_NAME = ['QA guarded', 'real mutation task'].join(' ')
 export const DXM_LOGGED_IN_STATUSES = new Set(['login_success', 'logged_in', 'not_published_verified', 'workflow_navigation'])
 const READONLY_PRECHECK_CTA = '运行保存前安全检查'
-const READONLY_PRECHECK_PURPOSE = '保存前安全检查会打开店小秘采集页和采集箱，只读取页面，不领取、不保存、不发布；通过后才能打开浏览器现场。'
+const READONLY_PRECHECK_PURPOSE = '保存前安全检查会打开店小秘已有待认领列表和商品箱，只读取页面，不认领、不保存、不发布；通过后才能打开浏览器现场。'
 
 const realWriteReleasePrerequisites = [
   {
     title: '保存前安全检查通过',
-    detail: '采集页和采集箱都要完成安全检查；检查过程中不能出现领取、保存、发布或异常跳转。',
+    detail: '已有待认领列表和商品箱都要完成安全检查；检查过程中不能出现认领、保存、发布或异常跳转。',
   },
   {
     title: '异常放行必须人工复核',
@@ -395,7 +394,7 @@ function humanDxmLoginState(runtimeStatus?: RuntimeStatus | null, runtimeStatusE
       tone: 'ok',
       label: status === 'workflow_navigation' ? 'DXM 已进入业务页' : 'DXM 已登录',
       detail: currentUrl ? `真实浏览器停留位置：${currentUrl}` : '真实店小秘登录态已可用。',
-      next: '下一步：进入采集箱或运行保存前安全检查。',
+      next: '下一步：进入商品箱或运行保存前安全检查。',
     }
   }
   if (status === 'waiting_captcha') {
@@ -535,7 +534,7 @@ const editableConfigSections: EditableConfigSection[] = [
     fields: [
       { name: 'store_name', label: '店铺', placeholder: '例如：Dang Kang', usage: 'direct' },
       { name: 'category_name', label: '绑定类目', placeholder: '例如：立牌类谷子', usage: 'direct' },
-      { name: 'claim_mark', label: '认领标记', placeholder: '用于区分 DXM 采集箱记录', usage: 'direct' },
+      { name: 'claim_mark', label: '认领标记', placeholder: '用于区分 DXM 商品箱记录', usage: 'direct' },
     ],
   },
   {
@@ -1809,7 +1808,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
             <span className={`status-pill ${configPreview?.ok ? 'ok' : 'warn'}`}>
               {configPreview?.ok ? '可用于当前任务' : `${incompleteGroups.length || sectionsBlockingStart.length} 个分区待补`}
             </span>
-            <small>{selectedTask ? `当前任务 #${selectedTask.id}` : '先到“采集箱只保存”创建任务后，可保存为本次任务覆盖。'}</small>
+            <small>{selectedTask ? `当前任务 #${selectedTask.id}` : '先到“商品箱编辑保存”创建任务后，可保存为本次任务覆盖。'}</small>
             {configPreview?.ok && advisoryGapCount > 0 && <small>{advisoryGapCount} 个分区有辅助字段待补</small>}
             <small>当前模板范围：{currentTemplateScopeLabel}</small>
           </div>
@@ -1823,7 +1822,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
           <div className="config-precheck-action__buttons">
             {!selectedTask && (
               <button className="button button--primary" type="button" onClick={onShowTasks}>
-                去采集箱只保存
+                去商品箱编辑保存
               </button>
             )}
             <button
@@ -2354,6 +2353,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
   const selectedTaskIsUnreleasedRealMode = selectedTask ? isUnreleasedRealDxmMutationTask(selectedTask) : false
   const selectedTaskCompleted = selectedTask?.status === 'completed'
   const selectedTaskNotDraft = Boolean(selectedTask && selectedTask.status !== 'draft')
+  const selectedTaskBlocksStart = Boolean(selectedTask && selectedTask.status !== 'draft' && selectedTask.status !== 'running' && selectedTask.status !== 'completed')
   const l2BlocksStart = needsRealL2 && l2Gate?.status !== 'passed'
   const l3BlocksStart = selectedTaskNeedsEditConfig && needsRealL2 && l3Gate?.status === 'blocked'
   const loginBlocksStart = selectedRealDxmMutationTask && !dxmLoggedIn
@@ -2374,9 +2374,9 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
     : !selectedStore
       ? '请选择真实店铺。'
     : selectedDraftProducts.length === 0
-        ? '请先选择 1 个采集箱商品后再创建只保存任务。'
+        ? '请先选择 1 个商品箱商品后再创建只保存任务。'
         : selectedDraftProducts.length !== 1
-        ? `采集箱只保存一次只能选 1 个商品；当前已选 ${selectedDraftProducts.length} 个。`
+        ? `商品箱编辑保存一次只能选 1 个商品；当前已选 ${selectedDraftProducts.length} 个。`
         : ''
   const unreleasedReleaseItems = workspace.realModeReleasePlan.modes.filter((item) => item.mode === 'claim_only' || item.mode === 'batch_save')
   const latestSingleSaveTask = [...workspace.tasks]
@@ -2406,7 +2406,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
   const hiddenTaskCount = Math.max(workspace.tasks.length - visibleTaskRows.length, 0)
   const canToggleTaskHistory = workspace.tasks.length > visibleTaskRows.length || showAllTasks
   const canCreateRealTask = Boolean(selectedStore && selectedDraftProducts.length > 0 && !busy && !singleSaveProductCountInvalid)
-  const needsSingleSaveRecovery = Boolean(selectedTask && !selectedTaskNotDraft && (selectedTaskIsUnreleasedRealMode || loginBlocksStart || configUnknownBlocksStart || configPreviewLoadingBlocksStart || configBlocksStart || l2BlocksStart || l3BlocksStart))
+  const needsSingleSaveRecovery = Boolean(selectedTask && (selectedTaskBlocksStart || selectedTaskIsUnreleasedRealMode || loginBlocksStart || configUnknownBlocksStart || configPreviewLoadingBlocksStart || configBlocksStart || l2BlocksStart || l3BlocksStart))
   const startDisabled = busy || !selectedTask || selectedTaskNotDraft || selectedTaskIsUnreleasedRealMode || loginBlocksStart || configUnknownBlocksStart || configPreviewLoadingBlocksStart || configBlocksStart || l2BlocksStart || l3BlocksStart
   const startLabel = !selectedTask
     ? '请选择任务'
@@ -2415,7 +2415,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
       : selectedTask.status === 'running'
         ? '任务运行中'
         : selectedTask.status === 'failed'
-          ? '重新创建采集箱只保存任务'
+          ? '重新创建商品箱编辑保存任务'
         : selectedTask.status !== 'draft'
           ? '任务非草稿，禁止启动'
           : selectedTaskIsUnreleasedRealMode
@@ -2439,7 +2439,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
                       : l3BlocksStart
                         ? '人工确认未完成，禁止启动'
                         : selectedTask?.mode === 'claim_only'
-                          ? '启动采集认领'
+                          ? '启动待认领商品处理'
                         : needsApproval
                           ? '批准并启动单商品只保存'
                           : needsRealL2
@@ -2451,14 +2451,14 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
       : `还有 ${hiddenTaskCount} 个历史任务可展开。`
     : workspace.tasks.length
       ? '当前已显示可用任务。'
-      : '暂无历史任务；先从数据采集认领，再创建采集箱只保存任务。'
+      : '暂无历史任务；先完成待认领商品进入商品箱，再创建商品箱编辑保存任务。'
   const blockedStartButtonLabel = startDisabled
     ? startLabel.includes('禁止启动')
       ? startLabel
       : `暂不能启动只保存：${startLabel}`
     : '可启动浏览器现场'
   const taskActionDiagnosis = {
-    create: quickCreateSingleSaveDisabledReason || '可创建采集箱只保存任务',
+    create: quickCreateSingleSaveDisabledReason || '可创建商品箱编辑保存任务',
     history: historyTaskHint,
     start: blockedStartButtonLabel,
   }
@@ -2508,14 +2508,14 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
   }
 
   return (
-    <section className="module-layout" aria-label="任务与记录">
-      <div className="module-card span-1 task-quick-actions" aria-label="采集箱只保存主操作">
-        <ModuleHead title="从采集箱创建只保存" meta="首屏只处理第二段保存任务" />
-        <div className="task-product-selection" aria-label="选择采集箱商品">
+    <section className="module-layout" aria-label="编辑保存">
+      <div className="module-card span-1 task-quick-actions" aria-label="编辑保存主操作">
+        <ModuleHead title="编辑保存" meta="从商品箱商品创建第二段只保存任务" />
+        <div className="task-product-selection" aria-label="选择商品箱商品">
           <div className="task-product-selection__head">
-            <span>采集箱商品</span>
-            <strong>{selectedDraftProducts[0]?.title ?? '请先选择 1 个采集箱商品'}</strong>
-            <small>当前交付只允许从采集箱商品创建只保存任务；点击候选会替换本次选择，不会启动批量、发布或无人值守。</small>
+            <span>商品箱商品</span>
+            <strong>{selectedDraftProducts[0]?.title ?? '请先选择 1 个商品箱商品'}</strong>
+            <small>当前交付只允许从商品箱商品创建只保存任务；点击候选会替换本次选择，不会启动批量、发布或无人值守。</small>
           </div>
           <label className="task-product-selection__store">
             <span>店铺</span>
@@ -2547,7 +2547,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
           </div>
           {uniqueProductOptions.length > primaryProductCandidates.length && (
             <small className="task-product-selection__more">
-              还有 {uniqueProductOptions.length - primaryProductCandidates.length} 个商品在下方“查看更多商品”里；本次只选择 1 个采集箱商品创建任务。
+              还有 {uniqueProductOptions.length - primaryProductCandidates.length} 个商品在下方“查看更多商品”里；本次只选择 1 个商品箱商品创建任务。
             </small>
           )}
         </div>
@@ -2561,7 +2561,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
             title={quickCreateSingleSaveDisabledReason || undefined}
             data-testid="task-quick-create-single-save"
           >
-            创建采集箱只保存任务
+            创建编辑保存任务
           </button>
           {quickCreateSingleSaveDisabledReason && (
             <small id="task-quick-create-single-save-reason" className="task-quick-actions__reason">
@@ -2583,7 +2583,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
         <div className="task-quick-actions__status">
           <span>当前任务</span>
           <strong>{selectedTask ? displayTaskName(selectedTask) : '未选择任务'}</strong>
-          <small>{selectedTask ? `${humanTaskModeLabel(selectedTask.mode)} / ${humanTaskStatus(selectedTask.status)}` : '先从数据采集认领，再创建采集箱只保存任务'}</small>
+          <small>{selectedTask ? `${humanTaskModeLabel(selectedTask.mode)} / ${humanTaskStatus(selectedTask.status)}` : '先完成待认领商品进入商品箱，再创建商品箱编辑保存任务'}</small>
         </div>
         <p>
           {!quickCreateSingleSaveDisabledReason
@@ -2659,8 +2659,8 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
         {!selectedTaskCompleted && !l2BlocksStart && l3BlocksStart && (
           <div className="gate-note gate-note--danger">
             <strong>真实保存已阻断</strong>
-            <span>{humanGateDetail(l2Gate?.detail) ?? '需要商品采集页与采集箱页两个页面检查均通过。'}</span>
-            <span>保存前安全检查通过后才启动采集认领；人工确认未完成前不启动单商品只保存；批量保存当前未开放。</span>
+            <span>{humanGateDetail(l2Gate?.detail) ?? '需要已有待认领列表与商品箱页面两个页面检查均通过。'}</span>
+            <span>保存前安全检查通过后才启动待认领商品处理；人工确认未完成前不启动单商品只保存；批量保存当前未开放。</span>
             <div className="next-step-actions">
               <button className="button button--secondary" type="button" onClick={onShowConsole}>查看阻断说明</button>
               <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看评审与检查计划</button>
@@ -2678,7 +2678,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
         )}
         {!selectedTaskCompleted && needsApproval && !selectedTaskNotDraft && (
           <div className="gate-note">
-            <span>采集认领可直接启动第一段流程；单商品只保存会先请求后端批准令牌；批量保存当前未开放。</span>
+            <span>待认领商品处理可直接启动第一段流程；单商品只保存会先请求后端批准令牌；批量保存当前未开放。</span>
             <L3ApprovalInlineForm
               approvedBy={l3ApprovedBy}
               busy={busy || startDisabled}
@@ -2697,7 +2697,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
         </summary>
         <div className="task-support-drawer__content">
           <details className="inline-disclosure task-create-drawer">
-            <summary>创建采集箱只保存任务</summary>
+            <summary>创建商品箱编辑保存任务</summary>
             <div className="real-task-card" aria-label="创建真实任务" data-publish-scene="SMT_SEMI_MANAGED_SAVE_ONLY">
               <div className="real-task-card__head">
                 <div>
@@ -2731,10 +2731,10 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
               </div>
               {singleSaveProductCountInvalid && (
                 <div className="guard-note guard-note--warn">
-                  采集箱只保存一次只能选择 1 个商品；当前已选 {selectedDraftProducts.length} 个。保存前安全检查可多选，真实保存请保留 1 个商品。
+                  商品箱编辑保存一次只能选择 1 个商品；当前已选 {selectedDraftProducts.length} 个。保存前安全检查可多选，真实保存请保留 1 个商品。
                 </div>
               )}
-              <div className="real-task-products" aria-label="选择采集箱商品">
+              <div className="real-task-products" aria-label="选择商品箱商品">
                 {uniqueProductOptions.slice(0, 6).map((product) => (
                   <label key={product.id} className="real-task-product">
                     <input
@@ -2761,7 +2761,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
                 >
                   创建真实任务
                 </button>
-                <span className="toolbar-note">{selectedDraftProducts.length ? `已选择 ${selectedDraftProducts.length} 个采集箱商品` : '先选择采集箱商品'}</span>
+                <span className="toolbar-note">{selectedDraftProducts.length ? `已选择 ${selectedDraftProducts.length} 个商品箱商品` : '先选择商品箱商品'}</span>
               </div>
             </div>
             {demoEnabled && (
@@ -2812,7 +2812,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
                 </button>
               ))}
               {!workspace.tasks.length && (
-                <EmptyState title="暂无真实任务" detail={demoEnabled ? '开发模式可创建本地自检批次；普通使用请先从数据采集认领商品，再创建采集箱只保存任务。' : '请先从数据采集认领商品，再创建采集箱只保存任务，普通模式不展示本地自检入口。'} />
+                <EmptyState title="暂无真实任务" detail={demoEnabled ? '开发模式可创建本地自检批次；普通使用请先完成待认领商品进入商品箱，再创建商品箱编辑保存任务。' : '请先完成待认领商品进入商品箱，再创建商品箱编辑保存任务，普通模式不展示本地自检入口。'} />
               )}
             </div>
           </details>
@@ -2831,7 +2831,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
             </div>
           </details>
           <details className="inline-disclosure task-release-drawer">
-            <summary>查看未发布模式边界</summary>
+            <summary>查看批量/发布边界</summary>
             <RealModeReleasePlanPanel items={unreleasedReleaseItems} />
           </details>
           <details className="inline-disclosure task-acceptance-drawer">
@@ -2926,7 +2926,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
                     </div>
                     <ul>
                       <li>{l2Gate?.detail ?? '缺少保存前安全检查证据。'}</li>
-                      <li>需要商品采集页与采集箱页双目标真实通过后，才可进入保存判断。</li>
+                      <li>需要已有待认领列表与商品箱页面双目标真实通过后，才可进入保存判断。</li>
                     </ul>
                   </article>
                 </div>
@@ -2935,11 +2935,11 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
                 label="单商品只保存"
                 status={l3Gate?.status ?? 'not_run'}
                 detail={l3Gate?.status === 'blocked'
-                  ? '保存前安全检查通过后才启动采集认领；人工确认未完成前不启动单商品只保存；批量保存当前未开放。'
+                  ? '保存前安全检查通过后才启动待认领商品处理；人工确认未完成前不启动单商品只保存；批量保存当前未开放。'
                   : '真实写操作仍需要人工批准令牌；待批准不等于已通过。'}
               />
               <div className="gate-note">
-                当前按钮策略：保存前安全检查未通过时保持阻断；采集认领可启动第一段流程；单商品只保存仍需后端人工批准；批量保存当前未开放。
+                当前按钮策略：保存前安全检查未通过时保持阻断；待认领商品处理可启动第一段流程；单商品只保存仍需后端人工批准；批量保存当前未开放。
               </div>
             </div>
           </details>
@@ -3032,6 +3032,7 @@ export function ExecutionConsole({
       runtimeLogCount={runtimeLogCount}
       runtimeLogs={runtimeLogs}
       runtimeLogError={runtimeLogError}
+      busy={busy}
       onStartAgentConsole={onStartAgentConsole}
       onShowTasks={onShowTasks}
       onShowDraftEdit={onShowDraftEdit}
@@ -3280,11 +3281,12 @@ function AgentStagePanel({
   onShowEvidence: () => void
   onShowReports: () => void
 }) {
+  const realBrowserVisible = Boolean(runtimeStatus?.realBrowser?.browserVisible || runtimeStatus?.realBrowser?.active || agentConsole?.active)
   return (
     <div className={embedded ? 'agent-console-stage agent-console-stage--embedded' : 'module-card agent-console-stage'}>
       <ModuleHead
         title="店小秘操作窗口"
-        meta={agentConsole?.active ? '真实浏览器运行中' : '先登录，再检查，最后只保存'}
+        meta={realBrowserVisible ? '真实浏览器已打开' : '先登录，再检查，最后只保存'}
       />
       <AgentLoginPanel
         dxmLoginDraft={dxmLoginDraft}
@@ -3328,7 +3330,7 @@ function AgentStagePanel({
             <summary>查看阻断详情</summary>
             <span>{realSaveBlockReason}</span>
             <div className="next-step-actions">
-              <button className="button button--secondary" type="button" onClick={onShowTasks}>回到采集箱只保存</button>
+              <button className="button button--secondary" type="button" onClick={onShowTasks}>回到商品箱编辑保存</button>
               <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看只读评审与检查计划</button>
               <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
             </div>
@@ -3381,7 +3383,7 @@ function ConsoleCompletedReviewPanel({
       <div className="console-review-panel__body">
         <div>
           <strong>下一步只复核结果</strong>
-          <span>查看保存结果、未发布证明和真实浏览器记录；如要处理新商品，先做数据采集认领，再回到采集箱只保存创建新任务。</span>
+          <span>查看保存结果、未发布证明和真实浏览器记录；如要处理新商品，先完成待认领商品进入商品箱，再回到商品箱编辑保存创建新任务。</span>
         </div>
         <div className="console-review-panel__facts">
           <span><b>结果</b><strong>优先查看</strong></span>
@@ -3435,17 +3437,33 @@ function RuntimeControlPanel({
   const runtimeOwnerText = runtimeControlOwnerText(runtimeStatus?.runtimeControl?.owner ?? 'direct', Boolean(runtimeStatus?.runtimeControl?.managedByDesktop))
   const runtimeControlDetail = runtimeStatus?.runtimeControl?.detail
     ?? '未读取到启动来源；请关闭并重新打开免安装版 exe，或使用 scripts/start-mvp.bat 启动后再重试。'
+  const workflowRuntime = runtimeStatus?.workflowRuntime
+  const workflowRuntimeNeedsReset = Boolean(workflowRuntime && workflowRuntime.healthy === false)
   const l2ProbeResourceState = getL2ProbeResourceState(runtimeStatus)
   const l2ProbeDisabled = busy || l2ProbeResourceState.blocked
   return (
     <div className="runtime-control-panel">
+      {workflowRuntimeNeedsReset && (
+        <div className="runtime-control-panel__callout" role="status">
+          <strong>真实浏览器执行器需要重启</strong>
+          <span>{workflowRuntime?.message || workflowRuntime?.unhealthyReason || '上次真实浏览器任务没有正常结束。'}</span>
+          <button
+            className="button button--secondary"
+            type="button"
+            disabled={busy}
+            onClick={() => onRuntimeControl('reset_workflow_runtime')}
+          >
+            重启真实浏览器执行器
+          </button>
+        </div>
+      )}
       <button
         className="button button--secondary"
         type="button"
         disabled={busy || !agentActive}
         onClick={() => onRuntimeControl('stop_agent_console')}
       >
-        停止浏览器 Agent
+        停止自动浏览器
       </button>
       <button
         className="button button--quiet"
@@ -3508,7 +3526,7 @@ function getL2ProbeResourceState(runtimeStatus: RuntimeStatus | null) {
       repairSteps: [
         '刷新运行状态，确认后端已经由免安装版接管。',
         '如果仍未知，关闭旧的 DXM Agent Console 或后台旧进程。',
-        '打开桌面免安装目录里的 DXM-Agent-Console.exe。',
+        '打开桌面免安装目录里的 DXM-Agent-Console-Portable-0.1.0.exe。',
         '不要只复制 exe，必须保留 resources 文件夹。',
       ],
       checkedPathPreview: [],
@@ -3553,7 +3571,7 @@ function getL2ProbeResourceState(runtimeStatus: RuntimeStatus | null) {
     ? backendRepairSteps
     : [
     '关闭旧的 DXM Agent Console 或后台旧进程。',
-    '打开桌面免安装目录里的 DXM-Agent-Console.exe。',
+    '打开桌面免安装目录里的 DXM-Agent-Console-Portable-0.1.0.exe。',
     '不要只复制 exe，必须保留 resources 文件夹。',
     ]
   return {
@@ -3612,8 +3630,8 @@ function RuntimeControlResultSummary({ result }: { result: RuntimeControlRespons
 
 function formatL2ProbeTargets(targets?: string[]) {
   const labels = {
-    data_acquisition: '商品采集页',
-    draft_box: '采集箱',
+    data_acquisition: '已有待认领列表',
+    draft_box: '商品箱',
   } as Record<string, string>
   const values = (targets?.length ? targets : ['data_acquisition', 'draft_box'])
     .map((target) => labels[target] ?? target)
@@ -3775,6 +3793,7 @@ function ConsoleFocusPanel({
   runtimeLogCount,
   runtimeLogs,
   runtimeLogError,
+  busy,
   onStartAgentConsole,
   onShowTasks,
   onShowDraftEdit,
@@ -3797,6 +3816,7 @@ function ConsoleFocusPanel({
   runtimeLogCount: number
   runtimeLogs: Record<RuntimeLogSource, RuntimeLogResponse | null>
   runtimeLogError: string | null
+  busy: boolean
   onStartAgentConsole: () => void
   onShowTasks: () => void
   onShowDraftEdit: () => void
@@ -3812,7 +3832,9 @@ function ConsoleFocusPanel({
   const hasBrowserSession = Boolean(realBrowser?.active || agentConsole?.active || agentConsole?.updated_at)
   const browserLaunching = Boolean(realBrowser?.browserLaunching || agentConsole?.browser_launching)
   const browserVisible = Boolean(realBrowser?.browserVisible || agentConsole?.browser_visible)
-  const manualTakeover = Boolean(agentConsole?.manual_takeover)
+  const browserAgentManualTakeover = Boolean(runtimeStatus?.browserAgent?.manualTakeover)
+  const manualTakeover = Boolean(agentConsole?.manual_takeover || browserAgentManualTakeover)
+  const workflowNeedsRestart = Boolean(runtimeStatus?.workflowRuntime?.healthy === false || runtimeStatus?.browserAgent?.healthy === false)
   const currentUrl = realBrowser?.currentUrl ?? agentConsole?.current_url ?? agentConsole?.target_url
   const selectedTaskCompleted = selectedTask?.status === 'completed'
   const guardLabel = selectedTaskCompleted
@@ -3830,13 +3852,13 @@ function ConsoleFocusPanel({
   const controlLabel = manualTakeover
     ? '人工接管中'
     : active && browserVisible
-      ? 'Agent 可控'
+      ? '自动浏览器可控'
       : active
         ? browserLaunching ? '启动中' : '等待窗口可见'
         : '启动后可控'
   const takeoverLabel = active
     ? manualTakeover
-      ? '接管中，可交还 Agent'
+      ? '接管中，可交还自动浏览器'
       : '可在生命周期区接管'
     : '启动浏览器后可接管'
   const consoleNext = selectedTaskCompleted
@@ -3865,7 +3887,7 @@ function ConsoleFocusPanel({
     launcher: '启动器',
     npm: '依赖安装',
     task: '任务',
-    agent: '浏览器 Agent',
+    agent: '自动浏览器',
   } as Record<RuntimeLogSource, string>)[runtimeLogSource]
   const l2StatusLabel = selectedTaskCompleted ? '已完成' : humanGateStateLabel(l2Gate?.status ?? 'not_run')
   const l3StatusLabel = selectedTaskCompleted ? '已完成' : humanGateStateLabel(l3Gate?.status ?? 'blocked')
@@ -3942,6 +3964,28 @@ function ConsoleFocusPanel({
           <span><strong>门禁</strong><b>{guardLabel}</b></span>
         </div>
       </details>
+      {(browserVisible || active || workflowNeedsRestart) && (
+        <div className="console-focus-panel__recovery" aria-label="真实浏览器恢复操作">
+          <strong>浏览器卡住了？</strong>
+          <span>{manualTakeover ? '你正在人工接管真实浏览器，处理完成后交还自动浏览器。' : workflowNeedsRestart ? '执行器需要重启后才能继续真实任务。' : '可以直接接管真实浏览器检查页面。'}</span>
+          <div>
+            {manualTakeover ? (
+              <button className="button button--primary" type="button" onClick={() => onRuntimeControl('browser_agent_resume')} disabled={busy}>
+                交还自动浏览器
+              </button>
+            ) : (
+              <button className="button button--secondary" type="button" onClick={() => onRuntimeControl('browser_agent_takeover')} disabled={busy || !browserVisible}>
+                人工接管真实浏览器
+              </button>
+            )}
+            {workflowNeedsRestart && (
+              <button className="button button--secondary" type="button" onClick={() => onRuntimeControl('reset_workflow_runtime')} disabled={busy}>
+                重启真实浏览器执行器
+              </button>
+            )}
+          </div>
+        </div>
+      )}
       <div className="console-focus-panel__actions">
         {selectedTaskCompleted ? (
           <small>任务已完成，下面复核报告、证据和日志。</small>
@@ -4024,7 +4068,7 @@ function ConsolePrimaryBlockerCard({
         {primaryPath.action === 'run_l2' && (
           <div className="console-primary-blocker-card__recovery" aria-label="保存前安全检查失败恢复路径">
             <span><b>1 确认登录</b><small>真实浏览器已登录，验证码或账号密码错误先在登录窗口修正。</small></span>
-            <span><b>2 打开目标页</b><small>能打开商品采集页和采集箱；打不开先处理页面权限或网络。</small></span>
+            <span><b>2 打开目标页</b><small>能打开已有待认领列表和商品箱；打不开先处理页面权限或网络。</small></span>
             <span><b>3 重新检查</b><small>无写入风险后，再点击运行保存前安全检查。</small></span>
             <button className="button button--quiet" type="button" onClick={() => onRuntimeLogSourceChange('launcher')}>
               查看启动器日志
@@ -4036,8 +4080,8 @@ function ConsolePrimaryBlockerCard({
         )}
         {primaryPath.code === 'select_task' && (
           <div className="console-primary-blocker-card__task-path" aria-label="任务准备路径">
-            <span><b>1 创建采集认领任务</b><small>先从店小秘数据采集把真实商品认领到采集箱。</small></span>
-            <span><b>2 从采集箱创建保存任务</b><small>认领完成后，选择已进入采集箱的商品创建单商品只保存。</small></span>
+            <span><b>1 创建待认领商品任务</b><small>先从店小秘已有待认领列表把商品放进商品箱。</small></span>
+            <span><b>2 从商品箱创建保存任务</b><small>完成后，选择已进入商品箱的商品创建单商品只保存。</small></span>
             <span><b>3 再确认配置并保存</b><small>第二段才补编辑页配置、人工确认只保存；批量和发布入口保持关闭。</small></span>
           </div>
         )}
@@ -4175,7 +4219,7 @@ function AgentBrowserFrame({
             </div>
             <div>
               <dt>控制状态</dt>
-              <dd>{canControl ? 'Agent 可控' : agentConsole?.manual_takeover ? '人工接管中' : browserLaunching ? '浏览器启动中' : realBrowserVisible ? '真实窗口可见' : '等待可见窗口'}</dd>
+              <dd>{canControl ? '自动浏览器可控' : agentConsole?.manual_takeover ? '人工接管中' : browserLaunching ? '浏览器启动中' : realBrowserVisible ? '真实窗口可见' : '等待可见窗口'}</dd>
             </div>
             <div>
               <dt>下一步</dt>
@@ -4325,7 +4369,7 @@ function AgentConsoleControls({
       ? primaryPath.next
       : '点击打开浏览器现场（不保存），进入独立 Profile 浏览器。'
     : manualTakeover
-      ? '完成人工处理后点击交还 Agent。'
+      ? '完成人工处理后点击交还自动浏览器。'
       : launching
         ? '正在打开独立 Profile 浏览器；控制台会自动刷新状态。'
       : visible
@@ -4338,7 +4382,7 @@ function AgentConsoleControls({
     : !active
       ? '先打开浏览器现场，才能刷新、接管、交还或关闭。'
       : manualTakeover
-        ? '当前已人工接管，处理完成后点击交还 Agent。'
+        ? '当前已人工接管，处理完成后点击交还自动浏览器。'
         : ''
   const snapshotDisabledReason = busy
     ? '正在处理当前操作，请等待完成后再刷新当前画面。'
@@ -4350,14 +4394,14 @@ function AgentConsoleControls({
     : !active
       ? '先打开浏览器现场，才能人工接管真实浏览器。'
       : manualTakeover
-        ? '当前已人工接管，处理完成后点击交还 Agent。'
+        ? '当前已人工接管，处理完成后点击交还自动浏览器。'
         : ''
   const releaseDisabledReason = busy
-    ? '正在处理当前操作，请等待完成后再交还 Agent。'
+    ? '正在处理当前操作，请等待完成后再交还自动浏览器。'
     : !active
-      ? '先打开浏览器现场，才需要交还 Agent。'
+      ? '先打开浏览器现场，才需要交还自动浏览器。'
       : !manualTakeover
-        ? '当前未处于人工接管状态，无需交还 Agent。'
+        ? '当前未处于人工接管状态，无需交还自动浏览器。'
         : ''
   const stopDisabledReason = busy
     ? '正在处理当前操作，请等待完成后再关闭浏览器。'
@@ -4396,7 +4440,7 @@ function AgentConsoleControls({
         <div className="agent-console-resource-alert" role="alert" aria-label="保存前安全检查资源缺失">
           <strong>保存前安全检查暂不可运行</strong>
           <span>{l2ProbeResourceState.detail}</span>
-          <small>处理：关闭当前旧窗口或后台旧进程，重新打开桌面上的 DXM-Agent-Console-免安装版\\DXM-Agent-Console.exe；完整目录必须保留 resources 文件夹。</small>
+          <small>处理：关闭当前旧窗口或后台旧进程，重新打开桌面上的 DXM-Agent-Console-免安装版\\DXM-Agent-Console-Portable-0.1.0.exe；完整目录必须保留 resources 文件夹。</small>
           <L2ProbeResourceRepairPanel l2ProbeResourceState={l2ProbeResourceState} />
         </div>
       )}
@@ -4417,9 +4461,9 @@ function AgentConsoleControls({
           type="button"
           onClick={() => onNavigateDxmTarget('draft_box')}
           disabled={busy}
-          title="登录成功后进入真实店小秘采集箱；该动作只导航，不保存、不发布。"
+          title="登录成功后进入真实店小秘商品箱；该动作只导航，不保存、不发布。"
         >
-          进入采集箱
+          进入商品箱
         </button>
         <button
           className="button button--quiet"
@@ -4462,7 +4506,7 @@ function AgentConsoleControls({
                 人工接管真实浏览器
               </button>
               <button className="button button--quiet" type="button" onClick={onReleaseAgentConsoleTakeover} disabled={busy || !active || !manualTakeover} title={releaseDisabledReason || undefined}>
-                交还 Agent
+                交还自动浏览器
               </button>
               <button className="button button--secondary" type="button" onClick={onStopAgentConsole} disabled={busy || !active} title={stopDisabledReason || undefined}>
                 关闭浏览器
@@ -4509,7 +4553,7 @@ function BrowserControlPad({
   const active = Boolean(agentConsole?.active && agentConsole?.browser_visible)
   const disabled = busy || !active || Boolean(agentConsole?.manual_takeover)
   const disabledReason = agentConsole?.manual_takeover
-    ? '人工接管中，先交还 Agent。'
+    ? '人工接管中，先交还自动浏览器。'
     : active
       ? '仅控制当前独立浏览器窗口。'
       : '启动真实浏览器后才能页面内操控。'
@@ -4630,7 +4674,7 @@ function L2RunnerStatePanel({
         <small>{state.status === 'passed'
           ? '可以继续人工确认只保存。'
           : state.status === 'failed'
-            ? '请确认已登录并能打开商品采集页、采集箱页后重试。'
+            ? '请确认已登录并能打开已有待认领列表、商品箱页面后重试。'
             : state.status === 'running'
               ? '请等待检查完成，完成后自动刷新。'
               : '点击下方按钮开始检查。'}</small>
@@ -4695,7 +4739,7 @@ function L2PrecheckFailureAdvice({
         <article>
           <span><b>失败页面</b><small>等待诊断明细</small></span>
           <span><b>失败检查</b><small>未收到页面诊断，请先查看启动器日志。</small></span>
-          <span><b>下一步处理</b><small>确认真实浏览器已登录并能打开目标页，再重新运行保存前安全检查。</small></span>
+          <span><b>下一步处理</b><small>请确认已登录并能打开已有待认领列表、商品箱页后重试。</small></span>
         </article>
       )}
     </div>
@@ -4723,8 +4767,8 @@ function L2PrecheckRunbook({
     <details className="l2-precheck-runbook inline-disclosure" aria-label="保存前安全检查操作引导">
       <summary>安全检查说明</summary>
       <div className="l2-precheck-runbook__steps">
-        <span><b>1 打开真实店小秘页面</b><small>确认已登录，能访问商品采集页。</small></span>
-        <span><b>2 检查两个页面</b><small>商品采集页 + 采集箱；不会领取、不会保存、不会发布。</small></span>
+        <span><b>1 打开真实店小秘页面</b><small>确认已登录，能访问已有待认领列表。</small></span>
+        <span><b>2 检查两个页面</b><small>已有待认领列表 + 商品箱；不会认领、不会保存、不会发布。</small></span>
         <span><b>3 通过后人工确认保存</b><small>只读通过不等于保存，仍需人工确认单商品只保存。</small></span>
       </div>
       <small>{nextAction}</small>
@@ -4882,7 +4926,7 @@ function RuntimeLogPanel({
     <div className="runtime-log-panel">
       <div className="runtime-log-toolbar">
         <strong>完整日志与维护诊断</strong>
-        <span>后端、前端、启动器、任务和浏览器 Agent 日志会自动增量刷新。</span>
+        <span>本机服务、主窗口、启动器、任务和自动浏览器日志会自动增量刷新。</span>
         <span className={`runtime-log-toolbar__refresh runtime-log-toolbar__refresh--${refreshMeta.tone}`}>
           {refreshMeta.status} · {refreshMeta.detail}
         </span>
@@ -5000,8 +5044,8 @@ function isBusinessRuntimeLogItem(item: RuntimeLogItem, summary: string) {
     '店小秘',
     '登录',
     '保存前安全检查',
-    '采集页',
-    '采集箱',
+    '待认领列表',
+    '商品箱',
     '认领',
     '编辑页',
     '填写',
@@ -5062,7 +5106,7 @@ function runtimeLogSourceLabels(): Record<RuntimeLogSource, string> {
     launcher: '启动器',
     npm: '依赖安装',
     task: '任务',
-    agent: '浏览器 Agent',
+    agent: '自动浏览器',
   }
 }
 
@@ -5096,13 +5140,13 @@ function humanRuntimeLogLine(item: RuntimeLogItem) {
       return '保存步骤失败：系统没有继续发布，请按页面提示检查真实浏览器后重试。'
     }
     if (normalized.includes('claim_to_draft_box') || normalized.includes('认领')) {
-      return '采集认领失败：系统没有继续保存，请检查目标商品和真实浏览器状态后重试。'
+      return '待认领商品处理失败：系统没有继续保存，请检查目标商品是否已在店小秘待认领列表中，然后重试。'
     }
     if (normalized.includes('open_data_acquisition')) {
-      return '数据采集页打开失败：请确认店小秘已登录并能访问数据采集页。'
+      return '已有待认领列表打开失败：请确认店小秘已登录并能访问待认领列表。'
     }
     if (normalized.includes('open_edit_page') || normalized.includes('open_editor')) {
-      return '编辑页打开失败：请确认商品已进入采集箱后重试。'
+      return '编辑页打开失败：请确认商品已进入商品箱后重试。'
     }
     return '当前步骤失败，请展开完整原始日志查看细节。'
   }
@@ -5119,13 +5163,13 @@ function humanRuntimeLogLine(item: RuntimeLogItem) {
     return '浏览器会话异常：当前浏览器自动化会话已经失效，系统没有继续保存。请关闭当前浏览器现场，重新打开真实浏览器后再运行任务。'
   }
   if (normalized.includes('open_data_acquisition')) {
-    return '正在打开店小秘数据采集页。'
+    return '正在打开店小秘已有待认领列表。'
   }
   if (normalized.includes('claim_to_draft_box')) {
-    return '正在把选中的商品认领到采集箱。'
+    return '正在把选中的商品放进商品箱。'
   }
   if (normalized.includes('verify_draft_box_claim')) {
-    return '正在确认商品已经进入采集箱。'
+    return '正在确认商品已经进入商品箱。'
   }
   if (normalized.includes('open_edit_page') || normalized.includes('open_editor')) {
     return '正在打开店小秘商品编辑页。'
@@ -5158,10 +5202,10 @@ function humanRuntimeLogLine(item: RuntimeLogItem) {
     return '保存前安全检查已完成。'
   }
   if (normalized.includes('target=draft_box') || normalized.includes('draft_box')) {
-    return '正在检查店小秘采集箱页。'
+    return '正在检查店小秘商品箱页面。'
   }
   if (normalized.includes('target=data_acquisition') || normalized.includes('data_acquisition')) {
-    return '正在检查店小秘商品采集页。'
+    return '正在检查店小秘已有待认领列表。'
   }
   if (normalized.includes('add.json') || line.includes('保存成功') || line.includes('编辑成功')) {
     return '店小秘保存接口返回成功。'
@@ -5349,10 +5393,10 @@ function buildConsolePrimaryPath({
     return {
       code: 'select_task',
       title: '需要选择任务',
-      reason: '当前没有选中的数据采集认领或采集箱编辑保存任务。',
-      detail: '先从数据采集创建认领任务；认领进采集箱后，再创建采集箱只保存任务。',
-      next: '去数据采集认领',
-      ctaLabel: '去数据采集认领',
+      reason: '当前没有选中的待认领商品或商品箱编辑保存任务。',
+      detail: '先从店小秘已有待认领商品创建任务；商品进入商品箱后，再创建商品箱编辑保存任务。',
+      next: '去待认领商品',
+      ctaLabel: '去待认领商品',
       action: 'tasks',
       browserStatus: '未选择任务，浏览器现场暂不启动',
       blocksBrowserStart: true,
@@ -5363,13 +5407,13 @@ function buildConsolePrimaryPath({
     const claimCompleted = selectedTask.mode === 'claim_only'
     return {
       code: 'completed',
-      title: claimCompleted ? '采集认领完成' : '保存成功',
+      title: claimCompleted ? '待认领商品已处理' : '保存成功',
       reason: '当前任务已完成。',
       detail: claimCompleted
-        ? '商品已进入采集箱；下一步到“采集箱只保存”创建只保存任务。'
+        ? '商品已进入商品箱；下一步到“商品箱编辑保存”创建只保存任务。'
         : '继续复核保存结果、未发布证明、日志和证据。',
-      next: claimCompleted ? '进入采集箱编辑保存' : '查看保存结果与未发布证明',
-      ctaLabel: claimCompleted ? '进入采集箱编辑保存' : '查看保存结果',
+      next: claimCompleted ? '进入商品箱编辑保存' : '查看保存结果与未发布证明',
+      ctaLabel: claimCompleted ? '进入商品箱编辑保存' : '查看保存结果',
       action: claimCompleted ? 'draft_edit_save' : 'reports',
       browserStatus: '任务已完成',
       blocksBrowserStart: true,
@@ -5397,8 +5441,8 @@ function buildConsolePrimaryPath({
       title: '保存失败，需处理',
       reason: failure.reason,
       detail: failure.detail,
-      next: '重新创建采集箱只保存任务',
-      ctaLabel: '重新创建采集箱只保存任务',
+      next: '重新创建商品箱编辑保存任务',
+      ctaLabel: '重新创建商品箱编辑保存任务',
       action: 'tasks',
       browserStatus: '上次执行失败，浏览器现场暂不启动',
       blocksBrowserStart: true,
@@ -5424,8 +5468,8 @@ function buildConsolePrimaryPath({
       code: 'not_draft',
       title: '需要选择任务',
       reason: '当前任务不是草稿状态。',
-      detail: '请选择草稿任务，或重新创建采集箱只保存任务。',
-      next: '回到采集箱只保存页选择草稿任务',
+      detail: '请选择草稿任务，或重新创建商品箱编辑保存任务。',
+      next: '回到商品箱编辑保存页选择草稿任务',
       ctaLabel: '选择草稿任务',
       action: 'tasks',
       browserStatus: '任务状态不可启动，浏览器现场暂不启动',
@@ -5438,9 +5482,9 @@ function buildConsolePrimaryPath({
       code: 'unreleased',
       title: '当前模式未放行',
       reason: `${humanTaskModeLabel(selectedTask.mode)} 当前未放行。`,
-      detail: '批量保存和无人值守仍需单独验收；当前开放采集认领和单商品只保存路径。',
-      next: '回到采集箱只保存页创建只保存任务',
-      ctaLabel: '创建采集箱只保存任务',
+      detail: '批量保存和无人值守仍需单独验收；当前开放待认领商品处理和单商品只保存路径。',
+      next: '回到商品箱编辑保存页创建只保存任务',
+      ctaLabel: '创建商品箱编辑保存任务',
       action: 'tasks',
       browserStatus: '当前模式未放行，浏览器现场暂不启动',
       blocksBrowserStart: true,
@@ -5510,7 +5554,7 @@ function buildConsolePrimaryPath({
       code: 'l2',
       title: '需要运行保存前安全检查',
       reason: `保存前安全检查：${humanGateStateLabel(l2Gate?.status ?? 'not_run')}。${READONLY_PRECHECK_PURPOSE}`,
-      detail: l2Detail ?? '需要商品采集页和采集箱页两个真实页面检查均通过。',
+      detail: l2Detail ?? '需要已有待认领列表和商品箱页面两个真实页面检查均通过。',
       next: READONLY_PRECHECK_CTA,
       ctaLabel: READONLY_PRECHECK_CTA,
       action: 'run_l2',
@@ -5525,8 +5569,8 @@ function buildConsolePrimaryPath({
       title: '需要人工确认只保存',
       reason: '真实保存前还没有完成人工批准。',
       detail: l3Detail ?? '保存前安全检查通过后，仍需要人工确认批准，只启动单商品只保存。',
-      next: '去采集箱只保存页填写批准人并启动',
-      ctaLabel: '去采集箱只保存页人工确认',
+      next: '去商品箱编辑保存页填写批准人并启动',
+      ctaLabel: '去商品箱编辑保存页人工确认',
       action: 'tasks',
       browserStatus: '等待人工确认，浏览器现场暂不启动',
       blocksBrowserStart: true,
@@ -5552,10 +5596,10 @@ function buildConsolePrimaryPath({
     title: '可以启动浏览器现场',
     reason: selectedTask.mode === 'claim_only' ? '店小秘登录和保存前安全检查当前未阻断。' : '配置、保存前安全检查和人工确认当前未阻断。',
     detail: selectedTask.mode === 'claim_only'
-      ? '将打开独立真实浏览器窗口，只执行数据采集认领到采集箱，不会进入编辑页、不会保存、不会发布。'
+      ? '将打开独立真实浏览器窗口，在店小秘已有待认领列表中定位商品，并放进商品箱。'
       : '将打开独立真实浏览器窗口；保存前仍需确认，不会发布。',
-    next: selectedTask.mode === 'claim_only' ? '启动采集认领' : '打开浏览器现场（不保存）',
-    ctaLabel: selectedTask.mode === 'claim_only' ? '启动采集认领' : '打开浏览器现场（不保存）',
+    next: selectedTask.mode === 'claim_only' ? '启动待认领商品处理' : '打开浏览器现场（不保存）',
+    ctaLabel: selectedTask.mode === 'claim_only' ? '启动待认领商品处理' : '打开浏览器现场（不保存）',
     action: 'start_browser',
     browserStatus: '浏览器现场待启动',
     blocksBrowserStart: false,
@@ -5577,8 +5621,8 @@ function humanTaskFailureMessage(selectedTask: Task, reports: Report[]) {
   return {
     reason,
     detail: reason.includes('浏览器会话异常')
-      ? '系统没有执行保存。请保持真实店小秘登录窗口可用，关闭旧浏览器现场或重启控制台后重新创建采集箱只保存任务。'
-      : '请先查看报告里的失败原因；确认店小秘浏览器可用后，重新创建采集箱只保存任务再执行。',
+      ? '系统没有执行保存。请保持真实店小秘登录窗口可用，关闭旧浏览器现场或重启控制台后重新创建商品箱编辑保存任务。'
+      : '请先查看报告里的失败原因；确认店小秘浏览器可用后，重新创建商品箱编辑保存任务再执行。',
   }
 }
 
@@ -5802,11 +5846,11 @@ function humanEvidencePointTitle(point: EvidencePoint) {
     FILL_BASE_INFO: '填写标题和基础信息',
     VERIFY_EDIT_OWNERSHIP: '确认编辑页归属',
     OPEN_EDIT_PAGE: '打开编辑页',
-    VERIFY_LIST_OWNERSHIP: '确认采集箱归属',
-    CLAIM_PRODUCT: '写入领取备注',
+    VERIFY_LIST_OWNERSHIP: '确认商品箱归属',
+    CLAIM_PRODUCT: '写入认领标记',
     ITEM_LOCKING: '锁定任务商品',
     FIND_PRODUCT: '定位目标商品',
-    OPEN_DRAFT_LIST: '打开采集箱',
+    OPEN_DRAFT_LIST: '打开商品箱',
     PRECHECK_PUBLISH_GUARD: '确认只保存不发布',
     PRECHECK_SESSION: '检查店小秘登录',
     PRECHECK_CONFIG: '检查任务配置',
@@ -5867,7 +5911,7 @@ function buildProblemCardCopy(item: ExceptionItem) {
     return {
       title: '保存前安全检查没有通过',
       what: message,
-      why: '商品采集页和采集箱页没有完成安全检查前，系统不会启动真实保存。',
+      why: '已有待认领列表和商品箱页面没有完成安全检查前，系统不会启动真实保存。',
       next: `点“${READONLY_PRECHECK_CTA}”；如果提示正在运行，就等待完成后刷新。`,
     }
   }
@@ -5876,7 +5920,7 @@ function buildProblemCardCopy(item: ExceptionItem) {
       title: '这条任务已经执行过或失败',
       what: message,
       why: '已经执行过的任务不能直接重复启动，避免重复操作真实店小秘。',
-      next: '点“采集箱只保存”，重新创建采集箱只保存任务。',
+      next: '点“商品箱编辑保存”，重新创建商品箱编辑保存任务。',
     }
   }
   if (message.includes('保存结果证据不完整') || raw.includes('save_result')) {
@@ -5884,7 +5928,7 @@ function buildProblemCardCopy(item: ExceptionItem) {
       title: '保存结果证据不完整',
       what: message,
       why: '系统没有拿到保存成功、未发布证明和保存接口回包。',
-      next: '先查看保存结果；确认真实浏览器可用后，重新创建采集箱只保存任务。',
+      next: '先查看保存结果；确认真实浏览器可用后，重新创建商品箱编辑保存任务。',
     }
   }
   if (message.includes('浏览器会话异常')) {
@@ -6114,8 +6158,8 @@ function summarizeL2Diagnostics(gate?: RegressionGate): L2DiagnosticSummary[] {
 
 function humanL2TargetLabel(target: string) {
   return ({
-    data_acquisition: '商品采集页',
-    draft_box: '采集箱',
+    data_acquisition: '已有待认领列表',
+    draft_box: '商品箱',
   } as Record<string, string>)[target] ?? target
 }
 
@@ -6134,7 +6178,7 @@ function l2DiagnosticNextAction({
     return '先在真实登录浏览器完成登录，再重新运行保存前安全检查。'
   }
   if (failedCheckKeys.includes('final_url_matches') || failedCheckKeys.includes('target_url_matches') || finalClass === 'home' || finalClass === 'other') {
-    return '检查目标页面是否跳到首页/登录页，必要时重新进入采集页或采集箱后复跑。'
+    return '检查目标页面是否跳到首页/登录页，必要时重新进入待认领列表或商品箱后复跑。'
   }
   if (reviewCandidateCount > 0) {
     return '把只读依赖候选交给人工评审；未评审前不要放行真实保存。'
@@ -6237,13 +6281,15 @@ function buildConsoleSteps(selectedTask: Task | null, logs: LogItem[]) {
 }
 
 function getBrowserFrame(workspace: DeliveryWorkspace, selectedTask: Task | null, agentConsole?: AgentConsoleSession | null, runtimeStatus?: RuntimeStatus | null) {
-  if (runtimeStatus?.realBrowser?.active) {
+  if (runtimeStatus?.realBrowser?.active || runtimeStatus?.realBrowser?.browserVisible) {
     return {
       url: runtimeStatus.realBrowser.currentUrl || agentConsole?.current_url || agentConsole?.target_url || 'https://www.dianxiaomi.com/',
       evidencePath: agentConsole?.screenshot_url ?? agentConsole?.screenshot ?? '',
       source: runtimeStatus.realBrowser.source === 'dxm_flow'
         ? '来自真实 DXM 业务浏览器会话'
-        : runtimeStatus.realBrowser.browserVisible ? '来自可见独立 Profile 浏览器会话' : '浏览器会话已创建，等待窗口可见',
+        : runtimeStatus.realBrowser.source === 'browser_agent'
+          ? '来自持久在线真实自动浏览器'
+          : runtimeStatus.realBrowser.browserVisible ? '来自可见独立 Profile 浏览器会话' : '浏览器会话已创建，等待窗口可见',
     }
   }
   if (agentConsole?.active) {
@@ -6341,13 +6387,7 @@ function getTaskDisplayKey(task: Task) {
 }
 
 export function displayTaskName(task: Pick<Task, 'name' | 'mode'>) {
-  if (task.mode === 'single_save' && task.name === LEGACY_QA_REAL_MUTATION_TASK_NAME) {
-    return '旧版单商品只保存核验任务'
-  }
-  if (task.mode === 'single_save' && task.name.toLowerCase().includes('l3 canary save-only')) {
-    return '单商品只保存核验任务'
-  }
-  return task.name
+  return humanTaskDisplayName(task)
 }
 
 function isAuxiliaryTask(task: Pick<Task, 'name' | 'mode'>) {
@@ -6376,7 +6416,7 @@ function humanTaskModeLabel(mode?: string | null) {
   const labels: Record<string, string> = {
     probe: '保存前安全检查',
     single_save: '单商品只保存',
-    claim_only: '采集认领',
+    claim_only: '待认领商品',
     batch_save: '批量保存未开放',
     dry_run: '开发自检',
   }
@@ -6415,8 +6455,8 @@ function humanGateDetail(detail?: string | null) {
   }
   if (detail.includes('data_acquisition') || detail.includes('draft_box')) {
     return detail
-      .split('data_acquisition').join('商品采集页')
-      .split('draft_box').join('采集箱页')
+      .split('data_acquisition').join('已有待认领列表')
+      .split('draft_box').join('商品箱页面')
       .split('L2').join('保存前安全检查')
       .split('L3').join('真实保存')
       .split('passed').join('通过')
@@ -6459,10 +6499,10 @@ function humanL2PrecheckError(message: string) {
 
 function humanDiagnosticNavigation(value: string) {
   return value
-    .split('data_acquisition').join('商品采集页')
-    .split('draft_box').join('采集箱页')
-    .replace(/\/web\/productCrawl\/dataAcquisition/g, '商品采集页')
-    .replace(/\/web\/smt\/smtProductList\/draft/g, '采集箱页')
+    .split('data_acquisition').join('已有待认领列表')
+    .split('draft_box').join('商品箱页面')
+    .replace(/\/web\/productCrawl\/dataAcquisition/g, '已有待认领列表')
+    .replace(/\/web\/smt\/smtProductList\/draft/g, '商品箱页面')
 }
 
 function humanFailedCheckLabel(value: string) {
@@ -6500,7 +6540,7 @@ function humanConsoleCodeLabel(code?: string | null) {
     PRECHECK_CONFIG: '启动前配置校验',
     PRECHECK_SESSION: '检查登录态',
     PRECHECK_PUBLISH_GUARD: '发布隔离检查',
-    OPEN_DRAFT_LIST: '进入采集箱',
+    OPEN_DRAFT_LIST: '进入商品箱',
     OPEN_EDIT_PAGE: '打开编辑页',
     SAVE_ONLY: '只保存',
     SAVE_GATE: '只保存',

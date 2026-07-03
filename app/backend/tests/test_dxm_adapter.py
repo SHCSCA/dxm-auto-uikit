@@ -59,6 +59,16 @@ class FakeLoginFlowWithLiveProbe(FakeLoginFlow):
         self.live_client = FakeLiveClient(logged_in=logged_in)
 
 
+class FakeBrowserAgentLoginFlow(FakeLoginFlowWithLiveProbe):
+    def __init__(self, visible_stage='login_failed', logged_in=True):
+        super().__init__(logged_in=logged_in)
+        self.visible_stage = visible_stage
+
+    def check_visible_login_state(self):
+        self.calls.append(('check_visible_login_state',))
+        return self._state(self.visible_stage)
+
+
 class FailingLiveClient:
     def __init__(self):
         self.probed = False
@@ -74,6 +84,44 @@ class FakeVisibleLoginFlow(FakeLoginFlow):
         self.live_client = FailingLiveClient()
         self._page = object()
         self._browser = object()
+
+
+class FakeWorkflowEventLoginFlow(FakeLoginFlow):
+    def __init__(self):
+        super().__init__()
+        self.listener = None
+        self.events = [{'event': 'data_acquisition_claim:target_find_start', 'human_step': '定位待认领商品'}]
+
+    def set_workflow_event_listener(self, listener):
+        self.listener = listener
+
+    def recent_workflow_events(self, limit=20):
+        self.calls.append(('recent_workflow_events', limit))
+        return self.events[-limit:]
+
+
+def test_workflow_event_listener_forwards_to_login_flow():
+    flow = FakeWorkflowEventLoginFlow()
+    adapter = DxmWorkflowAdapter(flow)
+    observed = []
+
+    adapter.set_workflow_event_listener(observed.append)
+    flow.listener({'event': 'data_acquisition_claim:target_find_start', 'human_step': '定位待认领商品'})
+    recent = adapter.recent_workflow_events()
+
+    assert observed == [{'event': 'data_acquisition_claim:target_find_start', 'human_step': '定位待认领商品'}]
+    assert recent == [{'event': 'data_acquisition_claim:target_find_start', 'human_step': '定位待认领商品'}]
+    assert flow.calls == [('recent_workflow_events', 20)]
+
+
+def test_adapter_result_includes_recent_workflow_events():
+    flow = FakeWorkflowEventLoginFlow()
+    result = DxmWorkflowAdapter(flow).check_login_state()
+
+    assert result['workflow_events'] == [
+        {'event': 'data_acquisition_claim:target_find_start', 'human_step': '定位待认领商品'}
+    ]
+    assert flow.calls == [('get_state',), ('recent_workflow_events', 240)]
 
 
 def test_check_login_state_delegates_to_login_flow_get_state():
@@ -96,6 +144,18 @@ def test_check_login_state_prefers_live_probe_when_available():
     assert result['ok'] is True
     assert result['stage'] == 'login_success'
     assert result['page_url'] == 'https://www.dianxiaomi.com/web/home'
+
+
+def test_browser_agent_check_login_state_uses_execution_browser_not_cookie_probe(monkeypatch):
+    monkeypatch.setenv('DXM_WORKFLOW_ACTION_RUNTIME', 'browser_agent')
+    flow = FakeBrowserAgentLoginFlow(visible_stage='login_failed', logged_in=True)
+
+    result = DxmWorkflowAdapter(flow).check_login_state()
+
+    assert flow.calls == [('check_visible_login_state',)]
+    assert flow.live_client.probed is False
+    assert result['ok'] is False
+    assert result['stage'] == 'login_failed'
 
 
 def test_check_login_state_live_probe_failure_blocks_workflow():
@@ -183,6 +243,27 @@ def test_open_editor_passes_note_text_for_claim_mark_targeting():
     )
 
     assert flow.calls == [('perform_draft_box_action', 'edit', 'AI认领-19-31', '崩坏3钥匙扣', 'Dang Kang', None)]
+    assert result['action'] == 'open_editor'
+
+
+def test_open_editor_passes_target_source_urls_for_existing_claimed_product():
+    flow = FakeLoginFlow()
+    source_urls = ['https://detail.1688.com/offer/1057791519266.html']
+    result = DxmWorkflowAdapter(flow).open_editor(
+        product_query='正版玩具总动员攀爬吊饰钥匙扣挂件',
+        store_name='Dang Kang',
+        note_text='AI-OPS',
+        target_source_urls=source_urls,
+    )
+
+    assert flow.calls == [(
+        'perform_draft_box_action',
+        'edit',
+        'AI-OPS',
+        '正版玩具总动员攀爬吊饰钥匙扣挂件',
+        'Dang Kang',
+        source_urls,
+    )]
     assert result['action'] == 'open_editor'
 
 
