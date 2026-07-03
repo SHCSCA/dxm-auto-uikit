@@ -400,6 +400,9 @@ function startBackend(repoRoot, port, backendInstanceId) {
       DXM_BACKEND_INSTANCE_ID: backendInstanceId,
       // Desktop mode contract: DXM_DESKTOP=1
       DXM_DESKTOP: '1',
+      DXM_WORKFLOW_ACTION_RUNTIME: 'browser_agent',
+      DXM_WORKFLOW_PROFILE_DIR: path.join(dataDir, 'browser_profiles', 'dxm_workflow'),
+      DXM_WORKFLOW_PERSISTENT_PROFILE: '1',
       PYTHONIOENCODING: 'utf-8',
       PYTHONDONTWRITEBYTECODE: '1',
     },

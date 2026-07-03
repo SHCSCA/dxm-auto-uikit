@@ -1,6 +1,9 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+const backendTarget = process.env.DXM_BACKEND_URL || `http://127.0.0.1:${process.env.DXM_BACKEND_PORT || '8000'}`
+const backendWsTarget = backendTarget.replace(/^http/, 'ws')
+
 export default defineConfig({
   base: './',
   plugins: [react()],
@@ -9,11 +12,11 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8000',
+        target: backendTarget,
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://127.0.0.1:8000',
+        target: backendWsTarget,
         ws: true,
       },
     },

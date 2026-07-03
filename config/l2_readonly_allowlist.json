@@ -249,11 +249,11 @@
       "decision": "approve",
       "method": "GET",
       "host": "s1.dianxiaomi.com",
-      "path_regex": "/dxm-web/2026-(05|06)/assets/publishDetection-[A-Za-z0-9_-]+\\.js",
+      "path_regex": "/dxm-web/20[0-9]{2}-(0[1-9]|1[0-2])/assets/publishDetection-[A-Za-z0-9_-]+\\.js",
       "resource_type": "script",
       "allowed_reasons": ["forbidden_url_keywords:publish"],
       "allow_forbidden_keywords": ["publish"],
-      "rationale": "Reviewed passive static JS chunk required by DXM SPA bootstrap. The narrow host/path/resource_type scope avoids allowing publish endpoints."
+      "rationale": "Reviewed passive date-stamped static JS chunk required by DXM SPA bootstrap. The narrow host/path/resource_type scope avoids allowing publish endpoints."
     }
   ]
 }

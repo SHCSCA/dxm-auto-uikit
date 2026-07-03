@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Deliver DXM Agent Console as a production-grade Windows desktop product for real Dianxiaomi two-stage automation: first claim real products from Data Acquisition into the collection box, then edit the verified collection-box product and save only.
+**Goal:** Deliver DXM Agent Console as a production-grade Windows desktop product for real Dianxiaomi two-stage automation: first claim products that already exist in Dianxiaomi's claimable-product list into the collection box, then edit the verified collection-box product and save only. The product does not collect or crawl new products.
 
 **Architecture:** Keep the existing Electron + React/Vite + FastAPI + SQLite + Playwright headed-browser architecture. Rebuild the product experience around the real business workflow, keep the browser visible, keep the browser HUD persistent, hide engineering diagnostics from the normal path, and enforce publish/batch/unattended actions as backend and frontend hard stops.
 
@@ -20,14 +20,15 @@
 
 - V0.9.7 production navigation is complete and pushed.
 - V0.9.8 production data model/provenance work is complete and pushed.
-- V0.9.9 source-URL claim, claimed-product handoff, operator-facing claim failure copy, and claim click-safety checks are complete in code; fresh real DXM canary evidence is still required.
+- V0.9.9 source-URL claim, claimed-product handoff, operator-facing claim failure copy, and claim click-safety checks are complete in code, but fresh real DXM canary evidence has not passed.
+- Latest real runs prove the remaining blocker is not ordinary selector polish: the real execution model must move to a persistent visible Browser Agent before Stage A can be called production-ready.
 - Current product boundary remains controlled single-product save-only.
 - The old path "choose a local/test product and save" is invalid for production.
 
 **Correct production workflow:**
 
 1. User logs in to the real Dianxiaomi browser.
-2. Stage A: Agent enters Dianxiaomi Data Acquisition and claims one real product into the collection box.
+2. Stage A: Agent opens Dianxiaomi's existing claimable-product list and claims one real product into the collection box.
 3. System verifies the same product exists in the collection box or Draft Box.
 4. Stage B: User selects that verified claimed product.
 5. User selects or confirms an edit template.
@@ -47,6 +48,31 @@
 - Hand-imported product direct save.
 - Save stage without completed claim provenance.
 
+## 0.1 Latest Real Browser Diagnosis
+
+**Date:** 2026-06-26
+
+**Real evidence checked:** AppData runtime tasks `#25` through `#37`, including workflow trace files under `C:\Users\wz\AppData\Roaming\DXM Agent Console\data\workflow_worker`.
+
+**What passed:**
+
+- Login browser can show an already logged-in Dianxiaomi home page.
+- L2 readonly checks can pass for the existing claimable-product list and Draft Box without write requests.
+- Backend task guards can block save when claim provenance is missing.
+- Failure copy can be translated away from raw `greenlet` and stack trace errors in many normal UI surfaces.
+- Focused backend tests around claim source URL matching, worker payloads, and lightweight ready checks pass.
+
+**What did not pass:**
+
+- Stage A real existing-product claim did not complete on a fresh real product.
+- Multiple selector, timeout, source URL, locator, keyboard, and CDP-level patches moved the failure point but did not make the run stable.
+- The worker often opens Dianxiaomi's claimable-product page into an incomplete or unstable state; trace evidence includes hidden first input rectangles such as `0x0` and no reliable target-row progress.
+- Per-action fresh browser/process execution makes the user experience look like a disappearing debug action rather than a stable controlled browser agent.
+
+**Current engineering conclusion:**
+
+The next version must not keep adding blind selectors. Production requires a persistent, visible Browser Agent with one stable browser context, one Playwright owner, structured Chinese progress events, and a persistent in-browser HUD. Stage A canary should resume only after that runtime exists.
+
 ## 1. Completion Definition
 
 The project is complete only when all of these are true:
@@ -55,7 +81,7 @@ The project is complete only when all of these are true:
 2. A normal operator can complete the full flow without reading technical logs.
 3. The visible browser stays open through success and failure unless the user closes it.
 4. Browser HUD stays visible and shows Chinese business progress.
-5. Stage A real canary succeeds: Data Acquisition product is claimed and verified in collection box.
+5. Stage A real canary succeeds: an existing claimable product is claimed and verified in collection box.
 6. Stage B real canary succeeds: verified product is edited and saved only.
 7. Result evidence proves `保存成功`.
 8. Result evidence proves `未发布`.
@@ -75,8 +101,8 @@ The project is complete only when all of these are true:
 | --- | --- | --- | --- |
 | 准备 | 操作首页 | Today what should I do next? | Current step, blocker, next action, latest result |
 | 准备 | 店小秘登录 | Connect real Dianxiaomi | Remembered account, open login browser, detect login |
-| 采集 | 采集认领 | Claim products from Data Acquisition | Store, source URL, keyword/category hint, claim mark, start claim |
-| 采集 | 采集箱商品 | Products already claimed | Verified claimed list, source URL, store, claim proof, editable state |
+| 认领 | 已有商品认领 | Claim existing Dianxiaomi claimable products | Store, source URL, keyword/category hint, claim mark, start claim |
+| 认领 | 采集箱商品 | Products already claimed | Verified claimed list, source URL, store, claim proof, editable state |
 | 配置 | 编辑页模板 | Edit-page filling rules | Chinese section forms, multiple templates, final value preview |
 | 配置 | 模板管理 | Maintain reusable templates | Copy, rename, bind, enable/disable, store/category defaults |
 | 保存 | 编辑保存 | Start save-only task | Select claimed product, approve save-only, start browser agent |
@@ -151,19 +177,19 @@ npm run build
 - Product without completed claim task is blocked.
 - Main UI does not show QA/test product as saveable.
 
-### V0.9.9 - Real Data Acquisition Claim Automation
+### V0.9.9 - Existing Product Claim Automation
 
-**Status:** Source-level implementation, UX handoff, and claim click-safety checks complete; pending fresh real DXM canary.
+**Status:** Source-level implementation, UX handoff, and claim click-safety checks complete; real canary blocked by browser runtime instability.
 
-**Goal:** Stage A becomes a real browser automation path.
+**Goal:** Stage A becomes a real browser automation path for existing Dianxiaomi claimable products.
 
 **User outcome:**
 
 - User enters a source URL, keyword, or category hint.
-- Agent opens real Dianxiaomi Data Acquisition.
+- Agent opens the real Dianxiaomi existing claimable-product list.
 - Agent locates one product and claims it into the collection box.
 - The browser stays visible.
-- HUD shows Chinese steps: `打开数据采集`, `搜索商品`, `定位商品`, `认领到采集箱`, `确认采集箱商品`.
+- HUD shows Chinese steps: `打开待认领列表`, `定位已有商品`, `认领到采集箱`, `确认采集箱商品`.
 - After success, user is sent to `采集箱商品`, not directly to save.
 
 **Main files:**
@@ -180,7 +206,7 @@ npm run build
 
 **Implementation tasks:**
 
-- [x] Add source URL matching to Data Acquisition claim flow.
+- [x] Add source URL matching to the existing claimable-product flow.
 - [x] Add collection-box verification after claim.
 - [x] Store source URL, store, platform, claim mark, claimed title, and verification timestamp.
 - [x] Convert claim browser failures to user-facing failure cards.
@@ -206,7 +232,125 @@ npm run build
 - No publish request.
 - Browser HUD screenshots or DOM evidence.
 
-### V0.10.0 - Edit Save From Verified Collection Product
+**Exit rule:** V0.9.9 cannot be marked production-ready until V0.9.10 persistent browser runtime is in place and a fresh Stage A canary passes.
+
+### V0.9.10 - Persistent Visible Browser Agent Runtime
+
+**Status:** Required next version.
+
+**Goal:** Replace fragile per-action browser execution with one persistent visible Browser Agent that stays online through login, existing-product claim, collection-box verification, edit-page save, failure, and manual takeover.
+
+**User outcome:**
+
+- User opens the EXE and sees one stable control console.
+- User opens one visible Dianxiaomi browser and it remains open.
+- Agent actions happen inside that visible browser or a clearly named execution browser, not in a hidden/flash-closing process.
+- The browser top-left HUD stays visible and shows Chinese task progress:
+  - `开始任务`
+  - `打开待认领列表`
+  - `定位已有商品`
+  - `认领到采集箱`
+  - `确认采集箱商品`
+  - `打开编辑页`
+  - `填写标题`
+  - `选择分类`
+  - `填写物流`
+  - `点击保存`
+  - `确认未发布`
+- On failure, browser remains open and HUD says where it stopped.
+- The main console and browser HUD show the same current step.
+
+**Architecture requirement:**
+
+- One long-lived browser worker per user session or active task.
+- One owner for the Playwright browser/page lifecycle.
+- No fresh browser subprocess per business action.
+- Backend communicates with the worker by explicit commands and receives structured events.
+- Worker emits business-level events and raw maintenance traces separately.
+- Worker supports `health`, `reset`, `manual_takeover`, `resume`, and `shutdown`.
+
+**Main files to modify or create:**
+
+- Create: `app/backend/src/execution/browser_agent_worker.py`
+- Create: `app/backend/src/execution/browser_agent_protocol.py`
+- Modify: `app/backend/src/execution/v1_runner.py`
+- Modify: `app/backend/src/execution/workflow_worker.py`
+- Modify: `app/backend/src/execution/dxm_login_flow.py`
+- Modify: `app/backend/src/main.py`
+- Modify: `app/backend/tests/test_v1_runner.py`
+- Create: `app/backend/tests/test_browser_agent_worker.py`
+- Modify: `app/backend/tests/test_login_flow.py`
+- Modify: `app/frontend/src/components/workbench/BrowserConsolePage.tsx`
+- Modify: `app/frontend/src/components/workbench/RunLogsPanel.tsx`
+- Modify: `app/frontend/src/types.ts`
+- Modify: `app/frontend/src/styles.css`
+
+**Implementation tasks:**
+
+- [ ] Write a failing backend test proving `claim_only` uses the persistent Browser Agent command path instead of spawning a fresh per-action browser process.
+- [ ] Define a small command/event protocol: `open_login`, `check_login`, `open_claimable_list`, `locate_existing_product`, `claim_product`, `verify_collection_box`, `open_edit_page`, `fill_edit_page`, `save_only`, `verify_not_published`, `manual_takeover`, `reset`.
+- [ ] Implement the worker process with a long-lived headed browser context and a single Playwright owner.
+- [ ] Persist browser session metadata in runtime status: `browserAgent.status`, `currentStep`, `visibleWindow`, `manualTakeover`, `lastEventAt`, `lastError`.
+- [ ] Make the runner execute Stage A and Stage B through Browser Agent commands.
+- [ ] Inject and reinject the in-browser HUD after navigation and reload.
+- [ ] Keep the browser open after handled failure.
+- [ ] Add console controls: `打开真实浏览器`, `运行已有商品认领`, `人工接管`, `继续执行`, `重启浏览器 Agent`.
+- [ ] Convert raw worker failures into user-facing problem cards.
+- [ ] Hide raw trace paths and run ids under maintenance diagnostics.
+
+**Acceptance commands:**
+
+```powershell
+cd D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend
+.\.venv\Scripts\python.exe -m pytest tests\test_browser_agent_worker.py tests\test_v1_runner.py tests\test_login_flow.py -q
+cd ..\frontend
+npm run build
+```
+
+**Real acceptance evidence:**
+
+- EXE or dev runtime opens a visible Dianxiaomi browser.
+- Browser remains open after login detection.
+- Running Stage A does not spawn a separate flash-closing browser.
+- Browser HUD remains visible during existing claimable-product list navigation.
+- Console recent logs show 5-10 Chinese business events, not raw technical trace lines.
+- If the run fails, the browser remains open and the UI gives a recovery action.
+
+**Exit criteria:** one real Stage A canary can run through the persistent Browser Agent and either claim an existing product with proof or fail cleanly with the browser still open, no stuck task, and no backend unusable state.
+
+### V0.10.0 - Stage A Real Claim Production Closure
+
+**Status:** Depends on V0.9.10.
+
+**Goal:** Complete real existing-product claim as a production workflow.
+
+**User outcome:**
+
+- User selects store and enters a real source URL or matching condition for an existing claimable product.
+- Agent claims one real existing product into the collection box.
+- User sees the claimed product in `采集箱商品`.
+- Save controls remain unavailable until claim proof exists.
+
+**Implementation tasks:**
+
+- [ ] Run Stage A through persistent Browser Agent.
+- [ ] Verify source URL/title/store match in collection box.
+- [ ] Save claim proof with source URL, claimed title, collection-box URL/state, timestamp, and screenshot/path evidence.
+- [ ] Add retry guidance for no result, duplicate product, wrong row, and login expired.
+- [ ] Prove no save, publish, batch, or unattended write request happened.
+
+**Acceptance commands:**
+
+```powershell
+cd D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend
+.\.venv\Scripts\python.exe -m pytest tests\test_acquisition_claim_workflow.py tests\test_v1_runner.py tests\test_login_flow.py -q
+cd ..\frontend
+npm run build
+```
+
+**Exit criteria:** one real existing product is claimed and appears as a verified claimed product available for the save stage.
+
+### V0.10.1 - Edit Save From Verified Collection Product
 
 **Status:** Save-stage provenance gate, selected-template execution defaults, runner-level save-time manual approval, save network response capture, unpublished proof capture, and operator-facing failure copy are complete in API, runner, delivery acceptance, and frontend contract coverage; remaining real save-only canary is pending.
 
@@ -275,7 +419,7 @@ npm run build
 - Unpublished proof exists.
 - Report links the same product across claim, collection verification, edit save, and result.
 
-### V0.10.1 - Production Template Center
+### V0.10.2 - Production Template Center
 
 **Goal:** Replace crowded configuration with multi-template Chinese section forms.
 
@@ -340,7 +484,7 @@ cd ..\frontend
 npm run build
 ```
 
-### V0.10.2 - Browser Agent Stability And Persistent HUD
+### V0.10.3 - Browser Agent UI Polish And Persistent HUD
 
 **Goal:** Make visible browser automation trustworthy.
 
@@ -379,7 +523,7 @@ cd ..\frontend
 npm run build
 ```
 
-### V0.10.3 - User-Facing Failure Recovery And Logs
+### V0.10.4 - User-Facing Failure Recovery And Logs
 
 **Goal:** A normal operator can recover from failures without reading raw logs.
 
@@ -422,7 +566,7 @@ cd ..\frontend
 npm run build
 ```
 
-### V0.10.4 - Portable EXE Release Candidate
+### V0.10.5 - Portable EXE Release Candidate
 
 **Goal:** Make the desktop package customer-usable.
 
@@ -473,7 +617,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-desktop-packa
 
 1. Start portable EXE.
 2. Login or reuse remembered Dianxiaomi account.
-3. Stage A: claim one real product from Data Acquisition.
+3. Stage A: claim one real existing product from Dianxiaomi's claimable-product list.
 4. Verify collection-box product.
 5. Choose template.
 6. Approve save-only.
@@ -523,7 +667,7 @@ scripts\final-delivery-check.bat -RequireCleanWorktree -CheckPortableDesktop -Ex
 
 - Single store.
 - Single product at a time.
-- Real Data Acquisition claim.
+- Real existing-product claim.
 - Real collection-box verification.
 - Real edit page fill.
 - Save only.
@@ -568,35 +712,205 @@ Add operator/reviewer split, approval records, and template ownership.
 
 Only if customer usage proves the need for team, queue, and cloud-managed operations.
 
-## 5. Execution Order
+## 5. Detailed Execution Order From Current State
 
-1. Finish V0.9.8 and push.
-2. Implement V0.9.9 claim automation.
-3. Implement V0.10.0 edit save from verified claimed product.
-4. Implement V0.10.1 template center.
-5. Implement V0.10.2 browser/HUD stability.
-6. Implement V0.10.3 recovery/logs.
-7. Implement V0.10.4 portable EXE release candidate.
-8. Run V1.0-RC full real canary.
-9. Cut V1.0 controlled production release.
+The current branch has already implemented the core source-level gates through V0.10.0. The remaining work is not "more mocked testing"; it is production proof, operator experience, packaging, and final delivery hardening.
 
-Each version must be committed separately. UI and browser changes require live browser verification. Real DXM changes require real evidence, not mocked success.
+### Phase 1 - Real Two-Stage Canary Closure
+
+**Goal:** Prove the correct business flow on real Dianxiaomi, with real browser evidence.
+
+**2026-06-25 execution status:**
+
+- AppData runtime database did not contain any real claimed product; it only contained historical QA/test product tasks and failed reports.
+- Fresh L2 dual-target readonly proof was rerun successfully for `data_acquisition` and `draft_box`; both targets passed with write, blocked, forbidden-keyword, and WebSocket counts at zero.
+- Stage A task `#10` was created from a real existing-product source URL but exposed the existing production defect: the browser action could stay `running` at `OPEN_DATA_ACQUISITION` without a user-visible result.
+- A backend fix was implemented so a hanging real browser workflow action fails the task instead of remaining permanently `running`.
+- Startup recovery was implemented so orphaned `running` or `paused` tasks from a crashed/stopped backend no longer survive as active tasks.
+- Stage A task `#11` verified the new failure behavior: it failed while opening the claimable-product list with user-facing copy, did not claim, did not save, did not publish, and did not remain running.
+- A visible recovery control was added for `reset_workflow_runtime`, exposed in `/api/runtime/status` as `workflowRuntime` and in the frontend maintenance panel as `重启真实浏览器执行器`.
+- Action-level browser logs were added for real workflow actions: `真实浏览器动作开始`, `真实浏览器动作完成`, `真实浏览器动作失败`, and `真实浏览器动作超时`.
+- Stage A task `#12` was run against the real AppData DXM session with a 90-second action timeout. It proved login success, then timed out at `OPEN_DATA_ACQUISITION`; logs showed the internal open-claimable-list action timing out at `2026-06-25T09:53:21Z`.
+- After task `#12`, `/api/runtime/status` correctly reported `workflowRuntime.status=needs_restart`; `/api/runtime/control reset_workflow_runtime` reset it back to `ready`.
+- Current Phase 1 blocker is not L2 and not data availability; it is Browser Agent execution stability inside the long-lived backend workflow executor.
+
+**2026-06-26 execution status update:**
+
+- Additional real Stage A tasks `#25` through `#37` were run after targeted backend patches.
+- The patches improved observability and moved failure points, but Stage A still did not complete.
+- Task `#25` failed at `CLAIM_TO_DRAFT_BOX`; trace ended around search-result waiting.
+- Task `#26` proved repeated full ready scans could hang after the first poll.
+- Tasks `#27` and `#28` showed claimable-list readiness waits were still unstable in a fresh worker browser.
+- Task `#29` passed the search-result wait skip but failed while locating the claim target.
+- Tasks `#30` through `#36` tried source URL locator, token, keyboard, and CDP approaches; these did not produce a stable real claim.
+- Task `#37` still failed at `CLAIM_TO_DRAFT_BOX`; trace showed the claimable-product page reported ready while the first input rectangle was `0x0`, then no reliable target-row progress occurred.
+- Focused tests passed for source URL token priority, source URL claim-target matching, search-ready wait skipping, and process-worker acquisition context.
+- This confirms the remaining defect is architectural: a fresh per-action/fresh-worker browser is not a production-stable basis for Dianxiaomi automation.
+
+**Current backend hardening completed in this phase:**
+
+- Action-level workflow timeout with operator-readable failure.
+- Browser closed/Playwright/greenlet failures mapped away from raw engineering errors.
+- Runner unhealthy state after workflow timeout.
+- Start guard blocks new real tasks when the workflow executor needs restart.
+- Runtime control can reset the real browser workflow executor without restarting the full desktop app.
+- Runtime status exposes workflow executor health so the UI can guide the user to the correct recovery action.
+- Real browser action logs now identify the exact business step that started, completed, failed, or timed out.
+- Backend startup recovery moves orphaned real tasks to manual review and cancels non-real orphaned tasks.
+
+1. Inspect current runtime data, task records, reports, and logs.
+2. Confirm whether a fresh V0.9.9 claimed product exists with source URL, store, platform, claim proof, and collection-box verification.
+3. If not, run one controlled Stage A canary: existing claimable-product list -> collection box.
+4. Confirm Stage A did not save, publish, batch, or perform unattended writes.
+5. Create Stage B only from the verified claimed product.
+6. Select an edit template and record the final execution values.
+7. Require explicit save-only approval.
+8. Run one controlled Stage B canary: collection-box/Draft Box edit page -> click only `保存`.
+9. Confirm save network response and unpublished proof.
+10. Save the canary evidence under the release evidence directory and link it from the acceptance report.
+
+**Exit criteria:** one real product can be traced from acquisition source, to claimed product, to edit page, to save-only result, with no publish or batch action.
+
+**Immediate next implementation task:** implement V0.9.10 persistent visible Browser Agent runtime. The previous acceptable option "dedicated browser worker process per real task" is no longer sufficient if it recreates the browser per action. The chosen design must keep one visible browser context alive across the full business flow and prove Stage A can open the existing claimable-product list and either claim successfully or fail without closing the browser or leaving the backend unusable.
+
+### Phase 2 - Operator Information Architecture
+
+**Goal:** Make the product understandable to a non-developer operator.
+
+1. Keep sidebar aligned to the two-stage workflow:
+   - `准备`: 操作首页, 店小秘登录
+   - `认领`: 已有商品认领, 采集箱商品
+   - `配置`: 编辑页模板, 模板管理
+   - `保存`: 编辑保存, 真实浏览器
+   - `复盘`: 保存结果, 问题与证据
+   - `系统`: 设置与日志
+2. Ensure each page has one primary user task.
+3. Move maintenance details, raw logs, run ids, paths, HAR/network terms, and internal gate language into diagnostics.
+4. Rewrite blockers as:
+   - `发生了什么`
+   - `为什么停止`
+   - `下一步点哪里`
+5. Verify the normal UI contains no `L2`, `L3`, `probe`, `run-id`, `HAR`, `greenlet`, `Internal Server Error`, stack traces, or English internal field keys.
+
+**Exit criteria:** a first-time user can tell which stage they are in, why they are blocked, and which button to press next without reading logs.
+
+### Phase 3 - Template Center Productionization
+
+**Goal:** Replace "configuration dump" with reusable customer templates.
+
+1. Support multiple named templates.
+2. Support manual task template selection.
+3. Support store default and category default templates.
+4. Show saved/unsaved state clearly.
+5. Show final execution values before save starts.
+6. Render edit-page fields as Chinese section forms:
+   - 店铺与任务基础
+   - 类目与标题
+   - SKU / 价格 / 库存
+   - 图片与素材
+   - 包装物流
+   - 合规 / 海关
+   - 半托管
+   - 店小秘引用模板
+   - 执行策略
+7. Provide three obvious actions per section:
+   - `仅本次任务使用`
+   - `保存为模板`
+   - `套用模板`
+
+**Exit criteria:** the operator knows which template is active, whether it is saved, and which values the agent will write into Dianxiaomi.
+
+### Phase 4 - Visible Browser Agent Reliability
+
+**Goal:** Make the real browser behave like a controlled agent, not a disappearing debug process.
+
+1. Keep login browser and execution browser visible.
+2. Keep browser open after handled failure.
+3. Make the browser HUD persistent in the upper-left or top-safe visible area.
+4. Reinject HUD after navigation, reload, and page transition.
+5. Show Chinese business progress in the HUD, for example:
+   - `开始任务`
+   - `打开待认领列表`
+   - `定位商品`
+   - `认领到采集箱`
+   - `打开编辑页`
+   - `填写标题`
+   - `选择分类`
+   - `填写物流`
+   - `点击保存`
+   - `确认未发布`
+6. Keep console state and browser HUD state synchronized.
+
+**Exit criteria:** while the real browser is operating, the user can see what the agent is doing, where it stopped, and when manual takeover is needed.
+
+### Phase 5 - Recovery, Logs, And Evidence
+
+**Goal:** Make failures recoverable without exposing engineering internals.
+
+1. Normalize all known backend/browser failures into operator problem cards.
+2. Keep raw logs available only under `系统 / 设置与日志` or maintenance diagnostics.
+3. Default recent logs to 5-10 high-signal business events.
+4. Fix log panel layout so entries do not overlap surrounding content.
+5. Ensure result reports say:
+   - which product was processed
+   - what stage succeeded or failed
+   - whether save happened
+   - whether publish happened
+   - what the next recovery action is
+
+**Exit criteria:** every common failure has a visible recovery route and does not require reading stack traces.
+
+### Phase 6 - Portable EXE Release Candidate
+
+**Goal:** Deliver a single no-install desktop package.
+
+1. Build the frontend.
+2. Build the portable Electron package.
+3. Copy the package to `D:\Desktop\DXM-Agent-Console-免安装版`.
+4. Verify bundled resources include backend, frontend, probe tools, and browser automation files.
+5. Verify EXE launch does not open extra backend/frontend terminal windows.
+6. Verify `file://` desktop mode is not reported as frontend failure.
+7. Verify account memory works through local encrypted storage.
+8. Verify packaged backend starts and exits cleanly.
+9. Record EXE path, size, SHA-256, Git HEAD, and build timestamp.
+
+**Exit criteria:** user can open the EXE, login, run the two-stage controlled flow, and view logs/results inside the app.
+
+### Phase 7 - V1.0 Release Acceptance
+
+**Goal:** Cut the first customer-usable controlled production release.
+
+1. Run backend focused tests.
+2. Run full frontend build.
+3. Run desktop package verification.
+4. Run one fresh real two-stage canary from the same release build.
+5. Run final delivery check.
+6. Update quick-start, recovery guide, known limitations, and final acceptance record.
+7. Merge and push only after all acceptance evidence is attached.
+
+**Exit criteria:** source, package, docs, and evidence all describe the same release and the same supported scope.
+
+Each version or phase must be committed separately. UI and browser changes require live browser verification. Real DXM changes require real evidence, not mocked success.
 
 ## 6. Current Next Action
 
-Continue V0.9.9:
+Continue with Phase 1, but do not spend another cycle on blind Stage A retries. The current evidence from tasks `#10`, `#11`, `#12`, and the later real attempts `#25` through `#37` proves the next engineering item is the persistent visible Browser Agent runtime:
 
-- Review claim-only read-only/click-safety checks before the actual claim click.
-- Run one real controlled claim canary from Data Acquisition to collection box.
-- Record the claim evidence and verify the UI moves the operator to `采集箱商品` rather than directly to save.
+1. Keep the current timeout/recovery/start-guard hardening.
+2. Implement V0.9.10: one persistent visible Browser Agent with one Playwright owner, structured Chinese step events, browser HUD reinjection, manual takeover, reset, and clean shutdown.
+3. Route `claim_only` Stage A through that Browser Agent.
+4. Re-run Stage A canary from a real existing claimable-product row only after the Browser Agent remains visible and healthy through login and claimable-list navigation.
+5. Confirm the claimed product appears in the collection box and is recorded as `dxm_data_acquisition`.
+6. Only after Stage A has real claim evidence, run the Stage B save-only canary.
+7. Update this plan and the acceptance report with exact evidence paths.
 
-After that, start V0.10.0 with subagents split as:
+Recommended subagent split for implementation continues to be:
 
-- Backend automation agent: real Data Acquisition claim and collection-box verification.
-- Backend save agent: collection-box product edit/save-only path.
-- Frontend UX agent: `编辑保存` and save result handoff.
-- Browser/HUD agent: persistent in-browser progress window.
-- Reviewer/main agent: contract tests, browser verification, and release boundary review.
+- Browser Agent agent: persistent visible browser worker, command/event protocol, health/reset/manual takeover, and HUD reinjection.
+- Backend automation agent: real existing-product claim and collection-box verification on top of the Browser Agent.
+- Backend save agent: collection-box product edit/save-only path on top of the Browser Agent.
+- Frontend UX agent: menu/page simplification, two-stage navigation, template center, and user-readable recovery.
+- Reviewer/main agent: contract tests, live browser verification, release boundary review, and final packaging evidence.
 
 ## 7. Self-Review
 

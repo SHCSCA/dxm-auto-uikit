@@ -2,9 +2,9 @@
 
 DXM 半托管自动化工作台，面向真实店小秘账号、真实浏览器和受控只保存流程。
 
-当前用户路径是：启动工作台、登录真实店小秘、先从数据采集认领商品到采集箱，再从采集箱进入编辑页，按模板补齐字段并在真实浏览器中完成“只保存不发布”的保存核验。它不是本地演示页，也不是安全诊断工具。
+当前用户路径是：启动工作台、登录真实店小秘、先在店小秘已有待认领商品列表中把目标商品放进商品箱，再从商品箱进入编辑页，按模板补齐字段并在真实浏览器中完成“只保存不发布”的保存核验。它不是商品采集器、本地演示页，也不是安全诊断工具。
 
-普通用户主流程：从“首页”查看下一步，到“店小秘登录”打开真实店小秘浏览器并登录，进入“数据采集认领”创建认领任务，进入“模板中心”按店小秘编辑页分区确认店铺默认和类目默认模板，再到“采集箱编辑保存”选择已认领商品，最后在“执行浏览器”中观察真实浏览器自动只保存。
+普通用户主流程：从“首页”查看下一步，到“账号与浏览器”打开真实店小秘浏览器并登录，进入“待认领商品”创建任务，进入“模板中心”按店小秘编辑页分区确认店铺默认和类目默认模板，再到“商品箱编辑保存”选择已进入商品箱的商品，最后在“浏览器现场”中观察真实浏览器自动只保存。
 
 当前可用范围：
 - 已验证受控单商品只保存；最终动作只保存，不发布。
@@ -26,13 +26,13 @@ D:\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console-Portable-0.1.0.exe
 outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
 ```
 
-2026-06-24 当前分支 packaged/portable smoke 已通过，文件 SHA-256：
+2026-07-04 04:14（Asia/Shanghai）当前分支 packaged/portable smoke 已通过，文件 SHA-256：
 
 ```text
-82CF223A673BB657237ACA1A586212F6F0F4FA45B125B44A9C502F565BE0934C
+83F162F579A1F45971ADDA7ABC93EB2FF206BC25FA6E0DB965872EEC5B9C0F75
 ```
 
-本轮桌面包验收记录：`docs/product/最终交付验收记录-20260623-桌面包.md`。该记录已更新为 2026-06-24 `5d16033` 新包证据，证明当前分支免安装包可启动，并包含“采集认领 -> 采集箱编辑保存”的主路径桥接、结果页两段式生产交付状态、真实浏览器 HUD 保活、测试商品阻断、模板中心默认配置主路径优化，以及新版两段式菜单与操作引导；真实店小秘“两段式端到端验收”仍需现场跑通后再标记最终生产交付。
+本轮桌面包验收记录：`docs/product/最终交付验收记录-20260623-桌面包.md`。当前 2026-07-04 `167fb6f` 工作树新包已通过 backend pytest、frontend production build、desktop production build、packaged smoke、portable smoke、browser workbench QA 和 final report center QA，证明当前分支免安装包可启动，并包含“待认领商品 -> 商品箱编辑保存”的主路径桥接、结果页两段式生产交付状态、真实浏览器 HUD 保活、测试商品阻断、模板中心默认配置主路径优化，以及新版两段式菜单与操作引导；真实店小秘“两段式端到端验收”仍需现场跑通后再标记最终生产交付。
 
 仓库内也保留同源构建产物：
 
@@ -80,7 +80,7 @@ scripts\start-mvp.bat
 3. 等启动器显示 `STARTED_OK` 后，使用自动打开的工作台页面；如果 5173 被占用，启动器会选择附近空闲端口并在日志中写出实际 URL。
 4. 进入工作台的“店小秘登录”，点击“打开真实登录页”。系统会打开可见的独立店小秘浏览器窗口，用户可直接输入验证码、查看错误并手动调整；桌面版可勾选“记住账号密码”，账号密码只做本机加密保存。
 5. 回到“模板中心”，按店小秘编辑页分区补齐：店铺与任务基础、类目与标题、SKU/价格/库存、价格策略、图片与素材、包装物流、合规/海关、半托管、店小秘引用模板。保存时可选“仅本次任务使用”或“保存为店铺模板”。
-6. 进入“数据采集认领”，选择真实店铺和商品，先把商品认领到采集箱，再到“采集箱编辑保存”选择已认领商品。
+6. 进入“待认领商品”，选择真实店铺和店小秘已有待认领商品，先把商品放进商品箱，再到“商品箱编辑保存”选择已进入商品箱的商品。
 7. 只有真实只读检查通过、配置检查通过且人工批准完成后，才能在页面内填写批准人标识并点击“申请并启动单商品只保存”。
 8. 进入“真实浏览器”观察真实浏览器会话状态、页面左上角黑色中文任务进度窗、网络响应和实时日志。真实店小秘浏览器是独立窗口；控制台默认只显示主操作和关键日志，账号密码、会话管理、高级浏览器控制、运行维护和自动操作轨迹按需展开。控制台不把本地截图渲染成实时画面，截图只作为报告证据路径保存。
 9. 任务完成后，到“结果与问题”核对保存响应、未发布证明、截图和结构化报告；如有失败或阻断，也在“结果与问题”查看原因和下一步。验收结论必须是保存成功且 `published=false`。
@@ -154,10 +154,10 @@ D:\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console-Portable-0.1.0.exe
 outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
 ```
 
-2026-06-24 当前分支 packaged/portable smoke 已通过，文件 SHA-256：
+2026-07-04 04:14（Asia/Shanghai）当前分支 packaged/portable smoke 已通过，文件 SHA-256：
 
 ```bat
-82CF223A673BB657237ACA1A586212F6F0F4FA45B125B44A9C502F565BE0934C
+83F162F579A1F45971ADDA7ABC93EB2FF206BC25FA6E0DB965872EEC5B9C0F75
 ```
 
 仓库内同源构建产物：
@@ -252,7 +252,7 @@ python3 -m pytest tests -q
 - 后端：`cd app/backend && .venv\Scripts\python.exe -m pytest -q`
 - 前端：`cd app/frontend && npm run build`
 - L1：`python tools/probes/l1_selector_replay.py --output-dir data/l1_selector_replay`
-- L2：需要真实店小秘登录态，双目标 `data_acquisition` / `draft_box` 必须使用同一个 `--run-id` 完成只读 probe，并共享同一 session fingerprint、脚本 hash 与 git head；全部通过后才允许 L3
+- L2：需要真实店小秘登录态，已有待认领列表与商品箱两个目标必须使用同一个 `--run-id` 完成保存前安全检查，并共享同一 session fingerprint、脚本 hash 与 git head；全部通过后才允许 L3。探针内部参数仍使用 `data_acquisition` / `draft_box`，这是店小秘页面适配名，不代表系统会采集或创建商品。
 - 浏览器 QA：前后端启动后运行 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\qa-browser-check.ps1`，输出 `outputs/browser-checks/qa-browser-check.json`、桌面/移动页面截图、`qa-console.jsonl`、`qa-network.json` 和 `qa-blocked-actions.json`；JSON 会记录浏览器/OS/git/script hash，并断言无 console error、无网络失败、无 4xx/5xx、无非 GET、无外部 origin，且本地启动与直接 DXM 写入端点均被 403 阻断
 
 DXM 半托管自动化工作台交付自检（推荐给验收人）：
@@ -265,11 +265,11 @@ scripts\final-delivery-check.bat
 
 当前源码包验收成功标准：`Local workbench check: PASS`、`Browser QA: PASS`、`Final report center QA: PASS`、`Source package check: PASS`，并按 L2/L3 门禁计算 `Real DXM write readiness`。当前最新归档本地工作台验收为 2026-06-22 18:14（Asia/Shanghai）：自动化工作台、桌面 portable 构建、packaged smoke、Browser QA 和最终报告中心 QA 均已通过；后端全量测试为 `678 passed`；报告内 Git HEAD 为 `4e555da7080ac1e5423d89ad86a2d290cda446c7`，本轮最终提交并推送为 `83537919cd3a3f3366caaff69032b1f01231b047`；报告目录为 `outputs\final-delivery-check`；`Source package check=NOT_REQUIRED`、`Source package readiness=DIRTY`。正式源码包交付仍必须重新运行 `-RequireCleanWorktree -CheckPortableDesktop -ExpectedRealDxmWriteReadiness READY`，并让报告 Git HEAD 与提交后的源码一致。历史 `READY` 只代表当时受控单商品只保存，不代表批量、无人值守或发布放行；当前两段式真实端到端仍需现场验收，不能把历史 READY 当永久授权。
 
-自动化或管理摘要读取 `final-delivery-check.json` 时，不能只读取 `ok`。当前 `ok: true` 只代表 `okScope` 所声明的范围通过；必须同时读取 `realDxmMutationAllowed`、`realDxmMutationScope` 与当次验收记录。若 `okScope` 为 `local_workbench_and_controlled_single_save_ready`、`realDxmMutationAllowed` 为 `true` 且 `realDxmMutationScope` 为 `controlled_single_save_only`，结论只支持保存阶段可按门禁启动；两段式生产交付还必须额外具备数据采集认领到采集箱的真实验收记录。
+自动化或管理摘要读取 `final-delivery-check.json` 时，不能只读取 `ok`。当前 `ok: true` 只代表 `okScope` 所声明的范围通过；必须同时读取 `realDxmMutationAllowed`、`realDxmMutationScope` 与当次验收记录。若 `okScope` 为 `local_workbench_and_controlled_single_save_ready`、`realDxmMutationAllowed` 为 `true` 且 `realDxmMutationScope` 为 `controlled_single_save_only`，结论只支持保存阶段可按门禁启动；两段式生产交付还必须额外具备已有待认领商品进入商品箱的真实验收记录。
 
 启动工作台后，结果与问题页会显示交付自检摘要和报告路径，方便验收人直接确认自动化工作台 PASS、真实写入门禁状态与源码包状态。
 
-开发自检入口只在 `?dev=1` 或显式启用 `VITE_DXM_ENABLE_DEMO=1` 时可用；它只创建本地 `dry_run` 自检任务，不触达 DXM，不能作为真实交付验收依据。真实用户交付路径是两段式：先执行数据采集认领，再执行采集箱编辑保存；保存阶段只在当前 L2/L3 READY、人工批准令牌和金丝雀证据链约束下放行。`batch_save`、批量无人值守和发布仍保持阻断。
+开发自检入口只在 `?dev=1` 或显式启用 `VITE_DXM_ENABLE_DEMO=1` 时可用；它只创建本地 `dry_run` 自检任务，不触达 DXM，不能作为真实交付验收依据。真实用户交付路径是两段式：先完成待认领商品处理，再执行商品箱编辑保存；保存阶段只在当前 L2/L3 READY、人工批准令牌和金丝雀证据链约束下放行。`batch_save`、批量无人值守和发布仍保持阻断。
 
 发布源码包前可加 clean worktree 门禁：
 
@@ -301,10 +301,10 @@ scripts\final-delivery-check.bat --help
 
 1. 保持 `config/l2_readonly_allowlist.json` 的最小只读范围；继续禁止写方法、WebSocket、EventSource 和 action 端点。
 2. 每次源码发布包前重新运行 `scripts\final-delivery-check.bat -RequireCleanWorktree -CheckPortableDesktop -ExpectedRealDxmWriteReadiness READY`，并核对报告 Git HEAD 与交付源码一致。
-3. 若要扩大到认领或批量保存，必须为对应范围重新建立真实只读检查、人工批准和保存/回滚证据，不复用单商品只保存结论。
+3. 当前主路径包含“待认领商品处理 -> 商品箱编辑保存”；若要扩大到批量保存或其他真实写入范围，必须为对应范围重新建立真实只读检查、人工批准和保存/回滚证据，不复用单商品只保存结论。
 4. 批量、无人值守和发布必须单独设计门禁、人工批准和回滚策略。
 
-免安装版快速使用说明见 `docs/product/免安装版快速使用说明-20260615.md`。当前本地交付记录见 `docs/product/最终交付验收记录-20260622.md`；2026-06-18 与 2026-06-17 记录保留为历史验收记录。当前源码有新改动或 L2/L3 证据过期时，交付前必须重新跑 clean worktree 验收或新鲜门禁。真实写入放行范围仅为受控 `single_save`，需要保留受控单商品只保存证据；批量、无人值守、认领和发布仍需单独证据链。
+免安装版快速使用说明见 `docs/product/免安装版快速使用说明-20260615.md`。当前本地交付记录见 `docs/product/最终交付验收记录-20260622.md`；2026-06-18 与 2026-06-17 记录保留为历史验收记录。当前源码有新改动或 L2/L3 证据过期时，交付前必须重新跑 clean worktree 验收或新鲜门禁。真实写入放行范围仅为受控 `single_save`；待认领商品处理是当前两段式主流程的第一段，批量、无人值守、发布以及扩大保存范围仍需单独证据链。
 
 ---
 

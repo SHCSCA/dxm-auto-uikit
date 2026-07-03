@@ -15,4 +15,4 @@ def test_app_lifespan_closes_visible_browser_sessions(monkeypatch):
 
     asyncio.run(run_lifespan_once())
 
-    assert calls == ['running', 'login-flow', 'agent-console']
+    assert calls == ['running', 'agent-console', 'login-flow']

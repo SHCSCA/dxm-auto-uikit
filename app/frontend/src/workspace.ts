@@ -211,8 +211,8 @@ export function buildEmptyWorkspace(): DeliveryWorkspace {
       evidenceLevel: 'C',
     }],
     safety: {
-      mode: 'probe / dry_run / claim_only / single_save / batch_save',
-      guarantee: '只保存不发布：当前仅受控 single_save 可在后端人工批准令牌下启动；claim_only/batch_save 未发布。',
+      mode: '待认领商品 / 商品箱单商品只保存',
+      guarantee: '只保存不发布：当前只开放待认领商品处理和受控单商品只保存；批量、无人值守和发布仍关闭。',
       forbiddenActions: ['发布', '继续发布', '保存并发布', '移入待发布'],
       lastCheckedAt: '等待任务数据',
     },
@@ -250,17 +250,17 @@ function buildRegressionGates(
     },
     {
       level: 'L2',
-      title: '真实登录态只读 probe',
+      title: '保存前安全检查',
       status: l2Ok ? 'mock_passed' : 'not_run',
       evidenceLevel: l2Ok ? 'B' : 'C',
       requiresApproval: true,
       command: 'tools/probes/l2_readonly_probe.py',
-      detail: l2Ok ? '仅有离线/mock L2 证据；不满足真实页面 L2 放行条件。' : '尚未运行真实 L2 只读 probe。',
+      detail: l2Ok ? '仅有离线检查证据；还不能放行真实保存。' : '尚未运行真实店小秘保存前安全检查。',
       latest: latestL2,
     },
     {
       level: 'L3',
-      title: '单商品 save-only 金丝雀',
+      title: '单商品只保存验收',
       status: hasSave && hasProof ? 'passed' : 'approval_required',
       evidenceLevel: hasSave && hasProof && hasNetwork ? 'A' : hasSave && hasProof ? 'B' : (grade?.grade ?? 'C'),
       requiresApproval: true,
@@ -275,6 +275,9 @@ function buildL2ProbePlan(): L2ProbePlan {
   const pythonCommand = 'app\\backend\\.venv\\Scripts\\python.exe'
   const scriptPath = 'tools\\probes\\l2_readonly_probe.py'
   const cookieFile = 'data\\sessions\\dianxiaomi_cookies.json'
+  const desktopCookieFile = '%APPDATA%\\DXM Agent Console\\data\\sessions\\dianxiaomi_cookies.json'
+  const desktopCookieCommand = '$desktopCookieFile = Join-Path $env:APPDATA "DXM Agent Console\\data\\sessions\\dianxiaomi_cookies.json"'
+  const cookieFileCommand = `$cookieFile = if (Test-Path $desktopCookieFile) { $desktopCookieFile } else { "${cookieFile}" }`
   const outputDir = 'data\\l2_readonly_probe'
   const allowlistFile = 'config\\l2_readonly_allowlist.json'
   const targets = [
@@ -284,17 +287,21 @@ function buildL2ProbePlan(): L2ProbePlan {
   return {
     schema: 'dxm_l2_readonly_probe_plan.v1',
     requiresApproval: true,
-    purpose: '真实店小秘采集页和采集箱只读检查；不领取、不备注、不保存、不发布。',
+    purpose: '真实店小秘已有待认领列表和商品箱只读检查；不认领、不备注、不保存、不发布。',
     runIdCommand,
     pythonCommand,
     scriptPath,
     cookieFile,
+    desktopCookieFile,
+    cookieFileCommand,
     outputDir,
     allowlistFile,
     targets,
     commands: [
       runIdCommand,
-      ...targets.map((target) => `${pythonCommand} ${scriptPath} --target ${target.id} --run-id $runId --cookie-file ${cookieFile} --output-dir ${outputDir} --allowlist-file ${allowlistFile}`),
+      desktopCookieCommand,
+      cookieFileCommand,
+      ...targets.map((target) => `${pythonCommand} ${scriptPath} --target ${target.id} --run-id $runId --cookie-file $cookieFile --output-dir ${outputDir} --allowlist-file ${allowlistFile} --headed`),
     ],
     acceptanceCriteria: [
       '两个目标必须使用同一 run-id。',
@@ -341,9 +348,9 @@ export function buildRealModeReleasePlan(): RealModeReleasePlan {
         label: '受控单商品只保存已放行',
         status: 'released_controlled',
         allowed: true,
-        release_scope: 'single product save-only canary',
+        release_scope: '受控单商品只保存验收',
         required_evidence: [
-          '采集页和采集箱真实只读检查通过',
+          '已有待认领列表和商品箱真实只读检查通过',
           '店小秘返回保存成功',
           '未发布状态证明',
           '保存成功回包和页面记录',
@@ -351,7 +358,7 @@ export function buildRealModeReleasePlan(): RealModeReleasePlan {
         required_controls: sharedControls,
         blockers: [],
         readiness_checklist: [
-          checklist('l2_dual_target', '采集页和采集箱真实只读检查通过', 'passed'),
+          checklist('l2_dual_target', '已有待认领列表和商品箱真实只读检查通过', 'passed'),
           checklist('l3_single_canary', '单商品只保存证据', 'passed'),
           checklist('published_false', '未发布状态证明', 'passed'),
           checklist('publish_guard', '发布隔离无风险信号', 'passed'),
@@ -359,28 +366,28 @@ export function buildRealModeReleasePlan(): RealModeReleasePlan {
       },
       {
         mode: 'claim_only',
-        label: '受控采集认领待后端确认',
+        label: '受控待认领商品处理待后端确认',
         status: 'blocked_stale_l2',
         allowed: false,
         release_scope: 'controlled claim to draft box',
         required_evidence: [
-          '采集页和采集箱真实只读检查通过',
-          '采集商品唯一命中证明',
-          '认领到采集箱成功证明',
+          '已有待认领列表和商品箱真实只读检查通过',
+          '待认领商品唯一命中证明',
+          '进入商品箱成功证明',
           '不打开编辑页、不触发保存请求证明',
         ],
         required_controls: [
           ...sharedControls,
-          '只认领到采集箱，不保存、不发布',
+          '只放进商品箱，不保存、不发布',
           '失败时人工接管',
         ],
         blockers: [
           '等待后端真实 L2 只读检查结果',
         ],
         readiness_checklist: [
-          checklist('l2_dual_target', '采集页和采集箱真实只读检查通过', 'missing', '等待后端真实 L2 只读检查结果'),
-          checklist('claim_target_unique', '采集商品唯一命中证明', 'missing', '等待真实认领任务生成证据'),
-          checklist('claim_to_draft', '认领到采集箱成功证明', 'missing', '等待真实认领任务生成证据'),
+          checklist('l2_dual_target', '已有待认领列表和商品箱真实只读检查通过', 'missing', '等待后端真实 L2 只读检查结果'),
+          checklist('claim_target_unique', '待认领商品唯一命中证明', 'missing', '等待真实认领任务生成证据'),
+          checklist('claim_to_draft', '进入商品箱成功证明', 'missing', '等待真实任务生成证据'),
           checklist('no_editor_or_save', '不打开编辑页、不触发保存请求证明', 'missing', '等待真实认领任务生成证据'),
         ],
       },
@@ -430,6 +437,8 @@ function normalizeL2ProbePlan(value: L2ProbePlan | undefined, fallback: L2ProbeP
     pythonCommand: stringOr(plan.pythonCommand, fallback.pythonCommand),
     scriptPath: stringOr(plan.scriptPath, fallback.scriptPath),
     cookieFile: stringOr(plan.cookieFile, fallback.cookieFile),
+    desktopCookieFile: stringOr(plan.desktopCookieFile, fallback.desktopCookieFile ?? ''),
+    cookieFileCommand: stringOr(plan.cookieFileCommand, fallback.cookieFileCommand ?? ''),
     outputDir: stringOr(plan.outputDir, fallback.outputDir),
     allowlistFile: stringOr(plan.allowlistFile, fallback.allowlistFile ?? ''),
     targets: Array.isArray(plan.targets) ? plan.targets as L2ProbePlan['targets'] : fallback.targets,
@@ -501,7 +510,7 @@ function buildEmptyTwoStageAcceptance(): TwoStageAcceptance {
     schema: 'dxm_two_stage_acceptance.v1',
     passed: false,
     status: 'no_task',
-    userMessage: '请选择真实数据采集商品，并完成采集认领到采集箱后，再执行单商品只保存。',
+    userMessage: '请选择店小秘已有待认领商品，并确认进入商品箱后，再执行单商品只保存。',
     claimTaskId: null,
     saveTaskId: null,
     claimedProductId: null,
@@ -699,7 +708,7 @@ function safetyFromGuard(
   if (!guard) return null
   const checked = guard.status === 'safe_unpublished' ? 'published=false 已确认' : guard.status
   return {
-    mode: 'single_save / batch_save / claim_only / dry_run / probe',
+    mode: '待认领商品 / 商品箱单商品只保存',
     guarantee: guard.safe
       ? '只保存不发布：发布隔离已开启，工作台没有发布动作入口。'
       : '只保存不发布：检测到发布风险信号，任务必须停止复核。',

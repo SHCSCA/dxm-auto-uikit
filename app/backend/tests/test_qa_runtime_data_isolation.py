@@ -44,7 +44,7 @@ def test_final_delivery_check_runs_browser_qa_backend_with_isolated_data_dir():
     assert "Start-BackgroundCommandWithEnvironment" in script
     backend_pytest_section = script[script.index('-Name "Backend pytest"') - 400:script.index('-Name "Frontend production build"')]
     assert "DXM_DATA_DIR" in backend_pytest_section
-    assert '-TimeoutSeconds 360' in backend_pytest_section
+    assert '-TimeoutSeconds 600' in backend_pytest_section
     qa_backend_section = script[script.index('-Name "QA backend service"') - 400:script.index('Wait-HttpReady -Name "QA backend service"')]
     assert "DXM_DATA_DIR" in qa_backend_section
     assert "pytestRuntimeDataDir" in script
@@ -226,8 +226,8 @@ def test_readme_next_steps_focus_on_allowlist_l2_l3_reverification():
     next_steps = readme[readme.index("## 下一步重点"):readme.index("## 目录结构")]
 
     assert "config/l2_readonly_allowlist.json" in next_steps
-    assert "受控单商品只保存证据" in next_steps
-    assert "认领或批量保存" in next_steps
+    assert "待认领商品处理 -> 商品箱编辑保存" in next_steps
+    assert "待认领商品处理是当前两段式主流程的第一段" in next_steps
     assert "批量、无人值守和发布" in next_steps
     assert "实现真实 `DxmAdapter`" not in next_steps
     assert "最终交付验收记录" in readme
@@ -270,7 +270,10 @@ def test_browser_qa_bootstraps_two_stage_flow_without_fake_single_save_products(
 
     assert "/api/acquisition/claim-requests" in ensure_section
     assert "/api/acquisition/claimed-products" in ensure_section
-    assert "QA two-stage acquisition claim request" in ensure_section
+    assert "Local acceptance claim request" in ensure_section
+    assert "Local acceptance draft save task" in ensure_section
+    assert "LOCAL_ACCEPTANCE" in ensure_section
+    assert "QA two-stage acquisition claim request" not in ensure_section
     assert "QA local gated single_save one product fixture" not in script
     assert "QA guarded single-save product" not in script
     assert "QA unreleased claim_only task" not in script
@@ -299,9 +302,12 @@ def test_final_delivery_check_captures_final_report_center_after_final_json_writ
     assert "finalReportCenterQaVisible" in qa_script
     assert "finalReportCenterQaDomState" in qa_script
     assert "finalReportCenterQaTextVisible" in qa_script
-    assert "hasExpectedPostFinalReportQa" in qa_script[qa_script.index("assertions: {"):qa_script.index("finalReportApiIsFinal")]
+    final_report_assertions = qa_script[qa_script.index("assertions: {"):qa_script.index("finalReportApiIsFinal")]
+    assert "finalReportCenterQaStateMatchesApi" in final_report_assertions
+    assert "hasExpectedPostFinalReportQa" in qa_script
     assert "'最终报告中心 QA '" not in qa_script
     assert "\\u6700\\u7ec8\\u62a5\\u544a\\u4e0e\\u8bc1\\u636e QA" in qa_script
+    assert "\\\\u7ef4\\\\u62a4\\\\u9a8c\\\\u6536\\\\u4fe1\\\\u606f" in qa_script
     assert "finalReportCenterScreenshotDomPath" in qa_script
     assert "expectedLockedEvidence" in qa_script
     assert "finalReportExpectedLockedEvidenceRows" in qa_script

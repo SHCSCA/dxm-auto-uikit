@@ -1,10 +1,12 @@
 # DXM Production Two Stage Version Plan Implementation Plan
 
+> **2026-07-01 范围修正:** 本项目不包含新增商品抓取。店小秘内部页面路径仍叫 `dataAcquisition`，部分真实按钮仍使用“采集箱”字样；但产品语义必须统一为“已有商品认领到商品箱”：只在店小秘已经存在的待认领商品列表中定位并认领到商品箱；不得填写产品网址，不得点击“开始采集”，不得发起新增商品采集。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 把 DXM Agent Console 交付为生产级真实店小秘两段式自动化产品：第一段从数据采集认领到采集箱，第二段从采集箱编辑商品并只保存。
+**Goal:** 把 DXM Agent Console 交付为生产级真实店小秘两段式自动化产品：第一段从店小秘已有待认领列表认领到商品箱，第二段从商品箱编辑商品并只保存。
 
-**Architecture:** 保持现有 React/Vite/Electron/FastAPI/SQLite/Playwright 架构，不重写技术栈。产品主路径按业务阶段拆分，普通用户只看到“登录、数据采集认领、采集箱商品、模板、只保存、结果”，`claim_only`、`single_save`、L2、probe、run-id、HAR、原始异常等工程概念只进入维护诊断。
+**Architecture:** 保持现有 React/Vite/Electron/FastAPI/SQLite/Playwright 架构，不重写技术栈。产品主路径按业务阶段拆分，普通用户只看到“登录、已有商品认领、商品箱商品、模板、只保存、结果”，`claim_only`、`single_save`、L2、probe、run-id、HAR、原始异常等工程概念只进入维护诊断。
 
 **Tech Stack:** React 18 + TypeScript + Vite, Electron portable desktop, FastAPI, SQLite repository, Playwright headed browser automation, pytest contract tests, PowerShell desktop package verification.
 
@@ -25,10 +27,10 @@
 
 **现在最重要的事实:**
 
-1. 正确业务逻辑不是“本地选测试商品然后保存”，而是“店小秘数据采集认领到采集箱，再从采集箱编辑保存”。
-2. 第一段页面不能出现第二段保存入口；认领完成后只能提示“去采集箱商品页选择已认领商品”。
-3. 第二段只能从真实采集箱确认商品创建保存任务，不能从 fixture、手工导入、旧失败任务、伪造 payload 启动。
-4. 认领完成必须有 `source_url`、店铺、认领标记、采集箱验证证据；缺任一关键证据不能生成可保存商品。
+1. 正确业务逻辑不是“本地选测试商品然后保存”，而是“店小秘已有商品认领到商品箱，再从商品箱编辑保存”。
+2. 第一段页面不能出现第二段保存入口；认领完成后只能提示“去商品箱商品页选择已认领商品”。
+3. 第二段只能从真实商品箱确认商品创建保存任务，不能从 fixture、手工导入、旧失败任务、伪造 payload 启动。
+4. 认领完成必须有店铺、认领标记、商品箱验证证据和内部身份校验证据；缺任一关键证据不能生成可保存商品。`source_url` 只能作为兼容旧证据的内部字段，不能作为用户输入项。
 5. 浏览器必须显式常开，HUD 必须常驻显示中文业务进度，失败时保留现场并允许人工接管。
 6. 模板中心必须是可维护的多套中文模板系统，不是写死配置或英文 key 表单。
 
@@ -40,9 +42,9 @@
 2. 打开真实店小秘浏览器。
 3. 本机加密记住店小秘账号密码。
 4. 用户人工处理验证码、登录异常和必要确认。
-5. 第一段：在真实店小秘数据采集页定位商品并认领到采集箱。
-6. 第一段完成后：记录真实 claimed product、来源链接、店铺、认领标记、采集箱确认。
-7. 第二段：从已确认的采集箱商品创建单商品只保存任务。
+5. 第一段：在真实店小秘已有待认领列表定位商品并认领到商品箱。
+6. 第一段完成后：记录真实 claimed product、店铺、认领标记、商品箱确认和内部身份校验证据。
+7. 第二段：从已确认的商品箱商品创建单商品只保存任务。
 8. 模板中心：按店小秘编辑页分区填写，支持多套模板和执行取值预览。
 9. 真实浏览器 Agent 填写编辑页字段，只点击“保存”。
 10. 结果页展示保存成功和未发布证明。
@@ -56,7 +58,7 @@
 5. 无人值守写入。
 6. 测试商品冒充真实商品。
 7. 手工导入商品直接启动真实保存。
-8. 未完成采集箱确认就进入第二段。
+8. 未完成商品箱确认就进入第二段。
 9. 失败任务复用为成功证据。
 
 ### 1.3 完成判定
@@ -67,8 +69,8 @@
 2. 主窗口首屏只显示当前步骤、能不能继续、为什么阻断、下一步按钮。
 3. 店小秘真实浏览器显式打开，并且 Agent 失败时不闪退。
 4. 浏览器左上角 HUD 常驻，中文显示实时动作。
-5. 第一段真实跑通：数据采集认领到采集箱。
-6. 第二段真实跑通：采集箱编辑商品并只保存。
+5. 第一段真实跑通：已有商品认领到商品箱。
+6. 第二段真实跑通：商品箱编辑商品并只保存。
 7. 保存成功证据存在。
 8. 未发布证明存在。
 9. 模板中心支持多套模板、中文分区、保存状态、执行取值预览。
@@ -87,8 +89,8 @@
 | --- | --- | --- | --- |
 | 准备 | 首页 | 今天先做什么 | 当前步骤、阻断原因、下一步按钮、最近结果 |
 | 准备 | 店小秘登录 | 连接真实店小秘 | 账号密码、记住账号、打开登录页、检测登录状态 |
-| 第一段：采集认领 | 数据采集认领 | 把数据采集商品放进采集箱 | 店铺平台、来源链接、关键词、类目、认领标记、启动认领 |
-| 第一段：采集认领 | 采集箱商品 | 管理已认领商品 | 已认领列表、来源链接、采集箱标题、可保存状态 |
+| 第一段：已有商品认领 | 已有商品认领 | 把已有待认领商品放进商品箱 | 店铺平台、关键词、类目、认领标记、启动认领 |
+| 第一段：已有商品认领 | 采集箱商品 | 管理已认领商品 | 已认领列表、商品箱标题、认领标记、可保存状态 |
 | 第二段：编辑保存 | 模板中心 | 管理填写规则 | 多模板、中文分区表单、默认模板、执行取值预览 |
 | 第二段：编辑保存 | 只保存任务 | 启动编辑保存 | 选择已认领商品、人工确认、启动保存、安全边界 |
 | 现场执行 | 真实浏览器 | 看 Agent 操作现场 | 浏览器状态、HUD、人工接管、重试 |
@@ -124,7 +126,7 @@
 
 - QA/browser 脚本不再把测试 single_save 当作生产路径。
 - 侧边栏和首屏开始转向两段式业务语言。
-- 当前分支已有“数据采集认领”和“采集箱编辑保存”的用户路径雏形。
+- 当前分支已有“已有商品认领”和“采集箱编辑保存”的用户路径雏形。
 
 **剩余风险:**
 
@@ -134,15 +136,15 @@
 
 ### V0.9.3 当前优先版：第一段证据可信修复
 
-**目标:** 第一段“数据采集认领”成为可信生产入口，不再产生弱证据或跨阶段误导。
+**目标:** 第一段“已有商品认领”成为可信生产入口，不再产生弱证据或跨阶段误导。
 
 **必须完成:**
 
-1. `AcquisitionClaimRequest` 增加 `source_url`。
-2. 来源链接、关键词、类目三者至少一个可作为商品线索。
+1. `AcquisitionClaimRequest` 不对普通用户暴露 `source_url`。
+2. 关键词、类目、认领标记至少一个可作为已有待认领商品线索。
 3. 创建认领请求时不创建本地商品。
-4. `claim_only` 执行完成时必须记录 `source_url`。
-5. 缺 `source_url`、缺 claimed product、缺 draft box verification 时，认领任务失败且不能生成可保存商品。
+4. `claim_only` 执行完成时必须记录商品箱身份校验证据。
+5. 缺 claimed product、缺商品箱验证或缺内部身份校验证据时，认领任务失败且不能生成可保存商品。
 6. 第一段 UI 删除“进入采集箱编辑保存”按钮。
 7. 第一段完成后只显示“去采集箱商品页选择已认领商品”。
 
@@ -163,8 +165,8 @@
 
 1. 打开免安装 EXE。
 2. 店小秘登录成功。
-3. 在“数据采集认领”输入来源链接、关键词或类目。
-4. Agent 打开真实数据采集页。
+3. 在“已有商品认领”输入关键词、类目或认领标记。
+4. Agent 打开真实已有待认领列表。
 5. Agent 定位商品并认领到采集箱。
 6. 系统打开采集箱确认同一个商品。
 7. 用户进入“采集箱商品”选择已认领商品。
@@ -176,9 +178,9 @@
 
 **验收标准:**
 
-- 真实店小秘完成一次 `数据采集认领 -> 采集箱确认`。
+- 真实店小秘完成一次 `已有商品认领 -> 采集箱确认`。
 - 真实店小秘完成一次 `采集箱编辑 -> 只保存 -> 未发布证明`。
-- 报告能关联同一商品的 `source_url`、claim result、draft box row、save result。
+- 报告能关联同一商品的认领结果、商品箱行、保存结果和内部身份校验证据。
 - 任何发布按钮、发布接口、保存并发布入口都会停止。
 
 **完成度目标:** 81% -> 88%。
@@ -259,7 +261,7 @@
 
 - 准备打开店小秘。
 - 检查登录状态。
-- 打开数据采集。
+- 打开已有待认领列表。
 - 搜索商品。
 - 定位目标商品。
 - 认领到采集箱。
@@ -298,7 +300,7 @@
 - 未登录。
 - 验证码未处理。
 - 未选择真实商品。
-- 来源链接无法匹配。
+- 商品箱身份校验无法确认。
 - 找不到商品。
 - 多个商品匹配。
 - 认领失败。
@@ -343,159 +345,43 @@
 
 ## 4. 实施任务
 
-### Task 1: V0.9.3 第一段来源链接和证据硬化
+### Task 1: V0.9.3 第一段商品箱身份证据硬化
+
+**2026-07-02 修正:** 之前的“增加来源链接输入 / 来源链接必填”方案已经废弃。用户不应填写来源链接，系统也不应把来源链接当作普通操作字段。`source_url` 只作为兼容历史证据的内部字段存在；当前产品入口只允许关键词、类目、认领标记等已有待认领商品线索。
 
 **Files:**
 
-- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\models.py`
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\main.py`
-- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\repository.py`
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\execution\v1_runner.py`
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\execution\dxm_adapter.py`
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\src\execution\dxm_login_flow.py`
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\tests\test_acquisition_claim_workflow.py`
 - Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend\tests\test_v1_runner.py`
+- Modify: `D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\frontend\src\components\workbench\AcquisitionClaimPage.tsx`
 
-- [ ] **Step 1: 写来源链接输入测试**
+- [x] **Step 1: 禁止来源链接作为用户输入**
+  - `AcquisitionClaimPage.tsx` 不显示来源链接输入框。
+  - `/api/acquisition/claim-requests` 不接受只靠 `source_url` 创建认领任务。
+  - 缺少关键词、类目和认领标记时，提示用户选择店小秘已有待认领商品线索。
 
-Add to `app/backend/tests/test_acquisition_claim_workflow.py`:
+- [x] **Step 2: 保留内部身份校验能力**
+  - 后端可继续读取历史 payload 或 DXM 页面中已有的 source URL 作为内部辅助证据。
+  - 该证据不得出现在普通用户主路径、菜单、配置表单或创建任务表单中。
 
-```python
-def test_acquisition_claim_request_accepts_source_url_hint(tmp_path, monkeypatch):
-    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
-    store = repo.create_store("Dang Kang", "AliExpress")
+- [x] **Step 3: 认领完成记录必须强制证据完整**
+  - 缺 claimed product、缺商品箱验证、缺内部身份校验证据时，任务失败且不能生成可保存商品。
+  - 面向用户的错误应描述为“商品箱身份校验证据不足”，不要求用户补填来源链接。
 
-    response = client.post(
-        "/api/acquisition/claim-requests",
-        json={
-            "store_id": store["id"],
-            "keyword": "",
-            "category_name": "",
-            "source_url": "https://detail.1688.com/offer/1013604102950.html",
-            "claim_mark": "AI-OPS",
-            "template_id": None,
-        },
-    )
+- [x] **Step 4: DXM 浏览器动作不点击采集入口**
+  - Agent 只等待店小秘已有待认领列表加载完成。
+  - Agent 不填写产品网址，不点击“开始采集”，不创建新的来源商品。
+  - 待认领列表 60 秒内仍不可认领时，停止并提示用户确认列表里已有目标商品。
 
-    assert response.status_code == 200
-    data = response.json()
-    assert data["source_url"] == "https://detail.1688.com/offer/1013604102950.html"
-    assert data["task_id"] > 0
-    assert repo.list_products(include_fixtures=True) == []
-```
-
-- [ ] **Step 2: 写缺来源链接失败测试**
-
-Add to `app/backend/tests/test_v1_runner.py`:
-
-```python
-def test_claim_only_does_not_record_claimed_product_without_source_url(v1_db):
-    repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel",
-        "category_name": "立牌类谷子",
-        "claim_mark": "AI-OPS",
-        "template_id": None,
-    })
-
-    class MissingSourceUrlAdapter(FakeWorkflowAdapter):
-        def _record(self, action, *args):
-            result = super()._record(action, *args)
-            if action == "verify_draft_box_claim":
-                result["evidence"]["claimed_product"].pop("source_url", None)
-            return result
-
-    asyncio.run(V1TaskRunner(repo, DummyManager(), workflow_adapter=MissingSourceUrlAdapter()).run_task(task["id"]))
-
-    assert repo.get_task(task["id"])["status"] == "failed"
-    assert repo.list_claimed_draft_products() == []
-```
-
-- [ ] **Step 3: 实现 `source_url` 模型字段**
-
-In `app/backend/src/models.py`:
-
-```python
-class AcquisitionClaimRequest(BaseModel):
-    store_id: int
-    keyword: str | None = None
-    category_name: str | None = None
-    source_url: str | None = None
-    claim_mark: str
-    template_id: int | None = None
-```
-
-- [ ] **Step 4: 规范化认领请求**
-
-In `app/backend/src/main.py`, normalize source URL:
-
-```python
-source_url = str(payload.source_url or "").strip()
-if not keyword and not category_name and not source_url:
-    raise HTTPException(status_code=400, detail="请填写来源链接、搜索关键词或认领类目，用于定位真实采集商品")
-data["source_url"] = source_url or None
-```
-
-- [ ] **Step 5: 仓储保存来源链接**
-
-In `app/backend/src/repository.py`, include:
-
-```python
-"source_url": data.get("source_url"),
-```
-
-in the acquisition claim task payload and response.
-
-- [ ] **Step 6: runner 传递来源链接**
-
-In `app/backend/src/execution/v1_runner.py`, add:
-
-```python
-def _acquisition_source_urls(self, task: Mapping[str, Any]) -> list[str]:
-    payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
-    values = [payload.get("source_url"), payload.get("url")]
-    source_urls = payload.get("source_urls")
-    if isinstance(source_urls, (list, tuple)):
-        values.extend(source_urls)
-    return [str(value).strip() for value in values if isinstance(value, str) and value.strip()]
-```
-
-Then pass `target_source_urls=self._acquisition_source_urls(task)` to both `claim_from_data_acquisition` and `verify_draft_box_claim`.
-
-- [ ] **Step 7: 认领完成记录必须强制证据完整**
-
-Before `repo.create_product(...)` in `_record_claimed_product_from_acquisition`:
-
-```python
-if not isinstance(claimed, Mapping) or not claimed:
-    raise V1ExecutionError("E202", "采集箱确认失败", "缺少采集箱商品证据，未记录可保存商品")
-source_url = claimed.get("source_url") or evidence.get("source_url") or payload.get("source_url")
-if not isinstance(source_url, str) or not source_url.strip():
-    raise V1ExecutionError("E202", "采集箱确认失败", "缺少来源链接，不能证明采集箱商品来自本次数据采集认领")
-```
-
-- [ ] **Step 8: DXM 浏览器动作支持来源链接匹配**
-
-In `dxm_adapter.py` and `dxm_login_flow.py`, add `target_source_urls` to `claim_from_data_acquisition` and `verify_draft_box_claim`; in `_find_data_acquisition_claim_target`, match row source links first when URL hint exists.
-
-- [ ] **Step 9: 验证**
-
-Run:
+- [x] **Step 5: 验证**
 
 ```powershell
 cd D:\Desktop\py\dxm-auto-uikit\.worktrees\dxm-production-two-stage\app\backend
-.\.venv\Scripts\python.exe -m pytest tests\test_acquisition_claim_workflow.py tests\test_v1_runner.py -q
-```
-
-Expected: all selected tests pass.
-
-- [ ] **Step 10: 提交**
-
-```powershell
-git add app/backend/src app/backend/tests
-git commit -m "feat: harden acquisition claim evidence"
+.\.venv\Scripts\python.exe -m pytest tests\test_acquisition_claim_workflow.py tests\test_v1_runner.py tests\test_login_flow.py -q
 ```
 
 ### Task 2: V0.9.3 第一段 UI 去除保存入口
@@ -514,7 +400,7 @@ Add to `app/backend/tests/test_frontend_demo_workflow_contract.py`:
 ```python
 def test_acquisition_claim_page_does_not_offer_save_stage_entry():
     source = ACQUISITION_CLAIM_PAGE_TSX.read_text(encoding="utf-8")
-    assert "从店小秘数据采集认领到采集箱" in source
+    assert "从店小秘已有商品认领到采集箱" in source
     assert "不会进入编辑页" in source
     assert "不会保存" in source
     assert "不会发布" in source
@@ -522,32 +408,29 @@ def test_acquisition_claim_page_does_not_offer_save_stage_entry():
     assert "进入采集箱编辑保存" not in source
 ```
 
-- [ ] **Step 2: 增加来源链接输入**
+- [x] **Step 2: 保持已有商品线索输入**
 
 In `AcquisitionClaimPage.tsx`:
 
 ```tsx
-const [sourceUrl, setSourceUrl] = useState('')
-const hasProductHint = Boolean(keyword.trim() || categoryName.trim() || sourceUrl.trim())
+const hasProductHint = Boolean(keyword.trim() || categoryName.trim() || claimMark.trim())
 ```
 
-Add field:
+Do not add a source-link field. The visible fields are:
 
-```tsx
-<label>
-  <span>来源链接</span>
-  <input value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="1688、Temu 或其他采集来源链接" disabled={busy} />
-</label>
-```
+- 店铺。
+- 商品关键词。
+- 商品类目。
+- 认领标记。
+- 后续模板。
 
-- [ ] **Step 3: submit 传递来源链接**
+- [x] **Step 3: submit 不传递来源链接**
 
 ```tsx
 onCreateClaimRequest({
   storeId: selectedStore.id,
   keyword: keyword.trim() || undefined,
   categoryName: categoryName.trim() || undefined,
-  sourceUrl: sourceUrl.trim() || undefined,
   claimMark: claimMark.trim(),
   templateId: templateId ? Number(templateId) : null,
 })
@@ -577,7 +460,6 @@ export type AcquisitionClaimCreateRequest = {
   storeId: number
   keyword?: string
   categoryName?: string
-  sourceUrl?: string
   claimMark: string
   templateId?: number | null
 }
@@ -619,11 +501,11 @@ git commit -m "feat: keep acquisition claim UI in first stage"
 Add to `test_acquisition_claim_workflow.py`:
 
 ```python
-def test_claimed_products_requires_source_url_and_draft_box_verification(tmp_path, monkeypatch):
+def test_claimed_products_requires_identity_and_draft_box_verification(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     store = repo.create_store("Dang Kang", "AliExpress")
     valid = repo.create_product({
-        "title": "真实采集商品 A",
+        "title": "真实待认领商品 A",
         "source": "dxm_data_acquisition",
         "status": "claimed_to_draft",
         "category_name": "立牌类谷子",
@@ -635,13 +517,13 @@ def test_claimed_products_requires_source_url_and_draft_box_verification(tmp_pat
             "source": "dxm_data_acquisition",
             "store_id": store["id"],
             "store_name": "Dang Kang",
-            "source_url": "https://detail.1688.com/offer/1013604102950.html",
+            "claim_identity": "draft-box-row-42",
             "claim_task_id": 42,
             "draft_box_verified": True,
         },
     })
     repo.create_product({
-        "title": "缺来源链接商品",
+        "title": "缺商品箱身份商品",
         "source": "dxm_data_acquisition",
         "status": "claimed_to_draft",
         "category_name": "立牌类谷子",
@@ -658,13 +540,13 @@ def test_claimed_products_requires_source_url_and_draft_box_verification(tmp_pat
     assert [item["id"] for item in response.json()] == [valid["id"]]
 ```
 
-- [ ] **Step 2: 后端过滤必须要求 source_url**
+- [ ] **Step 2: 后端过滤必须要求商品箱身份校验证据**
 
 In `Repository.list_claimed_draft_products()`:
 
 ```python
-source_url = self._first_source_url(payload)
-if not source_url:
+identity = self._claimed_product_identity(payload)
+if not identity:
     continue
 ```
 
@@ -681,7 +563,7 @@ Each item must show:
 
 - 店铺。
 - 商品标题。
-- 来源链接。
+- 商品箱身份校验证据。
 - 认领标记。
 - 采集箱验证状态。
 - 创建只保存任务按钮。
@@ -728,7 +610,7 @@ def test_single_save_report_keeps_claim_source_and_unpublished_proof(v1_db):
     repo = Repository()
     store = repo.create_store("Dang Kang", "AliExpress")
     claimed = repo.create_product({
-        "title": "真实采集商品 A",
+        "title": "真实待认领商品 A",
         "source": "dxm_data_acquisition",
         "status": "claimed_to_draft",
         "category_name": "立牌类谷子",
@@ -738,7 +620,7 @@ def test_single_save_report_keeps_claim_source_and_unpublished_proof(v1_db):
         "image_count": 1,
         "payload": {
             "source": "dxm_data_acquisition",
-            "source_url": "https://detail.1688.com/offer/1013604102950.html",
+            "claim_identity": "draft-box-row-42",
             "draft_box_verified": True,
             "claim_mark": "AI-OPS",
         },
@@ -758,7 +640,7 @@ def test_single_save_report_keeps_claim_source_and_unpublished_proof(v1_db):
     assert repo.get_task(task["id"])["status"] == "completed"
     report = repo.list_reports(task["id"])[0]
     assert report["published"] is False
-    assert report["summary"]["claimed_product_source_url"] == "https://detail.1688.com/offer/1013604102950.html"
+    assert report["summary"]["claimed_product_identity"] == "draft-box-row-42"
 ```
 
 - [ ] **Step 2: 保存入口继续要求人工批准**
@@ -780,7 +662,7 @@ If DXM page contains publish actions or network publish URLs, fail with customer
 - 保存状态。
 - 是否发布。
 - 商品。
-- 来源链接。
+- 商品箱身份校验证据。
 - 使用模板。
 - 保存时间。
 - 下一步建议。
@@ -947,7 +829,7 @@ In `browser_agent_status.py`:
 
 ```python
 STEP_COPY = {
-    "OPEN_DATA_ACQUISITION": ("正在打开数据采集", "进入店小秘数据采集页"),
+    "OPEN_DATA_ACQUISITION": ("正在打开已有待认领列表", "进入店小秘已有待认领列表"),
     "CLAIM_TO_DRAFT_BOX": ("正在认领商品", "把当前商品认领到采集箱"),
     "VERIFY_DRAFT_BOX_CLAIM": ("正在确认采集箱", "检查商品是否已进入采集箱"),
     "OPEN_EDITOR": ("正在打开编辑页", "进入采集箱商品编辑页"),
@@ -1130,7 +1012,7 @@ Manual acceptance:
 ```text
 1. 打开免安装 EXE。
 2. 确认店小秘账号自动填充或可手动登录。
-3. 在“数据采集认领”输入真实来源链接、关键词或类目。
+3. 在“已有商品认领”输入关键词、类目或认领标记。
 4. 真实浏览器完成认领到采集箱。
 5. 在“采集箱商品”选择已认领商品。
 6. 在“模板中心”确认模板和最终执行取值。
@@ -1212,7 +1094,7 @@ npm run build:portable
 
 ## 6. 执行顺序
 
-1. V0.9.3 Task 1：第一段来源链接和证据硬化。
+1. V0.9.3 Task 1：第一段商品箱身份证据硬化。
 2. V0.9.3 Task 2：第一段 UI 去除保存入口。
 3. V1.0 Task 3：采集箱商品页和第二段入口。
 4. V1.0 Task 4：真实只保存执行闭环。

@@ -158,6 +158,27 @@ def test_single_save_template_overrides_satisfy_required_save_fields():
     assert result["missing"] == []
 
 
+def test_single_save_accepts_flat_image_strategy_from_default_template():
+    service = ConfigValidationService()
+    templates = _required_templates()
+    for template in templates:
+        if template["template_type"] == "image":
+            image_payload = template["payload"]["image"]
+            template["payload"]["marketing_images_strategy"] = image_payload.pop("marketing_images_strategy")
+
+    result = service.validate_task(
+        {
+            "mode": "single_save",
+            "store_id": 1001,
+            "payload": {"product_ids": [501], "publish": False},
+        },
+        templates,
+    )
+
+    assert result["ok"] is True
+    assert "image.marketing_images_strategy" not in result["missing"]
+
+
 def test_single_save_ignores_templates_bound_to_other_store():
     service = ConfigValidationService()
     templates = [

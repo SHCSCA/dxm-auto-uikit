@@ -386,7 +386,7 @@ def test_agent_console_hud_extends_old_payload_with_chinese_defaults(tmp_path, m
     hud = status["hud"]
     assert hud["title"] == "正在只保存"
     assert hud["state"] == "SAVE_ONLY"
-    assert hud["phase"] == "第二段：采集箱编辑保存"
+    assert hud["phase"] == "第二段：商品箱编辑保存"
     assert hud["severity"] == "running"
     assert hud["line1"] == "只点击保存，不发布"
     assert hud["human_title"] == "正在只保存"
@@ -501,7 +501,7 @@ def test_agent_console_hud_maps_required_user_actions_to_business_copy(tmp_path,
     assert takeover["requires_user_action"] is True
     assert takeover["severity"] == "warning"
     assert takeover["human_title"] == "需要你接管真实浏览器"
-    assert takeover["human_next"] == "处理完成后在控制台交还 Agent"
+    assert takeover["human_next"] == "处理完成后在控制台交还自动浏览器"
 
 
 def test_agent_console_records_bounded_action_events(tmp_path, monkeypatch):

@@ -1,8 +1,10 @@
 # DXM Production Two-Stage Workflow Implementation Plan
 
+> **2026-07-02 状态:** 本计划为历史归档，已被 `2026-06-25-dxm-production-two-stage-version-plan.md` 取代。旧文中的 `采集认领`、`采集箱/草稿箱`、`开始采集认领` 不是当前用户界面或交付口径；当前主路径是 `待认领商品 -> 商品箱商品 -> 商品箱编辑保存`，系统不采集商品、不填写产品网址、不点击“开始采集”。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Convert DXM Agent Console from a local task/test-data flow into a production-grade two-stage real Dianxiaomi workflow: first claim real products from Data Acquisition into Draft Box, then edit the Draft Box product and save only.
+**Goal:** Historical version of the two-stage plan. The current product goal is: first move existing Dianxiaomi pending-claim products into the product box, then edit the product-box item and save only.
 
 **Architecture:** Keep the current React/Vite/Electron/FastAPI/Playwright stack. Add an explicit acquisition stage before the existing draft-box edit/save stage, move QA/demo data behind development diagnostics, and rebuild configuration as multi-template Chinese section forms. The user-facing app must expose business steps, while technical gates, selectors, run ids, and QA fixtures stay in maintenance-only diagnostics.
 

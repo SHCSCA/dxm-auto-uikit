@@ -1,9 +1,50 @@
 export function humanOperatorTitle(message: string, fallback: string) {
+  const sanitized = sanitizeLegacyDxmUserText(message)
   const safe = humanOperatorMessage(message)
-  return safe === message && !looksTechnicalOperatorMessage(message) ? message : fallback
+  return safe === sanitized && !looksTechnicalOperatorMessage(message) ? safe : fallback
+}
+
+type OperatorTaskLike = {
+  name?: string | null
+  mode?: string | null
+  payload?: Record<string, unknown> | null
+  total_jobs?: number | null
+}
+
+const LEGACY_QA_REAL_MUTATION_TASK_NAME = ['QA guarded', 'real mutation task'].join(' ')
+
+export function humanTaskDisplayName(task: OperatorTaskLike) {
+  const mode = String(task.mode || '')
+  const rawName = sanitizeLegacyDxmUserText(String(task.name || '')).trim()
+  const payload = task.payload && typeof task.payload === 'object' ? task.payload : {}
+  const payloadHint = firstTextValue(
+    payload.claimed_product_title,
+    payload.product_title,
+    payload.product_name,
+    payload.title,
+    payload.keyword,
+    payload.category_name,
+  )
+  if (mode === 'single_save' && rawName === LEGACY_QA_REAL_MUTATION_TASK_NAME) {
+    return '旧版单商品只保存核验任务'
+  }
+  if (mode === 'single_save' && rawName.toLowerCase().includes('l3 canary save-only')) {
+    return '单商品只保存核验任务'
+  }
+  if (mode === 'claim_only') {
+    return `待认领商品 - ${payloadHint || cleanTaskNameFallback(rawName) || '待认领商品'}`
+  }
+  if (hasMojibake(rawName) && mode === 'single_save') {
+    return `商品箱编辑保存 - ${payloadHint || '当前商品'}`
+  }
+  if (hasMojibake(rawName)) {
+    return payloadHint || humanTaskModeName(mode) || '当前任务'
+  }
+  return rawName || payloadHint || humanTaskModeName(mode) || '当前任务'
 }
 
 export function humanOperatorMessage(message: string) {
+  const sanitized = sanitizeLegacyDxmUserText(message)
   const normalized = message.toLowerCase()
   if (
     message.includes('Cannot switch to a different thread')
@@ -40,7 +81,7 @@ export function humanOperatorMessage(message: string) {
     || normalized.includes('run-id')
     || normalized.includes('run binding')
   ) {
-    return '检查记录没有对齐：请重新运行保存前安全检查，让商品采集页和采集箱页使用同一轮检查记录。'
+    return '检查记录没有对齐：请重新运行保存前安全检查，让已有待认领列表和商品箱页面使用同一轮检查记录。'
   }
   if (
     message.includes('save_result')
@@ -61,7 +102,49 @@ export function humanOperatorMessage(message: string) {
   if (looksTechnicalOperatorMessage(message)) {
     return '当前步骤被系统保护性阻断：请按页面提示处理后重试；真实保存不会启动或发布。'
   }
-  return message
+  return sanitized
+}
+
+export function sanitizeLegacyDxmUserText(message: string) {
+  return String(message)
+    .replace(/真实数据采集/g, '店小秘已有待认领商品')
+    .replace(/数据采集认领/g, '待认领商品')
+    .replace(/商品采集页/g, '已有待认领列表')
+    .replace(/数据采集页/g, '已有待认领列表')
+    .replace(/进入采集页/g, '进入待认领列表')
+    .replace(/重新进入采集页/g, '重新进入待认领列表')
+    .replace(/商品采集/g, '待认领商品')
+    .replace(/采集产品/g, '认领已有商品')
+    .replace(/采集箱编辑保存/g, '商品箱编辑保存')
+    .replace(/采集箱商品/g, '商品箱商品')
+    .replace(/进入采集箱/g, '进入商品箱')
+    .replace(/采集页/g, '待认领列表')
+}
+
+function firstTextValue(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
+function cleanTaskNameFallback(name: string) {
+  if (!name || hasMojibake(name)) return ''
+  return name.replace(/^(已有数据认领|已有商品认领|待认领商品)\s*-\s*/, '').trim()
+}
+
+function hasMojibake(value: string) {
+  return value.includes('\uFFFD') || value.includes('Ã') || value.includes('Â')
+}
+
+function humanTaskModeName(mode: string) {
+  return ({
+    claim_only: '待认领商品',
+    single_save: '商品箱编辑保存',
+    batch_save: '批量保存未开放',
+    probe: '保存前安全检查',
+    dry_run: '开发自检',
+  } as Record<string, string>)[mode] ?? ''
 }
 
 export function looksTechnicalOperatorMessage(message: string) {

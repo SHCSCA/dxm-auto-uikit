@@ -33,6 +33,7 @@ L2_PROBE_DIR = ROOT / "data" / "l2_readonly_probe"
 L2_PROBE_SCRIPT = "tools\\probes\\l2_readonly_probe.py"
 L2_PROBE_PYTHON = "app\\backend\\.venv\\Scripts\\python.exe"
 L2_PROBE_COOKIE_FILE = "data\\sessions\\dianxiaomi_cookies.json"
+L2_PROBE_DESKTOP_COOKIE_FILE = "%APPDATA%\\DXM Agent Console\\data\\sessions\\dianxiaomi_cookies.json"
 L2_PROBE_OUTPUT_DIR = "data\\l2_readonly_probe"
 L2_PROBE_ALLOWLIST_FILE = "config\\l2_readonly_allowlist.json"
 REQUIRED_L2_TARGETS = ("data_acquisition", "draft_box")
@@ -179,7 +180,7 @@ def _empty_delivery_workspace(
                 "title": "还没有可执行任务",
                 "severity": "blocker",
                 "owner": "task_selection",
-                "detail": "请先在“数据采集认领”或“采集箱编辑保存”中创建任务；没有任务时不会启动真实保存。",
+                "detail": "请先在“待认领商品”或“商品箱编辑保存”中创建任务；没有任务时不会启动真实保存。",
                 "evidenceLevel": "C",
             }
         ],
@@ -196,10 +197,14 @@ def _empty_delivery_workspace(
 
 _FIXTURE_TASK_MARKERS = (
     "qa guarded",
+    "qa two-stage",
+    "qa_two_stage",
     "fixture",
     "测试商品",
     "示例商品",
     "本地演示",
+    "/offer/test-",
+    "offer/test-",
 )
 
 
@@ -208,8 +213,6 @@ def _visible_operator_tasks(repo: Repository, tasks: list[dict[str, Any]]) -> li
 
 
 def _is_legacy_fixture_single_save_task(repo: Repository, task: Mapping[str, Any]) -> bool:
-    if task.get("mode") != "single_save":
-        return False
     payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
     if _looks_like_fixture_text(task.get("name")) or _looks_like_fixture_text(payload):
         return True
@@ -347,26 +350,25 @@ def _real_mode_release_plan(
         }
 
     shared_controls = [
-        "fresh same-run L2 data_acquisition and draft_box proof",
+        "fresh same-run L2 existing-claim-list and draft-box proof",
         "server-side manual approval token",
         "task runner evidence chain only; direct mutation endpoint remains forbidden",
         "publish guard must prove no publish, continue publish, save-and-publish, or move-to-publish action",
     ]
     l2_status = str((l2_gate or {}).get("status") or "")
     l2_passed = l2_status == "passed"
-    readiness_ready = bool(delivery_readiness and delivery_readiness.get("ready") is True)
     claim_only_currently_allowed = l2_passed
-    single_save_currently_allowed = l2_passed and readiness_ready
+    single_save_currently_allowed = l2_passed
     claim_only_status = "released_controlled" if claim_only_currently_allowed else "blocked_stale_l2"
     single_save_status = "released_controlled" if single_save_currently_allowed else "blocked_stale_l2"
     claim_only_blockers = [] if claim_only_currently_allowed else [
-        str((l2_gate or {}).get("detail") or "fresh same-run L2 data_acquisition and draft_box proof is required before real claim_only can start")
+        str((l2_gate or {}).get("detail") or "fresh same-run L2 existing-claim-list and draft-box proof is required before real claim_only can start")
     ]
     single_save_blockers = [] if single_save_currently_allowed else [
-        str((l2_gate or {}).get("detail") or "fresh same-run L2 data_acquisition and draft_box proof is required before real single_save can start")
+        str((l2_gate or {}).get("detail") or "fresh same-run L2 existing-claim-list and draft-box proof is required before real single_save can start")
     ]
     l2_check_status = "passed" if l2_passed else "blocked"
-    l2_check_blocker = None if l2_passed else "fresh L2 dual-target readonly proof is missing or stale"
+    l2_check_blocker = None if l2_passed else "fresh L2 existing-claim-list and draft-box readonly proof is missing or stale"
     return {
         "schema": "dxm_real_mode_release_plan.v1",
         "scope": "controlled_claim_and_single_save",
@@ -375,12 +377,12 @@ def _real_mode_release_plan(
         "modes": [
             {
                 "mode": "single_save",
-                "label": "受控 single_save",
+                "label": "受控单商品只保存",
                 "status": single_save_status,
                 "allowed": single_save_currently_allowed,
                 "release_scope": "single product save-only canary",
                 "required_evidence": [
-                    "L2 dual-target readonly proof",
+                    "L2 existing-claim-list and draft-box readonly proof",
                     "L3 save_result code=0",
                     "published=false proof",
                     "save and unpublished screenshots or paths",
@@ -389,7 +391,7 @@ def _real_mode_release_plan(
                 "required_controls": shared_controls,
                 "blockers": single_save_blockers,
                 "readiness_checklist": [
-                    checklist("l2_dual_target", "L2 dual-target readonly proof", status=l2_check_status, evidence_source="L2 gate", blocker=l2_check_blocker),
+                    checklist("l2_dual_target", "已有待认领列表和商品箱只读检查", status=l2_check_status, evidence_source="L2 gate", blocker=l2_check_blocker),
                     checklist("l3_single_canary", "historical single_save canary save evidence", status="passed", evidence_source="L3 task 70"),
                     checklist("published_false", "published=false proof", status="passed", evidence_source="report summary"),
                     checklist("publish_guard", "publish guard clean", status="passed", evidence_source="delivery workspace aggregation"),
@@ -397,25 +399,25 @@ def _real_mode_release_plan(
             },
             {
                 "mode": "claim_only",
-                "label": "受控 claim_only",
+                "label": "受控待认领商品处理",
                 "status": claim_only_status,
                 "allowed": claim_only_currently_allowed,
                 "release_scope": "controlled claim to draft box",
                 "required_evidence": [
-                    "L2 dual-target readonly proof",
-                    "unique acquisition product proof",
+                    "L2 existing-claim-list and draft-box readonly proof",
+                    "unique existing claimable product proof",
                     "claim to draft box proof",
                     "no editor open and no save request proof",
                 ],
                 "required_controls": [
-                    "fresh same-run L2 data_acquisition and draft_box proof",
+                    "fresh same-run L2 existing-claim-list and draft-box proof",
                     "task runner evidence chain only; direct mutation endpoint remains forbidden",
                     "claim_only must not open editor, save, publish, or move to pending publish",
                     "manual recovery path for wrong target claim",
                 ],
                 "blockers": claim_only_blockers,
                 "readiness_checklist": [
-                    checklist("l2_dual_target", "L2 dual-target readonly proof", status=l2_check_status, evidence_source="L2 gate", blocker=l2_check_blocker),
+                    checklist("l2_dual_target", "已有待认领列表和商品箱只读检查", status=l2_check_status, evidence_source="L2 gate", blocker=l2_check_blocker),
                     checklist(
                         "claim_ownership_proof",
                         "Claim ownership proof",
@@ -781,7 +783,7 @@ def _regression_gates(
         },
         {
             "level": "L2",
-            "title": "真实登录态只读 probe",
+            "title": "保存前安全检查",
             "status": l2_gate["status"],
             "evidenceLevel": l2_gate["evidenceLevel"],
             "requiresApproval": True,
@@ -803,21 +805,27 @@ def _regression_gates(
 
 def _l2_probe_plan() -> dict[str, Any]:
     run_id_command = '$runId = "l2-real-" + (Get-Date -Format "yyyyMMddTHHmmssZ")'
+    desktop_cookie_command = '$desktopCookieFile = Join-Path $env:APPDATA "DXM Agent Console\\data\\sessions\\dianxiaomi_cookies.json"'
+    cookie_file_command = f'$cookieFile = if (Test-Path $desktopCookieFile) {{ $desktopCookieFile }} else {{ "{L2_PROBE_COOKIE_FILE}" }}'
     commands = [
         run_id_command,
+        desktop_cookie_command,
+        cookie_file_command,
         *[
-            f"{L2_PROBE_PYTHON} {L2_PROBE_SCRIPT} --target {target} --run-id $runId --cookie-file {L2_PROBE_COOKIE_FILE} --output-dir {L2_PROBE_OUTPUT_DIR} --allowlist-file {L2_PROBE_ALLOWLIST_FILE} --headed"
+            f"{L2_PROBE_PYTHON} {L2_PROBE_SCRIPT} --target {target} --run-id $runId --cookie-file $cookieFile --output-dir {L2_PROBE_OUTPUT_DIR} --allowlist-file {L2_PROBE_ALLOWLIST_FILE} --headed"
             for target in REQUIRED_L2_TARGETS
         ],
     ]
     return {
         "schema": "dxm_l2_readonly_probe_plan.v1",
         "requiresApproval": True,
-        "purpose": "真实店小秘双目标 L2 页面核验；不领取、不备注、不保存、不发布。",
+        "purpose": "真实店小秘已有待认领列表和商品箱保存前安全检查；不认领、不备注、不保存、不发布。",
         "runIdCommand": run_id_command,
         "pythonCommand": L2_PROBE_PYTHON,
         "scriptPath": L2_PROBE_SCRIPT,
         "cookieFile": L2_PROBE_COOKIE_FILE,
+        "desktopCookieFile": L2_PROBE_DESKTOP_COOKIE_FILE,
+        "cookieFileCommand": cookie_file_command,
         "outputDir": L2_PROBE_OUTPUT_DIR,
         "allowlistFile": L2_PROBE_ALLOWLIST_FILE,
         "targets": [
@@ -839,8 +847,8 @@ def _l2_probe_plan() -> dict[str, Any]:
             "目标 URL 与最终 URL 必须停留在对应真实店小秘目标路径，且不得疑似登录页。",
         ],
         "safetyNotes": [
-            "运行前必须由操作者明确批准真实 L2 只读探测。",
-            "L2 只读探测失败或只产生 mock 证据时不自动放行 L3。",
+            "运行前必须由操作者明确批准真实保存前安全检查。",
+            "保存前安全检查失败或只产生 mock 证据时不自动放行真实保存。",
             "该计划只生成诊断证据，不授权 claim_only、single_save 或 batch_save 真实写入。",
         ],
     }
@@ -918,7 +926,7 @@ def _empty_two_stage_acceptance() -> dict[str, Any]:
         "schema": "dxm_two_stage_acceptance.v1",
         "passed": False,
         "status": "no_task",
-        "user_message": "请选择真实数据采集商品，并完成采集认领到采集箱后，再执行单商品只保存。",
+        "user_message": "请选择店小秘已有待认领商品，并确认进入商品箱后，再执行单商品只保存。",
         "claim_task_id": None,
         "save_task_id": None,
         "claimed_product_id": None,
@@ -1022,16 +1030,16 @@ def _two_stage_acceptance(
 
     if not missing_codes:
         status = "passed"
-        user_message = "真实两段式已完成：商品已从数据采集认领到采集箱，并完成单商品只保存且未发布。"
+        user_message = "真实两段式已完成：商品已从待认领商品进入商品箱，并完成单商品只保存且未发布。"
     elif any(code in missing_codes for code in ("claim_task_id", "claim_task", "claim_completed", "claim_product_match")):
         status = "missing_claim_stage"
-        user_message = "还没有完整的数据采集认领证据。请先从店小秘数据采集认领真实商品到采集箱，再创建单商品只保存任务。"
+        user_message = "还没有完整的待认领商品处理证据。请先从店小秘已有待认领列表把真实商品放进商品箱，再创建单商品只保存任务。"
     elif any(code in missing_codes for code in ("claimed_product", "claimed_product_source", "draft_box_verified", "single_save_linked_to_claim")):
         status = "missing_draft_box_stage"
-        user_message = "采集箱商品链路不完整。请确认本次保存任务选择的是刚认领进入采集箱的真实商品。"
+        user_message = "商品箱商品链路不完整。请确认本次保存任务选择的是刚进入商品箱的真实商品。"
     elif "save_success" in missing_codes:
         status = "missing_save_stage"
-        user_message = "采集箱编辑保存还没有成功证据。请启动单商品只保存，并等待保存成功。"
+        user_message = "商品箱编辑保存还没有成功证据。请启动单商品只保存，并等待保存成功。"
     elif "unpublished_proof" in missing_codes or "publish_guard_safe" in missing_codes:
         status = "missing_unpublished_proof"
         user_message = "保存后还缺少未发布证明，或检测到发布风险。请确认只保存成功且商品没有发布。"
@@ -1244,7 +1252,7 @@ def _l2_probe_gate(now: datetime | None = None) -> dict[str, Any]:
         return {
             "status": "passed",
             "evidenceLevel": "A",
-            "detail": "data_acquisition 与 draft_box 真实 L2 只读 probe 均通过，且写入、拦截、禁词、WebSocket 计数全为 0。",
+            "detail": "已有待认领列表与商品箱保存前安全检查均通过，且写入、拦截、禁词、WebSocket 计数全为 0。",
             "latest": latest,
         }
 

@@ -32,175 +32,175 @@ STEP_COPY: dict[str, dict[str, Any]] = {
         "progress_index": 1,
     },
     "OPEN_DATA_ACQUISITION": {
-        "phase": "第一段：数据采集认领",
-        "title": "正在打开数据采集",
-        "line1": "进入店小秘数据采集页",
-        "next": "把当前商品认领到采集箱",
+        "phase": "第一段：待认领商品",
+        "title": "正在打开待认领商品列表",
+        "line1": "进入店小秘已有待认领列表",
+        "next": "把已有待认领商品放进商品箱",
         "progress_index": 2,
     },
     "CLAIM_TO_DRAFT_BOX": {
-        "phase": "第一段：数据采集认领",
-        "title": "正在认领商品",
-        "line1": "把当前商品认领到采集箱",
-        "next": "检查商品是否已进入采集箱",
+        "phase": "第一段：待认领商品",
+        "title": "正在认领已有商品",
+        "line1": "把已有待认领商品认领到商品箱",
+        "next": "检查商品是否已进入商品箱",
         "progress_index": 3,
     },
     "VERIFY_DRAFT_BOX_CLAIM": {
-        "phase": "第一段：数据采集认领",
-        "title": "正在确认采集箱",
-        "line1": "检查商品是否已进入采集箱",
-        "next": "选择该采集箱商品继续编辑保存",
+        "phase": "第一段：待认领商品",
+        "title": "正在确认商品箱",
+        "line1": "检查商品是否已进入商品箱",
+        "next": "选择该商品箱商品继续编辑保存",
         "progress_index": 3,
     },
     "OPEN_DRAFT_LIST": {
-        "phase": "第二段：采集箱编辑保存",
-        "title": "正在打开采集箱",
-        "line1": "进入店小秘采集箱",
+        "phase": "第二段：商品箱编辑保存",
+        "title": "正在打开商品箱",
+        "line1": "进入店小秘商品箱",
         "next": "定位本次商品",
         "progress_index": 2,
     },
     "FIND_PRODUCT": {
-        "phase": "第二段：采集箱编辑保存",
+        "phase": "第二段：商品箱编辑保存",
         "title": "正在定位商品",
         "line1": "查找本次要编辑保存的商品",
         "next": "打开商品编辑页",
         "progress_index": 3,
     },
     "ITEM_LOCKING": {
-        "phase": "第二段：采集箱编辑保存",
+        "phase": "第二段：商品箱编辑保存",
         "title": "正在锁定商品",
         "line1": "确认本次只处理当前商品",
         "next": "打开商品编辑页",
         "progress_index": 3,
     },
     "CLAIM_PRODUCT": {
-        "phase": "第二段：采集箱编辑保存",
+        "phase": "第二段：商品箱编辑保存",
         "title": "正在标记商品",
         "line1": "写入本次任务识别标记",
         "next": "确认商品匹配",
         "progress_index": 3,
     },
     "VERIFY_LIST_OWNERSHIP": {
-        "phase": "第二段：采集箱编辑保存",
+        "phase": "第二段：商品箱编辑保存",
         "title": "正在确认商品",
-        "line1": "确认采集箱里的商品就是本次任务商品",
+        "line1": "确认商品箱里的商品就是本次任务商品",
         "next": "打开商品编辑页",
         "progress_index": 3,
     },
     "OPEN_EDIT_PAGE": {
-        "phase": "第二段：采集箱编辑保存",
+        "phase": "第二段：商品箱编辑保存",
         "title": "正在打开编辑页",
-        "line1": "进入采集箱商品编辑页",
+        "line1": "进入商品编辑页",
         "next": "填写标题和基础信息",
         "progress_index": 4,
     },
     "VERIFY_EDIT_OWNERSHIP": {
-        "phase": "第二段：采集箱编辑保存",
+        "phase": "第二段：商品箱编辑保存",
         "title": "正在确认编辑页",
         "line1": "确认当前编辑页属于本次商品",
         "next": "填写标题和基础信息",
         "progress_index": 4,
     },
     "FILL_BASE_INFO": {
-        "phase": "第二段：采集箱编辑保存",
+        "phase": "第二段：商品箱编辑保存",
         "title": "正在编辑商品",
         "line1": "正在填写标题",
         "next": "继续填写价格、图片和物流信息",
         "progress_index": 5,
     },
     "SELECT_CATEGORY": {
-        "phase": "第二段：采集箱编辑保存",
+        "phase": "第二段：商品箱编辑保存",
         "title": "正在选择分类",
         "line1": "确认商品分类和属性",
         "next": "填写价格库存",
         "progress_index": 6,
     },
     "FILL_VARIANTS": {
-        "phase": "第二段：采集箱编辑保存",
+        "phase": "第二段：商品箱编辑保存",
         "title": "正在编辑商品",
         "line1": "正在填写价格、库存和 SKU",
         "next": "处理图片素材",
         "progress_index": 7,
     },
     "FILL_MEDIA": {
-        "phase": "第二段：采集箱编辑保存",
+        "phase": "第二段：商品箱编辑保存",
         "title": "正在编辑商品",
         "line1": "正在处理图片",
         "next": "填写包装、物流和合规信息",
         "progress_index": 8,
     },
     "FILL_COMPLIANCE": {
-        "phase": "第二段：采集箱编辑保存",
+        "phase": "第二段：商品箱编辑保存",
         "title": "正在完善资料",
         "line1": "正在填写合规和海关信息",
         "next": "设置半托管信息",
         "progress_index": 9,
     },
     "ENABLE_SEMI_MANAGED": {
-        "phase": "第二段：采集箱编辑保存",
+        "phase": "第二段：商品箱编辑保存",
         "title": "正在设置半托管",
         "line1": "选择半托管服务，不触碰发布入口",
         "next": "填写包装物流信息",
         "progress_index": 9,
     },
     "OPEN_SEMI_MANAGED_PAGE": {
-        "phase": "第二段：采集箱编辑保存",
+        "phase": "第二段：商品箱编辑保存",
         "title": "正在设置半托管",
         "line1": "进入半托管编辑页",
         "next": "填写包装物流信息",
         "progress_index": 9,
     },
     "FILL_SEMI_GOODS": {
-        "phase": "第二段：采集箱编辑保存",
+        "phase": "第二段：商品箱编辑保存",
         "title": "正在设置包装物流",
         "line1": "填写重量、尺寸和物流信息",
         "next": "填写半托管 SKU 信息",
         "progress_index": 9,
     },
     "FILL_SEMI_VARIANTS": {
-        "phase": "第二段：采集箱编辑保存",
+        "phase": "第二段：商品箱编辑保存",
         "title": "正在设置包装物流",
         "line1": "填写半托管 SKU、价格和库存",
         "next": "保存前检查",
         "progress_index": 9,
     },
     "PRE_SAVE_GUARD_CHECK": {
-        "phase": "第二段：采集箱编辑保存",
+        "phase": "第二段：商品箱编辑保存",
         "title": "正在保存前检查",
         "line1": "确认页面不会触发发布",
         "next": "只点击保存",
         "progress_index": 9,
     },
     "SAVE_ONLY": {
-        "phase": "第二段：采集箱编辑保存",
+        "phase": "第二段：商品箱编辑保存",
         "title": "正在只保存",
         "line1": "只点击保存，不发布",
         "next": "确认商品没有发布",
         "progress_index": 10,
     },
     "VERIFY_SAVE_RESULT": {
-        "phase": "第二段：采集箱编辑保存",
+        "phase": "第二段：商品箱编辑保存",
         "title": "正在确认保存",
         "line1": "读取店小秘保存成功提示",
         "next": "确认商品没有发布",
         "progress_index": 10,
     },
     "VERIFY_NOT_PUBLISHED": {
-        "phase": "第二段：采集箱编辑保存",
+        "phase": "第二段：商品箱编辑保存",
         "title": "正在检查结果",
         "line1": "确认商品没有发布",
         "next": "查看保存结果和未发布证明",
         "progress_index": 11,
     },
     "WRITE_REPORT": {
-        "phase": "第二段：采集箱编辑保存",
+        "phase": "第二段：商品箱编辑保存",
         "title": "正在生成结果",
         "line1": "记录保存结果和未发布证明",
         "next": "任务完成",
         "progress_index": 12,
     },
     "RELEASE_LOCK": {
-        "phase": "第二段：采集箱编辑保存",
+        "phase": "第二段：商品箱编辑保存",
         "title": "任务完成",
         "line1": "保存完成并确认未发布",
         "next": "真实浏览器保持打开，查看结果报告",
@@ -241,7 +241,7 @@ USER_ACTION_COPY = {
         "phase": "人工接管中",
         "title": "需要你接管真实浏览器",
         "line1": "请在真实浏览器里检查或修正当前页面",
-        "next": "处理完成后在控制台交还 Agent",
+        "next": "处理完成后在控制台交还自动浏览器",
         "severity": "warning",
     },
 }
@@ -261,6 +261,9 @@ def build_browser_hud(payload: Mapping[str, Any] | None = None) -> dict[str, Any
             "line1": "请按控制台提示处理后重试",
             "next": "查看问题处理",
         }
+    override = _status_copy_override(step, status, payload)
+    if override:
+        copy = {**copy, **override}
 
     title = str(payload.get("title") or payload.get("human_title") or copy["title"])
     line1 = str(payload.get("line1") or payload.get("human_action") or copy["line1"])
@@ -303,6 +306,18 @@ def _severity(status: str, unknown: bool) -> str:
     if status == "success":
         return "success"
     return "info"
+
+
+def _status_copy_override(step: str, status: str, payload: Mapping[str, Any]) -> dict[str, Any] | None:
+    if step == "PRECHECK_SESSION" and status in ERROR_STATUSES:
+        error = str(payload.get("error") or "").strip()
+        return {
+            "phase": "等待登录",
+            "title": "需要登录店小秘",
+            "line1": error or "执行浏览器还没有登录店小秘",
+            "next": "在真实浏览器完成登录后重新检测",
+        }
+    return None
 
 
 def _default_line2(payload: Mapping[str, Any]) -> str:

@@ -106,10 +106,10 @@ export function DxmAccessPage({
           <small>登录浏览器只用于人工登录和验证码处理；浏览器现场只在配置、保存前安全检查和人工确认通过后由 Agent 操控。</small>
           <div className="dxm-access-status-card__actions">
             <button className="button button--quiet" type="button" onClick={() => onNavigateDxmTarget('draft_box')} disabled={!dxmLoggedIn || busy}>
-              进入采集箱
+              进入商品箱
             </button>
             <button className="button button--quiet" type="button" onClick={() => onNavigateDxmTarget('data_acquisition')} disabled={!dxmLoggedIn || busy}>
-              进入采集页
+              进入待认领列表
             </button>
             <button className="button button--quiet" type="button" onClick={onShowConsole}>
               查看登录日志
@@ -290,7 +290,7 @@ function humanDxmLoginState(runtimeStatus?: RuntimeStatus | null, runtimeStatusE
       tone: 'ok',
       label: status === 'workflow_navigation' ? 'DXM 已进入业务页' : 'DXM 已登录',
       detail: currentUrl ? `真实浏览器停留位置：${currentUrl}` : '真实店小秘登录态已可用。',
-      next: '下一步：进入采集箱或运行保存前安全检查。',
+      next: '下一步：进入待认领列表、商品箱，或运行保存前安全检查。',
     }
   }
   if (status === 'waiting_captcha') {
