@@ -1554,18 +1554,50 @@ class DxmLoginFlow:
         if last.get('has_collect_form') and not last.get('claim_count'):
             reason_parts.append('当前停留在店小秘新建来源商品输入区，系统不会填写链接或创建新来源商品')
         reason = '，'.join(reason_parts) or '页面未达到可操作状态'
+        diagnostic = self._data_acquisition_claim_timeout_diagnostic(last)
         self._trace_workflow_event(
             'wait_ready:timeout',
             label='已有待认领列表',
             result=last,
             reason=reason,
+            diagnostic=diagnostic,
             human_step='已有待认领列表还不能操作',
         )
+        diagnostic_text = f'{diagnostic}。' if diagnostic else ''
         raise RuntimeError(
             f'已有待认领列表 {timeout // 1000} 秒内仍不可认领：{reason}。'
+            f'{diagnostic_text}'
             '系统不会填写链接、不会点击开始采集、不会创建新来源商品；'
             '请确认待认领列表里已经显示目标商品后重试。'
         )
+
+    def _data_acquisition_claim_timeout_diagnostic(self, state: dict[str, Any]) -> str:
+        details: list[str] = []
+        current_url = str(state.get('url') or '').strip()
+        if current_url:
+            details.append(f'当前地址 {current_url[:180]}')
+        loading_items = state.get('loading_items')
+        if isinstance(loading_items, list) and loading_items:
+            markers: list[str] = []
+            for item in loading_items[:3]:
+                if not isinstance(item, dict):
+                    continue
+                selector = str(item.get('selector') or '').strip()
+                text = str(item.get('text') or '').replace('\n', ' ').strip()
+                marker = selector or 'loading'
+                if text:
+                    marker = f'{marker}={text[:60]}'
+                markers.append(marker)
+            if markers:
+                details.append('加载标记 ' + ' / '.join(markers))
+        elif str(state.get('loading_text') or '').strip():
+            details.append('加载提示 ' + str(state.get('loading_text') or '').strip()[:120])
+        probe_error = str(state.get('probe_error') or '').strip()
+        if probe_error:
+            details.append('页面检查异常 ' + probe_error[:160])
+        if int(state.get('claim_count') or 0) <= 0:
+            details.append('未检测到认领按钮')
+        return '；'.join(details)
 
     def _is_playwright_target_closed_error(self, exc: Exception) -> bool:
         text = str(exc).casefold()
@@ -10208,6 +10240,7 @@ class DxmLoginFlow:
             port=port,
             profile_dir=str(profile_dir),
             executable_path=executable_path,
+            has_no_sandbox_arg=any(str(arg).strip().lower() == '--no-sandbox' for arg in args),
             human_step='启动真实浏览器',
         )
         process = subprocess.Popen(command, **popen_kwargs)

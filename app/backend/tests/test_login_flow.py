@@ -2427,6 +2427,8 @@ def test_ensure_page_uses_persistent_context_for_visible_browser_profile(monkeyp
     assert starter.playwright.chromium.endpoint.startswith('http://127.0.0.1:')
     assert any(str(arg).startswith('--remote-debugging-port=') for arg in launched['command'])
     assert f'--user-data-dir={profile_dir.resolve()}' in launched['command']
+    start_event = next(event for event in flow.recent_workflow_events() if event['event'] == 'ensure_page:external_cdp_chrome_start')
+    assert start_event['has_no_sandbox_arg'] is False
 
 
 def test_ensure_page_detaches_browser_session_created_on_another_thread(monkeypatch, tmp_path):
@@ -5633,8 +5635,14 @@ def test_visible_data_acquisition_claim_ready_blocks_when_page_still_loading(mon
             'ready_term': None,
             'loading': True,
             'loading_count': 1,
+            'loading_items': [{
+                'selector': '.vxe-loading',
+                'text': 'LOADING',
+                'rect': {'x': 940, 'y': 550, 'w': 280, 'h': 180},
+            }],
             'rows': 0,
             'inputs': 1,
+            'claim_count': 0,
             'first_input_rect': {'x': 20, 'y': 40, 'w': 500, 'h': 100},
             'start_collect_rect': {'x': 700, 'y': 220, 'w': 120, 'h': 36},
             'text_excerpt': '数据采集 来源链接输入框 开始采集',
@@ -5645,8 +5653,12 @@ def test_visible_data_acquisition_claim_ready_blocks_when_page_still_loading(mon
         },
     )
 
-    with pytest.raises(RuntimeError, match='60 秒内仍不可认领：页面仍在加载'):
+    with pytest.raises(RuntimeError, match='加载标记 .vxe-loading=LOADING'):
         flow._wait_for_data_acquisition_ready_for_claim(FakePage())
+    timeout_event = flow.recent_workflow_events()[-1]
+    assert timeout_event['event'] == 'wait_ready:timeout'
+    assert '加载标记 .vxe-loading=LOADING' in timeout_event['diagnostic']
+    assert '当前地址 https://www.dianxiaomi.com/web/productCrawl/dataAcquisition' in timeout_event['diagnostic']
 
 
 def test_visible_data_acquisition_claim_ready_ignores_ambient_loading_when_claim_action_visible(monkeypatch, tmp_path):
