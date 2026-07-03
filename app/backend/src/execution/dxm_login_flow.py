@@ -2234,9 +2234,6 @@ class DxmLoginFlow:
             '.el-loading-mask',
             '.ant-spin-spinning',
             '.ant-spin',
-            '.loading',
-            '[class*="loading"]',
-            '[class*="Loading"]',
         )
         visible_items: list[dict[str, Any]] = []
         for selector in selectors:

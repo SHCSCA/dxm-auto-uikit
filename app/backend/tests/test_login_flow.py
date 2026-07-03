@@ -5834,6 +5834,44 @@ def test_data_acquisition_ready_requires_existing_claim_action_not_collect_form(
     assert ready['start_collect_rect'] is None
 
 
+def test_data_acquisition_ready_ignores_non_blocking_lazy_loading_class(tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={'width': 1280, 'height': 800})
+        page.route(
+            'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition',
+            lambda route: route.fulfill(
+                body='''
+                <html>
+                  <body>
+                    <table>
+                      <tr class="vxe-body--row">
+                        <td><div class="image-loading" style="display:block;width:70px;height:70px">图片加载</div></td>
+                        <td>真实待认领商品</td>
+                        <td><button style="display:block;width:90px;height:32px">认领</button></td>
+                      </tr>
+                    </table>
+                  </body>
+                </html>
+                ''',
+                content_type='text/html; charset=utf-8',
+            ),
+        )
+        page.goto('https://www.dianxiaomi.com/web/productCrawl/dataAcquisition', wait_until='domcontentloaded')
+
+        state = flow._inspect_data_acquisition_ready_state(page, ['数据采集'])
+        browser.close()
+
+    assert state['ready'] is True
+    assert state['ready_term'] == 'existing_claim_action_ready'
+    assert state['claim_count'] == 1
+    assert state['loading'] is False
+    assert state['loading_count'] == 0
+
+
 def test_data_acquisition_ready_probe_uses_bounded_runtime_not_unbounded_evaluate(monkeypatch, tmp_path):
     live_client = DummyLiveClient(logged_in=True)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
