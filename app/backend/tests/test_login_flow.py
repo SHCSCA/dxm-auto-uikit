@@ -3522,6 +3522,42 @@ def test_window_position_match_score_supports_secondary_monitor(tmp_path):
     assert score >= 100
 
 
+def test_window_restore_check_accepts_left_secondary_monitor(tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+
+    needs_restore = flow._window_needs_restore_to_primary_screen(
+        {'left': -1920, 'top': 80, 'width': 1600, 'height': 950},
+        virtual_screen={'left': -1920, 'top': 0, 'width': 3840, 'height': 1080},
+    )
+
+    assert needs_restore is False
+
+
+def test_window_restore_check_moves_window_outside_virtual_desktop(tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+
+    needs_restore = flow._window_needs_restore_to_primary_screen(
+        {'left': -5000, 'top': 80, 'width': 1600, 'height': 950},
+        virtual_screen={'left': -1920, 'top': 0, 'width': 3840, 'height': 1080},
+    )
+
+    assert needs_restore is True
+
+
+def test_window_restore_check_treats_tiny_window_as_not_operable(tmp_path):
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+
+    needs_restore = flow._window_needs_restore_to_primary_screen(
+        {'left': -1200, 'top': 80, 'width': 220, 'height': 160},
+        virtual_screen={'left': -1920, 'top': 0, 'width': 3840, 'height': 1080},
+    )
+
+    assert needs_restore is True
+
+
 def test_native_click_viewport_metrics_uses_cdp_timeout_instead_of_page_evaluate(tmp_path):
     live_client = DummyLiveClient(logged_in=True)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')

@@ -13057,6 +13057,65 @@ class DxmLoginFlow:
             best = max(best, score)
         return best
 
+    @staticmethod
+    def _window_needs_restore_to_primary_screen(
+        rect: dict[str, Any],
+        *,
+        virtual_screen: dict[str, Any] | None = None,
+        min_width: int = 400,
+        min_height: int = 300,
+    ) -> bool:
+        try:
+            left = int(rect.get('left') or 0)
+            top = int(rect.get('top') or 0)
+            width = int(rect.get('width') or 0)
+            height = int(rect.get('height') or 0)
+        except (TypeError, ValueError):
+            return True
+        if width < min_width or height < min_height:
+            return True
+
+        screen = virtual_screen if isinstance(virtual_screen, dict) else None
+        if not screen:
+            return left < -1000 or top < -1000
+        try:
+            screen_left = int(screen.get('left') or 0)
+            screen_top = int(screen.get('top') or 0)
+            screen_width = int(screen.get('width') or 0)
+            screen_height = int(screen.get('height') or 0)
+        except (TypeError, ValueError):
+            return left < -1000 or top < -1000
+        if screen_width <= 0 or screen_height <= 0:
+            return left < -1000 or top < -1000
+
+        right = left + width
+        bottom = top + height
+        screen_right = screen_left + screen_width
+        screen_bottom = screen_top + screen_height
+        intersects_virtual_desktop = (
+            right > screen_left
+            and left < screen_right
+            and bottom > screen_top
+            and top < screen_bottom
+        )
+        return not intersects_virtual_desktop
+
+    @staticmethod
+    def _win32_virtual_screen(user32: Any) -> dict[str, int]:
+        sm_xvirtualscreen = 76
+        sm_yvirtualscreen = 77
+        sm_cxvirtualscreen = 78
+        sm_cyvirtualscreen = 79
+        try:
+            return {
+                'left': int(user32.GetSystemMetrics(sm_xvirtualscreen)),
+                'top': int(user32.GetSystemMetrics(sm_yvirtualscreen)),
+                'width': int(user32.GetSystemMetrics(sm_cxvirtualscreen)),
+                'height': int(user32.GetSystemMetrics(sm_cyvirtualscreen)),
+            }
+        except Exception:
+            return {'left': 0, 'top': 0, 'width': 0, 'height': 0}
+
     def _native_dxm_content_window_info(self, page: Page) -> dict[str, Any] | None:
         if os.name != 'nt' or self._is_headless():
             return None
@@ -13458,7 +13517,12 @@ class DxmLoginFlow:
             user32.GetWindowRect(hwnd_value, ctypes.byref(rect))
             width = int(rect.right - rect.left)
             height = int(rect.bottom - rect.top)
-            offscreen_or_minimized = rect.left < -1000 or rect.top < -1000 or width < 400 or height < 300
+            window_rect = {'left': int(rect.left), 'top': int(rect.top), 'width': width, 'height': height}
+            virtual_screen = self._win32_virtual_screen(user32)
+            offscreen_or_minimized = self._window_needs_restore_to_primary_screen(
+                window_rect,
+                virtual_screen=virtual_screen,
+            )
             current_thread = kernel32.GetCurrentThreadId()
             foreground_before = user32.GetForegroundWindow()
             foreground_before_int = self._window_handle_to_int(foreground_before)
@@ -13498,7 +13562,8 @@ class DxmLoginFlow:
                 foreground_before=foreground_before_int,
                 hwnd=hwnd,
                 offscreen_or_minimized=bool(offscreen_or_minimized),
-                window_rect={'left': int(rect.left), 'top': int(rect.top), 'width': width, 'height': height},
+                window_rect=window_rect,
+                virtual_screen=virtual_screen,
                 viewport=viewport_metrics,
                 attached_foreground=attached_foreground,
                 attached_target=attached_target,
