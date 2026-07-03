@@ -12,6 +12,7 @@ def test_chrome_launch_options_uses_env_path(monkeypatch):
     assert options == {
         "headless": True,
         "executable_path": "C:/Chrome/chrome.exe",
+        "ignore_default_args": ["--no-sandbox"],
     }
 
 
@@ -23,7 +24,7 @@ def test_chrome_launch_options_allows_playwright_fallback(monkeypatch):
 
     options = browser_runtime.chrome_launch_options(headless=False)
 
-    assert options == {"headless": False}
+    assert options == {"headless": False, "ignore_default_args": ["--no-sandbox"]}
 
 
 def test_chrome_launch_options_adds_no_sandbox_off_windows(monkeypatch):
@@ -34,3 +35,4 @@ def test_chrome_launch_options_adds_no_sandbox_off_windows(monkeypatch):
 
     assert options["executable_path"] == "/usr/bin/google-chrome"
     assert options["args"] == ["--no-sandbox"]
+    assert "ignore_default_args" not in options

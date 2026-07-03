@@ -12,7 +12,9 @@ def chrome_launch_options(headless: bool) -> dict[str, Any]:
     executable_path = resolve_chrome_executable()
     if executable_path:
         options["executable_path"] = executable_path
-    if platform.system() != "Windows":
+    if platform.system() == "Windows":
+        options["ignore_default_args"] = ["--no-sandbox"]
+    else:
         options["args"] = ["--no-sandbox"]
     return options
 
