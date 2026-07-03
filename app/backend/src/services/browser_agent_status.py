@@ -247,6 +247,32 @@ USER_ACTION_COPY = {
 }
 
 
+OPERATOR_COPY_REPLACEMENTS = (
+    ("真实数据采集", "店小秘已有待认领商品"),
+    ("数据采集认领", "待认领商品"),
+    ("数据采集页", "已有待认领列表"),
+    ("数据采集", "已有待认领列表"),
+    ("采集箱编辑保存", "商品箱编辑保存"),
+    ("采集箱商品", "商品箱商品"),
+    ("进入采集箱", "进入商品箱"),
+    ("打开采集箱", "打开商品箱"),
+    ("切换到采集箱", "切换到商品箱"),
+    ("认领到采集箱", "认领到商品箱"),
+    ("领取到采集箱", "领取到商品箱"),
+    ("采集箱", "商品箱"),
+)
+
+
+def normalize_operator_copy(value: Any) -> Any:
+    """Normalize internal DXM page wording before it reaches operator-facing UI."""
+    if not isinstance(value, str):
+        return value
+    normalized = value
+    for source, target in OPERATOR_COPY_REPLACEMENTS:
+        normalized = normalized.replace(source, target)
+    return normalized
+
+
 def build_browser_hud(payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
     payload = payload or {}
     raw_step = str(payload.get("step") or payload.get("step_code") or payload.get("state") or payload.get("code") or "WAITING").strip()
@@ -265,11 +291,15 @@ def build_browser_hud(payload: Mapping[str, Any] | None = None) -> dict[str, Any
     if override:
         copy = {**copy, **override}
 
-    title = str(payload.get("title") or payload.get("human_title") or copy["title"])
-    line1 = str(payload.get("line1") or payload.get("human_action") or copy["line1"])
-    line2 = str(payload.get("line2") or _default_line2(payload))
-    next_step = str(payload.get("next_step") or payload.get("human_next") or copy["next"])
+    title = str(normalize_operator_copy(payload.get("title") or payload.get("human_title") or copy["title"]))
+    line1 = str(normalize_operator_copy(payload.get("line1") or payload.get("human_action") or copy["line1"]))
+    line2 = str(normalize_operator_copy(payload.get("line2") or _default_line2(payload)))
+    next_step = str(normalize_operator_copy(payload.get("next_step") or payload.get("human_next") or copy["next"]))
     severity = str(payload.get("severity") or copy.get("severity") or _severity(status, unknown))
+    phase = str(normalize_operator_copy(payload.get("phase") or copy["phase"]))
+    store_name = str(normalize_operator_copy(payload.get("store_name") or "等待店铺"))
+    task_name = str(normalize_operator_copy(payload.get("task_name") or "DXM 自动化任务"))
+    guard = str(normalize_operator_copy(payload.get("guard") or "只保存不发布"))
     requires_user_action = payload.get("requires_user_action")
     if requires_user_action is None:
         requires_user_action = bool(step in USER_ACTION_STATES or status in ERROR_STATUSES or unknown)
@@ -280,20 +310,20 @@ def build_browser_hud(payload: Mapping[str, Any] | None = None) -> dict[str, Any
         "line2": line2,
         "state": step,
         "step_code": step,
-        "phase": str(payload.get("phase") or copy["phase"]),
+        "phase": phase,
         "status": status,
         "severity": severity,
         "human_title": title,
         "human_action": line1,
         "human_next": next_step,
         "next_step": next_step,
-        "store_name": str(payload.get("store_name") or "等待店铺"),
-        "task_name": str(payload.get("task_name") or "DXM 自动化任务"),
-        "guard": str(payload.get("guard") or "只保存不发布"),
+        "store_name": store_name,
+        "task_name": task_name,
+        "guard": guard,
         "progress_index": payload.get("progress_index") or copy.get("progress_index"),
         "progress_total": payload.get("progress_total") or 12,
         "requires_user_action": bool(requires_user_action),
-        "maintenance_detail": _maintenance_detail(payload, include_step=bool(unknown or status in ERROR_STATUSES)),
+        "maintenance_detail": normalize_operator_copy(_maintenance_detail(payload, include_step=bool(unknown or status in ERROR_STATUSES))),
         "updated_at": str(payload.get("updated_at") or _now()),
     }
 
@@ -333,7 +363,7 @@ def _default_line2(payload: Mapping[str, Any]) -> str:
 def _maintenance_detail(payload: Mapping[str, Any], *, include_step: bool = False) -> str | None:
     detail = str(payload.get("maintenance_detail") or payload.get("error") or "").strip()
     raw_step = str(payload.get("step") or payload.get("step_code") or payload.get("state") or payload.get("code") or "").strip()
-    if detail and raw_step:
+    if detail and raw_step and include_step:
         return f"{raw_step}: {detail}"
     if detail:
         return detail

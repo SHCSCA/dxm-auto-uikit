@@ -46,6 +46,26 @@ def test_browser_agent_status_maps_acquisition_steps_to_chinese_hud():
     assert verify["human_next"] == "选择该商品箱商品继续编辑保存"
 
 
+def test_browser_agent_status_normalizes_legacy_collection_words_in_overrides():
+    hud = build_browser_hud({
+        "task_name": "采集箱编辑保存",
+        "step": "OPEN_DRAFT_LIST",
+        "status": "running",
+        "title": "正在打开采集箱",
+        "line1": "进入店小秘采集箱",
+        "line2": "数据采集页已打开",
+        "next_step": "认领到采集箱后继续",
+        "maintenance_detail": "继续切换到采集箱",
+    })
+
+    assert hud["task_name"] == "商品箱编辑保存"
+    assert hud["title"] == "正在打开商品箱"
+    assert hud["line1"] == "进入店小秘商品箱"
+    assert hud["line2"] == "已有待认领列表已打开"
+    assert hud["human_next"] == "认领到商品箱后继续"
+    assert hud["maintenance_detail"] == "继续切换到商品箱"
+
+
 def test_browser_agent_status_maps_save_steps_to_chinese_hud():
     editor = build_browser_hud({
         "task_name": "商品箱编辑保存",
@@ -196,6 +216,43 @@ def test_browser_agent_runtime_reports_last_internal_claim_step_on_timeout():
     assert status["currentStep"] == "定位待认领商品"
     assert "定位待认领商品" in status["lastError"]
     assert any(event["action"] == "workflow_trace" and event["step"] == "定位待认领商品" for event in status["events"])
+    runtime.shutdown()
+
+
+def test_browser_agent_runtime_normalizes_workflow_trace_step_copy():
+    class LegacyTraceAdapter:
+        def __init__(self):
+            self.listener = None
+
+        def set_workflow_event_listener(self, listener):
+            self.listener = listener
+
+        def recent_workflow_events(self):
+            return [{"human_step": "进入店小秘采集箱"}]
+
+        def open_draft_box(self):
+            if self.listener:
+                self.listener({"human_step": "进入店小秘采集箱"})
+            time.sleep(0.2)
+            return {"ok": True}
+
+    runtime = BrowserAgentRuntime(LegacyTraceAdapter())
+    command = BrowserAgentCommand(
+        task_id=42,
+        job_id=42,
+        state="OPEN_DRAFT_LIST",
+        action="open_draft_box",
+        params={},
+        step_label="打开采集箱",
+    )
+
+    with pytest.raises(TimeoutError):
+        runtime.run(command, timeout_seconds=0.02)
+
+    status = runtime.status()
+    assert status["currentStep"] == "进入店小秘商品箱"
+    assert "进入店小秘商品箱" in status["lastError"]
+    assert any(event["step"] == "进入店小秘商品箱" for event in status["events"])
     runtime.shutdown()
 
 

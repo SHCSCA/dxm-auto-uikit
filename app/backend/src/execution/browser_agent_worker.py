@@ -12,7 +12,7 @@ from typing import Any
 
 from src.core.config import DATA_DIR
 from src.execution.browser_agent_protocol import BrowserAgentCommand
-from src.services.browser_agent_status import build_browser_hud
+from src.services.browser_agent_status import build_browser_hud, normalize_operator_copy
 
 
 class BrowserAgentRuntime:
@@ -159,7 +159,7 @@ class BrowserAgentRuntime:
             result = future.result(timeout=timeout_seconds)
         except FutureTimeoutError as exc:
             last_event = self._latest_workflow_event(adapter)
-            last_step = self._workflow_event_step(last_event) or command.step_label or command.state
+            last_step = normalize_operator_copy(self._workflow_event_step(last_event) or command.step_label or command.state)
             failed_hud = self._build_hud(command, status="failed", error=f"{command.action} timed out；最后停在：{last_step}")
             with self._lock:
                 self._status.update(
@@ -193,7 +193,7 @@ class BrowserAgentRuntime:
                         "nextAction": failed_hud.get("human_next"),
                     }
                 )
-                self._record_event(command.action, command.step_label or command.state, status="failed", error=str(exc))
+                self._record_event(command.action, normalize_operator_copy(command.step_label or command.state), status="failed", error=str(exc))
             raise
 
         if isinstance(result, dict) and result.get("ok") is not True:
@@ -216,7 +216,7 @@ class BrowserAgentRuntime:
                         "nextAction": failed_hud.get("human_next"),
                     }
                 )
-                self._record_event(command.action, command.step_label or command.state, status="failed", error=error_text)
+                self._record_event(command.action, normalize_operator_copy(command.step_label or command.state), status="failed", error=error_text)
             return result
 
         with self._lock:
@@ -237,7 +237,7 @@ class BrowserAgentRuntime:
                     "nextAction": done_hud.get("human_next"),
                 }
             )
-            self._record_event(command.action, command.step_label or command.state, status="ok")
+            self._record_event(command.action, normalize_operator_copy(command.step_label or command.state), status="ok")
         return result
 
     def _build_hud(self, command: BrowserAgentCommand, *, status: str, error: str | None = None) -> dict[str, Any]:
@@ -313,7 +313,7 @@ class BrowserAgentRuntime:
 
         def _on_workflow_event(record: dict[str, Any]) -> None:
             event = dict(record) if isinstance(record, dict) else {"event": str(record)}
-            step = self._workflow_event_step(event) or "执行中"
+            step = normalize_operator_copy(self._workflow_event_step(event) or "执行中")
             with self._lock:
                 if self._status.get("status") != "running":
                     return

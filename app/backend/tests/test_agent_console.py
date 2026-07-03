@@ -20,7 +20,7 @@ def test_agent_console_service_preview_session_does_not_launch_browser(tmp_path,
         task_id=42,
         target_url="https://www.dianxiaomi.com/",
         launch_browser=False,
-        step={"state": "PRECHECK", "action": "配置预检", "next_step": "打开采集箱"},
+        step={"state": "PRECHECK", "action": "配置预检", "next_step": "打开商品箱"},
     )
 
     assert status["active"] is True
@@ -309,7 +309,7 @@ def test_agent_console_api_lifecycle_uses_preview_mode(tmp_path, monkeypatch):
                 "line1": "进入店小秘采集箱",
                 "line2": "店铺：Dang Kang",
                 "next_step": "定位备注商品",
-                "maintenance_detail": "api accepted extended hud fields",
+                "maintenance_detail": "api accepted extended hud fields: 采集箱",
             }
         },
     )
@@ -317,9 +317,10 @@ def test_agent_console_api_lifecycle_uses_preview_mode(tmp_path, monkeypatch):
     assert hud_response.status_code == 200
     hud = hud_response.json()["hud"]
     assert hud["state"] == "OPEN_DRAFT_BOX"
-    assert hud["line1"] == "进入店小秘采集箱"
+    assert hud["action"] == "打开商品箱"
+    assert hud["line1"] == "进入店小秘商品箱"
     assert hud["line2"] == "店铺：Dang Kang"
-    assert hud["maintenance_detail"] == "api accepted extended hud fields"
+    assert hud["maintenance_detail"] == "api accepted extended hud fields: 商品箱"
 
     status_response = client.get("/api/agent-console/status")
     assert status_response.status_code == 200

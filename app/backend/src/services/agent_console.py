@@ -9,7 +9,7 @@ from typing import Any
 
 from src.core.config import DATA_DIR
 from src.execution.browser_runtime import chrome_launch_options
-from src.services.browser_agent_status import build_browser_hud
+from src.services.browser_agent_status import build_browser_hud, normalize_operator_copy
 
 
 PROFILE_ROOT = DATA_DIR / "browser_profiles" / "agent_console"
@@ -1012,14 +1012,14 @@ class AgentConsoleService:
                 "line2": step.get("line2"),
                 "maintenance_detail": step.get("maintenance_detail"),
             })
-        title = step.get("title") or step.get("label") or (mapped or {}).get("title") or "Agent Console 待命"
+        title = normalize_operator_copy(step.get("title") or step.get("label") or (mapped or {}).get("title") or "Agent Console 待命")
         user_action_copy = USER_ACTION_HUD_COPY.get(str(state).upper())
         if user_action_copy and not step.get("title") and not step.get("label"):
-            title = user_action_copy["human_title"]
-        action = step.get("action") or step.get("detail") or (mapped or {}).get("line1") or (user_action_copy or {}).get("human_action") or "等待后端状态机推送"
-        next_step = step.get("next_step") or (mapped or {}).get("human_next") or (user_action_copy or {}).get("human_next") or "等待下一步"
-        line1 = step.get("line1") or (mapped or {}).get("line1") or action
-        line2 = step.get("line2") or (mapped or {}).get("line2")
+            title = normalize_operator_copy(user_action_copy["human_title"])
+        action = normalize_operator_copy(step.get("action") or step.get("detail") or (mapped or {}).get("line1") or (user_action_copy or {}).get("human_action") or "等待后端状态机推送")
+        next_step = normalize_operator_copy(step.get("next_step") or (mapped or {}).get("human_next") or (user_action_copy or {}).get("human_next") or "等待下一步")
+        line1 = normalize_operator_copy(step.get("line1") or (mapped or {}).get("line1") or action)
+        line2 = normalize_operator_copy(step.get("line2") or (mapped or {}).get("line2"))
         recent_actions = step.get("recent_actions")
         requires_user_action = step.get("requires_user_action")
         if requires_user_action is None and user_action_copy:
@@ -1031,18 +1031,18 @@ class AgentConsoleService:
             "line1": line1,
             "line2": line2,
             "next_step": next_step,
-            "store_name": step.get("store_name") or "Dang Kang",
-            "guard": step.get("guard") or "只保存不发布",
-            "phase": step.get("phase") or (mapped or {}).get("phase") or (user_action_copy or {}).get("phase") or "业务进度",
+            "store_name": normalize_operator_copy(step.get("store_name") or "Dang Kang"),
+            "guard": normalize_operator_copy(step.get("guard") or "只保存不发布"),
+            "phase": normalize_operator_copy(step.get("phase") or (mapped or {}).get("phase") or (user_action_copy or {}).get("phase") or "业务进度"),
             "progress_index": step.get("progress_index") or (mapped or {}).get("progress_index"),
             "progress_total": step.get("progress_total") or (mapped or {}).get("progress_total"),
             "severity": step.get("severity") or (mapped or {}).get("severity") or (user_action_copy or {}).get("severity") or "info",
-            "human_title": step.get("human_title") or (user_action_copy or {}).get("human_title") or title,
-            "human_action": step.get("human_action") or step.get("action") or (mapped or {}).get("human_action") or (user_action_copy or {}).get("human_action") or action,
-            "human_next": step.get("human_next") or step.get("next_step") or (mapped or {}).get("human_next") or (user_action_copy or {}).get("human_next") or next_step,
+            "human_title": normalize_operator_copy(step.get("human_title") or (user_action_copy or {}).get("human_title") or title),
+            "human_action": normalize_operator_copy(step.get("human_action") or step.get("action") or (mapped or {}).get("human_action") or (user_action_copy or {}).get("human_action") or action),
+            "human_next": normalize_operator_copy(step.get("human_next") or step.get("next_step") or (mapped or {}).get("human_next") or (user_action_copy or {}).get("human_next") or next_step),
             "recent_actions": list(recent_actions or [])[-MAX_RECENT_ACTIONS:],
             "requires_user_action": bool(requires_user_action) if requires_user_action is not None else False,
-            "maintenance_detail": step.get("maintenance_detail") or (mapped or {}).get("maintenance_detail"),
+            "maintenance_detail": normalize_operator_copy(step.get("maintenance_detail") or (mapped or {}).get("maintenance_detail")),
             "updated_at": _now(),
         }
 
