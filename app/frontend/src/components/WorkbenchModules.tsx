@@ -5294,7 +5294,7 @@ export function EvidenceTimeline({
   return (
     <section className="module-layout" aria-label="保存证据">
       <div className="module-card span-3">
-        <ModuleHead title="保存证据摘要" meta={`证据等级 ${workspace.evidenceGrade?.grade ?? 'C'}`} />
+        <ModuleHead title="保存证据摘要" meta={`验收强度 ${workspace.evidenceGrade?.grade ?? 'C'}`} />
         <div className="evidence-point-grid">
           {evidencePoints.slice(0, 8).map((point, index) => (
             <EvidencePointCard key={`${point.kind}-${point.id ?? index}`} point={point} />
@@ -5302,11 +5302,11 @@ export function EvidenceTimeline({
           {!evidencePoints.length && (
             <EmptyState
               title="暂无可验收证据"
-              detail="当前真实保存未放行时，保存结果、未发布证明和保存回包为 0 条是预期阻断；只有单商品只保存完成后才生成可验收证据等级。"
+              detail="当前真实保存未放行时，保存结果、未发布证明和保存回包为 0 条是正常保护；只有单商品只保存完成后才生成可验收保存记录。"
               actions={(
                 <>
-                  <button className="button button--secondary" type="button" onClick={onShowTasks}>查看任务门禁</button>
-                  <button className="button button--quiet" type="button" onClick={onShowConsole}>查看真实只读证据</button>
+                  <button className="button button--secondary" type="button" onClick={onShowTasks}>查看当前任务</button>
+                  <button className="button button--quiet" type="button" onClick={onShowConsole}>查看保存前检查</button>
                 </>
               )}
             />
@@ -5333,7 +5333,7 @@ export function EvidenceTimeline({
       </details>
       <details className="module-card span-3 disclosure-card evidence-grade-disclosure">
         <summary>
-          证据等级说明
+          验收强度说明
           <span>验收口径</span>
         </summary>
         <div className="grade-grid">

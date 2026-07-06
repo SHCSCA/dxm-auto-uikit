@@ -1435,7 +1435,7 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "{ id: 'results', label: '结果报告', short: '报', hint: '查看保存结果、失败原因和下一步' }" in shell_source
     assert "{ id: 'evidence', label: '保存证据', short: '据', hint: '查看未发布证明、页面记录和保存回包' }" in shell_source
     assert "{ id: 'issues', label: '问题与证据', short: '证', hint: '查看阻断原因、恢复建议和证据' }" in shell_source
-    assert "{ id: 'settings', label: '系统维护', short: '系', hint: '查看运行环境、日志路径和维护设置' }" in shell_source
+    assert "{ id: 'settings', label: '系统维护', short: '系', hint: '查看运行环境、服务状态和维护设置' }" in shell_source
     assert "const sectionLabels: Record<WorkbenchSection, string>" in shell_source
     assert "home: '首页'" in shell_source
     assert "dxm_access: '账号与浏览器'" in shell_source
@@ -3195,15 +3195,21 @@ def test_task_and_evidence_center_describe_l3_blocked_as_expected_lock():
     assert "当前按钮策略：待认领入箱可启动第一段流程；保存前安全检查未通过时只阻断第二段编辑保存" in task_center_section
     assert "人工确认未完成，禁止启动" in task_center_section
     assert "当前真实保存未放行时" in evidence_timeline_section
-    assert "0 条是预期阻断" in evidence_timeline_section
-    assert "只有单商品只保存完成后才生成可验收证据等级" in evidence_timeline_section
+    assert "0 条是正常保护" in evidence_timeline_section
+    assert "只有单商品只保存完成后才生成可验收保存记录" in evidence_timeline_section
     assert "保存证据摘要" in evidence_timeline_section
+    assert "验收强度" in evidence_timeline_section
     assert "evidence-raw-disclosure" in evidence_timeline_section
     assert "保存记录明细" in evidence_timeline_section
     assert "按需展开" in evidence_timeline_section
     assert "真实截图、DOM、报告和网络摘要" not in evidence_timeline_section
     assert "页面记录、保存报告和保存回包" in evidence_timeline_section
     assert "evidence-grade-disclosure" in evidence_timeline_section
+    assert "验收强度说明" in evidence_timeline_section
+    assert "查看当前任务" in evidence_timeline_section
+    assert "查看保存前检查" in evidence_timeline_section
+    assert "查看任务门禁" not in evidence_timeline_section
+    assert "查看真实只读证据" not in evidence_timeline_section
     assert "<ModuleHead title=\"原始证据\"" not in evidence_timeline_section
     assert "humanEvidencePointTitle(point)" in source
     assert "humanEvidencePointKind(point.kind)" in source
@@ -4762,7 +4768,7 @@ def test_sidebar_copy_names_save_only_agent_flow_without_ambiguous_browser_wordi
     assert "{ id: 'results', label: '结果报告', short: '报', hint: '查看保存结果、失败原因和下一步' }" in shell
     assert "{ id: 'evidence', label: '保存证据', short: '据', hint: '查看未发布证明、页面记录和保存回包' }" in shell
     assert "{ id: 'issues', label: '问题与证据', short: '证', hint: '查看阻断原因、恢复建议和证据' }" in shell
-    assert "{ id: 'settings', label: '系统维护', short: '系', hint: '查看运行环境、日志路径和维护设置' }" in shell
+    assert "{ id: 'settings', label: '系统维护', short: '系', hint: '查看运行环境、服务状态和维护设置' }" in shell
     assert "真实店小秘操作分为待认领入箱和商品箱编辑只保存" in shell
 
     assert "配置 / 任务 / 真实浏览器执行" not in shell

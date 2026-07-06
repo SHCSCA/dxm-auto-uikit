@@ -61,7 +61,7 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
     label: '维护',
     short: '5',
     items: [
-      { id: 'settings', label: '系统维护', short: '系', hint: '查看运行环境、日志路径和维护设置' },
+      { id: 'settings', label: '系统维护', short: '系', hint: '查看运行环境、服务状态和维护设置' },
     ],
   },
 ]
