@@ -35,7 +35,8 @@ def test_sidebar_uses_two_stage_production_workflow():
     assert "编辑保存" in shell
     assert "模板中心" in shell
     assert "模板管理" in shell
-    assert "报告与证据" in shell
+    assert "结果报告" in shell
+    assert "保存证据" in shell
     assert "问题与证据" in shell
     assert "系统维护" in shell
     assert "浏览器现场" in shell
@@ -63,7 +64,8 @@ def test_sidebar_exposes_production_two_stage_workflow_only():
         "{ id: 'product_tasks', label: '当前保存任务'",
         "{ id: 'start_save', label: '浏览器现场'",
         "{ id: 'task_history', label: '任务记录'",
-        "{ id: 'results', label: '报告与证据'",
+        "{ id: 'results', label: '结果报告'",
+        "{ id: 'evidence', label: '保存证据'",
         "{ id: 'issues', label: '问题与证据'",
         "{ id: 'settings', label: '系统维护'",
     ]
@@ -1419,7 +1421,8 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "config: 'template_center'" in app_source
     assert "tasks: 'product_tasks'" in app_source
     assert "console: 'start_save'" in app_source
-    assert "evidence: 'results'" in app_source
+    assert "evidence: 'results'" not in app_source
+    assert "onShowEvidence={() => setActiveSection('evidence')}" in app_source
     assert "type WorkbenchPrimaryArea" in shell_source
     assert "{ id: 'home', label: '首页', short: '首', hint: '查看当前步骤和下一步操作' }" in shell_source
     assert "{ id: 'dxm_access', label: '账号与浏览器', short: '登', hint: '记住账号并打开真实店小秘浏览器' }" in shell_source
@@ -1429,7 +1432,8 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "{ id: 'draft_edit_save', label: '商品箱编辑保存', short: '箱', hint: '从已认领商品箱开始编辑并只保存' }" in shell_source
     assert "{ id: 'product_tasks', label: '当前保存任务', short: '任', hint: '查看当前只保存任务、人工确认和恢复动作' }" in shell_source
     assert "{ id: 'start_save', label: '浏览器现场', short: '览', hint: '查看真实浏览器、中文进度窗和人工接管' }" in shell_source
-    assert "{ id: 'results', label: '报告与证据', short: '报', hint: '查看保存结果和未发布证明' }" in shell_source
+    assert "{ id: 'results', label: '结果报告', short: '报', hint: '查看保存结果、失败原因和下一步' }" in shell_source
+    assert "{ id: 'evidence', label: '保存证据', short: '据', hint: '查看未发布证明、页面记录和保存回包' }" in shell_source
     assert "{ id: 'issues', label: '问题与证据', short: '证', hint: '查看阻断原因、恢复建议和证据' }" in shell_source
     assert "{ id: 'settings', label: '系统维护', short: '系', hint: '查看运行环境、日志路径和维护设置' }" in shell_source
     assert "const sectionLabels: Record<WorkbenchSection, string>" in shell_source
@@ -1445,7 +1449,8 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "help: '使用帮助'" in shell_source
     assert "preflight: '浏览器现场'" in shell_source
     assert "real_browser: '浏览器现场'" in shell_source
-    assert "evidence: '报告与证据'" in shell_source
+    assert "results: '结果报告'" in shell_source
+    assert "evidence: '保存证据'" in shell_source
     assert "sectionLabels[activeSection] ?? '工作台'" in shell_source
     assert "case 'dxm_access'" in app_source
     assert "DxmAccessPage" in app_source
@@ -1620,12 +1625,13 @@ def test_sidebar_primary_navigation_keeps_only_user_main_path():
         "当前保存任务",
         "浏览器现场",
         "任务记录",
-        "报告与证据",
+        "结果报告",
+        "保存证据",
         "问题与证据",
         "系统维护",
     ]
 
-    assert primary_area_section.count("{ id: '") == 12
+    assert primary_area_section.count("{ id: '") == 13
     for label in expected_sidebar_labels:
         assert label in primary_area_section or label in shell_source
     assert "{ id: 'acquisition_claim', label: '待认领入箱'" in primary_area_section
@@ -1635,7 +1641,8 @@ def test_sidebar_primary_navigation_keeps_only_user_main_path():
     assert "{ id: 'product_tasks', label: '当前保存任务'" in primary_area_section
     assert "{ id: 'start_save', label: '浏览器现场'" in primary_area_section
     assert "{ id: 'task_history', label: '任务记录'" in primary_area_section
-    assert "{ id: 'results', label: '报告与证据'" in primary_area_section
+    assert "{ id: 'results', label: '结果报告'" in primary_area_section
+    assert "{ id: 'evidence', label: '保存证据'" in primary_area_section
     assert "{ id: 'edit_config'" not in primary_area_section
     assert "{ id: 'preflight', label: '运行前检查'" not in primary_area_section
     assert "{ id: 'real_browser'" not in primary_area_section
@@ -1647,7 +1654,7 @@ def test_sidebar_primary_navigation_keeps_only_user_main_path():
     assert "id: 'dashboard'" not in primary_area_section
     assert "id: 'agent_execution'" not in primary_area_section
     assert "label: '更多'" not in primary_area_section
-    assert "首页 / 账号与浏览器 / 待认领入箱 / 模板中心 / 模板管理 / 商品箱编辑保存 / 当前保存任务 / 浏览器现场 / 任务记录 / 报告与证据 / 问题与证据 / 系统维护" in shell_source
+    assert "首页 / 账号与浏览器 / 待认领入箱 / 模板中心 / 模板管理 / 商品箱编辑保存 / 当前保存任务 / 浏览器现场 / 任务记录 / 结果报告 / 保存证据 / 问题与证据 / 系统维护" in shell_source
     forbidden_default_labels = ["Agent Console", "L2", "L3", "probe", "HAR", "run-id", "结果与问题", "问题诊断", "任务与人工确认"]
     for label in forbidden_default_labels:
         assert label not in primary_area_section
@@ -3190,13 +3197,18 @@ def test_task_and_evidence_center_describe_l3_blocked_as_expected_lock():
     assert "当前真实保存未放行时" in evidence_timeline_section
     assert "0 条是预期阻断" in evidence_timeline_section
     assert "只有单商品只保存完成后才生成可验收证据等级" in evidence_timeline_section
+    assert "保存证据摘要" in evidence_timeline_section
     assert "evidence-raw-disclosure" in evidence_timeline_section
-    assert "原始证据明细" in evidence_timeline_section
+    assert "保存记录明细" in evidence_timeline_section
     assert "按需展开" in evidence_timeline_section
+    assert "真实截图、DOM、报告和网络摘要" not in evidence_timeline_section
+    assert "页面记录、保存报告和保存回包" in evidence_timeline_section
     assert "evidence-grade-disclosure" in evidence_timeline_section
     assert "<ModuleHead title=\"原始证据\"" not in evidence_timeline_section
     assert "humanEvidencePointTitle(point)" in source
     assert "humanEvidencePointKind(point.kind)" in source
+    assert "humanEvidenceTypeLabel(evidence.evidence_type)" in source
+    assert "formatTime(evidence.created_at)} / {evidence.evidence_type}" not in source
     assert "步骤快照" in source
     assert "执行证据" in source
     assert "确认未发布" in source
@@ -4710,7 +4722,7 @@ def test_frontend_first_screen_names_dxm_automation_delivery():
     assert "系统状态与验收详情" not in safety_bar
     assert "safety-bar__meta-details inline-disclosure" not in safety_bar
     assert "真实保存已阻断" not in safety_bar
-    assert "首页 / 账号与浏览器 / 待认领入箱 / 模板中心 / 模板管理 / 商品箱编辑保存 / 当前保存任务 / 浏览器现场 / 任务记录 / 报告与证据 / 问题与证据 / 系统维护" in shell
+    assert "首页 / 账号与浏览器 / 待认领入箱 / 模板中心 / 模板管理 / 商品箱编辑保存 / 当前保存任务 / 浏览器现场 / 任务记录 / 结果报告 / 保存证据 / 问题与证据 / 系统维护" in shell
     assert "\\u0044\\u0058\\u004d \\u5355\\u5546\\u54c1\\u53ea\\u4fdd\\u5b58 Agent" in qa_source
     assert "initialText.includes(text.overview) || initialText.includes('\\u767b\\u5f55\\u5e97\\u5c0f\\u79d8') || initialText.includes('\\u5f00\\u59cb\\u53ea\\u4fdd\\u5b58')" in qa_source
     assert "\\u73b0\\u5728\\u53ea\\u505a\\u8fd9\\u4e00\\u6b65" in qa_source
@@ -4732,7 +4744,8 @@ def test_sidebar_copy_names_save_only_agent_flow_without_ambiguous_browser_wordi
     assert "模板管理" in shell
     assert "真实浏览器" in shell
     assert "当前保存任务" in shell
-    assert "报告与证据" in shell
+    assert "结果报告" in shell
+    assert "保存证据" in shell
     assert "问题与证据" in shell
     assert "系统维护" in shell
     assert "证据归档" not in shell[shell.index("const primaryAreas"):shell.index("const sectionLabels")]
@@ -4746,7 +4759,8 @@ def test_sidebar_copy_names_save_only_agent_flow_without_ambiguous_browser_wordi
     assert "{ id: 'product_tasks', label: '当前保存任务', short: '任', hint: '查看当前只保存任务、人工确认和恢复动作' }" in shell
     assert "{ id: 'start_save', label: '浏览器现场', short: '览', hint: '查看真实浏览器、中文进度窗和人工接管' }" in shell
     assert "{ id: 'task_history', label: '任务记录', short: '记', hint: '查看历史任务、失败原因和恢复入口' }" in shell
-    assert "{ id: 'results', label: '报告与证据', short: '报', hint: '查看保存结果和未发布证明' }" in shell
+    assert "{ id: 'results', label: '结果报告', short: '报', hint: '查看保存结果、失败原因和下一步' }" in shell
+    assert "{ id: 'evidence', label: '保存证据', short: '据', hint: '查看未发布证明、页面记录和保存回包' }" in shell
     assert "{ id: 'issues', label: '问题与证据', short: '证', hint: '查看阻断原因、恢复建议和证据' }" in shell
     assert "{ id: 'settings', label: '系统维护', short: '系', hint: '查看运行环境、日志路径和维护设置' }" in shell
     assert "真实店小秘操作分为待认领入箱和商品箱编辑只保存" in shell
@@ -4787,8 +4801,10 @@ def test_frontend_uses_business_sidebar_groups_and_hides_operator_diagnostics_by
     assert "id: 'preflight'" not in primary_area_section
     assert "id: 'real_browser'" not in primary_area_section
     assert "id: 'manual_takeover'" not in primary_area_section
-    assert "results: '报告与证据'" in shell
+    assert "results: '结果报告'" in shell
+    assert "evidence: '保存证据'" in shell
     assert "id: 'results'" in primary_area_section
+    assert "id: 'evidence'" in primary_area_section
     assert "id: 'issues'" in primary_area_section
     assert "id: 'help'" not in primary_area_section
     assert "help: '使用帮助'" in shell

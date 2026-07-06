@@ -149,7 +149,6 @@ function normalizeWorkbenchSection(section: WorkbenchSection | LegacyWorkbenchSe
     preflight: 'start_save',
     real_browser: 'start_save',
     manual_takeover: 'start_save',
-    evidence: 'results',
     reports: 'results',
     exceptions: 'issues',
     issues: 'issues',
@@ -1253,7 +1252,7 @@ export default function App() {
             onShowConfig={() => setActiveSection('edit_config')}
             onShowDraftEdit={() => setActiveSection('draft_edit_save')}
             onShowConsole={() => setActiveSection('start_save')}
-            onShowEvidence={() => setActiveSection('results')}
+            onShowEvidence={() => setActiveSection('evidence')}
             onShowReports={() => setActiveSection('results')}
           />
         )
@@ -1322,7 +1321,7 @@ export default function App() {
             onShowTasks={() => setActiveSection('product_tasks')}
             onShowDraftEdit={() => setActiveSection('draft_edit_save')}
             onShowConfig={() => setActiveSection('edit_config')}
-            onShowEvidence={() => setActiveSection('results')}
+            onShowEvidence={() => setActiveSection('evidence')}
             onShowReports={() => setActiveSection('results')}
           />
         )
@@ -1331,7 +1330,7 @@ export default function App() {
       case 'issues':
         return <ExceptionQueue workspace={workspace} selectedTask={selectedTask} />
       case 'results':
-        return <ReportCenter workspace={workspace} selectedTask={selectedTask} finalCheck={finalCheck} onShowEvidence={() => setActiveSection('results')} onShowConsole={() => setActiveSection('start_save')} onShowExceptions={() => setActiveSection('issues')} />
+        return <ReportCenter workspace={workspace} selectedTask={selectedTask} finalCheck={finalCheck} onShowEvidence={() => setActiveSection('evidence')} onShowConsole={() => setActiveSection('start_save')} onShowExceptions={() => setActiveSection('issues')} />
       case 'help':
         return (
           <HelpPage

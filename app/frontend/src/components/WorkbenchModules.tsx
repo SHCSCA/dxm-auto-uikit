@@ -5294,7 +5294,7 @@ export function EvidenceTimeline({
   return (
     <section className="module-layout" aria-label="保存证据">
       <div className="module-card span-3">
-        <ModuleHead title="交付证据摘要" meta={`等级 ${workspace.evidenceGrade?.grade ?? 'C'}`} />
+        <ModuleHead title="保存证据摘要" meta={`证据等级 ${workspace.evidenceGrade?.grade ?? 'C'}`} />
         <div className="evidence-point-grid">
           {evidencePoints.slice(0, 8).map((point, index) => (
             <EvidencePointCard key={`${point.kind}-${point.id ?? index}`} point={point} />
@@ -5315,7 +5315,7 @@ export function EvidenceTimeline({
       </div>
       <details className="module-card span-3 disclosure-card evidence-raw-disclosure">
         <summary>
-          原始证据明细
+          保存记录明细
           <span>{evidences.length} 条，按需展开</span>
         </summary>
         <div className="evidence-timeline">
@@ -5324,8 +5324,8 @@ export function EvidenceTimeline({
           ))}
           {!evidences.length && (
             <EmptyState
-              title="暂无原始证据"
-              detail="未执行不代表通过；真实截图、DOM、报告和网络摘要会在执行后出现。"
+              title="暂无保存记录"
+              detail="未执行不代表通过；页面记录、保存报告和保存回包会在执行后出现。"
               actions={<button className="button button--secondary" type="button" onClick={onShowTasks}>查看阻断原因</button>}
             />
           )}
@@ -5783,7 +5783,8 @@ function LogRow({ log }: { log: LogItem }) {
 function EvidenceRow({ evidence }: { evidence: Evidence }) {
   const grade = evidenceGrade(evidence)
   const url = toArtifactUrl((evidence as Evidence & { file_path_url?: string }).file_path_url ?? evidence.file_path)
-  const title = String(evidence.meta?.title ?? evidence.evidence_type)
+  const evidenceTypeLabel = humanEvidenceTypeLabel(evidence.evidence_type)
+  const title = String(evidence.meta?.title ?? evidenceTypeLabel)
   const acceptance = String(evidence.meta?.acceptance ?? '等待补齐验收说明')
 
   return (
@@ -5792,11 +5793,23 @@ function EvidenceRow({ evidence }: { evidence: Evidence }) {
       <div>
         <strong>{title}</strong>
         <span>{acceptance}</span>
-        <small>{formatTime(evidence.created_at)} / {evidence.evidence_type}</small>
+        <small>{formatTime(evidence.created_at)} / {evidenceTypeLabel}</small>
       </div>
       {url ? <a href={url} target="_blank" rel="noreferrer" aria-label={`查看证据：${title}`}>查看证据</a> : <span className="status-pill muted">无文件</span>}
     </article>
   )
+}
+
+function humanEvidenceTypeLabel(type?: string | null) {
+  const normalized = String(type ?? '').toLowerCase()
+  if (normalized.includes('save_result') || normalized.includes('save-result')) return '保存结果'
+  if (normalized.includes('unpublished') || normalized.includes('not_published')) return '未发布证明'
+  if (normalized.includes('network') || normalized.includes('har') || normalized.includes('response')) return '保存回包'
+  if (normalized.includes('screenshot') || normalized.includes('image')) return '页面截图'
+  if (normalized.includes('dom') || normalized.includes('html')) return '页面记录'
+  if (normalized.includes('report')) return '保存报告'
+  if (normalized.includes('log')) return '执行记录'
+  return '保存证据'
 }
 
 function EvidencePointCard({ point }: { point: EvidencePoint }) {

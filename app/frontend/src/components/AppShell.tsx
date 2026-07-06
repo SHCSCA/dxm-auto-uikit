@@ -51,7 +51,8 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
     label: '复盘',
     short: '4',
     items: [
-      { id: 'results', label: '报告与证据', short: '报', hint: '查看保存结果和未发布证明' },
+      { id: 'results', label: '结果报告', short: '报', hint: '查看保存结果、失败原因和下一步' },
+      { id: 'evidence', label: '保存证据', short: '据', hint: '查看未发布证明、页面记录和保存回包' },
       { id: 'issues', label: '问题与证据', short: '证', hint: '查看阻断原因、恢复建议和证据' },
     ],
   },
@@ -86,9 +87,9 @@ const sectionLabels: Record<WorkbenchSection, string> = {
   preflight: '浏览器现场',
   real_browser: '浏览器现场',
   manual_takeover: '人工接管',
-  results: '报告与证据',
+  results: '结果报告',
   issues: '问题与证据',
-  evidence: '报告与证据',
+  evidence: '保存证据',
   help: '使用帮助',
   settings: '系统维护',
 }
@@ -129,7 +130,7 @@ export function AppShell({
             <div>
               <strong>DXM 只保存自动化</strong>
               <span>先认领已有商品，再编辑只保存</span>
-              <span className="sr-only">首页 / 账号与浏览器 / 待认领入箱 / 模板中心 / 模板管理 / 商品箱编辑保存 / 当前保存任务 / 浏览器现场 / 任务记录 / 报告与证据 / 问题与证据 / 系统维护</span>
+              <span className="sr-only">首页 / 账号与浏览器 / 待认领入箱 / 模板中心 / 模板管理 / 商品箱编辑保存 / 当前保存任务 / 浏览器现场 / 任务记录 / 结果报告 / 保存证据 / 问题与证据 / 系统维护</span>
             </div>
           )}
           <button className="icon-button" type="button" onClick={onToggleSidebar} aria-label="切换侧边栏">
