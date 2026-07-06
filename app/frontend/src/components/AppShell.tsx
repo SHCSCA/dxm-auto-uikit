@@ -20,10 +20,10 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
   },
   {
     id: 'claim',
-    label: '第一段：待认领商品',
+    label: '第一段：待认领入箱',
     short: '1',
     items: [
-      { id: 'acquisition_claim', label: '待认领商品', short: '领', hint: '把店小秘里已经存在的待认领商品放进商品箱' },
+      { id: 'acquisition_claim', label: '待认领入箱', short: '箱', hint: '把店小秘里已经存在的待认领商品放进商品箱' },
     ],
   },
   {
@@ -68,7 +68,7 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
 const sectionLabels: Record<WorkbenchSection, string> = {
   home: '首页',
   dxm_access: '账号与浏览器',
-  acquisition_claim: '待认领商品',
+  acquisition_claim: '待认领入箱',
   draft_edit_save: '商品箱编辑保存',
   template_center: '模板中心',
   product_tasks: '当前保存任务',
@@ -129,7 +129,7 @@ export function AppShell({
             <div>
               <strong>DXM 只保存自动化</strong>
               <span>先认领已有商品，再编辑只保存</span>
-              <span className="sr-only">首页 / 账号与浏览器 / 待认领商品 / 模板中心 / 模板管理 / 商品箱编辑保存 / 当前保存任务 / 浏览器现场 / 任务记录 / 报告与证据 / 问题与证据 / 系统维护</span>
+              <span className="sr-only">首页 / 账号与浏览器 / 待认领入箱 / 模板中心 / 模板管理 / 商品箱编辑保存 / 当前保存任务 / 浏览器现场 / 任务记录 / 报告与证据 / 问题与证据 / 系统维护</span>
             </div>
           )}
           <button className="icon-button" type="button" onClick={onToggleSidebar} aria-label="切换侧边栏">
@@ -176,7 +176,7 @@ export function AppShell({
             </section>
           ))}
         </nav>
-        <span className="sr-only">数据连接状态：{sourceLabel}。真实店小秘操作分为待认领商品处理和商品箱编辑只保存。</span>
+        <span className="sr-only">数据连接状态：{sourceLabel}。真实店小秘操作分为待认领入箱和商品箱编辑只保存。</span>
       </aside>
       <main ref={mainRef} className="workspace" tabIndex={-1} aria-label={`${activeLabel}主内容`}>
         <span className="sr-only" aria-live="polite">当前页面：{activeLabel}</span>

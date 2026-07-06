@@ -41,7 +41,7 @@ export function DraftEditSavePage({
   const saveSteps = [
     {
       title: '选择已进入商品箱的商品',
-      detail: claimedProducts.length ? '从第一段认领结果中选择，不能绕过待认领商品处理。' : '还没有商品箱商品，请先完成待认领商品认领。',
+      detail: claimedProducts.length ? '从第一段认领结果中选择，不能绕过待认领入箱。' : '还没有商品箱商品，请先完成待认领商品认领。',
       state: selectedProduct ? '已选择' : '待处理',
     },
     {
@@ -190,7 +190,7 @@ function humanProductStatus(status: string) {
   return ({
     claimed_to_draft: '已进入商品箱，可编辑保存',
     ready_for_edit: '已确认可编辑保存',
-    draft: '等待待认领商品处理',
+    draft: '等待待认领入箱',
   } as Record<string, string>)[status] ?? '等待处理'
 }
 

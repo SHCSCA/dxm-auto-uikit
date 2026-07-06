@@ -77,7 +77,7 @@ export function AcquisitionClaimPage({
   }
 
   return (
-    <section className="module-layout" aria-label="待认领商品">
+    <section className="module-layout" aria-label="待认领入箱">
       <div className="module-card span-2">
         <div className="module-head">
           <div>
@@ -86,11 +86,11 @@ export function AcquisitionClaimPage({
             <p>只处理店小秘里已经存在的待认领商品。系统会筛选列表并点击认领，不会填写产品网址，也不会创建新的来源商品。</p>
           </div>
           <button className="button button--secondary" type="button" onClick={onNavigateDataAcquisition} disabled={busy}>
-            打开待认领商品页
+            打开已有待认领列表
           </button>
         </div>
 
-        <ol className="operation-guide" aria-label="待认领商品四步">
+        <ol className="operation-guide" aria-label="待认领入箱四步">
           {claimSteps.map((step, index) => (
             <li key={step.title} className={claimCompleted || (lastRequest && index < 2) ? 'is-done' : ''}>
               <span>{index + 1}</span>

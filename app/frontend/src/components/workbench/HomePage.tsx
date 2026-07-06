@@ -46,9 +46,9 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
     : !dxmLoggedIn
       ? { label: '登录真实店小秘', detail: '打开可见浏览器完成账号、密码和验证码。', cta: '去登录店小秘', action: onShowDxmAccess }
       : !selectedTask
-        ? { label: '处理待认领商品', detail: '先从店小秘已有待认领列表中选择商品，并认领到商品箱。', cta: '去待认领商品', action: onShowAcquisition }
+        ? { label: '待认领入箱', detail: '先从店小秘已有待认领列表中选择商品，并认领到商品箱。', cta: '去待认领入箱', action: onShowAcquisition }
         : selectedTask.mode === 'claim_only' && selectedTask.status !== 'completed'
-          ? { label: '运行待认领商品处理', detail: '打开真实浏览器，把已有待认领商品认领到商品箱。', cta: '去真实浏览器', action: onShowConsole }
+          ? { label: '运行待认领入箱', detail: '打开真实浏览器，把已有待认领商品认领到商品箱。', cta: '去真实浏览器', action: onShowConsole }
         : !configReady
           ? { label: '检查编辑页模板', detail: '确认本次编辑保存会读取哪套模板和字段值。', cta: '去编辑页模板', action: onShowConfig }
           : !l2Passed
@@ -57,15 +57,15 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
               ? { label: '人工确认只保存', detail: '确认只保存、不发布后才能启动真实浏览器。', cta: '去真实浏览器', action: onShowConsole }
               : { label: '打开真实浏览器', detail: '系统将操控独立真实浏览器，只保存当前单商品。', cta: '去真实浏览器', action: onShowConsole }
   const blockerReason = claimTaskCompleted
-    ? '待认领商品已处理，下一步从商品箱创建只保存任务。'
+    ? '待认领商品已进入商品箱，下一步从商品箱创建只保存任务。'
     : selectedTaskCompleted
     ? '任务已完成，当前只需要复核结果。'
       : !dxmLoggedIn
       ? '店小秘还没有登录。'
       : !selectedTask
-        ? '还没有创建待认领商品任务。'
+        ? '还没有创建待认领入箱任务。'
         : selectedTask.mode === 'claim_only' && selectedTask.status !== 'completed'
-          ? '待认领商品还没有完成。'
+          ? '待认领入箱还没有完成。'
           : !configReady
             ? '编辑页模板还没有补齐。'
             : !l2Passed
@@ -78,7 +78,7 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
   const decisionCards = [
     { label: '现在该做什么', value: nextAction.label, detail: nextAction.detail, ok: selectedTaskCompleted || (!agentActive && blockerReason === '没有阻断。') },
     { label: '为什么不能继续', value: blockerReason, detail: controlOwnerDetail, ok: blockerReason === '没有阻断。' || selectedTaskCompleted },
-    { label: '下一步', value: nextAction.cta, detail: selectedTask ? displayTaskName(selectedTask) : '从待认领商品开始。', ok: true },
+    { label: '下一步', value: nextAction.cta, detail: selectedTask ? displayTaskName(selectedTask) : '从待认领入箱开始。', ok: true },
   ]
 
   return (
@@ -135,7 +135,7 @@ function OperationGuide({ workspace, selectedTask }: { workspace: DeliveryWorksp
   const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
   const steps = [
     { label: '登录店小秘', ok: workspace.stores.length > 0 },
-    { label: '第一段：待认领商品进入商品箱', ok: selectedTask?.mode === 'claim_only' || selectedTask?.mode === 'single_save' },
+    { label: '第一段：待认领入箱', ok: selectedTask?.mode === 'claim_only' || selectedTask?.mode === 'single_save' },
     { label: '第二段：商品箱编辑只保存', ok: selectedTask?.mode === 'single_save' },
     { label: '确认保存前安全检查通过', ok: l2Gate?.status === 'passed' },
     { label: '人工确认后只保存', ok: l3Gate?.status === 'passed' || selectedTask?.status === 'completed' },

@@ -2439,7 +2439,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
                       : l3BlocksStart
                         ? '人工确认未完成，禁止启动'
                         : selectedTask?.mode === 'claim_only'
-                          ? '启动待认领商品处理'
+                          ? '启动待认领入箱'
                         : needsApproval
                           ? '批准并启动单商品只保存'
                           : needsRealL2
@@ -2451,7 +2451,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
       : `还有 ${hiddenTaskCount} 个历史任务可展开。`
     : workspace.tasks.length
       ? '当前已显示可用任务。'
-      : '暂无历史任务；先完成待认领商品进入商品箱，再创建商品箱编辑保存任务。'
+      : '暂无历史任务；先完成待认领入箱，再创建商品箱编辑保存任务。'
   const blockedStartButtonLabel = startDisabled
     ? startLabel.includes('禁止启动')
       ? startLabel
@@ -2583,7 +2583,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
         <div className="task-quick-actions__status">
           <span>当前任务</span>
           <strong>{selectedTask ? displayTaskName(selectedTask) : '未选择任务'}</strong>
-          <small>{selectedTask ? `${humanTaskModeLabel(selectedTask.mode)} / ${humanTaskStatus(selectedTask.status)}` : '先完成待认领商品进入商品箱，再创建商品箱编辑保存任务'}</small>
+          <small>{selectedTask ? `${humanTaskModeLabel(selectedTask.mode)} / ${humanTaskStatus(selectedTask.status)}` : '先完成待认领入箱，再创建商品箱编辑保存任务'}</small>
         </div>
         <p>
           {!quickCreateSingleSaveDisabledReason
@@ -2660,7 +2660,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
           <div className="gate-note gate-note--danger">
             <strong>真实保存已阻断</strong>
             <span>{humanGateDetail(l2Gate?.detail) ?? '需要已有待认领列表与商品箱页面两个页面检查均通过。'}</span>
-            <span>保存前安全检查通过后才启动待认领商品处理；人工确认未完成前不启动单商品只保存；批量保存当前未开放。</span>
+            <span>待认领入箱是第一段；保存前安全检查只用于第二段商品箱编辑保存前，人工确认未完成前不启动单商品只保存，批量保存当前未开放。</span>
             <div className="next-step-actions">
               <button className="button button--secondary" type="button" onClick={onShowConsole}>查看阻断说明</button>
               <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看评审与检查计划</button>
@@ -2678,7 +2678,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
         )}
         {!selectedTaskCompleted && needsApproval && !selectedTaskNotDraft && (
           <div className="gate-note">
-            <span>待认领商品处理可直接启动第一段流程；单商品只保存会先请求后端批准令牌；批量保存当前未开放。</span>
+            <span>待认领入箱可直接启动第一段流程；单商品只保存会先请求后端批准令牌；批量保存当前未开放。</span>
             <L3ApprovalInlineForm
               approvedBy={l3ApprovedBy}
               busy={busy || startDisabled}
@@ -2812,7 +2812,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
                 </button>
               ))}
               {!workspace.tasks.length && (
-                <EmptyState title="暂无真实任务" detail={demoEnabled ? '开发模式可创建本地自检批次；普通使用请先完成待认领商品进入商品箱，再创建商品箱编辑保存任务。' : '请先完成待认领商品进入商品箱，再创建商品箱编辑保存任务，普通模式不展示本地自检入口。'} />
+                <EmptyState title="暂无真实任务" detail={demoEnabled ? '开发模式可创建本地自检批次；普通使用请先完成待认领入箱，再创建商品箱编辑保存任务。' : '请先完成待认领入箱，再创建商品箱编辑保存任务，普通模式不展示本地自检入口。'} />
               )}
             </div>
           </details>
@@ -2935,11 +2935,11 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
                 label="单商品只保存"
                 status={l3Gate?.status ?? 'not_run'}
                 detail={l3Gate?.status === 'blocked'
-                  ? '保存前安全检查通过后才启动待认领商品处理；人工确认未完成前不启动单商品只保存；批量保存当前未开放。'
+                  ? '待认领入箱是第一段；保存前安全检查只用于第二段商品箱编辑保存前，人工确认未完成前不启动单商品只保存，批量保存当前未开放。'
                   : '真实写操作仍需要人工批准令牌；待批准不等于已通过。'}
               />
               <div className="gate-note">
-                当前按钮策略：保存前安全检查未通过时保持阻断；待认领商品处理可启动第一段流程；单商品只保存仍需后端人工批准；批量保存当前未开放。
+                当前按钮策略：待认领入箱可启动第一段流程；保存前安全检查未通过时只阻断第二段编辑保存；单商品只保存仍需后端人工批准；批量保存当前未开放。
               </div>
             </div>
           </details>
@@ -3383,7 +3383,7 @@ function ConsoleCompletedReviewPanel({
       <div className="console-review-panel__body">
         <div>
           <strong>下一步只复核结果</strong>
-          <span>查看保存结果、未发布证明和真实浏览器记录；如要处理新商品，先完成待认领商品进入商品箱，再回到商品箱编辑保存创建新任务。</span>
+          <span>查看保存结果、未发布证明和真实浏览器记录；如要处理新商品，先完成待认领入箱，再回到商品箱编辑保存创建新任务。</span>
         </div>
         <div className="console-review-panel__facts">
           <span><b>结果</b><strong>优先查看</strong></span>
@@ -5140,7 +5140,7 @@ function humanRuntimeLogLine(item: RuntimeLogItem) {
       return '保存步骤失败：系统没有继续发布，请按页面提示检查真实浏览器后重试。'
     }
     if (normalized.includes('claim_to_draft_box') || normalized.includes('认领')) {
-      return '待认领商品处理失败：系统没有继续保存，请检查目标商品是否已在店小秘待认领列表中，然后重试。'
+      return '待认领入箱失败：商品没有进入商品箱，系统没有进入编辑保存。请检查目标商品是否已在店小秘待认领列表中，然后重试。'
     }
     if (normalized.includes('open_data_acquisition')) {
       return '已有待认领列表打开失败：请确认店小秘已登录并能访问待认领列表。'
@@ -5395,8 +5395,8 @@ function buildConsolePrimaryPath({
       title: '需要选择任务',
       reason: '当前没有选中的待认领商品或商品箱编辑保存任务。',
       detail: '先从店小秘已有待认领商品创建任务；商品进入商品箱后，再创建商品箱编辑保存任务。',
-      next: '去待认领商品',
-      ctaLabel: '去待认领商品',
+      next: '去待认领入箱',
+      ctaLabel: '去待认领入箱',
       action: 'tasks',
       browserStatus: '未选择任务，浏览器现场暂不启动',
       blocksBrowserStart: true,
@@ -5407,7 +5407,7 @@ function buildConsolePrimaryPath({
     const claimCompleted = selectedTask.mode === 'claim_only'
     return {
       code: 'completed',
-      title: claimCompleted ? '待认领商品已处理' : '保存成功',
+      title: claimCompleted ? '待认领入箱完成' : '保存成功',
       reason: '当前任务已完成。',
       detail: claimCompleted
         ? '商品已进入商品箱；下一步到“商品箱编辑保存”创建只保存任务。'
@@ -5482,7 +5482,7 @@ function buildConsolePrimaryPath({
       code: 'unreleased',
       title: '当前模式未放行',
       reason: `${humanTaskModeLabel(selectedTask.mode)} 当前未放行。`,
-      detail: '批量保存和无人值守仍需单独验收；当前开放待认领商品处理和单商品只保存路径。',
+      detail: '批量保存和无人值守仍需单独验收；当前开放待认领入箱和单商品只保存路径。',
       next: '回到商品箱编辑保存页创建只保存任务',
       ctaLabel: '创建商品箱编辑保存任务',
       action: 'tasks',
@@ -5598,8 +5598,8 @@ function buildConsolePrimaryPath({
     detail: selectedTask.mode === 'claim_only'
       ? '将打开独立真实浏览器窗口，在店小秘已有待认领列表中定位商品，并放进商品箱。'
       : '将打开独立真实浏览器窗口；保存前仍需确认，不会发布。',
-    next: selectedTask.mode === 'claim_only' ? '启动待认领商品处理' : '打开浏览器现场（不保存）',
-    ctaLabel: selectedTask.mode === 'claim_only' ? '启动待认领商品处理' : '打开浏览器现场（不保存）',
+    next: selectedTask.mode === 'claim_only' ? '启动待认领入箱' : '打开浏览器现场（不保存）',
+    ctaLabel: selectedTask.mode === 'claim_only' ? '启动待认领入箱' : '打开浏览器现场（不保存）',
     action: 'start_browser',
     browserStatus: '浏览器现场待启动',
     blocksBrowserStart: false,

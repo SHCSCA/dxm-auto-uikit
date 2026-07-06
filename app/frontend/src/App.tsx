@@ -745,7 +745,7 @@ export default function App() {
     try {
       if (REAL_DXM_MUTATION_MODES.has(selectedTask.mode)) {
         if (UNRELEASED_REAL_DXM_MUTATION_MODES.has(selectedTask.mode)) {
-          setOperationError('当前仅开放待认领商品处理和单商品只保存；批量保存必须重新验收后再放行。')
+          setOperationError('当前仅开放待认领入箱和单商品只保存；批量保存必须重新验收后再放行。')
           return
         }
         if (!RELEASED_REAL_DXM_MUTATION_MODES.has(selectedTask.mode)) {

@@ -233,7 +233,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
   const nextStepText = isReadyReadiness(readiness)
     ? twoStagePassed
       ? '复核当前任务、批准人和报告链路后，再启动商品箱编辑保存。'
-      : '先完成待认领商品进入商品箱，再执行商品箱编辑保存并核对未发布证明。'
+      : '先完成待认领入箱，再执行商品箱编辑保存并核对未发布证明。'
     : `先在当前任务点击“${READONLY_PRECHECK_CTA}”，通过后再进行人工确认保存。`
   const browserQaScreenshotCount = finalCheck?.browser_qa_screenshot_hashes
     ? Object.keys(finalCheck.browser_qa_screenshot_hashes).length
@@ -536,7 +536,7 @@ function BusinessResultSummaryCard({
 function humanTwoStageAcceptanceStatus(status: string) {
   return ({
     no_task: '等待创建真实任务',
-    missing_claim_stage: '等待待认领商品处理',
+    missing_claim_stage: '等待待认领入箱',
     missing_draft_box_stage: '等待商品箱商品确认',
     missing_save_stage: '等待商品箱编辑保存',
     missing_unpublished_proof: '等待未发布证明',

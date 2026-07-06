@@ -40,7 +40,7 @@ def test_sidebar_uses_two_stage_production_workflow():
     assert "系统维护" in shell
     assert "浏览器现场" in shell
     assert "真实浏览器" in shell
-    for group in ["准备", "第一段：待认领商品", "配置", "第二段：编辑只保存", "复盘", "维护"]:
+    for group in ["准备", "第一段：待认领入箱", "配置", "第二段：编辑只保存", "复盘", "维护"]:
         assert f"label: '{group}'" in shell
     assert "选择商品" not in shell
     assert "QA" not in shell
@@ -56,7 +56,7 @@ def test_sidebar_exposes_production_two_stage_workflow_only():
     expected_items = [
         "{ id: 'home', label: '首页'",
         "{ id: 'dxm_access', label: '账号与浏览器'",
-        "{ id: 'acquisition_claim', label: '待认领商品'",
+        "{ id: 'acquisition_claim', label: '待认领入箱'",
         "{ id: 'template_center', label: '模板中心'",
         "{ id: 'template_management', label: '模板管理'",
         "{ id: 'draft_edit_save', label: '商品箱编辑保存'",
@@ -97,7 +97,7 @@ def test_home_first_screen_uses_user_decision_language_without_technical_terms()
 
     for label in ["操作首页", "现在该做什么", "为什么不能继续", "下一步", "已有待认领商品", "商品箱", "编辑保存", "真实浏览器", "只保存", "不会发布"]:
         assert label in hero_section
-    for label in ["去待认领商品", "去商品箱编辑保存", "去真实浏览器"]:
+    for label in ["去待认领入箱", "去商品箱编辑保存", "去真实浏览器"]:
         assert label in source
     for forbidden in ["L2", "L3", "probe", "run-id", "HAR", "single_save", "claim_only", "Agent 控制台"]:
         assert forbidden not in hero_section
@@ -213,7 +213,7 @@ def test_execution_console_does_not_require_edit_config_or_l3_for_claim_only():
     assert "if (selectedTaskNeedsEditConfig && (configPreviewLoading || configPreview?.taskId !== selectedTask.id))" in build_primary_path_section
     assert "if (selectedTaskNeedsEditConfig && !configOk)" in build_primary_path_section
     assert "if (selectedTaskNeedsManualApproval && !l3Ready)" in build_primary_path_section
-    assert "selectedTask.mode === 'claim_only' ? '启动待认领商品处理'" in build_primary_path_section
+    assert "selectedTask.mode === 'claim_only' ? '启动待认领入箱'" in build_primary_path_section
     assert "已有待认领列表中定位商品，并放进商品箱" in build_primary_path_section
     assert "不会发起采集" not in build_primary_path_section
 
@@ -435,7 +435,7 @@ def test_single_save_recovery_copy_does_not_block_released_claim_stage():
     current_action_section = task_current_action_panel_section()
 
     assert "批量/发布不放行" in recovery_section
-    assert "待认领商品处理只走第一段入口" in source
+    assert "待认领入箱只走第一段入口" in source
     for forbidden in [
         "不放行认领/批量保存",
         "认领和批量保存需要单独验收",
@@ -1421,7 +1421,7 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "type WorkbenchPrimaryArea" in shell_source
     assert "{ id: 'home', label: '首页', short: '首', hint: '查看当前步骤和下一步操作' }" in shell_source
     assert "{ id: 'dxm_access', label: '账号与浏览器', short: '登', hint: '记住账号并打开真实店小秘浏览器' }" in shell_source
-    assert "{ id: 'acquisition_claim', label: '待认领商品', short: '领', hint: '把店小秘里已经存在的待认领商品放进商品箱' }" in shell_source
+    assert "{ id: 'acquisition_claim', label: '待认领入箱', short: '箱', hint: '把店小秘里已经存在的待认领商品放进商品箱' }" in shell_source
     assert "{ id: 'template_center', label: '模板中心', short: '模', hint: '按店小秘编辑页分区管理多套模板' }" in shell_source
     assert "{ id: 'template_management', label: '模板管理', short: '管', hint: '管理店铺、类目和本次任务模板' }" in shell_source
     assert "{ id: 'draft_edit_save', label: '商品箱编辑保存', short: '箱', hint: '从已认领商品箱开始编辑并只保存' }" in shell_source
@@ -1433,7 +1433,7 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "const sectionLabels: Record<WorkbenchSection, string>" in shell_source
     assert "home: '首页'" in shell_source
     assert "dxm_access: '账号与浏览器'" in shell_source
-    assert "acquisition_claim: '待认领商品'" in shell_source
+    assert "acquisition_claim: '待认领入箱'" in shell_source
     assert "draft_edit_save: '商品箱编辑保存'" in shell_source
     assert "template_center: '模板中心'" in shell_source
     assert "template_management: '模板管理'" in shell_source
@@ -1460,7 +1460,7 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "人工确认只保存" in home_page_source
     assert "打开真实浏览器" in home_page_source
     assert "function OperationGuide" in home_page_source
-    assert "待认领商品进入商品箱" in home_page_source
+    assert "第一段：待认领入箱" in home_page_source
     assert "确认保存前安全检查通过" in home_page_source
     assert "打开真实登录页" in dxm_access_source
     assert "验证码完成后检测登录状态" in dxm_access_source
@@ -1611,7 +1611,7 @@ def test_sidebar_primary_navigation_keeps_only_user_main_path():
     expected_sidebar_labels = [
         "首页",
         "账号与浏览器",
-        "待认领商品",
+        "待认领入箱",
         "商品箱编辑保存",
         "模板中心",
         "模板管理",
@@ -1626,7 +1626,7 @@ def test_sidebar_primary_navigation_keeps_only_user_main_path():
     assert primary_area_section.count("{ id: '") == 12
     for label in expected_sidebar_labels:
         assert label in primary_area_section or label in shell_source
-    assert "{ id: 'acquisition_claim', label: '待认领商品'" in primary_area_section
+    assert "{ id: 'acquisition_claim', label: '待认领入箱'" in primary_area_section
     assert "{ id: 'draft_edit_save', label: '商品箱编辑保存'" in primary_area_section
     assert "{ id: 'template_center', label: '模板中心'" in primary_area_section
     assert "{ id: 'template_management', label: '模板管理'" in primary_area_section
@@ -1645,7 +1645,7 @@ def test_sidebar_primary_navigation_keeps_only_user_main_path():
     assert "id: 'dashboard'" not in primary_area_section
     assert "id: 'agent_execution'" not in primary_area_section
     assert "label: '更多'" not in primary_area_section
-    assert "首页 / 账号与浏览器 / 待认领商品 / 模板中心 / 模板管理 / 商品箱编辑保存 / 当前保存任务 / 浏览器现场 / 任务记录 / 报告与证据 / 问题与证据 / 系统维护" in shell_source
+    assert "首页 / 账号与浏览器 / 待认领入箱 / 模板中心 / 模板管理 / 商品箱编辑保存 / 当前保存任务 / 浏览器现场 / 任务记录 / 报告与证据 / 问题与证据 / 系统维护" in shell_source
     forbidden_default_labels = ["Agent Console", "L2", "L3", "probe", "HAR", "run-id", "结果与问题", "问题诊断", "任务与人工确认"]
     for label in forbidden_default_labels:
         assert label not in primary_area_section
@@ -1828,7 +1828,7 @@ def test_default_shell_copy_does_not_present_demo_as_user_path():
     assert "连接状态" in shell_source
     assert "数据连接状态：{sourceLabel}" in shell_source
     assert "<strong>{sourceLabel}</strong>" not in shell_source
-    assert "真实店小秘操作分为待认领商品处理和商品箱编辑只保存" in shell_source
+    assert "真实店小秘操作分为待认领入箱和商品箱编辑只保存" in shell_source
     assert "真实接口优先" not in shell_source
     assert "不伪造保存结果" not in shell_source
     assert "演示数据仅开发模式可用" not in shell_source
@@ -2152,7 +2152,7 @@ def test_execution_console_select_task_state_explains_task_preparation_path():
 
     assert "code: 'select_task'" in primary_path_section
     assert "title: '需要选择任务'" in primary_path_section
-    assert "ctaLabel: '去待认领商品'" in primary_path_section
+    assert "ctaLabel: '去待认领入箱'" in primary_path_section
     assert "primaryPath.code === 'select_task'" in blocker_card_section
     assert "aria-label=\"任务准备路径\"" in blocker_card_section
     assert "console-primary-blocker-card__task-path" in blocker_card_section
@@ -2885,7 +2885,7 @@ def test_dashboard_and_guide_default_copy_hide_gate_codes():
         assert "single_save 任务" not in section
         assert "运行 L2 页面核验" not in section
         assert "运行 L2 复验" not in section
-    assert "待认领商品进入商品箱" in operation_guide_section
+    assert "待认领入箱" in operation_guide_section
     assert "确认保存前安全检查通过" in operation_guide_section
     assert "打开真实登录页" in dxm_access_source
     assert "AgentStagePanel" in console_section
@@ -3168,9 +3168,10 @@ def test_task_and_evidence_center_describe_l3_blocked_as_expected_lock():
     assert "解除发布隔离风险" not in task_center_section
     assert "齐全后才会形成 A/B/C 证据等级" not in evidence_timeline_section
 
-    assert "保存前安全检查通过后才启动待认领商品处理" in task_center_section
+    assert "待认领入箱是第一段；保存前安全检查只用于第二段商品箱编辑保存前" in task_center_section
+    assert "保存前安全检查通过后才启动待认领商品处理" not in task_center_section
     assert "人工确认未完成前不启动单商品只保存" in task_center_section
-    assert "当前按钮策略：保存前安全检查未通过时保持阻断" in task_center_section
+    assert "当前按钮策略：待认领入箱可启动第一段流程；保存前安全检查未通过时只阻断第二段编辑保存" in task_center_section
     assert "人工确认未完成，禁止启动" in task_center_section
     assert "当前真实保存未放行时" in evidence_timeline_section
     assert "0 条是预期阻断" in evidence_timeline_section
@@ -3475,7 +3476,7 @@ def test_task_center_explains_quick_action_availability_in_first_screen():
     assert "quickCreateSingleSaveDisabledReason || '可创建商品箱编辑保存任务'" in task_center_section
     assert "const blockedStartButtonLabel =" in task_center_section
     assert "start: blockedStartButtonLabel" in task_center_section
-    assert "暂无历史任务；先完成待认领商品进入商品箱，再创建商品箱编辑保存任务。" in task_center_section
+    assert "暂无历史任务；先完成待认领入箱，再创建商品箱编辑保存任务。" in task_center_section
     assert "aria-label=\"任务按钮不可点击原因\"" in quick_actions_section
     assert "<summary>为什么不能启动浏览器现场</summary>" in quick_actions_section
     assert "<strong>创建任务</strong>" in quick_actions_section
@@ -3670,7 +3671,7 @@ def test_frontend_blocks_unreleased_real_modes_before_l3_manual_approval():
     assert "const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save'])" in source
     assert "const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['batch_save'])" in source
     assert "UNRELEASED_REAL_DXM_MUTATION_MODES.has(selectedTask.mode)" in start_section
-    assert "当前仅开放待认领商品处理和单商品只保存" in start_section
+    assert "当前仅开放待认领入箱和单商品只保存" in start_section
     assert "批量保存必须重新验收后再放行" in start_section
     assert "将只启动单商品只保存任务，不会发布" in start_section
     assert "将只启动 save-only/claim-only 受控任务" not in start_section
@@ -3680,7 +3681,7 @@ def test_frontend_blocks_unreleased_real_modes_before_l3_manual_approval():
     assert "未发布，禁止启动" in workbench_source
     assert "function isReleasedRealDxmMutationTask" in workbench_source
     assert "function isUnreleasedRealDxmMutationTask" in workbench_source
-    assert "当前按钮策略：保存前安全检查未通过时保持阻断；待认领商品处理可启动第一段流程；单商品只保存仍需后端人工批准；批量保存当前未开放。" in workbench_source
+    assert "当前按钮策略：待认领入箱可启动第一段流程；保存前安全检查未通过时只阻断第二段编辑保存；单商品只保存仍需后端人工批准；批量保存当前未开放。" in workbench_source
     assert "unreleasedRealModeCopy" in qa_source
     assert "unreleasedRealModeButtonDisabled" in qa_source
     assert "async function verifyUnreleasedRealModeCreateBlocked()" in qa_source
@@ -3753,7 +3754,7 @@ def test_task_center_surfaces_real_mode_release_readiness_without_releasing_mode
     assert "readiness_checklist" in workspace_source
     assert "RealModeReleasePlanPanel" in task_center_section
     assert "真实模式放行准备" in panels_source
-    assert "待认领商品处理和单商品只保存受控开放" in panels_source
+    assert "待认领入箱和商品箱编辑保存受控开放" in panels_source
     assert "批量保存仍需单独验收" in panels_source
     assert "不能复用其它模式证据" in panels_source
     assert "批量大小上限" in panels_source
@@ -4681,7 +4682,7 @@ def test_frontend_first_screen_names_dxm_automation_delivery():
     assert "系统状态与验收详情" not in safety_bar
     assert "safety-bar__meta-details inline-disclosure" not in safety_bar
     assert "真实保存已阻断" not in safety_bar
-    assert "首页 / 账号与浏览器 / 待认领商品 / 模板中心 / 模板管理 / 商品箱编辑保存 / 当前保存任务 / 浏览器现场 / 任务记录 / 报告与证据 / 问题与证据 / 系统维护" in shell
+    assert "首页 / 账号与浏览器 / 待认领入箱 / 模板中心 / 模板管理 / 商品箱编辑保存 / 当前保存任务 / 浏览器现场 / 任务记录 / 报告与证据 / 问题与证据 / 系统维护" in shell
     assert "\\u0044\\u0058\\u004d \\u5355\\u5546\\u54c1\\u53ea\\u4fdd\\u5b58 Agent" in qa_source
     assert "initialText.includes(text.overview) || initialText.includes('\\u767b\\u5f55\\u5e97\\u5c0f\\u79d8') || initialText.includes('\\u5f00\\u59cb\\u53ea\\u4fdd\\u5b58')" in qa_source
     assert "\\u73b0\\u5728\\u53ea\\u505a\\u8fd9\\u4e00\\u6b65" in qa_source
@@ -4710,7 +4711,7 @@ def test_sidebar_copy_names_save_only_agent_flow_without_ambiguous_browser_wordi
     assert "使用帮助" not in primary_area_section
     assert "帮助与设置" not in shell
     assert "先认领已有商品，再编辑只保存" in shell
-    assert "{ id: 'acquisition_claim', label: '待认领商品', short: '领', hint: '把店小秘里已经存在的待认领商品放进商品箱' }" in shell
+    assert "{ id: 'acquisition_claim', label: '待认领入箱', short: '箱', hint: '把店小秘里已经存在的待认领商品放进商品箱' }" in shell
     assert "{ id: 'template_center', label: '模板中心', short: '模', hint: '按店小秘编辑页分区管理多套模板' }" in shell
     assert "{ id: 'template_management', label: '模板管理', short: '管', hint: '管理店铺、类目和本次任务模板' }" in shell
     assert "{ id: 'draft_edit_save', label: '商品箱编辑保存', short: '箱', hint: '从已认领商品箱开始编辑并只保存' }" in shell
@@ -4720,7 +4721,7 @@ def test_sidebar_copy_names_save_only_agent_flow_without_ambiguous_browser_wordi
     assert "{ id: 'results', label: '报告与证据', short: '报', hint: '查看保存结果和未发布证明' }" in shell
     assert "{ id: 'issues', label: '问题与证据', short: '证', hint: '查看阻断原因、恢复建议和证据' }" in shell
     assert "{ id: 'settings', label: '系统维护', short: '系', hint: '查看运行环境、日志路径和维护设置' }" in shell
-    assert "真实店小秘操作分为待认领商品处理和商品箱编辑只保存" in shell
+    assert "真实店小秘操作分为待认领入箱和商品箱编辑只保存" in shell
 
     assert "配置 / 任务 / 真实浏览器执行" not in shell
     assert "Agent 控制台与真实浏览器" not in shell
@@ -4791,7 +4792,7 @@ def test_home_dashboard_is_operator_command_center_not_static_metrics():
     assert "onShowReports" in dashboard_section
     assert "现在只做这一步" in dashboard_section
     assert "登录真实店小秘" in dashboard_section
-    assert "处理待认领商品" in dashboard_section
+    assert "待认领入箱" in dashboard_section
     assert "检查编辑页模板" in dashboard_section
     assert "运行保存前安全检查" in dashboard_section
     assert "人工确认只保存" in dashboard_section
@@ -5012,7 +5013,11 @@ def test_help_page_is_operator_guide_not_diagnostics():
     assert "失败后先看哪里" in help_source
     assert "系统不会做什么" in help_source
     assert "从登录开始" in help_source
-    assert "去选择商品" in help_source
+    assert "去待认领入箱" in help_source
+    assert "先把已有待认领商品放进商品箱" in help_source
+    assert "待认领商品认领到商品箱" in help_source
+    assert "从商品箱创建编辑保存任务" in help_source
+    assert "选择一个商品后创建单商品只保存任务" not in help_source
     assert "只点击保存，不发布" in help_source
     assert "真实浏览器左上角进度" in help_source
     assert "export { HelpPage as HelpCenter }" in source

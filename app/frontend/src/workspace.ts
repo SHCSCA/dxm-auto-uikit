@@ -211,8 +211,8 @@ export function buildEmptyWorkspace(): DeliveryWorkspace {
       evidenceLevel: 'C',
     }],
     safety: {
-      mode: '待认领商品 / 商品箱单商品只保存',
-      guarantee: '只保存不发布：当前只开放待认领商品处理和受控单商品只保存；批量、无人值守和发布仍关闭。',
+      mode: '待认领商品 -> 商品箱 -> 编辑保存只保存',
+      guarantee: '只保存不发布：当前只开放待认领入箱和受控单商品只保存；批量、无人值守和发布仍关闭。',
       forbiddenActions: ['发布', '继续发布', '保存并发布', '移入待发布'],
       lastCheckedAt: '等待任务数据',
     },
@@ -366,7 +366,7 @@ export function buildRealModeReleasePlan(): RealModeReleasePlan {
       },
       {
         mode: 'claim_only',
-        label: '受控待认领商品处理待后端确认',
+        label: '受控待认领入箱待后端确认',
         status: 'blocked_stale_l2',
         allowed: false,
         release_scope: 'controlled claim to draft box',
@@ -708,7 +708,7 @@ function safetyFromGuard(
   if (!guard) return null
   const checked = guard.status === 'safe_unpublished' ? 'published=false 已确认' : guard.status
   return {
-    mode: '待认领商品 / 商品箱单商品只保存',
+    mode: '待认领商品 -> 商品箱 -> 编辑保存只保存',
     guarantee: guard.safe
       ? '只保存不发布：发布隔离已开启，工作台没有发布动作入口。'
       : '只保存不发布：检测到发布风险信号，任务必须停止复核。',

@@ -33,15 +33,15 @@ export function HelpPage({
         <div className="guide-step guide-step--primary">
           <span aria-hidden="true">1</span>
           <div>
-            <strong>目标只有一个：让 Agent 打开真实店小秘，只点击保存，不发布。</strong>
+            <strong>目标只有一个：先把已有待认领商品放进商品箱，再让 Agent 只点击保存，不发布。</strong>
             <div className="guide-step__summary-line">
-              <small>你按页面顺序完成登录、选择商品、填写编辑页配置，然后在真实浏览器里检查并执行只保存。</small>
+              <small>你按页面顺序完成登录、待认领商品认领到商品箱、填写编辑页配置，然后在真实浏览器里检查并执行只保存。</small>
               <em>发布、批量和无人值守提交不会出现在主流程里。</em>
             </div>
           </div>
           <div className="guide-step__actions">
             <button className="button button--primary" type="button" onClick={onShowDxmAccess}>从登录开始</button>
-            <button className="button button--secondary" type="button" onClick={onShowTasks}>去选择商品</button>
+            <button className="button button--secondary" type="button" onClick={onShowTasks}>去待认领入箱</button>
           </div>
         </div>
       </div>
@@ -60,23 +60,23 @@ export function HelpPage({
           <GuideStep
             index="2"
             state={hasTask ? 'is-done' : dxmLoggedIn ? 'is-current' : undefined}
-            title="选择商品"
-            detail="选择一个商品后创建单商品只保存任务；一次只处理一个商品更容易检查。"
-            action="选择商品"
+            title="待认领商品认领到商品箱"
+            detail="先选择店小秘已有待认领商品，启动真实浏览器把它认领到商品箱；这里不会填写产品网址或创建新商品。"
+            action="待认领入箱"
             onAction={onShowTasks}
           />
           <GuideStep
             index="3"
             state={hasTask ? 'is-current' : undefined}
             title="填写编辑页配置"
-            detail="按店小秘编辑页分区填写店铺、类目、价格、图片、包装物流等取值。"
+            detail="商品进入商品箱后，按店小秘编辑页分区填写店铺、类目、价格、图片、包装物流等模板取值。"
             action="填写配置"
             onAction={onShowConfig}
           />
           <GuideStep
             index="4"
             title="启动只保存"
-            detail="先做安全检查，再在真实浏览器里人工确认页面，最后让 Agent 只点击保存。"
+            detail="第二段保存前先做安全检查，再在真实浏览器里人工确认页面，最后让 Agent 只点击保存。"
             action="进入执行"
             onAction={onShowConsole}
           />
@@ -92,11 +92,11 @@ export function HelpPage({
           </li>
           <li className={hasTask ? 'is-done' : undefined}>
             <span aria-hidden="true">2</span>
-            <strong>选择一个商品并确认任务</strong>
+            <strong>把已有待认领商品认领到商品箱</strong>
           </li>
           <li>
             <span aria-hidden="true">3</span>
-            <strong>检查编辑页配置会用哪些值</strong>
+            <strong>从商品箱创建编辑保存任务，检查模板会用哪些值</strong>
           </li>
           <li>
             <span aria-hidden="true">4</span>

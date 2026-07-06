@@ -450,7 +450,7 @@ export function RealModeReleasePlanPanel({ items }: { items: DeliveryWorkspace['
       <div className="real-mode-release-panel__head">
         <div>
           <strong>真实模式放行准备</strong>
-          <span>待认领商品处理和单商品只保存受控开放；批量保存仍需单独验收。</span>
+          <span>待认领入箱和商品箱编辑保存受控开放；批量保存仍需单独验收。</span>
         </div>
         <span className="guard-chip guard-chip--danger">受控认领 + 单商品只保存</span>
       </div>
@@ -658,7 +658,7 @@ function taskStartDecision({
     return {
       scope: '不可启动',
       reason: `${humanTaskModeLabel(selectedTask.mode)} 当前未放行。`,
-      next: '回到两段式主路径；待认领商品处理只走第一段入口，批量保存需要单独验收。',
+      next: '回到两段式主路径；待认领入箱只走第一段入口，批量保存需要单独验收。',
       tone: 'warn',
     }
   }
