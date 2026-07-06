@@ -3204,10 +3204,14 @@ def test_task_center_only_uses_demo_ready_copy_for_dry_run_tasks():
     assert "当前真实任务保持门禁控制，请先处理上方阻断原因。" in panels_source
 
 
-def test_task_center_exposes_real_task_creation_instead_of_demo_first_flow():
+def test_draft_edit_save_owns_real_task_creation_instead_of_current_task_page():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     app_source = APP_TSX.read_text(encoding="utf-8")
+    draft_source = DRAFT_EDIT_SAVE_PAGE_TSX.read_text(encoding="utf-8")
+    product_tasks_source = PRODUCT_TASKS_PAGE_TSX.read_text(encoding="utf-8")
     task_center_section = source[source.index("export function TaskCenterView"):source.index("export function ExecutionConsole")]
+    product_tasks_route = app_source[app_source.index("case 'product_tasks'"):app_source.index("case 'draft_edit_save'")]
+    draft_edit_route = app_source[app_source.index("case 'draft_edit_save'"):app_source.index("case 'start_save'")]
 
     assert "onCreateRealTask" in task_center_section
     assert "创建真实任务" in task_center_section
@@ -3220,7 +3224,15 @@ def test_task_center_exposes_real_task_creation_instead_of_demo_first_flow():
     assert "postJson<Task>('/api/tasks'" in app_source
     assert "mode: request.mode" in app_source
     assert "publish_scene: 'SMT_SEMI_MANAGED_SAVE_ONLY'" in app_source
-    assert "onCreateRealTask={createRealTask}" in app_source
+    assert "onCreateRealTask={createRealTask}" not in product_tasks_route
+    assert "onBootstrapDemo={bootstrapDemo}" not in product_tasks_route
+    assert "onStartTask={startSelectedTask}" not in product_tasks_route
+    assert "onCreateRealTask:" not in product_tasks_source
+    assert "onBootstrapDemo:" not in product_tasks_source
+    assert "demoEnabled" not in product_tasks_source
+    assert "onCreateSaveTask={(productId) =>" in draft_edit_route
+    assert "void createRealTask({ storeId, mode: 'single_save', productIds: [productId] })" in draft_edit_route
+    assert "创建编辑保存任务" in draft_source
 
 
 def test_task_center_surfaces_single_save_recovery_guide_for_blocked_real_tasks():
@@ -5090,15 +5102,25 @@ def test_product_tasks_page_is_extracted_from_workbench_modules():
     assert "ProductTasksPage as TaskCenter" in app_source
     assert "from './components/workbench/ProductTasksPage'" in app_source
     assert "export function ProductTasksPage" in product_tasks_source
-    assert "TaskCenterView" in product_tasks_source
-    assert "return <TaskCenterView {...props} />" in product_tasks_source
+    assert "TaskCenterView" not in product_tasks_source
+    assert "return <TaskCenterView {...props} />" not in product_tasks_source
     assert "export function TaskCenterView" in source
-    assert "aria-label=\"编辑保存\"" in source
-    assert "aria-label=\"编辑保存主操作\"" in source
-    assert "ModuleHead title=\"编辑保存\"" in source
-    assert "创建编辑保存任务" in source
+    assert "aria-label=\"当前保存任务\"" in product_tasks_source
+    assert "这里不选择商品，也不创建任务" in product_tasks_source
+    assert "要创建新的只保存任务，请先在“待认领入箱”完成第一段" in product_tasks_source
+    assert "onShowDraftEdit={() => setActiveSection('draft_edit_save')}" in app_source
+    assert "go_draft_edit: actions.onShowDraftEdit" in product_tasks_source
+    assert "onCreateRealTask:" not in product_tasks_source
+    assert "onBootstrapDemo:" not in product_tasks_source
+    assert "onStartTask:" not in product_tasks_source
+    assert "onStartTask," not in product_tasks_source
+    assert "start: actions.onShowConsole" in product_tasks_source
+    assert "onCreateRealTask={createRealTask}" not in app_source
+    assert "onBootstrapDemo={bootstrapDemo}" not in app_source
+    assert "onStartTask={startSelectedTask}" not in app_source[app_source.index("case 'product_tasks'"):app_source.index("case 'draft_edit_save'")]
+    assert "data-testid=\"task-quick-create-single-save\"" not in product_tasks_source
+    assert "aria-label=\"选择商品箱商品\"" not in product_tasks_source
     assert "任务与记录" not in source
-    assert "商品箱编辑保存主操作" not in source
     assert "export function TaskCenter(" not in source
 
 

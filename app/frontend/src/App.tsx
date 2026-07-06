@@ -1242,7 +1242,6 @@ export default function App() {
             runtimeStatus={runtimeStatus}
             runtimeStatusError={runtimeStatusError}
             busy={busy}
-            demoEnabled={DEMO_ENABLED}
             l3ApprovedBy={l3ApprovedBy}
             onL3ApprovedByChange={setL3ApprovedBy}
             onRunL2Probe={runL2ReadonlyProbe}
@@ -1251,10 +1250,8 @@ export default function App() {
               syncSelectedTaskIdUrl(taskId)
               void refreshConfigPreview(taskId)
             }}
-            onCreateRealTask={createRealTask}
-            onBootstrapDemo={bootstrapDemo}
-            onStartTask={startSelectedTask}
             onShowConfig={() => setActiveSection('edit_config')}
+            onShowDraftEdit={() => setActiveSection('draft_edit_save')}
             onShowConsole={() => setActiveSection('start_save')}
             onShowEvidence={() => setActiveSection('results')}
             onShowReports={() => setActiveSection('results')}
