@@ -162,13 +162,16 @@ export function ResultsPage({
         </div>
         <p>{l2ProbePlan.purpose || '真实保存保持暂停；仅在操作者确认可进行只读检查时，才重新运行已有待认领列表和商品箱检查。'}</p>
         <p>已有待认领列表和商品箱必须使用同一次检查记录复验，确保双目标证据绑定到同一次人工批准的安全检查。</p>
-        <div className="l2-next-step-card__commands">
-          {l2ProbePlan.commands.map((command) => (
-            <code key={command}>{command}</code>
-          ))}
-        </div>
-        <p>证据目录：{l2ProbePlan.outputDir}。{l2ProbePlan.acceptanceCriteria.join(' ')}</p>
-        <p>{l2ProbePlan.safetyNotes.join(' ')}</p>
+        <details className="disclosure-card">
+          <summary>维护命令与证据目录</summary>
+          <div className="l2-next-step-card__commands">
+            {l2ProbePlan.commands.map((command) => (
+              <code key={command}>{command}</code>
+            ))}
+          </div>
+          <p>证据目录：{l2ProbePlan.outputDir}。{l2ProbePlan.acceptanceCriteria.join(' ')}</p>
+          <p>{l2ProbePlan.safetyNotes.join(' ')}</p>
+        </details>
       </details>
       <details className="module-card span-3 disclosure-card">
         <summary>
@@ -241,7 +244,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
   const freshnessLabel = finalCheckMatchesCurrent ? '自检覆盖当前代码' : '自检未覆盖当前代码'
   const browserCheckLabel = `浏览器检查${finalCheck?.browser_qa_ok === true ? '已通过' : finalCheck?.browser_qa_ok === false ? '未通过' : '待刷新'}`
   const reportEvidenceCheckLabel = `保存证据检查${finalCheck?.post_final_report_qa_ok === true ? '已通过' : finalCheck?.post_final_report_qa_ok === false ? '未通过' : '待刷新'}`
-  const localWorkbenchLabel = `自动化工作台 ${finalCheck?.local_workbench_check ?? '未检查'}`
+  const localWorkbenchLabel = `本机检查${finalCheck?.local_workbench_check === 'PASS' ? '已通过' : finalCheck?.local_workbench_check === 'FAIL' ? '未通过' : '待刷新'}`
   const readinessBoundaryCopy = isReadyReadiness(readiness)
     ? twoStagePassed
       ? '真实店小秘两段式端到端已通过；批量、无人值守和发布仍保持关闭。'
@@ -250,7 +253,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
 
   return (
     <div className="module-card span-3 delivery-check-card">
-      <ModuleHead title="交付检查状态" meta={available ? checkedAt : '尚未运行'} />
+      <ModuleHead title="交付进度" meta={available ? checkedAt : '尚未运行'} />
       <div className="report-check-grid">
         <CheckRow
           label={`最终验收报告${localWorkbenchOk ? '通过' : '待刷新'}`}
@@ -298,7 +301,6 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
           <span>{localWorkbenchLabel}</span>
           <span>{browserCheckLabel}</span>
           <span>{reportEvidenceCheckLabel}</span>
-          <span>{`最终报告与证据 QA ${postFinalReportQaState}`}</span>
           <span>{freshnessLabel}</span>
           <span>{readinessBoundaryCopy}</span>
         </div>
@@ -334,9 +336,9 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
             <FinalCheckFreshnessRow finalCheck={finalCheck} />
             <RuntimeGateFreshnessRow finalCheck={finalCheck} />
             <SourcePackageCheckRow finalCheck={finalCheck} />
-            <CheckRow label={`浏览器 QA ${finalCheck?.browser_qa_ok === true ? 'PASS' : finalCheck?.browser_qa_ok === false ? 'FAIL' : '待刷新/未运行'}`} ok={finalCheck?.browser_qa_ok === true} />
+            <CheckRow label={`浏览器检查${finalCheck?.browser_qa_ok === true ? '已通过' : finalCheck?.browser_qa_ok === false ? '未通过' : '待刷新/未运行'}`} ok={finalCheck?.browser_qa_ok === true} />
             <CheckRow
-              label={`最终报告与证据 QA ${postFinalReportQaState}`}
+              label={`报告页面检查 ${postFinalReportQaState}`}
               ok={finalCheck?.post_final_report_qa_ok === true}
               testId="final-report-center-qa"
               state={postFinalReportQaState}
@@ -378,7 +380,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
             <span>预期真实写入 {finalCheck?.expected_real_dxm_write_readiness ?? '未记录'} / 有效预期匹配 {finalCheck?.effective_real_dxm_write_readiness_matches_expected === true ? 'true' : 'false'} / 报告记录匹配 {finalCheck?.real_dxm_write_readiness_matches_expected === true ? 'true' : 'false'}</span>
             <span>保存前安全检查候选评审模板 {finalCheck?.l2_allowlist_review_template_state ?? '未生成'} / 候选 {finalCheck?.l2_allowlist_review_template_candidate_count ?? 0} 项</span>
             <span>模板哈希 MD {shortHash(finalCheck?.l2_allowlist_review_template_markdown_sha256)} / JSON {shortHash(finalCheck?.l2_allowlist_review_template_json_sha256)}</span>
-            <span>浏览器 QA Git {browserQaGitHead} / 截图哈希 {finalCheck?.browser_qa_screenshot_hashes ? Object.keys(finalCheck.browser_qa_screenshot_hashes).length : 0} 项</span>
+            <span>浏览器检查代码版本 {browserQaGitHead} / 截图哈希 {finalCheck?.browser_qa_screenshot_hashes ? Object.keys(finalCheck.browser_qa_screenshot_hashes).length : 0} 项</span>
             <span>最终报告页截图 qa-report-center-final.png / 截图哈希 {finalCheck?.post_final_report_qa_screenshot_hashes ? Object.keys(finalCheck.post_final_report_qa_screenshot_hashes).length : 0} 项</span>
           </div>
           <div className="delivery-check-card__commands">

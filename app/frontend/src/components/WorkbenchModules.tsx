@@ -3533,12 +3533,11 @@ function getL2ProbeResourceState(runtimeStatus: RuntimeStatus | null) {
     }
   }
   if (runtimeStatus.l2ReadonlyProbe?.running) {
-    const runId = runtimeStatus.l2ReadonlyProbe.runId ?? '未知 runId'
     const taskId = runtimeStatus.l2ReadonlyProbe.taskId ? ` / 任务 #${runtimeStatus.l2ReadonlyProbe.taskId}` : ''
     return {
       blocked: true,
-      title: `保存前安全检查正在运行：${runId}${taskId}`,
-      detail: `保存前安全检查正在运行，请等待完成。当前检查：${runId}${taskId}。请等待完成或查看实时日志；完成前不会启动第二个检查。关闭旧窗口或后台旧进程后，再重新打开免安装版。`,
+      title: `保存前安全检查正在运行${taskId}`,
+      detail: '本轮保存前安全检查正在运行，请等待完成或查看实时日志；完成前不会启动第二个检查。',
       repairSteps: [],
       checkedPathPreview: [],
     }
@@ -3596,7 +3595,7 @@ function RuntimeControlResultSummary({ result }: { result: RuntimeControlRespons
         <small>不会保存、不会发布；请保持真实店小秘登录窗口可用。</small>
         <details className="inline-disclosure">
           <summary>技术日志</summary>
-          <small>run-id：{result.runId ?? '等待返回'}</small>
+          <small>检查编号：{result.runId ?? '等待返回'}</small>
           <small>日志：{result.logPath ?? '启动器日志'}</small>
         </details>
       </div>
@@ -4681,7 +4680,7 @@ function L2RunnerStatePanel({
         {(state.runId || state.exitCode !== null || stateLine) && (
           <details className="inline-disclosure">
             <summary>排障日志</summary>
-            {state.runId && <small>run-id：{state.runId}</small>}
+            {state.runId && <small>检查编号：{state.runId}</small>}
             {state.exitCode !== null && <small>退出码：{state.exitCode}</small>}
             {stateLine && <code>{stateLine}</code>}
           </details>

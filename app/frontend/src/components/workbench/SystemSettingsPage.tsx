@@ -39,9 +39,9 @@ export function SystemSettingsPage({
     : '最近验收：未读取'
 
   return (
-    <section className="module-layout" aria-label="系统设置">
+    <section className="module-layout" aria-label="系统维护">
       <div className="module-card span-3">
-        <ModuleHead title="系统设置" meta="服务状态、日志路径和技术诊断" />
+        <ModuleHead title="运行与安全" meta="真实浏览器、服务状态和安全范围" />
         <div className="settings-summary-grid">
           <div className="settings-summary-card">
             <span>当前可执行范围</span>
@@ -73,8 +73,8 @@ export function SystemSettingsPage({
 
       <details className="module-card disclosure-card">
         <summary>
-          日志和本机路径
-          <span>排障时展开</span>
+          维护人员：日志和本机路径
+          <span>排障时展开，普通使用无需处理</span>
         </summary>
         <div className="settings-path-list">
           <div><span>后端日志</span><code>{desktopRuntime?.backendLogPath ?? '运行后生成'}</code></div>
@@ -85,8 +85,8 @@ export function SystemSettingsPage({
 
       <details className="module-card span-3 disclosure-card">
         <summary>
-          技术诊断
-          <span>维护人员使用</span>
+          维护人员：检查细节
+          <span>普通使用只看上方运行状态</span>
         </summary>
         <RegressionGateGrid gates={workspace.regressionGates} />
         <p>验收状态用于判断当前版本能否交付受控单商品只保存路径；不扩大为批量、无人值守或发布能力。</p>
@@ -122,20 +122,35 @@ function RegressionGateGrid({ gates }: { gates: RegressionGate[] }) {
       {gates.map((gate) => (
         <div key={gate.level} className={`regression-gate ${gateStatusTone(gate.status)}`}>
           <div className="regression-gate__head">
-            <strong>{gate.level}</strong>
+            <strong>{humanGateBusinessName(gate)}</strong>
             <span className={`status-pill ${gateStatusPill(gate.status)}`}>{humanGateStatus(gate.status)}</span>
           </div>
           <h3>{gate.title}</h3>
           <p>{gate.detail}</p>
           <div className="regression-gate__meta">
-            <span>证据 {gate.evidenceLevel}</span>
-            <span>{gate.requiresApproval ? '需批准' : '本地门禁'}</span>
+            <span>{gate.requiresApproval ? '需要人工确认' : '系统自动检查'}</span>
           </div>
-          {gate.command && <code>{gate.command}</code>}
+          <details className="disclosure-card regression-gate__technical">
+            <summary>维护细节</summary>
+            <div className="settings-path-list">
+              <div><span>检查编号</span><code>{gate.level}</code></div>
+              <div><span>证据等级</span><code>{gate.evidenceLevel}</code></div>
+              {gate.command && <div><span>检查命令</span><code>{gate.command}</code></div>}
+            </div>
+          </details>
         </div>
       ))}
     </div>
   )
+}
+
+function humanGateBusinessName(gate: RegressionGate) {
+  const title = gate.title || ''
+  if (gate.level === 'L2' || title.includes('只读') || title.includes('页面')) return '保存前安全检查'
+  if (gate.level === 'L3' || title.includes('人工') || title.includes('保存')) return '人工确认只保存'
+  if (gate.level === 'L1') return '页面基础检查'
+  if (gate.level === 'L0') return '本机启动检查'
+  return title || '自动化检查'
 }
 
 function displayTaskName(task: Pick<Task, 'name' | 'mode'>) {

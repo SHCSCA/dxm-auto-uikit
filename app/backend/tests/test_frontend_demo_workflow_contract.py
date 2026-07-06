@@ -2729,8 +2729,15 @@ def test_report_center_uses_backend_l2_probe_plan_contract():
     assert "维护人员：重新验证保存前安全检查" in report_center_section
     assert "高级复核，需人工批准" in report_center_section
     assert "workspace.l2ProbePlan" in report_center_section
+    assert "维护命令与证据目录" in report_center_section
     assert "l2ProbePlan.commands.map" in report_center_section
     assert "l2ProbePlan.acceptanceCriteria" in report_center_section
+    visible_recheck_section = report_center_section[
+        report_center_section.index("维护人员：重新验证保存前安全检查"):
+        report_center_section.index("维护命令与证据目录")
+    ]
+    assert "l2ProbePlan.commands.map" not in visible_recheck_section
+    assert "l2ProbePlan.outputDir" not in visible_recheck_section
     assert "normalizeL2ProbePlan" in workspace_source
     assert "desktopCookieFile" in workspace_source
     assert "DXM Agent Console\\\\data\\\\sessions\\\\dianxiaomi_cookies.json" in workspace_source
@@ -2838,7 +2845,7 @@ def test_browser_qa_final_report_requires_two_stage_production_status():
 def test_report_center_keeps_final_check_engineering_details_in_appendix():
     final_card_section = final_delivery_card_section()
 
-    assert "ModuleHead title=\"交付检查状态\"" in final_card_section
+    assert "ModuleHead title=\"交付进度\"" in final_card_section
     assert "最终验收报告${localWorkbenchOk ? '通过' : '待刷新'}" in final_card_section
     assert "交付检查报告待刷新；当前运行状态已按最新真实检查结果覆盖为可申请单商品只保存" in final_card_section
     assert "历史验收结果已过期，请先重新运行只读复验和本地验收。" not in final_card_section
@@ -2853,7 +2860,7 @@ def test_report_center_keeps_final_check_engineering_details_in_appendix():
     assert "维护验收信息" in final_card_section
     assert "维护人员使用" in final_card_section
     assert "delivery-check-card__qa-summary" in final_card_section
-    assert "浏览器 QA Git" in final_card_section
+    assert "浏览器检查代码版本" in final_card_section
     assert "截图哈希" in final_card_section
     assert "命令、源码包、路径和门禁细节" not in final_card_section
     assert '<details className="disclosure-card delivery-check-card__technical">' in final_card_section
@@ -2866,8 +2873,11 @@ def test_report_center_keeps_final_check_engineering_details_in_appendix():
     ]
     assert "delivery-check-card__paths" not in appendix_before_technical
     assert "delivery-check-card__commands" not in appendix_before_technical
-    visible_section = final_card_section[:final_card_section.index('<details className="disclosure-card delivery-check-card__appendix">')]
-    for forbidden in ("源码包验收", "Browser QA", "allowlist", "READY", "BLOCKED", "L2=", "L3=", "scripts\\final-delivery-check.bat"):
+    visible_section = final_card_section[
+        final_card_section.index('<div className="module-card span-3 delivery-check-card">'):
+        final_card_section.index('<details className="disclosure-card delivery-check-card__appendix">')
+    ]
+    for forbidden in ("源码包验收", "Browser QA", "QA", "Git", "allowlist", "READY", "BLOCKED", "L2=", "L3=", "scripts\\final-delivery-check.bat", "命令", "路径"):
         assert forbidden not in visible_section
 
 
@@ -3997,10 +4007,10 @@ def test_execution_console_disables_l2_probe_when_runner_lock_is_active():
     assert "running: boolean" in types_source
     assert "runtimeStatus.l2ReadonlyProbe?.running" in l2_state_function
     assert "保存前安全检查正在运行" in l2_state_function
-    assert "runId" in l2_state_function
+    assert "runId" not in l2_state_function
     assert "请等待完成或查看实时日志" in l2_state_function
-    assert "保存前安全检查正在运行，请等待完成。" in l2_state_function
-    assert "关闭旧窗口或后台旧进程后，再重新打开免安装版。" in l2_state_function
+    assert "本轮保存前安全检查正在运行" in l2_state_function
+    assert "关闭旧窗口或后台旧进程后，再重新打开免安装版。" not in l2_state_function
 
 
 def test_task_center_precheck_cards_receive_resource_state_prop():
@@ -4117,7 +4127,8 @@ def test_execution_console_surfaces_l2_runner_result_not_just_start_message():
     assert "保存前安全检查已运行，但状态未刷新通过" in app_source
     runner_panel = workbench_source[workbench_source.index("function L2RunnerStatePanel"):workbench_source.index("function L2PrecheckFailureAdvice")]
     assert "<summary>排障日志</summary>" in runner_panel
-    assert "run-id：" in runner_panel
+    assert "检查编号：{state.runId}" in runner_panel
+    assert "run-id：" not in runner_panel
     assert "退出码：" in runner_panel
     failure_advice = workbench_source[workbench_source.index("function L2PrecheckFailureAdvice"):workbench_source.index("function L2PrecheckRunbook")]
     assert "请确认已登录并能打开已有待认领列表、商品箱页后重试。" in failure_advice
@@ -4209,7 +4220,7 @@ def test_runtime_maintenance_explains_cleared_and_protected_tasks():
     assert ".runtime-control-result" in styles_source
 
 
-def test_l2_precheck_start_receipt_shows_run_id_targets_and_log_path():
+def test_l2_precheck_start_receipt_keeps_run_id_in_technical_log():
     app_source = APP_TSX.read_text(encoding="utf-8")
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     types_source = (REPO_ROOT / "app" / "frontend" / "src" / "types.ts").read_text(encoding="utf-8")
@@ -4230,7 +4241,8 @@ def test_l2_precheck_start_receipt_shows_run_id_targets_and_log_path():
     assert "line: result.logPath ?? null" in run_runtime_control
     assert "result.action === 'run_l2_readonly_probe'" in result_summary
     assert "保存前安全检查已启动" in result_summary
-    assert "run-id：{result.runId ?? '等待返回'}" in result_summary
+    assert "检查编号：{result.runId ?? '等待返回'}" in result_summary
+    assert "run-id：{result.runId ?? '等待返回'}" not in result_summary
     assert "检查目标：{formatL2ProbeTargets(result.targets)}" in result_summary
     assert "日志：{result.logPath ?? '启动器日志'}" in result_summary
     assert "function formatL2ProbeTargets" in workbench_source
@@ -5000,14 +5012,28 @@ def test_issue_queue_problem_cards_use_what_why_next_structure():
 def test_system_settings_page_is_extracted_from_workbench_modules():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     settings_source = SYSTEM_SETTINGS_PAGE_TSX.read_text(encoding="utf-8")
+    settings_visible = settings_source[
+        settings_source.index('<section className="module-layout"'):
+        settings_source.index('<details className="module-card disclosure-card">')
+    ]
+    gate_card_section = settings_source[
+        settings_source.index("function RegressionGateGrid"):
+        settings_source.index("function displayTaskName")
+    ]
 
     assert "export function SystemSettingsPage" in settings_source
-    assert "aria-label=\"系统设置\"" in settings_source
-    assert "title=\"系统设置\"" in settings_source
+    assert "aria-label=\"系统维护\"" in settings_source
+    assert "title=\"运行与安全\"" in settings_source
     assert "当前可执行范围" in settings_source
     assert "真实浏览器" in settings_source
-    assert "技术诊断" in settings_source
+    assert "维护人员：检查细节" in settings_source
     assert "RegressionGateGrid" in settings_source
+    assert "humanGateBusinessName(gate)" in settings_source
+    assert "<strong>{gate.level}</strong>" not in gate_card_section
+    assert "{gate.command && <code>{gate.command}</code>}" not in gate_card_section
+    assert "<summary>维护细节</summary>" in gate_card_section
+    for forbidden in ("技术诊断", "日志路径", "L2", "L3", "证据 {gate.evidenceLevel}", "gate.command"):
+        assert forbidden not in settings_visible
     assert "帮助与设置" not in settings_source
     assert "export { SystemSettingsPage as SystemSettings }" in source
     assert "from './workbench/SystemSettingsPage'" in source
@@ -5051,8 +5077,8 @@ def test_results_page_is_extracted_from_workbench_modules():
     assert "aria-label=\"结果与问题\"" in results_source
     assert "保存后核对" in results_source
     assert "复核与后续处理" in results_source
-    assert "交付检查状态" in results_source
-    assert "最终报告与证据 QA" in results_source
+    assert "交付进度" in results_source
+    assert "最终报告与证据 QA" not in results_source
     assert "postFinalReportQaState" in results_source
     assert "delivery-check-card__visible-qa" in results_source
     assert "ReportCard" in results_source
