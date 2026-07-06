@@ -4678,7 +4678,7 @@ def test_source_url_input_helper_is_disabled_for_no_collection_scope(monkeypatch
 
     assert result['filled'] is False
     assert result['clicked_search'] is False
-    assert '不创建新来源商品' in result['reason']
+    assert '不新建商品' in result['reason']
     assert source_value == ''
     assert started_collect == 0
 
@@ -4703,7 +4703,7 @@ def test_source_url_rect_fill_closes_notice_before_native_paste(monkeypatch, tmp
     )
 
     assert result['ok'] is False
-    assert '不创建新来源商品' in result['reason']
+    assert '不新建商品' in result['reason']
     assert calls == []
 
 
@@ -4728,7 +4728,7 @@ def test_start_collect_click_helper_is_disabled_for_no_collection_scope(monkeypa
     )
 
     assert result['ok'] is False
-    assert '不创建新来源商品' in result['reason']
+    assert '不新建商品' in result['reason']
     assert calls == []
 
 
@@ -4879,7 +4879,7 @@ def test_source_url_rect_fill_reports_failure_when_native_and_keyboard_miss_fiel
     )
 
     assert result['ok'] is False
-    assert '不创建新来源商品' in result['reason']
+    assert '不新建商品' in result['reason']
     assert calls == []
 
 
@@ -5017,7 +5017,7 @@ def test_source_url_search_fails_fast_when_source_textarea_missing(monkeypatch, 
 
     assert result['filled'] is False
     assert result['clicked_search'] is False
-    assert '不创建新来源商品' in result['reason']
+    assert '不新建商品' in result['reason']
 
 
 def test_source_url_dom_fill_uses_cdp_runtime_timeout(tmp_path):
@@ -5058,7 +5058,7 @@ def test_source_url_dom_fill_uses_cdp_runtime_timeout(tmp_path):
     )
 
     assert result['ok'] is False
-    assert '不创建新来源商品' in result['reason']
+    assert '不新建商品' in result['reason']
     assert page.cdp.calls == []
 
 
@@ -5791,9 +5791,9 @@ def test_visible_data_acquisition_claim_ready_reports_collect_form_as_wrong_page
 
     message = str(excinfo.value)
     assert '已有待认领列表未显示可认领商品' in message
-    assert '当前停留在店小秘新建来源商品输入区' in message
-    assert '系统不会填写链接或创建新来源商品' in message
-    assert '系统不会填写链接、不会点击开始采集、不会创建新来源商品' in message
+    assert '当前停留在店小秘新建商品输入区' in message
+    assert '系统不会填写链接或新建商品' in message
+    assert '系统不会填写链接、不会点击开始采集、不会新建商品' in message
     assert '未完全加载' not in message
     assert flow.recent_workflow_events()[-1]['fast_fail'] is True
 

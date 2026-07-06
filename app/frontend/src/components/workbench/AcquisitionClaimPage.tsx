@@ -83,7 +83,7 @@ export function AcquisitionClaimPage({
           <div>
             <span className="eyebrow">第一段</span>
             <h2>把已有待认领商品放进商品箱</h2>
-            <p>只处理店小秘里已经存在的待认领商品。系统会筛选列表并点击认领，不会填写产品网址，也不会创建新的来源商品。</p>
+            <p>只处理店小秘里已经存在的待认领商品。系统会筛选列表并点击认领，不会填写产品网址，也不会新建商品。</p>
           </div>
           <button className="button button--secondary" type="button" onClick={onNavigateDataAcquisition} disabled={busy}>
             打开已有待认领列表

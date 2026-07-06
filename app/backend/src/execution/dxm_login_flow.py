@@ -103,7 +103,7 @@ WORKFLOW_HUMAN_STEP_COPY = {
     'data_acquisition_claim:dismiss_before_search_skipped': '准备匹配已有待认领商品',
     'data_acquisition_claim:search_start': '筛选已有待认领商品',
     'data_acquisition_search:source_input_filled': '来源链接仅作匹配',
-    'data_acquisition_search:start_collect_clicked': '已阻止创建新来源商品',
+    'data_acquisition_search:start_collect_clicked': '已阻止新建商品',
     'data_acquisition_search:collect_result_ready': '等待列表刷新',
     'data_acquisition_search:source_input_submitted': '等待列表刷新',
     'data_acquisition_search:result_ready_wait_skipped': '等待列表刷新',
@@ -1559,7 +1559,7 @@ class DxmLoginFlow:
                 if result.get('loading'):
                     reason_parts.append('页面仍在加载')
                 reason_parts.append('未看到已有待认领商品的认领按钮')
-                reason_parts.append('当前停留在店小秘新建来源商品输入区，系统不会填写链接或创建新来源商品')
+                reason_parts.append('当前停留在店小秘新建商品输入区，系统不会填写链接或新建商品')
                 reason = '，'.join(reason_parts)
                 diagnostic = self._data_acquisition_claim_timeout_diagnostic(result)
                 self._trace_workflow_event(
@@ -1575,7 +1575,7 @@ class DxmLoginFlow:
                 raise RuntimeError(
                     f'已有待认领列表未显示可认领商品：{reason}。'
                     f'{diagnostic_text}'
-                    '系统不会填写链接、不会点击开始采集、不会创建新来源商品；'
+                    '系统不会填写链接、不会点击开始采集、不会新建商品；'
                     '请确认待认领列表里已经显示目标商品后重试。'
                 )
             if now - last_trace_at >= 5:
@@ -1588,7 +1588,7 @@ class DxmLoginFlow:
         if not last.get('claim_count'):
             reason_parts.append('未看到已有待认领商品的认领按钮')
         if last.get('has_collect_form') and not last.get('claim_count'):
-            reason_parts.append('当前停留在店小秘新建来源商品输入区，系统不会填写链接或创建新来源商品')
+            reason_parts.append('当前停留在店小秘新建商品输入区，系统不会填写链接或新建商品')
         reason = '，'.join(reason_parts) or '页面未达到可操作状态'
         diagnostic = self._data_acquisition_claim_timeout_diagnostic(last)
         self._trace_workflow_event(
@@ -1603,7 +1603,7 @@ class DxmLoginFlow:
         raise RuntimeError(
             f'已有待认领列表 {timeout // 1000} 秒内仍不可认领：{reason}。'
             f'{diagnostic_text}'
-            '系统不会填写链接、不会点击开始采集、不会创建新来源商品；'
+            '系统不会填写链接、不会点击开始采集、不会新建商品；'
             '请确认待认领列表里已经显示目标商品后重试。'
         )
 
@@ -1866,7 +1866,7 @@ class DxmLoginFlow:
             'filled': False,
             'clicked_search': False,
             'source_match_only': True,
-            'reason': '来源链接只用于匹配已有待认领商品，不写入店小秘输入框，不创建新来源商品。',
+            'reason': '商品链接只用于匹配已有待认领商品，不写入店小秘输入框，不新建商品。',
         }
 
     def _data_acquisition_source_input_value_snapshot(self, page: Page, expected_query: str) -> dict[str, Any]:
@@ -1953,14 +1953,14 @@ class DxmLoginFlow:
             'data_acquisition_search:source_input_blocked',
             reason='source_url_match_only_scope',
         )
-        return {'ok': False, 'reason': '来源链接只用于匹配已有待认领商品，不写入店小秘输入框，不创建新来源商品。'}
+        return {'ok': False, 'reason': '商品链接只用于匹配已有待认领商品，不写入店小秘输入框，不新建商品。'}
 
     def _fill_data_acquisition_source_url_primary_input(self, page: Page, query: str) -> dict[str, Any]:
         self._trace_workflow_event(
             'data_acquisition_search:source_input_blocked',
             reason='source_url_match_only_scope',
         )
-        return {'ok': False, 'reason': '来源链接只用于匹配已有待认领商品，不写入店小秘输入框，不创建新来源商品。'}
+        return {'ok': False, 'reason': '商品链接只用于匹配已有待认领商品，不写入店小秘输入框，不新建商品。'}
 
     def _deprecated_fill_data_acquisition_source_url_primary_input(self, page: Page, query: str) -> dict[str, Any]:
         selectors = [
@@ -2001,7 +2001,7 @@ class DxmLoginFlow:
             'data_acquisition_search:source_input_blocked',
             reason='source_url_match_only_scope',
         )
-        return {'ok': False, 'reason': '来源链接只用于匹配已有待认领商品，不写入店小秘输入框，不创建新来源商品。'}
+        return {'ok': False, 'reason': '商品链接只用于匹配已有待认领商品，不写入店小秘输入框，不新建商品。'}
 
     def _deprecated_fill_data_acquisition_source_url_input(self, page: Page, query: str) -> dict[str, Any]:
         query_json = json.dumps(query, ensure_ascii=False)
@@ -2104,7 +2104,7 @@ class DxmLoginFlow:
             'data_acquisition_search:start_collect_blocked',
             reason='existing_data_claim_scope',
         )
-        return {'ok': False, 'reason': '当前系统只处理店小秘已有待认领商品，不创建新来源商品。'}
+        return {'ok': False, 'reason': '当前系统只处理店小秘已有待认领商品，不新建商品。'}
 
     def _wait_data_acquisition_collect_result(
         self,
@@ -2611,7 +2611,7 @@ class DxmLoginFlow:
                 source_url = self._locator_attribute(anchor, 'href', timeout=1000)
                 if action is None:
                     matched_without_action = {
-                        'reason': '来源商品行内未找到认领按钮',
+                        'reason': '待认领商品行内未找到认领按钮',
                         'rowText': row_text[:400],
                         'sourceUrls': [source_url] if source_url else [],
                         'debug': {'matchedToken': safe_token, 'scannedLinks': scanned_links},
@@ -2620,7 +2620,7 @@ class DxmLoginFlow:
                 action_rect = self._locator_box(action, timeout=1000)
                 if not self._rect_has_clickable_area(action_rect):
                     matched_without_action = {
-                        'reason': '来源商品行内未拿到可点击认领按钮位置',
+                        'reason': '待认领商品行内未拿到可点击认领按钮位置',
                         'rowText': row_text[:400],
                         'sourceUrls': [source_url] if source_url else [],
                         'debug': {'matchedToken': safe_token, 'scannedLinks': scanned_links},

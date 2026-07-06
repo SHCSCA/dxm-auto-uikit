@@ -3168,8 +3168,10 @@ def test_task_and_evidence_center_describe_l3_blocked_as_expected_lock():
     assert "解除发布隔离风险" not in task_center_section
     assert "齐全后才会形成 A/B/C 证据等级" not in evidence_timeline_section
 
+    legacy_claim_copy = "待认领商品" + "处理"
     assert "待认领入箱是第一段；保存前安全检查只用于第二段商品箱编辑保存前" in task_center_section
-    assert "保存前安全检查通过后才启动待认领商品处理" not in task_center_section
+    assert f"保存前安全检查通过后才启动{legacy_claim_copy}" not in task_center_section
+    assert legacy_claim_copy not in task_center_section
     assert "人工确认未完成前不启动单商品只保存" in task_center_section
     assert "当前按钮策略：待认领入箱可启动第一段流程；保存前安全检查未通过时只阻断第二段编辑保存" in task_center_section
     assert "人工确认未完成，禁止启动" in task_center_section

@@ -572,7 +572,7 @@ def test_delivery_workspace_exposes_unreleased_real_mode_release_plan(tmp_path, 
     assert "data_acquisition" not in operator_release_text
     assert "unique acquisition product proof" not in operator_release_text
     assert "已有待认领列表" in operator_release_text
-    assert "受控待认领商品处理" in operator_release_text
+    assert "受控待认领入箱" in operator_release_text
     assert any("rollback" in item for item in modes["batch_save"]["required_controls"])
     assert modes["claim_only"]["blockers"]
     assert any("cannot reuse single_save" in item for item in modes["batch_save"]["blockers"])

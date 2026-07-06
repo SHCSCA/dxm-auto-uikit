@@ -120,7 +120,7 @@ export function HomePage({ workspace, selectedTask, configPreview, runtimeStatus
           <div>
             <h2>两段真实流程</h2>
             <p>先认领，再编辑保存。系统不会跳过商品箱直接保存。</p>
-            <p>系统只处理店小秘已有待认领商品，不填写产品网址，不创建新的来源商品。</p>
+            <p>系统只处理店小秘已有待认领商品，不填写产品网址，不新建商品。</p>
           </div>
           <span>{controlOwner}</span>
         </div>

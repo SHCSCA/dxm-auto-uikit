@@ -997,7 +997,7 @@ def test_claim_only_calls_adapter_without_opening_editor_or_saving(v1_db):
     reports = repo.list_reports(task["id"])
     assert reports[0]["status"] == "success"
     assert reports[0]["published"] is False
-    assert reports[0]["save_result"]["message"] == "待认领商品处理已完成，商品已进入商品箱"
+    assert reports[0]["save_result"]["message"] == "待认领入箱已完成，商品已进入商品箱"
     products = repo.list_products()
     claimed = [product for product in products if product["status"] == "claimed_to_draft"]
     assert len(claimed) == 1
@@ -1052,7 +1052,7 @@ def test_claim_only_failure_uses_operator_chinese_detail(v1_db):
     exception = repo.list_exceptions()[0]
 
     for value in [detail, blocked_reason, job_error, exception["detail"]]:
-        assert "待认领商品" in value or "已有待认领" in value
+        assert "待认领入箱" in value or "已有待认领" in value
         assert "不会保存或发布" in value
         assert "claim_from_data_acquisition" not in value
         assert "dianxiaomi.com" not in value

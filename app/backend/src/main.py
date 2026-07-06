@@ -2251,7 +2251,7 @@ def _assert_claim_only_acquisition_task(task: dict[str, Any]) -> None:
     if any(job.get('product_id') is not None for job in jobs if isinstance(job, dict)):
         raise HTTPException(
             status_code=409,
-            detail='待认领商品处理必须从店小秘已有待认领列表开始，不能直接绑定本地商品。',
+            detail='待认领入箱必须从店小秘已有待认领列表开始，不能直接绑定本地商品。',
         )
 
 

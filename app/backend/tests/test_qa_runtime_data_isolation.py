@@ -226,8 +226,8 @@ def test_readme_next_steps_focus_on_allowlist_l2_l3_reverification():
     next_steps = readme[readme.index("## 下一步重点"):readme.index("## 目录结构")]
 
     assert "config/l2_readonly_allowlist.json" in next_steps
-    assert "待认领商品处理 -> 商品箱编辑保存" in next_steps
-    assert "待认领商品处理是当前两段式主流程的第一段" in next_steps
+    assert "待认领入箱 -> 商品箱编辑保存" in next_steps
+    assert "待认领入箱是当前两段式主流程的第一段" in next_steps
     assert "批量、无人值守和发布" in next_steps
     assert "实现真实 `DxmAdapter`" not in next_steps
     assert "最终交付验收记录" in readme

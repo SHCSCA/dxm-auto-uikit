@@ -399,7 +399,7 @@ def _real_mode_release_plan(
             },
             {
                 "mode": "claim_only",
-                "label": "受控待认领商品处理",
+                "label": "受控待认领入箱",
                 "status": claim_only_status,
                 "allowed": claim_only_currently_allowed,
                 "release_scope": "controlled claim to draft box",
@@ -1033,7 +1033,7 @@ def _two_stage_acceptance(
         user_message = "真实两段式已完成：商品已从待认领商品进入商品箱，并完成单商品只保存且未发布。"
     elif any(code in missing_codes for code in ("claim_task_id", "claim_task", "claim_completed", "claim_product_match")):
         status = "missing_claim_stage"
-        user_message = "还没有完整的待认领商品处理证据。请先从店小秘已有待认领列表把真实商品放进商品箱，再创建单商品只保存任务。"
+        user_message = "还没有完整的待认领入箱证据。请先从店小秘已有待认领列表把真实商品放进商品箱，再创建单商品只保存任务。"
     elif any(code in missing_codes for code in ("claimed_product", "claimed_product_source", "draft_box_verified", "single_save_linked_to_claim")):
         status = "missing_draft_box_stage"
         user_message = "商品箱商品链路不完整。请确认本次保存任务选择的是刚进入商品箱的真实商品。"

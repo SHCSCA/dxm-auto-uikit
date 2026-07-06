@@ -448,7 +448,7 @@ def test_claim_only_start_rejects_existing_product_job_shape(tmp_path, monkeypat
     response = client.post(f"/api/tasks/{task['id']}/start", json={})
 
     assert response.status_code == 409
-    assert "待认领商品" in response.json()["detail"]
+    assert "待认领入箱" in response.json()["detail"]
     assert "不能直接绑定本地商品" in response.json()["detail"]
     assert runner.calls == []
 

@@ -1836,7 +1836,7 @@ class V1TaskRunner:
     def _operator_claim_failure_detail(self, action_name: str) -> str | None:
         if action_name == "claim_from_data_acquisition":
             return (
-                "待认领商品处理没有完成。请保持真实店小秘浏览器打开，"
+                "待认领入箱没有完成。请保持真实店小秘浏览器打开，"
                 "检查搜索关键词、商品类目、店铺和验证码后重试；系统没有进入编辑页，不会保存或发布。"
             )
         if action_name == "verify_draft_box_claim":
@@ -2115,7 +2115,7 @@ class V1TaskRunner:
             result = {
                 "ok": True,
                 "mode": mode,
-                "message": "待认领商品处理已完成，商品已进入商品箱",
+                "message": "待认领入箱已完成，商品已进入商品箱",
                 "published": False,
                 "next_action": "进入“商品箱编辑保存”，选择该商品创建单商品只保存任务。",
             }
