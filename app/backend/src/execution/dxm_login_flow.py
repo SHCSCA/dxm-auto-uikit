@@ -1530,6 +1530,8 @@ class DxmLoginFlow:
             human_step='等待页面稳定',
         )
         time.sleep(3.0)
+        first_check_at = time.monotonic()
+        no_claim_fast_fail_after = 8.0
         while time.monotonic() < deadline:
             result = self._inspect_data_acquisition_ready_state_with_locators(page, terms)
             result['strategy'] = 'visible_locator_condition_wait'
@@ -1542,6 +1544,40 @@ class DxmLoginFlow:
                 self._trace_workflow_event('wait_ready:ready', label='已有待认领列表', result=result)
                 return result
             now = time.monotonic()
+            has_collect_form = bool(
+                result.get('has_collect_form')
+                or result.get('first_input_rect')
+                or result.get('start_collect_rect')
+            )
+            no_claim_visible_collect_form = (
+                int(result.get('claim_count') or 0) == 0
+                and has_collect_form
+                and now - first_check_at >= no_claim_fast_fail_after
+            )
+            if no_claim_visible_collect_form:
+                reason_parts: list[str] = []
+                if result.get('loading'):
+                    reason_parts.append('页面仍在加载')
+                reason_parts.append('未看到已有待认领商品的认领按钮')
+                reason_parts.append('当前停留在店小秘新建来源商品输入区，系统不会填写链接或创建新来源商品')
+                reason = '，'.join(reason_parts)
+                diagnostic = self._data_acquisition_claim_timeout_diagnostic(result)
+                self._trace_workflow_event(
+                    'wait_ready:timeout',
+                    label='已有待认领列表',
+                    result=result,
+                    reason=reason,
+                    diagnostic=diagnostic,
+                    fast_fail=True,
+                    human_step='已有待认领列表还不能操作',
+                )
+                diagnostic_text = f'{diagnostic}。' if diagnostic else ''
+                raise RuntimeError(
+                    f'已有待认领列表未显示可认领商品：{reason}。'
+                    f'{diagnostic_text}'
+                    '系统不会填写链接、不会点击开始采集、不会创建新来源商品；'
+                    '请确认待认领列表里已经显示目标商品后重试。'
+                )
             if now - last_trace_at >= 5:
                 last_trace_at = now
                 self._trace_workflow_event('wait_ready:poll', label='已有待认领列表', result=result)

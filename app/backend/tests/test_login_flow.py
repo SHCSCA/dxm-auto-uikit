@@ -5662,7 +5662,7 @@ def test_visible_data_acquisition_claim_ready_blocks_when_page_still_loading(mon
 
     monkeypatch.setattr(flow, '_is_headless', lambda: False)
     monkeypatch.setattr(dxm_login_flow_module.time, 'monotonic', lambda: current_time[0])
-    monkeypatch.setattr(dxm_login_flow_module.time, 'sleep', lambda seconds: current_time.__setitem__(0, current_time[0] + max(seconds, 30.0)))
+    monkeypatch.setattr(dxm_login_flow_module.time, 'sleep', lambda seconds: current_time.__setitem__(0, current_time[0] + seconds))
     monkeypatch.setattr(
         flow,
         '_inspect_data_acquisition_ready_state_with_locators',
@@ -5693,6 +5693,7 @@ def test_visible_data_acquisition_claim_ready_blocks_when_page_still_loading(mon
         flow._wait_for_data_acquisition_ready_for_claim(FakePage())
     timeout_event = flow.recent_workflow_events()[-1]
     assert timeout_event['event'] == 'wait_ready:timeout'
+    assert timeout_event['fast_fail'] is True
     assert '加载标记 .vxe-loading=LOADING' in timeout_event['diagnostic']
     assert '当前地址 https://www.dianxiaomi.com/web/productCrawl/dataAcquisition' in timeout_event['diagnostic']
 
@@ -5762,7 +5763,7 @@ def test_visible_data_acquisition_claim_ready_reports_collect_form_as_wrong_page
 
     monkeypatch.setattr(flow, '_is_headless', lambda: False)
     monkeypatch.setattr(dxm_login_flow_module.time, 'monotonic', lambda: current_time[0])
-    monkeypatch.setattr(dxm_login_flow_module.time, 'sleep', lambda seconds: current_time.__setitem__(0, current_time[0] + max(seconds, 30.0)))
+    monkeypatch.setattr(dxm_login_flow_module.time, 'sleep', lambda seconds: current_time.__setitem__(0, current_time[0] + seconds))
     monkeypatch.setattr(
         flow,
         '_inspect_data_acquisition_ready_state_with_locators',
@@ -5789,10 +5790,12 @@ def test_visible_data_acquisition_claim_ready_reports_collect_form_as_wrong_page
         flow._wait_for_data_acquisition_ready_for_claim(FakePage())
 
     message = str(excinfo.value)
-    assert '60 秒内仍不可认领' in message
+    assert '已有待认领列表未显示可认领商品' in message
     assert '当前停留在店小秘新建来源商品输入区' in message
     assert '系统不会填写链接或创建新来源商品' in message
+    assert '系统不会填写链接、不会点击开始采集、不会创建新来源商品' in message
     assert '未完全加载' not in message
+    assert flow.recent_workflow_events()[-1]['fast_fail'] is True
 
 
 def test_data_acquisition_ready_requires_existing_claim_action_not_collect_form(tmp_path):
