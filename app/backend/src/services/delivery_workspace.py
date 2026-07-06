@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import hashlib
+import html as html_lib
+import re
 from collections import defaultdict
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -52,6 +54,14 @@ L2_READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 L2_ACTIVE_RESOURCE_TYPES = {"xhr", "fetch", "eventsource", "websocket"}
 L2_REAL_TARGET_MAX_SKEW_SECONDS = 30 * 60
 L2_REAL_TARGET_MAX_AGE_SECONDS = 2 * 60 * 60
+CLAIM_CANDIDATE_LIMIT = 20
+CLAIM_ROW_RE = re.compile(r"<tr\b[^>]*class=\"[^\"]*\bvxe-body--row\b[^\"]*\"[^>]*>.*?</tr>", re.IGNORECASE | re.DOTALL)
+TITLE_ATTR_RE = re.compile(r"class=\"[^\"]*\bno-new-line4\b[^\"]*\"[^>]*\btitle=\"([^\"]+)\"", re.IGNORECASE | re.DOTALL)
+FALLBACK_TITLE_ATTR_RE = re.compile(r"class=\"[^\"]*\bno-new-line2\b[^\"]*\"[^>]*\btitle=\"([^\"]+)\"", re.IGNORECASE | re.DOTALL)
+ANCHOR_RE = re.compile(r"<a\b(?=[^>]*\bhref=\"([^\"]+)\")[^>]*>(.*?)</a>", re.IGNORECASE | re.DOTALL)
+TAG_RE = re.compile(r"<[^>]+>")
+DATE_RE = re.compile(r"20\d{2}-\d{2}-\d{2}\s+\d{2}:\d{2}")
+PHONE_OR_ACCOUNT_RE = re.compile(r"\b1\d{10}\b")
 
 ACTION_TO_STATES = {
     "check_login_state": ("PRECHECK_SESSION",),
@@ -106,6 +116,7 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
     l2_gate = _l2_probe_gate()
     delivery_readiness = _delivery_readiness(task, reports, evidences)
     two_stage_acceptance = _two_stage_acceptance(repo, task, reports, evidences, extracted)
+    claim_candidates = _claim_candidates_from_l2_gate(l2_gate)
 
     workspace = {
         "baseline": _baseline(),
@@ -127,6 +138,7 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
         "delivery_readiness": delivery_readiness,
         "two_stage_acceptance": two_stage_acceptance,
         "real_mode_release_plan": _real_mode_release_plan(l2_gate, delivery_readiness),
+        "claim_candidates": claim_candidates,
         "acceptanceGaps": _acceptance_gaps(exceptions, extracted, l2_gate, delivery_readiness),
         "safety": _safety_state(extracted, l2_gate, delivery_readiness),
         "l2_probe_plan": _l2_probe_plan(),
@@ -147,6 +159,7 @@ def _empty_delivery_workspace(
 ) -> dict[str, Any]:
     extracted = _extract_delivery_evidence([], [])
     l2_gate = _l2_probe_gate()
+    claim_candidates = _claim_candidates_from_l2_gate(l2_gate)
     delivery_readiness = {
         "ready": False,
         "has_l3_evidence": False,
@@ -174,6 +187,7 @@ def _empty_delivery_workspace(
         "delivery_readiness": delivery_readiness,
         "two_stage_acceptance": _empty_two_stage_acceptance(),
         "real_mode_release_plan": _real_mode_release_plan(l2_gate, delivery_readiness),
+        "claim_candidates": claim_candidates,
         "acceptanceGaps": [
             {
                 "id": "empty-workspace",
@@ -1351,6 +1365,137 @@ def _l2_probe_result_dirs() -> list[Path]:
         seen.add(key)
         unique.append(directory)
     return unique
+
+
+def _claim_candidates_from_l2_gate(l2_gate: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(l2_gate, Mapping) or l2_gate.get("status") != "passed":
+        return []
+    latest = l2_gate.get("latest")
+    if not isinstance(latest, Mapping):
+        return []
+    targets = latest.get("targets") or latest.get("realTargets")
+    if not isinstance(targets, Mapping):
+        return []
+    data_acquisition = targets.get("data_acquisition")
+    if not isinstance(data_acquisition, Mapping) or data_acquisition.get("ok") is not True:
+        return []
+    dom_path = _resolve_l2_evidence_path(data_acquisition.get("dom_path"))
+    if dom_path is None or not dom_path.is_file():
+        return []
+    try:
+        raw_html = dom_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return []
+    return _extract_claim_candidates_from_html(
+        raw_html,
+        dom_path=str(dom_path),
+        run_id=str(data_acquisition.get("run_id") or ""),
+        captured_at=str(data_acquisition.get("created_at") or ""),
+    )
+
+
+def _extract_claim_candidates_from_html(
+    raw_html: str,
+    *,
+    dom_path: str = "",
+    run_id: str = "",
+    captured_at: str = "",
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for row in CLAIM_ROW_RE.findall(raw_html):
+        row_text = _clean_html_text(row, limit=900)
+        if "认领" not in row_text:
+            continue
+        title = _claim_candidate_title(row)
+        if not title:
+            continue
+        source_url, source_label = _claim_candidate_source(row)
+        identity = (source_url or "", title)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        store_account = _first_regex_match(PHONE_OR_ACCOUNT_RE, row_text)
+        created_at = _first_regex_match(DATE_RE, row_text)
+        candidates.append(
+            {
+                "id": f"{run_id or 'l2-readonly'}:{len(candidates) + 1}",
+                "title": title,
+                "source": source_label or "",
+                "source_url": source_url or "",
+                "store_account": store_account or "",
+                "created_at": created_at or "",
+                "category_hint": _claim_candidate_category_hint(title, row_text),
+                "text_excerpt": row_text[:260],
+                "run_id": run_id,
+                "captured_at": captured_at,
+                "dom_path": dom_path,
+                "readonly": True,
+            }
+        )
+        if len(candidates) >= CLAIM_CANDIDATE_LIMIT:
+            break
+    return candidates
+
+
+def _claim_candidate_title(row_html: str) -> str:
+    for pattern in (TITLE_ATTR_RE, FALLBACK_TITLE_ATTR_RE):
+        for match in pattern.findall(row_html):
+            title = _clean_plain_text(match, limit=160)
+            if title and not title.startswith("品牌:"):
+                return title
+    return ""
+
+
+def _claim_candidate_source(row_html: str) -> tuple[str, str]:
+    fallback_url = ""
+    fallback_label = ""
+    for href, label_html in ANCHOR_RE.findall(row_html):
+        url = _clean_plain_text(href, limit=2000)
+        label = _clean_html_text(label_html, limit=40)
+        if not url.lower().startswith(("http://", "https://")):
+            continue
+        if not fallback_url:
+            fallback_url, fallback_label = url, label
+        if _looks_like_source_platform_label(label) or _looks_like_marketplace_url(url):
+            return url, label
+    return fallback_url, fallback_label
+
+
+def _looks_like_source_platform_label(label: str) -> bool:
+    normalized = label.lower()
+    return any(token in normalized for token in ("1688", "拼多多", "淘宝", "天猫", "temu", "amazon", "aliexpress", "wish", "shopee"))
+
+
+def _looks_like_marketplace_url(url: str) -> bool:
+    normalized = url.lower()
+    return any(token in normalized for token in ("1688.com", "yangkeduo.com", "taobao.com", "tmall.com", "aliexpress.com", "amazon.", "wish.com", "shopee."))
+
+
+def _claim_candidate_category_hint(title: str, row_text: str) -> str:
+    text = f"{title} {row_text}"
+    if any(token in text for token in ("立牌", "亚克力")):
+        return "立牌类谷子"
+    if any(token in text for token in ("棉花娃娃", "毛绒", "玩偶")):
+        return "毛绒玩偶"
+    if any(token in text for token in ("钥匙扣", "挂件", "徽章", "胸针")):
+        return "钥匙扣/挂件"
+    return ""
+
+
+def _clean_html_text(value: Any, *, limit: int = 500) -> str:
+    return _clean_plain_text(TAG_RE.sub(" ", str(value or "")), limit=limit)
+
+
+def _clean_plain_text(value: Any, *, limit: int = 500) -> str:
+    text = html_lib.unescape(str(value or "")).replace("\xa0", " ")
+    text = " ".join(text.split())
+    return text[:limit]
+
+
+def _first_regex_match(pattern: re.Pattern[str], value: str) -> str:
+    match = pattern.search(value)
+    return match.group(0) if match else ""
 
 
 def _latest_l2_results_by_target(results: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:

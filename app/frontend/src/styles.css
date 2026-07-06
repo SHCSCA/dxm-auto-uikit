@@ -1135,6 +1135,63 @@ a:focus-visible {
   line-height: 1.45;
 }
 
+.claim-candidates {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #f8fafc;
+}
+
+.claim-candidates__head,
+.claim-candidate {
+  min-width: 0;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.claim-candidates__head > div,
+.claim-candidate > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.claim-candidates__head strong,
+.claim-candidate strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claim-candidates__head span,
+.claim-candidate span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.claim-candidates__list {
+  display: grid;
+  gap: 6px;
+}
+
+.claim-candidate {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
 .config-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

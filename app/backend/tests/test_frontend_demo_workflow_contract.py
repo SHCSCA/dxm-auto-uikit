@@ -127,10 +127,12 @@ def test_acquisition_claim_page_uses_claim_request_api_not_legacy_task_center():
     assert "已有待认领列表" in page_source
     assert "商品箱" in page_source
     assert "创建商品认领任务" in page_source
-    assert "const hasProductHint = Boolean(keyword.trim() || categoryName.trim())" in page_source
-    assert "sourceUrl" not in page_source
-    assert "source_url: request.sourceUrl" not in app_source
-    assert "请至少填写商品关键词或商品类目" in page_source
+    assert "const hasProductHint = Boolean(keyword.trim() || categoryName.trim() || sourceUrl.trim())" in page_source
+    assert "claimCandidates={workspace.claimCandidates}" in route_section
+    assert "source_url: request.sourceUrl" in app_source
+    assert "最近只读检查发现的待认领商品" in page_source
+    assert "使用这条商品" in page_source
+    assert "请至少填写商品关键词、商品类目，或从上方选择一条待认领商品" in page_source
     assert "高级辅助匹配" not in page_source
     assert "来源链接" not in page_source
     assert "setOperationError(humanAcquisitionClaimError(error instanceof Error ? error.message : '创建认领任务失败'))" in app_source
@@ -149,7 +151,7 @@ def test_acquisition_claim_page_presents_four_step_real_claim_path():
     for label in ["选择店铺与平台", "筛选已有待认领商品", "认领到商品箱", "确认进入商品箱"]:
         assert label in page_source
 
-    for label in ["已有待认领商品", "认领标记", "认领到商品箱", "商品已进入商品箱", "去“商品箱编辑保存”选择该商品", "查看商品箱商品"]:
+    for label in ["已有待认领商品", "选择店小秘已有待认领商品", "匹配链接", "仅用于定位", "认领标记", "认领到商品箱", "商品已进入商品箱", "去“商品箱编辑保存”选择该商品", "查看商品箱商品"]:
         assert label in page_source
     for misleading in ["自动采集商品", "采集并一键发布"]:
         assert misleading not in page_source

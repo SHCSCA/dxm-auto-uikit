@@ -107,7 +107,7 @@ def test_mark_acquisition_claim_completed_updates_failed_job_state(tmp_path, mon
     assert refreshed["jobs"][0]["error_message"] is None
 
 
-def test_acquisition_claim_request_rejects_source_url_only_hint(tmp_path, monkeypatch):
+def test_acquisition_claim_request_accepts_source_url_only_match_hint(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     store = repo.create_store("Dang Kang", "AliExpress")
     source_url = "https://detail.1688.com/offer/1013604102950.html"
@@ -122,12 +122,15 @@ def test_acquisition_claim_request_rejects_source_url_only_hint(tmp_path, monkey
         },
     )
 
-    assert response.status_code == 400
-    detail = response.json()["detail"]
-    assert "商品关键词或商品类目" in detail
-    assert "已有待认领商品" in detail
-    assert "来源链接" not in detail
-    assert "源商品链接" not in detail
+    assert response.status_code == 200
+    data = response.json()
+    assert data["stage"] == "pending_acquisition_claim"
+    assert data["source_url"] == source_url
+    assert data["keyword"] is None
+    assert data["category_name"] is None
+    task = repo.get_task_private(data["task_id"])
+    assert task["mode"] == "claim_only"
+    assert task["payload"]["source_url"] == source_url
     assert repo.list_products(include_fixtures=True) == []
 
 
@@ -148,7 +151,9 @@ def test_acquisition_claim_request_requires_product_hint(tmp_path, monkeypatch):
 
     assert response.status_code == 400
     assert "已有待认领商品" in response.json()["detail"]
-    assert "商品关键词或商品类目" in response.json()["detail"]
+    assert "商品关键词" in response.json()["detail"]
+    assert "商品类目" in response.json()["detail"]
+    assert "选择一条待认领商品" in response.json()["detail"]
     assert "来源链接" not in response.json()["detail"]
 
 

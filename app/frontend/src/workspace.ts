@@ -1,5 +1,6 @@
 import type {
   AcceptanceGap,
+  ClaimCandidate,
   DeliveryWorkspace,
   DxmReferenceSectionCode,
   DxmReferenceTemplateMap,
@@ -49,6 +50,7 @@ type DeliveryWorkspaceApi = Partial<DeliveryWorkspace> & {
   l2_probe_plan?: L2ProbePlan
   real_mode_release_plan?: RealModeReleasePlan
   two_stage_acceptance?: unknown
+  claim_candidates?: ClaimCandidate[]
 }
 
 export const seedRows = [
@@ -114,6 +116,8 @@ export function composeWorkspace(bundle: WorkspaceApiBundle): DeliveryWorkspace 
   const l2ProbePlan = normalizeL2ProbePlan(workspace?.l2ProbePlan ?? workspace?.l2_probe_plan, fallback.l2ProbePlan)
   const realModeReleasePlan = normalizeRealModeReleasePlan(workspace?.realModeReleasePlan ?? workspace?.real_mode_release_plan, fallback.realModeReleasePlan)
   const twoStageAcceptance = normalizeTwoStageAcceptance(workspace?.twoStageAcceptance ?? workspace?.two_stage_acceptance, fallback.twoStageAcceptance)
+  const claimCandidates = chooseList(workspace?.claimCandidates ?? workspace?.claim_candidates, [], fallback.claimCandidates, Boolean(workspace), apiHasData)
+    .map(normalizeClaimCandidate)
   const stores = chooseList(workspace?.stores, bundle.stores, fallback.stores, Boolean(workspace), apiHasData)
   const templates = chooseList(workspace?.templates, bundle.templates, fallback.templates, Boolean(workspace), apiHasData)
   const products = chooseList(workspace?.products, bundle.products, fallback.products, Boolean(workspace), apiHasData)
@@ -148,6 +152,7 @@ export function composeWorkspace(bundle: WorkspaceApiBundle): DeliveryWorkspace 
     l2ProbePlan,
     realModeReleasePlan,
     twoStageAcceptance,
+    claimCandidates,
     dxmReferenceTemplates: normalizeReferenceSections(workspace?.dxmReferenceTemplates, templates, reports, templateResolution),
     acceptanceGaps: firstList(workspace?.acceptanceGaps, buildAcceptanceGaps(exceptions, evidences, reports, evidenceGradeValue), fallback.acceptanceGaps),
     safety: workspace?.safety ?? safetyFromGuard(publishGuardState, evidenceGradeValue) ?? fallback.safety,
@@ -201,6 +206,7 @@ export function buildEmptyWorkspace(): DeliveryWorkspace {
     l2ProbePlan: buildL2ProbePlan(),
     realModeReleasePlan: buildRealModeReleasePlan(),
     twoStageAcceptance: buildEmptyTwoStageAcceptance(),
+    claimCandidates: [],
     dxmReferenceTemplates: normalizeReferenceSections(undefined, [], [], null),
     acceptanceGaps: [{
       id: 'empty-workspace',
@@ -423,6 +429,38 @@ export function buildRealModeReleasePlan(): RealModeReleasePlan {
         ],
       },
     ],
+  }
+}
+
+function normalizeClaimCandidate(value: unknown): ClaimCandidate {
+  const item = asRecord(value)
+  const title = stringOr(item.title, '待认领商品')
+  const sourceUrl = stringOr(item.sourceUrl ?? item.source_url, '')
+  const storeAccount = stringOr(item.storeAccount ?? item.store_account, '')
+  const createdAt = stringOr(item.createdAt ?? item.created_at, '')
+  const categoryHint = stringOr(item.categoryHint ?? item.category_hint, '')
+  const textExcerpt = stringOr(item.textExcerpt ?? item.text_excerpt, '')
+  const runId = stringOr(item.runId ?? item.run_id, '')
+  const capturedAt = stringOr(item.capturedAt ?? item.captured_at, '')
+  return {
+    id: stringOr(item.id, `${sourceUrl || title}-${createdAt || runId || 'candidate'}`),
+    title,
+    source: stringOr(item.source, ''),
+    sourceUrl,
+    source_url: sourceUrl,
+    storeAccount,
+    store_account: storeAccount,
+    createdAt,
+    created_at: createdAt,
+    categoryHint,
+    category_hint: categoryHint,
+    textExcerpt,
+    text_excerpt: textExcerpt,
+    runId,
+    run_id: runId,
+    capturedAt,
+    captured_at: capturedAt,
+    readonly: item.readonly !== false,
   }
 }
 

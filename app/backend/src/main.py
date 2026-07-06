@@ -481,8 +481,8 @@ def _normalize_acquisition_claim_request(payload: AcquisitionClaimRequest) -> di
     claim_mark = str(data.get('claim_mark') or '').strip()
     if not claim_mark:
         raise HTTPException(status_code=400, detail='请填写认领标记。')
-    if not keyword and not category_name:
-        raise HTTPException(status_code=400, detail='请填写商品关键词或商品类目，自动浏览器才能在店小秘已有待认领商品中定位目标。')
+    if not keyword and not category_name and not source_url:
+        raise HTTPException(status_code=400, detail='请填写商品关键词、商品类目或选择一条待认领商品，自动浏览器才能在店小秘已有待认领商品中定位目标。')
     data['source_url'] = source_url or None
     data['keyword'] = keyword or None
     data['category_name'] = category_name or None

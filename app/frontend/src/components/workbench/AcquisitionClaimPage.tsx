@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { AcquisitionClaimCreateRequest, AcquisitionClaimResponse, Store, Template } from '../../types'
+import type { AcquisitionClaimCreateRequest, AcquisitionClaimResponse, ClaimCandidate, Store, Template } from '../../types'
 
 type AcquisitionClaimPageProps = {
   stores: Store[]
   templates: Template[]
+  claimCandidates: ClaimCandidate[]
   busy: boolean
   lastRequest: AcquisitionClaimResponse | null
   onCreateClaimRequest: (request: AcquisitionClaimCreateRequest) => void
@@ -22,6 +23,7 @@ const claimSteps = [
 export function AcquisitionClaimPage({
   stores,
   templates,
+  claimCandidates,
   busy,
   lastRequest,
   onCreateClaimRequest,
@@ -32,6 +34,7 @@ export function AcquisitionClaimPage({
   const defaultStoreId = stores[0]?.id ? String(stores[0].id) : ''
   const [storeId, setStoreId] = useState(defaultStoreId)
   const [keyword, setKeyword] = useState('')
+  const [sourceUrl, setSourceUrl] = useState('')
   const [categoryName, setCategoryName] = useState('')
   const [claimMark, setClaimMark] = useState('AI-OPS')
   const [templateId, setTemplateId] = useState('')
@@ -40,7 +43,7 @@ export function AcquisitionClaimPage({
     [stores, storeId],
   )
   const enabledTemplates = templates.filter((template) => template.is_enabled)
-  const hasProductHint = Boolean(keyword.trim() || categoryName.trim())
+  const hasProductHint = Boolean(keyword.trim() || categoryName.trim() || sourceUrl.trim())
   const canSubmit = Boolean(selectedStore && claimMark.trim() && hasProductHint)
   const claimCompleted = Boolean(
     lastRequest && (
@@ -70,10 +73,18 @@ export function AcquisitionClaimPage({
     onCreateClaimRequest({
       storeId: selectedStore.id,
       keyword: keyword.trim() || undefined,
+      sourceUrl: sourceUrl.trim() || undefined,
       categoryName: categoryName.trim() || undefined,
       claimMark: claimMark.trim(),
       templateId: templateId ? Number(templateId) : null,
     })
+  }
+
+  function useCandidate(candidate: ClaimCandidate) {
+    setKeyword(candidate.title)
+    setSourceUrl((candidate.sourceUrl ?? candidate.source_url ?? '').trim())
+    const candidateCategory = (candidate.categoryHint ?? candidate.category_hint ?? '').trim()
+    if (candidateCategory) setCategoryName(candidateCategory)
   }
 
   return (
@@ -100,6 +111,39 @@ export function AcquisitionClaimPage({
           ))}
         </ol>
 
+        <div className="claim-candidates" aria-label="最近只读检查发现的待认领商品">
+          <div className="claim-candidates__head">
+            <div>
+              <strong>选择店小秘已有待认领商品</strong>
+              <span>{claimCandidates.length ? `最近只读检查发现 ${claimCandidates.length} 条` : '先运行保存前安全检查后自动显示'}</span>
+            </div>
+            <button className="button button--secondary" type="button" onClick={onNavigateDataAcquisition} disabled={busy}>
+              查看已有待认领列表
+            </button>
+          </div>
+          {claimCandidates.length ? (
+            <div className="claim-candidates__list">
+              {claimCandidates.slice(0, 6).map((candidate) => (
+                <article className="claim-candidate" key={candidate.id}>
+                  <div>
+                    <strong>{candidate.title}</strong>
+                    <span>
+                      {[candidate.source, candidate.storeAccount ?? candidate.store_account, candidate.createdAt ?? candidate.created_at]
+                        .filter(Boolean)
+                        .join(' / ') || '来自最近只读检查'}
+                    </span>
+                  </div>
+                  <button className="button button--secondary" type="button" onClick={() => useCandidate(candidate)} disabled={busy}>
+                    使用这条商品
+                  </button>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="form-hint">没有候选时，请先确认已登录店小秘并运行保存前安全检查；系统只读取已有待认领列表，不会认领、不保存、不发布。</p>
+          )}
+        </div>
+
         <div className="config-grid">
           <label>
             <span>店铺</span>
@@ -115,6 +159,10 @@ export function AcquisitionClaimPage({
           <label>
             <span>商品关键词</span>
             <input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="筛选已有待认领列表" disabled={busy} />
+          </label>
+          <label>
+            <span>匹配链接</span>
+            <input value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="选择候选后自动带入，仅用于定位" disabled={busy} />
           </label>
           <label>
             <span>商品类目</span>
@@ -137,7 +185,7 @@ export function AcquisitionClaimPage({
           </label>
         </div>
         {!hasProductHint && (
-          <p className="form-hint">请至少填写商品关键词或商品类目，用来定位店小秘已有待认领商品。</p>
+          <p className="form-hint">请至少填写商品关键词、商品类目，或从上方选择一条待认领商品，用来定位店小秘已有待认领商品。</p>
         )}
 
         <div className="action-row">

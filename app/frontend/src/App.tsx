@@ -666,6 +666,7 @@ export default function App() {
       const result = await postJson<AcquisitionClaimResponse>('/api/acquisition/claim-requests', {
         store_id: request.storeId,
         keyword: request.keyword,
+        source_url: request.sourceUrl,
         category_name: request.categoryName,
         claim_mark: request.claimMark,
         template_id: request.templateId ?? null,
@@ -1219,6 +1220,7 @@ export default function App() {
           <AcquisitionClaimPage
             stores={workspace.stores}
             templates={workspace.templates}
+            claimCandidates={workspace.claimCandidates}
             busy={busy}
             lastRequest={visibleAcquisitionClaimRequest}
             onCreateClaimRequest={(request) => { void createAcquisitionClaimRequest(request) }}

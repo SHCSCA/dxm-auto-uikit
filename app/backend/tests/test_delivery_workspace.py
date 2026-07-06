@@ -416,6 +416,7 @@ def _write_l2_probe_result(
     script_sha256: str | None = "a" * 64,
     git_head: str | None = "b" * 40,
     cookie_file_sha256: str | None = "c" * 64,
+    dom_html: str | None = None,
 ):
     directory.mkdir(parents=True, exist_ok=True)
     created_at = created_at or _fresh_l2_created_at()
@@ -432,7 +433,7 @@ def _write_l2_probe_result(
     screenshot_path = directory / f"{target}.png"
     dom_path = directory / f"{target}.html"
     screenshot_path.write_bytes(f"{target} screenshot evidence".encode("utf-8"))
-    dom_path.write_text(f"<html><body>{target} dom evidence</body></html>", encoding="utf-8")
+    dom_path.write_text(dom_html or f"<html><body>{target} dom evidence</body></html>", encoding="utf-8")
     path = directory / f"{target}_{created_at.replace(':', '').replace('-', '')}.json"
     payload = {
                 "schema": "dxm_l2_readonly_probe.v1",
@@ -737,6 +738,56 @@ def test_delivery_workspace_reads_l2_probe_from_runtime_data_dir(tmp_path, monke
     assert l2_gate["status"] == "passed"
     assert data["evidence_grade"]["blocked_by_l2"] is False
     assert data["safety"]["l2Status"] == "passed"
+
+
+def test_delivery_workspace_exposes_readonly_claim_candidates_from_l2_dom(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_delivery_fixture(repo, with_network=True)
+    runtime_l2_dir = tmp_path / "runtime_data" / "l2_readonly_probe"
+    monkeypatch.setattr(delivery_workspace, "L2_RUNTIME_PROBE_DIR", runtime_l2_dir, raising=False)
+    created_at = _fresh_l2_created_at()
+    _write_l2_probe_result(
+        runtime_l2_dir,
+        "data_acquisition",
+        target_url="https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
+        created_at=created_at,
+        dom_html="""
+        <html><body>
+          <table>
+            <tr class="vxe-body--row">
+              <td><a href="https://detail.1688.com/offer/1057073209777.html" target="_blank">1688</a></td>
+              <td><div class="no-new-line4" title="鸣潮二周年线下生日会系列周边爱弥斯达妮娅亚克力立牌">标题</div></td>
+              <td><span class="vxe-cell--label">18855640392</span></td>
+              <td>2026-07-06 08:28</td>
+              <td><a href="javascript:">认领</a></td>
+            </tr>
+            <tr class="vxe-body--row">
+              <td><a href="https://example.com/ignored" target="_blank">其它</a></td>
+              <td><div class="no-new-line4" title="没有认领按钮的行">标题</div></td>
+              <td><a href="javascript:">编辑</a></td>
+            </tr>
+          </table>
+        </body></html>
+        """,
+    )
+    _write_l2_probe_result(
+        runtime_l2_dir,
+        "draft_box",
+        target_url="https://www.dianxiaomi.com/web/smt/smtProductList/draft",
+        created_at=created_at,
+    )
+
+    response = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}")
+
+    assert response.status_code == 200
+    candidates = response.json()["claim_candidates"]
+    assert len(candidates) == 1
+    assert candidates[0]["title"] == "鸣潮二周年线下生日会系列周边爱弥斯达妮娅亚克力立牌"
+    assert candidates[0]["source"] == "1688"
+    assert candidates[0]["source_url"] == "https://detail.1688.com/offer/1057073209777.html"
+    assert candidates[0]["store_account"] == "18855640392"
+    assert candidates[0]["category_hint"] == "立牌类谷子"
+    assert candidates[0]["readonly"] is True
 
 
 def test_delivery_workspace_l2_gate_reports_probe_source_dir(tmp_path, monkeypatch):
