@@ -5512,7 +5512,16 @@ class DxmLoginFlow:
                 if self._replace_active_field_with_native_clipboard_text(title):
                     time.sleep(0.18)
                     confirmed_title = self._visible_editor_existing_title_value(page)
-                    if confirmed_title and (
+                    if not confirmed_title:
+                        self._trace_workflow_event(
+                            'visible_editor_title:native_empty_readback',
+                            point=point,
+                            expected=title[:120],
+                            current_url=getattr(page, 'url', None),
+                            human_step='产品标题写入后回读为空',
+                        )
+                        continue
+                    if (
                         self._normalize_template_english_title(confirmed_title)
                         != self._normalize_template_english_title(title)
                     ):
@@ -5528,7 +5537,7 @@ class DxmLoginFlow:
                     self._trace_workflow_event(
                         'visible_editor_title:native_done',
                         point=point,
-                        confirmed=bool(confirmed_title),
+                        confirmed=True,
                         current_url=getattr(page, 'url', None),
                         human_step='产品标题填写完成',
                     )
@@ -5536,8 +5545,8 @@ class DxmLoginFlow:
                         'ok': True,
                         'method': 'native_coordinate_clipboard',
                         'point': point,
-                        'confirmed': bool(confirmed_title),
-                        'value': confirmed_title or title,
+                        'confirmed': True,
+                        'value': confirmed_title,
                     }
             except Exception as exc:
                 self._trace_workflow_event(

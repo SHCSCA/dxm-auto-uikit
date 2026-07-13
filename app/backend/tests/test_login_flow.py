@@ -3727,6 +3727,9 @@ def test_visible_editor_title_native_input_uses_win32_only_click_path(monkeypatc
         click_calls.append({'page': page, 'x': x, 'y': y, **kwargs})
         return True
 
+    reads = iter(['', '真实商品标题'])
+
+    monkeypatch.setattr(flow, '_visible_editor_existing_title_value', lambda _page: next(reads))
     monkeypatch.setattr(flow, '_click_point_with_native_window', fake_click)
     monkeypatch.setattr(flow, '_replace_active_field_with_native_clipboard_text', lambda text: True)
 
@@ -3734,6 +3737,39 @@ def test_visible_editor_title_native_input_uses_win32_only_click_path(monkeypatc
 
     assert result['ok'] is True
     assert click_calls[0]['use_viewport_metrics'] is False
+
+
+def test_visible_editor_title_native_input_rejects_empty_readback_after_every_candidate(monkeypatch, tmp_path):
+    monkeypatch.setattr(dxm_login_flow_module.os, 'name', 'nt', raising=False)
+    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
+    live_client = DummyLiveClient(logged_in=True)
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    click_calls = []
+    paste_calls = []
+
+    class FakePage:
+        url = 'https://www.dianxiaomi.com/web/smt/edit?id=123'
+
+    monkeypatch.setattr(flow, '_visible_editor_existing_title_value', lambda _page: '')
+    monkeypatch.setattr(
+        flow,
+        '_click_point_with_native_window',
+        lambda *args, **kwargs: click_calls.append((args, kwargs)) or True,
+    )
+    monkeypatch.setattr(
+        flow,
+        '_replace_active_field_with_native_clipboard_text',
+        lambda text: paste_calls.append(text) or True,
+    )
+
+    result = flow._fill_visible_editor_title_with_native_input(FakePage(), 'Pokemon Poke Ball Toy Model')
+    events = [event['event'] for event in flow.recent_workflow_events()]
+
+    assert result == {'ok': False, 'reason': 'visible_editor_title_native_input_failed'}
+    assert len(click_calls) == 3
+    assert paste_calls == ['Pokemon Poke Ball Toy Model'] * 3
+    assert events.count('visible_editor_title:native_empty_readback') == 3
+    assert 'visible_editor_title:native_done' not in events
 
 
 def test_visible_editor_title_native_input_rejects_unverified_clipboard_write(monkeypatch, tmp_path):
