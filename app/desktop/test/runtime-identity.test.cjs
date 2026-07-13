@@ -23,6 +23,7 @@ const {
   createBackendOwnership,
   setVerifiedBackendIdentity,
   canTerminateOwnedBackend,
+  terminateExactOwnedBackend,
   isCurrentOwnedBackendLive,
   clearOwnershipForChild,
   createBackendChildLifecycle,
@@ -152,7 +153,7 @@ test('direct launch build identity derives from the launch instance and fails Gi
   assert.equal(direct.gitDirty, true)
 })
 
-test('portable SHA fails closed for partial packaged markers and hashes only a fully consistent outer file', async () => {
+test('portable SHA requires the packaged APP_FILENAME to match the expected package basename', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dxm-portable-sha-'))
   const portable = path.join(root, 'DXM-Agent-Console-Portable-0.1.0.exe')
   const inner = path.join(root, 'inner', 'DXM-Agent-Console.exe')
@@ -168,6 +169,7 @@ test('portable SHA fails closed for partial packaged markers and hashes only a f
     portableExecutableFile: path.basename(portable),
     portableExecutableDir: root,
     portableExecutableAppFilename: 'DXM-Agent-Console.exe',
+    expectedPortableAppFilename: 'dxm-agent-desktop',
     innerExecutablePath: inner,
   }), /absolute/i)
   await assert.rejects(() => resolvePortablePackageSha({
@@ -175,6 +177,7 @@ test('portable SHA fails closed for partial packaged markers and hashes only a f
     portableExecutableFile: portable,
     portableExecutableDir: path.join(root, 'other'),
     portableExecutableAppFilename: 'DXM-Agent-Console.exe',
+    expectedPortableAppFilename: 'dxm-agent-desktop',
     innerExecutablePath: inner,
   }), /directory/i)
   await assert.rejects(() => resolvePortablePackageSha({
@@ -182,13 +185,15 @@ test('portable SHA fails closed for partial packaged markers and hashes only a f
     portableExecutableFile: portable,
     portableExecutableDir: root,
     portableExecutableAppFilename: 'nested\\app-name',
+    expectedPortableAppFilename: 'dxm-agent-desktop',
     innerExecutablePath: inner,
   }), /APP_FILENAME/i)
   await assert.rejects(() => resolvePortablePackageSha({
     isPackaged: true,
     portableExecutableFile: root,
     portableExecutableDir: path.dirname(root),
-    portableExecutableAppFilename: 'DXM-Agent-Console.exe',
+    portableExecutableAppFilename: 'dxm-agent-desktop',
+    expectedPortableAppFilename: 'dxm-agent-desktop',
     innerExecutablePath: inner,
   }), /regular file/i)
   await assert.rejects(() => resolvePortablePackageSha({
@@ -196,14 +201,24 @@ test('portable SHA fails closed for partial packaged markers and hashes only a f
     portableExecutableFile: inner,
     portableExecutableDir: path.dirname(inner),
     portableExecutableAppFilename: 'dxm-agent-desktop',
+    expectedPortableAppFilename: 'dxm-agent-desktop',
     innerExecutablePath: inner,
   }), /outer.*inner|inner.*outer/i)
+  await assert.rejects(() => resolvePortablePackageSha({
+    isPackaged: true,
+    portableExecutableFile: portable,
+    portableExecutableDir: root,
+    portableExecutableAppFilename: 'another-valid-product-name',
+    expectedPortableAppFilename: 'dxm-agent-desktop',
+    innerExecutablePath: inner,
+  }), /APP_FILENAME.*mismatch/i)
   assert.equal(
     await resolvePortablePackageSha({
       isPackaged: true,
       portableExecutableFile: portable,
       portableExecutableDir: root,
       portableExecutableAppFilename: 'dxm-agent-desktop',
+      expectedPortableAppFilename: 'DXM-Agent-Desktop',
       innerExecutablePath: inner,
     }),
     '741DBCAF6F760C16372C3B119DFC3A6DC7612245DB6124D23840F566045396C4',
@@ -247,6 +262,9 @@ test('backend environment clears stale identity inputs after spreading the paren
       DXM_RESOURCE_ROOT: 'stale-resource',
       DXM_WORKFLOW_PROFILE_DIR: 'stale-profile',
       PORTABLE_EXECUTABLE_FILE: 'stale-outer.exe',
+      DXM_BUILD_GIT_HEAD: 'stale-generator-head',
+      DXM_BUILD_GIT_DIRTY: 'false',
+      DXM_BUILD_AT: '2000-01-01T00:00:00.000Z',
       Dxm_Package_Sha256: 'EE'.repeat(32),
       dxm_build_manifest_json: 'mixed-case-stale-json',
     },
@@ -269,6 +287,9 @@ test('backend environment clears stale identity inputs after spreading the paren
   assert.equal('DXM_BUILD_MANIFEST_FILE' in env, false)
   assert.equal('DXM_PACKAGE_SHA256' in env, false)
   assert.equal('PORTABLE_EXECUTABLE_FILE' in env, false)
+  assert.equal('DXM_BUILD_GIT_HEAD' in env, false)
+  assert.equal('DXM_BUILD_GIT_DIRTY' in env, false)
+  assert.equal('DXM_BUILD_AT' in env, false)
   assert.equal(Object.keys(env).some((key) => key.toUpperCase() === 'DXM_PACKAGE_SHA256' && key !== 'DXM_PACKAGE_SHA256'), false)
   assert.equal(Object.keys(env).some((key) => key.toUpperCase() === 'DXM_BUILD_MANIFEST_JSON' && key !== 'DXM_BUILD_MANIFEST_JSON'), false)
 })
@@ -299,6 +320,60 @@ test('ownership permits exact pre-health cleanup and requires verified identity 
   child.exitCode = null
   child.signalCode = 'SIGTERM'
   assert.equal(canTerminateOwnedBackend({ currentOwnership: ownership, ownership, runtimeInfo }), false)
+})
+
+test('termination calls kill once only on the exact current live ChildProcess handle', () => {
+  const expected = expectedIdentity()
+  let exactKillCount = 0
+  let staleKillCount = 0
+  const child = {
+    pid: expected.backendPid,
+    exitCode: null,
+    signalCode: null,
+    kill() {
+      exactKillCount += 1
+      return false
+    },
+  }
+  const staleChild = {
+    pid: expected.backendPid,
+    exitCode: null,
+    signalCode: null,
+    kill() {
+      staleKillCount += 1
+      return true
+    },
+  }
+  const ownership = createBackendOwnership({ child, instanceId: expected.instanceId, expectedIdentity: expected })
+  const staleOwnership = createBackendOwnership({ child: staleChild, instanceId: expected.instanceId, expectedIdentity: expected })
+  const runtimeInfo = {
+    backendPid: expected.backendPid,
+    backendInstanceId: expected.instanceId,
+    runtimeIdentity: null,
+  }
+
+  assert.equal(terminateExactOwnedBackend({ currentOwnership: ownership, ownership, runtimeInfo }), true)
+  assert.equal(exactKillCount, 1)
+  assert.equal(ownership.child, child)
+  assert.equal(ownership.child.exitCode, null)
+  assert.equal(ownership.child.signalCode, null)
+
+  assert.equal(terminateExactOwnedBackend({ currentOwnership: ownership, ownership: staleOwnership, runtimeInfo }), false)
+  assert.equal(staleKillCount, 0)
+
+  child.exitCode = 0
+  assert.equal(terminateExactOwnedBackend({ currentOwnership: ownership, ownership, runtimeInfo }), false)
+  child.exitCode = null
+  child.signalCode = 'SIGTERM'
+  assert.equal(terminateExactOwnedBackend({ currentOwnership: ownership, ownership, runtimeInfo }), false)
+  child.signalCode = null
+
+  const verified = verifyRuntimeIdentity(actualIdentity(expected), expected)
+  setVerifiedBackendIdentity(ownership, verified)
+  runtimeInfo.runtimeIdentity = { ...verified, fingerprint: '00'.repeat(32) }
+  assert.equal(terminateExactOwnedBackend({ currentOwnership: ownership, ownership, runtimeInfo }), false)
+  assert.equal(exactKillCount, 1)
+  assert.equal(staleKillCount, 0)
 })
 
 test('exit or error events clear ownership only for the currently owned exact ChildProcess', () => {

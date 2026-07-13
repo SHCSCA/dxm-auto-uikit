@@ -3,7 +3,8 @@ const path = require('node:path')
 const fs = require('node:fs')
 const net = require('node:net')
 const crypto = require('node:crypto')
-const { spawn, execFileSync } = require('node:child_process')
+const { spawn } = require('node:child_process')
+const desktopPackage = require('../package.json')
 const {
   createDirectLaunchManifest,
   resolveLaunchManifest,
@@ -11,7 +12,7 @@ const {
   createExpectedRuntimeIdentity,
   buildBackendEnvironment,
   createBackendOwnership,
-  canTerminateOwnedBackend,
+  terminateExactOwnedBackend,
   createBackendChildLifecycle,
   waitForOwnedBackendHealth,
 } = require('./runtime-identity.cjs')
@@ -507,21 +508,14 @@ function resolveFrontendPath(repoRoot) {
 function killBackendProcess() {
   const ownership = backendOwnership
   if (!ownership) return
-  if (!canTerminateOwnedBackend({ currentOwnership: backendOwnership, ownership, runtimeInfo })) return
   const processToStop = ownership.child
-  appendDesktopLog(`Stopping backend process tree pid=${processToStop.pid ?? 'unknown'}`)
-  if (process.platform === 'win32' && processToStop.pid) {
-    try {
-      execFileSync('taskkill.exe', ['/PID', String(processToStop.pid), '/T', '/F'], {
-        stdio: 'ignore',
-        windowsHide: true,
-      })
-      return
-    } catch (error) {
-      appendDesktopLog(`taskkill backend process tree failed: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }
-  processToStop.kill()
+  const attempted = terminateExactOwnedBackend({
+    currentOwnership: backendOwnership,
+    ownership,
+    runtimeInfo,
+  })
+  if (!attempted) return
+  appendDesktopLog(`Stop requested for exact backend child handle pid=${processToStop.pid ?? 'unknown'}`)
 }
 
 async function createWindow() {
@@ -555,6 +549,7 @@ async function createWindow() {
       portableExecutableFile: process.env.PORTABLE_EXECUTABLE_FILE,
       portableExecutableDir: process.env.PORTABLE_EXECUTABLE_DIR,
       portableExecutableAppFilename: process.env.PORTABLE_EXECUTABLE_APP_FILENAME,
+      expectedPortableAppFilename: desktopPackage.name,
       innerExecutablePath: process.execPath,
     })
     runtimeInfo.backendPort = port

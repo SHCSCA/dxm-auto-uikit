@@ -106,10 +106,10 @@ def test_desktop_main_starts_backend_hidden_and_loads_frontend_with_api_base():
     assert "windowVisible: Boolean(mainWindow && mainWindow.isVisible())" in source
     assert "QA visible smoke written" in source
     assert "webContents.capturePage()" in source
-    assert "taskkill.exe" in kill_backend_section
-    assert "'/T'" in kill_backend_section
-    assert "'/F'" in kill_backend_section
-    assert "appendDesktopLog(`Stopping backend process tree" in kill_backend_section
+    assert "terminateExactOwnedBackend" in kill_backend_section
+    assert "taskkill" not in kill_backend_section.lower()
+    assert "execFileSync" not in source
+    assert "process.kill(" not in kill_backend_section
 
 
 def test_desktop_main_logs_packaged_probe_resource_status_before_backend_start():
@@ -188,6 +188,9 @@ def test_desktop_backend_start_owns_exact_child_and_injects_one_launch_identity(
     assert "resolveLaunchManifest" in startup_section
     assert "buildId: `direct-${backendInstanceId}`" in startup_section
     assert "resolvePortablePackageSha" in startup_section
+    assert "const desktopPackage = require('../package.json')" in source
+    assert "expectedPortableAppFilename: desktopPackage.name" in startup_section
+    assert "expectedPortableAppFilename: app.getName()" not in startup_section
     assert "buildBackendEnvironment" in start_backend_section
     assert "createExpectedRuntimeIdentity" in start_backend_section
     assert "createBackendOwnership" in start_backend_section
@@ -222,13 +225,15 @@ def test_desktop_backend_cleanup_requires_current_exact_live_child_and_two_phase
     assert "eventName === 'exit' || eventName === 'close'" in lifecycle_section
     assert "eventName === 'close' && !logStreamEnded" in lifecycle_section
     assert "endLogStream()" in lifecycle_section
-    assert "canTerminateOwnedBackend" in kill_backend_section
+    assert "canTerminateOwnedBackend" in identity_source
     assert "exitCode" in identity_source
     assert "signalCode" in identity_source
     assert ".killed" not in kill_backend_section
     assert "backendOwnership = null" not in kill_backend_section
-    assert "taskkill.exe" in kill_backend_section
-    assert "windowsHide: true" in kill_backend_section
+    assert "terminateExactOwnedBackend" in kill_backend_section
+    assert "ownership.child.kill()" in identity_source
+    assert "taskkill" not in kill_backend_section.lower()
+    assert "process.kill(" not in kill_backend_section
     assert "chrome" not in kill_backend_section.lower()
 
 

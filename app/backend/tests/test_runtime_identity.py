@@ -15,6 +15,7 @@ from src.services.runtime_identity import (
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "runtime_identity_golden_vector.json"
+PATH_CASES = json.loads(FIXTURE.read_text(encoding="utf-8"))["pathCases"]
 
 
 def _manifest(**overrides):
@@ -50,11 +51,16 @@ def test_canonical_json_matches_cross_language_golden_vector():
     assert fingerprint_payload(vector["identity"]) == vector["fingerprint"]
 
 
-def test_identity_paths_match_cross_language_lexical_golden_cases():
-    vector = json.loads(FIXTURE.read_text(encoding="utf-8"))
+@pytest.mark.parametrize(
+    "case",
+    PATH_CASES,
+    ids=lambda case: f"{case['platform']}:{case['input']}",
+)
+def test_identity_paths_match_cross_language_lexical_golden_cases(case):
+    assert normalize_identity_path(case["input"], platform=case["platform"]) == case["expected"]
 
-    for case in vector["pathCases"]:
-        assert normalize_identity_path(case["input"], platform=case["platform"]) == case["expected"]
+
+def test_identity_paths_reject_relative_values():
 
     with pytest.raises(ValueError, match="absolute"):
         normalize_identity_path("relative/path", platform="posix")

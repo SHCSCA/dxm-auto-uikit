@@ -61,11 +61,14 @@ def normalize_identity_path(
         drive, tail = ntpath.splitdrive(normalized)
         if re.fullmatch(r"[A-Za-z]:", drive):
             drive = drive.upper()
+        elif drive.startswith("\\\\") and not tail:
+            tail = "\\"
         return f"{drive}{tail}"
     if platform_name == "posix":
         if not posixpath.isabs(text):
             raise ValueError("identity path must be absolute")
-        return posixpath.normpath(text)
+        normalized = posixpath.normpath(text)
+        return f"/{normalized.lstrip('/')}" if normalized.startswith("//") else normalized
     raise ValueError(f"unsupported identity path platform: {platform_name}")
 
 

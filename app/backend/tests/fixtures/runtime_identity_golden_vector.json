@@ -34,9 +34,19 @@
       "expected": "\\\\server\\share\\profile"
     },
     {
+      "platform": "win32",
+      "input": "//server/share",
+      "expected": "\\\\server\\share\\"
+    },
+    {
       "platform": "posix",
       "input": "/var/lib/../dxm/",
       "expected": "/var/dxm"
+    },
+    {
+      "platform": "posix",
+      "input": "//server/share",
+      "expected": "/server/share"
     },
     {
       "platform": "posix",

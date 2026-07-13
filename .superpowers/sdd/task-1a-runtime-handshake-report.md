@@ -31,11 +31,11 @@ startedAt
 fingerprint
 ```
 
-`fingerprint` 是前 14 个字段的 canonical JSON SHA-256：递归键排序、UTF-8、保留非 ASCII、无多余空白、标准 JSON null/boolean、规范 UTC 毫秒时间、规范绝对路径和大写 SHA-256。Python 与 Node 共用 `runtime_identity_golden_vector.json`，包含中文、非 ASCII、Windows/UNC/POSIX 路径和固定 fingerprint。
+`fingerprint` 是前 14 个字段的 canonical JSON SHA-256：递归键排序、UTF-8、保留非 ASCII、无多余空白、标准 JSON null/boolean、规范 UTC 毫秒时间、规范绝对路径和大写 SHA-256。Python 与 Node 共用 `runtime_identity_golden_vector.json`，包含中文、非 ASCII、Windows/UNC/POSIX 路径和固定 fingerprint。边界路径也已冻结：UNC share root 统一保留根尾 `\`，POSIX `//server/share` 统一折叠为 `/server/share`，消除 Python/Node 同输入漂移。
 
 直接启动默认只做一次实时 Git 读取；失败时冻结为 `gitHead=unknown`、`gitDirty=true`、`buildId=direct-<instanceId>`，不会自动读取 `outputs` 中可能遗留的 manifest。显式注入或 packaged 模式使用 `dxm.desktop.build.v1` manifest；packaged 缺失、字段/版本/schema/fingerprint 不匹配均在 spawn 前失败。
 
-Portable 外层 SHA 仅在 packaged portable 的三个环境标记完整且一致、外层路径为绝对 regular file、并且与内部 `process.execPath` 不同时流式计算一次；direct、win-unpacked 或 installer 返回 null，不用 `process.execPath` 冒充外层包。backend 环境在展开父环境后按 Windows 大小写不敏感规则清除所有陈旧身份键，再写入本次冻结值。
+Portable 外层 SHA 仅在 packaged portable 的三个环境标记完整且一致、`PORTABLE_EXECUTABLE_APP_FILENAME` 以 Windows 大小写不敏感语义精确匹配打包内 `package.json.name`（本项目为 `dxm-agent-desktop`）、外层路径为绝对 regular file、并且与内部 `process.execPath` 不同时流式计算一次；direct、win-unpacked 或 installer 返回 null，不用 `process.execPath` 冒充外层包。backend 环境在展开父环境后按 Windows 大小写不敏感规则清除所有陈旧身份键（包括生成器使用的 `DXM_BUILD_GIT_HEAD`、`DXM_BUILD_GIT_DIRTY`、`DXM_BUILD_AT`），再写入本次冻结值。
 
 ## TDD 证据
 
@@ -61,22 +61,25 @@ Portable 外层 SHA 仅在 packaged portable 的三个环境标记完整且一�
 
 4. 后续小步 RED 覆盖了跨语言路径规范化、canonical UTC manifest 时间、portable 标记不完整、unknown/non-object manifest、完整返回身份、自校验 fingerprint、有效 PID 的 `error` 语义、mixed-case 陈旧环境键、child 在健康轮询间退出、late health response、exit/close 日志流与 frontend 类型合同。每项均在对应生产实现前观察到失败，再最小实现转绿；其中合法 JSON 但非 object 的 manifest 用例先稳定复现为 3 项 `AttributeError`，补显式 object guard 后 3 项通过。
 
+5. 双审 follow-up RED：
+
+   - Node 聚焦 3 项全部失败：另一个合法 APP_FILENAME 未被拒绝、3 个生成器 build env 键仍泄漏、exact-child termination helper 不存在。
+   - Python shared path fixture 精确失败 2 项：UNC share root 少根尾 `\`，POSIX `//server/share` 被保留为双斜杠。
+   - Desktop 静态契约失败 3 项：main 未传 package-name expected marker，仍使用 `taskkill /PID`，且未委托纯 exact-child helper。
+
 ### GREEN
 
 最终验证：
 
 ```powershell
 app\backend\.venv\Scripts\python.exe -m pytest tests/test_runtime_identity.py tests/test_health.py tests/test_desktop_package_contract.py -q
-# 43 passed
+# 50 passed
 
 app\backend\.venv\Scripts\python.exe -m pytest tests/test_task_start_guard.py -q -k runtime_status
 # 14 passed, 106 deselected
 
-app\backend\.venv\Scripts\python.exe -m pytest -q
-# 1072 passed in 276.49s (0:04:36)
-
 npm --prefix app/desktop test
-# 14 passed
+# 15 passed
 
 npm --prefix app/frontend run build
 # tsc --noEmit + Vite build passed
@@ -85,7 +88,7 @@ git diff --check
 # passed; only existing Git LF/CRLF notices, no whitespace error
 ```
 
-另有 backend `tests/test_task_start_guard.py` 整文件回归：`120 passed`。
+首次 Task 1A 提交另有 backend 全量基线 `1072 passed in 276.49s`，以及 `tests/test_task_start_guard.py` 整文件回归 `120 passed`。本 follow-up 最终验证使用上面的受影响定向集，没有启动浏览器、Electron 或 DXM。
 
 ## 文件
 
@@ -119,7 +122,7 @@ Frontend：
 - health 成功前仅 exact current live child 可被启动清理；成功后还要求已验证 PID/instance/fingerprint 与完整 identity 相等。
 - `error` 对已有有效 PID 只记录错误，不冒充退出；`exit`/`close` 仅能清除事件所属 exact current ChildProcess，日志流只在 `close` 结束一次。
 - health 轮询有单一 settled 状态；timeout 或 owned child 退出后，迟到响应不能写入 verified identity。
-- `.killed` 不作为退出或所有权证据；Windows 终止保持隐藏；没有加入 Chrome 路径扫描或终止。
+- `.killed` 不作为退出或所有权证据；终止路径不再使用 `taskkill` 或 `process.kill(pid)`，纯 helper 复核所有权后只调用当前 ownership 持有的 exact `ChildProcess.kill()` 一次。`kill()` 返回值不会清 ownership，仍只由 exact child 的 `exit`/`close` 清理。没有加入 Chrome 路径扫描或终止。
 
 ## 明确暂缓边界
 
@@ -132,6 +135,7 @@ Frontend：
 - 普通/生产 8000 端口冲突 fail-closed，不递增、不接管、不杀未知进程；
 - 8000–8079 legacy same-data-dir backend 检测；
 - 严格隔离的 QA userData/dataDir/profile/dynamic-port 例外。
+- Windows Job Object/受控进程树终止；本 Task 1A follow-up 只终止 exact backend 子进程句柄，不宣称整棵子进程树已被安全收口。
 
 当前 `findFreePort(8000)` 等旧行为由 Task 1A2 串行收口，不属于本提交完成声明。
 

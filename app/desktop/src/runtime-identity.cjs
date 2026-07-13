@@ -20,6 +20,9 @@ const IDENTITY_ENV_KEYS = [
   'DXM_GIT_DIRTY',
   'DXM_BUILD_ID',
   'DXM_PACKAGE_VERSION',
+  'DXM_BUILD_GIT_HEAD',
+  'DXM_BUILD_GIT_DIRTY',
+  'DXM_BUILD_AT',
   'PORTABLE_EXECUTABLE_FILE',
   'PORTABLE_EXECUTABLE_DIR',
   'PORTABLE_EXECUTABLE_APP_FILENAME',
@@ -179,6 +182,14 @@ function normalizePathKey(value) {
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized
 }
 
+function normalizeWindowsAppFilename(value, fieldName) {
+  const filename = String(value || '').trim()
+  if (!filename || filename === '.' || filename === '..' || path.win32.basename(filename) !== filename) {
+    throw new Error(`${fieldName} must be a non-empty Windows basename`)
+  }
+  return path.win32.normalize(filename).toLowerCase()
+}
+
 async function hashRegularFile(filePath) {
   const stat = await fs.promises.stat(filePath)
   if (!stat.isFile()) return null
@@ -196,6 +207,7 @@ async function resolvePortablePackageSha({
   portableExecutableFile,
   portableExecutableDir,
   portableExecutableAppFilename,
+  expectedPortableAppFilename,
   innerExecutablePath,
 }) {
   if (!isPackaged) return null
@@ -212,9 +224,16 @@ async function resolvePortablePackageSha({
   if (normalizePathKey(path.dirname(portableExecutableFile)) !== normalizePathKey(portableExecutableDir)) {
     throw new Error('PORTABLE_EXECUTABLE_FILE directory does not match PORTABLE_EXECUTABLE_DIR')
   }
-  const markerName = String(portableExecutableAppFilename).trim()
-  if (!markerName || path.win32.basename(markerName) !== markerName) {
-    throw new Error('PORTABLE_EXECUTABLE_APP_FILENAME must be a non-empty Windows app directory name')
+  const markerName = normalizeWindowsAppFilename(
+    portableExecutableAppFilename,
+    'PORTABLE_EXECUTABLE_APP_FILENAME',
+  )
+  const expectedMarkerName = normalizeWindowsAppFilename(
+    expectedPortableAppFilename,
+    'expected portable APP_FILENAME',
+  )
+  if (markerName !== expectedMarkerName) {
+    throw new Error('PORTABLE_EXECUTABLE_APP_FILENAME mismatch')
   }
   if (normalizePathKey(portableExecutableFile) === normalizePathKey(innerExecutablePath)) {
     throw new Error('Portable outer executable must differ from the inner process executable')
@@ -343,6 +362,12 @@ function canTerminateOwnedBackend({ currentOwnership, ownership, runtimeInfo }) 
     if (!runtimeInfo.runtimeIdentity) return false
     if (canonicalJson(runtimeInfo.runtimeIdentity) !== canonicalJson(ownership.verifiedIdentity)) return false
   }
+  return true
+}
+
+function terminateExactOwnedBackend({ currentOwnership, ownership, runtimeInfo }) {
+  if (!canTerminateOwnedBackend({ currentOwnership, ownership, runtimeInfo })) return false
+  ownership.child.kill()
   return true
 }
 
@@ -538,6 +563,7 @@ module.exports = {
   createBackendOwnership,
   setVerifiedBackendIdentity,
   canTerminateOwnedBackend,
+  terminateExactOwnedBackend,
   isCurrentOwnedBackendLive,
   clearOwnershipForChild,
   createBackendChildLifecycle,
