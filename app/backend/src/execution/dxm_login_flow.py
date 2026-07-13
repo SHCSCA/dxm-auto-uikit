@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -449,6 +450,139 @@ class DxmLoginFlow:
             and current.path.rstrip('/') == target.path.rstrip('/')
         )
 
+    def _page_looks_like_login(self, page: Page) -> bool:
+        title = ''
+        try:
+            title_method = getattr(page, 'title', None)
+            if callable(title_method):
+                title = str(title_method() or '')
+        except Exception:
+            title = ''
+        url = str(getattr(page, 'url', '') or '')
+        normalized = f'{title}\n{url}'.casefold()
+        return (
+            '登录' in normalized
+            or '登陆' in normalized
+            or 'login' in normalized
+            or '/login' in normalized
+        )
+
+    def _browser_readiness_gate(
+        self,
+        page: Page,
+        *,
+        label: str,
+        ready_terms: list[str] | tuple[str, ...] | None = None,
+    ) -> dict[str, Any]:
+        page_title = None
+        try:
+            title_method = getattr(page, 'title', None)
+            if callable(title_method):
+                page_title = str(title_method() or '')
+        except Exception:
+            page_title = None
+        page_url = str(getattr(page, 'url', '') or '')
+        if self._page_looks_like_login(page):
+            return {
+                'ok': False,
+                'reason': 'login_required',
+                'label': label,
+                'requires_user_action': True,
+                'page_title': page_title,
+                'page_url': page_url,
+                'message': f'{label}页面显示为登录页，请重新登录店小秘后重试。',
+            }
+        state: dict[str, Any] = {
+            'readyState': None,
+            'loading': None,
+            'loadingCount': None,
+            'blockingModal': None,
+            'bodyExcerpt': '',
+        }
+        try:
+            evaluate = getattr(page, 'evaluate', None)
+            if callable(evaluate):
+                probed = evaluate(r'''() => {
+                  const textOf = (el) => (el?.innerText || el?.textContent || '').replace(/\s+/g, ' ').trim();
+                  const visible = (el) => {
+                    if (!el) return false;
+                    const r = el.getBoundingClientRect();
+                    const s = window.getComputedStyle(el);
+                    return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+                  };
+                  const bodyText = textOf(document.body || document.documentElement);
+                  const loadingNodes = Array.from(document.querySelectorAll('.ant-spin-spinning, .vxe-loading, .vxe-loading--wrapper, .el-loading-mask, .ant-spin, .loading, [class*=loading], [class*=Loading]')).filter(visible);
+                  const modals = Array.from(document.querySelectorAll('.ant-modal, .ant-modal-wrap, [role=dialog], .ant-drawer')).filter(visible);
+                  return {
+                    readyState: document.readyState,
+                    loading: loadingNodes.length > 0 || /加载中|loading/i.test(bodyText),
+                    loadingCount: loadingNodes.length,
+                    blockingModal: modals.length ? textOf(modals[0]).slice(0, 240) : null,
+                    bodyExcerpt: bodyText.slice(0, 500),
+                  };
+                }''')
+                if isinstance(probed, dict):
+                    state.update(probed)
+        except Exception as exc:
+            return {
+                'ok': False,
+                'reason': 'page_probe_failed',
+                'label': label,
+                'requires_user_action': True,
+                'page_title': page_title,
+                'page_url': page_url,
+                'error': str(exc)[:240],
+                'message': f'{label}页面状态检查无响应，请人工查看真实浏览器。',
+            }
+        if state.get('loading'):
+            return {
+                'ok': False,
+                'reason': 'page_loading',
+                'label': label,
+                'requires_user_action': True,
+                'page_title': page_title,
+                'page_url': page_url,
+                'loading': True,
+                'loading_count': state.get('loadingCount'),
+                'body_excerpt': state.get('bodyExcerpt'),
+                'message': f'{label}页面仍在加载，已停止自动操作并保留真实浏览器。',
+            }
+        if state.get('blockingModal'):
+            return {
+                'ok': False,
+                'reason': 'blocking_modal',
+                'label': label,
+                'requires_user_action': True,
+                'page_title': page_title,
+                'page_url': page_url,
+                'blocking_modal': state.get('blockingModal'),
+                'message': f'{label}页面有弹窗或遮罩阻断，请人工处理后重试。',
+            }
+        body_excerpt = str(state.get('bodyExcerpt') or '')
+        terms = [str(term) for term in (ready_terms or []) if str(term).strip()]
+        if terms and not any(term in body_excerpt or term in (page_title or '') for term in terms):
+            return {
+                'ok': False,
+                'reason': 'target_not_ready',
+                'label': label,
+                'requires_user_action': True,
+                'page_title': page_title,
+                'page_url': page_url,
+                'body_excerpt': body_excerpt,
+                'message': f'{label}页面没有出现目标页面关键内容，请人工确认页面是否打开正确。',
+            }
+        return {
+            'ok': True,
+            'reason': 'ready',
+            'label': label,
+            'requires_user_action': False,
+            'page_title': page_title,
+            'page_url': page_url,
+            'ready_state': state.get('readyState'),
+            'loading': False,
+            'blocking_modal': None,
+        }
+
     def start_login(self, username: str, password: str) -> dict[str, Any]:
         try:
             browser_state = self._open_login_page_and_fill(username, password)
@@ -829,6 +963,23 @@ class DxmLoginFlow:
             self._write_state(state)
             return state
 
+        if isinstance(result, dict) and result.get('ok') is False:
+            state = {
+                'stage': result.get('stage') or 'draft_box_claim_verify_failed',
+                'label': result.get('label') or '商品箱确认失败',
+                'message': result.get('message') or '商品箱商品确认没有完成。',
+                'next_action': result.get('next_action') or '请打开商品箱检查认领商品是否出现，必要时回到已有待认领列表重新认领。',
+                'requires_user_action': result.get('requires_user_action', True),
+                'page_title': result.get('page_title'),
+                'page_url': result.get('page_url'),
+                'screenshot_url': result.get('screenshot_url'),
+                'browser_visible': result.get('browser_visible', not self._is_headless()),
+                'updated_at': now_iso(),
+            }
+            self._keep_visible_browser_for_recovery(state)
+            self._write_state(state)
+            return state
+
         previous_claim_target = previous_state.get('claim_target') if isinstance(previous_state.get('claim_target'), dict) else None
         state = {
             'stage': 'draft_box_claim_verified',
@@ -1156,6 +1307,52 @@ class DxmLoginFlow:
         target_source_urls: list[str] | None = None,
     ) -> dict[str, Any]:
         page = self._ensure_page_with_cookies()
+        if action == 'edit':
+            open_editor = self._find_open_editor_page_for_target(
+                product_query=product_query,
+                target_source_urls=target_source_urls or [],
+            )
+            if open_editor is not None:
+                editor_page = open_editor['page']
+                match = open_editor.get('match') or {}
+                self._page = editor_page
+                self._reapply_live_hud_if_available(editor_page)
+                self._trace_workflow_event(
+                    'draft_box_action:reuse_open_editor_for_target',
+                    matched_by=match.get('matchedBy'),
+                    source_urls=match.get('sourceUrls') or target_source_urls or [],
+                    current_url=getattr(editor_page, 'url', None),
+                    human_step='接管已打开的商品编辑页',
+                )
+                screenshot_path = DRAFT_ACTION_SCREENSHOT_MAP[action]
+                screenshot_result = self._capture_optional_workflow_screenshot(
+                    editor_page,
+                    screenshot_path,
+                    trace_prefix='draft_box_edit_reuse',
+                )
+                editor_meta = self._extract_editor_page_meta(editor_page)
+                try:
+                    page_title = editor_page.title()
+                except Exception:
+                    page_title = '店小秘编辑页'
+                return {
+                    'page_title': page_title,
+                    'page_url': getattr(editor_page, 'url', ''),
+                    'screenshot_url': screenshot_result.get('screenshot_url'),
+                    'screenshot_error': screenshot_result.get('error'),
+                    'action': action,
+                    'note_text': note_text,
+                    'product_query': product_query,
+                    'store_name': store_name,
+                    'target_row_text': match.get('textExcerpt') or '已接管当前打开的编辑页',
+                    'target_source_urls': match.get('sourceUrls') or target_source_urls or [],
+                    'message': '已接管已打开的真实编辑界面。',
+                    'editor_sections': editor_meta['sections'],
+                    'top_actions': editor_meta['top_actions'],
+                    'detected_fields': editor_meta['fields'],
+                    'editor_reused': True,
+                    'matched_by': match.get('matchedBy'),
+                }
         draft_url = WORKFLOW_TARGETS['draft_box']['url']
         visible_draft_box = os.name == 'nt' and not self._is_headless()
         if visible_draft_box:
@@ -1234,6 +1431,7 @@ class DxmLoginFlow:
 
         if action == 'edit':
             editor_page = self._open_editor_from_draft_box(page, row_info=row_info)
+            self._page = editor_page
             screenshot_path = DRAFT_ACTION_SCREENSHOT_MAP[action]
             screenshot_result = self._capture_optional_workflow_screenshot(
                 editor_page,
@@ -3125,11 +3323,21 @@ class DxmLoginFlow:
                 current_url=getattr(page, 'url', None),
                 human_step='打开商品箱页面',
             )
-            page.goto(
-                draft_box_url,
-                wait_until='commit' if visible_from_data_acquisition else 'domcontentloaded',
-                timeout=15000 if visible_from_data_acquisition else 45000,
-            )
+            try:
+                page.goto(
+                    draft_box_url,
+                    wait_until='commit' if visible_from_data_acquisition else 'domcontentloaded',
+                    timeout=15000 if visible_from_data_acquisition else 45000,
+                )
+            except Exception as exc:
+                if not (visible_from_data_acquisition and self._is_current_page_url(page, draft_box_url)):
+                    raise
+                self._trace_workflow_event(
+                    'draft_box_claim_verify:sterile_goto_timeout_continue',
+                    error=str(exc)[:240],
+                    current_url=getattr(page, 'url', None),
+                    human_step='商品箱页面已开始切换，继续等待页面稳定',
+                )
             self._trace_workflow_event(
                 'draft_box_claim_verify:sterile_goto_done',
                 current_url=getattr(page, 'url', None),
@@ -3148,22 +3356,73 @@ class DxmLoginFlow:
             native_navigated=native_navigated,
             human_step='已打开商品箱',
         )
+        if self._page_looks_like_login(page):
+            page_title = None
+            try:
+                page_title = page.title()
+            except Exception:
+                page_title = None
+            self._trace_workflow_event(
+                'draft_box_claim_verify:login_required',
+                current_url=getattr(page, 'url', None),
+                page_title=page_title,
+                human_step='商品箱页面要求重新登录',
+            )
+            return {
+                'ok': False,
+                'stage': 'draft_box_claim_login_required',
+                'label': '需要重新登录店小秘',
+                'message': '商品箱页面打开后显示登录页，当前真实浏览器登录态已失效或被店小秘重定向。',
+                'next_action': '请在真实浏览器中重新登录店小秘，然后重新执行待认领入箱确认。',
+                'requires_user_action': True,
+                'page_title': page_title,
+                'page_url': getattr(page, 'url', None),
+                'screenshot_url': None,
+                'browser_visible': not self._is_headless(),
+                'updated_at': now_iso(),
+            }
         visible_draft_box = visible_browser
         if visible_draft_box:
             self._trace_workflow_event(
                 'draft_box_claim_verify:visible_settle_start',
-                seconds=10,
+                seconds=3,
                 human_step='等待商品箱页面稳定',
             )
-            page.wait_for_timeout(10000)
+            page.wait_for_timeout(3000)
+            readiness = self._browser_readiness_gate(
+                page,
+                label='商品箱',
+                ready_terms=WORKFLOW_READY_TERMS['draft_box'],
+            )
+            self._trace_workflow_event(
+                'draft_box_claim_verify:readiness_gate',
+                readiness=readiness,
+                human_step='检查商品箱页面是否可操作',
+            )
+            if readiness.get('ok') is not True:
+                return {
+                    'ok': False,
+                    'stage': 'draft_box_claim_page_not_ready',
+                    'label': '商品箱页面未就绪',
+                    'message': readiness.get('message') or '商品箱页面尚未达到可操作状态。',
+                    'next_action': '请在真实浏览器中处理登录、加载或弹窗后重新执行商品箱确认。',
+                    'requires_user_action': True,
+                    'reason': readiness.get('reason'),
+                    'readiness': readiness,
+                    'page_title': readiness.get('page_title'),
+                    'page_url': readiness.get('page_url') or getattr(page, 'url', None),
+                    'screenshot_url': None,
+                    'browser_visible': not self._is_headless(),
+                    'updated_at': now_iso(),
+                }
             wait_result = {
                 'ready': True,
-                'ready_term': 'visible_draft_box_settle',
-                'loading': None,
+                'ready_term': 'browser_readiness_gate',
+                'loading': readiness.get('loading'),
                 'rows': None,
-                'text_excerpt': '',
-                'url': getattr(page, 'url', ''),
-                'title': '',
+                'text_excerpt': readiness.get('body_excerpt') or '',
+                'url': readiness.get('page_url') or getattr(page, 'url', ''),
+                'title': readiness.get('page_title') or '',
             }
         else:
             wait_result = self._wait_for_page_ready(
@@ -3356,8 +3615,20 @@ class DxmLoginFlow:
             if not editor_url:
                 raise RuntimeError('缺少上次编辑页地址')
             if not self._is_same_dxm_editor_page(getattr(page, 'url', ''), editor_url):
-                self._goto_with_live_hud(page, editor_url, wait_until='domcontentloaded', timeout=45000)
-                page.wait_for_timeout(2000)
+                open_editor_page = self._find_open_editor_page_for_url(editor_url)
+                if open_editor_page is not None:
+                    page = open_editor_page
+                    self._page = page
+                    self._trace_workflow_event(
+                        'editor_action:reuse_open_editor_page',
+                        action=action,
+                        current_url=getattr(page, 'url', None),
+                        human_step='复用已打开编辑页',
+                    )
+                else:
+                    self._goto_with_live_hud(page, editor_url, wait_until='domcontentloaded', timeout=45000)
+                    self._page = page
+                    page.wait_for_timeout(2000)
             self._trace_workflow_event(
                 'editor_action:wait_ready_start',
                 action=action,
@@ -3436,21 +3707,33 @@ class DxmLoginFlow:
         if action in {'save_only', 'verify_not_published'} and self._is_dxm_editor_url(state_page_url):
             editor_url = str(state_page_url or '')
             if not self._is_same_dxm_editor_page(getattr(page, 'url', ''), editor_url):
-                self._trace_workflow_event(
-                    'editor_action:sterile_goto_start',
-                    action=action,
-                    url=editor_url,
-                    current_url=getattr(page, 'url', None),
-                    human_step='打开编辑页',
-                )
-                page.goto(editor_url, wait_until='domcontentloaded', timeout=45000)
-                self._trace_workflow_event(
-                    'editor_action:sterile_goto_done',
-                    action=action,
-                    current_url=getattr(page, 'url', None),
-                    human_step='编辑页已打开',
-                )
-                page.wait_for_timeout(3000 if not self._is_headless() else 2000)
+                open_editor_page = self._find_open_editor_page_for_url(editor_url)
+                if open_editor_page is not None:
+                    page = open_editor_page
+                    self._page = page
+                    self._trace_workflow_event(
+                        'editor_action:sterile_reuse_open_editor_page',
+                        action=action,
+                        current_url=getattr(page, 'url', None),
+                        human_step='复用已打开编辑页',
+                    )
+                else:
+                    self._trace_workflow_event(
+                        'editor_action:sterile_goto_start',
+                        action=action,
+                        url=editor_url,
+                        current_url=getattr(page, 'url', None),
+                        human_step='打开编辑页',
+                    )
+                    page.goto(editor_url, wait_until='domcontentloaded', timeout=45000)
+                    self._page = page
+                    self._trace_workflow_event(
+                        'editor_action:sterile_goto_done',
+                        action=action,
+                        current_url=getattr(page, 'url', None),
+                        human_step='编辑页已打开',
+                    )
+                    page.wait_for_timeout(3000 if not self._is_headless() else 2000)
             visible_editor_page = self._is_visible_dxm_editor_page(page)
             ready = (
                 self._wait_for_visible_editor_loaded(page, product_query=product_query, timeout=20000)
@@ -3581,6 +3864,120 @@ class DxmLoginFlow:
         expected_id = (parse_qs(expected.query).get('id') or [''])[0]
         current_id = (parse_qs(current.query).get('id') or [''])[0]
         return bool(expected_id and current_id and expected_id == current_id)
+
+    def _find_open_editor_page_for_url(self, editor_url: str | None) -> Page | None:
+        if not self._is_dxm_editor_url(editor_url):
+            return None
+        for candidate in self._context_pages():
+            if candidate is None or self._is_playwright_object_closed(candidate):
+                continue
+            try:
+                candidate_url = getattr(candidate, 'url', '')
+            except Exception:
+                continue
+            if self._is_same_dxm_editor_page(candidate_url, editor_url):
+                return candidate
+        return None
+
+    def _find_open_editor_page_for_target(
+        self,
+        *,
+        product_query: str | None,
+        target_source_urls: list[str] | None,
+    ) -> dict[str, Any] | None:
+        if not product_query and not target_source_urls:
+            return None
+        for candidate in self._context_pages():
+            if candidate is None or self._is_playwright_object_closed(candidate):
+                continue
+            try:
+                candidate_url = getattr(candidate, 'url', '')
+            except Exception:
+                continue
+            if not self._is_dxm_editor_url(candidate_url):
+                continue
+            match = self._editor_page_matches_target(
+                candidate,
+                product_query=product_query,
+                target_source_urls=target_source_urls or [],
+            )
+            if isinstance(match, dict) and match.get('ok'):
+                return {'page': candidate, 'match': match}
+        return None
+
+    def _editor_page_matches_target(
+        self,
+        page: Page,
+        *,
+        product_query: str | None,
+        target_source_urls: list[str],
+    ) -> dict[str, Any]:
+        payload = {
+            'frag': product_query or '',
+            'targetSourceUrls': target_source_urls or [],
+        }
+        try:
+            result = page.evaluate(r'''({frag, targetSourceUrls}) => {
+              const norm = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+              const sourceKey = (url) => {
+                const raw = String(url || '');
+                try {
+                  const parsed = new URL(raw, location.href);
+                  const goodsId = parsed.searchParams.get('goods_id');
+                  if (goodsId) return `goods_id:${goodsId}`;
+                } catch (_) {}
+                const goodsMatch = raw.match(/[?&#]goods_id=(\d+)/);
+                if (goodsMatch) return `goods_id:${goodsMatch[1]}`;
+                const offerMatch = raw.match(/offer\/(\d+)\.html/);
+                if (offerMatch) return `offer:${offerMatch[1]}`;
+                const itemMatch = raw.match(/item\/(\d+)\.html/);
+                if (itemMatch) return `item:${itemMatch[1]}`;
+                return '';
+              };
+              const targets = Array.isArray(targetSourceUrls) ? targetSourceUrls.filter(Boolean).map(String) : [];
+              const targetKeys = targets.map(sourceKey).filter(Boolean);
+              const bodyText = norm(document.body?.innerText || '');
+              const values = [
+                bodyText,
+                ...Array.from(document.querySelectorAll('input,textarea')).map(el => norm(el.value || el.getAttribute('value') || '')),
+                ...Array.from(document.querySelectorAll('a[href]')).map(el => String(el.href || el.getAttribute('href') || '')),
+              ].filter(Boolean);
+              const sourceUrls = values.filter(value => sourceKey(value) || /goods_id=|detail\.1688\.com|aliexpress\.com\/item/i.test(value));
+              const sourceMatched = targetKeys.length
+                ? sourceUrls.some(url => targetKeys.includes(sourceKey(url)))
+                : false;
+              const query = norm(frag);
+              const queryPrefix = query.length >= 18 ? query.slice(0, 18) : query;
+              const titleMatched = Boolean(query && values.some(value => value.includes(query) || (queryPrefix.length >= 12 && value.includes(queryPrefix))));
+              if (sourceMatched) {
+                return {
+                  ok: true,
+                  matchedBy: 'source_url',
+                  sourceUrls: sourceUrls.filter(url => targetKeys.includes(sourceKey(url))).slice(0, 5),
+                  titleMatched,
+                  textExcerpt: bodyText.slice(0, 500),
+                };
+              }
+              if (titleMatched) {
+                return {
+                  ok: true,
+                  matchedBy: targetKeys.length ? 'title_without_visible_source' : 'title',
+                  sourceUrls: sourceUrls.slice(0, 5),
+                  titleMatched,
+                  textExcerpt: bodyText.slice(0, 500),
+                };
+              }
+              return {
+                ok: false,
+                matchedBy: '',
+                sourceUrlCount: sourceUrls.length,
+                titleMatched,
+                textExcerpt: bodyText.slice(0, 240),
+              };
+            }''', payload)
+        except Exception as exc:
+            return {'ok': False, 'error': str(exc)[:240]}
+        return result if isinstance(result, dict) else {'ok': False, 'reason': 'non_object_match_result'}
 
     def _editor_page_not_ready_result(
         self,
@@ -4571,6 +4968,7 @@ class DxmLoginFlow:
         return self._dismiss_blocking_modals(page)
 
     def _fill_editor_required_defaults_on_page(self, page: Page, defaults: dict[str, Any] | None = None) -> dict[str, Any]:
+        configured_values = self._flatten_editor_defaults(defaults or {})
         values: dict[str, Any] = {
             'category_keyword': '立牌',
             'category_match': 'ACG Stand',
@@ -4597,7 +4995,7 @@ class DxmLoginFlow:
             'manufacturer_priorities': ['jiyang county thunder', 'Jiyang County thunder'],
             'customs_product_name_priorities': ['钥匙扣', 'keychain'],
         }
-        values.update(self._flatten_editor_defaults(defaults or {}))
+        values.update(configured_values)
 
         category = self._select_editor_category(
             page,
@@ -4634,10 +5032,7 @@ class DxmLoginFlow:
             }
         dxm_reference_template_results = self._apply_dxm_reference_templates_on_page(page, values)
         reference_missing = self._missing_required_reference_template_results(dxm_reference_template_results)
-        blocking_reference_missing = [
-            item for item in reference_missing
-            if item != 'dxm_reference_templates.attribute_info'
-        ]
+        blocking_reference_missing = list(reference_missing)
         if blocking_reference_missing:
             screenshot_path = EDITOR_ACTION_SCREENSHOT_MAP['fill_editor_required_defaults']
             page.screenshot(path=str(screenshot_path), full_page=True)
@@ -4773,14 +5168,119 @@ class DxmLoginFlow:
                 human_step='基础字段批量填写完成',
             )
         if self._is_visible_dxm_editor_page(page):
+            category_editor_state = category.get('editor_state') if isinstance(category, dict) else None
+            category_editor_values = (
+                category_editor_state.get('values')
+                if isinstance(category_editor_state, dict) and isinstance(category_editor_state.get('values'), dict)
+                else {}
+            )
+            existing_state_title = str(category_editor_values.get('title') or '').strip()
+            title_action = self._resolve_template_title_action(
+                values,
+                configured_values,
+                existing_title=existing_state_title,
+            )
+            if title_action.get('ok') and not title_action.get('write'):
+                title_ok = True
+                title_strategy = str(title_action.get('strategy') or 'preserve_existing_visible_editor_state')
+                self._trace_workflow_event(
+                    'editor_base_fields:title_preserved_from_state',
+                    value=existing_state_title[:120],
+                    current_url=getattr(page, 'url', None),
+                    human_step='产品标题已有值，跳过重复填写',
+                )
+            elif title_action.get('ok'):
+                next_title = str(title_action.get('value') or '').strip()
+                title_fill = self._fill_visible_editor_title_with_native_input(page, next_title, force_replace=True)
+                if not title_fill.get('ok'):
+                    title_fill = self._fill_text_inputs_near_label(page, '产品标题', [next_title])
+                title_ok = bool(title_fill.get('ok'))
+                title_strategy = str(title_action.get('strategy') or 'template_title')
+                self._trace_workflow_event(
+                    'editor_base_fields:title_template_applied',
+                    before=existing_state_title[:120],
+                    after=next_title[:120],
+                    fill_ok=title_ok,
+                    strategy=title_strategy,
+                    current_url=getattr(page, 'url', None),
+                    human_step='按模板策略处理产品标题',
+                )
+            else:
+                return {
+                    'stage': 'fill_editor_required_defaults_failed',
+                    'label': '标题模板未就绪',
+                    'message': str(title_action.get('reason') or '产品标题含中文或为空，且没有可执行的标题模板策略。'),
+                    'page_title': '店小秘编辑页',
+                    'page_url': page.url,
+                    'screenshot_url': None,
+                    'fill_result': {
+                        'category': category,
+                        'dxm_reference_template_results': dxm_reference_template_results,
+                        'fields': {
+                            **field_result,
+                            'title': False,
+                            'title_strategy': str(title_action.get('strategy') or ''),
+                            'title_value': existing_state_title,
+                        },
+                        'missing': list(title_action.get('missing') or ['category.title_strategy']),
+                    },
+                    'published': False,
+                }
+            sku_state = self._visible_editor_text_input_state(page, '商品编码')
+            existing_sku_code = str(sku_state.get('value') or '').strip() if isinstance(sku_state, dict) else ''
+            goods_code_action = self._resolve_template_goods_code_action(
+                values,
+                configured_values,
+                existing_sku_code=existing_sku_code,
+            )
+            safe_sku_code = str(goods_code_action.get('value') or '')
+            if goods_code_action.get('ok') and not goods_code_action.get('write'):
+                sku_ok = True
+                sku_strategy = str(goods_code_action.get('strategy') or 'preserve_existing_visible_editor_value')
+            elif goods_code_action.get('ok'):
+                sku_fill = self._fill_text_inputs_near_label(page, '商品编码', [safe_sku_code])
+                sku_ok = bool(sku_fill.get('ok'))
+                sku_strategy = str(goods_code_action.get('strategy') or 'template_goods_code')
+                self._trace_workflow_event(
+                    'editor_base_fields:goods_code_template_applied',
+                    before=existing_sku_code[:80],
+                    after=safe_sku_code,
+                    fill_ok=sku_ok,
+                    current_url=getattr(page, 'url', None),
+                    human_step='按模板策略处理商品编码',
+                )
+            else:
+                return {
+                    'stage': 'fill_editor_required_defaults_failed',
+                    'label': '商品编码模板未就绪',
+                    'message': str(goods_code_action.get('reason') or '商品编码不符合店小秘规则，且没有可执行的 SKU/货号模板策略。'),
+                    'page_title': '店小秘编辑页',
+                    'page_url': page.url,
+                    'screenshot_url': None,
+                    'fill_result': {
+                        'category': category,
+                        'dxm_reference_template_results': dxm_reference_template_results,
+                        'fields': {
+                            **field_result,
+                            'sku_code': False,
+                            'sku_code_strategy': str(goods_code_action.get('strategy') or ''),
+                            'sku_code_value': existing_sku_code,
+                        },
+                        'missing': list(goods_code_action.get('missing') or ['sku.goods_code_strategy']),
+                    },
+                    'published': False,
+                }
             field_result.update({
-                'title': self._fill_visible_editor_title_with_native_input(page, str(values['title'])).get('ok'),
-                'sku_code': True,
+                'title': title_ok,
+                'sku_code': sku_ok,
                 'delivery_days': True,
-                'sku_code_strategy': 'preserve_existing_visible_editor_value',
+                'title_strategy': title_strategy,
+                'title_value': str(title_action.get('value') or existing_state_title),
+                'sku_code_strategy': sku_strategy,
+                'sku_code_value': safe_sku_code,
                 'delivery_days_strategy': 'preserve_existing_visible_editor_value',
             })
-            required_text_names = ('title',)
+            required_text_names = ('title', 'sku_code')
         else:
             field_result.update({
                 'title': self._fill_text_inputs_near_label(page, '产品标题', [str(values['title'])]).get('ok') or field_result.get('title'),
@@ -4857,12 +5357,34 @@ class DxmLoginFlow:
                 'gross_height': True,
             })
 
-        reference_templates = dxm_reference_template_results.get('attribute_info') or {'ok': True, 'skipped': True}
-        category_attributes = self._fill_category_required_attributes(page)
-        self._mark_attribute_template_deferred_if_attributes_filled(
-            dxm_reference_template_results,
-            category_attributes,
-        )
+        reference_templates = dxm_reference_template_results.get('attribute_info')
+        if reference_templates and reference_templates.get('ok') and not reference_templates.get('skipped'):
+            category_attributes = {
+                'ok': True,
+                'skipped': True,
+                'via_template': True,
+                'reason': '属性引用模板已套用，默认不手动填写类目属性。',
+            }
+            self._trace_workflow_event(
+                'category_attributes:covered_by_reference_template',
+                section='attribute_info',
+                names=list(reference_templates.get('names') or [])[:5],
+                current_url=getattr(page, 'url', None),
+                human_step='属性引用模板已套用，跳过手动属性填写',
+            )
+        else:
+            category_attributes = {
+                'ok': True,
+                'skipped': True,
+                'via_template': False,
+                'reason': '属性模板未套用；默认不手动填写类目属性。',
+            }
+            self._trace_workflow_event(
+                'category_attributes:manual_fill_skipped',
+                section='attribute_info',
+                current_url=getattr(page, 'url', None),
+                human_step='未自动手填属性字段',
+            )
         self._dismiss_editor_modals(page, context='fill_editor_required_defaults:before_selects')
         original_box = self._choose_ant_select_near_label(page, '是否原箱', ['否'])
         logistics = self._check_choice_by_text(page, '普货')
@@ -4879,13 +5401,19 @@ class DxmLoginFlow:
         screenshot_path = EDITOR_ACTION_SCREENSHOT_MAP['fill_editor_required_defaults']
         page.screenshot(path=str(screenshot_path), full_page=True)
         missing = list(validation.get('missing') or [])
-        field_missing_map = {
-            'english_title': 'title',
-            'delivery_days': 'delivery_days',
-        }
+        validation_values = validation.get('values') if isinstance(validation.get('values'), dict) else {}
+        validated_title = str(validation_values.get('title') or '').strip()
+
+        def missing_field_is_satisfied(item: str) -> bool:
+            if item == 'english_title':
+                return bool(field_result.get('title')) and self._is_safe_english_title(validated_title)
+            if item == 'delivery_days':
+                return bool(field_result.get('delivery_days'))
+            return False
+
         missing = [
             item for item in missing
-            if not (item in field_missing_map and field_result.get(field_missing_map[item]))
+            if not missing_field_is_satisfied(item)
         ]
         downstream_owned_missing = {
             'declared_value',
@@ -4941,7 +5469,21 @@ class DxmLoginFlow:
             'published': False,
         }
 
-    def _fill_visible_editor_title_with_native_input(self, page: Page, title: str) -> dict[str, Any]:
+    def _fill_visible_editor_title_with_native_input(self, page: Page, title: str, *, force_replace: bool = False) -> dict[str, Any]:
+        existing_title = self._visible_editor_existing_title_value(page)
+        if existing_title and not force_replace:
+            self._trace_workflow_event(
+                'visible_editor_title:existing_value',
+                value=existing_title[:120],
+                current_url=getattr(page, 'url', None),
+                human_step='产品标题已存在，跳过重复填写',
+            )
+            return {
+                'ok': True,
+                'already_present': True,
+                'method': 'dom_existing_value',
+                'value': existing_title,
+            }
         if os.name != 'nt' or self._is_headless():
             return {'ok': False, 'reason': 'native_input_unavailable'}
         self._trace_workflow_event(
@@ -4968,13 +5510,35 @@ class DxmLoginFlow:
                     continue
                 time.sleep(0.12)
                 if self._replace_active_field_with_native_clipboard_text(title):
+                    time.sleep(0.18)
+                    confirmed_title = self._visible_editor_existing_title_value(page)
+                    if confirmed_title and (
+                        self._normalize_template_english_title(confirmed_title)
+                        != self._normalize_template_english_title(title)
+                    ):
+                        self._trace_workflow_event(
+                            'visible_editor_title:native_value_mismatch',
+                            point=point,
+                            expected=title[:120],
+                            actual=confirmed_title[:120],
+                            current_url=getattr(page, 'url', None),
+                            human_step='产品标题写入未生效',
+                        )
+                        continue
                     self._trace_workflow_event(
                         'visible_editor_title:native_done',
                         point=point,
+                        confirmed=bool(confirmed_title),
                         current_url=getattr(page, 'url', None),
                         human_step='产品标题填写完成',
                     )
-                    return {'ok': True, 'method': 'native_coordinate_clipboard', 'point': point}
+                    return {
+                        'ok': True,
+                        'method': 'native_coordinate_clipboard',
+                        'point': point,
+                        'confirmed': bool(confirmed_title),
+                        'value': confirmed_title or title,
+                    }
             except Exception as exc:
                 self._trace_workflow_event(
                     'visible_editor_title:native_failed',
@@ -4984,6 +5548,25 @@ class DxmLoginFlow:
                     human_step='产品标题填写失败',
                 )
         return {'ok': False, 'reason': 'visible_editor_title_native_input_failed'}
+
+    def _visible_editor_existing_title_value(self, page: Page) -> str:
+        selectors = self._prefer_visible_css_selectors(
+            self._known_visible_editor_text_selectors('产品标题')
+        )
+        for selector in selectors:
+            try:
+                locator = page.locator(selector)
+                count = min(locator.count(), 5)
+            except Exception:
+                continue
+            for index in range(count):
+                try:
+                    candidate = locator.nth(index).input_value(timeout=600).strip()
+                except Exception:
+                    continue
+                if candidate:
+                    return candidate
+        return ''
 
     def _fill_editor_variants_on_page(self, page: Page, defaults: dict[str, Any] | None = None) -> dict[str, Any]:
         values: dict[str, Any] = {
@@ -5651,6 +6234,13 @@ class DxmLoginFlow:
             'category': {
                 'category_keyword': ('category_keyword', 'keyword', 'search_keyword'),
                 'category_match': ('category_match', 'match_text', 'category_name'),
+                'title': ('title',),
+                'english_title': ('english_title',),
+                'title_override': ('title_override',),
+                'title_strategy': ('title_strategy',),
+                'title_cleaning_rule': ('title_cleaning_rule',),
+                'title_keyword_map': ('title_keyword_map',),
+                'english_title_fallback': ('english_title_fallback', 'title_fallback'),
                 'custom_attributes': ('custom_attributes',),
                 'attribute_template_priorities': ('attribute_template_priorities', 'reference_template_priorities', 'attribute_templates'),
             },
@@ -5678,6 +6268,7 @@ class DxmLoginFlow:
             },
             'sku': {
                 'sku_code': ('sku_code', 'goods_code'),
+                'goods_code_strategy': ('goods_code_strategy', 'template_sku_rule'),
                 'jit_stock': ('jit_stock', 'stock'),
                 'stock': ('stock',),
             },
@@ -5698,6 +6289,7 @@ class DxmLoginFlow:
                 'height': ('height',),
                 'is_original_box': ('is_original_box', 'original_box'),
                 'logistics_attribute': ('logistics_attribute', 'attribute'),
+                'goods_code_strategy': ('goods_code_strategy',),
             },
         }
         for group_name, aliases in groups.items():
@@ -5711,6 +6303,317 @@ class DxmLoginFlow:
                         flattened[target_key] = value
                         break
         return flattened
+
+    @staticmethod
+    def _is_safe_dxm_goods_code(value: Any) -> bool:
+        text = str(value or '').strip()
+        return bool(text) and len(text) <= 50 and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*', text) is not None
+
+    @staticmethod
+    def _has_chinese_text(value: Any) -> bool:
+        return re.search(r'[\u3400-\u9fff]', str(value or '')) is not None
+
+    def _normalize_template_english_title(self, value: Any, *, max_length: int = 120) -> str:
+        text = str(value or '').replace('"', '').replace("'", '').strip()
+        text = re.sub(r'[^A-Za-z0-9 &/.,:+-]+', ' ', text)
+        text = re.sub(r'\s+', ' ', text).strip(' -.,')
+        if len(text) > max_length:
+            text = text[:max_length].rstrip(' -.,')
+        return text
+
+    def _is_safe_english_title(self, value: Any) -> bool:
+        text = str(value or '').strip()
+        return bool(text) and not self._has_chinese_text(text) and re.search(r'[A-Za-z]', text) is not None
+
+    def _resolve_template_title_action(
+        self,
+        values: dict[str, Any],
+        configured_values: dict[str, Any],
+        *,
+        existing_title: str,
+    ) -> dict[str, Any]:
+        existing = str(existing_title or '').strip()
+        if self._is_safe_english_title(existing):
+            return {
+                'ok': True,
+                'write': False,
+                'value': existing,
+                'strategy': 'preserve_existing_visible_editor_state',
+            }
+
+        for key in ('title_override', 'english_title', 'title'):
+            candidate = str(configured_values.get(key) or '').strip()
+            if candidate and self._is_safe_english_title(candidate):
+                return {
+                    'ok': True,
+                    'write': True,
+                    'value': self._normalize_template_english_title(candidate),
+                    'strategy': f'template_{key}',
+                }
+
+        strategy = str(configured_values.get('title_strategy') or values.get('title_strategy') or '').strip()
+        if not strategy:
+            return {
+                'ok': False,
+                'strategy': '',
+                'missing': ['category.title_strategy'],
+                'reason': '产品标题含中文或为空；请先在“类目与标题”模板配置英文标题策略，系统不会默认手工改写标题。',
+            }
+
+        normalized = strategy.lower().replace(' ', '').replace('_', '').replace('-', '')
+        source_terms = (
+            '来源标题',
+            '商品标题',
+            '原始标题',
+            '生成英文标题',
+            '英文标题',
+            'sourcetitle',
+            'sourceproducttitle',
+            'generateenglish',
+        )
+        if any(term.lower().replace(' ', '').replace('_', '').replace('-', '') in normalized for term in source_terms):
+            source_title = self._source_title_from_values(values, configured_values)
+            generated = self._template_english_title_from_source(source_title, values, configured_values)
+            if self._is_safe_english_title(generated):
+                return {
+                    'ok': True,
+                    'write': True,
+                    'value': generated,
+                    'strategy': 'template_source_title_english',
+                }
+            fallback = str(configured_values.get('english_title_fallback') or values.get('english_title_fallback') or '').strip()
+            if self._is_safe_english_title(fallback):
+                return {
+                    'ok': True,
+                    'write': True,
+                    'value': self._normalize_template_english_title(fallback),
+                    'strategy': 'template_english_title_fallback',
+                }
+            return {
+                'ok': False,
+                'strategy': 'template_source_title_english',
+                'missing': ['source_title'],
+                'reason': '标题模板要求按来源标题生成英文标题，但当前来源标题无法生成合规英文标题；请在模板中配置英文标题覆盖值或关键词映射。',
+            }
+
+        preserve_terms = ('保留', '沿用', 'preserve', 'keep')
+        if any(term in normalized for term in preserve_terms):
+            return {
+                'ok': False,
+                'strategy': 'preserve_source_title',
+                'missing': ['category.title_strategy'],
+                'reason': f'当前标题策略为“{strategy}”，但现有产品标题含中文，速卖通编辑页不允许保存；请改为“按来源标题生成英文标题”或填写英文标题覆盖值。',
+            }
+
+        return {
+            'ok': False,
+            'strategy': 'unsupported_title_strategy',
+            'missing': ['category.title_strategy'],
+            'reason': f'当前标题策略“{strategy}”尚未支持执行；请改为“按来源标题生成英文标题”或填写英文标题覆盖值。',
+        }
+
+    def _source_title_from_values(self, values: dict[str, Any], configured_values: dict[str, Any]) -> str:
+        for source in (configured_values, values):
+            for key in ('source_title', 'original_title', 'product_title', 'keyword'):
+                text = str(source.get(key) or '').strip()
+                if text:
+                    return text
+        return ''
+
+    def _template_english_title_from_source(
+        self,
+        source_title: str,
+        values: dict[str, Any],
+        configured_values: dict[str, Any],
+    ) -> str:
+        source = str(source_title or '').strip()
+        if self._is_safe_english_title(source):
+            return self._normalize_template_english_title(source)
+
+        configured_map = configured_values.get('title_keyword_map') or values.get('title_keyword_map')
+        keyword_map: list[tuple[str, str]] = []
+        if isinstance(configured_map, dict):
+            keyword_map.extend((str(key), str(value)) for key, value in configured_map.items())
+        keyword_map.extend([
+            ('宝可梦', 'Pokemon'),
+            ('神奇宝贝', 'Pokemon'),
+            ('皮卡丘', 'Pikachu'),
+            ('仙子伊布', 'Sylveon'),
+            ('伊布', 'Eevee'),
+            ('精灵球', 'Poke Ball'),
+            ('3D打印', '3D Printed'),
+            ('玩具模型', 'Toy Model'),
+            ('模型', 'Model'),
+            ('周边', 'Collectible'),
+            ('礼物', 'Gift'),
+            ('球体摆件', 'Ball Ornament'),
+            ('摆件', 'Ornament'),
+            ('钥匙扣', 'Keychain'),
+            ('亚克力', 'Acrylic'),
+            ('立牌', 'Display Stand'),
+            ('高颜值', 'Decorative'),
+        ])
+
+        parts: list[str] = []
+        seen: set[str] = set()
+        for zh, en in keyword_map:
+            zh_text = zh.strip()
+            en_text = self._normalize_template_english_title(en)
+            if not zh_text or not en_text or zh_text not in source:
+                continue
+            key = en_text.lower()
+            if key in seen:
+                continue
+            parts.append(en_text)
+            seen.add(key)
+
+        if not parts:
+            category_match = self._normalize_template_english_title(
+                configured_values.get('category_match') or values.get('category_match') or ''
+            )
+            if category_match and self._is_safe_english_title(category_match):
+                parts.append(category_match)
+                parts.append('Collectible Product')
+
+        return self._normalize_template_english_title(' '.join(parts))
+
+    def _safe_dxm_goods_code(self, value: Any, *, fallback: Any = '') -> str:
+        def normalize(raw: Any) -> str:
+            text = str(raw or '').strip()
+            if not text:
+                return ''
+            text = re.sub(r'[^A-Za-z0-9._-]+', '-', text)
+            text = re.sub(r'-{2,}', '-', text).strip('._-')
+            if len(text) > 50:
+                text = text[:50].rstrip('._-')
+            return text
+
+        for candidate in (value, fallback):
+            safe = normalize(candidate)
+            if self._is_safe_dxm_goods_code(safe):
+                return safe
+        seed = str(value or fallback or 'dxm-goods-code').encode('utf-8', errors='ignore')
+        return 'DXM-' + hashlib.sha1(seed).hexdigest()[:12].upper()
+
+    def _resolve_template_goods_code_action(
+        self,
+        values: dict[str, Any],
+        configured_values: dict[str, Any],
+        *,
+        existing_sku_code: str,
+    ) -> dict[str, Any]:
+        existing = str(existing_sku_code or '').strip()
+        if self._is_safe_dxm_goods_code(existing):
+            return {
+                'ok': True,
+                'write': False,
+                'value': existing,
+                'strategy': 'preserve_existing_visible_editor_value',
+            }
+
+        configured_sku_code = str(configured_values.get('sku_code') or '').strip()
+        if self._is_safe_dxm_goods_code(configured_sku_code):
+            return {
+                'ok': True,
+                'write': True,
+                'value': configured_sku_code,
+                'strategy': 'template_sku_code',
+            }
+
+        strategy = str(
+            configured_values.get('goods_code_strategy')
+            or values.get('goods_code_strategy')
+            or ''
+        ).strip()
+        if not strategy:
+            return {
+                'ok': False,
+                'strategy': '',
+                'missing': ['sku.goods_code_strategy'],
+                'reason': '商品编码不符合店小秘规则；请先在模板中心配置 SKU 编码或货号策略，系统不会默认手工改写。',
+            }
+
+        normalized = strategy.lower().replace(' ', '').replace('_', '').replace('-', '')
+        preserve_terms = ('沿用店小秘生成', '保持店小秘', 'preserve', 'keep', 'dxm')
+        if any(term.lower().replace(' ', '').replace('_', '').replace('-', '') in normalized for term in preserve_terms):
+            return {
+                'ok': False,
+                'strategy': 'preserve_dxm_generated',
+                'missing': ['sku.goods_code_strategy'],
+                'reason': f'当前模板货号策略为“{strategy}”，但店小秘现有商品编码不合规；请改为“按来源商品ID生成安全货号”或填写明确 SKU 编码。',
+            }
+
+        source_terms = (
+            '来源商品id',
+            '源商品id',
+            '商品id',
+            '安全货号',
+            '自动生成',
+            'sourceid',
+            'sourcegoodsid',
+            'productid',
+        )
+        if any(term in normalized for term in source_terms):
+            source_goods_id = self._source_goods_id_from_values(values)
+            if self._is_safe_dxm_goods_code(source_goods_id):
+                return {
+                    'ok': True,
+                    'write': True,
+                    'value': source_goods_id,
+                    'strategy': 'template_source_goods_id',
+                }
+            return {
+                'ok': False,
+                'strategy': 'template_source_goods_id',
+                'missing': ['source_urls'],
+                'reason': '模板要求按来源商品ID生成货号，但当前任务没有可识别的来源商品链接。',
+            }
+
+        sanitize_terms = ('清理非法字符', '合规化', 'sanitize', 'clean')
+        if any(term in normalized for term in sanitize_terms):
+            safe = self._safe_dxm_goods_code(existing, fallback=configured_sku_code)
+            return {
+                'ok': True,
+                'write': True,
+                'value': safe,
+                'strategy': 'template_sanitize_existing',
+            }
+
+        return {
+            'ok': False,
+            'strategy': 'unsupported_goods_code_strategy',
+            'missing': ['sku.goods_code_strategy'],
+            'reason': f'当前模板货号策略“{strategy}”尚未支持执行；请改为“按来源商品ID生成安全货号”或填写明确 SKU 编码。',
+        }
+
+    def _source_goods_id_from_values(self, values: dict[str, Any]) -> str:
+        raw_values: list[Any] = []
+        for key in ('source_url', 'url'):
+            if values.get(key):
+                raw_values.append(values.get(key))
+        source_urls = values.get('source_urls')
+        if isinstance(source_urls, (list, tuple, set)):
+            raw_values.extend(source_urls)
+        elif source_urls:
+            raw_values.append(source_urls)
+
+        for raw in raw_values:
+            text = str(raw or '').strip()
+            if not text:
+                continue
+            parsed = urlparse(text)
+            query = parse_qs(parsed.query)
+            for key in ('goods_id', 'goodsId', 'offer_id', 'offerId', 'id'):
+                for candidate in query.get(key, []):
+                    if self._is_safe_dxm_goods_code(candidate):
+                        return str(candidate)
+            path_match = re.search(r'/(?:offer|goods|item)/(\d{6,})(?:\.html)?', parsed.path)
+            if path_match:
+                return path_match.group(1)
+            any_match = re.search(r'(?<!\d)(\d{9,})(?!\d)', text)
+            if any_match:
+                return any_match.group(1)
+        return ''
 
     def _extract_image_slots(self, defaults: dict[str, Any] | None) -> list[dict[str, str]]:
         data = defaults or {}
@@ -6927,7 +7830,12 @@ class DxmLoginFlow:
             human_step='商品分类状态读取完成',
         )
         if body_state.get('category_selected'):
-            return {'ok': True, 'already_selected': True, 'text': body_state.get('category_text')}
+            return {
+                'ok': True,
+                'already_selected': True,
+                'text': body_state.get('category_text'),
+                'editor_state': body_state,
+            }
 
         visible_editor = self._is_visible_dxm_editor_page(page)
         scroll_probe_error = ''
@@ -7392,17 +8300,38 @@ class DxmLoginFlow:
             const r = el.getBoundingClientRect();
             return {x:r.x, y:r.y, w:r.width, h:r.height};
           };
+          const containsAny = (text, terms) => terms.some(term => text.includes(term) || norm(text).includes(norm(term)));
+          const attributeSectionTerms = ['属性信息', '产品属性', '类目属性'];
+          const templateTerms = ['引用模板', '产品属性模板', '属性模板', '请选择【产品属性模板】', '请选择模板'];
           const root = Array.from(document.querySelectorAll('section,form,div'))
             .filter(visible)
-            .find(el => textOf(el).includes('属性信息') && textOf(el).includes('引用模板'));
+            .find(el => {
+              const text = textOf(el);
+              return containsAny(text, attributeSectionTerms) && containsAny(text, templateTerms);
+            });
           const scope = root || document;
-          const select = Array.from(scope.querySelectorAll('.ant-select')).filter(visible).find(el => {
-            const text = textOf(el);
-            return text.includes('请选择引用模板') || text.includes('引用模板') || text.includes('---请选择引用模板---');
-          });
-          if (!select) return {ok:false, reason:'未找到属性信息引用模板选择框'};
-          const selectedText = textOf(select);
+          const candidateSelects = Array.from(scope.querySelectorAll('.ant-select')).filter(visible);
           const terms = priorities.map(String).filter(Boolean);
+          const select = candidateSelects.find(el => {
+            const text = textOf(el);
+            return containsAny(text, templateTerms)
+              || text.includes('请选择引用模板')
+              || text.includes('---请选择引用模板---');
+          });
+          const alreadySelected = candidateSelects.find(el => {
+            const text = textOf(el);
+            return terms.some(term => text.includes(term)) && !text.includes('请选择');
+          });
+          if (!select && alreadySelected) {
+            return {ok:true, already_selected:true, text:textOf(alreadySelected)};
+          }
+          if (!select) return {
+            ok:false,
+            reason:'未找到属性信息产品属性模板选择框',
+            root_found:Boolean(root),
+            select_candidates:candidateSelects.map(el => textOf(el).slice(0, 120)).filter(Boolean).slice(0, 12),
+          };
+          const selectedText = textOf(select);
           if (terms.some(term => selectedText.includes(term)) && !selectedText.includes('请选择')) {
             return {ok:true, already_selected:true, text:selectedText};
           }
@@ -7431,7 +8360,10 @@ class DxmLoginFlow:
           const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
           const select = Array.from(document.querySelectorAll('.ant-select')).filter(visible).find(el => {
             const text = textOf(el);
-            return text.includes('引用模板') || priorities.some(term => text.includes(String(term)));
+            return text.includes('引用模板')
+              || text.includes('产品属性模板')
+              || text.includes('属性模板')
+              || priorities.some(term => text.includes(String(term)));
           });
           const text = textOf(select || document.body);
           return {ok: priorities.some(term => text.includes(String(term))), text:text.slice(0, 160)};
@@ -7469,23 +8401,7 @@ class DxmLoginFlow:
                 current_url=getattr(page, 'url', None),
                 human_step=f'检查店小秘引用模板：{section}',
             )
-            visible_editor = self._is_visible_dxm_editor_page(page)
-            if visible_editor and section == 'attribute_info':
-                result = {
-                    'ok': False,
-                    'reason': '可见浏览器下不直接套用属性引用模板，改由编辑页属性字段补齐验证。',
-                    'deferred_to_category_attributes': True,
-                }
-            elif visible_editor and section in label_sections:
-                self._trace_workflow_event(
-                    'dxm_reference_template:deferred_to_field_control',
-                    section=section,
-                    names=names[:5],
-                    current_url=getattr(page, 'url', None),
-                    human_step=f'改用页面字段选择：{label_sections[section]}',
-                )
-                continue
-            elif not names:
+            if not names:
                 result = {'ok': not required, 'skipped': True, 'reason': 'no_reference_template_config'}
             elif section == 'attribute_info':
                 result = self._apply_reference_templates_on_page(page, names)
@@ -7919,10 +8835,12 @@ class DxmLoginFlow:
             .replace(/选择分类/g, '')
             .replace(/自动识别分类/g, '')
             .replace(/请选择/g, '')
+            .replace(/[-—–_>＞/\\|:：]/g, '')
             .trim();
+          const categoryPlaceholder = categoryText.includes('请选择分类') || !/[\u3400-\u9fffA-Za-z0-9]/.test(categoryValue);
           const categorySelected = categoryText.includes('ACGStand')
             || categoryText.includes('立牌类谷子')
-            || (categoryValue.length >= 2 && !categoryValue.includes('未选择'));
+            || (categoryValue.length >= 2 && !categoryPlaceholder && !categoryValue.includes('未选择'));
           if (!categorySelected) missing.push('category');
           if (!values.declared_value) missing.push('declared_value');
           if (!values.weight) missing.push('weight');
@@ -8250,12 +9168,82 @@ class DxmLoginFlow:
         page.wait_for_timeout(300)
         return {'ok': True, 'filled': filled}
 
+    def _visible_editor_text_input_state(self, page: Page, label_text: str) -> dict[str, Any]:
+        selectors = self._known_visible_editor_text_selectors(label_text)
+        for selector in self._prefer_visible_css_selectors(selectors):
+            try:
+                inputs = page.locator(selector)
+                if inputs.count() <= 0:
+                    continue
+                target = inputs.nth(0)
+                value = target.input_value(timeout=1200)
+                return {'ok': True, 'value': value, 'method': 'visible_known_selector', 'selector': selector}
+            except Exception:
+                continue
+        try:
+            state = page.evaluate(r'''(labelText) => {
+              const visible = (el) => {
+                const r = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+              };
+              const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
+              const rectOf = (el) => {
+                const r = el.getBoundingClientRect();
+                return {x:r.x, y:r.y, w:r.width, h:r.height};
+              };
+              const docY = (el) => {
+                const r = el.getBoundingClientRect();
+                return r.y + window.scrollY;
+              };
+              const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+              const inputValue = (el, method) => ({
+                ok: true,
+                value: String(el.value || ''),
+                method,
+                rect: rectOf(el),
+              });
+              const inputs = Array.from(document.querySelectorAll('input,textarea'))
+                .filter(el => visible(el) && !el.disabled && (el.tagName === 'TEXTAREA' || ['text', 'number', ''].includes(el.type)));
+              const containers = Array.from(document.querySelectorAll('.ant-form-item,.form-item,.form-group,tr,li'))
+                .filter(visible)
+                .filter(el => norm(textOf(el)).includes(norm(labelText)));
+              for (const container of containers) {
+                const local = Array.from(container.querySelectorAll('input,textarea'))
+                  .filter(el => visible(el) && !el.disabled);
+                if (local.length) return inputValue(local[0], 'visible_labeled_container');
+              }
+              const labels = Array.from(document.querySelectorAll('label,span,div,td,th'))
+                .filter(visible)
+                .map(el => ({el, text: textOf(el), rect: rectOf(el)}))
+                .filter(item => item.text && norm(item.text).includes(norm(labelText)) && item.rect.w <= 420 && item.rect.h <= 120);
+              for (const label of labels) {
+                const lr = label.rect;
+                const ly = docY(label.el) + lr.h / 2;
+                const rowInputs = inputs
+                  .filter(el => {
+                    const r = rectOf(el);
+                    const y = docY(el) + r.h / 2;
+                    return Math.abs(y - ly) < 72 && r.x > lr.x - 20;
+                  })
+                  .sort((a, b) => rectOf(a).x - rectOf(b).x);
+                if (rowInputs.length) return inputValue(rowInputs[0], 'visible_label_row');
+              }
+              return {ok:false, reason:`未读取到输入框：${labelText}`};
+            }''', label_text)
+            return state if isinstance(state, dict) else {'ok': False, 'reason': f'未读取到输入框：{label_text}'}
+        except Exception as exc:
+            return {'ok': False, 'reason': f'读取输入框失败：{label_text} / {exc}'}
+
     def _fill_text_inputs_after_label_locator(self, page: Page, label_text: str, values: list[str]) -> dict[str, Any]:
         if not values:
             return {'ok': True, 'filled': []}
         selector_result = self._fill_text_inputs_by_known_selector(page, label_text, values)
         if selector_result.get('ok'):
             return selector_result
+        container_result = self._fill_text_inputs_in_labeled_container(page, label_text, values)
+        if container_result.get('ok'):
+            return container_result
         label_literal = self._xpath_literal(str(label_text))
         selector = (
             "xpath=(//*[self::label or self::span or self::div or self::td or self::th]"
@@ -8296,6 +9284,53 @@ class DxmLoginFlow:
             human_step=f'{label_text}填写完成',
         )
         return {'ok': True, 'filled': filled, 'method': 'visible_label_following_locator'}
+
+    def _fill_text_inputs_in_labeled_container(self, page: Page, label_text: str, values: list[str]) -> dict[str, Any]:
+        try:
+            result = page.evaluate(r'''({labelText, values}) => {
+              const visible = (el) => {
+                const r = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+              };
+              const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
+              const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+              const setValue = (el, value) => {
+                if (!el || el.disabled) return false;
+                el.scrollIntoView({block:'center', inline:'nearest'});
+                el.focus();
+                const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+                const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+                if (setter) setter.call(el, String(value ?? ''));
+                else el.value = String(value ?? '');
+                el.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:String(value ?? '')}));
+                el.dispatchEvent(new Event('change', {bubbles:true}));
+                el.dispatchEvent(new Event('blur', {bubbles:true}));
+                return String(el.value || '') === String(value ?? '');
+              };
+              const containers = Array.from(document.querySelectorAll('.ant-form-item,.form-item,.form-group,tr,li'))
+                .filter(visible)
+                .filter(el => norm(textOf(el)).includes(norm(labelText)));
+              for (const container of containers) {
+                const inputs = Array.from(container.querySelectorAll('input,textarea'))
+                  .filter(el => visible(el) && !el.disabled && (el.tagName === 'TEXTAREA' || ['text', 'number', ''].includes(el.type)));
+                if (inputs.length < values.length) continue;
+                const filled = [];
+                let ok = true;
+                values.forEach((value, index) => {
+                  const written = setValue(inputs[index], value);
+                  ok = ok && written;
+                  if (written) filled.push(String(value ?? ''));
+                });
+                if (ok) return {ok:true, filled, method:'visible_labeled_container'};
+              }
+              return {ok:false, reason:`未找到标签容器输入框：${labelText}`};
+            }''', {'labelText': label_text, 'values': values})
+            if isinstance(result, dict):
+                return result
+            return {'ok': False, 'reason': f'标签容器填写失败：{label_text}'}
+        except Exception as exc:
+            return {'ok': False, 'reason': f'标签容器填写异常：{label_text} / {exc}'}
 
     def _fill_text_inputs_by_known_selector(self, page: Page, label_text: str, values: list[str]) -> dict[str, Any]:
         selectors = self._known_visible_editor_text_selectors(label_text)
@@ -8422,6 +9457,33 @@ class DxmLoginFlow:
         return "concat(" + ", \"'\", ".join(f"'{part}'" for part in parts) + ")"
 
     def _fill_packaging_info(self, page: Page, gross_weight: str, dimensions: list[str]) -> dict[str, Any]:
+        base = page.evaluate(r'''(values) => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const setValue = (el, value) => {
+            if (!el || el.disabled) return false;
+            el.focus();
+            el.value = String(value ?? '');
+            el.dispatchEvent(new Event('input', {bubbles: true}));
+            el.dispatchEvent(new Event('change', {bubbles: true}));
+            el.blur();
+            return String(el.value || '') === String(value ?? '');
+          };
+          const inputs = Array.from(document.querySelectorAll('input,textarea')).filter(visible);
+          const byPlaceholder = (text) => inputs.find(el => String(el.placeholder || '') === text && !el.disabled);
+          const dimensions = Array.isArray(values.dimensions) ? values.dimensions : [];
+          return {
+            weight: setValue(byPlaceholder('请输入重量'), values.gross_weight),
+            length: setValue(byPlaceholder('长'), dimensions[0]),
+            width: setValue(byPlaceholder('宽'), dimensions[1]),
+            height: setValue(byPlaceholder('高'), dimensions[2]),
+          };
+        }''', {'gross_weight': gross_weight, 'dimensions': dimensions})
+        if not all(bool(base.get(key)) for key in ('weight', 'length', 'width', 'height')):
+            return {'ok': False, 'reason': '基础重量或包装尺寸填写失败', 'base': base}
         gross = page.locator('#form_item_grossWeight').first
         try:
             gross.scroll_into_view_if_needed(timeout=3000)
@@ -8446,12 +9508,13 @@ class DxmLoginFlow:
           };
           const allInputs = Array.from(document.querySelectorAll('input,textarea'));
           const gy = docY(gross);
+          const grossIndex = allInputs.indexOf(gross);
           const candidates = allInputs
             .filter(el => visible(el) && !el.disabled && el.tagName === 'INPUT' && ['text', 'number', ''].includes(el.type))
             .filter(el => {
               const r = rectOf(el);
               const y = docY(el);
-              return y > gy + 20 && y < gy + 140 && r.w >= 50 && r.w <= 150;
+              return allInputs.indexOf(el) > grossIndex && y > gy - 10 && y < gy + 180 && r.w >= 50 && r.w <= 180;
             })
             .sort((a, b) => docY(a) - docY(b) || rectOf(a).x - rectOf(b).x);
           return candidates.slice(0, count).map(el => allInputs.indexOf(el));
@@ -8465,7 +9528,7 @@ class DxmLoginFlow:
             except TimeoutError:
                 return {'ok': False, 'reason': '包装后尺寸填写失败'}
         page.wait_for_timeout(300)
-        return {'ok': True, 'gross_weight': gross_weight, 'dimensions': dimensions}
+        return {'ok': True, 'gross_weight': gross_weight, 'dimensions': dimensions, 'base': base}
 
     def _choose_ant_select_by_input_id(
         self,
@@ -8551,6 +9614,41 @@ class DxmLoginFlow:
           };
         }'''
         option = page.evaluate(option_script, {'priorities': priorities, 'anchor': anchor_rect})
+        if not option or not option.get('rect'):
+            reopened = page.evaluate(r'''({anchor}) => {
+              const visible = (el) => {
+                const r = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < window.innerHeight
+                  && style.visibility !== 'hidden' && style.display !== 'none';
+              };
+              const rectOf = (el) => {
+                const r = el.getBoundingClientRect();
+                return {x:r.x, y:r.y, w:r.width, h:r.height};
+              };
+              const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+              const distance = (a, b) => Math.abs((a.x + a.w / 2) - (b.x + b.w / 2)) + Math.abs((a.y + a.h / 2) - (b.y + b.h / 2));
+              const selects = Array.from(document.querySelectorAll('.ant-select'))
+                .filter(visible)
+                .map(el => ({el, text:textOf(el), rect:rectOf(el)}))
+                .filter(x => x.rect.x < anchor.x + anchor.w + 80 && x.rect.x + x.rect.w > anchor.x - 80);
+              const picked = selects.sort((a, b) => distance(a.rect, anchor) - distance(b.rect, anchor))[0];
+              if (!picked) return {ok:false, reason:'select_not_found_near_anchor'};
+              const target = picked.el.querySelector('.ant-select-selector') || picked.el;
+              const fire = (type) => target.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true, view:window}));
+              picked.el.scrollIntoView({block:'nearest', inline:'nearest'});
+              fire('mouseover');
+              fire('mousemove');
+              fire('mousedown');
+              fire('mouseup');
+              fire('click');
+              return {ok:true, text:picked.text, rect:picked.rect, strategy:'reopen_select_dom_dispatch'};
+            }''', {'anchor': anchor_rect}) or {}
+            if reopened.get('ok'):
+                page.wait_for_timeout(800)
+                option = page.evaluate(option_script, {'priorities': priorities, 'anchor': reopened.get('rect') or anchor_rect})
+                if option and option.get('rect'):
+                    option['strategy'] = option.get('strategy') or reopened.get('strategy')
         if not option or not option.get('rect'):
             dismissed = self._dismiss_blocking_modals(page)
             if dismissed:
@@ -9660,12 +10758,42 @@ class DxmLoginFlow:
 
     def _visible_save_success_state(self, page: Page) -> dict[str, Any]:
         script = r'''() => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+          };
+          const textOf = (el) => String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
           const body = String(document.body ? document.body.innerText || document.body.textContent || '' : '');
           const compact = body.replace(/\s+/g, '');
           const successTerms = ['保存成功','编辑成功','产品编辑成功','您的产品编辑成功','已保存'];
           const successText = successTerms.find(term => compact.includes(term));
           if (successText) {
             return {ok:true, success_text:successText, published:false};
+          }
+          const errorSelectors = [
+            '.ant-message-notice',
+            '.ant-notification-notice',
+            '.ant-form-item-explain-error',
+            '.ant-form-item-has-error',
+            '[role="alert"]',
+            '.error',
+            '.error-message'
+          ];
+          const errorTerms = ['产品信息中有错误', '请选择', '未选择', '必填', '不能为空', '请完善', '错误', '失败'];
+          const visibleErrors = Array.from(document.querySelectorAll(errorSelectors.join(',')))
+            .filter(visible)
+            .map(textOf)
+            .filter(text => text && errorTerms.some(term => text.includes(term)));
+          const firstError = visibleErrors.find(text => text.length > 0);
+          if (firstError) {
+            return {
+              ok:false,
+              reason:'保存后页面提示：' + firstError.slice(0, 240),
+              validation_error:true,
+              error_text:firstError.slice(0, 500),
+              published:false
+            };
           }
           return {ok:false, reason:'保存后未检测到页面成功提示', published:false};
         }'''
@@ -12058,6 +13186,14 @@ class DxmLoginFlow:
                     dismissed=dismissed,
                     human_step='店铺筛选已处理',
                 )
+        if visible_draft_box and not str(product_query or '').strip():
+            self._trace_workflow_event(
+                'draft_box_search:submit_skipped_visible_empty_query',
+                store_name=store_name,
+                reason='visible_browser_store_only_search_would_reset_list',
+                human_step='可见浏览器跳过空商品箱搜索',
+            )
+            return
         if product_query is not None or store_name:
             self._trace_workflow_event(
                 'draft_box_search:submit_start',
@@ -12252,17 +13388,28 @@ class DxmLoginFlow:
             return {ok:false, reason:'未找到可见可编辑的商品箱搜索框'};
           }
           input.focus();
-          input.value = frag || '';
-          input.dispatchEvent(new Event('input', {bubbles:true}));
+          const valueSetter =
+            Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+            || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+          if (valueSetter) {
+            valueSetter.call(input, frag || '');
+          } else {
+            input.value = frag || '';
+          }
+          if (window.InputEvent) {
+            input.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data: frag || ''}));
+          } else {
+            input.dispatchEvent(new Event('input', {bubbles:true}));
+          }
           input.dispatchEvent(new Event('change', {bubbles:true}));
-          const controls = Array.from(document.querySelectorAll('button,a,[role="button"],span,div'))
+          const clickableSelector = 'button,a,[role="button"],input[type="button"],input[type="submit"]';
+          const exactControls = Array.from(document.querySelectorAll(clickableSelector))
             .filter(visible)
             .map(el => {
-              const text = norm(el.innerText || el.textContent);
-              const target = el.closest('button,a,[role="button"]') || el;
+              const text = norm(el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || el.getAttribute('title'));
+              const target = el;
               const tr = target.getBoundingClientRect();
               return {
-                el,
                 target,
                 text,
                 rect: {x:tr.x, y:tr.y, w:tr.width, h:tr.height},
@@ -12270,14 +13417,35 @@ class DxmLoginFlow:
               };
             })
             .filter(item => item.text === '搜索' || item.text.endsWith('搜索'));
-          const button = controls.sort((a, b) => a.distance - b.distance)[0];
+          const fallbackControls = exactControls.length ? [] : Array.from(document.querySelectorAll('span,div'))
+            .filter(visible)
+            .map(el => {
+              const target = el.closest(clickableSelector);
+              if (!target) return null;
+              const text = norm(target.innerText || target.textContent || target.value || target.getAttribute('aria-label') || target.getAttribute('title'));
+              const tr = target.getBoundingClientRect();
+              return {
+                target,
+                text,
+                rect: {x:tr.x, y:tr.y, w:tr.width, h:tr.height},
+                distance: Math.abs(tr.top - input.getBoundingClientRect().top) + Math.max(0, tr.left - input.getBoundingClientRect().right),
+              };
+            })
+            .filter(Boolean)
+            .filter(item => item.text === '搜索' || item.text.endsWith('搜索'));
+          const controls = exactControls.length ? exactControls : fallbackControls;
+          const button = controls.sort((a, b) => {
+            const aExact = a.text === '搜索' ? 0 : 1;
+            const bExact = b.text === '搜索' ? 0 : 1;
+            return (aExact - bExact) || (a.distance - b.distance);
+          })[0];
           if (button) {
             button.target.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
-            return {ok:true, strategy:'dom_visible_input_click_button', input:describe(input), clicked:button.text};
+            return {ok:true, strategy:'dom_visible_input_click_button', input:describe(input), clicked:button.text, value:String(input.value || '')};
           }
           input.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', code:'Enter', bubbles:true, cancelable:true}));
           input.dispatchEvent(new KeyboardEvent('keyup', {key:'Enter', code:'Enter', bubbles:true, cancelable:true}));
-          return {ok:true, strategy:'dom_visible_input_enter', input:describe(input), clicked:null};
+          return {ok:true, strategy:'dom_visible_input_enter', input:describe(input), clicked:null, value:String(input.value || '')};
         }''', product_query)
 
     def _find_draft_box_row(
@@ -12327,7 +13495,16 @@ class DxmLoginFlow:
             row_info = self._evaluate_page_function_with_runtime_timeout(page, r'''({frag, store, claimMark, targetSourceUrls}) => {
           const rows = Array.from(document.querySelectorAll('tr.vxe-body--row, tr, .ant-table-row, .el-table__row, [class*="vxe-body--row"], [class*="table"] [class*="row"], [class*="list"] [class*="item"]'));
           const normText = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-          const looksAggregate = (text) => (text.match(/创建：/g) || []).length > 1 || (text.match(/移入待发布/g) || []).length > 2;
+          const looksTableWrapper = (text) => (
+            /图片\s*标题\/产品ID/.test(text)
+            && /分组\s*价格\s*库存/.test(text)
+            && text.includes('操作')
+          );
+          const looksAggregate = (text) => (
+            (text.match(/创建：/g) || []).length > 1
+            || (text.match(/移入待发布/g) || []).length > 2
+            || looksTableWrapper(text)
+          );
           const sourceUrls = (row) => Array.from(row.querySelectorAll('a[href]'))
             .map(a => String(a.href || a.getAttribute('href') || ''))
             .filter(url => url.includes('goods_id=') || url.includes('detail.1688.com') || url.includes('yangkeduo.com') || url.includes('aliexpress.com'));
@@ -12477,7 +13654,16 @@ class DxmLoginFlow:
               const rows = Array.from(document.querySelectorAll('tr.vxe-body--row, tr, .ant-table-row, .el-table__row, [class*="vxe-body--row"], [class*="table"] [class*="row"], [class*="list"] [class*="item"]'))
                 .filter(visible);
               const rowText = (row) => textOf(row);
-              const looksAggregate = (text) => (text.match(/创建：/g) || []).length > 1 || (text.match(/移入待发布/g) || []).length > 2;
+              const looksTableWrapper = (text) => (
+                /图片\s*标题\/产品ID/.test(text)
+                && /分组\s*价格\s*库存/.test(text)
+                && text.includes('操作')
+              );
+              const looksAggregate = (text) => (
+                (text.match(/创建：/g) || []).length > 1
+                || (text.match(/移入待发布/g) || []).length > 2
+                || looksTableWrapper(text)
+              );
               const sourceUrls = (row) => Array.from(row.querySelectorAll('a[href]'))
                 .map(a => String(a.href || a.getAttribute('href') || ''))
                 .filter(url => url.includes('goods_id=') || url.includes('detail.1688.com') || url.includes('yangkeduo.com') || url.includes('aliexpress.com'));
@@ -12984,6 +14170,84 @@ class DxmLoginFlow:
             'viewport': viewport_metrics,
         }
 
+    @staticmethod
+    def _clamp_native_content_rect(
+        content_rect: dict[str, Any],
+        *,
+        window_rect: dict[str, Any] | None = None,
+        virtual_screen: dict[str, Any] | None = None,
+    ) -> dict[str, int]:
+        def number(source: dict[str, Any] | None, key: str, default: int = 0) -> int:
+            if not isinstance(source, dict):
+                return default
+            try:
+                return int(round(float(source.get(key))))
+            except (TypeError, ValueError):
+                return default
+
+        left = number(content_rect, 'left')
+        top = number(content_rect, 'top')
+        right = number(content_rect, 'right', left + number(content_rect, 'width'))
+        bottom = number(content_rect, 'bottom', top + number(content_rect, 'height'))
+
+        if isinstance(window_rect, dict):
+            window_left = number(window_rect, 'left', left)
+            window_top = number(window_rect, 'top', top)
+            window_right = number(window_rect, 'right', window_left + number(window_rect, 'width'))
+            window_bottom = number(window_rect, 'bottom', window_top + number(window_rect, 'height'))
+            left = max(left, window_left)
+            top = max(top, window_top)
+            right = min(right, window_right)
+            bottom = min(bottom, window_bottom)
+
+        if isinstance(virtual_screen, dict):
+            screen_left = number(virtual_screen, 'left', left)
+            screen_top = number(virtual_screen, 'top', top)
+            screen_right = screen_left + number(virtual_screen, 'width')
+            screen_bottom = screen_top + number(virtual_screen, 'height')
+            if screen_right > screen_left and screen_bottom > screen_top:
+                left = max(left, screen_left)
+                top = max(top, screen_top)
+                right = min(right, screen_right)
+                bottom = min(bottom, screen_bottom)
+
+        if right <= left or bottom <= top:
+            width = max(0, number(content_rect, 'width', right - left))
+            height = max(0, number(content_rect, 'height', bottom - top))
+            return {
+                'left': number(content_rect, 'left'),
+                'top': number(content_rect, 'top'),
+                'right': number(content_rect, 'left') + width,
+                'bottom': number(content_rect, 'top') + height,
+                'width': width,
+                'height': height,
+            }
+        return {
+            'left': left,
+            'top': top,
+            'right': right,
+            'bottom': bottom,
+            'width': right - left,
+            'height': bottom - top,
+        }
+
+    @staticmethod
+    def _screen_point_inside_virtual_screen(point: dict[str, Any], virtual_screen: dict[str, Any] | None) -> bool:
+        if not isinstance(virtual_screen, dict):
+            return True
+        try:
+            x = int(point.get('x'))
+            y = int(point.get('y'))
+            left = int(virtual_screen.get('left') or 0)
+            top = int(virtual_screen.get('top') or 0)
+            width = int(virtual_screen.get('width') or 0)
+            height = int(virtual_screen.get('height') or 0)
+        except (TypeError, ValueError):
+            return False
+        if width <= 0 or height <= 0:
+            return False
+        return left <= x < left + width and top <= y < top + height
+
     def _browser_viewport_metrics_for_native_click(self, page: Page) -> dict[str, Any]:
         expression = """() => ({
           innerWidth: window.innerWidth,
@@ -13151,6 +14415,30 @@ class DxmLoginFlow:
             }
         except Exception:
             return {'left': 0, 'top': 0, 'width': 0, 'height': 0}
+
+    def _window_restore_succeeded(
+        self,
+        before_rect: dict[str, Any],
+        after_rect: dict[str, Any],
+        *,
+        virtual_screen: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        before_needs_restore = self._window_needs_restore_to_primary_screen(
+            before_rect,
+            virtual_screen=virtual_screen,
+        )
+        after_needs_restore = self._window_needs_restore_to_primary_screen(
+            after_rect,
+            virtual_screen=virtual_screen,
+        )
+        return {
+            'ok': not after_needs_restore,
+            'before_needs_restore': before_needs_restore,
+            'after_needs_restore': after_needs_restore,
+            'before_rect': before_rect,
+            'after_rect': after_rect,
+            'virtual_screen': virtual_screen,
+        }
 
     def _native_dxm_content_window_info(self, page: Page) -> dict[str, Any] | None:
         if os.name != 'nt' or self._is_headless():
@@ -13589,7 +14877,20 @@ class DxmLoginFlow:
                 if attached_foreground:
                     user32.AttachThreadInput(current_thread, foreground_thread, False)
             foreground = self._window_handle_to_int(user32.GetForegroundWindow())
-            ok = foreground == hwnd
+            after_rect_raw = Rect()
+            user32.GetWindowRect(hwnd_value, ctypes.byref(after_rect_raw))
+            after_window_rect = {
+                'left': int(after_rect_raw.left),
+                'top': int(after_rect_raw.top),
+                'width': int(after_rect_raw.right - after_rect_raw.left),
+                'height': int(after_rect_raw.bottom - after_rect_raw.top),
+            }
+            restore_check = self._window_restore_succeeded(
+                window_rect,
+                after_window_rect,
+                virtual_screen=virtual_screen,
+            )
+            ok = foreground == hwnd and restore_check.get('ok') is True
             self._trace_workflow_event(
                 'click_rect:native_front_done',
                 ok=ok,
@@ -13599,6 +14900,8 @@ class DxmLoginFlow:
                 hwnd=hwnd,
                 offscreen_or_minimized=bool(offscreen_or_minimized),
                 window_rect=window_rect,
+                restored_window_rect=after_window_rect,
+                restore_check=restore_check,
                 virtual_screen=virtual_screen,
                 viewport=viewport_metrics,
                 attached_foreground=attached_foreground,
@@ -13771,7 +15074,22 @@ class DxmLoginFlow:
                 )
                 return False
             content = sorted(child_rects, key=lambda item: int(item.get('score') or 0), reverse=True)[0]
-            content_rect = content['rect']
+            virtual_screen = self._win32_virtual_screen(user32)
+            raw_content_rect = content['rect']
+            content_rect = self._clamp_native_content_rect(
+                raw_content_rect,
+                window_rect=target.get('rect') if isinstance(target.get('rect'), dict) else None,
+                virtual_screen=virtual_screen,
+            )
+            if content_rect != raw_content_rect:
+                self._trace_workflow_event(
+                    'click_rect:native_content_rect_clamped',
+                    raw_content_rect=raw_content_rect,
+                    content_rect=content_rect,
+                    window_rect=target.get('rect'),
+                    virtual_screen=virtual_screen,
+                    human_step='校准浏览器窗口位置',
+                )
             viewport_width = float(viewport_metrics.get('innerWidth') or viewport_metrics.get('visualViewportWidth') or content_rect['width'])
             viewport_height = float(viewport_metrics.get('innerHeight') or viewport_metrics.get('visualViewportHeight') or content_rect['height'])
             if x < 0 or y < 0 or x > viewport_width or y > viewport_height:
@@ -13787,17 +15105,37 @@ class DxmLoginFlow:
             point = self._native_click_screen_point(content_rect, x, y, viewport_metrics)
             screen_x = int(point['screen']['x'])
             screen_y = int(point['screen']['y'])
+            if not self._screen_point_inside_virtual_screen(point['screen'], virtual_screen):
+                self._trace_workflow_event(
+                    'click_rect:native_click_skipped',
+                    reason='screen_point_outside_virtual_screen',
+                    screen={'x': screen_x, 'y': screen_y},
+                    virtual_screen=virtual_screen,
+                    content_rect=content_rect,
+                    viewport=viewport_metrics,
+                    human_step='点击页面按钮',
+                )
+                return False
             self._trace_workflow_event(
                 'click_rect:native_click_start',
                 screen={'x': screen_x, 'y': screen_y},
                 content_rect=content_rect,
                 viewport=viewport_metrics,
                 scale=point.get('scale'),
+                virtual_screen=virtual_screen,
                 window_title=str(target.get('title') or '')[:160],
                 child_class=str(content.get('class') or '')[:120],
                 human_step='点击页面按钮',
             )
-            user32.SetCursorPos(screen_x, screen_y)
+            if not user32.SetCursorPos(screen_x, screen_y):
+                self._trace_workflow_event(
+                    'click_rect:native_click_skipped',
+                    reason='set_cursor_pos_failed',
+                    screen={'x': screen_x, 'y': screen_y},
+                    virtual_screen=virtual_screen,
+                    human_step='点击页面按钮',
+                )
+                return False
             time.sleep(0.03)
             mouseeventf_leftdown = 0x0002
             mouseeventf_leftup = 0x0004

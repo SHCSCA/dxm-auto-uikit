@@ -45,7 +45,9 @@ def test_template_center_metadata_exposes_chinese_edit_page_sections():
     section_labels = [section["label"] for section in data["sections"]]
     assert "店铺与任务基础" in section_labels
     assert "店小秘引用模板" in section_labels
-    assert "仅本次任务使用" in data["actions"]
+    assert data["source_priority"][:2] == ["精确店铺/类目模板", "用户指定模板"]
+    assert data["source_priority"][-1] == "高级：本次任务临时覆盖"
+    assert "高级：仅本次任务临时覆盖" in data["actions"]
     assert "设为店铺默认模板" in data["actions"]
     assert "设为类目默认模板" in data["actions"]
     assert "套用预置配置模板" in data["actions"]

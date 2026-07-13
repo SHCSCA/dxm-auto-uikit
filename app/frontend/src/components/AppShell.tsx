@@ -20,7 +20,7 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
   },
   {
     id: 'claim',
-    label: '第一段：待认领入箱',
+    label: '第一段：待认领商品',
     short: '1',
     items: [
       { id: 'acquisition_claim', label: '待认领入箱', short: '箱', hint: '把店小秘里已经存在的待认领商品放进商品箱' },
@@ -52,7 +52,7 @@ const primaryAreas: WorkbenchPrimaryArea[] = [
     short: '4',
     items: [
       { id: 'results', label: '结果报告', short: '报', hint: '查看保存结果、失败原因和下一步' },
-      { id: 'evidence', label: '保存证据', short: '据', hint: '查看未发布证明、页面记录和保存回包' },
+      { id: 'evidence', label: '报告与证据', short: '据', hint: '查看未发布证明、页面记录和保存回包' },
       { id: 'issues', label: '问题与证据', short: '证', hint: '查看阻断原因、恢复建议和证据' },
     ],
   },

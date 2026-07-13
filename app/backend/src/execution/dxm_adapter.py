@@ -296,8 +296,10 @@ class DxmWorkflowAdapter:
 
     def _result(self, action: str, evidence: dict[str, Any]) -> dict[str, Any]:
         stage = evidence.get('stage')
+        explicit_ok = evidence.get('ok')
+        ok = bool(explicit_ok) if isinstance(explicit_ok, bool) else not str(stage).endswith('_failed')
         result = {
-            'ok': not str(stage).endswith('_failed'),
+            'ok': ok,
             'stage': stage,
             'page_title': evidence.get('page_title'),
             'page_url': evidence.get('page_url'),

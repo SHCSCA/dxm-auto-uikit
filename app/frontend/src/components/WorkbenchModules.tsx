@@ -547,9 +547,10 @@ const editableConfigSections: EditableConfigSection[] = [
       { name: 'category_name', label: '目标类目', placeholder: '例如：立牌类谷子', usage: 'direct' },
       { name: 'category_keyword', label: '类目关键词', placeholder: '用于 DXM 搜索类目', usage: 'direct' },
       { name: 'template_category_id', label: 'DXM 类目 ID', placeholder: '店小秘编辑页类目 ID', usage: 'advisory' },
-      { name: 'title_override', label: '标题覆盖', placeholder: '留空则使用商品标题', usage: 'advisory' },
+      { name: 'title_override', label: '英文标题覆盖', placeholder: '可选：直接填写英文标题', usage: 'direct' },
       { name: 'title_cleaning_rule', label: '标题清洗规则', placeholder: '删除平台词 / 保留英文', usage: 'advisory' },
-      { name: 'title_strategy', label: '标题策略', placeholder: '保留原始标题 / 清洗关键词', usage: 'advisory' },
+      { name: 'title_strategy', label: '标题策略', placeholder: '按来源标题生成英文标题', usage: 'direct' },
+      { name: 'title_keyword_map', label: '标题关键词映射', placeholder: '中文词=英文词，用于模板生成', usage: 'advisory' },
     ],
   },
   {
@@ -1022,13 +1023,24 @@ function defaultTemplatePayloadForSection(section: EditableConfigSection, bindin
     category: {
       category_name: binding.category_name || '立牌类谷子',
       category_keyword: '立牌',
-      title_strategy: '保留原始标题并清洗平台词',
+      title_strategy: '按来源标题生成英文标题',
+      title_keyword_map: {
+        宝可梦: 'Pokemon',
+        神奇宝贝: 'Pokemon',
+        精灵球: 'Poke Ball',
+        '3D打印': '3D Printed',
+        玩具模型: 'Toy Model',
+        周边: 'Collectible',
+        礼物: 'Gift',
+        球体摆件: 'Ball Ornament',
+        立牌: 'Display Stand',
+      },
     },
     sku: {
-      sku_code: '沿用店小秘生成',
+      sku_code: '',
       stock: '200',
       jit_stock: '100',
-      goods_code_strategy: '沿用店小秘生成',
+      goods_code_strategy: '按来源商品ID生成安全货号',
       barcode_strategy: '留空',
     },
     pricing: {
@@ -1076,7 +1088,7 @@ function defaultTemplatePayloadForSection(section: EditableConfigSection, bindin
       length: '10',
       width: '10',
       height: '2',
-      goods_code_strategy: '沿用店小秘生成',
+      goods_code_strategy: '按来源商品ID生成安全货号',
     },
   }
   return { ...payload, ...(defaultsByType[section.templateType] ?? {}) }
@@ -1208,7 +1220,7 @@ function NextRequiredConfigFields({
 }
 
 function sourceBadgeText(source: string) {
-  if (source.startsWith('任务：') || source.startsWith('任务覆盖')) return '执行取值来自：本次任务'
+  if (source.startsWith('任务：') || source.startsWith('任务覆盖') || source.startsWith('高级：本次任务临时覆盖')) return '执行取值来自：本次任务临时覆盖'
   if (source.startsWith('商品：') || source.includes('商品 payload')) return '执行取值来自：商品原始数据'
   if (source.startsWith('模板：')) {
     return source.includes('预置配置模板') ? '执行取值来自：预置配置模板' : '执行取值来自：店铺模板'
@@ -1317,7 +1329,7 @@ function configSectionState(preview: ConfigPreviewGroup | undefined, configOk = 
 }
 
 function countPreviewTaskOverrideFields(preview: ConfigPreviewGroup | undefined) {
-  return (preview?.fields ?? []).filter((field) => field.source === '任务覆盖' || field.source.startsWith('任务覆盖')).length
+  return (preview?.fields ?? []).filter((field) => field.source === '任务覆盖' || field.source.startsWith('任务覆盖') || field.source === '高级：本次任务临时覆盖').length
 }
 
 function countTaskOverrideFields(task: Task | null, templateType: string) {
@@ -1510,10 +1522,10 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
     ?? (activeSectionStatus === 'dirty'
       ? '当前分区有改动，尚未保存；未保存的修改不会进入执行。'
       : activeSectionAlreadyPersisted
-        ? '当前分区来自已保存模板或任务覆盖，未修改。'
-        : '当前分区还没有已保存模板，请套用预置配置模板或手动保存。')
+        ? '当前分区来自已保存模板或高级临时覆盖，未修改。'
+        : '当前分区还没有已保存模板，请先套用或保存模板。')
   const currentTemplateDisplayLabel = activeTaskOverrideFieldCount > 0
-    ? '本次任务覆盖'
+    ? '高级临时覆盖'
     : activeTemplateSourceName
       ? activeTemplateSourceName.includes('预置配置模板') ? '预置配置模板' : '店铺模板'
       : activeSelectedTemplateId === '__default_test__'
@@ -1528,7 +1540,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
       : '选择任务后核对执行取值'
   const configCoverageLabels = ['店铺与任务基础', '类目与标题', 'SKU / 价格 / 库存', '价格策略', '图片与素材', '包装物流', '合规 / 海关', '半托管', '店小秘引用模板']
   const effectivePreviewTitle = '本次任务实际取值预览'
-  const sourcePriorityLabels = ['本次任务', '店铺模板', '预置配置模板', '商品原始数据']
+  const sourcePriorityLabels = ['精确店铺/类目模板', '用户指定模板', '店铺模板', '预置配置模板', '商品原始数据', '高级临时覆盖']
   const fieldUsageLegend = ['执行取值', '模板匹配', '辅助配置']
   const configReadyForReview = Boolean(configPreview?.ok)
   const configCoverageFieldIds = [
@@ -1620,12 +1632,12 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
           ...current,
           [section.code]: {
             status: 'saved',
-            scope: '本次任务',
+            scope: '高级临时覆盖',
             savedAt,
-            message: `已保存到本次任务；保存时间 ${savedAt}`,
+            message: `已保存为本次任务临时覆盖；保存时间 ${savedAt}`,
           },
         }))
-        setConfigMessage(`${section.title} 已保存为本次任务覆盖；页面填写值会进入执行取值，带 * 字段参与启动门禁，辅助配置不作为启动门禁必填。`)
+        setConfigMessage(`${section.title} 已保存为高级临时覆盖；只影响当前任务，默认仍优先使用模板。`)
         await onConfigSaved()
         if (continueToNextMissingSection) {
           selectNextMissingConfigSection(section.code)
@@ -1808,7 +1820,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
             <span className={`status-pill ${configPreview?.ok ? 'ok' : 'warn'}`}>
               {configPreview?.ok ? '可用于当前任务' : `${incompleteGroups.length || sectionsBlockingStart.length} 个分区待补`}
             </span>
-            <small>{selectedTask ? `当前任务 #${selectedTask.id}` : '先到“商品箱编辑保存”创建任务后，可保存为本次任务覆盖。'}</small>
+            <small>{selectedTask ? `当前任务 #${selectedTask.id}` : '先到“商品箱编辑保存”创建任务后，可在高级兜底里保存临时覆盖。'}</small>
             {configPreview?.ok && advisoryGapCount > 0 && <small>{advisoryGapCount} 个分区有辅助字段待补</small>}
             <small>当前模板范围：{currentTemplateScopeLabel}</small>
           </div>
@@ -1817,7 +1829,7 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
           <div>
             <strong>检查本次配置</strong>
             <span>配置检查会读取当前任务、店铺、商品和模板，判断执行器会填写哪些值；不会操作店小秘。</span>
-            {!selectedTask && <small>先选择任务后才能运行配置检查并保存为任务覆盖。</small>}
+            {!selectedTask && <small>先选择任务后才能运行配置检查；临时覆盖只在高级兜底中使用。</small>}
           </div>
           <div className="config-precheck-action__buttons">
             {!selectedTask && (
@@ -2061,9 +2073,9 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
               <span>
                 {selectedTask
                   ? activeTaskOverrideFieldCount > 0
-                    ? `本次任务已保存 ${activeTaskOverrideFieldCount} 个字段；检查结果中 ${activePreviewOverrideFieldCount} 个字段正在按任务覆盖取值，执行器启动时读取同一份检查取值。`
-                    : '尚未保存本次任务覆盖；当前分区会先按商品和店铺模板取值，保存后这里会显示任务覆盖字段数。'
-                  : '选择任务后，可保存为本次任务覆盖并在这里核对执行取值。'}
+                    ? `当前配置已保存：本次任务已保存 ${activeTaskOverrideFieldCount} 个临时覆盖字段；检查结果中 ${activePreviewOverrideFieldCount} 个字段正在按高级临时覆盖取值。`
+                    : '尚未保存高级临时覆盖；当前分区默认先按店铺/类目模板取值。'
+                  : '选择任务后，可在高级兜底里保存本次任务临时覆盖。'}
               </span>
             </div>
           </div>
@@ -2271,8 +2283,8 @@ function EditableConfigSectionCard({
       ) : null}
       <div className="config-save-scope-explainer" aria-label="保存方式说明">
         <span>
-          <strong>保存到本次任务</strong>
-          <small>只影响当前任务；执行器会优先读取这份任务覆盖。</small>
+          <strong>高级：保存为本次任务临时覆盖</strong>
+          <small>只影响当前任务；仅在模板无法覆盖这一次商品时使用。</small>
         </span>
         <span>
           <strong>保存为店铺模板</strong>
@@ -2288,7 +2300,7 @@ function EditableConfigSectionCard({
             disabled={continueDisabled}
             title={disabledReason || undefined}
           >
-            {savingSection === `task:${section.code}` ? '保存中...' : '仅本次任务使用并继续'}
+            {savingSection === `task:${section.code}` ? '保存中...' : '保存临时覆盖并继续'}
           </button>
         )}
         <button
@@ -2296,9 +2308,9 @@ function EditableConfigSectionCard({
           type="button"
           onClick={() => void onSave(section, 'task')}
           disabled={taskSaveDisabled}
-          title={!selectedTask ? '先选择任务，才能保存为本次任务。' : undefined}
+          title={!selectedTask ? '先选择任务，才能保存临时覆盖。' : undefined}
         >
-          {savingSection === `task:${section.code}` ? '保存中...' : '仅本次任务使用'}
+          {savingSection === `task:${section.code}` ? '保存中...' : '保存为临时覆盖'}
         </button>
         <button
           className="button button--quiet"

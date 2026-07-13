@@ -41,7 +41,7 @@ def test_sidebar_uses_two_stage_production_workflow():
     assert "系统维护" in shell
     assert "浏览器现场" in shell
     assert "真实浏览器" in shell
-    for group in ["准备", "第一段：待认领入箱", "配置", "第二段：编辑只保存", "复盘", "维护"]:
+    for group in ["准备", "第一段：待认领商品", "配置", "第二段：编辑只保存", "复盘", "维护"]:
         assert f"label: '{group}'" in shell
     assert "选择商品" not in shell
     assert "QA" not in shell
@@ -65,7 +65,7 @@ def test_sidebar_exposes_production_two_stage_workflow_only():
         "{ id: 'start_save', label: '浏览器现场'",
         "{ id: 'task_history', label: '任务记录'",
         "{ id: 'results', label: '结果报告'",
-        "{ id: 'evidence', label: '保存证据'",
+        "{ id: 'evidence', label: '报告与证据'",
         "{ id: 'issues', label: '问题与证据'",
         "{ id: 'settings', label: '系统维护'",
     ]
@@ -334,7 +334,7 @@ def test_template_center_page_presents_multi_template_chinese_section_workflow()
         "当前实际使用",
         "可用模板",
         "未保存修改不会进入执行",
-        "点击保存后才会进入真实执行",
+        "保存为模板后才会进入默认执行路径",
         "选择要编辑的模板",
         "套用到表单",
         "默认配置模板",
@@ -351,7 +351,7 @@ def test_template_center_page_presents_multi_template_chinese_section_workflow()
         "当前模板",
         "保存状态",
         "执行取值",
-        "仅本次任务使用",
+        "保存为本次任务临时覆盖",
         "保存为店铺模板",
         "保存为类目模板",
         "另存为新模板",
@@ -533,7 +533,7 @@ def test_config_center_prioritizes_missing_sections_and_sources():
     assert "只显示当前最需要处理的字段" in source
     assert "onEditRequiredSection" in source
     assert "编辑当前必填分区" in source
-    assert "仅本次任务使用并继续" in source
+    assert "保存临时覆盖并继续" in source
     assert "selectNextMissingConfigSection" in config_section
     assert "continueToNextMissingSection" in config_section
     assert "data-config-next-required" in source
@@ -672,8 +672,8 @@ def test_config_center_focused_section_execution_preview_and_template_save_state
     assert "otherConfigSections.map" not in config_section
     assert "配置保存闭环" in config_section
     assert "本次任务已保存" in config_section
-    assert "正在按任务覆盖取值" in config_section
-    assert "执行器启动时读取同一份检查取值" in config_section
+    assert "正在按高级临时覆盖取值" in config_section
+    assert "默认先按店铺/类目模板取值" in config_section
     assert "SectionExecutionValuePreview" in config_section
     assert config_section.index('<div className="editable-config-grid editable-config-grid--focused">') < config_section.index("<SectionExecutionValuePreview")
     assert config_section.index('<div className="editable-config-grid editable-config-grid--focused">') < config_section.index('<div className="config-section-tabs config-section-tabs--primary"')
@@ -808,7 +808,7 @@ def test_config_center_production_ux_contract_for_task_five():
     assert "预置样例模板" in template_console
     assert "不代表已配置完成" in template_console
     assert "套用预置配置模板" in template_console
-    assert "仅本次任务使用" in editable_card
+    assert "保存为临时覆盖" in editable_card
     assert "保存为店铺模板" in editable_card
     assert "套用预置配置模板" in editable_card
     assert "onApplyDefaultTemplate(section, '__default_test__')" in editable_card
@@ -1013,8 +1013,8 @@ def test_config_center_shows_save_scope_explainer_before_actions():
     before_actions = editable_card[:actions_index]
 
     assert "config-save-scope-explainer" in before_actions
-    assert "保存到本次任务" in before_actions
-    assert "只影响当前任务；执行器会优先读取这份任务覆盖。" in before_actions
+    assert "高级：保存为本次任务临时覆盖" in before_actions
+    assert "只影响当前任务；仅在模板无法覆盖这一次商品时使用。" in before_actions
     assert "保存为店铺模板" in before_actions
     assert "影响后续匹配当前店铺/类目的任务，不覆盖全局模板。" in before_actions
     assert ".config-save-scope-explainer" in styles_source
@@ -1118,11 +1118,11 @@ def test_config_center_can_save_task_level_overrides_separately_from_templates()
     assert "payload: withTemplateBinding(payload, currentTemplateBinding)" in config_section
     assert "findExactScopedTemplate(workspace.templates, section.templateType, currentTemplateBinding)" in config_section
     assert "当前模板范围" in config_section
-    assert "仅本次任务使用" in config_section
+    assert "保存为临时覆盖" in config_section
     assert "保存为店铺模板（后续任务可用）" in config_section
     assert "本次任务只影响当前批次" in config_section
-    assert "页面填写值会进入执行取值" in config_section
-    assert "带 * 字段参与启动门禁" in config_section
+    assert "默认仍优先使用模板" in config_section
+    assert "高级临时覆盖" in config_section
     assert "当前任务会优先使用这些值" not in config_section
     assert "@app.patch('/api/tasks/{task_id}/config-overrides')" in main_source
     assert "TaskConfigOverrideRequest" in models_source
@@ -1433,7 +1433,7 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "{ id: 'product_tasks', label: '当前保存任务', short: '任', hint: '查看当前只保存任务、人工确认和恢复动作' }" in shell_source
     assert "{ id: 'start_save', label: '浏览器现场', short: '览', hint: '查看真实浏览器、中文进度窗和人工接管' }" in shell_source
     assert "{ id: 'results', label: '结果报告', short: '报', hint: '查看保存结果、失败原因和下一步' }" in shell_source
-    assert "{ id: 'evidence', label: '保存证据', short: '据', hint: '查看未发布证明、页面记录和保存回包' }" in shell_source
+    assert "{ id: 'evidence', label: '报告与证据', short: '据', hint: '查看未发布证明、页面记录和保存回包' }" in shell_source
     assert "{ id: 'issues', label: '问题与证据', short: '证', hint: '查看阻断原因、恢复建议和证据' }" in shell_source
     assert "{ id: 'settings', label: '系统维护', short: '系', hint: '查看运行环境、服务状态和维护设置' }" in shell_source
     assert "const sectionLabels: Record<WorkbenchSection, string>" in shell_source
@@ -1626,7 +1626,7 @@ def test_sidebar_primary_navigation_keeps_only_user_main_path():
         "浏览器现场",
         "任务记录",
         "结果报告",
-        "保存证据",
+        "报告与证据",
         "问题与证据",
         "系统维护",
     ]
@@ -1642,7 +1642,7 @@ def test_sidebar_primary_navigation_keeps_only_user_main_path():
     assert "{ id: 'start_save', label: '浏览器现场'" in primary_area_section
     assert "{ id: 'task_history', label: '任务记录'" in primary_area_section
     assert "{ id: 'results', label: '结果报告'" in primary_area_section
-    assert "{ id: 'evidence', label: '保存证据'" in primary_area_section
+    assert "{ id: 'evidence', label: '报告与证据'" in primary_area_section
     assert "{ id: 'edit_config'" not in primary_area_section
     assert "{ id: 'preflight', label: '运行前检查'" not in primary_area_section
     assert "{ id: 'real_browser'" not in primary_area_section
@@ -3254,7 +3254,9 @@ def test_draft_edit_save_owns_real_task_creation_instead_of_current_task_page():
     assert "publish_scene: 'SMT_SEMI_MANAGED_SAVE_ONLY'" in app_source
     assert "onCreateRealTask={createRealTask}" not in product_tasks_route
     assert "onBootstrapDemo={bootstrapDemo}" not in product_tasks_route
-    assert "onStartTask={startSelectedTask}" not in product_tasks_route
+    assert "onStartTask={(taskId) => startSelectedTask(taskId)}" in product_tasks_route
+    assert "onStartTask: (taskId: number) => void" in product_tasks_source
+    assert "start: () => currentTask ? actions.onStartTask(currentTask.id) : undefined" in product_tasks_source
     assert "onCreateRealTask:" not in product_tasks_source
     assert "onBootstrapDemo:" not in product_tasks_source
     assert "demoEnabled" not in product_tasks_source
@@ -3712,11 +3714,11 @@ def test_frontend_blocks_unreleased_real_modes_before_l3_manual_approval():
     no_old_action_copy_start = qa_source.index("noOldActionCopy:")
     no_old_action_copy_section = qa_source[no_old_action_copy_start:qa_source.index("noConsoleErrors:", no_old_action_copy_start)]
 
-    assert "const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save'])" in source
-    assert "const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['batch_save'])" in source
-    assert "UNRELEASED_REAL_DXM_MUTATION_MODES.has(selectedTask.mode)" in start_section
-    assert "当前仅开放待认领入箱和单商品只保存" in start_section
-    assert "批量保存必须重新验收后再放行" in start_section
+    assert "const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['single_save'])" in source
+    assert "const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'batch_save'])" in source
+    assert "UNRELEASED_REAL_DXM_MUTATION_MODES.has(taskToStart.mode)" in start_section
+    assert "当前仅开放单商品只保存" in start_section
+    assert "待认领入箱和批量保存必须重新验收后再放行" in start_section
     assert "将只启动单商品只保存任务，不会发布" in start_section
     assert "将只启动 save-only/claim-only 受控任务" not in start_section
     assert "const selectedTaskIsUnreleasedRealMode = selectedTask ? isUnreleasedRealDxmMutationTask(selectedTask) : false" in workbench_source
@@ -3810,7 +3812,7 @@ def test_task_center_surfaces_real_mode_release_readiness_without_releasing_mode
     assert "独立只读与真实保存证据链" in panels_source
     assert "目标商品认领归属证明" in panels_source
     assert "逐商品保存结果与 published=false" in panels_source
-    assert "RELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save'])" in (REPO_ROOT / "app" / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+    assert "RELEASED_REAL_DXM_MUTATION_MODES = new Set(['single_save'])" in (REPO_ROOT / "app" / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
     assert "real-mode-release-panel" in styles_source
     assert "real-mode-release-panel__grid" in styles_source
     assert "realModeReleasePlanVisible" in qa_source
@@ -4766,7 +4768,7 @@ def test_sidebar_copy_names_save_only_agent_flow_without_ambiguous_browser_wordi
     assert "{ id: 'start_save', label: '浏览器现场', short: '览', hint: '查看真实浏览器、中文进度窗和人工接管' }" in shell
     assert "{ id: 'task_history', label: '任务记录', short: '记', hint: '查看历史任务、失败原因和恢复入口' }" in shell
     assert "{ id: 'results', label: '结果报告', short: '报', hint: '查看保存结果、失败原因和下一步' }" in shell
-    assert "{ id: 'evidence', label: '保存证据', short: '据', hint: '查看未发布证明、页面记录和保存回包' }" in shell
+    assert "{ id: 'evidence', label: '报告与证据', short: '据', hint: '查看未发布证明、页面记录和保存回包' }" in shell
     assert "{ id: 'issues', label: '问题与证据', short: '证', hint: '查看阻断原因、恢复建议和证据' }" in shell
     assert "{ id: 'settings', label: '系统维护', short: '系', hint: '查看运行环境、服务状态和维护设置' }" in shell
     assert "真实店小秘操作分为待认领入箱和商品箱编辑只保存" in shell
@@ -5158,14 +5160,13 @@ def test_product_tasks_page_is_extracted_from_workbench_modules():
     assert "要创建新的只保存任务，请先在“待认领入箱”完成第一段" in product_tasks_source
     assert "onShowDraftEdit={() => setActiveSection('draft_edit_save')}" in app_source
     assert "go_draft_edit: actions.onShowDraftEdit" in product_tasks_source
+    assert "onStartTask: (taskId: number) => void" in product_tasks_source
+    assert "start: () => currentTask ? actions.onStartTask(currentTask.id) : undefined" in product_tasks_source
     assert "onCreateRealTask:" not in product_tasks_source
     assert "onBootstrapDemo:" not in product_tasks_source
-    assert "onStartTask:" not in product_tasks_source
-    assert "onStartTask," not in product_tasks_source
-    assert "start: actions.onShowConsole" in product_tasks_source
     assert "onCreateRealTask={createRealTask}" not in app_source
     assert "onBootstrapDemo={bootstrapDemo}" not in app_source
-    assert "onStartTask={startSelectedTask}" not in app_source[app_source.index("case 'product_tasks'"):app_source.index("case 'draft_edit_save'")]
+    assert "onStartTask={(taskId) => startSelectedTask(taskId)}" in app_source[app_source.index("case 'product_tasks'"):app_source.index("case 'draft_edit_save'")]
     assert "data-testid=\"task-quick-create-single-save\"" not in product_tasks_source
     assert "aria-label=\"选择商品箱商品\"" not in product_tasks_source
     assert "任务与记录" not in source

@@ -501,13 +501,13 @@ def test_single_save_calls_workflow_adapter_in_complete_save_order(v1_db):
     ]
     defaults = adapter.calls[4][1]
     assert defaults["category_name"] == "任务类目"
-    assert defaults["category"]["template_category_id"] == "product-cat-1"
+    assert defaults["category"]["template_category_id"] == "tmpl-cat"
     assert defaults["logistics"]["weight"] == "0.05"
-    assert defaults["image"]["eu_outer_package_filename"] == "product-eu-1.jpg"
+    assert defaults["image"]["eu_outer_package_filename"] == "template-eu.jpg"
     assert defaults["image"]["alt_text"] == "任务图片说明"
-    assert defaults["compliance"]["material"] == "ABS"
+    assert defaults["compliance"]["material"] == "PVC"
     assert defaults["compliance"]["battery"] == "none"
-    assert defaults["semi_managed"]["supply_price"] == "5.60"
+    assert defaults["semi_managed"]["supply_price"] == "4.20"
     assert adapter.calls[9][1] == defaults
     reports = repo.list_reports(task["id"])
     assert reports[0]["published"] is False
@@ -940,7 +940,7 @@ def test_single_save_report_includes_resolved_dxm_reference_templates(v1_db):
     reports = repo.list_reports(task["id"])
     assert reports[0]["status"] == "success"
     resolved = reports[0]["summary"]["dxm_reference_templates_resolved"]
-    assert resolved["description"] == {"names": [], "required": False}
+    assert resolved["description"] == {"names": ["详情模板"], "required": False}
     assert resolved["freight"] == {"names": ["40g普货包裹"], "required": True}
     reference_results = reports[0]["summary"]["dxm_reference_template_results"]
     assert set(reference_results) == {
@@ -953,7 +953,7 @@ def test_single_save_report_includes_resolved_dxm_reference_templates(v1_db):
         "compliance",
         "semi_managed",
     }
-    assert reference_results["description"] == {"ok": True, "section": "description", "names": [], "required": False}
+    assert reference_results["description"] == {"ok": True, "section": "description", "names": ["详情模板"], "required": False}
     assert reference_results["freight"] == {"ok": True, "section": "freight", "names": ["40g普货包裹"], "required": True}
 
 

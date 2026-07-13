@@ -30,6 +30,7 @@ FIELD_GROUPS = [
             {"path": "category.title_strategy", "field": "title_strategy", "label": "标题策略", "required": False},
             {"path": "category.title_override", "field": "title_override", "label": "标题覆盖值", "required": False},
             {"path": "category.title_cleaning_rule", "field": "title_cleaning_rule", "label": "标题清洗规则", "required": False},
+            {"path": "category.title_keyword_map", "field": "title_keyword_map", "label": "标题关键词映射", "required": False},
         ],
     },
     {
@@ -134,7 +135,14 @@ DXM_REFERENCE_LABELS = {
     "semi_managed": "半托管模板",
 }
 
-CUSTOMER_TEMPLATE_PRIORITY = ["本次任务覆盖", "手动选择模板", "类目默认模板", "店铺默认模板", "系统默认模板"]
+CUSTOMER_TEMPLATE_PRIORITY = [
+    "精确店铺/类目模板",
+    "用户指定模板",
+    "店铺默认模板",
+    "系统默认模板",
+    "商品原始数据",
+    "高级：本次任务临时覆盖",
+]
 
 
 class ConfigPreviewService:
@@ -276,8 +284,8 @@ class ConfigPreviewService:
         text = str(source or "").strip()
         if not text or text == "未设置":
             return "未填写"
-        if text == "任务覆盖" or text.startswith("任务："):
-            return "来自本次任务"
+        if text in {"任务覆盖", "高级：本次任务临时覆盖"} or text.startswith("任务："):
+            return "来自本次任务临时覆盖"
         if text.startswith("模板："):
             return f"来自{text}"
         if text.startswith("商品："):

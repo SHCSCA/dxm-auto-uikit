@@ -6,13 +6,13 @@ from src.services.template_center import editable_sections, resolve_template
 def test_template_resolution_priority_uses_task_then_selected_category_store_system():
     resolved = resolve_template(
         task_template={"id": "task", "name": "本次任务模板"},
-        selected_template={"id": "selected", "name": "手动选择模板"},
+        selected_template={"id": "selected", "name": "用户指定模板"},
         category_template={"id": "category", "name": "类目模板"},
         store_template={"id": "store", "name": "店铺模板"},
         system_template={"id": "system", "name": "系统默认模板"},
     )
-    assert resolved["id"] == "task"
-    assert resolved["source_label"] == "本次任务覆盖"
+    assert resolved["id"] == "selected"
+    assert resolved["source_label"] == "用户指定模板"
 
     fallback = resolve_template(
         task_template=None,

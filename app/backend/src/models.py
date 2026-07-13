@@ -110,6 +110,11 @@ class AgentConsoleStartRequest(BaseModel):
     step: AgentConsoleStep | None = None
 
 
+class AgentConsoleBrowserDiagnosticsRequest(BaseModel):
+    target_url: str | None = None
+    launch_browser: bool = False
+
+
 class AgentConsoleHudRequest(BaseModel):
     step: AgentConsoleStep = Field(default_factory=AgentConsoleStep)
 

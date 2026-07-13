@@ -84,6 +84,89 @@ class AgentConsoleService:
         with self._lock:
             return dict(self._state)
 
+    def browser_diagnostics(self, *, target_url: str | None = None, launch_browser: bool = False) -> dict[str, Any]:
+        if launch_browser:
+            return {
+                "ok": False,
+                "readonly": True,
+                "reason": "diagnostics_launch_forbidden",
+                "message": "诊断接口只检查已有真实浏览器，不能启动新的真实 DXM 浏览器。",
+                **self.status(),
+            }
+        self._refresh_browser_liveness()
+        with self._lock:
+            page = self._page
+            state = dict(self._state)
+        page_info: dict[str, Any] = {
+            "url": state.get("current_url"),
+            "title": state.get("page_title"),
+            "ready_state": None,
+            "loading": None,
+            "blocking_modal": None,
+            "looks_like_login": _looks_like_login(state.get("page_title"), state.get("current_url")),
+        }
+        cdp_info: dict[str, Any] = {"page_evaluate_ok": False, "error": None}
+        if page is not None and state.get("browser_visible"):
+            def inspect_page() -> dict[str, Any]:
+                info = {
+                    "url": getattr(page, "url", None),
+                    "title": page.title() if callable(getattr(page, "title", None)) else None,
+                    "ready_state": None,
+                    "loading": None,
+                    "blocking_modal": None,
+                }
+                evaluate = getattr(page, "evaluate", None)
+                if callable(evaluate):
+                    probe = evaluate(r"""() => {
+                      const textOf = (el) => (el?.innerText || el?.textContent || '').replace(/\s+/g, ' ').trim();
+                      const visible = (el) => {
+                        if (!el) return false;
+                        const r = el.getBoundingClientRect();
+                        const s = window.getComputedStyle(el);
+                        return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+                      };
+                      const bodyText = textOf(document.body || document.documentElement);
+                      const loadingNodes = Array.from(document.querySelectorAll('.ant-spin, .loading, [class*=loading], [class*=Loading]')).filter(visible);
+                      const modals = Array.from(document.querySelectorAll('.ant-modal, .ant-modal-wrap, [role=dialog], .ant-drawer')).filter(visible);
+                      return {
+                        readyState: document.readyState,
+                        loading: loadingNodes.length > 0 || /加载中|loading/i.test(bodyText),
+                        loadingCount: loadingNodes.length,
+                        blockingModal: modals.length ? textOf(modals[0]).slice(0, 240) : null,
+                      };
+                    }""")
+                    if isinstance(probe, dict):
+                        info["ready_state"] = probe.get("readyState")
+                        info["loading"] = probe.get("loading")
+                        info["loading_count"] = probe.get("loadingCount")
+                        info["blocking_modal"] = probe.get("blockingModal")
+                return info
+            try:
+                live = self._run_browser_op(inspect_page)
+                page_info.update({key: value for key, value in live.items() if value is not None})
+                page_info["looks_like_login"] = _looks_like_login(page_info.get("title"), page_info.get("url"))
+                cdp_info["page_evaluate_ok"] = True
+            except Exception as exc:
+                cdp_info["error"] = str(exc)
+        diagnostics = {
+            "browser": {
+                "active": bool(state.get("active")),
+                "visible": bool(state.get("browser_visible")),
+                "launching": bool(state.get("browser_launching")),
+                "manual_takeover": bool(state.get("manual_takeover")),
+                "profile_dir": state.get("profile_dir"),
+                "last_error": state.get("last_error"),
+            },
+            "page": page_info,
+            "cdp": cdp_info,
+            "safety": {
+                "readonly": True,
+                "mutation_allowed": False,
+                "target_url": target_url or state.get("target_url") or DEFAULT_TARGET_URL,
+            },
+        }
+        return {"ok": True, "readonly": True, "diagnostics": diagnostics, **self.status()}
+
     def start(
         self,
         *,
@@ -1183,6 +1266,16 @@ def _browser_control_value(action: str, command: dict[str, Any]) -> str | None:
     if action == "press":
         return str(command.get("key") or "")
     return None
+
+
+def _looks_like_login(title: Any, url: Any) -> bool:
+    normalized = f"{title or ''}\n{url or ''}".casefold()
+    return (
+        "登录" in normalized
+        or "登陆" in normalized
+        or "login" in normalized
+        or "/login" in normalized
+    )
 
 
 HUD_INIT_SCRIPT = """

@@ -1013,6 +1013,81 @@ def test_agent_console_start_rejects_missing_task(tmp_path, monkeypatch):
     service.stop()
 
 
+
+
+def test_agent_console_browser_diagnostics_allows_readonly_check_without_task(tmp_path, monkeypatch):
+    client, _repo, service = _client_with_temp_repo_and_console(tmp_path, monkeypatch)
+    page = _FakePage()
+    with service._lock:
+        service._state = {
+            **service._empty_state(),
+            "active": True,
+            "session_id": "diag-session",
+            "browser_visible": True,
+            "browser_launching": False,
+            "current_url": page.url,
+            "page_title": page.title(),
+        }
+        service._page = page
+
+    response = client.post("/api/agent-console/browser-diagnostics", json={"launch_browser": False})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["readonly"] is True
+    assert data["diagnostics"]["browser"]["visible"] is True
+    assert data["diagnostics"]["page"]["url"] == "https://www.dianxiaomi.com/web/home"
+    assert data["diagnostics"]["page"]["title"] == "店小秘 Home"
+    assert data["diagnostics"]["safety"]["mutation_allowed"] is False
+
+
+def test_agent_console_browser_diagnostics_rejects_launch_without_task(tmp_path, monkeypatch):
+    client, _repo, service = _client_with_temp_repo_and_console(tmp_path, monkeypatch)
+    launch_calls = []
+
+    def fake_launch(*_args, **_kwargs):
+        launch_calls.append("launched")
+        raise AssertionError("browser diagnostics must not launch a real browser")
+
+    monkeypatch.setattr(service, "_launch_visible_browser", fake_launch)
+
+    response = client.post("/api/agent-console/browser-diagnostics", json={"launch_browser": True})
+
+    assert response.status_code == 403
+    assert "Diagnostics cannot launch" in response.json()["detail"]
+    assert launch_calls == []
+    assert service.status()["browser_visible"] is False
+    service.stop()
+
+
+
+def test_agent_console_browser_diagnostics_rejects_external_target(tmp_path, monkeypatch):
+    client, _repo, service = _client_with_temp_repo_and_console(tmp_path, monkeypatch)
+
+    response = client.post(
+        "/api/agent-console/browser-diagnostics",
+        json={"launch_browser": False, "target_url": "https://example.com/"},
+    )
+
+    assert response.status_code == 403
+    assert "dianxiaomi.com" in response.json()["detail"]
+    service.stop()
+
+
+def test_agent_console_browser_diagnostics_rejects_lookalike_dianxiaomi_domain(tmp_path, monkeypatch):
+    client, _repo, service = _client_with_temp_repo_and_console(tmp_path, monkeypatch)
+
+    response = client.post(
+        "/api/agent-console/browser-diagnostics",
+        json={"launch_browser": False, "target_url": "https://evil-dianxiaomi.com/"},
+    )
+
+    assert response.status_code == 403
+    assert "dianxiaomi.com" in response.json()["detail"]
+    service.stop()
+
+
 def _client_with_temp_repo_and_console(tmp_path, monkeypatch):
     db_path = tmp_path / "agent-console.db"
     monkeypatch.setattr(db, "DB_PATH", db_path)

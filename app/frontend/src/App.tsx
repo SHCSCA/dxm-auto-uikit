@@ -35,8 +35,8 @@ const DXM_TARGET_LABELS: Record<keyof typeof DXM_TARGET_URLS, string> = {
 }
 const AGENT_CONSOLE_NAVIGATION_SETTLE_MS = 2500
 const REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save', 'batch_save'])
-const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save'])
-const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['batch_save'])
+const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['single_save'])
+const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'batch_save'])
 const DXM_READY_SESSION_STATUSES = new Set(['login_success', 'logged_in', 'not_published_verified', 'workflow_navigation'])
 const L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
 const DEMO_ENABLED = new URLSearchParams(window.location.search).get('dev') === '1'
@@ -738,18 +738,21 @@ export default function App() {
     }
   }
 
-  async function startSelectedTask() {
-    if (!selectedTask) return
+  async function startSelectedTask(taskId?: number) {
+    const taskToStart = typeof taskId === 'number'
+      ? workspace.tasks.find((task) => task.id === taskId) ?? null
+      : selectedTask
+    if (!taskToStart) return
     setBusy(true)
     setOperationError(null)
     try {
-      if (REAL_DXM_MUTATION_MODES.has(selectedTask.mode)) {
-        if (UNRELEASED_REAL_DXM_MUTATION_MODES.has(selectedTask.mode)) {
-          setOperationError('当前仅开放待认领入箱和单商品只保存；批量保存必须重新验收后再放行。')
+      if (REAL_DXM_MUTATION_MODES.has(taskToStart.mode)) {
+        if (UNRELEASED_REAL_DXM_MUTATION_MODES.has(taskToStart.mode)) {
+          setOperationError('当前仅开放单商品只保存；待认领入箱和批量保存必须重新验收后再放行。')
           return
         }
-        if (!RELEASED_REAL_DXM_MUTATION_MODES.has(selectedTask.mode)) {
-          setOperationError(`当前执行模式 ${selectedTask.mode} 未发布，禁止启动真实 DXM 写入。`)
+        if (!RELEASED_REAL_DXM_MUTATION_MODES.has(taskToStart.mode)) {
+          setOperationError(`当前执行模式 ${taskToStart.mode} 未发布，禁止启动真实 DXM 写入。`)
           return
         }
         const latestRuntimeStatus = await getJson<RuntimeStatus>(`/api/runtime/status?frontend_url=${encodeURIComponent(window.location.origin)}`)
@@ -760,13 +763,13 @@ export default function App() {
           setActiveSection('dxm_access')
           return
         }
-        if (selectedTask.mode === 'claim_only') {
-          await postJson(`/api/tasks/${selectedTask.id}/start`, {})
+        if (taskToStart.mode === 'claim_only') {
+          await postJson(`/api/tasks/${taskToStart.id}/start`, {})
           setActiveSection('acquisition_claim')
           await refreshWorkspace()
           return
         }
-        const latestConfigPreview = await refreshConfigPreview(selectedTask.id)
+        const latestConfigPreview = await refreshConfigPreview(taskToStart.id)
         if (!latestConfigPreview || !latestConfigPreview.ok) {
           setOperationError(`配置检查未通过：${latestConfigPreview?.missing.slice(0, 6).join('、') || '请补齐填写编辑页配置'}`)
           setActiveSection('edit_config')
@@ -778,19 +781,21 @@ export default function App() {
           setActiveSection('product_tasks')
           return
         }
-        const approval = await postJson<ManualApprovalResponse>(`/api/tasks/${selectedTask.id}/manual-approval`, {
+        const approval = await postJson<ManualApprovalResponse>(`/api/tasks/${taskToStart.id}/manual-approval`, {
           approved_by: approvedBy.trim(),
           confirmation: L3_CONFIRMATION,
         })
-        await postJson(`/api/tasks/${selectedTask.id}/start`, {
+        await postJson(`/api/tasks/${taskToStart.id}/start`, {
           manual_approval: true,
           approval_token: approval.approvalToken,
           approved_by: approvedBy.trim(),
           confirmation: approval.confirmation || L3_CONFIRMATION,
         })
       } else {
-        await postJson(`/api/tasks/${selectedTask.id}/start`, {})
+        await postJson(`/api/tasks/${taskToStart.id}/start`, {})
       }
+      setSelectedTaskId(taskToStart.id)
+      syncSelectedTaskIdUrl(taskToStart.id)
       setActiveSection('start_save')
       await refreshWorkspace()
     } catch (error) {
@@ -1244,6 +1249,7 @@ export default function App() {
             l3ApprovedBy={l3ApprovedBy}
             onL3ApprovedByChange={setL3ApprovedBy}
             onRunL2Probe={runL2ReadonlyProbe}
+            onStartTask={(taskId) => startSelectedTask(taskId)}
             onSelectTask={(taskId) => {
               setSelectedTaskId(taskId)
               syncSelectedTaskIdUrl(taskId)

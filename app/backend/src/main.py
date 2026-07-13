@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -30,6 +31,7 @@ from src.execution.v1_runner import V1TaskRunner
 from src.models import (
     AIConfigUpdateRequest,
     AcquisitionClaimRequest,
+    AgentConsoleBrowserDiagnosticsRequest,
     AgentConsoleControlRequest,
     AgentConsoleHudRequest,
     AgentConsoleStartRequest,
@@ -59,7 +61,11 @@ from src.services.delivery_workspace import build_delivery_workspace, l2_real_pr
 from src.services.agent_console import AgentConsoleService
 from src.services.config_preview import ConfigPreviewService
 from src.services.template_center import template_center_metadata
-from src.services.starter_templates import build_starter_templates, starter_template_matches
+from src.services.starter_templates import (
+    build_starter_templates,
+    repair_legacy_starter_template,
+    starter_template_matches,
+)
 from src.ws import ConnectionManager
 
 @asynccontextmanager
@@ -129,13 +135,13 @@ runner = V1TaskRunner(
 )
 
 REAL_DXM_MUTATION_MODES = {'claim_only', 'single_save', 'batch_save'}
-RELEASED_REAL_DXM_MUTATION_MODES = {'claim_only', 'single_save'}
+RELEASED_REAL_DXM_MUTATION_MODES = {'single_save'}
 REAL_WRITE_START_MODES = REAL_DXM_MUTATION_MODES
 ALLOWED_START_MODES = {'probe', 'dry_run', 'claim_only', 'single_save', 'batch_save'}
 SAVE_ONLY_PUBLISH_SCENE = 'SMT_SEMI_MANAGED_SAVE_ONLY'
 CLAIM_TO_DRAFT_PUBLISH_SCENE = 'CONTROLLED_CLAIM_TO_DRAFT_ONLY'
 L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
-UNRELEASED_REAL_DXM_MODE_DETAIL = 'Only controlled claim_only and single_save are released for real DXM mutation'
+UNRELEASED_REAL_DXM_MODE_DETAIL = 'Only controlled single_save is released for real DXM mutation'
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FINAL_DELIVERY_CHECK_JSON = REPO_ROOT / 'outputs' / 'final-delivery-check' / 'final-delivery-check.json'
 RUNTIME_LAUNCHER_LOG_FILE = Path(
@@ -542,16 +548,33 @@ def _ensure_single_save_starter_templates(data: dict[str, Any]) -> None:
         platform=platform or 'AliExpress',
     ):
         template_type = str(starter_template.get('template_type') or '').strip().lower()
-        if any(
-            starter_template_matches(
-                template,
-                template_type=template_type,
-                store_name=store_name,
+        matched_template = next(
+            (
+                template
+                for template in existing_templates
+                if starter_template_matches(
+                    template,
+                    template_type=template_type,
+                    store_name=store_name,
+                    category_name=category_name,
+                    platform=platform or 'AliExpress',
+                )
+            ),
+            None,
+        )
+        if matched_template:
+            repaired_template = repair_legacy_starter_template(
+                matched_template,
+                starter_template,
                 category_name=category_name,
-                platform=platform or 'AliExpress',
             )
-            for template in existing_templates
-        ):
+            if repaired_template and matched_template.get('id') is not None:
+                updated_template = repo.update_template(int(matched_template['id']), repaired_template)
+                if updated_template:
+                    existing_templates = [
+                        updated_template if template.get('id') == updated_template.get('id') else template
+                        for template in existing_templates
+                    ]
             continue
         existing_templates.append(repo.create_template(starter_template))
 
@@ -1154,6 +1177,23 @@ def get_final_delivery_check_summary():
 @app.get('/api/agent-console/status')
 def get_agent_console_status():
     return normalize_artifact_paths(agent_console_service.status())
+
+
+@app.post('/api/agent-console/browser-diagnostics')
+def run_agent_console_browser_diagnostics(payload: AgentConsoleBrowserDiagnosticsRequest):
+    target_url = payload.target_url or 'https://www.dianxiaomi.com/'
+    parsed = urlparse(target_url)
+    host = (parsed.hostname or '').casefold()
+    allowed_host = host == 'dianxiaomi.com' or host.endswith('.dianxiaomi.com')
+    if parsed.scheme not in {'http', 'https'} or not allowed_host:
+        raise HTTPException(status_code=403, detail='Browser diagnostics target must be a dianxiaomi.com URL')
+    if payload.launch_browser:
+        raise HTTPException(status_code=403, detail='Diagnostics cannot launch a real DXM browser; start a gated task browser first')
+    result = agent_console_service.browser_diagnostics(
+        target_url=target_url,
+        launch_browser=False,
+    )
+    return normalize_artifact_paths(result)
 
 
 @app.post('/api/agent-console/start')

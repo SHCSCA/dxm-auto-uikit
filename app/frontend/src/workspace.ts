@@ -79,7 +79,7 @@ export const referenceSectionLabels: Record<DxmReferenceSectionCode, string> = {
 export const referenceSections = Object.keys(referenceSectionLabels) as DxmReferenceSectionCode[]
 
 export const demoDxmReferenceTemplates: DxmReferenceTemplateMap = {
-  attribute_info: { names: ['立牌类谷子属性模板'], required: true },
+  attribute_info: { names: ['万代立牌', 'bilibili动漫周边', '万代'], required: true },
   description: { names: ['详情描述模板-ACG立牌'], required: true },
   freight: { names: ['石油40g普货包裹.', '40g普货包裹'], required: true },
   service: { names: ['Service Template for New Sellers'], required: true },
@@ -91,8 +91,32 @@ export const demoDxmReferenceTemplates: DxmReferenceTemplateMap = {
 
 export const demoTemplateSeeds = [
   { template_type: 'title', template_name: '标题模板', binding_scope: '平台 / 店铺 / 类目', payload: { rule: '核心词 + 属性词 + 卖点词' }, is_enabled: true },
-  { template_type: 'category', template_name: '立牌类谷子属性模板', binding_scope: '平台 / 店铺 / 类目', payload: { category: { category_keyword: '立牌', category_match: 'ACG Stand', attribute_template_priorities: ['立牌类谷子属性模板'] } }, is_enabled: true },
-  { template_type: 'sku', template_name: 'SKU/货品编码模板', binding_scope: '店铺 / 类目', payload: { sku: { goods_code_strategy: '沿用店小秘生成', barcode_strategy: '留空' } }, is_enabled: true },
+  {
+    template_type: 'category',
+    template_name: '立牌类谷子属性模板',
+    binding_scope: '平台 / 店铺 / 类目',
+    payload: {
+      category: {
+        category_keyword: '立牌',
+        category_match: 'ACG Stand',
+        title_strategy: '按来源标题生成英文标题',
+        title_keyword_map: {
+          宝可梦: 'Pokemon',
+          神奇宝贝: 'Pokemon',
+          精灵球: 'Poke Ball',
+          '3D打印': '3D Printed',
+          玩具模型: 'Toy Model',
+          周边: 'Collectible',
+          礼物: 'Gift',
+          球体摆件: 'Ball Ornament',
+          立牌: 'Display Stand',
+        },
+        attribute_template_priorities: ['万代立牌', 'bilibili动漫周边', '万代'],
+      },
+    },
+    is_enabled: true,
+  },
+  { template_type: 'sku', template_name: 'SKU/货品编码模板', binding_scope: '店铺 / 类目', payload: { sku: { goods_code_strategy: '按来源商品ID生成安全货号', barcode_strategy: '留空' } }, is_enabled: true },
   { template_type: 'pricing', template_name: '价格库存模板', binding_scope: '店铺 / 类目 / 物流', payload: { pricing: { declared_value: '1', stock: '200' } }, is_enabled: true },
   { template_type: 'logistics', template_name: '包装物流模板', binding_scope: '店铺 / 类目', payload: { logistics: { weight: '0.03', length: '10', width: '10', height: '2', freight_templates: ['石油40g普货包裹.', '40g普货包裹'], service_templates: ['Service Template for New Sellers'] } }, is_enabled: true },
   { template_type: 'image', template_name: '图片银行模板', binding_scope: '店铺 / 类目', payload: { image: { source: '图片银行（速卖通）', eu_outer_package_filename: '微信图片_202504092228421.jpg' } }, is_enabled: true },

@@ -19,6 +19,7 @@ type ProductTasksPageProps = {
   onL3ApprovedByChange: (value: string) => void
   onSelectTask: (taskId: number) => void
   onRunL2Probe: () => void
+  onStartTask: (taskId: number) => void
   onShowConfig: () => void
   onShowDraftEdit: () => void
   onShowConsole: () => void
@@ -41,6 +42,7 @@ export function ProductTasksPage({
   onL3ApprovedByChange,
   onSelectTask,
   onRunL2Probe,
+  onStartTask,
   onShowConfig,
   onShowDraftEdit,
   onShowConsole,
@@ -62,10 +64,11 @@ export function ProductTasksPage({
     dxmLoggedIn: isDxmLoggedIn(runtimeStatus, runtimeStatusError),
     busy,
   })
-  const primaryAction = actionForDecision(decision.code, {
+  const primaryAction = actionForDecision(decision.code, currentTask, {
     onShowDraftEdit,
     onShowConfig,
     onRunL2Probe,
+    onStartTask,
     onShowConsole,
     onShowReports,
   })
@@ -264,10 +267,11 @@ function decision(code: string, tone: 'ok' | 'warn', what: string, why: string, 
   return { code, tone, what, why, next, cta, disabled }
 }
 
-function actionForDecision(code: string, actions: {
+function actionForDecision(code: string, currentTask: Task | null, actions: {
   onShowDraftEdit: () => void
   onShowConfig: () => void
   onRunL2Probe: () => void
+  onStartTask: (taskId: number) => void
   onShowConsole: () => void
   onShowReports: () => void
 }) {
@@ -277,7 +281,7 @@ function actionForDecision(code: string, actions: {
     run_l2: actions.onRunL2Probe,
     show_console: actions.onShowConsole,
     show_reports: actions.onShowReports,
-    start: actions.onShowConsole,
+    start: () => currentTask ? actions.onStartTask(currentTask.id) : undefined,
   } as Record<string, (() => void) | undefined>)[code]
 }
 

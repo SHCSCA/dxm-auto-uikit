@@ -19,6 +19,21 @@ DEFAULT_TEMPLATE_TYPES = {
     "dxm_reference",
 }
 
+TASK_CONTEXT_KEYS = {
+    "store_id",
+    "store_name",
+    "store",
+    "platform",
+    "category",
+    "category_name",
+    "mode",
+    "claim_mark",
+    "product_ids",
+    "source_url",
+    "source_urls",
+    "publish_scene",
+}
+
 
 @dataclass(frozen=True)
 class ConfigDefaultsResult:
@@ -77,7 +92,7 @@ class ConfigDefaultsResolver:
 
         if product_payload:
             product_label = f"商品：{(product or {}).get('title') or (product or {}).get('id')}"
-            self.merge_payload(defaults, sources, product_payload, product_label)
+            self.merge_payload_missing(defaults, sources, product_payload, product_label)
 
         for _sort_id, template_type, template in sorted(selected_templates, key=lambda item: item[0]):
             payload = template.get("payload") or {}
@@ -94,14 +109,27 @@ class ConfigDefaultsResolver:
 
         if task_payload:
             task_label = f"任务：{task.get('name') or task.get('id')}"
-            self.merge_payload(defaults, sources, task_payload, task_label, skip_keys={"template_overrides"})
+            self.merge_payload_missing(
+                defaults,
+                sources,
+                task_payload,
+                task_label,
+                skip_keys={"template_overrides"},
+                replace_source_prefixes=("商品：",),
+                force_replace_keys=TASK_CONTEXT_KEYS,
+            )
             overrides = task_payload.get("template_overrides")
             if isinstance(overrides, Mapping):
                 for template_type, payload in overrides.items():
                     normalized = self.normalize_template_type(template_type)
                     if normalized in DEFAULT_TEMPLATE_TYPES and isinstance(payload, Mapping):
-                        self.deep_merge(self.ensure_section(defaults, normalized), payload)
-                        self.deep_source_merge(self.ensure_section(sources, normalized), payload, "任务覆盖")
+                        self.deep_fill_missing_with_sources(
+                            self.ensure_section(defaults, normalized),
+                            self.ensure_section(sources, normalized),
+                            payload,
+                            "高级：本次任务临时覆盖",
+                            replace_source_prefixes=("商品：",),
+                        )
 
         defaults["dxm_reference_templates_resolved"] = resolve_dxm_reference_templates(defaults)
         defaults["_template_trace"] = template_trace
@@ -251,6 +279,41 @@ class ConfigDefaultsResolver:
                 target[target_key] = value
                 sources[target_key] = source_label
 
+    def merge_payload_missing(
+        self,
+        target: dict[str, Any],
+        sources: dict[str, Any],
+        payload: Mapping[str, Any],
+        source_label: str,
+        skip_keys: set[str] | None = None,
+        replace_source_prefixes: tuple[str, ...] = (),
+        force_replace_keys: set[str] | None = None,
+    ) -> None:
+        skip_keys = skip_keys or set()
+        force_replace_keys = force_replace_keys or set()
+        for key, value in payload.items():
+            if key in skip_keys:
+                continue
+            normalized = self.normalize_template_type(key)
+            target_key = normalized if normalized in DEFAULT_TEMPLATE_TYPES else key
+            existing_source = sources.get(target_key)
+            force_replace = key in force_replace_keys or target_key in force_replace_keys
+            if isinstance(value, Mapping):
+                if isinstance(target.get(target_key), dict):
+                    self.deep_fill_missing_with_sources(
+                        target[target_key],
+                        sources.setdefault(target_key, {}),
+                        value,
+                        source_label,
+                        replace_source_prefixes=replace_source_prefixes,
+                    )
+                elif force_replace or self.value_missing(target.get(target_key)) or self.source_can_be_replaced(existing_source, replace_source_prefixes):
+                    target[target_key] = dict(value)
+                    sources[target_key] = self.source_tree(value, source_label)
+            elif force_replace or self.value_missing(target.get(target_key)) or self.source_can_be_replaced(existing_source, replace_source_prefixes):
+                target[target_key] = value
+                sources[target_key] = source_label
+
     def deep_merge(self, target: dict[str, Any], source: Mapping[str, Any]) -> None:
         for key, value in source.items():
             if isinstance(value, Mapping) and isinstance(target.get(key), dict):
@@ -259,6 +322,36 @@ class ConfigDefaultsResolver:
                 target[key] = dict(value)
             else:
                 target[key] = value
+
+    def deep_fill_missing_with_sources(
+        self,
+        target: dict[str, Any],
+        source_target: dict[str, Any],
+        source: Mapping[str, Any],
+        source_label: str,
+        replace_source_prefixes: tuple[str, ...] = (),
+    ) -> None:
+        for key, value in source.items():
+            if isinstance(value, Mapping):
+                current = target.get(key)
+                if isinstance(current, dict):
+                    nested_source = source_target.setdefault(key, {})
+                    if not isinstance(nested_source, dict):
+                        nested_source = {}
+                        source_target[key] = nested_source
+                    self.deep_fill_missing_with_sources(
+                        current,
+                        nested_source,
+                        value,
+                        source_label,
+                        replace_source_prefixes=replace_source_prefixes,
+                    )
+                elif self.value_missing(current) or self.source_can_be_replaced(source_target.get(key), replace_source_prefixes):
+                    target[key] = dict(value)
+                    source_target[key] = self.source_tree(value, source_label)
+            elif self.value_missing(target.get(key)) or self.source_can_be_replaced(source_target.get(key), replace_source_prefixes):
+                target[key] = value
+                source_target[key] = source_label
 
     def ensure_section(self, target: dict[str, Any], key: str) -> dict[str, Any]:
         value = target.get(key)
@@ -281,6 +374,15 @@ class ConfigDefaultsResolver:
             key: self.source_tree(value, source_label) if isinstance(value, Mapping) else source_label
             for key, value in payload.items()
         }
+
+    def value_missing(self, value: Any) -> bool:
+        if isinstance(value, Mapping):
+            return not value
+        return value is None or str(value).strip() == ""
+
+    def source_can_be_replaced(self, source: Any, prefixes: tuple[str, ...]) -> bool:
+        text = str(source or "").strip()
+        return bool(text and any(text.startswith(prefix) for prefix in prefixes))
 
     def normalize_template_type(self, value: Any) -> str:
         return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")

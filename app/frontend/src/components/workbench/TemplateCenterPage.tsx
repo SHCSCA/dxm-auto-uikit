@@ -28,6 +28,7 @@ const fallbackTemplateCenterMetadata: TemplateCenterMetadata = {
       { key: 'title_strategy', label: '标题策略', required: false, value_kind: 'text' },
       { key: 'title_override', label: '标题覆盖值', required: false, value_kind: 'text' },
       { key: 'title_cleaning_rule', label: '标题清洗规则', required: false, value_kind: 'text' },
+      { key: 'title_keyword_map', label: '标题关键词映射', required: false, value_kind: 'text' },
     ] },
     { id: 'sku', label: 'SKU / 价格 / 库存', template_type: 'sku', fields: [
       { key: 'sku_code', label: 'SKU 编码', required: false, value_kind: 'text' },
@@ -93,8 +94,8 @@ const fallbackTemplateCenterMetadata: TemplateCenterMetadata = {
       { key: referenceFieldKey('semi_managed'), label: '半托管模板', required: true, value_kind: 'list' },
     ] },
   ],
-  source_priority: ['本次任务覆盖', '手动选择模板', '类目默认模板', '店铺默认模板', '系统默认模板', '商品原始数据'],
-  actions: ['仅本次任务使用', '设为店铺默认模板', '设为类目默认模板', '另存为新模板', '套用默认配置模板'],
+  source_priority: ['精确店铺/类目模板', '用户指定模板', '店铺默认模板', '系统默认模板', '商品原始数据', '高级：本次任务临时覆盖'],
+  actions: ['设为店铺默认模板', '设为类目默认模板', '另存为新模板', '套用默认配置模板', '高级：仅本次任务临时覆盖'],
 }
 
 export function TemplateCenterPage({
@@ -193,7 +194,7 @@ export function TemplateCenterPage({
     setTemplateName(activeTemplate?.template_name || `${activeSection.label}模板`)
     if (pendingTemplateApplyNotice.current) {
       pendingTemplateApplyNotice.current = false
-      setSaveState({ status: '已套用到表单', detail: '未保存修改不会进入执行；请核对字段后保存为本次任务或模板。' })
+      setSaveState({ status: '已套用到表单', detail: '未保存修改不会进入执行；请核对字段后保存为店铺/类目模板。' })
       return
     }
     setSaveState({ status: activeTemplate ? '已选择模板' : '等待填写', detail: activeTemplate ? `当前套用：${activeTemplate.template_name}` : '当前分区还没有已保存模板。' })
@@ -215,15 +216,15 @@ export function TemplateCenterPage({
 
   async function saveForTask() {
     if (!selectedTask) {
-      setSaveState({ status: '不能保存', detail: '请先在商品箱编辑保存页创建或选择任务。' })
+      setSaveState({ status: '不能保存', detail: '请先在商品箱编辑保存页创建或选择任务；临时覆盖只作为最后兜底。' })
       return
     }
-    await saveWithState('正在保存到本次任务', async () => {
+    await saveWithState('正在保存临时覆盖', async () => {
       await patchJson<Task>(`/api/tasks/${selectedTask.id}/config-overrides`, {
         section: activeSection.template_type,
         values: parseSectionValues(activeSection, draftValues),
       })
-      setSaveState({ status: '已保存到本次任务', detail: '本次任务会优先读取这些值，不影响其他任务。' })
+      setSaveState({ status: '已保存临时覆盖', detail: '只影响当前任务；这是模板无法覆盖时的最后兜底，不作为默认使用方式。' })
     })
   }
 
@@ -329,7 +330,7 @@ export function TemplateCenterPage({
           <div>
             <span className="eyebrow">模板中心</span>
             <h2>当前任务配置摘要</h2>
-            <p>按店小秘编辑页分区维护多套模板。执行前只确认三件事：当前任务用哪套模板、修改是否已保存、最终会填写哪些值。</p>
+            <p>按店小秘编辑页分区维护多套模板。默认优先使用模板；临时手工覆盖只作为最后兜底。</p>
           </div>
           <button className="button button--primary" type="button" onClick={onShowDraftEdit}>回到商品箱编辑保存</button>
         </div>
@@ -361,7 +362,7 @@ export function TemplateCenterPage({
             <small>发布、批量和无人值守仍保持关闭。</small>
           </span>
         </div>
-        <small className="template-center-receipt">{saveState.detail} 选择或修改模板只会影响当前表单，点击保存后才会进入真实执行。</small>
+        <small className="template-center-receipt">{saveState.detail} 选择或修改模板只会影响当前表单，保存为模板后才会进入默认执行路径。</small>
         <details className="template-default-pack" aria-label="默认配置模板套装">
           <summary>
             <span>
@@ -481,16 +482,21 @@ export function TemplateCenterPage({
               ))}
             </div>
           ) : (
-            <small>本次执行会使用已保存模板和本次任务覆盖值；当前分区还没有可展示的配置预览。</small>
+            <small>本次执行优先使用已保存模板；高级临时覆盖只有在你主动保存后才会生效。</small>
           )}
         </div>
 
         <div className="action-row">
-          <button className="button button--secondary" type="button" onClick={() => { void saveForTask() }} disabled={!selectedTask}>仅本次任务使用</button>
           <button className="button button--primary" type="button" onClick={() => { void saveAsDefaultTemplate('store') }}>保存为店铺模板</button>
           <button className="button button--primary" type="button" onClick={() => { void saveAsDefaultTemplate('category') }}>保存为类目模板</button>
           <button className="button button--quiet" type="button" onClick={() => { void saveAsDefaultTemplate('category', true) }}>另存为新模板</button>
         </div>
+
+        <details className="inline-disclosure">
+          <summary>高级兜底：临时覆盖当前任务</summary>
+          <p>只有当前模板无法满足这一次真实商品时才使用；默认执行路径仍然优先读取店铺/类目模板。</p>
+          <button className="button button--secondary" type="button" onClick={() => { void saveForTask() }} disabled={!selectedTask}>保存为本次任务临时覆盖</button>
+        </details>
 
         <details className="inline-disclosure template-library-details">
           <summary>更多模板管理与模板清单（共 {workspace.templates.length} 套）</summary>
@@ -612,9 +618,9 @@ function defaultValueForField(label: string) {
     '半托管长 cm': '10',
     '半托管宽 cm': '10',
     '半托管高 cm': '2',
-    货号策略: '使用 SKU',
+    货号策略: '按来源商品ID生成安全货号',
     条码策略: '留空',
-    属性信息模板: '立牌类谷子属性模板',
+    属性信息模板: '万代立牌\nbilibili动漫周边\n万代',
     描述模板: '详情描述模板-ACG立牌',
     运费模板: '石油40g普货包裹.\n40g普货包裹',
     服务模板: 'Service Template for New Sellers',

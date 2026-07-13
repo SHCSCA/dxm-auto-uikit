@@ -121,6 +121,13 @@ def _create_task(
     )
 
 
+def test_released_real_dxm_mutation_scope_remains_single_save_only():
+    import src.main as main
+
+    assert main.RELEASED_REAL_DXM_MUTATION_MODES == {"single_save"}
+    assert "claim_only" not in main.RELEASED_REAL_DXM_MUTATION_MODES
+
+
 def _create_claim_request(repo: Repository, *, store_name: str = "Dang Kang"):
     store = repo.create_store(store_name, "AliExpress")
     return repo.create_acquisition_claim_request(
@@ -302,7 +309,7 @@ def test_create_task_api_rejects_unreleased_or_wrong_scene_real_modes(tmp_path, 
         },
     )
     assert claim_response.status_code == 403
-    assert "claim-to-draft scene" in claim_response.json()["detail"]
+    assert "Only controlled single_save is released" in claim_response.json()["detail"]
 
     batch_response = client.post(
         "/api/tasks",
@@ -315,7 +322,7 @@ def test_create_task_api_rejects_unreleased_or_wrong_scene_real_modes(tmp_path, 
         },
     )
     assert batch_response.status_code == 403
-    assert "Only controlled claim_only and single_save are released" in batch_response.json()["detail"]
+    assert "Only controlled single_save is released" in batch_response.json()["detail"]
 
 
 def test_create_task_api_rejects_claim_only_with_existing_product_ids(tmp_path, monkeypatch):
@@ -346,8 +353,8 @@ def test_create_task_api_rejects_claim_only_with_existing_product_ids(tmp_path, 
         },
     )
 
-    assert response.status_code == 400
-    assert "without existing product_ids" in response.json()["detail"]
+    assert response.status_code == 403
+    assert "Only controlled single_save is released" in response.json()["detail"]
 
 
 def test_start_single_save_rejects_historical_multiple_products(tmp_path, monkeypatch):
@@ -406,7 +413,7 @@ def test_single_save_start_rejects_legacy_non_claimed_product_before_real_browse
     assert runner.calls == []
 
 
-def test_claim_only_start_requires_l2_readonly_gate(tmp_path, monkeypatch):
+def test_claim_only_start_rejects_before_l2_gate_because_mode_is_unreleased(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
@@ -416,11 +423,11 @@ def test_claim_only_start_requires_l2_readonly_gate(tmp_path, monkeypatch):
     response = client.post(f"/api/tasks/{task['id']}/start", json={})
 
     assert response.status_code == 403
-    assert "L2 readonly probe gate is not passed: not_run" in response.json()["detail"]
+    assert "Only controlled single_save is released" in response.json()["detail"]
     assert runner.calls == []
 
 
-def test_claim_only_start_is_released_for_controlled_acquisition_claim(tmp_path, monkeypatch):
+def test_claim_only_start_remains_unreleased_for_controlled_acquisition_claim(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
@@ -429,12 +436,12 @@ def test_claim_only_start_is_released_for_controlled_acquisition_claim(tmp_path,
 
     response = client.post(f"/api/tasks/{task['id']}/start", json={})
 
-    assert response.status_code == 200
-    assert response.json()["ok"] is True
-    assert runner.calls == [task["id"]]
+    assert response.status_code == 403
+    assert "Only controlled single_save is released" in response.json()["detail"]
+    assert runner.calls == []
 
 
-def test_claim_only_start_rejects_existing_product_job_shape(tmp_path, monkeypatch):
+def test_claim_only_start_rejects_existing_product_job_shape_after_release_gate(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
@@ -447,13 +454,12 @@ def test_claim_only_start_rejects_existing_product_job_shape(tmp_path, monkeypat
 
     response = client.post(f"/api/tasks/{task['id']}/start", json={})
 
-    assert response.status_code == 409
-    assert "待认领入箱" in response.json()["detail"]
-    assert "不能直接绑定本地商品" in response.json()["detail"]
+    assert response.status_code == 403
+    assert "Only controlled single_save is released" in response.json()["detail"]
     assert runner.calls == []
 
 
-def test_claim_only_start_allows_any_real_store_after_l2_gate(tmp_path, monkeypatch):
+def test_claim_only_start_rejects_any_real_store_because_mode_is_unreleased(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
@@ -462,9 +468,9 @@ def test_claim_only_start_allows_any_real_store_after_l2_gate(tmp_path, monkeypa
 
     response = client.post(f"/api/tasks/{task['id']}/start", json={})
 
-    assert response.status_code == 200
-    assert response.json()["ok"] is True
-    assert repo.get_task(task["id"])["status"] == "running"
+    assert response.status_code == 403
+    assert "Only controlled single_save is released" in response.json()["detail"]
+    assert runner.calls == []
 
 
 def test_unreleased_real_modes_reject_manual_approval(tmp_path, monkeypatch):
@@ -483,7 +489,7 @@ def test_unreleased_real_modes_reject_manual_approval(tmp_path, monkeypatch):
 
         assert response.status_code == 403
         detail = response.json()["detail"].lower()
-        assert "controlled claim_only and single_save" in detail
+        assert "controlled single_save" in detail
         assert "released" in detail
 
 
@@ -509,7 +515,7 @@ def test_unreleased_real_modes_cannot_start_after_approval_and_l2_passed(tmp_pat
 
         assert response.status_code == 403
         detail = response.json()["detail"].lower()
-        assert "controlled claim_only and single_save" in detail
+        assert "controlled single_save" in detail
         assert "released" in detail
         assert task["id"] not in runner.calls
     assert runner.calls == []
@@ -913,16 +919,16 @@ def test_agent_console_execution_browser_rejects_unreleased_and_non_real_modes(t
         response = client.post("/api/agent-console/start", json={"task_id": task["id"], "launch_browser": True})
 
         assert response.status_code == 403
-        assert "Only controlled claim_only and single_save are released" in response.json()["detail"]
+        assert "Only controlled single_save is released" in response.json()["detail"]
 
 
-def test_agent_console_execution_browser_allows_controlled_claim_only_task(tmp_path, monkeypatch):
+def test_agent_console_execution_browser_rejects_controlled_claim_only_task(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
     class DummyAgentConsoleService:
         def start(self, **payload):
-            return {"active": True, **payload}
+            raise AssertionError("claim_only must not launch an execution browser")
 
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
     monkeypatch.setattr(main, "agent_console_service", DummyAgentConsoleService())
@@ -930,19 +936,17 @@ def test_agent_console_execution_browser_allows_controlled_claim_only_task(tmp_p
 
     response = client.post("/api/agent-console/start", json={"task_id": task["id"], "launch_browser": True})
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["active"] is True
-    assert payload["task_id"] == task["id"]
+    assert response.status_code == 403
+    assert "Only controlled single_save is released" in response.json()["detail"]
 
 
-def test_agent_console_execution_browser_allows_claim_only_for_any_real_store(tmp_path, monkeypatch):
+def test_agent_console_execution_browser_rejects_claim_only_for_any_real_store(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
     class DummyAgentConsoleService:
         def start(self, **payload):
-            return {"active": True, **payload}
+            raise AssertionError("claim_only must not launch an execution browser")
 
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
     monkeypatch.setattr(main, "agent_console_service", DummyAgentConsoleService())
@@ -950,10 +954,8 @@ def test_agent_console_execution_browser_allows_claim_only_for_any_real_store(tm
 
     response = client.post("/api/agent-console/start", json={"task_id": task["id"], "launch_browser": True})
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["active"] is True
-    assert payload["task_id"] == task["id"]
+    assert response.status_code == 403
+    assert "Only controlled single_save is released" in response.json()["detail"]
 
 
 def test_runtime_logs_tail_known_log_sources(tmp_path, monkeypatch):
@@ -2105,8 +2107,8 @@ def test_config_preview_shows_effective_values_and_sources(tmp_path, monkeypatch
     assert response.status_code == 200
     groups = {group["section"]: group for group in response.json()["fieldGroups"]}
     logistics_fields = {field["path"]: field for field in groups["logistics"]["fields"]}
-    assert logistics_fields["logistics.weight"]["value"] == "0.05"
-    assert logistics_fields["logistics.weight"]["source"] == "任务覆盖"
+    assert logistics_fields["logistics.weight"]["value"] == "0.03"
+    assert logistics_fields["logistics.weight"]["source"] == "模板：包装物流模板"
     assert logistics_fields["logistics.length"]["value"] == "10"
     assert logistics_fields["logistics.length"]["source"] == "模板：包装物流模板"
 
@@ -2133,18 +2135,19 @@ def test_config_preview_returns_customer_template_priority_and_chinese_sections(
     assert response.status_code == 200
     preview = response.json()
     assert preview["templatePriority"] == [
-        "本次任务覆盖",
-        "手动选择模板",
-        "类目默认模板",
+        "精确店铺/类目模板",
+        "用户指定模板",
         "店铺默认模板",
         "系统默认模板",
+        "商品原始数据",
+        "高级：本次任务临时覆盖",
     ]
     sections = {section["section"]: section for section in preview["executionSections"]}
     assert "logistics" in sections
     assert sections["logistics"]["label"] == "包装物流"
     fields = {field["label"]: field for field in sections["logistics"]["fields"]}
-    assert fields["重量 kg"]["value"] == "0.05"
-    assert fields["重量 kg"]["source"] == "来自本次任务"
+    assert fields["重量 kg"]["value"] == "0.03"
+    assert fields["重量 kg"]["source"] == "来自模板：店铺包装模板"
     assert fields["长 cm"]["value"] == "10"
     assert fields["长 cm"]["source"] == "来自模板：店铺包装模板"
 
@@ -2338,6 +2341,99 @@ def test_create_single_save_task_seeds_starter_templates_for_claimed_product_cat
     assert validation["ok"] is True
     defaults = ConfigDefaultsResolver().resolve(templates, task, repo.get_product(product["id"]))
     assert any("立牌类谷子" in str(item["template_name"]) for item in defaults.template_trace)
+    assert defaults.defaults["category"]["attribute_template_priorities"] == ["万代立牌", "bilibili动漫周边", "万代"]
+    assert defaults.defaults["dxm_reference_templates_resolved"]["attribute_info"] == {
+        "names": ["万代立牌", "bilibili动漫周边", "万代"],
+        "required": True,
+    }
+
+
+def test_create_single_save_task_repairs_legacy_placeholder_attribute_template(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    store = repo.create_store("Dang Kang", "AliExpress")
+    claim_task = repo.create_acquisition_claim_request(
+        {
+            "store_id": store["id"],
+            "store_name": "Dang Kang",
+            "source_url": "https://mobile.yangkeduo.com/goods2.html?goods_id=893543996663",
+            "keyword": "宝可梦精灵球",
+            "category_name": "立牌类谷子",
+            "claim_mark": "AI-OPS",
+            "template_id": None,
+        }
+    )
+    product = repo.create_product(
+        {
+            "title": "宝可梦精灵球玩具模型周边礼物",
+            "source": "dxm_data_acquisition",
+            "status": "claimed_to_draft",
+            "category_name": "立牌类谷子",
+            "price": 0,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 0,
+            "payload": {
+                "source": "dxm_data_acquisition",
+                "store_id": store["id"],
+                "store_name": "Dang Kang",
+                "source_url": "https://mobile.yangkeduo.com/goods2.html?goods_id=893543996663",
+                "claim_task_id": claim_task["id"],
+                "claim_mark": "AI-OPS",
+                "draft_box_verified": True,
+            },
+        }
+    )
+    repo.mark_acquisition_claim_completed(claim_task["id"], product)
+    binding = {"store_name": "Dang Kang", "category_name": "立牌类谷子", "platform": "AliExpress"}
+    repo.create_template(
+        {
+            "template_type": "category",
+            "template_name": "旧类目模板",
+            "binding_scope": "店铺：Dang Kang / 类目：立牌类谷子 / 平台：AliExpress",
+            "payload": {
+                "binding": binding,
+                "category": {
+                    "category_keyword": "立牌",
+                    "category_match": "ACG Stand",
+                    "attribute_template_priorities": ["立牌类谷子属性模板"],
+                },
+            },
+            "is_enabled": True,
+        }
+    )
+    repo.create_template(
+        {
+            "template_type": "dxm_reference",
+            "template_name": "旧店小秘引用模板",
+            "binding_scope": "店铺：Dang Kang / 类目：立牌类谷子 / 平台：AliExpress",
+            "payload": {
+                "binding": binding,
+                "dxm_reference_templates": {
+                    "attribute_info": {"names": ["立牌类谷子属性模板"], "required": True}
+                },
+            },
+            "is_enabled": True,
+        }
+    )
+
+    response = client.post(
+        "/api/tasks",
+        json={
+            "name": "单商品只保存 - 宝可梦精灵球",
+            "store_id": store["id"],
+            "mode": "single_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "product_ids": [product["id"]],
+            "claim_mark": "AI-OPS",
+            "payload": {"store_name": "Dang Kang", "category_name": "立牌类谷子"},
+        },
+    )
+
+    assert response.status_code == 200
+    templates = repo.list_templates()
+    defaults = ConfigDefaultsResolver().resolve(templates, repo.get_task_private(response.json()["id"]), repo.get_product(product["id"]))
+    assert defaults.defaults["category"]["attribute_template_priorities"] == ["万代立牌", "bilibili动漫周边", "万代"]
+    assert defaults.defaults["dxm_reference_templates_resolved"]["attribute_info"]["names"] == ["万代立牌", "bilibili动漫周边", "万代"]
 
 
 def test_config_preview_covers_dxm_edit_page_sections_and_reference_templates(tmp_path, monkeypatch):
@@ -2422,7 +2518,7 @@ def test_config_preview_shows_semi_managed_supply_price_as_execution_value(tmp_p
     assert fields["semi_managed.product_price"]["required"] is False
     assert fields["semi_managed.product_price"]["missing"] is False
     assert fields["semi_managed.supply_price"]["value"] == "5.60"
-    assert fields["semi_managed.supply_price"]["source"] == "任务覆盖"
+    assert fields["semi_managed.supply_price"]["source"] == "高级：本次任务临时覆盖"
     assert fields["semi_managed.goods_code_strategy"]["required"] is True
     assert fields["semi_managed.barcode_strategy"]["required"] is True
 
@@ -2515,7 +2611,7 @@ def test_config_preview_and_runner_use_same_resolved_defaults(tmp_path, monkeypa
     execution_defaults = runner._execution_defaults(repo.get_task_private(task["id"]), product)
 
     assert preview["resolvedDefaults"] == execution_defaults
-    assert preview["resolvedDefaults"]["logistics"]["weight"] == "0.05"
+    assert preview["resolvedDefaults"]["logistics"]["weight"] == "0.03"
     assert preview["resolvedDefaults"]["logistics"]["length"] == "10"
 
 
@@ -2543,16 +2639,16 @@ def test_task_config_override_endpoint_updates_preview_and_runner_defaults(tmp_p
     preview = client.get(f"/api/config/preview?task_id={task['id']}").json()
     groups = {group["section"]: group for group in preview["fieldGroups"]}
     logistics_fields = {field["path"]: field for field in groups["logistics"]["fields"]}
-    assert logistics_fields["logistics.weight"]["value"] == "0.08"
-    assert logistics_fields["logistics.weight"]["source"] == "任务覆盖"
-    assert logistics_fields["logistics.length"]["value"] == "12"
-    assert logistics_fields["logistics.length"]["source"] == "任务覆盖"
+    assert logistics_fields["logistics.weight"]["value"] == "0.03"
+    assert logistics_fields["logistics.weight"]["source"] == "模板：包装物流模板"
+    assert logistics_fields["logistics.length"]["value"] == "10"
+    assert logistics_fields["logistics.length"]["source"] == "模板：包装物流模板"
     assert logistics_fields["logistics.height"]["value"] == "2"
     assert logistics_fields["logistics.height"]["source"] == "模板：包装物流模板"
 
     runner = V1TaskRunner(repo, object())
     execution_defaults = runner._execution_defaults(repo.get_task_private(task["id"]), repo.list_products()[0])
-    assert execution_defaults["logistics"]["weight"] == "0.08"
+    assert execution_defaults["logistics"]["weight"] == "0.03"
     assert execution_defaults["logistics"]["height"] == "2"
 
 
@@ -2586,7 +2682,7 @@ def test_config_preview_recovers_when_legacy_section_payload_is_scalar(tmp_path,
     }
     groups = {group["section"]: group for group in preview["fieldGroups"]}
     logistics_fields = {field["path"]: field for field in groups["logistics"]["fields"]}
-    assert logistics_fields["logistics.weight"]["source"] == "任务覆盖"
+    assert logistics_fields["logistics.weight"]["source"] == "高级：本次任务临时覆盖"
 
 
 def test_task_config_override_endpoint_updates_semi_managed_runner_defaults(tmp_path, monkeypatch):
@@ -2617,9 +2713,9 @@ def test_task_config_override_endpoint_updates_semi_managed_runner_defaults(tmp_
     groups = {group["section"]: group for group in preview["fieldGroups"]}
     semi_fields = {field["path"]: field for field in groups["semi_managed"]["fields"]}
     assert semi_fields["semi_managed.supply_price"]["value"] == "6.66"
-    assert semi_fields["semi_managed.supply_price"]["source"] == "任务覆盖"
+    assert semi_fields["semi_managed.supply_price"]["source"] == "高级：本次任务临时覆盖"
     assert semi_fields["semi_managed.jit_stock"]["value"] == "88"
-    assert semi_fields["semi_managed.jit_stock"]["source"] == "任务覆盖"
+    assert semi_fields["semi_managed.jit_stock"]["source"] == "高级：本次任务临时覆盖"
 
     runner = V1TaskRunner(repo, object())
     execution_defaults = runner._execution_defaults(repo.get_task_private(task["id"]), repo.list_products()[0])
@@ -2650,9 +2746,9 @@ def test_task_config_override_endpoint_updates_sku_code_runner_defaults(tmp_path
     groups = {group["section"]: group for group in preview["fieldGroups"]}
     sku_fields = {field["path"]: field for field in groups["sku"]["fields"]}
     assert sku_fields["sku.sku_code"]["value"] == "SKU-UI-001"
-    assert sku_fields["sku.sku_code"]["source"] == "任务覆盖"
+    assert sku_fields["sku.sku_code"]["source"] == "高级：本次任务临时覆盖"
     assert sku_fields["sku.jit_stock"]["value"] == "66"
-    assert sku_fields["sku.jit_stock"]["source"] == "任务覆盖"
+    assert sku_fields["sku.jit_stock"]["source"] == "高级：本次任务临时覆盖"
 
     runner = V1TaskRunner(repo, object())
     execution_defaults = runner._execution_defaults(repo.get_task_private(task["id"]), repo.list_products()[0])
@@ -3032,7 +3128,7 @@ def test_direct_real_dxm_mutation_rejects_unreleased_modes_even_after_l2_and_app
 
             assert response.status_code == 403
             detail = response.json()["detail"].lower()
-            assert "controlled claim_only and single_save" in detail
+            assert "controlled single_save" in detail
             assert "released" in detail
     assert flow.draft_box_actions == []
 

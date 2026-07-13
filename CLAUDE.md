@@ -25,7 +25,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 常用命令
 
-后端有专用 venv:`app/backend/.venv/Scripts/python.exe`(下文记作 `PY`)。无独立 lint 工具——质量门禁就是 pytest + 前端 build + L1 replay + 浏览器 QA。
+后端有专用 venv:`app/backend/.venv/Scripts/python.exe`(下文记作 `PY`)。无独立 lint 工具——质量门禁就是 pytest + 前端 typecheck/build + L1 replay + 浏览器 QA。
 
 ```bat
 :: 启动(Windows 单窗口,生产路径)。先检查环境,再启动后端8000+前端5173,健康检查过后自动开页
@@ -39,8 +39,13 @@ cd app\backend && .venv\Scripts\python.exe -m pytest -q
 cd app\backend && .venv\Scripts\python.exe -m pytest tests\test_publish_guard.py -q
 cd app\backend && .venv\Scripts\python.exe -m pytest tests\test_task_start_guard.py::<TestName> -q
 
-:: 前端生产构建(注意:build 脚本只有 vite build,没有独立 tsc 类型检查,类型错误不一定让 build 失败)
+:: 前端类型检查 / 生产构建(build 已串行执行 typecheck + vite build)
+cd app\frontend && npm install && npm run typecheck
 cd app\frontend && npm install && npm run build
+
+:: Electron 桌面壳(可选;先构建前端,再打包到 outputs/desktop-build 等产物目录)
+cd app\desktop && npm install && npm run build
+cd app\desktop && npm run build:portable
 
 :: L1 离线 selector replay 门禁(不访问店小秘;exit 0 通过 / 2 失败)
 python tools\probes\l1_selector_replay.py --output-dir data\l1_selector_replay
@@ -51,6 +56,8 @@ scripts\final-delivery-check.bat -RequireCleanWorktree   :: 源码发布包验�
 ```
 
 非 Windows 开发备用(无健康门禁、无 job object):`bash scripts/start-backend.sh` / `start-frontend.sh` / `start-mvp.sh`。
+
+未发现 `.cursor/rules/`、`.cursorrules` 或 `.github/copilot-instructions.md`;后续若新增这些规则,需把与本仓库安全门禁/命令相关的内容同步进本文件。
 
 L2 真实只读 probe 需要**真实登录 cookie + 人工审批**,不由 `final-delivery-check` 自动运行;两个目标(`data_acquisition` / `draft_box`)必须用**同一个 `--run-id`** 各跑一次,流水线只消费其已产出的证据。
 

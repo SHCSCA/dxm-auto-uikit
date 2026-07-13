@@ -10,12 +10,22 @@ from src.services.dxm_reference_templates import REFERENCE_TEMPLATE_SECTIONS
 TemplateLike = Mapping[str, Any] | None
 
 SOURCE_SCOPE_LABELS = {
-    "本次任务覆盖": "仅本次任务",
-    "手动选择模板": "手动选择",
+    "精确店铺/类目模板": "当前店铺/类目",
+    "用户指定模板": "当前选择",
     "类目默认模板": "当前类目默认",
     "店铺默认模板": "当前店铺默认",
     "系统默认模板": "系统默认",
+    "高级：本次任务临时覆盖": "仅本次任务",
 }
+
+SOURCE_PRIORITY = [
+    "精确店铺/类目模板",
+    "用户指定模板",
+    "店铺默认模板",
+    "系统默认模板",
+    "商品原始数据",
+    "高级：本次任务临时覆盖",
+]
 
 
 def editable_sections() -> list[dict[str, Any]]:
@@ -81,11 +91,11 @@ def resolve_template(
     system_template: TemplateLike = None,
 ) -> dict[str, Any]:
     candidates = [
-        ("本次任务覆盖", task_template),
-        ("手动选择模板", selected_template),
+        ("用户指定模板", selected_template),
         ("类目默认模板", category_template),
         ("店铺默认模板", store_template),
         ("系统默认模板", system_template),
+        ("高级：本次任务临时覆盖", task_template),
     ]
     for source_label, template in candidates:
         if template:
@@ -100,6 +110,6 @@ def resolve_template(
 def template_center_metadata() -> dict[str, Any]:
     return {
         "sections": editable_sections(),
-        "source_priority": ["本次任务覆盖", "手动选择模板", "类目默认模板", "店铺默认模板", "系统默认模板", "商品原始数据"],
-        "actions": ["仅本次任务使用", "设为店铺默认模板", "设为类目默认模板", "另存为新模板", "套用预置配置模板"],
+        "source_priority": SOURCE_PRIORITY,
+        "actions": ["设为店铺默认模板", "设为类目默认模板", "另存为新模板", "套用预置配置模板", "高级：仅本次任务临时覆盖"],
     }

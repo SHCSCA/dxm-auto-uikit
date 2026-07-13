@@ -14,6 +14,10 @@ class FakeLoginFlow:
         self.calls.append(('navigate_post_login', target))
         return self._state('workflow_navigation')
 
+    def verify_draft_box_claim(self, claim_mark, product_query=None, category_name=None, store_name=None, target_source_urls=None):
+        self.calls.append(('verify_draft_box_claim', claim_mark, product_query, category_name, store_name, target_source_urls))
+        return self._state('draft_box_claim_verified')
+
     def perform_draft_box_action(self, action, note_text=None, product_query=None, store_name=None, target_source_urls=None):
         self.calls.append(('perform_draft_box_action', action, note_text, product_query, store_name, target_source_urls))
         return self._state('editor_page' if action == 'edit' else 'draft_box_action')
@@ -98,6 +102,17 @@ class FakeWorkflowEventLoginFlow(FakeLoginFlow):
     def recent_workflow_events(self, limit=20):
         self.calls.append(('recent_workflow_events', limit))
         return self.events[-limit:]
+
+
+class FakeDraftBoxClaimNotReadyFlow(FakeLoginFlow):
+    def verify_draft_box_claim(self, claim_mark, product_query=None, category_name=None, store_name=None, target_source_urls=None):
+        self.calls.append(('verify_draft_box_claim', claim_mark, product_query, category_name, store_name, target_source_urls))
+        return {
+            **self._state('draft_box_claim_page_not_ready'),
+            'ok': False,
+            'reason': 'page_loading',
+            'message': '商品箱页面仍在加载，请人工处理后重试。',
+        }
 
 
 def test_workflow_event_listener_forwards_to_login_flow():
@@ -198,6 +213,17 @@ def test_open_draft_box_delegates_to_login_flow_navigation():
     assert flow.calls == [('navigate_post_login', 'draft_box')]
     assert result['action'] == 'open_draft_box'
     assert result['stage'] == 'workflow_navigation'
+
+
+def test_adapter_result_respects_explicit_false_ok_even_without_failed_stage_suffix():
+    flow = FakeDraftBoxClaimNotReadyFlow()
+
+    result = DxmWorkflowAdapter(flow).verify_draft_box_claim('AI认领')
+
+    assert flow.calls == [('verify_draft_box_claim', 'AI认领', None, None, None, None)]
+    assert result['ok'] is False
+    assert result['stage'] == 'draft_box_claim_page_not_ready'
+    assert result['evidence']['reason'] == 'page_loading'
 
 
 def test_claim_product_delegates_to_remark_action_with_note_text():
