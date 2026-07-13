@@ -1,7 +1,6 @@
 const { app, BrowserWindow, ipcMain, safeStorage, shell } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
-const net = require('node:net')
 const crypto = require('node:crypto')
 const { spawn } = require('node:child_process')
 const desktopPackage = require('../package.json')
@@ -16,8 +15,42 @@ const {
   createBackendChildLifecycle,
   waitForOwnedBackendHealth,
 } = require('./runtime-identity.cjs')
+const {
+  classifyLaunchArguments,
+  resolveSelectedDataDir,
+  selectBackendPort,
+  createTcpOccupancyProbe,
+  createHttpRuntimeProbe,
+  inspectLegacyRuntimePorts,
+} = require('./launch-policy.cjs')
+const {
+  createDesktopStartupController,
+  focusExistingWindow,
+  registerPrimaryInstanceLifecycle,
+} = require('./runtime-start.cjs')
 
 app.setName('DXM Agent Console')
+
+const normalUserDataDir = app.getPath('userData')
+let launchPolicy = null
+let launchPolicyValid = false
+let ownsSingleInstanceLock = false
+try {
+  launchPolicy = classifyLaunchArguments({
+    argv: process.argv,
+    normalUserDataDir,
+  })
+  if (launchPolicy.isIsolatedQa) {
+    fs.mkdirSync(launchPolicy.qaUserDataDir, { recursive: true })
+    app.setPath('userData', launchPolicy.qaUserDataDir)
+  }
+  launchPolicyValid = true
+  ownsSingleInstanceLock = app.requestSingleInstanceLock()
+  if (!ownsSingleInstanceLock) app.quit()
+} catch (error) {
+  console.error(`Invalid desktop launch policy: ${error instanceof Error ? error.message : String(error)}`)
+  app.exit(1)
+}
 
 let mainWindow = null
 let backendOwnership = null
@@ -32,52 +65,16 @@ const runtimeInfo = {
   frontendPath: null,
   backendLogPath: null,
   desktopLogPath: null,
+  dataDir: null,
+  dataDirReady: false,
   qaCapturePath: null,
+  qaVisibleSmokePath: null,
   lastError: null,
 }
 
-function getQaCapturePath() {
-  const arg = process.argv.find((value) => value.startsWith('--qa-capture='))
-  if (!arg) return null
-  const capturePath = arg.slice('--qa-capture='.length).trim()
-  return capturePath || null
-}
-
-function getQaCredentialSmokePath() {
-  const arg = process.argv.find((value) => value.startsWith('--qa-credential-smoke='))
-  if (!arg) return null
-  const outputPath = arg.slice('--qa-credential-smoke='.length).trim()
-  return outputPath || null
-}
-
-function getQaVisibleSmokePath() {
-  const arg = process.argv.find((value) => value.startsWith('--qa-visible-smoke='))
-  if (!arg) return null
-  const outputPath = arg.slice('--qa-visible-smoke='.length).trim()
-  return outputPath || null
-}
-
-function getQaUserDataDir() {
-  const arg = process.argv.find((value) => value.startsWith('--qa-user-data-dir='))
-  if (!arg) return null
-  const userDataDir = arg.slice('--qa-user-data-dir='.length).trim()
-  return userDataDir || null
-}
-
-const qaUserDataDir = getQaUserDataDir()
-if (qaUserDataDir) {
-  fs.mkdirSync(qaUserDataDir, { recursive: true })
-  app.setPath('userData', qaUserDataDir)
-}
-
 function initializeDesktopLogPath() {
-  try {
-    const dataDir = path.join(app.getPath('userData'), 'data')
-    fs.mkdirSync(dataDir, { recursive: true })
-    runtimeInfo.desktopLogPath = path.join(dataDir, 'desktop-main.log')
-  } catch {
-    // App paths may be unavailable before Electron is ready.
-  }
+  if (!runtimeInfo.dataDir) return
+  runtimeInfo.desktopLogPath = path.join(runtimeInfo.dataDir, 'desktop-main.log')
 }
 
 function resolveRepoRoot() {
@@ -99,16 +96,15 @@ function resolveRepoRoot() {
   throw new Error('Cannot locate repo root containing app/backend/src/main.py')
 }
 
-function ensureDataDir(repoRoot) {
-  const dataDir = app.isPackaged
-    ? path.join(app.getPath('userData'), 'data')
-    : path.join(repoRoot, 'data')
+function ensureDataDir(dataDir) {
   fs.mkdirSync(dataDir, { recursive: true })
+  runtimeInfo.dataDirReady = true
   return dataDir
 }
 
 function getDesktopDataDir() {
-  const dataDir = path.join(app.getPath('userData'), 'data')
+  if (!runtimeInfo.dataDir) throw new Error('Desktop runtime data directory is not selected')
+  const dataDir = runtimeInfo.dataDir
   fs.mkdirSync(dataDir, { recursive: true })
   return dataDir
 }
@@ -240,9 +236,13 @@ function runCredentialSmoke(outputPath) {
 function appendDesktopLog(message) {
   if (!runtimeInfo.desktopLogPath) initializeDesktopLogPath()
   const logPath = runtimeInfo.desktopLogPath
-  if (!logPath) return
+  if (!logPath || !runtimeInfo.dataDirReady) return
   const line = `[${new Date().toISOString()}] ${message}\n`
-  fs.appendFileSync(logPath, line, 'utf8')
+  try {
+    fs.appendFileSync(logPath, line, 'utf8')
+  } catch (error) {
+    console.error(`Desktop log write failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 
 function logPackagedResourceStatus(repoRoot) {
@@ -274,8 +274,21 @@ function rawStartupErrorDetail(error) {
 function userStartupErrorMessage(error) {
   const raw = rawStartupErrorDetail(error)
   const normalized = raw.toLowerCase()
+  const conflict = error?.conflict && typeof error.conflict === 'object' ? error.conflict : null
   if (normalized.includes('packaged backend python is missing') || normalized.includes('resources')) {
     return '免安装目录不完整，后端运行资源没有找到。请重新解压或重新复制完整的 DXM Agent Console 免安装版目录后再启动。'
+  }
+  if (normalized.includes('same data directory')) {
+    const facts = conflict ? [
+      Number.isInteger(conflict.port) ? `端口 ${conflict.port}` : null,
+      conflict.pid === null || conflict.pid === undefined ? null : `进程 ${conflict.pid}`,
+      conflict.instanceId ? `实例 ${conflict.instanceId}` : null,
+    ].filter(Boolean) : []
+    const factText = facts.length ? `（${facts.join('，')}）` : ''
+    return `已有 DXM Agent Console 正在使用同一数据目录${factText}。请先从原窗口正常退出，再重新打开；系统不会自动接管或结束旧进程。`
+  }
+  if (normalized.includes('loopback port 8000')) {
+    return '本机 8000 端口已被占用。请先关闭占用该端口的旧控制台或其他程序，再重新打开；系统不会自动结束该进程。'
   }
   if (normalized.includes('no free loopback port') || normalized.includes('eaddrinuse')) {
     return '本机服务端口被占用。请关闭旧的 DXM Agent Console 窗口或后台进程，然后重新打开。'
@@ -349,28 +362,15 @@ function createStartupErrorWindow(error) {
   mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
 }
 
-function findFreePort(preferredPort, maxAttempts = 80) {
-  return new Promise((resolve, reject) => {
-    let port = preferredPort
+const tcpOccupancyProbe = createTcpOccupancyProbe()
+const httpRuntimeProbe = createHttpRuntimeProbe()
 
-    const tryPort = () => {
-      const server = net.createServer()
-      server.once('error', () => {
-        port += 1
-        if (port >= preferredPort + maxAttempts) {
-          reject(new Error(`No free loopback port from ${preferredPort}`))
-          return
-        }
-        tryPort()
-      })
-      server.once('listening', () => {
-        server.close(() => resolve(port))
-      })
-      server.listen(port, '127.0.0.1')
-    }
-
-    tryPort()
-  })
+async function isLoopbackPortFree(port, { signal } = {}) {
+  return await tcpOccupancyProbe({
+    host: '127.0.0.1',
+    port,
+    signal,
+  }) === false
 }
 
 function createBackendInstanceId() {
@@ -518,148 +518,192 @@ function killBackendProcess() {
   appendDesktopLog(`Stop requested for exact backend child handle pid=${processToStop.pid ?? 'unknown'}`)
 }
 
-async function createWindow() {
-  try {
-    initializeDesktopLogPath()
-    appendDesktopLog(`Desktop app starting packaged=${app.isPackaged} resourcesPath=${process.resourcesPath}`)
-    const qaCapturePath = getQaCapturePath()
-    const qaCredentialSmokePath = getQaCredentialSmokePath()
-    const qaVisibleSmokePath = getQaVisibleSmokePath()
-    runtimeInfo.qaCapturePath = qaCapturePath
-    runtimeInfo.qaVisibleSmokePath = qaVisibleSmokePath
-    const repoRoot = resolveRepoRoot()
-    runtimeInfo.repoRoot = repoRoot
-    const port = await findFreePort(8000)
-    const backendInstanceId = createBackendInstanceId()
-    const dataDir = ensureDataDir(repoRoot)
-    const workflowProfileDir = path.join(dataDir, 'browser_profiles', 'dxm_workflow')
-    const launchManifest = resolveLaunchManifest({
-      isPackaged: app.isPackaged,
-      resourcesPath: process.resourcesPath,
-      packageVersion: app.getVersion(),
-      explicitManifestFile: process.env.DXM_BUILD_MANIFEST_FILE || null,
-      directManifestFactory: () => createDirectLaunchManifest({
-        repoRoot,
-        packageVersion: app.getVersion(),
-        buildId: `direct-${backendInstanceId}`,
-      }),
-    })
-    const packageSha256 = await resolvePortablePackageSha({
-      isPackaged: app.isPackaged,
-      portableExecutableFile: process.env.PORTABLE_EXECUTABLE_FILE,
-      portableExecutableDir: process.env.PORTABLE_EXECUTABLE_DIR,
-      portableExecutableAppFilename: process.env.PORTABLE_EXECUTABLE_APP_FILENAME,
-      expectedPortableAppFilename: desktopPackage.name,
-      innerExecutablePath: process.execPath,
-    })
-    runtimeInfo.backendPort = port
-    runtimeInfo.apiBase = `http://127.0.0.1:${port}`
-    logPackagedResourceStatus(repoRoot)
-    const ownership = startBackend(repoRoot, port, backendInstanceId, {
-      manifest: launchManifest,
-      packageSha256,
+async function startDesktopRuntime() {
+  const qaCapturePath = launchPolicy.smokeOutputs.capture
+  const qaCredentialSmokePath = launchPolicy.smokeOutputs.credential
+  const qaVisibleSmokePath = launchPolicy.smokeOutputs.visible
+  runtimeInfo.qaCapturePath = qaCapturePath
+  runtimeInfo.qaVisibleSmokePath = qaVisibleSmokePath
+
+  const repoRoot = resolveRepoRoot()
+  const dataDir = resolveSelectedDataDir({
+    isIsolatedQa: launchPolicy.isIsolatedQa,
+    isPackaged: app.isPackaged,
+    repoRoot,
+    userDataDir: app.getPath('userData'),
+  })
+  runtimeInfo.repoRoot = repoRoot
+  runtimeInfo.dataDir = dataDir
+  const port = await selectBackendPort({
+    isIsolatedQa: launchPolicy.isIsolatedQa,
+    isPortFree: isLoopbackPortFree,
+  })
+  if (!launchPolicy.isIsolatedQa) {
+    await inspectLegacyRuntimePorts({
       dataDir,
-      workflowProfileDir,
-      resourceRoot: repoRoot,
+      tcpProbe: tcpOccupancyProbe,
+      httpProbe: httpRuntimeProbe,
     })
-    await waitForHealth(runtimeInfo.apiBase, 45000, ownership)
+  }
 
-    const frontendPath = resolveFrontendPath(repoRoot)
-    runtimeInfo.frontendPath = frontendPath
+  ensureDataDir(dataDir)
+  initializeDesktopLogPath()
+  appendDesktopLog(`Desktop app starting packaged=${app.isPackaged} resourcesPath=${process.resourcesPath}`)
+  const backendInstanceId = createBackendInstanceId()
+  const workflowProfileDir = path.join(dataDir, 'browser_profiles', 'dxm_workflow')
+  const launchManifest = resolveLaunchManifest({
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    packageVersion: app.getVersion(),
+    explicitManifestFile: process.env.DXM_BUILD_MANIFEST_FILE || null,
+    directManifestFactory: () => createDirectLaunchManifest({
+      repoRoot,
+      packageVersion: app.getVersion(),
+      buildId: `direct-${backendInstanceId}`,
+    }),
+  })
+  const packageSha256 = await resolvePortablePackageSha({
+    isPackaged: app.isPackaged,
+    portableExecutableFile: process.env.PORTABLE_EXECUTABLE_FILE,
+    portableExecutableDir: process.env.PORTABLE_EXECUTABLE_DIR,
+    portableExecutableAppFilename: process.env.PORTABLE_EXECUTABLE_APP_FILENAME,
+    expectedPortableAppFilename: desktopPackage.name,
+    innerExecutablePath: process.execPath,
+  })
+  runtimeInfo.backendPort = port
+  runtimeInfo.apiBase = `http://127.0.0.1:${port}`
+  logPackagedResourceStatus(repoRoot)
+  const ownership = startBackend(repoRoot, port, backendInstanceId, {
+    manifest: launchManifest,
+    packageSha256,
+    dataDir,
+    workflowProfileDir,
+    resourceRoot: repoRoot,
+  })
+  await waitForHealth(runtimeInfo.apiBase, 45000, ownership)
 
-    mainWindow = new BrowserWindow({
-      width: 1480,
-      height: 940,
-      minWidth: 1180,
-      minHeight: 760,
-      show: !qaCapturePath,
-      backgroundColor: '#f6f8fb',
-      title: 'DXM Agent Console',
-      webPreferences: {
-        preload: path.join(__dirname, 'preload.cjs'),
-        contextIsolation: true,
-        nodeIntegration: false,
-      },
-    })
+  const frontendPath = resolveFrontendPath(repoRoot)
+  runtimeInfo.frontendPath = frontendPath
+  return Object.freeze({
+    apiBase: runtimeInfo.apiBase,
+    frontendPath,
+    qaCapturePath,
+    qaCredentialSmokePath,
+    qaVisibleSmokePath,
+  })
+}
 
-    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-      shell.openExternal(url)
-      return { action: 'deny' }
-    })
+async function createMainWindow(runtime) {
+  if (focusExistingWindow(() => mainWindow)) return mainWindow
+  const window = new BrowserWindow({
+    width: 1480,
+    height: 940,
+    minWidth: 1180,
+    minHeight: 760,
+    show: !runtime.qaCapturePath,
+    backgroundColor: '#f6f8fb',
+    title: 'DXM Agent Console',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  })
+  mainWindow = window
+  window.once('closed', () => {
+    if (mainWindow === window) mainWindow = null
+  })
 
-    await mainWindow.loadFile(frontendPath, {
-      query: {
-        apiBase: runtimeInfo.apiBase,
-        desktop: '1',
-      },
-    })
-    appendDesktopLog(`Loaded frontend ${frontendPath} with apiBase=${runtimeInfo.apiBase}`)
-    if (qaCredentialSmokePath) {
-      runCredentialSmoke(qaCredentialSmokePath)
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url)
+    return { action: 'deny' }
+  })
+
+  await window.loadFile(runtime.frontendPath, {
+    query: {
+      apiBase: runtime.apiBase,
+      desktop: '1',
+    },
+  })
+  appendDesktopLog(`Loaded frontend ${runtime.frontendPath} with apiBase=${runtime.apiBase}`)
+  if (runtime.qaCredentialSmokePath) {
+    runCredentialSmoke(runtime.qaCredentialSmokePath)
+  }
+  if (runtime.qaCapturePath) {
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+    fs.mkdirSync(path.dirname(runtime.qaCapturePath), { recursive: true })
+    const image = await window.webContents.capturePage()
+    fs.writeFileSync(runtime.qaCapturePath, image.toPNG())
+    appendDesktopLog(`QA capture written: ${runtime.qaCapturePath}`)
+    app.quit()
+  }
+  if (runtime.qaVisibleSmokePath) {
+    await new Promise((resolve) => setTimeout(resolve, 900))
+    const result = {
+      ok: Boolean(mainWindow && mainWindow.isVisible()),
+      windowVisible: Boolean(mainWindow && mainWindow.isVisible()),
+      windowFocused: Boolean(mainWindow && mainWindow.isFocused()),
+      windowBounds: mainWindow ? mainWindow.getBounds() : null,
+      backendPort: runtimeInfo.backendPort,
+      apiBase: runtimeInfo.apiBase,
+      frontendPath: runtimeInfo.frontendPath,
+      desktopLogPath: runtimeInfo.desktopLogPath,
+      backendLogPath: runtimeInfo.backendLogPath,
+      checkedAt: new Date().toISOString(),
     }
-    if (qaCapturePath) {
-      await new Promise((resolve) => setTimeout(resolve, 1200))
-      fs.mkdirSync(path.dirname(qaCapturePath), { recursive: true })
-      const image = await mainWindow.webContents.capturePage()
-      fs.writeFileSync(qaCapturePath, image.toPNG())
-      appendDesktopLog(`QA capture written: ${qaCapturePath}`)
-      app.quit()
+    fs.mkdirSync(path.dirname(runtime.qaVisibleSmokePath), { recursive: true })
+    fs.writeFileSync(runtime.qaVisibleSmokePath, JSON.stringify(result, null, 2))
+    appendDesktopLog(`QA visible smoke written: ${runtime.qaVisibleSmokePath} visible=${result.windowVisible}`)
+    if (!result.ok) {
+      app.exit(1)
     }
-    if (qaVisibleSmokePath) {
-      await new Promise((resolve) => setTimeout(resolve, 900))
-      const result = {
-        ok: Boolean(mainWindow && mainWindow.isVisible()),
-        windowVisible: Boolean(mainWindow && mainWindow.isVisible()),
-        windowFocused: Boolean(mainWindow && mainWindow.isFocused()),
-        windowBounds: mainWindow ? mainWindow.getBounds() : null,
-        backendPort: runtimeInfo.backendPort,
-        apiBase: runtimeInfo.apiBase,
-        frontendPath: runtimeInfo.frontendPath,
-        desktopLogPath: runtimeInfo.desktopLogPath,
-        backendLogPath: runtimeInfo.backendLogPath,
-        checkedAt: new Date().toISOString(),
-      }
-      fs.mkdirSync(path.dirname(qaVisibleSmokePath), { recursive: true })
-      fs.writeFileSync(qaVisibleSmokePath, JSON.stringify(result, null, 2))
-      appendDesktopLog(`QA visible smoke written: ${qaVisibleSmokePath} visible=${result.windowVisible}`)
-      if (!result.ok) {
-        app.exit(1)
-      }
-      app.quit()
-    }
-  } catch (error) {
-    runtimeInfo.lastError = error.stack || error.message
-    appendDesktopLog(`Desktop startup failed: ${runtimeInfo.lastError}`)
-    killBackendProcess()
+    app.quit()
+  }
+  return window
+}
+
+const startupController = launchPolicyValid && ownsSingleInstanceLock
+  ? createDesktopStartupController({
+      startRuntime: startDesktopRuntime,
+      createMainWindow,
+    })
+  : null
+let startupFailureShown = false
+
+function handleDesktopStartupFailure(error) {
+  runtimeInfo.lastError = error instanceof Error ? error.stack || error.message : String(error)
+  appendDesktopLog(`Desktop startup failed: ${runtimeInfo.lastError}`)
+  killBackendProcess()
+  if (!startupFailureShown) {
+    startupFailureShown = true
     createStartupErrorWindow(error)
   }
 }
 
-ipcMain.handle('desktop:get-runtime-info', () => ({
-  ...runtimeInfo,
-  runtimeIdentity: runtimeInfo.runtimeIdentity ? { ...runtimeInfo.runtimeIdentity } : null,
-}))
-ipcMain.handle('desktop:dxm-credential:load', () => loadDxmCredential())
-ipcMain.handle('desktop:dxm-credential:save', (_event, payload) => saveDxmCredential(payload))
-ipcMain.handle('desktop:dxm-credential:clear', () => clearDxmCredential())
+if (ownsSingleInstanceLock) {
+  ipcMain.handle('desktop:get-runtime-info', () => ({
+    ...runtimeInfo,
+    runtimeIdentity: runtimeInfo.runtimeIdentity ? { ...runtimeInfo.runtimeIdentity } : null,
+  }))
+  ipcMain.handle('desktop:dxm-credential:load', () => loadDxmCredential())
+  ipcMain.handle('desktop:dxm-credential:save', (_event, payload) => saveDxmCredential(payload))
+  ipcMain.handle('desktop:dxm-credential:clear', () => clearDxmCredential())
+}
 
-app.whenReady().then(() => {
-  createWindow()
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow()
-    }
-  })
-})
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
-})
-
-app.on('will-quit', () => {
-  killBackendProcess()
+registerPrimaryInstanceLifecycle({
+  launchPolicyValid,
+  ownsSingleInstanceLock,
+  app,
+  startupController,
+  hasWindows: () => BrowserWindow.getAllWindows().length > 0,
+  focusWindow: () => focusExistingWindow(() => mainWindow),
+  handleFailure: handleDesktopStartupFailure,
+  onWindowAllClosed: () => {
+    if (process.platform !== 'darwin') app.quit()
+  },
+  onWillQuit: () => {
+    killBackendProcess()
+  },
 })
 
 process.on('uncaughtException', (error) => {

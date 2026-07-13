@@ -9,6 +9,10 @@ DESKTOP_PORTABLE_PATCH = DESKTOP_DIR / "scripts" / "patch-electron-builder-porta
 DESKTOP_BUILD_MANIFEST = DESKTOP_DIR / "scripts" / "generate-build-manifest.cjs"
 DESKTOP_RUNTIME_IDENTITY = DESKTOP_DIR / "src" / "runtime-identity.cjs"
 DESKTOP_RUNTIME_IDENTITY_TEST = DESKTOP_DIR / "test" / "runtime-identity.test.cjs"
+DESKTOP_LAUNCH_POLICY = DESKTOP_DIR / "src" / "launch-policy.cjs"
+DESKTOP_LAUNCH_POLICY_TEST = DESKTOP_DIR / "test" / "launch-policy.test.cjs"
+DESKTOP_RUNTIME_START = DESKTOP_DIR / "src" / "runtime-start.cjs"
+DESKTOP_RUNTIME_START_TEST = DESKTOP_DIR / "test" / "runtime-start.test.cjs"
 DESKTOP_MAIN = DESKTOP_DIR / "src" / "main.cjs"
 DESKTOP_PRELOAD = DESKTOP_DIR / "src" / "preload.cjs"
 DESKTOP_BUILDER = DESKTOP_DIR / "electron-builder.yml"
@@ -52,6 +56,81 @@ def test_desktop_build_generates_and_packages_frozen_build_manifest():
     assert DESKTOP_BUILD_MANIFEST.exists()
     assert DESKTOP_RUNTIME_IDENTITY.exists()
     assert DESKTOP_RUNTIME_IDENTITY_TEST.exists()
+    assert DESKTOP_LAUNCH_POLICY.exists()
+    assert DESKTOP_LAUNCH_POLICY_TEST.exists()
+    assert DESKTOP_RUNTIME_START.exists()
+    assert DESKTOP_RUNTIME_START_TEST.exists()
+
+
+def test_desktop_main_validates_qa_then_locks_selected_user_data_before_runtime_or_window():
+    source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    runtime_start_source = DESKTOP_RUNTIME_START.read_text(encoding="utf-8")
+
+    assert "classifyLaunchArguments" in source
+    assert "const normalUserDataDir = app.getPath('userData')" in source
+    assert "fs.mkdirSync(launchPolicy.qaUserDataDir, { recursive: true })" in source
+    assert "app.setPath('userData', launchPolicy.qaUserDataDir)" in source
+    assert "app.requestSingleInstanceLock()" in source
+    assert "app.on('second-instance'" in runtime_start_source
+    assert "focusWindow: () => focusExistingWindow(() => mainWindow)" in source
+    assert "async function startDesktopRuntime()" in source
+    assert "async function createMainWindow(runtime)" in source
+
+    classify_at = source.index("classifyLaunchArguments")
+    qa_root_at = source.index("fs.mkdirSync(launchPolicy.qaUserDataDir, { recursive: true })")
+    set_path_at = source.index("app.setPath('userData', launchPolicy.qaUserDataDir)")
+    lock_at = source.index("app.requestSingleInstanceLock()")
+    register_at = source.index("registerPrimaryInstanceLifecycle({")
+    assert classify_at < qa_root_at < set_path_at < lock_at < register_at
+
+
+def test_desktop_normal_port_is_fixed_and_legacy_scan_precedes_spawn():
+    source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    policy_source = DESKTOP_LAUNCH_POLICY.read_text(encoding="utf-8")
+    runtime_start_source = DESKTOP_RUNTIME_START.read_text(encoding="utf-8")
+
+    assert "selectBackendPort" in source
+    assert "inspectLegacyRuntimePorts" in source
+    assert "createTcpOccupancyProbe" in source
+    assert "createHttpRuntimeProbe" in source
+    assert "isIsolatedQa: launchPolicy.isIsolatedQa" in source
+    assert "if (!launchPolicy.isIsolatedQa)" in source
+    startup_section = source[source.index("async function startDesktopRuntime()"):source.index("async function createMainWindow(runtime)")]
+    assert startup_section.index("inspectLegacyRuntimePorts({") < startup_section.index("startBackend(repoRoot, port, backendInstanceId")
+    assert "return 8000" in policy_source
+    assert "for (let port = 8000; port <= 8079; port += 1)" in policy_source
+    assert "AbortController" in policy_source
+    assert "maxBodyBytes" in policy_source
+    assert "createRuntimeStarter" in runtime_start_source
+    assert "createDesktopStartupController" in runtime_start_source
+    assert "findFreePort(8000" not in source
+
+
+def test_desktop_activate_reuses_verified_runtime_without_backend_restart():
+    source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    runtime_start_source = DESKTOP_RUNTIME_START.read_text(encoding="utf-8")
+    activate_section = runtime_start_source[
+        runtime_start_source.index("app.on('activate'"):
+        runtime_start_source.index("app.on('window-all-closed'")
+    ]
+
+    assert "startupController.onActivate" in activate_section
+    assert "startRuntimeOnce" not in activate_section
+    assert "startRuntime" not in activate_section
+    assert "startBackend" not in activate_section
+    assert "registerPrimaryInstanceLifecycle({" in source
+
+
+def test_desktop_invalid_policy_or_missing_lock_cannot_register_ready_startup():
+    source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    runtime_start_source = DESKTOP_RUNTIME_START.read_text(encoding="utf-8")
+
+    assert "let launchPolicyValid = false" in source
+    assert "launchPolicyValid = true" in source
+    assert "registerPrimaryInstanceLifecycle({" in source
+    assert "launchPolicyValid," in source
+    assert "ownsSingleInstanceLock," in source
+    assert "if (!launchPolicyValid || !ownsSingleInstanceLock) return false" in runtime_start_source
 
 
 def test_desktop_build_patches_portable_launcher_exec_quoting():
@@ -69,13 +148,15 @@ def test_desktop_build_patches_portable_launcher_exec_quoting():
 def test_desktop_main_starts_backend_hidden_and_loads_frontend_with_api_base():
     source = DESKTOP_MAIN.read_text(encoding="utf-8")
     identity_source = DESKTOP_RUNTIME_IDENTITY.read_text(encoding="utf-8")
-    kill_backend_section = source[source.index("function killBackendProcess"):source.index("async function createWindow")]
+    launch_policy_source = DESKTOP_LAUNCH_POLICY.read_text(encoding="utf-8")
+    runtime_start_source = DESKTOP_RUNTIME_START.read_text(encoding="utf-8")
+    kill_backend_section = source[source.index("function killBackendProcess"):source.index("async function startDesktopRuntime")]
 
     assert "app.setName('DXM Agent Console')" in source
     assert "function resolveRepoRoot()" in source
     assert "process.resourcesPath" in source
     assert "app/backend/src/main.py" in source
-    assert "findFreePort(8000" in source
+    assert "selectBackendPort" in source
     assert "app/backend/.venv/Scripts/python.exe" in source
     assert "if (app.isPackaged)" in source
     assert "Packaged backend Python is missing" in source
@@ -98,11 +179,11 @@ def test_desktop_main_starts_backend_hidden_and_loads_frontend_with_api_base():
     assert "app/frontend/dist/index.html" in source
     assert "apiBase=" in source
     assert "killBackendProcess()" in source
-    assert "will-quit" in source
-    assert "function getQaCapturePath()" in source
-    assert "--qa-capture=" in source
-    assert "--qa-visible-smoke=" in source
-    assert "show: !qaCapturePath" in source
+    assert "will-quit" in runtime_start_source
+    assert "classifyLaunchArguments" in source
+    assert "qa-capture" in launch_policy_source
+    assert "qa-visible-smoke" in launch_policy_source
+    assert "show: !runtime.qaCapturePath" in source
     assert "windowVisible: Boolean(mainWindow && mainWindow.isVisible())" in source
     assert "QA visible smoke written" in source
     assert "webContents.capturePage()" in source
@@ -114,7 +195,7 @@ def test_desktop_main_starts_backend_hidden_and_loads_frontend_with_api_base():
 
 def test_desktop_main_logs_packaged_probe_resource_status_before_backend_start():
     source = DESKTOP_MAIN.read_text(encoding="utf-8")
-    startup_section = source[source.index("async function createWindow"):source.index("ipcMain.handle")]
+    startup_section = source[source.index("async function startDesktopRuntime"):source.index("async function createMainWindow")]
 
     assert "function logPackagedResourceStatus" in source
     assert "tools/probes/l2_readonly_probe_runner.py" in source
@@ -170,7 +251,7 @@ def test_desktop_backend_health_check_verifies_full_launch_identity_and_self_pro
 
 def test_desktop_backend_start_sets_unique_instance_id_for_health_handshake():
     source = DESKTOP_MAIN.read_text(encoding="utf-8")
-    startup_section = source[source.index("async function createWindow"):source.index("ipcMain.handle")]
+    startup_section = source[source.index("async function startDesktopRuntime"):source.index("async function createMainWindow")]
     start_backend_section = source[source.index("function startBackend"):source.index("function waitForHealth")]
 
     assert "function createBackendInstanceId()" in source
@@ -182,7 +263,7 @@ def test_desktop_backend_start_sets_unique_instance_id_for_health_handshake():
 def test_desktop_backend_start_owns_exact_child_and_injects_one_launch_identity():
     source = DESKTOP_MAIN.read_text(encoding="utf-8")
     start_backend_section = source[source.index("function startBackend"):source.index("function waitForHealth")]
-    startup_section = source[source.index("async function createWindow"):source.index("ipcMain.handle")]
+    startup_section = source[source.index("async function startDesktopRuntime"):source.index("async function createMainWindow")]
 
     assert "let backendOwnership = null" in source
     assert "resolveLaunchManifest" in startup_section
@@ -205,7 +286,7 @@ def test_desktop_backend_cleanup_requires_current_exact_live_child_and_two_phase
     source = DESKTOP_MAIN.read_text(encoding="utf-8")
     identity_source = DESKTOP_RUNTIME_IDENTITY.read_text(encoding="utf-8")
     start_backend_section = source[source.index("function startBackend"):source.index("function waitForHealth")]
-    kill_backend_section = source[source.index("function killBackendProcess"):source.index("async function createWindow")]
+    kill_backend_section = source[source.index("function killBackendProcess"):source.index("async function startDesktopRuntime")]
     lifecycle_section = identity_source[
         identity_source.index("function clearOwnershipForChild"):
         identity_source.index("function waitForOwnedBackendHealth")
@@ -271,7 +352,7 @@ def test_desktop_main_surfaces_startup_failures_in_visible_window():
     source = DESKTOP_MAIN.read_text(encoding="utf-8")
     startup_error_section = source[
         source.index("function createStartupErrorWindow"):
-        source.index("function findFreePort")
+        source.index("const tcpOccupancyProbe")
     ]
 
     assert "function createStartupErrorWindow(error)" in source
@@ -284,6 +365,23 @@ def test_desktop_main_surfaces_startup_failures_in_visible_window():
     assert "const message = userStartupErrorMessage(error)" in startup_error_section
     assert "error.stack || error.message" not in startup_error_section
     assert "处理步骤" in startup_error_section
+
+
+def test_desktop_main_surfaces_fixed_port_and_same_data_conflicts_as_actionable_startup_errors():
+    source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    message_section = source[
+        source.index("function userStartupErrorMessage"):
+        source.index("function createStartupErrorWindow")
+    ]
+
+    assert "loopback port 8000" in message_section
+    assert "same data directory" in message_section
+    assert "本机 8000 端口已被占用" in message_section
+    assert "已有 DXM Agent Console 正在使用同一数据目录" in message_section
+    assert "error?.conflict" in message_section
+    assert "conflict.port" in message_section
+    assert "conflict.pid" in message_section
+    assert "conflict.instanceId" in message_section
 
 
 def test_desktop_preload_exposes_readonly_runtime_metadata():
@@ -305,13 +403,13 @@ def test_desktop_preload_exposes_readonly_runtime_metadata():
 
 def test_desktop_credential_smoke_verifies_safe_storage_without_destroying_user_secret():
     source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    launch_policy_source = DESKTOP_LAUNCH_POLICY.read_text(encoding="utf-8")
     verify_source = VERIFY_DESKTOP_PACKAGE.read_text(encoding="utf-8")
 
-    assert "function getQaUserDataDir()" in source
-    assert "--qa-user-data-dir=" in source
-    assert "app.setPath('userData', qaUserDataDir)" in source
-    assert "function getQaCredentialSmokePath()" in source
-    assert "--qa-credential-smoke=" in source
+    assert "classifyLaunchArguments" in source
+    assert "qa-user-data-dir" in launch_policy_source
+    assert "app.setPath('userData', launchPolicy.qaUserDataDir)" in source
+    assert "qa-credential-smoke" in launch_policy_source
     assert "function runCredentialSmoke(outputPath)" in source
     assert "const previousCredential = fs.existsSync(credentialPath)" in source
     assert "saveDxmCredential({ username: '__qa_dxm_user__', password: '__qa_dxm_password__' })" in source
