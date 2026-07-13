@@ -53,6 +53,14 @@ export function ProductTasksPage({
   const taskRows = workspace.tasks.filter(isOperatorTask).slice(0, 8)
   const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
   const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
+  const currentApprover = l3ApprovedBy.trim()
+  const currentTaskNeedsApproval = Boolean(
+    currentTask
+    && currentTask.status === 'draft'
+    && (currentTask.mode === 'claim_only' || currentTask.mode === 'single_save')
+    && l2Gate?.status === 'passed'
+  )
+  const currentTaskApprovalMissing = currentTaskNeedsApproval && !currentApprover
   const configForTask = currentTask && configPreview?.taskId === currentTask.id ? configPreview : null
   const decision = buildTaskDecision({
     task: currentTask,
@@ -60,7 +68,7 @@ export function ProductTasksPage({
     configPreviewError,
     configPreviewLoading,
     l2Passed: l2Gate?.status === 'passed',
-    l3Passed: l3Gate?.status === 'passed',
+    currentApproverPresent: Boolean(currentApprover),
     dxmLoggedIn: isDxmLoggedIn(runtimeStatus, runtimeStatusError),
     busy,
   })
@@ -72,7 +80,7 @@ export function ProductTasksPage({
     onShowConsole,
     onShowReports,
   })
-  const primaryDisabled = busy || !primaryAction || decision.disabled
+  const primaryDisabled = busy || !primaryAction || decision.disabled || currentTaskApprovalMissing
 
   return (
     <section className="module-layout" aria-label="当前保存任务">
@@ -116,9 +124,13 @@ export function ProductTasksPage({
             <strong>保存前检查</strong>
             <b>{gateStatusLabel(l2Gate?.status)}</b>
           </span>
-          <span className={currentTask?.mode !== 'single_save' || l3Gate?.status === 'passed' ? 'is-ok' : 'is-warn'}>
-            <strong>人工确认</strong>
-            <b>{currentTask?.mode === 'single_save' ? gateStatusLabel(l3Gate?.status) : '第一段无需保存确认'}</b>
+          <span className={currentTaskApprovalMissing ? 'is-warn' : 'is-ok'}>
+            <strong>本次任务批准人</strong>
+            <b>{currentTaskNeedsApproval ? currentApprover || '待填写' : '保存前检查通过后填写'}</b>
+          </span>
+          <span className={l3Gate?.status === 'passed' ? 'is-ok' : 'is-warn'}>
+            <strong>历史执行证据</strong>
+            <b>{gateStatusLabel(l3Gate?.status)}</b>
           </span>
         </div>
 
@@ -149,13 +161,13 @@ export function ProductTasksPage({
           </div>
         )}
 
-        {currentTask?.mode === 'single_save' && l2Gate?.status === 'passed' && l3Gate?.status !== 'passed' && (
+        {currentTaskNeedsApproval && (
           <div className="gate-note">
-            <strong>人工确认只保存</strong>
-            <span>只启动单商品只保存任务，不发布、不批量、不无人值守。填写批准人后再启动。</span>
+            <strong>{currentTask?.mode === 'claim_only' ? '人工确认认领到商品箱' : '人工确认只保存不发布'}</strong>
+            <span>{currentTask?.mode === 'claim_only' ? '确认将该已有商品认领到商品箱' : '确认本次只保存不发布'}。填写批准人后，系统才会为本次任务申请一次性批准令牌。</span>
             <label className="approval-inline">
               <span>批准人</span>
-              <input value={l3ApprovedBy} onChange={(event) => onL3ApprovedByChange(event.target.value)} placeholder="填写当前操作者" disabled={busy} />
+              <input value={l3ApprovedBy} onChange={(event) => onL3ApprovedByChange(event.target.value)} placeholder="填写当前操作者" disabled={busy} required />
             </label>
           </div>
         )}
@@ -220,7 +232,7 @@ function buildTaskDecision({
   configPreviewError,
   configPreviewLoading,
   l2Passed,
-  l3Passed,
+  currentApproverPresent,
   dxmLoggedIn,
   busy,
 }: {
@@ -229,7 +241,7 @@ function buildTaskDecision({
   configPreviewError: string | null
   configPreviewLoading: boolean
   l2Passed: boolean
-  l3Passed: boolean
+  currentApproverPresent: boolean
   dxmLoggedIn: boolean
   busy: boolean
 }) {
@@ -257,8 +269,10 @@ function buildTaskDecision({
   if (!l2Passed) {
     return decision('run_l2', 'warn', '需要保存前检查', '真实浏览器保存前必须确认已有待认领列表和商品箱页面没有写入风险。', '运行保存前安全检查。', READONLY_PRECHECK_CTA, false)
   }
-  if (task.mode === 'single_save' && !l3Passed) {
-    return decision('start', 'warn', '等待人工确认只保存', '真实保存前还没有完成批准人确认。', '填写批准人后，去浏览器现场确认并执行这一个单商品只保存任务。', '去浏览器现场确认', busy)
+  if ((task.mode === 'claim_only' || task.mode === 'single_save') && !currentApproverPresent) {
+    return task.mode === 'claim_only'
+      ? decision('start', 'warn', '等待人工确认认领到商品箱', '确认将该已有商品认领到商品箱，并填写本次任务批准人。', '填写批准人后再启动待认领入箱。', '填写当前批准人', true)
+      : decision('start', 'warn', '等待人工确认只保存不发布', '确认本次只保存不发布，并填写本次任务批准人。', '填写批准人后再启动单商品只保存。', '填写当前批准人', true)
   }
   return decision('start', 'ok', task.mode === 'claim_only' ? '可以处理待认领入箱' : '可以处理单商品只保存', '当前没有阻断项。', '到“浏览器现场”查看并执行真实进度。', task.mode === 'claim_only' ? '去浏览器现场处理入箱' : '去浏览器现场执行只保存', busy)
 }

@@ -3706,7 +3706,7 @@ def test_task_center_surfaces_l2_allowlist_review_candidates_as_manual_review_on
     assert "onShowReports={() => setActiveSection('results')}" in app_source
 
 
-def test_frontend_blocks_unreleased_real_modes_before_l3_manual_approval():
+def test_frontend_releases_both_controlled_stages_and_blocks_only_batch():
     source = APP_TSX.read_text(encoding="utf-8")
     workbench_source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     start_section = source[source.index("async function startSelectedTask"):source.index("async function startAgentConsole")]
@@ -3714,12 +3714,10 @@ def test_frontend_blocks_unreleased_real_modes_before_l3_manual_approval():
     no_old_action_copy_start = qa_source.index("noOldActionCopy:")
     no_old_action_copy_section = qa_source[no_old_action_copy_start:qa_source.index("noConsoleErrors:", no_old_action_copy_start)]
 
-    assert "const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['single_save'])" in source
-    assert "const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'batch_save'])" in source
+    assert "const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save'])" in source
+    assert "const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['batch_save'])" in source
     assert "UNRELEASED_REAL_DXM_MUTATION_MODES.has(taskToStart.mode)" in start_section
-    assert "当前仅开放单商品只保存" in start_section
-    assert "待认领入箱和批量保存必须重新验收后再放行" in start_section
-    assert "将只启动单商品只保存任务，不会发布" in start_section
+    assert "当前仅开放待认领入箱和单商品只保存；批量保存必须重新验收后再放行。" in start_section
     assert "将只启动 save-only/claim-only 受控任务" not in start_section
     assert "const selectedTaskIsUnreleasedRealMode = selectedTask ? isUnreleasedRealDxmMutationTask(selectedTask) : false" in workbench_source
     assert "startDisabled = busy || !selectedTask || selectedTaskNotDraft || selectedTaskIsUnreleasedRealMode || loginBlocksStart || configUnknownBlocksStart || configPreviewLoadingBlocksStart || configBlocksStart || l2BlocksStart || l3BlocksStart" in workbench_source
@@ -3759,6 +3757,30 @@ def test_frontend_blocks_unreleased_real_modes_before_l3_manual_approval():
     assert "\\u542f\\u52a8\\u6f14\\u793a\\u6d4f\\u89c8\\u5668" in qa_source
     assert "oldAutomation" in no_old_action_copy_section
     assert "SAVE_ONLY" in no_old_action_copy_section
+
+
+def test_frontend_claim_and_single_save_share_current_task_server_approval_flow():
+    source = APP_TSX.read_text(encoding="utf-8")
+    start_section = source[source.index("async function startSelectedTask"):source.index("async function startAgentConsole")]
+    real_start = start_section.index("if (REAL_DXM_MUTATION_MODES.has(taskToStart.mode))")
+    real_end = start_section.index("} else {", real_start)
+    real_mutation_section = start_section[real_start:real_end]
+
+    assert "const CLAIM_ONLY_CONFIRMATION = '确认将该已有商品认领到商品箱'" in source
+    assert "const L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'" in source
+    assert "const approvedBy = l3ApprovedBy.trim()" in real_mutation_section
+    assert "if (!approvedBy)" in real_mutation_section
+    assert "if (taskToStart.mode === 'single_save')" in real_mutation_section
+    assert "const latestConfigPreview = await refreshConfigPreview(taskToStart.id)" in real_mutation_section
+    assert "const approvalConfirmation = taskToStart.mode === 'claim_only' ? CLAIM_ONLY_CONFIRMATION : L3_CONFIRMATION" in real_mutation_section
+    assert "`/api/tasks/${taskToStart.id}/manual-approval`" in real_mutation_section
+    assert "approved_by: approvedBy" in real_mutation_section
+    assert "confirmation: approvalConfirmation" in real_mutation_section
+    assert "approval_token: approval.approvalToken" in real_mutation_section
+    assert "confirmation: approval.confirmation || approvalConfirmation" in real_mutation_section
+    assert real_mutation_section.index("if (!approvedBy)") < real_mutation_section.index("/manual-approval")
+    assert real_mutation_section.index("/manual-approval") < real_mutation_section.index("/start`")
+    assert "await postJson(`/api/tasks/${taskToStart.id}/start`, {})" not in real_mutation_section
 
 
 def test_task_center_start_button_matches_real_start_prechecks():
@@ -3812,7 +3834,7 @@ def test_task_center_surfaces_real_mode_release_readiness_without_releasing_mode
     assert "独立只读与真实保存证据链" in panels_source
     assert "目标商品认领归属证明" in panels_source
     assert "逐商品保存结果与 published=false" in panels_source
-    assert "RELEASED_REAL_DXM_MUTATION_MODES = new Set(['single_save'])" in (REPO_ROOT / "app" / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+    assert "RELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save'])" in (REPO_ROOT / "app" / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
     assert "real-mode-release-panel" in styles_source
     assert "real-mode-release-panel__grid" in styles_source
     assert "realModeReleasePlanVisible" in qa_source
@@ -5171,6 +5193,30 @@ def test_product_tasks_page_is_extracted_from_workbench_modules():
     assert "aria-label=\"选择商品箱商品\"" not in product_tasks_source
     assert "任务与记录" not in source
     assert "export function TaskCenter(" not in source
+
+
+def test_product_tasks_page_requires_current_approver_for_both_released_stages():
+    source = PRODUCT_TASKS_PAGE_TSX.read_text(encoding="utf-8")
+    component_section = source[source.index("export function ProductTasksPage"):source.index("function firstOperatorTask")]
+    decision_section = source[source.index("function buildTaskDecision"):source.index("function decision")]
+
+    assert "const currentApprover = l3ApprovedBy.trim()" in component_section
+    assert "const currentTaskNeedsApproval = Boolean(" in component_section
+    assert "currentTask.status === 'draft'" in component_section
+    assert "(currentTask.mode === 'claim_only' || currentTask.mode === 'single_save')" in component_section
+    assert "l2Gate?.status === 'passed'" in component_section
+    assert "const currentTaskApprovalMissing = currentTaskNeedsApproval && !currentApprover" in component_section
+    assert "currentApproverPresent: Boolean(currentApprover)" in component_section
+    assert "const primaryDisabled = busy || !primaryAction || decision.disabled || currentTaskApprovalMissing" in component_section
+    assert "if ((task.mode === 'claim_only' || task.mode === 'single_save') && !currentApproverPresent)" in decision_section
+    assert "l3Passed" not in decision_section
+    assert "{currentTaskNeedsApproval && (" in component_section
+    assert "currentTaskNeedsApproval && currentTaskApprovalMissing" not in component_section
+    assert "currentTask?.mode === 'claim_only' ? '人工确认认领到商品箱' : '人工确认只保存不发布'" in component_section
+    assert "确认将该已有商品认领到商品箱" in component_section
+    assert "确认本次只保存不发布" in component_section
+    assert "value={l3ApprovedBy}" in component_section
+    assert "l3Gate?.status !== 'passed'" not in component_section
 
 
 def test_edit_config_page_entry_is_extracted_from_workbench_modules():

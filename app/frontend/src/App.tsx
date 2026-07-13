@@ -35,9 +35,10 @@ const DXM_TARGET_LABELS: Record<keyof typeof DXM_TARGET_URLS, string> = {
 }
 const AGENT_CONSOLE_NAVIGATION_SETTLE_MS = 2500
 const REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save', 'batch_save'])
-const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['single_save'])
-const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'batch_save'])
+const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save'])
+const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['batch_save'])
 const DXM_READY_SESSION_STATUSES = new Set(['login_success', 'logged_in', 'not_published_verified', 'workflow_navigation'])
+const CLAIM_ONLY_CONFIRMATION = '确认将该已有商品认领到商品箱'
 const L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
 const DEMO_ENABLED = new URLSearchParams(window.location.search).get('dev') === '1'
   || (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_DXM_ENABLE_DEMO === '1'
@@ -748,7 +749,7 @@ export default function App() {
     try {
       if (REAL_DXM_MUTATION_MODES.has(taskToStart.mode)) {
         if (UNRELEASED_REAL_DXM_MUTATION_MODES.has(taskToStart.mode)) {
-          setOperationError('当前仅开放单商品只保存；待认领入箱和批量保存必须重新验收后再放行。')
+          setOperationError('当前仅开放待认领入箱和单商品只保存；批量保存必须重新验收后再放行。')
           return
         }
         if (!RELEASED_REAL_DXM_MUTATION_MODES.has(taskToStart.mode)) {
@@ -763,40 +764,42 @@ export default function App() {
           setActiveSection('dxm_access')
           return
         }
-        if (taskToStart.mode === 'claim_only') {
-          await postJson(`/api/tasks/${taskToStart.id}/start`, {})
-          setActiveSection('acquisition_claim')
-          await refreshWorkspace()
-          return
-        }
-        const latestConfigPreview = await refreshConfigPreview(taskToStart.id)
-        if (!latestConfigPreview || !latestConfigPreview.ok) {
-          setOperationError(`配置检查未通过：${latestConfigPreview?.missing.slice(0, 6).join('、') || '请补齐填写编辑页配置'}`)
-          setActiveSection('edit_config')
-          return
-        }
         const approvedBy = l3ApprovedBy.trim()
         if (!approvedBy) {
-          setOperationError('请填写批准人标识；将只启动单商品只保存任务，不会发布。')
+          const approvalCopy = taskToStart.mode === 'claim_only' ? CLAIM_ONLY_CONFIRMATION : '确认本次只保存不发布'
+          setOperationError(`请填写批准人标识；${approvalCopy}。`)
           setActiveSection('product_tasks')
           return
         }
+        if (taskToStart.mode === 'single_save') {
+          const latestConfigPreview = await refreshConfigPreview(taskToStart.id)
+          if (!latestConfigPreview || !latestConfigPreview.ok) {
+            setOperationError(`配置检查未通过：${latestConfigPreview?.missing.slice(0, 6).join('、') || '请补齐填写编辑页配置'}`)
+            setActiveSection('edit_config')
+            return
+          }
+        }
+        const approvalConfirmation = taskToStart.mode === 'claim_only' ? CLAIM_ONLY_CONFIRMATION : L3_CONFIRMATION
         const approval = await postJson<ManualApprovalResponse>(`/api/tasks/${taskToStart.id}/manual-approval`, {
-          approved_by: approvedBy.trim(),
-          confirmation: L3_CONFIRMATION,
+          approved_by: approvedBy,
+          confirmation: approvalConfirmation,
         })
         await postJson(`/api/tasks/${taskToStart.id}/start`, {
           manual_approval: true,
           approval_token: approval.approvalToken,
-          approved_by: approvedBy.trim(),
-          confirmation: approval.confirmation || L3_CONFIRMATION,
+          approved_by: approvedBy,
+          confirmation: approval.confirmation || approvalConfirmation,
         })
       } else {
         await postJson(`/api/tasks/${taskToStart.id}/start`, {})
       }
       setSelectedTaskId(taskToStart.id)
       syncSelectedTaskIdUrl(taskToStart.id)
-      setActiveSection('start_save')
+      if (taskToStart.mode === 'claim_only') {
+        setActiveSection('acquisition_claim')
+      } else {
+        setActiveSection('start_save')
+      }
       await refreshWorkspace()
     } catch (error) {
       setOperationError(humanOperationError(error instanceof Error ? error.message : '启动保存核验任务失败'))
