@@ -2241,11 +2241,18 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
     token_hash = approval.get('token_hash')
     request_token_hash = hashlib.sha256(request.approval_token.encode('utf-8')).hexdigest() if request.approval_token else ''
     token_ok = bool(token_hash and hmac.compare_digest(request_token_hash, str(token_hash)))
+    request_approver = str(request.approved_by or '').strip()
+    stored_approver = str(approval.get('approved_by') or '').strip()
+    approver_ok = bool(
+        request_approver
+        and stored_approver
+        and hmac.compare_digest(request_approver, stored_approver)
+    )
     required_confirmation = CLAIM_CONFIRMATION if mode == 'claim_only' else L3_CONFIRMATION
     approved = (
         request.manual_approval is True
         and request.confirmation == required_confirmation
-        and bool(request.approved_by and request.approved_by.strip())
+        and approver_ok
         and approval.get('approved') is True
         and approval.get('source') == 'server'
         and token_ok
@@ -2253,7 +2260,10 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
     if not approved:
         raise HTTPException(
             status_code=403,
-            detail=f'Manual approval with confirmation {required_confirmation} is required before starting real {mode}',
+            detail=(
+                f'Manual approval with confirmation {required_confirmation} is required before starting real {mode}; '
+                'approved_by must match the stored server approver'
+            ),
         )
     l2_gate = l2_real_probe_gate()
     if l2_gate.get('status') != 'passed':
@@ -2518,8 +2528,8 @@ def build_login_state(data: dict):
         return {
             'stage': 'login_success',
             'label': '已登录',
-            'message': '已检测到真实店小秘登录态；可以继续配置、L2 复验和受控 single_save 自动化准备。',
-            'next_action': '进入操作引导，按配置预检、L2 复验、人工批准顺序启动受控 single_save；claim_only、batch_save 和发布仍未放行。',
+            'message': '已检测到真实店小秘登录态；受控 claim_only 可按 Stage A 审批启动，受控 single_save 可按 Stage B 审批启动。',
+            'next_action': '先完成配置预检和 L2 复验，再按各自人工审批启动；batch_save 和发布仍关闭。',
             'requires_user_action': False,
             'screenshot_url': data.get('home_screenshot_url') or data.get('product_page', {}).get('screenshot_url'),
             'page_title': data.get('title') or data.get('product_page', {}).get('title'),

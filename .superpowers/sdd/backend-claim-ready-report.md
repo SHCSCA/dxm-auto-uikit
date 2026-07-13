@@ -73,3 +73,54 @@ Result:
 - `.superpowers/sdd/backend-claim-ready-report.md`
 
 `tests/test_acquisition_claim_workflow.py` was run but not changed.
+
+## Review fix: approver binding and login-success copy
+
+Review found two follow-up gaps:
+
+- The start guard accepted a correct token even when the request approver did not match the server-stored approver, and it did not require the stored approver to be non-empty.
+- The post-login operator copy still said `claim_only` was unreleased.
+
+### Review RED
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q tests/test_task_start_guard.py::test_claim_only_start_rejects_mismatched_stage_a_approver tests/test_task_start_guard.py::test_claim_only_start_rejects_empty_stored_stage_a_approver tests/test_task_start_guard.py::test_single_save_start_rejects_mismatched_stage_b_approver tests/test_login_flow.py::test_login_success_copy_describes_controlled_two_stage_start_boundary
+```
+
+Result before the review fix: `4 failed in 3.49s`.
+
+Expected failures:
+
+- A correct Stage A token with a different request approver incorrectly returned 200.
+- A correct Stage A token with an empty stored approver incorrectly returned 200.
+- A correct Stage B token with a different request approver incorrectly returned 200.
+- Login-success copy still described `claim_only` as unreleased.
+
+### Review GREEN
+
+The start guard now trims both approver values, requires both to be non-empty, and requires the normalized request approver to match the stored server approver. The login-success copy now states that controlled `claim_only` uses Stage A approval, controlled `single_save` uses Stage B approval, and `batch_save` plus publish remain closed.
+
+The exact RED selection then returned:
+
+```text
+4 passed in 1.32s
+```
+
+Focused full-file checks:
+
+```text
+tests/test_task_start_guard.py: 118 passed in 33.55s
+tests/test_login_flow.py: 357 passed in 149.25s
+```
+
+Final combined review regression:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q tests/test_task_start_guard.py tests/test_acquisition_claim_workflow.py tests/test_final_delivery_check_summary.py tests/test_login_flow.py
+```
+
+Result:
+
+```text
+501 passed in 202.26s
+```

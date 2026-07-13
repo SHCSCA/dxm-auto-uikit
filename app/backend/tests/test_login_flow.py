@@ -1420,6 +1420,16 @@ def test_login_continue_returns_recoverable_state_when_browser_runner_crashes(mo
     assert data['requires_user_action'] is True
 
 
+def test_login_success_copy_describes_controlled_two_stage_start_boundary():
+    state = main_module.build_login_state({"logged_in": True})
+
+    operator_copy = f"{state['message']} {state['next_action']}"
+    assert "claim_only 可按 Stage A 审批启动" in operator_copy
+    assert "single_save 可按 Stage B 审批启动" in operator_copy
+    assert "batch_save 和发布仍关闭" in operator_copy
+    assert "claim_only、batch_save 和发布仍未放行" not in operator_copy
+
+
 def test_login_continue_returns_success_state(monkeypatch):
     flow = DummyLoginFlow()
     monkeypatch.setattr('src.main.login_flow', flow)
