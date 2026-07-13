@@ -61,11 +61,6 @@ from src.services.delivery_workspace import build_delivery_workspace, l2_real_pr
 from src.services.agent_console import AgentConsoleService
 from src.services.config_preview import ConfigPreviewService
 from src.services.template_center import template_center_metadata
-from src.services.starter_templates import (
-    build_starter_templates,
-    repair_legacy_starter_template,
-    starter_template_matches,
-)
 from src.ws import ConnectionManager
 
 @asynccontextmanager
@@ -510,74 +505,7 @@ def get_task(task_id: int):
 @app.post('/api/tasks')
 def create_task(payload: TaskCreate):
     _assert_task_create_scope(payload)
-    data = payload.model_dump()
-    _ensure_single_save_starter_templates(data)
-    return repo.create_task(data)
-
-
-def _ensure_single_save_starter_templates(data: dict[str, Any]) -> None:
-    if data.get('mode') != 'single_save':
-        return
-    product_ids = data.get('product_ids') or []
-    if len(product_ids) != 1:
-        return
-    product = repo.get_product(int(product_ids[0]))
-    if not product:
-        return
-    task_payload = data.get('payload') if isinstance(data.get('payload'), dict) else {}
-    product_payload = product.get('payload') if isinstance(product.get('payload'), dict) else {}
-    store_name = str(
-        task_payload.get('store_name')
-        or product_payload.get('store_name')
-        or repo._store_name_for_id(data.get('store_id'))  # noqa: SLF001 - repository owns store lookup.
-        or ''
-    ).strip()
-    category_name = str(
-        product.get('category_name')
-        or product_payload.get('category_name')
-        or task_payload.get('category_name')
-        or ''
-    ).strip()
-    platform = str(task_payload.get('platform') or product_payload.get('platform') or 'AliExpress').strip()
-    if not store_name or not category_name:
-        return
-
-    existing_templates = repo.list_templates()
-    for starter_template in build_starter_templates(
-        store_name=store_name,
-        category_name=category_name,
-        platform=platform or 'AliExpress',
-    ):
-        template_type = str(starter_template.get('template_type') or '').strip().lower()
-        matched_template = next(
-            (
-                template
-                for template in existing_templates
-                if starter_template_matches(
-                    template,
-                    template_type=template_type,
-                    store_name=store_name,
-                    category_name=category_name,
-                    platform=platform or 'AliExpress',
-                )
-            ),
-            None,
-        )
-        if matched_template:
-            repaired_template = repair_legacy_starter_template(
-                matched_template,
-                starter_template,
-                category_name=category_name,
-            )
-            if repaired_template and matched_template.get('id') is not None:
-                updated_template = repo.update_template(int(matched_template['id']), repaired_template)
-                if updated_template:
-                    existing_templates = [
-                        updated_template if template.get('id') == updated_template.get('id') else template
-                        for template in existing_templates
-                    ]
-            continue
-        existing_templates.append(repo.create_template(starter_template))
+    return repo.create_task(payload.model_dump())
 
 
 @app.patch('/api/tasks/{task_id}/config-overrides')

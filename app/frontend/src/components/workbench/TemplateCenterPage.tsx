@@ -95,7 +95,7 @@ const fallbackTemplateCenterMetadata: TemplateCenterMetadata = {
     ] },
   ],
   source_priority: ['精确店铺/类目模板', '用户指定模板', '店铺默认模板', '系统默认模板', '商品原始数据', '高级：本次任务临时覆盖'],
-  actions: ['设为店铺默认模板', '设为类目默认模板', '另存为新模板', '套用默认配置模板', '高级：仅本次任务临时覆盖'],
+  actions: ['设为店铺默认模板', '设为类目默认模板', '另存为新模板', '高级：仅本次任务临时覆盖'],
 }
 
 export function TemplateCenterPage({
@@ -115,7 +115,6 @@ export function TemplateCenterPage({
   const [draftValues, setDraftValues] = useState<Record<string, string>>({})
   const [templateName, setTemplateName] = useState('')
   const [saveState, setSaveState] = useState({ status: '等待填写', detail: '选择分区后可保存为本次任务或店铺模板。' })
-  const [defaultTemplatePackState, setDefaultTemplatePackState] = useState('尚未生成默认配置模板套装')
   const pendingTemplateApplyNotice = useRef(false)
   const activeSection = metadata.sections.find((section) => section.id === activeSectionId) ?? metadata.sections[0]
   const sectionTemplates = useMemo(
@@ -168,14 +167,6 @@ export function TemplateCenterPage({
   const activeFilledCount = activeSection.fields.filter((field) => String(draftValues[field.key] ?? '').trim()).length
   const activeRequiredCount = activeSection.fields.filter((field) => field.required).length
   const activeFilledRequiredCount = activeSection.fields.filter((field) => field.required && String(draftValues[field.key] ?? '').trim()).length
-  const defaultDraftPack = useMemo(
-    () => metadata.sections.reduce<Record<string, Record<string, string>>>((pack, section) => {
-      pack[section.id] = defaultValuesForSection(section)
-      return pack
-    }, {}),
-    [metadata.sections],
-  )
-
   useEffect(() => {
     void getJsonOrDefault<TemplateCenterMetadata>('/api/template-center/metadata', fallbackTemplateCenterMetadata).then(setMetadata)
   }, [])
@@ -207,7 +198,7 @@ export function TemplateCenterPage({
 
   function applyTemplateChoice() {
     if (!templateChoice) {
-      setSaveState({ status: '无法套用模板', detail: '当前分区还没有可用模板；可以套用默认配置模板后保存。' })
+      setSaveState({ status: '无法套用模板', detail: '当前分区还没有可用模板；请直接填写字段并保存为店铺或类目模板。' })
       return
     }
     pendingTemplateApplyNotice.current = true
@@ -267,51 +258,6 @@ export function TemplateCenterPage({
     })
   }
 
-  function applyDefaultTemplate() {
-    setDraftValues(defaultValuesForSection(activeSection))
-    setTemplateName(`默认配置模板 - ${activeSection.label}`)
-    setSaveState({ status: '已套用默认配置模板', detail: '已填入常用默认值；执行前仍需按当前真实商品核对并保存。' })
-  }
-
-  function applyDefaultTemplatePack() {
-    setDraftValues(defaultDraftPack[activeSection.id] ?? defaultValuesForSection(activeSection))
-    setTemplateName(`默认配置模板 - ${activeSection.label}`)
-    setDefaultTemplatePackState(`已生成默认模板草稿；已覆盖全部编辑页分区 ${metadata.sections.length} 个。`)
-    setSaveState({ status: '已生成默认模板草稿', detail: '默认配置只是起点，不会自动进入真实执行；请按当前真实商品核对后保存。' })
-  }
-
-  async function saveDefaultTemplatePackAsStoreTemplates() {
-    await saveWithState('正在保存默认配置模板套装', async () => {
-      const savedTemplates = await Promise.all(metadata.sections.map((section) => {
-        const existingDefaultTemplate = workspace.templates.find((template) => (
-          template.template_type === section.template_type
-          && template.binding_scope === bindingScope
-          && template.template_name === `默认配置模板 - ${section.label}`
-          && template.payload?.default_template_pack === true
-        ))
-        const body = {
-          template_type: section.template_type,
-          template_name: `默认配置模板 - ${section.label}`,
-          binding_scope: bindingScope,
-          payload: {
-            [section.template_type]: parseSectionValues(section, defaultDraftPack[section.id] ?? defaultValuesForSection(section)),
-            binding: defaultBinding('store', currentStore, currentCategory),
-            template_scope: 'store',
-            default_template_pack: true,
-          },
-          is_enabled: true,
-        }
-        return existingDefaultTemplate ? patchJson<Template>(`/api/templates/${existingDefaultTemplate.id}`, body) : postJson<Template>('/api/templates', body)
-      }))
-      const activeSavedTemplate = savedTemplates.find((template) => template.template_type === activeSection.template_type)
-      if (activeSavedTemplate) {
-        setSelectedTemplateId(String(activeSavedTemplate.id))
-      }
-      setDefaultTemplatePackState(`默认配置模板套装已保存；已生成 ${savedTemplates.length} 套店铺模板。`)
-      setSaveState({ status: '默认配置模板套装已保存', detail: '默认配置只是起点，不会自动进入真实执行；重复保存会更新默认配置模板套装，不覆盖已有正式店铺模板。' })
-    })
-  }
-
   async function saveWithState(label: string, action: () => Promise<void>) {
     setSaveState({ status: label, detail: '请等待当前保存动作完成。' })
     try {
@@ -344,7 +290,7 @@ export function TemplateCenterPage({
           <span>
             <strong>当前实际使用</strong>
             <b>{activeTemplate ? activeTemplate.template_name : '还没有保存模板'}</b>
-            <small>{activeTemplate ? `本次执行会使用：${activeSection.label} / ${activeTemplate.template_name}` : '请先套用默认配置模板或填写表单，再保存为模板。'}</small>
+            <small>{activeTemplate ? `本次执行会使用：${activeSection.label} / ${activeTemplate.template_name}` : '当前分区没有可执行模板；请直接填写并保存为店铺或类目模板。'}</small>
           </span>
           <span>
             <strong>保存状态</strong>
@@ -363,29 +309,6 @@ export function TemplateCenterPage({
           </span>
         </div>
         <small className="template-center-receipt">{saveState.detail} 选择或修改模板只会影响当前表单，保存为模板后才会进入默认执行路径。</small>
-        <details className="template-default-pack" aria-label="默认配置模板套装">
-          <summary>
-            <span>
-              <strong>默认配置模板套装</strong>
-              <b>{defaultTemplatePackState}</b>
-            </span>
-            <em>展开管理</em>
-          </summary>
-          <div className="template-default-pack__body">
-            <span>
-              <strong>用途</strong>
-              <b>生成全部分区草稿</b>
-              <small>一套验收样例默认值，只作为起点；不会自动进入真实执行。</small>
-            </span>
-            <span>
-              <strong>覆盖范围</strong>
-              <b>已覆盖全部编辑页分区</b>
-              <small>{metadata.sections.map((section) => section.label).join(' / ')}。重复保存会更新默认配置模板套装，不覆盖已有正式店铺模板。</small>
-            </span>
-            <button className="button button--secondary" type="button" onClick={applyDefaultTemplatePack}>生成默认模板草稿</button>
-            <button className="button button--quiet" type="button" onClick={() => { void saveDefaultTemplatePackAsStoreTemplates() }}>保存全部分区为店铺模板</button>
-          </div>
-        </details>
       </div>
 
       <div className="module-card span-1 template-section-panel">
@@ -433,11 +356,6 @@ export function TemplateCenterPage({
             <input value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="例如 Dang Kang 立牌类目模板" />
           </label>
           <button className="button button--secondary" type="button" onClick={applyTemplateChoice} disabled={!templateChoice}>套用到表单</button>
-          <button className="button button--quiet" type="button" onClick={applyDefaultTemplate}>套用默认配置模板</button>
-        </div>
-        <div className="template-default-note">
-          <strong>默认配置模板</strong>
-          <span>基于验收样例值快速填充分区字段，只作为起点；保存前仍需要按当前真实商品核对。旧版“预置配置模板”等同于这里的默认配置模板。</span>
         </div>
 
         <div className="template-field-grid">
@@ -514,7 +432,7 @@ export function TemplateCenterPage({
             )) : (
               <div className="empty-state">
                 <strong>当前分区还没有模板</strong>
-                <span>可套用默认配置模板后另存，或直接填写字段保存。</span>
+                <span>请直接填写字段保存为店铺或类目模板；缺失字段会由配置检查阻止执行。</span>
               </div>
             )}
           </div>
@@ -583,53 +501,6 @@ function defaultBinding(scope: 'store' | 'category', storeName: string, category
     binding.category_name = categoryName
   }
   return binding
-}
-
-function defaultValuesForSection(section: TemplateCenterSection) {
-  return Object.fromEntries(section.fields.map((field) => [field.key, defaultValueForField(field.label)]))
-}
-
-function defaultValueForField(label: string) {
-  const defaults: Record<string, string> = {
-    店铺: 'Dang Kang',
-    任务模式: '单商品只保存',
-    绑定类目: '立牌类谷子',
-    目标类目: '立牌类谷子',
-    类目关键词: '立牌',
-    认领标记: 'AI-OPS',
-    库存: '200',
-    'JIT 库存': '100',
-    普通库存: '100',
-    商品价: '7.99',
-    供货价: '5.20',
-    'EU 外包装图': '微信图片_202504092228421.jpg',
-    营销图策略: '使用商品图补齐 3:4',
-    主图策略: '保留合格 800x800 主图，异常图自动修复',
-    重量: '0.03',
-    '重量 kg': '0.03',
-    '长 cm': '10',
-    '宽 cm': '10',
-    '高 cm': '2',
-    物流属性: '普货',
-    报关品名: 'Acrylic stand',
-    材质: 'Acrylic',
-    用途: 'Decoration',
-    是否原包装: '否',
-    '半托管长 cm': '10',
-    '半托管宽 cm': '10',
-    '半托管高 cm': '2',
-    货号策略: '按来源商品ID生成安全货号',
-    条码策略: '留空',
-    属性信息模板: '万代立牌\nbilibili动漫周边\n万代',
-    描述模板: '详情描述模板-ACG立牌',
-    运费模板: '石油40g普货包裹.\n40g普货包裹',
-    服务模板: 'Service Template for New Sellers',
-    欧盟责任人: 'Jacqueiline Marti',
-    制造商: 'jiyang county thunder\nJiyang County thunder',
-    合规模板: '合规模板\n钥匙扣\nkeychain',
-    半托管模板: '半托管模板',
-  }
-  return defaults[label] ?? ''
 }
 
 function previewFieldForKey(group: ConfigPreview['fieldGroups'][number] | undefined, key: string, label: string) {

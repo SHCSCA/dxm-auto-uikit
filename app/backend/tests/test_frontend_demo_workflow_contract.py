@@ -337,7 +337,6 @@ def test_template_center_page_presents_multi_template_chinese_section_workflow()
         "保存为模板后才会进入默认执行路径",
         "选择要编辑的模板",
         "套用到表单",
-        "默认配置模板",
         "当前分区执行取值核对",
         "更多模板管理与模板清单",
         "店铺与任务基础",
@@ -356,8 +355,6 @@ def test_template_center_page_presents_multi_template_chinese_section_workflow()
         "保存为类目模板",
         "另存为新模板",
         "停用当前模板",
-        "套用默认配置模板",
-        "旧版“预置配置模板”",
         "一次只编辑一个分区",
     ]:
         assert label in page_source
@@ -372,39 +369,32 @@ def test_template_center_page_presents_multi_template_chinese_section_workflow()
     assert "本次执行会使用" in page_source
     assert "executionSections" in page_source
     assert "当前分区执行取值核对" in page_source
-    for forbidden in ["配置中心", "默认测试模板", "测试用", "L2", "run-id", "probe", "QA guarded product"]:
+    for forbidden in ["配置中心", "默认测试模板", "套用默认配置模板", "预置配置模板", "测试用", "L2", "run-id", "probe", "QA guarded product"]:
         assert forbidden not in page_source
 
 
-def test_template_center_exposes_default_template_pack_as_customer_safe_starting_point():
+def test_template_center_cannot_persist_bundled_default_template_values():
     page_source = TEMPLATE_CENTER_PAGE_TSX.read_text(encoding="utf-8")
-    styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
 
-    for label in [
-        "默认配置模板套装",
-        "一套验收样例默认值",
-        "已覆盖全部编辑页分区",
-        "生成默认模板草稿",
+    for forbidden in [
         "保存全部分区为店铺模板",
-        "defaultTemplatePackState",
-        "applyDefaultTemplatePack",
         "saveDefaultTemplatePackAsStoreTemplates",
         "defaultDraftPack",
-        "默认配置只是起点",
-        "不会自动进入真实执行",
-        "不覆盖已有正式店铺模板",
-        "重复保存会更新默认配置模板套装",
-        "existingDefaultTemplate",
+        "defaultValuesForSection",
+        "defaultValueForField",
+        "default_template_pack: true",
+        "套用默认配置模板",
+        "微信图片_202504092228421.jpg",
+        "Jacqueiline Marti",
     ]:
-        assert label in page_source
-    assert "metadata.sections.reduce" in page_source
-    assert "setDraftValues(defaultDraftPack[activeSection.id]" in page_source
-    assert "Promise.all(metadata.sections.map" in page_source
-    assert "template_name: `默认配置模板 - ${section.label}`" in page_source
-    assert "existingDefaultTemplate ? patchJson<Template>" in page_source
-    assert "default_template_pack: true" in page_source
-    assert ".template-default-pack" in styles_source
-    assert "grid-template-columns: minmax(260px, 1.2fr) minmax(220px, 1fr) auto auto;" in styles_source
+        assert forbidden not in page_source
+
+    assert "postJson<Template>('/api/templates', body)" in page_source
+    assert "patchJson<Template>(`/api/templates/${activeTemplate.id}`, body)" in page_source
+    assert "保存为店铺模板" in page_source
+    assert "保存为类目模板" in page_source
+    assert "当前分区还没有模板" in page_source
+    assert "直接填写字段保存" in page_source
 
 
 def test_screen_reader_only_text_cannot_intercept_sidebar_clicks():

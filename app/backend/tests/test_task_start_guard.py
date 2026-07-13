@@ -2547,7 +2547,7 @@ def test_config_defaults_resolver_prefers_specific_template_even_when_input_orde
     ]
 
 
-def test_create_single_save_task_seeds_starter_templates_for_claimed_product_category(tmp_path, monkeypatch):
+def test_create_single_save_task_leaves_empty_template_library_unchanged(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     store = repo.create_store("Dang Kang", "AliExpress")
     claim_task = repo.create_acquisition_claim_request(
@@ -2583,6 +2583,8 @@ def test_create_single_save_task_seeds_starter_templates_for_claimed_product_cat
         }
     )
     repo.mark_acquisition_claim_completed(claim_task["id"], product)
+    templates_before = repo.list_templates()
+    assert templates_before == []
 
     response = client.post(
         "/api/tasks",
@@ -2599,32 +2601,16 @@ def test_create_single_save_task_seeds_starter_templates_for_claimed_product_cat
 
     assert response.status_code == 200
     task = repo.get_task_private(response.json()["id"])
-    templates = repo.list_templates()
-    template_types = {template["template_type"] for template in templates}
-    assert {
-        "category",
-        "sku",
-        "pricing",
-        "logistics",
-        "image",
-        "compliance",
-        "semi_managed",
-        "dxm_reference",
-    }.issubset(template_types)
-    assert all("QA_CATEGORY" not in template["binding_scope"] for template in templates)
+    templates_after = repo.list_templates()
+    assert templates_after == templates_before
 
-    validation = ConfigValidationService().validate_task(task, templates, repo.get_product(product["id"]))
-    assert validation["ok"] is True
-    defaults = ConfigDefaultsResolver().resolve(templates, task, repo.get_product(product["id"]))
-    assert any("立牌类谷子" in str(item["template_name"]) for item in defaults.template_trace)
-    assert defaults.defaults["category"]["attribute_template_priorities"] == ["万代立牌", "bilibili动漫周边", "万代"]
-    assert defaults.defaults["dxm_reference_templates_resolved"]["attribute_info"] == {
-        "names": ["万代立牌", "bilibili动漫周边", "万代"],
-        "required": True,
-    }
+    validation = ConfigValidationService().validate_task(task, templates_after, repo.get_product(product["id"]))
+    assert validation["ok"] is False
+    assert validation["error_code"] == "E302"
+    assert validation["missing"]
 
 
-def test_create_single_save_task_repairs_legacy_placeholder_attribute_template(tmp_path, monkeypatch):
+def test_create_single_save_task_leaves_legacy_template_library_unchanged(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     store = repo.create_store("Dang Kang", "AliExpress")
     claim_task = repo.create_acquisition_claim_request(
@@ -2691,6 +2677,7 @@ def test_create_single_save_task_repairs_legacy_placeholder_attribute_template(t
             "is_enabled": True,
         }
     )
+    templates_before = repo.list_templates()
 
     response = client.post(
         "/api/tasks",
@@ -2706,10 +2693,8 @@ def test_create_single_save_task_repairs_legacy_placeholder_attribute_template(t
     )
 
     assert response.status_code == 200
-    templates = repo.list_templates()
-    defaults = ConfigDefaultsResolver().resolve(templates, repo.get_task_private(response.json()["id"]), repo.get_product(product["id"]))
-    assert defaults.defaults["category"]["attribute_template_priorities"] == ["万代立牌", "bilibili动漫周边", "万代"]
-    assert defaults.defaults["dxm_reference_templates_resolved"]["attribute_info"]["names"] == ["万代立牌", "bilibili动漫周边", "万代"]
+    assert repo.get_task_private(response.json()["id"])["mode"] == "single_save"
+    assert repo.list_templates() == templates_before
 
 
 def test_config_preview_covers_dxm_edit_page_sections_and_reference_templates(tmp_path, monkeypatch):
