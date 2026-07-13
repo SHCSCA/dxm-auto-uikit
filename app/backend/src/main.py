@@ -2246,7 +2246,7 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
     approver_ok = bool(
         request_approver
         and stored_approver
-        and hmac.compare_digest(request_approver, stored_approver)
+        and hmac.compare_digest(request_approver.encode('utf-8'), stored_approver.encode('utf-8'))
     )
     required_confirmation = CLAIM_CONFIRMATION if mode == 'claim_only' else L3_CONFIRMATION
     approved = (

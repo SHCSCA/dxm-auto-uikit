@@ -124,3 +124,55 @@ Result:
 ```text
 501 passed in 202.26s
 ```
+
+## Second review fix: non-ASCII approver comparison
+
+Second review found that `hmac.compare_digest()` was receiving normalized Python `str` values. Matching non-ASCII approvers such as `张三` therefore raised `TypeError` instead of allowing the approved task to start.
+
+### Second review RED
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q tests/test_task_start_guard.py::test_claim_only_start_accepts_matching_chinese_stage_a_approver tests/test_task_start_guard.py::test_single_save_start_accepts_matching_chinese_stage_b_approver
+```
+
+Result before the fix:
+
+```text
+2 failed in 1.43s
+```
+
+Both Stage A and Stage B returned HTTP 500 instead of 200. The active comparison primitive reproduced the underlying exception:
+
+```text
+TypeError: comparing strings with non-ASCII characters is not supported
+```
+
+### Second review GREEN
+
+The minimal implementation keeps trimming, non-empty checks, and mismatch rejection unchanged, but compares the normalized approver values as UTF-8 bytes.
+
+Exact RED selection after the fix:
+
+```text
+2 passed in 0.97s
+```
+
+Approval-focused regression:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q tests/test_task_start_guard.py -k "approval or approver"
+```
+
+```text
+24 passed, 96 deselected in 5.69s
+```
+
+Complete start-guard regression:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q tests/test_task_start_guard.py
+```
+
+```text
+120 passed in 29.15s
+```

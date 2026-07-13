@@ -536,6 +536,37 @@ def test_claim_only_start_rejects_mismatched_stage_a_approver(tmp_path, monkeypa
     assert runner.calls == []
 
 
+def test_claim_only_start_accepts_matching_chinese_stage_a_approver(tmp_path, monkeypatch):
+    _client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    client = TestClient(app, raise_server_exceptions=False)
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_claim_request(repo)
+    approval_response = client.post(
+        f"/api/tasks/{task['id']}/manual-approval",
+        json={
+            "approved_by": "张三",
+            "confirmation": "确认将该已有商品认领到商品箱",
+        },
+    )
+    assert approval_response.status_code == 200
+
+    response = client.post(
+        f"/api/tasks/{task['id']}/start",
+        json={
+            "manual_approval": True,
+            "approval_token": approval_response.json()["approvalToken"],
+            "approved_by": "张三",
+            "confirmation": "确认将该已有商品认领到商品箱",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert repo.get_task(task["id"])["status"] == "running"
+
+
 def test_claim_only_start_rejects_empty_stored_stage_a_approver(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
@@ -605,6 +636,34 @@ def test_single_save_start_rejects_mismatched_stage_b_approver(tmp_path, monkeyp
     assert response.status_code == 403
     assert "approved_by" in response.json()["detail"]
     assert runner.calls == []
+
+
+def test_single_save_start_accepts_matching_chinese_stage_b_approver(tmp_path, monkeypatch):
+    _client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    client = TestClient(app, raise_server_exceptions=False)
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_task(repo)
+    approval_response = client.post(
+        f"/api/tasks/{task['id']}/manual-approval",
+        json={"approved_by": "张三", "confirmation": "CONFIRM_DXM_SAVE_ONLY"},
+    )
+    assert approval_response.status_code == 200
+
+    response = client.post(
+        f"/api/tasks/{task['id']}/start",
+        json={
+            "manual_approval": True,
+            "approval_token": approval_response.json()["approvalToken"],
+            "approved_by": "张三",
+            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert repo.get_task(task["id"])["status"] == "running"
 
 
 def test_batch_save_remains_unreleased_when_claim_only_is_released(tmp_path, monkeypatch):
