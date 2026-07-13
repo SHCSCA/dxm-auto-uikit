@@ -5,6 +5,30 @@ from fastapi.testclient import TestClient
 from src.main import app
 
 
+def test_current_real_dxm_gate_summary_blocks_ready_when_two_stage_is_false(monkeypatch):
+    import src.main as main
+
+    monkeypatch.setattr(
+        main,
+        "build_delivery_workspace",
+        lambda _repo: {
+            "regression_gates": [
+                {"level": "L2", "status": "passed"},
+                {"level": "L3", "status": "passed"},
+            ],
+            "delivery_readiness": {"ready": True},
+            "two_stage_acceptance": {"passed": False, "status": "missing_save_stage"},
+        },
+    )
+
+    summary = main._current_real_dxm_gate_summary()
+
+    assert summary["readiness"] == "BLOCKED"
+    assert summary["two_stage_ready"] is False
+    assert summary["two_stage_status"] == "missing_save_stage"
+    assert "Two-stage acceptance is not passed" in summary["blocked_reason"]
+
+
 def test_final_delivery_check_summary_returns_not_run_when_report_missing(tmp_path, monkeypatch):
     import src.main as main
 

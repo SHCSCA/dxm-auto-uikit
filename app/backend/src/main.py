@@ -135,13 +135,14 @@ runner = V1TaskRunner(
 )
 
 REAL_DXM_MUTATION_MODES = {'claim_only', 'single_save', 'batch_save'}
-RELEASED_REAL_DXM_MUTATION_MODES = {'single_save'}
+RELEASED_REAL_DXM_MUTATION_MODES = {'claim_only', 'single_save'}
 REAL_WRITE_START_MODES = REAL_DXM_MUTATION_MODES
 ALLOWED_START_MODES = {'probe', 'dry_run', 'claim_only', 'single_save', 'batch_save'}
 SAVE_ONLY_PUBLISH_SCENE = 'SMT_SEMI_MANAGED_SAVE_ONLY'
 CLAIM_TO_DRAFT_PUBLISH_SCENE = 'CONTROLLED_CLAIM_TO_DRAFT_ONLY'
+CLAIM_CONFIRMATION = '确认将该已有商品认领到商品箱'
 L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
-UNRELEASED_REAL_DXM_MODE_DETAIL = 'Only controlled single_save is released for real DXM mutation'
+UNRELEASED_REAL_DXM_MODE_DETAIL = 'Only controlled claim_only and single_save are released for real DXM mutation'
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FINAL_DELIVERY_CHECK_JSON = REPO_ROOT / 'outputs' / 'final-delivery-check' / 'final-delivery-check.json'
 RUNTIME_LAUNCHER_LOG_FILE = Path(
@@ -593,7 +594,7 @@ def update_task_config_overrides(task_id: int, payload: TaskConfigOverrideReques
 
 @app.post('/api/tasks/{task_id}/manual-approval')
 def approve_task_for_real_dxm(task_id: int, payload: TaskManualApprovalRequest):
-    _assert_task_can_receive_manual_approval(task_id, payload)
+    required_confirmation = _assert_task_can_receive_manual_approval(task_id, payload)
     token = secrets.token_urlsafe(24)
     task = repo.set_task_manual_approval(
         task_id,
@@ -608,7 +609,7 @@ def approve_task_for_real_dxm(task_id: int, payload: TaskManualApprovalRequest):
         'ok': True,
         'taskId': task_id,
         'approvalToken': token,
-        'confirmation': L3_CONFIRMATION,
+        'confirmation': required_confirmation,
         'approvedBy': approval.get('approved_by'),
         'approvedAt': approval.get('approved_at'),
         'l2GateStatus': 'passed',
@@ -2110,7 +2111,7 @@ def _current_real_dxm_gate_summary():
     two_stage_status = two_stage_acceptance.get('status') if isinstance(two_stage_acceptance, dict) else None
     l2_status = l2_gate.get('status') if l2_gate else None
     l3_status = l3_gate.get('status') if l3_gate else None
-    if l2_status == 'passed' and l3_status == 'passed' and delivery_ready:
+    if l2_status == 'passed' and l3_status == 'passed' and delivery_ready and two_stage_ready:
         return {
             'readiness': 'READY',
             'blocked_reason': '',
@@ -2126,8 +2127,10 @@ def _current_real_dxm_gate_summary():
         reason = f"L2 gate is {l2_status}; {l2_gate.get('detail') or 'real DXM writes require fresh dual-target readonly evidence.'}"
     elif l3_status != 'passed':
         reason = f"L3 gate is {l3_status}; {l3_gate.get('detail') or 'real DXM writes require fresh single_save canary evidence.'}"
+    elif not two_stage_ready:
+        reason = f"Two-stage acceptance is not passed: {two_stage_status or 'missing'}; claim and save proof are both required."
     else:
-        reason = 'L3 evidence readiness is incomplete in the current workspace.'
+        reason = 'Delivery readiness is incomplete in the current workspace.'
     return {
         'readiness': 'BLOCKED',
         'blocked_reason': reason,
@@ -2167,7 +2170,7 @@ def _final_check_stale_blocked_reason(freshness: str) -> str:
     return '最终验收未覆盖当前代码：无法确认报告与当前代码一致，请重新运行最终验收后再启动真实保存。'
 
 
-def _assert_task_can_receive_manual_approval(task_id: int, request: TaskManualApprovalRequest) -> None:
+def _assert_task_can_receive_manual_approval(task_id: int, request: TaskManualApprovalRequest) -> str:
     task = repo.get_task_private(task_id)
     if not task:
         raise HTTPException(status_code=404, detail='Task not found')
@@ -2178,19 +2181,28 @@ def _assert_task_can_receive_manual_approval(task_id: int, request: TaskManualAp
         raise HTTPException(status_code=403, detail=UNRELEASED_REAL_DXM_MODE_DETAIL)
     if task.get('status') != 'draft':
         raise HTTPException(status_code=409, detail=f"Task cannot be approved from status: {task.get('status')}")
-    if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
-        raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')
-    _assert_real_task_uses_non_fixture_products(task)
+    if mode == 'claim_only':
+        if str(task.get('publish_scene') or '') != CLAIM_TO_DRAFT_PUBLISH_SCENE:
+            raise HTTPException(status_code=403, detail='Controlled claim_only task requires claim-to-draft scene')
+        _assert_claim_only_acquisition_task(task)
+    else:
+        _assert_single_save_product_count(task.get('payload') or {}, status_code=409)
+        _assert_real_task_uses_non_fixture_products(task)
+        _assert_single_save_uses_claimed_draft_product((task.get('payload') or {}).get('product_ids') or [])
+        if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
+            raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')
+    required_confirmation = CLAIM_CONFIRMATION if mode == 'claim_only' else L3_CONFIRMATION
     if not request.approved_by or not request.approved_by.strip():
         raise HTTPException(status_code=400, detail='approved_by is required')
-    if request.confirmation != L3_CONFIRMATION:
-        raise HTTPException(status_code=400, detail=f'confirmation must be {L3_CONFIRMATION}')
+    if request.confirmation != required_confirmation:
+        raise HTTPException(status_code=400, detail=f'confirmation must be {required_confirmation}')
     l2_gate = l2_real_probe_gate()
     if l2_gate.get('status') != 'passed':
         raise HTTPException(
             status_code=403,
             detail=f"L2 readonly probe gate is not passed: {l2_gate.get('status')}",
         )
+    return required_confirmation
 
 
 def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
@@ -2216,20 +2228,12 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
         if str(task.get('publish_scene') or '') != CLAIM_TO_DRAFT_PUBLISH_SCENE:
             raise HTTPException(status_code=403, detail='Controlled claim_only task requires claim-to-draft scene')
         _assert_claim_only_acquisition_task(task)
-        l2_gate = l2_real_probe_gate()
-        if l2_gate.get('status') != 'passed':
-            raise HTTPException(
-                status_code=403,
-                detail=f"L2 readonly probe gate is not passed: {l2_gate.get('status')}",
-            )
-        return
-    _assert_single_save_product_count(task.get('payload') or {}, status_code=409)
-    _assert_real_task_uses_non_fixture_products(task)
-    if mode == 'single_save':
+    else:
+        _assert_single_save_product_count(task.get('payload') or {}, status_code=409)
+        _assert_real_task_uses_non_fixture_products(task)
         _assert_single_save_uses_claimed_draft_product(payload.get('product_ids') or [])
-
-    if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
-        raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')
+        if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
+            raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')
 
     approval = payload.get('manual_approval') or {}
     if not isinstance(approval, dict):
@@ -2237,10 +2241,11 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
     token_hash = approval.get('token_hash')
     request_token_hash = hashlib.sha256(request.approval_token.encode('utf-8')).hexdigest() if request.approval_token else ''
     token_ok = bool(token_hash and hmac.compare_digest(request_token_hash, str(token_hash)))
+    required_confirmation = CLAIM_CONFIRMATION if mode == 'claim_only' else L3_CONFIRMATION
     approved = (
         request.manual_approval is True
-        and request.confirmation == L3_CONFIRMATION
-        and bool(request.approved_by)
+        and request.confirmation == required_confirmation
+        and bool(request.approved_by and request.approved_by.strip())
         and approval.get('approved') is True
         and approval.get('source') == 'server'
         and token_ok
@@ -2248,7 +2253,7 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> None:
     if not approved:
         raise HTTPException(
             status_code=403,
-            detail='Manual approval is required before starting real claim_only/single_save/batch_save',
+            detail=f'Manual approval with confirmation {required_confirmation} is required before starting real {mode}',
         )
     l2_gate = l2_real_probe_gate()
     if l2_gate.get('status') != 'passed':

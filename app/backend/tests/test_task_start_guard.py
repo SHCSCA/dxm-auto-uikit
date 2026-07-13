@@ -121,11 +121,11 @@ def _create_task(
     )
 
 
-def test_released_real_dxm_mutation_scope_remains_single_save_only():
+def test_released_real_dxm_mutation_scope_is_controlled_two_stage_only():
     import src.main as main
 
-    assert main.RELEASED_REAL_DXM_MUTATION_MODES == {"single_save"}
-    assert "claim_only" not in main.RELEASED_REAL_DXM_MUTATION_MODES
+    assert main.RELEASED_REAL_DXM_MUTATION_MODES == {"claim_only", "single_save"}
+    assert "batch_save" not in main.RELEASED_REAL_DXM_MUTATION_MODES
 
 
 def _create_claim_request(repo: Repository, *, store_name: str = "Dang Kang"):
@@ -282,7 +282,7 @@ def test_main_runner_reuses_login_flow_executor_for_thread_bound_playwright():
     assert "workflow_executor=login_flow_executor" in runner_section
 
 
-def test_create_task_api_rejects_unreleased_or_wrong_scene_real_modes(tmp_path, monkeypatch):
+def test_create_task_api_rejects_wrong_scene_claim_and_unreleased_batch(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     store = repo.create_store("Dang Kang", "AliExpress")
     product = repo.create_product(
@@ -309,7 +309,7 @@ def test_create_task_api_rejects_unreleased_or_wrong_scene_real_modes(tmp_path, 
         },
     )
     assert claim_response.status_code == 403
-    assert "Only controlled single_save is released" in claim_response.json()["detail"]
+    assert "Controlled claim_only task requires claim-to-draft scene" in claim_response.json()["detail"]
 
     batch_response = client.post(
         "/api/tasks",
@@ -322,7 +322,7 @@ def test_create_task_api_rejects_unreleased_or_wrong_scene_real_modes(tmp_path, 
         },
     )
     assert batch_response.status_code == 403
-    assert "Only controlled single_save is released" in batch_response.json()["detail"]
+    assert "Only controlled claim_only and single_save are released" in batch_response.json()["detail"]
 
 
 def test_create_task_api_rejects_claim_only_with_existing_product_ids(tmp_path, monkeypatch):
@@ -353,8 +353,8 @@ def test_create_task_api_rejects_claim_only_with_existing_product_ids(tmp_path, 
         },
     )
 
-    assert response.status_code == 403
-    assert "Only controlled single_save is released" in response.json()["detail"]
+    assert response.status_code == 400
+    assert "without existing product_ids" in response.json()["detail"]
 
 
 def test_start_single_save_rejects_historical_multiple_products(tmp_path, monkeypatch):
@@ -413,7 +413,7 @@ def test_single_save_start_rejects_legacy_non_claimed_product_before_real_browse
     assert runner.calls == []
 
 
-def test_claim_only_start_rejects_before_l2_gate_because_mode_is_unreleased(tmp_path, monkeypatch):
+def test_claim_only_start_requires_stage_a_approval_before_l2_gate(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
@@ -423,11 +423,122 @@ def test_claim_only_start_rejects_before_l2_gate_because_mode_is_unreleased(tmp_
     response = client.post(f"/api/tasks/{task['id']}/start", json={})
 
     assert response.status_code == 403
-    assert "Only controlled single_save is released" in response.json()["detail"]
+    assert "确认将该已有商品认领到商品箱" in response.json()["detail"]
     assert runner.calls == []
 
 
-def test_claim_only_start_remains_unreleased_for_controlled_acquisition_claim(tmp_path, monkeypatch):
+def test_claim_only_start_rejects_missing_stage_a_confirmation(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_claim_request(repo)
+    _approve_task(repo, task["id"], "claim-stage-a-token")
+
+    response = client.post(
+        f"/api/tasks/{task['id']}/start",
+        json={
+            "manual_approval": True,
+            "approval_token": "claim-stage-a-token",
+            "approved_by": "ops-owner",
+        },
+    )
+
+    assert response.status_code == 403
+    assert "确认将该已有商品认领到商品箱" in response.json()["detail"]
+    assert runner.calls == []
+
+
+def test_claim_only_start_rejects_wrong_stage_a_confirmation(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_claim_request(repo)
+    _approve_task(repo, task["id"], "claim-stage-a-token")
+
+    response = client.post(
+        f"/api/tasks/{task['id']}/start",
+        json={
+            "manual_approval": True,
+            "approval_token": "claim-stage-a-token",
+            "approved_by": "ops-owner",
+            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
+        },
+    )
+
+    assert response.status_code == 403
+    assert "确认将该已有商品认领到商品箱" in response.json()["detail"]
+    assert runner.calls == []
+
+
+def test_claim_only_manual_approval_token_allows_stage_a_start(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_claim_request(repo)
+
+    approval_response = client.post(
+        f"/api/tasks/{task['id']}/manual-approval",
+        json={
+            "approved_by": "ops-owner",
+            "confirmation": "确认将该已有商品认领到商品箱",
+        },
+    )
+
+    assert approval_response.status_code == 200
+    approval_payload = approval_response.json()
+    assert approval_payload["confirmation"] == "确认将该已有商品认领到商品箱"
+
+    start_response = client.post(
+        f"/api/tasks/{task['id']}/start",
+        json={
+            "manual_approval": True,
+            "approval_token": approval_payload["approvalToken"],
+            "approved_by": "ops-owner",
+            "confirmation": "确认将该已有商品认领到商品箱",
+        },
+    )
+
+    assert start_response.status_code == 200
+    assert start_response.json()["ok"] is True
+    assert repo.get_task(task["id"])["status"] == "running"
+
+
+def test_single_save_manual_approval_keeps_stage_b_confirmation(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_task(repo)
+
+    response = client.post(
+        f"/api/tasks/{task['id']}/manual-approval",
+        json={"approved_by": "ops-owner", "confirmation": "CONFIRM_DXM_SAVE_ONLY"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["confirmation"] == "CONFIRM_DXM_SAVE_ONLY"
+
+
+def test_batch_save_remains_unreleased_when_claim_only_is_released(tmp_path, monkeypatch):
+    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+    import src.main as main
+
+    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
+    task = _create_task(repo, mode="batch_save")
+
+    response = client.post(
+        f"/api/tasks/{task['id']}/manual-approval",
+        json={"approved_by": "ops-owner", "confirmation": "CONFIRM_DXM_SAVE_ONLY"},
+    )
+
+    assert main.RELEASED_REAL_DXM_MUTATION_MODES == {"claim_only", "single_save"}
+    assert response.status_code == 403
+
+
+def test_claim_only_start_requires_manual_approval_when_l2_passes(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
@@ -437,7 +548,7 @@ def test_claim_only_start_remains_unreleased_for_controlled_acquisition_claim(tm
     response = client.post(f"/api/tasks/{task['id']}/start", json={})
 
     assert response.status_code == 403
-    assert "Only controlled single_save is released" in response.json()["detail"]
+    assert "确认将该已有商品认领到商品箱" in response.json()["detail"]
     assert runner.calls == []
 
 
@@ -454,23 +565,32 @@ def test_claim_only_start_rejects_existing_product_job_shape_after_release_gate(
 
     response = client.post(f"/api/tasks/{task['id']}/start", json={})
 
-    assert response.status_code == 403
-    assert "Only controlled single_save is released" in response.json()["detail"]
+    assert response.status_code == 409
+    assert "不能直接绑定本地商品" in response.json()["detail"]
     assert runner.calls == []
 
 
-def test_claim_only_start_rejects_any_real_store_because_mode_is_unreleased(tmp_path, monkeypatch):
+def test_claim_only_start_allows_any_real_store_with_stage_a_approval(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
     task = _create_claim_request(repo, store_name="Other Store")
+    _approve_task(repo, task["id"], "other-store-claim-token")
 
-    response = client.post(f"/api/tasks/{task['id']}/start", json={})
+    response = client.post(
+        f"/api/tasks/{task['id']}/start",
+        json={
+            "manual_approval": True,
+            "approval_token": "other-store-claim-token",
+            "approved_by": "ops-owner",
+            "confirmation": "确认将该已有商品认领到商品箱",
+        },
+    )
 
-    assert response.status_code == 403
-    assert "Only controlled single_save is released" in response.json()["detail"]
-    assert runner.calls == []
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert repo.get_task(task["id"])["status"] == "running"
 
 
 def test_unreleased_real_modes_reject_manual_approval(tmp_path, monkeypatch):
@@ -489,7 +609,7 @@ def test_unreleased_real_modes_reject_manual_approval(tmp_path, monkeypatch):
 
         assert response.status_code == 403
         detail = response.json()["detail"].lower()
-        assert "controlled single_save" in detail
+        assert "controlled claim_only and single_save" in detail
         assert "released" in detail
 
 
@@ -515,7 +635,7 @@ def test_unreleased_real_modes_cannot_start_after_approval_and_l2_passed(tmp_pat
 
         assert response.status_code == 403
         detail = response.json()["detail"].lower()
-        assert "controlled single_save" in detail
+        assert "controlled claim_only and single_save" in detail
         assert "released" in detail
         assert task["id"] not in runner.calls
     assert runner.calls == []
@@ -919,43 +1039,55 @@ def test_agent_console_execution_browser_rejects_unreleased_and_non_real_modes(t
         response = client.post("/api/agent-console/start", json={"task_id": task["id"], "launch_browser": True})
 
         assert response.status_code == 403
-        assert "Only controlled single_save is released" in response.json()["detail"]
+        assert "Only controlled claim_only and single_save are released" in response.json()["detail"]
 
 
-def test_agent_console_execution_browser_rejects_controlled_claim_only_task(tmp_path, monkeypatch):
+def test_agent_console_execution_browser_allows_controlled_claim_only_task(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
     class DummyAgentConsoleService:
-        def start(self, **payload):
-            raise AssertionError("claim_only must not launch an execution browser")
+        def __init__(self):
+            self.calls = []
 
+        def start(self, **payload):
+            self.calls.append(payload)
+            return {"ok": True}
+
+    service = DummyAgentConsoleService()
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
-    monkeypatch.setattr(main, "agent_console_service", DummyAgentConsoleService())
+    monkeypatch.setattr(main, "agent_console_service", service)
     task = _create_claim_request(repo)
 
     response = client.post("/api/agent-console/start", json={"task_id": task["id"], "launch_browser": True})
 
-    assert response.status_code == 403
-    assert "Only controlled single_save is released" in response.json()["detail"]
+    assert response.status_code == 200
+    assert service.calls[0]["task_id"] == task["id"]
+    assert service.calls[0]["launch_browser"] is True
 
 
-def test_agent_console_execution_browser_rejects_claim_only_for_any_real_store(tmp_path, monkeypatch):
+def test_agent_console_execution_browser_allows_claim_only_for_any_real_store(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
     class DummyAgentConsoleService:
-        def start(self, **payload):
-            raise AssertionError("claim_only must not launch an execution browser")
+        def __init__(self):
+            self.calls = []
 
+        def start(self, **payload):
+            self.calls.append(payload)
+            return {"ok": True}
+
+    service = DummyAgentConsoleService()
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
-    monkeypatch.setattr(main, "agent_console_service", DummyAgentConsoleService())
+    monkeypatch.setattr(main, "agent_console_service", service)
     task = _create_claim_request(repo, store_name="Other Store")
 
     response = client.post("/api/agent-console/start", json={"task_id": task["id"], "launch_browser": True})
 
-    assert response.status_code == 403
-    assert "Only controlled single_save is released" in response.json()["detail"]
+    assert response.status_code == 200
+    assert service.calls[0]["task_id"] == task["id"]
+    assert service.calls[0]["launch_browser"] is True
 
 
 def test_runtime_logs_tail_known_log_sources(tmp_path, monkeypatch):
@@ -3128,7 +3260,7 @@ def test_direct_real_dxm_mutation_rejects_unreleased_modes_even_after_l2_and_app
 
             assert response.status_code == 403
             detail = response.json()["detail"].lower()
-            assert "controlled single_save" in detail
+            assert "controlled claim_only and single_save" in detail
             assert "released" in detail
     assert flow.draft_box_actions == []
 
