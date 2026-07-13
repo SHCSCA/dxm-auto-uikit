@@ -1,0 +1,47 @@
+{
+  "identity": {
+    "schemaVersion": "dxm.runtime.identity.v1",
+    "instanceId": "desktop-测试-01",
+    "gitHead": "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+    "gitDirty": true,
+    "buildId": "build-β-001",
+    "packageVersion": "0.1.0",
+    "packageSha256": null,
+    "backendPid": 4321,
+    "browserAgentPid": 4321,
+    "browserExecutionModel": "in_process_thread",
+    "dataDir": "C:\\用户\\DXM\\data",
+    "workflowProfileDir": "C:\\用户\\DXM\\data\\browser_profiles\\dxm_workflow",
+    "resourceRoot": "D:\\Desktop\\py\\dxm-auto-uikit",
+    "startedAt": "2026-07-13T03:04:05.678Z"
+  },
+  "canonicalJson": "{\"backendPid\":4321,\"browserAgentPid\":4321,\"browserExecutionModel\":\"in_process_thread\",\"buildId\":\"build-β-001\",\"dataDir\":\"C:\\\\用户\\\\DXM\\\\data\",\"gitDirty\":true,\"gitHead\":\"ABCDEF0123456789ABCDEF0123456789ABCDEF01\",\"instanceId\":\"desktop-测试-01\",\"packageSha256\":null,\"packageVersion\":\"0.1.0\",\"resourceRoot\":\"D:\\\\Desktop\\\\py\\\\dxm-auto-uikit\",\"schemaVersion\":\"dxm.runtime.identity.v1\",\"startedAt\":\"2026-07-13T03:04:05.678Z\",\"workflowProfileDir\":\"C:\\\\用户\\\\DXM\\\\data\\\\browser_profiles\\\\dxm_workflow\"}",
+  "fingerprint": "18E66ACACE593A8819A66BFD02DB6D78CCB226B6503EC3012162CDF85182F139",
+  "pathCases": [
+    {
+      "platform": "win32",
+      "input": "c:/用户/DXM/data/../data/",
+      "expected": "C:\\用户\\DXM\\data"
+    },
+    {
+      "platform": "win32",
+      "input": "C:\\",
+      "expected": "C:\\"
+    },
+    {
+      "platform": "win32",
+      "input": "\\\\server\\share\\folder\\..\\profile\\",
+      "expected": "\\\\server\\share\\profile"
+    },
+    {
+      "platform": "posix",
+      "input": "/var/lib/../dxm/",
+      "expected": "/var/dxm"
+    },
+    {
+      "platform": "posix",
+      "input": "/",
+      "expected": "/"
+    }
+  ]
+}

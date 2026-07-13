@@ -1437,13 +1437,13 @@ def test_runtime_status_exposes_backend_data_dir_and_instance_id(tmp_path, monke
     import src.main as main
 
     client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
-    monkeypatch.setattr(main, "RUNTIME_BACKEND_INSTANCE_ID", "desktop-instance-test")
 
     response = client.get("/api/runtime/status?frontend_url=http://127.0.0.1:9")
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["backend"]["instanceId"] == "desktop-instance-test"
+    assert payload["backend"]["instanceId"] == payload["runtimeIdentity"]["instanceId"]
+    assert payload["backend"]["runtimeIdentity"] == payload["runtimeIdentity"]
     assert payload["paths"]["data_dir"] == str(main.DATA_DIR)
     assert payload["paths"]["l2_readonly_probe_dir"] == str(main.L2_READONLY_PROBE_OUTPUT_DIR)
 

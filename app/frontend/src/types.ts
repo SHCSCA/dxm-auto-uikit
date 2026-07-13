@@ -1,8 +1,27 @@
 export type Store = { id: number; name: string; platform: string; status: string }
+export type RuntimeIdentity = {
+  schemaVersion: string
+  instanceId: string
+  gitHead: string
+  gitDirty: boolean
+  buildId: string
+  packageVersion: string
+  packageSha256: string | null
+  backendPid: number
+  browserAgentPid: number
+  browserExecutionModel: 'in_process_thread'
+  dataDir: string
+  workflowProfileDir: string
+  resourceRoot: string
+  startedAt: string
+  fingerprint: string
+}
 export type DesktopRuntimeInfo = {
   repoRoot?: string | null
   backendPort?: number | null
+  backendPid?: number | null
   backendInstanceId?: string | null
+  runtimeIdentity?: RuntimeIdentity | null
   apiBase?: string | null
   frontendPath?: string | null
   backendLogPath?: string | null
@@ -146,7 +165,8 @@ export type RuntimeLogSource = 'backend' | 'frontend' | 'launcher' | 'npm' | 'ta
 export type RuntimeLogItem = { line: string; level: 'info' | 'warning' | 'error' | string; tags: string[] }
 export type RuntimeLogResponse = { source: string; path: string; exists: boolean; cursor: number; nextCursor: number; lines: string[]; items?: RuntimeLogItem[]; truncated?: boolean; modifiedAt?: string | null; ageSeconds?: number | null; stale?: boolean; fetchedAt?: string; error?: string }
 export type RuntimeStatus = {
-  backend: { status: string; url?: string; port?: number | null; instanceId?: string | null; detail?: string }
+  runtimeIdentity: RuntimeIdentity
+  backend: { status: string; url?: string; port?: number | null; instanceId?: string | null; runtimeIdentity: RuntimeIdentity; detail?: string }
   frontend: { status: string; url?: string; port?: number | null; detail?: string }
   agentConsole: { status: string; active: boolean; browserVisible: boolean; browserLaunching?: boolean; currentUrl?: string | null; profileDir?: string | null; lastError?: string | null }
   browserAgent?: {

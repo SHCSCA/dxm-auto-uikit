@@ -61,6 +61,7 @@ from src.services.delivery_workspace import build_delivery_workspace, l2_real_pr
 from src.services.agent_console import AgentConsoleService
 from src.services.config_preview import ConfigPreviewService
 from src.services.template_center import template_center_metadata
+from src.services.runtime_identity import RuntimeIdentity
 from src.ws import ConnectionManager
 
 @asynccontextmanager
@@ -155,7 +156,12 @@ RUNTIME_CONTROL_COMMAND_FILE = Path(
 )
 RUNTIME_CONTROL_MANAGED_BY_LAUNCHER = bool(os.environ.get('DXM_RUNTIME_CONTROL_COMMAND_FILE'))
 RUNTIME_DESKTOP_MODE = bool(os.environ.get('DXM_DESKTOP'))
-RUNTIME_BACKEND_INSTANCE_ID = os.environ.get('DXM_BACKEND_INSTANCE_ID')
+runtime_identity = RuntimeIdentity.from_environment(
+    data_dir=DATA_DIR,
+    repo_root=REPO_ROOT,
+    package_version=app.version,
+)
+RUNTIME_BACKEND_INSTANCE_ID = runtime_identity.instance_id
 RUNTIME_VIRTUAL_LOG_SOURCES = {'task', 'agent'}
 RUNTIME_LOG_LEVELS = {'info', 'warning', 'error'}
 RUNTIME_LOG_STALE_SECONDS = 30 * 60
@@ -251,9 +257,10 @@ def _mark_unfinished_jobs_after_runtime_recovery(
         )
 
 
-@app.get('/health', response_model=HealthResponse, response_model_exclude_none=True)
+@app.get('/health', response_model=HealthResponse)
 def health():
-    return HealthResponse(status='ok', instanceId=RUNTIME_BACKEND_INSTANCE_ID)
+    identity = runtime_identity.as_dict()
+    return HealthResponse(status='ok', instanceId=identity['instanceId'], runtimeIdentity=identity)
 
 
 @app.get('/api/engine')
@@ -727,12 +734,15 @@ def runtime_status(frontend_url: str | None = None):
     agent_status = agent_console_service.status()
     dxm_state = normalize_artifact_paths(login_flow.get_state())
     real_browser_status = _runtime_real_browser_status(agent_status, dxm_state)
+    identity = runtime_identity.as_dict()
     return {
+        'runtimeIdentity': identity,
         'backend': {
             'status': 'ok',
             'url': backend_url,
             'port': _url_port(backend_url),
-            'instanceId': RUNTIME_BACKEND_INSTANCE_ID,
+            'instanceId': identity['instanceId'],
+            'runtimeIdentity': identity,
             'detail': 'Backend API is responding',
         },
         'frontend': _runtime_http_service_status('frontend', frontend_url),

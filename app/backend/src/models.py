@@ -2,9 +2,28 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+class RuntimeIdentityResponse(BaseModel):
+    schemaVersion: str
+    instanceId: str
+    gitHead: str
+    gitDirty: bool
+    buildId: str
+    packageVersion: str
+    packageSha256: str | None
+    backendPid: int
+    browserAgentPid: int
+    browserExecutionModel: str
+    dataDir: str
+    workflowProfileDir: str
+    resourceRoot: str
+    startedAt: str
+    fingerprint: str
+
+
 class HealthResponse(BaseModel):
     status: str
-    instanceId: str | None = None
+    instanceId: str
+    runtimeIdentity: RuntimeIdentityResponse
 
 
 class StoreCreate(BaseModel):

@@ -6,6 +6,9 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DESKTOP_DIR = REPO_ROOT / "app" / "desktop"
 DESKTOP_PACKAGE = DESKTOP_DIR / "package.json"
 DESKTOP_PORTABLE_PATCH = DESKTOP_DIR / "scripts" / "patch-electron-builder-portable.cjs"
+DESKTOP_BUILD_MANIFEST = DESKTOP_DIR / "scripts" / "generate-build-manifest.cjs"
+DESKTOP_RUNTIME_IDENTITY = DESKTOP_DIR / "src" / "runtime-identity.cjs"
+DESKTOP_RUNTIME_IDENTITY_TEST = DESKTOP_DIR / "test" / "runtime-identity.test.cjs"
 DESKTOP_MAIN = DESKTOP_DIR / "src" / "main.cjs"
 DESKTOP_PRELOAD = DESKTOP_DIR / "src" / "preload.cjs"
 DESKTOP_BUILDER = DESKTOP_DIR / "electron-builder.yml"
@@ -36,6 +39,21 @@ def test_desktop_package_declares_electron_entrypoints_and_build_scripts():
     assert "electron-builder" in package["devDependencies"]
 
 
+def test_desktop_build_generates_and_packages_frozen_build_manifest():
+    package = json.loads(DESKTOP_PACKAGE.read_text(encoding="utf-8"))
+    builder = DESKTOP_BUILDER.read_text(encoding="utf-8")
+
+    assert package["scripts"]["build:metadata"] == "node scripts/generate-build-manifest.cjs"
+    for script_name in ("build", "build:portable", "build:installer"):
+        assert "npm run build:metadata" in package["scripts"][script_name]
+        assert package["scripts"][script_name].index("npm run build:metadata") < package["scripts"][script_name].index("electron-builder")
+    assert "outputs/build-metadata/desktop-build-manifest.json" in builder.replace("..\\", "../")
+    assert "to: build-metadata/desktop-build-manifest.json" in builder
+    assert DESKTOP_BUILD_MANIFEST.exists()
+    assert DESKTOP_RUNTIME_IDENTITY.exists()
+    assert DESKTOP_RUNTIME_IDENTITY_TEST.exists()
+
+
 def test_desktop_build_patches_portable_launcher_exec_quoting():
     package = json.loads(DESKTOP_PACKAGE.read_text(encoding="utf-8"))
     patch_source = DESKTOP_PORTABLE_PATCH.read_text(encoding="utf-8")
@@ -50,6 +68,7 @@ def test_desktop_build_patches_portable_launcher_exec_quoting():
 
 def test_desktop_main_starts_backend_hidden_and_loads_frontend_with_api_base():
     source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    identity_source = DESKTOP_RUNTIME_IDENTITY.read_text(encoding="utf-8")
     kill_backend_section = source[source.index("function killBackendProcess"):source.index("async function createWindow")]
 
     assert "app.setName('DXM Agent Console')" in source
@@ -62,14 +81,16 @@ def test_desktop_main_starts_backend_hidden_and_loads_frontend_with_api_base():
     assert "Packaged backend Python is missing" in source
     assert "app.getPath('userData')" in source
     assert "src.main:app" in source
-    assert "DXM_DATA_DIR" in source
-    assert "DXM_RESOURCE_ROOT" in source
+    assert "buildBackendEnvironment" in source
+    assert "DXM_DATA_DIR" in identity_source
+    assert "DXM_RESOURCE_ROOT" in identity_source
     assert "DXM_LAUNCHER_LOG_FILE" in source
     assert "DXM_BACKEND_PORT: String(port)" in source
     assert "DXM_BACKEND_URL: `http://127.0.0.1:${port}`" in source
     assert "DXM_DESKTOP=1" in source
     assert "DXM_WORKFLOW_ACTION_RUNTIME: 'browser_agent'" in source
-    assert "DXM_WORKFLOW_PROFILE_DIR: path.join(dataDir, 'browser_profiles', 'dxm_workflow')" in source
+    assert "const workflowProfileDir = path.join(dataDir, 'browser_profiles', 'dxm_workflow')" in source
+    assert "DXM_WORKFLOW_PROFILE_DIR" in identity_source
     assert "DXM_WORKFLOW_PERSISTENT_PROFILE: '1'" in source
     assert "PYTHONDONTWRITEBYTECODE" in source
     assert "windowsHide: true" in source
@@ -101,22 +122,50 @@ def test_desktop_main_logs_packaged_probe_resource_status_before_backend_start()
     assert "config/l2_readonly_allowlist.json" in source
     assert "Packaged resource status:" in source
     assert "logPackagedResourceStatus(repoRoot)" in startup_section
-    assert startup_section.index("logPackagedResourceStatus(repoRoot)") < startup_section.index("startBackend(repoRoot, port, backendInstanceId)")
+    assert startup_section.index("logPackagedResourceStatus(repoRoot)") < startup_section.index("startBackend(repoRoot, port, backendInstanceId, {")
     assert "QA capture written" in source
 
 
 def test_desktop_backend_health_check_requires_ok_json_response():
     source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    identity_source = DESKTOP_RUNTIME_IDENTITY.read_text(encoding="utf-8")
     health_section = source[source.index("function waitForHealth"):source.index("function resolveFrontendPath")]
+    waiter_section = identity_source[
+        identity_source.index("function waitForOwnedBackendHealth"):
+        identity_source.index("module.exports")
+    ]
 
-    assert "const chunks = []" in health_section
-    assert "JSON.parse(raw)" in health_section
-    assert "payload.status === 'ok'" in health_section
-    assert "expectedInstanceId" in health_section
-    assert "payload.instanceId === expectedInstanceId" in health_section
-    assert "different backend instance" in health_section
-    assert "response.statusCode >= 200 && response.statusCode < 300" in health_section
-    assert "response.statusCode < 500" not in health_section
+    assert "return waitForOwnedBackendHealth({" in health_section
+    assert "getCurrentOwnership: () => backendOwnership" in health_section
+    assert "const chunks = []" in waiter_section
+    assert "JSON.parse(Buffer.concat(chunks).toString('utf8'))" in waiter_section
+    assert "payload.status === 'ok'" in waiter_section
+    assert "ownership.expectedIdentity" in waiter_section
+    assert "payload.instanceId !== verifiedIdentity.instanceId" in waiter_section
+    assert "mismatched backend" in waiter_section
+    assert "response.statusCode >= 200" in waiter_section
+    assert "response.statusCode < 300" in waiter_section
+    assert "response.statusCode < 500" not in waiter_section
+
+
+def test_desktop_backend_health_check_verifies_full_launch_identity_and_self_proof():
+    source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    identity_source = DESKTOP_RUNTIME_IDENTITY.read_text(encoding="utf-8")
+    health_section = source[source.index("function waitForHealth"):source.index("function resolveFrontendPath")]
+    waiter_section = identity_source[
+        identity_source.index("function waitForOwnedBackendHealth"):
+        identity_source.index("module.exports")
+    ]
+
+    assert "waitForOwnedBackendHealth" in health_section
+    assert "verifyRuntimeIdentity" in waiter_section
+    assert "ownership.expectedIdentity" in waiter_section
+    assert "payload.runtimeIdentity" in waiter_section
+    assert "setVerifiedBackendIdentity" in waiter_section
+    assert "onVerified: (identity)" in health_section
+    assert "runtimeInfo.runtimeIdentity" in health_section
+    assert "isCurrentOwnedBackendLive(getCurrentOwnership(), ownership)" in waiter_section
+    assert "payload.instanceId === expectedInstanceId" not in waiter_section
 
 
 def test_desktop_backend_start_sets_unique_instance_id_for_health_handshake():
@@ -126,8 +175,91 @@ def test_desktop_backend_start_sets_unique_instance_id_for_health_handshake():
 
     assert "function createBackendInstanceId()" in source
     assert "const backendInstanceId = createBackendInstanceId()" in startup_section
-    assert "DXM_BACKEND_INSTANCE_ID: backendInstanceId" in start_backend_section
-    assert "waitForHealth(runtimeInfo.apiBase, 45000, backendInstanceId)" in startup_section
+    assert "instanceId: backendInstanceId" in start_backend_section
+    assert "waitForHealth(runtimeInfo.apiBase, 45000, ownership)" in startup_section
+
+
+def test_desktop_backend_start_owns_exact_child_and_injects_one_launch_identity():
+    source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    start_backend_section = source[source.index("function startBackend"):source.index("function waitForHealth")]
+    startup_section = source[source.index("async function createWindow"):source.index("ipcMain.handle")]
+
+    assert "let backendOwnership = null" in source
+    assert "resolveLaunchManifest" in startup_section
+    assert "buildId: `direct-${backendInstanceId}`" in startup_section
+    assert "resolvePortablePackageSha" in startup_section
+    assert "buildBackendEnvironment" in start_backend_section
+    assert "createExpectedRuntimeIdentity" in start_backend_section
+    assert "createBackendOwnership" in start_backend_section
+    assert "return ownership" in start_backend_section
+    assert "child.pid" in start_backend_section
+    assert "DXM_BUILD_MANIFEST_JSON" not in start_backend_section
+    assert "const ownership = startBackend(" in startup_section
+    assert "await waitForHealth(runtimeInfo.apiBase, 45000, ownership)" in startup_section
+
+
+def test_desktop_backend_cleanup_requires_current_exact_live_child_and_two_phase_identity():
+    source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    identity_source = DESKTOP_RUNTIME_IDENTITY.read_text(encoding="utf-8")
+    start_backend_section = source[source.index("function startBackend"):source.index("function waitForHealth")]
+    kill_backend_section = source[source.index("function killBackendProcess"):source.index("async function createWindow")]
+    lifecycle_section = identity_source[
+        identity_source.index("function clearOwnershipForChild"):
+        identity_source.index("function waitForOwnedBackendHealth")
+    ]
+
+    assert "createBackendChildLifecycle" in start_backend_section
+    assert "backendOwnership === ownership" in start_backend_section
+    assert "lifecycle.handle(eventName)" in start_backend_section
+    assert "child.on('exit'" in start_backend_section
+    assert "child.on('close'" in start_backend_section
+    error_start = start_backend_section.index("child.on('error'")
+    pid_guard = start_backend_section.index("\n  if (!Number.isInteger(child.pid)", error_start)
+    error_section = start_backend_section[error_start:pid_guard]
+    assert "lifecycle.handle" not in error_section
+    assert error_start < pid_guard
+    assert "currentOwnership.child !== eventChild" in lifecycle_section
+    assert "eventName === 'exit' || eventName === 'close'" in lifecycle_section
+    assert "eventName === 'close' && !logStreamEnded" in lifecycle_section
+    assert "endLogStream()" in lifecycle_section
+    assert "canTerminateOwnedBackend" in kill_backend_section
+    assert "exitCode" in identity_source
+    assert "signalCode" in identity_source
+    assert ".killed" not in kill_backend_section
+    assert "backendOwnership = null" not in kill_backend_section
+    assert "taskkill.exe" in kill_backend_section
+    assert "windowsHide: true" in kill_backend_section
+    assert "chrome" not in kill_backend_section.lower()
+
+
+def test_frontend_runtime_types_include_the_frozen_identity_at_all_contract_surfaces():
+    source = TYPES_TS.read_text(encoding="utf-8")
+
+    assert "export type RuntimeIdentity = {" in source
+    for field in (
+        "schemaVersion: string",
+        "instanceId: string",
+        "gitHead: string",
+        "gitDirty: boolean",
+        "buildId: string",
+        "packageVersion: string",
+        "packageSha256: string | null",
+        "backendPid: number",
+        "browserAgentPid: number",
+        "browserExecutionModel: 'in_process_thread'",
+        "dataDir: string",
+        "workflowProfileDir: string",
+        "resourceRoot: string",
+        "startedAt: string",
+        "fingerprint: string",
+    ):
+        assert field in source
+    desktop_section = source[source.index("export type DesktopRuntimeInfo"):source.index("export type DxmStoredCredential")]
+    runtime_section = source[source.index("export type RuntimeStatus"):source.index("export type RuntimeControlAction")]
+    assert "backendPid?: number | null" in desktop_section
+    assert "runtimeIdentity?: RuntimeIdentity | null" in desktop_section
+    assert "runtimeIdentity: RuntimeIdentity" in runtime_section
+    assert "backend: { status: string; url?: string; port?: number | null; instanceId?: string | null; runtimeIdentity: RuntimeIdentity; detail?: string }" in runtime_section
 
 
 def test_desktop_main_surfaces_startup_failures_in_visible_window():

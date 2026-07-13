@@ -11,6 +11,8 @@ files:
   - ../frontend/dist/**
   - ../backend/src/**
 extraResources:
+  - from: ../../outputs/build-metadata/desktop-build-manifest.json
+    to: build-metadata/desktop-build-manifest.json
   - from: ../frontend/dist
     to: app/frontend/dist
   - from: ../backend/src

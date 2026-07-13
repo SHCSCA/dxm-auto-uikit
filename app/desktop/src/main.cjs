@@ -2,19 +2,31 @@ const { app, BrowserWindow, ipcMain, safeStorage, shell } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 const net = require('node:net')
-const http = require('node:http')
 const crypto = require('node:crypto')
 const { spawn, execFileSync } = require('node:child_process')
+const {
+  createDirectLaunchManifest,
+  resolveLaunchManifest,
+  resolvePortablePackageSha,
+  createExpectedRuntimeIdentity,
+  buildBackendEnvironment,
+  createBackendOwnership,
+  canTerminateOwnedBackend,
+  createBackendChildLifecycle,
+  waitForOwnedBackendHealth,
+} = require('./runtime-identity.cjs')
 
 app.setName('DXM Agent Console')
 
 let mainWindow = null
-let backendProcess = null
+let backendOwnership = null
 
 const runtimeInfo = {
   repoRoot: null,
   backendPort: null,
+  backendPid: null,
   backendInstanceId: null,
+  runtimeIdentity: null,
   apiBase: null,
   frontendPath: null,
   backendLogPath: null,
@@ -376,9 +388,15 @@ function resolvePythonPath(repoRoot) {
   return process.platform === 'win32' ? 'python' : 'python3'
 }
 
-function startBackend(repoRoot, port, backendInstanceId) {
+function startBackend(repoRoot, port, backendInstanceId, launchIdentity) {
   const backendDir = path.join(repoRoot, 'app', 'backend')
-  const dataDir = ensureDataDir(repoRoot)
+  const {
+    manifest,
+    packageSha256,
+    dataDir,
+    workflowProfileDir,
+    resourceRoot,
+  } = launchIdentity
   const backendLogPath = path.join(dataDir, 'backend.log')
   runtimeInfo.backendLogPath = backendLogPath
   // Desktop launcher log contract: data/desktop-main.log
@@ -388,82 +406,92 @@ function startBackend(repoRoot, port, backendInstanceId) {
   const args = ['-m', 'uvicorn', 'src.main:app', '--host', '127.0.0.1', '--port', String(port)]
   appendDesktopLog(`Starting backend: ${pythonPath} ${args.join(' ')}`)
 
-  backendProcess = spawn(pythonPath, args, {
+  const backendEnvironment = buildBackendEnvironment({
+    ...process.env,
+    DXM_LAUNCHER_LOG_FILE: runtimeInfo.desktopLogPath,
+    DXM_BACKEND_PORT: String(port),
+    DXM_BACKEND_URL: `http://127.0.0.1:${port}`,
+    // Desktop mode contract: DXM_DESKTOP=1
+    DXM_DESKTOP: '1',
+    DXM_WORKFLOW_ACTION_RUNTIME: 'browser_agent',
+    DXM_WORKFLOW_PERSISTENT_PROFILE: '1',
+    PYTHONIOENCODING: 'utf-8',
+    PYTHONDONTWRITEBYTECODE: '1',
+  }, {
+    manifest,
+    instanceId: backendInstanceId,
+    packageSha256,
+    dataDir,
+    resourceRoot,
+    workflowProfileDir,
+  })
+  const child = spawn(pythonPath, args, {
     cwd: backendDir,
-    env: {
-      ...process.env,
-      DXM_DATA_DIR: dataDir,
-      DXM_RESOURCE_ROOT: repoRoot,
-      DXM_LAUNCHER_LOG_FILE: runtimeInfo.desktopLogPath,
-      DXM_BACKEND_PORT: String(port),
-      DXM_BACKEND_URL: `http://127.0.0.1:${port}`,
-      DXM_BACKEND_INSTANCE_ID: backendInstanceId,
-      // Desktop mode contract: DXM_DESKTOP=1
-      DXM_DESKTOP: '1',
-      DXM_WORKFLOW_ACTION_RUNTIME: 'browser_agent',
-      DXM_WORKFLOW_PROFILE_DIR: path.join(dataDir, 'browser_profiles', 'dxm_workflow'),
-      DXM_WORKFLOW_PERSISTENT_PROFILE: '1',
-      PYTHONIOENCODING: 'utf-8',
-      PYTHONDONTWRITEBYTECODE: '1',
-    },
+    env: backendEnvironment,
     windowsHide: true,
   })
 
   const logStream = fs.createWriteStream(backendLogPath, { flags: 'a' })
-  backendProcess.stdout.on('data', (chunk) => logStream.write(chunk))
-  backendProcess.stderr.on('data', (chunk) => logStream.write(chunk))
-  backendProcess.on('exit', (code, signal) => {
-    appendDesktopLog(`Backend exited: code=${code ?? 'null'} signal=${signal ?? 'null'}`)
+  let logStreamEnded = false
+  const endLogStream = () => {
+    if (logStreamEnded) return
+    logStreamEnded = true
     logStream.end()
-  })
-  backendProcess.on('error', (error) => {
-    runtimeInfo.lastError = error.message
+  }
+  child.stdout.on('data', (chunk) => logStream.write(chunk))
+  child.stderr.on('data', (chunk) => logStream.write(chunk))
+  let ownership = null
+  child.on('error', (error) => {
+    if (!Number.isInteger(child.pid) || child.pid <= 0) {
+      runtimeInfo.lastError = error.message
+      endLogStream()
+    } else if (ownership && backendOwnership === ownership) {
+      runtimeInfo.lastError = error.message
+    }
     appendDesktopLog(`Backend spawn error: ${error.stack || error.message}`)
   })
+  if (!Number.isInteger(child.pid) || child.pid <= 0) {
+    endLogStream()
+    throw new Error('Backend spawn did not return a valid child pid')
+  }
+  const expectedIdentity = createExpectedRuntimeIdentity({
+    manifest,
+    instanceId: backendInstanceId,
+    packageSha256,
+    backendPid: child.pid,
+    dataDir,
+    workflowProfileDir,
+    resourceRoot,
+  })
+  ownership = createBackendOwnership({ child, instanceId: backendInstanceId, expectedIdentity })
+  backendOwnership = ownership
+  runtimeInfo.backendPid = child.pid
+  runtimeInfo.backendInstanceId = backendInstanceId
+  runtimeInfo.runtimeIdentity = null
+
+  const lifecycle = createBackendChildLifecycle({
+    ownership,
+    getCurrentOwnership: () => backendOwnership,
+    setCurrentOwnership: (value) => { backendOwnership = value },
+    endLogStream,
+  })
+  const finalizeChild = (eventName, code, signal) => {
+    appendDesktopLog(`Backend ${eventName}: code=${code ?? 'null'} signal=${signal ?? 'null'}`)
+    lifecycle.handle(eventName)
+  }
+  child.on('exit', (code, signal) => finalizeChild('exit', code, signal))
+  child.on('close', (code, signal) => finalizeChild('close', code, signal))
+  return ownership
 }
 
-function waitForHealth(apiBase, timeoutMs = 45000, expectedInstanceId = null) {
-  const startedAt = Date.now()
-  return new Promise((resolve, reject) => {
-    const poll = () => {
-      const request = http.get(`${apiBase}/health`, (response) => {
-        const chunks = []
-        response.on('data', (chunk) => chunks.push(chunk))
-        response.on('end', () => {
-          try {
-            const raw = Buffer.concat(chunks).toString('utf8')
-            const payload = JSON.parse(raw)
-            if (response.statusCode && response.statusCode >= 200 && response.statusCode < 300 && payload.status === 'ok') {
-              const instanceMatches = !expectedInstanceId || payload.instanceId === expectedInstanceId
-              if (!instanceMatches) {
-                reject(new Error(`Backend health check reached a different backend instance at ${apiBase}/health`))
-                return
-              }
-              resolve()
-              return
-            }
-          } catch (error) {
-            appendDesktopLog(`Backend health response was not ready: ${error.message}`)
-          }
-          retry()
-        })
-      })
-      request.on('error', retry)
-      request.setTimeout(1500, () => {
-        request.destroy()
-        retry()
-      })
-    }
-
-    const retry = () => {
-      if (Date.now() - startedAt > timeoutMs) {
-        reject(new Error(`Backend health check timed out: ${apiBase}/health`))
-        return
-      }
-      setTimeout(poll, 500)
-    }
-
-    poll()
+function waitForHealth(apiBase, timeoutMs = 45000, ownership) {
+  return waitForOwnedBackendHealth({
+    apiBase,
+    timeoutMs,
+    ownership,
+    getCurrentOwnership: () => backendOwnership,
+    onVerified: (identity) => { runtimeInfo.runtimeIdentity = identity },
+    log: (message) => appendDesktopLog(message),
   })
 }
 
@@ -477,9 +505,10 @@ function resolveFrontendPath(repoRoot) {
 }
 
 function killBackendProcess() {
-  if (!backendProcess || backendProcess.killed) return
-  const processToStop = backendProcess
-  backendProcess = null
+  const ownership = backendOwnership
+  if (!ownership) return
+  if (!canTerminateOwnedBackend({ currentOwnership: backendOwnership, ownership, runtimeInfo })) return
+  const processToStop = ownership.child
   appendDesktopLog(`Stopping backend process tree pid=${processToStop.pid ?? 'unknown'}`)
   if (process.platform === 'win32' && processToStop.pid) {
     try {
@@ -508,12 +537,37 @@ async function createWindow() {
     runtimeInfo.repoRoot = repoRoot
     const port = await findFreePort(8000)
     const backendInstanceId = createBackendInstanceId()
+    const dataDir = ensureDataDir(repoRoot)
+    const workflowProfileDir = path.join(dataDir, 'browser_profiles', 'dxm_workflow')
+    const launchManifest = resolveLaunchManifest({
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      packageVersion: app.getVersion(),
+      explicitManifestFile: process.env.DXM_BUILD_MANIFEST_FILE || null,
+      directManifestFactory: () => createDirectLaunchManifest({
+        repoRoot,
+        packageVersion: app.getVersion(),
+        buildId: `direct-${backendInstanceId}`,
+      }),
+    })
+    const packageSha256 = await resolvePortablePackageSha({
+      isPackaged: app.isPackaged,
+      portableExecutableFile: process.env.PORTABLE_EXECUTABLE_FILE,
+      portableExecutableDir: process.env.PORTABLE_EXECUTABLE_DIR,
+      portableExecutableAppFilename: process.env.PORTABLE_EXECUTABLE_APP_FILENAME,
+      innerExecutablePath: process.execPath,
+    })
     runtimeInfo.backendPort = port
-    runtimeInfo.backendInstanceId = backendInstanceId
     runtimeInfo.apiBase = `http://127.0.0.1:${port}`
     logPackagedResourceStatus(repoRoot)
-    startBackend(repoRoot, port, backendInstanceId)
-    await waitForHealth(runtimeInfo.apiBase, 45000, backendInstanceId)
+    const ownership = startBackend(repoRoot, port, backendInstanceId, {
+      manifest: launchManifest,
+      packageSha256,
+      dataDir,
+      workflowProfileDir,
+      resourceRoot: repoRoot,
+    })
+    await waitForHealth(runtimeInfo.apiBase, 45000, ownership)
 
     const frontendPath = resolveFrontendPath(repoRoot)
     runtimeInfo.frontendPath = frontendPath
@@ -586,7 +640,10 @@ async function createWindow() {
   }
 }
 
-ipcMain.handle('desktop:get-runtime-info', () => ({ ...runtimeInfo }))
+ipcMain.handle('desktop:get-runtime-info', () => ({
+  ...runtimeInfo,
+  runtimeIdentity: runtimeInfo.runtimeIdentity ? { ...runtimeInfo.runtimeIdentity } : null,
+}))
 ipcMain.handle('desktop:dxm-credential:load', () => loadDxmCredential())
 ipcMain.handle('desktop:dxm-credential:save', (_event, payload) => saveDxmCredential(payload))
 ipcMain.handle('desktop:dxm-credential:clear', () => clearDxmCredential())
