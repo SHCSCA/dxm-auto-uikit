@@ -4,8 +4,12 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 from src.services.windows_job import WindowsJobError, ensure_backend_job_owner
+
+
+DESCENDANT_TTL_SECONDS = 120
 
 
 def main() -> int:
@@ -21,10 +25,16 @@ def main() -> int:
         )
         return 70
 
-    # The descendant is intentionally self-limiting. If Job ownership is
-    # broken, a failed proof cannot leave a long-lived orphan behind.
+    # The TTL is far beyond every proof deadline, so a signal inside five
+    # seconds of owner exit cannot be mistaken for natural expiry. The test
+    # holds an exact PROCESS_TERMINATE handle for bounded failure cleanup.
+    descendant_started_at_unix_ms = int(time.time() * 1000)
     descendant = subprocess.Popen(
-        [sys._base_executable, "-c", "import time; time.sleep(20)"],
+        [
+            sys._base_executable,
+            "-c",
+            f"import time; time.sleep({DESCENDANT_TTL_SECONDS})",
+        ],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -32,7 +42,13 @@ def main() -> int:
     )
     print(
         json.dumps(
-            {"status": "ready", "ownerPid": os.getpid(), "descendantPid": descendant.pid},
+            {
+                "status": "ready",
+                "ownerPid": os.getpid(),
+                "descendantPid": descendant.pid,
+                "descendantTtlSeconds": DESCENDANT_TTL_SECONDS,
+                "descendantStartedAtUnixMs": descendant_started_at_unix_ms,
+            },
             separators=(",", ":"),
         ),
         flush=True,

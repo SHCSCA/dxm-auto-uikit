@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from pathlib import Path
 
@@ -150,13 +151,24 @@ def _readline_with_timeout(process: subprocess.Popen[str], timeout: float) -> st
             raise AssertionError("job_owner did not report readiness within the deadline")
 
 
-def _open_synchronize_handle(pid: int):
+def _open_exact_process_handle(pid: int):
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
     kernel32.OpenProcess.restype = ctypes.c_void_p
-    handle = kernel32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+    # SYNCHRONIZE proves exit. PROCESS_TERMINATE permits cleanup through this
+    # already-held exact handle if the kill-on-close assertion fails.
+    handle = kernel32.OpenProcess(0x00100000 | 0x0001, False, pid)
     if not handle:
-        raise AssertionError(f"OpenProcess(SYNCHRONIZE) failed: GetLastError={ctypes.get_last_error()}")
+        raise AssertionError(
+            "OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE) failed: "
+            f"GetLastError={ctypes.get_last_error()}"
+        )
+    kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+    kernel32.TerminateProcess.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    kernel32.TerminateProcess.restype = ctypes.c_int
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel32.CloseHandle.restype = ctypes.c_int
     return kernel32, handle
 
 
@@ -194,25 +206,48 @@ def test_isolated_owner_exit_kills_its_waiting_descendant():
 
         descendant_pid = int(report["descendantPid"])
         assert int(report["ownerPid"]) == owner.pid
-        kernel32, descendant_handle = _open_synchronize_handle(descendant_pid)
-        kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-        kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+        kernel32, descendant_handle = _open_exact_process_handle(descendant_pid)
         assert kernel32.WaitForSingleObject(descendant_handle, 0) == 0x00000102  # WAIT_TIMEOUT
+
+        ttl_seconds = report.get("descendantTtlSeconds")
+        started_at_unix_ms = report.get("descendantStartedAtUnixMs")
+        assert isinstance(ttl_seconds, int) and ttl_seconds >= 120, (
+            "proof descendant TTL must be at least 120s; a 20s fixture can "
+            "naturally expire inside the test's readiness/wait windows"
+        )
+        assert isinstance(started_at_unix_ms, int) and started_at_unix_ms > 0
+        natural_deadline = (started_at_unix_ms / 1000) + ttl_seconds
+        assert natural_deadline - time.time() >= 100, (
+            f"descendant PID {descendant_pid} is too close to natural TTL for a valid Job proof"
+        )
 
         assert owner.stdin is not None
         owner.stdin.write("EXIT\n")
         owner.stdin.flush()
         owner.wait(timeout=10)
-        wait_result = kernel32.WaitForSingleObject(descendant_handle, 10_000)
+        signal_wait_started = time.monotonic()
+        wait_result = kernel32.WaitForSingleObject(descendant_handle, 5_000)
+        signal_wait_seconds = time.monotonic() - signal_wait_started
         assert wait_result == 0x00000000, (
             f"descendant PID {descendant_pid} survived exact owner PID {owner.pid} exit; "
             f"WaitForSingleObject={wait_result}"
         )
+        assert signal_wait_seconds <= 5.5
+        assert time.time() < natural_deadline - 60, (
+            f"descendant PID {descendant_pid} signaled too near its natural TTL"
+        )
     finally:
-        if descendant_handle and kernel32:
-            kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-            kernel32.CloseHandle.restype = ctypes.c_int
-            kernel32.CloseHandle(descendant_handle)
         if owner.poll() is None:
             owner.kill()
             owner.wait(timeout=5)
+        if descendant_handle and kernel32:
+            if kernel32.WaitForSingleObject(descendant_handle, 0) == 0x00000102:
+                terminated = kernel32.TerminateProcess(descendant_handle, 0xEE)
+                terminate_error = ctypes.get_last_error()
+                cleanup_wait = kernel32.WaitForSingleObject(descendant_handle, 5_000)
+                assert cleanup_wait == 0x00000000, (
+                    "exact descendant cleanup failed: "
+                    f"TerminateProcess={terminated} GetLastError={terminate_error} "
+                    f"WaitForSingleObject={cleanup_wait}"
+                )
+            kernel32.CloseHandle(descendant_handle)
