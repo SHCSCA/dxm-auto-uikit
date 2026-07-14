@@ -21,6 +21,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from src.core.config import DATA_DIR
+from src.services.runtime_bootstrap import ensure_runtime_bootstrap
+
+
+APP_VERSION = '0.1.0'
+REPO_ROOT = Path(__file__).resolve().parents[3]
+runtime_bootstrap_state = ensure_runtime_bootstrap(
+    data_dir=DATA_DIR,
+    repo_root=REPO_ROOT,
+    package_version=APP_VERSION,
+)
+runtime_identity = runtime_bootstrap_state.runtime_identity
+
+
 from src.db import init_db
 from src.execution.dxm_live import DxmLiveClient
 from src.execution.dxm_adapter import DxmWorkflowAdapter
@@ -61,7 +74,6 @@ from src.services.delivery_workspace import build_delivery_workspace, l2_real_pr
 from src.services.agent_console import AgentConsoleService
 from src.services.config_preview import ConfigPreviewService
 from src.services.template_center import template_center_metadata
-from src.services.runtime_identity import RuntimeIdentity
 from src.ws import ConnectionManager
 
 @asynccontextmanager
@@ -90,7 +102,7 @@ async def app_lifespan(_app: FastAPI):
             _append_backend_runtime_log(f'Browser Agent cleanup failed: {exc}')
 
 
-app = FastAPI(title='dxm-auto-uikit backend', version='0.1.0', lifespan=app_lifespan)
+app = FastAPI(title='dxm-auto-uikit backend', version=APP_VERSION, lifespan=app_lifespan)
 LOOPBACK_CORS_ORIGIN_RE = r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
 PUBLIC_ARTIFACT_ROOTS = {
     'screenshots': DATA_DIR / 'screenshots',
@@ -139,11 +151,10 @@ CLAIM_TO_DRAFT_PUBLISH_SCENE = 'CONTROLLED_CLAIM_TO_DRAFT_ONLY'
 CLAIM_CONFIRMATION = '确认将该已有商品认领到商品箱'
 L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
 UNRELEASED_REAL_DXM_MODE_DETAIL = 'Only controlled claim_only and single_save are released for real DXM mutation'
-REPO_ROOT = Path(__file__).resolve().parents[3]
 FINAL_DELIVERY_CHECK_JSON = REPO_ROOT / 'outputs' / 'final-delivery-check' / 'final-delivery-check.json'
 RUNTIME_LAUNCHER_LOG_FILE = Path(
     os.environ.get('DXM_LAUNCHER_LOG_FILE')
-    or DATA_DIR / ('desktop-main.log' if os.environ.get('DXM_DESKTOP') else 'start-mvp.log')
+    or DATA_DIR / ('desktop-main.log' if runtime_bootstrap_state.owner == 'electron_desktop' else 'start-mvp.log')
 )
 RUNTIME_LOG_SOURCES = {
     'backend': DATA_DIR / 'backend.log',
@@ -155,12 +166,7 @@ RUNTIME_CONTROL_COMMAND_FILE = Path(
     os.environ.get('DXM_RUNTIME_CONTROL_COMMAND_FILE') or DATA_DIR / 'runtime-control-command.json'
 )
 RUNTIME_CONTROL_MANAGED_BY_LAUNCHER = bool(os.environ.get('DXM_RUNTIME_CONTROL_COMMAND_FILE'))
-RUNTIME_DESKTOP_MODE = bool(os.environ.get('DXM_DESKTOP'))
-runtime_identity = RuntimeIdentity.from_environment(
-    data_dir=DATA_DIR,
-    repo_root=REPO_ROOT,
-    package_version=app.version,
-)
+RUNTIME_DESKTOP_MODE = runtime_bootstrap_state.owner == 'electron_desktop'
 RUNTIME_BACKEND_INSTANCE_ID = runtime_identity.instance_id
 RUNTIME_VIRTUAL_LOG_SOURCES = {'task', 'agent'}
 RUNTIME_LOG_LEVELS = {'info', 'warning', 'error'}
