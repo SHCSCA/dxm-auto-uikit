@@ -51,8 +51,15 @@ A second independent quality pass found three important lifecycle gaps and one m
 
 - an exact child `kill()` request is accepted only when `ChildProcess.kill()` returns `true`; `false` and thrown errors do not invalidate the startup controller, and the Electron quit seam contains/logs a thrown kill error so `will-quit` is not broken;
 - if exact backend invalidation races the first window initialization, the controller now destroys the exact returned window, clears only its matching global reference, retains the terminal `stopped/failed` state, and leaves no apparently healthy window that could suppress the startup error window;
-- capture and visible-smoke QA exits now share `app.quit()` and the registered `will-quit` cleanup path; a failed visible smoke sets a nonzero process exit code without calling `app.exit(1)`;
+- capture and visible-smoke QA exits now share `app.quit()` and the registered `will-quit` cleanup path;
 - startup error content loads through a contained rich-to-minimal fallback helper. A first `loadURL` rejection gets one visible minimal fallback attempt, and a second rejection is logged and resolved without recursion or an unhandled rejection.
+
+A final native-exit review found that Node's `process.exitCode` is not authoritative for Electron's native application exit. Electron 33.4.11 implements `Browser::Quit` without setting the native exit code, while `Browser::Exit` calls `SetExitCode`; therefore a failed visible smoke could still return native status `0`. A focused TDD follow-up replaces the old helper with a pure native-exit coordinator:
+
+- a failed QA request first records pending native exit code `1`, then calls `app.quit()`; it never calls `app.exit()` at the request site;
+- the production `will-quit` handler requests exact-child cleanup first and only then finalizes the coordinator;
+- only a pending failure finalizes through `app.exit(1)`; a successful QA quit stays on Electron's normal `app.quit()` path and never calls `app.exit()`;
+- repeated failure requests retain the nonzero result, and finalization is guarded before `app.exit(1)` so recursive/reentrant callbacks cannot invoke it twice.
 
 Phase A still only requests termination through the exact owned `ChildProcess` handle. Waiting for confirmed child close, parent-pipe graceful shutdown, bounded fallback, and Job Object teardown remain explicitly owned by Phase B.
 
@@ -63,6 +70,8 @@ Follow-up RED evidence:
 - focused Python desktop contract: `34` tests, `3` expected failures before production used the bootstrap/transaction helpers and preflight log truth; the unique-error-window follow-up then failed `1/1` before the old one-shot boolean gate was removed.
 - second-pass batch 1 focused Node run: `29` tests, `3` expected failures proving `kill() === false` was misreported, an initialize/invalidate race retained the normal window, and the termination-to-invalidation seam was absent;
 - second-pass batch 2 focused runtime-start run: `18` tests, `5` expected failures proving a thrown `kill()` escaped the quit seam, unified QA quit behavior was absent, and rich/fallback error content rejections were not contained.
+- native-exit focused runtime-start run: `19` tests, `3` expected failures because `createNativeExitCoordinator` did not yet exist; the three failures covered strict `app.quit()` → `will-quit` cleanup → `app.exit(1)` ordering, success without `app.exit()`, and idempotent repeated failure finalization.
+- native-exit Python production contract: `1` expected failure before `main.cjs` instantiated and wired the coordinator into the QA and `will-quit` paths.
 
 Fresh final verification evidence is recorded below after the last documentation-only changes.
 
@@ -110,9 +119,9 @@ The optional parsed `--qa-deadline-ms` is intentionally not wired to inner grace
 
 ## Final verification
 
-Fresh implementer verification immediately before the second follow-up commit:
+Fresh implementer verification immediately before the native-exit follow-up commit:
 
-- `npm test` in `app/desktop`: `55 passed`, `0 failed`;
+- `npm test` in `app/desktop`: `56 passed`, `0 failed`;
 - `python -m pytest tests/test_desktop_package_contract.py tests/test_qa_runtime_data_isolation.py -q`: `49 passed`;
 - `npm run build` in `app/frontend`: TypeScript check and Vite production build passed (`49` modules transformed);
 - `node --check` for `main.cjs`, `launch-policy.cjs`, `runtime-start.cjs`, and `runtime-identity.cjs`: passed;

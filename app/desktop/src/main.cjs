@@ -24,6 +24,7 @@ const {
   inspectLegacyRuntimePorts,
 } = require('./launch-policy.cjs')
 const {
+  createNativeExitCoordinator,
   createDesktopStartupController,
   createStartupFailurePresentation,
   createTransactionalWindow,
@@ -34,10 +35,10 @@ const {
   prepareElectronLaunchOwnership,
   registerPrimaryInstanceLifecycle,
   requestExactBackendTermination,
-  requestQaAppQuit,
 } = require('./runtime-start.cjs')
 
 app.setName('DXM Agent Console')
+const nativeExitCoordinator = createNativeExitCoordinator({ app })
 
 const normalUserDataDir = app.getPath('userData')
 let launchPolicy = null
@@ -671,7 +672,7 @@ async function createMainWindow(runtime) {
         const image = await window.webContents.capturePage()
         fs.writeFileSync(runtime.qaCapturePath, image.toPNG())
         appendDesktopLog(`QA capture written: ${runtime.qaCapturePath}`)
-        setImmediate(() => requestQaAppQuit({ app, processLike: process }))
+        setImmediate(() => nativeExitCoordinator.requestQuit())
       }
       if (runtime.qaVisibleSmokePath) {
         await new Promise((resolve) => setTimeout(resolve, 900))
@@ -691,9 +692,9 @@ async function createMainWindow(runtime) {
         fs.writeFileSync(runtime.qaVisibleSmokePath, JSON.stringify(result, null, 2))
         appendDesktopLog(`QA visible smoke written: ${runtime.qaVisibleSmokePath} visible=${result.windowVisible}`)
         if (!result.ok) {
-          setImmediate(() => requestQaAppQuit({ app, processLike: process, failed: true }))
+          setImmediate(() => nativeExitCoordinator.requestQuit({ failed: true }))
         } else {
-          setImmediate(() => requestQaAppQuit({ app, processLike: process }))
+          setImmediate(() => nativeExitCoordinator.requestQuit())
         }
       }
     },
@@ -742,6 +743,7 @@ registerPrimaryInstanceLifecycle({
   },
   onWillQuit: () => {
     killBackendProcess()
+    nativeExitCoordinator.finalizeAfterCleanup()
   },
 })
 

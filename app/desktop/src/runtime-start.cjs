@@ -162,14 +162,29 @@ function requestExactBackendTermination({
   })
 }
 
-function requestQaAppQuit({ app, processLike, failed = false }) {
-  if (!app || typeof app.quit !== 'function') throw new TypeError('app.quit must be a function')
-  if (!processLike || typeof processLike !== 'object') throw new TypeError('processLike must be an object')
-  if (failed && (!Number.isInteger(processLike.exitCode) || processLike.exitCode === 0)) {
-    processLike.exitCode = 1
+function createNativeExitCoordinator({ app }) {
+  if (!app || typeof app.quit !== 'function' || typeof app.exit !== 'function') {
+    throw new TypeError('app.quit and app.exit must be functions')
   }
-  app.quit()
-  return true
+  let pendingNativeExitCode = null
+  let quitRequested = false
+  let nativeExitFinalized = false
+
+  return Object.freeze({
+    requestQuit({ failed = false } = {}) {
+      if (failed) pendingNativeExitCode = 1
+      if (quitRequested || nativeExitFinalized) return false
+      quitRequested = true
+      app.quit()
+      return true
+    },
+    finalizeAfterCleanup() {
+      if (pendingNativeExitCode === null || nativeExitFinalized) return false
+      nativeExitFinalized = true
+      app.exit(pendingNativeExitCode)
+      return true
+    },
+  })
 }
 
 async function loadStartupErrorContent({
@@ -291,7 +306,7 @@ module.exports = {
   discardExactWindow,
   invalidateStartupForExactOwnership,
   requestExactBackendTermination,
-  requestQaAppQuit,
+  createNativeExitCoordinator,
   loadStartupErrorContent,
   createDesktopStartupController,
   registerPrimaryInstanceLifecycle,

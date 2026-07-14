@@ -371,16 +371,23 @@ def test_desktop_main_surfaces_startup_failures_in_visible_window():
     assert "旧浏览器后台进程" not in startup_error_section
 
 
-def test_visible_smoke_failure_uses_unified_quit_cleanup_with_nonzero_status():
+def test_visible_smoke_failure_sets_native_exit_only_after_will_quit_cleanup():
     source = DESKTOP_MAIN.read_text(encoding="utf-8")
     visible_start = source.index("if (runtime.qaVisibleSmokePath)")
     visible_section = source[visible_start:source.index("startupController =", visible_start)]
+    will_quit_start = source.index("onWillQuit: () => {")
+    will_quit_section = source[will_quit_start:source.index("\n  },\n})", will_quit_start)]
 
-    assert "requestQaAppQuit({ app, processLike: process, failed: true })" in visible_section
-    assert "requestQaAppQuit({ app, processLike: process })" in visible_section
+    assert "const nativeExitCoordinator = createNativeExitCoordinator({ app })" in source
+    assert "nativeExitCoordinator.requestQuit({ failed: true })" in visible_section
+    assert "nativeExitCoordinator.requestQuit()" in visible_section
+    assert "process.exitCode" not in source
     assert "app.exit(" not in visible_section
     assert source.count("app.exit(1)") == 1
     assert source.index("app.exit(1)") < source.index("let mainWindow")
+    assert will_quit_section.index("killBackendProcess()") < will_quit_section.index(
+        "nativeExitCoordinator.finalizeAfterCleanup()"
+    )
 
 
 def test_desktop_main_window_setup_is_transactional_and_startup_error_window_is_unique():

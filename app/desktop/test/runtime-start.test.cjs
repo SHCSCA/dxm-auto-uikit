@@ -2,6 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 
 const {
+  createNativeExitCoordinator,
   createDesktopStartupController,
   createStartupFailurePresentation,
   createTransactionalWindow,
@@ -12,7 +13,6 @@ const {
   prepareElectronLaunchOwnership,
   registerPrimaryInstanceLifecycle,
   requestExactBackendTermination,
-  requestQaAppQuit,
 } = require('../src/runtime-start.cjs')
 
 test('ready starts runtime once before the first window and activate creates only a window', async () => {
@@ -349,32 +349,72 @@ test('exact backend termination catches a child kill error without invalidating 
   assert.notEqual(controller.getVerifiedRuntime(), null)
 })
 
-test('failed QA quit preserves nonzero status and reaches the unified app quit cleanup lifecycle', () => {
+test('failed native exit is finalized only after will-quit cleanup', () => {
   const events = []
-  const processLike = { exitCode: undefined }
+  let onWillQuit
   const app = {
-    exit: () => { throw new Error('direct app.exit must not be used') },
     quit: () => {
-      events.push('quit')
-      events.push('will-quit cleanup')
+      events.push('app.quit')
+      onWillQuit()
     },
+    exit: (code) => events.push(`app.exit:${code}`),
+  }
+  const coordinator = createNativeExitCoordinator({ app })
+  onWillQuit = () => {
+    events.push('will-quit cleanup')
+    coordinator.finalizeAfterCleanup()
   }
 
-  assert.equal(requestQaAppQuit({ app, processLike, failed: true }), true)
-  assert.equal(processLike.exitCode, 1)
-  assert.deepEqual(events, ['quit', 'will-quit cleanup'])
+  assert.equal(coordinator.requestQuit({ failed: true }), true)
+  assert.deepEqual(events, [
+    'app.quit',
+    'will-quit cleanup',
+    'app.exit:1',
+  ])
 })
 
-test('successful QA quit keeps the normal exit status and still uses app quit', () => {
+test('successful native exit uses normal quit and never calls app.exit', () => {
   const events = []
-  const processLike = { exitCode: undefined }
-  assert.equal(requestQaAppQuit({
-    app: { quit: () => events.push('quit') },
-    processLike,
-    failed: false,
-  }), true)
-  assert.equal(processLike.exitCode, undefined)
-  assert.deepEqual(events, ['quit'])
+  let onWillQuit
+  const app = {
+    quit: () => {
+      events.push('app.quit')
+      onWillQuit()
+    },
+    exit: (code) => events.push(`app.exit:${code}`),
+  }
+  const coordinator = createNativeExitCoordinator({ app })
+  onWillQuit = () => {
+    events.push('will-quit cleanup')
+    coordinator.finalizeAfterCleanup()
+  }
+
+  assert.equal(coordinator.requestQuit({ failed: false }), true)
+  assert.deepEqual(events, ['app.quit', 'will-quit cleanup'])
+})
+
+test('repeated failed quit requests preserve failure and finalize native exit only once', () => {
+  const events = []
+  let coordinator
+  const app = {
+    quit: () => events.push('app.quit'),
+    exit: (code) => {
+      events.push(`app.exit:${code}`)
+      coordinator.finalizeAfterCleanup()
+    },
+  }
+  coordinator = createNativeExitCoordinator({ app })
+
+  assert.equal(coordinator.requestQuit({ failed: true }), true)
+  assert.equal(coordinator.requestQuit({ failed: true }), false)
+  events.push('will-quit cleanup')
+  assert.equal(coordinator.finalizeAfterCleanup(), true)
+  assert.equal(coordinator.finalizeAfterCleanup(), false)
+  assert.deepEqual(events, [
+    'app.quit',
+    'will-quit cleanup',
+    'app.exit:1',
+  ])
 })
 
 test('startup error content falls back once when rich HTML fails to load', async () => {
