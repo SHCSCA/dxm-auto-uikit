@@ -126,3 +126,11 @@ Fresh implementer verification immediately before the native-exit follow-up comm
 - `npm run build` in `app/frontend`: TypeScript check and Vite production build passed (`49` modules transformed);
 - `node --check` for `main.cjs`, `launch-policy.cjs`, `runtime-start.cjs`, and `runtime-identity.cjs`: passed;
 - `git diff --check`: passed (only Git's existing LF-to-CRLF working-copy notices).
+
+Fresh owner verification from the clean `9ff20ae` commit reproduced the same `56 / 49 / frontend build / four syntax checks / diff-check` result.
+
+## Final independent acceptance
+
+- Final spec review: PASS. It verified the native failure sequence `app.quit()` -> `will-quit` exact-child cleanup request -> guarded `app.exit(1)`, normal success without `app.exit`, repeat/re-entry protection, the lock-before-backend invalid-policy exception, and all earlier Phase A findings.
+- Final quality review: PASS. It checked the implementation against the installed Electron 33.4.11 `Browser::Quit` / `Browser::Exit` semantics and found no Phase A blocker.
+- Residual ownership risks are explicitly Phase B: waiting for exact child close, parent-pipe EOF, bounded fallback, and the Windows Job Object. Phase A does not claim those proofs.
