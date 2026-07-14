@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import threading
+from enum import Enum, auto
 from typing import BinaryIO, Callable, Protocol, TypeVar
 
 
@@ -134,7 +135,7 @@ class DesktopParentChannel:
         """
 
         with self._lock:
-            if self._shutdown_pending:
+            if self._shutdown_pending or self._run_claimed:
                 return False
             self._run_claimed = True
         callback()
@@ -173,8 +174,59 @@ class DesktopParentChannel:
         self._exit_for_lost_parent()
 
 
+class _ArmState(Enum):
+    EMPTY = auto()
+    ARMING = auto()
+    ARMED = auto()
+
+
 _ARMED_LOCK = threading.Lock()
+_ARMED_STATE = _ArmState.EMPTY
+_ARMING_RESERVATION: object | None = None
 _ARMED_CHANNEL: DesktopParentChannel | None = None
+
+
+def _reserve_process_channel() -> object:
+    global _ARMED_STATE, _ARMING_RESERVATION
+    with _ARMED_LOCK:
+        if _ARMED_STATE is _ArmState.ARMING:
+            raise DesktopParentChannelError("desktop parent channel is already arming")
+        if _ARMED_STATE is _ArmState.ARMED:
+            raise DesktopParentChannelError("desktop parent channel is already armed")
+        reservation = object()
+        _ARMED_STATE = _ArmState.ARMING
+        _ARMING_RESERVATION = reservation
+        return reservation
+
+
+def _rollback_process_channel(reservation: object) -> None:
+    global _ARMED_STATE, _ARMING_RESERVATION, _ARMED_CHANNEL
+    with _ARMED_LOCK:
+        if (
+            _ARMED_STATE is _ArmState.ARMING
+            and _ARMING_RESERVATION is reservation
+        ):
+            _ARMED_STATE = _ArmState.EMPTY
+            _ARMING_RESERVATION = None
+            _ARMED_CHANNEL = None
+
+
+def _publish_process_channel(
+    reservation: object,
+    channel: DesktopParentChannel,
+) -> None:
+    global _ARMED_STATE, _ARMING_RESERVATION, _ARMED_CHANNEL
+    with _ARMED_LOCK:
+        if (
+            _ARMED_STATE is not _ArmState.ARMING
+            or _ARMING_RESERVATION is not reservation
+        ):
+            raise DesktopParentChannelError(
+                "desktop parent channel arming reservation was lost"
+            )
+        _ARMED_CHANNEL = channel
+        _ARMING_RESERVATION = None
+        _ARMED_STATE = _ArmState.ARMED
 
 
 def arm_desktop_parent_channel(
@@ -184,33 +236,23 @@ def arm_desktop_parent_channel(
     hard_exit: Callable[[int], object] | None = None,
     max_line_bytes: int = DEFAULT_MAX_LINE_BYTES,
 ) -> DesktopParentChannel:
-    """Synchronously validate START, publish the proof, then arm the watchdog."""
+    """Reserve, validate START, start the watchdog, then publish the proof."""
 
-    global _ARMED_CHANNEL
     instance_id = _validate_instance_id(expected_instance_id)
-    with _ARMED_LOCK:
-        if _ARMED_CHANNEL is not None:
-            raise DesktopParentChannelError("desktop parent channel is already armed")
-
-    line = _read_bounded_line(stream, max_line_bytes)
-    _validate_start_line(line, instance_id)
-    channel = DesktopParentChannel(
-        stream=stream,
-        instance_id=instance_id,
-        hard_exit=os._exit if hard_exit is None else hard_exit,
-        max_line_bytes=max_line_bytes,
-    )
-
-    with _ARMED_LOCK:
-        if _ARMED_CHANNEL is not None:
-            raise DesktopParentChannelError("desktop parent channel is already armed")
-        _ARMED_CHANNEL = channel
+    reservation = _reserve_process_channel()
     try:
+        line = _read_bounded_line(stream, max_line_bytes)
+        _validate_start_line(line, instance_id)
+        channel = DesktopParentChannel(
+            stream=stream,
+            instance_id=instance_id,
+            hard_exit=os._exit if hard_exit is None else hard_exit,
+            max_line_bytes=max_line_bytes,
+        )
         channel.start_reader()
+        _publish_process_channel(reservation, channel)
     except BaseException:
-        with _ARMED_LOCK:
-            if _ARMED_CHANNEL is channel:
-                _ARMED_CHANNEL = None
+        _rollback_process_channel(reservation)
         raise
     return channel
 
@@ -219,8 +261,9 @@ def require_armed_desktop_parent_channel(expected_instance_id: str) -> DesktopPa
     """Return the in-process proof only when it matches the frozen instance."""
 
     with _ARMED_LOCK:
+        state = _ARMED_STATE
         channel = _ARMED_CHANNEL
-    if channel is None:
+    if state is not _ArmState.ARMED or channel is None:
         raise DesktopParentChannelError("desktop parent channel is not armed")
     if channel.instance_id != expected_instance_id:
         raise DesktopParentChannelError(
@@ -233,6 +276,8 @@ def require_armed_desktop_parent_channel(expected_instance_id: str) -> DesktopPa
 def _reset_armed_channel_for_tests() -> None:
     """Drop only the process-global test reference; production never calls this."""
 
-    global _ARMED_CHANNEL
+    global _ARMED_STATE, _ARMING_RESERVATION, _ARMED_CHANNEL
     with _ARMED_LOCK:
+        _ARMED_STATE = _ArmState.EMPTY
+        _ARMING_RESERVATION = None
         _ARMED_CHANNEL = None

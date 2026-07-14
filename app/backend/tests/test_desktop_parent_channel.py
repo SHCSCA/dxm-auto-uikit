@@ -27,6 +27,37 @@ class ServerStub:
     should_exit = False
 
 
+class PausedFirstReadStream:
+    def __init__(self, first_line: bytes):
+        self.first_line = first_line
+        self.read_started = threading.Event()
+        self.release_first_read = threading.Event()
+        self._remaining = queue.Queue()
+        self.read_count = 0
+
+    def put(self, line: bytes) -> None:
+        self._remaining.put(line)
+
+    def readline(self, _limit: int = -1) -> bytes:
+        self.read_count += 1
+        if self.read_count == 1:
+            self.read_started.set()
+            if not self.release_first_read.wait(2):
+                raise TimeoutError("test did not release first START read")
+            return self.first_line
+        return self._remaining.get(timeout=2)
+
+
+class CountingLineStream:
+    def __init__(self, *lines: bytes):
+        self._lines = iter(lines)
+        self.read_count = 0
+
+    def readline(self, _limit: int = -1) -> bytes:
+        self.read_count += 1
+        return next(self._lines, b"")
+
+
 @pytest.fixture(autouse=True)
 def reset_process_channel():
     parent_channel._reset_armed_channel_for_tests()
@@ -116,6 +147,130 @@ def test_second_channel_cannot_replace_the_exact_armed_fact():
     assert first.wait_for_reader(1)
 
 
+def test_arm_reserves_singleton_before_blocking_start_read_and_second_arm_does_not_read():
+    first_stream = PausedFirstReadStream(b"START first-blocked\n")
+    second_stream = CountingLineStream(b"START second-must-not-read\n", b"SHUTDOWN\n")
+    first_result = []
+    first_errors = []
+
+    def arm_first():
+        try:
+            first_result.append(
+                parent_channel.arm_desktop_parent_channel(
+                    first_stream,
+                    expected_instance_id="first-blocked",
+                    hard_exit=lambda _code: None,
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            first_errors.append(exc)
+
+    worker = threading.Thread(target=arm_first)
+    worker.start()
+    assert first_stream.read_started.wait(1)
+    try:
+        with pytest.raises(parent_channel.DesktopParentChannelError, match="already arming"):
+            parent_channel.arm_desktop_parent_channel(
+                second_stream,
+                expected_instance_id="second-must-not-read",
+                hard_exit=lambda _code: None,
+            )
+        assert second_stream.read_count == 0
+    finally:
+        first_stream.release_first_read.set()
+        worker.join(2)
+
+    assert first_errors == []
+    assert len(first_result) == 1
+    assert parent_channel.require_armed_desktop_parent_channel("first-blocked") is first_result[0]
+    first_stream.put(b"SHUTDOWN\n")
+    assert first_result[0].wait_for_reader(1)
+
+
+def test_require_cannot_observe_channel_until_reader_start_completes(monkeypatch):
+    stream = BlockingLineStream(b"START publish-after-reader\n")
+    start_entered = threading.Event()
+    release_start = threading.Event()
+    result = []
+    errors = []
+    original_start_reader = parent_channel.DesktopParentChannel.start_reader
+
+    def blocked_start_reader(channel):
+        start_entered.set()
+        if not release_start.wait(2):
+            raise TimeoutError("test did not release reader start")
+        original_start_reader(channel)
+
+    monkeypatch.setattr(
+        parent_channel.DesktopParentChannel,
+        "start_reader",
+        blocked_start_reader,
+    )
+
+    def arm_channel():
+        try:
+            result.append(
+                parent_channel.arm_desktop_parent_channel(
+                    stream,
+                    expected_instance_id="publish-after-reader",
+                    hard_exit=lambda _code: None,
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    worker = threading.Thread(target=arm_channel)
+    worker.start()
+    assert start_entered.wait(1)
+    try:
+        with pytest.raises(parent_channel.DesktopParentChannelError, match="not armed"):
+            parent_channel.require_armed_desktop_parent_channel("publish-after-reader")
+    finally:
+        release_start.set()
+        worker.join(2)
+
+    assert errors == []
+    assert len(result) == 1
+    assert result[0].reader_alive is True
+    assert parent_channel.require_armed_desktop_parent_channel("publish-after-reader") is result[0]
+    stream.put(b"SHUTDOWN\n")
+    assert result[0].wait_for_reader(1)
+
+
+def test_reader_start_failure_atomically_restores_empty_singleton(monkeypatch):
+    first_stream = BlockingLineStream(b"START failed-start\n")
+    original_start_reader = parent_channel.DesktopParentChannel.start_reader
+    monkeypatch.setattr(
+        parent_channel.DesktopParentChannel,
+        "start_reader",
+        lambda _channel: (_ for _ in ()).throw(RuntimeError("reader start failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="reader start failed"):
+        parent_channel.arm_desktop_parent_channel(
+            first_stream,
+            expected_instance_id="failed-start",
+            hard_exit=lambda _code: None,
+        )
+    with pytest.raises(parent_channel.DesktopParentChannelError, match="not armed"):
+        parent_channel.require_armed_desktop_parent_channel("failed-start")
+
+    monkeypatch.setattr(
+        parent_channel.DesktopParentChannel,
+        "start_reader",
+        original_start_reader,
+    )
+    retry_stream = BlockingLineStream(b"START retry-after-failure\n")
+    retry = parent_channel.arm_desktop_parent_channel(
+        retry_stream,
+        expected_instance_id="retry-after-failure",
+        hard_exit=lambda _code: None,
+    )
+    assert parent_channel.require_armed_desktop_parent_channel("retry-after-failure") is retry
+    retry_stream.put(b"SHUTDOWN\n")
+    assert retry.wait_for_reader(1)
+
+
 def test_shutdown_marks_pending_sets_attached_server_and_reader_returns_with_writer_open(tmp_path):
     read_fd, write_fd = os.pipe()
     reader = os.fdopen(read_fd, "rb", buffering=0)
@@ -189,6 +344,51 @@ def test_shutdown_after_run_gate_sets_server_exit_without_blocking_callback():
     worker.join(1)
 
     assert result == [True]
+
+
+def test_run_edge_can_only_be_claimed_once_sequentially():
+    channel = parent_channel.DesktopParentChannel(
+        stream=object(),
+        instance_id="single-run",
+        hard_exit=lambda _code: None,
+        max_line_bytes=64,
+    )
+    calls = []
+
+    assert channel.run_if_not_shutdown(lambda: calls.append("first")) is True
+    assert channel.run_if_not_shutdown(lambda: calls.append("duplicate")) is False
+    assert calls == ["first"]
+
+
+def test_concurrent_duplicate_run_claim_executes_exactly_one_callback_across_repeated_rounds():
+    for round_index in range(50):
+        channel = parent_channel.DesktopParentChannel(
+            stream=object(),
+            instance_id=f"concurrent-run-{round_index}",
+            hard_exit=lambda _code: None,
+            max_line_bytes=64,
+        )
+        start = threading.Barrier(3)
+        results = []
+        calls = []
+
+        def claim(label):
+            start.wait(timeout=1)
+            results.append(channel.run_if_not_shutdown(lambda: calls.append(label)))
+
+        workers = [
+            threading.Thread(target=claim, args=("a",)),
+            threading.Thread(target=claim, args=("b",)),
+        ]
+        for worker in workers:
+            worker.start()
+        start.wait(timeout=1)
+        for worker in workers:
+            worker.join(1)
+            assert worker.is_alive() is False
+
+        assert sorted(results) == [False, True]
+        assert len(calls) == 1
 
 
 def test_parent_eof_calls_injected_hard_exit_immediately():
