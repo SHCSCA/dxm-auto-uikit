@@ -31,6 +31,10 @@ class RuntimeLeaseConflictError(RuntimeError):
         )
 
 
+class _AuthorityByteLockContention(RuntimeError):
+    """Internal marker for a write rejected by a live byte-range lock."""
+
+
 class RuntimeDataLease:
     """Owns a process-lifetime OS lock on one canonical runtime data directory.
 
@@ -66,7 +70,11 @@ class RuntimeDataLease:
         descriptor = _open_non_inheritable(lock_path)
         locked = False
         try:
-            _ensure_authority_byte(descriptor)
+            try:
+                _ensure_authority_byte(descriptor)
+            except _AuthorityByteLockContention as exc:
+                owner_metadata = _read_diagnostic_metadata(descriptor)
+                raise RuntimeLeaseConflictError(canonical_data_dir, owner_metadata) from exc
             try:
                 _lock_authority_byte(descriptor)
                 locked = True
@@ -84,10 +92,22 @@ class RuntimeDataLease:
                 file_descriptor=descriptor,
                 diagnostic_metadata=diagnostic_metadata,
             )
-        except BaseException:
+        except BaseException as primary_error:
+            cleanup_errors: list[tuple[str, BaseException]] = []
             if locked:
-                _unlock_authority_byte(descriptor)
-            os.close(descriptor)
+                try:
+                    _unlock_authority_byte(descriptor)
+                except BaseException as cleanup_error:
+                    cleanup_errors.append(("unlock", cleanup_error))
+            try:
+                os.close(descriptor)
+            except BaseException as cleanup_error:
+                cleanup_errors.append(("close", cleanup_error))
+            for stage, cleanup_error in cleanup_errors:
+                primary_error.add_note(
+                    "runtime lease cleanup "
+                    f"{stage} failed: {type(cleanup_error).__name__}: {cleanup_error}"
+                )
             raise
 
     @property
@@ -130,7 +150,14 @@ def _ensure_authority_byte(descriptor: int) -> None:
     if os.fstat(descriptor).st_size >= 1:
         return
     os.lseek(descriptor, 0, os.SEEK_SET)
-    os.write(descriptor, b"\x00")
+    try:
+        written = os.write(descriptor, b"\x00")
+    except OSError as exc:
+        if _is_lock_contention(exc):
+            raise _AuthorityByteLockContention from exc
+        raise
+    if written != 1:
+        raise OSError(errno.EIO, "failed to create runtime lease authority byte")
     os.fsync(descriptor)
 
 
