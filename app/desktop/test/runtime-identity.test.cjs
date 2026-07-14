@@ -322,7 +322,7 @@ test('ownership permits exact pre-health cleanup and requires verified identity 
   assert.equal(canTerminateOwnedBackend({ currentOwnership: ownership, ownership, runtimeInfo }), false)
 })
 
-test('termination calls kill once only on the exact current live ChildProcess handle', () => {
+test('termination reports success only when the exact current live ChildProcess accepts kill', () => {
   const expected = expectedIdentity()
   let exactKillCount = 0
   let staleKillCount = 0
@@ -352,7 +352,7 @@ test('termination calls kill once only on the exact current live ChildProcess ha
     runtimeIdentity: null,
   }
 
-  assert.equal(terminateExactOwnedBackend({ currentOwnership: ownership, ownership, runtimeInfo }), true)
+  assert.equal(terminateExactOwnedBackend({ currentOwnership: ownership, ownership, runtimeInfo }), false)
   assert.equal(exactKillCount, 1)
   assert.equal(ownership.child, child)
   assert.equal(ownership.child.exitCode, null)
@@ -374,6 +374,27 @@ test('termination calls kill once only on the exact current live ChildProcess ha
   assert.equal(terminateExactOwnedBackend({ currentOwnership: ownership, ownership, runtimeInfo }), false)
   assert.equal(exactKillCount, 1)
   assert.equal(staleKillCount, 0)
+})
+
+test('termination propagates an exact child kill error instead of reporting accepted termination', () => {
+  const expected = expectedIdentity()
+  const child = {
+    pid: expected.backendPid,
+    exitCode: null,
+    signalCode: null,
+    kill() { throw new Error('kill request rejected') },
+  }
+  const ownership = createBackendOwnership({ child, instanceId: expected.instanceId, expectedIdentity: expected })
+  const runtimeInfo = {
+    backendPid: expected.backendPid,
+    backendInstanceId: expected.instanceId,
+    runtimeIdentity: null,
+  }
+
+  assert.throws(
+    () => terminateExactOwnedBackend({ currentOwnership: ownership, ownership, runtimeInfo }),
+    /kill request rejected/,
+  )
 })
 
 test('exit or error events clear ownership only for the currently owned exact ChildProcess', () => {

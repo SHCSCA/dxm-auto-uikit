@@ -367,8 +367,7 @@ function canTerminateOwnedBackend({ currentOwnership, ownership, runtimeInfo }) 
 
 function terminateExactOwnedBackend({ currentOwnership, ownership, runtimeInfo }) {
   if (!canTerminateOwnedBackend({ currentOwnership, ownership, runtimeInfo })) return false
-  ownership.child.kill()
-  return true
+  return ownership.child.kill() === true
 }
 
 function isCurrentOwnedBackendLive(currentOwnership, ownership) {

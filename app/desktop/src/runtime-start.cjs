@@ -104,14 +104,20 @@ async function createTransactionalWindow({
     await initializeWindow(window)
     return window
   } catch (error) {
-    try {
-      if (!window.isDestroyed?.()) window.destroy()
-    } catch {
-      // Preserve the load/smoke error that caused the transaction to fail.
-    }
-    if (getCurrentWindow() === window) setCurrentWindow(null)
+    discardExactWindow({ window, getCurrentWindow, setCurrentWindow })
     throw error
   }
+}
+
+function discardExactWindow({ window, getCurrentWindow, setCurrentWindow }) {
+  if (!window || typeof getCurrentWindow !== 'function' || typeof setCurrentWindow !== 'function') return false
+  try {
+    if (!window.isDestroyed?.() && typeof window.destroy === 'function') window.destroy()
+  } catch {
+    // Window cleanup must not replace the startup failure that triggered it.
+  }
+  if (getCurrentWindow() === window) setCurrentWindow(null)
+  return true
 }
 
 function invalidateStartupForExactOwnership({
@@ -127,8 +133,77 @@ function invalidateStartupForExactOwnership({
   return true
 }
 
-function createDesktopStartupController({ startRuntime, createMainWindow }) {
+function requestExactBackendTermination({
+  currentOwnership,
+  ownership,
+  runtimeInfo,
+  startupController,
+  terminateOwnedBackend,
+  onTerminationError = () => {},
+}) {
+  if (typeof terminateOwnedBackend !== 'function') throw new TypeError('terminateOwnedBackend must be a function')
+  let accepted = false
+  try {
+    accepted = terminateOwnedBackend({ currentOwnership, ownership, runtimeInfo })
+  } catch (error) {
+    try {
+      onTerminationError(error)
+    } catch {
+      // A diagnostic callback cannot turn best-effort exact-child cleanup into an uncaught quit failure.
+    }
+    return false
+  }
+  if (accepted !== true) return false
+  return invalidateStartupForExactOwnership({
+    currentOwnership,
+    eventOwnership: ownership,
+    eventName: 'kill',
+    startupController,
+  })
+}
+
+function requestQaAppQuit({ app, processLike, failed = false }) {
+  if (!app || typeof app.quit !== 'function') throw new TypeError('app.quit must be a function')
+  if (!processLike || typeof processLike !== 'object') throw new TypeError('processLike must be an object')
+  if (failed && (!Number.isInteger(processLike.exitCode) || processLike.exitCode === 0)) {
+    processLike.exitCode = 1
+  }
+  app.quit()
+  return true
+}
+
+async function loadStartupErrorContent({
+  window,
+  richContentUrl,
+  fallbackContentUrl,
+  onLoadError = () => {},
+}) {
+  if (!window || typeof window.loadURL !== 'function') throw new TypeError('window.loadURL must be a function')
+  const reportLoadError = (error, stage) => {
+    try {
+      onLoadError(error, stage)
+    } catch {
+      // Error reporting is secondary to containing the BrowserWindow load rejection.
+    }
+  }
+  try {
+    await window.loadURL(richContentUrl)
+    return 'rich'
+  } catch (error) {
+    reportLoadError(error, 'rich')
+  }
+  try {
+    await window.loadURL(fallbackContentUrl)
+    return 'fallback'
+  } catch (error) {
+    reportLoadError(error, 'fallback')
+    return 'failed'
+  }
+}
+
+function createDesktopStartupController({ startRuntime, createMainWindow, discardMainWindow = () => {} }) {
   if (typeof createMainWindow !== 'function') throw new TypeError('createMainWindow must be a function')
+  if (typeof discardMainWindow !== 'function') throw new TypeError('discardMainWindow must be a function')
   const startRuntimeOnce = createRuntimeStarter(startRuntime)
   let verifiedRuntime = null
   let readyPromise = null
@@ -140,8 +215,9 @@ function createDesktopStartupController({ startRuntime, createMainWindow }) {
       if (!readyPromise) {
         state = 'starting'
         readyPromise = startRuntimeOnce().then(async (runtime) => {
-          await createMainWindow(runtime)
+          const window = await createMainWindow(runtime)
           if (state !== 'starting') {
+            discardMainWindow(window)
             throw new Error(`Desktop startup was invalidated while creating the first window: ${state}`)
           }
           verifiedRuntime = runtime
@@ -212,7 +288,11 @@ module.exports = {
   createStartupFailurePresentation,
   prepareElectronLaunchOwnership,
   createTransactionalWindow,
+  discardExactWindow,
   invalidateStartupForExactOwnership,
+  requestExactBackendTermination,
+  requestQaAppQuit,
+  loadStartupErrorContent,
   createDesktopStartupController,
   registerPrimaryInstanceLifecycle,
 }

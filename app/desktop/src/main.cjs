@@ -27,10 +27,14 @@ const {
   createDesktopStartupController,
   createStartupFailurePresentation,
   createTransactionalWindow,
+  discardExactWindow,
   focusExistingWindow,
   invalidateStartupForExactOwnership,
+  loadStartupErrorContent,
   prepareElectronLaunchOwnership,
   registerPrimaryInstanceLifecycle,
+  requestExactBackendTermination,
+  requestQaAppQuit,
 } = require('./runtime-start.cjs')
 
 app.setName('DXM Agent Console')
@@ -359,7 +363,17 @@ function createStartupErrorWindow(error) {
     </main>
   </body>
 </html>`
-  window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+  const richContentUrl = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
+  const fallbackHtml = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>DXM Agent Console 启动失败</title><body style="margin:0;padding:32px;font-family:Segoe UI,Microsoft YaHei,sans-serif;background:#f8fafc;color:#111827"><h1>DXM Agent Console 启动失败</h1><p>请关闭当前窗口后重新打开完整的免安装版程序。</p><p>错误码：${escapeHtml(presentation.code)}</p></body></html>`
+  const fallbackContentUrl = `data:text/html;charset=utf-8,${encodeURIComponent(fallbackHtml)}`
+  void loadStartupErrorContent({
+    window,
+    richContentUrl,
+    fallbackContentUrl,
+    onLoadError: (loadError, stage) => {
+      appendDesktopLog(`Startup error window ${stage} content load failed: ${rawStartupErrorDetail(loadError)}`)
+    },
+  })
   return window
 }
 
@@ -522,18 +536,17 @@ function killBackendProcess() {
   const ownership = backendOwnership
   if (!ownership) return
   const processToStop = ownership.child
-  const attempted = terminateExactOwnedBackend({
+  const attempted = requestExactBackendTermination({
     currentOwnership: backendOwnership,
     ownership,
     runtimeInfo,
+    startupController,
+    terminateOwnedBackend: terminateExactOwnedBackend,
+    onTerminationError: (error) => {
+      appendDesktopLog(`Exact backend stop request failed: ${rawStartupErrorDetail(error)}`)
+    },
   })
   if (!attempted) return
-  invalidateStartupForExactOwnership({
-    currentOwnership: backendOwnership,
-    eventOwnership: ownership,
-    eventName: 'kill',
-    startupController,
-  })
   appendDesktopLog(`Stop requested for exact backend child handle pid=${processToStop.pid ?? 'unknown'}`)
 }
 
@@ -658,7 +671,7 @@ async function createMainWindow(runtime) {
         const image = await window.webContents.capturePage()
         fs.writeFileSync(runtime.qaCapturePath, image.toPNG())
         appendDesktopLog(`QA capture written: ${runtime.qaCapturePath}`)
-        setImmediate(() => app.quit())
+        setImmediate(() => requestQaAppQuit({ app, processLike: process }))
       }
       if (runtime.qaVisibleSmokePath) {
         await new Promise((resolve) => setTimeout(resolve, 900))
@@ -678,9 +691,9 @@ async function createMainWindow(runtime) {
         fs.writeFileSync(runtime.qaVisibleSmokePath, JSON.stringify(result, null, 2))
         appendDesktopLog(`QA visible smoke written: ${runtime.qaVisibleSmokePath} visible=${result.windowVisible}`)
         if (!result.ok) {
-          app.exit(1)
+          setImmediate(() => requestQaAppQuit({ app, processLike: process, failed: true }))
         } else {
-          setImmediate(() => app.quit())
+          setImmediate(() => requestQaAppQuit({ app, processLike: process }))
         }
       }
     },
@@ -691,6 +704,11 @@ startupController = launchPolicyValid && ownsSingleInstanceLock
   ? createDesktopStartupController({
       startRuntime: startDesktopRuntime,
       createMainWindow,
+      discardMainWindow: (window) => discardExactWindow({
+        window,
+        getCurrentWindow: () => mainWindow,
+        setCurrentWindow: (value) => { mainWindow = value },
+      }),
     })
   : null
 

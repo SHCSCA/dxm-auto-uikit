@@ -5,9 +5,14 @@ const {
   createDesktopStartupController,
   createStartupFailurePresentation,
   createTransactionalWindow,
+  discardExactWindow,
+  focusExistingWindow,
   invalidateStartupForExactOwnership,
+  loadStartupErrorContent,
   prepareElectronLaunchOwnership,
   registerPrimaryInstanceLifecycle,
+  requestExactBackendTermination,
+  requestQaAppQuit,
 } = require('../src/runtime-start.cjs')
 
 test('ready starts runtime once before the first window and activate creates only a window', async () => {
@@ -78,6 +83,44 @@ test('first window failure leaves no verified runtime and activate never retries
   assert.equal(controller.getVerifiedRuntime(), null)
   assert.equal(await controller.onActivate({ hasWindows: false }), false)
   assert.equal(windows, 1)
+})
+
+test('exact invalidation during first-window initialization rolls back the returned window before surfacing failure', async () => {
+  let releaseWindow
+  let currentWindow = null
+  let errorWindowCreated = false
+  const firstWindow = {
+    destroyed: false,
+    isDestroyed() { return this.destroyed },
+    destroy() { this.destroyed = true },
+  }
+  const controller = createDesktopStartupController({
+    startRuntime: async () => ({ apiBase: 'http://127.0.0.1:8000' }),
+    createMainWindow: async () => {
+      currentWindow = firstWindow
+      await new Promise((resolve) => { releaseWindow = resolve })
+      return firstWindow
+    },
+    discardMainWindow: (window) => discardExactWindow({
+      window,
+      getCurrentWindow: () => currentWindow,
+      setCurrentWindow: (value) => { currentWindow = value },
+    }),
+  })
+
+  const ready = controller.onReady()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(controller.getState(), 'starting')
+  controller.invalidateRuntime('stopped')
+  releaseWindow()
+
+  await assert.rejects(ready, /invalidated while creating the first window: stopped/)
+  assert.equal(firstWindow.destroyed, true)
+  assert.equal(currentWindow, null)
+  assert.equal(controller.getVerifiedRuntime(), null)
+  assert.equal(controller.getState(), 'stopped')
+  if (!focusExistingWindow(() => currentWindow)) errorWindowCreated = true
+  assert.equal(errorWindowCreated, true)
 })
 
 test('startup conflict presentation uses stable error code and ignores resource paths in the stack', () => {
@@ -246,6 +289,134 @@ test('only exact current ownership exit, close, or kill invalidates a verified s
   assert.equal(controller.getState(), 'stopped')
   assert.equal(controller.getVerifiedRuntime(), null)
   assert.equal(await controller.onActivate({ hasWindows: false }), false)
+})
+
+test('exact backend termination invalidates startup only after the child accepts the kill request', async () => {
+  const controller = createDesktopStartupController({
+    startRuntime: async () => ({ apiBase: 'http://127.0.0.1:8000' }),
+    createMainWindow: async () => {},
+  })
+  await controller.onReady()
+  const ownership = { child: { pid: 21 } }
+  const runtimeInfo = { backendPid: 21, backendInstanceId: 'owned' }
+  const calls = []
+
+  assert.equal(requestExactBackendTermination({
+    currentOwnership: ownership,
+    ownership,
+    runtimeInfo,
+    startupController: controller,
+    terminateOwnedBackend: (input) => {
+      calls.push(input)
+      return false
+    },
+  }), false)
+  assert.equal(controller.getState(), 'ready')
+
+  assert.equal(requestExactBackendTermination({
+    currentOwnership: ownership,
+    ownership,
+    runtimeInfo,
+    startupController: controller,
+    terminateOwnedBackend: () => true,
+  }), true)
+  assert.equal(controller.getState(), 'stopped')
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].currentOwnership, ownership)
+  assert.equal(calls[0].ownership, ownership)
+  assert.equal(calls[0].runtimeInfo, runtimeInfo)
+})
+
+test('exact backend termination catches a child kill error without invalidating startup', async () => {
+  const controller = createDesktopStartupController({
+    startRuntime: async () => ({ apiBase: 'http://127.0.0.1:8000' }),
+    createMainWindow: async () => {},
+  })
+  await controller.onReady()
+  const ownership = { child: { pid: 22 } }
+  const errors = []
+
+  assert.equal(requestExactBackendTermination({
+    currentOwnership: ownership,
+    ownership,
+    runtimeInfo: { backendPid: 22, backendInstanceId: 'owned' },
+    startupController: controller,
+    terminateOwnedBackend: () => { throw new Error('kill request rejected') },
+    onTerminationError: (error) => errors.push(error.message),
+  }), false)
+  assert.deepEqual(errors, ['kill request rejected'])
+  assert.equal(controller.getState(), 'ready')
+  assert.notEqual(controller.getVerifiedRuntime(), null)
+})
+
+test('failed QA quit preserves nonzero status and reaches the unified app quit cleanup lifecycle', () => {
+  const events = []
+  const processLike = { exitCode: undefined }
+  const app = {
+    exit: () => { throw new Error('direct app.exit must not be used') },
+    quit: () => {
+      events.push('quit')
+      events.push('will-quit cleanup')
+    },
+  }
+
+  assert.equal(requestQaAppQuit({ app, processLike, failed: true }), true)
+  assert.equal(processLike.exitCode, 1)
+  assert.deepEqual(events, ['quit', 'will-quit cleanup'])
+})
+
+test('successful QA quit keeps the normal exit status and still uses app quit', () => {
+  const events = []
+  const processLike = { exitCode: undefined }
+  assert.equal(requestQaAppQuit({
+    app: { quit: () => events.push('quit') },
+    processLike,
+    failed: false,
+  }), true)
+  assert.equal(processLike.exitCode, undefined)
+  assert.deepEqual(events, ['quit'])
+})
+
+test('startup error content falls back once when rich HTML fails to load', async () => {
+  const urls = []
+  const diagnostics = []
+  const window = {
+    loadURL: async (url) => {
+      urls.push(url)
+      if (urls.length === 1) throw new Error('rich content rejected')
+    },
+  }
+
+  const result = await loadStartupErrorContent({
+    window,
+    richContentUrl: 'data:text/html,rich',
+    fallbackContentUrl: 'data:text/html,safe-fallback',
+    onLoadError: (error, stage) => diagnostics.push(`${stage}:${error.message}`),
+  })
+
+  assert.equal(result, 'fallback')
+  assert.deepEqual(urls, ['data:text/html,rich', 'data:text/html,safe-fallback'])
+  assert.deepEqual(diagnostics, ['rich:rich content rejected'])
+})
+
+test('startup error content contains a second load rejection without recursion or an unhandled rejection', async () => {
+  const urls = []
+  const diagnostics = []
+  const result = await loadStartupErrorContent({
+    window: {
+      loadURL: async (url) => {
+        urls.push(url)
+        throw new Error(`rejected ${urls.length}`)
+      },
+    },
+    richContentUrl: 'data:text/html,rich',
+    fallbackContentUrl: 'data:text/html,safe-fallback',
+    onLoadError: (error, stage) => diagnostics.push(`${stage}:${error.message}`),
+  })
+
+  assert.equal(result, 'failed')
+  assert.equal(urls.length, 2)
+  assert.deepEqual(diagnostics, ['rich:rejected 1', 'fallback:rejected 2'])
 })
 
 test('invalid policy or a missing single-instance lock registers no startup lifecycle', async () => {

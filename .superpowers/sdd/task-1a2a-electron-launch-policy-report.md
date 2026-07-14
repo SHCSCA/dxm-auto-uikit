@@ -47,11 +47,22 @@ The first independent spec review passed, while the first quality review returne
 - `--qa-capture` and `--qa-visible-smoke` are mutually exclusive, while credential smoke may accompany either one;
 - production startup now calls the injected `prepareElectronLaunchOwnership` helper. Its behavior test proves classify → QA root creation → `setPath` → lock, and proves invalid policy or a false lock registers no lifecycle.
 
+A second independent quality pass found three important lifecycle gaps and one minor error-window gap. A second TDD follow-up closes them without expanding Phase A:
+
+- an exact child `kill()` request is accepted only when `ChildProcess.kill()` returns `true`; `false` and thrown errors do not invalidate the startup controller, and the Electron quit seam contains/logs a thrown kill error so `will-quit` is not broken;
+- if exact backend invalidation races the first window initialization, the controller now destroys the exact returned window, clears only its matching global reference, retains the terminal `stopped/failed` state, and leaves no apparently healthy window that could suppress the startup error window;
+- capture and visible-smoke QA exits now share `app.quit()` and the registered `will-quit` cleanup path; a failed visible smoke sets a nonzero process exit code without calling `app.exit(1)`;
+- startup error content loads through a contained rich-to-minimal fallback helper. A first `loadURL` rejection gets one visible minimal fallback attempt, and a second rejection is logged and resolved without recursion or an unhandled rejection.
+
+Phase A still only requests termination through the exact owned `ChildProcess` handle. Waiting for confirmed child close, parent-pipe graceful shutdown, bounded fallback, and Job Object teardown remain explicitly owned by Phase B.
+
 Follow-up RED evidence:
 
 - focused Node run: `26` tests, `3` expected failures (capture+visible accepted, idle/starting activate threw, and explicit controller state was absent);
 - second focused Node run: `11` tests, `6` expected failures because the stable presentation, transactional-window, bootstrap-order, and exact-invalidation helpers did not yet exist;
 - focused Python desktop contract: `34` tests, `3` expected failures before production used the bootstrap/transaction helpers and preflight log truth; the unique-error-window follow-up then failed `1/1` before the old one-shot boolean gate was removed.
+- second-pass batch 1 focused Node run: `29` tests, `3` expected failures proving `kill() === false` was misreported, an initialize/invalidate race retained the normal window, and the termination-to-invalidation seam was absent;
+- second-pass batch 2 focused runtime-start run: `18` tests, `5` expected failures proving a thrown `kill()` escaped the quit seam, unified QA quit behavior was absent, and rich/fallback error content rejections were not contained.
 
 Fresh final verification evidence is recorded below after the last documentation-only changes.
 
@@ -76,9 +87,11 @@ Legacy diagnostics never adopt or kill a process. Same-data identity from `/heal
 
 - `app/desktop/src/launch-policy.cjs`
 - `app/desktop/src/runtime-start.cjs`
+- `app/desktop/src/runtime-identity.cjs`
 - `app/desktop/src/main.cjs`
 - `app/desktop/test/launch-policy.test.cjs`
 - `app/desktop/test/runtime-start.test.cjs`
+- `app/desktop/test/runtime-identity.test.cjs`
 - `app/backend/tests/test_desktop_package_contract.py`
 - `.superpowers/sdd/progress.md`
 - `.superpowers/sdd/task-1a2-runtime-ownership-brief.md` (revised governing brief, force-added)
@@ -97,10 +110,10 @@ The optional parsed `--qa-deadline-ms` is intentionally not wired to inner grace
 
 ## Final verification
 
-Fresh owner verification immediately before the independent commit:
+Fresh implementer verification immediately before the second follow-up commit:
 
-- `npm test` in `app/desktop`: `47 passed`, `0 failed`;
-- `python -m pytest tests/test_desktop_package_contract.py tests/test_qa_runtime_data_isolation.py -q`: `48 passed`;
+- `npm test` in `app/desktop`: `55 passed`, `0 failed`;
+- `python -m pytest tests/test_desktop_package_contract.py tests/test_qa_runtime_data_isolation.py -q`: `49 passed`;
 - `npm run build` in `app/frontend`: TypeScript check and Vite production build passed (`49` modules transformed);
-- `node --check` for `main.cjs`, `launch-policy.cjs`, and `runtime-start.cjs`: passed;
+- `node --check` for `main.cjs`, `launch-policy.cjs`, `runtime-start.cjs`, and `runtime-identity.cjs`: passed;
 - `git diff --check`: passed (only Git's existing LF-to-CRLF working-copy notices).

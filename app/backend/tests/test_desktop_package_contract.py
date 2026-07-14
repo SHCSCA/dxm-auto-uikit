@@ -357,7 +357,9 @@ def test_desktop_main_surfaces_startup_failures_in_visible_window():
     assert "function createStartupErrorWindow(error)" in source
     assert "DXM Agent Console startup failed" in source
     assert "desktop-main.log" in source
-    assert "loadURL(`data:text/html" in source
+    assert "loadStartupErrorContent({" in startup_error_section
+    assert "fallbackContentUrl" in startup_error_section
+    assert "Startup error window ${stage} content load failed" in startup_error_section
     assert "killBackendProcess()" in source
     assert "function userStartupErrorMessage" in source
     assert "appendDesktopLog(`Startup failure detail:" in startup_error_section
@@ -367,6 +369,18 @@ def test_desktop_main_surfaces_startup_failures_in_visible_window():
     assert "presentation.logMessage" in startup_error_section
     assert "未生成启动日志" in runtime_start_source
     assert "旧浏览器后台进程" not in startup_error_section
+
+
+def test_visible_smoke_failure_uses_unified_quit_cleanup_with_nonzero_status():
+    source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    visible_start = source.index("if (runtime.qaVisibleSmokePath)")
+    visible_section = source[visible_start:source.index("startupController =", visible_start)]
+
+    assert "requestQaAppQuit({ app, processLike: process, failed: true })" in visible_section
+    assert "requestQaAppQuit({ app, processLike: process })" in visible_section
+    assert "app.exit(" not in visible_section
+    assert source.count("app.exit(1)") == 1
+    assert source.index("app.exit(1)") < source.index("let mainWindow")
 
 
 def test_desktop_main_window_setup_is_transactional_and_startup_error_window_is_unique():
