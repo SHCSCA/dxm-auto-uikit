@@ -25,7 +25,11 @@ const {
 } = require('./launch-policy.cjs')
 const {
   createDesktopStartupController,
+  createStartupFailurePresentation,
+  createTransactionalWindow,
   focusExistingWindow,
+  invalidateStartupForExactOwnership,
+  prepareElectronLaunchOwnership,
   registerPrimaryInstanceLifecycle,
 } = require('./runtime-start.cjs')
 
@@ -36,17 +40,18 @@ let launchPolicy = null
 let launchPolicyValid = false
 let ownsSingleInstanceLock = false
 try {
-  launchPolicy = classifyLaunchArguments({
+  const launchOwnership = prepareElectronLaunchOwnership({
     argv: process.argv,
     normalUserDataDir,
+    classifyLaunchArguments,
+    createQaRoot: (qaUserDataDir) => fs.mkdirSync(qaUserDataDir, { recursive: true }),
+    setUserDataPath: (qaUserDataDir) => app.setPath('userData', qaUserDataDir),
+    requestSingleInstanceLock: () => app.requestSingleInstanceLock(),
+    quit: () => app.quit(),
   })
-  if (launchPolicy.isIsolatedQa) {
-    fs.mkdirSync(launchPolicy.qaUserDataDir, { recursive: true })
-    app.setPath('userData', launchPolicy.qaUserDataDir)
-  }
-  launchPolicyValid = true
-  ownsSingleInstanceLock = app.requestSingleInstanceLock()
-  if (!ownsSingleInstanceLock) app.quit()
+  launchPolicy = launchOwnership.launchPolicy
+  launchPolicyValid = launchOwnership.launchPolicyValid
+  ownsSingleInstanceLock = launchOwnership.ownsSingleInstanceLock
 } catch (error) {
   console.error(`Invalid desktop launch policy: ${error instanceof Error ? error.message : String(error)}`)
   app.exit(1)
@@ -54,6 +59,7 @@ try {
 
 let mainWindow = null
 let backendOwnership = null
+let startupController = null
 
 const runtimeInfo = {
   repoRoot: null,
@@ -65,6 +71,7 @@ const runtimeInfo = {
   frontendPath: null,
   backendLogPath: null,
   desktopLogPath: null,
+  desktopLogWritten: false,
   dataDir: null,
   dataDirReady: false,
   qaCapturePath: null,
@@ -236,12 +243,15 @@ function runCredentialSmoke(outputPath) {
 function appendDesktopLog(message) {
   if (!runtimeInfo.desktopLogPath) initializeDesktopLogPath()
   const logPath = runtimeInfo.desktopLogPath
-  if (!logPath || !runtimeInfo.dataDirReady) return
+  if (!logPath || !runtimeInfo.dataDirReady) return false
   const line = `[${new Date().toISOString()}] ${message}\n`
   try {
     fs.appendFileSync(logPath, line, 'utf8')
+    runtimeInfo.desktopLogWritten = true
+    return true
   } catch (error) {
     console.error(`Desktop log write failed: ${error instanceof Error ? error.message : String(error)}`)
+    return false
   }
 }
 
@@ -271,42 +281,25 @@ function rawStartupErrorDetail(error) {
   return error instanceof Error ? error.stack || error.message : String(error)
 }
 
+function createCodedStartupError(code, message) {
+  const error = new Error(message)
+  error.code = code
+  return error
+}
+
 function userStartupErrorMessage(error) {
-  const raw = rawStartupErrorDetail(error)
-  const normalized = raw.toLowerCase()
-  const conflict = error?.conflict && typeof error.conflict === 'object' ? error.conflict : null
-  if (normalized.includes('packaged backend python is missing') || normalized.includes('resources')) {
-    return '免安装目录不完整，后端运行资源没有找到。请重新解压或重新复制完整的 DXM Agent Console 免安装版目录后再启动。'
-  }
-  if (normalized.includes('same data directory')) {
-    const facts = conflict ? [
-      Number.isInteger(conflict.port) ? `端口 ${conflict.port}` : null,
-      conflict.pid === null || conflict.pid === undefined ? null : `进程 ${conflict.pid}`,
-      conflict.instanceId ? `实例 ${conflict.instanceId}` : null,
-    ].filter(Boolean) : []
-    const factText = facts.length ? `（${facts.join('，')}）` : ''
-    return `已有 DXM Agent Console 正在使用同一数据目录${factText}。请先从原窗口正常退出，再重新打开；系统不会自动接管或结束旧进程。`
-  }
-  if (normalized.includes('loopback port 8000')) {
-    return '本机 8000 端口已被占用。请先关闭占用该端口的旧控制台或其他程序，再重新打开；系统不会自动结束该进程。'
-  }
-  if (normalized.includes('no free loopback port') || normalized.includes('eaddrinuse')) {
-    return '本机服务端口被占用。请关闭旧的 DXM Agent Console 窗口或后台进程，然后重新打开。'
-  }
-  if (normalized.includes('frontend') || normalized.includes('index.html')) {
-    return '桌面页面资源没有加载成功。请确认免安装目录没有缺文件，并重新打开程序。'
-  }
-  if (normalized.includes('backend') || normalized.includes('uvicorn') || normalized.includes('python')) {
-    return '后端服务启动失败。请关闭旧窗口后重试；如果仍失败，把日志文件发给维护人员排查。'
-  }
-  return '工作台启动失败。系统没有执行保存或发布动作；请关闭旧窗口后重新打开，如果仍失败请查看日志文件。'
+  return createStartupFailurePresentation(error).message
 }
 
 function createStartupErrorWindow(error) {
   appendDesktopLog(`Startup failure detail: ${rawStartupErrorDetail(error)}`)
+  if (focusExistingWindow(() => mainWindow)) return mainWindow
+  const presentation = createStartupFailurePresentation(error, {
+    desktopLogWritten: runtimeInfo.desktopLogWritten,
+    desktopLogPath: runtimeInfo.desktopLogPath,
+  })
   const message = userStartupErrorMessage(error)
-  const logPath = runtimeInfo.desktopLogPath || 'desktop-main.log'
-  mainWindow = new BrowserWindow({
+  const window = new BrowserWindow({
     width: 860,
     height: 560,
     minWidth: 720,
@@ -318,6 +311,13 @@ function createStartupErrorWindow(error) {
       nodeIntegration: false,
     },
   })
+  mainWindow = window
+  window.once('closed', () => {
+    if (mainWindow === window) mainWindow = null
+  })
+  const logSection = presentation.logAvailable
+    ? `<strong>日志文件</strong><code>${escapeHtml(presentation.logPath)}</code>`
+    : `<strong>启动日志</strong><p>${escapeHtml(presentation.logMessage)}</p>`
   const html = `<!doctype html>
 <html lang="zh-CN">
   <head>
@@ -342,24 +342,25 @@ function createStartupErrorWindow(error) {
       <section class="notice">
         <strong>发生了什么</strong>
         <p>${escapeHtml(message)}</p>
+        <p>错误码：${escapeHtml(presentation.code)}</p>
       </section>
       <section>
         <strong>处理步骤</strong>
         <ol>
           <li>先关闭当前窗口。</li>
-          <li>确认没有旧的 DXM Agent Console 或旧浏览器后台进程。</li>
-          <li>重新打开完整的免安装版 exe；如果仍失败，把下面日志文件发给维护人员。</li>
+          <li>按上方提示处理对应冲突或目录问题。</li>
+          <li>重新打开完整的免安装版 exe；如果仍失败，把错误码和实际生成的日志文件发给维护人员。</li>
         </ol>
       </section>
       <section>
-        <strong>日志文件</strong>
-        <code>${escapeHtml(logPath)}</code>
+        ${logSection}
       </section>
-      <p class="muted">原始错误已写入日志文件，页面不直接显示技术堆栈，避免普通用户被无关细节干扰。</p>
+      <p class="muted">${escapeHtml(presentation.logMessage)}页面不直接显示技术堆栈，避免普通用户被无关细节干扰。</p>
     </main>
   </body>
 </html>`
-  mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+  window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+  return window
 }
 
 const tcpOccupancyProbe = createTcpOccupancyProbe()
@@ -384,7 +385,10 @@ function resolvePythonPath(repoRoot) {
     return bundledVenvPython
   }
   if (app.isPackaged) {
-    throw new Error(`Packaged backend Python is missing: ${bundledVenvPython}`)
+    throw createCodedStartupError(
+      'DXM_PACKAGED_BACKEND_MISSING',
+      `Packaged backend Python is missing: ${bundledVenvPython}`,
+    )
   }
   return process.platform === 'win32' ? 'python' : 'python3'
 }
@@ -453,7 +457,7 @@ function startBackend(repoRoot, port, backendInstanceId, launchIdentity) {
   })
   if (!Number.isInteger(child.pid) || child.pid <= 0) {
     endLogStream()
-    throw new Error('Backend spawn did not return a valid child pid')
+    throw createCodedStartupError('DXM_BACKEND_START_FAILED', 'Backend spawn did not return a valid child pid')
   }
   const expectedIdentity = createExpectedRuntimeIdentity({
     manifest,
@@ -478,6 +482,12 @@ function startBackend(repoRoot, port, backendInstanceId, launchIdentity) {
   })
   const finalizeChild = (eventName, code, signal) => {
     appendDesktopLog(`Backend ${eventName}: code=${code ?? 'null'} signal=${signal ?? 'null'}`)
+    invalidateStartupForExactOwnership({
+      currentOwnership: backendOwnership,
+      eventOwnership: ownership,
+      eventName,
+      startupController,
+    })
     lifecycle.handle(eventName)
   }
   child.on('exit', (code, signal) => finalizeChild('exit', code, signal))
@@ -500,7 +510,10 @@ function resolveFrontendPath(repoRoot) {
   // Frontend entry contract: app/frontend/dist/index.html
   const frontendPath = path.join(repoRoot, 'app', 'frontend', 'dist', 'index.html')
   if (!fs.existsSync(frontendPath)) {
-    throw new Error('Frontend dist missing. Run npm --prefix app/frontend run build first.')
+    throw createCodedStartupError(
+      'DXM_FRONTEND_MISSING',
+      'Frontend dist missing. Run npm --prefix app/frontend run build first.',
+    )
   }
   return frontendPath
 }
@@ -515,6 +528,12 @@ function killBackendProcess() {
     runtimeInfo,
   })
   if (!attempted) return
+  invalidateStartupForExactOwnership({
+    currentOwnership: backendOwnership,
+    eventOwnership: ownership,
+    eventName: 'kill',
+    startupController,
+  })
   appendDesktopLog(`Stop requested for exact backend child handle pid=${processToStop.pid ?? 'unknown'}`)
 }
 
@@ -595,89 +614,91 @@ async function startDesktopRuntime() {
 
 async function createMainWindow(runtime) {
   if (focusExistingWindow(() => mainWindow)) return mainWindow
-  const window = new BrowserWindow({
-    width: 1480,
-    height: 940,
-    minWidth: 1180,
-    minHeight: 760,
-    show: !runtime.qaCapturePath,
-    backgroundColor: '#f6f8fb',
-    title: 'DXM Agent Console',
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
+  return createTransactionalWindow({
+    getCurrentWindow: () => mainWindow,
+    setCurrentWindow: (value) => { mainWindow = value },
+    createWindow: () => {
+      const window = new BrowserWindow({
+        width: 1480,
+        height: 940,
+        minWidth: 1180,
+        minHeight: 760,
+        show: !runtime.qaCapturePath,
+        backgroundColor: '#f6f8fb',
+        title: 'DXM Agent Console',
+        webPreferences: {
+          preload: path.join(__dirname, 'preload.cjs'),
+          contextIsolation: true,
+          nodeIntegration: false,
+        },
+      })
+      window.once('closed', () => {
+        if (mainWindow === window) mainWindow = null
+      })
+      window.webContents.setWindowOpenHandler(({ url }) => {
+        shell.openExternal(url)
+        return { action: 'deny' }
+      })
+      return window
+    },
+    initializeWindow: async (window) => {
+      await window.loadFile(runtime.frontendPath, {
+        query: {
+          apiBase: runtime.apiBase,
+          desktop: '1',
+        },
+      })
+      appendDesktopLog(`Loaded frontend ${runtime.frontendPath} with apiBase=${runtime.apiBase}`)
+      if (runtime.qaCredentialSmokePath) {
+        runCredentialSmoke(runtime.qaCredentialSmokePath)
+      }
+      if (runtime.qaCapturePath) {
+        await new Promise((resolve) => setTimeout(resolve, 1200))
+        fs.mkdirSync(path.dirname(runtime.qaCapturePath), { recursive: true })
+        const image = await window.webContents.capturePage()
+        fs.writeFileSync(runtime.qaCapturePath, image.toPNG())
+        appendDesktopLog(`QA capture written: ${runtime.qaCapturePath}`)
+        setImmediate(() => app.quit())
+      }
+      if (runtime.qaVisibleSmokePath) {
+        await new Promise((resolve) => setTimeout(resolve, 900))
+        const result = {
+          ok: Boolean(!window.isDestroyed() && window.isVisible()),
+          windowVisible: Boolean(!window.isDestroyed() && window.isVisible()),
+          windowFocused: Boolean(!window.isDestroyed() && window.isFocused()),
+          windowBounds: window.isDestroyed() ? null : window.getBounds(),
+          backendPort: runtimeInfo.backendPort,
+          apiBase: runtimeInfo.apiBase,
+          frontendPath: runtimeInfo.frontendPath,
+          desktopLogPath: runtimeInfo.desktopLogPath,
+          backendLogPath: runtimeInfo.backendLogPath,
+          checkedAt: new Date().toISOString(),
+        }
+        fs.mkdirSync(path.dirname(runtime.qaVisibleSmokePath), { recursive: true })
+        fs.writeFileSync(runtime.qaVisibleSmokePath, JSON.stringify(result, null, 2))
+        appendDesktopLog(`QA visible smoke written: ${runtime.qaVisibleSmokePath} visible=${result.windowVisible}`)
+        if (!result.ok) {
+          app.exit(1)
+        } else {
+          setImmediate(() => app.quit())
+        }
+      }
     },
   })
-  mainWindow = window
-  window.once('closed', () => {
-    if (mainWindow === window) mainWindow = null
-  })
-
-  window.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
-    return { action: 'deny' }
-  })
-
-  await window.loadFile(runtime.frontendPath, {
-    query: {
-      apiBase: runtime.apiBase,
-      desktop: '1',
-    },
-  })
-  appendDesktopLog(`Loaded frontend ${runtime.frontendPath} with apiBase=${runtime.apiBase}`)
-  if (runtime.qaCredentialSmokePath) {
-    runCredentialSmoke(runtime.qaCredentialSmokePath)
-  }
-  if (runtime.qaCapturePath) {
-    await new Promise((resolve) => setTimeout(resolve, 1200))
-    fs.mkdirSync(path.dirname(runtime.qaCapturePath), { recursive: true })
-    const image = await window.webContents.capturePage()
-    fs.writeFileSync(runtime.qaCapturePath, image.toPNG())
-    appendDesktopLog(`QA capture written: ${runtime.qaCapturePath}`)
-    app.quit()
-  }
-  if (runtime.qaVisibleSmokePath) {
-    await new Promise((resolve) => setTimeout(resolve, 900))
-    const result = {
-      ok: Boolean(mainWindow && mainWindow.isVisible()),
-      windowVisible: Boolean(mainWindow && mainWindow.isVisible()),
-      windowFocused: Boolean(mainWindow && mainWindow.isFocused()),
-      windowBounds: mainWindow ? mainWindow.getBounds() : null,
-      backendPort: runtimeInfo.backendPort,
-      apiBase: runtimeInfo.apiBase,
-      frontendPath: runtimeInfo.frontendPath,
-      desktopLogPath: runtimeInfo.desktopLogPath,
-      backendLogPath: runtimeInfo.backendLogPath,
-      checkedAt: new Date().toISOString(),
-    }
-    fs.mkdirSync(path.dirname(runtime.qaVisibleSmokePath), { recursive: true })
-    fs.writeFileSync(runtime.qaVisibleSmokePath, JSON.stringify(result, null, 2))
-    appendDesktopLog(`QA visible smoke written: ${runtime.qaVisibleSmokePath} visible=${result.windowVisible}`)
-    if (!result.ok) {
-      app.exit(1)
-    }
-    app.quit()
-  }
-  return window
 }
 
-const startupController = launchPolicyValid && ownsSingleInstanceLock
+startupController = launchPolicyValid && ownsSingleInstanceLock
   ? createDesktopStartupController({
       startRuntime: startDesktopRuntime,
       createMainWindow,
     })
   : null
-let startupFailureShown = false
 
 function handleDesktopStartupFailure(error) {
   runtimeInfo.lastError = error instanceof Error ? error.stack || error.message : String(error)
   appendDesktopLog(`Desktop startup failed: ${runtimeInfo.lastError}`)
   killBackendProcess()
-  if (!startupFailureShown) {
-    startupFailureShown = true
-    createStartupErrorWindow(error)
-  }
+  createStartupErrorWindow(error)
 }
 
 if (ownsSingleInstanceLock) {

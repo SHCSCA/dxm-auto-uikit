@@ -68,20 +68,18 @@ def test_desktop_main_validates_qa_then_locks_selected_user_data_before_runtime_
 
     assert "classifyLaunchArguments" in source
     assert "const normalUserDataDir = app.getPath('userData')" in source
-    assert "fs.mkdirSync(launchPolicy.qaUserDataDir, { recursive: true })" in source
-    assert "app.setPath('userData', launchPolicy.qaUserDataDir)" in source
-    assert "app.requestSingleInstanceLock()" in source
+    assert "createQaRoot: (qaUserDataDir) => fs.mkdirSync(qaUserDataDir, { recursive: true })" in source
+    assert "setUserDataPath: (qaUserDataDir) => app.setPath('userData', qaUserDataDir)" in source
+    assert "requestSingleInstanceLock: () => app.requestSingleInstanceLock()" in source
     assert "app.on('second-instance'" in runtime_start_source
     assert "focusWindow: () => focusExistingWindow(() => mainWindow)" in source
     assert "async function startDesktopRuntime()" in source
     assert "async function createMainWindow(runtime)" in source
 
-    classify_at = source.index("classifyLaunchArguments")
-    qa_root_at = source.index("fs.mkdirSync(launchPolicy.qaUserDataDir, { recursive: true })")
-    set_path_at = source.index("app.setPath('userData', launchPolicy.qaUserDataDir)")
-    lock_at = source.index("app.requestSingleInstanceLock()")
+    bootstrap_at = source.index("prepareElectronLaunchOwnership({")
     register_at = source.index("registerPrimaryInstanceLifecycle({")
-    assert classify_at < qa_root_at < set_path_at < lock_at < register_at
+    assert bootstrap_at < register_at
+    assert "function prepareElectronLaunchOwnership" in runtime_start_source
 
 
 def test_desktop_normal_port_is_fixed_and_legacy_scan_precedes_spawn():
@@ -126,7 +124,7 @@ def test_desktop_invalid_policy_or_missing_lock_cannot_register_ready_startup():
     runtime_start_source = DESKTOP_RUNTIME_START.read_text(encoding="utf-8")
 
     assert "let launchPolicyValid = false" in source
-    assert "launchPolicyValid = true" in source
+    assert "launchPolicyValid = launchOwnership.launchPolicyValid" in source
     assert "registerPrimaryInstanceLifecycle({" in source
     assert "launchPolicyValid," in source
     assert "ownsSingleInstanceLock," in source
@@ -184,7 +182,7 @@ def test_desktop_main_starts_backend_hidden_and_loads_frontend_with_api_base():
     assert "qa-capture" in launch_policy_source
     assert "qa-visible-smoke" in launch_policy_source
     assert "show: !runtime.qaCapturePath" in source
-    assert "windowVisible: Boolean(mainWindow && mainWindow.isVisible())" in source
+    assert "windowVisible: Boolean(!window.isDestroyed() && window.isVisible())" in source
     assert "QA visible smoke written" in source
     assert "webContents.capturePage()" in source
     assert "terminateExactOwnedBackend" in kill_backend_section
@@ -350,6 +348,7 @@ def test_frontend_runtime_types_include_the_frozen_identity_at_all_contract_surf
 
 def test_desktop_main_surfaces_startup_failures_in_visible_window():
     source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    runtime_start_source = DESKTOP_RUNTIME_START.read_text(encoding="utf-8")
     startup_error_section = source[
         source.index("function createStartupErrorWindow"):
         source.index("const tcpOccupancyProbe")
@@ -365,23 +364,53 @@ def test_desktop_main_surfaces_startup_failures_in_visible_window():
     assert "const message = userStartupErrorMessage(error)" in startup_error_section
     assert "error.stack || error.message" not in startup_error_section
     assert "处理步骤" in startup_error_section
+    assert "presentation.logMessage" in startup_error_section
+    assert "未生成启动日志" in runtime_start_source
+    assert "旧浏览器后台进程" not in startup_error_section
+
+
+def test_desktop_main_window_setup_is_transactional_and_startup_error_window_is_unique():
+    source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    runtime_start_source = DESKTOP_RUNTIME_START.read_text(encoding="utf-8")
+    main_window_start = source.index("async function createMainWindow(runtime)")
+    main_window_section = source[
+        main_window_start:
+        source.index("startupController =", main_window_start)
+    ]
+    error_window_section = source[
+        source.index("function createStartupErrorWindow"):
+        source.index("const tcpOccupancyProbe")
+    ]
+
+    assert "createTransactionalWindow({" in main_window_section
+    assert "window.destroy()" in runtime_start_source
+    assert "if (getCurrentWindow() === window)" in runtime_start_source
+    assert error_window_section.index("focusExistingWindow") < error_window_section.index("new BrowserWindow")
+    assert "window.once('closed'" in error_window_section
+    assert "startupFailureShown" not in source
+    failure_handler = source[
+        source.index("function handleDesktopStartupFailure"):
+        source.index("if (ownsSingleInstanceLock)")
+    ]
+    assert "createStartupErrorWindow(error)" in failure_handler
 
 
 def test_desktop_main_surfaces_fixed_port_and_same_data_conflicts_as_actionable_startup_errors():
     source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    runtime_start_source = DESKTOP_RUNTIME_START.read_text(encoding="utf-8")
     message_section = source[
         source.index("function userStartupErrorMessage"):
         source.index("function createStartupErrorWindow")
     ]
 
-    assert "loopback port 8000" in message_section
-    assert "same data directory" in message_section
-    assert "本机 8000 端口已被占用" in message_section
-    assert "已有 DXM Agent Console 正在使用同一数据目录" in message_section
-    assert "error?.conflict" in message_section
-    assert "conflict.port" in message_section
-    assert "conflict.pid" in message_section
-    assert "conflict.instanceId" in message_section
+    assert "createStartupFailurePresentation(error).message" in message_section
+    assert "DXM_PORT_8000_OCCUPIED" in runtime_start_source
+    assert "本机 8000 端口已被占用" in runtime_start_source
+    assert "已有 DXM Agent Console 正在使用同一数据目录" in runtime_start_source
+    assert "error?.conflict" in runtime_start_source
+    assert "conflict.port" in runtime_start_source
+    assert "conflict.pid" in runtime_start_source
+    assert "conflict.instanceId" in runtime_start_source
 
 
 def test_desktop_preload_exposes_readonly_runtime_metadata():
@@ -408,7 +437,7 @@ def test_desktop_credential_smoke_verifies_safe_storage_without_destroying_user_
 
     assert "classifyLaunchArguments" in source
     assert "qa-user-data-dir" in launch_policy_source
-    assert "app.setPath('userData', launchPolicy.qaUserDataDir)" in source
+    assert "setUserDataPath: (qaUserDataDir) => app.setPath('userData', qaUserDataDir)" in source
     assert "qa-credential-smoke" in launch_policy_source
     assert "function runCredentialSmoke(outputPath)" in source
     assert "const previousCredential = fs.existsSync(credentialPath)" in source

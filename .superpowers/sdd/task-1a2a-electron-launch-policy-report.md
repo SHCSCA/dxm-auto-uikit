@@ -36,6 +36,23 @@ GREEN evidence collected during implementation:
 - QA runtime data-isolation contracts: `14 passed`;
 - Node syntax checks for `main.cjs`, `launch-policy.cjs`, and `runtime-start.cjs`: passed.
 
+## Independent-review follow-up
+
+The first independent spec review passed, while the first quality review returned four important and two minor findings. A separate TDD follow-up closes all six without entering phases B/C:
+
+- startup-user classification now consumes stable `error.code` values and never the diagnostic stack; same-data and fixed-port fixtures deliberately include a packaged `resources/app.asar` stack and retain the correct conflict message;
+- the startup controller now exposes explicit `idle / starting / ready / failed / stopped` states, caches a runtime only after the first window and all requested smoke work succeed, treats pre-ready `activate` as a no-op, and invalidates only for the exact current ownership on `exit`, `close`, or a successful exact-child kill request;
+- window creation is transactional: a load/credential/capture/visible-smoke failure destroys the exact failed `BrowserWindow` and clears only a matching global reference; repeated startup failures focus the one existing error window instead of creating duplicates;
+- desktop-log availability is an observed fact set only after `appendFileSync` succeeds. Preflight conflicts before data-directory creation display the stable error code and state that no startup log was generated, without claiming a nonexistent path or giving a generic old-browser-process instruction;
+- `--qa-capture` and `--qa-visible-smoke` are mutually exclusive, while credential smoke may accompany either one;
+- production startup now calls the injected `prepareElectronLaunchOwnership` helper. Its behavior test proves classify → QA root creation → `setPath` → lock, and proves invalid policy or a false lock registers no lifecycle.
+
+Follow-up RED evidence:
+
+- focused Node run: `26` tests, `3` expected failures (capture+visible accepted, idle/starting activate threw, and explicit controller state was absent);
+- second focused Node run: `11` tests, `6` expected failures because the stable presentation, transactional-window, bootstrap-order, and exact-invalidation helpers did not yet exist;
+- focused Python desktop contract: `34` tests, `3` expected failures before production used the bootstrap/transaction helpers and preflight log truth; the unique-error-window follow-up then failed `1/1` before the old one-shot boolean gate was removed.
+
 Fresh final verification evidence is recorded below after the last documentation-only changes.
 
 ## Runtime ordering and policies
@@ -82,8 +99,8 @@ The optional parsed `--qa-deadline-ms` is intentionally not wired to inner grace
 
 Fresh owner verification immediately before the independent commit:
 
-- `npm test` in `app/desktop`: `39 passed`, `0 failed`;
-- `python -m pytest tests/test_desktop_package_contract.py tests/test_qa_runtime_data_isolation.py -q`: `47 passed`;
+- `npm test` in `app/desktop`: `47 passed`, `0 failed`;
+- `python -m pytest tests/test_desktop_package_contract.py tests/test_qa_runtime_data_isolation.py -q`: `48 passed`;
 - `npm run build` in `app/frontend`: TypeScript check and Vite production build passed (`49` modules transformed);
 - `node --check` for `main.cjs`, `launch-policy.cjs`, and `runtime-start.cjs`: passed;
 - `git diff --check`: passed (only Git's existing LF-to-CRLF working-copy notices).

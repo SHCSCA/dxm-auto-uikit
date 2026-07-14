@@ -114,6 +114,39 @@ test('QA rejects duplicate and unknown qa flags while allowing unrelated flags',
   )
 })
 
+test('capture and visible smoke are mutually exclusive while credential may accompany either', (t) => {
+  const { root, normalUserDataDir } = makeWorkspace(t)
+  const qaUserDataDir = path.join(root, 'qa-user-data')
+  const capture = path.join(root, 'outputs', 'capture.png')
+  const visible = path.join(root, 'outputs', 'visible.json')
+  const credential = path.join(root, 'outputs', 'credential.json')
+
+  assert.throws(() => classifyLaunchArguments({
+    argv: [
+      `--qa-user-data-dir=${qaUserDataDir}`,
+      `--qa-capture=${capture}`,
+      `--qa-visible-smoke=${visible}`,
+    ],
+    normalUserDataDir,
+  }), /capture.*visible|visible.*capture/i)
+
+  for (const primarySmoke of [
+    `--qa-capture=${capture}`,
+    `--qa-visible-smoke=${visible}`,
+  ]) {
+    const policy = classifyLaunchArguments({
+      argv: [
+        `--qa-user-data-dir=${qaUserDataDir}`,
+        primarySmoke,
+        `--qa-credential-smoke=${credential}`,
+      ],
+      normalUserDataDir,
+    })
+    assert.equal(policy.isIsolatedQa, true)
+    assert.equal(policy.smokeOutputs.credential, credential)
+  }
+})
+
 test('QA user-data rejects normal path equality, ancestors, and descendants', (t) => {
   const { root, normalUserDataDir } = makeWorkspace(t)
   const output = path.join(root, 'outputs', 'capture.png')

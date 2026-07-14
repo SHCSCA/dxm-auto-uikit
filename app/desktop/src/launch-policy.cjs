@@ -126,6 +126,9 @@ function classifyLaunchArguments({
   if (!qa.has('qa-user-data-dir') || presentSmokeFlags.length === 0) {
     throw new Error('Isolated QA requires --qa-user-data-dir and at least one known smoke output')
   }
+  if (qa.has('qa-capture') && qa.has('qa-visible-smoke')) {
+    throw new Error('Isolated QA cannot combine --qa-capture with --qa-visible-smoke')
+  }
 
   const qaUserDataDir = requireAbsoluteQaPath(qa.get('qa-user-data-dir'), 'qa-user-data-dir', platform)
   const normalCanonical = canonicalizeComparablePath(normalLexical, { platform, fsModule })
@@ -223,9 +226,15 @@ async function selectBackendPort({
   }
   if (freePorts.length > 0) return Math.min(...freePorts)
   if (outcome === 'deadline') {
-    throw new Error('No free loopback port was proven in QA range 8000..8079 before the total deadline')
+    throw createConflictError(
+      'DXM_QA_PORT_UNAVAILABLE',
+      'No free loopback port was proven in QA range 8000..8079 before the total deadline',
+    )
   }
-  throw new Error('No free loopback port in bounded QA range 8000..8079')
+  throw createConflictError(
+    'DXM_QA_PORT_UNAVAILABLE',
+    'No free loopback port in bounded QA range 8000..8079',
+  )
 }
 
 function createTcpOccupancyProbe({ netModule = net } = {}) {
