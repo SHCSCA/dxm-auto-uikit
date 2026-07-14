@@ -742,3 +742,642 @@ print(json.dumps({
     assert payload["screenshotsExists"] is False
     assert payload["evidencesExists"] is False
     assert all(loaded is False for loaded in payload["modules"].values())
+
+
+@pytest.mark.parametrize(
+    "changed_fact",
+    [
+        "data_dir",
+        "owner",
+        "desktop",
+        "channel",
+        "instance",
+        "repo_root",
+        "package_version",
+        "platform",
+        "resource_root",
+        "workflow_profile",
+        "build_manifest",
+        "package_sha",
+        "dependency",
+    ],
+)
+def test_ready_singleton_rejects_every_different_request_contract_fact(tmp_path, changed_fact):
+    first_data = tmp_path / "signature-a"
+    second_data = tmp_path / "signature-b"
+    result = _run_python(
+        """
+import json
+import os
+from pathlib import Path
+from types import MappingProxyType
+
+from src.services.runtime_bootstrap import RuntimeBootstrapError, ensure_runtime_bootstrap
+
+case = os.environ['DXM_SIGNATURE_CASE']
+first_data = Path(os.environ['DXM_FIRST_DATA']).resolve()
+second_data = Path(os.environ['DXM_SECOND_DATA']).resolve()
+repo_a = first_data.parent / 'repo-a'
+repo_b = first_data.parent / 'repo-b'
+calls = {'identity': 0, 'root': 0, 'lease': 0, 'dirs': 0}
+
+class Identity:
+    def __init__(self, env):
+        self.instance_id = env.get('DXM_BACKEND_INSTANCE_ID') or 'signature-instance'
+        self.payload = MappingProxyType({
+            'instanceId': self.instance_id,
+            'dataDir': env['DXM_DATA_DIR'],
+        })
+    def as_dict(self):
+        return dict(self.payload)
+
+def identity_a(**kwargs):
+    calls['identity'] += 1
+    return Identity(kwargs['env'])
+
+def identity_b(**kwargs):
+    calls['identity'] += 1
+    return Identity(kwargs['env'])
+
+def create_root(_path):
+    calls['root'] += 1
+
+lease = object()
+def acquire_lease(_path, **_kwargs):
+    calls['lease'] += 1
+    return lease
+
+def create_dirs():
+    calls['dirs'] += 1
+
+base_env = {'DXM_DATA_DIR': str(first_data), 'DXM_RUNTIME_OWNER': 'direct'}
+first = dict(
+    data_dir=first_data,
+    repo_root=repo_a,
+    package_version='1.0.0',
+    environ=base_env,
+    platform_name=os.name,
+    identity_factory=identity_a,
+    data_root_creator=create_root,
+    lease_factory=acquire_lease,
+    remaining_directories_creator=create_dirs,
+)
+winner = ensure_runtime_bootstrap(**first)
+second = dict(first)
+second['environ'] = dict(base_env)
+if case == 'data_dir':
+    second['data_dir'] = second_data
+    second['environ']['DXM_DATA_DIR'] = str(second_data)
+elif case == 'owner':
+    second['environ']['DXM_RUNTIME_OWNER'] = 'start_mvp'
+elif case == 'desktop':
+    second['environ']['DXM_DESKTOP'] = '0'
+elif case == 'channel':
+    second['environ']['DXM_DESKTOP_PARENT_CHANNEL'] = ''
+elif case == 'instance':
+    second['environ']['DXM_BACKEND_INSTANCE_ID'] = 'different-instance'
+elif case == 'repo_root':
+    second['repo_root'] = repo_b
+elif case == 'package_version':
+    second['package_version'] = '2.0.0'
+elif case == 'platform':
+    second['platform_name'] = 'posix' if os.name == 'nt' else 'nt'
+elif case == 'resource_root':
+    second['environ']['DXM_RESOURCE_ROOT'] = str(repo_b)
+elif case == 'workflow_profile':
+    second['environ']['DXM_WORKFLOW_PROFILE_DIR'] = str(second_data / 'profile')
+elif case == 'build_manifest':
+    second['environ']['DXM_BUILD_MANIFEST_JSON'] = 'different-manifest'
+elif case == 'package_sha':
+    second['environ']['DXM_PACKAGE_SHA256'] = 'A' * 64
+elif case == 'dependency':
+    second['identity_factory'] = identity_b
+else:
+    raise AssertionError(case)
+
+error = None
+try:
+    ensure_runtime_bootstrap(**second)
+except BaseException as exc:
+    error = {'type': type(exc).__name__, 'message': str(exc)}
+print(json.dumps({
+    'error': error,
+    'calls': calls,
+    'winnerOwner': winner.owner,
+}))
+""",
+        env={
+            **_isolated_env(first_data),
+            "DXM_SIGNATURE_CASE": changed_fact,
+            "DXM_FIRST_DATA": str(first_data),
+            "DXM_SECOND_DATA": str(second_data),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = _last_json_line(result.stdout)
+    assert payload["error"]["type"] == "RuntimeBootstrapError"
+    assert "mismatch" in payload["error"]["message"]
+    assert payload["calls"] == {"identity": 1, "root": 1, "lease": 1, "dirs": 1}
+    assert payload["winnerOwner"] == "direct"
+
+
+def test_ten_rounds_of_heterogeneous_concurrent_ensure_have_one_winner_and_one_mismatch(tmp_path):
+    data_dir = tmp_path / "heterogeneous-concurrency"
+    result = _run_python(
+        """
+import json
+import os
+import threading
+from pathlib import Path
+from types import MappingProxyType
+
+import src.services.runtime_bootstrap as runtime_bootstrap
+
+root = Path(os.environ['DXM_DATA_DIR']).resolve()
+rounds = []
+
+class Identity:
+    def __init__(self, env):
+        self.instance_id = 'concurrent-instance'
+        self.payload = MappingProxyType({'instanceId': self.instance_id, 'dataDir': env['DXM_DATA_DIR']})
+    def as_dict(self):
+        return dict(self.payload)
+
+def identity_factory(**kwargs):
+    return Identity(kwargs['env'])
+
+def create_root(_path):
+    return None
+
+def acquire_lease(_path, **_kwargs):
+    return object()
+
+def create_dirs():
+    return None
+
+for index in range(10):
+    runtime_bootstrap._reset_runtime_bootstrap_for_tests()
+    barrier = threading.Barrier(3)
+    outcomes = []
+    lock = threading.Lock()
+    def invoke(label):
+        data_dir = root / label / str(index)
+        kwargs = dict(
+            data_dir=data_dir,
+            repo_root=root / 'repo',
+            environ={'DXM_DATA_DIR': str(data_dir), 'DXM_RUNTIME_OWNER': 'direct'},
+            platform_name=os.name,
+            identity_factory=identity_factory,
+            data_root_creator=create_root,
+            lease_factory=acquire_lease,
+            remaining_directories_creator=create_dirs,
+        )
+        barrier.wait(timeout=2)
+        try:
+            state = runtime_bootstrap.ensure_runtime_bootstrap(**kwargs)
+            outcome = {'kind': 'winner', 'dataDir': str(state.data_dir)}
+        except BaseException as exc:
+            outcome = {'kind': 'error', 'type': type(exc).__name__, 'message': str(exc)}
+        with lock:
+            outcomes.append(outcome)
+    workers = [
+        threading.Thread(target=invoke, args=('a',)),
+        threading.Thread(target=invoke, args=('b',)),
+    ]
+    for worker in workers:
+        worker.start()
+    barrier.wait(timeout=2)
+    for worker in workers:
+        worker.join(2)
+        assert not worker.is_alive()
+    rounds.append(outcomes)
+
+print(json.dumps(rounds))
+""",
+        env=_isolated_env(data_dir),
+    )
+
+    assert result.returncode == 0, result.stderr
+    rounds = _last_json_line(result.stdout)
+    assert len(rounds) == 10
+    for outcomes in rounds:
+        assert [item["kind"] for item in outcomes].count("winner") == 1
+        errors = [item for item in outcomes if item["kind"] == "error"]
+        assert len(errors) == 1
+        assert errors[0]["type"] == "RuntimeBootstrapError"
+        assert "mismatch" in errors[0]["message"]
+
+
+@pytest.mark.parametrize("failure_stage", ["lease", "job", "remaining"])
+def test_first_ensure_failure_is_one_shot_and_later_call_requires_restart(tmp_path, failure_stage):
+    data_dir = tmp_path / f"one-shot-{failure_stage}"
+    result = _run_python(
+        """
+import json
+import os
+from pathlib import Path
+from types import MappingProxyType
+
+from src.services.runtime_bootstrap import RuntimeBootstrapError, ensure_runtime_bootstrap
+
+stage = os.environ['DXM_FAILURE_STAGE']
+data_dir = Path(os.environ['DXM_DATA_DIR']).resolve()
+events = []
+
+class MarkerError(RuntimeError):
+    pass
+marker = MarkerError('first ' + stage + ' failure')
+
+class Identity:
+    instance_id = 'failure-instance'
+    payload = MappingProxyType({'instanceId': instance_id, 'dataDir': str(data_dir)})
+    def as_dict(self):
+        return dict(self.payload)
+
+def identity_factory(**_kwargs):
+    events.append('identity')
+    return Identity()
+
+def create_root(path):
+    events.append('root')
+    path.mkdir(parents=True, exist_ok=True)
+
+def lease_factory(path, **_kwargs):
+    events.append('lease')
+    if stage == 'lease':
+        raise marker
+    if stage == 'remaining':
+        from src.services.runtime_lease import RuntimeDataLease
+        return RuntimeDataLease.acquire(path, metadata={'stage': stage})
+    return object()
+
+def job_factory():
+    events.append('job')
+    if stage == 'job':
+        raise marker
+    return object()
+
+def remaining_factory():
+    events.append('remaining')
+    if stage == 'remaining':
+        raise marker
+
+env = {'DXM_DATA_DIR': str(data_dir), 'DXM_RUNTIME_OWNER': 'direct'}
+kwargs = dict(
+    data_dir=data_dir,
+    repo_root=data_dir.parent / 'repo',
+    environ=env,
+    platform_name=os.name,
+    identity_factory=identity_factory,
+    data_root_creator=create_root,
+    lease_factory=lease_factory,
+    remaining_directories_creator=remaining_factory,
+)
+if stage == 'job':
+    env.update({
+        'DXM_RUNTIME_OWNER': 'electron_desktop',
+        'DXM_DESKTOP': '1',
+        'DXM_DESKTOP_PARENT_CHANNEL': 'stdin-v1',
+        'DXM_BACKEND_INSTANCE_ID': 'failure-instance',
+    })
+    kwargs['parent_channel_getter'] = lambda _expected: object()
+    kwargs['job_owner_factory'] = job_factory
+
+first = None
+try:
+    ensure_runtime_bootstrap(**kwargs)
+except BaseException as exc:
+    first = {'sameMarker': exc is marker, 'type': type(exc).__name__, 'message': str(exc)}
+
+second = None
+try:
+    ensure_runtime_bootstrap(**kwargs)
+except BaseException as exc:
+    second = {
+        'type': type(exc).__name__,
+        'message': str(exc),
+        'causeIsMarker': exc.__cause__ is marker,
+    }
+
+print(json.dumps({'first': first, 'second': second, 'events': events}))
+""",
+        env={**_isolated_env(data_dir), "DXM_FAILURE_STAGE": failure_stage},
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = _last_json_line(result.stdout)
+    assert payload["first"] == {
+        "sameMarker": True,
+        "type": "MarkerError",
+        "message": f"first {failure_stage} failure",
+    }
+    assert payload["second"]["type"] == "RuntimeBootstrapError"
+    assert "restart required" in payload["second"]["message"]
+    assert payload["second"]["causeIsMarker"] is True
+    expected_events = {
+        "lease": ["identity", "root", "lease"],
+        "job": ["identity", "root", "lease", "job"],
+        "remaining": ["identity", "root", "lease", "remaining"],
+    }
+    assert payload["events"] == expected_events[failure_stage]
+
+
+def test_test_reset_clears_ready_signature_and_latched_failure(tmp_path):
+    data_dir = tmp_path / "reset-state-machine"
+    result = _run_python(
+        """
+import json
+import os
+from pathlib import Path
+from types import MappingProxyType
+
+import src.services.runtime_bootstrap as runtime_bootstrap
+
+data_dir = Path(os.environ['DXM_DATA_DIR']).resolve()
+calls = {'lease': 0}
+class Identity:
+    instance_id = 'reset-instance'
+    def __init__(self, data_text):
+        self.payload = MappingProxyType({'instanceId': self.instance_id, 'dataDir': data_text})
+    def as_dict(self):
+        return dict(self.payload)
+def identity_factory(**kwargs):
+    return Identity(kwargs['env']['DXM_DATA_DIR'])
+def failing_lease(_path, **_kwargs):
+    calls['lease'] += 1
+    raise RuntimeError('latched failure')
+base = dict(
+    data_dir=data_dir,
+    repo_root=data_dir.parent,
+    environ={'DXM_DATA_DIR': str(data_dir), 'DXM_RUNTIME_OWNER': 'direct'},
+    identity_factory=identity_factory,
+    data_root_creator=lambda _path: None,
+    lease_factory=failing_lease,
+    remaining_directories_creator=lambda: None,
+)
+try:
+    runtime_bootstrap.ensure_runtime_bootstrap(**base)
+except RuntimeError:
+    pass
+runtime_bootstrap._reset_runtime_bootstrap_for_tests()
+base['lease_factory'] = lambda _path, **_kwargs: object()
+state = runtime_bootstrap.ensure_runtime_bootstrap(**base)
+runtime_bootstrap._reset_runtime_bootstrap_for_tests()
+base['data_dir'] = data_dir / 'third'
+base['environ'] = {'DXM_DATA_DIR': str(data_dir / 'third'), 'DXM_RUNTIME_OWNER': 'direct'}
+state_after_ready_reset = runtime_bootstrap.ensure_runtime_bootstrap(**base)
+print(json.dumps({
+    'calls': calls,
+    'firstOwner': state.owner,
+    'secondData': str(state_after_ready_reset.data_dir),
+}))
+""",
+        env=_isolated_env(data_dir),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert _last_json_line(result.stdout) == {
+        "calls": {"lease": 1},
+        "firstOwner": "direct",
+        "secondData": str((data_dir / "third").resolve()),
+    }
+
+
+class _FalseyCallable:
+    def __init__(self, name, callback, calls):
+        self.name = name
+        self.callback = callback
+        self.calls = calls
+
+    def __bool__(self):
+        return False
+
+    def __call__(self, *args, **kwargs):
+        self.calls.append(self.name)
+        return self.callback(*args, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "dependency_name",
+    [
+        "parent_channel_getter",
+        "identity_factory",
+        "data_root_creator",
+        "lease_factory",
+        "job_owner_factory",
+        "remaining_directories_creator",
+    ],
+)
+def test_falsey_injected_callable_is_used_by_identity_not_truthiness(
+    tmp_path,
+    monkeypatch,
+    dependency_name,
+):
+    from types import MappingProxyType
+
+    import src.services.runtime_bootstrap as runtime_bootstrap
+
+    data_dir = (tmp_path / dependency_name).resolve()
+    calls = []
+    channel = object()
+    lease = object()
+    job = object()
+
+    class Identity:
+        instance_id = "falsey-instance"
+        payload = MappingProxyType({"instanceId": instance_id, "dataDir": str(data_dir)})
+
+        def as_dict(self):
+            return dict(self.payload)
+
+    callbacks = {
+        "parent_channel_getter": lambda _expected: channel,
+        "identity_factory": lambda **_kwargs: Identity(),
+        "data_root_creator": lambda _path: None,
+        "lease_factory": lambda _path, **_kwargs: lease,
+        "job_owner_factory": lambda: job,
+        "remaining_directories_creator": lambda: None,
+    }
+    dependencies = {
+        name: (lambda callback=callback: callback)
+        for name, callback in callbacks.items()
+    }
+    dependencies = {name: factory() for name, factory in dependencies.items()}
+    dependencies[dependency_name] = _FalseyCallable(
+        dependency_name,
+        callbacks[dependency_name],
+        calls,
+    )
+
+    monkeypatch.setattr(
+        runtime_bootstrap,
+        "require_armed_desktop_parent_channel",
+        lambda _expected: calls.append("fallback-parent") or object(),
+    )
+    monkeypatch.setattr(
+        runtime_bootstrap.RuntimeIdentity,
+        "from_environment",
+        staticmethod(lambda **_kwargs: calls.append("fallback-identity") or Identity()),
+    )
+    monkeypatch.setattr(
+        runtime_bootstrap,
+        "_create_data_root",
+        lambda _path: calls.append("fallback-root"),
+    )
+    monkeypatch.setattr(
+        runtime_bootstrap.RuntimeDataLease,
+        "acquire",
+        staticmethod(lambda _path, **_kwargs: calls.append("fallback-lease") or object()),
+    )
+    monkeypatch.setattr(
+        runtime_bootstrap,
+        "ensure_backend_job_owner",
+        lambda: calls.append("fallback-job") or object(),
+    )
+    monkeypatch.setattr(
+        runtime_bootstrap,
+        "ensure_runtime_directories",
+        lambda _path: calls.append("fallback-remaining"),
+    )
+
+    state = runtime_bootstrap.build_runtime_bootstrap(
+        data_dir=data_dir,
+        repo_root=REPO_ROOT,
+        environ={
+            "DXM_DATA_DIR": str(data_dir),
+            "DXM_RUNTIME_OWNER": "electron_desktop",
+            "DXM_DESKTOP": "1",
+            "DXM_DESKTOP_PARENT_CHANNEL": "stdin-v1",
+            "DXM_BACKEND_INSTANCE_ID": "falsey-instance",
+        },
+        platform_name="nt",
+        **dependencies,
+    )
+
+    assert calls == [dependency_name]
+    assert state.parent_channel is channel
+    assert state.runtime_identity.instance_id == "falsey-instance"
+    assert state.lease is lease
+    assert state.windows_job_owner is job
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows canonical path casing proof")
+def test_identity_receives_frozen_canonical_data_env_without_mutating_original_mapping(tmp_path):
+    from types import MappingProxyType
+
+    from src.services.runtime_bootstrap import build_runtime_bootstrap
+
+    actual_data = tmp_path / "MiXeD-Canonical-Data"
+    actual_data.mkdir()
+    lower_alias = actual_data.with_name(actual_data.name.lower())
+    canonical_text = str(lower_alias.resolve(strict=False))
+    assert str(lower_alias) != canonical_text
+    original_env = {
+        "DXM_DATA_DIR": str(lower_alias),
+        "DXM_RUNTIME_OWNER": "direct",
+    }
+    seen = {}
+    lease_paths = []
+
+    class Identity:
+        instance_id = "canonical-instance"
+
+        def __init__(self, data_text):
+            self.payload = MappingProxyType(
+                {"instanceId": self.instance_id, "dataDir": data_text}
+            )
+
+        def as_dict(self):
+            return dict(self.payload)
+
+    def identity_factory(**kwargs):
+        env = kwargs["env"]
+        seen["dataDir"] = env["DXM_DATA_DIR"]
+        try:
+            env["MUTATION_PROBE"] = "forbidden"
+        except TypeError:
+            seen["immutable"] = True
+        else:
+            seen["immutable"] = False
+            del env["MUTATION_PROBE"]
+        return Identity(env["DXM_DATA_DIR"])
+
+    state = build_runtime_bootstrap(
+        data_dir=lower_alias,
+        repo_root=REPO_ROOT,
+        environ=original_env,
+        identity_factory=identity_factory,
+        data_root_creator=lambda _path: None,
+        lease_factory=lambda path, **_kwargs: lease_paths.append(path) or object(),
+        remaining_directories_creator=lambda: None,
+    )
+
+    assert original_env["DXM_DATA_DIR"] == str(lower_alias)
+    assert seen == {"dataDir": canonical_text, "immutable": True}
+    assert str(state.data_dir) == canonical_text
+    assert state.runtime_identity.as_dict()["dataDir"] == canonical_text
+    assert [str(path) for path in lease_paths] == [canonical_text]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows exact canonical identity proof")
+def test_noncanonical_identity_data_text_fails_before_root_even_when_windows_path_equal(tmp_path):
+    from types import MappingProxyType
+
+    from src.services.runtime_bootstrap import RuntimeBootstrapError, build_runtime_bootstrap
+
+    actual_data = tmp_path / "MiXeD-Identity-Data"
+    actual_data.mkdir()
+    lower_alias = actual_data.with_name(actual_data.name.lower())
+    canonical_text = str(lower_alias.resolve(strict=False))
+    assert str(lower_alias) != canonical_text
+    root_calls = []
+
+    class NoncanonicalIdentity:
+        instance_id = "noncanonical-instance"
+        payload = MappingProxyType(
+            {"instanceId": instance_id, "dataDir": str(lower_alias)}
+        )
+
+        def as_dict(self):
+            return dict(self.payload)
+
+    with pytest.raises(RuntimeBootstrapError, match="canonical data directory"):
+        build_runtime_bootstrap(
+            data_dir=lower_alias,
+            repo_root=REPO_ROOT,
+            environ={"DXM_DATA_DIR": str(lower_alias), "DXM_RUNTIME_OWNER": "direct"},
+            identity_factory=lambda **_kwargs: NoncanonicalIdentity(),
+            data_root_creator=lambda path: root_calls.append(path),
+            lease_factory=lambda _path, **_kwargs: object(),
+            remaining_directories_creator=lambda: None,
+        )
+
+    assert root_calls == []
+    assert str(lower_alias.resolve(strict=False)) == canonical_text
+
+
+def test_explicit_data_env_conflict_fails_before_identity_or_root(tmp_path):
+    from src.services.runtime_bootstrap import RuntimeBootstrapError, build_runtime_bootstrap
+
+    requested_data = tmp_path / "configured-data"
+    conflicting_data = tmp_path / "different-env-data"
+    events = []
+
+    with pytest.raises(RuntimeBootstrapError, match="DXM_DATA_DIR"):
+        build_runtime_bootstrap(
+            data_dir=requested_data,
+            repo_root=REPO_ROOT,
+            environ={
+                "DXM_DATA_DIR": str(conflicting_data),
+                "DXM_RUNTIME_OWNER": "direct",
+            },
+            identity_factory=lambda **_kwargs: events.append("identity"),
+            data_root_creator=lambda _path: events.append("root"),
+            lease_factory=lambda _path, **_kwargs: object(),
+            remaining_directories_creator=lambda: None,
+        )
+
+    assert events == []
+    assert requested_data.exists() is False
+    assert conflicting_data.exists() is False
