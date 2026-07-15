@@ -11,10 +11,16 @@ const {
   createExpectedRuntimeIdentity,
   buildBackendEnvironment,
   createBackendOwnership,
-  terminateExactOwnedBackend,
-  createBackendChildLifecycle,
+  canTerminateOwnedBackend,
   waitForOwnedBackendHealth,
 } = require('./runtime-identity.cjs')
+const {
+  buildDesktopBackendEnvironment,
+  classifyWritableLogFailure,
+  createWritableLogOpenGate,
+  createBackendShutdownController,
+  createBeforeQuitController,
+} = require('./backend-shutdown.cjs')
 const {
   classifyLaunchArguments,
   resolveSelectedDataDir,
@@ -24,6 +30,7 @@ const {
   inspectLegacyRuntimePorts,
 } = require('./launch-policy.cjs')
 const {
+  createQaDeadlineController,
   createNativeExitCoordinator,
   createDesktopStartupController,
   createStartupFailurePresentation,
@@ -34,7 +41,6 @@ const {
   loadStartupErrorContent,
   prepareElectronLaunchOwnership,
   registerPrimaryInstanceLifecycle,
-  requestExactBackendTermination,
 } = require('./runtime-start.cjs')
 
 app.setName('DXM Agent Console')
@@ -83,6 +89,55 @@ const runtimeInfo = {
   qaVisibleSmokePath: null,
   lastError: null,
 }
+
+const backendShutdownController = createBackendShutdownController({
+  getCurrentOwnership: () => backendOwnership,
+  setCurrentOwnership: (value) => { backendOwnership = value },
+  isCurrentOwnershipLive: (ownership) => canTerminateOwnedBackend({
+    currentOwnership: backendOwnership,
+    ownership,
+    runtimeInfo,
+  }),
+  invalidateStartup: (ownership, eventName) => {
+    invalidateStartupForExactOwnership({
+      currentOwnership: ownership,
+      eventOwnership: ownership,
+      eventName,
+      startupController,
+    })
+  },
+  onDiagnostic: (error, stage) => {
+    runtimeInfo.lastError = error instanceof Error ? error.stack || error.message : String(error)
+    appendDesktopLog(`Backend shutdown ${stage}: ${runtimeInfo.lastError}`)
+  },
+  onTerminationFailure: (error) => {
+    nativeExitCoordinator.markFailure()
+    appendDesktopLog(`Backend bounded termination failed: ${rawStartupErrorDetail(error)}`)
+  },
+})
+
+const beforeQuitController = createBeforeQuitController({
+  app,
+  requestCurrentOrPendingTermination: (options) => (
+    backendShutdownController.requestCurrentOrPendingTermination(options)
+  ),
+  onTerminationError: (error) => {
+    nativeExitCoordinator.markFailure()
+    appendDesktopLog(`Backend did not close cleanly before final quit: ${rawStartupErrorDetail(error)}`)
+  },
+})
+
+const qaDeadlineController = (
+  launchPolicyValid
+  && ownsSingleInstanceLock
+  && launchPolicy?.isIsolatedQa
+  && launchPolicy.deadlineMs !== null
+)
+  ? createQaDeadlineController({
+      deadlineMs: launchPolicy.deadlineMs,
+      requestFailedQuit: () => nativeExitCoordinator.requestQuit({ failed: true }),
+    })
+  : null
 
 function initializeDesktopLogPath() {
   if (!runtimeInfo.dataDir) return
@@ -408,7 +463,7 @@ function resolvePythonPath(repoRoot) {
   return process.platform === 'win32' ? 'python' : 'python3'
 }
 
-function startBackend(repoRoot, port, backendInstanceId, launchIdentity) {
+async function startBackend(repoRoot, port, backendInstanceId, launchIdentity) {
   const backendDir = path.join(repoRoot, 'app', 'backend')
   const {
     manifest,
@@ -423,21 +478,19 @@ function startBackend(repoRoot, port, backendInstanceId, launchIdentity) {
   runtimeInfo.desktopLogPath = path.join(dataDir, 'desktop-main.log')
 
   const pythonPath = resolvePythonPath(repoRoot)
-  const args = ['-m', 'uvicorn', 'src.main:app', '--host', '127.0.0.1', '--port', String(port)]
+  const args = ['-m', 'src.desktop_server']
   appendDesktopLog(`Starting backend: ${pythonPath} ${args.join(' ')}`)
 
-  const backendEnvironment = buildBackendEnvironment({
+  const desktopBackendEnvironment = buildDesktopBackendEnvironment({
     ...process.env,
     DXM_LAUNCHER_LOG_FILE: runtimeInfo.desktopLogPath,
-    DXM_BACKEND_PORT: String(port),
     DXM_BACKEND_URL: `http://127.0.0.1:${port}`,
-    // Desktop mode contract: DXM_DESKTOP=1
-    DXM_DESKTOP: '1',
     DXM_WORKFLOW_ACTION_RUNTIME: 'browser_agent',
     DXM_WORKFLOW_PERSISTENT_PROFILE: '1',
     PYTHONIOENCODING: 'utf-8',
     PYTHONDONTWRITEBYTECODE: '1',
-  }, {
+  }, { port })
+  const backendEnvironment = buildBackendEnvironment(desktopBackendEnvironment, {
     manifest,
     instanceId: backendInstanceId,
     packageSha256,
@@ -445,69 +498,160 @@ function startBackend(repoRoot, port, backendInstanceId, launchIdentity) {
     resourceRoot,
     workflowProfileDir,
   })
-  const child = spawn(pythonPath, args, {
-    cwd: backendDir,
-    env: backendEnvironment,
-    windowsHide: true,
-  })
-
-  const logStream = fs.createWriteStream(backendLogPath, { flags: 'a' })
+  let logStreamEndRequested = false
   let logStreamEnded = false
+  let logStream = null
   const endLogStream = () => {
-    if (logStreamEnded) return
+    logStreamEndRequested = true
+    if (logStreamEnded || !logStream) return
     logStreamEnded = true
     logStream.end()
   }
-  child.stdout.on('data', (chunk) => logStream.write(chunk))
-  child.stderr.on('data', (chunk) => logStream.write(chunk))
   let ownership = null
-  child.on('error', (error) => {
-    if (!Number.isInteger(child.pid) || child.pid <= 0) {
-      runtimeInfo.lastError = error.message
-      endLogStream()
-    } else if (ownership && backendOwnership === ownership) {
-      runtimeInfo.lastError = error.message
-    }
-    appendDesktopLog(`Backend spawn error: ${error.stack || error.message}`)
+  let setupCleanupReleased = false
+  let setupLogFailure = null
+  let openedLogFailureHandled = false
+  const child = spawn(pythonPath, args, {
+    cwd: backendDir,
+    env: backendEnvironment,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
   })
-  if (!Number.isInteger(child.pid) || child.pid <= 0) {
-    endLogStream()
-    throw createCodedStartupError('DXM_BACKEND_START_FAILED', 'Backend spawn did not return a valid child pid')
-  }
-  const expectedIdentity = createExpectedRuntimeIdentity({
-    manifest,
-    instanceId: backendInstanceId,
-    packageSha256,
-    backendPid: child.pid,
-    dataDir,
-    workflowProfileDir,
-    resourceRoot,
-  })
-  ownership = createBackendOwnership({ child, instanceId: backendInstanceId, expectedIdentity })
-  backendOwnership = ownership
-  runtimeInfo.backendPid = child.pid
-  runtimeInfo.backendInstanceId = backendInstanceId
-  runtimeInfo.runtimeIdentity = null
-
-  const lifecycle = createBackendChildLifecycle({
-    ownership,
-    getCurrentOwnership: () => backendOwnership,
-    setCurrentOwnership: (value) => { backendOwnership = value },
-    endLogStream,
-  })
-  const finalizeChild = (eventName, code, signal) => {
-    appendDesktopLog(`Backend ${eventName}: code=${code ?? 'null'} signal=${signal ?? 'null'}`)
-    invalidateStartupForExactOwnership({
-      currentOwnership: backendOwnership,
-      eventOwnership: ownership,
-      eventName,
-      startupController,
+  try {
+    const spawnSetupAuthority = backendShutdownController.registerSpawnSetup(child, {
+      onClose: endLogStream,
+      onChildError: (error) => {
+        runtimeInfo.lastError = error.message
+        appendDesktopLog(`Backend spawn error before ownership: ${error.stack || error.message}`)
+      },
+      onDiagnostic: (error, stage) => {
+        appendDesktopLog(`Unowned backend spawn cleanup ${stage}: ${rawStartupErrorDetail(error)}`)
+      },
     })
-    lifecycle.handle(eventName)
+    if (!Number.isInteger(child.pid) || child.pid <= 0) {
+      throw createCodedStartupError(
+        'DXM_BACKEND_START_FAILED',
+        'Backend spawn did not return a valid child pid',
+      )
+    }
+    if (!child.stdin || !child.stdout || !child.stderr
+      || typeof child.stdin.write !== 'function'
+      || typeof child.stdout.on !== 'function'
+      || typeof child.stderr.on !== 'function') {
+      throw createCodedStartupError(
+        'DXM_BACKEND_START_FAILED',
+        'Backend spawn did not provide exact stdin/stdout/stderr pipes',
+      )
+    }
+    logStream = fs.createWriteStream(backendLogPath, { flags: 'a' })
+    const logOpenGate = createWritableLogOpenGate(logStream, {
+      onError: (error, phase) => {
+        const failureScope = classifyWritableLogFailure({
+          phase,
+          ownership,
+          currentOwnership: backendOwnership,
+          setupCleanupReleased,
+        })
+        if (failureScope === 'stale') {
+          appendDesktopLog(`Ignored stale backend log stream error: ${rawStartupErrorDetail(error)}`)
+          return
+        }
+        if (failureScope === 'setup') {
+          if (!setupLogFailure) setupLogFailure = error
+          appendDesktopLog(`Backend log stream failed during ownership setup: ${rawStartupErrorDetail(error)}`)
+          return
+        }
+        if (failureScope === 'exact-current' && openedLogFailureHandled) {
+          appendDesktopLog(`Additional backend log stream error: ${rawStartupErrorDetail(error)}`)
+          return
+        }
+        if (failureScope === 'exact-current') openedLogFailureHandled = true
+        runtimeInfo.lastError = rawStartupErrorDetail(error)
+        nativeExitCoordinator.markFailure()
+        appendDesktopLog(`Backend log stream ${phase} failed: ${runtimeInfo.lastError}`)
+        if (failureScope === 'exact-current') {
+          try {
+            startupController?.invalidateRuntime?.('stopped')
+          } catch (invalidationError) {
+            appendDesktopLog(
+              `Backend log failure invalidation failed: ${rawStartupErrorDetail(invalidationError)}`,
+            )
+          }
+          try {
+            const termination = backendShutdownController.requestCurrentOrPendingTermination({
+              reason: 'backend-log-error',
+            })
+            termination.catch((terminationError) => {
+              nativeExitCoordinator.markFailure()
+              appendDesktopLog(
+                `Backend log failure termination failed: ${rawStartupErrorDetail(terminationError)}`,
+              )
+            })
+          } catch (terminationError) {
+            nativeExitCoordinator.markFailure()
+            appendDesktopLog(
+              `Backend log failure termination failed: ${rawStartupErrorDetail(terminationError)}`,
+            )
+          }
+        }
+      },
+      onDiagnostic: (error, stage) => {
+        nativeExitCoordinator.markFailure()
+        appendDesktopLog(`Backend log gate ${stage}: ${rawStartupErrorDetail(error)}`)
+      },
+    })
+    if (logStreamEndRequested) endLogStream()
+    await logOpenGate.waitUntilOpen()
+    if (setupLogFailure) throw setupLogFailure
+    child.stdout.on('data', (chunk) => logStream.write(chunk))
+    child.stderr.on('data', (chunk) => logStream.write(chunk))
+
+    const expectedIdentity = createExpectedRuntimeIdentity({
+      manifest,
+      instanceId: backendInstanceId,
+      packageSha256,
+      backendPid: child.pid,
+      dataDir,
+      workflowProfileDir,
+      resourceRoot,
+    })
+    ownership = createBackendOwnership({ child, instanceId: backendInstanceId, expectedIdentity })
+    runtimeInfo.backendPid = child.pid
+    runtimeInfo.backendInstanceId = backendInstanceId
+    runtimeInfo.runtimeIdentity = null
+    backendShutdownController.handoffSpawnSetup(spawnSetupAuthority, ownership, {
+      endLogStream,
+      onChildEvent: (eventName, code, signal) => {
+        appendDesktopLog(`Backend ${eventName}: code=${code ?? 'null'} signal=${signal ?? 'null'}`)
+      },
+    })
+    setupCleanupReleased = true
+    await backendShutdownController.startParentChannel(ownership)
+    return ownership
+  } catch (startupError) {
+    let cleanupError = null
+    try {
+      const exactCleanup = startupError?.terminationPromise
+        || ownership?.terminationPromise
+        || backendShutdownController.requestCurrentOrPendingTermination({
+          reason: 'startup-construction',
+        })
+      await exactCleanup
+    } catch (error) {
+      cleanupError = error
+    }
+    if (cleanupError) {
+      nativeExitCoordinator.markFailure()
+      appendDesktopLog(`Backend startup cleanup failed: ${rawStartupErrorDetail(cleanupError)}`)
+      const combinedError = new AggregateError(
+        [startupError, cleanupError],
+        `Backend startup failed and exact child cleanup did not complete: ${startupError.message}`,
+      )
+      combinedError.code = cleanupError.code || startupError.code || 'DXM_BACKEND_START_FAILED'
+      throw combinedError
+    }
+    throw startupError
   }
-  child.on('exit', (code, signal) => finalizeChild('exit', code, signal))
-  child.on('close', (code, signal) => finalizeChild('close', code, signal))
-  return ownership
 }
 
 function waitForHealth(apiBase, timeoutMs = 45000, ownership) {
@@ -533,22 +677,13 @@ function resolveFrontendPath(repoRoot) {
   return frontendPath
 }
 
-function killBackendProcess() {
-  const ownership = backendOwnership
-  if (!ownership) return
-  const processToStop = ownership.child
-  const attempted = requestExactBackendTermination({
-    currentOwnership: backendOwnership,
-    ownership,
-    runtimeInfo,
-    startupController,
-    terminateOwnedBackend: terminateExactOwnedBackend,
-    onTerminationError: (error) => {
-      appendDesktopLog(`Exact backend stop request failed: ${rawStartupErrorDetail(error)}`)
-    },
+function requestBackendTermination(reason) {
+  const termination = backendShutdownController.requestCurrentOrPendingTermination({ reason })
+  termination.catch((error) => {
+    nativeExitCoordinator.markFailure()
+    appendDesktopLog(`Exact backend termination failed: ${rawStartupErrorDetail(error)}`)
   })
-  if (!attempted) return
-  appendDesktopLog(`Stop requested for exact backend child handle pid=${processToStop.pid ?? 'unknown'}`)
+  return termination
 }
 
 async function startDesktopRuntime() {
@@ -606,7 +741,7 @@ async function startDesktopRuntime() {
   runtimeInfo.backendPort = port
   runtimeInfo.apiBase = `http://127.0.0.1:${port}`
   logPackagedResourceStatus(repoRoot)
-  const ownership = startBackend(repoRoot, port, backendInstanceId, {
+  const ownership = await startBackend(repoRoot, port, backendInstanceId, {
     manifest: launchManifest,
     packageSha256,
     dataDir,
@@ -716,7 +851,7 @@ startupController = launchPolicyValid && ownsSingleInstanceLock
 function handleDesktopStartupFailure(error) {
   runtimeInfo.lastError = error instanceof Error ? error.stack || error.message : String(error)
   appendDesktopLog(`Desktop startup failed: ${runtimeInfo.lastError}`)
-  killBackendProcess()
+  requestBackendTermination('startup-failure')
   createStartupErrorWindow(error)
 }
 
@@ -730,6 +865,7 @@ if (ownsSingleInstanceLock) {
   ipcMain.handle('desktop:dxm-credential:clear', () => clearDxmCredential())
 }
 
+qaDeadlineController?.arm()
 registerPrimaryInstanceLifecycle({
   launchPolicyValid,
   ownsSingleInstanceLock,
@@ -741,8 +877,9 @@ registerPrimaryInstanceLifecycle({
   onWindowAllClosed: () => {
     if (process.platform !== 'darwin') app.quit()
   },
+  onBeforeQuit: (event) => beforeQuitController.handleBeforeQuit(event),
   onWillQuit: () => {
-    killBackendProcess()
+    qaDeadlineController?.cancel()
     nativeExitCoordinator.finalizeAfterCleanup()
   },
 })

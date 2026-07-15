@@ -127,38 +127,58 @@ function invalidateStartupForExactOwnership({
   startupController,
 }) {
   if (!currentOwnership || currentOwnership !== eventOwnership) return false
-  if (eventName !== 'exit' && eventName !== 'close' && eventName !== 'kill') return false
+  if (![
+    'exit',
+    'close',
+    'kill',
+    'child-error',
+    'stdin-error',
+    'stdin-close',
+  ].includes(eventName)) return false
   if (typeof startupController?.invalidateRuntime !== 'function') return false
   startupController.invalidateRuntime('stopped')
   return true
 }
 
-function requestExactBackendTermination({
-  currentOwnership,
-  ownership,
-  runtimeInfo,
-  startupController,
-  terminateOwnedBackend,
-  onTerminationError = () => {},
+function createQaDeadlineController({
+  deadlineMs,
+  requestFailedQuit,
+  setTimer = setTimeout,
+  clearTimer = clearTimeout,
 }) {
-  if (typeof terminateOwnedBackend !== 'function') throw new TypeError('terminateOwnedBackend must be a function')
-  let accepted = false
-  try {
-    accepted = terminateOwnedBackend({ currentOwnership, ownership, runtimeInfo })
-  } catch (error) {
-    try {
-      onTerminationError(error)
-    } catch {
-      // A diagnostic callback cannot turn best-effort exact-child cleanup into an uncaught quit failure.
-    }
-    return false
+  if (deadlineMs !== null && (!Number.isInteger(deadlineMs) || deadlineMs < 1)) {
+    throw new TypeError('QA deadline must be null or a positive integer')
   }
-  if (accepted !== true) return false
-  return invalidateStartupForExactOwnership({
-    currentOwnership,
-    eventOwnership: ownership,
-    eventName: 'kill',
-    startupController,
+  if (typeof requestFailedQuit !== 'function'
+    || typeof setTimer !== 'function'
+    || typeof clearTimer !== 'function') {
+    throw new TypeError('QA deadline dependencies must be functions')
+  }
+  let timer = null
+  let canceled = false
+  let fired = false
+
+  const fire = () => {
+    if (canceled || fired) return false
+    fired = true
+    timer = null
+    requestFailedQuit()
+    return true
+  }
+
+  return Object.freeze({
+    arm() {
+      if (deadlineMs === null || canceled || fired || timer !== null) return false
+      timer = setTimer(fire, deadlineMs)
+      return true
+    },
+    cancel() {
+      if (deadlineMs === null || canceled || fired || timer === null) return false
+      canceled = true
+      clearTimer(timer)
+      timer = null
+      return true
+    },
   })
 }
 
@@ -176,6 +196,11 @@ function createNativeExitCoordinator({ app }) {
       if (quitRequested || nativeExitFinalized) return false
       quitRequested = true
       app.quit()
+      return true
+    },
+    markFailure() {
+      if (pendingNativeExitCode === 1) return false
+      pendingNativeExitCode = 1
       return true
     },
     finalizeAfterCleanup() {
@@ -277,6 +302,7 @@ function registerPrimaryInstanceLifecycle({
   focusWindow,
   handleFailure,
   onWindowAllClosed,
+  onBeforeQuit = () => {},
   onWillQuit,
 }) {
   if (!launchPolicyValid || !ownsSingleInstanceLock) return false
@@ -290,6 +316,7 @@ function registerPrimaryInstanceLifecycle({
       .catch(handleFailure)
   })
   app.on('window-all-closed', onWindowAllClosed)
+  app.on('before-quit', onBeforeQuit)
   app.on('will-quit', onWillQuit)
   app.whenReady()
     .then(() => startupController.onReady())
@@ -305,7 +332,7 @@ module.exports = {
   createTransactionalWindow,
   discardExactWindow,
   invalidateStartupForExactOwnership,
-  requestExactBackendTermination,
+  createQaDeadlineController,
   createNativeExitCoordinator,
   loadStartupErrorContent,
   createDesktopStartupController,

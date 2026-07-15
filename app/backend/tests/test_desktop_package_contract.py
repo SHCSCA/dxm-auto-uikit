@@ -13,6 +13,8 @@ DESKTOP_LAUNCH_POLICY = DESKTOP_DIR / "src" / "launch-policy.cjs"
 DESKTOP_LAUNCH_POLICY_TEST = DESKTOP_DIR / "test" / "launch-policy.test.cjs"
 DESKTOP_RUNTIME_START = DESKTOP_DIR / "src" / "runtime-start.cjs"
 DESKTOP_RUNTIME_START_TEST = DESKTOP_DIR / "test" / "runtime-start.test.cjs"
+DESKTOP_BACKEND_SHUTDOWN = DESKTOP_DIR / "src" / "backend-shutdown.cjs"
+DESKTOP_BACKEND_SHUTDOWN_TEST = DESKTOP_DIR / "test" / "backend-shutdown.test.cjs"
 DESKTOP_MAIN = DESKTOP_DIR / "src" / "main.cjs"
 DESKTOP_PRELOAD = DESKTOP_DIR / "src" / "preload.cjs"
 DESKTOP_BUILDER = DESKTOP_DIR / "electron-builder.yml"
@@ -148,7 +150,11 @@ def test_desktop_main_starts_backend_hidden_and_loads_frontend_with_api_base():
     identity_source = DESKTOP_RUNTIME_IDENTITY.read_text(encoding="utf-8")
     launch_policy_source = DESKTOP_LAUNCH_POLICY.read_text(encoding="utf-8")
     runtime_start_source = DESKTOP_RUNTIME_START.read_text(encoding="utf-8")
-    kill_backend_section = source[source.index("function killBackendProcess"):source.index("async function startDesktopRuntime")]
+    shutdown_source = DESKTOP_BACKEND_SHUTDOWN.read_text(encoding="utf-8")
+    termination_section = source[
+        source.index("function requestBackendTermination"):
+        source.index("async function startDesktopRuntime")
+    ]
 
     assert "app.setName('DXM Agent Console')" in source
     assert "function resolveRepoRoot()" in source
@@ -159,14 +165,14 @@ def test_desktop_main_starts_backend_hidden_and_loads_frontend_with_api_base():
     assert "if (app.isPackaged)" in source
     assert "Packaged backend Python is missing" in source
     assert "app.getPath('userData')" in source
-    assert "src.main:app" in source
+    assert "src.desktop_server" in source
     assert "buildBackendEnvironment" in source
     assert "DXM_DATA_DIR" in identity_source
     assert "DXM_RESOURCE_ROOT" in identity_source
     assert "DXM_LAUNCHER_LOG_FILE" in source
-    assert "DXM_BACKEND_PORT: String(port)" in source
+    assert "env.DXM_BACKEND_PORT = String(port)" in shutdown_source
     assert "DXM_BACKEND_URL: `http://127.0.0.1:${port}`" in source
-    assert "DXM_DESKTOP=1" in source
+    assert "env.DXM_DESKTOP = '1'" in shutdown_source
     assert "DXM_WORKFLOW_ACTION_RUNTIME: 'browser_agent'" in source
     assert "const workflowProfileDir = path.join(dataDir, 'browser_profiles', 'dxm_workflow')" in source
     assert "DXM_WORKFLOW_PROFILE_DIR" in identity_source
@@ -176,7 +182,8 @@ def test_desktop_main_starts_backend_hidden_and_loads_frontend_with_api_base():
     assert "data/desktop-main.log" in source
     assert "app/frontend/dist/index.html" in source
     assert "apiBase=" in source
-    assert "killBackendProcess()" in source
+    assert "backendShutdownController.requestCurrentOrPendingTermination" in termination_section
+    assert "if (!ownership)" not in termination_section
     assert "will-quit" in runtime_start_source
     assert "classifyLaunchArguments" in source
     assert "qa-capture" in launch_policy_source
@@ -185,10 +192,98 @@ def test_desktop_main_starts_backend_hidden_and_loads_frontend_with_api_base():
     assert "windowVisible: Boolean(!window.isDestroyed() && window.isVisible())" in source
     assert "QA visible smoke written" in source
     assert "webContents.capturePage()" in source
-    assert "terminateExactOwnedBackend" in kill_backend_section
-    assert "taskkill" not in kill_backend_section.lower()
+    assert "nativeExitCoordinator.markFailure()" in termination_section
+    assert "taskkill" not in termination_section.lower()
     assert "execFileSync" not in source
-    assert "process.kill(" not in kill_backend_section
+    assert "process.kill(" not in termination_section
+
+
+def test_desktop_main_uses_the_programmatic_host_and_exact_piped_parent_channel():
+    source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    shutdown_source = DESKTOP_BACKEND_SHUTDOWN.read_text(encoding="utf-8")
+    start_backend_section = source[
+        source.index("function startBackend"):
+        source.index("function waitForHealth")
+    ]
+    startup_section = source[
+        source.index("async function startDesktopRuntime"):
+        source.index("async function createMainWindow")
+    ]
+
+    assert DESKTOP_BACKEND_SHUTDOWN.exists()
+    assert DESKTOP_BACKEND_SHUTDOWN_TEST.exists()
+    assert "require('./backend-shutdown.cjs')" in source
+    assert "const args = ['-m', 'src.desktop_server']" in start_backend_section
+    assert "stdio: ['pipe', 'pipe', 'pipe']" in start_backend_section
+    assert "buildDesktopBackendEnvironment" in start_backend_section
+    assert "DXM_RUNTIME_OWNER = 'electron_desktop'" in shutdown_source
+    assert "DXM_DESKTOP = '1'" in shutdown_source
+    assert "DXM_DESKTOP_PARENT_CHANNEL = 'stdin-v1'" in shutdown_source
+    assert "backendShutdownController.registerSpawnSetup" in start_backend_section
+    assert "backendShutdownController.handoffSpawnSetup" in start_backend_section
+    assert "await backendShutdownController.startParentChannel(ownership)" in start_backend_section
+    assert "const ownership = await startBackend(" in startup_section
+    assert startup_section.index("const ownership = await startBackend(") < startup_section.index(
+        "await waitForHealth(runtimeInfo.apiBase, 45000, ownership)"
+    )
+    assert "src.main:app" not in start_backend_section
+    assert "-m', 'uvicorn" not in start_backend_section
+
+
+def test_desktop_quit_wiring_waits_once_in_before_quit_and_will_quit_only_finalizes_native_exit():
+    source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    runtime_start_source = DESKTOP_RUNTIME_START.read_text(encoding="utf-8")
+    shutdown_source = DESKTOP_BACKEND_SHUTDOWN.read_text(encoding="utf-8")
+    lifecycle_section = source[source.index("registerPrimaryInstanceLifecycle({"):]
+
+    assert "createBeforeQuitController" in source
+    assert "beforeQuitController.handleBeforeQuit" in lifecycle_section
+    assert "app.on('before-quit', onBeforeQuit)" in runtime_start_source
+    assert "event?.preventDefault?.()" in shutdown_source
+    assert "requestCurrentOrPendingTermination({ reason: 'before-quit' })" in shutdown_source
+    before_quit_setup = source[
+        source.index("const beforeQuitController = createBeforeQuitController({"):
+        source.index("const qaDeadlineController =")
+    ]
+    assert "backendShutdownController.requestCurrentOrPendingTermination(options)" in before_quit_setup
+    assert "getCurrentOwnership" not in before_quit_setup
+    assert "getPendingTermination" not in before_quit_setup
+    assert "onWillQuit: () => {" in lifecycle_section
+    will_quit = lifecycle_section[
+        lifecycle_section.index("onWillQuit: () => {"):
+        lifecycle_section.index("\n  },\n})", lifecycle_section.index("onWillQuit: () => {"))
+    ]
+    assert "nativeExitCoordinator.finalizeAfterCleanup()" in will_quit
+    assert "requestTermination" not in will_quit
+    assert "killBackendProcess" not in will_quit
+
+
+def test_isolated_qa_deadline_arms_once_and_will_quit_cancels_before_native_finalize():
+    source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    runtime_start_source = DESKTOP_RUNTIME_START.read_text(encoding="utf-8")
+    deadline_section = source[
+        source.index("const qaDeadlineController ="):
+        source.index("function initializeDesktopLogPath")
+    ]
+    lifecycle_section = source[source.index("qaDeadlineController?.arm()") :]
+    will_quit = lifecycle_section[
+        lifecycle_section.index("onWillQuit: () => {"):
+        lifecycle_section.index("\n  },\n})", lifecycle_section.index("onWillQuit: () => {"))
+    ]
+
+    assert "function createQaDeadlineController" in runtime_start_source
+    assert "launchPolicyValid" in deadline_section
+    assert "ownsSingleInstanceLock" in deadline_section
+    assert "launchPolicy?.isIsolatedQa" in deadline_section
+    assert "launchPolicy.deadlineMs !== null" in deadline_section
+    assert "deadlineMs: launchPolicy.deadlineMs" in deadline_section
+    assert "nativeExitCoordinator.requestQuit({ failed: true })" in deadline_section
+    assert lifecycle_section.index("qaDeadlineController?.arm()") < lifecycle_section.index(
+        "registerPrimaryInstanceLifecycle({"
+    )
+    assert will_quit.index("qaDeadlineController?.cancel()") < will_quit.index(
+        "nativeExitCoordinator.finalizeAfterCleanup()"
+    )
 
 
 def test_desktop_main_logs_packaged_probe_resource_status_before_backend_start():
@@ -276,44 +371,141 @@ def test_desktop_backend_start_owns_exact_child_and_injects_one_launch_identity(
     assert "return ownership" in start_backend_section
     assert "child.pid" in start_backend_section
     assert "DXM_BUILD_MANIFEST_JSON" not in start_backend_section
-    assert "const ownership = startBackend(" in startup_section
+    assert "const ownership = await startBackend(" in startup_section
     assert "await waitForHealth(runtimeInfo.apiBase, 45000, ownership)" in startup_section
+
+
+def test_desktop_backend_start_installs_and_awaits_the_exact_spawn_setup_close_barrier():
+    source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    shutdown_source = DESKTOP_BACKEND_SHUTDOWN.read_text(encoding="utf-8")
+    start_backend_section = source[source.index("async function startBackend"):source.index("function waitForHealth")]
+
+    spawn_index = start_backend_section.index("const child = spawn(")
+    try_index = start_backend_section.index("\n  try {", spawn_index)
+    setup_authority_index = start_backend_section.index(
+        "const spawnSetupAuthority = backendShutdownController.registerSpawnSetup(child"
+    )
+    pid_validation_index = start_backend_section.index("if (!Number.isInteger(child.pid)")
+    pipe_validation_index = start_backend_section.index("if (!child.stdin || !child.stdout || !child.stderr")
+    identity_index = start_backend_section.index("const expectedIdentity = createExpectedRuntimeIdentity")
+    handoff_index = start_backend_section.index("backendShutdownController.handoffSpawnSetup(")
+    release_fact_index = start_backend_section.index("setupCleanupReleased = true")
+    start_channel_index = start_backend_section.index(
+        "await backendShutdownController.startParentChannel(ownership)"
+    )
+
+    assert "createSpawnSetupCleanup" in shutdown_source
+    assert "createSpawnSetupCleanup(child" in shutdown_source[
+        shutdown_source.index("function registerSpawnSetup"):
+        shutdown_source.index("function attachOwnership")
+    ]
+    assert spawn_index < try_index < setup_authority_index < pid_validation_index
+    assert not start_backend_section[
+        try_index + len("\n  try {"):setup_authority_index
+    ].strip()
+    assert setup_authority_index < pipe_validation_index
+    assert setup_authority_index < identity_index
+    assert identity_index < handoff_index < release_fact_index < start_channel_index
+    assert "createSpawnSetupCleanup" not in start_backend_section
+    assert "spawnSetupCleanup" not in start_backend_section
+    assert "const exactCleanup = startupError?.terminationPromise" in start_backend_section
+    assert "|| ownership?.terminationPromise" in start_backend_section
+    assert "backendShutdownController.requestCurrentOrPendingTermination({" in start_backend_section
+    assert "await exactCleanup" in start_backend_section
+    assert start_backend_section.index("startupError?.terminationPromise") < start_backend_section.index(
+        "backendShutdownController.requestCurrentOrPendingTermination({",
+        start_backend_section.index("catch (startupError)"),
+    )
+    assert "terminateUnownedSpawnChild" not in start_backend_section
+
+
+def test_desktop_backend_log_open_gate_precedes_output_identity_handoff_and_start():
+    source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    shutdown_source = DESKTOP_BACKEND_SHUTDOWN.read_text(encoding="utf-8")
+    start_backend_section = source[
+        source.index("async function startBackend"):source.index("function waitForHealth")
+    ]
+
+    setup_cleanup_index = start_backend_section.index(
+        "const spawnSetupAuthority = backendShutdownController.registerSpawnSetup(child"
+    )
+    log_stream_index = start_backend_section.index("logStream = fs.createWriteStream(")
+    log_gate_index = start_backend_section.index(
+        "const logOpenGate = createWritableLogOpenGate(logStream"
+    )
+    failure_scope_index = start_backend_section.index(
+        "const failureScope = classifyWritableLogFailure({"
+    )
+    stale_return_index = start_backend_section.index("if (failureScope === 'stale')")
+    setup_latch_index = start_backend_section.index("if (failureScope === 'setup')")
+    current_failure_index = start_backend_section.index(
+        "runtimeInfo.lastError = rawStartupErrorDetail(error)",
+        setup_latch_index,
+    )
+    log_wait_index = start_backend_section.index("await logOpenGate.waitUntilOpen()")
+    setup_failure_check_index = start_backend_section.index("if (setupLogFailure) throw setupLogFailure")
+    stdout_index = start_backend_section.index("child.stdout.on('data'")
+    stderr_index = start_backend_section.index("child.stderr.on('data'")
+    identity_index = start_backend_section.index("const expectedIdentity = createExpectedRuntimeIdentity")
+    handoff_index = start_backend_section.index("backendShutdownController.handoffSpawnSetup(")
+    release_index = start_backend_section.index("setupCleanupReleased = true")
+    start_index = start_backend_section.index(
+        "await backendShutdownController.startParentChannel(ownership)"
+    )
+
+    assert "createWritableLogOpenGate" in shutdown_source
+    assert "onClose: endLogStream" in start_backend_section[
+        setup_cleanup_index:log_stream_index
+    ]
+    assert log_stream_index < log_gate_index < failure_scope_index
+    assert failure_scope_index < stale_return_index < setup_latch_index < current_failure_index
+    assert log_gate_index < log_wait_index < setup_failure_check_index
+    assert setup_failure_check_index < stdout_index < stderr_index < identity_index
+    assert identity_index < handoff_index < release_index < start_index
+    assert "failureScope === 'exact-current'" in start_backend_section
+    assert "nativeExitCoordinator.markFailure()" in start_backend_section[
+        log_gate_index:stdout_index
+    ]
+    assert "backendShutdownController.requestCurrentOrPendingTermination({" in start_backend_section[
+        log_gate_index:stdout_index
+    ]
+    assert "reason: 'backend-log-error'" in start_backend_section[log_gate_index:stdout_index]
 
 
 def test_desktop_backend_cleanup_requires_current_exact_live_child_and_two_phase_identity():
     source = DESKTOP_MAIN.read_text(encoding="utf-8")
     identity_source = DESKTOP_RUNTIME_IDENTITY.read_text(encoding="utf-8")
+    shutdown_source = DESKTOP_BACKEND_SHUTDOWN.read_text(encoding="utf-8")
     start_backend_section = source[source.index("function startBackend"):source.index("function waitForHealth")]
-    kill_backend_section = source[source.index("function killBackendProcess"):source.index("async function startDesktopRuntime")]
-    lifecycle_section = identity_source[
-        identity_source.index("function clearOwnershipForChild"):
-        identity_source.index("function waitForOwnedBackendHealth")
+    lifecycle_section = shutdown_source[
+        shutdown_source.index("function createBackendShutdownController"):
+        shutdown_source.index("function createBeforeQuitController")
+    ]
+    kill_start = lifecycle_section.index("const attemptExactKillOnce")
+    kill_section = lifecycle_section[
+        kill_start:
+        lifecycle_section.index("control.forceFallback", kill_start)
     ]
 
-    assert "createBackendChildLifecycle" in start_backend_section
-    assert "backendOwnership === ownership" in start_backend_section
-    assert "lifecycle.handle(eventName)" in start_backend_section
-    assert "child.on('exit'" in start_backend_section
-    assert "child.on('close'" in start_backend_section
-    error_start = start_backend_section.index("child.on('error'")
-    pid_guard = start_backend_section.index("\n  if (!Number.isInteger(child.pid)", error_start)
-    error_section = start_backend_section[error_start:pid_guard]
-    assert "lifecycle.handle" not in error_section
-    assert error_start < pid_guard
-    assert "currentOwnership.child !== eventChild" in lifecycle_section
-    assert "eventName === 'exit' || eventName === 'close'" in lifecycle_section
-    assert "eventName === 'close' && !logStreamEnded" in lifecycle_section
-    assert "endLogStream()" in lifecycle_section
+    assert "backendShutdownController.handoffSpawnSetup" in start_backend_section
+    assert "child.on('exit', handleExit)" in lifecycle_section
+    assert "child.on('close', handleClose)" in lifecycle_section
+    assert "stdin.on('error', handlePipeError)" in lifecycle_section
+    assert "const wasCurrent = exactCurrent(ownership)" in lifecycle_section
+    assert "if (wasCurrent) setCurrentOwnership(null)" in lifecycle_section
+    assert "ownership.exitObserved = true" in lifecycle_section
+    assert "ownership.closeObserved = true" in lifecycle_section
+    assert "state.endLogStream()" in lifecycle_section
     assert "canTerminateOwnedBackend" in identity_source
     assert "exitCode" in identity_source
     assert "signalCode" in identity_source
-    assert ".killed" not in kill_backend_section
-    assert "backendOwnership = null" not in kill_backend_section
-    assert "terminateExactOwnedBackend" in kill_backend_section
-    assert "ownership.child.kill()" in identity_source
-    assert "taskkill" not in kill_backend_section.lower()
-    assert "process.kill(" not in kill_backend_section
-    assert "chrome" not in kill_backend_section.lower()
+    assert "ownership.killAttempted" in kill_section
+    assert "!exactCurrentLive(ownership)" in kill_section
+    assert "ownership.child.kill()" in kill_section
+    assert "setCurrentOwnership(null)" not in kill_section
+    assert "taskkill" not in lifecycle_section.lower()
+    assert "process.kill(" not in lifecycle_section
+    assert "chrome" not in lifecycle_section.lower()
 
 
 def test_frontend_runtime_types_include_the_frozen_identity_at_all_contract_surfaces():
@@ -360,7 +552,7 @@ def test_desktop_main_surfaces_startup_failures_in_visible_window():
     assert "loadStartupErrorContent({" in startup_error_section
     assert "fallbackContentUrl" in startup_error_section
     assert "Startup error window ${stage} content load failed" in startup_error_section
-    assert "killBackendProcess()" in source
+    assert "requestBackendTermination('startup-failure')" in source
     assert "function userStartupErrorMessage" in source
     assert "appendDesktopLog(`Startup failure detail:" in startup_error_section
     assert "const message = userStartupErrorMessage(error)" in startup_error_section
@@ -385,9 +577,9 @@ def test_visible_smoke_failure_sets_native_exit_only_after_will_quit_cleanup():
     assert "app.exit(" not in visible_section
     assert source.count("app.exit(1)") == 1
     assert source.index("app.exit(1)") < source.index("let mainWindow")
-    assert will_quit_section.index("killBackendProcess()") < will_quit_section.index(
-        "nativeExitCoordinator.finalizeAfterCleanup()"
-    )
+    assert "nativeExitCoordinator.finalizeAfterCleanup()" in will_quit_section
+    assert "requestBackendTermination" not in will_quit_section
+    assert ".kill(" not in will_quit_section
 
 
 def test_desktop_main_window_setup_is_transactional_and_startup_error_window_is_unique():

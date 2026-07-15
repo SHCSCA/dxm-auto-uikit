@@ -337,6 +337,27 @@ function createBackendOwnership({ child, instanceId, expectedIdentity }) {
     instanceId: String(instanceId),
     expectedIdentity,
     verifiedIdentity: null,
+    channelStarted: false,
+    channelStartRequested: false,
+    channelStartPromise: null,
+    channelStartError: null,
+    terminationRequested: false,
+    terminationReason: null,
+    terminationPromise: null,
+    shutdownWriteAttempted: false,
+    shutdownWriteCompleted: false,
+    shutdownWriteError: null,
+    exitObserved: false,
+    exitCode: null,
+    exitSignal: null,
+    closeObserved: false,
+    closeCode: null,
+    closeSignal: null,
+    killAttempted: false,
+    killAttemptCount: 0,
+    killAccepted: null,
+    killError: null,
+    lifecycleAttached: false,
   }
 }
 
@@ -365,42 +386,10 @@ function canTerminateOwnedBackend({ currentOwnership, ownership, runtimeInfo }) 
   return true
 }
 
-function terminateExactOwnedBackend({ currentOwnership, ownership, runtimeInfo }) {
-  if (!canTerminateOwnedBackend({ currentOwnership, ownership, runtimeInfo })) return false
-  return ownership.child.kill() === true
-}
-
 function isCurrentOwnedBackendLive(currentOwnership, ownership) {
   if (!ownership || currentOwnership !== ownership || !ownership.child) return false
   const child = ownership.child
   return child.pid === ownership.pid && child.exitCode === null && child.signalCode === null
-}
-
-function clearOwnershipForChild(currentOwnership, eventChild, eventName) {
-  if (!currentOwnership || currentOwnership.child !== eventChild) return currentOwnership
-  return eventName === 'exit' || eventName === 'close' ? null : currentOwnership
-}
-
-function createBackendChildLifecycle({
-  ownership,
-  getCurrentOwnership,
-  setCurrentOwnership,
-  endLogStream,
-}) {
-  let logStreamEnded = false
-  return {
-    handle(eventName) {
-      if (eventName === 'exit' || eventName === 'close') {
-        const current = getCurrentOwnership()
-        const next = clearOwnershipForChild(current, ownership.child, eventName)
-        if (next !== current) setCurrentOwnership(next)
-      }
-      if (eventName === 'close' && !logStreamEnded) {
-        logStreamEnded = true
-        endLogStream()
-      }
-    },
-  }
 }
 
 function waitForOwnedBackendHealth({
@@ -562,9 +551,6 @@ module.exports = {
   createBackendOwnership,
   setVerifiedBackendIdentity,
   canTerminateOwnedBackend,
-  terminateExactOwnedBackend,
   isCurrentOwnedBackendLive,
-  clearOwnershipForChild,
-  createBackendChildLifecycle,
   waitForOwnedBackendHealth,
 }

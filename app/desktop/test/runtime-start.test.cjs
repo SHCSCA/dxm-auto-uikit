@@ -2,6 +2,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 
 const {
+  createQaDeadlineController,
   createNativeExitCoordinator,
   createDesktopStartupController,
   createStartupFailurePresentation,
@@ -12,8 +13,62 @@ const {
   loadStartupErrorContent,
   prepareElectronLaunchOwnership,
   registerPrimaryInstanceLifecycle,
-  requestExactBackendTermination,
 } = require('../src/runtime-start.cjs')
+
+test('QA deadline arms once, fires once, and cancel makes a late callback inert', () => {
+  let disabledTimerCalls = 0
+  const disabled = createQaDeadlineController({
+    deadlineMs: null,
+    requestFailedQuit: () => assert.fail('disabled deadline must not quit'),
+    setTimer: () => { disabledTimerCalls += 1 },
+    clearTimer: () => assert.fail('disabled deadline has no timer to clear'),
+  })
+  assert.equal(disabled.arm(), false)
+  assert.equal(disabled.cancel(), false)
+  assert.equal(disabledTimerCalls, 0)
+
+  const timerId = { id: 'qa-deadline' }
+  let deadlineCallback = null
+  let clearCount = 0
+  let failedQuitCount = 0
+  const deadline = createQaDeadlineController({
+    deadlineMs: 25,
+    requestFailedQuit: () => { failedQuitCount += 1 },
+    setTimer: (callback, delayMs) => {
+      assert.equal(delayMs, 25)
+      deadlineCallback = callback
+      return timerId
+    },
+    clearTimer: (candidate) => {
+      assert.strictEqual(candidate, timerId)
+      clearCount += 1
+    },
+  })
+  assert.equal(deadline.arm(), true)
+  assert.equal(deadline.arm(), false)
+  deadlineCallback()
+  deadlineCallback()
+  assert.equal(failedQuitCount, 1)
+  assert.equal(deadline.cancel(), false)
+  assert.equal(clearCount, 0)
+
+  let canceledCallback = null
+  const canceled = createQaDeadlineController({
+    deadlineMs: 50,
+    requestFailedQuit: () => { failedQuitCount += 1 },
+    setTimer: (callback) => {
+      canceledCallback = callback
+      return timerId
+    },
+    clearTimer: () => { clearCount += 1 },
+  })
+  assert.equal(canceled.arm(), true)
+  assert.equal(canceled.cancel(), true)
+  assert.equal(canceled.cancel(), false)
+  canceledCallback()
+  assert.equal(failedQuitCount, 1)
+  assert.equal(clearCount, 1)
+})
 
 test('ready starts runtime once before the first window and activate creates only a window', async () => {
   const calls = []
@@ -257,7 +312,7 @@ test('invalid launch classification and false lock cannot register any lifecycle
   assert.deepEqual(appCalls, [])
 })
 
-test('only exact current ownership exit, close, or kill invalidates a verified startup', async () => {
+test('only an approved exact current backend stop or channel failure invalidates a verified startup', async () => {
   const controller = createDesktopStartupController({
     startRuntime: async () => ({ apiBase: 'http://127.0.0.1:8000' }),
     createMainWindow: async () => {},
@@ -283,70 +338,12 @@ test('only exact current ownership exit, close, or kill invalidates a verified s
   assert.equal(invalidateStartupForExactOwnership({
     currentOwnership,
     eventOwnership: currentOwnership,
-    eventName: 'kill',
+    eventName: 'stdin-error',
     startupController: controller,
   }), true)
   assert.equal(controller.getState(), 'stopped')
   assert.equal(controller.getVerifiedRuntime(), null)
   assert.equal(await controller.onActivate({ hasWindows: false }), false)
-})
-
-test('exact backend termination invalidates startup only after the child accepts the kill request', async () => {
-  const controller = createDesktopStartupController({
-    startRuntime: async () => ({ apiBase: 'http://127.0.0.1:8000' }),
-    createMainWindow: async () => {},
-  })
-  await controller.onReady()
-  const ownership = { child: { pid: 21 } }
-  const runtimeInfo = { backendPid: 21, backendInstanceId: 'owned' }
-  const calls = []
-
-  assert.equal(requestExactBackendTermination({
-    currentOwnership: ownership,
-    ownership,
-    runtimeInfo,
-    startupController: controller,
-    terminateOwnedBackend: (input) => {
-      calls.push(input)
-      return false
-    },
-  }), false)
-  assert.equal(controller.getState(), 'ready')
-
-  assert.equal(requestExactBackendTermination({
-    currentOwnership: ownership,
-    ownership,
-    runtimeInfo,
-    startupController: controller,
-    terminateOwnedBackend: () => true,
-  }), true)
-  assert.equal(controller.getState(), 'stopped')
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].currentOwnership, ownership)
-  assert.equal(calls[0].ownership, ownership)
-  assert.equal(calls[0].runtimeInfo, runtimeInfo)
-})
-
-test('exact backend termination catches a child kill error without invalidating startup', async () => {
-  const controller = createDesktopStartupController({
-    startRuntime: async () => ({ apiBase: 'http://127.0.0.1:8000' }),
-    createMainWindow: async () => {},
-  })
-  await controller.onReady()
-  const ownership = { child: { pid: 22 } }
-  const errors = []
-
-  assert.equal(requestExactBackendTermination({
-    currentOwnership: ownership,
-    ownership,
-    runtimeInfo: { backendPid: 22, backendInstanceId: 'owned' },
-    startupController: controller,
-    terminateOwnedBackend: () => { throw new Error('kill request rejected') },
-    onTerminationError: (error) => errors.push(error.message),
-  }), false)
-  assert.deepEqual(errors, ['kill request rejected'])
-  assert.equal(controller.getState(), 'ready')
-  assert.notEqual(controller.getVerifiedRuntime(), null)
 })
 
 test('failed native exit is finalized only after will-quit cleanup', () => {
@@ -415,6 +412,50 @@ test('repeated failed quit requests preserve failure and finalize native exit on
     'will-quit cleanup',
     'app.exit:1',
   ])
+})
+
+test('a bounded backend termination failure upgrades native exit without issuing another initial quit', () => {
+  const events = []
+  const coordinator = createNativeExitCoordinator({
+    app: {
+      quit: () => events.push('app.quit'),
+      exit: (code) => events.push(`app.exit:${code}`),
+    },
+  })
+
+  assert.equal(coordinator.requestQuit(), true)
+  assert.equal(coordinator.markFailure(), true)
+  assert.equal(coordinator.markFailure(), false)
+  assert.equal(coordinator.finalizeAfterCleanup(), true)
+  assert.deepEqual(events, ['app.quit', 'app.exit:1'])
+})
+
+test('QA deadline upgrades an already-started successful quit without another quit request', () => {
+  const events = []
+  let deadlineCallback = null
+  const coordinator = createNativeExitCoordinator({
+    app: {
+      quit: () => events.push('app.quit'),
+      exit: (code) => events.push(`app.exit:${code}`),
+    },
+  })
+  const deadline = createQaDeadlineController({
+    deadlineMs: 25,
+    requestFailedQuit: () => coordinator.requestQuit({ failed: true }),
+    setTimer: (callback) => {
+      deadlineCallback = callback
+      return 1
+    },
+    clearTimer: () => {},
+  })
+
+  assert.equal(deadline.arm(), true)
+  assert.equal(coordinator.requestQuit(), true)
+  deadlineCallback()
+  deadlineCallback()
+  assert.deepEqual(events, ['app.quit'])
+  assert.equal(coordinator.finalizeAfterCleanup(), true)
+  assert.deepEqual(events, ['app.quit', 'app.exit:1'])
 })
 
 test('startup error content falls back once when rich HTML fails to load', async () => {

@@ -23,10 +23,7 @@ const {
   createBackendOwnership,
   setVerifiedBackendIdentity,
   canTerminateOwnedBackend,
-  terminateExactOwnedBackend,
   isCurrentOwnedBackendLive,
-  clearOwnershipForChild,
-  createBackendChildLifecycle,
   waitForOwnedBackendHealth,
 } = require('../src/runtime-identity.cjs')
 
@@ -322,117 +319,16 @@ test('ownership permits exact pre-health cleanup and requires verified identity 
   assert.equal(canTerminateOwnedBackend({ currentOwnership: ownership, ownership, runtimeInfo }), false)
 })
 
-test('termination reports success only when the exact current live ChildProcess accepts kill', () => {
-  const expected = expectedIdentity()
-  let exactKillCount = 0
-  let staleKillCount = 0
-  const child = {
-    pid: expected.backendPid,
-    exitCode: null,
-    signalCode: null,
-    kill() {
-      exactKillCount += 1
-      return false
-    },
-  }
-  const staleChild = {
-    pid: expected.backendPid,
-    exitCode: null,
-    signalCode: null,
-    kill() {
-      staleKillCount += 1
-      return true
-    },
-  }
-  const ownership = createBackendOwnership({ child, instanceId: expected.instanceId, expectedIdentity: expected })
-  const staleOwnership = createBackendOwnership({ child: staleChild, instanceId: expected.instanceId, expectedIdentity: expected })
-  const runtimeInfo = {
-    backendPid: expected.backendPid,
-    backendInstanceId: expected.instanceId,
-    runtimeIdentity: null,
-  }
-
-  assert.equal(terminateExactOwnedBackend({ currentOwnership: ownership, ownership, runtimeInfo }), false)
-  assert.equal(exactKillCount, 1)
-  assert.equal(ownership.child, child)
-  assert.equal(ownership.child.exitCode, null)
-  assert.equal(ownership.child.signalCode, null)
-
-  assert.equal(terminateExactOwnedBackend({ currentOwnership: ownership, ownership: staleOwnership, runtimeInfo }), false)
-  assert.equal(staleKillCount, 0)
-
-  child.exitCode = 0
-  assert.equal(terminateExactOwnedBackend({ currentOwnership: ownership, ownership, runtimeInfo }), false)
-  child.exitCode = null
-  child.signalCode = 'SIGTERM'
-  assert.equal(terminateExactOwnedBackend({ currentOwnership: ownership, ownership, runtimeInfo }), false)
-  child.signalCode = null
-
-  const verified = verifyRuntimeIdentity(actualIdentity(expected), expected)
-  setVerifiedBackendIdentity(ownership, verified)
-  runtimeInfo.runtimeIdentity = { ...verified, fingerprint: '00'.repeat(32) }
-  assert.equal(terminateExactOwnedBackend({ currentOwnership: ownership, ownership, runtimeInfo }), false)
-  assert.equal(exactKillCount, 1)
-  assert.equal(staleKillCount, 0)
-})
-
-test('termination propagates an exact child kill error instead of reporting accepted termination', () => {
-  const expected = expectedIdentity()
-  const child = {
-    pid: expected.backendPid,
-    exitCode: null,
-    signalCode: null,
-    kill() { throw new Error('kill request rejected') },
-  }
-  const ownership = createBackendOwnership({ child, instanceId: expected.instanceId, expectedIdentity: expected })
-  const runtimeInfo = {
-    backendPid: expected.backendPid,
-    backendInstanceId: expected.instanceId,
-    runtimeIdentity: null,
-  }
-
-  assert.throws(
-    () => terminateExactOwnedBackend({ currentOwnership: ownership, ownership, runtimeInfo }),
-    /kill request rejected/,
-  )
-})
-
-test('exit or error events clear ownership only for the currently owned exact ChildProcess', () => {
+test('current ownership liveness requires the exact record and a live child', () => {
   const expected = expectedIdentity()
   const child = { pid: expected.backendPid, exitCode: null, signalCode: null }
-  const staleChild = { pid: expected.backendPid, exitCode: null, signalCode: null }
   const ownership = createBackendOwnership({ child, instanceId: expected.instanceId, expectedIdentity: expected })
 
   assert.equal(isCurrentOwnedBackendLive(ownership, ownership), true)
   assert.equal(isCurrentOwnedBackendLive({ ...ownership }, ownership), false)
-  assert.equal(clearOwnershipForChild(ownership, staleChild, 'exit'), ownership)
-  assert.equal(clearOwnershipForChild(ownership, child, 'error'), ownership)
-  assert.equal(clearOwnershipForChild(ownership, child, 'exit'), null)
-  assert.equal(clearOwnershipForChild(ownership, child, 'close'), null)
 
   child.exitCode = 1
   assert.equal(isCurrentOwnedBackendLive(ownership, ownership), false)
-})
-
-test('child exit clears ownership while close ends the log stream exactly once', () => {
-  const expected = expectedIdentity()
-  const child = { pid: expected.backendPid, exitCode: null, signalCode: null }
-  const ownership = createBackendOwnership({ child, instanceId: expected.instanceId, expectedIdentity: expected })
-  let currentOwnership = ownership
-  let logEndCount = 0
-  const lifecycle = createBackendChildLifecycle({
-    ownership,
-    getCurrentOwnership: () => currentOwnership,
-    setCurrentOwnership: (value) => { currentOwnership = value },
-    endLogStream: () => { logEndCount += 1 },
-  })
-
-  lifecycle.handle('exit')
-  assert.equal(currentOwnership, null)
-  assert.equal(logEndCount, 0)
-  lifecycle.handle('close')
-  lifecycle.handle('close')
-  assert.equal(logEndCount, 1)
 })
 
 test('health waiter cannot verify a late response after timeout', async (t) => {
