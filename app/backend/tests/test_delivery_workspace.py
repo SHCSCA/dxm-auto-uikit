@@ -1,13 +1,654 @@
+import base64
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from src import db
+from src.core import config
 from src.main import app
 from src.repository import Repository
 from src.services import delivery_workspace
+from src.services.state_consistency import audit_state_consistency
+from src.state_machine.two_stage import (
+    canonical_claim_target_identity,
+    canonical_source_identity,
+)
+
+
+_MINIMAL_VALID_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
+
+
+def _evidence_ref(name: str, *, content: bytes | None = None) -> dict:
+    config.SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    path = (config.SCREENSHOT_DIR / name).resolve()
+    content = _MINIMAL_VALID_PNG if content is None else content
+    path.write_bytes(content)
+    return {
+        "path": str(path),
+        "sha256": hashlib.sha256(content).hexdigest().upper(),
+        "size": len(content),
+    }
+
+
+def test_state_consistency_rejects_completed_task_with_failed_job():
+    result = audit_state_consistency(
+        task={
+            "id": 41,
+            "status": "completed",
+            "total_jobs": 1,
+            "completed_jobs": 0,
+            "failed_jobs": 1,
+        },
+        jobs=[{"id": 73, "task_id": 41, "status": "failed"}],
+        reports=[],
+        exceptions=[],
+    )
+
+    assert result["consistent"] is False
+    assert result["violation_codes"] == ["STATE_TASK_COMPLETED_HAS_FAILED_JOB"]
+
+
+def test_state_consistency_rejects_success_report_for_failed_job():
+    result = audit_state_consistency(
+        task={
+            "id": 42,
+            "status": "failed",
+            "total_jobs": 1,
+            "completed_jobs": 0,
+            "failed_jobs": 1,
+        },
+        jobs=[{"id": 74, "task_id": 42, "status": "failed"}],
+        reports=[{"id": 95, "task_id": 42, "job_id": 74, "status": "success"}],
+        exceptions=[],
+    )
+
+    assert result["consistent"] is False
+    assert result["violation_codes"] == ["STATE_FAILED_JOB_HAS_SUCCESS_REPORT"]
+
+
+def test_state_consistency_rejects_failed_report_for_succeeded_job():
+    result = audit_state_consistency(
+        task={
+            "id": 43,
+            "status": "completed",
+            "total_jobs": 1,
+            "completed_jobs": 1,
+            "failed_jobs": 0,
+        },
+        jobs=[{"id": 75, "task_id": 43, "status": "succeeded"}],
+        reports=[{"id": 96, "task_id": 43, "job_id": 75, "status": "failed"}],
+        exceptions=[],
+    )
+
+    assert result["consistent"] is False
+    assert result["violation_codes"] == ["STATE_SUCCEEDED_JOB_HAS_FAILED_REPORT"]
+
+
+def test_state_consistency_rejects_success_with_open_exception():
+    result = audit_state_consistency(
+        task={
+            "id": 44,
+            "status": "completed",
+            "total_jobs": 1,
+            "completed_jobs": 1,
+            "failed_jobs": 0,
+        },
+        jobs=[{"id": 76, "task_id": 44, "status": "succeeded"}],
+        reports=[{"id": 97, "task_id": 44, "job_id": 76, "status": "success"}],
+        exceptions=[{"id": 108, "task_id": 44, "job_id": 76, "status": "open"}],
+    )
+
+    assert result["consistent"] is False
+    assert result["violation_codes"] == ["STATE_SUCCESS_HAS_OPEN_EXCEPTION"]
+
+
+def test_state_consistency_rejects_open_exception_bound_to_unknown_job():
+    result = audit_state_consistency(
+        task={
+            "id": 41,
+            "status": "completed",
+            "total_jobs": 1,
+            "completed_jobs": 1,
+            "failed_jobs": 0,
+        },
+        jobs=[{"id": 73, "task_id": 41, "status": "succeeded"}],
+        reports=[{"id": 81, "task_id": 41, "job_id": 73, "status": "success"}],
+        exceptions=[{"id": 91, "task_id": 41, "job_id": 999, "status": "open"}],
+    )
+
+    assert result["consistent"] is False
+    assert result["violation_codes"] == [
+        "STATE_EXCEPTION_REFERENCES_UNKNOWN_JOB",
+        "STATE_SUCCESS_HAS_OPEN_EXCEPTION",
+    ]
+
+
+def test_state_consistency_rejects_resolved_exception_bound_to_unknown_job():
+    result = audit_state_consistency(
+        task={
+            "id": 41,
+            "status": "running",
+            "total_jobs": 1,
+            "completed_jobs": 0,
+            "failed_jobs": 0,
+        },
+        jobs=[{"id": 73, "task_id": 41, "status": "running"}],
+        reports=[],
+        exceptions=[
+            {"id": 91, "task_id": 41, "job_id": 999, "status": "resolved"}
+        ],
+    )
+
+    assert result["consistent"] is False
+    assert result["violation_codes"] == [
+        "STATE_EXCEPTION_REFERENCES_UNKNOWN_JOB"
+    ]
+
+
+def test_state_consistency_rejects_closed_exception_bound_to_cross_task():
+    result = audit_state_consistency(
+        task={
+            "id": 41,
+            "status": "running",
+            "total_jobs": 1,
+            "completed_jobs": 0,
+            "failed_jobs": 0,
+        },
+        jobs=[{"id": 73, "task_id": 41, "status": "running"}],
+        reports=[],
+        exceptions=[
+            {"id": 91, "task_id": 999, "job_id": 73, "status": "closed"}
+        ],
+    )
+
+    assert result["consistent"] is False
+    assert result["violation_codes"] == [
+        "STATE_EXCEPTION_REFERENCES_UNKNOWN_JOB"
+    ]
+
+
+def test_state_consistency_rejects_open_exception_without_job_binding():
+    result = audit_state_consistency(
+        task={
+            "id": 41,
+            "status": "completed",
+            "total_jobs": 1,
+            "completed_jobs": 1,
+            "failed_jobs": 0,
+        },
+        jobs=[{"id": 73, "task_id": 41, "status": "succeeded"}],
+        reports=[{"id": 81, "task_id": 41, "job_id": 73, "status": "success"}],
+        exceptions=[{"id": 91, "task_id": 41, "job_id": None, "status": "open"}],
+    )
+
+    assert result["consistent"] is False
+    assert result["violation_codes"] == [
+        "STATE_EXCEPTION_REFERENCES_UNKNOWN_JOB",
+        "STATE_SUCCESS_HAS_OPEN_EXCEPTION",
+    ]
+
+
+def test_state_consistency_rejects_cross_task_report_and_exception_bindings():
+    result = audit_state_consistency(
+        task={
+            "id": 41,
+            "status": "completed",
+            "total_jobs": 1,
+            "completed_jobs": 1,
+            "failed_jobs": 0,
+        },
+        jobs=[{"id": 73, "task_id": 41, "status": "succeeded"}],
+        reports=[{"id": 81, "task_id": 999, "job_id": 73, "status": "success"}],
+        exceptions=[{"id": 91, "task_id": 999, "job_id": 73, "status": "open"}],
+    )
+
+    assert result["consistent"] is False
+    assert result["violation_codes"] == [
+        "STATE_REPORT_REFERENCES_UNKNOWN_JOB",
+        "STATE_EXCEPTION_REFERENCES_UNKNOWN_JOB",
+        "STATE_SUCCESS_HAS_OPEN_EXCEPTION",
+    ]
+
+
+def test_state_consistency_rejects_task_counter_mismatch():
+    result = audit_state_consistency(
+        task={
+            "id": 45,
+            "status": "completed",
+            "total_jobs": 1,
+            "completed_jobs": 0,
+            "failed_jobs": 0,
+        },
+        jobs=[{"id": 77, "task_id": 45, "status": "succeeded"}],
+        reports=[{"id": 98, "task_id": 45, "job_id": 77, "status": "success"}],
+        exceptions=[],
+    )
+
+    assert result["consistent"] is False
+    assert result["violation_codes"] == ["STATE_TASK_COUNTER_MISMATCH"]
+    assert result["violations"][0]["expected"] == {
+        "total_jobs": 1,
+        "completed_jobs": 1,
+        "failed_jobs": 0,
+    }
+
+
+def test_state_consistency_accepts_matching_terminal_success_facts():
+    result = audit_state_consistency(
+        task={
+            "id": 46,
+            "status": "completed",
+            "total_jobs": 1,
+            "completed_jobs": 1,
+            "failed_jobs": 0,
+        },
+        jobs=[{"id": 78, "task_id": 46, "status": "succeeded"}],
+        reports=[{"id": 99, "task_id": 46, "job_id": 78, "status": "success"}],
+        exceptions=[],
+    )
+
+    assert result == {
+        "schema": "dxm_state_consistency.v1",
+        "consistent": True,
+        "violation_codes": [],
+        "violations": [],
+        "audited_task_ids": [46],
+    }
+
+
+def test_state_consistency_rejects_success_report_for_pending_job():
+    result = audit_state_consistency(
+        task={
+            "id": 47,
+            "status": "draft",
+            "total_jobs": 1,
+            "completed_jobs": 0,
+            "failed_jobs": 0,
+        },
+        jobs=[{"id": 79, "task_id": 47, "status": "pending"}],
+        reports=[{"id": 100, "task_id": 47, "job_id": 79, "status": "success"}],
+        exceptions=[],
+    )
+
+    assert result["consistent"] is False
+    assert result["violation_codes"] == ["STATE_SUCCESS_REPORT_REQUIRES_SUCCEEDED_JOB"]
+
+
+def test_state_consistency_rejects_completed_task_with_pending_job():
+    result = audit_state_consistency(
+        task={
+            "id": 48,
+            "status": "completed",
+            "total_jobs": 1,
+            "completed_jobs": 0,
+            "failed_jobs": 0,
+        },
+        jobs=[{"id": 80, "task_id": 48, "status": "pending"}],
+        reports=[],
+        exceptions=[],
+    )
+
+    assert result["consistent"] is False
+    assert result["violation_codes"] == [
+        "STATE_COMPLETED_TASK_REQUIRES_ALL_JOBS_SUCCEEDED"
+    ]
+
+
+def test_state_consistency_rejects_failed_task_with_nonfailed_job():
+    result = audit_state_consistency(
+        task={
+            "id": 49,
+            "status": "failed",
+            "total_jobs": 2,
+            "completed_jobs": 0,
+            "failed_jobs": 1,
+        },
+        jobs=[
+            {"id": 81, "task_id": 49, "status": "failed"},
+            {"id": 82, "task_id": 49, "status": "pending"},
+        ],
+        reports=[],
+        exceptions=[],
+    )
+
+    assert result["consistent"] is False
+    assert result["violation_codes"] == [
+        "STATE_FAILED_TASK_REQUIRES_ALL_JOBS_FAILED"
+    ]
+
+
+def test_state_consistency_rejects_partial_success_without_mixed_terminal_jobs():
+    result = audit_state_consistency(
+        task={
+            "id": 50,
+            "status": "partial_success",
+            "total_jobs": 2,
+            "completed_jobs": 1,
+            "failed_jobs": 0,
+        },
+        jobs=[
+            {"id": 83, "task_id": 50, "status": "succeeded"},
+            {"id": 84, "task_id": 50, "status": "pending"},
+        ],
+        reports=[],
+        exceptions=[],
+    )
+
+    assert result["consistent"] is False
+    assert result["violation_codes"] == [
+        "STATE_PARTIAL_SUCCESS_REQUIRES_MIXED_TERMINAL_JOBS"
+    ]
+
+
+def test_state_consistency_rejects_report_that_references_unknown_job():
+    result = audit_state_consistency(
+        task={
+            "id": 51,
+            "status": "draft",
+            "total_jobs": 0,
+            "completed_jobs": 0,
+            "failed_jobs": 0,
+        },
+        jobs=[],
+        reports=[{"id": 101, "task_id": 51, "job_id": 999, "status": "success"}],
+        exceptions=[],
+    )
+
+    assert result["consistent"] is False
+    assert result["violation_codes"] == ["STATE_REPORT_REFERENCES_UNKNOWN_JOB"]
+
+
+def test_state_consistency_rejects_report_without_job_binding():
+    result = audit_state_consistency(
+        task={
+            "id": 41,
+            "status": "completed",
+            "total_jobs": 1,
+            "completed_jobs": 1,
+            "failed_jobs": 0,
+        },
+        jobs=[{"id": 73, "task_id": 41, "status": "succeeded"}],
+        reports=[{"id": 81, "job_id": None, "status": "success"}],
+        exceptions=[],
+    )
+
+    assert result["consistent"] is False
+    assert result["violation_codes"] == ["STATE_REPORT_REFERENCES_UNKNOWN_JOB"]
+
+
+def test_state_consistency_rejects_running_task_when_all_jobs_are_terminal():
+    result = audit_state_consistency(
+        task={
+            "id": 52,
+            "status": "running",
+            "total_jobs": 2,
+            "completed_jobs": 1,
+            "failed_jobs": 1,
+        },
+        jobs=[
+            {"id": 102, "task_id": 52, "status": "succeeded"},
+            {"id": 103, "task_id": 52, "status": "failed"},
+        ],
+        reports=[],
+        exceptions=[],
+    )
+
+    assert result["consistent"] is False
+    assert result["violation_codes"] == [
+        "STATE_NONTERMINAL_TASK_HAS_ALL_TERMINAL_JOBS"
+    ]
+
+
+def test_state_consistency_allows_running_multi_job_task_with_work_remaining():
+    result = audit_state_consistency(
+        task={
+            "id": 53,
+            "status": "running",
+            "total_jobs": 2,
+            "completed_jobs": 1,
+            "failed_jobs": 0,
+        },
+        jobs=[
+            {"id": 104, "task_id": 53, "status": "succeeded"},
+            {"id": 105, "task_id": 53, "status": "running"},
+        ],
+        reports=[],
+        exceptions=[],
+    )
+
+    assert result["consistent"] is True
+    assert result["violation_codes"] == []
+
+
+def test_state_consistency_treats_needs_manual_review_as_terminal_task_outcome():
+    result = audit_state_consistency(
+        task={
+            "id": 54,
+            "status": "needs_manual_review",
+            "total_jobs": 1,
+            "completed_jobs": 0,
+            "failed_jobs": 1,
+        },
+        jobs=[{"id": 106, "task_id": 54, "status": "failed"}],
+        reports=[],
+        exceptions=[],
+    )
+
+    assert result["consistent"] is True
+    assert "STATE_NONTERMINAL_TASK_HAS_ALL_TERMINAL_JOBS" not in result[
+        "violation_codes"
+    ]
+
+
+def test_delivery_workspace_blocks_every_ready_surface_on_state_contradiction(tmp_path, monkeypatch):
+    l2_dir = tmp_path / "l2_readonly_probe"
+    _write_l2_probe_result(
+        l2_dir,
+        "data_acquisition",
+        target_url="https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
+    )
+    _write_l2_probe_result(
+        l2_dir,
+        "draft_box",
+        target_url="https://www.dianxiaomi.com/web/smt/smtProductList/draft",
+        created_at=_fresh_l2_created_at(-30),
+    )
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(delivery_workspace, "L2_PROBE_DIR", l2_dir)
+    fixture = _create_two_stage_delivery_fixture(repo)
+    repo.update_job(fixture["save_job"]["id"], status="failed", error_code="E901")
+    repo.update_task_status(
+        fixture["save_task"]["id"],
+        "failed",
+        completed_jobs=0,
+        failed_jobs=1,
+    )
+    repo.add_exception(
+        fixture["save_task"]["id"],
+        fixture["save_job"]["id"],
+        "E901",
+        "save",
+        "保存失败",
+        "真实保存失败后收到迟到成功结果",
+        "保持失败并创建新的任务重试",
+    )
+
+    data = client.get(
+        f"/api/delivery/workspace?task_id={fixture['save_task']['id']}"
+    ).json()
+
+    assert data["state_consistency"]["consistent"] is False
+    assert data["state_consistency"]["violation_codes"] == [
+        "STATE_FAILED_JOB_HAS_SUCCESS_REPORT",
+        "STATE_SUCCESS_HAS_OPEN_EXCEPTION",
+    ]
+    assert data["delivery_readiness"]["ready"] is False
+    assert data["delivery_readiness"]["blocked_by_state_consistency"] is True
+    state_gap = next(
+        gap for gap in data["acceptanceGaps"] if gap["id"] == "gap-state-consistency"
+    )
+    assert state_gap["severity"] == "blocker"
+    assert "STATE_FAILED_JOB_HAS_SUCCESS_REPORT" in state_gap["detail"]
+    assert data["two_stage_acceptance"]["passed"] is False
+    assert data["two_stage_acceptance"]["status"] == "inconsistent_state"
+    assert "state_consistency" in data["two_stage_acceptance"]["missing_codes"]
+    l3_gate = next(gate for gate in data["regression_gates"] if gate["level"] == "L3")
+    assert l3_gate["status"] == "blocked"
+    assert "STATE_FAILED_JOB_HAS_SUCCESS_REPORT" in l3_gate["detail"]
+
+
+def test_delivery_workspace_aggregates_linked_claim_task_contradictions(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_two_stage_delivery_fixture(repo)
+    claim_job = repo.get_task(fixture["claim_task"]["id"])["jobs"][0]
+    repo.update_job(claim_job["id"], status="failed", error_code="E901")
+    repo.update_task_status(
+        fixture["claim_task"]["id"],
+        "failed",
+        completed_jobs=0,
+        failed_jobs=1,
+    )
+
+    data = client.get(
+        f"/api/delivery/workspace?task_id={fixture['save_task']['id']}"
+    ).json()
+
+    assert data["state_consistency"]["consistent"] is False
+    violation = next(
+        item
+        for item in data["state_consistency"]["violations"]
+        if item["code"] == "STATE_FAILED_JOB_HAS_SUCCESS_REPORT"
+    )
+    assert violation["task_id"] == fixture["claim_task"]["id"]
+    assert data["state_consistency"]["audited_task_ids"] == [
+        fixture["save_task"]["id"],
+        fixture["claim_task"]["id"],
+    ]
+    assert data["two_stage_acceptance"]["status"] == "inconsistent_state"
+    assert data["two_stage_acceptance"]["passed"] is False
+
+
+def test_delivery_workspace_requires_completed_save_task_for_all_ready_surfaces(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_two_stage_delivery_fixture(repo)
+    repo.update_task_status(
+        fixture["save_task"]["id"],
+        "running",
+        completed_jobs=1,
+        failed_jobs=0,
+    )
+
+    data = client.get(
+        f"/api/delivery/workspace?task_id={fixture['save_task']['id']}"
+    ).json()
+
+    assert data["delivery_readiness"]["ready"] is False
+    assert data["delivery_readiness"]["task_completed"] is False
+    assert data["delivery_readiness"]["blocked_by_task_status"] is True
+    assert data["two_stage_acceptance"]["passed"] is False
+    assert data["two_stage_acceptance"]["checks"]["save_task_completed"] is False
+    assert "save_task_completed" in data["two_stage_acceptance"]["missing_codes"]
+
+
+def test_two_stage_acceptance_calls_terminal_manual_review_an_incomplete_save_stage(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_two_stage_delivery_fixture(repo)
+    repo.update_task_status(
+        fixture["save_task"]["id"],
+        "needs_manual_review",
+        completed_jobs=1,
+        failed_jobs=0,
+    )
+
+    data = client.get(
+        f"/api/delivery/workspace?task_id={fixture['save_task']['id']}"
+    ).json()
+
+    assert data["state_consistency"]["consistent"] is True
+    assert data["delivery_readiness"]["ready"] is False
+    assert data["two_stage_acceptance"]["passed"] is False
+    assert data["two_stage_acceptance"]["status"] == "missing_save_stage"
+    assert "save_task_completed" in data["two_stage_acceptance"]["missing_codes"]
+
+
+def test_delivery_workspace_does_not_lose_task_exception_beyond_global_limit(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_two_stage_delivery_fixture(repo)
+    repo.add_exception(
+        fixture["save_task"]["id"],
+        fixture["save_job"]["id"],
+        "E901",
+        "save",
+        "保存失败历史",
+        "成功事实仍保留未处理异常",
+        "创建新任务重试",
+    )
+    for index in range(205):
+        repo.add_exception(
+            900_000 + index,
+            None,
+            "ENOISE",
+            "unrelated",
+            "无关异常",
+            f"noise-{index}",
+            "ignore",
+        )
+
+    data = client.get(
+        f"/api/delivery/workspace?task_id={fixture['save_task']['id']}"
+    ).json()
+
+    assert data["state_consistency"]["consistent"] is False
+    assert "STATE_SUCCESS_HAS_OPEN_EXCEPTION" in data["state_consistency"]["violation_codes"]
+    violation = next(
+        item
+        for item in data["state_consistency"]["violations"]
+        if item["code"] == "STATE_SUCCESS_HAS_OPEN_EXCEPTION"
+    )
+    assert violation["task_id"] == fixture["save_task"]["id"]
+
+
+def test_delivery_workspace_does_not_lose_linked_claim_exception_beyond_global_limit(tmp_path, monkeypatch):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_two_stage_delivery_fixture(repo)
+    claim_job = repo.get_task(fixture["claim_task"]["id"])["jobs"][0]
+    repo.add_exception(
+        fixture["claim_task"]["id"],
+        claim_job["id"],
+        "E901",
+        "claim",
+        "认领失败历史",
+        "认领成功事实仍保留未处理异常",
+        "创建新任务重试",
+    )
+    for index in range(205):
+        repo.add_exception(
+            910_000 + index,
+            None,
+            "ENOISE",
+            "unrelated",
+            "无关异常",
+            f"claim-noise-{index}",
+            "ignore",
+        )
+
+    data = client.get(
+        f"/api/delivery/workspace?task_id={fixture['save_task']['id']}"
+    ).json()
+
+    violation = next(
+        item
+        for item in data["state_consistency"]["violations"]
+        if item["code"] == "STATE_SUCCESS_HAS_OPEN_EXCEPTION"
+        and item["task_id"] == fixture["claim_task"]["id"]
+    )
+    assert violation["job_id"] == claim_job["id"]
 
 
 def _fresh_l2_created_at(offset_seconds: int = 0) -> str:
@@ -28,6 +669,155 @@ def _table_signature() -> dict:
         }
 
 
+def _create_verified_claimed_product(
+    repo: Repository,
+    store: dict,
+    *,
+    product_title: str,
+    category_name: str = "立牌类谷子",
+    source_url: str = "https://detail.1688.com/offer/1013604102950.html",
+    claim_mark: str = "AI-OPS",
+    price: float = 9.9,
+    sku_count: int = 1,
+    image_count: int = 1,
+    test_only: bool = False,
+) -> tuple[dict, dict]:
+    claim_task = repo.create_acquisition_claim_request(
+        {
+            "store_id": store["id"],
+            "store_name": store["name"],
+            "source_url": source_url,
+            "keyword": product_title,
+            "category_name": category_name,
+            "claim_mark": claim_mark,
+            "template_id": None,
+            **(
+                {"test_only": True, "data_origin": "test_fixture"}
+                if test_only
+                else {}
+            ),
+        }
+    )
+    claim_job = repo.get_task_private(claim_task["id"])["jobs"][0]
+    repo.update_task_status(claim_task["id"], "running")
+    repo.update_job(claim_job["id"], status="running")
+    source_identity = canonical_source_identity(source_url, [source_url])
+    target_identity = canonical_claim_target_identity(
+        source_url,
+        [source_url],
+        keyword=product_title,
+        category_name=category_name,
+    )
+    claim_result = repo.create_claimed_product_and_complete_acquisition(
+        claim_task["id"],
+        {
+            "title": product_title,
+            "source": "dxm_data_acquisition",
+            "status": "claimed_to_draft",
+            "category_name": category_name,
+            "price": price,
+            "currency": "USD",
+            "sku_count": sku_count,
+            "image_count": image_count,
+            "payload": {
+                "source": "dxm_data_acquisition",
+                "store_id": store["id"],
+                "store_name": store["name"],
+                "source_url": source_url,
+                "source_urls": [source_url],
+                "claim_task_id": claim_task["id"],
+                "claim_mark": claim_mark,
+                "draft_box_verified": True,
+                "source_title": product_title,
+                **(
+                    {"test_only": True, "data_origin": "test_fixture"}
+                    if test_only
+                    else {}
+                ),
+            },
+        },
+        draft_box_observation={
+            "schema": "dxm.draft_box.observation.v1",
+            "verification_state": "VERIFY_DRAFT_BOX_CLAIM",
+            "action": "verify_draft_box_claim",
+            "draft_box_verified": True,
+            "page_url": "https://www.dianxiaomi.com/web/smt/smtProductList/draft",
+            "authorized_target_identity": target_identity,
+            "authorized_target_fingerprint": target_identity["fingerprint"],
+            "observed_source_identity": source_identity,
+            "observed_store_identity": {
+                "store_id": store["id"],
+                "store_name": store["name"],
+                "selected": True,
+                "selected_store_names": [store["name"]],
+                "selection_evidence": {"input_checked": True},
+                "draft_box_cell_evidence": {
+                    "store_name": store["name"],
+                    "cell_text": f"「{store['name']}」",
+                    "source": "structured_store_cell",
+                },
+            },
+            "matched_by": ["source_url"],
+            "match_evidence": {"source_url": source_identity["primary_url"]},
+            "observed_product_identity": product_title,
+            "observed_row_identity": f"商品箱行 {product_title} {category_name} {store['name']}",
+            "evidence_ref": _evidence_ref(f"claim-{claim_task['id']}.png"),
+        },
+    )
+    assert claim_result.applied is True
+    product = claim_result.product
+    assert product is not None
+    if test_only:
+        persisted_claim_task = repo.get_task_private(claim_task["id"])
+        marked_payload = dict(persisted_claim_task["payload"])
+        marked_payload.update({"test_only": True, "data_origin": "test_fixture"})
+        with db.connection() as conn:
+            conn.execute(
+                "UPDATE tasks SET payload_json=? WHERE id=?",
+                (json.dumps(marked_payload, ensure_ascii=False), claim_task["id"]),
+            )
+        claim_task = repo.get_task_private(claim_task["id"])
+    return product, claim_task
+
+
+def _create_legacy_single_save_task(
+    repo: Repository,
+    store: dict,
+    product: dict,
+    *,
+    name: str,
+    claim_mark: str = "AI-OPS",
+    payload: dict | None = None,
+) -> dict:
+    """Persist a pre-invariant single-save row for read-side compatibility tests."""
+
+    task = repo.create_task(
+        {
+            "name": name,
+            "store_id": store["id"],
+            "mode": "dry_run",
+            "publish_scene": "DRY_RUN",
+            "claim_mark": claim_mark,
+            "product_ids": [product["id"]],
+            "payload": dict(payload or {}),
+        }
+    )
+    legacy_payload = dict(task["payload"])
+    legacy_payload.update(
+        {
+            "mode": "single_save",
+            "execution_mode": "single_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+        }
+    )
+    with db.connection() as conn:
+        conn.execute(
+            "UPDATE tasks SET mode='single_save', publish_scene='SMT_SEMI_MANAGED_SAVE_ONLY', payload_json=? WHERE id=?",
+            (json.dumps(legacy_payload, ensure_ascii=False), task["id"]),
+        )
+    return repo.get_task_private(task["id"])
+
+
 def _create_delivery_fixture(
     repo: Repository,
     *,
@@ -37,17 +827,14 @@ def _create_delivery_fixture(
     published_value=False,
 ) -> dict:
     store = repo.create_store("Dang Kang", "AliExpress")
-    product = repo.create_product(
-        {
-            "title": "ACG Stand Product",
-            "source": "test",
-            "category_name": "立牌类谷子",
-            "price": 7.01,
-            "currency": "USD",
-            "sku_count": 8,
-            "image_count": 8,
-            "payload": {"source_title": "ACG Stand Product"},
-        }
+    product, _claim_task = _create_verified_claimed_product(
+        repo,
+        store,
+        product_title="ACG Stand Product",
+        claim_mark="AI认领",
+        price=7.01,
+        sku_count=8,
+        image_count=8,
     )
     task = repo.create_task(
         {
@@ -154,37 +941,67 @@ def _create_delivery_fixture(
     }
     if not with_verify_proof:
         summary["workflow_results"] = [item for item in summary["workflow_results"] if item["action"] != "verify_not_published"]
+    state_evidence_ref = _evidence_ref(f"state-{task['id']}-{job['id']}.png")
+    save_evidence_ref = _evidence_ref(f"save-{task['id']}-{job['id']}.png")
+    unpublished_evidence_ref = (
+        _evidence_ref(f"unpublished-{task['id']}-{job['id']}.png")
+        if with_verify_proof
+        else None
+    )
     repo.add_evidence(
         task["id"],
         job["id"],
         "state_snapshot",
-        "data/screenshots/save.txt",
-        {"state": "SAVE_ONLY", "field_domain": "save"},
+        state_evidence_ref["path"],
+        {
+            "state": "SAVE_ONLY",
+            "field_domain": "save",
+            "evidence_ref": state_evidence_ref,
+        },
     )
     repo.add_evidence(
         task["id"],
         job["id"],
         "workflow_action",
-        "/artifacts/screenshots/dianxiaomi_save_only.png",
-        {"state": "SAVE_ONLY", "action": "save_only", "save_result": save_result},
+        save_evidence_ref["path"],
+        {
+            "state": "SAVE_ONLY",
+            "action": "save_only",
+            "save_result": save_result,
+            "evidence_ref": save_evidence_ref,
+        },
     )
     if with_verify_proof:
         repo.add_evidence(
             task["id"],
             job["id"],
             "workflow_action",
-            "/artifacts/screenshots/dianxiaomi_verify_not_published.png",
-            {"state": "VERIFY_NOT_PUBLISHED", "action": "verify_not_published", "published": published_value},
+            unpublished_evidence_ref["path"],
+            {
+                "state": "VERIFY_NOT_PUBLISHED",
+                "action": "verify_not_published",
+                "published": published_value,
+                "evidence_ref": unpublished_evidence_ref,
+            },
         )
     report = repo.add_report(task["id"], job["id"], product["id"], "success", False, save_result, summary)
+    repo.update_job(job["id"], status="succeeded")
+    repo.update_task_status(task["id"], "completed", completed_jobs=1, failed_jobs=0)
     return {"task": task, "job": job, "report": report}
 
 
-def _create_two_stage_delivery_fixture(repo: Repository) -> dict:
+def _create_two_stage_delivery_fixture(
+    repo: Repository,
+    *,
+    l3_evidence_descriptors: bool = True,
+) -> dict:
     store = repo.create_store("Dang Kang", "AliExpress")
+    source_url = "https://detail.1688.com/offer/1013604102950.html"
     claim_task = repo.create_acquisition_claim_request(
         {
             "store_id": store["id"],
+            "store_name": store["name"],
+            "source_url": source_url,
             "keyword": "Hazbin Hotel 立牌",
             "category_name": "立牌类谷子",
             "claim_mark": "AI-OPS",
@@ -192,7 +1009,17 @@ def _create_two_stage_delivery_fixture(repo: Repository) -> dict:
         }
     )
     claim_job = repo.get_task(claim_task["id"])["jobs"][0]
-    product = repo.create_product(
+    repo.update_task_status(claim_task["id"], "running")
+    repo.update_job(claim_job["id"], status="running")
+    source_identity = canonical_source_identity(source_url, [source_url])
+    target_identity = canonical_claim_target_identity(
+        source_url,
+        [source_url],
+        keyword="Hazbin Hotel 立牌",
+        category_name="立牌类谷子",
+    )
+    claim_result = repo.create_claimed_product_and_complete_acquisition(
+        claim_task["id"],
         {
             "title": "真实待认领商品 A",
             "source": "dxm_data_acquisition",
@@ -204,14 +1031,46 @@ def _create_two_stage_delivery_fixture(repo: Repository) -> dict:
             "image_count": 1,
             "payload": {
                 "source": "dxm_data_acquisition",
-                "source_url": "https://detail.1688.com/offer/1013604102950.html",
+                "store_id": store["id"],
+                "store_name": store["name"],
+                "source_url": source_url,
+                "source_urls": [source_url],
                 "claim_task_id": claim_task["id"],
                 "claim_mark": "AI-OPS",
                 "draft_box_verified": True,
             },
-        }
+        },
+        draft_box_observation={
+            "schema": "dxm.draft_box.observation.v1",
+            "verification_state": "VERIFY_DRAFT_BOX_CLAIM",
+            "action": "verify_draft_box_claim",
+            "draft_box_verified": True,
+            "page_url": "https://www.dianxiaomi.com/web/smt/smtProductList/draft?status=0",
+            "authorized_target_identity": target_identity,
+            "authorized_target_fingerprint": target_identity["fingerprint"],
+            "observed_source_identity": source_identity,
+            "observed_store_identity": {
+                "store_id": store["id"],
+                "store_name": store["name"],
+                "selected": True,
+                "selected_store_names": [store["name"]],
+                "selection_evidence": {"input_checked": True},
+                "draft_box_cell_evidence": {
+                    "store_name": store["name"],
+                    "cell_text": f"「{store['name']}」",
+                    "source": "structured_store_cell",
+                },
+            },
+            "matched_by": ["source_url"],
+            "match_evidence": {"source_url": source_identity["primary_url"]},
+            "observed_product_identity": "真实待认领商品 A",
+            "observed_row_identity": f"商品箱行 真实待认领商品 A {store['name']}",
+            "evidence_ref": _evidence_ref(f"claim-{claim_task['id']}.png"),
+        },
     )
-    repo.mark_acquisition_claim_completed(claim_task["id"], product)
+    assert claim_result.applied is True
+    product = claim_result.product
+    assert product is not None
     claim_save_result = {
         "ok": True,
         "message": "已有商品认领已完成，商品已进入采集箱",
@@ -226,7 +1085,7 @@ def _create_two_stage_delivery_fixture(repo: Repository) -> dict:
             "id": product["id"],
             "title": product["title"],
             "source": "dxm_data_acquisition",
-            "source_url": "https://detail.1688.com/offer/1013604102950.html",
+            "source_url": source_url,
             "draft_box_verified": True,
         },
         "next_action": "进入采集箱编辑保存",
@@ -240,7 +1099,6 @@ def _create_two_stage_delivery_fixture(repo: Repository) -> dict:
         claim_save_result,
         claim_summary,
     )
-    repo.update_task_status(claim_task["id"], "completed", completed_jobs=1, failed_jobs=0)
 
     save_task = repo.create_task(
         {
@@ -291,21 +1149,45 @@ def _create_two_stage_delivery_fixture(repo: Repository) -> dict:
         ],
         "published": False,
     }
-    repo.add_evidence(
-        save_task["id"],
-        save_job["id"],
-        "workflow_action",
-        "/artifacts/screenshots/save.png",
-        {"state": "SAVE_ONLY", "action": "save_only", "save_result": save_result},
+    save_evidence_ref = _evidence_ref(f"save-{save_task['id']}-{save_job['id']}.png")
+    unpublished_evidence_ref = _evidence_ref(
+        f"unpublished-{save_task['id']}-{save_job['id']}.png"
     )
     repo.add_evidence(
         save_task["id"],
         save_job["id"],
         "workflow_action",
-        "/artifacts/screenshots/not_published.png",
-        {"state": "VERIFY_NOT_PUBLISHED", "action": "verify_not_published", "published": False},
+        save_evidence_ref["path"],
+        {
+            "state": "SAVE_ONLY",
+            "action": "save_only",
+            "save_result": save_result,
+            **(
+                {"evidence_ref": save_evidence_ref}
+                if l3_evidence_descriptors
+                else {}
+            ),
+        },
+    )
+    repo.add_evidence(
+        save_task["id"],
+        save_job["id"],
+        "workflow_action",
+        unpublished_evidence_ref["path"],
+        {
+            "state": "VERIFY_NOT_PUBLISHED",
+            "action": "verify_not_published",
+            "published": False,
+            **(
+                {"evidence_ref": unpublished_evidence_ref}
+                if l3_evidence_descriptors
+                else {}
+            ),
+        },
     )
     save_report = repo.add_report(save_task["id"], save_job["id"], product["id"], "success", False, save_result, save_summary)
+    repo.update_job(save_job["id"], status="succeeded")
+    repo.update_task_status(save_task["id"], "completed", completed_jobs=1, failed_jobs=0)
     return {
         "claim_task": claim_task,
         "claim_report": claim_report,
@@ -371,21 +1253,39 @@ def _create_delivery_fixture_with_missing_second_job(repo: Repository) -> dict:
         ],
         "published": False,
     }
-    repo.add_evidence(
-        task["id"],
-        first_job["id"],
-        "workflow_action",
-        "/artifacts/screenshots/save.png",
-        {"state": "SAVE_ONLY", "action": "save_only", "save_result": save_result},
+    save_evidence_ref = _evidence_ref(
+        f"batch-save-{task['id']}-{first_job['id']}.png"
+    )
+    unpublished_evidence_ref = _evidence_ref(
+        f"batch-unpublished-{task['id']}-{first_job['id']}.png"
     )
     repo.add_evidence(
         task["id"],
         first_job["id"],
         "workflow_action",
-        "/artifacts/screenshots/not_published.png",
-        {"state": "VERIFY_NOT_PUBLISHED", "action": "verify_not_published", "published": False},
+        save_evidence_ref["path"],
+        {
+            "state": "SAVE_ONLY",
+            "action": "save_only",
+            "save_result": save_result,
+            "evidence_ref": save_evidence_ref,
+        },
+    )
+    repo.add_evidence(
+        task["id"],
+        first_job["id"],
+        "workflow_action",
+        unpublished_evidence_ref["path"],
+        {
+            "state": "VERIFY_NOT_PUBLISHED",
+            "action": "verify_not_published",
+            "published": False,
+            "evidence_ref": unpublished_evidence_ref,
+        },
     )
     repo.add_report(task["id"], first_job["id"], products[0]["id"], "success", False, save_result, summary)
+    repo.update_job(first_job["id"], status="succeeded")
+    repo.update_task_status(task["id"], "running", completed_jobs=1, failed_jobs=0)
     return {"task": task, "first_job": first_job}
 
 
@@ -400,6 +1300,7 @@ def _client_with_temp_repo(tmp_path, monkeypatch):
     import src.main as main
 
     monkeypatch.setattr(main, "repo", repo)
+    monkeypatch.setattr(main, "_current_browser_session_id", lambda: "test-browser-context-generation")
     return TestClient(app), repo
 
 
@@ -642,18 +1543,10 @@ def test_delivery_workspace_releases_single_save_start_after_l2_even_before_save
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     monkeypatch.setattr(delivery_workspace, "L2_PROBE_DIR", l2_dir)
     store = repo.create_store("Dang Kang", "AliExpress")
-    product = repo.create_product(
-        {
-            "title": "待保存商品",
-            "source": "dxm_draft_box",
-            "status": "claimed_to_draft",
-            "category_name": "立牌类谷子",
-            "price": 9.9,
-            "currency": "USD",
-            "sku_count": 1,
-            "image_count": 1,
-            "payload": {"draft_box_verified": True},
-        }
+    product, _claim_task = _create_verified_claimed_product(
+        repo,
+        store,
+        product_title="待保存商品",
     )
     task = repo.create_task(
         {
@@ -915,12 +1808,12 @@ def test_delivery_workspace_without_tasks_returns_recoverable_empty_workspace(tm
     assert any(gap["id"] == "empty-workspace" for gap in data["acceptanceGaps"])
 
 
-def test_delivery_workspace_does_not_select_legacy_fixture_single_save_task(tmp_path, monkeypatch):
+def test_delivery_workspace_keeps_marker_and_fixture_words_visible_as_operator_data(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     store = repo.create_store("Dang Kang", "AliExpress")
     product = repo.create_product(
         {
-            "title": "QA guarded product",
+            "title": "测试商品 fixture 示例商品但属于真实业务",
             "source": "test",
             "status": "draft",
             "category_name": "QA_CATEGORY",
@@ -928,65 +1821,45 @@ def test_delivery_workspace_does_not_select_legacy_fixture_single_save_task(tmp_
             "currency": "USD",
             "sku_count": 1,
             "image_count": 1,
-            "payload": {"fixture": True},
+            "payload": {
+                "test_only": True,
+                "data_origin": "test_fixture",
+            },
         }
     )
-    repo.create_task(
-        {
-            "name": "单商品只保存 - Dang Kang - 1 件商品",
-            "store_id": store["id"],
-            "mode": "single_save",
-            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
-            "product_ids": [product["id"]],
-            "claim_mark": "AI认领",
-            "payload": {"store_name": store["name"], "category_name": product["category_name"]},
-        }
+    task = _create_legacy_single_save_task(
+        repo,
+        store,
+        product,
+        name="单商品只保存 - Dang Kang - 1 件商品",
+        claim_mark="AI认领",
+        payload={"store_name": store["name"], "category_name": product["category_name"]},
     )
 
     response = client.get("/api/delivery/workspace")
 
     assert response.status_code == 200
     data = response.json()
-    assert data["current_task"] is None
-    assert data["products"] == []
-    assert data["tasks"] == []
-    assert any(gap["id"] == "empty-workspace" for gap in data["acceptanceGaps"])
+    assert data["current_task"]["id"] == task["id"]
+    assert [item["id"] for item in repo.list_products()] == [product["id"]]
+    assert [item["id"] for item in data["products"]] == [product["id"]]
+    assert [item["id"] for item in data["tasks"]] == [task["id"]]
+    assert data["delivery_readiness"]["ready"] is False
 
 
-def test_delivery_workspace_does_not_select_qa_two_stage_fixture_tasks(tmp_path, monkeypatch):
+def test_delivery_workspace_keeps_explicit_test_marker_task_visible_and_blocked(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     store = repo.create_store("Dang Kang", "AliExpress")
-    product = repo.create_product(
-        {
-            "title": "ACG Stand Product 1",
-            "source": "dxm_data_acquisition",
-            "status": "claimed_to_draft",
-            "category_name": "立牌类谷子",
-            "price": 1,
-            "currency": "USD",
-            "sku_count": 1,
-            "image_count": 1,
-            "payload": {
-                "source_url": "https://detail.1688.com/offer/test-1.html",
-                "source_urls": ["https://detail.1688.com/offer/test-1.html"],
-                "draft_box_verified": True,
-            },
-        }
+    product, _claim_task = _create_verified_claimed_product(
+        repo,
+        store,
+        product_title="ACG Stand Product 1",
+        source_url="https://detail.1688.com/offer/test-1.html",
+        claim_mark="QA_TWO_STAGE",
+        price=1,
+        test_only=True,
     )
-    repo.create_task(
-        {
-            "name": "待认领商品 - QA two-stage acquisition claim request",
-            "store_id": store["id"],
-            "mode": "claim_only",
-            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
-            "claim_mark": "QA_TWO_STAGE",
-            "payload": {
-                "keyword": "QA two-stage acquisition claim request",
-                "claim_mark": "QA_TWO_STAGE",
-            },
-        }
-    )
-    repo.create_task(
+    task = repo.create_task(
         {
             "name": "QA two-stage claimed product save task",
             "store_id": store["id"],
@@ -1000,6 +1873,8 @@ def test_delivery_workspace_does_not_select_qa_two_stage_fixture_tasks(tmp_path,
                 "product_ids": [product["id"]],
                 "claim_mark": "QA_TWO_STAGE",
                 "source_url": "https://detail.1688.com/offer/test-1.html",
+                "test_only": True,
+                "data_origin": "test_fixture",
             },
         }
     )
@@ -1008,12 +1883,13 @@ def test_delivery_workspace_does_not_select_qa_two_stage_fixture_tasks(tmp_path,
 
     assert response.status_code == 200
     data = response.json()
-    assert data["current_task"] is None
-    assert data["tasks"] == []
-    assert any(gap["id"] == "empty-workspace" for gap in data["acceptanceGaps"])
+    assert data["current_task"]["id"] == task["id"]
+    assert any(item["id"] == task["id"] for item in data["tasks"])
+    assert any(item["id"] == product["id"] for item in data["products"])
+    assert data["delivery_readiness"]["ready"] is False
 
 
-def test_delivery_workspace_missing_requested_task_falls_back_without_api_error(tmp_path, monkeypatch):
+def test_delivery_workspace_missing_requested_task_fails_closed_without_substituting_ready_task(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     fixture = _create_delivery_fixture(repo, with_network=True)
 
@@ -1021,9 +1897,14 @@ def test_delivery_workspace_missing_requested_task_falls_back_without_api_error(
 
     assert response.status_code == 200
     data = response.json()
-    assert data["current_task"]["id"] == fixture["task"]["id"]
+    assert fixture["task"]["id"] in {task["id"] for task in repo.list_tasks()}
+    assert data["current_task"] is None
+    assert data["tasks"] == []
     assert data["requested_task_missing"] is True
     assert data["requested_task_id"] == 999999
+    assert data["delivery_readiness"]["ready"] is False
+    assert data["two_stage_acceptance"]["passed"] is False
+    assert data["state_consistency"]["consistent"] is False
 
 
 def test_delivery_workspace_without_task_id_prefers_task_with_delivery_evidence_over_newer_draft(tmp_path, monkeypatch):
@@ -1069,17 +1950,13 @@ def test_delivery_workspace_without_task_id_prefers_newer_actionable_single_save
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     fixture = _create_delivery_fixture(repo, with_network=True)
     store = repo.create_store("Dang Kang", "AliExpress")
-    product = repo.create_product(
-        {
-            "title": "QA actionable single save product",
-            "source": "qa",
-            "category_name": "QA_CATEGORY",
-            "price": 8.01,
-            "currency": "USD",
-            "sku_count": 1,
-            "image_count": 1,
-            "payload": {"source_title": "QA actionable single save product"},
-        }
+    product, _claim_task = _create_verified_claimed_product(
+        repo,
+        store,
+        product_title="Actionable single save product",
+        category_name="立牌类谷子",
+        source_url="https://detail.1688.com/offer/2026000000001.html",
+        price=8.01,
     )
     newer_draft = repo.create_task(
         {
@@ -1103,21 +1980,17 @@ def test_delivery_workspace_without_task_id_prefers_newer_actionable_single_save
     assert any(task["id"] == fixture["task"]["id"] for task in data["tasks"])
 
 
-def test_delivery_workspace_without_task_id_prefers_success_evidence_over_newer_failed_task(tmp_path, monkeypatch):
+def test_delivery_workspace_without_task_id_uses_newer_failed_single_save_as_current_truth(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     fixture = _create_delivery_fixture(repo, with_network=True)
     store = repo.create_store("Dang Kang", "AliExpress")
-    product = repo.create_product(
-        {
-            "title": "QA failed single save product",
-            "source": "qa",
-            "category_name": "QA_CATEGORY",
-            "price": 8.01,
-            "currency": "USD",
-            "sku_count": 1,
-            "image_count": 1,
-            "payload": {"source_title": "QA failed single save product"},
-        }
+    product, _claim_task = _create_verified_claimed_product(
+        repo,
+        store,
+        product_title="Failed single save product",
+        category_name="立牌类谷子",
+        source_url="https://detail.1688.com/offer/2026000000002.html",
+        price=8.01,
     )
     failed_task = repo.create_task(
         {
@@ -1138,25 +2011,134 @@ def test_delivery_workspace_without_task_id_prefers_success_evidence_over_newer_
     data = response.json()
     assert failed_task["id"] > fixture["task"]["id"]
     assert data["tasks"][0]["id"] == failed_task["id"]
-    assert data["current_task"]["id"] == fixture["task"]["id"]
-    assert data["report_summary"]["latest_report"]["task_id"] == fixture["task"]["id"]
-    assert data["publish_guard_state"]["status"] == "safe_unpublished"
+    assert data["current_task"]["id"] == failed_task["id"]
+    assert data["current_task"]["status"] == "failed"
+    assert data["report_summary"]["latest_report"] is None
+    assert data["delivery_readiness"]["ready"] is False
+    assert data["state_consistency"]["consistent"] is False
+    assert failed_task["id"] in data["state_consistency"]["audited_task_ids"]
+    l3_gate = next(gate for gate in data["regression_gates"] if gate["level"] == "L3")
+    assert l3_gate["status"] == "blocked"
+    assert any(task["id"] == fixture["task"]["id"] for task in data["tasks"])
+
+    explicit = client.get(
+        f"/api/delivery/workspace?task_id={fixture['task']['id']}"
+    ).json()
+    assert explicit["current_task"]["id"] == fixture["task"]["id"]
+    assert explicit["report_summary"]["latest_report"]["task_id"] == fixture["task"]["id"]
+    assert explicit["delivery_readiness"]["ready"] is True
+    assert failed_task["id"] not in explicit["state_consistency"]["audited_task_ids"]
+
+
+def test_delivery_workspace_does_not_hide_real_task_because_business_text_mentions_fixture(
+    tmp_path,
+    monkeypatch,
+):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    historical_success = _create_delivery_fixture(repo, with_network=True)
+    store = repo.create_store("Dang Kang Real", "AliExpress")
+    product, _claim_task = _create_verified_claimed_product(
+        repo,
+        store,
+        product_title="测试商品 fixture 关键词但属于真实业务",
+        category_name="立牌类谷子",
+        source_url="https://detail.1688.com/offer/2026000000999.html",
+        price=8.01,
+    )
+    current_failure = repo.create_task(
+        {
+            "name": "单商品只保存 - 真实业务最新失败",
+            "store_id": store["id"],
+            "mode": "single_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "product_ids": [product["id"]],
+            "claim_mark": "AI认领",
+            "payload": {
+                "store_name": store["name"],
+                "category_name": product["category_name"],
+                "test_only": True,
+                "data_origin": "test_fixture",
+            },
+        }
+    )
+    repo.update_task_status(
+        current_failure["id"],
+        "failed",
+        completed_jobs=0,
+        failed_jobs=1,
+    )
+
+    data = client.get("/api/delivery/workspace").json()
+
+    assert current_failure["id"] > historical_success["task"]["id"]
+    assert data["current_task"]["id"] == current_failure["id"]
+    assert data["current_task"]["status"] == "failed"
+    assert data["delivery_readiness"]["ready"] is False
+    assert any(task["id"] == current_failure["id"] for task in data["tasks"])
+
+
+@pytest.mark.parametrize(
+    "current_status",
+    ["partial_success", "cancelled", "needs_manual_review", "draft"],
+)
+def test_delivery_workspace_without_task_id_uses_latest_single_save_status_as_current_truth(
+    tmp_path,
+    monkeypatch,
+    current_status,
+):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    historical_success = _create_delivery_fixture(repo, with_network=True)
+    store = repo.create_store("Dang Kang", "AliExpress")
+    product, _claim_task = _create_verified_claimed_product(
+        repo,
+        store,
+        product_title=f"Current truth product {current_status}",
+        category_name="立牌类谷子",
+        source_url="https://detail.1688.com/offer/2026000000100.html",
+        price=8.01,
+    )
+    current_task = repo.create_task(
+        {
+            "name": f"单商品只保存 - Dang Kang - {current_status}",
+            "store_id": store["id"],
+            "mode": "single_save",
+            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
+            "product_ids": [product["id"]],
+            "claim_mark": "AI认领",
+            "payload": {"store_name": store["name"], "category_name": product["category_name"]},
+        }
+    )
+    if current_status != "draft":
+        repo.update_task_status(
+            current_task["id"],
+            current_status,
+            completed_jobs=0,
+            failed_jobs=0,
+        )
+
+    data = client.get("/api/delivery/workspace").json()
+
+    assert current_task["id"] > historical_success["task"]["id"]
+    assert data["current_task"]["id"] == current_task["id"]
+    assert data["current_task"]["status"] == current_status
+    assert data["report_summary"]["latest_report"] is None
+    assert data["delivery_readiness"]["ready"] is False
+    assert current_task["id"] in data["state_consistency"]["audited_task_ids"]
+    l3_gate = next(gate for gate in data["regression_gates"] if gate["level"] == "L3")
+    assert l3_gate["status"] == "blocked"
+    assert any(task["id"] == historical_success["task"]["id"] for task in data["tasks"])
 
 
 def test_delivery_workspace_without_task_id_ignores_older_draft_when_newer_success_evidence_exists(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     store = repo.create_store("Dang Kang", "AliExpress")
-    product = repo.create_product(
-        {
-            "title": "QA stale draft product",
-            "source": "qa",
-            "category_name": "QA_CATEGORY",
-            "price": 8.01,
-            "currency": "USD",
-            "sku_count": 1,
-            "image_count": 1,
-            "payload": {"source_title": "QA stale draft product"},
-        }
+    product, _claim_task = _create_verified_claimed_product(
+        repo,
+        store,
+        product_title="Stale draft product",
+        category_name="立牌类谷子",
+        source_url="https://detail.1688.com/offer/2026000000003.html",
+        price=8.01,
     )
     older_draft = repo.create_task(
         {
@@ -1394,16 +2376,12 @@ def test_delivery_workspace_two_stage_acceptance_requires_acquisition_claim_chai
             },
         }
     )
-    task = repo.create_task(
-        {
-            "name": "单商品只保存 - Dang Kang - 1 件商品",
-            "store_id": store["id"],
-            "mode": "single_save",
-            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
-            "claim_mark": "AI-OPS",
-            "product_ids": [product["id"]],
-            "payload": {"store_name": "Dang Kang", "category_name": "立牌类谷子"},
-        }
+    task = _create_legacy_single_save_task(
+        repo,
+        store,
+        product,
+        name="单商品只保存 - Dang Kang - 1 件商品",
+        payload={"store_name": "Dang Kang", "category_name": "立牌类谷子"},
     )
     job = repo.get_task(task["id"])["jobs"][0]
     save_result = {
@@ -1429,6 +2407,8 @@ def test_delivery_workspace_two_stage_acceptance_requires_acquisition_claim_chai
         "published": False,
     }
     repo.add_report(task["id"], job["id"], product["id"], "success", False, save_result, summary)
+    repo.update_job(job["id"], status="succeeded")
+    repo.update_task_status(task["id"], "completed", completed_jobs=1, failed_jobs=0)
 
     data = client.get(f"/api/delivery/workspace?task_id={task['id']}").json()
 
@@ -1487,19 +2467,15 @@ def test_delivery_workspace_two_stage_acceptance_rejects_completed_non_claim_tas
             }
         )
         conn.execute(
-            "UPDATE tasks SET status='completed', completed_jobs=1, failed_jobs=0, payload_json=? WHERE id=?",
+            "UPDATE tasks SET status='completed', completed_jobs=0, failed_jobs=0, payload_json=? WHERE id=?",
             (json.dumps(payload, ensure_ascii=False), fake_claim_task["id"]),
         )
-    save_task = repo.create_task(
-        {
-            "name": "单商品只保存 - Dang Kang - 1 件商品",
-            "store_id": store["id"],
-            "mode": "single_save",
-            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
-            "claim_mark": "AI-OPS",
-            "product_ids": [product["id"]],
-            "payload": {"store_name": "Dang Kang", "category_name": "立牌类谷子"},
-        }
+    save_task = _create_legacy_single_save_task(
+        repo,
+        store,
+        product,
+        name="单商品只保存 - Dang Kang - 1 件商品",
+        payload={"store_name": "Dang Kang", "category_name": "立牌类谷子"},
     )
     job = repo.get_task(save_task["id"])["jobs"][0]
     save_result = {
@@ -1525,6 +2501,8 @@ def test_delivery_workspace_two_stage_acceptance_rejects_completed_non_claim_tas
         "published": False,
     }
     repo.add_report(save_task["id"], job["id"], product["id"], "success", False, save_result, summary)
+    repo.update_job(job["id"], status="succeeded")
+    repo.update_task_status(save_task["id"], "completed", completed_jobs=1, failed_jobs=0)
 
     data = client.get(f"/api/delivery/workspace?task_id={save_task['id']}").json()
 
@@ -1556,6 +2534,333 @@ def test_delivery_workspace_two_stage_acceptance_passes_when_claim_and_save_shar
     assert acceptance["checks"]["publish_guard_safe"] is True
     assert acceptance["missing_codes"] == []
     assert "两段式" in acceptance["user_message"]
+
+
+def test_delivery_workspace_blocks_all_ready_surfaces_for_bare_l3_evidence_paths(
+    tmp_path,
+    monkeypatch,
+):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_two_stage_delivery_fixture(
+        repo,
+        l3_evidence_descriptors=False,
+    )
+
+    data = client.get(
+        f"/api/delivery/workspace?task_id={fixture['save_task']['id']}"
+    ).json()
+
+    assert data["delivery_readiness"]["ready"] is False
+    assert data["two_stage_acceptance"]["passed"] is False
+    assert "save_evidence_integrity" in data["two_stage_acceptance"]["missing_codes"]
+    assert "unpublished_evidence_integrity" in data["two_stage_acceptance"]["missing_codes"]
+    l3_gate = next(
+        gate for gate in data["regression_gates"] if gate["level"] == "L3"
+    )
+    assert l3_gate["status"] == "blocked"
+
+
+def _replace_persisted_action_evidence_ref(
+    repo: Repository,
+    task_id: int,
+    action: str,
+    evidence_ref: dict,
+) -> None:
+    evidence = next(
+        item
+        for item in repo.list_evidences(task_id)
+        if (item.get("meta") or {}).get("action") == action
+    )
+    meta = dict(evidence["meta"])
+    meta["evidence_ref"] = evidence_ref
+    with db.connection() as conn:
+        conn.execute(
+            "UPDATE job_evidences SET file_path=?, meta_json=? WHERE id=?",
+            (
+                evidence_ref["path"],
+                json.dumps(meta, ensure_ascii=False),
+                evidence["id"],
+            ),
+        )
+
+
+def test_delivery_workspace_rejects_l3_evidence_outside_screenshot_directory(
+    tmp_path,
+    monkeypatch,
+):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_two_stage_delivery_fixture(repo)
+    task_id = fixture["save_task"]["id"]
+    assert client.get(
+        f"/api/delivery/workspace?task_id={task_id}"
+    ).json()["two_stage_acceptance"]["passed"] is True
+
+    code_path = Path(delivery_workspace.__file__).resolve()
+    code_content = code_path.read_bytes()
+    forged_ref = {
+        "path": str(code_path),
+        "sha256": hashlib.sha256(code_content).hexdigest().upper(),
+        "size": len(code_content),
+    }
+    _replace_persisted_action_evidence_ref(repo, task_id, "save_only", forged_ref)
+
+    data = client.get(f"/api/delivery/workspace?task_id={task_id}").json()
+
+    assert data["two_stage_acceptance"]["passed"] is False
+    assert "save_evidence_integrity" in data["two_stage_acceptance"]["missing_codes"]
+
+
+@pytest.mark.parametrize("outside_kind", ["traversal", "prefix_collision"])
+def test_delivery_workspace_rejects_screenshot_root_escape_paths(
+    tmp_path,
+    monkeypatch,
+    outside_kind,
+):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_two_stage_delivery_fixture(repo)
+    task_id = fixture["save_task"]["id"]
+    if outside_kind == "traversal":
+        outside_path = config.SCREENSHOT_DIR.parent / f"traversal-{task_id}.png"
+        descriptor_path = config.SCREENSHOT_DIR / ".." / outside_path.name
+    else:
+        outside_dir = config.SCREENSHOT_DIR.with_name(
+            f"{config.SCREENSHOT_DIR.name}-forged"
+        )
+        outside_dir.mkdir(parents=True, exist_ok=True)
+        outside_path = outside_dir / f"prefix-collision-{task_id}.png"
+        descriptor_path = outside_path
+    outside_path.write_bytes(_MINIMAL_VALID_PNG)
+    forged_ref = {
+        "path": str(descriptor_path),
+        "sha256": hashlib.sha256(_MINIMAL_VALID_PNG).hexdigest().upper(),
+        "size": len(_MINIMAL_VALID_PNG),
+    }
+    _replace_persisted_action_evidence_ref(repo, task_id, "save_only", forged_ref)
+
+    data = client.get(f"/api/delivery/workspace?task_id={task_id}").json()
+
+    assert data["two_stage_acceptance"]["passed"] is False
+    assert "save_evidence_integrity" in data["two_stage_acceptance"]["missing_codes"]
+
+
+def test_delivery_workspace_requires_png_extension_for_l3_evidence(
+    tmp_path,
+    monkeypatch,
+):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_two_stage_delivery_fixture(repo)
+    task_id = fixture["save_task"]["id"]
+    forged_ref = _evidence_ref(f"forged-save-{task_id}.txt")
+    _replace_persisted_action_evidence_ref(repo, task_id, "save_only", forged_ref)
+
+    data = client.get(f"/api/delivery/workspace?task_id={task_id}").json()
+
+    assert data["two_stage_acceptance"]["passed"] is False
+    assert "save_evidence_integrity" in data["two_stage_acceptance"]["missing_codes"]
+
+
+def test_delivery_workspace_requires_png_signature_for_l3_evidence(
+    tmp_path,
+    monkeypatch,
+):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_two_stage_delivery_fixture(repo)
+    task_id = fixture["save_task"]["id"]
+    forged_ref = _evidence_ref(
+        f"forged-unpublished-{task_id}.png",
+        content=b"not-a-png-screenshot",
+    )
+    _replace_persisted_action_evidence_ref(
+        repo,
+        task_id,
+        "verify_not_published",
+        forged_ref,
+    )
+
+    data = client.get(f"/api/delivery/workspace?task_id={task_id}").json()
+
+    assert data["two_stage_acceptance"]["passed"] is False
+    assert "unpublished_evidence_integrity" in data["two_stage_acceptance"]["missing_codes"]
+
+
+def test_delivery_workspace_rechecks_l3_evidence_file_existence_before_ready(
+    tmp_path,
+    monkeypatch,
+):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_two_stage_delivery_fixture(repo)
+    save_evidence = next(
+        evidence
+        for evidence in repo.list_evidences(fixture["save_task"]["id"])
+        if (evidence.get("meta") or {}).get("action") == "save_only"
+    )
+    Path(save_evidence["meta"]["evidence_ref"]["path"]).unlink()
+
+    data = client.get(
+        f"/api/delivery/workspace?task_id={fixture['save_task']['id']}"
+    ).json()
+
+    assert data["delivery_readiness"]["ready"] is False
+    assert data["two_stage_acceptance"]["passed"] is False
+    assert "save_evidence_integrity" in data["two_stage_acceptance"]["missing_codes"]
+    l3_gate = next(
+        gate for gate in data["regression_gates"] if gate["level"] == "L3"
+    )
+    assert l3_gate["status"] == "blocked"
+
+
+def test_delivery_workspace_rehashes_l3_evidence_before_ready(
+    tmp_path,
+    monkeypatch,
+):
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_two_stage_delivery_fixture(repo)
+    unpublished_evidence = next(
+        evidence
+        for evidence in repo.list_evidences(fixture["save_task"]["id"])
+        if (evidence.get("meta") or {}).get("action") == "verify_not_published"
+    )
+    evidence_ref = unpublished_evidence["meta"]["evidence_ref"]
+    Path(evidence_ref["path"]).write_bytes(b"x" * evidence_ref["size"])
+
+    data = client.get(
+        f"/api/delivery/workspace?task_id={fixture['save_task']['id']}"
+    ).json()
+
+    assert data["delivery_readiness"]["ready"] is False
+    assert data["two_stage_acceptance"]["passed"] is False
+    assert "unpublished_evidence_integrity" in data["two_stage_acceptance"]["missing_codes"]
+    l3_gate = next(
+        gate for gate in data["regression_gates"] if gate["level"] == "L3"
+    )
+    assert l3_gate["status"] == "blocked"
+
+
+def _ready_two_stage_workspace(tmp_path, monkeypatch):
+    l2_dir = tmp_path / "l2_readonly_probe"
+    _write_l2_probe_result(
+        l2_dir,
+        "data_acquisition",
+        target_url="https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
+    )
+    _write_l2_probe_result(
+        l2_dir,
+        "draft_box",
+        target_url="https://www.dianxiaomi.com/web/smt/smtProductList/draft",
+        created_at=_fresh_l2_created_at(-30),
+    )
+    client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
+    fixture = _create_two_stage_delivery_fixture(repo)
+    return client, repo, fixture
+
+
+def _replace_task_payload(task_id: int, payload: dict) -> None:
+    with db.connection() as conn:
+        conn.execute(
+            "UPDATE tasks SET payload_json=? WHERE id=?",
+            (json.dumps(payload, ensure_ascii=False), task_id),
+        )
+
+
+def _replace_product_payload(product_id: int, payload: dict) -> None:
+    with db.connection() as conn:
+        conn.execute(
+            "UPDATE products SET payload_json=? WHERE id=?",
+            (json.dumps(payload, ensure_ascii=False), product_id),
+        )
+
+
+def _assert_two_stage_provenance_blocks_ready(data: dict, missing_code: str) -> None:
+    acceptance = data["two_stage_acceptance"]
+    assert acceptance["passed"] is False
+    assert acceptance["status"] == "invalid_claim_provenance"
+    assert missing_code in acceptance["missing_codes"]
+    assert data["delivery_readiness"]["ready"] is False
+    assert data["delivery_readiness"]["blocked_by_two_stage_acceptance"] is True
+    l3_gate = next(gate for gate in data["regression_gates"] if gate["level"] == "L3")
+    assert l3_gate["status"] == "blocked"
+    assert "两段式" in l3_gate["detail"]
+
+
+def test_delivery_workspace_blocks_ready_when_save_task_stage_a_snapshot_drifts(tmp_path, monkeypatch):
+    client, repo, fixture = _ready_two_stage_workspace(tmp_path, monkeypatch)
+    save_task = repo.get_task_private(fixture["save_task"]["id"])
+    tampered_payload = dict(save_task["payload"])
+    tampered_stage_a = dict(tampered_payload["stage_a_task_facts"])
+    tampered_stage_a["task_id"] = int(tampered_stage_a["task_id"]) + 10_000
+    tampered_payload["stage_a_task_facts"] = tampered_stage_a
+    _replace_task_payload(save_task["id"], tampered_payload)
+
+    data = client.get(f"/api/delivery/workspace?task_id={save_task['id']}").json()
+
+    acceptance = data["two_stage_acceptance"]
+    assert acceptance["checks"]["claim_provenance_valid"] is True
+    assert acceptance["checks"]["single_save_claim_snapshot_valid"] is False
+    _assert_two_stage_provenance_blocks_ready(data, "single_save_claim_snapshot")
+
+
+def test_delivery_workspace_blocks_ready_when_save_task_draft_box_proof_fingerprint_drifts(tmp_path, monkeypatch):
+    client, repo, fixture = _ready_two_stage_workspace(tmp_path, monkeypatch)
+    save_task = repo.get_task_private(fixture["save_task"]["id"])
+    tampered_payload = dict(save_task["payload"])
+    tampered_payload["draft_box_proof_fingerprint"] = "0" * 64
+    _replace_task_payload(save_task["id"], tampered_payload)
+
+    data = client.get(f"/api/delivery/workspace?task_id={save_task['id']}").json()
+
+    acceptance = data["two_stage_acceptance"]
+    assert acceptance["checks"]["claim_provenance_valid"] is True
+    assert acceptance["checks"]["single_save_claim_snapshot_valid"] is False
+    _assert_two_stage_provenance_blocks_ready(data, "single_save_claim_snapshot")
+
+
+def test_delivery_workspace_blocks_ready_when_claimed_product_source_identity_drifts(tmp_path, monkeypatch):
+    client, repo, fixture = _ready_two_stage_workspace(tmp_path, monkeypatch)
+    product = repo.get_product(fixture["product"]["id"])
+    tampered_payload = dict(product["payload"])
+    tampered_payload["source_identity"] = {
+        "primary_url": "https://example.invalid/tampered-source",
+        "urls": ["https://example.invalid/tampered-source"],
+    }
+    _replace_product_payload(product["id"], tampered_payload)
+
+    save_task_id = fixture["save_task"]["id"]
+    data = client.get(f"/api/delivery/workspace?task_id={save_task_id}").json()
+
+    acceptance = data["two_stage_acceptance"]
+    assert acceptance["checks"]["claim_provenance_valid"] is False
+    assert acceptance["checks"]["single_save_claim_snapshot_valid"] is False
+    _assert_two_stage_provenance_blocks_ready(data, "claim_provenance")
+
+
+def test_delivery_workspace_rehashes_draft_box_evidence_before_ready(tmp_path, monkeypatch):
+    client, repo, fixture = _ready_two_stage_workspace(tmp_path, monkeypatch)
+    product = repo.get_product(fixture["product"]["id"])
+    evidence_ref = product["payload"]["draft_box_proof"]["proof_content"]["evidence_ref"]
+    Path(evidence_ref["path"]).write_bytes(b"tampered-after-proof")
+
+    save_task_id = fixture["save_task"]["id"]
+    data = client.get(f"/api/delivery/workspace?task_id={save_task_id}").json()
+
+    acceptance = data["two_stage_acceptance"]
+    assert acceptance["checks"]["claim_provenance_valid"] is False
+    assert acceptance["checks"]["single_save_claim_snapshot_valid"] is False
+    _assert_two_stage_provenance_blocks_ready(data, "claim_provenance")
+
+
+def test_delivery_workspace_blocks_ready_when_save_task_store_snapshot_drifts(tmp_path, monkeypatch):
+    client, repo, fixture = _ready_two_stage_workspace(tmp_path, monkeypatch)
+    save_task = repo.get_task_private(fixture["save_task"]["id"])
+    tampered_payload = dict(save_task["payload"])
+    tampered_payload["store_id"] = int(tampered_payload["store_id"]) + 10_000
+    _replace_task_payload(save_task["id"], tampered_payload)
+
+    data = client.get(f"/api/delivery/workspace?task_id={save_task['id']}").json()
+
+    acceptance = data["two_stage_acceptance"]
+    assert acceptance["checks"]["claim_provenance_valid"] is True
+    assert acceptance["checks"]["single_save_claim_snapshot_valid"] is False
+    _assert_two_stage_provenance_blocks_ready(data, "single_save_claim_snapshot")
 
 
 def test_delivery_workspace_blocks_publish_network_signal(tmp_path, monkeypatch):
@@ -1837,17 +3142,11 @@ def test_delivery_workspace_l3_waits_for_approval_before_evidence_exists(tmp_pat
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     monkeypatch.setattr(delivery_workspace, "L2_PROBE_DIR", l2_dir)
     store = repo.create_store("Dang Kang", "AliExpress")
-    product = repo.create_product(
-        {
-            "title": "Draft Product",
-            "source": "test",
-            "category_name": "立牌类谷子",
-            "price": 7.01,
-            "currency": "USD",
-            "sku_count": 1,
-            "image_count": 1,
-            "payload": {},
-        }
+    product, _claim_task = _create_verified_claimed_product(
+        repo,
+        store,
+        product_title="Draft Product",
+        price=7.01,
     )
     task = repo.create_task(
         {

@@ -6,6 +6,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FINAL_DELIVERY_CHECK = REPO_ROOT / "scripts" / "final-delivery-check.ps1"
+FINAL_DELIVERY_STATE_CONTRACT = REPO_ROOT / "scripts" / "test-final-delivery-state-consistency-contract.ps1"
 QA_BROWSER_CHECK = REPO_ROOT / "scripts" / "qa-browser-check.ps1"
 VERIFY_DESKTOP_PACKAGE = REPO_ROOT / "scripts" / "verify-desktop-package.ps1"
 WORKBENCH_MODULES = REPO_ROOT / "app" / "frontend" / "src" / "components" / "WorkbenchModules.tsx"
@@ -30,6 +31,29 @@ def test_backend_config_can_use_dxm_data_dir_override(tmp_path):
 
     assert Path(output[0]) == tmp_path / "isolated-data"
     assert Path(output[1]) == tmp_path / "isolated-data" / "sqlite" / "dxm_auto_uikit.db"
+
+
+def test_final_delivery_state_consistency_contract_executes():
+    result = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(FINAL_DELIVERY_STATE_CONTRACT),
+            "-SourceScript",
+            str(FINAL_DELIVERY_CHECK),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "state consistency contract: 11/11 passed" in result.stdout
 
 
 def test_final_delivery_check_runs_browser_qa_backend_with_isolated_data_dir():
@@ -72,6 +96,13 @@ def test_final_delivery_check_seeds_qa_runtime_from_authoritative_data_before_ba
         script.index('Wait-HttpReady -Name "QA backend service"')
     ]
     assert "DXM_DATA_DIR = $qaRuntimeDataDir" in qa_backend_section
+
+
+def test_final_delivery_check_does_not_fallback_to_qa_workspace_snapshot():
+    script = FINAL_DELIVERY_CHECK.read_text(encoding="utf-8")
+
+    assert "Get-AuthoritativeWorkspaceSnapshot" in script
+    assert "Get-WorkspaceSnapshot -ApiBase $workspaceApiBase" not in script
 
 
 def test_final_delivery_check_reports_l2_probe_evidence_and_plan():

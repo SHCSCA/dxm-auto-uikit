@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import hmac
 import html as html_lib
 import re
 from collections import defaultdict
@@ -11,10 +12,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from src.core.config import DATA_DIR
+from src.core.config import DATA_DIR, SCREENSHOT_DIR
 from src.execution.v1_runner import MODE_LAST_STATE, V1_STEPS
 from src.repository import Repository
+from src.services.evidence_ref import validate_evidence_ref
 from src.services.publish_guard import PublishGuardService
+from src.services.state_consistency import audit_state_consistency, combine_state_consistency
 
 
 REFERENCE_SECTION_LABELS = {
@@ -82,40 +85,57 @@ ACTION_TO_STATES = {
 
 
 def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> dict[str, Any] | None:
-    tasks = _visible_operator_tasks(repo, repo.list_tasks())
+    tasks = repo.list_tasks()
     requested_task_id = task_id
     requested_task_missing = False
     if task_id is None:
         if not tasks:
             return _empty_delivery_workspace(repo)
-        task_id = _default_delivery_task_id(repo, tasks)
+        task_id = _default_delivery_task_id(tasks)
 
     task = repo.get_task(task_id)
-    if task and _is_legacy_fixture_single_save_task(repo, task):
-        task = None
     if not task:
+        if requested_task_id is not None:
+            return _empty_delivery_workspace(
+                repo,
+                requested_task_id=requested_task_id,
+                requested_task_missing=True,
+            )
         requested_task_missing = requested_task_id is not None
         if not tasks:
             return _empty_delivery_workspace(repo, requested_task_id=requested_task_id, requested_task_missing=requested_task_missing)
-        task_id = _default_delivery_task_id(repo, tasks)
+        task_id = _default_delivery_task_id(tasks)
         task = repo.get_task(task_id)
-        if task and _is_legacy_fixture_single_save_task(repo, task):
-            return _empty_delivery_workspace(repo, requested_task_id=requested_task_id, requested_task_missing=True)
         if not task:
             return _empty_delivery_workspace(repo, requested_task_id=requested_task_id, requested_task_missing=requested_task_missing)
 
     reports = repo.list_reports(task_id)
     evidences = repo.list_evidences(task_id)
     logs = repo.list_logs(task_id)
-    exceptions = [
-        item for item in repo.list_exceptions()
-        if item.get("task_id") == task_id
-    ]
+    exceptions = repo.list_task_exceptions(task_id)
     latest_report = _latest_report(reports)
     extracted = _extract_delivery_evidence(reports, evidences)
     l2_gate = _l2_probe_gate()
-    delivery_readiness = _delivery_readiness(task, reports, evidences)
-    two_stage_acceptance = _two_stage_acceptance(repo, task, reports, evidences, extracted)
+    state_consistency = _workspace_state_consistency(
+        repo,
+        task,
+        reports,
+    )
+    two_stage_acceptance = _two_stage_acceptance(
+        repo,
+        task,
+        reports,
+        evidences,
+        extracted,
+        state_consistency,
+    )
+    delivery_readiness = _delivery_readiness(
+        task,
+        reports,
+        evidences,
+        state_consistency,
+        two_stage_acceptance,
+    )
     claim_candidates = _claim_candidates_from_l2_gate(l2_gate)
 
     workspace = {
@@ -134,12 +154,25 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
         "dxmReferenceTemplates": _dxm_reference_sections(latest_report),
         "publish_guard_state": _publish_guard_state(reports, extracted),
         "evidence_grade": _evidence_grade(extracted, l2_gate, delivery_readiness),
-        "regression_gates": _regression_gates(extracted, l2_gate, delivery_readiness),
+        "regression_gates": _regression_gates(
+            extracted,
+            l2_gate,
+            delivery_readiness,
+            state_consistency,
+            two_stage_acceptance,
+        ),
+        "state_consistency": state_consistency,
         "delivery_readiness": delivery_readiness,
         "two_stage_acceptance": two_stage_acceptance,
         "real_mode_release_plan": _real_mode_release_plan(l2_gate, delivery_readiness),
         "claim_candidates": claim_candidates,
-        "acceptanceGaps": _acceptance_gaps(exceptions, extracted, l2_gate, delivery_readiness),
+        "acceptanceGaps": _acceptance_gaps(
+            exceptions,
+            extracted,
+            l2_gate,
+            delivery_readiness,
+            state_consistency,
+        ),
         "safety": _safety_state(extracted, l2_gate, delivery_readiness),
         "l2_probe_plan": _l2_probe_plan(),
         "logs": logs,
@@ -149,6 +182,63 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
         workspace["requested_task_missing"] = True
         workspace["requested_task_id"] = requested_task_id
     return workspace
+
+
+def _workspace_state_consistency(
+    repo: Repository,
+    task: Mapping[str, Any],
+    reports: list[dict[str, Any]],
+) -> dict[str, Any]:
+    task_id = _int_or_none(task.get("id"))
+    audits: list[dict[str, Any]] = []
+
+    def append_audit(
+        audited_task: Mapping[str, Any],
+        audited_reports: list[dict[str, Any]],
+    ) -> None:
+        audited_task_id = _int_or_none(audited_task.get("id"))
+        audit = audit_state_consistency(
+            task=audited_task,
+            jobs=list(audited_task.get("jobs") or []),
+            reports=audited_reports,
+            exceptions=repo.list_task_exceptions(audited_task_id),
+        )
+        audit["audited_task_ids"] = [audited_task_id]
+        audits.append(audit)
+
+    append_audit(task, reports)
+    claim_task_id = _linked_claim_task_id(repo, task)
+    if claim_task_id is not None and claim_task_id != task_id:
+        claim_task = repo.get_task_private(claim_task_id)
+        if claim_task:
+            append_audit(claim_task, repo.list_reports(claim_task_id))
+
+    return combine_state_consistency(audits)
+
+
+def _linked_claim_task_id(repo: Repository, task: Mapping[str, Any]) -> int | None:
+    payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+    claim_task_id = _int_or_none(payload.get("claim_task_id"))
+    if claim_task_id is not None:
+        return claim_task_id
+
+    product_ids = [
+        _int_or_none(payload.get("claimed_product_id")),
+        *[_int_or_none(job.get("product_id")) for job in task.get("jobs") or []],
+    ]
+    for product_id in product_ids:
+        if product_id is None:
+            continue
+        product = repo.get_product(product_id)
+        product_payload = (
+            product.get("payload")
+            if isinstance((product or {}).get("payload"), Mapping)
+            else {}
+        )
+        claim_task_id = _int_or_none(product_payload.get("claim_task_id"))
+        if claim_task_id is not None:
+            return claim_task_id
+    return None
 
 
 def _empty_delivery_workspace(
@@ -161,11 +251,29 @@ def _empty_delivery_workspace(
     l2_gate = _l2_probe_gate()
     claim_candidates = _claim_candidates_from_l2_gate(l2_gate)
     delivery_readiness = {
+        "schema": "dxm_delivery_readiness.v1",
         "ready": False,
+        "task_completed": False,
+        "blocked_by_task_status": True,
         "has_l3_evidence": False,
         "total_job_count": 0,
         "complete_job_count": 0,
         "jobs": [],
+        "blocked_by_state_consistency": True,
+        "state_violation_codes": ["STATE_TASK_UNAVAILABLE"],
+    }
+    state_consistency = {
+        "schema": "dxm_state_consistency.v1",
+        "consistent": False,
+        "violation_codes": ["STATE_TASK_UNAVAILABLE"],
+        "violations": [
+            {
+                "code": "STATE_TASK_UNAVAILABLE",
+                "task_id": requested_task_id,
+                "detail": "No task is available for consistency audit.",
+            }
+        ],
+        "audited_task_ids": [],
     }
     workspace = {
         "baseline": _baseline(),
@@ -183,7 +291,8 @@ def _empty_delivery_workspace(
         "dxmReferenceTemplates": _dxm_reference_sections(None),
         "publish_guard_state": _publish_guard_state([], extracted),
         "evidence_grade": _evidence_grade(extracted, l2_gate, delivery_readiness),
-        "regression_gates": _regression_gates(extracted, l2_gate, delivery_readiness),
+        "regression_gates": _regression_gates(extracted, l2_gate, delivery_readiness, state_consistency),
+        "state_consistency": state_consistency,
         "delivery_readiness": delivery_readiness,
         "two_stage_acceptance": _empty_two_stage_acceptance(),
         "real_mode_release_plan": _real_mode_release_plan(l2_gate, delivery_readiness),
@@ -209,116 +318,15 @@ def _empty_delivery_workspace(
     return workspace
 
 
-_FIXTURE_TASK_MARKERS = (
-    "qa guarded",
-    "qa two-stage",
-    "qa_two_stage",
-    "fixture",
-    "测试商品",
-    "示例商品",
-    "本地演示",
-    "/offer/test-",
-    "offer/test-",
-)
-
-
-def _visible_operator_tasks(repo: Repository, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [task for task in tasks if not _is_legacy_fixture_single_save_task(repo, task)]
-
-
-def _is_legacy_fixture_single_save_task(repo: Repository, task: Mapping[str, Any]) -> bool:
-    payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
-    if _looks_like_fixture_text(task.get("name")) or _looks_like_fixture_text(payload):
-        return True
-    for product_id in _task_product_ids(task):
-        product = repo.get_product(product_id)
-        if product and _looks_like_fixture_product(product):
-            return True
-    return False
-
-
-def _task_product_ids(task: Mapping[str, Any]) -> list[int]:
-    payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
-    raw_values = payload.get("product_ids")
-    if not isinstance(raw_values, list):
-        raw_values = []
-    jobs = task.get("jobs")
-    if isinstance(jobs, list):
-        raw_values = [*raw_values, *(job.get("product_id") for job in jobs if isinstance(job, Mapping))]
-    product_ids: list[int] = []
-    for value in raw_values:
-        try:
-            product_id = int(value)
-        except (TypeError, ValueError):
-            continue
-        if product_id > 0:
-            product_ids.append(product_id)
-    return list(dict.fromkeys(product_ids))
-
-
-def _looks_like_fixture_product(product: Mapping[str, Any]) -> bool:
-    payload = product.get("payload") if isinstance(product.get("payload"), Mapping) else {}
-    return _looks_like_fixture_text(
-        [
-            product.get("title"),
-            product.get("category_name"),
-            product.get("source"),
-            payload,
-        ]
-    )
-
-
-def _looks_like_fixture_text(value: Any) -> bool:
-    if isinstance(value, Mapping):
-        text = " ".join(str(item or "") for item in value.values())
-    elif isinstance(value, (list, tuple, set)):
-        text = " ".join(str(item or "") for item in value)
-    else:
-        text = str(value or "")
-    normalized = text.casefold()
-    return any(marker in normalized for marker in _FIXTURE_TASK_MARKERS)
-
-
-def _default_delivery_task_id(repo: Repository, tasks: list[dict[str, Any]]) -> int:
-    latest_delivery_report_task_id: int | None = None
-    for report in repo.list_reports():
-        if _report_has_delivery_evidence(report):
-            latest_delivery_report_task_id = int(report["task_id"])
-            break
-
-    for task in tasks:
-        if _is_active_delivery_task(task):
-            return int(task["id"])
-    for task in tasks:
-        if _is_draft_delivery_task(task):
-            if latest_delivery_report_task_id is None or int(task["id"]) > latest_delivery_report_task_id:
-                return int(task["id"])
-            break
-    if latest_delivery_report_task_id is not None:
-        return latest_delivery_report_task_id
-    for task in tasks:
-        if _is_draft_delivery_task(task):
-            return int(task["id"])
+def _default_delivery_task_id(tasks: list[dict[str, Any]]) -> int:
+    single_save_tasks = [task for task in tasks if task.get("mode") == "single_save"]
+    if single_save_tasks:
+        latest_single_save = max(
+            single_save_tasks,
+            key=lambda task: (str(task.get("created_at") or ""), int(task["id"])),
+        )
+        return int(latest_single_save["id"])
     return int(tasks[0]["id"])
-
-
-def _is_active_delivery_task(task: Mapping[str, Any]) -> bool:
-    if task.get("mode") != "single_save":
-        return False
-    return str(task.get("status") or "").lower() in {"running", "paused", "needs_manual_review"}
-
-
-def _is_draft_delivery_task(task: Mapping[str, Any]) -> bool:
-    if task.get("mode") != "single_save":
-        return False
-    return str(task.get("status") or "").lower() == "draft"
-
-
-def _report_has_delivery_evidence(report: Mapping[str, Any]) -> bool:
-    if str(report.get("status") or "").lower() != "success":
-        return False
-    extracted = _extract_delivery_evidence([dict(report)], [])
-    return bool(extracted["save_results"] and extracted["published_proofs"])
 
 
 def _baseline() -> dict[str, Any]:
@@ -735,16 +743,39 @@ def _regression_gates(
     extracted: dict[str, Any],
     l2_gate: Mapping[str, Any] | None = None,
     delivery_readiness: Mapping[str, Any] | None = None,
+    state_consistency: Mapping[str, Any] | None = None,
+    two_stage_acceptance: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     latest_l1 = _latest_schema_result(L1_REPLAY_DIR, "dxm_l1_selector_replay.v1")
     l2_gate = dict(l2_gate or _l2_probe_gate())
     l2_passed = l2_gate["status"] == "passed"
     has_l3_save_proof = bool(extracted["save_results"] and extracted["published_proofs"])
     has_l3_network = bool(extracted["network_save_results"] or extracted["har_summaries"])
-    if not l2_passed:
+    state_consistent = bool(state_consistency) and state_consistency.get("consistent") is True
+    two_stage_checks = (two_stage_acceptance or {}).get("checks") or {}
+    claim_provenance_invalid = (
+        (delivery_readiness or {}).get("two_stage_required") is True
+        and (
+            two_stage_checks.get("claim_provenance_valid") is False
+            or two_stage_checks.get("single_save_claim_snapshot_valid") is False
+        )
+    )
+    if not state_consistent:
+        l3_status = "blocked"
+        l3_level = "C"
+        codes = ", ".join(str(code) for code in (state_consistency or {}).get("violation_codes") or [])
+        l3_detail = f"持久化状态互相矛盾，L3 禁止 READY：{codes or 'state consistency unavailable'}。"
+    elif not l2_passed:
         l3_status = "blocked"
         l3_level = "C"
         l3_detail = f"L2 未通过（当前：{l2_gate['status']}），真实 claim_only/single_save/batch_save 启动入口关闭。"
+    elif claim_provenance_invalid:
+        l3_status = "blocked"
+        l3_level = "C"
+        missing_codes = ", ".join(
+            str(code) for code in (two_stage_acceptance or {}).get("missing_codes") or []
+        )
+        l3_detail = f"两段式认领来源或保存任务快照无效，L3 禁止 READY：{missing_codes or 'claim provenance invalid'}。"
     elif (
         delivery_readiness
         and delivery_readiness.get("has_l3_evidence") is True
@@ -872,6 +903,8 @@ def _delivery_readiness(
     task: Mapping[str, Any],
     reports: list[dict[str, Any]],
     evidences: list[dict[str, Any]],
+    state_consistency: Mapping[str, Any],
+    two_stage_acceptance: Mapping[str, Any],
 ) -> dict[str, Any]:
     jobs = list(task.get("jobs") or [])
     reports_by_job: dict[int, list[dict[str, Any]]] = defaultdict(list)
@@ -926,12 +959,33 @@ def _delivery_readiness(
         )
 
     complete_count = sum(1 for item in job_results if item["ready"])
+    state_consistent = state_consistency.get("consistent") is True
+    task_completed = str(task.get("status") or "").lower() == "completed"
+    two_stage_required = task.get("mode") == "single_save"
+    two_stage_ready = (
+        not two_stage_required
+        or two_stage_acceptance.get("passed") is True
+    )
     return {
-        "ready": bool(job_results) and complete_count == len(job_results),
+        "schema": "dxm_delivery_readiness.v1",
+        "ready": (
+            state_consistent
+            and task_completed
+            and two_stage_ready
+            and bool(job_results)
+            and complete_count == len(job_results)
+        ),
+        "task_completed": task_completed,
+        "blocked_by_task_status": not task_completed,
         "has_l3_evidence": bool(reports or evidences),
         "total_job_count": len(job_results),
         "complete_job_count": complete_count,
         "jobs": job_results,
+        "blocked_by_state_consistency": not state_consistent,
+        "state_violation_codes": list(state_consistency.get("violation_codes") or []),
+        "two_stage_required": two_stage_required,
+        "blocked_by_two_stage_acceptance": not two_stage_ready,
+        "two_stage_missing_codes": list(two_stage_acceptance.get("missing_codes") or []),
     }
 
 
@@ -948,11 +1002,16 @@ def _empty_two_stage_acceptance() -> dict[str, Any]:
         "checks": {
             "claim_task_present": False,
             "claim_completed": False,
+            "save_task_completed": False,
             "claimed_product_present": False,
+            "claim_provenance_valid": False,
+            "single_save_claim_snapshot_valid": False,
             "draft_box_verified": False,
             "single_save_linked_to_claim": False,
             "save_success": False,
             "unpublished_proof": False,
+            "save_evidence_integrity": False,
+            "unpublished_evidence_integrity": False,
             "publish_guard_safe": False,
         },
     }
@@ -964,6 +1023,7 @@ def _two_stage_acceptance(
     reports: list[dict[str, Any]],
     evidences: list[dict[str, Any]],
     extracted: dict[str, Any],
+    state_consistency: Mapping[str, Any],
 ) -> dict[str, Any]:
     payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
     jobs = list(task.get("jobs") or [])
@@ -982,6 +1042,13 @@ def _two_stage_acceptance(
     claim_reports = repo.list_reports(claim_task_id) if claim_task_id is not None else []
     publish_guard = _publish_guard_state(reports, extracted)
 
+    claim_provenance_valid = bool(product) and repo.product_has_completed_claim_provenance(product)
+    claim_snapshot_error = (
+        repo.single_save_claim_snapshot_error(dict(task), product)
+        if product is not None
+        else "claimed product is unavailable"
+    )
+    single_save_claim_snapshot_valid = claim_snapshot_error is None
     claim_completed = _claim_stage_completed(claim_task, claim_payload, claim_reports, claimed_product_id)
     claim_product_matches = _claim_reports_match_product(claim_reports, claimed_product_id) or (
         _int_or_none(claim_payload.get("claimed_product_id")) == claimed_product_id
@@ -1005,20 +1072,42 @@ def _two_stage_acceptance(
     )
     save_success = any(_report_has_successful_save(report) for report in reports)
     unpublished_proof = bool(extracted.get("published_proofs"))
+    save_evidence_integrity = _all_jobs_have_valid_action_evidence(
+        jobs,
+        evidences,
+        {"save_only", "SAVE_ONLY"},
+    )
+    unpublished_evidence_integrity = _all_jobs_have_valid_action_evidence(
+        jobs,
+        evidences,
+        {"verify_not_published", "VERIFY_NOT_PUBLISHED"},
+    )
     publish_guard_safe = publish_guard.get("safe") is True
+    state_consistent = state_consistency.get("consistent") is True
+    save_task_completed = str(task.get("status") or "").lower() == "completed"
 
     checks = {
         "claim_task_present": claim_task is not None,
         "claim_completed": claim_completed,
+        "save_task_completed": save_task_completed,
         "claimed_product_present": product is not None and claimed_product_id is not None,
+        "claim_provenance_valid": claim_provenance_valid,
+        "single_save_claim_snapshot_valid": single_save_claim_snapshot_valid,
         "claim_product_matches": claim_product_matches,
         "draft_box_verified": draft_box_verified,
         "single_save_linked_to_claim": single_save_linked,
         "save_success": save_success,
         "unpublished_proof": unpublished_proof,
+        "save_evidence_integrity": save_evidence_integrity,
+        "unpublished_evidence_integrity": unpublished_evidence_integrity,
         "publish_guard_safe": publish_guard_safe,
+        "state_consistent": state_consistent,
     }
     missing_codes: list[str] = []
+    if not state_consistent:
+        missing_codes.append("state_consistency")
+    if not save_task_completed:
+        missing_codes.append("save_task_completed")
     if claim_task_id is None:
         missing_codes.append("claim_task_id")
     if claim_task is None:
@@ -1029,6 +1118,10 @@ def _two_stage_acceptance(
         missing_codes.append("claim_product_match")
     if product is None or claimed_product_id is None:
         missing_codes.append("claimed_product")
+    if not claim_provenance_valid:
+        missing_codes.append("claim_provenance")
+    if not single_save_claim_snapshot_valid:
+        missing_codes.append("single_save_claim_snapshot")
     if product_source != "dxm_data_acquisition":
         missing_codes.append("claimed_product_source")
     if not draft_box_verified:
@@ -1039,24 +1132,40 @@ def _two_stage_acceptance(
         missing_codes.append("save_success")
     if not unpublished_proof:
         missing_codes.append("unpublished_proof")
+    if not save_evidence_integrity:
+        missing_codes.append("save_evidence_integrity")
+    if not unpublished_evidence_integrity:
+        missing_codes.append("unpublished_evidence_integrity")
     if not publish_guard_safe:
         missing_codes.append("publish_guard_safe")
 
-    if not missing_codes:
+    if not state_consistent:
+        status = "inconsistent_state"
+        user_message = "任务、Job、报告或异常状态互相矛盾，已阻止 READY；请保留失败历史并创建新任务重试。"
+    elif not missing_codes:
         status = "passed"
         user_message = "真实两段式已完成：商品已从待认领商品进入商品箱，并完成单商品只保存且未发布。"
     elif any(code in missing_codes for code in ("claim_task_id", "claim_task", "claim_completed", "claim_product_match")):
         status = "missing_claim_stage"
         user_message = "还没有完整的待认领入箱证据。请先从店小秘已有待认领列表把真实商品放进商品箱，再创建单商品只保存任务。"
+    elif any(code in missing_codes for code in ("claim_provenance", "single_save_claim_snapshot")):
+        status = "invalid_claim_provenance"
+        user_message = "认领来源或保存任务中的两段式快照已失配，已阻止 READY；请从有效商品箱商品重新创建单商品只保存任务。"
     elif any(code in missing_codes for code in ("claimed_product", "claimed_product_source", "draft_box_verified", "single_save_linked_to_claim")):
         status = "missing_draft_box_stage"
         user_message = "商品箱商品链路不完整。请确认本次保存任务选择的是刚进入商品箱的真实商品。"
-    elif "save_success" in missing_codes:
+    elif "save_task_completed" in missing_codes or "save_success" in missing_codes:
         status = "missing_save_stage"
         user_message = "商品箱编辑保存还没有成功证据。请启动单商品只保存，并等待保存成功。"
     elif "unpublished_proof" in missing_codes or "publish_guard_safe" in missing_codes:
         status = "missing_unpublished_proof"
         user_message = "保存后还缺少未发布证明，或检测到发布风险。请确认只保存成功且商品没有发布。"
+    elif any(
+        code in missing_codes
+        for code in ("save_evidence_integrity", "unpublished_evidence_integrity")
+    ):
+        status = "invalid_l3_evidence"
+        user_message = "保存或未发布截图的文件、大小或哈希已失配，已阻止 READY；请重新执行本次单商品只保存。"
     else:
         status = "incomplete"
         user_message = "两段式验收证据不完整，请按页面提示补齐后重试。"
@@ -1071,9 +1180,11 @@ def _two_stage_acceptance(
         "claimed_product_id": claimed_product_id,
         "missing_codes": missing_codes,
         "checks": checks,
+        "claim_snapshot_error": claim_snapshot_error,
         "claim_report_count": len(claim_reports),
         "save_report_count": len(reports),
         "evidence_count": len(evidences),
+        "state_violation_codes": list(state_consistency.get("violation_codes") or []),
     }
 
 
@@ -1197,10 +1308,42 @@ def _payload_has_network_or_har(payload: Any) -> bool:
 
 
 def _evidence_file_for_action(evidence: Mapping[str, Any], accepted: set[str]) -> bool:
-    if not evidence.get("file_path"):
-        return False
     meta = evidence.get("meta") or {}
-    return str(meta.get("action") or "") in accepted or str(meta.get("state") or "") in accepted
+    if not isinstance(meta, Mapping):
+        return False
+    if not (
+        str(meta.get("action") or "") in accepted
+        or str(meta.get("state") or "") in accepted
+    ):
+        return False
+    return _evidence_ref_is_current(meta.get("evidence_ref"))
+
+
+def _all_jobs_have_valid_action_evidence(
+    jobs: list[Mapping[str, Any]],
+    evidences: list[Mapping[str, Any]],
+    accepted: set[str],
+) -> bool:
+    if not jobs:
+        return False
+    for job in jobs:
+        job_id = _int_or_none(job.get("id"))
+        if job_id is None:
+            return False
+        if not any(
+            _int_or_none(evidence.get("job_id")) == job_id
+            and _evidence_file_for_action(evidence, accepted)
+            for evidence in evidences
+        ):
+            return False
+    return True
+
+
+def _evidence_ref_is_current(value: Any) -> bool:
+    return validate_evidence_ref(
+        value,
+        screenshot_root=SCREENSHOT_DIR,
+    ).get("ok") is True
 
 
 def l2_real_probe_gate() -> dict[str, Any]:
@@ -2259,8 +2402,23 @@ def _acceptance_gaps(
     extracted: dict[str, Any],
     l2_gate: Mapping[str, Any] | None = None,
     delivery_readiness: Mapping[str, Any] | None = None,
+    state_consistency: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     gaps: list[dict[str, Any]] = []
+    if not state_consistency or state_consistency.get("consistent") is not True:
+        codes = ", ".join(
+            str(code) for code in (state_consistency or {}).get("violation_codes") or []
+        )
+        gaps.append(
+            {
+                "id": "gap-state-consistency",
+                "title": "任务状态事实互相矛盾",
+                "severity": "blocker",
+                "owner": "state_consistency",
+                "detail": f"READY 已阻止：{codes or 'state consistency unavailable'}。",
+                "evidenceLevel": "A",
+            }
+        )
     l2_status = (l2_gate or {}).get("status")
     if l2_gate and l2_status != "passed":
         gaps.append(

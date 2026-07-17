@@ -8,6 +8,13 @@
 
 **Tech Stack:** Python 3.11, FastAPI, SQLite, Playwright/visible Chrome, React/TypeScript/Vite, Electron, pytest, PowerShell delivery checks.
 
+## Status note — 2026-07-17
+
+- The user explicitly authorized documentation updates, merging this branch, and pushing code.
+- That authorization changes only the Git/remote-operation boundary; it does not waive any task, review, test, clean-worktree, package identity, L2/L3, state-consistency, mutation-ledger, or live two-stage gate.
+- Production delivery remains `BLOCKED` until Task 6 produces fresh evidence from the same clean commit and portable build.
+- Current progress is tracked in [`.superpowers/sdd/progress.md`](../../../.superpowers/sdd/progress.md); unchecked items in this plan are not implicitly complete.
+
 ## Global Constraints
 
 - Operate only DXM's existing pending-item list; never trigger acquisition or create a new source item. Source URLs are match hints only.
@@ -95,4 +102,4 @@
 
 ## Completion Definition
 
-Completion requires fresh evidence for every Task 6 item from the current portable build. Historical canaries, source-only tests, or older EXEs cannot satisfy completion. Remote push/merge remains outside this plan until the user explicitly authorizes it.
+Completion requires fresh evidence for every Task 6 item from the current portable build. Historical canaries, source-only tests, or older EXEs cannot satisfy completion. Push/merge is authorized as of 2026-07-17, but must still follow the repository verification and release gates above.

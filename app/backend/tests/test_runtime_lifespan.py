@@ -22,6 +22,36 @@ def test_app_lifespan_closes_visible_browser_sessions(monkeypatch):
     assert calls == ['running', 'agent-console', 'login-flow']
 
 
+def test_app_lifespan_records_truth_when_browser_agent_shutdown_is_incomplete(monkeypatch):
+    logs: list[str] = []
+
+    monkeypatch.setattr(main_module, '_append_backend_runtime_log', logs.append)
+    monkeypatch.setattr(main_module.agent_console_service, 'stop', lambda: {'active': False})
+    monkeypatch.setattr(
+        main_module.browser_agent_runtime,
+        'shutdown',
+        lambda: {
+            'ok': False,
+            'status': 'stopping',
+            'reasonCode': 'BROWSER_AGENT_STOPPING',
+            'needsRestart': True,
+        },
+    )
+
+    async def run_lifespan_once():
+        async with main_module.app_lifespan(main_module.app):
+            return None
+
+    asyncio.run(run_lifespan_once())
+
+    assert any(
+        'Browser Agent cleanup incomplete' in line
+        and 'status=stopping' in line
+        and 'reason=BROWSER_AGENT_STOPPING' in line
+        for line in logs
+    )
+
+
 def test_repeated_testclient_lifespan_never_releases_process_bootstrap_lease(monkeypatch):
     state = main_module.runtime_bootstrap_state
     lease = state.lease

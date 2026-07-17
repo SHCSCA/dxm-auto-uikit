@@ -3,23 +3,48 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import subprocess
 import sys
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from src.core.config import DATA_DIR, SCREENSHOT_DIR
-from src.execution.browser_agent_protocol import BrowserAgentCommand, browser_agent_command_from_worker_request
+from src.execution.action_result_contract import (
+    ACTION_RESULT_SCHEMA_VERSION,
+    ActionResultContractError,
+    validate_action_result_envelope,
+    validate_independent_save_verification_pair,
+)
+from src.execution.browser_agent_protocol import (
+    BrowserAgentCommand,
+    MUTATION_COMMAND_PLANS,
+    MutationCommandContractError,
+    browser_agent_command_from_worker_request,
+    build_mutation_scope_id,
+    mutation_target_hash,
+    validate_browser_agent_command,
+)
 from src.execution.dxm_live import DxmLiveClient
-from src.repository import Repository
+from src.repository import Repository, TerminalReportConflictError
 from src.services.browser_agent_status import build_browser_hud
 from src.services.config_defaults import DEFAULT_TEMPLATE_TYPES, ConfigDefaultsResolver
 from src.services.config_validation import ConfigValidationService
+from src.services.evidence_ref import validate_evidence_ref
 from src.services.ownership_lock import OwnershipLockService
 from src.services.publish_guard import PublishGuardService
+from src.state_machine.two_stage import (
+    TwoStageContractError,
+    authorization_context_fingerprint,
+    canonical_claim_target_identity,
+    canonical_source_identity,
+    verify_authorization_context,
+    verify_exact_stage_task_facts,
+)
 from src.state_machine.contracts import StateName, normalize_execution_mode
 from src.utils import now_iso
 
@@ -50,6 +75,31 @@ V1_STEPS = [
     (StateName.WRITE_REPORT, "生成商品执行报告", "report"),
     (StateName.RELEASE_LOCK, "释放商品归属锁", "ownership"),
 ]
+
+
+def _normalized_observed_text(value: Any) -> str:
+    return " ".join(str(value or "").split()).casefold()
+
+
+def _observed_text_contains_hint(observed_text: str, hint: str) -> bool:
+    normalized_hint = _normalized_observed_text(hint)
+    if not observed_text or not normalized_hint:
+        return False
+    if any(character.isascii() and character.isalnum() for character in normalized_hint):
+        pattern = rf"(?<![0-9a-z_]){re.escape(normalized_hint)}(?![0-9a-z_])"
+        return re.search(pattern, observed_text) is not None
+    return normalized_hint in observed_text
+
+
+def _observed_text_contains_exact_boundary(observed_text: str, expected_text: str) -> bool:
+    normalized_observed = _normalized_observed_text(observed_text)
+    normalized_expected = _normalized_observed_text(expected_text)
+    if not normalized_observed or not normalized_expected:
+        return False
+    return re.search(
+        rf"(?<!\w){re.escape(normalized_expected)}(?!\w)",
+        normalized_observed,
+    ) is not None
 
 SINGLE_SAVE_STEPS = [
     step
@@ -185,6 +235,27 @@ WORKFLOW_BROWSER_ACTION_STATES = {
     StateName.VERIFY_NOT_PUBLISHED,
 }
 
+WORKFLOW_EXPECTED_PAGE_BY_STATE = {
+    StateName.PRECHECK_SESSION: "authenticated_dxm",
+    StateName.OPEN_DATA_ACQUISITION: "data_acquisition",
+    StateName.CLAIM_TO_DRAFT_BOX: "data_acquisition",
+    StateName.VERIFY_DRAFT_BOX_CLAIM: "draft_box",
+    StateName.OPEN_DRAFT_LIST: "draft_box",
+    StateName.CLAIM_PRODUCT: "draft_box",
+    StateName.OPEN_EDIT_PAGE: "editor",
+    StateName.VERIFY_EDIT_OWNERSHIP: "editor",
+    StateName.FILL_BASE_INFO: "editor",
+    StateName.FILL_VARIANTS: "editor",
+    StateName.FILL_MEDIA: "editor",
+    StateName.FILL_COMPLIANCE: "editor",
+    StateName.ENABLE_SEMI_MANAGED: "editor",
+    StateName.OPEN_SEMI_MANAGED_PAGE: "semi_managed",
+    StateName.FILL_SEMI_GOODS: "semi_managed",
+    StateName.FILL_SEMI_VARIANTS: "semi_managed",
+    StateName.SAVE_ONLY: "semi_managed",
+    StateName.VERIFY_NOT_PUBLISHED: "semi_managed",
+}
+
 class V1TaskRunner:
     def __init__(
         self,
@@ -193,6 +264,7 @@ class V1TaskRunner:
         workflow_adapter: Any | None = None,
         agent_console: Any | None = None,
         browser_agent_runtime: Any | None = None,
+        authorization_verifier: Callable[[int, str, str], Any] | None = None,
         workflow_executor: ThreadPoolExecutor | None = None,
         workflow_action_timeout_seconds: float | None = None,
     ) -> None:
@@ -201,6 +273,7 @@ class V1TaskRunner:
         self.workflow_adapter = workflow_adapter
         self.agent_console = agent_console
         self.browser_agent_runtime = browser_agent_runtime
+        self.authorization_verifier = authorization_verifier
         self._workflow_executor = workflow_executor or (ThreadPoolExecutor(max_workers=1) if workflow_adapter is not None else None)
         self.workflow_action_timeout_seconds = (
             float(workflow_action_timeout_seconds)
@@ -208,6 +281,7 @@ class V1TaskRunner:
             else self._workflow_action_timeout_from_env()
         )
         self.workflow_runtime_unhealthy_reason: str | None = None
+        self._active_browser_agent_commands: dict[tuple[int, int, str], BrowserAgentCommand] = {}
         self.live = DxmLiveClient()
         self.publish_guard = PublishGuardService()
         self.config_validation = ConfigValidationService()
@@ -232,6 +306,8 @@ class V1TaskRunner:
         return "auto"
 
     def _use_browser_agent_runtime(self) -> bool:
+        if self._requires_persistent_browser_agent():
+            return self.browser_agent_runtime is not None
         if self.browser_agent_runtime is None:
             return False
         runtime = self._workflow_action_runtime_from_env()
@@ -246,6 +322,8 @@ class V1TaskRunner:
         return adapter_class.__name__ == "DxmWorkflowAdapter" and adapter_class.__module__.endswith("dxm_adapter")
 
     def _use_process_workflow_runtime(self) -> bool:
+        if self._requires_persistent_browser_agent():
+            return False
         runtime = self._workflow_action_runtime_from_env()
         if runtime == "browser_agent":
             return False
@@ -258,6 +336,9 @@ class V1TaskRunner:
             return False
         adapter_class = adapter.__class__
         return adapter_class.__name__ == "DxmWorkflowAdapter" and adapter_class.__module__.endswith("dxm_adapter")
+
+    def _requires_persistent_browser_agent(self) -> bool:
+        return getattr(self.workflow_adapter, "requires_persistent_browser_agent", False) is True
 
     async def run_task(self, task_id: int) -> None:
         task = self.repo.get_task(task_id)
@@ -287,18 +368,58 @@ class V1TaskRunner:
                 )
             await self.manager.broadcast(task_id, {"type": "task_status", "status": "failed", "taskId": task_id})
             return
-        self.repo.update_task_status(task_id, "running")
+        if not self.repo.try_update_task_status(
+            task_id,
+            "running",
+            expected_statuses=("draft", "running"),
+        ):
+            return
         await self.manager.broadcast(task_id, {"type": "task_status", "status": "running", "taskId": task_id, "mode": mode})
 
         completed = 0
         failed = 0
         for job in task["jobs"]:
             success = await self._run_job(task, job, mode)
+            if success is None:
+                return
             if success:
                 completed += 1
             else:
                 failed += 1
-            self.repo.update_task_status(task_id, "running", completed_jobs=completed, failed_jobs=failed)
+                failed_task = self.repo.get_task(task_id)
+                if failed_task and failed_task.get("status") == "failed":
+                    await self.manager.broadcast(task_id, {
+                        "type": "task_status",
+                        "taskId": task_id,
+                        "status": "failed",
+                        "completedJobs": failed_task.get("completed_jobs", completed),
+                        "failedJobs": failed_task.get("failed_jobs", failed),
+                    })
+                    return
+            if mode == "claim_only" and success:
+                await self.manager.broadcast(task_id, {
+                    "type": "job_completed",
+                    "taskId": task_id,
+                    "jobId": job["id"],
+                    "completedJobs": completed,
+                    "failedJobs": failed,
+                })
+                await self.manager.broadcast(task_id, {
+                    "type": "task_status",
+                    "taskId": task_id,
+                    "status": "completed",
+                    "completedJobs": completed,
+                    "failedJobs": failed,
+                })
+                return
+            if not self.repo.try_update_task_status(
+                task_id,
+                "running",
+                expected_statuses=("running",),
+                completed_jobs=completed,
+                failed_jobs=failed,
+            ):
+                return
             await self.manager.broadcast(task_id, {
                 "type": "job_completed",
                 "taskId": task_id,
@@ -308,7 +429,14 @@ class V1TaskRunner:
             })
 
         final_status = "completed" if failed == 0 else ("partial_success" if completed else "failed")
-        self.repo.update_task_status(task_id, final_status, completed_jobs=completed, failed_jobs=failed)
+        if not self.repo.try_update_task_status(
+            task_id,
+            final_status,
+            expected_statuses=("running",),
+            completed_jobs=completed,
+            failed_jobs=failed,
+        ):
+            return
         await self.manager.broadcast(task_id, {
             "type": "task_status",
             "taskId": task_id,
@@ -317,7 +445,7 @@ class V1TaskRunner:
             "failedJobs": failed,
         })
 
-    async def _run_job(self, task: dict[str, Any], job: dict[str, Any], mode: str) -> bool:
+    async def _run_job(self, task: dict[str, Any], job: dict[str, Any], mode: str) -> bool | None:
         task_id = task["id"]
         job_id = job["id"]
         product_id = job.get("product_id")
@@ -410,10 +538,25 @@ class V1TaskRunner:
                     if verified["conflict"]:
                         raise V1ExecutionError("E202", "页面领取标记不一致", verified["reason"])
 
+                if (mode, state_name) in {
+                    ("claim_only", StateName.CLAIM_TO_DRAFT_BOX),
+                    ("single_save", StateName.SAVE_ONLY),
+                }:
+                    self._assert_real_mutation_authorized(task_id, mode, state_name)
                 workflow_result = await self._run_workflow_action_async(task, job, state_name, claim_mark, execution_defaults)
                 if workflow_result:
+                    if state_name == StateName.VERIFY_NOT_PUBLISHED:
+                        self._assert_save_and_unpublished_proofs_independent(
+                            workflow_results,
+                            workflow_result,
+                        )
                     if mode == "claim_only" and state_name == StateName.VERIFY_DRAFT_BOX_CLAIM:
-                        claimed_product = self._record_claimed_product_from_acquisition(task, workflow_result, claim_mark)
+                        claimed_product = self._record_claimed_product_from_acquisition(
+                            task,
+                            job,
+                            workflow_result,
+                            claim_mark,
+                        )
                     agent_action_event = self._sync_agent_action(
                         task,
                         job,
@@ -438,9 +581,36 @@ class V1TaskRunner:
                         "save_result": workflow_result.get("save_result"),
                         "dxm_reference_template_results": workflow_result.get("dxm_reference_template_results"),
                     }
+                    required_action_evidence = state_name in {
+                        StateName.SAVE_ONLY,
+                        StateName.VERIFY_NOT_PUBLISHED,
+                    }
+                    evidence_ref = workflow_result.get("evidence_ref")
+                    if not required_action_evidence and not isinstance(evidence_ref, Mapping):
+                        nested_evidence = workflow_result.get("evidence")
+                        evidence_ref = (
+                            nested_evidence.get("evidence_ref")
+                            if isinstance(nested_evidence, Mapping)
+                            else None
+                        )
+                    valid_evidence_ref = (
+                        isinstance(evidence_ref, Mapping)
+                        and set(evidence_ref) == {"path", "sha256", "size"}
+                        and isinstance(evidence_ref.get("path"), str)
+                        and bool(evidence_ref.get("path"))
+                        and isinstance(evidence_ref.get("sha256"), str)
+                        and bool(evidence_ref.get("sha256"))
+                        and isinstance(evidence_ref.get("size"), int)
+                        and not isinstance(evidence_ref.get("size"), bool)
+                        and evidence_ref.get("size") > 0
+                    )
+                    workflow_evidence_path = workflow_result.get("screenshot_url")
+                    if valid_evidence_ref:
+                        workflow_meta["evidence_ref"] = dict(evidence_ref)
+                        workflow_evidence_path = evidence_ref["path"]
                     if agent_action_event:
                         workflow_meta["agent_action"] = agent_action_event
-                    self.repo.add_evidence(task_id, job_id, "workflow_action", workflow_result.get("screenshot_url"), workflow_meta)
+                    self.repo.add_evidence(task_id, job_id, "workflow_action", workflow_evidence_path, workflow_meta)
 
                 virtual_hud = HUD_VIRTUAL_STAGE_AFTER.get(state_name)
                 if virtual_hud:
@@ -542,23 +712,40 @@ class V1TaskRunner:
                 live_browser_hud_events=live_browser_hud_events,
                 claimed_product=claimed_product,
             )
+            if mode in {"single_save", "batch_save"}:
+                self._revalidate_terminal_action_evidence(workflow_results)
             save_result = self._save_result_for_mode(mode, workflow_results, claimed_product=claimed_product)
             report_product_id = int(claimed_product["id"]) if mode == "claim_only" and claimed_product and claimed_product.get("id") else product_id
-            self.repo.add_report(task_id, job_id, report_product_id, "success", False, save_result, summary)
-            self.repo.update_job(
-                job_id,
-                status="succeeded",
-                current_step_code="DONE",
-                current_step_name="V1 执行完成",
-                error_code=None,
-                error_message=None,
-            )
+            if mode == "claim_only":
+                self.repo.add_report(task_id, job_id, report_product_id, "success", False, save_result, summary)
+            else:
+                finalized = self.repo.finalize_job_success(
+                    task_id,
+                    job_id,
+                    report_product_id,
+                    published=False,
+                    save_result=save_result,
+                    summary=summary,
+                )
+                if not finalized.applied:
+                    if finalized.conflict_code == TerminalReportConflictError.conflict_code:
+                        raise TerminalReportConflictError(task_id, job_id)
+                    raise _JobTerminalTransitionRejected(finalized.conflict_code, finalized.reason)
             self.repo.add_log(task_id, job_id, "success", "V1 商品流程完成", {"mode": mode, "published": False})
             return True
+        except _ClaimTerminalTransitionRejected:
+            return None
+        except _JobTerminalTransitionRejected:
+            return None
         except Exception as exc:
             if lock_token:
                 self.ownership_lock.release_lock(lock_token)
-            error = exc if isinstance(exc, V1ExecutionError) else V1ExecutionError("E999", "V1 执行失败", str(exc))
+            if isinstance(exc, V1ExecutionError):
+                error = exc
+            elif isinstance(exc, TerminalReportConflictError):
+                error = V1ExecutionError(exc.conflict_code, "报告终态冲突", str(exc))
+            else:
+                error = V1ExecutionError("E999", "V1 执行失败", str(exc))
             failure_override = self._failure_hud_override(error)
             failure_evidence_path = evidence_paths[-1] if evidence_paths else ""
             agent_console_event = self._sync_agent_console(
@@ -585,46 +772,35 @@ class V1TaskRunner:
             )
             if live_browser_hud_event:
                 live_browser_hud_events.append(live_browser_hud_event)
-            self.repo.update_job(
-                job_id,
-                status="failed",
-                current_step_code="FAILED",
-                current_step_name="执行失败",
-                error_code=error.error_code,
-                error_message=error.detail,
+            failure_summary = self._build_summary(
+                task,
+                job,
+                mode,
+                claim_mark,
+                filled_fields,
+                empty_fields,
+                evidence_paths,
+                workflow_results,
+                execution_defaults,
+                blocked_reason=error.detail,
+                agent_console_events=agent_console_events,
+                agent_action_events=agent_action_events,
+                live_browser_hud_events=live_browser_hud_events,
             )
-            self.repo.add_exception(
-                task_id,
-                job_id,
-                error.error_code,
-                "v1_executor",
-                error.title,
-                error.detail,
-                "检查配置、页面状态和证据后重试；禁止忽略发布或归属风险继续执行。",
-            )
-            self.repo.add_report(
+            finalized = self.repo.finalize_job_failure(
                 task_id,
                 job_id,
                 product_id,
-                "failed",
-                False,
-                {"ok": False, "error_code": error.error_code, "message": error.detail},
-                self._build_summary(
-                    task,
-                    job,
-                    mode,
-                    claim_mark,
-                    filled_fields,
-                    empty_fields,
-                    evidence_paths,
-                    workflow_results,
-                    execution_defaults,
-                    blocked_reason=error.detail,
-                    agent_console_events=agent_console_events,
-                    agent_action_events=agent_action_events,
-                    live_browser_hud_events=live_browser_hud_events,
-                ),
+                error_code=error.error_code,
+                field_domain="v1_executor",
+                title=error.title,
+                detail=error.detail,
+                suggestion="检查配置、页面状态和证据后重试；禁止忽略发布或归属风险继续执行。",
+                save_result={"ok": False, "error_code": error.error_code, "message": error.detail},
+                summary=failure_summary,
             )
+            if not finalized.applied:
+                return None
             self.repo.add_log(task_id, job_id, "error", error.title, {"error_code": error.error_code, "detail": error.detail})
             return False
 
@@ -1050,6 +1226,46 @@ class V1TaskRunner:
             if not result["allowed"]:
                 raise V1ExecutionError("E999", "保存动作被发布隔离器阻断", "; ".join(result["reasons"]))
 
+    def _assert_real_mutation_authorized(
+        self,
+        task_id: int,
+        mode: str,
+        state_name: StateName,
+    ) -> None:
+        verifier = self.authorization_verifier
+        if verifier is None:
+            raise V1ExecutionError(
+                "AUTH_VERIFIER_MISSING",
+                "真实写入授权校验器缺失",
+                f"{mode} cannot enter {state_name.value} without exact lease revalidation",
+            )
+        try:
+            result = verifier(int(task_id), mode, state_name.value)
+        except V1ExecutionError:
+            raise
+        except Exception as exc:
+            reason_code = str(
+                getattr(exc, "reason_code", None)
+                or getattr(exc, "error_code", None)
+                or "AUTH_REVALIDATION_FAILED"
+            )
+            raise V1ExecutionError(
+                reason_code,
+                "真实写入授权已失效",
+                str(exc) or reason_code,
+            ) from exc
+        if not isinstance(result, Mapping) or result.get("ok") is not True:
+            reason_code = (
+                str(result.get("reason_code") or "AUTH_REVALIDATION_FAILED")
+                if isinstance(result, Mapping)
+                else "AUTH_REVALIDATION_FAILED"
+            )
+            raise V1ExecutionError(
+                reason_code,
+                "真实写入授权已失效",
+                reason_code,
+            )
+
     def _guard_single_save_claimed_product(self, product: Mapping[str, Any] | None) -> None:
         if not product:
             raise V1ExecutionError(
@@ -1266,6 +1482,7 @@ class V1TaskRunner:
                     "defaults": defaults,
                     "product_query": product_query,
                     "store_name": store_name,
+                    "target_source_urls": target_source_urls,
                 },
             ),
             StateName.VERIFY_NOT_PUBLISHED: (
@@ -1295,7 +1512,18 @@ class V1TaskRunner:
         if state_name == StateName.SAVE_ONLY:
             self._assert_manual_approval_before_save(task)
 
+        runtime_id = self._browser_agent_runtime_id()
         request = {
+            "command_id": uuid.uuid4().hex,
+            "idempotency_key": (
+                f"v1:{runtime_id}:{task.get('id')}:"
+                f"{job.get('id')}:{state_name.value}:{action_name}"
+            ),
+            "deadline": (
+                datetime.now(timezone.utc) + timedelta(seconds=self.workflow_action_timeout_seconds)
+            ).isoformat(),
+            "expected_page": self._expected_page_for_state(state_name),
+            "runtime_id": runtime_id,
             "task_id": task.get("id"),
             "job_id": job.get("id"),
             "state": state_name.value,
@@ -1309,14 +1537,15 @@ class V1TaskRunner:
             error_code=error_code,
             error_title=error_title,
         )
-        result["workflow_runtime"] = "process"
-        return self._validate_workflow_action_result(
+        validated_result = self._validate_workflow_action_result(
             state_name=state_name,
             action_name=action_name,
             error_code=error_code,
             error_title=error_title,
             result=result,
         )
+        validated_result["workflow_runtime"] = "process"
+        return validated_result
 
     def _run_workflow_action_browser_agent(
         self,
@@ -1325,6 +1554,7 @@ class V1TaskRunner:
         state_name: StateName,
         claim_mark: str,
         defaults: dict[str, Any],
+        command: BrowserAgentCommand | None = None,
     ) -> dict[str, Any] | None:
         if self.browser_agent_runtime is None:
             return None
@@ -1335,23 +1565,23 @@ class V1TaskRunner:
         if state_name == StateName.SAVE_ONLY:
             self._assert_manual_approval_before_save(task)
 
-        request = {
-            "task_id": task.get("id"),
-            "job_id": job.get("id"),
-            "state": state_name.value,
-            "action": action_name,
-            "params": params,
-        }
-        command = browser_agent_command_from_worker_request(
-            request,
-            step_label=self._workflow_step_label(state_name),
+        command = command or self._build_browser_agent_command(
+            task,
+            job,
+            state_name,
+            action_name,
+            params,
         )
+        command_key = (int(task["id"]), int(job["id"]), state_name.value)
+        self._active_browser_agent_commands[command_key] = command
         try:
             result = self.browser_agent_runtime.run(
                 command,
                 timeout_seconds=self.workflow_action_timeout_seconds,
             )
         except TimeoutError as exc:
+            self._cancel_browser_agent_command(command)
+            self._active_browser_agent_commands.pop(command_key, None)
             detail = self._browser_agent_timeout_detail(state_name)
             self.workflow_runtime_unhealthy_reason = detail
             raise V1ExecutionError(
@@ -1360,19 +1590,243 @@ class V1TaskRunner:
                 detail,
             ) from exc
         except Exception as exc:
+            self._active_browser_agent_commands.pop(command_key, None)
             detail = self._workflow_exception_detail(action_name, exc)
             self.workflow_runtime_unhealthy_reason = detail
             raise V1ExecutionError(error_code, error_title, detail) from exc
-        result = dict(result)
-        result["workflow_runtime"] = "browser_agent"
-        result.setdefault("browser_agent_command", command.to_payload())
-        return self._validate_workflow_action_result(
-            state_name=state_name,
-            action_name=action_name,
-            error_code=error_code,
-            error_title=error_title,
-            result=result,
+        try:
+            validated_result = self._validate_workflow_action_result(
+                state_name=state_name,
+                action_name=action_name,
+                error_code=error_code,
+                error_title=error_title,
+                result=result,
+            )
+        finally:
+            self._active_browser_agent_commands.pop(command_key, None)
+        validated_result["workflow_runtime"] = "browser_agent"
+        validated_result.setdefault("browser_agent_command", command.to_payload())
+        return validated_result
+
+    def _build_browser_agent_command(
+        self,
+        task: dict[str, Any],
+        job: dict[str, Any],
+        state_name: StateName,
+        action_name: str,
+        params: dict[str, Any],
+    ) -> BrowserAgentCommand:
+        runtime_id = self._browser_agent_runtime_id()
+        mutation_scope = self._build_browser_agent_mutation_scope(
+            task,
+            job,
+            state_name,
+            action_name,
+            params,
         )
+        request = {
+            "command_id": uuid.uuid4().hex,
+            "idempotency_key": (
+                f"v1:{runtime_id}:{task.get('id')}:{job.get('id')}:"
+                f"{state_name.value}:{action_name}"
+            ),
+            "deadline": (
+                datetime.now(timezone.utc) + timedelta(seconds=self.workflow_action_timeout_seconds)
+            ).isoformat(),
+            "expected_page": self._expected_page_for_state(state_name),
+            "runtime_id": runtime_id,
+            "task_id": task.get("id"),
+            "job_id": job.get("id"),
+            "state": state_name.value,
+            "action": action_name,
+            "params": dict(params),
+            **mutation_scope,
+        }
+        command = browser_agent_command_from_worker_request(
+            request,
+            step_label=self._workflow_step_label(state_name),
+        )
+        if mutation_scope or (state_name.value, action_name) not in MUTATION_COMMAND_PLANS:
+            try:
+                validate_browser_agent_command(command)
+            except MutationCommandContractError as exc:
+                raise V1ExecutionError(
+                    "E999",
+                    "真实浏览器变更范围无效",
+                    f"{exc.reason_code}: browser mutation command scope is invalid; no mutation was dispatched.",
+                ) from exc
+        return command
+
+    def _build_browser_agent_mutation_scope(
+        self,
+        task: Mapping[str, Any],
+        job: Mapping[str, Any],
+        state_name: StateName,
+        action_name: str,
+        params: dict[str, Any],
+    ) -> dict[str, str]:
+        expected_stage = {
+            (StateName.CLAIM_TO_DRAFT_BOX, "claim_from_data_acquisition"): "stage_a",
+            (StateName.SAVE_ONLY, "save_only"): "stage_b",
+        }.get((state_name, action_name))
+        if expected_stage is None:
+            return {}
+        if not self._requires_persistent_browser_agent():
+            # Synthetic adapters used for contract and timeout tests do not
+            # perform external DXM mutations, so they do not consume a real
+            # authorization lease or durable mutation ledger scope.
+            return {}
+
+        try:
+            task_id = int(task.get("id"))
+            job_id = int(job.get("id"))
+        except (TypeError, ValueError) as exc:
+            raise V1ExecutionError(
+                "E999",
+                "真实浏览器变更范围无效",
+                "mutation authorization scope requires canonical task and job IDs; no mutation was dispatched.",
+            ) from exc
+        if task_id <= 0 or job_id <= 0:
+            raise V1ExecutionError(
+                "E999",
+                "真实浏览器变更范围无效",
+                "mutation authorization scope requires positive task and job IDs; no mutation was dispatched.",
+            )
+
+        current_task = self.repo.get_task_private(task_id)
+        payload = (
+            current_task.get("payload")
+            if isinstance(current_task, Mapping) and isinstance(current_task.get("payload"), Mapping)
+            else {}
+        )
+        approval = payload.get("manual_approval") if isinstance(payload, Mapping) else None
+        if not isinstance(approval, Mapping):
+            raise V1ExecutionError(
+                "E999",
+                "真实浏览器变更范围无效",
+                "mutation authorization lease is missing; no mutation was dispatched.",
+            )
+        lease_id = str(approval.get("lease_id") or "").strip()
+        if (
+            approval.get("approved") is not True
+            or approval.get("source") != "server"
+            or approval.get("consumed") is not True
+            or not str(approval.get("consumed_at") or "").strip()
+            or not lease_id
+        ):
+            raise V1ExecutionError(
+                "E999",
+                "真实浏览器变更范围无效",
+                "mutation authorization lease is absent or unconsumed; no mutation was dispatched.",
+            )
+
+        authorization_context = approval.get("authorization_context")
+        stage_task_facts = approval.get("stage_task_facts")
+        if not isinstance(authorization_context, Mapping) or not isinstance(stage_task_facts, Mapping):
+            raise V1ExecutionError(
+                "E999",
+                "真实浏览器变更范围无效",
+                "mutation authorization context or exact stage facts are missing; no mutation was dispatched.",
+            )
+        context_facts = authorization_context.get("stage_task_facts")
+        if not isinstance(context_facts, Mapping) or dict(context_facts) != dict(stage_task_facts):
+            raise V1ExecutionError(
+                "E999",
+                "真实浏览器变更范围无效",
+                "mutation authorization stage facts have drifted; no mutation was dispatched.",
+            )
+        context_check = verify_authorization_context(authorization_context)
+        facts_check = verify_exact_stage_task_facts(
+            stage_task_facts,
+            expected_stage=expected_stage,
+        )
+        if context_check.get("ok") is not True or facts_check.get("ok") is not True:
+            reason_code = (
+                context_check.get("reason_code")
+                if context_check.get("ok") is not True
+                else facts_check.get("reason_code")
+            )
+            raise V1ExecutionError(
+                "E999",
+                "真实浏览器变更范围无效",
+                f"{reason_code}: mutation authorization contract is invalid; no mutation was dispatched.",
+            )
+        if (
+            isinstance(stage_task_facts.get("task_id"), bool)
+            or isinstance(stage_task_facts.get("job_id"), bool)
+            or stage_task_facts.get("task_id") != task_id
+            or stage_task_facts.get("job_id") != job_id
+        ):
+            raise V1ExecutionError(
+                "E999",
+                "真实浏览器变更范围无效",
+                "mutation authorization stage facts do not bind this task and job; no mutation was dispatched.",
+            )
+
+        try:
+            target_digest = mutation_target_hash(action_name, params)
+            authorization_digest = authorization_context_fingerprint(authorization_context)
+            stage_digest = str(stage_task_facts.get("fingerprint") or "")
+            scope_id = build_mutation_scope_id(
+                authorization_lease_id=lease_id,
+                task_id=task_id,
+                job_id=job_id,
+                state=state_name.value,
+                action=action_name,
+            )
+        except (MutationCommandContractError, TwoStageContractError) as exc:
+            reason_code = getattr(exc, "reason_code", "MUTATION_SCOPE_INVALID")
+            raise V1ExecutionError(
+                "E999",
+                "真实浏览器变更范围无效",
+                f"{reason_code}: mutation target or authorization fingerprint is invalid; no mutation was dispatched.",
+            ) from exc
+        return {
+            "mutation_scope_id": scope_id,
+            "target_hash": target_digest,
+            "authorization_fingerprint": authorization_digest,
+            "authorization_lease_id": lease_id,
+            "stage_task_facts_fingerprint": stage_digest,
+        }
+
+    def _cancel_browser_agent_command(self, command: BrowserAgentCommand | None) -> dict[str, Any] | None:
+        if command is None or self.browser_agent_runtime is None:
+            return None
+        cancel = getattr(self.browser_agent_runtime, "cancel_command", None)
+        if not callable(cancel):
+            return None
+        try:
+            result = cancel(command.command_id, command.runtime_id)
+        except Exception:
+            return None
+        return dict(result) if isinstance(result, Mapping) else None
+
+    def _expected_page_for_state(self, state_name: StateName) -> str:
+        expected_page = WORKFLOW_EXPECTED_PAGE_BY_STATE.get(state_name)
+        if not expected_page:
+            raise V1ExecutionError(
+                "E901",
+                "真实浏览器页面契约缺失",
+                f"步骤 {state_name.value} 没有受控 expected_page 映射；系统已停止任务，不会保存或发布。",
+            )
+        return expected_page
+
+    def _browser_agent_runtime_id(self) -> str:
+        runtime = self.browser_agent_runtime
+        runtime_id = str(getattr(runtime, "runtime_id", "") or "").strip()
+        if runtime_id:
+            return runtime_id
+        status_getter = getattr(runtime, "status", None)
+        if callable(status_getter):
+            try:
+                status = status_getter()
+            except Exception:
+                status = None
+            if isinstance(status, Mapping):
+                runtime_id = str(status.get("runtimeId") or "").strip()
+                if runtime_id:
+                    return runtime_id
+        return f"test-runtime-{id(runtime)}"
 
     def _invoke_workflow_worker(
         self,
@@ -1467,10 +1921,6 @@ class V1TaskRunner:
                 fallback="执行器结果格式不正确。",
             )
             raise V1ExecutionError(error_code, error_title, detail)
-        result.setdefault("worker_request_file", str(request_file))
-        result.setdefault("worker_result_file", str(result_file))
-        result.setdefault("worker_trace_file", str(trace_file))
-        result.setdefault("worker_exit_code", completed.returncode)
         return result
 
     def _workflow_trace_tail(self, trace_file: Path, limit: int = 5) -> str:
@@ -1513,18 +1963,251 @@ class V1TaskRunner:
         action_name: str,
         error_code: str,
         error_title: str,
-        result: Mapping[str, Any],
+        result: Any,
     ) -> dict[str, Any]:
+        if not isinstance(result, Mapping):
+            raise V1ExecutionError(
+                error_code,
+                error_title,
+                f"{action_name} result must be a mapping with ok=true",
+            )
         result_dict = dict(result)
-        if not result_dict.get("ok"):
-            raise V1ExecutionError(error_code, error_title, self._workflow_failure_detail(action_name, result_dict))
-        if state_name == StateName.CLAIM_PRODUCT and result_dict.get("evidence", {}).get("note_verified") is False:
-            raise V1ExecutionError(error_code, error_title, f"{action_name} note_verified false")
-        if state_name == StateName.SAVE_ONLY:
-            save_result = self._extract_save_result(result_dict)
-            if not save_result or save_result.get("ok") is not True:
-                raise V1ExecutionError(error_code, error_title, f"{action_name} save_result missing or false")
-        return result_dict
+        if result_dict.get("schema_version") != ACTION_RESULT_SCHEMA_VERSION:
+            legacy_detail = (
+                self._workflow_failure_detail(action_name, result_dict)
+                if result_dict.get("ok") is not True
+                else f"{action_name} result is missing {ACTION_RESULT_SCHEMA_VERSION}"
+            )
+            raise V1ExecutionError(
+                error_code,
+                error_title,
+                f"ACTION_RESULT_CONTRACT_MISSING: {legacy_detail}",
+            )
+        try:
+            envelope = validate_action_result_envelope(
+                result_dict,
+                expected_state=state_name.value,
+                expected_action=action_name,
+            )
+        except ActionResultContractError as exc:
+            raise V1ExecutionError(
+                error_code,
+                error_title,
+                f"{exc.reason_code}: {exc}",
+            ) from exc
+
+        if envelope["ok"] is not True:
+            recovery = envelope.get("recoverability") or {}
+            operator_detail = self._operator_claim_failure_detail(action_name)
+            observations = envelope.get("evidence", {}).get("observations", {})
+            save_failure = (
+                observations.get("save_result")
+                if isinstance(observations, Mapping)
+                and isinstance(observations.get("save_result"), Mapping)
+                else {}
+            )
+            save_failure_bits = [
+                save_failure.get("reason"),
+                save_failure.get("message"),
+            ]
+            network_failure = save_failure.get("network_save_result")
+            if isinstance(network_failure, Mapping):
+                save_failure_bits.extend(
+                    (network_failure.get("reason"), network_failure.get("message"))
+                )
+            network_events = save_failure.get("network_events")
+            if isinstance(network_events, list):
+                save_failure_bits.append(f"保存接口捕获 {len(network_events)} 条")
+            save_failure_detail = "; ".join(
+                str(item) for item in save_failure_bits if item
+            )
+            contract_detail = (
+                f"{action_name} save_result missing or false: {envelope.get('failure_code')}; "
+                f"{save_failure_detail or recovery.get('reason') or 'no recovery detail'}"
+                if action_name == "save_only"
+                else (
+                    f"{action_name} failed: {envelope.get('failure_code')}; "
+                    f"{recovery.get('reason') or 'no recovery detail'}"
+                )
+            )
+            raise V1ExecutionError(
+                error_code,
+                error_title,
+                operator_detail
+                or contract_detail,
+            )
+
+        normalized_refs: list[dict[str, Any]] = []
+        for evidence_ref in envelope["evidence"]["refs"]:
+            validated_ref = self._validate_action_evidence_ref(
+                {
+                    "path": evidence_ref.get("path"),
+                    "sha256": evidence_ref.get("sha256"),
+                    "size": evidence_ref.get("size"),
+                },
+                action_name=action_name,
+                error_code=error_code,
+                error_title=error_title,
+            )
+            normalized_refs.append(
+                {
+                    **validated_ref,
+                    "kind": evidence_ref["kind"],
+                    "captured_at": evidence_ref["captured_at"],
+                }
+            )
+        envelope["evidence"]["refs"] = normalized_refs
+        return self._workflow_action_compatibility_view(envelope)
+
+    @staticmethod
+    def _workflow_action_compatibility_view(envelope: Mapping[str, Any]) -> dict[str, Any]:
+        """Expose trusted legacy read paths only after the canonical envelope passes."""
+
+        canonical = dict(envelope)
+        observations = canonical["evidence"]["observations"]
+        before_values = canonical["before_values"]
+        after_values = canonical["after_values"]
+
+        def observation_value(key: str) -> Any:
+            if key in observations:
+                return observations.get(key)
+            for source_name in (
+                "verification_result",
+                "draft_action_result",
+                "editor_action_result",
+                "fill_result",
+                "save_result",
+                "unpublished_proof",
+                "navigation_result",
+                "wait_result",
+                "login_check",
+                "live_probe",
+            ):
+                source = observations.get(source_name)
+                if isinstance(source, Mapping) and key in source:
+                    return source.get(key)
+            return None
+
+        target_identity = before_values.get("target_identity")
+        target_identity = target_identity if isinstance(target_identity, Mapping) else {}
+        refs = canonical["evidence"]["refs"]
+        basic_ref = (
+            {
+                "path": refs[0]["path"],
+                "sha256": refs[0]["sha256"],
+                "size": refs[0]["size"],
+            }
+            if refs
+            else None
+        )
+        result = {
+            "ok": True,
+            "action": canonical["action"],
+            "stage": canonical["attempted_state"],
+            "page_title": observation_value("page_title"),
+            "page_url": canonical["page_identity"]["url"],
+            "screenshot_url": basic_ref["path"] if basic_ref else observation_value("screenshot_url"),
+            "product_query": before_values.get("product_query") or target_identity.get("product_query"),
+            "store_name": before_values.get("store_name") or target_identity.get("store_name"),
+            "save_result": observation_value("save_result"),
+            "fill_result": observation_value("fill_result"),
+            "unpublished_proof": observation_value("unpublished_proof"),
+            "published": after_values.get("published"),
+            "evidence": dict(observations),
+            "evidence_ref": basic_ref,
+            "dxm_reference_template_results": observation_value(
+                "dxm_reference_template_results"
+            ),
+            "action_result": canonical,
+        }
+        return result
+
+    def _validate_action_evidence_ref(
+        self,
+        value: Any,
+        *,
+        action_name: str,
+        error_code: str,
+        error_title: str,
+    ) -> dict[str, Any]:
+        validation = validate_evidence_ref(
+            value,
+            screenshot_root=Path(SCREENSHOT_DIR),
+        )
+        if validation.get("ok") is not True:
+            reason_code = str(validation.get("reason_code") or "EVIDENCE_REF_INVALID")
+            raise V1ExecutionError(
+                error_code,
+                error_title,
+                f"{action_name} evidence_ref invalid: {reason_code}",
+            )
+        return {
+            "path": validation["path"],
+            "sha256": validation["sha256"],
+            "size": validation["size"],
+        }
+
+    def _assert_save_and_unpublished_proofs_independent(
+        self,
+        prior_results: list[dict[str, Any]],
+        verification_result: Mapping[str, Any],
+    ) -> None:
+        save_envelope = next(
+            (
+                result.get("action_result")
+                for result in reversed(prior_results)
+                if isinstance(result.get("action_result"), Mapping)
+                and result["action_result"].get("attempted_state") == StateName.SAVE_ONLY.value
+            ),
+            None,
+        )
+        verification_envelope = verification_result.get("action_result")
+        if not isinstance(save_envelope, Mapping) or not isinstance(
+            verification_envelope, Mapping
+        ):
+            raise V1ExecutionError(
+                "E999",
+                "保存与未发布证据链不完整",
+                "SAVE_ONLY and VERIFY_NOT_PUBLISHED require canonical action results",
+            )
+        try:
+            validate_independent_save_verification_pair(
+                save_envelope,
+                verification_envelope,
+            )
+        except ActionResultContractError as exc:
+            raise V1ExecutionError(
+                "E999",
+                "未发布证据不是独立复核",
+                f"{exc.reason_code}: {exc}",
+            ) from exc
+
+    def _revalidate_terminal_action_evidence(
+        self,
+        workflow_results: list[dict[str, Any]],
+    ) -> None:
+        required_actions = {
+            "save_only": "只保存证据终态复核失败",
+            "verify_not_published": "未发布证据终态复核失败",
+        }
+        for action_name, error_title in required_actions.items():
+            matches = [
+                result
+                for result in workflow_results
+                if result.get("action") == action_name
+            ]
+            if len(matches) != 1:
+                raise V1ExecutionError(
+                    "E999",
+                    error_title,
+                    f"{action_name} requires exactly one validated evidence_ref",
+                )
+            matches[0]["evidence_ref"] = self._validate_action_evidence_ref(
+                matches[0].get("evidence_ref"),
+                action_name=action_name,
+                error_code="E999",
+                error_title=error_title,
+            )
 
     def _run_workflow_action(
         self,
@@ -1715,10 +2398,37 @@ class V1TaskRunner:
             )
         if state_name == StateName.SAVE_ONLY:
             self._assert_manual_approval_before_save(task)
+        command_context = {
+            "task_id": task.get("id"),
+            "job_id": job.get("id"),
+            "state": state_name.value,
+            "mode": str(task.get("mode") or ""),
+            "command_id": uuid.uuid4().hex,
+        }
+        mutation_setter = getattr(self.workflow_adapter, "set_mutation_authorizer", None)
+        mutation_clearer = getattr(self.workflow_adapter, "clear_mutation_authorizer", None)
+        evidence_setter = getattr(self.workflow_adapter, "set_execution_evidence_context", None)
+        evidence_clearer = getattr(self.workflow_adapter, "clear_execution_evidence_context", None)
+        if callable(mutation_setter):
+            mutation_setter(
+                lambda _context, operation: self._mutation_click_authorization_result(
+                    task,
+                    state_name,
+                    operation,
+                ),
+                command_context,
+            )
+        if callable(evidence_setter):
+            evidence_setter(command_context)
         try:
             result = call()
         except Exception as exc:
             raise V1ExecutionError(error_code, error_title, self._workflow_exception_detail(action_name, exc)) from exc
+        finally:
+            if callable(mutation_clearer):
+                mutation_clearer()
+            if callable(evidence_clearer):
+                evidence_clearer()
 
         return self._validate_workflow_action_result(
             state_name=state_name,
@@ -1727,6 +2437,36 @@ class V1TaskRunner:
             error_title=error_title,
             result=result,
         )
+
+    def _mutation_click_authorization_result(
+        self,
+        task: Mapping[str, Any],
+        state_name: StateName,
+        operation: Callable[[], Any],
+    ) -> dict[str, Any]:
+        if not callable(operation):
+            return {
+                "ok": False,
+                "executed": False,
+                "reason_code": "MUTATION_OPERATION_INVALID",
+            }
+        mode = str(task.get("mode") or "")
+        if state_name not in {StateName.CLAIM_TO_DRAFT_BOX, StateName.SAVE_ONLY}:
+            operation_result = operation()
+            return {
+                "ok": True,
+                "executed": True,
+                "operation_result": operation_result,
+                "reason_code": "NON_MUTATING_STATE",
+            }
+        self._assert_real_mutation_authorized(int(task["id"]), mode, state_name)
+        operation_result = operation()
+        return {
+            "ok": True,
+            "executed": True,
+            "operation_result": operation_result,
+            "reason_code": "OK",
+        }
 
     def _assert_manual_approval_before_save(self, task: Mapping[str, Any]) -> None:
         current_task = self.repo.get_task_private(int(task["id"])) if task.get("id") is not None else None
@@ -1861,6 +2601,8 @@ class V1TaskRunner:
         label = self._workflow_step_label(state_name)
         should_log_browser_action = state_name in WORKFLOW_BROWSER_ACTION_STATES
         runtime_setting = self._workflow_action_runtime_from_env()
+        if self._requires_persistent_browser_agent():
+            self._require_persistent_browser_agent_ready()
         if runtime_setting == "browser_agent" and self.browser_agent_runtime is None:
             raise V1ExecutionError(
                 "E901",
@@ -1878,6 +2620,44 @@ class V1TaskRunner:
             })
         loop = asyncio.get_running_loop()
         if use_browser_agent_runtime:
+            command_spec = self._workflow_action_worker_request(
+                task,
+                job,
+                state_name,
+                claim_mark,
+                defaults,
+            )
+            if command_spec is None:
+                return None
+            action_name, _error_code, _error_title, params = command_spec
+            if state_name == StateName.SAVE_ONLY:
+                self._assert_manual_approval_before_save(task)
+            browser_agent_command = self._build_browser_agent_command(
+                task,
+                job,
+                state_name,
+                action_name,
+                params,
+            )
+            reserve = getattr(self.browser_agent_runtime, "reserve_command", None)
+            if callable(reserve):
+                try:
+                    reservation = reserve(browser_agent_command)
+                except Exception as exc:
+                    raise V1ExecutionError(
+                        "E901",
+                        "真实浏览器命令预留失败",
+                        f"真实浏览器 runtime binding 或命令预留失败：{exc}；系统已停止任务，不会保存或发布。",
+                    ) from exc
+                if not isinstance(reservation, Mapping) or reservation.get("ok") is not True:
+                    reason = reservation.get("reasonCode") if isinstance(reservation, Mapping) else "invalid_reservation"
+                    raise V1ExecutionError(
+                        "E901",
+                        "真实浏览器命令预留失败",
+                        f"真实浏览器命令预留被拒绝：{reason}；系统已停止任务，不会保存或发布。",
+                    )
+            command_key = (task_id, job_id, state_name.value)
+            self._active_browser_agent_commands[command_key] = browser_agent_command
             future = loop.run_in_executor(
                 None,
                 self._run_workflow_action_browser_agent,
@@ -1886,6 +2666,7 @@ class V1TaskRunner:
                 state_name,
                 claim_mark,
                 defaults,
+                browser_agent_command,
             )
             wait_timeout = self.workflow_action_timeout_seconds + 10
         elif use_process_runtime:
@@ -1911,7 +2692,7 @@ class V1TaskRunner:
             )
             wait_timeout = self.workflow_action_timeout_seconds
         try:
-            result = await asyncio.wait_for(future, timeout=wait_timeout)
+            result = await asyncio.wait_for(asyncio.shield(future), timeout=wait_timeout)
             if should_log_browser_action and result:
                 self.repo.add_log(task_id, job_id, "success", f"真实浏览器动作完成：{label}", {
                     "state": state_name.value,
@@ -1922,7 +2703,11 @@ class V1TaskRunner:
                     "runtime": runtime_name,
                 })
             return result
+        except asyncio.CancelledError:
+            self._cancel_active_browser_agent_command(task_id, job_id, state_name)
+            raise
         except asyncio.TimeoutError as exc:
+            self._cancel_active_browser_agent_command(task_id, job_id, state_name)
             detail = self._workflow_action_timeout_detail(state_name)
             self.workflow_runtime_unhealthy_reason = detail
             if should_log_browser_action:
@@ -1946,6 +2731,64 @@ class V1TaskRunner:
                     "runtime": runtime_name,
                 })
             raise
+
+    def _cancel_active_browser_agent_command(
+        self,
+        task_id: int,
+        job_id: int,
+        state_name: StateName,
+    ) -> dict[str, Any] | None:
+        command = self._active_browser_agent_commands.get((task_id, job_id, state_name.value))
+        return self._cancel_browser_agent_command(command)
+
+    def _require_persistent_browser_agent_ready(self) -> dict[str, Any]:
+        runtime = self.browser_agent_runtime
+        if runtime is None:
+            raise V1ExecutionError(
+                "E901",
+                "持久在线真实浏览器未配置",
+                "真实店小秘流程必须使用持久在线真实浏览器，但当前运行时缺失；系统已停止任务，不会保存或发布。",
+            )
+        status_getter = getattr(runtime, "status", None)
+        if not callable(status_getter):
+            raise V1ExecutionError(
+                "E901",
+                "持久在线真实浏览器状态不可用",
+                "无法读取持久在线真实浏览器的健康状态；系统已停止任务，不会保存或发布。",
+            )
+        try:
+            status = status_getter()
+        except Exception as exc:
+            raise V1ExecutionError(
+                "E901",
+                "持久在线真实浏览器状态不可用",
+                f"读取持久在线真实浏览器状态失败：{exc}；系统已停止任务，不会保存或发布。",
+            ) from exc
+        if not isinstance(status, Mapping):
+            raise V1ExecutionError(
+                "E901",
+                "持久在线真实浏览器状态无效",
+                "持久在线真实浏览器返回了无效状态；系统已停止任务，不会保存或发布。",
+            )
+        status_runtime_id = str(status.get("runtimeId") or "").strip()
+        bound_runtime_id = str(getattr(runtime, "runtime_id", "") or "").strip()
+        if not status_runtime_id or not bound_runtime_id or status_runtime_id != bound_runtime_id:
+            raise V1ExecutionError(
+                "E901",
+                "持久在线真实浏览器绑定失效",
+                "持久在线真实浏览器的 runtime binding 不匹配；系统已停止任务，不会保存或发布。",
+            )
+        if (
+            status.get("healthy") is not True
+            or status.get("active") is True
+            or str(status.get("status") or "") != "idle"
+        ):
+            raise V1ExecutionError(
+                "E901",
+                "持久在线真实浏览器不健康",
+                "持久在线真实浏览器当前不健康或仍有命令未收口；系统已停止任务，不会保存或发布。",
+            )
+        return dict(status)
 
     def _workflow_action_timeout_detail(self, state_name: StateName) -> str:
         step_label = self._workflow_step_label(state_name)
@@ -2144,6 +2987,26 @@ class V1TaskRunner:
     def _store_name(self, task: dict[str, Any]) -> str:
         return task.get("payload", {}).get("store_name") or "Dang Kang"
 
+    def _authoritative_store(self, task: Mapping[str, Any]) -> tuple[int, str]:
+        try:
+            store_id = int(task.get("store_id"))
+        except (TypeError, ValueError) as exc:
+            raise V1ExecutionError("E202", "任务店铺绑定无效", "task store_id is invalid") from exc
+        if store_id <= 0:
+            raise V1ExecutionError("E202", "任务店铺绑定无效", "task store_id is invalid")
+        store = next(
+            (
+                item
+                for item in self.repo.list_stores()
+                if not isinstance(item.get("id"), bool) and int(item.get("id") or 0) == store_id
+            ),
+            None,
+        )
+        store_name = str((store or {}).get("name") or "").strip()
+        if not store_name:
+            raise V1ExecutionError("E202", "任务店铺不存在", "task store_id has no authoritative store row")
+        return store_id, store_name
+
     def _execution_defaults(
         self,
         task: Mapping[str, Any],
@@ -2262,6 +3125,7 @@ class V1TaskRunner:
     def _record_claimed_product_from_acquisition(
         self,
         task: Mapping[str, Any],
+        job: Mapping[str, Any],
         workflow_result: Mapping[str, Any],
         claim_mark: str,
     ) -> dict[str, Any]:
@@ -2269,6 +3133,17 @@ class V1TaskRunner:
         claimed = evidence.get("claimed_product") if isinstance(evidence.get("claimed_product"), Mapping) else None
         if not claimed:
             raise V1ExecutionError("E202", "待认领商品缺少真实商品证据", "draft-box verification did not return claimed_product evidence")
+        draft_box_match = (
+            evidence.get("draft_box_match")
+            if isinstance(evidence.get("draft_box_match"), Mapping)
+            else None
+        )
+        if not draft_box_match:
+            raise V1ExecutionError(
+                "E202",
+                "待认领商品缺少真实商品箱匹配证据",
+                "VERIFY_DRAFT_BOX_CLAIM did not return immutable draft_box_match evidence",
+            )
         payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
         title = (
             claimed.get("title")
@@ -2278,27 +3153,185 @@ class V1TaskRunner:
             or "店小秘已有待认领商品"
         )
         category_name = claimed.get("category_name") or payload.get("category_name") or "未分类"
-        source_url = str(claimed.get("source_url") or "").strip()
-        if not source_url:
+        row_text = str(draft_box_match.get("row_text") or "").strip()
+        source_urls = [
+            str(value).strip()
+            for value in draft_box_match.get("source_urls") or ()
+            if isinstance(value, str) and value.strip()
+        ]
+        if not row_text or not source_urls:
             raise V1ExecutionError(
                 "E202",
                 "待认领商品缺少商品箱身份校验证据",
-                "商品箱验证没有返回可唯一确认本次商品的身份信息。",
+                "商品箱真实行没有返回行文本和来源链接。",
             )
+        try:
+            target_identity = canonical_claim_target_identity(
+                payload.get("source_url"),
+                payload.get("source_urls") or (),
+                keyword=payload.get("keyword"),
+                category_name=payload.get("category_name"),
+            )
+            source_identity = canonical_source_identity(source_urls[0], source_urls)
+        except TwoStageContractError as exc:
+            raise V1ExecutionError(
+                "E202",
+                "商品箱来源证据无效",
+                f"{exc.reason_code}: draft-box source evidence is invalid",
+            ) from exc
+        claimed_source_url = str(claimed.get("source_url") or "").strip()
+        if claimed_source_url:
+            try:
+                claimed_source_identity = canonical_source_identity(claimed_source_url)
+            except TwoStageContractError as exc:
+                raise V1ExecutionError("E202", "商品箱来源证据无效", exc.reason_code) from exc
+            if claimed_source_identity["primary_url"] not in source_identity["urls"]:
+                raise V1ExecutionError(
+                    "E202",
+                    "商品箱来源证据互相矛盾",
+                    "claimed_product source URL is outside draft_box_match source URLs",
+                )
+        authoritative_store_id, expected_store_name = self._authoritative_store(task)
+        store_observation = (
+            draft_box_match.get("store_observation")
+            if isinstance(draft_box_match.get("store_observation"), Mapping)
+            else None
+        )
+        observed_store_name = str((store_observation or {}).get("observed_store_name") or "").strip()
+        selection_evidence = (store_observation or {}).get("selection_evidence")
+        store_cell_evidence = (store_observation or {}).get("draft_box_cell_evidence")
+        top_level_store_evidence = draft_box_match.get("store_evidence")
+        selected_store_names_value = (store_observation or {}).get("selected_store_names")
+        selected_store_names: list[str] = []
+        selected_store_keys: set[str] = set()
+        selected_store_names_valid = isinstance(selected_store_names_value, list)
+        if isinstance(selected_store_names_value, list):
+            for raw_name in selected_store_names_value:
+                if not isinstance(raw_name, str) or not raw_name.strip():
+                    selected_store_names_valid = False
+                    continue
+                selected_name = " ".join(raw_name.split())
+                if selected_name and selected_name not in selected_store_keys:
+                    selected_store_keys.add(selected_name)
+                    selected_store_names.append(selected_name)
+        if (
+            store_observation is None
+            or store_observation.get("selected") is not True
+            or not selected_store_names_valid
+            or selected_store_names != [expected_store_name]
+            or not isinstance(selection_evidence, Mapping)
+            or not selection_evidence
+            or not isinstance(store_cell_evidence, Mapping)
+            or not isinstance(top_level_store_evidence, Mapping)
+            or dict(top_level_store_evidence) != dict(store_cell_evidence)
+            or not expected_store_name
+            or observed_store_name != expected_store_name
+            or store_cell_evidence.get("source") != "structured_store_cell"
+            or " ".join(str(store_cell_evidence.get("store_name") or "").split()) != expected_store_name
+            or not _observed_text_contains_exact_boundary(
+                str(store_cell_evidence.get("cell_text") or ""),
+                expected_store_name,
+            )
+        ):
+            raise V1ExecutionError(
+                "E202",
+                "商品箱真实行没有匹配授权店铺",
+                "draft_box_match does not contain observed store evidence for the task store",
+            )
+        semantic_matched_by = str(draft_box_match.get("matched_by") or "").strip()
+        semantic_matched_value = " ".join(str(draft_box_match.get("matched_value") or "").split())
+        authorized_source = target_identity.get("source_identity")
+        if authorized_source is not None:
+            if semantic_matched_by != "source_url":
+                raise V1ExecutionError(
+                    "E202",
+                    "商品箱真实行没有按授权来源命中",
+                    "URL-authorized claim requires source_url draft_box_match evidence",
+                )
+            if (
+                source_identity["primary_url"] not in set(authorized_source["urls"])
+                or not set(source_identity["urls"]).issubset(set(authorized_source["urls"]))
+                or semantic_matched_value != source_identity["primary_url"]
+            ):
+                raise V1ExecutionError(
+                    "E202",
+                    "商品箱真实行来源与授权来源不一致",
+                    "observed draft-box source identity is outside the Stage A target",
+                )
+            matched_by = ["source_url"]
+            match_evidence = {"source_url": source_identity["primary_url"]}
+        else:
+            observed_texts = (
+                _normalized_observed_text(title),
+                _normalized_observed_text(row_text),
+            )
+            allowed_hints = [
+                key
+                for key in ("keyword", "category_name")
+                if target_identity.get(key) is not None
+            ]
+            matched_by = [
+                key
+                for key in allowed_hints
+                if any(
+                    _observed_text_contains_hint(observed_text, target_identity[key])
+                    for observed_text in observed_texts
+                )
+            ]
+            required_hint = "keyword" if target_identity.get("keyword") is not None else "category_name"
+            if (
+                required_hint not in matched_by
+                or not _observed_text_contains_hint(
+                    _normalized_observed_text(row_text),
+                    target_identity[required_hint],
+                )
+                or semantic_matched_by not in matched_by
+                or semantic_matched_value != target_identity.get(semantic_matched_by)
+            ):
+                raise V1ExecutionError(
+                    "E202",
+                    "商品箱真实行没有命中授权商品提示",
+                    "draft_box_match hint evidence was not derived from the observed row",
+                )
+            match_evidence = {key: target_identity[key] for key in matched_by}
         claim_target = evidence.get("claim_target") if isinstance(evidence.get("claim_target"), Mapping) else {}
         search_result = evidence.get("search_result") if isinstance(evidence.get("search_result"), Mapping) else {}
-        source_urls = self._unique_source_urls(
-            source_url,
-            claimed.get("source_urls"),
-            evidence.get("target_source_urls"),
-            claim_target.get("sourceUrls") if isinstance(claim_target, Mapping) else None,
-        )
+        evidence_ref = evidence.get("evidence_ref")
+        if not isinstance(evidence_ref, Mapping) or set(evidence_ref) != {"path", "sha256", "size"}:
+            raise V1ExecutionError(
+                "E202",
+                "商品箱证据文件描述缺失",
+                "VERIFY_DRAFT_BOX_CLAIM must return exact path, sha256, and size evidence",
+            )
+        draft_box_observation = {
+            "schema": "dxm.draft_box.observation.v1",
+            "verification_state": StateName.VERIFY_DRAFT_BOX_CLAIM.value,
+            "action": "verify_draft_box_claim",
+            "draft_box_verified": True,
+            "page_url": workflow_result.get("page_url"),
+            "authorized_target_identity": target_identity,
+            "authorized_target_fingerprint": target_identity["fingerprint"],
+            "observed_source_identity": source_identity,
+            "observed_store_identity": {
+                "store_id": authoritative_store_id,
+                "store_name": observed_store_name,
+                "selected": True,
+                "selected_store_names": list(selected_store_names),
+                "selection_evidence": dict(selection_evidence),
+                "draft_box_cell_evidence": dict(store_cell_evidence),
+            },
+            "matched_by": matched_by,
+            "match_evidence": match_evidence,
+            "observed_product_identity": str(title),
+            "observed_row_identity": row_text,
+            "evidence_ref": dict(evidence_ref),
+        }
         product_payload = {
             "source": "dxm_data_acquisition",
-            "store_id": task.get("store_id") or payload.get("store_id"),
-            "store_name": self._store_name(dict(task)),
-            "source_url": source_url,
-            "source_urls": source_urls,
+            "store_id": authoritative_store_id,
+            "store_name": expected_store_name,
+            "source_url": source_identity["primary_url"],
+            "source_urls": list(source_identity["urls"]),
             "source_title": title,
             "claim_mark": claim_mark,
             "claim_task_id": task.get("id"),
@@ -2306,23 +3339,44 @@ class V1TaskRunner:
             "draft_box_url": workflow_result.get("page_url"),
             "data_acquisition_row_text": claim_target.get("rowText") if isinstance(claim_target, Mapping) else None,
             "data_acquisition_match": claim_target.get("matchedBy") if isinstance(claim_target, Mapping) else None,
-            "draft_box_row_text": claimed.get("row_text") or evidence.get("target_row_text"),
+            "draft_box_row_text": row_text,
+            "draft_box_match": dict(draft_box_match),
             "acquisition_search": dict(search_result) if search_result else None,
             "template_id": payload.get("template_id"),
         }
-        product = self.repo.create_product({
-            "title": str(title),
-            "source": "dxm_data_acquisition",
-            "status": "claimed_to_draft",
-            "category_name": str(category_name),
-            "price": 0,
-            "currency": "USD",
-            "sku_count": 1,
-            "image_count": 0,
-            "payload": {key: value for key, value in product_payload.items() if value is not None},
-        })
-        self.repo.mark_acquisition_claim_completed(int(task["id"]), product)
-        return product
+        try:
+            result = self.repo.create_claimed_product_and_complete_acquisition(
+                int(task["id"]),
+                {
+                    "title": str(title),
+                    "source": "dxm_data_acquisition",
+                    "status": "claimed_to_draft",
+                    "category_name": str(category_name),
+                    "price": 0,
+                    "currency": "USD",
+                    "sku_count": 1,
+                    "image_count": 0,
+                    "payload": {key: value for key, value in product_payload.items() if value is not None},
+                },
+                draft_box_observation=draft_box_observation,
+            )
+        except TwoStageContractError as exc:
+            raise V1ExecutionError(
+                "E202",
+                "商品箱店铺证据合同无效",
+                f"{exc.reason_code}: draft-box proof was rejected",
+            ) from exc
+        if not result.applied and not result.idempotent:
+            if result.conflict_code == "CLAIM_TERMINAL_STATE_CONFLICT":
+                raise _ClaimTerminalTransitionRejected(result.conflict_code, result.reason)
+            raise V1ExecutionError(
+                result.conflict_code or "E202",
+                "认领状态转换被拒绝",
+                result.reason or "claim completion was rejected",
+            )
+        if result.product is None:
+            raise V1ExecutionError("E202", "商品箱认领结果未落库", "claim completion returned no claimed product")
+        return result.product
 
     def _source_title(self, product_id: int | None) -> str:
         if product_id is None:
@@ -2385,6 +3439,20 @@ class V1TaskRunner:
     def _claim_mark(self, task: dict[str, Any]) -> str:
         base_mark = task.get("payload", {}).get("claim_mark", "AI认领")
         return f"{base_mark}-{task['id']}"
+
+
+class _ClaimTerminalTransitionRejected(Exception):
+    def __init__(self, conflict_code: str | None, reason: str | None) -> None:
+        super().__init__(reason or conflict_code or "claim terminal transition rejected")
+        self.conflict_code = conflict_code
+        self.reason = reason
+
+
+class _JobTerminalTransitionRejected(Exception):
+    def __init__(self, conflict_code: str | None, reason: str | None) -> None:
+        super().__init__(reason or conflict_code or "job terminal transition rejected")
+        self.conflict_code = conflict_code
+        self.reason = reason
 
 
 class V1ExecutionError(Exception):

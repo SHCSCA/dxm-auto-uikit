@@ -179,6 +179,42 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_ownership_locks_token
                 ON ownership_locks (lock_token);
+
+            CREATE TABLE IF NOT EXISTS mutation_dispatch_ledger (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mutation_id TEXT NOT NULL UNIQUE,
+                mutation_scope_id TEXT NOT NULL,
+                mutation_action TEXT NOT NULL,
+                ordinal INTEGER NOT NULL,
+                command_state TEXT NOT NULL,
+                command_action TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                job_id TEXT NOT NULL,
+                authorization_lease_id TEXT NOT NULL,
+                stage_task_facts_fingerprint TEXT NOT NULL,
+                target_hash TEXT NOT NULL,
+                authorization_fingerprint TEXT NOT NULL,
+                browser_session_id TEXT,
+                page_url TEXT,
+                page_kind TEXT,
+                status TEXT NOT NULL,
+                command_id TEXT,
+                runtime_id TEXT,
+                outcome_json TEXT,
+                reserved_at TEXT NOT NULL,
+                dispatch_started_at TEXT,
+                dispatched_at TEXT,
+                unknown_at TEXT,
+                updated_at TEXT NOT NULL,
+                UNIQUE (mutation_scope_id, mutation_action),
+                UNIQUE (mutation_scope_id, ordinal)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_mutation_dispatch_ledger_status
+                ON mutation_dispatch_ledger (status, updated_at);
+
+            CREATE INDEX IF NOT EXISTS idx_mutation_dispatch_ledger_scope
+                ON mutation_dispatch_ledger (mutation_scope_id, ordinal);
             """
         )
         _ensure_columns(

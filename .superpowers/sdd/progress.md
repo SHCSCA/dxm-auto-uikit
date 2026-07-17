@@ -4,12 +4,18 @@ Branch start: `99ea3e044ea550a9e529794f2c35dd2e89b6725f`
 Working branch: `fix/dxm-two-stage-runtime-truth`
 Pre-work tracked-change backup: `refs/backup/pre-dxm-runtime-truth-20260713-113752` (`9b0ac7d005bbb2395cd5a3b240359a49fb932688`)
 
-- Task 1: in progress
-- Task 2: pending
+Current truth (2026-07-17): production delivery remains `BLOCKED`. The working branch contains the controlled Stage A `claim_only` + Stage B `single_save` source surface and is still hardening Browser Agent lifecycle, mutation dispatch durability, live identity rechecks, and fail-closed recovery. No same-HEAD portable/live two-stage production proof has been recorded for this branch.
+
+Git authority (2026-07-17): the user authorized documentation updates, branch merge, and push. This removes the remote-operation authority blocker only; it does not waive Task 2-6 verification, clean-source, package-identity, L2/L3, two-stage, state-consistency, or mutation-ledger gates.
+
+- Task 1: complete
+- Task 2: in progress
 - Task 3: pending
 - Task 4: pending
 - Task 5: pending
 - Task 6: pending
+
+Documentation reconciliation: complete on 2026-07-17 for current-truth routing and historical banners. This entry does not assert final code tests, merge, push, packaging, or live DXM acceptance.
 
 Minor review findings: none recorded.
 

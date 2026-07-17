@@ -1,25 +1,26 @@
 # dxm-auto-uikit
 
-DXM 半托管自动化工作台，面向真实店小秘账号、真实浏览器和受控只保存流程。
+DXM 半托管自动化工作台：用真实可见浏览器处理店小秘已有商品，受控完成“待认领商品入箱 → 商品箱编辑 → 只保存不发布”。
 
-当前用户路径是：启动工作台、登录真实店小秘、先在店小秘已有待认领商品列表中把目标商品放进商品箱，再从商品箱进入编辑页，按模板补齐字段并在真实浏览器中完成“只保存不发布”的保存核验。它不会新建商品、不会填写商品链接，不是本地演示页，也不是安全诊断工具。
+## 当前状态（2026-07-17）
 
-普通用户主流程：从“首页”查看下一步，到“账号与浏览器”打开真实店小秘浏览器并登录，进入“待认领商品”创建任务，进入“模板中心”按店小秘编辑页分区确认店铺默认和类目默认模板，再到“商品箱编辑保存”选择已进入商品箱的商品，最后在“浏览器现场”中观察真实浏览器自动只保存。
+当前开发分支正在加固两段式运行时真相链：Stage A `claim_only` 只处理一个经过绑定的待认领商品，Stage B `single_save` 只处理 Stage A 产生并验证过的同一个商品。两阶段使用各自的服务端审批租约、确认文本、任务事实和浏览器动作证据。`batch_save`、批量、无人值守、发布、保存并发布及移入待发布仍保持关闭。
 
-当前可用范围：
-- 已验证受控单商品只保存；最终动作只保存，不发布。
-- 批量保存、无人值守和任何发布动作仍保持关闭。
-- 每次执行前都以工作台当前状态为准：真实登录、配置完整、真实只读检查通过、人工确认后才启动保存。
+**当前生产交付状态为 `BLOCKED`。** 当前分支没有“同一干净 Git HEAD 构建 portable → 启动该 portable → 新鲜 L2 → 同商品 Stage A/Stage B 真实闭环 → 保存成功且 `published=false`”的完整证据。源码测试、历史金丝雀或旧 EXE 都不能替代这条证据链。
+
+2026-07-04 的 portable 与 `READY` 记录是历史构建快照，不是当前分支的放行结论。当前事实入口见 [文档导航](docs/README.md) 和 [2026-07-17 状态说明](docs/product/DXM-Agent-Console-当前开发状态与后续计划-20260717.md)。
+
+真实用户主路径保持不变：登录真实店小秘；对已有待认领商品执行 Stage A；确认既有模板；对同一已入箱商品执行 Stage B；最后核对保存回包、证据路径和独立的未发布证明。任一前置事实缺失、互相矛盾、身份漂移、审批失效、浏览器页面不匹配或动作结果不确定，都必须失败关闭并转人工复核。
 
 ## 真实用户快速开始
 
-> 当前用户可执行范围：受控“单商品只保存”。最终动作只保存，不发布；内部任务模式为 `single_save`，普通操作时只看页面上的中文按钮。
+> 本节保留源码启动方式和 2026-07-04 历史包路径，便于追溯。旧包不代表 2026-07-17 当前分支已放行；真实写入继续保持 `BLOCKED`，直到同 HEAD portable 与两段式现场验收全部通过。
 
 ### 推荐入口：DXM Agent Console 桌面版
 
 交付用户优先使用桌面版，不需要分别打开后端和前端两个控制台窗口。
 
-当前给用户的免安装 EXE：
+2026-07-04 历史验收使用的免安装 EXE：
 
 ```text
 D:\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console-Portable-0.1.0.exe
@@ -32,7 +33,7 @@ outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
 87FF78089190226C2E98FAA1B4BA60DA25E25C320901B9FD7C0A6207F9C140F8
 ```
 
-本轮桌面包验收记录：`docs/product/最终交付验收记录-20260623-桌面包.md`。当前 2026-07-04 05:47（Asia/Shanghai）最新验收已通过；L2 双目标真实只读检查 run-id `l2-real-20260704T050647Z` 已通过，受控单商品只保存门禁为 `READY`。这只证明当前分支免安装包可启动，并包含“待认领商品 -> 商品箱编辑保存”的主路径桥接、结果页两段式生产交付状态、真实浏览器 HUD 保活、测试商品阻断、模板中心默认配置主路径优化，以及新版两段式菜单与操作引导；真实店小秘“两段式端到端验收”仍需现场跑通后再标记最终生产交付。
+历史桌面包验收记录：`docs/product/最终交付验收记录-20260623-桌面包.md`。其中 `READY` 只属于记录内的旧 commit、旧包和受控单商品保存范围；它没有证明当前源码或完整两段式生产交付。
 
 仓库内也保留同源构建产物：
 
@@ -122,12 +123,12 @@ scripts\start-mvp.bat
 - Playwright 主引擎骨架
 - POP 保存待发布链路（真实单商品只保存已具备受控证据；批量、无人值守和发布仍不放行）
 
-### 当前是“受控单商品只保存版”
+### 当前源码是“受控两段式加固版”
 说明：
 - 右侧实时执行区已经能看到任务状态、步骤流、日志和证据
 - 工作台会显示真实只读检查、人工确认、证据等级和真实保存阻断原因
 - 前置条件不满足时，真实认领、单商品只保存和批量保存会被后端与前端双重阻断
-- 当前已验证的真实写入范围仅为受控单商品只保存；批量、无人值守和发布仍保持阻断
+- Stage A `claim_only` 与 Stage B `single_save` 已进入源码级契约加固；这不等同于当前生产放行
 - 历史可用状态不是永久授权；每次真实启动前都必须看当前工作台状态，源码包交付前必须重新运行最新 `final-delivery-check`
 
 ---
@@ -147,7 +148,7 @@ scripts\start-mvp.bat
 
 推荐给真实用户的入口是桌面版。
 
-当前给用户的免安装 EXE：
+2026-07-04 历史验收使用的免安装 EXE：
 
 ```bat
 D:\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console-Portable-0.1.0.exe
@@ -263,13 +264,13 @@ scripts\final-delivery-check.bat
 
 它会串行运行 Windows 启动前检查、后端全量测试、前端生产构建、L1 selector replay、`git diff --check`、浏览器 QA，并输出 `outputs/final-delivery-check/final-delivery-check.md` / `.json`。最终自检模式下，浏览器 QA 截图和 sidecar 文件位于 `outputs\final-delivery-check\browser-checks\`。浏览器 QA 会临时启动隔离的当前源码后端和前端预览服务，避免误测 8000/5173 上的旧进程；检查模式可能安装前端依赖，但不会访问店小秘、不会执行真实保存。报告顶部会分别显示“自动化工作台自检结果”和“真实 DXM 写入放行状态”。
 
-当前源码包验收成功标准：`Local workbench check: PASS`、`Browser QA: PASS`、`Final report center QA: PASS`、`Source package check: PASS`，并按 L2/L3 门禁计算 `Real DXM write readiness`。2026-07-04 05:47（Asia/Shanghai）主干 clean worktree 最终检查已通过本地工作台、后端 `997 passed`、前端生产构建、桌面构建、packaged smoke、浏览器工作台 QA 和最终报告中心 QA；报告目录为 `outputs\final-delivery-check-clean-ready`。当次真实写入状态为 `Real DXM write readiness: READY`，范围仅为 `controlled_single_save_only`；L2 双目标真实只读检查 run-id 为 `l2-real-20260704T050647Z`，两个目标写入、拦截、禁词和 WebSocket 计数均为 0。`Production delivery ready: False`，因为当前两段式真实端到端仍缺少“待认领商品 -> 商品箱 -> 编辑只保存 -> 保存成功 -> 未发布证明”的现场闭环验收。
+2026-07-04 的 clean-worktree 检查、测试计数、L2 run-id 和 `READY` 结论只属于历史验收记录。2026-07-17 当前分支必须重新产生自己的测试、构建、portable smoke、L2 和两段式现场证据；在此之前，预期状态是 `BLOCKED` / `pending_live_dxm_validation`。
 
 自动化或管理摘要读取 `final-delivery-check.json` 时，不能只读取 `ok`。当前 `ok: true` 只代表 `okScope` 所声明的范围通过；必须同时读取 `realDxmMutationAllowed`、`realDxmMutationScope` 与当次验收记录。若 `okScope` 为 `local_workbench_and_controlled_single_save_ready`、`realDxmMutationAllowed` 为 `true` 且 `realDxmMutationScope` 为 `controlled_single_save_only`，结论只支持保存阶段可按门禁启动；两段式生产交付还必须额外具备已有待认领商品进入商品箱的真实验收记录。
 
 启动工作台后，结果与问题页会显示交付自检摘要和报告路径，方便验收人直接确认自动化工作台 PASS、真实写入门禁状态与源码包状态。
 
-开发自检入口只在 `?dev=1` 或显式启用 `VITE_DXM_ENABLE_DEMO=1` 时可用；它只创建本地 `dry_run` 自检任务，不触达 DXM，不能作为真实交付验收依据。真实用户交付路径是两段式：先完成待认领入箱，再执行商品箱编辑保存；保存阶段只在当前 L2/L3 READY、人工批准令牌和金丝雀证据链约束下放行。`batch_save`、批量无人值守和发布仍保持阻断。
+开发自检入口只在 `?dev=1` 或显式启用 `VITE_DXM_ENABLE_DEMO=1` 时可用；它只创建本地 `dry_run` 自检任务，不触达 DXM，不能作为真实交付验收依据。真实用户交付路径是两段式：先完成待认领入箱，再执行同商品编辑保存；每个阶段只有在当次上游门禁、专属人工审批租约、实时身份复核和 mutation ledger 共同允许时才可执行。`batch_save`、批量无人值守和发布仍保持阻断。
 
 发布源码包前可加 clean worktree 门禁：
 
@@ -300,11 +301,11 @@ scripts\final-delivery-check.bat --help
 ## 下一步重点
 
 1. 保持 `config/l2_readonly_allowlist.json` 的最小只读范围；继续禁止写方法、WebSocket、EventSource 和 action 端点。
-2. 每次源码发布包前重新运行 `scripts\final-delivery-check.bat -RequireCleanWorktree -CheckPortableDesktop -ExpectedRealDxmWriteReadiness READY -ExpectedRealDxmTwoStageEndToEnd pending_live_dxm_validation`；如果当次没有新鲜 L2/L3 门禁，则必须改用 `BLOCKED`，并核对报告 Git HEAD 与交付源码一致。
+2. 当前源码发布候选必须先运行 `scripts\final-delivery-check.bat -RequireCleanWorktree -CheckPortableDesktop -ExpectedRealDxmWriteReadiness BLOCKED -ExpectedRealDxmTwoStageEndToEnd pending_live_dxm_validation`，并核对报告 Git HEAD 与交付源码一致。只有同 HEAD 真实两段式闭环完成后，才能同时改用 `READY` 与 `passed`。
 3. 当前主路径包含“待认领入箱 -> 商品箱编辑保存”；若要扩大到批量保存或其他真实写入范围，必须为对应范围重新建立真实只读检查、人工批准和保存/回滚证据，不复用单商品只保存结论。
 4. 批量、无人值守和发布必须单独设计门禁、人工批准和回滚策略。
 
-免安装版快速使用说明见 `docs/product/免安装版快速使用说明-20260615.md`。当前本地交付记录见 `docs/product/最终交付验收记录-20260622.md`；2026-06-18 与 2026-06-17 记录保留为历史验收记录。当前源码有新改动或 L2/L3 证据过期时，交付前必须重新跑 clean worktree 验收或新鲜门禁。真实写入放行范围仅为受控 `single_save`；待认领入箱是当前两段式主流程的第一段，批量、无人值守、发布以及扩大保存范围仍需单独证据链。
+免安装版快速使用说明与 2026-06-22/2026-07-04 验收记录均为历史资料。当前源码有新改动或 L2/L3 证据过期时，交付前必须重新跑 clean worktree、同 HEAD portable 和新鲜门禁；不得复用旧 `single_save` 结论扩大解释。
 
 ---
 
@@ -354,4 +355,4 @@ scripts/
 
 ## 一句话状态
 
-**dxm-auto-uikit 已经进入“DXM 半托管自动化工作台 + 受控单商品只保存”阶段；批量、无人值守和发布仍保持单独门禁，不随当前单商品只保存证据自动放行。**
+**当前源码正在完成受控两段式 `claim_only` + `single_save` 的运行时加固；在同 HEAD portable 和真实两段式证据齐备前，生产交付保持 `BLOCKED`。**

@@ -4,6 +4,10 @@
 
 L2 只读 probe 只用于验证登录态、目标页面可达性、DOM/按钮文本和截图证据。它不得写备注、不得认领、不得保存、不得发布。
 
+L2 是 Stage A `claim_only` 与 Stage B `single_save` 的共同上游门禁，但**永远不是 mutation 授权**。L2 通过后，两阶段仍需各自的服务端审批租约、实时 browser/session/page/target 复核、持久化 mutation ledger、状态一致性和动作结果证据。L2 候选只可作为目标提示，不能代替精确商品绑定。
+
+2026-07-17 当前分支尚无同 HEAD portable 与真实两段式现场闭环，生产状态保持 `BLOCKED`；历史 L2 run-id 不能解除该阻断。
+
 ## 运行命令
 
 真实店小秘 L2 只读探测仍会打开真实页面。只有在用户明确批准“执行 L2 真实只读探测”后才运行以下命令；它不会点击、输入、认领、备注、保存或发布。
@@ -37,6 +41,7 @@ app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target 
 - `safety.ok == true`
 - 真实店小秘目标必须加载 cookie，且不得疑似停留在登录页
 - `data_acquisition` 与 `draft_box` 必须共享同一个 `evidence_binding.run_id`、`script_sha256`、`git_head` 和 `session_fingerprint_sha256`
+- 用于交付的 L2 `git_head` 必须与运行中的 backend identity、portable build identity 和最终验收 HEAD 一致；源码分支更新后旧 L2 自动降级为历史证据
 - 输出 JSON、Markdown、截图和 DOM 路径
 - 截图记录 `sha256`
 - DOM 记录 `sha256`
@@ -57,6 +62,7 @@ app\backend\.venv\Scripts\python.exe tools\probes\l2_readonly_probe.py --target 
 - 真实 `dianxiaomi.com` 目标不忽略 HTTPS 证书错误；只有本地/mock URL 才允许 `ignore_https_errors`
 - BrowserContext 禁用 Service Worker，避免请求绕过路由门禁
 - 不把 `tools/probes/**/tmp_*` 历史脚本作为 L2 门禁入口
+- 不因 L2 `passed` 自动创建、批准、重试或恢复 Stage A/Stage B mutation；ledger 中存在 `UNKNOWN`/未对账动作时继续阻断
 
 ## 输出位置
 
@@ -94,6 +100,8 @@ JSON/Markdown 的 `diagnostics` 包含：
 - `l2_recheck_required=true`
 
 只有当评审记录完成、代码或配置实现了显式最小 allowlist，并且重新运行真实 L2 双目标通过后，才允许进入 L3 判断。任何缺少评审人、理由、范围或复跑证据的候选都必须继续阻断。
+
+进入 L3 判断也不等于进入生产 READY：必须继续通过 `dxm_two_stage_acceptance.v1`、`dxm_state_consistency.v1`、mutation ledger 对账、同 HEAD portable 和同商品真实 Stage A/B 验收。
 
 ## 证据等级
 

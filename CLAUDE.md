@@ -6,11 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 这是什么
 
-**DXM 半托管自动化工作台**:用真实浏览器驱动真实「店小秘」(dianxiaomi.com)账号,把速卖通(SMT)采集箱商品按模板补齐字段并**「只保存到待发布、永不发布」**。它不是本地演示页,也不是安全诊断工具。
+**DXM 半托管自动化工作台**:用真实可见浏览器驱动真实「店小秘」(dianxiaomi.com)账号,把店小秘已有待认领商品受控认领到商品箱,再按已确认模板编辑并**「只保存、不发布」**。它不是本地演示页,也不是安全诊断工具。
 
-整个系统的核心价值与全部复杂度都在一件事上:**在能操作真实卖家账号的前提下,用分层证据门禁(L0→L1→L2→L3)把「真实写入」死死锁住,使得唯一被放行的真实变更只有「单店(Dang Kang)、单商品、save-only、带服务端一次性审批令牌、且有新鲜只读探针证据」的受控金丝雀**。改动本仓库时,默认假设你正在靠近这套门禁——任何让真实写入/发布更容易发生的改动都是高危改动。
+整个系统的核心价值与全部复杂度都在一件事上:**在能操作真实卖家账号的前提下,用分层证据门禁(L0→L1→L2→L3)把真实写入锁在同商品两段式真相链内**。Stage A `claim_only` 与 Stage B `single_save` 分别使用服务端审批租约,并绑定任务、运行时、浏览器会话、精确页面、目标和证据。改动本仓库时,默认假设你正在靠近这套门禁——任何让真实写入/发布更容易发生的改动都是高危改动。
 
-最新归档交付记录为 `docs/product/最终交付验收记录-20260622.md`，当次 `realDxmWriteReadiness = READY`，但范围严格为 `controlled_single_save_only`。L2 真实只读证据有新鲜度窗口；实时状态必须以当前工作台或最新 `final-delivery-check` 为准。`claim_only` / `batch_save` / 批量 / 无人值守 / 任何发布动作**均未放行**。
+2026-07-17 当前源码处于两段式运行时加固阶段,生产交付为 `BLOCKED`。`claim_only` 与 `single_save` 是唯一进入受控源码路径的真实 mutation 模式,但没有同一干净 Git HEAD 的 portable、packaged smoke、新鲜 L2 和同商品 Stage A/B 现场闭环前,二者都不能解释为当前生产放行。2026-06-22 与 2026-07-04 的 `READY`/portable 记录只属于历史构建。`batch_save`、批量、无人值守和任何发布动作始终未放行。
 
 ## 仓库布局(顶层)
 
@@ -68,9 +68,9 @@ L2 真实只读 probe 需要**真实登录 cookie + 人工审批**,不由 `final
 
 ### 执行 = 24 状态机 + 模式截断
 - `state_machine/contracts.py` 定义 `ExecutionMode`(probe/dry_run/claim_only/single_save/batch_save)、`FORBIDDEN_EXECUTION_MODES`(publish/continue_publish/save_and_publish,被 `normalize_execution_mode` 直接拒绝)、`StateName` 枚举与节点不变量。
-- `execution/v1_runner.py` 的 `V1_STEPS` 是 24 步流水线;`MODE_LAST_STATE` 决定每种模式跑到哪一步就停:`dry_run` 只跑 `PRECHECK_CONFIG`;`probe` 停在 `PRECHECK_PUBLISH_GUARD`;`claim_only` 停在 `VERIFY_LIST_OWNERSHIP`(物理上永不开编辑器、永不发 `add.json`);`single_save`/`batch_save` 跑到 `RELEASE_LOCK`。这是「爆炸半径」的结构性边界。
-- **真假分流的唯一开关是 `workflow_adapter`**。Runner 把特定状态映射成 `DxmWorkflowAdapter` 的真实浏览器动作,放在 **1 线程 ThreadPoolExecutor** 上跑(Playwright 同步 API 不能在 asyncio loop 上跑)。adapter 转发进 `dxm_login_flow.py`(5400 行,唯一真正驱动浏览器的地方)。若 `workflow_adapter is None`,真实写入模式直接 E901,而 probe/dry_run 仍作为纯骨架「成功」——生产 `main.py` 始终传真实 adapter。
-- **步间状态只通过磁盘文件 `dianxiaomi_runtime_state.json` 传递**(page_url / source_editor_url / target_source_urls / save_result)。`DxmLoginFlow` 每个动作都**新开并关闭一整个浏览器**、重新注入 cookie、导航到上一步保存的 URL。没有跨步长存的 page,所以 state 文件缺失/过期会直接打断编辑/半托管步骤。
+- `execution/v1_runner.py` 的 `V1_STEPS` 是 24 步保存流水线,另有独立 `CLAIM_ONLY_STEPS`;`MODE_LAST_STATE` 决定模式截断:`dry_run` 只跑 `PRECHECK_CONFIG`;`probe` 停在 `PRECHECK_PUBLISH_GUARD`;`claim_only` 停在 `VERIFY_DRAFT_BOX_CLAIM`(物理上永不开编辑器、永不发保存 `add.json`);`single_save`/`batch_save` 跑到 `RELEASE_LOCK`。这是「爆炸半径」的结构性边界。
+- **真假分流的唯一开关仍是 `workflow_adapter`**,但真实路径已经由持久化 `BrowserAgentRuntime` 承载。`V1TaskRunner` 构造带 command ID、幂等/变更标识、deadline、runtime/session/page/target 绑定和取消纪元的命令,worker 再调用 `DxmWorkflowAdapter → DxmLoginFlow`。若 `workflow_adapter is None`,真实写入模式直接失败;probe/dry_run 仍保持非真实写入。
+- **真实浏览器不是每步重开。** `DxmLoginFlow` 持有可见 browser/context/page,`BrowserAgentRuntime` 在 Stage A/Stage B 动作间维持同一受控会话并做生命周期接管。磁盘 runtime state 只作为恢复/诊断资料,不能替代实时 session、精确页面、目标绑定和动作前复核。
 - **save 判定以真实保存证据为准且文字精确**:`_save_only_on_page` 只点规范化文本**恰为「保存」**的按钮,若发现任何发布类按钮则中止;保存成功接受 DOM 出现「保存成功/编辑保存成功/编辑成功」或保存接口回包成功。真实接口包括 `.../api/smtProduct/add.json` / `.../api/popChoiceProduct/add.json`,必须是 POST、2xx、`code==0` 且成功文案命中;显式排除 publish/release/online/history URL。report/log 全程 `published=false`。
 
 ### 安全门禁——这是本仓库最该读懂的部分
@@ -82,7 +82,7 @@ L2 真实只读 probe 需要**真实登录 cookie + 人工审批**,不由 `final
 
 2. **Publish guard**(`publish_guard.py`,无状态内容扫描):对 action/目标文本/URL/可见文本/弹窗文本/网络 URL 规范化后,命中任何发布信号(立即发布/继续发布/保存并发布/移入待发布/精确「发布」/`submitpublish` 等)即 `allowed=False`、`risk_level=critical`、`E999`。它放行仅提及「待发布」状态的良性文案,只拦发布**动作**。Runner 在 `PRECHECK_PUBLISH_GUARD`、`PRE_SAVE_GUARD_CHECK`、`SAVE_ONLY` 三处调用它。
 
-3. **任务启动闸**(`main.py`):`REAL_DXM_MUTATION_MODES = {claim_only, single_save, batch_save}`,但 `RELEASED_REAL_DXM_MUTATION_MODES = {single_save}` 才真正放行。`_assert_task_can_start` 与 `_assert_task_can_receive_manual_approval` 都要求:模式已放行、`publish_scene == SMT_SEMI_MANAGED_SAVE_ONLY`、`store == 'Dang Kang'`、审批 `source=='server'` 且 `approved`、请求 `approval_token` 与存储的 `token_hash` **HMAC 比对**(`hmac.compare_digest`)、`confirmation == 'CONFIRM_DXM_SAVE_ONLY'`、非空 `approved_by`、且 `l2_real_probe_gate().status == 'passed'`。审批令牌由 `/manual-approval` 用 `secrets.token_urlsafe(24)` 服务端生成、**只存 SHA-256 hash**;读 API(`_public_task_payload`)抹掉 token/token_hash,所以无法从 GET 回放。`try_start_task` 用一条原子 SQL(`UPDATE ... WHERE status='draft'`,rowcount==1)做单飞 draft→running。
+3. **任务启动闸**(`main.py`):`REAL_DXM_MUTATION_MODES = {claim_only, single_save, batch_save}`,当前源码只把 `claim_only` 与 `single_save` 纳入受控 release surface。两阶段要求不同 publish scene、确认文本和服务端审批租约;令牌只存 hash,读 API 不回显。Stage A 还必须绑定一个真实待认领来源;Stage B 必须引用同店铺、同商品、已完成 Stage A 与商品箱验证快照。`try_start_task` 用原子 SQL 做单飞 draft→running;启动后每个真实 mutation 前仍要重新校验已消费租约和动作上下文。
 
 4. **直连变更端点是「陷阱闸」**:`/api/dxm/draft-box/action`、`/workflow/claim-product`、`/workflow/open-editor` 走 `_assert_direct_real_dxm_mutation_allowed`——它跑完整启动闸校验后**无条件 raise 403**。即便一个完全合法、已审批、L2 已过的请求也返回 403:真实变更在产证据的 runner 之外**结构上不可能发生**。
 
@@ -96,10 +96,14 @@ L2 真实只读 probe 需要**真实登录 cookie + 人工审批**,不由 `final
 
 ## 不可破坏的不变量(改这些前先停下来)
 
-- **放行范围只有 `controlled_single_save_only`**。解释 `final-delivery-check.json` 时不能只看 `ok`——必须连同 `okScope` / `realDxmMutationScope` / `realDxmWriteReadiness` 一起读;`ok:true` 仅代表 `okScope` 声明的范围。该 JSON 写入时带 **UTF-8 BOM**,Python 解析须 `encoding='utf-8-sig'`。
+- **生产结论必须 fail-closed**:`dxm_two_stage_acceptance.v1`、`dxm_state_consistency.v1`、L2/L3、runtime/build/package identity 任一缺失或冲突,都只能是 `BLOCKED`。
+- **Mutation 不确定性不能自动重试**:持久化 mutation ledger 必须以稳定审批/任务 scope 生成动作 ID;进程崩溃时仍处于 `DISPATCHING` 的动作恢复为 `UNKNOWN`,只允许人工对账,不得因为换 runtime 或重启而再次点击。
+- **动作前实时身份复核**:真实点击前必须重查 browser session、精确页面、目标绑定、审批租约和生命周期 owner。授权检查通过不代表稍后点击仍然安全。
+
+- **当前生产放行范围是 `none` (`BLOCKED`)**。解释 `final-delivery-check.json` 时不能只看 `ok`:必须连同 `okScope`、`realDxmMutationScope`、`realDxmWriteReadiness`、`twoStageAcceptance`、`stateConsistency`、Git/runtime/build/package identity 和证据路径一起读。该 JSON 写入时带 **UTF-8 BOM**,Python 解析须 `encoding='utf-8-sig'`。
 - **发布四层独立封锁**:`config_validation` 的 E999、`repo.create_task` 强制 `publish_allowed=False`、`agent_console` 的 `BLOCKED_SELECTOR_CONTROL_KEYWORDS` + 仅允许 dianxiaomi.com 的 goto、`selector_profile` 的 `forbidden_buttons`(经 L1 replay 暴露)。删任何一层都不会开放发布,但每层都假设其他层存在。
-- **要扩到 `claim_only` 或 `batch_save`**:必须为对应范围**重新建立** L2/L3 证据链 + 人工审批 + 回滚策略,**不能复用** `single_save` 的结论。`real_mode_release_plan` 里 `single_save=released_controlled`,其余 `blocked_unreleased`,且在任何 L2/审批检查**之前**就被拒。
-- **真实写入硬约束**:店铺只允许 `Dang Kang`;只操作带 `AI认领-{task_id}-{job_id}` 唯一备注且 store/title/SKU/product_id 与任务 payload 一致的商品(商品归属锁 `ownership_lock.py`)。
+- **两段式不是范围复用**:`claim_only` 与 `single_save` 各自建立审批和动作证据,Stage B 必须绑定 Stage A 的同商品事实。`batch_save` 及任何更大范围仍需重新设计证据链、人工审批、回滚/对账策略,不得复用两段式单商品结论。
+- **真实写入硬约束**:店铺来自任务与真实页面的权威绑定,不得硬编码或跨店复用证据;只操作 Stage A 来源、Stage B 快照与当前页面一致的同一商品。store/title/SKU/product_id/来源/商品箱证明任一冲突即停止(商品归属锁 `ownership_lock.py`)。
 - **AI 不进执行闭环**:`title_ai.py`(DeepSeek 标题改写)等 AI 只做配置建议/标题/异常分析,绝不临场决定类目/品牌/是否发布、绝不绕验证码。
 - **Browser-Use 是预留增强引擎,不是底座**:执行层走统一 ExecutionEngine 抽象,默认 `PlaywrightEngine`,`BrowserUseEngine` 仅扩展位。业务中台(模板中心/状态机/异常池/证据)必须自建。
 
@@ -117,14 +121,16 @@ L2 真实只读 probe 需要**真实登录 cookie + 人工审批**,不由 `final
 
 - 装配 + 启动闸 + 路由 + artifact URL:`app/backend/src/main.py`
 - L0–L3 门禁定义/计算 + L2 严格闸 + 发布放行计划:`app/backend/src/services/delivery_workspace.py`
+- 两段式验收与状态一致性:`app/backend/src/state_machine/two_stage.py`、`app/backend/src/services/state_consistency.py`
+- Browser Agent 协议/生命周期/动作契约:`app/backend/src/execution/browser_agent_protocol.py`、`browser_agent_worker.py`、`action_result_contract.py`;持久化 mutation 派发账本:`mutation_dispatch_ledger.py`
 - 发布拦截:`app/backend/src/services/publish_guard.py`;商品归属锁:`services/ownership_lock.py`
 - 24 状态机执行引擎:`app/backend/src/execution/v1_runner.py`
-- 真实浏览器驱动(5400 行):`app/backend/src/execution/dxm_login_flow.py`(facade:`dxm_adapter.py`,只读探针:`dxm_live.py`)
+- 真实浏览器驱动:`app/backend/src/execution/dxm_login_flow.py`(facade:`dxm_adapter.py`,只读探针:`dxm_live.py`)
 - 模式/状态/禁用模式枚举:`app/backend/src/state_machine/contracts.py`
 - 配置合并/校验/预览:`services/config_defaults.py`、`config_validation.py`、`config_preview.py`
 - 前端控制流从这读起:`app/frontend/src/App.tsx`;全部面板:`components/WorkbenchModules.tsx`;客户端派生:`workspace.ts`
 - 交付自检流水线:`scripts/final-delivery-check.ps1`;浏览器 QA:`scripts/qa-browser-check.ps1`;启动器:`scripts/start-mvp.ps1`
-- 门禁/产品规范权威文档:`docs/product/店小秘半托管执行器可交付化回归矩阵.md`、`docs/product/L2只读Probe门禁.md`、`docs/product/店小秘速卖通半托管自动化执行器_PRD_V1.0.md`
+- 当前文档入口:`docs/README.md`;运行时架构:`docs/tech/当前运行时架构-20260717.md`;门禁规范:`docs/product/店小秘半托管执行器可交付化回归矩阵.md`、`docs/product/L2只读Probe门禁.md`
 
 ## 测试与协作约定(本仓库)
 
