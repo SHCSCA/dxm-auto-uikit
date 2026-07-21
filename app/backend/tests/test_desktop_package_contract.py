@@ -830,34 +830,14 @@ def test_app_shell_presents_agent_console_as_user_first_navigation():
     index_html = (REPO_ROOT / "app" / "frontend" / "index.html").read_text(encoding="utf-8")
 
     assert "DXM Agent Console" in index_html
-    assert "type WorkbenchPrimaryArea" in source
-    assert "const primaryAreas" in source
-    primary_block = source[source.index("const primaryAreas"):source.index("const sectionLabels")]
-    assert "label: '准备'" in source
-    assert "label: '第一段：待认领商品'" in source
-    assert "label: '第二段：编辑只保存'" in source
-    assert "label: '复盘'" in source
-    assert "label: '维护'" in source
-    assert "label: '更多'" not in source
-    assert "首页" in source
-    assert "账号与浏览器" in source
-    assert "待认领商品" in source
-    assert "商品箱编辑保存" in source
-    assert "模板中心" in source
-    assert "浏览器现场" in source
-    assert "任务记录" in source
-    assert "报告与证据" in source
-    assert "证据归档" not in primary_block
-    assert "系统维护" in source
-    assert "id: 'dashboard'" not in primary_block
-    assert "{ id: 'start_save', label: '浏览器现场'" in primary_block
-    assert "{ id: 'task_history', label: '任务记录'" in primary_block
-    assert "{ id: 'exceptions', label: '问题'" not in primary_block
-    assert "{ id: 'preflight', label: '运行前检查'" not in primary_block
-    assert "{ id: 'real_browser', label: '真实浏览器'" not in primary_block
-    assert "报告中心" not in source
-    assert "异常池" not in source
-    assert "nav-section" in source
+    assert "type PrimaryNavigationItem" in source
+    assert "const primaryNavigation" in source
+    primary_block = source[source.index("const primaryNavigation"):source.index("const sectionLabels")]
+    for label in ["编辑工作台", "模板中心", "浏览器现场", "批次记录", "系统设置"]:
+        assert label in primary_block
+    assert primary_block.count("{ id: '") == 5
+    for hidden_label in ["待认领入箱", "商品箱编辑保存", "当前保存任务", "报告与证据", "问题与证据"]:
+        assert hidden_label not in primary_block
     assert "nav-subitem" in source
     assert "Agent 控制台" not in source
 

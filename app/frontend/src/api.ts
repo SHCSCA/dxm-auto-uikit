@@ -40,6 +40,7 @@ async function responseErrorMessage(response: Response, fallback: string): Promi
   try {
     const payload = await response.clone().json()
     if (typeof payload?.detail === 'string') return safeApiErrorMessage(payload.detail, response.status, fallback)
+    if (typeof payload?.detail?.message === 'string') return safeApiErrorMessage(payload.detail.message, response.status, fallback)
     if (typeof payload?.message === 'string') return safeApiErrorMessage(payload.message, response.status, fallback)
   } catch {
     try {

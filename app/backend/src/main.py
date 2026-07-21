@@ -17,7 +17,7 @@ from threading import RLock
 from typing import Any
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -51,6 +51,10 @@ from src.models import (
     AgentConsoleHudRequest,
     AgentConsoleStartRequest,
     DraftBoxActionRequest,
+    DraftBoxScopeSnapshotCreate,
+    EditBatchCreate,
+    EditBatchBundleComposeRequest,
+    EditBatchManualApprovalRequest,
     HealthResponse,
     LoginContinueRequest,
     LoginNavigateRequest,
@@ -67,6 +71,12 @@ from src.models import (
     TitleGenerateRequest,
     TemplateCreate,
     TemplateUpdate,
+)
+from src.batch_edit import (
+    BatchEditContractError,
+    BatchEditCoordinator,
+    BundleComposerError,
+    EditBatchBundleComposer,
 )
 from src.repository import Repository
 from src.services.config_defaults import DEFAULT_TEMPLATE_TYPES
@@ -365,6 +375,105 @@ def dxm_workflow_open_draft_box():
     return normalize_artifact_paths(_run_login_flow(_workflow_adapter().open_draft_box))
 
 
+@app.post('/api/dxm/draft-box/scope-snapshots', status_code=201)
+def create_draft_box_scope_snapshot(payload: DraftBoxScopeSnapshotCreate):
+    capture = _run_login_flow(
+        workflow_adapter.capture_draft_box_scope,
+        payload.max_items,
+    )
+    try:
+        identity = runtime_identity.as_dict()
+        return BatchEditCoordinator(repo).persist_scope_capture(
+            capture,
+            requested_max_items=payload.max_items,
+            runtime_context={
+                "instance_id": identity["instanceId"],
+                "browser_runtime_id": browser_agent_runtime.runtime_id,
+                "git_head": identity["gitHead"],
+            },
+            expected_browser_session_id=workflow_adapter.browser_session_id(),
+        )
+    except BatchEditContractError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason_code": exc.reason_code, "message": str(exc)},
+        ) from exc
+
+
+@app.post('/api/edit-batches', status_code=201)
+def create_edit_batch(payload: EditBatchCreate):
+    try:
+        return BatchEditCoordinator(repo).create_draft_batch(
+            scope_snapshot_id=payload.scope_snapshot_id,
+            template_id=payload.template_id,
+        )
+    except BatchEditContractError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason_code": exc.reason_code, "message": str(exc)},
+        ) from exc
+
+
+@app.post('/api/edit-batches/{batch_id}/manual-approval')
+def approve_edit_batch(batch_id: int, payload: EditBatchManualApprovalRequest):
+    batch = repo.get_edit_batch(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail='Edit batch not found')
+    if payload.confirmation != 'CONFIRM_DXM_BATCH_SAVE_ONLY':
+        raise HTTPException(
+            status_code=400,
+            detail='confirmation must exactly equal CONFIRM_DXM_BATCH_SAVE_ONLY',
+        )
+    if not payload.approved_by.strip():
+        raise HTTPException(status_code=400, detail='approved_by must identify the approving operator')
+    coordinator = BatchEditCoordinator(repo)
+    try:
+        capture_max_items = coordinator.approval_capture_max_items(batch)
+    except BatchEditContractError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+
+    capture = _run_login_flow(
+        workflow_adapter.capture_draft_box_scope,
+        capture_max_items,
+    )
+    try:
+        identity = runtime_identity.as_dict()
+        return coordinator.approve_batch(
+            batch,
+            capture,
+            runtime_context={
+                'instance_id': identity['instanceId'],
+                'browser_runtime_id': browser_agent_runtime.runtime_id,
+                'git_head': identity['gitHead'],
+            },
+            expected_browser_session_id=workflow_adapter.browser_session_id(),
+            approved_by=payload.approved_by,
+            confirmation=payload.confirmation,
+        )
+    except BatchEditContractError as exc:
+        status_code = 404 if exc.reason_code == 'BATCH_NOT_FOUND' else 409
+        raise HTTPException(
+            status_code=status_code,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+
+
+@app.get('/api/edit-batches/{batch_id}')
+def get_edit_batch(batch_id: int):
+    batch = repo.get_edit_batch(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail='Edit batch not found')
+    return batch
+
+
+@app.get('/api/edit-batches')
+def list_edit_batches():
+    return repo.list_edit_batches()
+
+
 @app.post('/api/dxm/draft-box/action')
 def dxm_draft_box_action(payload: DraftBoxActionRequest):
     _assert_direct_real_dxm_mutation_allowed(payload)
@@ -441,9 +550,50 @@ def get_template_center_metadata():
     return template_center_metadata()
 
 
+@app.get('/api/template-center/edit-batch-bundle-options')
+def get_edit_batch_bundle_options(
+    store_id: int = Query(gt=0),
+    category_name: str | None = Query(default=None, max_length=200),
+):
+    try:
+        return EditBatchBundleComposer().options(
+            store_id=store_id,
+            category_name=category_name,
+        )
+    except BundleComposerError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={
+                'reason_code': exc.reason_code,
+                'message': str(exc),
+                'missing': exc.missing,
+            },
+        ) from exc
+
+
+@app.post('/api/template-center/edit-batch-bundles', status_code=201)
+def compose_edit_batch_bundle(payload: EditBatchBundleComposeRequest):
+    try:
+        return EditBatchBundleComposer().compose(payload.model_dump())
+    except BundleComposerError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={
+                'reason_code': exc.reason_code,
+                'message': str(exc),
+                'missing': exc.missing,
+            },
+        ) from exc
+
+
 @app.post('/api/templates')
 def create_template(payload: TemplateCreate):
     data = payload.model_dump()
+    if str(data.get('template_type') or '').strip().lower() == 'edit_batch_bundle':
+        raise HTTPException(
+            status_code=409,
+            detail='edit_batch_bundle templates can only be created by the bundle composer',
+        )
     data['payload'] = _normalize_template_payload(data.get('template_type'), data.get('payload'))
     return repo.create_template(data)
 
@@ -451,15 +601,26 @@ def create_template(payload: TemplateCreate):
 @app.patch('/api/templates/{template_id}')
 def update_template(template_id: int, payload: TemplateUpdate):
     data = payload.model_dump(exclude_unset=True)
+    current = repo.get_template(template_id)
+    if not current:
+        raise HTTPException(status_code=404, detail='Template not found')
+    if current.get('template_type') == 'edit_batch_bundle':
+        if set(data) != {'is_enabled'} or not isinstance(data.get('is_enabled'), bool):
+            raise HTTPException(
+                status_code=409,
+                detail='edit_batch_bundle content is immutable; only is_enabled may be patched',
+            )
+    elif str(data.get('template_type') or '').strip().lower() == 'edit_batch_bundle':
+        raise HTTPException(
+            status_code=409,
+            detail='templates cannot be converted to edit_batch_bundle',
+        )
     if 'payload' in data:
         template_type = data.get('template_type')
         if template_type is None:
-            current = repo.get_template(template_id)
             template_type = current.get('template_type') if current else None
         data['payload'] = _normalize_template_payload(template_type, data.get('payload'))
     template = repo.update_template(template_id, data)
-    if not template:
-        raise HTTPException(status_code=404, detail='Template not found')
     return template
 
 

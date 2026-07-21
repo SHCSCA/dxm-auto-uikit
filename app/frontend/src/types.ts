@@ -74,6 +74,178 @@ export type DxmReferenceTemplateSection = {
   source: 'new' | 'legacy' | 'fallback'
 }
 export type Template = { id: number; template_type: string; template_name: string; binding_scope: string; payload: Record<string, unknown>; is_enabled: boolean }
+export type EditBatchBundleSectionCode =
+  | 'category'
+  | 'sku'
+  | 'pricing'
+  | 'logistics'
+  | 'image'
+  | 'compliance'
+  | 'semi_managed'
+  | 'dxm_reference'
+export type EditBatchBundleCandidate = {
+  template_id: number
+  template_name: string
+  template_type: EditBatchBundleSectionCode
+  binding_scope: string
+  source_digest: string
+  ready: boolean
+  missing_fields: string[]
+}
+export type EditBatchBundleSectionOptions = {
+  section: EditBatchBundleSectionCode
+  template_type: EditBatchBundleSectionCode
+  ready_count: number
+  candidates: EditBatchBundleCandidate[]
+  default_candidate: EditBatchBundleCandidate | null
+}
+export type EditBatchBundleOptions = {
+  store: { id: number; name: string; platform: string }
+  category_name: string | null
+  required_sections: EditBatchBundleSectionCode[]
+  ready_count: number
+  ready: boolean
+  sections: EditBatchBundleSectionOptions[]
+}
+export type EditBatchBundleCreateRequest = {
+  template_name: string
+  version: string
+  store_id: number
+  category_name: string | null
+  section_templates: Record<EditBatchBundleSectionCode, {
+    template_id: number
+    source_digest: string
+  }>
+}
+export type DraftBoxScopeEvidenceRef = {
+  kind: 'live_dom_row'
+  browser_session_id: string
+  page_kind: 'draft_box'
+  page_url: string
+  dom_index: number
+  row_sha256: string
+}
+export type DraftBoxScopeItem = {
+  ordinal: number
+  title: string
+  dxm_product_id: string | null
+  stable_record_key: string
+  source_url: string | null
+  source_urls: string[]
+  store_evidence: {
+    store_name: string
+    cell_text: string
+    source: 'structured_store_cell'
+    column_index: number
+    tag: string
+    class_name: string
+    dom_index: number
+  }
+  target_identity: Record<string, unknown>
+  target_identity_sha256: string
+  evidence_ref: DraftBoxScopeEvidenceRef
+}
+export type DraftBoxScopeSnapshot = {
+  id: number
+  schema_version: 'dxm_draft_box_scope.v1'
+  observed_at: string
+  runtime_identity: {
+    instance_id: string
+    browser_runtime_id: string
+    browser_session_id: string
+    git_head: string
+  }
+  page_identity: {
+    url: string
+    kind: 'draft_box'
+    title: string
+    business_marker: string
+  }
+  store_identity: {
+    store_name: string
+    source: 'structured_store_cell'
+    fingerprint: string
+  }
+  filter_state: Record<string, unknown>
+  sort_state: Record<string, unknown>
+  page_state: {
+    current_page: number | null
+    page_size: number | null
+    total_items: number | null
+    visible_row_count: number
+    captured_count: number
+    max_items: number
+    truncated: boolean
+  }
+  items: DraftBoxScopeItem[]
+  evidence: {
+    kind: 'live_dom_snapshot'
+    dom_sha256: string
+    refs_digest: string
+    summary: Record<string, unknown>
+    refs: DraftBoxScopeEvidenceRef[]
+  }
+  zero_write_proof: {
+    strategy: 'current_visible_page_dom_read'
+    navigation_attempted: false
+    interactive_action_attempted: false
+    mutation_dispatch_attempted: false
+  }
+  digest: string
+  snapshot_sha256: string
+  created_at: string
+}
+export type EditBatchSummary = {
+  id: number
+  schema_version: 'dxm_edit_batch.v1'
+  status: string
+  scope_snapshot_id: number
+  scope_snapshot_digest: string
+  template_id: number
+  template_snapshot_digest: string
+  policy_digest: string
+  item_count: number
+  store_identity: DraftBoxScopeSnapshot['store_identity'] | null
+  template: { name: string | null; version: string | null }
+  created_at: string
+  updated_at: string
+}
+export type EditBatchItem = {
+  id: number
+  batch_id: number
+  ordinal: number
+  status: string
+  target_identity_sha256: string
+  item_snapshot: DraftBoxScopeItem
+  created_at: string
+  updated_at: string
+}
+export type EditBatchDetail = {
+  id: number
+  schema_version: 'dxm_edit_batch.v1'
+  status: string
+  scope_snapshot_id: number
+  scope_snapshot_digest: string
+  scope_snapshot: DraftBoxScopeSnapshot
+  template_id: number
+  template_snapshot_digest: string
+  template_snapshot: Template
+  policy_digest: string
+  policy: {
+    schema_version: string
+    approval_mode: 'batch_once'
+    dispatch_mode: 'strict_sequential'
+    global_concurrency: 1
+    publish_allowed: false
+    unknown_result_policy: 'stop_no_retry'
+    identity_drift_policy: 'stop_batch'
+    session_loss_policy: 'stop_batch'
+    pre_save_no_effect_failure_policy: string
+  }
+  created_at: string
+  updated_at: string
+  items: EditBatchItem[]
+}
 export type TemplateCenterField = {
   key: string
   label: string

@@ -55,6 +55,13 @@ class AuthorizationLeaseResult:
     lease: dict[str, Any] | None
 
 
+@dataclass(frozen=True)
+class BatchApprovalResult:
+    applied: bool
+    reason_code: str
+    batch: dict[str, Any] | None
+
+
 def _first_source_url_from_payload(payload: dict[str, Any]) -> str | None:
     for key in ('source_url', 'url'):
         value = payload.get(key)
@@ -145,6 +152,223 @@ class Repository:
             row['payload'] = loads(row.pop('payload_json'), {})
             row['is_enabled'] = bool(row['is_enabled'])
             return row
+
+    def create_draft_box_scope_snapshot(self, snapshot: dict[str, Any]):
+        now = now_iso()
+        with connection() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO draft_box_scope_snapshots
+                    (schema_version, digest, snapshot_json, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    snapshot['schema_version'],
+                    snapshot['digest'],
+                    dumps(snapshot),
+                    now,
+                ),
+            )
+            return {
+                'id': int(cur.lastrowid),
+                **snapshot,
+                'created_at': now,
+            }
+
+    def get_draft_box_scope_snapshot(self, snapshot_id: int):
+        with connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM draft_box_scope_snapshots WHERE id=?",
+                (snapshot_id,),
+            ).fetchone()
+            if not row:
+                return None
+            snapshot = loads(row['snapshot_json'], {})
+            return {
+                'id': int(row['id']),
+                **snapshot,
+                'created_at': row['created_at'],
+            }
+
+    def create_edit_batch(self, data: dict[str, Any]):
+        now = now_iso()
+        with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cur = conn.execute(
+                """
+                INSERT INTO edit_batches (
+                    schema_version, status,
+                    scope_snapshot_id, scope_snapshot_digest, scope_snapshot_json,
+                    template_id, template_snapshot_digest, template_snapshot_json,
+                    policy_digest, policy_json,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    data['schema_version'],
+                    data['status'],
+                    data['scope_snapshot_id'],
+                    data['scope_snapshot_digest'],
+                    dumps(data['scope_snapshot']),
+                    data['template_id'],
+                    data['template_snapshot_digest'],
+                    dumps(data['template_snapshot']),
+                    data['policy_digest'],
+                    dumps(data['policy']),
+                    now,
+                    now,
+                ),
+            )
+            batch_id = int(cur.lastrowid)
+            for item in data['items']:
+                conn.execute(
+                    """
+                    INSERT INTO edit_batch_items (
+                        batch_id, ordinal, status, target_identity_sha256,
+                        item_snapshot_json, created_at, updated_at
+                    ) VALUES (?, ?, 'pending', ?, ?, ?, ?)
+                    """,
+                    (
+                        batch_id,
+                        item['ordinal'],
+                        item['target_identity_sha256'],
+                        dumps(item),
+                        now,
+                        now,
+                    ),
+                )
+        return self.get_edit_batch(batch_id)
+
+    def get_edit_batch(self, batch_id: int):
+        with connection() as conn:
+            row = conn.execute("SELECT * FROM edit_batches WHERE id=?", (batch_id,)).fetchone()
+            if not row:
+                return None
+            items = conn.execute(
+                "SELECT * FROM edit_batch_items WHERE batch_id=? ORDER BY ordinal ASC",
+                (batch_id,),
+            ).fetchall()
+            return self._decode_edit_batch(row, items)
+
+    def approve_edit_batch(self, batch_id: int, approval: dict[str, Any]) -> BatchApprovalResult:
+        now = now_iso()
+        reason_code = "BATCH_NOT_DRAFT"
+        with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT id, status FROM edit_batches WHERE id=?",
+                (batch_id,),
+            ).fetchone()
+            if not row:
+                return BatchApprovalResult(False, "BATCH_NOT_FOUND", None)
+            if row["status"] != "draft":
+                return BatchApprovalResult(False, reason_code, None)
+            cursor = conn.execute(
+                """
+                UPDATE edit_batches
+                   SET status='approved',
+                       approval_token_hash=?, approval_lease_id=?, approval_context_json=?,
+                       updated_at=?
+                 WHERE id=? AND status='draft'
+                """,
+                (
+                    approval["token_hash"],
+                    approval["lease_id"],
+                    dumps(approval["context"]),
+                    now,
+                    batch_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                return BatchApprovalResult(False, reason_code, None)
+        return BatchApprovalResult(True, "OK", self.get_edit_batch(batch_id))
+
+    def list_edit_batches(self):
+        with connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT b.*,
+                       (SELECT COUNT(*) FROM edit_batch_items i WHERE i.batch_id=b.id) AS item_count
+                  FROM edit_batches b
+                 ORDER BY b.created_at DESC, b.id DESC
+                """
+            ).fetchall()
+            summaries = []
+            for row in rows:
+                scope_snapshot = loads(row['scope_snapshot_json'], {})
+                template_snapshot = loads(row['template_snapshot_json'], {})
+                template_payload = template_snapshot.get('payload') if isinstance(template_snapshot.get('payload'), dict) else {}
+                summaries.append({
+                    'id': int(row['id']),
+                    'schema_version': row['schema_version'],
+                    'status': row['status'],
+                    'scope_snapshot_id': int(row['scope_snapshot_id']),
+                    'scope_snapshot_digest': row['scope_snapshot_digest'],
+                    'template_id': int(row['template_id']),
+                    'template_snapshot_digest': row['template_snapshot_digest'],
+                    'policy_digest': row['policy_digest'],
+                    'item_count': int(row['item_count']),
+                    'store_identity': scope_snapshot.get('store_identity'),
+                    'template': {
+                        'name': template_snapshot.get('template_name'),
+                        'version': template_payload.get('version'),
+                    },
+                    'created_at': row['created_at'],
+                    'updated_at': row['updated_at'],
+                })
+                approval = self._decode_edit_batch_approval_summary(row)
+                if approval is not None:
+                    summaries[-1]['approval'] = approval
+            return summaries
+
+    def _decode_edit_batch(self, row: dict[str, Any], items: list[dict[str, Any]]):
+        batch = {
+            'id': int(row['id']),
+            'schema_version': row['schema_version'],
+            'status': row['status'],
+            'scope_snapshot_id': int(row['scope_snapshot_id']),
+            'scope_snapshot_digest': row['scope_snapshot_digest'],
+            'scope_snapshot': loads(row['scope_snapshot_json'], {}),
+            'template_id': int(row['template_id']),
+            'template_snapshot_digest': row['template_snapshot_digest'],
+            'template_snapshot': loads(row['template_snapshot_json'], {}),
+            'policy_digest': row['policy_digest'],
+            'policy': loads(row['policy_json'], {}),
+            'created_at': row['created_at'],
+            'updated_at': row['updated_at'],
+            'items': [
+                {
+                    'id': int(item['id']),
+                    'batch_id': int(item['batch_id']),
+                    'ordinal': int(item['ordinal']),
+                    'status': item['status'],
+                    'target_identity_sha256': item['target_identity_sha256'],
+                    'item_snapshot': loads(item['item_snapshot_json'], {}),
+                    'created_at': item['created_at'],
+                    'updated_at': item['updated_at'],
+                }
+                for item in items
+            ],
+        }
+        approval = self._decode_edit_batch_approval_summary(row)
+        if approval is not None:
+            batch['approval'] = approval
+        return batch
+
+    @staticmethod
+    def _decode_edit_batch_approval_summary(row: dict[str, Any]) -> dict[str, Any] | None:
+        if row.get('status') != 'approved' or not row.get('approval_context_json'):
+            return None
+        context = loads(row['approval_context_json'], {})
+        return {
+            'approved': True,
+            'approved_by': context.get('approved_by'),
+            'approved_at': context.get('issued_at'),
+            'issued_at': context.get('issued_at'),
+            'expires_at': context.get('expires_at'),
+            'confirmation': context.get('confirmation'),
+            'scope_revalidation': context.get('read_attestation'),
+        }
 
     def list_products(self, *, include_fixtures: bool = False):
         with connection() as conn:

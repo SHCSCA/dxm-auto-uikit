@@ -231,6 +231,29 @@ def test_open_draft_box_delegates_to_login_flow_navigation():
     assert result['stage'] == 'workflow_navigation'
 
 
+def test_capture_draft_box_scope_delegates_readonly_capture_without_contract_rewrite():
+    class ScopeFlow:
+        def __init__(self):
+            self.calls = []
+
+        def capture_draft_box_scope(self, max_items):
+            self.calls.append(('capture_draft_box_scope', max_items))
+            return {
+                'schema': 'dxm_draft_box_scope_capture.v1',
+                'ok': True,
+                'items': [{'position': 1, 'title': '商品 A'}],
+                'zero_write_proof': {'ok': True},
+            }
+
+    flow = ScopeFlow()
+
+    result = DxmWorkflowAdapter(flow).capture_draft_box_scope(max_items=25)
+
+    assert flow.calls == [('capture_draft_box_scope', 25)]
+    assert result['schema'] == 'dxm_draft_box_scope_capture.v1'
+    assert result['items'] == [{'position': 1, 'title': '商品 A'}]
+
+
 def test_adapter_result_respects_explicit_false_ok_even_without_failed_stage_suffix():
     flow = FakeDraftBoxClaimNotReadyFlow()
 

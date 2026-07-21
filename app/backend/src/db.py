@@ -215,7 +215,65 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_mutation_dispatch_ledger_scope
                 ON mutation_dispatch_ledger (mutation_scope_id, ordinal);
+
+            CREATE TABLE IF NOT EXISTS draft_box_scope_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                schema_version TEXT NOT NULL,
+                digest TEXT NOT NULL UNIQUE,
+                snapshot_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_draft_box_scope_snapshots_created
+                ON draft_box_scope_snapshots (created_at DESC, id DESC);
+
+            CREATE TABLE IF NOT EXISTS edit_batches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                schema_version TEXT NOT NULL,
+                status TEXT NOT NULL,
+                scope_snapshot_id INTEGER NOT NULL,
+                scope_snapshot_digest TEXT NOT NULL,
+                scope_snapshot_json TEXT NOT NULL,
+                template_id INTEGER NOT NULL,
+                template_snapshot_digest TEXT NOT NULL,
+                template_snapshot_json TEXT NOT NULL,
+                policy_digest TEXT NOT NULL,
+                policy_json TEXT NOT NULL,
+                approval_token_hash TEXT,
+                approval_lease_id TEXT,
+                approval_context_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_edit_batches_created
+                ON edit_batches (created_at DESC, id DESC);
+
+            CREATE TABLE IF NOT EXISTS edit_batch_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id INTEGER NOT NULL,
+                ordinal INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                target_identity_sha256 TEXT NOT NULL,
+                item_snapshot_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (batch_id, ordinal),
+                UNIQUE (batch_id, target_identity_sha256)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_edit_batch_items_batch
+                ON edit_batch_items (batch_id, ordinal);
             """
+        )
+        _ensure_columns(
+            conn,
+            "edit_batches",
+            {
+                "approval_token_hash": "TEXT",
+                "approval_lease_id": "TEXT",
+                "approval_context_json": "TEXT",
+            },
         )
         _ensure_columns(
             conn,

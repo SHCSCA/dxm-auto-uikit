@@ -143,6 +143,11 @@ class DxmWorkflowAdapter:
             before_values={'requested_page_identity': 'draft_box'},
         )
 
+    def capture_draft_box_scope(self, max_items: int) -> dict[str, Any]:
+        """Return the flow's raw, read-only scope attestation unchanged."""
+
+        return self.login_flow.capture_draft_box_scope(max_items=max_items)
+
     def open_data_acquisition(self) -> dict[str, Any]:
         return self._result(
             'open_data_acquisition',

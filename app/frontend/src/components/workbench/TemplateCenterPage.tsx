@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { getJsonOrDefault, patchJson, postJson } from '../../api'
 import type { ConfigPreview, DeliveryWorkspace, Task, Template, TemplateCenterMetadata, TemplateCenterSection } from '../../types'
+import { BatchTemplateComposer } from './BatchTemplateComposer'
+
+type TemplateCenterMode = 'sections' | 'batch_bundle'
 
 type TemplateCenterPageProps = {
   workspace: DeliveryWorkspace
@@ -108,6 +111,7 @@ export function TemplateCenterPage({
   onRefreshConfigPreview,
   onShowDraftEdit,
 }: TemplateCenterPageProps) {
+  const [templateCenterMode, setTemplateCenterMode] = useState<TemplateCenterMode>('sections')
   const [metadata, setMetadata] = useState<TemplateCenterMetadata>(fallbackTemplateCenterMetadata)
   const [activeSectionId, setActiveSectionId] = useState(fallbackTemplateCenterMetadata.sections[0].id)
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
@@ -275,42 +279,68 @@ export function TemplateCenterPage({
         <div className="module-head">
           <div>
             <span className="eyebrow">模板中心</span>
-            <h2>当前任务配置摘要</h2>
-            <p>按店小秘编辑页分区维护多套模板。默认优先使用模板；临时手工覆盖只作为最后兜底。</p>
+            <h2>{templateCenterMode === 'sections' ? '当前任务配置摘要' : '整批模板组合'}</h2>
+            <p>{templateCenterMode === 'sections'
+              ? '按店小秘编辑页分区维护多套模板。默认优先使用模板；临时手工覆盖只作为最后兜底。'
+              : '从 8 个已校验的分区模板组合一份可冻结的整批编辑模板。'}</p>
           </div>
-          <button className="button button--primary" type="button" onClick={onShowDraftEdit}>回到商品箱编辑保存</button>
+          {templateCenterMode === 'sections' && (
+            <button className="button button--primary" type="button" onClick={onShowDraftEdit}>回到商品箱编辑保存</button>
+          )}
         </div>
-        <div className="template-topline" aria-label="模板中心首屏摘要">
-          <span><strong>当前任务</strong><b>{selectedTask?.name || '尚未选择保存任务'}</b></span>
-          <span><strong>当前分区</strong><b>{activeSection.label}</b></span>
-          <span><strong>可用模板</strong><b>{sectionTemplates.length} 套</b></span>
-          <span><strong>保存状态</strong><b>{hasUnsavedChanges ? '有未保存修改' : saveState.status}</b></span>
+        <div className="template-center-mode-switch" role="tablist" aria-label="模板中心模式">
+          <button type="button" role="tab" aria-selected={templateCenterMode === 'sections'} className={templateCenterMode === 'sections' ? 'is-active' : ''} onClick={() => setTemplateCenterMode('sections')}>分区模板</button>
+          <button type="button" role="tab" aria-selected={templateCenterMode === 'batch_bundle'} className={templateCenterMode === 'batch_bundle' ? 'is-active' : ''} onClick={() => setTemplateCenterMode('batch_bundle')}>整批模板</button>
         </div>
-        <div className="template-usage-confirmation" aria-label="模板使用确认">
-          <span>
-            <strong>当前实际使用</strong>
-            <b>{activeTemplate ? activeTemplate.template_name : '还没有保存模板'}</b>
-            <small>{activeTemplate ? `本次执行会使用：${activeSection.label} / ${activeTemplate.template_name}` : '当前分区没有可执行模板；请直接填写并保存为店铺或类目模板。'}</small>
-          </span>
-          <span>
-            <strong>保存状态</strong>
-            <b>{hasUnsavedChanges ? '有未保存修改' : saveState.status}</b>
-            <small>未保存修改不会进入执行。</small>
-          </span>
-          <span>
-            <strong>执行取值</strong>
-            <b>{executionStatus}</b>
-            <small>{executionSummary}</small>
-          </span>
-          <span>
-            <strong>下一步</strong>
-            <b>{nextTemplateStep}</b>
-            <small>发布、批量和无人值守仍保持关闭。</small>
-          </span>
-        </div>
-        <small className="template-center-receipt">{saveState.detail} 选择或修改模板只会影响当前表单，保存为模板后才会进入默认执行路径。</small>
+        {templateCenterMode === 'sections' && (
+          <>
+            <div className="template-topline" aria-label="模板中心首屏摘要">
+              <span><strong>当前任务</strong><b>{selectedTask?.name || '尚未选择保存任务'}</b></span>
+              <span><strong>当前分区</strong><b>{activeSection.label}</b></span>
+              <span><strong>可用模板</strong><b>{sectionTemplates.length} 套</b></span>
+              <span><strong>保存状态</strong><b>{hasUnsavedChanges ? '有未保存修改' : saveState.status}</b></span>
+            </div>
+            <div className="template-usage-confirmation" aria-label="模板使用确认">
+              <span>
+                <strong>当前实际使用</strong>
+                <b>{activeTemplate ? activeTemplate.template_name : '还没有保存模板'}</b>
+                <small>{activeTemplate ? `本次执行会使用：${activeSection.label} / ${activeTemplate.template_name}` : '当前分区没有可执行模板；请直接填写并保存为店铺或类目模板。'}</small>
+              </span>
+              <span>
+                <strong>保存状态</strong>
+                <b>{hasUnsavedChanges ? '有未保存修改' : saveState.status}</b>
+                <small>未保存修改不会进入执行。</small>
+              </span>
+              <span>
+                <strong>执行取值</strong>
+                <b>{executionStatus}</b>
+                <small>{executionSummary}</small>
+              </span>
+              <span>
+                <strong>下一步</strong>
+                <b>{nextTemplateStep}</b>
+                <small>发布、批量和无人值守仍保持关闭。</small>
+              </span>
+            </div>
+            <small className="template-center-receipt">{saveState.detail} 选择或修改模板只会影响当前表单，保存为模板后才会进入默认执行路径。</small>
+          </>
+        )}
       </div>
 
+      {templateCenterMode === 'batch_bundle' ? (
+        <BatchTemplateComposer
+          workspace={workspace}
+          selectedTask={selectedTask}
+          initialCategoryName={currentCategory}
+          onBundleCreated={onConfigSaved}
+          onEditSection={(section) => {
+            setActiveSectionId(section)
+            setTemplateCenterMode('sections')
+          }}
+          onShowDraftEdit={onShowDraftEdit}
+        />
+      ) : (
+        <>
       <div className="module-card span-1 template-section-panel">
         <div className="module-head">
           <h2>编辑页分区</h2>
@@ -446,6 +476,8 @@ export function TemplateCenterPage({
           </div>
         </details>
       </div>
+        </>
+      )}
     </section>
   )
 }

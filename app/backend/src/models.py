@@ -1,5 +1,5 @@
 from typing import Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 
 class RuntimeIdentityResponse(BaseModel):
@@ -40,11 +40,67 @@ class TemplateCreate(BaseModel):
 
 
 class TemplateUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     template_type: str | None = None
     template_name: str | None = None
     binding_scope: str | None = None
     payload: dict[str, Any] | None = None
     is_enabled: bool | None = None
+
+
+class DraftBoxScopeSnapshotCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_items: StrictInt = Field(ge=1, le=100)
+
+
+class EditBatchCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scope_snapshot_id: StrictInt = Field(gt=0)
+    template_id: StrictInt = Field(gt=0)
+
+
+class EditBatchManualApprovalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    approved_by: str = Field(min_length=1, max_length=200)
+    confirmation: str = Field(min_length=1, max_length=64)
+
+
+class EditBatchBundleSourceSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    template_id: StrictInt = Field(gt=0)
+    source_digest: str = Field(pattern=r"^[0-9A-Fa-f]{64}$")
+
+
+class EditBatchBundleSectionTemplates(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    category: EditBatchBundleSourceSelection
+    sku: EditBatchBundleSourceSelection
+    pricing: EditBatchBundleSourceSelection
+    logistics: EditBatchBundleSourceSelection
+    image: EditBatchBundleSourceSelection
+    compliance: EditBatchBundleSourceSelection
+    semi_managed: EditBatchBundleSourceSelection
+    dxm_reference: EditBatchBundleSourceSelection
+
+
+class EditBatchBundleComposeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    template_name: str = Field(min_length=1, max_length=120, pattern=r".*\S.*")
+    version: str = Field(
+        min_length=1,
+        max_length=32,
+        pattern=r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$",
+    )
+    store_id: StrictInt = Field(gt=0)
+    category_name: str | None = Field(default=None, max_length=200)
+    section_templates: EditBatchBundleSectionTemplates
 
 
 class ProductCreate(BaseModel):

@@ -1211,6 +1211,526 @@ class DxmLoginFlow:
         self._write_state(state)
         return state
 
+    def capture_draft_box_scope(self, max_items: int) -> dict[str, Any]:
+        """Read the ordered scope from the already-visible draft-box page.
+
+        This entry point deliberately never calls ``_ensure_page``, ``goto``,
+        search helpers, click helpers, or the mutation dispatcher.  A caller
+        must first establish the visible Browser Agent session and prove the
+        exact ``draft_box`` route; this method only reads that live DOM.
+        """
+
+        if isinstance(max_items, bool) or not isinstance(max_items, int) or not 1 <= max_items <= 100:
+            return self._draft_box_scope_failure(
+                'INVALID_MAX_ITEMS',
+                'max_items 必须是 1 到 100 之间的整数。',
+            )
+
+        page = self._page
+        browser_session_id = self.browser_session_id()
+        current_thread_id = threading.get_ident()
+        if (
+            page is None
+            or self._context is None
+            or self._browser is None
+            or not browser_session_id
+            or getattr(page, 'context', None) is not self._context
+            or self._is_playwright_object_closed(page)
+            or self._is_playwright_object_closed(self._context)
+            or not self._is_browser_connected(self._browser)
+        ):
+            return self._draft_box_scope_failure(
+                'BROWSER_SESSION_UNAVAILABLE',
+                '当前没有可复用的真实可见浏览器会话；系统不会另开浏览器或自动导航。',
+                page=page,
+            )
+        if self._browser_session_thread_id != current_thread_id:
+            return self._draft_box_scope_failure(
+                'BROWSER_SESSION_THREAD_MISMATCH',
+                '当前调用线程不是可见浏览器会话 owner，已拒绝跨线程读取。',
+                page=page,
+                browser_session_id=browser_session_id,
+            )
+        if self._is_headless():
+            return self._draft_box_scope_failure(
+                'VISIBLE_BROWSER_REQUIRED',
+                '范围捕获只允许复用当前真实可见浏览器。',
+                page=page,
+                browser_session_id=browser_session_id,
+            )
+
+        readiness = self._browser_readiness_gate(
+            page,
+            label='商品箱',
+            expected_identity='draft_box',
+            ready_terms=WORKFLOW_READY_TERMS['draft_box'],
+        )
+        if readiness.get('ok') is not True:
+            reason = str(readiness.get('reason') or '')
+            reason_code = {
+                'login_required': 'LOGIN_REQUIRED',
+                'wrong_route': 'DRAFT_BOX_PAGE_NOT_PROVEN',
+                'page_loading': 'DRAFT_BOX_PAGE_NOT_READY',
+                'blocking_modal': 'DRAFT_BOX_PAGE_NOT_READY',
+                'target_not_ready': 'DRAFT_BOX_PAGE_NOT_READY',
+                'page_probe_failed': 'DRAFT_BOX_PAGE_NOT_READY',
+            }.get(reason, 'DRAFT_BOX_PAGE_NOT_READY')
+            return self._draft_box_scope_failure(
+                reason_code,
+                str(readiness.get('message') or '当前商品箱页面未就绪。'),
+                page=page,
+                browser_session_id=browser_session_id,
+                readiness=readiness,
+            )
+
+        try:
+            raw_snapshot = self._read_draft_box_scope_dom(page, max_items=max_items)
+            normalized_items = self._normalize_draft_box_scope_items(
+                raw_snapshot.get('items'),
+                browser_session_id=browser_session_id,
+                page_url=str(getattr(page, 'url', '') or ''),
+            )
+        except TwoStageContractError as exc:
+            reason_code = str(exc.reason_code or '')
+            if not reason_code.startswith('DRAFT_BOX_'):
+                reason_code = 'DRAFT_BOX_ITEM_IDENTITY_INCOMPLETE'
+            return self._draft_box_scope_failure(
+                reason_code,
+                str(exc),
+                page=page,
+                browser_session_id=browser_session_id,
+                readiness=readiness,
+            )
+        except Exception as exc:
+            return self._draft_box_scope_failure(
+                'DRAFT_BOX_SCOPE_READ_FAILED',
+                f'读取当前商品箱 DOM 失败：{exc}',
+                page=page,
+                browser_session_id=browser_session_id,
+                readiness=readiness,
+            )
+
+        if not normalized_items:
+            return self._draft_box_scope_failure(
+                'DRAFT_BOX_EMPTY',
+                '当前商品箱页面没有可冻结的可见商品。',
+                page=page,
+                browser_session_id=browser_session_id,
+                readiness=readiness,
+            )
+
+        page_url = str(getattr(page, 'url', '') or '')
+        page_title = str(readiness.get('page_title') or '')
+        visible_row_count = int(raw_snapshot.get('visibleRowCount') or len(normalized_items))
+        pagination = dict(raw_snapshot.get('pagination') or {})
+        pagination.update({
+            'visible_row_count': visible_row_count,
+            'captured_count': len(normalized_items),
+            'max_items': max_items,
+            'truncated': visible_row_count > len(normalized_items),
+        })
+        facts = {
+            'filter': dict(raw_snapshot.get('filter') or {'controls': []}),
+            'sort': dict(raw_snapshot.get('sort') or {'keys': [], 'dom_order_authoritative': True}),
+            'pagination': pagination,
+            'runtime': {
+                'browser_session_id': browser_session_id,
+                'browser_visible': True,
+                'page_kind': 'draft_box',
+                'page_url': page_url,
+                'owner_thread_id': self._browser_session_thread_id,
+                'capture_thread_id': current_thread_id,
+                'binding': 'current_live_browser_page',
+            },
+        }
+        page_fact = {
+            'kind': 'draft_box',
+            'url': page_url,
+            'title': page_title,
+            'ready': True,
+            'business_marker': readiness.get('business_marker'),
+        }
+        evidence_payload = {
+            'page': page_fact,
+            'facts': facts,
+            'items': normalized_items,
+        }
+        dom_sha256 = hashlib.sha256(
+            json.dumps(
+                evidence_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(',', ':'),
+                allow_nan=False,
+            ).encode('utf-8')
+        ).hexdigest().upper()
+        evidence_refs = [dict(item['evidence_ref']) for item in normalized_items]
+        dom_digest = hashlib.sha256(
+            json.dumps(
+                evidence_refs,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(',', ':'),
+                allow_nan=False,
+            ).encode('utf-8')
+        ).hexdigest().upper()
+        captured_at = now_iso()
+        return {
+            'schema': 'dxm_draft_box_scope_capture.v1',
+            'ok': True,
+            'stage': 'draft_box_scope_captured',
+            'reason_code': 'OK',
+            'message': f'已只读捕获当前商品箱可见范围，共 {len(normalized_items)} 个商品。',
+            'captured_at': captured_at,
+            'browser_session_id': browser_session_id,
+            'page': page_fact,
+            'facts': facts,
+            'items': normalized_items,
+            'evidence': {
+                'kind': 'live_dom_snapshot',
+                'dom_sha256': dom_sha256,
+                'dom_digest': dom_digest,
+                'summary': {
+                    'captured_count': len(normalized_items),
+                    'visible_row_count': visible_row_count,
+                    'ordered': True,
+                    'stable_identity_complete': True,
+                    'page_kind': 'draft_box',
+                },
+                'refs': evidence_refs,
+            },
+            'zero_write_proof': self._draft_box_scope_zero_write_proof(),
+        }
+
+    def _draft_box_scope_failure(
+        self,
+        reason_code: str,
+        message: str,
+        *,
+        page: Page | None = None,
+        browser_session_id: str | None = None,
+        readiness: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        page_url = str(getattr(page, 'url', '') or '') if page is not None else ''
+        page_title = str((readiness or {}).get('page_title') or '')
+        page_kind = 'draft_box' if self._page_identity_result(page_url, 'draft_box').get('ok') is True else None
+        return {
+            'schema': 'dxm_draft_box_scope_capture.v1',
+            'ok': False,
+            'stage': 'draft_box_scope_rejected',
+            'reason_code': str(reason_code),
+            'message': str(message),
+            'captured_at': now_iso(),
+            'browser_session_id': browser_session_id,
+            'page': {
+                'kind': page_kind,
+                'url': page_url,
+                'title': page_title,
+                'ready': (readiness or {}).get('ok') is True,
+                'business_marker': (readiness or {}).get('business_marker'),
+            },
+            'facts': {
+                'filter': {'controls': []},
+                'sort': {'keys': [], 'dom_order_authoritative': True},
+                'pagination': {
+                    'current_page': None,
+                    'page_size': None,
+                    'total_items': None,
+                    'visible_row_count': 0,
+                    'captured_count': 0,
+                    'max_items': None,
+                    'truncated': False,
+                },
+                'runtime': {
+                    'browser_session_id': browser_session_id,
+                    'browser_visible': bool(page is not None and not self._is_headless()),
+                    'page_kind': page_kind,
+                    'page_url': page_url,
+                    'owner_thread_id': self._browser_session_thread_id,
+                    'capture_thread_id': threading.get_ident(),
+                    'binding': 'current_live_browser_page' if browser_session_id else None,
+                },
+            },
+            'items': [],
+            'evidence': {
+                'kind': 'live_dom_snapshot',
+                'dom_sha256': None,
+                'dom_digest': None,
+                'summary': {
+                    'captured_count': 0,
+                    'visible_row_count': 0,
+                    'ordered': True,
+                    'stable_identity_complete': False,
+                    'page_kind': page_kind,
+                },
+                'refs': [],
+            },
+            'zero_write_proof': self._draft_box_scope_zero_write_proof(),
+        }
+
+    @staticmethod
+    def _draft_box_scope_zero_write_proof() -> dict[str, Any]:
+        return {
+            'ok': True,
+            'strategy': 'current_visible_page_dom_read',
+            'navigation_attempted': False,
+            'interactive_action_attempted': False,
+            'mutation_dispatch_attempted': False,
+        }
+
+    def _read_draft_box_scope_dom(self, page: Page, *, max_items: int) -> dict[str, Any]:
+        result = self._evaluate_page_function_with_runtime_timeout(page, r'''(maxItems) => {
+          const textOf = (el) => String(el?.innerText || el?.textContent || '').replace(/\s+/g, ' ').trim();
+          const visible = (el) => {
+            if (!el || !el.getBoundingClientRect) return false;
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+          };
+          const rows = Array.from(document.querySelectorAll(
+            'tr.vxe-body--row, tbody tr.ant-table-row, tbody tr.el-table__row, tbody tr, [role="row"][data-row-key], [class*="vxe-body--row"]'
+          )).filter(visible).filter(row => {
+            const text = textOf(row);
+            if (!text) return false;
+            const compact = text.replace(/\s+/g, '');
+            if (/图片标题\/产品ID/.test(compact) && compact.includes('操作')) return false;
+            return true;
+          });
+          const hostMatches = (host, domain) => host === domain || host.endsWith(`.${domain}`);
+          const isDxmHost = (host) => hostMatches(host, 'dianxiaomi.com');
+          const isSupportedProductSource = (parsed) => {
+            const host = parsed.hostname.toLowerCase();
+            const path = parsed.pathname;
+            if (isDxmHost(host)) return false;
+            if (hostMatches(host, '1688.com')) return /^\/offer\/[0-9]+\.html$/i.test(path);
+            if (hostMatches(host, 'yangkeduo.com')) {
+              return /^\/goods2?\.html$/i.test(path) && /^[0-9]+$/.test(String(parsed.searchParams.get('goods_id') || ''));
+            }
+            if (hostMatches(host, 'aliexpress.com')) return /^\/item\/[0-9]+\.html$/i.test(path);
+            return false;
+          };
+          const sourceUrls = (row) => Array.from(row.querySelectorAll('a[href]')).map(anchor => {
+            try {
+              const sourceCell = anchor.closest('[data-field="source"],[data-column="source"],.source-cell,[class*="source"]');
+              const sourceLabel = textOf(anchor);
+              if (!sourceCell && !/(来源|源商品|原商品|source)/i.test(sourceLabel)) return '';
+              const parsed = new URL(String(anchor.href || anchor.getAttribute('href') || ''), location.href);
+              if (!['http:', 'https:'].includes(parsed.protocol) || !isSupportedProductSource(parsed)) return '';
+              parsed.hash = '';
+              return parsed.href;
+            } catch (_) {
+              return '';
+            }
+          }).filter(Boolean);
+          const productId = (row, rowText) => {
+            const nodes = [row, ...Array.from(row.querySelectorAll('[data-product-id],[data-productid]'))];
+            for (const node of nodes) {
+              for (const key of ['data-product-id', 'data-productid']) {
+                const value = String(node.getAttribute?.(key) || '').trim();
+                if (/^[A-Za-z0-9_-]{5,128}$/.test(value)) return value;
+              }
+            }
+            for (const anchor of Array.from(row.querySelectorAll('a[href]'))) {
+              try {
+                const parsed = new URL(String(anchor.href || anchor.getAttribute('href') || ''), location.href);
+                if (!isDxmHost(parsed.hostname.toLowerCase()) || !parsed.pathname.startsWith('/web/smt/')) continue;
+                for (const key of ['productId', 'product_id', 'productid']) {
+                  const value = String(parsed.searchParams.get(key) || '').trim();
+                  if (/^[A-Za-z0-9_-]{5,128}$/.test(value)) return value;
+                }
+              } catch (_) {}
+            }
+            const match = rowText.match(/(?:产品|商品|Product)\s*ID\s*[:：#]?\s*([A-Za-z0-9_-]{5,128})/i);
+            return match ? match[1] : null;
+          };
+          const storeEvidence = (row) => {
+            const cells = Array.from(row.querySelectorAll('td,[role="cell"],.vxe-body--column,.ant-table-cell,.el-table__cell'));
+            const explicit = Array.from(row.querySelectorAll('[data-store-name],[data-field="store"],[data-column="store"],.store-cell'));
+            const table = row.closest('table');
+            const headers = table ? Array.from(table.querySelectorAll('thead th,[role="columnheader"],.vxe-header--column')) : [];
+            const storeColumnIndex = headers.findIndex(header => /^(店铺账号|店铺|store(?:\s+account)?)$/i.test(textOf(header).replace(/\s+/g, ' ').trim()));
+            const headerBoundCell = storeColumnIndex >= 0 ? cells[storeColumnIndex] : null;
+            const candidates = [...new Set([...explicit, ...(headerBoundCell ? [headerBoundCell] : [])])];
+            for (const candidate of candidates) {
+              const cell = candidate.matches?.('td,[role="cell"],.vxe-body--column,.ant-table-cell,.el-table__cell')
+                ? candidate
+                : candidate.closest?.('td,[role="cell"],.vxe-body--column,.ant-table-cell,.el-table__cell') || candidate;
+              const cellText = textOf(cell);
+              const quotedNames = Array.from(cellText.matchAll(/「([^」]+)」/g)).map(match => match[1]);
+              const storeName = String(candidate.getAttribute?.('data-store-name') || quotedNames.at(-1) || '').replace(/\s+/g, ' ').trim();
+              if (!storeName) continue;
+              const columnIndex = cells.indexOf(cell);
+              if (columnIndex < 0 && !candidate.getAttribute?.('data-store-name')) continue;
+              return {
+                store_name: storeName,
+                cell_text: cellText.slice(0, 240),
+                source: 'structured_store_cell',
+                column_index: Math.max(0, columnIndex),
+                tag: String(cell.tagName || ''),
+                class_name: String(cell.className || '').slice(0, 160),
+              };
+            }
+            return null;
+          };
+          const title = (row, rowText) => {
+            const explicit = row.querySelector('[data-product-title],[data-field="title"],.product-title,.goods-title,.title-cell,[class*="product-title"]');
+            const explicitValue = String(explicit?.getAttribute?.('data-product-title') || textOf(explicit)).replace(/\s+/g, ' ').trim();
+            if (explicitValue) return explicitValue.slice(0, 500);
+            const cells = Array.from(row.querySelectorAll('td,[role="cell"],.vxe-body--column,.ant-table-cell,.el-table__cell'));
+            const candidate = cells.map(cell => textOf(cell)).find(value => {
+              const compact = value.replace(/\s+/g, '');
+              return value.length >= 2 && !/^(编辑|更多|发布|移入待发布)$/.test(compact) && !/^「[^」]+」$/.test(compact);
+            });
+            if (candidate) return candidate.replace(/(?:产品|商品)\s*ID\s*[:：#]?\s*[A-Za-z0-9_-]{5,128}/i, '').trim().slice(0, 500);
+            return rowText.split(/(?:产品|商品)\s*ID\s*[:：#]?/i)[0].replace(/「[^」]+」/g, '').trim().slice(0, 500);
+          };
+          const controls = Array.from(document.querySelectorAll('input:not([type="hidden"]),textarea,select'))
+            .filter(visible)
+            .slice(0, 16)
+            .map(control => ({
+              key: String(control.getAttribute('data-filter-key') || control.getAttribute('name') || control.getAttribute('placeholder') || control.id || control.tagName).trim().slice(0, 120),
+              value: String(control.value || control.options?.[control.selectedIndex]?.text || '').trim().slice(0, 240),
+              source: 'visible_filter_control',
+            }));
+          const sortKeys = Array.from(document.querySelectorAll('[aria-sort]:not([aria-sort="none"]),[data-sort-order],[data-sort-direction],.sort-active,.active-sort'))
+            .filter(visible)
+            .slice(0, 8)
+            .map(node => ({
+              key: textOf(node).slice(0, 120),
+              direction: String(node.getAttribute('aria-sort') || node.getAttribute('data-sort-order') || node.getAttribute('data-sort-direction') || '').toLowerCase(),
+            }))
+            .filter(item => item.key || item.direction);
+          const currentPageNode = document.querySelector('.ant-pagination-item-active,.el-pager .active,[aria-current="page"]');
+          const paginationText = textOf(document.querySelector('.ant-pagination-total-text,.el-pagination__total,.pagination,.ant-pagination'));
+          const totalMatch = paginationText.match(/(?:共|total)\s*(\d+)/i);
+          const pageSizeNode = document.querySelector('[data-page-size],.ant-select-selection-item,.el-pagination__sizes select');
+          const pageSizeMatch = String(pageSizeNode?.getAttribute?.('data-page-size') || pageSizeNode?.value || textOf(pageSizeNode)).match(/\d+/);
+          const items = rows.slice(0, maxItems).map((row, index) => {
+            const rowText = textOf(row);
+            return {
+              domIndex: index,
+              title: title(row, rowText),
+              productId: productId(row, rowText),
+              sourceUrls: sourceUrls(row),
+              storeEvidence: storeEvidence(row),
+              rowText: rowText.slice(0, 900),
+            };
+          });
+          return {
+            items,
+            visibleRowCount: rows.length,
+            filter: {controls},
+            sort: {keys: sortKeys, dom_order_authoritative: true},
+            pagination: {
+              current_page: Number.parseInt(textOf(currentPageNode), 10) || null,
+              page_size: pageSizeMatch ? Number.parseInt(pageSizeMatch[0], 10) : null,
+              total_items: totalMatch ? Number.parseInt(totalMatch[1], 10) : null,
+            },
+          };
+        }''', max_items, timeout=3000)
+        if not isinstance(result, dict):
+            raise RuntimeError('DOM snapshot did not return an object')
+        return result
+
+    @staticmethod
+    def _normalize_draft_box_scope_items(
+        raw_items: Any,
+        *,
+        browser_session_id: str,
+        page_url: str,
+    ) -> list[dict[str, Any]]:
+        if not isinstance(raw_items, list):
+            raise TwoStageContractError(
+                'DRAFT_BOX_SCOPE_READ_FAILED',
+                '商品箱 DOM 返回的 items 不是列表。',
+            )
+        normalized: list[dict[str, Any]] = []
+        fingerprints: set[str] = set()
+        for position, raw in enumerate(raw_items, start=1):
+            if not isinstance(raw, Mapping):
+                raise TwoStageContractError(
+                    'DRAFT_BOX_ITEM_IDENTITY_INCOMPLETE',
+                    f'商品箱第 {position} 行不是结构化商品记录。',
+                )
+            title = ' '.join(str(raw.get('title') or '').split())
+            product_id = str(raw.get('productId') or '').strip() or None
+            source_urls = [str(value).strip() for value in (raw.get('sourceUrls') or []) if str(value).strip()]
+            canonical_urls: list[str] = []
+            primary_source_url: str | None = None
+            source: dict[str, Any] | None = None
+            if source_urls:
+                canonical_candidates = sorted({
+                    str(canonical_source_identity(value, [value])['primary_url'])
+                    for value in source_urls
+                })
+                source = canonical_source_identity(canonical_candidates[0], canonical_candidates)
+                canonical_urls = list(source['urls'])
+                primary_source_url = str(source['primary_url'])
+            store = dict(raw.get('storeEvidence') or {}) if isinstance(raw.get('storeEvidence'), Mapping) else {}
+            store_name = ' '.join(str(store.get('store_name') or '').split())
+            store_cell_text = ' '.join(str(store.get('cell_text') or '').split())
+            if not title or not store_name or not store_cell_text or store.get('source') != 'structured_store_cell':
+                raise TwoStageContractError(
+                    'DRAFT_BOX_ITEM_IDENTITY_INCOMPLETE',
+                    f'商品箱第 {position} 行缺少标题或结构化店铺证据。',
+                )
+            if product_id:
+                identity = {
+                    'kind': 'product_id',
+                    'value': product_id,
+                    'fingerprint': hashlib.sha256(f'product_id:{product_id}'.encode('utf-8')).hexdigest().upper(),
+                }
+            elif source is not None:
+                identity = {
+                    'kind': 'source_url',
+                    'value': source['primary_url'],
+                    'fingerprint': source['fingerprint'],
+                }
+            else:
+                raise TwoStageContractError(
+                    'DRAFT_BOX_ITEM_IDENTITY_INCOMPLETE',
+                    f'商品箱第 {position} 行缺少产品 ID 或来源 URL。',
+                )
+            fingerprint = str(identity['fingerprint'])
+            if fingerprint in fingerprints:
+                raise TwoStageContractError(
+                    'DRAFT_BOX_ITEM_IDENTITY_AMBIGUOUS',
+                    f'商品箱存在重复或歧义身份：第 {position} 行与前序商品相同。',
+                )
+            fingerprints.add(fingerprint)
+            dom_index = int(raw.get('domIndex') if raw.get('domIndex') is not None else position - 1)
+            row_text = ' '.join(str(raw.get('rowText') or '').split())[:900]
+            row_sha256 = hashlib.sha256(row_text.encode('utf-8')).hexdigest().upper()
+            store_evidence = {
+                'store_name': store_name,
+                'cell_text': store_cell_text[:240],
+                'source': 'structured_store_cell',
+                'column_index': int(store.get('column_index') or 0),
+                'tag': str(store.get('tag') or ''),
+                'class_name': str(store.get('class_name') or ''),
+                'dom_index': dom_index,
+            }
+            evidence_ref = {
+                'kind': 'live_dom_row',
+                'browser_session_id': browser_session_id,
+                'page_kind': 'draft_box',
+                'page_url': page_url,
+                'dom_index': dom_index,
+                'row_sha256': row_sha256,
+            }
+            normalized.append({
+                'position': position,
+                'title': title,
+                'product_id': product_id,
+                'source_url': primary_source_url,
+                'source_urls': canonical_urls,
+                'stable_identity': identity,
+                'store_evidence': store_evidence,
+                'row_text_excerpt': row_text,
+                'evidence_ref': evidence_ref,
+            })
+        return normalized
+
     def perform_draft_box_action(
         self,
         action: str,

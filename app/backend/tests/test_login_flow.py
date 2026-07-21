@@ -2,6 +2,7 @@ from pathlib import Path
 import asyncio
 import ctypes
 import hashlib
+import json
 import re
 import threading
 import time
@@ -261,6 +262,566 @@ def test_login_start_and_continue_are_dispatched_on_same_thread(monkeypatch):
 
 def test_draft_box_target_opens_status_zero_collection_list():
     assert WORKFLOW_TARGETS['draft_box']['url'].endswith('/web/smt/smtProductList/draft?status=0')
+
+
+class ScopeConnectedBrowser:
+    def is_connected(self):
+        return True
+
+    def on(self, *_args):
+        return None
+
+
+class ScopeOpenContext:
+    def is_closed(self):
+        return False
+
+    def on(self, *_args):
+        return None
+
+
+def _bind_visible_scope_session(flow, page):
+    browser = ScopeConnectedBrowser()
+    context = ScopeOpenContext()
+    page.context = context
+    flow._browser = browser
+    flow._context = context
+    flow._page = page
+    flow._browser_session_thread_id = threading.get_ident()
+    flow._bind_browser_context_generation(context)
+    flow._is_headless = lambda: False
+    return flow
+
+
+class ScopeSnapshotPage:
+    url = WORKFLOW_TARGETS['draft_box']['url']
+
+    def __init__(self, snapshot, *, loading=False):
+        self.snapshot = snapshot
+        self.loading = loading
+        self.evaluate_calls = []
+
+    def title(self):
+        return '店小秘--速卖通商品箱'
+
+    def evaluate(self, script, arg=None):
+        self.evaluate_calls.append((script, arg))
+        if 'businessMarkerCount' in script:
+            return {
+                'readyState': 'complete',
+                'loading': self.loading,
+                'loadingCount': 1 if self.loading else 0,
+                'blockingModal': None,
+                'businessMarker': '标题/产品ID',
+                'businessMarkerCount': 1,
+                'bodyExcerpt': '店铺账号 | 标题/产品ID',
+            }
+        return self.snapshot
+
+
+def test_capture_draft_box_scope_returns_ordered_readonly_current_session_snapshot(monkeypatch, tmp_path):
+    class DraftBoxPage:
+        url = WORKFLOW_TARGETS['draft_box']['url']
+
+        def __init__(self):
+            self.evaluate_calls = []
+
+        def title(self):
+            return '店小秘--速卖通商品箱'
+
+        def evaluate(self, script, arg=None):
+            self.evaluate_calls.append((script, arg))
+            if 'businessMarkerCount' in script:
+                return {
+                    'readyState': 'complete',
+                    'loading': False,
+                    'loadingCount': 0,
+                    'blockingModal': None,
+                    'businessMarker': '标题/产品ID',
+                    'businessMarkerCount': 1,
+                    'bodyExcerpt': '店铺账号 | 标题/产品ID',
+                }
+            return {
+                'items': [
+                    {
+                        'domIndex': 4,
+                        'title': '第一个商品',
+                        'productId': 'DXM-2002',
+                        'sourceUrls': ['https://detail.1688.com/offer/1013604102950.html'],
+                        'storeEvidence': {
+                            'store_name': 'Alpha Store',
+                            'cell_text': '「Alpha Store」',
+                            'source': 'structured_store_cell',
+                            'column_index': 2,
+                        },
+                        'rowText': '第一个商品 产品ID：DXM-2002 「Alpha Store」 编辑',
+                    },
+                    {
+                        'domIndex': 7,
+                        'title': '第二个商品',
+                        'productId': None,
+                        'sourceUrls': ['https://www.aliexpress.com/item/1005011837878679.html?spm=scope'],
+                        'storeEvidence': {
+                            'store_name': 'Beta Store',
+                            'cell_text': '「Beta Store」',
+                            'source': 'structured_store_cell',
+                            'column_index': 2,
+                        },
+                        'rowText': '第二个商品 「Beta Store」 编辑',
+                    },
+                ],
+                'visibleRowCount': 2,
+                'filter': {
+                    'controls': [{'key': 'search', 'value': '待处理', 'source': 'visible_input'}],
+                },
+                'sort': {
+                    'keys': [{'key': '创建时间', 'direction': 'descending'}],
+                    'dom_order_authoritative': True,
+                },
+                'pagination': {
+                    'current_page': 1,
+                    'page_size': 20,
+                    'total_items': 2,
+                },
+            }
+
+    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+    page = DraftBoxPage()
+    _bind_visible_scope_session(flow, page)
+
+    result = flow.capture_draft_box_scope(max_items=2)
+
+    assert result['schema'] == 'dxm_draft_box_scope_capture.v1'
+    assert result['ok'] is True
+    assert result['stage'] == 'draft_box_scope_captured'
+    assert [item['position'] for item in result['items']] == [1, 2]
+    assert result['items'][0]['stable_identity'] == {
+        'kind': 'product_id',
+        'value': 'DXM-2002',
+        'fingerprint': result['items'][0]['stable_identity']['fingerprint'],
+    }
+    assert result['items'][1]['stable_identity']['kind'] == 'source_url'
+    assert result['items'][1]['stable_identity']['value'].startswith('https://www.aliexpress.com/item/')
+    assert result['facts']['pagination']['current_page'] == 1
+    assert result['facts']['runtime']['browser_session_id'] == flow.browser_session_id()
+    assert result['facts']['runtime']['page_kind'] == 'draft_box'
+    assert result['evidence']['kind'] == 'live_dom_snapshot'
+    assert len(result['evidence']['dom_sha256']) == 64
+    assert result['evidence']['dom_digest'] == hashlib.sha256(
+        json.dumps(
+            result['evidence']['refs'],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(',', ':'),
+            allow_nan=False,
+        ).encode('utf-8')
+    ).hexdigest().upper()
+    assert result['zero_write_proof'] == {
+        'ok': True,
+        'strategy': 'current_visible_page_dom_read',
+        'navigation_attempted': False,
+        'interactive_action_attempted': False,
+        'mutation_dispatch_attempted': False,
+    }
+    assert len(page.evaluate_calls) == 2
+
+
+def test_capture_draft_box_scope_uses_one_deterministic_primary_for_multiple_source_urls(tmp_path):
+    source_urls = [
+        'https://mobile.yangkeduo.com/goods.html?goods_id=877361738237',
+        'https://detail.1688.com/offer/1013604102950.html',
+    ]
+    page = ScopeSnapshotPage({
+        'items': [{
+            'domIndex': 0,
+            'title': '多来源商品',
+            'productId': None,
+            'sourceUrls': source_urls,
+            'storeEvidence': {
+                'store_name': 'Alpha Store',
+                'cell_text': '「Alpha Store」',
+                'source': 'structured_store_cell',
+                'column_index': 2,
+            },
+            'rowText': '多来源商品 「Alpha Store」 编辑',
+        }],
+        'visibleRowCount': 1,
+        'filter': {'controls': []},
+        'sort': {'keys': [], 'dom_order_authoritative': True},
+        'pagination': {'current_page': 1, 'page_size': 20, 'total_items': 1},
+    })
+    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+    _bind_visible_scope_session(flow, page)
+
+    result = flow.capture_draft_box_scope(max_items=20)
+
+    assert result['ok'] is True
+    item = result['items'][0]
+    assert item['source_urls'] == sorted(item['source_urls'])
+    assert item['source_url'] == item['source_urls'][0]
+    assert item['stable_identity']['value'] == item['source_url']
+
+
+def test_capture_draft_box_scope_reads_offline_draft_box_dom_without_network_or_click(monkeypatch, tmp_path):
+    html = '''
+    <html>
+      <head>
+        <title>店小秘--速卖通商品箱</title>
+        <style>
+          table, input, button, a, .ant-pagination, [data-page-size] { display: block; width: 240px; height: 28px; }
+          tr, td, th { display: table-row; width: 300px; height: 30px; }
+        </style>
+      </head>
+      <body>
+        <input data-filter-key="search" value="待处理" placeholder="搜索内容" />
+        <table>
+          <thead><tr><th>店铺账号</th><th aria-sort="descending">创建时间</th><th>标题/产品ID</th></tr></thead>
+          <tbody>
+            <tr class="vxe-body--row" data-product-id="DXM-1001">
+              <td class="title-cell" data-product-title="商品 A">商品 A 产品ID：DXM-1001</td>
+              <td class="store-cell" data-store-name="Alpha Store">「Alpha Store」</td>
+              <td><a href="https://detail.1688.com/offer/1013604102950.html">来源</a></td>
+              <td><button>编辑</button></td>
+            </tr>
+            <tr class="vxe-body--row">
+              <td class="title-cell" data-product-title="商品 B">商品 B</td>
+              <td class="store-cell" data-store-name="Beta Store">「Beta Store」</td>
+              <td><a href="https://www.aliexpress.com/item/1005011837878679.html?spm=offline">来源</a></td>
+              <td><button>编辑</button></td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="ant-pagination"><span class="ant-pagination-item-active">1</span><span>共 2 条</span></div>
+        <span data-page-size="20">20 / 页</span>
+      </body>
+    </html>
+    '''
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context(viewport={'width': 1280, 'height': 800})
+        context.route(
+            '**/*',
+            lambda route: route.fulfill(
+                status=200,
+                headers={'Content-Type': 'text/html; charset=utf-8'},
+                body=html,
+            ),
+        )
+        page = context.new_page()
+        page.goto(WORKFLOW_TARGETS['draft_box']['url'])
+        requests_after_load = []
+        page.on('request', lambda request: requests_after_load.append((request.method, request.url)))
+        flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+        flow._browser = browser
+        flow._context = context
+        flow._page = page
+        flow._browser_session_thread_id = threading.get_ident()
+        flow._bind_browser_context_generation(context)
+        monkeypatch.setattr(flow, '_is_headless', lambda: False)
+
+        result = flow.capture_draft_box_scope(max_items=2)
+
+        context.close()
+        browser.close()
+
+    assert result['ok'] is True, (result['reason_code'], result['message'])
+    assert [item['title'] for item in result['items']] == ['商品 A', '商品 B']
+    assert result['items'][0]['stable_identity']['kind'] == 'product_id'
+    assert result['items'][1]['stable_identity']['kind'] == 'source_url'
+    assert result['facts']['filter']['controls'][0]['value'] == '待处理'
+    assert result['facts']['sort']['keys'] == [{'key': '创建时间', 'direction': 'descending'}]
+    assert result['facts']['pagination']['total_items'] == 2
+    assert requests_after_load == []
+
+
+@pytest.mark.parametrize(
+    ("row_html", "expected_reason"),
+    [
+        (
+            '''
+            <tr class="vxe-body--row" data-row-key="row_0001" data-id="internal_0001">
+              <td class="title-cell" data-product-title="普通商品">普通商品</td>
+              <td class="store-cell" data-store-name="Alpha Store">「Alpha Store」</td>
+              <td><a href="https://example.com/help">帮助</a></td>
+            </tr>
+            ''',
+            'DRAFT_BOX_ITEM_IDENTITY_INCOMPLETE',
+        ),
+        (
+            '''
+            <tr class="vxe-body--row">
+              <td class="title-cell" data-product-title="普通商品">普通商品</td>
+              <td class="store-cell" data-store-name="Alpha Store">「Alpha Store」</td>
+              <td><a href="https://www.dianxiaomi.com/web/smt/edit?id=abcde">编辑</a></td>
+            </tr>
+            ''',
+            'DRAFT_BOX_ITEM_IDENTITY_INCOMPLETE',
+        ),
+        (
+            '''
+            <tr class="vxe-body--row">
+              <td class="title-cell" data-product-title="普通商品">普通商品</td>
+              <td class="store-cell" data-store-name="Alpha Store">「Alpha Store」</td>
+              <td><a href="https://static.dianxiaomi.com/help/guide?id=abcde">来源</a></td>
+            </tr>
+            ''',
+            'DRAFT_BOX_ITEM_IDENTITY_INCOMPLETE',
+        ),
+        (
+            '''
+            <tr class="vxe-body--row">
+              <td class="title-cell" data-product-title="普通商品">普通商品</td>
+              <td class="store-cell" data-store-name="Alpha Store">「Alpha Store」</td>
+              <td><a href="https://example.com/product/ordinary-link">来源</a></td>
+            </tr>
+            ''',
+            'DRAFT_BOX_ITEM_IDENTITY_INCOMPLETE',
+        ),
+        (
+            '''
+            <tr class="vxe-body--row" data-product-id="DXM-1001">
+              <td class="title-cell" data-product-title="「Pokemon」立牌">「Pokemon」立牌 产品ID：DXM-1001</td>
+              <td><a href="https://detail.1688.com/offer/1013604102950.html">来源</a></td>
+            </tr>
+            ''',
+            'DRAFT_BOX_ITEM_IDENTITY_INCOMPLETE',
+        ),
+    ],
+)
+def test_capture_draft_box_scope_rejects_unproven_product_source_and_store_identity(
+    monkeypatch,
+    tmp_path,
+    row_html,
+    expected_reason,
+):
+    html = f'''
+    <html>
+      <head>
+        <title>店小秘--速卖通商品箱</title>
+        <style>
+          table, input, button, a {{ display: block; width: 240px; height: 28px; }}
+          tr, td, th {{ display: table-row; width: 300px; height: 30px; }}
+        </style>
+      </head>
+      <body>
+        <table>
+          <thead><tr><th>标题/产品ID</th><th>店铺账号</th><th>来源</th></tr></thead>
+          <tbody>{row_html}</tbody>
+        </table>
+      </body>
+    </html>
+    '''
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context(viewport={'width': 1280, 'height': 800})
+        context.route(
+            '**/*',
+            lambda route: route.fulfill(
+                status=200,
+                headers={'Content-Type': 'text/html; charset=utf-8'},
+                body=html,
+            ),
+        )
+        page = context.new_page()
+        page.goto(WORKFLOW_TARGETS['draft_box']['url'])
+        flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+        flow._browser = browser
+        flow._context = context
+        flow._page = page
+        flow._browser_session_thread_id = threading.get_ident()
+        flow._bind_browser_context_generation(context)
+        monkeypatch.setattr(flow, '_is_headless', lambda: False)
+
+        result = flow.capture_draft_box_scope(max_items=1)
+
+        context.close()
+        browser.close()
+
+    assert result['ok'] is False
+    assert result['reason_code'] == expected_reason
+    assert result['items'] == []
+    assert result['zero_write_proof']['mutation_dispatch_attempted'] is False
+
+
+def test_capture_draft_box_scope_distinguishes_expired_login_without_dom_scan(tmp_path):
+    class LoginPage:
+        url = 'https://www.dianxiaomi.com/login'
+
+        def __init__(self):
+            self.evaluate_calls = 0
+
+        def title(self):
+            return '店小秘登录'
+
+        def evaluate(self, *_args):
+            self.evaluate_calls += 1
+            raise AssertionError('登录失效后不得扫描商品箱 DOM')
+
+    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+    page = LoginPage()
+    _bind_visible_scope_session(flow, page)
+
+    result = flow.capture_draft_box_scope(max_items=20)
+
+    assert result['ok'] is False
+    assert result['reason_code'] == 'LOGIN_REQUIRED'
+    assert result['items'] == []
+    assert result['zero_write_proof']['ok'] is True
+    assert page.evaluate_calls == 0
+
+
+def test_capture_draft_box_scope_rejects_page_drift_without_navigation_or_dom_scan(tmp_path):
+    class ProductListPage:
+        url = 'https://www.dianxiaomi.com/product/productList.htm'
+
+        def __init__(self):
+            self.evaluate_calls = 0
+
+        def title(self):
+            return '店小秘--产品列表'
+
+        def evaluate(self, *_args):
+            self.evaluate_calls += 1
+            raise AssertionError('页面漂移后不得扫描商品箱 DOM')
+
+    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+    page = ProductListPage()
+    _bind_visible_scope_session(flow, page)
+
+    result = flow.capture_draft_box_scope(max_items=20)
+
+    assert result['ok'] is False
+    assert result['reason_code'] == 'DRAFT_BOX_PAGE_NOT_PROVEN'
+    assert result['page']['kind'] is None
+    assert result['facts']['runtime']['page_kind'] is None
+    assert result['zero_write_proof']['navigation_attempted'] is False
+    assert page.evaluate_calls == 0
+
+
+def test_capture_draft_box_scope_distinguishes_ready_empty_list(tmp_path):
+    page = ScopeSnapshotPage({
+        'items': [],
+        'visibleRowCount': 0,
+        'filter': {'controls': []},
+        'sort': {'keys': [], 'dom_order_authoritative': True},
+        'pagination': {'current_page': 1, 'page_size': 20, 'total_items': 0},
+    })
+    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+    _bind_visible_scope_session(flow, page)
+
+    result = flow.capture_draft_box_scope(max_items=20)
+
+    assert result['ok'] is False
+    assert result['reason_code'] == 'DRAFT_BOX_EMPTY'
+    assert result['page']['kind'] == 'draft_box'
+    assert result['page']['ready'] is True
+    assert result['items'] == []
+    assert result['evidence']['refs'] == []
+    assert len(page.evaluate_calls) == 2
+
+
+def test_capture_draft_box_scope_distinguishes_loading_page_from_empty_list(tmp_path):
+    page = ScopeSnapshotPage({'items': []}, loading=True)
+    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+    _bind_visible_scope_session(flow, page)
+
+    result = flow.capture_draft_box_scope(max_items=20)
+
+    assert result['ok'] is False
+    assert result['reason_code'] == 'DRAFT_BOX_PAGE_NOT_READY'
+    assert result['items'] == []
+    assert len(page.evaluate_calls) == 1
+
+
+def test_capture_draft_box_scope_fails_closed_when_item_has_no_stable_identity(tmp_path):
+    page = ScopeSnapshotPage({
+        'items': [{
+            'domIndex': 0,
+            'title': '缺少稳定身份的商品',
+            'productId': None,
+            'sourceUrls': [],
+            'storeEvidence': {
+                'store_name': 'Alpha Store',
+                'cell_text': '「Alpha Store」',
+                'source': 'structured_store_cell',
+                'column_index': 2,
+            },
+            'rowText': '缺少稳定身份的商品 「Alpha Store」 编辑',
+        }],
+        'visibleRowCount': 1,
+        'filter': {'controls': []},
+        'sort': {'keys': [], 'dom_order_authoritative': True},
+        'pagination': {'current_page': 1, 'page_size': 20, 'total_items': 1},
+    })
+    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+    _bind_visible_scope_session(flow, page)
+
+    result = flow.capture_draft_box_scope(max_items=20)
+
+    assert result['ok'] is False
+    assert result['reason_code'] == 'DRAFT_BOX_ITEM_IDENTITY_INCOMPLETE'
+    assert result['items'] == []
+    assert result['evidence']['dom_digest'] is None
+    assert result['zero_write_proof']['mutation_dispatch_attempted'] is False
+
+
+def test_capture_draft_box_scope_rejects_duplicate_identity_as_ambiguous(tmp_path):
+    def item(dom_index, title):
+        return {
+            'domIndex': dom_index,
+            'title': title,
+            'productId': 'DXM-DUPLICATE-1',
+            'sourceUrls': [],
+            'storeEvidence': {
+                'store_name': 'Alpha Store',
+                'cell_text': '「Alpha Store」',
+                'source': 'structured_store_cell',
+                'column_index': 2,
+            },
+            'rowText': f'{title} 产品ID：DXM-DUPLICATE-1 「Alpha Store」 编辑',
+        }
+
+    page = ScopeSnapshotPage({
+        'items': [item(0, '重复商品 A'), item(1, '重复商品 B')],
+        'visibleRowCount': 2,
+        'filter': {'controls': []},
+        'sort': {'keys': [], 'dom_order_authoritative': True},
+        'pagination': {'current_page': 1, 'page_size': 20, 'total_items': 2},
+    })
+    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+    _bind_visible_scope_session(flow, page)
+
+    result = flow.capture_draft_box_scope(max_items=20)
+
+    assert result['ok'] is False
+    assert result['reason_code'] == 'DRAFT_BOX_ITEM_IDENTITY_AMBIGUOUS'
+    assert result['items'] == []
+    assert result['evidence']['refs'] == []
+
+
+@pytest.mark.parametrize('max_items', [None, True, 0, 101, -1, 1.5])
+def test_capture_draft_box_scope_bounds_max_items_before_accessing_browser(max_items, tmp_path):
+    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+
+    result = flow.capture_draft_box_scope(max_items=max_items)
+
+    assert result['ok'] is False
+    assert result['reason_code'] == 'INVALID_MAX_ITEMS'
+    assert result['browser_session_id'] is None
+    assert result['items'] == []
+
+
+def test_capture_draft_box_scope_does_not_create_browser_when_live_session_is_missing(tmp_path, monkeypatch):
+    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+    monkeypatch.setattr(flow, '_ensure_page', lambda: pytest.fail('范围捕获不得创建新浏览器'))
+    monkeypatch.setattr(flow, '_ensure_page_with_cookies', lambda: pytest.fail('范围捕获不得加载或创建会话'))
+
+    result = flow.capture_draft_box_scope(max_items=20)
+
+    assert result['ok'] is False
+    assert result['reason_code'] == 'BROWSER_SESSION_UNAVAILABLE'
+    assert result['browser_session_id'] is None
+    assert result['zero_write_proof']['navigation_attempted'] is False
 
 
 class DummyPage:

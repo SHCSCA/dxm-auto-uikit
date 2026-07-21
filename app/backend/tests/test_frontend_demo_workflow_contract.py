@@ -13,6 +13,8 @@ ISSUES_PAGE_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "workb
 DXM_ACCESS_PAGE_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "workbench" / "DxmAccessPage.tsx"
 ACQUISITION_CLAIM_PAGE_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "workbench" / "AcquisitionClaimPage.tsx"
 DRAFT_EDIT_SAVE_PAGE_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "workbench" / "DraftEditSavePage.tsx"
+BATCH_EDIT_PAGE_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "workbench" / "BatchEditPage.tsx"
+BATCH_RECORDS_PAGE_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "workbench" / "BatchRecordsPage.tsx"
 TEMPLATE_CENTER_PAGE_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "workbench" / "TemplateCenterPage.tsx"
 PRODUCT_TASKS_PAGE_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "workbench" / "ProductTasksPage.tsx"
 PRODUCT_TASK_PANELS_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "workbench" / "ProductTaskPanels.tsx"
@@ -25,55 +27,37 @@ README = REPO_ROOT / "README.md"
 USER_GUIDE = REPO_ROOT / "docs" / "product" / "用户交付使用说明-20260526.md"
 
 
-def test_sidebar_uses_two_stage_production_workflow():
+def test_sidebar_uses_low_noise_operator_navigation():
     source = REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx"
     shell = source.read_text(encoding="utf-8")
+    primary_navigation = shell[shell.index("const primaryNavigation"):shell.index("const sectionLabels")]
 
-    assert "待认领商品" in shell
-    assert "商品箱编辑保存" in shell
-    assert "账号与浏览器" in shell
-    assert "编辑保存" in shell
-    assert "模板中心" in shell
-    assert "模板管理" in shell
-    assert "结果报告" in shell
-    assert "保存证据" in shell
-    assert "问题与证据" in shell
-    assert "系统维护" in shell
-    assert "浏览器现场" in shell
-    assert "真实浏览器" in shell
-    for group in ["准备", "第一段：待认领商品", "配置", "第二段：编辑只保存", "复盘", "维护"]:
-        assert f"label: '{group}'" in shell
-    assert "选择商品" not in shell
-    assert "QA" not in shell
-    assert "L2" not in shell
-    assert "run-id" not in shell
+    for label in ["编辑工作台", "模板中心", "浏览器现场", "批次记录", "系统设置"]:
+        assert label in primary_navigation
+    for hidden_label in ["待认领入箱", "商品箱编辑保存", "当前保存任务", "结果报告", "问题与证据"]:
+        assert hidden_label not in primary_navigation
+    for technical_label in ["QA", "L2", "run-id"]:
+        assert technical_label not in primary_navigation
 
 
-def test_sidebar_exposes_production_two_stage_workflow_only():
+def test_sidebar_exposes_only_five_operator_destinations():
     source = REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx"
     shell = source.read_text(encoding="utf-8")
-    primary_area_section = shell[shell.index("const primaryAreas"):shell.index("const sectionLabels")]
+    primary_navigation = shell[shell.index("const primaryNavigation"):shell.index("const sectionLabels")]
 
     expected_items = [
-        "{ id: 'home', label: '首页'",
-        "{ id: 'dxm_access', label: '账号与浏览器'",
-        "{ id: 'acquisition_claim', label: '待认领入箱'",
+        "{ id: 'home', label: '编辑工作台'",
         "{ id: 'template_center', label: '模板中心'",
-        "{ id: 'template_management', label: '模板管理'",
-        "{ id: 'draft_edit_save', label: '商品箱编辑保存'",
-        "{ id: 'product_tasks', label: '当前保存任务'",
         "{ id: 'start_save', label: '浏览器现场'",
-        "{ id: 'task_history', label: '任务记录'",
-        "{ id: 'results', label: '结果报告'",
-        "{ id: 'evidence', label: '报告与证据'",
-        "{ id: 'issues', label: '问题与证据'",
-        "{ id: 'settings', label: '系统维护'",
+        "{ id: 'task_history', label: '批次记录'",
+        "{ id: 'settings', label: '系统设置'",
     ]
     for item in expected_items:
-        assert item in primary_area_section
+        assert item in primary_navigation
 
-    for label in ["Agent 控制台", "证据中心", "异常池", "任务中心", "配置中心", "使用帮助", "问题诊断", "结果与问题", "执行记录", "浏览器执行", "商品采集"]:
-        assert label not in primary_area_section
+    assert primary_navigation.count("{ id: '") == 5
+    for hidden_label in ["待认领入箱", "商品箱编辑保存", "当前保存任务", "结果报告", "报告与证据", "问题与证据"]:
+        assert hidden_label not in primary_navigation
 
 
 def test_sidebar_routes_business_entries_to_reachable_pages():
@@ -86,25 +70,30 @@ def test_sidebar_routes_business_entries_to_reachable_pages():
     assert "tasks: 'product_tasks'" in normalize_section
     assert "product_tasks: 'acquisition_claim'" not in normalize_section
     assert "current_task: 'product_tasks'" in normalize_section
-    assert "task_history: 'product_tasks'" in normalize_section
+    assert "task_history: 'task_history'" in normalize_section
+    task_history_route = app_source[app_source.index("case 'task_history':"):app_source.index("case 'draft_edit_save':")]
+    assert "<BatchRecordsPage" in task_history_route
     assert "exceptions: 'issues'" in normalize_section
     assert "issues: 'results'" not in normalize_section
     assert "onShowExceptions={() => setActiveSection('issues')}" in app_source
     assert "onShowIssues={() => setActiveSection('issues')}" in app_source
 
 
-def test_home_first_screen_uses_user_decision_language_without_technical_terms():
+def test_home_first_screen_has_one_status_one_action_and_truthful_summary():
     source = HOME_PAGE_TSX.read_text(encoding="utf-8")
-    hero_section = source[source.index('<div className="hero-panel home-command">'):source.index("function OperationGuide")]
+    visible_section = source[source.index("return ("):]
 
-    for label in ["操作首页", "现在该做什么", "为什么不能继续", "下一步", "已有待认领商品", "商品箱", "编辑保存", "真实浏览器", "只保存", "不会发布"]:
-        assert label in hero_section
-    for label in ["去待认领入箱", "去商品箱编辑保存", "去真实浏览器"]:
-        assert label in source
-    for forbidden in ["L2", "L3", "probe", "run-id", "HAR", "single_save", "claim_only", "Agent 控制台"]:
-        assert forbidden not in hero_section
-    for removed_first_screen_block in ["home-menu-map", "两段式操作入口", "维护人员查看运行状态", "证据等级", "操作引导", "去浏览器现场"]:
-        assert removed_first_screen_block not in hero_section
+    for label in ["编辑工作台", "当前状态", "最近异常", "只保存，不发布"]:
+        assert label in visible_section
+    for scope_label in ["当前任务", "当前批次"]:
+        assert scope_label in source
+    assert visible_section.count("<button") == 1
+    assert "workspace.exceptions.find" in source
+    assert "selectedTask.total_jobs > 1" in source
+    assert "mode.mode === 'batch_save'" in source
+    assert "batchMode?.allowed === true" in source
+    for forbidden in ["待认领入箱", "两段真实流程", "function OperationGuide", "home-command__status-grid", "批次成功", "批次完成", "mock", "fake"]:
+        assert forbidden not in visible_section
 
 
 def test_safety_status_bar_visible_row_hides_gate_jargon_and_maintenance_details():
@@ -194,7 +183,7 @@ def test_legacy_collection_language_is_sanitized_for_operator_copy():
     ]:
         assert replacement in copy_source
     assert "return sanitized" in copy_source
-    assert "请重新从“待认领商品”把店小秘已有待认领商品认领到商品箱后再继续。" in app_source
+    assert "<BatchEditPage" in app_source
     assert "进入待认领列表" in dxm_access_source
     assert "进入采集页" not in dxm_access_source
     assert "写入认领标记" in modules_source
@@ -236,69 +225,32 @@ def test_two_stage_pages_select_loaded_store_and_claimed_product_by_default():
 
 def test_draft_edit_save_page_starts_from_claimed_product_without_technical_gate_copy():
     app_source = APP_TSX.read_text(encoding="utf-8")
-    page_source = DRAFT_EDIT_SAVE_PAGE_TSX.read_text(encoding="utf-8")
+    page_source = BATCH_EDIT_PAGE_TSX.read_text(encoding="utf-8")
     route_section = app_source[app_source.index("case 'draft_edit_save'"):app_source.index("case 'start_save'")]
 
-    assert "DraftEditSavePage" in app_source
-    assert "const selectedEditSaveTask = selectedTask?.mode === 'single_save' ? selectedTask : null" in app_source
-    assert "<DraftEditSavePage" in route_section
-    assert "selectedTask={selectedEditSaveTask}" in route_section
-    assert "selectedTask={selectedTask}" not in route_section
+    assert "BatchEditPage" in app_source
+    assert "<BatchEditPage" in route_section
+    assert "templates={workspace.templates}" in route_section
     assert "<ExecutionConsole" not in route_section
-    assert "loadOrFallback<Product[]>('/api/acquisition/claimed-products', [])" in app_source
-    assert "const [claimedDraftProducts, setClaimedDraftProducts] = useState<Product[]>([])" in app_source
-    assert "claimedProducts," in app_source
-    assert "setClaimedDraftProducts(claimedProducts)" in app_source
-    assert 'aria-label="商品箱商品"' in page_source
-    assert 'aria-label="编辑保存"' not in page_source
-    assert "商品箱商品" in page_source
-    assert "选择商品后，再创建编辑保存任务" in page_source
-    assert "只保存，不发布" in page_source
-    for label in [
-        "选择已进入商品箱的商品",
-        "确认本次使用的模板",
-        "人工确认只保存",
-        "开始编辑并只保存",
-        "查看保存结果",
-    ]:
+    assert "postJson<DraftBoxScopeSnapshot>('/api/dxm/draft-box/scope-snapshots'" in page_source
+    assert "postJson<EditBatchDetail>('/api/edit-batches'" in page_source
+    for label in ["批量编辑商品", "真实商品箱现场", "只保存 · 不发布", "冻结当前商品箱范围"]:
         assert label in page_source
 
 
 def test_draft_edit_save_uses_claimed_product_store_instead_of_first_store():
     app_source = APP_TSX.read_text(encoding="utf-8")
-    page_source = DRAFT_EDIT_SAVE_PAGE_TSX.read_text(encoding="utf-8")
+    page_source = BATCH_EDIT_PAGE_TSX.read_text(encoding="utf-8")
     route_section = app_source[app_source.index("case 'draft_edit_save'"):app_source.index("case 'start_save'")]
 
-    assert "function storeIdForClaimedProduct" in app_source
-    assert "const storeId = storeIdForClaimedProduct(product, workspace.stores)" in route_section
-    assert "workspace.stores[0]?.id" not in route_section
-    assert "该商品箱商品缺少原始店铺信息" in route_section
-    for label in [
-        "商品箱商品",
-        "这里只显示第一段已认领并确认进入商品箱的真实商品",
-        "选择商品后，再创建编辑保存任务",
-        "当前模式：只保存，不发布",
-        "商品箱验证",
-        "已确认进入商品箱",
-        "商品箱身份",
-        "店小秘已有待认领商品",
-        "确认商品箱商品正确",
-        "确认本次使用的模板",
-        "人工确认只保存",
-        "开始编辑并只保存",
-    ]:
-        assert label in page_source
-    for label in [
-        "payload.draft_box_verified",
-        "payload.claim_task_id",
-        "product.lifecycle_label",
-        "product.source_status_label",
-        "product.draft_box_verification_label",
-        "product.claim_task_id",
-    ]:
-        assert label in page_source
-    for forbidden in ["来源链接", "payload.source_url", "product.source_url"]:
-        assert forbidden not in page_source
+    assert "templates={workspace.templates}" in route_section
+    assert "store_id:" not in page_source
+    assert "product_ids:" not in page_source
+    assert "scopeSnapshot.store_identity.store_name" in page_source
+    assert "scopeSnapshot.items.map" in page_source
+    assert "item.ordinal" in page_source
+    assert "item.target_identity_sha256" in page_source
+    assert "max_items: maxItems" in page_source
     assert "L2" not in page_source
     assert "run-id" not in page_source
     assert "probe" not in page_source
@@ -307,11 +259,11 @@ def test_draft_edit_save_uses_claimed_product_store_instead_of_first_store():
         assert forbidden not in page_source
 
 
-def test_frontend_loads_claimed_draft_products_from_explicit_acquisition_api():
+def test_batch_builder_does_not_load_a_local_claimed_product_picker():
     app_source = APP_TSX.read_text(encoding="utf-8")
 
-    assert "loadOrFallback<Product[]>('/api/acquisition/claimed-products', [])" in app_source
-    assert "setClaimedDraftProducts" in app_source
+    assert "loadOrFallback<Product[]>('/api/acquisition/claimed-products', [])" not in app_source
+    assert "setClaimedDraftProducts" not in app_source
     assert "workspace.products.filter(isVerifiedClaimedDraftProduct)" not in app_source
     assert "function isVerifiedClaimedDraftProduct" not in app_source
 
@@ -1224,7 +1176,7 @@ def test_config_center_uses_compact_density_and_collapsed_assist_drawer():
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
     qa_source = QA_BROWSER_CHECK.read_text(encoding="utf-8")
 
-    assert "--font-body: 12px" in styles_source
+    assert "--font-body: 14px" in styles_source
     assert "--font-compact: 11px" in styles_source
     assert ".content-density-summary" in styles_source
     assert ".config-assist-drawer" in styles_source
@@ -1413,28 +1365,21 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "console: 'start_save'" in app_source
     assert "evidence: 'results'" not in app_source
     assert "onShowEvidence={() => setActiveSection('evidence')}" in app_source
-    assert "type WorkbenchPrimaryArea" in shell_source
-    assert "{ id: 'home', label: '首页', short: '首', hint: '查看当前步骤和下一步操作' }" in shell_source
-    assert "{ id: 'dxm_access', label: '账号与浏览器', short: '登', hint: '记住账号并打开真实店小秘浏览器' }" in shell_source
-    assert "{ id: 'acquisition_claim', label: '待认领入箱', short: '箱', hint: '把店小秘里已经存在的待认领商品放进商品箱' }" in shell_source
-    assert "{ id: 'template_center', label: '模板中心', short: '模', hint: '按店小秘编辑页分区管理多套模板' }" in shell_source
-    assert "{ id: 'template_management', label: '模板管理', short: '管', hint: '管理店铺、类目和本次任务模板' }" in shell_source
-    assert "{ id: 'draft_edit_save', label: '商品箱编辑保存', short: '箱', hint: '从已认领商品箱开始编辑并只保存' }" in shell_source
-    assert "{ id: 'product_tasks', label: '当前保存任务', short: '任', hint: '查看当前只保存任务、人工确认和恢复动作' }" in shell_source
-    assert "{ id: 'start_save', label: '浏览器现场', short: '览', hint: '查看真实浏览器、中文进度窗和人工接管' }" in shell_source
-    assert "{ id: 'results', label: '结果报告', short: '报', hint: '查看保存结果、失败原因和下一步' }" in shell_source
-    assert "{ id: 'evidence', label: '报告与证据', short: '据', hint: '查看未发布证明、页面记录和保存回包' }" in shell_source
-    assert "{ id: 'issues', label: '问题与证据', short: '证', hint: '查看阻断原因、恢复建议和证据' }" in shell_source
-    assert "{ id: 'settings', label: '系统维护', short: '系', hint: '查看运行环境、服务状态和维护设置' }" in shell_source
+    assert "type PrimaryNavigationItem" in shell_source
+    assert "{ id: 'home', label: '编辑工作台', short: '编'" in shell_source
+    assert "{ id: 'template_center', label: '模板中心', short: '模'" in shell_source
+    assert "{ id: 'start_save', label: '浏览器现场', short: '览'" in shell_source
+    assert "{ id: 'task_history', label: '批次记录', short: '记'" in shell_source
+    assert "{ id: 'settings', label: '系统设置', short: '设'" in shell_source
     assert "const sectionLabels: Record<WorkbenchSection, string>" in shell_source
-    assert "home: '首页'" in shell_source
+    assert "home: '编辑工作台'" in shell_source
     assert "dxm_access: '账号与浏览器'" in shell_source
     assert "acquisition_claim: '待认领入箱'" in shell_source
     assert "draft_edit_save: '商品箱编辑保存'" in shell_source
     assert "template_center: '模板中心'" in shell_source
     assert "template_management: '模板管理'" in shell_source
     assert "product_tasks: '当前保存任务'" in shell_source
-    assert "task_history: '任务记录'" in shell_source
+    assert "task_history: '批次记录'" in shell_source
     assert "issues: '问题与证据'" in shell_source
     assert "help: '使用帮助'" in shell_source
     assert "preflight: '浏览器现场'" in shell_source
@@ -1449,16 +1394,12 @@ def test_frontend_has_stateful_operation_guide_entry():
     assert "export { DxmAccessPage }" in workbench_source
     assert "HomePage as Dashboard" in app_source
     assert "export function HomePage" in home_page_source
-    assert "现在只做这一步" in home_page_source
-    assert "登录真实店小秘" in home_page_source
-    assert "待认领商品" in home_page_source
-    assert "检查编辑页模板" in home_page_source
-    assert "运行保存前安全检查" in home_page_source
-    assert "人工确认只保存" in home_page_source
-    assert "打开真实浏览器" in home_page_source
-    assert "function OperationGuide" in home_page_source
-    assert "第一段：待认领入箱" in home_page_source
-    assert "确认保存前安全检查通过" in home_page_source
+    assert "aria-label=\"当前状态\"" in home_page_source
+    assert "登录店小秘" in home_page_source
+    assert "检查编辑模板" in home_page_source
+    assert "打开浏览器现场" in home_page_source
+    assert "最近异常" in home_page_source
+    assert "function OperationGuide" not in home_page_source
     assert "打开真实登录页" in dxm_access_source
     assert "验证码完成后检测登录状态" in dxm_access_source
     assert "登录浏览器只用于人工登录和验证码处理" in dxm_access_source
@@ -1534,8 +1475,8 @@ def test_first_screen_keeps_status_and_precheck_guidance_compact():
         safety_bar.index("</section>")
     ]
     home_command_styles = styles_source[
-        styles_source.index(".home-command__status-grid {"):
-        styles_source.index(".home-command__boundary {")
+        styles_source.index(".home-command {"):
+        styles_source.index(".home-menu-map {")
     ]
 
     assert "真实保存已阻断" not in safety_visible
@@ -1545,13 +1486,11 @@ def test_first_screen_keeps_status_and_precheck_guidance_compact():
     assert "维护详情" not in safety_visible
     assert "维护状态说明" not in safety_visible
     assert "detailChips.map" not in safety_visible
-    assert "现在只做这一步" in home_page_source
-    assert "home-command__status-grid" in home_page_source
-    assert "grid-template-columns: repeat(3, minmax(0, 1fr));" in home_command_styles
-    assert "为什么不能继续" in home_page_source
-    assert "用户操作中" in home_page_source
-    assert "自动助手操作中" in home_page_source
-    assert "等待人工确认" in home_page_source
+    assert "aria-label=\"当前状态\"" in home_page_source
+    assert home_page_source.count("<button") == 1
+    assert ".home-status-line" in home_command_styles
+    assert ".home-brief-grid" in home_command_styles
+    assert "font-size: 14px;" in home_command_styles
     assert "DxmLoginInlineForm" in dxm_access_source
     assert "operator-inline-form" in dxm_access_source
     assert ".guide-step__summary-line" in styles_source
@@ -1603,51 +1542,16 @@ def test_sidebar_is_navigation_only_not_status_or_hint_panel():
 
 def test_sidebar_primary_navigation_keeps_only_user_main_path():
     shell_source = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
-    primary_area_section = shell_source[shell_source.index("const primaryAreas"):shell_source.index("const sectionLabels")]
+    primary_navigation = shell_source[shell_source.index("const primaryNavigation"):shell_source.index("const sectionLabels")]
 
-    expected_sidebar_labels = [
-        "首页",
-        "账号与浏览器",
-        "待认领入箱",
-        "商品箱编辑保存",
-        "模板中心",
-        "模板管理",
-        "当前保存任务",
-        "浏览器现场",
-        "任务记录",
-        "结果报告",
-        "报告与证据",
-        "问题与证据",
-        "系统维护",
-    ]
-
-    assert primary_area_section.count("{ id: '") == 13
+    expected_sidebar_labels = ["编辑工作台", "模板中心", "浏览器现场", "批次记录", "系统设置"]
+    assert primary_navigation.count("{ id: '") == 5
     for label in expected_sidebar_labels:
-        assert label in primary_area_section or label in shell_source
-    assert "{ id: 'acquisition_claim', label: '待认领入箱'" in primary_area_section
-    assert "{ id: 'draft_edit_save', label: '商品箱编辑保存'" in primary_area_section
-    assert "{ id: 'template_center', label: '模板中心'" in primary_area_section
-    assert "{ id: 'template_management', label: '模板管理'" in primary_area_section
-    assert "{ id: 'product_tasks', label: '当前保存任务'" in primary_area_section
-    assert "{ id: 'start_save', label: '浏览器现场'" in primary_area_section
-    assert "{ id: 'task_history', label: '任务记录'" in primary_area_section
-    assert "{ id: 'results', label: '结果报告'" in primary_area_section
-    assert "{ id: 'evidence', label: '报告与证据'" in primary_area_section
-    assert "{ id: 'edit_config'" not in primary_area_section
-    assert "{ id: 'preflight', label: '运行前检查'" not in primary_area_section
-    assert "{ id: 'real_browser'" not in primary_area_section
-    assert "{ id: 'manual_takeover', label: '人工接管'" not in primary_area_section
-    assert "{ id: 'evidence', label: '证据归档'" not in primary_area_section
-    assert "{ id: 'exceptions', label: '问题'" not in primary_area_section
-    assert "{ id: 'issues', label: '问题与证据'" in primary_area_section
-    assert "{ id: 'settings', label: '系统维护'" in primary_area_section
-    assert "id: 'dashboard'" not in primary_area_section
-    assert "id: 'agent_execution'" not in primary_area_section
-    assert "label: '更多'" not in primary_area_section
-    assert "首页 / 账号与浏览器 / 待认领入箱 / 模板中心 / 模板管理 / 商品箱编辑保存 / 当前保存任务 / 浏览器现场 / 任务记录 / 结果报告 / 保存证据 / 问题与证据 / 系统维护" in shell_source
-    forbidden_default_labels = ["Agent Console", "L2", "L3", "probe", "HAR", "run-id", "结果与问题", "问题诊断", "任务与人工确认"]
+        assert label in primary_navigation
+    assert "编辑工作台 / 模板中心 / 浏览器现场 / 批次记录 / 系统设置" in shell_source
+    forbidden_default_labels = ["Agent Console", "L2", "L3", "probe", "HAR", "run-id", "待认领入箱", "商品箱编辑保存", "问题诊断"]
     for label in forbidden_default_labels:
-        assert label not in primary_area_section
+        assert label not in primary_navigation
 
 
 def test_guide_center_can_start_real_dxm_login_without_l2_gate():
@@ -1827,7 +1731,7 @@ def test_default_shell_copy_does_not_present_demo_as_user_path():
     assert "连接状态" in shell_source
     assert "数据连接状态：{sourceLabel}" in shell_source
     assert "<strong>{sourceLabel}</strong>" not in shell_source
-    assert "真实店小秘操作分为待认领入箱和商品箱编辑只保存" in shell_source
+    assert "所有真实操作以当前后端能力和人工批准为准" in shell_source
     assert "真实接口优先" not in shell_source
     assert "不伪造保存结果" not in shell_source
     assert "演示数据仅开发模式可用" not in shell_source
@@ -2882,11 +2786,10 @@ def test_dashboard_and_guide_default_copy_hide_gate_codes():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     home_page_source = HOME_PAGE_TSX.read_text(encoding="utf-8")
     dxm_access_source = DXM_ACCESS_PAGE_TSX.read_text(encoding="utf-8")
-    dashboard_section = home_page_source[home_page_source.index("export function HomePage"):home_page_source.index("function OperationGuide")]
-    operation_guide_section = home_page_source[home_page_source.index("function OperationGuide"):]
+    dashboard_section = home_page_source[home_page_source.index("export function HomePage"):]
     console_section = source[source.index("export function ExecutionConsole"):source.index("function ConsoleFocusPanel")]
 
-    for section in (dashboard_section, operation_guide_section, dxm_access_source, console_section):
+    for section in (dashboard_section, dxm_access_source, console_section):
         assert "选择真实 single_save 任务" not in section
         assert "确认 L2 真实只读通过" not in section
         assert "L2 真实只读通过" not in section
@@ -2894,8 +2797,8 @@ def test_dashboard_and_guide_default_copy_hide_gate_codes():
         assert "single_save 任务" not in section
         assert "运行 L2 页面核验" not in section
         assert "运行 L2 复验" not in section
-    assert "待认领入箱" in operation_guide_section
-    assert "确认保存前安全检查通过" in operation_guide_section
+    assert "待认领入箱" not in dashboard_section
+    assert "批量编辑尚未开放" in dashboard_section
     assert "打开真实登录页" in dxm_access_source
     assert "AgentStagePanel" in console_section
     assert "运行保存前安全检查" in source
@@ -3143,7 +3046,7 @@ def test_dashboard_and_exception_gap_lists_present_l3_post_evidence_as_locked_sc
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     home_page_source = HOME_PAGE_TSX.read_text(encoding="utf-8")
     issues_source = ISSUES_PAGE_TSX.read_text(encoding="utf-8")
-    dashboard_section = home_page_source[home_page_source.index("export function HomePage"):home_page_source.index("function OperationGuide")]
+    dashboard_section = home_page_source[home_page_source.index("export function HomePage"):]
     exception_section = issues_source[issues_source.index("export function IssuesPage"):issues_source.index("function ExceptionCard")]
     gap_list_section = source[source.index("export function GapList"):source.index("export function CheckRow")]
 
@@ -3225,7 +3128,7 @@ def test_task_center_only_uses_demo_ready_copy_for_dry_run_tasks():
 def test_draft_edit_save_owns_real_task_creation_instead_of_current_task_page():
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
     app_source = APP_TSX.read_text(encoding="utf-8")
-    draft_source = DRAFT_EDIT_SAVE_PAGE_TSX.read_text(encoding="utf-8")
+    draft_source = BATCH_EDIT_PAGE_TSX.read_text(encoding="utf-8")
     product_tasks_source = PRODUCT_TASKS_PAGE_TSX.read_text(encoding="utf-8")
     task_center_section = source[source.index("export function TaskCenterView"):source.index("export function ExecutionConsole")]
     product_tasks_route = app_source[app_source.index("case 'product_tasks'"):app_source.index("case 'draft_edit_save'")]
@@ -3250,9 +3153,11 @@ def test_draft_edit_save_owns_real_task_creation_instead_of_current_task_page():
     assert "onCreateRealTask:" not in product_tasks_source
     assert "onBootstrapDemo:" not in product_tasks_source
     assert "demoEnabled" not in product_tasks_source
-    assert "onCreateSaveTask={(productId) =>" in draft_edit_route
-    assert "void createRealTask({ storeId, mode: 'single_save', productIds: [productId] })" in draft_edit_route
-    assert "创建编辑保存任务" in draft_source
+    assert "<BatchEditPage" in draft_edit_route
+    assert "onCreateSaveTask={(productId) =>" not in draft_edit_route
+    assert "scope_snapshot_id: scopeSnapshot.id" in draft_source
+    assert "template_id: selectedTemplate.id" in draft_source
+    assert "冻结批次草稿" in draft_source
 
 
 def test_task_center_surfaces_single_save_recovery_guide_for_blocked_real_tasks():
@@ -4723,18 +4628,14 @@ def test_frontend_first_screen_names_dxm_automation_delivery():
     source = HOME_PAGE_TSX.read_text(encoding="utf-8")
     shell = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
     safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
-    qa_source = QA_BROWSER_CHECK.read_text(encoding="utf-8")
 
-    assert "操作首页" in source
-    assert "按两段真实流程推进" in source
-    assert "不会发布；批量和无人值守保存保持关闭" in source
-    assert "操作首页决策：现在该做什么 / 为什么不能继续 / 下一步" in source
-    assert "aria-label=\"保存边界\"" in source
-    assert "当前模式</strong><b>只保存" in source
-    assert "保存范围</strong><b>{realWriteReady ? '单商品只保存可执行' : '等待人工确认'}" in source
-    assert "当前范围' : '下一步'" in source
+    assert "编辑工作台" in source
+    assert "aria-label=\"当前状态\"" in source
+    assert "最近异常" in source
     assert "只保存，不发布" in source
-    assert "完成页面检查" in source
+    assert "mode.mode === 'batch_save'" in source
+    assert "batchMode?.allowed === true" in source
+    assert "工作台不会模拟执行或生成成功结果" in source
     assert "继续下一步：打开真实店小秘登录" in safety_bar
     assert "当前可执行：单商品只保存自动化" in safety_bar
     assert "维护详情" not in safety_bar
@@ -4742,53 +4643,27 @@ def test_frontend_first_screen_names_dxm_automation_delivery():
     assert "系统状态与验收详情" not in safety_bar
     assert "safety-bar__meta-details inline-disclosure" not in safety_bar
     assert "真实保存已阻断" not in safety_bar
-    assert "首页 / 账号与浏览器 / 待认领入箱 / 模板中心 / 模板管理 / 商品箱编辑保存 / 当前保存任务 / 浏览器现场 / 任务记录 / 结果报告 / 保存证据 / 问题与证据 / 系统维护" in shell
-    assert "\\u0044\\u0058\\u004d \\u5355\\u5546\\u54c1\\u53ea\\u4fdd\\u5b58 Agent" in qa_source
-    assert "initialText.includes(text.overview) || initialText.includes('\\u767b\\u5f55\\u5e97\\u5c0f\\u79d8') || initialText.includes('\\u5f00\\u59cb\\u53ea\\u4fdd\\u5b58')" in qa_source
-    assert "\\u73b0\\u5728\\u53ea\\u505a\\u8fd9\\u4e00\\u6b65" in qa_source
-    assert "\\u771f\\u5b9e\\u4fdd\\u5b58\\u5df2\\u963b\\u65ad" in qa_source
+    assert "编辑工作台 / 模板中心 / 浏览器现场 / 批次记录 / 系统设置" in shell
     assert "半托管保存交付工作台" not in source
     assert "保存核验 / 证据复盘" not in shell
 
 
 def test_sidebar_copy_names_save_only_agent_flow_without_ambiguous_browser_wording():
     shell = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
-    primary_area_section = shell[shell.index("const primaryAreas"):shell.index("const sectionLabels")]
+    primary_navigation = shell[shell.index("const primaryNavigation"):shell.index("const sectionLabels")]
 
-    assert "DXM 只保存自动化" in shell
-    assert "首页" in shell
-    assert "账号与浏览器" in shell
-    assert "待认领商品" in shell
-    assert "商品箱编辑保存" in shell
-    assert "模板中心" in shell
-    assert "模板管理" in shell
-    assert "真实浏览器" in shell
-    assert "当前保存任务" in shell
-    assert "结果报告" in shell
-    assert "保存证据" in shell
-    assert "问题与证据" in shell
-    assert "系统维护" in shell
-    assert "证据归档" not in shell[shell.index("const primaryAreas"):shell.index("const sectionLabels")]
-    assert "使用帮助" not in primary_area_section
-    assert "帮助与设置" not in shell
-    assert "先认领已有商品，再编辑只保存" in shell
-    assert "{ id: 'acquisition_claim', label: '待认领入箱', short: '箱', hint: '把店小秘里已经存在的待认领商品放进商品箱' }" in shell
-    assert "{ id: 'template_center', label: '模板中心', short: '模', hint: '按店小秘编辑页分区管理多套模板' }" in shell
-    assert "{ id: 'template_management', label: '模板管理', short: '管', hint: '管理店铺、类目和本次任务模板' }" in shell
-    assert "{ id: 'draft_edit_save', label: '商品箱编辑保存', short: '箱', hint: '从已认领商品箱开始编辑并只保存' }" in shell
-    assert "{ id: 'product_tasks', label: '当前保存任务', short: '任', hint: '查看当前只保存任务、人工确认和恢复动作' }" in shell
-    assert "{ id: 'start_save', label: '浏览器现场', short: '览', hint: '查看真实浏览器、中文进度窗和人工接管' }" in shell
-    assert "{ id: 'task_history', label: '任务记录', short: '记', hint: '查看历史任务、失败原因和恢复入口' }" in shell
-    assert "{ id: 'results', label: '结果报告', short: '报', hint: '查看保存结果、失败原因和下一步' }" in shell
-    assert "{ id: 'evidence', label: '报告与证据', short: '据', hint: '查看未发布证明、页面记录和保存回包' }" in shell
-    assert "{ id: 'issues', label: '问题与证据', short: '证', hint: '查看阻断原因、恢复建议和证据' }" in shell
-    assert "{ id: 'settings', label: '系统维护', short: '系', hint: '查看运行环境、服务状态和维护设置' }" in shell
-    assert "真实店小秘操作分为待认领入箱和商品箱编辑只保存" in shell
+    assert "DXM 编辑工作台" in shell
+    assert "受控编辑 · 只保存不发布" in shell
+    for label in ["编辑工作台", "模板中心", "浏览器现场", "批次记录", "系统设置"]:
+        assert label in primary_navigation
+    for hidden_label in ["待认领入箱", "商品箱编辑保存", "当前保存任务", "结果报告", "问题与证据"]:
+        assert hidden_label not in primary_navigation
+    assert "所有真实操作以当前后端能力和人工批准为准" in shell
 
     assert "配置 / 任务 / 真实浏览器执行" not in shell
     assert "Agent 控制台与真实浏览器" not in shell
     assert "hint: '真实浏览器'" not in shell
-    assert "只保存自动化" in shell
+    assert "只保存不发布" in shell
     assert "报告中心" not in shell
     assert "异常池" not in shell
     assert "系统总览" not in shell
@@ -4798,38 +4673,17 @@ def test_frontend_uses_business_sidebar_groups_and_hides_operator_diagnostics_by
     shell = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
     safety_bar = SAFETY_STATUS_BAR_TSX.read_text(encoding="utf-8")
     source = WORKBENCH_MODULES_TSX.read_text(encoding="utf-8")
+    primary_navigation = shell[shell.index("const primaryNavigation"):shell.index("const sectionLabels")]
 
-    assert "id: 'prepare'" in shell
-    assert "id: 'claim'" in shell
-    assert "id: 'config'" in shell
-    assert "id: 'save'" in shell
-    assert "id: 'execute'" not in shell
-    assert "id: 'diagnose'" not in shell
-    assert "id: 'field'" not in shell
-    assert "id: 'review'" in shell
-    assert "id: 'system'" in shell
-    assert "复盘与设置" not in shell
-    assert "id: 'home'" in shell
-    assert "id: 'dxm_access'" in shell
-    assert "id: 'acquisition_claim'" in shell
-    assert "id: 'draft_edit_save'" in shell
-    assert "id: 'template_center'" in shell
-    primary_area_section = shell[shell.index("const primaryAreas"):shell.index("const sectionLabels")]
-    assert "id: 'product_tasks'" in primary_area_section
-    assert "id: 'edit_config'" not in primary_area_section
-    assert "id: 'start_save'" in primary_area_section
-    assert "id: 'preflight'" not in primary_area_section
-    assert "id: 'real_browser'" not in primary_area_section
-    assert "id: 'manual_takeover'" not in primary_area_section
+    assert primary_navigation.count("{ id: '") == 5
+    for section_id in ["home", "template_center", "start_save", "task_history", "settings"]:
+        assert f"id: '{section_id}'" in primary_navigation
+    for hidden_section_id in ["dxm_access", "acquisition_claim", "draft_edit_save", "product_tasks", "edit_config", "preflight", "real_browser", "manual_takeover", "results", "evidence", "issues", "help"]:
+        assert f"id: '{hidden_section_id}'" not in primary_navigation
     assert "results: '结果报告'" in shell
     assert "evidence: '保存证据'" in shell
-    assert "id: 'results'" in primary_area_section
-    assert "id: 'evidence'" in primary_area_section
-    assert "id: 'issues'" in primary_area_section
-    assert "id: 'help'" not in primary_area_section
     assert "help: '使用帮助'" in shell
-    assert "id: 'settings'" in primary_area_section
-    assert "settings: '系统维护'" in shell
+    assert "settings: '系统设置'" in shell
     assert "维护详情" not in safety_bar
     visible_bar = safety_bar[safety_bar.index("return ("):safety_bar.index("</section>")]
     assert "技术诊断" not in visible_bar
@@ -4844,25 +4698,22 @@ def test_home_dashboard_is_operator_command_center_not_static_metrics():
     source = HOME_PAGE_TSX.read_text(encoding="utf-8")
     app_source = APP_TSX.read_text(encoding="utf-8")
     styles_source = (REPO_ROOT / "app" / "frontend" / "src" / "styles.css").read_text(encoding="utf-8")
-    dashboard_section = source[source.index("export function HomePage"):source.index("function OperationGuide")]
+    dashboard_section = source[source.index("export function HomePage"):]
 
     assert "type HomePageProps" in source
     assert "onShowDxmAccess" in dashboard_section
-    assert "onShowAcquisition" in dashboard_section
     assert "onShowDraftEdit" in dashboard_section
     assert "onShowTasks" in dashboard_section
     assert "onShowConfig" in dashboard_section
     assert "onShowConsole" in dashboard_section
-    assert "onShowReports" in dashboard_section
-    assert "现在只做这一步" in dashboard_section
-    assert "登录真实店小秘" in dashboard_section
-    assert "待认领入箱" in dashboard_section
-    assert "检查编辑页模板" in dashboard_section
-    assert "运行保存前安全检查" in dashboard_section
-    assert "人工确认只保存" in dashboard_section
-    assert "打开真实浏览器" in dashboard_section
-    assert "home-command__status-grid" in dashboard_section
-    assert "home-command__boundary" in dashboard_section
+    assert "登录店小秘" in dashboard_section
+    assert "选择商品箱商品" in dashboard_section
+    assert "检查编辑模板" in dashboard_section
+    assert "打开浏览器现场" in dashboard_section
+    assert "home-status-line" in dashboard_section
+    assert "home-brief-grid" in dashboard_section
+    assert dashboard_section.count("<button") == 1
+    assert "待认领入箱" not in dashboard_section
     assert "onShowDxmAccess={() => setActiveSection('dxm_access')}" in app_source
     assert "onShowAcquisition={() => setActiveSection('acquisition_claim')}" in app_source
     assert "onShowDraftEdit={() => setActiveSection('draft_edit_save')}" in app_source
@@ -4870,22 +4721,24 @@ def test_home_dashboard_is_operator_command_center_not_static_metrics():
     assert "onShowConfig={() => setActiveSection('edit_config')}" in app_source
     assert "onShowConsole={() => setActiveSection('start_save')}" in app_source
     assert "onShowReports={() => setActiveSection('results')}" in app_source
-    assert ".home-command__status-grid" in styles_source
-    assert ".home-command__next button" in styles_source
+    assert ".home-status-line" in styles_source
+    assert ".home-command__primary button" in styles_source
 
 
-def test_home_page_default_path_is_three_decision_cards_without_gate_jargon():
+def test_home_page_default_path_is_one_decision_without_gate_jargon():
     source = HOME_PAGE_TSX.read_text(encoding="utf-8")
-    dashboard_section = source[source.index("<div className=\"hero-panel home-command\">"):source.index("function OperationGuide")]
+    dashboard_section = source[source.index("<div className=\"hero-panel home-command\">"):]
 
-    for label in ["现在该做什么", "为什么不能继续", "下一步"]:
-        assert label in dashboard_section
+    assert "下一步" in dashboard_section
+    assert dashboard_section.count("<button") == 1
+    assert "aria-label=\"当前状态\"" in dashboard_section
 
     for forbidden in ["L2", "L3", "probe", "run-id", "HAR", "greenlet"]:
         assert forbidden not in dashboard_section
 
     assert "维护人员查看运行状态" not in dashboard_section
     assert "home-menu-map" not in dashboard_section
+    assert "home-command__status-grid" not in dashboard_section
 
 
 def test_config_and_console_primary_screens_keep_diagnostics_secondary():
@@ -5257,7 +5110,8 @@ def test_home_page_entry_is_extracted_from_workbench_modules():
     assert "HomePage as Dashboard" in app_source
     assert "from './components/workbench/HomePage'" in app_source
     assert "export function HomePage" in home_page_source
-    assert "function OperationGuide" in home_page_source
+    assert "home-brief-grid" in home_page_source
+    assert "function OperationGuide" not in home_page_source
     assert "export function Dashboard" not in source
     assert "export { Dashboard as DashboardView }" not in source
 

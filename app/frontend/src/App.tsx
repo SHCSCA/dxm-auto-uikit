@@ -4,7 +4,8 @@ import { AppShell } from './components/AppShell'
 import { SafetyStatusBar } from './components/SafetyStatusBar'
 import { AgentExecutionPage as ExecutionConsole } from './components/workbench/AgentExecutionPage'
 import { AcquisitionClaimPage } from './components/workbench/AcquisitionClaimPage'
-import { DraftEditSavePage } from './components/workbench/DraftEditSavePage'
+import { BatchEditPage } from './components/workbench/BatchEditPage'
+import { BatchRecordsPage } from './components/workbench/BatchRecordsPage'
 import { HelpPage } from './components/workbench/HelpPage'
 import { HomePage as Dashboard } from './components/workbench/HomePage'
 import { ProductTasksPage as TaskCenter } from './components/workbench/ProductTasksPage'
@@ -137,7 +138,7 @@ function normalizeWorkbenchSection(section: WorkbenchSection | LegacyWorkbenchSe
     tasks: 'product_tasks',
     product_tasks: 'product_tasks',
     current_task: 'product_tasks',
-    task_history: 'product_tasks',
+    task_history: 'task_history',
     config: 'template_center',
     edit_config: 'template_center',
     config_basic: 'template_center',
@@ -178,7 +179,6 @@ export default function App() {
   const [operationError, setOperationError] = useState<string | null>(null)
   const [operationNotice, setOperationNotice] = useState<string | null>(null)
   const [lastAcquisitionClaimRequest, setLastAcquisitionClaimRequest] = useState<AcquisitionClaimResponse | null>(null)
-  const [claimedDraftProducts, setClaimedDraftProducts] = useState<Product[]>([])
   const [runtimeLogSource, setRuntimeLogSource] = useState<RuntimeLogSource>('backend')
   const [runtimeLogs, setRuntimeLogs] = useState<Record<RuntimeLogSource, RuntimeLogResponse | null>>({
     backend: null,
@@ -270,7 +270,6 @@ export default function App() {
       stores,
       templates,
       products,
-      claimedProducts,
       tasks,
       logs,
       evidences,
@@ -283,7 +282,6 @@ export default function App() {
       loadOrFallback<Store[]>('/api/stores', []),
       loadOrFallback<Template[]>('/api/templates', []),
       loadOrFallback<Product[]>('/api/products', []),
-      loadOrFallback<Product[]>('/api/acquisition/claimed-products', []),
       loadOrFallback<Task[]>('/api/tasks', []),
       loadOrFallback<LogItem[]>('/api/logs', []),
       loadOrFallback<Evidence[]>('/api/evidences', []),
@@ -304,7 +302,6 @@ export default function App() {
       reports,
     })
     setWorkspace(nextWorkspace)
-    setClaimedDraftProducts(claimedProducts)
     setAgentConsole(consoleStatus)
     setFinalCheck(finalCheckSummary)
     const taskMissing = Boolean(deliveryWorkspace?.requested_task_missing)
@@ -1173,6 +1170,9 @@ export default function App() {
   }
 
   const currentSection = normalizeWorkbenchSection(activeSection)
+  const showGlobalSafetyStatus = currentSection !== 'home'
+    && currentSection !== 'draft_edit_save'
+    && currentSection !== 'task_history'
   const setWorkbenchSection = useCallback((section: WorkbenchSection) => {
     setActiveSection(normalizeWorkbenchSection(section))
   }, [])
@@ -1181,8 +1181,6 @@ export default function App() {
     [workspace.tasks],
   )
   const visibleAcquisitionClaimRequest = persistedAcquisitionClaimRequest ?? lastAcquisitionClaimRequest
-  const selectedEditSaveTask = selectedTask?.mode === 'single_save' ? selectedTask : null
-
   const content = (() => {
     switch (currentSection) {
       case 'edit_config':
@@ -1238,7 +1236,6 @@ export default function App() {
         )
       case 'product_tasks':
       case 'current_task':
-      case 'task_history':
         return (
           <TaskCenter
             workspace={workspace}
@@ -1265,25 +1262,18 @@ export default function App() {
             onShowReports={() => setActiveSection('results')}
           />
         )
+      case 'task_history':
+        return (
+          <BatchRecordsPage
+            onCreateBatch={() => setActiveSection('draft_edit_save')}
+          />
+        )
       case 'draft_edit_save':
         return (
-          <DraftEditSavePage
-            claimedProducts={claimedDraftProducts}
-            selectedTask={selectedEditSaveTask}
-            busy={busy}
-            onCreateSaveTask={(productId) => {
-              const product = workspace.products.find((item) => item.id === productId) ?? null
-              const storeId = storeIdForClaimedProduct(product, workspace.stores)
-              if (!storeId) {
-                setOperationError('该商品箱商品缺少原始店铺信息，不能创建编辑保存任务。请重新从“待认领商品”把店小秘已有待认领商品认领到商品箱后再继续。')
-                setActiveSection('acquisition_claim')
-                return
-              }
-              void createRealTask({ storeId, mode: 'single_save', productIds: [productId] })
-            }}
-            onShowAcquisition={() => setActiveSection('acquisition_claim')}
+          <BatchEditPage
+            templates={workspace.templates}
             onShowTemplates={() => setActiveSection('template_center')}
-            onShowExecutionConsole={() => setActiveSection('start_save')}
+            onShowRecords={() => setActiveSection('task_history')}
           />
         )
       case 'start_save':
@@ -1366,7 +1356,7 @@ export default function App() {
             onShowDxmAccess={() => setActiveSection('dxm_access')}
             onShowAcquisition={() => setActiveSection('acquisition_claim')}
             onShowDraftEdit={() => setActiveSection('draft_edit_save')}
-            onShowTasks={() => setActiveSection('product_tasks')}
+            onShowTasks={() => setActiveSection('task_history')}
             onShowConfig={() => setActiveSection('edit_config')}
             onShowConsole={() => setActiveSection('start_save')}
             onShowReports={() => setActiveSection('results')}
@@ -1383,23 +1373,25 @@ export default function App() {
       onToggleSidebar={() => setSidebarCollapsed((value) => !value)}
       sourceLabel={sourceLabels[workspace.source]}
     >
-      <SafetyStatusBar
-        workspace={workspace}
-        selectedTask={selectedTask}
-        configPreview={configPreview}
-        configPreviewError={configPreviewError}
-        configPreviewLoading={configPreviewLoading}
-        runtimeStatus={runtimeStatus}
-        runtimeStatusError={runtimeStatusError}
-        desktopRuntime={desktopRuntime}
-        busy={busy}
-        onRefresh={() => { void refreshWorkspace(); void refreshRuntimeStatus(); void refreshRuntimeLogs(); void refreshConfigPreview() }}
-        onShowDxmAccess={() => setActiveSection('dxm_access')}
-        onShowConfig={() => setActiveSection('edit_config')}
-        onShowTasks={() => setActiveSection('product_tasks')}
-        onShowConsole={() => setActiveSection('start_save')}
-        onShowReports={() => setActiveSection('results')}
-      />
+      {showGlobalSafetyStatus && (
+        <SafetyStatusBar
+          workspace={workspace}
+          selectedTask={selectedTask}
+          configPreview={configPreview}
+          configPreviewError={configPreviewError}
+          configPreviewLoading={configPreviewLoading}
+          runtimeStatus={runtimeStatus}
+          runtimeStatusError={runtimeStatusError}
+          desktopRuntime={desktopRuntime}
+          busy={busy}
+          onRefresh={() => { void refreshWorkspace(); void refreshRuntimeStatus(); void refreshRuntimeLogs(); void refreshConfigPreview() }}
+          onShowDxmAccess={() => setActiveSection('dxm_access')}
+          onShowConfig={() => setActiveSection('edit_config')}
+          onShowTasks={() => setActiveSection('product_tasks')}
+          onShowConsole={() => setActiveSection('start_save')}
+          onShowReports={() => setActiveSection('results')}
+        />
+      )}
       <div className="operation-toast-stack" aria-live="polite">
         {workspaceNotice && (
           <details className={`workspace-alert workspace-alert--${workspaceNotice.kind}`} role={workspaceNotice.kind === 'degraded' ? 'alert' : 'status'} data-testid="workspace-notice">
@@ -1810,13 +1802,3 @@ function taskToAcquisitionClaimResponse(task: Task | null): AcquisitionClaimResp
   }
 }
 
-function storeIdForClaimedProduct(product: Product | null, stores: Store[]): number | null {
-  if (!product) return null
-  const payload = product.payload ?? {}
-  const rawStoreId = payload.store_id ?? payload.claim_store_id ?? payload.dxm_store_id
-  const parsedStoreId = Number(rawStoreId)
-  if (Number.isInteger(parsedStoreId) && parsedStoreId > 0) {
-    return stores.some((store) => store.id === parsedStoreId) ? parsedStoreId : null
-  }
-  return stores.length === 1 ? stores[0].id : null
-}
