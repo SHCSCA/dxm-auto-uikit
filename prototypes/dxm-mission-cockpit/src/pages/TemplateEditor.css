@@ -1,0 +1,231 @@
+.template-editor-heading {
+  min-width: 0;
+  width: min(680px, 100%);
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(260px, 1.35fr);
+  gap: 12px 14px;
+}
+
+.template-editor-kicker {
+  grid-column: 1 / -1;
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.template-editor-heading > small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.template-editor-field {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  color: #526178;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.template-editor-field input,
+.template-rule-editor-field input {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid #b9c8da;
+  border-radius: 7px;
+  color: var(--ink);
+  background: #fff;
+  font: inherit;
+  line-height: 1.4;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.template-editor-field input:focus,
+.template-rule-editor-field input:focus {
+  border-color: #488ee9;
+  outline: 0;
+  box-shadow: 0 0 0 3px rgba(9, 105, 237, 0.12);
+}
+
+.template-rule-editor-field {
+  min-width: 0;
+}
+
+.template-reference-warning {
+  margin: 14px 20px 0;
+  padding: 11px 13px;
+  border: 1px solid #f0c98e;
+  border-radius: 8px;
+  color: #855913;
+  background: #fff9ee;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 9px;
+}
+
+.template-reference-warning--empty {
+  border-color: #c9d8e9;
+  color: #3f5e7d;
+  background: #f6f9fd;
+}
+
+.template-reference-warning strong,
+.template-reference-warning span {
+  display: block;
+}
+
+.template-reference-warning strong {
+  font-size: 12.5px;
+}
+
+.template-reference-warning span {
+  margin-top: 3px;
+  color: #7a674c;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.template-reference-warning--empty span {
+  color: #64768b;
+}
+
+.template-comparison {
+  border: 1px solid #cbd9ea;
+  border-radius: 8px;
+  background: #f7faff;
+  overflow: hidden;
+}
+
+.template-comparison > header {
+  padding: 11px 13px;
+  border-bottom: 1px solid #d8e2ef;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.template-comparison > header div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.template-comparison > header strong {
+  color: #2f4663;
+  font-size: 13px;
+}
+
+.template-comparison > header span {
+  color: #6b7f98;
+  font-size: 11px;
+}
+
+.template-comparison > p {
+  margin: 0;
+  padding: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.template-comparison-list {
+  max-height: 310px;
+  overflow: auto;
+}
+
+.template-comparison-row {
+  padding: 10px 13px;
+  border-bottom: 1px solid #e4ebf4;
+  display: grid;
+  grid-template-columns: minmax(130px, 0.7fr) minmax(150px, 1fr) 18px minmax(150px, 1fr);
+  align-items: center;
+  gap: 9px;
+  color: #5a6a80;
+  font-size: 11.5px;
+}
+
+.template-comparison-row:last-child {
+  border-bottom: 0;
+}
+
+.template-comparison-row > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.template-comparison-row small {
+  color: #7b8da4;
+  font-size: 10px;
+}
+
+.template-comparison-row strong {
+  color: #334960;
+  overflow-wrap: anywhere;
+}
+
+.template-comparison-before,
+.template-comparison-after {
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 5px;
+  overflow-wrap: anywhere;
+}
+
+.template-comparison-before {
+  color: #865c62;
+  background: #fff1f2;
+  text-decoration: line-through;
+}
+
+.template-comparison-after {
+  color: #256342;
+  background: #edf9f1;
+}
+
+.template-enable-button:not(:disabled) {
+  background: #168257;
+  border-color: #168257;
+}
+
+@media (max-width: 860px) {
+  .template-editor-heading {
+    grid-template-columns: 1fr;
+  }
+
+  .template-editor-kicker,
+  .template-editor-heading > small {
+    grid-column: 1;
+  }
+
+  .template-comparison-row {
+    grid-template-columns: minmax(100px, 0.75fr) minmax(120px, 1fr) 14px minmax(120px, 1fr);
+  }
+}
+
+@media (max-width: 680px) {
+  .template-header-actions {
+    width: 100%;
+  }
+
+  .template-header-actions > button {
+    flex: 1 1 150px;
+  }
+
+  .template-reference-warning {
+    margin: 10px 12px 0;
+  }
+
+  .template-comparison-row {
+    grid-template-columns: 1fr;
+  }
+
+  .template-comparison-row > span[aria-hidden="true"] {
+    display: none;
+  }
+}
