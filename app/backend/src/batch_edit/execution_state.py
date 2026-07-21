@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import hashlib
 import hmac
 import json
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping
 
 from src.batch_edit.scope_contract import canonical_sha256
@@ -24,6 +24,25 @@ START_CONTEXT_SCHEMA = "dxm_edit_batch_start_context.v1"
 ITEM_GRANT_SCHEMA = "dxm_edit_batch_item_grant.v1"
 ITEM_GRANT_CONSUMPTION_SCHEMA = "dxm_edit_batch_item_grant_consumption.v1"
 ITEM_OUTCOME_DECISION_SCHEMA = "dxm_edit_batch_item_outcome_decision.v1"
+BATCH_ITEM_GRANT_MAX_TTL_SECONDS = 60 * 60
+
+_APPROVAL_CONTEXT_KEYS = {
+    "schema_version",
+    "batch",
+    "scope",
+    "template",
+    "policy",
+    "ordered_targets",
+    "store_identity",
+    "runtime_identity",
+    "read_attestation",
+    "approved_by",
+    "confirmation",
+    "lease_id",
+    "issued_at",
+    "expires_at",
+    "fingerprint",
+}
 
 _START_CONTEXT_KEYS = {
     "schema_version",
@@ -102,7 +121,11 @@ def normalize_approval_for_storage(approval: Any) -> dict[str, Any]:
         _reject("APPROVAL_STORAGE_INVALID", "approval must be an object")
     token_hash = _sha256_text(approval.get("token_hash"), "approval token hash")
     lease_id = _canonical_text(approval.get("lease_id"), "approval lease id")
-    context = _canonical_object(approval.get("context"), "approval context")
+    context = _exact_object(approval.get("context"), _APPROVAL_CONTEXT_KEYS, "approval context")
+    if context["schema_version"] != "dxm_edit_batch_approval_context.v1":
+        _reject("APPROVAL_STORAGE_SCHEMA_INVALID", "approval context schema is unsupported")
+    if context["confirmation"] != "CONFIRM_DXM_BATCH_SAVE_ONLY":
+        _reject("APPROVAL_STORAGE_CONFIRMATION_INVALID", "approval confirmation is invalid")
     if context.get("lease_id") != lease_id:
         _reject("APPROVAL_STORAGE_BINDING_INVALID", "approval lease binding is inconsistent")
     fingerprint = _sha256_text(context.get("fingerprint"), "approval context fingerprint")
@@ -123,12 +146,20 @@ def normalize_start_context_for_storage(
     *,
     batch_row: Mapping[str, Any],
     approval_context: Mapping[str, Any],
+    consumed_at: str,
 ) -> dict[str, Any]:
     context = _exact_object(start_context, _START_CONTEXT_KEYS, "start context")
     if context["schema_version"] != START_CONTEXT_SCHEMA:
         _reject("START_CONTEXT_SCHEMA_INVALID", "start context schema is unsupported")
     if context["authorization_state"] != "approval_token_consumed":
         _reject("START_CONTEXT_NOT_CONSUMED", "start context did not consume the approval token")
+    consumed = _timestamp(consumed_at, "approval consumed_at")
+    issued_at = _timestamp(approval_context.get("issued_at"), "approval issued_at")
+    expires_at = _timestamp(approval_context.get("expires_at"), "approval expires_at")
+    if issued_at >= expires_at or (expires_at - issued_at).total_seconds() > 5 * 60:
+        _reject("APPROVAL_STORAGE_INTERVAL_INVALID", "approval lease interval is invalid")
+    if consumed < issued_at or consumed >= expires_at:
+        _reject("APPROVAL_STORAGE_EXPIRED", "approval must be consumed inside its start window")
     if approval_context.get("batch") != {
         "id": int(batch_row["id"]),
         "schema_version": batch_row["schema_version"],
@@ -163,6 +194,19 @@ def normalize_start_context_for_storage(
     }
     if any(context.get(key) != value for key, value in expected.items()):
         _reject("START_CONTEXT_BINDING_INVALID", "start context does not match frozen approval facts")
+    scope_snapshot = _json_column_object(batch_row.get("scope_snapshot_json"), "scope snapshot")
+    scope_runtime = scope_snapshot.get("runtime_identity")
+    if (
+        context.get("runtime_identity") != approval_context.get("runtime_identity")
+        or context.get("runtime_identity") != scope_runtime
+        or context.get("store_identity") != approval_context.get("store_identity")
+        or context.get("store_identity") != scope_snapshot.get("store_identity")
+        or context.get("page_identity") != scope_snapshot.get("page_identity")
+        or not isinstance(scope_runtime, dict)
+        or context.get("browser_session_id") != scope_runtime.get("browser_session_id")
+        or context.get("git_head") != scope_runtime.get("git_head")
+    ):
+        _reject("START_CONTEXT_LIVE_BINDING_INVALID", "start context live bindings are inconsistent")
     for key in (
         "approval_context_fingerprint",
         "scope_digest",
@@ -208,6 +252,13 @@ def normalize_item_grant_for_storage(
     }
     if any(value.get(key) != expected_value for key, expected_value in expected.items()):
         _reject("ITEM_GRANT_BINDING_INVALID", "item grant does not match persisted execution facts")
+    issued_at = _timestamp(value.get("issued_at"), "grant issued_at")
+    expires_at = _timestamp(value.get("expires_at"), "grant expires_at")
+    if (
+        issued_at >= expires_at
+        or (expires_at - issued_at).total_seconds() > BATCH_ITEM_GRANT_MAX_TTL_SECONDS
+    ):
+        _reject("ITEM_GRANT_INTERVAL_INVALID", "item grant interval is invalid")
     _sha256_text(value.get("nonce_hash"), "grant nonce hash")
     _sha256_text(value.get("mutation_scope_id"), "mutation scope id")
     _canonical_text(value.get("grant_lease_id"), "grant lease id")
@@ -242,6 +293,75 @@ def normalize_item_grant_consumption_for_storage(
         _reject("ITEM_GRANT_CONSUMPTION_BINDING_INVALID", "grant consumption does not match stored grant")
     _reject_raw_secret_keys(value)
     return value
+
+
+def derive_execution_item_grant(
+    batch: Any,
+    *,
+    start_context: Any,
+    now: datetime,
+    grant_lease_id: str,
+    one_time_nonce: str,
+    ttl_seconds: int,
+) -> dict[str, Any]:
+    """Derive a per-item grant after start; approval expiry remains historical binding only."""
+    from src.batch_edit.execution_contract import derive_next_item_grant
+
+    current = _aware_datetime(now, "grant now")
+    if isinstance(ttl_seconds, bool) or not isinstance(ttl_seconds, int):
+        _reject("ITEM_GRANT_TTL_INVALID", "item grant TTL must be an integer")
+    if ttl_seconds < 60 or ttl_seconds > BATCH_ITEM_GRANT_MAX_TTL_SECONDS:
+        _reject("ITEM_GRANT_TTL_INVALID", "item grant TTL is outside the supported interval")
+    if not isinstance(start_context, dict):
+        _reject("START_CONTEXT_INVALID", "start context is missing")
+    _timestamp(start_context.get("approval_expires_at"), "approval expires_at")
+    issued = derive_next_item_grant(
+        batch,
+        start_context=start_context,
+        now=current,
+        grant_lease_id=grant_lease_id,
+        one_time_nonce=one_time_nonce,
+    )
+    grant = _exact_object(issued.get("grant"), _ITEM_GRANT_KEYS, "item grant")
+    grant["issued_at"] = current.isoformat()
+    grant["expires_at"] = (current + timedelta(seconds=ttl_seconds)).isoformat()
+    unsigned = dict(grant)
+    unsigned.pop("fingerprint", None)
+    grant["fingerprint"] = canonical_sha256(unsigned)
+    return {"grant": grant, "nonce": issued.get("nonce")}
+
+
+def validate_execution_item_grant_consumption(
+    grant: Any,
+    *,
+    raw_nonce: str,
+    now: datetime,
+    request: Any,
+    consumed_nonce_hashes: Any,
+) -> dict[str, Any]:
+    """Validate the live item lease without reusing the expired start-only approval window."""
+    from src.batch_edit.execution_contract import validate_and_consume_item_grant
+
+    canonical_grant = _exact_object(grant, _ITEM_GRANT_KEYS, "item grant")
+    current = _aware_datetime(now, "grant consumption now")
+    issued_at = _timestamp(canonical_grant.get("issued_at"), "grant issued_at")
+    expires_at = _timestamp(canonical_grant.get("expires_at"), "grant expires_at")
+    if issued_at >= expires_at:
+        _reject("ITEM_GRANT_INTERVAL_INVALID", "item grant interval is invalid")
+    if current < issued_at:
+        _reject("ITEM_GRANT_NOT_YET_VALID", "item grant is not yet valid")
+    if current >= expires_at:
+        _reject("ITEM_GRANT_EXPIRED", "item grant has expired")
+    if (expires_at - issued_at).total_seconds() > BATCH_ITEM_GRANT_MAX_TTL_SECONDS:
+        _reject("ITEM_GRANT_INTERVAL_INVALID", "item grant interval is invalid")
+    _timestamp(canonical_grant.get("approval_expires_at"), "approval expires_at")
+    return validate_and_consume_item_grant(
+        canonical_grant,
+        raw_nonce=raw_nonce,
+        now=current,
+        request=request,
+        consumed_nonce_hashes=consumed_nonce_hashes,
+    )
 
 
 def normalize_item_outcome_for_storage(
@@ -410,6 +530,38 @@ def _sha256_text(value: Any, label: str) -> str:
     if len(text) != 64 or any(char not in "0123456789ABCDEF" for char in text):
         _reject("SHA256_REQUIRED", f"{label} must be a SHA-256 digest")
     return text
+
+
+def _timestamp(value: Any, label: str) -> datetime:
+    if not isinstance(value, str):
+        _reject("TIMESTAMP_INVALID", f"{label} must be an ISO timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise EditBatchExecutionPersistenceError(
+            "TIMESTAMP_INVALID", f"{label} is invalid"
+        ) from exc
+    return _aware_datetime(parsed, label)
+
+
+def _aware_datetime(value: Any, label: str) -> datetime:
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+        _reject("TIMESTAMP_INVALID", f"{label} must be timezone-aware")
+    return value.astimezone(timezone.utc)
+
+
+def _json_column_object(value: Any, label: str) -> dict[str, Any]:
+    if not isinstance(value, str) or not value:
+        _reject("PERSISTED_JSON_INVALID", f"{label} is missing")
+    try:
+        decoded = json.loads(value)
+    except (TypeError, ValueError) as exc:
+        raise EditBatchExecutionPersistenceError(
+            "PERSISTED_JSON_INVALID", f"{label} is invalid"
+        ) from exc
+    if not isinstance(decoded, dict):
+        _reject("PERSISTED_JSON_INVALID", f"{label} must be an object")
+    return decoded
 
 
 def _reject_raw_secret_keys(value: Any) -> None:

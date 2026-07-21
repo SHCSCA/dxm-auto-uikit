@@ -24,7 +24,10 @@ from src.execution.action_result_contract import (
     ActionResultContractError,
     validate_action_result_envelope,
 )
-from src.execution.browser_agent_protocol import BrowserAgentCommand
+from src.execution.browser_agent_protocol import (
+    BrowserAgentCommand,
+    canonical_frozen_target_identity,
+)
 from src.services.browser_agent_status import build_browser_hud, normalize_operator_copy
 from src.services.evidence_ref import validate_evidence_ref
 
@@ -1874,11 +1877,24 @@ class BrowserAgentRuntime:
 
 def execute_browser_agent_action(adapter: Any, action: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     params = params if isinstance(params, dict) else {}
-    target_identity_kwargs = (
-        {"target_identity": dict(params["target_identity"])}
-        if isinstance(params.get("target_identity"), Mapping)
-        else {}
-    )
+    raw_target_identity = params.get("target_identity")
+    target_identity_kwargs: dict[str, Any] = {}
+    if raw_target_identity is not None:
+        if not isinstance(raw_target_identity, Mapping):
+            raise ValueError("target_identity must be a structured mapping")
+        raw_store_name = params.get("store_name")
+        if not isinstance(raw_store_name, str):
+            raise ValueError("frozen target commands require an exact string store_name")
+        store_name = " ".join(raw_store_name.split())
+        if not store_name or raw_store_name != store_name:
+            raise ValueError("frozen target commands require a canonical store_name")
+        normalized_target = canonical_frozen_target_identity(
+            dict(raw_target_identity),
+            store_name=store_name,
+        )
+        if normalized_target is None:
+            raise ValueError("target_identity validation unexpectedly returned empty")
+        target_identity_kwargs = {"target_identity": normalized_target}
     if action == "update_live_hud":
         updater = getattr(adapter, "update_live_hud", None)
         if not callable(updater):
@@ -2060,6 +2076,10 @@ def _validated_action_result_evidence_refs(
     candidate_fields = ["evidence_ref"]
     if state_specific_field is not None:
         candidate_fields.append(state_specific_field)
+        if raw.get("ok") is True and raw.get(state_specific_field) is None:
+            _raise_action_result_contract_failure(
+                f"successful {state} action result requires {state_specific_field}"
+            )
     candidates = [raw.get(field) for field in candidate_fields if raw.get(field) is not None]
     required_kind = _PROOF_EVIDENCE_KIND_BY_STATE.get(state)
     if not candidates:
@@ -2084,23 +2104,52 @@ def _validated_action_result_evidence_refs(
         )
     evidence_path = Path(str(validation["path"]))
     try:
+        evidence_stat = evidence_path.stat()
         captured_at = datetime.fromtimestamp(
-            evidence_path.stat().st_mtime,
+            evidence_stat.st_mtime,
             timezone.utc,
         ).isoformat()
     except OSError as exc:
         _raise_action_result_contract_failure(
             f"evidence_ref captured_at unavailable: {exc}"
         )
-    return [
-        {
-            "path": validation["path"],
-            "sha256": validation["sha256"],
-            "size": validation["size"],
-            "kind": required_kind or "screenshot",
-            "captured_at": captured_at,
-        }
-    ]
+    if state == "VERIFY_NOT_PUBLISHED" and raw.get("ok") is True:
+        save_ref = raw.get("save_evidence_ref")
+        if not isinstance(save_ref, Mapping):
+            _raise_action_result_contract_failure(
+                "successful VERIFY_NOT_PUBLISHED requires the preceding save_evidence_ref"
+            )
+        save_validation = validate_evidence_ref(
+            save_ref,
+            screenshot_root=Path(SCREENSHOT_DIR),
+        )
+        if save_validation.get("ok") is not True:
+            reason_code = str(save_validation.get("reason_code") or "EVIDENCE_REF_INVALID")
+            _raise_action_result_contract_failure(
+                f"save_evidence_ref live-file validation failed: {reason_code}"
+            )
+        save_path = Path(str(save_validation["path"]))
+        if save_path.resolve() == evidence_path.resolve():
+            _raise_action_result_contract_failure(
+                "VERIFY_NOT_PUBLISHED must use a different evidence path from SAVE_ONLY"
+            )
+        try:
+            save_stat = save_path.stat()
+        except OSError as exc:
+            _raise_action_result_contract_failure(
+                f"save_evidence_ref captured_at unavailable: {exc}"
+            )
+        if evidence_stat.st_mtime_ns <= save_stat.st_mtime_ns:
+            _raise_action_result_contract_failure(
+                "VERIFY_NOT_PUBLISHED evidence must be captured after SAVE_ONLY evidence"
+            )
+    return [{
+        "path": validation["path"],
+        "sha256": validation["sha256"],
+        "size": validation["size"],
+        "kind": required_kind or "screenshot",
+        "captured_at": captured_at,
+    }]
 
 
 def _raise_action_result_contract_failure(message: str) -> None:
@@ -2191,9 +2240,14 @@ def _optional_str(value: Any) -> str | None:
 
 
 def _optional_str_list(value: Any) -> list[str] | None:
-    if not isinstance(value, list):
+    if value is None:
         return None
-    result = [str(item).strip() for item in value if str(item or "").strip()]
+    if not isinstance(value, list) or any(
+        not isinstance(item, str) or not item.strip() or item != item.strip()
+        for item in value
+    ):
+        raise ValueError("target_source_urls must be a canonical string list")
+    result = list(value)
     return result or None
 
 

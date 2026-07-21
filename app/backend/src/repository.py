@@ -366,6 +366,8 @@ class Repository:
                     return self._edit_batch_execution_failure("BATCH_NOT_DRAFT")
                 if self._other_active_edit_batch_exists(conn, batch_id):
                     return self._edit_batch_execution_failure("ANOTHER_EDIT_BATCH_ACTIVE")
+                if self._running_task_exists(conn):
+                    return self._edit_batch_execution_failure("LEGACY_TASK_ACTIVE")
                 items = self._edit_batch_item_rows(conn, batch_id)
                 if not items or any(item["status"] != "pending" for item in items):
                     return self._edit_batch_execution_failure("BATCH_ITEMS_NOT_STARTABLE")
@@ -375,6 +377,7 @@ class Repository:
                     start_context,
                     batch_row=row,
                     approval_context=stored_approval["context"],
+                    consumed_at=transition_at,
                 )
                 cursor = conn.execute(
                     """
@@ -434,6 +437,8 @@ class Repository:
                     return self._edit_batch_execution_failure("APPROVAL_TOKEN_ALREADY_CONSUMED")
                 if self._other_active_edit_batch_exists(conn, batch_id):
                     return self._edit_batch_execution_failure("ANOTHER_EDIT_BATCH_ACTIVE")
+                if self._running_task_exists(conn):
+                    return self._edit_batch_execution_failure("LEGACY_TASK_ACTIVE")
                 items = self._edit_batch_item_rows(conn, batch_id)
                 if not items or any(item["status"] != "pending" for item in items):
                     return self._edit_batch_execution_failure("BATCH_ITEMS_NOT_STARTABLE")
@@ -449,6 +454,7 @@ class Repository:
                     start_context,
                     batch_row=row,
                     approval_context=stored_approval["context"],
+                    consumed_at=transition_at,
                 )
                 cursor = conn.execute(
                     """
@@ -732,7 +738,7 @@ class Repository:
                     return self._edit_batch_execution_failure("ITEM_OUTCOME_CAS_CONFLICT")
 
                 if manual_review:
-                    conn.execute(
+                    batch_cursor = conn.execute(
                         """
                         UPDATE edit_batches
                            SET status='stopped', stopped_at=?, execution_reason_code=?,
@@ -746,8 +752,11 @@ class Repository:
                             batch_id,
                         ),
                     )
+                    if batch_cursor.rowcount != 1:
+                        conn.rollback()
+                        return self._edit_batch_execution_failure("BATCH_STOP_CAS_CONFLICT")
                 elif batch["status"] == "stop_requested":
-                    conn.execute(
+                    batch_cursor = conn.execute(
                         """
                         UPDATE edit_batches
                            SET status='stopped', stopped_at=?,
@@ -757,6 +766,9 @@ class Repository:
                         """,
                         (finished_at, finished_at, batch_id),
                     )
+                    if batch_cursor.rowcount != 1:
+                        conn.rollback()
+                        return self._edit_batch_execution_failure("BATCH_STOP_CAS_CONFLICT")
         except EditBatchExecutionPersistenceError as exc:
             return self._edit_batch_execution_failure(exc.reason_code)
         return self._edit_batch_execution_success(batch_id, item_id=item_id)
@@ -862,7 +874,7 @@ class Repository:
                     canonical_actions = normalize_action_results_for_storage(safe_actions)
                 except EditBatchExecutionPersistenceError:
                     return self._edit_batch_execution_failure("STOP_EVIDENCE_INVALID")
-                conn.execute(
+                item_cursor = conn.execute(
                     """
                     UPDATE edit_batch_items
                        SET status='stopped_uncertain',
@@ -885,6 +897,9 @@ class Repository:
                         batch_id,
                     ),
                 )
+                if item_cursor.rowcount != 1:
+                    conn.rollback()
+                    return self._edit_batch_execution_failure("ITEM_STOP_CAS_CONFLICT")
             cursor = conn.execute(
                 """
                 UPDATE edit_batches
@@ -902,6 +917,7 @@ class Repository:
                 ),
             )
             if cursor.rowcount != 1:
+                conn.rollback()
                 return self._edit_batch_execution_failure("STOP_CAS_CONFLICT")
         return self._edit_batch_execution_success(batch_id)
 
@@ -953,6 +969,48 @@ class Repository:
             "auto_resumed": False,
         }
 
+    def get_active_edit_batch_execution(self) -> dict[str, Any] | None:
+        """Expose only the active batch identity and progress for cross-workflow gating."""
+        with connection() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM edit_batches
+                 WHERE status IN ('running', 'stop_requested')
+                 ORDER BY started_at ASC, id ASC
+                 LIMIT 1
+                """
+            ).fetchone()
+            if not row:
+                return None
+            items = self._edit_batch_item_rows(conn, int(row["id"]))
+            return {
+                "id": int(row["id"]),
+                "status": row["status"],
+                "execution": build_public_execution(row),
+                "progress": build_public_progress(items),
+            }
+
+    def get_active_task_execution(self) -> dict[str, Any] | None:
+        """Expose a minimal legacy-task fact set before any batch recapture work."""
+
+        with connection() as conn:
+            row = conn.execute(
+                """
+                SELECT id, status, mode
+                  FROM tasks
+                 WHERE status='running'
+                 ORDER BY updated_at ASC, id ASC
+                 LIMIT 1
+                """
+            ).fetchone()
+            if not row:
+                return None
+            return {
+                "id": int(row["id"]),
+                "status": str(row["status"]),
+                "mode": str(row["mode"]),
+            }
+
     @staticmethod
     def _edit_batch_execution_failure(reason_code: str) -> EditBatchExecutionTransitionResult:
         return EditBatchExecutionTransitionResult(
@@ -999,6 +1057,12 @@ class Repository:
             (batch_id,),
         ).fetchone()
         return row is not None
+
+    @staticmethod
+    def _running_task_exists(conn: Any) -> bool:
+        return conn.execute(
+            "SELECT 1 AS active FROM tasks WHERE status='running' LIMIT 1"
+        ).fetchone() is not None
 
     @staticmethod
     def _edit_batch_item_rows(conn: Any, batch_id: int) -> list[dict[str, Any]]:
@@ -2045,6 +2109,11 @@ class Repository:
     def try_start_task(self, task_id: int) -> bool:
         now = now_iso()
         with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if conn.execute(
+                "SELECT 1 AS active FROM edit_batches WHERE status IN ('running', 'stop_requested') LIMIT 1"
+            ).fetchone():
+                return False
             cur = conn.execute(
                 "UPDATE tasks SET status='running', updated_at=? WHERE id=? AND status='draft'",
                 (now, task_id),
@@ -2089,8 +2158,13 @@ class Repository:
                 expiry = None
             stored_context = approval.get('authorization_context')
             context_check = compare_authorization_context(stored_context, authorization_context)
+            edit_batch_active = conn.execute(
+                "SELECT 1 AS active FROM edit_batches WHERE status IN ('running', 'stop_requested') LIMIT 1"
+            ).fetchone() is not None
             if task.get('status') != 'draft':
                 reason_code = 'AUTH_TASK_NOT_DRAFT'
+            elif edit_batch_active:
+                reason_code = 'AUTH_EDIT_BATCH_ACTIVE'
             elif approval.get('approved') is not True or approval.get('source') != 'server':
                 reason_code = 'AUTH_LEASE_NOT_APPROVED'
             elif approval.get('consumed') is True:

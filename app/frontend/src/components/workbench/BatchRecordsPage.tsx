@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { getJson, postJson } from '../../api'
 import type { EditBatchDetail, EditBatchItem, EditBatchProgressSummary, EditBatchSummary } from '../../types'
 
@@ -86,12 +86,23 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
     return () => window.clearInterval(timer)
   }, [detail?.id, detail?.status, openBatch])
 
-  const progress = useMemo(() => detail ? progressFor(detail) : null, [detail])
+  const progress = detail?.progress ?? null
   const currentItem = detail && progress?.current_ordinal
     ? detail.items.find((item) => item.ordinal === progress.current_ordinal) ?? null
     : null
   const exceptionalItems = detail?.items.filter((item) => item.outcome && item.outcome.classification !== 'SUCCEEDED') ?? []
-  const executionReasonCode = detail ? detail.execution?.reason_code ?? detail.execution?.stop_reason_code : null
+  const executionReasonCode = detail?.execution.reason_code ?? null
+  const firstManualReviewItem = exceptionalItems.find((item) => item.outcome?.manual_review_required)
+  const primaryNotice = error
+    ? { tone: 'danger', text: error }
+    : detail?.execution.manual_review_required
+      ? {
+          tone: 'danger',
+          text: humanReasonCode(executionReasonCode ?? firstManualReviewItem?.outcome?.reason_code),
+        }
+      : pollingNotice
+        ? { tone: 'warning', text: pollingNotice }
+        : null
 
   async function requestStop() {
     if (!detail || detail.status !== 'running' || stopping) return
@@ -125,7 +136,7 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
           <div>
             <span className="eyebrow">真实执行记录</span>
             <h2>批次记录</h2>
-            <p>运行中的批次会自动更新。主视图只保留进度和下一步，异常与证据收在详情中。</p>
+            <p>运行中的批次会自动更新。主视图只保留进度和下一步，异常与人工复核收在详情中。</p>
           </div>
           <div className="batch-records-head__actions">
             <button className="button button--quiet" type="button" onClick={() => { void loadBatches() }} disabled={loading || detailLoading}>刷新</button>
@@ -153,7 +164,9 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
               >
                 <span><strong>批次 #{batch.id}</strong><b>{humanBatchStatus(batch.status)}</b></span>
                 <small>{batch.store_identity?.store_name ?? '店铺待确认'} · {batch.item_count} 件</small>
-                <small>{batch.template.name ?? '模板待确认'} · {formatDateTime(batch.created_at)}</small>
+                <small>{POLLING_STATUSES.has(batch.status)
+                  ? `${batch.progress.completed}/${batch.progress.total} 已完成 · ${batch.template.name ?? '模板待确认'}`
+                  : `${batch.template.name ?? '模板待确认'} · ${formatDateTime(batch.created_at)}`}</small>
               </button>
             ))}
           </div>
@@ -178,8 +191,12 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
               <span className={`batch-status-badge is-${statusTone(detail.status)}`}>{humanBatchStatus(detail.status)}</span>
             </div>
 
-            {error && <div className="batch-inline-error" role="alert">{error}</div>}
-            {pollingNotice && <div className="batch-polling-notice" role="status">{pollingNotice}</div>}
+            {primaryNotice && (
+              <div className={`batch-primary-notice is-${primaryNotice.tone}`} role={primaryNotice.tone === 'danger' ? 'alert' : 'status'}>
+                <strong>{primaryNotice.tone === 'danger' ? '需要处理' : '进度暂未更新'}</strong>
+                <span>{primaryNotice.text}</span>
+              </div>
+            )}
 
             {detail.status === 'draft' ? (
               <div className="batch-draft-boundary">
@@ -216,45 +233,44 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
               </div>
             ) : null}
 
-            <dl className="batch-fact-grid" aria-label="批次摘要">
-              <div><dt>商品</dt><dd>{detail.items.length} 件 · 严格串行</dd></div>
-              <div><dt>模板</dt><dd>{detail.template_snapshot.template_name} · {templateVersion(detail)}</dd></div>
-              <div><dt>批准</dt><dd>整批一次</dd></div>
-              <div><dt>边界</dt><dd>只保存 · 不发布</dd></div>
-            </dl>
-
-            <ol className="batch-record-items" aria-label="批次商品明细">
-              {detail.items.map((item) => (
-                <li key={item.id} className={item.status === 'running' ? 'is-current' : ''}>
-                  <span>{item.ordinal}</span>
-                  <div>
-                    <strong>{item.item_snapshot.title}</strong>
-                    <small>{item.item_snapshot.dxm_product_id ?? item.item_snapshot.stable_record_key}</small>
-                  </div>
-                  <b>{humanItemStatus(item.status)}</b>
-                </li>
-              ))}
-            </ol>
+            <div className="batch-record-template-summary" aria-label="本批次模板摘要">
+              <span>
+                <strong>{detail.template_snapshot.template_name}</strong>
+                <small>{templateVersion(detail)} · {detail.items.length} 件 · 严格串行</small>
+              </span>
+              <b>只保存 · 不发布</b>
+            </div>
 
             <details className="batch-evidence-details">
-              <summary>异常与证据{exceptionalItems.length ? ` · ${exceptionalItems.length} 项` : ''}</summary>
+              <summary>商品明细 · {detail.items.length} 件</summary>
+              <ol className="batch-record-items" aria-label="批次商品明细">
+                {detail.items.map((item) => (
+                  <li key={item.id} className={item.status === 'running' ? 'is-current' : ''}>
+                    <span>{item.ordinal}</span>
+                    <div>
+                      <strong>{item.item_snapshot.title}</strong>
+                      <small>{item.item_snapshot.dxm_product_id ? `产品 ID ${item.item_snapshot.dxm_product_id}` : '商品身份已由后端绑定'}</small>
+                    </div>
+                    <b>{humanItemStatus(item.status)}</b>
+                  </li>
+                ))}
+              </ol>
+            </details>
+
+            <details className="batch-evidence-details">
+              <summary>异常与人工复核{exceptionalItems.length ? ` · ${exceptionalItems.length} 项` : ' · 无待处理项'}</summary>
               <div className="batch-evidence-payload">
                 {executionReasonCode && (
-                  <span><strong>批次停止原因</strong><b>{humanReasonCode(executionReasonCode)}</b><code>{executionReasonCode}</code></span>
+                  <span><strong>批次停止原因</strong><b>{humanReasonCode(executionReasonCode)}</b></span>
                 )}
                 {exceptionalItems.map((item) => (
                   <span key={item.id}>
                     <strong>第 {item.ordinal} 件 · {humanOutcome(item)}</strong>
                     <b>{humanReasonCode(item.outcome?.reason_code)}</b>
-                    {item.outcome?.reason_code && <code>{item.outcome.reason_code}</code>}
+                    <small>{item.outcome?.manual_review_required ? '需要人工复核' : '已在保存前安全隔离'}{item.outcome?.finished_at ? ` · ${formatDateTime(item.outcome.finished_at)}` : ''}</small>
                   </span>
                 ))}
                 {!executionReasonCode && !exceptionalItems.length && <span><strong>暂无异常</strong><b>当前没有需要人工处理的结果。</b></span>}
-                <div className="batch-digest-strip">
-                  <span><strong>范围摘要</strong><code>{detail.scope_snapshot_digest}</code></span>
-                  <span><strong>模板摘要</strong><code>{detail.template_snapshot_digest}</code></span>
-                  <span><strong>策略摘要</strong><code>{detail.policy_digest}</code></span>
-                </div>
               </div>
             </details>
           </>
@@ -269,28 +285,6 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
       </article>
     </section>
   )
-}
-
-function progressFor(detail: EditBatchDetail): EditBatchProgressSummary {
-  if (detail.progress) return detail.progress
-  const execution = detail.execution
-  const succeeded = execution?.succeeded_count ?? detail.items.filter((item) => item.status === 'succeeded').length
-  const isolated = execution?.isolated_count ?? detail.items.filter((item) => item.status === 'isolated_pre_save_no_write').length
-  const stopped = detail.items.filter((item) => item.status === 'stopped_uncertain').length
-  const runningItem = detail.items.find((item) => item.status === 'running')
-  const completed = execution?.completed_count ?? succeeded + isolated + stopped
-  const total = execution?.total_count ?? detail.items.length
-  return {
-    total,
-    completed,
-    succeeded,
-    isolated,
-    pending: detail.items.filter((item) => item.status === 'pending').length,
-    running: runningItem ? 1 : 0,
-    stopped,
-    current_ordinal: execution?.current_ordinal ?? runningItem?.ordinal ?? null,
-    percent: total ? Math.round((completed / total) * 100) : 0,
-  }
 }
 
 function humanRecordsError(caught: unknown, action: string) {
@@ -349,7 +343,7 @@ function humanReasonCode(reasonCode: string | null | undefined) {
 
 function progressSummary(detail: EditBatchDetail, progress: EditBatchProgressSummary) {
   if (detail.status === 'completed') return `已完成 ${progress.total} 件，全部结束。`
-  if (detail.status === 'stopped') return detail.execution?.manual_review_required || detail.execution?.requires_manual_review
+  if (detail.status === 'stopped') return detail.execution.manual_review_required
     ? '批次已停止，需要人工复核。'
     : '批次已安全停止。'
   return progress.pending ? `还有 ${progress.pending} 件等待处理。` : '等待后端更新当前商品。'

@@ -1354,6 +1354,29 @@ a:focus-visible {
   font-size: 14px;
 }
 
+.batch-scope-review {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+}
+
+.batch-scope-review > summary {
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.batch-scope-review[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.batch-scope-review > .batch-fact-grid,
+.batch-scope-review > .batch-scope-items {
+  margin: 10px;
+}
+
 .batch-inline-error {
   width: 100%;
   padding: 10px 12px;
@@ -1841,11 +1864,55 @@ a:focus-visible {
   justify-self: end;
 }
 
-.batch-polling-notice {
-  padding: 8px 10px;
+.batch-primary-notice {
+  padding: 10px 12px;
+  display: grid;
+  gap: 3px;
+  border: 1px solid #efd18a;
   border-radius: 7px;
   color: #7a4a00;
   background: var(--amber-soft);
+  font-size: 12px;
+}
+
+.batch-primary-notice.is-danger {
+  border-color: #f3b8bf;
+  color: var(--red);
+  background: var(--red-soft);
+}
+
+.batch-record-template-summary {
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+}
+
+.batch-record-template-summary > span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.batch-record-template-summary strong,
+.batch-record-template-summary small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-record-template-summary small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.batch-record-template-summary > b {
+  flex: 0 0 auto;
+  color: var(--green);
   font-size: 12px;
 }
 
@@ -1883,6 +1950,10 @@ a:focus-visible {
   padding: 10px;
 }
 
+.batch-evidence-details > .batch-record-items {
+  margin: 10px;
+}
+
 .batch-evidence-payload {
   display: grid;
   gap: 7px;
@@ -1896,6 +1967,11 @@ a:focus-visible {
 
 .batch-evidence-payload strong {
   font-size: 12px;
+}
+
+.batch-evidence-payload small {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .batch-evidence-payload code {
@@ -1963,6 +2039,11 @@ a:focus-visible {
   .batch-stop-action {
     width: 100%;
     justify-self: stretch;
+  }
+
+  .batch-record-template-summary {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .batch-scope-card,
@@ -4771,11 +4852,21 @@ tr:last-child td {
   background: var(--surface);
 }
 
-.template-execution-preview > div:first-child {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
+.template-execution-preview > summary {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.template-execution-preview[open] > summary {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.template-execution-preview > small {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .template-execution-preview__grid {
@@ -9577,7 +9668,6 @@ tr:last-child td {
   .template-topline,
   .template-usage-confirmation,
   .template-active-source,
-  .template-execution-preview > div:first-child,
   .guide-step,
   .decision-row,
   .evidence-row,

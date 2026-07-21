@@ -177,7 +177,12 @@ class ConfigDefaultsResolver:
         task_payload = task.get("payload") or {}
         product_payload = (product or {}).get("payload") or {}
         return {
-            "store_name": task_payload.get("store_name") or "Dang Kang",
+            "store_name": (
+                task_payload.get("store_name")
+                or task.get("store_name")
+                or task_payload.get("store")
+                or task.get("store")
+            ),
             "category_name": (
                 (product or {}).get("category_name")
                 or product_payload.get("category_name")

@@ -52,9 +52,11 @@ from src.models import (
     AgentConsoleStartRequest,
     DraftBoxActionRequest,
     DraftBoxScopeSnapshotCreate,
+    EditBatchApproveAndStartRequest,
     EditBatchCreate,
     EditBatchBundleComposeRequest,
     EditBatchManualApprovalRequest,
+    EditBatchStopRequest,
     HealthResponse,
     LoginContinueRequest,
     LoginNavigateRequest,
@@ -75,6 +77,8 @@ from src.models import (
 from src.batch_edit import (
     BatchEditContractError,
     BatchEditCoordinator,
+    BatchExecutionRuntime,
+    BatchRuntimeError,
     BundleComposerError,
     EditBatchBundleComposer,
 )
@@ -108,9 +112,23 @@ async def app_lifespan(_app: FastAPI):
     except Exception as exc:
         _append_backend_runtime_log(f'Startup task recovery failed: {exc}')
     try:
+        recovered_batches = batch_execution_runtime.recover_interrupted_batches()
+        if recovered_batches:
+            _append_backend_runtime_log(
+                f'startup edit-batch recovery stopped={recovered_batches}'
+            )
+    except Exception as exc:
+        _append_backend_runtime_log(f'Startup edit-batch recovery failed: {exc}')
+    try:
         yield
     finally:
         _append_backend_runtime_log('DXM backend runtime stopping; closing visible browser sessions')
+        try:
+            batch_shutdown = batch_execution_runtime.shutdown()
+            if isinstance(batch_shutdown, dict) and batch_shutdown.get('ok') is not True:
+                _append_backend_runtime_log('Edit-batch runtime cleanup incomplete')
+        except Exception as exc:
+            _append_backend_runtime_log(f'Edit-batch runtime cleanup failed: {exc}')
         try:
             agent_console_service.stop()
         except Exception as exc:
@@ -158,13 +176,42 @@ browser_agent_runtime = BrowserAgentRuntime(
     workflow_adapter,
     mutation_ledger=mutation_dispatch_ledger,
 )
-browser_agent_runtime.set_mutation_authorizer(
-    lambda command, _context: _verify_runner_authorization(
+
+
+def _current_batch_runtime_facts() -> dict[str, Any]:
+    identity = runtime_identity.as_dict()
+    browser_session_id = workflow_adapter.browser_session_id()
+    return {
+        'runtime_identity': {
+            'instance_id': identity['instanceId'],
+            'browser_runtime_id': browser_agent_runtime.runtime_id,
+            'browser_session_id': browser_session_id,
+            'git_head': identity['gitHead'],
+        },
+        'git_head': identity['gitHead'],
+    }
+
+
+batch_execution_runtime = BatchExecutionRuntime(
+    repo,
+    browser_agent_runtime,
+    mutation_dispatch_ledger,
+    runtime_facts_provider=_current_batch_runtime_facts,
+    browser_session_provider=lambda: workflow_adapter.browser_session_id(),
+)
+
+
+def _authorize_browser_mutation(command: Any, context: Any) -> dict[str, Any]:
+    if batch_execution_runtime.is_batch_command(command):
+        return batch_execution_runtime.authorize_mutation(command, context)
+    return _verify_runner_authorization(
         int(command.task_id),
         'claim_only' if command.state == 'CLAIM_TO_DRAFT_BOX' else 'single_save',
         command.state,
     )
-)
+
+
+browser_agent_runtime.set_mutation_authorizer(_authorize_browser_mutation)
 title_ai_service = TitleAIService()
 selector_profile_service = SelectorProfileService()
 agent_console_service = AgentConsoleService()
@@ -454,6 +501,121 @@ def approve_edit_batch(batch_id: int, payload: EditBatchManualApprovalRequest):
             confirmation=payload.confirmation,
         )
     except BatchEditContractError as exc:
+        status_code = 404 if exc.reason_code == 'BATCH_NOT_FOUND' else 409
+        raise HTTPException(
+            status_code=status_code,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+
+
+@app.post('/api/edit-batches/{batch_id}/approve-and-start')
+async def approve_and_start_edit_batch(
+    batch_id: int,
+    payload: EditBatchApproveAndStartRequest,
+):
+    batch = repo.get_edit_batch(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail='Edit batch not found')
+    if payload.confirmation != 'CONFIRM_DXM_BATCH_SAVE_ONLY':
+        raise HTTPException(
+            status_code=400,
+            detail='confirmation must exactly equal CONFIRM_DXM_BATCH_SAVE_ONLY',
+        )
+    if not payload.approved_by.strip():
+        raise HTTPException(status_code=400, detail='approved_by must identify the approving operator')
+
+    coordinator = BatchEditCoordinator(repo)
+    try:
+        capture_max_items = coordinator.approval_capture_max_items(batch)
+    except BatchEditContractError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+
+    try:
+        capture = await asyncio.to_thread(
+            _run_login_flow,
+            workflow_adapter.capture_draft_box_scope,
+            capture_max_items,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': 'BATCH_SCOPE_RECAPTURE_FAILED',
+                'message': '无法重新读取当前商品箱范围，批次没有启动。',
+            },
+        ) from exc
+    browser_session_id = workflow_adapter.browser_session_id()
+    identity = runtime_identity.as_dict()
+    runtime_context = {
+        'instance_id': identity['instanceId'],
+        'browser_runtime_id': browser_agent_runtime.runtime_id,
+        'git_head': identity['gitHead'],
+    }
+    authoritative_facts = {
+        'runtime_identity': {
+            **runtime_context,
+            'browser_session_id': browser_session_id,
+        },
+        'browser_session_id': browser_session_id,
+        'git_head': identity['gitHead'],
+        'store_identity': batch['scope_snapshot']['store_identity'],
+        'page_identity': batch['scope_snapshot']['page_identity'],
+    }
+    try:
+        started = coordinator.approve_and_start_batch(
+            batch,
+            capture,
+            runtime_context=runtime_context,
+            expected_browser_session_id=browser_session_id,
+            authoritative_facts=authoritative_facts,
+            approved_by=payload.approved_by,
+            confirmation=payload.confirmation,
+        )
+    except BatchEditContractError as exc:
+        status_code = 404 if exc.reason_code == 'BATCH_NOT_FOUND' else 409
+        raise HTTPException(
+            status_code=status_code,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                'reason_code': 'BATCH_START_FAILED',
+                'message': '批次启动失败，未安排执行。',
+            },
+        ) from exc
+    try:
+        batch_execution_runtime.schedule(batch_id)
+    except Exception as exc:
+        repo.stop_edit_batch(
+            batch_id,
+            reason_code='BATCH_RUNTIME_SCHEDULE_FAILED',
+            reason='批次已批准，但执行协调器未能启动；系统已停止批次，请人工核对。',
+            requires_manual_review=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                'reason_code': 'BATCH_RUNTIME_SCHEDULE_FAILED',
+                'message': '批次执行协调器未能启动，批次已安全停止。',
+            },
+        ) from exc
+    return started
+
+
+@app.post('/api/edit-batches/{batch_id}/stop')
+def request_edit_batch_stop(batch_id: int, payload: EditBatchStopRequest):
+    try:
+        return batch_execution_runtime.request_stop(
+            batch_id,
+            requested_by=payload.requested_by,
+            reason=payload.reason,
+        )
+    except BatchRuntimeError as exc:
         status_code = 404 if exc.reason_code == 'BATCH_NOT_FOUND' else 409
         raise HTTPException(
             status_code=status_code,
@@ -779,6 +941,15 @@ async def start_task(task_id: int, payload: TaskStartRequest | None = None):
         if not result.ok:
             raise HTTPException(status_code=409, detail=f'{result.reason_code}: authorization lease rejected')
     elif not repo.try_start_task(task_id):
+        active_batch = repo.get_active_edit_batch_execution()
+        if active_batch is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    'reason_code': 'EDIT_BATCH_ACTIVE',
+                    'message': f"批次 #{active_batch['id']} 正在占用自动浏览器，请先等待完成或停止批次。",
+                },
+            )
         raise HTTPException(status_code=409, detail='Task is already running')
     asyncio.create_task(runner.run_task(task_id))
     return {'ok': True, 'taskId': task_id}
@@ -1397,6 +1568,15 @@ def start_agent_console(payload: AgentConsoleStartRequest):
     if payload.task_id is not None and task is None:
         raise HTTPException(status_code=404, detail='Task not found')
     if payload.launch_browser:
+        active_batch = repo.get_active_edit_batch_execution()
+        if active_batch is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    'reason_code': 'EDIT_BATCH_ACTIVE',
+                    'message': f"批次 #{active_batch['id']} 正在占用自动浏览器，请先等待完成或停止批次。",
+                },
+            )
         if task is None:
             raise HTTPException(
                 status_code=403,
@@ -2686,6 +2866,16 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> dict[str,
     task = repo.get_task_private(task_id)
     if not task:
         raise HTTPException(status_code=404, detail='Task not found')
+
+    active_batch = repo.get_active_edit_batch_execution()
+    if active_batch is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': 'EDIT_BATCH_ACTIVE',
+                'message': f"批次 #{active_batch['id']} 正在占用自动浏览器，请先等待完成或停止批次。",
+            },
+        )
 
     payload = task.get('payload') or {}
     mode = str(task.get('mode') or payload.get('execution_mode') or '')

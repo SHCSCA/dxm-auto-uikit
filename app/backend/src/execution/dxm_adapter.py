@@ -1157,13 +1157,26 @@ class DxmWorkflowAdapter:
         for name in postconditions:
             postconditions[name] = False
 
+        def concrete(value: Any) -> bool:
+            if isinstance(value, Mapping):
+                return bool(value) and any(concrete(item) for item in value.values())
+            if isinstance(value, (list, tuple)):
+                return bool(value) and all(concrete(item) for item in value)
+            if isinstance(value, str):
+                return bool(value.strip())
+            return value is not None
+
         def detail_exact(field: Mapping[str, Any]) -> bool:
+            value_after = field.get('value_after')
+            expected_value = field.get('expected_value')
             return bool(
                 field.get('ok') is True
                 and field.get('located') is True
                 and 'value_after' in field
                 and 'expected_value' in field
-                and str(field.get('value_after')) == str(field.get('expected_value'))
+                and concrete(value_after)
+                and concrete(expected_value)
+                and str(value_after) == str(expected_value)
             )
 
         def exact(*names: str) -> bool:
@@ -1218,6 +1231,13 @@ class DxmWorkflowAdapter:
         network = save.get('network_save_result') if isinstance(save.get('network_save_result'), Mapping) else {}
         page = save.get('page_save_result') if isinstance(save.get('page_save_result'), Mapping) else {}
         decision = save.get('save_decision') if isinstance(save.get('save_decision'), Mapping) else {}
+        network_message = str(network.get('message') or network.get('msg') or '').strip()
+        page_success_text = str(page.get('success_text') or '').strip()
+        page_transition = page.get('status_transition') if isinstance(page.get('status_transition'), Mapping) else {}
+        try:
+            network_status_ok = 200 <= int(network.get('status') or 0) < 300
+        except (TypeError, ValueError):
+            network_status_ok = False
         postconditions['mutation_authorized'] = bool(
             authorization.get('ok') is True
             and authorization.get('executed') is True
@@ -1231,12 +1251,21 @@ class DxmWorkflowAdapter:
         )
         postconditions['save_click_dispatched'] = save.get('save_click_dispatched') is True
         postconditions['network_save_success'] = bool(
-            save.get('network_save_success') is True
-            or (network.get('ok') is True and decision.get('network_ok') is True)
+            network.get('ok') is True
+            and decision.get('network_ok') is True
+            and str(network.get('url') or '').strip()
+            and str(network.get('method') or '').upper() == 'POST'
+            and network_status_ok
+            and network_message
+            and ('code' in network or isinstance(network.get('raw'), Mapping))
         )
         postconditions['page_save_success'] = bool(
-            save.get('page_save_success') is True
-            or (page.get('ok') is True and decision.get('page_ok') is True)
+            page.get('ok') is True
+            and decision.get('page_ok') is True
+            and page_success_text
+            and page_transition.get('kind') == 'new_or_changed_structured_save_status'
+            and isinstance(page_transition.get('entry'), Mapping)
+            and page_transition.get('entry')
         )
         postconditions['published_false'] = bool(
             save.get('published') is False and evidence.get('published') is not True
@@ -1254,6 +1283,9 @@ class DxmWorkflowAdapter:
         structured_current_page = bool(
             proof.get('verified_on_current_page') is True
             and proof.get('proof_kind') == 'structured_unpublished_status'
+            and proof.get('status_scope_unique') is True
+            and proof.get('bound_candidate_count') == 1
+            and str(proof.get('target_identity_sha256') or '').strip()
         )
         valid_status = status in {'待发布', '草稿', '未发布', '待完善'}
         target_identity_match = bool(
@@ -1287,10 +1319,9 @@ class DxmWorkflowAdapter:
             and isinstance(unpublished_ref, Mapping)
             and save_ref.get('path')
             and unpublished_ref.get('path')
-            and (
-                save_ref.get('path') != unpublished_ref.get('path')
-                or save_ref.get('sha256') != unpublished_ref.get('sha256')
-            )
+            and save_ref.get('sha256')
+            and unpublished_ref.get('sha256')
+            and save_ref.get('path') != unpublished_ref.get('path')
         )
 
     @staticmethod

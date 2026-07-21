@@ -122,6 +122,7 @@ export function BatchEditPage({
         confirmation: 'CONFIRM_DXM_BATCH_SAVE_ONLY',
       })
       setDraftBatch(started)
+      onShowRecords()
     } catch (caught) {
       setError(humanBatchError(caught, '批准并开始批次失败'))
     } finally {
@@ -151,14 +152,6 @@ export function BatchEditPage({
             <div><dt>店铺</dt><dd>{draftBatch.scope_snapshot.store_identity.store_name}</dd></div>
             <div><dt>模板</dt><dd>{draftBatch.template_snapshot.template_name} · {templateVersion(draftBatch.template_snapshot)}</dd></div>
           </dl>
-          <details className="batch-evidence-details">
-            <summary>证据详情</summary>
-            <div className="batch-digest-strip">
-              <span><strong>范围摘要</strong><code>{draftBatch.scope_snapshot_digest}</code></span>
-              <span><strong>模板摘要</strong><code>{draftBatch.template_snapshot_digest}</code></span>
-              <span><strong>策略摘要</strong><code>{draftBatch.policy_digest}</code></span>
-            </div>
-          </details>
           {isDraft ? (
             <div className="batch-approval-card" aria-label="整批一次批准">
               <div className="batch-approval-card__intro">
@@ -260,33 +253,26 @@ export function BatchEditPage({
               </div>
               <span>{formatDateTime(scopeSnapshot.observed_at)}</span>
             </div>
-            <dl className="batch-fact-grid batch-fact-grid--scope" aria-label="商品箱现场证据">
-              <div><dt>来源页</dt><dd>{scopeSnapshot.page_identity.title}</dd><small>{compactDxmPath(scopeSnapshot.page_identity.url)}</small></div>
-              <div><dt>筛选</dt><dd>{scopeFilterSummary(scopeSnapshot.filter_state)}</dd></div>
-              <div><dt>排序</dt><dd>{scopeSortSummary(scopeSnapshot.sort_state)}</dd></div>
-              <div><dt>分页</dt><dd>{scopePageSummary(scopeSnapshot.page_state)}</dd></div>
-            </dl>
-            <ol className="batch-scope-items" aria-label="冻结商品顺序">
-              {scopeSnapshot.items.map((item) => (
-                <li key={item.target_identity_sha256}>
-                  <span>{item.ordinal}</span>
-                  <div>
-                    <strong>{item.title}</strong>
-                    <small>{item.dxm_product_id ? `产品 ID ${item.dxm_product_id}` : item.stable_record_key}</small>
-                  </div>
-                  <b title={item.target_identity_sha256}>身份已绑定</b>
-                </li>
-              ))}
-            </ol>
-            <details className="batch-evidence-details">
-              <summary>证据详情</summary>
-              <div className="batch-evidence-payload">
-                <span><strong>DOM 摘要</strong><code>{scopeSnapshot.evidence.dom_sha256}</code></span>
-                <span><strong>行证据摘要</strong><code>{scopeSnapshot.evidence.refs_digest}</code></span>
+            <details className="batch-scope-review">
+              <summary>查看范围详情与 {scopeSnapshot.items.length} 件商品</summary>
+              <dl className="batch-fact-grid batch-fact-grid--scope" aria-label="商品箱现场摘要">
+                <div><dt>来源页</dt><dd>{scopeSnapshot.page_identity.title}</dd><small>{compactDxmPath(scopeSnapshot.page_identity.url)}</small></div>
+                <div><dt>筛选</dt><dd>{scopeFilterSummary(scopeSnapshot.filter_state)}</dd></div>
+                <div><dt>排序</dt><dd>{scopeSortSummary(scopeSnapshot.sort_state)}</dd></div>
+                <div><dt>分页</dt><dd>{scopePageSummary(scopeSnapshot.page_state)}</dd></div>
+              </dl>
+              <ol className="batch-scope-items" aria-label="冻结商品顺序">
                 {scopeSnapshot.items.map((item) => (
-                  <span key={item.target_identity_sha256}><strong>商品 {item.ordinal} 身份</strong><code>{item.target_identity_sha256}</code></span>
+                  <li key={item.ordinal}>
+                    <span>{item.ordinal}</span>
+                    <div>
+                      <strong>{item.title}</strong>
+                      <small>{item.dxm_product_id ? `产品 ID ${item.dxm_product_id}` : '店小秘商品身份已绑定'}</small>
+                    </div>
+                    <b>已核对</b>
+                  </li>
                 ))}
-              </div>
+              </ol>
             </details>
           </article>
 
@@ -298,9 +284,9 @@ export function BatchEditPage({
               </div>
             </div>
             <div className="batch-evidence-note">
-              <strong>现场证据已绑定</strong>
-              <span>行证据 {scopeSnapshot.evidence.refs.length} 条</span>
-              <span>零写入：{isZeroWriteProven(scopeSnapshot.zero_write_proof) ? '导航、交互、写入均未发生' : '未证明'}</span>
+              <strong>{scopeSnapshot.items.length} 件商品已核对</strong>
+              <span>店铺、顺序和商品身份已由后端冻结。</span>
+              <span>{isZeroWriteProven(scopeSnapshot.zero_write_proof) ? '本次读取未执行导航、点击或写入。' : '只读边界尚未得到确认。'}</span>
             </div>
             {error && <div className="batch-inline-error" role="alert">{error}</div>}
             {selectedTemplate ? (

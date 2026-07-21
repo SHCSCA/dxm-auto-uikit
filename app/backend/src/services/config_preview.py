@@ -411,7 +411,12 @@ class ConfigPreviewService:
 
         task_payload = task.get("payload") or {}
         product_payload = (product or {}).get("payload") or {}
-        actual_store = task_payload.get("store_name") or "Dang Kang"
+        actual_store = (
+            task_payload.get("store_name")
+            or task.get("store_name")
+            or task_payload.get("store")
+            or task.get("store")
+        )
         actual_category = (product or {}).get("category_name") or product_payload.get("category_name") or task_payload.get("category_name") or task_payload.get("category")
         actual_platform = task_payload.get("platform") or task.get("platform") or "AliExpress"
         return (

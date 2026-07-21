@@ -6,6 +6,7 @@ import json
 import re
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 
 MUTATION_COMMAND_PLANS: dict[tuple[str, str], dict[str, int]] = {
@@ -24,6 +25,7 @@ MUTATION_COMMAND_PLANS: dict[tuple[str, str], dict[str, int]] = {
 _MUTATION_STATES = frozenset(state for state, _action in MUTATION_COMMAND_PLANS)
 _MUTATION_COMMAND_ACTIONS = frozenset(action for _state, action in MUTATION_COMMAND_PLANS)
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
+_FROZEN_PRODUCT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{5,128}$")
 
 
 class MutationCommandContractError(ValueError):
@@ -190,6 +192,34 @@ def _canonical_target_source_urls(value: Any) -> list[str]:
     return list(identity["urls"])
 
 
+def _is_supported_frozen_source_url(value: str) -> bool:
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return False
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    host = str(parsed.hostname or "").casefold().rstrip(".")
+    path = str(parsed.path or "")
+
+    def host_matches(domain: str) -> bool:
+        return host == domain or host.endswith(f".{domain}")
+
+    if host_matches("dianxiaomi.com"):
+        return False
+    if host_matches("1688.com"):
+        return re.fullmatch(r"/offer/[0-9]+\.html", path, flags=re.IGNORECASE) is not None
+    if host_matches("yangkeduo.com"):
+        goods_id = (parse_qs(parsed.query).get("goods_id") or [""])[0]
+        return bool(
+            re.fullmatch(r"/goods2?\.html", path, flags=re.IGNORECASE)
+            and re.fullmatch(r"[0-9]+", str(goods_id or ""))
+        )
+    if host_matches("aliexpress.com"):
+        return re.fullmatch(r"/item/[0-9]+\.html", path, flags=re.IGNORECASE) is not None
+    return False
+
+
 def _canonical_frozen_target_identity(value: Any, *, store_name: str) -> dict[str, Any] | None:
     """Validate the immutable identity captured from the visible DXM draft box.
 
@@ -231,14 +261,21 @@ def _canonical_frozen_target_identity(value: Any, *, store_name: str) -> dict[st
         reason_code="MUTATION_TARGET_INVALID",
         field_name="target_identity.stable_identity.value",
     )
+    raw_fingerprint = stable.get("fingerprint")
     fingerprint = _required_sha256(
-        stable.get("fingerprint"),
+        raw_fingerprint,
         field_name="target_identity.stable_identity.fingerprint",
     ).upper()
+    raw_store_fingerprint = value.get("store_fingerprint")
     store_fingerprint = _required_sha256(
-        value.get("store_fingerprint"),
+        raw_store_fingerprint,
         field_name="target_identity.store_fingerprint",
     ).upper()
+    if raw_fingerprint != fingerprint or raw_store_fingerprint != store_fingerprint:
+        raise MutationCommandContractError(
+            "MUTATION_TARGET_INVALID",
+            "target_identity digests must be canonical uppercase sha256 values",
+        )
     expected_store_fingerprint = hashlib.sha256(
         json.dumps(
             {"source": "structured_store_cell", "store_name": store_name},
@@ -252,8 +289,29 @@ def _canonical_frozen_target_identity(value: Any, *, store_name: str) -> dict[st
             "MUTATION_TARGET_INVALID",
             "target_identity store binding does not match store_name",
         )
-    source_urls = _canonical_target_source_urls(value.get("source_urls"))
+    raw_source_urls = value.get("source_urls")
+    if not isinstance(raw_source_urls, list) or any(
+        not isinstance(item, str) or not item.strip() or item != item.strip()
+        for item in raw_source_urls
+    ):
+        raise MutationCommandContractError(
+            "MUTATION_TARGET_INVALID",
+            "target_identity.source_urls must be a canonical string list",
+        )
+    source_urls = _canonical_target_source_urls(raw_source_urls)
+    if source_urls != raw_source_urls or any(
+        not _is_supported_frozen_source_url(item) for item in source_urls
+    ):
+        raise MutationCommandContractError(
+            "MUTATION_TARGET_INVALID",
+            "target_identity source URLs must be canonical supported product pages",
+        )
     if kind == "product_id":
+        if _FROZEN_PRODUCT_ID_RE.fullmatch(stable_value) is None:
+            raise MutationCommandContractError(
+                "MUTATION_TARGET_INVALID",
+                "target_identity product_id is not a structured product identifier",
+            )
         expected_fingerprint = hashlib.sha256(
             f"product_id:{stable_value}".encode("utf-8")
         ).hexdigest().upper()
@@ -298,6 +356,12 @@ def _canonical_frozen_target_identity(value: Any, *, store_name: str) -> dict[st
         },
         "source_urls": source_urls,
     }
+
+
+def canonical_frozen_target_identity(value: Any, *, store_name: str) -> dict[str, Any] | None:
+    """Public strict validator used by every Browser Agent step carrying a frozen target."""
+
+    return _canonical_frozen_target_identity(value, store_name=store_name)
 
 
 def canonical_mutation_target_payload(
@@ -367,7 +431,9 @@ def canonical_mutation_target_payload(
     target = {
         "schema": "dxm.mutation-target.v1",
         "action": action,
-        "product_query": product_query,
+        # A display title is useful operator context, but must not participate
+        # in the mutation identity once a frozen structured target exists.
+        "product_query": None if target_identity is not None else product_query,
         "store_name": store_name,
         "target_source_urls": target_source_urls,
     }

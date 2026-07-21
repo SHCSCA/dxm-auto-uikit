@@ -172,13 +172,15 @@ export function BatchTemplateComposer({
   const canCompose = Boolean(options?.ready && !firstIssue && formReady)
   const primaryLabel = createdBundle
     ? '回到批次草稿'
-    : optionsError
-      ? '重新读取候选'
-      : firstIssue
-        ? `编辑「${firstIssue.label}」`
-        : submitting
-          ? '正在生成整批模板'
-          : '生成整批模板'
+    : optionsLoading
+      ? '正在读取候选'
+      : optionsError
+        ? '重新读取候选'
+        : firstIssue
+          ? `编辑「${firstIssue.label}」`
+          : submitting
+            ? '正在生成整批模板'
+            : '生成整批模板'
   const primaryDisabled = optionsLoading
     || submitting
     || (!createdBundle && !optionsError && !firstIssue && !canCompose)
@@ -340,8 +342,18 @@ export function BatchTemplateComposer({
         </div>
       </details>
 
-      <div className={issueSections.length ? 'batch-template-issues has-issues' : 'batch-template-issues is-clear'}>
-        {issueSections.length ? (
+      <div className={optionsLoading || optionsError || issueSections.length ? 'batch-template-issues has-issues' : 'batch-template-issues is-clear'}>
+        {optionsLoading ? (
+          <span className="batch-template-issues__summary">
+            <strong>正在读取候选模板</strong>
+            <b>请稍候</b>
+          </span>
+        ) : optionsError ? (
+          <span className="batch-template-issues__summary">
+            <strong>{optionsError}</strong>
+            <b>需要重新读取</b>
+          </span>
+        ) : issueSections.length ? (
           <>
             <span className="batch-template-issues__summary">
               <strong>首个阻断：{firstIssue?.label}</strong>
@@ -364,11 +376,9 @@ export function BatchTemplateComposer({
         )}
       </div>
 
-      {(optionsLoading || optionsError || message) && (
-        <p className={`batch-template-message${message ? ` is-${message.tone}` : optionsError ? ' is-error' : ''}`} aria-live="polite">
-          {optionsLoading
-            ? '正在读取当前店铺与类目的候选模板。'
-            : message?.text || optionsError}
+      {message && !optionsError && (
+        <p className={`batch-template-message is-${message.tone}`} aria-live="polite">
+          {message.text}
         </p>
       )}
 

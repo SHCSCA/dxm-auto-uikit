@@ -300,7 +300,6 @@ class ConfigValidationService:
             or task.get("store_name")
             or task_payload.get("store")
             or task.get("store")
-            or "Dang Kang"
         )
         actual_category = (
             (product or {}).get("category_name")

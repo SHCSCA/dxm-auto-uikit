@@ -12,10 +12,15 @@ from typing import Any
 
 from src.batch_edit.execution_contract import (
     ITEM_EXECUTION_REQUEST_SCHEMA,
+    PRE_SAVE_VALIDATION_REASON_ALLOWLIST,
     BatchExecutionContractError,
     classify_item_outcome,
-    derive_next_item_grant,
-    validate_and_consume_item_grant,
+)
+from src.batch_edit.execution_state import (
+    BATCH_ITEM_GRANT_MAX_TTL_SECONDS,
+    EditBatchExecutionPersistenceError,
+    derive_execution_item_grant,
+    validate_execution_item_grant_consumption,
 )
 from src.batch_edit.scope_contract import canonical_sha256
 from src.core.config import SCREENSHOT_DIR
@@ -104,6 +109,10 @@ class BatchExecutionRuntime:
         self._runtime_facts_provider = runtime_facts_provider
         self._browser_session_provider = browser_session_provider
         self._command_timeout_seconds = max(30.0, float(command_timeout_seconds))
+        self._item_grant_ttl_seconds = min(
+            BATCH_ITEM_GRANT_MAX_TTL_SECONDS,
+            max(60, int(self._command_timeout_seconds * len(BATCH_BROWSER_STEPS)) + 60),
+        )
         self._run_lock: asyncio.Lock | None = None
         self._tasks: dict[int, asyncio.Task[None]] = {}
         self._active_lock = threading.RLock()
@@ -114,10 +123,11 @@ class BatchExecutionRuntime:
         recover = getattr(self._repository, "recover_interrupted_edit_batches", None)
         if not callable(recover):
             return 0
-        result = recover(
-            reason_code="PROCESS_RESTART_MANUAL_REVIEW",
-            reason="应用重启时批次仍在执行，系统已停止且不会自动重试。请人工核对最后一件商品。",
-        )
+        result = recover()
+        if isinstance(result, Mapping):
+            return int(result.get("recovered_count") or 0)
+        if isinstance(result, bool):
+            return int(result)
         return int(result or 0)
 
     def shutdown(self) -> dict[str, Any]:
@@ -194,14 +204,15 @@ class BatchExecutionRuntime:
                     )
                     return
                 try:
-                    issued = derive_next_item_grant(
+                    issued = derive_execution_item_grant(
                         _execution_contract_batch(batch),
                         start_context=dict(start_context),
                         now=datetime.now(timezone.utc),
                         grant_lease_id=uuid.uuid4().hex,
                         one_time_nonce=secrets.token_urlsafe(32),
+                        ttl_seconds=self._item_grant_ttl_seconds,
                     )
-                except BatchExecutionContractError as exc:
+                except (BatchExecutionContractError, EditBatchExecutionPersistenceError) as exc:
                     self._stop_batch(batch_id, exc.reason_code, str(exc), manual_review=True)
                     return
                 grant = dict(issued["grant"])
@@ -361,14 +372,14 @@ class BatchExecutionRuntime:
         consumed_reader = getattr(self._repository, "consumed_edit_batch_nonce_hashes", None)
         consumed = consumed_reader(int(grant["batch_id"])) if callable(consumed_reader) else []
         try:
-            consumption = validate_and_consume_item_grant(
+            consumption = validate_execution_item_grant_consumption(
                 grant,
                 raw_nonce=nonce,
                 now=datetime.now(timezone.utc),
                 request=request,
                 consumed_nonce_hashes=consumed,
             )
-        except BatchExecutionContractError as exc:
+        except (BatchExecutionContractError, EditBatchExecutionPersistenceError) as exc:
             return {"ok": False, "reason_code": exc.reason_code}
         consume = getattr(self._repository, "consume_edit_batch_item_grant", None)
         if not callable(consume) or not _cas_applied(
@@ -420,6 +431,11 @@ class BatchExecutionRuntime:
             "target_identity": target_identity,
             "target_identity_sha256": grant["target_identity_sha256"],
         }
+        save_step = next(step for step in BATCH_BROWSER_STEPS if step.state == "SAVE_ONLY")
+        save_params = {**base_params, "defaults": defaults}
+        self._reserve_item_mutation(
+            self._build_command(batch, item, grant, save_step, save_params)
+        )
         action_results: list[dict[str, Any]] = []
         for step in BATCH_BROWSER_STEPS:
             self._assert_batch_can_continue(batch_id, grant)
@@ -471,14 +487,22 @@ class BatchExecutionRuntime:
                     f"{step.label}没有形成可信结果：{exc}",
                     manual_review=step.state in {"SAVE_ONLY", "VERIFY_NOT_PUBLISHED"},
                 ) from exc
+            self._validate_evidence_refs(canonical)
+            action_results.append(canonical)
             if canonical.get("ok") is not True:
+                isolated = self._isolated_pre_save_execution(
+                    step,
+                    grant,
+                    canonical,
+                    action_results,
+                )
+                if isolated is not None:
+                    return isolated
                 raise BatchRuntimeError(
                     str(canonical.get("failure_code") or "BROWSER_ACTION_REJECTED"),
                     f"{step.label}未完成，系统已停止且不会自动重试。",
                     manual_review=step.state in {"SAVE_ONLY", "VERIFY_NOT_PUBLISHED"},
                 )
-            self._validate_evidence_refs(canonical)
-            action_results.append(canonical)
 
         save = next(result for result in action_results if result["attempted_state"] == "SAVE_ONLY")
         verification = next(
@@ -526,6 +550,144 @@ class BatchExecutionRuntime:
                 manual_review=True,
             )
         return {"decision": decision, "outcome": outcome, "action_results": action_results}
+
+    def _isolated_pre_save_execution(
+        self,
+        step: BatchBrowserStep,
+        grant: Mapping[str, Any],
+        action_result: Mapping[str, Any],
+        action_results: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        if step.state in {"SAVE_ONLY", "VERIFY_NOT_PUBLISHED"}:
+            return None
+        validation_reason = str(action_result.get("failure_code") or "")
+        if validation_reason not in PRE_SAVE_VALIDATION_REASON_ALLOWLIST:
+            return None
+        observations = action_result.get("evidence", {}).get("observations")
+        if not isinstance(observations, Mapping):
+            return None
+        network = observations.get("network_audit")
+        publish = observations.get("publish_signal")
+        if (
+            not isinstance(network, Mapping)
+            or set(network) != {"complete", "mutation_request_count", "publish_request_count"}
+            or network.get("complete") is not True
+            or type(network.get("mutation_request_count")) is not int
+            or type(network.get("publish_request_count")) is not int
+            or network.get("mutation_request_count") != 0
+            or network.get("publish_request_count") != 0
+            or not isinstance(publish, Mapping)
+            or set(publish) != {"detected", "kind"}
+            or publish.get("detected") is not False
+            or not isinstance(publish.get("kind"), str)
+            or not str(publish.get("kind") or "").strip()
+        ):
+            return None
+        before_values = action_result.get("before_values")
+        page_identity = action_result.get("page_identity")
+        runtime_identity = grant.get("runtime_identity")
+        if not isinstance(before_values, Mapping):
+            return None
+        target_identity = before_values.get("target_identity")
+        store_identity = grant.get("store_identity")
+        if (
+            not isinstance(target_identity, Mapping)
+            or canonical_sha256(dict(target_identity)) != grant.get("target_identity_sha256")
+            or not isinstance(store_identity, Mapping)
+            or before_values.get("store_name") != store_identity.get("store_name")
+            or not isinstance(page_identity, Mapping)
+            or page_identity.get("kind") != step.expected_page
+            or not isinstance(page_identity.get("url"), str)
+            or not str(page_identity.get("url") or "").strip()
+            or not isinstance(runtime_identity, Mapping)
+            or page_identity.get("runtime_id") != runtime_identity.get("browser_runtime_id")
+            or page_identity.get("browser_session_id") != grant.get("browser_session_id")
+            or self._live_binding_rejection(grant) is not None
+        ):
+            return None
+        ledger_entry = self._mutation_ledger.get_entry(
+            str(grant.get("mutation_scope_id") or ""),
+            "save_only_click",
+        )
+        ledger_status = str((ledger_entry or {}).get("status") or "") or None
+        if ledger_status != "RESERVED":
+            return None
+        outcome = {
+            "schema_version": "dxm_edit_batch_item_outcome_evidence.v1",
+            "ok": False,
+            "error_code": "PRE_SAVE_VALIDATION_NO_WRITE",
+            "validation_reason": validation_reason,
+            "ledger_status": ledger_status,
+            "network_audit": {
+                "complete": True,
+                "mutation_request_count": 0,
+                "publish_request_count": 0,
+            },
+            "publish_signal": {
+                "detected": False,
+                "kind": publish.get("kind"),
+            },
+            "save_proven": False,
+            "runtime_identity": grant["runtime_identity"],
+            "browser_session_id": grant["browser_session_id"],
+            "git_head": grant["git_head"],
+            "store_identity": grant["store_identity"],
+            "page_identity": grant["page_identity"],
+            "target_identity_sha256": grant["target_identity_sha256"],
+            "mutation_scope_id": grant["mutation_scope_id"],
+        }
+        decision = classify_item_outcome(dict(grant), outcome)
+        if (
+            decision.get("continue_batch") is not True
+            or decision.get("classification") != "ISOLATED_PRE_SAVE_NO_WRITE"
+        ):
+            return None
+        return {
+            "decision": decision,
+            "outcome": outcome,
+            "action_results": list(action_results),
+        }
+
+    def _reserve_item_mutation(self, command: BrowserAgentCommand) -> None:
+        """Create the durable no-dispatch boundary before any item interaction."""
+
+        reserve = getattr(self._mutation_ledger, "reserve_command", None)
+        if not callable(reserve):
+            raise BatchRuntimeError(
+                "MUTATION_LEDGER_REQUIRED",
+                "逐件保存账本不可用，系统不会开始处理该商品。",
+            )
+        try:
+            result = reserve(command)
+        except Exception as exc:
+            raise BatchRuntimeError(
+                "MUTATION_LEDGER_UNAVAILABLE",
+                f"逐件保存账本不可用：{exc}",
+            ) from exc
+        accepted = (
+            result.get("ok") is True
+            if isinstance(result, Mapping)
+            else getattr(result, "ok", False) is True
+        )
+        if not accepted:
+            raise BatchRuntimeError(
+                _result_reason(result, "MUTATION_LEDGER_RESERVATION_REJECTED"),
+                "逐件保存账本未能建立唯一保留项，系统不会继续。",
+            )
+        entry = self._mutation_ledger.get_entry(
+            str(command.mutation_scope_id or ""),
+            "save_only_click",
+        )
+        if (
+            not isinstance(entry, Mapping)
+            or entry.get("status") != "RESERVED"
+            or entry.get("mutation_scope_id") != command.mutation_scope_id
+            or entry.get("mutation_action") != "save_only_click"
+        ):
+            raise BatchRuntimeError(
+                "MUTATION_LEDGER_RESERVATION_UNPROVEN",
+                "逐件保存账本没有形成可信的 RESERVED 状态，系统不会继续。",
+            )
 
     def _build_command(
         self,
@@ -655,13 +817,34 @@ class BatchExecutionRuntime:
         manual_review: bool,
     ) -> None:
         stop = getattr(self._repository, "stop_edit_batch", None)
-        if callable(stop):
-            stop(
-                batch_id,
-                reason_code=reason_code,
-                reason=reason,
-                requires_manual_review=manual_review,
+        if not callable(stop):
+            raise BatchRuntimeError(
+                "BATCH_STOP_UNAVAILABLE",
+                "批次停止状态无法持久化。",
+                manual_review=True,
             )
+        result = stop(
+            batch_id,
+            reason_code=reason_code,
+            reason=reason,
+            requires_manual_review=manual_review,
+        )
+        if _cas_applied(result):
+            return
+        current = self._repository.get_edit_batch(batch_id)
+        if isinstance(current, Mapping) and current.get("status") in {"stopped", "completed"}:
+            return
+        recover = getattr(self._repository, "recover_interrupted_edit_batches", None)
+        if callable(recover):
+            recover()
+            current = self._repository.get_edit_batch(batch_id)
+            if isinstance(current, Mapping) and current.get("status") in {"stopped", "completed"}:
+                return
+        raise BatchRuntimeError(
+            _result_reason(result, "BATCH_STOP_PERSISTENCE_FAILED"),
+            "批次停止状态无法持久化，运行时已撤销后续动作。",
+            manual_review=True,
+        )
 
     def _private_batch(self, batch_id: int) -> dict[str, Any]:
         getter = getattr(self._repository, "get_edit_batch_private", None)
@@ -680,12 +863,18 @@ class BatchExecutionRuntime:
         except Exception as exc:
             failure = exc
         if failure is not None:
-            self._stop_batch(
-                batch_id,
-                "BATCH_RUNTIME_UNHANDLED_FAILURE",
-                f"批次执行器异常退出：{failure}",
-                manual_review=True,
-            )
+            try:
+                self._stop_batch(
+                    batch_id,
+                    "BATCH_RUNTIME_UNHANDLED_FAILURE",
+                    f"批次执行器异常退出：{failure}",
+                    manual_review=True,
+                )
+            except Exception:
+                try:
+                    self.recover_interrupted_batches()
+                except Exception:
+                    pass
 
 
 def _private_value(batch: Mapping[str, Any], key: str) -> Any:

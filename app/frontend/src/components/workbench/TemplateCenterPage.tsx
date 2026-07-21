@@ -144,7 +144,9 @@ export function TemplateCenterPage({
     ? '正在检查执行取值'
     : configPreview?.ok
       ? '执行取值已就绪'
-      : configPreviewError || '存在缺失字段'
+      : configPreviewError
+        ? '配置仍有阻断'
+        : '存在缺失字段'
   const executionSummary = configPreviewLoading
     ? '正在读取本次任务最终取值'
     : configPreview?.ok
@@ -269,7 +271,7 @@ export function TemplateCenterPage({
       await onConfigSaved()
       await onRefreshConfigPreview()
     } catch (error) {
-      setSaveState({ status: '保存失败', detail: error instanceof Error ? error.message : '保存失败，请查看实时日志。' })
+      setSaveState({ status: '保存失败', detail: humanTemplateSaveError(error) })
     }
   }
 
@@ -414,11 +416,8 @@ export function TemplateCenterPage({
           })}
         </div>
 
-        <div className="template-execution-preview" aria-label="当前分区执行取值核对">
-          <div>
-            <strong>当前分区执行取值核对</strong>
-            <span>{executionPreviewFields.length ? '保存前请核对这些最终会写入店小秘编辑页的值。' : '等待配置检查后展示本次执行最终取值。'}</span>
-          </div>
+        <details className="template-execution-preview" aria-label="当前分区执行取值核对">
+          <summary>核对本分区最终取值 · {executionStatus}</summary>
           {executionPreviewFields.length ? (
             <div className="template-execution-preview__grid">
               {executionPreviewFields.map((field, index) => (
@@ -432,7 +431,7 @@ export function TemplateCenterPage({
           ) : (
             <small>本次执行优先使用已保存模板；高级临时覆盖只有在你主动保存后才会生效。</small>
           )}
-        </div>
+        </details>
 
         <div className="action-row">
           <button className="button button--primary" type="button" onClick={() => { void saveAsDefaultTemplate('store') }}>保存为店铺模板</button>
@@ -577,4 +576,15 @@ function setPathValue(target: Record<string, unknown>, path: string, value: unkn
     current = current[part] as Record<string, unknown>
   }
   current[parts[parts.length - 1]] = value
+}
+
+function humanTemplateSaveError(error: unknown) {
+  const message = error instanceof Error ? error.message.toLowerCase() : ''
+  if (message.includes('binding') || message.includes('store') || message.includes('category')) {
+    return '模板绑定与当前店铺或类目不一致，请核对范围后重试。'
+  }
+  if (message.includes('required') || message.includes('missing') || message.includes('incomplete')) {
+    return '模板仍有必填内容未完成，请补齐当前分区后重试。'
+  }
+  return '模板未能保存。请核对当前分区后重试；本次修改没有进入执行。'
 }

@@ -797,7 +797,7 @@ def _regression_gates(
             if has_l3_save_proof and has_l3_network
             else "已找到保存结果和未发布证明；缺少网络/HAR 保存证据。"
             if has_l3_save_proof
-            else "真实写操作必须由用户明确批准，只能操作 Dang Kang 已备注归属商品。"
+            else "真实写操作必须由用户明确批准，只能操作当前任务绑定店铺中已确认归属的商品。"
         )
 
     return [

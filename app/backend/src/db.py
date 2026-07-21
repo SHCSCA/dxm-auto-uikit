@@ -23,6 +23,10 @@ def connection():
     conn = get_connection()
     try:
         yield conn
+    except BaseException:
+        conn.rollback()
+        raise
+    else:
         conn.commit()
     finally:
         conn.close()

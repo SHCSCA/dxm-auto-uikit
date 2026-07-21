@@ -2985,7 +2985,21 @@ class V1TaskRunner:
         return evidence.get("save_result")
 
     def _store_name(self, task: dict[str, Any]) -> str:
-        return task.get("payload", {}).get("store_name") or "Dang Kang"
+        payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+        configured = str(
+            payload.get("store_name")
+            or task.get("store_name")
+            or payload.get("store")
+            or task.get("store")
+            or ""
+        ).strip()
+        if configured:
+            return configured
+        try:
+            _store_id, authoritative_name = self._authoritative_store(task)
+        except V1ExecutionError:
+            return ""
+        return authoritative_name
 
     def _authoritative_store(self, task: Mapping[str, Any]) -> tuple[int, str]:
         try:

@@ -195,10 +195,12 @@ export type DraftBoxScopeSnapshot = {
   snapshot_sha256: string
   created_at: string
 }
+export type EditBatchStatus = 'draft' | 'approved' | 'running' | 'stop_requested' | 'completed' | 'stopped'
+export type EditBatchItemStatus = 'pending' | 'running' | 'succeeded' | 'isolated_pre_save_no_write' | 'stopped_uncertain'
 export type EditBatchSummary = {
   id: number
   schema_version: 'dxm_edit_batch.v1'
-  status: string
+  status: EditBatchStatus
   scope_snapshot_id: number
   scope_snapshot_digest: string
   template_id: number
@@ -209,12 +211,14 @@ export type EditBatchSummary = {
   template: { name: string | null; version: string | null }
   created_at: string
   updated_at: string
+  execution: EditBatchExecutionSummary
+  progress: EditBatchProgressSummary
 }
 export type EditBatchItem = {
   id: number
   batch_id: number
   ordinal: number
-  status: string
+  status: EditBatchItemStatus
   target_identity_sha256: string
   item_snapshot: DraftBoxScopeItem
   outcome?: EditBatchItemOutcome | null
@@ -222,31 +226,19 @@ export type EditBatchItem = {
   updated_at: string
 }
 export type EditBatchItemOutcome = {
-  classification?: 'SUCCEEDED' | 'ISOLATED_PRE_SAVE_NO_WRITE' | 'STOPPED_UNCERTAIN' | string
-  reason_code?: string | null
-  finished_at?: string | null
-  manual_review_required?: boolean
-  message?: string | null
-  evidence_refs?: Array<Record<string, unknown>>
+  classification: 'SUCCEEDED' | 'ISOLATED_PRE_SAVE_NO_WRITE' | 'STOPPED_UNCERTAIN'
+  reason_code: string | null
+  finished_at: string | null
+  manual_review_required: boolean
 }
 export type EditBatchExecutionSummary = {
-  state?: 'approved' | 'running' | 'stop_requested' | 'completed' | 'stopped' | string
-  status?: 'approved' | 'running' | 'stop_requested' | 'completed' | 'stopped' | string
-  started_at?: string | null
-  stop_requested_at?: string | null
-  stopped_at?: string | null
-  completed_at?: string | null
-  manual_review_required?: boolean
-  requires_manual_review?: boolean
-  reason_code?: string | null
-  stop_reason_code?: string | null
-  stop_reason?: string | null
-  current_ordinal?: number | null
-  total_count?: number
-  completed_count?: number
-  succeeded_count?: number
-  isolated_count?: number
-  last_error?: string | null
+  state: EditBatchStatus
+  started_at: string | null
+  stop_requested_at: string | null
+  stopped_at: string | null
+  completed_at: string | null
+  manual_review_required: boolean
+  reason_code: string | null
 }
 export type EditBatchProgressSummary = {
   total: number
@@ -262,7 +254,7 @@ export type EditBatchProgressSummary = {
 export type EditBatchDetail = {
   id: number
   schema_version: 'dxm_edit_batch.v1'
-  status: string
+  status: EditBatchStatus
   scope_snapshot_id: number
   scope_snapshot_digest: string
   scope_snapshot: DraftBoxScopeSnapshot
@@ -283,8 +275,8 @@ export type EditBatchDetail = {
   }
   created_at: string
   updated_at: string
-  execution?: EditBatchExecutionSummary | null
-  progress?: EditBatchProgressSummary | null
+  execution: EditBatchExecutionSummary
+  progress: EditBatchProgressSummary
   items: EditBatchItem[]
 }
 export type TemplateCenterField = {

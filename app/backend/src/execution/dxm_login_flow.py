@@ -588,7 +588,34 @@ class DxmLoginFlow:
         if not command_action or not isinstance(target_values, dict):
             return None
         try:
-            observed_target_hash = mutation_target_hash(command_action, target_values)
+            observed_values = dict(target_values)
+            frozen_target = observed_values.get('target_identity')
+            if frozen_target is not None:
+                normalized_target, _target_sha256 = self._normalize_frozen_target_identity(
+                    frozen_target,
+                    store_name=observed_values.get('store_name'),
+                    target_source_urls=observed_values.get('target_source_urls'),
+                )
+                # The authorization hash is a live target observation, not a
+                # hash of trusted command parameters.  Frozen saves are only
+                # dispatchable from the exact structured editor readback.
+                if expected_page not in {'editor', 'semi_managed'}:
+                    raise FrozenTargetIdentityError(
+                        'FROZEN_TARGET_LIVE_PRODUCT_PAGE_REQUIRED',
+                        '冻结商品保存授权要求当前精确商品编辑页。',
+                    )
+                live_match = self._editor_page_matches_frozen_target(
+                    page,
+                    target_identity=normalized_target,
+                    store_name=observed_values.get('store_name'),
+                )
+                if live_match.get('ok') is not True:
+                    raise FrozenTargetIdentityError(
+                        'FROZEN_TARGET_LIVE_READBACK_MISMATCH',
+                        '冻结商品保存授权前的实时身份读回不一致。',
+                    )
+                observed_values['target_identity'] = normalized_target
+            observed_target_hash = mutation_target_hash(command_action, observed_values)
         except Exception:
             observed_target_hash = None
         return {
@@ -2070,10 +2097,15 @@ class DxmLoginFlow:
             'published': result.get('published', False),
             'editor_action_result': dict(result),
             'save_evidence_ref': (
-                previous_state.get('evidence_ref')
+                result.get('evidence_ref')
+                if action == 'save_only' and isinstance(result.get('evidence_ref'), dict)
+                else previous_state.get('save_evidence_ref') or previous_state.get('evidence_ref')
                 if action == 'verify_not_published'
                 and previous_state.get('current_action') == 'save_only'
-                and isinstance(previous_state.get('evidence_ref'), dict)
+                and isinstance(
+                    previous_state.get('save_evidence_ref') or previous_state.get('evidence_ref'),
+                    dict,
+                )
                 else None
             ),
             'unpublished_evidence_ref': (
@@ -4264,6 +4296,11 @@ class DxmLoginFlow:
         targets = self._canonical_source_url_set(target_urls)
         return bool(actual and targets and actual.intersection(targets))
 
+    def _source_urls_match_exact(self, actual_urls: list[str], target_urls: list[str]) -> bool:
+        actual = self._canonical_source_url_set(actual_urls)
+        targets = self._canonical_source_url_set(target_urls)
+        return bool(actual and targets and actual == targets)
+
     def _canonical_source_url_set(self, urls: list[str]) -> set[str]:
         canonical: set[str] = set()
         try:
@@ -5401,6 +5438,13 @@ class DxmLoginFlow:
             target_source_urls = list(normalized_target['source_urls'])
         page = self._ensure_page_with_cookies()
         state = self.get_state()
+        if normalized_target is not None:
+            previous_target_sha256 = str(state.get('target_identity_sha256') or '').strip()
+            if previous_target_sha256 != str(target_identity_sha256):
+                raise FrozenTargetIdentityError(
+                    'FROZEN_TARGET_STEP_CONTINUITY_MISSING',
+                    '上一步没有同一冻结商品身份记录，已停止当前批次步骤。',
+                )
         if action in {
             'fill_editor_required_defaults',
             'verify_edit_ownership',
@@ -5522,17 +5566,33 @@ class DxmLoginFlow:
                         'fill_result': strict_fill,
                     })
             elif action == 'fill_editor_required_defaults':
-                action_result = self._fill_editor_required_defaults_on_page(page, defaults)
+                action_result = self._fill_editor_required_defaults_on_page(
+                    page,
+                    defaults,
+                    require_explicit_defaults=normalized_target is not None,
+                )
             elif action == 'fill_editor_variants':
-                action_result = self._fill_editor_variants_on_page(page, defaults)
+                action_result = self._fill_editor_variants_on_page(
+                    page,
+                    defaults,
+                    require_explicit_defaults=normalized_target is not None,
+                )
             elif action == 'fill_media_assets':
                 action_result = self._fill_media_assets_on_page(page, defaults)
             elif action == 'fill_compliance_defaults':
-                action_result = self._fill_compliance_defaults_on_page(page, defaults)
+                action_result = self._fill_compliance_defaults_on_page(
+                    page,
+                    defaults,
+                    require_explicit_defaults=normalized_target is not None,
+                )
             elif action == 'enable_semi_managed':
                 action_result = self._enable_semi_managed_on_page(page)
             else:
-                action_result = self._open_semi_managed_page_from_editor(page, defaults)
+                action_result = self._open_semi_managed_page_from_editor(
+                    page,
+                    defaults,
+                    require_explicit_defaults=normalized_target is not None,
+                )
             if normalized_target is None:
                 return action_result
             frozen_after = (
@@ -5619,9 +5679,15 @@ class DxmLoginFlow:
                     page,
                     product_query,
                     store_name,
+                    target_identity=normalized_target,
+                    target_identity_sha256=target_identity_sha256,
                 )
             else:
-                prefill = self._prepare_editor_page_for_save(page, defaults)
+                prefill = self._prepare_editor_page_for_save(
+                    page,
+                    defaults,
+                    require_explicit_defaults=normalized_target is not None,
+                )
                 if str(prefill.get('stage')).endswith('_failed'):
                     result = {
                         **prefill,
@@ -5684,9 +5750,37 @@ class DxmLoginFlow:
             raise RuntimeError('缺少上次半托管页地址')
         source_editor_url = state.get('source_editor_url') or state.get('editor_page_url')
         if action == 'fill_semi_managed_defaults' and self._is_visible_dxm_editor_page(page):
-            result = self._fill_semi_managed_defaults_on_page(page, defaults)
+            frozen_before = (
+                self._require_frozen_editor_identity(
+                    page,
+                    target_identity=normalized_target,
+                    store_name=store_name,
+                    phase='半托管字段处理前',
+                )
+                if normalized_target is not None
+                else None
+            )
+            result = self._fill_semi_managed_defaults_on_page(
+                page,
+                defaults,
+                require_explicit_defaults=normalized_target is not None,
+            )
             if source_editor_url and not result.get('source_editor_url'):
                 result['source_editor_url'] = source_editor_url
+            if normalized_target is not None:
+                frozen_after = self._require_frozen_editor_identity(
+                    page,
+                    target_identity=normalized_target,
+                    store_name=store_name,
+                    phase='半托管字段处理后',
+                )
+                result = self._attach_frozen_target_evidence(
+                    result,
+                    target_identity=normalized_target,
+                    target_identity_sha256=str(target_identity_sha256),
+                    before=frozen_before,
+                    after=frozen_after,
+                )
             return result
         needs_source_reopen = bool(source_editor_url and 'editFromSmt' in str(semi_url) and '?' not in str(semi_url))
         if needs_source_reopen:
@@ -5698,7 +5792,18 @@ class DxmLoginFlow:
                 expected_identity='editor',
             )
             self._dismiss_blocking_modals(page)
-            open_result = self._open_semi_managed_page_from_editor(page, defaults)
+            if normalized_target is not None:
+                self._require_frozen_editor_identity(
+                    page,
+                    target_identity=normalized_target,
+                    store_name=store_name,
+                    phase='重新进入半托管页前',
+                )
+            open_result = self._open_semi_managed_page_from_editor(
+                page,
+                defaults,
+                require_explicit_defaults=normalized_target is not None,
+            )
             if str(open_result.get('stage')).endswith('_failed'):
                 failed_stage = (
                     'fill_semi_managed_defaults_failed'
@@ -5720,15 +5825,38 @@ class DxmLoginFlow:
             expected_identity='semi_managed',
         )
         self._dismiss_blocking_modals(page)
+        frozen_before = (
+            self._require_frozen_product_page_identity(
+                page,
+                target_identity=normalized_target,
+                store_name=store_name,
+                phase='半托管页动作前',
+            )
+            if normalized_target is not None
+            else None
+        )
         if action == 'fill_semi_managed_defaults':
-            result = self._fill_semi_managed_defaults_on_page(page, defaults)
+            result = self._fill_semi_managed_defaults_on_page(
+                page,
+                defaults,
+                require_explicit_defaults=normalized_target is not None,
+            )
             if source_editor_url and not result.get('source_editor_url'):
                 result['source_editor_url'] = source_editor_url
-            return result
-        if action == 'verify_not_published':
-            result = self._verify_not_published_on_page(page, product_query, store_name)
+        elif action == 'verify_not_published':
+            result = self._verify_not_published_on_page(
+                page,
+                product_query,
+                store_name,
+                target_identity=normalized_target,
+                target_identity_sha256=target_identity_sha256,
+            )
         else:
-            prefill = self._fill_semi_managed_defaults_on_page(page, defaults)
+            prefill = self._fill_semi_managed_defaults_on_page(
+                page,
+                defaults,
+                require_explicit_defaults=normalized_target is not None,
+            )
             if str(prefill.get('stage')).endswith('_failed'):
                 return {
                     **prefill,
@@ -5736,9 +5864,30 @@ class DxmLoginFlow:
                     'label': '保存前半托管字段填写失败',
                     'message': prefill.get('message') or '保存前半托管字段未补齐。',
                 }
+            if normalized_target is not None:
+                self._require_frozen_product_page_identity(
+                    page,
+                    target_identity=normalized_target,
+                    store_name=store_name,
+                    phase='半托管保存点击立即前',
+                )
             result = self._save_only_on_page(page)
         if source_editor_url and isinstance(result, dict) and not result.get('source_editor_url'):
             result['source_editor_url'] = source_editor_url
+        if normalized_target is not None:
+            frozen_after = self._require_frozen_product_page_identity(
+                page,
+                target_identity=normalized_target,
+                store_name=store_name,
+                phase='半托管页动作后',
+            )
+            result = self._attach_frozen_target_evidence(
+                result,
+                target_identity=normalized_target,
+                target_identity_sha256=str(target_identity_sha256),
+                before=frozen_before,
+                after=frozen_after,
+            )
         return result
 
     def _is_dxm_editor_url(self, url: str | None) -> bool:
@@ -5968,6 +6117,7 @@ class DxmLoginFlow:
                 (Array.isArray(expectedSourceUrls) ? expectedSourceUrls : []).map(canonicalUrl).filter(Boolean)
               ));
               const ids = [];
+              let currentEditorId = '';
               const addId = (raw) => {
                 const candidate = String(raw || '').trim();
                 if (/^[A-Za-z0-9_-]{5,128}$/.test(candidate) && !ids.includes(candidate)) ids.push(candidate);
@@ -5975,8 +6125,14 @@ class DxmLoginFlow:
               try {
                 const current = new URL(location.href);
                 const keys = ['productId', 'product_id', 'productid'];
-                if (current.pathname.replace(/\/$/, '') === '/web/smt/edit') keys.push('id');
-                for (const key of keys) addId(current.searchParams.get(key));
+                if (['/web/smt/edit', '/web/smt/editFromSmt'].includes(current.pathname.replace(/\/$/, ''))) keys.push('id');
+                for (const key of keys) {
+                  const candidate = current.searchParams.get(key);
+                  addId(candidate);
+                  if (key === 'id' && /^[A-Za-z0-9_-]{5,128}$/.test(String(candidate || '').trim())) {
+                    currentEditorId = String(candidate).trim();
+                  }
+                }
               } catch (_) {}
               const idFields = Array.from(document.querySelectorAll(
                 '[data-product-id],[data-productid],[data-field="productId"],[data-field="product_id"],'
@@ -6051,11 +6207,14 @@ class DxmLoginFlow:
                 }
               }
               const productIdentityMatch = kind === 'product_id'
-                ? ids.includes(value)
+                ? currentEditorId === value
                 : observedSources.includes(canonicalUrl(value));
               const sourceIdentityMatch = targetSources.length === 0
-                || observedSources.some(source => targetSources.includes(source));
-              const storeIdentityMatch = observedStores.includes(storeName);
+                || (
+                  observedSources.length === targetSources.length
+                  && targetSources.every(source => observedSources.includes(source))
+                );
+              const storeIdentityMatch = observedStores.length === 1 && observedStores[0] === storeName;
               return {
                 ok: Boolean(productIdentityMatch && sourceIdentityMatch && storeIdentityMatch),
                 matchedBy: kind,
@@ -6063,6 +6222,7 @@ class DxmLoginFlow:
                 store_identity_match: Boolean(storeIdentityMatch),
                 store_match: Boolean(storeIdentityMatch),
                 source_identity_match: Boolean(sourceIdentityMatch),
+                current_editor_product_id: currentEditorId || null,
                 observed_product_ids: ids.slice(0, 12),
                 observed_source_urls: observedSources.slice(0, 12),
                 observed_store_names: observedStores.slice(0, 12),
@@ -6090,15 +6250,24 @@ class DxmLoginFlow:
             if str(value).strip()
         ]
         if stable['kind'] == 'product_id':
-            product_identity_match = stable['value'] in {
-                str(value).strip() for value in verified.get('observed_product_ids') or []
-            }
+            product_identity_match = (
+                str(verified.get('current_editor_product_id') or '').strip() == stable['value']
+            )
         else:
-            product_identity_match = self._source_urls_match(observed_sources, [stable['value']])
+            product_identity_match = self._source_urls_match_exact(observed_sources, expected_sources)
         source_identity_match = bool(
-            not expected_sources or self._source_urls_match(observed_sources, expected_sources)
+            not expected_sources
+            or self._source_urls_match_exact(observed_sources, expected_sources)
         )
-        store_identity_match = verified.get('store_identity_match') is True
+        observed_stores = [
+            ' '.join(str(value or '').split())
+            for value in verified.get('observed_store_names') or []
+            if str(value or '').strip()
+        ]
+        store_identity_match = bool(
+            verified.get('store_identity_match') is True
+            and observed_stores == [' '.join(str(store_name or '').split())]
+        )
         verified.update({
             'ok': bool(product_identity_match and source_identity_match and store_identity_match),
             'product_identity_match': product_identity_match,
@@ -6228,6 +6397,34 @@ class DxmLoginFlow:
             )
         return match
 
+    def _require_frozen_product_page_identity(
+        self,
+        page: Page,
+        *,
+        target_identity: dict[str, Any],
+        store_name: str | None,
+        phase: str,
+    ) -> dict[str, Any]:
+        page_url = str(getattr(page, 'url', '') or '')
+        editor_page = self._is_dxm_editor_url(page_url)
+        semi_page = self._page_identity_result(page_url, 'semi_managed').get('ok') is True
+        if not editor_page and not semi_page:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_PRODUCT_PAGE_REQUIRED',
+                f'{phase}时当前页面不是可验证的商品编辑页，已停止操作。',
+            )
+        match = self._editor_page_matches_frozen_target(
+            page,
+            target_identity=target_identity,
+            store_name=store_name,
+        )
+        if match.get('ok') is not True:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_PRODUCT_PAGE_IDENTITY_DRIFT',
+                f'{phase}时商品、来源或店铺结构化身份与冻结目标不一致，已停止操作。',
+            )
+        return match
+
     @staticmethod
     def _attach_frozen_target_evidence(
         result: Mapping[str, Any],
@@ -6265,9 +6462,20 @@ class DxmLoginFlow:
             }
             if key == 'unpublished_proof':
                 enriched.update({
-                    'target_bound': True,
-                    'product_matched': identity_fields['product_identity_match'],
-                    'store_matched': identity_fields['store_identity_match'],
+                    'target_bound': bool(
+                        nested.get('target_bound') is True
+                        and identity_fields['product_identity_match']
+                        and identity_fields['store_identity_match']
+                        and identity_fields['source_identity_match']
+                    ),
+                    'product_matched': bool(
+                        nested.get('product_matched') is True
+                        and identity_fields['product_identity_match']
+                    ),
+                    'store_matched': bool(
+                        nested.get('store_matched') is True
+                        and identity_fields['store_identity_match']
+                    ),
                 })
             attached[key] = enriched
         return attached
@@ -6536,8 +6744,18 @@ class DxmLoginFlow:
                 return True
         return False
 
-    def _prepare_editor_page_for_save(self, page: Page, defaults: dict[str, Any] | None = None) -> dict[str, Any]:
-        required_result = self._fill_editor_required_defaults_on_page(page, defaults)
+    def _prepare_editor_page_for_save(
+        self,
+        page: Page,
+        defaults: dict[str, Any] | None = None,
+        *,
+        require_explicit_defaults: bool = False,
+    ) -> dict[str, Any]:
+        required_result = self._fill_editor_required_defaults_on_page(
+            page,
+            defaults,
+            require_explicit_defaults=require_explicit_defaults,
+        )
         if str(required_result.get('stage')).endswith('_failed'):
             return {
                 **required_result,
@@ -6551,7 +6769,11 @@ class DxmLoginFlow:
                 'published': False,
             }
 
-        variants_result = self._fill_editor_variants_on_page(page, defaults)
+        variants_result = self._fill_editor_variants_on_page(
+            page,
+            defaults,
+            require_explicit_defaults=require_explicit_defaults,
+        )
         if str(variants_result.get('stage')).endswith('_failed'):
             return {
                 **variants_result,
@@ -6582,7 +6804,11 @@ class DxmLoginFlow:
                 'published': False,
             }
 
-        compliance_result = self._fill_compliance_defaults_on_page(page, defaults)
+        compliance_result = self._fill_compliance_defaults_on_page(
+            page,
+            defaults,
+            require_explicit_defaults=require_explicit_defaults,
+        )
         if str(compliance_result.get('stage')).endswith('_failed'):
             return {
                 **compliance_result,
@@ -6760,7 +6986,13 @@ class DxmLoginFlow:
             'published': False,
         }
 
-    def _open_semi_managed_page_from_editor(self, page: Page, defaults: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _open_semi_managed_page_from_editor(
+        self,
+        page: Page,
+        defaults: dict[str, Any] | None = None,
+        *,
+        require_explicit_defaults: bool = False,
+    ) -> dict[str, Any]:
         source_editor_url = page.url
         if self._is_visible_dxm_editor_page(page):
             self._trace_workflow_event(
@@ -6780,7 +7012,11 @@ class DxmLoginFlow:
                 'preserved_visible_editor_page': True,
                 'published': False,
             }
-        required_result = self._fill_editor_required_defaults_on_page(page, defaults)
+        required_result = self._fill_editor_required_defaults_on_page(
+            page,
+            defaults,
+            require_explicit_defaults=require_explicit_defaults,
+        )
         if required_result['stage'].endswith('_failed'):
             return {
                 **required_result,
@@ -6788,7 +7024,11 @@ class DxmLoginFlow:
                 'label': '普通编辑页必填项未通过',
                 'message': required_result.get('message') or '普通编辑页必填项未通过，不能进入半托管信息。',
             }
-        variants_result = self._fill_editor_variants_on_page(page, defaults)
+        variants_result = self._fill_editor_variants_on_page(
+            page,
+            defaults,
+            require_explicit_defaults=require_explicit_defaults,
+        )
         if variants_result['stage'].endswith('_failed'):
             return {
                 **variants_result,
@@ -6812,7 +7052,11 @@ class DxmLoginFlow:
                     'message': media_result.get('message') or '欧盟外包装图未回填，不能进入半托管信息。',
                 }
             eu_media_verified_before_enable = self._media_result_has_verified_eu_outer_package(media_result)
-        compliance_result = self._fill_compliance_defaults_on_page(page, defaults)
+        compliance_result = self._fill_compliance_defaults_on_page(
+            page,
+            defaults,
+            require_explicit_defaults=require_explicit_defaults,
+        )
         if compliance_result['stage'].endswith('_failed'):
             return {
                 **compliance_result,
@@ -7295,35 +7539,125 @@ class DxmLoginFlow:
             return self._dismiss_blocking_modals_if_visible(page, context=context)
         return self._dismiss_blocking_modals(page)
 
-    def _fill_editor_required_defaults_on_page(self, page: Page, defaults: dict[str, Any] | None = None) -> dict[str, Any]:
-        configured_values = self._flatten_editor_defaults(defaults or {})
-        values: dict[str, Any] = {
-            'category_keyword': '立牌',
-            'category_match': 'ACG Stand',
-            'title': 'Hazbin Hotel Alastor Acrylic Stand Keychain Colorful Bag Pendant Card',
-            'custom_attributes': [
-                ['Material', 'Acrylic'],
-                ['Theme', 'Anime'],
-                ['Product Type', 'Acrylic Stand'],
-                ['Feature', 'Display Stand'],
-                ['Style', 'Cartoon'],
-            ],
-            'declared_value': '1',
-            'stock': '200',
-            'weight': '0.03',
-            'length': '10',
-            'width': '10',
-            'height': '2',
-            'sku_code': '610274761685-DK-AD-10CM',
-            'delivery_days': '7',
-            'gross_weight': '0.03',
-            'freight_template_priorities': ['40g普货包裹', '80g普货包裹', '100g普货包裹', '普货包裹'],
-            'service_template_priorities': ['Service Template for New Sellers'],
-            'eu_responsible_priorities': ['Jacqueiline Marti'],
-            'manufacturer_priorities': ['jiyang county thunder', 'Jiyang County thunder'],
-            'customs_product_name_priorities': ['钥匙扣', 'keychain'],
+    def _missing_explicit_template_defaults(
+        self,
+        profile: str,
+        defaults: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any], list[str]]:
+        values = self._flatten_editor_defaults(defaults or {})
+
+        def concrete(value: Any) -> bool:
+            if isinstance(value, Mapping):
+                return bool(value) and any(concrete(item) for item in value.values())
+            if isinstance(value, (list, tuple)):
+                return bool(value) and all(concrete(item) for item in value)
+            return bool(str(value or '').strip())
+
+        required_by_profile = {
+            'base': (
+                'category_keyword',
+                'category_match',
+                'declared_value',
+                'stock',
+                'weight',
+                'length',
+                'width',
+                'height',
+                'gross_weight',
+                'delivery_days',
+                'freight_template_priorities',
+                'service_template_priorities',
+                'eu_responsible_priorities',
+                'manufacturer_priorities',
+                'customs_product_name_priorities',
+                'is_original_box',
+                'logistics_attribute',
+                'tax_quote_text',
+            ),
+            'variants': (
+                'declared_value',
+                'stock',
+                'weight',
+                'length',
+                'width',
+                'height',
+                'logistics_attribute',
+                'is_original_box',
+            ),
+            'compliance': (
+                'eu_responsible_priorities',
+                'manufacturer_priorities',
+            ),
+            'semi_managed': (
+                'is_original_box',
+                'logistics_attribute',
+                'weight',
+                'length',
+                'width',
+                'height',
+                'jit_stock',
+                'product_price',
+                'supply_price',
+                'sku_code',
+                'freight_template_priorities',
+                'service_template_priorities',
+            ),
         }
-        values.update(configured_values)
+        missing = [
+            key for key in required_by_profile.get(profile, ())
+            if not concrete(values.get(key))
+        ]
+        if profile == 'base':
+            if not any(concrete(values.get(key)) for key in ('title', 'english_title', 'title_override', 'title_strategy')):
+                missing.append('category.title_strategy_or_value')
+            if not any(concrete(values.get(key)) for key in ('sku_code', 'goods_code_strategy')):
+                missing.append('sku.goods_code_strategy_or_value')
+        return values, sorted(set(missing))
+
+    @staticmethod
+    def _explicit_template_defaults_failure(
+        *,
+        stage: str,
+        label: str,
+        page: Page,
+        missing: list[str],
+        strict_frozen_target: bool,
+    ) -> dict[str, Any]:
+        return {
+            'ok': False,
+            'stage': stage,
+            'label': label,
+            'message': '已停止：缺少经过验证的模板字段：' + '、'.join(missing),
+            'page_title': '店小秘编辑页',
+            'page_url': str(getattr(page, 'url', '') or ''),
+            'screenshot_url': None,
+            'fill_result': {
+                'ok': False,
+                'missing': missing,
+                'explicit_template_defaults_required': True,
+                'strict_frozen_target': strict_frozen_target,
+                'write_attempted': False,
+            },
+            'published': False,
+        }
+
+    def _fill_editor_required_defaults_on_page(
+        self,
+        page: Page,
+        defaults: dict[str, Any] | None = None,
+        *,
+        require_explicit_defaults: bool = False,
+    ) -> dict[str, Any]:
+        values, explicit_missing = self._missing_explicit_template_defaults('base', defaults)
+        configured_values = dict(values)
+        if explicit_missing:
+            return self._explicit_template_defaults_failure(
+                stage='fill_editor_required_defaults_failed',
+                label='基础信息模板不完整',
+                page=page,
+                missing=explicit_missing,
+                strict_frozen_target=require_explicit_defaults,
+            )
 
         category = self._select_editor_category(
             page,
@@ -7721,9 +8055,13 @@ class DxmLoginFlow:
                 human_step='未自动手填属性字段',
             )
         self._dismiss_editor_modals(page, context='fill_editor_required_defaults:before_selects')
-        original_box = self._choose_ant_select_near_label(page, '是否原箱', ['否'])
-        logistics = self._check_choice_by_text(page, '普货')
-        tax = self._check_choice_by_text(page, '不含关税报价')
+        original_box = self._choose_ant_select_near_label(
+            page,
+            '是否原箱',
+            [str(values['is_original_box'])],
+        )
+        logistics = self._check_choice_by_text(page, str(values['logistics_attribute']))
+        tax = self._check_choice_by_text(page, str(values['tax_quote_text']))
         freight = dxm_reference_template_results.get('freight') or self._choose_ant_select_near_label(page, '运费模板', values.get('freight_template_priorities') or [])
         service = dxm_reference_template_results.get('service') or self._choose_ant_select_near_label(page, '服务模板', values.get('service_template_priorities') or [])
         customs = self._fill_customs_supervision_attribute(page, values.get('customs_product_name_priorities') or [])
@@ -7913,18 +8251,23 @@ class DxmLoginFlow:
                     return candidate
         return ''
 
-    def _fill_editor_variants_on_page(self, page: Page, defaults: dict[str, Any] | None = None) -> dict[str, Any]:
-        values: dict[str, Any] = {
-            'declared_value': '1',
-            'stock': '200',
-            'weight': '0.03',
-            'length': '10',
-            'width': '10',
-            'height': '2',
-            'logistics_attribute': '普货',
-            'original_box': '否',
-        }
-        values.update(self._flatten_editor_defaults(defaults or {}))
+    def _fill_editor_variants_on_page(
+        self,
+        page: Page,
+        defaults: dict[str, Any] | None = None,
+        *,
+        require_explicit_defaults: bool = False,
+    ) -> dict[str, Any]:
+        values, explicit_missing = self._missing_explicit_template_defaults('variants', defaults)
+        if explicit_missing:
+            return self._explicit_template_defaults_failure(
+                stage='fill_editor_variants_failed',
+                label='变体模板不完整',
+                page=page,
+                missing=explicit_missing,
+                strict_frozen_target=require_explicit_defaults,
+            )
+        values['original_box'] = values['is_original_box']
         if self._is_visible_dxm_editor_page(page):
             self._trace_workflow_event(
                 'editor_variants:visible_preserve_existing',
@@ -8102,7 +8445,7 @@ class DxmLoginFlow:
                 page.wait_for_timeout(500)
                 logistics_verify = self._verify_editor_variant_logistics_attribute(page, logistics_value)
                 result['logistics_attribute_verify'] = logistics_verify
-                if not logistics_verify.get('ok') and not logistics_verify.get('skipped'):
+                if logistics_verify.get('ok') is not True:
                     logistics_retry = self._fill_editor_variant_logistics_attribute(page, logistics_value)
                     page.wait_for_timeout(500)
                     logistics_verify = self._verify_editor_variant_logistics_attribute(page, logistics_value)
@@ -8110,7 +8453,10 @@ class DxmLoginFlow:
                     result['logistics_attribute_verify'] = logistics_verify
                     logistics_result = {**logistics_retry, 'verified': logistics_verify}
                     result['logistics_attribute_detail'] = logistics_result
-            if logistics_result.get('ok') and (result.get('logistics_attribute_verify') or {}).get('ok', True):
+            if (
+                logistics_result.get('ok') is True
+                and (result.get('logistics_attribute_verify') or {}).get('ok') is True
+            ):
                 result['missing'] = [item for item in missing if item != 'logistics_attribute']
             else:
                 result['missing'] = sorted(set(missing + ['logistics_attribute']))
@@ -8173,9 +8519,30 @@ class DxmLoginFlow:
               };
             }''', value)
         except Exception as exc:
-            return {'ok': True, 'skipped': True, 'reason': f'logistics_verify_unavailable: {exc}'}
+            return {
+                'ok': False,
+                'skipped': False,
+                'row_count': 0,
+                'filled_count': 0,
+                'missing_rows': [],
+                'value': str(value or ''),
+                'reason': f'logistics_verify_unavailable: {exc}',
+            }
         if not isinstance(result, dict) or 'row_count' not in result:
-            return {'ok': True, 'skipped': True, 'reason': 'logistics_verify_unavailable'}
+            return {
+                'ok': False,
+                'skipped': False,
+                'row_count': 0,
+                'filled_count': 0,
+                'missing_rows': [],
+                'value': str(value or ''),
+                'reason': 'logistics_verify_unavailable',
+            }
+        if not str(result.get('value') or '').strip() or int(result.get('row_count') or 0) <= 0:
+            result.update({
+                'ok': False,
+                'reason': result.get('reason') or 'logistics_verify_empty_readback',
+            })
         return result
 
     def _fill_editor_variant_logistics_attribute(self, page: Page, value: str) -> dict[str, Any]:
@@ -13556,8 +13923,11 @@ class DxmLoginFlow:
         page: Page,
         product_query: str | None = None,
         store_name: str | None = None,
+        *,
+        target_identity: dict[str, Any] | None = None,
+        target_identity_sha256: str | None = None,
     ) -> dict[str, Any]:
-        result = page.evaluate(r'''({productQuery, storeName}) => {
+        result = page.evaluate(r'''({productQuery, storeName, frozenTarget}) => {
           const norm = (value) => String(value || '').replace(/\s+/g, '').trim();
           const textOf = (el) => String(el?.innerText || el?.textContent || el?.value || '').replace(/\s+/g, ' ').trim();
           const visible = (el) => {
@@ -13630,8 +14000,8 @@ class DxmLoginFlow:
                 scope.getAttribute?.('data-store-name'),
                 ...storeNodes,
               ].filter(Boolean).join(' '));
-              const productMatched = !query || productHaystack.includes(query);
-              const storeMatched = !store || storeHaystack.includes(store);
+              const productMatched = frozenTarget ? true : Boolean(query && productHaystack.includes(query));
+              const storeMatched = frozenTarget ? true : Boolean(store && storeHaystack.includes(store));
               return {
                 statusText,
                 source: sourceOf(el),
@@ -13645,7 +14015,8 @@ class DxmLoginFlow:
           const boundCandidates = candidates.filter(item => item.targetBound);
           const published = boundCandidates.find(item => publishedStatuses.includes(item.statusText)) || null;
           const unpublished = boundCandidates.find(item => unpublishedStatuses.includes(item.statusText)) || null;
-          const proof = !published ? unpublished : null;
+          const uniqueBoundStatus = boundCandidates.length === 1;
+          const proof = uniqueBoundStatus && !published ? unpublished : null;
           return {
             ok: Boolean(proof),
             product_query: productQuery || null,
@@ -13659,13 +14030,19 @@ class DxmLoginFlow:
             publish_risk_term: published?.statusText || null,
             structured_candidate_count: candidates.length,
             bound_candidate_count: boundCandidates.length,
+            status_scope_unique: uniqueBoundStatus,
             scope_excerpt: (published || proof)?.scopeExcerpt || '',
             reason: published
               ? 'structured_status_is_published'
+              : !uniqueBoundStatus ? 'structured_unpublished_status_not_unique'
               : proof ? null : 'structured_unpublished_status_missing',
             published: Boolean(published),
           };
-        }''', {'productQuery': product_query, 'storeName': store_name})
+        }''', {
+            'productQuery': product_query,
+            'storeName': store_name,
+            'frozenTarget': target_identity is not None,
+        })
         result = result if isinstance(result, dict) else {
             'ok': False,
             'reason': 'structured_unpublished_probe_unreadable',
@@ -13677,12 +14054,20 @@ class DxmLoginFlow:
             result.get('proof_kind') == 'structured_unpublished_status'
             and normalized_status in unpublished_statuses
             and result.get('target_bound') is True
+            and result.get('status_scope_unique') is True
+            and result.get('bound_candidate_count') == 1
             and not result.get('publish_risk_term')
             and result.get('published') is not True
         )
         result['ok'] = proof_valid
         result['verified_on_current_page'] = True
         result['page_url'] = str(getattr(page, 'url', '') or '')
+        result['target_identity_sha256'] = target_identity_sha256
+        result['identity_binding_kind'] = (
+            'frozen_target_structured_page_readback'
+            if target_identity is not None
+            else 'legacy_query_store_scope'
+        )
         if not proof_valid and not result.get('reason'):
             result['reason'] = 'structured_unpublished_status_missing'
         evidence_ref = self._capture_scoped_evidence_screenshot(
@@ -13991,12 +14376,18 @@ class DxmLoginFlow:
                 msg = data.get('msg') or data.get('message') or msg
             code_ok = code in (0, '0') or payload.get('success') is True
             exact_add = event_path(item) in exact_save_add_paths
-            if exact_add:
-                success_text = str(msg or '')
-                text_ok = any(term in success_text for term in ('保存成功', '编辑保存成功', '编辑成功'))
-                ok = method_ok(item) and status_ok(item) and code_ok and text_ok
-            else:
-                ok = code_ok
+            success_text = str(msg or '').strip()
+            text_ok = any(term in success_text for term in ('保存成功', '编辑保存成功', '编辑成功'))
+            # A code-only or empty body is not a save receipt.  The endpoint,
+            # method, transport status, structured code and non-empty success
+            # message must all agree before this can authorize success.
+            ok = bool(
+                exact_add
+                and method_ok(item)
+                and status_ok(item)
+                and code_ok
+                and text_ok
+            )
             return {
                 'ok': ok,
                 'url': item.get('url'),
@@ -14006,16 +14397,19 @@ class DxmLoginFlow:
                 'msg': msg,
                 'message': msg,
                 'raw': payload,
+                'receipt_complete': ok,
             }
         last = events[-1]
         status = last.get('status')
         return {
-            'ok': 200 <= int(status or 0) < 300,
+            'ok': False,
             'url': last.get('url'),
             'method': last.get('method'),
             'status': status,
             'msg': last.get('text_excerpt'),
             'message': last.get('text_excerpt'),
+            'reason': '保存响应缺少可验证的结构化成功回执',
+            'receipt_complete': False,
         }
 
     def _ensure_page(self) -> Page:
@@ -16688,7 +17082,10 @@ class DxmLoginFlow:
                 const ids = productIds(row);
                 const sources = sourceUrls(row);
                 const productMatched = kind === 'product_id' ? ids.includes(value) : sources.includes(canonicalUrl(value));
-                const sourceMatched = targetUrls.length === 0 || sources.some(url => targetUrls.includes(url));
+                const sourceMatched = targetUrls.length === 0 || (
+                  sources.length === targetUrls.length
+                  && targetUrls.every(url => sources.includes(url))
+                );
                 if (!productMatched || !sourceMatched) return null;
                 const clickables = [];
                 const seen = new Set();
@@ -16778,9 +17175,10 @@ class DxmLoginFlow:
         if stable['kind'] == 'product_id':
             product_identity_match = stable['value'] in observed_ids
         else:
-            product_identity_match = self._source_urls_match(observed_sources, [stable['value']])
+            product_identity_match = self._source_urls_match_exact(observed_sources, expected_source_urls)
         source_identity_match = bool(
-            not expected_source_urls or self._source_urls_match(observed_sources, expected_source_urls)
+            not expected_source_urls
+            or self._source_urls_match_exact(observed_sources, expected_source_urls)
         )
         if not product_identity_match or not source_identity_match:
             raise FrozenTargetIdentityError(

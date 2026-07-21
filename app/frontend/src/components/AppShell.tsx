@@ -12,7 +12,7 @@ const primaryNavigation: PrimaryNavigationItem[] = [
   { id: 'home', label: '编辑工作台', short: '编', hint: '查看当前状态和唯一下一步' },
   { id: 'template_center', label: '模板中心', short: '模', hint: '管理编辑使用的模板' },
   { id: 'start_save', label: '浏览器现场', short: '览', hint: '查看真实浏览器和当前执行' },
-  { id: 'task_history', label: '批次记录', short: '记', hint: '查看实时进度、结果和证据' },
+  { id: 'task_history', label: '批次记录', short: '记', hint: '查看实时进度、结果和人工复核' },
   { id: 'settings', label: '系统设置', short: '设', hint: '查看运行环境与系统设置' },
 ]
 
