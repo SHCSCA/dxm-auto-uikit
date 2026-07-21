@@ -190,6 +190,116 @@ def _canonical_target_source_urls(value: Any) -> list[str]:
     return list(identity["urls"])
 
 
+def _canonical_frozen_target_identity(value: Any, *, store_name: str) -> dict[str, Any] | None:
+    """Validate the immutable identity captured from the visible DXM draft box.
+
+    Legacy single-save commands do not carry this object.  Governed edit-batch
+    commands do, and must bind the mutation hash to the structured product ID
+    or canonical source URL instead of trusting a display-title substring.
+    """
+
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {
+        "schema_version",
+        "store_fingerprint",
+        "stable_identity",
+        "source_urls",
+    }:
+        raise MutationCommandContractError(
+            "MUTATION_TARGET_INVALID",
+            "target_identity must be an exact dxm draft-box target object",
+        )
+    if value.get("schema_version") != "dxm_draft_box_target.v1":
+        raise MutationCommandContractError(
+            "MUTATION_TARGET_INVALID",
+            "target_identity schema is not supported",
+        )
+    stable = value.get("stable_identity")
+    if not isinstance(stable, dict) or set(stable) != {"kind", "value", "fingerprint"}:
+        raise MutationCommandContractError(
+            "MUTATION_TARGET_INVALID",
+            "target_identity stable identity is invalid",
+        )
+    kind = _required_text(
+        stable.get("kind"),
+        reason_code="MUTATION_TARGET_INVALID",
+        field_name="target_identity.stable_identity.kind",
+    )
+    stable_value = _required_text(
+        stable.get("value"),
+        reason_code="MUTATION_TARGET_INVALID",
+        field_name="target_identity.stable_identity.value",
+    )
+    fingerprint = _required_sha256(
+        stable.get("fingerprint"),
+        field_name="target_identity.stable_identity.fingerprint",
+    ).upper()
+    store_fingerprint = _required_sha256(
+        value.get("store_fingerprint"),
+        field_name="target_identity.store_fingerprint",
+    ).upper()
+    expected_store_fingerprint = hashlib.sha256(
+        json.dumps(
+            {"source": "structured_store_cell", "store_name": store_name},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest().upper()
+    if not hmac.compare_digest(store_fingerprint, expected_store_fingerprint):
+        raise MutationCommandContractError(
+            "MUTATION_TARGET_INVALID",
+            "target_identity store binding does not match store_name",
+        )
+    source_urls = _canonical_target_source_urls(value.get("source_urls"))
+    if kind == "product_id":
+        expected_fingerprint = hashlib.sha256(
+            f"product_id:{stable_value}".encode("utf-8")
+        ).hexdigest().upper()
+    elif kind == "source_url":
+        if not source_urls:
+            raise MutationCommandContractError(
+                "MUTATION_TARGET_INVALID",
+                "source_url target identity requires canonical source URLs",
+            )
+        try:
+            from src.state_machine.two_stage import canonical_source_identity
+
+            source_identity = canonical_source_identity(source_urls[0], source_urls)
+        except Exception as exc:
+            raise MutationCommandContractError(
+                "MUTATION_TARGET_INVALID",
+                "source_url target identity is not canonical",
+            ) from exc
+        if stable_value != source_identity["primary_url"]:
+            raise MutationCommandContractError(
+                "MUTATION_TARGET_INVALID",
+                "source_url target identity conflicts with its source URLs",
+            )
+        expected_fingerprint = str(source_identity["fingerprint"]).upper()
+    else:
+        raise MutationCommandContractError(
+            "MUTATION_TARGET_INVALID",
+            "target_identity stable identity kind is unsupported",
+        )
+    if not hmac.compare_digest(fingerprint, expected_fingerprint):
+        raise MutationCommandContractError(
+            "MUTATION_TARGET_INVALID",
+            "target_identity fingerprint cannot be reproduced",
+        )
+    return {
+        "schema_version": "dxm_draft_box_target.v1",
+        "store_fingerprint": store_fingerprint,
+        "stable_identity": {
+            "kind": kind,
+            "value": stable_value,
+            "fingerprint": fingerprint,
+        },
+        "source_urls": source_urls,
+    }
+
+
 def canonical_mutation_target_payload(
     command_action: str,
     values: dict[str, Any],
@@ -237,18 +347,41 @@ def canonical_mutation_target_payload(
             "store_name": store_name,
             "target_source_urls": target_source_urls,
         }
-    if not product_query:
+    target_identity = _canonical_frozen_target_identity(
+        values.get("target_identity"),
+        store_name=store_name,
+    )
+    if target_identity is not None:
+        frozen_source_urls = target_identity["source_urls"]
+        if target_source_urls and target_source_urls != frozen_source_urls:
+            raise MutationCommandContractError(
+                "MUTATION_TARGET_INVALID",
+                "mutation source URLs do not match the frozen target identity",
+            )
+        target_source_urls = frozen_source_urls
+    if not product_query and target_identity is None:
         raise MutationCommandContractError(
             "MUTATION_TARGET_INVALID",
-            "save target requires an exact product_query",
+            "save target requires an exact product_query or frozen target_identity",
         )
-    return {
+    target = {
         "schema": "dxm.mutation-target.v1",
         "action": action,
         "product_query": product_query,
         "store_name": store_name,
         "target_source_urls": target_source_urls,
     }
+    if target_identity is not None:
+        target["target_identity"] = target_identity
+        target["target_identity_sha256"] = hashlib.sha256(
+            json.dumps(
+                target_identity,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest().upper()
+    return target
 
 
 def mutation_target_hash(command_action: str, values: dict[str, Any]) -> str:

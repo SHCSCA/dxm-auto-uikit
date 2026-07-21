@@ -237,6 +237,7 @@ class DxmWorkflowAdapter:
         store_name: str | None = None,
         note_text: str | None = None,
         target_source_urls: list[str] | None = None,
+        target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._result(
             'open_editor',
@@ -246,12 +247,14 @@ class DxmWorkflowAdapter:
                 product_query=product_query,
                 store_name=store_name,
                 target_source_urls=target_source_urls,
+                target_identity=target_identity,
             ),
             before_values={
                 'note_text': note_text,
                 'product_query': product_query,
                 'store_name': store_name,
                 'target_source_urls': list(target_source_urls or []),
+                'target_identity': _mapping_copy(target_identity),
             },
         )
 
@@ -259,6 +262,7 @@ class DxmWorkflowAdapter:
         self,
         product_query: str | None = None,
         store_name: str | None = None,
+        target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._result(
             'enable_semi_managed',
@@ -266,8 +270,13 @@ class DxmWorkflowAdapter:
                 'enable_semi_managed',
                 product_query=product_query,
                 store_name=store_name,
+                target_identity=target_identity,
             ),
-            before_values={'product_query': product_query, 'store_name': store_name},
+            before_values={
+                'product_query': product_query,
+                'store_name': store_name,
+                'target_identity': _mapping_copy(target_identity),
+            },
         )
 
     def fill_editor_required_defaults(
@@ -275,6 +284,7 @@ class DxmWorkflowAdapter:
         defaults: dict[str, Any] | None = None,
         product_query: str | None = None,
         store_name: str | None = None,
+        target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._result(
             'fill_editor_required_defaults',
@@ -283,11 +293,13 @@ class DxmWorkflowAdapter:
                 defaults=defaults,
                 product_query=product_query,
                 store_name=store_name,
+                target_identity=target_identity,
             ),
             before_values={
                 'defaults': dict(defaults or {}),
                 'product_query': product_query,
                 'store_name': store_name,
+                'target_identity': _mapping_copy(target_identity),
             },
         )
 
@@ -296,6 +308,7 @@ class DxmWorkflowAdapter:
         defaults: dict[str, Any] | None = None,
         product_query: str | None = None,
         store_name: str | None = None,
+        target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._result(
             'fill_media_assets',
@@ -304,11 +317,13 @@ class DxmWorkflowAdapter:
                 defaults=defaults,
                 product_query=product_query,
                 store_name=store_name,
+                target_identity=target_identity,
             ),
             before_values={
                 'defaults': dict(defaults or {}),
                 'product_query': product_query,
                 'store_name': store_name,
+                'target_identity': _mapping_copy(target_identity),
             },
         )
 
@@ -317,6 +332,7 @@ class DxmWorkflowAdapter:
         product_query: str | None = None,
         store_name: str | None = None,
         target_source_urls: list[str] | None = None,
+        target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._result(
             'verify_edit_ownership',
@@ -325,11 +341,13 @@ class DxmWorkflowAdapter:
                 product_query=product_query,
                 store_name=store_name,
                 target_source_urls=target_source_urls,
+                target_identity=target_identity,
             ),
             before_values={
                 'product_query': product_query,
                 'store_name': store_name,
                 'target_source_urls': list(target_source_urls or []),
+                'target_identity': _mapping_copy(target_identity),
             },
         )
 
@@ -338,6 +356,7 @@ class DxmWorkflowAdapter:
         defaults: dict[str, Any] | None = None,
         product_query: str | None = None,
         store_name: str | None = None,
+        target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._result(
             'fill_editor_variants',
@@ -346,11 +365,13 @@ class DxmWorkflowAdapter:
                 defaults=defaults,
                 product_query=product_query,
                 store_name=store_name,
+                target_identity=target_identity,
             ),
             before_values={
                 'defaults': dict(defaults or {}),
                 'product_query': product_query,
                 'store_name': store_name,
+                'target_identity': _mapping_copy(target_identity),
             },
         )
 
@@ -359,6 +380,7 @@ class DxmWorkflowAdapter:
         defaults: dict[str, Any] | None = None,
         product_query: str | None = None,
         store_name: str | None = None,
+        target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._result(
             'fill_compliance_defaults',
@@ -367,11 +389,13 @@ class DxmWorkflowAdapter:
                 defaults=defaults,
                 product_query=product_query,
                 store_name=store_name,
+                target_identity=target_identity,
             ),
             before_values={
                 'defaults': dict(defaults or {}),
                 'product_query': product_query,
                 'store_name': store_name,
+                'target_identity': _mapping_copy(target_identity),
             },
         )
 
@@ -380,6 +404,7 @@ class DxmWorkflowAdapter:
         defaults: dict[str, Any] | None = None,
         product_query: str | None = None,
         store_name: str | None = None,
+        target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._result(
             'open_semi_managed_page',
@@ -388,11 +413,13 @@ class DxmWorkflowAdapter:
                 defaults=defaults,
                 product_query=product_query,
                 store_name=store_name,
+                target_identity=target_identity,
             ),
             before_values={
                 'defaults': dict(defaults or {}),
                 'product_query': product_query,
                 'store_name': store_name,
+                'target_identity': _mapping_copy(target_identity),
             },
         )
 
@@ -401,6 +428,7 @@ class DxmWorkflowAdapter:
         defaults: dict[str, Any] | None = None,
         product_query: str | None = None,
         store_name: str | None = None,
+        target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._result(
             'fill_semi_managed_defaults',
@@ -409,11 +437,13 @@ class DxmWorkflowAdapter:
                 defaults=defaults,
                 product_query=product_query,
                 store_name=store_name,
+                target_identity=target_identity,
             ),
             before_values={
                 'defaults': dict(defaults or {}),
                 'product_query': product_query,
                 'store_name': store_name,
+                'target_identity': _mapping_copy(target_identity),
             },
         )
 
@@ -422,6 +452,7 @@ class DxmWorkflowAdapter:
         defaults: dict[str, Any] | None = None,
         product_query: str | None = None,
         store_name: str | None = None,
+        target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._result(
             'save_only',
@@ -430,15 +461,20 @@ class DxmWorkflowAdapter:
                 defaults=defaults,
                 product_query=product_query,
                 store_name=store_name,
+                target_identity=target_identity,
             ),
             before_values={
                 'defaults': dict(defaults or {}),
                 'product_query': product_query,
                 'store_name': store_name,
-                'target_identity': {
-                    'product_query': product_query,
-                    'store_name': store_name,
-                },
+                'target_identity': (
+                    _mapping_copy(target_identity)
+                    if target_identity is not None
+                    else {
+                        'product_query': product_query,
+                        'store_name': store_name,
+                    }
+                ),
             },
         )
 
@@ -446,6 +482,7 @@ class DxmWorkflowAdapter:
         self,
         product_query: str | None = None,
         store_name: str | None = None,
+        target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._result(
             'verify_not_published',
@@ -453,14 +490,19 @@ class DxmWorkflowAdapter:
                 'verify_not_published',
                 product_query=product_query,
                 store_name=store_name,
+                target_identity=target_identity,
             ),
             before_values={
                 'product_query': product_query,
                 'store_name': store_name,
-                'target_identity': {
-                    'product_query': product_query,
-                    'store_name': store_name,
-                },
+                'target_identity': (
+                    _mapping_copy(target_identity)
+                    if target_identity is not None
+                    else {
+                        'product_query': product_query,
+                        'store_name': store_name,
+                    }
+                ),
             },
         )
 
@@ -628,6 +670,16 @@ class DxmWorkflowAdapter:
         if action not in {'save_only', 'verify_not_published'}:
             return True
         target = before_values.get('target_identity')
+        if isinstance(target, Mapping) and target.get('schema_version') == 'dxm_draft_box_target.v1':
+            stable = target.get('stable_identity')
+            return bool(
+                isinstance(stable, Mapping)
+                and str(stable.get('kind') or '').strip()
+                and str(stable.get('value') or '').strip()
+                and str(stable.get('fingerprint') or '').strip()
+                and str(target.get('store_fingerprint') or '').strip()
+                and str(before_values.get('store_name') or '').strip()
+            )
         return bool(
             isinstance(target, Mapping)
             and str(target.get('product_query') or '').strip()
@@ -728,8 +780,11 @@ class DxmWorkflowAdapter:
                 'editor_readiness': _mapping_copy(raw.get('readiness')),
                 'target_identity_readback': {
                     'product_identity_match': raw.get('product_identity_match'),
-                    'store_match': raw.get('store_match'),
+                    'store_identity_match': raw.get('store_identity_match', raw.get('store_match')),
+                    'store_match': raw.get('store_match', raw.get('store_identity_match')),
                     'source_identity_match': raw.get('source_identity_match'),
+                    'target_identity_sha256': raw.get('target_identity_sha256'),
+                    'evidence': _mapping_copy(raw.get('target_identity_evidence')),
                 },
             }
         if action == 'verify_edit_ownership':
@@ -1054,7 +1109,9 @@ class DxmWorkflowAdapter:
         )
         postconditions['editor_ready'] |= readiness.get('editor_ready') is True
         postconditions['product_identity_match'] |= raw.get('product_identity_match') is True
-        postconditions['store_match'] |= raw.get('store_match') is True
+        postconditions['store_match'] |= bool(
+            raw.get('store_identity_match') is True or raw.get('store_match') is True
+        )
         postconditions['source_identity_match'] |= raw.get('source_identity_match') is True
 
     @staticmethod

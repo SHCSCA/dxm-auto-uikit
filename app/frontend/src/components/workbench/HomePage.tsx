@@ -18,26 +18,17 @@ type HomePageProps = {
 export function HomePage({
   workspace,
   selectedTask,
-  configPreview,
   runtimeStatus,
   onShowDxmAccess,
   onShowDraftEdit,
-  onShowTasks,
-  onShowConfig,
   onShowConsole,
 }: HomePageProps) {
-  const batchMode = workspace.realModeReleasePlan.modes.find((mode) => mode.mode === 'batch_save')
-  const batchCapabilityReady = batchMode?.allowed === true
   const recentException = workspace.exceptions.find((item) => item.status !== 'resolved' && item.status !== 'closed')
     ?? workspace.exceptions[0]
     ?? null
   const dxmLoggedIn = runtimeStatus ? DXM_LOGGED_IN_STATUSES.has(runtimeStatus.dxmLogin.status) : false
   const agentActive = runtimeStatus?.realBrowser?.active === true
-  const configReady = Boolean(
-    selectedTask?.status === 'completed'
-      || (selectedTask && configPreview?.taskId === selectedTask.id && configPreview.ok),
-  )
-  const currentScopeLabel = selectedTask?.total_jobs && selectedTask.total_jobs > 1 ? '当前批次' : '当前任务'
+  const currentScopeLabel = '当前保存任务'
   const currentScopeProgress = selectedTask
     ? `${selectedTask.completed_jobs}/${Math.max(selectedTask.total_jobs, 1)} 项已处理`
     : '暂无运行中任务'
@@ -60,17 +51,11 @@ export function HomePage({
             label: '等待登录店小秘',
             detail: '完成真实浏览器登录后再读取商品箱现场。',
           }
-        : batchCapabilityReady
-          ? {
-              tone: 'ready',
-              label: '后端已放行批量编辑能力',
-              detail: '实际执行仍需绑定当前现场并完成人工批准；只保存，不发布。',
-            }
-          : {
-              tone: 'blocked',
-              label: '批量编辑尚未开放',
-              detail: '当前后端未放行批量保存，工作台不会模拟执行或生成成功结果。',
-            }
+        : {
+            tone: 'ready',
+            label: '可以准备商品箱批次',
+            detail: '先读取当前商品箱范围，再冻结模板并完成人工批准；只保存，不发布。',
+          }
 
   const primaryAction = !dxmLoggedIn
     ? {
@@ -78,29 +63,17 @@ export function HomePage({
         detail: '在可见浏览器中完成账号、密码和验证码。',
         action: onShowDxmAccess,
       }
-    : selectedTask?.status === 'completed'
+    : agentActive
       ? {
-          label: '查看任务记录',
-          detail: '复核完成结果、未发布证明与异常。',
-          action: onShowTasks,
+          label: '查看浏览器现场',
+          detail: '查看当前商品、安全检查与真实执行状态。',
+          action: onShowConsole,
         }
-      : !selectedTask
-        ? {
-            label: '选择商品箱商品',
-            detail: '从店小秘已有商品箱范围中选择要编辑的真实商品。',
-            action: onShowDraftEdit,
-          }
-        : !configReady
-          ? {
-              label: '检查编辑模板',
-              detail: '确认当前任务要使用的模板和必填字段。',
-              action: onShowConfig,
-            }
-          : {
-              label: '打开浏览器现场',
-              detail: '查看当前任务、安全检查和真实执行状态。',
-              action: onShowConsole,
-            }
+      : {
+          label: '进入批量编辑',
+          detail: '读取真实商品箱范围，选择整批模板并创建草稿。',
+          action: onShowDraftEdit,
+        }
 
   return (
     <section className="dashboard-grid home-workbench" aria-label="编辑工作台">

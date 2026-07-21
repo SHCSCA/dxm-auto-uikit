@@ -1874,6 +1874,11 @@ class BrowserAgentRuntime:
 
 def execute_browser_agent_action(adapter: Any, action: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     params = params if isinstance(params, dict) else {}
+    target_identity_kwargs = (
+        {"target_identity": dict(params["target_identity"])}
+        if isinstance(params.get("target_identity"), Mapping)
+        else {}
+    )
     if action == "update_live_hud":
         updater = getattr(adapter, "update_live_hud", None)
         if not callable(updater):
@@ -1915,12 +1920,14 @@ def execute_browser_agent_action(adapter: Any, action: str, params: dict[str, An
             store_name=_optional_str(params.get("store_name")),
             note_text=_optional_str(params.get("note_text")),
             target_source_urls=_optional_str_list(params.get("target_source_urls")),
+            **target_identity_kwargs,
         )
     if action == "verify_edit_ownership":
         return adapter.verify_edit_ownership(
             product_query=_optional_str(params.get("product_query")),
             store_name=_optional_str(params.get("store_name")),
             target_source_urls=_optional_str_list(params.get("target_source_urls")),
+            **target_identity_kwargs,
         )
     if action in {
         "fill_editor_required_defaults",
@@ -1936,16 +1943,19 @@ def execute_browser_agent_action(adapter: Any, action: str, params: dict[str, An
             defaults=params.get("defaults") if isinstance(params.get("defaults"), dict) else {},
             product_query=_optional_str(params.get("product_query")),
             store_name=_optional_str(params.get("store_name")),
+            **target_identity_kwargs,
         )
     if action == "enable_semi_managed":
         return adapter.enable_semi_managed(
             product_query=_optional_str(params.get("product_query")),
             store_name=_optional_str(params.get("store_name")),
+            **target_identity_kwargs,
         )
     if action == "verify_not_published":
         return adapter.verify_not_published(
             product_query=_optional_str(params.get("product_query")),
             store_name=_optional_str(params.get("store_name")),
+            **target_identity_kwargs,
         )
     raise ValueError(f"Unsupported Browser Agent action: {action}")
 

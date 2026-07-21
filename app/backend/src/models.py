@@ -69,6 +69,26 @@ class EditBatchManualApprovalRequest(BaseModel):
     confirmation: str = Field(min_length=1, max_length=64)
 
 
+class EditBatchApproveAndStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    approved_by: str = Field(min_length=1, max_length=200)
+    confirmation: str = Field(min_length=1, max_length=64)
+
+
+class EditBatchStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    approval_token: str = Field(min_length=1, max_length=256)
+
+
+class EditBatchStopRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    requested_by: str = Field(min_length=1, max_length=200, pattern=r".*\S.*")
+    reason: str | None = Field(default=None, max_length=500)
+
+
 class EditBatchBundleSourceSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

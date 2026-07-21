@@ -170,6 +170,7 @@ export default function App() {
     reports: [],
   }))
   const [activeSection, setActiveSection] = useState<WorkbenchSection>('home')
+  const [activeEditBatchId, setActiveEditBatchId] = useState<number | null>(null)
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(initialTaskIdFromUrl)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -1265,13 +1266,23 @@ export default function App() {
       case 'task_history':
         return (
           <BatchRecordsPage
-            onCreateBatch={() => setActiveSection('draft_edit_save')}
+            initialBatchId={activeEditBatchId}
+            onCreateBatch={() => {
+              setActiveEditBatchId(null)
+              setActiveSection('draft_edit_save')
+            }}
+            onOpenBatch={(batchId) => {
+              setActiveEditBatchId(batchId)
+              setActiveSection('draft_edit_save')
+            }}
           />
         )
       case 'draft_edit_save':
         return (
           <BatchEditPage
             templates={workspace.templates}
+            initialBatchId={activeEditBatchId}
+            onBatchSelected={setActiveEditBatchId}
             onShowTemplates={() => setActiveSection('template_center')}
             onShowRecords={() => setActiveSection('task_history')}
           />
@@ -1355,7 +1366,10 @@ export default function App() {
             runtimeStatus={runtimeStatus}
             onShowDxmAccess={() => setActiveSection('dxm_access')}
             onShowAcquisition={() => setActiveSection('acquisition_claim')}
-            onShowDraftEdit={() => setActiveSection('draft_edit_save')}
+            onShowDraftEdit={() => {
+              setActiveEditBatchId(null)
+              setActiveSection('draft_edit_save')
+            }}
             onShowTasks={() => setActiveSection('task_history')}
             onShowConfig={() => setActiveSection('edit_config')}
             onShowConsole={() => setActiveSection('start_save')}

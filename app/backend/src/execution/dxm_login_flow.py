@@ -30,10 +30,20 @@ LOGIN_SCREENSHOT_FILE = SCREENSHOT_DIR / 'dianxiaomi_login_start.png'
 LOGIN_RESULT_SCREENSHOT_FILE = SCREENSHOT_DIR / 'dianxiaomi_login_result.png'
 WORKFLOW_BROWSER_PROFILE_DIR = DATA_DIR / 'browser_profiles' / 'dxm_workflow'
 VISIBLE_CDP_CONNECT_TIMEOUT_MS = 8000
+FROZEN_DRAFT_TARGET_SCHEMA = 'dxm_draft_box_target.v1'
+_FROZEN_PRODUCT_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{5,128}$')
 
 
 class MutationAuthorizationError(RuntimeError):
     """A final-dispatch authorization failure that must never enter click fallback paths."""
+
+
+class FrozenTargetIdentityError(RuntimeError):
+    """A frozen batch target could not be proven against the current live DOM."""
+
+    def __init__(self, reason_code: str, message: str) -> None:
+        self.reason_code = reason_code
+        super().__init__(message)
 
 WORKFLOW_SCREENSHOT_MAP = {
     'product': SCREENSHOT_DIR / 'dianxiaomi_product_page.png',
@@ -1522,7 +1532,7 @@ class DxmLoginFlow:
               return '';
             }
           }).filter(Boolean);
-          const productId = (row, rowText) => {
+          const productId = (row) => {
             const nodes = [row, ...Array.from(row.querySelectorAll('[data-product-id],[data-productid]'))];
             for (const node of nodes) {
               for (const key of ['data-product-id', 'data-productid']) {
@@ -1530,18 +1540,30 @@ class DxmLoginFlow:
                 if (/^[A-Za-z0-9_-]{5,128}$/.test(value)) return value;
               }
             }
+            const structuredFields = Array.from(row.querySelectorAll(
+              '[data-field="productId"],[data-field="product_id"],[data-field="productid"],'
+              + '[data-column="productId"],[data-column="product_id"],[data-column="productid"],'
+              + 'input[name="productId"],input[name="product_id"],input[name="productid"]'
+            ));
+            for (const field of structuredFields) {
+              const value = String(
+                field.value || field.getAttribute?.('value') || field.getAttribute?.('data-value') || textOf(field)
+              ).trim();
+              if (/^[A-Za-z0-9_-]{5,128}$/.test(value)) return value;
+            }
             for (const anchor of Array.from(row.querySelectorAll('a[href]'))) {
               try {
                 const parsed = new URL(String(anchor.href || anchor.getAttribute('href') || ''), location.href);
                 if (!isDxmHost(parsed.hostname.toLowerCase()) || !parsed.pathname.startsWith('/web/smt/')) continue;
-                for (const key of ['productId', 'product_id', 'productid']) {
+                const keys = ['productId', 'product_id', 'productid'];
+                if (parsed.pathname.replace(/\/$/, '') === '/web/smt/edit') keys.push('id');
+                for (const key of keys) {
                   const value = String(parsed.searchParams.get(key) || '').trim();
                   if (/^[A-Za-z0-9_-]{5,128}$/.test(value)) return value;
                 }
               } catch (_) {}
             }
-            const match = rowText.match(/(?:产品|商品|Product)\s*ID\s*[:：#]?\s*([A-Za-z0-9_-]{5,128})/i);
-            return match ? match[1] : null;
+            return null;
           };
           const storeEvidence = (row) => {
             const cells = Array.from(row.querySelectorAll('td,[role="cell"],.vxe-body--column,.ant-table-cell,.el-table__cell'));
@@ -1610,7 +1632,7 @@ class DxmLoginFlow:
             return {
               domIndex: index,
               title: title(row, rowText),
-              productId: productId(row, rowText),
+              productId: productId(row),
               sourceUrls: sourceUrls(row),
               storeEvidence: storeEvidence(row),
               rowText: rowText.slice(0, 900),
@@ -1738,6 +1760,7 @@ class DxmLoginFlow:
         product_query: str | None = None,
         store_name: str | None = None,
         target_source_urls: list[str] | None = None,
+        target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if action not in DRAFT_ACTION_SCREENSHOT_MAP:
             state = self._error_state(
@@ -1755,6 +1778,7 @@ class DxmLoginFlow:
                 product_query=product_query,
                 store_name=store_name,
                 target_source_urls=target_source_urls,
+                target_identity=target_identity,
             )
         except Exception as exc:
             state = self._error_state(
@@ -1786,6 +1810,14 @@ class DxmLoginFlow:
                 'store_name': result.get('store_name'),
                 'target_row_text': result.get('target_row_text'),
                 'target_source_urls': result.get('target_source_urls', []),
+                'target_identity': result.get('target_identity'),
+                'target_identity_sha256': result.get('target_identity_sha256'),
+                'target_identity_evidence': result.get('target_identity_evidence'),
+                'product_identity_match': result.get('product_identity_match'),
+                'store_identity_match': result.get('store_identity_match'),
+                'store_match': result.get('store_match'),
+                'source_identity_match': result.get('source_identity_match'),
+                'readiness': result.get('readiness'),
                 'editor_sections': result.get('editor_sections', []),
                 'top_actions': result.get('top_actions', []),
                 'detected_fields': result.get('detected_fields', []),
@@ -1967,6 +1999,7 @@ class DxmLoginFlow:
         product_query: str | None = None,
         store_name: str | None = None,
         target_source_urls: list[str] | None = None,
+        target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         previous_state = self.get_state()
         if action not in EDITOR_ACTION_SCREENSHOT_MAP:
@@ -1985,6 +2018,7 @@ class DxmLoginFlow:
                 product_query=product_query,
                 store_name=store_name,
                 target_source_urls=target_source_urls,
+                target_identity=target_identity,
             )
         except Exception as exc:
             state = self._error_state(
@@ -2012,6 +2046,13 @@ class DxmLoginFlow:
             'current_action': action,
             'product_query': product_query,
             'store_name': store_name,
+            'target_identity': result.get('target_identity'),
+            'target_identity_sha256': result.get('target_identity_sha256'),
+            'target_identity_evidence': result.get('target_identity_evidence'),
+            'product_identity_match': result.get('product_identity_match'),
+            'store_identity_match': result.get('store_identity_match'),
+            'store_match': result.get('store_match'),
+            'source_identity_match': result.get('source_identity_match'),
             'semi_managed_visible': result.get('semi_managed_visible'),
             'semi_managed_enabled': result.get('semi_managed_enabled'),
             'save_result': (
@@ -2302,12 +2343,24 @@ class DxmLoginFlow:
         product_query: str | None = None,
         store_name: str | None = None,
         target_source_urls: list[str] | None = None,
+        target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        normalized_target: dict[str, Any] | None = None
+        target_identity_sha256: str | None = None
+        if target_identity is not None:
+            normalized_target, target_identity_sha256 = self._normalize_frozen_target_identity(
+                target_identity,
+                store_name=store_name,
+                target_source_urls=target_source_urls,
+            )
+            target_source_urls = list(normalized_target['source_urls'])
         page = self._ensure_page_with_cookies()
         if action == 'edit':
             open_editor = self._find_open_editor_page_for_target(
                 product_query=product_query,
                 target_source_urls=target_source_urls or [],
+                target_identity=normalized_target,
+                store_name=store_name,
             )
             if open_editor is not None:
                 editor_page = open_editor['page']
@@ -2328,6 +2381,15 @@ class DxmLoginFlow:
                     trace_prefix='draft_box_edit_reuse',
                 )
                 editor_meta = self._extract_editor_page_meta(editor_page)
+                identity_readback = self._verify_opened_editor_target(
+                    editor_page,
+                    product_query=product_query,
+                    store_name=store_name,
+                    target_source_urls=target_source_urls or [],
+                    target_identity=normalized_target,
+                    target_identity_sha256=target_identity_sha256,
+                    row_info=match,
+                )
                 try:
                     page_title = editor_page.title()
                 except Exception:
@@ -2350,6 +2412,7 @@ class DxmLoginFlow:
                     'detected_fields': editor_meta['fields'],
                     'editor_reused': True,
                     'matched_by': match.get('matchedBy'),
+                    **identity_readback,
                 }
         draft_url = WORKFLOW_TARGETS['draft_box']['url']
         visible_draft_box = os.name == 'nt' and not self._is_headless()
@@ -2389,24 +2452,55 @@ class DxmLoginFlow:
                 dismiss_strategy='full',
             )
             self._dismiss_blocking_modals(page)
-        claim_mark = note_text or self._current_claim_mark(product_query=product_query, store_name=store_name)
+        claim_mark = (
+            None
+            if normalized_target is not None
+            else note_text or self._current_claim_mark(product_query=product_query, store_name=store_name)
+        )
         row_info: dict[str, Any] | None = None
-        try:
-            row_info = self._find_draft_box_row(
-                page,
-                product_query,
-                store_name=store_name,
-                claim_mark=claim_mark,
-                target_source_urls=target_source_urls,
-            )
-        except RuntimeError as initial_exc:
-            self._trace_workflow_event(
-                'draft_box_action:visible_find_missed',
-                action=action,
-                reason=str(initial_exc)[:240],
-                human_step='当前商品箱列表未直接找到商品',
-            )
-        if row_info is None:
+        if normalized_target is not None:
+            try:
+                row_info = self._find_draft_box_row(
+                    page,
+                    store_name=store_name,
+                    target_source_urls=target_source_urls,
+                    target_identity=normalized_target,
+                )
+            except FrozenTargetIdentityError as initial_exc:
+                if initial_exc.reason_code != 'FROZEN_TARGET_ROW_NOT_FOUND':
+                    raise
+                self._trace_workflow_event(
+                    'draft_box_action:frozen_find_missed',
+                    action=action,
+                    reason_code=initial_exc.reason_code,
+                    target_identity_sha256=target_identity_sha256,
+                    human_step='当前商品箱列表未直接找到冻结商品',
+                )
+                search_value = str(normalized_target['stable_identity']['value'])
+                self._search_draft_box(page, product_query=search_value, store_name=store_name)
+                row_info = self._find_draft_box_row(
+                    page,
+                    store_name=store_name,
+                    target_source_urls=target_source_urls,
+                    target_identity=normalized_target,
+                )
+        else:
+            try:
+                row_info = self._find_draft_box_row(
+                    page,
+                    product_query,
+                    store_name=store_name,
+                    claim_mark=claim_mark,
+                    target_source_urls=target_source_urls,
+                )
+            except RuntimeError as initial_exc:
+                self._trace_workflow_event(
+                    'draft_box_action:visible_find_missed',
+                    action=action,
+                    reason=str(initial_exc)[:240],
+                    human_step='当前商品箱列表未直接找到商品',
+                )
+        if row_info is None and normalized_target is None:
             self._search_draft_box(page, product_query=product_query, store_name=store_name)
             try:
                 row_info = self._find_draft_box_row(
@@ -2429,7 +2523,12 @@ class DxmLoginFlow:
                 )
 
         if action == 'edit':
-            editor_page = self._open_editor_from_draft_box(page, row_info=row_info)
+            editor_page = self._open_editor_from_draft_box(
+                page,
+                row_info=row_info,
+                target_identity=normalized_target,
+                store_name=store_name,
+            )
             self._page = editor_page
             screenshot_path = DRAFT_ACTION_SCREENSHOT_MAP[action]
             screenshot_result = self._capture_optional_workflow_screenshot(
@@ -2438,6 +2537,15 @@ class DxmLoginFlow:
                 trace_prefix='draft_box_edit',
             )
             editor_meta = self._extract_editor_page_meta(editor_page)
+            identity_readback = self._verify_opened_editor_target(
+                editor_page,
+                product_query=product_query,
+                store_name=store_name,
+                target_source_urls=target_source_urls or [],
+                target_identity=normalized_target,
+                target_identity_sha256=target_identity_sha256,
+                row_info=row_info,
+            )
             return {
                 'ok': True,
                 'page_title': editor_page.title(),
@@ -2454,6 +2562,7 @@ class DxmLoginFlow:
                 'editor_sections': editor_meta['sections'],
                 'top_actions': editor_meta['top_actions'],
                 'detected_fields': editor_meta['fields'],
+                **identity_readback,
             }
 
         note_text = note_text or 'AI认领'
@@ -2483,6 +2592,13 @@ class DxmLoginFlow:
             'note_text': note_text,
             'product_query': product_query,
             'store_name': store_name,
+            'target_identity': result.get('target_identity'),
+            'target_identity_sha256': result.get('target_identity_sha256'),
+            'target_identity_evidence': result.get('target_identity_evidence'),
+            'product_identity_match': result.get('product_identity_match'),
+            'store_identity_match': result.get('store_identity_match'),
+            'store_match': result.get('store_match'),
+            'source_identity_match': result.get('source_identity_match'),
             'note_verified': note_result.get('verified'),
             'target_row_text': note_result.get('rowText') or row_info.get('rowText'),
             'target_source_urls': row_info.get('sourceUrls', []),
@@ -4159,6 +4275,166 @@ class DxmLoginFlow:
             return set()
         return canonical
 
+    @staticmethod
+    def _canonical_frozen_target_sha256(value: Mapping[str, Any]) -> str:
+        encoded = json.dumps(
+            dict(value),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(',', ':'),
+            allow_nan=False,
+        ).encode('utf-8')
+        return hashlib.sha256(encoded).hexdigest().upper()
+
+    @staticmethod
+    def _is_supported_frozen_source_url(value: str) -> bool:
+        try:
+            parsed = urlparse(value)
+        except ValueError:
+            return False
+        host = str(parsed.hostname or '').casefold().rstrip('.')
+        path = str(parsed.path or '')
+
+        def host_matches(domain: str) -> bool:
+            return host == domain or host.endswith(f'.{domain}')
+
+        if host_matches('dianxiaomi.com'):
+            return False
+        if host_matches('1688.com'):
+            return re.fullmatch(r'/offer/[0-9]+\.html', path, flags=re.IGNORECASE) is not None
+        if host_matches('yangkeduo.com'):
+            goods_id = (parse_qs(parsed.query).get('goods_id') or [''])[0]
+            return bool(
+                re.fullmatch(r'/goods2?\.html', path, flags=re.IGNORECASE)
+                and re.fullmatch(r'[0-9]+', str(goods_id or ''))
+            )
+        if host_matches('aliexpress.com'):
+            return re.fullmatch(r'/item/[0-9]+\.html', path, flags=re.IGNORECASE) is not None
+        return False
+
+    def _normalize_frozen_target_identity(
+        self,
+        target_identity: Mapping[str, Any],
+        *,
+        store_name: str | None,
+        target_source_urls: list[str] | None = None,
+    ) -> tuple[dict[str, Any], str]:
+        if not isinstance(target_identity, Mapping) or set(target_identity) != {
+            'schema_version',
+            'store_fingerprint',
+            'stable_identity',
+            'source_urls',
+        }:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_SCHEMA_INVALID',
+                '冻结商品目标结构无效，已停止打开编辑页。',
+            )
+        if target_identity.get('schema_version') != FROZEN_DRAFT_TARGET_SCHEMA:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_SCHEMA_INVALID',
+                '冻结商品目标版本不受支持，已停止打开编辑页。',
+            )
+        stable = target_identity.get('stable_identity')
+        if not isinstance(stable, Mapping) or set(stable) != {'kind', 'value', 'fingerprint'}:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_IDENTITY_INVALID',
+                '冻结商品的稳定身份结构无效，已停止打开编辑页。',
+            )
+        kind = str(stable.get('kind') or '').strip()
+        value = str(stable.get('value') or '').strip()
+        fingerprint = str(stable.get('fingerprint') or '').strip()
+        store_fingerprint = str(target_identity.get('store_fingerprint') or '').strip()
+        if not re.fullmatch(r'[A-F0-9]{64}', fingerprint) or not re.fullmatch(
+            r'[A-F0-9]{64}', store_fingerprint
+        ):
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_DIGEST_INVALID',
+                '冻结商品身份摘要无效，已停止打开编辑页。',
+            )
+        raw_source_urls = target_identity.get('source_urls')
+        if not isinstance(raw_source_urls, list) or any(
+            not isinstance(candidate, str) or not candidate.strip() for candidate in raw_source_urls
+        ):
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_SOURCE_INVALID',
+                '冻结商品来源链接结构无效，已停止打开编辑页。',
+            )
+        source_urls = [candidate.strip() for candidate in raw_source_urls]
+        canonical_source: dict[str, Any] | None = None
+        if source_urls:
+            try:
+                canonical_source = canonical_source_identity(source_urls[0], source_urls)
+            except TwoStageContractError as exc:
+                raise FrozenTargetIdentityError(
+                    'FROZEN_TARGET_SOURCE_INVALID',
+                    '冻结商品来源链接无效，已停止打开编辑页。',
+                ) from exc
+            if list(canonical_source['urls']) != source_urls or any(
+                not self._is_supported_frozen_source_url(candidate) for candidate in source_urls
+            ):
+                raise FrozenTargetIdentityError(
+                    'FROZEN_TARGET_SOURCE_INVALID',
+                    '冻结商品来源链接不是规范的外部商品详情页，已停止打开编辑页。',
+                )
+        if kind == 'product_id':
+            if _FROZEN_PRODUCT_ID_PATTERN.fullmatch(value) is None:
+                raise FrozenTargetIdentityError(
+                    'FROZEN_TARGET_PRODUCT_ID_INVALID',
+                    '冻结商品产品 ID 无效，已停止打开编辑页。',
+                )
+            expected_fingerprint = hashlib.sha256(f'product_id:{value}'.encode('utf-8')).hexdigest().upper()
+        elif kind == 'source_url':
+            if canonical_source is None or value != canonical_source['primary_url']:
+                raise FrozenTargetIdentityError(
+                    'FROZEN_TARGET_SOURCE_INVALID',
+                    '冻结商品主来源链接与稳定身份不一致，已停止打开编辑页。',
+                )
+            expected_fingerprint = str(canonical_source['fingerprint'])
+        else:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_KIND_UNSUPPORTED',
+                '冻结商品稳定身份类型不受支持，已停止打开编辑页。',
+            )
+        if fingerprint != expected_fingerprint:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_FINGERPRINT_MISMATCH',
+                '冻结商品稳定身份摘要不匹配，已停止打开编辑页。',
+            )
+        normalized_store_name = ' '.join(str(store_name or '').split())
+        if not normalized_store_name:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_STORE_REQUIRED',
+                '冻结商品缺少店铺名称，已停止打开编辑页。',
+            )
+        expected_store_fingerprint = self._canonical_frozen_target_sha256({
+            'store_name': normalized_store_name,
+            'source': 'structured_store_cell',
+        })
+        if store_fingerprint != expected_store_fingerprint:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_STORE_MISMATCH',
+                '冻结商品店铺身份与当前批次店铺不一致，已停止打开编辑页。',
+            )
+        if target_source_urls:
+            provided_urls = self._canonical_source_url_set(target_source_urls)
+            frozen_urls = set(source_urls)
+            if not provided_urls or provided_urls != frozen_urls:
+                raise FrozenTargetIdentityError(
+                    'FROZEN_TARGET_SOURCE_DRIFT',
+                    '调用参数中的来源链接与冻结商品身份不一致，已停止打开编辑页。',
+                )
+        normalized = {
+            'schema_version': FROZEN_DRAFT_TARGET_SCHEMA,
+            'store_fingerprint': store_fingerprint,
+            'stable_identity': {
+                'kind': kind,
+                'value': value,
+                'fingerprint': fingerprint,
+            },
+            'source_urls': source_urls,
+        }
+        return normalized, self._canonical_frozen_target_sha256(normalized)
+
     def _claim_candidate_has_authorized_source(
         self,
         candidate: Mapping[str, Any],
@@ -5112,7 +5388,17 @@ class DxmLoginFlow:
         product_query: str | None = None,
         store_name: str | None = None,
         target_source_urls: list[str] | None = None,
+        target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        normalized_target: dict[str, Any] | None = None
+        target_identity_sha256: str | None = None
+        if target_identity is not None:
+            normalized_target, target_identity_sha256 = self._normalize_frozen_target_identity(
+                target_identity,
+                store_name=store_name,
+                target_source_urls=target_source_urls,
+            )
+            target_source_urls = list(normalized_target['source_urls'])
         page = self._ensure_page_with_cookies()
         state = self.get_state()
         if action in {
@@ -5201,24 +5487,71 @@ class DxmLoginFlow:
                 current_url=getattr(page, 'url', None),
                 human_step='编辑页提示弹窗检查完成',
             )
+            frozen_before = (
+                self._require_frozen_editor_identity(
+                    page,
+                    target_identity=normalized_target,
+                    store_name=store_name,
+                    phase='执行编辑动作前',
+                )
+                if normalized_target is not None
+                else None
+            )
             if action == 'verify_edit_ownership':
-                return self._verify_edit_ownership_on_page(
+                action_result = self._verify_edit_ownership_on_page(
                     page,
                     product_query,
                     store_name,
                     expected_source_urls=target_source_urls or state.get('target_source_urls') or [],
                 )
-            if action == 'fill_editor_required_defaults':
-                return self._fill_editor_required_defaults_on_page(page, defaults)
-            if action == 'fill_editor_variants':
-                return self._fill_editor_variants_on_page(page, defaults)
-            if action == 'fill_media_assets':
-                return self._fill_media_assets_on_page(page, defaults)
-            if action == 'fill_compliance_defaults':
-                return self._fill_compliance_defaults_on_page(page, defaults)
-            if action == 'enable_semi_managed':
-                return self._enable_semi_managed_on_page(page)
-            return self._open_semi_managed_page_from_editor(page, defaults)
+                if normalized_target is not None:
+                    strict_fill = dict(action_result.get('fill_result') or {})
+                    strict_fill.update({
+                        'ok': True,
+                        'query_matched': frozen_before.get('product_identity_match') is True,
+                        'source_matched': frozen_before.get('source_identity_match') is True,
+                        'store_matched': frozen_before.get('store_identity_match') is True,
+                        'has_editor_signals': True,
+                        'verified_by': 'frozen_target_structured_readback',
+                    })
+                    action_result.update({
+                        'ok': True,
+                        'stage': 'edit_ownership_verified',
+                        'label': '编辑页归属已校验',
+                        'message': '编辑页结构化身份与冻结商品完全一致。',
+                        'fill_result': strict_fill,
+                    })
+            elif action == 'fill_editor_required_defaults':
+                action_result = self._fill_editor_required_defaults_on_page(page, defaults)
+            elif action == 'fill_editor_variants':
+                action_result = self._fill_editor_variants_on_page(page, defaults)
+            elif action == 'fill_media_assets':
+                action_result = self._fill_media_assets_on_page(page, defaults)
+            elif action == 'fill_compliance_defaults':
+                action_result = self._fill_compliance_defaults_on_page(page, defaults)
+            elif action == 'enable_semi_managed':
+                action_result = self._enable_semi_managed_on_page(page)
+            else:
+                action_result = self._open_semi_managed_page_from_editor(page, defaults)
+            if normalized_target is None:
+                return action_result
+            frozen_after = (
+                None
+                if action == 'open_semi_managed_page'
+                else self._require_frozen_editor_identity(
+                    page,
+                    target_identity=normalized_target,
+                    store_name=store_name,
+                    phase='执行编辑动作后',
+                )
+            )
+            return self._attach_frozen_target_evidence(
+                action_result,
+                target_identity=normalized_target,
+                target_identity_sha256=str(target_identity_sha256),
+                before=frozen_before,
+                after=frozen_after,
+            )
 
         state_page_url = state.get('page_url')
         if action in {'save_only', 'verify_not_published'} and self._is_dxm_editor_url(state_page_url):
@@ -5271,6 +5604,16 @@ class DxmLoginFlow:
                     store_name=store_name,
                 )
             self._reapply_live_hud_if_available(page)
+            frozen_before = (
+                self._require_frozen_editor_identity(
+                    page,
+                    target_identity=normalized_target,
+                    store_name=store_name,
+                    phase='保存或未发布校验前',
+                )
+                if normalized_target is not None
+                else None
+            )
             if action == 'verify_not_published':
                 result = self._verify_not_published_on_page(
                     page,
@@ -5295,10 +5638,45 @@ class DxmLoginFlow:
                     }
                     if isinstance(result, dict) and not result.get('source_editor_url'):
                         result['source_editor_url'] = editor_url
-                    return result
+                    if normalized_target is None:
+                        return result
+                    frozen_after = self._require_frozen_editor_identity(
+                        page,
+                        target_identity=normalized_target,
+                        store_name=store_name,
+                        phase='保存前配置失败后',
+                    )
+                    return self._attach_frozen_target_evidence(
+                        result,
+                        target_identity=normalized_target,
+                        target_identity_sha256=str(target_identity_sha256),
+                        before=frozen_before,
+                        after=frozen_after,
+                    )
+                if normalized_target is not None:
+                    self._require_frozen_editor_identity(
+                        page,
+                        target_identity=normalized_target,
+                        store_name=store_name,
+                        phase='保存点击立即前',
+                    )
                 result = self._save_only_on_page(page)
             if isinstance(result, dict) and not result.get('source_editor_url'):
                 result['source_editor_url'] = editor_url
+            if normalized_target is not None:
+                frozen_after = self._require_frozen_editor_identity(
+                    page,
+                    target_identity=normalized_target,
+                    store_name=store_name,
+                    phase='保存或未发布校验后',
+                )
+                result = self._attach_frozen_target_evidence(
+                    result,
+                    target_identity=normalized_target,
+                    target_identity_sha256=str(target_identity_sha256),
+                    before=frozen_before,
+                    after=frozen_after,
+                )
             return result
 
         semi_url = state.get('page_url')
@@ -5413,9 +5791,12 @@ class DxmLoginFlow:
         *,
         product_query: str | None,
         target_source_urls: list[str] | None,
+        target_identity: dict[str, Any] | None = None,
+        store_name: str | None = None,
     ) -> dict[str, Any] | None:
-        if not product_query and not target_source_urls:
+        if not product_query and not target_source_urls and target_identity is None:
             return None
+        matches: list[dict[str, Any]] = []
         for candidate in self._context_pages():
             if candidate is None or self._is_playwright_object_closed(candidate):
                 continue
@@ -5429,9 +5810,18 @@ class DxmLoginFlow:
                 candidate,
                 product_query=product_query,
                 target_source_urls=target_source_urls or [],
+                target_identity=target_identity,
+                store_name=store_name,
             )
             if isinstance(match, dict) and match.get('ok'):
-                return {'page': candidate, 'match': match}
+                matches.append({'page': candidate, 'match': match})
+        if target_identity is not None and len(matches) > 1:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_EDITOR_AMBIGUOUS',
+                '存在多个与冻结商品身份相同的编辑页，已停止接管。',
+            )
+        if matches:
+            return matches[0]
         return None
 
     def _editor_page_matches_target(
@@ -5440,7 +5830,15 @@ class DxmLoginFlow:
         *,
         product_query: str | None,
         target_source_urls: list[str],
+        target_identity: dict[str, Any] | None = None,
+        store_name: str | None = None,
     ) -> dict[str, Any]:
+        if target_identity is not None:
+            return self._editor_page_matches_frozen_target(
+                page,
+                target_identity=target_identity,
+                store_name=store_name,
+            )
         payload = {
             'frag': product_query or '',
             'targetSourceUrls': target_source_urls or [],
@@ -5514,6 +5912,365 @@ class DxmLoginFlow:
         except Exception as exc:
             return {'ok': False, 'error': str(exc)[:240]}
         return result if isinstance(result, dict) else {'ok': False, 'reason': 'non_object_match_result'}
+
+    def _editor_page_matches_frozen_target(
+        self,
+        page: Page,
+        *,
+        target_identity: dict[str, Any],
+        store_name: str | None,
+    ) -> dict[str, Any]:
+        normalized_target, target_sha256 = self._normalize_frozen_target_identity(
+            target_identity,
+            store_name=store_name,
+        )
+        stable = dict(normalized_target['stable_identity'])
+        expected_sources = list(normalized_target['source_urls'])
+        payload = {
+            'kind': stable['kind'],
+            'value': stable['value'],
+            'storeName': ' '.join(str(store_name or '').split()),
+            'sourceUrls': expected_sources,
+        }
+        try:
+            result = self._evaluate_page_function_with_runtime_timeout(page, r'''({kind, value, storeName, sourceUrls: expectedSourceUrls}) => {
+              const textOf = (el) => String(el?.innerText || el?.textContent || '').replace(/\s+/g, ' ').trim();
+              const visible = (el) => {
+                if (!el || !el.getBoundingClientRect) return false;
+                const rect = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+              };
+              const hostMatches = (host, domain) => host === domain || host.endsWith(`.${domain}`);
+              const isDxmHost = (host) => hostMatches(host, 'dianxiaomi.com');
+              const isSupportedSource = (parsed) => {
+                const host = parsed.hostname.toLowerCase();
+                if (isDxmHost(host)) return false;
+                if (hostMatches(host, '1688.com')) return /^\/offer\/[0-9]+\.html$/i.test(parsed.pathname);
+                if (hostMatches(host, 'yangkeduo.com')) {
+                  return /^\/goods2?\.html$/i.test(parsed.pathname)
+                    && /^[0-9]+$/.test(String(parsed.searchParams.get('goods_id') || ''));
+                }
+                if (hostMatches(host, 'aliexpress.com')) return /^\/item\/[0-9]+\.html$/i.test(parsed.pathname);
+                return false;
+              };
+              const canonicalUrl = (raw) => {
+                try {
+                  const parsed = new URL(String(raw || ''), location.href);
+                  if (!['http:', 'https:'].includes(parsed.protocol) || !isSupportedSource(parsed)) return '';
+                  parsed.hash = '';
+                  return parsed.href;
+                } catch (_) {
+                  return '';
+                }
+              };
+              const targetSources = Array.from(new Set(
+                (Array.isArray(expectedSourceUrls) ? expectedSourceUrls : []).map(canonicalUrl).filter(Boolean)
+              ));
+              const ids = [];
+              const addId = (raw) => {
+                const candidate = String(raw || '').trim();
+                if (/^[A-Za-z0-9_-]{5,128}$/.test(candidate) && !ids.includes(candidate)) ids.push(candidate);
+              };
+              try {
+                const current = new URL(location.href);
+                const keys = ['productId', 'product_id', 'productid'];
+                if (current.pathname.replace(/\/$/, '') === '/web/smt/edit') keys.push('id');
+                for (const key of keys) addId(current.searchParams.get(key));
+              } catch (_) {}
+              const idFields = Array.from(document.querySelectorAll(
+                '[data-product-id],[data-productid],[data-field="productId"],[data-field="product_id"],'
+                + '[data-field="productid"],[data-column="productId"],[data-column="product_id"],'
+                + '[data-column="productid"],input[name="productId"],input[name="product_id"],input[name="productid"]'
+              ));
+              for (const field of idFields) {
+                if (!visible(field)) continue;
+                addId(field.getAttribute?.('data-product-id'));
+                addId(field.getAttribute?.('data-productid'));
+                addId(field.value || field.getAttribute?.('value') || field.getAttribute?.('data-value') || textOf(field));
+              }
+              for (const anchor of Array.from(document.querySelectorAll('a[href]')).filter(visible)) {
+                try {
+                  const parsed = new URL(String(anchor.href || anchor.getAttribute('href') || ''), location.href);
+                  if (!isDxmHost(parsed.hostname.toLowerCase()) || !parsed.pathname.startsWith('/web/smt/')) continue;
+                  const keys = ['productId', 'product_id', 'productid'];
+                  if (parsed.pathname.replace(/\/$/, '') === '/web/smt/edit') keys.push('id');
+                  for (const key of keys) addId(parsed.searchParams.get(key));
+                } catch (_) {}
+              }
+              const observedSources = [];
+              const addSource = (raw) => {
+                const canonical = canonicalUrl(raw);
+                if (canonical && !observedSources.includes(canonical)) observedSources.push(canonical);
+              };
+              const sourceNodes = Array.from(document.querySelectorAll(
+                '[data-field="source"],[data-column="source"],[data-field="sourceUrl"],'
+                + '[data-field="source_url"],[data-source-url],.source-cell,input[name="sourceUrl"],'
+                + 'input[name="source_url"],input[placeholder*="来源"],input[placeholder*="源商品"]'
+              ));
+              for (const node of sourceNodes) {
+                if (!visible(node)) continue;
+                addSource(node.getAttribute?.('data-source-url'));
+                addSource(node.value || node.getAttribute?.('value'));
+                for (const anchor of Array.from(node.querySelectorAll?.('a[href]') || [])) {
+                  if (visible(anchor)) addSource(anchor.href || anchor.getAttribute('href'));
+                }
+              }
+              for (const anchor of Array.from(document.querySelectorAll('a[href]')).filter(visible)) {
+                const sourceContainer = anchor.closest('[data-field="source"],[data-column="source"],.source-cell,[class*="source"]');
+                if (sourceContainer || /(来源|源商品|原商品|source)/i.test(textOf(anchor))) {
+                  addSource(anchor.href || anchor.getAttribute('href'));
+                }
+              }
+              const observedStores = [];
+              const addStore = (raw) => {
+                const candidate = String(raw || '').replace(/\s+/g, ' ').trim().replace(/^「|」$/g, '');
+                if (candidate && !observedStores.includes(candidate)) observedStores.push(candidate);
+              };
+              const storeNodes = Array.from(document.querySelectorAll(
+                '[data-store-name],[data-field="store"],[data-column="store"],.store-cell,select[name*="store" i],input[name*="store" i]'
+              ));
+              for (const node of storeNodes) {
+                if (!visible(node)) continue;
+                addStore(node.getAttribute?.('data-store-name'));
+                addStore(node.value || node.options?.[node.selectedIndex]?.text || node.getAttribute?.('value'));
+                if (!['INPUT', 'SELECT', 'TEXTAREA'].includes(String(node.tagName || ''))) addStore(textOf(node));
+              }
+              const labels = Array.from(document.querySelectorAll('label,.ant-form-item-label,.el-form-item__label'))
+                .filter(visible)
+                .filter(label => /^(店铺账号|店铺|store(?:\s+account)?)$/i.test(textOf(label).replace(/[：:]$/, '').trim()));
+              for (const label of labels) {
+                const container = label.closest('.ant-form-item,.el-form-item,[class*="form-item"],[class*="FormItem"]') || label.parentElement;
+                if (!container) continue;
+                const values = Array.from(container.querySelectorAll(
+                  '[data-store-name],input,select,.ant-select-selection-item,.el-select__selected-item,[data-value]'
+                )).filter(visible);
+                for (const node of values) {
+                  addStore(node.getAttribute?.('data-store-name'));
+                  addStore(node.value || node.options?.[node.selectedIndex]?.text || node.getAttribute?.('data-value') || textOf(node));
+                }
+              }
+              const productIdentityMatch = kind === 'product_id'
+                ? ids.includes(value)
+                : observedSources.includes(canonicalUrl(value));
+              const sourceIdentityMatch = targetSources.length === 0
+                || observedSources.some(source => targetSources.includes(source));
+              const storeIdentityMatch = observedStores.includes(storeName);
+              return {
+                ok: Boolean(productIdentityMatch && sourceIdentityMatch && storeIdentityMatch),
+                matchedBy: kind,
+                product_identity_match: Boolean(productIdentityMatch),
+                store_identity_match: Boolean(storeIdentityMatch),
+                store_match: Boolean(storeIdentityMatch),
+                source_identity_match: Boolean(sourceIdentityMatch),
+                observed_product_ids: ids.slice(0, 12),
+                observed_source_urls: observedSources.slice(0, 12),
+                observed_store_names: observedStores.slice(0, 12),
+                expected_store_name: storeName,
+                expected_source_urls: targetSources,
+              };
+            }''', payload, timeout=3000)
+        except Exception as exc:
+            return {
+                'ok': False,
+                'reason': 'frozen_editor_identity_read_failed',
+                'error': str(exc)[:240],
+                'target_identity_sha256': target_sha256,
+            }
+        if not isinstance(result, Mapping):
+            return {
+                'ok': False,
+                'reason': 'frozen_editor_identity_result_invalid',
+                'target_identity_sha256': target_sha256,
+            }
+        verified = dict(result)
+        observed_sources = [
+            str(value).strip()
+            for value in verified.get('observed_source_urls') or []
+            if str(value).strip()
+        ]
+        if stable['kind'] == 'product_id':
+            product_identity_match = stable['value'] in {
+                str(value).strip() for value in verified.get('observed_product_ids') or []
+            }
+        else:
+            product_identity_match = self._source_urls_match(observed_sources, [stable['value']])
+        source_identity_match = bool(
+            not expected_sources or self._source_urls_match(observed_sources, expected_sources)
+        )
+        store_identity_match = verified.get('store_identity_match') is True
+        verified.update({
+            'ok': bool(product_identity_match and source_identity_match and store_identity_match),
+            'product_identity_match': product_identity_match,
+            'store_identity_match': store_identity_match,
+            'store_match': store_identity_match,
+            'source_identity_match': source_identity_match,
+            'target_identity': normalized_target,
+            'target_identity_sha256': target_sha256,
+        })
+        if not verified['ok'] and not verified.get('reason'):
+            verified['reason'] = 'frozen_editor_identity_mismatch'
+        return verified
+
+    def _verify_opened_editor_target(
+        self,
+        page: Page,
+        *,
+        product_query: str | None,
+        store_name: str | None,
+        target_source_urls: list[str],
+        target_identity: dict[str, Any] | None,
+        target_identity_sha256: str | None,
+        row_info: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        self._dismiss_editor_modals(page, context='open_editor:identity_readback')
+        visible_editor = self._is_visible_dxm_editor_page(page)
+        loaded = (
+            self._wait_for_visible_editor_loaded(
+                page,
+                expected_identity='editor',
+                product_query=product_query,
+                timeout=20000,
+            )
+            if visible_editor
+            else self._wait_for_body_text(
+                page,
+                ['基本信息', '产品信息', '保存'],
+                timeout=20000,
+                expected_identity='editor',
+            )
+        )
+        readiness = self._browser_readiness_gate(
+            page,
+            label='商品编辑页',
+            expected_identity='editor',
+            ready_terms=['基本信息', '产品信息', '保存'],
+        )
+        readiness = {
+            **readiness,
+            'editor_ready': bool(loaded and readiness.get('ok') is True),
+        }
+        if target_identity is not None and readiness['editor_ready'] is not True:
+            raise FrozenTargetIdentityError(
+                'EDITOR_NOT_READY',
+                '商品编辑页未完成加载，已停止后续编辑与保存。',
+            )
+        editor_match = self._editor_page_matches_target(
+            page,
+            product_query=product_query,
+            target_source_urls=target_source_urls,
+            target_identity=target_identity,
+            store_name=store_name,
+        )
+        if target_identity is not None:
+            if editor_match.get('ok') is not True:
+                raise FrozenTargetIdentityError(
+                    'FROZEN_TARGET_EDITOR_READBACK_MISMATCH',
+                    '打开编辑页后无法读回同一冻结商品、来源和店铺身份，已停止后续操作。',
+                )
+            product_identity_match = editor_match.get('product_identity_match') is True
+            store_identity_match = editor_match.get('store_identity_match') is True
+            source_identity_match = editor_match.get('source_identity_match') is True
+        else:
+            product_identity_match = editor_match.get('ok') is True
+            row_store = row_info.get('storeEvidence') if isinstance(row_info, Mapping) else None
+            store_identity_match = bool(not store_name or isinstance(row_store, Mapping))
+            source_identity_match = bool(
+                not target_source_urls
+                or editor_match.get('matchedBy') == 'source_url'
+                or self._source_urls_match(
+                    list(editor_match.get('sourceUrls') or []),
+                    target_source_urls,
+                )
+            )
+        return {
+            'readiness': readiness,
+            'target_identity': dict(target_identity) if target_identity is not None else None,
+            'target_identity_sha256': target_identity_sha256,
+            'product_identity_match': product_identity_match,
+            'store_identity_match': store_identity_match,
+            'store_match': store_identity_match,
+            'source_identity_match': source_identity_match,
+            'target_identity_evidence': {
+                'row_readback': {
+                    'matched_by': row_info.get('matchedBy') if isinstance(row_info, Mapping) else None,
+                    'product_ids': list(row_info.get('productIds') or []) if isinstance(row_info, Mapping) else [],
+                    'source_urls': list(row_info.get('sourceUrls') or []) if isinstance(row_info, Mapping) else [],
+                    'store_evidence': dict(row_info.get('storeEvidence') or {}) if isinstance(row_info, Mapping) else {},
+                    'target_identity_sha256': target_identity_sha256,
+                },
+                'editor_readback': dict(editor_match),
+            },
+        }
+
+    def _require_frozen_editor_identity(
+        self,
+        page: Page,
+        *,
+        target_identity: dict[str, Any],
+        store_name: str | None,
+        phase: str,
+    ) -> dict[str, Any]:
+        if not self._is_dxm_editor_url(getattr(page, 'url', '')):
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_EDITOR_REQUIRED',
+                f'{phase}时当前页面不是可验证的店小秘编辑页，已停止操作。',
+            )
+        match = self._editor_page_matches_frozen_target(
+            page,
+            target_identity=target_identity,
+            store_name=store_name,
+        )
+        if match.get('ok') is not True:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_EDITOR_IDENTITY_DRIFT',
+                f'{phase}时编辑页商品、来源或店铺身份与冻结目标不一致，已停止操作。',
+            )
+        return match
+
+    @staticmethod
+    def _attach_frozen_target_evidence(
+        result: Mapping[str, Any],
+        *,
+        target_identity: dict[str, Any],
+        target_identity_sha256: str,
+        before: Mapping[str, Any],
+        after: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        attached = dict(result)
+        final_readback = dict(after or before)
+        identity_fields = {
+            'target_identity': dict(target_identity),
+            'target_identity_sha256': target_identity_sha256,
+            'product_identity_match': final_readback.get('product_identity_match') is True,
+            'store_identity_match': final_readback.get('store_identity_match') is True,
+            'store_match': final_readback.get('store_identity_match') is True,
+            'source_identity_match': final_readback.get('source_identity_match') is True,
+            'target_identity_evidence': {
+                'before_action': dict(before),
+                'after_action': dict(after) if after is not None else None,
+            },
+        }
+        attached.update(identity_fields)
+        for key in ('fill_result', 'save_result', 'unpublished_proof'):
+            nested = attached.get(key)
+            if not isinstance(nested, Mapping):
+                continue
+            enriched = {
+                **dict(nested),
+                'target_identity_sha256': target_identity_sha256,
+                'product_identity_match': identity_fields['product_identity_match'],
+                'store_identity_match': identity_fields['store_identity_match'],
+                'source_identity_match': identity_fields['source_identity_match'],
+            }
+            if key == 'unpublished_proof':
+                enriched.update({
+                    'target_bound': True,
+                    'product_matched': identity_fields['product_identity_match'],
+                    'store_matched': identity_fields['store_identity_match'],
+                })
+            attached[key] = enriched
+        return attached
 
     def _editor_page_not_ready_result(
         self,
@@ -15609,7 +16366,20 @@ class DxmLoginFlow:
         store_name: str | None = None,
         claim_mark: str | None = None,
         target_source_urls: list[str] | None = None,
+        target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if target_identity is not None:
+            normalized_target, target_sha256 = self._normalize_frozen_target_identity(
+                target_identity,
+                store_name=store_name,
+                target_source_urls=target_source_urls,
+            )
+            return self._find_draft_box_row_by_frozen_target(
+                page,
+                target_identity=normalized_target,
+                target_identity_sha256=target_sha256,
+                store_name=' '.join(str(store_name or '').split()),
+            )
         payload = {
             'frag': product_query,
             'store': store_name,
@@ -15784,6 +16554,257 @@ class DxmLoginFlow:
                 raise RuntimeError(f'目标商品行不唯一，请提供更精确的商品标题或唯一标识：{product_query}')
             raise RuntimeError(f'未找到目标商品行：{product_query or "首个可操作商品"}')
         return row_info
+
+    def _find_draft_box_row_by_frozen_target(
+        self,
+        page: Page,
+        *,
+        target_identity: dict[str, Any],
+        target_identity_sha256: str,
+        store_name: str,
+    ) -> dict[str, Any]:
+        stable = dict(target_identity['stable_identity'])
+        expected_source_urls = list(target_identity['source_urls'])
+        payload = {
+            'kind': stable['kind'],
+            'value': stable['value'],
+            'storeName': store_name,
+            'sourceUrls': expected_source_urls,
+        }
+        self._trace_workflow_event(
+            'draft_box_row_find:frozen_start',
+            identity_kind=stable['kind'],
+            target_identity_sha256=target_identity_sha256,
+            source_url_count=len(expected_source_urls),
+            human_step='按冻结商品身份定位商品箱行',
+        )
+        try:
+            result = self._evaluate_page_function_with_runtime_timeout(page, r'''({kind, value, storeName, sourceUrls: expectedSourceUrls}) => {
+              const textOf = (el) => String(el?.innerText || el?.textContent || '').replace(/\s+/g, ' ').trim();
+              const visible = (el) => {
+                if (!el || !el.getBoundingClientRect) return false;
+                const rect = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+              };
+              const hostMatches = (host, domain) => host === domain || host.endsWith(`.${domain}`);
+              const isDxmHost = (host) => hostMatches(host, 'dianxiaomi.com');
+              const isSupportedSource = (parsed) => {
+                const host = parsed.hostname.toLowerCase();
+                if (isDxmHost(host)) return false;
+                if (hostMatches(host, '1688.com')) return /^\/offer\/[0-9]+\.html$/i.test(parsed.pathname);
+                if (hostMatches(host, 'yangkeduo.com')) {
+                  return /^\/goods2?\.html$/i.test(parsed.pathname)
+                    && /^[0-9]+$/.test(String(parsed.searchParams.get('goods_id') || ''));
+                }
+                if (hostMatches(host, 'aliexpress.com')) return /^\/item\/[0-9]+\.html$/i.test(parsed.pathname);
+                return false;
+              };
+              const canonicalUrl = (raw) => {
+                try {
+                  const parsed = new URL(String(raw || ''), location.href);
+                  if (!['http:', 'https:'].includes(parsed.protocol) || !isSupportedSource(parsed)) return '';
+                  parsed.hash = '';
+                  return parsed.href;
+                } catch (_) {
+                  return '';
+                }
+              };
+              const targetUrls = Array.from(new Set(
+                (Array.isArray(expectedSourceUrls) ? expectedSourceUrls : []).map(canonicalUrl).filter(Boolean)
+              ));
+              const sourceUrls = (row) => Array.from(new Set(Array.from(row.querySelectorAll('a[href]')).map(anchor => {
+                const sourceCell = anchor.closest('[data-field="source"],[data-column="source"],.source-cell,[class*="source"]');
+                const label = textOf(anchor);
+                if (!sourceCell && !/(来源|源商品|原商品|source)/i.test(label)) return '';
+                return canonicalUrl(anchor.href || anchor.getAttribute('href') || '');
+              }).filter(Boolean)));
+              const productIds = (row) => {
+                const found = [];
+                const add = (raw) => {
+                  const candidate = String(raw || '').trim();
+                  if (/^[A-Za-z0-9_-]{5,128}$/.test(candidate) && !found.includes(candidate)) found.push(candidate);
+                };
+                for (const node of [row, ...Array.from(row.querySelectorAll('[data-product-id],[data-productid]'))]) {
+                  add(node.getAttribute?.('data-product-id'));
+                  add(node.getAttribute?.('data-productid'));
+                }
+                for (const field of Array.from(row.querySelectorAll(
+                  '[data-field="productId"],[data-field="product_id"],[data-field="productid"],'
+                  + '[data-column="productId"],[data-column="product_id"],[data-column="productid"],'
+                  + 'input[name="productId"],input[name="product_id"],input[name="productid"]'
+                ))) {
+                  add(field.value || field.getAttribute?.('value') || field.getAttribute?.('data-value') || textOf(field));
+                }
+                for (const anchor of Array.from(row.querySelectorAll('a[href]'))) {
+                  try {
+                    const parsed = new URL(String(anchor.href || anchor.getAttribute('href') || ''), location.href);
+                    if (!isDxmHost(parsed.hostname.toLowerCase()) || !parsed.pathname.startsWith('/web/smt/')) continue;
+                    const keys = ['productId', 'product_id', 'productid'];
+                    if (parsed.pathname.replace(/\/$/, '') === '/web/smt/edit') keys.push('id');
+                    for (const key of keys) add(parsed.searchParams.get(key));
+                  } catch (_) {}
+                }
+                return found;
+              };
+              const storeEvidence = (row) => {
+                const cells = Array.from(row.querySelectorAll('td,[role="cell"],.vxe-body--column,.ant-table-cell,.el-table__cell'));
+                const explicit = Array.from(row.querySelectorAll('[data-store-name],[data-field="store"],[data-column="store"],.store-cell'));
+                const table = row.closest('table');
+                const headers = table ? Array.from(table.querySelectorAll('thead th,[role="columnheader"],.vxe-header--column')) : [];
+                const index = headers.findIndex(header => /^(店铺账号|店铺|store(?:\s+account)?)$/i.test(textOf(header)));
+                const bound = index >= 0 ? cells[index] : null;
+                for (const candidate of [...new Set([...explicit, ...(bound ? [bound] : [])])]) {
+                  const cell = candidate.matches?.('td,[role="cell"],.vxe-body--column,.ant-table-cell,.el-table__cell')
+                    ? candidate
+                    : candidate.closest?.('td,[role="cell"],.vxe-body--column,.ant-table-cell,.el-table__cell') || candidate;
+                  const cellText = textOf(cell);
+                  const quoted = Array.from(cellText.matchAll(/「([^」]+)」/g)).map(match => match[1]);
+                  const observed = String(candidate.getAttribute?.('data-store-name') || quoted.at(-1) || '').replace(/\s+/g, ' ').trim();
+                  if (!observed || observed !== storeName) continue;
+                  const columnIndex = cells.indexOf(cell);
+                  if (columnIndex < 0 && !candidate.getAttribute?.('data-store-name')) continue;
+                  return {
+                    store_name: observed,
+                    cell_text: cellText.slice(0, 240),
+                    source: 'structured_store_cell',
+                    column_index: Math.max(0, columnIndex),
+                    tag: String(cell.tagName || ''),
+                    class_name: String(cell.className || '').slice(0, 160),
+                  };
+                }
+                return null;
+              };
+              const rows = Array.from(document.querySelectorAll(
+                'tr.vxe-body--row,tbody tr.ant-table-row,tbody tr.el-table__row,tbody tr,[role="row"][data-row-key],[class*="vxe-body--row"]'
+              )).filter(visible).filter(row => {
+                const text = textOf(row);
+                const compact = text.replace(/\s+/g, '');
+                return Boolean(text) && !(/图片标题\/产品ID/.test(compact) && compact.includes('操作'));
+              });
+              const matches = rows.map((row, rowIndex) => {
+                const stores = storeEvidence(row);
+                if (!stores) return null;
+                const ids = productIds(row);
+                const sources = sourceUrls(row);
+                const productMatched = kind === 'product_id' ? ids.includes(value) : sources.includes(canonicalUrl(value));
+                const sourceMatched = targetUrls.length === 0 || sources.some(url => targetUrls.includes(url));
+                if (!productMatched || !sourceMatched) return null;
+                const clickables = [];
+                const seen = new Set();
+                for (const node of Array.from(row.querySelectorAll('a,button,[role="button"],span'))) {
+                  if (!visible(node) || textOf(node).replace(/\s+/g, '') !== '编辑') continue;
+                  const target = node.closest('a,button,[role="button"]') || node;
+                  if (seen.has(target)) continue;
+                  seen.add(target);
+                  const rect = target.getBoundingClientRect();
+                  if (rect.width < 5 || rect.height < 5) continue;
+                  clickables.push({
+                    txt: '编辑',
+                    tag: String(target.tagName || ''),
+                    cls: String(target.className || ''),
+                    href: String(target.href || target.getAttribute?.('href') || ''),
+                    rect: {x: rect.x, y: rect.y, w: rect.width, h: rect.height},
+                  });
+                }
+                return {
+                  rowIndex,
+                  rowText: textOf(row).slice(0, 700),
+                  productIds: ids,
+                  sourceUrls: sources,
+                  storeEvidence: stores,
+                  actions: clickables,
+                };
+              }).filter(Boolean);
+              if (matches.length !== 1) {
+                return {
+                  ok: false,
+                  reason: matches.length > 1 ? 'frozen_target_ambiguous' : 'frozen_target_not_found',
+                  matchCount: matches.length,
+                  matches: matches.slice(0, 5),
+                  rowCount: rows.length,
+                };
+              }
+              if (matches[0].actions.length !== 1) {
+                return {
+                  ok: false,
+                  reason: 'frozen_target_edit_action_not_unique',
+                  matchCount: 1,
+                  editActionCount: matches[0].actions.length,
+                  matches,
+                };
+              }
+              return {ok: true, ...matches[0], matchedBy: kind};
+            }''', payload, timeout=3000)
+        except FrozenTargetIdentityError:
+            raise
+        except Exception as exc:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_ROW_READ_FAILED',
+                '读取冻结商品行失败，已停止打开编辑页。',
+            ) from exc
+        if not isinstance(result, Mapping):
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_ROW_READ_FAILED',
+                '冻结商品行读取结果不可验证，已停止打开编辑页。',
+            )
+        reason = str(result.get('reason') or '')
+        if result.get('ok') is not True:
+            if reason == 'frozen_target_ambiguous':
+                raise FrozenTargetIdentityError(
+                    'FROZEN_TARGET_ROW_AMBIGUOUS',
+                    '商品箱中冻结身份匹配到多行，已停止打开编辑页。',
+                )
+            if reason == 'frozen_target_edit_action_not_unique':
+                raise FrozenTargetIdentityError(
+                    'FROZEN_TARGET_EDIT_ACTION_AMBIGUOUS',
+                    '冻结商品行的编辑入口不唯一，已停止打开编辑页。',
+                )
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_ROW_NOT_FOUND',
+                '商品箱中未找到与冻结身份和店铺完全一致的唯一商品行。',
+            )
+        observed_store = result.get('storeEvidence')
+        if not isinstance(observed_store, Mapping) or (
+            observed_store.get('source') != 'structured_store_cell'
+            or ' '.join(str(observed_store.get('store_name') or '').split()) != store_name
+        ):
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_STORE_READBACK_MISMATCH',
+                '商品箱结构化店铺读回与冻结店铺不一致，已停止打开编辑页。',
+            )
+        observed_ids = [str(value).strip() for value in result.get('productIds') or [] if str(value).strip()]
+        observed_sources = [str(value).strip() for value in result.get('sourceUrls') or [] if str(value).strip()]
+        if stable['kind'] == 'product_id':
+            product_identity_match = stable['value'] in observed_ids
+        else:
+            product_identity_match = self._source_urls_match(observed_sources, [stable['value']])
+        source_identity_match = bool(
+            not expected_source_urls or self._source_urls_match(observed_sources, expected_source_urls)
+        )
+        if not product_identity_match or not source_identity_match:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_ROW_IDENTITY_MISMATCH',
+                '商品箱行读回身份与冻结商品不一致，已停止打开编辑页。',
+            )
+        verified = dict(result)
+        verified.update({
+            'target_identity': dict(target_identity),
+            'target_identity_sha256': target_identity_sha256,
+            'product_identity_match': True,
+            'store_identity_match': True,
+            'store_match': True,
+            'source_identity_match': source_identity_match,
+            'target_unique': True,
+        })
+        self._trace_workflow_event(
+            'draft_box_row_find:frozen_done',
+            matched_by=verified.get('matchedBy'),
+            row_index=verified.get('rowIndex'),
+            target_identity_sha256=target_identity_sha256,
+            human_step='冻结商品身份与商品箱行核对完成',
+        )
+        return verified
 
     def _find_draft_box_row_with_runtime_snapshot(
         self,
@@ -18025,9 +19046,23 @@ class DxmLoginFlow:
             time.sleep(0.25)
             pages = [*pages, *self._context_pages()]
 
-    def _open_editor_from_draft_box(self, page: Page, row_info: dict[str, Any] | None = None) -> Page:
+    def _open_editor_from_draft_box(
+        self,
+        page: Page,
+        row_info: dict[str, Any] | None = None,
+        *,
+        target_identity: dict[str, Any] | None = None,
+        store_name: str | None = None,
+    ) -> Page:
         if self._context is None:
             raise RuntimeError('浏览器上下文不存在，无法从商品箱进入编辑页')
+        if target_identity is not None:
+            return self._open_frozen_target_editor_from_draft_box(
+                page,
+                row_info=row_info,
+                target_identity=target_identity,
+                store_name=store_name,
+            )
 
         edit_selectors = [
             'button:has-text("编辑")',
@@ -18139,6 +19174,69 @@ class DxmLoginFlow:
         if '/web/smt/edit' in page.url:
             return page
         raise RuntimeError('已触发编辑动作，但未能进入真实编辑界面')
+
+    def _open_frozen_target_editor_from_draft_box(
+        self,
+        page: Page,
+        *,
+        row_info: dict[str, Any] | None,
+        target_identity: dict[str, Any],
+        store_name: str | None,
+    ) -> Page:
+        normalized_target, target_sha256 = self._normalize_frozen_target_identity(
+            target_identity,
+            store_name=store_name,
+        )
+        fresh_row = self._find_draft_box_row(
+            page,
+            store_name=store_name,
+            target_source_urls=list(normalized_target['source_urls']),
+            target_identity=normalized_target,
+        )
+        if row_info is not None and row_info.get('target_identity_sha256') not in {None, target_sha256}:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_ROW_DRIFT',
+                '点击编辑前商品箱行身份已变化，已停止打开编辑页。',
+            )
+        actions = [
+            action
+            for action in fresh_row.get('actions') or []
+            if isinstance(action, Mapping) and action.get('txt') == '编辑'
+        ]
+        if len(actions) != 1:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_EDIT_ACTION_AMBIGUOUS',
+                '点击前冻结商品行的编辑入口不唯一，已停止打开编辑页。',
+            )
+        edit_action = dict(actions[0])
+        edit_href = str(edit_action.get('href') or '').strip()
+        if edit_href and not edit_href.casefold().startswith('javascript') and edit_href != '#':
+            edit_url = urljoin(str(page.url or ''), edit_href)
+            if self._is_dxm_editor_url(edit_url):
+                self._goto_with_live_hud(page, edit_url, wait_until='domcontentloaded', timeout=45000)
+                page.wait_for_url('**/web/smt/edit**', timeout=15000)
+                self._reapply_live_hud_if_available(page)
+                return page
+        rect = edit_action.get('rect')
+        if not isinstance(rect, Mapping) or not self._rect_has_clickable_area(dict(rect)):
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_EDIT_ACTION_MISSING',
+                '冻结商品行的编辑入口无法安全点击，已停止打开编辑页。',
+            )
+        pages_before = self._context_pages()
+        self._click_rect_center(page, dict(rect))
+        page.wait_for_timeout(1500)
+        editor_page = self._find_editor_page(
+            [page, *self._new_context_pages(pages_before)],
+            wait_ms=10000,
+        )
+        if editor_page is None:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_EDITOR_NOT_OPENED',
+                '已点击冻结商品的编辑入口，但未进入可验证的编辑页。',
+            )
+        self._reapply_live_hud_if_available(editor_page)
+        return editor_page
 
     def _dispatch_draft_row_edit_event(self, page: Page, row_info: dict[str, Any]) -> dict[str, Any]:
         return page.evaluate(r'''(rowInfo) => {

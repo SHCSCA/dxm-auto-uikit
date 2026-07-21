@@ -217,8 +217,47 @@ export type EditBatchItem = {
   status: string
   target_identity_sha256: string
   item_snapshot: DraftBoxScopeItem
+  outcome?: EditBatchItemOutcome | null
   created_at: string
   updated_at: string
+}
+export type EditBatchItemOutcome = {
+  classification?: 'SUCCEEDED' | 'ISOLATED_PRE_SAVE_NO_WRITE' | 'STOPPED_UNCERTAIN' | string
+  reason_code?: string | null
+  finished_at?: string | null
+  manual_review_required?: boolean
+  message?: string | null
+  evidence_refs?: Array<Record<string, unknown>>
+}
+export type EditBatchExecutionSummary = {
+  state?: 'approved' | 'running' | 'stop_requested' | 'completed' | 'stopped' | string
+  status?: 'approved' | 'running' | 'stop_requested' | 'completed' | 'stopped' | string
+  started_at?: string | null
+  stop_requested_at?: string | null
+  stopped_at?: string | null
+  completed_at?: string | null
+  manual_review_required?: boolean
+  requires_manual_review?: boolean
+  reason_code?: string | null
+  stop_reason_code?: string | null
+  stop_reason?: string | null
+  current_ordinal?: number | null
+  total_count?: number
+  completed_count?: number
+  succeeded_count?: number
+  isolated_count?: number
+  last_error?: string | null
+}
+export type EditBatchProgressSummary = {
+  total: number
+  completed: number
+  succeeded: number
+  isolated: number
+  pending: number
+  running: number
+  stopped: number
+  current_ordinal: number | null
+  percent: number
 }
 export type EditBatchDetail = {
   id: number
@@ -244,6 +283,8 @@ export type EditBatchDetail = {
   }
   created_at: string
   updated_at: string
+  execution?: EditBatchExecutionSummary | null
+  progress?: EditBatchProgressSummary | null
   items: EditBatchItem[]
 }
 export type TemplateCenterField = {

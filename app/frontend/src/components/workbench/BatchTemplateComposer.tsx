@@ -341,18 +341,26 @@ export function BatchTemplateComposer({
       </details>
 
       <div className={issueSections.length ? 'batch-template-issues has-issues' : 'batch-template-issues is-clear'}>
-        <strong>问题分区</strong>
         {issueSections.length ? (
-          <ul>
-            {issueSections.map((issue) => (
-              <li key={issue.section}>
-                <b>{issue.label}</b>
-                <span>{issue.detail}</span>
-              </li>
-            ))}
-          </ul>
+          <>
+            <span className="batch-template-issues__summary">
+              <strong>首个阻断：{firstIssue?.label}</strong>
+              <b>{issueSections.length} 个分区未就绪</b>
+            </span>
+            <details>
+              <summary>查看问题明细</summary>
+              <ul>
+                {issueSections.map((issue) => (
+                  <li key={issue.section}>
+                    <b>{issue.label}</b>
+                    <span>{issue.detail}</span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          </>
         ) : (
-          <span>8 个分区均已有后端确认的就绪候选。</span>
+          <span><strong>全部就绪</strong> · 8 个分区均已有可用模板。</span>
         )}
       </div>
 

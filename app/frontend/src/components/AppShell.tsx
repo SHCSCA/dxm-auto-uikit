@@ -12,7 +12,7 @@ const primaryNavigation: PrimaryNavigationItem[] = [
   { id: 'home', label: '编辑工作台', short: '编', hint: '查看当前状态和唯一下一步' },
   { id: 'template_center', label: '模板中心', short: '模', hint: '管理编辑使用的模板' },
   { id: 'start_save', label: '浏览器现场', short: '览', hint: '查看真实浏览器和当前执行' },
-  { id: 'task_history', label: '批次记录', short: '记', hint: '查看历史任务、结果和异常' },
+  { id: 'task_history', label: '批次记录', short: '记', hint: '查看实时进度、结果和证据' },
   { id: 'settings', label: '系统设置', short: '设', hint: '查看运行环境与系统设置' },
 ]
 
@@ -20,7 +20,7 @@ const sectionLabels: Record<WorkbenchSection, string> = {
   home: '编辑工作台',
   dxm_access: '账号与浏览器',
   acquisition_claim: '待认领入箱',
-  draft_edit_save: '商品箱编辑保存',
+  draft_edit_save: '商品箱批量编辑',
   template_center: '模板中心',
   product_tasks: '当前保存任务',
   current_task: '当前保存任务',

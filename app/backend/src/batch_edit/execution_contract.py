@@ -265,9 +265,12 @@ def derive_next_item_grant(
         if canonical_batch[batch_key] != start[start_key]:
             _reject("START_FROZEN_BINDING_DRIFT", f"{start_key} has drifted")
     current_time = _aware_datetime(now, "now")
-    approval_expiry = _timestamp(start["approval_expires_at"], "approval expires_at")
-    if current_time >= approval_expiry:
-        _reject("APPROVAL_LEASE_EXPIRED", "approval lease has expired")
+    # The five-minute approval lease gates the *start* transition only.  Once
+    # authorize_batch_start has consumed it and the resulting start context is
+    # durably stored, a large strictly-serial batch must not become invalid just
+    # because later items take longer than five minutes to reach.  Every item is
+    # still protected by its own short-lived, one-use grant below.
+    _timestamp(start["approval_expires_at"], "approval expires_at")
 
     items = canonical_batch["items"]
     if not isinstance(items, list) or not items:
@@ -301,10 +304,7 @@ def derive_next_item_grant(
     nonce = _non_empty_text(one_time_nonce, "one-time grant nonce")
     lease_id = _non_empty_text(grant_lease_id, "grant lease id")
     issued_at = current_time.isoformat()
-    expires_at = min(
-        current_time.timestamp() + ITEM_GRANT_TTL_SECONDS,
-        approval_expiry.timestamp(),
-    )
+    expires_at = current_time.timestamp() + ITEM_GRANT_TTL_SECONDS
     expires_text = datetime.fromtimestamp(expires_at, timezone.utc).isoformat()
     mutation_scope_id = build_mutation_scope_id(
         authorization_lease_id=lease_id,
@@ -382,8 +382,11 @@ def validate_and_consume_item_grant(
         _reject("GRANT_FINGERPRINT_INVALID", "item grant fingerprint is invalid")
 
     current_time = _aware_datetime(now, "now")
-    if current_time >= _timestamp(canonical_grant["approval_expires_at"], "approval expires_at"):
-        _reject("APPROVAL_LEASE_EXPIRED", "approval lease has expired")
+    # Approval expiry is checked while creating the persisted start context.
+    # Mutation dispatch is instead bounded by the per-item grant expiry so an
+    # already-started batch can progress without silently extending approval
+    # token validity or forcing unsafe re-approval mid-run.
+    _timestamp(canonical_grant["approval_expires_at"], "approval expires_at")
     if current_time >= _timestamp(canonical_grant["expires_at"], "grant expires_at"):
         _reject("GRANT_EXPIRED", "item grant has expired")
     expected_nonce_hash = _sha256_text(canonical_grant["nonce_hash"], "grant nonce hash")

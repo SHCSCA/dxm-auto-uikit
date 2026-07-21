@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from src.batch_edit.batch_contract import (
@@ -19,6 +20,10 @@ from src.batch_edit.scope_contract import (
     ScopeContractError,
     canonical_sha256,
     normalize_scope_capture,
+)
+from src.batch_edit.execution_contract import (
+    BatchExecutionContractError,
+    authorize_batch_start,
 )
 from src.repository import Repository
 
@@ -102,23 +107,14 @@ class BatchEditCoordinator:
         approved_by: str,
         confirmation: str,
     ) -> dict[str, Any]:
-        try:
-            current_scope, scope_revalidation = revalidate_frozen_scope(
-                batch,
-                capture,
-                runtime_context=runtime_context,
-                expected_browser_session_id=expected_browser_session_id,
-            )
-            approval = issue_batch_approval(
-                batch,
-                current_scope,
-                scope_revalidation,
-                approved_by=approved_by,
-                confirmation=confirmation,
-            )
-        except BatchApprovalContractError as exc:
-            raise BatchEditContractError(exc.reason_code, str(exc)) from exc
-
+        approval = self.prepare_approval(
+            batch,
+            capture,
+            runtime_context=runtime_context,
+            expected_browser_session_id=expected_browser_session_id,
+            approved_by=approved_by,
+            confirmation=confirmation,
+        )
         result = self._repository.approve_edit_batch(int(batch["id"]), approval)
         if not result.applied:
             detail = (
@@ -137,6 +133,116 @@ class BatchEditCoordinator:
             "expiresAt": approval["expires_at"],
             "scopeRevalidation": approval["scope_revalidation"],
         }
+
+    def prepare_approval(
+        self,
+        batch: dict[str, Any],
+        capture: dict[str, Any],
+        *,
+        runtime_context: dict[str, Any],
+        expected_browser_session_id: str,
+        approved_by: str,
+        confirmation: str,
+    ) -> dict[str, Any]:
+        """Create private approval facts without mutating repository state."""
+
+        try:
+            current_scope, scope_revalidation = revalidate_frozen_scope(
+                batch,
+                capture,
+                runtime_context=runtime_context,
+                expected_browser_session_id=expected_browser_session_id,
+            )
+            approval = issue_batch_approval(
+                batch,
+                current_scope,
+                scope_revalidation,
+                approved_by=approved_by,
+                confirmation=confirmation,
+            )
+        except BatchApprovalContractError as exc:
+            raise BatchEditContractError(exc.reason_code, str(exc)) from exc
+        return approval
+
+    def approve_and_start_batch(
+        self,
+        batch: dict[str, Any],
+        capture: dict[str, Any],
+        *,
+        runtime_context: dict[str, Any],
+        expected_browser_session_id: str,
+        authoritative_facts: dict[str, Any],
+        approved_by: str,
+        confirmation: str,
+    ) -> dict[str, Any]:
+        """Atomically consume one approval into a durable running batch."""
+
+        approval = self.prepare_approval(
+            batch,
+            capture,
+            runtime_context=runtime_context,
+            expected_browser_session_id=expected_browser_session_id,
+            approved_by=approved_by,
+            confirmation=confirmation,
+        )
+        contract_keys = {
+            "id",
+            "schema_version",
+            "status",
+            "scope_snapshot_id",
+            "scope_snapshot_digest",
+            "scope_snapshot",
+            "template_id",
+            "template_snapshot_digest",
+            "template_snapshot",
+            "policy_digest",
+            "policy",
+            "created_at",
+            "updated_at",
+            "items",
+        }
+        approved_batch = {key: batch[key] for key in contract_keys}
+        approved_batch["status"] = "approved"
+        now = datetime.now(timezone.utc)
+        try:
+            start_context = authorize_batch_start(
+                approved_batch,
+                approval_token=approval["token"],
+                stored_approval_token_hash=approval["token_hash"],
+                approval_context=approval["context"],
+                now=now,
+                authoritative_facts=authoritative_facts,
+            )
+        except BatchExecutionContractError as exc:
+            raise BatchEditContractError(exc.reason_code, str(exc)) from exc
+        starter = getattr(self._repository, "approve_and_start_edit_batch", None)
+        if not callable(starter):
+            raise BatchEditContractError(
+                "BATCH_START_UNAVAILABLE",
+                "edit batch approval/start persistence is unavailable",
+            )
+        result = starter(
+            int(batch["id"]),
+            approval,
+            start_context,
+            consumed_at=now.isoformat(),
+        )
+        applied = bool(
+            result is True
+            or getattr(result, "applied", False)
+            or (isinstance(result, dict) and (result.get("ok") is True or result.get("applied") is True))
+        )
+        if not applied:
+            reason_code = (
+                result.get("reason_code")
+                if isinstance(result, dict)
+                else getattr(result, "reason_code", None)
+            ) or "BATCH_START_CONFLICT"
+            raise BatchEditContractError(str(reason_code), "edit batch could not enter running state")
+        started = self._repository.get_edit_batch(int(batch["id"]))
+        if not isinstance(started, dict):
+            raise BatchEditContractError("BATCH_START_RESULT_MISSING", "started edit batch could not be read")
+        return started
 
     def approval_capture_max_items(self, batch: dict[str, Any]) -> int:
         try:

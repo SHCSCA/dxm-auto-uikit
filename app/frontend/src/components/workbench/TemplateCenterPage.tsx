@@ -319,7 +319,7 @@ export function TemplateCenterPage({
               <span>
                 <strong>下一步</strong>
                 <b>{nextTemplateStep}</b>
-                <small>发布、批量和无人值守仍保持关闭。</small>
+                <small>执行边界始终为只保存、不发布。</small>
               </span>
             </div>
             <small className="template-center-receipt">{saveState.detail} 选择或修改模板只会影响当前表单，保存为模板后才会进入默认执行路径。</small>
@@ -383,7 +383,7 @@ export function TemplateCenterPage({
           </label>
           <label>
             <span>模板名称</span>
-            <input value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="例如 Dang Kang 立牌类目模板" />
+            <input value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="例如 当前类目编辑模板" />
           </label>
           <button className="button button--secondary" type="button" onClick={applyTemplateChoice} disabled={!templateChoice}>套用到表单</button>
         </div>

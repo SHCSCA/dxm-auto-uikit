@@ -1,16 +1,24 @@
 import { useEffect, useMemo, useState } from 'react'
-import { postJson } from '../../api'
+import { getJson, postJson } from '../../api'
 import type { DraftBoxScopeSnapshot, EditBatchDetail, Template } from '../../types'
 
 type BatchEditPageProps = {
   templates: Template[]
+  initialBatchId: number | null
+  onBatchSelected: (batchId: number | null) => void
   onShowTemplates: () => void
   onShowRecords: () => void
 }
 
 const scopeLimits = [5, 10, 20, 50]
 
-export function BatchEditPage({ templates, onShowTemplates, onShowRecords }: BatchEditPageProps) {
+export function BatchEditPage({
+  templates,
+  initialBatchId,
+  onBatchSelected,
+  onShowTemplates,
+  onShowRecords,
+}: BatchEditPageProps) {
   const batchTemplates = useMemo(
     () => templates.filter((template) => template.template_type === 'edit_batch_bundle' && template.is_enabled),
     [templates],
@@ -19,7 +27,9 @@ export function BatchEditPage({ templates, onShowTemplates, onShowRecords }: Bat
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
   const [scopeSnapshot, setScopeSnapshot] = useState<DraftBoxScopeSnapshot | null>(null)
   const [draftBatch, setDraftBatch] = useState<EditBatchDetail | null>(null)
-  const [busyAction, setBusyAction] = useState<'capture' | 'create' | null>(null)
+  const [approvedBy, setApprovedBy] = useState('')
+  const [saveOnlyConfirmed, setSaveOnlyConfirmed] = useState(false)
+  const [busyAction, setBusyAction] = useState<'load' | 'capture' | 'create' | 'start' | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const selectedTemplate = batchTemplates.find((template) => String(template.id) === selectedTemplateId)
@@ -36,7 +46,28 @@ export function BatchEditPage({ templates, onShowTemplates, onShowRecords }: Bat
     }
   }, [batchTemplates, selectedTemplateId])
 
+  useEffect(() => {
+    if (!initialBatchId || draftBatch?.id === initialBatchId) return
+    let cancelled = false
+    setBusyAction('load')
+    setError(null)
+    void getJson<EditBatchDetail>(`/api/edit-batches/${initialBatchId}`)
+      .then((batch) => {
+        if (!cancelled) setDraftBatch(batch)
+      })
+      .catch((caught) => {
+        if (!cancelled) setError(humanBatchError(caught, '读取批次失败'))
+      })
+      .finally(() => {
+        if (!cancelled) setBusyAction(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [draftBatch?.id, initialBatchId])
+
   async function captureLiveScope() {
+    onBatchSelected(null)
     setBusyAction('capture')
     setError(null)
     try {
@@ -63,6 +94,9 @@ export function BatchEditPage({ templates, onShowTemplates, onShowRecords }: Bat
         template_id: selectedTemplate.id,
       })
       setDraftBatch(created)
+      onBatchSelected(created.id)
+      setApprovedBy('')
+      setSaveOnlyConfirmed(false)
     } catch (caught) {
       setError(humanBatchError(caught, '冻结批次草稿失败'))
     } finally {
@@ -70,16 +104,45 @@ export function BatchEditPage({ templates, onShowTemplates, onShowRecords }: Bat
     }
   }
 
+  if (initialBatchId && !draftBatch && busyAction === 'load') {
+    return (
+      <section className="module-layout batch-edit-page" aria-label="批量编辑商品">
+        <article className="module-card span-3 batch-record-empty" role="status">正在读取批次 #{initialBatchId}…</article>
+      </section>
+    )
+  }
+
+  async function approveAndStartBatch() {
+    if (!draftBatch || draftBatch.status !== 'draft' || !approvedBy.trim() || !saveOnlyConfirmed) return
+    setBusyAction('start')
+    setError(null)
+    try {
+      const started = await postJson<EditBatchDetail>(`/api/edit-batches/${draftBatch.id}/approve-and-start`, {
+        approved_by: approvedBy.trim(),
+        confirmation: 'CONFIRM_DXM_BATCH_SAVE_ONLY',
+      })
+      setDraftBatch(started)
+    } catch (caught) {
+      setError(humanBatchError(caught, '批准并开始批次失败'))
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
   if (draftBatch) {
+    const isDraft = draftBatch.status === 'draft'
+    const progress = draftBatch.progress
     return (
       <section className="module-layout batch-edit-page" aria-label="批量编辑商品">
         <article className="module-card span-3 batch-draft-receipt">
           <div className="batch-boundary-line">
-            <span className="batch-state-dot is-frozen" aria-hidden="true" />
+            <span className={`batch-state-dot ${isDraft ? 'is-frozen' : 'is-running'}`} aria-hidden="true" />
             <div>
-              <span>不可变批次草稿 #{draftBatch.id}</span>
-              <h2>批次草稿已冻结，批准与执行尚未开放</h2>
-              <p>商品顺序、店铺、模板版本与只保存策略已写入草稿；当前没有批准或执行入口，也没有产生保存结果。</p>
+              <span>不可变批次 #{draftBatch.id}</span>
+              <h2>{isDraft ? '范围已冻结，等待一次批准' : humanBatchStatus(draftBatch.status)}</h2>
+              <p>{isDraft
+                ? '商品顺序、店铺与模板版本已经固定。批准后严格串行处理，每件只保存、不发布。'
+                : `批次已交给后端执行；${progress ? `当前完成 ${progress.completed}/${progress.total} 件。` : '进度会持续写入批次记录。'}`}</p>
             </div>
           </div>
           <dl className="batch-fact-grid" aria-label="已冻结批次事实">
@@ -96,9 +159,51 @@ export function BatchEditPage({ templates, onShowTemplates, onShowRecords }: Bat
               <span><strong>策略摘要</strong><code>{draftBatch.policy_digest}</code></span>
             </div>
           </details>
-          <button className="button button--primary batch-primary-action" type="button" onClick={onShowRecords}>
-            查看批次记录
-          </button>
+          {isDraft ? (
+            <div className="batch-approval-card" aria-label="整批一次批准">
+              <div className="batch-approval-card__intro">
+                <strong>批准并开始</strong>
+                <span>这次批准只适用于上方已冻结范围；身份或现场发生变化时会停止。</span>
+              </div>
+              <label htmlFor="batch-approved-by">
+                <span>批准人</span>
+                <input
+                  id="batch-approved-by"
+                  value={approvedBy}
+                  onChange={(event) => setApprovedBy(event.target.value)}
+                  placeholder="填写本次批准人"
+                  autoComplete="name"
+                  maxLength={200}
+                  disabled={busyAction !== null}
+                />
+              </label>
+              <label className="batch-save-only-confirmation">
+                <input
+                  type="checkbox"
+                  checked={saveOnlyConfirmed}
+                  onChange={(event) => setSaveOnlyConfirmed(event.target.checked)}
+                  disabled={busyAction !== null}
+                />
+                <span>
+                  <strong>我确认只保存、不发布</strong>
+                  <small>逐件串行；结果不确定时停止，且不自动重试。</small>
+                </span>
+              </label>
+              {error && <div className="batch-inline-error" role="alert">{error}</div>}
+              <button
+                className="button button--primary batch-primary-action"
+                type="button"
+                onClick={() => { void approveAndStartBatch() }}
+                disabled={busyAction !== null || !approvedBy.trim() || !saveOnlyConfirmed}
+              >
+                {busyAction === 'start' ? '正在批准并开始…' : '批准并开始'}
+              </button>
+            </div>
+          ) : (
+            <button className="button button--primary batch-primary-action" type="button" onClick={onShowRecords}>
+              查看实时批次记录
+            </button>
+          )}
         </article>
       </section>
     )
@@ -296,5 +401,13 @@ function formatDateTime(value: string) {
 }
 
 function humanBatchStatus(status: string) {
-  return status === 'draft' ? '草稿 · 未批准' : status
+  const labels: Record<string, string> = {
+    draft: '草稿 · 待批准',
+    approved: '已批准 · 等待开始',
+    running: '正在逐件保存',
+    stop_requested: '正在安全停止',
+    completed: '全部处理完成',
+    stopped: '已停止',
+  }
+  return labels[status] ?? '状态待确认'
 }

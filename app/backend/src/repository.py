@@ -2,12 +2,28 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
 from src.core.config import SCREENSHOT_DIR
-from src.db import connection, dumps, loads
+from src.db import connection, dumps, loads, recover_interrupted_edit_batches as recover_edit_batches_in_db
+from src.batch_edit.execution_state import (
+    ITEM_CONTINUE_TERMINAL_STATUSES,
+    EditBatchExecutionPersistenceError,
+    EditBatchExecutionTransitionResult,
+    build_public_execution,
+    build_public_item_outcome,
+    build_public_progress,
+    normalize_action_results_for_storage,
+    normalize_approval_for_storage,
+    normalize_execution_evidence_for_storage,
+    normalize_item_grant_consumption_for_storage,
+    normalize_item_grant_for_storage,
+    normalize_item_outcome_for_storage,
+    normalize_start_context_for_storage,
+)
 from src.services.evidence_ref import validate_evidence_ref
 from src.state_machine.two_stage import (
     TwoStageContractError,
@@ -248,11 +264,55 @@ class Repository:
                 "SELECT * FROM edit_batch_items WHERE batch_id=? ORDER BY ordinal ASC",
                 (batch_id,),
             ).fetchall()
-            return self._decode_edit_batch(row, items)
+            return self._decode_edit_batch(row, items, include_execution=True)
+
+    def get_edit_batch_private(self, batch_id: int):
+        """Return frozen batch facts and hashed authorization state for the executor only."""
+        with connection() as conn:
+            row = conn.execute("SELECT * FROM edit_batches WHERE id=?", (batch_id,)).fetchone()
+            if not row:
+                return None
+            items = conn.execute(
+                "SELECT * FROM edit_batch_items WHERE batch_id=? ORDER BY ordinal ASC",
+                (batch_id,),
+            ).fetchall()
+            batch = self._decode_edit_batch(row, items, include_execution=False)
+            batch["_private"] = {
+                "approval_token_hash": row.get("approval_token_hash"),
+                "approval_lease_id": row.get("approval_lease_id"),
+                "approval_context": loads(row.get("approval_context_json"), None),
+                "approval_token_consumed_at": row.get("approval_token_consumed_at"),
+                "start_context": loads(row.get("start_context_json"), None),
+                "execution_detail": row.get("execution_detail"),
+                "stop_request_context": loads(row.get("stop_request_context_json"), None),
+                "item_authorizations": [
+                    {
+                        "item_id": int(item["id"]),
+                        "ordinal": int(item["ordinal"]),
+                        "grant_lease_id": item.get("grant_lease_id"),
+                        "grant_fingerprint": item.get("grant_fingerprint"),
+                        "grant_nonce_hash": item.get("grant_nonce_hash"),
+                        "mutation_scope_id": item.get("mutation_scope_id"),
+                        "grant": loads(item.get("grant_context_json"), None),
+                        "granted_at": item.get("granted_at"),
+                        "grant_expires_at": item.get("grant_expires_at"),
+                        "grant_consumed_at": item.get("grant_consumed_at"),
+                        "outcome_evidence": loads(item.get("outcome_evidence_json"), None),
+                        "outcome_decision": loads(item.get("outcome_decision_json"), None),
+                        "action_results": loads(item.get("action_results_json"), None),
+                    }
+                    for item in items
+                ],
+            }
+            return batch
 
     def approve_edit_batch(self, batch_id: int, approval: dict[str, Any]) -> BatchApprovalResult:
         now = now_iso()
         reason_code = "BATCH_NOT_DRAFT"
+        try:
+            stored_approval = normalize_approval_for_storage(approval)
+        except EditBatchExecutionPersistenceError as exc:
+            return BatchApprovalResult(False, exc.reason_code, None)
         with connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -272,9 +332,9 @@ class Repository:
                  WHERE id=? AND status='draft'
                 """,
                 (
-                    approval["token_hash"],
-                    approval["lease_id"],
-                    dumps(approval["context"]),
+                    stored_approval["token_hash"],
+                    stored_approval["lease_id"],
+                    dumps(stored_approval["context"]),
                     now,
                     batch_id,
                 ),
@@ -282,6 +342,707 @@ class Repository:
             if cursor.rowcount != 1:
                 return BatchApprovalResult(False, reason_code, None)
         return BatchApprovalResult(True, "OK", self.get_edit_batch(batch_id))
+
+    def approve_and_start_edit_batch(
+        self,
+        batch_id: int,
+        approval: dict[str, Any],
+        start_context: dict[str, Any],
+        *,
+        consumed_at: str | None = None,
+    ) -> EditBatchExecutionTransitionResult:
+        """Atomically persist approval and consume it while moving draft -> running."""
+        try:
+            transition_at = self._edit_batch_timestamp(consumed_at)
+        except EditBatchExecutionPersistenceError as exc:
+            return self._edit_batch_execution_failure(exc.reason_code)
+        try:
+            with connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute("SELECT * FROM edit_batches WHERE id=?", (batch_id,)).fetchone()
+                if not row:
+                    return self._edit_batch_execution_failure("BATCH_NOT_FOUND")
+                if row["status"] != "draft":
+                    return self._edit_batch_execution_failure("BATCH_NOT_DRAFT")
+                if self._other_active_edit_batch_exists(conn, batch_id):
+                    return self._edit_batch_execution_failure("ANOTHER_EDIT_BATCH_ACTIVE")
+                items = self._edit_batch_item_rows(conn, batch_id)
+                if not items or any(item["status"] != "pending" for item in items):
+                    return self._edit_batch_execution_failure("BATCH_ITEMS_NOT_STARTABLE")
+
+                stored_approval = normalize_approval_for_storage(approval)
+                stored_start = normalize_start_context_for_storage(
+                    start_context,
+                    batch_row=row,
+                    approval_context=stored_approval["context"],
+                )
+                cursor = conn.execute(
+                    """
+                    UPDATE edit_batches
+                       SET status='running',
+                           approval_token_hash=?,
+                           approval_lease_id=?,
+                           approval_context_json=?,
+                           approval_token_consumed_at=?,
+                           start_context_json=?,
+                           started_at=?,
+                           execution_reason_code='BATCH_STARTED',
+                           manual_review_required=0,
+                           updated_at=?
+                     WHERE id=? AND status='draft'
+                    """,
+                    (
+                        stored_approval["token_hash"],
+                        stored_approval["lease_id"],
+                        dumps(stored_approval["context"]),
+                        transition_at,
+                        dumps(stored_start),
+                        transition_at,
+                        transition_at,
+                        batch_id,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    return self._edit_batch_execution_failure("BATCH_START_CAS_CONFLICT")
+        except EditBatchExecutionPersistenceError as exc:
+            return self._edit_batch_execution_failure(exc.reason_code)
+        except sqlite3.IntegrityError:
+            return self._edit_batch_execution_failure("ANOTHER_EDIT_BATCH_ACTIVE")
+        return self._edit_batch_execution_success(batch_id)
+
+    def start_approved_edit_batch(
+        self,
+        batch_id: int,
+        start_context: dict[str, Any],
+        *,
+        consumed_at: str | None = None,
+    ) -> EditBatchExecutionTransitionResult:
+        """Consume an already-issued approval using an approved -> running CAS."""
+        try:
+            transition_at = self._edit_batch_timestamp(consumed_at)
+        except EditBatchExecutionPersistenceError as exc:
+            return self._edit_batch_execution_failure(exc.reason_code)
+        try:
+            with connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute("SELECT * FROM edit_batches WHERE id=?", (batch_id,)).fetchone()
+                if not row:
+                    return self._edit_batch_execution_failure("BATCH_NOT_FOUND")
+                if row["status"] != "approved":
+                    return self._edit_batch_execution_failure("BATCH_NOT_APPROVED")
+                if row.get("approval_token_consumed_at"):
+                    return self._edit_batch_execution_failure("APPROVAL_TOKEN_ALREADY_CONSUMED")
+                if self._other_active_edit_batch_exists(conn, batch_id):
+                    return self._edit_batch_execution_failure("ANOTHER_EDIT_BATCH_ACTIVE")
+                items = self._edit_batch_item_rows(conn, batch_id)
+                if not items or any(item["status"] != "pending" for item in items):
+                    return self._edit_batch_execution_failure("BATCH_ITEMS_NOT_STARTABLE")
+
+                stored_approval = normalize_approval_for_storage(
+                    {
+                        "token_hash": row.get("approval_token_hash"),
+                        "lease_id": row.get("approval_lease_id"),
+                        "context": loads(row.get("approval_context_json"), None),
+                    }
+                )
+                stored_start = normalize_start_context_for_storage(
+                    start_context,
+                    batch_row=row,
+                    approval_context=stored_approval["context"],
+                )
+                cursor = conn.execute(
+                    """
+                    UPDATE edit_batches
+                       SET status='running',
+                           approval_token_consumed_at=?,
+                           start_context_json=?,
+                           started_at=?,
+                           execution_reason_code='BATCH_STARTED',
+                           manual_review_required=0,
+                           updated_at=?
+                     WHERE id=?
+                       AND status='approved'
+                       AND approval_token_consumed_at IS NULL
+                       AND approval_lease_id=?
+                       AND approval_token_hash=?
+                    """,
+                    (
+                        transition_at,
+                        dumps(stored_start),
+                        transition_at,
+                        transition_at,
+                        batch_id,
+                        stored_approval["lease_id"],
+                        stored_approval["token_hash"],
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    return self._edit_batch_execution_failure("BATCH_START_CAS_CONFLICT")
+        except EditBatchExecutionPersistenceError as exc:
+            return self._edit_batch_execution_failure(exc.reason_code)
+        except sqlite3.IntegrityError:
+            return self._edit_batch_execution_failure("ANOTHER_EDIT_BATCH_ACTIVE")
+        return self._edit_batch_execution_success(batch_id)
+
+    def issue_edit_batch_item_grant(
+        self,
+        batch_id: int,
+        item_id: int,
+        grant: dict[str, Any],
+    ) -> EditBatchExecutionTransitionResult:
+        """Persist one hashed grant and reserve the next item as the sole running item."""
+        try:
+            with connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                batch = conn.execute("SELECT * FROM edit_batches WHERE id=?", (batch_id,)).fetchone()
+                if not batch:
+                    return self._edit_batch_execution_failure("BATCH_NOT_FOUND")
+                if batch["status"] != "running":
+                    return self._edit_batch_execution_failure("BATCH_NOT_RUNNING")
+                start_context = loads(batch.get("start_context_json"), None)
+                if not isinstance(start_context, dict):
+                    return self._edit_batch_execution_failure("BATCH_START_CONTEXT_MISSING")
+                items = self._edit_batch_item_rows(conn, batch_id)
+                item = next((row for row in items if int(row["id"]) == item_id), None)
+                if not item:
+                    return self._edit_batch_execution_failure("BATCH_ITEM_NOT_FOUND")
+
+                normalized_grant = normalize_item_grant_for_storage(
+                    grant,
+                    batch_row=batch,
+                    item_row=item,
+                    start_context=start_context,
+                )
+                existing_grant = loads(item.get("grant_context_json"), None)
+                if item["status"] == "running":
+                    if existing_grant == normalized_grant:
+                        return self._edit_batch_execution_success(
+                            batch_id,
+                            item_id=item_id,
+                            applied=True,
+                            idempotent=True,
+                            reason_code="ITEM_GRANT_ALREADY_ISSUED",
+                        )
+                    return self._edit_batch_execution_failure("BATCH_ITEM_ALREADY_RUNNING")
+                if item["status"] != "pending":
+                    return self._edit_batch_execution_failure("BATCH_ITEM_NOT_PENDING")
+                if any(row["status"] == "running" for row in items):
+                    return self._edit_batch_execution_failure("ANOTHER_BATCH_ITEM_RUNNING")
+                first_pending = next((row for row in items if row["status"] == "pending"), None)
+                if not first_pending or int(first_pending["id"]) != item_id:
+                    return self._edit_batch_execution_failure("BATCH_ITEM_NOT_NEXT")
+                prior_items = [row for row in items if int(row["ordinal"]) < int(item["ordinal"])]
+                if any(row["status"] not in ITEM_CONTINUE_TERMINAL_STATUSES for row in prior_items):
+                    return self._edit_batch_execution_failure("BATCH_PRIOR_ITEM_NOT_SAFE")
+
+                cursor = conn.execute(
+                    """
+                    UPDATE edit_batch_items
+                       SET status='running',
+                           grant_lease_id=?,
+                           grant_fingerprint=?,
+                           grant_nonce_hash=?,
+                           mutation_scope_id=?,
+                           grant_context_json=?,
+                           granted_at=?,
+                           grant_expires_at=?,
+                           updated_at=?
+                     WHERE id=? AND batch_id=? AND status='pending'
+                    """,
+                    (
+                        normalized_grant["grant_lease_id"],
+                        normalized_grant["fingerprint"],
+                        normalized_grant["nonce_hash"],
+                        normalized_grant["mutation_scope_id"],
+                        dumps(normalized_grant),
+                        normalized_grant["issued_at"],
+                        normalized_grant["expires_at"],
+                        now_iso(),
+                        item_id,
+                        batch_id,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    return self._edit_batch_execution_failure("ITEM_GRANT_CAS_CONFLICT")
+        except EditBatchExecutionPersistenceError as exc:
+            return self._edit_batch_execution_failure(exc.reason_code)
+        except sqlite3.IntegrityError:
+            return self._edit_batch_execution_failure("ITEM_GRANT_UNIQUENESS_CONFLICT")
+        return self._edit_batch_execution_success(batch_id, item_id=item_id)
+
+    def consume_edit_batch_item_grant(
+        self,
+        batch_id: int,
+        item_id: int,
+        consumption: dict[str, Any],
+    ) -> EditBatchExecutionTransitionResult:
+        """CAS-consume the persisted nonce hash immediately before the save mutation."""
+        now = now_iso()
+        try:
+            with connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                batch = conn.execute("SELECT * FROM edit_batches WHERE id=?", (batch_id,)).fetchone()
+                if not batch:
+                    return self._edit_batch_execution_failure("BATCH_NOT_FOUND")
+                if batch["status"] != "running":
+                    return self._edit_batch_execution_failure("BATCH_NOT_RUNNING")
+                item = conn.execute(
+                    "SELECT * FROM edit_batch_items WHERE id=? AND batch_id=?",
+                    (item_id, batch_id),
+                ).fetchone()
+                if not item:
+                    return self._edit_batch_execution_failure("BATCH_ITEM_NOT_FOUND")
+                if item["status"] != "running":
+                    return self._edit_batch_execution_failure("BATCH_ITEM_NOT_RUNNING")
+                if item.get("grant_consumed_at"):
+                    return self._edit_batch_execution_failure("ITEM_GRANT_ALREADY_CONSUMED")
+                stored_grant = loads(item.get("grant_context_json"), None)
+                if not isinstance(stored_grant, dict):
+                    return self._edit_batch_execution_failure("ITEM_GRANT_MISSING")
+                normalized = normalize_item_grant_consumption_for_storage(
+                    consumption,
+                    batch_row=batch,
+                    item_row=item,
+                    stored_grant=stored_grant,
+                )
+                cursor = conn.execute(
+                    """
+                    UPDATE edit_batch_items
+                       SET grant_consumed_at=?, updated_at=?
+                     WHERE id=? AND batch_id=? AND status='running'
+                       AND grant_consumed_at IS NULL
+                       AND grant_fingerprint=?
+                       AND grant_nonce_hash=?
+                    """,
+                    (
+                        now,
+                        now,
+                        item_id,
+                        batch_id,
+                        normalized["grant_fingerprint"],
+                        normalized["consumed_nonce_hash"],
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    return self._edit_batch_execution_failure("ITEM_GRANT_CONSUME_CAS_CONFLICT")
+        except EditBatchExecutionPersistenceError as exc:
+            return self._edit_batch_execution_failure(exc.reason_code)
+        return self._edit_batch_execution_success(batch_id, item_id=item_id)
+
+    def consumed_edit_batch_nonce_hashes(self, batch_id: int) -> set[str]:
+        with connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT grant_nonce_hash
+                  FROM edit_batch_items
+                 WHERE batch_id=?
+                   AND grant_consumed_at IS NOT NULL
+                   AND grant_nonce_hash IS NOT NULL
+                """,
+                (batch_id,),
+            ).fetchall()
+            return {str(row["grant_nonce_hash"]) for row in rows}
+
+    def complete_edit_batch_item(
+        self,
+        batch_id: int,
+        item_id: int,
+        decision: dict[str, Any],
+        outcome: dict[str, Any],
+        action_results: list[dict[str, Any]],
+    ) -> EditBatchExecutionTransitionResult:
+        """Persist a terminal item result; uncertain evidence stops the whole batch."""
+        finished_at = now_iso()
+        try:
+            with connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                batch = conn.execute("SELECT * FROM edit_batches WHERE id=?", (batch_id,)).fetchone()
+                if not batch:
+                    return self._edit_batch_execution_failure("BATCH_NOT_FOUND")
+                item = conn.execute(
+                    "SELECT * FROM edit_batch_items WHERE id=? AND batch_id=?",
+                    (item_id, batch_id),
+                ).fetchone()
+                if not item:
+                    return self._edit_batch_execution_failure("BATCH_ITEM_NOT_FOUND")
+
+                normalized_decision, normalized_outcome = normalize_item_outcome_for_storage(
+                    decision,
+                    outcome,
+                    batch_id=batch_id,
+                    item_id=item_id,
+                    ordinal=int(item["ordinal"]),
+                )
+                normalized_actions = normalize_action_results_for_storage(action_results)
+                target_status = normalized_decision["item_transition"]["to_status"]
+                if item["status"] == target_status:
+                    if (
+                        loads(item.get("outcome_decision_json"), None) == normalized_decision
+                        and loads(item.get("outcome_evidence_json"), None) == normalized_outcome
+                        and loads(item.get("action_results_json"), None) == normalized_actions
+                    ):
+                        return self._edit_batch_execution_success(
+                            batch_id,
+                            item_id=item_id,
+                            applied=True,
+                            idempotent=True,
+                            reason_code="ITEM_OUTCOME_ALREADY_RECORDED",
+                        )
+                    return self._edit_batch_execution_failure("ITEM_OUTCOME_CONFLICT")
+                if batch["status"] not in {"running", "stop_requested"}:
+                    return self._edit_batch_execution_failure("BATCH_NOT_ACTIVE")
+                if item["status"] != "running":
+                    return self._edit_batch_execution_failure("BATCH_ITEM_NOT_RUNNING")
+
+                classification = normalized_decision["classification"]
+                if classification == "SUCCEEDED" and not item.get("grant_consumed_at"):
+                    return self._edit_batch_execution_failure("ITEM_GRANT_NOT_CONSUMED")
+                if classification == "ISOLATED_PRE_SAVE_NO_WRITE" and item.get("grant_consumed_at"):
+                    return self._edit_batch_execution_failure("ISOLATED_ITEM_GRANT_WAS_CONSUMED")
+                manual_review = classification == "STOPPED_UNCERTAIN"
+                cursor = conn.execute(
+                    """
+                    UPDATE edit_batch_items
+                       SET status=?,
+                           outcome_classification=?,
+                           outcome_reason_code=?,
+                           outcome_evidence_json=?,
+                           outcome_decision_json=?,
+                           action_results_json=?,
+                           finished_at=?,
+                           manual_review_required=?,
+                           updated_at=?
+                     WHERE id=? AND batch_id=? AND status='running'
+                    """,
+                    (
+                        target_status,
+                        classification,
+                        normalized_decision["reason_code"],
+                        dumps(normalized_outcome),
+                        dumps(normalized_decision),
+                        dumps(normalized_actions),
+                        finished_at,
+                        int(manual_review),
+                        finished_at,
+                        item_id,
+                        batch_id,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    return self._edit_batch_execution_failure("ITEM_OUTCOME_CAS_CONFLICT")
+
+                if manual_review:
+                    conn.execute(
+                        """
+                        UPDATE edit_batches
+                           SET status='stopped', stopped_at=?, execution_reason_code=?,
+                               manual_review_required=1, updated_at=?
+                         WHERE id=? AND status IN ('running', 'stop_requested')
+                        """,
+                        (
+                            finished_at,
+                            normalized_decision["reason_code"],
+                            finished_at,
+                            batch_id,
+                        ),
+                    )
+                elif batch["status"] == "stop_requested":
+                    conn.execute(
+                        """
+                        UPDATE edit_batches
+                           SET status='stopped', stopped_at=?,
+                               execution_reason_code='STOP_REQUESTED_SAFE_ITEM_BOUNDARY',
+                               updated_at=?
+                         WHERE id=? AND status='stop_requested'
+                        """,
+                        (finished_at, finished_at, batch_id),
+                    )
+        except EditBatchExecutionPersistenceError as exc:
+            return self._edit_batch_execution_failure(exc.reason_code)
+        return self._edit_batch_execution_success(batch_id, item_id=item_id)
+
+    def request_stop_edit_batch(
+        self,
+        batch_id: int,
+        *,
+        requested_by: str,
+        reason: str | None = None,
+    ) -> EditBatchExecutionTransitionResult:
+        requested_at = now_iso()
+        operator = " ".join(str(requested_by or "").split())
+        detail = " ".join(str(reason or "").split()) or None
+        if not operator or len(operator) > 200 or (detail is not None and len(detail) > 500):
+            return self._edit_batch_execution_failure("STOP_REQUEST_INVALID")
+        request_context = {
+            "schema_version": "dxm_edit_batch_stop_request.v1",
+            "requested_by": operator,
+            "reason": detail,
+            "requested_at": requested_at,
+        }
+        with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT status FROM edit_batches WHERE id=?", (batch_id,)).fetchone()
+            if not row:
+                return self._edit_batch_execution_failure("BATCH_NOT_FOUND")
+            if row["status"] == "stop_requested":
+                return self._edit_batch_execution_success(
+                    batch_id,
+                    applied=True,
+                    idempotent=True,
+                    reason_code="STOP_ALREADY_REQUESTED",
+                )
+            if row["status"] != "running":
+                return self._edit_batch_execution_failure("BATCH_NOT_RUNNING")
+            cursor = conn.execute(
+                """
+                UPDATE edit_batches
+                   SET status='stop_requested', stop_requested_at=?,
+                       execution_reason_code='OPERATOR_STOP_REQUESTED',
+                       execution_detail=?, stop_request_context_json=?, updated_at=?
+                 WHERE id=? AND status='running'
+                """,
+                (requested_at, detail, dumps(request_context), requested_at, batch_id),
+            )
+            if cursor.rowcount != 1:
+                return self._edit_batch_execution_failure("STOP_REQUEST_CAS_CONFLICT")
+        return self._edit_batch_execution_success(batch_id)
+
+    def stop_edit_batch(
+        self,
+        batch_id: int,
+        reason_code: str = "STOP_REQUESTED",
+        reason: str | None = None,
+        requires_manual_review: bool = True,
+        *,
+        evidence: dict[str, Any] | None = None,
+        action_results: list[dict[str, Any]] | None = None,
+    ) -> EditBatchExecutionTransitionResult:
+        """Finalize stop_requested -> stopped; a live item becomes manual-review only."""
+        stopped_at = now_iso()
+        try:
+            canonical_reason = self._edit_batch_reason_code(reason_code)
+        except EditBatchExecutionPersistenceError as exc:
+            return self._edit_batch_execution_failure(exc.reason_code)
+        detail = " ".join(str(reason or "").split()) or None
+        if detail is not None and len(detail) > 1000:
+            return self._edit_batch_execution_failure("STOP_REASON_DETAIL_INVALID")
+        with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            batch = conn.execute("SELECT * FROM edit_batches WHERE id=?", (batch_id,)).fetchone()
+            if not batch:
+                return self._edit_batch_execution_failure("BATCH_NOT_FOUND")
+            if batch["status"] == "stopped":
+                return self._edit_batch_execution_success(
+                    batch_id,
+                    applied=True,
+                    idempotent=True,
+                    reason_code="BATCH_ALREADY_STOPPED",
+                )
+            if batch["status"] not in {"running", "stop_requested"}:
+                return self._edit_batch_execution_failure("BATCH_NOT_ACTIVE")
+            running_items = conn.execute(
+                "SELECT * FROM edit_batch_items WHERE batch_id=? AND status='running'",
+                (batch_id,),
+            ).fetchall()
+            if len(running_items) > 1:
+                return self._edit_batch_execution_failure("MULTIPLE_BATCH_ITEMS_RUNNING")
+            manual_review = bool(requires_manual_review or running_items)
+            if running_items:
+                item = running_items[0]
+                safe_evidence = evidence or {
+                    "schema_version": "dxm_edit_batch_stop_evidence.v1",
+                    "reason_code": canonical_reason,
+                    "detail": detail,
+                    "stopped_at": stopped_at,
+                    "retry_allowed": False,
+                }
+                safe_actions = action_results or []
+                try:
+                    canonical_evidence = normalize_execution_evidence_for_storage(safe_evidence)
+                    canonical_actions = normalize_action_results_for_storage(safe_actions)
+                except EditBatchExecutionPersistenceError:
+                    return self._edit_batch_execution_failure("STOP_EVIDENCE_INVALID")
+                conn.execute(
+                    """
+                    UPDATE edit_batch_items
+                       SET status='stopped_uncertain',
+                           outcome_classification='STOPPED_UNCERTAIN',
+                           outcome_reason_code=?,
+                           outcome_evidence_json=?,
+                           action_results_json=?,
+                           finished_at=?,
+                           manual_review_required=1,
+                           updated_at=?
+                     WHERE id=? AND batch_id=? AND status='running'
+                    """,
+                    (
+                        canonical_reason,
+                        dumps(canonical_evidence),
+                        dumps(canonical_actions),
+                        stopped_at,
+                        stopped_at,
+                        item["id"],
+                        batch_id,
+                    ),
+                )
+            cursor = conn.execute(
+                """
+                UPDATE edit_batches
+                   SET status='stopped', stopped_at=?, execution_reason_code=?,
+                       execution_detail=?, manual_review_required=?, updated_at=?
+                 WHERE id=? AND status IN ('running', 'stop_requested')
+                """,
+                (
+                    stopped_at,
+                    canonical_reason,
+                    detail,
+                    int(manual_review),
+                    stopped_at,
+                    batch_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                return self._edit_batch_execution_failure("STOP_CAS_CONFLICT")
+        return self._edit_batch_execution_success(batch_id)
+
+    def complete_edit_batch(self, batch_id: int) -> EditBatchExecutionTransitionResult:
+        completed_at = now_iso()
+        with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            batch = conn.execute("SELECT status FROM edit_batches WHERE id=?", (batch_id,)).fetchone()
+            if not batch:
+                return self._edit_batch_execution_failure("BATCH_NOT_FOUND")
+            if batch["status"] == "completed":
+                return self._edit_batch_execution_success(
+                    batch_id,
+                    applied=True,
+                    idempotent=True,
+                    reason_code="BATCH_ALREADY_COMPLETED",
+                )
+            if batch["status"] != "running":
+                return self._edit_batch_execution_failure("BATCH_NOT_RUNNING")
+            items = self._edit_batch_item_rows(conn, batch_id)
+            if not items:
+                return self._edit_batch_execution_failure("BATCH_HAS_NO_ITEMS")
+            if any(item["status"] not in ITEM_CONTINUE_TERMINAL_STATUSES for item in items):
+                return self._edit_batch_execution_failure("BATCH_ITEMS_NOT_COMPLETE")
+            cursor = conn.execute(
+                """
+                UPDATE edit_batches
+                   SET status='completed', completed_at=?,
+                       execution_reason_code='ALL_ITEMS_COMPLETED',
+                       manual_review_required=0, updated_at=?
+                 WHERE id=? AND status='running'
+                """,
+                (completed_at, completed_at, batch_id),
+            )
+            if cursor.rowcount != 1:
+                return self._edit_batch_execution_failure("BATCH_COMPLETE_CAS_CONFLICT")
+        return self._edit_batch_execution_success(batch_id)
+
+    def recover_interrupted_edit_batches(self) -> dict[str, Any]:
+        with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            batch_ids = recover_edit_batches_in_db(conn)
+        return {
+            "applied": bool(batch_ids),
+            "reason_code": "INTERRUPTED_BATCHES_STOPPED" if batch_ids else "NO_INTERRUPTED_BATCHES",
+            "recovered_count": len(batch_ids),
+            "batch_ids": batch_ids,
+            "manual_review_required": bool(batch_ids),
+            "auto_resumed": False,
+        }
+
+    @staticmethod
+    def _edit_batch_execution_failure(reason_code: str) -> EditBatchExecutionTransitionResult:
+        return EditBatchExecutionTransitionResult(
+            applied=False,
+            idempotent=False,
+            reason_code=reason_code,
+            batch=None,
+            item=None,
+        )
+
+    def _edit_batch_execution_success(
+        self,
+        batch_id: int,
+        *,
+        item_id: int | None = None,
+        applied: bool = True,
+        idempotent: bool = False,
+        reason_code: str = "OK",
+    ) -> EditBatchExecutionTransitionResult:
+        batch = self.get_edit_batch(batch_id)
+        item = None
+        if batch and item_id is not None:
+            item = next(
+                (value for value in batch.get("items", []) if int(value.get("id", 0)) == item_id),
+                None,
+            )
+        return EditBatchExecutionTransitionResult(
+            applied=applied,
+            idempotent=idempotent,
+            reason_code=reason_code,
+            batch=batch,
+            item=item,
+        )
+
+    @staticmethod
+    def _other_active_edit_batch_exists(conn: Any, batch_id: int) -> bool:
+        row = conn.execute(
+            """
+            SELECT id
+              FROM edit_batches
+             WHERE status IN ('running', 'stop_requested') AND id<>?
+             LIMIT 1
+            """,
+            (batch_id,),
+        ).fetchone()
+        return row is not None
+
+    @staticmethod
+    def _edit_batch_item_rows(conn: Any, batch_id: int) -> list[dict[str, Any]]:
+        return conn.execute(
+            "SELECT * FROM edit_batch_items WHERE batch_id=? ORDER BY ordinal ASC",
+            (batch_id,),
+        ).fetchall()
+
+    @staticmethod
+    def _edit_batch_reason_code(value: Any) -> str:
+        if not isinstance(value, str):
+            raise EditBatchExecutionPersistenceError(
+                "STOP_REASON_INVALID", "stop reason code must be text"
+            )
+        reason = value.strip().upper()
+        if (
+            not reason
+            or len(reason) > 120
+            or any(char not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_" for char in reason)
+        ):
+            raise EditBatchExecutionPersistenceError(
+                "STOP_REASON_INVALID", "stop reason code must be canonical upper snake case"
+            )
+        return reason
+
+    @staticmethod
+    def _edit_batch_timestamp(value: str | None) -> str:
+        if value is None:
+            return now_iso()
+        if not isinstance(value, str) or value != value.strip():
+            raise EditBatchExecutionPersistenceError(
+                "EXECUTION_TIMESTAMP_INVALID", "execution timestamp must be canonical ISO text"
+            )
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise EditBatchExecutionPersistenceError(
+                "EXECUTION_TIMESTAMP_INVALID", "execution timestamp is invalid"
+            ) from exc
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise EditBatchExecutionPersistenceError(
+                "EXECUTION_TIMESTAMP_INVALID", "execution timestamp must be timezone-aware"
+            )
+        return parsed.astimezone(timezone.utc).isoformat()
 
     def list_edit_batches(self):
         with connection() as conn:
@@ -295,6 +1056,10 @@ class Repository:
             ).fetchall()
             summaries = []
             for row in rows:
+                item_rows = conn.execute(
+                    "SELECT status, ordinal FROM edit_batch_items WHERE batch_id=? ORDER BY ordinal ASC",
+                    (row["id"],),
+                ).fetchall()
                 scope_snapshot = loads(row['scope_snapshot_json'], {})
                 template_snapshot = loads(row['template_snapshot_json'], {})
                 template_payload = template_snapshot.get('payload') if isinstance(template_snapshot.get('payload'), dict) else {}
@@ -315,13 +1080,21 @@ class Repository:
                     },
                     'created_at': row['created_at'],
                     'updated_at': row['updated_at'],
+                    'execution': build_public_execution(row),
+                    'progress': build_public_progress(item_rows),
                 })
                 approval = self._decode_edit_batch_approval_summary(row)
                 if approval is not None:
                     summaries[-1]['approval'] = approval
             return summaries
 
-    def _decode_edit_batch(self, row: dict[str, Any], items: list[dict[str, Any]]):
+    def _decode_edit_batch(
+        self,
+        row: dict[str, Any],
+        items: list[dict[str, Any]],
+        *,
+        include_execution: bool,
+    ):
         batch = {
             'id': int(row['id']),
             'schema_version': row['schema_version'],
@@ -336,8 +1109,10 @@ class Repository:
             'policy': loads(row['policy_json'], {}),
             'created_at': row['created_at'],
             'updated_at': row['updated_at'],
-            'items': [
-                {
+            'items': [],
+        }
+        for item in items:
+            public_item = {
                     'id': int(item['id']),
                     'batch_id': int(item['batch_id']),
                     'ordinal': int(item['ordinal']),
@@ -346,13 +1121,17 @@ class Repository:
                     'item_snapshot': loads(item['item_snapshot_json'], {}),
                     'created_at': item['created_at'],
                     'updated_at': item['updated_at'],
-                }
-                for item in items
-            ],
-        }
+            }
+            outcome = build_public_item_outcome(item)
+            if outcome is not None:
+                public_item['outcome'] = outcome
+            batch['items'].append(public_item)
         approval = self._decode_edit_batch_approval_summary(row)
         if approval is not None:
             batch['approval'] = approval
+        if include_execution:
+            batch['execution'] = build_public_execution(row)
+            batch['progress'] = build_public_progress(items)
         return batch
 
     @staticmethod

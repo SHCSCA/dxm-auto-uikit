@@ -1,6 +1,7 @@
 import json
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -242,6 +243,16 @@ def init_db() -> None:
                 approval_token_hash TEXT,
                 approval_lease_id TEXT,
                 approval_context_json TEXT,
+                approval_token_consumed_at TEXT,
+                start_context_json TEXT,
+                started_at TEXT,
+                stop_requested_at TEXT,
+                stopped_at TEXT,
+                completed_at TEXT,
+                execution_reason_code TEXT,
+                execution_detail TEXT,
+                stop_request_context_json TEXT,
+                manual_review_required INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -256,6 +267,21 @@ def init_db() -> None:
                 status TEXT NOT NULL,
                 target_identity_sha256 TEXT NOT NULL,
                 item_snapshot_json TEXT NOT NULL,
+                grant_lease_id TEXT,
+                grant_fingerprint TEXT,
+                grant_nonce_hash TEXT,
+                mutation_scope_id TEXT,
+                grant_context_json TEXT,
+                granted_at TEXT,
+                grant_expires_at TEXT,
+                grant_consumed_at TEXT,
+                outcome_classification TEXT,
+                outcome_reason_code TEXT,
+                outcome_evidence_json TEXT,
+                outcome_decision_json TEXT,
+                action_results_json TEXT,
+                finished_at TEXT,
+                manual_review_required INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 UNIQUE (batch_id, ordinal),
@@ -273,7 +299,62 @@ def init_db() -> None:
                 "approval_token_hash": "TEXT",
                 "approval_lease_id": "TEXT",
                 "approval_context_json": "TEXT",
+                "approval_token_consumed_at": "TEXT",
+                "start_context_json": "TEXT",
+                "started_at": "TEXT",
+                "stop_requested_at": "TEXT",
+                "stopped_at": "TEXT",
+                "completed_at": "TEXT",
+                "execution_reason_code": "TEXT",
+                "execution_detail": "TEXT",
+                "stop_request_context_json": "TEXT",
+                "manual_review_required": "INTEGER NOT NULL DEFAULT 0",
             },
+        )
+        _ensure_columns(
+            conn,
+            "edit_batch_items",
+            {
+                "grant_lease_id": "TEXT",
+                "grant_fingerprint": "TEXT",
+                "grant_nonce_hash": "TEXT",
+                "mutation_scope_id": "TEXT",
+                "grant_context_json": "TEXT",
+                "granted_at": "TEXT",
+                "grant_expires_at": "TEXT",
+                "grant_consumed_at": "TEXT",
+                "outcome_classification": "TEXT",
+                "outcome_reason_code": "TEXT",
+                "outcome_evidence_json": "TEXT",
+                "outcome_decision_json": "TEXT",
+                "action_results_json": "TEXT",
+                "finished_at": "TEXT",
+                "manual_review_required": "INTEGER NOT NULL DEFAULT 0",
+            },
+        )
+        recover_interrupted_edit_batches(conn)
+        conn.executescript(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_edit_batch_items_one_running
+                ON edit_batch_items (batch_id)
+                WHERE status = 'running';
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_edit_batches_one_active
+                ON edit_batches ((1))
+                WHERE status IN ('running', 'stop_requested');
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_edit_batch_items_grant_lease
+                ON edit_batch_items (grant_lease_id)
+                WHERE grant_lease_id IS NOT NULL;
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_edit_batch_items_grant_nonce_hash
+                ON edit_batch_items (grant_nonce_hash)
+                WHERE grant_nonce_hash IS NOT NULL;
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_edit_batch_items_mutation_scope
+                ON edit_batch_items (mutation_scope_id)
+                WHERE mutation_scope_id IS NOT NULL;
+            """
         )
         _ensure_columns(
             conn,
@@ -306,3 +387,55 @@ def _ensure_columns(conn: sqlite3.Connection, table_name: str, columns: dict[str
     for column_name, column_definition in columns.items():
         if column_name not in existing:
             conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}")
+
+
+def recover_interrupted_edit_batches(conn: sqlite3.Connection) -> list[int]:
+    """Fail closed on process restart; a live batch is never auto-resumed."""
+    interrupted = conn.execute(
+        "SELECT id, status FROM edit_batches WHERE status IN ('running', 'stop_requested')"
+    ).fetchall()
+    if not interrupted:
+        return []
+
+    recovered_at = datetime.now(timezone.utc).isoformat()
+    reason_code = "PROCESS_RESTART_REQUIRES_MANUAL_REVIEW"
+    for batch in interrupted:
+        batch_id = int(batch["id"])
+        prior_status = str(batch["status"])
+        recovery_evidence = dumps(
+            {
+                "schema_version": "dxm_edit_batch_recovery_evidence.v1",
+                "reason_code": reason_code,
+                "prior_batch_status": prior_status,
+                "recovered_at": recovered_at,
+                "retry_allowed": False,
+            }
+        )
+        conn.execute(
+            """
+            UPDATE edit_batch_items
+               SET status='stopped_uncertain',
+                   outcome_classification='STOPPED_UNCERTAIN',
+                   outcome_reason_code=?,
+                   outcome_evidence_json=?,
+                   finished_at=?,
+                   manual_review_required=1,
+                   updated_at=?
+             WHERE batch_id=? AND status='running'
+            """,
+            (reason_code, recovery_evidence, recovered_at, recovered_at, batch_id),
+        )
+        conn.execute(
+            """
+            UPDATE edit_batches
+               SET status='stopped',
+                   stopped_at=?,
+                   execution_reason_code=?,
+                   execution_detail='进程重启后批次不会自动恢复，请人工核对后重新创建批次。',
+                   manual_review_required=1,
+                   updated_at=?
+             WHERE id=? AND status IN ('running', 'stop_requested')
+            """,
+            (recovered_at, reason_code, recovered_at, batch_id),
+        )
+    return [int(batch["id"]) for batch in interrupted]

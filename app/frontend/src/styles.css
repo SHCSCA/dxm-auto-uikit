@@ -1098,6 +1098,40 @@ a:focus-visible {
   line-height: 1.45;
 }
 
+.batch-template-issues__summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.batch-template-issues__summary strong {
+  color: var(--text);
+}
+
+.batch-template-issues__summary b {
+  flex: 0 0 auto;
+  color: #7a4a00;
+  font-size: 12px;
+}
+
+.batch-template-issues details {
+  border-top: 1px solid rgba(122, 74, 0, 0.16);
+}
+
+.batch-template-issues details > summary {
+  padding-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.batch-template-issues details[open] > summary {
+  margin-bottom: 8px;
+}
+
 .batch-template-issues ul {
   margin: 0;
   padding: 0;
@@ -1509,6 +1543,76 @@ a:focus-visible {
   box-shadow: 0 0 0 5px var(--green-soft);
 }
 
+.batch-state-dot.is-running {
+  background: var(--brand);
+  box-shadow: 0 0 0 5px var(--brand-soft);
+}
+
+.batch-approval-card {
+  width: min(100%, 760px);
+  padding: 14px;
+  display: grid;
+  grid-template-columns: minmax(190px, 0.75fr) minmax(260px, 1.25fr);
+  gap: 12px 16px;
+  align-items: end;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+}
+
+.batch-approval-card__intro,
+.batch-approval-card > label:not(.batch-save-only-confirmation),
+.batch-save-only-confirmation > span {
+  display: grid;
+  gap: 4px;
+}
+
+.batch-approval-card__intro span,
+.batch-approval-card label > span,
+.batch-save-only-confirmation small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.batch-approval-card input[type="text"],
+.batch-approval-card input:not([type]) {
+  width: 100%;
+  min-height: 38px;
+  padding: 7px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  color: var(--text);
+  background: var(--surface);
+}
+
+.batch-save-only-confirmation {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid #b8ddcb;
+  border-radius: 7px;
+  background: var(--green-soft);
+  cursor: pointer;
+}
+
+.batch-save-only-confirmation input {
+  width: 17px;
+  height: 17px;
+  margin-top: 2px;
+  accent-color: var(--green);
+}
+
+.batch-approval-card .batch-inline-error {
+  grid-column: 1 / -1;
+}
+
+.batch-approval-card .batch-primary-action {
+  grid-column: 2;
+}
+
 .batch-digest-strip {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1580,6 +1684,36 @@ a:focus-visible {
   font-size: 12px;
 }
 
+.batch-status-badge {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--surface-alt);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.batch-status-badge.is-active,
+.batch-status-badge.is-success {
+  border-color: #b8ddcb;
+  color: var(--green);
+  background: var(--green-soft);
+}
+
+.batch-status-badge.is-warning {
+  border-color: #efd18a;
+  color: #7a4a00;
+  background: var(--amber-soft);
+}
+
+.batch-status-badge.is-danger {
+  border-color: #f3b8bf;
+  color: var(--red);
+  background: var(--red-soft);
+}
+
 .batch-record-buttons small {
   overflow: hidden;
   color: var(--muted);
@@ -1612,8 +1746,118 @@ a:focus-visible {
   background: var(--amber-soft);
 }
 
+.batch-draft-boundary {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.batch-draft-boundary > span {
+  display: grid;
+  gap: 3px;
+}
+
 .batch-draft-boundary span {
   font-size: 12px;
+}
+
+.batch-draft-boundary small {
+  color: var(--muted);
+}
+
+.batch-progress-card {
+  padding: 13px;
+  display: grid;
+  gap: 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-alt);
+}
+
+.batch-progress-card__headline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.batch-progress-card__headline > span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.batch-progress-card__headline small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-progress-card__headline b {
+  color: var(--brand);
+  font-size: 19px;
+}
+
+.batch-progress-track {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.batch-progress-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--brand);
+  transition: width 180ms ease;
+}
+
+.batch-progress-card__facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--line);
+}
+
+.batch-progress-card__facts > span {
+  padding: 8px 9px;
+  display: grid;
+  gap: 2px;
+  background: var(--surface);
+}
+
+.batch-progress-card__facts small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.batch-stop-action {
+  justify-self: end;
+}
+
+.batch-polling-notice {
+  padding: 8px 10px;
+  border-radius: 7px;
+  color: #7a4a00;
+  background: var(--amber-soft);
+  font-size: 12px;
+}
+
+.batch-record-items li.is-current {
+  background: var(--brand-soft);
+  box-shadow: inset 3px 0 var(--brand);
+}
+
+.batch-evidence-payload > span b {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .batch-evidence-details {
@@ -1689,6 +1933,34 @@ a:focus-visible {
 
   .batch-primary-action,
   .batch-records-head__actions .button {
+    width: 100%;
+    justify-self: stretch;
+  }
+
+  .batch-approval-card {
+    grid-template-columns: 1fr;
+  }
+
+  .batch-approval-card .batch-primary-action,
+  .batch-save-only-confirmation {
+    grid-column: 1;
+  }
+
+  .batch-draft-boundary,
+  .batch-progress-card__headline {
+    align-items: stretch;
+  }
+
+  .batch-draft-boundary {
+    grid-template-columns: 1fr;
+  }
+
+  .batch-progress-card__headline {
+    flex-direction: column;
+  }
+
+  .batch-draft-boundary .button,
+  .batch-stop-action {
     width: 100%;
     justify-self: stretch;
   }
