@@ -414,7 +414,6 @@ class BatchExecutionRuntime:
             "reason_code": "BATCH_ITEM_SAVE_AUTHORIZED",
             "batch_id": int(grant["batch_id"]),
             "item_id": int(grant["item_id"]),
-            "grant_fingerprint": grant["fingerprint"],
         }
 
     def _execute_item(
@@ -445,12 +444,28 @@ class BatchExecutionRuntime:
             raise BatchRuntimeError("BATCH_ITEM_TARGET_DRIFT", "冻结商品身份无法复现。")
         defaults = self._bundle_defaults(batch)
         store_name = str(batch["scope_snapshot"]["store_identity"]["store_name"])
-        product_query = str(
-            snapshot.get("dxm_product_id")
-            or target_identity.get("stable_identity", {}).get("value")
-            or snapshot.get("title")
-            or ""
-        ).strip()
+        stable_identity = target_identity.get("stable_identity")
+        if not isinstance(stable_identity, Mapping):
+            raise BatchRuntimeError(
+                "BATCH_ITEM_STABLE_IDENTITY_MISSING",
+                "冻结商品缺少精确身份，系统不会使用标题搜索。",
+            )
+        stable_kind = str(stable_identity.get("kind") or "").strip()
+        stable_value = str(stable_identity.get("value") or "").strip()
+        if stable_kind not in {"product_id", "source_url"} or not stable_value:
+            raise BatchRuntimeError(
+                "BATCH_ITEM_STABLE_IDENTITY_INVALID",
+                "冻结商品身份不可用于精确定位，系统不会使用模糊回退。",
+            )
+        if (
+            stable_kind == "product_id"
+            and str(snapshot.get("dxm_product_id") or "").strip() != stable_value
+        ):
+            raise BatchRuntimeError(
+                "BATCH_ITEM_STABLE_IDENTITY_DRIFT",
+                "冻结商品编号与目标身份不一致。",
+            )
+        product_query = stable_value
         base_params = {
             "batch_execution": True,
             "product_query": product_query or None,
@@ -526,7 +541,9 @@ class BatchExecutionRuntime:
         save_step = next(step for step in BATCH_BROWSER_STEPS if step.state == "SAVE_ONLY")
         save_params = {**base_params, "defaults": defaults}
         save_command = self._build_command(current_batch, item, grant, save_step, save_params)
+        self._assert_save_boundary_ready(batch_id, item_id, grant)
         self._reserve_item_mutation(save_command)
+        self._assert_save_boundary_ready(batch_id, item_id, grant)
         lease_id = str(grant["grant_lease_id"])
         with self._active_lock:
             self._active_grants[lease_id] = {"grant": grant, "nonce": nonce}
@@ -727,18 +744,22 @@ class BatchExecutionRuntime:
         expected_browser_session_id: str,
         post_grant: bool,
     ) -> dict[str, Any]:
-        if not post_grant and any(
-            value
-            for value in (
-                command.mutation_scope_id,
-                command.authorization_fingerprint,
-                command.authorization_lease_id,
-                command.stage_task_facts_fingerprint,
+        authority_fields = (
+            command.mutation_scope_id,
+            command.authorization_fingerprint,
+            command.authorization_lease_id,
+            command.stage_task_facts_fingerprint,
+        )
+        if step.state == "SAVE_ONLY" and any(not value for value in authority_fields):
+            raise BatchRuntimeError(
+                "SAVE_AUTHORITY_INCOMPLETE",
+                "保存动作没有完整绑定逐件授权。",
+                manual_review=True,
             )
-        ):
+        if step.state != "SAVE_ONLY" and any(authority_fields):
             raise BatchRuntimeError(
                 "PRE_SAVE_AUTHORITY_FORBIDDEN",
-                "保存前步骤携带了不应存在的变更授权。",
+                "非保存步骤携带了不应存在的变更授权。",
                 manual_review=True,
             )
         with self._active_lock:
@@ -875,6 +896,16 @@ class BatchExecutionRuntime:
             or entry.get("status") != "RESERVED"
             or entry.get("mutation_scope_id") != command.mutation_scope_id
             or entry.get("mutation_action") != "save_only_click"
+            or entry.get("command_state") != "SAVE_ONLY"
+            or entry.get("command_action") != "save_only"
+            or entry.get("task_id") != str(command.task_id)
+            or entry.get("job_id") != str(command.job_id)
+            or entry.get("authorization_lease_id")
+            != command.authorization_lease_id
+            or entry.get("authorization_fingerprint")
+            != command.authorization_fingerprint
+            or entry.get("command_id") != command.command_id
+            or entry.get("runtime_id") != command.runtime_id
         ):
             raise BatchRuntimeError(
                 "MUTATION_LEDGER_RESERVATION_UNPROVEN",
@@ -942,6 +973,95 @@ class BatchExecutionRuntime:
         if not isinstance(sections, Mapping) or not sections:
             raise BatchRuntimeError("BATCH_TEMPLATE_DEFAULTS_MISSING", "整批模板内容缺失。")
         return {str(key): value for key, value in sections.items()}
+
+    def _assert_save_boundary_ready(
+        self,
+        batch_id: int,
+        item_id: int,
+        grant: Mapping[str, Any],
+    ) -> None:
+        batch = self._private_batch(batch_id)
+        if batch.get("status") == "stop_requested":
+            raise BatchRuntimeError(
+                "OPERATOR_STOPPED_BEFORE_SAVE",
+                "操作员已在保存派发前停止批次。",
+                manual_review=True,
+            )
+        if batch.get("status") != "running":
+            raise BatchRuntimeError(
+                "BATCH_NOT_RUNNING",
+                "批次已不在执行状态。",
+                manual_review=True,
+            )
+        running_items = [
+            item for item in batch.get("items") or [] if item.get("status") == "running"
+        ]
+        if (
+            len(running_items) != 1
+            or int(running_items[0].get("id") or 0) != item_id
+            or running_items[0].get("target_identity_sha256")
+            != grant.get("target_identity_sha256")
+        ):
+            raise BatchRuntimeError(
+                "SAVE_ITEM_CLAIM_DRIFT",
+                "保存边界的逐件认领状态已变化。",
+                manual_review=True,
+            )
+        private = batch.get("_private")
+        rows = private.get("item_authorizations") if isinstance(private, Mapping) else None
+        authorization = next(
+            (
+                row
+                for row in rows or []
+                if isinstance(row, Mapping) and int(row.get("item_id") or 0) == item_id
+            ),
+            None,
+        )
+        if not isinstance(authorization, Mapping) or any(
+            authorization.get(key) != value
+            for key, value in {
+                "grant_lease_id": grant.get("grant_lease_id"),
+                "grant_fingerprint": grant.get("fingerprint"),
+                "grant_nonce_hash": grant.get("nonce_hash"),
+                "mutation_scope_id": grant.get("mutation_scope_id"),
+                "grant": dict(grant),
+                "granted_at": grant.get("issued_at"),
+                "grant_expires_at": grant.get("expires_at"),
+                "grant_consumed_at": None,
+            }.items()
+        ):
+            raise BatchRuntimeError(
+                "SAVE_GRANT_PERSISTENCE_DRIFT",
+                "保存授权没有形成可复现的一次性持久化绑定。",
+                manual_review=True,
+            )
+        try:
+            expires_at = datetime.fromisoformat(
+                str(grant.get("expires_at") or "").replace("Z", "+00:00")
+            )
+        except ValueError as exc:
+            raise BatchRuntimeError(
+                "SAVE_GRANT_EXPIRY_INVALID",
+                "保存授权有效期无效。",
+                manual_review=True,
+            ) from exc
+        if (
+            expires_at.tzinfo is None
+            or expires_at.utcoffset() is None
+            or datetime.now(timezone.utc) >= expires_at.astimezone(timezone.utc)
+        ):
+            raise BatchRuntimeError(
+                "SAVE_GRANT_EXPIRED",
+                "保存授权已过期，系统不会派发保存。",
+                manual_review=True,
+            )
+        rejection = self._live_binding_rejection(grant)
+        if rejection is not None:
+            raise BatchRuntimeError(
+                rejection,
+                "保存前运行现场已变化，系统已停止且不会自动重试。",
+                manual_review=True,
+            )
 
     def _assert_batch_can_continue(self, batch_id: int, grant: Mapping[str, Any]) -> None:
         batch = self._private_batch(batch_id)

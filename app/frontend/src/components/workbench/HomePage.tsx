@@ -1,8 +1,9 @@
-import type { ConfigPreview, DeliveryWorkspace, RuntimeStatus, Task } from '../../types'
+import type { ConfigPreview, DeliveryWorkspace, EditBatchSummary, RuntimeStatus, Task } from '../../types'
 import { DXM_LOGGED_IN_STATUSES, displayTaskName } from '../WorkbenchModules'
 
 type HomePageProps = {
   workspace: DeliveryWorkspace
+  editBatches: EditBatchSummary[]
   selectedTask: Task | null
   configPreview: ConfigPreview | null
   runtimeStatus: RuntimeStatus | null
@@ -12,33 +13,61 @@ type HomePageProps = {
   onShowTasks: () => void
   onShowConfig: () => void
   onShowConsole: () => void
+  onShowBatchRecords: () => void
   onShowReports: () => void
 }
 
 export function HomePage({
   workspace,
+  editBatches,
   selectedTask,
   runtimeStatus,
   onShowDxmAccess,
   onShowDraftEdit,
+  onShowTasks,
   onShowConsole,
+  onShowBatchRecords,
 }: HomePageProps) {
-  const recentException = workspace.exceptions.find((item) => item.status !== 'resolved' && item.status !== 'closed')
-    ?? workspace.exceptions[0]
-    ?? null
+  const recentException = editBatches.length
+    ? null
+    : workspace.exceptions.find((item) => item.status !== 'resolved' && item.status !== 'closed')
+      ?? workspace.exceptions[0]
+      ?? null
   const dxmLoggedIn = runtimeStatus ? DXM_LOGGED_IN_STATUSES.has(runtimeStatus.dxmLogin.status) : false
-  const agentActive = runtimeStatus?.realBrowser?.active === true
-  const currentScopeLabel = '当前保存任务'
-  const currentScopeProgress = selectedTask
-    ? `${selectedTask.completed_jobs}/${Math.max(selectedTask.total_jobs, 1)} 项已处理`
-    : '暂无运行中任务'
+  const diagnosticBrowserActive = runtimeStatus?.agentConsole?.active === true
+  const activeBatch = editBatches.find((batch) => batch.status === 'running' || batch.status === 'stop_requested') ?? null
+  const draftBatch = editBatches.find((batch) => batch.status === 'draft') ?? null
+  const reviewBatch = editBatches.find((batch) => batch.execution.manual_review_required || batch.progress.stopped > 0) ?? null
+  const runningTask = workspace.tasks.find((task) => task.status === 'running') ?? null
+  const currentScopeLabel = activeBatch ? '当前整批执行' : runningTask ? '当前单商品任务' : draftBatch ? '待批准批次' : '当前保存任务'
+  const currentScopeProgress = activeBatch
+    ? `${activeBatch.progress.completed}/${activeBatch.progress.total} 件已处理`
+    : runningTask
+      ? `${runningTask.completed_jobs}/${Math.max(runningTask.total_jobs, 1)} 项已处理`
+      : draftBatch
+        ? `${draftBatch.item_count} 件范围已冻结`
+        : selectedTask
+          ? `${selectedTask.completed_jobs}/${Math.max(selectedTask.total_jobs, 1)} 项已处理`
+          : '暂无运行中任务'
 
-  const liveStatus = agentActive
+  const liveStatus = activeBatch
     ? {
         tone: 'active',
-        label: '浏览器现场执行中',
-        detail: '当前操作由真实浏览器执行，任何不确定结果都会停止并等待人工处理。',
+        label: '整批正在严格串行执行',
+        detail: `已处理 ${activeBatch.progress.completed}/${activeBatch.progress.total} 件；不确定结果会停止且不自动重试。`,
       }
+    : runningTask
+      ? {
+          tone: 'active',
+          label: '单商品任务正在执行',
+          detail: '任务执行器正在真实页面处理；请从当前保存任务查看状态。',
+        }
+    : diagnosticBrowserActive
+      ? {
+          tone: 'waiting',
+          label: '旧诊断浏览器仍在运行',
+          detail: '真实认领、单商品保存和整批执行前必须先关闭它。',
+        }
     : !runtimeStatus
       ? {
           tone: 'waiting',
@@ -57,19 +86,37 @@ export function HomePage({
             detail: '先读取当前商品箱范围，再冻结模板并完成人工批准；只保存，不发布。',
           }
 
-  const primaryAction = !dxmLoggedIn
+  const primaryAction = activeBatch
+    ? {
+        label: '查看串行进度',
+        detail: '查看当前商品、完成数量和安全停止入口。',
+        action: onShowBatchRecords,
+      }
+    : runningTask
+      ? {
+          label: '查看当前任务',
+          detail: '查看真实执行状态；不要从诊断浏览器重复启动。',
+          action: onShowTasks,
+        }
+      : diagnosticBrowserActive
+        ? {
+            label: '关闭旧诊断浏览器',
+            detail: '释放共享浏览器后再回到批次流程。',
+            action: onShowConsole,
+          }
+        : draftBatch
+          ? {
+              label: '继续批准批次',
+              detail: '核对已冻结范围后，一次批准并启动严格串行执行。',
+              action: onShowBatchRecords,
+            }
+        : !dxmLoggedIn
     ? {
         label: '登录店小秘',
         detail: '在可见浏览器中完成账号、密码和验证码。',
         action: onShowDxmAccess,
       }
-    : agentActive
-      ? {
-          label: '查看浏览器现场',
-          detail: '查看当前商品、安全检查与真实执行状态。',
-          action: onShowConsole,
-        }
-      : {
+    : {
           label: '进入批量编辑',
           detail: '读取真实商品箱范围，选择整批模板并创建草稿。',
           action: onShowDraftEdit,
@@ -105,13 +152,21 @@ export function HomePage({
       <div className="home-brief-grid">
         <article className="module-card home-brief-card" aria-label={currentScopeLabel}>
           <span>{currentScopeLabel}</span>
-          <strong>{selectedTask ? displayTaskName(selectedTask) : '未选择任务'}</strong>
+          <strong>{activeBatch
+            ? `批次 #${activeBatch.id} · ${activeBatch.store_identity?.store_name ?? '店铺已冻结'}`
+            : runningTask
+              ? displayTaskName(runningTask)
+              : draftBatch
+                ? `批次 #${draftBatch.id} · 等待批准`
+                : selectedTask
+                  ? displayTaskName(selectedTask)
+                  : '尚无真实任务'}</strong>
           <small>{currentScopeProgress}</small>
         </article>
-        <article className={`module-card home-brief-card ${recentException ? 'is-warning' : 'is-clear'}`} aria-label="最近异常">
-          <span>最近异常</span>
-          <strong>{recentException?.title ?? '暂无待处理异常'}</strong>
-          <small>{recentException?.suggestion || '出现异常时会在这里显示最近一条。'}</small>
+        <article className={`module-card home-brief-card ${reviewBatch || recentException ? 'is-warning' : 'is-clear'}`} aria-label="最近异常">
+          <span>需要处理</span>
+          <strong>{reviewBatch ? `批次 #${reviewBatch.id} 需要人工核对` : recentException?.title ?? '暂无待处理问题'}</strong>
+          <small>{reviewBatch ? '先核对真实店小秘页面，不要自动重试结果不确定的商品。' : recentException?.suggestion || '出现问题时会在这里显示最近一条。'}</small>
         </article>
       </div>
     </section>

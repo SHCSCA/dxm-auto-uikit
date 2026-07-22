@@ -1,6 +1,7 @@
 import type {
   AcceptanceGap,
   DeliveryWorkspace,
+  EditBatchSummary,
   FinalDeliveryCheckSummary,
   RegressionGate,
   Report,
@@ -12,10 +13,13 @@ import { humanOperatorMessage, humanOperatorTitle, humanTaskDisplayName } from '
 
 type ResultsPageProps = {
   workspace: DeliveryWorkspace
+  editBatches: EditBatchSummary[]
   selectedTask: Task | null
   finalCheck: FinalDeliveryCheckSummary | null
+  onShowDraftEdit: () => void
+  onShowBatchRecords: () => void
   onShowEvidence: () => void
-  onShowConsole: () => void
+  onShowTasks: () => void
   onShowExceptions: () => void
 }
 
@@ -54,32 +58,53 @@ type L2DiagnosticSummary = {
 
 export function ResultsPage({
   workspace,
+  editBatches,
   selectedTask,
   finalCheck,
+  onShowDraftEdit,
+  onShowBatchRecords,
   onShowEvidence,
-  onShowConsole,
+  onShowTasks,
   onShowExceptions,
 }: ResultsPageProps) {
+  if (editBatches.length) {
+    return <ControlledBatchResults batches={editBatches} onShowBatchRecords={onShowBatchRecords} />
+  }
+  if (!selectedTask && workspace.reports.length === 0 && workspace.evidences.length === 0) {
+    return (
+      <section className="module-layout" aria-label="保存结果" data-testid="report-center-section">
+        <article className="module-card span-3 batch-result-primary">
+          <div className="module-head">
+            <div>
+              <span className="eyebrow">真实执行结果</span>
+              <h2>还没有保存结果</h2>
+              <p>这里不会生成演示报告。先读取真实商品箱范围，创建店铺级批次并完成一次批准。</p>
+            </div>
+          </div>
+          <div className="batch-primary-notice">
+            <strong>下一步：创建第一个受控批次</strong>
+            <span>批次只保存、不发布，并按商品严格串行执行。</span>
+          </div>
+          <button className="button button--primary" type="button" onClick={onShowDraftEdit}>读取商品箱范围</button>
+        </article>
+      </section>
+    )
+  }
   const reports = selectedTask ? workspace.reports.filter((item) => item.task_id === selectedTask.id) : workspace.reports
   const reportSummary = workspace.reportSummary
-  const l2ProbePlan = workspace.l2ProbePlan
-  const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
   const effectiveReadiness = finalCheck?.effective_real_dxm_write_readiness ?? finalCheck?.real_dxm_write_readiness
   const realWriteExpectedBlocked = effectiveReadiness === 'BLOCKED'
   const businessReportCount = reportSummary?.total_reports ?? reports.length
   const saveResultCount = reportSummary?.save_results?.length ?? 0
   const unpublishedProofCount = reportSummary?.published_proofs?.length ?? 0
   const networkHarCount = (reportSummary?.network_save_results?.length ?? 0) + (reportSummary?.har_summaries?.length ?? 0)
-  const l2AllowlistReviewItems = summarizeL2Diagnostics(l2Gate).flatMap((item) =>
-    item.reviewCandidateRequests.map((request) => ({ target: item.targetLabel, request })),
-  )
   const hasOpenIssue = workspace.exceptions.some((item) => item.status !== 'resolved' && item.status !== 'closed')
   const hasCompletedEvidence = saveResultCount > 0 || unpublishedProofCount > 0 || businessReportCount > 0
   const primaryAction = hasOpenIssue
     ? { label: '处理当前问题', detail: '先处理阻断，再决定是否重新执行。', onClick: onShowExceptions }
     : hasCompletedEvidence
       ? { label: '查看保存证据', detail: '核对保存成功与未发布证明。', onClick: onShowEvidence }
-      : { label: '回到浏览器现场', detail: '从当前现场继续安全检查或执行。', onClick: onShowConsole }
+      : { label: '回到当前保存任务', detail: '从任务页完成安全检查，再直接批准并启动。', onClick: onShowTasks }
 
   return (
     <section className="module-layout" aria-label="结果与问题" data-testid="report-center-section">
@@ -93,7 +118,6 @@ export function ResultsPage({
         realWriteExpectedBlocked={realWriteExpectedBlocked}
         primaryAction={primaryAction}
       />
-      <TwoStageAcceptanceCard acceptance={workspace.twoStageAcceptance} />
       <div className="module-card span-3">
         <ModuleHead title="保存后核对" meta={humanPublishGuardStatus(workspace.publishGuardState?.status)} />
         <div className="report-check-grid">
@@ -122,55 +146,100 @@ export function ResultsPage({
           )}
         </div>
       </div>
-      <FinalDeliveryCheckCard finalCheck={finalCheck} />
-      <details className="module-card span-3 disclosure-card l2-next-step-card">
-        <summary>
-          维护人员：重新验证保存前安全检查
-          <span>高级复核，需人工批准</span>
-        </summary>
-        <div className="l2-allowlist-review">
-          <div className="l2-allowlist-review__head">
-            <strong>保存前安全检查候选处理</strong>
-            <span>先评审，再重新检查</span>
+    </section>
+  )
+}
+
+function ControlledBatchResults({
+  batches,
+  onShowBatchRecords,
+}: {
+  batches: EditBatchSummary[]
+  onShowBatchRecords: () => void
+}) {
+  const latest = batches[0]
+  const active = batches.find((batch) => batch.status === 'running' || batch.status === 'stop_requested') ?? null
+  const needsReview = batches.filter((batch) => batch.execution.manual_review_required || batch.progress.stopped > 0)
+  const next = active
+    ? {
+        title: '查看实时串行进度',
+        detail: `批次 #${active.id} 正在处理 ${active.progress.completed}/${active.progress.total} 件；需要停止时从批次记录发起安全停止。`,
+      }
+    : latest.status === 'draft'
+      ? {
+          title: '继续核对并批准批次',
+          detail: '范围和模板已经冻结；核对后一次批准并启动，执行期间不会发布。',
+        }
+      : needsReview.length
+        ? {
+            title: '处理需要人工核对的批次',
+            detail: '先确认店小秘真实页面结果，不要对结果不确定的商品自动重试。',
+          }
+        : {
+            title: '查看本批次保存结果',
+            detail: '核对逐件保存成功、保存前隔离和未发布状态。',
+          }
+
+  return (
+    <section className="module-layout batch-results-page" aria-label="结果与问题" data-testid="report-center-section">
+      <article className="module-card span-3 batch-result-primary">
+        <div className="module-head">
+          <div>
+            <span className="eyebrow">受控商品箱整批结果</span>
+            <h2>{batchResultStatus(latest)}</h2>
+            <p>这是范围冻结、一次批准、严格串行的 edit-batch 结果。旧版 batch_save、无人值守和发布仍不可用。</p>
           </div>
-          <p>当前只生成候选清单，不自动放行。未完成人工评审前，不运行下方安全检查命令。</p>
-          {l2AllowlistReviewItems.length > 0 ? (
-            <ul>
-              {l2AllowlistReviewItems.slice(0, 8).map((item) => (
-                <li key={`${item.target}:${item.request}`}>{item.target}：{item.request}</li>
-              ))}
-            </ul>
-          ) : (
-            <p>当前工作区没有可展示的异常候选；仍需按最终报告和安全检查记录复核后再决定是否重跑。</p>
-          )}
+          <span className={`batch-status-badge is-${batchResultTone(latest)}`}>批次 #{latest.id}</span>
         </div>
-        <p>{l2ProbePlan.purpose || '真实保存保持暂停；仅在操作者确认可进行只读检查时，才重新运行已有待认领列表和商品箱检查。'}</p>
-        <p>已有待认领列表和商品箱必须使用同一次检查记录复验，确保双目标证据绑定到同一次人工批准的安全检查。</p>
-        <details className="disclosure-card">
-          <summary>维护命令与证据目录</summary>
-          <div className="l2-next-step-card__commands">
-            {l2ProbePlan.commands.map((command) => (
-              <code key={command}>{command}</code>
-            ))}
-          </div>
-          <p>证据目录：{l2ProbePlan.outputDir}。{l2ProbePlan.acceptanceCriteria.join(' ')}</p>
-          <p>{l2ProbePlan.safetyNotes.join(' ')}</p>
-        </details>
-      </details>
-      <details className="module-card span-3 disclosure-card">
-        <summary>
-          {realWriteExpectedBlocked ? '真实保存后报告必须覆盖' : '报告必须覆盖'}
-          <span>{realWriteExpectedBlocked ? '真实写入放行后' : '交付检查表'}</span>
-        </summary>
-        <div className="report-check-grid">
-          <PostL3ReportCheckRow label="配置模板命中" ok={workspace.dxmReferenceTemplates.some((item) => item.templateNames.length)} realWriteExpectedBlocked={realWriteExpectedBlocked} />
-          <PostL3ReportCheckRow label="执行步骤与结果" ok={workspace.logs.length > 0} realWriteExpectedBlocked={realWriteExpectedBlocked} />
-          <PostL3ReportCheckRow label="证明强度 A/B/C" ok={workspace.evidences.length > 0} realWriteExpectedBlocked={realWriteExpectedBlocked} />
-          <PostL3ReportCheckRow label="验收缺口已列明" ok={workspace.acceptanceGaps.length > 0} realWriteExpectedBlocked={realWriteExpectedBlocked} />
+        <div className="batch-progress-card__facts" aria-label="最近批次结果摘要">
+          <span><strong>{latest.progress.succeeded}</strong><small>保存成功</small></span>
+          <span><strong>{latest.progress.isolated}</strong><small>保存前安全隔离</small></span>
+          <span><strong>{latest.progress.stopped}</strong><small>停止待核对</small></span>
+        </div>
+        <div className={`batch-primary-notice ${needsReview.length ? 'is-danger' : ''}`}>
+          <strong>下一步：{next.title}</strong>
+          <span>{next.detail}</span>
+        </div>
+        <button className="button button--primary" type="button" onClick={onShowBatchRecords}>
+          {next.title}
+        </button>
+      </article>
+
+      <details className="module-card span-3 batch-evidence-details">
+        <summary>最近批次 · {batches.length} 条</summary>
+        <div className="batch-evidence-payload">
+          {batches.slice(0, 8).map((batch) => (
+            <span key={batch.id}>
+              <strong>批次 #{batch.id} · {batch.store_identity?.store_name ?? '店铺已冻结'}</strong>
+              <b>{batchResultStatus(batch)}</b>
+              <small>{batch.progress.completed}/{batch.progress.total} 件已处理 · {batch.template.name ?? '模板已冻结'}</small>
+            </span>
+          ))}
         </div>
       </details>
     </section>
   )
+}
+
+function batchResultStatus(batch: EditBatchSummary) {
+  if (batch.execution.manual_review_required) return '批次已停止，需要人工核对'
+  const labels: Record<string, string> = {
+    draft: '范围已冻结，等待批准',
+    approved: '旧批准记录未启动',
+    running: '正在逐件只保存',
+    stop_requested: '正在安全停止',
+    completed: '批次处理完成',
+    stopped: '批次已安全停止',
+  }
+  return labels[batch.status] ?? '批次状态待确认'
+}
+
+function batchResultTone(batch: EditBatchSummary) {
+  if (batch.execution.manual_review_required || batch.status === 'stopped') return 'danger'
+  if (batch.status === 'completed') return 'success'
+  if (batch.status === 'running') return 'active'
+  if (batch.status === 'stop_requested') return 'warning'
+  return 'neutral'
 }
 
 function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheckSummary | null }) {

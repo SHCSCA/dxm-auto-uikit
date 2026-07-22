@@ -309,7 +309,7 @@ export function TemplateCenterPage({
             <h2>{templateCenterMode === 'sections' ? '当前任务配置摘要' : '整批模板组合'}</h2>
             <p>{templateCenterMode === 'sections'
               ? '按店小秘编辑页分区维护多套模板。默认优先使用模板；临时手工覆盖只作为最后兜底。'
-              : '从 8 个已校验的分区模板组合一份可冻结的整批编辑模板。'}</p>
+              : '从 8 个已校验的编辑分区组合一份店铺级整批模板；店小秘引用只展示 5 个可执行控件。'}</p>
           </div>
           {templateCenterMode === 'sections' && (
             <button className="button button--quiet" type="button" onClick={onShowDraftEdit}>回到商品箱批次</button>

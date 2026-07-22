@@ -53,18 +53,6 @@ type DeliveryWorkspaceApi = Partial<DeliveryWorkspace> & {
   claim_candidates?: ClaimCandidate[]
 }
 
-export const seedRows = [
-  {
-    title: 'LOCAL DEMO ONLY - DO NOT EXECUTE',
-    source_title: '本地演示占位商品（禁止真实执行）',
-    category_name: '本地演示类目（禁止真实执行）',
-    price: 0,
-    sku_count: 1,
-    image_count: 0,
-    image: { eu_outer_package_filename: 'DEMO_ONLY_DO_NOT_EXECUTE.jpg' },
-  },
-]
-
 export const referenceSectionLabels: Record<DxmReferenceSectionCode, string> = {
   attribute_info: '属性信息',
   description: '详情描述',
@@ -76,30 +64,15 @@ export const referenceSectionLabels: Record<DxmReferenceSectionCode, string> = {
   semi_managed: '半托管模板',
 }
 
-export const referenceSections = Object.keys(referenceSectionLabels) as DxmReferenceSectionCode[]
+const allReferenceSections = Object.keys(referenceSectionLabels) as DxmReferenceSectionCode[]
 
-export const demoDxmReferenceTemplates: DxmReferenceTemplateMap = {
-  attribute_info: { names: [], required: true },
-  description: { names: [], required: false },
-  freight: { names: [], required: true },
-  service: { names: [], required: true },
-  eu_responsible: { names: [], required: true },
-  manufacturer: { names: [], required: true },
-  compliance: { names: [], required: false },
-  semi_managed: { names: [], required: false },
-}
-
-export const demoTemplateSeeds = [
-  { template_type: 'title', template_name: '[本地演示·禁止执行] 标题', binding_scope: '仅 dev=1 本地演示', payload: {}, is_enabled: false },
-  { template_type: 'category', template_name: '[本地演示·禁止执行] 类目', binding_scope: '仅 dev=1 本地演示', payload: { category: {} }, is_enabled: false },
-  { template_type: 'sku', template_name: '[本地演示·禁止执行] SKU', binding_scope: '仅 dev=1 本地演示', payload: { sku: {} }, is_enabled: false },
-  { template_type: 'pricing', template_name: '[本地演示·禁止执行] 价格库存', binding_scope: '仅 dev=1 本地演示', payload: { pricing: {} }, is_enabled: false },
-  { template_type: 'logistics', template_name: '[本地演示·禁止执行] 包装物流', binding_scope: '仅 dev=1 本地演示', payload: { logistics: {} }, is_enabled: false },
-  { template_type: 'image', template_name: '[本地演示·禁止执行] 图片', binding_scope: '仅 dev=1 本地演示', payload: { image: {} }, is_enabled: false },
-  { template_type: 'semi_managed', template_name: '[本地演示·禁止执行] 半托管', binding_scope: '仅 dev=1 本地演示', payload: { semi_managed: {} }, is_enabled: false },
-  { template_type: 'compliance', template_name: '[本地演示·禁止执行] 合规', binding_scope: '仅 dev=1 本地演示', payload: { compliance: {} }, is_enabled: false },
-  { template_type: 'dxm_reference', template_name: '[本地演示·禁止执行] 店小秘引用', binding_scope: '仅 dev=1 本地演示', payload: { dxm_reference_templates: demoDxmReferenceTemplates }, is_enabled: false },
-] satisfies Array<Omit<Template, 'id'>>
+export const referenceSections: DxmReferenceSectionCode[] = [
+  'attribute_info',
+  'freight',
+  'service',
+  'eu_responsible',
+  'manufacturer',
+]
 
 export function composeWorkspace(bundle: WorkspaceApiBundle): DeliveryWorkspace {
   const fallback = buildEmptyWorkspace()
@@ -693,7 +666,7 @@ function resolveReferenceTemplateMap(templates: Template[], reports: Report[], t
 }
 
 function mergeReferenceMap(target: DxmReferenceTemplateMap, mapping: Record<string, unknown>) {
-  for (const section of referenceSections) {
+  for (const section of allReferenceSections) {
     const raw = asRecord(mapping[section])
     const names = namesFromValue(raw.names ?? raw.templates ?? raw.template_names ?? raw.name ?? mapping[section])
     if (names.length) target[section].names = unique([...target[section].names, ...names])
@@ -819,8 +792,8 @@ function hasAnyApiData(bundle: WorkspaceApiBundle) {
 }
 
 function emptyReferenceMap(): DxmReferenceTemplateMap {
-  return referenceSections.reduce((acc, section) => {
-    acc[section] = { names: [], required: true }
+  return allReferenceSections.reduce((acc, section) => {
+    acc[section] = { names: [], required: referenceSections.includes(section) }
     return acc
   }, {} as DxmReferenceTemplateMap)
 }

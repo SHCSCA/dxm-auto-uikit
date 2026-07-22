@@ -4,9 +4,10 @@ type HelpPageProps = {
   selectedTask: Task | null
   runtimeStatus: RuntimeStatus | null
   onShowDxmAccess: () => void
+  onShowAcquisition: () => void
   onShowTasks: () => void
-  onShowConfig: () => void
-  onShowConsole: () => void
+  onShowDraftEdit: () => void
+  onShowBatchRecords: () => void
   onShowResults: () => void
   onShowIssues: () => void
 }
@@ -17,31 +18,36 @@ export function HelpPage({
   selectedTask,
   runtimeStatus,
   onShowDxmAccess,
+  onShowAcquisition,
   onShowTasks,
-  onShowConfig,
-  onShowConsole,
+  onShowDraftEdit,
+  onShowBatchRecords,
   onShowResults,
   onShowIssues,
 }: HelpPageProps) {
   const dxmLoggedIn = DXM_LOGGED_IN_STATES.has(runtimeStatus?.dxmLogin?.status ?? '')
   const hasTask = Boolean(selectedTask)
+  const nextAction = !dxmLoggedIn
+    ? { label: '登录店小秘', action: onShowDxmAccess, detail: '先在可见浏览器完成登录和验证码。' }
+    : !hasTask
+      ? { label: '认领已有商品', action: onShowAcquisition, detail: '提供真实来源商品链接，把已有商品认领到商品箱。' }
+      : { label: '创建商品箱批次', action: onShowDraftEdit, detail: '读取真实范围，选择店铺级模板并创建待批准草稿。' }
 
   return (
     <section className="module-layout guide-layout" aria-label="使用帮助">
       <div className="module-card span-3">
-        <ModuleHead title="使用帮助" meta="普通用户操作指南" />
+        <ModuleHead title="使用帮助" meta="受控商品箱整批流程" />
         <div className="guide-step guide-step--primary">
           <span aria-hidden="true">1</span>
           <div>
-            <strong>目标只有一个：先把已有待认领商品放进商品箱，再让 Agent 只点击保存，不发布。</strong>
+            <strong>目标只有一个：把已有来源商品认领进商品箱，再按店铺级模板逐件只保存。</strong>
             <div className="guide-step__summary-line">
-              <small>你按页面顺序完成登录、待认领商品认领到商品箱、填写编辑页配置，然后在真实浏览器里检查并执行只保存。</small>
-              <em>发布、批量和无人值守提交不会出现在主流程里。</em>
+              <small>{nextAction.detail}</small>
+              <em>整批只批准一次，严格串行；结果不确定立即停止且不自动重试。</em>
             </div>
           </div>
           <div className="guide-step__actions">
-            <button className="button button--primary" type="button" onClick={onShowDxmAccess}>从登录开始</button>
-            <button className="button button--secondary" type="button" onClick={onShowTasks}>去待认领入箱</button>
+            <button className="button button--primary" type="button" onClick={nextAction.action}>{nextAction.label}</button>
           </div>
         </div>
       </div>
@@ -61,30 +67,30 @@ export function HelpPage({
             index="2"
             state={hasTask ? 'is-done' : dxmLoggedIn ? 'is-current' : undefined}
             title="待认领商品认领到商品箱"
-            detail="先选择店小秘已有待认领商品，启动真实浏览器把它认领到商品箱；这里不会填写产品网址或创建新商品。"
-            action="待认领入箱"
-            onAction={onShowTasks}
+            detail="必须提供支持站点的真实 HTTP(S) 商品链接；关键词和类目只用于辅助定位，不能单独发起真实认领。"
+            action="创建认领任务"
+            onAction={onShowAcquisition}
           />
           <GuideStep
             index="3"
             state={hasTask ? 'is-current' : undefined}
-            title="填写编辑页配置"
-            detail="商品进入商品箱后，按店小秘编辑页分区填写店铺、类目、价格、图片、包装物流等模板取值。"
-            action="填写配置"
-            onAction={onShowConfig}
+            title="冻结范围并选择店铺级模板"
+            detail="从真实商品箱读取当前店铺范围，选择不绑定类目的整批模板；店小秘引用只采用 5 个可精确选择并读回的控件。"
+            action="创建整批草稿"
+            onAction={onShowDraftEdit}
           />
           <GuideStep
             index="4"
-            title="启动只保存"
-            detail="第二段保存前先做安全检查，再在真实浏览器里人工确认页面，最后让 Agent 只点击保存。"
-            action="进入执行"
-            onAction={onShowConsole}
+            title="一次批准并启动"
+            detail="核对冻结范围后一次批准；系统按商品严格串行只保存。旧诊断浏览器必须先关闭，但不需要先打开它。"
+            action="查看批次记录"
+            onAction={onShowBatchRecords}
           />
         </div>
       </div>
 
       <div className="module-card">
-        <ModuleHead title="每次只保存怎么走" meta="日常操作" />
+        <ModuleHead title="每批怎么走" meta="日常操作" />
         <ol className="operation-guide">
           <li className={dxmLoggedIn ? 'is-done' : undefined}>
             <span aria-hidden="true">1</span>
@@ -92,17 +98,18 @@ export function HelpPage({
           </li>
           <li className={hasTask ? 'is-done' : undefined}>
             <span aria-hidden="true">2</span>
-            <strong>把已有待认领商品认领到商品箱</strong>
+            <strong>用真实来源链接把已有商品认领到商品箱</strong>
           </li>
           <li>
             <span aria-hidden="true">3</span>
-            <strong>从商品箱创建编辑保存任务，检查模板会用哪些值</strong>
+            <strong>读取当前商品箱范围，选择店铺级整批模板</strong>
           </li>
           <li>
             <span aria-hidden="true">4</span>
-            <strong>观察真实浏览器左上角进度，完成保存后查看结果</strong>
+            <strong>一次批准后观察串行进度，完成后查看结果</strong>
           </li>
         </ol>
+        <button className="button button--secondary" type="button" onClick={onShowTasks}>查看当前认领与单商品任务</button>
       </div>
 
       <div className="module-card">
@@ -134,14 +141,14 @@ export function HelpPage({
             <small>主流程只允许保存，不提供发布按钮。</small>
           </div>
           <div className="settings-summary-card">
-            <span>不会批量提交</span>
-            <strong>一次一个商品</strong>
-            <small>当前交付范围是单商品只保存。</small>
+            <span>不会并发写入</span>
+            <strong>严格串行</strong>
+            <small>整批范围一次批准，但始终逐件处理。</small>
           </div>
           <div className="settings-summary-card">
-            <span>不会隐藏操作</span>
-            <strong>真实浏览器可见</strong>
-            <small>Agent 的关键动作会在浏览器进度中显示。</small>
+            <span>不会猜测重试</span>
+            <strong>不确定就停止</strong>
+            <small>结果无法证明时转人工核对，不自动重试。</small>
           </div>
         </div>
       </div>

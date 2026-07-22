@@ -360,6 +360,52 @@ def init_db() -> None:
             CREATE UNIQUE INDEX IF NOT EXISTS idx_edit_batch_items_mutation_scope
                 ON edit_batch_items (mutation_scope_id)
                 WHERE mutation_scope_id IS NOT NULL;
+
+            CREATE TRIGGER IF NOT EXISTS trg_tasks_single_running_browser_update
+            BEFORE UPDATE OF status ON tasks
+            WHEN NEW.status='running' AND OLD.status<>'running'
+            BEGIN
+                SELECT RAISE(ABORT, 'AUTH_ANOTHER_TASK_ACTIVE')
+                 WHERE EXISTS (
+                    SELECT 1 FROM tasks
+                     WHERE status='running' AND id<>NEW.id
+                 );
+                SELECT RAISE(ABORT, 'AUTH_EDIT_BATCH_ACTIVE')
+                 WHERE EXISTS (
+                    SELECT 1 FROM edit_batches
+                     WHERE status IN ('running', 'stop_requested')
+                 );
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_tasks_single_running_browser_insert
+            BEFORE INSERT ON tasks
+            WHEN NEW.status='running'
+            BEGIN
+                SELECT RAISE(ABORT, 'AUTH_ANOTHER_TASK_ACTIVE')
+                 WHERE EXISTS (SELECT 1 FROM tasks WHERE status='running');
+                SELECT RAISE(ABORT, 'AUTH_EDIT_BATCH_ACTIVE')
+                 WHERE EXISTS (
+                    SELECT 1 FROM edit_batches
+                     WHERE status IN ('running', 'stop_requested')
+                 );
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_edit_batches_single_browser_update
+            BEFORE UPDATE OF status ON edit_batches
+            WHEN NEW.status IN ('running', 'stop_requested')
+             AND OLD.status NOT IN ('running', 'stop_requested')
+            BEGIN
+                SELECT RAISE(ABORT, 'LEGACY_TASK_ACTIVE')
+                 WHERE EXISTS (SELECT 1 FROM tasks WHERE status='running');
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_edit_batches_single_browser_insert
+            BEFORE INSERT ON edit_batches
+            WHEN NEW.status IN ('running', 'stop_requested')
+            BEGIN
+                SELECT RAISE(ABORT, 'LEGACY_TASK_ACTIVE')
+                 WHERE EXISTS (SELECT 1 FROM tasks WHERE status='running');
+            END;
             """
         )
         _ensure_columns(
@@ -384,6 +430,7 @@ def init_db() -> None:
             },
         )
         disable_legacy_generated_starter_templates(conn)
+        disable_unexecutable_edit_batch_bundles(conn)
 
 
 def _ensure_columns(conn: sqlite3.Connection, table_name: str, columns: dict[str, str]) -> None:
@@ -450,6 +497,147 @@ def disable_legacy_generated_starter_templates(conn: sqlite3.Connection) -> list
             (disabled_at, template_id),
         )
     return matched_ids
+
+
+def disable_unexecutable_edit_batch_bundles(conn: sqlite3.Connection) -> list[int]:
+    """Quarantine only exact bundle shapes that current execution must reject."""
+
+    rows = conn.execute(
+        """
+        SELECT id, payload_json
+          FROM templates
+         WHERE template_type='edit_batch_bundle' AND is_enabled=1
+         ORDER BY id ASC
+        """
+    ).fetchall()
+    disabled_ids: list[int] = []
+    bundle_keys = {
+        "schema_version",
+        "version",
+        "required_sections",
+        "binding",
+        "source_templates",
+        "sections",
+    }
+    binding_keys = {"store_id", "store_name", "category_name", "platform"}
+    section_names = {
+        "category",
+        "sku",
+        "pricing",
+        "logistics",
+        "image",
+        "compliance",
+        "semi_managed",
+        "dxm_reference",
+    }
+    ordered_section_names = [
+        "category",
+        "sku",
+        "pricing",
+        "logistics",
+        "image",
+        "compliance",
+        "semi_managed",
+        "dxm_reference",
+    ]
+    reference_names = {
+        "attribute_info",
+        "description",
+        "freight",
+        "service",
+        "eu_responsible",
+        "manufacturer",
+        "compliance",
+        "semi_managed",
+    }
+    unsupported_names = {"description", "compliance", "semi_managed"}
+    for row in rows:
+        try:
+            payload = json.loads(str(row.get("payload_json") or ""))
+        except (TypeError, ValueError):
+            continue
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != bundle_keys
+            or payload.get("schema_version") != "dxm_edit_template_bundle.v1"
+        ):
+            continue
+        binding = payload.get("binding")
+        sections = payload.get("sections")
+        source_templates = payload.get("source_templates")
+        if (
+            not isinstance(payload.get("version"), str)
+            or not payload["version"].strip()
+            or payload.get("required_sections") != ordered_section_names
+            or not isinstance(binding, dict)
+            or set(binding) != binding_keys
+            or not isinstance(sections, dict)
+            or set(sections) != section_names
+            or not isinstance(source_templates, dict)
+            or set(source_templates) != section_names
+            or isinstance(binding.get("store_id"), bool)
+            or not isinstance(binding.get("store_id"), int)
+            or binding["store_id"] <= 0
+            or not isinstance(binding.get("store_name"), str)
+            or not binding["store_name"].strip()
+            or not isinstance(binding.get("platform"), str)
+            or not binding["platform"].strip()
+            or (
+                binding.get("category_name") is not None
+                and not isinstance(binding.get("category_name"), str)
+            )
+        ):
+            continue
+        category_name = binding.get("category_name")
+        category_bound = isinstance(category_name, str) and bool(category_name.strip())
+
+        dxm_reference = sections.get("dxm_reference")
+        references = (
+            dxm_reference.get("dxm_reference_templates")
+            if isinstance(dxm_reference, dict)
+            and set(dxm_reference) == {"dxm_reference_templates"}
+            else None
+        )
+        unsupported_configured = False
+        if isinstance(references, dict) and set(references) == reference_names:
+            exact_reference_shape = all(
+                isinstance(config, dict)
+                and set(config) == {"names", "required"}
+                and isinstance(config.get("names"), list)
+                and all(
+                    isinstance(value, str)
+                    and bool(value.strip())
+                    and value == value.strip()
+                    for value in config["names"]
+                )
+                and isinstance(config.get("required"), bool)
+                for config in references.values()
+            )
+            if exact_reference_shape:
+                unsupported_configured = any(
+                    references[name]["required"] is True
+                    or any(
+                        isinstance(value, str) and bool(value.strip())
+                        for value in references[name]["names"]
+                    )
+                    for name in unsupported_names
+                )
+        if category_bound or unsupported_configured:
+            disabled_ids.append(int(row["id"]))
+
+    if not disabled_ids:
+        return []
+    disabled_at = datetime.now(timezone.utc).isoformat()
+    for template_id in disabled_ids:
+        conn.execute(
+            """
+            UPDATE templates
+               SET is_enabled=0, updated_at=?
+             WHERE id=? AND template_type='edit_batch_bundle' AND is_enabled=1
+            """,
+            (disabled_at, template_id),
+        )
+    return disabled_ids
 
 
 def _exact_legacy_generated_starter_identity(

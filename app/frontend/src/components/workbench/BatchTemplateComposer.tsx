@@ -359,7 +359,7 @@ export function BatchTemplateComposer({
             </details>
           </>
         ) : (
-          <span><strong>全部就绪</strong> · 8 个分区均已有可用模板。</span>
+          <span><strong>全部就绪</strong> · 8 个编辑分区均已有可用模板；店小秘引用段只采用 5 个可精确选择并读回的控件。</span>
         )}
       </div>
 

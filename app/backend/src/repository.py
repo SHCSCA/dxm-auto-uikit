@@ -275,7 +275,8 @@ class Repository:
                 "SELECT * FROM edit_batch_items WHERE batch_id=? ORDER BY ordinal ASC",
                 (batch_id,),
             ).fetchall()
-            return self._decode_edit_batch(row, items, include_execution=True)
+            decoded = self._decode_edit_batch(row, items, include_execution=True)
+            return self._public_edit_batch(decoded)
 
     def get_edit_batch_private(self, batch_id: int):
         """Return frozen batch facts and hashed authorization state for the executor only."""
@@ -1467,12 +1468,11 @@ class Repository:
                     'schema_version': row['schema_version'],
                     'status': row['status'],
                     'scope_snapshot_id': int(row['scope_snapshot_id']),
-                    'scope_snapshot_digest': row['scope_snapshot_digest'],
                     'template_id': int(row['template_id']),
-                    'template_snapshot_digest': row['template_snapshot_digest'],
-                    'policy_digest': row['policy_digest'],
                     'item_count': int(row['item_count']),
-                    'store_identity': scope_snapshot.get('store_identity'),
+                    'store_identity': self._public_store_identity(
+                        scope_snapshot.get('store_identity')
+                    ),
                     'template': {
                         'name': template_snapshot.get('template_name'),
                         'version': template_payload.get('version'),
@@ -1533,19 +1533,125 @@ class Repository:
             batch['progress'] = build_public_progress(items)
         return batch
 
+    @classmethod
+    def _public_edit_batch(cls, batch: dict[str, Any]) -> dict[str, Any]:
+        """Project frozen execution facts into the small operator-facing contract."""
+
+        scope_snapshot = (
+            batch.get('scope_snapshot')
+            if isinstance(batch.get('scope_snapshot'), dict)
+            else {}
+        )
+        template_snapshot = (
+            batch.get('template_snapshot')
+            if isinstance(batch.get('template_snapshot'), dict)
+            else {}
+        )
+        template_payload = (
+            template_snapshot.get('payload')
+            if isinstance(template_snapshot.get('payload'), dict)
+            else {}
+        )
+        policy = batch.get('policy') if isinstance(batch.get('policy'), dict) else {}
+        public_batch = {
+            'id': batch.get('id'),
+            'schema_version': batch.get('schema_version'),
+            'status': batch.get('status'),
+            'scope_snapshot_id': batch.get('scope_snapshot_id'),
+            'scope_snapshot': cls._public_scope_snapshot(scope_snapshot),
+            'template_id': batch.get('template_id'),
+            'template_snapshot': {
+                'template_name': template_snapshot.get('template_name'),
+                'payload': {'version': template_payload.get('version')},
+            },
+            'policy': {
+                key: policy.get(key)
+                for key in (
+                    'approval_mode',
+                    'dispatch_mode',
+                    'global_concurrency',
+                    'publish_allowed',
+                    'unknown_result_policy',
+                    'identity_drift_policy',
+                    'session_loss_policy',
+                    'pre_save_no_effect_failure_policy',
+                )
+                if key in policy
+            },
+            'created_at': batch.get('created_at'),
+            'updated_at': batch.get('updated_at'),
+            'items': [
+                cls._public_edit_batch_item(item)
+                for item in batch.get('items') or []
+                if isinstance(item, dict)
+            ],
+        }
+        for key in ('approval', 'execution', 'progress'):
+            if key in batch:
+                public_batch[key] = batch[key]
+        return public_batch
+
+    @classmethod
+    def _public_scope_snapshot(cls, snapshot: dict[str, Any]) -> dict[str, Any]:
+        page_state = snapshot.get('page_state') if isinstance(snapshot.get('page_state'), dict) else {}
+        return {
+            'observed_at': snapshot.get('observed_at'),
+            'store_identity': cls._public_store_identity(snapshot.get('store_identity')),
+            'page_state': {
+                key: page_state.get(key)
+                for key in (
+                    'current_page',
+                    'total_items',
+                    'captured_count',
+                    'max_items',
+                    'truncated',
+                )
+                if key in page_state
+            },
+        }
+
+    @staticmethod
+    def _public_store_identity(value: Any) -> dict[str, Any] | None:
+        if not isinstance(value, dict):
+            return None
+        return {'store_name': value.get('store_name')}
+
+    @staticmethod
+    def _public_edit_batch_item(item: dict[str, Any]) -> dict[str, Any]:
+        snapshot = (
+            item.get('item_snapshot')
+            if isinstance(item.get('item_snapshot'), dict)
+            else {}
+        )
+        public_item = {
+            'id': item.get('id'),
+            'batch_id': item.get('batch_id'),
+            'ordinal': item.get('ordinal'),
+            'status': item.get('status'),
+            'item_snapshot': {
+                'title': snapshot.get('title'),
+                'dxm_product_id': snapshot.get('dxm_product_id'),
+                'source_url': snapshot.get('source_url'),
+                'source_urls': list(snapshot.get('source_urls') or []),
+            },
+            'created_at': item.get('created_at'),
+            'updated_at': item.get('updated_at'),
+        }
+        if 'outcome' in item:
+            public_item['outcome'] = item['outcome']
+        return public_item
+
     @staticmethod
     def _decode_edit_batch_approval_summary(row: dict[str, Any]) -> dict[str, Any] | None:
-        if row.get('status') != 'approved' or not row.get('approval_context_json'):
+        if not row.get('approval_context_json'):
             return None
         context = loads(row['approval_context_json'], {})
+        if not isinstance(context, dict):
+            return None
         return {
             'approved': True,
             'approved_by': context.get('approved_by'),
             'approved_at': context.get('issued_at'),
-            'issued_at': context.get('issued_at'),
-            'expires_at': context.get('expires_at'),
-            'confirmation': context.get('confirmation'),
-            'scope_revalidation': context.get('read_attestation'),
         }
 
     def list_products(self, *, include_fixtures: bool = False):
@@ -2073,14 +2179,24 @@ class Repository:
     def update_task_status(self, task_id: int, status: str, completed_jobs: int | None = None, failed_jobs: int | None = None):
         now = now_iso()
         with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             if status == 'running':
-                conn.execute("BEGIN IMMEDIATE")
                 if self._active_edit_batch_exists(conn):
                     raise RuntimeError('AUTH_EDIT_BATCH_ACTIVE')
                 if self._other_running_task_exists(conn, task_id):
                     raise RuntimeError('AUTH_ANOTHER_TASK_ACTIVE')
-            existing = conn.execute("SELECT completed_jobs, failed_jobs FROM tasks WHERE id=?", (task_id,)).fetchone()
+            existing = conn.execute(
+                "SELECT status, completed_jobs, failed_jobs FROM tasks WHERE id=?",
+                (task_id,),
+            ).fetchone()
             if not existing:
+                return False
+            if (
+                str(existing.get("status") or "")
+                in {"failed", "cancelled", "needs_manual_review"}
+                and status in {"running", "completed", "partial_success"}
+                and status != existing.get("status")
+            ):
                 return False
             conn.execute(
                 "UPDATE tasks SET status=?, completed_jobs=?, failed_jobs=?, updated_at=? WHERE id=?",
@@ -2103,11 +2219,23 @@ class Repository:
         now = now_iso()
         placeholders = ", ".join("?" for _ in expected)
         with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             if status == 'running':
-                conn.execute("BEGIN IMMEDIATE")
                 if self._active_edit_batch_exists(conn):
                     return False
                 if self._other_running_task_exists(conn, task_id):
+                    return False
+            if status in {"running", "completed", "partial_success"}:
+                current = conn.execute(
+                    "SELECT status FROM tasks WHERE id=?",
+                    (task_id,),
+                ).fetchone()
+                if (
+                    current
+                    and str(current.get("status") or "")
+                    in {"failed", "cancelled", "needs_manual_review"}
+                    and status != current.get("status")
+                ):
                     return False
             updated = conn.execute(
                 f"""
@@ -2549,7 +2677,7 @@ class Repository:
         try:
             current_time = datetime.fromisoformat(now_text)
         except ValueError:
-            return AuthorizationLeaseResult(False, 'AUTH_TIME_INVALID', self.get_task_private(task_id), None)
+            return AuthorizationLeaseResult(False, 'AUTH_TIME_INVALID', self.get_task(task_id), None)
         if current_time.tzinfo is None:
             current_time = current_time.replace(tzinfo=timezone.utc)
         with connection() as conn:
@@ -2598,9 +2726,14 @@ class Repository:
             elif context_check.get('ok') is not True:
                 reason_code = str(context_check.get('reason_code') or 'AUTH_CONTEXT_MISMATCH')
             if reason_code != 'OK':
-                task['payload'] = payload
+                task['payload'] = self._public_task_payload(payload)
                 task.pop('payload_json', None)
-                return AuthorizationLeaseResult(False, reason_code, task, dict(approval) if approval else None)
+                return AuthorizationLeaseResult(
+                    False,
+                    reason_code,
+                    task,
+                    self._public_authorization_lease(approval),
+                )
             next_approval = dict(approval)
             next_approval.update({'consumed': True, 'consumed_at': now_text})
             next_payload = dict(payload)
@@ -2614,12 +2747,12 @@ class Repository:
                 (dumps(next_payload), now_text, task_id),
             )
             if updated.rowcount != 1:
-                return AuthorizationLeaseResult(False, 'AUTH_START_CAS_CONFLICT', self.get_task_private(task_id), None)
+                return AuthorizationLeaseResult(False, 'AUTH_START_CAS_CONFLICT', self.get_task(task_id), None)
         return AuthorizationLeaseResult(
             True,
             'OK',
-            self.get_task_private(task_id),
-            dict(next_approval),
+            self.get_task(task_id),
+            self._public_authorization_lease(next_approval),
         )
 
     def verify_consumed_task_authorization(
@@ -2635,7 +2768,7 @@ class Repository:
             if current_time.tzinfo is None:
                 current_time = current_time.replace(tzinfo=timezone.utc)
         except ValueError:
-            return AuthorizationLeaseResult(False, 'AUTH_TIME_INVALID', self.get_task_private(task_id), None)
+            return AuthorizationLeaseResult(False, 'AUTH_TIME_INVALID', self.get_task(task_id), None)
         task = self.get_task_private(task_id)
         if not task:
             return AuthorizationLeaseResult(False, 'AUTH_TASK_NOT_FOUND', None, None)
@@ -2667,8 +2800,8 @@ class Repository:
         return AuthorizationLeaseResult(
             reason_code == 'OK',
             reason_code,
-            task,
-            dict(approval) if approval else None,
+            self.get_task(task_id),
+            self._public_authorization_lease(approval),
         )
 
     def try_pause_task(self, task_id: int) -> bool:
@@ -2684,7 +2817,11 @@ class Repository:
         return False
 
     def _public_task_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
-        public_payload = dict(payload or {})
+        public_payload = {
+            key: value
+            for key, value in dict(payload or {}).items()
+            if not self._is_private_task_payload_key(key)
+        }
         approval = public_payload.get('manual_approval')
         if isinstance(approval, dict):
             public_approval = {
@@ -2705,18 +2842,99 @@ class Repository:
             public_payload['manual_approval'] = public_approval
         return public_payload
 
+    @staticmethod
+    def _is_private_task_payload_key(key: Any) -> bool:
+        normalized = str(key).strip().lower().replace('-', '_')
+        compact = normalized.replace('_', '')
+        if compact in {
+            'authorizationcontext',
+            'claimtargetidentity',
+            'claimedproductsourceidentity',
+            'draftboxproof',
+            'sourceidentity',
+            'stageataskfacts',
+            'stagetaskfacts',
+            'startcontext',
+        }:
+            return True
+        if compact == 'grant' or compact.startswith('grant'):
+            return True
+        if compact in {
+            'approvaltoken',
+            'onetimenonce',
+            'rawnonce',
+            'token',
+        }:
+            return True
+        return (
+            'nonce' in compact
+            or compact.endswith('digest')
+            or compact.endswith('fingerprint')
+            or compact.endswith('hash')
+            or compact.endswith('sha256')
+            or compact.endswith('token')
+        )
+
+    @staticmethod
+    def _public_authorization_lease(approval: Any) -> dict[str, Any] | None:
+        if not isinstance(approval, dict) or not approval:
+            return None
+        return {
+            key: approval.get(key)
+            for key in (
+                'approved',
+                'approved_by',
+                'approved_at',
+                'source',
+                'confirmation',
+                'issued_at',
+                'expires_at',
+                'consumed',
+                'consumed_at',
+            )
+            if key in approval
+        }
+
     def update_job(self, job_id: int, **fields):
         now = now_iso()
+        requested_status = fields.get("status")
         cols = []
         values = []
         for key, value in fields.items():
             cols.append(f"{key}=?")
             values.append(value)
+        if not cols:
+            return False
         cols.append("updated_at=?")
         values.append(now)
         values.append(job_id)
         with connection() as conn:
-            conn.execute(f"UPDATE jobs SET {', '.join(cols)} WHERE id=?", values)
+            if requested_status is not None:
+                conn.execute("BEGIN IMMEDIATE")
+                current = conn.execute(
+                    "SELECT status FROM jobs WHERE id=?",
+                    (job_id,),
+                ).fetchone()
+                if not current:
+                    return False
+                current_status = str(current.get("status") or "")
+                next_status = str(requested_status or "")
+                failure_terminal = {
+                    "failed",
+                    "cancelled",
+                    "needs_manual_review",
+                    "stopped_uncertain",
+                }
+                success_terminal = {"succeeded", "completed"}
+                if current_status in failure_terminal and next_status != current_status:
+                    return False
+                if current_status in success_terminal and next_status in {"pending", "running"}:
+                    return False
+            updated = conn.execute(
+                f"UPDATE jobs SET {', '.join(cols)} WHERE id=?",
+                values,
+            )
+            return updated.rowcount == 1
 
     def add_log(self, task_id: int, job_id: int | None, level: str, message: str, context: dict[str, Any] | None = None):
         now = now_iso()

@@ -1885,6 +1885,42 @@ a:focus-visible {
   justify-self: end;
 }
 
+.batch-stop-form {
+  display: flex;
+  align-items: end;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.batch-stop-form label {
+  min-width: min(280px, 100%);
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.batch-stop-form input {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--surface);
+}
+
+.batch-stop-pending {
+  color: var(--amber);
+  text-align: right;
+}
+
+.batch-draft-boundary.is-complete {
+  border-color: #b8ddcb;
+  color: var(--green);
+  background: var(--green-soft);
+}
+
 .batch-primary-notice {
   padding: 10px 12px;
   display: grid;
@@ -2053,6 +2089,11 @@ a:focus-visible {
   }
 
   .batch-progress-card__headline {
+    flex-direction: column;
+  }
+
+  .batch-stop-form {
+    align-items: stretch;
     flex-direction: column;
   }
 

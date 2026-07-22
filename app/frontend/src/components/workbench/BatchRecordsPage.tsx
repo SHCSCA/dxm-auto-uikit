@@ -17,6 +17,7 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
   const [loading, setLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
   const [stopping, setStopping] = useState(false)
+  const [stopRequestedBy, setStopRequestedBy] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [pollingNotice, setPollingNotice] = useState<string | null>(null)
 
@@ -26,6 +27,7 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
     if (!silent) {
       setDetailLoading(true)
       setError(null)
+      setStopRequestedBy('')
     }
     try {
       const nextDetail = await getJson<EditBatchDetail>(`/api/edit-batches/${batchId}`)
@@ -112,8 +114,11 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
 
   async function requestStop() {
     if (!detail || detail.status !== 'running' || stopping) return
-    const requestedBy = window.prompt('请输入停止申请人（最多 200 字）')?.trim()
-    if (!requestedBy) return
+    const requestedBy = stopRequestedBy.trim()
+    if (!requestedBy) {
+      setError('请先填写停止申请人。')
+      return
+    }
     if (requestedBy.length > 200) {
       setError('停止请求未提交：停止申请人不能超过 200 字。')
       return
@@ -134,6 +139,7 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
             progress: nextDetail.progress,
           }
         : batch))
+      setStopRequestedBy('')
     } catch (caught) {
       setError(humanRecordsError(caught, '停止请求未提交'))
     } finally {
@@ -152,7 +158,6 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
           </div>
           <div className="batch-records-head__actions">
             <button className="button button--quiet" type="button" onClick={() => { void loadBatches() }} disabled={loading || detailLoading}>刷新</button>
-            <button className="button button--primary" type="button" onClick={onCreateBatch}>创建新批次</button>
           </div>
         </div>
       </article>
@@ -240,18 +245,50 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
                   <span><strong>{progress.isolated}</strong><small>保存前隔离</small></span>
                   <span><strong>{progress.pending + progress.running}</strong><small>待处理</small></span>
                 </div>
-                {(detail.status === 'running' || detail.status === 'stop_requested') && (
-                  <button
-                    className="button button--quiet batch-stop-action"
-                    type="button"
-                    onClick={() => { void requestStop() }}
-                    disabled={stopping || detail.status === 'stop_requested'}
-                  >
-                    {detail.status === 'stop_requested' ? '已请求停止' : stopping ? '正在提交停止…' : '停止批次'}
-                  </button>
+                {detail.status === 'running' && (
+                  <div className="batch-stop-form">
+                    <label htmlFor="batch-stop-requested-by">
+                      <span>需要安全停止？填写申请人后提交</span>
+                      <input
+                        id="batch-stop-requested-by"
+                        value={stopRequestedBy}
+                        maxLength={200}
+                        onChange={(event) => setStopRequestedBy(event.target.value)}
+                        placeholder="姓名或值班标识"
+                      />
+                    </label>
+                    <button
+                      className="button button--quiet batch-stop-action"
+                      type="button"
+                      onClick={() => { void requestStop() }}
+                      disabled={stopping}
+                    >
+                      {stopping ? '正在提交停止…' : '安全停止批次'}
+                    </button>
+                  </div>
                 )}
+                {detail.status === 'stop_requested' && <small className="batch-stop-pending">停止请求已提交；当前商品确认结束后不会再派发下一件。</small>}
               </div>
             ) : null}
+
+            {detail.status === 'completed' && (
+              <div className="batch-draft-boundary is-complete">
+                <span><strong>下一步：创建下一批</strong><small>本批次已经结束，可以重新读取最新商品箱范围。</small></span>
+                <button className="button button--primary" type="button" onClick={onCreateBatch}>创建下一批</button>
+              </div>
+            )}
+            {detail.status === 'stopped' && !detail.execution.manual_review_required && (
+              <div className="batch-draft-boundary is-complete">
+                <span><strong>批次已安全停止</strong><small>当前没有结果不确定项；需要继续时请重新读取最新范围。</small></span>
+                <button className="button button--primary" type="button" onClick={onCreateBatch}>重新读取范围</button>
+              </div>
+            )}
+            {detail.status === 'stopped' && detail.execution.manual_review_required && (
+              <div className="batch-primary-notice is-danger">
+                <strong>下一步：人工核对真实页面</strong>
+                <span>先确认停止位置商品是否已经保存；结果明确前不要创建重试批次。</span>
+              </div>
+            )}
 
             <div className="batch-record-template-summary" aria-label="本批次模板摘要">
               <span>
@@ -298,8 +335,9 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
           <div className="batch-inline-error" role="alert">{error}</div>
         ) : (
           <div className="batch-record-empty">
-            <strong>选择一条批次记录</strong>
-            <span>详情会从后端读取，不使用本地结果。</span>
+            <strong>{batches.length ? '选择一条批次记录' : '还没有真实批次'}</strong>
+            <span>{batches.length ? '详情会从后端读取，不使用本地结果。' : '先读取真实商品箱范围，再冻结店铺级模板。'}</span>
+            {!batches.length && <button className="button button--primary" type="button" onClick={onCreateBatch}>读取商品箱范围</button>}
           </div>
         )}
       </article>

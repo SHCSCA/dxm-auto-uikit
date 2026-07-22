@@ -18,8 +18,8 @@ import {
   SystemSettings,
 } from './components/WorkbenchModules'
 import { humanOperatorMessage } from './components/workbench/workbenchCopy'
-import type { AcquisitionClaimCreateRequest, AcquisitionClaimResponse, AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, DxmCredentialSaveResult, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LegacyWorkbenchSection, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
-import { composeWorkspace, demoTemplateSeeds, seedRows } from './workspace'
+import type { AcquisitionClaimCreateRequest, AcquisitionClaimResponse, AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, DxmCredentialSaveResult, EditBatchSummary, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LegacyWorkbenchSection, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
+import { composeWorkspace } from './workspace'
 
 const AGENT_CONSOLE_TARGET_URL = 'https://www.dianxiaomi.com/'
 const DXM_TARGET_URLS = {
@@ -41,8 +41,6 @@ const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['batch_save'])
 const DXM_READY_SESSION_STATUSES = new Set(['login_success', 'logged_in', 'not_published_verified', 'workflow_navigation'])
 const CLAIM_ONLY_CONFIRMATION = '确认将该已有商品认领到商品箱'
 const L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
-const DEMO_ENABLED = new URLSearchParams(window.location.search).get('dev') === '1'
-  || (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_DXM_ENABLE_DEMO === '1'
 const initialTaskIdFromUrl = (() => {
   const rawTaskId = new URLSearchParams(window.location.search).get('task_id')
   const taskId = Number(rawTaskId)
@@ -171,6 +169,7 @@ export default function App() {
   }))
   const [activeSection, setActiveSection] = useState<WorkbenchSection>('home')
   const [activeEditBatchId, setActiveEditBatchId] = useState<number | null>(null)
+  const [editBatches, setEditBatches] = useState<EditBatchSummary[]>([])
   const [templateCenterEntryMode, setTemplateCenterEntryMode] = useState<TemplateCenterMode>('sections')
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(initialTaskIdFromUrl)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -277,6 +276,7 @@ export default function App() {
       evidences,
       exceptions,
       reports,
+      batchSummaries,
       consoleStatus,
       finalCheckSummary,
     ] = await Promise.all([
@@ -289,6 +289,7 @@ export default function App() {
       loadOrFallback<Evidence[]>('/api/evidences', []),
       loadOrFallback<ExceptionItem[]>('/api/exceptions', []),
       loadOrFallback<Report[]>('/api/reports', []),
+      loadOrFallback<EditBatchSummary[]>('/api/edit-batches', []),
       loadOrFallback<AgentConsoleSession | null>('/api/agent-console/status', null),
       loadOrFallback<FinalDeliveryCheckSummary | null>('/api/delivery/final-check', null),
     ])
@@ -304,6 +305,7 @@ export default function App() {
       reports,
     })
     setWorkspace(nextWorkspace)
+    setEditBatches(batchSummaries)
     setAgentConsole(consoleStatus)
     setFinalCheck(finalCheckSummary)
     const taskMissing = Boolean(deliveryWorkspace?.requested_task_missing)
@@ -339,14 +341,15 @@ export default function App() {
   }, [refreshWorkspace])
 
   const workspaceHasRunningTask = workspace.tasks.some((task) => task.status === 'running')
+  const workspaceHasRunningBatch = editBatches.some((batch) => batch.status === 'running' || batch.status === 'stop_requested')
 
   useEffect(() => {
-    if (!workspaceHasRunningTask && !agentConsole?.active) return
+    if (!workspaceHasRunningTask && !workspaceHasRunningBatch && !agentConsole?.active) return
     const timer = window.setInterval(() => {
       void refreshWorkspace({ silent: true })
     }, 1500)
     return () => window.clearInterval(timer)
-  }, [agentConsole?.active, refreshWorkspace, workspaceHasRunningTask])
+  }, [agentConsole?.active, refreshWorkspace, workspaceHasRunningBatch, workspaceHasRunningTask])
 
   const refreshConfigPreview = useCallback(async (taskId: number | null = selectedTask?.id ?? null) => {
     if (!taskId) {
@@ -685,59 +688,6 @@ export default function App() {
       await refreshWorkspace()
     } catch (error) {
       setOperationError(humanAcquisitionClaimError(error instanceof Error ? error.message : '创建认领任务失败'))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function bootstrapDemo() {
-    if (!DEMO_ENABLED) {
-      setOperationError('开发自检数据只在 dev=1 模式可用；真实使用请先把店小秘已有待认领商品认领到商品箱，再创建单商品只保存任务并运行保存前安全检查。')
-      return
-    }
-    const confirmed = window.confirm('这会向本地后端写入演示店铺、模板、商品和本地演示核验批次；不会访问店小秘，也不会启动真实保存。继续？')
-    if (!confirmed) return
-    setBusy(true)
-    setOperationError(null)
-    try {
-      let stores = workspace.stores
-      if (!stores.length || workspace.source === 'mock') {
-        const store = await postJson<Store>('/api/stores/connect', { name: 'LOCAL_DEMO_ONLY_DO_NOT_EXECUTE', platform: 'AliExpress' })
-        stores = [store]
-      }
-
-      const existingTemplateTypes = new Set(workspace.templates.map((item) => item.template_type))
-      const missingTemplates = demoTemplateSeeds.filter((item) => !existingTemplateTypes.has(item.template_type))
-      if (missingTemplates.length) {
-        await Promise.all(missingTemplates.map((template) => postJson('/api/templates', template)))
-      }
-
-      let products = workspace.products
-      if (!products.length || workspace.source === 'mock') {
-        products = await postJson<Product[]>('/api/products/import', { rows: seedRows })
-      }
-
-      const store = stores[0]
-      const task = await postJson<Task>('/api/tasks', {
-        name: '本地演示核验批次',
-        store_id: store.id,
-        mode: 'dry_run',
-        publish_scene: 'SMT_SEMI_MANAGED_SAVE_ONLY',
-        product_ids: products.map((item) => item.id),
-        claim_mark: 'AI认领',
-        payload: {
-          store_name: store.name,
-          category_name: products[0]?.category_name ?? '本地演示类目（禁止真实执行）',
-          image: products[0]?.image ?? seedRows[0].image,
-        },
-      })
-      setSelectedTaskId(task.id)
-      syncSelectedTaskIdUrl(task.id)
-      setActiveSection('product_tasks')
-      await refreshWorkspace()
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '准备演示数据失败'
-      setOperationError(humanTaskCreateError(message))
     } finally {
       setBusy(false)
     }
@@ -1186,7 +1136,7 @@ export default function App() {
     && currentSection !== 'draft_edit_save'
     && currentSection !== 'task_history'
   const setWorkbenchSection = useCallback((section: WorkbenchSection) => {
-    if (section === 'template_center') setTemplateCenterEntryMode('sections')
+    if (section === 'template_center') setTemplateCenterEntryMode('batch_bundle')
     setActiveSection(normalizeWorkbenchSection(section))
   }, [])
   const persistedAcquisitionClaimRequest = useMemo(
@@ -1266,6 +1216,7 @@ export default function App() {
             onRunL2Probe={runL2ReadonlyProbe}
             onStartTask={(taskId) => startSelectedTask(taskId)}
             onShowAcquisition={() => setActiveSection('acquisition_claim')}
+            onShowDxmAccess={() => setActiveSection('dxm_access')}
             onSelectTask={(taskId) => {
               setSelectedTaskId(taskId)
               syncSelectedTaskIdUrl(taskId)
@@ -1359,25 +1310,28 @@ export default function App() {
         return (
           <ExceptionQueue
             workspace={workspace}
+            editBatches={editBatches}
             selectedTask={selectedTask}
-            onShowConsole={() => setActiveSection('start_save')}
+            onShowTasks={() => setActiveSection('product_tasks')}
             onShowDraftEdit={() => {
               setActiveEditBatchId(null)
               setActiveSection('draft_edit_save')
             }}
+            onShowBatchRecords={() => setActiveSection('task_history')}
           />
         )
       case 'results':
-        return <ReportCenter workspace={workspace} selectedTask={selectedTask} finalCheck={finalCheck} onShowEvidence={() => setActiveSection('evidence')} onShowConsole={() => setActiveSection('start_save')} onShowExceptions={() => setActiveSection('issues')} />
+        return <ReportCenter workspace={workspace} editBatches={editBatches} selectedTask={selectedTask} finalCheck={finalCheck} onShowDraftEdit={() => { setActiveEditBatchId(null); setActiveSection('draft_edit_save') }} onShowBatchRecords={() => setActiveSection('task_history')} onShowEvidence={() => setActiveSection('evidence')} onShowTasks={() => setActiveSection('product_tasks')} onShowExceptions={() => setActiveSection('issues')} />
       case 'help':
         return (
           <HelpPage
             selectedTask={selectedTask}
             runtimeStatus={runtimeStatus}
             onShowDxmAccess={() => setActiveSection('dxm_access')}
+            onShowAcquisition={() => setActiveSection('acquisition_claim')}
             onShowTasks={() => setActiveSection('product_tasks')}
-            onShowConfig={() => setActiveSection('edit_config')}
-            onShowConsole={() => setActiveSection('start_save')}
+            onShowDraftEdit={() => { setActiveEditBatchId(null); setActiveSection('draft_edit_save') }}
+            onShowBatchRecords={() => setActiveSection('task_history')}
             onShowResults={() => setActiveSection('results')}
             onShowIssues={() => setActiveSection('issues')}
           />
@@ -1389,6 +1343,7 @@ export default function App() {
         return (
           <Dashboard
             workspace={workspace}
+            editBatches={editBatches}
             selectedTask={selectedTask}
             configPreview={configPreview}
             runtimeStatus={runtimeStatus}
@@ -1401,6 +1356,7 @@ export default function App() {
             onShowTasks={() => setActiveSection('task_history')}
             onShowConfig={() => setActiveSection('edit_config')}
             onShowConsole={() => setActiveSection('start_save')}
+            onShowBatchRecords={() => setActiveSection('task_history')}
             onShowReports={() => setActiveSection('results')}
           />
         )

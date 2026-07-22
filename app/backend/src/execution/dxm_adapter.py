@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from src.execution.action_result_contract import ACTION_RESULT_CONTRACTS
+from src.execution.browser_agent_protocol import canonical_frozen_target_identity
 
 
 _FAILURE_CODE_PATTERN = re.compile(r'^[A-Z][A-Z0-9_]{2,63}$')
@@ -21,12 +22,31 @@ _CONTRACT_SOURCE_KEYS = (
     'save_result',
     'unpublished_proof',
 )
+_FROZEN_TARGET_REQUIRED_ACTIONS = frozenset(
+    {
+        'claim_product',
+        'open_editor',
+        'verify_edit_ownership',
+        'fill_editor_required_defaults',
+        'fill_editor_variants',
+        'fill_media_assets',
+        'fill_compliance_defaults',
+        'enable_semi_managed',
+        'open_semi_managed_page',
+        'fill_semi_managed_defaults',
+        'save_only',
+        'verify_not_published',
+    }
+)
 _RECOVERABILITY_BY_CODE = {
     'AUTH_REVALIDATION_FAILED': ('manual_takeover', False, True),
     'AUTH_VERIFIER_MISSING': ('manual_takeover', False, True),
     'BROWSER_SESSION_MISMATCH': ('restart_runtime', True, True),
     'BROWSER_SESSION_UNAVAILABLE': ('restart_runtime', True, True),
-    'MUTATION_OPERATION_FAILED': ('retry_same_page', True, True),
+    'MUTATION_OPERATION_FAILED': ('manual_takeover', False, True),
+    'BROWSER_AGENT_COMMAND_REVOKED': ('manual_takeover', False, True),
+    'BROWSER_AGENT_LATE_RESULT_IGNORED': ('manual_takeover', False, True),
+    'MUTATION_LEDGER_COMMIT_FAILED': ('manual_takeover', False, True),
     'PAGE_LOADING': ('retry_same_page', True, True),
     'RUNTIME_DISCONNECTED': ('restart_runtime', True, True),
     'STRUCTURED_UNPUBLISHED_STATUS_MISSING': ('manual_takeover', False, True),
@@ -42,6 +62,21 @@ class DxmWorkflowAdapter:
 
     def __init__(self, login_flow: Any) -> None:
         self.login_flow = login_flow
+
+    @staticmethod
+    def _require_frozen_target_identity(
+        action: str,
+        target_identity: Mapping[str, Any] | None,
+        store_name: str | None,
+    ) -> dict[str, Any]:
+        if not isinstance(target_identity, Mapping):
+            raise ValueError(f'{action} requires a frozen exact target_identity')
+        if not isinstance(store_name, str) or store_name != ' '.join(store_name.split()) or not store_name:
+            raise ValueError(f'{action} requires a canonical exact store_name')
+        normalized = canonical_frozen_target_identity(dict(target_identity), store_name=store_name)
+        if normalized is None:
+            raise ValueError(f'{action} target_identity validation returned empty')
+        return normalized
 
     def set_workflow_event_listener(self, listener: Any | None) -> None:
         setter = getattr(self.login_flow, 'set_workflow_event_listener', None)
@@ -213,7 +248,11 @@ class DxmWorkflowAdapter:
         product_query: str | None = None,
         store_name: str | None = None,
         target_source_urls: list[str] | None = None,
+        target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        target_identity = self._require_frozen_target_identity(
+            'claim_product', target_identity, store_name
+        )
         return self._result(
             'claim_product',
             self.login_flow.perform_draft_box_action(
@@ -222,12 +261,14 @@ class DxmWorkflowAdapter:
                 product_query=product_query,
                 store_name=store_name,
                 target_source_urls=target_source_urls,
+                target_identity=target_identity,
             ),
             before_values={
                 'note_text': note_text,
                 'product_query': product_query,
                 'store_name': store_name,
                 'target_source_urls': list(target_source_urls or []),
+                'target_identity': dict(target_identity),
             },
         )
 
@@ -239,6 +280,9 @@ class DxmWorkflowAdapter:
         target_source_urls: list[str] | None = None,
         target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        target_identity = self._require_frozen_target_identity(
+            'open_editor', target_identity, store_name
+        )
         return self._result(
             'open_editor',
             self.login_flow.perform_draft_box_action(
@@ -264,6 +308,9 @@ class DxmWorkflowAdapter:
         store_name: str | None = None,
         target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        target_identity = self._require_frozen_target_identity(
+            'enable_semi_managed', target_identity, store_name
+        )
         return self._result(
             'enable_semi_managed',
             self.login_flow.perform_editor_action(
@@ -286,6 +333,9 @@ class DxmWorkflowAdapter:
         store_name: str | None = None,
         target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        target_identity = self._require_frozen_target_identity(
+            'fill_editor_required_defaults', target_identity, store_name
+        )
         return self._result(
             'fill_editor_required_defaults',
             self.login_flow.perform_editor_action(
@@ -310,6 +360,9 @@ class DxmWorkflowAdapter:
         store_name: str | None = None,
         target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        target_identity = self._require_frozen_target_identity(
+            'fill_media_assets', target_identity, store_name
+        )
         return self._result(
             'fill_media_assets',
             self.login_flow.perform_editor_action(
@@ -334,6 +387,9 @@ class DxmWorkflowAdapter:
         target_source_urls: list[str] | None = None,
         target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        target_identity = self._require_frozen_target_identity(
+            'verify_edit_ownership', target_identity, store_name
+        )
         return self._result(
             'verify_edit_ownership',
             self.login_flow.perform_editor_action(
@@ -358,6 +414,9 @@ class DxmWorkflowAdapter:
         store_name: str | None = None,
         target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        target_identity = self._require_frozen_target_identity(
+            'fill_editor_variants', target_identity, store_name
+        )
         return self._result(
             'fill_editor_variants',
             self.login_flow.perform_editor_action(
@@ -382,6 +441,9 @@ class DxmWorkflowAdapter:
         store_name: str | None = None,
         target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        target_identity = self._require_frozen_target_identity(
+            'fill_compliance_defaults', target_identity, store_name
+        )
         return self._result(
             'fill_compliance_defaults',
             self.login_flow.perform_editor_action(
@@ -406,6 +468,9 @@ class DxmWorkflowAdapter:
         store_name: str | None = None,
         target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        target_identity = self._require_frozen_target_identity(
+            'open_semi_managed_page', target_identity, store_name
+        )
         return self._result(
             'open_semi_managed_page',
             self.login_flow.perform_editor_action(
@@ -430,6 +495,9 @@ class DxmWorkflowAdapter:
         store_name: str | None = None,
         target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        target_identity = self._require_frozen_target_identity(
+            'fill_semi_managed_defaults', target_identity, store_name
+        )
         return self._result(
             'fill_semi_managed_defaults',
             self.login_flow.perform_editor_action(
@@ -454,6 +522,9 @@ class DxmWorkflowAdapter:
         store_name: str | None = None,
         target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        target_identity = self._require_frozen_target_identity(
+            'save_only', target_identity, store_name
+        )
         return self._result(
             'save_only',
             self.login_flow.perform_editor_action(
@@ -467,14 +538,7 @@ class DxmWorkflowAdapter:
                 'defaults': dict(defaults or {}),
                 'product_query': product_query,
                 'store_name': store_name,
-                'target_identity': (
-                    _mapping_copy(target_identity)
-                    if target_identity is not None
-                    else {
-                        'product_query': product_query,
-                        'store_name': store_name,
-                    }
-                ),
+                'target_identity': dict(target_identity),
             },
         )
 
@@ -484,6 +548,9 @@ class DxmWorkflowAdapter:
         store_name: str | None = None,
         target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        target_identity = self._require_frozen_target_identity(
+            'verify_not_published', target_identity, store_name
+        )
         return self._result(
             'verify_not_published',
             self.login_flow.perform_editor_action(
@@ -495,14 +562,7 @@ class DxmWorkflowAdapter:
             before_values={
                 'product_query': product_query,
                 'store_name': store_name,
-                'target_identity': (
-                    _mapping_copy(target_identity)
-                    if target_identity is not None
-                    else {
-                        'product_query': product_query,
-                        'store_name': store_name,
-                    }
-                ),
+                'target_identity': dict(target_identity),
             },
         )
 
@@ -667,7 +727,16 @@ class DxmWorkflowAdapter:
     def _facts_inputs_complete(cls, action: str, before_values: Mapping[str, Any]) -> bool:
         if not cls._has_concrete_value(before_values):
             return False
-        if action not in {'save_only', 'verify_not_published'}:
+        if action in {'claim_from_data_acquisition', 'verify_draft_box_claim'}:
+            source_urls = before_values.get('target_source_urls')
+            return bool(
+                str(before_values.get('claim_mark') or '').strip()
+                and str(before_values.get('store_name') or '').strip()
+                and isinstance(source_urls, list)
+                and source_urls
+                and all(isinstance(value, str) and value.strip() for value in source_urls)
+            )
+        if action not in _FROZEN_TARGET_REQUIRED_ACTIONS:
             return True
         target = before_values.get('target_identity')
         if isinstance(target, Mapping) and target.get('schema_version') == 'dxm_draft_box_target.v1':
@@ -680,11 +749,7 @@ class DxmWorkflowAdapter:
                 and str(target.get('store_fingerprint') or '').strip()
                 and str(before_values.get('store_name') or '').strip()
             )
-        return bool(
-            isinstance(target, Mapping)
-            and str(target.get('product_query') or '').strip()
-            and str(target.get('store_name') or '').strip()
-        )
+        return False
 
     @staticmethod
     def _after_values(action: str, sources: Mapping[str, dict[str, Any]]) -> dict[str, Any]:

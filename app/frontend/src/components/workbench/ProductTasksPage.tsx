@@ -21,6 +21,7 @@ type ProductTasksPageProps = {
   onRunL2Probe: () => void
   onStartTask: (taskId: number) => void
   onShowAcquisition: () => void
+  onShowDxmAccess: () => void
   onShowConfig: () => void
   onShowDraftEdit: () => void
   onShowConsole: () => void
@@ -45,6 +46,7 @@ export function ProductTasksPage({
   onRunL2Probe,
   onStartTask,
   onShowAcquisition,
+  onShowDxmAccess,
   onShowConfig,
   onShowDraftEdit,
   onShowConsole,
@@ -78,6 +80,7 @@ export function ProductTasksPage({
   const primaryAction = actionForDecision(decision.code, currentTask, {
     onShowDraftEdit,
     onShowAcquisition,
+    onShowDxmAccess,
     onShowConfig,
     onRunL2Probe,
     onStartTask,
@@ -270,7 +273,7 @@ function buildTaskDecision({
     return decision('show_console', 'warn', '旧诊断浏览器仍在运行', '真实认领、单商品只保存和整批执行不能与旧 Agent Console 共享浏览器。', '到浏览器诊断关闭旧窗口，再回来批准并启动。', '关闭旧诊断浏览器', false)
   }
   if (!dxmLoggedIn) {
-    return decision('show_console', 'warn', '需要登录店小秘', '系统还没有检测到真实店小秘登录态。', '先打开真实浏览器完成登录，再回来继续。', '去浏览器现场', false)
+    return decision('show_login', 'warn', '需要登录店小秘', '系统还没有检测到真实店小秘登录态。', '先到账号与浏览器完成登录，再回来继续。', '登录店小秘', false)
   }
   if (task.mode === 'single_save' && configPreviewLoading) {
     return decision('none', 'warn', '正在检查模板', '系统正在读取本次编辑页模板。', '等待检查完成后再启动。', '等待配置检查', true)
@@ -296,6 +299,7 @@ function decision(code: string, tone: 'ok' | 'warn', what: string, why: string, 
 function actionForDecision(code: string, currentTask: Task | null, actions: {
   onShowDraftEdit: () => void
   onShowAcquisition: () => void
+  onShowDxmAccess: () => void
   onShowConfig: () => void
   onRunL2Probe: () => void
   onStartTask: (taskId: number) => void
@@ -305,6 +309,7 @@ function actionForDecision(code: string, currentTask: Task | null, actions: {
   return ({
     go_draft_edit: actions.onShowDraftEdit,
     show_acquisition: actions.onShowAcquisition,
+    show_login: actions.onShowDxmAccess,
     show_config: actions.onShowConfig,
     run_l2: actions.onRunL2Probe,
     show_console: actions.onShowConsole,

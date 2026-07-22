@@ -646,8 +646,11 @@ def _json_column_object(value: Any, label: str) -> dict[str, Any]:
 def _reject_raw_secret_keys(value: Any) -> None:
     if isinstance(value, dict):
         forbidden = {"token", "approval_token", "nonce", "raw_nonce", "one_time_nonce"}
+        forbidden_compact = {"token", "approvaltoken", "nonce", "rawnonce", "onetimenonce"}
         for key, child in value.items():
-            if str(key).lower() in forbidden:
+            normalized_key = str(key).strip().lower().replace("-", "_")
+            compact_key = normalized_key.replace("_", "")
+            if normalized_key in forbidden or compact_key in forbidden_compact:
                 _reject("RAW_AUTHORIZATION_SECRET_FORBIDDEN", "raw authorization secrets cannot be persisted")
             _reject_raw_secret_keys(child)
     elif isinstance(value, list):

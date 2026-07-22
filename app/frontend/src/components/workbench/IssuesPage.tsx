@@ -1,28 +1,45 @@
 import type { ReactNode } from 'react'
-import type { AcceptanceGap, DeliveryWorkspace, ExceptionItem, Task } from '../../types'
+import type { AcceptanceGap, DeliveryWorkspace, EditBatchSummary, ExceptionItem, Task } from '../../types'
 import { humanOperatorMessage, humanOperatorTitle } from './workbenchCopy'
 
 type IssuesPageProps = {
   workspace: DeliveryWorkspace
+  editBatches: EditBatchSummary[]
   selectedTask: Task | null
-  onShowConsole: () => void
+  onShowTasks: () => void
   onShowDraftEdit: () => void
+  onShowBatchRecords: () => void
 }
 
 const READONLY_PRECHECK_CTA = '运行保存前安全检查'
 const l3PostEvidenceGapIds = new Set(['gap-save-result', 'gap-unpublished-proof', 'gap-network-save-response'])
 
-export function IssuesPage({ workspace, selectedTask, onShowConsole, onShowDraftEdit }: IssuesPageProps) {
+export function IssuesPage({ workspace, editBatches, selectedTask, onShowTasks, onShowDraftEdit, onShowBatchRecords }: IssuesPageProps) {
+  if (editBatches.length) {
+    return <ControlledBatchIssues batches={editBatches} onShowDraftEdit={onShowDraftEdit} onShowBatchRecords={onShowBatchRecords} />
+  }
+  if (!selectedTask && workspace.exceptions.length === 0) {
+    return (
+      <section className="module-layout" aria-label="失败处理">
+        <article className="module-card span-3 issue-primary-action">
+          <span>
+            <strong>当前没有待处理问题</strong>
+            <small>这里不会创建演示异常。真实批次出现结果不确定时会停止，并把人工核对入口显示在这里。</small>
+          </span>
+          <button className="button button--primary" type="button" onClick={onShowDraftEdit}>读取商品箱范围</button>
+        </article>
+      </section>
+    )
+  }
   const exceptions = selectedTask ? workspace.exceptions.filter((item) => item.task_id === selectedTask.id) : workspace.exceptions
-  const presentedAcceptanceGaps = presentAcceptanceGaps(workspace.acceptanceGaps, isRealWriteExpectedBlocked(workspace))
   const emptyExceptionDetail = selectedTask?.status === 'completed'
     ? '当前任务暂无问题记录；如需复核保存链路，请查看保存结果。'
     : '未执行不代表通过；执行失败、字段缺失和保存阻断会进入结果与问题。'
   const primaryAction = exceptions.length
     ? {
-        label: '回到浏览器现场',
-        detail: '先处理列表中的第一条问题；状态不确定时不要重新执行。',
-        onClick: onShowConsole,
+        label: '回到当前保存任务',
+        detail: '先处理列表中的第一条问题；状态不确定时不要重新执行，也不要打开旧诊断浏览器。',
+        onClick: onShowTasks,
       }
     : {
         label: '创建商品箱批次',
@@ -39,7 +56,7 @@ export function IssuesPage({ workspace, selectedTask, onShowConsole, onShowDraft
         </span>
         <button className="button button--primary" type="button" onClick={primaryAction.onClick}>{primaryAction.label}</button>
       </div>
-      <div className="module-card span-2">
+      <div className="module-card span-3">
         <ModuleHead title="结果与问题" meta={`${exceptions.length} 条待处理`} />
         <div className="exception-list">
           {exceptions.map((item) => (
@@ -50,10 +67,70 @@ export function IssuesPage({ workspace, selectedTask, onShowConsole, onShowDraft
           )}
         </div>
       </div>
-      <div className="module-card">
-        <ModuleHead title="还缺哪些证明" meta={`${presentedAcceptanceGaps.length} 项`} />
-        <GapList gaps={presentedAcceptanceGaps} />
-      </div>
+    </section>
+  )
+}
+
+function ControlledBatchIssues({
+  batches,
+  onShowDraftEdit,
+  onShowBatchRecords,
+}: {
+  batches: EditBatchSummary[]
+  onShowDraftEdit: () => void
+  onShowBatchRecords: () => void
+}) {
+  const active = batches.find((batch) => batch.status === 'running' || batch.status === 'stop_requested') ?? null
+  const reviewBatches = batches.filter((batch) => batch.execution.manual_review_required || batch.progress.stopped > 0)
+  const hasIssues = reviewBatches.length > 0
+  const primaryAction = hasIssues || active
+    ? {
+        label: hasIssues ? '打开批次记录核对' : '查看当前串行进度',
+        detail: hasIssues
+          ? '先在真实店小秘页面核对结果不确定的商品，不要自动重试。'
+          : '当前没有需要人工处理的问题；继续观察严格串行进度。',
+        onClick: onShowBatchRecords,
+      }
+    : {
+        label: '创建下一批',
+        detail: '当前没有待处理问题，可以重新读取真实商品箱范围。',
+        onClick: onShowDraftEdit,
+      }
+
+  return (
+    <section className="module-layout" aria-label="结果与问题">
+      <article className="module-card span-3 issue-primary-action">
+        <span>
+          <strong>下一步</strong>
+          <small>{primaryAction.detail}</small>
+        </span>
+        <button className="button button--primary" type="button" onClick={primaryAction.onClick}>{primaryAction.label}</button>
+      </article>
+      <article className="module-card span-3">
+        <ModuleHead title="批次问题" meta={hasIssues ? `${reviewBatches.length} 条待核对` : '暂无待处理问题'} />
+        {hasIssues ? (
+          <div className="exception-list">
+            {reviewBatches.map((batch) => (
+              <article className="exception-card" key={batch.id}>
+                <div className="exception-card__head">
+                  <strong>批次 #{batch.id} 已保护性停止</strong>
+                  <span className="status-pill danger">需人工核对</span>
+                </div>
+                <div className="exception-card__problem-grid">
+                  <span><strong>发生了什么</strong><small>系统无法完整证明其中一件商品的最终结果，已停止后续串行处理。</small></span>
+                  <span><strong>为什么不能继续</strong><small>继续或自动重试可能造成重复保存，必须先核对真实店小秘页面。</small></span>
+                  <span><strong>下一步</strong><small>打开批次记录，按商品顺序核对停止位置和已完成结果。</small></span>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            title={active ? '当前没有待处理问题' : '最近批次没有待处理问题'}
+            detail={active ? '批次仍在严格串行执行；出现不确定结果时会自动停止并进入这里。' : '历史记录来自真实后端，未生成任何演示问题。'}
+          />
+        )}
+      </article>
     </section>
   )
 }
@@ -100,7 +177,7 @@ function buildProblemCardCopy(item: ExceptionItem) {
     return {
       title: '店小秘还没登录',
       what: '系统还没有确认真实店小秘浏览器处于已登录状态。',
-      why: '没有登录态时不会打开浏览器现场执行保存，也不会保存或发布。',
+      why: '没有登录态时不会启动真实认领或保存，也不会发布。',
       next: '点“登录店小秘”，打开真实登录页，完成验证码后再点“检测登录状态”。',
     }
   }

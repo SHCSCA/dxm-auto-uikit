@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -26,6 +27,7 @@ from src.execution.browser_agent_protocol import (
     MutationCommandContractError,
     browser_agent_command_from_worker_request,
     build_mutation_scope_id,
+    canonical_frozen_target_identity,
     mutation_target_hash,
     validate_browser_agent_command,
 )
@@ -43,6 +45,7 @@ from src.state_machine.two_stage import (
     canonical_claim_target_identity,
     canonical_source_identity,
     verify_authorization_context,
+    verify_draft_box_proof,
     verify_exact_stage_task_facts,
 )
 from src.state_machine.contracts import StateName, normalize_execution_mode
@@ -75,6 +78,25 @@ V1_STEPS = [
     (StateName.WRITE_REPORT, "生成商品执行报告", "report"),
     (StateName.RELEASE_LOCK, "释放商品归属锁", "ownership"),
 ]
+
+
+FROZEN_TARGET_STATES = frozenset(
+    {
+        StateName.CLAIM_PRODUCT,
+        StateName.OPEN_EDIT_PAGE,
+        StateName.VERIFY_EDIT_OWNERSHIP,
+        StateName.FILL_BASE_INFO,
+        StateName.FILL_VARIANTS,
+        StateName.FILL_MEDIA,
+        StateName.FILL_COMPLIANCE,
+        StateName.ENABLE_SEMI_MANAGED,
+        StateName.OPEN_SEMI_MANAGED_PAGE,
+        StateName.FILL_SEMI_GOODS,
+        StateName.FILL_SEMI_VARIANTS,
+        StateName.SAVE_ONLY,
+        StateName.VERIFY_NOT_PUBLISHED,
+    }
+)
 
 
 def _normalized_observed_text(value: Any) -> str:
@@ -341,7 +363,7 @@ class V1TaskRunner:
         return getattr(self.workflow_adapter, "requires_persistent_browser_agent", False) is True
 
     async def run_task(self, task_id: int) -> None:
-        task = self.repo.get_task(task_id)
+        task = self.repo.get_task_private(task_id)
         if not task:
             return
         try:
@@ -1218,7 +1240,7 @@ class V1TaskRunner:
             if mode in {"single_save", "batch_save"} and task.get("publish_scene") != "SMT_SEMI_MANAGED_SAVE_ONLY":
                 raise V1ExecutionError("E999", "任务发布场景不安全", "V1 只允许 SMT_SEMI_MANAGED_SAVE_ONLY")
             if mode == "single_save":
-                self._guard_single_save_claimed_product(product)
+                self._guard_single_save_claimed_product(task, job, product)
         if state_name in {StateName.CLAIM_PRODUCT, StateName.CLAIM_TO_DRAFT_BOX, StateName.VERIFY_DRAFT_BOX_CLAIM} and not claim_mark:
             raise V1ExecutionError("E202", "领取标记为空", "任务缺少 claim_mark")
         if state_name == StateName.SAVE_ONLY:
@@ -1266,7 +1288,12 @@ class V1TaskRunner:
                 reason_code,
             )
 
-    def _guard_single_save_claimed_product(self, product: Mapping[str, Any] | None) -> None:
+    def _guard_single_save_claimed_product(
+        self,
+        task: Mapping[str, Any],
+        job: Mapping[str, Any],
+        product: Mapping[str, Any] | None,
+    ) -> None:
         if not product:
             raise V1ExecutionError(
                 "E202",
@@ -1306,6 +1333,137 @@ class V1TaskRunner:
                 "待认领商品任务链不完整",
                 "单商品只保存必须能追溯到已完成的待认领商品任务；请重新完成认领到商品箱后再启动只保存。",
             )
+        snapshot_error = self.repo.single_save_claim_snapshot_error(
+            dict(task),
+            dict(product),
+        )
+        if snapshot_error:
+            raise V1ExecutionError(
+                "E202",
+                "商品箱身份快照已变化",
+                f"{snapshot_error}；请从当前商品箱重新创建单商品只保存任务。",
+            )
+        self._frozen_single_save_target_identity(task, job)
+
+    def _frozen_single_save_target_identity(
+        self,
+        task: Mapping[str, Any],
+        job: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Derive the mutation target only from the immutable Stage A proof snapshot."""
+
+        mode = str(task.get("mode") or "").strip()
+        if mode != "single_save":
+            raise V1ExecutionError(
+                "E999",
+                "真实编辑入口未开放",
+                "只有具有完整商品箱证据的单商品只保存任务可以进入真实编辑链。",
+            )
+        product_id = job.get("product_id")
+        if isinstance(product_id, bool) or not isinstance(product_id, int) or product_id <= 0:
+            raise V1ExecutionError("E202", "商品身份无效", "single_save job is not bound to one exact product")
+        payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+        proof = payload.get("draft_box_proof")
+        stage_a_facts = payload.get("stage_a_task_facts")
+        if not isinstance(proof, Mapping) or not isinstance(stage_a_facts, Mapping):
+            raise V1ExecutionError(
+                "E202",
+                "商品箱证据缺失",
+                "single_save requires the immutable Stage A draft-box proof snapshot",
+            )
+        proof_check = verify_draft_box_proof(
+            proof,
+            stage_a_task_facts=stage_a_facts,
+            product_id=product_id,
+        )
+        if proof_check.get("ok") is not True:
+            raise V1ExecutionError(
+                "E202",
+                "商品箱证据无效",
+                str(proof_check.get("reason_code") or "DRAFT_BOX_PROOF_INVALID"),
+            )
+        proof_content = proof.get("proof_content")
+        observed_source = (
+            proof_content.get("observed_source_identity")
+            if isinstance(proof_content, Mapping)
+            else None
+        )
+        observed_store = (
+            proof_content.get("observed_store_identity")
+            if isinstance(proof_content, Mapping)
+            else None
+        )
+        if not isinstance(observed_source, Mapping) or not isinstance(observed_store, Mapping):
+            raise V1ExecutionError(
+                "E202",
+                "商品箱精确身份缺失",
+                "Stage A proof must contain exact source and structured store observations",
+            )
+        try:
+            source_identity = canonical_source_identity(
+                observed_source.get("primary_url"),
+                observed_source.get("urls") or (),
+            )
+        except TwoStageContractError as exc:
+            raise V1ExecutionError("E202", "商品来源身份无效", exc.reason_code) from exc
+        if dict(observed_source) != source_identity:
+            raise V1ExecutionError(
+                "E202",
+                "商品来源身份不规范",
+                "Stage A observed source identity is not canonical",
+            )
+        snapshot_source = payload.get("claimed_product_source_identity")
+        snapshot_urls = payload.get("claimed_product_source_urls")
+        if snapshot_source != source_identity or snapshot_urls != list(source_identity["urls"]):
+            raise V1ExecutionError(
+                "E202",
+                "商品来源快照不一致",
+                "single_save source snapshot has drifted from the immutable Stage A proof",
+            )
+        _store_id, authoritative_store_name = self._authoritative_store(task)
+        store_name = " ".join(authoritative_store_name.split())
+        observed_store_name = " ".join(str(observed_store.get("store_name") or "").split())
+        selected_store_names = observed_store.get("selected_store_names")
+        cell_evidence = observed_store.get("draft_box_cell_evidence")
+        if (
+            not store_name
+            or observed_store_name != store_name
+            or observed_store.get("selected") is not True
+            or selected_store_names != [store_name]
+            or not isinstance(cell_evidence, Mapping)
+            or cell_evidence.get("source") != "structured_store_cell"
+            or " ".join(str(cell_evidence.get("store_name") or "").split()) != store_name
+        ):
+            raise V1ExecutionError(
+                "E202",
+                "商品箱店铺身份不一致",
+                "single_save target is not bound to the exact structured store cell from Stage A",
+            )
+        store_fingerprint = hashlib.sha256(
+            json.dumps(
+                {"source": "structured_store_cell", "store_name": store_name},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest().upper()
+        candidate = {
+            "schema_version": "dxm_draft_box_target.v1",
+            "store_fingerprint": store_fingerprint,
+            "stable_identity": {
+                "kind": "source_url",
+                "value": source_identity["primary_url"],
+                "fingerprint": str(source_identity["fingerprint"]).upper(),
+            },
+            "source_urls": list(source_identity["urls"]),
+        }
+        try:
+            target = canonical_frozen_target_identity(candidate, store_name=store_name)
+        except MutationCommandContractError as exc:
+            raise V1ExecutionError("E202", "商品箱精确身份无效", str(exc)) from exc
+        if target is None:
+            raise V1ExecutionError("E202", "商品箱精确身份缺失", "frozen target validator returned no target")
+        return target
 
     def _workflow_action_worker_request(
         self,
@@ -1495,7 +1653,19 @@ class V1TaskRunner:
                 },
             ),
         }
-        return specs.get(state_name)
+        spec = specs.get(state_name)
+        if spec is None or state_name not in FROZEN_TARGET_STATES:
+            return spec
+        action_name, error_code, error_title, params = spec
+        return (
+            action_name,
+            error_code,
+            error_title,
+            {
+                **params,
+                "target_identity": self._frozen_single_save_target_identity(task, job),
+            },
+        )
 
     def _run_workflow_action_process(
         self,
@@ -2225,6 +2395,11 @@ class V1TaskRunner:
         acquisition_category = self._acquisition_category_name(task)
         target_source_urls = self._target_source_urls(task, job)
         store_name = self._store_name(task)
+        target_identity = (
+            self._frozen_single_save_target_identity(task, job)
+            if state_name in FROZEN_TARGET_STATES
+            else None
+        )
         actions = {
             StateName.PRECHECK_SESSION: ("check_login_state", "E101", "店小秘登录态检查失败", lambda: self.workflow_adapter.check_login_state()),
             StateName.OPEN_DATA_ACQUISITION: ("open_data_acquisition", "E201", "进入已有待认领列表失败", lambda: self.workflow_adapter.open_data_acquisition()),
@@ -2262,6 +2437,7 @@ class V1TaskRunner:
                     product_query=product_query,
                     store_name=store_name,
                     target_source_urls=target_source_urls,
+                    target_identity=target_identity,
                 ),
             ),
             StateName.OPEN_EDIT_PAGE: (
@@ -2273,6 +2449,7 @@ class V1TaskRunner:
                     store_name=store_name,
                     note_text=claim_mark,
                     target_source_urls=target_source_urls,
+                    target_identity=target_identity,
                 ),
             ),
             StateName.VERIFY_EDIT_OWNERSHIP: (
@@ -2283,6 +2460,7 @@ class V1TaskRunner:
                     product_query=product_query,
                     store_name=store_name,
                     target_source_urls=target_source_urls,
+                    target_identity=target_identity,
                 ),
             ),
             StateName.FILL_BASE_INFO: (
@@ -2293,6 +2471,7 @@ class V1TaskRunner:
                     defaults=defaults,
                     product_query=product_query,
                     store_name=store_name,
+                    target_identity=target_identity,
                 ),
             ),
             StateName.FILL_VARIANTS: (
@@ -2303,6 +2482,7 @@ class V1TaskRunner:
                     defaults=defaults,
                     product_query=product_query,
                     store_name=store_name,
+                    target_identity=target_identity,
                 ),
             ),
             StateName.FILL_MEDIA: (
@@ -2313,6 +2493,7 @@ class V1TaskRunner:
                     defaults=defaults,
                     product_query=product_query,
                     store_name=store_name,
+                    target_identity=target_identity,
                 ),
             ),
             StateName.FILL_COMPLIANCE: (
@@ -2323,6 +2504,7 @@ class V1TaskRunner:
                     defaults=defaults,
                     product_query=product_query,
                     store_name=store_name,
+                    target_identity=target_identity,
                 ),
             ),
             StateName.ENABLE_SEMI_MANAGED: (
@@ -2332,6 +2514,7 @@ class V1TaskRunner:
                 lambda: self.workflow_adapter.enable_semi_managed(
                     product_query=product_query,
                     store_name=store_name,
+                    target_identity=target_identity,
                 ),
             ),
             StateName.OPEN_SEMI_MANAGED_PAGE: (
@@ -2342,6 +2525,7 @@ class V1TaskRunner:
                     defaults=defaults,
                     product_query=product_query,
                     store_name=store_name,
+                    target_identity=target_identity,
                 ),
             ),
             StateName.FILL_SEMI_GOODS: (
@@ -2352,6 +2536,7 @@ class V1TaskRunner:
                     defaults=defaults,
                     product_query=product_query,
                     store_name=store_name,
+                    target_identity=target_identity,
                 ),
             ),
             StateName.FILL_SEMI_VARIANTS: (
@@ -2362,6 +2547,7 @@ class V1TaskRunner:
                     defaults=defaults,
                     product_query=product_query,
                     store_name=store_name,
+                    target_identity=target_identity,
                 ),
             ),
             StateName.SAVE_ONLY: (
@@ -2372,6 +2558,7 @@ class V1TaskRunner:
                     defaults=defaults,
                     product_query=product_query,
                     store_name=store_name,
+                    target_identity=target_identity,
                 ),
             ),
             StateName.VERIFY_NOT_PUBLISHED: (
@@ -2381,6 +2568,7 @@ class V1TaskRunner:
                 lambda: self.workflow_adapter.verify_not_published(
                     product_query=product_query,
                     store_name=store_name,
+                    target_identity=target_identity,
                 ),
             ),
         }
@@ -2985,6 +3173,12 @@ class V1TaskRunner:
         return evidence.get("save_result")
 
     def _store_name(self, task: dict[str, Any]) -> str:
+        try:
+            _store_id, authoritative_name = self._authoritative_store(task)
+        except V1ExecutionError:
+            authoritative_name = ""
+        if authoritative_name:
+            return authoritative_name
         payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
         configured = str(
             payload.get("store_name")
@@ -2993,13 +3187,7 @@ class V1TaskRunner:
             or task.get("store")
             or ""
         ).strip()
-        if configured:
-            return configured
-        try:
-            _store_id, authoritative_name = self._authoritative_store(task)
-        except V1ExecutionError:
-            return ""
-        return authoritative_name
+        return configured
 
     def _authoritative_store(self, task: Mapping[str, Any]) -> tuple[int, str]:
         try:

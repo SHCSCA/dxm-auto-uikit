@@ -22,7 +22,11 @@ from src.execution.browser_agent_protocol import mutation_target_hash
 from src.execution.browser_runtime import chrome_launch_options
 from src.execution.dxm_live import DxmLiveClient
 from src.services.agent_console import HUD_INIT_SCRIPT
-from src.state_machine.two_stage import TwoStageContractError, canonical_source_identity
+from src.state_machine.two_stage import (
+    TwoStageContractError,
+    canonical_source_identity,
+    is_supported_product_detail_url,
+)
 from src.utils import now_iso
 
 RUNTIME_STATE_FILE = SESSION_DIR / 'dianxiaomi_runtime_state.json'
@@ -1873,6 +1877,13 @@ class DxmLoginFlow:
             'note_verified': result.get('note_verified'),
             'target_row_text': result.get('target_row_text'),
             'target_source_urls': result.get('target_source_urls', []),
+            'target_identity': result.get('target_identity'),
+            'target_identity_sha256': result.get('target_identity_sha256'),
+            'target_identity_evidence': result.get('target_identity_evidence'),
+            'product_identity_match': result.get('product_identity_match'),
+            'store_identity_match': result.get('store_identity_match'),
+            'store_match': result.get('store_match'),
+            'source_identity_match': result.get('source_identity_match'),
             'draft_action_result': dict(result),
         }
         self._write_state(state)
@@ -2377,15 +2388,17 @@ class DxmLoginFlow:
         target_source_urls: list[str] | None = None,
         target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        normalized_target: dict[str, Any] | None = None
-        target_identity_sha256: str | None = None
-        if target_identity is not None:
-            normalized_target, target_identity_sha256 = self._normalize_frozen_target_identity(
-                target_identity,
-                store_name=store_name,
-                target_source_urls=target_source_urls,
+        if target_identity is None:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_REQUIRED',
+                f'{action} 必须携带冻结商品身份，已在打开商品箱前停止。',
             )
-            target_source_urls = list(normalized_target['source_urls'])
+        normalized_target, target_identity_sha256 = self._normalize_frozen_target_identity(
+            target_identity,
+            store_name=store_name,
+            target_source_urls=target_source_urls,
+        )
+        target_source_urls = list(normalized_target['source_urls'])
         page = self._ensure_page_with_cookies()
         if action == 'edit':
             open_editor = self._find_open_editor_page_for_target(
@@ -2599,14 +2612,32 @@ class DxmLoginFlow:
 
         note_text = note_text or 'AI认领'
         if note_text in (row_info.get('rowText') or ''):
-            note_result = {'verified': True, 'rowText': row_info.get('rowText'), 'already_present': True}
+            exact_row = self._find_draft_box_row_by_frozen_target(
+                page,
+                target_identity=normalized_target,
+                target_identity_sha256=str(target_identity_sha256),
+                store_name=' '.join(str(store_name or '').split()),
+            )
+            note_result = {
+                'verified': note_text in str(exact_row.get('rowText') or ''),
+                'rowText': exact_row.get('rowText'),
+                'already_present': True,
+                'write_attempted': False,
+                'target_unique': exact_row.get('target_unique') is True,
+                'product_identity_match': exact_row.get('product_identity_match') is True,
+                'store_identity_match': exact_row.get('store_identity_match') is True,
+                'source_identity_match': exact_row.get('source_identity_match') is True,
+                'ownership_binding_match': True,
+                'target_identity_evidence': {'after_readback': exact_row},
+            }
         else:
             note_result = self._add_note_to_draft_row(
                 page,
                 row_info,
                 note_text,
-                product_query=product_query,
                 store_name=store_name,
+                target_identity=normalized_target,
+                target_identity_sha256=str(target_identity_sha256),
             )
         screenshot_path = DRAFT_ACTION_SCREENSHOT_MAP[action]
         screenshot_result = self._capture_optional_workflow_screenshot(
@@ -2624,13 +2655,19 @@ class DxmLoginFlow:
             'note_text': note_text,
             'product_query': product_query,
             'store_name': store_name,
-            'target_identity': result.get('target_identity'),
-            'target_identity_sha256': result.get('target_identity_sha256'),
-            'target_identity_evidence': result.get('target_identity_evidence'),
-            'product_identity_match': result.get('product_identity_match'),
-            'store_identity_match': result.get('store_identity_match'),
-            'store_match': result.get('store_match'),
-            'source_identity_match': result.get('source_identity_match'),
+            'target_identity': dict(normalized_target),
+            'target_identity_sha256': target_identity_sha256,
+            'target_identity_evidence': note_result.get('target_identity_evidence'),
+            'product_identity_match': note_result.get('product_identity_match') is True,
+            'store_identity_match': note_result.get('store_identity_match') is True,
+            'store_match': note_result.get('store_identity_match') is True,
+            'source_identity_match': note_result.get('source_identity_match') is True,
+            'target_unique': note_result.get('target_unique') is True,
+            'note_write_attempted': bool(
+                note_result.get('write_attempted') is True
+                or note_result.get('already_present') is True
+            ),
+            'ownership_binding_match': note_result.get('ownership_binding_match') is True,
             'note_verified': note_result.get('verified'),
             'target_row_text': note_result.get('rowText') or row_info.get('rowText'),
             'target_source_urls': row_info.get('sourceUrls', []),
@@ -2644,6 +2681,17 @@ class DxmLoginFlow:
         store_name: str | None = None,
         target_source_urls: list[str] | None = None,
     ) -> dict[str, Any]:
+        target_source_urls = self._require_canonical_target_source_urls(
+            target_source_urls,
+            phase='认领商品',
+        )
+        normalized_store_name = ' '.join(str(store_name or '').split())
+        if not normalized_store_name or store_name != normalized_store_name:
+            raise FrozenTargetIdentityError(
+                'EXACT_STORE_IDENTITY_REQUIRED',
+                '认领商品缺少规范店铺名称，已在页面操作前停止。',
+            )
+        store_name = normalized_store_name
         self._trace_workflow_event('data_acquisition_claim:open_start')
         data_acquisition_url = WORKFLOW_TARGETS['data_acquisition']['url']
         page = self._open_data_acquisition_page_for_claim(data_acquisition_url)
@@ -2699,6 +2747,16 @@ class DxmLoginFlow:
         )
         if not target.get('ok'):
             raise RuntimeError(target.get('reason') or '未找到可认领的待认领商品')
+        if (
+            target.get('matchedBy') != 'source_url'
+            or not self._source_urls_match_exact(
+                list(target.get('sourceUrls') or []), target_source_urls
+            )
+        ):
+            raise FrozenTargetIdentityError(
+                'EXACT_SOURCE_IDENTITY_MISMATCH',
+                '待认领商品没有唯一精确匹配授权来源 URL，已停止认领。',
+            )
 
         dismissed_modals = self._dismiss_data_acquisition_blocking_modals(page)
         self._trace_workflow_event(
@@ -2728,6 +2786,16 @@ class DxmLoginFlow:
         )
         if not target.get('ok'):
             raise RuntimeError(target.get('reason') or '清理弹窗后未找到可认领的待认领商品')
+        if (
+            target.get('matchedBy') != 'source_url'
+            or not self._source_urls_match_exact(
+                list(target.get('sourceUrls') or []), target_source_urls
+            )
+        ):
+            raise FrozenTargetIdentityError(
+                'EXACT_SOURCE_IDENTITY_DRIFT',
+                '认领点击前商品来源身份已变化，已停止认领。',
+            )
         safety_result = self._assert_data_acquisition_claim_click_safe(
             page,
             target,
@@ -3713,6 +3781,26 @@ class DxmLoginFlow:
         store_name: str | None = None,
         target_source_urls: list[str] | None = None,
     ) -> dict[str, Any]:
+        if any(str(value or '').strip() for value in (target_source_urls or [])):
+            source_target = self._find_data_acquisition_claim_target_by_source_url(
+                page,
+                target_source_urls or [],
+                product_query=product_query,
+            )
+            if (
+                not isinstance(source_target, dict)
+                or source_target.get('ok') is not True
+                or source_target.get('matchedBy') != 'source_url'
+                or not self._claim_candidate_has_authorized_source(
+                    source_target, target_source_urls or []
+                )
+            ):
+                return {
+                    **(source_target if isinstance(source_target, dict) else {}),
+                    'ok': False,
+                    'reason': '待认领商品行来源与授权来源不唯一或不一致，系统已停止；不会按标题认领。',
+                }
+            return source_target
         if str(product_query or '').strip():
             product_target = self._find_data_acquisition_claim_target_by_product_query_script(
                 page,
@@ -3725,22 +3813,6 @@ class DxmLoginFlow:
                 and self._claim_candidate_has_authorized_source(product_target, target_source_urls or [])
             ):
                 return product_target
-        if any(str(value or '').strip() for value in (target_source_urls or [])):
-            source_target = self._find_data_acquisition_claim_target_by_source_url(
-                page,
-                target_source_urls or [],
-                product_query=product_query,
-            )
-            if (
-                isinstance(source_target, dict)
-                and source_target.get('ok')
-                and not self._claim_candidate_has_authorized_source(source_target, target_source_urls or [])
-            ):
-                return {
-                    'ok': False,
-                    'reason': '待认领商品行来源与授权来源不一致，系统已停止；不会认领其他商品。',
-                }
-            return source_target
         return page.evaluate(r'''({productQuery, categoryName, storeName, targetSourceUrls}) => {
           const visible = (el) => {
             const r = el.getBoundingClientRect();
@@ -4019,6 +4091,8 @@ class DxmLoginFlow:
             return {'ok': False, 'reason': '来源链接缺少可用于匹配的商品标识'}
         self._trace_workflow_event('data_acquisition_claim:source_lookup_start', token_count=len(tokens))
         result: dict[str, Any] | None = None
+        matches: list[dict[str, Any]] = []
+        seen_action_rects: set[tuple[int, int, int, int]] = set()
         scanned_links = 0
         matched_without_action: dict[str, Any] | None = None
         try:
@@ -4037,12 +4111,26 @@ class DxmLoginFlow:
             row_text = self._locator_text(row, timeout=1000)
             if self._contains_data_acquisition_claim_forbidden_term(row_text):
                 continue
+            observed_source_urls: list[str] = []
+            try:
+                row_anchors = row.locator('a[href]')
+                for row_anchor_index in range(min(self._locator_count(row_anchors), 20)):
+                    candidate_url = self._locator_attribute(
+                        row_anchors.nth(row_anchor_index), 'href', timeout=500
+                    )
+                    if candidate_url and self._source_urls_match([candidate_url], target_source_urls):
+                        observed_source_urls.append(candidate_url)
+            except Exception:
+                observed_source_urls = [source_url]
+            observed_source_urls = sorted(self._canonical_source_url_set(observed_source_urls))
+            if not self._source_urls_match_exact(observed_source_urls, target_source_urls):
+                continue
             action = self._claim_action_in_container(row)
             if action is None:
                 matched_without_action = {
                     'reason': '待认领商品行内未找到认领按钮',
                     'rowText': row_text[:400],
-                    'sourceUrls': [source_url],
+                    'sourceUrls': observed_source_urls,
                     'debug': {'matchedSourceUrl': source_url, 'scannedLinks': scanned_links},
                 }
                 continue
@@ -4051,12 +4139,19 @@ class DxmLoginFlow:
                 matched_without_action = {
                     'reason': '待认领商品行内未拿到可点击认领按钮位置',
                     'rowText': row_text[:400],
-                    'sourceUrls': [source_url],
+                    'sourceUrls': observed_source_urls,
                     'debug': {'matchedSourceUrl': source_url, 'scannedLinks': scanned_links},
                 }
                 continue
             action_text = self._locator_text(action, timeout=1000) or '认领'
-            result = {
+            rect_key = tuple(
+                int(round(float(action_rect.get(key) or 0)))
+                for key in ('x', 'y', 'w', 'h')
+            )
+            if rect_key in seen_action_rects:
+                continue
+            seen_action_rects.add(rect_key)
+            matches.append({
                 'ok': True,
                 'matchedBy': 'source_url',
                 'rowIndex': index,
@@ -4064,14 +4159,30 @@ class DxmLoginFlow:
                 'rowText': row_text[:800],
                 'actionText': action_text[:120],
                 'actionRect': action_rect,
-                'sourceUrls': [source_url],
+                'sourceUrls': observed_source_urls,
                 'debug': {
                     'matchedSourceUrl': source_url,
                     'scannedLinks': scanned_links,
                     'strategy': 'canonical_exact_bounded_locator',
                 },
+            })
+        if len(matches) == 1:
+            result = matches[0]
+        elif len(matches) > 1:
+            result = {
+                'ok': False,
+                'reason': '来源 URL 精确匹配到多个可认领商品行，已停止认领。',
+                'matchCount': len(matches),
+                'matches': [
+                    {
+                        'rowIndex': item.get('rowIndex'),
+                        'sourceUrls': item.get('sourceUrls'),
+                        'actionRect': item.get('actionRect'),
+                    }
+                    for item in matches[:5]
+                ],
+                'debug': {'scannedLinks': scanned_links, 'strategy': 'canonical_exact_unique_locator'},
             }
-            break
         if result is None and matched_without_action:
             result = {'ok': False, **matched_without_action}
         if result is None:
@@ -4301,6 +4412,37 @@ class DxmLoginFlow:
         targets = self._canonical_source_url_set(target_urls)
         return bool(actual and targets and actual == targets)
 
+    def _require_canonical_target_source_urls(
+        self,
+        target_source_urls: list[str] | None,
+        *,
+        phase: str,
+    ) -> list[str]:
+        if not isinstance(target_source_urls, list) or not target_source_urls or any(
+            not isinstance(value, str) or not value.strip() for value in target_source_urls
+        ):
+            raise FrozenTargetIdentityError(
+                'EXACT_SOURCE_IDENTITY_REQUIRED',
+                f'{phase}缺少非空规范来源 URL，已停止操作。',
+            )
+        raw_urls = [value.strip() for value in target_source_urls]
+        try:
+            canonical = canonical_source_identity(raw_urls[0], raw_urls)
+        except TwoStageContractError as exc:
+            raise FrozenTargetIdentityError(
+                'EXACT_SOURCE_IDENTITY_INVALID',
+                f'{phase}的来源 URL 不是可验证的商品详情页，已停止操作。',
+            ) from exc
+        canonical_urls = list(canonical['urls'])
+        if raw_urls != canonical_urls or any(
+            not self._is_supported_frozen_source_url(value) for value in canonical_urls
+        ):
+            raise FrozenTargetIdentityError(
+                'EXACT_SOURCE_IDENTITY_NON_CANONICAL',
+                f'{phase}的来源 URL 未规范化，已停止操作。',
+            )
+        return canonical_urls
+
     def _canonical_source_url_set(self, urls: list[str]) -> set[str]:
         canonical: set[str] = set()
         try:
@@ -4325,29 +4467,7 @@ class DxmLoginFlow:
 
     @staticmethod
     def _is_supported_frozen_source_url(value: str) -> bool:
-        try:
-            parsed = urlparse(value)
-        except ValueError:
-            return False
-        host = str(parsed.hostname or '').casefold().rstrip('.')
-        path = str(parsed.path or '')
-
-        def host_matches(domain: str) -> bool:
-            return host == domain or host.endswith(f'.{domain}')
-
-        if host_matches('dianxiaomi.com'):
-            return False
-        if host_matches('1688.com'):
-            return re.fullmatch(r'/offer/[0-9]+\.html', path, flags=re.IGNORECASE) is not None
-        if host_matches('yangkeduo.com'):
-            goods_id = (parse_qs(parsed.query).get('goods_id') or [''])[0]
-            return bool(
-                re.fullmatch(r'/goods2?\.html', path, flags=re.IGNORECASE)
-                and re.fullmatch(r'[0-9]+', str(goods_id or ''))
-            )
-        if host_matches('aliexpress.com'):
-            return re.fullmatch(r'/item/[0-9]+\.html', path, flags=re.IGNORECASE) is not None
-        return False
+        return is_supported_product_detail_url(value)
 
     def _normalize_frozen_target_identity(
         self,
@@ -4479,11 +4599,11 @@ class DxmLoginFlow:
     ) -> bool:
         authorized = [str(value).strip() for value in target_source_urls if str(value or '').strip()]
         if not authorized:
-            return True
+            return False
         observed = candidate.get('sourceUrls')
         if not isinstance(observed, list):
             return False
-        return self._source_urls_match(observed, authorized)
+        return self._source_urls_match_exact(observed, authorized)
 
     def _source_match_container(self, anchor: Any) -> Any:
         for selector in (
@@ -4980,6 +5100,17 @@ class DxmLoginFlow:
         store_name: str | None = None,
         target_source_urls: list[str] | None = None,
     ) -> dict[str, Any]:
+        authorized_target_source_urls = self._require_canonical_target_source_urls(
+            target_source_urls,
+            phase='商品箱认领验证',
+        )
+        normalized_store_name = ' '.join(str(store_name or '').split())
+        if not normalized_store_name or store_name != normalized_store_name:
+            raise FrozenTargetIdentityError(
+                'EXACT_STORE_IDENTITY_REQUIRED',
+                '商品箱认领验证缺少规范店铺名称，已在导航前停止。',
+            )
+        store_name = normalized_store_name
         self._trace_workflow_event(
             'draft_box_claim_verify:start',
             product_query=product_query,
@@ -4997,10 +5128,6 @@ class DxmLoginFlow:
         )
         product_query = product_query or claimed.get('title')
         category_name = category_name or claimed.get('category_name')
-        authorized_target_source_urls = list(target_source_urls or [])
-        resolved_target_source_urls = list(authorized_target_source_urls)
-        if claimed.get('source_url'):
-            resolved_target_source_urls.append(claimed.get('source_url'))
         page = self._ensure_page_with_cookies()
         visible_from_data_acquisition = os.name == 'nt' and not self._is_headless() and self._is_data_acquisition_page_url(page)
         if visible_from_data_acquisition:
@@ -5148,22 +5275,18 @@ class DxmLoginFlow:
             human_step='检查商品箱弹窗',
         )
         row_info: dict[str, Any] | None = None
-        match_input_kind = 'keyword' if str(product_query or '').strip() else 'category_name'
-        match_input_value = str(product_query or category_name or '').strip()
         try:
             self._trace_workflow_event(
                 'draft_box_claim_verify:find_visible_start',
-                product_query=product_query,
+                product_query=None,
                 store_name=store_name,
-                target_source_urls=resolved_target_source_urls,
+                target_source_urls=authorized_target_source_urls,
                 human_step='先检查当前商品箱列表',
             )
             row_info = self._find_draft_box_row(
                 page,
-                product_query,
                 store_name=store_name,
-                claim_mark=claim_mark,
-                target_source_urls=resolved_target_source_urls,
+                target_source_urls=authorized_target_source_urls,
             )
             self._trace_workflow_event(
                 'draft_box_claim_verify:find_visible_done',
@@ -5178,45 +5301,41 @@ class DxmLoginFlow:
             )
 
         if row_info is None:
-            self._search_draft_box(page, product_query=product_query, store_name=store_name)
+            self._search_draft_box(
+                page,
+                product_query=authorized_target_source_urls[0],
+                store_name=store_name,
+            )
             self._trace_workflow_event(
                 'draft_box_claim_verify:search_done',
-                product_query=product_query,
+                product_query=authorized_target_source_urls[0],
                 store_name=store_name,
                 human_step='搜索商品箱商品',
             )
-            try:
-                self._trace_workflow_event(
-                    'draft_box_claim_verify:find_start',
-                    product_query=product_query,
-                    store_name=store_name,
-                    target_source_urls=resolved_target_source_urls,
-                    human_step='定位商品箱商品',
-                )
-                row_info = self._find_draft_box_row(
-                    page,
-                    product_query,
-                    store_name=store_name,
-                    claim_mark=claim_mark,
-                    target_source_urls=resolved_target_source_urls,
-                )
-            except RuntimeError:
-                self._trace_workflow_event(
-                    'draft_box_claim_verify:find_retry_by_category',
-                    category_name=category_name,
-                    human_step='改用类目重新搜索商品箱商品',
-                )
-                self._search_draft_box(page, product_query=category_name, store_name=store_name)
-                match_input_kind = 'category_name'
-                match_input_value = str(category_name or '').strip()
-                row_info = self._find_draft_box_row(
-                    page,
-                    category_name or product_query,
-                    store_name=store_name,
-                    target_source_urls=resolved_target_source_urls,
-                )
+            self._trace_workflow_event(
+                'draft_box_claim_verify:find_start',
+                product_query=None,
+                store_name=store_name,
+                target_source_urls=authorized_target_source_urls,
+                human_step='按精确来源身份定位商品箱商品',
+            )
+            row_info = self._find_draft_box_row(
+                page,
+                store_name=store_name,
+                target_source_urls=authorized_target_source_urls,
+            )
         if row_info is None:
             raise RuntimeError('未找到商品箱商品')
+        if (
+            row_info.get('matchedBy') != 'source_url'
+            or not self._source_urls_match_exact(
+                list(row_info.get('sourceUrls') or []), authorized_target_source_urls
+            )
+        ):
+            raise FrozenTargetIdentityError(
+                'EXACT_SOURCE_IDENTITY_MISMATCH',
+                '商品箱认领验证没有唯一精确读回同一来源身份，已停止。',
+            )
         self._trace_workflow_event(
             'draft_box_claim_verify:find_done',
             matched_by=row_info.get('matchedBy'),
@@ -5252,8 +5371,6 @@ class DxmLoginFlow:
         )
         draft_box_match = self._semantic_draft_box_match(
             row_info,
-            match_input_kind=match_input_kind,
-            match_input_value=match_input_value,
             target_source_urls=authorized_target_source_urls,
             store_name=store_name,
             store_selection=store_selection,
@@ -5283,8 +5400,6 @@ class DxmLoginFlow:
         self,
         row_info: dict[str, Any],
         *,
-        match_input_kind: str,
-        match_input_value: str,
         target_source_urls: list[str],
         store_name: str | None,
         store_selection: dict[str, Any] | None = None,
@@ -5308,25 +5423,14 @@ class DxmLoginFlow:
                 canonical_target_urls.add(canonical_source_identity(target)['primary_url'])
         except TwoStageContractError as exc:
             raise RuntimeError('商品箱真实行包含无效来源链接') from exc
-        exact_source_match = next(
-            (value for value in canonical_observed_urls if value in canonical_target_urls),
-            None,
-        )
-        if target_source_urls:
-            if exact_source_match is None:
-                raise RuntimeError('商品箱真实行来源与授权来源不一致')
-            matched_by = 'source_url'
-            matched_value = exact_source_match
-        else:
-            matched_by = match_input_kind
-            matched_value = ' '.join(str(match_input_value or '').split())
-        if matched_by not in {'source_url', 'keyword', 'category_name'} or not matched_value:
-            raise RuntimeError('商品箱匹配缺少可审计的真实查询依据')
-        normalized_row = ' '.join(row_text.split()).casefold()
-        if matched_by != 'source_url':
-            normalized_match = ' '.join(matched_value.split()).casefold()
-            if not self._contains_exact_observed_hint(normalized_row, normalized_match):
-                raise RuntimeError('商品箱真实行没有实际命中授权查询词')
+        if (
+            raw_matched_by != 'source_url'
+            or not canonical_target_urls
+            or set(canonical_observed_urls) != canonical_target_urls
+        ):
+            raise RuntimeError('商品箱真实行来源与授权来源不唯一或不一致')
+        matched_by = 'source_url'
+        matched_value = sorted(canonical_target_urls)[0]
         normalized_store = ' '.join(str(store_name or '').split()).casefold()
         store_cell_evidence = row_info.get('storeEvidence')
         if not isinstance(store_cell_evidence, dict):
@@ -5427,15 +5531,24 @@ class DxmLoginFlow:
         target_source_urls: list[str] | None = None,
         target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        normalized_target: dict[str, Any] | None = None
-        target_identity_sha256: str | None = None
-        if target_identity is not None:
-            normalized_target, target_identity_sha256 = self._normalize_frozen_target_identity(
-                target_identity,
-                store_name=store_name,
-                target_source_urls=target_source_urls,
+        if target_identity is None:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_REQUIRED',
+                f'{action} 必须携带冻结商品身份，已在访问编辑页前停止。',
             )
-            target_source_urls = list(normalized_target['source_urls'])
+        normalized_target, target_identity_sha256 = self._normalize_frozen_target_identity(
+            target_identity,
+            store_name=store_name,
+            target_source_urls=target_source_urls,
+        )
+        target_source_urls = list(normalized_target['source_urls'])
+        reference_preflight = self._unsupported_dxm_reference_template_preflight(defaults or {})
+        if reference_preflight:
+            return self._unsupported_dxm_reference_template_failure(
+                page=None,
+                action=action,
+                unsupported=reference_preflight,
+            )
         page = self._ensure_page_with_cookies()
         state = self.get_state()
         if normalized_target is not None:
@@ -6751,6 +6864,13 @@ class DxmLoginFlow:
         *,
         require_explicit_defaults: bool = False,
     ) -> dict[str, Any]:
+        unsupported = self._unsupported_dxm_reference_template_preflight(defaults or {})
+        if unsupported:
+            return self._unsupported_dxm_reference_template_failure(
+                page=page,
+                action='editor_save_prefill',
+                unsupported=unsupported,
+            )
         required_result = self._fill_editor_required_defaults_on_page(
             page,
             defaults,
@@ -6962,6 +7082,13 @@ class DxmLoginFlow:
         *,
         require_explicit_defaults: bool = False,
     ) -> dict[str, Any]:
+        unsupported = self._unsupported_dxm_reference_template_preflight(defaults or {})
+        if unsupported:
+            return self._unsupported_dxm_reference_template_failure(
+                page=page,
+                action='open_semi_managed_page',
+                unsupported=unsupported,
+            )
         source_editor_url = page.url
         required_result = self._fill_editor_required_defaults_on_page(
             page,
@@ -7598,6 +7725,13 @@ class DxmLoginFlow:
         *,
         require_explicit_defaults: bool = False,
     ) -> dict[str, Any]:
+        unsupported = self._unsupported_dxm_reference_template_preflight(defaults or {})
+        if unsupported:
+            return self._unsupported_dxm_reference_template_failure(
+                page=page,
+                action='fill_editor_required_defaults',
+                unsupported=unsupported,
+            )
         values, explicit_missing = self._missing_explicit_template_defaults('base', defaults)
         configured_values = dict(values)
         if explicit_missing:
@@ -8777,6 +8911,13 @@ class DxmLoginFlow:
         *,
         require_explicit_defaults: bool = False,
     ) -> dict[str, Any]:
+        unsupported = self._unsupported_dxm_reference_template_preflight(defaults or {})
+        if unsupported:
+            return self._unsupported_dxm_reference_template_failure(
+                page=page,
+                action='fill_compliance_defaults',
+                unsupported=unsupported,
+            )
         values, explicit_missing = self._missing_explicit_template_defaults('compliance', defaults)
         if explicit_missing:
             return self._explicit_template_defaults_failure(
@@ -11033,6 +11174,53 @@ class DxmLoginFlow:
             )
         return results
 
+    def _unsupported_dxm_reference_template_preflight(
+        self,
+        defaults: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        values = self._flatten_editor_defaults(defaults)
+        configs = self._dxm_reference_template_configs(values)
+        unsupported: list[dict[str, Any]] = []
+        for section in ('description', 'compliance', 'semi_managed'):
+            config = configs.get(section)
+            names = [str(value).strip() for value in (config or {}).get('names') or [] if str(value).strip()]
+            if names:
+                unsupported.append({
+                    'section': section,
+                    'names': names,
+                    'required': bool((config or {}).get('required', True)),
+                    'reason_code': 'UNSUPPORTED_REFERENCE_TEMPLATE_RUNTIME',
+                })
+        return unsupported
+
+    def _unsupported_dxm_reference_template_failure(
+        self,
+        *,
+        page: Page | None,
+        action: str,
+        unsupported: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        sections = [str(item.get('section') or '') for item in unsupported if item.get('section')]
+        page_url = str(getattr(page, 'url', '') or '') if page is not None else ''
+        return {
+            'ok': False,
+            'stage': f'{action}_failed',
+            'label': '引用模板运行时不支持',
+            'message': '已在任何页面写入前停止：当前运行时不能执行引用模板：' + '、'.join(sections),
+            'failure_code': 'UNSUPPORTED_REFERENCE_TEMPLATE_RUNTIME',
+            'page_title': '店小秘编辑页',
+            'page_url': page_url,
+            'screenshot_url': None,
+            'fill_result': {
+                'ok': False,
+                'write_attempted': False,
+                'unsupported_runtime_sections': unsupported,
+                'missing': [f'dxm_reference_templates.{section}' for section in sections],
+                'failure_code': 'UNSUPPORTED_REFERENCE_TEMPLATE_RUNTIME',
+            },
+            'published': False,
+        }
+
     def _dxm_reference_template_configs(self, values: dict[str, Any]) -> dict[str, dict[str, Any]]:
         raw = values.get('dxm_reference_templates_resolved') or values.get('dxm_reference_templates')
         if not raw and any(section in values for section in DXM_REFERENCE_TEMPLATE_SECTIONS):
@@ -12537,6 +12725,13 @@ class DxmLoginFlow:
         *,
         require_explicit_defaults: bool = False,
     ) -> dict[str, Any]:
+        unsupported = self._unsupported_dxm_reference_template_preflight(defaults or {})
+        if unsupported:
+            return self._unsupported_dxm_reference_template_failure(
+                page=page,
+                action='fill_semi_managed_defaults',
+                unsupported=unsupported,
+            )
         values, explicit_missing = self._missing_explicit_template_defaults('semi_managed', defaults)
         if explicit_missing:
             return self._explicit_template_defaults_failure(
@@ -17539,9 +17734,21 @@ class DxmLoginFlow:
         page: Page,
         row_info: dict[str, Any],
         note_text: str,
-        product_query: str | None = None,
         store_name: str | None = None,
+        target_identity: dict[str, Any] | None = None,
+        target_identity_sha256: str | None = None,
     ) -> dict[str, Any]:
+        if target_identity is None or not target_identity_sha256:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_REQUIRED',
+                '写入商品备注前缺少冻结商品身份，已停止操作。',
+            )
+        row_info = self._find_draft_box_row_by_frozen_target(
+            page,
+            target_identity=target_identity,
+            target_identity_sha256=target_identity_sha256,
+            store_name=' '.join(str(store_name or '').split()),
+        )
         actions = row_info.get('actions', [])
         more = (
             next((a for a in actions if a.get('txt') == '更多' and 'ant-dropdown-trigger' in str(a.get('cls', ''))), None)
@@ -17644,46 +17851,35 @@ class DxmLoginFlow:
             raise RuntimeError(write_res.get('reason') or '提交备注失败')
         page.wait_for_timeout(2500)
 
-        verify = page.evaluate(r'''({rowIndex, note}) => {
-          const rows = Array.from(document.querySelectorAll('tr.vxe-body--row, tr'));
-          const rowTexts = rows.map(row => (row.innerText || row.textContent || '').replace(/\s+/g, ' ').trim());
-          const fallbackText = rowTexts[rowIndex] || '';
-          const text = fallbackText.slice(0,700);
-          return {verified:fallbackText.includes(note), rowText:text};
-        }''', {'rowIndex': row_info.get('rowIndex'), 'note': note_text})
-        if verify and verify.get('verified'):
-            return verify
-        if store_name or product_query:
-            try:
-                self._search_draft_box(page, product_query=None, store_name=store_name)
-                page.wait_for_timeout(1000)
-                fallback_verify = page.evaluate(r'''({note, store}) => {
-                  const rows = Array.from(document.querySelectorAll('tr.vxe-body--row, tr'));
-                  const texts = rows.map(row => (row.innerText || row.textContent || '').replace(/\s+/g, ' ').trim());
-                  const matches = texts.filter(text => {
-                    if (!text.includes(note)) return false;
-                    if (!store) return true;
-                    return text.includes(`「${store}」`) || text.includes(store);
-                  });
-                  if (matches.length === 1) {
-                    return {verified:true, rowText:matches[0].slice(0,700), verifiedBy:'claim_mark_store_search'};
-                  }
-                  return {
-                    verified:false,
-                    rowText:(matches[0] || '').slice(0,700),
-                    matchCount:matches.length,
-                    verifiedBy:'claim_mark_store_search'
-                  };
-                }''', {'note': note_text, 'store': store_name})
-                if fallback_verify and fallback_verify.get('verified'):
-                    fallback_verify['initialRowText'] = (verify or {}).get('rowText')
-                    return fallback_verify
-                if verify is not None:
-                    verify['fallbackVerify'] = fallback_verify
-            except Exception as exc:
-                if verify is not None:
-                    verify['fallbackError'] = str(exc)
-        return verify or {}
+        exact_row = self._find_draft_box_row_by_frozen_target(
+            page,
+            target_identity=target_identity,
+            target_identity_sha256=target_identity_sha256,
+            store_name=' '.join(str(store_name or '').split()),
+        )
+        row_text = str(exact_row.get('rowText') or '')
+        verified = bool(note_text and note_text in row_text)
+        return {
+            'verified': verified,
+            'rowText': row_text,
+            'verifiedBy': 'frozen_target_structured_row_readback',
+            'write_attempted': True,
+            'target_unique': exact_row.get('target_unique') is True,
+            'product_identity_match': exact_row.get('product_identity_match') is True,
+            'store_identity_match': exact_row.get('store_identity_match') is True,
+            'source_identity_match': exact_row.get('source_identity_match') is True,
+            'ownership_binding_match': bool(
+                verified
+                and exact_row.get('target_unique') is True
+                and exact_row.get('product_identity_match') is True
+                and exact_row.get('store_identity_match') is True
+                and exact_row.get('source_identity_match') is True
+            ),
+            'target_identity_evidence': {
+                'before_readback': row_info,
+                'after_readback': exact_row,
+            },
+        }
 
     def _click_rect_center(
         self,

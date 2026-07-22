@@ -27,6 +27,7 @@ from src.execution.action_result_contract import (
 from src.execution.browser_agent_protocol import (
     BrowserAgentCommand,
     canonical_frozen_target_identity,
+    canonical_mutation_target_payload,
 )
 from src.services.browser_agent_status import build_browser_hud, normalize_operator_copy
 from src.services.evidence_ref import validate_evidence_ref
@@ -58,6 +59,22 @@ _MUTATION_ACTION_SEQUENCE_BY_STATE = MappingProxyType(
             }
         ),
         "SAVE_ONLY": MappingProxyType({"save_only_click": 1}),
+    }
+)
+_FROZEN_TARGET_REQUIRED_ACTIONS = frozenset(
+    {
+        "claim_product",
+        "open_editor",
+        "verify_edit_ownership",
+        "fill_editor_required_defaults",
+        "fill_editor_variants",
+        "fill_media_assets",
+        "fill_compliance_defaults",
+        "enable_semi_managed",
+        "open_semi_managed_page",
+        "fill_semi_managed_defaults",
+        "save_only",
+        "verify_not_published",
     }
 )
 
@@ -814,12 +831,13 @@ class BrowserAgentRuntime:
                 last_step = normalize_operator_copy(self._workflow_event_step(last_event) or command.step_label or command.state)
                 failed_hud = self._build_hud(command, status="failed", error=f"{command.action} timed out；最后停在：{last_step}")
                 with self._lock:
-                    if self._execution_may_publish_status_locked(lease):
+                    if self._execution_is_active_locked(lease):
                         self._status.update(
                             {
                                 "status": "needs_restart",
                                 "healthy": False,
                                 "active": False,
+                                "outcome": "UNKNOWN",
                                 "currentStep": last_step,
                                 "lastError": f"{command.action} timed out；最后停在：{last_step}",
                                 "lastWorkflowEvent": last_event,
@@ -1063,6 +1081,11 @@ class BrowserAgentRuntime:
             updater(hud)
         try:
             raw_result = execute_browser_agent_action(adapter, command.action, command.params)
+            with self._lock:
+                if not self._execution_result_may_publish_locked(lease):
+                    raise RuntimeError(
+                        "BROWSER_AGENT_LATE_RESULT_IGNORED: command lease was revoked or superseded"
+                    )
             result = self._build_action_result_envelope(
                 adapter,
                 command,
@@ -1121,6 +1144,34 @@ class BrowserAgentRuntime:
     ) -> dict[str, Any]:
         raw, contract_facts = _require_raw_action_result_contract(raw_result)
         _validate_reported_action_result_identity(raw, command, context)
+        if command.action in _FROZEN_TARGET_REQUIRED_ACTIONS:
+            command_store = command.params.get("store_name")
+            if not isinstance(command_store, str) or command_store != " ".join(command_store.split()) or not command_store:
+                _raise_action_result_contract_failure(
+                    "frozen target command requires canonical store_name"
+                )
+            command_target = canonical_frozen_target_identity(
+                command.params.get("target_identity"),
+                store_name=command_store,
+            )
+            before_values = contract_facts.get("before_values")
+            if not isinstance(before_values, Mapping):
+                _raise_action_result_contract_failure(
+                    "frozen target result requires structured before_values"
+                )
+            before_store = before_values.get("store_name")
+            before_target = before_values.get("target_identity")
+            if before_store != command_store or before_target != command_target:
+                _raise_action_result_contract_failure(
+                    "contract_facts.before_values target_identity/store_name do not match the command"
+                )
+            if raw.get("ok") is True and (
+                raw.get("store_name") != command_store
+                or raw.get("target_identity") != command_target
+            ):
+                _raise_action_result_contract_failure(
+                    "successful action result target_identity/store_name do not match the command"
+                )
 
         cached_session_id = context.browser_session_id
         current_session_id = self._adapter_browser_session_id(adapter)
@@ -1544,7 +1595,20 @@ class BrowserAgentRuntime:
         self._cancel_epoch += 1
 
     def _execution_may_publish_status_locked(self, lease: _ExecutionLease) -> bool:
-        return self._active_lease is lease and self._lifecycle_intent is None
+        return bool(
+            self._execution_is_active_locked(lease)
+            and self._execution_result_may_publish_locked(lease)
+        )
+
+    def _execution_is_active_locked(self, lease: _ExecutionLease) -> bool:
+        return self._active_lease is lease
+
+    def _execution_result_may_publish_locked(self, lease: _ExecutionLease) -> bool:
+        return bool(
+            lease.revoked is False
+            and lease.context.cancel_epoch == self._cancel_epoch
+            and self._lifecycle_intent is None
+        )
 
     def _mark_worker_finished(self, lease: _ExecutionLease, future: Any) -> None:
         lifecycle_action = None
@@ -1879,6 +1943,8 @@ def execute_browser_agent_action(adapter: Any, action: str, params: dict[str, An
     params = params if isinstance(params, dict) else {}
     raw_target_identity = params.get("target_identity")
     target_identity_kwargs: dict[str, Any] = {}
+    if action in _FROZEN_TARGET_REQUIRED_ACTIONS and raw_target_identity is None:
+        raise ValueError(f"{action} requires a frozen exact target_identity")
     if raw_target_identity is not None:
         if not isinstance(raw_target_identity, Mapping):
             raise ValueError("target_identity must be a structured mapping")
@@ -1906,20 +1972,22 @@ def execute_browser_agent_action(adapter: Any, action: str, params: dict[str, An
     if action == "open_data_acquisition":
         return adapter.open_data_acquisition()
     if action == "claim_from_data_acquisition":
+        claim_target = canonical_mutation_target_payload("claim_from_data_acquisition", params)
         return adapter.claim_from_data_acquisition(
-            str(params.get("claim_mark") or ""),
-            product_query=_optional_str(params.get("product_query")),
-            category_name=_optional_str(params.get("category_name")),
-            store_name=_optional_str(params.get("store_name")),
-            target_source_urls=_optional_str_list(params.get("target_source_urls")),
+            str(claim_target["claim_mark"]),
+            product_query=_optional_str(claim_target.get("product_query")),
+            category_name=_optional_str(claim_target.get("category_name")),
+            store_name=str(claim_target["store_name"]),
+            target_source_urls=list(claim_target["target_source_urls"]),
         )
     if action == "verify_draft_box_claim":
+        claim_target = canonical_mutation_target_payload("claim_from_data_acquisition", params)
         return adapter.verify_draft_box_claim(
-            str(params.get("claim_mark") or ""),
-            product_query=_optional_str(params.get("product_query")),
-            category_name=_optional_str(params.get("category_name")),
-            store_name=_optional_str(params.get("store_name")),
-            target_source_urls=_optional_str_list(params.get("target_source_urls")),
+            str(claim_target["claim_mark"]),
+            product_query=_optional_str(claim_target.get("product_query")),
+            category_name=_optional_str(claim_target.get("category_name")),
+            store_name=str(claim_target["store_name"]),
+            target_source_urls=list(claim_target["target_source_urls"]),
         )
     if action == "open_draft_box":
         return adapter.open_draft_box()
@@ -1929,6 +1997,7 @@ def execute_browser_agent_action(adapter: Any, action: str, params: dict[str, An
             product_query=_optional_str(params.get("product_query")),
             store_name=_optional_str(params.get("store_name")),
             target_source_urls=_optional_str_list(params.get("target_source_urls")),
+            **target_identity_kwargs,
         )
     if action == "open_editor":
         return adapter.open_editor(
@@ -2294,6 +2363,7 @@ def _defer_page_hud_until_after_action(command: BrowserAgentCommand) -> bool:
     return command.action in {
         "check_login_state",
         "open_data_acquisition",
+        "claim_from_data_acquisition",
         "verify_draft_box_claim",
         "open_draft_box",
         "claim_product",

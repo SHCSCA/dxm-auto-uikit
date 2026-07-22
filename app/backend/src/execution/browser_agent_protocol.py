@@ -6,7 +6,6 @@ import json
 import re
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import parse_qs, urlparse
 
 
 MUTATION_COMMAND_PLANS: dict[tuple[str, str], dict[str, int]] = {
@@ -189,35 +188,22 @@ def _canonical_target_source_urls(value: Any) -> list[str]:
             "MUTATION_TARGET_INVALID",
             "target_source_urls do not form a canonical source identity",
         ) from exc
-    return list(identity["urls"])
+    urls = list(identity["urls"])
+    if any(not _is_supported_frozen_source_url(item) for item in urls):
+        raise MutationCommandContractError(
+            "MUTATION_TARGET_INVALID",
+            "target_source_urls must be supported external product detail pages",
+        )
+    return urls
 
 
 def _is_supported_frozen_source_url(value: str) -> bool:
     try:
-        parsed = urlparse(value)
-    except ValueError:
-        return False
-    if parsed.scheme not in {"http", "https"}:
-        return False
-    host = str(parsed.hostname or "").casefold().rstrip(".")
-    path = str(parsed.path or "")
+        from src.state_machine.two_stage import is_supported_product_detail_url
 
-    def host_matches(domain: str) -> bool:
-        return host == domain or host.endswith(f".{domain}")
-
-    if host_matches("dianxiaomi.com"):
+        return is_supported_product_detail_url(value)
+    except Exception:
         return False
-    if host_matches("1688.com"):
-        return re.fullmatch(r"/offer/[0-9]+\.html", path, flags=re.IGNORECASE) is not None
-    if host_matches("yangkeduo.com"):
-        goods_id = (parse_qs(parsed.query).get("goods_id") or [""])[0]
-        return bool(
-            re.fullmatch(r"/goods2?\.html", path, flags=re.IGNORECASE)
-            and re.fullmatch(r"[0-9]+", str(goods_id or ""))
-        )
-    if host_matches("aliexpress.com"):
-        return re.fullmatch(r"/item/[0-9]+\.html", path, flags=re.IGNORECASE) is not None
-    return False
 
 
 def _canonical_frozen_target_identity(value: Any, *, store_name: str) -> dict[str, Any] | None:
@@ -397,10 +383,10 @@ def canonical_mutation_target_payload(
     if action == "claim_from_data_acquisition":
         category_name = _canonical_optional_target_text(values.get("category_name"))
         claim_mark = _canonical_optional_target_text(values.get("claim_mark"))
-        if not claim_mark or not (target_source_urls or product_query or category_name):
+        if not claim_mark or not target_source_urls:
             raise MutationCommandContractError(
                 "MUTATION_TARGET_INVALID",
-                "claim target requires claim_mark and a URL or exact match hint",
+                "claim target requires claim_mark and canonical source URLs",
             )
         return {
             "schema": "dxm.mutation-target.v1",
@@ -415,38 +401,35 @@ def canonical_mutation_target_payload(
         values.get("target_identity"),
         store_name=store_name,
     )
-    if target_identity is not None:
-        frozen_source_urls = target_identity["source_urls"]
-        if target_source_urls and target_source_urls != frozen_source_urls:
-            raise MutationCommandContractError(
-                "MUTATION_TARGET_INVALID",
-                "mutation source URLs do not match the frozen target identity",
-            )
-        target_source_urls = frozen_source_urls
-    if not product_query and target_identity is None:
+    if target_identity is None:
         raise MutationCommandContractError(
             "MUTATION_TARGET_INVALID",
-            "save target requires an exact product_query or frozen target_identity",
+            "save target requires a frozen target_identity",
         )
+    frozen_source_urls = target_identity["source_urls"]
+    if target_source_urls and target_source_urls != frozen_source_urls:
+        raise MutationCommandContractError(
+            "MUTATION_TARGET_INVALID",
+            "mutation source URLs do not match the frozen target identity",
+        )
+    target_source_urls = frozen_source_urls
     target = {
         "schema": "dxm.mutation-target.v1",
         "action": action,
-        # A display title is useful operator context, but must not participate
-        # in the mutation identity once a frozen structured target exists.
-        "product_query": None if target_identity is not None else product_query,
+        # Display text is never part of a mutation identity.
+        "product_query": None,
         "store_name": store_name,
         "target_source_urls": target_source_urls,
-    }
-    if target_identity is not None:
-        target["target_identity"] = target_identity
-        target["target_identity_sha256"] = hashlib.sha256(
+        "target_identity": target_identity,
+        "target_identity_sha256": hashlib.sha256(
             json.dumps(
                 target_identity,
                 ensure_ascii=False,
                 sort_keys=True,
                 separators=(",", ":"),
             ).encode("utf-8")
-        ).hexdigest().upper()
+        ).hexdigest().upper(),
+    }
     return target
 
 

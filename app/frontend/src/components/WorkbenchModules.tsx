@@ -122,7 +122,7 @@ type DxmAccessPageProps = {
 export const l3PostEvidenceGapIds = new Set(['gap-save-result', 'gap-unpublished-proof', 'gap-network-save-response'])
 export const DXM_LOGGED_IN_STATUSES = new Set(['login_success', 'logged_in', 'not_published_verified', 'workflow_navigation'])
 const READONLY_PRECHECK_CTA = '运行保存前安全检查'
-const READONLY_PRECHECK_PURPOSE = '保存前安全检查会打开店小秘已有待认领列表和商品箱，只读取页面，不认领、不保存、不发布；通过后才能打开浏览器现场。'
+const READONLY_PRECHECK_PURPOSE = '保存前安全检查只读取店小秘已有待认领列表和商品箱，不认领、不保存、不发布；通过后回到当前保存任务直接批准并启动。'
 
 const realWriteReleasePrerequisites = [
   {
@@ -4164,7 +4164,7 @@ function AgentBrowserFrame({
                   : realBrowser?.source === 'dxm_flow'
                     ? '真实业务浏览器已连接；任务进度以真实店小秘窗口左上角提示为准。'
                     : '浏览器状态已连接；人工接管或窗口未显示时，控制面板会保持只读/禁用。'
-                : '点击上方按钮后，会使用独立 Profile 打开真实 dianxiaomi.com。'}
+                : '点击上方按钮后，会打开隔离的店小秘诊断窗口。'}
             </span>
             <small>独立浏览器窗口才是真实操作现场；这里仅显示状态和下一步，不在网页内发布。</small>
           </div>
@@ -4189,7 +4189,7 @@ function AgentBrowserFrame({
             <div className="browser-launch-diagnostic" role="alert" aria-label="真实浏览器启动失败诊断">
               <strong>真实浏览器启动失败</strong>
               <span>{realBrowser?.lastError || agentConsole?.last_error}</span>
-              <small>处理：关闭旧的 DXM Agent Console 或旧浏览器进程后重试；浏览器 Profile：{agentConsole?.profile_dir || '等待后端返回 Profile 目录'}。</small>
+              <small>处理：关闭旧的 DXM Agent Console 或旧浏览器进程后重试。</small>
             </div>
           )}
         </div>
@@ -4224,10 +4224,9 @@ function AgentBrowserFrame({
         </div>
       </div>
       <details className="agent-browser__details inline-disclosure">
-        <summary>技术证据路径与网络响应</summary>
+        <summary>诊断网络响应</summary>
         <div className="agent-browser__footer">
           <div className="agent-browser__source">
-            <span>{browserFrame.source}</span>
             <div className="agent-network-events" aria-label="网络响应">
               <strong>网络响应</strong>
               {recentNetworkEvents.length > 0 ? (
@@ -4247,7 +4246,6 @@ function AgentBrowserFrame({
               )}
             </div>
           </div>
-          <span>{agentConsole?.profile_dir ? `浏览器数据目录: ${agentConsole.profile_dir}` : '等待启动独立浏览器'}</span>
         </div>
       </details>
     </div>
@@ -4297,7 +4295,6 @@ function AgentConsoleControls({
 }) {
   const active = Boolean(agentConsole?.active)
   const manualTakeover = Boolean(agentConsole?.manual_takeover)
-  const screenshot = agentConsole?.screenshot_url ?? agentConsole?.screenshot ?? ''
   const launching = Boolean(agentConsole?.browser_launching)
   const visible = Boolean(agentConsole?.browser_visible)
   const takeoverStateLabel = !active
@@ -4312,7 +4309,7 @@ function AgentConsoleControls({
   const lifecycleStatus = !active
     ? browserStartBlocked
       ? primaryPath.browserStatus
-      : '浏览器现场待启动'
+      : '独立诊断浏览器未打开'
     : manualTakeover
       ? '人工正在接管浏览器现场'
       : launching
@@ -4323,11 +4320,11 @@ function AgentConsoleControls({
   const lifecycleNext = !active
     ? browserStartBlocked
       ? primaryPath.next
-      : '点击打开浏览器现场（不保存），进入独立 Profile 浏览器。'
+      : '仅在排查登录或页面问题时打开；它不是执行前置条件，真实任务启动前必须关闭。'
     : manualTakeover
       ? '完成人工处理后点击交还自动浏览器。'
       : launching
-        ? '正在打开独立 Profile 浏览器；控制台会自动刷新状态。'
+        ? '正在打开独立诊断浏览器；控制台会自动刷新状态。'
       : visible
         ? '可刷新画面、人工接管，或使用高级浏览器控制。'
         : '等待窗口显示；如长时间无响应，可关闭后重试。'
@@ -4336,33 +4333,33 @@ function AgentConsoleControls({
   const sessionDisabledReason = busy
     ? '正在处理当前操作，请等待完成后再操作浏览器现场。'
     : !active
-      ? '先打开浏览器现场，才能刷新、接管、交还或关闭。'
+      ? '先打开独立诊断浏览器，才能使用诊断会话操作。'
       : manualTakeover
         ? '当前已人工接管，处理完成后点击交还自动浏览器。'
         : ''
   const snapshotDisabledReason = busy
     ? '正在处理当前操作，请等待完成后再刷新当前画面。'
     : !active
-      ? '先打开浏览器现场，才能刷新当前画面。'
+      ? '先打开独立诊断浏览器，才能刷新当前画面。'
       : ''
   const takeoverDisabledReason = busy
     ? '正在处理当前操作，请等待完成后再人工接管。'
     : !active
-      ? '先打开浏览器现场，才能人工接管真实浏览器。'
+      ? '先打开独立诊断浏览器，才能人工接管。'
       : manualTakeover
         ? '当前已人工接管，处理完成后点击交还自动浏览器。'
         : ''
   const releaseDisabledReason = busy
     ? '正在处理当前操作，请等待完成后再交还自动浏览器。'
     : !active
-      ? '先打开浏览器现场，才需要交还自动浏览器。'
+      ? '独立诊断浏览器未打开，无需交还。'
       : !manualTakeover
         ? '当前未处于人工接管状态，无需交还自动浏览器。'
         : ''
   const stopDisabledReason = busy
     ? '正在处理当前操作，请等待完成后再关闭浏览器。'
     : !active
-      ? '浏览器现场尚未打开，无需关闭。'
+      ? '独立诊断浏览器尚未打开，无需关闭。'
       : ''
   return (
     <div className="agent-console-controls">
@@ -4426,26 +4423,24 @@ function AgentConsoleControls({
           type="button"
           onClick={onStartAgentConsole}
           disabled={busy || !selectedTask || browserStartBlocked || active || launching}
-          title={active ? '当前浏览器现场会话正在运行。' : browserStartBlocked ? browserStartBlockReason : realSaveBlocked ? realSaveBlockReason : '打开浏览器现场（不保存）；保存前仍需人工确认'}
+          title={active ? '独立诊断浏览器正在运行；真实任务启动前需要先关闭。' : browserStartBlocked ? browserStartBlockReason : realSaveBlocked ? realSaveBlockReason : '仅打开独立诊断浏览器，不会启动认领、保存或发布'}
         >
           {launching
-            ? '浏览器现场启动中'
+            ? '诊断浏览器启动中'
             : active
-              ? '浏览器现场已打开'
-              : primaryPath.code === 'l3'
-                ? '人工确认后打开浏览器现场'
-            : '打开浏览器现场（不保存）'}
+              ? '诊断浏览器已打开'
+              : '打开独立诊断浏览器'}
         </button>
       </div>
       <details className="agent-console-controls__mission-drawer inline-disclosure">
         <summary>模式说明与安全边界</summary>
         <div className="agent-console-controls__mission">
-          <strong>控制台 Agent 模式</strong>
-          <span>登录浏览器用于人工登录和验证码。浏览器现场在配置、保存前安全检查和人工确认通过后由 Agent 操作。控制台操控独立真实浏览器；截图仅用于报告证据。</span>
+          <strong>独立诊断模式</strong>
+          <span>本页只用于排查登录、页面和浏览器问题，不负责启动真实认领、单商品保存或整批执行。诊断结束后先关闭窗口，再回到对应任务页批准并启动。</span>
           <div>
-            <b>1 登录/接入</b>
-            <b>2 只读定位</b>
-            <b>3 人工放行后只保存</b>
+            <b>1 排查登录</b>
+            <b>2 查看页面</b>
+            <b>3 关闭后回任务页</b>
           </div>
         </div>
       </details>
@@ -4478,16 +4473,6 @@ function AgentConsoleControls({
               busy={busy}
               onControlAgentConsoleBrowser={onControlAgentConsoleBrowser}
             />
-          </details>
-          <details className="agent-console-controls__fields inline-disclosure">
-            <summary>维护详情</summary>
-            <div className="agent-console-controls__field-grid">
-              <StatusField label="session_id" value={agentConsole?.session_id} />
-              <StatusField label="last_step" value={agentConsole?.last_step_code ?? agentConsole?.hud?.state} />
-              <StatusField label="profile_dir" value={agentConsole?.profile_dir} />
-              <StatusField label="current_url" value={agentConsole?.current_url ?? agentConsole?.target_url} />
-              <StatusField label="screenshot" value={screenshot} />
-            </div>
           </details>
         </div>
       </details>
@@ -5380,8 +5365,8 @@ function buildConsolePrimaryPath({
     return {
       code: 'running',
       title: '正在执行',
-      reason: '任务已经启动，避免重复启动浏览器现场。',
-      detail: '查看当前浏览器现场、运行日志和自动操作轨迹。',
+      reason: '任务已经启动，不能重复派发。',
+      detail: '从当前保存任务查看进度；本页只保留诊断信息。',
       next: '等待当前任务完成',
       ctaLabel: '查看当前执行',
       action: 'current_execution',
@@ -5538,7 +5523,7 @@ function buildConsolePrimaryPath({
       code: 'busy',
       title: '正在处理当前操作',
       reason: '工作台正在处理上一个请求。',
-      detail: '请等待当前请求完成后再启动浏览器现场。',
+      detail: '请等待当前请求完成后再回到任务页继续。',
       next: '等待当前操作完成',
       ctaLabel: '查看检查计划',
       action: 'reports',
@@ -5549,15 +5534,15 @@ function buildConsolePrimaryPath({
   }
   return {
     code: 'ready',
-    title: '可以启动浏览器现场',
+    title: '任务已就绪',
     reason: selectedTask.mode === 'claim_only' ? '店小秘登录和保存前安全检查当前未阻断。' : '配置、保存前安全检查和人工确认当前未阻断。',
     detail: selectedTask.mode === 'claim_only'
-      ? '将打开独立真实浏览器窗口，在店小秘已有待认领列表中定位商品，并放进商品箱。'
-      : '将打开独立真实浏览器窗口；保存前仍需确认，不会发布。',
-    next: selectedTask.mode === 'claim_only' ? '启动待认领入箱' : '打开浏览器现场（不保存）',
-    ctaLabel: selectedTask.mode === 'claim_only' ? '启动待认领入箱' : '打开浏览器现场（不保存）',
-    action: 'start_browser',
-    browserStatus: '浏览器现场待启动',
+      ? '回到当前保存任务，填写批准人后直接批准并启动认领。无需先打开独立诊断浏览器。'
+      : '回到当前保存任务，填写批准人后直接批准并启动单商品只保存。无需先打开独立诊断浏览器。',
+    next: '回到当前保存任务批准并启动',
+    ctaLabel: '回到当前保存任务',
+    action: 'tasks',
+    browserStatus: '独立诊断浏览器按需使用',
     blocksBrowserStart: false,
     saveBlocked: false,
   }
@@ -5691,13 +5676,12 @@ function ReferenceTemplateMap({ sections }: { sections: DxmReferenceTemplateSect
             <strong>{referenceSectionLabels[section.section]}</strong>
             <span>{section.required ? '必填' : '可选'}</span>
           </div>
-          <code>{section.section}</code>
           <div className="pill-list">
             {section.templateNames.length
               ? section.templateNames.map((name) => <span key={name}>{name}</span>)
               : <span className="is-muted">待后端返回命中模板</span>}
           </div>
-          <small>来源：{section.source === 'new' ? 'dxm_reference_templates' : section.source === 'legacy' ? '旧字段兼容' : '默认规则'}</small>
+          <small>{section.templateNames.length ? '执行时会精确选择并读回确认。' : '请先填写真实店小秘模板名称。'}</small>
         </div>
       ))}
     </div>
@@ -6258,14 +6242,14 @@ function getBrowserFrame(workspace: DeliveryWorkspace, selectedTask: Task | null
         ? '来自真实 DXM 业务浏览器会话'
         : runtimeStatus.realBrowser.source === 'browser_agent'
           ? '来自持久在线真实自动浏览器'
-          : runtimeStatus.realBrowser.browserVisible ? '来自可见独立 Profile 浏览器会话' : '浏览器会话已创建，等待窗口可见',
+          : runtimeStatus.realBrowser.browserVisible ? '来自可见的隔离诊断浏览器' : '浏览器会话已创建，等待窗口可见',
     }
   }
   if (agentConsole?.active) {
     return {
       url: agentConsole.current_url || agentConsole.target_url || 'https://www.dianxiaomi.com/',
       evidencePath: agentConsole.screenshot_url ?? agentConsole.screenshot ?? '',
-      source: agentConsole.browser_visible ? '来自可见独立 Profile 浏览器会话' : '浏览器会话已创建，等待窗口可见',
+      source: agentConsole.browser_visible ? '来自可见的隔离诊断浏览器' : '浏览器会话已创建，等待窗口可见',
     }
   }
   const taskEvidence = selectedTask

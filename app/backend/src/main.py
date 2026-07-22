@@ -548,7 +548,7 @@ async def approve_and_start_edit_batch(
     batch_id: int,
     payload: EditBatchApproveAndStartRequest,
 ):
-    batch = repo.get_edit_batch(batch_id)
+    batch = repo.get_edit_batch_private(batch_id)
     if not batch:
         raise HTTPException(status_code=404, detail='Edit batch not found')
     _assert_batch_browser_available()

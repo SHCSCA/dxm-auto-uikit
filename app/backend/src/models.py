@@ -134,12 +134,14 @@ class ProductCreate(BaseModel):
 
 
 class AcquisitionClaimRequest(BaseModel):
-    store_id: int
-    source_url: str | None = None
-    keyword: str | None = None
-    category_name: str | None = None
-    claim_mark: str
-    template_id: int | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    store_id: StrictInt = Field(gt=0)
+    source_url: str = Field(min_length=1, max_length=2048, pattern=r".*\S.*")
+    keyword: str | None = Field(default=None, max_length=300)
+    category_name: str | None = Field(default=None, max_length=200)
+    claim_mark: str = Field(min_length=1, max_length=200, pattern=r".*\S.*")
+    template_id: StrictInt | None = Field(default=None, gt=0)
 
 
 class TaskCreate(BaseModel):
