@@ -14,6 +14,7 @@ type TemplateCenterPageProps = {
   onConfigSaved: () => void | Promise<void>
   onRefreshConfigPreview: () => void | Promise<void>
   onShowDraftEdit: () => void
+  onShowDxmAccess: () => void
   initialMode?: TemplateCenterMode
 }
 
@@ -108,6 +109,7 @@ export function TemplateCenterPage({
   onConfigSaved,
   onRefreshConfigPreview,
   onShowDraftEdit,
+  onShowDxmAccess,
   initialMode = 'sections',
 }: TemplateCenterPageProps) {
   const [templateCenterMode, setTemplateCenterMode] = useState<TemplateCenterMode>(initialMode)
@@ -364,6 +366,7 @@ export function TemplateCenterPage({
             setTemplateCenterMode('sections')
           }}
           onShowDraftEdit={onShowDraftEdit}
+          onShowDxmAccess={onShowDxmAccess}
         />
       ) : (
         <>
@@ -523,17 +526,19 @@ function referenceFieldKey(section: string) {
   return `dxm_reference_templates.${section}.names`
 }
 
-const unsupportedReferenceFieldKeys = new Set([
-  referenceFieldKey('description'),
-  referenceFieldKey('compliance'),
-  referenceFieldKey('semi_managed'),
+const executableReferenceFieldKeys = new Set([
+  referenceFieldKey('attribute_info'),
+  referenceFieldKey('freight'),
+  referenceFieldKey('service'),
+  referenceFieldKey('eu_responsible'),
+  referenceFieldKey('manufacturer'),
 ])
 
 function normalizeTemplateCenterMetadata(metadata: TemplateCenterMetadata): TemplateCenterMetadata {
   return {
     ...metadata,
     sections: metadata.sections.map((section) => section.template_type === 'dxm_reference'
-      ? { ...section, fields: section.fields.filter((field) => !unsupportedReferenceFieldKeys.has(field.key)) }
+      ? { ...section, fields: section.fields.filter((field) => executableReferenceFieldKeys.has(field.key)) }
       : section),
   }
 }

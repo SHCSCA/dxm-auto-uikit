@@ -168,8 +168,8 @@ export function BatchEditPage({
           <dl className="batch-fact-grid" aria-label="已冻结批次事实">
             <div><dt>状态</dt><dd>{humanBatchStatus(draftBatch.status)}</dd></div>
             <div><dt>商品范围</dt><dd>{draftBatch.items.length} 件，按现场顺序</dd></div>
-            <div><dt>店铺</dt><dd>{draftBatch.scope_snapshot.store_identity.store_name}</dd></div>
-            <div><dt>模板</dt><dd>{draftBatch.template_snapshot.template_name} · {templateVersion(draftBatch.template_snapshot)}</dd></div>
+            <div><dt>店铺</dt><dd>{draftBatch.scope_snapshot.store_identity?.store_name ?? '店铺已冻结'}</dd></div>
+            <div><dt>模板</dt><dd>{draftBatch.template_snapshot.template_name ?? '模板已冻结'} · {templateVersion(draftBatch.template_snapshot)}</dd></div>
           </dl>
           {isDraft ? (
             <div className="batch-approval-card" aria-label="整批一次批准">
@@ -355,12 +355,12 @@ function humanBatchError(caught: unknown, action: string) {
   const message = caught instanceof Error ? caught.message.trim() : ''
   const normalized = message.toLowerCase()
   if (normalized.includes('template')) return '整批模板未通过完整性检查。请在模板中心启用完整的整批编辑模板后重试；系统没有执行保存或发布。'
-  if (normalized.includes('session') || normalized.includes('browser')) return '当前可见店小秘会话已变化或不可用。请回到浏览器现场确认仍在商品箱页面后重试；系统没有执行保存或发布。'
+  if (normalized.includes('session') || normalized.includes('browser')) return '当前店小秘登录会话已变化或不可用。请重新检测登录状态，并确认旧诊断浏览器已关闭后重试；系统没有执行保存或发布。'
   if (normalized.includes('scope') || normalized.includes('draft-box') || normalized.includes('draft box')) return '当前商品箱范围不能安全冻结。请确认页面、店铺和商品顺序后重新读取；系统没有执行保存或发布。'
   return `${action}。请刷新工作台后重试；系统没有执行保存或发布。`
 }
 
-function templateVersion(template: Template | null) {
+function templateVersion(template: Pick<Template, 'payload'> | { payload?: { version?: unknown } } | null) {
   const version = template?.payload?.version
   return typeof version === 'string' && version.trim() ? `v${version.replace(/^v/i, '')}` : '版本未标注'
 }

@@ -99,14 +99,12 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
     ? detail.items.find((item) => item.ordinal === progress.current_ordinal) ?? null
     : null
   const exceptionalItems = detail?.items.filter((item) => item.outcome && item.outcome.classification !== 'SUCCEEDED') ?? []
-  const executionReasonCode = detail?.execution.reason_code ?? null
-  const firstManualReviewItem = exceptionalItems.find((item) => item.outcome?.manual_review_required)
   const primaryNotice = error
     ? { tone: 'danger', text: error }
     : detail?.execution.manual_review_required
       ? {
           tone: 'danger',
-          text: humanReasonCode(executionReasonCode ?? firstManualReviewItem?.outcome?.reason_code),
+          text: '其中一件商品的最终结果无法完整证明；批次已停止，请先人工核对真实店小秘页面。',
         }
       : pollingNotice
         ? { tone: 'warning', text: pollingNotice }
@@ -203,7 +201,7 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
             <div className="module-head">
               <div>
                 <span className="eyebrow">批次 #{detail.id}</span>
-                <h2>{detail.scope_snapshot.store_identity.store_name}</h2>
+                <h2>{detail.scope_snapshot.store_identity?.store_name ?? '店铺已冻结'}</h2>
               </div>
               <span className={`batch-status-badge is-${statusTone(detail.status)}`}>{humanBatchStatus(detail.status)}</span>
             </div>
@@ -233,7 +231,7 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
                 <div className="batch-progress-card__headline">
                   <span>
                     <strong>{detail.status === 'stop_requested' ? '正在安全停止' : humanBatchStatus(detail.status)}</strong>
-                    <small>{currentItem ? `当前：第 ${currentItem.ordinal} 件 · ${currentItem.item_snapshot.title}` : progressSummary(detail, progress)}</small>
+                    <small>{currentItem ? `当前：第 ${currentItem.ordinal} 件 · ${currentItem.item_snapshot.title ?? '商品已绑定'}` : progressSummary(detail, progress)}</small>
                   </span>
                   <b>{progress.completed}/{progress.total}</b>
                 </div>
@@ -305,7 +303,7 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
                   <li key={item.id} className={item.status === 'running' ? 'is-current' : ''}>
                     <span>{item.ordinal}</span>
                     <div>
-                      <strong>{item.item_snapshot.title}</strong>
+                      <strong>{item.item_snapshot.title ?? '商品已绑定'}</strong>
                       <small>{item.item_snapshot.dxm_product_id ? `产品 ID ${item.item_snapshot.dxm_product_id}` : '商品身份已由后端绑定'}</small>
                     </div>
                     <b>{humanItemStatus(item.status)}</b>
@@ -317,17 +315,14 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
             <details className="batch-evidence-details">
               <summary>异常与人工复核{exceptionalItems.length ? ` · ${exceptionalItems.length} 项` : ' · 无待处理项'}</summary>
               <div className="batch-evidence-payload">
-                {executionReasonCode && (
-                  <span><strong>批次停止原因</strong><b>{humanReasonCode(executionReasonCode)}</b></span>
-                )}
                 {exceptionalItems.map((item) => (
                   <span key={item.id}>
                     <strong>第 {item.ordinal} 件 · {humanOutcome(item)}</strong>
-                    <b>{humanReasonCode(item.outcome?.reason_code)}</b>
+                    <b>{item.outcome?.manual_review_required ? '先人工核对真实页面，不要自动重试' : '已在保存前安全隔离，未执行写入'}</b>
                     <small>{item.outcome?.manual_review_required ? '需要人工复核' : '已在保存前安全隔离'}{item.outcome?.finished_at ? ` · ${formatDateTime(item.outcome.finished_at)}` : ''}</small>
                   </span>
                 ))}
-                {!executionReasonCode && !exceptionalItems.length && <span><strong>暂无异常</strong><b>当前没有需要人工处理的结果。</b></span>}
+                {!exceptionalItems.length && <span><strong>暂无异常</strong><b>当前没有需要人工处理的结果。</b></span>}
               </div>
             </details>
           </>
@@ -347,7 +342,7 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
 
 function humanRecordsError(caught: unknown, action: string) {
   const message = caught instanceof Error ? caught.message.toLowerCase() : ''
-  if (message.includes('session') || message.includes('runtime')) return `${action}：当前浏览器现场已经变化，请回到浏览器现场确认。`
+  if (message.includes('session') || message.includes('runtime')) return `${action}：当前店小秘会话已经变化，请重新检测登录，并确认旧诊断浏览器已关闭。`
   if (message.includes('status') || message.includes('state')) return `${action}：批次状态已经变化，请刷新后查看最新记录。`
   return `${action}。请刷新工作台后重试。`
 }
@@ -382,21 +377,6 @@ function humanOutcome(item: EditBatchItem) {
     STOPPED_UNCERTAIN: '结果不确定',
   }
   return labels[item.outcome?.classification ?? ''] ?? humanItemStatus(item.status)
-}
-
-function humanReasonCode(reasonCode: string | null | undefined) {
-  if (!reasonCode) return '未记录额外原因'
-  const labels: Record<string, string> = {
-    ITEM_SAVE_PROVEN: '已证明只保存成功',
-    PRE_SAVE_VALIDATION_ISOLATED: '保存前校验未通过，且已证明零写入',
-    PUBLISH_RISK_DETECTED: '检测到发布风险，批次已停止',
-    MUTATION_OUTCOME_UNCERTAIN: '保存动作结果不确定，需要人工复核',
-    OUTCOME_IDENTITY_DRIFT: '商品或浏览器身份发生变化',
-    EVIDENCE_MISSING: '结果证据不完整，需要人工复核',
-    SESSION_LOST: '浏览器会话已丢失',
-    STOP_REQUESTED: '操作员请求停止',
-  }
-  return labels[reasonCode] ?? '执行未能安全继续，需要人工复核'
 }
 
 function progressSummary(detail: EditBatchDetail, progress: EditBatchProgressSummary) {

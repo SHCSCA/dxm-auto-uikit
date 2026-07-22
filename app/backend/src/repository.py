@@ -833,6 +833,7 @@ class Repository:
                 except BatchExecutionContractError as exc:
                     return self._edit_batch_execution_failure(exc.reason_code)
 
+                normalized_actions = normalize_action_results_for_storage(action_results)
                 normalized_decision, normalized_outcome = normalize_item_outcome_for_storage(
                     decision,
                     outcome,
@@ -841,8 +842,8 @@ class Repository:
                     ordinal=int(item["ordinal"]),
                     stored_grant=stored_grant if isinstance(stored_grant, dict) else None,
                     claim_context=claim_context,
+                    action_results=normalized_actions,
                 )
-                normalized_actions = normalize_action_results_for_storage(action_results)
                 target_status = normalized_decision["item_transition"]["to_status"]
                 if batch["status"] not in {"running", "stop_requested"}:
                     return self._edit_batch_execution_failure("BATCH_NOT_ACTIVE")

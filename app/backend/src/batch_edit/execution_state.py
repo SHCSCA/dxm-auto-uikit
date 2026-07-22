@@ -7,6 +7,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping
 
 from src.batch_edit.scope_contract import canonical_sha256
+from src.execution.action_result_contract import (
+    ActionResultContractError,
+    validate_action_result_envelope,
+    validate_independent_save_verification_pair,
+)
 
 
 BATCH_EXECUTION_STATUSES = frozenset(
@@ -48,7 +53,10 @@ _ITEM_OUTCOME_EVIDENCE_KEYS = {
     "browser_session_id",
     "git_head",
     "store_identity",
-    "page_identity",
+    "scope_page_identity",
+    "action_page_identity",
+    "save_page_identity",
+    "verification_page_identity",
     "target_identity_sha256",
     "mutation_scope_id",
 }
@@ -415,6 +423,7 @@ def normalize_item_outcome_for_storage(
     ordinal: int,
     stored_grant: Mapping[str, Any] | None,
     claim_context: Mapping[str, Any] | None = None,
+    action_results: list[dict[str, Any]],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     from src.batch_edit.execution_contract import (
         BatchExecutionContractError,
@@ -487,9 +496,125 @@ def normalize_item_outcome_for_storage(
             "ITEM_OUTCOME_DECISION_EVIDENCE_MISMATCH",
             "outcome decision cannot be reproduced from its stored grant and evidence",
         )
+    _validate_item_action_results_for_storage(
+        classification,
+        canonical_evidence,
+        action_results,
+    )
     _reject_raw_secret_keys(value)
     _reject_raw_secret_keys(canonical_evidence)
     return value, canonical_evidence
+
+
+def _validate_item_action_results_for_storage(
+    classification: str,
+    evidence: Mapping[str, Any],
+    action_results: list[dict[str, Any]],
+) -> None:
+    if not isinstance(action_results, list) or not action_results:
+        _reject("ACTION_RESULTS_INVALID", "a terminal item outcome requires action results")
+    canonical_actions: list[dict[str, Any]] = []
+    try:
+        for action in action_results:
+            canonical_actions.append(validate_action_result_envelope(action))
+    except ActionResultContractError as exc:
+        _reject(exc.reason_code, str(exc))
+
+    if classification == "SUCCEEDED":
+        save_indexes = [
+            index
+            for index, action in enumerate(canonical_actions)
+            if action.get("attempted_state") == "SAVE_ONLY"
+            and action.get("action") == "save_only"
+        ]
+        verification_indexes = [
+            index
+            for index, action in enumerate(canonical_actions)
+            if action.get("attempted_state") == "VERIFY_NOT_PUBLISHED"
+            and action.get("action") == "verify_not_published"
+        ]
+        if (
+            save_indexes != [len(canonical_actions) - 2]
+            or verification_indexes != [len(canonical_actions) - 1]
+        ):
+            _reject(
+                "ITEM_SUCCESS_ACTION_ORDER_INVALID",
+                "success requires one final SAVE followed by one independent verification",
+            )
+        try:
+            pair = validate_independent_save_verification_pair(
+                canonical_actions[save_indexes[0]],
+                canonical_actions[verification_indexes[0]],
+            )
+        except ActionResultContractError as exc:
+            _reject(exc.reason_code, str(exc))
+        save = pair["save"]
+        verification = pair["verification"]
+        save_observations = _action_result_observations(save)
+        verification_observations = _action_result_observations(verification)
+        save_target = save.get("before_values", {}).get("target_identity")
+        verification_target = verification.get("before_values", {}).get("target_identity")
+        verification_proof = verification_observations.get("fresh_probe")
+        expected_store_name = evidence.get("store_identity", {}).get("store_name")
+        if (
+            evidence.get("save_page_identity") != save.get("page_identity")
+            or evidence.get("verification_page_identity") != verification.get("page_identity")
+            or evidence.get("action_page_identity") is not None
+            or evidence.get("network_audit") != save_observations.get("network_audit")
+            or evidence.get("publish_signal") != save_observations.get("publish_signal")
+            or evidence.get("save_proven") is not True
+            or not isinstance(save_target, Mapping)
+            or save_target != verification_target
+            or canonical_sha256(dict(save_target)) != evidence.get("target_identity_sha256")
+            or save.get("before_values", {}).get("store_name") != expected_store_name
+            or verification.get("before_values", {}).get("store_name") != expected_store_name
+            or not isinstance(verification_proof, Mapping)
+            or verification_proof.get("target_identity_sha256")
+            != evidence.get("target_identity_sha256")
+            or not isinstance(verification_proof.get("identity_readback"), Mapping)
+        ):
+            _reject(
+                "ITEM_SUCCESS_ACTION_EVIDENCE_MISMATCH",
+                "success outcome does not match its SAVE and verification action evidence",
+            )
+        return
+
+    if classification == "ISOLATED_PRE_SAVE_NO_WRITE":
+        if any(
+            action.get("attempted_state") in {"SAVE_ONLY", "VERIFY_NOT_PUBLISHED"}
+            for action in canonical_actions
+        ):
+            _reject(
+                "ISOLATED_ITEM_SAVE_ACTION_PRESENT",
+                "a pre-save isolation cannot contain SAVE or post-save verification",
+            )
+        failed = canonical_actions[-1]
+        failed_observations = _action_result_observations(failed)
+        failed_target = failed.get("before_values", {}).get("target_identity")
+        expected_store_name = evidence.get("store_identity", {}).get("store_name")
+        if (
+            failed.get("ok") is not False
+            or any(action.get("ok") is not True for action in canonical_actions[:-1])
+            or failed.get("failure_code") != evidence.get("validation_reason")
+            or failed.get("page_identity") != evidence.get("action_page_identity")
+            or evidence.get("save_page_identity") is not None
+            or evidence.get("verification_page_identity") is not None
+            or failed_observations.get("network_audit") != evidence.get("network_audit")
+            or failed_observations.get("publish_signal") != evidence.get("publish_signal")
+            or not isinstance(failed_target, Mapping)
+            or canonical_sha256(dict(failed_target)) != evidence.get("target_identity_sha256")
+            or failed.get("before_values", {}).get("store_name") != expected_store_name
+        ):
+            _reject(
+                "ISOLATED_ITEM_ACTION_EVIDENCE_MISMATCH",
+                "pre-save isolation does not match the failed action evidence",
+            )
+
+
+def _action_result_observations(action: Mapping[str, Any]) -> dict[str, Any]:
+    evidence = action.get("evidence")
+    observations = evidence.get("observations") if isinstance(evidence, Mapping) else None
+    return dict(observations) if isinstance(observations, Mapping) else {}
 
 
 def normalize_action_results_for_storage(action_results: Any) -> list[dict[str, Any]]:

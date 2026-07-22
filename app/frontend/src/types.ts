@@ -214,15 +214,9 @@ export type EditBatchStatus = 'draft' | 'approved' | 'running' | 'stop_requested
 export type EditBatchItemStatus = 'pending' | 'running' | 'succeeded' | 'isolated_pre_save_no_write' | 'stopped_uncertain'
 export type EditBatchSummary = {
   id: number
-  schema_version: 'dxm_edit_batch.v1'
   status: EditBatchStatus
-  scope_snapshot_id: number
-  scope_snapshot_digest: string
-  template_id: number
-  template_snapshot_digest: string
-  policy_digest: string
   item_count: number
-  store_identity: DraftBoxScopeSnapshot['store_identity'] | null
+  store_identity: { store_name: string | null } | null
   template: { name: string | null; version: string | null }
   created_at: string
   updated_at: string
@@ -235,15 +229,18 @@ export type EditBatchItem = {
   batch_id: number
   ordinal: number
   status: EditBatchItemStatus
-  target_identity_sha256: string
-  item_snapshot: DraftBoxScopeItem
+  item_snapshot: {
+    title: string | null
+    dxm_product_id: string | null
+    source_url?: string | null
+    source_urls?: string[]
+  }
   outcome?: EditBatchItemOutcome | null
   created_at: string
   updated_at: string
 }
 export type EditBatchItemOutcome = {
   classification: 'SUCCEEDED' | 'ISOLATED_PRE_SAVE_NO_WRITE' | 'STOPPED_UNCERTAIN'
-  reason_code: string | null
   finished_at: string | null
   manual_review_required: boolean
 }
@@ -254,7 +251,6 @@ export type EditBatchExecutionSummary = {
   stopped_at: string | null
   completed_at: string | null
   manual_review_required: boolean
-  reason_code: string | null
 }
 export type EditBatchProgressSummary = {
   total: number
@@ -269,34 +265,26 @@ export type EditBatchProgressSummary = {
 }
 export type EditBatchApprovalSummary = {
   approved: true
-  approved_by: string
-  approved_at: string
-  issued_at: string
-  expires_at: string
-  confirmation: 'CONFIRM_DXM_BATCH_SAVE_ONLY'
-  scope_revalidation: Record<string, unknown>
+  approved_by: string | null
+  approved_at: string | null
 }
 export type EditBatchDetail = {
   id: number
-  schema_version: 'dxm_edit_batch.v1'
   status: EditBatchStatus
-  scope_snapshot_id: number
-  scope_snapshot_digest: string
-  scope_snapshot: DraftBoxScopeSnapshot
-  template_id: number
-  template_snapshot_digest: string
-  template_snapshot: Template
-  policy_digest: string
-  policy: {
-    schema_version: string
-    approval_mode: 'batch_once'
-    dispatch_mode: 'strict_sequential'
-    global_concurrency: 1
-    publish_allowed: false
-    unknown_result_policy: 'stop_no_retry'
-    identity_drift_policy: 'stop_batch'
-    session_loss_policy: 'stop_batch'
-    pre_save_no_effect_failure_policy: string
+  scope_snapshot: {
+    observed_at?: string | null
+    store_identity: { store_name: string | null } | null
+    page_state?: {
+      current_page?: number | null
+      total_items?: number | null
+      captured_count?: number | null
+      max_items?: number | null
+      truncated?: boolean | null
+    }
+  }
+  template_snapshot: {
+    template_name: string | null
+    payload?: { version?: unknown }
   }
   created_at: string
   updated_at: string

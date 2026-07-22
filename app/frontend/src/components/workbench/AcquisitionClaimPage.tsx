@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { validateSourceProductUrl } from '../../sourceUrl'
 import type { AcquisitionClaimCreateRequest, AcquisitionClaimResponse, ClaimCandidate, Store, Template } from '../../types'
 
 type AcquisitionClaimPageProps = {
@@ -11,13 +12,12 @@ type AcquisitionClaimPageProps = {
   onNavigateDataAcquisition: () => void
   onShowDraftEdit: () => void
   onShowTasks: () => void
-  onShowExecutionConsole: () => void
 }
 
 const claimSteps = [
   { title: '选择店铺与平台', detail: '确认这次认领使用哪个真实店小秘店铺。' },
   { title: '绑定来源商品', detail: '选择带真实来源商品 URL 的候选，或粘贴该商品的完整 URL。' },
-  { title: '认领到商品箱', detail: '打开浏览器现场处理认领，完成后进入第二段编辑保存。' },
+  { title: '认领到商品箱', detail: '在当前保存任务一次批准并启动；无需先打开独立诊断浏览器。' },
   { title: '确认进入商品箱', detail: '认领完成后再进入第二段商品编辑保存。' },
 ]
 
@@ -31,7 +31,6 @@ export function AcquisitionClaimPage({
   onNavigateDataAcquisition,
   onShowDraftEdit,
   onShowTasks,
-  onShowExecutionConsole,
 }: AcquisitionClaimPageProps) {
   const defaultStoreId = stores[0]?.id ? String(stores[0].id) : ''
   const [storeId, setStoreId] = useState(defaultStoreId)
@@ -45,7 +44,7 @@ export function AcquisitionClaimPage({
     [stores, storeId],
   )
   const enabledTemplates = templates.filter((template) => template.is_enabled)
-  const sourceUrlState = supportedRealProductSourceUrl(sourceUrl)
+  const sourceUrlState = validateSourceProductUrl(sourceUrl)
   const canSubmit = Boolean(selectedStore && claimMark.trim() && sourceUrlState.ok)
   const claimCompleted = Boolean(
     lastRequest && (
@@ -75,7 +74,7 @@ export function AcquisitionClaimPage({
     onCreateClaimRequest({
       storeId: selectedStore.id,
       keyword: keyword.trim() || undefined,
-      sourceUrl: sourceUrl.trim() || undefined,
+      sourceUrl: sourceUrl.trim(),
       categoryName: categoryName.trim() || undefined,
       claimMark: claimMark.trim(),
       templateId: templateId ? Number(templateId) : null,
@@ -84,7 +83,7 @@ export function AcquisitionClaimPage({
 
   function useCandidate(candidate: ClaimCandidate) {
     const candidateSourceUrl = (candidate.sourceUrl ?? candidate.source_url ?? '').trim()
-    if (!supportedRealProductSourceUrl(candidateSourceUrl).ok) return
+    if (!validateSourceProductUrl(candidateSourceUrl).ok) return
     setKeyword(candidate.title)
     setSourceUrl(candidateSourceUrl)
     const candidateCategory = (candidate.categoryHint ?? candidate.category_hint ?? '').trim()
@@ -141,9 +140,9 @@ export function AcquisitionClaimPage({
                     className="button button--secondary"
                     type="button"
                     onClick={() => useCandidate(candidate)}
-                    disabled={busy || !supportedRealProductSourceUrl(candidate.sourceUrl ?? candidate.source_url ?? '').ok}
+                    disabled={busy || !validateSourceProductUrl(candidate.sourceUrl ?? candidate.source_url ?? '').ok}
                   >
-                    {supportedRealProductSourceUrl(candidate.sourceUrl ?? candidate.source_url ?? '').ok ? '使用这条商品' : '缺少来源 URL'}
+                    {validateSourceProductUrl(candidate.sourceUrl ?? candidate.source_url ?? '').ok ? '使用这条商品' : '来源链接不受支持'}
                   </button>
                 </article>
               ))}
@@ -212,14 +211,9 @@ export function AcquisitionClaimPage({
               创建商品认领任务
             </button>
           ) : claimCompleted ? (
-            <>
-              <button className="button button--primary" type="button" onClick={onShowDraftEdit} disabled={busy}>
-                进入商品箱批量编辑
-              </button>
-              <button className="button button--secondary" type="button" onClick={onShowExecutionConsole} disabled={busy}>
-                查看执行记录
-              </button>
-            </>
+            <button className="button button--primary" type="button" onClick={onShowDraftEdit} disabled={busy}>
+              进入商品箱批量编辑
+            </button>
           ) : (
             <button className="button button--primary" type="button" onClick={onShowTasks} disabled={busy}>
               去当前任务批准并启动
@@ -251,26 +245,4 @@ export function AcquisitionClaimPage({
       </div>
     </section>
   )
-}
-
-function supportedRealProductSourceUrl(value: string | null | undefined) {
-  const raw = String(value ?? '').trim()
-  if (!raw) {
-    return { ok: false, message: '从上方选择一条带来源 URL 的商品，或粘贴真实来源商品的完整链接。' }
-  }
-  try {
-    const url = new URL(raw)
-    const hostname = url.hostname.toLowerCase().replace(/\.$/, '')
-    const localHost = hostname === 'localhost'
-      || hostname === '127.0.0.1'
-      || hostname === '::1'
-      || hostname.endsWith('.local')
-    const dxmHost = hostname === 'dianxiaomi.com' || hostname.endsWith('.dianxiaomi.com')
-    if (!['http:', 'https:'].includes(url.protocol) || !hostname || url.username || url.password || localHost || dxmHost) {
-      return { ok: false, message: '填写来源站点的完整 HTTP(S) 商品链接；不要填写店小秘页面或本机地址。' }
-    }
-    return { ok: true, message: '来源商品 URL 已就绪。' }
-  } catch {
-    return { ok: false, message: '来源商品 URL 格式不完整，请粘贴包含 https:// 和站点域名的商品链接。' }
-  }
 }

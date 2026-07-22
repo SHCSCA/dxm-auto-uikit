@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 
@@ -145,25 +145,35 @@ class AcquisitionClaimRequest(BaseModel):
 
 
 class TaskCreate(BaseModel):
-    name: str
-    store_id: int | None = None
-    mode: str = "single_save"
-    publish_scene: str = "SMT_SEMI_MANAGED_SAVE_ONLY"
-    product_ids: list[int] = Field(default_factory=list)
-    claim_mark: str = "AI认领"
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200, pattern=r".*\S.*")
+    store_id: StrictInt | None = Field(default=None, gt=0)
+    mode: Literal["probe", "dry_run", "claim_only", "single_save", "batch_save"] = "single_save"
+    publish_scene: str = Field(
+        default="SMT_SEMI_MANAGED_SAVE_ONLY",
+        min_length=1,
+        max_length=64,
+    )
+    product_ids: list[StrictInt] = Field(default_factory=list, max_length=100)
+    claim_mark: str = Field(default="AI认领", min_length=1, max_length=200, pattern=r".*\S.*")
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class TaskStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     manual_approval: bool = False
-    approval_token: str | None = None
-    approved_by: str | None = None
-    confirmation: str | None = None
+    approval_token: str | None = Field(default=None, max_length=256)
+    approved_by: str | None = Field(default=None, max_length=200)
+    confirmation: str | None = Field(default=None, max_length=64)
 
 
 class TaskManualApprovalRequest(BaseModel):
-    approved_by: str
-    confirmation: str
+    model_config = ConfigDict(extra="forbid")
+
+    approved_by: str = Field(min_length=1, max_length=200, pattern=r".*\S.*")
+    confirmation: str = Field(min_length=1, max_length=64)
 
 
 class TaskConfigOverrideRequest(BaseModel):

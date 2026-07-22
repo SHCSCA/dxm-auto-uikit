@@ -13,7 +13,7 @@ type HomePageProps = {
   onShowTasks: () => void
   onShowConfig: () => void
   onShowConsole: () => void
-  onShowBatchRecords: () => void
+  onShowBatchRecords: (batchId?: number) => void
   onShowReports: () => void
 }
 
@@ -90,7 +90,7 @@ export function HomePage({
     ? {
         label: '查看串行进度',
         detail: '查看当前商品、完成数量和安全停止入口。',
-        action: onShowBatchRecords,
+        action: () => onShowBatchRecords(activeBatch.id),
       }
     : runningTask
       ? {
@@ -108,7 +108,7 @@ export function HomePage({
           ? {
               label: '继续批准批次',
               detail: '核对已冻结范围后，一次批准并启动严格串行执行。',
-              action: onShowBatchRecords,
+              action: () => onShowBatchRecords(draftBatch.id),
             }
         : !dxmLoggedIn
     ? {

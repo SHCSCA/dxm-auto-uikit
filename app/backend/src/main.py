@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import RLock
-from typing import Any
+from typing import Any, NoReturn
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -675,38 +675,17 @@ def list_edit_batches():
 @app.post('/api/dxm/draft-box/action')
 def dxm_draft_box_action(payload: DraftBoxActionRequest):
     _assert_direct_real_dxm_mutation_allowed(payload)
-    result = _run_login_flow(
-        login_flow.perform_draft_box_action,
-        payload.action,
-        note_text=payload.note_text,
-        product_query=payload.product_query,
-        store_name=payload.store_name,
-        target_source_urls=payload.target_source_urls or None,
-    )
-    return normalize_artifact_paths(result)
 
 
 @app.post('/api/dxm/workflow/claim-product')
 def dxm_workflow_claim_product(payload: DraftBoxActionRequest):
     _assert_direct_real_dxm_mutation_allowed(payload)
-    return normalize_artifact_paths(_run_login_flow(
-        _workflow_adapter().claim_product,
-        payload.note_text or 'AI认领',
-        product_query=payload.product_query,
-        store_name=payload.store_name,
-        target_source_urls=payload.target_source_urls,
-    ))
 
 
 @app.post('/api/dxm/workflow/open-editor')
 def dxm_workflow_open_editor(payload: DraftBoxActionRequest | None = None):
     payload = payload or DraftBoxActionRequest(action='edit')
     _assert_direct_real_dxm_mutation_allowed(payload)
-    return normalize_artifact_paths(_run_login_flow(
-        _workflow_adapter().open_editor,
-        product_query=payload.product_query,
-        store_name=payload.store_name,
-    ))
 
 
 @app.get('/api/ai/config')
@@ -3151,6 +3130,15 @@ def _assert_task_create_scope(payload: TaskCreate) -> None:
     mode = str(payload.mode or '').strip()
     if mode in REAL_DXM_MUTATION_MODES and mode not in RELEASED_REAL_DXM_MUTATION_MODES:
         raise HTTPException(status_code=403, detail=UNRELEASED_REAL_DXM_MODE_DETAIL)
+    if mode in RELEASED_REAL_DXM_MUTATION_MODES and (
+        isinstance(payload.store_id, bool)
+        or not isinstance(payload.store_id, int)
+        or payload.store_id <= 0
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail='真实店小秘任务必须绑定一个明确店铺。',
+        )
     if mode == 'claim_only' and str(payload.publish_scene or '') != CLAIM_TO_DRAFT_PUBLISH_SCENE:
         raise HTTPException(status_code=403, detail='Controlled claim_only task requires claim-to-draft scene')
     if mode == 'claim_only' and payload.product_ids:
@@ -3274,31 +3262,29 @@ def _assert_single_save_uses_claimed_draft_product(
 def _assert_single_save_product_count(payload: dict[str, Any], *, status_code: int) -> None:
     product_ids = payload.get('product_ids') if isinstance(payload, dict) else None
     product_count = len(product_ids) if isinstance(product_ids, list) else 0
-    if product_count != 1:
+    product_id = product_ids[0] if product_count == 1 else None
+    if (
+        product_count != 1
+        or isinstance(product_id, bool)
+        or not isinstance(product_id, int)
+        or product_id <= 0
+    ):
         raise HTTPException(
             status_code=status_code,
-            detail=f'single_save requires exactly one product; got {product_count}',
+            detail='single_save requires exactly one positive product id',
         )
 
 
-def _assert_direct_real_dxm_mutation_allowed(payload: DraftBoxActionRequest) -> None:
-    if payload.task_id is None:
-        raise HTTPException(
-            status_code=403,
-            detail='Direct real DXM mutation requires an approved guarded task',
-        )
-    _assert_task_can_start(
-        payload.task_id,
-        TaskStartRequest(
-            manual_approval=payload.manual_approval,
-            approval_token=payload.approval_token,
-            approved_by=payload.approved_by,
-            confirmation=payload.confirmation,
-        ),
-    )
+def _assert_direct_real_dxm_mutation_allowed(_payload: DraftBoxActionRequest) -> NoReturn:
     raise HTTPException(
         status_code=403,
-        detail='Direct real DXM mutation must run through the task runner evidence chain',
+        detail={
+            'reason_code': 'DIRECT_MUTATION_ROUTE_DISABLED',
+            'message': (
+                '旧直连写入口已关闭。真实店小秘变更只能通过受控单任务运行器，'
+                '或“范围冻结→整批模板→一次批准→严格串行”的商品箱批次执行。'
+            ),
+        },
     )
 
 

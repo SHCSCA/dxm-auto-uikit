@@ -8,7 +8,7 @@ type IssuesPageProps = {
   selectedTask: Task | null
   onShowTasks: () => void
   onShowDraftEdit: () => void
-  onShowBatchRecords: () => void
+  onShowBatchRecords: (batchId?: number) => void
 }
 
 const READONLY_PRECHECK_CTA = '运行保存前安全检查'
@@ -78,7 +78,7 @@ function ControlledBatchIssues({
 }: {
   batches: EditBatchSummary[]
   onShowDraftEdit: () => void
-  onShowBatchRecords: () => void
+  onShowBatchRecords: (batchId?: number) => void
 }) {
   const active = batches.find((batch) => batch.status === 'running' || batch.status === 'stop_requested') ?? null
   const reviewBatches = batches.filter((batch) => batch.execution.manual_review_required || batch.progress.stopped > 0)
@@ -89,7 +89,7 @@ function ControlledBatchIssues({
         detail: hasIssues
           ? '先在真实店小秘页面核对结果不确定的商品，不要自动重试。'
           : '当前没有需要人工处理的问题；继续观察严格串行进度。',
-        onClick: onShowBatchRecords,
+        onClick: () => onShowBatchRecords((hasIssues ? reviewBatches[0] : active)?.id),
       }
     : {
         label: '创建下一批',

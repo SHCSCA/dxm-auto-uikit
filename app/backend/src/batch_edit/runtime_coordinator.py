@@ -610,28 +610,12 @@ class BatchExecutionRuntime:
             str(grant["mutation_scope_id"]),
             "save_only_click",
         )
-        ledger_status = str((ledger_entry or {}).get("status") or "") or None
-        outcome = {
-            "schema_version": "dxm_edit_batch_item_outcome_evidence.v1",
-            "ok": True,
-            "error_code": None,
-            "validation_reason": None,
-            "ledger_status": ledger_status,
-            "network_audit": {
-                "complete": True,
-                "mutation_request_count": 1,
-                "publish_request_count": 0,
-            },
-            "publish_signal": {"detected": False, "kind": "independent_unpublished_probe"},
-            "save_proven": True,
-            "runtime_identity": grant["runtime_identity"],
-            "browser_session_id": grant["browser_session_id"],
-            "git_head": grant["git_head"],
-            "store_identity": grant["store_identity"],
-            "page_identity": grant["page_identity"],
-            "target_identity_sha256": grant["target_identity_sha256"],
-            "mutation_scope_id": grant["mutation_scope_id"],
-        }
+        outcome = self._derive_success_outcome(
+            grant,
+            save,
+            verification,
+            ledger_entry,
+        )
         decision = classify_item_outcome(grant, outcome)
         if decision.get("continue_batch") is not True or decision.get("classification") != "SUCCEEDED":
             raise BatchRuntimeError(
@@ -640,6 +624,126 @@ class BatchExecutionRuntime:
                 manual_review=True,
             )
         return {"decision": decision, "outcome": outcome, "action_results": action_results}
+
+    def _derive_success_outcome(
+        self,
+        grant: Mapping[str, Any],
+        save: Mapping[str, Any],
+        verification: Mapping[str, Any],
+        ledger_entry: Any,
+    ) -> dict[str, Any]:
+        """Derive success only from the closed SAVE audit and independent readback."""
+
+        save_observations = _action_observations(save)
+        verification_observations = _action_observations(verification)
+        network = save_observations.get("network_audit")
+        publish = save_observations.get("publish_signal")
+        save_page = save.get("page_identity")
+        verification_page = verification.get("page_identity")
+        save_before = save.get("before_values")
+        verification_before = verification.get("before_values")
+        verification_proof = verification_observations.get("fresh_probe")
+        required_save_postconditions = {
+            "mutation_authorized",
+            "exact_save_target",
+            "save_click_dispatched",
+            "network_save_success",
+            "page_save_success",
+            "published_false",
+            "publish_action_not_clicked",
+        }
+        required_verification_postconditions = {
+            "independent_probe",
+            "product_identity_match",
+            "unpublished_verified",
+            "publish_status_absent_or_false",
+            "save_evidence_not_reused",
+        }
+        if (
+            not isinstance(ledger_entry, Mapping)
+            or ledger_entry.get("status") != "DISPATCHED"
+            or ledger_entry.get("unknown_at") is not None
+            or not ledger_entry.get("outcome")
+            or not isinstance(network, Mapping)
+            or set(network) != {
+                "complete",
+                "mutation_request_count",
+                "publish_request_count",
+            }
+            or network.get("complete") is not True
+            or type(network.get("mutation_request_count")) is not int
+            or type(network.get("publish_request_count")) is not int
+            or network.get("mutation_request_count") != 1
+            or network.get("publish_request_count") != 0
+            or not isinstance(publish, Mapping)
+            or set(publish) != {"detected", "kind"}
+            or publish.get("detected") is not False
+            or not isinstance(publish.get("kind"), str)
+            or not str(publish.get("kind") or "").strip()
+            or not isinstance(save_page, Mapping)
+            or not isinstance(verification_page, Mapping)
+            or dict(save_page) != dict(verification_page)
+            or save_page.get("kind") != "semi_managed"
+            or save_page.get("runtime_id")
+            != grant.get("runtime_identity", {}).get("browser_runtime_id")
+            or save_page.get("browser_session_id") != grant.get("browser_session_id")
+            or not isinstance(save_before, Mapping)
+            or not isinstance(verification_before, Mapping)
+            or save_before.get("target_identity") != verification_before.get("target_identity")
+            or not isinstance(save_before.get("target_identity"), Mapping)
+            or canonical_sha256(dict(save_before["target_identity"]))
+            != grant.get("target_identity_sha256")
+            or save_before.get("store_name")
+            != grant.get("store_identity", {}).get("store_name")
+            or verification_before.get("store_name")
+            != grant.get("store_identity", {}).get("store_name")
+            or not isinstance(verification_proof, Mapping)
+            or verification_proof.get("ok") is not True
+            or verification_proof.get("proof_kind") != "structured_unpublished_status"
+            or verification_proof.get("verified_on_current_page") is not True
+            or verification_proof.get("status_scope_unique") is not True
+            or verification_proof.get("bound_candidate_count") != 1
+            or verification_proof.get("target_bound") is not True
+            or verification_proof.get("product_matched") is not True
+            or verification_proof.get("store_matched") is not True
+            or verification_proof.get("published") is not False
+            or verification_proof.get("target_identity_sha256")
+            != grant.get("target_identity_sha256")
+            or not isinstance(verification_proof.get("identity_readback"), Mapping)
+            or any(
+                save.get("postconditions", {}).get(key) is not True
+                for key in required_save_postconditions
+            )
+            or any(
+                verification.get("postconditions", {}).get(key) is not True
+                for key in required_verification_postconditions
+            )
+        ):
+            raise BatchRuntimeError(
+                "ITEM_SUCCESS_EVIDENCE_UNCERTAIN",
+                "保存、网络审计与未发布核验没有形成同一商品的可信闭环。",
+                manual_review=True,
+            )
+        return {
+            "schema_version": "dxm_edit_batch_item_outcome_evidence.v1",
+            "ok": True,
+            "error_code": None,
+            "validation_reason": None,
+            "ledger_status": "DISPATCHED",
+            "network_audit": dict(network),
+            "publish_signal": dict(publish),
+            "save_proven": True,
+            "runtime_identity": grant["runtime_identity"],
+            "browser_session_id": grant["browser_session_id"],
+            "git_head": grant["git_head"],
+            "store_identity": grant["store_identity"],
+            "scope_page_identity": grant["page_identity"],
+            "action_page_identity": None,
+            "save_page_identity": dict(save_page),
+            "verification_page_identity": dict(verification_page),
+            "target_identity_sha256": grant["target_identity_sha256"],
+            "mutation_scope_id": grant["mutation_scope_id"],
+        }
 
     def _isolated_pre_save_execution(
         self,
@@ -719,7 +823,10 @@ class BatchExecutionRuntime:
             "browser_session_id": claim_context["browser_session_id"],
             "git_head": claim_context["git_head"],
             "store_identity": claim_context["store_identity"],
-            "page_identity": claim_context["page_identity"],
+            "scope_page_identity": claim_context["page_identity"],
+            "action_page_identity": dict(page_identity),
+            "save_page_identity": None,
+            "verification_page_identity": None,
             "target_identity_sha256": claim_context["target_identity_sha256"],
             "mutation_scope_id": None,
         }
@@ -1203,10 +1310,13 @@ def _execution_contract_batch(batch: Mapping[str, Any]) -> dict[str, Any]:
             f"批次执行事实缺失：{', '.join(sorted(missing))}",
         )
     result = {key: batch[key] for key in _EXECUTION_CONTRACT_BATCH_KEYS}
-    approval = batch.get("approval")
-    if isinstance(approval, Mapping):
-        result["approval"] = dict(approval)
     return result
+
+
+def _action_observations(result: Mapping[str, Any]) -> dict[str, Any]:
+    evidence = result.get("evidence")
+    observations = evidence.get("observations") if isinstance(evidence, Mapping) else None
+    return dict(observations) if isinstance(observations, Mapping) else {}
 
 
 def _positive_int(value: Any, label: str) -> int:

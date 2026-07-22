@@ -3443,59 +3443,30 @@ class V1TaskRunner:
         semantic_matched_by = str(draft_box_match.get("matched_by") or "").strip()
         semantic_matched_value = " ".join(str(draft_box_match.get("matched_value") or "").split())
         authorized_source = target_identity.get("source_identity")
-        if authorized_source is not None:
-            if semantic_matched_by != "source_url":
-                raise V1ExecutionError(
-                    "E202",
-                    "商品箱真实行没有按授权来源命中",
-                    "URL-authorized claim requires source_url draft_box_match evidence",
-                )
-            if (
-                source_identity["primary_url"] not in set(authorized_source["urls"])
-                or not set(source_identity["urls"]).issubset(set(authorized_source["urls"]))
-                or semantic_matched_value != source_identity["primary_url"]
-            ):
-                raise V1ExecutionError(
-                    "E202",
-                    "商品箱真实行来源与授权来源不一致",
-                    "observed draft-box source identity is outside the Stage A target",
-                )
-            matched_by = ["source_url"]
-            match_evidence = {"source_url": source_identity["primary_url"]}
-        else:
-            observed_texts = (
-                _normalized_observed_text(title),
-                _normalized_observed_text(row_text),
+        if not isinstance(authorized_source, Mapping):
+            raise V1ExecutionError(
+                "E202",
+                "待认领任务缺少精确来源商品 URL",
+                "controlled claim verification never accepts keyword, title, category, or row-text identity fallbacks",
             )
-            allowed_hints = [
-                key
-                for key in ("keyword", "category_name")
-                if target_identity.get(key) is not None
-            ]
-            matched_by = [
-                key
-                for key in allowed_hints
-                if any(
-                    _observed_text_contains_hint(observed_text, target_identity[key])
-                    for observed_text in observed_texts
-                )
-            ]
-            required_hint = "keyword" if target_identity.get("keyword") is not None else "category_name"
-            if (
-                required_hint not in matched_by
-                or not _observed_text_contains_hint(
-                    _normalized_observed_text(row_text),
-                    target_identity[required_hint],
-                )
-                or semantic_matched_by not in matched_by
-                or semantic_matched_value != target_identity.get(semantic_matched_by)
-            ):
-                raise V1ExecutionError(
-                    "E202",
-                    "商品箱真实行没有命中授权商品提示",
-                    "draft_box_match hint evidence was not derived from the observed row",
-                )
-            match_evidence = {key: target_identity[key] for key in matched_by}
+        if semantic_matched_by != "source_url":
+            raise V1ExecutionError(
+                "E202",
+                "商品箱真实行没有按授权来源命中",
+                "URL-authorized claim requires source_url draft_box_match evidence",
+            )
+        if (
+            source_identity["primary_url"] != authorized_source["primary_url"]
+            or not set(source_identity["urls"]).issubset(set(authorized_source["urls"]))
+            or semantic_matched_value != authorized_source["primary_url"]
+        ):
+            raise V1ExecutionError(
+                "E202",
+                "商品箱真实行来源与授权来源不一致",
+                "observed draft-box source identity does not exactly match the Stage A source URL",
+            )
+        matched_by = ["source_url"]
+        match_evidence = {"source_url": authorized_source["primary_url"]}
         claim_target = evidence.get("claim_target") if isinstance(evidence.get("claim_target"), Mapping) else {}
         search_result = evidence.get("search_result") if isinstance(evidence.get("search_result"), Mapping) else {}
         evidence_ref = evidence.get("evidence_ref")

@@ -16,6 +16,7 @@ type BatchTemplateComposerProps = {
   onBundleCreated: () => void | Promise<void>
   onEditSection: (section: EditBatchBundleSectionCode) => void
   onShowDraftEdit: () => void
+  onShowDxmAccess: () => void
 }
 
 type IssueSection = {
@@ -81,6 +82,7 @@ export function BatchTemplateComposer({
   onBundleCreated,
   onEditSection,
   onShowDraftEdit,
+  onShowDxmAccess,
 }: BatchTemplateComposerProps) {
   const [selectedStoreId, setSelectedStoreId] = useState<number | null>(() => preferredStoreId(workspace, selectedTask))
   const [templateName, setTemplateName] = useState('整批编辑模板')
@@ -167,6 +169,8 @@ export function BatchTemplateComposer({
       ? '正在读取候选'
       : optionsError
         ? '重新读取候选'
+        : selectedStoreId == null
+          ? '先连接真实店铺'
         : firstIssue
           ? `编辑「${firstIssue.label}」`
           : submitting
@@ -174,8 +178,7 @@ export function BatchTemplateComposer({
             : '生成整批模板'
   const primaryDisabled = optionsLoading
     || submitting
-    || (!createdBundle && !optionsError && !firstIssue && !canCompose)
-    || (!createdBundle && !optionsError && selectedStoreId == null)
+    || (selectedStoreId != null && !createdBundle && !optionsError && !firstIssue && !canCompose)
 
   function changeStore(value: string) {
     const storeId = Number(value)
@@ -204,6 +207,10 @@ export function BatchTemplateComposer({
     if (optionsError) {
       setMessage(null)
       setReloadKey((current) => current + 1)
+      return
+    }
+    if (selectedStoreId == null) {
+      onShowDxmAccess()
       return
     }
     if (!options) return
@@ -339,6 +346,11 @@ export function BatchTemplateComposer({
           <span className="batch-template-issues__summary">
             <strong>{optionsError}</strong>
             <b>需要重新读取</b>
+          </span>
+        ) : selectedStoreId == null ? (
+          <span className="batch-template-issues__summary">
+            <strong>尚未连接真实店铺</strong>
+            <b>先完成店小秘接入</b>
           </span>
         ) : issueSections.length ? (
           <>

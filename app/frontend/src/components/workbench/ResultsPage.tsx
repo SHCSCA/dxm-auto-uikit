@@ -17,7 +17,7 @@ type ResultsPageProps = {
   selectedTask: Task | null
   finalCheck: FinalDeliveryCheckSummary | null
   onShowDraftEdit: () => void
-  onShowBatchRecords: () => void
+  onShowBatchRecords: (batchId?: number) => void
   onShowEvidence: () => void
   onShowTasks: () => void
   onShowExceptions: () => void
@@ -155,11 +155,12 @@ function ControlledBatchResults({
   onShowBatchRecords,
 }: {
   batches: EditBatchSummary[]
-  onShowBatchRecords: () => void
+  onShowBatchRecords: (batchId?: number) => void
 }) {
   const latest = batches[0]
   const active = batches.find((batch) => batch.status === 'running' || batch.status === 'stop_requested') ?? null
   const needsReview = batches.filter((batch) => batch.execution.manual_review_required || batch.progress.stopped > 0)
+  const targetBatch = active ?? (latest.status === 'draft' ? latest : needsReview[0] ?? latest)
   const next = active
     ? {
         title: '查看实时串行进度',
@@ -200,7 +201,7 @@ function ControlledBatchResults({
           <strong>下一步：{next.title}</strong>
           <span>{next.detail}</span>
         </div>
-        <button className="button button--primary" type="button" onClick={onShowBatchRecords}>
+        <button className="button button--primary" type="button" onClick={() => onShowBatchRecords(targetBatch.id)}>
           {next.title}
         </button>
       </article>

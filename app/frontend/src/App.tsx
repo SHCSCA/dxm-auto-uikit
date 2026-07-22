@@ -18,6 +18,7 @@ import {
   SystemSettings,
 } from './components/WorkbenchModules'
 import { humanOperatorMessage } from './components/workbench/workbenchCopy'
+import { isSupportedSourceProductUrl } from './sourceUrl'
 import type { AcquisitionClaimCreateRequest, AcquisitionClaimResponse, AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, DxmCredentialSaveResult, EditBatchSummary, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LegacyWorkbenchSection, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
 import { composeWorkspace } from './workspace'
 
@@ -661,8 +662,8 @@ export default function App() {
   }
 
   async function createAcquisitionClaimRequest(request: AcquisitionClaimCreateRequest) {
-    if (!isSupportedRealProductSourceUrl(request.sourceUrl)) {
-      setOperationError('请先选择一条带真实来源商品 URL 的待认领商品，或粘贴来源站点的完整 HTTP(S) 商品链接。关键词和类目不能单独用于真实认领。')
+    if (!isSupportedSourceProductUrl(request.sourceUrl)) {
+      setOperationError('请提供 1688、拼多多或 AliExpress 的精确商品详情 URL。关键词和类目不能单独用于真实认领。')
       setActiveSection('acquisition_claim')
       return
     }
@@ -1165,6 +1166,7 @@ export default function App() {
             onConfigSaved={async () => { await refreshWorkspace(); await refreshConfigPreview() }}
             onRefreshConfigPreview={async () => { await refreshConfigPreview(); await refreshWorkspace() }}
             onShowDraftEdit={() => setActiveSection('draft_edit_save')}
+            onShowDxmAccess={() => setActiveSection('dxm_access')}
             initialMode={templateCenterEntryMode}
           />
         )
@@ -1196,7 +1198,6 @@ export default function App() {
             onNavigateDataAcquisition={() => { void navigateDxmTarget('data_acquisition') }}
             onShowDraftEdit={() => setActiveSection('draft_edit_save')}
             onShowTasks={() => setActiveSection('product_tasks')}
-            onShowExecutionConsole={() => setActiveSection('start_save')}
           />
         )
       case 'product_tasks':
@@ -1225,7 +1226,6 @@ export default function App() {
             onShowConfig={() => setActiveSection('edit_config')}
             onShowDraftEdit={() => setActiveSection('draft_edit_save')}
             onShowConsole={() => setActiveSection('start_save')}
-            onShowEvidence={() => setActiveSection('evidence')}
             onShowReports={() => setActiveSection('results')}
           />
         )
@@ -1317,11 +1317,11 @@ export default function App() {
               setActiveEditBatchId(null)
               setActiveSection('draft_edit_save')
             }}
-            onShowBatchRecords={() => setActiveSection('task_history')}
+            onShowBatchRecords={() => { setActiveEditBatchId(null); setActiveSection('task_history') }}
           />
         )
       case 'results':
-        return <ReportCenter workspace={workspace} editBatches={editBatches} selectedTask={selectedTask} finalCheck={finalCheck} onShowDraftEdit={() => { setActiveEditBatchId(null); setActiveSection('draft_edit_save') }} onShowBatchRecords={() => setActiveSection('task_history')} onShowEvidence={() => setActiveSection('evidence')} onShowTasks={() => setActiveSection('product_tasks')} onShowExceptions={() => setActiveSection('issues')} />
+        return <ReportCenter workspace={workspace} editBatches={editBatches} selectedTask={selectedTask} finalCheck={finalCheck} onShowDraftEdit={() => { setActiveEditBatchId(null); setActiveSection('draft_edit_save') }} onShowBatchRecords={(batchId) => { setActiveEditBatchId(batchId ?? null); setActiveSection('task_history') }} onShowEvidence={() => setActiveSection('evidence')} onShowTasks={() => setActiveSection('product_tasks')} onShowExceptions={() => setActiveSection('issues')} />
       case 'help':
         return (
           <HelpPage
@@ -1331,7 +1331,7 @@ export default function App() {
             onShowAcquisition={() => setActiveSection('acquisition_claim')}
             onShowTasks={() => setActiveSection('product_tasks')}
             onShowDraftEdit={() => { setActiveEditBatchId(null); setActiveSection('draft_edit_save') }}
-            onShowBatchRecords={() => setActiveSection('task_history')}
+            onShowBatchRecords={(batchId) => { setActiveEditBatchId(batchId ?? null); setActiveSection('task_history') }}
             onShowResults={() => setActiveSection('results')}
             onShowIssues={() => setActiveSection('issues')}
           />
@@ -1535,25 +1535,6 @@ function humanAcquisitionClaimError(message: string) {
     return '商品认领任务创建失败：请确认本机工作台服务正常、店铺信息已读取，并重新填写已有待认领商品条件后重试；系统只处理已有待认领商品，不会保存或发布。'
   }
   return message || '商品认领任务创建失败：请重新检查店铺和已有待认领商品条件后重试；系统只处理已有待认领商品，不会保存或发布。'
-}
-
-function isSupportedRealProductSourceUrl(value: string | null | undefined) {
-  try {
-    const url = new URL(String(value ?? '').trim())
-    const hostname = url.hostname.toLowerCase().replace(/\.$/, '')
-    return ['http:', 'https:'].includes(url.protocol)
-      && Boolean(hostname)
-      && !url.username
-      && !url.password
-      && hostname !== 'localhost'
-      && hostname !== '127.0.0.1'
-      && hostname !== '::1'
-      && !hostname.endsWith('.local')
-      && hostname !== 'dianxiaomi.com'
-      && !hostname.endsWith('.dianxiaomi.com')
-  } catch {
-    return false
-  }
 }
 
 function humanDxmNavigationError(message: string, targetLabel: string) {

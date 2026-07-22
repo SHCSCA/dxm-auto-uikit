@@ -7654,6 +7654,8 @@ class DxmLoginFlow:
                 'sku_code',
             ),
             'variants': (
+                'sku_code',
+                'retail_price',
                 'declared_value',
                 'stock',
                 'weight',
@@ -7666,6 +7668,7 @@ class DxmLoginFlow:
             'compliance': (
                 'eu_responsible_priorities',
                 'manufacturer_priorities',
+                'customs_product_name_priorities',
             ),
             'semi_managed': (
                 'is_original_box',
@@ -7781,6 +7784,36 @@ class DxmLoginFlow:
                 'page_url': page.url,
                 'screenshot_url': self._artifact_url(screenshot_path),
                 'fill_result': {'category': category, 'missing': ['category']},
+                'published': False,
+            }
+        category_expected = ' '.join(str(values['category_match']).split())
+        category_observed = ' '.join(
+            str(category.get('category_text') or category.get('text') or '').split()
+        )
+        category.update({
+            'located': bool(category_observed),
+            'expected_value': category_expected,
+            'value_after': category_observed,
+            'exact_readback': bool(
+                category_expected
+                and category_observed
+                and category_observed == category_expected
+            ),
+        })
+        if category.get('exact_readback') is not True:
+            return {
+                'ok': False,
+                'stage': 'fill_editor_required_defaults_failed',
+                'label': '商品分类精确读回失败',
+                'message': '商品分类控件读回值与明确配置不完全相等，已停止后续写入。',
+                'failure_code': 'CATEGORY_EXACT_READBACK_MISMATCH',
+                'page_title': '店小秘编辑页',
+                'page_url': page.url,
+                'screenshot_url': None,
+                'fill_result': {
+                    'category': category,
+                    'missing': ['category_selected_exact'],
+                },
                 'published': False,
             }
         dxm_reference_template_results = self._apply_dxm_reference_templates_on_page(page, values)
@@ -8277,6 +8310,7 @@ class DxmLoginFlow:
                 'dxm_reference_template_results': dxm_reference_template_results,
                 'category_attributes': category_attributes,
                 'fields': field_result,
+                'field_details': exact_readback,
                 'original_box': original_box,
                 'logistics_attribute': logistics,
                 'tax_quote': tax,
@@ -8445,9 +8479,36 @@ class DxmLoginFlow:
           const inputs = Array.from(scope.querySelectorAll('input,textarea')).filter(visible).filter(el => !el.disabled);
           const fillByPlaceholder = (needle, value) => {
             const matched = inputs.filter(el => String(el.placeholder || '').includes(needle));
+            const expected = String(value ?? '').trim();
+            const values = matched.map(el => {
+              const before = String(el.value || '');
+              const wrote = Boolean(expected && setNativeValue(el, expected));
+              const after = String(el.value || '');
+              return {
+                ok: Boolean(wrote && after.trim() && after === expected),
+                located: true,
+                expected_value: expected,
+                value_before: before,
+                value_after: after,
+              };
+            });
             return {
               matched: matched.length,
-              filled: matched.filter(el => setNativeValue(el, String(value))).length,
+              filled: values.filter(item => item.ok).length,
+              expected_value: expected,
+              values,
+            };
+          };
+          const fillByPlaceholders = (needles, value) => {
+            for (const needle of needles) {
+              const result = fillByPlaceholder(needle, value);
+              if (result.matched) return {...result, matched_placeholder: needle};
+            }
+            return {
+              matched: 0,
+              filled: 0,
+              expected_value: String(value ?? '').trim(),
+              values: [],
             };
           };
           const validCustomName = (value) => {
@@ -8510,7 +8571,14 @@ class DxmLoginFlow:
               if (!select) continue;
               const before = String(select.value || '');
               const ok = setSelectValue(select, requestedValue);
-              valuesSet.push({before, after:String(select.value || ''), ok});
+              valuesSet.push({
+                before,
+                after:String(select.value || ''),
+                located:true,
+                expected_value:requestedValue,
+                value_after:String(select.value || ''),
+                ok:Boolean(ok && String(select.value || '') === requestedValue),
+              });
             }
             return {
               matched: valuesSet.length,
@@ -8520,6 +8588,8 @@ class DxmLoginFlow:
             };
           };
           const variant_original_box = fillVariantOriginalBox();
+          const sku = fillByPlaceholders(['SKU', '货号', '商品编码'], values.sku_code);
+          const retailPrice = fillByPlaceholders(['零售价', '产品价格'], values.retail_price);
           const declaredValue = fillByPlaceholder('货值', values.declared_value);
           const stock = fillByPlaceholder('库存', values.stock);
           const weight = fillByPlaceholder('重量', values.weight);
@@ -8533,22 +8603,30 @@ class DxmLoginFlow:
             .filter((el, idx, arr) => arr.indexOf(el) === idx)
             .length;
           const missing = [];
-          if (!declaredValue.filled) missing.push('declared_value');
-          if (!stock.filled) missing.push('stock');
-          if (!weight.filled) missing.push('weight');
-          if (!length.filled || !width.filled || !height.filled) missing.push('dimensions');
+          if (!sku.matched || sku.filled !== sku.matched) missing.push('sku_code');
+          if (!retailPrice.matched || retailPrice.filled !== retailPrice.matched) missing.push('retail_price');
+          if (!declaredValue.matched || declaredValue.filled !== declaredValue.matched) missing.push('declared_value');
+          if (!stock.matched || stock.filled !== stock.matched) missing.push('stock');
+          if (!weight.matched || weight.filled !== weight.matched) missing.push('weight');
+          if (
+            !length.matched || length.filled !== length.matched
+            || !width.matched || width.filled !== width.matched
+            || !height.matched || height.filled !== height.matched
+          ) missing.push('dimensions');
           if (!plainGoodsVisible && !logisticsIconCount) missing.push('logistics_attribute');
           if (
-            variantCustomNameInputs.length > 0
+            configuredVariantNames.length > 0
             && (
               configuredVariantNames.length !== variantCustomNameInputs.length
               || variantCustomNameValues.some(item => !item.ok)
             )
           ) missing.push('variant_custom_names');
-          if (variant_original_box.matched && variant_original_box.filled < variant_original_box.matched) missing.push('original_box');
+          if (!variant_original_box.matched || variant_original_box.filled !== variant_original_box.matched) missing.push('original_box');
           return {
             ok: missing.length === 0,
             missing,
+            sku,
+            retail_price: retailPrice,
             declared_value: declaredValue,
             stock,
             weight,
@@ -8928,8 +9006,39 @@ class DxmLoginFlow:
                 strict_frozen_target=require_explicit_defaults,
             )
         self._dismiss_blocking_modals(page)
-        eu_responsible = self._choose_ant_select_near_label(page, '欧盟责任人', values.get('eu_responsible_priorities') or [])
-        manufacturer = self._choose_ant_select_near_label(page, '品牌制造商', values.get('manufacturer_priorities') or [])
+        reference_configs = self._dxm_reference_template_configs(values)
+        eu_config = reference_configs.get('eu_responsible') or {
+            'names': values.get('eu_responsible_priorities') or [],
+            'required': True,
+        }
+        manufacturer_config = reference_configs.get('manufacturer') or {
+            'names': values.get('manufacturer_priorities') or [],
+            'required': True,
+        }
+        eu_responsible = self._choose_ant_select_near_label(
+            page, '欧盟责任人', list(eu_config.get('names') or [])
+        )
+        manufacturer = self._choose_ant_select_near_label(
+            page, '品牌制造商', list(manufacturer_config.get('names') or [])
+        )
+        dxm_reference_template_results = {
+            'eu_responsible': {
+                **eu_responsible,
+                'section': 'eu_responsible',
+                'names': list(eu_config.get('names') or []),
+                'required': bool(eu_config.get('required', True)),
+            },
+            'manufacturer': {
+                **manufacturer,
+                'section': 'manufacturer',
+                'names': list(manufacturer_config.get('names') or []),
+                'required': bool(manufacturer_config.get('required', True)),
+            },
+        }
+        customs = self._fill_customs_supervision_attribute(
+            page,
+            values.get('customs_product_name_priorities') or [],
+        )
         media = {'ok': True, 'skipped': True, 'reason': 'no_config'}
         if self._extract_eu_outer_package_filename(values):
             media = self._fill_media_assets_on_page(page, values).get('fill_result', {}).get('eu_outer_package_image') or {}
@@ -8937,6 +9046,8 @@ class DxmLoginFlow:
         missing = []
         if self._extract_eu_outer_package_filename(values) and not media.get('ok'):
             missing.append('eu_outer_package_image')
+        if customs.get('ok') is not True:
+            missing.append('customs_supervision')
         optional_unfilled = [
             name for name, result in {
                 'eu_responsible': eu_responsible,
@@ -8960,6 +9071,8 @@ class DxmLoginFlow:
                 'eu_responsible': eu_responsible,
                 'manufacturer': manufacturer,
                 'eu_outer_package_image': media,
+                'customs_supervision': customs,
+                'dxm_reference_template_results': dxm_reference_template_results,
                 'missing': missing,
                 'optional_unfilled': optional_unfilled,
             },
@@ -10047,7 +10160,7 @@ class DxmLoginFlow:
 
     def _fill_image_slot_by_filename(self, page: Page, slot_label: str, filename: str) -> dict[str, Any]:
         before = self._image_slot_state(page, slot_label, filename)
-        requires_configured_filename = self._is_eu_outer_package_slot(slot_label)
+        requires_configured_filename = bool(str(filename or '').strip())
         materialize_result = None
         if before.get('missing_slot'):
             materialize_result = self._materialize_image_slot_section(page, slot_label)
@@ -10188,8 +10301,22 @@ class DxmLoginFlow:
             return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
           };
           const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-          const attrText = (el) => [el.getAttribute('src'), el.getAttribute('alt'), el.getAttribute('title'), el.getAttribute('data-name')]
-            .map(v => String(v || '')).join(' ');
+          const imageNames = (el) => {
+            const result = [];
+            for (const raw of [el.getAttribute('data-name'), el.getAttribute('alt'), el.getAttribute('title')]) {
+              const value = String(raw || '').trim();
+              if (value && !result.includes(value)) result.push(value);
+            }
+            const src = String(el.getAttribute('src') || '').trim();
+            if (src) {
+              try {
+                const parsed = new URL(src, location.href);
+                const base = decodeURIComponent(parsed.pathname.split('/').filter(Boolean).at(-1) || '');
+                if (base && !result.includes(base)) result.push(base);
+              } catch (_) {}
+            }
+            return result;
+          };
           const norm = (s) => String(s || '').replace(/[：:\/\s]/g, '').trim();
           const isEuOuter = norm(slotLabel).includes('外包装标签实拍图欧盟') || String(slotLabel || '').toLowerCase().includes('eu_outer_package');
           const aliases = isEuOuter ? [slotLabel, '外包装/标签实拍图-欧盟', '外包装标签实拍图-欧盟', '外包装标签实拍图欧盟'] : [slotLabel];
@@ -10212,8 +10339,8 @@ class DxmLoginFlow:
           if (!row) return {ok:false, reason:`未找到${slotLabel}所在行`};
           const rowText = textOf(row);
           const imgs = Array.from(row.querySelectorAll('img')).filter(visible);
-          const imageTexts = imgs.map(attrText);
-          const hasConfiguredName = filename && (rowText.includes(filename) || imageTexts.some(text => text.includes(filename)));
+          const observedFilenames = Array.from(new Set(imgs.flatMap(imageNames)));
+          const hasConfiguredName = Boolean(filename && observedFilenames.includes(String(filename).trim()));
           const filledImgs = imgs.filter(img => {
             const src = String(img.getAttribute('src') || '');
             return src && !src.includes('addImg') && !src.includes('addimg') && !src.includes('static/img/addImg');
@@ -10222,9 +10349,11 @@ class DxmLoginFlow:
             ok: Boolean(hasConfiguredName || filledImgs.length),
             reason: hasConfiguredName || filledImgs.length ? null : (slotLabel === '外包装/标签实拍图-欧盟' ? '欧盟外包装图槽位仍为空' : `${slotLabel}槽位仍为空`),
             filename_matched: Boolean(hasConfiguredName),
+            expected_value: String(filename || '').trim(),
+            value_after: hasConfiguredName ? String(filename).trim() : '',
             filled_image_count: filledImgs.length,
             row_text: rowText.slice(0, 300),
-            image_texts: imageTexts.slice(0, 5),
+            observed_filenames: observedFilenames.slice(0, 10),
           };
         }''', {'slotLabel': slot_label, 'filename': filename})
 
@@ -10775,24 +10904,15 @@ class DxmLoginFlow:
         return page.evaluate(script)
 
     def _fill_category_required_attributes(self, page: Page) -> dict[str, Any]:
-        age = self._check_choice_by_text(page, '14 + y(14+y)')
-        if not age.get('ok'):
-            age = self._check_choice_by_text(page, '18+(18+)')
-        origin = self._choose_ant_select_near_label(page, '产地', ['中国大陆', 'Mainland China', 'China'])
-        brand = self._choose_ant_select_near_label(page, '品牌', ['NONE', 'NoEnName', '无品牌'])
-        item_type = self._choose_ant_select_near_label(page, '产品类型', ['Model', 'Puppets', 'Other'])
-        chemical = self._choose_ant_select_near_label(page, '高关注化学品', ['None', '无', 'No'])
-        generic = self._fill_unselected_category_attribute_selects(page)
-        result = {
-            'age': age,
-            'origin': origin,
-            'brand': brand,
-            'item_type': item_type,
-            'high_concerned_chemical': chemical,
-            'generic_required_attributes': generic,
+        # Category attributes are business data.  Without an explicit, frozen
+        # template there is no safe value to infer, so this legacy helper is a
+        # read/write boundary that must fail before touching the page.
+        return {
+            'ok': False,
+            'write_attempted': False,
+            'reason': 'explicit_category_attribute_template_required',
+            'missing': ['category.custom_attributes'],
         }
-        missing = [name for name, value in result.items() if not value.get('ok')]
-        return {'ok': not missing, 'missing': missing, **result}
 
     def _fill_unselected_category_attribute_selects(self, page: Page) -> dict[str, Any]:
         filled: list[dict[str, Any]] = []
@@ -11269,6 +11389,20 @@ class DxmLoginFlow:
         ]
 
     def _fill_customs_supervision_attribute(self, page: Page, priorities: list[str]) -> dict[str, Any]:
+        normalized_priorities = [
+            str(value).strip()
+            for value in priorities
+            if str(value or '').strip()
+        ]
+        if not normalized_priorities:
+            return {
+                'ok': False,
+                'located': False,
+                'expected_value': None,
+                'value_after': None,
+                'write_attempted': False,
+                'reason': 'customs_product_name_priorities_required',
+            }
         configured = page.evaluate(r'''() => {
           const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
           const visible = (el) => {
@@ -11319,12 +11453,19 @@ class DxmLoginFlow:
           };
         }''')
         if configured.get('ok'):
-            if configured.get('update_rect'):
-                self._click_rect_center(page, configured['update_rect'])
-                page.wait_for_timeout(1500)
-                self._dismiss_blocking_modals(page)
-                return {'ok': True, 'already_configured': True, 'updated_existing': True, 'state': configured}
-            return {'ok': True, 'already_configured': True, 'state': configured}
+            observed = str(configured.get('product_name_value') or '').strip()
+            expected = next((value for value in normalized_priorities if value == observed), None)
+            return {
+                'ok': expected is not None,
+                'already_configured': True,
+                'located': bool(observed),
+                'expected_value': expected,
+                'value_after': observed,
+                'exact_readback': expected is not None,
+                'write_attempted': False,
+                'state': configured,
+                'reason': None if expected is not None else 'customs_product_name_readback_mismatch',
+            }
 
         opened = page.evaluate(r'''() => {
           const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
@@ -11478,23 +11619,26 @@ class DxmLoginFlow:
             if modal_state.get('select_rect'):
                 self._click_rect_center(page, modal_state['select_rect'])
                 page.wait_for_timeout(1200)
-                if modal_state.get('is_product_name_step'):
-                    page.keyboard.press('Enter')
-                    page.wait_for_timeout(1200)
-                    option = {'ok': True, 'text': 'active-option'}
-                else:
-                    option = self._click_ant_option_near_rect(
-                        page,
-                        ['其他', 'Other'],
-                        modal_state['select_rect'],
-                        required=False,
-                    )
-                    if not option.get('ok'):
-                        return {
-                            'ok': False,
-                            'reason': '未找到可用海关监管种类选项，已停止避免误选',
-                            'state': {'modal_text': str(modal_state.get('text') or '')[:300]},
-                        }
+                if not modal_state.get('is_product_name_step'):
+                    return {
+                        'ok': False,
+                        'write_attempted': bool(selected_options),
+                        'reason': 'explicit_customs_kind_template_required',
+                        'state': {'modal_text': str(modal_state.get('text') or '')[:300]},
+                    }
+                option = self._click_ant_option_near_rect(
+                    page,
+                    normalized_priorities,
+                    modal_state['select_rect'],
+                    required=True,
+                )
+                if not option.get('ok'):
+                    return {
+                        'ok': False,
+                        'write_attempted': False,
+                        'reason': 'customs_product_name_exact_option_missing',
+                        'state': {'modal_text': str(modal_state.get('text') or '')[:300]},
+                    }
                 selected_options.append(str(option.get('text') or ''))
             if not modal_state.get('confirm_rect'):
                 break
@@ -11539,14 +11683,28 @@ class DxmLoginFlow:
             body_excerpt: body.slice(-1000),
           };
         }''')
+        observed = str(state.get('product_name_value') or '').strip()
+        expected = next((value for value in normalized_priorities if value == observed), None)
+        exact_readback = bool(state.get('ok') and expected is not None)
         return {
-            'ok': bool(state.get('ok')),
+            'ok': exact_readback,
+            'located': bool(observed),
+            'expected_value': expected,
+            'value_after': observed,
+            'exact_readback': exact_readback,
+            'write_attempted': bool(selected_options or confirm_texts),
             'selected': selected_options[-1] if selected_options else None,
             'selected_options': selected_options,
             'confirm_steps': len(confirm_texts),
             'confirm_texts': confirm_texts,
             'state': state,
-            'reason': None if state.get('ok') else '海关监管属性未落表',
+            'reason': (
+                None
+                if exact_readback
+                else 'customs_product_name_readback_mismatch'
+                if state.get('ok')
+                else '海关监管属性未落表'
+            ),
         }
 
     def _semi_managed_page_state(self, page: Page) -> dict[str, Any]:
@@ -12972,7 +13130,46 @@ class DxmLoginFlow:
             'original_box': dict(original_box),
             'logistics_attribute': dict(logistics_attribute),
         }
-        missing = [name for name, ok in (result or {}).items() if not ok]
+        required_fields = (
+            'product_price',
+            'supply_price',
+            'weight',
+            'length',
+            'width',
+            'height',
+            'stock',
+            'goods_code',
+            'freight_template',
+            'service_template',
+            'variant_rows_present',
+            'is_original_box',
+            'logistics_attribute',
+        )
+        missing = [name for name in required_fields if result.get(name) is not True]
+        for field_name in (
+            'product_price',
+            'supply_price',
+            'weight',
+            'length',
+            'width',
+            'height',
+            'jit_stock',
+            'goods_code',
+            'freight_template',
+            'service_template',
+            'original_box',
+            'logistics_attribute',
+        ):
+            detail = result['field_details'].get(field_name)
+            if not isinstance(detail, Mapping) or not (
+                detail.get('ok') is True
+                and detail.get('located') is not False
+                and str(detail.get('expected_value') or '').strip()
+                and str(detail.get('value_after') or '').strip()
+                and str(detail.get('expected_value')) == str(detail.get('value_after'))
+            ):
+                missing.append(f'{field_name}_readback_exact')
+        missing = sorted(set(missing))
         screenshot_path = EDITOR_ACTION_SCREENSHOT_MAP['fill_semi_managed_defaults']
         page.screenshot(path=str(screenshot_path), full_page=True)
         return {
@@ -12988,7 +13185,11 @@ class DxmLoginFlow:
                 'original_box': original_box,
                 'logistics_attribute_detail': logistics_attribute,
                 'missing': missing,
-                'optional_unfilled': ['goods_code', 'goods_barcode'],
+                'optional_unfilled': [
+                    name
+                    for name, detail in (result.get('optional_details') or {}).items()
+                    if isinstance(detail, Mapping) and detail.get('ok') is not True
+                ],
             },
             'published': False,
         }

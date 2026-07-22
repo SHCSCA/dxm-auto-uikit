@@ -7,6 +7,10 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
+from src.execution.browser_agent_protocol import (
+    MutationCommandContractError,
+    canonical_frozen_target_identity,
+)
 from src.state_machine.two_stage import (
     TwoStageContractError,
     canonical_source_identity,
@@ -371,6 +375,18 @@ def _normalize_items(
             },
             "source_urls": list(source_urls),
         }
+        try:
+            canonical_target = canonical_frozen_target_identity(
+                target_identity,
+                store_name=current_store_name,
+            )
+        except MutationCommandContractError as exc:
+            raise ScopeContractError("SCOPE_ITEM_IDENTITY_INVALID", str(exc)) from exc
+        if canonical_target != target_identity:
+            _reject(
+                "SCOPE_ITEM_IDENTITY_INVALID",
+                "scope target identity is not in the exact executable form",
+            )
         normalized.append(
             {
                 "ordinal": expected_ordinal,

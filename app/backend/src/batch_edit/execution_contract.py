@@ -524,7 +524,10 @@ def classify_pre_save_no_write_outcome(claim_context: Any, outcome: Any) -> dict
                 "browser_session_id",
                 "git_head",
                 "store_identity",
-                "page_identity",
+                "scope_page_identity",
+                "action_page_identity",
+                "save_page_identity",
+                "verification_page_identity",
                 "target_identity_sha256",
                 "mutation_scope_id",
             },
@@ -548,10 +551,26 @@ def classify_pre_save_no_write_outcome(claim_context: Any, outcome: Any) -> dict
         "browser_session_id",
         "git_head",
         "store_identity",
-        "page_identity",
         "target_identity_sha256",
     )
     if any(evidence[key] != claim[key] for key in stable_keys):
+        return _stop_decision(claim, "OUTCOME_IDENTITY_DRIFT")
+    if evidence["scope_page_identity"] != claim["page_identity"]:
+        return _stop_decision(claim, "OUTCOME_IDENTITY_DRIFT")
+    try:
+        action_page = _execution_page_identity(
+            evidence["action_page_identity"], "pre-save action page identity"
+        )
+    except BatchExecutionContractError:
+        return _stop_decision(claim, "EVIDENCE_MISSING")
+    runtime_identity = claim.get("runtime_identity")
+    if (
+        not isinstance(runtime_identity, dict)
+        or action_page["runtime_id"] != runtime_identity.get("browser_runtime_id")
+        or action_page["browser_session_id"] != claim["browser_session_id"]
+        or evidence["save_page_identity"] is not None
+        or evidence["verification_page_identity"] is not None
+    ):
         return _stop_decision(claim, "OUTCOME_IDENTITY_DRIFT")
     if (
         evidence["schema_version"] != ITEM_OUTCOME_EVIDENCE_SCHEMA
@@ -625,7 +644,10 @@ def classify_item_outcome(grant: Any, outcome: Any) -> dict[str, Any]:
                 "browser_session_id",
                 "git_head",
                 "store_identity",
-                "page_identity",
+                "scope_page_identity",
+                "action_page_identity",
+                "save_page_identity",
+                "verification_page_identity",
                 "target_identity_sha256",
                 "mutation_scope_id",
             },
@@ -660,20 +682,46 @@ def classify_item_outcome(grant: Any, outcome: Any) -> dict[str, Any]:
         "browser_session_id",
         "git_head",
         "store_identity",
-        "page_identity",
         "target_identity_sha256",
         "mutation_scope_id",
     )
     if any(evidence[key] != canonical_grant[key] for key in stable_keys):
         return _stop_decision(canonical_grant, "OUTCOME_IDENTITY_DRIFT")
+    if evidence["scope_page_identity"] != canonical_grant["page_identity"]:
+        return _stop_decision(canonical_grant, "OUTCOME_IDENTITY_DRIFT")
+    actual_pages: dict[str, dict[str, Any]] = {}
+    try:
+        for page_key in (
+            "action_page_identity",
+            "save_page_identity",
+            "verification_page_identity",
+        ):
+            page_value = evidence[page_key]
+            if page_value is not None:
+                actual_pages[page_key] = _execution_page_identity(page_value, page_key)
+    except BatchExecutionContractError:
+        return _stop_decision(canonical_grant, "EVIDENCE_MISSING")
+    runtime_identity = canonical_grant.get("runtime_identity")
+    if not isinstance(runtime_identity, dict) or any(
+        page["runtime_id"] != runtime_identity.get("browser_runtime_id")
+        or page["browser_session_id"] != canonical_grant["browser_session_id"]
+        for page in actual_pages.values()
+    ):
+        return _stop_decision(canonical_grant, "OUTCOME_IDENTITY_DRIFT")
 
     if evidence["ok"] is True:
+        save_page = actual_pages.get("save_page_identity")
+        verification_page = actual_pages.get("verification_page_identity")
         if (
             evidence["error_code"] is None
             and evidence["validation_reason"] is None
             and evidence["ledger_status"] == "DISPATCHED"
             and evidence["save_proven"] is True
             and mutation_count == 1
+            and evidence["action_page_identity"] is None
+            and isinstance(save_page, dict)
+            and save_page == verification_page
+            and save_page.get("kind") == "semi_managed"
         ):
             return _continue_decision(canonical_grant, "SUCCEEDED", "ITEM_SAVE_PROVEN")
         return _stop_decision(canonical_grant, "SUCCESS_EVIDENCE_UNCERTAIN")
@@ -732,6 +780,19 @@ def _non_negative_count(value: Any) -> int:
     return value
 
 
+def _execution_page_identity(value: Any, label: str) -> dict[str, Any]:
+    page = _exact_object(
+        value,
+        {"kind", "url", "runtime_id", "browser_session_id"},
+        label,
+    )
+    for key in ("kind", "url", "runtime_id", "browser_session_id"):
+        _non_empty_text(page[key], f"{label}.{key}")
+    if not str(page["url"]).lower().startswith(("http://", "https://")):
+        _reject("PAGE_IDENTITY_INVALID", f"{label}.url must be an absolute HTTP URL")
+    return page
+
+
 def _batch_object(value: Any) -> dict[str, Any]:
     base_keys = {
         "id",
@@ -759,10 +820,6 @@ def _batch_object(value: Any) -> dict[str, Any]:
                 "approved",
                 "approved_by",
                 "approved_at",
-                "issued_at",
-                "expires_at",
-                "confirmation",
-                "scope_revalidation",
             },
             "public approval summary",
         )

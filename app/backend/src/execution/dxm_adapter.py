@@ -980,6 +980,14 @@ class DxmWorkflowAdapter:
             self._derive_open_editor_postconditions(evidence, sources, postconditions)
         elif action == 'verify_edit_ownership':
             self._derive_edit_ownership_postconditions(sources, postconditions)
+        elif action == 'fill_editor_required_defaults':
+            self._derive_base_defaults_postconditions(sources, postconditions)
+        elif action == 'fill_editor_variants':
+            self._derive_variant_postconditions(sources, postconditions)
+        elif action == 'fill_media_assets':
+            self._derive_media_postconditions(sources, postconditions)
+        elif action == 'fill_compliance_defaults':
+            self._derive_compliance_postconditions(sources, postconditions)
         elif action == 'enable_semi_managed':
             editor = sources.get('editor_action_result') or {}
             postconditions['semi_managed_visible'] |= editor.get('semi_managed_visible') is True
@@ -1191,6 +1199,221 @@ class DxmWorkflowAdapter:
         )
         postconditions['store_match'] |= fill.get('store_matched') is True
         postconditions['source_identity_match'] |= fill.get('source_matched') is True
+
+    @classmethod
+    def _exact_readback_detail(cls, value: Any) -> bool:
+        if not isinstance(value, Mapping):
+            return False
+        expected = value.get('expected_value')
+        observed = value.get('value_after')
+        return bool(
+            value.get('ok') is True
+            and value.get('located') is not False
+            and cls._has_concrete_value(expected)
+            and cls._has_concrete_value(observed)
+            and str(expected) == str(observed)
+        )
+
+    @classmethod
+    def _exact_readback_group(cls, value: Any) -> bool:
+        if not isinstance(value, Mapping):
+            return False
+        rows = value.get('values')
+        return bool(
+            isinstance(rows, list)
+            and rows
+            and value.get('matched') == len(rows)
+            and value.get('filled') == len(rows)
+            and all(cls._exact_readback_detail(row) for row in rows)
+        )
+
+    @classmethod
+    def _derive_base_defaults_postconditions(
+        cls,
+        sources: Mapping[str, dict[str, Any]],
+        postconditions: dict[str, bool],
+    ) -> None:
+        for name in postconditions:
+            postconditions[name] = False
+        fill = sources.get('fill_result') or {}
+        details = fill.get('field_details') if isinstance(fill.get('field_details'), Mapping) else {}
+        title_exact = cls._exact_readback_detail(details.get('title'))
+        category_exact = cls._exact_readback_detail(fill.get('category'))
+        required_field_names = (
+            'title',
+            'declared_value',
+            'stock',
+            'weight',
+            'length',
+            'width',
+            'height',
+            'delivery_days',
+            'gross_weight',
+            'sku_code',
+        )
+        fields_exact = all(cls._exact_readback_detail(details.get(name)) for name in required_field_names)
+        template_results = (
+            fill.get('dxm_reference_template_results')
+            if isinstance(fill.get('dxm_reference_template_results'), Mapping)
+            else {}
+        )
+        configured_templates = [
+            result
+            for result in template_results.values()
+            if isinstance(result, Mapping) and result.get('names')
+        ]
+        templates_exact = bool(
+            configured_templates
+            and all(cls._exact_readback_detail(result) for result in configured_templates)
+        )
+        required_select_names = (
+            'category',
+            'original_box',
+            'logistics_attribute',
+            'tax_quote',
+            'freight_template',
+            'service_template',
+            'customs_supervision',
+        )
+        selects_exact = all(
+            cls._exact_readback_detail(fill.get(name)) for name in required_select_names
+        )
+        postconditions['title_readback_nonempty'] = bool(
+            title_exact and str(details['title'].get('value_after') or '').strip()
+        )
+        postconditions['title_readback_exact'] = title_exact
+        postconditions['category_selected_exact'] = category_exact
+        postconditions['required_templates_resolved'] = templates_exact
+        postconditions['required_fields_complete'] = bool(
+            fields_exact
+            and selects_exact
+            and templates_exact
+            and fill.get('missing') == []
+        )
+
+    @classmethod
+    def _derive_variant_postconditions(
+        cls,
+        sources: Mapping[str, dict[str, Any]],
+        postconditions: dict[str, bool],
+    ) -> None:
+        for name in postconditions:
+            postconditions[name] = False
+        fill = sources.get('fill_result') or {}
+        sku_exact = cls._exact_readback_group(fill.get('sku'))
+        price_exact = cls._exact_readback_group(fill.get('retail_price'))
+        stock_exact = cls._exact_readback_group(fill.get('stock'))
+        required_groups = (
+            'sku',
+            'retail_price',
+            'declared_value',
+            'stock',
+            'weight',
+            'length',
+            'width',
+            'height',
+        )
+        groups_exact = all(cls._exact_readback_group(fill.get(name)) for name in required_groups)
+        original_box = fill.get('variant_original_box')
+        original_box_exact = cls._exact_readback_group(original_box)
+        logistics = fill.get('logistics_attribute_verify') or fill.get('logistics_attribute_detail')
+        logistics_exact = cls._exact_readback_detail(logistics)
+        variant_rows_present = bool(
+            sku_exact
+            and price_exact
+            and stock_exact
+            and isinstance(fill.get('sku'), Mapping)
+            and int(fill['sku'].get('matched') or 0) > 0
+        )
+        postconditions['variant_rows_present'] = variant_rows_present
+        postconditions['sku_readback_exact'] = sku_exact
+        postconditions['price_readback_exact'] = price_exact
+        postconditions['stock_readback_exact'] = stock_exact
+        postconditions['all_required_cells_complete'] = bool(
+            variant_rows_present
+            and groups_exact
+            and original_box_exact
+            and logistics_exact
+            and fill.get('missing') == []
+        )
+
+    @classmethod
+    def _derive_media_postconditions(
+        cls,
+        sources: Mapping[str, dict[str, Any]],
+        postconditions: dict[str, bool],
+    ) -> None:
+        for name in postconditions:
+            postconditions[name] = False
+        fill = sources.get('fill_result') or {}
+        slots = fill.get('image_slots')
+        exact_slots = []
+        if isinstance(slots, list):
+            for slot in slots:
+                verified = slot.get('verified') if isinstance(slot, Mapping) else None
+                exact_slots.append(bool(
+                    isinstance(slot, Mapping)
+                    and str(slot.get('filename') or '').strip()
+                    and cls._exact_readback_detail(verified)
+                    and int(verified.get('filled_image_count') or 0) > 0
+                    and slot.get('deferred') is not True
+                ))
+        all_slots_exact = bool(exact_slots and all(exact_slots))
+        marketing = fill.get('marketing_images') if isinstance(fill.get('marketing_images'), Mapping) else {}
+        marketing_complete = bool(
+            marketing.get('skipped') is True and marketing.get('reason') == 'not_configured'
+            or (
+                marketing.get('ok') is True
+                and isinstance(marketing.get('items'), list)
+                and marketing.get('items')
+                and all(
+                    isinstance(item, Mapping)
+                    and item.get('has_image') is True
+                    and isinstance(item.get('dimensions'), Mapping)
+                    for item in marketing['items']
+                )
+            )
+        )
+        postconditions['main_images_present'] = all_slots_exact
+        postconditions['required_assets_match'] = all_slots_exact
+        postconditions['invalid_images_absent'] = all_slots_exact
+        postconditions['marketing_assets_complete'] = marketing_complete
+
+    @classmethod
+    def _derive_compliance_postconditions(
+        cls,
+        sources: Mapping[str, dict[str, Any]],
+        postconditions: dict[str, bool],
+    ) -> None:
+        for name in postconditions:
+            postconditions[name] = False
+        fill = sources.get('fill_result') or {}
+        eu_exact = cls._exact_readback_detail(fill.get('eu_responsible'))
+        manufacturer_exact = cls._exact_readback_detail(fill.get('manufacturer'))
+        customs_exact = cls._exact_readback_detail(fill.get('customs_supervision'))
+        template_results = (
+            fill.get('dxm_reference_template_results')
+            if isinstance(fill.get('dxm_reference_template_results'), Mapping)
+            else {}
+        )
+        configured = [
+            result for result in template_results.values()
+            if isinstance(result, Mapping) and result.get('names')
+        ]
+        templates_exact = bool(
+            configured and all(cls._exact_readback_detail(result) for result in configured)
+        )
+        postconditions['eu_responsible_readback_exact'] = eu_exact
+        postconditions['manufacturer_readback_exact'] = manufacturer_exact
+        postconditions['customs_readback_exact'] = customs_exact
+        postconditions['required_templates_applied'] = templates_exact
+        postconditions['required_compliance_complete'] = bool(
+            eu_exact
+            and manufacturer_exact
+            and customs_exact
+            and templates_exact
+            and fill.get('missing') == []
+        )
 
     @staticmethod
     def _derive_open_semi_postconditions(

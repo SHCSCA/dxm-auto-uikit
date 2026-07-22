@@ -4,6 +4,7 @@ import type {
   RuntimeStatus,
   Task,
 } from '../../types'
+import { isSupportedSourceProductUrl } from '../../sourceUrl'
 import { humanTaskDisplayName, humanOperatorMessage } from './workbenchCopy'
 
 type ProductTasksPageProps = {
@@ -25,7 +26,6 @@ type ProductTasksPageProps = {
   onShowConfig: () => void
   onShowDraftEdit: () => void
   onShowConsole: () => void
-  onShowEvidence: () => void
   onShowReports: () => void
 }
 
@@ -50,7 +50,6 @@ export function ProductTasksPage({
   onShowConfig,
   onShowDraftEdit,
   onShowConsole,
-  onShowEvidence,
   onShowReports,
 }: ProductTasksPageProps) {
   const currentTask = selectedTask && isOperatorTask(selectedTask) ? selectedTask : firstOperatorTask(workspace.tasks)
@@ -98,9 +97,6 @@ export function ProductTasksPage({
             <h2>{currentTask ? humanTaskDisplayName(currentTask) : '还没有可启动的保存任务'}</h2>
             <p>这里不选择商品，也不创建任务。要创建新的只保存任务，请先在“待认领入箱”完成第一段，再到“商品箱编辑保存”选择商品箱商品。</p>
           </div>
-          <button className="button button--secondary" type="button" onClick={onShowReports}>
-            查看结果与证据
-          </button>
         </div>
 
         <div className={`task-current-panel__decision task-current-panel__decision--${decision.tone}`} aria-label="当前任务判断">
@@ -145,26 +141,12 @@ export function ProductTasksPage({
           <button className="button button--primary" type="button" onClick={primaryAction} disabled={primaryDisabled}>
             {decision.cta}
           </button>
-          <button className="button button--secondary" type="button" onClick={onShowConsole} disabled={!currentTask}>
-            浏览器诊断与关闭旧窗口
-          </button>
-          <button className="button button--secondary" type="button" onClick={onShowConfig} disabled={currentTask?.mode !== 'single_save'}>
-            检查编辑页模板
-          </button>
         </div>
 
         {currentTask?.mode === 'single_save' && l2Gate?.status !== 'passed' && (
           <div className="gate-note">
             <strong>保存前检查没有通过</strong>
             <span>{safeGateDetail(l2Gate?.detail) || '需要确认已有待认领列表和商品箱页面能正常打开，且检查过程没有写入动作。'}</span>
-            <div className="next-step-actions">
-              <button className="button button--secondary" type="button" onClick={onRunL2Probe} disabled={busy}>
-                {READONLY_PRECHECK_CTA}
-              </button>
-              <button className="button button--quiet" type="button" onClick={onShowEvidence}>
-                查看证据缺口
-              </button>
-            </div>
           </div>
         )}
 
@@ -255,13 +237,13 @@ function buildTaskDecision({
   busy: boolean
 }) {
   if (!task) {
-    return decision('go_draft_edit', 'warn', '还没有保存任务', '当前没有可启动的待认领入箱或商品箱编辑保存任务。', '先到“待认领入箱”或“商品箱编辑保存”创建任务。', '去商品箱编辑保存', false)
+    return decision('show_acquisition', 'warn', '还没有保存任务', '当前没有可启动的待认领入箱或单商品只保存任务。', '先从真实来源商品创建待认领任务；已有商品箱内容可直接走整批编辑。', '创建待认领任务', false)
   }
   if (task.status === 'completed') {
     return decision('show_reports', 'ok', '任务已完成', '当前任务已经结束，不能重复启动。', '查看保存结果和未发布证明。', '查看保存结果', false)
   }
   if (task.status === 'running') {
-    return decision('show_console', 'ok', '任务正在运行', '系统正在控制真实浏览器，避免重复启动。', '到“浏览器现场”查看进度，必要时人工接管。', '查看浏览器现场', false)
+    return decision('none', 'ok', '任务正在运行', '系统正在控制真实浏览器，避免重复启动。', '保持当前页等待状态更新；独立诊断浏览器不是执行入口。', '任务执行中', true)
   }
   if (task.status !== 'draft') {
     return decision('go_draft_edit', 'warn', '当前任务不可直接启动', '这条任务不是草稿状态。', '重新从商品箱商品创建编辑保存任务。', '去商品箱编辑保存', false)
@@ -324,22 +306,7 @@ function taskHasSupportedSourceUrl(task: Task) {
     : typeof task.payload?.claimed_product_source_url === 'string'
       ? task.payload.claimed_product_source_url
       : ''
-  try {
-    const url = new URL(value)
-    const hostname = url.hostname.toLowerCase().replace(/\.$/, '')
-    return ['http:', 'https:'].includes(url.protocol)
-      && Boolean(hostname)
-      && !url.username
-      && !url.password
-      && hostname !== 'localhost'
-      && hostname !== '127.0.0.1'
-      && hostname !== '::1'
-      && !hostname.endsWith('.local')
-      && hostname !== 'dianxiaomi.com'
-      && !hostname.endsWith('.dianxiaomi.com')
-  } catch {
-    return false
-  }
+  return isSupportedSourceProductUrl(value)
 }
 
 function configStatusLabel(task: Task | null, configPreview: ConfigPreview | null, loading: boolean, error: string | null) {
