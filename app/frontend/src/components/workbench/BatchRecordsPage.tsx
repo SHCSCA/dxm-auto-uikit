@@ -423,7 +423,7 @@ function safeStoppedCount(progress: EditBatchProgressSummary) {
 }
 
 function uncertainCount(progress: EditBatchProgressSummary) {
-  return progress.uncertain ?? progress.stopped ?? 0
+  return progress.uncertain ?? 0
 }
 
 function templateVersion(detail: EditBatchDetail) {

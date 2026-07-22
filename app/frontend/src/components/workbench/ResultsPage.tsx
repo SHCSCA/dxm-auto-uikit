@@ -14,6 +14,7 @@ import { humanOperatorMessage, humanOperatorTitle, humanTaskDisplayName } from '
 type ResultsPageProps = {
   workspace: DeliveryWorkspace
   editBatches: EditBatchSummary[]
+  activeBatchId: number | null
   selectedTask: Task | null
   finalCheck: FinalDeliveryCheckSummary | null
   onShowDraftEdit: () => void
@@ -60,6 +61,7 @@ type L2DiagnosticSummary = {
 export function ResultsPage({
   workspace,
   editBatches,
+  activeBatchId,
   selectedTask,
   finalCheck,
   onShowDraftEdit,
@@ -69,8 +71,22 @@ export function ResultsPage({
   onShowTasks,
   onShowExceptions,
 }: ResultsPageProps) {
-  if (editBatches.length) {
-    return <ControlledBatchResults batches={editBatches} onShowBatchRecords={onShowBatchRecords} onOpenBatch={onOpenBatch} />
+  const selectedTaskHasResults = Boolean(selectedTask && (
+    selectedTask.status === 'completed'
+    || workspace.reports.some((item) => item.task_id === selectedTask.id)
+    || workspace.evidences.some((item) => item.task_id === selectedTask.id)
+    || workspace.exceptions.some((item) => item.task_id === selectedTask.id)
+  ))
+  const explicitlySelectedBatch = activeBatchId == null
+    ? null
+    : editBatches.find((batch) => batch.id === activeBatchId) ?? null
+  const operationalBatch = editBatches.find((batch) => batch.status === 'running' || batch.status === 'stop_requested')
+    ?? editBatches.find((batch) => batch.execution.manual_review_required)
+    ?? editBatches[0]
+    ?? null
+  const focusedBatch = explicitlySelectedBatch ?? (!selectedTaskHasResults ? operationalBatch : null)
+  if (focusedBatch) {
+    return <ControlledBatchResults batches={editBatches} focusedBatch={focusedBatch} onShowBatchRecords={onShowBatchRecords} onOpenBatch={onOpenBatch} />
   }
   if (!selectedTask && workspace.reports.length === 0 && workspace.evidences.length === 0) {
     return (
@@ -133,7 +149,7 @@ export function ResultsPage({
           <BusinessReportCheckRow count={businessReportCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
           <EvidenceCheckRow label="保存结果" count={saveResultCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
           <EvidenceCheckRow label="未发布证明" count={unpublishedProofCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
-          <EvidenceCheckRow label="保存回包" count={networkHarCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
+          <EvidenceCheckRow label="保存回执" count={networkHarCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
         </div>
         {realWriteExpectedBlocked && (
           <p className="delivery-check-card__warning">人工确认前不要求生成新的真实保存证据；0 条代表当前自动化真实保存按规则暂停。</p>
@@ -161,25 +177,25 @@ export function ResultsPage({
 
 function ControlledBatchResults({
   batches,
+  focusedBatch,
   onShowBatchRecords,
   onOpenBatch,
 }: {
   batches: EditBatchSummary[]
+  focusedBatch: EditBatchSummary
   onShowBatchRecords: (batchId?: number) => void
   onOpenBatch: (batchId: number) => void
 }) {
-  const latest = batches[0]
-  const active = batches.find((batch) => batch.status === 'running' || batch.status === 'stop_requested') ?? null
-  const needsReview = batches.filter((batch) => batch.execution.manual_review_required)
-  const targetBatch = active ?? needsReview[0] ?? latest
+  const targetBatch = focusedBatch
+  const active = targetBatch.status === 'running' || targetBatch.status === 'stop_requested' ? targetBatch : null
   const safeStopped = targetBatch.progress.stopped_before_save_no_write ?? 0
-  const uncertain = targetBatch.progress.uncertain ?? targetBatch.progress.stopped ?? 0
+  const uncertain = targetBatch.progress.uncertain ?? 0
   const next = active
     ? {
         title: '查看实时串行进度',
         detail: `批次 #${active.id} 正在处理 ${active.progress.completed}/${active.progress.total} 件；需要停止时从批次记录发起安全停止。`,
       }
-    : needsReview.length
+    : targetBatch.execution.manual_review_required
       ? {
           title: '处理需要人工对账的批次',
           detail: '先确认店小秘真实页面结果，不要对结果不确定的商品自动重试。',
@@ -203,7 +219,7 @@ function ControlledBatchResults({
           <div>
             <span className="eyebrow">受控商品箱整批结果</span>
             <h2>{batchResultStatus(targetBatch)}</h2>
-            <p>这是范围冻结、一次批准、严格串行的 edit-batch 结果。旧版 batch_save、无人值守和发布仍不可用。</p>
+            <p>这是范围冻结、一次批准、严格串行的受控批次结果。旧版批量保存、无人值守和发布仍不可用。</p>
           </div>
           <span className={`batch-status-badge is-${batchResultTone(targetBatch)}`}>批次 #{targetBatch.id}</span>
         </div>
@@ -234,6 +250,7 @@ function ControlledBatchResults({
               <strong>批次 #{batch.id} · {batch.store_identity?.store_name ?? '店铺已冻结'}</strong>
               <b>{batchResultStatus(batch)}</b>
               <small>{batch.progress.completed}/{batch.progress.total} 件已处理 · {batch.template.name ?? '模板已冻结'}</small>
+              <button className="button button--quiet" type="button" onClick={() => onShowBatchRecords(batch.id)}>查看批次记录</button>
             </span>
           ))}
         </div>
@@ -572,7 +589,7 @@ function BusinessResultSummaryCard({
           ? '本次结果需要复核'
           : '还没有完成保存'
   const detail = ok
-    ? '系统已拿到保存成功、未发布证明和保存接口回包。'
+    ? '系统已拿到保存成功回执和独立未发布证明。'
     : reportIndicatesPublished
       ? '报告明确标记为已发布；不要继续执行或自动重试。'
       : realWriteExpectedBlocked
@@ -857,7 +874,7 @@ function humanPublishGuardStatus(status?: string | null, hasUnpublishedProof = f
     waiting: '等待执行',
     empty: '等待执行',
     unknown: '等待执行',
-  } as Record<string, string>)[status ?? 'unknown'] ?? status ?? '等待执行'
+  } as Record<string, string>)[status ?? 'unknown'] ?? '状态待确认'
 }
 
 function humanReportTitle(report: Report) {
@@ -881,7 +898,7 @@ function humanReportStatus(status?: string | null) {
     running: '运行中',
     draft: '待执行',
   }
-  return labels[String(status || 'draft')] ?? String(status || '待执行')
+  return labels[String(status || 'draft')] ?? '状态待确认'
 }
 
 function reportStatusTone(status?: string | null) {

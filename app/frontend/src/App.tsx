@@ -710,7 +710,7 @@ export default function App() {
     try {
       if (REAL_DXM_MUTATION_MODES.has(taskToStart.mode)) {
         if (UNRELEASED_REAL_DXM_MUTATION_MODES.has(taskToStart.mode)) {
-          setOperationError('旧版 batch_save 入口已关闭。请使用“商品箱批量编辑”的范围冻结、一次批准和严格串行流程。')
+          setOperationError('旧版批量保存入口已关闭。请使用“商品箱批量编辑”的范围冻结、一次批准和严格串行流程。')
           return
         }
         if (!RELEASED_REAL_DXM_MUTATION_MODES.has(taskToStart.mode)) {
@@ -1182,6 +1182,14 @@ export default function App() {
     setActiveEditBatchId(batchId)
     setActiveSection('draft_edit_save')
   }
+  const showSelectedTaskResults = () => {
+    setActiveEditBatchId(null)
+    setActiveSection('results')
+  }
+  const showSelectedTaskIssues = () => {
+    setActiveEditBatchId(null)
+    setActiveSection('issues')
+  }
   const setWorkbenchSection = useCallback((section: WorkbenchSection) => {
     if (section === 'template_center') setTemplateCenterEntryMode('batch_bundle')
     setActiveSection(normalizeWorkbenchSection(section))
@@ -1264,6 +1272,7 @@ export default function App() {
             onShowAcquisition={() => setActiveSection('acquisition_claim')}
             onShowDxmAccess={() => setActiveSection('dxm_access')}
             onSelectTask={(taskId) => {
+              setActiveEditBatchId(null)
               setSelectedTaskId(taskId)
               syncSelectedTaskIdUrl(taskId)
               void refreshConfigPreview(taskId)
@@ -1271,7 +1280,7 @@ export default function App() {
             onShowConfig={() => setActiveSection('edit_config')}
             onShowDraftEdit={startNewEditBatch}
             onShowConsole={() => setActiveSection('start_save')}
-            onShowReports={() => setActiveSection('results')}
+            onShowReports={showSelectedTaskResults}
           />
         )
       case 'task_history':
@@ -1364,7 +1373,7 @@ export default function App() {
             onShowDraftEdit={() => setActiveSection('draft_edit_save')}
             onShowConfig={() => setActiveSection('edit_config')}
             onShowEvidence={() => setActiveSection('evidence')}
-            onShowReports={() => setActiveSection('results')}
+            onShowReports={showSelectedTaskResults}
           />
         )
       case 'evidence':
@@ -1374,6 +1383,7 @@ export default function App() {
           <ExceptionQueue
             workspace={workspace}
             editBatches={editBatches}
+            activeBatchId={activeEditBatchId}
             selectedTask={selectedTask}
             onShowTasks={() => setActiveSection('product_tasks')}
             onShowDraftEdit={startNewEditBatch}
@@ -1382,7 +1392,7 @@ export default function App() {
           />
         )
       case 'results':
-        return <ReportCenter workspace={workspace} editBatches={editBatches} selectedTask={selectedTask} finalCheck={finalCheck} onShowDraftEdit={startNewEditBatch} onShowBatchRecords={showBatchRecords} onOpenBatch={openBatchForApproval} onShowEvidence={() => setActiveSection('evidence')} onShowTasks={() => setActiveSection('product_tasks')} onShowExceptions={() => setActiveSection('issues')} />
+        return <ReportCenter workspace={workspace} editBatches={editBatches} activeBatchId={activeEditBatchId} selectedTask={selectedTask} finalCheck={finalCheck} onShowDraftEdit={startNewEditBatch} onShowBatchRecords={showBatchRecords} onOpenBatch={openBatchForApproval} onShowEvidence={() => setActiveSection('evidence')} onShowTasks={() => setActiveSection('product_tasks')} onShowExceptions={showSelectedTaskIssues} />
       case 'help':
         return (
           <HelpPage
@@ -1394,7 +1404,7 @@ export default function App() {
             onShowDraftEdit={startNewEditBatch}
             onShowBatchRecords={() => showBatchRecords()}
             onShowResults={() => setActiveSection('results')}
-            onShowIssues={() => setActiveSection('issues')}
+            onShowIssues={showSelectedTaskIssues}
           />
         )
       case 'settings':

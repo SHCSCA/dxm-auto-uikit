@@ -6,12 +6,14 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 from src.core.config import SCREENSHOT_DIR
 from src.db import (
     connection,
     disable_edit_batch_bundles_with_quarantined_sources,
     disable_legacy_generated_starter_templates,
+    disable_unexecutable_edit_batch_bundles,
     dumps,
     loads,
     recover_interrupted_edit_batches as recover_edit_batches_in_db,
@@ -182,6 +184,7 @@ class Repository:
             # source-reference quarantine applied during database startup.
             disable_legacy_generated_starter_templates(conn)
             disable_edit_batch_bundles_with_quarantined_sources(conn)
+            disable_unexecutable_edit_batch_bundles(conn)
             row = conn.execute("SELECT * FROM templates WHERE id=?", (cur.lastrowid,)).fetchone()
             row['payload'] = loads(row.pop('payload_json'), {})
             row['is_enabled'] = bool(row['is_enabled'])
@@ -256,6 +259,7 @@ class Repository:
             # immediately reinstates quarantine in this same transaction.
             disable_legacy_generated_starter_templates(conn)
             disable_edit_batch_bundles_with_quarantined_sources(conn)
+            disable_unexecutable_edit_batch_bundles(conn)
             updated = conn.execute(
                 "SELECT * FROM templates WHERE id=?",
                 (template_id,),
@@ -1640,6 +1644,11 @@ class Repository:
                 or cancellation.get("external_dispatch_started") is not False
             ):
                 return None
+            cancelled = cls._edit_batch_ledger_time(
+                cancellation.get("cancelled_at")
+            )
+            if cancelled is None or not reserved <= cancelled <= stopped:
+                return None
         else:
             return None
         return {
@@ -1678,6 +1687,21 @@ class Repository:
         if parsed.tzinfo is None or parsed.utcoffset() is None:
             return None
         return parsed.astimezone(timezone.utc)
+
+    @staticmethod
+    def _edit_batch_normalized_page_url(value: Any) -> str | None:
+        if not isinstance(value, str) or not value.strip():
+            return None
+        try:
+            parsed = urlparse(value)
+        except ValueError:
+            return None
+        scheme = str(parsed.scheme or "").casefold()
+        hostname = str(parsed.hostname or "").casefold()
+        if scheme not in {"http", "https"} or not hostname:
+            return None
+        path = str(parsed.path or "").rstrip("/")
+        return f"{scheme}://{hostname}{path}?{parsed.query}".rstrip("?")
 
     @classmethod
     def _edit_batch_ledger_binding_rejection(
@@ -1844,6 +1868,40 @@ class Repository:
             or outcome.get("mutation_scope_id") != stored_grant.get("mutation_scope_id")
         ):
             return "MUTATION_LEDGER_DISPATCH_UNPROVEN"
+        try:
+            ledger_outcome = loads(row.get("outcome_json"), None)
+        except (TypeError, ValueError):
+            return "MUTATION_LEDGER_DISPATCH_UNPROVEN"
+        if not (
+            ledger_outcome is True
+            or (
+                isinstance(ledger_outcome, dict)
+                and ledger_outcome.get("dispatched") is True
+            )
+        ):
+            return "MUTATION_LEDGER_DISPATCH_UNPROVEN"
+        save_page = outcome.get("save_page_identity")
+        ledger_page_url = cls._edit_batch_normalized_page_url(row.get("page_url"))
+        save_page_url = cls._edit_batch_normalized_page_url(
+            save_page.get("url") if isinstance(save_page, dict) else None
+        )
+        expected_runtime_id = (
+            stored_grant.get("runtime_identity", {}).get("browser_runtime_id")
+            if isinstance(stored_grant.get("runtime_identity"), dict)
+            else None
+        )
+        if (
+            not isinstance(save_page, dict)
+            or row.get("page_kind") != "semi_managed"
+            or save_page.get("kind") != row.get("page_kind")
+            or save_page.get("browser_session_id") != row.get("browser_session_id")
+            or row.get("runtime_id") != expected_runtime_id
+            or save_page.get("runtime_id") != expected_runtime_id
+            or ledger_page_url is None
+            or row.get("page_url") != ledger_page_url
+            or save_page_url != ledger_page_url
+        ):
+            return "MUTATION_LEDGER_PAGE_IDENTITY_UNPROVEN"
         ordered_times = [
             cls._edit_batch_ledger_time(item_row.get("granted_at")),
             cls._edit_batch_ledger_time(row.get("reserved_at")),

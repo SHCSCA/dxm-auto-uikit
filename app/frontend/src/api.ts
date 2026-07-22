@@ -74,7 +74,10 @@ function safeApiErrorMessage(raw: string, status: number, fallback: string): str
     || normalized.includes('stack trace')
   )
   if (looksTechnical || status >= 500) {
-    return `${humanRequestFallback(fallback)}：本机服务处理失败。请刷新工作台或查看实时日志；系统没有执行保存或发布。`
+    if (fallback.startsWith('POST ') || fallback.startsWith('PATCH ')) {
+      return `${humanRequestFallback(fallback)}：本机服务处理失败，操作结果未确认。系统不会自动重试；请先刷新工作台状态，必要时到真实页面人工核对。`
+    }
+    return `${humanRequestFallback(fallback)}：本机服务处理失败。请刷新工作台或查看实时日志。`
   }
   if (message) return message
   return `${humanRequestFallback(fallback)}（${status}）`

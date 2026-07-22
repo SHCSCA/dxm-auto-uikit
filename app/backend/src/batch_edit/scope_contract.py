@@ -292,27 +292,28 @@ def _normalize_items(
         source_urls = item["source_urls"]
         if not isinstance(source_urls, list) or any(not isinstance(value, str) for value in source_urls):
             _reject("SCOPE_ITEM_SOURCE_INVALID", "item source_urls must be a list of URLs")
-        canonical_source: dict[str, Any] | None = None
-        if source_urls:
-            try:
-                canonical_source = canonical_source_identity(source_urls[0], source_urls)
-            except TwoStageContractError as exc:
-                raise ScopeContractError("SCOPE_ITEM_SOURCE_INVALID", str(exc)) from exc
-            if (
-                list(canonical_source["urls"]) != source_urls
-                or item["source_url"] != canonical_source["primary_url"]
-            ):
-                _reject("SCOPE_ITEM_SOURCE_INVALID", "item source URLs are not canonical")
-            if any(
-                not is_supported_product_detail_url(candidate)
-                for candidate in canonical_source["urls"]
-            ):
-                _reject(
-                    "SCOPE_ITEM_SOURCE_INVALID",
-                    "item source URLs must be supported external product detail pages",
-                )
-        elif item["source_url"] is not None:
-            _reject("SCOPE_ITEM_SOURCE_INVALID", "item source_url is not represented in source_urls")
+        if not source_urls:
+            _reject(
+                "SCOPE_ITEM_SOURCE_INVALID",
+                "every executable item requires canonical product source URLs",
+            )
+        try:
+            canonical_source = canonical_source_identity(source_urls[0], source_urls)
+        except TwoStageContractError as exc:
+            raise ScopeContractError("SCOPE_ITEM_SOURCE_INVALID", str(exc)) from exc
+        if (
+            list(canonical_source["urls"]) != source_urls
+            or item["source_url"] != canonical_source["primary_url"]
+        ):
+            _reject("SCOPE_ITEM_SOURCE_INVALID", "item source URLs are not canonical")
+        if any(
+            not is_supported_product_detail_url(candidate)
+            for candidate in canonical_source["urls"]
+        ):
+            _reject(
+                "SCOPE_ITEM_SOURCE_INVALID",
+                "item source URLs must be supported external product detail pages",
+            )
         stable = _exact_object(
             item["stable_identity"],
             {"kind", "value", "fingerprint"},
@@ -326,8 +327,6 @@ def _normalize_items(
             if item["product_id"] != value:
                 _reject("SCOPE_ITEM_IDENTITY_INVALID", "product ID conflicts with stable identity")
         elif kind == "source_url":
-            if canonical_source is None:
-                _reject("SCOPE_ITEM_IDENTITY_INVALID", "source URL identity requires canonical source URLs")
             expected_fingerprint = canonical_source["fingerprint"]
             if item["product_id"] is not None or value != canonical_source["primary_url"]:
                 _reject("SCOPE_ITEM_IDENTITY_INVALID", "source URL conflicts with stable identity")

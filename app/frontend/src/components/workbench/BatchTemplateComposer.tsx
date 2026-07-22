@@ -185,7 +185,7 @@ export function BatchTemplateComposer({
       : optionsError
         ? '重新读取候选'
         : selectedStoreId == null
-          ? storeLockedToScope ? '刷新真实店铺' : '先连接真实店铺'
+          ? storeLockedToScope ? '重新连接当前店铺' : '先连接真实店铺'
           : firstIssue
             ? `编辑「${firstIssue.label}」`
             : submitting

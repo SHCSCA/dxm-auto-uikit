@@ -2,6 +2,7 @@ import os
 import re
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import urlsplit
 
 from src.execution.action_result_contract import ACTION_RESULT_CONTRACTS
 from src.execution.browser_agent_protocol import canonical_frozen_target_identity
@@ -63,6 +64,31 @@ def _mapping_copy(value: Any) -> dict[str, Any]:
 
 def _strict_int(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _exact_save_receipt(value: Mapping[str, Any]) -> bool:
+    try:
+        parsed = urlsplit(str(value.get('url') or ''))
+    except ValueError:
+        return False
+    host = str(parsed.hostname or '').casefold()
+    status = _strict_int(value.get('status'))
+    message = str(value.get('message') or value.get('msg') or '').strip()
+    return bool(
+        value.get('ok') is True
+        and value.get('receipt_complete') is True
+        and _strict_int(value.get('receipt_count')) == 1
+        and (host == 'dianxiaomi.com' or host.endswith('.dianxiaomi.com'))
+        and str(parsed.path or '').casefold() in {
+            '/api/popchoiceproduct/add.json',
+            '/api/smtproduct/add.json',
+        }
+        and str(value.get('method') or '').upper() == 'POST'
+        and status is not None
+        and 200 <= status < 300
+        and value.get('code') in (0, '0')
+        and any(term in message for term in ('保存成功', '编辑保存成功', '编辑成功'))
+    )
 
 
 class DxmWorkflowAdapter:
@@ -595,9 +621,18 @@ class DxmWorkflowAdapter:
         evidence_map = dict(evidence) if isinstance(evidence, Mapping) else {}
         evidence_map = self._normalize_published_evidence(action, evidence_map)
         stage = evidence_map.get('stage')
+        contract_facts = self._build_contract_facts(
+            action,
+            evidence_map,
+            before_values=dict(before_values or {}),
+        )
+        contract_ok = bool(
+            evidence_map.get('ok') is True
+            and contract_facts.get('failure_code') is None
+        )
         result = {
             **evidence_map,
-            'ok': evidence_map.get('ok') is True,
+            'ok': contract_ok,
             'stage': stage,
             'page_title': evidence_map.get('page_title'),
             'page_url': evidence_map.get('page_url'),
@@ -609,11 +644,7 @@ class DxmWorkflowAdapter:
             'save_result': evidence_map.get('save_result'),
             'fill_result': evidence_map.get('fill_result'),
             'evidence': evidence_map,
-            'contract_facts': self._build_contract_facts(
-                action,
-                evidence_map,
-                before_values=dict(before_values or {}),
-            ),
+            'contract_facts': contract_facts,
         }
         events = self.recent_workflow_events(240)
         if events:
@@ -635,13 +666,40 @@ class DxmWorkflowAdapter:
             audit = _mapping_copy(save.get('network_audit'))
             receipt = _mapping_copy(save.get('network_save_result'))
             signal = _mapping_copy(save.get('publish_signal'))
+            authorization = _mapping_copy(save.get('mutation_authorization'))
+            pre_dispatch = _mapping_copy(save.get('pre_dispatch_readback'))
+            pre_dispatch_target = _mapping_copy(pre_dispatch.get('exact_save_target'))
+            page = _mapping_copy(save.get('page_save_result'))
+            transition = _mapping_copy(page.get('status_transition'))
+            decision = _mapping_copy(save.get('save_decision'))
             complete_no_publish_save = bool(
                 result.get('ok') is True
                 and save.get('ok') is True
+                and save.get('exact_save_target') is True
+                and save.get('clicked') is True
                 and save.get('save_click_dispatched') is True
-                and receipt.get('ok') is True
-                and receipt.get('receipt_complete') is True
-                and _strict_int(receipt.get('receipt_count')) == 1
+                and save.get('publish_action_clicked') is False
+                and save.get('text') == '保存'
+                and _strict_int(save.get('exact_save_count')) == 1
+                and save.get('click_method') in {'native_exact_save', 'dom_exact_save'}
+                and authorization.get('ok') is True
+                and authorization.get('executed') is True
+                and authorization.get('mutation_action') == 'save_only_click'
+                and authorization.get('mutation_status') == 'DISPATCHED'
+                and str(authorization.get('mutation_id') or '').strip()
+                and pre_dispatch.get('ok') is True
+                and pre_dispatch.get('required_readback_complete') is True
+                and pre_dispatch.get('write_attempted') is False
+                and pre_dispatch.get('phase') == 'before_ledger_begin_dispatch'
+                and pre_dispatch_target.get('ok') is True
+                and pre_dispatch_target.get('text') == '保存'
+                and pre_dispatch_target.get('exact_save_count') == 1
+                and isinstance(pre_dispatch.get('identity'), Mapping)
+                and pre_dispatch.get('identity')
+                and isinstance(pre_dispatch.get('current_field_integrity'), Mapping)
+                and pre_dispatch['current_field_integrity'].get('ok') is True
+                and _exact_save_receipt(receipt)
+                and audit.get('scope') == 'same_origin_write_window'
                 and audit.get('complete') is True
                 and audit.get('window_closed') is True
                 and _strict_int(audit.get('registered_listener_count')) == 2
@@ -652,6 +710,20 @@ class DxmWorkflowAdapter:
                 and _strict_int(audit.get('publish_request_count')) == 0
                 and signal.get('detected') is False
                 and signal.get('kind') == 'network_route_classification'
+                and _strict_int(signal.get('request_count')) == 0
+                and page.get('ok') is True
+                and str(page.get('success_text') or '').strip()
+                and transition.get('kind') == 'new_or_changed_structured_save_status'
+                and isinstance(transition.get('entry'), Mapping)
+                and transition.get('entry')
+                and decision == {
+                    'ok': True,
+                    'rule': 'page_success_and_network_success',
+                    'page_ok': True,
+                    'network_ok': True,
+                    'network_receipt_ok': True,
+                    'network_audit_ok': True,
+                }
                 and save.get('published') is False
             )
             published = False if complete_no_publish_save else None
@@ -661,6 +733,11 @@ class DxmWorkflowAdapter:
             proof = _mapping_copy(result.get('unpublished_proof'))
             identity = _mapping_copy(proof.get('identity_readback'))
             status = ''.join(str(proof.get('status_text') or proof.get('publish_status') or '').split())
+            try:
+                proof_page = urlsplit(str(proof.get('page_url') or ''))
+            except ValueError:
+                proof_page = urlsplit('')
+            proof_host = str(proof_page.hostname or '').casefold()
             independent_false = bool(
                 result.get('ok') is True
                 and proof.get('ok') is True
@@ -668,8 +745,11 @@ class DxmWorkflowAdapter:
                 and proof.get('proof_kind') == 'structured_unpublished_status'
                 and proof.get('status_scope_unique') is True
                 and _strict_int(proof.get('bound_candidate_count')) == 1
+                and _strict_int(proof.get('structured_candidate_count')) == 1
                 and proof.get('identity_binding_kind') == 'frozen_target_structured_page_readback'
-                and str(proof.get('target_identity_sha256') or '').strip()
+                and re.fullmatch(r'[0-9A-Fa-f]{64}', str(proof.get('target_identity_sha256') or '')) is not None
+                and (proof_host == 'dianxiaomi.com' or proof_host.endswith('.dianxiaomi.com'))
+                and str(proof_page.path or '').rstrip('/').casefold() == '/web/smt/editfromsmt'
                 and identity.get('product_identity_match') is True
                 and identity.get('store_identity_match') is True
                 and identity.get('source_identity_match') is True
@@ -699,7 +779,19 @@ class DxmWorkflowAdapter:
                 return [rewrite(item) for item in value]
             return value
 
-        result = rewrite(result)
+        if action == 'verify_not_published':
+            result = {
+                key: (
+                    published
+                    if key == 'published'
+                    else rewrite(value)
+                    if key in {'unpublished_proof', 'fill_result', 'editor_action_result'}
+                    else value
+                )
+                for key, value in result.items()
+            }
+        else:
+            result = rewrite(result)
         result['published'] = published
         return result
 
@@ -1618,6 +1710,7 @@ class DxmWorkflowAdapter:
         save = sources.get('save_result') or {}
         authorization = save.get('mutation_authorization') if isinstance(save.get('mutation_authorization'), Mapping) else {}
         pre_dispatch = save.get('pre_dispatch_readback') if isinstance(save.get('pre_dispatch_readback'), Mapping) else {}
+        pre_dispatch_target = pre_dispatch.get('exact_save_target') if isinstance(pre_dispatch.get('exact_save_target'), Mapping) else {}
         network = save.get('network_save_result') if isinstance(save.get('network_save_result'), Mapping) else {}
         network_audit = save.get('network_audit') if isinstance(save.get('network_audit'), Mapping) else {}
         publish_signal = save.get('publish_signal') if isinstance(save.get('publish_signal'), Mapping) else {}
@@ -1638,6 +1731,9 @@ class DxmWorkflowAdapter:
             and pre_dispatch.get('required_readback_complete') is True
             and pre_dispatch.get('write_attempted') is False
             and pre_dispatch.get('phase') == 'before_ledger_begin_dispatch'
+            and pre_dispatch_target.get('ok') is True
+            and pre_dispatch_target.get('text') == '保存'
+            and pre_dispatch_target.get('exact_save_count') == 1
             and isinstance(pre_dispatch.get('identity'), Mapping)
             and pre_dispatch.get('identity')
             and isinstance(pre_dispatch.get('current_field_integrity'), Mapping)
@@ -1651,15 +1747,11 @@ class DxmWorkflowAdapter:
         )
         postconditions['save_click_dispatched'] = save.get('save_click_dispatched') is True
         postconditions['network_save_success'] = bool(
-            network.get('ok') is True
+            _exact_save_receipt(network)
             and decision.get('network_ok') is True
-            and str(network.get('url') or '').strip()
-            and str(network.get('method') or '').upper() == 'POST'
             and network_status_ok
             and network_message
-            and ('code' in network or isinstance(network.get('raw'), Mapping))
-            and network.get('receipt_complete') is True
-            and _strict_int(network.get('receipt_count')) == 1
+            and network_audit.get('scope') == 'same_origin_write_window'
             and network_audit.get('complete') is True
             and network_audit.get('window_closed') is True
             and _strict_int(network_audit.get('registered_listener_count')) == 2
@@ -1670,6 +1762,7 @@ class DxmWorkflowAdapter:
             and _strict_int(network_audit.get('publish_request_count')) == 0
             and publish_signal.get('detected') is False
             and publish_signal.get('kind') == 'network_route_classification'
+            and _strict_int(publish_signal.get('request_count')) == 0
         )
         postconditions['page_save_success'] = bool(
             page.get('ok') is True

@@ -5,6 +5,7 @@ import { humanOperatorMessage, humanOperatorTitle } from './workbenchCopy'
 type IssuesPageProps = {
   workspace: DeliveryWorkspace
   editBatches: EditBatchSummary[]
+  activeBatchId: number | null
   selectedTask: Task | null
   onShowTasks: () => void
   onShowDraftEdit: () => void
@@ -15,9 +16,26 @@ type IssuesPageProps = {
 const READONLY_PRECHECK_CTA = '运行保存前安全检查'
 const l3PostEvidenceGapIds = new Set(['gap-save-result', 'gap-unpublished-proof', 'gap-network-save-response'])
 
-export function IssuesPage({ workspace, editBatches, selectedTask, onShowTasks, onShowDraftEdit, onShowBatchRecords, onOpenBatch }: IssuesPageProps) {
-  if (editBatches.length) {
-    return <ControlledBatchIssues batches={editBatches} onShowDraftEdit={onShowDraftEdit} onShowBatchRecords={onShowBatchRecords} onOpenBatch={onOpenBatch} />
+export function IssuesPage({ workspace, editBatches, activeBatchId, selectedTask, onShowTasks, onShowDraftEdit, onShowBatchRecords, onOpenBatch }: IssuesPageProps) {
+  const exceptions = selectedTask ? workspace.exceptions.filter((item) => item.task_id === selectedTask.id) : workspace.exceptions
+  const selectedTaskNeedsAttention = Boolean(selectedTask && (
+    exceptions.length > 0
+    || selectedTask.failed_jobs > 0
+    || selectedTask.status === 'failed'
+    || selectedTask.status === 'blocked'
+    || selectedTask.status === 'needs_manual_review'
+  ))
+  const explicitlySelectedBatch = activeBatchId == null
+    ? null
+    : editBatches.find((batch) => batch.id === activeBatchId) ?? null
+  const operationalBatch = editBatches.find((batch) => batch.status === 'running' || batch.status === 'stop_requested')
+    ?? editBatches.find((batch) => batch.execution.manual_review_required)
+    ?? editBatches.find((batch) => batch.status === 'draft')
+    ?? editBatches[0]
+    ?? null
+  const focusedBatch = explicitlySelectedBatch ?? (!selectedTaskNeedsAttention ? operationalBatch : null)
+  if (focusedBatch) {
+    return <ControlledBatchIssues focusedBatch={focusedBatch} onShowDraftEdit={onShowDraftEdit} onShowBatchRecords={onShowBatchRecords} onOpenBatch={onOpenBatch} />
   }
   if (!selectedTask && workspace.exceptions.length === 0) {
     return (
@@ -32,7 +50,6 @@ export function IssuesPage({ workspace, editBatches, selectedTask, onShowTasks, 
       </section>
     )
   }
-  const exceptions = selectedTask ? workspace.exceptions.filter((item) => item.task_id === selectedTask.id) : workspace.exceptions
   const emptyExceptionDetail = selectedTask?.status === 'completed'
     ? '当前任务暂无问题记录；如需复核保存链路，请查看保存结果。'
     : '未执行不代表通过；执行失败、字段缺失和保存阻断会进入结果与问题。'
@@ -73,20 +90,22 @@ export function IssuesPage({ workspace, editBatches, selectedTask, onShowTasks, 
 }
 
 function ControlledBatchIssues({
-  batches,
+  focusedBatch,
   onShowDraftEdit,
   onShowBatchRecords,
   onOpenBatch,
 }: {
-  batches: EditBatchSummary[]
+  focusedBatch: EditBatchSummary
   onShowDraftEdit: () => void
   onShowBatchRecords: (batchId?: number) => void
   onOpenBatch: (batchId: number) => void
 }) {
-  const active = batches.find((batch) => batch.status === 'running' || batch.status === 'stop_requested') ?? null
-  const draft = batches.find((batch) => batch.status === 'draft') ?? null
-  const reviewBatches = batches.filter((batch) => batch.execution.manual_review_required)
-  const latestSafeStopped = batches.find((batch) => (batch.progress.stopped_before_save_no_write ?? 0) > 0 && !batch.execution.manual_review_required) ?? null
+  const active = focusedBatch.status === 'running' || focusedBatch.status === 'stop_requested' ? focusedBatch : null
+  const draft = focusedBatch.status === 'draft' ? focusedBatch : null
+  const reviewBatches = focusedBatch.execution.manual_review_required ? [focusedBatch] : []
+  const latestSafeStopped = (focusedBatch.progress.stopped_before_save_no_write ?? 0) > 0 && !focusedBatch.execution.manual_review_required
+    ? focusedBatch
+    : null
   const hasIssues = reviewBatches.length > 0
   const primaryAction = hasIssues || active
     ? {
@@ -218,7 +237,7 @@ function buildProblemCardCopy(item: ExceptionItem) {
     return {
       title: '保存结果证据不完整',
       what: message,
-      why: '系统没有拿到保存成功、未发布证明和保存接口回包。',
+      why: '系统没有拿到保存成功回执和独立未发布证明。',
       next: '先查看保存结果；确认真实浏览器可用后，重新创建单商品只保存任务。',
     }
   }
