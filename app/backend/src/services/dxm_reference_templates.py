@@ -15,6 +15,22 @@ REFERENCE_TEMPLATE_SECTIONS = (
     "semi_managed",
 )
 
+# Only these sections currently have a real DXM control-selection path plus
+# exact post-selection readback. Name-only sections stay disabled until the
+# corresponding editor controls are implemented end to end.
+EXECUTABLE_REFERENCE_TEMPLATE_SECTIONS = (
+    "attribute_info",
+    "freight",
+    "service",
+    "eu_responsible",
+    "manufacturer",
+)
+UNSUPPORTED_REFERENCE_TEMPLATE_SECTIONS = tuple(
+    section
+    for section in REFERENCE_TEMPLATE_SECTIONS
+    if section not in EXECUTABLE_REFERENCE_TEMPLATE_SECTIONS
+)
+
 LEGACY_REFERENCE_TEMPLATE_PATHS = {
     "attribute_info": (
         "attribute_template_priorities",
@@ -49,7 +65,10 @@ LEGACY_REFERENCE_TEMPLATE_PATHS = {
 
 def resolve_dxm_reference_templates(*payloads: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
     resolved: dict[str, dict[str, Any]] = {
-        section: {"names": [], "required": True}
+        section: {
+            "names": [],
+            "required": section in EXECUTABLE_REFERENCE_TEMPLATE_SECTIONS,
+        }
         for section in REFERENCE_TEMPLATE_SECTIONS
     }
     explicit_sections: set[str] = set()

@@ -5,52 +5,40 @@ import { humanOperatorMessage, humanOperatorTitle } from './workbenchCopy'
 type IssuesPageProps = {
   workspace: DeliveryWorkspace
   selectedTask: Task | null
+  onShowConsole: () => void
+  onShowDraftEdit: () => void
 }
 
 const READONLY_PRECHECK_CTA = '运行保存前安全检查'
 const l3PostEvidenceGapIds = new Set(['gap-save-result', 'gap-unpublished-proof', 'gap-network-save-response'])
 
-export function IssuesPage({ workspace, selectedTask }: IssuesPageProps) {
+export function IssuesPage({ workspace, selectedTask, onShowConsole, onShowDraftEdit }: IssuesPageProps) {
   const exceptions = selectedTask ? workspace.exceptions.filter((item) => item.task_id === selectedTask.id) : workspace.exceptions
   const presentedAcceptanceGaps = presentAcceptanceGaps(workspace.acceptanceGaps, isRealWriteExpectedBlocked(workspace))
-  const defaultProblemRecoveryCards = [
-    {
-      title: '店小秘还没登录',
-      what: '真实店小秘浏览器还没有确认登录成功。',
-      why: '没有登录态时，浏览器现场不会启动保存动作，也不会保存或发布。',
-      next: '去“登录店小秘”，打开真实登录页，完成验证码后检测登录状态。',
-    },
-    {
-      title: '保存前安全检查没有通过',
-      what: '已有待认领列表和商品箱页面还没有完成安全检查。',
-      why: '安全检查未通过前，系统不能确认页面安全，所以不会启动真实保存。',
-      next: `去“浏览器现场”，点击“${READONLY_PRECHECK_CTA}”。`,
-    },
-    {
-      title: '这条任务已经执行过或失败',
-      what: '当前任务不是可启动的草稿任务。',
-      why: '已经执行过的任务不能重复启动，避免重复操作真实店小秘。',
-      next: '去“商品箱编辑保存”，重新创建单商品只保存任务。',
-    },
-    {
-      title: '保存结果证据不完整',
-      what: '系统没有拿到保存成功、未发布证明和保存接口回包。',
-      why: '证据不完整时不能当作交付成功。',
-      next: '去“保存结果”查看失败原因，再重新创建单商品只保存任务。',
-    },
-    {
-      title: '浏览器会话异常',
-      what: '真实浏览器会话不可用或旧进程仍占用。',
-      why: '系统无法确认当前页面状态时，会暂停真实保存。',
-      next: '关闭旧窗口或后台旧进程后，再重新打开免安装版。',
-    },
-  ]
   const emptyExceptionDetail = selectedTask?.status === 'completed'
     ? '当前任务暂无问题记录；如需复核保存链路，请查看保存结果。'
     : '未执行不代表通过；执行失败、字段缺失和保存阻断会进入结果与问题。'
+  const primaryAction = exceptions.length
+    ? {
+        label: '回到浏览器现场',
+        detail: '先处理列表中的第一条问题；状态不确定时不要重新执行。',
+        onClick: onShowConsole,
+      }
+    : {
+        label: '创建商品箱批次',
+        detail: '当前没有待处理问题，可以从真实商品箱范围开始下一批。',
+        onClick: onShowDraftEdit,
+      }
 
   return (
     <section className="module-layout" aria-label="结果与问题">
+      <div className="module-card span-3 issue-primary-action">
+        <span>
+          <strong>下一步</strong>
+          <small>{primaryAction.detail}</small>
+        </span>
+        <button className="button button--primary" type="button" onClick={primaryAction.onClick}>{primaryAction.label}</button>
+      </div>
       <div className="module-card span-2">
         <ModuleHead title="结果与问题" meta={`${exceptions.length} 条待处理`} />
         <div className="exception-list">
@@ -58,33 +46,7 @@ export function IssuesPage({ workspace, selectedTask }: IssuesPageProps) {
             <ExceptionCard key={item.id} item={item} />
           ))}
           {!exceptions.length && (
-            <>
-              <EmptyState title="暂无待处理问题" detail={emptyExceptionDetail} />
-              <div className="default-problem-cards" aria-label="默认问题恢复卡">
-                {defaultProblemRecoveryCards.map((card) => (
-                  <article key={card.title} className="exception-card">
-                    <div className="exception-card__head">
-                      <strong>{card.title}</strong>
-                      <span className="status-pill warn">可自查</span>
-                    </div>
-                    <div className="exception-card__problem-grid">
-                      <span>
-                        <strong>发生了什么</strong>
-                        <small>{card.what}</small>
-                      </span>
-                      <span>
-                        <strong>为什么不能继续</strong>
-                        <small>{card.why}</small>
-                      </span>
-                      <span>
-                        <strong>下一步</strong>
-                        <small>{card.next}</small>
-                      </span>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </>
+            <EmptyState title="暂无待处理问题" detail={emptyExceptionDetail} />
           )}
         </div>
       </div>
@@ -119,13 +81,10 @@ function ExceptionCard({ item }: { item: ExceptionItem }) {
         </span>
       </div>
       <details className="inline-disclosure">
-        <summary>维护人员查看技术细节</summary>
-        <small>错误码：{item.error_code}</small>
-        <small>领域：{item.field_domain}</small>
-        <small>诊断摘要：{humanOperatorMessage(item.title || item.detail || item.error_code)}</small>
-        <small>处理建议：{humanOperatorMessage(item.suggestion || '请查看实时日志或诊断文件后重试。')}</small>
-        <pre>{item.detail || item.title || item.error_code}</pre>
-        <small>完整原始信息请查看实时日志或诊断文件。</small>
+        <summary>查看处理说明</summary>
+        <small>诊断摘要：{humanOperatorMessage(item.title || item.detail || '问题需要处理')}</small>
+        <small>处理建议：{humanOperatorMessage(item.suggestion || '请按页面提示处理后重试。')}</small>
+        <small>技术标识和原始协议字段只保留在维护日志中，不在操作页展示。</small>
       </details>
     </article>
   )
@@ -194,7 +153,7 @@ function GapList({ gaps }: { gaps: AcceptanceGap[] }) {
             <strong>{gap.title}</strong>
             <span>{humanGateDetail(gap.detail) ?? gap.detail}</span>
           </div>
-          <small>负责处理：{humanAcceptanceGapOwner(gap.owner)} / 证明强度：{gap.evidenceLevel}</small>
+          <small>{humanAcceptanceGapOwner(gap.owner)}负责处理</small>
         </article>
       ))}
     </div>

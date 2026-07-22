@@ -6,7 +6,10 @@ from collections.abc import Mapping
 from typing import Any
 
 from src.batch_edit.scope_contract import SCOPE_SCHEMA, canonical_sha256
-from src.services.dxm_reference_templates import resolve_dxm_reference_templates
+from src.services.dxm_reference_templates import (
+    UNSUPPORTED_REFERENCE_TEMPLATE_SECTIONS,
+    resolve_dxm_reference_templates,
+)
 from src.services.config_validation import ConfigValidationService
 
 
@@ -153,6 +156,11 @@ def freeze_template_bundle(template: Any) -> dict[str, Any]:
         )
     ):
         _reject("TEMPLATE_BUNDLE_INVALID", "template bundle binding is invalid")
+    if binding["category_name"] is not None:
+        _reject(
+            "BATCH_CATEGORY_SCOPE_UNVERIFIABLE",
+            "category-bound edit batches are disabled until DXM exposes exact per-row category evidence",
+        )
 
     source_templates = payload["source_templates"]
     if not isinstance(source_templates, dict) or set(source_templates) != set(BATCH_TEMPLATE_REQUIRED_SECTIONS):
@@ -234,6 +242,17 @@ def normalize_bundle_source_section(section: str, payload: Any) -> dict[str, Any
             "dxm_reference source must contain dxm_reference_templates or grouped dxm_reference",
         )
     normalized = resolve_dxm_reference_templates({"dxm_reference_templates": raw_mapping})
+    unsupported = [
+        section
+        for section in UNSUPPORTED_REFERENCE_TEMPLATE_SECTIONS
+        if normalized[section].get("required") is True or bool(normalized[section].get("names"))
+    ]
+    if unsupported:
+        _reject(
+            "DXM_REFERENCE_SECTION_UNSUPPORTED",
+            "name-only DXM reference sections have no executable exact-control path: "
+            + ", ".join(unsupported),
+        )
     return {"dxm_reference_templates": normalized}
 
 

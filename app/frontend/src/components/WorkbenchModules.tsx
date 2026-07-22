@@ -653,19 +653,51 @@ const editableConfigSections: EditableConfigSection[] = [
     templateType: 'dxm_reference',
     previewSection: 'dxm_reference',
     title: '店小秘引用模板',
-    detail: '店小秘编辑页 8 段下拉模板引用，执行时按 resolved 结果匹配真实模板；尺码模板按类目属性规则处理。',
+    detail: '只维护当前真实编辑控件支持的 5 类引用；描述、合规和半托管引用暂不可执行，不进入必填或保存。',
     fields: [
       { name: 'dxm_reference_templates.attribute_info.names', previewPath: 'dxm_reference_templates_resolved.attribute_info.names', label: '属性信息模板', placeholder: '每行一个属性信息模板', usage: 'template', valueKind: 'list' },
-      { name: 'dxm_reference_templates.description.names', previewPath: 'dxm_reference_templates_resolved.description.names', label: '描述模板', placeholder: '每行一个描述模板', usage: 'template', valueKind: 'list' },
       { name: 'dxm_reference_templates.freight.names', previewPath: 'dxm_reference_templates_resolved.freight.names', label: '运费模板', placeholder: '每行一个运费模板', usage: 'template', valueKind: 'list' },
       { name: 'dxm_reference_templates.service.names', previewPath: 'dxm_reference_templates_resolved.service.names', label: '服务模板', placeholder: '每行一个服务模板', usage: 'template', valueKind: 'list' },
       { name: 'dxm_reference_templates.eu_responsible.names', previewPath: 'dxm_reference_templates_resolved.eu_responsible.names', label: '欧盟责任人', placeholder: '每行一个欧盟责任人', usage: 'template', valueKind: 'list' },
       { name: 'dxm_reference_templates.manufacturer.names', previewPath: 'dxm_reference_templates_resolved.manufacturer.names', label: '制造商', placeholder: '每行一个制造商', usage: 'template', valueKind: 'list' },
-      { name: 'dxm_reference_templates.compliance.names', previewPath: 'dxm_reference_templates_resolved.compliance.names', label: '合规模板', placeholder: '每行一个合规模板', usage: 'template', valueKind: 'list' },
-      { name: 'dxm_reference_templates.semi_managed.names', previewPath: 'dxm_reference_templates_resolved.semi_managed.names', label: '半托管模板', placeholder: '每行一个半托管模板', usage: 'template', valueKind: 'list' },
     ],
   },
 ]
+
+const unsupportedDxmReferencePaths = [
+  'dxm_reference_templates.description',
+  'dxm_reference_templates.compliance',
+  'dxm_reference_templates.semi_managed',
+]
+
+function isUnsupportedDxmReferencePath(value: string) {
+  const normalized = value.toLowerCase()
+  return unsupportedDxmReferencePaths.some((path) => normalized.includes(path))
+}
+
+function visibleConfigMissing(items: string[]) {
+  return items
+    .filter((item) => !isUnsupportedDxmReferencePath(item))
+    .map(humanConfigMissingLabel)
+}
+
+function humanConfigMissingLabel(value: string) {
+  const normalized = value.toLowerCase()
+  const labels: Array<[string, string]> = [
+    ['attribute_info', '属性信息模板'],
+    ['eu_responsible', '欧盟责任人'],
+    ['manufacturer', '制造商'],
+    ['freight', '运费模板'],
+    ['service', '服务模板'],
+    ['category', '类目与标题'],
+    ['logistics', '包装物流'],
+    ['pricing', '价格策略'],
+    ['semi_managed', '半托管配置'],
+    ['compliance', '合规配置'],
+    ['image', '图片与素材'],
+  ]
+  return labels.find(([key]) => normalized.includes(key))?.[1] ?? '必填配置'
+}
 
 function uniqueConfigSections<T extends { section: EditableConfigSection }>(items: T[]) {
   const seen = new Set<ConfigSectionCode>()
@@ -1063,9 +1095,9 @@ function ConfigReadinessPanel({
     )
   }
   if (!configPreview) {
-    return <div className="config-readiness is-warn"><strong>本次任务配置检查未加载</strong><span>请刷新工作台，或确认后端 /api/config/preview 可用。</span></div>
+    return <div className="config-readiness is-warn"><strong>本次任务配置检查未加载</strong><span>请刷新工作台，或确认本机服务可用。</span></div>
   }
-  const missing = configPreview.missing.slice(0, 8)
+  const missing = visibleConfigMissing(configPreview.missing).slice(0, 8)
   return (
     <div className={`config-readiness ${configPreview.ok ? 'is-ok' : 'is-warn'}`}>
       <div>
@@ -1095,7 +1127,7 @@ function NextRequiredConfigFields({
   onEditRequiredSection: () => void
 }) {
   const missingFields = (preview?.fields ?? [])
-    .filter((field) => field.missing)
+    .filter((field) => field.missing && !isUnsupportedDxmReferencePath(field.path))
     .slice(0, 5)
   const fallbackFields = section.fields.slice(0, 4).map((field) => ({
     label: field.label,
@@ -1127,7 +1159,6 @@ function NextRequiredConfigFields({
         ) : fields.map((field) => (
           <span key={`${field.path}:${field.label}`}>
             <b>{field.label}</b>
-            <code>{field.path}</code>
             {!configOk && <small>{field.source}</small>}
           </span>
         ))}
@@ -1170,7 +1201,7 @@ function EffectiveValuePreview({
 }) {
   const fields = (configPreview?.fieldGroups ?? [])
     .flatMap((group) => group.fields.map((field) => ({ ...field, groupLabel: group.label })))
-    .filter((field) => field.required || field.value !== undefined)
+    .filter((field) => !isUnsupportedDxmReferencePath(field.path) && (field.required || field.value !== undefined))
     .slice(0, 14)
 
   return (
@@ -1194,7 +1225,7 @@ function EffectiveValuePreview({
               <small>{sourceBadgeText(field.source)}</small>
               <details className="section-execution-preview__technical">
                 <summary>字段来源详情</summary>
-                <small>{field.path}</small>
+                <small>{sourceBadgeText(field.source)}</small>
               </details>
             </div>
           ))}
@@ -1227,6 +1258,7 @@ function missingRequiredDraftLabels(
 ) {
   if (!preview) return null
   return preview.fields.flatMap((previewField) => {
+    if (isUnsupportedDxmReferencePath(previewField.path)) return []
     if (!previewField.required) return []
     const editorField = section.fields.find((field) => fieldPreview(preview, field) === previewField)
     if (!editorField) return previewField.missing ? [previewField.label] : []
@@ -1476,13 +1508,10 @@ export function ConfigCenter({ workspace, selectedTask, configPreview, configPre
   const configReadyForReview = Boolean(configPreview?.ok)
   const configCoverageFieldIds = [
     'dxm_reference_templates.attribute_info.names',
-    'dxm_reference_templates.description.names',
     'dxm_reference_templates.freight.names',
     'dxm_reference_templates.service.names',
     'dxm_reference_templates.eu_responsible.names',
     'dxm_reference_templates.manufacturer.names',
-    'dxm_reference_templates.compliance.names',
-    'dxm_reference_templates.semi_managed.names',
     '尺码模板',
     'price_multiplier',
     'local_asset_path',
@@ -2059,7 +2088,7 @@ function SectionExecutionValuePreview({
               <small>{sourceBadgeText(field.source)}</small>
               <details className="section-execution-preview__technical">
                 <summary>字段来源详情</summary>
-                <small>{field.path}</small>
+                <small>{sourceBadgeText(field.source)}</small>
               </details>
             </div>
           ))}
@@ -2192,9 +2221,9 @@ function EditableConfigSectionCard({
           </div>
         </details>
       )}
-      {preview?.missing.length ? (
+      {visibleConfigMissing(preview?.missing ?? []).length ? (
         <div className="missing-strip">
-          {preview.missing.slice(0, 4).map((item) => <span key={item}>{item}</span>)}
+          {visibleConfigMissing(preview.missing).slice(0, 4).map((item, index) => <span key={`${item}-${index}`}>{item}</span>)}
         </div>
       ) : null}
       <div className="config-save-scope-explainer" aria-label="保存方式说明">
@@ -2560,7 +2589,7 @@ export function TaskCenterView({ workspace, selectedTask, configPreview, configP
         {!selectedTaskCompleted && (configBlocksStart || configPreviewLoading || configPreviewError || configPreviewTaskMismatch) && (
           <div className={`gate-note ${configBlocksStart ? 'gate-note--danger' : ''}`}>
             <strong>{configPreviewError ? '配置检查接口不可用' : configPreviewTaskMismatch ? '配置属于其它任务' : configPreviewLoading ? '正在检查配置' : '配置检查未通过'}</strong>
-            <span>{configPreviewError ? humanConfigError(configPreviewError) : configPreviewTaskMismatch ? '请重新检查本次任务配置，避免沿用上一任务的配置结果。' : configPreviewLoading ? '正在读取当前任务的 DXM 编辑页字段来源。' : `请先补齐：${configPreviewForSelectedTask?.missing.slice(0, 6).join('、') || '填写编辑页配置'}`}</span>
+            <span>{configPreviewError ? humanConfigError(configPreviewError) : configPreviewTaskMismatch ? '请重新检查本次任务配置，避免沿用上一任务的配置结果。' : configPreviewLoading ? '正在读取当前任务的 DXM 编辑页字段来源。' : `请先补齐：${visibleConfigMissing(configPreviewForSelectedTask?.missing ?? []).slice(0, 6).join('、') || '当前支持的必填配置'}`}</span>
             {(configBlocksStart || configPreviewTaskMismatch) && (
               <div className="next-step-actions">
                 <button className="button button--secondary" type="button" onClick={onShowConfig}>去填写编辑页</button>
@@ -5452,7 +5481,7 @@ function buildConsolePrimaryPath({
       title: '需要补配置',
       reason: configPreview ? '当前任务配置检查未通过。' : '尚未完成本次任务配置检查。',
       detail: configPreview?.missing.length
-        ? `请先补齐：${configPreview.missing.slice(0, 4).join('、')}`
+        ? `请先补齐：${visibleConfigMissing(configPreview.missing).slice(0, 4).join('、') || '当前支持的必填配置'}`
         : '请先到填写编辑页检查本次任务配置，确认店铺、类目、图片、物流和半托管字段。',
       next: '去填写编辑页补齐配置',
       ctaLabel: '去填写编辑页补齐配置',

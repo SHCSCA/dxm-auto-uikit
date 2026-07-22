@@ -74,6 +74,37 @@ class BatchEditCoordinator:
             raise BatchEditContractError(exc.reason_code, str(exc)) from exc
 
         bundle_binding = template_snapshot["payload"]["binding"]
+        if bundle_binding["category_name"] is not None:
+            raise BatchEditContractError(
+                "BATCH_CATEGORY_SCOPE_UNVERIFIABLE",
+                "the frozen DXM scope has no exact per-row category evidence",
+            )
+        bound_store = next(
+            (
+                store
+                for store in self._repository.list_stores()
+                if int(store["id"]) == int(bundle_binding["store_id"])
+            ),
+            None,
+        )
+        if bound_store is None:
+            raise BatchEditContractError(
+                "TEMPLATE_SCOPE_STORE_NOT_FOUND",
+                "the store bound to the edit batch bundle no longer exists",
+            )
+        if (
+            bound_store["name"] != bundle_binding["store_name"]
+            or bound_store["platform"] != bundle_binding["platform"]
+        ):
+            raise BatchEditContractError(
+                "TEMPLATE_SCOPE_STORE_DRIFT",
+                "the edit batch bundle store binding no longer matches the current store record",
+            )
+        if str(bound_store["platform"]).strip().casefold() != "aliexpress":
+            raise BatchEditContractError(
+                "BATCH_PLATFORM_UNSUPPORTED",
+                "controlled edit batches currently support only the AliExpress draft-box workflow",
+            )
         if bundle_binding["store_name"] != scope_snapshot["store_identity"]["store_name"]:
             raise BatchEditContractError(
                 "TEMPLATE_SCOPE_STORE_MISMATCH",

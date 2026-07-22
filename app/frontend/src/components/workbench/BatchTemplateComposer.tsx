@@ -13,7 +13,6 @@ import type {
 type BatchTemplateComposerProps = {
   workspace: DeliveryWorkspace
   selectedTask: Task | null
-  initialCategoryName: string
   onBundleCreated: () => void | Promise<void>
   onEditSection: (section: EditBatchBundleSectionCode) => void
   onShowDraftEdit: () => void
@@ -79,14 +78,12 @@ const MISSING_FIELD_LABELS: Record<string, string> = {
 export function BatchTemplateComposer({
   workspace,
   selectedTask,
-  initialCategoryName,
   onBundleCreated,
   onEditSection,
   onShowDraftEdit,
 }: BatchTemplateComposerProps) {
   const [selectedStoreId, setSelectedStoreId] = useState<number | null>(() => preferredStoreId(workspace, selectedTask))
-  const [categoryName, setCategoryName] = useState(() => cleanInitialCategory(initialCategoryName))
-  const [templateName, setTemplateName] = useState(() => defaultBundleName(initialCategoryName))
+  const [templateName, setTemplateName] = useState('整批编辑模板')
   const [version, setVersion] = useState('1.0.0')
   const [options, setOptions] = useState<EditBatchBundleOptions | null>(null)
   const [selectedTemplateIds, setSelectedTemplateIds] = useState<Partial<Record<EditBatchBundleSectionCode, number>>>({})
@@ -101,11 +98,6 @@ export function BatchTemplateComposer({
     const storeStillExists = selectedStoreId != null && workspace.stores.some((store) => store.id === selectedStoreId)
     if (!storeStillExists) setSelectedStoreId(preferredStoreId(workspace, selectedTask))
   }, [selectedStoreId, selectedTask, workspace.stores])
-
-  useEffect(() => {
-    setCategoryName(cleanInitialCategory(initialCategoryName))
-    setTemplateName((current) => current.trim() || defaultBundleName(initialCategoryName))
-  }, [initialCategoryName])
 
   useEffect(() => {
     if (selectedStoreId == null) {
@@ -125,7 +117,6 @@ export function BatchTemplateComposer({
       const params = new URLSearchParams({
         store_id: String(selectedStoreId),
       })
-      if (categoryName.trim()) params.set('category_name', categoryName.trim())
       void getJson<EditBatchBundleOptions>(`/api/template-center/edit-batch-bundle-options?${params.toString()}`)
         .then((result) => {
           if (cancelled) return
@@ -147,7 +138,7 @@ export function BatchTemplateComposer({
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [categoryName, reloadKey, selectedStoreId])
+  }, [reloadKey, selectedStoreId])
 
   const sectionsByCode = useMemo(() => new Map(
     (options?.sections ?? []).map((section) => [section.section, section] as const),
@@ -245,7 +236,7 @@ export function BatchTemplateComposer({
         template_name: templateName.trim(),
         version: version.trim(),
         store_id: selectedStoreId,
-        category_name: categoryName.trim() || null,
+        category_name: null,
         section_templates: sectionTemplates,
       } satisfies EditBatchBundleCreateRequest)
       setCreatedBundle(created)
@@ -289,20 +280,16 @@ export function BatchTemplateComposer({
               )}
             </select>
           </label>
-          <label>
-            <span>绑定类目（可选）</span>
-            <input
-              value={categoryName}
-              onChange={(event) => { setCategoryName(event.target.value); setCreatedBundle(null); setMessage(null) }}
-              placeholder="留空则生成店铺级模板"
-            />
-          </label>
+          <span className="batch-template-store-binding">
+            <strong>精确店铺绑定</strong>
+            <small>当前商品箱现场没有结构化类目证据，因此整批模板固定按店铺绑定；目标类目由“类目与标题”分区决定。</small>
+          </span>
           <label>
             <span>整批模板名称</span>
             <input
               value={templateName}
               onChange={(event) => { setTemplateName(event.target.value); setCreatedBundle(null); setMessage(null) }}
-              placeholder="例如 车载用品整批编辑模板"
+              placeholder="填写可识别的整批模板名称"
             />
           </label>
           <label>
@@ -402,16 +389,6 @@ function preferredStoreId(workspace: DeliveryWorkspace, selectedTask: Task | nul
   const taskStoreName = String(selectedTask?.payload?.store_name ?? '').trim()
   const taskStore = workspace.stores.find((store) => store.name === taskStoreName)
   return taskStore?.id ?? workspace.stores[0]?.id ?? null
-}
-
-function cleanInitialCategory(categoryName: string) {
-  const value = categoryName.trim()
-  return value === '未选择类目' ? '' : value
-}
-
-function defaultBundleName(categoryName: string) {
-  const category = cleanInitialCategory(categoryName)
-  return category ? `${category}整批编辑模板` : '整批编辑模板'
 }
 
 function readyCandidates(section: EditBatchBundleSectionOptions | undefined) {

@@ -39,10 +39,16 @@ class BundleComposerError(ValueError):
 class EditBatchBundleComposer:
     def options(self, *, store_id: int, category_name: str | None) -> dict[str, Any]:
         category = _optional_text(category_name)
+        if category is not None:
+            _reject(
+                "BATCH_CATEGORY_SCOPE_UNVERIFIABLE",
+                "category-bound edit batches are unavailable because live draft-box rows do not expose exact category evidence",
+            )
         with connection() as conn:
             store = conn.execute("SELECT * FROM stores WHERE id=?", (store_id,)).fetchone()
             if not store:
                 _reject("STORE_NOT_FOUND", "store does not exist", status_code=404)
+            _assert_supported_batch_store(store)
             rows = conn.execute(
                 "SELECT * FROM templates WHERE template_type != ? ORDER BY id DESC",
                 (BATCH_TEMPLATE_TYPE,),
@@ -77,6 +83,11 @@ class EditBatchBundleComposer:
 
     def compose(self, request: dict[str, Any]) -> dict[str, Any]:
         category = _optional_text(request.get("category_name"))
+        if category is not None:
+            _reject(
+                "BATCH_CATEGORY_SCOPE_UNVERIFIABLE",
+                "category-bound edit batches are unavailable because live draft-box rows do not expose exact category evidence",
+            )
         template_name = str(request["template_name"]).strip()
         version = str(request["version"])
         selections = request["section_templates"]
@@ -86,6 +97,7 @@ class EditBatchBundleComposer:
             store = conn.execute("SELECT * FROM stores WHERE id=?", (request["store_id"],)).fetchone()
             if not store:
                 _reject("STORE_NOT_FOUND", "store does not exist", status_code=404)
+            _assert_supported_batch_store(store)
 
             source_templates: dict[str, Any] = {}
             sections: dict[str, Any] = {}
@@ -361,6 +373,14 @@ def _section_missing_fields(section: str, value: Mapping[str, Any]) -> list[str]
 def _optional_text(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
+
+
+def _assert_supported_batch_store(store: Mapping[str, Any]) -> None:
+    if str(store.get("platform") or "").strip().casefold() != "aliexpress":
+        _reject(
+            "BATCH_PLATFORM_UNSUPPORTED",
+            "controlled edit batches currently support only the AliExpress draft-box workflow",
+        )
 
 
 def _reject(

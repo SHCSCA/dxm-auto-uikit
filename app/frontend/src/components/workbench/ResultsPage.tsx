@@ -1,4 +1,3 @@
-import type { ReactNode } from 'react'
 import type {
   AcceptanceGap,
   DeliveryWorkspace,
@@ -74,6 +73,13 @@ export function ResultsPage({
   const l2AllowlistReviewItems = summarizeL2Diagnostics(l2Gate).flatMap((item) =>
     item.reviewCandidateRequests.map((request) => ({ target: item.targetLabel, request })),
   )
+  const hasOpenIssue = workspace.exceptions.some((item) => item.status !== 'resolved' && item.status !== 'closed')
+  const hasCompletedEvidence = saveResultCount > 0 || unpublishedProofCount > 0 || businessReportCount > 0
+  const primaryAction = hasOpenIssue
+    ? { label: '处理当前问题', detail: '先处理阻断，再决定是否重新执行。', onClick: onShowExceptions }
+    : hasCompletedEvidence
+      ? { label: '查看保存证据', detail: '核对保存成功与未发布证明。', onClick: onShowEvidence }
+      : { label: '回到浏览器现场', detail: '从当前现场继续安全检查或执行。', onClick: onShowConsole }
 
   return (
     <section className="module-layout" aria-label="结果与问题" data-testid="report-center-section">
@@ -85,14 +91,9 @@ export function ResultsPage({
         networkHarCount={networkHarCount}
         publishGuardStatus={workspace.publishGuardState?.status}
         realWriteExpectedBlocked={realWriteExpectedBlocked}
-        onShowEvidence={onShowEvidence}
-        onShowConsole={onShowConsole}
+        primaryAction={primaryAction}
       />
-      <TwoStageAcceptanceCard
-        acceptance={workspace.twoStageAcceptance}
-        onShowConsole={onShowConsole}
-        onShowEvidence={onShowEvidence}
-      />
+      <TwoStageAcceptanceCard acceptance={workspace.twoStageAcceptance} />
       <div className="module-card span-3">
         <ModuleHead title="保存后核对" meta={humanPublishGuardStatus(workspace.publishGuardState?.status)} />
         <div className="report-check-grid">
@@ -104,17 +105,6 @@ export function ResultsPage({
         {realWriteExpectedBlocked && (
           <p className="delivery-check-card__warning">人工确认前不要求生成新的真实保存证据；0 条代表当前自动化真实保存按规则暂停。</p>
         )}
-      </div>
-      <div className="module-card span-3 report-followup-actions" aria-label="复核与后续处理">
-        <div>
-          <strong>复核与后续处理</strong>
-          <span>任务结束后优先看保存证据；有阻断就在本页处理问题；需要继续执行回“浏览器现场”。</span>
-        </div>
-        <div className="toolbar">
-          <button className="button button--secondary" type="button" data-section="evidence" onClick={onShowEvidence}>查看保存证据</button>
-          <button className="button button--quiet" type="button" data-section="exceptions" onClick={onShowExceptions}>处理问题</button>
-          <button className="button button--quiet" type="button" data-section="console" onClick={onShowConsole}>回到浏览器现场</button>
-        </div>
       </div>
       <div className="module-card span-3">
         <ModuleHead title="保存结果" meta={`${reports.length} 份报告`} />
@@ -128,12 +118,6 @@ export function ResultsPage({
               detail={realWriteExpectedBlocked
                 ? '真实写入未确认前不要求生成业务保存报告；自动化工作台验收摘要见上方。'
                 : '单商品只保存完成并生成未发布证明后，这里会展示报告和证据路径。当前可先查看安全检查记录和证据缺口。'}
-              actions={(
-                <>
-                  <button className="button button--secondary" type="button" onClick={onShowEvidence}>查看证据缺口</button>
-                  <button className="button button--quiet" type="button" onClick={onShowConsole}>查看安全检查记录</button>
-                </>
-              )}
             />
           )}
         </div>
@@ -194,9 +178,6 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
   const checkedAt = finalCheck?.checked_at ? new Date(finalCheck.checked_at).toLocaleString() : '尚无记录'
   const reportPath = finalCheck?.summary_path ?? 'outputs/final-delivery-check/final-delivery-check.md'
   const jsonPath = finalCheck?.json_path ?? 'outputs/final-delivery-check/final-delivery-check.json'
-  const gitHead = finalCheck?.git_head ? finalCheck.git_head.slice(0, 8) : '未记录'
-  const currentGitHead = finalCheck?.current_git_head ? finalCheck.current_git_head.slice(0, 8) : '未记录'
-  const browserQaGitHead = finalCheck?.browser_qa_git_head ? finalCheck.browser_qa_git_head.slice(0, 8) : '未记录'
   const finalCheckMatchesCurrent = finalCheck?.final_check_matches_current_worktree === true
   const localWorkbenchOk = finalCheck?.local_workbench_check === 'PASS'
   const postFinalReportQaState = finalCheck?.post_final_report_qa_ok === true
@@ -371,7 +352,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
             {finalCheck?.final_report_center_screenshot_path && (
               <code data-testid="final-report-center-screenshot-path">{finalCheck.final_report_center_screenshot_path}</code>
             )}
-            <span>自检 Git {gitHead} / 当前 Git {currentGitHead}</span>
+            <span>代码与自检版本一致性 {freshnessLabel}</span>
             <span>OK 范围 {finalCheck?.ok_scope ?? '未记录'} / {realDxmMutationAllowedLabel}</span>
             <span>有效真实保存 {humanReadinessLabel(readiness)} / 报告记录 {humanReadinessLabel(reportReadiness)} / 运行门禁 {runtimeGateFreshness}</span>
             <span>两段式端到端 {twoStageEndToEndLabel} / 预期 {finalCheck?.expected_real_dxm_two_stage_end_to_end ?? '未记录'} / 匹配 {finalCheck?.two_stage_acceptance_matches_expected === true ? 'true' : 'false'}</span>
@@ -379,9 +360,9 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
             <span>受控单商品只保存 {finalCheck?.controlled_single_save_ready === true ? '可申请' : '未放行'} / 批量无人值守发布 {finalCheck?.batch_unattended_publish_allowed === true ? '允许' : '阻断'}</span>
             <span>预期真实写入 {finalCheck?.expected_real_dxm_write_readiness ?? '未记录'} / 有效预期匹配 {finalCheck?.effective_real_dxm_write_readiness_matches_expected === true ? 'true' : 'false'} / 报告记录匹配 {finalCheck?.real_dxm_write_readiness_matches_expected === true ? 'true' : 'false'}</span>
             <span>保存前安全检查候选评审模板 {finalCheck?.l2_allowlist_review_template_state ?? '未生成'} / 候选 {finalCheck?.l2_allowlist_review_template_candidate_count ?? 0} 项</span>
-            <span>模板哈希 MD {shortHash(finalCheck?.l2_allowlist_review_template_markdown_sha256)} / JSON {shortHash(finalCheck?.l2_allowlist_review_template_json_sha256)}</span>
-            <span>浏览器检查代码版本 {browserQaGitHead} / 截图哈希 {finalCheck?.browser_qa_screenshot_hashes ? Object.keys(finalCheck.browser_qa_screenshot_hashes).length : 0} 项</span>
-            <span>最终报告页截图 qa-report-center-final.png / 截图哈希 {finalCheck?.post_final_report_qa_screenshot_hashes ? Object.keys(finalCheck.post_final_report_qa_screenshot_hashes).length : 0} 项</span>
+            <span>候选评审材料 {finalCheck?.l2_allowlist_review_template_state ?? '未生成'}，技术校验值已隐藏</span>
+            <span>{browserCheckLabel} / 截图核验 {finalCheck?.browser_qa_screenshot_hashes ? Object.keys(finalCheck.browser_qa_screenshot_hashes).length : 0} 项</span>
+            <span>最终报告页截图 qa-report-center-final.png / 页面核验 {finalCheck?.post_final_report_qa_screenshot_hashes ? Object.keys(finalCheck.post_final_report_qa_screenshot_hashes).length : 0} 项</span>
           </div>
           <div className="delivery-check-card__commands">
             <div>
@@ -411,12 +392,8 @@ function ModuleHead({ title, meta }: { title: string; meta: string }) {
 
 function TwoStageAcceptanceCard({
   acceptance,
-  onShowConsole,
-  onShowEvidence,
 }: {
   acceptance: TwoStageAcceptance
-  onShowConsole: () => void
-  onShowEvidence: () => void
 }) {
   const checks = acceptance.checks ?? {}
   const claimReady = checks.claim_task_present === true && checks.claim_completed === true && checks.claim_product_matches === true
@@ -442,10 +419,6 @@ function TwoStageAcceptanceCard({
           <strong>下一步</strong>
           <span>{nextAction}</span>
         </div>
-        <div className="toolbar">
-          <button className="button button--secondary" type="button" onClick={onShowConsole}>回到浏览器现场</button>
-          <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看保存证据</button>
-        </div>
       </div>
     </div>
   )
@@ -459,8 +432,7 @@ function BusinessResultSummaryCard({
   networkHarCount,
   publishGuardStatus,
   realWriteExpectedBlocked,
-  onShowEvidence,
-  onShowConsole,
+  primaryAction,
 }: {
   selectedTask: Task | null
   latestReport: Report | null
@@ -469,8 +441,7 @@ function BusinessResultSummaryCard({
   networkHarCount: number
   publishGuardStatus?: string | null
   realWriteExpectedBlocked: boolean
-  onShowEvidence: () => void
-  onShowConsole: () => void
+  primaryAction: { label: string; detail: string; onClick: () => void }
 }) {
   const taskDone = selectedTask?.status === 'completed'
   const reportSuccess = latestReport?.status === 'success'
@@ -528,8 +499,11 @@ function BusinessResultSummaryCard({
         </div>
       </div>
       <div className="report-followup-actions business-result-summary__actions" aria-label="本次结果后续动作">
-        <button className="button button--secondary" type="button" onClick={onShowEvidence}>查看保存证据</button>
-        <button className="button button--quiet" type="button" onClick={onShowConsole}>回到浏览器现场</button>
+        <span>
+          <strong>下一步</strong>
+          <small>{primaryAction.detail}</small>
+        </span>
+        <button className="button button--primary" type="button" onClick={primaryAction.onClick}>{primaryAction.label}</button>
       </div>
     </div>
   )
@@ -557,12 +531,11 @@ function humanTwoStageNextAction(status: string) {
   } as Record<string, string>)[status] ?? '按页面提示补齐缺失步骤后重试。'
 }
 
-function EmptyState({ title, detail, actions }: { title: string; detail: string; actions?: ReactNode }) {
+function EmptyState({ title, detail }: { title: string; detail: string }) {
   return (
     <div className="empty-state">
       <strong>{title}</strong>
       <span>{detail}</span>
-      {actions && <div className="next-step-actions">{actions}</div>}
     </div>
   )
 }
@@ -837,10 +810,6 @@ function humanTwoStageEndToEndLabel(status: string) {
   if (status === 'pending_live_dxm_validation') return '待现场验证'
   if (status === 'not_run') return '未运行'
   return '待确认'
-}
-
-function shortHash(value?: string | null) {
-  return value ? value.slice(0, 12) : '未记录'
 }
 
 function formatTime(value: string) {

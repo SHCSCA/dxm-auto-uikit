@@ -19,6 +19,7 @@ from src.execution.browser_agent_protocol import build_mutation_scope_id
 
 START_CONTEXT_SCHEMA = "dxm_edit_batch_start_context.v1"
 ITEM_GRANT_SCHEMA = "dxm_edit_batch_item_grant.v1"
+ITEM_CLAIM_CONTEXT_SCHEMA = "dxm_edit_batch_item_claim_context.v1"
 ITEM_EXECUTION_REQUEST_SCHEMA = "dxm_edit_batch_item_execution_request.v1"
 ITEM_GRANT_CONSUMPTION_SCHEMA = "dxm_edit_batch_item_grant_consumption.v1"
 ITEM_OUTCOME_EVIDENCE_SCHEMA = "dxm_edit_batch_item_outcome_evidence.v1"
@@ -214,6 +215,80 @@ def authorize_batch_start(
     )
 
 
+def derive_running_item_claim_context(
+    batch: Any,
+    *,
+    start_context: Any,
+    allow_stop_requested: bool = False,
+) -> dict[str, Any]:
+    """Bind the sole claimed item without creating any mutation authority."""
+
+    canonical_batch = _batch_object(batch)
+    start = _execution_start_context(start_context)
+    allowed_batch_statuses = {"running", "stop_requested"} if allow_stop_requested else {"running"}
+    if (
+        canonical_batch["schema_version"] != BATCH_SCHEMA
+        or canonical_batch["status"] not in allowed_batch_statuses
+    ):
+        _reject("BATCH_NOT_RUNNING", "an item may be claimed only from a running batch")
+    if canonical_batch["id"] != start["batch_id"]:
+        _reject("START_BATCH_BINDING_DRIFT", "start context batch binding has drifted")
+    for batch_key, start_key in (
+        ("scope_snapshot_digest", "scope_digest"),
+        ("template_snapshot_digest", "template_digest"),
+        ("policy_digest", "policy_digest"),
+    ):
+        if canonical_batch[batch_key] != start[start_key]:
+            _reject("START_FROZEN_BINDING_DRIFT", f"{start_key} has drifted")
+
+    items = canonical_batch["items"]
+    if not isinstance(items, list) or not items:
+        _reject("BATCH_ITEM_BINDING_INVALID", "batch items are missing")
+    ordered_targets = _ordered_targets(items)
+    if canonical_sha256(ordered_targets) != start["ordered_target_digest"]:
+        _reject("START_TARGET_ORDER_DRIFT", "ordered target binding has drifted")
+
+    running: dict[str, Any] | None = None
+    seen_running = False
+    for expected_ordinal, item in enumerate(items, start=1):
+        if not isinstance(item, dict) or item.get("ordinal") != expected_ordinal:
+            _reject("BATCH_ITEM_ORDER_INVALID", "batch item order is not contiguous")
+        status = item.get("status")
+        if status in _TERMINAL_CONTINUE_ITEM_STATUSES and not seen_running:
+            continue
+        if status == "running" and not seen_running:
+            running = item
+            seen_running = True
+            continue
+        if status == "pending" and seen_running:
+            continue
+        if status == "running":
+            _reject("MULTIPLE_BATCH_ITEMS_RUNNING", "more than one batch item is running")
+        _reject("BATCH_ITEM_ORDER_INVALID", "claimed item ordering is not strictly serial")
+    if running is None:
+        _reject("BATCH_ITEM_NOT_CLAIMED", "batch has no claimed running item")
+
+    return _canonical_clone(
+        {
+            "schema_version": ITEM_CLAIM_CONTEXT_SCHEMA,
+            "batch_id": start["batch_id"],
+            "item_id": _positive_int(running.get("id"), "batch item id"),
+            "ordinal": _positive_int(running.get("ordinal"), "batch item ordinal"),
+            "scope_digest": start["scope_digest"],
+            "template_digest": start["template_digest"],
+            "policy_digest": start["policy_digest"],
+            "target_identity_sha256": _sha256_text(
+                running.get("target_identity_sha256"), "target identity hash"
+            ),
+            "store_identity": start["store_identity"],
+            "runtime_identity": start["runtime_identity"],
+            "browser_session_id": start["browser_session_id"],
+            "git_head": start["git_head"],
+            "page_identity": start["page_identity"],
+        }
+    )
+
+
 def derive_next_item_grant(
     batch: Any,
     *,
@@ -222,48 +297,10 @@ def derive_next_item_grant(
     grant_lease_id: str,
     one_time_nonce: str,
 ) -> dict[str, Any]:
-    """Derive one deterministic, short-lived grant for the next pending item only."""
+    """Derive one short-lived grant for the already-claimed running item only."""
     canonical_batch = _batch_object(batch)
-    start = _exact_object(
-        start_context,
-        {
-            "schema_version",
-            "authorization_state",
-            "batch_id",
-            "approval_lease_id",
-            "approval_context_fingerprint",
-            "approval_expires_at",
-            "scope_digest",
-            "template_digest",
-            "policy_digest",
-            "ordered_target_digest",
-            "runtime_identity",
-            "browser_session_id",
-            "git_head",
-            "store_identity",
-            "page_identity",
-        },
-        "start context",
-    )
-    if start["schema_version"] != START_CONTEXT_SCHEMA:
-        _reject("START_CONTEXT_SCHEMA_INVALID", "start context schema is not supported")
-    if start["authorization_state"] != "approval_token_consumed":
-        _reject("START_AUTHORIZATION_NOT_CONSUMED", "approval token was not consumed")
-    if canonical_batch["schema_version"] != BATCH_SCHEMA or canonical_batch["status"] not in {
-        "approved",
-        "running",
-    }:
-        _reject("BATCH_NOT_STARTABLE", "batch is not approved or running")
-    if canonical_batch["id"] != start["batch_id"]:
-        _reject("START_BATCH_BINDING_DRIFT", "start context batch binding has drifted")
-    binding_pairs = (
-        ("scope_snapshot_digest", "scope_digest"),
-        ("template_snapshot_digest", "template_digest"),
-        ("policy_digest", "policy_digest"),
-    )
-    for batch_key, start_key in binding_pairs:
-        if canonical_batch[batch_key] != start[start_key]:
-            _reject("START_FROZEN_BINDING_DRIFT", f"{start_key} has drifted")
+    start = _execution_start_context(start_context)
+    claim = derive_running_item_claim_context(canonical_batch, start_context=start)
     current_time = _aware_datetime(now, "now")
     # The five-minute approval lease gates the *start* transition only.  Once
     # authorize_batch_start has consumed it and the resulting start context is
@@ -272,35 +309,9 @@ def derive_next_item_grant(
     # still protected by its own short-lived, one-use grant below.
     _timestamp(start["approval_expires_at"], "approval expires_at")
 
-    items = canonical_batch["items"]
-    if not isinstance(items, list) or not items:
-        _reject("BATCH_ITEM_BINDING_INVALID", "batch items are missing")
-    if any(isinstance(item, dict) and item.get("status") == "running" for item in items):
-        _reject("BATCH_ITEM_RUNNING", "another batch item is already running")
-    ordered_targets = _ordered_targets(items)
-    if canonical_sha256(ordered_targets) != start["ordered_target_digest"]:
-        _reject("START_TARGET_ORDER_DRIFT", "ordered target binding has drifted")
-    next_item: dict[str, Any] | None = None
-    seen_pending = False
-    for expected_ordinal, item in enumerate(items, start=1):
-        if not isinstance(item, dict) or item.get("ordinal") != expected_ordinal:
-            _reject("BATCH_ITEM_ORDER_INVALID", "batch item order is not contiguous")
-        status = item.get("status")
-        if status == "pending":
-            seen_pending = True
-            if next_item is None:
-                next_item = item
-        elif status in _TERMINAL_CONTINUE_ITEM_STATUSES:
-            if seen_pending:
-                _reject("BATCH_ITEM_ORDER_INVALID", "a terminal item appears after a pending item")
-        else:
-            _reject("BATCH_PRIOR_ITEM_NONTERMINAL", "a prior item is not safely terminal")
-    if next_item is None:
-        _reject("BATCH_NO_PENDING_ITEM", "batch has no pending item")
-
-    ordinal = next_item["ordinal"]
-    item_id = _positive_int(next_item.get("id"), "batch item id")
-    target_hash = _sha256_text(next_item.get("target_identity_sha256"), "target identity hash")
+    ordinal = claim["ordinal"]
+    item_id = claim["item_id"]
+    target_hash = claim["target_identity_sha256"]
     nonce = _non_empty_text(one_time_nonce, "one-time grant nonce")
     lease_id = _non_empty_text(grant_lease_id, "grant lease id")
     issued_at = current_time.isoformat()
@@ -321,15 +332,15 @@ def derive_next_item_grant(
         "approval_lease_id": start["approval_lease_id"],
         "approval_context_fingerprint": start["approval_context_fingerprint"],
         "approval_expires_at": start["approval_expires_at"],
-        "scope_digest": start["scope_digest"],
-        "template_digest": start["template_digest"],
-        "policy_digest": start["policy_digest"],
+        "scope_digest": claim["scope_digest"],
+        "template_digest": claim["template_digest"],
+        "policy_digest": claim["policy_digest"],
         "target_identity_sha256": target_hash,
-        "store_identity": start["store_identity"],
-        "runtime_identity": start["runtime_identity"],
-        "browser_session_id": start["browser_session_id"],
-        "git_head": start["git_head"],
-        "page_identity": start["page_identity"],
+        "store_identity": claim["store_identity"],
+        "runtime_identity": claim["runtime_identity"],
+        "browser_session_id": claim["browser_session_id"],
+        "git_head": claim["git_head"],
+        "page_identity": claim["page_identity"],
         "mutation_scope_id": mutation_scope_id,
         "grant_lease_id": lease_id,
         "issued_at": issued_at,
@@ -439,7 +450,7 @@ def validate_and_consume_item_grant(
         "batch_id": canonical_grant["batch_id"],
         "item_id": canonical_grant["item_id"],
         "ordinal": canonical_grant["ordinal"],
-        "from_status": "pending",
+        "from_status": "running",
         "to_status": "running",
         "grant_lease_id": canonical_grant["grant_lease_id"],
         "grant_fingerprint": fingerprint,
@@ -447,6 +458,98 @@ def validate_and_consume_item_grant(
         "consumed_nonce_hash": expected_nonce_hash,
         "retry_allowed": False,
     }
+
+
+def classify_pre_save_no_write_outcome(claim_context: Any, outcome: Any) -> dict[str, Any]:
+    """Classify a pre-save failure that never possessed mutation authority."""
+
+    claim = _exact_object(
+        claim_context,
+        {
+            "schema_version",
+            "batch_id",
+            "item_id",
+            "ordinal",
+            "scope_digest",
+            "template_digest",
+            "policy_digest",
+            "target_identity_sha256",
+            "store_identity",
+            "runtime_identity",
+            "browser_session_id",
+            "git_head",
+            "page_identity",
+        },
+        "item claim context",
+    )
+    if claim["schema_version"] != ITEM_CLAIM_CONTEXT_SCHEMA:
+        return _stop_decision(claim, "CLAIM_CONTEXT_SCHEMA_INVALID")
+    try:
+        evidence = _exact_object(
+            outcome,
+            {
+                "schema_version",
+                "ok",
+                "error_code",
+                "validation_reason",
+                "ledger_status",
+                "network_audit",
+                "publish_signal",
+                "save_proven",
+                "runtime_identity",
+                "browser_session_id",
+                "git_head",
+                "store_identity",
+                "page_identity",
+                "target_identity_sha256",
+                "mutation_scope_id",
+            },
+            "item outcome evidence",
+        )
+        network = _exact_object(
+            evidence["network_audit"],
+            {"complete", "mutation_request_count", "publish_request_count"},
+            "network audit",
+        )
+        publish = _exact_object(
+            evidence["publish_signal"], {"detected", "kind"}, "publish signal"
+        )
+        mutation_count = _non_negative_count(network["mutation_request_count"])
+        publish_count = _non_negative_count(network["publish_request_count"])
+    except BatchExecutionContractError:
+        return _stop_decision(claim, "EVIDENCE_MISSING")
+
+    stable_keys = (
+        "runtime_identity",
+        "browser_session_id",
+        "git_head",
+        "store_identity",
+        "page_identity",
+        "target_identity_sha256",
+    )
+    if any(evidence[key] != claim[key] for key in stable_keys):
+        return _stop_decision(claim, "OUTCOME_IDENTITY_DRIFT")
+    if (
+        evidence["schema_version"] != ITEM_OUTCOME_EVIDENCE_SCHEMA
+        or evidence["ok"] is not False
+        or evidence["error_code"] != "PRE_SAVE_VALIDATION_NO_WRITE"
+        or evidence["validation_reason"] not in PRE_SAVE_VALIDATION_REASON_ALLOWLIST
+        or evidence["ledger_status"] is not None
+        or evidence["mutation_scope_id"] is not None
+        or network["complete"] is not True
+        or mutation_count != 0
+        or publish_count != 0
+        or publish["detected"] is not False
+        or not isinstance(publish.get("kind"), str)
+        or not publish["kind"].strip()
+        or evidence["save_proven"] is not False
+    ):
+        return _stop_decision(claim, "ZERO_WRITE_PROOF_FALSE")
+    return _continue_decision(
+        claim,
+        "ISOLATED_PRE_SAVE_NO_WRITE",
+        "PRE_SAVE_VALIDATION_ISOLATED",
+    )
 
 
 def classify_item_outcome(grant: Any, outcome: Any) -> dict[str, Any]:
@@ -677,6 +780,46 @@ def _approval_context(value: Any) -> dict[str, Any]:
     _timestamp(context["issued_at"], "approval issued_at")
     _timestamp(context["expires_at"], "approval expires_at")
     return context
+
+
+def _execution_start_context(value: Any) -> dict[str, Any]:
+    start = _exact_object(
+        value,
+        {
+            "schema_version",
+            "authorization_state",
+            "batch_id",
+            "approval_lease_id",
+            "approval_context_fingerprint",
+            "approval_expires_at",
+            "scope_digest",
+            "template_digest",
+            "policy_digest",
+            "ordered_target_digest",
+            "runtime_identity",
+            "browser_session_id",
+            "git_head",
+            "store_identity",
+            "page_identity",
+        },
+        "start context",
+    )
+    if start["schema_version"] != START_CONTEXT_SCHEMA:
+        _reject("START_CONTEXT_SCHEMA_INVALID", "start context schema is not supported")
+    if start["authorization_state"] != "approval_token_consumed":
+        _reject("START_AUTHORIZATION_NOT_CONSUMED", "approval token was not consumed")
+    _positive_int(start["batch_id"], "start context batch id")
+    for key in (
+        "approval_context_fingerprint",
+        "scope_digest",
+        "template_digest",
+        "policy_digest",
+        "ordered_target_digest",
+    ):
+        _sha256_text(start[key], key)
+    _non_empty_text(start["approval_lease_id"], "approval lease id")
+    _timestamp(start["approval_expires_at"], "approval expires_at")
+    return start
 
 
 def _ordered_targets(items: Any) -> list[dict[str, Any]]:

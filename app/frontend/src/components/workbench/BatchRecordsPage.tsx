@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getJson, postJson } from '../../api'
-import type { EditBatchDetail, EditBatchItem, EditBatchProgressSummary, EditBatchSummary } from '../../types'
+import type { EditBatchDetail, EditBatchItem, EditBatchProgressSummary, EditBatchStopRequest, EditBatchSummary } from '../../types'
 
 type BatchRecordsPageProps = {
   initialBatchId: number | null
@@ -32,7 +32,13 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
       setDetail(nextDetail)
       setPollingNotice(null)
       setBatches((current) => current.map((batch) => batch.id === batchId
-        ? { ...batch, status: nextDetail.status, updated_at: nextDetail.updated_at }
+        ? {
+            ...batch,
+            status: nextDetail.status,
+            updated_at: nextDetail.updated_at,
+            execution: nextDetail.execution,
+            progress: nextDetail.progress,
+          }
         : batch))
     } catch (caught) {
       if (silent) {
@@ -117,10 +123,16 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
     try {
       const nextDetail = await postJson<EditBatchDetail>(`/api/edit-batches/${detail.id}/stop`, {
         requested_by: requestedBy,
-      })
+      } satisfies EditBatchStopRequest)
       setDetail(nextDetail)
       setBatches((current) => current.map((batch) => batch.id === nextDetail.id
-        ? { ...batch, status: nextDetail.status, updated_at: nextDetail.updated_at }
+        ? {
+            ...batch,
+            status: nextDetail.status,
+            updated_at: nextDetail.updated_at,
+            execution: nextDetail.execution,
+            progress: nextDetail.progress,
+          }
         : batch))
     } catch (caught) {
       setError(humanRecordsError(caught, '停止请求未提交'))
@@ -136,7 +148,7 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
           <div>
             <span className="eyebrow">真实执行记录</span>
             <h2>批次记录</h2>
-            <p>运行中的批次会自动更新。主视图只保留进度和下一步，异常与人工复核收在详情中。</p>
+            <p>受控逐件批次会自动更新；旧版批量任务、无人值守和发布仍关闭。主视图只保留进度与下一步。</p>
           </div>
           <div className="batch-records-head__actions">
             <button className="button button--quiet" type="button" onClick={() => { void loadBatches() }} disabled={loading || detailLoading}>刷新</button>
@@ -202,6 +214,14 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
               <div className="batch-draft-boundary">
                 <span><strong>等待批准</strong><small>范围和模板已冻结，尚未开始处理商品。</small></span>
                 <button className="button button--primary" type="button" onClick={() => onOpenBatch(detail.id)}>继续批准</button>
+              </div>
+            ) : detail.status === 'approved' ? (
+              <div className="batch-draft-boundary">
+                <span>
+                  <strong>旧式批准记录未启动</strong>
+                  <small>该记录没有经过原子的“批准并启动”流程，不能继续执行。请新建批次并重新核对范围。</small>
+                </span>
+                <button className="button button--primary" type="button" onClick={onCreateBatch}>新建安全批次</button>
               </div>
             ) : progress ? (
               <div className="batch-progress-card" aria-label="批次执行进度">
@@ -297,7 +317,7 @@ function humanRecordsError(caught: unknown, action: string) {
 function humanBatchStatus(status: string) {
   const labels: Record<string, string> = {
     draft: '草稿 · 待批准',
-    approved: '已批准 · 等待开始',
+    approved: '旧式批准记录 · 未启动',
     running: '正在逐件保存',
     stop_requested: '正在安全停止',
     completed: '全部处理完成',

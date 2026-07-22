@@ -4,7 +4,10 @@ from collections.abc import Iterable, Mapping
 from enum import StrEnum
 from typing import Any
 
-from src.services.dxm_reference_templates import resolve_dxm_reference_templates
+from src.services.dxm_reference_templates import (
+    UNSUPPORTED_REFERENCE_TEMPLATE_SECTIONS,
+    resolve_dxm_reference_templates,
+)
 
 
 class ExecutionMode(StrEnum):
@@ -159,7 +162,11 @@ class ConfigValidationService:
         )
         missing: list[str] = []
         for section, config in resolved.items():
-            if config.get("required", True) and not config.get("names"):
+            if section in UNSUPPORTED_REFERENCE_TEMPLATE_SECTIONS and (
+                config.get("required") is True or bool(config.get("names"))
+            ):
+                missing.append(f"dxm_reference_templates.{section}.unsupported")
+            elif config.get("required", True) and not config.get("names"):
                 missing.append(f"dxm_reference_templates.{section}")
         return missing
 

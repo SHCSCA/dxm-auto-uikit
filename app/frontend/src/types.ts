@@ -117,6 +117,21 @@ export type EditBatchBundleCreateRequest = {
     source_digest: string
   }>
 }
+export type DraftBoxScopeSnapshotCreateRequest = {
+  max_items: number
+}
+export type EditBatchCreateRequest = {
+  scope_snapshot_id: number
+  template_id: number
+}
+export type EditBatchApproveAndStartRequest = {
+  approved_by: string
+  confirmation: 'CONFIRM_DXM_BATCH_SAVE_ONLY'
+}
+export type EditBatchStopRequest = {
+  requested_by: string
+  reason?: string | null
+}
 export type DraftBoxScopeEvidenceRef = {
   kind: 'live_dom_row'
   browser_session_id: string
@@ -213,6 +228,7 @@ export type EditBatchSummary = {
   updated_at: string
   execution: EditBatchExecutionSummary
   progress: EditBatchProgressSummary
+  approval?: EditBatchApprovalSummary
 }
 export type EditBatchItem = {
   id: number
@@ -251,6 +267,15 @@ export type EditBatchProgressSummary = {
   current_ordinal: number | null
   percent: number
 }
+export type EditBatchApprovalSummary = {
+  approved: true
+  approved_by: string
+  approved_at: string
+  issued_at: string
+  expires_at: string
+  confirmation: 'CONFIRM_DXM_BATCH_SAVE_ONLY'
+  scope_revalidation: Record<string, unknown>
+}
 export type EditBatchDetail = {
   id: number
   schema_version: 'dxm_edit_batch.v1'
@@ -278,6 +303,7 @@ export type EditBatchDetail = {
   execution: EditBatchExecutionSummary
   progress: EditBatchProgressSummary
   items: EditBatchItem[]
+  approval?: EditBatchApprovalSummary
 }
 export type TemplateCenterField = {
   key: string

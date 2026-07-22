@@ -24,7 +24,34 @@ START_CONTEXT_SCHEMA = "dxm_edit_batch_start_context.v1"
 ITEM_GRANT_SCHEMA = "dxm_edit_batch_item_grant.v1"
 ITEM_GRANT_CONSUMPTION_SCHEMA = "dxm_edit_batch_item_grant_consumption.v1"
 ITEM_OUTCOME_DECISION_SCHEMA = "dxm_edit_batch_item_outcome_decision.v1"
-BATCH_ITEM_GRANT_MAX_TTL_SECONDS = 60 * 60
+BATCH_ITEM_GRANT_TTL_SECONDS = 60
+
+_ITEM_OUTCOME_DECISION_KEYS = {
+    "schema_version",
+    "classification",
+    "continue_batch",
+    "retry_allowed",
+    "reason_code",
+    "item_transition",
+    "batch_transition",
+}
+_ITEM_OUTCOME_EVIDENCE_KEYS = {
+    "schema_version",
+    "ok",
+    "error_code",
+    "validation_reason",
+    "ledger_status",
+    "network_audit",
+    "publish_signal",
+    "save_proven",
+    "runtime_identity",
+    "browser_session_id",
+    "git_head",
+    "store_identity",
+    "page_identity",
+    "target_identity_sha256",
+    "mutation_scope_id",
+}
 
 _APPROVAL_CONTEXT_KEYS = {
     "schema_version",
@@ -126,6 +153,11 @@ def normalize_approval_for_storage(approval: Any) -> dict[str, Any]:
         _reject("APPROVAL_STORAGE_SCHEMA_INVALID", "approval context schema is unsupported")
     if context["confirmation"] != "CONFIRM_DXM_BATCH_SAVE_ONLY":
         _reject("APPROVAL_STORAGE_CONFIRMATION_INVALID", "approval confirmation is invalid")
+    _canonical_text(context.get("approved_by"), "approval operator")
+    issued_at = _timestamp(context.get("issued_at"), "approval issued_at")
+    expires_at = _timestamp(context.get("expires_at"), "approval expires_at")
+    if issued_at >= expires_at or (expires_at - issued_at).total_seconds() > 5 * 60:
+        _reject("APPROVAL_STORAGE_INTERVAL_INVALID", "approval lease interval is invalid")
     if context.get("lease_id") != lease_id:
         _reject("APPROVAL_STORAGE_BINDING_INVALID", "approval lease binding is inconsistent")
     fingerprint = _sha256_text(context.get("fingerprint"), "approval context fingerprint")
@@ -256,7 +288,7 @@ def normalize_item_grant_for_storage(
     expires_at = _timestamp(value.get("expires_at"), "grant expires_at")
     if (
         issued_at >= expires_at
-        or (expires_at - issued_at).total_seconds() > BATCH_ITEM_GRANT_MAX_TTL_SECONDS
+        or (expires_at - issued_at).total_seconds() > BATCH_ITEM_GRANT_TTL_SECONDS
     ):
         _reject("ITEM_GRANT_INTERVAL_INVALID", "item grant interval is invalid")
     _sha256_text(value.get("nonce_hash"), "grant nonce hash")
@@ -272,11 +304,12 @@ def normalize_item_grant_consumption_for_storage(
     batch_row: Mapping[str, Any],
     item_row: Mapping[str, Any],
     stored_grant: Mapping[str, Any],
+    consumed_at: str,
 ) -> dict[str, Any]:
     value = _exact_object(consumption, _ITEM_GRANT_CONSUMPTION_KEYS, "grant consumption")
     if value["schema_version"] != ITEM_GRANT_CONSUMPTION_SCHEMA:
         _reject("ITEM_GRANT_CONSUMPTION_SCHEMA_INVALID", "grant consumption schema is unsupported")
-    if value["from_status"] != "pending" or value["to_status"] != "running":
+    if value["from_status"] != "running" or value["to_status"] != "running":
         _reject("ITEM_GRANT_CONSUMPTION_TRANSITION_INVALID", "grant consumption transition is invalid")
     if value["retry_allowed"] is not False:
         _reject("ITEM_GRANT_RETRY_FORBIDDEN", "batch item grants cannot be retried")
@@ -291,6 +324,15 @@ def normalize_item_grant_consumption_for_storage(
     }
     if any(value.get(key) != expected_value for key, expected_value in expected.items()):
         _reject("ITEM_GRANT_CONSUMPTION_BINDING_INVALID", "grant consumption does not match stored grant")
+    consumed = _timestamp(consumed_at, "grant consumed_at")
+    issued_at = _timestamp(stored_grant.get("issued_at"), "grant issued_at")
+    expires_at = _timestamp(stored_grant.get("expires_at"), "grant expires_at")
+    if issued_at >= expires_at:
+        _reject("ITEM_GRANT_INTERVAL_INVALID", "item grant interval is invalid")
+    if consumed < issued_at:
+        _reject("ITEM_GRANT_NOT_YET_VALID", "item grant is not yet valid")
+    if consumed >= expires_at:
+        _reject("ITEM_GRANT_EXPIRED", "item grant has expired")
     _reject_raw_secret_keys(value)
     return value
 
@@ -310,8 +352,8 @@ def derive_execution_item_grant(
     current = _aware_datetime(now, "grant now")
     if isinstance(ttl_seconds, bool) or not isinstance(ttl_seconds, int):
         _reject("ITEM_GRANT_TTL_INVALID", "item grant TTL must be an integer")
-    if ttl_seconds < 60 or ttl_seconds > BATCH_ITEM_GRANT_MAX_TTL_SECONDS:
-        _reject("ITEM_GRANT_TTL_INVALID", "item grant TTL is outside the supported interval")
+    if ttl_seconds != BATCH_ITEM_GRANT_TTL_SECONDS:
+        _reject("ITEM_GRANT_TTL_INVALID", "item grant TTL must be exactly 60 seconds")
     if not isinstance(start_context, dict):
         _reject("START_CONTEXT_INVALID", "start context is missing")
     _timestamp(start_context.get("approval_expires_at"), "approval expires_at")
@@ -352,7 +394,7 @@ def validate_execution_item_grant_consumption(
         _reject("ITEM_GRANT_NOT_YET_VALID", "item grant is not yet valid")
     if current >= expires_at:
         _reject("ITEM_GRANT_EXPIRED", "item grant has expired")
-    if (expires_at - issued_at).total_seconds() > BATCH_ITEM_GRANT_MAX_TTL_SECONDS:
+    if (expires_at - issued_at).total_seconds() > BATCH_ITEM_GRANT_TTL_SECONDS:
         _reject("ITEM_GRANT_INTERVAL_INVALID", "item grant interval is invalid")
     _timestamp(canonical_grant.get("approval_expires_at"), "approval expires_at")
     return validate_and_consume_item_grant(
@@ -371,8 +413,20 @@ def normalize_item_outcome_for_storage(
     batch_id: int,
     item_id: int,
     ordinal: int,
+    stored_grant: Mapping[str, Any] | None,
+    claim_context: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    value = _canonical_object(decision, "item outcome decision")
+    from src.batch_edit.execution_contract import (
+        BatchExecutionContractError,
+        classify_pre_save_no_write_outcome,
+        classify_item_outcome,
+    )
+
+    value = _exact_object(
+        decision,
+        _ITEM_OUTCOME_DECISION_KEYS,
+        "item outcome decision",
+    )
     if value.get("schema_version") != ITEM_OUTCOME_DECISION_SCHEMA:
         _reject("ITEM_OUTCOME_DECISION_SCHEMA_INVALID", "outcome decision schema is unsupported")
     transition = value.get("item_transition")
@@ -407,7 +461,32 @@ def normalize_item_outcome_for_storage(
     elif batch_transition is not None:
         _reject("ITEM_OUTCOME_TRANSITION_INVALID", "safe item outcome cannot force a batch transition")
     reason_code = _canonical_text(value.get("reason_code"), "outcome reason code")
-    canonical_evidence = _canonical_object(evidence, "item outcome evidence")
+    canonical_evidence = _exact_object(
+        evidence,
+        _ITEM_OUTCOME_EVIDENCE_KEYS,
+        "item outcome evidence",
+    )
+    try:
+        if classification == "ISOLATED_PRE_SAVE_NO_WRITE":
+            if stored_grant is not None or not isinstance(claim_context, Mapping):
+                _reject(
+                    "ISOLATED_ITEM_AUTHORITY_PRESENT",
+                    "an isolated pre-save item must never have received mutation authority",
+                )
+            expected_decision = classify_pre_save_no_write_outcome(
+                dict(claim_context), canonical_evidence
+            )
+        else:
+            if not isinstance(stored_grant, Mapping):
+                _reject("ITEM_GRANT_MISSING", "a post-grant outcome requires its stored grant")
+            expected_decision = classify_item_outcome(dict(stored_grant), canonical_evidence)
+    except BatchExecutionContractError as exc:
+        _reject(exc.reason_code, str(exc))
+    if value != expected_decision:
+        _reject(
+            "ITEM_OUTCOME_DECISION_EVIDENCE_MISMATCH",
+            "outcome decision cannot be reproduced from its stored grant and evidence",
+        )
     _reject_raw_secret_keys(value)
     _reject_raw_secret_keys(canonical_evidence)
     return value, canonical_evidence

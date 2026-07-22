@@ -361,6 +361,7 @@ def get_engine():
 
 @app.get('/api/dxm/live-status')
 def dxm_live_status():
+    _assert_batch_browser_available()
     result = live_client.probe_session()
     return normalize_artifact_paths(result)
 
@@ -372,11 +373,13 @@ def dxm_login_state():
 
 @app.get('/api/dxm/workflow/check-login')
 def dxm_workflow_check_login():
+    _assert_batch_browser_available()
     return normalize_artifact_paths(_run_login_flow(_workflow_adapter().check_login_state))
 
 
 @app.post('/api/dxm/login/start')
 def dxm_login_start(payload: LoginStartRequest):
+    _assert_batch_browser_available()
     try:
         result = _run_login_flow(login_flow.start_login, payload.username, payload.password)
     except Exception as exc:
@@ -393,6 +396,7 @@ def dxm_login_start(payload: LoginStartRequest):
 def dxm_login_continue(payload: LoginContinueRequest):
     if not payload.confirm:
         return normalize_artifact_paths(login_flow.get_state())
+    _assert_batch_browser_available()
     try:
         result = _run_login_flow(login_flow.continue_login)
     except Exception as exc:
@@ -407,6 +411,7 @@ def dxm_login_continue(payload: LoginContinueRequest):
 
 @app.post('/api/dxm/navigate')
 def dxm_navigate(payload: LoginNavigateRequest):
+    _assert_batch_browser_available()
     try:
         result = _run_login_flow(login_flow.navigate_post_login, payload.target)
     except Exception as exc:
@@ -419,11 +424,51 @@ def dxm_navigate(payload: LoginNavigateRequest):
 
 @app.post('/api/dxm/workflow/open-draft-box')
 def dxm_workflow_open_draft_box():
+    _assert_batch_browser_available()
     return normalize_artifact_paths(_run_login_flow(_workflow_adapter().open_draft_box))
+
+
+def _assert_batch_browser_available() -> None:
+    """Keep interactive browser work off an executing shared browser session."""
+
+    console_status = agent_console_service.status()
+    if console_status.get('active') or console_status.get('browser_visible'):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': 'AGENT_CONSOLE_ACTIVE',
+                'message': '已有单任务浏览器现场。请先关闭该现场，再进入商品箱整批流程。',
+            },
+        )
+    active_task = repo.get_active_task_execution()
+    if active_task is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': 'LEGACY_TASK_ACTIVE',
+                'message': (
+                    f"任务 #{active_task['id']} 正在使用自动浏览器。"
+                    '请等待任务结束后再读取或批准批次。'
+                ),
+            },
+        )
+    active_batch = repo.get_active_edit_batch_execution()
+    if active_batch is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': 'ANOTHER_EDIT_BATCH_ACTIVE',
+                'message': (
+                    f"批次 #{active_batch['id']} 正在使用自动浏览器。"
+                    '请等待完成或停止该批次后再继续。'
+                ),
+            },
+        )
 
 
 @app.post('/api/dxm/draft-box/scope-snapshots', status_code=201)
 def create_draft_box_scope_snapshot(payload: DraftBoxScopeSnapshotCreate):
+    _assert_batch_browser_available()
     capture = _run_login_flow(
         workflow_adapter.capture_draft_box_scope,
         payload.max_items,
@@ -466,6 +511,7 @@ def approve_edit_batch(batch_id: int, payload: EditBatchManualApprovalRequest):
     batch = repo.get_edit_batch(batch_id)
     if not batch:
         raise HTTPException(status_code=404, detail='Edit batch not found')
+    _assert_batch_browser_available()
     if payload.confirmation != 'CONFIRM_DXM_BATCH_SAVE_ONLY':
         raise HTTPException(
             status_code=400,
@@ -516,6 +562,7 @@ async def approve_and_start_edit_batch(
     batch = repo.get_edit_batch(batch_id)
     if not batch:
         raise HTTPException(status_code=404, detail='Edit batch not found')
+    _assert_batch_browser_available()
     if payload.confirmation != 'CONFIRM_DXM_BATCH_SAVE_ONLY':
         raise HTTPException(
             status_code=400,
@@ -1356,11 +1403,42 @@ def _reset_workflow_runtime() -> dict[str, Any]:
     }
 
 
+def _assert_runtime_disruption_allowed(action: str) -> None:
+    active_batch = repo.get_active_edit_batch_execution()
+    if active_batch is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': 'EDIT_BATCH_ACTIVE',
+                'message': (
+                    f"批次 #{active_batch['id']} 仍在执行，不能执行当前运行时操作。"
+                    '请使用批次停止按钮并等待安全收口。'
+                ),
+                'action': action,
+            },
+        )
+    active_task = repo.get_active_task_execution()
+    if active_task is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': 'LEGACY_TASK_ACTIVE',
+                'message': (
+                    f"任务 #{active_task['id']} 仍在执行，不能重置或停止共享浏览器。"
+                    '请等待任务完成；异常时先转入人工复核。'
+                ),
+                'action': action,
+            },
+        )
+
+
 @app.post('/api/runtime/control')
 def runtime_control(payload: RuntimeControlRequest):
     action = payload.action.strip().lower()
     if action not in RUNTIME_CONTROL_ACTIONS:
         raise HTTPException(status_code=400, detail=f'Unknown runtime control action: {payload.action}')
+    if action in {'restart_backend', 'stop_agent_console', 'reset_workflow_runtime'}:
+        _assert_runtime_disruption_allowed(action)
 
     if action in {'restart_backend', 'restart_frontend'}:
         if not RUNTIME_CONTROL_MANAGED_BY_LAUNCHER:
@@ -1568,6 +1646,18 @@ def start_agent_console(payload: AgentConsoleStartRequest):
     if payload.task_id is not None and task is None:
         raise HTTPException(status_code=404, detail='Task not found')
     if payload.launch_browser:
+        active_task = repo.get_active_task_execution()
+        if active_task is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    'reason_code': 'LEGACY_TASK_ACTIVE',
+                    'message': (
+                        f"任务 #{active_task['id']} 正在占用自动浏览器。"
+                        '请等待任务结束后再打开新的执行浏览器。'
+                    ),
+                },
+            )
         active_batch = repo.get_active_edit_batch_execution()
         if active_batch is not None:
             raise HTTPException(
@@ -1613,6 +1703,7 @@ def start_agent_console(payload: AgentConsoleStartRequest):
 
 @app.post('/api/agent-console/hud')
 def update_agent_console_hud(payload: AgentConsoleHudRequest):
+    _assert_runtime_disruption_allowed('update_agent_console_hud')
     return normalize_artifact_paths(agent_console_service.update_hud(payload.step.model_dump(exclude_none=True)))
 
 
@@ -1628,21 +1719,25 @@ def refresh_agent_console_frame():
 
 @app.post('/api/agent-console/control')
 def control_agent_console_browser(payload: AgentConsoleControlRequest):
+    _assert_runtime_disruption_allowed('control_agent_console_browser')
     return normalize_artifact_paths(agent_console_service.control_browser(payload.model_dump(exclude_none=True)))
 
 
 @app.post('/api/agent-console/takeover')
 def request_agent_console_takeover():
+    _assert_runtime_disruption_allowed('request_agent_console_takeover')
     return normalize_artifact_paths(agent_console_service.request_manual_takeover())
 
 
 @app.post('/api/agent-console/release')
 def release_agent_console_takeover():
+    _assert_runtime_disruption_allowed('release_agent_console_takeover')
     return normalize_artifact_paths(agent_console_service.release_manual_takeover())
 
 
 @app.post('/api/agent-console/stop')
 def stop_agent_console():
+    _assert_runtime_disruption_allowed('stop_agent_console')
     return normalize_artifact_paths(agent_console_service.stop())
 
 
@@ -2832,6 +2927,30 @@ def _assert_task_can_receive_manual_approval(task_id: int, request: TaskManualAp
     task = repo.get_task_private(task_id)
     if not task:
         raise HTTPException(status_code=404, detail='Task not found')
+    active_task = repo.get_active_task_execution()
+    if active_task is not None and int(active_task['id']) != int(task_id):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': 'LEGACY_TASK_ACTIVE',
+                'message': (
+                    f"任务 #{active_task['id']} 正在占用自动浏览器。"
+                    '请等待任务结束后再批准下一项任务。'
+                ),
+            },
+        )
+    active_batch = repo.get_active_edit_batch_execution()
+    if active_batch is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': 'EDIT_BATCH_ACTIVE',
+                'message': (
+                    f"批次 #{active_batch['id']} 正在占用自动浏览器。"
+                    '请等待完成或停止批次后再批准单商品任务。'
+                ),
+            },
+        )
     mode = str(task.get('mode') or (task.get('payload') or {}).get('execution_mode') or '')
     if mode not in REAL_DXM_MUTATION_MODES:
         raise HTTPException(status_code=400, detail=f'Manual approval is only available for real DXM mutation modes: {mode}')
@@ -2867,6 +2986,18 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> dict[str,
     if not task:
         raise HTTPException(status_code=404, detail='Task not found')
 
+    active_task = repo.get_active_task_execution()
+    if active_task is not None and int(active_task['id']) != int(task_id):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': 'LEGACY_TASK_ACTIVE',
+                'message': (
+                    f"任务 #{active_task['id']} 正在占用自动浏览器。"
+                    '请等待任务结束后再启动下一项任务。'
+                ),
+            },
+        )
     active_batch = repo.get_active_edit_batch_execution()
     if active_batch is not None:
         raise HTTPException(

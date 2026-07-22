@@ -9,7 +9,7 @@ import { BatchRecordsPage } from './components/workbench/BatchRecordsPage'
 import { HelpPage } from './components/workbench/HelpPage'
 import { HomePage as Dashboard } from './components/workbench/HomePage'
 import { ProductTasksPage as TaskCenter } from './components/workbench/ProductTasksPage'
-import { TemplateCenterPage } from './components/workbench/TemplateCenterPage'
+import { TemplateCenterPage, type TemplateCenterMode } from './components/workbench/TemplateCenterPage'
 import {
   DxmAccessPage,
   EvidenceTimeline,
@@ -171,6 +171,7 @@ export default function App() {
   }))
   const [activeSection, setActiveSection] = useState<WorkbenchSection>('home')
   const [activeEditBatchId, setActiveEditBatchId] = useState<number | null>(null)
+  const [templateCenterEntryMode, setTemplateCenterEntryMode] = useState<TemplateCenterMode>('sections')
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(initialTaskIdFromUrl)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -696,7 +697,7 @@ export default function App() {
     try {
       let stores = workspace.stores
       if (!stores.length || workspace.source === 'mock') {
-        const store = await postJson<Store>('/api/stores/connect', { name: 'Dang Kang', platform: 'AliExpress' })
+        const store = await postJson<Store>('/api/stores/connect', { name: 'LOCAL_DEMO_ONLY_DO_NOT_EXECUTE', platform: 'AliExpress' })
         stores = [store]
       }
 
@@ -721,7 +722,7 @@ export default function App() {
         claim_mark: 'AI认领',
         payload: {
           store_name: store.name,
-          category_name: products[0]?.category_name ?? '立牌类谷子',
+          category_name: products[0]?.category_name ?? '本地演示类目（禁止真实执行）',
           image: products[0]?.image ?? seedRows[0].image,
         },
       })
@@ -747,7 +748,7 @@ export default function App() {
     try {
       if (REAL_DXM_MUTATION_MODES.has(taskToStart.mode)) {
         if (UNRELEASED_REAL_DXM_MUTATION_MODES.has(taskToStart.mode)) {
-          setOperationError('当前仅开放待认领入箱和单商品只保存；批量保存必须重新验收后再放行。')
+          setOperationError('旧版 batch_save 入口已关闭。请使用“商品箱批量编辑”的范围冻结、一次批准和严格串行流程。')
           return
         }
         if (!RELEASED_REAL_DXM_MUTATION_MODES.has(taskToStart.mode)) {
@@ -1175,6 +1176,7 @@ export default function App() {
     && currentSection !== 'draft_edit_save'
     && currentSection !== 'task_history'
   const setWorkbenchSection = useCallback((section: WorkbenchSection) => {
+    if (section === 'template_center') setTemplateCenterEntryMode('sections')
     setActiveSection(normalizeWorkbenchSection(section))
   }, [])
   const persistedAcquisitionClaimRequest = useMemo(
@@ -1203,6 +1205,7 @@ export default function App() {
             onConfigSaved={async () => { await refreshWorkspace(); await refreshConfigPreview() }}
             onRefreshConfigPreview={async () => { await refreshConfigPreview(); await refreshWorkspace() }}
             onShowDraftEdit={() => setActiveSection('draft_edit_save')}
+            initialMode={templateCenterEntryMode}
           />
         )
       case 'dxm_access':
@@ -1283,7 +1286,10 @@ export default function App() {
             templates={workspace.templates}
             initialBatchId={activeEditBatchId}
             onBatchSelected={setActiveEditBatchId}
-            onShowTemplates={() => setActiveSection('template_center')}
+            onShowTemplates={() => {
+              setTemplateCenterEntryMode('batch_bundle')
+              setActiveSection('template_center')
+            }}
             onShowRecords={() => setActiveSection('task_history')}
           />
         )
@@ -1338,7 +1344,17 @@ export default function App() {
       case 'evidence':
         return <EvidenceTimeline workspace={workspace} selectedTask={selectedTask} onShowTasks={() => setActiveSection('product_tasks')} onShowConsole={() => setActiveSection('start_save')} />
       case 'issues':
-        return <ExceptionQueue workspace={workspace} selectedTask={selectedTask} />
+        return (
+          <ExceptionQueue
+            workspace={workspace}
+            selectedTask={selectedTask}
+            onShowConsole={() => setActiveSection('start_save')}
+            onShowDraftEdit={() => {
+              setActiveEditBatchId(null)
+              setActiveSection('draft_edit_save')
+            }}
+          />
+        )
       case 'results':
         return <ReportCenter workspace={workspace} selectedTask={selectedTask} finalCheck={finalCheck} onShowEvidence={() => setActiveSection('evidence')} onShowConsole={() => setActiveSection('start_save')} onShowExceptions={() => setActiveSection('issues')} />
       case 'help':

@@ -24,6 +24,10 @@ from src.batch_edit.execution_state import (
     normalize_item_outcome_for_storage,
     normalize_start_context_for_storage,
 )
+from src.batch_edit.execution_contract import (
+    BatchExecutionContractError,
+    derive_running_item_claim_context,
+)
 from src.services.evidence_ref import validate_evidence_ref
 from src.state_machine.two_stage import (
     TwoStageContractError,
@@ -69,6 +73,13 @@ class AuthorizationLeaseResult:
     reason_code: str
     task: dict[str, Any] | None
     lease: dict[str, Any] | None
+
+
+@dataclass(frozen=True)
+class TaskManualApprovalResult:
+    ok: bool
+    reason_code: str
+    task: dict[str, Any] | None
 
 
 @dataclass(frozen=True)
@@ -490,13 +501,74 @@ class Repository:
             return self._edit_batch_execution_failure("ANOTHER_EDIT_BATCH_ACTIVE")
         return self._edit_batch_execution_success(batch_id)
 
+    def claim_next_edit_batch_item(
+        self,
+        batch_id: int,
+    ) -> EditBatchExecutionTransitionResult:
+        """Atomically claim the next item without creating any save authority."""
+
+        claimed_at = now_iso()
+        with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            batch = conn.execute("SELECT status FROM edit_batches WHERE id=?", (batch_id,)).fetchone()
+            if not batch:
+                return self._edit_batch_execution_failure("BATCH_NOT_FOUND")
+            if batch["status"] != "running":
+                return self._edit_batch_execution_failure("BATCH_NOT_RUNNING")
+            items = self._edit_batch_item_rows(conn, batch_id)
+            if not items:
+                return self._edit_batch_execution_failure("BATCH_HAS_NO_ITEMS")
+            if any(item["status"] == "running" for item in items):
+                return self._edit_batch_execution_failure("ANOTHER_BATCH_ITEM_RUNNING")
+            item = next((row for row in items if row["status"] == "pending"), None)
+            if item is None:
+                return self._edit_batch_execution_failure("BATCH_NO_PENDING_ITEM")
+            prior = [row for row in items if int(row["ordinal"]) < int(item["ordinal"])]
+            following = [row for row in items if int(row["ordinal"]) > int(item["ordinal"])]
+            if any(row["status"] not in ITEM_CONTINUE_TERMINAL_STATUSES for row in prior):
+                return self._edit_batch_execution_failure("BATCH_PRIOR_ITEM_NOT_SAFE")
+            if any(row["status"] != "pending" for row in following):
+                return self._edit_batch_execution_failure("BATCH_ITEM_ORDER_INVALID")
+            if any(
+                item.get(column) is not None
+                for column in (
+                    "grant_lease_id",
+                    "grant_fingerprint",
+                    "grant_nonce_hash",
+                    "mutation_scope_id",
+                    "grant_context_json",
+                    "granted_at",
+                    "grant_expires_at",
+                    "grant_consumed_at",
+                )
+            ):
+                return self._edit_batch_execution_failure("PENDING_ITEM_AUTHORITY_PRESENT")
+            cursor = conn.execute(
+                """
+                UPDATE edit_batch_items
+                   SET status='running', claimed_at=?, updated_at=?
+                 WHERE id=? AND batch_id=? AND status='pending'
+                   AND grant_lease_id IS NULL
+                   AND grant_fingerprint IS NULL
+                   AND grant_nonce_hash IS NULL
+                   AND mutation_scope_id IS NULL
+                   AND grant_context_json IS NULL
+                   AND grant_consumed_at IS NULL
+                """,
+                (claimed_at, claimed_at, item["id"], batch_id),
+            )
+            if cursor.rowcount != 1:
+                return self._edit_batch_execution_failure("ITEM_CLAIM_CAS_CONFLICT")
+            item_id = int(item["id"])
+        return self._edit_batch_execution_success(batch_id, item_id=item_id)
+
     def issue_edit_batch_item_grant(
         self,
         batch_id: int,
         item_id: int,
         grant: dict[str, Any],
     ) -> EditBatchExecutionTransitionResult:
-        """Persist one hashed grant and reserve the next item as the sole running item."""
+        """Persist one 60-second grant for an already-claimed running item."""
         try:
             with connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
@@ -520,8 +592,39 @@ class Repository:
                     start_context=start_context,
                 )
                 existing_grant = loads(item.get("grant_context_json"), None)
-                if item["status"] == "running":
-                    if existing_grant == normalized_grant:
+                if item["status"] != "running":
+                    return self._edit_batch_execution_failure("BATCH_ITEM_NOT_RUNNING")
+                running_items = [row for row in items if row["status"] == "running"]
+                if len(running_items) != 1 or int(running_items[0]["id"]) != item_id:
+                    return self._edit_batch_execution_failure("ANOTHER_BATCH_ITEM_RUNNING")
+                prior_items = [row for row in items if int(row["ordinal"]) < int(item["ordinal"])]
+                if any(row["status"] not in ITEM_CONTINUE_TERMINAL_STATUSES for row in prior_items):
+                    return self._edit_batch_execution_failure("BATCH_PRIOR_ITEM_NOT_SAFE")
+                if existing_grant is not None or any(
+                    item.get(column) is not None
+                    for column in (
+                        "grant_lease_id",
+                        "grant_fingerprint",
+                        "grant_nonce_hash",
+                        "mutation_scope_id",
+                        "granted_at",
+                        "grant_expires_at",
+                        "grant_consumed_at",
+                    )
+                ):
+                    exact_existing = {
+                        "grant_lease_id": normalized_grant["grant_lease_id"],
+                        "grant_fingerprint": normalized_grant["fingerprint"],
+                        "grant_nonce_hash": normalized_grant["nonce_hash"],
+                        "mutation_scope_id": normalized_grant["mutation_scope_id"],
+                        "granted_at": normalized_grant["issued_at"],
+                        "grant_expires_at": normalized_grant["expires_at"],
+                    }
+                    if (
+                        existing_grant == normalized_grant
+                        and not item.get("grant_consumed_at")
+                        and all(item.get(key) == value for key, value in exact_existing.items())
+                    ):
                         return self._edit_batch_execution_success(
                             batch_id,
                             item_id=item_id,
@@ -529,23 +632,12 @@ class Repository:
                             idempotent=True,
                             reason_code="ITEM_GRANT_ALREADY_ISSUED",
                         )
-                    return self._edit_batch_execution_failure("BATCH_ITEM_ALREADY_RUNNING")
-                if item["status"] != "pending":
-                    return self._edit_batch_execution_failure("BATCH_ITEM_NOT_PENDING")
-                if any(row["status"] == "running" for row in items):
-                    return self._edit_batch_execution_failure("ANOTHER_BATCH_ITEM_RUNNING")
-                first_pending = next((row for row in items if row["status"] == "pending"), None)
-                if not first_pending or int(first_pending["id"]) != item_id:
-                    return self._edit_batch_execution_failure("BATCH_ITEM_NOT_NEXT")
-                prior_items = [row for row in items if int(row["ordinal"]) < int(item["ordinal"])]
-                if any(row["status"] not in ITEM_CONTINUE_TERMINAL_STATUSES for row in prior_items):
-                    return self._edit_batch_execution_failure("BATCH_PRIOR_ITEM_NOT_SAFE")
+                    return self._edit_batch_execution_failure("ITEM_GRANT_ALREADY_PRESENT")
 
                 cursor = conn.execute(
                     """
                     UPDATE edit_batch_items
-                       SET status='running',
-                           grant_lease_id=?,
+                       SET grant_lease_id=?,
                            grant_fingerprint=?,
                            grant_nonce_hash=?,
                            mutation_scope_id=?,
@@ -553,7 +645,13 @@ class Repository:
                            granted_at=?,
                            grant_expires_at=?,
                            updated_at=?
-                     WHERE id=? AND batch_id=? AND status='pending'
+                     WHERE id=? AND batch_id=? AND status='running'
+                       AND grant_lease_id IS NULL
+                       AND grant_fingerprint IS NULL
+                       AND grant_nonce_hash IS NULL
+                       AND mutation_scope_id IS NULL
+                       AND grant_context_json IS NULL
+                       AND grant_consumed_at IS NULL
                     """,
                     (
                         normalized_grant["grant_lease_id"],
@@ -583,7 +681,6 @@ class Repository:
         consumption: dict[str, Any],
     ) -> EditBatchExecutionTransitionResult:
         """CAS-consume the persisted nonce hash immediately before the save mutation."""
-        now = now_iso()
         try:
             with connection() as conn:
                 conn.execute("BEGIN IMMEDIATE")
@@ -605,11 +702,13 @@ class Repository:
                 stored_grant = loads(item.get("grant_context_json"), None)
                 if not isinstance(stored_grant, dict):
                     return self._edit_batch_execution_failure("ITEM_GRANT_MISSING")
+                consumed_at = now_iso()
                 normalized = normalize_item_grant_consumption_for_storage(
                     consumption,
                     batch_row=batch,
                     item_row=item,
                     stored_grant=stored_grant,
+                    consumed_at=consumed_at,
                 )
                 cursor = conn.execute(
                     """
@@ -621,8 +720,8 @@ class Repository:
                        AND grant_nonce_hash=?
                     """,
                     (
-                        now,
-                        now,
+                        consumed_at,
+                        consumed_at,
                         item_id,
                         batch_id,
                         normalized["grant_fingerprint"],
@@ -665,27 +764,22 @@ class Repository:
                 batch = conn.execute("SELECT * FROM edit_batches WHERE id=?", (batch_id,)).fetchone()
                 if not batch:
                     return self._edit_batch_execution_failure("BATCH_NOT_FOUND")
-                item = conn.execute(
-                    "SELECT * FROM edit_batch_items WHERE id=? AND batch_id=?",
-                    (item_id, batch_id),
-                ).fetchone()
+                items = self._edit_batch_item_rows(conn, batch_id)
+                item = next((row for row in items if int(row["id"]) == item_id), None)
                 if not item:
                     return self._edit_batch_execution_failure("BATCH_ITEM_NOT_FOUND")
 
-                normalized_decision, normalized_outcome = normalize_item_outcome_for_storage(
-                    decision,
-                    outcome,
-                    batch_id=batch_id,
-                    item_id=item_id,
-                    ordinal=int(item["ordinal"]),
-                )
-                normalized_actions = normalize_action_results_for_storage(action_results)
-                target_status = normalized_decision["item_transition"]["to_status"]
-                if item["status"] == target_status:
+                if item["status"] in ITEM_CONTINUE_TERMINAL_STATUSES | {"stopped_uncertain"}:
+                    try:
+                        replay_decision = normalize_execution_evidence_for_storage(decision)
+                        replay_outcome = normalize_execution_evidence_for_storage(outcome)
+                        replay_actions = normalize_action_results_for_storage(action_results)
+                    except EditBatchExecutionPersistenceError:
+                        return self._edit_batch_execution_failure("ITEM_OUTCOME_CONFLICT")
                     if (
-                        loads(item.get("outcome_decision_json"), None) == normalized_decision
-                        and loads(item.get("outcome_evidence_json"), None) == normalized_outcome
-                        and loads(item.get("action_results_json"), None) == normalized_actions
+                        loads(item.get("outcome_decision_json"), None) == replay_decision
+                        and loads(item.get("outcome_evidence_json"), None) == replay_outcome
+                        and loads(item.get("action_results_json"), None) == replay_actions
                     ):
                         return self._edit_batch_execution_success(
                             batch_id,
@@ -695,6 +789,29 @@ class Repository:
                             reason_code="ITEM_OUTCOME_ALREADY_RECORDED",
                         )
                     return self._edit_batch_execution_failure("ITEM_OUTCOME_CONFLICT")
+
+                stored_grant = loads(item.get("grant_context_json"), None)
+                start_context = loads(batch.get("start_context_json"), None)
+                try:
+                    claim_context = derive_running_item_claim_context(
+                        self._decode_edit_batch(batch, items, include_execution=False),
+                        start_context=start_context,
+                        allow_stop_requested=True,
+                    )
+                except BatchExecutionContractError as exc:
+                    return self._edit_batch_execution_failure(exc.reason_code)
+
+                normalized_decision, normalized_outcome = normalize_item_outcome_for_storage(
+                    decision,
+                    outcome,
+                    batch_id=batch_id,
+                    item_id=item_id,
+                    ordinal=int(item["ordinal"]),
+                    stored_grant=stored_grant if isinstance(stored_grant, dict) else None,
+                    claim_context=claim_context,
+                )
+                normalized_actions = normalize_action_results_for_storage(action_results)
+                target_status = normalized_decision["item_transition"]["to_status"]
                 if batch["status"] not in {"running", "stop_requested"}:
                     return self._edit_batch_execution_failure("BATCH_NOT_ACTIVE")
                 if item["status"] != "running":
@@ -703,8 +820,20 @@ class Repository:
                 classification = normalized_decision["classification"]
                 if classification == "SUCCEEDED" and not item.get("grant_consumed_at"):
                     return self._edit_batch_execution_failure("ITEM_GRANT_NOT_CONSUMED")
-                if classification == "ISOLATED_PRE_SAVE_NO_WRITE" and item.get("grant_consumed_at"):
-                    return self._edit_batch_execution_failure("ISOLATED_ITEM_GRANT_WAS_CONSUMED")
+                if classification == "ISOLATED_PRE_SAVE_NO_WRITE" and any(
+                    item.get(column) is not None
+                    for column in (
+                        "grant_lease_id",
+                        "grant_fingerprint",
+                        "grant_nonce_hash",
+                        "mutation_scope_id",
+                        "grant_context_json",
+                        "granted_at",
+                        "grant_expires_at",
+                        "grant_consumed_at",
+                    )
+                ):
+                    return self._edit_batch_execution_failure("ISOLATED_ITEM_AUTHORITY_PRESENT")
                 manual_review = classification == "STOPPED_UNCERTAIN"
                 cursor = conn.execute(
                     """
@@ -1062,6 +1191,24 @@ class Repository:
     def _running_task_exists(conn: Any) -> bool:
         return conn.execute(
             "SELECT 1 AS active FROM tasks WHERE status='running' LIMIT 1"
+        ).fetchone() is not None
+
+    @staticmethod
+    def _other_running_task_exists(conn: Any, task_id: int) -> bool:
+        return conn.execute(
+            "SELECT 1 AS active FROM tasks WHERE status='running' AND id<>? LIMIT 1",
+            (task_id,),
+        ).fetchone() is not None
+
+    @staticmethod
+    def _active_edit_batch_exists(conn: Any) -> bool:
+        return conn.execute(
+            """
+            SELECT 1 AS active
+              FROM edit_batches
+             WHERE status IN ('running', 'stop_requested')
+             LIMIT 1
+            """
         ).fetchone() is not None
 
     @staticmethod
@@ -1580,13 +1727,72 @@ class Repository:
         lease_id: str | None = None,
         issued_at: str | None = None,
         expires_at: str | None = None,
-    ):
+    ) -> TaskManualApprovalResult:
         now = issued_at or now_iso()
+        try:
+            current_time = datetime.fromisoformat(now.replace("Z", "+00:00"))
+            if current_time.tzinfo is None:
+                current_time = current_time.replace(tzinfo=timezone.utc)
+        except (AttributeError, TypeError, ValueError):
+            return TaskManualApprovalResult(False, "TASK_APPROVAL_TIME_INVALID", None)
+        if not isinstance(token, str) or not token or not isinstance(approved_by, str) or not approved_by.strip():
+            return TaskManualApprovalResult(False, "TASK_APPROVAL_INPUT_INVALID", None)
+        if authorization_context is not None:
+            if (
+                not isinstance(lease_id, str)
+                or not lease_id.strip()
+                or not isinstance(confirmation, str)
+                or not confirmation.strip()
+                or not isinstance(expires_at, str)
+            ):
+                return TaskManualApprovalResult(False, "TASK_APPROVAL_INPUT_INVALID", None)
+            try:
+                expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                if expiry.tzinfo is None:
+                    expiry = expiry.replace(tzinfo=timezone.utc)
+            except ValueError:
+                return TaskManualApprovalResult(False, "TASK_APPROVAL_TIME_INVALID", None)
+            lease_seconds = (expiry - current_time).total_seconds()
+            if lease_seconds <= 0 or lease_seconds > 5 * 60:
+                return TaskManualApprovalResult(False, "TASK_APPROVAL_TIME_INVALID", None)
         with connection() as conn:
-            task = conn.execute("SELECT payload_json FROM tasks WHERE id=?", (task_id,)).fetchone()
+            conn.execute("BEGIN IMMEDIATE")
+            task = conn.execute(
+                "SELECT status, payload_json FROM tasks WHERE id=?",
+                (task_id,),
+            ).fetchone()
             if not task:
-                return None
-            payload = loads(task['payload_json'], {})
+                return TaskManualApprovalResult(False, "TASK_NOT_FOUND", None)
+            if task["status"] != "draft":
+                return TaskManualApprovalResult(False, "TASK_NOT_DRAFT", None)
+            original_payload_json = task["payload_json"]
+            payload = loads(original_payload_json, {})
+            existing_approval = (
+                payload.get("manual_approval")
+                if isinstance(payload.get("manual_approval"), dict)
+                else None
+            )
+            if (
+                isinstance(existing_approval, dict)
+                and existing_approval.get("approved") is True
+                and existing_approval.get("source") == "server"
+                and existing_approval.get("consumed") is not True
+            ):
+                existing_expiry_text = existing_approval.get("expires_at")
+                try:
+                    existing_expiry = datetime.fromisoformat(
+                        str(existing_expiry_text).replace("Z", "+00:00")
+                    )
+                    if existing_expiry.tzinfo is None:
+                        existing_expiry = existing_expiry.replace(tzinfo=timezone.utc)
+                except (TypeError, ValueError):
+                    existing_expiry = None
+                if existing_expiry is None or current_time < existing_expiry:
+                    return TaskManualApprovalResult(
+                        False,
+                        "TASK_APPROVAL_ALREADY_ISSUED",
+                        None,
+                    )
             payload['manual_approval'] = {
                 'approved': bool(approved),
                 'token_hash': hashlib.sha256(token.encode("utf-8")).hexdigest(),
@@ -1604,11 +1810,17 @@ class Repository:
                     'consumed_at': None,
                 } if authorization_context is not None else {}),
             }
-            conn.execute(
-                "UPDATE tasks SET payload_json=?, updated_at=? WHERE id=?",
-                (dumps(payload), now, task_id),
+            cursor = conn.execute(
+                """
+                UPDATE tasks
+                   SET payload_json=?, updated_at=?
+                 WHERE id=? AND status='draft' AND payload_json=?
+                """,
+                (dumps(payload), now, task_id, original_payload_json),
             )
-        return self.get_task(task_id)
+            if cursor.rowcount != 1:
+                return TaskManualApprovalResult(False, "TASK_APPROVAL_CAS_CONFLICT", None)
+        return TaskManualApprovalResult(True, "OK", self.get_task(task_id))
 
     def update_task_template_override(self, task_id: int, section: str, values: dict[str, Any]):
         now = now_iso()
@@ -1673,11 +1885,20 @@ class Repository:
     def update_task_status(self, task_id: int, status: str, completed_jobs: int | None = None, failed_jobs: int | None = None):
         now = now_iso()
         with connection() as conn:
+            if status == 'running':
+                conn.execute("BEGIN IMMEDIATE")
+                if self._active_edit_batch_exists(conn):
+                    raise RuntimeError('AUTH_EDIT_BATCH_ACTIVE')
+                if self._other_running_task_exists(conn, task_id):
+                    raise RuntimeError('AUTH_ANOTHER_TASK_ACTIVE')
             existing = conn.execute("SELECT completed_jobs, failed_jobs FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if not existing:
+                return False
             conn.execute(
                 "UPDATE tasks SET status=?, completed_jobs=?, failed_jobs=?, updated_at=? WHERE id=?",
                 (status, completed_jobs if completed_jobs is not None else existing['completed_jobs'], failed_jobs if failed_jobs is not None else existing['failed_jobs'], now, task_id),
             )
+            return True
 
     def try_update_task_status(
         self,
@@ -1694,6 +1915,12 @@ class Repository:
         now = now_iso()
         placeholders = ", ".join("?" for _ in expected)
         with connection() as conn:
+            if status == 'running':
+                conn.execute("BEGIN IMMEDIATE")
+                if self._active_edit_batch_exists(conn):
+                    return False
+                if self._other_running_task_exists(conn, task_id):
+                    return False
             updated = conn.execute(
                 f"""
                 UPDATE tasks
@@ -2110,9 +2337,9 @@ class Repository:
         now = now_iso()
         with connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            if conn.execute(
-                "SELECT 1 AS active FROM edit_batches WHERE status IN ('running', 'stop_requested') LIMIT 1"
-            ).fetchone():
+            if self._active_edit_batch_exists(conn):
+                return False
+            if self._other_running_task_exists(conn, task_id):
                 return False
             cur = conn.execute(
                 "UPDATE tasks SET status='running', updated_at=? WHERE id=? AND status='draft'",
@@ -2158,13 +2385,14 @@ class Repository:
                 expiry = None
             stored_context = approval.get('authorization_context')
             context_check = compare_authorization_context(stored_context, authorization_context)
-            edit_batch_active = conn.execute(
-                "SELECT 1 AS active FROM edit_batches WHERE status IN ('running', 'stop_requested') LIMIT 1"
-            ).fetchone() is not None
+            edit_batch_active = self._active_edit_batch_exists(conn)
+            another_task_active = self._other_running_task_exists(conn, task_id)
             if task.get('status') != 'draft':
                 reason_code = 'AUTH_TASK_NOT_DRAFT'
             elif edit_batch_active:
                 reason_code = 'AUTH_EDIT_BATCH_ACTIVE'
+            elif another_task_active:
+                reason_code = 'AUTH_ANOTHER_TASK_ACTIVE'
             elif approval.get('approved') is not True or approval.get('source') != 'server':
                 reason_code = 'AUTH_LEASE_NOT_APPROVED'
             elif approval.get('consumed') is True:
@@ -2274,7 +2502,17 @@ class Repository:
             public_approval = {
                 key: value
                 for key, value in approval.items()
-                if key not in {'token', 'token_hash'}
+                if key in {
+                    'approved',
+                    'approved_by',
+                    'approved_at',
+                    'source',
+                    'confirmation',
+                    'issued_at',
+                    'expires_at',
+                    'consumed',
+                    'consumed_at',
+                }
             }
             public_payload['manual_approval'] = public_approval
         return public_payload

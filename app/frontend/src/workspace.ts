@@ -55,13 +55,13 @@ type DeliveryWorkspaceApi = Partial<DeliveryWorkspace> & {
 
 export const seedRows = [
   {
-    title: 'Wind Breaker Anime Acrylic Stand Hot Spring Battle Charm',
-    source_title: '防风铃x空座温泉云蒸决战阵防风少年',
-    category_name: '立牌类谷子',
-    price: 7.01,
-    sku_count: 8,
-    image_count: 8,
-    image: { eu_outer_package_filename: '微信图片_202504092228421.jpg' },
+    title: 'LOCAL DEMO ONLY - DO NOT EXECUTE',
+    source_title: '本地演示占位商品（禁止真实执行）',
+    category_name: '本地演示类目（禁止真实执行）',
+    price: 0,
+    sku_count: 1,
+    image_count: 0,
+    image: { eu_outer_package_filename: 'DEMO_ONLY_DO_NOT_EXECUTE.jpg' },
   },
 ]
 
@@ -79,50 +79,26 @@ export const referenceSectionLabels: Record<DxmReferenceSectionCode, string> = {
 export const referenceSections = Object.keys(referenceSectionLabels) as DxmReferenceSectionCode[]
 
 export const demoDxmReferenceTemplates: DxmReferenceTemplateMap = {
-  attribute_info: { names: ['万代立牌', 'bilibili动漫周边', '万代'], required: true },
-  description: { names: ['详情描述模板-ACG立牌'], required: true },
-  freight: { names: ['石油40g普货包裹.', '40g普货包裹'], required: true },
-  service: { names: ['Service Template for New Sellers'], required: true },
-  eu_responsible: { names: ['Jacqueiline Marti'], required: true },
-  manufacturer: { names: ['jiyang county thunder', 'Jiyang County thunder'], required: true },
-  compliance: { names: ['合规模板', '钥匙扣', 'keychain'], required: true },
-  semi_managed: { names: ['半托管模板'], required: true },
+  attribute_info: { names: [], required: true },
+  description: { names: [], required: false },
+  freight: { names: [], required: true },
+  service: { names: [], required: true },
+  eu_responsible: { names: [], required: true },
+  manufacturer: { names: [], required: true },
+  compliance: { names: [], required: false },
+  semi_managed: { names: [], required: false },
 }
 
 export const demoTemplateSeeds = [
-  { template_type: 'title', template_name: '标题模板', binding_scope: '平台 / 店铺 / 类目', payload: { rule: '核心词 + 属性词 + 卖点词' }, is_enabled: true },
-  {
-    template_type: 'category',
-    template_name: '立牌类谷子属性模板',
-    binding_scope: '平台 / 店铺 / 类目',
-    payload: {
-      category: {
-        category_keyword: '立牌',
-        category_match: 'ACG Stand',
-        title_strategy: '按来源标题生成英文标题',
-        title_keyword_map: {
-          宝可梦: 'Pokemon',
-          神奇宝贝: 'Pokemon',
-          精灵球: 'Poke Ball',
-          '3D打印': '3D Printed',
-          玩具模型: 'Toy Model',
-          周边: 'Collectible',
-          礼物: 'Gift',
-          球体摆件: 'Ball Ornament',
-          立牌: 'Display Stand',
-        },
-        attribute_template_priorities: ['万代立牌', 'bilibili动漫周边', '万代'],
-      },
-    },
-    is_enabled: true,
-  },
-  { template_type: 'sku', template_name: 'SKU/货品编码模板', binding_scope: '店铺 / 类目', payload: { sku: { goods_code_strategy: '按来源商品ID生成安全货号', barcode_strategy: '留空' } }, is_enabled: true },
-  { template_type: 'pricing', template_name: '价格库存模板', binding_scope: '店铺 / 类目 / 物流', payload: { pricing: { declared_value: '1', stock: '200' } }, is_enabled: true },
-  { template_type: 'logistics', template_name: '包装物流模板', binding_scope: '店铺 / 类目', payload: { logistics: { weight: '0.03', length: '10', width: '10', height: '2', freight_templates: ['石油40g普货包裹.', '40g普货包裹'], service_templates: ['Service Template for New Sellers'] } }, is_enabled: true },
-  { template_type: 'image', template_name: '图片银行模板', binding_scope: '店铺 / 类目', payload: { image: { source: '图片银行（速卖通）', eu_outer_package_filename: '微信图片_202504092228421.jpg' } }, is_enabled: true },
-  { template_type: 'semi_managed', template_name: '半托管模板', binding_scope: '店铺 / 类目 / 国家站点', payload: { semi_managed: { countries: '全选', original_box: '否', jit_stock: '100', barcode_strategy: '留空' } }, is_enabled: true },
-  { template_type: 'compliance', template_name: '合规模板', binding_scope: '类目 / 国家站点', payload: { compliance: { eu_responsible_names: ['Jacqueiline Marti'], manufacturer_names: ['jiyang county thunder', 'Jiyang County thunder'], customs_product_names: ['钥匙扣', 'keychain'] } }, is_enabled: true },
-  { template_type: 'dxm_reference', template_name: '店小秘引用模板映射', binding_scope: '店铺 / 类目 / 国家站点', payload: { dxm_reference_templates: demoDxmReferenceTemplates }, is_enabled: true },
+  { template_type: 'title', template_name: '[本地演示·禁止执行] 标题', binding_scope: '仅 dev=1 本地演示', payload: {}, is_enabled: false },
+  { template_type: 'category', template_name: '[本地演示·禁止执行] 类目', binding_scope: '仅 dev=1 本地演示', payload: { category: {} }, is_enabled: false },
+  { template_type: 'sku', template_name: '[本地演示·禁止执行] SKU', binding_scope: '仅 dev=1 本地演示', payload: { sku: {} }, is_enabled: false },
+  { template_type: 'pricing', template_name: '[本地演示·禁止执行] 价格库存', binding_scope: '仅 dev=1 本地演示', payload: { pricing: {} }, is_enabled: false },
+  { template_type: 'logistics', template_name: '[本地演示·禁止执行] 包装物流', binding_scope: '仅 dev=1 本地演示', payload: { logistics: {} }, is_enabled: false },
+  { template_type: 'image', template_name: '[本地演示·禁止执行] 图片', binding_scope: '仅 dev=1 本地演示', payload: { image: {} }, is_enabled: false },
+  { template_type: 'semi_managed', template_name: '[本地演示·禁止执行] 半托管', binding_scope: '仅 dev=1 本地演示', payload: { semi_managed: {} }, is_enabled: false },
+  { template_type: 'compliance', template_name: '[本地演示·禁止执行] 合规', binding_scope: '仅 dev=1 本地演示', payload: { compliance: {} }, is_enabled: false },
+  { template_type: 'dxm_reference', template_name: '[本地演示·禁止执行] 店小秘引用', binding_scope: '仅 dev=1 本地演示', payload: { dxm_reference_templates: demoDxmReferenceTemplates }, is_enabled: false },
 ] satisfies Array<Omit<Template, 'id'>>
 
 export function composeWorkspace(bundle: WorkspaceApiBundle): DeliveryWorkspace {
@@ -241,8 +217,8 @@ export function buildEmptyWorkspace(): DeliveryWorkspace {
       evidenceLevel: 'C',
     }],
     safety: {
-      mode: '待认领商品 -> 商品箱 -> 编辑保存只保存',
-      guarantee: '只保存不发布：当前只开放待认领入箱和受控单商品只保存；批量、无人值守和发布仍关闭。',
+      mode: '商品箱范围 -> 一次批准 -> 严格串行逐件只保存',
+      guarantee: '受控逐件商品箱批次已开放；旧版 batch_save、无人值守和发布仍关闭。',
       forbiddenActions: ['发布', '继续发布', '保存并发布', '移入待发布'],
       lastCheckedAt: '等待任务数据',
     },
@@ -334,8 +310,8 @@ function buildL2ProbePlan(): L2ProbePlan {
       ...targets.map((target) => `${pythonCommand} ${scriptPath} --target ${target.id} --run-id $runId --cookie-file $cookieFile --output-dir ${outputDir} --allowlist-file ${allowlistFile} --headed`),
     ],
     acceptanceCriteria: [
-      '两个目标必须使用同一 run-id。',
-      '两个目标必须共享同一 session fingerprint、script_sha256 和 git_head。',
+      '两个目标必须属于同一次人工批准的检查记录。',
+      '两个目标必须来自同一检查会话和同一代码版本。',
       '只读网络计数必须全为 0。',
     ],
     safetyNotes: [
@@ -362,9 +338,9 @@ export function buildRealModeReleasePlan(): RealModeReleasePlan {
     detail,
   })
   const sharedControls = [
-    'publish_allowed=false',
+    '发布入口固定关闭',
     '禁止发布、继续发布、保存并发布、移入待发布',
-    '人工批准令牌',
+    '一次人工批准',
     '失败停止并人工接管',
   ]
   return {
@@ -422,8 +398,33 @@ export function buildRealModeReleasePlan(): RealModeReleasePlan {
         ],
       },
       {
+        mode: 'edit_batch',
+        label: '商品箱受控逐件批次已开放',
+        status: 'released_controlled',
+        allowed: true,
+        release_scope: 'immutable draft-box scope with strict sequential save-only execution',
+        required_evidence: [
+          '真实商品箱范围与店铺身份冻结',
+          '整批模板完整且按精确店铺绑定',
+          '逐商品保存结果和未发布证明',
+          '不确定结果停止且不自动重试',
+        ],
+        required_controls: [
+          ...sharedControls,
+          '全局并发为 1',
+          '范围或身份变化立即停止',
+        ],
+        blockers: [],
+        readiness_checklist: [
+          checklist('immutable_scope', '商品箱范围与店铺身份已冻结', 'passed'),
+          checklist('atomic_approval_start', '一次批准并原子启动', 'passed'),
+          checklist('strict_sequential', '逐商品严格串行', 'passed'),
+          checklist('unknown_stop_no_retry', '不确定结果停止且不重试', 'passed'),
+        ],
+      },
+      {
         mode: 'batch_save',
-        label: '批量只保存当前未开放',
+        label: '旧版 batch_save 仍关闭',
         status: 'blocked_unreleased',
         allowed: false,
         release_scope: 'not released',

@@ -14,10 +14,12 @@ from src.batch_edit.execution_contract import (
     ITEM_EXECUTION_REQUEST_SCHEMA,
     PRE_SAVE_VALIDATION_REASON_ALLOWLIST,
     BatchExecutionContractError,
+    classify_pre_save_no_write_outcome,
     classify_item_outcome,
+    derive_running_item_claim_context,
 )
 from src.batch_edit.execution_state import (
-    BATCH_ITEM_GRANT_MAX_TTL_SECONDS,
+    BATCH_ITEM_GRANT_TTL_SECONDS,
     EditBatchExecutionPersistenceError,
     derive_execution_item_grant,
     validate_execution_item_grant_consumption,
@@ -87,10 +89,10 @@ class BatchRuntimeError(RuntimeError):
 class BatchExecutionRuntime:
     """Run one approved edit batch through the singleton Browser Agent.
 
-    The runtime deliberately has no retry loop.  It issues one short-lived grant
-    per item, consumes that grant at the last instant before the SAVE click, and
-    stops the whole batch whenever the external result is not independently
-    proven.  Repository methods provide all cross-process CAS boundaries.
+    The runtime deliberately has no retry loop.  It claims each item without
+    mutation authority, performs all pre-save work without a grant, then issues
+    and consumes one 60-second grant at the SAVE click.  Any unproven external
+    result stops the whole batch.  Repository methods provide the CAS boundaries.
     """
 
     def __init__(
@@ -109,10 +111,7 @@ class BatchExecutionRuntime:
         self._runtime_facts_provider = runtime_facts_provider
         self._browser_session_provider = browser_session_provider
         self._command_timeout_seconds = max(30.0, float(command_timeout_seconds))
-        self._item_grant_ttl_seconds = min(
-            BATCH_ITEM_GRANT_MAX_TTL_SECONDS,
-            max(60, int(self._command_timeout_seconds * len(BATCH_BROWSER_STEPS)) + 60),
-        )
+        self._item_grant_ttl_seconds = BATCH_ITEM_GRANT_TTL_SECONDS
         self._run_lock: asyncio.Lock | None = None
         self._tasks: dict[int, asyncio.Task[None]] = {}
         self._active_lock = threading.RLock()
@@ -136,6 +135,8 @@ class BatchExecutionRuntime:
         with self._active_lock:
             commands = list(self._active_commands.values())
             tasks = list(self._tasks.values())
+            self._active_grants.clear()
+            self._active_commands.clear()
         cancel_command = getattr(self._browser_agent_runtime, "cancel_command", None)
         if callable(cancel_command):
             for command in commands:
@@ -184,6 +185,18 @@ class BatchExecutionRuntime:
                     return
                 if status != "running":
                     return
+                running = next(
+                    (item for item in batch.get("items") or [] if item.get("status") == "running"),
+                    None,
+                )
+                if running is not None:
+                    self._stop_batch(
+                        batch_id,
+                        "UNEXPECTED_RUNNING_ITEM",
+                        "批次存在未受当前执行器持有的运行商品，系统已停止且不会重试。",
+                        manual_review=True,
+                    )
+                    return
                 pending = next(
                     (item for item in batch.get("items") or [] if item.get("status") == "pending"),
                     None,
@@ -203,50 +216,48 @@ class BatchExecutionRuntime:
                         manual_review=True,
                     )
                     return
-                try:
-                    issued = derive_execution_item_grant(
-                        _execution_contract_batch(batch),
-                        start_context=dict(start_context),
-                        now=datetime.now(timezone.utc),
-                        grant_lease_id=uuid.uuid4().hex,
-                        one_time_nonce=secrets.token_urlsafe(32),
-                        ttl_seconds=self._item_grant_ttl_seconds,
-                    )
-                except (BatchExecutionContractError, EditBatchExecutionPersistenceError) as exc:
-                    self._stop_batch(batch_id, exc.reason_code, str(exc), manual_review=True)
-                    return
-                grant = dict(issued["grant"])
-                nonce = str(issued["nonce"])
-                item_id = int(grant["item_id"])
-                issue_grant = getattr(self._repository, "issue_edit_batch_item_grant", None)
-                if not callable(issue_grant) or not _cas_applied(
-                    issue_grant(batch_id, item_id, grant)
-                ):
+                claim_next = getattr(self._repository, "claim_next_edit_batch_item", None)
+                claim_result = claim_next(batch_id) if callable(claim_next) else None
+                if not _cas_applied(claim_result):
                     self._stop_batch(
                         batch_id,
-                        "ITEM_GRANT_CONFLICT",
-                        "逐件授权状态已变化，系统已停止且不会重试。",
+                        _result_reason(claim_result, "ITEM_CLAIM_CONFLICT"),
+                        "逐件认领状态已变化，系统已停止且不会重试。",
                         manual_review=True,
                     )
                     return
-
-                lease_id = str(grant["grant_lease_id"])
-                with self._active_lock:
-                    self._active_grants[lease_id] = {"grant": grant, "nonce": nonce}
+                claimed_item = getattr(claim_result, "item", None)
+                if not isinstance(claimed_item, Mapping):
+                    self._stop_batch(
+                        batch_id,
+                        "ITEM_CLAIM_RESULT_MISSING",
+                        "逐件认领结果缺失，系统已停止且不会重试。",
+                        manual_review=True,
+                    )
+                    return
+                item_id = int(claimed_item["id"])
+                batch = self._private_batch(batch_id)
+                try:
+                    claim_context = derive_running_item_claim_context(
+                        _execution_contract_batch(batch),
+                        start_context=dict(start_context),
+                    )
+                except BatchExecutionContractError as exc:
+                    self._stop_batch(batch_id, exc.reason_code, str(exc), manual_review=True)
+                    return
                 try:
                     execution = await asyncio.to_thread(
                         self._execute_item,
                         batch_id,
                         item_id,
-                        grant,
+                        claim_context,
                     )
                 except Exception as exc:
-                    reason_code, detail, manual_review = self._failure_details(exc, grant)
+                    reason_code, detail, manual_review = self._failure_details(exc)
                     self._stop_batch(batch_id, reason_code, detail, manual_review=manual_review)
                     return
                 finally:
                     with self._active_lock:
-                        self._active_grants.pop(lease_id, None)
                         self._active_commands.pop(batch_id, None)
 
                 complete_item = getattr(self._repository, "complete_edit_batch_item", None)
@@ -280,6 +291,14 @@ class BatchExecutionRuntime:
             raise BatchRuntimeError(_result_reason(result, "BATCH_STOP_CONFLICT"), "批次当前状态不能停止。")
         with self._active_lock:
             command = self._active_commands.get(batch_id)
+            revoked_leases = [
+                lease_id
+                for lease_id, active in self._active_grants.items()
+                if isinstance(active.get("grant"), Mapping)
+                and int(active["grant"].get("batch_id") or 0) == batch_id
+            ]
+            for lease_id in revoked_leases:
+                self._active_grants.pop(lease_id, None)
         if command is not None:
             cancel = getattr(self._browser_agent_runtime, "cancel_command", None)
             if callable(cancel):
@@ -386,6 +405,10 @@ class BatchExecutionRuntime:
             consume(int(grant["batch_id"]), int(grant["item_id"]), consumption)
         ):
             return {"ok": False, "reason_code": "BATCH_GRANT_CONSUME_CONFLICT"}
+        with self._active_lock:
+            current = self._active_grants.get(lease_id)
+            if current is active:
+                self._active_grants.pop(lease_id, None)
         return {
             "ok": True,
             "reason_code": "BATCH_ITEM_SAVE_AUTHORIZED",
@@ -398,7 +421,7 @@ class BatchExecutionRuntime:
         self,
         batch_id: int,
         item_id: int,
-        grant: dict[str, Any],
+        claim_context: dict[str, Any],
     ) -> dict[str, Any]:
         batch = self._private_batch(batch_id)
         item = next(
@@ -411,8 +434,13 @@ class BatchExecutionRuntime:
         if not isinstance(snapshot, dict):
             raise BatchRuntimeError("BATCH_ITEM_SNAPSHOT_MISSING", "批次商品冻结信息缺失。")
         target_identity = snapshot.get("target_identity")
-        if not isinstance(target_identity, dict) or canonical_sha256(target_identity) != grant.get(
-            "target_identity_sha256"
+        if (
+            claim_context.get("batch_id") != batch_id
+            or claim_context.get("item_id") != item_id
+            or not isinstance(target_identity, dict)
+            or canonical_sha256(target_identity) != claim_context.get(
+                "target_identity_sha256"
+            )
         ):
             raise BatchRuntimeError("BATCH_ITEM_TARGET_DRIFT", "冻结商品身份无法复现。")
         defaults = self._bundle_defaults(batch)
@@ -429,70 +457,32 @@ class BatchExecutionRuntime:
             "store_name": store_name,
             "target_source_urls": list(snapshot.get("source_urls") or []),
             "target_identity": target_identity,
-            "target_identity_sha256": grant["target_identity_sha256"],
+            "target_identity_sha256": claim_context["target_identity_sha256"],
         }
-        save_step = next(step for step in BATCH_BROWSER_STEPS if step.state == "SAVE_ONLY")
-        save_params = {**base_params, "defaults": defaults}
-        self._reserve_item_mutation(
-            self._build_command(batch, item, grant, save_step, save_params)
-        )
         action_results: list[dict[str, Any]] = []
-        for step in BATCH_BROWSER_STEPS:
-            self._assert_batch_can_continue(batch_id, grant)
+        pre_save_steps = tuple(
+            step for step in BATCH_BROWSER_STEPS if step.state not in {"SAVE_ONLY", "VERIFY_NOT_PUBLISHED"}
+        )
+        for step in pre_save_steps:
+            self._assert_batch_can_continue(batch_id, claim_context)
             params = dict(base_params)
             if step.action in {"check_login_state", "open_draft_box"}:
                 params = {"batch_execution": True}
             elif step.include_defaults:
                 params["defaults"] = defaults
-            command = self._build_command(batch, item, grant, step, params)
-            with self._active_lock:
-                self._active_commands[batch_id] = command
-            try:
-                raw_result = self._browser_agent_runtime.run(
-                    command,
-                    timeout_seconds=self._command_timeout_seconds,
-                )
-            except TimeoutError as exc:
-                cancel = getattr(self._browser_agent_runtime, "cancel_command", None)
-                if callable(cancel):
-                    try:
-                        cancel(command.command_id, command.runtime_id)
-                    except Exception:
-                        pass
-                raise BatchRuntimeError(
-                    "BROWSER_COMMAND_TIMEOUT",
-                    f"{step.label}超时，系统已停止且不会自动重试。",
-                    manual_review=step.state in {"SAVE_ONLY", "VERIFY_NOT_PUBLISHED"},
-                ) from exc
-            except Exception as exc:
-                raise BatchRuntimeError(
-                    "BROWSER_COMMAND_FAILED",
-                    f"{step.label}失败：{exc}",
-                    manual_review=step.state in {"SAVE_ONLY", "VERIFY_NOT_PUBLISHED"},
-                ) from exc
-            finally:
-                with self._active_lock:
-                    self._active_commands.pop(batch_id, None)
-            try:
-                canonical = validate_action_result_envelope(
-                    raw_result,
-                    expected_state=step.state,
-                    expected_action=step.action,
-                    expected_runtime_id=str(self._browser_agent_runtime.runtime_id),
-                    expected_browser_session_id=str(grant["browser_session_id"]),
-                )
-            except ActionResultContractError as exc:
-                raise BatchRuntimeError(
-                    exc.reason_code,
-                    f"{step.label}没有形成可信结果：{exc}",
-                    manual_review=step.state in {"SAVE_ONLY", "VERIFY_NOT_PUBLISHED"},
-                ) from exc
-            self._validate_evidence_refs(canonical)
+            command = self._build_command(batch, item, None, step, params)
+            canonical = self._run_browser_step(
+                batch_id,
+                command,
+                step,
+                expected_browser_session_id=str(claim_context["browser_session_id"]),
+                post_grant=False,
+            )
             action_results.append(canonical)
             if canonical.get("ok") is not True:
                 isolated = self._isolated_pre_save_execution(
                     step,
-                    grant,
+                    claim_context,
                     canonical,
                     action_results,
                 )
@@ -504,10 +494,93 @@ class BatchExecutionRuntime:
                     manual_review=step.state in {"SAVE_ONLY", "VERIFY_NOT_PUBLISHED"},
                 )
 
-        save = next(result for result in action_results if result["attempted_state"] == "SAVE_ONLY")
-        verification = next(
-            result for result in action_results if result["attempted_state"] == "VERIFY_NOT_PUBLISHED"
+        self._assert_batch_can_continue(batch_id, claim_context)
+        current_batch = self._private_batch(batch_id)
+        start_context = _private_value(current_batch, "start_context")
+        if not isinstance(start_context, Mapping):
+            raise BatchRuntimeError("START_CONTEXT_MISSING", "批次启动上下文缺失。", manual_review=True)
+        try:
+            issued = derive_execution_item_grant(
+                _execution_contract_batch(current_batch),
+                start_context=dict(start_context),
+                now=datetime.now(timezone.utc),
+                grant_lease_id=uuid.uuid4().hex,
+                one_time_nonce=secrets.token_urlsafe(32),
+                ttl_seconds=self._item_grant_ttl_seconds,
+            )
+        except (BatchExecutionContractError, EditBatchExecutionPersistenceError) as exc:
+            raise BatchRuntimeError(exc.reason_code, str(exc), manual_review=True) from exc
+        grant = dict(issued["grant"])
+        nonce = str(issued["nonce"])
+        if int(grant.get("item_id") or 0) != item_id:
+            raise BatchRuntimeError("ITEM_GRANT_TARGET_DRIFT", "逐件授权绑定到了另一商品。", manual_review=True)
+        issue_grant = getattr(self._repository, "issue_edit_batch_item_grant", None)
+        grant_result = issue_grant(batch_id, item_id, grant) if callable(issue_grant) else None
+        if not _cas_applied(grant_result):
+            raise BatchRuntimeError(
+                _result_reason(grant_result, "ITEM_GRANT_CONFLICT"),
+                "保存授权状态已变化，系统已停止且不会重试。",
+                manual_review=True,
+            )
+
+        save_step = next(step for step in BATCH_BROWSER_STEPS if step.state == "SAVE_ONLY")
+        save_params = {**base_params, "defaults": defaults}
+        save_command = self._build_command(current_batch, item, grant, save_step, save_params)
+        self._reserve_item_mutation(save_command)
+        lease_id = str(grant["grant_lease_id"])
+        with self._active_lock:
+            self._active_grants[lease_id] = {"grant": grant, "nonce": nonce}
+        try:
+            save = self._run_browser_step(
+                batch_id,
+                save_command,
+                save_step,
+                expected_browser_session_id=str(grant["browser_session_id"]),
+                post_grant=True,
+            )
+        finally:
+            with self._active_lock:
+                self._active_grants.pop(lease_id, None)
+        action_results.append(save)
+        if save.get("ok") is not True:
+            raise BatchRuntimeError(
+                str(save.get("failure_code") or "SAVE_RESULT_UNCERTAIN"),
+                "保存动作没有形成确定结果，系统已停止且不会自动重试。",
+                manual_review=True,
+            )
+        if not self._grant_consumption_proven(batch_id, item_id, grant):
+            raise BatchRuntimeError(
+                "ITEM_GRANT_CONSUMPTION_UNPROVEN",
+                "保存授权的一次性消费没有可靠落库。",
+                manual_review=True,
+            )
+
+        verification_step = next(
+            step for step in BATCH_BROWSER_STEPS if step.state == "VERIFY_NOT_PUBLISHED"
         )
+        self._assert_batch_can_continue(batch_id, grant)
+        verification_params = dict(base_params)
+        verification_command = self._build_command(
+            current_batch,
+            item,
+            None,
+            verification_step,
+            verification_params,
+        )
+        verification = self._run_browser_step(
+            batch_id,
+            verification_command,
+            verification_step,
+            expected_browser_session_id=str(grant["browser_session_id"]),
+            post_grant=True,
+        )
+        action_results.append(verification)
+        if verification.get("ok") is not True:
+            raise BatchRuntimeError(
+                str(verification.get("failure_code") or "UNPUBLISHED_VERIFICATION_UNCERTAIN"),
+                "未发布核验没有形成确定结果，系统已停止且不会自动重试。",
+                manual_review=True,
+            )
         try:
             validate_independent_save_verification_pair(save, verification)
         except ActionResultContractError as exc:
@@ -554,7 +627,7 @@ class BatchExecutionRuntime:
     def _isolated_pre_save_execution(
         self,
         step: BatchBrowserStep,
-        grant: Mapping[str, Any],
+        claim_context: Mapping[str, Any],
         action_result: Mapping[str, Any],
         action_results: list[dict[str, Any]],
     ) -> dict[str, Any] | None:
@@ -585,14 +658,14 @@ class BatchExecutionRuntime:
             return None
         before_values = action_result.get("before_values")
         page_identity = action_result.get("page_identity")
-        runtime_identity = grant.get("runtime_identity")
+        runtime_identity = claim_context.get("runtime_identity")
         if not isinstance(before_values, Mapping):
             return None
         target_identity = before_values.get("target_identity")
-        store_identity = grant.get("store_identity")
+        store_identity = claim_context.get("store_identity")
         if (
             not isinstance(target_identity, Mapping)
-            or canonical_sha256(dict(target_identity)) != grant.get("target_identity_sha256")
+            or canonical_sha256(dict(target_identity)) != claim_context.get("target_identity_sha256")
             or not isinstance(store_identity, Mapping)
             or before_values.get("store_name") != store_identity.get("store_name")
             or not isinstance(page_identity, Mapping)
@@ -601,23 +674,20 @@ class BatchExecutionRuntime:
             or not str(page_identity.get("url") or "").strip()
             or not isinstance(runtime_identity, Mapping)
             or page_identity.get("runtime_id") != runtime_identity.get("browser_runtime_id")
-            or page_identity.get("browser_session_id") != grant.get("browser_session_id")
-            or self._live_binding_rejection(grant) is not None
+            or page_identity.get("browser_session_id") != claim_context.get("browser_session_id")
+            or self._live_binding_rejection(claim_context) is not None
         ):
             return None
-        ledger_entry = self._mutation_ledger.get_entry(
-            str(grant.get("mutation_scope_id") or ""),
-            "save_only_click",
-        )
-        ledger_status = str((ledger_entry or {}).get("status") or "") or None
-        if ledger_status != "RESERVED":
+        if not self._item_has_no_authority(
+            int(claim_context["batch_id"]), int(claim_context["item_id"])
+        ):
             return None
         outcome = {
             "schema_version": "dxm_edit_batch_item_outcome_evidence.v1",
             "ok": False,
             "error_code": "PRE_SAVE_VALIDATION_NO_WRITE",
             "validation_reason": validation_reason,
-            "ledger_status": ledger_status,
+            "ledger_status": None,
             "network_audit": {
                 "complete": True,
                 "mutation_request_count": 0,
@@ -628,15 +698,15 @@ class BatchExecutionRuntime:
                 "kind": publish.get("kind"),
             },
             "save_proven": False,
-            "runtime_identity": grant["runtime_identity"],
-            "browser_session_id": grant["browser_session_id"],
-            "git_head": grant["git_head"],
-            "store_identity": grant["store_identity"],
-            "page_identity": grant["page_identity"],
-            "target_identity_sha256": grant["target_identity_sha256"],
-            "mutation_scope_id": grant["mutation_scope_id"],
+            "runtime_identity": claim_context["runtime_identity"],
+            "browser_session_id": claim_context["browser_session_id"],
+            "git_head": claim_context["git_head"],
+            "store_identity": claim_context["store_identity"],
+            "page_identity": claim_context["page_identity"],
+            "target_identity_sha256": claim_context["target_identity_sha256"],
+            "mutation_scope_id": None,
         }
-        decision = classify_item_outcome(dict(grant), outcome)
+        decision = classify_pre_save_no_write_outcome(dict(claim_context), outcome)
         if (
             decision.get("continue_batch") is not True
             or decision.get("classification") != "ISOLATED_PRE_SAVE_NO_WRITE"
@@ -648,8 +718,130 @@ class BatchExecutionRuntime:
             "action_results": list(action_results),
         }
 
+    def _run_browser_step(
+        self,
+        batch_id: int,
+        command: BrowserAgentCommand,
+        step: BatchBrowserStep,
+        *,
+        expected_browser_session_id: str,
+        post_grant: bool,
+    ) -> dict[str, Any]:
+        if not post_grant and any(
+            value
+            for value in (
+                command.mutation_scope_id,
+                command.authorization_fingerprint,
+                command.authorization_lease_id,
+                command.stage_task_facts_fingerprint,
+            )
+        ):
+            raise BatchRuntimeError(
+                "PRE_SAVE_AUTHORITY_FORBIDDEN",
+                "保存前步骤携带了不应存在的变更授权。",
+                manual_review=True,
+            )
+        with self._active_lock:
+            self._active_commands[batch_id] = command
+        try:
+            raw_result = self._browser_agent_runtime.run(
+                command,
+                timeout_seconds=self._command_timeout_seconds,
+            )
+        except TimeoutError as exc:
+            cancel = getattr(self._browser_agent_runtime, "cancel_command", None)
+            if callable(cancel):
+                try:
+                    cancel(command.command_id, command.runtime_id)
+                except Exception:
+                    pass
+            raise BatchRuntimeError(
+                "BROWSER_COMMAND_TIMEOUT",
+                f"{step.label}超时，系统已停止且不会自动重试。",
+                manual_review=post_grant,
+            ) from exc
+        except Exception as exc:
+            raise BatchRuntimeError(
+                "BROWSER_COMMAND_FAILED",
+                f"{step.label}失败：{exc}",
+                manual_review=post_grant,
+            ) from exc
+        finally:
+            with self._active_lock:
+                self._active_commands.pop(batch_id, None)
+        try:
+            canonical = validate_action_result_envelope(
+                raw_result,
+                expected_state=step.state,
+                expected_action=step.action,
+                expected_runtime_id=str(self._browser_agent_runtime.runtime_id),
+                expected_browser_session_id=expected_browser_session_id,
+            )
+        except ActionResultContractError as exc:
+            raise BatchRuntimeError(
+                exc.reason_code,
+                f"{step.label}没有形成可信结果：{exc}",
+                manual_review=post_grant,
+            ) from exc
+        self._validate_evidence_refs(canonical)
+        return canonical
+
+    def _grant_consumption_proven(
+        self,
+        batch_id: int,
+        item_id: int,
+        grant: Mapping[str, Any],
+    ) -> bool:
+        batch = self._private_batch(batch_id)
+        private = batch.get("_private")
+        rows = private.get("item_authorizations") if isinstance(private, Mapping) else None
+        row = next(
+            (
+                value
+                for value in rows or []
+                if isinstance(value, Mapping) and int(value.get("item_id") or 0) == item_id
+            ),
+            None,
+        )
+        return bool(
+            isinstance(row, Mapping)
+            and row.get("grant_lease_id") == grant.get("grant_lease_id")
+            and row.get("grant_fingerprint") == grant.get("fingerprint")
+            and row.get("grant_nonce_hash") == grant.get("nonce_hash")
+            and row.get("mutation_scope_id") == grant.get("mutation_scope_id")
+            and row.get("grant_consumed_at")
+        )
+
+    def _item_has_no_authority(self, batch_id: int, item_id: int) -> bool:
+        batch = self._private_batch(batch_id)
+        private = batch.get("_private")
+        rows = private.get("item_authorizations") if isinstance(private, Mapping) else None
+        row = next(
+            (
+                value
+                for value in rows or []
+                if isinstance(value, Mapping) and int(value.get("item_id") or 0) == item_id
+            ),
+            None,
+        )
+        if not isinstance(row, Mapping):
+            return False
+        return all(
+            row.get(key) is None
+            for key in (
+                "grant_lease_id",
+                "grant_fingerprint",
+                "grant_nonce_hash",
+                "mutation_scope_id",
+                "grant",
+                "granted_at",
+                "grant_expires_at",
+                "grant_consumed_at",
+            )
+        )
+
     def _reserve_item_mutation(self, command: BrowserAgentCommand) -> None:
-        """Create the durable no-dispatch boundary before any item interaction."""
+        """Create the durable RESERVED boundary immediately before SAVE_ONLY."""
 
         reserve = getattr(self._mutation_ledger, "reserve_command", None)
         if not callable(reserve):
@@ -693,7 +885,7 @@ class BatchExecutionRuntime:
         self,
         batch: dict[str, Any],
         item: dict[str, Any],
-        grant: dict[str, Any],
+        grant: Mapping[str, Any] | None,
         step: BatchBrowserStep,
         params: dict[str, Any],
     ) -> BrowserAgentCommand:
@@ -702,6 +894,12 @@ class BatchExecutionRuntime:
         item_id = int(item["id"])
         mutation_fields: dict[str, Any] = {}
         if step.state == "SAVE_ONLY":
+            if not isinstance(grant, Mapping):
+                raise BatchRuntimeError(
+                    "SAVE_GRANT_REQUIRED",
+                    "保存动作缺少逐件授权。",
+                    manual_review=True,
+                )
             mutation_fields = {
                 "mutation_scope_id": grant["mutation_scope_id"],
                 "target_hash": mutation_target_hash("save_only", params),
@@ -788,19 +986,12 @@ class BatchExecutionRuntime:
     def _failure_details(
         self,
         exc: Exception,
-        grant: Mapping[str, Any],
     ) -> tuple[str, str, bool]:
-        entry = self._mutation_ledger.get_entry(
-            str(grant.get("mutation_scope_id") or ""),
-            "save_only_click",
-        )
-        ledger_status = str((entry or {}).get("status") or "")
-        externally_uncertain = ledger_status in {"DISPATCHING", "DISPATCHED", "UNKNOWN"}
         if isinstance(exc, BatchRuntimeError):
             return (
                 exc.reason_code,
                 str(exc),
-                bool(exc.manual_review or externally_uncertain),
+                True,
             )
         return (
             "BATCH_ITEM_UNEXPECTED_FAILURE",

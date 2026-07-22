@@ -166,7 +166,7 @@ export function AcquisitionClaimPage({
           </label>
           <label>
             <span>商品类目</span>
-            <input value={categoryName} onChange={(event) => setCategoryName(event.target.value)} placeholder="例如：立牌类谷子" disabled={busy} />
+            <input value={categoryName} onChange={(event) => setCategoryName(event.target.value)} placeholder="填写当前真实商品类目" disabled={busy} />
           </label>
           <label>
             <span>认领标记</span>

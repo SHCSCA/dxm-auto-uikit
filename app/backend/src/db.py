@@ -271,6 +271,7 @@ def init_db() -> None:
                 status TEXT NOT NULL,
                 target_identity_sha256 TEXT NOT NULL,
                 item_snapshot_json TEXT NOT NULL,
+                claimed_at TEXT,
                 grant_lease_id TEXT,
                 grant_fingerprint TEXT,
                 grant_nonce_hash TEXT,
@@ -319,6 +320,7 @@ def init_db() -> None:
             conn,
             "edit_batch_items",
             {
+                "claimed_at": "TEXT",
                 "grant_lease_id": "TEXT",
                 "grant_fingerprint": "TEXT",
                 "grant_nonce_hash": "TEXT",
@@ -381,6 +383,7 @@ def init_db() -> None:
                 "summary_json": "TEXT NOT NULL DEFAULT '{}'",
             },
         )
+        disable_legacy_generated_starter_templates(conn)
 
 
 def _ensure_columns(conn: sqlite3.Connection, table_name: str, columns: dict[str, str]) -> None:
@@ -391,6 +394,272 @@ def _ensure_columns(conn: sqlite3.Connection, table_name: str, columns: dict[str
     for column_name, column_definition in columns.items():
         if column_name not in existing:
             conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}")
+
+
+def disable_legacy_generated_starter_templates(conn: sqlite3.Connection) -> list[int]:
+    """Disable only complete packs that exactly reproduce the retired generator."""
+
+    rows = conn.execute(
+        """
+        SELECT id, template_type, template_name, binding_scope, payload_json, is_enabled
+          FROM templates
+         WHERE template_name LIKE '%起步模板%'
+         ORDER BY id ASC
+        """
+    ).fetchall()
+    expected_types = {
+        "category",
+        "sku",
+        "pricing",
+        "logistics",
+        "image",
+        "compliance",
+        "semi_managed",
+        "dxm_reference",
+    }
+    cohorts: dict[tuple[str, str, str], list[tuple[dict[str, Any], str]]] = {}
+    for row in rows:
+        identity = _exact_legacy_generated_starter_identity(row)
+        if identity is None:
+            continue
+        store_name, category_name, platform, template_type = identity
+        cohorts.setdefault((store_name, category_name, platform), []).append(
+            (row, template_type)
+        )
+    matched_ids: list[int] = []
+    for cohort in cohorts.values():
+        # The retired code generated one exact row for every type in one call.
+        # Partial or duplicate packs are ambiguous and deliberately left alone.
+        if len(cohort) != len(expected_types) or {item[1] for item in cohort} != expected_types:
+            continue
+        matched_ids.extend(
+            int(row["id"])
+            for row, _template_type in cohort
+            if int(row.get("is_enabled") or 0) == 1
+        )
+    if not matched_ids:
+        return []
+    disabled_at = datetime.now(timezone.utc).isoformat()
+    for template_id in matched_ids:
+        conn.execute(
+            """
+            UPDATE templates
+               SET is_enabled=0, updated_at=?
+             WHERE id=? AND is_enabled=1
+            """,
+            (disabled_at, template_id),
+        )
+    return matched_ids
+
+
+def _exact_legacy_generated_starter_identity(
+    row: dict[str, Any],
+) -> tuple[str, str, str, str] | None:
+    try:
+        payload = json.loads(str(row.get("payload_json") or ""))
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    binding = payload.get("binding")
+    if not isinstance(binding, dict) or set(binding) != {
+        "store_name",
+        "category_name",
+        "platform",
+    }:
+        return None
+    store_name = binding.get("store_name")
+    category_name = binding.get("category_name")
+    platform = binding.get("platform")
+    if any(
+        not isinstance(value, str) or not value or value != value.strip()
+        for value in (store_name, category_name, platform)
+    ):
+        return None
+    template_type = str(row.get("template_type") or "").strip().lower()
+    expected_name, expected_payload = _legacy_generated_starter_signature(
+        template_type,
+        binding=dict(binding),
+        category_name=category_name,
+    )
+    if expected_name is None or expected_payload is None:
+        return None
+    if (
+        row.get("template_type") != template_type
+        or row.get("template_name") != expected_name
+        or row.get("binding_scope")
+        != f"店铺：{store_name} / 类目：{category_name} / 平台：{platform}"
+        or payload != expected_payload
+    ):
+        return None
+    return store_name, category_name, platform, template_type
+
+
+def _legacy_generated_starter_signature(
+    template_type: str,
+    *,
+    binding: dict[str, str],
+    category_name: str,
+) -> tuple[str | None, dict[str, Any] | None]:
+    references = _legacy_generated_reference_templates(category_name)
+    payloads: dict[str, tuple[str, dict[str, Any]]] = {
+        "category": (
+            "类目与标题起步模板",
+            {
+                "binding": binding,
+                "category": {
+                    "category_keyword": "立牌" if "立牌" in category_name else category_name,
+                    "category_match": "ACG Stand",
+                    "title_strategy": "按来源标题生成英文标题",
+                    "title_keyword_map": _legacy_generated_title_keyword_map(category_name),
+                    "attribute_template_priorities": references["attribute_info"]["names"],
+                },
+            },
+        ),
+        "sku": (
+            "SKU与库存起步模板",
+            {
+                "binding": binding,
+                "sku": {
+                    "goods_code_strategy": "按来源商品ID生成安全货号",
+                    "barcode_strategy": "留空",
+                    "stock": "200",
+                    "jit_stock": "100",
+                },
+            },
+        ),
+        "pricing": (
+            "价格策略起步模板",
+            {
+                "binding": binding,
+                "pricing": {
+                    "declared_value": "1",
+                    "stock": "200",
+                    "product_price": "7.01",
+                    "supply_price": "5.20",
+                },
+            },
+        ),
+        "logistics": (
+            "包装物流起步模板",
+            {
+                "binding": binding,
+                "logistics": {
+                    "weight": "0.03",
+                    "length": "10",
+                    "width": "10",
+                    "height": "2",
+                    "freight_templates": references["freight"]["names"],
+                    "service_templates": references["service"]["names"],
+                    "logistics_attribute": "普货",
+                    "is_original_box": "否",
+                },
+            },
+        ),
+        "image": (
+            "图片与素材起步模板",
+            {
+                "binding": binding,
+                "image": {
+                    "source": "图片银行（速卖通）",
+                    "eu_outer_package_filename": "微信图片_202504092228421.jpg",
+                    "marketing_images_strategy": "使用 EU 外包装图补齐 3:4",
+                    "main_image_strategy": "保留 800x800 合规主图",
+                    "invalid_image_strategy": "删除 0x0 无效图",
+                },
+            },
+        ),
+        "compliance": (
+            "合规海关起步模板",
+            {
+                "binding": binding,
+                "compliance": {
+                    "eu_responsible_names": references["eu_responsible"]["names"],
+                    "manufacturer_names": references["manufacturer"]["names"],
+                    "customs_product_names": ["钥匙扣", "keychain"],
+                    "customs_name": "钥匙扣",
+                    "material": "Acrylic",
+                    "purpose": "Decoration",
+                    "brand": "无品牌",
+                    "statement": "符合平台合规要求",
+                },
+            },
+        ),
+        "semi_managed": (
+            "半托管起步模板",
+            {
+                "binding": binding,
+                "semi_managed": {
+                    "product_price": "7.01",
+                    "supply_price": "5.20",
+                    "jit_stock": "100",
+                    "is_original_box": "否",
+                    "length": "10",
+                    "width": "10",
+                    "height": "2",
+                    "goods_code_strategy": "按来源商品ID生成安全货号",
+                    "barcode_strategy": "留空",
+                },
+            },
+        ),
+        "dxm_reference": (
+            "店小秘引用模板起步模板",
+            {
+                "binding": binding,
+                "dxm_reference_templates": references,
+            },
+        ),
+    }
+    signature = payloads.get(template_type)
+    if signature is None:
+        return None, None
+    name_suffix, payload = signature
+    return f"{category_name} / {name_suffix}", payload
+
+
+def _legacy_generated_reference_templates(category_name: str) -> dict[str, Any]:
+    attribute_names = (
+        ["万代立牌", "bilibili动漫周边", "万代"]
+        if "立牌" in category_name
+        else [f"{category_name}属性模板"]
+    )
+    return {
+        "attribute_info": {"names": attribute_names, "required": True},
+        "description": {"names": ["详情描述模板-ACG立牌"], "required": True},
+        "freight": {"names": ["石油40g普货包裹.", "40g普货包裹"], "required": True},
+        "service": {"names": ["Service Template for New Sellers"], "required": True},
+        "eu_responsible": {"names": ["Jacqueiline Marti"], "required": True},
+        "manufacturer": {
+            "names": ["jiyang county thunder", "Jiyang County thunder"],
+            "required": True,
+        },
+        "compliance": {"names": ["合规模板", "钥匙扣", "keychain"], "required": True},
+        "semi_managed": {"names": ["半托管模板"], "required": True},
+    }
+
+
+def _legacy_generated_title_keyword_map(category_name: str) -> dict[str, str]:
+    mappings = {
+        "宝可梦": "Pokemon",
+        "神奇宝贝": "Pokemon",
+        "皮卡丘": "Pikachu",
+        "仙子伊布": "Sylveon",
+        "伊布": "Eevee",
+        "精灵球": "Poke Ball",
+        "3D打印": "3D Printed",
+        "玩具模型": "Toy Model",
+        "模型": "Model",
+        "周边": "Collectible",
+        "礼物": "Gift",
+        "球体摆件": "Ball Ornament",
+        "摆件": "Ornament",
+        "钥匙扣": "Keychain",
+        "亚克力": "Acrylic",
+        "高颜值": "Decorative",
+    }
+    if "立牌" in category_name:
+        mappings["立牌"] = "Display Stand"
+    return mappings
 
 
 def recover_interrupted_edit_batches(conn: sqlite3.Connection) -> list[int]:

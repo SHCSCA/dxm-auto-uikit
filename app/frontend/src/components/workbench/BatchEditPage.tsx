@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { getJson, postJson } from '../../api'
-import type { DraftBoxScopeSnapshot, EditBatchDetail, Template } from '../../types'
+import { apiErrorReasonCode, getJson, postJson } from '../../api'
+import type {
+  DraftBoxScopeSnapshot,
+  DraftBoxScopeSnapshotCreateRequest,
+  EditBatchApproveAndStartRequest,
+  EditBatchCreateRequest,
+  EditBatchDetail,
+  Template,
+} from '../../types'
 
 type BatchEditPageProps = {
   templates: Template[]
@@ -73,7 +80,7 @@ export function BatchEditPage({
     try {
       const snapshot = await postJson<DraftBoxScopeSnapshot>('/api/dxm/draft-box/scope-snapshots', {
         max_items: maxItems,
-      })
+      } satisfies DraftBoxScopeSnapshotCreateRequest)
       setScopeSnapshot(snapshot)
       setDraftBatch(null)
     } catch (caught) {
@@ -92,7 +99,7 @@ export function BatchEditPage({
       const created = await postJson<EditBatchDetail>('/api/edit-batches', {
         scope_snapshot_id: scopeSnapshot.id,
         template_id: selectedTemplate.id,
-      })
+      } satisfies EditBatchCreateRequest)
       setDraftBatch(created)
       onBatchSelected(created.id)
       setApprovedBy('')
@@ -120,7 +127,7 @@ export function BatchEditPage({
       const started = await postJson<EditBatchDetail>(`/api/edit-batches/${draftBatch.id}/approve-and-start`, {
         approved_by: approvedBy.trim(),
         confirmation: 'CONFIRM_DXM_BATCH_SAVE_ONLY',
-      })
+      } satisfies EditBatchApproveAndStartRequest)
       setDraftBatch(started)
       onShowRecords()
     } catch (caught) {
@@ -142,7 +149,7 @@ export function BatchEditPage({
               <span>不可变批次 #{draftBatch.id}</span>
               <h2>{isDraft ? '范围已冻结，等待一次批准' : humanBatchStatus(draftBatch.status)}</h2>
               <p>{isDraft
-                ? '商品顺序、店铺与模板版本已经固定。批准后严格串行处理，每件只保存、不发布。'
+                ? '商品顺序、店铺与模板版本已经固定。一次批准后严格串行处理，每件只保存、不发布。'
                 : `批次已交给后端执行；${progress ? `当前完成 ${progress.completed}/${progress.total} 件。` : '进度会持续写入批次记录。'}`}</p>
             </div>
           </div>
@@ -209,7 +216,7 @@ export function BatchEditPage({
           <div>
             <span className="eyebrow">批量编辑 · 真实商品箱现场</span>
             <h2>冻结当前商品箱范围</h2>
-            <p>读取同一可见浏览器现场的商品箱商品行，保留当前筛选、排序和商品顺序。只读取，不导航、不交互、不写入。</p>
+            <p>本页开放受控逐件批次：范围冻结、一次批准、严格串行、只保存。旧版批量任务（batch_save）、无人值守和发布仍关闭。</p>
           </div>
           <span className="batch-boundary-chip">只保存 · 不发布</span>
         </div>
@@ -320,6 +327,10 @@ export function BatchEditPage({
 }
 
 function humanBatchError(caught: unknown, action: string) {
+  const reasonCode = apiErrorReasonCode(caught)
+  if (reasonCode === 'LEGACY_TASK_ACTIVE' || reasonCode === 'ANOTHER_EDIT_BATCH_ACTIVE' || reasonCode === 'EDIT_BATCH_ACTIVE') {
+    return '当前已有任务或批次正在执行。请先结束当前任务或批次，再回来批准本批次。'
+  }
   const message = caught instanceof Error ? caught.message.trim() : ''
   const normalized = message.toLowerCase()
   if (normalized.includes('template')) return '整批模板未通过完整性检查。请在模板中心启用完整的整批编辑模板后重试；系统没有执行保存或发布。'
@@ -389,7 +400,7 @@ function formatDateTime(value: string) {
 function humanBatchStatus(status: string) {
   const labels: Record<string, string> = {
     draft: '草稿 · 待批准',
-    approved: '已批准 · 等待开始',
+    approved: '旧式批准记录 · 未启动',
     running: '正在逐件保存',
     stop_requested: '正在安全停止',
     completed: '全部处理完成',

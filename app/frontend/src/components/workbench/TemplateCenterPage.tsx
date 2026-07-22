@@ -3,7 +3,7 @@ import { getJsonOrDefault, patchJson, postJson } from '../../api'
 import type { ConfigPreview, DeliveryWorkspace, Task, Template, TemplateCenterMetadata, TemplateCenterSection } from '../../types'
 import { BatchTemplateComposer } from './BatchTemplateComposer'
 
-type TemplateCenterMode = 'sections' | 'batch_bundle'
+export type TemplateCenterMode = 'sections' | 'batch_bundle'
 
 type TemplateCenterPageProps = {
   workspace: DeliveryWorkspace
@@ -14,6 +14,7 @@ type TemplateCenterPageProps = {
   onConfigSaved: () => void | Promise<void>
   onRefreshConfigPreview: () => void | Promise<void>
   onShowDraftEdit: () => void
+  initialMode?: TemplateCenterMode
 }
 
 const fallbackTemplateCenterMetadata: TemplateCenterMetadata = {
@@ -88,13 +89,10 @@ const fallbackTemplateCenterMetadata: TemplateCenterMetadata = {
     ] },
     { id: 'dxm_reference', label: '店小秘引用模板', template_type: 'dxm_reference', fields: [
       { key: referenceFieldKey('attribute_info'), label: '属性信息模板', required: true, value_kind: 'list' },
-      { key: referenceFieldKey('description'), label: '描述模板', required: true, value_kind: 'list' },
       { key: referenceFieldKey('freight'), label: '运费模板', required: true, value_kind: 'list' },
       { key: referenceFieldKey('service'), label: '服务模板', required: true, value_kind: 'list' },
       { key: referenceFieldKey('eu_responsible'), label: '欧盟责任人', required: true, value_kind: 'list' },
       { key: referenceFieldKey('manufacturer'), label: '制造商', required: true, value_kind: 'list' },
-      { key: referenceFieldKey('compliance'), label: '合规模板', required: true, value_kind: 'list' },
-      { key: referenceFieldKey('semi_managed'), label: '半托管模板', required: true, value_kind: 'list' },
     ] },
   ],
   source_priority: ['精确店铺/类目模板', '用户指定模板', '店铺默认模板', '系统默认模板', '商品原始数据', '高级：本次任务临时覆盖'],
@@ -110,8 +108,10 @@ export function TemplateCenterPage({
   onConfigSaved,
   onRefreshConfigPreview,
   onShowDraftEdit,
+  initialMode = 'sections',
 }: TemplateCenterPageProps) {
-  const [templateCenterMode, setTemplateCenterMode] = useState<TemplateCenterMode>('sections')
+  const [templateCenterMode, setTemplateCenterMode] = useState<TemplateCenterMode>(initialMode)
+  const [defaultScope, setDefaultScope] = useState<'store' | 'category'>('store')
   const [metadata, setMetadata] = useState<TemplateCenterMetadata>(fallbackTemplateCenterMetadata)
   const [activeSectionId, setActiveSectionId] = useState(fallbackTemplateCenterMetadata.sections[0].id)
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
@@ -173,8 +173,12 @@ export function TemplateCenterPage({
   const activeFilledCount = activeSection.fields.filter((field) => String(draftValues[field.key] ?? '').trim()).length
   const activeRequiredCount = activeSection.fields.filter((field) => field.required).length
   const activeFilledRequiredCount = activeSection.fields.filter((field) => field.required && String(draftValues[field.key] ?? '').trim()).length
+  const missingRequiredLabels = activeSection.fields
+    .filter((field) => field.required && !String(draftValues[field.key] ?? '').trim())
+    .map((field) => field.label)
   useEffect(() => {
-    void getJsonOrDefault<TemplateCenterMetadata>('/api/template-center/metadata', fallbackTemplateCenterMetadata).then(setMetadata)
+    void getJsonOrDefault<TemplateCenterMetadata>('/api/template-center/metadata', fallbackTemplateCenterMetadata)
+      .then((nextMetadata) => setMetadata(normalizeTemplateCenterMetadata(nextMetadata)))
   }, [])
 
   useEffect(() => {
@@ -216,6 +220,7 @@ export function TemplateCenterPage({
       setSaveState({ status: '不能保存', detail: '请先在商品箱编辑保存页创建或选择任务；临时覆盖只作为最后兜底。' })
       return
     }
+    if (!requiredFieldsReady()) return
     await saveWithState('正在保存临时覆盖', async () => {
       await patchJson<Task>(`/api/tasks/${selectedTask.id}/config-overrides`, {
         section: activeSection.template_type,
@@ -227,6 +232,15 @@ export function TemplateCenterPage({
 
   async function saveAsDefaultTemplate(scope: 'store' | 'category', copy = false) {
     const defaultLabel = scope === 'category' ? '类目默认模板' : '店铺默认模板'
+    if (currentStore === '未选择店铺') {
+      setSaveState({ status: '不能保存', detail: '当前没有真实店铺。请先连接或选择店铺，系统没有保存模板。' })
+      return
+    }
+    if (scope === 'category' && currentCategory === '未选择类目') {
+      setSaveState({ status: '不能保存', detail: '当前没有真实类目。请先选择商品或填写任务类目，系统没有保存模板。' })
+      return
+    }
+    if (!requiredFieldsReady()) return
     await saveWithState(copy ? '正在另存为新模板' : `正在设为${defaultLabel}`, async () => {
       const body = {
         template_type: activeSection.template_type,
@@ -275,6 +289,17 @@ export function TemplateCenterPage({
     }
   }
 
+  function requiredFieldsReady() {
+    if (!missingRequiredLabels.length) return true
+    const visibleLabels = missingRequiredLabels.slice(0, 3).join('、')
+    const remainingCount = Math.max(0, missingRequiredLabels.length - 3)
+    setSaveState({
+      status: '不能保存',
+      detail: `请先填写必填字段：${visibleLabels}${remainingCount ? `，另有 ${remainingCount} 项` : ''}。系统没有保存任何配置。`,
+    })
+    return false
+  }
+
   return (
     <section className="module-layout template-center-page" aria-label="模板中心">
       <div className="module-card span-3">
@@ -287,7 +312,7 @@ export function TemplateCenterPage({
               : '从 8 个已校验的分区模板组合一份可冻结的整批编辑模板。'}</p>
           </div>
           {templateCenterMode === 'sections' && (
-            <button className="button button--primary" type="button" onClick={onShowDraftEdit}>回到商品箱编辑保存</button>
+            <button className="button button--quiet" type="button" onClick={onShowDraftEdit}>回到商品箱批次</button>
           )}
         </div>
         <div className="template-center-mode-switch" role="tablist" aria-label="模板中心模式">
@@ -333,7 +358,6 @@ export function TemplateCenterPage({
         <BatchTemplateComposer
           workspace={workspace}
           selectedTask={selectedTask}
-          initialCategoryName={currentCategory}
           onBundleCreated={onConfigSaved}
           onEditSection={(section) => {
             setActiveSectionId(section)
@@ -433,16 +457,30 @@ export function TemplateCenterPage({
           )}
         </details>
 
-        <div className="action-row">
-          <button className="button button--primary" type="button" onClick={() => { void saveAsDefaultTemplate('store') }}>保存为店铺模板</button>
-          <button className="button button--primary" type="button" onClick={() => { void saveAsDefaultTemplate('category') }}>保存为类目模板</button>
-          <button className="button button--quiet" type="button" onClick={() => { void saveAsDefaultTemplate('category', true) }}>另存为新模板</button>
+        <div className="template-save-action" aria-label="保存当前分区">
+          <label>
+            <span>保存范围</span>
+            <select value={defaultScope} onChange={(event) => setDefaultScope(event.target.value as 'store' | 'category')}>
+              <option value="store">当前店铺</option>
+              <option value="category">当前店铺与类目</option>
+            </select>
+          </label>
+          <span>
+            <strong>{defaultScope === 'category' ? '保存为类目模板' : '保存为店铺模板'}</strong>
+            <small>{defaultScope === 'category' ? '只用于当前店铺和当前类目。' : '用于当前店铺下没有类目模板的任务。'}</small>
+          </span>
+          <button className="button button--primary" type="button" onClick={() => { void saveAsDefaultTemplate(defaultScope) }}>
+            {defaultScope === 'category' ? '保存类目模板' : '保存店铺模板'}
+          </button>
         </div>
 
         <details className="inline-disclosure">
-          <summary>高级兜底：临时覆盖当前任务</summary>
-          <p>只有当前模板无法满足这一次真实商品时才使用；默认执行路径仍然优先读取店铺/类目模板。</p>
-          <button className="button button--secondary" type="button" onClick={() => { void saveForTask() }} disabled={!selectedTask}>保存为本次任务临时覆盖</button>
+          <summary>其他保存方式</summary>
+          <p>另存副本用于保留当前模板；临时覆盖只在模板无法满足本次任务时使用。</p>
+          <div className="toolbar">
+            <button className="button button--quiet" type="button" onClick={() => { void saveAsDefaultTemplate(defaultScope, true) }}>另存为新模板</button>
+            <button className="button button--quiet" type="button" onClick={() => { void saveForTask() }} disabled={!selectedTask}>仅覆盖本次任务</button>
+          </div>
         </details>
 
         <details className="inline-disclosure template-library-details">
@@ -483,6 +521,21 @@ export function TemplateCenterPage({
 
 function referenceFieldKey(section: string) {
   return `dxm_reference_templates.${section}.names`
+}
+
+const unsupportedReferenceFieldKeys = new Set([
+  referenceFieldKey('description'),
+  referenceFieldKey('compliance'),
+  referenceFieldKey('semi_managed'),
+])
+
+function normalizeTemplateCenterMetadata(metadata: TemplateCenterMetadata): TemplateCenterMetadata {
+  return {
+    ...metadata,
+    sections: metadata.sections.map((section) => section.template_type === 'dxm_reference'
+      ? { ...section, fields: section.fields.filter((field) => !unsupportedReferenceFieldKeys.has(field.key)) }
+      : section),
+  }
 }
 
 function selectedTaskProduct(workspace: DeliveryWorkspace, selectedTask: Task | null) {
