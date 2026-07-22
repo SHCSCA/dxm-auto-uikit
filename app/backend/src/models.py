@@ -93,7 +93,6 @@ class EditBatchBundleSourceSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     template_id: StrictInt = Field(gt=0)
-    source_digest: str = Field(pattern=r"^[0-9A-Fa-f]{64}$")
 
 
 class EditBatchBundleSectionTemplates(BaseModel):

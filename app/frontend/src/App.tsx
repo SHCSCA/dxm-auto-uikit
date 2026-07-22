@@ -19,7 +19,7 @@ import {
 } from './components/WorkbenchModules'
 import { humanOperatorMessage } from './components/workbench/workbenchCopy'
 import { isSupportedSourceProductUrl } from './sourceUrl'
-import type { AcquisitionClaimCreateRequest, AcquisitionClaimResponse, AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, DxmCredentialSaveResult, EditBatchSummary, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LegacyWorkbenchSection, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
+import type { AcquisitionClaimCreateRequest, AcquisitionClaimResponse, AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, DraftBoxScopeSnapshot, DxmCredentialSaveResult, EditBatchSummary, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LegacyWorkbenchSection, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
 import { composeWorkspace } from './workspace'
 
 const AGENT_CONSOLE_TARGET_URL = 'https://www.dianxiaomi.com/'
@@ -170,7 +170,9 @@ export default function App() {
   }))
   const [activeSection, setActiveSection] = useState<WorkbenchSection>('home')
   const [activeEditBatchId, setActiveEditBatchId] = useState<number | null>(null)
+  const [activeScopeSnapshot, setActiveScopeSnapshot] = useState<DraftBoxScopeSnapshot | null>(null)
   const [editBatches, setEditBatches] = useState<EditBatchSummary[]>([])
+  const [editBatchStateAvailable, setEditBatchStateAvailable] = useState(false)
   const [templateCenterEntryMode, setTemplateCenterEntryMode] = useState<TemplateCenterMode>('sections')
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(initialTaskIdFromUrl)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -305,8 +307,10 @@ export default function App() {
       exceptions,
       reports,
     })
+    const editBatchStateFailed = failures.some((failure) => failure.path === '/api/edit-batches')
     setWorkspace(nextWorkspace)
-    setEditBatches(batchSummaries)
+    if (!editBatchStateFailed) setEditBatches(batchSummaries)
+    setEditBatchStateAvailable(!editBatchStateFailed)
     setAgentConsole(consoleStatus)
     setFinalCheck(finalCheckSummary)
     const taskMissing = Boolean(deliveryWorkspace?.requested_task_missing)
@@ -343,6 +347,8 @@ export default function App() {
 
   const workspaceHasRunningTask = workspace.tasks.some((task) => task.status === 'running')
   const workspaceHasRunningBatch = editBatches.some((batch) => batch.status === 'running' || batch.status === 'stop_requested')
+  const runningEditBatch = editBatches.find((batch) => batch.status === 'running' || batch.status === 'stop_requested') ?? null
+  const runningMutationTask = workspace.tasks.find((task) => task.status === 'running' && REAL_DXM_MUTATION_MODES.has(task.mode)) ?? null
 
   useEffect(() => {
     if (!workspaceHasRunningTask && !workspaceHasRunningBatch && !agentConsole?.active) return
@@ -709,6 +715,27 @@ export default function App() {
         }
         if (!RELEASED_REAL_DXM_MUTATION_MODES.has(taskToStart.mode)) {
           setOperationError(`当前执行模式 ${taskToStart.mode} 未发布，禁止启动真实 DXM 写入。`)
+          return
+        }
+        if (!editBatchStateAvailable) {
+          setOperationError('批次占用状态暂时无法确认。为避免并发真实写入，本次任务没有启动；请刷新工作台后重试。')
+          return
+        }
+        const conflictingBatch = editBatches.find((batch) => batch.status === 'running' || batch.status === 'stop_requested')
+        if (conflictingBatch) {
+          setActiveEditBatchId(conflictingBatch.id)
+          setOperationError(`批次 #${conflictingBatch.id} 正在占用全局执行位。一次只允许一个真实写入流程；请先查看该批次。`)
+          setActiveSection('task_history')
+          return
+        }
+        const conflictingTask = workspace.tasks.find((task) => (
+          task.id !== taskToStart.id
+          && task.status === 'running'
+          && REAL_DXM_MUTATION_MODES.has(task.mode)
+        ))
+        if (conflictingTask) {
+          setOperationError('已有真实写入任务正在执行。一次只允许一个真实写入流程；请等待当前任务结束后再启动。')
+          setActiveSection('product_tasks')
           return
         }
         const latestRuntimeStatus = await getJson<RuntimeStatus>(`/api/runtime/status?frontend_url=${encodeURIComponent(window.location.origin)}`)
@@ -1136,6 +1163,25 @@ export default function App() {
   const showGlobalSafetyStatus = currentSection !== 'home'
     && currentSection !== 'draft_edit_save'
     && currentSection !== 'task_history'
+    && currentSection !== 'template_center'
+    && currentSection !== 'template_management'
+    && currentSection !== 'results'
+    && currentSection !== 'issues'
+  const startNewEditBatch = () => {
+    setActiveEditBatchId(null)
+    setActiveScopeSnapshot(null)
+    setActiveSection('draft_edit_save')
+  }
+  const showBatchRecords = (batchId?: number) => {
+    setActiveScopeSnapshot(null)
+    setActiveEditBatchId(batchId ?? null)
+    setActiveSection('task_history')
+  }
+  const openBatchForApproval = (batchId: number) => {
+    setActiveScopeSnapshot(null)
+    setActiveEditBatchId(batchId)
+    setActiveSection('draft_edit_save')
+  }
   const setWorkbenchSection = useCallback((section: WorkbenchSection) => {
     if (section === 'template_center') setTemplateCenterEntryMode('batch_bundle')
     setActiveSection(normalizeWorkbenchSection(section))
@@ -1167,6 +1213,7 @@ export default function App() {
             onRefreshConfigPreview={async () => { await refreshConfigPreview(); await refreshWorkspace() }}
             onShowDraftEdit={() => setActiveSection('draft_edit_save')}
             onShowDxmAccess={() => setActiveSection('dxm_access')}
+            batchScopeStoreName={activeScopeSnapshot?.store_identity.store_name ?? null}
             initialMode={templateCenterEntryMode}
           />
         )
@@ -1190,12 +1237,11 @@ export default function App() {
         return (
           <AcquisitionClaimPage
             stores={workspace.stores}
-            templates={workspace.templates}
             claimCandidates={workspace.claimCandidates}
             busy={busy}
             lastRequest={visibleAcquisitionClaimRequest}
             onCreateClaimRequest={(request) => { void createAcquisitionClaimRequest(request) }}
-            onShowDraftEdit={() => setActiveSection('draft_edit_save')}
+            onShowDraftEdit={startNewEditBatch}
             onShowTasks={() => setActiveSection('product_tasks')}
           />
         )
@@ -1223,7 +1269,7 @@ export default function App() {
               void refreshConfigPreview(taskId)
             }}
             onShowConfig={() => setActiveSection('edit_config')}
-            onShowDraftEdit={() => setActiveSection('draft_edit_save')}
+            onShowDraftEdit={startNewEditBatch}
             onShowConsole={() => setActiveSection('start_save')}
             onShowReports={() => setActiveSection('results')}
           />
@@ -1232,27 +1278,45 @@ export default function App() {
         return (
           <BatchRecordsPage
             initialBatchId={activeEditBatchId}
-            onCreateBatch={() => {
-              setActiveEditBatchId(null)
-              setActiveSection('draft_edit_save')
-            }}
-            onOpenBatch={(batchId) => {
-              setActiveEditBatchId(batchId)
-              setActiveSection('draft_edit_save')
-            }}
+            onCreateBatch={startNewEditBatch}
+            onOpenBatch={openBatchForApproval}
           />
         )
       case 'draft_edit_save':
         return (
           <BatchEditPage
+            stores={workspace.stores}
             templates={workspace.templates}
+            scopeSnapshot={activeScopeSnapshot}
             initialBatchId={activeEditBatchId}
-            onBatchSelected={setActiveEditBatchId}
+            activeExecution={runningEditBatch
+              ? { kind: 'batch', id: runningEditBatch.id, label: `批次 #${runningEditBatch.id}` }
+              : runningMutationTask
+                ? { kind: 'task', id: runningMutationTask.id, label: `真实任务 #${runningMutationTask.id}` }
+                : null}
+            batchStateAvailable={editBatchStateAvailable}
+            dxmReady={Boolean(runtimeStatus && DXM_READY_SESSION_STATUSES.has(runtimeStatus.dxmLogin.status))}
+            diagnosticBrowserActive={runtimeStatus?.agentConsole?.active === true}
+            onScopeSnapshotChange={setActiveScopeSnapshot}
+            onBatchSelected={(batchId) => {
+              setActiveEditBatchId(batchId)
+              if (batchId) {
+                setActiveScopeSnapshot(null)
+                void refreshWorkspace({ silent: true })
+              }
+            }}
             onShowTemplates={() => {
               setTemplateCenterEntryMode('batch_bundle')
               setActiveSection('template_center')
             }}
-            onShowRecords={() => setActiveSection('task_history')}
+            onShowRecords={(batchId) => {
+              showBatchRecords(batchId)
+              void refreshWorkspace({ silent: true })
+            }}
+            onShowDxmAccess={() => setActiveSection('dxm_access')}
+            onShowConsole={() => setActiveSection('start_save')}
+            onShowTasks={() => setActiveSection('product_tasks')}
+            onRefreshStatus={() => { void refreshWorkspace(); void refreshRuntimeStatus() }}
           />
         )
       case 'start_save':
@@ -1312,15 +1376,13 @@ export default function App() {
             editBatches={editBatches}
             selectedTask={selectedTask}
             onShowTasks={() => setActiveSection('product_tasks')}
-            onShowDraftEdit={() => {
-              setActiveEditBatchId(null)
-              setActiveSection('draft_edit_save')
-            }}
-            onShowBatchRecords={(batchId) => { setActiveEditBatchId(batchId ?? null); setActiveSection('task_history') }}
+            onShowDraftEdit={startNewEditBatch}
+            onShowBatchRecords={showBatchRecords}
+            onOpenBatch={openBatchForApproval}
           />
         )
       case 'results':
-        return <ReportCenter workspace={workspace} editBatches={editBatches} selectedTask={selectedTask} finalCheck={finalCheck} onShowDraftEdit={() => { setActiveEditBatchId(null); setActiveSection('draft_edit_save') }} onShowBatchRecords={(batchId) => { setActiveEditBatchId(batchId ?? null); setActiveSection('task_history') }} onShowEvidence={() => setActiveSection('evidence')} onShowTasks={() => setActiveSection('product_tasks')} onShowExceptions={() => setActiveSection('issues')} />
+        return <ReportCenter workspace={workspace} editBatches={editBatches} selectedTask={selectedTask} finalCheck={finalCheck} onShowDraftEdit={startNewEditBatch} onShowBatchRecords={showBatchRecords} onOpenBatch={openBatchForApproval} onShowEvidence={() => setActiveSection('evidence')} onShowTasks={() => setActiveSection('product_tasks')} onShowExceptions={() => setActiveSection('issues')} />
       case 'help':
         return (
           <HelpPage
@@ -1329,8 +1391,8 @@ export default function App() {
             onShowDxmAccess={() => setActiveSection('dxm_access')}
             onShowAcquisition={() => setActiveSection('acquisition_claim')}
             onShowTasks={() => setActiveSection('product_tasks')}
-            onShowDraftEdit={() => { setActiveEditBatchId(null); setActiveSection('draft_edit_save') }}
-            onShowBatchRecords={() => { setActiveEditBatchId(null); setActiveSection('task_history') }}
+            onShowDraftEdit={startNewEditBatch}
+            onShowBatchRecords={() => showBatchRecords()}
             onShowResults={() => setActiveSection('results')}
             onShowIssues={() => setActiveSection('issues')}
           />
@@ -1346,13 +1408,11 @@ export default function App() {
             selectedTask={selectedTask}
             runtimeStatus={runtimeStatus}
             onShowDxmAccess={() => setActiveSection('dxm_access')}
-            onShowDraftEdit={() => {
-              setActiveEditBatchId(null)
-              setActiveSection('draft_edit_save')
-            }}
+            onShowDraftEdit={startNewEditBatch}
             onShowTasks={() => setActiveSection('product_tasks')}
             onShowConsole={() => setActiveSection('start_save')}
-            onShowBatchRecords={(batchId) => { setActiveEditBatchId(batchId ?? null); setActiveSection('task_history') }}
+            onShowBatchRecords={showBatchRecords}
+            onOpenBatch={openBatchForApproval}
           />
         )
     }

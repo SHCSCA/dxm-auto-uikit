@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hmac
 import re
 from collections.abc import Mapping
 from typing import Any
@@ -113,8 +112,6 @@ class EditBatchBundleComposer:
                 template = _decode_template(row)
                 snapshot = source_template_snapshot(template)
                 digest = canonical_sha256(snapshot)
-                if not hmac.compare_digest(digest, str(selection["source_digest"]).upper()):
-                    _reject("TEMPLATE_SOURCE_DIGEST_DRIFT", f"source template {section} digest changed")
                 if template["is_enabled"] is not True:
                     _reject("TEMPLATE_SOURCE_DISABLED", f"source template {section} is disabled")
                 if template.get("requires_manual_configuration") is True:
@@ -197,6 +194,11 @@ class EditBatchBundleComposer:
                     and existing_binding.get("category_name") == category
                 ):
                     if canonical_sha256(existing_payload) == canonical_sha256(payload):
+                        if existing.get("requires_manual_configuration") is True:
+                            _reject(
+                                "TEMPLATE_BUNDLE_REQUIRES_MANUAL_CONFIGURATION",
+                                "matching bundle remains quarantined until its payload is substantively changed",
+                            )
                         reactivated = existing["is_enabled"] is not True
                         if reactivated:
                             conn.execute(
@@ -253,7 +255,6 @@ class EditBatchBundleComposer:
             "template_name": template["template_name"],
             "template_type": template["template_type"],
             "binding_scope": template["binding_scope"],
-            "source_digest": canonical_sha256(snapshot),
             "missing_fields": list(dict.fromkeys(missing)),
             "ready": not missing,
         }

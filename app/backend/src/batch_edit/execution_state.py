@@ -319,7 +319,7 @@ def normalize_item_grant_for_storage(
     expires_at = _timestamp(value.get("expires_at"), "grant expires_at")
     if (
         issued_at >= expires_at
-        or (expires_at - issued_at).total_seconds() > BATCH_ITEM_GRANT_TTL_SECONDS
+        or (expires_at - issued_at).total_seconds() != BATCH_ITEM_GRANT_TTL_SECONDS
     ):
         _reject("ITEM_GRANT_INTERVAL_INVALID", "item grant interval is invalid")
     _sha256_text(value.get("nonce_hash"), "grant nonce hash")
@@ -358,7 +358,11 @@ def normalize_item_grant_consumption_for_storage(
     consumed = _timestamp(consumed_at, "grant consumed_at")
     issued_at = _timestamp(stored_grant.get("issued_at"), "grant issued_at")
     expires_at = _timestamp(stored_grant.get("expires_at"), "grant expires_at")
-    if issued_at >= expires_at:
+    if (
+        issued_at >= expires_at
+        or (expires_at - issued_at).total_seconds()
+        != BATCH_ITEM_GRANT_TTL_SECONDS
+    ):
         _reject("ITEM_GRANT_INTERVAL_INVALID", "item grant interval is invalid")
     if consumed < issued_at:
         _reject("ITEM_GRANT_NOT_YET_VALID", "item grant is not yet valid")
@@ -425,7 +429,7 @@ def validate_execution_item_grant_consumption(
         _reject("ITEM_GRANT_NOT_YET_VALID", "item grant is not yet valid")
     if current >= expires_at:
         _reject("ITEM_GRANT_EXPIRED", "item grant has expired")
-    if (expires_at - issued_at).total_seconds() > BATCH_ITEM_GRANT_TTL_SECONDS:
+    if (expires_at - issued_at).total_seconds() != BATCH_ITEM_GRANT_TTL_SECONDS:
         _reject("ITEM_GRANT_INTERVAL_INVALID", "item grant interval is invalid")
     _timestamp(canonical_grant.get("approval_expires_at"), "approval expires_at")
     return validate_and_consume_item_grant(

@@ -15,6 +15,7 @@ type TemplateCenterPageProps = {
   onRefreshConfigPreview: () => void | Promise<void>
   onShowDraftEdit: () => void
   onShowDxmAccess: () => void
+  batchScopeStoreName?: string | null
   initialMode?: TemplateCenterMode
 }
 
@@ -110,6 +111,7 @@ export function TemplateCenterPage({
   onRefreshConfigPreview,
   onShowDraftEdit,
   onShowDxmAccess,
+  batchScopeStoreName,
   initialMode = 'sections',
 }: TemplateCenterPageProps) {
   const [templateCenterMode, setTemplateCenterMode] = useState<TemplateCenterMode>(initialMode)
@@ -360,6 +362,7 @@ export function TemplateCenterPage({
         <BatchTemplateComposer
           workspace={workspace}
           selectedTask={selectedTask}
+          preferredBatchStoreName={batchScopeStoreName}
           onBundleCreated={onConfigSaved}
           onEditSection={(section) => {
             setActiveSectionId(section)

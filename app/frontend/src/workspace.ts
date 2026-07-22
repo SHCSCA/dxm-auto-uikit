@@ -243,7 +243,7 @@ function buildRegressionGates(
       status: hasSave && hasProof ? 'passed' : 'approval_required',
       evidenceLevel: hasSave && hasProof && hasNetwork ? 'A' : hasSave && hasProof ? 'B' : (grade?.grade ?? 'C'),
       requiresApproval: true,
-      command: 'single_save with manual approval token',
+      command: '单商品只保存（人工批准）',
       detail: hasSave && hasProof ? '已有保存结果和未发布证明。' : '真实写操作必须由用户批准，只保存不发布。',
     },
   ]
@@ -437,11 +437,8 @@ function normalizeClaimCandidate(value: unknown): ClaimCandidate {
   const storeAccount = stringOr(item.storeAccount ?? item.store_account, '')
   const createdAt = stringOr(item.createdAt ?? item.created_at, '')
   const categoryHint = stringOr(item.categoryHint ?? item.category_hint, '')
-  const textExcerpt = stringOr(item.textExcerpt ?? item.text_excerpt, '')
-  const runId = stringOr(item.runId ?? item.run_id, '')
-  const capturedAt = stringOr(item.capturedAt ?? item.captured_at, '')
   return {
-    id: stringOr(item.id, `${sourceUrl || title}-${createdAt || runId || 'candidate'}`),
+    id: stringOr(item.id, `${sourceUrl || title}-${createdAt || 'candidate'}`),
     title,
     source: stringOr(item.source, ''),
     sourceUrl,
@@ -452,13 +449,6 @@ function normalizeClaimCandidate(value: unknown): ClaimCandidate {
     created_at: createdAt,
     categoryHint,
     category_hint: categoryHint,
-    textExcerpt,
-    text_excerpt: textExcerpt,
-    runId,
-    run_id: runId,
-    capturedAt,
-    captured_at: capturedAt,
-    readonly: item.readonly !== false,
   }
 }
 

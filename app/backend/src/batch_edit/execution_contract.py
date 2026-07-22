@@ -425,7 +425,7 @@ def validate_and_consume_item_grant(
     _timestamp(canonical_grant["approval_expires_at"], "approval expires_at")
     issued_at = _timestamp(canonical_grant["issued_at"], "grant issued_at")
     expires_at = _timestamp(canonical_grant["expires_at"], "grant expires_at")
-    if issued_at >= expires_at or (expires_at - issued_at).total_seconds() > ITEM_GRANT_TTL_SECONDS:
+    if issued_at >= expires_at or (expires_at - issued_at).total_seconds() != ITEM_GRANT_TTL_SECONDS:
         _reject("GRANT_INTERVAL_INVALID", "item grant interval is invalid")
     if current_time < issued_at:
         _reject("GRANT_NOT_YET_VALID", "item grant has not started")

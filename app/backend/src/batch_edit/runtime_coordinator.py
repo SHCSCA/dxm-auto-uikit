@@ -284,7 +284,10 @@ class BatchExecutionRuntime:
                         claim_context,
                     )
                 except Exception as exc:
-                    current = self._private_batch(batch_id)
+                    try:
+                        current = self._private_batch(batch_id)
+                    except Exception:
+                        current = {}
                     if current.get("status") == "stop_requested":
                         reason_code = "OPERATOR_STOPPED"
                         detail = "操作员已停止批次；系统正在保存边界完成零写入或不确定性判定。"
@@ -365,9 +368,19 @@ class BatchExecutionRuntime:
         if (
             command.state != "SAVE_ONLY"
             or command.action != "save_only"
+            or command.command_id != active.get("command_id")
+            or command.runtime_id != active.get("runtime_id")
+            or command.target_hash != active.get("target_hash")
+            or command.stage_task_facts_fingerprint
+            != active.get("stage_task_facts_fingerprint")
+            or str(command.task_id) != str(grant.get("batch_id"))
+            or str(command.job_id) != str(grant.get("item_id"))
+            or command.runtime_id != str(self._browser_agent_runtime.runtime_id)
             or command.mutation_scope_id != grant.get("mutation_scope_id")
             or command.authorization_fingerprint != grant.get("fingerprint")
             or command.authorization_lease_id != grant.get("grant_lease_id")
+            or command.stage_task_facts_fingerprint
+            != self._stage_task_facts_fingerprint(grant)
         ):
             return {"ok": False, "reason_code": "BATCH_GRANT_COMMAND_DRIFT"}
         mutation_action = (
@@ -588,7 +601,16 @@ class BatchExecutionRuntime:
             raise
         lease_id = str(grant["grant_lease_id"])
         with self._active_lock:
-            self._active_grants[lease_id] = {"grant": grant, "nonce": nonce}
+            self._active_grants[lease_id] = {
+                "grant": grant,
+                "nonce": nonce,
+                "command_id": save_command.command_id,
+                "runtime_id": save_command.runtime_id,
+                "target_hash": save_command.target_hash,
+                "stage_task_facts_fingerprint": (
+                    save_command.stage_task_facts_fingerprint
+                ),
+            }
         try:
             save = self._run_browser_step(
                 batch_id,
@@ -1067,8 +1089,23 @@ class BatchExecutionRuntime:
             != command.authorization_lease_id
             or entry.get("authorization_fingerprint")
             != command.authorization_fingerprint
+            or entry.get("stage_task_facts_fingerprint")
+            != command.stage_task_facts_fingerprint
+            or entry.get("target_hash") != command.target_hash
             or entry.get("command_id") != command.command_id
             or entry.get("runtime_id") != command.runtime_id
+            or entry.get("outcome") is not None
+            or any(
+                entry.get(key) is not None
+                for key in (
+                    "dispatch_started_at",
+                    "dispatched_at",
+                    "unknown_at",
+                    "browser_session_id",
+                    "page_url",
+                    "page_kind",
+                )
+            )
         ):
             raise BatchRuntimeError(
                 "MUTATION_LEDGER_RESERVATION_UNPROVEN",
@@ -1101,16 +1138,36 @@ class BatchExecutionRuntime:
             if isinstance(result, Mapping)
             else getattr(result, "ok", False) is True
         )
-        if accepted:
-            return
         entry = self._mutation_ledger.get_entry(
             str(command.mutation_scope_id or ""),
             "save_only_click",
         )
-        if isinstance(entry, Mapping) and entry.get("status") == "CANCELLED_BEFORE_DISPATCH":
+        cancellation = entry.get("outcome") if isinstance(entry, Mapping) else None
+        if (
+            isinstance(entry, Mapping)
+            and entry.get("status") == "CANCELLED_BEFORE_DISPATCH"
+            and entry.get("mutation_scope_id") == command.mutation_scope_id
+            and entry.get("mutation_action") == "save_only_click"
+            and entry.get("command_id") == command.command_id
+            and entry.get("runtime_id") == command.runtime_id
+            and entry.get("stage_task_facts_fingerprint")
+            == command.stage_task_facts_fingerprint
+            and entry.get("target_hash") == command.target_hash
+            and entry.get("dispatch_started_at") is None
+            and entry.get("dispatched_at") is None
+            and entry.get("unknown_at") is None
+            and isinstance(cancellation, Mapping)
+            and cancellation.get("classification")
+            == "CANCELLED_BEFORE_DISPATCH"
+            and cancellation.get("external_dispatch_started") is False
+        ):
             return
         raise BatchRuntimeError(
-            _result_reason(result, "MUTATION_LEDGER_CANCEL_UNCERTAIN"),
+            (
+                "MUTATION_LEDGER_CANCEL_UNCERTAIN"
+                if accepted
+                else _result_reason(result, "MUTATION_LEDGER_CANCEL_UNCERTAIN")
+            ),
             "停止发生在保存派发边界，账本无法证明零点击；请人工核对。",
             manual_review=True,
         )
@@ -1139,16 +1196,8 @@ class BatchExecutionRuntime:
                 "target_hash": mutation_target_hash("save_only", params),
                 "authorization_fingerprint": grant["fingerprint"],
                 "authorization_lease_id": grant["grant_lease_id"],
-                "stage_task_facts_fingerprint": canonical_sha256(
-                    {
-                        "batch_id": batch_id,
-                        "item_id": item_id,
-                        "scope_digest": grant["scope_digest"],
-                        "template_digest": grant["template_digest"],
-                        "policy_digest": grant["policy_digest"],
-                        "target_identity_sha256": grant["target_identity_sha256"],
-                        "grant_fingerprint": grant["fingerprint"],
-                    }
+                "stage_task_facts_fingerprint": self._stage_task_facts_fingerprint(
+                    grant
                 ),
             }
         now = datetime.now(timezone.utc)
@@ -1167,6 +1216,20 @@ class BatchExecutionRuntime:
             params=params,
             step_label=step.label,
             **mutation_fields,
+        )
+
+    @staticmethod
+    def _stage_task_facts_fingerprint(grant: Mapping[str, Any]) -> str:
+        return canonical_sha256(
+            {
+                "batch_id": grant.get("batch_id"),
+                "item_id": grant.get("item_id"),
+                "scope_digest": grant.get("scope_digest"),
+                "template_digest": grant.get("template_digest"),
+                "policy_digest": grant.get("policy_digest"),
+                "target_identity_sha256": grant.get("target_identity_sha256"),
+                "grant_fingerprint": grant.get("fingerprint"),
+            }
         )
 
     def _bundle_defaults(self, batch: Mapping[str, Any]) -> dict[str, Any]:

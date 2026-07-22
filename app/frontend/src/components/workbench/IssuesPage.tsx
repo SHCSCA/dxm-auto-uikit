@@ -9,14 +9,15 @@ type IssuesPageProps = {
   onShowTasks: () => void
   onShowDraftEdit: () => void
   onShowBatchRecords: (batchId?: number) => void
+  onOpenBatch: (batchId: number) => void
 }
 
 const READONLY_PRECHECK_CTA = '运行保存前安全检查'
 const l3PostEvidenceGapIds = new Set(['gap-save-result', 'gap-unpublished-proof', 'gap-network-save-response'])
 
-export function IssuesPage({ workspace, editBatches, selectedTask, onShowTasks, onShowDraftEdit, onShowBatchRecords }: IssuesPageProps) {
+export function IssuesPage({ workspace, editBatches, selectedTask, onShowTasks, onShowDraftEdit, onShowBatchRecords, onOpenBatch }: IssuesPageProps) {
   if (editBatches.length) {
-    return <ControlledBatchIssues batches={editBatches} onShowDraftEdit={onShowDraftEdit} onShowBatchRecords={onShowBatchRecords} />
+    return <ControlledBatchIssues batches={editBatches} onShowDraftEdit={onShowDraftEdit} onShowBatchRecords={onShowBatchRecords} onOpenBatch={onOpenBatch} />
   }
   if (!selectedTask && workspace.exceptions.length === 0) {
     return (
@@ -75,12 +76,15 @@ function ControlledBatchIssues({
   batches,
   onShowDraftEdit,
   onShowBatchRecords,
+  onOpenBatch,
 }: {
   batches: EditBatchSummary[]
   onShowDraftEdit: () => void
   onShowBatchRecords: (batchId?: number) => void
+  onOpenBatch: (batchId: number) => void
 }) {
   const active = batches.find((batch) => batch.status === 'running' || batch.status === 'stop_requested') ?? null
+  const draft = batches.find((batch) => batch.status === 'draft') ?? null
   const reviewBatches = batches.filter((batch) => batch.execution.manual_review_required)
   const latestSafeStopped = batches.find((batch) => (batch.progress.stopped_before_save_no_write ?? 0) > 0 && !batch.execution.manual_review_required) ?? null
   const hasIssues = reviewBatches.length > 0
@@ -92,11 +96,17 @@ function ControlledBatchIssues({
           : '当前没有需要人工处理的问题；继续观察严格串行进度。',
         onClick: () => onShowBatchRecords((hasIssues ? reviewBatches[0] : active)?.id),
       }
-    : {
-        label: '创建下一批',
-        detail: '当前没有待处理问题，可以重新读取真实商品箱范围。',
-        onClick: onShowDraftEdit,
-      }
+    : draft
+      ? {
+          label: '继续批准批次',
+          detail: '当前没有待处理问题；核对已冻结范围后，一次批准并启动严格串行执行。',
+          onClick: () => onOpenBatch(draft.id),
+        }
+      : {
+          label: '创建下一批',
+          detail: '当前没有待处理问题，可以重新读取真实商品箱范围。',
+          onClick: onShowDraftEdit,
+        }
 
   return (
     <section className="module-layout" aria-label="结果与问题">
@@ -127,12 +137,14 @@ function ControlledBatchIssues({
           </div>
         ) : (
           <EmptyState
-            title={active ? '当前没有待处理问题' : latestSafeStopped ? '保存前安全停止无需对账' : '最近批次没有待处理问题'}
+            title={active ? '当前没有待处理问题' : draft ? '当前草稿暂无问题' : latestSafeStopped ? '保存前安全停止无需对账' : '最近批次没有待处理问题'}
             detail={active
               ? '批次仍在严格串行执行；出现不确定结果时会自动停止并进入这里。'
-              : latestSafeStopped
-                ? `批次 #${latestSafeStopped.id} 有 ${latestSafeStopped.progress.stopped_before_save_no_write ?? 0} 件在保存前安全停止，未发生写入，无需人工对账。`
-                : '历史记录来自真实后端，未生成任何演示问题。'}
+              : draft
+                ? `批次 #${draft.id} 的范围与模板已冻结，尚未执行任何商品。`
+                : latestSafeStopped
+                  ? `批次 #${latestSafeStopped.id} 有 ${latestSafeStopped.progress.stopped_before_save_no_write ?? 0} 件在保存前安全停止，未发生写入，无需人工对账。`
+                  : '历史记录来自真实后端，未生成任何演示问题。'}
           />
         )}
       </article>

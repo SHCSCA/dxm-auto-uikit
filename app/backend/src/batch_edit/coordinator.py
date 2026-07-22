@@ -170,7 +170,10 @@ class BatchEditCoordinator:
             "approvedBy": approval["approved_by"],
             "issuedAt": approval["issued_at"],
             "expiresAt": approval["expires_at"],
-            "scopeRevalidation": approval["scope_revalidation"],
+            "scopeRevalidation": {
+                "status": approval["scope_revalidation"].get("status"),
+                "capturedAt": approval["scope_revalidation"].get("captured_at"),
+            },
         }
 
     def prepare_approval(

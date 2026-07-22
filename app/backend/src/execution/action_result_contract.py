@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Mapping
@@ -437,6 +438,336 @@ def _validate_evidence_refs(
         )
 
 
+def _required_mapping(value: Any, field: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or not value:
+        _reject(f"{field} must be a non-empty mapping")
+    return dict(value)
+
+
+def _required_positive_count(value: Any, field: str) -> int:
+    if type(value) is not int or value <= 0:
+        _reject(f"{field} must be a positive integer")
+    return value
+
+
+def _required_sha256(value: Any, field: str) -> str:
+    digest = _non_empty_string(value, field)
+    if not _SHA256_PATTERN.fullmatch(digest):
+        _reject(f"{field} must be 64 hexadecimal characters")
+    return digest.casefold()
+
+
+def _canonical_mapping_sha256(value: Mapping[str, Any], field: str) -> str:
+    try:
+        encoded = json.dumps(
+            dict(value),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        _reject(f"{field} must be canonical JSON")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _validate_integrity_snapshot(value: Any, field: str) -> dict[str, Any]:
+    snapshot = _required_mapping(value, field)
+    if snapshot.get("ok") is not True:
+        _reject(f"{field}.ok must be true")
+    if snapshot.get("kind") != "structured_nonempty_form_state":
+        _reject(f"{field}.kind must identify structured non-empty form state")
+    field_count = _required_positive_count(snapshot.get("field_count"), f"{field}.field_count")
+    nonempty_count = _required_positive_count(
+        snapshot.get("nonempty_field_count"), f"{field}.nonempty_field_count"
+    )
+    if field_count != nonempty_count:
+        _reject(f"{field} must contain only non-empty captured fields")
+    _required_sha256(snapshot.get("sha256"), f"{field}.sha256")
+    return snapshot
+
+
+def _validate_save_network_receipt(value: Any, field: str) -> dict[str, Any]:
+    receipt = _required_mapping(value, field)
+    if receipt.get("ok") is not True or receipt.get("receipt_complete") is not True:
+        _reject(f"{field} must be a complete successful receipt")
+    if type(receipt.get("receipt_count")) is not int or receipt.get("receipt_count") != 1:
+        _reject(f"{field}.receipt_count must be exactly one")
+    try:
+        parsed = urlsplit(_non_empty_string(receipt.get("url"), f"{field}.url"))
+    except ValueError:
+        _reject(f"{field}.url must be a valid URL")
+    hostname = str(parsed.hostname or "").casefold()
+    if hostname != "dianxiaomi.com" and not hostname.endswith(".dianxiaomi.com"):
+        _reject(f"{field}.url must use the controlled DXM origin")
+    if str(parsed.path or "").casefold() not in {
+        "/api/popchoiceproduct/add.json",
+        "/api/smtproduct/add.json",
+    }:
+        _reject(f"{field}.url must be an exact supported SAVE endpoint")
+    if str(receipt.get("method") or "").upper() != "POST":
+        _reject(f"{field}.method must be POST")
+    status = receipt.get("status")
+    if type(status) is not int or not 200 <= status < 300:
+        _reject(f"{field}.status must be a 2xx integer")
+    if receipt.get("code") not in (0, "0"):
+        _reject(f"{field}.code must be zero")
+    message = _non_empty_string(
+        receipt.get("message") or receipt.get("msg"), f"{field}.message"
+    )
+    if not any(term in message for term in ("保存成功", "编辑保存成功", "编辑成功")):
+        _reject(f"{field}.message must contain a structured SAVE success term")
+    return receipt
+
+
+def _validate_save_success_semantics(envelope: Mapping[str, Any]) -> None:
+    before = dict(envelope["before_values"])
+    after = dict(envelope["after_values"])
+    observations = dict(envelope["evidence"]["observations"])
+    save = _required_mapping(observations.get("save_result"), "evidence.observations.save_result")
+
+    if save.get("ok") is not True or save.get("published") is not False:
+        _reject("SAVE success requires save_result ok=true and published=false")
+    if save.get("exact_save_target") is not True:
+        _reject("SAVE success requires an exact SAVE target")
+    if save.get("save_click_dispatched") is not True or save.get("clicked") is not True:
+        _reject("SAVE success requires one dispatched SAVE click")
+    if save.get("publish_action_clicked") is not False:
+        _reject("SAVE success requires publish_action_clicked=false")
+    if str(save.get("text") or "") != "保存" or save.get("exact_save_count") != 1:
+        _reject("SAVE success requires exactly one visible button labelled 保存")
+    if save.get("click_method") not in {"native_exact_save", "dom_exact_save"}:
+        _reject("SAVE success requires an approved exact-save click method")
+
+    authorization = _required_mapping(
+        save.get("mutation_authorization"), "save_result.mutation_authorization"
+    )
+    if (
+        authorization.get("ok") is not True
+        or authorization.get("executed") is not True
+        or authorization.get("mutation_action") != "save_only_click"
+        or authorization.get("mutation_status") != "DISPATCHED"
+    ):
+        _reject("SAVE success requires the exact consumed mutation authorization")
+    _non_empty_string(
+        authorization.get("mutation_id"), "save_result.mutation_authorization.mutation_id"
+    )
+
+    pre_dispatch = _required_mapping(
+        save.get("pre_dispatch_readback"), "save_result.pre_dispatch_readback"
+    )
+    if (
+        pre_dispatch.get("ok") is not True
+        or pre_dispatch.get("required_readback_complete") is not True
+        or pre_dispatch.get("write_attempted") is not False
+        or pre_dispatch.get("phase") != "before_ledger_begin_dispatch"
+    ):
+        _reject("SAVE success requires a complete zero-write pre-dispatch readback")
+    identity = _required_mapping(
+        pre_dispatch.get("identity"), "save_result.pre_dispatch_readback.identity"
+    )
+    if any(
+        identity.get(key) is not True
+        for key in (
+            "ok",
+            "product_identity_match",
+            "store_identity_match",
+            "source_identity_match",
+        )
+    ):
+        _reject("SAVE success requires exact product, store, and source identity")
+    frozen_target = _required_mapping(
+        before.get("target_identity"), "before_values.target_identity"
+    )
+    if identity.get("target_identity") != frozen_target:
+        _reject("SAVE pre-dispatch identity must equal the frozen command target")
+    expected_store = " ".join(str(before.get("store_name") or "").split())
+    if not expected_store or " ".join(str(identity.get("expected_store_name") or "").split()) != expected_store:
+        _reject("SAVE pre-dispatch store must equal the frozen command store")
+    identity_digest = _required_sha256(
+        identity.get("target_identity_sha256"),
+        "save_result.pre_dispatch_readback.identity.target_identity_sha256",
+    )
+    if identity_digest != _canonical_mapping_sha256(
+        frozen_target, "before_values.target_identity"
+    ):
+        _reject("SAVE pre-dispatch target digest must match the frozen command target")
+    baseline = _validate_integrity_snapshot(
+        pre_dispatch.get("baseline_field_integrity"),
+        "save_result.pre_dispatch_readback.baseline_field_integrity",
+    )
+    current = _validate_integrity_snapshot(
+        pre_dispatch.get("current_field_integrity"),
+        "save_result.pre_dispatch_readback.current_field_integrity",
+    )
+    for key in ("kind", "field_count", "nonempty_field_count", "sha256"):
+        if baseline.get(key) != current.get(key):
+            _reject("SAVE form state changed after required-field readback")
+
+    network = _validate_save_network_receipt(
+        save.get("network_save_result"), "save_result.network_save_result"
+    )
+    audit = _required_mapping(save.get("network_audit"), "save_result.network_audit")
+    if (
+        audit.get("complete") is not True
+        or audit.get("window_closed") is not True
+        or type(audit.get("registered_listener_count")) is not int
+        or audit.get("registered_listener_count") != 2
+        or type(audit.get("removed_listener_count")) is not int
+        or audit.get("removed_listener_count") != 2
+        or type(audit.get("mutation_request_count")) is not int
+        or audit.get("mutation_request_count") != 1
+        or type(audit.get("save_request_count")) is not int
+        or audit.get("save_request_count") != 1
+        or type(audit.get("other_mutation_request_count")) is not int
+        or audit.get("other_mutation_request_count") != 0
+        or type(audit.get("publish_request_count")) is not int
+        or audit.get("publish_request_count") != 0
+    ):
+        _reject("SAVE success requires one exact SAVE request and a closed zero-publish audit")
+    publish_signal = _required_mapping(
+        save.get("publish_signal"), "save_result.publish_signal"
+    )
+    if (
+        publish_signal.get("detected") is not False
+        or publish_signal.get("kind") != "network_route_classification"
+    ):
+        _reject("SAVE success requires an explicit zero-publish network classification")
+
+    page = _required_mapping(save.get("page_save_result"), "save_result.page_save_result")
+    transition = _required_mapping(
+        page.get("status_transition"), "save_result.page_save_result.status_transition"
+    )
+    if (
+        page.get("ok") is not True
+        or transition.get("kind") != "new_or_changed_structured_save_status"
+        or not isinstance(transition.get("entry"), Mapping)
+        or not transition.get("entry")
+    ):
+        _reject("SAVE success requires a new or changed structured page status")
+    _non_empty_string(page.get("success_text"), "save_result.page_save_result.success_text")
+    decision = _required_mapping(save.get("save_decision"), "save_result.save_decision")
+    if decision != {
+        "ok": True,
+        "rule": "page_success_and_network_success",
+        "page_ok": True,
+        "network_ok": True,
+        "network_receipt_ok": True,
+        "network_audit_ok": True,
+    }:
+        _reject("SAVE decision must bind page, receipt, and network audit success")
+    if save.get("network_save_success") is not True or save.get("page_save_success") is not True:
+        _reject("SAVE result must preserve both independent success signals")
+
+    exact_target = _required_mapping(
+        observations.get("exact_save_target"), "evidence.observations.exact_save_target"
+    )
+    if exact_target != {
+        "text": "保存",
+        "exact_save_count": 1,
+        "click_method": save.get("click_method"),
+    }:
+        _reject("SAVE observations must preserve the exact click target")
+    if observations.get("save_click_dispatched") is not True:
+        _reject("SAVE observations must preserve click dispatch")
+    for key, expected in (
+        ("mutation_authorization", authorization),
+        ("pre_dispatch_readback", pre_dispatch),
+        ("network_save_result", network),
+        ("network_audit", audit),
+        ("publish_signal", publish_signal),
+        ("page_save_result", page),
+    ):
+        if observations.get(key) != expected or after.get(key) != expected:
+            _reject(f"SAVE {key} facts must agree across result, evidence, and readback")
+    if after.get("exact_save_target") is not True or after.get("save_click_dispatched") is not True:
+        _reject("SAVE after_values must preserve the exact dispatched target")
+    if after.get("published") is not False:
+        _reject("SAVE after_values.published must be false")
+
+
+def _validate_unpublished_success_semantics(envelope: Mapping[str, Any]) -> None:
+    after = dict(envelope["after_values"])
+    observations = dict(envelope["evidence"]["observations"])
+    proof = _required_mapping(
+        observations.get("fresh_probe"), "evidence.observations.fresh_probe"
+    )
+    status = "".join(str(proof.get("status_text") or proof.get("publish_status") or "").split())
+    if (
+        proof.get("ok") is not True
+        or proof.get("published") is not False
+        or proof.get("proof_kind") != "structured_unpublished_status"
+        or status not in {"待发布", "草稿", "未发布", "待完善"}
+        or proof.get("verified_on_current_page") is not True
+        or proof.get("status_scope_unique") is not True
+        or type(proof.get("bound_candidate_count")) is not int
+        or proof.get("bound_candidate_count") != 1
+        or type(proof.get("structured_candidate_count")) is not int
+        or proof.get("structured_candidate_count") != 1
+        or proof.get("target_bound") is not True
+        or proof.get("product_matched") is not True
+        or proof.get("store_matched") is not True
+        or proof.get("source_identity_match") is not True
+        or proof.get("identity_binding_kind")
+        != "frozen_target_structured_page_readback"
+        or proof.get("publish_risk_term") not in (None, "")
+    ):
+        _reject("VERIFY_NOT_PUBLISHED requires one target-bound structured unpublished row")
+    _required_sha256(
+        proof.get("target_identity_sha256"), "fresh_probe.target_identity_sha256"
+    )
+    if not _page_url_matches_identity(proof.get("page_url"), "semi_managed"):
+        _reject("VERIFY_NOT_PUBLISHED proof must come from the controlled semi-managed page")
+    identity = _required_mapping(proof.get("identity_readback"), "fresh_probe.identity_readback")
+    if any(
+        identity.get(key) is not True
+        for key in (
+            "product_identity_match",
+            "store_identity_match",
+            "source_identity_match",
+        )
+    ):
+        _reject("VERIFY_NOT_PUBLISHED requires exact product, store, and source readback")
+    observed_target = _required_mapping(
+        observations.get("target_identity"), "evidence.observations.target_identity"
+    )
+    if any(
+        observed_target.get(key) is not True
+        for key in (
+            "product_matched",
+            "store_matched",
+            "source_identity_match",
+            "target_bound",
+        )
+    ):
+        _reject("VERIFY_NOT_PUBLISHED target observation must be exact")
+    observed_target_digest = _required_sha256(
+        observed_target.get("target_identity_sha256"),
+        "evidence.observations.target_identity.target_identity_sha256",
+    )
+    if observed_target_digest != _required_sha256(
+        proof.get("target_identity_sha256"), "fresh_probe.target_identity_sha256"
+    ):
+        _reject("VERIFY_NOT_PUBLISHED target observation digest must match the fresh probe")
+    if observations.get("identity_readback") != identity:
+        _reject("VERIFY_NOT_PUBLISHED identity observations disagree")
+    if after.get("fresh_probe") != proof:
+        _reject("VERIFY_NOT_PUBLISHED readback must preserve the fresh probe")
+    if after.get("target_identity") != observed_target or after.get("identity_readback") != identity:
+        _reject("VERIFY_NOT_PUBLISHED after_values must preserve target identity")
+    if after.get("published") is not False:
+        _reject("VERIFY_NOT_PUBLISHED after_values.published must be false")
+
+
+def _validate_success_evidence_semantics(
+    envelope: Mapping[str, Any], *, state: str
+) -> None:
+    if state == "SAVE_ONLY":
+        _validate_save_success_semantics(envelope)
+    elif state == "VERIFY_NOT_PUBLISHED":
+        _validate_unpublished_success_semantics(envelope)
+
+
 def validate_action_result_envelope(
     value: Mapping[str, Any],
     *,
@@ -547,6 +878,8 @@ def validate_action_result_envelope(
     }:
         _reject("successful actions require recoverability kind=none")
 
+    _validate_success_evidence_semantics(envelope, state=state)
+
     return _json_clone(envelope)
 
 
@@ -576,6 +909,31 @@ def validate_independent_save_verification_pair(
             _reject(
                 f"SAVE and VERIFY_NOT_PUBLISHED page_identity.{identity_field} must match"
             )
+
+    save_observations = save["evidence"]["observations"]
+    verification_observations = verification["evidence"]["observations"]
+    save_pre_dispatch = _required_mapping(
+        save_observations.get("pre_dispatch_readback"),
+        "SAVE evidence.observations.pre_dispatch_readback",
+    )
+    save_identity = _required_mapping(
+        save_pre_dispatch.get("identity"),
+        "SAVE evidence.observations.pre_dispatch_readback.identity",
+    )
+    verification_probe = _required_mapping(
+        verification_observations.get("fresh_probe"),
+        "VERIFY_NOT_PUBLISHED evidence.observations.fresh_probe",
+    )
+    save_target_digest = _required_sha256(
+        save_identity.get("target_identity_sha256"),
+        "SAVE target_identity_sha256",
+    )
+    verification_target_digest = _required_sha256(
+        verification_probe.get("target_identity_sha256"),
+        "VERIFY_NOT_PUBLISHED target_identity_sha256",
+    )
+    if save_target_digest != verification_target_digest:
+        _reject("SAVE and VERIFY_NOT_PUBLISHED target identity digests must match")
 
     save_refs = save["evidence"]["refs"]
     verification_refs = verification["evidence"]["refs"]

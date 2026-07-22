@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
@@ -50,6 +51,12 @@ def normalize_scope_capture(
     runtime_context: dict[str, Any],
     expected_browser_session_id: str,
 ) -> dict[str, Any]:
+    if (
+        isinstance(requested_max_items, bool)
+        or not isinstance(requested_max_items, int)
+        or not 1 <= requested_max_items <= 100
+    ):
+        _reject("SCOPE_ITEMS_INVALID", "requested_max_items must be an integer in 1..100")
     raw = _exact_object(
         capture,
         {
@@ -260,6 +267,8 @@ def _normalize_items(
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
     normalized: list[dict[str, Any]] = []
     fingerprints: set[str] = set()
+    dom_indices: set[int] = set()
+    previous_dom_index = -1
     store_name: str | None = None
     for expected_ordinal, raw_value in enumerate(raw_items, start=1):
         item = _exact_object(
@@ -336,15 +345,42 @@ def _normalize_items(
             "item.store_evidence",
         )
         current_store_name = _non_empty_text(store["store_name"], "store name")
-        _non_empty_text(store["cell_text"], "store cell text")
+        store_cell_text = _non_empty_text(store["cell_text"], "store cell text")
         if store["source"] != "structured_store_cell":
             _reject("SCOPE_STORE_EVIDENCE_INVALID", "store identity is not from the structured store cell")
+        normalized_store = " ".join(current_store_name.split())
+        normalized_cell = " ".join(store_cell_text.split())
+        if re.search(
+            rf"(?:^|[\s:：\u300c]){re.escape(normalized_store)}(?:$|[\s\u300d])",
+            normalized_cell,
+        ) is None:
+            _reject("SCOPE_STORE_EVIDENCE_INVALID", "store cell text does not exactly identify the store")
+        if (
+            isinstance(store["column_index"], bool)
+            or not isinstance(store["column_index"], int)
+            or store["column_index"] < 0
+            or not _non_empty_text(store["tag"], "store cell tag")
+        ):
+            _reject("SCOPE_STORE_EVIDENCE_INVALID", "store cell metadata is invalid")
+        dom_index = store["dom_index"]
+        if (
+            isinstance(dom_index, bool)
+            or not isinstance(dom_index, int)
+            or dom_index < 0
+            or dom_index in dom_indices
+            or dom_index <= previous_dom_index
+        ):
+            _reject("SCOPE_ORDER_INVALID", "scope DOM row indices must be unique and increasing")
+        dom_indices.add(dom_index)
+        previous_dom_index = dom_index
         if store_name is None:
             store_name = current_store_name
         elif store_name != current_store_name:
             _reject("SCOPE_MULTI_STORE_FORBIDDEN", "one edit batch scope must contain exactly one store")
 
         row_text = _non_empty_text(item["row_text_excerpt"], "row text excerpt")
+        if title not in row_text or current_store_name not in row_text:
+            _reject("SCOPE_ITEM_EVIDENCE_INVALID", "row evidence does not contain the exact title and store")
         ref = _exact_object(
             item["evidence_ref"],
             {"kind", "browser_session_id", "page_kind", "page_url", "dom_index", "row_sha256"},
@@ -449,7 +485,7 @@ def _draft_box_url(value: Any) -> str:
     host = (parsed.hostname or "").casefold()
     if parsed.scheme != "https" or not (host == "dianxiaomi.com" or host.endswith(".dianxiaomi.com")):
         _reject("SCOPE_PAGE_INVALID", "scope page is outside dianxiaomi.com")
-    if not parsed.path.rstrip("/").endswith("/web/smt/smtProductList/draft"):
+    if parsed.path.rstrip("/").casefold() != "/web/smt/smtproductlist/draft":
         _reject("SCOPE_PAGE_INVALID", "scope page is not the SMT draft box")
     return text
 

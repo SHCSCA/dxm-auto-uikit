@@ -13,6 +13,7 @@ import type {
 type BatchTemplateComposerProps = {
   workspace: DeliveryWorkspace
   selectedTask: Task | null
+  preferredBatchStoreName?: string | null
   onBundleCreated: () => void | Promise<void>
   onEditSection: (section: EditBatchBundleSectionCode) => void
   onShowDraftEdit: () => void
@@ -79,17 +80,19 @@ const MISSING_FIELD_LABELS: Record<string, string> = {
 export function BatchTemplateComposer({
   workspace,
   selectedTask,
+  preferredBatchStoreName,
   onBundleCreated,
   onEditSection,
   onShowDraftEdit,
   onShowDxmAccess,
 }: BatchTemplateComposerProps) {
-  const [selectedStoreId, setSelectedStoreId] = useState<number | null>(() => preferredStoreId(workspace, selectedTask))
+  const storeLockedToScope = Boolean(String(preferredBatchStoreName ?? '').trim())
+  const [selectedStoreId, setSelectedStoreId] = useState<number | null>(() => preferredStoreId(workspace, selectedTask, preferredBatchStoreName))
   const [templateName, setTemplateName] = useState('整批编辑模板')
   const [version, setVersion] = useState('1.0.0')
   const [options, setOptions] = useState<EditBatchBundleOptions | null>(null)
   const [selectedTemplateIds, setSelectedTemplateIds] = useState<Partial<Record<EditBatchBundleSectionCode, number>>>({})
-  const [optionsLoading, setOptionsLoading] = useState(() => preferredStoreId(workspace, selectedTask) != null)
+  const [optionsLoading, setOptionsLoading] = useState(() => preferredStoreId(workspace, selectedTask, preferredBatchStoreName) != null)
   const [optionsError, setOptionsError] = useState<string | null>(null)
   const [message, setMessage] = useState<ComposerMessage | null>(null)
   const [createdBundle, setCreatedBundle] = useState<Template | null>(null)
@@ -97,9 +100,14 @@ export function BatchTemplateComposer({
   const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
+    const scopedStoreId = preferredStoreId(workspace, null, preferredBatchStoreName)
+    if (storeLockedToScope && selectedStoreId !== scopedStoreId) {
+      setSelectedStoreId(scopedStoreId)
+      return
+    }
     const storeStillExists = selectedStoreId != null && workspace.stores.some((store) => store.id === selectedStoreId)
-    if (!storeStillExists) setSelectedStoreId(preferredStoreId(workspace, selectedTask))
-  }, [selectedStoreId, selectedTask, workspace.stores])
+    if (!storeStillExists) setSelectedStoreId(preferredStoreId(workspace, selectedTask, preferredBatchStoreName))
+  }, [preferredBatchStoreName, selectedStoreId, selectedTask, storeLockedToScope, workspace, workspace.stores])
 
   useEffect(() => {
     if (selectedStoreId == null) {
@@ -123,6 +131,12 @@ export function BatchTemplateComposer({
       void getJson<EditBatchBundleOptions>(`/api/template-center/edit-batch-bundle-options?${params.toString()}`)
         .then((result) => {
           if (cancelled) return
+          if (result.store.id !== selectedStoreId || result.category_name !== null) {
+            setOptions(null)
+            setSelectedTemplateIds({})
+            setOptionsError('候选不是当前店铺的店铺级模板；请重新读取或先完善分区模板。')
+            return
+          }
           setOptions(result)
           setSelectedTemplateIds((current) => defaultSelections(result, current))
         })
@@ -171,17 +185,18 @@ export function BatchTemplateComposer({
       : optionsError
         ? '重新读取候选'
         : selectedStoreId == null
-          ? '先连接真实店铺'
-        : firstIssue
-          ? `编辑「${firstIssue.label}」`
-          : submitting
-            ? '正在生成整批模板'
-            : '生成整批模板'
+          ? storeLockedToScope ? '刷新真实店铺' : '先连接真实店铺'
+          : firstIssue
+            ? `编辑「${firstIssue.label}」`
+            : submitting
+              ? '正在生成整批模板'
+              : '生成整批模板'
   const primaryDisabled = optionsLoading
     || submitting
     || (selectedStoreId != null && !createdBundle && !optionsError && !firstIssue && !canCompose)
 
   function changeStore(value: string) {
+    if (storeLockedToScope) return
     const storeId = Number(value)
     const nextStoreId = Number.isInteger(storeId) && storeId > 0 ? storeId : null
     setSelectedStoreId(nextStoreId)
@@ -237,7 +252,6 @@ export function BatchTemplateComposer({
       }
       sectionTemplates[sectionCode] = {
         template_id: candidate.template_id,
-        source_digest: candidate.source_digest,
       }
     }
 
@@ -284,17 +298,20 @@ export function BatchTemplateComposer({
         <div className="batch-template-composer__fields">
           <label>
             <span>店铺</span>
-            <select value={selectedStoreId ?? ''} onChange={(event) => changeStore(event.target.value)} disabled={!workspace.stores.length}>
+            <select value={selectedStoreId ?? ''} onChange={(event) => changeStore(event.target.value)} disabled={!workspace.stores.length || storeLockedToScope}>
+              {selectedStoreId == null && <option value="">当前现场店铺未连接</option>}
               {workspace.stores.length ? workspace.stores.map((store) => (
                 <option key={store.id} value={store.id}>{store.name}</option>
-              )) : (
+              )) : selectedStoreId != null ? (
                 <option value="">暂无店铺</option>
-              )}
+              ) : null}
             </select>
           </label>
           <span className="batch-template-store-binding">
             <strong>精确店铺绑定</strong>
-            <small>当前商品箱现场没有结构化类目证据，因此整批模板固定按店铺绑定；目标类目由“类目与标题”分区决定。</small>
+            <small>{storeLockedToScope
+              ? `已锁定本次商品箱现场店铺：${preferredBatchStoreName}。`
+              : '当前商品箱现场没有结构化类目证据，因此整批模板固定按店铺绑定；目标类目由“类目与标题”分区决定。'}</small>
           </span>
           <label>
             <span>整批模板名称</span>
@@ -400,12 +417,19 @@ export function BatchTemplateComposer({
   )
 }
 
-function preferredStoreId(workspace: DeliveryWorkspace, selectedTask: Task | null) {
+function preferredStoreId(workspace: DeliveryWorkspace, selectedTask: Task | null, preferredBatchStoreName?: string | null) {
+  const batchStoreName = String(preferredBatchStoreName ?? '').trim()
+  const batchStore = workspace.stores.find((store) => normalizeStoreName(store.name) === normalizeStoreName(batchStoreName))
+  if (batchStoreName) return batchStore?.id ?? null
   const taskStoreId = selectedTask?.store_id
   if (taskStoreId != null && workspace.stores.some((store) => store.id === taskStoreId)) return taskStoreId
   const taskStoreName = String(selectedTask?.payload?.store_name ?? '').trim()
   const taskStore = workspace.stores.find((store) => store.name === taskStoreName)
   return taskStore?.id ?? workspace.stores[0]?.id ?? null
+}
+
+function normalizeStoreName(value: string) {
+  return value.trim().toLocaleLowerCase('zh-CN')
 }
 
 function readyCandidates(section: EditBatchBundleSectionOptions | undefined) {

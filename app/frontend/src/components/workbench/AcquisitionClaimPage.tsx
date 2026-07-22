@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { validateSourceProductUrl } from '../../sourceUrl'
-import type { AcquisitionClaimCreateRequest, AcquisitionClaimResponse, ClaimCandidate, Store, Template } from '../../types'
+import type { AcquisitionClaimCreateRequest, AcquisitionClaimResponse, ClaimCandidate, Store } from '../../types'
 
 type AcquisitionClaimPageProps = {
   stores: Store[]
-  templates: Template[]
   claimCandidates: ClaimCandidate[]
   busy: boolean
   lastRequest: AcquisitionClaimResponse | null
@@ -22,7 +21,6 @@ const claimSteps = [
 
 export function AcquisitionClaimPage({
   stores,
-  templates,
   claimCandidates,
   busy,
   lastRequest,
@@ -36,12 +34,10 @@ export function AcquisitionClaimPage({
   const [sourceUrl, setSourceUrl] = useState('')
   const [categoryName, setCategoryName] = useState('')
   const [claimMark, setClaimMark] = useState('AI-OPS')
-  const [templateId, setTemplateId] = useState('')
   const selectedStore = useMemo(
     () => stores.find((store) => String(store.id) === storeId) ?? stores[0] ?? null,
     [stores, storeId],
   )
-  const enabledTemplates = templates.filter((template) => template.is_enabled)
   const sourceUrlState = validateSourceProductUrl(sourceUrl)
   const canSubmit = Boolean(selectedStore && claimMark.trim() && sourceUrlState.ok)
   const claimCompleted = Boolean(
@@ -62,10 +58,15 @@ export function AcquisitionClaimPage({
       if (storeId) setStoreId('')
       return
     }
+    const requestStore = stores.find((store) => store.id === lastRequest?.store_id)
+    if (requestStore && String(requestStore.id) !== storeId) {
+      setStoreId(String(requestStore.id))
+      return
+    }
     if (!stores.some((store) => String(store.id) === storeId)) {
       setStoreId(String(stores[0].id))
     }
-  }, [storeId, stores])
+  }, [lastRequest?.store_id, storeId, stores])
 
   function submit() {
     if (!selectedStore || !canSubmit) return
@@ -75,13 +76,18 @@ export function AcquisitionClaimPage({
       sourceUrl: sourceUrl.trim(),
       categoryName: categoryName.trim() || undefined,
       claimMark: claimMark.trim(),
-      templateId: templateId ? Number(templateId) : null,
     })
   }
 
   function useCandidate(candidate: ClaimCandidate) {
     const candidateSourceUrl = (candidate.sourceUrl ?? candidate.source_url ?? '').trim()
     if (!validateSourceProductUrl(candidateSourceUrl).ok) return
+    const candidateStoreName = String(candidate.storeAccount ?? candidate.store_account ?? '').trim()
+    if (candidateStoreName) {
+      const matchingStore = stores.find((store) => normalizeStoreName(store.name) === normalizeStoreName(candidateStoreName))
+      if (!matchingStore) return
+      setStoreId(String(matchingStore.id))
+    }
     setKeyword(candidate.title)
     setSourceUrl(candidateSourceUrl)
     const candidateCategory = (candidate.categoryHint ?? candidate.category_hint ?? '').trim()
@@ -132,9 +138,9 @@ export function AcquisitionClaimPage({
                     className="button button--secondary"
                     type="button"
                     onClick={() => useCandidate(candidate)}
-                    disabled={busy || !validateSourceProductUrl(candidate.sourceUrl ?? candidate.source_url ?? '').ok}
+                    disabled={busy || !candidateCanBind(candidate, stores)}
                   >
-                    {validateSourceProductUrl(candidate.sourceUrl ?? candidate.source_url ?? '').ok ? '使用这条商品' : '来源链接不受支持'}
+                    {candidateActionLabel(candidate, stores)}
                   </button>
                 </article>
               ))}
@@ -181,17 +187,6 @@ export function AcquisitionClaimPage({
             <span>认领标记</span>
             <input value={claimMark} onChange={(event) => setClaimMark(event.target.value)} placeholder="例如：AI-OPS" disabled={busy} />
           </label>
-          <label>
-            <span>后续模板</span>
-            <select value={templateId} onChange={(event) => setTemplateId(event.target.value)} disabled={busy}>
-              <option value="">稍后在编辑页模板选择</option>
-              {enabledTemplates.map((template) => (
-                <option key={template.id} value={template.id}>
-                  {template.template_name}
-                </option>
-              ))}
-            </select>
-          </label>
         </div>
         {!sourceUrlState.ok && (
           <p className="form-hint" role="status">下一步：{sourceUrlState.message}</p>
@@ -237,4 +232,19 @@ export function AcquisitionClaimPage({
       </div>
     </section>
   )
+}
+
+function candidateCanBind(candidate: ClaimCandidate, stores: Store[]) {
+  if (!validateSourceProductUrl(candidate.sourceUrl ?? candidate.source_url ?? '').ok) return false
+  const candidateStoreName = String(candidate.storeAccount ?? candidate.store_account ?? '').trim()
+  return !candidateStoreName || stores.some((store) => normalizeStoreName(store.name) === normalizeStoreName(candidateStoreName))
+}
+
+function candidateActionLabel(candidate: ClaimCandidate, stores: Store[]) {
+  if (!validateSourceProductUrl(candidate.sourceUrl ?? candidate.source_url ?? '').ok) return '来源链接不受支持'
+  return candidateCanBind(candidate, stores) ? '使用这条商品' : '店铺无法匹配'
+}
+
+function normalizeStoreName(value: string) {
+  return value.trim().toLocaleLowerCase('zh-CN')
 }

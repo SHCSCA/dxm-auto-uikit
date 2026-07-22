@@ -1449,11 +1449,7 @@ class BrowserAgentRuntime:
         else:
             dispatch_confirmed = operation_result is True or (
                 isinstance(operation_result, Mapping)
-                and (
-                    operation_result.get("dispatched") is True
-                    if "dispatched" in operation_result
-                    else operation_result.get("ok") is True
-                )
+                and operation_result.get("dispatched") is True
             )
             if not dispatch_confirmed:
                 if ledger_started:

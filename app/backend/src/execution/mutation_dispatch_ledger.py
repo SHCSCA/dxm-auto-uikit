@@ -60,11 +60,28 @@ class MutationDispatchLedger:
             "stage_task_facts_fingerprint": str(command.stage_task_facts_fingerprint),
             "target_hash": str(command.target_hash),
             "authorization_fingerprint": str(command.authorization_fingerprint),
+            "command_id": str(command.command_id),
+            "runtime_id": str(command.runtime_id),
         }
 
     @staticmethod
     def _binding_matches(row: dict[str, Any], expected: dict[str, Any]) -> bool:
         return all(row.get(key) == value for key, value in expected.items())
+
+    @staticmethod
+    def _reserved_row_is_pristine(row: dict[str, Any]) -> bool:
+        return all(
+            row.get(key) is None
+            for key in (
+                "browser_session_id",
+                "page_url",
+                "page_kind",
+                "outcome_json",
+                "dispatch_started_at",
+                "dispatched_at",
+                "unknown_at",
+            )
+        )
 
     @staticmethod
     def _terminal_reason(status: str) -> str:
@@ -105,6 +122,19 @@ class MutationDispatchLedger:
                     return MutationLedgerDecision(
                         False,
                         "MUTATION_SCOPE_BINDING_MISMATCH",
+                        dict(row),
+                    )
+                status = str(row.get("status") or "")
+                if status != "RESERVED":
+                    return MutationLedgerDecision(
+                        False,
+                        self._terminal_reason(status),
+                        dict(row),
+                    )
+                if not self._reserved_row_is_pristine(row):
+                    return MutationLedgerDecision(
+                        False,
+                        "MUTATION_RESERVED_STATE_UNCERTAIN",
                         dict(row),
                     )
             existing_actions = {str(row["mutation_action"]) for row in existing_rows}
@@ -205,6 +235,12 @@ class MutationDispatchLedger:
             status = str(row.get("status") or "")
             if status != "RESERVED":
                 return MutationLedgerDecision(False, self._terminal_reason(status), dict(row))
+            if not self._reserved_row_is_pristine(row):
+                return MutationLedgerDecision(
+                    False,
+                    "MUTATION_RESERVED_STATE_UNCERTAIN",
+                    dict(row),
+                )
 
             predecessors = conn.execute(
                 """
@@ -322,6 +358,33 @@ class MutationDispatchLedger:
                 )
             status = str(row.get("status") or "")
             if status == "CANCELLED_BEFORE_DISPATCH":
+                try:
+                    prior_outcome = json.loads(str(row.get("outcome_json") or ""))
+                except (TypeError, ValueError):
+                    prior_outcome = None
+                if (
+                    not isinstance(prior_outcome, dict)
+                    or prior_outcome.get("classification")
+                    != "CANCELLED_BEFORE_DISPATCH"
+                    or prior_outcome.get("reason_code") != canonical_reason
+                    or prior_outcome.get("external_dispatch_started") is not False
+                    or any(
+                        row.get(key) is not None
+                        for key in (
+                            "dispatch_started_at",
+                            "dispatched_at",
+                            "unknown_at",
+                            "browser_session_id",
+                            "page_url",
+                            "page_kind",
+                        )
+                    )
+                ):
+                    return MutationLedgerDecision(
+                        False,
+                        "MUTATION_CANCEL_PROOF_INVALID",
+                        dict(row),
+                    )
                 return MutationLedgerDecision(True, "OK", dict(row), idempotent=True)
             if status != "RESERVED":
                 return MutationLedgerDecision(False, self._terminal_reason(status), dict(row))
@@ -416,10 +479,16 @@ class MutationDispatchLedger:
                 return MutationLedgerDecision(False, "MUTATION_SCOPE_BINDING_MISMATCH", dict(row))
             status = str(row.get("status") or "")
             if status == "DISPATCHED":
+                if row.get("outcome_json") != outcome_json:
+                    return MutationLedgerDecision(
+                        False,
+                        "MUTATION_OUTCOME_CONFLICT",
+                        dict(row),
+                    )
                 return MutationLedgerDecision(True, "OK", dict(row), idempotent=True)
             if status != "DISPATCHING":
                 return MutationLedgerDecision(False, self._terminal_reason(status), dict(row))
-            conn.execute(
+            changed = conn.execute(
                 """
                 UPDATE mutation_dispatch_ledger
                    SET status='DISPATCHED', outcome_json=?, dispatched_at=?, updated_at=?
@@ -427,6 +496,12 @@ class MutationDispatchLedger:
                 """,
                 (outcome_json, now, now, command.mutation_scope_id, mutation_action),
             )
+            if changed.rowcount != 1:
+                return MutationLedgerDecision(
+                    False,
+                    "MUTATION_LEDGER_STATE_INVALID",
+                    dict(row),
+                )
             updated = conn.execute(
                 """
                 SELECT * FROM mutation_dispatch_ledger
@@ -464,10 +539,16 @@ class MutationDispatchLedger:
                 return MutationLedgerDecision(False, "MUTATION_SCOPE_BINDING_MISMATCH", dict(row))
             status = str(row.get("status") or "")
             if status == "UNKNOWN":
+                if row.get("outcome_json") != outcome_json:
+                    return MutationLedgerDecision(
+                        False,
+                        "MUTATION_OUTCOME_CONFLICT",
+                        dict(row),
+                    )
                 return MutationLedgerDecision(True, "OK", dict(row), idempotent=True)
             if status != "DISPATCHING":
                 return MutationLedgerDecision(False, self._terminal_reason(status), dict(row))
-            conn.execute(
+            changed = conn.execute(
                 """
                 UPDATE mutation_dispatch_ledger
                    SET status='UNKNOWN', outcome_json=?, unknown_at=?, updated_at=?
@@ -475,6 +556,12 @@ class MutationDispatchLedger:
                 """,
                 (outcome_json, now, now, command.mutation_scope_id, mutation_action),
             )
+            if changed.rowcount != 1:
+                return MutationLedgerDecision(
+                    False,
+                    "MUTATION_LEDGER_STATE_INVALID",
+                    dict(row),
+                )
             updated = conn.execute(
                 """
                 SELECT * FROM mutation_dispatch_ledger
