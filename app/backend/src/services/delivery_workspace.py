@@ -153,7 +153,9 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
         "template_resolution": _template_resolution(latest_report),
         "dxmReferenceTemplates": _dxm_reference_sections(latest_report),
         "publish_guard_state": _publish_guard_state(reports, extracted),
-        "evidence_grade": _evidence_grade(extracted, l2_gate, delivery_readiness),
+        "evidence_grade": _evidence_grade(
+            extracted, reports, l2_gate, delivery_readiness
+        ),
         "regression_gates": _regression_gates(
             extracted,
             l2_gate,
@@ -173,7 +175,7 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
             delivery_readiness,
             state_consistency,
         ),
-        "safety": _safety_state(extracted, l2_gate, delivery_readiness),
+        "safety": _safety_state(extracted, reports, l2_gate, delivery_readiness),
         "l2_probe_plan": _l2_probe_plan(),
         "logs": logs,
         "exceptions": exceptions,
@@ -290,7 +292,9 @@ def _empty_delivery_workspace(
         "template_resolution": _template_resolution(None),
         "dxmReferenceTemplates": _dxm_reference_sections(None),
         "publish_guard_state": _publish_guard_state([], extracted),
-        "evidence_grade": _evidence_grade(extracted, l2_gate, delivery_readiness),
+        "evidence_grade": _evidence_grade(
+            extracted, [], l2_gate, delivery_readiness
+        ),
         "regression_gates": _regression_gates(extracted, l2_gate, delivery_readiness, state_consistency),
         "state_consistency": state_consistency,
         "delivery_readiness": delivery_readiness,
@@ -307,7 +311,7 @@ def _empty_delivery_workspace(
                 "evidenceLevel": "C",
             }
         ],
-        "safety": _safety_state(extracted, l2_gate, delivery_readiness),
+        "safety": _safety_state(extracted, [], l2_gate, delivery_readiness),
         "l2_probe_plan": _l2_probe_plan(),
         "logs": [],
         "exceptions": [],
@@ -338,7 +342,7 @@ def _baseline() -> dict[str, Any]:
             "python -m pytest tests/test_delivery_workspace.py -q",
             "python -m pytest tests/test_v1_runner.py tests/test_publish_guard.py -q",
         ],
-        "db_schema": "unchanged",
+        "db_schema": "reports.published is tri-state: true / verified false / unknown null",
         "capabilities": [
             "read tasks/jobs/reports/evidences/logs/templates/exceptions",
             "extract save result, unpublished proof, network and HAR summary",
@@ -381,19 +385,32 @@ def _real_mode_release_plan(
     l2_passed = l2_status == "passed"
     claim_only_currently_allowed = l2_passed
     single_save_currently_allowed = l2_passed
+    controlled_batch_currently_allowed = l2_passed
     claim_only_status = "released_controlled" if claim_only_currently_allowed else "blocked_stale_l2"
     single_save_status = "released_controlled" if single_save_currently_allowed else "blocked_stale_l2"
+    controlled_batch_status = (
+        "released_controlled" if controlled_batch_currently_allowed else "blocked_stale_l2"
+    )
     claim_only_blockers = [] if claim_only_currently_allowed else [
         str((l2_gate or {}).get("detail") or "fresh same-run L2 existing-claim-list and draft-box proof is required before real claim_only can start")
     ]
     single_save_blockers = [] if single_save_currently_allowed else [
         str((l2_gate or {}).get("detail") or "fresh same-run L2 existing-claim-list and draft-box proof is required before real single_save can start")
     ]
+    controlled_batch_blockers = [] if controlled_batch_currently_allowed else [
+        str(
+            (l2_gate or {}).get("detail")
+            or "fresh same-run L2 proof is required before a controlled edit batch can start"
+        )
+    ]
+    current_delivery_ready = bool(delivery_readiness) and delivery_readiness.get("ready") is True
+    current_delivery_status = "passed" if current_delivery_ready else "missing"
+    current_delivery_blocker = None if current_delivery_ready else "current task has no complete L3 evidence chain"
     l2_check_status = "passed" if l2_passed else "blocked"
     l2_check_blocker = None if l2_passed else "fresh L2 existing-claim-list and draft-box readonly proof is missing or stale"
     return {
         "schema": "dxm_real_mode_release_plan.v1",
-        "scope": "controlled_claim_and_single_save",
+        "scope": "controlled_claim_single_save_and_edit_batch",
         "publish_allowed": False,
         "batch_unattended_publish_allowed": False,
         "modes": [
@@ -414,9 +431,20 @@ def _real_mode_release_plan(
                 "blockers": single_save_blockers,
                 "readiness_checklist": [
                     checklist("l2_dual_target", "已有待认领列表和商品箱只读检查", status=l2_check_status, evidence_source="L2 gate", blocker=l2_check_blocker),
-                    checklist("l3_single_canary", "historical single_save canary save evidence", status="passed", evidence_source="L3 task 70"),
-                    checklist("published_false", "published=false proof", status="passed", evidence_source="report summary"),
-                    checklist("publish_guard", "publish guard clean", status="passed", evidence_source="delivery workspace aggregation"),
+                    checklist(
+                        "l3_single_canary",
+                        "当前任务完整保存与未发布证据",
+                        status=current_delivery_status,
+                        evidence_source="current task delivery readiness",
+                        blocker=current_delivery_blocker,
+                    ),
+                    checklist(
+                        "publish_guard",
+                        "当前任务发布隔离证据完整",
+                        status=current_delivery_status,
+                        evidence_source="current task delivery readiness",
+                        blocker=current_delivery_blocker,
+                    ),
                 ],
             },
             {
@@ -462,54 +490,76 @@ def _real_mode_release_plan(
                 ],
             },
             {
+                "mode": "controlled_edit_batch",
+                "label": "受控整批编辑",
+                "status": controlled_batch_status,
+                "allowed": controlled_batch_currently_allowed,
+                "release_scope": "frozen visible draft-box scope; serial save-only execution",
+                "required_evidence": [
+                    "fresh L2 readonly proof bound to approval and every item dispatch",
+                    "immutable ordered scope and store-level template bundle",
+                    "per-item exact identity and required-field readback",
+                    "per-item exact SAVE receipt and independent unpublished proof",
+                    "UNKNOWN stop and manual reconciliation evidence",
+                ],
+                "required_controls": [
+                    "one atomic approve-and-start operation for the frozen batch",
+                    "global concurrency one and strict serial dispatch",
+                    "60-second one-time item mutation grant",
+                    "pre-save zero-write failures may isolate; dispatch uncertainty stops the batch",
+                    "legacy unattended task mode remains forbidden",
+                ],
+                "blockers": controlled_batch_blockers,
+                "readiness_checklist": [
+                    checklist(
+                        "l2_batch_binding",
+                        "L2 与整批批准及逐商品派发绑定",
+                        status=l2_check_status,
+                        evidence_source="L2 gate",
+                        blocker=l2_check_blocker,
+                    ),
+                    checklist(
+                        "immutable_scope",
+                        "当前可见商品箱范围与顺序冻结",
+                        status="enforced_by_runtime",
+                        evidence_source="edit-batch contract",
+                    ),
+                    checklist(
+                        "serial_jit_dispatch",
+                        "全局单并发与逐商品即时授权",
+                        status="enforced_by_runtime",
+                        evidence_source="edit-batch runtime",
+                    ),
+                    checklist(
+                        "unknown_manual_reconciliation",
+                        "UNKNOWN 停批且禁止自动重试",
+                        status="enforced_by_runtime",
+                        evidence_source="mutation dispatch ledger",
+                    ),
+                ],
+            },
+            {
                 "mode": "batch_save",
-                "label": "batch_save",
+                "label": "旧批量任务模式",
                 "status": "blocked_unreleased",
                 "allowed": False,
                 "release_scope": "not released",
                 "required_evidence": [
-                    "dedicated L2/L3 run for batch_save",
-                    "batch size limit proof",
-                    "per-job save_result code=0",
-                    "per-job published=false proof",
-                    "per-job network/HAR save response evidence",
-                    "partial failure report and retry boundary proof",
+                    "not applicable; use controlled_edit_batch instead",
                 ],
                 "required_controls": [
-                    *shared_controls,
-                    "small batch cap before any unattended execution",
-                    "stop-on-first-publish-risk policy",
-                    "rollback and manual handoff procedure",
+                    "task mode batch_save stays blocked",
+                    "unattended scheduling stays blocked",
                 ],
                 "blockers": [
-                    "cannot reuse single_save evidence",
-                    "batch failure isolation and rollback are not yet accepted",
-                    "unattended execution remains forbidden",
+                    "legacy batch_save is outside the release surface",
                 ],
                 "readiness_checklist": [
                     checklist(
-                        "dedicated_l2_l3",
-                        "Dedicated batch_save L2/L3 evidence",
-                        blocker="cannot reuse single_save evidence",
-                        detail="Batch behavior must be proven separately from one controlled single_save canary.",
-                    ),
-                    checklist(
-                        "batch_size_limit",
-                        "Batch size limit proof",
-                        blocker="missing batch size cap acceptance",
-                        detail="The runner and UI must enforce a small batch cap before any batch_save release.",
-                    ),
-                    checklist(
-                        "per_job_save_and_unpublished",
-                        "Per-job save result and published=false proof",
-                        blocker="missing per-job evidence",
-                        detail="Every job needs save_result code=0, unpublished proof, and report linkage.",
-                    ),
-                    checklist(
-                        "partial_failure_rollback",
-                        "Partial failure report plus rollback/manual handoff",
-                        blocker="missing partial failure rollback proof",
-                        detail="A failed item must stop safely with a visible handoff path and no publish action.",
+                        "legacy_mode_blocked",
+                        "旧 batch_save 不进入真实写入路径",
+                        status="blocked",
+                        blocker="use controlled_edit_batch",
                     ),
                 ],
             },
@@ -674,7 +724,21 @@ def _template_resolution(latest_report: dict[str, Any] | None) -> dict[str, Any]
 def _publish_guard_state(reports: list[dict[str, Any]], extracted: dict[str, Any]) -> dict[str, Any]:
     published_values = extracted["published_values"]
     has_published_true = any(value is True for value in published_values)
-    has_unpublished_proof = bool(extracted["published_proofs"])
+    save_reports = [
+        report
+        for report in reports
+        if report.get("status") == "success"
+        and (
+            _payload_has_save_result(report.get("save_result"))
+            or _payload_has_save_result(report.get("summary"))
+        )
+    ]
+    verified_save_reports = [
+        report for report in save_reports if _report_has_successful_save(report)
+    ]
+    has_unpublished_proof = bool(save_reports) and len(verified_save_reports) == len(
+        save_reports
+    )
     publish_risk = extracted["publish_risk"]
     if publish_risk["reasons"]:
         status = "blocked_published_signal"
@@ -693,7 +757,8 @@ def _publish_guard_state(reports: list[dict[str, Any]], extracted: dict[str, Any
             else False if has_unpublished_proof else None
         ),
         "publish_allowed": False,
-        "report_published_all_false": bool(reports) and all(report.get("published") is False for report in reports),
+        "report_published_all_false": bool(save_reports)
+        and all(report.get("published") is False for report in save_reports),
         "has_unpublished_proof": has_unpublished_proof,
         "reasons": [
             *(["published=true signal found"] if has_published_true else []),
@@ -704,12 +769,31 @@ def _publish_guard_state(reports: list[dict[str, Any]], extracted: dict[str, Any
 
 def _evidence_grade(
     extracted: dict[str, Any],
+    reports: list[dict[str, Any]],
     l2_gate: Mapping[str, Any] | None = None,
     delivery_readiness: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    has_save_result = bool(extracted["save_results"])
-    has_published_proof = bool(extracted["published_proofs"])
-    has_network_or_har = bool(extracted["network_save_results"] or extracted["har_summaries"])
+    save_reports = [
+        report
+        for report in reports
+        if report.get("status") == "success"
+        and (
+            _payload_has_save_result(report.get("save_result"))
+            or _payload_has_save_result(report.get("summary"))
+        )
+    ]
+    verified_save_reports = [
+        report for report in save_reports if _report_has_successful_save(report)
+    ]
+    has_save_result = bool(save_reports)
+    has_published_proof = bool(save_reports) and len(verified_save_reports) == len(
+        save_reports
+    )
+    has_network_or_har = bool(save_reports) and all(
+        _payload_has_network_or_har(report.get("save_result"))
+        or _payload_has_network_or_har(report.get("summary"))
+        for report in save_reports
+    )
     has_publish_risk = bool(extracted["publish_risk"]["reasons"])
     l2_status = (l2_gate or {}).get("status")
     blocked_by_l2 = bool(l2_gate) and l2_status != "passed"
@@ -753,8 +837,20 @@ def _regression_gates(
     latest_l1 = _latest_schema_result(L1_REPLAY_DIR, "dxm_l1_selector_replay.v1")
     l2_gate = dict(l2_gate or _l2_probe_gate())
     l2_passed = l2_gate["status"] == "passed"
-    has_l3_save_proof = bool(extracted["save_results"] and extracted["published_proofs"])
-    has_l3_network = bool(extracted["network_save_results"] or extracted["har_summaries"])
+    delivery_scope_complete = not (
+        delivery_readiness
+        and delivery_readiness.get("has_l3_evidence") is True
+        and delivery_readiness.get("ready") is not True
+    )
+    has_l3_save_proof = bool(
+        delivery_scope_complete
+        and extracted["save_results"]
+        and extracted["published_proofs"]
+    )
+    has_l3_network = bool(
+        delivery_scope_complete
+        and (extracted["network_save_results"] or extracted["har_summaries"])
+    )
     state_consistent = bool(state_consistency) and state_consistency.get("consistent") is True
     two_stage_checks = (two_stage_acceptance or {}).get("checks") or {}
     claim_provenance_invalid = (
@@ -772,7 +868,7 @@ def _regression_gates(
     elif not l2_passed:
         l3_status = "blocked"
         l3_level = "C"
-        l3_detail = f"L2 未通过（当前：{l2_gate['status']}），真实 claim_only/single_save/batch_save 启动入口关闭。"
+        l3_detail = f"L2 未通过（当前：{l2_gate['status']}），真实 claim_only、single_save 与受控整批编辑入口关闭。"
     elif claim_provenance_invalid:
         l3_status = "blocked"
         l3_level = "C"
@@ -898,7 +994,7 @@ def _l2_probe_plan() -> dict[str, Any]:
         "safetyNotes": [
             "运行前必须由操作者明确批准真实保存前安全检查。",
             "保存前安全检查失败或只产生 mock 证据时不自动放行真实保存。",
-            "该计划只生成诊断证据，不授权 claim_only、single_save 或 batch_save 真实写入。",
+            "该计划只生成诊断证据，不授权 claim_only、single_save 或受控整批编辑真实写入；旧 batch_save 始终关闭。",
         ],
     }
 
@@ -1248,13 +1344,15 @@ def _payload_mentions_product(payload: Any, product_id: int) -> bool:
 
 
 def _report_has_successful_save(report: Mapping[str, Any]) -> bool:
-    return (
-        report.get("status") == "success"
-        and _parse_bool(report.get("published")) is False
-        and (
-            _payload_has_save_result(report.get("save_result"))
-            or _payload_has_save_result(report.get("summary"))
+    if report.get("status") != "success" or _parse_bool(report.get("published")) is not False:
+        return False
+    payloads = (report.get("save_result"), report.get("summary"))
+    return bool(
+        any(_payload_has_save_result(payload) for payload in payloads)
+        and any(
+            _payload_has_unpublished_proof(payload, "report") for payload in payloads
         )
+        and any(_payload_has_network_or_har(payload) for payload in payloads)
     )
 
 
@@ -1270,7 +1368,7 @@ def _int_or_none(value: Any) -> int | None:
 def _payload_has_save_result(payload: Any) -> bool:
     if isinstance(payload, Mapping):
         nested = payload.get("save_result")
-        if isinstance(nested, Mapping) and (_looks_like_save_result(nested) or nested.get("ok") is True):
+        if isinstance(nested, Mapping) and _looks_like_save_result(nested):
             return True
         if _looks_like_save_result(payload):
             return True
@@ -2194,8 +2292,6 @@ def _collect_from_payload(
 ) -> None:
     if isinstance(payload, Mapping):
         _collect_publish_scan_inputs(payload, publish_scan)
-        if isinstance(payload.get("save_result"), Mapping):
-            save_results.append(dict(payload["save_result"]))
         if _looks_like_save_result(payload):
             save_results.append(dict(payload))
         network_save_result = payload.get("network_save_result")
@@ -2222,41 +2318,177 @@ def _collect_from_payload(
 
 
 def _looks_like_save_result(payload: Mapping[str, Any]) -> bool:
-    return (
-        payload.get("ok") is True
-        and (
-            "success_text" in payload
-            or "network_save_result" in payload
-            or "clicked" in payload
-            or "message" in payload
+    if (
+        payload.get("ok") is not True
+        or payload.get("published") is not False
+        or payload.get("exact_save_target") is not True
+        or payload.get("save_click_dispatched") is not True
+        or payload.get("clicked") is not True
+        or payload.get("publish_action_clicked") is not False
+        or str(payload.get("text") or "") != "保存"
+        or payload.get("exact_save_count") != 1
+        or payload.get("click_method") not in {"native_exact_save", "dom_exact_save"}
+        or payload.get("network_save_success") is not True
+        or payload.get("page_save_success") is not True
+    ):
+        return False
+
+    authorization = payload.get("mutation_authorization")
+    if not isinstance(authorization, Mapping) or not (
+        authorization.get("ok") is True
+        and authorization.get("executed") is True
+        and authorization.get("mutation_action") == "save_only_click"
+        and authorization.get("mutation_status") == "DISPATCHED"
+        and bool(str(authorization.get("mutation_id") or "").strip())
+    ):
+        return False
+
+    pre_dispatch = payload.get("pre_dispatch_readback")
+    if not isinstance(pre_dispatch, Mapping) or not (
+        pre_dispatch.get("ok") is True
+        and pre_dispatch.get("required_readback_complete") is True
+        and pre_dispatch.get("write_attempted") is False
+        and pre_dispatch.get("phase") == "before_ledger_begin_dispatch"
+    ):
+        return False
+    identity = pre_dispatch.get("identity")
+    if not isinstance(identity, Mapping) or any(
+        identity.get(key) is not True
+        for key in (
+            "ok",
+            "product_identity_match",
+            "store_identity_match",
+            "source_identity_match",
         )
-        and "published" in payload
-    )
+    ):
+        return False
+    if re.fullmatch(
+        r"[0-9A-Fa-f]{64}", str(identity.get("target_identity_sha256") or "").strip()
+    ) is None:
+        return False
+    frozen_target = identity.get("target_identity")
+    if not isinstance(frozen_target, Mapping) or not frozen_target:
+        return False
+    try:
+        frozen_target_digest = hashlib.sha256(
+            json.dumps(
+                dict(frozen_target),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+    except (TypeError, ValueError):
+        return False
+    if not hmac.compare_digest(
+        frozen_target_digest,
+        str(identity.get("target_identity_sha256") or "").strip().casefold(),
+    ):
+        return False
+    if not str(identity.get("expected_store_name") or "").strip():
+        return False
+    baseline = pre_dispatch.get("baseline_field_integrity")
+    current = pre_dispatch.get("current_field_integrity")
+    if not isinstance(baseline, Mapping) or not isinstance(current, Mapping):
+        return False
+    integrity_keys = ("kind", "field_count", "nonempty_field_count", "sha256")
+    for snapshot in (baseline, current):
+        if (
+            snapshot.get("ok") is not True
+            or snapshot.get("kind") != "structured_nonempty_form_state"
+            or type(snapshot.get("field_count")) is not int
+            or snapshot.get("field_count") <= 0
+            or snapshot.get("nonempty_field_count") != snapshot.get("field_count")
+            or re.fullmatch(
+                r"[0-9A-Fa-f]{64}", str(snapshot.get("sha256") or "").strip()
+            )
+            is None
+        ):
+            return False
+    if any(baseline.get(key) != current.get(key) for key in integrity_keys):
+        return False
+
+    network = payload.get("network_save_result")
+    audit = payload.get("network_audit")
+    publish_signal = payload.get("publish_signal")
+    if not isinstance(network, Mapping) or not _network_save_result_seen(network):
+        return False
+    if not isinstance(audit, Mapping) or not (
+        audit.get("complete") is True
+        and audit.get("window_closed") is True
+        and type(audit.get("registered_listener_count")) is int
+        and audit.get("registered_listener_count") == 2
+        and type(audit.get("removed_listener_count")) is int
+        and audit.get("removed_listener_count") == 2
+        and type(audit.get("mutation_request_count")) is int
+        and audit.get("mutation_request_count") == 1
+        and type(audit.get("save_request_count")) is int
+        and audit.get("save_request_count") == 1
+        and type(audit.get("other_mutation_request_count")) is int
+        and audit.get("other_mutation_request_count") == 0
+        and type(audit.get("publish_request_count")) is int
+        and audit.get("publish_request_count") == 0
+    ):
+        return False
+    if not isinstance(publish_signal, Mapping) or not (
+        publish_signal.get("detected") is False
+        and publish_signal.get("kind") == "network_route_classification"
+    ):
+        return False
+
+    page = payload.get("page_save_result")
+    transition = page.get("status_transition") if isinstance(page, Mapping) else None
+    if not isinstance(page, Mapping) or not isinstance(transition, Mapping) or not (
+        page.get("ok") is True
+        and str(page.get("success_text") or "").strip()
+        and transition.get("kind") == "new_or_changed_structured_save_status"
+        and isinstance(transition.get("entry"), Mapping)
+        and transition.get("entry")
+    ):
+        return False
+    return payload.get("save_decision") == {
+        "ok": True,
+        "rule": "page_success_and_network_success",
+        "page_ok": True,
+        "network_ok": True,
+        "network_receipt_ok": True,
+        "network_audit_ok": True,
+    }
 
 
 def _network_save_result_seen(payload: Mapping[str, Any]) -> bool:
-    if payload.get("save_response_seen") is True:
-        return True
     url = str(payload.get("url") or "").lower()
-    status = payload.get("status")
-    if status is None and payload.get("ok") is True:
-        status = 200
-    return _looks_like_save_network_response(payload, url) and _status_2xx_or_3xx(status)
+    return bool(
+        payload.get("ok") is True
+        and payload.get("receipt_complete") is True
+        and type(payload.get("receipt_count")) is int
+        and payload.get("receipt_count") == 1
+        and _looks_like_save_network_response(payload, url)
+        and _status_2xx(payload.get("status"))
+    )
 
 
 def _network_event_save_response_seen(payload: Mapping[str, Any]) -> bool:
     url = str(payload.get("url") or "").lower()
-    return _looks_like_save_network_response(payload, url) and _status_2xx_or_3xx(payload.get("status"))
+    return _looks_like_save_network_response(payload, url) and _status_2xx(payload.get("status"))
 
 
 def _looks_like_save_network_response(payload: Mapping[str, Any], url: str) -> bool:
-    if "save" in url:
-        return True
     save_add_endpoints = (
         "/api/popchoiceproduct/add.json",
         "/api/smtproduct/add.json",
     )
-    if not any(url.endswith(endpoint) for endpoint in save_add_endpoints):
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return False
+    hostname = str(parsed.hostname or "").casefold()
+    if hostname != "dianxiaomi.com" and not hostname.endswith(".dianxiaomi.com"):
+        return False
+    if str(parsed.path or "").casefold() not in save_add_endpoints:
+        return False
+    if str(payload.get("method") or "").upper() != "POST":
         return False
     response_codes = _strings_from_value(payload.get("code"))
     response_text_values = _strings_from_value(payload.get("msg")) + _strings_from_value(payload.get("message"))
@@ -2373,10 +2605,16 @@ def _strings_from_value(value: Any) -> list[str]:
 
 
 def _har_save_response_seen(payload: Mapping[str, Any]) -> bool:
-    if payload.get("save_response_seen") is True:
+    url = str(payload.get("url") or "")
+    if _looks_like_save_network_response(payload, url) and _status_2xx(payload.get("status")):
         return True
-    if payload.get("ok") is True and "save" in str(payload.get("url") or payload.get("path") or "").lower():
-        return True
+    for key in ("events", "entries", "responses"):
+        values = payload.get(key)
+        if isinstance(values, list) and any(
+            isinstance(item, Mapping) and _network_event_save_response_seen(item)
+            for item in values
+        ):
+            return True
     return False
 
 
@@ -2471,7 +2709,7 @@ def _acceptance_gaps(
                 "title": "L2 真实只读门禁未通过",
                 "severity": "blocker",
                 "owner": "l2_readonly_probe",
-                "detail": str(l2_gate.get("detail") or f"L2 当前状态为 {l2_status}，禁止进入真实 claim_only/single_save/batch_save。"),
+                "detail": str(l2_gate.get("detail") or f"L2 当前状态为 {l2_status}，禁止进入真实 claim_only、single_save 与受控整批编辑。"),
                 "evidenceLevel": "C",
             }
         )
@@ -2544,7 +2782,7 @@ def _acceptance_gaps(
                 "title": "L3 金丝雀需人工批准",
                 "severity": "watch",
                 "owner": "ops-review",
-                "detail": "真实 claim_only/single_save/batch_save 写操作必须在用户明确批准后执行。",
+                "detail": "真实 claim_only、single_save 与受控整批编辑必须在用户明确批准后执行；旧 batch_save 仍关闭。",
                 "evidenceLevel": "C",
             }
         )
@@ -2553,12 +2791,13 @@ def _acceptance_gaps(
 
 def _safety_state(
     extracted: dict[str, Any],
+    reports: list[dict[str, Any]],
     l2_gate: Mapping[str, Any] | None = None,
     delivery_readiness: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    grade = _evidence_grade(extracted, l2_gate, delivery_readiness)
+    grade = _evidence_grade(extracted, reports, l2_gate, delivery_readiness)
     return {
-        "mode": "single_save / batch_save / claim_only / dry_run / probe",
+        "mode": "controlled_edit_batch / single_save / claim_only / dry_run / probe",
         "guarantee": "只保存不发布：工作台不提供任何发布动作入口，后端发布隔离固定开启。",
         "forbiddenActions": ["发布", "继续发布", "保存并发布", "移入待发布"],
         "lastCheckedAt": "runtime aggregation",
@@ -2589,12 +2828,12 @@ def _names_from_value(value: Any) -> list[str]:
     return []
 
 
-def _status_2xx_or_3xx(value: Any) -> bool:
+def _status_2xx(value: Any) -> bool:
     try:
         status = int(value or 0)
     except (TypeError, ValueError):
         return False
-    return 200 <= status < 400
+    return 200 <= status < 300
 
 
 def _parse_bool(value: Any) -> bool | None:

@@ -36,6 +36,7 @@ WORKFLOW_BROWSER_PROFILE_DIR = DATA_DIR / 'browser_profiles' / 'dxm_workflow'
 VISIBLE_CDP_CONNECT_TIMEOUT_MS = 8000
 FROZEN_DRAFT_TARGET_SCHEMA = 'dxm_draft_box_target.v1'
 _FROZEN_PRODUCT_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{5,128}$')
+_MUTATION_FAILURE_CODE_PATTERN = re.compile(r'^([A-Z][A-Z0-9_]{2,63})(?::|$)')
 
 
 class MutationAuthorizationError(RuntimeError):
@@ -431,9 +432,11 @@ class DxmLoginFlow:
         except Exception as exc:
             if isinstance(exc, MutationAuthorizationError):
                 raise
+            explicit_code = _MUTATION_FAILURE_CODE_PATTERN.match(str(exc).strip())
             reason_code = str(
                 getattr(exc, 'reason_code', None)
                 or getattr(exc, 'error_code', None)
+                or (explicit_code.group(1) if explicit_code else None)
                 or ('MUTATION_OPERATION_FAILED' if operation_attempts else 'AUTH_REVALIDATION_FAILED')
             )
             raise MutationAuthorizationError(f'{reason_code}: {exc}') from exc
@@ -2062,15 +2065,24 @@ class DxmLoginFlow:
                 target_identity=target_identity,
             )
         except Exception as exc:
+            explicit_code = _MUTATION_FAILURE_CODE_PATTERN.match(str(exc).strip())
             state = self._error_state(
                 stage=f'{action}_failed',
                 label='动作失败',
                 message=f'执行编辑页动作失败：{exc}',
                 next_action='确认编辑页或半托管页仍可访问，且页面结构未变。',
             )
+            state['failure_code'] = (
+                str(getattr(exc, 'reason_code', None) or '').strip()
+                or (explicit_code.group(1) if explicit_code else None)
+            )
+            state['published'] = None
             self._keep_visible_browser_for_recovery(state)
             self._write_state(state)
             return state
+
+        if action not in {'save_only', 'verify_not_published'}:
+            result['published'] = None
 
         state = {
             'ok': result.get('ok') is True,
@@ -2108,7 +2120,7 @@ class DxmLoginFlow:
                 else None
             ),
             'source_editor_url': result.get('source_editor_url') or result.get('editor_page_url'),
-            'published': result.get('published', False),
+            'published': result.get('published'),
             'editor_action_result': dict(result),
             'save_evidence_ref': (
                 result.get('evidence_ref')
@@ -3190,21 +3202,20 @@ class DxmLoginFlow:
             for value in target.get('sourceUrls') or []
             if str(value or '').strip()
         ]
-        if authorized_source_urls and not self._source_urls_match(live_source_urls, authorized_source_urls):
+        if not authorized_source_urls or not self._source_urls_match_exact(
+            live_source_urls,
+            authorized_source_urls,
+        ):
             raise RuntimeError(
                 '待认领商品安全检查未通过：当前点击商品行来源与授权目标不一致，系统已停止；不会认领其他商品。'
             )
-        if selected_source_urls and not self._source_urls_match(live_source_urls, selected_source_urls):
+        if not selected_source_urls or not self._source_urls_match_exact(
+            live_source_urls,
+            selected_source_urls,
+        ):
             raise RuntimeError(
                 '待认领商品安全检查未通过：当前点击商品行已不是刚才选中的目标，系统已停止；不会认领其他商品。'
             )
-        if not selected_source_urls:
-            selected_row_identity = ' '.join(target_row_text.split()).casefold()
-            live_row_identity = ' '.join(str(live_context.get('row_text') or '').split()).casefold()
-            if not selected_row_identity or live_row_identity != selected_row_identity:
-                raise RuntimeError(
-                    '待认领商品安全检查未通过：当前点击商品行身份已变化，系统已停止；不会认领其他商品。'
-                )
         return {
             **live_context,
             'publish_action_attempted': False,
@@ -4520,22 +4531,25 @@ class DxmLoginFlow:
                 '冻结商品来源链接结构无效，已停止打开编辑页。',
             )
         source_urls = [candidate.strip() for candidate in raw_source_urls]
-        canonical_source: dict[str, Any] | None = None
-        if source_urls:
-            try:
-                canonical_source = canonical_source_identity(source_urls[0], source_urls)
-            except TwoStageContractError as exc:
-                raise FrozenTargetIdentityError(
-                    'FROZEN_TARGET_SOURCE_INVALID',
-                    '冻结商品来源链接无效，已停止打开编辑页。',
-                ) from exc
-            if list(canonical_source['urls']) != source_urls or any(
-                not self._is_supported_frozen_source_url(candidate) for candidate in source_urls
-            ):
-                raise FrozenTargetIdentityError(
-                    'FROZEN_TARGET_SOURCE_INVALID',
-                    '冻结商品来源链接不是规范的外部商品详情页，已停止打开编辑页。',
-                )
+        if not source_urls:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_SOURCE_REQUIRED',
+                '冻结商品缺少非空规范来源链接，已停止打开编辑页。',
+            )
+        try:
+            canonical_source = canonical_source_identity(source_urls[0], source_urls)
+        except TwoStageContractError as exc:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_SOURCE_INVALID',
+                '冻结商品来源链接无效，已停止打开编辑页。',
+            ) from exc
+        if list(canonical_source['urls']) != source_urls or any(
+            not self._is_supported_frozen_source_url(candidate) for candidate in source_urls
+        ):
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_SOURCE_INVALID',
+                '冻结商品来源链接不是规范的外部商品详情页，已停止打开编辑页。',
+            )
         if kind == 'product_id':
             if _FROZEN_PRODUCT_ID_PATTERN.fullmatch(value) is None:
                 raise FrozenTargetIdentityError(
@@ -4575,10 +4589,12 @@ class DxmLoginFlow:
                 'FROZEN_TARGET_STORE_MISMATCH',
                 '冻结商品店铺身份与当前批次店铺不一致，已停止打开编辑页。',
             )
-        if target_source_urls:
-            provided_urls = self._canonical_source_url_set(target_source_urls)
-            frozen_urls = set(source_urls)
-            if not provided_urls or provided_urls != frozen_urls:
+        if target_source_urls is not None:
+            provided_urls = self._require_canonical_target_source_urls(
+                target_source_urls,
+                phase='冻结商品调用参数校验',
+            )
+            if provided_urls != source_urls:
                 raise FrozenTargetIdentityError(
                     'FROZEN_TARGET_SOURCE_DRIFT',
                     '调用参数中的来源链接与冻结商品身份不一致，已停止打开编辑页。',
@@ -5690,6 +5706,9 @@ class DxmLoginFlow:
                     strict_fill = dict(action_result.get('fill_result') or {})
                     strict_fill.update({
                         'ok': True,
+                        'product_identity_match': frozen_before.get('product_identity_match') is True,
+                        'source_identity_match': frozen_before.get('source_identity_match') is True,
+                        'store_identity_match': frozen_before.get('store_identity_match') is True,
                         'query_matched': frozen_before.get('product_identity_match') is True,
                         'source_matched': frozen_before.get('source_identity_match') is True,
                         'store_matched': frozen_before.get('store_identity_match') is True,
@@ -6359,11 +6378,9 @@ class DxmLoginFlow:
               const productIdentityMatch = kind === 'product_id'
                 ? currentEditorId === value
                 : observedSources.includes(canonicalUrl(value));
-              const sourceIdentityMatch = targetSources.length === 0
-                || (
-                  observedSources.length === targetSources.length
-                  && targetSources.every(source => observedSources.includes(source))
-                );
+              const sourceIdentityMatch = targetSources.length > 0
+                && observedSources.length === targetSources.length
+                && targetSources.every(source => observedSources.includes(source));
               const storeIdentityMatch = observedStores.length === 1 && observedStores[0] === storeName;
               return {
                 ok: Boolean(productIdentityMatch && sourceIdentityMatch && storeIdentityMatch),
@@ -6405,10 +6422,7 @@ class DxmLoginFlow:
             )
         else:
             product_identity_match = self._source_urls_match_exact(observed_sources, expected_sources)
-        source_identity_match = bool(
-            not expected_sources
-            or self._source_urls_match_exact(observed_sources, expected_sources)
-        )
+        source_identity_match = self._source_urls_match_exact(observed_sources, expected_sources)
         observed_stores = [
             ' '.join(str(value or '').split())
             for value in verified.get('observed_store_names') or []
@@ -7037,7 +7051,7 @@ class DxmLoginFlow:
             },
             'required_readback_complete': True,
             'field_integrity': field_integrity,
-            'published': False,
+            'published': None,
         }
 
     def _enable_semi_managed_on_page(self, page: Page) -> dict[str, Any]:
@@ -7130,7 +7144,8 @@ class DxmLoginFlow:
             'screenshot_url': self._artifact_url(screenshot_path),
             'semi_managed_visible': visible,
             'semi_managed_enabled': enabled,
-            'published': False,
+            'publish_action_attempted': False,
+            'published': None,
         }
 
     def _open_semi_managed_page_from_editor(
@@ -13259,7 +13274,7 @@ class DxmLoginFlow:
             detail = result['field_details'].get(field_name)
             if not isinstance(detail, Mapping) or not (
                 detail.get('ok') is True
-                and detail.get('located') is not False
+                and detail.get('located') is True
                 and str(detail.get('expected_value') or '').strip()
                 and str(detail.get('value_after') or '').strip()
                 and str(detail.get('expected_value')) == str(detail.get('value_after'))
@@ -13676,13 +13691,20 @@ class DxmLoginFlow:
             })
             return dict(final_pre_dispatch_readback)
         unavailable_network_audit = {
+            'scope': 'same_origin_write_window',
             'complete': False,
+            'window_closed': False,
+            'registered_listener_count': 0,
+            'removed_listener_count': 0,
             'mutation_request_count': 0,
+            'save_request_count': 0,
+            'other_mutation_request_count': 0,
             'publish_request_count': 0,
         }
         no_publish_signal = {
-            'detected': False,
+            'detected': None,
             'kind': 'network_route_classification',
+            'request_count': 0,
         }
         if self._is_visible_dxm_editor_page(page):
             save_state = self._visible_exact_save_button_state(page)
@@ -13708,7 +13730,7 @@ class DxmLoginFlow:
                         **save_state,
                         'ok': False,
                         'reason': reason,
-                        'published': False,
+                        'published': None,
                         'clicked': False,
                         'exact_save_target': False,
                         'save_click_dispatched': False,
@@ -13718,7 +13740,7 @@ class DxmLoginFlow:
                         'network_audit': dict(unavailable_network_audit),
                         'publish_signal': dict(no_publish_signal),
                     },
-                    'published': False,
+                    'published': None,
                 }
             rect = save_state['rect']
             center_x = float(rect.get('x') or 0) + float(rect.get('w') or 0) / 2
@@ -13728,6 +13750,48 @@ class DxmLoginFlow:
             clicked = False
             mutation_authorization: dict[str, Any] = {}
             verify_result: dict[str, Any] | None = None
+
+            def final_native_save_target_guard() -> dict[str, Any]:
+                base = final_save_target_guard()
+                live_save = self._visible_exact_save_button_state(page)
+                live_rect = live_save.get('rect') if isinstance(live_save, Mapping) else None
+                planned_rect = save_state.get('rect') if isinstance(save_state.get('rect'), Mapping) else None
+
+                def same_rect() -> bool:
+                    if not isinstance(live_rect, Mapping) or not isinstance(planned_rect, Mapping):
+                        return False
+                    try:
+                        return all(
+                            abs(float(live_rect.get(key)) - float(planned_rect.get(key))) <= 1.0
+                            for key in ('x', 'y', 'w', 'h')
+                        )
+                    except (TypeError, ValueError):
+                        return False
+
+                target_exact = bool(
+                    isinstance(live_save, Mapping)
+                    and live_save.get('ok') is True
+                    and live_save.get('text') == '保存'
+                    and live_save.get('exact_save_count') == 1
+                    and live_save.get('at_point_text') == '保存'
+                    and same_rect()
+                )
+                final_pre_dispatch_readback.update({
+                    'ok': base.get('ok') is True and target_exact,
+                    'exact_save_target': {
+                        'ok': target_exact,
+                        'text': live_save.get('text') if isinstance(live_save, Mapping) else None,
+                        'at_point_text': live_save.get('at_point_text') if isinstance(live_save, Mapping) else None,
+                        'exact_save_count': live_save.get('exact_save_count') if isinstance(live_save, Mapping) else None,
+                        'planned_rect': dict(planned_rect or {}),
+                        'live_rect': dict(live_rect or {}),
+                    },
+                    'reason': None if base.get('ok') is True and target_exact else (
+                        base.get('reason') or 'exact_save_target_changed_before_dispatch'
+                    ),
+                })
+                return dict(final_pre_dispatch_readback)
+
             try:
                 clicked = self._click_point_with_native_window(
                     page,
@@ -13736,7 +13800,7 @@ class DxmLoginFlow:
                     use_viewport_metrics=False,
                     viewport_metrics_override=save_state.get('viewport') if isinstance(save_state.get('viewport'), dict) else None,
                     mutation_action='save_only_click',
-                    pre_dispatch_guard=final_save_target_guard,
+                    pre_dispatch_guard=final_native_save_target_guard,
                 )
                 if clicked:
                     mutation_authorization = dict(self._last_mutation_authorization_facts or {})
@@ -13775,7 +13839,7 @@ class DxmLoginFlow:
                         **save_state,
                         'ok': False,
                         'reason': 'native_exact_save_click_failed',
-                        'published': False,
+                        'published': None,
                         'clicked': False,
                         'exact_save_target': True,
                         'save_click_dispatched': False,
@@ -13786,22 +13850,16 @@ class DxmLoginFlow:
                         'network_audit': network_audit,
                         'publish_signal': publish_signal,
                     },
-                    'published': False if publish_signal.get('detected') is False else None,
+                    'published': None,
                 }
             network_result = self._network_save_result(network_events)
             page_result = verify_result if isinstance(verify_result, dict) else {
                 'ok': False,
                 'reason': '保存后页面结果不可读',
-                'published': False,
+                'published': None,
             }
             page_ok = page_result.get('ok') is True
-            audit_ok = bool(
-                network_audit.get('complete') is True
-                and int(network_audit.get('mutation_request_count') or 0) >= 1
-                and int(network_audit.get('publish_request_count') or 0) == 0
-                and publish_signal.get('detected') is False
-                and str(publish_signal.get('kind') or '').strip()
-            )
+            audit_ok = self._save_network_audit_complete(network_audit, publish_signal)
             network_receipt_ok = network_result.get('ok') is True
             network_ok = bool(network_receipt_ok and audit_ok)
             combined_ok = page_ok and network_ok
@@ -13839,7 +13897,7 @@ class DxmLoginFlow:
                 'network_save_success': network_ok,
                 'page_save_success': page_ok,
                 'publish_action_clicked': publish_signal.get('detected') is True,
-                'published': False if publish_signal.get('detected') is False else None,
+                'published': False if combined_ok else None,
             }
             if combined_ok:
                 save_result['success_text'] = page_result.get('success_text') or network_result.get('message') or '保存成功'
@@ -13865,7 +13923,7 @@ class DxmLoginFlow:
                 'screenshot_url': self._artifact_url(screenshot_path),
                 'evidence_ref': evidence_ref,
                 'save_result': save_result,
-                'published': False if publish_signal.get('detected') is False else None,
+                'published': False if combined_ok else None,
             }
         dismissed_modals = self._dismiss_blocking_modals(page)
         blocking_modal = self._visible_blocking_modal_state(page)
@@ -13899,9 +13957,9 @@ class DxmLoginFlow:
                     'publish_action_clicked': False,
                     'network_audit': dict(unavailable_network_audit),
                     'publish_signal': dict(no_publish_signal),
-                    'published': False,
+                    'published': None,
                 },
-                'published': False,
+                'published': None,
             }
         click_result = page.evaluate(r'''() => {
           const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
@@ -13912,22 +13970,23 @@ class DxmLoginFlow:
             return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
           };
           const candidates = Array.from(document.querySelectorAll('button,a,[role="button"]')).filter(isUsableAction).map(el => ({el, text:norm(el.innerText || el.textContent)}));
-          const save = candidates.find(x => x.text === '保存');
-          if (!save) {
+          const exactSaves = candidates.filter(item => item.text === '保存');
+          if (exactSaves.length !== 1) {
             const forbidden = candidates.find(x => labels.includes(x.text));
-            if (forbidden) return {ok:false, reason:`命中发布按钮：${forbidden.text}`, published:false};
+            if (forbidden) return {ok:false, reason:`命中发布按钮：${forbidden.text}`, exact_save_count:exactSaves.length, published:null};
             const fallback = Array.from(document.querySelectorAll('button,a,[role="button"],span,div')).filter(isUsableAction).map(el => ({text:norm(el.innerText || el.textContent)}));
             const fallbackForbidden = fallback.find(x => labels.includes(x.text));
-            return {ok:false, reason: fallbackForbidden ? `命中发布按钮：${fallbackForbidden.text}` : '未找到保存按钮', published:false};
+            return {ok:false, reason: fallbackForbidden ? `命中发布按钮：${fallbackForbidden.text}` : `精确保存按钮数量不是 1：${exactSaves.length}`, exact_save_count:exactSaves.length, published:null};
           }
+          const save = exactSaves[0];
           const r = save.el.getBoundingClientRect();
           return {
             ok:true,
             text:'保存',
-            exact_save_count:candidates.filter(item => item.text === '保存').length,
+            exact_save_count:exactSaves.length,
             rect:{x:r.x,y:r.y,w:r.width,h:r.height},
             message:'已定位保存按钮',
-            published:false
+            published:null
           };
         }''')
         click_result = click_result or {}
@@ -13951,6 +14010,7 @@ class DxmLoginFlow:
                     page,
                     mutation_action='save_only_click',
                     pre_dispatch_guard=final_save_target_guard,
+                    pre_dispatch_facts=final_pre_dispatch_readback,
                 )
                 if not clicked:
                     click_result = {
@@ -13983,17 +14043,11 @@ class DxmLoginFlow:
         page_result = page_result if isinstance(page_result, dict) else {
             'ok': False,
             'reason': '保存后页面结果不可读',
-            'published': False,
+            'published': None,
         }
         network_result = self._network_save_result(network_events)
         page_ok = page_result.get('ok') is True
-        audit_ok = bool(
-            network_audit.get('complete') is True
-            and int(network_audit.get('mutation_request_count') or 0) >= 1
-            and int(network_audit.get('publish_request_count') or 0) == 0
-            and publish_signal.get('detected') is False
-            and str(publish_signal.get('kind') or '').strip()
-        )
+        audit_ok = self._save_network_audit_complete(network_audit, publish_signal)
         network_receipt_ok = network_result.get('ok') is True
         network_ok = bool(network_receipt_ok and audit_ok)
         combined_ok = page_ok and network_ok
@@ -14032,7 +14086,7 @@ class DxmLoginFlow:
             'network_save_success': network_ok,
             'page_save_success': page_ok,
             'publish_action_clicked': publish_signal.get('detected') is True,
-            'published': False if publish_signal.get('detected') is False else None,
+            'published': False if combined_ok else None,
         }
         if combined_ok:
             verify_result['success_text'] = page_result.get('success_text') or network_result.get('message') or '保存成功'
@@ -14058,7 +14112,7 @@ class DxmLoginFlow:
             'screenshot_url': self._artifact_url(screenshot_path),
             'evidence_ref': evidence_ref,
             'save_result': verify_result,
-            'published': False if publish_signal.get('detected') is False else None,
+            'published': False if combined_ok else None,
         }
 
     def _visible_exact_save_button_state(self, page: Page) -> dict[str, Any]:
@@ -14095,17 +14149,20 @@ class DxmLoginFlow:
           const dialogs = Array.from(document.querySelectorAll('.ant-modal,.ant-modal-wrap,.el-dialog,.el-dialog__wrapper,[role="dialog"],[class*="modal"],[class*="Modal"],[class*="popup"],[class*="Popup"],[class*="dialog"],[class*="Dialog"]'))
             .filter(visible);
           const exactSaves = actions.filter(item => item.text === '保存');
-          if (!exactSaves.length) {
+          if (exactSaves.length !== 1) {
             const forbidden = forbiddenActions[0];
             return {
               ok:false,
-              reason: forbidden ? `只看到发布类按钮：${forbidden.text}` : '未找到精确“保存”按钮',
+              reason: forbidden
+                ? `只看到发布类按钮：${forbidden.text}`
+                : `精确“保存”按钮数量不是 1：${exactSaves.length}`,
+              exact_save_count:exactSaves.length,
               forbidden_actions: forbiddenActions,
-              published:false,
+              published:null,
               viewport:{innerWidth:window.innerWidth, innerHeight:window.innerHeight, visualViewportWidth:window.visualViewport && window.visualViewport.width, visualViewportHeight:window.visualViewport && window.visualViewport.height, devicePixelRatio:window.devicePixelRatio || 1}
             };
           }
-          const targetItem = exactSaves.find(item => !dialogs.some(dialog => dialog.contains(item.el))) || exactSaves[0];
+          const targetItem = exactSaves[0];
           const target = targetItem.el;
           if (dialogs.some(dialog => dialog.contains(target))) {
             return {
@@ -14114,7 +14171,7 @@ class DxmLoginFlow:
               rect:targetItem.rect,
               text:targetItem.text,
               forbidden_actions: forbiddenActions,
-              published:false,
+              published:null,
               viewport:{innerWidth:window.innerWidth, innerHeight:window.innerHeight, visualViewportWidth:window.visualViewport && window.visualViewport.width, visualViewportHeight:window.visualViewport && window.visualViewport.height, devicePixelRatio:window.devicePixelRatio || 1}
             };
           }
@@ -14129,7 +14186,7 @@ class DxmLoginFlow:
               rect,
               text:targetItem.text,
               forbidden_actions: forbiddenActions,
-              published:false,
+              published:null,
               viewport:{innerWidth:window.innerWidth, innerHeight:window.innerHeight, visualViewportWidth:window.visualViewport && window.visualViewport.width, visualViewportHeight:window.visualViewport && window.visualViewport.height, devicePixelRatio:window.devicePixelRatio || 1}
             };
           }
@@ -14144,7 +14201,7 @@ class DxmLoginFlow:
               text:targetItem.text,
               at_point_text:actualText,
               forbidden_actions: forbiddenActions,
-              published:false,
+              published:null,
               viewport:{innerWidth:window.innerWidth, innerHeight:window.innerHeight, visualViewportWidth:window.visualViewport && window.visualViewport.width, visualViewportHeight:window.visualViewport && window.visualViewport.height, devicePixelRatio:window.devicePixelRatio || 1}
             };
           }
@@ -14156,7 +14213,7 @@ class DxmLoginFlow:
             at_point_text:actualText,
             exact_save_count: exactSaves.length,
             forbidden_actions: forbiddenActions,
-            published:false,
+            published:null,
             viewport:{innerWidth:window.innerWidth, innerHeight:window.innerHeight, visualViewportWidth:window.visualViewport && window.visualViewport.width, visualViewportHeight:window.visualViewport && window.visualViewport.height, devicePixelRatio:window.devicePixelRatio || 1}
           };
         }'''
@@ -14164,27 +14221,19 @@ class DxmLoginFlow:
             result = self._evaluate_visible_page_function_via_devtools(page, script, timeout=1800)
         except Exception as exc:
             devtools_reason = str(exc)[:160]
-            native_result = self._visible_exact_save_button_state_from_native_snapshot(
-                page,
-                devtools_reason=devtools_reason,
-            )
-            if isinstance(native_result, dict) and native_result.get('ok'):
-                result = native_result
-            else:
-                native_reason = native_result.get('reason') if isinstance(native_result, dict) else '原生窗口兜底不可用'
-                result = {
-                    'ok': False,
-                    'reason': f'保存按钮定位通道不可用或失败：{devtools_reason}；原生窗口兜底失败：{native_reason}',
-                    'published': False,
-                    'native_fallback': native_result if isinstance(native_result, dict) else None,
-                }
+            result = {
+                'ok': False,
+                'reason': f'保存按钮精确文本定位通道不可用或失败：{devtools_reason}',
+                'published': None,
+                'native_fallback': None,
+            }
         self._trace_workflow_event(
             'save_only:visible_exact_save_locator_done',
             current_url=getattr(page, 'url', None),
             result=result,
             human_step='定位保存按钮',
         )
-        return result if isinstance(result, dict) else {'ok': False, 'reason': '保存按钮定位结果不可读', 'published': False}
+        return result if isinstance(result, dict) else {'ok': False, 'reason': '保存按钮定位结果不可读', 'published': None}
 
     def _visible_exact_save_button_state_from_native_snapshot(
         self,
@@ -14771,7 +14820,7 @@ class DxmLoginFlow:
         result = result if isinstance(result, dict) else {
             'ok': False,
             'reason': 'structured_unpublished_probe_unreadable',
-            'published': False,
+            'published': None,
         }
         product_matched = identity_readback.get('product_identity_match') is True
         store_matched = identity_readback.get('store_identity_match') is True
@@ -14835,101 +14884,146 @@ class DxmLoginFlow:
         *,
         mutation_action: str | None = None,
         pre_dispatch_guard: Callable[[], Any] | None = None,
+        pre_dispatch_facts: dict[str, Any] | None = None,
     ) -> bool:
-        try:
-            exact_target = page.evaluate(r'''() => {
+        target_handle: Any | None = None
+        target_descriptor: dict[str, Any] = {}
+
+        def capture_exact_target_guard() -> dict[str, Any]:
+            nonlocal target_handle, target_descriptor
+            base = pre_dispatch_guard() if callable(pre_dispatch_guard) else {'ok': True}
+            base_ok = base is True or (
+                isinstance(base, Mapping) and base.get('ok') is True
+            )
+            facts = dict(base) if isinstance(base, Mapping) else {'ok': base_ok}
+            if not base_ok:
+                return facts
+            handle = page.evaluate_handle(r'''() => {
               const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
               const visible = (el) => {
+                if (!el || !el.getBoundingClientRect) return false;
                 const r = el.getBoundingClientRect();
                 const style = window.getComputedStyle(el);
-                return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none'
+                return r.width > 0 && r.height > 0
+                  && r.bottom > 0 && r.top < window.innerHeight
+                  && style.visibility !== 'hidden' && style.display !== 'none'
+                  && style.pointerEvents !== 'none'
                   && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
               };
-              const rectOf = (el) => {
-                const r = el.getBoundingClientRect();
-                return {x:r.x, y:r.y, w:r.width, h:r.height};
-              };
-              const candidates = Array.from(document.querySelectorAll('button,a,[role="button"]'))
+              const exact = Array.from(document.querySelectorAll('button,a,[role="button"]'))
                 .filter(visible)
                 .filter(el => norm(el.innerText || el.textContent) === '保存');
-              const target = candidates[0] || null;
-              if (!target) return null;
-              target.scrollIntoView({block:'center', inline:'center'});
-              return {rect:rectOf(target), text:norm(target.innerText || target.textContent)};
+              if (exact.length !== 1) return null;
+              exact[0].scrollIntoView({block:'center', inline:'center'});
+              return exact[0];
             }''')
-            if isinstance(exact_target, dict) and exact_target.get('rect'):
-                page.wait_for_timeout(300)
-                def dispatch_operation() -> Any:
-                    dispatch_result = page.evaluate(r'''() => {
-                  const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
-                  const visible = (el) => {
-                    const r = el.getBoundingClientRect();
-                    const style = window.getComputedStyle(el);
-                    return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < window.innerHeight
-                      && style.visibility !== 'hidden' && style.display !== 'none'
-                      && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
-                  };
-                  const rectOf = (el) => {
-                    const r = el.getBoundingClientRect();
-                    return {x:r.x, y:r.y, w:r.width, h:r.height};
-                  };
-                  const dispatchMouse = (el, rect) => {
-                    const x = rect.x + rect.w / 2;
-                    const y = rect.y + rect.h / 2;
-                    for (const type of ['mouseover', 'mousemove', 'mousedown', 'mouseup', 'click']) {
-                      el.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true, view:window, clientX:x, clientY:y, button:0}));
-                    }
-                  };
-                  const dangerousTerms = ['发布','立即发布','继续发布','保存并发布','保存并移入待发布','移入待发布','批量发布'];
-                  const targets = Array.from(document.querySelectorAll('button,a,[role="button"]'))
-                    .filter(visible)
-                    .filter(el => norm(el.innerText || el.textContent) === '保存');
-                  if (targets.length !== 1) return {ok:false, reason:'exact_save_target_not_unique', exact_save_count:targets.length};
-                  const target = targets[0];
-                  const rect = rectOf(target);
-                  const x = rect.x + rect.w / 2;
-                  const y = rect.y + rect.h / 2;
-                  const atPoint = document.elementFromPoint(x, y);
-                  const actual = atPoint && atPoint.closest ? (atPoint.closest('button,a,[role="button"]') || target) : target;
-                  const actualText = norm(actual.innerText || actual.textContent);
-                  if (actualText !== '保存') {
-                    return {ok:false, reason:'point_not_on_exact_save', rect, text:norm(target.innerText || target.textContent), at_point_text:actualText};
-                  }
-                  if (dangerousTerms.some(term => actualText.includes(norm(term)))) {
-                    return {ok:false, reason:'dangerous_save_target', rect, text:actualText};
-                  }
-                  dispatchMouse(actual, rect);
-                  if (typeof actual.click === 'function') actual.click();
-                  return {ok:true, rect, text:actualText, method:'dom_exact_text'};
-                    }''')
-                    if not isinstance(dispatch_result, Mapping) or dispatch_result.get('ok') is not True:
-                        reason = (
-                            str(dispatch_result.get('reason') or 'exact_save_target_changed')
-                            if isinstance(dispatch_result, Mapping)
-                            else 'exact_save_target_changed'
-                        )
-                        raise MutationAuthorizationError(f'MUTATION_TARGET_DRIFT: {reason}')
-                    return dict(dispatch_result)
+            element = handle.as_element()
+            if element is None:
+                try:
+                    handle.dispose()
+                except Exception:
+                    pass
+                facts.update({
+                    'ok': False,
+                    'reason': 'exact_save_target_not_unique',
+                    'exact_save_target': {'ok': False, 'exact_save_count': None},
+                })
+                if pre_dispatch_facts is not None:
+                    pre_dispatch_facts.update(facts)
+                return facts
+            descriptor = element.evaluate(r'''(target) => {
+              const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
+              const visible = (el) => {
+                if (!el || !el.getBoundingClientRect) return false;
+                const r = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return r.width > 0 && r.height > 0
+                  && r.bottom > 0 && r.top < window.innerHeight
+                  && style.visibility !== 'hidden' && style.display !== 'none'
+                  && style.pointerEvents !== 'none'
+                  && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
+              };
+              const rect = target.getBoundingClientRect();
+              const exact = Array.from(document.querySelectorAll('button,a,[role="button"]'))
+                .filter(visible)
+                .filter(el => norm(el.innerText || el.textContent) === '保存');
+              const x = rect.x + rect.width / 2;
+              const y = rect.y + rect.height / 2;
+              const atPoint = document.elementFromPoint(x, y);
+              const actual = atPoint?.closest?.('button,a,[role="button"]') || null;
+              const text = norm(target.innerText || target.textContent);
+              const atPointText = norm(actual?.innerText || actual?.textContent);
+              const ok = exact.length === 1
+                && exact[0] === target
+                && actual === target
+                && text === '保存'
+                && atPointText === '保存';
+              return {
+                ok,
+                text,
+                at_point_text:atPointText,
+                exact_save_count:exact.length,
+                rect:{x:rect.x,y:rect.y,w:rect.width,h:rect.height},
+                reason:ok ? null : 'exact_save_target_changed_before_dispatch',
+              };
+            }''')
+            target_descriptor = dict(descriptor) if isinstance(descriptor, Mapping) else {}
+            if target_descriptor.get('ok') is not True:
+                try:
+                    handle.dispose()
+                except Exception:
+                    pass
+                facts.update({
+                    'ok': False,
+                    'reason': target_descriptor.get('reason') or 'exact_save_target_changed_before_dispatch',
+                    'exact_save_target': dict(target_descriptor),
+                })
+                if pre_dispatch_facts is not None:
+                    pre_dispatch_facts.update(facts)
+                return facts
+            target_handle = element
+            facts.update({
+                'ok': True,
+                'exact_save_target': dict(target_descriptor),
+            })
+            if pre_dispatch_facts is not None:
+                pre_dispatch_facts.update(facts)
+            return facts
 
-                authorization = (
-                    self._dispatch_authorized_mutation(
-                        mutation_action,
-                        dispatch_operation,
-                        pre_dispatch_guard=pre_dispatch_guard,
-                    )
-                    if mutation_action
-                    else None
+        def dispatch_operation() -> dict[str, Any]:
+            if target_handle is None:
+                raise MutationAuthorizationError(
+                    'MUTATION_TARGET_DRIFT: exact save ElementHandle was not captured before dispatch'
                 )
-                dispatched = authorization.get('operation_result') if authorization else dispatch_operation()
-                if isinstance(dispatched, dict) and dispatched.get('ok'):
-                    self._trace_workflow_event(
-                        'save_only:exact_save_click_done',
-                        method='dom_exact_text',
-                        result=dispatched,
-                        authorization=(authorization or {}).get('authorization_facts'),
-                        human_step='点击保存',
-                    )
-                    return True
+            dispatched = target_handle.evaluate(r'''(target) => {
+              target.click();
+              return {ok:true, dispatched:true, method:'dom_exact_text'};
+            }''')
+            if not isinstance(dispatched, Mapping) or dispatched.get('dispatched') is not True:
+                raise RuntimeError('MUTATION_DISPATCH_NOT_CONFIRMED: exact save click was not dispatched')
+            return dict(dispatched)
+
+        try:
+            if mutation_action:
+                authorization = self._dispatch_authorized_mutation(
+                    mutation_action,
+                    dispatch_operation,
+                    pre_dispatch_guard=capture_exact_target_guard,
+                )
+                dispatched = authorization.get('operation_result')
+            else:
+                self._run_mutation_pre_dispatch_guard(capture_exact_target_guard)
+                authorization = None
+                dispatched = dispatch_operation()
+            if isinstance(dispatched, Mapping) and dispatched.get('dispatched') is True:
+                self._trace_workflow_event(
+                    'save_only:exact_save_click_done',
+                    method='dom_exact_text',
+                    result={**target_descriptor, **dict(dispatched)},
+                    authorization=(authorization or {}).get('authorization_facts'),
+                    human_step='点击保存',
+                )
+                return True
         except Exception as exc:  # noqa: BLE001 - exact save failures are fail-closed.
             if isinstance(exc, MutationAuthorizationError):
                 raise
@@ -14938,6 +15032,13 @@ class DxmLoginFlow:
                 error=str(exc)[:240],
                 human_step='点击保存',
             )
+            return False
+        finally:
+            if target_handle is not None:
+                try:
+                    target_handle.dispose()
+                except Exception:
+                    pass
         return False
 
     def _capture_save_network_events(self, page: Page, save_rect: dict[str, Any] | None) -> dict[str, Any]:
@@ -15049,6 +15150,12 @@ class DxmLoginFlow:
         request_origin = f'{parsed.scheme.lower()}://{parsed.netloc.lower()}'
         if request_origin != page_origin:
             return None
+        path = parsed.path.lower()
+        if str(method or '').upper() == 'POST' and path in {
+            '/api/popchoiceproduct/add.json',
+            '/api/smtproduct/add.json',
+        }:
+            return 'save_request'
         route = f'{parsed.path}?{parsed.query}'.lower()
         if any(term in route for term in ('submitpublish', 'publish')):
             return 'publish_request'
@@ -15057,6 +15164,30 @@ class DxmLoginFlow:
         if 'online' in route:
             return 'online_request'
         return 'mutation_request'
+
+    @staticmethod
+    def _save_network_audit_complete(
+        network_audit: Mapping[str, Any],
+        publish_signal: Mapping[str, Any],
+    ) -> bool:
+        def exact_count(key: str, expected: int) -> bool:
+            value = network_audit.get(key)
+            return isinstance(value, int) and not isinstance(value, bool) and value == expected
+
+        return bool(
+            network_audit.get('scope') == 'same_origin_write_window'
+            and network_audit.get('complete') is True
+            and network_audit.get('window_closed') is True
+            and exact_count('registered_listener_count', 2)
+            and exact_count('removed_listener_count', 2)
+            and exact_count('mutation_request_count', 1)
+            and exact_count('save_request_count', 1)
+            and exact_count('other_mutation_request_count', 0)
+            and exact_count('publish_request_count', 0)
+            and publish_signal.get('detected') is False
+            and publish_signal.get('kind') == 'network_route_classification'
+            and publish_signal.get('request_count') == 0
+        )
 
     @staticmethod
     def _finalize_save_network_audit(page: Page, session: Mapping[str, Any]) -> dict[str, Any]:
@@ -15080,6 +15211,24 @@ class DxmLoginFlow:
             for item in mutation_requests
             if item.get('mutation_kind') in {'publish_request', 'release_request', 'online_request'}
         ]
+        save_requests = [
+            item for item in mutation_requests if item.get('mutation_kind') == 'save_request'
+        ]
+        other_mutation_requests = [
+            item
+            for item in mutation_requests
+            if item.get('mutation_kind') not in {
+                'save_request',
+                'publish_request',
+                'release_request',
+                'online_request',
+            }
+        ]
+        window_complete = bool(
+            session.get('registered') is True
+            and len(listeners) == 2
+            and removed == len(listeners)
+        )
         detected_kind = (
             str(publish_requests[0].get('mutation_kind'))
             if publish_requests
@@ -15088,98 +15237,85 @@ class DxmLoginFlow:
         return {
             'events': events,
             'network_audit': {
-                'complete': bool(
-                    session.get('registered') is True
-                    and len(listeners) == 2
-                    and removed == len(listeners)
-                ),
+                'scope': 'same_origin_write_window',
+                'complete': window_complete,
+                'window_closed': True,
+                'registered_listener_count': len(listeners),
+                'removed_listener_count': removed,
                 'mutation_request_count': len(mutation_requests),
+                'save_request_count': len(save_requests),
+                'other_mutation_request_count': len(other_mutation_requests),
                 'publish_request_count': len(publish_requests),
             },
             'publish_signal': {
-                'detected': bool(publish_requests),
+                'detected': bool(publish_requests) if window_complete else None,
                 'kind': detected_kind,
+                'request_count': len(publish_requests),
             },
         }
 
     def _network_save_result(self, events: list[dict[str, Any]]) -> dict[str, Any]:
-        if not events:
-            return {'ok': None, 'reason': '未捕获保存相关接口响应'}
-        json_events = [item for item in events if isinstance(item.get('json'), dict)]
-        if json_events:
-            exact_save_add_paths = {
-                '/api/popchoiceproduct/add.json',
-                '/api/smtproduct/add.json',
-            }
-
-            def event_path(item: dict[str, Any]) -> str:
-                try:
-                    return urlparse(str(item.get('url') or '')).path.lower()
-                except ValueError:
-                    return ''
-
-            def priority(item: dict[str, Any]) -> int:
-                path = event_path(item)
-                if path in exact_save_add_paths:
-                    return 0
-                if path.endswith('/add.json') and 'history' not in path:
-                    return 1
-                return 2
-
-            def status_ok(item: dict[str, Any]) -> bool:
-                try:
-                    return 200 <= int(item.get('status') or 0) < 300
-                except (TypeError, ValueError):
-                    return False
-
-            def method_ok(item: dict[str, Any]) -> bool:
-                return str(item.get('method') or '').upper() == 'POST'
-
-            indexed = list(enumerate(json_events))
-            _idx, item = sorted(indexed, key=lambda pair: (priority(pair[1]), -pair[0]))[0]
-            payload = item.get('json') or {}
-            data = payload.get('data')
-            code = payload.get('code')
-            msg = payload.get('msg') or payload.get('message')
-            if isinstance(data, dict):
-                code = data.get('code', code)
-                msg = data.get('msg') or data.get('message') or msg
-            code_ok = code in (0, '0') or payload.get('success') is True
-            exact_add = event_path(item) in exact_save_add_paths
-            success_text = str(msg or '').strip()
-            text_ok = any(term in success_text for term in ('保存成功', '编辑保存成功', '编辑成功'))
-            # A code-only or empty body is not a save receipt.  The endpoint,
-            # method, transport status, structured code and non-empty success
-            # message must all agree before this can authorize success.
-            ok = bool(
-                exact_add
-                and method_ok(item)
-                and status_ok(item)
-                and code_ok
-                and text_ok
-            )
+        exact_save_events = [
+            item
+            for item in events
+            if isinstance(item, Mapping)
+            and item.get('request_observed') is True
+            and item.get('mutation_kind') == 'save_request'
+            and str(item.get('method') or '').upper() == 'POST'
+        ]
+        receipt_count = len(exact_save_events)
+        if receipt_count != 1:
             return {
-                'ok': ok,
+                'ok': False,
+                'reason': (
+                    '未捕获唯一保存接口请求'
+                    if receipt_count == 0
+                    else '同一保存窗口捕获到多个保存接口请求'
+                ),
+                'receipt_count': receipt_count,
+                'receipt_complete': False,
+            }
+        item = dict(exact_save_events[0])
+        payload = item.get('json') if isinstance(item.get('json'), Mapping) else None
+        status = item.get('status')
+        status_ok = bool(
+            isinstance(status, int)
+            and not isinstance(status, bool)
+            and 200 <= status < 300
+        )
+        if payload is None:
+            return {
+                'ok': False,
                 'url': item.get('url'),
                 'method': item.get('method'),
-                'status': item.get('status'),
-                'code': code,
-                'msg': msg,
-                'message': msg,
-                'raw': payload,
-                'receipt_complete': ok,
+                'status': status,
+                'reason': '唯一保存响应缺少结构化 JSON 回执',
+                'receipt_count': 1,
+                'receipt_complete': False,
             }
-        last = events[-1]
-        status = last.get('status')
+        payload = dict(payload)
+        data = payload.get('data')
+        code = payload.get('code')
+        msg = payload.get('msg') or payload.get('message')
+        if isinstance(data, Mapping):
+            code = data.get('code', code)
+            msg = data.get('msg') or data.get('message') or msg
+        code_ok = code in (0, '0') or payload.get('success') is True
+        success_text = str(msg or '').strip()
+        text_ok = any(term in success_text for term in ('保存成功', '编辑保存成功', '编辑成功'))
+        receipt_complete = bool(status_ok and code_ok and text_ok)
         return {
-            'ok': False,
-            'url': last.get('url'),
-            'method': last.get('method'),
+            'ok': receipt_complete,
+            'url': item.get('url'),
+            'method': item.get('method'),
             'status': status,
-            'msg': last.get('text_excerpt'),
-            'message': last.get('text_excerpt'),
-            'reason': '保存响应缺少可验证的结构化成功回执',
-            'receipt_complete': False,
+            'code': code,
+            'msg': msg,
+            'message': msg,
+            'raw': payload,
+            'receipt_count': 1,
+            'receipt_complete': receipt_complete,
+            **({} if receipt_complete else {'reason': '唯一保存回执未同时满足状态、代码和成功消息'}),
         }
 
     def _ensure_page(self) -> Page:
@@ -17544,6 +17680,14 @@ class DxmLoginFlow:
                 target_identity_sha256=target_sha256,
                 store_name=' '.join(str(store_name or '').split()),
             )
+        target_source_urls = self._require_canonical_target_source_urls(
+            target_source_urls,
+            phase='商品箱精确行定位',
+        )
+        # Stage A may use a display query to narrow the visible list, but row
+        # identity is always the complete canonical source-URL set.
+        product_query = None
+        claim_mark = None
         payload = {
             'frag': product_query,
             'store': store_name,
@@ -17681,22 +17825,7 @@ class DxmLoginFlow:
             }).filter(Boolean);
             return {ok:true, rowIndex:sourceMatches[0].idx, rowText:sourceMatches[0].text.slice(0,700), sourceUrls:sourceUrls(row), storeEvidence:storeEvidence(row), actions, matchedBy:'source_url'};
           }
-          if (frag && candidates.length > 1) {
-            return {ok:false, ambiguous:true, matches:candidates.map(x => ({rowIndex:x.idx, rowText:x.text.slice(0,300)}))};
-          }
-          const picked = candidates.find(x => !x.text.includes('备注:')) || candidates[0] || null;
-          if (!picked) return {ok:false, matches:candidates};
-          const row = rows[picked.idx];
-          const pickedSourceUrls = sourceUrls(row);
-          const actions = Array.from(row.querySelectorAll('*')).map(el => {
-            const txt = normText(el);
-            const r = el.getBoundingClientRect();
-            if (!txt || r.width < 5 || r.height < 5) return null;
-            if (!['移入待发布','编辑','发布','更多'].includes(txt)) return null;
-            return {txt, tag: el.tagName, cls: String(el.className || ''), href: String(el.href || el.getAttribute('href') || ''), rect: {x:r.x,y:r.y,w:r.width,h:r.height}};
-          }).filter(Boolean);
-          const matchedBy = frag && picked.text.includes(frag) ? 'title' : 'first_operable';
-          return {ok:true, rowIndex:picked.idx, rowText:picked.text.slice(0,700), sourceUrls:pickedSourceUrls, storeEvidence:storeEvidence(row), actions, matchedBy};
+          return {ok:false, reason:'exact_source_row_not_found', matches:[]};
         }''', payload, timeout=3000)
         except Exception as exc:
             self._trace_workflow_event(
@@ -17946,9 +18075,9 @@ class DxmLoginFlow:
             product_identity_match = stable['value'] in observed_ids
         else:
             product_identity_match = self._source_urls_match_exact(observed_sources, expected_source_urls)
-        source_identity_match = bool(
-            not expected_source_urls
-            or self._source_urls_match_exact(observed_sources, expected_source_urls)
+        source_identity_match = self._source_urls_match_exact(
+            observed_sources,
+            expected_source_urls,
         )
         if not product_identity_match or not source_identity_match:
             raise FrozenTargetIdentityError(
@@ -18058,11 +18187,16 @@ class DxmLoginFlow:
                   class_name:String(picked.cell.className || '').slice(0, 240),
                 };
               };
-              const targetUrls = Array.isArray(targetSourceUrls) ? targetSourceUrls.filter(Boolean).map(String) : [];
+              const targetUrls = Array.from(new Set(
+                (Array.isArray(targetSourceUrls) ? targetSourceUrls : [])
+                  .map(canonicalUrl)
+                  .filter(Boolean)
+              )).sort();
               const hasTargetSource = (row) => {
                 if (!targetUrls.length) return false;
-                const urls = sourceUrls(row);
-                return urls.some(url => targetUrls.some(target => sourceUrlMatches(url, target)));
+                const urls = Array.from(new Set(sourceUrls(row).map(canonicalUrl).filter(Boolean))).sort();
+                return urls.length === targetUrls.length
+                  && urls.every((url, index) => url === targetUrls[index]);
               };
               const rectOf = (el) => {
                 const r = el.getBoundingClientRect();
@@ -18086,11 +18220,7 @@ class DxmLoginFlow:
                 if (!item.text || looksAggregate(item.text)) return false;
                 if (!['移入待发布','编辑','发布','更多'].some(k => item.text.includes(k))) return false;
                 if (store && !storeEvidence(item.row)) return false;
-                if (targetUrls.length) return hasTargetSource(item.row);
-                if (claimMark && item.text.includes(claimMark)) return true;
-                if (hasTargetSource(item.row)) return true;
-                if (frag) return item.text.includes(frag) || item.text.includes(String(frag).slice(0, 18));
-                return true;
+                return targetUrls.length > 0 && hasTargetSource(item.row);
               });
               if (!candidates.length) {
                 return {
@@ -18102,14 +18232,13 @@ class DxmLoginFlow:
                   textExcerpt: bodyText.slice(0, 500)
                 };
               }
-              const claimMatches = claimMark ? candidates.filter(item => item.text.includes(claimMark)) : [];
-              const sourceMatches = targetUrls.length ? candidates.filter(item => hasTargetSource(item.row)) : [];
-              const titleMatches = frag ? candidates.filter(item => item.text.includes(frag) || item.text.includes(String(frag).slice(0, 18))) : [];
-              const pickedMatches = claimMatches.length ? claimMatches : (sourceMatches.length ? sourceMatches : titleMatches);
+              const sourceMatches = candidates.filter(item => hasTargetSource(item.row));
+              const pickedMatches = sourceMatches;
               if (pickedMatches.length > 1) {
                 return {ok:false, ambiguous:true, matches:pickedMatches.map(item => ({rowIndex:item.idx, rowText:item.text.slice(0,300), sourceUrls:sourceUrls(item.row)}))};
               }
-              const picked = pickedMatches[0] || candidates[0];
+              const picked = pickedMatches[0];
+              if (!picked) return {ok:false, reason:'draft_box_no_exact_source_match'};
               const actions = actionCandidates(picked.row);
               const edit = actions.find(item => item.txt === '编辑');
               if (!edit) {
@@ -18119,10 +18248,10 @@ class DxmLoginFlow:
                 ok:true,
                 rowIndex:picked.idx,
                 rowText:picked.text.slice(0,700),
-                sourceUrls:sourceUrls(picked.row),
+                sourceUrls:Array.from(new Set(sourceUrls(picked.row).map(canonicalUrl).filter(Boolean))).sort(),
                 storeEvidence:storeEvidence(picked.row),
                 actions:[edit, ...actions.filter(item => item.txt !== '编辑')],
-                matchedBy: claimMatches.length ? 'claim_mark' : (sourceMatches.length ? 'source_url' : 'title')
+                matchedBy:'source_url'
               };
             }''', payload, timeout=2500)
         except Exception as exc:

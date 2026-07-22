@@ -11,6 +11,7 @@ type HomePageProps = {
   onShowTasks: () => void
   onShowConsole: () => void
   onShowBatchRecords: (batchId?: number) => void
+  onOpenBatch: (batchId: number) => void
 }
 
 export function HomePage({
@@ -23,6 +24,7 @@ export function HomePage({
   onShowTasks,
   onShowConsole,
   onShowBatchRecords,
+  onOpenBatch,
 }: HomePageProps) {
   const recentException = editBatches.length
     ? null
@@ -118,7 +120,7 @@ export function HomePage({
           ? {
               label: '继续批准批次',
               detail: '核对已冻结范围后，一次批准并启动严格串行执行。',
-              action: () => onShowBatchRecords(draftBatch.id),
+              action: () => onOpenBatch(draftBatch.id),
             }
         : !dxmLoggedIn
     ? {

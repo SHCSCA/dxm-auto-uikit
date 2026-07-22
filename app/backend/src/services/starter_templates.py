@@ -74,6 +74,8 @@ def starter_template_matches(
         return False
     if not bool(template.get("is_enabled", True)):
         return False
+    if template.get("requires_manual_configuration") is True:
+        return False
     payload = template.get("payload")
     if not isinstance(payload, Mapping):
         return False

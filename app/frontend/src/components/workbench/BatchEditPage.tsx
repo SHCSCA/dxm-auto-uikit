@@ -6,33 +6,75 @@ import type {
   EditBatchApproveAndStartRequest,
   EditBatchCreateRequest,
   EditBatchDetail,
+  Store,
   Template,
 } from '../../types'
 
+type ActiveBatchExecution = {
+  kind: 'batch' | 'task'
+  id: number
+  label: string
+} | null
+
+type BatchFlowBlocker = {
+  title: string
+  detail: string
+  action: string
+  onAction: () => void
+} | null
+
 type BatchEditPageProps = {
+  stores: Store[]
   templates: Template[]
+  scopeSnapshot: DraftBoxScopeSnapshot | null
   initialBatchId: number | null
+  activeExecution: ActiveBatchExecution
+  batchStateAvailable: boolean
+  dxmReady: boolean
+  diagnosticBrowserActive: boolean
+  onScopeSnapshotChange: (snapshot: DraftBoxScopeSnapshot | null) => void
   onBatchSelected: (batchId: number | null) => void
   onShowTemplates: () => void
-  onShowRecords: () => void
+  onShowRecords: (batchId?: number) => void
+  onShowDxmAccess: () => void
+  onShowConsole: () => void
+  onShowTasks: () => void
+  onRefreshStatus: () => void
 }
 
 const scopeLimits = [5, 10, 20, 50]
 
 export function BatchEditPage({
+  stores,
   templates,
+  scopeSnapshot,
   initialBatchId,
+  activeExecution,
+  batchStateAvailable,
+  dxmReady,
+  diagnosticBrowserActive,
+  onScopeSnapshotChange,
   onBatchSelected,
   onShowTemplates,
   onShowRecords,
+  onShowDxmAccess,
+  onShowConsole,
+  onShowTasks,
+  onRefreshStatus,
 }: BatchEditPageProps) {
-  const batchTemplates = useMemo(
+  const storeLevelBatchTemplates = useMemo(
     () => templates.filter((template) => (
       template.template_type === 'edit_batch_bundle'
       && template.is_enabled
       && isStoreLevelBatchTemplate(template)
     )),
     [templates],
+  )
+  const batchTemplates = useMemo(
+    () => scopeSnapshot
+      ? storeLevelBatchTemplates.filter((template) => templateMatchesScopeStore(template, scopeSnapshot.store_identity.store_name, stores))
+      : storeLevelBatchTemplates,
+    [scopeSnapshot, storeLevelBatchTemplates, stores],
   )
   const hiddenLegacyBundleCount = useMemo(
     () => templates.filter((template) => (
@@ -42,14 +84,51 @@ export function BatchEditPage({
     )).length,
     [templates],
   )
+  const hiddenOtherStoreBundleCount = Math.max(0, storeLevelBatchTemplates.length - batchTemplates.length)
   const [maxItems, setMaxItems] = useState(5)
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
-  const [scopeSnapshot, setScopeSnapshot] = useState<DraftBoxScopeSnapshot | null>(null)
   const [draftBatch, setDraftBatch] = useState<EditBatchDetail | null>(null)
   const [approvedBy, setApprovedBy] = useState('')
   const [saveOnlyConfirmed, setSaveOnlyConfirmed] = useState(false)
   const [busyAction, setBusyAction] = useState<'load' | 'capture' | 'create' | 'start' | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const ownsActiveBatch = activeExecution?.kind === 'batch' && activeExecution.id === draftBatch?.id
+  const flowBlocker: BatchFlowBlocker = activeExecution && !ownsActiveBatch
+    ? activeExecution.kind === 'batch'
+      ? {
+          title: `${activeExecution.label} 正在严格串行执行`,
+          detail: '全局一次只执行一个真实写入流程。当前批次结束前不能读取、冻结或启动另一批。',
+          action: '查看正在执行的批次',
+          onAction: () => onShowRecords(activeExecution.id),
+        }
+      : {
+          title: `${activeExecution.label} 正在执行`,
+          detail: '全局一次只执行一个真实写入流程。当前任务结束前不能启动商品箱整批编辑。',
+          action: '查看当前保存任务',
+          onAction: onShowTasks,
+        }
+    : !batchStateAvailable
+      ? {
+          title: '批次占用状态暂时无法确认',
+          detail: '为避免并发真实写入，当前不会读取范围、冻结草稿或启动批次。',
+          action: '刷新占用状态',
+          onAction: onRefreshStatus,
+        }
+      : diagnosticBrowserActive
+        ? {
+            title: '旧诊断浏览器正在占用共享浏览器',
+            detail: '关闭运行中的旧诊断浏览器后再读取范围或批准批次；不需要先打开诊断浏览器。',
+            action: '关闭旧诊断浏览器',
+            onAction: onShowConsole,
+          }
+        : !dxmReady
+          ? {
+              title: '先完成真实店小秘登录',
+              detail: '登录状态确认后才能读取真实商品箱范围；当前不会执行保存或发布。',
+              action: '登录店小秘',
+              onAction: onShowDxmAccess,
+            }
+          : null
 
   const selectedTemplate = batchTemplates.find((template) => String(template.id) === selectedTemplateId)
     ?? batchTemplates[0]
@@ -86,6 +165,7 @@ export function BatchEditPage({
   }, [draftBatch?.id, initialBatchId])
 
   async function captureLiveScope() {
+    if (flowBlocker) return
     onBatchSelected(null)
     setBusyAction('capture')
     setError(null)
@@ -93,10 +173,10 @@ export function BatchEditPage({
       const snapshot = await postJson<DraftBoxScopeSnapshot>('/api/dxm/draft-box/scope-snapshots', {
         max_items: maxItems,
       } satisfies DraftBoxScopeSnapshotCreateRequest)
-      setScopeSnapshot(snapshot)
+      onScopeSnapshotChange(snapshot)
       setDraftBatch(null)
     } catch (caught) {
-      setScopeSnapshot(null)
+      onScopeSnapshotChange(null)
       setError(humanBatchError(caught, '读取商品箱现场失败'))
     } finally {
       setBusyAction(null)
@@ -104,7 +184,7 @@ export function BatchEditPage({
   }
 
   async function createDraftBatch() {
-    if (!scopeSnapshot || !selectedTemplate) return
+    if (flowBlocker || !scopeSnapshot || !selectedTemplate) return
     setBusyAction('create')
     setError(null)
     try {
@@ -113,6 +193,7 @@ export function BatchEditPage({
         template_id: selectedTemplate.id,
       } satisfies EditBatchCreateRequest)
       setDraftBatch(created)
+      onScopeSnapshotChange(null)
       onBatchSelected(created.id)
       setApprovedBy('')
       setSaveOnlyConfirmed(false)
@@ -132,7 +213,7 @@ export function BatchEditPage({
   }
 
   async function approveAndStartBatch() {
-    if (!draftBatch || draftBatch.status !== 'draft' || !approvedBy.trim() || !saveOnlyConfirmed) return
+    if (flowBlocker || !draftBatch || draftBatch.status !== 'draft' || !approvedBy.trim() || !saveOnlyConfirmed) return
     setBusyAction('start')
     setError(null)
     try {
@@ -141,7 +222,7 @@ export function BatchEditPage({
         confirmation: 'CONFIRM_DXM_BATCH_SAVE_ONLY',
       } satisfies EditBatchApproveAndStartRequest)
       setDraftBatch(started)
-      onShowRecords()
+      onShowRecords(started.id)
     } catch (caught) {
       setError(humanBatchError(caught, '批准并开始批次失败'))
     } finally {
@@ -171,7 +252,9 @@ export function BatchEditPage({
             <div><dt>店铺</dt><dd>{draftBatch.scope_snapshot.store_identity?.store_name ?? '店铺已冻结'}</dd></div>
             <div><dt>模板</dt><dd>{draftBatch.template_snapshot.template_name ?? '模板已冻结'} · {templateVersion(draftBatch.template_snapshot)}</dd></div>
           </dl>
-          {isDraft ? (
+          {isDraft && flowBlocker ? (
+            <BatchFlowBlockerCard blocker={flowBlocker} />
+          ) : isDraft ? (
             <div className="batch-approval-card" aria-label="整批一次批准">
               <div className="batch-approval-card__intro">
                 <strong>批准并开始</strong>
@@ -212,7 +295,7 @@ export function BatchEditPage({
               </button>
             </div>
           ) : (
-            <button className="button button--primary batch-primary-action" type="button" onClick={onShowRecords}>
+            <button className="button button--primary batch-primary-action" type="button" onClick={() => onShowRecords(draftBatch.id)}>
               查看实时批次记录
             </button>
           )}
@@ -234,7 +317,11 @@ export function BatchEditPage({
         </div>
       </article>
 
-      {!scopeSnapshot ? (
+      {flowBlocker ? (
+        <article className="module-card span-3 batch-capture-card">
+          <BatchFlowBlockerCard blocker={flowBlocker} />
+        </article>
+      ) : !scopeSnapshot ? (
         <article className="module-card span-3 batch-capture-card">
           <div className="batch-capture-contract">
             <div>
@@ -252,14 +339,14 @@ export function BatchEditPage({
           </div>
           <div className="batch-template-inline">
             <span>
-            <strong>{selectedTemplate ? '将用于草稿的模板' : '模板尚未就绪'}</strong>
-              <small>{selectedTemplate
-                ? '读取现场后仍可在创建草稿前切换。'
+              <strong>{storeLevelBatchTemplates.length ? '店铺级模板候选已准备' : '模板尚未就绪'}</strong>
+              <small>{storeLevelBatchTemplates.length
+                ? '读取现场店铺后，只保留店铺身份精确一致的整批模板。'
                 : hiddenLegacyBundleCount
-                  ? '旧的类目绑定整批模板已隐藏；当前商品箱没有结构化类目证据，必须重新生成店铺级模板。'
+                  ? '旧的类目绑定或无明确店铺整批模板已隐藏；必须重新生成店铺级模板。'
                   : '不影响只读范围读取；创建草稿前必须到模板中心准备完整模板包。'}</small>
             </span>
-            <b>{selectedTemplate ? `${selectedTemplate.template_name} · ${templateVersion(selectedTemplate)}` : '先读取现场，再补模板'}</b>
+            <b>{storeLevelBatchTemplates.length ? `${storeLevelBatchTemplates.length} 套候选` : '先读取现场，再补模板'}</b>
           </div>
           {error && <div className="batch-inline-error" role="alert">{error}</div>}
           <button className="button button--primary batch-primary-action" type="button" onClick={() => { void captureLiveScope() }} disabled={busyAction !== null}>
@@ -321,7 +408,7 @@ export function BatchEditPage({
                       <option value={String(template.id)} key={template.id}>{template.template_name} · {templateVersion(template)}</option>
                     ))}
                   </select>
-                  <small>仅列出已启用的完整整批模板；后端会再次验证全部必需分区。</small>
+                  <small>仅列出与当前现场店铺一致的店铺级整批模板；后端会再次验证全部必需分区。</small>
                 </label>
                 <button className="button button--primary batch-primary-action" type="button" onClick={() => { void createDraftBatch() }} disabled={busyAction !== null}>
                   {busyAction === 'create' ? '正在冻结草稿…' : '冻结批次草稿'}
@@ -331,9 +418,11 @@ export function BatchEditPage({
             ) : (
               <div className="batch-template-blocker" role="status">
                 <strong>整批模板未就绪</strong>
-                <span>{hiddenLegacyBundleCount
-                  ? '现有模板仍绑定类目，无法用当前商品箱现场精确核对。现场已安全读取，但不能创建草稿。'
-                  : '当前生产数据中没有已启用的完整整批模板。现场已安全读取，但不能创建草稿。'}</span>
+                <span>{hiddenOtherStoreBundleCount
+                  ? `现有店铺级模板属于其他店铺，与 ${scopeSnapshot.store_identity.store_name} 不一致。现场已安全读取，但不能创建草稿。`
+                  : hiddenLegacyBundleCount
+                    ? '现有模板仍绑定类目或缺少明确店铺，无法用当前商品箱现场精确核对。现场已安全读取，但不能创建草稿。'
+                    : '当前生产数据中没有已启用的完整整批模板。现场已安全读取，但不能创建草稿。'}</span>
                 <button className="button button--primary batch-primary-action" type="button" onClick={onShowTemplates}>重新生成店铺级整批模板</button>
               </div>
             )}
@@ -370,6 +459,18 @@ function humanBatchError(caught: unknown, action: string) {
   return `${action}。请刷新工作台后重试；系统没有执行保存或发布。`
 }
 
+function BatchFlowBlockerCard({ blocker }: { blocker: Exclude<BatchFlowBlocker, null> }) {
+  return (
+    <div className="batch-template-blocker" role="status">
+      <strong>{blocker.title}</strong>
+      <span>{blocker.detail}</span>
+      <button className="button button--primary batch-primary-action" type="button" onClick={blocker.onAction}>
+        {blocker.action}
+      </button>
+    </div>
+  )
+}
+
 function templateVersion(template: Pick<Template, 'payload'> | { payload?: { version?: unknown } } | null) {
   const version = template?.payload?.version
   return typeof version === 'string' && version.trim() ? `v${version.replace(/^v/i, '')}` : '版本未标注'
@@ -380,7 +481,9 @@ function scopeFilterSummary(filter: Record<string, unknown>) {
   const values = controls.flatMap((control) => {
     if (!control || typeof control !== 'object') return []
     const record = control as Record<string, unknown>
-    const key = typeof record.key === 'string' ? record.key : '筛选'
+    const rawKey = typeof record.key === 'string' ? record.key : ''
+    const key = businessFilterLabel(rawKey)
+    if (!key) return []
     const value = typeof record.value === 'string' || typeof record.value === 'number' ? String(record.value) : '已记录'
     return [`${key}: ${value}`]
   })
@@ -392,11 +495,39 @@ function scopeSortSummary(sort: Record<string, unknown>) {
   const values = keys.flatMap((keyValue) => {
     if (!keyValue || typeof keyValue !== 'object') return []
     const record = keyValue as Record<string, unknown>
-    const key = typeof record.key === 'string' ? record.key : '当前顺序'
-    const direction = typeof record.direction === 'string' ? record.direction : ''
+    const rawKey = typeof record.key === 'string' ? record.key : ''
+    const key = businessSortLabel(rawKey)
+    if (!key) return []
+    const direction = humanSortDirection(typeof record.direction === 'string' ? record.direction : '')
     return [`${key}${direction ? ` ${direction}` : ''}`]
   })
   return values.length ? values.join(' · ') : '当前页面顺序'
+}
+
+function businessFilterLabel(key: string) {
+  return ({
+    store: '店铺',
+    store_name: '店铺',
+    status: '状态',
+    keyword: '关键词',
+    category: '类目',
+    category_name: '类目',
+    page_size: '每页数量',
+  } as Record<string, string>)[key.trim().toLowerCase()] ?? ''
+}
+
+function businessSortLabel(key: string) {
+  return ({
+    created_at: '创建时间',
+    updated_at: '更新时间',
+    title: '商品标题',
+    price: '价格',
+    ordinal: '页面顺序',
+  } as Record<string, string>)[key.trim().toLowerCase()] ?? ''
+}
+
+function humanSortDirection(direction: string) {
+  return ({ asc: '升序', ascending: '升序', desc: '降序', descending: '降序' } as Record<string, string>)[direction.trim().toLowerCase()] ?? ''
 }
 
 function scopePageSummary(pageState: DraftBoxScopeSnapshot['page_state']) {
@@ -442,11 +573,27 @@ function humanBatchStatus(status: string) {
 
 function isStoreLevelBatchTemplate(template: Template) {
   const binding = template.payload?.binding
-  return Boolean(
-    binding
-    && typeof binding === 'object'
-    && !Array.isArray(binding)
-    && Object.prototype.hasOwnProperty.call(binding, 'category_name')
-    && (binding as Record<string, unknown>).category_name === null,
-  )
+  if (!binding || typeof binding !== 'object' || Array.isArray(binding)) return false
+  const record = binding as Record<string, unknown>
+  const storeId = Number(record.store_id)
+  const storeName = typeof record.store_name === 'string' ? record.store_name.trim() : ''
+  return Object.prototype.hasOwnProperty.call(record, 'category_name')
+    && record.category_name === null
+    && ((Number.isInteger(storeId) && storeId > 0) || Boolean(storeName))
+}
+
+function templateMatchesScopeStore(template: Template, scopeStoreName: string, stores: Store[]) {
+  const binding = template.payload?.binding
+  if (!binding || typeof binding !== 'object' || Array.isArray(binding)) return false
+  const record = binding as Record<string, unknown>
+  const boundStoreName = typeof record.store_name === 'string' ? record.store_name.trim() : ''
+  if (boundStoreName) return normalizeStoreName(boundStoreName) === normalizeStoreName(scopeStoreName)
+  const storeId = Number(record.store_id)
+  if (!Number.isInteger(storeId) || storeId <= 0) return false
+  const boundStore = stores.find((store) => store.id === storeId)
+  return Boolean(boundStore && normalizeStoreName(boundStore.name) === normalizeStoreName(scopeStoreName))
+}
+
+function normalizeStoreName(value: string) {
+  return value.trim().toLocaleLowerCase('zh-CN')
 }

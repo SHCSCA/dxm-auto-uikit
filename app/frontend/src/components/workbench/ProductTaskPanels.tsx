@@ -709,7 +709,7 @@ function humanReadinessCheckLabel(id: string, fallback: string) {
     no_editor_or_save: '不打开编辑页、不触发保存请求证明',
     rollback_release: '归属释放或人工回滚路径',
     batch_size_limit: '批量大小上限',
-    per_job_save_and_unpublished: '逐商品保存结果与 published=false',
+    per_job_save_and_unpublished: '逐商品保存结果与独立未发布证明',
     partial_failure_rollback: '部分失败报告与回滚/人工接管',
   } as Record<string, string>)[id] ?? fallback
 }

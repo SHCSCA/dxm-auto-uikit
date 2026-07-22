@@ -209,9 +209,9 @@ def _is_supported_frozen_source_url(value: str) -> bool:
 def _canonical_frozen_target_identity(value: Any, *, store_name: str) -> dict[str, Any] | None:
     """Validate the immutable identity captured from the visible DXM draft box.
 
-    Legacy single-save commands do not carry this object.  Governed edit-batch
-    commands do, and must bind the mutation hash to the structured product ID
-    or canonical source URL instead of trusting a display-title substring.
+    Every governed edit/save command carries this object and binds the mutation
+    hash to both a structured product identity and canonical source URLs instead
+    of trusting a display-title substring.
     """
 
     if value is None:
@@ -285,12 +285,12 @@ def _canonical_frozen_target_identity(value: Any, *, store_name: str) -> dict[st
             "target_identity.source_urls must be a canonical string list",
         )
     source_urls = _canonical_target_source_urls(raw_source_urls)
-    if source_urls != raw_source_urls or any(
+    if not source_urls or source_urls != raw_source_urls or any(
         not _is_supported_frozen_source_url(item) for item in source_urls
     ):
         raise MutationCommandContractError(
             "MUTATION_TARGET_INVALID",
-            "target_identity source URLs must be canonical supported product pages",
+            "target_identity requires non-empty canonical supported product source URLs",
         )
     if kind == "product_id":
         if _FROZEN_PRODUCT_ID_RE.fullmatch(stable_value) is None:

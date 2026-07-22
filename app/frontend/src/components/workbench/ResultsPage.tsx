@@ -18,6 +18,7 @@ type ResultsPageProps = {
   finalCheck: FinalDeliveryCheckSummary | null
   onShowDraftEdit: () => void
   onShowBatchRecords: (batchId?: number) => void
+  onOpenBatch: (batchId: number) => void
   onShowEvidence: () => void
   onShowTasks: () => void
   onShowExceptions: () => void
@@ -63,12 +64,13 @@ export function ResultsPage({
   finalCheck,
   onShowDraftEdit,
   onShowBatchRecords,
+  onOpenBatch,
   onShowEvidence,
   onShowTasks,
   onShowExceptions,
 }: ResultsPageProps) {
   if (editBatches.length) {
-    return <ControlledBatchResults batches={editBatches} onShowBatchRecords={onShowBatchRecords} />
+    return <ControlledBatchResults batches={editBatches} onShowBatchRecords={onShowBatchRecords} onOpenBatch={onOpenBatch} />
   }
   if (!selectedTask && workspace.reports.length === 0 && workspace.evidences.length === 0) {
     return (
@@ -120,7 +122,13 @@ export function ResultsPage({
         primaryAction={primaryAction}
       />
       <div className="module-card span-3">
-        <ModuleHead title="保存后核对" meta={humanPublishGuardStatus(workspace.publishGuardState?.status)} />
+        <ModuleHead
+          title="保存后核对"
+          meta={humanPublishGuardStatus(
+            workspace.publishGuardState?.status,
+            workspace.publishGuardState?.has_unpublished_proof === true,
+          )}
+        />
         <div className="report-check-grid">
           <BusinessReportCheckRow count={businessReportCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
           <EvidenceCheckRow label="保存结果" count={saveResultCount} realWriteExpectedBlocked={realWriteExpectedBlocked} />
@@ -154,9 +162,11 @@ export function ResultsPage({
 function ControlledBatchResults({
   batches,
   onShowBatchRecords,
+  onOpenBatch,
 }: {
   batches: EditBatchSummary[]
   onShowBatchRecords: (batchId?: number) => void
+  onOpenBatch: (batchId: number) => void
 }) {
   const latest = batches[0]
   const active = batches.find((batch) => batch.status === 'running' || batch.status === 'stop_requested') ?? null
@@ -207,7 +217,11 @@ function ControlledBatchResults({
           <strong>下一步：{next.title}</strong>
           <span>{next.detail}</span>
         </div>
-        <button className="button button--primary" type="button" onClick={() => onShowBatchRecords(targetBatch.id)}>
+        <button
+          className="button button--primary"
+          type="button"
+          onClick={() => targetBatch.status === 'draft' ? onOpenBatch(targetBatch.id) : onShowBatchRecords(targetBatch.id)}
+        >
           {next.title}
         </button>
       </article>
@@ -521,6 +535,7 @@ function BusinessResultSummaryCard({
   const taskDone = selectedTask?.status === 'completed'
   const reportSuccess = latestReport?.status === 'success'
   const reportPublished = latestReport?.published
+  const reportIndicatesPublished = reportPublished === true
   const reportConfirmsUnpublished = reportPublished === false
   const hasSaveProof = saveResultCount > 0 && unpublishedProofCount > 0 && networkHarCount > 0 && reportConfirmsUnpublished
   const ok = taskDone
@@ -542,21 +557,27 @@ function BusinessResultSummaryCard({
       : '等待完成'
   const nextStep = ok
     ? '查看保存证据，确认未发布。'
-    : realWriteExpectedBlocked
-      ? '回到浏览器现场，完成安全检查和人工确认。'
-      : '处理问题或回到浏览器现场重试。'
+    : reportIndicatesPublished
+      ? '立即停止后续操作并人工核对真实店小秘页面。'
+      : realWriteExpectedBlocked
+        ? '回到浏览器现场，完成安全检查和人工确认。'
+        : '处理问题或回到浏览器现场重试。'
   const title = ok
     ? '本次只保存已完成'
-    : realWriteExpectedBlocked
-      ? '等待人工确认后保存'
-      : taskDone
-        ? '本次结果需要复核'
-        : '还没有完成保存'
+    : reportIndicatesPublished
+      ? '发现已发布结果，必须立即核对'
+      : realWriteExpectedBlocked
+        ? '等待人工确认后保存'
+        : taskDone
+          ? '本次结果需要复核'
+          : '还没有完成保存'
   const detail = ok
     ? '系统已拿到保存成功、未发布证明和保存接口回包。'
-    : realWriteExpectedBlocked
-      ? '真实保存不会自动启动；完成登录、配置、安全检查和人工确认后再执行。'
-      : '请先查看保存证据或回到浏览器现场处理当前阻断。'
+    : reportIndicatesPublished
+      ? '报告明确标记为已发布；不要继续执行或自动重试。'
+      : realWriteExpectedBlocked
+        ? '真实保存不会自动启动；完成登录、配置、安全检查和人工确认后再执行。'
+        : '请先查看保存证据或回到浏览器现场处理当前阻断。'
 
   return (
     <div className={`module-card span-3 business-result-summary ${ok ? 'is-ok' : realWriteExpectedBlocked ? 'is-waiting' : 'is-warn'}`} aria-label="本次保存结果">
@@ -763,7 +784,7 @@ function ReportCard({ report }: { report: Report }) {
         <strong>{title}</strong>
         <div className="report-card__statuses">
           <span className={`status-pill ${reportStatusTone(report.status)}`}>{humanReportStatus(report.status)}</span>
-          <span className={`status-pill ${reportPublishedTone(report.published)}`}>{humanReportPublished(report.published)}</span>
+          <span className={`status-pill ${reportPublishedTone(report.published)}`}>发布：{humanReportPublished(report.published)}</span>
         </div>
       </div>
       <p>{humanReportSummary(report)}</p>
@@ -828,9 +849,9 @@ function summarizeL2Diagnostics(gate?: RegressionGate): L2DiagnosticSummary[] {
   })
 }
 
-function humanPublishGuardStatus(status?: string | null) {
+function humanPublishGuardStatus(status?: string | null, hasUnpublishedProof = false) {
+  if (status === 'safe_unpublished') return hasUnpublishedProof ? '保存后未发布' : '未验证/不适用'
   return ({
-    safe_unpublished: '保存后未发布',
     unsafe_publish_risk: '发现发布风险',
     blocked: '已暂停',
     waiting: '等待执行',

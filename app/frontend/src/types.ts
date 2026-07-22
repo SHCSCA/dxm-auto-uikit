@@ -2,11 +2,9 @@ export type Store = { id: number; name: string; platform: string; status: string
 export type RuntimeIdentity = {
   schemaVersion: string
   instanceId: string
-  gitHead: string
   gitDirty: boolean
   buildId: string
   packageVersion: string
-  packageSha256: string | null
   backendPid: number
   browserAgentPid: number
   browserExecutionModel: 'in_process_thread'
@@ -14,7 +12,6 @@ export type RuntimeIdentity = {
   workflowProfileDir: string
   resourceRoot: string
   startedAt: string
-  fingerprint: string
 }
 export type DesktopRuntimeInfo = {
   repoRoot?: string | null
@@ -88,7 +85,6 @@ export type EditBatchBundleCandidate = {
   template_name: string
   template_type: EditBatchBundleSectionCode
   binding_scope: string
-  source_digest: string
   ready: boolean
   missing_fields: string[]
 }
@@ -114,7 +110,6 @@ export type EditBatchBundleCreateRequest = {
   category_name: string | null
   section_templates: Record<EditBatchBundleSectionCode, {
     template_id: number
-    source_digest: string
   }>
 }
 export type DraftBoxScopeSnapshotCreateRequest = {
@@ -304,13 +299,6 @@ export type ClaimCandidate = {
   created_at?: string | null
   categoryHint?: string | null
   category_hint?: string | null
-  textExcerpt?: string | null
-  text_excerpt?: string | null
-  runId?: string | null
-  run_id?: string | null
-  capturedAt?: string | null
-  captured_at?: string | null
-  readonly?: boolean | null
 }
 export type AcquisitionClaimCreateRequest = { storeId: number; sourceUrl: string; keyword?: string; categoryName?: string; claimMark: string; templateId?: number | null }
 export type AcquisitionClaimResponse = {
@@ -473,7 +461,7 @@ export type ConfigPreview = {
 }
 export type Evidence = { id: number; task_id: number; job_id: number | null; evidence_type: string; file_path: string | null; meta: Record<string, unknown>; created_at: string }
 export type ExceptionItem = { id: number; task_id: number; job_id: number | null; error_code: string; field_domain: string; title: string; detail: string; suggestion: string; status: string }
-export type Report = { id: number | string; task_id?: number; title?: string; status?: string; report_type?: string; summary?: string; published?: boolean | null; file_path?: string | null; file_path_url?: string | null; created_at?: string; [key: string]: unknown }
+export type Report = { id: number | string; task_id?: number; title?: string; status?: string; report_type?: string; summary?: string; published: boolean | null; file_path?: string | null; file_path_url?: string | null; created_at?: string; [key: string]: unknown }
 export type LiveEvent = { type: string; taskId: number; jobId?: number; productId?: number; stepCode?: string; stepName?: string; fieldDomain?: string; screenshotPath?: string; timestamp?: string; status?: string; completedJobs?: number; failedJobs?: number }
 
 export type EvidenceGrade = 'A' | 'B' | 'C'
@@ -608,7 +596,6 @@ export type AgentConsoleControlCommand = {
 }
 export type AgentConsoleSession = {
   active: boolean
-  session_id: string | null
   task_id: number | null
   job_id?: number | null
   product_id?: number | null
@@ -681,27 +668,17 @@ export type FinalDeliveryCheckSummary = {
   source_package_readiness?: string | null
   source_package_check?: string | null
   require_clean_worktree?: boolean | null
-  git_head?: string | null
-  current_git_head?: string | null
-  current_git_status_short?: string | null
   current_git_is_dirty?: boolean | null
   final_check_matches_current_worktree?: boolean | null
   final_check_freshness?: string | null
   browser_qa_ok?: boolean | null
   browser_qa_checked_at?: string | null
-  browser_qa_git_head?: string | null
-  browser_qa_git_status_short?: string | null
-  browser_qa_matches_report_git_head?: boolean | null
-  browser_qa_screenshot_hashes?: Record<string, string> | null
   post_final_report_qa_ok?: boolean | null
   post_final_report_qa_checked_at?: string | null
-  post_final_report_qa_screenshot_hashes?: Record<string, string> | null
   l2_allowlist_review_template_state?: string | null
   l2_allowlist_review_template_candidate_count?: number | null
   l2_allowlist_review_template_markdown_path?: string | null
   l2_allowlist_review_template_json_path?: string | null
-  l2_allowlist_review_template_markdown_sha256?: string | null
-  l2_allowlist_review_template_json_sha256?: string | null
   qa_services?: Record<string, unknown> | null
   gates?: Record<string, unknown> | null
   summary_path?: string | null

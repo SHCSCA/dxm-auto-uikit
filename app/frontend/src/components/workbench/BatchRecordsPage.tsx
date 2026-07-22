@@ -103,7 +103,9 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
   const currentItem = detail && progress?.current_ordinal
     ? detail.items.find((item) => item.ordinal === progress.current_ordinal) ?? null
     : null
-  const exceptionalItems = detail?.items.filter((item) => NON_SUCCESS_TERMINAL_ITEM_STATUSES.has(item.status)) ?? []
+  const exceptionalItems = detail?.items.filter((item) => (
+    NON_SUCCESS_TERMINAL_ITEM_STATUSES.has(item.status) || itemNeedsManualReview(item)
+  )) ?? []
   const safeStopped = progress ? safeStoppedCount(progress) : 0
   const uncertain = progress ? uncertainCount(progress) : 0
   const primaryNotice = error
@@ -300,6 +302,9 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
               <span>
                 <strong>{detail.template_snapshot.template_name ?? '模板已冻结'}</strong>
                 <small>{templateVersion(detail)} · {detail.items.length} 件 · 严格串行</small>
+                {detail.approval?.approved && (
+                  <small>一次批准：{detail.approval.approved_by ?? '批准人已记录'}{detail.approval.approved_at ? ` · ${formatDateTime(detail.approval.approved_at)}` : ''}</small>
+                )}
               </span>
               <b>只保存 · 不发布</b>
             </div>
@@ -386,6 +391,7 @@ function humanItemStatus(status: string) {
 }
 
 function humanOutcome(item: EditBatchItem) {
+  if (itemNeedsManualReview(item)) return '结果不确定 · 待人工对账'
   return humanItemStatus(item.status)
 }
 

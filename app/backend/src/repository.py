@@ -8,7 +8,14 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.core.config import SCREENSHOT_DIR
-from src.db import connection, dumps, loads, recover_interrupted_edit_batches as recover_edit_batches_in_db
+from src.db import (
+    connection,
+    disable_edit_batch_bundles_with_quarantined_sources,
+    disable_legacy_generated_starter_templates,
+    dumps,
+    loads,
+    recover_interrupted_edit_batches as recover_edit_batches_in_db,
+)
 from src.batch_edit.execution_state import (
     ITEM_CONTINUE_TERMINAL_STATUSES,
     ITEM_TERMINAL_STATUSES,
@@ -29,6 +36,9 @@ from src.batch_edit.execution_contract import (
     BatchExecutionContractError,
     derive_running_item_claim_context,
 )
+from src.batch_edit.batch_contract import BatchContractError, freeze_template_bundle
+from src.batch_edit.scope_contract import canonical_sha256
+from src.execution.browser_agent_protocol import mutation_target_hash
 from src.services.evidence_ref import validate_evidence_ref
 from src.state_machine.two_stage import (
     TwoStageContractError,
@@ -155,12 +165,23 @@ class Repository:
     def create_template(self, data: dict[str, Any]):
         now = now_iso()
         with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             cur = conn.execute(
-                "INSERT INTO templates (template_type, template_name, binding_scope, payload_json, is_enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                """
+                INSERT INTO templates (
+                    template_type, template_name, binding_scope, payload_json,
+                    is_enabled, requires_manual_configuration, quarantine_reason,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?)
+                """,
                 (
                     data['template_type'], data['template_name'], data['binding_scope'], dumps(data['payload']), int(data['is_enabled']), now, now,
                 ),
             )
+            # Generic template APIs must not bypass the same exact legacy and
+            # source-reference quarantine applied during database startup.
+            disable_legacy_generated_starter_templates(conn)
+            disable_edit_batch_bundles_with_quarantined_sources(conn)
             row = conn.execute("SELECT * FROM templates WHERE id=?", (cur.lastrowid,)).fetchone()
             row['payload'] = loads(row.pop('payload_json'), {})
             row['is_enabled'] = bool(row['is_enabled'])
@@ -170,31 +191,46 @@ class Repository:
             return row
 
     def update_template(self, template_id: int, data: dict[str, Any]):
-        current = self.get_template(template_id)
-        if not current:
-            return None
-        next_payload = {
-            'template_type': data.get('template_type') or current['template_type'],
-            'template_name': data.get('template_name') or current['template_name'],
-            'binding_scope': data.get('binding_scope') or current['binding_scope'],
-            'payload': data['payload'] if data.get('payload') is not None else current['payload'],
-            'is_enabled': current['is_enabled'] if data.get('is_enabled') is None else bool(data['is_enabled']),
-        }
-        material_changed = (
-            'payload' in data
-            and data.get('payload') is not None
-            and data.get('payload') != current.get('payload')
-        )
-        requires_manual_configuration = bool(
-            current.get('requires_manual_configuration') and not material_changed
-        )
-        quarantine_reason = (
-            current.get('quarantine_reason')
-            if requires_manual_configuration
-            else None
-        )
         now = now_iso()
         with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM templates WHERE id=?",
+                (template_id,),
+            ).fetchone()
+            if not row:
+                return None
+            current = dict(row)
+            current['payload'] = loads(current.pop('payload_json'), {})
+            current['is_enabled'] = bool(current['is_enabled'])
+            current['requires_manual_configuration'] = bool(
+                current.get('requires_manual_configuration')
+            )
+            next_payload = {
+                'template_type': data.get('template_type') or current['template_type'],
+                'template_name': data.get('template_name') or current['template_name'],
+                'binding_scope': data.get('binding_scope') or current['binding_scope'],
+                'payload': data['payload'] if data.get('payload') is not None else current['payload'],
+                'is_enabled': current['is_enabled'] if data.get('is_enabled') is None else bool(data['is_enabled']),
+            }
+            material_changed = (
+                'payload' in data
+                and data.get('payload') is not None
+                and data.get('payload') != current.get('payload')
+            )
+            requires_manual_configuration = bool(
+                current.get('requires_manual_configuration') and not material_changed
+            )
+            quarantine_reason = (
+                current.get('quarantine_reason')
+                if requires_manual_configuration
+                else None
+            )
+            if requires_manual_configuration and quarantine_reason in {
+                'LEGACY_GENERATED_STARTER_EXACT_MATCH',
+                'BUNDLE_REFERENCES_QUARANTINED_SOURCE',
+            }:
+                next_payload['is_enabled'] = False
             conn.execute(
                 """
                 UPDATE templates
@@ -215,7 +251,21 @@ class Repository:
                     template_id,
                 ),
             )
-        return self.get_template(template_id)
+            # A substantive payload change may clear a legacy marker, but the
+            # exact legacy signature or a still-quarantined source reference
+            # immediately reinstates quarantine in this same transaction.
+            disable_legacy_generated_starter_templates(conn)
+            disable_edit_batch_bundles_with_quarantined_sources(conn)
+            updated = conn.execute(
+                "SELECT * FROM templates WHERE id=?",
+                (template_id,),
+            ).fetchone()
+            updated['payload'] = loads(updated.pop('payload_json'), {})
+            updated['is_enabled'] = bool(updated['is_enabled'])
+            updated['requires_manual_configuration'] = bool(
+                updated.get('requires_manual_configuration')
+            )
+            return updated
 
     def get_template(self, template_id: int):
         with connection() as conn:
@@ -274,12 +324,13 @@ class Repository:
         return {
             'id': snapshot.get('id'),
             'observed_at': snapshot.get('observed_at'),
-            'created_at': snapshot.get('created_at'),
             'page_identity': {
                 'url': page.get('url'),
                 'title': page.get('title'),
             },
-            'store_name': store.get('store_name'),
+            'store_identity': {
+                'store_name': store.get('store_name'),
+            },
             'filter_state': snapshot.get('filter_state'),
             'sort_state': snapshot.get('sort_state'),
             'page_state': snapshot.get('page_state'),
@@ -406,13 +457,16 @@ class Repository:
         with connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
-                "SELECT id, status FROM edit_batches WHERE id=?",
+                "SELECT * FROM edit_batches WHERE id=?",
                 (batch_id,),
             ).fetchone()
             if not row:
                 return BatchApprovalResult(False, "BATCH_NOT_FOUND", None)
             if row["status"] != "draft":
                 return BatchApprovalResult(False, reason_code, None)
+            template_rejection = self._edit_batch_live_template_rejection(conn, row)
+            if template_rejection is not None:
+                return BatchApprovalResult(False, template_rejection, None)
             cursor = conn.execute(
                 """
                 UPDATE edit_batches
@@ -458,6 +512,9 @@ class Repository:
                     return self._edit_batch_execution_failure("ANOTHER_EDIT_BATCH_ACTIVE")
                 if self._running_task_exists(conn):
                     return self._edit_batch_execution_failure("LEGACY_TASK_ACTIVE")
+                template_rejection = self._edit_batch_live_template_rejection(conn, row)
+                if template_rejection is not None:
+                    return self._edit_batch_execution_failure(template_rejection)
                 items = self._edit_batch_item_rows(conn, batch_id)
                 if not items or any(item["status"] != "pending" for item in items):
                     return self._edit_batch_execution_failure("BATCH_ITEMS_NOT_STARTABLE")
@@ -529,6 +586,9 @@ class Repository:
                     return self._edit_batch_execution_failure("ANOTHER_EDIT_BATCH_ACTIVE")
                 if self._running_task_exists(conn):
                     return self._edit_batch_execution_failure("LEGACY_TASK_ACTIVE")
+                template_rejection = self._edit_batch_live_template_rejection(conn, row)
+                if template_rejection is not None:
+                    return self._edit_batch_execution_failure(template_rejection)
                 items = self._edit_batch_item_rows(conn, batch_id)
                 if not items or any(item["status"] != "pending" for item in items):
                     return self._edit_batch_execution_failure("BATCH_ITEMS_NOT_STARTABLE")
@@ -656,6 +716,11 @@ class Repository:
                     return self._edit_batch_execution_failure("BATCH_NOT_FOUND")
                 if batch["status"] != "running":
                     return self._edit_batch_execution_failure("BATCH_NOT_RUNNING")
+                template_rejection = self._edit_batch_live_template_rejection(
+                    conn, batch
+                )
+                if template_rejection is not None:
+                    return self._edit_batch_execution_failure(template_rejection)
                 start_context = loads(batch.get("start_context_json"), None)
                 if not isinstance(start_context, dict):
                     return self._edit_batch_execution_failure("BATCH_START_CONTEXT_MISSING")
@@ -789,6 +854,11 @@ class Repository:
                     return self._edit_batch_execution_failure("BATCH_NOT_FOUND")
                 if batch["status"] != "running":
                     return self._edit_batch_execution_failure("BATCH_NOT_RUNNING")
+                template_rejection = self._edit_batch_live_template_rejection(
+                    conn, batch
+                )
+                if template_rejection is not None:
+                    return self._edit_batch_execution_failure(template_rejection)
                 item = conn.execute(
                     "SELECT * FROM edit_batch_items WHERE id=? AND batch_id=?",
                     (item_id, batch_id),
@@ -1112,7 +1182,7 @@ class Repository:
             if len(running_items) > 1:
                 return self._edit_batch_execution_failure("MULTIPLE_BATCH_ITEMS_RUNNING")
             safe_stop_evidence: dict[str, Any] | None = None
-            if running_items and not requires_manual_review:
+            if running_items:
                 safe_stop_evidence = self._edit_batch_safe_pre_dispatch_stop_evidence(
                     conn,
                     batch_row=batch,
@@ -1367,6 +1437,35 @@ class Repository:
             """
         ).fetchone() is not None
 
+    @staticmethod
+    def _edit_batch_live_template_rejection(
+        conn: Any,
+        batch_row: dict[str, Any],
+    ) -> str | None:
+        template_row = conn.execute(
+            "SELECT * FROM templates WHERE id=?",
+            (batch_row.get("template_id"),),
+        ).fetchone()
+        if not isinstance(template_row, dict):
+            return "TEMPLATE_NOT_FOUND"
+        template = dict(template_row)
+        template["payload"] = loads(template.pop("payload_json", None), {})
+        template["is_enabled"] = bool(template.get("is_enabled"))
+        template["requires_manual_configuration"] = bool(
+            template.get("requires_manual_configuration")
+        )
+        try:
+            frozen = freeze_template_bundle(template)
+        except BatchContractError as exc:
+            return exc.reason_code
+        if (
+            int(frozen.get("id") or 0) != int(batch_row.get("template_id") or 0)
+            or canonical_sha256(frozen)
+            != str(batch_row.get("template_snapshot_digest") or "")
+        ):
+            return "BATCH_TEMPLATE_SNAPSHOT_DRIFT"
+        return None
+
     @classmethod
     def _edit_batch_safe_pre_dispatch_stop_evidence(
         cls,
@@ -1600,10 +1699,58 @@ class Repository:
             "task_id": str(batch_id),
             "job_id": str(item_id),
             "authorization_lease_id": stored_grant.get("grant_lease_id"),
+            "stage_task_facts_fingerprint": canonical_sha256(
+                {
+                    "batch_id": batch_id,
+                    "item_id": item_id,
+                    "scope_digest": stored_grant.get("scope_digest"),
+                    "template_digest": stored_grant.get("template_digest"),
+                    "policy_digest": stored_grant.get("policy_digest"),
+                    "target_identity_sha256": stored_grant.get(
+                        "target_identity_sha256"
+                    ),
+                    "grant_fingerprint": stored_grant.get("fingerprint"),
+                }
+            ),
             "authorization_fingerprint": stored_grant.get("fingerprint"),
+            "runtime_id": (
+                stored_grant.get("runtime_identity", {}).get("browser_runtime_id")
+                if isinstance(stored_grant.get("runtime_identity"), dict)
+                else None
+            ),
         }
         if any(row.get(key) != value for key, value in expected.items()):
             return "MUTATION_LEDGER_BINDING_DRIFT"
+        item_snapshot = loads(item_row.get("item_snapshot_json"), None)
+        store_identity = stored_grant.get("store_identity")
+        if not isinstance(item_snapshot, dict) or not isinstance(store_identity, dict):
+            return "MUTATION_LEDGER_TARGET_BINDING_UNPROVEN"
+        target_identity = item_snapshot.get("target_identity")
+        if not isinstance(target_identity, dict):
+            return "MUTATION_LEDGER_TARGET_BINDING_UNPROVEN"
+        try:
+            expected_target_hash = mutation_target_hash(
+                "save_only",
+                {
+                    "store_name": store_identity.get("store_name"),
+                    "target_source_urls": list(item_snapshot.get("source_urls") or []),
+                    "target_identity": target_identity,
+                    "target_identity_sha256": stored_grant.get(
+                        "target_identity_sha256"
+                    ),
+                },
+            )
+        except Exception:
+            return "MUTATION_LEDGER_TARGET_BINDING_UNPROVEN"
+        if row.get("target_hash") != expected_target_hash:
+            return "MUTATION_LEDGER_TARGET_BINDING_DRIFT"
+        command_id = row.get("command_id")
+        if (
+            not isinstance(command_id, str)
+            or len(command_id) != 32
+            or any(char not in "0123456789abcdef" for char in command_id)
+        ):
+            return "MUTATION_LEDGER_COMMAND_BINDING_UNPROVEN"
         item_binding = {
             "grant_lease_id": stored_grant.get("grant_lease_id"),
             "grant_fingerprint": stored_grant.get("fingerprint"),
@@ -1641,6 +1788,19 @@ class Repository:
             return rejection
         if row.get("status") != "RESERVED":
             return "MUTATION_LEDGER_NOT_RESERVED"
+        if any(
+            row.get(key) is not None
+            for key in (
+                "dispatch_started_at",
+                "dispatched_at",
+                "unknown_at",
+                "outcome_json",
+                "browser_session_id",
+                "page_url",
+                "page_kind",
+            )
+        ):
+            return "MUTATION_RESERVED_STATE_UNCERTAIN"
         granted = cls._edit_batch_ledger_time(item_row.get("granted_at"))
         reserved = cls._edit_batch_ledger_time(row.get("reserved_at"))
         consumed = cls._edit_batch_ledger_time(consumed_at)

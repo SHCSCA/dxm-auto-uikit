@@ -45,9 +45,36 @@ SOURCE_TEMPLATE_RECORD_KEYS = {
     "source_digest",
     "snapshot",
 }
-PUBLISH_BOOLEAN_KEYS = {"publish", "published", "should_publish", "auto_publish"}
-PUBLISH_ACTION_KEYS = {"action", "intended_action", "target_action"}
-FORBIDDEN_PUBLISH_ACTIONS = {"publish", "continue_publish", "save_and_publish"}
+PUBLISH_BOOLEAN_KEYS = {
+    "publish",
+    "published",
+    "publish_allowed",
+    "should_publish",
+    "auto_publish",
+    "auto_release",
+    "should_release",
+}
+PUBLISH_ACTION_KEYS = {
+    "action",
+    "intended_action",
+    "target_action",
+    "submit_action",
+    "publish_action",
+}
+FORBIDDEN_PUBLISH_ACTIONS = {
+    "publish",
+    "continue_publish",
+    "save_and_publish",
+    "move_to_publish",
+    "move_to_pending_publish",
+    "submit_publish",
+    "release",
+    "online",
+    "发布",
+    "继续发布",
+    "保存并发布",
+    "移入待发布",
+}
 
 
 class BatchContractError(ValueError):
@@ -153,14 +180,21 @@ def freeze_template_bundle(template: Any) -> dict[str, Any]:
         or binding["store_id"] <= 0
         or not isinstance(binding["store_name"], str)
         or not binding["store_name"].strip()
+        or binding["store_name"] != binding["store_name"].strip()
         or not isinstance(binding["platform"], str)
         or not binding["platform"].strip()
+        or binding["platform"] != binding["platform"].strip()
         or (
             binding["category_name"] is not None
             and not isinstance(binding["category_name"], str)
         )
     ):
         _reject("TEMPLATE_BUNDLE_INVALID", "template bundle binding is invalid")
+    if binding["platform"].casefold() != "aliexpress":
+        _reject(
+            "BATCH_PLATFORM_UNSUPPORTED",
+            "controlled edit batches currently support only AliExpress",
+        )
     if binding["category_name"] is not None:
         _reject(
             "BATCH_CATEGORY_SCOPE_UNVERIFIABLE",

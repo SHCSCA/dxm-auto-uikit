@@ -468,17 +468,40 @@ def migrate_reports_published_to_tristate(conn: sqlite3.Connection) -> bool:
     )
     if published_column is None:
         conn.execute("ALTER TABLE reports ADD COLUMN published INTEGER")
-        return True
-    if (
-        int(published_column.get("notnull") or 0) == 0
-        and published_column.get("dflt_value") is None
-    ):
+        published_column = next(
+            row
+            for row in conn.execute("PRAGMA table_info(reports)").fetchall()
+            if row["name"] == "published"
+        )
+    raw_default = published_column.get("dflt_value")
+    normalized_default = (
+        str(raw_default).strip().strip("()").strip().strip("'\"").lower()
+        if raw_default is not None
+        else None
+    )
+    legacy_default_false = (
+        int(published_column.get("notnull") or 0) != 0
+        or normalized_default in {"0", "false"}
+    )
+    table_row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='reports'"
+    ).fetchone()
+    normalized_sql = " ".join(str((table_row or {}).get("sql") or "").lower().split())
+    has_tristate_check = (
+        "published integer check (published is null or published in (0, 1))"
+        in normalized_sql
+    )
+    if not legacy_default_false and has_tristate_check:
         return False
 
-    # Every historical zero came from a NOT NULL DEFAULT 0 schema, so it cannot
-    # prove that a save completed without publishing. Preserve only explicit
-    # historical true; current code may write false again after a trusted save
-    # and independent no-publish verification.
+    # Zeros from the legacy NOT NULL/default-false schema never proved a
+    # no-publish result.  A nullable/default-free table already had tri-state
+    # semantics, so preserve its explicit zero while adding the DB constraint.
+    published_projection = (
+        "CASE WHEN published = 1 THEN 1 ELSE NULL END"
+        if legacy_default_false
+        else "CASE WHEN published = 1 THEN 1 WHEN published = 0 THEN 0 ELSE NULL END"
+    )
     conn.execute("ALTER TABLE reports RENAME TO reports__legacy_published")
     conn.execute(
         """
@@ -497,14 +520,14 @@ def migrate_reports_published_to_tristate(conn: sqlite3.Connection) -> bool:
         """
     )
     conn.execute(
-        """
+        f"""
         INSERT INTO reports (
             id, task_id, job_id, product_id, status, published,
             save_result_json, summary_json, created_at, updated_at
         )
         SELECT
             id, task_id, job_id, product_id, status,
-            CASE WHEN published = 1 THEN 1 ELSE NULL END,
+            {published_projection},
             save_result_json, summary_json, created_at, updated_at
           FROM reports__legacy_published
          ORDER BY id ASC
@@ -553,7 +576,6 @@ def disable_legacy_generated_starter_templates(conn: sqlite3.Connection) -> list
         matched_ids.extend(
             int(row["id"])
             for row, _template_type in cohort
-            if int(row.get("is_enabled") or 0) == 1
         )
     quarantined_at = datetime.now(timezone.utc).isoformat()
     candidate_ids = [
@@ -582,6 +604,11 @@ def disable_legacy_generated_starter_templates(conn: sqlite3.Connection) -> list
                    quarantine_reason='LEGACY_GENERATED_STARTER_EXACT_MATCH',
                    updated_at=?
              WHERE id=?
+               AND (
+                   is_enabled<>0
+                   OR requires_manual_configuration<>1
+                   OR COALESCE(quarantine_reason, '')<>'LEGACY_GENERATED_STARTER_EXACT_MATCH'
+               )
             """,
             (quarantined_at, template_id),
         )
@@ -640,6 +667,11 @@ def disable_edit_batch_bundles_with_quarantined_sources(
                    quarantine_reason='BUNDLE_REFERENCES_QUARANTINED_SOURCE',
                    updated_at=?
              WHERE id=?
+               AND (
+                   is_enabled<>0
+                   OR requires_manual_configuration<>1
+                   OR COALESCE(quarantine_reason, '')<>'BUNDLE_REFERENCES_QUARANTINED_SOURCE'
+               )
             """,
             (updated_at, template_id),
         )

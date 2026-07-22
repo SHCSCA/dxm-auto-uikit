@@ -164,5 +164,13 @@ export function looksTechnicalOperatorMessage(message: string) {
     || normalized.includes('internal server error')
     || normalized.includes('/api/')
     || normalized.includes('.py')
+    || normalized.includes('reason_code')
+    || normalized.includes('approval_token')
+    || normalized.includes('session_id')
+    || normalized.includes('browser_session')
+    || normalized.includes('fingerprint')
+    || normalized.includes('digest')
+    || normalized.includes('sha256')
+    || /\b[0-9a-f]{64}\b/i.test(message)
   )
 }
