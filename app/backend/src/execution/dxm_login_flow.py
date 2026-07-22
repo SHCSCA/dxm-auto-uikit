@@ -2880,7 +2880,7 @@ class DxmLoginFlow:
             'claim_dialog': dialog_result,
             'claim_click_safety': safety_result,
             'claim_click_receipt': claim_click_receipt,
-            'published': False,
+            'published': None,
         }
 
     def _open_data_acquisition_page_for_claim(self, data_acquisition_url: str, *, force_goto: bool = False) -> Page:
@@ -5412,7 +5412,7 @@ class DxmLoginFlow:
                 'source_url': (row_info.get('sourceUrls') or [None])[0],
                 'row_text': row_info.get('rowText'),
             },
-            'published': False,
+            'published': None,
         }
 
     def _semantic_draft_box_match(
@@ -5854,10 +5854,10 @@ class DxmLoginFlow:
                         'save_result': {
                             'ok': False,
                             'reason': 'editor_prefill_failed',
-                            'published': False,
+                            'published': None,
                             'preflight_results': prefill.get('preflight_results'),
                         },
-                        'published': False,
+                        'published': None,
                     }
                     if isinstance(result, dict) and not result.get('source_editor_url'):
                         result['source_editor_url'] = editor_url
@@ -6672,13 +6672,13 @@ class DxmLoginFlow:
             'page_url': page_url,
             'fill_result': fill_result,
             'source_editor_url': editor_url,
-            'published': False,
+            'published': None,
         }
         if action == 'save_only':
             result['save_result'] = {
                 'ok': False,
                 'reason': 'editor_page_not_ready',
-                'published': False,
+                'published': None,
             }
         return result
 
@@ -6937,7 +6937,7 @@ class DxmLoginFlow:
                 'preflight_results': {
                     'required_defaults': required_result,
                 },
-                'published': False,
+                'published': None,
             }
 
         variants_result = self._fill_editor_variants_on_page(
@@ -6956,7 +6956,7 @@ class DxmLoginFlow:
                     'required_defaults': required_result,
                     'variants': variants_result,
                 },
-                'published': False,
+                'published': None,
             }
 
         media_result = self._fill_media_assets_on_page(page, defaults)
@@ -6972,7 +6972,7 @@ class DxmLoginFlow:
                     'variants': variants_result,
                     'media': media_result,
                 },
-                'published': False,
+                'published': None,
             }
 
         compliance_result = self._fill_compliance_defaults_on_page(
@@ -6993,7 +6993,7 @@ class DxmLoginFlow:
                     'media': media_result,
                     'compliance': compliance_result,
                 },
-                'published': False,
+                'published': None,
             }
 
         main_images_result = self._repair_product_main_images_on_page(page)
@@ -7013,7 +7013,7 @@ class DxmLoginFlow:
                     'compliance': compliance_result,
                     'main_images': main_images_result,
                 },
-                'published': False,
+                'published': None,
             }
 
         field_integrity = self._capture_save_field_integrity_snapshot(page)
@@ -7033,7 +7033,7 @@ class DxmLoginFlow:
                     'main_images': main_images_result,
                 },
                 'field_integrity': field_integrity,
-                'published': False,
+                'published': None,
             }
         return {
             'ok': True,
@@ -7238,7 +7238,7 @@ class DxmLoginFlow:
                     'compliance': compliance_result,
                     'main_images': main_images_result,
                 },
-                'published': False,
+                'published': None,
             }
         customs_preflight = (required_result.get('fill_result') or {}).get('customs_supervision') or {}
         customs_after_repairs = customs_preflight
@@ -7265,7 +7265,7 @@ class DxmLoginFlow:
                         'main_images': main_images_result,
                         'customs_supervision_after_repairs': customs_after_repairs,
                     },
-                    'published': False,
+                    'published': None,
                 }
         enable_result = self._enable_semi_managed_on_page(page)
         if enable_result['stage'].endswith('_failed'):
@@ -7300,7 +7300,7 @@ class DxmLoginFlow:
                 'page_title': page.title(),
                 'page_url': page.url,
                 'screenshot_url': enable_result.get('screenshot_url'),
-                'published': False,
+                'published': None,
             }
         page.wait_for_timeout(2500)
         screenshot_path = EDITOR_ACTION_SCREENSHOT_MAP['open_semi_managed_page']
@@ -7320,7 +7320,7 @@ class DxmLoginFlow:
                 'page_title': page.title(),
                 'page_url': page.url,
                 'screenshot_url': self._artifact_url(screenshot_path),
-                'published': False,
+                'published': None,
             }
         if not page_state.get('is_semi_page'):
             return {
@@ -7331,7 +7331,7 @@ class DxmLoginFlow:
                 'page_title': page.title(),
                 'page_url': page.url,
                 'screenshot_url': self._artifact_url(screenshot_path),
-                'published': False,
+                'published': None,
             }
         return {
             'ok': True,
@@ -7342,7 +7342,7 @@ class DxmLoginFlow:
             'page_url': page.url,
             'screenshot_url': self._artifact_url(screenshot_path),
             'source_editor_url': source_editor_url,
-            'published': False,
+            'published': None,
         }
 
     def _repair_product_main_images_on_page(self, page: Page) -> dict[str, Any]:
@@ -7629,7 +7629,7 @@ class DxmLoginFlow:
             'fill_result': result,
             'product_query': product_query,
             'store_name': store_name,
-            'published': False,
+            'published': None,
         }
 
     def _verify_visible_edit_ownership_from_state(
@@ -7791,7 +7791,7 @@ class DxmLoginFlow:
                 'strict_frozen_target': strict_frozen_target,
                 'write_attempted': False,
             },
-            'published': False,
+            'published': None,
         }
 
     def _fill_editor_required_defaults_on_page(
@@ -7843,7 +7843,7 @@ class DxmLoginFlow:
                     'page_url': page.url,
                     'screenshot_url': None,
                     'fill_result': {'category': category, 'missing': ['category']},
-                    'published': False,
+                    'published': None,
                     'next_action': '请关闭当前执行浏览器后重新启动任务；若仍失败，打开“问题”查看真实浏览器控制通道状态。',
                 }
             screenshot_path = EDITOR_ACTION_SCREENSHOT_MAP['fill_editor_required_defaults']
@@ -7857,7 +7857,7 @@ class DxmLoginFlow:
                 'page_url': page.url,
                 'screenshot_url': self._artifact_url(screenshot_path),
                 'fill_result': {'category': category, 'missing': ['category']},
-                'published': False,
+                'published': None,
             }
         category_expected = ' '.join(str(values['category_match']).split())
         category_observed = ' '.join(
@@ -7887,7 +7887,7 @@ class DxmLoginFlow:
                     'category': category,
                     'missing': ['category_selected_exact'],
                 },
-                'published': False,
+                'published': None,
             }
         dxm_reference_template_results = self._apply_dxm_reference_templates_on_page(page, values)
         reference_missing = self._missing_required_reference_template_results(dxm_reference_template_results)
@@ -7909,7 +7909,7 @@ class DxmLoginFlow:
                     'missing': blocking_reference_missing,
                 },
                 'dxm_reference_template_results': dxm_reference_template_results,
-                'published': False,
+                'published': None,
             }
         if self._is_visible_dxm_editor_page(page):
             self._trace_workflow_event(
@@ -8093,7 +8093,7 @@ class DxmLoginFlow:
                         },
                         'missing': list(title_action.get('missing') or ['category.title_strategy']),
                     },
-                    'published': False,
+                    'published': None,
                 }
             sku_state = self._visible_editor_text_input_state(page, '商品编码')
             existing_sku_code = str(sku_state.get('value') or '').strip() if isinstance(sku_state, dict) else ''
@@ -8146,7 +8146,7 @@ class DxmLoginFlow:
                         },
                         'missing': list(goods_code_action.get('missing') or ['sku.goods_code_strategy']),
                     },
-                    'published': False,
+                    'published': None,
                 }
             delivery_fill = self._fill_text_inputs_near_label(
                 page,
@@ -8209,7 +8209,7 @@ class DxmLoginFlow:
                     'fields': field_result,
                     'missing': required_text_missing,
                 },
-                'published': False,
+                'published': None,
             }
         self._trace_workflow_event(
             'editor_packaging:start',
@@ -8245,7 +8245,7 @@ class DxmLoginFlow:
                     'packaging': packaging,
                     'missing': ['packaging'],
                 },
-                'published': False,
+                'published': None,
             }
         if packaging.get('ok'):
             field_result.update({
@@ -8402,7 +8402,7 @@ class DxmLoginFlow:
                 'optional_unfilled': optional_unfilled,
             },
             'dxm_reference_template_results': dxm_reference_template_results,
-            'published': False,
+            'published': None,
         }
 
     def _fill_visible_editor_title_with_native_input(self, page: Page, title: str, *, force_replace: bool = False) -> dict[str, Any]:
@@ -8764,7 +8764,7 @@ class DxmLoginFlow:
             'page_url': page.url,
             'screenshot_url': self._artifact_url(screenshot_path),
             'fill_result': result,
-            'published': False,
+            'published': None,
         }
 
     def _verify_editor_variant_logistics_attribute(self, page: Page, value: str) -> dict[str, Any]:
@@ -9019,7 +9019,7 @@ class DxmLoginFlow:
                     'missing': ['image.slots'],
                     'write_attempted': False,
                 },
-                'published': False,
+                'published': None,
             }
 
         self._dismiss_blocking_modals(page)
@@ -9079,7 +9079,7 @@ class DxmLoginFlow:
                 'eu_outer_package_image': eu_result,
                 'marketing_images': marketing_result,
             },
-            'published': False,
+            'published': None,
         }
 
     def _fill_compliance_defaults_on_page(
@@ -9176,7 +9176,7 @@ class DxmLoginFlow:
                 'missing': missing,
                 'optional_unfilled': optional_unfilled,
             },
-            'published': False,
+            'published': None,
         }
 
     def _extract_eu_outer_package_filename(self, defaults: dict[str, Any] | None) -> str:
@@ -11438,7 +11438,7 @@ class DxmLoginFlow:
                 'missing': [f'dxm_reference_templates.{section}' for section in sections],
                 'failure_code': 'UNSUPPORTED_REFERENCE_TEMPLATE_RUNTIME',
             },
-            'published': False,
+            'published': None,
         }
 
     def _dxm_reference_template_configs(self, values: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -13307,7 +13307,7 @@ class DxmLoginFlow:
                     if isinstance(detail, Mapping) and detail.get('ok') is not True
                 ],
             },
-            'published': False,
+            'published': None,
         }
 
     def _fill_semi_original_box(self, page: Page, value: str) -> dict[str, Any]:
@@ -13722,7 +13722,7 @@ class DxmLoginFlow:
                     'ok': False,
                     'stage': 'save_only_failed',
                     'label': '保存按钮未安全定位',
-                    'message': f'可视浏览器下未能安全定位精确“保存”按钮：{reason}。本次没有点击保存，也没有发布。',
+                    'message': f'可视浏览器下未能安全定位精确“保存”按钮：{reason}。本次未派发任何按钮点击；发布状态未判定。',
                     'page_title': '店小秘编辑页',
                     'page_url': page.url,
                     'screenshot_url': None,
@@ -13730,8 +13730,10 @@ class DxmLoginFlow:
                         **save_state,
                         'ok': False,
                         'reason': reason,
+                        'failure_code': 'MUTATION_CANCELLED_BEFORE_DISPATCH',
                         'published': None,
                         'clicked': False,
+                        'zero_click_proven': True,
                         'exact_save_target': False,
                         'save_click_dispatched': False,
                         'network_save_success': False,
@@ -13831,7 +13833,7 @@ class DxmLoginFlow:
                     'ok': False,
                     'stage': 'save_only_failed',
                     'label': '保存按钮点击失败',
-                    'message': '已定位精确“保存”按钮，但原生浏览器点击失败。本次没有点击保存，也没有发布。',
+                    'message': '已定位精确“保存”按钮，但点击在派发前被安全取消；本次未派发按钮点击，发布状态未判定。',
                     'page_title': '店小秘编辑页',
                     'page_url': page.url,
                     'screenshot_url': None,
@@ -13839,8 +13841,10 @@ class DxmLoginFlow:
                         **save_state,
                         'ok': False,
                         'reason': 'native_exact_save_click_failed',
+                        'failure_code': 'MUTATION_CANCELLED_BEFORE_DISPATCH',
                         'published': None,
                         'clicked': False,
+                        'zero_click_proven': True,
                         'exact_save_target': True,
                         'save_click_dispatched': False,
                         'network_save_success': False,
@@ -14247,7 +14251,7 @@ class DxmLoginFlow:
             return {
                 'ok': False,
                 'reason': f'原生窗口截图失败：{str(exc)[:160]}',
-                'published': False,
+                'published': None,
             }
         state = self._locate_save_button_from_native_toolbar_snapshot(snapshot)
         if not state.get('ok'):
@@ -14258,7 +14262,7 @@ class DxmLoginFlow:
             **state,
             'locator': 'native_toolbar_snapshot',
             'devtools_error': devtools_reason,
-            'published': False,
+            'published': None,
             'viewport': {
                 'innerWidth': width,
                 'innerHeight': height,
@@ -14279,17 +14283,17 @@ class DxmLoginFlow:
     @staticmethod
     def _locate_save_button_from_native_toolbar_snapshot(snapshot: dict[str, Any] | None) -> dict[str, Any]:
         if not isinstance(snapshot, dict):
-            return {'ok': False, 'reason': '原生窗口截图为空', 'published': False}
+            return {'ok': False, 'reason': '原生窗口截图为空', 'published': None}
         try:
             width = int(snapshot.get('width') or 0)
             height = int(snapshot.get('height') or 0)
         except (TypeError, ValueError):
-            return {'ok': False, 'reason': '原生窗口截图尺寸不可读', 'published': False}
+            return {'ok': False, 'reason': '原生窗口截图尺寸不可读', 'published': None}
         pixels = snapshot.get('pixels')
         if width <= 0 or height <= 0 or not isinstance(pixels, (bytes, bytearray)):
-            return {'ok': False, 'reason': '原生窗口截图像素不可读', 'published': False}
+            return {'ok': False, 'reason': '原生窗口截图像素不可读', 'published': None}
         if len(pixels) < width * height * 4:
-            return {'ok': False, 'reason': '原生窗口截图像素长度不足', 'published': False}
+            return {'ok': False, 'reason': '原生窗口截图像素长度不足', 'published': None}
 
         top_limit = min(height, max(140, int(height * 0.24)))
         step = 1 if width <= 1000 else 2
@@ -14369,7 +14373,7 @@ class DxmLoginFlow:
         orange_buttons = [item for item in components(is_orange) if buttonish(item, min_w=34, max_w=190)]
         green_buttons = [item for item in components(is_green) if buttonish(item, min_w=34, max_w=180)]
         if not green_buttons:
-            return {'ok': False, 'reason': '未在顶部工具栏识别到发布按钮参照物', 'published': False}
+            return {'ok': False, 'reason': '未在顶部工具栏识别到发布按钮参照物', 'published': None}
 
         for publish in sorted(green_buttons, key=lambda item: (float(item.get('x') or 0), int(item.get('count') or 0)), reverse=True):
             row_oranges = [
@@ -14403,13 +14407,13 @@ class DxmLoginFlow:
                     'h': int(publish['h']),
                 },
                 'exact_save_count': 1,
-                'published': False,
+                'published': None,
             }
 
         return {
             'ok': False,
             'reason': '已识别发布按钮，但未在其左侧安全识别到独立“保存”按钮',
-            'published': False,
+            'published': None,
         }
 
     @staticmethod
@@ -14500,7 +14504,7 @@ class DxmLoginFlow:
                 'reason': baseline.get('reason') or 'structured_save_baseline_missing',
                 'baseline': baseline,
                 'current': current,
-                'published': False,
+                'published': None,
             }
         if current.get('ok') is not True:
             return {
@@ -14508,7 +14512,7 @@ class DxmLoginFlow:
                 'reason': current.get('reason') or 'structured_save_status_probe_failed',
                 'baseline': baseline,
                 'current': current,
-                'published': False,
+                'published': None,
             }
         success_terms = ('保存成功', '编辑成功', '产品编辑成功', '您的产品编辑成功', '已保存')
         error_terms = ('产品信息中有错误', '请选择', '未选择', '必填', '不能为空', '请完善', '错误', '失败')
@@ -14537,7 +14541,7 @@ class DxmLoginFlow:
                 'error_text': error_text,
                 'baseline': baseline,
                 'current': current,
-                'published': False,
+                'published': None,
             }
         successes = [entry for entry in current_entries if any(term in compact(entry) for term in success_terms)]
         if not successes:
@@ -14546,7 +14550,7 @@ class DxmLoginFlow:
                 'reason': 'structured_save_success_missing',
                 'baseline': baseline,
                 'current': current,
-                'published': False,
+                'published': None,
             }
         changed = next(
             (
@@ -14563,7 +14567,7 @@ class DxmLoginFlow:
                 'reason': 'stale_save_success_status',
                 'baseline': baseline,
                 'current': current,
-                'published': False,
+                'published': None,
             }
         changed_text = compact(changed)
         success_text = next((term for term in success_terms if term in changed_text), None)
@@ -14576,7 +14580,7 @@ class DxmLoginFlow:
             },
             'baseline': baseline,
             'current': current,
-            'published': False,
+            'published': None,
         }
 
     def _visible_save_success_state(
@@ -14593,7 +14597,7 @@ class DxmLoginFlow:
             result=result,
             human_step='确认保存结果',
         )
-        return result if isinstance(result, dict) else {'ok': False, 'reason': '保存成功提示结果不可读', 'published': False}
+        return result if isinstance(result, dict) else {'ok': False, 'reason': '保存成功提示结果不可读', 'published': None}
 
     def _visible_blocking_modal_state(self, page: Page) -> dict[str, Any]:
         return page.evaluate(r'''() => {
@@ -14814,7 +14818,7 @@ class DxmLoginFlow:
               ? 'structured_status_is_published'
               : !uniqueBoundStatus ? 'structured_unpublished_status_not_unique'
               : proof ? null : 'structured_unpublished_status_missing',
-            published: Boolean(published),
+            published: published ? true : (proof ? false : null),
           };
         }''')
         result = result if isinstance(result, dict) else {
@@ -14850,6 +14854,11 @@ class DxmLoginFlow:
             and result.get('published') is not True
         )
         result['ok'] = proof_valid
+        result['published'] = (
+            False
+            if proof_valid
+            else True if result.get('published') is True else None
+        )
         result['verified_on_current_page'] = target_bound
         result['page_url'] = str(getattr(page, 'url', '') or '')
         result['target_identity_sha256'] = target_identity_sha256
@@ -14875,7 +14884,7 @@ class DxmLoginFlow:
             'evidence_ref': evidence_ref,
             'fill_result': result,
             'unpublished_proof': result,
-            'published': bool(result.get('published')),
+            'published': result.get('published'),
         }
 
     def _click_exact_save_button(
@@ -14888,6 +14897,7 @@ class DxmLoginFlow:
     ) -> bool:
         target_handle: Any | None = None
         target_descriptor: dict[str, Any] = {}
+        operation_entered = False
 
         def capture_exact_target_guard() -> dict[str, Any]:
             nonlocal target_handle, target_descriptor
@@ -14931,6 +14941,7 @@ class DxmLoginFlow:
                 if pre_dispatch_facts is not None:
                     pre_dispatch_facts.update(facts)
                 return facts
+            target_handle = element
             descriptor = element.evaluate(r'''(target) => {
               const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
               const visible = (el) => {
@@ -14970,9 +14981,10 @@ class DxmLoginFlow:
             target_descriptor = dict(descriptor) if isinstance(descriptor, Mapping) else {}
             if target_descriptor.get('ok') is not True:
                 try:
-                    handle.dispose()
+                    target_handle.dispose()
                 except Exception:
                     pass
+                target_handle = None
                 facts.update({
                     'ok': False,
                     'reason': target_descriptor.get('reason') or 'exact_save_target_changed_before_dispatch',
@@ -14981,7 +14993,6 @@ class DxmLoginFlow:
                 if pre_dispatch_facts is not None:
                     pre_dispatch_facts.update(facts)
                 return facts
-            target_handle = element
             facts.update({
                 'ok': True,
                 'exact_save_target': dict(target_descriptor),
@@ -14991,10 +15002,12 @@ class DxmLoginFlow:
             return facts
 
         def dispatch_operation() -> dict[str, Any]:
+            nonlocal operation_entered
             if target_handle is None:
                 raise MutationAuthorizationError(
                     'MUTATION_TARGET_DRIFT: exact save ElementHandle was not captured before dispatch'
                 )
+            operation_entered = True
             dispatched = target_handle.evaluate(r'''(target) => {
               target.click();
               return {ok:true, dispatched:true, method:'dom_exact_text'};
@@ -15027,6 +15040,10 @@ class DxmLoginFlow:
         except Exception as exc:  # noqa: BLE001 - exact save failures are fail-closed.
             if isinstance(exc, MutationAuthorizationError):
                 raise
+            if operation_entered:
+                raise MutationAuthorizationError(
+                    f'MUTATION_OUTCOME_UNKNOWN: DOM exact-save click failed after dispatch operation entered: {exc}'
+                ) from exc
             self._trace_workflow_event(
                 'save_only:exact_save_dom_scroll_failed',
                 error=str(exc)[:240],
@@ -15300,7 +15317,7 @@ class DxmLoginFlow:
         if isinstance(data, Mapping):
             code = data.get('code', code)
             msg = data.get('msg') or data.get('message') or msg
-        code_ok = code in (0, '0') or payload.get('success') is True
+        code_ok = code in (0, '0')
         success_text = str(msg or '').strip()
         text_ok = any(term in success_text for term in ('保存成功', '编辑保存成功', '编辑成功'))
         receipt_complete = bool(status_ok and code_ok and text_ok)
@@ -17981,7 +17998,7 @@ class DxmLoginFlow:
                 const ids = productIds(row);
                 const sources = sourceUrls(row);
                 const productMatched = kind === 'product_id' ? ids.includes(value) : sources.includes(canonicalUrl(value));
-                const sourceMatched = targetUrls.length === 0 || (
+                const sourceMatched = targetUrls.length > 0 && (
                   sources.length === targetUrls.length
                   && targetUrls.every(url => sources.includes(url))
                 );
@@ -18597,8 +18614,11 @@ class DxmLoginFlow:
             self._trace_workflow_event('click_rect:done', method='native_window', human_step='点击页面按钮')
             return
         self._trace_workflow_event('click_rect:mouse_start', human_step='点击页面按钮')
+        mouse_operation_entered = False
         try:
             def mouse_click_operation() -> bool:
+                nonlocal mouse_operation_entered
+                mouse_operation_entered = True
                 page.mouse.click(x, y)
                 return True
 
@@ -18626,6 +18646,10 @@ class DxmLoginFlow:
         except Exception as exc:
             if isinstance(exc, MutationAuthorizationError):
                 raise
+            if mouse_operation_entered:
+                raise MutationAuthorizationError(
+                    f'MUTATION_OUTCOME_UNKNOWN: Playwright click failed after dispatch operation entered: {exc}'
+                ) from exc
             self._trace_workflow_event('click_rect:mouse_failed', error=str(exc)[:240], human_step='点击页面按钮')
         raise RuntimeError('真实浏览器点击失败：浏览器输入事件不可用，已停止本次操作。')
 
@@ -18650,8 +18674,11 @@ class DxmLoginFlow:
                 purpose=purpose,
                 human_step=purpose,
             )
+            click_operation_entered = False
             try:
                 def click_operation() -> dict[str, Any]:
+                    nonlocal click_operation_entered
+                    click_operation_entered = True
                     page.mouse.click(x, y, delay=50)
                     return {'dispatched': True, 'method': 'playwright_mouse'}
 
@@ -18685,6 +18712,10 @@ class DxmLoginFlow:
             except Exception as exc:
                 if isinstance(exc, MutationAuthorizationError):
                     raise
+                if click_operation_entered:
+                    raise MutationAuthorizationError(
+                        f'MUTATION_OUTCOME_UNKNOWN: claim click failed after dispatch operation entered: {exc}'
+                    ) from exc
                 self._trace_workflow_event(
                     'data_acquisition_claim:page_mouse_click_failed',
                     x=x,
@@ -19631,6 +19662,7 @@ class DxmLoginFlow:
         page_url = str(getattr(page, 'url', '') or '')
         if 'dianxiaomi.com' not in page_url:
             return False
+        operation_entered = False
         binding = self._resolve_native_browser_identity(page)
         if not binding:
             self._trace_workflow_event(
@@ -19886,6 +19918,8 @@ class DxmLoginFlow:
             mouseeventf_leftup = 0x0004
 
             def native_click_operation() -> bool:
+                nonlocal operation_entered
+                operation_entered = True
                 user32.mouse_event(mouseeventf_leftdown, 0, 0, 0, None)
                 time.sleep(0.04)
                 user32.mouse_event(mouseeventf_leftup, 0, 0, 0, None)
@@ -19914,6 +19948,10 @@ class DxmLoginFlow:
         except Exception as exc:
             if isinstance(exc, MutationAuthorizationError):
                 raise
+            if operation_entered:
+                raise MutationAuthorizationError(
+                    f'MUTATION_OUTCOME_UNKNOWN: native click failed after dispatch operation entered: {exc}'
+                ) from exc
             self._trace_workflow_event('click_rect:native_click_failed', error=str(exc)[:240], human_step='点击页面按钮')
             return False
 
@@ -20263,6 +20301,7 @@ class DxmLoginFlow:
         mutation_action: str | None = None,
         pre_dispatch_guard: Callable[[], Any] | None = None,
     ) -> bool:
+        operation_entered = False
         try:
             self._trace_workflow_event('click_rect:cdp_session_start', human_step='点击页面按钮')
             cdp = page.context.new_cdp_session(page)
@@ -20280,6 +20319,8 @@ class DxmLoginFlow:
                 human_step='点击页面按钮',
             )
             def cdp_click_operation() -> bool:
+                nonlocal operation_entered
+                operation_entered = True
                 for event in (
                     {'type': 'mousePressed', 'x': x, 'y': y, 'button': 'left', 'clickCount': 1},
                     {'type': 'mouseReleased', 'x': x, 'y': y, 'button': 'left', 'clickCount': 1},
@@ -20320,6 +20361,10 @@ class DxmLoginFlow:
         except Exception as exc:
             if isinstance(exc, MutationAuthorizationError):
                 raise
+            if operation_entered:
+                raise MutationAuthorizationError(
+                    f'MUTATION_OUTCOME_UNKNOWN: CDP click failed after dispatch operation entered: {exc}'
+                ) from exc
             self._trace_workflow_event('click_rect:cdp_failed', error=str(exc)[:240], human_step='点击页面按钮')
             return False
 

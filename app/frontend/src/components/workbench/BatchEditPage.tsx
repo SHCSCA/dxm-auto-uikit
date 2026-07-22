@@ -90,6 +90,7 @@ export function BatchEditPage({
   const [draftBatch, setDraftBatch] = useState<EditBatchDetail | null>(null)
   const [approvedBy, setApprovedBy] = useState('')
   const [saveOnlyConfirmed, setSaveOnlyConfirmed] = useState(false)
+  const [startOutcomeUnknown, setStartOutcomeUnknown] = useState(false)
   const [busyAction, setBusyAction] = useState<'load' | 'capture' | 'create' | 'start' | null>(null)
   const [error, setError] = useState<string | null>(null)
   const ownsActiveBatch = activeExecution?.kind === 'batch' && activeExecution.id === draftBatch?.id
@@ -118,7 +119,7 @@ export function BatchEditPage({
         ? {
             title: '旧诊断浏览器正在占用共享浏览器',
             detail: '关闭运行中的旧诊断浏览器后再读取范围或批准批次；不需要先打开诊断浏览器。',
-            action: '关闭旧诊断浏览器',
+            action: '前往浏览器诊断',
             onAction: onShowConsole,
           }
         : !dxmReady
@@ -151,10 +152,13 @@ export function BatchEditPage({
     setError(null)
     void getJson<EditBatchDetail>(`/api/edit-batches/${initialBatchId}`)
       .then((batch) => {
-        if (!cancelled) setDraftBatch(batch)
+        if (!cancelled) {
+          setDraftBatch(batch)
+          setStartOutcomeUnknown(false)
+        }
       })
       .catch((caught) => {
-        if (!cancelled) setError(humanBatchError(caught, '读取批次失败'))
+        if (!cancelled) setError(humanBatchError(caught, '读取批次失败', 'state_read'))
       })
       .finally(() => {
         if (!cancelled) setBusyAction(null)
@@ -175,9 +179,10 @@ export function BatchEditPage({
       } satisfies DraftBoxScopeSnapshotCreateRequest)
       onScopeSnapshotChange(snapshot)
       setDraftBatch(null)
+      setStartOutcomeUnknown(false)
     } catch (caught) {
       onScopeSnapshotChange(null)
-      setError(humanBatchError(caught, '读取商品箱现场失败'))
+      setError(humanBatchError(caught, '读取商品箱现场失败', 'pre_dispatch'))
     } finally {
       setBusyAction(null)
     }
@@ -197,8 +202,9 @@ export function BatchEditPage({
       onBatchSelected(created.id)
       setApprovedBy('')
       setSaveOnlyConfirmed(false)
+      setStartOutcomeUnknown(false)
     } catch (caught) {
-      setError(humanBatchError(caught, '冻结批次草稿失败'))
+      setError(humanBatchError(caught, '冻结批次草稿失败', 'pre_dispatch'))
     } finally {
       setBusyAction(null)
     }
@@ -216,6 +222,7 @@ export function BatchEditPage({
     if (flowBlocker || !draftBatch || draftBatch.status !== 'draft' || !approvedBy.trim() || !saveOnlyConfirmed) return
     setBusyAction('start')
     setError(null)
+    setStartOutcomeUnknown(false)
     try {
       const started = await postJson<EditBatchDetail>(`/api/edit-batches/${draftBatch.id}/approve-and-start`, {
         approved_by: approvedBy.trim(),
@@ -224,7 +231,8 @@ export function BatchEditPage({
       setDraftBatch(started)
       onShowRecords(started.id)
     } catch (caught) {
-      setError(humanBatchError(caught, '批准并开始批次失败'))
+      setError(humanBatchError(caught, '批准并开始批次失败', 'approve_start'))
+      setStartOutcomeUnknown(true)
     } finally {
       setBusyAction(null)
     }
@@ -285,14 +293,20 @@ export function BatchEditPage({
                 </span>
               </label>
               {error && <div className="batch-inline-error" role="alert">{error}</div>}
-              <button
-                className="button button--primary batch-primary-action"
-                type="button"
-                onClick={() => { void approveAndStartBatch() }}
-                disabled={busyAction !== null || !approvedBy.trim() || !saveOnlyConfirmed}
-              >
-                {busyAction === 'start' ? '正在批准并开始…' : '批准并开始'}
-              </button>
+              {startOutcomeUnknown ? (
+                <button className="button button--primary batch-primary-action" type="button" onClick={() => onShowRecords(draftBatch.id)}>
+                  刷新批次记录
+                </button>
+              ) : (
+                <button
+                  className="button button--primary batch-primary-action"
+                  type="button"
+                  onClick={() => { void approveAndStartBatch() }}
+                  disabled={busyAction !== null || !approvedBy.trim() || !saveOnlyConfirmed}
+                >
+                  {busyAction === 'start' ? '正在批准并开始…' : '批准并开始'}
+                </button>
+              )}
             </div>
           ) : (
             <button className="button button--primary batch-primary-action" type="button" onClick={() => onShowRecords(draftBatch.id)}>
@@ -311,7 +325,7 @@ export function BatchEditPage({
           <div>
             <span className="eyebrow">批量编辑 · 真实商品箱现场</span>
             <h2>冻结当前商品箱范围</h2>
-            <p>本页开放受控逐件批次：范围冻结、一次批准、严格串行、只保存。旧版批量任务（batch_save）、无人值守和发布仍关闭。</p>
+            <p>本页开放受控逐件批次：范围冻结、一次批准、严格串行、只保存。旧版批量保存、无人值守和发布仍关闭。</p>
           </div>
           <span className="batch-boundary-chip">只保存 · 不发布</span>
         </div>
@@ -395,7 +409,7 @@ export function BatchEditPage({
             </div>
             <div className="batch-evidence-note">
               <strong>{scopeSnapshot.items.length} 件商品已核对</strong>
-              <span>店铺、顺序和商品身份已由后端冻结。</span>
+              <span>店铺、顺序和商品身份已从当前现场读取；创建草稿后会与模板一起固定。</span>
               <span>{isZeroWriteProven(scopeSnapshot.zero_write_proof) ? '本次读取未执行导航、点击或写入。' : '只读边界尚未得到确认。'}</span>
             </div>
             {error && <div className="batch-inline-error" role="alert">{error}</div>}
@@ -433,9 +447,15 @@ export function BatchEditPage({
   )
 }
 
-function humanBatchError(caught: unknown, action: string) {
+function humanBatchError(caught: unknown, action: string, phase: 'state_read' | 'pre_dispatch' | 'approve_start') {
   const message = caught instanceof Error ? caught.message.trim() : ''
   const normalized = message.toLowerCase()
+  if (phase === 'approve_start') {
+    return '批准并启动的结果暂未确认。请先刷新批次记录；系统不会自动重试，在状态明确前禁止重复批准或启动。必要时人工核对真实店小秘页面。'
+  }
+  if (phase === 'state_read') {
+    return '批次状态暂未读取成功。请刷新批次记录；状态明确前不要重复批准或启动。'
+  }
   if (
     normalized.includes('已有任务')
     || normalized.includes('已有批次')

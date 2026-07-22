@@ -1445,7 +1445,9 @@ class BrowserAgentRuntime:
                     )
                 except Exception:
                     pass
-            raise
+            raise RuntimeError(
+                f"MUTATION_OUTCOME_UNKNOWN: mutation operation raised after dispatch began: {exc}"
+            ) from exc
         else:
             dispatch_confirmed = operation_result is True or (
                 isinstance(operation_result, Mapping)

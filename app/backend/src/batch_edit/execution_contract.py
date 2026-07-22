@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from src.batch_edit.batch_contract import (
@@ -338,8 +338,9 @@ def derive_next_item_grant(
     nonce = _non_empty_text(one_time_nonce, "one-time grant nonce")
     lease_id = _non_empty_text(grant_lease_id, "grant lease id")
     issued_at = current_time.isoformat()
-    expires_at = current_time.timestamp() + ITEM_GRANT_TTL_SECONDS
-    expires_text = datetime.fromtimestamp(expires_at, timezone.utc).isoformat()
+    expires_text = (
+        current_time + timedelta(seconds=ITEM_GRANT_TTL_SECONDS)
+    ).isoformat()
     mutation_scope_id = build_mutation_scope_id(
         authorization_lease_id=lease_id,
         task_id=start["batch_id"],

@@ -191,7 +191,7 @@ export function buildEmptyWorkspace(): DeliveryWorkspace {
     }],
     safety: {
       mode: '商品箱范围 -> 一次批准 -> 严格串行逐件只保存',
-      guarantee: '受控逐件商品箱批次已开放；旧版 batch_save、无人值守和发布仍关闭。',
+      guarantee: '受控逐件商品箱批次已开放；旧版批量保存、无人值守和发布仍关闭。',
       forbiddenActions: ['发布', '继续发布', '保存并发布', '移入待发布'],
       lastCheckedAt: '等待任务数据',
     },
@@ -397,7 +397,7 @@ export function buildRealModeReleasePlan(): RealModeReleasePlan {
       },
       {
         mode: 'batch_save',
-        label: '旧版 batch_save 仍关闭',
+        label: '旧版批量保存仍关闭',
         status: 'blocked_unreleased',
         allowed: false,
         release_scope: 'not released',

@@ -162,9 +162,22 @@ export type DraftBoxScopeSnapshot = {
 }
 export type EditBatchStatus = 'draft' | 'approved' | 'running' | 'stop_requested' | 'completed' | 'stopped'
 export type EditBatchItemStatus = 'pending' | 'running' | 'succeeded' | 'isolated_pre_save_no_write' | 'stopped_before_save_no_write' | 'stopped_uncertain'
+export type EditBatchPublicPolicy = {
+  approval_mode?: string
+  dispatch_mode?: string
+  global_concurrency?: number
+  publish_allowed?: boolean
+  unknown_result_policy?: string
+  identity_drift_policy?: string
+  session_loss_policy?: string
+  pre_save_no_effect_failure_policy?: string
+}
 export type EditBatchSummary = {
   id: number
+  schema_version: string
   status: EditBatchStatus
+  scope_snapshot_id: number
+  template_id: number
   item_count: number
   store_identity: { store_name: string | null } | null
   template: { name: string | null; version: string | null }
@@ -210,7 +223,6 @@ export type EditBatchProgressSummary = {
   running: number
   stopped_before_save_no_write?: number
   uncertain?: number
-  stopped?: number
   current_ordinal: number | null
   percent: number
 }
@@ -221,7 +233,9 @@ export type EditBatchApprovalSummary = {
 }
 export type EditBatchDetail = {
   id: number
+  schema_version: string
   status: EditBatchStatus
+  scope_snapshot_id: number
   scope_snapshot: {
     observed_at?: string | null
     store_identity: { store_name: string | null } | null
@@ -233,10 +247,12 @@ export type EditBatchDetail = {
       truncated?: boolean | null
     }
   }
+  template_id: number
   template_snapshot: {
     template_name: string | null
     payload?: { version?: unknown }
   }
+  policy: EditBatchPublicPolicy
   created_at: string
   updated_at: string
   execution: EditBatchExecutionSummary

@@ -563,6 +563,16 @@ def _validate_save_success_semantics(envelope: Mapping[str, Any]) -> None:
         or pre_dispatch.get("phase") != "before_ledger_begin_dispatch"
     ):
         _reject("SAVE success requires a complete zero-write pre-dispatch readback")
+    pre_dispatch_target = _required_mapping(
+        pre_dispatch.get("exact_save_target"),
+        "save_result.pre_dispatch_readback.exact_save_target",
+    )
+    if (
+        pre_dispatch_target.get("ok") is not True
+        or pre_dispatch_target.get("text") != "保存"
+        or pre_dispatch_target.get("exact_save_count") != 1
+    ):
+        _reject("SAVE success requires the unique exact SAVE target to be rebound before ledger dispatch")
     identity = _required_mapping(
         pre_dispatch.get("identity"), "save_result.pre_dispatch_readback.identity"
     )
@@ -609,7 +619,8 @@ def _validate_save_success_semantics(envelope: Mapping[str, Any]) -> None:
     )
     audit = _required_mapping(save.get("network_audit"), "save_result.network_audit")
     if (
-        audit.get("complete") is not True
+        audit.get("scope") != "same_origin_write_window"
+        or audit.get("complete") is not True
         or audit.get("window_closed") is not True
         or type(audit.get("registered_listener_count")) is not int
         or audit.get("registered_listener_count") != 2
@@ -631,6 +642,8 @@ def _validate_save_success_semantics(envelope: Mapping[str, Any]) -> None:
     if (
         publish_signal.get("detected") is not False
         or publish_signal.get("kind") != "network_route_classification"
+        or type(publish_signal.get("request_count")) is not int
+        or publish_signal.get("request_count") != 0
     ):
         _reject("SAVE success requires an explicit zero-publish network classification")
 

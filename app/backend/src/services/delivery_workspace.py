@@ -13,6 +13,10 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from src.core.config import DATA_DIR, SCREENSHOT_DIR
+from src.execution.action_result_contract import (
+    ActionResultContractError,
+    validate_independent_save_verification_pair,
+)
 from src.execution.v1_runner import MODE_LAST_STATE, V1_STEPS
 from src.repository import Repository
 from src.services.evidence_ref import validate_evidence_ref
@@ -1353,7 +1357,46 @@ def _report_has_successful_save(report: Mapping[str, Any]) -> bool:
             _payload_has_unpublished_proof(payload, "report") for payload in payloads
         )
         and any(_payload_has_network_or_har(payload) for payload in payloads)
+        and _report_has_independent_save_verification_pair(report)
     )
+
+
+def _report_has_independent_save_verification_pair(report: Mapping[str, Any]) -> bool:
+    """Require the canonical same-target SAVE -> VERIFY proof pair from this report."""
+
+    envelopes: list[Mapping[str, Any]] = []
+
+    def collect(value: Any) -> None:
+        if isinstance(value, Mapping):
+            if (
+                value.get("schema_version") == "dxm.action-result.v1"
+                and isinstance(value.get("attempted_state"), str)
+                and isinstance(value.get("action"), str)
+            ):
+                envelopes.append(value)
+                return
+            for nested in value.values():
+                collect(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                collect(nested)
+
+    collect(report.get("save_result"))
+    collect(report.get("summary"))
+    saves = [item for item in envelopes if item.get("attempted_state") == "SAVE_ONLY"]
+    verifications = [
+        item
+        for item in envelopes
+        if item.get("attempted_state") == "VERIFY_NOT_PUBLISHED"
+    ]
+    for save in saves:
+        for verification in verifications:
+            try:
+                validate_independent_save_verification_pair(save, verification)
+            except ActionResultContractError:
+                continue
+            return True
+    return False
 
 
 def _int_or_none(value: Any) -> int | None:
@@ -2351,6 +2394,13 @@ def _looks_like_save_result(payload: Mapping[str, Any]) -> bool:
         and pre_dispatch.get("phase") == "before_ledger_begin_dispatch"
     ):
         return False
+    exact_save_target = pre_dispatch.get("exact_save_target")
+    if not isinstance(exact_save_target, Mapping) or not (
+        exact_save_target.get("ok") is True
+        and exact_save_target.get("text") == "保存"
+        and exact_save_target.get("exact_save_count") == 1
+    ):
+        return False
     identity = pre_dispatch.get("identity")
     if not isinstance(identity, Mapping) or any(
         identity.get(key) is not True
@@ -2415,7 +2465,8 @@ def _looks_like_save_result(payload: Mapping[str, Any]) -> bool:
     if not isinstance(network, Mapping) or not _network_save_result_seen(network):
         return False
     if not isinstance(audit, Mapping) or not (
-        audit.get("complete") is True
+        audit.get("scope") == "same_origin_write_window"
+        and audit.get("complete") is True
         and audit.get("window_closed") is True
         and type(audit.get("registered_listener_count")) is int
         and audit.get("registered_listener_count") == 2
@@ -2434,6 +2485,8 @@ def _looks_like_save_result(payload: Mapping[str, Any]) -> bool:
     if not isinstance(publish_signal, Mapping) or not (
         publish_signal.get("detected") is False
         and publish_signal.get("kind") == "network_route_classification"
+        and type(publish_signal.get("request_count")) is int
+        and publish_signal.get("request_count") == 0
     ):
         return False
 
