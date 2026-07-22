@@ -19,6 +19,10 @@ extraResources:
     to: app/frontend/dist
   - from: ../backend/src
     to: app/backend/src
+    filter:
+      - "**/*"
+      - "!**/__pycache__/**"
+      - "!**/*.pyc"
   - from: ../backend/.venv
     to: app/backend/.venv
     filter:

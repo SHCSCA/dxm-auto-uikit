@@ -727,6 +727,8 @@ def test_desktop_builder_excludes_backend_dev_runtime_cache_from_delivery_bundle
     assert "site-packages" in prune_source
     assert "pytest" in prune_source
     assert "setuptools" in prune_source
+    assert "const backendPath" in prune_source
+    assert "pruneTree(backendPath)" in prune_source
 
 
 def test_start_desktop_launcher_builds_frontend_then_runs_electron():
