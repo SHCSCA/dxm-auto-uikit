@@ -9,14 +9,13 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from src import db
+from src import db, repository as repository_module
 from src.core import config
 from src.execution.v1_runner import V1TaskRunner
 from src.main import app
 from src.repository import Repository
 from src.services.config_defaults import ConfigDefaultsResolver
 from src.services.config_validation import ConfigValidationService
-from src.state_machine.two_stage import canonical_claim_target_identity, canonical_source_identity
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 _MINIMAL_VALID_PNG = base64.b64decode(
@@ -34,6 +33,39 @@ def _evidence_ref(name: str) -> dict:
         "sha256": hashlib.sha256(content).hexdigest().upper(),
         "size": len(content),
     }
+
+
+def _create_product_box_product(
+    repo: Repository,
+    *,
+    store: dict,
+    source_url: str,
+    title: str,
+    category_name: str,
+) -> dict:
+    return repo.create_product(
+        {
+            "title": title,
+            "source": "dxm_draft_box",
+            "status": "ready_for_edit",
+            "category_name": category_name,
+            "price": 0,
+            "currency": "USD",
+            "sku_count": 1,
+            "image_count": 0,
+            "payload": {
+                "source": "dxm_draft_box",
+                "store_id": store["id"],
+                "store_name": store["name"],
+                "source_url": source_url,
+                "source_urls": [source_url],
+                "draft_box_verified": True,
+                "product_box_evidence_ref": _evidence_ref(
+                    f"product-box-{store['id']}-{hashlib.sha256(source_url.encode('utf-8')).hexdigest()[:12]}.png"
+                ),
+            },
+        }
+    )
 
 
 class DummyRunner:
@@ -54,18 +86,21 @@ class DummyDxmLoginFlow:
     def perform_draft_box_action(
         self,
         action,
-        note_text=None,
         product_query=None,
         store_name=None,
         target_source_urls=None,
+        target_identity=None,
     ):
-        self.draft_box_actions.append((action, note_text, product_query, store_name, target_source_urls))
+        self.draft_box_actions.append((action, product_query, store_name, target_source_urls))
         return {"stage": "draft_box_action", "action": action}
 
 
 def _client_with_temp_repo(tmp_path, monkeypatch):
     db_path = tmp_path / "task-start-guard.db"
+    evidence_dir = tmp_path / "evidences"
     monkeypatch.setattr(db, "DB_PATH", db_path)
+    monkeypatch.setattr(config, "SCREENSHOT_DIR", evidence_dir)
+    monkeypatch.setattr(repository_module, "EVIDENCE_DIR", evidence_dir)
     db.init_db()
     repo = Repository()
     runner = DummyRunner()
@@ -84,91 +119,35 @@ def _create_task(
     store_name: str = "Dang Kang",
     approval: dict | None = None,
     product_title: str = "ACG Stand Product",
-    product_status: str = "claimed_to_draft",
+    product_status: str = "ready_for_edit",
     publish_scene: str = "SMT_SEMI_MANAGED_SAVE_ONLY",
     source_url: str = "https://detail.1688.com/offer/1013604102950.html",
 ):
     store = repo.create_store(store_name, "AliExpress")
-    claim_task = None
     product_is_fixture = "qa guarded product" in product_title.casefold()
-    if mode == "single_save" and product_status == "claimed_to_draft" and not product_is_fixture:
-        claim_task = repo.create_acquisition_claim_request(
-            {
-                "store_id": store["id"],
-                "store_name": store_name,
-                "source_url": source_url,
-                "keyword": product_title,
-                "category_name": "立牌类谷子",
-                "claim_mark": "AI认领",
-                "template_id": None,
-            }
-        )
+    product_box_ready = product_status == "ready_for_edit" and not product_is_fixture
     product_data = {
-            "title": product_title,
-            "source": "dxm_data_acquisition",
+        "title": product_title,
+        "source": "dxm_draft_box" if not product_is_fixture else "test",
+        "status": product_status,
+        "category_name": "立牌类谷子",
+        "price": 7.01,
+        "currency": "USD",
+        "sku_count": 1,
+        "image_count": 1,
+        "payload": {
+            "source": "dxm_draft_box" if not product_is_fixture else "test",
+            "store_id": store["id"],
+            "store_name": store_name,
             "source_url": source_url,
-            "status": product_status,
-            "category_name": "立牌类谷子",
-            "price": 7.01,
-            "currency": "USD",
-            "sku_count": 1,
-            "image_count": 1,
-            "payload": {
-                "source": "dxm_data_acquisition",
-                "store_id": store["id"],
-                "store_name": store_name,
-                "source_url": source_url,
-                "claim_task_id": claim_task["id"] if claim_task else None,
-                "claim_mark": "AI认领",
-                "draft_box_verified": product_status == "claimed_to_draft",
-            },
-        }
-    if claim_task:
-        claim_job = repo.get_task_private(claim_task["id"])["jobs"][0]
-        repo.update_task_status(claim_task["id"], "running")
-        repo.update_job(claim_job["id"], status="running")
-        target_identity = canonical_claim_target_identity(
-            source_url,
-            [source_url],
-            keyword=product_title,
-            category_name="立牌类谷子",
-        )
-        source_identity = canonical_source_identity(source_url, [source_url])
-        row_text = f"商品箱行 {product_title} 立牌类谷子 {store_name}"
-        completion = repo.create_claimed_product_and_complete_acquisition(
-            claim_task["id"],
-            product_data,
-            draft_box_observation={
-                "schema": "dxm.draft_box.observation.v1",
-                "verification_state": "VERIFY_DRAFT_BOX_CLAIM",
-                "action": "verify_draft_box_claim",
-                "draft_box_verified": True,
-                "page_url": "https://www.dianxiaomi.com/web/smt/smtProductList/draft",
-                "authorized_target_identity": target_identity,
-                "authorized_target_fingerprint": target_identity["fingerprint"],
-                "observed_source_identity": source_identity,
-                "observed_store_identity": {
-                    "store_id": store["id"],
-                    "store_name": store_name,
-                    "selected": True,
-                    "selected_store_names": [store_name],
-                    "selection_evidence": {"input_checked": True},
-                    "draft_box_cell_evidence": {
-                        "store_name": store_name,
-                        "cell_text": f"「{store_name}」",
-                        "source": "structured_store_cell",
-                    },
-                },
-                "matched_by": ["source_url"],
-                "match_evidence": {"source_url": source_identity["primary_url"]},
-                "observed_product_identity": product_title,
-                "observed_row_identity": row_text,
-                "evidence_ref": _evidence_ref(f"task-start-{claim_task['id']}.png"),
-            },
-        )
-        product = completion.product
-    else:
-        product = repo.create_product(product_data)
+            "source_urls": [source_url],
+            "draft_box_verified": product_box_ready,
+            "product_box_evidence_ref": _evidence_ref(
+                f"task-start-product-{store['id']}-{hashlib.sha256(product_title.encode('utf-8')).hexdigest()[:12]}.png"
+            ),
+        },
+    }
+    product = repo.create_product(product_data)
     payload = {"store_name": store_name}
     if approval is not None:
         payload["manual_approval"] = approval
@@ -177,18 +156,17 @@ def _create_task(
         "store_id": store["id"],
         "mode": mode,
         "publish_scene": publish_scene,
-        "claim_mark": "AI认领",
         "product_ids": [product["id"]],
         "payload": payload,
     }
-    if mode == "single_save" and not claim_task:
+    if mode == "single_save" and not product_box_ready:
         task_data["mode"] = "dry_run"
     task = repo.create_task(
         {
             **task_data,
         }
     )
-    if mode == "single_save" and not claim_task:
+    if mode == "single_save" and not product_box_ready:
         with db.connection() as conn:
             row = conn.execute("SELECT payload_json FROM tasks WHERE id=?", (task["id"],)).fetchone()
             stored_payload = db.loads(row["payload_json"], {})
@@ -201,24 +179,11 @@ def _create_task(
     return task
 
 
-def test_released_real_dxm_mutation_scope_is_controlled_two_stage_only():
+def test_released_real_dxm_mutation_scope_is_single_save_only():
     import src.main as main
 
-    assert main.RELEASED_REAL_DXM_MUTATION_MODES == {"claim_only", "single_save"}
+    assert main.RELEASED_REAL_DXM_MUTATION_MODES == {"single_save"}
     assert "batch_save" not in main.RELEASED_REAL_DXM_MUTATION_MODES
-
-
-def _create_claim_request(repo: Repository, *, store_name: str = "Dang Kang"):
-    store = repo.create_store(store_name, "AliExpress")
-    return repo.create_acquisition_claim_request(
-        {
-            "store_id": store["id"],
-            "keyword": "Hazbin Hotel 立牌",
-            "category_name": "立牌类谷子",
-            "claim_mark": "AI认领",
-            "template_id": None,
-        }
-    )
 
 
 def _approve_task(repo: Repository, task_id: int, token: str):
@@ -351,7 +316,7 @@ def test_create_single_save_rejects_multiple_products(tmp_path, monkeypatch):
     )
 
     assert response.status_code == 400
-    assert "single_save requires exactly one product" in response.json()["detail"]
+    assert "single_save requires exactly one positive product id" in response.json()["detail"]
 
 
 def test_main_runner_reuses_login_flow_executor_for_thread_bound_playwright():
@@ -360,157 +325,6 @@ def test_main_runner_reuses_login_flow_executor_for_thread_bound_playwright():
 
     assert "login_flow_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='dxm-login-flow')" in main_source
     assert "workflow_executor=login_flow_executor" in runner_section
-
-
-def test_create_task_api_rejects_wrong_scene_claim_and_unreleased_batch(tmp_path, monkeypatch):
-    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
-    store = repo.create_store("Dang Kang", "AliExpress")
-    product = repo.create_product(
-        {
-            "title": "ACG Stand Product",
-            "source": "test",
-            "category_name": "立牌类谷子",
-            "price": 7.01,
-            "currency": "USD",
-            "sku_count": 1,
-            "image_count": 1,
-            "payload": {},
-        }
-    )
-
-    claim_response = client.post(
-        "/api/tasks",
-        json={
-            "name": "wrong scene claim",
-            "store_id": store["id"],
-            "mode": "claim_only",
-            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
-            "product_ids": [product["id"]],
-        },
-    )
-
-
-def _complete_test_claim(
-    repo: Repository,
-    *,
-    store: dict,
-    claim_task: dict,
-    source_url: str,
-    title: str,
-    category_name: str,
-    claim_mark: str = "AI-OPS",
-):
-    job = repo.get_task_private(claim_task["id"])["jobs"][0]
-    repo.update_task_status(claim_task["id"], "running")
-    repo.update_job(job["id"], status="running")
-    task_payload = repo.get_task_private(claim_task["id"])["payload"]
-    target_identity = canonical_claim_target_identity(
-        task_payload.get("source_url"),
-        task_payload.get("source_urls") or (),
-        keyword=task_payload.get("keyword"),
-        category_name=task_payload.get("category_name"),
-    )
-    source_identity = canonical_source_identity(source_url, [source_url])
-    row_text = f"商品箱行 {title} {category_name} {store['name']}"
-    result = repo.create_claimed_product_and_complete_acquisition(
-        claim_task["id"],
-        {
-            "title": title,
-            "source": "dxm_data_acquisition",
-            "status": "claimed_to_draft",
-            "category_name": category_name,
-            "price": 0,
-            "currency": "USD",
-            "sku_count": 1,
-            "image_count": 0,
-            "payload": {
-                "source": "dxm_data_acquisition",
-                "store_id": store["id"],
-                "store_name": store["name"],
-                "source_url": source_url,
-                "source_urls": [source_url],
-                "claim_task_id": claim_task["id"],
-                "claim_mark": claim_mark,
-                "draft_box_verified": True,
-            },
-        },
-        draft_box_observation={
-            "schema": "dxm.draft_box.observation.v1",
-            "verification_state": "VERIFY_DRAFT_BOX_CLAIM",
-            "action": "verify_draft_box_claim",
-            "draft_box_verified": True,
-            "page_url": "https://www.dianxiaomi.com/web/smt/smtProductList/draft",
-            "authorized_target_identity": target_identity,
-            "authorized_target_fingerprint": target_identity["fingerprint"],
-            "observed_source_identity": source_identity,
-            "observed_store_identity": {
-                "store_id": store["id"],
-                "store_name": store["name"],
-                "selected": True,
-                "selected_store_names": [store["name"]],
-                "selection_evidence": {"input_checked": True},
-                "draft_box_cell_evidence": {
-                    "store_name": store["name"],
-                    "cell_text": f"「{store['name']}」",
-                    "source": "structured_store_cell",
-                },
-            },
-            "matched_by": ["source_url"],
-            "match_evidence": {"source_url": source_identity["primary_url"]},
-            "observed_product_identity": title,
-            "observed_row_identity": row_text,
-            "evidence_ref": _evidence_ref(f"task-start-claim-{claim_task['id']}.png"),
-        },
-    )
-    assert result.applied is True
-    return result.product
-    assert claim_response.status_code == 403
-    assert "Controlled claim_only task requires claim-to-draft scene" in claim_response.json()["detail"]
-
-    batch_response = client.post(
-        "/api/tasks",
-        json={
-            "name": "blocked batch",
-            "store_id": store["id"],
-            "mode": "batch_save",
-            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
-            "product_ids": [product["id"]],
-        },
-    )
-    assert batch_response.status_code == 403
-    assert "Only controlled claim_only and single_save are released" in batch_response.json()["detail"]
-
-
-def test_create_task_api_rejects_claim_only_with_existing_product_ids(tmp_path, monkeypatch):
-    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
-    store = repo.create_store("Dang Kang", "AliExpress")
-    product = repo.create_product(
-        {
-            "title": "ACG Stand Product",
-            "source": "dxm_data_acquisition",
-            "status": "claimed_to_draft",
-            "category_name": "立牌类谷子",
-            "price": 7.01,
-            "currency": "USD",
-            "sku_count": 1,
-            "image_count": 1,
-            "payload": {},
-        }
-    )
-
-    response = client.post(
-        "/api/tasks",
-        json={
-            "name": "wrong claim task",
-            "store_id": store["id"],
-            "mode": "claim_only",
-            "publish_scene": "CONTROLLED_CLAIM_TO_DRAFT_ONLY",
-            "product_ids": [product["id"]],
-        },
-    )
-
-    assert response.status_code == 400
-    assert "without existing product_ids" in response.json()["detail"]
 
 
 def test_start_single_save_rejects_historical_multiple_products(tmp_path, monkeypatch):
@@ -534,7 +348,6 @@ def test_start_single_save_rejects_historical_multiple_products(tmp_path, monkey
         "store_id": store["id"],
         "mode": "single_save",
         "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
-        "claim_mark": "AI认领",
         "product_ids": product_ids,
         "payload": {"store_name": "Dang Kang"},
     })
@@ -542,7 +355,7 @@ def test_start_single_save_rejects_historical_multiple_products(tmp_path, monkey
     response = client.post(f"/api/tasks/{task['id']}/start", json={})
 
     assert response.status_code == 409
-    assert "single_save requires exactly one product" in response.json()["detail"]
+    assert "single_save requires exactly one positive product id" in response.json()["detail"]
     assert runner.calls == []
 
 
@@ -556,7 +369,7 @@ def test_single_save_start_requires_manual_approval(tmp_path, monkeypatch):
     assert runner.calls == []
 
 
-def test_single_save_start_rejects_legacy_non_claimed_product_before_real_browser(tmp_path, monkeypatch):
+def test_single_save_start_rejects_product_not_ready_for_edit_before_real_browser(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     task = _create_task(repo, product_status="draft")
 
@@ -564,194 +377,11 @@ def test_single_save_start_rejects_legacy_non_claimed_product_before_real_browse
 
     assert response.status_code == 409
     detail = response.json()["detail"]
-    assert "待认领商品" in detail or "已有待认领" in detail
     assert "商品箱" in detail
     assert runner.calls == []
 
 
-def test_claim_only_start_requires_stage_a_approval_before_l2_gate(tmp_path, monkeypatch):
-    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
-    import src.main as main
-
-    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "not_run"})
-    task = _create_claim_request(repo)
-
-    response = client.post(f"/api/tasks/{task['id']}/start", json={})
-
-    assert response.status_code == 403
-    assert "确认将该已有商品认领到商品箱" in response.json()["detail"]
-    assert runner.calls == []
-
-
-def test_claim_only_start_rejects_missing_stage_a_confirmation(tmp_path, monkeypatch):
-    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
-    import src.main as main
-
-    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
-    task = _create_claim_request(repo)
-    _approve_task(repo, task["id"], "claim-stage-a-token")
-
-    response = client.post(
-        f"/api/tasks/{task['id']}/start",
-        json={
-            "manual_approval": True,
-            "approval_token": "claim-stage-a-token",
-            "approved_by": "ops-owner",
-        },
-    )
-
-    assert response.status_code == 403
-    assert "确认将该已有商品认领到商品箱" in response.json()["detail"]
-    assert runner.calls == []
-
-
-def test_claim_only_start_rejects_wrong_stage_a_confirmation(tmp_path, monkeypatch):
-    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
-    import src.main as main
-
-    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
-    task = _create_claim_request(repo)
-    _approve_task(repo, task["id"], "claim-stage-a-token")
-
-    response = client.post(
-        f"/api/tasks/{task['id']}/start",
-        json={
-            "manual_approval": True,
-            "approval_token": "claim-stage-a-token",
-            "approved_by": "ops-owner",
-            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
-        },
-    )
-
-    assert response.status_code == 403
-    assert "确认将该已有商品认领到商品箱" in response.json()["detail"]
-    assert runner.calls == []
-
-
-def test_claim_only_manual_approval_token_allows_stage_a_start(tmp_path, monkeypatch):
-    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
-    import src.main as main
-
-    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
-    task = _create_claim_request(repo)
-
-    approval_response = client.post(
-        f"/api/tasks/{task['id']}/manual-approval",
-        json={
-            "approved_by": "ops-owner",
-            "confirmation": "确认将该已有商品认领到商品箱",
-        },
-    )
-
-    assert approval_response.status_code == 200
-    approval_payload = approval_response.json()
-    assert approval_payload["confirmation"] == "确认将该已有商品认领到商品箱"
-
-    start_response = client.post(
-        f"/api/tasks/{task['id']}/start",
-        json={
-            "manual_approval": True,
-            "approval_token": approval_payload["approvalToken"],
-            "approved_by": "ops-owner",
-            "confirmation": "确认将该已有商品认领到商品箱",
-        },
-    )
-
-    assert start_response.status_code == 200
-    assert start_response.json()["ok"] is True
-    assert repo.get_task(task["id"])["status"] == "running"
-
-
-def test_claim_only_start_rejects_mismatched_stage_a_approver(tmp_path, monkeypatch):
-    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
-    import src.main as main
-
-    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
-    task = _create_claim_request(repo)
-    approval_response = client.post(
-        f"/api/tasks/{task['id']}/manual-approval",
-        json={
-            "approved_by": "ops-owner",
-            "confirmation": "确认将该已有商品认领到商品箱",
-        },
-    )
-    assert approval_response.status_code == 200
-
-    response = client.post(
-        f"/api/tasks/{task['id']}/start",
-        json={
-            "manual_approval": True,
-            "approval_token": approval_response.json()["approvalToken"],
-            "approved_by": "different-operator",
-            "confirmation": "确认将该已有商品认领到商品箱",
-        },
-    )
-
-    assert response.status_code == 403
-    assert "approved_by" in response.json()["detail"]
-    assert runner.calls == []
-
-
-def test_claim_only_start_accepts_matching_chinese_stage_a_approver(tmp_path, monkeypatch):
-    _client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
-    import src.main as main
-
-    client = TestClient(app, raise_server_exceptions=False)
-    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
-    task = _create_claim_request(repo)
-    approval_response = client.post(
-        f"/api/tasks/{task['id']}/manual-approval",
-        json={
-            "approved_by": "张三",
-            "confirmation": "确认将该已有商品认领到商品箱",
-        },
-    )
-    assert approval_response.status_code == 200
-
-    response = client.post(
-        f"/api/tasks/{task['id']}/start",
-        json={
-            "manual_approval": True,
-            "approval_token": approval_response.json()["approvalToken"],
-            "approved_by": "张三",
-            "confirmation": "确认将该已有商品认领到商品箱",
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json()["ok"] is True
-    assert repo.get_task(task["id"])["status"] == "running"
-
-
-def test_claim_only_start_rejects_empty_stored_stage_a_approver(tmp_path, monkeypatch):
-    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
-    import src.main as main
-
-    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
-    task = _create_claim_request(repo)
-    repo.set_task_manual_approval(
-        task["id"],
-        approved=True,
-        token="claim-empty-approver-token",
-        approved_by="   ",
-    )
-
-    response = client.post(
-        f"/api/tasks/{task['id']}/start",
-        json={
-            "manual_approval": True,
-            "approval_token": "claim-empty-approver-token",
-            "approved_by": "ops-owner",
-            "confirmation": "确认将该已有商品认领到商品箱",
-        },
-    )
-
-    assert response.status_code == 403
-    assert "approved_by" in response.json()["detail"]
-    assert runner.calls == []
-
-
-def test_single_save_manual_approval_keeps_stage_b_confirmation(tmp_path, monkeypatch):
+def test_single_save_manual_approval_keeps_save_confirmation(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
@@ -767,7 +397,7 @@ def test_single_save_manual_approval_keeps_stage_b_confirmation(tmp_path, monkey
     assert response.json()["confirmation"] == "CONFIRM_DXM_SAVE_ONLY"
 
 
-def test_single_save_start_rejects_mismatched_stage_b_approver(tmp_path, monkeypatch):
+def test_single_save_start_rejects_mismatched_save_approver(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
@@ -794,7 +424,7 @@ def test_single_save_start_rejects_mismatched_stage_b_approver(tmp_path, monkeyp
     assert runner.calls == []
 
 
-def test_single_save_start_accepts_matching_chinese_stage_b_approver(tmp_path, monkeypatch):
+def test_single_save_start_accepts_matching_chinese_save_approver(tmp_path, monkeypatch):
     _client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
@@ -822,7 +452,7 @@ def test_single_save_start_accepts_matching_chinese_stage_b_approver(tmp_path, m
     assert repo.get_task(task["id"])["status"] == "running"
 
 
-def test_batch_save_remains_unreleased_when_claim_only_is_released(tmp_path, monkeypatch):
+def test_batch_save_remains_unreleased_when_single_save_is_released(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
@@ -834,67 +464,8 @@ def test_batch_save_remains_unreleased_when_claim_only_is_released(tmp_path, mon
         json={"approved_by": "ops-owner", "confirmation": "CONFIRM_DXM_SAVE_ONLY"},
     )
 
-    assert main.RELEASED_REAL_DXM_MUTATION_MODES == {"claim_only", "single_save"}
+    assert main.RELEASED_REAL_DXM_MUTATION_MODES == {"single_save"}
     assert response.status_code == 403
-
-
-def test_claim_only_start_requires_manual_approval_when_l2_passes(tmp_path, monkeypatch):
-    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
-    import src.main as main
-
-    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
-    task = _create_claim_request(repo)
-
-    response = client.post(f"/api/tasks/{task['id']}/start", json={})
-
-    assert response.status_code == 403
-    assert "确认将该已有商品认领到商品箱" in response.json()["detail"]
-    assert runner.calls == []
-
-
-def test_claim_only_start_rejects_existing_product_job_shape_after_release_gate(tmp_path, monkeypatch):
-    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
-    import src.main as main
-
-    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
-    task = _create_task(
-        repo,
-        mode="claim_only",
-        publish_scene="CONTROLLED_CLAIM_TO_DRAFT_ONLY",
-    )
-
-    response = client.post(f"/api/tasks/{task['id']}/start", json={})
-
-    assert response.status_code == 409
-    assert "不能直接绑定本地商品" in response.json()["detail"]
-    assert runner.calls == []
-
-
-def test_claim_only_start_allows_any_real_store_with_stage_a_approval(tmp_path, monkeypatch):
-    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
-    import src.main as main
-
-    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
-    task = _create_claim_request(repo, store_name="Other Store")
-    approval = client.post(
-        f"/api/tasks/{task['id']}/manual-approval",
-        json={"approved_by": "ops-owner", "confirmation": "确认将该已有商品认领到商品箱"},
-    )
-    assert approval.status_code == 200
-
-    response = client.post(
-        f"/api/tasks/{task['id']}/start",
-        json={
-            "manual_approval": True,
-            "approval_token": approval.json()["approvalToken"],
-            "approved_by": "ops-owner",
-            "confirmation": "确认将该已有商品认领到商品箱",
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json()["ok"] is True
-    assert repo.get_task(task["id"])["status"] == "running"
 
 
 def test_unreleased_real_modes_reject_manual_approval(tmp_path, monkeypatch):
@@ -913,7 +484,7 @@ def test_unreleased_real_modes_reject_manual_approval(tmp_path, monkeypatch):
 
         assert response.status_code == 403
         detail = response.json()["detail"].lower()
-        assert "controlled claim_only and single_save" in detail
+        assert "controlled single_save" in detail
         assert "released" in detail
 
 
@@ -939,7 +510,7 @@ def test_unreleased_real_modes_cannot_start_after_approval_and_l2_passed(tmp_pat
 
         assert response.status_code == 403
         detail = response.json()["detail"].lower()
-        assert "controlled claim_only and single_save" in detail
+        assert "controlled single_save" in detail
         assert "released" in detail
         assert task["id"] not in runner.calls
     assert runner.calls == []
@@ -972,7 +543,7 @@ def test_single_save_start_accepts_matching_manual_approval_token(tmp_path, monk
     assert repo.get_task(task["id"])["status"] == "running"
 
 
-def test_single_save_start_rejects_product_without_completed_claim_provenance(tmp_path, monkeypatch):
+def test_single_save_start_rejects_product_without_verified_product_box_provenance(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
@@ -992,13 +563,11 @@ def test_single_save_start_rejects_product_without_completed_claim_provenance(tm
 
     assert response.status_code == 409
     detail = response.json()["detail"]
-    assert "已完成的待认领商品任务链" in detail
-    assert "待认领商品" in detail
     assert "商品箱" in detail
     assert runner.calls == []
 
 
-def test_products_api_keeps_client_writable_fixture_markers_visible(tmp_path, monkeypatch):
+def test_products_api_filters_legacy_acquisition_rows_but_keeps_test_fixtures(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     repo.create_product(
         {
@@ -1014,7 +583,7 @@ def test_products_api_keeps_client_writable_fixture_markers_visible(tmp_path, mo
     )
     repo.create_product(
         {
-            "title": "真实待认领商品 A",
+            "title": "legacy acquisition product",
             "source": "dxm_data_acquisition",
             "category_name": "立牌类谷子",
             "price": 9.9,
@@ -1029,7 +598,7 @@ def test_products_api_keeps_client_writable_fixture_markers_visible(tmp_path, mo
 
     assert response.status_code == 200
     titles = [item["title"] for item in response.json()]
-    assert "真实待认领商品 A" in titles
+    assert "legacy acquisition product" not in titles
     assert "QA guarded product" in titles
 
 
@@ -1089,52 +658,22 @@ def test_single_save_start_accepts_task_template_overrides_for_required_fields(t
     assert runner.calls == [task["id"]]
 
 
-def test_claim_only_approval_persists_exact_unconsumed_authorization_lease(tmp_path, monkeypatch):
-    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
-    import src.main as main
-
-    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed", "run_id": "l2-run-a"})
-    task = _create_claim_request(repo)
-
-    response = client.post(
-        f"/api/tasks/{task['id']}/manual-approval",
-        json={"approved_by": "ops-owner", "confirmation": "确认将该已有商品认领到商品箱"},
-    )
-
-    assert response.status_code == 200
-    approval = response.json()["manualApproval"]
-    assert approval["lease_id"]
-    assert approval["confirmation"] == "确认将该已有商品认领到商品箱"
-    assert approval["stage_task_facts"]["stage"] == "stage_a"
-    assert approval["authorization_context"]["runtime_instance_id"]
-    assert approval["authorization_context"]["browser_session_id"]
-    assert approval["authorization_context"]["git_head"]
-    assert approval["authorization_context"]["l2_evidence_fingerprint"]
-    assert approval["issued_at"]
-    assert approval["expires_at"]
-    assert approval["consumed"] is False
-    assert "token_hash" not in approval
-    private_approval = repo.get_task_private(task["id"])["payload"]["manual_approval"]
-    assert private_approval["token_hash"]
-    assert private_approval["lease_id"] == approval["lease_id"]
-
-
 def test_real_task_start_atomically_consumes_lease_and_reuse_fails_after_status_reset(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed", "run_id": "l2-run-a"})
-    task = _create_claim_request(repo)
+    task = _create_task(repo)
     approval_response = client.post(
         f"/api/tasks/{task['id']}/manual-approval",
-        json={"approved_by": "ops-owner", "confirmation": "确认将该已有商品认领到商品箱"},
+        json={"approved_by": "ops-owner", "confirmation": "CONFIRM_DXM_SAVE_ONLY"},
     )
     token = approval_response.json()["approvalToken"]
     start_payload = {
         "manual_approval": True,
         "approval_token": token,
         "approved_by": "ops-owner",
-        "confirmation": "确认将该已有商品认领到商品箱",
+        "confirmation": "CONFIRM_DXM_SAVE_ONLY",
     }
 
     first = client.post(f"/api/tasks/{task['id']}/start", json=start_payload)
@@ -1160,10 +699,10 @@ def test_real_task_start_rejects_expired_authorization_lease(tmp_path, monkeypat
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed", "run_id": "l2-run-a"})
     clock = [datetime(2026, 7, 15, 1, 0, tzinfo=timezone.utc)]
     monkeypatch.setattr(main, "_authorization_now", lambda: clock[0])
-    task = _create_claim_request(repo)
+    task = _create_task(repo)
     approval = client.post(
         f"/api/tasks/{task['id']}/manual-approval",
-        json={"approved_by": "ops-owner", "confirmation": "确认将该已有商品认领到商品箱"},
+        json={"approved_by": "ops-owner", "confirmation": "CONFIRM_DXM_SAVE_ONLY"},
     )
     clock[0] += timedelta(seconds=main.AUTHORIZATION_LEASE_TTL_SECONDS + 1)
 
@@ -1173,7 +712,7 @@ def test_real_task_start_rejects_expired_authorization_lease(tmp_path, monkeypat
             "manual_approval": True,
             "approval_token": approval.json()["approvalToken"],
             "approved_by": "ops-owner",
-            "confirmation": "确认将该已有商品认领到商品箱",
+            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
         },
     )
 
@@ -1190,10 +729,10 @@ def test_runner_revalidation_rejects_lease_that_expires_after_atomic_start(tmp_p
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed", "run_id": "l2-run-a"})
     clock = [datetime(2026, 7, 15, 1, 0, tzinfo=timezone.utc)]
     monkeypatch.setattr(main, "_authorization_now", lambda: clock[0])
-    task = _create_claim_request(repo)
+    task = _create_task(repo)
     approval = client.post(
         f"/api/tasks/{task['id']}/manual-approval",
-        json={"approved_by": "ops-owner", "confirmation": "确认将该已有商品认领到商品箱"},
+        json={"approved_by": "ops-owner", "confirmation": "CONFIRM_DXM_SAVE_ONLY"},
     )
     start = client.post(
         f"/api/tasks/{task['id']}/start",
@@ -1201,62 +740,15 @@ def test_runner_revalidation_rejects_lease_that_expires_after_atomic_start(tmp_p
             "manual_approval": True,
             "approval_token": approval.json()["approvalToken"],
             "approved_by": "ops-owner",
-            "confirmation": "确认将该已有商品认领到商品箱",
+            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
         },
     )
     assert start.status_code == 200
     clock[0] += timedelta(seconds=main.AUTHORIZATION_LEASE_TTL_SECONDS + 1)
 
-    result = main._verify_runner_authorization(task["id"], "claim_only", "CLAIM_TO_DRAFT_BOX")
+    result = main._verify_runner_authorization(task["id"], "single_save", "SAVE_ONLY")
 
     assert result == {"ok": False, "reason_code": "AUTH_LEASE_EXPIRED"}
-
-
-def test_stage_a_and_stage_b_approval_tokens_cannot_be_swapped(tmp_path, monkeypatch):
-    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
-    import src.main as main
-
-    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed", "run_id": "l2-run-a"})
-    stage_a = _create_claim_request(repo)
-    stage_b = _create_task(repo, mode="single_save")
-    _create_required_save_templates(repo)
-    stage_a_approval = client.post(
-        f"/api/tasks/{stage_a['id']}/manual-approval",
-        json={"approved_by": "ops-owner", "confirmation": "确认将该已有商品认领到商品箱"},
-    )
-    stage_b_approval = client.post(
-        f"/api/tasks/{stage_b['id']}/manual-approval",
-        json={"approved_by": "ops-owner", "confirmation": "CONFIRM_DXM_SAVE_ONLY"},
-    )
-    assert stage_a_approval.status_code == 200
-    assert stage_b_approval.status_code == 200
-
-    swapped_into_stage_b = client.post(
-        f"/api/tasks/{stage_b['id']}/start",
-        json={
-            "manual_approval": True,
-            "approval_token": stage_a_approval.json()["approvalToken"],
-            "approved_by": "ops-owner",
-            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
-        },
-    )
-    swapped_into_stage_a = client.post(
-        f"/api/tasks/{stage_a['id']}/start",
-        json={
-            "manual_approval": True,
-            "approval_token": stage_b_approval.json()["approvalToken"],
-            "approved_by": "ops-owner",
-            "confirmation": "确认将该已有商品认领到商品箱",
-        },
-    )
-
-    assert swapped_into_stage_b.status_code in {403, 409}
-    assert "Manual approval" in swapped_into_stage_b.json()["detail"]
-    assert swapped_into_stage_a.status_code in {403, 409}
-    assert "Manual approval" in swapped_into_stage_a.json()["detail"]
-    assert repo.get_task_private(stage_a["id"])["status"] == "draft"
-    assert repo.get_task_private(stage_b["id"])["status"] == "draft"
-    assert runner.calls == []
 
 
 def test_real_task_start_rejects_browser_session_drift_after_approval(tmp_path, monkeypatch):
@@ -1266,10 +758,10 @@ def test_real_task_start_rejects_browser_session_drift_after_approval(tmp_path, 
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed", "run_id": "l2-run-a"})
     browser_session = ["browser-session-a"]
     monkeypatch.setattr(main, "_current_browser_session_id", lambda: browser_session[0])
-    task = _create_claim_request(repo)
+    task = _create_task(repo)
     approval = client.post(
         f"/api/tasks/{task['id']}/manual-approval",
-        json={"approved_by": "ops-owner", "confirmation": "确认将该已有商品认领到商品箱"},
+        json={"approved_by": "ops-owner", "confirmation": "CONFIRM_DXM_SAVE_ONLY"},
     )
     browser_session[0] = "browser-session-b"
 
@@ -1279,7 +771,7 @@ def test_real_task_start_rejects_browser_session_drift_after_approval(tmp_path, 
             "manual_approval": True,
             "approval_token": approval.json()["approvalToken"],
             "approved_by": "ops-owner",
-            "confirmation": "确认将该已有商品认领到商品箱",
+            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
         },
     )
 
@@ -1295,10 +787,10 @@ def test_real_task_start_rejects_l2_evidence_drift_after_approval(tmp_path, monk
 
     l2_run = ["l2-run-a"]
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed", "run_id": l2_run[0]})
-    task = _create_claim_request(repo)
+    task = _create_task(repo)
     approval = client.post(
         f"/api/tasks/{task['id']}/manual-approval",
-        json={"approved_by": "ops-owner", "confirmation": "确认将该已有商品认领到商品箱"},
+        json={"approved_by": "ops-owner", "confirmation": "CONFIRM_DXM_SAVE_ONLY"},
     )
     l2_run[0] = "l2-run-b"
 
@@ -1308,7 +800,7 @@ def test_real_task_start_rejects_l2_evidence_drift_after_approval(tmp_path, monk
             "manual_approval": True,
             "approval_token": approval.json()["approvalToken"],
             "approved_by": "ops-owner",
-            "confirmation": "确认将该已有商品认领到商品箱",
+            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
         },
     )
 
@@ -1328,10 +820,10 @@ def test_real_task_start_rejects_runtime_instance_drift_after_approval(tmp_path,
 
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed", "run_id": "l2-run-a"})
     monkeypatch.setattr(main, "runtime_identity", RuntimeIdentity("runtime-instance-a"))
-    task = _create_claim_request(repo)
+    task = _create_task(repo)
     approval = client.post(
         f"/api/tasks/{task['id']}/manual-approval",
-        json={"approved_by": "ops-owner", "confirmation": "确认将该已有商品认领到商品箱"},
+        json={"approved_by": "ops-owner", "confirmation": "CONFIRM_DXM_SAVE_ONLY"},
     )
     monkeypatch.setattr(main, "runtime_identity", RuntimeIdentity("runtime-instance-b"))
 
@@ -1341,7 +833,7 @@ def test_real_task_start_rejects_runtime_instance_drift_after_approval(tmp_path,
             "manual_approval": True,
             "approval_token": approval.json()["approvalToken"],
             "approved_by": "ops-owner",
-            "confirmation": "确认将该已有商品认领到商品箱",
+            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
         },
     )
 
@@ -1402,10 +894,10 @@ def test_real_task_start_rejects_git_head_drift_after_approval(tmp_path, monkeyp
     git_head = ["a" * 40]
     monkeypatch.setattr(main, "_current_git_summary", lambda: {"head": git_head[0], "is_dirty": False, "status_short": ""})
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed", "run_id": "l2-run-a"})
-    task = _create_claim_request(repo)
+    task = _create_task(repo)
     approval = client.post(
         f"/api/tasks/{task['id']}/manual-approval",
-        json={"approved_by": "ops-owner", "confirmation": "确认将该已有商品认领到商品箱"},
+        json={"approved_by": "ops-owner", "confirmation": "CONFIRM_DXM_SAVE_ONLY"},
     )
     git_head[0] = "b" * 40
 
@@ -1415,7 +907,7 @@ def test_real_task_start_rejects_git_head_drift_after_approval(tmp_path, monkeyp
             "manual_approval": True,
             "approval_token": approval.json()["approvalToken"],
             "approved_by": "ops-owner",
-            "confirmation": "确认将该已有商品认领到商品箱",
+            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
         },
     )
 
@@ -1432,10 +924,10 @@ def test_runner_authorization_revalidation_reloads_consumed_lease_and_rejects_dr
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed", "run_id": "l2-run-a"})
     browser_session = ["browser-session-a"]
     monkeypatch.setattr(main, "_current_browser_session_id", lambda: browser_session[0])
-    task = _create_claim_request(repo)
+    task = _create_task(repo)
     approval = client.post(
         f"/api/tasks/{task['id']}/manual-approval",
-        json={"approved_by": "ops-owner", "confirmation": "确认将该已有商品认领到商品箱"},
+        json={"approved_by": "ops-owner", "confirmation": "CONFIRM_DXM_SAVE_ONLY"},
     )
     start = client.post(
         f"/api/tasks/{task['id']}/start",
@@ -1443,17 +935,17 @@ def test_runner_authorization_revalidation_reloads_consumed_lease_and_rejects_dr
             "manual_approval": True,
             "approval_token": approval.json()["approvalToken"],
             "approved_by": "ops-owner",
-            "confirmation": "确认将该已有商品认领到商品箱",
+            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
         },
     )
     assert start.status_code == 200
-    assert main._verify_runner_authorization(task["id"], "claim_only", "CLAIM_TO_DRAFT_BOX") == {
+    assert main._verify_runner_authorization(task["id"], "single_save", "SAVE_ONLY") == {
         "ok": True,
         "reason_code": "OK",
     }
     browser_session[0] = "browser-session-b"
 
-    result = main._verify_runner_authorization(task["id"], "claim_only", "CLAIM_TO_DRAFT_BOX")
+    result = main._verify_runner_authorization(task["id"], "single_save", "SAVE_ONLY")
 
     assert result["ok"] is False
     assert result["reason_code"] == "AUTH_CONTEXT_MISMATCH"
@@ -1725,55 +1217,7 @@ def test_agent_console_execution_browser_rejects_unreleased_and_non_real_modes(t
         response = client.post("/api/agent-console/start", json={"task_id": task["id"], "launch_browser": True})
 
         assert response.status_code == 403
-        assert "Only controlled claim_only and single_save are released" in response.json()["detail"]
-
-
-def test_agent_console_execution_browser_allows_controlled_claim_only_task(tmp_path, monkeypatch):
-    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
-    import src.main as main
-
-    class DummyAgentConsoleService:
-        def __init__(self):
-            self.calls = []
-
-        def start(self, **payload):
-            self.calls.append(payload)
-            return {"ok": True}
-
-    service = DummyAgentConsoleService()
-    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
-    monkeypatch.setattr(main, "agent_console_service", service)
-    task = _create_claim_request(repo)
-
-    response = client.post("/api/agent-console/start", json={"task_id": task["id"], "launch_browser": True})
-
-    assert response.status_code == 200
-    assert service.calls[0]["task_id"] == task["id"]
-    assert service.calls[0]["launch_browser"] is True
-
-
-def test_agent_console_execution_browser_allows_claim_only_for_any_real_store(tmp_path, monkeypatch):
-    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
-    import src.main as main
-
-    class DummyAgentConsoleService:
-        def __init__(self):
-            self.calls = []
-
-        def start(self, **payload):
-            self.calls.append(payload)
-            return {"ok": True}
-
-    service = DummyAgentConsoleService()
-    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
-    monkeypatch.setattr(main, "agent_console_service", service)
-    task = _create_claim_request(repo, store_name="Other Store")
-
-    response = client.post("/api/agent-console/start", json={"task_id": task["id"], "launch_browser": True})
-
-    assert response.status_code == 200
-    assert service.calls[0]["task_id"] == task["id"]
-    assert service.calls[0]["launch_browser"] is True
+        assert "Only controlled single_save is released" in response.json()["detail"]
 
 
 def test_runtime_logs_tail_known_log_sources(tmp_path, monkeypatch):
@@ -2042,11 +1486,11 @@ def test_runtime_status_unifies_visible_dxm_flow_browser_even_when_agent_console
     client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     monkeypatch.setattr(main.login_flow, "get_state", lambda: {
         "stage": "workflow_navigation",
-        "label": "数据采集",
-        "message": "已进入数据采集页，可以继续认领产品。",
-        "next_action": "继续切换到速卖通采集箱或执行认领。",
-        "page_title": "店小秘--数据采集",
-        "page_url": "https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
+        "label": "商品箱",
+        "message": "已进入商品箱，可以继续定位待编辑商品。",
+        "next_action": "继续执行受控单商品编辑保存。",
+        "page_title": "店小秘--商品箱",
+        "page_url": "https://www.dianxiaomi.com/web/smt/smtProductList/draft",
         "browser_visible": True,
         "last_error": None,
     })
@@ -2068,9 +1512,9 @@ def test_runtime_status_unifies_visible_dxm_flow_browser_even_when_agent_console
     assert payload["realBrowser"]["active"] is True
     assert payload["realBrowser"]["browserVisible"] is True
     assert payload["realBrowser"]["source"] == "dxm_flow"
-    assert payload["realBrowser"]["currentUrl"].endswith("/web/productCrawl/dataAcquisition")
-    assert payload["realBrowser"]["pageTitle"] == "店小秘--数据采集"
-    assert payload["realBrowser"]["currentStep"] == "数据采集"
+    assert payload["realBrowser"]["currentUrl"].endswith("/web/smt/smtProductList/draft")
+    assert payload["realBrowser"]["pageTitle"] == "店小秘--商品箱"
+    assert payload["realBrowser"]["currentStep"] == "商品箱"
 
 
 def test_runtime_status_exposes_agent_browser_launch_diagnostics(tmp_path, monkeypatch):
@@ -2118,7 +1562,7 @@ def test_runtime_control_clears_only_non_real_stuck_tasks(tmp_path, monkeypatch)
     dry_run = _create_task(repo, mode="dry_run")
     single_save = _create_task(repo, mode="single_save")
     repo.update_task_status(dry_run["id"], "running")
-    repo.update_task_status(single_save["id"], "running")
+    repo.update_task_status(single_save["id"], "paused")
 
     response = client.post("/api/runtime/control", json={"action": "clear_stuck_tasks"})
 
@@ -2127,7 +1571,7 @@ def test_runtime_control_clears_only_non_real_stuck_tasks(tmp_path, monkeypatch)
     assert payload["ok"] is True
     assert payload["clearedTaskIds"] == [dry_run["id"]]
     assert repo.get_task(dry_run["id"])["status"] == "cancelled"
-    assert repo.get_task(single_save["id"])["status"] == "running"
+    assert repo.get_task(single_save["id"])["status"] == "paused"
     assert any(item["id"] == single_save["id"] and item["reason"] == "real_write_protected" for item in payload["skippedTasks"])
 
 
@@ -2194,7 +1638,7 @@ def test_startup_recovery_moves_orphaned_real_tasks_to_manual_review(tmp_path, m
     dry_job = repo.get_task(dry_run["id"])["jobs"][0]
     real_job = repo.get_task(single_save["id"])["jobs"][0]
     repo.update_task_status(dry_run["id"], "running")
-    repo.update_task_status(single_save["id"], "running")
+    repo.update_task_status(single_save["id"], "paused")
     repo.update_job(dry_job["id"], status="running")
     repo.update_job(real_job["id"], status="running")
 
@@ -2217,13 +1661,7 @@ def test_real_task_start_rejects_when_workflow_runtime_unhealthy(tmp_path, monke
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
     runner.workflow_runtime_unhealthy_reason = "真实浏览器操作超时：请重新打开执行浏览器后再重试。"
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-        "claim_mark": "AI认领",
-    })
+    task = _create_task(repo)
 
     response = client.post(f"/api/tasks/{task['id']}/start", json={})
 
@@ -2259,16 +1697,16 @@ def test_runtime_status_reports_persistent_browser_agent(tmp_path, monkeypatch):
                 "healthy": True,
                 "active": True,
                 "browserVisible": True,
-                "currentUrl": "https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
-                "pageTitle": "店小秘数据采集",
-                "currentStep": "认领到采集箱",
+                "currentUrl": "https://www.dianxiaomi.com/web/smt/smtProductList/draft",
+                "pageTitle": "店小秘商品箱",
+                "currentStep": "定位待编辑商品",
                 "lastError": None,
                 "lastEventAt": "2026-06-26T00:00:00+00:00",
                 "manualTakeover": False,
                 "events": [
                     {
-                        "action": "claim_from_data_acquisition",
-                        "step": "认领到采集箱",
+                        "action": "open_editor",
+                        "step": "定位待编辑商品",
                         "status": "running",
                     }
                 ],
@@ -2287,10 +1725,10 @@ def test_runtime_status_reports_persistent_browser_agent(tmp_path, monkeypatch):
     assert payload["browserAgent"]["status"] == "running"
     assert payload["browserAgent"]["active"] is True
     assert payload["browserAgent"]["browserVisible"] is True
-    assert payload["browserAgent"]["currentStep"] == "认领到采集箱"
-    assert payload["browserAgent"]["events"][0]["action"] == "claim_from_data_acquisition"
+    assert payload["browserAgent"]["currentStep"] == "定位待编辑商品"
+    assert payload["browserAgent"]["events"][0]["action"] == "open_editor"
     assert payload["realBrowser"]["source"] == "browser_agent"
-    assert payload["realBrowser"]["currentStep"] == "认领到采集箱"
+    assert payload["realBrowser"]["currentStep"] == "定位待编辑商品"
 
 
 def test_real_task_start_rejects_when_browser_agent_runtime_unhealthy(tmp_path, monkeypatch):
@@ -2303,8 +1741,8 @@ def test_real_task_start_rejects_when_browser_agent_runtime_unhealthy(tmp_path, 
                 "healthy": False,
                 "active": False,
                 "browserVisible": True,
-                "currentStep": "认领到采集箱",
-                "lastError": "Browser Agent command timed out: claim_from_data_acquisition",
+                "currentStep": "保存商品",
+                "lastError": "Browser Agent command timed out: save_only",
                 "events": [],
             }
 
@@ -2312,14 +1750,7 @@ def test_real_task_start_rejects_when_browser_agent_runtime_unhealthy(tmp_path, 
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "passed"})
     monkeypatch.setattr(main, "browser_agent_runtime", DummyBrowserAgentRuntime())
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-        "claim_mark": "AI认领",
-    })
+    task = _create_task(repo)
 
     try:
         response = client.post(f"/api/tasks/{task['id']}/start", json={})
@@ -2787,7 +2218,7 @@ def test_runtime_control_starts_l2_readonly_probe_runner_without_real_write(tmp_
     assert payload["ok"] is True
     assert payload["action"] == "run_l2_readonly_probe"
     assert payload["pid"] == 4321
-    assert payload["targets"] == ["data_acquisition", "draft_box"]
+    assert payload["targets"] == ["draft_box"]
     assert payload["runId"].startswith("l2-real-")
     assert len(popen_calls) == 1
     command = popen_calls[0]["command"]
@@ -2804,7 +2235,7 @@ def test_runtime_control_starts_l2_readonly_probe_runner_without_real_write(tmp_
     assert "claim_only" not in command
     assert "single_save" not in command
     assert "batch_save" not in command
-    assert "started L2 readonly dual-target probe" in launcher_log.read_text(encoding="utf-8")
+    assert "started L2 readonly product-box probe" in launcher_log.read_text(encoding="utf-8")
     lock_payload = json.loads(lock_file.read_text(encoding="utf-8"))
     assert lock_payload["run_id"] == payload["runId"]
     assert lock_payload["pid"] == 4321
@@ -3058,7 +2489,6 @@ def test_config_preview_shows_effective_values_and_sources(tmp_path, monkeypatch
             "store_id": base_task["store_id"],
             "mode": "single_save",
             "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
-            "claim_mark": "AI认领",
             "product_ids": base_payload["product_ids"],
             "payload": {
                 **base_payload,
@@ -3239,21 +2669,9 @@ def test_config_defaults_resolver_prefers_specific_template_even_when_input_orde
 def test_create_single_save_task_leaves_empty_template_library_unchanged(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     store = repo.create_store("Dang Kang", "AliExpress")
-    claim_task = repo.create_acquisition_claim_request(
-        {
-            "store_id": store["id"],
-            "store_name": "Dang Kang",
-            "source_url": "https://mobile.yangkeduo.com/goods2.html?goods_id=893543996663",
-            "keyword": "宝可梦精灵球",
-            "category_name": "立牌类谷子",
-            "claim_mark": "AI-OPS",
-            "template_id": None,
-        }
-    )
-    product = _complete_test_claim(
+    product = _create_product_box_product(
         repo,
         store=store,
-        claim_task=claim_task,
         source_url="https://mobile.yangkeduo.com/goods2.html?goods_id=893543996663",
         title="宝可梦精灵球玩具模型周边礼物",
         category_name="立牌类谷子",
@@ -3269,7 +2687,6 @@ def test_create_single_save_task_leaves_empty_template_library_unchanged(tmp_pat
             "mode": "single_save",
             "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
             "product_ids": [product["id"]],
-            "claim_mark": "AI-OPS",
             "payload": {"store_name": "Dang Kang", "category_name": "立牌类谷子"},
         },
     )
@@ -3288,21 +2705,9 @@ def test_create_single_save_task_leaves_empty_template_library_unchanged(tmp_pat
 def test_create_single_save_task_leaves_legacy_template_library_unchanged(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     store = repo.create_store("Dang Kang", "AliExpress")
-    claim_task = repo.create_acquisition_claim_request(
-        {
-            "store_id": store["id"],
-            "store_name": "Dang Kang",
-            "source_url": "https://mobile.yangkeduo.com/goods2.html?goods_id=893543996663",
-            "keyword": "宝可梦精灵球",
-            "category_name": "立牌类谷子",
-            "claim_mark": "AI-OPS",
-            "template_id": None,
-        }
-    )
-    product = _complete_test_claim(
+    product = _create_product_box_product(
         repo,
         store=store,
-        claim_task=claim_task,
         source_url="https://mobile.yangkeduo.com/goods2.html?goods_id=893543996663",
         title="宝可梦精灵球玩具模型周边礼物",
         category_name="立牌类谷子",
@@ -3348,7 +2753,6 @@ def test_create_single_save_task_leaves_legacy_template_library_unchanged(tmp_pa
             "mode": "single_save",
             "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
             "product_ids": [product["id"]],
-            "claim_mark": "AI-OPS",
             "payload": {"store_name": "Dang Kang", "category_name": "立牌类谷子"},
         },
     )
@@ -3445,24 +2849,24 @@ def test_config_preview_shows_semi_managed_supply_price_as_execution_value(tmp_p
     assert fields["semi_managed.barcode_strategy"]["required"] is True
 
 
-def test_config_preview_uses_resolved_dxm_reference_template_sections(tmp_path, monkeypatch):
+def test_config_preview_uses_supported_dxm_reference_template_sections(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     task = _create_task(repo)
     repo.create_template(
         {
             "template_type": "dxm_reference",
-            "template_name": "DXM 八段引用模板",
+            "template_name": "DXM 可执行引用模板",
             "binding_scope": "Dang Kang",
             "payload": {
                 "dxm_reference_templates": {
                     "attribute_info": {"names": ["属性模板 A"]},
-                    "description": {"names": ["描述模板 A"], "required": False},
+                    "description": {"names": [], "required": False},
                     "freight": {"names": ["半托管运费模板"]},
                     "service": {"names": ["无忧服务模板"]},
                     "eu_responsible": {"names": ["EU Responsible Person"]},
                     "manufacturer": {"names": ["默认制造商"]},
-                    "compliance": {"names": ["合规模板"]},
-                    "semi_managed": {"names": ["半托管模板"]},
+                    "compliance": {"names": [], "required": False},
+                    "semi_managed": {"names": [], "required": False},
                 }
             },
             "is_enabled": True,
@@ -3486,7 +2890,7 @@ def test_config_preview_uses_resolved_dxm_reference_template_sections(tmp_path, 
     }
     assert fields["dxm_reference_templates_resolved.attribute_info.names"]["value"] == ["属性模板 A"]
     assert fields["dxm_reference_templates_resolved.description.names"]["required"] is False
-    assert fields["dxm_reference_templates_resolved.freight.names"]["source"] == "模板：DXM 八段引用模板"
+    assert fields["dxm_reference_templates_resolved.freight.names"]["source"] == "模板：DXM 可执行引用模板"
 
 
 def test_config_preview_keeps_publish_allowed_out_of_editable_value_fields(tmp_path, monkeypatch):
@@ -3518,7 +2922,6 @@ def test_config_preview_and_runner_use_same_resolved_defaults(tmp_path, monkeypa
             "store_id": base_task["store_id"],
             "mode": "single_save",
             "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
-            "claim_mark": "AI认领",
             "product_ids": base_payload["product_ids"],
             "payload": {
                 **base_payload,
@@ -3955,29 +3358,11 @@ def test_direct_draft_box_action_rejects_when_l2_gate_not_passed(tmp_path, monke
 
     response = client.post(
         "/api/dxm/draft-box/action",
-        json={"action": "remark", "note_text": "AI认领", "store_name": "Dang Kang"},
+        json={"action": "edit", "store_name": "Dang Kang"},
     )
 
     assert response.status_code == 403
-    assert "Direct real DXM mutation requires an approved guarded task" in response.json()["detail"]
-    assert flow.draft_box_actions == []
-
-
-def test_direct_claim_product_rejects_when_l2_gate_not_passed(tmp_path, monkeypatch):
-    client, _repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
-    import src.main as main
-
-    flow = DummyDxmLoginFlow()
-    monkeypatch.setattr(main, "login_flow", flow)
-    monkeypatch.setattr(main, "l2_real_probe_gate", lambda: {"status": "failed"})
-
-    response = client.post(
-        "/api/dxm/workflow/claim-product",
-        json={"action": "remark", "note_text": "AI认领", "store_name": "Dang Kang"},
-    )
-
-    assert response.status_code == 403
-    assert "Direct real DXM mutation requires an approved guarded task" in response.json()["detail"]
+    assert response.json()["detail"]["reason_code"] == "DIRECT_MUTATION_ROUTE_DISABLED"
     assert flow.draft_box_actions == []
 
 
@@ -4002,17 +3387,11 @@ def test_direct_real_dxm_mutation_rejects_approved_task_when_l2_gate_not_passed(
 
     draft_response = client.post(
         "/api/dxm/draft-box/action",
-        json={"action": "remark", "note_text": "AI认领", **approval},
-    )
-    claim_response = client.post(
-        "/api/dxm/workflow/claim-product",
-        json={"action": "remark", "note_text": "AI认领", **approval},
+        json={"action": "edit", **approval},
     )
 
     assert draft_response.status_code == 403
-    assert claim_response.status_code == 403
-    assert "L2 readonly probe gate is not passed: failed" in draft_response.json()["detail"]
-    assert "L2 readonly probe gate is not passed: failed" in claim_response.json()["detail"]
+    assert draft_response.json()["detail"]["reason_code"] == "DIRECT_MUTATION_ROUTE_DISABLED"
     assert flow.draft_box_actions == []
 
 
@@ -4026,7 +3405,6 @@ def test_direct_real_dxm_mutation_rejects_unreleased_modes_even_after_l2_and_app
 
     endpoints = (
         "/api/dxm/draft-box/action",
-        "/api/dxm/workflow/claim-product",
         "/api/dxm/workflow/open-editor",
     )
     for mode in ("batch_save",):
@@ -4037,8 +3415,7 @@ def test_direct_real_dxm_mutation_rejects_unreleased_modes_even_after_l2_and_app
             response = client.post(
                 endpoint,
                 json={
-                    "action": "remark",
-                    "note_text": "AI认领",
+                    "action": "edit",
                     "task_id": task["id"],
                     "manual_approval": True,
                     "approval_token": token,
@@ -4049,9 +3426,7 @@ def test_direct_real_dxm_mutation_rejects_unreleased_modes_even_after_l2_and_app
             )
 
             assert response.status_code == 403
-            detail = response.json()["detail"].lower()
-            assert "controlled claim_only and single_save" in detail
-            assert "released" in detail
+            assert response.json()["detail"]["reason_code"] == "DIRECT_MUTATION_ROUTE_DISABLED"
     assert flow.draft_box_actions == []
 
 
@@ -4068,8 +3443,7 @@ def test_direct_real_dxm_mutation_rejects_even_after_l2_and_approval(tmp_path, m
     response = client.post(
         "/api/dxm/draft-box/action",
         json={
-            "action": "remark",
-            "note_text": "AI认领",
+            "action": "edit",
             "task_id": task["id"],
             "manual_approval": True,
             "approval_token": "direct-token",
@@ -4080,7 +3454,7 @@ def test_direct_real_dxm_mutation_rejects_even_after_l2_and_approval(tmp_path, m
     )
 
     assert response.status_code == 403
-    assert "task runner evidence chain" in response.json()["detail"]
+    assert response.json()["detail"]["reason_code"] == "DIRECT_MUTATION_ROUTE_DISABLED"
     assert flow.draft_box_actions == []
 
 

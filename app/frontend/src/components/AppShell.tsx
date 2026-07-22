@@ -19,7 +19,6 @@ const primaryNavigation: PrimaryNavigationItem[] = [
 const sectionLabels: Record<WorkbenchSection, string> = {
   home: '编辑工作台',
   dxm_access: '账号与浏览器',
-  acquisition_claim: '待认领入箱',
   draft_edit_save: '商品箱批量编辑',
   template_center: '模板中心',
   product_tasks: '当前保存任务',

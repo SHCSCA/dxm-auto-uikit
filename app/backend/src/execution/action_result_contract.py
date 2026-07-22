@@ -38,21 +38,19 @@ _RECOVERABILITY_KINDS = frozenset(
     {"none", "retry_same_page", "manual_takeover", "restart_runtime", "terminal"}
 )
 _IMMUTABLE_PROOF_STATES = frozenset(
-    {"VERIFY_DRAFT_BOX_CLAIM", "SAVE_ONLY", "VERIFY_NOT_PUBLISHED"}
+    {"SAVE_ONLY", "VERIFY_NOT_PUBLISHED"}
 )
 _PROOF_REF_KIND_BY_STATE = MappingProxyType(
     {
-        "VERIFY_DRAFT_BOX_CLAIM": "draft_box_screenshot",
         "SAVE_ONLY": "save_screenshot",
         "VERIFY_NOT_PUBLISHED": "unpublished_screenshot",
     }
 )
 _NON_RETRYABLE_MUTATION_STATES = frozenset(
-    {"CLAIM_TO_DRAFT_BOX", "CLAIM_PRODUCT", "SAVE_ONLY"}
+    {"SAVE_ONLY"}
 )
 _CONTROLLED_PAGE_PATHS = MappingProxyType(
     {
-        "data_acquisition": "/web/productcrawl/dataacquisition",
         "draft_box": "/web/smt/smtproductlist/draft",
         "editor": "/web/smt/edit",
         "semi_managed": "/web/smt/editfromsmt",
@@ -93,43 +91,6 @@ ACTION_RESULT_CONTRACTS = MappingProxyType(
                 )
             }
         ),
-        "open_data_acquisition": MappingProxyType(
-            {
-                "OPEN_DATA_ACQUISITION": _contract(
-                    "data_acquisition",
-                    "expected_page",
-                    "business_marker_present",
-                    "loading_absent",
-                    "blocking_modal_absent",
-                )
-            }
-        ),
-        "claim_from_data_acquisition": MappingProxyType(
-            {
-                "CLAIM_TO_DRAFT_BOX": _contract(
-                    "data_acquisition",
-                    "target_unique",
-                    "source_identity_match",
-                    "store_selected_exact",
-                    "category_selected_exact",
-                    "claim_dispatched",
-                    "publish_not_attempted",
-                )
-            }
-        ),
-        "verify_draft_box_claim": MappingProxyType(
-            {
-                "VERIFY_DRAFT_BOX_CLAIM": _contract(
-                    "draft_box",
-                    "draft_box_verified",
-                    "target_unique",
-                    "product_identity_match",
-                    "store_match",
-                    "source_identity_match",
-                    "claim_mark_match",
-                )
-            }
-        ),
         "open_draft_box": MappingProxyType(
             {
                 "OPEN_DRAFT_LIST": _contract(
@@ -138,17 +99,6 @@ ACTION_RESULT_CONTRACTS = MappingProxyType(
                     "business_marker_present",
                     "loading_absent",
                     "blocking_modal_absent",
-                )
-            }
-        ),
-        "claim_product": MappingProxyType(
-            {
-                "CLAIM_PRODUCT": _contract(
-                    "draft_box",
-                    "target_unique",
-                    "note_write_attempted",
-                    "note_readback_exact",
-                    "ownership_binding_match",
                 )
             }
         ),

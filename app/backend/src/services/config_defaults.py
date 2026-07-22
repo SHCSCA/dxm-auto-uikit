@@ -27,7 +27,6 @@ TASK_CONTEXT_KEYS = {
     "category",
     "category_name",
     "mode",
-    "claim_mark",
     "product_ids",
     "source_url",
     "source_urls",

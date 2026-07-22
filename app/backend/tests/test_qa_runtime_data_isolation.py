@@ -295,22 +295,22 @@ def test_browser_qa_disables_extensions_and_bounds_cdp_commands():
     assert "pending.delete(msgId)" in script
 
 
-def test_browser_qa_bootstraps_two_stage_flow_without_fake_single_save_products():
+def test_browser_qa_reuses_real_single_save_without_fabricating_product_box_facts():
     script = QA_BROWSER_CHECK.read_text(encoding="utf-8")
     ensure_section = script[script.index("async function ensureRealMutationTask"):script.index("async function verifyUnreleasedRealModeCreateBlocked")]
 
-    assert "/api/acquisition/claim-requests" in ensure_section
-    assert "/api/acquisition/claimed-products" in ensure_section
-    assert "Local acceptance claim request" in ensure_section
-    assert "Local acceptance draft save task" in ensure_section
-    assert "LOCAL_ACCEPTANCE" in ensure_section
-    assert "QA two-stage acquisition claim request" not in ensure_section
+    assert "task?.mode === 'single_save'" in ensure_section
+    assert "return await ensureDryRunDemoTask()" in ensure_section
+    assert "/api/acquisition/" not in ensure_section
+    assert "/api/products" not in ensure_section
+    assert "postJson('/api/tasks'" not in ensure_section
+    assert "product_box_snapshot" not in ensure_section
     assert "QA local gated single_save one product fixture" not in script
     assert "QA guarded single-save product" not in script
-    assert "QA unreleased claim_only task" not in script
-    assert "product_ids: [claimedProduct.id]" in ensure_section
     assert "source: 'qa'" not in ensure_section
-    assert "product_ids: [qaProduct.id]" not in ensure_section
+    assert "claim_only" not in script
+    assert "data_acquisition" not in script
+    assert "待认领" not in script
 
 
 def test_final_delivery_check_captures_final_report_center_after_final_json_write():

@@ -16,7 +16,6 @@ FIELD_GROUPS = [
             {"path": "store_name", "field": "store_name", "label": "店铺", "required": True},
             {"path": "execution_mode", "field": "execution_mode", "label": "任务模式", "required": True},
             {"path": "category_name", "field": "category_name", "label": "绑定类目", "required": False},
-            {"path": "claim_mark", "field": "claim_mark", "label": "认领标记", "required": False},
         ],
     },
     {
@@ -297,7 +296,7 @@ class ConfigPreviewService:
 
     def _missing_for_group(self, section: str, missing: set[str]) -> set[str]:
         aliases = {
-            "task_basic": {"store", "mode", "claim_mark"},
+            "task_basic": {"store", "mode"},
             "category": {"category"},
             "sku": {"sku"},
             "pricing": {"pricing"},

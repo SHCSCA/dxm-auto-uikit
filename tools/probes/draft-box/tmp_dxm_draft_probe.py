@@ -40,7 +40,7 @@ with sync_playwright() as p:
         'body': body,
         'keywords': {},
         'matches': page.evaluate(r'''() => {
-          const targets = ['认领','认领到采集箱','采集箱','待发布产品','编辑','发布','更多','店铺','所属店铺','授权店铺','导入','导出','同步产品'];
+          const targets = ['待发布产品','编辑','发布','更多','店铺','所属店铺','授权店铺','导入','导出','同步产品'];
           const out = [];
           for (const el of document.querySelectorAll('a,button,span,div,td,th')) {
             const txt = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
@@ -53,7 +53,7 @@ with sync_playwright() as p:
           return out.slice(0,120)
         }''')
     }
-    for kw in ['认领','店铺','所属店铺','授权店铺','采集箱','待发布产品','编辑','发布']:
+    for kw in ['店铺','所属店铺','授权店铺','待发布产品','编辑','发布']:
         data['keywords'][kw] = kw in body
     browser.close()
 

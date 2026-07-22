@@ -12,7 +12,6 @@ from fastapi.testclient import TestClient
 from playwright.sync_api import sync_playwright
 
 from src.execution import dxm_login_flow as dxm_login_flow_module
-from src.execution.dxm_adapter import DxmWorkflowAdapter
 from src.execution.dxm_login_flow import (
     DxmLoginFlow,
     MutationAuthorizationError,
@@ -114,7 +113,7 @@ class DummyLoginFlow:
             'stage': 'login_success',
             'label': '已登录',
             'message': '登录成功，已进入真实店小秘后台。',
-            'next_action': '继续进入数据采集与采集箱流程。',
+            'next_action': '继续进入商品箱编辑保存流程。',
             'requires_user_action': False,
             'screenshot_url': None,
             'page_title': '店小秘首页',
@@ -141,44 +140,33 @@ class DummyLoginFlow:
     def perform_draft_box_action(
         self,
         action: str,
-        note_text: str | None = None,
         product_query: str | None = None,
         store_name: str | None = None,
         target_source_urls: list[str] | None = None,
+        target_identity: dict | None = None,
     ):
-        self.performed_action = (action, note_text, product_query, store_name, target_source_urls)
-        if action == 'edit':
-            self.state = {
-                'ok': True,
-                'stage': 'editor_page',
-                'label': '已进入编辑界面',
-                'message': '已进入真实编辑界面，可继续读取字段与模板映射。',
-                'next_action': '继续处理分类引导、属性信息与编辑页字段。',
-                'requires_user_action': False,
-                'screenshot_url': '/artifacts/screenshots/edit.png',
-                'page_title': '店小秘--编辑速卖通产品',
-                'page_url': 'https://www.dianxiaomi.com/web/smt/edit?id=123',
-                'current_nav': 'edit_page',
-                'current_action': action,
-                'note_text': note_text,
-                'editor_sections': ['基本信息', '产品信息', '其他信息'],
-                'top_actions': ['保存并移入待发布', '保存', '发布'],
-                'detected_fields': ['产品标题', '产品分类', '半托管服务'],
+        self.performed_action = (action, product_query, store_name, target_source_urls, target_identity)
+        if action != 'edit':
+            return {
+                'ok': False,
+                'stage': 'draft_box_action_failed',
+                'message': f'不支持的商品箱动作：{action}',
             }
-            return self.state
         self.state = {
             'ok': True,
-            'stage': 'draft_box_action',
-            'label': '采集箱动作已触发',
-            'message': f'已执行 {action}',
-            'next_action': '继续验证页面回显或进入下一步。',
+            'stage': 'editor_page',
+            'label': '已进入编辑界面',
+            'message': '已进入真实编辑界面，可继续读取字段与模板映射。',
+            'next_action': '继续处理分类引导、属性信息与编辑页字段。',
             'requires_user_action': False,
-            'screenshot_url': f'/artifacts/screenshots/{action}.png',
-            'page_title': '速卖通采集箱',
-            'page_url': 'https://www.dianxiaomi.com/web/smt/smtProductList/draft',
-            'current_nav': 'draft_box',
+            'screenshot_url': '/artifacts/screenshots/edit.png',
+            'page_title': '店小秘--编辑速卖通产品',
+            'page_url': 'https://www.dianxiaomi.com/web/smt/edit?id=123',
+            'current_nav': 'edit_page',
             'current_action': action,
-            'note_text': note_text,
+            'editor_sections': ['基本信息', '产品信息', '其他信息'],
+            'top_actions': ['保存并移入待发布', '保存', '发布'],
+            'detected_fields': ['产品标题', '产品分类', '半托管服务'],
         }
         return self.state
 
@@ -262,6 +250,37 @@ def test_login_start_and_continue_are_dispatched_on_same_thread(monkeypatch):
 
 def test_draft_box_target_opens_status_zero_collection_list():
     assert WORKFLOW_TARGETS['draft_box']['url'].endswith('/web/smt/smtProductList/draft?status=0')
+
+
+def test_acquisition_surface_is_removed_from_login_flow():
+    assert 'data_acquisition' not in WORKFLOW_TARGETS
+    assert set(dxm_login_flow_module.DRAFT_ACTION_SCREENSHOT_MAP) == {'edit'}
+    assert not hasattr(DxmLoginFlow, 'claim_from_data_acquisition')
+    assert not hasattr(DxmLoginFlow, 'verify_draft_box_claim')
+
+
+def test_draft_box_action_rejects_every_non_edit_action(monkeypatch, tmp_path):
+    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+    monkeypatch.setattr(
+        flow,
+        '_perform_draft_box_action',
+        lambda *_args, **_kwargs: pytest.fail('removed action reached mutation implementation'),
+    )
+
+    state = flow.perform_draft_box_action('legacy-action')
+
+    assert state['ok'] is False
+    assert state['stage'] == 'draft_box_action_failed'
+    assert '只允许进入编辑页' in state['next_action']
+
+
+def test_edit_action_requires_frozen_product_box_target(tmp_path):
+    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+
+    with pytest.raises(dxm_login_flow_module.FrozenTargetIdentityError) as exc_info:
+        flow._perform_draft_box_action('edit')
+
+    assert exc_info.value.reason_code == 'FROZEN_TARGET_REQUIRED'
 
 
 class ScopeConnectedBrowser:
@@ -1025,9 +1044,9 @@ def test_live_browser_hud_page_events_only_mark_reapply_pending():
     flow._page = page
 
     flow.update_live_hud({
-        'state': 'CLAIM_TO_COLLECTION_BOX',
-        'human_title': '正在认领到采集箱',
-        'human_action': '从已有待认领商品认领商品',
+        'state': 'OPEN_DRAFT_BOX',
+        'human_title': '正在打开商品箱',
+        'human_action': '进入店小秘商品箱',
     })
 
     assert 'framenavigated' in page.handlers
@@ -1050,15 +1069,15 @@ def test_live_browser_hud_page_events_only_mark_reapply_pending():
     assert new_page.hud_payloads == []
     assert flow._live_hud_reapply_pending is True
     flow._reapply_live_hud_if_available(new_page)
-    assert new_page.hud_payloads[-1]['human_title'] == '正在认领到采集箱'
+    assert new_page.hud_payloads[-1]['human_title'] == '正在打开商品箱'
 
 
 def test_live_browser_hud_caches_status_before_page_exists():
     flow = DxmLoginFlow(DummyLiveClient())
     result = flow.update_live_hud({
-        'state': 'OPEN_DATA_ACQUISITION',
-        'human_title': '正在打开数据采集',
-        'human_action': '进入店小秘已有待认领列表',
+        'state': 'OPEN_DRAFT_BOX',
+        'human_title': '正在打开商品箱',
+        'human_action': '进入店小秘商品箱',
     })
     assert result['updated'] is False
     assert result['reason'] == 'live_browser_page_missing'
@@ -1066,8 +1085,8 @@ def test_live_browser_hud_caches_status_before_page_exists():
     page = DummyHudPage()
     flow._reapply_live_hud_if_available(page)
 
-    assert page.hud_payloads[-1]['state'] == 'OPEN_DATA_ACQUISITION'
-    assert page.hud_payloads[-1]['human_action'] == '进入店小秘已有待认领列表'
+    assert page.hud_payloads[-1]['state'] == 'OPEN_DRAFT_BOX'
+    assert page.hud_payloads[-1]['human_action'] == '进入店小秘商品箱'
 
 
 def test_live_browser_hud_payload_update_uses_runtime_timeout(monkeypatch):
@@ -1083,9 +1102,9 @@ def test_live_browser_hud_payload_update_uses_runtime_timeout(monkeypatch):
     monkeypatch.setattr(flow, '_evaluate_page_function_with_runtime_timeout', fail_payload_update)
 
     result = flow.update_live_hud({
-        'state': 'OPEN_DATA_ACQUISITION',
-        'human_title': '正在打开待认领商品列表',
-        'human_action': '进入店小秘已有待认领列表',
+        'state': 'OPEN_DRAFT_BOX',
+        'human_title': '正在打开商品箱',
+        'human_action': '进入店小秘商品箱',
     })
 
     assert result['ok'] is False
@@ -1094,23 +1113,6 @@ def test_live_browser_hud_payload_update_uses_runtime_timeout(monkeypatch):
     assert calls and calls[-1] <= 1000
 
 
-class DummyClaimMarkDraftPage(DummyDraftPage):
-    def __init__(self):
-        super().__init__({'ok': False, 'matches': []})
-        self.find_arg = None
-
-    def evaluate(self, script, arg=None):
-        if 'rowIndex:picked.idx' in script:
-            self.find_arg = arg
-            if arg.get('claimMark') == 'AI认领-19-31':
-                return {
-                    'ok': True,
-                    'rowIndex': 4,
-                    'rowText': 'Hazbin Hotel Alastor Acrylic Stand Keychain 备注:AI认领-19-31 「Dang Kang」 编辑 更多',
-                    'actions': [{'txt': '编辑', 'tag': 'A', 'rect': {'x': 1, 'y': 2, 'w': 3, 'h': 4}}],
-                }
-            return {'ok': False, 'matches': []}
-        return super().evaluate(script, arg)
 
 
 class DummySourceUrlDraftPage(DummyDraftPage):
@@ -1531,82 +1533,8 @@ class DummyReadyWaitPage:
         return None
 
 
-class DummyDataAcquisitionReadyWaitPage:
-    url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-    def __init__(self):
-        self.ready_calls = 0
-        self.dismiss_calls = 0
-
-    def evaluate(self, script, arg=None):
-        if arg is None:
-            self.dismiss_calls += 1
-            return {'visible': False}
-        if 'document.body' in script or 'innerText' in script:
-            raise AssertionError('data acquisition ready check must not scan full body text')
-        self.ready_calls += 1
-        if self.ready_calls == 1:
-            return {
-                'ready': False,
-                'ready_term': None,
-                'loading': True,
-                'loading_count': 1,
-                'rows': 0,
-                'inputs': 0,
-                'text_excerpt': '加载中',
-                'url': self.url,
-                'title': '店小秘--免费的跨境电商ERP',
-                'loading_text': '',
-            }
-        return {
-            'ready': True,
-            'ready_term': '数据采集',
-            'loading': False,
-            'loading_count': 0,
-            'rows': 1,
-            'inputs': 8,
-            'text_excerpt': '数据采集 认领 采集箱',
-            'url': self.url,
-            'title': '店小秘--数据采集',
-            'loading_text': '',
-        }
-
-    def wait_for_timeout(self, timeout):
-        return None
 
 
-class DummyNoteVerifyScriptPage:
-    url = 'https://www.dianxiaomi.com/web/smt/smtProductList/draft'
-
-    def __init__(self, menu_label='备注'):
-        self.evaluate_calls = 0
-        self.verify_script = ''
-        self.note_visible_after_search = False
-        self.menu_label = menu_label
-
-    def wait_for_timeout(self, timeout):
-        return None
-
-    def evaluate(self, script, arg=None):
-        self.evaluate_calls += 1
-        if 'safeRemark' in script:
-            return {'ok': True, 'text': self.menu_label, 'rect': {'x': 1, 'y': 2, 'w': 3, 'h': 4}}
-        if 'li.ant-dropdown-menu-item' in script:
-            return {'ok': True, 'text': self.menu_label, 'rect': {'x': 1, 'y': 2, 'w': 3, 'h': 4}}
-        if '未找到备注弹窗' in script:
-            return {'ok': True}
-        if 'rowTexts' in script:
-            self.verify_script = script
-            return {'verified': False, 'rowText': '目标行未写入备注'}
-        if 'claim_mark_store_search' in script:
-            if self.note_visible_after_search:
-                return {
-                    'verified': True,
-                    'rowText': '1688 Anime Peripherals Ron Weasley Figurine 备注:AI认领-47-514 「Dang Kang」 编辑 更多',
-                    'verifiedBy': 'claim_mark_store_search',
-                }
-            return {'verified': False, 'rowText': '', 'matchCount': 0, 'verifiedBy': 'claim_mark_store_search'}
-        return None
 
 
 class DummyOpenSemiPage(DummySemiPage):
@@ -2052,14 +1980,6 @@ def test_login_continue_returns_recoverable_state_when_browser_runner_crashes(mo
     assert data['requires_user_action'] is True
 
 
-def test_login_success_copy_describes_controlled_two_stage_start_boundary():
-    state = main_module.build_login_state({"logged_in": True})
-
-    operator_copy = f"{state['message']} {state['next_action']}"
-    assert "claim_only 可按 Stage A 审批启动" in operator_copy
-    assert "single_save 可按 Stage B 审批启动" in operator_copy
-    assert "batch_save 和发布仍关闭" in operator_copy
-    assert "claim_only、batch_save 和发布仍未放行" not in operator_copy
 
 
 def test_login_continue_returns_success_state(monkeypatch):
@@ -2121,112 +2041,16 @@ def test_navigate_endpoint_returns_recoverable_state_when_browser_session_crashe
     assert data['requires_user_action'] is True
 
 
-def test_draft_box_action_endpoint_delegates_to_login_flow_after_guard_passes(monkeypatch):
-    flow = DummyLoginFlow()
-    monkeypatch.setattr('src.main.login_flow', flow)
-    monkeypatch.setattr('src.main._assert_direct_real_dxm_mutation_allowed', lambda payload: None)
-
-    client = TestClient(app)
-    response = client.post('/api/dxm/draft-box/action', json={'action': 'remark', 'note_text': 'AI认领'})
-
-    assert response.status_code == 200
-    data = response.json()
-    assert flow.performed_action == ('remark', 'AI认领', None, None, None)
-    assert data['current_action'] == 'remark'
-    assert data['note_text'] == 'AI认领'
 
 
-def test_workflow_check_login_uses_adapter_contract(monkeypatch):
-    flow = DummyLoginFlow()
-    flow.state = {
-        'ok': True,
-        'stage': 'login_success',
-        'page_title': '店小秘首页',
-        'page_url': 'https://www.dianxiaomi.com/index.htm',
-        'screenshot_url': '/artifacts/screenshots/home.png',
-    }
-    monkeypatch.setattr('src.main.login_flow', flow)
-    monkeypatch.setattr('src.main.workflow_adapter', DxmWorkflowAdapter(flow))
-
-    client = TestClient(app)
-    response = client.get('/api/dxm/workflow/check-login')
-
-    assert response.status_code == 200
-    data = response.json()
-    assert data['ok'] is True
-    assert data['action'] == 'check_login_state'
-    assert data['evidence']['stage'] == 'login_success'
 
 
-def test_workflow_open_draft_box_uses_adapter_contract(monkeypatch):
-    flow = DummyLoginFlow()
-    monkeypatch.setattr('src.main.login_flow', flow)
-    monkeypatch.setattr('src.main.workflow_adapter', DxmWorkflowAdapter(flow))
-
-    client = TestClient(app)
-    response = client.post('/api/dxm/workflow/open-draft-box')
-
-    assert response.status_code == 200
-    data = response.json()
-    assert flow.navigated_to == 'draft_box'
-    assert data['ok'] is True
-    assert data['action'] == 'open_draft_box'
-    assert data['evidence']['current_nav'] == 'draft_box'
 
 
-def test_workflow_claim_product_uses_adapter_contract_after_guard_passes(monkeypatch):
-    flow = DummyLoginFlow()
-    monkeypatch.setattr('src.main.login_flow', flow)
-    monkeypatch.setattr('src.main.workflow_adapter', DxmWorkflowAdapter(flow))
-    monkeypatch.setattr('src.main._assert_direct_real_dxm_mutation_allowed', lambda payload: None)
-
-    client = TestClient(app)
-    source_urls = ['https://detail.1688.com/offer/1013604102950.html']
-    response = client.post(
-        '/api/dxm/workflow/claim-product',
-        json={'action': 'remark', 'note_text': 'AI认领-1', 'target_source_urls': source_urls},
-    )
-
-    assert response.status_code == 200
-    data = response.json()
-    assert flow.performed_action == ('remark', 'AI认领-1', None, None, source_urls)
-    assert data['action'] == 'claim_product'
-    assert data['evidence']['note_text'] == 'AI认领-1'
 
 
-def test_workflow_open_editor_uses_adapter_contract_after_guard_passes(monkeypatch):
-    flow = DummyLoginFlow()
-    monkeypatch.setattr('src.main.login_flow', flow)
-    monkeypatch.setattr('src.main.workflow_adapter', DxmWorkflowAdapter(flow))
-    monkeypatch.setattr('src.main._assert_direct_real_dxm_mutation_allowed', lambda payload: None)
-
-    client = TestClient(app)
-    response = client.post('/api/dxm/workflow/open-editor')
-
-    assert response.status_code == 200
-    data = response.json()
-    assert flow.performed_action == ('edit', None, None, None, None)
-    assert data['action'] == 'open_editor'
-    assert data['evidence']['stage'] == 'editor_page'
 
 
-def test_edit_action_endpoint_returns_editor_page_after_guard_passes(monkeypatch):
-    flow = DummyLoginFlow()
-    monkeypatch.setattr('src.main.login_flow', flow)
-    monkeypatch.setattr('src.main._assert_direct_real_dxm_mutation_allowed', lambda payload: None)
-
-    client = TestClient(app)
-    response = client.post('/api/dxm/draft-box/action', json={'action': 'edit'})
-
-    assert response.status_code == 200
-    data = response.json()
-    assert flow.performed_action == ('edit', None, None, None, None)
-    assert data['stage'] == 'editor_page'
-    assert data['current_nav'] == 'edit_page'
-    assert '编辑' in data['page_title']
-    assert 'editor_sections' in data
-    assert 'top_actions' in data
-    assert 'detected_fields' in data
 
 
 def test_dxm_login_flow_start_persists_browser_snapshot(monkeypatch, tmp_path):
@@ -2330,7 +2154,6 @@ def test_dxm_login_flow_continue_success_keeps_visible_browser_for_next_steps(mo
     assert state['stage'] == 'login_success'
     assert state['browser_visible'] is True
     assert '真实浏览器窗口会保留' in state['next_action']
-    assert '已有待认领列表' in state['next_action']
     assert '商品箱' in state['next_action']
     assert close_calls == []
 
@@ -2540,26 +2363,26 @@ def test_navigation_state_preserves_exact_readiness_observations(monkeypatch, tm
     flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
     wait_result = {
         'ready': True,
-        'expected_identity': 'data_acquisition',
+        'expected_identity': 'draft_box',
         'loading': False,
         'readiness': {
             'ok': True,
-            'expected_identity': 'data_acquisition',
-            'business_marker': '已有待认领商品',
+            'expected_identity': 'draft_box',
+            'business_marker': '标题/产品ID',
             'loading': False,
             'blocking_modal': None,
         },
     }
     navigation_result = {
-        'page_title': '数据采集',
-        'page_url': 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition',
-        'target': 'data_acquisition',
+        'page_title': '商品箱',
+        'page_url': WORKFLOW_TARGETS['draft_box']['url'],
+        'target': 'draft_box',
         'wait_result': wait_result,
         'dismissed_blocking_modals': 0,
     }
     monkeypatch.setattr(flow, '_navigate_in_session', lambda target: navigation_result)
 
-    state = flow.navigate_post_login('data_acquisition')
+    state = flow.navigate_post_login('draft_box')
 
     assert state['wait_result'] == wait_result
     assert state['navigation_result'] == navigation_result
@@ -2571,18 +2394,18 @@ def test_dxm_login_flow_navigate_keeps_visible_browser_for_operator(monkeypatch,
     close_calls = []
 
     monkeypatch.setattr(flow, '_navigate_in_session', lambda target: {
-        'page_title': '数据采集',
-        'page_url': 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition',
-        'screenshot_url': '/artifacts/screenshots/data-acquisition.png',
+        'page_title': '产品列表',
+        'page_url': WORKFLOW_TARGETS['product']['url'],
+        'screenshot_url': '/artifacts/screenshots/product.png',
         'target': target,
     })
     monkeypatch.setattr(flow, '_close_browser_session', lambda: close_calls.append('closed'))
     monkeypatch.setattr(flow, '_is_headless', lambda: False)
 
-    state = flow.navigate_post_login('data_acquisition')
+    state = flow.navigate_post_login('product')
 
     assert state['stage'] == 'workflow_navigation'
-    assert state['current_nav'] == 'data_acquisition'
+    assert state['current_nav'] == 'product'
     assert state['browser_visible'] is True
     assert '真实浏览器窗口会保留' in state['next_action']
     assert close_calls == []
@@ -2597,7 +2420,7 @@ def test_dxm_login_flow_navigation_failure_keeps_visible_browser_for_recovery(mo
     monkeypatch.setattr(flow, '_close_browser_session', lambda: close_calls.append('closed'))
     monkeypatch.setattr(flow, '_is_headless', lambda: False)
 
-    state = flow.navigate_post_login('data_acquisition')
+    state = flow.navigate_post_login('draft_box')
 
     assert state['stage'] == 'workflow_navigation_failed'
     assert state['requires_user_action'] is True
@@ -2610,30 +2433,35 @@ def test_dxm_login_flow_perform_draft_box_action_updates_state(monkeypatch, tmp_
     live_client = DummyLiveClient(logged_in=True)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
 
-    monkeypatch.setattr(flow, '_perform_draft_box_action', lambda action, note_text=None, product_query=None, store_name=None, target_source_urls=None: {
-        'page_title': '速卖通采集箱',
-        'page_url': 'https://www.dianxiaomi.com/web/smt/smtProductList/draft',
-        'screenshot_url': '/artifacts/screenshots/remark.png',
+    monkeypatch.setattr(flow, '_perform_draft_box_action', lambda action, product_query=None, store_name=None, target_source_urls=None, target_identity=None: {
+        'ok': True,
+        'page_title': '店小秘--编辑速卖通产品',
+        'page_url': 'https://www.dianxiaomi.com/web/smt/edit?id=123',
+        'screenshot_url': '/artifacts/screenshots/edit.png',
         'action': action,
-        'note_text': note_text,
         'product_query': product_query,
         'store_name': store_name,
-        'note_verified': True,
-        'target_row_text': '崩坏3钥匙扣爱莉希雅 备注: AI认领',
+        'target_row_text': '崩坏3钥匙扣爱莉希雅 编辑',
+        'editor_sections': ['基本信息'],
+        'top_actions': ['保存'],
+        'detected_fields': ['产品标题'],
     })
     monkeypatch.setattr(flow, '_close_browser_session', lambda: None)
 
-    state = flow.perform_draft_box_action('remark', note_text='AI认领', product_query='崩坏3钥匙扣', store_name='Dang Kang')
+    state = flow.perform_draft_box_action(
+        'edit',
+        product_query='崩坏3钥匙扣',
+        store_name='Dang Kang',
+        target_identity={},
+    )
 
-    assert state['stage'] == 'draft_box_action'
-    assert state['current_nav'] == 'draft_box'
-    assert state['current_action'] == 'remark'
-    assert state['note_text'] == 'AI认领'
+    assert state['stage'] == 'editor_page'
+    assert state['current_nav'] == 'edit_page'
+    assert state['current_action'] == 'edit'
     assert state['product_query'] == '崩坏3钥匙扣'
     assert state['store_name'] == 'Dang Kang'
-    assert state['note_verified'] is True
-    assert '备注: AI认领' in state['target_row_text']
-    assert state['draft_action_result']['note_verified'] is True
+    assert state['editor_sections'] == ['基本信息']
+    assert state['draft_action_result']['action'] == 'edit'
 
 
 def test_dxm_login_flow_perform_draft_box_action_keeps_browser_session_on_success(monkeypatch, tmp_path):
@@ -2641,19 +2469,18 @@ def test_dxm_login_flow_perform_draft_box_action_keeps_browser_session_on_succes
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
     close_calls = []
 
-    monkeypatch.setattr(flow, '_perform_draft_box_action', lambda action, note_text=None, product_query=None, store_name=None, target_source_urls=None: {
-        'page_title': '速卖通采集箱',
-        'page_url': 'https://www.dianxiaomi.com/web/smt/smtProductList/draft',
-        'screenshot_url': '/artifacts/screenshots/remark.png',
+    monkeypatch.setattr(flow, '_perform_draft_box_action', lambda action, product_query=None, store_name=None, target_source_urls=None, target_identity=None: {
+        'ok': True,
+        'page_title': '店小秘--编辑速卖通产品',
+        'page_url': 'https://www.dianxiaomi.com/web/smt/edit?id=123',
+        'screenshot_url': '/artifacts/screenshots/edit.png',
         'action': action,
-        'note_text': note_text,
-        'note_verified': True,
     })
     monkeypatch.setattr(flow, '_close_browser_session', lambda: close_calls.append('closed'))
 
-    state = flow.perform_draft_box_action('remark', note_text='AI认领')
+    state = flow.perform_draft_box_action('edit', target_identity={})
 
-    assert state['stage'] == 'draft_box_action'
+    assert state['stage'] == 'editor_page'
     assert close_calls == []
 
 
@@ -2661,12 +2488,12 @@ def test_dxm_login_flow_edit_action_enters_editor_page(monkeypatch, tmp_path):
     live_client = DummyLiveClient(logged_in=True)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
 
-    monkeypatch.setattr(flow, '_perform_draft_box_action', lambda action, note_text=None, product_query=None, store_name=None, target_source_urls=None: {
+    monkeypatch.setattr(flow, '_perform_draft_box_action', lambda action, product_query=None, store_name=None, target_source_urls=None, target_identity=None: {
+        'ok': True,
         'page_title': '店小秘--编辑速卖通产品',
         'page_url': 'https://www.dianxiaomi.com/web/smt/edit?id=123456',
         'screenshot_url': '/artifacts/screenshots/edit.png',
         'action': action,
-        'note_text': note_text,
         'product_query': product_query,
         'store_name': store_name,
         'target_row_text': '崩坏3钥匙扣爱莉希雅',
@@ -2676,7 +2503,12 @@ def test_dxm_login_flow_edit_action_enters_editor_page(monkeypatch, tmp_path):
     })
     monkeypatch.setattr(flow, '_close_browser_session', lambda: None)
 
-    state = flow.perform_draft_box_action('edit', product_query='崩坏3钥匙扣', store_name='Dang Kang')
+    state = flow.perform_draft_box_action(
+        'edit',
+        product_query='崩坏3钥匙扣',
+        store_name='Dang Kang',
+        target_identity={},
+    )
 
     assert state['stage'] == 'editor_page'
     assert state['current_nav'] == 'edit_page'
@@ -2690,92 +2522,8 @@ def test_dxm_login_flow_edit_action_enters_editor_page(monkeypatch, tmp_path):
     assert '半托管服务' in state['detected_fields']
 
 
-def test_perform_draft_box_action_visible_mode_skips_full_modal_dismiss(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    monkeypatch.setattr(flow, '_is_headless', lambda: False)
-    settle_calls = []
-    goto_calls = []
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/smt/smtProductList/draft?status=0'
-
-        def goto(self, url, *, wait_until, timeout):
-            goto_calls.append((url, wait_until, timeout))
-            self.url = url
-
-        def title(self):
-            return '店小秘--编辑速卖通产品'
-
-        def screenshot(self, **_kwargs):
-            return None
-
-    page = FakePage()
-
-    monkeypatch.setattr(flow, '_ensure_page_with_cookies', lambda: page)
-    monkeypatch.setattr(flow, '_goto_with_live_hud', lambda *_args, **_kwargs: pytest.fail('visible draft action should not inject HUD before page settles'))
-    monkeypatch.setattr(
-        flow,
-        '_settle_visible_draft_box',
-        lambda target_page, expected_identity: settle_calls.append((target_page, expected_identity)) or {'ready': True, 'ready_term': 'visible_draft_box_settle'},
-    )
-    monkeypatch.setattr(flow, '_wait_for_page_ready', lambda *_args, **_kwargs: pytest.fail('visible draft action should use sterile settle instead of wait_ready'))
-    monkeypatch.setattr(flow, '_dismiss_blocking_modals', lambda _page: pytest.fail('visible draft action should not run full modal dismiss'))
-    monkeypatch.setattr(flow, '_find_draft_box_row', lambda *_args, **_kwargs: {'rowText': '目标商品 「Dang Kang」 编辑', 'sourceUrls': [], 'actions': []})
-    monkeypatch.setattr(flow, '_open_editor_from_draft_box', lambda target_page, row_info=None: target_page)
-    monkeypatch.setattr(flow, '_extract_editor_page_meta', lambda _page: {'sections': [], 'top_actions': [], 'fields': []})
-
-    result = flow._perform_draft_box_action('edit', product_query='目标商品', store_name='Dang Kang')
-
-    assert result['action'] == 'edit'
-    assert goto_calls == [('https://www.dianxiaomi.com/web/smt/smtProductList/draft?status=0', 'domcontentloaded', 45000)]
-    assert settle_calls == [(page, 'draft_box')]
 
 
-def test_perform_draft_box_edit_keeps_editor_result_when_screenshot_times_out(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    monkeypatch.setattr(flow, '_is_headless', lambda: True)
-
-    class DraftPage:
-        url = 'https://www.dianxiaomi.com/web/smt/smtProductList/draft?status=0'
-
-        def goto(self, url, *, wait_until, timeout):
-            self.url = url
-
-    class EditorPage:
-        url = 'https://www.dianxiaomi.com/web/smt/edit?id=130658341347985374'
-
-        def title(self):
-            return '店小秘--编辑速卖通产品'
-
-        def screenshot(self, **_kwargs):
-            raise RuntimeError('Page.screenshot: Timeout 30000ms exceeded')
-
-    row = {
-        'rowText': '正版玩具总动员攀爬吊饰钥匙扣挂件 「Dang Kang」 编辑',
-        'sourceUrls': ['https://detail.1688.com/offer/1057791519266.html'],
-        'actions': [],
-    }
-
-    monkeypatch.setattr(flow, '_ensure_page_with_cookies', lambda: DraftPage())
-    monkeypatch.setattr(flow, '_wait_for_page_ready', lambda *_args, **_kwargs: {'ready': True, 'ready_term': '店铺账号'})
-    monkeypatch.setattr(flow, '_settle_visible_draft_box', lambda _page, expected_identity: {'ready': expected_identity == 'draft_box', 'ready_term': '店铺账号'})
-    monkeypatch.setattr(flow, '_find_draft_box_row', lambda *_args, **_kwargs: row)
-    monkeypatch.setattr(flow, '_open_editor_from_draft_box', lambda _page, row_info=None: EditorPage())
-    monkeypatch.setattr(flow, '_extract_editor_page_meta', lambda _page: {'sections': ['基本信息'], 'top_actions': ['保存'], 'fields': ['产品信息']})
-
-    result = flow._perform_draft_box_action(
-        'edit',
-        product_query='正版玩具总动员攀爬吊饰钥匙扣挂件',
-        store_name='Dang Kang',
-        target_source_urls=['https://detail.1688.com/offer/1057791519266.html'],
-    )
-
-    assert result['page_url'] == 'https://www.dianxiaomi.com/web/smt/edit?id=130658341347985374'
-    assert result['screenshot_url'] is None
-    assert 'Page.screenshot' in result['screenshot_error']
-    assert result['target_source_urls'] == ['https://detail.1688.com/offer/1057791519266.html']
 
 
 def test_visible_editor_workflow_screenshot_skips_full_page_capture(monkeypatch, tmp_path):
@@ -2918,7 +2666,7 @@ def test_settle_visible_draft_box_propagates_readiness_gate_failure(monkeypatch,
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
 
     class Page:
-        url = WORKFLOW_TARGETS['data_acquisition']['url']
+        url = WORKFLOW_TARGETS['product']['url']
 
     monkeypatch.setattr(dxm_login_flow_module.time, 'sleep', lambda _seconds: None)
     monkeypatch.setattr(flow, '_browser_readiness_gate', lambda *_args, **_kwargs: {
@@ -3298,17 +3046,6 @@ def test_extract_editor_page_meta_reads_sections_buttons_and_fields(tmp_path):
     assert meta['fields'] == ['产品标题', '产品分类', '半托管服务', '欧盟责任人']
 
 
-def test_dxm_login_flow_remark_action_reports_missing_target(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    monkeypatch.setattr(flow, '_ensure_page_with_cookies', lambda: DummyDraftPage({'ok': False, 'matches': []}))
-    monkeypatch.setattr(flow, '_close_browser_session', lambda: None)
-
-    state = flow.perform_draft_box_action('remark', note_text='AI认领', product_query='不存在')
-
-    assert state['stage'] == 'draft_box_action_failed'
-    assert '未找到目标商品行' in state['message']
 
 
 def test_dxm_login_flow_draft_box_action_failure_keeps_visible_browser_for_recovery(monkeypatch, tmp_path):
@@ -3320,7 +3057,7 @@ def test_dxm_login_flow_draft_box_action_failure_keeps_visible_browser_for_recov
     monkeypatch.setattr(flow, '_close_browser_session', lambda: close_calls.append('closed'))
     monkeypatch.setattr(flow, '_is_headless', lambda: False)
 
-    state = flow.perform_draft_box_action('remark', note_text='AI-OPS', product_query='真实商品')
+    state = flow.perform_draft_box_action('edit', product_query='真实商品', target_identity={})
 
     assert state['stage'] == 'draft_box_action_failed'
     assert state['requires_user_action'] is True
@@ -3329,481 +3066,37 @@ def test_dxm_login_flow_draft_box_action_failure_keeps_visible_browser_for_recov
     assert close_calls == []
 
 
-def test_remark_action_treats_existing_note_as_verified(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    row = {
-        'ok': True,
-        'rowIndex': 1,
-        'rowText': 'Hazbin Hotel Alastor Acrylic Stand 备注:AI认领-19-31 「Dang Kang」 编辑 更多',
-        'actions': [{'txt': '更多', 'tag': 'A', 'cls': 'ant-dropdown-trigger', 'rect': {'x': 1, 'y': 2, 'w': 3, 'h': 4}}],
-    }
-
-    monkeypatch.setattr(flow, '_ensure_page_with_cookies', lambda: DummyDraftPage(row))
-    monkeypatch.setattr(flow, '_close_browser_session', lambda: None)
-    monkeypatch.setattr(flow, '_add_note_to_draft_row', lambda *args, **kwargs: pytest.fail('existing note should not be rewritten'))
-
-    state = flow.perform_draft_box_action(
-        'remark',
-        note_text='AI认领-19-31',
-        product_query='绝区零妄想天使南宫羽猫咪话筒麦克风cos道具',
-        store_name='Dang Kang',
-    )
-
-    assert state['stage'] == 'draft_box_action'
-    assert state['note_verified'] is True
-    assert state['target_row_text'] == row['rowText']
-
-
-def test_find_draft_box_row_blocks_ambiguous_product_match(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    page = DummyDraftPage({'ok': False, 'ambiguous': True, 'matches': [{'rowText': '重复商品A'}, {'rowText': '重复商品B'}]})
-
-    with pytest.raises(RuntimeError, match='目标商品行不唯一'):
-        flow._find_draft_box_row(page, product_query='重复商品', store_name='Dang Kang')
-
-
-def test_find_draft_box_row_can_match_existing_claim_mark_when_title_changed(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    page = DummyClaimMarkDraftPage()
-
-    row = flow._find_draft_box_row(
-        page,
-        product_query='绝区零妄想天使南宫羽猫咪话筒麦克风cos道具',
-        store_name='Dang Kang',
-        claim_mark='AI认领-19-31',
-    )
-
-    assert row['rowIndex'] == 4
-    assert page.find_arg['claimMark'] == 'AI认领-19-31'
-
-
-def test_find_draft_box_row_can_match_source_url_when_title_changed(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    page = DummySourceUrlDraftPage()
-
-    row = flow._find_draft_box_row(
-        page,
-        product_query='1688 Anime Peripherals Ron Weasley Figurine Acrylic Keychain Hermione Granger Figure Acrylic Pendant',
-        store_name='Dang Kang',
-        target_source_urls=['https://detail.1688.com/offer/1013604102950.html'],
-    )
-
-    assert row['rowIndex'] == 1
-    assert row['matchedBy'] == 'source_url'
-    assert page.find_arg['targetSourceUrls'] == ['https://detail.1688.com/offer/1013604102950.html']
-
-
-def test_find_draft_box_row_matches_exact_canonical_pdd_source_url(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    html = '''
-    <html>
-      <head>
-        <style>
-          button, a { display: inline-block; width: 72px; height: 24px; }
-        </style>
-      </head>
-      <body>
-        <table>
-          <tbody>
-            <tr class="vxe-body--row">
-              <td>小马宝莉夏日泳装列柔柔碧琪珍奇云宝苹果嘉儿亚克力8CM10CM立牌 「Dang Kang」</td>
-              <td><a href="https://mobile.yangkeduo.com/goods.html?refer_share_id=abc&goods_id=877361738237&_oak_share_ticket=xyz#pushState">来源</a></td>
-              <td><button>编辑</button><button>更多</button></td>
-            </tr>
-          </tbody>
-        </table>
-      </body>
-    </html>
-    '''
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        page.set_content(html)
-        row = flow._find_draft_box_row(
-            page,
-            product_query='标题可能已变',
-            store_name='Dang Kang',
-            target_source_urls=['https://mobile.yangkeduo.com/goods.html?refer_share_id=abc&goods_id=877361738237&_oak_share_ticket=xyz'],
-        )
-        browser.close()
-
-    assert row['matchedBy'] == 'source_url'
-    assert 'goods_id=877361738237' in row['sourceUrls'][0]
-
-
-def test_find_draft_box_runtime_snapshot_ignores_table_wrapper_duplicate(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    monkeypatch.setattr(flow, '_force_foreground_dxm_window', lambda: True)
-    html = '''
-    <html>
-      <head>
-        <style>
-          .table, .row { display: block; }
-          button, a { display: inline-block; width: 72px; height: 24px; }
-        </style>
-      </head>
-      <body>
-        <div class="table">
-          <div class="row wrapper">
-            图片 标题/产品ID 分组 价格 库存 运费模板 时间 操作
-            <div class="row product">
-              <div class="store-cell">拼多多 宝可梦精灵球玩具模型周边礼物3D打印球体摆件神奇宝贝高颜值 「Dang Kang」</div>
-              <a href="https://mobile.yangkeduo.com/goods2.html?goods_id=893543996663">来源</a>
-              <button>移入待发布</button><button>编辑</button><button>发布</button><button>更多</button>
-            </div>
-          </div>
-        </div>
-      </body>
-    </html>
-    '''
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        page.set_content(html)
-        row = flow._find_draft_box_row_with_runtime_snapshot(
-            page,
-            product_query='宝可梦精灵球玩具模型周边礼物3D打印球体摆件神奇宝贝高颜值',
-            store_name='Dang Kang',
-            claim_mark='AI-OPS-20260709',
-            target_source_urls=['https://mobile.yangkeduo.com/goods2.html?goods_id=893543996663'],
-        )
-        browser.close()
-
-    assert row is not None
-    assert row['matchedBy'] == 'source_url'
-    assert row['rowText'].startswith('拼多多 宝可梦精灵球')
-    assert '图片 标题/产品ID' not in row['rowText']
-
-
-def test_find_draft_box_row_matches_exact_canonical_aliexpress_source_url(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    html = '''
-    <html>
-      <head>
-        <style>
-          button, a { display: inline-block; width: 72px; height: 24px; }
-        </style>
-      </head>
-      <body>
-        <table>
-          <tbody>
-            <tr class="vxe-body--row">
-              <td>Sanrio Hello Kitty Shake Magnetic Phone Stand 「Dang Kang」</td>
-              <td><a href="https://www.aliexpress.com/item/1005011837878679.html?spm=a2g0o.productlist.main.1">来源</a></td>
-              <td><button>编辑</button><button>更多</button></td>
-            </tr>
-          </tbody>
-        </table>
-      </body>
-    </html>
-    '''
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        page.set_content(html)
-        row = flow._find_draft_box_row(
-            page,
-            product_query='店小秘展示标题已被改写',
-            store_name='Dang Kang',
-            target_source_urls=['https://www.aliexpress.com/item/1005011837878679.html?spm=a2g0o.productlist.main.1'],
-        )
-        browser.close()
-
-    assert row['matchedBy'] == 'source_url'
-    assert '1005011837878679' in row['sourceUrls'][0]
-
-
-def test_find_draft_box_row_uses_runtime_timeout_helper(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    calls = []
-
-    def fake_evaluate(target_page, function_source, arg, *, timeout):
-        calls.append((target_page, function_source, arg, timeout))
-        return {
-            'ok': True,
-            'rowIndex': 2,
-            'rowText': '目标商品 「Dang Kang」 移入待发布 编辑 发布 更多',
-            'sourceUrls': [],
-            'actions': [],
-            'matchedBy': 'title',
-        }
-
-    monkeypatch.setattr(flow, '_evaluate_page_function_with_runtime_timeout', fake_evaluate, raising=False)
-    page = object()
-
-    row = flow._find_draft_box_row(page, '目标商品', store_name='Dang Kang')
-
-    assert row['matchedBy'] == 'title'
-    assert calls
-    assert calls[0][0] is page
-    assert calls[0][2]['frag'] == '目标商品'
-    assert calls[0][3] == 3000
-
-
-def test_find_draft_box_row_visible_mode_uses_runtime_snapshot_before_locator_or_large_scan(monkeypatch, tmp_path):
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    foreground_calls = []
-
-    runtime_row = {
-        'ok': True,
-        'rowIndex': 0,
-        'rowText': '目标商品 「Dang Kang」 编辑 更多',
-        'sourceUrls': ['https://detail.1688.com/offer/1057791519266.html'],
-        'actions': [{'txt': '编辑', 'tag': 'A', 'href': '/web/smt/edit?id=1', 'rect': {}}],
-        'matchedBy': 'title',
-    }
-    monkeypatch.setattr(flow, '_force_foreground_dxm_window', lambda: foreground_calls.append('front') or True)
-    monkeypatch.setattr(flow, '_find_draft_box_row_with_runtime_snapshot', lambda *args, **kwargs: runtime_row)
-    monkeypatch.setattr(
-        flow,
-        '_find_draft_box_row_with_bounded_locators',
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('visible draft-box lookup must not use locator path')),
-    )
-
-    def fail_large_scan(*_args, **_kwargs):
-        raise AssertionError('visible draft-box lookup must not run the large page evaluate scan')
-
-    monkeypatch.setattr(flow, '_evaluate_page_function_with_runtime_timeout', fail_large_scan, raising=False)
-
-    row = flow._find_draft_box_row(object(), product_query='目标商品', store_name='Dang Kang')
-
-    assert row is runtime_row
-    assert row['matchedBy'] == 'title'
-
-
-def test_find_draft_box_row_visible_runtime_snapshot_reports_empty_or_loading(monkeypatch, tmp_path):
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    foreground_calls = []
-    calls = []
-
-    def fake_runtime(target_page, function_source, arg, *, timeout):
-        calls.append((target_page, arg, timeout))
-        return {
-            'ok': False,
-            'reason': 'draft_box_empty',
-            'loading': True,
-            'empty': True,
-            'rowCount': 0,
-            'textExcerpt': '暂无数据 LOADING',
-        }
-
-    monkeypatch.setattr(flow, '_force_foreground_dxm_window', lambda: foreground_calls.append('front') or True)
-    monkeypatch.setattr(flow, '_evaluate_page_function_with_runtime_timeout', fake_runtime, raising=False)
-
-    with pytest.raises(RuntimeError, match='真实商品箱当前没有找到本次商品'):
-        flow._find_draft_box_row_with_runtime_snapshot(
-            object(),
-            product_query='目标商品',
-            store_name='Dang Kang',
-            claim_mark='AI-OPS',
-            target_source_urls=['https://detail.1688.com/offer/1057791519266.html'],
-        )
-
-    assert foreground_calls == ['front']
-    assert calls[0][1]['frag'] == '目标商品'
-    assert calls[0][2] == 2500
-
-
-def test_draft_box_claimed_product_title_prefers_row_title_over_source_url(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    title = flow._draft_box_claimed_product_title(
-        product_query='https://mobile.yangkeduo.com/goods2.html?goods_id=893543996663',
-        row_text='拼多多 宝可梦精灵球玩具模型周边礼物3D打印球体摆件神奇宝贝高颜值 「Dang Kang」 「零 29.94 CNY」 创建： 2026-07-03 移入待发布 编辑 发布 更多',
-        category_name='立牌类谷子',
-        claimed={'title': ''},
-    )
-
-    assert title == '宝可梦精灵球玩具模型周边礼物3D打印球体摆件神奇宝贝高颜值'
-
-
-def test_find_draft_box_row_does_not_fallback_when_target_source_url_misses(tmp_path):
-    try:
-        from playwright.sync_api import sync_playwright
-    except Exception as exc:
-        pytest.skip(f'Playwright unavailable: {exc}')
-
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    html = '''
-    <html>
-      <head>
-        <style>
-          button, a { display: inline-block; width: 72px; height: 24px; }
-        </style>
-      </head>
-      <body>
-        <table>
-          <tbody>
-            <tr class="vxe-body--row">
-              <td>Visible Matched Title 「Dang Kang」</td>
-              <td><a href="https://detail.1688.com/offer/111.html">来源</a></td>
-              <td><button>编辑</button><button>更多</button></td>
-            </tr>
-            <tr class="vxe-body--row">
-              <td>Another Product 「Dang Kang」</td>
-              <td><a href="https://detail.1688.com/offer/222.html">来源</a></td>
-              <td><button>编辑</button><button>更多</button></td>
-            </tr>
-          </tbody>
-        </table>
-      </body>
-    </html>
-    '''
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        page.set_content(html)
-        with pytest.raises(RuntimeError, match='未找到目标商品行'):
-            flow._find_draft_box_row(
-                page,
-                product_query='Visible Matched Title',
-                store_name='Dang Kang',
-                target_source_urls=['https://detail.1688.com/offer/999.html'],
-            )
-        browser.close()
-
-
-def test_find_draft_box_row_rejects_title_match_when_authorized_source_url_not_rendered(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    html = '''
-    <html>
-      <head>
-        <style>
-          button, a { display: inline-block; width: 72px; height: 24px; }
-        </style>
-      </head>
-      <body>
-        <table>
-          <tbody>
-            <tr class="vxe-body--row">
-              <td>小马宝莉夏日泳装列柔柔碧琪珍奇云宝苹果嘉儿亚克力8CM10CM立牌 「Dang Kang」</td>
-              <td><button>移入待发布</button><button>编辑</button><button>更多</button></td>
-            </tr>
-            <tr class="vxe-body--row">
-              <td>Another Product 「Dang Kang」</td>
-              <td><button>编辑</button><button>更多</button></td>
-            </tr>
-          </tbody>
-        </table>
-      </body>
-    </html>
-    '''
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        page.set_content(html)
-        with pytest.raises(RuntimeError, match='未找到目标商品行'):
-            flow._find_draft_box_row(
-                page,
-                product_query='小马宝莉夏日泳装列柔柔碧琪珍奇云宝苹果嘉儿亚克力8CM10CM立牌',
-                store_name='Dang Kang',
-                target_source_urls=['https://mobile.yangkeduo.com/goods.html?goods_id=877361738237'],
-            )
-        browser.close()
-
-
-def test_find_draft_box_row_handles_virtualized_div_rows_without_picking_table_container(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    html = '''
-    <html>
-      <body>
-        <div class="vxe-table">
-          <div class="vxe-table--body-wrapper">
-            <div class="vxe-body--row">
-              <div class="store-cell">拼多多 小马宝莉夏日泳装列柔柔碧琪珍奇云宝苹果嘉儿亚克力8CM10CM立牌 「Dang Kang」</div>
-              创建： 2026-06-30 13:15:22 移入待发布 编辑 发布 更多
-              <button>编辑</button>
-            </div>
-            <div class="vxe-body--row">
-              拼多多 其它商品 「PI XIU」 创建： 2026-06-30 13:10:00 移入待发布 编辑 发布 更多
-            </div>
-          </div>
-        </div>
-      </body>
-    </html>
-    '''
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        page.set_content(html)
-        row = flow._find_draft_box_row(
-            page,
-            product_query='小马宝莉夏日泳装列柔柔碧琪珍奇云宝苹果嘉儿亚克力8CM10CM立牌',
-            store_name='Dang Kang',
-        )
-        browser.close()
-
-    assert row['matchedBy'] == 'title'
-    assert row['rowText'].count('创建：') == 1
-
-
-def test_find_data_acquisition_claim_target_prefers_source_url_when_query_text_misses(tmp_path):
-    try:
-        from playwright.sync_api import sync_playwright
-    except Exception as exc:
-        pytest.skip(f'Playwright unavailable: {exc}')
-
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    html = '''
-    <html>
-      <head>
-        <style>
-          button, a { display: inline-block; width: 96px; height: 24px; }
-        </style>
-      </head>
-      <body>
-        <table>
-          <tbody>
-            <tr class="vxe-body--row">
-              <td>店小秘页面标题可能已被平台改写</td>
-              <td><a href="https://detail.1688.com/offer/1013604102950.html">来源</a></td>
-              <td><button>认领</button></td>
-            </tr>
-          </tbody>
-        </table>
-      </body>
-    </html>
-    '''
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        page.set_content(html)
-        row = flow._find_data_acquisition_claim_target(
-            page,
-            product_query='未指定商品',
-            target_source_urls=['https://detail.1688.com/offer/1013604102950.html'],
-        )
-        browser.close()
-
-    assert row['ok'] is True
-    assert row['matchedBy'] == 'source_url'
-
-
-def test_data_acquisition_source_urls_require_exact_canonical_match(tmp_path):
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def test_product_box_source_urls_require_exact_canonical_match(tmp_path):
     flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
 
     assert flow._source_urls_match(
@@ -3820,270 +3113,20 @@ def test_data_acquisition_source_urls_require_exact_canonical_match(tmp_path):
     ) is False
 
 
-def test_find_data_acquisition_target_rejects_title_candidate_with_fake_source(monkeypatch, tmp_path):
-    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
-    authorized = ['https://detail.1688.com/offer/1013604102950.html']
-    source_fallback_calls = []
-    monkeypatch.setattr(
-        flow,
-        '_find_data_acquisition_claim_target_by_product_query_script',
-        lambda *_args, **_kwargs: {
-            'ok': True,
-            'matchedBy': 'product_query_exact_script',
-            'rowText': '目标标题 认领',
-            'actionText': '认领',
-            'actionRect': {'x': 10, 'y': 20, 'w': 30, 'h': 20},
-            'sourceUrls': [authorized[0] + '.evil'],
-        },
-    )
-    monkeypatch.setattr(
-        flow,
-        '_find_data_acquisition_claim_target_by_source_url',
-        lambda *_args, **_kwargs: source_fallback_calls.append(True) or {
-            'ok': False,
-            'reason': 'exact source missing',
-        },
-    )
-
-    result = flow._find_data_acquisition_claim_target(
-        object(),
-        product_query='目标标题',
-        target_source_urls=authorized,
-    )
-
-    assert result['ok'] is False
-    assert source_fallback_calls == [True]
 
 
-def test_source_url_lookup_never_falls_back_to_title_when_exact_url_missing(monkeypatch, tmp_path):
-    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
-    title_fallback_calls = []
-
-    class EmptyPage:
-        def locator(self, _selector):
-            return object()
-
-    monkeypatch.setattr(flow, '_locator_count', lambda _locator: 0)
-    monkeypatch.setattr(
-        flow,
-        '_find_data_acquisition_claim_target_by_product_query_locator',
-        lambda *_args, **_kwargs: title_fallback_calls.append(True) or {
-            'ok': True,
-            'matchedBy': 'product_query_after_collect',
-        },
-    )
-
-    result = flow._find_data_acquisition_claim_target_by_source_url(
-        EmptyPage(),
-        ['https://detail.1688.com/offer/1013604102950.html'],
-        product_query='完全相同标题',
-    )
-
-    assert result['ok'] is False
-    assert title_fallback_calls == []
 
 
-def test_find_data_acquisition_claim_target_by_source_url_uses_bounded_locators(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    html = '''
-    <html>
-      <head>
-        <style>
-          tr, button, a { display: block; width: 240px; height: 28px; }
-        </style>
-      </head>
-      <body>
-        <table>
-          <tr class="vxe-body--row">
-            <td>真实待认领商品</td>
-            <td><a href="https://detail.1688.com/offer/1013604102950.html">来源</a></td>
-            <td><button>认领</button></td>
-          </tr>
-        </table>
-      </body>
-    </html>
-    '''
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        page.set_content(html)
-        monkeypatch.setattr(
-            page,
-            'evaluate',
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('source lookup must not run page-wide evaluate')),
-        )
-
-        row = flow._find_data_acquisition_claim_target_by_source_url(
-            page,
-            ['https://detail.1688.com/offer/1013604102950.html'],
-        )
-        browser.close()
-
-    assert row['ok'] is True
-    assert row['matchedBy'] == 'source_url'
 
 
-def test_find_data_acquisition_claim_target_does_not_match_url_authorized_row_by_title_only(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    html = '''
-    <html>
-      <head>
-        <style>
-          tr, button { display: block; width: 320px; height: 32px; }
-        </style>
-      </head>
-      <body>
-        <table>
-          <tr class="vxe-body--row">
-            <td>Sanrio Hello Kitty Shake For Magsafe Magnetic Phone Griptok Grip Tok Stand</td>
-            <td><button>认领</button></td>
-          </tr>
-        </table>
-      </body>
-    </html>
-    '''
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        page.set_content(html)
-
-        row = flow._find_data_acquisition_claim_target_by_source_url(
-            page,
-            ['https://www.aliexpress.com/item/1005011837878679.html'],
-            product_query='Sanrio Hello Kitty Shake For Magsafe Magnetic Phone Griptok Grip Tok Stand',
-        )
-        browser.close()
-
-    assert row['ok'] is False
-    assert '未找到来源链接对应的可认领商品行' in row['reason']
 
 
-def test_source_url_lookup_does_not_fallback_to_title_amid_unrelated_page_links(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    html = '''
-    <html>
-      <head>
-        <style>
-          button, a { display: inline-block; width: 96px; height: 24px; }
-        </style>
-      </head>
-      <body>
-        <a href="https://www.dianxiaomi.com/help">帮助中心</a>
-        <table>
-          <tr class="vxe-body--row">
-            <td>Sanrio Hello Kitty Shake For Magsafe Magnetic Phone Griptok Grip Tok Stand</td>
-            <td><button>认领</button></td>
-          </tr>
-        </table>
-      </body>
-    </html>
-    '''
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        page.set_content(html)
-
-        row = flow._find_data_acquisition_claim_target_by_source_url(
-            page,
-            ['https://www.aliexpress.com/item/1005011837878679.html'],
-            product_query='Sanrio Hello Kitty Shake For Magsafe Magnetic Phone Griptok Grip Tok Stand',
-        )
-        browser.close()
-
-    assert row['ok'] is False
-    assert '未找到来源链接对应的可认领商品行' in row['reason']
 
 
-def test_product_query_locator_uses_exact_claim_actions_not_page_containers(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    html = '''
-    <html>
-      <head>
-        <style>
-          button, a, span { display: inline-block; width: 96px; height: 24px; }
-        </style>
-      </head>
-      <body>
-        <div>导航 产品 数据 认领 采集箱</div>
-        <section>链接采集 自动认领 采集并一键发布 开始采集</section>
-        <table>
-          <tr class="vxe-body--row">
-            <td>Sanrio Hello Kitty Shake For Magsafe Magnetic Phone Griptok Grip Tok Stand</td>
-            <td><button>认领</button></td>
-          </tr>
-        </table>
-      </body>
-    </html>
-    '''
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        page.set_content(html)
-        row = flow._find_data_acquisition_claim_target_by_product_query_locator(
-            page,
-            'Sanrio Hello Kitty Shake For Magsafe Magnetic Phone Griptok Grip Tok Stand',
-            target_source_urls=[],
-        )
-        browser.close()
-
-    assert row is not None
-    assert row['ok'] is True
-    assert row['matchedBy'] == 'product_query_after_collect'
-    assert 'Sanrio Hello Kitty' in row['rowText']
 
 
-def test_find_data_acquisition_claim_target_by_source_url_rejects_unverified_first_result(tmp_path):
-    class PageWithoutResponsiveDom:
-        viewport_size = {'width': 1440, 'height': 900}
-
-        def locator(self, *_args, **_kwargs):
-            raise RuntimeError('DOM is busy')
-
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    row = flow._find_data_acquisition_claim_target_by_source_url(
-        PageWithoutResponsiveDom(),
-        ['https://www.aliexpress.com/item/1005011837878679.html'],
-        product_query='Sanrio Hello Kitty Shake For Magsafe Magnetic Phone Griptok Grip Tok Stand',
-    )
-
-    assert row['ok'] is False
-    assert '未找到来源链接对应的可认领商品行' in row['reason']
 
 
-def test_visible_data_acquisition_source_url_does_not_use_coordinate_fallback(monkeypatch, tmp_path):
-    class VisibleDataAcquisitionPage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-        viewport_size = {'width': 1440, 'height': 900}
-
-        def evaluate(self, *_args, **_kwargs):
-            raise RuntimeError('DOM is still loading')
-
-        def locator(self, *_args, **_kwargs):
-            raise RuntimeError('DOM is still loading')
-
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-
-    row = flow._find_data_acquisition_claim_target(
-        VisibleDataAcquisitionPage(),
-        product_query='Sanrio Hello Kitty Shake For Magsafe Magnetic Phone Griptok Grip Tok Stand',
-        target_source_urls=['https://www.aliexpress.com/item/1005011837878679.html'],
-    )
-
-    assert row['ok'] is False
-    assert row.get('matchedBy') != 'source_url_search_first_result'
-    assert '未找到来源链接对应的可认领商品行' in row['reason']
 
 
 def test_workflow_trace_keeps_recent_events_and_notifies_listener(tmp_path):
@@ -4093,105 +3136,21 @@ def test_workflow_trace_keeps_recent_events_and_notifies_listener(tmp_path):
 
     flow.set_workflow_event_listener(observed.append)
     flow._trace_workflow_event(
-        'data_acquisition_claim:target_find_start',
-        human_step='定位待认领商品',
+        'draft_box_scope:capture_start',
+        human_step='读取商品箱范围',
         token_count=2,
     )
 
     recent = flow.recent_workflow_events()
-    assert recent[-1]['event'] == 'data_acquisition_claim:target_find_start'
-    assert recent[-1]['human_step'] == '定位待认领商品'
+    assert recent[-1]['event'] == 'draft_box_scope:capture_start'
+    assert recent[-1]['human_step'] == '读取商品箱范围'
     assert observed[-1] == recent[-1]
 
 
-def test_data_acquisition_claim_click_safety_allows_claim_button(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    html = '''
-    <html>
-      <head>
-        <style>
-          button, a { display: inline-block; width: 96px; height: 28px; }
-        </style>
-      </head>
-      <body>
-        <section>数据采集 <span>采集箱</span></section>
-        <table>
-          <tbody>
-            <tr class="vxe-body--row">
-              <td>真实待认领商品</td>
-              <td><a href="https://detail.1688.com/offer/1013604102950.html">来源</a></td>
-              <td><button>认领</button></td>
-            </tr>
-          </tbody>
-        </table>
-      </body>
-    </html>
-    '''
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        page.set_content(html)
-        target = flow._find_data_acquisition_claim_target(
-            page,
-            product_query='真实待认领商品',
-            target_source_urls=['https://detail.1688.com/offer/1013604102950.html'],
-        )
-        result = flow._assert_data_acquisition_claim_click_safe(page, target)
-        browser.close()
-
-    assert result['ok'] is True
-    assert '认领' in result['action_text']
 
 
-def test_data_acquisition_claim_click_safety_rejects_list_reorder_to_other_source(tmp_path):
-    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
-    authorized = ['https://detail.1688.com/offer/1013604102950.html']
-    target = {
-        'matchedBy': 'source_url',
-        'rowText': '授权商品 认领',
-        'actionText': '认领',
-        'actionRect': {'x': 10, 'y': 20, 'w': 30, 'h': 20},
-        'sourceUrls': authorized,
-    }
-
-    class ReorderedPage:
-        def evaluate(self, *_args, **_kwargs):
-            return {
-                'ok': True,
-                'action_text': '认领',
-                'row_text': '另一商品 认领',
-                'source_urls': ['https://detail.1688.com/offer/999.html'],
-                'page_url': 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition',
-            }
-
-    with pytest.raises(RuntimeError, match='来源与授权目标不一致'):
-        flow._assert_data_acquisition_claim_click_safe(
-            ReorderedPage(),
-            target,
-            target_source_urls=authorized,
-        )
 
 
-def test_data_acquisition_claim_click_safety_rejects_source_url_first_result_coordinate(tmp_path):
-    class PageThatRejectsEvaluate:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-        def evaluate(self, *_args, **_kwargs):
-            raise AssertionError('deprecated coordinate fallback should be rejected before page script')
-
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    target = {
-        'matchedBy': 'source_url_search_first_result',
-        'rowText': 'Sanrio Hello Kitty 来源URL搜索结果首行 认领',
-        'actionText': '认领',
-        'actionRect': {'x': 1310, 'y': 683, 'w': 60, 'h': 22},
-    }
-
-    with pytest.raises(RuntimeError, match='不再允许使用固定坐标认领'):
-        flow._assert_data_acquisition_claim_click_safe(PageThatRejectsEvaluate(), target)
 
 
 def test_click_rect_center_prefers_browser_input_before_dom_click(monkeypatch, tmp_path):
@@ -4268,7 +3227,7 @@ def test_click_rect_center_prefers_cdp_before_native_window_click(monkeypatch, t
             raise AssertionError('Playwright mouse should not run when CDP input succeeds')
 
     class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
+        url = WORKFLOW_TARGETS['draft_box']['url']
 
         def __init__(self, cdp):
             self.context = FakeContext(cdp)
@@ -4314,7 +3273,7 @@ def test_click_rect_center_falls_back_to_native_window_click_when_cdp_fails(monk
             raise AssertionError('Playwright mouse should not run when native window click succeeds')
 
     class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
+        url = WORKFLOW_TARGETS['draft_box']['url']
         context = FakeContext()
         mouse = BlockingMouse()
 
@@ -5481,105 +4440,10 @@ def test_visible_editor_semi_entry_steps_preserve_existing_without_dom_eval(monk
     assert opened['preserved_visible_editor_page'] is True
 
 
-def test_data_acquisition_claim_rect_click_prefers_page_mouse_for_visible_claim_page(monkeypatch, tmp_path):
-    monkeypatch.setattr(dxm_login_flow_module.os, 'name', 'nt', raising=False)
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    clicks = []
-
-    class FakeMouse:
-        def click(self, x, y, **kwargs):
-            clicks.append((x, y, kwargs))
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-        mouse = FakeMouse()
-
-    monkeypatch.setattr(
-        flow,
-        '_click_rect_center',
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('claim click must use page mouse before native/window fallback')),
-    )
-
-    flow._click_data_acquisition_claim_rect_center(FakePage(), {'x': 100, 'y': 200, 'w': 40, 'h': 20}, purpose='认领按钮')
-
-    assert clicks == [(120.0, 210.0, {'delay': 50})]
-    assert flow.recent_workflow_events()[-1]['event'] == 'data_acquisition_claim:page_mouse_click_done'
 
 
-def test_claim_click_revalidates_inside_dispatch_helper_immediately_before_mouse(monkeypatch, tmp_path):
-    monkeypatch.setattr(dxm_login_flow_module.os, 'name', 'nt', raising=False)
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
-    events = []
-
-    class FakeMouse:
-        def click(self, *_args, **_kwargs):
-            events.append('dispatch')
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-        mouse = FakeMouse()
-
-    def authorize(_context, operation):
-        events.append('authorize')
-        operation_result = operation()
-        return {'ok': True, 'executed': True, 'operation_result': operation_result}
-
-    flow.set_mutation_authorizer(
-        authorize,
-        {'task_id': 1, 'job_id': 2, 'state': 'CLAIM_TO_DRAFT_BOX', 'mode': 'claim_only'},
-    )
-
-    flow._click_data_acquisition_claim_rect_center(
-        FakePage(),
-        {'x': 10, 'y': 20, 'w': 30, 'h': 20},
-        purpose='认领按钮',
-        mutation_action='claim_open_dialog_click',
-        pre_dispatch_guard=lambda: events.append('target_guard') or {'ok': True},
-    )
-
-    assert events == ['authorize', 'target_guard', 'dispatch']
 
 
-def test_claim_click_target_drift_after_authorization_never_dispatches_mouse(monkeypatch, tmp_path):
-    monkeypatch.setattr(dxm_login_flow_module.os, 'name', 'nt', raising=False)
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
-    events = []
-
-    class FakeMouse:
-        def click(self, *_args, **_kwargs):
-            events.append('dispatch')
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-        mouse = FakeMouse()
-
-    def authorize(_context, operation):
-        events.append('authorize')
-        return {
-            'ok': True,
-            'executed': True,
-            'operation_result': operation(),
-        }
-
-    flow.set_mutation_authorizer(authorize, {'task_id': 1})
-
-    with pytest.raises(MutationAuthorizationError, match='MUTATION_TARGET_DRIFT'):
-        flow._click_data_acquisition_claim_rect_center(
-            FakePage(),
-            {'x': 10, 'y': 20, 'w': 30, 'h': 20},
-            purpose='认领按钮',
-            mutation_action='claim_open_dialog_click',
-            pre_dispatch_guard=lambda: events.append('target_guard') or {
-                'ok': False,
-                'reason': 'claim row changed during authorization',
-            },
-        )
-
-    assert events == ['authorize', 'target_guard']
 
 
 def test_exact_save_revalidates_after_wait_and_immediately_before_dom_dispatch(tmp_path):
@@ -5909,1568 +4773,78 @@ def test_click_rect_center_skips_dom_runtime_when_cdp_input_succeeds(monkeypatch
     assert page.calls == ['bring_to_front']
 
 
-def test_data_acquisition_claim_click_safety_blocks_save_button_misclick(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    html = '''
-    <html>
-      <head>
-        <style>
-          button { display: inline-block; width: 120px; height: 28px; }
-        </style>
-      </head>
-      <body>
-        <section>商品编辑页</section>
-        <button id="save">保存</button>
-      </body>
-    </html>
-    '''
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        page.set_content(html)
-        rect = page.locator('#save').bounding_box()
-        target = {
-            'rowText': '真实待认领商品 认领',
-            'actionText': '认领',
-            'actionRect': {'x': rect['x'], 'y': rect['y'], 'w': rect['width'], 'h': rect['height']},
-        }
-        with pytest.raises(RuntimeError, match='保存、发布或待发布动作'):
-            flow._assert_data_acquisition_claim_click_safe(page, target)
-        browser.close()
-
-
-def test_data_acquisition_claim_click_safety_blocks_forbidden_target_row(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    target = {
-        'rowText': '真实待认领商品 保存并移入待发布 发布',
-        'actionText': '认领',
-        'actionRect': {'x': 1, 'y': 1, 'w': 96, 'h': 24},
-    }
-
-    with pytest.raises(RuntimeError, match='目标商品行包含保存、发布或待发布动作'):
-        flow._assert_data_acquisition_claim_click_safe(None, target)
-
-
-def test_search_data_acquisition_uses_source_url_only_as_match_context(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    source_url = 'https://detail.1688.com/offer/1013604102950.html'
-    html = '''
-    <html>
-      <head>
-        <style>
-          input, button { display: inline-block; width: 220px; height: 28px; }
-        </style>
-      </head>
-      <body>
-        <section>数据采集 <button>搜索</button></section>
-        <input id="title" placeholder="搜索标题或关键词" />
-        <input id="source" placeholder="来源链接 / URL" />
-        <table><tr><td>认领</td><td>采集箱</td></tr></table>
-      </body>
-    </html>
-    '''
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        page.set_content(html)
-
-        result = flow._search_data_acquisition(
-            page,
-            product_query='错误标题不应用于 URL 模式',
-            target_source_urls=[source_url],
-        )
-
-        title_value = page.locator('#title').input_value()
-        source_value = page.locator('#source').input_value()
-        browser.close()
-
-    assert result['query_source'] == 'product_query'
-    assert result['query'] == '错误标题不应用于 URL 模式'
-    assert result['source_match_only'] is True
-    assert source_value == ''
-    assert title_value == '错误标题不应用于 URL 模式'
-
-
-def test_search_data_acquisition_does_not_collect_when_only_source_url_is_present(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    html = '''
-    <html>
-      <head>
-        <style>
-          input, button { display: inline-block; width: 220px; height: 28px; }
-        </style>
-      </head>
-      <body>
-        <section>数据采集 <button>开始采集</button></section>
-        <input id="source" placeholder="来源链接 / URL" />
-        <button>认领</button>
-      </body>
-    </html>
-    '''
-
-    def fail_ready_wait(*args, **kwargs):
-        raise AssertionError('data acquisition search must not run page-ready probing after search')
-
-    monkeypatch.setattr(flow, '_wait_for_page_ready', fail_ready_wait)
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        page.set_content(html)
-
-        result = flow._search_data_acquisition(
-            page,
-            product_query='https://detail.1688.com/offer/1013604102950.html',
-            target_source_urls=['https://detail.1688.com/offer/1013604102950.html'],
-        )
-
-        source_value = page.locator('#source').input_value()
-        browser.close()
-
-    assert result['query_source'] == 'none'
-    assert result['source_match_only'] is True
-    assert result['filled'] is False
-    assert result['clicked_search'] is False
-    assert 'clicked_start_collect' not in result
-    assert source_value == ''
-
-
-def test_data_acquisition_claim_uses_source_url_only_to_match_existing_rows(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    source_url = 'https://www.aliexpress.com/item/1005011837878679.html'
-
-    monkeypatch.setattr('src.execution.dxm_login_flow.time.sleep', lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(flow, '_wait_for_data_acquisition_ready_for_claim', lambda *_args, **_kwargs: {
-        'first_input_rect': {'x': 10, 'y': 10, 'w': 420, 'h': 100},
-        'start_collect_rect': {'x': 500, 'y': 10, 'w': 120, 'h': 40},
-    })
-    monkeypatch.setattr(flow, '_dismiss_data_acquisition_blocking_modals', lambda *_args, **_kwargs: 0)
-    monkeypatch.setattr(flow, '_assert_data_acquisition_claim_click_safe', lambda *_args, **_kwargs: {'ok': True})
-    monkeypatch.setattr(
-        flow,
-        '_click_data_acquisition_claim_rect_center',
-        lambda *_args, **_kwargs: {'dispatched': True, 'method': 'test_click'},
-    )
-    monkeypatch.setattr(flow, '_complete_data_acquisition_claim_dialog', lambda *_args, **_kwargs: {'ok': True})
-    monkeypatch.setattr(flow, '_capture_optional_workflow_screenshot', lambda *_args, **_kwargs: {'screenshot_url': None})
-    monkeypatch.setattr(flow, '_find_data_acquisition_claim_target', lambda *_args, **_kwargs: {
-        'ok': True,
-        'matchedBy': 'source_url',
-        'title': '真实商品',
-        'sourceUrls': [source_url],
-        'rowText': '真实商品 认领',
-        'actionText': '认领',
-        'actionRect': {'x': 100, 'y': 100, 'w': 80, 'h': 32},
-    })
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        page.set_content('''
-        <html>
-          <body>
-            <section>数据采集</section>
-            <textarea id="source-box" placeholder="请填写产品的网址，多个网址用Enter换行" style="display:block;width:620px;height:120px"></textarea>
-            <input id="keyword-box" placeholder="搜索标题或关键词" style="display:block;width:260px;height:32px" />
-            <button id="start-collect" onclick="window.__startedCollect = (window.__startedCollect || 0) + 1">开始采集</button>
-            <button>搜索</button>
-            <table><tr><td>真实商品</td><td><button>认领</button></td></tr></table>
-          </body>
-        </html>
-        ''')
-        monkeypatch.setattr(flow, '_open_data_acquisition_page_for_claim', lambda *_args, **_kwargs: page)
-
-        result = flow._perform_data_acquisition_claim(
-            claim_mark='AI-OPS',
-            product_query='真实商品',
-            category_name='立牌类谷子',
-            store_name='Dang Kang',
-            target_source_urls=[source_url],
-        )
-        source_value = page.locator('#source-box').input_value()
-        keyword_value = page.locator('#keyword-box').input_value()
-        started_collect = page.evaluate('window.__startedCollect || 0')
-        browser.close()
-
-    assert result['published'] is False
-    assert result['claim_click_receipt'] == {'dispatched': True, 'method': 'test_click'}
-    assert source_value == ''
-    assert keyword_value == '真实商品'
-    assert started_collect == 0
-
-
-def test_source_url_input_helper_is_disabled_for_no_collection_scope(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    monkeypatch.setattr('src.execution.dxm_login_flow.time.sleep', lambda *_args, **_kwargs: None)
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        page.set_content('''
-        <html>
-          <body>
-            <section>
-              <label>填写产品的网址，多个网址用 Enter 换行</label>
-              <textarea id="source-box" style="display:block;width:520px;height:120px"></textarea>
-              <button id="start-collect" onclick="window.__startedCollect = (window.__startedCollect || 0) + 1">开始采集</button>
-              <button>认领</button>
-            </section>
-          </body>
-        </html>
-        ''')
-
-        result = flow._search_data_acquisition_source_url_input(
-            page,
-            'https://detail.1688.com/offer/1013604102950.html',
-            ['https://detail.1688.com/offer/1013604102950.html'],
-        )
-        source_value = page.locator('#source-box').input_value()
-        started_collect = page.evaluate('window.__startedCollect || 0')
-        browser.close()
-
-    assert result['filled'] is False
-    assert result['clicked_search'] is False
-    assert '不新建商品' in result['reason']
-    assert source_value == ''
-    assert started_collect == 0
-
-
-def test_source_url_rect_fill_closes_notice_before_native_paste(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    calls = []
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-    monkeypatch.setattr(flow, '_dismiss_data_acquisition_notice_with_native_click', lambda page: calls.append(('dismiss', page)) or True)
-    monkeypatch.setattr(flow, '_bring_page_to_front_for_click', lambda page: calls.append(('front', page)) or True)
-    monkeypatch.setattr(flow, '_click_point_with_native_window', lambda page, x, y: calls.append(('click', x, y)) or True)
-    monkeypatch.setattr(flow, '_replace_active_field_with_native_clipboard_text', lambda text: calls.append(('paste', text)) or True)
-
-    result = flow._fill_data_acquisition_source_url_input_rect(
-        FakePage(),
-        'https://www.aliexpress.com/item/1005011837878679.html',
-        {'x': 100, 'y': 200, 'w': 600, 'h': 120},
-    )
-
-    assert result['ok'] is False
-    assert '不新建商品' in result['reason']
-    assert calls == []
-
-
-def test_start_collect_click_helper_is_disabled_for_no_collection_scope(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    calls = []
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-        def locator(self, *_args, **_kwargs):
-            raise AssertionError('start collect rect path must not query locators')
-
-    monkeypatch.setattr(flow, '_dismiss_data_acquisition_notice_with_native_click', lambda page: calls.append(('dismiss', page)) or True)
-    monkeypatch.setattr(flow, '_dismiss_data_acquisition_blocking_modals', lambda page: calls.append(('dismiss_blocking', page)) or 1)
-    monkeypatch.setattr(flow, '_click_rect_center', lambda page, rect: calls.append(('click', rect)))
-
-    result = flow._click_data_acquisition_start_collect(
-        FakePage(),
-        start_collect_rect={'x': 800, 'y': 500, 'w': 120, 'h': 40},
-    )
-
-    assert result['ok'] is False
-    assert '不新建商品' in result['reason']
-    assert calls == []
-
-
-def test_collect_result_ready_when_claim_actions_visible_even_if_loading(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    class FakePage:
-        def wait_for_timeout(self, _timeout):
-            raise AssertionError('visible claim actions should not wait for spinner to disappear')
-
-    monkeypatch.setattr(flow, '_data_acquisition_visible_loading_state', lambda _page: {'loading': True, 'loading_count': 1, 'loading_text': 'LOADING'})
-    monkeypatch.setattr(flow, '_count_exact_data_acquisition_claim_actions', lambda _page: 2)
-
-    result = flow._wait_data_acquisition_collect_result(FakePage(), timeout=3000)
-
-    assert result['ok'] is True
-    assert result['loading'] is True
-    assert result['loading_count'] == 1
-    assert result['claim_count'] == 2
-
-
-def test_visible_data_acquisition_collect_result_waits_until_loading_clears(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-    monkeypatch.setattr(flow, '_is_headless', lambda: False)
-    loading_states = [
-        {'loading': True, 'loading_count': 1, 'loading_text': 'LOADING'},
-        {'loading': False, 'loading_count': 0, 'loading_text': ''},
-    ]
-    claim_counts = [0, 1]
-    monkeypatch.setattr(
-        flow,
-        '_inspect_data_acquisition_collect_result_state',
-        lambda _page: (_ for _ in ()).throw(AssertionError('visible collect result wait must not use runtime probe')),
-    )
-    monkeypatch.setattr(flow, '_data_acquisition_visible_loading_state', lambda _page: loading_states.pop(0))
-    monkeypatch.setattr(flow, '_count_exact_data_acquisition_claim_actions', lambda _page: claim_counts.pop(0))
-    sleeps = []
-    monkeypatch.setattr(dxm_login_flow_module.time, 'sleep', lambda seconds: sleeps.append(seconds))
-
-    result = flow._wait_data_acquisition_collect_result(FakePage(), timeout=90000)
-
-    assert result['ok'] is True
-    assert result['loading'] is False
-    assert result['claim_count'] == 1
-    assert result['strategy'] == 'visible_locator_collect_result'
-    assert sleeps == [3, 1.0]
-
-
-def test_visible_data_acquisition_collect_result_waits_for_target_when_source_url_provided(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-    monkeypatch.setattr(flow, '_is_headless', lambda: False)
-    monkeypatch.setattr(flow, '_data_acquisition_visible_loading_state', lambda _page: {'loading': False, 'loading_count': 0, 'loading_text': ''})
-    monkeypatch.setattr(flow, '_count_exact_data_acquisition_claim_actions', lambda _page: 20)
-    target_states = [
-        {'ready': False, 'reason': '目标商品尚未出现在待认领结果中'},
-        {'ready': True, 'matched_by': 'product_query_exact_script'},
-    ]
-    monkeypatch.setattr(flow, '_data_acquisition_collect_target_state', lambda *_args, **_kwargs: target_states.pop(0))
-    sleeps = []
-    monkeypatch.setattr(dxm_login_flow_module.time, 'sleep', lambda seconds: sleeps.append(seconds))
-
-    result = flow._wait_data_acquisition_collect_result(
-        FakePage(),
-        timeout=90000,
-        product_query='Sanrio Hello Kitty',
-        target_source_urls=['https://www.aliexpress.com/item/1005011837878679.html'],
-    )
-
-    assert result['ok'] is True
-    assert result['claim_count'] == 20
-    assert result['target_ready'] is True
-    assert result['target_state']['matched_by'] == 'product_query_exact_script'
-    assert sleeps == [3, 1.0]
-
-
-def test_source_input_value_snapshot_ignores_checkbox_value_on(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        page.set_content('''
-        <html>
-          <body>
-            <input type="checkbox" checked />
-            <textarea placeholder="产品的网址" style="display:block;width:640px;height:120px"></textarea>
-          </body>
-        </html>
-        ''')
-        result = flow._data_acquisition_source_input_value_snapshot(
-            page,
-            'https://www.aliexpress.com/item/1005011837878679.html',
-        )
-        browser.close()
-
-    assert result['found'] is True
-    assert result['selector'].startswith('textarea')
-    assert result['value_excerpt'] == ''
-    assert result['contains_expected'] is False
-
-
-def test_source_url_rect_fill_reports_failure_when_native_and_keyboard_miss_field(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    calls = []
-
-    class FakeMouse:
-        def click(self, x, y):
-            calls.append(('mouse_click', x, y))
-
-    class FakeKeyboard:
-        def press(self, key):
-            calls.append(('key_press', key))
-
-        def insert_text(self, text):
-            calls.append(('insert_text', text))
-
-    class FakePage:
-        mouse = FakeMouse()
-        keyboard = FakeKeyboard()
-
-    monkeypatch.setattr(flow, '_dismiss_data_acquisition_notice_with_native_click', lambda _page: False)
-    monkeypatch.setattr(flow, '_bring_page_to_front_for_click', lambda _page: True)
-    monkeypatch.setattr(flow, '_click_point_with_native_window', lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(flow, '_replace_active_field_with_native_clipboard_text', lambda _text: True)
-    monkeypatch.setattr(
-        flow,
-        '_data_acquisition_source_input_value_snapshot',
-        lambda *_args, **_kwargs: {'found': True, 'value_excerpt': 'on', 'contains_expected': False},
-    )
-
-    result = flow._fill_data_acquisition_source_url_input_rect(
-        FakePage(),
-        'https://www.aliexpress.com/item/1005011837878679.html',
-        {'x': 100, 'y': 200, 'w': 400, 'h': 100},
-    )
-
-    assert result['ok'] is False
-    assert '不新建商品' in result['reason']
-    assert calls == []
-
-
-def test_find_data_acquisition_claim_target_rejects_product_query_without_source_before_url_scan(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    product_target = {
-        'ok': True,
-        'matchedBy': 'product_query_after_collect',
-        'actionRect': {'x': 1, 'y': 2, 'w': 3, 'h': 4},
-    }
-    monkeypatch.setattr(flow, '_find_data_acquisition_claim_target_by_product_query_locator', lambda *_args, **_kwargs: product_target)
-    source_result = {'ok': False, 'reason': 'exact source missing'}
-    monkeypatch.setattr(flow, '_find_data_acquisition_claim_target_by_source_url', lambda *_args, **_kwargs: source_result)
-
-    result = flow._find_data_acquisition_claim_target(
-        object(),
-        product_query='Sanrio Hello Kitty Shake For Magsafe Magnetic Phone Griptok Grip Tok Stand',
-        target_source_urls=['https://www.aliexpress.com/item/1005011837878679.html'],
-    )
-
-    assert result is source_result
-
-
-def test_find_data_acquisition_claim_target_by_product_query_script_with_source_url(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        page.set_content('''
-        <html>
-          <body>
-            <table>
-              <tr><td>其他商品</td><td><button>认领</button></td></tr>
-              <tr>
-                <td>速卖通 Sanrio Hello Kitty Shake For Magsafe Magnetic Phone Griptok Grip Tok Stand</td>
-                <td><a href="https://www.aliexpress.com/item/1005011837878679.html">来源</a></td>
-                <td><button style="display:block;width:64px;height:28px">认领</button></td>
-              </tr>
-            </table>
-          </body>
-        </html>
-        ''')
-
-        result = flow._find_data_acquisition_claim_target(
-            page,
-            product_query='Sanrio Hello Kitty Shake For Magsafe Magnetic Phone Griptok Grip Tok Stand',
-            target_source_urls=['https://www.aliexpress.com/item/1005011837878679.html'],
-        )
-        browser.close()
-
-    assert result['ok'] is True
-    assert result['matchedBy'] == 'product_query_exact_script'
-    assert 'Sanrio Hello Kitty' in result['rowText']
-    assert result['actionRect']['w'] > 0
-
-
-def test_find_data_acquisition_claim_target_product_query_uses_cdp_timeout(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    target = {
-        'ok': True,
-        'matchedBy': 'product_query_exact_script',
-        'rowText': 'Sanrio Hello Kitty Shake 认领',
-        'sourceUrls': ['https://www.aliexpress.com/item/1005011837878679.html'],
-        'actionRect': {'x': 1200, 'y': 500, 'w': 64, 'h': 28},
-    }
-
-    class FakeCdp:
-        def __init__(self):
-            self.calls = []
-
-        def send(self, method, payload):
-            self.calls.append((method, payload))
-            assert method == 'Runtime.evaluate'
-            assert payload['returnByValue'] is True
-            assert payload['timeout'] <= 2500
-            return {'result': {'value': target}}
-
-    class FakeContext:
-        def __init__(self, cdp):
-            self.cdp = cdp
-
-        def new_cdp_session(self, page):
-            return self.cdp
-
-    class FakePage:
-        def __init__(self, cdp):
-            self.context = FakeContext(cdp)
-
-        def evaluate(self, *_args, **_kwargs):
-            raise AssertionError('product target lookup must not use bare page.evaluate')
-
-    cdp = FakeCdp()
-    monkeypatch.setattr(
-        flow,
-        '_find_data_acquisition_claim_target_by_product_query_locator',
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('CDP result should not fall back to locator lookup')),
-    )
-
-    result = flow._find_data_acquisition_claim_target_by_product_query_script(
-        FakePage(cdp),
-        'Sanrio Hello Kitty Shake For Magsafe Magnetic Phone Griptok Grip Tok Stand',
-        target_source_urls=['https://www.aliexpress.com/item/1005011837878679.html'],
-    )
-
-    assert result == target
-    assert len(cdp.calls) == 1
-
-
-def test_source_url_search_fails_fast_when_source_textarea_missing(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    def fail_heavy_scan(*_args, **_kwargs):
-        raise AssertionError('missing primary input must not fall back to heavy DOM/CDP scan')
-
-    monkeypatch.setattr(flow, '_fill_data_acquisition_source_url_input', fail_heavy_scan)
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        page.set_content('<html><body><button>开始采集</button></body></html>')
-
-        result = flow._search_data_acquisition_source_url_input(
-            page,
-            'https://www.aliexpress.com/item/1005011837878679.html',
-            ['https://www.aliexpress.com/item/1005011837878679.html'],
-        )
-        browser.close()
-
-    assert result['filled'] is False
-    assert result['clicked_search'] is False
-    assert '不新建商品' in result['reason']
-
-
-def test_source_url_dom_fill_uses_cdp_runtime_timeout(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    class FakeCdp:
-        def __init__(self):
-            self.calls = []
-
-        def send(self, method, payload):
-            self.calls.append((method, payload))
-            assert method == 'Runtime.evaluate'
-            assert payload['timeout'] <= 2500
-            assert '1005011837878679' in payload['expression']
-            return {'result': {'value': {'ok': True, 'selector': 'textarea:nth(0)', 'tag': 'textarea'}}}
-
-    class FakeContext:
-        def __init__(self, cdp):
-            self.cdp = cdp
-
-        def new_cdp_session(self, page):
-            return self.cdp
-
-    class FakePage:
-        def __init__(self):
-            self.cdp = FakeCdp()
-            self.context = FakeContext(self.cdp)
-
-        def evaluate(self, script, payload=None):
-            raise AssertionError('source URL DOM fill must not use unbounded page.evaluate')
-
-    page = FakePage()
-
-    result = flow._fill_data_acquisition_source_url_input(
-        page,
-        'https://www.aliexpress.com/item/1005011837878679.html',
-    )
-
-    assert result['ok'] is False
-    assert '不新建商品' in result['reason']
-    assert page.cdp.calls == []
-
-
-def test_data_acquisition_source_url_tokens_prioritize_path_product_id(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    tokens = flow._data_acquisition_source_url_tokens([
-        'https://www.aliexpress.com/item/1005011837878679.html?pdp_npi=4%40dis%2112000056736085391%21sh',
-    ])
-
-    assert tokens[0] == '1005011837878679'
-    assert '2112000056736085391' in tokens
-
-
-def test_data_acquisition_source_url_tokens_ignore_short_query_noise(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    tokens = flow._data_acquisition_source_url_tokens([
-        'https://www.aliexpress.com/item/1005011837878679.html?pdp_npi=4%40dis%21USD%21US+%245.92%21US+%240.99%21%21%2139.89%216.65%21%400b5dcc3217821154652661366e8fcc%2112000056736085391%21sh%21US%216005040146%21X'
-    ])
-
-    assert tokens[0] == '1005011837878679'
-    assert '2112000056736085391' in tokens
-    assert '245' not in tokens
-    assert '592' not in tokens
-    assert '099' not in tokens
-
-
-def test_data_acquisition_claim_state_keeps_search_and_target_evidence(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    claim_target = {
-        'matchedBy': 'source_url',
-        'rowText': '真实待认领商品行 来源 1013604102950 认领',
-        'sourceUrls': ['https://detail.1688.com/offer/1013604102950.html'],
-    }
-    search_result = {
-        'query': 'https://detail.1688.com/offer/1013604102950.html',
-        'query_source': 'target_source_url',
-        'filled': True,
-        'clicked_search': True,
-    }
-
-    monkeypatch.setattr(flow, '_perform_data_acquisition_claim', lambda **kwargs: {
-        'page_title': '数据采集',
-        'page_url': 'https://www.dianxiaomi.com/web/smt/collect/index.htm',
-        'screenshot_url': '/artifacts/screenshots/claim.png',
-        'message': '已进入店小秘已有待认领列表，可以继续认领到采集箱。',
-        'target_source_urls': ['https://detail.1688.com/offer/1013604102950.html'],
-        'search_result': search_result,
-        'claim_target': claim_target,
-        'claimed_product': {
-            'title': '真实待认领商品',
-            'category_name': '立牌类谷子',
-            'source_url': 'https://detail.1688.com/offer/1013604102950.html',
-        },
-    })
-
-    state = flow.claim_from_data_acquisition(
-        'AI-OPS-1',
-        target_source_urls=['https://detail.1688.com/offer/1013604102950.html'],
-    )
-
-    assert state['stage'] == 'data_acquisition_claim'
-    assert state['ok'] is True
-    assert state['search_result']['query_source'] == 'target_source_url'
-    assert state['claim_target']['matchedBy'] == 'source_url'
-    assert '真实待认领商品行' in state['claim_target']['rowText']
-
-
-def test_data_acquisition_claim_does_not_fail_when_visible_screenshot_fails(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    flow.set_mutation_authorizer(_execute_authorized_operation, {'task_id': 1})
-    monkeypatch.delenv('DXM_LOGIN_HEADLESS', raising=False)
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    monkeypatch.setattr(dxm_login_flow_module.time, 'sleep', lambda _seconds: None)
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-        def __init__(self):
-            self.screenshot_calls = []
-
-        def wait_for_timeout(self, _timeout):
-            return None
-
-        def screenshot(self, **kwargs):
-            self.screenshot_calls.append(kwargs)
-            raise RuntimeError('visible page screenshot timed out')
-
-        def title(self):
-            raise AssertionError('visible data acquisition claim must not read page.title() after action completion')
-
-    page = FakePage()
-    target = {
-        'ok': True,
-        'title': '真实待认领商品',
-        'categoryName': '立牌类谷子',
-        'sourceUrls': ['https://www.aliexpress.com/item/1005011837878679.html'],
-        'rowText': '真实待认领商品 认领',
-        'actionRect': {'x': 100, 'y': 200, 'w': 80, 'h': 30},
-    }
-
-    monkeypatch.setattr(flow, '_open_data_acquisition_page_for_claim', lambda *_args, **_kwargs: page)
-    monkeypatch.setattr(flow, '_wait_for_data_acquisition_ready_for_claim', lambda _page: {'first_input_rect': None})
-    monkeypatch.setattr(flow, '_search_data_acquisition', lambda *_args, **_kwargs: {
-        'query_source': 'target_source_url',
-        'filled': True,
-        'clicked_search': True,
-    })
-    monkeypatch.setattr(flow, '_find_data_acquisition_claim_target', lambda *_args, **_kwargs: target)
-    monkeypatch.setattr(flow, '_dismiss_data_acquisition_blocking_modals', lambda *_args, **_kwargs: 0)
-    monkeypatch.setattr(flow, '_assert_data_acquisition_claim_click_safe', lambda *_args, **_kwargs: {'ok': True})
-    monkeypatch.setattr(
-        flow,
-        '_click_data_acquisition_claim_rect_center',
-        lambda *_args, **_kwargs: {
-            'dispatched': True,
-            'authorization': {'executed': True},
-        },
-    )
-    monkeypatch.setattr(flow, '_complete_data_acquisition_claim_dialog', lambda *_args, **_kwargs: {'ok': True})
-
-    result = flow._perform_data_acquisition_claim(
-        claim_mark='AI-OPS',
-        product_query='真实待认领商品',
-        category_name='立牌类谷子',
-        store_name='Dang Kang',
-        target_source_urls=['https://www.aliexpress.com/item/1005011837878679.html'],
-    )
-
-    assert result['claimed_product']['title'] == '真实待认领商品'
-    assert result['page_title'] == '店小秘--数据采集'
-    assert result['page_url'] == 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-    assert result['screenshot_url'] is None
-    assert 'screenshot timed out' in result['screenshot_error']
-    assert page.screenshot_calls[-1]['full_page'] is False
-    assert page.screenshot_calls[-1]['timeout'] == 5000
-    assert flow.recent_workflow_events()[-1]['event'] == 'data_acquisition_claim:done'
-
-
-def test_data_acquisition_claim_refinds_target_after_dismissing_modals(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    monkeypatch.setattr(dxm_login_flow_module.time, 'sleep', lambda _seconds: None)
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-        def wait_for_timeout(self, _timeout):
-            return None
-
-        def title(self):
-            return '店小秘--数据采集'
-
-    page = FakePage()
-    stale_target = {
-        'ok': True,
-        'matchedBy': 'product_query_exact_script',
-        'title': 'Sanrio Hello Kitty',
-        'categoryName': '立牌类谷子',
-        'sourceUrls': ['https://www.aliexpress.com/item/1005011837878679.html'],
-        'rowText': 'Sanrio Hello Kitty 认领',
-        'actionText': '认领',
-        'actionRect': {'x': 100, 'y': 200, 'w': 80, 'h': 30},
-    }
-    fresh_target = {
-        **stale_target,
-        'actionRect': {'x': 320, 'y': 420, 'w': 80, 'h': 30},
-        'matchedBy': 'product_query_exact_script_refreshed',
-    }
-    targets = [stale_target, fresh_target]
-    safety_targets = []
-    clicked_rects = []
-
-    def fake_find(*_args, **_kwargs):
-        return targets.pop(0)
-
-    monkeypatch.setattr(flow, '_open_data_acquisition_page_for_claim', lambda *_args, **_kwargs: page)
-    monkeypatch.setattr(flow, '_wait_for_data_acquisition_ready_for_claim', lambda _page: {'first_input_rect': None})
-    monkeypatch.setattr(flow, '_search_data_acquisition', lambda *_args, **_kwargs: {
-        'query_source': 'target_source_url',
-        'filled': True,
-        'clicked_search': True,
-    })
-    monkeypatch.setattr(flow, '_find_data_acquisition_claim_target', fake_find)
-    monkeypatch.setattr(flow, '_dismiss_data_acquisition_blocking_modals', lambda *_args, **_kwargs: 1)
-    monkeypatch.setattr(flow, '_assert_data_acquisition_claim_click_safe', lambda _page, target, **_kwargs: safety_targets.append(target) or {'ok': True})
-    monkeypatch.setattr(flow, '_click_data_acquisition_claim_rect_center', lambda _page, rect, **_kwargs: clicked_rects.append(rect))
-    monkeypatch.setattr(flow, '_complete_data_acquisition_claim_dialog', lambda *_args, **_kwargs: {'ok': True})
-    monkeypatch.setattr(flow, '_capture_optional_workflow_screenshot', lambda *_args, **_kwargs: {'screenshot_url': None})
-
-    result = flow._perform_data_acquisition_claim(
-        claim_mark='AI-OPS',
-        product_query='Sanrio Hello Kitty',
-        category_name='立牌类谷子',
-        store_name='Dang Kang',
-        target_source_urls=['https://www.aliexpress.com/item/1005011837878679.html'],
-    )
-
-    assert result['claim_target']['matchedBy'] == 'product_query_exact_script_refreshed'
-    assert safety_targets == [fresh_target]
-    assert clicked_rects == [fresh_target['actionRect']]
-    assert targets == []
-
-
-def test_data_acquisition_claim_stops_when_source_collection_did_not_start(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    class FakePage:
-        def wait_for_timeout(self, _timeout):
-            return None
-
-    monkeypatch.setattr(flow, '_ensure_page_with_cookies', lambda: FakePage())
-    monkeypatch.setattr(flow, '_goto_data_acquisition_sterile', lambda *args, **kwargs: None)
-    monkeypatch.setattr(flow, '_wait_for_data_acquisition_ready_for_claim', lambda *args, **kwargs: {'first_input_rect': None})
-    monkeypatch.setattr(flow, '_search_data_acquisition', lambda *args, **kwargs: {
-        'query': 'https://www.aliexpress.com/item/1005011837878679.html',
-        'query_source': 'target_source_url',
-        'filled': True,
-        'clicked_search': False,
-        'reason': '未找到可点击的蓝色“开始采集”按钮',
-    })
-
-    def fail_if_target_lookup_runs(*args, **kwargs):
-        raise AssertionError('采集没有启动时不应该继续查找认领按钮')
-
-    monkeypatch.setattr(flow, '_find_data_acquisition_claim_target', fail_if_target_lookup_runs)
-
-    with pytest.raises(RuntimeError, match='开始采集'):
-        flow._perform_data_acquisition_claim(
-            claim_mark='AI-OPS-1',
-            product_query='真实商品',
-            category_name='立牌类谷子',
-            store_name='Dang Kang',
-            target_source_urls=['https://www.aliexpress.com/item/1005011837878679.html'],
-        )
-
-
-def test_data_acquisition_claim_does_not_wait_six_seconds_before_search(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-        def __init__(self):
-            self.waits = []
-
-        def wait_for_timeout(self, timeout):
-            self.waits.append(timeout)
-            if timeout >= 2000:
-                raise AssertionError('data acquisition search must not wait several seconds before filling source URL')
-
-    page = FakePage()
-    monkeypatch.setattr(flow, '_ensure_page_with_cookies', lambda: page)
-    monkeypatch.setattr(flow, '_goto_data_acquisition_sterile', lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        flow,
-        '_wait_for_data_acquisition_ready_for_claim',
-        lambda *_args, **_kwargs: {'first_input_rect': {'x': 1, 'y': 2, 'w': 300, 'h': 80}},
-    )
-    monkeypatch.setattr(
-        flow,
-        '_search_data_acquisition',
-        lambda *_args, **_kwargs: {'query_source': 'target_source_url', 'filled': True, 'clicked_search': True},
-    )
-    monkeypatch.setattr(flow, '_find_data_acquisition_claim_target', lambda *_args, **_kwargs: {'ok': False, 'reason': 'stop after search'})
-
-    with pytest.raises(RuntimeError, match='stop after search'):
-        flow._perform_data_acquisition_claim(
-            claim_mark='AI-OPS',
-            target_source_urls=['https://www.aliexpress.com/item/1005011837878679.html'],
-        )
-
-    assert all(timeout < 2000 for timeout in page.waits)
-
-
-def test_data_acquisition_claim_reuses_current_page_without_second_goto(monkeypatch, tmp_path):
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-        def wait_for_timeout(self, _timeout):
-            return None
-
-    page = FakePage()
-    flow._page = page
-    monkeypatch.setattr(
-        flow,
-        '_ensure_page_with_cookies',
-        lambda: (_ for _ in ()).throw(AssertionError('current data acquisition page must be reused')),
-    )
-    sterile_gotos = []
-    monkeypatch.setattr(flow, '_goto_data_acquisition_sterile', lambda page, url, **_kwargs: sterile_gotos.append((page, url)))
-    monkeypatch.setattr(flow, '_attach_and_reapply_live_hud_page', lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        flow,
-        '_wait_for_data_acquisition_ready_for_claim',
-        lambda *_args, **_kwargs: {
-            'first_input_rect': {'x': 1, 'y': 2, 'w': 300, 'h': 80},
-            'start_collect_rect': {'x': 10, 'y': 20, 'w': 120, 'h': 36},
-        },
-    )
-    monkeypatch.setattr(
-        flow,
-        '_search_data_acquisition',
-        lambda *_args, **_kwargs: {'query_source': 'target_source_url', 'filled': True, 'clicked_search': True},
-    )
-    monkeypatch.setattr(
-        flow,
-        '_find_data_acquisition_claim_target',
-        lambda *_args, **_kwargs: {'ok': False, 'reason': 'stop after ready reuse'},
-    )
-
-    with pytest.raises(RuntimeError, match='stop after ready reuse'):
-        flow._perform_data_acquisition_claim(
-            claim_mark='AI-OPS',
-            target_source_urls=['https://www.aliexpress.com/item/1005011837878679.html'],
-        )
-
-    assert sterile_gotos == []
-
-
-def test_data_acquisition_claim_recovers_when_reused_page_is_closed_during_ready_check(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    class FakePage:
-        def __init__(self, url):
-            self.url = url
-            self.waits = []
-
-        def wait_for_timeout(self, timeout):
-            self.waits.append(timeout)
-
-    target_url = WORKFLOW_TARGETS['data_acquisition']['url']
-    first_page = FakePage(target_url)
-    second_page = FakePage('about:blank')
-    pages = [first_page, second_page]
-    ensure_calls = []
-    goto_calls = []
-    wait_calls = []
-
-    def fake_ensure_page():
-        ensure_calls.append(True)
-        return pages.pop(0)
-
-    def fake_wait_for_data_acquisition_ready(page, *_args, **_kwargs):
-        wait_calls.append(page)
-        if len(wait_calls) == 1:
-            raise RuntimeError('Page.evaluate: Target page, context or browser has been closed')
-        return {'first_input_rect': {'x': 1, 'y': 2, 'w': 300, 'h': 80}}
-
-    monkeypatch.setattr(flow, '_ensure_page_with_cookies', fake_ensure_page)
-    monkeypatch.setattr(flow, '_attach_and_reapply_live_hud_page', lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(flow, '_goto_data_acquisition_sterile', lambda page, url, **_kwargs: (goto_calls.append((page, url)), setattr(page, 'url', url)))
-    monkeypatch.setattr(flow, '_wait_for_data_acquisition_ready_for_claim', fake_wait_for_data_acquisition_ready)
-    monkeypatch.setattr(
-        flow,
-        '_search_data_acquisition',
-        lambda *_args, **_kwargs: {'query_source': 'target_source_url', 'filled': True, 'clicked_search': True},
-    )
-    monkeypatch.setattr(
-        flow,
-        '_find_data_acquisition_claim_target',
-        lambda *_args, **_kwargs: {'ok': False, 'reason': 'stop after recovered ready'},
-    )
-
-    with pytest.raises(RuntimeError, match='stop after recovered ready'):
-        flow._perform_data_acquisition_claim(
-            claim_mark='AI-OPS',
-            target_source_urls=['https://www.aliexpress.com/item/1005011837878679.html'],
-        )
-
-    assert len(ensure_calls) == 2
-    assert wait_calls == [first_page, second_page]
-    assert goto_calls == [(second_page, target_url)]
-
-
-def test_data_acquisition_ready_requires_real_controls_not_url_snapshot(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-        viewport_size = {'width': 1440, 'height': 1024}
-
-        def wait_for_timeout(self, _timeout):
-            raise AssertionError('data acquisition ready poll must not depend on Playwright wait_for_timeout')
-
-    monkeypatch.setattr(flow, '_dismiss_data_acquisition_blocking_modals', lambda *_args, **_kwargs: 0)
-    monkeypatch.setattr(
-        flow,
-        '_data_acquisition_operable_snapshot',
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('URL-only snapshot must not be used')),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        flow,
-        '_inspect_data_acquisition_ready_state',
-        lambda *_args, **_kwargs: {
-            'ready': True,
-            'ready_term': 'existing_claim_action_ready',
-            'first_input_rect': None,
-            'start_collect_rect': None,
-            'loading': False,
-            'loading_count': 0,
-            'claim_count': 1,
-            'strategy': 'locator_probe',
-        },
-    )
-    sleeps = []
-    monkeypatch.setattr(dxm_login_flow_module.time, 'sleep', lambda seconds: sleeps.append(seconds))
-
-    result = flow._wait_for_page_ready(
-        FakePage(),
-        ['数据采集'],
-        label='数据采集',
-        expected_identity='data_acquisition',
-        timeout=5000,
-        dismiss_strategy='data_acquisition',
-    )
-
-    assert result['ready'] is True
-    assert result['ready_term'] == 'existing_claim_action_ready'
-    assert result['claim_count'] == 1
-    assert result['first_input_rect'] is None
-    assert result['start_collect_rect'] is None
-    assert sleeps == [3.0]
-
-
-def test_visible_data_acquisition_claim_ready_waits_three_seconds_then_checks_controls(monkeypatch, tmp_path):
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    sleeps = []
-    locator_checks = []
-
-    class FakeContext:
-        def new_cdp_session(self, _page):
-            raise AssertionError('visible data acquisition claim ready must not use CDP runtime probe')
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-        context = FakeContext()
-
-        def locator(self, *_args, **_kwargs):
-            raise AssertionError('test patches locator inspection at the method seam')
-
-        def evaluate(self, *_args, **_kwargs):
-            raise AssertionError('visible data acquisition claim ready must not run page scripts')
-
-        def title(self):
-            raise AssertionError('visible data acquisition claim ready must not query page title')
-
-    monkeypatch.setattr(flow, '_is_headless', lambda: False)
-    monkeypatch.setattr(dxm_login_flow_module.time, 'sleep', lambda seconds: sleeps.append(seconds))
-    monkeypatch.setattr(
-        flow,
-        '_inspect_data_acquisition_ready_state',
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('claim ready must not inspect DOM before the page settles')),
-    )
-    monkeypatch.setattr(
-        flow,
-        '_inspect_data_acquisition_ready_state_with_runtime',
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('claim ready must not use runtime probe')),
-    )
-
-    def fake_locator_probe(page, terms):
-        locator_checks.append((page, terms))
-        return {
-            'ready': True,
-            'ready_term': 'existing_claim_action_ready',
-            'loading': False,
-            'loading_count': 0,
-            'rows': 1,
-            'inputs': 0,
-            'claim_count': 1,
-            'has_collect_form': True,
-            'first_input_rect': None,
-            'start_collect_rect': None,
-            'text_excerpt': '数据采集 已有认领按钮',
-            'url': FakePage.url,
-            'title': '',
-            'loading_text': '',
-            'locator_probe_available': True,
-        }
-
-    monkeypatch.setattr(flow, '_inspect_data_acquisition_ready_state_with_locators', fake_locator_probe)
-
-    result = flow._wait_for_data_acquisition_ready_for_claim(FakePage())
-
-    assert result['ready'] is True
-    assert result['strategy'] == 'visible_locator_condition_wait'
-    assert result['ready_term'] == 'existing_claim_action_ready'
-    assert result['claim_count'] == 1
-    assert result['first_input_rect'] is None
-    assert result['start_collect_rect'] is None
-    assert sleeps == [3.0]
-    assert len(locator_checks) == 1
-
-
-def test_visible_data_acquisition_claim_ready_polls_until_claim_actions_appear(monkeypatch, tmp_path):
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    current_time = [0.0]
-    sleeps = []
-    checks = []
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-    states = [
-        {
-            'ready': False,
-            'ready_term': None,
-            'loading': True,
-            'loading_count': 1,
-            'rows': 0,
-            'inputs': 1,
-            'claim_count': 0,
-            'has_collect_form': True,
-            'first_input_rect': None,
-            'start_collect_rect': None,
-            'text_excerpt': '数据采集 正在加载',
-            'url': FakePage.url,
-            'title': '',
-            'loading_text': 'LOADING',
-            'locator_probe_available': True,
-        },
-        {
-            'ready': False,
-            'ready_term': None,
-            'loading': False,
-            'loading_count': 0,
-            'rows': 0,
-            'inputs': 1,
-            'claim_count': 0,
-            'has_collect_form': True,
-            'first_input_rect': None,
-            'start_collect_rect': None,
-            'text_excerpt': '数据采集 等待列表',
-            'url': FakePage.url,
-            'title': '',
-            'loading_text': '',
-            'locator_probe_available': True,
-        },
-        {
-            'ready': True,
-            'ready_term': 'existing_claim_action_ready',
-            'loading': False,
-            'loading_count': 0,
-            'rows': 1,
-            'inputs': 1,
-            'claim_count': 1,
-            'has_collect_form': True,
-            'first_input_rect': None,
-            'start_collect_rect': None,
-            'text_excerpt': '数据采集 已有认领按钮',
-            'url': FakePage.url,
-            'title': '',
-            'loading_text': '',
-            'locator_probe_available': True,
-        },
-    ]
-
-    def fake_sleep(seconds):
-        sleeps.append(seconds)
-        current_time[0] += seconds
-
-    def fake_probe(_page, _terms):
-        index = min(len(checks), len(states) - 1)
-        checks.append(index)
-        return dict(states[index])
-
-    monkeypatch.setattr(flow, '_is_headless', lambda: False)
-    monkeypatch.setattr(dxm_login_flow_module.time, 'monotonic', lambda: current_time[0])
-    monkeypatch.setattr(dxm_login_flow_module.time, 'sleep', fake_sleep)
-    monkeypatch.setattr(flow, '_inspect_data_acquisition_ready_state_with_locators', fake_probe)
-
-    result = flow._wait_for_data_acquisition_ready_for_claim(FakePage())
-
-    assert result['ready'] is True
-    assert result['ready_term'] == 'existing_claim_action_ready'
-    assert result['strategy'] == 'visible_locator_condition_wait'
-    assert checks == [0, 1, 2]
-    assert sleeps == [3.0, 1.0, 1.0]
-
-
-def test_visible_data_acquisition_claim_ready_blocks_when_page_still_loading(monkeypatch, tmp_path):
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    current_time = [0.0]
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-        def evaluate(self, *_args, **_kwargs):
-            raise AssertionError('visible data acquisition claim ready must not run page scripts')
-
-    monkeypatch.setattr(flow, '_is_headless', lambda: False)
-    monkeypatch.setattr(dxm_login_flow_module.time, 'monotonic', lambda: current_time[0])
-    monkeypatch.setattr(dxm_login_flow_module.time, 'sleep', lambda seconds: current_time.__setitem__(0, current_time[0] + seconds))
-    monkeypatch.setattr(
-        flow,
-        '_inspect_data_acquisition_ready_state_with_locators',
-        lambda *_args, **_kwargs: {
-            'ready': False,
-            'ready_term': None,
-            'loading': True,
-            'loading_count': 1,
-            'loading_items': [{
-                'selector': '.vxe-loading',
-                'text': 'LOADING',
-                'rect': {'x': 940, 'y': 550, 'w': 280, 'h': 180},
-            }],
-            'rows': 0,
-            'inputs': 1,
-            'claim_count': 0,
-            'first_input_rect': {'x': 20, 'y': 40, 'w': 500, 'h': 100},
-            'start_collect_rect': {'x': 700, 'y': 220, 'w': 120, 'h': 36},
-            'text_excerpt': '数据采集 来源链接输入框 开始采集',
-            'url': FakePage.url,
-            'title': '',
-            'loading_text': 'LOADING',
-            'locator_probe_available': True,
-        },
-    )
-
-    with pytest.raises(RuntimeError, match='加载标记 .vxe-loading=LOADING'):
-        flow._wait_for_data_acquisition_ready_for_claim(FakePage())
-    timeout_event = flow.recent_workflow_events()[-1]
-    assert timeout_event['event'] == 'wait_ready:timeout'
-    assert timeout_event['fast_fail'] is True
-    assert '加载标记 .vxe-loading=LOADING' in timeout_event['diagnostic']
-    assert '当前地址 https://www.dianxiaomi.com/web/productCrawl/dataAcquisition' in timeout_event['diagnostic']
-
-
-def test_visible_data_acquisition_claim_ready_ignores_ambient_loading_when_claim_action_visible(monkeypatch, tmp_path):
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    current_time = [0.0]
-    sleeps = []
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-        def evaluate(self, *_args, **_kwargs):
-            raise AssertionError('visible data acquisition claim ready must not run page scripts')
-
-    def fake_sleep(seconds):
-        sleeps.append(seconds)
-        current_time[0] += seconds
-
-    monkeypatch.setattr(flow, '_is_headless', lambda: False)
-    monkeypatch.setattr(dxm_login_flow_module.time, 'monotonic', lambda: current_time[0])
-    monkeypatch.setattr(dxm_login_flow_module.time, 'sleep', fake_sleep)
-    monkeypatch.setattr(
-        flow,
-        '_inspect_data_acquisition_ready_state_with_locators',
-        lambda *_args, **_kwargs: {
-            'ready': False,
-            'ready_term': None,
-            'loading': True,
-            'loading_count': 1,
-            'rows': 1,
-            'inputs': 1,
-            'claim_count': 1,
-            'has_collect_form': True,
-            'first_input_rect': None,
-            'start_collect_rect': None,
-            'text_excerpt': '已有待认领商品 认领 LOADING',
-            'url': FakePage.url,
-            'title': '',
-            'loading_text': 'LOADING',
-            'locator_probe_available': True,
-        },
-    )
-
-    result = flow._wait_for_data_acquisition_ready_for_claim(FakePage())
-
-    assert result['ready'] is True
-    assert result['claim_count'] == 1
-    assert result['loading'] is True
-    assert result['ready_term'] == 'existing_claim_action_ready'
-    assert sleeps == [3.0]
-
-
-def test_visible_data_acquisition_claim_ready_reports_collect_form_as_wrong_page(monkeypatch, tmp_path):
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    current_time = [0.0]
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-        def evaluate(self, *_args, **_kwargs):
-            raise AssertionError('visible data acquisition claim ready must not run page scripts')
-
-    monkeypatch.setattr(flow, '_is_headless', lambda: False)
-    monkeypatch.setattr(dxm_login_flow_module.time, 'monotonic', lambda: current_time[0])
-    monkeypatch.setattr(dxm_login_flow_module.time, 'sleep', lambda seconds: current_time.__setitem__(0, current_time[0] + seconds))
-    monkeypatch.setattr(
-        flow,
-        '_inspect_data_acquisition_ready_state_with_locators',
-        lambda *_args, **_kwargs: {
-            'ready': False,
-            'ready_term': None,
-            'loading': False,
-            'loading_count': 0,
-            'rows': 0,
-            'inputs': 1,
-            'claim_count': 0,
-            'has_collect_form': True,
-            'first_input_rect': None,
-            'start_collect_rect': None,
-            'text_excerpt': '请填写产品的网址 开始采集',
-            'url': FakePage.url,
-            'title': '',
-            'loading_text': '',
-            'locator_probe_available': True,
-        },
-    )
-
-    with pytest.raises(RuntimeError) as excinfo:
-        flow._wait_for_data_acquisition_ready_for_claim(FakePage())
-
-    message = str(excinfo.value)
-    assert '已有待认领列表未显示可认领商品' in message
-    assert '当前停留在店小秘新建商品输入区' in message
-    assert '系统不会填写链接或新建商品' in message
-    assert '系统不会填写链接、不会点击开始采集、不会新建商品' in message
-    assert '未完全加载' not in message
-    assert flow.recent_workflow_events()[-1]['fast_fail'] is True
-
-
-def test_data_acquisition_ready_requires_existing_claim_action_not_collect_form(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        target_url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-        source_placeholder = '\u8bf7\u586b\u5199\u4ea7\u54c1\u7684\u7f51\u5740\uff0c\u591a\u4e2a\u7f51\u5740\u7528Enter\u6362\u884c'
-        other_button = '\u5176\u4ed6\u6309\u94ae'
-        start_collect = '\u5f00\u59cb\u91c7\u96c6'
-        data_acquisition = '\u6570\u636e\u91c7\u96c6'
-
-        def load_data_acquisition_html(html: str):
-            page.route(target_url, lambda route: route.fulfill(body=html, content_type='text/html; charset=utf-8'))
-            page.goto(target_url, wait_until='domcontentloaded')
-            page.unroute(target_url)
-
-        load_data_acquisition_html(f'''
-        <html>
-          <body>
-            <textarea placeholder="{source_placeholder}" style="display:block;width:640px;height:130px"></textarea>
-            <button>{other_button}</button>
-          </body>
-        </html>
-        ''')
-        ready_without_start_collect = flow._inspect_data_acquisition_ready_state(page, [data_acquisition])
-
-        load_data_acquisition_html(f'''
-        <html>
-          <body>
-            <textarea placeholder="{source_placeholder}" style="display:block;width:640px;height:130px"></textarea>
-            <button style="display:block;width:120px;height:40px">{start_collect}</button>
-            <div class="vxe-loading" style="display:block;width:240px;height:120px">LOADING</div>
-          </body>
-        </html>
-        ''')
-        loading = flow._inspect_data_acquisition_ready_state(page, [data_acquisition])
-
-        load_data_acquisition_html(f'''
-        <html>
-          <body>
-            <textarea placeholder="{source_placeholder}" style="display:block;width:640px;height:130px"></textarea>
-            <button style="display:block;width:120px;height:40px">{start_collect}</button>
-          </body>
-        </html>
-        ''')
-        collect_form_only = flow._inspect_data_acquisition_ready_state(page, [data_acquisition])
-
-        load_data_acquisition_html(f'''
-        <html>
-          <body>
-            <textarea placeholder="{source_placeholder}" style="display:block;width:640px;height:130px"></textarea>
-            <button style="display:block;width:120px;height:40px">{start_collect}</button>
-            <table><tr><td>真实待认领商品</td><td><button style="display:block;width:90px;height:32px">认领</button></td></tr></table>
-          </body>
-        </html>
-        ''')
-        ready = flow._inspect_data_acquisition_ready_state(page, [data_acquisition])
-        browser.close()
-
-    assert ready_without_start_collect['ready'] is False
-    assert ready_without_start_collect['start_collect_rect'] is None
-    assert ready_without_start_collect['has_collect_form'] is True
-    assert loading['ready'] is False
-    assert loading['loading'] is True
-    assert collect_form_only['ready'] is False
-    assert collect_form_only['start_collect_rect'] is None
-    assert collect_form_only['has_collect_form'] is True
-    assert ready['ready'] is True
-    assert ready['ready_term'] == 'existing_claim_action_ready'
-    assert ready['claim_count'] == 1
-    assert ready['start_collect_rect'] is None
-
-
-def test_data_acquisition_ready_ignores_non_blocking_lazy_loading_class(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        page.route(
-            'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition',
-            lambda route: route.fulfill(
-                body='''
-                <html>
-                  <body>
-                    <table>
-                      <tr class="vxe-body--row">
-                        <td><div class="image-loading" style="display:block;width:70px;height:70px">图片加载</div></td>
-                        <td>真实待认领商品</td>
-                        <td><button style="display:block;width:90px;height:32px">认领</button></td>
-                      </tr>
-                    </table>
-                  </body>
-                </html>
-                ''',
-                content_type='text/html; charset=utf-8',
-            ),
-        )
-        page.goto('https://www.dianxiaomi.com/web/productCrawl/dataAcquisition', wait_until='domcontentloaded')
-
-        state = flow._inspect_data_acquisition_ready_state(page, ['数据采集'])
-        browser.close()
-
-    assert state['ready'] is True
-    assert state['ready_term'] == 'existing_claim_action_ready'
-    assert state['claim_count'] == 1
-    assert state['loading'] is False
-    assert state['loading_count'] == 0
-
-
-def test_data_acquisition_ready_probe_uses_bounded_runtime_not_unbounded_evaluate(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-        def locator(self, *_args, **_kwargs):
-            raise AssertionError('visible data acquisition ready probe must not use Playwright locators')
-
-        def evaluate(self, *_args, **_kwargs):
-            raise AssertionError('data acquisition ready probe must not use unbounded page.evaluate')
-
-    page = FakePage()
-    calls = []
-
-    def fake_bounded_runtime(target_page, function_source, *, timeout):
-        calls.append({
-            'page': target_page,
-            'function_source': function_source,
-            'timeout': timeout,
-        })
-        return {
-            'ready': True,
-            'ready_term': 'existing_claim_action_ready',
-            'loading': False,
-            'rows': 1,
-            'inputs': 1,
-            'claim_count': 1,
-            'first_input_rect': None,
-            'start_collect_rect': None,
-            'text_excerpt': '数据采集 认领',
-            'url': page.url,
-            'title': '店小秘--数据采集',
-            'loading_text': '',
-        }
-
-    monkeypatch.setattr(flow, '_evaluate_zero_arg_page_function_with_runtime_timeout', fake_bounded_runtime)
-
-    result = flow._inspect_data_acquisition_ready_state(page, ['数据采集'])
-
-    assert result['ready'] is True
-    assert len(calls) == 1
-    assert calls[0]['page'] is page
-    assert calls[0]['timeout'] <= 3000
-    assert '数据采集' in calls[0]['function_source']
-
-
-def test_data_acquisition_ready_probe_prefers_locator_boxes_over_runtime(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    monkeypatch.setattr(flow, '_is_headless', lambda: True)
-    monkeypatch.setattr(flow, '_count_exact_data_acquisition_claim_actions', lambda _page: 1)
-
-    class FakeLocator:
-        def __init__(self, rect):
-            self.rect = rect
-
-        @property
-        def first(self):
-            return self
-
-        def bounding_box(self, timeout=0):
-            return self.rect
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-        def locator(self, selector):
-            if 'placeholder' in selector:
-                return FakeLocator({'x': 10, 'y': 20, 'width': 300, 'height': 80})
-            if '开始采集' in selector:
-                return FakeLocator({'x': 500, 'y': 600, 'width': 120, 'height': 40})
-            return FakeLocator(None)
-
-        def title(self):
-            return '店小秘--数据采集'
-
-    monkeypatch.setattr(
-        flow,
-        '_evaluate_zero_arg_page_function_with_runtime_timeout',
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('runtime probe should not run')),
-    )
-
-    result = flow._inspect_data_acquisition_ready_state(FakePage(), ['数据采集'])
-
-    assert result['ready'] is True
-    assert result['ready_term'] == 'existing_claim_action_ready'
-    assert result['claim_count'] == 1
-    assert result['first_input_rect'] is None
-    assert result['start_collect_rect'] is None
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def test_visible_workflow_browser_uses_clean_context_by_default(monkeypatch, tmp_path):
@@ -7544,430 +4918,27 @@ def test_visible_workflow_browser_uses_clean_context_by_default(monkeypatch, tmp
     assert '--hide-crash-restore-bubble' in calls['launch_kwargs']['args']
 
 
-def test_data_acquisition_claim_failure_recovery_does_not_read_page_title(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    class LoadingPage:
-        @property
-        def url(self):
-            return 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-        def title(self):
-            return '不应该读取标题'
-
-    flow._page = LoadingPage()
-    monkeypatch.setattr(
-        flow,
-        '_perform_data_acquisition_claim',
-        lambda **kwargs: (_ for _ in ()).throw(RuntimeError('未找到可填写来源链接的搜索框')),
-    )
-
-    state = flow.claim_from_data_acquisition(
-        'AI-OPS-1',
-        target_source_urls=['https://www.aliexpress.com/item/1005011837878679.html'],
-    )
-
-    assert state['stage'] == 'data_acquisition_claim_failed'
-    assert state['page_url'] == 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-    assert state['page_title'] == '店小秘官网登录页'
 
 
-def test_draft_box_claim_verification_carries_data_acquisition_target(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    flow._write_state({
-        'stage': 'data_acquisition_claim',
-        'claimed_product': {
-            'title': '真实待认领商品',
-            'category_name': '立牌类谷子',
-            'source_url': 'https://detail.1688.com/offer/1013604102950.html',
-        },
-        'claim_target': {
-            'matchedBy': 'source_url',
-            'rowText': '真实待认领商品行 来源 1013604102950 认领',
-            'sourceUrls': ['https://detail.1688.com/offer/1013604102950.html'],
-        },
-        'search_result': {'query_source': 'product_query', 'clicked_search': True},
-    })
-    monkeypatch.setattr(flow, '_verify_draft_box_claim', lambda **kwargs: {
-        'page_title': '速卖通采集箱',
-        'page_url': 'https://www.dianxiaomi.com/web/smt/smtProductList/draft',
-        'screenshot_url': '/artifacts/screenshots/verify.png',
-        'target_source_urls': ['https://detail.1688.com/offer/1013604102950.html'],
-        'draft_box_match': {
-            'matched_by': 'source_url',
-            'matched_value': 'https://detail.1688.com/offer/1013604102950.html',
-            'row_text': '采集箱商品行 真实待认领商品 AI-OPS-1',
-            'source_urls': ['https://detail.1688.com/offer/1013604102950.html'],
-            'store_name': 'Dang Kang',
-        },
-        'claimed_product': {
-            'title': '真实待认领商品',
-            'category_name': '立牌类谷子',
-            'source_url': 'https://detail.1688.com/offer/1013604102950.html',
-            'row_text': '采集箱商品行 真实待认领商品 AI-OPS-1',
-        },
-    })
-
-    state = flow.verify_draft_box_claim('AI-OPS-1')
-
-    assert state['stage'] == 'draft_box_claim_verified'
-    assert state['claim_target']['matchedBy'] == 'source_url'
-    assert '真实待认领商品行' in state['claim_target']['rowText']
-    assert '采集箱商品行' in state['claimed_product']['row_text']
-    assert state['draft_box_match'] == {
-        'matched_by': 'source_url',
-        'matched_value': 'https://detail.1688.com/offer/1013604102950.html',
-        'row_text': '采集箱商品行 真实待认领商品 AI-OPS-1',
-        'source_urls': ['https://detail.1688.com/offer/1013604102950.html'],
-        'store_name': 'Dang Kang',
-    }
-    assert set(state['verification_result']) >= {
-        'claimed_product',
-        'draft_box_match',
-        'claim_target',
-        'search_result',
-    }
-    assert state['verification_result']['claim_target'] == state['claim_target']
-    assert state['verification_result']['search_result'] == {
-        'query_source': 'product_query',
-        'clicked_search': True,
-    }
 
 
-def test_verify_draft_box_claim_from_visible_data_acquisition_uses_commit_navigation(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    flow.set_execution_evidence_context({'task_id': 1, 'job_id': 1, 'state': 'VERIFY_DRAFT_BOX_CLAIM', 'command_id': 'commit-nav'})
-    monkeypatch.setattr(flow, '_capture_scoped_evidence_screenshot', lambda *_args, **_kwargs: {
-        'path': str((tmp_path / 'commit-nav-proof.png').resolve()), 'sha256': 'A' * 64, 'size': 1,
-    })
-    monkeypatch.setattr(flow, '_artifact_url', lambda _path: '/artifacts/commit-nav-proof.png')
-    monkeypatch.delenv('DXM_LOGIN_HEADLESS', raising=False)
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    calls = []
-    flow._write_state({
-        'stage': 'data_acquisition_claim',
-        'claim_dialog': {'store_selection': {'observed_store_name': 'Dang Kang', 'selected': True, 'selected_store_names': ['Dang Kang'], 'selection_evidence': {'input_checked': True}}},
-        'claimed_product': {
-            'title': '真实待认领商品',
-            'category_name': '立牌类谷子',
-            'source_url': 'https://www.aliexpress.com/item/1005011837878679.html',
-        },
-    })
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-        def add_init_script(self, _script):
-            return None
-
-        def on(self, _event, _callback):
-            return None
-
-        def goto(self, url, *, wait_until, timeout):
-            calls.append(('goto', url, wait_until, timeout))
-            self.url = url
-
-        def wait_for_timeout(self, _timeout):
-            return None
-
-        def screenshot(self, **_kwargs):
-            return None
-
-        def title(self):
-            return '店小秘--采集箱'
-
-        def evaluate(self, _script, _arg=None):
-            return {
-                'readyState': 'complete',
-                'loading': False,
-                'loadingCount': 0,
-                'blockingModal': None,
-                'businessMarker': '标题/产品ID',
-                'businessMarkerCount': 1,
-                'bodyExcerpt': '商品箱 店铺账号 搜索内容 标题/产品ID 编辑',
-            }
-
-    page = FakePage()
-    monkeypatch.setattr(flow, '_ensure_page_with_cookies', lambda: page)
-    monkeypatch.setattr(flow, '_dismiss_data_acquisition_notice_with_native_click', lambda _page: calls.append(('notice',)) or True)
-    monkeypatch.setattr(flow, '_click_data_acquisition_visible_dismiss_points', lambda _page, _trace: calls.append(('native_points',)) or 0)
-    monkeypatch.setattr(flow, '_press_native_escape_for_visible_dxm', lambda _page: calls.append(('escape',)) or True)
-    monkeypatch.setattr(flow, '_navigate_visible_dxm_with_native_address_bar', lambda _page, _url: calls.append(('native_nav_failed', _url)) and False)
-    monkeypatch.setattr(flow, '_wait_for_page_ready', lambda *_args, **_kwargs: {'ready': True, 'title': '店小秘--采集箱'})
-    monkeypatch.setattr(flow, '_dismiss_blocking_modals', lambda _page: 0)
-    monkeypatch.setattr(flow, '_search_draft_box', lambda *_args, **_kwargs: calls.append(('search',)))
-    monkeypatch.setattr(flow, '_find_draft_box_row', lambda *_args, **_kwargs: {
-        'rowText': '采集箱商品行 真实待认领商品 Dang Kang',
-        'sourceUrls': ['https://www.aliexpress.com/item/1005011837878679.html'],
-        'storeEvidence': {'store_name': 'Dang Kang', 'cell_text': '「Dang Kang」', 'source': 'structured_store_cell'},
-        'matchedBy': 'source_url',
-    })
-
-    result = flow._verify_draft_box_claim(
-        claim_mark='AI-OPS',
-        product_query='真实待认领商品',
-        category_name='立牌类谷子',
-        store_name='Dang Kang',
-        target_source_urls=['https://www.aliexpress.com/item/1005011837878679.html'],
-    )
-
-    assert ('notice',) in calls
-    assert ('native_points',) in calls
-    assert ('escape',) in calls
-    goto_call = next(call for call in calls if call[0] == 'goto')
-    assert goto_call[2] == 'commit'
-    assert goto_call[3] == 15000
-    assert result['claimed_product']['row_text'] == '采集箱商品行 真实待认领商品 Dang Kang'
-    assert result['draft_box_match'] == {
-        'matched_by': 'source_url',
-        'matched_value': 'https://www.aliexpress.com/item/1005011837878679.html',
-        'raw_matched_by': 'source_url',
-        'row_text': '采集箱商品行 真实待认领商品 Dang Kang',
-        'source_urls': ['https://www.aliexpress.com/item/1005011837878679.html'],
-        'store_name': 'Dang Kang',
-        'store_evidence': {'store_name': 'Dang Kang', 'cell_text': '「Dang Kang」', 'source': 'structured_store_cell'},
-        'store_observation': {
-            'observed_store_name': 'Dang Kang',
-            'selected': True,
-            'selected_store_names': ['Dang Kang'],
-            'selection_evidence': {'input_checked': True},
-            'draft_box_cell_evidence': {'store_name': 'Dang Kang', 'cell_text': '「Dang Kang」', 'source': 'structured_store_cell'},
-        },
-    }
 
 
-def test_semantic_draft_box_match_rejects_claim_mark_only_row_without_authorized_hint(tmp_path):
-    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
-
-    with pytest.raises(RuntimeError, match='真实'):
-        flow._semantic_draft_box_match(
-            {
-                'rowText': 'AI-OPS 认领成功 Dang Kang',
-                'sourceUrls': ['https://detail.1688.com/offer/1013604102950.html'],
-                'matchedBy': 'claim_mark',
-            },
-            match_input_kind='keyword',
-            match_input_value='真实待认领商品',
-            target_source_urls=[],
-            store_name='Dang Kang',
-        )
 
 
-def test_semantic_draft_box_match_rejects_url_substring_instead_of_exact_canonical_match(tmp_path):
-    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
-
-    with pytest.raises(RuntimeError, match='来源'):
-        flow._semantic_draft_box_match(
-            {
-                'rowText': '真实待认领商品 Dang Kang',
-                'sourceUrls': ['https://detail.1688.com/offer/1013604102950.html-copy'],
-                'matchedBy': 'source_url',
-            },
-            match_input_kind='keyword',
-            match_input_value='真实待认领商品',
-            target_source_urls=['https://detail.1688.com/offer/1013604102950.html'],
-            store_name='Dang Kang',
-        )
 
 
-def test_semantic_draft_box_match_rejects_store_name_only_in_unstructured_row_text(tmp_path):
-    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
-
-    with pytest.raises(RuntimeError, match='结构化店铺单元格'):
-        flow._semantic_draft_box_match(
-            {
-                'rowText': '真实待认领商品 Dang Kang',
-                'sourceUrls': ['https://detail.1688.com/offer/1013604102950.html'],
-                'matchedBy': 'source_url',
-            },
-            match_input_kind='keyword',
-            match_input_value='真实待认领商品',
-            target_source_urls=['https://detail.1688.com/offer/1013604102950.html'],
-            store_name='Dang Kang',
-            store_selection={
-                'observed_store_name': 'Dang Kang',
-                'selected': True,
-                'selected_store_names': ['Dang Kang'],
-                'selection_evidence': {'input_checked': True},
-            },
-        )
 
 
-def test_verify_draft_box_claim_continues_when_visible_commit_goto_times_out_after_url_changes(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    flow.set_execution_evidence_context({'task_id': 2, 'job_id': 2, 'state': 'VERIFY_DRAFT_BOX_CLAIM', 'command_id': 'timeout-nav'})
-    monkeypatch.setattr(flow, '_capture_scoped_evidence_screenshot', lambda *_args, **_kwargs: {
-        'path': str((tmp_path / 'timeout-nav-proof.png').resolve()), 'sha256': 'B' * 64, 'size': 1,
-    })
-    monkeypatch.setattr(flow, '_artifact_url', lambda _path: '/artifacts/timeout-nav-proof.png')
-    monkeypatch.delenv('DXM_LOGIN_HEADLESS', raising=False)
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    calls = []
-    draft_url = WORKFLOW_TARGETS['draft_box']['url']
-    flow._write_state({
-        'stage': 'data_acquisition_claim',
-        'claim_dialog': {'store_selection': {'observed_store_name': 'Dang Kang', 'selected': True, 'selected_store_names': ['Dang Kang'], 'selection_evidence': {'input_checked': True}}},
-        'claimed_product': {
-            'title': '真实待认领商品',
-            'category_name': '立牌类谷子',
-            'source_url': 'https://detail.1688.com/offer/1013604102950.html',
-        },
-    })
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-        def add_init_script(self, _script):
-            return None
-
-        def on(self, _event, _callback):
-            return None
-
-        def goto(self, url, *, wait_until, timeout):
-            calls.append(('goto', url, wait_until, timeout))
-            self.url = url
-            raise TimeoutError('Page.goto: Timeout 15000ms exceeded')
-
-        def wait_for_timeout(self, timeout):
-            calls.append(('wait', timeout))
-
-        def screenshot(self, **_kwargs):
-            return None
-
-        def title(self):
-            return '店小秘--采集箱'
-
-        def evaluate(self, _script, _arg=None):
-            return {
-                'readyState': 'complete',
-                'loading': False,
-                'loadingCount': 0,
-                'blockingModal': None,
-                'businessMarker': '标题/产品ID',
-                'businessMarkerCount': 1,
-                'bodyExcerpt': '商品箱 店铺账号 搜索内容 标题/产品ID 编辑',
-            }
-
-    page = FakePage()
-    monkeypatch.setattr(flow, '_ensure_page_with_cookies', lambda: page)
-    monkeypatch.setattr(flow, '_dismiss_data_acquisition_notice_with_native_click', lambda _page: calls.append(('notice',)) or True)
-    monkeypatch.setattr(flow, '_click_data_acquisition_visible_dismiss_points', lambda _page, _trace: calls.append(('native_points',)) or 0)
-    monkeypatch.setattr(flow, '_press_native_escape_for_visible_dxm', lambda _page: calls.append(('escape',)) or True)
-    monkeypatch.setattr(flow, '_navigate_visible_dxm_with_native_address_bar', lambda _page, _url: calls.append(('native_nav_failed', _url)) and False)
-    monkeypatch.setattr(flow, '_dismiss_blocking_modals_if_visible', lambda *_args, **_kwargs: 0)
-    monkeypatch.setattr(flow, '_search_draft_box', lambda *_args, **_kwargs: calls.append(('search',)))
-    monkeypatch.setattr(flow, '_find_draft_box_row', lambda *_args, **_kwargs: {
-        'rowText': '采集箱商品行 真实待认领商品 AI-OPS Dang Kang',
-        'sourceUrls': ['https://detail.1688.com/offer/1013604102950.html'],
-        'storeEvidence': {'store_name': 'Dang Kang', 'cell_text': 'Dang Kang', 'source': 'structured_store_cell'},
-        'matchedBy': 'source_url',
-    })
-
-    result = flow._verify_draft_box_claim(
-        claim_mark='AI-OPS',
-        product_query='真实待认领商品',
-        category_name='立牌类谷子',
-        store_name='Dang Kang',
-        target_source_urls=['https://detail.1688.com/offer/1013604102950.html'],
-    )
-
-    assert ('goto', draft_url, 'commit', 15000) in calls
-    assert ('wait', 3000) in calls
-    assert result['claimed_product']['row_text'] == '采集箱商品行 真实待认领商品 AI-OPS Dang Kang'
 
 
-def test_verify_draft_box_claim_from_visible_data_acquisition_prefers_native_address_navigation(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    flow.set_execution_evidence_context({'task_id': 3, 'job_id': 3, 'state': 'VERIFY_DRAFT_BOX_CLAIM', 'command_id': 'native-nav'})
-    monkeypatch.setattr(flow, '_capture_scoped_evidence_screenshot', lambda *_args, **_kwargs: {
-        'path': str((tmp_path / 'native-nav-proof.png').resolve()), 'sha256': 'C' * 64, 'size': 1,
-    })
-    monkeypatch.setattr(flow, '_artifact_url', lambda _path: '/artifacts/native-nav-proof.png')
-    monkeypatch.delenv('DXM_LOGIN_HEADLESS', raising=False)
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    calls = []
-    flow._write_state({
-        'stage': 'data_acquisition_claim',
-        'claim_dialog': {'store_selection': {'observed_store_name': 'Dang Kang', 'selected': True, 'selected_store_names': ['Dang Kang'], 'selection_evidence': {'input_checked': True}}},
-        'claimed_product': {
-            'title': '真实待认领商品',
-            'category_name': '立牌类谷子',
-        },
-    })
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-        def add_init_script(self, _script):
-            return None
-
-        def on(self, _event, _callback):
-            return None
-
-        def goto(self, *_args, **_kwargs):
-            raise AssertionError('native address navigation should avoid page.goto in visible DXM mode')
-
-        def wait_for_timeout(self, _timeout):
-            return None
-
-        def screenshot(self, **_kwargs):
-            return None
-
-        def title(self):
-            return '店小秘--采集箱'
-
-        def evaluate(self, _script, _arg=None):
-            return {
-                'readyState': 'complete',
-                'loading': False,
-                'loadingCount': 0,
-                'blockingModal': None,
-                'businessMarker': '标题/产品ID',
-                'businessMarkerCount': 1,
-                'bodyExcerpt': '商品箱 店铺账号 搜索内容 标题/产品ID 编辑',
-            }
-
-    page = FakePage()
-    monkeypatch.setattr(flow, '_ensure_page_with_cookies', lambda: page)
-    monkeypatch.setattr(flow, '_dismiss_data_acquisition_notice_with_native_click', lambda _page: calls.append(('notice',)) or True)
-    monkeypatch.setattr(flow, '_click_data_acquisition_visible_dismiss_points', lambda _page, _trace: calls.append(('native_points',)) or 0)
-    monkeypatch.setattr(flow, '_press_native_escape_for_visible_dxm', lambda _page: calls.append(('escape',)) or True)
-    def navigate_with_native_address_bar(target_page, target_url):
-        calls.append(('native_nav', target_url))
-        target_page.url = target_url
-        return True
-
-    monkeypatch.setattr(flow, '_navigate_visible_dxm_with_native_address_bar', navigate_with_native_address_bar)
-    monkeypatch.setattr(flow, '_wait_for_page_ready', lambda *_args, **_kwargs: {'ready': True, 'title': '店小秘--采集箱'})
-    monkeypatch.setattr(flow, '_dismiss_blocking_modals', lambda _page: 0)
-    monkeypatch.setattr(flow, '_search_draft_box', lambda *_args, **_kwargs: calls.append(('search',)))
-    monkeypatch.setattr(flow, '_find_draft_box_row', lambda *_args, **_kwargs: {
-        'rowText': '采集箱商品行 真实待认领商品 Dang Kang',
-        'sourceUrls': ['https://detail.1688.com/offer/1013604102950.html'],
-        'storeEvidence': {'store_name': 'Dang Kang', 'cell_text': 'Dang Kang', 'source': 'structured_store_cell'},
-    })
-
-    result = flow._verify_draft_box_claim(
-        claim_mark='AI-OPS',
-        product_query='真实待认领商品',
-        category_name='立牌类谷子',
-        store_name='Dang Kang',
-    )
-
-    assert any(call[0] == 'native_nav' for call in calls)
-    assert result['claimed_product']['row_text'] == '采集箱商品行 真实待认领商品 Dang Kang'
 
 
 def test_browser_readiness_gate_rejects_wrong_route_even_when_draft_box_markers_match(tmp_path):
     flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
 
     class WrongRoutePage:
-        url = WORKFLOW_TARGETS['data_acquisition']['url']
+        url = WORKFLOW_TARGETS['product']['url']
 
         def title(self):
             return '店小秘--商品箱'
@@ -7993,7 +4964,7 @@ def test_browser_readiness_gate_rejects_wrong_route_even_when_draft_box_markers_
     assert result['ok'] is False
     assert result['reason'] == 'wrong_route'
     assert result['expected_identity'] == 'draft_box'
-    assert result['page_url'] == WORKFLOW_TARGETS['data_acquisition']['url']
+    assert result['page_url'] == WORKFLOW_TARGETS['product']['url']
 
 
 def test_browser_readiness_gate_rejects_title_and_body_without_business_dom_marker(tmp_path):
@@ -8092,143 +5063,10 @@ def test_browser_readiness_gate_blocks_loading_draft_box_page(tmp_path):
     assert result['loading'] is True
 
 
-def test_verify_draft_box_claim_stops_when_readiness_gate_reports_loading(monkeypatch, tmp_path):
-    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
-    monkeypatch.delenv('DXM_LOGIN_HEADLESS', raising=False)
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    flow._write_state({'stage': 'data_acquisition_claim', 'claimed_product': {'title': '真实待认领商品'}})
-    calls = []
-
-    class LoadingDraftBoxPage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-        def add_init_script(self, _script):
-            return None
-
-        def on(self, _event, _callback):
-            return None
-
-        def wait_for_timeout(self, timeout):
-            calls.append(('wait', timeout))
-
-        def screenshot(self, **_kwargs):
-            return None
-
-        def title(self):
-            return '店小秘--商品箱'
-
-        def evaluate(self, _script, _arg=None):
-            return {
-                'readyState': 'interactive',
-                'loading': True,
-                'loadingCount': 1,
-                'blockingModal': None,
-                'bodyExcerpt': '商品箱 加载中',
-            }
-
-    page = LoadingDraftBoxPage()
-    monkeypatch.setattr(flow, '_ensure_page_with_cookies', lambda: page)
-    monkeypatch.setattr(flow, '_dismiss_data_acquisition_notice_with_native_click', lambda _page: True)
-    monkeypatch.setattr(flow, '_click_data_acquisition_visible_dismiss_points', lambda _page, _trace: 0)
-    monkeypatch.setattr(flow, '_press_native_escape_for_visible_dxm', lambda _page: True)
-    monkeypatch.setattr(flow, '_navigate_visible_dxm_with_native_address_bar', lambda _page, _url: setattr(page, 'url', _url) or True)
-    monkeypatch.setattr(flow, '_search_draft_box', lambda *_args, **_kwargs: calls.append(('search',)))
-    monkeypatch.setattr(flow, '_find_draft_box_row', lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('should not search rows while page is loading')))
-
-    result = flow._verify_draft_box_claim('AI-OPS', product_query='真实待认领商品')
-
-    assert result['ok'] is False
-    assert result['stage'] == 'draft_box_claim_page_not_ready'
-    assert result['reason'] == 'page_loading'
-    assert ('search',) not in calls
 
 
-def test_verify_draft_box_claim_stops_when_draft_url_shows_login_page(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    monkeypatch.delenv('DXM_LOGIN_HEADLESS', raising=False)
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    calls = []
-    draft_url = WORKFLOW_TARGETS['draft_box']['url']
-    flow._write_state({
-        'stage': 'data_acquisition_claim',
-        'claimed_product': {
-            'title': '真实待认领商品',
-            'category_name': '立牌类谷子',
-            'source_url': 'https://detail.1688.com/offer/1013604102950.html',
-        },
-    })
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-        def add_init_script(self, _script):
-            return None
-
-        def on(self, _event, _callback):
-            return None
-
-        def goto(self, url, *, wait_until, timeout):
-            calls.append(('goto', url, wait_until, timeout))
-            self.url = url
-            raise TimeoutError('Page.goto: Timeout 15000ms exceeded')
-
-        def wait_for_timeout(self, timeout):
-            calls.append(('wait', timeout))
-
-        def screenshot(self, **_kwargs):
-            return None
-
-        def title(self):
-            return '店小秘官网登录页'
-
-    page = FakePage()
-    monkeypatch.setattr(flow, '_ensure_page_with_cookies', lambda: page)
-    monkeypatch.setattr(flow, '_dismiss_data_acquisition_notice_with_native_click', lambda _page: calls.append(('notice',)) or True)
-    monkeypatch.setattr(flow, '_click_data_acquisition_visible_dismiss_points', lambda _page, _trace: calls.append(('native_points',)) or 0)
-    monkeypatch.setattr(flow, '_press_native_escape_for_visible_dxm', lambda _page: calls.append(('escape',)) or True)
-    monkeypatch.setattr(flow, '_navigate_visible_dxm_with_native_address_bar', lambda _page, _url: calls.append(('native_nav_failed', _url)) and False)
-    monkeypatch.setattr(flow, '_dismiss_blocking_modals_if_visible', lambda *_args, **_kwargs: 0)
-    monkeypatch.setattr(flow, '_search_draft_box', lambda *_args, **_kwargs: calls.append(('search',)))
-    monkeypatch.setattr(flow, '_find_draft_box_row', lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('should not search draft rows on login page')))
-
-    result = flow._verify_draft_box_claim(
-        claim_mark='AI-OPS',
-        product_query='真实待认领商品',
-        category_name='立牌类谷子',
-        store_name='Dang Kang',
-        target_source_urls=['https://detail.1688.com/offer/1013604102950.html'],
-    )
-
-    assert ('goto', draft_url, 'commit', 15000) in calls
-    assert ('search',) not in calls
-    assert result['ok'] is False
-    assert result['stage'] == 'draft_box_claim_login_required'
-    assert result['requires_user_action'] is True
-    assert '登录' in result['message']
 
 
-def test_verify_draft_box_claim_public_api_preserves_login_required_state(monkeypatch, tmp_path):
-    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
-    monkeypatch.setattr(flow, '_verify_draft_box_claim', lambda **_kwargs: {
-        'ok': False,
-        'stage': 'draft_box_claim_login_required',
-        'label': '需要重新登录店小秘',
-        'message': '商品箱页面打开后显示登录页，当前真实浏览器登录态已失效或被店小秘重定向。',
-        'next_action': '请在真实浏览器中重新登录店小秘，然后重新执行待认领入箱确认。',
-        'requires_user_action': True,
-        'page_title': '店小秘官网登录页',
-        'page_url': WORKFLOW_TARGETS['draft_box']['url'],
-        'browser_visible': True,
-    })
-
-    state = flow.verify_draft_box_claim('AI-OPS')
-
-    assert state['stage'] == 'draft_box_claim_login_required'
-    assert state['requires_user_action'] is True
-    assert state['page_title'] == '店小秘官网登录页'
-    assert state['page_url'] == WORKFLOW_TARGETS['draft_box']['url']
-    assert state['label'] == '需要重新登录店小秘'
 
 
 def test_window_restore_verification_rejects_still_offscreen_window(tmp_path):
@@ -8254,105 +5092,12 @@ def test_native_click_screen_point_requires_virtual_screen_bounds(tmp_path):
     assert flow._screen_point_inside_virtual_screen({'x': 100, 'y': 1200}, virtual_screen) is False
 
 
-def test_find_data_acquisition_claim_target_rejects_title_match_when_target_source_url_misses(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    html = '''
-    <html>
-      <head>
-        <style>
-          button, a { display: inline-block; width: 96px; height: 24px; }
-        </style>
-      </head>
-      <body>
-        <table>
-          <tbody>
-            <tr class="vxe-body--row">
-              <td>Visible Matched Title</td>
-              <td><a href="https://detail.1688.com/offer/111.html">来源</a></td>
-              <td><button>认领</button></td>
-            </tr>
-          </tbody>
-        </table>
-      </body>
-    </html>
-    '''
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1280, 'height': 800})
-        page.set_content(html)
-        row = flow._find_data_acquisition_claim_target(
-            page,
-            product_query='Visible Matched Title',
-            target_source_urls=['https://detail.1688.com/offer/999.html'],
-        )
-        browser.close()
-
-    assert row['ok'] is False
-    assert '未找到' in row['reason']
 
 
-def test_add_note_verifies_only_target_row(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    page = DummyNoteVerifyScriptPage()
-    clicks = []
-
-    monkeypatch.setattr(flow, '_click_rect_center', lambda target_page, rect: clicks.append(rect))
-
-    result = flow._add_note_to_draft_row(
-        page,
-        {'rowIndex': 2, 'actions': [{'txt': '更多', 'tag': 'A', 'cls': 'ant-dropdown-trigger', 'rect': {'x': 5, 'y': 6, 'w': 7, 'h': 8}}]},
-        'AI认领-12-34',
-    )
-
-    assert result['verified'] is False
-    assert 'rowTexts.find' not in page.verify_script
-    assert clicks[0] == {'x': 5, 'y': 6, 'w': 7, 'h': 8}
 
 
-def test_add_note_accepts_modify_remark_menu_label(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    page = DummyNoteVerifyScriptPage(menu_label='修改备注')
-    clicks = []
-
-    monkeypatch.setattr(flow, '_click_rect_center', lambda target_page, rect: clicks.append(rect))
-
-    flow._add_note_to_draft_row(
-        page,
-        {'rowIndex': 2, 'actions': [{'txt': '更多', 'tag': 'A', 'cls': 'ant-dropdown-trigger', 'rect': {'x': 5, 'y': 6, 'w': 7, 'h': 8}}]},
-        'AI认领-12-34',
-    )
-
-    assert clicks[1] == {'x': 1, 'y': 2, 'w': 3, 'h': 4}
 
 
-def test_add_note_falls_back_to_store_search_when_current_filter_is_empty(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    page = DummyNoteVerifyScriptPage()
-    searches = []
-
-    def fake_search(target_page, product_query=None, store_name=None):
-        searches.append((product_query, store_name))
-        target_page.note_visible_after_search = True
-
-    monkeypatch.setattr(flow, '_click_rect_center', lambda target_page, rect: None)
-    monkeypatch.setattr(flow, '_search_draft_box', fake_search)
-
-    result = flow._add_note_to_draft_row(
-        page,
-        {'rowIndex': 2, 'actions': [{'txt': '更多', 'tag': 'A', 'cls': 'ant-dropdown-trigger', 'rect': {'x': 5, 'y': 6, 'w': 7, 'h': 8}}]},
-        'AI认领-47-514',
-        product_query='1688 Anime Peripherals Ron Weasley Figurine Acrylic Keychain',
-        store_name='Dang Kang',
-    )
-
-    assert result['verified'] is True
-    assert result['verifiedBy'] == 'claim_mark_store_search'
-    assert searches == [(None, 'Dang Kang')]
 
 
 def test_search_draft_box_visible_mode_uses_editable_search_input(monkeypatch, tmp_path):
@@ -8446,189 +5191,14 @@ def test_search_draft_box_visible_mode_does_not_submit_empty_query_for_store_onl
     assert submit_calls == []
 
 
-def test_open_editor_from_draft_box_clicks_target_row_edit(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    flow._context = object()
-    page = DummyDraftPage({'ok': True})
-    clicked = []
-
-    def fake_click(target_page, rect):
-        clicked.append(rect)
-        target_page.url = 'https://www.dianxiaomi.com/web/smt/edit?id=123'
-
-    monkeypatch.setattr(flow, '_click_rect_center', fake_click)
-
-    result = flow._open_editor_from_draft_box(
-        page,
-        row_info={'actions': [{'txt': '编辑', 'rect': {'x': 10, 'y': 20, 'w': 30, 'h': 40}}]},
-    )
-
-    assert result is page
-    assert clicked == [{'x': 10, 'y': 20, 'w': 30, 'h': 40}]
 
 
-def test_open_editor_from_draft_box_finds_editor_page_when_popup_is_home(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    page = DummyDraftPage({'ok': True})
-    popup_home = DummyDraftPage({'ok': True})
-    popup_home.url = 'https://www.dianxiaomi.com/'
-    popup_home.wait_for_load_state = lambda *args, **kwargs: None
-    editor_page = DummyDraftPage({'ok': True})
-    editor_page.url = 'https://www.dianxiaomi.com/web/smt/edit?id=123'
-
-    class NewPageInfo:
-        value = popup_home
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    class Context:
-        def __init__(self):
-            self.pages = [page]
-
-        def expect_page(self, timeout=0):
-            return NewPageInfo()
-
-    context = Context()
-    flow._context = context
-
-    def fake_click(target_page, rect):
-        context.pages.extend([popup_home, editor_page])
-
-    monkeypatch.setattr(flow, '_click_rect_center', fake_click)
-
-    result = flow._open_editor_from_draft_box(
-        page,
-        row_info={'actions': [{'txt': '编辑', 'tag': 'A', 'rect': {'x': 10, 'y': 20, 'w': 30, 'h': 40}}]},
-    )
-
-    assert result is editor_page
 
 
-def test_open_editor_from_draft_box_prefers_dom_edit_event(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    page = DummyDraftPage({'ok': True})
-    editor_page = DummyDraftPage({'ok': True})
-    editor_page.url = 'https://www.dianxiaomi.com/web/smt/edit?id=123'
-
-    class Context:
-        def __init__(self):
-            self.pages = [page]
-
-    context = Context()
-    flow._context = context
-    clicked = []
-
-    def fake_dispatch(target_page, row_info):
-        context.pages.append(editor_page)
-        return {'ok': True, 'strategy': 'dom_mouse_event'}
-
-    monkeypatch.setattr(flow, '_dispatch_draft_row_edit_event', fake_dispatch)
-    monkeypatch.setattr(flow, '_click_rect_center', lambda target_page, rect: clicked.append(rect))
-
-    result = flow._open_editor_from_draft_box(
-        page,
-        row_info={'rowIndex': 3, 'rowText': '目标商品 编辑', 'actions': [{'txt': '编辑', 'tag': 'A', 'rect': {'x': 10, 'y': 20, 'w': 30, 'h': 40}}]},
-    )
-
-    assert result is editor_page
-    assert clicked == []
 
 
-def test_perform_draft_box_edit_updates_active_page_to_editor(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    draft_page = DummyDraftPage({'ok': True})
-    editor_page = DummyDraftPage({'ok': True})
-    editor_page.url = 'https://www.dianxiaomi.com/web/smt/edit?id=123'
-    flow._page = draft_page
-
-    monkeypatch.setattr(flow, '_is_headless', lambda: True)
-    monkeypatch.setattr(flow, '_ensure_page_with_cookies', lambda: draft_page)
-    monkeypatch.setattr(flow, '_goto_with_live_hud', lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(flow, '_wait_for_page_ready', lambda *_args, **_kwargs: {'ready': True})
-    monkeypatch.setattr(flow, '_dismiss_blocking_modals', lambda *_args, **_kwargs: 0)
-    monkeypatch.setattr(flow, '_find_draft_box_row', lambda *_args, **_kwargs: {
-        'rowText': '目标商品 「Dang Kang」 编辑',
-        'sourceUrls': ['https://mobile.yangkeduo.com/goods2.html?goods_id=893543996663'],
-    })
-    monkeypatch.setattr(flow, '_open_editor_from_draft_box', lambda *_args, **_kwargs: editor_page)
-    monkeypatch.setattr(flow, '_capture_optional_workflow_screenshot', lambda *_args, **_kwargs: {'screenshot_url': None})
-    monkeypatch.setattr(flow, '_extract_editor_page_meta', lambda _page: {'sections': [], 'top_actions': [], 'fields': []})
-
-    result = flow._perform_draft_box_action('edit', product_query='目标商品', store_name='Dang Kang')
-
-    assert result['page_url'] == editor_page.url
-    assert flow._page is editor_page
 
 
-def test_perform_draft_box_edit_reuses_matching_open_editor_before_search(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    class FakePage:
-        def __init__(self, url, title='店小秘--速卖通产品', match=None):
-            self.url = url
-            self._title = title
-            self.match = match
-            self.gotos = []
-
-        def title(self):
-            return self._title
-
-        def goto(self, url, **_kwargs):
-            self.gotos.append(url)
-            self.url = url
-
-        def evaluate(self, *_args, **_kwargs):
-            if self.match is not None:
-                return self.match
-            return {'ok': False}
-
-    draft_page = FakePage('https://www.dianxiaomi.com/web/smt/smtProductList/draft?status=0')
-    editor_page = FakePage(
-        'https://www.dianxiaomi.com/web/smt/edit?id=130658341351030322',
-        title='店小秘--编辑速卖通产品',
-        match={
-            'ok': True,
-            'matchedBy': 'source_url',
-            'sourceUrls': ['https://mobile.yangkeduo.com/goods2.html?goods_id=893543996663'],
-            'textExcerpt': '宝可梦精灵球玩具模型周边礼物3D打印球体摆件',
-        },
-    )
-
-    class Context:
-        pages = [draft_page, editor_page]
-
-    flow._context = Context()
-    flow._page = draft_page
-
-    monkeypatch.setattr(flow, '_ensure_page_with_cookies', lambda: draft_page)
-    monkeypatch.setattr(flow, '_goto_with_live_hud', lambda *_args, **_kwargs: pytest.fail('matching editor should be reused before draft search'))
-    monkeypatch.setattr(flow, '_find_draft_box_row', lambda *_args, **_kwargs: pytest.fail('matching editor should avoid draft row lookup'))
-    monkeypatch.setattr(flow, '_search_draft_box', lambda *_args, **_kwargs: pytest.fail('matching editor should avoid draft search'))
-    monkeypatch.setattr(flow, '_capture_optional_workflow_screenshot', lambda *_args, **_kwargs: {'screenshot_url': None})
-    monkeypatch.setattr(flow, '_extract_editor_page_meta', lambda _page: {'sections': [], 'top_actions': [], 'fields': []})
-    monkeypatch.setattr(flow, '_reapply_live_hud_if_available', lambda _page: None)
-
-    result = flow._perform_draft_box_action(
-        'edit',
-        product_query='宝可梦精灵球玩具模型周边礼物3D打印球体摆件神奇宝贝高颜值',
-        store_name='Dang Kang',
-        target_source_urls=['https://mobile.yangkeduo.com/goods2.html?goods_id=893543996663'],
-    )
-
-    assert result['page_url'] == editor_page.url
-    assert result['editor_reused'] is True
-    assert result['matched_by'] == 'source_url'
-    assert flow._page is editor_page
-    assert draft_page.gotos == []
 
 
 def test_editor_page_target_match_requires_exact_canonical_source_when_url_authorized(tmp_path):
@@ -8674,53 +5244,6 @@ def test_editor_page_target_match_accepts_exact_canonical_source_url(tmp_path):
     assert result['sourceUrls'] == ['https://www.aliexpress.com/item/1005011837878679.html?spm=authorized']
 
 
-def test_dispatch_draft_row_edit_event_ignores_stale_row_index_for_text_match(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    row_text = (
-        '1688 ENHYPEN Cute Cartoon Acrylic Keychain '
-        '备注:AI认领-177-2643 「Dang Kang」 移入待发布 编辑 发布 更多'
-    )
-    filler = ''.join(
-        '<div style="width:10px;height:10px"></div>'
-        for _ in range(70)
-    )
-    html = f'''
-    <html><body>
-      {filler}
-      <div class="target-row">
-        {row_text}
-        <a href="javascript:" onclick="window.__editClicked = true">编辑</a>
-      </div>
-    </body></html>
-    '''
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        try:
-            page = browser.new_page(viewport={'width': 1440, 'height': 900})
-            page.set_content(html)
-
-            result = flow._dispatch_draft_row_edit_event(
-                page,
-                {
-                    'rowIndex': 60,
-                    'rowText': row_text,
-                    'actions': [
-                        {
-                            'txt': '编辑',
-                            'tag': 'A',
-                            'href': 'javascript:',
-                            'rect': {'x': 1, 'y': 2, 'w': 3, 'h': 4},
-                        }
-                    ],
-                },
-            )
-
-            assert result['ok'] is True
-            assert page.evaluate('window.__editClicked === true') is True
-        finally:
-            browser.close()
 
 
 def test_dxm_login_flow_perform_editor_action_updates_state(monkeypatch, tmp_path):
@@ -10149,410 +6672,24 @@ def test_dismiss_blocking_modals_handles_dxm_campaign_next_step(monkeypatch, tmp
     assert flow._last_dismiss_blocking_modals_trace[0]['clicked'] in {'下一步', 'standalone:下一步'}
 
 
-def test_dismiss_data_acquisition_blocking_modals_clicks_plain_guide_skip(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    clicks = []
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1200, 'height': 800})
-        page.set_content(
-            '''
-            <div class="guide-overlay" style="position:fixed;left:20px;top:20px;width:300px;height:160px;background:#111;color:#fff;z-index:9999">
-              <div>1/5</div>
-              <div>下一步</div>
-              <div id="skip" style="position:absolute;right:16px;bottom:12px;width:56px;height:28px">跳过</div>
-            </div>
-            '''
-        )
-
-        def fake_click(target_page, rect):
-            clicks.append(rect)
-            target_page.evaluate("document.querySelector('.guide-overlay')?.remove()")
-
-        monkeypatch.setattr(flow, '_click_rect_center', fake_click)
-
-        dismissed = flow._dismiss_data_acquisition_blocking_modals(page)
-        browser.close()
-
-    assert dismissed == 1
-    assert clicks
-    assert flow._last_dismiss_blocking_modals_trace[0]['clicked'] in {'跳过', 'guide:跳过', 'standalone:跳过'}
 
 
-def test_dismiss_data_acquisition_blocking_modals_prefers_guide_skip_over_next(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    clicks = []
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1200, 'height': 800})
-        page.set_content(
-            '''
-            <div class="guide-overlay" style="position:fixed;left:0;top:0;width:100%;height:100%;z-index:2001">
-              <div class="guide-body" style="position:absolute;left:200px;top:200px;width:525px;height:138px">
-                <div class="guide-title">安装店小秘采集插件</div>
-                <div class="guide-btn flex">
-                  <button style="width:71px;height:32px">下一步</button>
-                  <button style="width:120px;height:32px">下载采集插件</button>
-                  <div id="skip" style="display:inline-block;width:56px;height:32px">跳过</div>
-                </div>
-              </div>
-            </div>
-            '''
-        )
-
-        def fake_click(target_page, rect):
-            clicks.append(rect)
-            target_page.evaluate("document.querySelector('.guide-overlay')?.remove()")
-
-        monkeypatch.setattr(flow, '_click_rect_center', fake_click)
-
-        dismissed = flow._dismiss_data_acquisition_blocking_modals(page)
-        browser.close()
-
-    assert dismissed == 1
-    assert clicks
-    assert flow._last_dismiss_blocking_modals_trace[0]['clicked'] in {'跳过', 'standalone:跳过'}
 
 
-def test_dismiss_data_acquisition_blocking_modals_clicks_notice_button_not_footer(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    clicks = []
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1440, 'height': 1024})
-        page.set_content(
-            '''
-            <div class="ant-modal-wrap bullet-layer notice-list-modal notice-list-modal--offline"
-                 style="position:fixed;inset:0;z-index:3000">
-              <div class="ant-modal" style="position:absolute;left:240px;top:67px;width:960px;height:640px;background:white">
-                <div class="ant-modal-content">
-                  <div class="notice-list-modal__body" style="height:560px">线下活动 小秘公告</div>
-                  <div class="ant-modal-footer" style="position:absolute;left:0;bottom:0;width:960px;height:64px">
-                    <div class="notice-list-modal__footer" style="width:960px;height:64px">
-                      <button id="real-close" style="position:absolute;left:878px;top:16px;width:58px;height:32px">
-                        <span>关闭</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            '''
-        )
-
-        def fake_click(target_page, rect):
-            clicks.append(rect)
-            target_page.evaluate("document.querySelector('.notice-list-modal')?.remove()")
-
-        monkeypatch.setattr(flow, '_click_rect_center', fake_click)
-
-        dismissed = flow._dismiss_data_acquisition_blocking_modals(page)
-        browser.close()
-
-    assert dismissed == 1
-    assert clicks
-    assert clicks[0]['w'] <= 70
-    assert clicks[0]['h'] <= 40
-    assert flow._last_dismiss_blocking_modals_trace[0]['clicked'] == '关闭'
 
 
-def test_complete_data_acquisition_claim_dialog_rejects_missing_requested_store_option(monkeypatch, tmp_path):
-    monkeypatch.setenv('DXM_LOGIN_HEADLESS', '1')
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    clicks = []
-
-    class FakeCdp:
-        def __init__(self):
-            self.calls = []
-
-        def send(self, method, payload):
-            self.calls.append((method, payload))
-            assert method == 'Runtime.evaluate'
-            assert payload['timeout'] <= 2500
-            assert '认领' in payload['expression']
-            return {
-                'result': {
-                    'value': {
-                        'ok': True,
-                        'submitted': False,
-                        'submit_text': '认领',
-                        'submit_rect': {'x': 100, 'y': 120, 'w': 80, 'h': 32},
-                        'clicked_options': [],
-                    }
-                }
-            }
-
-    class FakeContext:
-        def __init__(self, cdp):
-            self.cdp = cdp
-
-        def new_cdp_session(self, page):
-            return self.cdp
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-        def __init__(self):
-            self.cdp = FakeCdp()
-            self.context = FakeContext(self.cdp)
-
-        def evaluate(self, *_args, **_kwargs):
-            raise AssertionError('认领弹窗扫描不能使用无超时 page.evaluate')
-
-        def wait_for_timeout(self, *_args, **_kwargs):
-            pass
-
-    page = FakePage()
-    monkeypatch.setattr(flow, '_click_data_acquisition_claim_rect_center', lambda target_page, rect, **_kwargs: clicks.append(rect))
-
-    result = flow._complete_data_acquisition_claim_dialog(page, category_name='QA_CATEGORY', store_name='Dang Kang')
-
-    assert result['ok'] is False
-    assert result['submitted'] is False
-    assert 'Dang Kang' in result['reason']
-    assert clicks == []
-    assert page.cdp.calls
 
 
-def test_complete_data_acquisition_claim_dialog_rejects_store_click_without_selected_readback(monkeypatch, tmp_path):
-    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
-    clicks = []
-    scans = iter([
-        {
-            'ok': True,
-            'submitted': False,
-            'submit_text': '确定',
-            'submit_rect': {'x': 100, 'y': 120, 'w': 80, 'h': 32},
-            'option_rects': [{'label': 'Dang Kang', 'text': 'Dang Kang', 'rect': {'x': 30, 'y': 80, 'w': 120, 'h': 28}}],
-        },
-        {
-            'ok': True,
-            'requested_store_name': 'Dang Kang',
-            'observed_store_name': 'Dang Kang',
-            'selected': False,
-            'selection_evidence': {'input_checked': False, 'aria_checked': 'false'},
-        },
-    ])
-    monkeypatch.setattr(flow, '_evaluate_zero_arg_page_function_with_runtime_timeout', lambda *_args, **_kwargs: next(scans))
-    monkeypatch.setattr(
-        flow,
-        '_click_data_acquisition_claim_rect_center',
-        lambda _page, rect, **kwargs: clicks.append((rect, kwargs.get('purpose'))) or {'dispatched': True},
-    )
-
-    result = flow._complete_data_acquisition_claim_dialog(object(), store_name='Dang Kang')
-
-    assert result['ok'] is False
-    assert result['submitted'] is False
-    assert result['store_selection']['selected'] is False
-    assert [purpose for _, purpose in clicks] == ['认领弹窗选项']
 
 
-def test_complete_data_acquisition_claim_dialog_rejects_missing_real_click_receipt(monkeypatch, tmp_path):
-    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
-    clicks = []
-    monkeypatch.setattr(
-        flow,
-        '_evaluate_zero_arg_page_function_with_runtime_timeout',
-        lambda *_args, **_kwargs: {
-            'ok': True,
-            'submitted': False,
-            'submit_rect': {'x': 100, 'y': 120, 'w': 80, 'h': 32},
-            'option_rects': [{'label': 'Dang Kang', 'rect': {'x': 30, 'y': 80, 'w': 120, 'h': 28}}],
-        },
-    )
-    monkeypatch.setattr(
-        flow,
-        '_click_data_acquisition_claim_rect_center',
-        lambda _page, _rect, **kwargs: clicks.append(kwargs.get('purpose')),
-    )
-
-    result = flow._complete_data_acquisition_claim_dialog(object(), store_name='Dang Kang')
-
-    assert result['ok'] is False
-    assert result['submitted'] is False
-    assert '点击回执' in result['reason']
-    assert clicks == ['认领弹窗选项']
 
 
-def test_complete_data_acquisition_claim_dialog_requires_and_returns_exact_store_selection_readback(monkeypatch, tmp_path):
-    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
-    clicks = []
-    scans = iter([
-        {
-            'ok': True,
-            'submitted': False,
-            'submit_text': '确定',
-            'submit_rect': {'x': 100, 'y': 120, 'w': 80, 'h': 32},
-            'option_rects': [{'label': 'Dang Kang', 'text': 'Dang Kang', 'rect': {'x': 30, 'y': 80, 'w': 120, 'h': 28}}],
-        },
-        {
-            'ok': True,
-            'requested_store_name': 'Dang Kang',
-            'observed_store_name': 'Dang Kang',
-            'selected': True,
-            'selected_store_names': ['Dang Kang'],
-            'selection_evidence': {
-                'input_checked': True,
-                'aria_checked': 'true',
-                'aria_selected': None,
-                'class_name': 'ant-checkbox-wrapper ant-checkbox-wrapper-checked',
-            },
-        },
-    ])
-    monkeypatch.setattr(flow, '_evaluate_zero_arg_page_function_with_runtime_timeout', lambda *_args, **_kwargs: next(scans))
-    monkeypatch.setattr(
-        flow,
-        '_click_data_acquisition_claim_rect_center',
-        lambda _page, rect, **kwargs: clicks.append((rect, kwargs.get('purpose'))) or {'dispatched': True},
-    )
-    flow.set_mutation_authorizer(
-        _execute_authorized_operation,
-        {'task_id': 7, 'job_id': 11, 'state': 'CLAIM_TO_DRAFT_BOX', 'mode': 'claim_only'},
-    )
-
-    result = flow._complete_data_acquisition_claim_dialog(object(), store_name='Dang Kang')
-
-    assert result['ok'] is True
-    assert result['submitted'] is True
-    assert result['store_selection']['observed_store_name'] == 'Dang Kang'
-    assert result['store_selection']['selected'] is True
-    assert result['submit_click_receipt']['dispatched'] is True
-    assert [purpose for _, purpose in clicks] == ['认领弹窗选项', '认领弹窗确认']
 
 
-def test_complete_data_acquisition_claim_dialog_rejects_another_selected_store(monkeypatch, tmp_path):
-    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
-    clicks = []
-    scans = iter([
-        {
-            'ok': True,
-            'submitted': False,
-            'submit_text': '确定',
-            'submit_rect': {'x': 100, 'y': 120, 'w': 80, 'h': 32},
-            'option_rects': [{'label': 'Dang Kang', 'text': 'Dang Kang', 'rect': {'x': 30, 'y': 80, 'w': 120, 'h': 28}}],
-        },
-        {
-            'ok': True,
-            'requested_store_name': 'Dang Kang',
-            'observed_store_name': 'Dang Kang',
-            'selected': True,
-            'selected_store_names': ['Dang Kang', 'Another Store'],
-            'selection_evidence': {'input_checked': True},
-        },
-    ])
-    monkeypatch.setattr(flow, '_evaluate_zero_arg_page_function_with_runtime_timeout', lambda *_args, **_kwargs: next(scans))
-    monkeypatch.setattr(
-        flow,
-        '_click_data_acquisition_claim_rect_center',
-        lambda _page, rect, **kwargs: clicks.append((rect, kwargs.get('purpose'))) or {'dispatched': True},
-    )
-
-    result = flow._complete_data_acquisition_claim_dialog(object(), store_name='Dang Kang')
-
-    assert result['ok'] is False
-    assert result['submitted'] is False
-    assert result['store_selection']['selected_store_names'] == ['Dang Kang', 'Another Store']
-    assert [purpose for _, purpose in clicks] == ['认领弹窗选项']
 
 
-def test_claim_dialog_revalidates_at_confirm_click_and_does_not_click_when_expired(monkeypatch, tmp_path):
-    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
-    clicks = []
-    scans = iter([
-        {
-            'ok': True,
-            'submitted': False,
-            'submit_rect': {'x': 100, 'y': 120, 'w': 80, 'h': 32},
-            'option_rects': [{'label': 'Dang Kang', 'rect': {'x': 30, 'y': 80, 'w': 120, 'h': 28}}],
-        },
-        {
-            'ok': True,
-            'observed_store_name': 'Dang Kang',
-            'selected': True,
-            'selected_store_names': ['Dang Kang'],
-            'selection_evidence': {'input_checked': True},
-        },
-    ])
-    monkeypatch.setattr(flow, '_evaluate_zero_arg_page_function_with_runtime_timeout', lambda *_args, **_kwargs: next(scans))
-    def fake_click(_page, _rect, **kwargs):
-        mutation_action = kwargs.get('mutation_action')
-        def operation():
-            clicks.append(kwargs.get('purpose'))
-            return {'dispatched': True}
-
-        if not mutation_action:
-            return operation()
-        return flow._dispatch_authorized_mutation(mutation_action, operation)['operation_result']
-
-    monkeypatch.setattr(flow, '_click_data_acquisition_claim_rect_center', fake_click)
-    flow.set_mutation_authorizer(
-        lambda _context, _operation: {'ok': False, 'reason_code': 'AUTH_LEASE_EXPIRED'},
-        {'task_id': 7, 'job_id': 8, 'state': 'CLAIM_TO_DRAFT_BOX', 'mode': 'claim_only'},
-    )
-
-    with pytest.raises(RuntimeError, match='AUTH_LEASE_EXPIRED'):
-        flow._complete_data_acquisition_claim_dialog(object(), store_name='Dang Kang')
-
-    assert clicks == ['认领弹窗选项']
 
 
-def test_claim_dialog_confirm_rechecks_live_button_and_store_inside_authorized_operation(monkeypatch, tmp_path):
-    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
-    clicks = []
-    scans = iter([
-        {
-            'ok': True,
-            'submitted': False,
-            'submit_rect': {'x': 100, 'y': 120, 'w': 80, 'h': 32},
-            'option_rects': [{'label': 'Dang Kang', 'rect': {'x': 30, 'y': 80, 'w': 120, 'h': 28}}],
-        },
-        {
-            'ok': True,
-            'observed_store_name': 'Dang Kang',
-            'selected': True,
-            'selected_store_names': ['Dang Kang'],
-            'selection_evidence': {'input_checked': True},
-        },
-    ])
-    monkeypatch.setattr(flow, '_evaluate_zero_arg_page_function_with_runtime_timeout', lambda *_args, **_kwargs: next(scans))
-    monkeypatch.setattr(
-        flow,
-        '_assert_data_acquisition_claim_dialog_submit_safe',
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            MutationAuthorizationError('MUTATION_TARGET_DRIFT: store changed')
-        ),
-    )
-
-    def fake_click(_page, _rect, **kwargs):
-        if not kwargs.get('mutation_action'):
-            clicks.append(kwargs.get('purpose'))
-            return {'dispatched': True}
-        guard = kwargs.get('pre_dispatch_guard')
-        assert callable(guard)
-        def operation():
-            guard()
-            clicks.append(kwargs.get('purpose'))
-            return {'dispatched': True}
-        return flow._dispatch_authorized_mutation(
-            kwargs['mutation_action'],
-            operation,
-        )['operation_result']
-
-    monkeypatch.setattr(flow, '_click_data_acquisition_claim_rect_center', fake_click)
-    flow.set_mutation_authorizer(_execute_authorized_operation, {'task_id': 7})
-
-    with pytest.raises(MutationAuthorizationError, match='MUTATION_TARGET_DRIFT'):
-        flow._complete_data_acquisition_claim_dialog(object(), store_name='Dang Kang')
-
-    assert clicks == ['认领弹窗选项']
 
 
 @pytest.mark.parametrize('invalid_result', [None, True, 'unexpected'])
@@ -10560,11 +6697,11 @@ def test_mutation_authorizer_malformed_result_fails_closed(tmp_path, invalid_res
     flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
     flow.set_mutation_authorizer(
         lambda _context, _operation: invalid_result,
-        {'task_id': 7, 'job_id': 8, 'state': 'CLAIM_TO_DRAFT_BOX', 'mode': 'claim_only'},
+        {'task_id': 7, 'job_id': 8, 'state': 'SAVE_ONLY', 'mode': 'single_save'},
     )
 
     with pytest.raises(RuntimeError, match='AUTH_REVALIDATION_FAILED'):
-        flow._dispatch_authorized_mutation('claim_confirm_click', lambda: True)
+        flow._dispatch_authorized_mutation('save_only_click', lambda: True)
 
 
 def test_dispatch_authorized_mutation_rejection_never_executes_operation(tmp_path):
@@ -10572,12 +6709,12 @@ def test_dispatch_authorized_mutation_rejection_never_executes_operation(tmp_pat
     operation_calls = []
     flow.set_mutation_authorizer(
         lambda _context, _operation: {'ok': False, 'reason_code': 'AUTH_LEASE_EXPIRED'},
-        {'task_id': 7, 'job_id': 8, 'state': 'CLAIM_TO_DRAFT_BOX', 'mode': 'claim_only'},
+        {'task_id': 7, 'job_id': 8, 'state': 'SAVE_ONLY', 'mode': 'single_save'},
     )
 
     with pytest.raises(RuntimeError, match='AUTH_LEASE_EXPIRED'):
         flow._dispatch_authorized_mutation(
-            'claim_confirm_click',
+            'save_only_click',
             lambda: operation_calls.append('clicked') or True,
         )
 
@@ -10590,7 +6727,7 @@ def test_dispatch_authorized_mutation_without_authorizer_never_executes_operatio
 
     with pytest.raises(RuntimeError, match='AUTH_VERIFIER_MISSING'):
         flow._dispatch_authorized_mutation(
-            'claim_confirm_click',
+            'save_only_click',
             lambda: operation_calls.append('clicked') or True,
         )
 
@@ -10614,7 +6751,7 @@ def test_dispatch_authorized_mutation_executes_operation_exactly_once(tmp_path):
     flow.set_mutation_authorizer(authorize, {'task_id': 7})
 
     result = flow._dispatch_authorized_mutation(
-        'claim_confirm_click',
+        'save_only_click',
         lambda: operation_calls.append('clicked') or {'clicked': True},
     )
 
@@ -10623,10 +6760,10 @@ def test_dispatch_authorized_mutation_executes_operation_exactly_once(tmp_path):
     assert result['executed'] is True
     assert result['operation_result'] == {'clicked': True}
     assert result['reason_code'] == 'OK'
-    assert result['mutation_action'] == 'claim_confirm_click'
+    assert result['mutation_action'] == 'save_only_click'
     assert result['authorization_facts']['ok'] is True
     assert result['authorization_facts']['executed'] is True
-    assert result['authorization_facts']['mutation_action'] == 'claim_confirm_click'
+    assert result['authorization_facts']['mutation_action'] == 'save_only_click'
 
 
 def test_dispatch_authorized_mutation_blocks_second_operation_attempt(tmp_path):
@@ -10642,7 +6779,7 @@ def test_dispatch_authorized_mutation_blocks_second_operation_attempt(tmp_path):
 
     with pytest.raises(RuntimeError, match='MUTATION_OPERATION_MULTIPLE_EXECUTIONS'):
         flow._dispatch_authorized_mutation(
-            'claim_confirm_click',
+            'save_only_click',
             lambda: operation_calls.append('clicked') or True,
         )
 
@@ -10664,7 +6801,7 @@ def test_dispatch_authorized_mutation_rejects_success_without_executed_proof(tmp
 
     with pytest.raises(RuntimeError, match='MUTATION_OPERATION_NOT_EXECUTED'):
         flow._dispatch_authorized_mutation(
-            'claim_confirm_click',
+            'save_only_click',
             lambda: operation_calls.append('clicked') or True,
         )
 
@@ -10686,7 +6823,7 @@ def test_dispatch_authorized_mutation_operation_error_is_not_retried(tmp_path):
     flow.set_mutation_authorizer(authorize, {'task_id': 7})
 
     with pytest.raises(RuntimeError, match='MUTATION_OPERATION_FAILED'):
-        flow._dispatch_authorized_mutation('claim_confirm_click', failing_operation)
+        flow._dispatch_authorized_mutation('save_only_click', failing_operation)
 
     assert operation_calls == ['attempt']
 
@@ -10738,25 +6875,25 @@ def test_draft_box_evidence_paths_are_unique_and_content_attested(tmp_path):
     flow.set_execution_evidence_context({
         'task_id': 1,
         'job_id': 2,
-        'state': 'VERIFY_DRAFT_BOX_CLAIM',
+        'state': 'VERIFY_NOT_PUBLISHED',
         'command_id': 'command-a',
     })
-    first = flow._scoped_evidence_path(base, action='verify_draft_box_claim')
+    first = flow._scoped_evidence_path(base, action='verify_not_published')
     first.write_bytes(b'first-proof')
     first_ref = flow._evidence_descriptor(first)
 
     flow.set_execution_evidence_context({
         'task_id': 1,
         'job_id': 2,
-        'state': 'VERIFY_DRAFT_BOX_CLAIM',
+        'state': 'VERIFY_NOT_PUBLISHED',
         'command_id': 'command-b',
     })
-    second = flow._scoped_evidence_path(base, action='verify_draft_box_claim')
+    second = flow._scoped_evidence_path(base, action='verify_not_published')
     second.write_bytes(b'second-proof')
     second_ref = flow._evidence_descriptor(second)
 
     assert first != second
-    assert 'task_1_job_2_VERIFY_DRAFT_BOX_CLAIM_command-a' in first.name
+    assert 'task_1_job_2_VERIFY_NOT_PUBLISHED_command-a' in first.name
     assert first_ref['path'] == str(first.resolve())
     assert first_ref['sha256'] != second_ref['sha256']
     assert first_ref['size'] == len(b'first-proof')
@@ -10882,497 +7019,30 @@ def test_verify_not_published_returns_content_attested_evidence(tmp_path):
     assert Path(result['evidence_ref']['path']).read_bytes() == b'unpublished-proof'
 
 
-def test_complete_data_acquisition_claim_dialog_prefers_exact_store_option_over_modal_container(monkeypatch, tmp_path):
-    monkeypatch.setenv('DXM_LOGIN_HEADLESS', '1')
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    clicks = []
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1400, 'height': 900})
-        page.set_content(
-            '''
-            <div class="ant-modal" style="position:fixed;left:250px;top:80px;width:900px;height:520px;background:white">
-              <div style="padding:20px">选择店铺-认领到采集箱</div>
-              <div style="position:absolute;left:40px;top:80px;width:820px;height:300px">
-                    <label class="ant-checkbox-wrapper" style="position:absolute;left:20px;top:40px;width:130px;height:26px">
-                      <span class="ant-checkbox"><input type="checkbox"></span><span>Dang Kang</span>
-                </label>
-                <label class="ant-checkbox-wrapper" style="position:absolute;left:170px;top:40px;width:100px;height:26px">
-                  <span class="ant-checkbox"></span><span>JX TOY</span>
-                </label>
-              </div>
-              <button style="position:absolute;right:80px;bottom:40px;width:60px;height:32px">确定</button>
-            </div>
-            '''
-        )
-
-        def click_dialog_target(target_page, rect, **kwargs):
-            purpose = kwargs.get('purpose')
-            clicks.append((rect, purpose))
-            if purpose == '认领弹窗选项':
-                target_page.mouse.click(rect['x'] + rect['w'] / 2, rect['y'] + rect['h'] / 2)
-            return {'dispatched': True}
-
-        monkeypatch.setattr(flow, '_click_data_acquisition_claim_rect_center', click_dialog_target)
-        flow.set_mutation_authorizer(_execute_authorized_operation, {'task_id': 1})
-
-        result = flow._complete_data_acquisition_claim_dialog(page, category_name='立牌类谷子', store_name='Dang Kang')
-        browser.close()
-
-    assert result['ok'] is True
-    assert result['submitted'] is True
-    assert clicks[0][1] == '认领弹窗选项'
-    assert clicks[0][0]['w'] < 180
-    assert clicks[0][0]['h'] < 40
-    assert clicks[1][1] == '认领弹窗确认'
-
-
-def test_complete_data_acquisition_claim_dialog_visible_mode_scans_and_submits(monkeypatch, tmp_path):
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    clicks = []
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-        def wait_for_timeout(self, *_args, **_kwargs):
-            pass
-
-    scans = iter([
-        {
-            'ok': True,
-            'submitted': False,
-            'submit_text': '确定',
-            'submit_rect': {'x': 100, 'y': 120, 'w': 80, 'h': 32},
-            'option_rects': [{'label': 'Dang Kang', 'rect': {'x': 30, 'y': 80, 'w': 120, 'h': 28}}],
-            'clicked_options': ['Dang Kang'],
-        },
-        {
-            'ok': True,
-            'requested_store_name': 'Dang Kang',
-            'observed_store_name': 'Dang Kang',
-            'selected': True,
-            'selected_store_names': ['Dang Kang'],
-            'selection_evidence': {'input_checked': True},
-        },
-    ])
-    monkeypatch.setattr(
-        flow,
-        '_evaluate_zero_arg_page_function_with_runtime_timeout',
-        lambda *_args, **_kwargs: next(scans),
-    )
-    monkeypatch.setattr(
-        flow,
-        '_click_data_acquisition_claim_rect_center',
-        lambda target_page, rect, **kwargs: clicks.append((rect, kwargs.get('purpose'))) or {'dispatched': True},
-    )
-    flow.set_mutation_authorizer(_execute_authorized_operation, {'task_id': 1})
-
-    result = flow._complete_data_acquisition_claim_dialog(FakePage(), category_name='立牌类谷子', store_name='Dang Kang')
-
-    assert result['ok'] is True
-    assert result['submitted'] is True
-    assert clicks == [
-        ({'x': 30, 'y': 80, 'w': 120, 'h': 28}, '认领弹窗选项'),
-        ({'x': 100, 'y': 120, 'w': 80, 'h': 32}, '认领弹窗确认'),
-    ]
-
-
-def test_dismiss_data_acquisition_blocking_modals_uses_bounded_runtime(monkeypatch, tmp_path):
-    monkeypatch.setenv('DXM_LOGIN_HEADLESS', '1')
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    class FakeCdp:
-        def __init__(self):
-            self.calls = []
-
-        def send(self, method, payload):
-            self.calls.append((method, payload))
-            assert method == 'Runtime.evaluate'
-            assert payload['timeout'] <= 2500
-            assert 'guide-overlay' in payload['expression']
-            raise RuntimeError('Runtime.evaluate timed out')
-
-    class FakeContext:
-        def __init__(self, cdp):
-            self.cdp = cdp
-
-        def new_cdp_session(self, page):
-            return self.cdp
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-        def __init__(self):
-            self.cdp = FakeCdp()
-            self.context = FakeContext(self.cdp)
-
-        def evaluate(self, *_args, **_kwargs):
-            raise AssertionError('data acquisition modal scan must not use unbounded page.evaluate')
-
-    page = FakePage()
-
-    dismissed = flow._dismiss_data_acquisition_blocking_modals(page)
-
-    assert dismissed == 0
-    assert page.cdp.calls
-
-
-def test_dismiss_data_acquisition_blocking_modals_removes_blank_guide_overlay(tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1200, 'height': 800})
-        page.set_content(
-            '''
-            <button id="start">开始采集</button>
-            <div class="guide-overlay" style="position:fixed;left:0;top:0;width:100%;height:100%;z-index:2001;background:rgba(0,0,0,.5)"></div>
-            <div class="guide-overlay" style="position:fixed;left:0;top:0;width:100%;height:100%;z-index:2001">
-              <div class="guide-body" style="display:none">1/5 下一步 跳过</div>
-            </div>
-            '''
-        )
-
-        dismissed = flow._dismiss_data_acquisition_blocking_modals(page)
-        visible_overlays = page.locator('.guide-overlay').evaluate_all(
-            """els => els.filter(el => {
-              const r = el.getBoundingClientRect();
-              const s = getComputedStyle(el);
-              return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
-            }).length"""
-        )
-        browser.close()
-
-    assert dismissed == 1
-    assert visible_overlays == 0
-    assert flow._last_dismiss_blocking_modals_trace[0]['clicked'] == 'removed:blank-guide-overlay'
-
-
-def test_dismiss_data_acquisition_blocking_modals_handles_notice_then_guide(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1200, 'height': 800})
-        page.set_content(
-            '''
-            <div class="notice-list-modal" style="position:fixed;left:100px;top:80px;width:700px;height:420px;z-index:3000;background:white">
-              <div>线下活动 小秘公告</div>
-              <button id="close-notice" style="position:absolute;right:20px;bottom:20px;width:80px;height:32px">关闭</button>
-            </div>
-            <div class="guide-overlay" style="position:fixed;left:0;top:0;width:100%;height:100%;z-index:2001;background:rgba(0,0,0,.5)"></div>
-            <div class="guide-overlay" style="position:fixed;left:0;top:0;width:100%;height:100%;z-index:2001">
-              <div class="guide-body" style="display:none">1/5 下一步 跳过</div>
-            </div>
-            '''
-        )
-
-        def fake_click(target_page, rect):
-            target_page.evaluate("document.querySelector('.notice-list-modal')?.remove()")
-
-        monkeypatch.setattr(flow, '_click_rect_center', fake_click)
-
-        dismissed = flow._dismiss_data_acquisition_blocking_modals(page)
-        notice_count = page.locator('.notice-list-modal').count()
-        visible_overlays = page.locator('.guide-overlay').evaluate_all(
-            """els => els.filter(el => {
-              const r = el.getBoundingClientRect();
-              const s = getComputedStyle(el);
-              return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
-            }).length"""
-        )
-        browser.close()
-
-    assert dismissed == 2
-    assert notice_count == 0
-    assert visible_overlays == 0
-    assert {item['clicked'] for item in flow._last_dismiss_blocking_modals_trace} == {
-        '关闭',
-        'removed:blank-guide-overlay',
-    }
-
-
-def test_dismiss_data_acquisition_visible_browser_uses_native_only_cleanup(monkeypatch, tmp_path):
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    calls = []
-
-    class FakeContext:
-        def new_cdp_session(self, page):
-            raise AssertionError('visible browser modal cleanup must not use CDP runtime scan')
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-        def __init__(self):
-            self.context = FakeContext()
-
-        def evaluate(self, *_args, **_kwargs):
-            raise AssertionError('visible browser modal cleanup must not run page scripts')
-
-    monkeypatch.setattr(flow, '_dismiss_data_acquisition_notice_with_native_click', lambda page: calls.append('notice') or True)
-    monkeypatch.setattr(flow, '_click_data_acquisition_visible_dismiss_points', lambda page, trace: calls.append('native_points') or 0)
-    monkeypatch.setattr(flow, '_press_native_escape_for_visible_dxm', lambda page: calls.append('escape') or True)
-
-    page = FakePage()
-    dismissed = flow._dismiss_data_acquisition_blocking_modals(page)
-
-    assert dismissed == 0
-    assert calls == ['notice', 'native_points', 'escape']
-
-
-def test_dismiss_data_acquisition_visible_browser_falls_back_to_bounded_guide_scan(monkeypatch, tmp_path):
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    calls = []
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-        def wait_for_timeout(self, timeout):
-            calls.append(('wait', timeout))
-
-    page = FakePage()
-    monkeypatch.setattr(flow, '_dismiss_data_acquisition_notice_with_native_click', lambda target_page: calls.append('notice') or True)
-    monkeypatch.setattr(flow, '_click_data_acquisition_visible_dismiss_points', lambda target_page, trace: calls.append('native_points') or 0)
-    monkeypatch.setattr(flow, '_press_native_escape_for_visible_dxm', lambda target_page: calls.append('escape') or True)
-    monkeypatch.setattr(flow, '_dismiss_data_acquisition_plugin_guide_with_runtime', lambda target_page, trace: 0)
-    monkeypatch.setattr(
-        flow,
-        '_evaluate_zero_arg_page_function_with_runtime_timeout',
-        lambda target_page, script, timeout=2000: calls.append(('scan', timeout)) or {
-            'visible': True,
-            'clicked': '跳过',
-            'rect': {'x': 340, 'y': 310, 'w': 56, 'h': 28},
-            'text': '安装店小秘采集插件 1/5 下一步 下载采集插件 跳过',
-        },
-    )
-    monkeypatch.setattr(flow, '_click_rect_center', lambda target_page, rect: calls.append(('click', rect)))
-
-    dismissed = flow._dismiss_data_acquisition_blocking_modals(page)
-
-    assert dismissed == 1
-    assert ('scan', 2000) in calls
-    assert ('click', {'x': 340, 'y': 310, 'w': 56, 'h': 28}) in calls
-    assert flow._last_dismiss_blocking_modals_trace[-1]['clicked'] == '跳过'
-
-
-def test_dismiss_data_acquisition_visible_browser_removes_plugin_guide_when_skip_click_sticks(monkeypatch, tmp_path):
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={'width': 1200, 'height': 800})
-        page.set_content(
-            '''
-            <button id="start">开始采集</button>
-            <div class="guide-overlay" style="position:fixed;left:0;top:0;width:100%;height:100%;z-index:2001">
-              <div id="guideBody" class="guide-body guide-bottom"
-                   style="position:absolute;left:258px;top:247px;width:525px;height:138px;background:#111;color:#fff;z-index:10001">
-                <div>安装店小秘采集插件</div>
-                <div>支持谷歌、360、Edge、紫鸟浏览器安装采集插件，如何安装&gt;&gt;</div>
-                <div class="guide-btn flex" style="position:absolute;left:30px;bottom:12px;width:480px;height:32px">
-                  <button style="width:71px;height:32px">下一步</button>
-                  <button style="width:126px;height:32px">下载采集插件</button>
-                  <div class="m-left10 pointer" style="display:inline-block;width:26px;height:32px;cursor:pointer">跳过</div>
-                </div>
-              </div>
-            </div>
-            '''
-        )
-
-        monkeypatch.setattr(flow, '_is_data_acquisition_page_url', lambda _page: True)
-        monkeypatch.setattr(flow, '_dismiss_data_acquisition_notice_with_native_click', lambda _page: False)
-        monkeypatch.setattr(flow, '_click_data_acquisition_visible_dismiss_points', lambda _page, _trace: 0)
-        monkeypatch.setattr(flow, '_press_native_escape_for_visible_dxm', lambda _page: False)
-        monkeypatch.setattr(
-            flow,
-            '_click_rect_center',
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('known plugin guide should be removed without native coordinate click')),
-        )
-
-        dismissed = flow._dismiss_data_acquisition_blocking_modals(page)
-        visible_overlays = page.locator('.guide-overlay, .guide-body').evaluate_all(
-            """els => els.filter(el => {
-              const r = el.getBoundingClientRect();
-              const s = getComputedStyle(el);
-              return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
-            }).length"""
-        )
-        browser.close()
-
-    assert dismissed == 1
-    assert visible_overlays == 0
-    assert flow._last_dismiss_blocking_modals_trace[-1]['clicked'] == 'runtime:guide-skip'
-
-
-def test_open_data_acquisition_visible_page_reuses_loaded_page(monkeypatch, tmp_path):
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    calls = []
-
-    class FakeContext:
-        def add_init_script(self, script):
-            raise AssertionError('data acquisition sterile open must not inject scripts before loading')
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-        context = FakeContext()
-
-    page = FakePage()
-    monkeypatch.setattr(flow, '_ensure_page_with_cookies', lambda: page)
-    monkeypatch.setattr(flow, '_goto_data_acquisition_sterile', lambda target_page, url, **kwargs: calls.append(('sterile_goto', url, kwargs)))
-    monkeypatch.setattr(flow, '_attach_and_reapply_live_hud_page', lambda _page: calls.append(('reuse',)))
-
-    result = flow._open_data_acquisition_page_for_claim('https://www.dianxiaomi.com/web/productCrawl/dataAcquisition')
-
-    assert result is page
-    assert calls == [('reuse',)]
-
-
-def test_open_data_acquisition_non_current_page_uses_sterile_goto_without_notice_script(monkeypatch, tmp_path):
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    scripts = []
-    gotos = []
-
-    class FakeContext:
-        def add_init_script(self, script):
-            scripts.append(script)
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/web/home'
-        context = FakeContext()
-
-    page = FakePage()
-    monkeypatch.setattr(flow, '_ensure_page_with_cookies', lambda: page)
-    monkeypatch.setattr(flow, '_goto_data_acquisition_sterile', lambda target_page, url, **kwargs: gotos.append((url, kwargs)))
-
-    flow._open_data_acquisition_page_for_claim('https://www.dianxiaomi.com/web/productCrawl/dataAcquisition')
-    flow._open_data_acquisition_page_for_claim('https://www.dianxiaomi.com/web/productCrawl/dataAcquisition', force_goto=True)
-
-    assert scripts == []
-    assert len(gotos) == 2
-
-
-def test_open_data_acquisition_navigation_requires_identity_marker_and_no_loading(monkeypatch, tmp_path):
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    calls = []
-
-    class FakePage:
-        url = 'https://www.dianxiaomi.com/'
-
-    page = FakePage()
-
-    def fake_sterile_goto(target_page, url, **_kwargs):
-        calls.append(('sterile_goto', url))
-        target_page.url = url
-
-    monkeypatch.setattr(flow, '_ensure_page_with_cookies', lambda: page)
-    monkeypatch.setattr(flow, '_goto_data_acquisition_sterile', fake_sterile_goto)
-    monkeypatch.setattr(
-        flow,
-        '_browser_readiness_gate',
-        lambda target_page, **kwargs: calls.append(('readiness', kwargs)) or {
-            'ok': True,
-            'business_marker': '认领',
-            'loading': False,
-            'page_url': target_page.url,
-            'page_title': '店小秘--数据采集',
-        },
-    )
-    monkeypatch.setattr(
-        flow,
-        '_wait_for_page_ready',
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('open-only data acquisition must not run DOM readiness probe')),
-    )
-    monkeypatch.setattr(
-        flow,
-        '_goto_with_live_hud',
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('open-only data acquisition must not inject live HUD before loading')),
-    )
-
-    result = flow._navigate_in_session('data_acquisition')
-
-    assert calls == [
-        ('sterile_goto', WORKFLOW_TARGETS['data_acquisition']['url']),
-        ('readiness', {
-            'label': '已有待认领列表',
-            'expected_identity': 'data_acquisition',
-            'ready_terms': WORKFLOW_READY_TERMS['data_acquisition'],
-        }),
-    ]
-    assert result['page_url'] == WORKFLOW_TARGETS['data_acquisition']['url']
-    assert result['wait_result']['ready_term'] == '认领'
-    assert result['screenshot_url'] is None
-    assert result['dismissed_blocking_modals'] == 0
-
-
-def test_ensure_data_acquisition_page_reuses_visible_page_without_restarting_playwright(monkeypatch, tmp_path):
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-
-    class OldDataAcquisitionPage:
-        url = 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition'
-
-        def is_closed(self):
-            return False
-
-    flow._page = OldDataAcquisitionPage()
-    flow._context = object()
-    flow._browser = object()
-    flow._playwright = object()
-
-    def fake_ensure_page_with_cookies():
-        raise AssertionError('visible data acquisition page must not restart Playwright')
-
-    monkeypatch.setattr(flow, '_ensure_page_with_cookies', fake_ensure_page_with_cookies)
-
-    result = flow._ensure_data_acquisition_page_with_cookies()
-
-    assert result is flow._page
-    assert flow._context is not None
-    assert flow._browser is not None
-    assert flow._playwright is not None
-    assert flow.recent_workflow_events()[-1]['event'] == 'ensure_page:reuse_visible_data_acquisition_page'
-
-
-def test_new_visible_browser_context_does_not_preinstall_data_acquisition_scripts(monkeypatch, tmp_path):
-    monkeypatch.setenv('DXM_LOGIN_HEADED', '1')
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    scripts = []
-
-    class FakeBrowser:
-        def new_context(self, **kwargs):
-            assert kwargs['ignore_https_errors'] is True
-
-            class FakeContext:
-                def add_init_script(self, script):
-                    scripts.append(script)
-
-            return FakeContext()
-
-    context = flow._new_browser_context(FakeBrowser())
-
-    assert context is not None
-    assert scripts == []
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def test_dismiss_blocking_modals_skips_ant_modal_mask_and_uses_dialog(monkeypatch, tmp_path):
@@ -11647,97 +7317,8 @@ def test_wait_for_page_ready_loops_until_loading_disappears(tmp_path):
     assert page.dismiss_calls == 2
 
 
-def test_wait_for_data_acquisition_ready_uses_real_control_probe(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    page = DummyDataAcquisitionReadyWaitPage()
-    probes = []
-
-    def fake_probe(_page, _terms):
-        probes.append(1)
-        return {
-            'ready': True,
-            'ready_term': 'data_acquisition_form_ready',
-            'loading': False,
-            'loading_count': 0,
-            'rows': 0,
-            'inputs': 1,
-            'first_input_rect': {'x': 20, 'y': 40, 'w': 500, 'h': 100},
-            'start_collect_rect': {'x': 700, 'y': 220, 'w': 120, 'h': 36},
-            'text_excerpt': '数据采集 开始采集',
-            'url': page.url,
-            'title': '店小秘--数据采集',
-            'loading_text': '',
-            'strategy': 'test_control_probe',
-        }
-
-    monkeypatch.setattr(flow, '_inspect_data_acquisition_ready_state', fake_probe)
-    monkeypatch.setattr(
-        flow,
-        '_data_acquisition_operable_snapshot',
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('URL-only snapshot must not be used')),
-        raising=False,
-    )
-    monkeypatch.setattr(dxm_login_flow_module.time, 'sleep', lambda _seconds: None)
-
-    result = flow._wait_for_page_ready(
-        page,
-        ['数据采集', '认领', '采集箱'],
-        label='数据采集',
-        expected_identity='data_acquisition',
-        timeout=3000,
-        dismiss_strategy='data_acquisition',
-    )
-
-    assert result['ready'] is True
-    assert result['ready_term'] == 'data_acquisition_form_ready'
-    assert result['strategy'] == 'test_control_probe'
-    assert len(probes) == 1
-    assert page.ready_calls == 0
-    assert page.dismiss_calls == 0
 
 
-def test_wait_for_data_acquisition_search_results_skip_dismiss_but_probe_controls(monkeypatch, tmp_path):
-    live_client = DummyLiveClient(logged_in=True)
-    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
-    page = DummyDataAcquisitionReadyWaitPage()
-    probes = []
-
-    def fake_probe(_page, _terms):
-        probes.append(1)
-        return {
-            'ready': True,
-            'ready_term': 'data_acquisition_form_ready',
-            'loading': False,
-            'loading_count': 0,
-            'rows': 1,
-            'inputs': 1,
-            'first_input_rect': {'x': 20, 'y': 40, 'w': 500, 'h': 100},
-            'start_collect_rect': {'x': 700, 'y': 220, 'w': 120, 'h': 36},
-            'text_excerpt': '数据采集 开始采集 认领',
-            'url': page.url,
-            'title': '店小秘--数据采集',
-            'loading_text': '',
-            'strategy': 'test_control_probe',
-        }
-
-    monkeypatch.setattr(flow, '_inspect_data_acquisition_ready_state', fake_probe)
-    monkeypatch.setattr(dxm_login_flow_module.time, 'sleep', lambda _seconds: None)
-
-    result = flow._wait_for_page_ready(
-        page,
-        ['数据采集', '认领', '采集箱', '暂无数据'],
-        label='数据采集搜索结果',
-        expected_identity='data_acquisition',
-        timeout=3000,
-        dismiss_strategy='data_acquisition_no_dismiss',
-    )
-
-    assert result['ready'] is True
-    assert result['strategy'] == 'test_control_probe'
-    assert len(probes) == 1
-    assert page.ready_calls == 0
-    assert page.dismiss_calls == 0
 
 
 def test_open_semi_managed_page_fails_on_product_info_error(monkeypatch, tmp_path):

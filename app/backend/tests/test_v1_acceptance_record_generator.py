@@ -211,7 +211,8 @@ def test_generate_v1_acceptance_record_covers_required_evidence(tmp_path):
     assert "report_id=11 / task_id=19 / job_id=31" in markdown
     assert "绝区零妄想天使南宫羽猫咪话筒麦克风cos道具" in markdown
     assert "Dang Kang" in markdown
-    assert "AI认领-19-31" in markdown
+    assert "claim_mark" not in markdown
+    assert "AI认领-19-31" not in markdown
     assert "data/screenshots/dianxiaomi_save_only.png" in markdown
     assert "data/screenshots/dianxiaomi_verify_not_published.png" in markdown
     assert "python scripts/report/generate_v1_acceptance_record.py --report-id 11" in markdown

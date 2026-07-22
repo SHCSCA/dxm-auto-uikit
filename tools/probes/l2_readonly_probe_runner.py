@@ -13,11 +13,11 @@ DEFAULT_PROBE_SCRIPT = ROOT / "tools" / "probes" / "l2_readonly_probe.py"
 DEFAULT_COOKIE_FILE = ROOT / "data" / "sessions" / "dianxiaomi_cookies.json"
 DEFAULT_OUTPUT_DIR = ROOT / "data" / "l2_readonly_probe"
 DEFAULT_ALLOWLIST_FILE = ROOT / "config" / "l2_readonly_allowlist.json"
-REQUIRED_TARGETS = ("data_acquisition", "draft_box")
+REQUIRED_TARGETS = ("draft_box",)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the approved dual-target L2 readonly probe.")
+    parser = argparse.ArgumentParser(description="Run the approved draft-box L2 readonly probe.")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--script", default=str(DEFAULT_PROBE_SCRIPT))

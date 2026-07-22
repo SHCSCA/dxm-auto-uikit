@@ -23,7 +23,6 @@ from src.execution.browser_runtime import chrome_launch_options  # noqa: E402
 
 
 TARGETS = {
-    "data_acquisition": "https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
     "draft_box": "https://www.dianxiaomi.com/web/smt/smtProductList/draft",
 }
 READ_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -564,8 +563,6 @@ def _classify_final_path(target: str, url: Any) -> str:
 
 
 def _target_markers(target: str) -> tuple[str, ...]:
-    if target == "data_acquisition":
-        return ("采集箱", "数据采集", "采集")
     if target == "draft_box":
         return ("草稿箱", "草稿", "产品列表")
     return ()
@@ -728,7 +725,7 @@ def collect_visible_matches(page) -> list[dict[str, Any]]:
     return page.evaluate(
         """
         () => {
-          const targets = ['速卖通','AliExpress','采集箱','认领','编辑','发布','保存','店铺','所属店铺','授权店铺','半托管'];
+          const targets = ['速卖通','AliExpress','商品箱','编辑','发布','保存','店铺','所属店铺','授权店铺','半托管'];
           const out = [];
           for (const el of document.querySelectorAll('a,button,span,div,td,th,input')) {
             const txt = (el.innerText || el.textContent || el.getAttribute('value') || '').replace(/\\s+/g, ' ').trim();
@@ -924,13 +921,13 @@ def render_markdown(result: dict[str, Any]) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a guarded L2 read-only Dianxiaomi probe.")
-    parser.add_argument("--target", choices=sorted(TARGETS), default="data_acquisition")
+    parser.add_argument("--target", choices=sorted(TARGETS), default="draft_box")
     parser.add_argument("--url", default=None, help="Override target URL, mainly for local/mock verification.")
     parser.add_argument("--cookie-file", default=str(DEFAULT_COOKIE_FILE))
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     parser.add_argument("--headed", action="store_true")
     parser.add_argument("--wait-ms", type=int, default=3500)
-    parser.add_argument("--run-id", default=None, help="Shared identifier for both real L2 targets in one approved probe run.")
+    parser.add_argument("--run-id", default=None, help="Identifier binding the approved real L2 draft-box probe evidence.")
     parser.add_argument(
         "--allowlist-file",
         default=None,

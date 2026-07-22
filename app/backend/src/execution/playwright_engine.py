@@ -6,12 +6,10 @@ class PlaywrightEngine:
             "capabilities": [
                 "probe",
                 "dry_run",
-                "claim_only",
                 "single_save",
                 "batch_save",
                 "check_login",
                 "open_smt_draft_list",
-                "claim_product",
                 "verify_ownership",
                 "fill_base_info",
                 "fill_variants",

@@ -72,7 +72,7 @@ export function HomePage({
       ? {
           tone: 'waiting',
           label: '旧诊断浏览器仍在运行',
-          detail: '真实认领、单商品保存和整批执行前必须先关闭它。',
+          detail: '单商品保存和整批执行前必须先关闭它。',
         }
     : !runtimeStatus
       ? {

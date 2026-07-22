@@ -1,6 +1,5 @@
 import type {
   AcceptanceGap,
-  ClaimCandidate,
   DeliveryWorkspace,
   DxmReferenceSectionCode,
   DxmReferenceTemplateMap,
@@ -23,7 +22,7 @@ import type {
   Task,
   TemplateResolutionResult,
   Template,
-  TwoStageAcceptance,
+  SingleSaveAcceptance,
 } from './types'
 
 export type WorkspaceApiBundle = {
@@ -49,8 +48,7 @@ type DeliveryWorkspaceApi = Partial<DeliveryWorkspace> & {
   regression_gates?: RegressionGate[]
   l2_probe_plan?: L2ProbePlan
   real_mode_release_plan?: RealModeReleasePlan
-  two_stage_acceptance?: unknown
-  claim_candidates?: ClaimCandidate[]
+  single_save_acceptance?: unknown
 }
 
 export const referenceSectionLabels: Record<DxmReferenceSectionCode, string> = {
@@ -88,9 +86,7 @@ export function composeWorkspace(bundle: WorkspaceApiBundle): DeliveryWorkspace 
   const regressionGates = firstList(workspace?.regressionGates, workspace?.regression_gates, fallback.regressionGates)
   const l2ProbePlan = normalizeL2ProbePlan(workspace?.l2ProbePlan ?? workspace?.l2_probe_plan, fallback.l2ProbePlan)
   const realModeReleasePlan = normalizeRealModeReleasePlan(workspace?.realModeReleasePlan ?? workspace?.real_mode_release_plan, fallback.realModeReleasePlan)
-  const twoStageAcceptance = normalizeTwoStageAcceptance(workspace?.twoStageAcceptance ?? workspace?.two_stage_acceptance, fallback.twoStageAcceptance)
-  const claimCandidates = chooseList(workspace?.claimCandidates ?? workspace?.claim_candidates, [], fallback.claimCandidates, Boolean(workspace), apiHasData)
-    .map(normalizeClaimCandidate)
+  const singleSaveAcceptance = normalizeSingleSaveAcceptance(workspace?.singleSaveAcceptance ?? workspace?.single_save_acceptance, fallback.singleSaveAcceptance)
   const stores = chooseList(workspace?.stores, bundle.stores, fallback.stores, Boolean(workspace), apiHasData)
   const templates = chooseList(workspace?.templates, bundle.templates, fallback.templates, Boolean(workspace), apiHasData)
   const products = chooseList(workspace?.products, bundle.products, fallback.products, Boolean(workspace), apiHasData)
@@ -124,8 +120,7 @@ export function composeWorkspace(bundle: WorkspaceApiBundle): DeliveryWorkspace 
     regressionGates,
     l2ProbePlan,
     realModeReleasePlan,
-    twoStageAcceptance,
-    claimCandidates,
+    singleSaveAcceptance,
     dxmReferenceTemplates: normalizeReferenceSections(workspace?.dxmReferenceTemplates, templates, reports, templateResolution),
     acceptanceGaps: firstList(workspace?.acceptanceGaps, buildAcceptanceGaps(exceptions, evidences, reports, evidenceGradeValue), fallback.acceptanceGaps),
     safety: workspace?.safety ?? safetyFromGuard(publishGuardState, evidenceGradeValue) ?? fallback.safety,
@@ -178,8 +173,7 @@ export function buildEmptyWorkspace(): DeliveryWorkspace {
     regressionGates: buildRegressionGates(null, { grade: 'C' }, []),
     l2ProbePlan: buildL2ProbePlan(),
     realModeReleasePlan: buildRealModeReleasePlan(),
-    twoStageAcceptance: buildEmptyTwoStageAcceptance(),
-    claimCandidates: [],
+    singleSaveAcceptance: buildEmptySingleSaveAcceptance(),
     dxmReferenceTemplates: normalizeReferenceSections(undefined, [], [], null),
     acceptanceGaps: [{
       id: 'empty-workspace',
@@ -260,13 +254,12 @@ function buildL2ProbePlan(): L2ProbePlan {
   const outputDir = 'data\\l2_readonly_probe'
   const allowlistFile = 'config\\l2_readonly_allowlist.json'
   const targets = [
-    { id: 'data_acquisition', url: 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition', required: true },
     { id: 'draft_box', url: 'https://www.dianxiaomi.com/web/smt/smtProductList/draft', required: true },
   ]
   return {
     schema: 'dxm_l2_readonly_probe_plan.v1',
     requiresApproval: true,
-    purpose: '真实店小秘已有待认领列表和商品箱只读检查；不认领、不备注、不保存、不发布。',
+    purpose: '真实店小秘商品箱只读检查；不修改、不保存、不发布。',
     runIdCommand,
     pythonCommand,
     scriptPath,
@@ -283,8 +276,8 @@ function buildL2ProbePlan(): L2ProbePlan {
       ...targets.map((target) => `${pythonCommand} ${scriptPath} --target ${target.id} --run-id $runId --cookie-file $cookieFile --output-dir ${outputDir} --allowlist-file ${allowlistFile} --headed`),
     ],
     acceptanceCriteria: [
-      '两个目标必须属于同一次人工批准的检查记录。',
-      '两个目标必须来自同一检查会话和同一代码版本。',
+      '商品箱目标必须属于本次人工批准的检查记录。',
+      '商品箱证据必须来自同一检查会话和同一代码版本。',
       '只读网络计数必须全为 0。',
     ],
     safetyNotes: [
@@ -318,7 +311,7 @@ export function buildRealModeReleasePlan(): RealModeReleasePlan {
   ]
   return {
     schema: 'dxm_real_mode_release_plan.v1',
-    scope: 'controlled_claim_and_single_save',
+    scope: 'controlled_draft_box_save_only',
     publish_allowed: false,
     batch_unattended_publish_allowed: false,
     modes: [
@@ -329,7 +322,7 @@ export function buildRealModeReleasePlan(): RealModeReleasePlan {
         allowed: true,
         release_scope: '受控单商品只保存验收',
         required_evidence: [
-          '已有待认领列表和商品箱真实只读检查通过',
+          '商品箱真实只读检查通过',
           '店小秘返回保存成功',
           '未发布状态证明',
           '保存成功回包和页面记录',
@@ -337,37 +330,10 @@ export function buildRealModeReleasePlan(): RealModeReleasePlan {
         required_controls: sharedControls,
         blockers: [],
         readiness_checklist: [
-          checklist('l2_dual_target', '已有待认领列表和商品箱真实只读检查通过', 'passed'),
+          checklist('l2_draft_box', '商品箱真实只读检查通过', 'passed'),
           checklist('l3_single_canary', '单商品只保存证据', 'passed'),
           checklist('published_false', '未发布状态证明', 'passed'),
           checklist('publish_guard', '发布隔离无风险信号', 'passed'),
-        ],
-      },
-      {
-        mode: 'claim_only',
-        label: '受控待认领入箱待后端确认',
-        status: 'blocked_stale_l2',
-        allowed: false,
-        release_scope: 'controlled claim to draft box',
-        required_evidence: [
-          '已有待认领列表和商品箱真实只读检查通过',
-          '待认领商品唯一命中证明',
-          '进入商品箱成功证明',
-          '不打开编辑页、不触发保存请求证明',
-        ],
-        required_controls: [
-          ...sharedControls,
-          '只放进商品箱，不保存、不发布',
-          '失败时人工接管',
-        ],
-        blockers: [
-          '等待后端真实 L2 只读检查结果',
-        ],
-        readiness_checklist: [
-          checklist('l2_dual_target', '已有待认领列表和商品箱真实只读检查通过', 'missing', '等待后端真实 L2 只读检查结果'),
-          checklist('claim_target_unique', '待认领商品唯一命中证明', 'missing', '等待真实认领任务生成证据'),
-          checklist('claim_to_draft', '进入商品箱成功证明', 'missing', '等待真实任务生成证据'),
-          checklist('no_editor_or_save', '不打开编辑页、不触发保存请求证明', 'missing', '等待真实认领任务生成证据'),
         ],
       },
       {
@@ -427,28 +393,6 @@ export function buildRealModeReleasePlan(): RealModeReleasePlan {
         ],
       },
     ],
-  }
-}
-
-function normalizeClaimCandidate(value: unknown): ClaimCandidate {
-  const item = asRecord(value)
-  const title = stringOr(item.title, '待认领商品')
-  const sourceUrl = stringOr(item.sourceUrl ?? item.source_url, '')
-  const storeAccount = stringOr(item.storeAccount ?? item.store_account, '')
-  const createdAt = stringOr(item.createdAt ?? item.created_at, '')
-  const categoryHint = stringOr(item.categoryHint ?? item.category_hint, '')
-  return {
-    id: stringOr(item.id, `${sourceUrl || title}-${createdAt || 'candidate'}`),
-    title,
-    source: stringOr(item.source, ''),
-    sourceUrl,
-    source_url: sourceUrl,
-    storeAccount,
-    store_account: storeAccount,
-    createdAt,
-    created_at: createdAt,
-    categoryHint,
-    category_hint: categoryHint,
   }
 }
 
@@ -531,53 +475,70 @@ function normalizeReadinessChecklistItem(
   }
 }
 
-function buildEmptyTwoStageAcceptance(): TwoStageAcceptance {
+function buildEmptySingleSaveAcceptance(): SingleSaveAcceptance {
   return {
-    schema: 'dxm_two_stage_acceptance.v1',
+    schema: 'dxm_single_save_acceptance.v1',
     passed: false,
     status: 'no_task',
-    userMessage: '请选择店小秘已有待认领商品，并确认进入商品箱后，再执行单商品只保存。',
-    claimTaskId: null,
+    userMessage: '请从商品箱选择现有商品，完成编辑并只保存。',
     saveTaskId: null,
-    claimedProductId: null,
+    productId: null,
     missingCodes: ['task'],
+    stateViolationCodes: [],
+    saveReportCount: 0,
+    evidenceCount: 0,
+    productBoxSnapshotError: null,
     checks: {
-      claim_task_present: false,
-      claim_completed: false,
-      claimed_product_present: false,
-      claim_product_matches: false,
-      draft_box_verified: false,
-      single_save_linked_to_claim: false,
+      save_task_mode_valid: false,
+      save_task_completed: false,
+      product_present: false,
+      product_box_snapshot_valid: false,
+      single_save_target_bound: false,
+      manual_approval_consumed: false,
       save_success: false,
       unpublished_proof: false,
+      save_evidence_integrity: false,
+      unpublished_evidence_integrity: false,
       publish_guard_safe: false,
+      state_consistent: false,
     },
   }
 }
 
-function normalizeTwoStageAcceptance(value: unknown, fallback: TwoStageAcceptance): TwoStageAcceptance {
+function normalizeSingleSaveAcceptance(value: unknown, fallback: SingleSaveAcceptance): SingleSaveAcceptance {
   const item = asRecord(value)
   const checks = asRecord(item.checks)
+  const stringList = (camel: unknown, snake: unknown, safeFallback: string[]) => (
+    Array.isArray(camel)
+      ? camel.map(String).filter(Boolean)
+      : Array.isArray(snake)
+        ? snake.map(String).filter(Boolean)
+        : safeFallback
+  )
+  const nonNegativeCount = (candidate: unknown, safeFallback: number) => {
+    const parsed = Number(candidate)
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : safeFallback
+  }
   return {
     ...fallback,
     schema: stringOr(item.schema, fallback.schema),
     passed: typeof item.passed === 'boolean' ? item.passed : fallback.passed,
     status: stringOr(item.status, fallback.status),
     userMessage: stringOr(item.userMessage ?? item.user_message, fallback.userMessage),
-    claimTaskId: numberOrNull(item.claimTaskId ?? item.claim_task_id, fallback.claimTaskId),
     saveTaskId: numberOrNull(item.saveTaskId ?? item.save_task_id, fallback.saveTaskId),
-    claimedProductId: numberOrNull(item.claimedProductId ?? item.claimed_product_id, fallback.claimedProductId),
-    missingCodes: Array.isArray(item.missingCodes)
-      ? item.missingCodes.map(String).filter(Boolean)
-      : Array.isArray(item.missing_codes)
-        ? item.missing_codes.map(String).filter(Boolean)
-        : fallback.missingCodes,
+    productId: numberOrNull(item.productId ?? item.product_id, fallback.productId),
+    missingCodes: stringList(item.missingCodes, item.missing_codes, fallback.missingCodes),
+    stateViolationCodes: stringList(item.stateViolationCodes, item.state_violation_codes, fallback.stateViolationCodes),
+    saveReportCount: nonNegativeCount(item.saveReportCount ?? item.save_report_count, fallback.saveReportCount),
+    evidenceCount: nonNegativeCount(item.evidenceCount ?? item.evidence_count, fallback.evidenceCount),
+    productBoxSnapshotError: item.productBoxSnapshotError === null || item.product_box_snapshot_error === null
+      ? null
+      : stringOr(item.productBoxSnapshotError ?? item.product_box_snapshot_error, fallback.productBoxSnapshotError ?? '') || null,
     checks: Object.fromEntries(
       Object.entries({ ...fallback.checks, ...checks }).map(([key, raw]) => [key, raw === true]),
     ),
   }
 }
-
 export function humanTaskStatus(status: string) {
   return ({
     draft: '待启动',
@@ -743,7 +704,7 @@ function safetyFromGuard(
         ? '已安全暂停'
         : '未验证/不适用'
   return {
-    mode: '待认领商品 -> 商品箱 -> 编辑保存只保存',
+    mode: '商品箱现有商品 -> 编辑 -> 只保存不发布',
     guarantee: safeUnpublished
       ? '只保存不发布：发布隔离已开启，工作台没有发布动作入口。'
       : publishRisk

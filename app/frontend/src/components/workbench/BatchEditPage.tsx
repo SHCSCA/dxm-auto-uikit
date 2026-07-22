@@ -39,7 +39,8 @@ type BatchEditPageProps = {
   onShowDxmAccess: () => void
   onShowConsole: () => void
   onShowTasks: () => void
-  onRefreshStatus: () => void
+  onCreateSingleSave: (storeId: number, productId: number) => Promise<void>
+  onRefreshStatus: () => Promise<void> | void
 }
 
 const scopeLimits = [5, 10, 20, 50]
@@ -60,6 +61,7 @@ export function BatchEditPage({
   onShowDxmAccess,
   onShowConsole,
   onShowTasks,
+  onCreateSingleSave,
   onRefreshStatus,
 }: BatchEditPageProps) {
   const storeLevelBatchTemplates = useMemo(
@@ -87,11 +89,12 @@ export function BatchEditPage({
   const hiddenOtherStoreBundleCount = Math.max(0, storeLevelBatchTemplates.length - batchTemplates.length)
   const [maxItems, setMaxItems] = useState(5)
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
+  const [selectedSingleProductId, setSelectedSingleProductId] = useState('')
   const [draftBatch, setDraftBatch] = useState<EditBatchDetail | null>(null)
   const [approvedBy, setApprovedBy] = useState('')
   const [saveOnlyConfirmed, setSaveOnlyConfirmed] = useState(false)
   const [startOutcomeUnknown, setStartOutcomeUnknown] = useState(false)
-  const [busyAction, setBusyAction] = useState<'load' | 'capture' | 'create' | 'start' | null>(null)
+  const [busyAction, setBusyAction] = useState<'load' | 'capture' | 'single' | 'create' | 'start' | null>(null)
   const [error, setError] = useState<string | null>(null)
   const ownsActiveBatch = activeExecution?.kind === 'batch' && activeExecution.id === draftBatch?.id
   const flowBlocker: BatchFlowBlocker = activeExecution && !ownsActiveBatch
@@ -146,6 +149,17 @@ export function BatchEditPage({
   }, [batchTemplates, selectedTemplateId])
 
   useEffect(() => {
+    const available = (scopeSnapshot?.items ?? []).filter((item) => item.local_product_id)
+    if (!available.length) {
+      setSelectedSingleProductId('')
+      return
+    }
+    if (!available.some((item) => String(item.local_product_id) === selectedSingleProductId)) {
+      setSelectedSingleProductId(String(available[0].local_product_id))
+    }
+  }, [scopeSnapshot, selectedSingleProductId])
+
+  useEffect(() => {
     if (!initialBatchId || draftBatch?.id === initialBatchId) return
     let cancelled = false
     setBusyAction('load')
@@ -180,6 +194,7 @@ export function BatchEditPage({
       onScopeSnapshotChange(snapshot)
       setDraftBatch(null)
       setStartOutcomeUnknown(false)
+      void Promise.resolve().then(() => onRefreshStatus()).catch(() => undefined)
     } catch (caught) {
       onScopeSnapshotChange(null)
       setError(humanBatchError(caught, '读取商品箱现场失败', 'pre_dispatch'))
@@ -205,6 +220,21 @@ export function BatchEditPage({
       setStartOutcomeUnknown(false)
     } catch (caught) {
       setError(humanBatchError(caught, '冻结批次草稿失败', 'pre_dispatch'))
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function createSingleSaveTask() {
+    const storeId = scopeSnapshot?.store_identity.store_id
+    const productId = Number(selectedSingleProductId)
+    if (!storeId || !Number.isInteger(productId) || productId <= 0) return
+    setBusyAction('single')
+    setError(null)
+    try {
+      await onCreateSingleSave(storeId, productId)
+    } catch (caught) {
+      setError(humanBatchError(caught, '创建单商品只保存任务失败', 'pre_dispatch'))
     } finally {
       setBusyAction(null)
     }
@@ -413,6 +443,32 @@ export function BatchEditPage({
               <span>{isZeroWriteProven(scopeSnapshot.zero_write_proof) ? '本次读取未执行导航、点击或写入。' : '只读边界尚未得到确认。'}</span>
             </div>
             {error && <div className="batch-inline-error" role="alert">{error}</div>}
+            {scopeSnapshot.store_identity.store_id && scopeSnapshot.items.some((item) => item.local_product_id) ? (
+              <div className="batch-template-inline" aria-label="单商品只保存入口">
+                <label htmlFor="single-save-product">
+                  <span>单商品只保存</span>
+                  <select
+                    id="single-save-product"
+                    value={selectedSingleProductId}
+                    onChange={(event) => setSelectedSingleProductId(event.target.value)}
+                    disabled={busyAction !== null}
+                  >
+                    {scopeSnapshot.items.filter((item) => item.local_product_id).map((item) => (
+                      <option value={String(item.local_product_id)} key={item.ordinal}>{item.ordinal}. {item.title}</option>
+                    ))}
+                  </select>
+                  <small>使用本次实时商品箱证据创建一个受控任务；仍需配置检查、商品箱 L2 和人工批准。</small>
+                </label>
+                <button className="button button--secondary" type="button" onClick={() => { void createSingleSaveTask() }} disabled={busyAction !== null || !selectedSingleProductId}>
+                  {busyAction === 'single' ? '正在创建单商品任务…' : '创建单商品只保存任务'}
+                </button>
+              </div>
+            ) : (
+              <div className="batch-template-blocker" role="status">
+                <strong>先连接现场店铺</strong>
+                <span>当前商品箱店铺未与工作台中的唯一店铺匹配；范围已安全读取，但不能创建真实保存任务。</span>
+              </div>
+            )}
             {selectedTemplate ? (
               <>
                 <label className="batch-template-select" htmlFor="batch-template">

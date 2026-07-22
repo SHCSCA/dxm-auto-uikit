@@ -13,7 +13,6 @@ from src.services.dxm_reference_templates import (
 class ExecutionMode(StrEnum):
     PROBE = "probe"
     DRY_RUN = "dry_run"
-    CLAIM_ONLY = "claim_only"
     SINGLE_SAVE = "single_save"
     BATCH_SAVE = "batch_save"
 
@@ -130,13 +129,6 @@ class ConfigValidationService:
     ) -> list[str]:
         if mode == ExecutionMode.PROBE.value:
             return []
-        if mode == ExecutionMode.CLAIM_ONLY.value:
-            missing: list[str] = []
-            if not self._has_store(task, payload):
-                missing.append("store")
-            if not self._has_value(task, payload, "claim_mark"):
-                missing.append("claim_mark")
-            return missing
         if mode in (ExecutionMode.SINGLE_SAVE.value, ExecutionMode.BATCH_SAVE.value):
             present_templates = self._present_template_types(templates)
             missing = [name for name in self.SAVE_REQUIRED_TEMPLATES if name not in present_templates]

@@ -253,7 +253,7 @@ class BatchExecutionRuntime:
                     self._stop_batch(
                         batch_id,
                         _result_reason(claim_result, "ITEM_CLAIM_CONFLICT"),
-                        "逐件认领状态已变化，系统已停止且不会重试。",
+                        "逐件执行权状态已变化，系统已停止且不会重试。",
                         manual_review=True,
                     )
                     return
@@ -262,7 +262,7 @@ class BatchExecutionRuntime:
                     self._stop_batch(
                         batch_id,
                         "ITEM_CLAIM_RESULT_MISSING",
-                        "逐件认领结果缺失，系统已停止且不会重试。",
+                        "逐件执行权结果缺失，系统已停止且不会重试。",
                         manual_review=True,
                     )
                     return
@@ -1270,7 +1270,7 @@ class BatchExecutionRuntime:
         ):
             raise BatchRuntimeError(
                 "SAVE_ITEM_CLAIM_DRIFT",
-                "保存边界的逐件认领状态已变化。",
+                "保存边界的逐件执行权状态已变化。",
                 manual_review=False,
             )
         private = batch.get("_private")

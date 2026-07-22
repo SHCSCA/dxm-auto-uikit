@@ -2,12 +2,12 @@
   "schema": "dxm_l1_selector_replay_manifest.v1",
   "cases": [
     {
-      "id": "draft_list_claimed_product",
+      "id": "draft_list_product_box_item",
       "page_key": "smt_draft_list",
       "url": "https://www.dianxiaomi.com/web/smt/smtProductList/draft",
-      "fixture": "draft_list_claimed_product.html",
-      "required_texts": ["草稿", "编辑", "Dang Kang", "AI认领"],
-      "checks": ["claimed_row_ownership", "publish_button_absent"]
+      "fixture": "draft_list_product_box_item.html",
+      "required_texts": ["草稿", "编辑", "Dang Kang", "绝区零妄想天使南宫羽猫咪话筒麦克风cos道具"],
+      "checks": ["product_box_row_identity", "publish_button_absent"]
     },
     {
       "id": "edit_media_and_templates",

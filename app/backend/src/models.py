@@ -132,30 +132,18 @@ class ProductCreate(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
-class AcquisitionClaimRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    store_id: StrictInt = Field(gt=0)
-    source_url: str = Field(min_length=1, max_length=2048, pattern=r".*\S.*")
-    keyword: str | None = Field(default=None, max_length=300)
-    category_name: str | None = Field(default=None, max_length=200)
-    claim_mark: str = Field(min_length=1, max_length=200, pattern=r".*\S.*")
-    template_id: StrictInt | None = Field(default=None, gt=0)
-
-
 class TaskCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=200, pattern=r".*\S.*")
     store_id: StrictInt | None = Field(default=None, gt=0)
-    mode: Literal["probe", "dry_run", "claim_only", "single_save", "batch_save"] = "single_save"
+    mode: Literal["probe", "dry_run", "single_save", "batch_save"] = "single_save"
     publish_scene: str = Field(
         default="SMT_SEMI_MANAGED_SAVE_ONLY",
         min_length=1,
         max_length=64,
     )
     product_ids: list[StrictInt] = Field(default_factory=list, max_length=100)
-    claim_mark: str = Field(default="AI认领", min_length=1, max_length=200, pattern=r".*\S.*")
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -256,7 +244,6 @@ class LoginNavigateRequest(BaseModel):
 
 class DraftBoxActionRequest(BaseModel):
     action: str
-    note_text: str | None = None
     product_query: str | None = None
     store_name: str | None = None
     target_source_urls: list[str] = Field(default_factory=list)

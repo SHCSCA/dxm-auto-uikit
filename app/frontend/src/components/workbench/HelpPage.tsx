@@ -4,7 +4,6 @@ type HelpPageProps = {
   selectedTask: Task | null
   runtimeStatus: RuntimeStatus | null
   onShowDxmAccess: () => void
-  onShowAcquisition: () => void
   onShowTasks: () => void
   onShowDraftEdit: () => void
   onShowBatchRecords: () => void
@@ -18,7 +17,6 @@ export function HelpPage({
   selectedTask,
   runtimeStatus,
   onShowDxmAccess,
-  onShowAcquisition,
   onShowTasks,
   onShowDraftEdit,
   onShowBatchRecords,
@@ -29,9 +27,7 @@ export function HelpPage({
   const hasTask = Boolean(selectedTask)
   const nextAction = !dxmLoggedIn
     ? { label: '登录店小秘', action: onShowDxmAccess, detail: '先在可见浏览器完成登录和验证码。' }
-    : !hasTask
-      ? { label: '认领已有商品', action: onShowAcquisition, detail: '提供真实来源商品链接，把已有商品认领到商品箱。' }
-      : { label: '创建商品箱批次', action: onShowDraftEdit, detail: '读取真实范围，选择店铺级模板并创建待批准草稿。' }
+    : { label: '创建商品箱批次', action: onShowDraftEdit, detail: '读取商品箱现有商品，选择店铺级模板并创建待批准草稿。' }
 
   return (
     <section className="module-layout guide-layout" aria-label="使用帮助">
@@ -40,7 +36,7 @@ export function HelpPage({
         <div className="guide-step guide-step--primary">
           <span aria-hidden="true">1</span>
           <div>
-            <strong>目标只有一个：把已有来源商品认领进商品箱，再按店铺级模板逐件只保存。</strong>
+            <strong>目标只有一个：直接编辑商品箱现有商品，并按店铺级模板逐件只保存。</strong>
             <div className="guide-step__summary-line">
               <small>{nextAction.detail}</small>
               <em>整批只批准一次，严格串行；结果不确定立即停止并转人工对账。</em>
@@ -65,11 +61,11 @@ export function HelpPage({
           />
           <GuideStep
             index="2"
-            state={hasTask ? 'is-done' : dxmLoggedIn ? 'is-current' : undefined}
-            title="待认领商品认领到商品箱"
-            detail="必须提供支持站点的真实 HTTP(S) 商品链接；关键词和类目只用于辅助定位，不能单独发起真实认领。"
-            action="创建认领任务"
-            onAction={onShowAcquisition}
+            state={dxmLoggedIn ? 'is-current' : undefined}
+            title="读取商品箱现有商品"
+            detail="从真实商品箱读取当前店铺范围，商品和店铺身份都由现场读回。"
+            action="读取商品箱范围"
+            onAction={onShowDraftEdit}
           />
           <GuideStep
             index="3"
@@ -98,7 +94,7 @@ export function HelpPage({
           </li>
           <li className={hasTask ? 'is-done' : undefined}>
             <span aria-hidden="true">2</span>
-            <strong>用真实来源链接把已有商品认领到商品箱</strong>
+            <strong>读取商品箱现有商品和店铺身份</strong>
           </li>
           <li>
             <span aria-hidden="true">3</span>
@@ -109,7 +105,7 @@ export function HelpPage({
             <strong>一次批准后观察串行进度，完成后查看结果</strong>
           </li>
         </ol>
-        <button className="button button--secondary" type="button" onClick={onShowTasks}>查看当前认领与单商品任务</button>
+        <button className="button button--secondary" type="button" onClick={onShowTasks}>查看当前单商品任务</button>
       </div>
 
       <div className="module-card">

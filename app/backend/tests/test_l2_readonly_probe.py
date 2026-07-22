@@ -14,6 +14,42 @@ def _load_probe_module():
     return module
 
 
+def _load_probe_runner_module():
+    repo_root = Path(__file__).resolve().parents[3]
+    script_path = repo_root / "tools" / "probes" / "l2_readonly_probe_runner.py"
+    spec = importlib.util.spec_from_file_location("l2_readonly_probe_runner", script_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_l2_probe_surface_contains_only_draft_box():
+    probe = _load_probe_module()
+    runner = _load_probe_runner_module()
+
+    assert probe.TARGETS == {
+        "draft_box": "https://www.dianxiaomi.com/web/smt/smtProductList/draft"
+    }
+    assert runner.REQUIRED_TARGETS == ("draft_box",)
+
+
+def test_repository_allowlist_drops_acquisition_page_dependencies_but_keeps_claim_blocked():
+    probe = _load_probe_module()
+    repo_root = Path(__file__).resolve().parents[3]
+    entries, errors, _ = probe.load_allowlist(
+        repo_root / "config" / "l2_readonly_allowlist.json"
+    )
+
+    assert errors == []
+    assert "claim" in probe.FORBIDDEN_URL_KEYWORDS
+    assert {
+        "dxm-crawl-auto-collect-config",
+        "dxm-banjia-ebay-sites-readonly-post",
+        "dxm-data-acquisition-index-readonly-post",
+        "dxm-product-source-recommend-offer-readonly-post",
+    }.isdisjoint({entry["id"] for entry in entries})
+
+
 class FakeRequest:
     def __init__(self, method: str, url: str, resource_type: str = "xhr"):
         self.method = method

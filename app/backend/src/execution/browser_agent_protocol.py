@@ -9,13 +9,6 @@ from typing import Any
 
 
 MUTATION_COMMAND_PLANS: dict[tuple[str, str], dict[str, int]] = {
-    (
-        "CLAIM_TO_DRAFT_BOX",
-        "claim_from_data_acquisition",
-    ): {
-        "claim_open_dialog_click": 1,
-        "claim_confirm_click": 2,
-    },
     ("SAVE_ONLY", "save_only"): {
         "save_only_click": 1,
     },
@@ -180,7 +173,7 @@ def _canonical_target_source_urls(value: Any) -> list[str]:
     if not candidates:
         return []
     try:
-        from src.state_machine.two_stage import canonical_source_identity
+        from src.state_machine.save_authorization import canonical_source_identity
 
         identity = canonical_source_identity(candidates[0], candidates)
     except Exception as exc:
@@ -199,7 +192,7 @@ def _canonical_target_source_urls(value: Any) -> list[str]:
 
 def _is_supported_frozen_source_url(value: str) -> bool:
     try:
-        from src.state_machine.two_stage import is_supported_product_detail_url
+        from src.state_machine.save_authorization import is_supported_product_detail_url
 
         return is_supported_product_detail_url(value)
     except Exception:
@@ -308,7 +301,7 @@ def _canonical_frozen_target_identity(value: Any, *, store_name: str) -> dict[st
                 "source_url target identity requires canonical source URLs",
             )
         try:
-            from src.state_machine.two_stage import canonical_source_identity
+            from src.state_machine.save_authorization import canonical_source_identity
 
             source_identity = canonical_source_identity(source_urls[0], source_urls)
         except Exception as exc:
@@ -380,23 +373,6 @@ def canonical_mutation_target_payload(
             "MUTATION_TARGET_INVALID",
             "mutation target requires an exact store_name",
         )
-    if action == "claim_from_data_acquisition":
-        category_name = _canonical_optional_target_text(values.get("category_name"))
-        claim_mark = _canonical_optional_target_text(values.get("claim_mark"))
-        if not claim_mark or not target_source_urls:
-            raise MutationCommandContractError(
-                "MUTATION_TARGET_INVALID",
-                "claim target requires claim_mark and canonical source URLs",
-            )
-        return {
-            "schema": "dxm.mutation-target.v1",
-            "action": action,
-            "claim_mark": claim_mark,
-            "product_query": product_query,
-            "category_name": category_name,
-            "store_name": store_name,
-            "target_source_urls": target_source_urls,
-        }
     target_identity = _canonical_frozen_target_identity(
         values.get("target_identity"),
         store_name=store_name,

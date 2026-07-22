@@ -25,7 +25,6 @@ const fallbackTemplateCenterMetadata: TemplateCenterMetadata = {
       { key: 'store_name', label: '店铺', required: true, value_kind: 'text' },
       { key: 'execution_mode', label: '任务模式', required: true, value_kind: 'text' },
       { key: 'category_name', label: '绑定类目', required: false, value_kind: 'text' },
-      { key: 'claim_mark', label: '认领标记', required: false, value_kind: 'text' },
     ] },
     { id: 'category', label: '类目与标题', template_type: 'category', fields: [
       { key: 'category_name', label: '目标类目', required: false, value_kind: 'text' },

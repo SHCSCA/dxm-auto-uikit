@@ -19,7 +19,6 @@ from src.execution import v1_runner as v1_runner_module
 from src.execution.v1_runner import V1ExecutionError, V1TaskRunner
 from src.repository import Repository
 from src.state_machine.contracts import StateName
-from src.state_machine.two_stage import canonical_claim_target_identity, canonical_source_identity
 
 
 def _test_runner(*args, **kwargs):
@@ -51,7 +50,6 @@ def _evidence_ref(name: str) -> dict:
 
 _TEST_PAGE_URLS = {
     "authenticated_dxm": "https://www.dianxiaomi.com/web/index.htm",
-    "data_acquisition": "https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
     "draft_box": "https://www.dianxiaomi.com/web/smt/smtProductList/draft",
     "editor": "https://www.dianxiaomi.com/web/smt/edit",
     "semi_managed": "https://www.dianxiaomi.com/web/smt/editFromSmt",
@@ -59,11 +57,7 @@ _TEST_PAGE_URLS = {
 
 _TEST_ACTION_CONTRACTS = {
     "check_login_state": ("PRECHECK_SESSION", "authenticated_dxm", ("session_authenticated", "business_page_ready", "loading_absent")),
-    "open_data_acquisition": ("OPEN_DATA_ACQUISITION", "data_acquisition", ("expected_page", "business_marker_present", "loading_absent", "blocking_modal_absent")),
-    "claim_from_data_acquisition": ("CLAIM_TO_DRAFT_BOX", "data_acquisition", ("target_unique", "source_identity_match", "store_selected_exact", "category_selected_exact", "claim_dispatched", "publish_not_attempted")),
-    "verify_draft_box_claim": ("VERIFY_DRAFT_BOX_CLAIM", "draft_box", ("draft_box_verified", "target_unique", "product_identity_match", "store_match", "source_identity_match", "claim_mark_match")),
     "open_draft_box": ("OPEN_DRAFT_LIST", "draft_box", ("expected_page", "business_marker_present", "loading_absent", "blocking_modal_absent")),
-    "claim_product": ("CLAIM_PRODUCT", "draft_box", ("target_unique", "note_write_attempted", "note_readback_exact", "ownership_binding_match")),
     "open_editor": ("OPEN_EDIT_PAGE", "editor", ("expected_editor_page", "editor_ready", "product_identity_match", "store_match", "source_identity_match")),
     "verify_edit_ownership": ("VERIFY_EDIT_OWNERSHIP", "editor", ("editor_identity_match", "product_identity_match", "store_match", "source_identity_match")),
     "fill_editor_required_defaults": ("FILL_BASE_INFO", "editor", ("title_readback_nonempty", "title_readback_exact", "category_selected_exact", "required_templates_resolved", "required_fields_complete")),
@@ -91,6 +85,153 @@ _TEST_SEMI_VARIANT_CONTRACT = (
 )
 
 
+def _mapping_sha256(value: dict) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest().upper()
+
+
+def _merge_mapping(base: dict, override: dict) -> dict:
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_mapping(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _strict_test_save_result(*, target_identity: dict, store_name: str) -> dict:
+    target_digest = _mapping_sha256(target_identity)
+    integrity = {
+        "ok": True,
+        "kind": "structured_nonempty_form_state",
+        "field_count": 12,
+        "nonempty_field_count": 12,
+        "sha256": "C" * 64,
+    }
+    authorization = {
+        "ok": True,
+        "executed": True,
+        "mutation_action": "save_only_click",
+        "mutation_status": "DISPATCHED",
+        "mutation_id": "mutation-test-1",
+    }
+    pre_dispatch = {
+        "ok": True,
+        "required_readback_complete": True,
+        "write_attempted": False,
+        "phase": "before_ledger_begin_dispatch",
+        "exact_save_target": {"ok": True, "text": "保存", "exact_save_count": 1},
+        "identity": {
+            "ok": True,
+            "product_identity_match": True,
+            "store_identity_match": True,
+            "source_identity_match": True,
+            "target_identity": target_identity,
+            "target_identity_sha256": target_digest,
+            "expected_store_name": store_name,
+        },
+        "baseline_field_integrity": integrity,
+        "current_field_integrity": dict(integrity),
+    }
+    network = {
+        "ok": True,
+        "receipt_complete": True,
+        "receipt_count": 1,
+        "method": "POST",
+        "url": "https://www.dianxiaomi.com/api/popChoiceProduct/add.json",
+        "status": 200,
+        "code": 0,
+        "msg": "您的产品编辑保存成功！",
+    }
+    network_audit = {
+        "scope": "same_origin_write_window",
+        "complete": True,
+        "window_closed": True,
+        "registered_listener_count": 2,
+        "removed_listener_count": 2,
+        "mutation_request_count": 1,
+        "save_request_count": 1,
+        "other_mutation_request_count": 0,
+        "publish_request_count": 0,
+    }
+    publish_signal = {
+        "detected": False,
+        "kind": "network_route_classification",
+        "request_count": 0,
+    }
+    page_save_result = {
+        "ok": True,
+        "success_text": "保存成功",
+        "status_transition": {
+            "kind": "new_or_changed_structured_save_status",
+            "entry": {"text": "保存成功", "kind": "toast"},
+        },
+    }
+    return {
+        "ok": True,
+        "code": 0,
+        "msg": "真实保存成功",
+        "published": False,
+        "exact_save_target": True,
+        "save_click_dispatched": True,
+        "clicked": True,
+        "publish_action_clicked": False,
+        "text": "保存",
+        "exact_save_count": 1,
+        "click_method": "native_exact_save",
+        "network_save_success": True,
+        "page_save_success": True,
+        "mutation_authorization": authorization,
+        "pre_dispatch_readback": pre_dispatch,
+        "network_save_result": network,
+        "network_audit": network_audit,
+        "publish_signal": publish_signal,
+        "page_save_result": page_save_result,
+        "save_decision": {
+            "ok": True,
+            "rule": "page_success_and_network_success",
+            "page_ok": True,
+            "network_ok": True,
+            "network_receipt_ok": True,
+            "network_audit_ok": True,
+        },
+    }
+
+
+def _strict_test_unpublished_proof(*, target_identity: dict) -> dict:
+    return {
+        "ok": True,
+        "published": False,
+        "proof_kind": "structured_unpublished_status",
+        "status_text": "待发布",
+        "verified_on_current_page": True,
+        "status_scope_unique": True,
+        "bound_candidate_count": 1,
+        "structured_candidate_count": 1,
+        "target_bound": True,
+        "product_matched": True,
+        "store_matched": True,
+        "source_identity_match": True,
+        "identity_binding_kind": "frozen_target_structured_page_readback",
+        "publish_risk_term": None,
+        "target_identity_sha256": _mapping_sha256(target_identity),
+        "page_url": _TEST_PAGE_URLS["semi_managed"],
+        "identity_readback": {
+            "product_identity_match": True,
+            "store_identity_match": True,
+            "source_identity_match": True,
+        },
+    }
+
+
 def _canonical_test_action_result(
     action: str,
     legacy_result: dict,
@@ -104,8 +245,6 @@ def _canonical_test_action_result(
         state, page_kind, condition_names = _TEST_SEMI_VARIANT_CONTRACT
     ok = legacy_result.get("ok") is True
     evidence = legacy_result.get("evidence") if isinstance(legacy_result.get("evidence"), dict) else {}
-    if action == "claim_product" and evidence.get("note_verified") is False:
-        ok = False
     save_result = legacy_result.get("save_result")
     if action == "save_only" and (not isinstance(save_result, dict) or save_result.get("ok") is not True):
         ok = False
@@ -117,11 +256,14 @@ def _canonical_test_action_result(
         "product_query": product_query,
         "store_name": store_name,
     }
-    if action in {"save_only", "verify_not_published"}:
-        before_values["target_identity"] = {
+    target_identity = legacy_result.get("target_identity")
+    if not isinstance(target_identity, dict):
+        target_identity = {
             "product_query": "test-product",
             "store_name": "test-store",
         }
+    if action in {"save_only", "verify_not_published"}:
+        before_values["target_identity"] = target_identity
 
     after_values = {
         "observed_action": action,
@@ -130,7 +272,24 @@ def _canonical_test_action_result(
     if action == "save_only":
         after_values.update({"published": False, "save_result": dict(save_result or {})})
     if action == "verify_not_published":
-        after_values.update({"published": False, "fresh_probe": {"ok": True}})
+        proof = legacy_result.get("unpublished_proof")
+        if not isinstance(proof, dict):
+            proof = _strict_test_unpublished_proof(target_identity=target_identity)
+        observed_target = {
+            "product_matched": True,
+            "store_matched": True,
+            "source_identity_match": True,
+            "target_bound": True,
+            "target_identity_sha256": proof["target_identity_sha256"],
+        }
+        after_values.update(
+            {
+                "published": False,
+                "fresh_probe": proof,
+                "target_identity": observed_target,
+                "identity_readback": proof["identity_readback"],
+            }
+        )
 
     observations = {
         **evidence,
@@ -147,12 +306,42 @@ def _canonical_test_action_result(
     ):
         if legacy_result.get(key) is not None:
             observations[key] = legacy_result[key]
+    if action == "save_only" and isinstance(save_result, dict) and save_result.get("ok") is True:
+        observations.update(
+            {
+                "exact_save_target": {
+                    "text": "保存",
+                    "exact_save_count": 1,
+                    "click_method": save_result.get("click_method"),
+                },
+                "save_click_dispatched": True,
+            }
+        )
+        for key in (
+            "mutation_authorization",
+            "pre_dispatch_readback",
+            "network_save_result",
+            "network_audit",
+            "publish_signal",
+            "page_save_result",
+        ):
+            observations[key] = save_result.get(key)
+            after_values[key] = save_result.get(key)
+        after_values["exact_save_target"] = True
+        after_values["save_click_dispatched"] = True
+    if action == "verify_not_published":
+        observations.update(
+            {
+                "fresh_probe": proof,
+                "target_identity": observed_target,
+                "identity_readback": proof["identity_readback"],
+            }
+        )
 
     refs = []
     basic_ref = legacy_result.get("evidence_ref") or evidence.get("evidence_ref")
     if isinstance(basic_ref, dict):
         kind = {
-            "VERIFY_DRAFT_BOX_CLAIM": "draft_box_screenshot",
             "SAVE_ONLY": "save_screenshot",
             "VERIFY_NOT_PUBLISHED": "unpublished_screenshot",
         }.get(state, "screenshot")
@@ -217,13 +406,11 @@ class FakeWorkflowAdapter:
     def __init__(
         self,
         fail_action: str | None = None,
-        note_verified: bool = True,
         save_result: dict | None = None,
         include_save_result: bool = True,
     ):
         self.calls = []
         self.fail_action = fail_action
-        self.note_verified = note_verified
         self.save_result = save_result or {"ok": True, "code": 0, "msg": "真实保存成功", "published": False}
         self.include_save_result = include_save_result
         self.live_hud_calls = []
@@ -234,78 +421,38 @@ class FakeWorkflowAdapter:
     def open_draft_box(self):
         return self._record("open_draft_box")
 
-    def open_data_acquisition(self):
-        return self._record("open_data_acquisition")
+    def open_editor(self, product_query=None, store_name=None, target_source_urls=None, target_identity=None):
+        return self._record("open_editor", product_query, store_name, target_source_urls, target_identity)
 
-    def claim_from_data_acquisition(
-        self,
-        claim_mark,
-        product_query=None,
-        category_name=None,
-        store_name=None,
-        target_source_urls=None,
-    ):
-        return self._record(
-            "claim_from_data_acquisition",
-            claim_mark,
-            product_query,
-            category_name,
-            store_name,
-            target_source_urls,
-        )
+    def verify_edit_ownership(self, product_query=None, store_name=None, target_source_urls=None, target_identity=None):
+        return self._record("verify_edit_ownership", product_query, store_name, target_source_urls, target_identity)
 
-    def verify_draft_box_claim(
-        self,
-        claim_mark,
-        product_query=None,
-        category_name=None,
-        store_name=None,
-        target_source_urls=None,
-    ):
-        return self._record(
-            "verify_draft_box_claim",
-            claim_mark,
-            product_query,
-            category_name,
-            store_name,
-            target_source_urls,
-        )
-
-    def claim_product(self, note_text, product_query=None, store_name=None, target_source_urls=None):
-        return self._record("claim_product", note_text, product_query, store_name, target_source_urls)
-
-    def open_editor(self, product_query=None, store_name=None, note_text=None, target_source_urls=None):
-        return self._record("open_editor", product_query, store_name, note_text, target_source_urls)
-
-    def verify_edit_ownership(self, product_query=None, store_name=None, target_source_urls=None):
-        return self._record("verify_edit_ownership", product_query, store_name, target_source_urls)
-
-    def fill_editor_required_defaults(self, defaults=None, product_query=None, store_name=None):
+    def fill_editor_required_defaults(self, defaults=None, product_query=None, store_name=None, target_identity=None):
         return self._record("fill_editor_required_defaults", defaults, product_query, store_name)
 
-    def fill_editor_variants(self, defaults=None, product_query=None, store_name=None):
+    def fill_editor_variants(self, defaults=None, product_query=None, store_name=None, target_identity=None):
         return self._record("fill_editor_variants", defaults, product_query, store_name)
 
-    def fill_media_assets(self, defaults=None, product_query=None, store_name=None):
+    def fill_media_assets(self, defaults=None, product_query=None, store_name=None, target_identity=None):
         return self._record("fill_media_assets", defaults, product_query, store_name)
 
-    def fill_compliance_defaults(self, defaults=None, product_query=None, store_name=None):
+    def fill_compliance_defaults(self, defaults=None, product_query=None, store_name=None, target_identity=None):
         return self._record("fill_compliance_defaults", defaults, product_query, store_name)
 
-    def enable_semi_managed(self, product_query=None, store_name=None):
+    def enable_semi_managed(self, product_query=None, store_name=None, target_identity=None):
         return self._record("enable_semi_managed", product_query, store_name)
 
-    def open_semi_managed_page(self, defaults=None, product_query=None, store_name=None):
+    def open_semi_managed_page(self, defaults=None, product_query=None, store_name=None, target_identity=None):
         return self._record("open_semi_managed_page", defaults, product_query, store_name)
 
-    def fill_semi_managed_defaults(self, defaults=None, product_query=None, store_name=None):
+    def fill_semi_managed_defaults(self, defaults=None, product_query=None, store_name=None, target_identity=None):
         return self._record("fill_semi_managed_defaults", defaults, product_query, store_name)
 
-    def save_only(self, defaults=None, product_query=None, store_name=None):
-        return self._record("save_only", defaults, product_query, store_name)
+    def save_only(self, defaults=None, product_query=None, store_name=None, target_identity=None):
+        return self._record("save_only", defaults, product_query, store_name, target_identity)
 
-    def verify_not_published(self, product_query=None, store_name=None):
-        return self._record("verify_not_published", product_query, store_name)
+    def verify_not_published(self, product_query=None, store_name=None, target_identity=None):
+        return self._record("verify_not_published", product_query, store_name, target_identity)
 
     def update_live_hud(self, hud):
         self.live_hud_calls.append(hud)
@@ -321,63 +468,25 @@ class FakeWorkflowAdapter:
 
     def _record(self, action, *args):
         self.calls.append((action, *args))
-        evidence = {"action": action}
-        if action == "claim_product":
-            evidence["note_verified"] = self.note_verified
-        if action == "verify_draft_box_claim":
-            product_query = args[1] or "ACG Stand Product 1"
-            category_name = args[2] or "立牌类谷子"
-            store_name = args[3] or "Dang Kang"
-            target_source_urls = list(args[4] or [])
-            observed_source_url = "https://detail.1688.com/offer/from-acquisition.html"
-            row_text = f"采集箱商品行 {product_query} {category_name} {store_name} AI认领"
-            evidence["claimed_product"] = {
-                "title": product_query,
-                "category_name": category_name,
-                "source_url": observed_source_url,
-                "row_text": row_text,
-            }
-            semantic_match = (
-                ("source_url", observed_source_url)
-                if target_source_urls
-                else (("keyword", product_query) if product_query else ("category_name", category_name))
+        target_identity = args[-1] if args and isinstance(args[-1], dict) else None
+        business_args = args[:-1] if target_identity is not None else args
+        product_query = business_args[-2] if len(business_args) >= 2 else None
+        store_name = business_args[-1] if business_args else None
+        effective_save_result = self.save_result
+        if (
+            action == "save_only"
+            and self.include_save_result
+            and isinstance(self.save_result, dict)
+            and self.save_result.get("ok") is True
+        ):
+            effective_save_result = _merge_mapping(
+                _strict_test_save_result(
+                    target_identity=target_identity or {"product_query": "test-product", "store_name": "test-store"},
+                    store_name=str(store_name or "test-store"),
+                ),
+                self.save_result,
             )
-            evidence["draft_box_match"] = {
-                "matched_by": semantic_match[0],
-                "matched_value": semantic_match[1],
-                "raw_matched_by": semantic_match[0],
-                "row_text": row_text,
-                "source_urls": [observed_source_url],
-                "store_name": store_name,
-                "store_evidence": {
-                    "store_name": store_name,
-                    "cell_text": f"「{store_name}」",
-                    "source": "structured_store_cell",
-                },
-                "store_observation": {
-                    "observed_store_name": store_name,
-                    "selected": True,
-                    "selected_store_names": [store_name],
-                    "selection_evidence": {"input_checked": True},
-                    "draft_box_cell_evidence": {
-                        "store_name": store_name,
-                        "cell_text": f"「{store_name}」",
-                        "source": "structured_store_cell",
-                    },
-                },
-            }
-            evidence["evidence_ref"] = _evidence_ref(f"workflow-verify-{len(self.calls)}.png")
-            evidence["claim_target"] = {
-                "matchedBy": "source_url",
-                "rowText": "待认领商品行 ACG Stand Product 1 认领",
-                "sourceUrls": ["https://detail.1688.com/offer/from-acquisition.html"],
-            }
-            evidence["search_result"] = {
-                "query": "https://detail.1688.com/offer/from-acquisition.html",
-                "query_source": "target_source_url",
-                "filled": True,
-                "clicked_search": True,
-            }
+        evidence = {"action": action}
         if action == "fill_editor_required_defaults" and args:
             defaults = args[0] if isinstance(args[0], dict) else {}
             resolved = defaults.get("dxm_reference_templates_resolved") or {}
@@ -387,7 +496,7 @@ class FakeWorkflowAdapter:
             }
             evidence["dxm_reference_template_results"] = applied
         if action == "save_only" and self.include_save_result:
-            evidence["save_result"] = self.save_result
+            evidence["save_result"] = effective_save_result
         if action in {"save_only", "verify_not_published"}:
             evidence["evidence_ref"] = _evidence_ref(
                 f"workflow-{action}-{len(self.calls)}.png"
@@ -396,15 +505,20 @@ class FakeWorkflowAdapter:
             "ok": action != self.fail_action,
             "action": action,
             "stage": f"{action}_stage",
-            "page_title": "速卖通采集箱",
+            "page_title": "速卖通商品箱",
             "page_url": "https://www.dianxiaomi.com/web/smt/smtProductList/draft",
             "screenshot_url": f"/artifacts/{action}.png",
-            "product_query": args[-2] if len(args) >= 2 else None,
-            "store_name": args[-1] if len(args) >= 1 else None,
+            "product_query": product_query,
+            "store_name": store_name,
+            "target_identity": target_identity,
             "evidence": evidence,
         }
         if action == "save_only" and self.include_save_result:
-            result["save_result"] = self.save_result
+            result["save_result"] = effective_save_result
+        if action == "verify_not_published":
+            result["unpublished_proof"] = _strict_test_unpublished_proof(
+                target_identity=target_identity or {"product_query": "test-product", "store_name": "test-store"}
+            )
         if action in {"save_only", "verify_not_published"}:
             result["evidence_ref"] = evidence["evidence_ref"]
         if "dxm_reference_template_results" in evidence:
@@ -451,70 +565,42 @@ class FakeBrowserAgentRuntime:
                 "ok": True,
                 "updated": True,
                 "reason": "live_browser_hud_updated",
-                "current_url": "https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
-                "page_title": "店小秘数据采集",
+                "current_url": "https://www.dianxiaomi.com/web/smt/smtProductList/draft",
+                "page_title": "店小秘商品箱",
                 "hud": hud,
                 "updated_at": "2026-05-22T00:00:03+00:00",
             }
+        page_kind = _TEST_ACTION_CONTRACTS[command.action][1]
         result = {
             "ok": True,
             "action": command.action,
             "stage": f"{command.action}_stage",
-            "page_title": "店小秘商品箱" if command.action == "verify_draft_box_claim" else "店小秘数据采集",
-            "page_url": (
-                "https://www.dianxiaomi.com/web/smt/smtProductList/draft"
-                if command.action == "verify_draft_box_claim"
-                else "https://www.dianxiaomi.com/web/productCrawl/dataAcquisition"
-            ),
+            "page_title": "店小秘商品箱",
+            "page_url": _TEST_PAGE_URLS[page_kind],
             "screenshot_url": f"/artifacts/{command.action}.png",
-            "evidence": {
-                "action": command.action,
-                "claimed_product": {
-                    "title": command.params.get("product_query") or "ACG Stand Product 1",
-                    "category_name": command.params.get("category_name") or "立牌类谷子",
-                    "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-                    "row_text": "采集箱商品行 ACG Stand Product 1 AI认领",
-                } if command.action == "verify_draft_box_claim" else None,
-                "draft_box_match": {
-                    "matched_by": "source_url" if command.params.get("target_source_urls") else "keyword",
-                    "matched_value": (
-                        "https://detail.1688.com/offer/from-acquisition.html"
-                        if command.params.get("target_source_urls")
-                        else command.params.get("product_query") or "ACG Stand Product 1"
-                    ),
-                    "raw_matched_by": "source_url" if command.params.get("target_source_urls") else "keyword",
-                    "row_text": (
-                        f"采集箱商品行 {command.params.get('product_query') or 'ACG Stand Product 1'} "
-                        f"{command.params.get('category_name') or '立牌类谷子'} "
-                        f"{command.params.get('store_name') or 'Dang Kang'} AI认领"
-                    ),
-                    "source_urls": ["https://detail.1688.com/offer/from-acquisition.html"],
-                    "store_name": command.params.get("store_name") or "Dang Kang",
-                    "store_evidence": {
-                        "store_name": command.params.get("store_name") or "Dang Kang",
-                        "cell_text": f"「{command.params.get('store_name') or 'Dang Kang'}」",
-                        "source": "structured_store_cell",
-                    },
-                    "store_observation": {
-                        "observed_store_name": command.params.get("store_name") or "Dang Kang",
-                        "selected": True,
-                        "selected_store_names": [command.params.get("store_name") or "Dang Kang"],
-                        "selection_evidence": {"input_checked": True},
-                        "draft_box_cell_evidence": {
-                            "store_name": command.params.get("store_name") or "Dang Kang",
-                            "cell_text": f"「{command.params.get('store_name') or 'Dang Kang'}」",
-                            "source": "structured_store_cell",
-                        },
-                    },
-                } if command.action == "verify_draft_box_claim" else None,
-                "evidence_ref": _evidence_ref(
-                    f"browser-task-{command.task_id}-job-{command.job_id}-verify.png"
-                ) if command.action == "verify_draft_box_claim" else None,
-            },
+            "evidence": {"action": command.action},
+            "product_query": command.params.get("product_query"),
+            "store_name": command.params.get("store_name"),
+            "target_identity": command.params.get("target_identity"),
         }
         if command.action == "save_only":
-            result["save_result"] = {"ok": True, "code": 0, "msg": "真实保存成功", "published": False}
+            target_identity = command.params.get("target_identity") or {
+                "product_query": "test-product",
+                "store_name": "test-store",
+            }
+            result["save_result"] = _strict_test_save_result(
+                target_identity=target_identity,
+                store_name=str(command.params.get("store_name") or "test-store"),
+            )
             result["evidence"]["save_result"] = result["save_result"]
+        if command.action == "verify_not_published":
+            target_identity = command.params.get("target_identity") or {
+                "product_query": "test-product",
+                "store_name": "test-store",
+            }
+            result["unpublished_proof"] = _strict_test_unpublished_proof(
+                target_identity=target_identity,
+            )
         if command.action in {"save_only", "verify_not_published"}:
             evidence_ref = _evidence_ref(
                 f"browser-task-{command.task_id}-job-{command.job_id}-{command.action}.png"
@@ -605,7 +691,7 @@ def v1_db(tmp_path, monkeypatch):
     screenshot_dir = tmp_path / "screenshots"
     screenshot_dir.mkdir()
     monkeypatch.setattr(db, "DB_PATH", db_path)
-    monkeypatch.setattr(repository_module, "SCREENSHOT_DIR", screenshot_dir)
+    monkeypatch.setattr(repository_module, "EVIDENCE_DIR", screenshot_dir)
     monkeypatch.setattr(v1_runner_module, "SCREENSHOT_DIR", screenshot_dir)
     db.init_db()
     return db_path
@@ -620,13 +706,10 @@ def _create_task(
     store = repo.create_store("Dang Kang", "AliExpress")
     dxm_reference_templates = {
         "attribute_info": {"names": ["立牌类谷子"]},
-        "description": {"names": ["详情模板"]},
         "freight": {"names": ["40g普货包裹"]},
         "service": {"names": ["Service Template for New Sellers"]},
         "eu_responsible": {"names": ["Jacqueiline Marti"]},
         "manufacturer": {"names": ["jiyang county thunder"]},
-        "compliance": {"names": ["合规模板"]},
-        "semi_managed": {"names": ["半托管模板"]},
     }
     template_payloads = {
         "category": {
@@ -678,85 +761,31 @@ def _create_task(
         )
     product_ids = []
     for idx in range(product_count):
-        source_url = f"https://detail.1688.com/offer/test-{idx + 1}.html"
-        claim_task = None
-        if mode == "single_save":
-            claim_task = repo.create_acquisition_claim_request(
-                {
-                    "store_id": store["id"],
-                    "source_url": source_url,
-                    "keyword": f"ACG Stand Product {idx + 1}",
-                    "category_name": "立牌类谷子",
-                    "claim_mark": "AI认领",
-                    "template_id": None,
-                }
-            )
+        source_url = f"https://detail.1688.com/offer/{1013604102950 + idx}.html"
         product_data = {
-                "title": f"ACG Stand Product {idx + 1}",
-                "source": "dxm_data_acquisition" if mode == "single_save" else "test",
-                "status": "claimed_to_draft" if mode == "single_save" else "draft",
-                "category_name": "立牌类谷子",
-                "price": 7.01,
-                "currency": "USD",
-                "sku_count": 8,
-                "image_count": 8,
-                "payload": {
-                    "source": "dxm_data_acquisition" if mode == "single_save" else "test",
-                    "source_title": f"ACG Stand Product {idx + 1}",
-                    "source_url": source_url,
-                    "source_urls": [source_url],
-                    "claim_task_id": claim_task["id"] if claim_task else None,
-                    "draft_box_verified": mode == "single_save",
-                    "store_name": "Dang Kang",
-                    "category": {"template_category_id": f"product-cat-{idx + 1}"},
-                    "image": {"eu_outer_package_filename": f"product-eu-{idx + 1}.jpg"},
-                    "compliance": {"battery": "none"},
-                },
-            }
-        if claim_task:
-            claim_job = repo.get_task_private(claim_task["id"])["jobs"][0]
-            repo.update_task_status(claim_task["id"], "running")
-            repo.update_job(claim_job["id"], status="running")
-            target_identity = canonical_claim_target_identity(
-                source_url,
-                [source_url],
-                keyword=f"ACG Stand Product {idx + 1}",
-                category_name="立牌类谷子",
-            )
-            source_identity = canonical_source_identity(source_url, [source_url])
-            product = repo.create_claimed_product_and_complete_acquisition(
-                claim_task["id"],
-                product_data,
-                draft_box_observation={
-                    "schema": "dxm.draft_box.observation.v1",
-                    "verification_state": "VERIFY_DRAFT_BOX_CLAIM",
-                    "action": "verify_draft_box_claim",
-                    "draft_box_verified": True,
-                    "page_url": "https://www.dianxiaomi.com/web/smt/smtProductList/draft",
-                    "authorized_target_identity": target_identity,
-                    "authorized_target_fingerprint": target_identity["fingerprint"],
-                    "observed_source_identity": source_identity,
-                    "observed_store_identity": {
-                        "store_id": store["id"],
-                        "store_name": "Dang Kang",
-                        "selected": True,
-                        "selected_store_names": ["Dang Kang"],
-                        "selection_evidence": {"input_checked": True},
-                        "draft_box_cell_evidence": {
-                            "store_name": "Dang Kang",
-                            "cell_text": "「Dang Kang」",
-                            "source": "structured_store_cell",
-                        },
-                    },
-                    "matched_by": ["source_url"],
-                    "match_evidence": {"source_url": source_identity["primary_url"]},
-                    "observed_product_identity": f"ACG Stand Product {idx + 1}",
-                    "observed_row_identity": f"商品箱行 ACG Stand Product {idx + 1} 立牌类谷子 Dang Kang",
-                    "evidence_ref": _evidence_ref(f"v1-claim-{claim_task['id']}.png"),
-                },
-            ).product
-        else:
-            product = repo.create_product(product_data)
+            "title": f"ACG Stand Product {idx + 1}",
+            "source": "dxm_draft_box" if mode == "single_save" else "test",
+            "status": "ready_for_edit" if mode == "single_save" else "draft",
+            "category_name": "立牌类谷子",
+            "price": 7.01,
+            "currency": "USD",
+            "sku_count": 8,
+            "image_count": 8,
+            "payload": {
+                "source": "dxm_draft_box" if mode == "single_save" else "test",
+                "source_title": f"ACG Stand Product {idx + 1}",
+                "source_url": source_url,
+                "source_urls": [source_url],
+                "draft_box_verified": mode == "single_save",
+                "store_id": store["id"],
+                "store_name": "Dang Kang",
+                "product_box_evidence_ref": _evidence_ref(f"v1-product-{idx + 1}.png"),
+                "category": {"template_category_id": f"product-cat-{idx + 1}"},
+                "image": {"eu_outer_package_filename": f"product-eu-{idx + 1}.jpg"},
+                "compliance": {"battery": "none"},
+            },
+        }
+        product = repo.create_product(product_data)
         product_ids.append(product["id"])
     task = repo.create_task(
         {
@@ -764,7 +793,6 @@ def _create_task(
             "store_id": store["id"],
             "mode": mode,
             "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
-            "claim_mark": "AI认领",
             "product_ids": product_ids,
             "payload": {
                 "store_name": "Dang Kang",
@@ -777,14 +805,23 @@ def _create_task(
         }
     )
     if mode in {"single_save", "batch_save"} and manual_approval:
-        return repo.set_task_manual_approval(task["id"], approved=True, token="runner-approval-token", approved_by="ops-owner")
+        approval = repo.set_task_manual_approval(
+            task["id"],
+            approved=True,
+            token="runner-approval-token",
+            approved_by="ops-owner",
+        )
+        assert approval.ok is True
+        assert approval.task is not None
+        approved_task = repo.get_task_private(task["id"])
+        assert approved_task is not None
+        return approved_task
     return task
 
 
 def test_single_save_generates_success_report_and_never_publishes(v1_db):
     repo = Repository()
     task = _create_task(repo, mode="single_save", product_count=1)
-    job_id = repo.get_task(task["id"])["jobs"][0]["id"]
     manager = DummyManager()
 
     adapter = FakeWorkflowAdapter()
@@ -798,7 +835,8 @@ def test_single_save_generates_success_report_and_never_publishes(v1_db):
     assert reports[0]["status"] == "success"
     assert reports[0]["published"] is False
     assert reports[0]["save_result"]["msg"] == "真实保存成功"
-    assert reports[0]["summary"]["claim_mark"] == f"AI认领-{task['id']}-{job_id}"
+    assert "claim_mark" not in reports[0]["summary"]
+    assert reports[0]["summary"]["product_box_snapshot_fingerprint"]
     assert "semi_goods" in reports[0]["summary"]["filled_fields"]
 
 
@@ -808,9 +846,9 @@ def test_single_save_late_success_cannot_override_manual_review_after_save_autho
     manager = DummyManager()
 
     class ManualReviewDuringSaveAdapter(FakeWorkflowAdapter):
-        def save_only(self, defaults=None, product_query=None, store_name=None):
+        def save_only(self, defaults=None, product_query=None, store_name=None, target_identity=None):
             repo.update_task_status(task["id"], "needs_manual_review")
-            return super().save_only(defaults, product_query, store_name)
+            return super().save_only(defaults, product_query, store_name, target_identity)
 
     asyncio.run(
         _test_runner(
@@ -846,28 +884,31 @@ def test_create_task_preserves_payload_overrides(v1_db):
 def test_single_save_calls_workflow_adapter_in_complete_save_order(v1_db):
     repo = Repository()
     task = _create_task(repo, mode="single_save", product_count=1)
-    job_id = repo.get_task(task["id"])["jobs"][0]["id"]
     manager = DummyManager()
     adapter = FakeWorkflowAdapter()
 
     asyncio.run(_test_runner(repo, manager, workflow_adapter=adapter).run_task(task["id"]))
 
-    assert adapter.calls == [
-        ("check_login_state",),
-        ("open_draft_box",),
-        ("open_editor", "ACG Stand Product 1", "Dang Kang", f"AI认领-{task['id']}-{job_id}", ["https://detail.1688.com/offer/test-1.html"]),
-        ("verify_edit_ownership", "ACG Stand Product 1", "Dang Kang", ["https://detail.1688.com/offer/test-1.html"]),
-        ("fill_editor_required_defaults", adapter.calls[4][1], "ACG Stand Product 1", "Dang Kang"),
-        ("fill_editor_variants", adapter.calls[5][1], "ACG Stand Product 1", "Dang Kang"),
-        ("fill_media_assets", adapter.calls[6][1], "ACG Stand Product 1", "Dang Kang"),
-        ("fill_compliance_defaults", adapter.calls[7][1], "ACG Stand Product 1", "Dang Kang"),
-        ("enable_semi_managed", "ACG Stand Product 1", "Dang Kang"),
-        ("open_semi_managed_page", adapter.calls[9][1], "ACG Stand Product 1", "Dang Kang"),
-        ("fill_semi_managed_defaults", adapter.calls[10][1], "ACG Stand Product 1", "Dang Kang"),
-        ("fill_semi_managed_defaults", adapter.calls[11][1], "ACG Stand Product 1", "Dang Kang"),
-        ("save_only", adapter.calls[12][1], "ACG Stand Product 1", "Dang Kang"),
-        ("verify_not_published", "ACG Stand Product 1", "Dang Kang"),
+    assert [call[0] for call in adapter.calls] == [
+        "check_login_state",
+        "open_draft_box",
+        "open_editor",
+        "verify_edit_ownership",
+        "fill_editor_required_defaults",
+        "fill_editor_variants",
+        "fill_media_assets",
+        "fill_compliance_defaults",
+        "enable_semi_managed",
+        "open_semi_managed_page",
+        "fill_semi_managed_defaults",
+        "fill_semi_managed_defaults",
+        "save_only",
+        "verify_not_published",
     ]
+    source_urls = ["https://detail.1688.com/offer/1013604102950.html"]
+    assert adapter.calls[2][1:4] == ("ACG Stand Product 1", "Dang Kang", source_urls)
+    assert adapter.calls[3][1:4] == ("ACG Stand Product 1", "Dang Kang", source_urls)
+    assert adapter.calls[2][4] == adapter.calls[3][4]
     defaults = adapter.calls[4][1]
     assert defaults["category_name"] == "任务类目"
     assert defaults["category"]["template_category_id"] == "tmpl-cat"
@@ -1294,13 +1335,10 @@ def test_single_save_missing_required_dxm_reference_template_fails_before_save(v
                         "category_name": "模板类目",
                         "dxm_reference_templates": {
                             "attribute_info": {"names": ["立牌类谷子"]},
-                            "description": {"names": ["详情模板"]},
                             "freight": {"names": [], "required": True},
                             "service": {"names": ["Service Template for New Sellers"]},
                             "eu_responsible": {"names": ["Jacqueiline Marti"]},
                             "manufacturer": {"names": ["jiyang county thunder"]},
-                            "compliance": {"names": ["合规模板"]},
-                            "semi_managed": {"names": ["半托管模板"]},
                         },
                         "category": {
                             "template_category_id": "tmpl-cat",
@@ -1349,7 +1387,7 @@ def test_single_save_report_includes_resolved_dxm_reference_templates(v1_db):
     reports = repo.list_reports(task["id"])
     assert reports[0]["status"] == "success"
     resolved = reports[0]["summary"]["dxm_reference_templates_resolved"]
-    assert resolved["description"] == {"names": ["详情模板"], "required": False}
+    assert resolved["description"] == {"names": [], "required": False}
     assert resolved["freight"] == {"names": ["40g普货包裹"], "required": True}
     reference_results = reports[0]["summary"]["dxm_reference_template_results"]
     assert set(reference_results) == {
@@ -1362,252 +1400,8 @@ def test_single_save_report_includes_resolved_dxm_reference_templates(v1_db):
         "compliance",
         "semi_managed",
     }
-    assert reference_results["description"] == {"ok": True, "section": "description", "names": ["详情模板"], "required": False}
+    assert reference_results["description"] == {"ok": True, "section": "description", "names": [], "required": False}
     assert reference_results["freight"] == {"ok": True, "section": "freight", "names": ["40g普货包裹"], "required": True}
-
-
-def test_claim_only_calls_adapter_without_opening_editor_or_saving(v1_db):
-    repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-        "claim_mark": "AI认领",
-        "template_id": "template-1",
-    })
-    manager = DummyManager()
-    adapter = FakeWorkflowAdapter()
-
-    asyncio.run(_test_runner(repo, manager, workflow_adapter=adapter).run_task(task["id"]))
-
-    assert adapter.calls == [
-        ("check_login_state",),
-        ("open_data_acquisition",),
-        (
-            "claim_from_data_acquisition",
-            f"AI认领-{task['id']}",
-            "Hazbin Hotel 立牌",
-            "立牌类谷子",
-            "Dang Kang",
-            ["https://detail.1688.com/offer/from-acquisition.html"],
-        ),
-        (
-            "verify_draft_box_claim",
-            f"AI认领-{task['id']}",
-            "Hazbin Hotel 立牌",
-            "立牌类谷子",
-            "Dang Kang",
-            ["https://detail.1688.com/offer/from-acquisition.html"],
-        ),
-    ]
-    assert not any(call[0] in {"open_editor", "save_only"} for call in adapter.calls)
-    reports = repo.list_reports(task["id"])
-    assert reports[0]["status"] == "success"
-    assert reports[0]["published"] is False
-    assert reports[0]["save_result"]["message"] == "待认领入箱已完成，商品已进入商品箱"
-    products = repo.list_products()
-    claimed = [product for product in products if product["status"] == "claimed_to_draft"]
-    assert len(claimed) == 1
-    assert claimed[0]["title"] == "Hazbin Hotel 立牌"
-    assert claimed[0]["source"] == "dxm_data_acquisition"
-    assert claimed[0]["payload"]["store_id"] == store["id"]
-    assert claimed[0]["payload"]["store_name"] == "Dang Kang"
-    assert claimed[0]["payload"]["claim_task_id"] == task["id"]
-    assert claimed[0]["payload"]["claim_mark"] == f"AI认领-{task['id']}"
-    assert claimed[0]["payload"]["source_url"] == "https://detail.1688.com/offer/from-acquisition.html"
-    assert claimed[0]["payload"]["source_urls"] == ["https://detail.1688.com/offer/from-acquisition.html"]
-    assert claimed[0]["payload"]["data_acquisition_match"] == "source_url"
-    assert "待认领商品行" in claimed[0]["payload"]["data_acquisition_row_text"]
-    assert "采集箱商品行" in claimed[0]["payload"]["draft_box_row_text"]
-    assert claimed[0]["payload"]["acquisition_search"]["query_source"] == "target_source_url"
-    assert reports[0]["product_id"] == claimed[0]["id"]
-    assert reports[0]["save_result"]["claimed_product_id"] == claimed[0]["id"]
-    assert reports[0]["summary"]["claimed_product"]["id"] == claimed[0]["id"]
-    assert "商品箱编辑保存" in reports[0]["summary"]["next_action"]
-
-    refreshed_task = repo.get_task_private(task["id"])
-    assert refreshed_task["payload"]["stage"] == "claimed_to_draft"
-    assert refreshed_task["payload"]["status"] == "completed"
-    assert refreshed_task["payload"]["claimed_product_id"] == claimed[0]["id"]
-    assert refreshed_task["payload"]["claimed_product_source_url"] == "https://detail.1688.com/offer/from-acquisition.html"
-    assert refreshed_task["payload"]["claimed_product_category_name"] == "立牌类谷子"
-    assert refreshed_task["payload"]["draft_box_verified"] is True
-    assert "商品箱编辑保存" in refreshed_task["payload"]["next_step"]
-
-
-def test_claim_only_rejects_store_proof_without_exact_selected_store_names(v1_db):
-    class MissingSelectedStoreNamesAdapter(FakeWorkflowAdapter):
-        def _record(self, action, *args):
-            result = super()._record(action, *args)
-            if action == "verify_draft_box_claim":
-                _test_action_observations(result)["draft_box_match"]["store_observation"].pop(
-                    "selected_store_names",
-                    None,
-                )
-            return result
-
-    repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-        "claim_mark": "AI认领",
-        "template_id": "template-1",
-    })
-
-    asyncio.run(
-        _test_runner(
-            repo,
-            DummyManager(),
-            workflow_adapter=MissingSelectedStoreNamesAdapter(),
-        ).run_task(task["id"])
-    )
-
-    refreshed = repo.get_task_private(task["id"])
-    assert refreshed["status"] == "failed"
-    assert refreshed["jobs"][0]["error_code"] == "E202"
-    assert repo.list_claimed_draft_products() == []
-    assert repo.list_products(include_fixtures=True) == []
-
-
-def test_claim_only_rejects_store_proof_without_structured_store_cell(v1_db):
-    class MissingStoreCellAdapter(FakeWorkflowAdapter):
-        def _record(self, action, *args):
-            result = super()._record(action, *args)
-            if action == "verify_draft_box_claim":
-                _test_action_observations(result)["draft_box_match"]["store_observation"].pop(
-                    "draft_box_cell_evidence",
-                    None,
-                )
-            return result
-
-    repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-        "claim_mark": "AI认领",
-        "template_id": "template-1",
-    })
-
-    asyncio.run(
-        _test_runner(
-            repo,
-            DummyManager(),
-            workflow_adapter=MissingStoreCellAdapter(),
-        ).run_task(task["id"])
-    )
-
-    refreshed = repo.get_task_private(task["id"])
-    assert refreshed["status"] == "failed"
-    assert refreshed["jobs"][0]["error_code"] == "E202"
-    assert repo.list_claimed_draft_products() == []
-    assert repo.list_products(include_fixtures=True) == []
-
-
-@pytest.mark.parametrize(
-    "invalid_store_proof",
-    [
-        "multiple_selected_stores",
-        "selected_store_names_string",
-        "selection_evidence_string",
-        "store_cell_string",
-        "top_level_store_evidence_string",
-        "wrong_cell_source",
-        "wrong_cell_store",
-        "wrong_cell_text_boundary",
-        "top_level_observation_mismatch",
-    ],
-)
-def test_claim_only_rejects_malformed_or_inconsistent_store_proof(
-    v1_db,
-    invalid_store_proof,
-):
-    class InvalidStoreProofAdapter(FakeWorkflowAdapter):
-        def _record(self, action, *args):
-            result = super()._record(action, *args)
-            if action != "verify_draft_box_claim":
-                return result
-            draft_box_match = _test_action_observations(result)["draft_box_match"]
-            observation = draft_box_match["store_observation"]
-            cell = observation["draft_box_cell_evidence"]
-            if invalid_store_proof == "multiple_selected_stores":
-                observation["selected_store_names"] = ["Dang Kang", "Another Store"]
-            elif invalid_store_proof == "selected_store_names_string":
-                observation["selected_store_names"] = "Dang Kang"
-            elif invalid_store_proof == "selection_evidence_string":
-                observation["selection_evidence"] = "input_checked=true"
-            elif invalid_store_proof == "store_cell_string":
-                observation["draft_box_cell_evidence"] = "Dang Kang"
-            elif invalid_store_proof == "top_level_store_evidence_string":
-                draft_box_match["store_evidence"] = draft_box_match["row_text"]
-            elif invalid_store_proof == "wrong_cell_source":
-                cell["source"] = "draft_box_row_text"
-                draft_box_match["store_evidence"] = dict(cell)
-            elif invalid_store_proof == "wrong_cell_store":
-                cell["store_name"] = "Another Store"
-                draft_box_match["store_evidence"] = dict(cell)
-            elif invalid_store_proof == "wrong_cell_text_boundary":
-                cell["cell_text"] = "Dang KangPlus"
-                draft_box_match["store_evidence"] = dict(cell)
-            elif invalid_store_proof == "top_level_observation_mismatch":
-                draft_box_match["store_evidence"] = {**cell, "cell_text": "Another Store"}
-            return result
-
-    repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-        "claim_mark": "AI认领",
-        "template_id": "template-1",
-    })
-
-    asyncio.run(
-        _test_runner(
-            repo,
-            DummyManager(),
-            workflow_adapter=InvalidStoreProofAdapter(),
-        ).run_task(task["id"])
-    )
-
-    refreshed = repo.get_task_private(task["id"])
-    assert refreshed["status"] == "failed"
-    assert refreshed["jobs"][0]["error_code"] == "E202"
-    assert repo.list_claimed_draft_products() == []
-    assert repo.list_products(include_fixtures=True) == []
-
-
-def test_claim_only_missing_authorization_verifier_fails_before_first_mutation(v1_db):
-    repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request(
-        {
-            "store_id": store["id"],
-            "keyword": "Hazbin Hotel 立牌",
-            "category_name": "立牌类谷子",
-            "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-            "claim_mark": "AI认领",
-            "template_id": "template-1",
-        }
-    )
-    manager = DummyManager()
-    adapter = FakeWorkflowAdapter()
-
-    asyncio.run(V1TaskRunner(repo, manager, workflow_adapter=adapter).run_task(task["id"]))
-
-    assert [call[0] for call in adapter.calls] == ["check_login_state", "open_data_acquisition"]
-    report = repo.list_reports(task["id"])[0]
-    assert report["status"] == "failed"
-    assert report["save_result"]["error_code"] == "AUTH_VERIFIER_MISSING"
 
 
 @pytest.mark.parametrize("invalid_result", [None, True, "unexpected"])
@@ -1623,43 +1417,6 @@ def test_real_mutation_authorizer_malformed_result_fails_closed(v1_db, invalid_r
         runner._assert_real_mutation_authorized(1, "single_save", StateName.SAVE_ONLY)
 
     assert exc_info.value.error_code == "AUTH_REVALIDATION_FAILED"
-
-
-def test_claim_only_revalidates_consumed_lease_immediately_before_first_mutation(v1_db):
-    repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request(
-        {
-            "store_id": store["id"],
-            "keyword": "Hazbin Hotel 立牌",
-            "category_name": "立牌类谷子",
-            "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-            "claim_mark": "AI认领",
-            "template_id": "template-1",
-        }
-    )
-    manager = DummyManager()
-    adapter = FakeWorkflowAdapter()
-    verifier_calls = []
-
-    def reject_drift(task_id, mode, state):
-        verifier_calls.append((task_id, mode, state))
-        return {"ok": False, "reason_code": "AUTH_CONTEXT_MISMATCH"}
-
-    asyncio.run(
-        _test_runner(
-            repo,
-            manager,
-            workflow_adapter=adapter,
-            authorization_verifier=reject_drift,
-        ).run_task(task["id"])
-    )
-
-    assert verifier_calls == [(task["id"], "claim_only", "CLAIM_TO_DRAFT_BOX")]
-    assert [call[0] for call in adapter.calls] == ["check_login_state", "open_data_acquisition"]
-    report = repo.list_reports(task["id"])[0]
-    assert report["status"] == "failed"
-    assert report["save_result"]["error_code"] == "AUTH_CONTEXT_MISMATCH"
 
 
 def test_single_save_revalidates_consumed_lease_immediately_before_save_mutation(v1_db):
@@ -1686,335 +1443,6 @@ def test_single_save_revalidates_consumed_lease_immediately_before_save_mutation
     report = repo.list_reports(task["id"])[0]
     assert report["status"] == "failed"
     assert report["save_result"]["error_code"] == "AUTH_LEASE_EXPIRED"
-
-
-def test_claim_only_failure_uses_operator_chinese_detail(v1_db):
-    repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-        "claim_mark": "AI认领",
-        "template_id": "template-1",
-    })
-    manager = DummyManager()
-    adapter = FakeWorkflowAdapter(fail_action="claim_from_data_acquisition")
-
-    asyncio.run(_test_runner(repo, manager, workflow_adapter=adapter).run_task(task["id"]))
-
-    report = repo.list_reports(task["id"])[0]
-    detail = report["save_result"]["message"]
-    blocked_reason = report["summary"]["blocked_reason"]
-    refreshed_task = repo.get_task_private(task["id"])
-    job_error = refreshed_task["jobs"][0]["error_message"]
-    exception = repo.list_exceptions()[0]
-
-    for value in [detail, blocked_reason, job_error, exception["detail"]]:
-        assert "待认领入箱" in value or "已有待认领" in value
-        assert "不会保存或发布" in value
-        assert "claim_from_data_acquisition" not in value
-        assert "dianxiaomi.com" not in value
-
-
-def test_claim_only_browser_action_timeout_fails_task_instead_of_staying_running(v1_db):
-    class HangingWorkflowAdapter(FakeWorkflowAdapter):
-        def open_data_acquisition(self):
-            time.sleep(0.2)
-            return super().open_data_acquisition()
-
-    repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-        "claim_mark": "AI认领",
-        "template_id": "template-1",
-    })
-    manager = DummyManager()
-    adapter = HangingWorkflowAdapter()
-
-    asyncio.run(
-        _test_runner(
-            repo,
-            manager,
-            workflow_adapter=adapter,
-            workflow_action_timeout_seconds=0.01,
-        ).run_task(task["id"])
-    )
-
-    refreshed = repo.get_task_private(task["id"])
-    report = repo.list_reports(task["id"])[0]
-    exception = repo.list_exceptions()[0]
-
-    assert refreshed["status"] == "failed"
-    assert refreshed["jobs"][0]["status"] == "failed"
-    assert refreshed["jobs"][0]["error_code"] == "E901"
-    assert "真实浏览器操作超时" in refreshed["jobs"][0]["error_message"]
-    assert "重新打开执行浏览器" in refreshed["jobs"][0]["error_message"]
-    assert report["save_result"]["ok"] is False
-    assert "真实浏览器操作超时" in report["summary"]["blocked_reason"]
-    assert exception["title"] == "真实浏览器操作超时"
-    messages = [item["message"] for item in repo.list_logs(task["id"])]
-    assert "真实浏览器动作开始：打开已有待认领列表" in messages
-    assert "真实浏览器动作超时：打开已有待认领列表" in messages
-
-
-def test_claim_only_browser_closed_error_is_operator_readable(v1_db):
-    class ClosedBrowserWorkflowAdapter(FakeWorkflowAdapter):
-        def open_data_acquisition(self):
-            return {
-                "ok": False,
-                "action": "open_data_acquisition",
-                "stage": "workflow_navigation_failed",
-                "page_url": "https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
-                "message": "进入业务页失败：Page.evaluate: Target page, context or browser has been closed",
-            }
-
-    repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-        "claim_mark": "AI认领",
-        "template_id": "template-1",
-    })
-    manager = DummyManager()
-    adapter = ClosedBrowserWorkflowAdapter()
-
-    asyncio.run(_test_runner(repo, manager, workflow_adapter=adapter).run_task(task["id"]))
-
-    report = repo.list_reports(task["id"])[0]
-    detail = report["summary"]["blocked_reason"]
-    job_error = repo.get_task_private(task["id"])["jobs"][0]["error_message"]
-
-    for value in [detail, job_error]:
-        assert "真实浏览器窗口已关闭或失去连接" in value
-        assert "重新打开执行浏览器" in value
-        assert "不会保存或发布" in value
-        assert "Page.evaluate" not in value
-        assert "Target page" not in value
-    messages = [item["message"] for item in repo.list_logs(task["id"])]
-    assert "真实浏览器动作开始：打开已有待认领列表" in messages
-    assert "真实浏览器动作失败：打开已有待认领列表" in messages
-
-
-def test_claim_only_does_not_record_claimed_product_without_source_url(v1_db):
-    class MissingSourceUrlAdapter(FakeWorkflowAdapter):
-        def _record(self, action, *args):
-            result = super()._record(action, *args)
-            if action == "verify_draft_box_claim":
-                evidence = _test_action_observations(result)
-                claimed_product = evidence.get("claimed_product") or {}
-                claimed_product.pop("source_url", None)
-                draft_box_match = evidence.get("draft_box_match") or {}
-                draft_box_match["source_urls"] = []
-            return result
-
-    repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "claim_mark": "AI认领",
-        "template_id": "template-1",
-    })
-    manager = DummyManager()
-    adapter = MissingSourceUrlAdapter()
-
-    asyncio.run(_test_runner(repo, manager, workflow_adapter=adapter).run_task(task["id"]))
-
-    refreshed = repo.get_task_private(task["id"])
-    assert refreshed["status"] == "failed"
-    assert repo.list_claimed_draft_products() == []
-    assert repo.list_products(include_fixtures=True) == []
-
-
-def test_claim_only_rejects_draft_box_source_outside_stage_a_authorized_url(v1_db):
-    class WrongObservedSourceAdapter(FakeWorkflowAdapter):
-        def _record(self, action, *args):
-            result = super()._record(action, *args)
-            if action == "verify_draft_box_claim":
-                evidence = _test_action_observations(result)
-                wrong_url = "https://detail.1688.com/offer/different-product.html"
-                evidence["claimed_product"]["source_url"] = wrong_url
-                evidence["draft_box_match"]["source_urls"] = [wrong_url]
-                evidence["draft_box_match"]["matched_value"] = wrong_url
-            return result
-
-    repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-        "claim_mark": "AI认领",
-        "template_id": "template-1",
-    })
-
-    asyncio.run(_test_runner(repo, DummyManager(), workflow_adapter=WrongObservedSourceAdapter()).run_task(task["id"]))
-
-    refreshed = repo.get_task_private(task["id"])
-    assert refreshed["status"] == "failed"
-    assert refreshed["jobs"][0]["error_code"] == "E202"
-    assert repo.list_products(include_fixtures=True) == []
-
-
-def test_claim_only_rejects_claim_mark_row_that_does_not_observe_authorized_hint(v1_db):
-    class ClaimMarkOnlyAdapter(FakeWorkflowAdapter):
-        def _record(self, action, *args):
-            result = super()._record(action, *args)
-            if action == "verify_draft_box_claim":
-                evidence = _test_action_observations(result)
-                row_text = "AI认领 已进入商品箱 Dang Kang"
-                evidence["claimed_product"]["title"] = "无关商品"
-                evidence["claimed_product"]["row_text"] = row_text
-                evidence["draft_box_match"].update({
-                    "matched_by": "keyword",
-                    "matched_value": "Hazbin Hotel 立牌",
-                    "raw_matched_by": "claim_mark",
-                    "row_text": row_text,
-                })
-            return result
-
-    repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "claim_mark": "AI认领",
-        "template_id": "template-1",
-    })
-
-    asyncio.run(_test_runner(repo, DummyManager(), workflow_adapter=ClaimMarkOnlyAdapter()).run_task(task["id"]))
-
-    refreshed = repo.get_task_private(task["id"])
-    assert refreshed["status"] == "failed"
-    assert refreshed["jobs"][0]["error_code"] == "E202"
-    assert repo.list_products(include_fixtures=True) == []
-
-
-def test_claim_only_rejects_page_store_name_spoofed_against_authoritative_store_id(v1_db):
-    repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "store_name": "Spoof Store",
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "claim_mark": "AI认领",
-        "template_id": "template-1",
-    })
-
-    asyncio.run(_test_runner(repo, DummyManager(), workflow_adapter=FakeWorkflowAdapter()).run_task(task["id"]))
-
-    refreshed = repo.get_task_private(task["id"])
-    assert refreshed["status"] == "failed"
-    assert refreshed["jobs"][0]["error_code"] == "E202"
-    assert repo.list_products(include_fixtures=True) == []
-
-
-def test_claim_click_revalidates_after_outer_guard_and_before_adapter_mutation(v1_db):
-    class ClickAuthorizingAdapter(FakeWorkflowAdapter):
-        def __init__(self):
-            super().__init__()
-            self.authorizer = None
-            self.context = None
-            self.clicked = False
-
-        def set_mutation_authorizer(self, authorizer, context=None):
-            self.authorizer = authorizer
-            self.context = context
-
-        def clear_mutation_authorizer(self):
-            self.authorizer = None
-
-        def claim_from_data_acquisition(self, *args, **kwargs):
-            def click_operation():
-                self.clicked = True
-                return True
-
-            result = self.authorizer(
-                {**self.context, "mutation_action": "claim_confirm_click"},
-                click_operation,
-            )
-            if not isinstance(result, dict) or result.get("ok") is not True:
-                raise RuntimeError(result.get("reason_code") if isinstance(result, dict) else "AUTH_REVALIDATION_FAILED")
-            return super().claim_from_data_acquisition(*args, **kwargs)
-
-    repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "store_name": store["name"],
-        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "claim_mark": "AI认领",
-        "template_id": "template-1",
-    })
-    adapter = ClickAuthorizingAdapter()
-    checks = []
-
-    def verifier(*_args):
-        checks.append(_args)
-        return (
-            {"ok": True, "reason_code": "OK"}
-            if len(checks) == 1
-            else {"ok": False, "reason_code": "AUTH_LEASE_EXPIRED"}
-        )
-
-    asyncio.run(V1TaskRunner(
-        repo,
-        DummyManager(),
-        workflow_adapter=adapter,
-        authorization_verifier=verifier,
-    ).run_task(task["id"]))
-
-    assert len(checks) == 2
-    assert adapter.clicked is False
-    assert repo.get_task_private(task["id"])["status"] == "failed"
-
-
-def test_claim_only_keeps_source_url_as_match_hint_not_acquisition_query(v1_db):
-    repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    source_url = "https://detail.1688.com/offer/from-acquisition.html"
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "source_url": source_url,
-        "claim_mark": "AI认领",
-        "template_id": "template-1",
-    })
-    manager = DummyManager()
-    adapter = FakeWorkflowAdapter()
-
-    asyncio.run(_test_runner(repo, manager, workflow_adapter=adapter).run_task(task["id"]))
-
-    assert adapter.calls[2] == (
-        "claim_from_data_acquisition",
-        f"AI认领-{task['id']}",
-        None,
-        None,
-        "Dang Kang",
-        [source_url],
-    )
-    assert adapter.calls[3] == (
-        "verify_draft_box_claim",
-        f"AI认领-{task['id']}",
-        None,
-        None,
-        "Dang Kang",
-        [source_url],
-    )
 
 
 def test_single_save_fails_when_adapter_lacks_media_or_compliance_methods(v1_db):
@@ -2084,7 +1512,7 @@ def test_workflow_adapter_failure_fails_job_and_writes_exception_and_report(v1_d
     exceptions = repo.list_exceptions()
     assert refreshed["status"] == "failed"
     assert reports[0]["status"] == "failed"
-    assert reports[0]["published"] is False
+    assert reports[0]["published"] is None
     assert "open_editor" in reports[0]["summary"]["blocked_reason"]
     assert exceptions[0]["error_code"] == "E901"
     assert any(
@@ -2121,22 +1549,6 @@ def test_workflow_action_rejects_non_boolean_success_values(v1_db, impostor_ok):
     assert [report for report in reports if report["status"] == "success"] == []
 
 
-def test_single_save_uses_existing_claimed_draft_product_without_rewriting_claim_note(v1_db):
-    repo = Repository()
-    task = _create_task(repo, mode="single_save", product_count=1)
-    manager = DummyManager()
-    adapter = FakeWorkflowAdapter(note_verified=False)
-
-    asyncio.run(_test_runner(repo, manager, workflow_adapter=adapter).run_task(task["id"]))
-
-    actions = [call[0] for call in adapter.calls]
-    assert "claim_product" not in actions
-    assert "open_editor" in actions
-    reports = repo.list_reports(task["id"])
-    assert reports[0]["status"] == "success"
-    assert "claim_product" not in reports[0]["summary"]["workflow_actions"]
-
-
 def test_single_save_runner_requires_server_manual_approval_immediately_before_save(v1_db):
     repo = Repository()
     task = _create_task(repo, mode="single_save", product_count=1, manual_approval=False)
@@ -2148,7 +1560,7 @@ def test_single_save_runner_requires_server_manual_approval_immediately_before_s
     assert "save_only" not in [call[0] for call in adapter.calls]
     reports = repo.list_reports(task["id"])
     assert reports[0]["status"] == "failed"
-    assert reports[0]["published"] is False
+    assert reports[0]["published"] is None
     assert "人工确认" in reports[0]["summary"]["blocked_reason"]
 
 
@@ -2172,7 +1584,7 @@ def test_single_save_browser_agent_still_requires_manual_approval_before_save(v1
     assert "save_only" not in actions
     reports = repo.list_reports(task["id"])
     assert reports[0]["status"] == "failed"
-    assert reports[0]["published"] is False
+    assert reports[0]["published"] is None
     assert "人工确认" in reports[0]["summary"]["blocked_reason"]
 
 
@@ -2210,8 +1622,8 @@ def test_save_only_false_save_result_fails_job(v1_db):
 
     reports = repo.list_reports(task["id"])
     assert reports[0]["status"] == "failed"
-    assert reports[0]["published"] is False
-    assert "save_result" in reports[0]["summary"]["blocked_reason"]
+    assert reports[0]["published"] is None
+    assert "保存失败" in reports[0]["summary"]["blocked_reason"]
 
 
 def test_single_save_fails_when_action_result_has_no_evidence_descriptor(v1_db):
@@ -2456,7 +1868,7 @@ def test_save_only_smt_add_json_network_success_does_not_leave_failure_summary(v
         assert evidence_ref["sha256"] == hashlib.sha256(content).hexdigest().upper()
 
 
-def test_single_save_runner_rejects_product_that_lost_claimed_status_before_browser(v1_db):
+def test_single_save_runner_rejects_product_that_lost_ready_for_edit_status_before_browser(v1_db):
     repo = Repository()
     task = _create_task(repo, mode="single_save", product_count=1)
     product_id = task["payload"]["product_ids"][0]
@@ -2470,7 +1882,7 @@ def test_single_save_runner_rejects_product_that_lost_claimed_status_before_brow
     assert adapter.calls == []
     reports = repo.list_reports(task["id"])
     assert reports[0]["status"] == "failed"
-    assert "已认领的商品箱商品" in reports[0]["summary"]["blocked_reason"]
+    assert "商品箱" in reports[0]["summary"]["blocked_reason"]
 
 
 def test_single_save_runner_rejects_product_without_draft_box_verification_before_browser(v1_db):
@@ -2503,7 +1915,7 @@ def test_save_only_missing_save_result_fails_job(v1_db):
 
     reports = repo.list_reports(task["id"])
     assert reports[0]["status"] == "failed"
-    assert reports[0]["published"] is False
+    assert reports[0]["published"] is None
     assert "save_result" in reports[0]["summary"]["blocked_reason"]
 
 
@@ -2609,60 +2021,6 @@ def test_real_dxm_adapter_always_requires_persistent_browser_agent_runtime(v1_db
     assert _test_runner(repo, manager, workflow_adapter=fake_adapter)._use_process_workflow_runtime() is True
 
 
-def test_claim_only_process_worker_request_contains_acquisition_context(v1_db, monkeypatch):
-    repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-        "claim_mark": "AI认领",
-        "template_id": "template-1",
-    })
-    job = repo.get_task(task["id"])["jobs"][0]
-    runner = _test_runner(repo, DummyManager(), workflow_adapter=FakeWorkflowAdapter())
-    captured = {}
-
-    def fake_invoke_worker(**kwargs):
-        captured.update(kwargs)
-        legacy_result = {
-            "ok": True,
-            "action": kwargs["action_name"],
-            "stage": "data_acquisition_claim",
-            "page_url": "https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
-            "evidence": {"stage": "data_acquisition_claim"},
-        }
-        return _canonical_test_action_result(
-            kwargs["action_name"],
-            legacy_result,
-            state_override=kwargs["state_name"].value,
-        )
-
-    monkeypatch.setattr(runner, "_invoke_workflow_worker", fake_invoke_worker)
-
-    result = runner._run_workflow_action_process(
-        task,
-        job,
-        StateName.CLAIM_TO_DRAFT_BOX,
-        f"AI认领-{task['id']}",
-        {},
-    )
-
-    request = captured["request"]
-    assert request["action"] == "claim_from_data_acquisition"
-    assert request["state"] == StateName.CLAIM_TO_DRAFT_BOX.value
-    assert request["params"] == {
-        "claim_mark": f"AI认领-{task['id']}",
-        "product_query": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "store_name": "Dang Kang",
-        "target_source_urls": ["https://detail.1688.com/offer/from-acquisition.html"],
-    }
-    assert result["ok"] is True
-    assert result["workflow_runtime"] == "process"
-
-
 def test_single_save_process_worker_keeps_source_urls_for_editor_identity(v1_db, monkeypatch):
     repo = Repository()
     task = _create_task(repo, mode="single_save", product_count=1)
@@ -2692,64 +2050,12 @@ def test_single_save_process_worker_keeps_source_urls_for_editor_identity(v1_db,
             task,
             job,
             state_name,
-            f"AI认领-{task['id']}-{job['id']}",
             {},
         )
 
     assert [request["action"] for request in requests] == ["open_editor", "verify_edit_ownership"]
-    assert requests[0]["params"]["target_source_urls"] == ["https://detail.1688.com/offer/test-1.html"]
-    assert requests[1]["params"]["target_source_urls"] == ["https://detail.1688.com/offer/test-1.html"]
-
-
-def test_claim_only_browser_agent_command_contains_acquisition_context(v1_db, monkeypatch):
-    repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-        "claim_mark": "AI认领",
-        "template_id": "template-1",
-    })
-    job = repo.get_task(task["id"])["jobs"][0]
-    runtime = FakeBrowserAgentRuntime()
-    runner = _test_runner(
-        repo,
-        DummyManager(),
-        workflow_adapter=FakeWorkflowAdapter(),
-        browser_agent_runtime=runtime,
-        workflow_action_timeout_seconds=33,
-    )
-    monkeypatch.setenv("DXM_WORKFLOW_ACTION_RUNTIME", "browser_agent")
-
-    result = runner._run_workflow_action_browser_agent(
-        task,
-        job,
-        StateName.CLAIM_TO_DRAFT_BOX,
-        f"AI认领-{task['id']}",
-        {},
-    )
-
-    command, timeout_seconds = runtime.commands[0]
-    assert command.command_id
-    assert command.idempotency_key
-    assert datetime.fromisoformat(command.deadline).tzinfo is not None
-    assert command.expected_page == "data_acquisition"
-    assert command.runtime_id
-    assert command.action == "claim_from_data_acquisition"
-    assert command.state == StateName.CLAIM_TO_DRAFT_BOX.value
-    assert command.step_label == "认领到商品箱"
-    assert command.params == {
-        "claim_mark": f"AI认领-{task['id']}",
-        "product_query": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "store_name": "Dang Kang",
-        "target_source_urls": ["https://detail.1688.com/offer/from-acquisition.html"],
-    }
-    assert timeout_seconds == 33
-    assert result["workflow_runtime"] == "browser_agent"
-    assert result["browser_agent_command"]["action"] == "claim_from_data_acquisition"
+    assert requests[0]["params"]["target_source_urls"] == ["https://detail.1688.com/offer/1013604102950.html"]
+    assert requests[1]["params"]["target_source_urls"] == ["https://detail.1688.com/offer/1013604102950.html"]
 
 
 def test_v1_rebuilds_command_with_stable_idempotency_key_and_runtime_reuses_result(v1_db):
@@ -2815,14 +2121,14 @@ def test_v1_rebuilds_command_with_stable_idempotency_key_and_runtime_reuses_resu
         task,
         job,
         StateName.PRECHECK_SESSION,
-        "AI认领",
+        "DXM-LOCK",
         {},
     )
     second = runner._run_workflow_action_browser_agent(
         task,
         job,
         StateName.PRECHECK_SESSION,
-        "AI认领",
+        "DXM-LOCK",
         {},
     )
 
@@ -2845,14 +2151,7 @@ def test_v1_command_uses_one_runtime_id_snapshot_for_binding_and_idempotency(v1_
             return "runtime-before-reset" if self.runtime_reads == 1 else "runtime-after-reset"
 
     repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-        "claim_mark": "AI认领",
-    })
+    task = _create_task(repo, mode="single_save", product_count=1)
     job = repo.get_task(task["id"])["jobs"][0]
     runtime = ResetBetweenReadsRuntime()
     runner = _test_runner(
@@ -2866,8 +2165,8 @@ def test_v1_command_uses_one_runtime_id_snapshot_for_binding_and_idempotency(v1_
     runner._run_workflow_action_browser_agent(
         task,
         job,
-        StateName.CLAIM_TO_DRAFT_BOX,
-        f"AI认领-{task['id']}",
+        StateName.PRECHECK_SESSION,
+        "DXM-LOCK",
         {},
     )
 
@@ -2922,7 +2221,6 @@ def test_v1_runtime_reset_between_snapshot_and_reservation_fails_closed_without_
                 task,
                 job,
                 StateName.PRECHECK_SESSION,
-                "AI认领",
                 {},
             )
         )
@@ -2934,14 +2232,7 @@ def test_v1_runtime_reset_between_snapshot_and_reservation_fails_closed_without_
 
 def test_browser_agent_runtime_does_not_queue_live_hud_updates(v1_db, monkeypatch):
     repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-        "claim_mark": "AI认领",
-    })
+    task = _create_task(repo, mode="single_save", product_count=1)
     job = repo.get_task(task["id"])["jobs"][0]
     adapter = FakeWorkflowAdapter()
     runtime = FakeBrowserAgentRuntime()
@@ -2957,20 +2248,21 @@ def test_browser_agent_runtime_does_not_queue_live_hud_updates(v1_db, monkeypatc
     event = runner._sync_live_browser_hud(
         task,
         job,
-        "claim_only",
-        StateName.CLAIM_TO_DRAFT_BOX,
-        "认领到商品箱",
-        "acquisition",
-        "/artifacts/claim.txt",
+        "single_save",
+        StateName.SAVE_ONLY,
+        "保存商品",
+        "semi_managed",
+        "/artifacts/save.txt",
     )
 
     assert runtime.commands == []
     assert adapter.live_hud_calls == []
     assert event["updated"] is False
     assert event["reason"] == "live_browser_hud_deferred_to_browser_agent"
-    assert event["last_step_code"] == "CLAIM_TO_DRAFT_BOX"
-    assert event["hud"]["state"] == "CLAIM_TO_DRAFT_BOX"
-    assert event["hud"]["human_action"].endswith("认领到商品箱")
+    assert event["last_step_code"] == "SAVE_ONLY"
+    assert event["hud"]["state"] == "SAVE_ONLY"
+    assert "保存" in event["hud"]["human_action"]
+    assert "不发布" in event["hud"]["human_action"]
 
 
 def test_live_hud_update_skips_unhealthy_browser_agent_runtime(v1_db, monkeypatch):
@@ -2982,7 +2274,7 @@ def test_live_hud_update_skips_unhealthy_browser_agent_runtime(v1_db, monkeypatc
             return {
                 "status": "needs_restart",
                 "healthy": False,
-                "lastError": "claim_from_data_acquisition timed out",
+                "lastError": "save_only timed out",
             }
 
         def run(self, command, *, timeout_seconds=None):
@@ -2990,14 +2282,7 @@ def test_live_hud_update_skips_unhealthy_browser_agent_runtime(v1_db, monkeypatc
             raise AssertionError("unhealthy Browser Agent must not receive HUD work")
 
     repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-        "claim_mark": "AI认领",
-    })
+    task = _create_task(repo, mode="single_save", product_count=1)
     job = repo.get_task(task["id"])["jobs"][0]
     runtime = UnhealthyRuntime()
     runner = _test_runner(
@@ -3012,65 +2297,23 @@ def test_live_hud_update_skips_unhealthy_browser_agent_runtime(v1_db, monkeypatc
     event = runner._sync_live_browser_hud(
         task,
         job,
-        "claim_only",
-        StateName.CLAIM_TO_DRAFT_BOX,
+        "single_save",
+        StateName.SAVE_ONLY,
         "当前步骤失败",
-        "acquisition",
-        "/artifacts/claim.txt",
+        "semi_managed",
+        "/artifacts/save.txt",
         hud_override={"step_code": "TASK_FAILED", "step_name": "当前步骤失败"},
     )
 
     assert runtime.commands == []
     assert event["updated"] is False
     assert event["reason"] == "live_browser_hud_runtime_unhealthy"
-    assert event["last_error"] == "claim_from_data_acquisition timed out"
+    assert event["last_error"] == "save_only timed out"
     assert event["last_step_code"] == "TASK_FAILED"
 
 
-def test_claim_only_browser_agent_runtime_replaces_process_worker(v1_db, monkeypatch):
-    repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-        "claim_mark": "AI认领",
-    })
-    runtime = FakeBrowserAgentRuntime()
-    runner = _test_runner(
-        repo,
-        DummyManager(),
-        workflow_adapter=FakeWorkflowAdapter(),
-        browser_agent_runtime=runtime,
-    )
-    monkeypatch.setenv("DXM_WORKFLOW_ACTION_RUNTIME", "browser_agent")
-
-    def fail_process_worker(*_args, **_kwargs):
-        raise AssertionError("workflow_worker subprocess should not be used in browser_agent mode")
-
-    monkeypatch.setattr(runner, "_invoke_workflow_worker", fail_process_worker)
-
-    asyncio.run(runner.run_task(task["id"]))
-
-    refreshed = repo.get_task(task["id"])
-    reports = repo.list_reports(task["id"])
-    assert refreshed["status"] == "completed"
-    assert reports[0]["status"] == "success"
-    actions = [command.action for command, _timeout in runtime.commands]
-    assert [action for action in actions if action != "update_live_hud"] == [
-        "check_login_state",
-        "open_data_acquisition",
-        "claim_from_data_acquisition",
-        "verify_draft_box_claim",
-    ]
-    assert "update_live_hud" not in actions
-    logs = repo.list_logs(task["id"])
-    assert any(item["context"].get("runtime") == "browser_agent" for item in logs)
-
-
-def test_browser_agent_timeout_detail_includes_last_internal_claim_step(v1_db, monkeypatch):
-    class TimeoutAtClaimRuntime(FakeBrowserAgentRuntime):
+def test_browser_agent_timeout_detail_includes_last_internal_save_step(v1_db, monkeypatch):
+    class TimeoutAtSaveRuntime(FakeBrowserAgentRuntime):
         def __init__(self):
             super().__init__()
             self.last_step = None
@@ -3081,28 +2324,21 @@ def test_browser_agent_timeout_detail_includes_last_internal_claim_step(v1_db, m
                 "healthy": True,
                 "currentStep": self.last_step or "待启动",
                 "lastWorkflowEvent": {
-                    "event": "data_acquisition_claim:target_find_start",
+                    "event": "save_only:dispatch_start",
                     "human_step": self.last_step,
                 } if self.last_step else None,
             }
 
         def run(self, command, *, timeout_seconds=None):
-            if command.action == "claim_from_data_acquisition":
+            if command.action == "save_only":
                 self.commands.append((command, timeout_seconds))
-                self.last_step = "定位待认领商品"
-                raise TimeoutError("Browser Agent command timed out: claim_from_data_acquisition")
+                self.last_step = "点击保存"
+                raise TimeoutError("Browser Agent command timed out: save_only")
             return super().run(command, timeout_seconds=timeout_seconds)
 
     repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-        "claim_mark": "AI认领",
-    })
-    runtime = TimeoutAtClaimRuntime()
+    task = _create_task(repo, mode="single_save", product_count=1)
+    runtime = TimeoutAtSaveRuntime()
     runner = _test_runner(
         repo,
         DummyManager(),
@@ -3117,8 +2353,8 @@ def test_browser_agent_timeout_detail_includes_last_internal_claim_step(v1_db, m
     refreshed = repo.get_task(task["id"])
     report = repo.list_reports(task["id"])[0]
     assert refreshed["status"] == "failed"
-    assert "定位待认领商品" in refreshed["jobs"][0]["error_message"]
-    assert "定位待认领商品" in report["summary"]["blocked_reason"]
+    assert "点击保存" in refreshed["jobs"][0]["error_message"]
+    assert "点击保存" in report["summary"]["blocked_reason"]
 
 
 def test_browser_agent_timeout_explicitly_cancels_the_same_command_identity(v1_db):
@@ -3146,14 +2382,7 @@ def test_browser_agent_timeout_explicitly_cancels_the_same_command_identity(v1_d
             }
 
     repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-        "claim_mark": "AI认领",
-    })
+    task = _create_task(repo, mode="single_save", product_count=1)
     job = repo.get_task(task["id"])["jobs"][0]
     runtime = TimeoutRuntime()
     runner = _test_runner(
@@ -3168,8 +2397,8 @@ def test_browser_agent_timeout_explicitly_cancels_the_same_command_identity(v1_d
         runner._run_workflow_action_browser_agent(
             task,
             job,
-            StateName.CLAIM_TO_DRAFT_BOX,
-            f"AI认领-{task['id']}",
+            StateName.PRECHECK_SESSION,
+            "DXM-LOCK",
             {},
         )
 
@@ -3195,8 +2424,8 @@ def test_async_caller_cancellation_explicitly_cancels_browser_agent_command(v1_d
             return {
                 "ok": True,
                 "action": command.action,
-                "stage": "claim_complete",
-                "page_url": "https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
+                "stage": "session_check_complete",
+                "page_url": "https://www.dianxiaomi.com/web/home",
                 "evidence": {},
             }
 
@@ -3206,14 +2435,7 @@ def test_async_caller_cancellation_explicitly_cancels_browser_agent_command(v1_d
             return {"ok": True}
 
     repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-        "claim_mark": "AI认领",
-    })
+    task = _create_task(repo, mode="single_save", product_count=1)
     job = repo.get_task(task["id"])["jobs"][0]
     runtime = CancellableRuntime()
     runner = _test_runner(
@@ -3230,8 +2452,7 @@ def test_async_caller_cancellation_explicitly_cancels_browser_agent_command(v1_d
             runner._run_workflow_action_async(
                 task,
                 job,
-                StateName.CLAIM_TO_DRAFT_BOX,
-                f"AI认领-{task['id']}",
+                StateName.PRECHECK_SESSION,
                 {},
             )
         )
@@ -3296,7 +2517,6 @@ def test_async_cancel_before_executor_start_consumes_reservation_without_adapter
                 task,
                 job,
                 StateName.PRECHECK_SESSION,
-                "AI认领",
                 {},
             )
         )
@@ -3324,14 +2544,7 @@ def test_async_cancel_before_executor_start_consumes_reservation_without_adapter
 
 def test_browser_agent_runtime_setting_fails_closed_when_runtime_missing(v1_db, monkeypatch):
     repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-        "claim_mark": "AI认领",
-    })
+    task = _create_task(repo, mode="single_save", product_count=1)
     adapter = FakeWorkflowAdapter()
     runner = _test_runner(repo, DummyManager(), workflow_adapter=adapter)
     monkeypatch.setenv("DXM_WORKFLOW_ACTION_RUNTIME", "browser_agent")
@@ -3353,14 +2566,7 @@ def test_real_dxm_adapter_fails_closed_when_persistent_runtime_is_missing_even_i
             raise AssertionError("real DxmWorkflowAdapter must not run outside BrowserAgent")
 
     repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-        "claim_mark": "AI认领",
-    })
+    task = _create_task(repo, mode="single_save", product_count=1)
     runner = _test_runner(
         repo,
         DummyManager(),
@@ -3401,14 +2607,7 @@ def test_real_dxm_adapter_fails_closed_on_unhealthy_or_wrong_runtime_binding(
             raise AssertionError("invalid BrowserAgent runtime must not dispatch")
 
     repo = Repository()
-    store = repo.create_store("Dang Kang", "AliExpress")
-    task = repo.create_acquisition_claim_request({
-        "store_id": store["id"],
-        "keyword": "Hazbin Hotel 立牌",
-        "category_name": "立牌类谷子",
-        "source_url": "https://detail.1688.com/offer/from-acquisition.html",
-        "claim_mark": "AI认领",
-    })
+    task = _create_task(repo, mode="single_save", product_count=1)
     runner = _test_runner(
         repo,
         DummyManager(),
@@ -3452,19 +2651,7 @@ def test_batch_save_without_workflow_adapter_fails(v1_db):
     assert "workflow_adapter" in reports[0]["summary"]["blocked_reason"]
 
 
-def test_claim_only_without_workflow_adapter_fails(v1_db):
-    repo = Repository()
-    task = _create_task(repo, mode="claim_only", product_count=1)
-    manager = DummyManager()
-
-    asyncio.run(_test_runner(repo, manager).run_task(task["id"]))
-
-    reports = repo.list_reports(task["id"])
-    assert reports[0]["status"] == "failed"
-    assert "workflow_adapter" in reports[0]["summary"]["blocked_reason"]
-
-
-def test_batch_save_runs_jobs_serially_with_independent_reports(v1_db):
+def test_legacy_batch_save_cannot_enter_the_single_save_browser_chain(v1_db):
     repo = Repository()
     task = _create_task(repo, mode="batch_save", product_count=3)
     manager = DummyManager()
@@ -3475,11 +2662,14 @@ def test_batch_save_runs_jobs_serially_with_independent_reports(v1_db):
 
     reports = repo.list_reports(task["id"])
     refreshed = repo.get_task(task["id"])
-    assert refreshed["status"] == "completed"
-    assert refreshed["completed_jobs"] == 3
-    assert refreshed["failed_jobs"] == 0
-    assert len(reports) == 3
-    assert all(report["published"] is False for report in reports)
+    assert refreshed["status"] == "failed"
+    assert refreshed["completed_jobs"] == 0
+    assert refreshed["failed_jobs"] == 1
+    assert len(reports) == 1
+    assert all(report["status"] == "failed" for report in reports)
+    assert all(report["published"] is None for report in reports)
+    assert all("单商品只保存" in report["summary"]["blocked_reason"] for report in reports)
+    assert "save_only" not in [call[0] for call in adapter.calls]
 
 
 def test_forbidden_publish_mode_fails_before_actions(v1_db):

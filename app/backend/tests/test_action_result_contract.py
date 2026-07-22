@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from copy import deepcopy
 
 import pytest
@@ -14,11 +16,29 @@ from src.execution.action_result_contract import (
 
 _PAGE_URLS = {
     "authenticated_dxm": "https://www.dianxiaomi.com/web/index.htm",
-    "data_acquisition": "https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
     "draft_box": "https://www.dianxiaomi.com/web/smt/smtProductList/draft",
     "editor": "https://www.dianxiaomi.com/web/smt/edit",
     "semi_managed": "https://www.dianxiaomi.com/web/smt/editFromSmt",
 }
+_SAVE_URL = "https://www.dianxiaomi.com/api/popChoiceProduct/add.json"
+_TARGET_IDENTITY = {
+    "product_id": "product-1",
+    "store_id": "store-1",
+    "source_url": "https://www.dianxiaomi.com/web/smt/edit/1",
+}
+_STORE_NAME = "store-1"
+
+
+def _canonical_sha256(value: dict) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def _valid_navigation_result() -> dict:
@@ -73,18 +93,123 @@ def _immutable_ref(
 
 def _valid_save_result() -> dict:
     value = _valid_navigation_result()
+    target_identity = deepcopy(_TARGET_IDENTITY)
+    target_digest = _canonical_sha256(target_identity)
+    integrity = {
+        "ok": True,
+        "kind": "structured_nonempty_form_state",
+        "field_count": 12,
+        "nonempty_field_count": 12,
+        "sha256": "C" * 64,
+    }
+    authorization = {
+        "ok": True,
+        "executed": True,
+        "mutation_action": "save_only_click",
+        "mutation_status": "DISPATCHED",
+        "mutation_id": "mutation-1",
+    }
+    pre_dispatch = {
+        "ok": True,
+        "required_readback_complete": True,
+        "write_attempted": False,
+        "phase": "before_ledger_begin_dispatch",
+        "exact_save_target": {
+            "ok": True,
+            "text": "保存",
+            "exact_save_count": 1,
+        },
+        "identity": {
+            "ok": True,
+            "product_identity_match": True,
+            "store_identity_match": True,
+            "source_identity_match": True,
+            "target_identity": target_identity,
+            "target_identity_sha256": target_digest,
+            "expected_store_name": _STORE_NAME,
+        },
+        "baseline_field_integrity": integrity,
+        "current_field_integrity": dict(integrity),
+    }
+    network = {
+        "ok": True,
+        "receipt_complete": True,
+        "receipt_count": 1,
+        "method": "POST",
+        "url": _SAVE_URL,
+        "status": 200,
+        "code": 0,
+        "msg": "您的产品编辑保存成功！",
+    }
+    network_audit = {
+        "scope": "same_origin_write_window",
+        "complete": True,
+        "window_closed": True,
+        "registered_listener_count": 2,
+        "removed_listener_count": 2,
+        "mutation_request_count": 1,
+        "save_request_count": 1,
+        "other_mutation_request_count": 0,
+        "publish_request_count": 0,
+    }
+    publish_signal = {
+        "detected": False,
+        "kind": "network_route_classification",
+        "request_count": 0,
+    }
+    page_save_result = {
+        "ok": True,
+        "success_text": "保存成功",
+        "status_transition": {
+            "kind": "new_or_changed_structured_save_status",
+            "entry": {"text": "保存成功", "kind": "toast"},
+        },
+    }
+    save_result = {
+        "ok": True,
+        "published": False,
+        "exact_save_target": True,
+        "save_click_dispatched": True,
+        "clicked": True,
+        "publish_action_clicked": False,
+        "text": "保存",
+        "exact_save_count": 1,
+        "click_method": "native_exact_save",
+        "network_save_success": True,
+        "page_save_success": True,
+        "mutation_authorization": authorization,
+        "pre_dispatch_readback": pre_dispatch,
+        "network_save_result": network,
+        "network_audit": network_audit,
+        "publish_signal": publish_signal,
+        "page_save_result": page_save_result,
+        "save_decision": {
+            "ok": True,
+            "rule": "page_success_and_network_success",
+            "page_ok": True,
+            "network_ok": True,
+            "network_receipt_ok": True,
+            "network_audit_ok": True,
+        },
+    }
     value.update(
         {
             "action": "save_only",
             "attempted_state": "SAVE_ONLY",
             "before_values": {
-                "target_identity": "product-1",
-                "authorization_fingerprint": "authorization-1",
+                "target_identity": target_identity,
+                "store_name": _STORE_NAME,
             },
             "after_values": {
-                "network_status": 200,
-                "page_message": "保存成功",
+                "exact_save_target": True,
+                "save_click_dispatched": True,
                 "published": False,
+                "mutation_authorization": authorization,
+                "pre_dispatch_readback": pre_dispatch,
+                "network_save_result": network,
+                "network_audit": network_audit,
+                "publish_signal": publish_signal,
+                "page_save_result": page_save_result,
             },
             "postconditions": {
                 "mutation_authorized": True,
@@ -97,8 +222,19 @@ def _valid_save_result() -> dict:
             },
             "evidence": {
                 "observations": {
-                    "network_status": 200,
-                    "page_message": "保存成功",
+                    "save_result": save_result,
+                    "exact_save_target": {
+                        "text": "保存",
+                        "exact_save_count": 1,
+                        "click_method": save_result["click_method"],
+                    },
+                    "save_click_dispatched": True,
+                    "mutation_authorization": authorization,
+                    "pre_dispatch_readback": pre_dispatch,
+                    "network_save_result": network,
+                    "network_audit": network_audit,
+                    "publish_signal": publish_signal,
+                    "page_save_result": page_save_result,
                 },
                 "refs": [_immutable_ref("save_screenshot")],
             },
@@ -115,17 +251,51 @@ def _valid_save_result() -> dict:
 
 def _valid_unpublished_result() -> dict:
     value = _valid_save_result()
+    target_identity = deepcopy(_TARGET_IDENTITY)
+    target_digest = _canonical_sha256(target_identity)
+    identity_readback = {
+        "product_identity_match": True,
+        "store_identity_match": True,
+        "source_identity_match": True,
+    }
+    proof = {
+        "ok": True,
+        "published": False,
+        "proof_kind": "structured_unpublished_status",
+        "status_text": "待发布",
+        "verified_on_current_page": True,
+        "status_scope_unique": True,
+        "bound_candidate_count": 1,
+        "structured_candidate_count": 1,
+        "target_bound": True,
+        "product_matched": True,
+        "store_matched": True,
+        "source_identity_match": True,
+        "identity_binding_kind": "frozen_target_structured_page_readback",
+        "publish_risk_term": None,
+        "target_identity_sha256": target_digest,
+        "page_url": _PAGE_URLS["semi_managed"],
+        "identity_readback": identity_readback,
+    }
+    observed_target = {
+        "product_matched": True,
+        "store_matched": True,
+        "source_identity_match": True,
+        "target_bound": True,
+        "target_identity_sha256": target_digest,
+    }
     value.update(
         {
             "action": "verify_not_published",
             "attempted_state": "VERIFY_NOT_PUBLISHED",
             "before_values": {
-                "target_identity": "product-1",
-                "save_evidence_fingerprint": "save-proof-1",
+                "target_identity": target_identity,
             },
             "after_values": {
                 "published": False,
-                "probe_evidence_fingerprint": "unpublished-proof-1",
+                "fresh_probe": proof,
+                "target_identity": observed_target,
+                "identity_readback": identity_readback,
             },
             "postconditions": {
                 "independent_probe": True,
@@ -135,7 +305,11 @@ def _valid_unpublished_result() -> dict:
                 "save_evidence_not_reused": True,
             },
             "evidence": {
-                "observations": {"published": False, "probe": "current_page"},
+                "observations": {
+                    "fresh_probe": proof,
+                    "target_identity": observed_target,
+                    "identity_readback": identity_readback,
+                },
                 "refs": [
                     _immutable_ref(
                         "unpublished_screenshot",
@@ -151,6 +325,10 @@ def _valid_unpublished_result() -> dict:
 
 
 def _valid_registered_result(action: str, state: str) -> dict:
+    if state == "SAVE_ONLY":
+        return _valid_save_result()
+    if state == "VERIFY_NOT_PUBLISHED":
+        return _valid_unpublished_result()
     contract = ACTION_RESULT_CONTRACTS[action][state]
     value = _valid_navigation_result()
     value.update(
@@ -167,7 +345,6 @@ def _valid_registered_result(action: str, state: str) -> dict:
                 "refs": [
                     _immutable_ref(
                         {
-                            "VERIFY_DRAFT_BOX_CLAIM": "draft_box_screenshot",
                             "SAVE_ONLY": "save_screenshot",
                             "VERIFY_NOT_PUBLISHED": "unpublished_screenshot",
                         }.get(state, "screenshot")
@@ -200,14 +377,10 @@ def test_valid_navigation_result_returns_an_isolated_canonical_dict():
     assert result["before_values"] is not value["before_values"]
 
 
-def test_registry_covers_precheck_and_all_sixteen_browser_actions():
+def test_registry_covers_precheck_and_all_supported_browser_actions():
     expected = {
         "check_login_state": {"PRECHECK_SESSION": "authenticated_dxm"},
-        "open_data_acquisition": {"OPEN_DATA_ACQUISITION": "data_acquisition"},
-        "claim_from_data_acquisition": {"CLAIM_TO_DRAFT_BOX": "data_acquisition"},
-        "verify_draft_box_claim": {"VERIFY_DRAFT_BOX_CLAIM": "draft_box"},
         "open_draft_box": {"OPEN_DRAFT_LIST": "draft_box"},
-        "claim_product": {"CLAIM_PRODUCT": "draft_box"},
         "open_editor": {"OPEN_EDIT_PAGE": "editor"},
         "verify_edit_ownership": {"VERIFY_EDIT_OWNERSHIP": "editor"},
         "fill_editor_required_defaults": {"FILL_BASE_INFO": "editor"},
@@ -341,8 +514,8 @@ def test_stage_and_label_cannot_be_used_as_success_facts():
 @pytest.mark.parametrize(
     ("expected_state", "expected_action", "message"),
     [
-        ("CLAIM_PRODUCT", "open_draft_box", "attempted_state does not match"),
-        ("OPEN_DRAFT_LIST", "claim_product", "action does not match"),
+        ("OPEN_EDIT_PAGE", "open_draft_box", "attempted_state does not match"),
+        ("OPEN_DRAFT_LIST", "open_editor", "action does not match"),
     ],
 )
 def test_command_state_and_action_must_match_the_producer_envelope(
@@ -360,7 +533,7 @@ def test_command_state_and_action_must_match_the_producer_envelope(
 
 def test_unregistered_state_action_pair_is_rejected():
     value = _valid_navigation_result()
-    value["attempted_state"] = "CLAIM_PRODUCT"
+    value["attempted_state"] = "REMOVED_STATE"
 
     with pytest.raises(ActionResultContractError, match="unsupported state/action pair"):
         validate_action_result_envelope(value)
@@ -484,16 +657,6 @@ def test_failures_require_a_stable_code_and_non_empty_recoverability(
         validate_action_result_envelope(value)
 
 
-def test_draft_box_proof_state_requires_an_immutable_reference():
-    value = _valid_registered_result(
-        "verify_draft_box_claim", "VERIFY_DRAFT_BOX_CLAIM"
-    )
-    value["evidence"]["refs"] = []
-
-    with pytest.raises(ActionResultContractError, match="immutable evidence"):
-        validate_action_result_envelope(value)
-
-
 @pytest.mark.parametrize(
     ("field", "invalid_value", "message"),
     [
@@ -588,8 +751,8 @@ def test_runtime_and_session_identity_can_be_bound_to_authoritative_values(
         validate_action_result_envelope(value, **kwargs)
 
 
-@pytest.mark.parametrize("state,action", [("CLAIM_TO_DRAFT_BOX", "claim_from_data_acquisition"), ("CLAIM_PRODUCT", "claim_product"), ("SAVE_ONLY", "save_only")])
-def test_unknown_mutation_failure_cannot_claim_automatic_retry(state, action):
+@pytest.mark.parametrize("state,action", [("SAVE_ONLY", "save_only")])
+def test_unknown_mutation_failure_cannot_allow_automatic_retry(state, action):
     value = _valid_registered_result(action, state)
     value.update(
         {

@@ -527,78 +527,17 @@ const qaExpectedReady = initialEffectiveReadiness === 'READY'
   && initialEffectiveMutationScope === 'controlled_single_save_only';
 const shouldRunBlockedMutationChecks = !qaExpectedReady;
 async function ensureRealMutationTask() {
-  function findReusableClaimRequest(tasks, storeId) {
-    return Array.isArray(tasks)
-      ? tasks.find(task => task?.name === 'Local acceptance claim request'
-        && task?.mode === 'claim_only'
-        && Number(task?.store_id) === Number(storeId)
-        && !['completed', 'cancelled'].includes(String(task?.status || ''))) || null
-      : null;
-  }
-  function findReusableLinkedSaveTask(tasks, claimedProduct) {
-    const claimedProductId = Number(claimedProduct?.id);
-    return Array.isArray(tasks)
-      ? tasks.find(task => task?.name === 'Local acceptance draft save task'
-        && task?.mode === 'single_save'
-        && Number(task?.total_jobs) === 1
-        && Number(task?.payload?.claimed_product_id || task?.payload?.product_id || 0) === claimedProductId) || null
-      : null;
-  }
-  const existingStores = await fetchJson('/api/stores');
-  const dangKangStore = Array.isArray(existingStores)
-    ? existingStores.find(store => store?.name === 'Dang Kang')
-    : null;
-  const store = dangKangStore
-    ? dangKangStore
-    : await postJson('/api/stores/connect', { name: 'Dang Kang', platform: 'AliExpress' });
   const existingTasks = await fetchJson('/api/tasks').catch(() => []);
-  async function ensureTwoStageClaimRequest() {
-    const reusableClaimRequest = findReusableClaimRequest(existingTasks, store.id);
-    if (reusableClaimRequest) return reusableClaimRequest;
-    const created = await postJson('/api/acquisition/claim-requests', {
-      store_id: store.id,
-      keyword: 'Local acceptance claim request',
-      category_name: '\u7ad6\u724c\u7c7b\u8c37\u5b50',
-      claim_mark: 'LOCAL_ACCEPTANCE',
-      template_id: null,
-    });
-    const taskId = created?.task_id || created?.id;
-    return taskId ? await fetchJson('/api/tasks/' + taskId).catch(() => created) : created;
-  }
-  const claimedProducts = await fetchJson('/api/acquisition/claimed-products').catch(() => []);
-  const claimedProduct = Array.isArray(claimedProducts) && claimedProducts.length ? claimedProducts[0] : null;
-  const claimRequestTask = await ensureTwoStageClaimRequest();
-  if (!claimedProduct) {
-    return {
-      ...(claimRequestTask || {}),
-      id: claimRequestTask?.id || claimRequestTask?.task_id,
-      mode: 'claim_only',
-      status: claimRequestTask?.status || claimRequestTask?.task_status || 'draft',
-      total_jobs: claimRequestTask?.total_jobs || 1,
-      payload: {
-        ...(claimRequestTask?.payload || {}),
-        stage: 'awaiting_claimed_product',
-      },
-    };
-  }
-  const reusableTask = findReusableLinkedSaveTask(existingTasks, claimedProduct);
+  const reusableTask = Array.isArray(existingTasks)
+    ? existingTasks.find(task => task?.mode === 'single_save'
+      && Number(task?.total_jobs) === 1
+      && !['cancelled', 'archived'].includes(String(task?.status || ''))) || null
+    : null;
   if (reusableTask) return reusableTask;
-  return await postJson('/api/tasks', {
-    name: 'Local acceptance draft save task',
-    store_id: claimedProduct.store_id || store.id,
-    mode: 'single_save',
-    publish_scene: 'SMT_SEMI_MANAGED_SAVE_ONLY',
-    product_ids: [claimedProduct.id],
-    claim_mark: 'LOCAL_ACCEPTANCE',
-    payload: {
-      store_name: claimedProduct.store_name || store.name,
-      category_name: claimedProduct?.category_name ?? '\u7ad6\u724c\u7c7b\u8c37\u5b50',
-      image: claimedProduct?.image ?? null,
-      claimed_product_id: claimedProduct.id,
-      claimed_product_source_url: claimedProduct.source_url || claimedProduct.url || null,
-      stage: 'claimed_product_available',
-    },
-  });
+
+  // Never synthesize product-box provenance in browser QA. A local dry-run task
+  // is sufficient for blocked-endpoint checks when no real single-save exists.
+  return await ensureDryRunDemoTask();
 }
 async function verifyUnreleasedRealModeCreateBlocked() {
   const existingStores = await fetchJson('/api/stores');
@@ -614,7 +553,6 @@ async function verifyUnreleasedRealModeCreateBlocked() {
     mode: 'batch_save',
     publish_scene: 'SMT_SEMI_MANAGED_SAVE_ONLY',
     product_ids: [],
-    claim_mark: 'QA_BATCH_BLOCK',
     payload: {
       store_name: store.name,
       category_name: 'QA_CATEGORY',
@@ -657,7 +595,6 @@ async function ensureDryRunDemoTask() {
     mode: 'dry_run',
     publish_scene: 'SMT_SEMI_MANAGED_SAVE_ONLY',
     product_ids: products.map(item => item.id),
-    claim_mark: 'AI_CLAIM',
     payload: {
       store_name: store.name,
       category_name: products[0]?.category_name ?? 'QA_CATEGORY',
@@ -770,13 +707,13 @@ const text = {
   localDemoStart: '\u542f\u52a8\u5f00\u53d1\u81ea\u68c0\u4efb\u52a1',
   l2RunIdFlag: '--run-id',
   l2RunIdVar: '$runId',
-  l2SameBinding: '\u91c7\u96c6\u9875\u548c\u91c7\u96c6\u7bb1',
+  l2SameBinding: '商品箱证据绑定',
   fallbackCopyPatterns: ['fallback \u6570\u636e', '\u6765\u6e90\uff1afallback', 'mock \u6216 fallback', 'mock or fallback'],
-  unreleasedRealModeCopy: '\u5f85\u8ba4\u9886\u5546\u54c1\u5904\u7406\u548c\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u53d7\u63a7\u5f00\u653e',
+  unreleasedRealModeCopy: '单商品只保存仅按受控商品箱现场开放',
   unreleasedRealModeButtonDisabled: '\u672a\u53d1\u5e03\uff0c\u7981\u6b62\u542f\u52a8',
-  controlledSingleSaveOnly: '\u53d7\u63a7\u8ba4\u9886 + \u5355\u5546\u54c1\u53ea\u4fdd\u5b58',
+  controlledSingleSaveOnly: '受控商品箱单商品只保存',
   realModeReleasePlanTitle: '\u771f\u5b9e\u6a21\u5f0f\u653e\u884c\u51c6\u5907',
-  claimOnlyUnreleased: '\u5f85\u8ba4\u9886\u5546\u54c1\u5904\u7406\u548c\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u53d7\u63a7\u5f00\u653e',
+  singleSaveControlled: '单商品只保存仅按受控商品箱现场开放',
   batchSaveUnreleased: '\u6279\u91cf\u4fdd\u5b58\u4ecd\u9700\u5355\u72ec\u9a8c\u6536',
   cannotReuseSingleSave: '\u4e0d\u80fd\u590d\u7528\u5355\u5546\u54c1\u53ea\u4fdd\u5b58\u8bc1\u636e',
   batchSizeLimit: '\u6279\u91cf\u5927\u5c0f\u4e0a\u9650',
@@ -821,35 +758,35 @@ if (reportOnlyFinal) {
     && finalReportEffectiveMutationAllowed === true
     && finalReportEffectiveMutationScope === 'controlled_single_save_only'
     && finalCheckSummary?.batch_unattended_publish_allowed === false;
-  const finalReportTwoStageEndToEnd = finalCheckSummary?.effective_real_dxm_two_stage_end_to_end
-    ?? finalCheckSummary?.real_dxm_two_stage_end_to_end
-    ?? 'pending_live_dxm_validation';
-  const finalReportTwoStagePassed = finalReportTwoStageEndToEnd === 'passed';
-  const finalReportTwoStageLabel = finalReportTwoStagePassed
+  const finalReportSingleSaveStatus = finalCheckSummary?.current_single_save_status
+    ?? (finalCheckSummary?.current_single_save_ready === true ? 'passed' : 'pending_live_dxm_validation');
+  const finalReportSingleSavePassed = finalCheckSummary?.current_single_save_ready === true
+    && finalReportSingleSaveStatus === 'passed';
+  const finalReportSingleSaveLabel = finalReportSingleSavePassed
     ? '\u5df2\u901a\u8fc7'
-    : finalReportTwoStageEndToEnd === 'not_run'
+    : finalReportSingleSaveStatus === 'not_run'
       ? '\u672a\u8fd0\u884c'
-      : finalReportTwoStageEndToEnd === 'pending_live_dxm_validation'
+      : finalReportSingleSaveStatus === 'pending_live_dxm_validation'
         ? '\u5f85\u73b0\u573a\u9a8c\u8bc1'
         : '\u5f85\u786e\u8ba4';
   const finalReportProductionDeliveryReady = finalCheckSummary?.production_delivery_ready === true
     && finalCheckSummary?.final_delivery_completed === true
-    && finalReportTwoStagePassed;
+    && finalReportSingleSavePassed;
   const finalReportProductionDeliveryLabel = finalReportProductionDeliveryReady
     ? '\u751f\u4ea7\u4ea4\u4ed8\u5df2\u5b8c\u6210'
     : '\u751f\u4ea7\u4ea4\u4ed8\u672a\u5b8c\u6210';
-  const finalReportTwoStageStatusText = '\u4e24\u6bb5\u5f0f\u7aef\u5230\u7aef\uff1a' + finalReportTwoStageLabel;
+  const finalReportSingleSaveStatusText = '单阶段只保存 ' + finalReportSingleSaveLabel;
   const finalReportProductionDeliveryText = '\u751f\u4ea7\u4ea4\u4ed8\u72b6\u6001\uff1a' + finalReportProductionDeliveryLabel;
-  const finalReportTwoStageApiMatchesExpected = finalCheckSummary?.status === 'available'
-    ? finalCheckSummary?.two_stage_acceptance_matches_expected === true
-    : finalReportTwoStageEndToEnd === 'pending_live_dxm_validation';
+  const finalReportSingleSaveApiMatchesExpected = finalCheckSummary?.status === 'available'
+    ? finalCheckSummary?.single_save_acceptance_matches_expected === true
+    : finalReportSingleSaveStatus === 'pending_live_dxm_validation';
   const expectedLockedEvidence = [text.saveResultLocked, text.unpublishedProofLocked, text.networkHarLocked];
   const requiredReportFragments = [
     text.finalCheck,
     expectedLocalWorkbench,
     expectedBrowserQa,
     expectedSourcePackage,
-    finalReportTwoStageStatusText,
+    finalReportSingleSaveStatusText,
     finalReportProductionDeliveryText,
     ...(finalReportReportWriteBlocked ? [
       text.businessReportLocked,
@@ -863,7 +800,7 @@ if (reportOnlyFinal) {
     ...(allowMissingPostFinalQa ? [] : ['qa-report-center-final.png']),
   ];
   const reportText = await waitForBodyIncludes(requiredReportFragments, 5000);
-  const finalReportTwoStageStatusVisible = reportText.includes(finalReportTwoStageStatusText);
+  const finalReportSingleSaveStatusVisible = reportText.includes(finalReportSingleSaveStatusText);
   const finalReportProductionDeliveryVisible = reportText.includes(finalReportProductionDeliveryText);
   const finalReportReadyStateVisible = (
     reportText.includes(text.realSingleSaveReady)
@@ -873,10 +810,10 @@ if (reportOnlyFinal) {
   ) && (
     reportText.includes(text.readyLimitedCopy)
       || reportText.includes(text.batchUnattendedPublishBlocked)
-      || reportText.includes(finalReportTwoStageStatusText)
+      || reportText.includes(finalReportSingleSaveStatusText)
       || reportText.includes(finalReportProductionDeliveryText)
       || reportText.includes('\u751f\u4ea7\u4ea4\u4ed8\u672a\u5b8c\u6210')
-      || reportText.includes('\u4e24\u6bb5\u5f0f\u7aef\u5230\u7aef\uff1a\u5f85\u73b0\u573a\u9a8c\u8bc1')
+      || reportText.includes('单阶段只保存 待现场验证')
   );
   const finalReportShot = await screenshot('qa-report-center-final');
   const finalReportCenterQaDomState = await evalValue('(() => { const el = document.querySelector("[data-testid=\\"final-report-center-qa\\"]"); return el ? el.getAttribute("data-state") : null; })()');
@@ -919,12 +856,12 @@ if (reportOnlyFinal) {
     finalReportCenterQaDomState,
     finalReportCenterScreenshotDomPath,
     reportCenterSectionVisible,
-    finalReportTwoStageEndToEnd,
-    finalReportTwoStageStatusText,
+    finalReportSingleSaveStatus,
+    finalReportSingleSaveStatusText,
     finalReportProductionDeliveryText,
-    finalReportTwoStageStatusVisible,
+    finalReportSingleSaveStatusVisible,
     finalReportProductionDeliveryVisible,
-    finalReportTwoStageApiMatchesExpected,
+    finalReportSingleSaveApiMatchesExpected,
     finalReportProductionDeliveryReady,
     apiPostFinalReportQaOk: finalCheckSummary?.post_final_report_qa_ok,
     apiFinalReportCenterScreenshotPath: finalCheckSummary?.final_report_center_screenshot_path,
@@ -994,30 +931,30 @@ if (reportOnlyFinal) {
         || finalReportCenterQaDiagnostics.hasRealWriteReleasePrerequisites
         || Boolean(finalCheckSummary?.real_mode_release_plan),
       finalReportNoL3PostEvidenceBlockerChips: finalReportCenterQaDiagnostics.noL3PostEvidenceBlockerChips,
-      finalReportTwoStageStatusVisible,
+      finalReportSingleSaveStatusVisible,
       finalReportProductionDeliveryVisible,
-      finalReportTwoStageApiMatchesExpected,
+      finalReportSingleSaveApiMatchesExpected,
       finalReportProductionDeliveryStateHonest: finalReportProductionDeliveryReady
         ? finalCheckSummary?.production_delivery_ready === true
           && finalCheckSummary?.final_delivery_completed === true
-          && finalReportTwoStagePassed
+          && finalReportSingleSavePassed
           && finalReportProductionDeliveryVisible
         : finalCheckSummary?.production_delivery_ready !== true
           && finalCheckSummary?.final_delivery_completed !== true
-          && !finalReportTwoStagePassed
+          && !finalReportSingleSavePassed
           && finalReportProductionDeliveryVisible,
       finalReportApiIsFinal: allowMissingPostFinalQa || finalCheckSummary?.browser_qa_ok === true
         && finalCheckSummary?.post_final_report_qa_ok === true
-        && finalReportTwoStageApiMatchesExpected
+        && finalReportSingleSaveApiMatchesExpected
         && (
           finalReportProductionDeliveryReady
             ? finalCheckSummary?.production_delivery_ready === true
               && finalCheckSummary?.final_delivery_completed === true
-              && finalReportTwoStagePassed
+              && finalReportSingleSavePassed
               && finalReportEffectiveMutationAllowed === true
             : finalCheckSummary?.production_delivery_ready !== true
               && finalCheckSummary?.final_delivery_completed !== true
-              && !finalReportTwoStagePassed
+              && !finalReportSingleSavePassed
               && (finalReportReady
                 ? finalReportEffectiveMutationAllowed === true
                 : finalReportEffectiveMutationAllowed === false
@@ -1322,7 +1259,6 @@ try {
       await postBlockedAction('task_start', '/api/tasks/' + taskId + '/start', {}),
       await postBlockedAction('agent_console_start', '/api/agent-console/start', { task_id: taskId, launch_browser: true }),
       await postBlockedAction('dxm_draft_box_action', '/api/dxm/draft-box/action', directPayload),
-      await postBlockedAction('dxm_claim_product', '/api/dxm/workflow/claim-product', directPayload),
       await postBlockedAction('dxm_open_editor', '/api/dxm/workflow/open-editor', { ...directPayload, action: 'edit' }),
     ];
     blockedStartStatus = blockedActionChecks.find(item => item.name === 'task_start')?.status ?? null;
@@ -1343,7 +1279,7 @@ fs.writeFileSync(blockedActionsPath, JSON.stringify({
   checks: blockedActionChecks,
 }, null, 2));
 const mutationBlockedActionChecks = blockedActionChecks.filter(item => item.name !== 'agent_console_start');
-const blockedActionsAllForbidden = mutationBlockedActionChecks.length === 4 && mutationBlockedActionChecks.every(item => isBlockedStatus(item.status));
+const blockedActionsAllForbidden = mutationBlockedActionChecks.length === 3 && mutationBlockedActionChecks.every(item => isBlockedStatus(item.status));
 const taskStateUnchanged = JSON.stringify(beforeTaskStatus) === JSON.stringify(afterTaskStatus);
 await clickSelector('[data-section="product_tasks"]') || await clickSelector('[data-section="tasks"]') || await clickText(text.tasks);
 await new Promise(r => setTimeout(r, 500));
@@ -1353,7 +1289,6 @@ const demoBatchHiddenByDefault = !taskTextAfterDefaultDemoCheck.includes(text.de
 const hasLocalAcceptanceCommand = Array.isArray(reportAcceptanceCommands) && reportAcceptanceCommands.some(command => /scripts[\\/]+final-delivery-check\.bat$/.test(command));
 const hasSourceAcceptanceCommand = Array.isArray(reportAcceptanceCommands) && reportAcceptanceCommands.some(command => /scripts[\\/]+final-delivery-check\.bat\s+-RequireCleanWorktree$/.test(command));
 const hasRunIdSetup = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(command => command.includes('$runId') && command.includes('Get-Date'));
-const hasDataAcquisitionRunId = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(command => command.includes('--target data_acquisition') && command.includes('--run-id $runId'));
 const hasDraftBoxRunId = Array.isArray(l2CommandBlocks) && l2CommandBlocks.some(command => command.includes('--target draft_box') && command.includes('--run-id $runId'));
 const userFacingText = initialText + ' ' + taskText + ' ' + consoleText + ' ' + reportText;
 const visibleForbiddenActionButtons = await evalValue('(() => { const forbidden = [/^\u53d1\u5e03$/, /^\u7acb\u5373\u53d1\u5e03$/, /^\u4e00\u952e\u53d1\u5e03$/, /\u542f\u52a8\u6279\u91cf\u4fdd\u5b58/, /\u65e0\u4eba\u503c\u5b88\u542f\u52a8/]; const nodes = [...document.querySelectorAll("button,[role=button],a")]; const isVisible = (node) => { const style = window.getComputedStyle(node); const rect = node.getBoundingClientRect(); return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0; }; return nodes.filter(isVisible).map(node => (node.innerText || node.textContent || "").trim()).filter(Boolean).filter(text => forbidden.some(pattern => pattern.test(text))); })()');
@@ -1549,7 +1484,7 @@ const result = {
     realModeReleasePlanVisible: finalCheckExpectedReady
       ? finalCheckReadyStateVisible
       : taskText.includes(text.realModeReleasePlanTitle)
-        && taskText.includes(text.claimOnlyUnreleased)
+        && taskText.includes(text.singleSaveControlled)
         && taskText.includes(text.batchSaveUnreleased)
         && taskText.includes(text.cannotReuseSingleSave)
         && taskText.includes(text.batchSizeLimit)
@@ -1633,7 +1568,7 @@ const result = {
       && !reportText.includes(text.oldNetworkHarBlocker)),
     reportDualAcceptanceCommands: (reportText.includes(text.localAcceptanceCommand) && reportText.includes(text.sourceAcceptanceCommand) && hasLocalAcceptanceCommand && hasSourceAcceptanceCommand)
       || Boolean(finalCheckSummaryForReport?.summary_path && finalCheckSummaryForReport?.json_path),
-    reportL2RunBindingCopy: (reportText.includes(text.l2SameBinding) && hasRunIdSetup && hasDataAcquisitionRunId && hasDraftBoxRunId)
+    reportL2RunBindingCopy: (reportText.includes(text.l2SameBinding) && hasRunIdSetup && hasDraftBoxRunId)
       || Boolean(finalCheckSummaryForReport?.current_l2_gate_status),
     reportSourcePackageNotRequiredCopy: !finalCheckRequiresNotRequiredCopy || (reportText.includes(text.sourcePackageNotRequired) && reportText.includes(text.sourcePackageNotRequiredCopy)) || finalCheckSummaryForReport?.source_package_check === 'NOT_REQUIRED',
     demoBatchHiddenByDefault: demoBatchHiddenByDefault,
@@ -1657,8 +1592,6 @@ const result = {
     noOldActionCopy: !(consoleText + ' ' + taskText).includes(text.oldWaitSave)
       && !(consoleText + ' ' + taskText).includes(text.oldVisibleBrowser)
       && !(consoleText + ' ' + taskText).includes(text.oldAutomation)
-      && !(consoleText + ' ' + taskText).includes('claim_only/batch_save')
-      && !(consoleText + ' ' + taskText).includes('\u4e0d\u653e\u884c\u8ba4\u9886')
       && !(consoleText + ' ' + taskText).includes('SAVE_ONLY'),
     noConsoleErrors: consoleErrors.length === 0,
     networkNoFailures: failedNetworkEvents.length === 0,

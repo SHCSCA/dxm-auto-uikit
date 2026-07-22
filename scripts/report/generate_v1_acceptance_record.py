@@ -168,7 +168,6 @@ def generate_markdown(db_path: str | Path, report_id: int = DEFAULT_REPORT_ID, r
     published_text = "true" if bool(report.get("published")) else "false"
     source_title = summary.get("source_title") or product_payload.get("source_title") or (product or {}).get("title") or "-"
     store_name = summary.get("store_name") or task_payload.get("store_name") or (store or {}).get("name") or "-"
-    claim_mark = summary.get("claim_mark") or task_payload.get("claim_mark") or "-"
     category = summary.get("category") or (product or {}).get("category_name") or task_payload.get("category_name") or "-"
     agent_console_section = _agent_console_section(summary, repo_root)
 
@@ -189,7 +188,6 @@ def generate_markdown(db_path: str | Path, report_id: int = DEFAULT_REPORT_ID, r
 - 店铺：{store_name}
 - 平台：{(store or {}).get("platform") or task_payload.get("platform") or "-"}
 - 类目：{category}
-- claim_mark：{claim_mark}
 - 任务名称：{(task or {}).get("name") or "-"}
 - Job 状态：{(job or {}).get("status") or "-"} / {(job or {}).get("current_step_code") or "-"} / {(job or {}).get("current_step_name") or "-"}
 

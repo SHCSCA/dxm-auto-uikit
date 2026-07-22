@@ -798,31 +798,33 @@ def test_user_docs_present_desktop_exe_as_primary_delivery_entry():
     readme = README.read_text(encoding="utf-8")
     user_guide = USER_GUIDE.read_text(encoding="utf-8")
 
-    for source in (readme, user_guide):
-        assert "DXM Agent Console 桌面版" in source
-        assert "D:\\Desktop\\DXM-Agent-Console-免安装版\\DXM-Agent-Console-Portable-0.1.0.exe" in source
-        assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
-        assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in source
-        assert "87FF78089190226C2E98FAA1B4BA60DA25E25C320901B9FD7C0A6207F9C140F8" in source
-        assert "portable 首次启动会解包 Electron 与 Python 运行时" in source
-        assert "%TEMP%` 所在磁盘建议至少保留 1GB 可用空间" in source
-        assert "scripts\\start-desktop.bat" in source
-        assert "scripts\\verify-desktop-package.ps1" in source
-        assert "AppData\\Roaming\\DXM Agent Console\\data\\desktop-main.log" in source
+    assert "DXM Agent Console 桌面版" in readme
+    assert "D:\\Desktop\\DXM-Agent-Console-免安装版\\DXM-Agent-Console-Portable-0.1.0.exe" in readme
+    assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in readme
+    assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in readme
+    assert "portable 首次启动会解包 Electron 与 Python 运行时" in readme
+    assert "%TEMP%` 所在磁盘建议至少保留 1GB 可用空间" in readme
+    assert "scripts\\start-desktop.bat" in readme
+    assert "scripts\\verify-desktop-package.ps1" in readme
+    assert "AppData\\Roaming\\DXM Agent Console\\data\\desktop-main.log" in readme
+
+    assert "商品箱中已经存在的商品" in user_guide
+    assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in user_guide
+    assert "%APPDATA%\\DXM Agent Console\\data\\desktop-main.log" in user_guide
+    assert "只保存、不发布" in user_guide
 
 
 def test_portable_quick_guide_uses_verified_portable_entry():
     source = PORTABLE_QUICK_GUIDE.read_text(encoding="utf-8")
 
-    assert "D:\\Desktop\\DXM-Agent-Console-免安装版\\DXM-Agent-Console-Portable-0.1.0.exe" in source
-    assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
-    assert "使用目录版时必须保留整个文件夹和 `resources` 目录" in source
     assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in source
-    assert "87FF78089190226C2E98FAA1B4BA60DA25E25C320901B9FD7C0A6207F9C140F8" in source
-    assert "至少建议保留 1GB 可用空间" in source
+    assert "当前合并后 Git HEAD 新构建并完成 smoke" in source
+    assert "同时提供 SHA-256 与构建 Git HEAD" in source
+    assert "必须保留整个目录" in source
+    assert "建议保留至少 1 GB" in source
 
 
-def test_delivery_docs_describe_two_stage_real_browser_scope():
+def test_delivery_docs_describe_product_box_single_stage_real_browser_scope():
     docs = [
         README,
         PORTABLE_QUICK_GUIDE,
@@ -830,12 +832,12 @@ def test_delivery_docs_describe_two_stage_real_browser_scope():
     ]
     for path in docs:
         source = path.read_text(encoding="utf-8")
-        assert "待认领商品" in source
-        assert "商品箱编辑保存" in source
+        assert "商品箱" in source
         assert "只保存" in source
         assert "不发布" in source
         assert "真实浏览器" in source
         assert "本地测试商品" not in source
+        assert "待认领入箱" not in source
 
 
 def test_frontend_vite_build_uses_relative_base_for_electron_file_loading():
@@ -863,7 +865,7 @@ def test_app_shell_presents_agent_console_as_user_first_navigation():
     assert "type PrimaryNavigationItem" in source
     assert "const primaryNavigation" in source
     primary_block = source[source.index("const primaryNavigation"):source.index("const sectionLabels")]
-    for label in ["编辑工作台", "模板中心", "浏览器现场", "批次记录", "系统设置"]:
+    for label in ["编辑工作台", "模板中心", "浏览器诊断", "批次记录", "系统设置"]:
         assert label in primary_block
     assert primary_block.count("{ id: '") == 5
     for hidden_label in ["待认领入箱", "商品箱编辑保存", "当前保存任务", "报告与证据", "问题与证据"]:
