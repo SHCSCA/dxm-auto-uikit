@@ -2223,7 +2223,7 @@ function EditableConfigSectionCard({
       )}
       {visibleConfigMissing(preview?.missing ?? []).length ? (
         <div className="missing-strip">
-          {visibleConfigMissing(preview.missing).slice(0, 4).map((item, index) => <span key={`${item}-${index}`}>{item}</span>)}
+          {visibleConfigMissing(preview?.missing ?? []).slice(0, 4).map((item, index) => <span key={`${item}-${index}`}>{item}</span>)}
         </div>
       ) : null}
       <div className="config-save-scope-explainer" aria-label="保存方式说明">
