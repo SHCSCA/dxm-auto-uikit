@@ -10,12 +10,13 @@ type AcquisitionClaimPageProps = {
   onCreateClaimRequest: (request: AcquisitionClaimCreateRequest) => void
   onNavigateDataAcquisition: () => void
   onShowDraftEdit: () => void
+  onShowTasks: () => void
   onShowExecutionConsole: () => void
 }
 
 const claimSteps = [
   { title: '选择店铺与平台', detail: '确认这次认领使用哪个真实店小秘店铺。' },
-  { title: '筛选已有待认领商品', detail: '填写关键词或类目，只筛选店小秘已有列表。' },
+  { title: '绑定来源商品', detail: '选择带真实来源商品 URL 的候选，或粘贴该商品的完整 URL。' },
   { title: '认领到商品箱', detail: '打开浏览器现场处理认领，完成后进入第二段编辑保存。' },
   { title: '确认进入商品箱', detail: '认领完成后再进入第二段商品编辑保存。' },
 ]
@@ -29,6 +30,7 @@ export function AcquisitionClaimPage({
   onCreateClaimRequest,
   onNavigateDataAcquisition,
   onShowDraftEdit,
+  onShowTasks,
   onShowExecutionConsole,
 }: AcquisitionClaimPageProps) {
   const defaultStoreId = stores[0]?.id ? String(stores[0].id) : ''
@@ -43,8 +45,8 @@ export function AcquisitionClaimPage({
     [stores, storeId],
   )
   const enabledTemplates = templates.filter((template) => template.is_enabled)
-  const hasProductHint = Boolean(keyword.trim() || categoryName.trim() || sourceUrl.trim())
-  const canSubmit = Boolean(selectedStore && claimMark.trim() && hasProductHint)
+  const sourceUrlState = supportedRealProductSourceUrl(sourceUrl)
+  const canSubmit = Boolean(selectedStore && claimMark.trim() && sourceUrlState.ok)
   const claimCompleted = Boolean(
     lastRequest && (
       lastRequest.stage === 'claimed_to_draft'
@@ -81,8 +83,10 @@ export function AcquisitionClaimPage({
   }
 
   function useCandidate(candidate: ClaimCandidate) {
+    const candidateSourceUrl = (candidate.sourceUrl ?? candidate.source_url ?? '').trim()
+    if (!supportedRealProductSourceUrl(candidateSourceUrl).ok) return
     setKeyword(candidate.title)
-    setSourceUrl((candidate.sourceUrl ?? candidate.source_url ?? '').trim())
+    setSourceUrl(candidateSourceUrl)
     const candidateCategory = (candidate.categoryHint ?? candidate.category_hint ?? '').trim()
     if (candidateCategory) setCategoryName(candidateCategory)
   }
@@ -94,7 +98,7 @@ export function AcquisitionClaimPage({
           <div>
             <span className="eyebrow">第一段</span>
             <h2>把已有待认领商品放进商品箱</h2>
-            <p>只处理店小秘里已经存在的待认领商品。系统会筛选列表并点击认领，不会填写产品网址，也不会新建商品。</p>
+            <p>只处理店小秘里已经存在、且能用真实来源商品 URL 精确绑定的待认领商品。关键词和类目只辅助缩小列表，不会单独触发认领。</p>
           </div>
           <button className="button button--secondary" type="button" onClick={onNavigateDataAcquisition} disabled={busy}>
             打开已有待认领列表
@@ -133,8 +137,13 @@ export function AcquisitionClaimPage({
                         .join(' / ') || '来自最近只读检查'}
                     </span>
                   </div>
-                  <button className="button button--secondary" type="button" onClick={() => useCandidate(candidate)} disabled={busy}>
-                    使用这条商品
+                  <button
+                    className="button button--secondary"
+                    type="button"
+                    onClick={() => useCandidate(candidate)}
+                    disabled={busy || !supportedRealProductSourceUrl(candidate.sourceUrl ?? candidate.source_url ?? '').ok}
+                  >
+                    {supportedRealProductSourceUrl(candidate.sourceUrl ?? candidate.source_url ?? '').ok ? '使用这条商品' : '缺少来源 URL'}
                   </button>
                 </article>
               ))}
@@ -157,16 +166,25 @@ export function AcquisitionClaimPage({
             </select>
           </label>
           <label>
-            <span>商品关键词</span>
-            <input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="筛选已有待认领列表" disabled={busy} />
+            <span>真实来源商品 URL *</span>
+            <input
+              type="url"
+              inputMode="url"
+              value={sourceUrl}
+              onChange={(event) => setSourceUrl(event.target.value)}
+              placeholder="https://…"
+              disabled={busy}
+              aria-describedby="claim-source-url-help"
+            />
+            <small id="claim-source-url-help">必须是来源站点的完整 HTTP(S) 商品链接；店小秘页面链接、关键词和类目不能替代。</small>
           </label>
           <label>
-            <span>匹配链接</span>
-            <input value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="选择候选后自动带入，仅用于定位" disabled={busy} />
+            <span>辅助关键词</span>
+            <input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="可选，仅缩小已有列表" disabled={busy} />
           </label>
           <label>
-            <span>商品类目</span>
-            <input value={categoryName} onChange={(event) => setCategoryName(event.target.value)} placeholder="填写当前真实商品类目" disabled={busy} />
+            <span>辅助类目</span>
+            <input value={categoryName} onChange={(event) => setCategoryName(event.target.value)} placeholder="可选，仅辅助核对" disabled={busy} />
           </label>
           <label>
             <span>认领标记</span>
@@ -184,28 +202,28 @@ export function AcquisitionClaimPage({
             </select>
           </label>
         </div>
-        {!hasProductHint && (
-          <p className="form-hint">请至少填写商品关键词、商品类目，或从上方选择一条待认领商品，用来定位店小秘已有待认领商品。</p>
+        {!sourceUrlState.ok && (
+          <p className="form-hint" role="status">下一步：{sourceUrlState.message}</p>
         )}
 
         <div className="action-row">
-          <button className="button button--primary" type="button" onClick={submit} disabled={busy || !canSubmit}>
-            创建商品认领任务
-          </button>
-          {lastRequest && !claimCompleted && (
-            <button className="button button--secondary" type="button" onClick={onShowExecutionConsole} disabled={busy}>
-              开始认领到商品箱
+          {!lastRequest ? (
+            <button className="button button--primary" type="button" onClick={submit} disabled={busy || !canSubmit}>
+              创建商品认领任务
             </button>
-          )}
-          {lastRequest && claimCompleted && (
+          ) : claimCompleted ? (
             <>
               <button className="button button--primary" type="button" onClick={onShowDraftEdit} disabled={busy}>
-                查看商品箱商品
+                进入商品箱批量编辑
               </button>
               <button className="button button--secondary" type="button" onClick={onShowExecutionConsole} disabled={busy}>
                 查看执行记录
               </button>
             </>
+          ) : (
+            <button className="button button--primary" type="button" onClick={onShowTasks} disabled={busy}>
+              去当前任务批准并启动
+            </button>
           )}
         </div>
       </div>
@@ -218,9 +236,9 @@ export function AcquisitionClaimPage({
         {lastRequest ? (
           <div className="status-grid">
             <span><strong>店铺</strong><b>{selectedStore?.name ?? lastRequest.store_id}</b></span>
-            <span><strong>阶段</strong><b>{claimCompleted ? '商品已进入商品箱' : '等待启动真实浏览器认领'}</b></span>
+            <span><strong>阶段</strong><b>{claimCompleted ? '商品已进入商品箱' : '等待在当前任务批准并启动'}</b></span>
             <span><strong>标记</strong><b>{lastRequest.claim_mark}</b></span>
-            <span><strong>下一步</strong><b>{claimCompleted ? '去“商品箱编辑保存”选择该商品' : '认领到商品箱'}</b></span>
+            <span><strong>下一步</strong><b>{claimCompleted ? '进入商品箱批量编辑' : '关闭旧诊断浏览器，再批准并启动认领'}</b></span>
             {claimCompleted && <span><strong>商品箱商品</strong><b>{lastRequest.claimed_product_title || `商品 #${lastRequest.claimed_product_id}`}</b></span>}
             {claimCompleted && <span><strong>商品箱验证</strong><b>{draftBoxVerified ? '已确认进入商品箱' : '等待商品箱验证'}</b></span>}
             {claimCompleted && <span><strong>商品来源</strong><b>{claimedSourceLabel}</b></span>}
@@ -233,4 +251,26 @@ export function AcquisitionClaimPage({
       </div>
     </section>
   )
+}
+
+function supportedRealProductSourceUrl(value: string | null | undefined) {
+  const raw = String(value ?? '').trim()
+  if (!raw) {
+    return { ok: false, message: '从上方选择一条带来源 URL 的商品，或粘贴真实来源商品的完整链接。' }
+  }
+  try {
+    const url = new URL(raw)
+    const hostname = url.hostname.toLowerCase().replace(/\.$/, '')
+    const localHost = hostname === 'localhost'
+      || hostname === '127.0.0.1'
+      || hostname === '::1'
+      || hostname.endsWith('.local')
+    const dxmHost = hostname === 'dianxiaomi.com' || hostname.endsWith('.dianxiaomi.com')
+    if (!['http:', 'https:'].includes(url.protocol) || !hostname || url.username || url.password || localHost || dxmHost) {
+      return { ok: false, message: '填写来源站点的完整 HTTP(S) 商品链接；不要填写店小秘页面或本机地址。' }
+    }
+    return { ok: true, message: '来源商品 URL 已就绪。' }
+  } catch {
+    return { ok: false, message: '来源商品 URL 格式不完整，请粘贴包含 https:// 和站点域名的商品链接。' }
+  }
 }

@@ -11,7 +11,7 @@ type PrimaryNavigationItem = {
 const primaryNavigation: PrimaryNavigationItem[] = [
   { id: 'home', label: '编辑工作台', short: '编', hint: '查看当前状态和唯一下一步' },
   { id: 'template_center', label: '模板中心', short: '模', hint: '管理编辑使用的模板' },
-  { id: 'start_save', label: '浏览器现场', short: '览', hint: '查看真实浏览器和当前执行' },
+  { id: 'start_save', label: '浏览器诊断', short: '诊', hint: '查看运行状态，或关闭占用共享浏览器的旧诊断窗口' },
   { id: 'task_history', label: '批次记录', short: '记', hint: '查看实时进度、结果和人工复核' },
   { id: 'settings', label: '系统设置', short: '设', hint: '查看运行环境与系统设置' },
 ]
@@ -33,9 +33,9 @@ const sectionLabels: Record<WorkbenchSection, string> = {
   config_logistics: '包装物流',
   config_compliance: '合规海关',
   template_management: '模板管理',
-  start_save: '浏览器现场',
-  preflight: '浏览器现场',
-  real_browser: '浏览器现场',
+  start_save: '浏览器诊断',
+  preflight: '浏览器诊断',
+  real_browser: '浏览器诊断',
   manual_takeover: '人工接管',
   results: '结果报告',
   issues: '问题与证据',
@@ -80,7 +80,7 @@ export function AppShell({
             <div>
               <strong>DXM 编辑工作台</strong>
               <span>受控编辑 · 只保存不发布</span>
-              <span className="sr-only">编辑工作台 / 模板中心 / 浏览器现场 / 批次记录 / 系统设置</span>
+              <span className="sr-only">编辑工作台 / 模板中心 / 浏览器诊断 / 批次记录 / 系统设置</span>
             </div>
           )}
           <button className="icon-button" type="button" onClick={onToggleSidebar} aria-label="切换侧边栏">

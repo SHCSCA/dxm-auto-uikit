@@ -27,7 +27,19 @@ export function BatchEditPage({
   onShowRecords,
 }: BatchEditPageProps) {
   const batchTemplates = useMemo(
-    () => templates.filter((template) => template.template_type === 'edit_batch_bundle' && template.is_enabled),
+    () => templates.filter((template) => (
+      template.template_type === 'edit_batch_bundle'
+      && template.is_enabled
+      && isStoreLevelBatchTemplate(template)
+    )),
+    [templates],
+  )
+  const hiddenLegacyBundleCount = useMemo(
+    () => templates.filter((template) => (
+      template.template_type === 'edit_batch_bundle'
+      && template.is_enabled
+      && !isStoreLevelBatchTemplate(template)
+    )).length,
     [templates],
   )
   const [maxItems, setMaxItems] = useState(5)
@@ -240,8 +252,12 @@ export function BatchEditPage({
           </div>
           <div className="batch-template-inline">
             <span>
-              <strong>{selectedTemplate ? '将用于草稿的模板' : '模板尚未就绪'}</strong>
-              <small>{selectedTemplate ? '读取现场后仍可在创建草稿前切换。' : '不影响只读范围读取；创建草稿前必须到模板中心准备完整模板包。'}</small>
+            <strong>{selectedTemplate ? '将用于草稿的模板' : '模板尚未就绪'}</strong>
+              <small>{selectedTemplate
+                ? '读取现场后仍可在创建草稿前切换。'
+                : hiddenLegacyBundleCount
+                  ? '旧的类目绑定整批模板已隐藏；当前商品箱没有结构化类目证据，必须重新生成店铺级模板。'
+                  : '不影响只读范围读取；创建草稿前必须到模板中心准备完整模板包。'}</small>
             </span>
             <b>{selectedTemplate ? `${selectedTemplate.template_name} · ${templateVersion(selectedTemplate)}` : '先读取现场，再补模板'}</b>
           </div>
@@ -315,8 +331,10 @@ export function BatchEditPage({
             ) : (
               <div className="batch-template-blocker" role="status">
                 <strong>整批模板未就绪</strong>
-                <span>当前生产数据中没有已启用的完整整批模板。现场已安全读取，但不能创建草稿。</span>
-                <button className="button button--primary batch-primary-action" type="button" onClick={onShowTemplates}>前往模板中心</button>
+                <span>{hiddenLegacyBundleCount
+                  ? '现有模板仍绑定类目，无法用当前商品箱现场精确核对。现场已安全读取，但不能创建草稿。'
+                  : '当前生产数据中没有已启用的完整整批模板。现场已安全读取，但不能创建草稿。'}</span>
+                <button className="button button--primary batch-primary-action" type="button" onClick={onShowTemplates}>重新生成店铺级整批模板</button>
               </div>
             )}
           </aside>
@@ -330,6 +348,9 @@ function humanBatchError(caught: unknown, action: string) {
   const reasonCode = apiErrorReasonCode(caught)
   if (reasonCode === 'LEGACY_TASK_ACTIVE' || reasonCode === 'ANOTHER_EDIT_BATCH_ACTIVE' || reasonCode === 'EDIT_BATCH_ACTIVE') {
     return '当前已有任务或批次正在执行。请先结束当前任务或批次，再回来批准本批次。'
+  }
+  if (reasonCode === 'AGENT_CONSOLE_ACTIVE' || reasonCode === 'BROWSER_SESSION_BUSY') {
+    return '旧浏览器诊断窗口仍在运行。请先到“浏览器诊断”关闭该窗口，再回来读取范围或批准批次。系统没有执行保存。'
   }
   const message = caught instanceof Error ? caught.message.trim() : ''
   const normalized = message.toLowerCase()
@@ -407,4 +428,15 @@ function humanBatchStatus(status: string) {
     stopped: '已停止',
   }
   return labels[status] ?? '状态待确认'
+}
+
+function isStoreLevelBatchTemplate(template: Template) {
+  const binding = template.payload?.binding
+  return Boolean(
+    binding
+    && typeof binding === 'object'
+    && !Array.isArray(binding)
+    && Object.prototype.hasOwnProperty.call(binding, 'category_name')
+    && (binding as Record<string, unknown>).category_name === null,
+  )
 }

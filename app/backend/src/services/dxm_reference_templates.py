@@ -95,6 +95,20 @@ def resolve_dxm_reference_templates(*payloads: Mapping[str, Any] | None) -> dict
     return {section: resolved[section] for section in REFERENCE_TEMPLATE_SECTIONS}
 
 
+def configured_unsupported_reference_sections(
+    resolved: Mapping[str, Mapping[str, Any]],
+) -> list[str]:
+    return [
+        section
+        for section in UNSUPPORTED_REFERENCE_TEMPLATE_SECTIONS
+        if isinstance(resolved.get(section), Mapping)
+        and (
+            resolved[section].get("required") is True
+            or bool(resolved[section].get("names"))
+        )
+    ]
+
+
 def reference_payload_candidates(payload: Mapping[str, Any]) -> Iterable[Mapping[str, Any]]:
     yield payload
     for value in payload.values():

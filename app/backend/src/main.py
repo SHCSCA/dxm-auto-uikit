@@ -89,6 +89,10 @@ from src.services.selector_profile import SelectorProfileService
 from src.services.delivery_workspace import build_delivery_workspace, l2_real_probe_gate
 from src.services.agent_console import AgentConsoleService
 from src.services.config_preview import ConfigPreviewService
+from src.services.dxm_reference_templates import (
+    configured_unsupported_reference_sections,
+    resolve_dxm_reference_templates,
+)
 from src.services.template_center import template_center_metadata
 from src.state_machine.two_stage import (
     TwoStageContractError,
@@ -96,6 +100,8 @@ from src.state_machine.two_stage import (
     build_stage_a_task_facts,
     build_stage_b_task_facts,
     canonical_claim_target_identity,
+    canonical_source_identity,
+    is_supported_product_detail_url,
 )
 from src.ws import ConnectionManager
 
@@ -428,18 +434,36 @@ def dxm_workflow_open_draft_box():
     return normalize_artifact_paths(_run_login_flow(_workflow_adapter().open_draft_box))
 
 
-def _assert_batch_browser_available() -> None:
-    """Keep interactive browser work off an executing shared browser session."""
-
+def _active_agent_console_browser() -> dict[str, Any] | None:
     console_status = agent_console_service.status()
-    if console_status.get('active') or console_status.get('browser_visible'):
+    console_owns_browser = (
+        console_status.get('browser_visible') is True
+        or console_status.get('browser_launching') is True
+        or (
+            console_status.get('active') is True
+            and console_status.get('launch_browser') is True
+        )
+    )
+    return console_status if console_owns_browser else None
+
+
+def _assert_agent_console_browser_released(message: str) -> None:
+    if _active_agent_console_browser() is not None:
         raise HTTPException(
             status_code=409,
             detail={
                 'reason_code': 'AGENT_CONSOLE_ACTIVE',
-                'message': '已有单任务浏览器现场。请先关闭该现场，再进入商品箱整批流程。',
+                'message': message,
             },
         )
+
+
+def _assert_batch_browser_available() -> None:
+    """Keep interactive browser work off an executing shared browser session."""
+
+    _assert_agent_console_browser_released(
+        '已有单任务浏览器现场。请先关闭该现场，再进入商品箱整批流程。',
+    )
     active_task = repo.get_active_task_execution()
     if active_task is not None:
         raise HTTPException(
@@ -507,51 +531,16 @@ def create_edit_batch(payload: EditBatchCreate):
 
 
 @app.post('/api/edit-batches/{batch_id}/manual-approval')
-def approve_edit_batch(batch_id: int, payload: EditBatchManualApprovalRequest):
-    batch = repo.get_edit_batch(batch_id)
-    if not batch:
+def approve_edit_batch(batch_id: int, _payload: EditBatchManualApprovalRequest):
+    if not repo.get_edit_batch(batch_id):
         raise HTTPException(status_code=404, detail='Edit batch not found')
-    _assert_batch_browser_available()
-    if payload.confirmation != 'CONFIRM_DXM_BATCH_SAVE_ONLY':
-        raise HTTPException(
-            status_code=400,
-            detail='confirmation must exactly equal CONFIRM_DXM_BATCH_SAVE_ONLY',
-        )
-    if not payload.approved_by.strip():
-        raise HTTPException(status_code=400, detail='approved_by must identify the approving operator')
-    coordinator = BatchEditCoordinator(repo)
-    try:
-        capture_max_items = coordinator.approval_capture_max_items(batch)
-    except BatchEditContractError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={'reason_code': exc.reason_code, 'message': str(exc)},
-        ) from exc
-
-    capture = _run_login_flow(
-        workflow_adapter.capture_draft_box_scope,
-        capture_max_items,
+    raise HTTPException(
+        status_code=409,
+        detail={
+            'reason_code': 'BATCH_APPROVAL_REQUIRES_ATOMIC_START',
+            'message': '整批批准必须与启动原子完成，请使用“批准并开始”。',
+        },
     )
-    try:
-        identity = runtime_identity.as_dict()
-        return coordinator.approve_batch(
-            batch,
-            capture,
-            runtime_context={
-                'instance_id': identity['instanceId'],
-                'browser_runtime_id': browser_agent_runtime.runtime_id,
-                'git_head': identity['gitHead'],
-            },
-            expected_browser_session_id=workflow_adapter.browser_session_id(),
-            approved_by=payload.approved_by,
-            confirmation=payload.confirmation,
-        )
-    except BatchEditContractError as exc:
-        status_code = 404 if exc.reason_code == 'BATCH_NOT_FOUND' else 409
-        raise HTTPException(
-            status_code=status_code,
-            detail={'reason_code': exc.reason_code, 'message': str(exc)},
-        ) from exc
 
 
 @app.post('/api/edit-batches/{batch_id}/approve-and-start')
@@ -804,6 +793,7 @@ def create_template(payload: TemplateCreate):
             detail='edit_batch_bundle templates can only be created by the bundle composer',
         )
     data['payload'] = _normalize_template_payload(data.get('template_type'), data.get('payload'))
+    _assert_executable_dxm_reference_payload(data.get('template_type'), data.get('payload'))
     return repo.create_template(data)
 
 
@@ -829,6 +819,9 @@ def update_template(template_id: int, payload: TemplateUpdate):
         if template_type is None:
             template_type = current.get('template_type') if current else None
         data['payload'] = _normalize_template_payload(template_type, data.get('payload'))
+    effective_template_type = data.get('template_type', current.get('template_type'))
+    effective_payload = data.get('payload', current.get('payload'))
+    _assert_executable_dxm_reference_payload(effective_template_type, effective_payload)
     template = repo.update_template(template_id, data)
     return template
 
@@ -894,9 +887,21 @@ def _normalize_acquisition_claim_request(payload: AcquisitionClaimRequest) -> di
     claim_mark = str(data.get('claim_mark') or '').strip()
     if not claim_mark:
         raise HTTPException(status_code=400, detail='请填写认领标记。')
-    if not keyword and not category_name and not source_url:
-        raise HTTPException(status_code=400, detail='请填写商品关键词、商品类目或选择一条待认领商品，自动浏览器才能在店小秘已有待认领商品中定位目标。')
-    data['source_url'] = source_url or None
+    if not source_url:
+        raise HTTPException(
+            status_code=400,
+            detail='真实认领必须提供受支持的来源商品详情 URL；关键词和类目只能辅助筛选。',
+        )
+    if not is_supported_product_detail_url(source_url):
+        raise HTTPException(
+            status_code=400,
+            detail='来源 URL 必须是受支持的 1688、拼多多或 AliExpress 商品详情页。',
+        )
+    try:
+        canonical_source = canonical_source_identity(source_url)
+    except TwoStageContractError as exc:
+        raise HTTPException(status_code=400, detail=f'{exc.reason_code}: 来源商品 URL 无效。') from exc
+    data['source_url'] = canonical_source['primary_url']
     data['keyword'] = keyword or None
     data['category_name'] = category_name or None
     data['claim_mark'] = claim_mark
@@ -916,7 +921,14 @@ def get_task(task_id: int):
 @app.post('/api/tasks')
 def create_task(payload: TaskCreate):
     _assert_task_create_scope(payload)
-    return repo.create_task(payload.model_dump())
+    data = payload.model_dump()
+    if str(payload.mode or '').strip() == 'claim_only':
+        task_payload = dict(data.get('payload') or {})
+        source = canonical_source_identity(str(task_payload['source_url']))
+        task_payload['source_url'] = source['primary_url']
+        task_payload['source_urls'] = list(source['urls'])
+        data['payload'] = task_payload
+    return repo.create_task(data)
 
 
 @app.patch('/api/tasks/{task_id}/config-overrides')
@@ -925,6 +937,7 @@ def update_task_config_overrides(task_id: int, payload: TaskConfigOverrideReques
     if section not in DEFAULT_TEMPLATE_TYPES:
         raise HTTPException(status_code=400, detail=f'Unsupported config override section: {payload.section}')
     values = _normalize_config_override_values(section, payload.values)
+    _assert_executable_dxm_reference_payload(section, values)
     task = repo.update_task_template_override(task_id, section, values)
     if not task:
         raise HTTPException(status_code=404, detail='Task not found')
@@ -946,7 +959,7 @@ def approve_task_for_real_dxm(task_id: int, payload: TaskManualApprovalRequest):
     issued_at = _authorization_now()
     expires_at = issued_at + timedelta(seconds=AUTHORIZATION_LEASE_TTL_SECONDS)
     token = secrets.token_urlsafe(24)
-    task = repo.set_task_manual_approval(
+    approval_result = repo.set_task_manual_approval(
         task_id,
         approved=True,
         token=token,
@@ -957,8 +970,32 @@ def approve_task_for_real_dxm(task_id: int, payload: TaskManualApprovalRequest):
         issued_at=issued_at.isoformat(),
         expires_at=expires_at.isoformat(),
     )
-    if not task:
-        raise HTTPException(status_code=404, detail='Task not found')
+    if not approval_result.ok:
+        if approval_result.reason_code == 'TASK_NOT_FOUND':
+            status_code = 404
+        elif approval_result.reason_code in {
+            'TASK_APPROVAL_INPUT_INVALID',
+            'TASK_APPROVAL_TIME_INVALID',
+        }:
+            status_code = 400
+        else:
+            status_code = 409
+        raise HTTPException(
+            status_code=status_code,
+            detail={
+                'reason_code': approval_result.reason_code,
+                'message': '任务批准状态已变化；系统没有覆盖现有授权。',
+            },
+        )
+    task = approval_result.task
+    if not isinstance(task, dict):
+        raise HTTPException(
+            status_code=500,
+            detail={
+                'reason_code': 'TASK_APPROVAL_RESULT_MISSING',
+                'message': '任务已批准，但无法读取批准后的任务状态。',
+            },
+        )
     approval = (task.get('payload') or {}).get('manual_approval') or {}
     return {
         'ok': True,
@@ -1752,6 +1789,25 @@ def _normalize_template_payload(template_type: Any, payload: Any) -> Any:
     if normalized_type != 'dxm_reference':
         return payload
     return _normalize_dxm_reference_override(payload)
+
+
+def _assert_executable_dxm_reference_payload(template_type: Any, payload: Any) -> None:
+    normalized_type = str(template_type or '').strip().lower().replace('-', '_').replace(' ', '_')
+    if normalized_type != 'dxm_reference' or not isinstance(payload, dict):
+        return
+    resolved = resolve_dxm_reference_templates(payload)
+    unsupported = configured_unsupported_reference_sections(resolved)
+    if unsupported:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': 'DXM_REFERENCE_SECTION_UNSUPPORTED',
+                'message': (
+                    '这些店小秘引用项尚无可验证的真实控件，不能进入执行配置：'
+                    + '、'.join(unsupported)
+                ),
+            },
+        )
 
 
 def _normalize_dxm_reference_override(value: Any) -> Any:
@@ -2927,6 +2983,9 @@ def _assert_task_can_receive_manual_approval(task_id: int, request: TaskManualAp
     task = repo.get_task_private(task_id)
     if not task:
         raise HTTPException(status_code=404, detail='Task not found')
+    _assert_agent_console_browser_released(
+        '已有旧 Agent Console 浏览器现场。请先关闭该现场，再批准真实任务。',
+    )
     active_task = repo.get_active_task_execution()
     if active_task is not None and int(active_task['id']) != int(task_id):
         raise HTTPException(
@@ -3019,6 +3078,9 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> dict[str,
 
     if mode not in REAL_DXM_MUTATION_MODES:
         return None
+    _assert_agent_console_browser_released(
+        '已有旧 Agent Console 浏览器现场。请先关闭该现场，再启动真实任务。',
+    )
     _assert_workflow_runtime_healthy()
     if mode not in RELEASED_REAL_DXM_MUTATION_MODES:
         raise HTTPException(status_code=403, detail=UNRELEASED_REAL_DXM_MODE_DETAIL)
@@ -3096,6 +3158,13 @@ def _assert_task_create_scope(payload: TaskCreate) -> None:
             status_code=400,
             detail='Controlled claim_only must be created from acquisition claim request without existing product_ids',
         )
+    if mode == 'claim_only':
+        source_url = str((payload.payload or {}).get('source_url') or '').strip()
+        if not source_url or not is_supported_product_detail_url(source_url):
+            raise HTTPException(
+                status_code=400,
+                detail='Controlled claim_only requires one supported exact source product URL.',
+            )
     if mode == 'single_save':
         _assert_single_save_product_count({'product_ids': payload.product_ids}, status_code=400)
         _assert_single_save_uses_claimed_draft_product(
@@ -3105,6 +3174,13 @@ def _assert_task_create_scope(payload: TaskCreate) -> None:
 
 
 def _assert_claim_only_acquisition_task(task: dict[str, Any]) -> None:
+    payload = task.get('payload') if isinstance(task.get('payload'), dict) else {}
+    source_url = str(payload.get('source_url') or '').strip()
+    if not source_url or not is_supported_product_detail_url(source_url):
+        raise HTTPException(
+            status_code=409,
+            detail='该待认领任务没有受支持的精确来源商品 URL，请重新创建任务。',
+        )
     jobs = task.get('jobs') if isinstance(task.get('jobs'), list) else []
     if not jobs:
         raise HTTPException(status_code=409, detail='待认领商品任务缺少认领作业，请重新创建任务。')

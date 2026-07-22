@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Any
 
 from src.services.dxm_reference_templates import (
-    UNSUPPORTED_REFERENCE_TEMPLATE_SECTIONS,
+    configured_unsupported_reference_sections,
     resolve_dxm_reference_templates,
 )
 
@@ -160,11 +160,10 @@ class ConfigValidationService:
             task_payload,
             product_payload,
         )
+        unsupported = set(configured_unsupported_reference_sections(resolved))
         missing: list[str] = []
         for section, config in resolved.items():
-            if section in UNSUPPORTED_REFERENCE_TEMPLATE_SECTIONS and (
-                config.get("required") is True or bool(config.get("names"))
-            ):
+            if section in unsupported:
                 missing.append(f"dxm_reference_templates.{section}.unsupported")
             elif config.get("required", True) and not config.get("names"):
                 missing.append(f"dxm_reference_templates.{section}")

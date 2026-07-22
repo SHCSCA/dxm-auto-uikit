@@ -658,6 +658,11 @@ export default function App() {
   }
 
   async function createAcquisitionClaimRequest(request: AcquisitionClaimCreateRequest) {
+    if (!isSupportedRealProductSourceUrl(request.sourceUrl)) {
+      setOperationError('请先选择一条带真实来源商品 URL 的待认领商品，或粘贴来源站点的完整 HTTP(S) 商品链接。关键词和类目不能单独用于真实认领。')
+      setActiveSection('acquisition_claim')
+      return
+    }
     setBusy(true)
     setOperationError(null)
     setOperationNotice(null)
@@ -665,7 +670,7 @@ export default function App() {
       const result = await postJson<AcquisitionClaimResponse>('/api/acquisition/claim-requests', {
         store_id: request.storeId,
         keyword: request.keyword,
-        source_url: request.sourceUrl,
+        source_url: request.sourceUrl.trim(),
         category_name: request.categoryName,
         claim_mark: request.claimMark,
         template_id: request.templateId ?? null,
@@ -675,8 +680,8 @@ export default function App() {
         setSelectedTaskId(result.task_id)
         syncSelectedTaskIdUrl(result.task_id)
       }
-      setActiveSection('start_save')
-      setOperationNotice('商品认领任务已创建。下一步在浏览器现场启动自动浏览器，将店小秘已有待认领商品认领到商品箱。')
+      setActiveSection('product_tasks')
+      setOperationNotice('商品认领任务已创建。下一步在“当前保存任务”完成安全检查、关闭旧诊断浏览器并填写批准人，然后直接批准并启动认领。')
       await refreshWorkspace()
     } catch (error) {
       setOperationError(humanAcquisitionClaimError(error instanceof Error ? error.message : '创建认领任务失败'))
@@ -757,6 +762,11 @@ export default function App() {
         }
         const latestRuntimeStatus = await getJson<RuntimeStatus>(`/api/runtime/status?frontend_url=${encodeURIComponent(window.location.origin)}`)
         setRuntimeStatus(latestRuntimeStatus)
+        if (latestRuntimeStatus.agentConsole?.active === true) {
+          setOperationError('旧浏览器诊断窗口仍在运行。请先到“浏览器诊断”关闭该窗口，再回来批准并启动真实任务。系统尚未签发本次批准。')
+          setActiveSection('start_save')
+          return
+        }
         const dxmLoginStatus = latestRuntimeStatus.dxmLogin?.status ?? ''
         if (!DXM_READY_SESSION_STATUSES.has(dxmLoginStatus)) {
           setOperationError(`请先完成真实 DXM 登录；当前登录状态：${dxmLoginStatus || '未知'}。`)
@@ -1235,6 +1245,7 @@ export default function App() {
             onCreateClaimRequest={(request) => { void createAcquisitionClaimRequest(request) }}
             onNavigateDataAcquisition={() => { void navigateDxmTarget('data_acquisition') }}
             onShowDraftEdit={() => setActiveSection('draft_edit_save')}
+            onShowTasks={() => setActiveSection('product_tasks')}
             onShowExecutionConsole={() => setActiveSection('start_save')}
           />
         )
@@ -1254,6 +1265,7 @@ export default function App() {
             onL3ApprovedByChange={setL3ApprovedBy}
             onRunL2Probe={runL2ReadonlyProbe}
             onStartTask={(taskId) => startSelectedTask(taskId)}
+            onShowAcquisition={() => setActiveSection('acquisition_claim')}
             onSelectTask={(taskId) => {
               setSelectedTaskId(taskId)
               syncSelectedTaskIdUrl(taskId)
@@ -1569,6 +1581,25 @@ function humanAcquisitionClaimError(message: string) {
   return message || '商品认领任务创建失败：请重新检查店铺和已有待认领商品条件后重试；系统只处理已有待认领商品，不会保存或发布。'
 }
 
+function isSupportedRealProductSourceUrl(value: string | null | undefined) {
+  try {
+    const url = new URL(String(value ?? '').trim())
+    const hostname = url.hostname.toLowerCase().replace(/\.$/, '')
+    return ['http:', 'https:'].includes(url.protocol)
+      && Boolean(hostname)
+      && !url.username
+      && !url.password
+      && hostname !== 'localhost'
+      && hostname !== '127.0.0.1'
+      && hostname !== '::1'
+      && !hostname.endsWith('.local')
+      && hostname !== 'dianxiaomi.com'
+      && !hostname.endsWith('.dianxiaomi.com')
+  } catch {
+    return false
+  }
+}
+
 function humanDxmNavigationError(message: string, targetLabel: string) {
   const browserRuntimeMessage = humanBrowserRuntimeError(message)
   if (browserRuntimeMessage) {
@@ -1816,6 +1847,7 @@ function taskToAcquisitionClaimResponse(task: Task | null): AcquisitionClaimResp
     status: String(payload.status ?? task.status ?? 'pending'),
     store_id: Number(task.store_id ?? payload.store_id ?? 0),
     keyword: typeof payload.keyword === 'string' ? payload.keyword : null,
+    source_url: typeof payload.source_url === 'string' ? payload.source_url : null,
     category_name: typeof payload.category_name === 'string' ? payload.category_name : null,
     claim_mark: String(payload.claim_mark ?? 'AI-OPS'),
     template_id: typeof payload.template_id === 'number' ? payload.template_id : null,

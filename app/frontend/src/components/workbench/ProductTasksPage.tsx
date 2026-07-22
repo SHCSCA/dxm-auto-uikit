@@ -20,6 +20,7 @@ type ProductTasksPageProps = {
   onSelectTask: (taskId: number) => void
   onRunL2Probe: () => void
   onStartTask: (taskId: number) => void
+  onShowAcquisition: () => void
   onShowConfig: () => void
   onShowDraftEdit: () => void
   onShowConsole: () => void
@@ -43,6 +44,7 @@ export function ProductTasksPage({
   onSelectTask,
   onRunL2Probe,
   onStartTask,
+  onShowAcquisition,
   onShowConfig,
   onShowDraftEdit,
   onShowConsole,
@@ -70,10 +72,12 @@ export function ProductTasksPage({
     l2Passed: l2Gate?.status === 'passed',
     currentApproverPresent: Boolean(currentApprover),
     dxmLoggedIn: isDxmLoggedIn(runtimeStatus, runtimeStatusError),
+    diagnosticBrowserActive: runtimeStatus?.agentConsole?.active === true,
     busy,
   })
   const primaryAction = actionForDecision(decision.code, currentTask, {
     onShowDraftEdit,
+    onShowAcquisition,
     onShowConfig,
     onRunL2Probe,
     onStartTask,
@@ -139,7 +143,7 @@ export function ProductTasksPage({
             {decision.cta}
           </button>
           <button className="button button--secondary" type="button" onClick={onShowConsole} disabled={!currentTask}>
-            去浏览器现场
+            浏览器诊断与关闭旧窗口
           </button>
           <button className="button button--secondary" type="button" onClick={onShowConfig} disabled={currentTask?.mode !== 'single_save'}>
             检查编辑页模板
@@ -164,7 +168,7 @@ export function ProductTasksPage({
         {currentTaskNeedsApproval && (
           <div className="gate-note">
             <strong>{currentTask?.mode === 'claim_only' ? '人工确认认领到商品箱' : '人工确认只保存不发布'}</strong>
-            <span>{currentTask?.mode === 'claim_only' ? '确认将该已有商品认领到商品箱' : '确认本次只保存不发布'}。填写批准人后，系统才会为本次任务申请一次性批准令牌。</span>
+            <span>{currentTask?.mode === 'claim_only' ? '确认将该已有商品认领到商品箱' : '确认本次只保存不发布'}。关闭旧诊断浏览器并填写批准人后，系统才会直接批准并启动本次任务。</span>
             <label className="approval-inline">
               <span>批准人</span>
               <input value={l3ApprovedBy} onChange={(event) => onL3ApprovedByChange(event.target.value)} placeholder="填写当前操作者" disabled={busy} required />
@@ -234,6 +238,7 @@ function buildTaskDecision({
   l2Passed,
   currentApproverPresent,
   dxmLoggedIn,
+  diagnosticBrowserActive,
   busy,
 }: {
   task: Task | null
@@ -243,6 +248,7 @@ function buildTaskDecision({
   l2Passed: boolean
   currentApproverPresent: boolean
   dxmLoggedIn: boolean
+  diagnosticBrowserActive: boolean
   busy: boolean
 }) {
   if (!task) {
@@ -256,6 +262,12 @@ function buildTaskDecision({
   }
   if (task.status !== 'draft') {
     return decision('go_draft_edit', 'warn', '当前任务不可直接启动', '这条任务不是草稿状态。', '重新从商品箱商品创建编辑保存任务。', '去商品箱编辑保存', false)
+  }
+  if (task.mode === 'claim_only' && !taskHasSupportedSourceUrl(task)) {
+    return decision('show_acquisition', 'warn', '缺少真实来源商品 URL', '关键词、类目或标题只能辅助筛选，不能唯一授权真实认领。', '回到待认领入箱，选择带来源 URL 的候选或粘贴完整商品链接。', '补齐来源商品 URL', false)
+  }
+  if (diagnosticBrowserActive) {
+    return decision('show_console', 'warn', '旧诊断浏览器仍在运行', '真实认领、单商品只保存和整批执行不能与旧 Agent Console 共享浏览器。', '到浏览器诊断关闭旧窗口，再回来批准并启动。', '关闭旧诊断浏览器', false)
   }
   if (!dxmLoggedIn) {
     return decision('show_console', 'warn', '需要登录店小秘', '系统还没有检测到真实店小秘登录态。', '先打开真实浏览器完成登录，再回来继续。', '去浏览器现场', false)
@@ -274,7 +286,7 @@ function buildTaskDecision({
       ? decision('start', 'warn', '等待人工确认认领到商品箱', '确认将该已有商品认领到商品箱，并填写本次任务批准人。', '填写批准人后再启动待认领入箱。', '填写当前批准人', true)
       : decision('start', 'warn', '等待人工确认只保存不发布', '确认本次只保存不发布，并填写本次任务批准人。', '填写批准人后再启动单商品只保存。', '填写当前批准人', true)
   }
-  return decision('start', 'ok', task.mode === 'claim_only' ? '可以处理待认领入箱' : '可以处理单商品只保存', '当前没有阻断项。', '到“浏览器现场”查看并执行真实进度。', task.mode === 'claim_only' ? '去浏览器现场处理入箱' : '去浏览器现场执行只保存', busy)
+  return decision('start', 'ok', task.mode === 'claim_only' ? '可以处理待认领入箱' : '可以处理单商品只保存', '当前没有阻断项，旧诊断浏览器已关闭。', '一次批准后由任务运行器直接启动真实执行。', task.mode === 'claim_only' ? '批准并启动认领' : '批准并启动只保存', busy)
 }
 
 function decision(code: string, tone: 'ok' | 'warn', what: string, why: string, next: string, cta: string, disabled: boolean) {
@@ -283,6 +295,7 @@ function decision(code: string, tone: 'ok' | 'warn', what: string, why: string, 
 
 function actionForDecision(code: string, currentTask: Task | null, actions: {
   onShowDraftEdit: () => void
+  onShowAcquisition: () => void
   onShowConfig: () => void
   onRunL2Probe: () => void
   onStartTask: (taskId: number) => void
@@ -291,12 +304,37 @@ function actionForDecision(code: string, currentTask: Task | null, actions: {
 }) {
   return ({
     go_draft_edit: actions.onShowDraftEdit,
+    show_acquisition: actions.onShowAcquisition,
     show_config: actions.onShowConfig,
     run_l2: actions.onRunL2Probe,
     show_console: actions.onShowConsole,
     show_reports: actions.onShowReports,
     start: () => currentTask ? actions.onStartTask(currentTask.id) : undefined,
   } as Record<string, (() => void) | undefined>)[code]
+}
+
+function taskHasSupportedSourceUrl(task: Task) {
+  const value = typeof task.payload?.source_url === 'string'
+    ? task.payload.source_url
+    : typeof task.payload?.claimed_product_source_url === 'string'
+      ? task.payload.claimed_product_source_url
+      : ''
+  try {
+    const url = new URL(value)
+    const hostname = url.hostname.toLowerCase().replace(/\.$/, '')
+    return ['http:', 'https:'].includes(url.protocol)
+      && Boolean(hostname)
+      && !url.username
+      && !url.password
+      && hostname !== 'localhost'
+      && hostname !== '127.0.0.1'
+      && hostname !== '::1'
+      && !hostname.endsWith('.local')
+      && hostname !== 'dianxiaomi.com'
+      && !hostname.endsWith('.dianxiaomi.com')
+  } catch {
+    return false
+  }
 }
 
 function configStatusLabel(task: Task | null, configPreview: ConfigPreview | null, loading: boolean, error: string | null) {

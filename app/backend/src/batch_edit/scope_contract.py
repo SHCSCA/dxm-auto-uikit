@@ -3,12 +3,15 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import re
 from datetime import datetime
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
-from src.state_machine.two_stage import TwoStageContractError, canonical_source_identity
+from src.state_machine.two_stage import (
+    TwoStageContractError,
+    canonical_source_identity,
+    is_supported_product_detail_url,
+)
 
 
 RAW_SCOPE_SCHEMA = "dxm_draft_box_scope_capture.v1"
@@ -288,7 +291,7 @@ def _normalize_items(
             ):
                 _reject("SCOPE_ITEM_SOURCE_INVALID", "item source URLs are not canonical")
             if any(
-                not _is_supported_product_detail_url(candidate)
+                not is_supported_product_detail_url(candidate)
                 for candidate in canonical_source["urls"]
             ):
                 _reject(
@@ -433,38 +436,6 @@ def _draft_box_url(value: Any) -> str:
     if not parsed.path.rstrip("/").endswith("/web/smt/smtProductList/draft"):
         _reject("SCOPE_PAGE_INVALID", "scope page is not the SMT draft box")
     return text
-
-
-def _is_supported_product_detail_url(value: Any) -> bool:
-    if not isinstance(value, str):
-        return False
-    try:
-        parsed = urlparse(value)
-        port = parsed.port
-    except ValueError:
-        return False
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname or port is not None:
-        return False
-    host = parsed.hostname.casefold().rstrip(".")
-    path = parsed.path
-
-    def host_matches(domain: str) -> bool:
-        return host == domain or host.endswith(f".{domain}")
-
-    if host_matches("dianxiaomi.com"):
-        return False
-    if host_matches("1688.com"):
-        return re.fullmatch(r"/offer/[0-9]+\.html", path, flags=re.IGNORECASE) is not None
-    if host_matches("yangkeduo.com"):
-        goods_ids = parse_qs(parsed.query, keep_blank_values=True).get("goods_id", [])
-        return (
-            re.fullmatch(r"/goods2?\.html", path, flags=re.IGNORECASE) is not None
-            and len(goods_ids) == 1
-            and re.fullmatch(r"[0-9]+", goods_ids[0]) is not None
-        )
-    if host_matches("aliexpress.com"):
-        return re.fullmatch(r"/item/[0-9]+\.html", path, flags=re.IGNORECASE) is not None
-    return False
 
 
 def _same_exact_int(left: Any, right: Any) -> bool:

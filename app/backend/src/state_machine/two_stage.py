@@ -9,7 +9,7 @@ from collections.abc import Iterable, Mapping
 from functools import wraps
 from pathlib import Path
 from typing import Any
-from urllib.parse import SplitResult, urlsplit, urlunsplit
+from urllib.parse import SplitResult, parse_qs, urlsplit, urlunsplit
 
 
 SOURCE_IDENTITY_SCHEMA = "dxm.source.identity.v1"
@@ -316,6 +316,38 @@ def canonical_source_identity(
         "urls": sorted(urls),
     }
     return {**unsigned, "fingerprint": _sha256(unsigned)}
+
+
+def is_supported_product_detail_url(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return False
+    if parsed.scheme.casefold() not in {"http", "https"} or not parsed.hostname or port is not None:
+        return False
+    host = parsed.hostname.casefold().rstrip(".")
+    path = parsed.path
+
+    def host_matches(domain: str) -> bool:
+        return host == domain or host.endswith(f".{domain}")
+
+    if host_matches("dianxiaomi.com"):
+        return False
+    if host_matches("1688.com"):
+        return re.fullmatch(r"/offer/[0-9]+\.html", path, flags=re.IGNORECASE) is not None
+    if host_matches("yangkeduo.com"):
+        goods_ids = parse_qs(parsed.query, keep_blank_values=True).get("goods_id", [])
+        return (
+            re.fullmatch(r"/goods2?\.html", path, flags=re.IGNORECASE) is not None
+            and len(goods_ids) == 1
+            and re.fullmatch(r"[0-9]+", goods_ids[0]) is not None
+        )
+    if host_matches("aliexpress.com"):
+        return re.fullmatch(r"/item/[0-9]+\.html", path, flags=re.IGNORECASE) is not None
+    return False
 
 
 def _optional_match_hint(value: Any, *, field_name: str) -> str | None:

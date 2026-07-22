@@ -240,6 +240,24 @@ def derive_running_item_claim_context(
     ):
         if canonical_batch[batch_key] != start[start_key]:
             _reject("START_FROZEN_BINDING_DRIFT", f"{start_key} has drifted")
+    try:
+        frozen_scope = freeze_scope_snapshot(canonical_batch["scope_snapshot"])
+    except BatchContractError as exc:
+        raise BatchExecutionContractError(exc.reason_code, str(exc)) from exc
+    scope_runtime = frozen_scope.get("runtime_identity")
+    if (
+        frozen_scope.get("digest") != start["scope_digest"]
+        or start["runtime_identity"] != scope_runtime
+        or start["store_identity"] != frozen_scope.get("store_identity")
+        or start["page_identity"] != frozen_scope.get("page_identity")
+        or not isinstance(scope_runtime, dict)
+        or start["browser_session_id"] != scope_runtime.get("browser_session_id")
+        or start["git_head"] != scope_runtime.get("git_head")
+    ):
+        _reject(
+            "START_LIVE_BINDING_DRIFT",
+            "persisted start context no longer matches the frozen scope",
+        )
 
     items = canonical_batch["items"]
     if not isinstance(items, list) or not items:
@@ -398,7 +416,13 @@ def validate_and_consume_item_grant(
     # already-started batch can progress without silently extending approval
     # token validity or forcing unsafe re-approval mid-run.
     _timestamp(canonical_grant["approval_expires_at"], "approval expires_at")
-    if current_time >= _timestamp(canonical_grant["expires_at"], "grant expires_at"):
+    issued_at = _timestamp(canonical_grant["issued_at"], "grant issued_at")
+    expires_at = _timestamp(canonical_grant["expires_at"], "grant expires_at")
+    if issued_at >= expires_at or (expires_at - issued_at).total_seconds() > ITEM_GRANT_TTL_SECONDS:
+        _reject("GRANT_INTERVAL_INVALID", "item grant interval is invalid")
+    if current_time < issued_at:
+        _reject("GRANT_NOT_YET_VALID", "item grant has not started")
+    if current_time >= expires_at:
         _reject("GRANT_EXPIRED", "item grant has expired")
     expected_nonce_hash = _sha256_text(canonical_grant["nonce_hash"], "grant nonce hash")
     supplied_nonce_hash = hashlib.sha256(
@@ -629,6 +653,8 @@ def classify_item_outcome(grant: Any, outcome: Any) -> dict[str, Any]:
         return _stop_decision(canonical_grant, "PUBLISH_RISK_DETECTED")
     if network["complete"] is not True:
         return _stop_decision(canonical_grant, "EVIDENCE_MISSING")
+    if not isinstance(publish.get("kind"), str) or not publish["kind"].strip():
+        return _stop_decision(canonical_grant, "EVIDENCE_MISSING")
     stable_keys = (
         "runtime_identity",
         "browser_session_id",
@@ -647,7 +673,7 @@ def classify_item_outcome(grant: Any, outcome: Any) -> dict[str, Any]:
             and evidence["validation_reason"] is None
             and evidence["ledger_status"] == "DISPATCHED"
             and evidence["save_proven"] is True
-            and mutation_count >= 1
+            and mutation_count == 1
         ):
             return _continue_decision(canonical_grant, "SUCCEEDED", "ITEM_SAVE_PROVEN")
         return _stop_decision(canonical_grant, "SUCCESS_EVIDENCE_UNCERTAIN")
@@ -656,17 +682,12 @@ def classify_item_outcome(grant: Any, outcome: Any) -> dict[str, Any]:
         return _stop_decision(canonical_grant, "MUTATION_OUTCOME_UNCERTAIN")
     if mutation_count != 0:
         return _stop_decision(canonical_grant, "ZERO_WRITE_PROOF_FALSE")
-    if evidence["error_code"] != "PRE_SAVE_VALIDATION_NO_WRITE":
-        return _stop_decision(canonical_grant, "UNCLASSIFIED_ITEM_FAILURE")
-    if evidence["validation_reason"] not in PRE_SAVE_VALIDATION_REASON_ALLOWLIST:
-        return _stop_decision(canonical_grant, "VALIDATION_REASON_NOT_ALLOWED")
-    if evidence["save_proven"] is not False:
-        return _stop_decision(canonical_grant, "ZERO_WRITE_PROOF_FALSE")
-    return _continue_decision(
-        canonical_grant,
-        "ISOLATED_PRE_SAVE_NO_WRITE",
-        "PRE_SAVE_VALIDATION_ISOLATED",
-    )
+    # Once a grant exists, the item has crossed the mutation-authority boundary.
+    # Even zero-write-looking evidence can no longer be isolated automatically;
+    # the persisted grant and ledger reservation require manual reconciliation.
+    if evidence["error_code"] == "PRE_SAVE_VALIDATION_NO_WRITE":
+        return _stop_decision(canonical_grant, "POST_GRANT_FAILURE_REQUIRES_REVIEW")
+    return _stop_decision(canonical_grant, "UNCLASSIFIED_ITEM_FAILURE")
 
 
 def _continue_decision(grant: dict[str, Any], classification: str, reason_code: str) -> dict[str, Any]:

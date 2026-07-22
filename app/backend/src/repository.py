@@ -591,6 +591,27 @@ class Repository:
                     item_row=item,
                     start_context=start_context,
                 )
+                issued_at = datetime.fromisoformat(
+                    str(normalized_grant["issued_at"]).replace("Z", "+00:00")
+                ).astimezone(timezone.utc)
+                expires_at = datetime.fromisoformat(
+                    str(normalized_grant["expires_at"]).replace("Z", "+00:00")
+                ).astimezone(timezone.utc)
+                grant_checked_at = datetime.now(timezone.utc)
+                if grant_checked_at < issued_at or grant_checked_at >= expires_at:
+                    return self._edit_batch_execution_failure("ITEM_GRANT_NOT_CURRENT")
+                if conn.execute(
+                    """
+                    SELECT 1 AS present
+                      FROM mutation_dispatch_ledger
+                     WHERE mutation_scope_id=?
+                     LIMIT 1
+                    """,
+                    (normalized_grant["mutation_scope_id"],),
+                ).fetchone() is not None:
+                    return self._edit_batch_execution_failure(
+                        "ITEM_GRANT_LEDGER_SCOPE_ALREADY_PRESENT"
+                    )
                 existing_grant = loads(item.get("grant_context_json"), None)
                 if item["status"] != "running":
                     return self._edit_batch_execution_failure("BATCH_ITEM_NOT_RUNNING")
@@ -710,6 +731,16 @@ class Repository:
                     stored_grant=stored_grant,
                     consumed_at=consumed_at,
                 )
+                ledger_rejection = self._edit_batch_reserved_ledger_rejection(
+                    conn,
+                    batch_id=batch_id,
+                    item_id=item_id,
+                    item_row=item,
+                    stored_grant=stored_grant,
+                    consumed_at=consumed_at,
+                )
+                if ledger_rejection is not None:
+                    return self._edit_batch_execution_failure(ledger_rejection)
                 cursor = conn.execute(
                     """
                     UPDATE edit_batch_items
@@ -820,6 +851,19 @@ class Repository:
                 classification = normalized_decision["classification"]
                 if classification == "SUCCEEDED" and not item.get("grant_consumed_at"):
                     return self._edit_batch_execution_failure("ITEM_GRANT_NOT_CONSUMED")
+                if classification == "SUCCEEDED":
+                    ledger_rejection = self._edit_batch_dispatched_ledger_rejection(
+                        conn,
+                        batch_id=batch_id,
+                        item_id=item_id,
+                        item_row=item,
+                        stored_grant=(
+                            stored_grant if isinstance(stored_grant, dict) else None
+                        ),
+                        outcome=normalized_outcome,
+                    )
+                    if ledger_rejection is not None:
+                        return self._edit_batch_execution_failure(ledger_rejection)
                 if classification == "ISOLATED_PRE_SAVE_NO_WRITE" and any(
                     item.get(column) is not None
                     for column in (
@@ -1210,6 +1254,150 @@ class Repository:
              LIMIT 1
             """
         ).fetchone() is not None
+
+    @staticmethod
+    def _edit_batch_ledger_row(conn: Any, mutation_scope_id: str) -> dict[str, Any] | None:
+        return conn.execute(
+            """
+            SELECT *
+              FROM mutation_dispatch_ledger
+             WHERE mutation_scope_id=? AND mutation_action='save_only_click'
+             LIMIT 1
+            """,
+            (mutation_scope_id,),
+        ).fetchone()
+
+    @staticmethod
+    def _edit_batch_ledger_time(value: Any) -> datetime | None:
+        if not isinstance(value, str) or not value.strip():
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            return None
+        return parsed.astimezone(timezone.utc)
+
+    @classmethod
+    def _edit_batch_ledger_binding_rejection(
+        cls,
+        row: dict[str, Any] | None,
+        *,
+        batch_id: int,
+        item_id: int,
+        item_row: dict[str, Any],
+        stored_grant: dict[str, Any],
+    ) -> str | None:
+        if not isinstance(row, dict):
+            return "MUTATION_LEDGER_ENTRY_MISSING"
+        expected = {
+            "mutation_scope_id": stored_grant.get("mutation_scope_id"),
+            "mutation_action": "save_only_click",
+            "command_state": "SAVE_ONLY",
+            "command_action": "save_only",
+            "task_id": str(batch_id),
+            "job_id": str(item_id),
+            "authorization_lease_id": stored_grant.get("grant_lease_id"),
+            "authorization_fingerprint": stored_grant.get("fingerprint"),
+        }
+        if any(row.get(key) != value for key, value in expected.items()):
+            return "MUTATION_LEDGER_BINDING_DRIFT"
+        item_binding = {
+            "grant_lease_id": stored_grant.get("grant_lease_id"),
+            "grant_fingerprint": stored_grant.get("fingerprint"),
+            "grant_nonce_hash": stored_grant.get("nonce_hash"),
+            "mutation_scope_id": stored_grant.get("mutation_scope_id"),
+            "granted_at": stored_grant.get("issued_at"),
+            "grant_expires_at": stored_grant.get("expires_at"),
+        }
+        if any(item_row.get(key) != value for key, value in item_binding.items()):
+            return "ITEM_GRANT_PERSISTED_BINDING_DRIFT"
+        return None
+
+    @classmethod
+    def _edit_batch_reserved_ledger_rejection(
+        cls,
+        conn: Any,
+        *,
+        batch_id: int,
+        item_id: int,
+        item_row: dict[str, Any],
+        stored_grant: dict[str, Any],
+        consumed_at: str,
+    ) -> str | None:
+        row = cls._edit_batch_ledger_row(
+            conn, str(stored_grant.get("mutation_scope_id") or "")
+        )
+        rejection = cls._edit_batch_ledger_binding_rejection(
+            row,
+            batch_id=batch_id,
+            item_id=item_id,
+            item_row=item_row,
+            stored_grant=stored_grant,
+        )
+        if rejection is not None:
+            return rejection
+        if row.get("status") != "RESERVED":
+            return "MUTATION_LEDGER_NOT_RESERVED"
+        granted = cls._edit_batch_ledger_time(item_row.get("granted_at"))
+        reserved = cls._edit_batch_ledger_time(row.get("reserved_at"))
+        consumed = cls._edit_batch_ledger_time(consumed_at)
+        if granted is None or reserved is None or consumed is None:
+            return "MUTATION_LEDGER_ORDER_UNPROVEN"
+        if not granted <= reserved <= consumed:
+            return "MUTATION_LEDGER_ORDER_INVALID"
+        return None
+
+    @classmethod
+    def _edit_batch_dispatched_ledger_rejection(
+        cls,
+        conn: Any,
+        *,
+        batch_id: int,
+        item_id: int,
+        item_row: dict[str, Any],
+        stored_grant: dict[str, Any] | None,
+        outcome: dict[str, Any],
+    ) -> str | None:
+        if not isinstance(stored_grant, dict):
+            return "ITEM_GRANT_MISSING"
+        row = cls._edit_batch_ledger_row(
+            conn, str(stored_grant.get("mutation_scope_id") or "")
+        )
+        rejection = cls._edit_batch_ledger_binding_rejection(
+            row,
+            batch_id=batch_id,
+            item_id=item_id,
+            item_row=item_row,
+            stored_grant=stored_grant,
+        )
+        if rejection is not None:
+            return rejection
+        if (
+            row.get("status") != "DISPATCHED"
+            or row.get("unknown_at") is not None
+            or not row.get("outcome_json")
+            or row.get("browser_session_id") != stored_grant.get("browser_session_id")
+            or outcome.get("ledger_status") != "DISPATCHED"
+            or outcome.get("mutation_scope_id") != stored_grant.get("mutation_scope_id")
+        ):
+            return "MUTATION_LEDGER_DISPATCH_UNPROVEN"
+        ordered_times = [
+            cls._edit_batch_ledger_time(item_row.get("granted_at")),
+            cls._edit_batch_ledger_time(row.get("reserved_at")),
+            cls._edit_batch_ledger_time(item_row.get("grant_consumed_at")),
+            cls._edit_batch_ledger_time(row.get("dispatch_started_at")),
+            cls._edit_batch_ledger_time(row.get("dispatched_at")),
+        ]
+        if any(value is None for value in ordered_times):
+            return "MUTATION_LEDGER_ORDER_UNPROVEN"
+        if any(
+            earlier > later
+            for earlier, later in zip(ordered_times, ordered_times[1:])
+        ):
+            return "MUTATION_LEDGER_ORDER_INVALID"
+        return None
 
     @staticmethod
     def _edit_batch_item_rows(conn: Any, batch_id: int) -> list[dict[str, Any]]:

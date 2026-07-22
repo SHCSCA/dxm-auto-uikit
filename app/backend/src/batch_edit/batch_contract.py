@@ -7,7 +7,7 @@ from typing import Any
 
 from src.batch_edit.scope_contract import SCOPE_SCHEMA, canonical_sha256
 from src.services.dxm_reference_templates import (
-    UNSUPPORTED_REFERENCE_TEMPLATE_SECTIONS,
+    configured_unsupported_reference_sections,
     resolve_dxm_reference_templates,
 )
 from src.services.config_validation import ConfigValidationService
@@ -242,11 +242,7 @@ def normalize_bundle_source_section(section: str, payload: Any) -> dict[str, Any
             "dxm_reference source must contain dxm_reference_templates or grouped dxm_reference",
         )
     normalized = resolve_dxm_reference_templates({"dxm_reference_templates": raw_mapping})
-    unsupported = [
-        section
-        for section in UNSUPPORTED_REFERENCE_TEMPLATE_SECTIONS
-        if normalized[section].get("required") is True or bool(normalized[section].get("names"))
-    ]
+    unsupported = configured_unsupported_reference_sections(normalized)
     if unsupported:
         _reject(
             "DXM_REFERENCE_SECTION_UNSUPPORTED",

@@ -368,7 +368,7 @@ export type ClaimCandidate = {
   captured_at?: string | null
   readonly?: boolean | null
 }
-export type AcquisitionClaimCreateRequest = { storeId: number; keyword?: string; sourceUrl?: string; categoryName?: string; claimMark: string; templateId?: number | null }
+export type AcquisitionClaimCreateRequest = { storeId: number; sourceUrl: string; keyword?: string; categoryName?: string; claimMark: string; templateId?: number | null }
 export type AcquisitionClaimResponse = {
   id: number
   task_id: number
