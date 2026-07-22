@@ -46,11 +46,13 @@ function pruneSitePackages(sitePackagesPath) {
 function prunePackagedRuntime(context) {
   const appOutDir = context.appOutDir
   const venvPath = path.join(appOutDir, 'resources', 'app', 'backend', '.venv')
+  const pythonRuntimePath = path.join(appOutDir, 'resources', 'app', 'backend', 'python-runtime')
   const sitePackagesPath = path.join(venvPath, 'Lib', 'site-packages')
 
   pruneSitePackages(sitePackagesPath)
   pruneTree(venvPath)
-  console.log(`pruned packaged backend runtime: ${venvPath}`)
+  pruneTree(pythonRuntimePath)
+  console.log(`pruned packaged backend runtimes: ${venvPath}; ${pythonRuntimePath}`)
 }
 
 module.exports = prunePackagedRuntime

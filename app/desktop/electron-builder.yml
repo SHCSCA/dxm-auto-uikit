@@ -13,6 +13,8 @@ files:
 extraResources:
   - from: ../../outputs/build-metadata/desktop-build-manifest.json
     to: build-metadata/desktop-build-manifest.json
+  - from: ../../outputs/desktop-python-runtime
+    to: app/backend/python-runtime
   - from: ../frontend/dist
     to: app/frontend/dist
   - from: ../backend/src
@@ -32,6 +34,7 @@ extraResources:
       - "!Lib/site-packages/setuptools-*.dist-info/**"
       - "!Lib/site-packages/wheel/**"
       - "!Lib/site-packages/wheel-*.dist-info/**"
+      - "!Lib/site-packages/__editable__.*"
   - from: ../../tools/probes
     to: tools/probes
   - from: ../../config

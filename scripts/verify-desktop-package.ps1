@@ -74,7 +74,8 @@ if (!(Test-Path $ExePath)) {
 }
 
 $RequiredResources = @(
-  'resources\app\backend\.venv\Scripts\python.exe',
+  'resources\app\backend\python-runtime\python.exe',
+  'resources\app\backend\.venv\Lib\site-packages',
   'resources\tools\probes\l2_readonly_probe_runner.py',
   'resources\tools\probes\l2_readonly_probe.py',
   'resources\config\l2_readonly_allowlist.json'
@@ -166,7 +167,7 @@ function Assert-DesktopSmokeLog {
   if ($LogText -notmatch 'Starting backend') {
     throw "$Label failed: desktop-main.log does not contain Starting backend. Log: $ExistingLog"
   }
-  $BundledPythonRelative = 'resources\app\backend\.venv\Scripts\python.exe'
+  $BundledPythonRelative = 'resources\app\backend\python-runtime\python.exe'
   if ($ExpectedPythonRoot) {
     $BundledPythonPath = Join-Path $ExpectedPythonRoot $BundledPythonRelative
     if ($LogText -notmatch [regex]::Escape($BundledPythonPath)) {
@@ -216,9 +217,9 @@ function Assert-PackagedRuntimeClean {
   param(
     [string]$ExePath
   )
-  $VenvPath = Join-Path (Split-Path $ExePath) 'resources\app\backend\.venv'
-  $BytecodeFiles = @(Get-ChildItem -LiteralPath $VenvPath -Recurse -Force -Filter '*.pyc' -ErrorAction SilentlyContinue)
-  $BytecodeDirs = @(Get-ChildItem -LiteralPath $VenvPath -Recurse -Force -Directory -Filter '__pycache__' -ErrorAction SilentlyContinue)
+  $BackendResourcePath = Join-Path (Split-Path $ExePath) 'resources\app\backend'
+  $BytecodeFiles = @(Get-ChildItem -LiteralPath $BackendResourcePath -Recurse -Force -Filter '*.pyc' -ErrorAction SilentlyContinue)
+  $BytecodeDirs = @(Get-ChildItem -LiteralPath $BackendResourcePath -Recurse -Force -Directory -Filter '__pycache__' -ErrorAction SilentlyContinue)
   if ($BytecodeFiles.Count -gt 0 -or $BytecodeDirs.Count -gt 0) {
     throw "Packaged runtime generated Python bytecode cache. *.pyc=$($BytecodeFiles.Count), __pycache__=$($BytecodeDirs.Count). Runtime must keep the免安装版 directory clean."
   }
@@ -260,8 +261,10 @@ function Assert-PackagedBackendResourceStatus {
   )
   $ExeDir = Split-Path $ExePath
   $ResourceRoot = Join-Path $ExeDir 'resources'
-  $PythonPath = Join-Path $ResourceRoot 'app\backend\.venv\Scripts\python.exe'
   $BackendDir = Join-Path $ResourceRoot 'app\backend'
+  $PythonRuntimeDir = Join-Path $BackendDir 'python-runtime'
+  $PythonPath = Join-Path $PythonRuntimeDir 'python.exe'
+  $PythonPackagesDir = Join-Path $BackendDir '.venv\Lib\site-packages'
   $RuntimeDataDir = Join-Path $env:TEMP "dxm-agent-console-runtime-check-$([guid]::NewGuid().ToString('N'))"
   New-Item -ItemType Directory -Force -Path $RuntimeDataDir | Out-Null
   $Port = Get-FreeLoopbackPort
@@ -276,9 +279,29 @@ function Assert-PackagedBackendResourceStatus {
     $StartInfo.Arguments = "-m uvicorn src.main:app --host 127.0.0.1 --port $Port"
     $StartInfo.UseShellExecute = $false
     $StartInfo.CreateNoWindow = $true
+    $RuntimeOwnerKeys = @(
+      'DXM_RUNTIME_OWNER',
+      'DXM_DESKTOP',
+      'DXM_DESKTOP_PARENT_CHANNEL',
+      'DXM_BACKEND_INSTANCE_ID',
+      'DXM_RUNTIME_CONTROL_COMMAND_FILE'
+    )
+    foreach ($InheritedKey in @($StartInfo.EnvironmentVariables.Keys)) {
+      if ($RuntimeOwnerKeys -contains ([string]$InheritedKey).ToUpperInvariant()) {
+        $StartInfo.EnvironmentVariables.Remove([string]$InheritedKey)
+      }
+    }
+    foreach ($InheritedKey in @($StartInfo.EnvironmentVariables.Keys)) {
+      if (@('PYTHONHOME', 'PYTHONPATH', 'VIRTUAL_ENV') -contains ([string]$InheritedKey).ToUpperInvariant()) {
+        $StartInfo.EnvironmentVariables.Remove([string]$InheritedKey)
+      }
+    }
+    $StartInfo.EnvironmentVariables['DXM_RUNTIME_OWNER'] = 'package_probe'
+    $StartInfo.EnvironmentVariables['PYTHONHOME'] = $PythonRuntimeDir
+    $StartInfo.EnvironmentVariables['PYTHONPATH'] = $PythonPackagesDir
+    $StartInfo.EnvironmentVariables['PYTHONNOUSERSITE'] = '1'
     $StartInfo.EnvironmentVariables['DXM_DATA_DIR'] = $RuntimeDataDir
     $StartInfo.EnvironmentVariables['DXM_RESOURCE_ROOT'] = $ResourceRoot
-    $StartInfo.EnvironmentVariables['DXM_DESKTOP'] = '1'
     $StartInfo.EnvironmentVariables['DXM_LAUNCHER_LOG_FILE'] = Join-Path $RuntimeDataDir 'desktop-main.log'
     $StartInfo.EnvironmentVariables['DXM_BACKEND_PORT'] = [string]$Port
     $StartInfo.EnvironmentVariables['DXM_BACKEND_URL'] = $ApiBase

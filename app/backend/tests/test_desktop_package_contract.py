@@ -19,6 +19,7 @@ DESKTOP_MAIN = DESKTOP_DIR / "src" / "main.cjs"
 DESKTOP_PRELOAD = DESKTOP_DIR / "src" / "preload.cjs"
 DESKTOP_BUILDER = DESKTOP_DIR / "electron-builder.yml"
 DESKTOP_PRUNE_RUNTIME = DESKTOP_DIR / "scripts" / "prune-packaged-runtime.cjs"
+DESKTOP_PREPARE_PYTHON_RUNTIME = DESKTOP_DIR / "scripts" / "prepare-python-runtime.cjs"
 START_DESKTOP = REPO_ROOT / "scripts" / "start-desktop.bat"
 VERIFY_DESKTOP_PACKAGE = REPO_ROOT / "scripts" / "verify-desktop-package.ps1"
 FRONTEND_VITE_CONFIG = REPO_ROOT / "app" / "frontend" / "vite.config.ts"
@@ -62,6 +63,26 @@ def test_desktop_build_generates_and_packages_frozen_build_manifest():
     assert DESKTOP_LAUNCH_POLICY_TEST.exists()
     assert DESKTOP_RUNTIME_START.exists()
     assert DESKTOP_RUNTIME_START_TEST.exists()
+
+
+def test_desktop_package_stages_a_self_contained_python_runtime_and_uses_it_when_packaged():
+    package = json.loads(DESKTOP_PACKAGE.read_text(encoding="utf-8"))
+    builder = DESKTOP_BUILDER.read_text(encoding="utf-8").replace("..\\", "../")
+    main_source = DESKTOP_MAIN.read_text(encoding="utf-8")
+    verify_source = VERIFY_DESKTOP_PACKAGE.read_text(encoding="utf-8")
+
+    assert package["scripts"]["prepare:python-runtime"] == "node scripts/prepare-python-runtime.cjs"
+    for script_name in ("build", "build:portable", "build:installer"):
+        assert "npm run prepare:python-runtime" in package["scripts"][script_name]
+        assert package["scripts"][script_name].index("npm run prepare:python-runtime") < package["scripts"][script_name].index("electron-builder")
+    assert "outputs/desktop-python-runtime" in builder
+    assert "to: app/backend/python-runtime" in builder
+    assert DESKTOP_PREPARE_PYTHON_RUNTIME.exists()
+    assert "app', 'backend', 'python-runtime', 'python.exe" in main_source
+    assert "PYTHONHOME" in main_source
+    assert "PYTHONNOUSERSITE" in main_source
+    assert "Lib', 'site-packages" in main_source
+    assert "resources\\app\\backend\\python-runtime\\python.exe" in verify_source
 
 
 def test_desktop_main_validates_qa_then_locks_selected_user_data_before_runtime_or_window():
@@ -719,6 +740,10 @@ def test_start_desktop_launcher_builds_frontend_then_runs_electron():
 
 def test_verify_desktop_package_smoke_script_checks_packaged_exe_logs():
     source = VERIFY_DESKTOP_PACKAGE.read_text(encoding="utf-8")
+    resource_status_section = source[
+        source.index("function Assert-PackagedBackendResourceStatus"):
+        source.index("Assert-PackagedBackendResourceStatus -ExePath")
+    ]
 
     assert "DXM Agent Console packaged smoke" in source
     assert "trap {" in source
@@ -731,7 +756,7 @@ def test_verify_desktop_package_smoke_script_checks_packaged_exe_logs():
     assert "Starting backend" in source
     assert "--qa-capture=$CapturePath" in source
     assert "QA capture was not created" in source
-    assert "resources\\app\\backend\\.venv\\Scripts\\python.exe" in source
+    assert "resources\\app\\backend\\python-runtime\\python.exe" in source
     assert "backend did not start with bundled Python" in source
     assert "tools\\probes\\l2_readonly_probe_runner.py" in source
     assert "config\\l2_readonly_allowlist.json" in source
@@ -743,6 +768,9 @@ def test_verify_desktop_package_smoke_script_checks_packaged_exe_logs():
     assert "l2_readonly_probe_script" in source
     assert "l2_readonly_probe_allowlist" in source
     assert "Packaged backend resource status passed" in source
+    assert "DXM_RUNTIME_OWNER" in resource_status_section
+    assert "package_probe" in resource_status_section
+    assert "EnvironmentVariables['DXM_DESKTOP'] = '1'" not in resource_status_section
     assert "Assert-PackagedRuntimeClean" in source
     assert "*.pyc" in source
     assert "__pycache__" in source
