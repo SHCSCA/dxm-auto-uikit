@@ -104,6 +104,11 @@ def freeze_template_bundle(template: Any) -> dict[str, Any]:
         )
     if template.get("is_enabled") is not True:
         _reject("TEMPLATE_DISABLED", "edit batch template is disabled")
+    if template.get("requires_manual_configuration") is True:
+        _reject(
+            "TEMPLATE_REQUIRES_MANUAL_CONFIGURATION",
+            "edit batch template is quarantined until an operator configures it",
+        )
     payload = template.get("payload")
     if not isinstance(payload, dict) or set(payload) != {
         "schema_version",

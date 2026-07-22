@@ -117,6 +117,11 @@ class EditBatchBundleComposer:
                     _reject("TEMPLATE_SOURCE_DIGEST_DRIFT", f"source template {section} digest changed")
                 if template["is_enabled"] is not True:
                     _reject("TEMPLATE_SOURCE_DISABLED", f"source template {section} is disabled")
+                if template.get("requires_manual_configuration") is True:
+                    _reject(
+                        "TEMPLATE_SOURCE_REQUIRES_MANUAL_CONFIGURATION",
+                        f"source template {section} is quarantined until an operator configures it",
+                    )
                 if template["template_type"] != section:
                     _reject("TEMPLATE_SOURCE_TYPE_MISMATCH", f"source template {section} has the wrong type")
                 if not _binding_compatible(template, store, category):
@@ -233,6 +238,8 @@ class EditBatchBundleComposer:
         missing: list[str] = []
         if template["is_enabled"] is not True:
             missing.append("is_enabled")
+        if template.get("requires_manual_configuration") is True:
+            missing.append("requires_manual_configuration")
         if not _binding_compatible(template, store, category):
             missing.append("binding")
         try:
@@ -260,6 +267,10 @@ def _decode_template(row: Mapping[str, Any]) -> dict[str, Any]:
         "binding_scope": row["binding_scope"],
         "payload": loads(row["payload_json"], {}),
         "is_enabled": bool(row["is_enabled"]),
+        "requires_manual_configuration": bool(
+            row.get("requires_manual_configuration")
+        ),
+        "quarantine_reason": row.get("quarantine_reason"),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }

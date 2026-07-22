@@ -89,7 +89,7 @@ export function BatchTemplateComposer({
   const [version, setVersion] = useState('1.0.0')
   const [options, setOptions] = useState<EditBatchBundleOptions | null>(null)
   const [selectedTemplateIds, setSelectedTemplateIds] = useState<Partial<Record<EditBatchBundleSectionCode, number>>>({})
-  const [optionsLoading, setOptionsLoading] = useState(false)
+  const [optionsLoading, setOptionsLoading] = useState(() => preferredStoreId(workspace, selectedTask) != null)
   const [optionsError, setOptionsError] = useState<string | null>(null)
   const [message, setMessage] = useState<ComposerMessage | null>(null)
   const [createdBundle, setCreatedBundle] = useState<Template | null>(null)
@@ -111,11 +111,12 @@ export function BatchTemplateComposer({
     }
 
     let cancelled = false
+    setOptions(null)
+    setOptionsLoading(true)
+    setOptionsError(null)
+    setMessage(null)
+    setCreatedBundle(null)
     const timer = window.setTimeout(() => {
-      setOptionsLoading(true)
-      setOptionsError(null)
-      setMessage(null)
-      setCreatedBundle(null)
       const params = new URLSearchParams({
         store_id: String(selectedStoreId),
       })
@@ -182,7 +183,11 @@ export function BatchTemplateComposer({
 
   function changeStore(value: string) {
     const storeId = Number(value)
-    setSelectedStoreId(Number.isInteger(storeId) && storeId > 0 ? storeId : null)
+    const nextStoreId = Number.isInteger(storeId) && storeId > 0 ? storeId : null
+    setSelectedStoreId(nextStoreId)
+    setOptions(null)
+    setOptionsLoading(nextStoreId != null)
+    setOptionsError(null)
     setCreatedBundle(null)
     setMessage(null)
   }

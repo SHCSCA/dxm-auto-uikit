@@ -737,15 +737,24 @@ class V1TaskRunner:
             if mode in {"single_save", "batch_save"}:
                 self._revalidate_terminal_action_evidence(workflow_results)
             save_result = self._save_result_for_mode(mode, workflow_results, claimed_product=claimed_product)
+            summary["published"] = save_result["published"]
             report_product_id = int(claimed_product["id"]) if mode == "claim_only" and claimed_product and claimed_product.get("id") else product_id
             if mode == "claim_only":
-                self.repo.add_report(task_id, job_id, report_product_id, "success", False, save_result, summary)
+                self.repo.add_report(
+                    task_id,
+                    job_id,
+                    report_product_id,
+                    "success",
+                    save_result["published"],
+                    save_result,
+                    summary,
+                )
             else:
                 finalized = self.repo.finalize_job_success(
                     task_id,
                     job_id,
                     report_product_id,
-                    published=False,
+                    published=save_result["published"],
                     save_result=save_result,
                     summary=summary,
                 )
@@ -753,7 +762,13 @@ class V1TaskRunner:
                     if finalized.conflict_code == TerminalReportConflictError.conflict_code:
                         raise TerminalReportConflictError(task_id, job_id)
                     raise _JobTerminalTransitionRejected(finalized.conflict_code, finalized.reason)
-            self.repo.add_log(task_id, job_id, "success", "V1 商品流程完成", {"mode": mode, "published": False})
+            self.repo.add_log(
+                task_id,
+                job_id,
+                "success",
+                "V1 商品流程完成",
+                {"mode": mode, "published": save_result["published"]},
+            )
             return True
         except _ClaimTerminalTransitionRejected:
             return None
@@ -3016,29 +3031,16 @@ class V1TaskRunner:
         copy = HUD_STEP_COPY.get(state_name)
         return copy[0] if copy else state_name.value
 
-    def _noop_workflow_result(self, action_name: str, product_query: str, store_name: str) -> dict[str, Any]:
-        return {
-            "ok": True,
-            "action": action_name,
-            "stage": "noop_adapter_action",
-            "page_title": None,
-            "page_url": None,
-            "screenshot_url": None,
-            "product_query": product_query,
-            "store_name": store_name,
-            "evidence": {
-                "action": action_name,
-                "noop": True,
-                "reason": "workflow_adapter method not available",
-                "product_query": product_query,
-                "store_name": store_name,
-            },
-        }
-
     def _write_evidence(self, task_id: int, job_id: int, state_name: StateName) -> Path:
         path = SCREENSHOT_DIR / f"v1_task_{task_id}_job_{job_id}_{state_name.value}.txt"
         path.write_text(
-            f"state={state_name.value}\ntask_id={task_id}\njob_id={job_id}\ncreated_at={now_iso()}\npublished=false\n",
+            (
+                f"state={state_name.value}\n"
+                f"task_id={task_id}\n"
+                f"job_id={job_id}\n"
+                f"created_at={now_iso()}\n"
+                "publish_state=unverified\n"
+            ),
             encoding="utf-8",
         )
         return path
@@ -3094,7 +3096,9 @@ class V1TaskRunner:
             "live_browser_hud": live_hud_events[-1] if live_hud_events else None,
             "claimed_product": dict(claimed_product) if claimed_product else None,
             "next_action": next_action,
-            "published": False,
+            # A failure can occur after a real mutation was dispatched.  Do not
+            # turn missing terminal evidence into a fabricated non-publish fact.
+            "published": None,
         }
 
     def _workflow_reference_template_results(self, workflow_results: list[dict[str, Any]]) -> dict[str, Any]:
@@ -3147,7 +3151,9 @@ class V1TaskRunner:
                 "ok": True,
                 "mode": mode,
                 "message": "待认领入箱已完成，商品已进入商品箱",
-                "published": False,
+                "published": None,
+                "save_attempted": False,
+                "publish_attempted": False,
                 "next_action": "进入“商品箱编辑保存”，选择该商品创建单商品只保存任务。",
             }
             if claimed_product:
@@ -3158,11 +3164,30 @@ class V1TaskRunner:
                 })
             return result
         if mode in {"probe", "dry_run"}:
-            return {"ok": True, "mode": mode, "message": "当前模式未执行保存动作", "published": False}
-        save_result = next((self._extract_save_result(result) for result in reversed(workflow_results) if result.get("action") == "save_only"), None)
-        if not save_result:
+            return {
+                "ok": True,
+                "mode": mode,
+                "message": "当前模式未执行保存动作",
+                "published": None,
+                "save_attempted": False,
+                "publish_attempted": False,
+            }
+        raw_save_result = next((self._extract_save_result(result) for result in reversed(workflow_results) if result.get("action") == "save_only"), None)
+        if not isinstance(raw_save_result, Mapping):
             raise V1ExecutionError("E999", "缺少保存证据", "save_only save_result missing")
-        save_result["published"] = False
+        save_result = dict(raw_save_result)
+        if save_result.get("ok") is not True:
+            raise V1ExecutionError(
+                "E999",
+                "保存结果未确认成功",
+                "save_only save_result must explicitly report ok=true",
+            )
+        if save_result.get("published") is not False:
+            raise V1ExecutionError(
+                "E999",
+                "未发布结果不可信",
+                "save_only save_result must explicitly report published=false",
+            )
         return save_result
 
     def _extract_save_result(self, workflow_result: dict[str, Any]) -> dict[str, Any] | None:

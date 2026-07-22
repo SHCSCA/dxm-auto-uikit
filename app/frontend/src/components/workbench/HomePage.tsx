@@ -1,20 +1,16 @@
-import type { ConfigPreview, DeliveryWorkspace, EditBatchSummary, RuntimeStatus, Task } from '../../types'
+import type { DeliveryWorkspace, EditBatchSummary, RuntimeStatus, Task } from '../../types'
 import { DXM_LOGGED_IN_STATUSES, displayTaskName } from '../WorkbenchModules'
 
 type HomePageProps = {
   workspace: DeliveryWorkspace
   editBatches: EditBatchSummary[]
   selectedTask: Task | null
-  configPreview: ConfigPreview | null
   runtimeStatus: RuntimeStatus | null
   onShowDxmAccess: () => void
-  onShowAcquisition: () => void
   onShowDraftEdit: () => void
   onShowTasks: () => void
-  onShowConfig: () => void
   onShowConsole: () => void
   onShowBatchRecords: (batchId?: number) => void
-  onShowReports: () => void
 }
 
 export function HomePage({
@@ -37,18 +33,20 @@ export function HomePage({
   const diagnosticBrowserActive = runtimeStatus?.agentConsole?.active === true
   const activeBatch = editBatches.find((batch) => batch.status === 'running' || batch.status === 'stop_requested') ?? null
   const draftBatch = editBatches.find((batch) => batch.status === 'draft') ?? null
-  const reviewBatch = editBatches.find((batch) => batch.execution.manual_review_required || batch.progress.stopped > 0) ?? null
+  const reviewBatch = editBatches.find((batch) => batch.execution.manual_review_required) ?? null
   const runningTask = workspace.tasks.find((task) => task.status === 'running') ?? null
-  const currentScopeLabel = activeBatch ? '当前整批执行' : runningTask ? '当前单商品任务' : draftBatch ? '待批准批次' : '当前保存任务'
+  const currentScopeLabel = activeBatch ? '当前整批执行' : runningTask ? '当前单商品任务' : reviewBatch ? '待人工对账批次' : draftBatch ? '待批准批次' : '当前保存任务'
   const currentScopeProgress = activeBatch
     ? `${activeBatch.progress.completed}/${activeBatch.progress.total} 件已处理`
     : runningTask
       ? `${runningTask.completed_jobs}/${Math.max(runningTask.total_jobs, 1)} 项已处理`
-      : draftBatch
-        ? `${draftBatch.item_count} 件范围已冻结`
-        : selectedTask
-          ? `${selectedTask.completed_jobs}/${Math.max(selectedTask.total_jobs, 1)} 项已处理`
-          : '暂无运行中任务'
+      : reviewBatch
+        ? `${reviewBatch.progress.completed}/${reviewBatch.progress.total} 件已处理，停止位置待确认`
+        : draftBatch
+          ? `${draftBatch.item_count} 件范围已冻结`
+          : selectedTask
+            ? `${selectedTask.completed_jobs}/${Math.max(selectedTask.total_jobs, 1)} 项已处理`
+            : '暂无运行中任务'
 
   const liveStatus = activeBatch
     ? {
@@ -61,6 +59,12 @@ export function HomePage({
           tone: 'active',
           label: '单商品任务正在执行',
           detail: '任务执行器正在真实页面处理；请从当前保存任务查看状态。',
+        }
+    : reviewBatch
+      ? {
+          tone: 'waiting',
+          label: '结果不确定，等待人工对账',
+          detail: `批次 #${reviewBatch.id} 未能证明停止位置的最终结果；确认前不要重试。`,
         }
     : diagnosticBrowserActive
       ? {
@@ -98,6 +102,12 @@ export function HomePage({
           detail: '查看真实执行状态；不要从诊断浏览器重复启动。',
           action: onShowTasks,
         }
+      : reviewBatch
+        ? {
+            label: '人工对账停止位置',
+            detail: '先确认真实店小秘页面结果；结果明确前不要创建或启动重试批次。',
+            action: () => onShowBatchRecords(reviewBatch.id),
+          }
       : diagnosticBrowserActive
         ? {
             label: '关闭旧诊断浏览器',
@@ -156,17 +166,19 @@ export function HomePage({
             ? `批次 #${activeBatch.id} · ${activeBatch.store_identity?.store_name ?? '店铺已冻结'}`
             : runningTask
               ? displayTaskName(runningTask)
-              : draftBatch
-                ? `批次 #${draftBatch.id} · 等待批准`
-                : selectedTask
-                  ? displayTaskName(selectedTask)
-                  : '尚无真实任务'}</strong>
+              : reviewBatch
+                ? `批次 #${reviewBatch.id} · 等待人工对账`
+                : draftBatch
+                  ? `批次 #${draftBatch.id} · 等待批准`
+                  : selectedTask
+                    ? displayTaskName(selectedTask)
+                    : '尚无真实任务'}</strong>
           <small>{currentScopeProgress}</small>
         </article>
         <article className={`module-card home-brief-card ${reviewBatch || recentException ? 'is-warning' : 'is-clear'}`} aria-label="最近异常">
           <span>需要处理</span>
-          <strong>{reviewBatch ? `批次 #${reviewBatch.id} 需要人工核对` : recentException?.title ?? '暂无待处理问题'}</strong>
-          <small>{reviewBatch ? '先核对真实店小秘页面，不要自动重试结果不确定的商品。' : recentException?.suggestion || '出现问题时会在这里显示最近一条。'}</small>
+          <strong>{reviewBatch ? `批次 #${reviewBatch.id} 需要人工对账` : recentException?.title ?? '暂无待处理问题'}</strong>
+          <small>{reviewBatch ? '先对账真实店小秘页面，不要自动重试结果不确定的商品。' : recentException?.suggestion || '出现问题时会在这里显示最近一条。'}</small>
         </article>
       </div>
     </section>

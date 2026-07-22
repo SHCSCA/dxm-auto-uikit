@@ -3,17 +3,10 @@ const runtimeBase = params.get('apiBase') || (window as any).__DXM_API_BASE__
 export const API_BASE = runtimeBase || ''
 
 export class ApiRequestError extends Error {
-  readonly reasonCode: string | null
-
-  constructor(message: string, reasonCode: string | null = null) {
+  constructor(message: string) {
     super(message)
     this.name = 'ApiRequestError'
-    this.reasonCode = reasonCode
   }
-}
-
-export function apiErrorReasonCode(error: unknown) {
-  return error instanceof ApiRequestError ? error.reasonCode : null
 }
 
 export async function getJson<T>(path: string): Promise<T> {
@@ -53,32 +46,18 @@ export async function patchJson<T>(path: string, body: unknown): Promise<T> {
 async function responseError(response: Response, fallback: string): Promise<ApiRequestError> {
   try {
     const payload = await response.clone().json()
-    const reasonCode = apiPayloadReasonCode(payload)
-    if (typeof payload?.detail === 'string') return new ApiRequestError(safeApiErrorMessage(payload.detail, response.status, fallback), reasonCode)
-    if (typeof payload?.detail?.message === 'string') return new ApiRequestError(safeApiErrorMessage(payload.detail.message, response.status, fallback), reasonCode)
-    if (typeof payload?.message === 'string') return new ApiRequestError(safeApiErrorMessage(payload.message, response.status, fallback), reasonCode)
+    if (typeof payload?.detail === 'string') return new ApiRequestError(safeApiErrorMessage(payload.detail, response.status, fallback))
+    if (typeof payload?.detail?.message === 'string') return new ApiRequestError(safeApiErrorMessage(payload.detail.message, response.status, fallback))
+    if (typeof payload?.message === 'string') return new ApiRequestError(safeApiErrorMessage(payload.message, response.status, fallback))
   } catch {
     try {
       const text = await response.text()
-      if (text.trim()) return new ApiRequestError(safeApiErrorMessage(text.trim(), response.status, fallback), reasonCodeFromText(text))
+      if (text.trim()) return new ApiRequestError(safeApiErrorMessage(text.trim(), response.status, fallback))
     } catch {
       // Keep the caller-facing fallback below.
     }
   }
   return new ApiRequestError(safeApiErrorMessage('', response.status, fallback))
-}
-
-function apiPayloadReasonCode(payload: unknown) {
-  if (!payload || typeof payload !== 'object') return null
-  const record = payload as Record<string, unknown>
-  const detail = record.detail && typeof record.detail === 'object' ? record.detail as Record<string, unknown> : null
-  const value = detail?.reason_code ?? record.reason_code
-  return typeof value === 'string' && /^[A-Z][A-Z0-9_]*$/.test(value) ? value : null
-}
-
-function reasonCodeFromText(value: string) {
-  const match = value.trim().match(/^([A-Z][A-Z0-9_]*)(?=:)/)
-  return match?.[1] ?? null
 }
 
 function safeApiErrorMessage(raw: string, status: number, fallback: string): string {
@@ -112,8 +91,9 @@ function operatorSafeApiMessage(raw: string) {
   if (/^[A-Z][A-Z0-9_]{2,}$/.test(raw)) return ''
   return raw
     .replace(/^[A-Z][A-Z0-9_]{2,}:\s*/, '')
-    .replace(/\b(?:approval_)?token\b\s*[:=]?\s*[^\s,;，；]*/gi, '授权信息已隐藏')
-    .replace(/\b(?:reason_code|schema_version|policy_digest|scope_snapshot_digest|template_snapshot_digest)\b\s*[:=]?\s*[^\s,;，；]*/gi, '技术字段已隐藏')
-    .replace(/\b[0-9A-F]{64}\b/gi, '技术校验值已隐藏')
+    .replace(/\b(?:approval_)?token\b\s*[:=]?\s*[^\s,;，；]*/gi, '')
+    .replace(/\b(?:reason_code|schema_version|policy_digest|scope_snapshot_digest|template_snapshot_digest|browser_session_id|session_id|runtime_identity|fingerprint|lease_id|nonce_hash|git_head|l2_evidence_fingerprint|mutation_scope_id)\b\s*[:=]?\s*[^\s,;，；]*/gi, '')
+    .replace(/\b[0-9A-F]{64}\b/gi, '')
+    .replace(/\s{2,}/g, ' ')
     .trim()
 }

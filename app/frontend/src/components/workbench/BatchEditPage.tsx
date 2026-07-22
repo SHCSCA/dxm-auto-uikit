@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { apiErrorReasonCode, getJson, postJson } from '../../api'
+import { getJson, postJson } from '../../api'
 import type {
   DraftBoxScopeSnapshot,
   DraftBoxScopeSnapshotCreateRequest,
@@ -175,7 +175,7 @@ export function BatchEditPage({
             <div className="batch-approval-card" aria-label="整批一次批准">
               <div className="batch-approval-card__intro">
                 <strong>批准并开始</strong>
-                <span>这次批准只适用于上方已冻结范围；身份或现场发生变化时会停止。</span>
+                <span>这次批准只适用于上方已冻结范围；保存前变化会零写入停止，结果不确定才转人工对账。</span>
               </div>
               <label htmlFor="batch-approved-by">
                 <span>批准人</span>
@@ -198,7 +198,7 @@ export function BatchEditPage({
                 />
                 <span>
                   <strong>我确认只保存、不发布</strong>
-                  <small>逐件串行；结果不确定时停止，且不自动重试。</small>
+                  <small>逐件串行；保存前安全停止无需对账，结果不确定停止且不自动重试。</small>
                 </span>
               </label>
               {error && <div className="batch-inline-error" role="alert">{error}</div>}
@@ -345,15 +345,25 @@ export function BatchEditPage({
 }
 
 function humanBatchError(caught: unknown, action: string) {
-  const reasonCode = apiErrorReasonCode(caught)
-  if (reasonCode === 'LEGACY_TASK_ACTIVE' || reasonCode === 'ANOTHER_EDIT_BATCH_ACTIVE' || reasonCode === 'EDIT_BATCH_ACTIVE') {
-    return '当前已有任务或批次正在执行。请先结束当前任务或批次，再回来批准本批次。'
-  }
-  if (reasonCode === 'AGENT_CONSOLE_ACTIVE' || reasonCode === 'BROWSER_SESSION_BUSY') {
-    return '旧浏览器诊断窗口仍在运行。请先到“浏览器诊断”关闭该窗口，再回来读取范围或批准批次。系统没有执行保存。'
-  }
   const message = caught instanceof Error ? caught.message.trim() : ''
   const normalized = message.toLowerCase()
+  if (
+    normalized.includes('已有任务')
+    || normalized.includes('已有批次')
+    || normalized.includes('正在占用')
+    || normalized.includes('already running')
+    || normalized.includes('another edit batch')
+  ) {
+    return '当前已有任务或批次正在执行。请先结束当前任务或批次，再回来批准本批次。'
+  }
+  if (
+    normalized.includes('agent console')
+    || normalized.includes('诊断浏览器')
+    || normalized.includes('浏览器现场')
+    || normalized.includes('browser is busy')
+  ) {
+    return '旧浏览器诊断窗口仍在运行。请先到“浏览器诊断”关闭该窗口，再回来读取范围或批准批次。系统没有执行保存。'
+  }
   if (normalized.includes('template')) return '整批模板未通过完整性检查。请在模板中心启用完整的整批编辑模板后重试；系统没有执行保存或发布。'
   if (normalized.includes('session') || normalized.includes('browser')) return '当前店小秘登录会话已变化或不可用。请重新检测登录状态，并确认旧诊断浏览器已关闭后重试；系统没有执行保存或发布。'
   if (normalized.includes('scope') || normalized.includes('draft-box') || normalized.includes('draft box')) return '当前商品箱范围不能安全冻结。请确认页面、店铺和商品顺序后重新读取；系统没有执行保存或发布。'

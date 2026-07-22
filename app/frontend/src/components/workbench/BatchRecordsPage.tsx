@@ -9,6 +9,11 @@ type BatchRecordsPageProps = {
 }
 
 const POLLING_STATUSES = new Set(['running', 'stop_requested'])
+const NON_SUCCESS_TERMINAL_ITEM_STATUSES = new Set([
+  'isolated_pre_save_no_write',
+  'stopped_before_save_no_write',
+  'stopped_uncertain',
+])
 
 export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }: BatchRecordsPageProps) {
   const [batches, setBatches] = useState<EditBatchSummary[]>([])
@@ -98,13 +103,15 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
   const currentItem = detail && progress?.current_ordinal
     ? detail.items.find((item) => item.ordinal === progress.current_ordinal) ?? null
     : null
-  const exceptionalItems = detail?.items.filter((item) => item.outcome && item.outcome.classification !== 'SUCCEEDED') ?? []
+  const exceptionalItems = detail?.items.filter((item) => NON_SUCCESS_TERMINAL_ITEM_STATUSES.has(item.status)) ?? []
+  const safeStopped = progress ? safeStoppedCount(progress) : 0
+  const uncertain = progress ? uncertainCount(progress) : 0
   const primaryNotice = error
     ? { tone: 'danger', text: error }
     : detail?.execution.manual_review_required
       ? {
           tone: 'danger',
-          text: '其中一件商品的最终结果无法完整证明；批次已停止，请先人工核对真实店小秘页面。',
+          text: '其中一件商品的最终结果无法完整证明；批次已停止，请先人工对账真实店小秘页面。',
         }
       : pollingNotice
         ? { tone: 'warning', text: pollingNotice }
@@ -177,7 +184,7 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
                 onClick={() => { void openBatch(batch.id) }}
                 aria-pressed={batch.id === selectedBatchId}
               >
-                <span><strong>批次 #{batch.id}</strong><b>{humanBatchStatus(batch.status)}</b></span>
+                <span><strong>批次 #{batch.id}</strong><b>{humanBatchStatus(batch.status, batch.execution.manual_review_required, safeStoppedCount(batch.progress))}</b></span>
                 <small>{batch.store_identity?.store_name ?? '店铺待确认'} · {batch.item_count} 件</small>
                 <small>{POLLING_STATUSES.has(batch.status)
                   ? `${batch.progress.completed}/${batch.progress.total} 已完成 · ${batch.template.name ?? '模板待确认'}`
@@ -203,7 +210,7 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
                 <span className="eyebrow">批次 #{detail.id}</span>
                 <h2>{detail.scope_snapshot.store_identity?.store_name ?? '店铺已冻结'}</h2>
               </div>
-              <span className={`batch-status-badge is-${statusTone(detail.status)}`}>{humanBatchStatus(detail.status)}</span>
+              <span className={`batch-status-badge is-${statusTone(detail.status, detail.execution.manual_review_required)}`}>{humanBatchStatus(detail.status, detail.execution.manual_review_required, safeStopped)}</span>
             </div>
 
             {primaryNotice && (
@@ -230,7 +237,7 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
               <div className="batch-progress-card" aria-label="批次执行进度">
                 <div className="batch-progress-card__headline">
                   <span>
-                    <strong>{detail.status === 'stop_requested' ? '正在安全停止' : humanBatchStatus(detail.status)}</strong>
+                    <strong>{detail.status === 'stop_requested' ? '正在安全停止' : humanBatchStatus(detail.status, detail.execution.manual_review_required, safeStopped)}</strong>
                     <small>{currentItem ? `当前：第 ${currentItem.ordinal} 件 · ${currentItem.item_snapshot.title ?? '商品已绑定'}` : progressSummary(detail, progress)}</small>
                   </span>
                   <b>{progress.completed}/{progress.total}</b>
@@ -238,10 +245,11 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
                 <div className="batch-progress-track" aria-label={`已完成 ${progress.percent}%`}>
                   <span style={{ width: `${boundedPercent(progress.percent)}%` }} />
                 </div>
-                <div className="batch-progress-card__facts">
+                <div className="batch-progress-card__facts batch-progress-card__facts--four">
                   <span><strong>{progress.succeeded}</strong><small>保存成功</small></span>
                   <span><strong>{progress.isolated}</strong><small>保存前隔离</small></span>
-                  <span><strong>{progress.pending + progress.running}</strong><small>待处理</small></span>
+                  <span><strong>{safeStopped}</strong><small>保存前安全停止</small></span>
+                  <span><strong>{uncertain}</strong><small>结果不确定待对账</small></span>
                 </div>
                 {detail.status === 'running' && (
                   <div className="batch-stop-form">
@@ -271,26 +279,26 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
 
             {detail.status === 'completed' && (
               <div className="batch-draft-boundary is-complete">
-                <span><strong>下一步：创建下一批</strong><small>本批次已经结束，可以重新读取最新商品箱范围。</small></span>
+                <span><strong>下一步：创建下一批</strong><small>{safeStopped > 0 ? `本批次已结束；${safeStopped} 件在保存前安全停止，未发生写入且无需人工对账。` : '本批次已经结束，可以重新读取最新商品箱范围。'}</small></span>
                 <button className="button button--primary" type="button" onClick={onCreateBatch}>创建下一批</button>
               </div>
             )}
             {detail.status === 'stopped' && !detail.execution.manual_review_required && (
               <div className="batch-draft-boundary is-complete">
-                <span><strong>批次已安全停止</strong><small>当前没有结果不确定项；需要继续时请重新读取最新范围。</small></span>
+                <span><strong>保存前已安全停止</strong><small>{safeStopped > 0 ? `${safeStopped} 件未发生写入，无需人工对账；` : '当前没有结果不确定项，无需人工对账；'}需要继续时请重新读取最新范围。</small></span>
                 <button className="button button--primary" type="button" onClick={onCreateBatch}>重新读取范围</button>
               </div>
             )}
             {detail.status === 'stopped' && detail.execution.manual_review_required && (
               <div className="batch-primary-notice is-danger">
-                <strong>下一步：人工核对真实页面</strong>
+                <strong>下一步：人工对账真实页面</strong>
                 <span>先确认停止位置商品是否已经保存；结果明确前不要创建重试批次。</span>
               </div>
             )}
 
             <div className="batch-record-template-summary" aria-label="本批次模板摘要">
               <span>
-                <strong>{detail.template_snapshot.template_name}</strong>
+                <strong>{detail.template_snapshot.template_name ?? '模板已冻结'}</strong>
                 <small>{templateVersion(detail)} · {detail.items.length} 件 · 严格串行</small>
               </span>
               <b>只保存 · 不发布</b>
@@ -313,13 +321,17 @@ export function BatchRecordsPage({ initialBatchId, onCreateBatch, onOpenBatch }:
             </details>
 
             <details className="batch-evidence-details">
-              <summary>异常与人工复核{exceptionalItems.length ? ` · ${exceptionalItems.length} 项` : ' · 无待处理项'}</summary>
+              <summary>安全停止与人工对账{exceptionalItems.length ? ` · ${exceptionalItems.length} 项` : ' · 无待处理项'}</summary>
               <div className="batch-evidence-payload">
                 {exceptionalItems.map((item) => (
                   <span key={item.id}>
                     <strong>第 {item.ordinal} 件 · {humanOutcome(item)}</strong>
-                    <b>{item.outcome?.manual_review_required ? '先人工核对真实页面，不要自动重试' : '已在保存前安全隔离，未执行写入'}</b>
-                    <small>{item.outcome?.manual_review_required ? '需要人工复核' : '已在保存前安全隔离'}{item.outcome?.finished_at ? ` · ${formatDateTime(item.outcome.finished_at)}` : ''}</small>
+                    <b>{itemNeedsManualReview(item)
+                      ? '结果不确定，必须人工对账且禁止自动重试'
+                      : item.status === 'stopped_before_save_no_write'
+                        ? '保存前已安全停止，未发生写入，无需人工对账'
+                        : '保存前已安全隔离，未发生写入，无需人工对账'}</b>
+                    <small>{itemNeedsManualReview(item) ? '需要人工对账' : '零写入，无需人工对账'}{item.outcome?.finished_at ? ` · ${formatDateTime(item.outcome.finished_at)}` : ''}</small>
                   </span>
                 ))}
                 {!exceptionalItems.length && <span><strong>暂无异常</strong><b>当前没有需要人工处理的结果。</b></span>}
@@ -347,7 +359,9 @@ function humanRecordsError(caught: unknown, action: string) {
   return `${action}。请刷新工作台后重试。`
 }
 
-function humanBatchStatus(status: string) {
+function humanBatchStatus(status: string, manualReviewRequired = false, safeStopped = 0) {
+  if (status === 'stopped' && manualReviewRequired) return '已停止 · 待人工对账'
+  if (status === 'stopped' && safeStopped > 0) return '保存前安全停止 · 零写入'
   const labels: Record<string, string> = {
     draft: '草稿 · 待批准',
     approved: '旧式批准记录 · 未启动',
@@ -365,34 +379,45 @@ function humanItemStatus(status: string) {
     running: '正在保存',
     succeeded: '保存成功',
     isolated_pre_save_no_write: '保存前隔离',
-    stopped_uncertain: '已停止 · 待复核',
+    stopped_before_save_no_write: '保存前已安全停止、未发生写入、无需人工对账',
+    stopped_uncertain: '结果不确定 · 待人工对账',
   }
   return labels[status] ?? '状态待确认'
 }
 
 function humanOutcome(item: EditBatchItem) {
-  const labels: Record<string, string> = {
-    SUCCEEDED: '保存成功',
-    ISOLATED_PRE_SAVE_NO_WRITE: '保存前隔离',
-    STOPPED_UNCERTAIN: '结果不确定',
-  }
-  return labels[item.outcome?.classification ?? ''] ?? humanItemStatus(item.status)
+  return humanItemStatus(item.status)
+}
+
+function itemNeedsManualReview(item: EditBatchItem) {
+  return item.status === 'stopped_uncertain' || item.outcome?.manual_review_required === true
 }
 
 function progressSummary(detail: EditBatchDetail, progress: EditBatchProgressSummary) {
   if (detail.status === 'completed') return `已完成 ${progress.total} 件，全部结束。`
   if (detail.status === 'stopped') return detail.execution.manual_review_required
-    ? '批次已停止，需要人工复核。'
-    : '批次已安全停止。'
+    ? '批次已停止，需要人工对账。'
+    : safeStoppedCount(progress) > 0
+      ? `批次已在保存前安全停止；${safeStoppedCount(progress)} 件未发生写入，无需人工对账。`
+      : '批次已安全停止，无需人工对账。'
   return progress.pending ? `还有 ${progress.pending} 件等待处理。` : '等待后端更新当前商品。'
 }
 
-function statusTone(status: string) {
+function statusTone(status: string, manualReviewRequired = false) {
+  if (manualReviewRequired) return 'danger'
   if (status === 'completed') return 'success'
-  if (status === 'stopped') return 'danger'
+  if (status === 'stopped') return 'warning'
   if (status === 'running' || status === 'approved') return 'active'
   if (status === 'stop_requested') return 'warning'
   return 'neutral'
+}
+
+function safeStoppedCount(progress: EditBatchProgressSummary) {
+  return progress.stopped_before_save_no_write ?? 0
+}
+
+function uncertainCount(progress: EditBatchProgressSummary) {
+  return progress.uncertain ?? progress.stopped ?? 0
 }
 
 function templateVersion(detail: EditBatchDetail) {

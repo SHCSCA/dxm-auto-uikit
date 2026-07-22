@@ -72,6 +72,7 @@ class MutationDispatchLedger:
             "DISPATCHING": "MUTATION_ALREADY_DISPATCHING",
             "DISPATCHED": "MUTATION_ALREADY_DISPATCHED",
             "UNKNOWN": "MUTATION_OUTCOME_UNKNOWN",
+            "CANCELLED_BEFORE_DISPATCH": "MUTATION_CANCELLED_BEFORE_DISPATCH",
         }.get(status, "MUTATION_LEDGER_STATE_INVALID")
 
     def reserve_command(self, command: BrowserAgentCommand) -> MutationLedgerDecision:
@@ -269,6 +270,123 @@ class MutationDispatchLedger:
                 (command.mutation_scope_id, mutation_action),
             ).fetchone()
             return MutationLedgerDecision(True, "OK", dict(dispatched))
+
+    def cancel_reserved(
+        self,
+        command: BrowserAgentCommand,
+        mutation_action: str,
+        *,
+        reason_code: str = "BATCH_STOPPED_BEFORE_DISPATCH",
+    ) -> MutationLedgerDecision:
+        """CAS-cancel one exact RESERVED binding before any external dispatch."""
+
+        try:
+            ordinal = mutation_ordinal_for_command(command, mutation_action)
+        except MutationCommandContractError as exc:
+            return self._contract_failure(exc)
+        expected = self._binding(command, mutation_action, ordinal)
+        canonical_reason = str(reason_code or "").strip().upper()
+        if (
+            not canonical_reason
+            or len(canonical_reason) > 120
+            or any(char not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_" for char in canonical_reason)
+        ):
+            return MutationLedgerDecision(False, "MUTATION_CANCEL_REASON_INVALID")
+        now = now_iso()
+        outcome_json = json.dumps(
+            {
+                "classification": "CANCELLED_BEFORE_DISPATCH",
+                "reason_code": canonical_reason,
+                "cancelled_at": now,
+                "external_dispatch_started": False,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT * FROM mutation_dispatch_ledger
+                 WHERE mutation_scope_id=? AND mutation_action=?
+                """,
+                (command.mutation_scope_id, mutation_action),
+            ).fetchone()
+            if row is None:
+                return MutationLedgerDecision(False, "MUTATION_NOT_RESERVED")
+            if not self._binding_matches(row, expected):
+                return MutationLedgerDecision(
+                    False,
+                    "MUTATION_SCOPE_BINDING_MISMATCH",
+                    dict(row),
+                )
+            status = str(row.get("status") or "")
+            if status == "CANCELLED_BEFORE_DISPATCH":
+                return MutationLedgerDecision(True, "OK", dict(row), idempotent=True)
+            if status != "RESERVED":
+                return MutationLedgerDecision(False, self._terminal_reason(status), dict(row))
+            if any(
+                row.get(key) is not None
+                for key in (
+                    "dispatch_started_at",
+                    "dispatched_at",
+                    "unknown_at",
+                    "outcome_json",
+                    "browser_session_id",
+                    "page_url",
+                    "page_kind",
+                )
+            ):
+                return MutationLedgerDecision(
+                    False,
+                    "MUTATION_RESERVED_STATE_UNCERTAIN",
+                    dict(row),
+                )
+            updated = conn.execute(
+                """
+                UPDATE mutation_dispatch_ledger
+                   SET status='CANCELLED_BEFORE_DISPATCH',
+                       outcome_json=?, updated_at=?
+                 WHERE mutation_scope_id=?
+                   AND mutation_action=?
+                   AND status='RESERVED'
+                   AND dispatch_started_at IS NULL
+                   AND dispatched_at IS NULL
+                   AND unknown_at IS NULL
+                   AND outcome_json IS NULL
+                   AND browser_session_id IS NULL
+                   AND page_url IS NULL
+                   AND page_kind IS NULL
+                """,
+                (
+                    outcome_json,
+                    now,
+                    command.mutation_scope_id,
+                    mutation_action,
+                ),
+            )
+            if updated.rowcount != 1:
+                current = conn.execute(
+                    """
+                    SELECT * FROM mutation_dispatch_ledger
+                     WHERE mutation_scope_id=? AND mutation_action=?
+                    """,
+                    (command.mutation_scope_id, mutation_action),
+                ).fetchone()
+                current_status = str((current or {}).get("status") or "")
+                return MutationLedgerDecision(
+                    False,
+                    self._terminal_reason(current_status),
+                    dict(current) if current else None,
+                )
+            cancelled = conn.execute(
+                """
+                SELECT * FROM mutation_dispatch_ledger
+                 WHERE mutation_scope_id=? AND mutation_action=?
+                """,
+                (command.mutation_scope_id, mutation_action),
+            ).fetchone()
+            return MutationLedgerDecision(True, "OK", dict(cancelled))
 
     def mark_dispatched(
         self,

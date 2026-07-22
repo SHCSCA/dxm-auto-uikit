@@ -198,12 +198,23 @@ def _current_batch_runtime_facts() -> dict[str, Any]:
     }
 
 
+def _current_batch_l2_verification() -> dict[str, str]:
+    """Return the current L2 state through the batch runtime's narrow contract."""
+
+    gate = l2_real_probe_gate()
+    return {
+        'status': str(gate.get('status') or ''),
+        'fingerprint': _l2_authorization_fingerprint(gate),
+    }
+
+
 batch_execution_runtime = BatchExecutionRuntime(
     repo,
     browser_agent_runtime,
     mutation_dispatch_ledger,
     runtime_facts_provider=_current_batch_runtime_facts,
     browser_session_provider=lambda: workflow_adapter.browser_session_id(),
+    l2_verifier=_current_batch_l2_verification,
 )
 
 
@@ -499,7 +510,10 @@ def create_draft_box_scope_snapshot(payload: DraftBoxScopeSnapshotCreate):
     )
     try:
         identity = runtime_identity.as_dict()
-        return BatchEditCoordinator(repo).persist_scope_capture(
+        return BatchEditCoordinator(
+            repo,
+            l2_verifier=_current_batch_l2_verification,
+        ).persist_scope_capture(
             capture,
             requested_max_items=payload.max_items,
             runtime_context={
@@ -519,7 +533,10 @@ def create_draft_box_scope_snapshot(payload: DraftBoxScopeSnapshotCreate):
 @app.post('/api/edit-batches', status_code=201)
 def create_edit_batch(payload: EditBatchCreate):
     try:
-        return BatchEditCoordinator(repo).create_draft_batch(
+        return BatchEditCoordinator(
+            repo,
+            l2_verifier=_current_batch_l2_verification,
+        ).create_draft_batch(
             scope_snapshot_id=payload.scope_snapshot_id,
             template_id=payload.template_id,
         )
@@ -560,7 +577,10 @@ async def approve_and_start_edit_batch(
     if not payload.approved_by.strip():
         raise HTTPException(status_code=400, detail='approved_by must identify the approving operator')
 
-    coordinator = BatchEditCoordinator(repo)
+    coordinator = BatchEditCoordinator(
+        repo,
+        l2_verifier=_current_batch_l2_verification,
+    )
     try:
         capture_max_items = coordinator.approval_capture_max_items(batch)
     except BatchEditContractError as exc:
@@ -630,8 +650,8 @@ async def approve_and_start_edit_batch(
         repo.stop_edit_batch(
             batch_id,
             reason_code='BATCH_RUNTIME_SCHEDULE_FAILED',
-            reason='批次已批准，但执行协调器未能启动；系统已停止批次，请人工核对。',
-            requires_manual_review=True,
+            reason='批次已批准，但执行协调器未能启动；系统已在任何商品开始前停止。',
+            requires_manual_review=False,
         )
         raise HTTPException(
             status_code=500,

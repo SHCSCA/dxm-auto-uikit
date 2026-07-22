@@ -115,6 +115,7 @@ export function ResultsPage({
         unpublishedProofCount={unpublishedProofCount}
         networkHarCount={networkHarCount}
         publishGuardStatus={workspace.publishGuardState?.status}
+        publishGuardHasUnpublishedProof={workspace.publishGuardState?.has_unpublished_proof === true}
         realWriteExpectedBlocked={realWriteExpectedBlocked}
         primaryAction={primaryAction}
       />
@@ -159,26 +160,30 @@ function ControlledBatchResults({
 }) {
   const latest = batches[0]
   const active = batches.find((batch) => batch.status === 'running' || batch.status === 'stop_requested') ?? null
-  const needsReview = batches.filter((batch) => batch.execution.manual_review_required || batch.progress.stopped > 0)
-  const targetBatch = active ?? (latest.status === 'draft' ? latest : needsReview[0] ?? latest)
+  const needsReview = batches.filter((batch) => batch.execution.manual_review_required)
+  const targetBatch = active ?? needsReview[0] ?? latest
+  const safeStopped = targetBatch.progress.stopped_before_save_no_write ?? 0
+  const uncertain = targetBatch.progress.uncertain ?? targetBatch.progress.stopped ?? 0
   const next = active
     ? {
         title: '查看实时串行进度',
         detail: `批次 #${active.id} 正在处理 ${active.progress.completed}/${active.progress.total} 件；需要停止时从批次记录发起安全停止。`,
       }
-    : latest.status === 'draft'
+    : needsReview.length
       ? {
-          title: '继续核对并批准批次',
-          detail: '范围和模板已经冻结；核对后一次批准并启动，执行期间不会发布。',
+          title: '处理需要人工对账的批次',
+          detail: '先确认店小秘真实页面结果，不要对结果不确定的商品自动重试。',
         }
-      : needsReview.length
+      : targetBatch.status === 'draft'
         ? {
-            title: '处理需要人工核对的批次',
-            detail: '先确认店小秘真实页面结果，不要对结果不确定的商品自动重试。',
+            title: '继续核对并批准批次',
+            detail: '范围和模板已经冻结；核对后一次批准并启动，执行期间不会发布。',
           }
         : {
             title: '查看本批次保存结果',
-            detail: '核对逐件保存成功、保存前隔离和未发布状态。',
+            detail: safeStopped > 0
+              ? `${safeStopped} 件在保存前已安全停止，未发生写入且无需人工对账。`
+              : '核对逐件保存成功、保存前隔离和未发布状态。',
           }
 
   return (
@@ -187,17 +192,18 @@ function ControlledBatchResults({
         <div className="module-head">
           <div>
             <span className="eyebrow">受控商品箱整批结果</span>
-            <h2>{batchResultStatus(latest)}</h2>
+            <h2>{batchResultStatus(targetBatch)}</h2>
             <p>这是范围冻结、一次批准、严格串行的 edit-batch 结果。旧版 batch_save、无人值守和发布仍不可用。</p>
           </div>
-          <span className={`batch-status-badge is-${batchResultTone(latest)}`}>批次 #{latest.id}</span>
+          <span className={`batch-status-badge is-${batchResultTone(targetBatch)}`}>批次 #{targetBatch.id}</span>
         </div>
-        <div className="batch-progress-card__facts" aria-label="最近批次结果摘要">
-          <span><strong>{latest.progress.succeeded}</strong><small>保存成功</small></span>
-          <span><strong>{latest.progress.isolated}</strong><small>保存前安全隔离</small></span>
-          <span><strong>{latest.progress.stopped}</strong><small>停止待核对</small></span>
+        <div className="batch-progress-card__facts batch-progress-card__facts--four" aria-label="当前重点批次结果摘要">
+          <span><strong>{targetBatch.progress.succeeded}</strong><small>保存成功</small></span>
+          <span><strong>{targetBatch.progress.isolated}</strong><small>保存前安全隔离</small></span>
+          <span><strong>{safeStopped}</strong><small>保存前安全停止</small></span>
+          <span><strong>{uncertain}</strong><small>结果不确定待对账</small></span>
         </div>
-        <div className={`batch-primary-notice ${needsReview.length ? 'is-danger' : ''}`}>
+        <div className={`batch-primary-notice ${targetBatch.execution.manual_review_required ? 'is-danger' : ''}`}>
           <strong>下一步：{next.title}</strong>
           <span>{next.detail}</span>
         </div>
@@ -223,7 +229,8 @@ function ControlledBatchResults({
 }
 
 function batchResultStatus(batch: EditBatchSummary) {
-  if (batch.execution.manual_review_required) return '批次已停止，需要人工核对'
+  if (batch.execution.manual_review_required) return '批次已停止，需要人工对账'
+  if (batch.status === 'stopped' && (batch.progress.stopped_before_save_no_write ?? 0) > 0) return '批次已安全停止，停止位置未写入'
   const labels: Record<string, string> = {
     draft: '范围已冻结，等待批准',
     approved: '旧批准记录未启动',
@@ -236,10 +243,10 @@ function batchResultStatus(batch: EditBatchSummary) {
 }
 
 function batchResultTone(batch: EditBatchSummary) {
-  if (batch.execution.manual_review_required || batch.status === 'stopped') return 'danger'
+  if (batch.execution.manual_review_required) return 'danger'
   if (batch.status === 'completed') return 'success'
   if (batch.status === 'running') return 'active'
-  if (batch.status === 'stop_requested') return 'warning'
+  if (batch.status === 'stop_requested' || batch.status === 'stopped') return 'warning'
   return 'neutral'
 }
 
@@ -289,9 +296,6 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
       ? '复核当前任务、批准人和报告链路后，再启动商品箱编辑保存。'
       : '先完成待认领入箱，再执行商品箱编辑保存并核对未发布证明。'
     : `先在当前任务点击“${READONLY_PRECHECK_CTA}”，通过后再进行人工确认保存。`
-  const browserQaScreenshotCount = finalCheck?.browser_qa_screenshot_hashes
-    ? Object.keys(finalCheck.browser_qa_screenshot_hashes).length
-    : 0
   const freshnessLabel = finalCheckMatchesCurrent ? '自检覆盖当前代码' : '自检未覆盖当前代码'
   const browserCheckLabel = `浏览器检查${finalCheck?.browser_qa_ok === true ? '已通过' : finalCheck?.browser_qa_ok === false ? '未通过' : '待刷新'}`
   const reportEvidenceCheckLabel = `保存证据检查${finalCheck?.post_final_report_qa_ok === true ? '已通过' : finalCheck?.post_final_report_qa_ok === false ? '未通过' : '待刷新'}`
@@ -431,8 +435,7 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
             <span>预期真实写入 {finalCheck?.expected_real_dxm_write_readiness ?? '未记录'} / 有效预期匹配 {finalCheck?.effective_real_dxm_write_readiness_matches_expected === true ? 'true' : 'false'} / 报告记录匹配 {finalCheck?.real_dxm_write_readiness_matches_expected === true ? 'true' : 'false'}</span>
             <span>保存前安全检查候选评审模板 {finalCheck?.l2_allowlist_review_template_state ?? '未生成'} / 候选 {finalCheck?.l2_allowlist_review_template_candidate_count ?? 0} 项</span>
             <span>候选评审材料 {finalCheck?.l2_allowlist_review_template_state ?? '未生成'}，技术校验值已隐藏</span>
-            <span>{browserCheckLabel} / 截图核验 {finalCheck?.browser_qa_screenshot_hashes ? Object.keys(finalCheck.browser_qa_screenshot_hashes).length : 0} 项</span>
-            <span>最终报告页截图 qa-report-center-final.png / 页面核验 {finalCheck?.post_final_report_qa_screenshot_hashes ? Object.keys(finalCheck.post_final_report_qa_screenshot_hashes).length : 0} 项</span>
+            <span>{browserCheckLabel}</span>
           </div>
           <div className="delivery-check-card__commands">
             <div>
@@ -501,6 +504,7 @@ function BusinessResultSummaryCard({
   unpublishedProofCount,
   networkHarCount,
   publishGuardStatus,
+  publishGuardHasUnpublishedProof,
   realWriteExpectedBlocked,
   primaryAction,
 }: {
@@ -510,23 +514,26 @@ function BusinessResultSummaryCard({
   unpublishedProofCount: number
   networkHarCount: number
   publishGuardStatus?: string | null
+  publishGuardHasUnpublishedProof: boolean
   realWriteExpectedBlocked: boolean
   primaryAction: { label: string; detail: string; onClick: () => void }
 }) {
   const taskDone = selectedTask?.status === 'completed'
   const reportSuccess = latestReport?.status === 'success'
-  const hasSaveProof = saveResultCount > 0 && unpublishedProofCount > 0 && networkHarCount > 0
-  const ok = taskDone && reportSuccess && hasSaveProof && publishGuardStatus === 'safe_unpublished'
+  const reportPublished = latestReport?.published
+  const reportConfirmsUnpublished = reportPublished === false
+  const hasSaveProof = saveResultCount > 0 && unpublishedProofCount > 0 && networkHarCount > 0 && reportConfirmsUnpublished
+  const ok = taskDone
+    && reportSuccess
+    && hasSaveProof
+    && publishGuardStatus === 'safe_unpublished'
+    && publishGuardHasUnpublishedProof
   const saveQuestion = ok
     ? '已保存'
     : taskDone && reportSuccess
       ? '保存已返回，证据待补齐'
       : '等待保存'
-  const publishQuestion = publishGuardStatus === 'safe_unpublished' || unpublishedProofCount > 0
-    ? '没有发布'
-    : ok
-      ? '没有发布'
-      : '等待未发布证明'
+  const publishQuestion = humanReportPublished(reportPublished)
   const productLabel = taskProductLabel(selectedTask)
   const completedAt = latestReport?.created_at
     ? formatTime(latestReport.created_at)
@@ -562,7 +569,7 @@ function BusinessResultSummaryCard({
         </div>
         <div className="business-result-summary__facts">
           <span className={saveResultCount > 0 || ok ? 'is-ok' : 'is-warn'}><b>保存成功了吗</b><strong>{saveQuestion}</strong></span>
-          <span className={publishGuardStatus === 'safe_unpublished' || unpublishedProofCount > 0 ? 'is-ok' : 'is-warn'}><b>有没有发布</b><strong>{publishQuestion}</strong></span>
+          <span className={reportConfirmsUnpublished ? 'is-ok' : 'is-warn'}><b>有没有发布</b><strong>{publishQuestion}</strong></span>
           <span><b>商品</b><strong>{productLabel}</strong></span>
           <span><b>完成时间</b><strong>{completedAt}</strong></span>
           <span><b>下一步</b><strong>{nextStep}</strong></span>
@@ -754,7 +761,10 @@ function ReportCard({ report }: { report: Report }) {
     <article className="report-card">
       <div className="report-card__head">
         <strong>{title}</strong>
-        <span className={`status-pill ${reportStatusTone(report.status)}`}>{humanReportStatus(report.status)}</span>
+        <div className="report-card__statuses">
+          <span className={`status-pill ${reportStatusTone(report.status)}`}>{humanReportStatus(report.status)}</span>
+          <span className={`status-pill ${reportPublishedTone(report.published)}`}>{humanReportPublished(report.published)}</span>
+        </div>
       </div>
       <p>{humanReportSummary(report)}</p>
       <div className="report-card__footer">
@@ -857,6 +867,18 @@ function reportStatusTone(status?: string | null) {
   if (status === 'success') return 'ok'
   if (status === 'failed') return 'danger'
   if (status === 'running') return 'warn'
+  return 'muted'
+}
+
+function humanReportPublished(published?: boolean | null) {
+  if (published === true) return '已发布'
+  if (published === false) return '未发布'
+  return '未验证/不适用'
+}
+
+function reportPublishedTone(published?: boolean | null) {
+  if (published === true) return 'danger'
+  if (published === false) return 'ok'
   return 'muted'
 }
 

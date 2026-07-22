@@ -62,7 +62,10 @@ class ConfigDefaultsResolver:
         applicable_templates: list[tuple[int, int, str, Mapping[str, Any]]] = []
         selected_templates: list[tuple[int, str, Mapping[str, Any]]] = []
         for index, template in enumerate(templates):
-            if not template.get("is_enabled", True):
+            if (
+                not template.get("is_enabled", True)
+                or template.get("requires_manual_configuration") is True
+            ):
                 continue
             template_type = self.normalize_template_type(template.get("template_type"))
             if template_type not in DEFAULT_TEMPLATE_TYPES:

@@ -168,7 +168,7 @@ export function buildEmptyWorkspace(): DeliveryWorkspace {
     publishGuardState: {
       status: 'empty',
       safe: false,
-      published: false,
+      published: null,
       publish_allowed: false,
       report_published_all_false: false,
       has_unpublished_proof: false,
@@ -742,12 +742,23 @@ function safetyFromGuard(
   grade?: { grade: EvidenceGrade; [key: string]: unknown } | null,
 ): DeliveryWorkspace['safety'] | null {
   if (!guard) return null
-  const checked = guard.status === 'safe_unpublished' ? 'published=false 已确认' : guard.status
+  const hasUnpublishedProof = guard.has_unpublished_proof === true
+  const safeUnpublished = guard.status === 'safe_unpublished' && hasUnpublishedProof
+  const publishRisk = guard.status === 'unsafe_publish_risk'
+  const checked = safeUnpublished
+    ? '保存后未发布已确认'
+    : publishRisk
+      ? '发现发布风险'
+      : guard.status === 'blocked'
+        ? '已安全暂停'
+        : '未验证/不适用'
   return {
     mode: '待认领商品 -> 商品箱 -> 编辑保存只保存',
-    guarantee: guard.safe
+    guarantee: safeUnpublished
       ? '只保存不发布：发布隔离已开启，工作台没有发布动作入口。'
-      : '只保存不发布：检测到发布风险信号，任务必须停止复核。',
+      : publishRisk
+        ? '检测到发布风险信号，任务必须停止并人工复核。'
+        : '尚未取得独立未发布证明；当前发布状态为未验证或不适用。',
     forbiddenActions: ['发布', '继续发布', '保存并发布', '移入待发布'],
     lastCheckedAt: `${checked}${grade?.grade ? ` / 证据 ${grade.grade}` : ''}`,
   }

@@ -220,6 +220,7 @@ class ConfigPreviewService:
             self._normalize_template_type(template.get("template_type"))
             for template in templates
             if template.get("is_enabled", True)
+            and template.get("requires_manual_configuration") is not True
         }
         groups: list[dict[str, Any]] = []
         for group in FIELD_GROUPS:

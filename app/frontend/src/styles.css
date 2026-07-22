@@ -1869,6 +1869,10 @@ a:focus-visible {
   background: var(--line);
 }
 
+.batch-progress-card__facts--four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .batch-progress-card__facts > span {
   padding: 8px 9px;
   display: grid;
@@ -2090,6 +2094,10 @@ a:focus-visible {
 
   .batch-progress-card__headline {
     flex-direction: column;
+  }
+
+  .batch-progress-card__facts--four {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .batch-stop-form {
@@ -9171,6 +9179,13 @@ tr:last-child td {
   justify-content: space-between;
   gap: 10px;
   align-items: start;
+}
+
+.report-card__statuses {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 .exception-card p,

@@ -1262,11 +1262,25 @@ class BrowserAgentRuntime:
                 "reason": "browser_agent_mutation_authorizer_missing",
                 "command_id": context.command_id,
             }
+        pre_dispatch_guard = (
+            mutation_context.get("_pre_dispatch_guard")
+            if isinstance(mutation_context, Mapping)
+            else None
+        )
+        public_mutation_context = (
+            {
+                key: value
+                for key, value in mutation_context.items()
+                if key != "_pre_dispatch_guard"
+            }
+            if isinstance(mutation_context, Mapping)
+            else mutation_context
+        )
         with self._mutation_dispatch_gate:
             with self._lock:
                 initial_rejection = self._mutation_dispatch_rejection_locked(
                     lease,
-                    mutation_context,
+                    public_mutation_context,
                 )
         if initial_rejection is not None:
             return {
@@ -1286,37 +1300,11 @@ class BrowserAgentRuntime:
                 "command_id": context.command_id,
             }
 
-        authorization = authorizer(command, mutation_context)
-        if not isinstance(authorization, Mapping) or authorization.get("ok") is not True:
-            diagnostics = dict(authorization) if isinstance(authorization, Mapping) else {}
-            return {
-                **diagnostics,
-                "ok": False,
-                "executed": False,
-                "reason": diagnostics.get("reason") or "browser_agent_mutation_not_authorized",
-                "command_id": context.command_id,
-            }
-
-        diagnostics = dict(authorization)
-        live_identity, identity_rejection = self._bound_mutation_identity(
-            lease,
-            command,
-            expected_identity=bound_identity,
-        )
-        if identity_rejection is not None:
-            return {
-                **diagnostics,
-                **identity_rejection,
-                "ok": False,
-                "executed": False,
-                "command_id": context.command_id,
-            }
         if (
             getattr(lease.adapter, "requires_persistent_browser_agent", False) is True
             and self._mutation_ledger is None
         ):
             return {
-                **diagnostics,
                 "ok": False,
                 "executed": False,
                 "reason": "browser_agent_mutation_ledger_missing",
@@ -1324,32 +1312,94 @@ class BrowserAgentRuntime:
                 "command_id": context.command_id,
             }
         mutation_action = str(
-            mutation_context.get("mutation_action")
-            if isinstance(mutation_context, Mapping)
+            public_mutation_context.get("mutation_action")
+            if isinstance(public_mutation_context, Mapping)
             else ""
         ).strip()
         ledger = self._mutation_ledger
         ledger_started = False
         ledger_entry: dict[str, Any] | None = None
+        final_identity: dict[str, Any] | None = None
         with self._mutation_dispatch_gate:
+            final_identity, identity_rejection = self._bound_mutation_identity(
+                lease,
+                command,
+                expected_identity=bound_identity,
+            )
+            if identity_rejection is not None:
+                return {
+                    **identity_rejection,
+                    "ok": False,
+                    "executed": False,
+                    "zero_click_proven": True,
+                    "outcome": "CANCELLED_BEFORE_DISPATCH",
+                    "command_id": context.command_id,
+                }
+            if callable(pre_dispatch_guard):
+                try:
+                    preflight_result = pre_dispatch_guard()
+                except BaseException as exc:
+                    return {
+                        "ok": False,
+                        "executed": False,
+                        "zero_click_proven": True,
+                        "outcome": "CANCELLED_BEFORE_DISPATCH",
+                        "reason": "browser_agent_mutation_final_preflight_failed",
+                        "reason_code": str(
+                            getattr(exc, "reason_code", None)
+                            or getattr(exc, "error_code", None)
+                            or "MUTATION_TARGET_DRIFT"
+                        ),
+                        "detail": str(exc),
+                        "command_id": context.command_id,
+                    }
+                preflight_ok = preflight_result is True or (
+                    isinstance(preflight_result, Mapping)
+                    and preflight_result.get("ok") is True
+                )
+                if not preflight_ok:
+                    return {
+                        "ok": False,
+                        "executed": False,
+                        "zero_click_proven": True,
+                        "outcome": "CANCELLED_BEFORE_DISPATCH",
+                        "reason": "browser_agent_mutation_final_preflight_rejected",
+                        "reason_code": "MUTATION_TARGET_DRIFT",
+                        "detail": (
+                            str(preflight_result.get("reason") or "final target readback rejected")
+                            if isinstance(preflight_result, Mapping)
+                            else "final target readback rejected"
+                        ),
+                        "command_id": context.command_id,
+                    }
             with self._lock:
                 rejection = self._mutation_dispatch_rejection_locked(
                     lease,
-                    mutation_context,
+                    public_mutation_context,
                 )
                 if rejection is not None:
                     return {
-                        **diagnostics,
                         **rejection,
                         "ok": False,
                         "executed": False,
                     }
+                authorization = authorizer(command, public_mutation_context)
+                if not isinstance(authorization, Mapping) or authorization.get("ok") is not True:
+                    diagnostics = dict(authorization) if isinstance(authorization, Mapping) else {}
+                    return {
+                        **diagnostics,
+                        "ok": False,
+                        "executed": False,
+                        "reason": diagnostics.get("reason") or "browser_agent_mutation_not_authorized",
+                        "command_id": context.command_id,
+                    }
+                diagnostics = dict(authorization)
                 if ledger is not None:
                     try:
                         ledger_decision = ledger.begin_dispatch(
                             command,
                             mutation_action,
-                            identity=dict(live_identity or bound_identity or {}),
+                            identity=dict(final_identity or bound_identity or {}),
                         )
                     except Exception as exc:
                         return {
@@ -1379,7 +1429,7 @@ class BrowserAgentRuntime:
                     ledger_entry = dict(entry) if isinstance(entry, Mapping) else None
                 lease.mutation_dispatch_inflight = True
                 lease.mutation_dispatch_action = mutation_action or None
-                lease.mutation_bound_identity = dict(live_identity or bound_identity or {})
+                lease.mutation_bound_identity = dict(final_identity or bound_identity or {})
         try:
             operation_result = operation()
         except BaseException as exc:
@@ -1397,6 +1447,31 @@ class BrowserAgentRuntime:
                     pass
             raise
         else:
+            dispatch_confirmed = operation_result is True or (
+                isinstance(operation_result, Mapping)
+                and (
+                    operation_result.get("dispatched") is True
+                    if "dispatched" in operation_result
+                    else operation_result.get("ok") is True
+                )
+            )
+            if not dispatch_confirmed:
+                if ledger_started:
+                    try:
+                        ledger.mark_unknown(
+                            command,
+                            mutation_action,
+                            {
+                                "phase": "operation_result",
+                                "reason_code": "MUTATION_DISPATCH_NOT_CONFIRMED",
+                                "operation_result": operation_result,
+                            },
+                        )
+                    except Exception:
+                        pass
+                raise RuntimeError(
+                    "MUTATION_OUTCOME_UNKNOWN: mutation operation did not prove dispatch"
+                )
             if ledger_started:
                 try:
                     dispatch_decision = ledger.mark_dispatched(
@@ -1465,9 +1540,10 @@ class BrowserAgentRuntime:
     ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
         """Read and validate live page identity without holding runtime locks.
 
-        The first read binds the exact URL for this dispatch attempt. The second
-        read happens after external authorization and must match byte-for-byte
-        after URL normalization, including session generation and target hash.
+        The first read binds the exact URL for this dispatch attempt. The final
+        read happens before the JIT grant is consumed and before the ledger can
+        enter DISPATCHING; it must match byte-for-byte after URL normalization,
+        including session generation and target hash.
         """
 
         identity = self._adapter_current_mutation_identity(lease.adapter, command)

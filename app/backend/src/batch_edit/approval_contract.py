@@ -166,6 +166,7 @@ def issue_batch_approval(
     *,
     approved_by: str,
     confirmation: str,
+    l2_evidence_fingerprint: str,
     issued_at: datetime | None = None,
 ) -> dict[str, Any]:
     approver = str(approved_by or "").strip()
@@ -186,6 +187,10 @@ def issue_batch_approval(
     lease_id = uuid.uuid4().hex
     token = secrets.token_urlsafe(32)
     ordered_targets = _ordered_targets(current_scope.get("items"))
+    l2_fingerprint = _canonical_digest(
+        l2_evidence_fingerprint,
+        "l2_evidence_fingerprint",
+    )
     context = {
         "schema_version": BATCH_APPROVAL_CONTEXT_SCHEMA,
         "batch": {
@@ -208,6 +213,7 @@ def issue_batch_approval(
         },
         "store_identity": current_scope.get("store_identity"),
         "runtime_identity": current_scope.get("runtime_identity"),
+        "l2_evidence_fingerprint": l2_fingerprint,
         "read_attestation": scope_revalidation,
         "approved_by": approver,
         "confirmation": confirmation,
@@ -253,6 +259,15 @@ def _ordered_targets(value: Any) -> list[dict[str, Any]]:
             }
         )
     return ordered
+
+
+def _canonical_digest(value: Any, field_name: str) -> str:
+    if not isinstance(value, str) or value != value.strip():
+        _reject("BATCH_L2_EVIDENCE_FINGERPRINT_INVALID", f"{field_name} is invalid")
+    digest = value.upper()
+    if len(digest) != 64 or any(char not in "0123456789ABCDEF" for char in digest):
+        _reject("BATCH_L2_EVIDENCE_FINGERPRINT_INVALID", f"{field_name} is invalid")
+    return digest
 
 
 def _reject(reason_code: str, detail: str) -> None:

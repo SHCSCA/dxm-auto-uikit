@@ -43,7 +43,7 @@ export function HelpPage({
             <strong>目标只有一个：把已有来源商品认领进商品箱，再按店铺级模板逐件只保存。</strong>
             <div className="guide-step__summary-line">
               <small>{nextAction.detail}</small>
-              <em>整批只批准一次，严格串行；结果不确定立即停止且不自动重试。</em>
+              <em>整批只批准一次，严格串行；结果不确定立即停止并转人工对账。</em>
             </div>
           </div>
           <div className="guide-step__actions">
@@ -82,7 +82,7 @@ export function HelpPage({
           <GuideStep
             index="4"
             title="一次批准并启动"
-            detail="核对冻结范围后一次批准；系统按商品严格串行只保存。旧诊断浏览器必须先关闭，但不需要先打开它。"
+            detail="核对冻结范围后一次批准；系统按商品严格串行只保存。运行中的旧诊断浏览器必须先关闭，但不需要先打开它。"
             action="查看批次记录"
             onAction={onShowBatchRecords}
           />
@@ -146,9 +146,9 @@ export function HelpPage({
             <small>整批范围一次批准，但始终逐件处理。</small>
           </div>
           <div className="settings-summary-card">
-            <span>不会猜测重试</span>
-            <strong>不确定就停止</strong>
-            <small>结果无法证明时转人工核对，不自动重试。</small>
+            <span>停止语义明确</span>
+            <strong>零写入或人工对账</strong>
+            <small>保存前安全停止无需对账；结果不确定才转人工对账，且不自动重试。</small>
           </div>
         </div>
       </div>

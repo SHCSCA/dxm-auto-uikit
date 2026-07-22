@@ -132,54 +132,20 @@ export type EditBatchStopRequest = {
   requested_by: string
   reason?: string | null
 }
-export type DraftBoxScopeEvidenceRef = {
-  kind: 'live_dom_row'
-  browser_session_id: string
-  page_kind: 'draft_box'
-  page_url: string
-  dom_index: number
-  row_sha256: string
-}
 export type DraftBoxScopeItem = {
   ordinal: number
   title: string
   dxm_product_id: string | null
-  stable_record_key: string
-  source_url: string | null
-  source_urls: string[]
-  store_evidence: {
-    store_name: string
-    cell_text: string
-    source: 'structured_store_cell'
-    column_index: number
-    tag: string
-    class_name: string
-    dom_index: number
-  }
-  target_identity: Record<string, unknown>
-  target_identity_sha256: string
-  evidence_ref: DraftBoxScopeEvidenceRef
 }
 export type DraftBoxScopeSnapshot = {
   id: number
-  schema_version: 'dxm_draft_box_scope.v1'
   observed_at: string
-  runtime_identity: {
-    instance_id: string
-    browser_runtime_id: string
-    browser_session_id: string
-    git_head: string
-  }
   page_identity: {
     url: string
-    kind: 'draft_box'
     title: string
-    business_marker: string
   }
   store_identity: {
     store_name: string
-    source: 'structured_store_cell'
-    fingerprint: string
   }
   filter_state: Record<string, unknown>
   sort_state: Record<string, unknown>
@@ -193,25 +159,14 @@ export type DraftBoxScopeSnapshot = {
     truncated: boolean
   }
   items: DraftBoxScopeItem[]
-  evidence: {
-    kind: 'live_dom_snapshot'
-    dom_sha256: string
-    refs_digest: string
-    summary: Record<string, unknown>
-    refs: DraftBoxScopeEvidenceRef[]
-  }
   zero_write_proof: {
-    strategy: 'current_visible_page_dom_read'
     navigation_attempted: false
     interactive_action_attempted: false
     mutation_dispatch_attempted: false
   }
-  digest: string
-  snapshot_sha256: string
-  created_at: string
 }
 export type EditBatchStatus = 'draft' | 'approved' | 'running' | 'stop_requested' | 'completed' | 'stopped'
-export type EditBatchItemStatus = 'pending' | 'running' | 'succeeded' | 'isolated_pre_save_no_write' | 'stopped_uncertain'
+export type EditBatchItemStatus = 'pending' | 'running' | 'succeeded' | 'isolated_pre_save_no_write' | 'stopped_before_save_no_write' | 'stopped_uncertain'
 export type EditBatchSummary = {
   id: number
   status: EditBatchStatus
@@ -240,9 +195,8 @@ export type EditBatchItem = {
   updated_at: string
 }
 export type EditBatchItemOutcome = {
-  classification: 'SUCCEEDED' | 'ISOLATED_PRE_SAVE_NO_WRITE' | 'STOPPED_UNCERTAIN'
-  finished_at: string | null
-  manual_review_required: boolean
+  finished_at?: string | null
+  manual_review_required?: boolean
 }
 export type EditBatchExecutionSummary = {
   state: EditBatchStatus
@@ -259,7 +213,9 @@ export type EditBatchProgressSummary = {
   isolated: number
   pending: number
   running: number
-  stopped: number
+  stopped_before_save_no_write?: number
+  uncertain?: number
+  stopped?: number
   current_ordinal: number | null
   percent: number
 }
@@ -517,7 +473,7 @@ export type ConfigPreview = {
 }
 export type Evidence = { id: number; task_id: number; job_id: number | null; evidence_type: string; file_path: string | null; meta: Record<string, unknown>; created_at: string }
 export type ExceptionItem = { id: number; task_id: number; job_id: number | null; error_code: string; field_domain: string; title: string; detail: string; suggestion: string; status: string }
-export type Report = { id: number | string; task_id?: number; title?: string; status?: string; report_type?: string; summary?: string; file_path?: string | null; file_path_url?: string | null; created_at?: string; [key: string]: unknown }
+export type Report = { id: number | string; task_id?: number; title?: string; status?: string; report_type?: string; summary?: string; published?: boolean | null; file_path?: string | null; file_path_url?: string | null; created_at?: string; [key: string]: unknown }
 export type LiveEvent = { type: string; taskId: number; jobId?: number; productId?: number; stepCode?: string; stepName?: string; fieldDomain?: string; screenshotPath?: string; timestamp?: string; status?: string; completedJobs?: number; failedJobs?: number }
 
 export type EvidenceGrade = 'A' | 'B' | 'C'
@@ -535,7 +491,7 @@ export type RunStep = {
 export type SafetyGuardState = {
   status: string
   safe: boolean
-  published: boolean
+  published: boolean | null
   publish_allowed: boolean
   report_published_all_false?: boolean
   has_unpublished_proof?: boolean

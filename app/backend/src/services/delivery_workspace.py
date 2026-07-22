@@ -687,7 +687,11 @@ def _publish_guard_state(reports: list[dict[str, Any]], extracted: dict[str, Any
     return {
         "status": status,
         "safe": not has_published_true and not publish_risk["reasons"] and has_unpublished_proof,
-        "published": True if has_published_true else False,
+        "published": (
+            True
+            if has_published_true
+            else False if has_unpublished_proof else None
+        ),
         "publish_allowed": False,
         "report_published_all_false": bool(reports) and all(report.get("published") is False for report in reports),
         "has_unpublished_proof": has_unpublished_proof,
@@ -2298,20 +2302,60 @@ def _collect_publish_scan_inputs(payload: Mapping[str, Any], publish_scan: dict[
 
 
 def _is_unpublished_proof_payload(payload: Mapping[str, Any], source: str) -> bool:
-    proof_text = " ".join(
-        _strings_from_value(
-            [
-                source,
-                payload.get("action"),
-                payload.get("state"),
-                payload.get("proof_type"),
-                payload.get("screenshot_url"),
-                payload.get("file_path"),
-                payload.get("message"),
-            ]
+    """Accept only a target-bound structured readback, never a text label.
+
+    Older reports frequently contained ``published=false`` on failed or
+    non-saving steps.  A filename/action containing ``verify_not_published``
+    therefore cannot be evidence by itself.
+    """
+
+    del source
+    if payload.get("ok") is not True or payload.get("published") is not False:
+        return False
+    if payload.get("proof_kind") != "structured_unpublished_status":
+        return False
+    status = "".join(str(payload.get("status_text") or "").split())
+    if status not in {"待发布", "草稿", "未发布", "待完善"}:
+        return False
+    if (
+        payload.get("verified_on_current_page") is not True
+        or payload.get("status_scope_unique") is not True
+        or type(payload.get("bound_candidate_count")) is not int
+        or payload.get("bound_candidate_count") != 1
+        or type(payload.get("structured_candidate_count")) is not int
+        or payload.get("structured_candidate_count") != 1
+        or payload.get("target_bound") is not True
+        or payload.get("product_matched") is not True
+        or payload.get("store_matched") is not True
+        or payload.get("source_identity_match") is not True
+        or payload.get("identity_binding_kind")
+        != "frozen_target_structured_page_readback"
+        or payload.get("publish_risk_term") not in (None, "")
+    ):
+        return False
+    identity = payload.get("identity_readback")
+    if not isinstance(identity, Mapping) or any(
+        identity.get(key) is not True
+        for key in (
+            "product_identity_match",
+            "store_identity_match",
+            "source_identity_match",
         )
-    ).lower()
-    return "verify_not_published" in proof_text or "verify not published" in proof_text
+    ):
+        return False
+    target_digest = str(payload.get("target_identity_sha256") or "").strip()
+    if re.fullmatch(r"[0-9A-Fa-f]{64}", target_digest) is None:
+        return False
+    try:
+        page = urlsplit(str(payload.get("page_url") or ""))
+    except ValueError:
+        return False
+    hostname = str(page.hostname or "").casefold()
+    return bool(
+        (hostname == "dianxiaomi.com" or hostname.endswith(".dianxiaomi.com"))
+        and str(page.path or "").rstrip("/").casefold()
+        == "/web/smt/editfromsmt"
+    )
 
 
 def _strings_from_value(value: Any) -> list[str]:

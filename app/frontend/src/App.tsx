@@ -758,7 +758,7 @@ export default function App() {
       if (taskToStart.mode === 'claim_only') {
         setActiveSection('acquisition_claim')
       } else {
-        setActiveSection('start_save')
+        setActiveSection('product_tasks')
       }
       await refreshWorkspace()
     } catch (error) {
@@ -1195,7 +1195,6 @@ export default function App() {
             busy={busy}
             lastRequest={visibleAcquisitionClaimRequest}
             onCreateClaimRequest={(request) => { void createAcquisitionClaimRequest(request) }}
-            onNavigateDataAcquisition={() => { void navigateDxmTarget('data_acquisition') }}
             onShowDraftEdit={() => setActiveSection('draft_edit_save')}
             onShowTasks={() => setActiveSection('product_tasks')}
           />
@@ -1317,7 +1316,7 @@ export default function App() {
               setActiveEditBatchId(null)
               setActiveSection('draft_edit_save')
             }}
-            onShowBatchRecords={() => { setActiveEditBatchId(null); setActiveSection('task_history') }}
+            onShowBatchRecords={(batchId) => { setActiveEditBatchId(batchId ?? null); setActiveSection('task_history') }}
           />
         )
       case 'results':
@@ -1331,7 +1330,7 @@ export default function App() {
             onShowAcquisition={() => setActiveSection('acquisition_claim')}
             onShowTasks={() => setActiveSection('product_tasks')}
             onShowDraftEdit={() => { setActiveEditBatchId(null); setActiveSection('draft_edit_save') }}
-            onShowBatchRecords={(batchId) => { setActiveEditBatchId(batchId ?? null); setActiveSection('task_history') }}
+            onShowBatchRecords={() => { setActiveEditBatchId(null); setActiveSection('task_history') }}
             onShowResults={() => setActiveSection('results')}
             onShowIssues={() => setActiveSection('issues')}
           />
@@ -1345,19 +1344,15 @@ export default function App() {
             workspace={workspace}
             editBatches={editBatches}
             selectedTask={selectedTask}
-            configPreview={configPreview}
             runtimeStatus={runtimeStatus}
             onShowDxmAccess={() => setActiveSection('dxm_access')}
-            onShowAcquisition={() => setActiveSection('acquisition_claim')}
             onShowDraftEdit={() => {
               setActiveEditBatchId(null)
               setActiveSection('draft_edit_save')
             }}
-            onShowTasks={() => setActiveSection('task_history')}
-            onShowConfig={() => setActiveSection('edit_config')}
+            onShowTasks={() => setActiveSection('product_tasks')}
             onShowConsole={() => setActiveSection('start_save')}
-            onShowBatchRecords={() => setActiveSection('task_history')}
-            onShowReports={() => setActiveSection('results')}
+            onShowBatchRecords={(batchId) => { setActiveEditBatchId(batchId ?? null); setActiveSection('task_history') }}
           />
         )
     }
@@ -1525,6 +1520,14 @@ function humanTaskCreateError(message: string) {
 
 function humanAcquisitionClaimError(message: string) {
   const normalized = message.toLowerCase()
+  if (
+    normalized.includes('source url')
+    || normalized.includes('source product url')
+    || normalized.includes('商品详情页')
+    || normalized.includes('来源 url')
+  ) {
+    return '仅支持 1688、拼多多或 AliExpress 的精确商品详情链接；关键词和类目只能辅助定位。系统没有执行认领、保存或发布。'
+  }
   if (
     normalized.includes('internal server error')
     || normalized.includes('failed to fetch')

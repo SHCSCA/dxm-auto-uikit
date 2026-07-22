@@ -9,7 +9,6 @@ type AcquisitionClaimPageProps = {
   busy: boolean
   lastRequest: AcquisitionClaimResponse | null
   onCreateClaimRequest: (request: AcquisitionClaimCreateRequest) => void
-  onNavigateDataAcquisition: () => void
   onShowDraftEdit: () => void
   onShowTasks: () => void
 }
@@ -28,7 +27,6 @@ export function AcquisitionClaimPage({
   busy,
   lastRequest,
   onCreateClaimRequest,
-  onNavigateDataAcquisition,
   onShowDraftEdit,
   onShowTasks,
 }: AcquisitionClaimPageProps) {
@@ -99,9 +97,6 @@ export function AcquisitionClaimPage({
             <h2>把已有待认领商品放进商品箱</h2>
             <p>只处理店小秘里已经存在、且能用真实来源商品 URL 精确绑定的待认领商品。关键词和类目只辅助缩小列表，不会单独触发认领。</p>
           </div>
-          <button className="button button--secondary" type="button" onClick={onNavigateDataAcquisition} disabled={busy}>
-            打开已有待认领列表
-          </button>
         </div>
 
         <ol className="operation-guide" aria-label="待认领入箱四步">
@@ -120,9 +115,6 @@ export function AcquisitionClaimPage({
               <strong>选择店小秘已有待认领商品</strong>
               <span>{claimCandidates.length ? `最近只读检查发现 ${claimCandidates.length} 条` : '先运行保存前安全检查后自动显示'}</span>
             </div>
-            <button className="button button--secondary" type="button" onClick={onNavigateDataAcquisition} disabled={busy}>
-              查看已有待认领列表
-            </button>
           </div>
           {claimCandidates.length ? (
             <div className="claim-candidates__list">
@@ -232,7 +224,7 @@ export function AcquisitionClaimPage({
             <span><strong>店铺</strong><b>{selectedStore?.name ?? lastRequest.store_id}</b></span>
             <span><strong>阶段</strong><b>{claimCompleted ? '商品已进入商品箱' : '等待在当前任务批准并启动'}</b></span>
             <span><strong>标记</strong><b>{lastRequest.claim_mark}</b></span>
-            <span><strong>下一步</strong><b>{claimCompleted ? '进入商品箱批量编辑' : '关闭旧诊断浏览器，再批准并启动认领'}</b></span>
+            <span><strong>下一步</strong><b>{claimCompleted ? '进入商品箱批量编辑' : '去当前任务批准并启动；如旧诊断浏览器仍在运行，先关闭'}</b></span>
             {claimCompleted && <span><strong>商品箱商品</strong><b>{lastRequest.claimed_product_title || `商品 #${lastRequest.claimed_product_id}`}</b></span>}
             {claimCompleted && <span><strong>商品箱验证</strong><b>{draftBoxVerified ? '已确认进入商品箱' : '等待商品箱验证'}</b></span>}
             {claimCompleted && <span><strong>商品来源</strong><b>{claimedSourceLabel}</b></span>}

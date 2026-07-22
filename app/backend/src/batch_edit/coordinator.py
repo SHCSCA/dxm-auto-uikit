@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hmac
 from datetime import datetime, timezone
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from src.batch_edit.batch_contract import (
@@ -37,8 +39,14 @@ class BatchEditContractError(ValueError):
 class BatchEditCoordinator:
     """Freeze read-only DXM scope facts behind a deliberately small interface."""
 
-    def __init__(self, repository: Repository) -> None:
+    def __init__(
+        self,
+        repository: Repository,
+        *,
+        l2_verifier: Callable[[], Mapping[str, Any]] | None = None,
+    ) -> None:
         self._repository = repository
+        self._l2_verifier = l2_verifier
 
     def persist_scope_capture(
         self,
@@ -174,6 +182,7 @@ class BatchEditCoordinator:
         expected_browser_session_id: str,
         approved_by: str,
         confirmation: str,
+        l2_evidence_fingerprint: str | None = None,
     ) -> dict[str, Any]:
         """Create private approval facts without mutating repository state."""
 
@@ -190,6 +199,11 @@ class BatchEditCoordinator:
                 scope_revalidation,
                 approved_by=approved_by,
                 confirmation=confirmation,
+                l2_evidence_fingerprint=(
+                    l2_evidence_fingerprint
+                    if l2_evidence_fingerprint is not None
+                    else self._require_current_l2()
+                ),
             )
         except BatchApprovalContractError as exc:
             raise BatchEditContractError(exc.reason_code, str(exc)) from exc
@@ -208,6 +222,7 @@ class BatchEditCoordinator:
     ) -> dict[str, Any]:
         """Atomically consume one approval into a durable running batch."""
 
+        approval_l2_fingerprint = self._require_current_l2()
         approval = self.prepare_approval(
             batch,
             capture,
@@ -215,6 +230,10 @@ class BatchEditCoordinator:
             expected_browser_session_id=expected_browser_session_id,
             approved_by=approved_by,
             confirmation=confirmation,
+            l2_evidence_fingerprint=approval_l2_fingerprint,
+        )
+        start_l2_fingerprint = self._require_current_l2(
+            expected_fingerprint=approval_l2_fingerprint,
         )
         contract_keys = {
             "id",
@@ -242,7 +261,10 @@ class BatchEditCoordinator:
                 stored_approval_token_hash=approval["token_hash"],
                 approval_context=approval["context"],
                 now=now,
-                authoritative_facts=authoritative_facts,
+                authoritative_facts={
+                    **authoritative_facts,
+                    "l2_evidence_fingerprint": start_l2_fingerprint,
+                },
             )
         except BatchExecutionContractError as exc:
             raise BatchEditContractError(exc.reason_code, str(exc)) from exc
@@ -274,6 +296,42 @@ class BatchEditCoordinator:
         if not isinstance(started, dict):
             raise BatchEditContractError("BATCH_START_RESULT_MISSING", "started edit batch could not be read")
         return started
+
+    def _require_current_l2(self, *, expected_fingerprint: str | None = None) -> str:
+        if not callable(self._l2_verifier):
+            raise BatchEditContractError(
+                "BATCH_L2_VERIFIER_MISSING",
+                "batch approval/start requires an injected current L2 verifier",
+            )
+        try:
+            verification = self._l2_verifier()
+        except Exception as exc:
+            raise BatchEditContractError(
+                "BATCH_L2_VERIFIER_UNAVAILABLE",
+                "current L2 verification could not be read",
+            ) from exc
+        if not isinstance(verification, Mapping) or verification.get("status") != "passed":
+            raise BatchEditContractError(
+                "BATCH_L2_GATE_NOT_PASSED",
+                "current L2 gate is not passed",
+            )
+        fingerprint = str(verification.get("fingerprint") or "").strip().upper()
+        if len(fingerprint) != 64 or any(
+            char not in "0123456789ABCDEF" for char in fingerprint
+        ):
+            raise BatchEditContractError(
+                "BATCH_L2_EVIDENCE_FINGERPRINT_INVALID",
+                "current L2 evidence fingerprint is invalid",
+            )
+        if expected_fingerprint is not None and not hmac.compare_digest(
+            fingerprint,
+            expected_fingerprint,
+        ):
+            raise BatchEditContractError(
+                "BATCH_L2_EVIDENCE_DRIFT",
+                "L2 evidence changed between approval and start",
+            )
+        return fingerprint
 
     def approval_capture_max_items(self, batch: dict[str, Any]) -> int:
         try:

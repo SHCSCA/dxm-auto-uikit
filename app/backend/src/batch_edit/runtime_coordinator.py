@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import secrets
 import threading
 import uuid
@@ -61,6 +62,21 @@ BATCH_BROWSER_STEPS: tuple[BatchBrowserStep, ...] = (
     BatchBrowserStep("VERIFY_NOT_PUBLISHED", "verify_not_published", "semi_managed", "独立确认未发布"),
 )
 
+_SAFE_STOP_PROOF_REASON_CODES = frozenset(
+    {
+        "OPERATOR_STOPPED",
+        "OPERATOR_STOPPED_BEFORE_SAVE",
+        "BATCH_L2_VERIFIER_MISSING",
+        "BATCH_L2_VERIFIER_UNAVAILABLE",
+        "BATCH_L2_GATE_NOT_PASSED",
+        "BATCH_L2_EVIDENCE_FINGERPRINT_INVALID",
+        "BATCH_L2_EVIDENCE_DRIFT",
+        "BATCH_RUNTIME_IDENTITY_DRIFT",
+        "BATCH_GIT_HEAD_DRIFT",
+        "BATCH_BROWSER_SESSION_DRIFT",
+    }
+)
+
 _EXECUTION_CONTRACT_BATCH_KEYS = {
     "id",
     "schema_version",
@@ -80,7 +96,7 @@ _EXECUTION_CONTRACT_BATCH_KEYS = {
 
 
 class BatchRuntimeError(RuntimeError):
-    def __init__(self, reason_code: str, detail: str, *, manual_review: bool = False) -> None:
+    def __init__(self, reason_code: str, detail: str, *, manual_review: bool = True) -> None:
         self.reason_code = reason_code
         self.manual_review = manual_review
         super().__init__(detail)
@@ -103,6 +119,7 @@ class BatchExecutionRuntime:
         *,
         runtime_facts_provider: Callable[[], Mapping[str, Any]],
         browser_session_provider: Callable[[], str | None],
+        l2_verifier: Callable[[], Mapping[str, Any]] | None = None,
         command_timeout_seconds: float = 180.0,
     ) -> None:
         self._repository = repository
@@ -110,6 +127,7 @@ class BatchExecutionRuntime:
         self._mutation_ledger = mutation_ledger
         self._runtime_facts_provider = runtime_facts_provider
         self._browser_session_provider = browser_session_provider
+        self._l2_verifier = l2_verifier
         self._command_timeout_seconds = max(30.0, float(command_timeout_seconds))
         self._item_grant_ttl_seconds = BATCH_ITEM_GRANT_TTL_SECONDS
         self._run_lock: asyncio.Lock | None = None
@@ -185,6 +203,20 @@ class BatchExecutionRuntime:
                     return
                 if status != "running":
                     return
+                start_context = _private_value(batch, "start_context")
+                live_rejection = (
+                    self._live_binding_rejection(start_context)
+                    if isinstance(start_context, Mapping)
+                    else "START_CONTEXT_MISSING"
+                )
+                if live_rejection is not None:
+                    self._stop_batch(
+                        batch_id,
+                        live_rejection,
+                        "批次启动绑定或当前 L2 保存前安全检查已变化，系统已零点击停止。",
+                        manual_review=False,
+                    )
+                    return
                 running = next(
                     (item for item in batch.get("items") or [] if item.get("status") == "running"),
                     None,
@@ -207,7 +239,6 @@ class BatchExecutionRuntime:
                         raise BatchRuntimeError("BATCH_COMPLETE_CONFLICT", "批次完成状态写入失败。")
                     return
 
-                start_context = _private_value(batch, "start_context")
                 if not isinstance(start_context, Mapping):
                     self._stop_batch(
                         batch_id,
@@ -253,7 +284,13 @@ class BatchExecutionRuntime:
                         claim_context,
                     )
                 except Exception as exc:
-                    reason_code, detail, manual_review = self._failure_details(exc)
+                    current = self._private_batch(batch_id)
+                    if current.get("status") == "stop_requested":
+                        reason_code = "OPERATOR_STOPPED"
+                        detail = "操作员已停止批次；系统正在保存边界完成零写入或不确定性判定。"
+                        manual_review = False
+                    else:
+                        reason_code, detail, manual_review = self._failure_details(exc)
                     self._stop_batch(batch_id, reason_code, detail, manual_review=manual_review)
                     return
                 finally:
@@ -377,6 +414,7 @@ class BatchExecutionRuntime:
             "runtime_identity",
             "browser_session_id",
             "git_head",
+            "l2_evidence_fingerprint",
             "page_identity",
             "mutation_scope_id",
             "grant_lease_id",
@@ -543,7 +581,11 @@ class BatchExecutionRuntime:
         save_command = self._build_command(current_batch, item, grant, save_step, save_params)
         self._assert_save_boundary_ready(batch_id, item_id, grant)
         self._reserve_item_mutation(save_command)
-        self._assert_save_boundary_ready(batch_id, item_id, grant)
+        try:
+            self._assert_save_boundary_ready(batch_id, item_id, grant)
+        except Exception:
+            self._cancel_reserved_item_mutation(save_command)
+            raise
         lease_id = str(grant["grant_lease_id"])
         with self._active_lock:
             self._active_grants[lease_id] = {"grant": grant, "nonce": nonce}
@@ -563,13 +605,13 @@ class BatchExecutionRuntime:
             raise BatchRuntimeError(
                 str(save.get("failure_code") or "SAVE_RESULT_UNCERTAIN"),
                 "保存动作没有形成确定结果，系统已停止且不会自动重试。",
-                manual_review=True,
+                manual_review=False,
             )
         if not self._grant_consumption_proven(batch_id, item_id, grant):
             raise BatchRuntimeError(
                 "ITEM_GRANT_CONSUMPTION_UNPROVEN",
                 "保存授权的一次性消费没有可靠落库。",
-                manual_review=True,
+                manual_review=False,
             )
 
         verification_step = next(
@@ -596,7 +638,7 @@ class BatchExecutionRuntime:
             raise BatchRuntimeError(
                 str(verification.get("failure_code") or "UNPUBLISHED_VERIFICATION_UNCERTAIN"),
                 "未发布核验没有形成确定结果，系统已停止且不会自动重试。",
-                manual_review=True,
+                manual_review=False,
             )
         try:
             validate_independent_save_verification_pair(save, verification)
@@ -604,7 +646,7 @@ class BatchExecutionRuntime:
             raise BatchRuntimeError(
                 exc.reason_code,
                 f"保存与未发布证据不是独立闭环：{exc}",
-                manual_review=True,
+                manual_review=False,
             ) from exc
         ledger_entry = self._mutation_ledger.get_entry(
             str(grant["mutation_scope_id"]),
@@ -621,7 +663,7 @@ class BatchExecutionRuntime:
             raise BatchRuntimeError(
                 str(decision.get("reason_code") or "ITEM_OUTCOME_UNCERTAIN"),
                 "商品保存结果不确定，系统已停止且不会自动重试。",
-                manual_review=True,
+                manual_review=False,
             )
         return {"decision": decision, "outcome": outcome, "action_results": action_results}
 
@@ -673,7 +715,7 @@ class BatchExecutionRuntime:
             or network.get("complete") is not True
             or type(network.get("mutation_request_count")) is not int
             or type(network.get("publish_request_count")) is not int
-            or network.get("mutation_request_count") != 1
+            or network.get("mutation_request_count") < 1
             or network.get("publish_request_count") != 0
             or not isinstance(publish, Mapping)
             or set(publish) != {"detected", "kind"}
@@ -722,7 +764,7 @@ class BatchExecutionRuntime:
             raise BatchRuntimeError(
                 "ITEM_SUCCESS_EVIDENCE_UNCERTAIN",
                 "保存、网络审计与未发布核验没有形成同一商品的可信闭环。",
-                manual_review=True,
+                manual_review=False,
             )
         return {
             "schema_version": "dxm_edit_batch_item_outcome_evidence.v1",
@@ -736,6 +778,7 @@ class BatchExecutionRuntime:
             "runtime_identity": grant["runtime_identity"],
             "browser_session_id": grant["browser_session_id"],
             "git_head": grant["git_head"],
+            "l2_evidence_fingerprint": grant["l2_evidence_fingerprint"],
             "store_identity": grant["store_identity"],
             "scope_page_identity": grant["page_identity"],
             "action_page_identity": None,
@@ -822,6 +865,7 @@ class BatchExecutionRuntime:
             "runtime_identity": claim_context["runtime_identity"],
             "browser_session_id": claim_context["browser_session_id"],
             "git_head": claim_context["git_head"],
+            "l2_evidence_fingerprint": claim_context["l2_evidence_fingerprint"],
             "store_identity": claim_context["store_identity"],
             "scope_page_identity": claim_context["page_identity"],
             "action_page_identity": dict(page_identity),
@@ -886,13 +930,13 @@ class BatchExecutionRuntime:
             raise BatchRuntimeError(
                 "BROWSER_COMMAND_TIMEOUT",
                 f"{step.label}超时，系统已停止且不会自动重试。",
-                manual_review=post_grant,
+                manual_review=not post_grant,
             ) from exc
         except Exception as exc:
             raise BatchRuntimeError(
                 "BROWSER_COMMAND_FAILED",
                 f"{step.label}失败：{exc}",
-                manual_review=post_grant,
+                manual_review=not post_grant,
             ) from exc
         finally:
             with self._active_lock:
@@ -909,9 +953,18 @@ class BatchExecutionRuntime:
             raise BatchRuntimeError(
                 exc.reason_code,
                 f"{step.label}没有形成可信结果：{exc}",
-                manual_review=post_grant,
+                manual_review=not post_grant,
             ) from exc
-        self._validate_evidence_refs(canonical)
+        try:
+            self._validate_evidence_refs(canonical)
+        except BatchRuntimeError as exc:
+            if not post_grant:
+                raise
+            raise BatchRuntimeError(
+                exc.reason_code,
+                str(exc),
+                manual_review=False,
+            ) from exc
         return canonical
 
     def _grant_consumption_proven(
@@ -976,6 +1029,7 @@ class BatchExecutionRuntime:
             raise BatchRuntimeError(
                 "MUTATION_LEDGER_REQUIRED",
                 "逐件保存账本不可用，系统不会开始处理该商品。",
+                manual_review=False,
             )
         try:
             result = reserve(command)
@@ -983,6 +1037,7 @@ class BatchExecutionRuntime:
             raise BatchRuntimeError(
                 "MUTATION_LEDGER_UNAVAILABLE",
                 f"逐件保存账本不可用：{exc}",
+                manual_review=False,
             ) from exc
         accepted = (
             result.get("ok") is True
@@ -993,6 +1048,7 @@ class BatchExecutionRuntime:
             raise BatchRuntimeError(
                 _result_reason(result, "MUTATION_LEDGER_RESERVATION_REJECTED"),
                 "逐件保存账本未能建立唯一保留项，系统不会继续。",
+                manual_review=False,
             )
         entry = self._mutation_ledger.get_entry(
             str(command.mutation_scope_id or ""),
@@ -1017,7 +1073,47 @@ class BatchExecutionRuntime:
             raise BatchRuntimeError(
                 "MUTATION_LEDGER_RESERVATION_UNPROVEN",
                 "逐件保存账本没有形成可信的 RESERVED 状态，系统不会继续。",
+                manual_review=False,
             )
+
+    def _cancel_reserved_item_mutation(self, command: BrowserAgentCommand) -> None:
+        cancel = getattr(self._mutation_ledger, "cancel_reserved", None)
+        if not callable(cancel):
+            raise BatchRuntimeError(
+                "MUTATION_LEDGER_CANCEL_UNAVAILABLE",
+                "停止发生在保存派发前，但账本无法确认取消；请人工核对。",
+                manual_review=True,
+            )
+        try:
+            result = cancel(
+                command,
+                "save_only_click",
+                reason_code="BATCH_STOPPED_BEFORE_DISPATCH",
+            )
+        except Exception as exc:
+            raise BatchRuntimeError(
+                "MUTATION_LEDGER_CANCEL_UNCERTAIN",
+                f"保存派发前账本取消失败：{exc}",
+                manual_review=True,
+            ) from exc
+        accepted = (
+            result.get("ok") is True
+            if isinstance(result, Mapping)
+            else getattr(result, "ok", False) is True
+        )
+        if accepted:
+            return
+        entry = self._mutation_ledger.get_entry(
+            str(command.mutation_scope_id or ""),
+            "save_only_click",
+        )
+        if isinstance(entry, Mapping) and entry.get("status") == "CANCELLED_BEFORE_DISPATCH":
+            return
+        raise BatchRuntimeError(
+            _result_reason(result, "MUTATION_LEDGER_CANCEL_UNCERTAIN"),
+            "停止发生在保存派发边界，账本无法证明零点击；请人工核对。",
+            manual_review=True,
+        )
 
     def _build_command(
         self,
@@ -1092,13 +1188,13 @@ class BatchExecutionRuntime:
             raise BatchRuntimeError(
                 "OPERATOR_STOPPED_BEFORE_SAVE",
                 "操作员已在保存派发前停止批次。",
-                manual_review=True,
+                manual_review=False,
             )
         if batch.get("status") != "running":
             raise BatchRuntimeError(
                 "BATCH_NOT_RUNNING",
                 "批次已不在执行状态。",
-                manual_review=True,
+                manual_review=False,
             )
         running_items = [
             item for item in batch.get("items") or [] if item.get("status") == "running"
@@ -1112,7 +1208,7 @@ class BatchExecutionRuntime:
             raise BatchRuntimeError(
                 "SAVE_ITEM_CLAIM_DRIFT",
                 "保存边界的逐件认领状态已变化。",
-                manual_review=True,
+                manual_review=False,
             )
         private = batch.get("_private")
         rows = private.get("item_authorizations") if isinstance(private, Mapping) else None
@@ -1140,7 +1236,7 @@ class BatchExecutionRuntime:
             raise BatchRuntimeError(
                 "SAVE_GRANT_PERSISTENCE_DRIFT",
                 "保存授权没有形成可复现的一次性持久化绑定。",
-                manual_review=True,
+                manual_review=False,
             )
         try:
             expires_at = datetime.fromisoformat(
@@ -1150,7 +1246,7 @@ class BatchExecutionRuntime:
             raise BatchRuntimeError(
                 "SAVE_GRANT_EXPIRY_INVALID",
                 "保存授权有效期无效。",
-                manual_review=True,
+                manual_review=False,
             ) from exc
         if (
             expires_at.tzinfo is None
@@ -1160,14 +1256,14 @@ class BatchExecutionRuntime:
             raise BatchRuntimeError(
                 "SAVE_GRANT_EXPIRED",
                 "保存授权已过期，系统不会派发保存。",
-                manual_review=True,
+                manual_review=False,
             )
         rejection = self._live_binding_rejection(grant)
         if rejection is not None:
             raise BatchRuntimeError(
                 rejection,
                 "保存前运行现场已变化，系统已停止且不会自动重试。",
-                manual_review=True,
+                manual_review=False,
             )
 
     def _assert_batch_can_continue(self, batch_id: int, grant: Mapping[str, Any]) -> None:
@@ -1181,6 +1277,9 @@ class BatchExecutionRuntime:
             raise BatchRuntimeError(rejection, "运行现场已变化，系统已停止且不会自动重试。", manual_review=True)
 
     def _live_binding_rejection(self, grant: Mapping[str, Any]) -> str | None:
+        l2_rejection = self._l2_binding_rejection(grant)
+        if l2_rejection is not None:
+            return l2_rejection
         facts = dict(self._runtime_facts_provider())
         expected_runtime = grant.get("runtime_identity")
         if facts.get("runtime_identity") != expected_runtime:
@@ -1190,6 +1289,27 @@ class BatchExecutionRuntime:
         browser_session_id = str(self._browser_session_provider() or "")
         if not browser_session_id or browser_session_id != grant.get("browser_session_id"):
             return "BATCH_BROWSER_SESSION_DRIFT"
+        return None
+
+    def _l2_binding_rejection(self, binding: Mapping[str, Any]) -> str | None:
+        if not callable(self._l2_verifier):
+            return "BATCH_L2_VERIFIER_MISSING"
+        try:
+            verification = self._l2_verifier()
+        except Exception:
+            return "BATCH_L2_VERIFIER_UNAVAILABLE"
+        if not isinstance(verification, Mapping) or verification.get("status") != "passed":
+            return "BATCH_L2_GATE_NOT_PASSED"
+        current = str(verification.get("fingerprint") or "").strip().upper()
+        expected = str(binding.get("l2_evidence_fingerprint") or "").strip().upper()
+        if (
+            len(current) != 64
+            or len(expected) != 64
+            or any(char not in "0123456789ABCDEF" for char in current + expected)
+        ):
+            return "BATCH_L2_EVIDENCE_FINGERPRINT_INVALID"
+        if not hmac.compare_digest(current, expected):
+            return "BATCH_L2_EVIDENCE_DRIFT"
         return None
 
     def _validate_evidence_refs(self, envelope: Mapping[str, Any]) -> None:
@@ -1218,7 +1338,9 @@ class BatchExecutionRuntime:
             return (
                 exc.reason_code,
                 str(exc),
-                True,
+                False
+                if exc.reason_code in _SAFE_STOP_PROOF_REASON_CODES
+                else exc.manual_review,
             )
         return (
             "BATCH_ITEM_UNEXPECTED_FAILURE",

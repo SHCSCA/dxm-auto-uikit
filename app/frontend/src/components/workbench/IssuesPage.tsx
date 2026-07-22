@@ -24,7 +24,7 @@ export function IssuesPage({ workspace, editBatches, selectedTask, onShowTasks, 
         <article className="module-card span-3 issue-primary-action">
           <span>
             <strong>当前没有待处理问题</strong>
-            <small>这里不会创建演示异常。真实批次出现结果不确定时会停止，并把人工核对入口显示在这里。</small>
+            <small>这里不会创建演示异常。真实批次出现结果不确定时会停止，并把人工对账入口显示在这里。</small>
           </span>
           <button className="button button--primary" type="button" onClick={onShowDraftEdit}>读取商品箱范围</button>
         </article>
@@ -81,13 +81,14 @@ function ControlledBatchIssues({
   onShowBatchRecords: (batchId?: number) => void
 }) {
   const active = batches.find((batch) => batch.status === 'running' || batch.status === 'stop_requested') ?? null
-  const reviewBatches = batches.filter((batch) => batch.execution.manual_review_required || batch.progress.stopped > 0)
+  const reviewBatches = batches.filter((batch) => batch.execution.manual_review_required)
+  const latestSafeStopped = batches.find((batch) => (batch.progress.stopped_before_save_no_write ?? 0) > 0 && !batch.execution.manual_review_required) ?? null
   const hasIssues = reviewBatches.length > 0
   const primaryAction = hasIssues || active
     ? {
-        label: hasIssues ? '打开批次记录核对' : '查看当前串行进度',
+        label: hasIssues ? '打开批次记录对账' : '查看当前串行进度',
         detail: hasIssues
-          ? '先在真实店小秘页面核对结果不确定的商品，不要自动重试。'
+          ? '先在真实店小秘页面对账结果不确定的商品，不要自动重试。'
           : '当前没有需要人工处理的问题；继续观察严格串行进度。',
         onClick: () => onShowBatchRecords((hasIssues ? reviewBatches[0] : active)?.id),
       }
@@ -107,27 +108,31 @@ function ControlledBatchIssues({
         <button className="button button--primary" type="button" onClick={primaryAction.onClick}>{primaryAction.label}</button>
       </article>
       <article className="module-card span-3">
-        <ModuleHead title="批次问题" meta={hasIssues ? `${reviewBatches.length} 条待核对` : '暂无待处理问题'} />
+        <ModuleHead title="批次问题" meta={hasIssues ? `${reviewBatches.length} 条待对账` : '暂无待处理问题'} />
         {hasIssues ? (
           <div className="exception-list">
             {reviewBatches.map((batch) => (
               <article className="exception-card" key={batch.id}>
                 <div className="exception-card__head">
                   <strong>批次 #{batch.id} 已保护性停止</strong>
-                  <span className="status-pill danger">需人工核对</span>
+                  <span className="status-pill danger">需人工对账</span>
                 </div>
                 <div className="exception-card__problem-grid">
                   <span><strong>发生了什么</strong><small>系统无法完整证明其中一件商品的最终结果，已停止后续串行处理。</small></span>
-                  <span><strong>为什么不能继续</strong><small>继续或自动重试可能造成重复保存，必须先核对真实店小秘页面。</small></span>
-                  <span><strong>下一步</strong><small>打开批次记录，按商品顺序核对停止位置和已完成结果。</small></span>
+                  <span><strong>为什么不能继续</strong><small>继续或自动重试可能造成重复保存，必须先对账真实店小秘页面。</small></span>
+                  <span><strong>下一步</strong><small>打开批次记录，按商品顺序对账停止位置和已完成结果。</small></span>
                 </div>
               </article>
             ))}
           </div>
         ) : (
           <EmptyState
-            title={active ? '当前没有待处理问题' : '最近批次没有待处理问题'}
-            detail={active ? '批次仍在严格串行执行；出现不确定结果时会自动停止并进入这里。' : '历史记录来自真实后端，未生成任何演示问题。'}
+            title={active ? '当前没有待处理问题' : latestSafeStopped ? '保存前安全停止无需对账' : '最近批次没有待处理问题'}
+            detail={active
+              ? '批次仍在严格串行执行；出现不确定结果时会自动停止并进入这里。'
+              : latestSafeStopped
+                ? `批次 #${latestSafeStopped.id} 有 ${latestSafeStopped.progress.stopped_before_save_no_write ?? 0} 件在保存前安全停止，未发生写入，无需人工对账。`
+                : '历史记录来自真实后端，未生成任何演示问题。'}
           />
         )}
       </article>

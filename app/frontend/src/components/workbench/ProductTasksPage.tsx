@@ -153,7 +153,7 @@ export function ProductTasksPage({
         {currentTaskNeedsApproval && (
           <div className="gate-note">
             <strong>{currentTask?.mode === 'claim_only' ? '人工确认认领到商品箱' : '人工确认只保存不发布'}</strong>
-            <span>{currentTask?.mode === 'claim_only' ? '确认将该已有商品认领到商品箱' : '确认本次只保存不发布'}。关闭旧诊断浏览器并填写批准人后，系统才会直接批准并启动本次任务。</span>
+            <span>{currentTask?.mode === 'claim_only' ? '确认将该已有商品认领到商品箱' : '确认本次只保存不发布'}。填写批准人后系统会直接批准并启动；如旧诊断浏览器仍在运行，必须先关闭。</span>
             <label className="approval-inline">
               <span>批准人</span>
               <input value={l3ApprovedBy} onChange={(event) => onL3ApprovedByChange(event.target.value)} placeholder="填写当前操作者" disabled={busy} required />

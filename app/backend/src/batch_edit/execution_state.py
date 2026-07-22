@@ -18,11 +18,23 @@ BATCH_EXECUTION_STATUSES = frozenset(
     {"draft", "approved", "running", "stop_requested", "completed", "stopped"}
 )
 ITEM_EXECUTION_STATUSES = frozenset(
-    {"pending", "running", "succeeded", "isolated_pre_save_no_write", "stopped_uncertain"}
+    {
+        "pending",
+        "running",
+        "succeeded",
+        "isolated_pre_save_no_write",
+        "stopped_before_save_no_write",
+        "stopped_uncertain",
+    }
 )
 ITEM_CONTINUE_TERMINAL_STATUSES = frozenset({"succeeded", "isolated_pre_save_no_write"})
 ITEM_TERMINAL_STATUSES = frozenset(
-    {"succeeded", "isolated_pre_save_no_write", "stopped_uncertain"}
+    {
+        "succeeded",
+        "isolated_pre_save_no_write",
+        "stopped_before_save_no_write",
+        "stopped_uncertain",
+    }
 )
 
 START_CONTEXT_SCHEMA = "dxm_edit_batch_start_context.v1"
@@ -52,6 +64,7 @@ _ITEM_OUTCOME_EVIDENCE_KEYS = {
     "runtime_identity",
     "browser_session_id",
     "git_head",
+    "l2_evidence_fingerprint",
     "store_identity",
     "scope_page_identity",
     "action_page_identity",
@@ -70,6 +83,7 @@ _APPROVAL_CONTEXT_KEYS = {
     "ordered_targets",
     "store_identity",
     "runtime_identity",
+    "l2_evidence_fingerprint",
     "read_attestation",
     "approved_by",
     "confirmation",
@@ -93,6 +107,7 @@ _START_CONTEXT_KEYS = {
     "runtime_identity",
     "browser_session_id",
     "git_head",
+    "l2_evidence_fingerprint",
     "store_identity",
     "page_identity",
 }
@@ -112,6 +127,7 @@ _ITEM_GRANT_KEYS = {
     "runtime_identity",
     "browser_session_id",
     "git_head",
+    "l2_evidence_fingerprint",
     "page_identity",
     "mutation_scope_id",
     "grant_lease_id",
@@ -169,6 +185,10 @@ def normalize_approval_for_storage(approval: Any) -> dict[str, Any]:
     if context.get("lease_id") != lease_id:
         _reject("APPROVAL_STORAGE_BINDING_INVALID", "approval lease binding is inconsistent")
     fingerprint = _sha256_text(context.get("fingerprint"), "approval context fingerprint")
+    _sha256_text(
+        context.get("l2_evidence_fingerprint"),
+        "approval L2 evidence fingerprint",
+    )
     unsigned_context = dict(context)
     unsigned_context.pop("fingerprint", None)
     if not hmac.compare_digest(fingerprint, canonical_sha256(unsigned_context)):
@@ -231,6 +251,7 @@ def normalize_start_context_for_storage(
         "scope_digest": batch_row["scope_snapshot_digest"],
         "template_digest": batch_row["template_snapshot_digest"],
         "policy_digest": batch_row["policy_digest"],
+        "l2_evidence_fingerprint": approval_context.get("l2_evidence_fingerprint"),
     }
     if any(context.get(key) != value for key, value in expected.items()):
         _reject("START_CONTEXT_BINDING_INVALID", "start context does not match frozen approval facts")
@@ -253,6 +274,7 @@ def normalize_start_context_for_storage(
         "template_digest",
         "policy_digest",
         "ordered_target_digest",
+        "l2_evidence_fingerprint",
     ):
         _sha256_text(context.get(key), key)
     _reject_raw_secret_keys(context)
@@ -288,6 +310,7 @@ def normalize_item_grant_for_storage(
         "runtime_identity": start_context.get("runtime_identity"),
         "browser_session_id": start_context.get("browser_session_id"),
         "git_head": start_context.get("git_head"),
+        "l2_evidence_fingerprint": start_context.get("l2_evidence_fingerprint"),
         "page_identity": start_context.get("page_identity"),
     }
     if any(value.get(key) != expected_value for key, expected_value in expected.items()):
@@ -657,15 +680,21 @@ def build_public_progress(items: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         if status == "running" and current_ordinal is None:
             current_ordinal = int(item["ordinal"])
     total = len(rows)
-    finished = counts["succeeded"] + counts["isolated_pre_save_no_write"] + counts["stopped_uncertain"]
+    finished = (
+        counts["succeeded"]
+        + counts["isolated_pre_save_no_write"]
+        + counts["stopped_before_save_no_write"]
+        + counts["stopped_uncertain"]
+    )
     return {
         "total": total,
         "completed": finished,
         "succeeded": counts["succeeded"],
         "isolated": counts["isolated_pre_save_no_write"],
+        "stopped_before_save_no_write": counts["stopped_before_save_no_write"],
         "pending": counts["pending"],
         "running": counts["running"],
-        "stopped": counts["stopped_uncertain"],
+        "uncertain": counts["stopped_uncertain"],
         "current_ordinal": current_ordinal,
         "percent": int((finished * 100) / total) if total else 0,
     }
@@ -680,7 +709,6 @@ def build_public_execution(batch_row: Mapping[str, Any]) -> dict[str, Any]:
         "stopped_at": batch_row.get("stopped_at"),
         "completed_at": batch_row.get("completed_at"),
         "manual_review_required": bool(batch_row.get("manual_review_required")),
-        "reason_code": batch_row.get("execution_reason_code"),
     }
 
 
@@ -689,8 +717,6 @@ def build_public_item_outcome(item_row: Mapping[str, Any]) -> dict[str, Any] | N
     if not classification:
         return None
     return {
-        "classification": classification,
-        "reason_code": item_row.get("outcome_reason_code"),
         "finished_at": item_row.get("finished_at"),
         "manual_review_required": bool(item_row.get("manual_review_required")),
     }

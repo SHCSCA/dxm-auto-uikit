@@ -174,6 +174,7 @@ def authorize_batch_start(
             "runtime_identity",
             "browser_session_id",
             "git_head",
+            "l2_evidence_fingerprint",
             "store_identity",
             "page_identity",
         },
@@ -187,6 +188,8 @@ def authorize_batch_start(
         _reject("BROWSER_SESSION_DRIFT", "authoritative browser session has drifted")
     if live["git_head"] != scope["runtime_identity"].get("git_head"):
         _reject("GIT_HEAD_DRIFT", "authoritative git head has drifted")
+    if live["l2_evidence_fingerprint"] != context["l2_evidence_fingerprint"]:
+        _reject("L2_EVIDENCE_DRIFT", "authoritative L2 evidence has drifted")
     if live["store_identity"] != context["store_identity"] or live["store_identity"] != scope[
         "store_identity"
     ]:
@@ -209,6 +212,7 @@ def authorize_batch_start(
             "runtime_identity": live["runtime_identity"],
             "browser_session_id": live["browser_session_id"],
             "git_head": live["git_head"],
+            "l2_evidence_fingerprint": live["l2_evidence_fingerprint"],
             "store_identity": live["store_identity"],
             "page_identity": live["page_identity"],
         }
@@ -302,6 +306,7 @@ def derive_running_item_claim_context(
             "runtime_identity": start["runtime_identity"],
             "browser_session_id": start["browser_session_id"],
             "git_head": start["git_head"],
+            "l2_evidence_fingerprint": start["l2_evidence_fingerprint"],
             "page_identity": start["page_identity"],
         }
     )
@@ -358,6 +363,7 @@ def derive_next_item_grant(
         "runtime_identity": claim["runtime_identity"],
         "browser_session_id": claim["browser_session_id"],
         "git_head": claim["git_head"],
+        "l2_evidence_fingerprint": claim["l2_evidence_fingerprint"],
         "page_identity": claim["page_identity"],
         "mutation_scope_id": mutation_scope_id,
         "grant_lease_id": lease_id,
@@ -394,6 +400,7 @@ def validate_and_consume_item_grant(
         "runtime_identity",
         "browser_session_id",
         "git_head",
+        "l2_evidence_fingerprint",
         "page_identity",
         "mutation_scope_id",
         "grant_lease_id",
@@ -452,6 +459,7 @@ def validate_and_consume_item_grant(
         "runtime_identity",
         "browser_session_id",
         "git_head",
+        "l2_evidence_fingerprint",
         "page_identity",
         "mutation_scope_id",
         "grant_lease_id",
@@ -502,6 +510,7 @@ def classify_pre_save_no_write_outcome(claim_context: Any, outcome: Any) -> dict
             "runtime_identity",
             "browser_session_id",
             "git_head",
+            "l2_evidence_fingerprint",
             "page_identity",
         },
         "item claim context",
@@ -523,6 +532,7 @@ def classify_pre_save_no_write_outcome(claim_context: Any, outcome: Any) -> dict
                 "runtime_identity",
                 "browser_session_id",
                 "git_head",
+                "l2_evidence_fingerprint",
                 "store_identity",
                 "scope_page_identity",
                 "action_page_identity",
@@ -550,6 +560,7 @@ def classify_pre_save_no_write_outcome(claim_context: Any, outcome: Any) -> dict
         "runtime_identity",
         "browser_session_id",
         "git_head",
+        "l2_evidence_fingerprint",
         "store_identity",
         "target_identity_sha256",
     )
@@ -613,6 +624,7 @@ def classify_item_outcome(grant: Any, outcome: Any) -> dict[str, Any]:
         "runtime_identity",
         "browser_session_id",
         "git_head",
+        "l2_evidence_fingerprint",
         "page_identity",
         "mutation_scope_id",
         "grant_lease_id",
@@ -643,6 +655,7 @@ def classify_item_outcome(grant: Any, outcome: Any) -> dict[str, Any]:
                 "runtime_identity",
                 "browser_session_id",
                 "git_head",
+                "l2_evidence_fingerprint",
                 "store_identity",
                 "scope_page_identity",
                 "action_page_identity",
@@ -681,6 +694,7 @@ def classify_item_outcome(grant: Any, outcome: Any) -> dict[str, Any]:
         "runtime_identity",
         "browser_session_id",
         "git_head",
+        "l2_evidence_fingerprint",
         "store_identity",
         "target_identity_sha256",
         "mutation_scope_id",
@@ -717,7 +731,7 @@ def classify_item_outcome(grant: Any, outcome: Any) -> dict[str, Any]:
             and evidence["validation_reason"] is None
             and evidence["ledger_status"] == "DISPATCHED"
             and evidence["save_proven"] is True
-            and mutation_count == 1
+            and mutation_count >= 1
             and evidence["action_page_identity"] is None
             and isinstance(save_page, dict)
             and save_page == verification_page
@@ -838,6 +852,7 @@ def _approval_context(value: Any) -> dict[str, Any]:
             "ordered_targets",
             "store_identity",
             "runtime_identity",
+            "l2_evidence_fingerprint",
             "read_attestation",
             "approved_by",
             "confirmation",
@@ -854,6 +869,10 @@ def _approval_context(value: Any) -> dict[str, Any]:
         if not isinstance(context[key], dict):
             _reject("APPROVAL_CONTEXT_INVALID", f"approval context {key} is invalid")
     _sha256_text(context["fingerprint"], "approval context fingerprint")
+    _sha256_text(
+        context["l2_evidence_fingerprint"],
+        "approval L2 evidence fingerprint",
+    )
     _non_empty_text(context["lease_id"], "approval lease id")
     _timestamp(context["issued_at"], "approval issued_at")
     _timestamp(context["expires_at"], "approval expires_at")
@@ -877,6 +896,7 @@ def _execution_start_context(value: Any) -> dict[str, Any]:
             "runtime_identity",
             "browser_session_id",
             "git_head",
+            "l2_evidence_fingerprint",
             "store_identity",
             "page_identity",
         },
@@ -893,6 +913,7 @@ def _execution_start_context(value: Any) -> dict[str, Any]:
         "template_digest",
         "policy_digest",
         "ordered_target_digest",
+        "l2_evidence_fingerprint",
     ):
         _sha256_text(start[key], key)
     _non_empty_text(start["approval_lease_id"], "approval lease id")

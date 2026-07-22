@@ -11,6 +11,7 @@ from src.core.config import SCREENSHOT_DIR
 from src.db import connection, dumps, loads, recover_interrupted_edit_batches as recover_edit_batches_in_db
 from src.batch_edit.execution_state import (
     ITEM_CONTINUE_TERMINAL_STATUSES,
+    ITEM_TERMINAL_STATUSES,
     EditBatchExecutionPersistenceError,
     EditBatchExecutionTransitionResult,
     build_public_execution,
@@ -108,6 +109,24 @@ def _exact_positive_int(value: Any) -> int:
     return value
 
 
+def _published_to_db(value: bool | None) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise ValueError("published must be true, false, or null")
+    return int(value)
+
+
+def _published_from_db(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if value == 0:
+        return False
+    if value == 1:
+        return True
+    raise ValueError("reports.published contains an invalid tri-state value")
+
+
 class Repository:
     def list_stores(self):
         with connection() as conn:
@@ -128,6 +147,9 @@ class Repository:
             for row in rows:
                 row['payload'] = loads(row.pop('payload_json'), {})
                 row['is_enabled'] = bool(row['is_enabled'])
+                row['requires_manual_configuration'] = bool(
+                    row.get('requires_manual_configuration')
+                )
             return rows
 
     def create_template(self, data: dict[str, Any]):
@@ -142,6 +164,9 @@ class Repository:
             row = conn.execute("SELECT * FROM templates WHERE id=?", (cur.lastrowid,)).fetchone()
             row['payload'] = loads(row.pop('payload_json'), {})
             row['is_enabled'] = bool(row['is_enabled'])
+            row['requires_manual_configuration'] = bool(
+                row.get('requires_manual_configuration')
+            )
             return row
 
     def update_template(self, template_id: int, data: dict[str, Any]):
@@ -155,16 +180,37 @@ class Repository:
             'payload': data['payload'] if data.get('payload') is not None else current['payload'],
             'is_enabled': current['is_enabled'] if data.get('is_enabled') is None else bool(data['is_enabled']),
         }
+        material_changed = (
+            'payload' in data
+            and data.get('payload') is not None
+            and data.get('payload') != current.get('payload')
+        )
+        requires_manual_configuration = bool(
+            current.get('requires_manual_configuration') and not material_changed
+        )
+        quarantine_reason = (
+            current.get('quarantine_reason')
+            if requires_manual_configuration
+            else None
+        )
         now = now_iso()
         with connection() as conn:
             conn.execute(
-                "UPDATE templates SET template_type=?, template_name=?, binding_scope=?, payload_json=?, is_enabled=?, updated_at=? WHERE id=?",
+                """
+                UPDATE templates
+                   SET template_type=?, template_name=?, binding_scope=?, payload_json=?,
+                       is_enabled=?, requires_manual_configuration=?, quarantine_reason=?,
+                       updated_at=?
+                 WHERE id=?
+                """,
                 (
                     next_payload['template_type'],
                     next_payload['template_name'],
                     next_payload['binding_scope'],
                     dumps(next_payload['payload']),
                     int(next_payload['is_enabled']),
+                    int(requires_manual_configuration),
+                    quarantine_reason,
                     now,
                     template_id,
                 ),
@@ -178,6 +224,9 @@ class Repository:
                 return None
             row['payload'] = loads(row.pop('payload_json'), {})
             row['is_enabled'] = bool(row['is_enabled'])
+            row['requires_manual_configuration'] = bool(
+                row.get('requires_manual_configuration')
+            )
             return row
 
     def create_draft_box_scope_snapshot(self, snapshot: dict[str, Any]):
@@ -196,11 +245,12 @@ class Repository:
                     now,
                 ),
             )
-            return {
+            stored = {
                 'id': int(cur.lastrowid),
                 **snapshot,
                 'created_at': now,
             }
+            return self._public_draft_box_scope_snapshot(stored)
 
     def get_draft_box_scope_snapshot(self, snapshot_id: int):
         with connection() as conn:
@@ -216,6 +266,34 @@ class Repository:
                 **snapshot,
                 'created_at': row['created_at'],
             }
+
+    @staticmethod
+    def _public_draft_box_scope_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+        page = snapshot.get('page_identity') if isinstance(snapshot.get('page_identity'), dict) else {}
+        store = snapshot.get('store_identity') if isinstance(snapshot.get('store_identity'), dict) else {}
+        return {
+            'id': snapshot.get('id'),
+            'observed_at': snapshot.get('observed_at'),
+            'created_at': snapshot.get('created_at'),
+            'page_identity': {
+                'url': page.get('url'),
+                'title': page.get('title'),
+            },
+            'store_name': store.get('store_name'),
+            'filter_state': snapshot.get('filter_state'),
+            'sort_state': snapshot.get('sort_state'),
+            'page_state': snapshot.get('page_state'),
+            'items': [
+                {
+                    'ordinal': item.get('ordinal'),
+                    'title': item.get('title'),
+                    'dxm_product_id': item.get('dxm_product_id'),
+                }
+                for item in snapshot.get('items') or []
+                if isinstance(item, dict)
+            ],
+            'zero_write_proof': snapshot.get('zero_write_proof'),
+        }
 
     def create_edit_batch(self, data: dict[str, Any]):
         now = now_iso()
@@ -801,7 +879,7 @@ class Repository:
                 if not item:
                     return self._edit_batch_execution_failure("BATCH_ITEM_NOT_FOUND")
 
-                if item["status"] in ITEM_CONTINUE_TERMINAL_STATUSES | {"stopped_uncertain"}:
+                if item["status"] in ITEM_TERMINAL_STATUSES:
                     try:
                         replay_decision = normalize_execution_evidence_for_storage(decision)
                         replay_outcome = normalize_execution_evidence_for_storage(outcome)
@@ -1004,7 +1082,7 @@ class Repository:
         evidence: dict[str, Any] | None = None,
         action_results: list[dict[str, Any]] | None = None,
     ) -> EditBatchExecutionTransitionResult:
-        """Finalize stop_requested -> stopped; a live item becomes manual-review only."""
+        """Finalize an active batch and classify a running item from durable dispatch facts."""
         stopped_at = now_iso()
         try:
             canonical_reason = self._edit_batch_reason_code(reason_code)
@@ -1033,40 +1111,72 @@ class Repository:
             ).fetchall()
             if len(running_items) > 1:
                 return self._edit_batch_execution_failure("MULTIPLE_BATCH_ITEMS_RUNNING")
-            manual_review = bool(requires_manual_review or running_items)
+            safe_stop_evidence: dict[str, Any] | None = None
+            if running_items and not requires_manual_review:
+                safe_stop_evidence = self._edit_batch_safe_pre_dispatch_stop_evidence(
+                    conn,
+                    batch_row=batch,
+                    item_row=running_items[0],
+                    reason_code=canonical_reason,
+                    detail=detail,
+                    stopped_at=stopped_at,
+                )
+            running_item_safe = safe_stop_evidence is not None
+            manual_review = bool(
+                requires_manual_review or (running_items and not running_item_safe)
+            )
             if running_items:
                 item = running_items[0]
-                safe_evidence = evidence or {
-                    "schema_version": "dxm_edit_batch_stop_evidence.v1",
-                    "reason_code": canonical_reason,
-                    "detail": detail,
-                    "stopped_at": stopped_at,
-                    "retry_allowed": False,
-                }
+                stop_evidence = (
+                    safe_stop_evidence
+                    if running_item_safe
+                    else evidence
+                    or {
+                        "schema_version": "dxm_edit_batch_stop_evidence.v1",
+                        "reason_code": canonical_reason,
+                        "detail": detail,
+                        "stopped_at": stopped_at,
+                        "retry_allowed": False,
+                        "zero_dispatch_proven": False,
+                    }
+                )
                 safe_actions = action_results or []
                 try:
-                    canonical_evidence = normalize_execution_evidence_for_storage(safe_evidence)
+                    canonical_evidence = normalize_execution_evidence_for_storage(stop_evidence)
                     canonical_actions = normalize_action_results_for_storage(safe_actions)
                 except EditBatchExecutionPersistenceError:
                     return self._edit_batch_execution_failure("STOP_EVIDENCE_INVALID")
+                item_status = (
+                    "stopped_before_save_no_write"
+                    if running_item_safe
+                    else "stopped_uncertain"
+                )
+                classification = (
+                    "STOPPED_BEFORE_SAVE_NO_WRITE"
+                    if running_item_safe
+                    else "STOPPED_UNCERTAIN"
+                )
                 item_cursor = conn.execute(
                     """
                     UPDATE edit_batch_items
-                       SET status='stopped_uncertain',
-                           outcome_classification='STOPPED_UNCERTAIN',
+                       SET status=?,
+                           outcome_classification=?,
                            outcome_reason_code=?,
                            outcome_evidence_json=?,
                            action_results_json=?,
                            finished_at=?,
-                           manual_review_required=1,
+                           manual_review_required=?,
                            updated_at=?
                      WHERE id=? AND batch_id=? AND status='running'
                     """,
                     (
+                        item_status,
+                        classification,
                         canonical_reason,
                         dumps(canonical_evidence),
                         dumps(canonical_actions),
                         stopped_at,
+                        int(manual_review),
                         stopped_at,
                         item["id"],
                         batch_id,
@@ -1256,6 +1366,195 @@ class Repository:
              LIMIT 1
             """
         ).fetchone() is not None
+
+    @classmethod
+    def _edit_batch_safe_pre_dispatch_stop_evidence(
+        cls,
+        conn: Any,
+        *,
+        batch_row: dict[str, Any],
+        item_row: dict[str, Any],
+        reason_code: str,
+        detail: str | None,
+        stopped_at: str,
+    ) -> dict[str, Any] | None:
+        """Prove zero dispatch and terminate an exact RESERVED row in one write txn."""
+
+        authority_columns = (
+            "grant_lease_id",
+            "grant_fingerprint",
+            "grant_nonce_hash",
+            "mutation_scope_id",
+            "grant_context_json",
+            "granted_at",
+            "grant_expires_at",
+        )
+        scope_id = item_row.get("mutation_scope_id")
+        if scope_id is None:
+            ledger_rows = conn.execute(
+                """
+                SELECT * FROM mutation_dispatch_ledger
+                 WHERE task_id=? AND job_id=?
+                 ORDER BY id ASC
+                """,
+                (str(batch_row["id"]), str(item_row["id"])),
+            ).fetchall()
+        else:
+            ledger_rows = conn.execute(
+                """
+                SELECT * FROM mutation_dispatch_ledger
+                 WHERE (task_id=? AND job_id=?) OR mutation_scope_id=?
+                 ORDER BY id ASC
+                """,
+                (str(batch_row["id"]), str(item_row["id"]), str(scope_id)),
+            ).fetchall()
+
+        authority_present = [item_row.get(column) is not None for column in authority_columns]
+        if item_row.get("grant_consumed_at") is not None:
+            return None
+        if not any(authority_present):
+            if ledger_rows:
+                return None
+            return {
+                "schema_version": "dxm_edit_batch_stop_evidence.v1",
+                "classification": "STOPPED_BEFORE_SAVE_NO_WRITE",
+                "reason_code": reason_code,
+                "detail": detail,
+                "stopped_at": stopped_at,
+                "retry_allowed": False,
+                "grant_issued": False,
+                "grant_consumed": False,
+                "ledger_status": None,
+                "zero_dispatch_proven": True,
+            }
+        if not all(authority_present):
+            return None
+
+        stored_grant = loads(item_row.get("grant_context_json"), None)
+        start_context = loads(batch_row.get("start_context_json"), None)
+        if not isinstance(stored_grant, dict) or not isinstance(start_context, dict):
+            return None
+        try:
+            normalized_grant = normalize_item_grant_for_storage(
+                stored_grant,
+                batch_row=batch_row,
+                item_row=item_row,
+                start_context=start_context,
+            )
+        except EditBatchExecutionPersistenceError:
+            return None
+        if normalized_grant != stored_grant:
+            return None
+        item_binding = {
+            "grant_lease_id": normalized_grant.get("grant_lease_id"),
+            "grant_fingerprint": normalized_grant.get("fingerprint"),
+            "grant_nonce_hash": normalized_grant.get("nonce_hash"),
+            "mutation_scope_id": normalized_grant.get("mutation_scope_id"),
+            "granted_at": normalized_grant.get("issued_at"),
+            "grant_expires_at": normalized_grant.get("expires_at"),
+        }
+        if any(item_row.get(key) != value for key, value in item_binding.items()):
+            return None
+        granted = cls._edit_batch_ledger_time(item_row.get("granted_at"))
+        stopped = cls._edit_batch_ledger_time(stopped_at)
+        if granted is None or stopped is None or granted > stopped:
+            return None
+        if not ledger_rows:
+            return {
+                "schema_version": "dxm_edit_batch_stop_evidence.v1",
+                "classification": "STOPPED_BEFORE_SAVE_NO_WRITE",
+                "reason_code": reason_code,
+                "detail": detail,
+                "stopped_at": stopped_at,
+                "retry_allowed": False,
+                "grant_issued": True,
+                "grant_consumed": False,
+                "ledger_status": None,
+                "zero_dispatch_proven": True,
+            }
+        if len(ledger_rows) != 1:
+            return None
+        ledger_row = ledger_rows[0]
+        rejection = cls._edit_batch_ledger_binding_rejection(
+            ledger_row,
+            batch_id=int(batch_row["id"]),
+            item_id=int(item_row["id"]),
+            item_row=item_row,
+            stored_grant=normalized_grant,
+        )
+        if rejection is not None:
+            return None
+        reserved = cls._edit_batch_ledger_time(ledger_row.get("reserved_at"))
+        if reserved is None or not granted <= reserved <= stopped:
+            return None
+        dispatch_fields = (
+            "dispatch_started_at",
+            "dispatched_at",
+            "unknown_at",
+            "browser_session_id",
+            "page_url",
+            "page_kind",
+        )
+        if any(ledger_row.get(key) is not None for key in dispatch_fields):
+            return None
+        ledger_status = str(ledger_row.get("status") or "")
+        if ledger_status == "RESERVED":
+            if ledger_row.get("outcome_json") is not None:
+                return None
+            cancellation = {
+                "classification": "CANCELLED_BEFORE_DISPATCH",
+                "reason_code": reason_code,
+                "cancelled_at": stopped_at,
+                "external_dispatch_started": False,
+            }
+            cursor = conn.execute(
+                """
+                UPDATE mutation_dispatch_ledger
+                   SET status='CANCELLED_BEFORE_DISPATCH',
+                       outcome_json=?, updated_at=?
+                 WHERE id=?
+                   AND mutation_scope_id=?
+                   AND mutation_action='save_only_click'
+                   AND status='RESERVED'
+                   AND dispatch_started_at IS NULL
+                   AND dispatched_at IS NULL
+                   AND unknown_at IS NULL
+                   AND outcome_json IS NULL
+                   AND browser_session_id IS NULL
+                   AND page_url IS NULL
+                   AND page_kind IS NULL
+                """,
+                (
+                    dumps(cancellation),
+                    stopped_at,
+                    ledger_row["id"],
+                    normalized_grant["mutation_scope_id"],
+                ),
+            )
+            if cursor.rowcount != 1:
+                return None
+        elif ledger_status == "CANCELLED_BEFORE_DISPATCH":
+            cancellation = loads(ledger_row.get("outcome_json"), None)
+            if (
+                not isinstance(cancellation, dict)
+                or cancellation.get("classification") != "CANCELLED_BEFORE_DISPATCH"
+                or cancellation.get("external_dispatch_started") is not False
+            ):
+                return None
+        else:
+            return None
+        return {
+            "schema_version": "dxm_edit_batch_stop_evidence.v1",
+            "classification": "STOPPED_BEFORE_SAVE_NO_WRITE",
+            "reason_code": reason_code,
+            "detail": detail,
+            "stopped_at": stopped_at,
+            "retry_allowed": False,
+            "grant_issued": True,
+            "grant_consumed": False,
+            "ledger_status": "CANCELLED_BEFORE_DISPATCH",
+            "zero_dispatch_proven": True,
+        }
 
     @staticmethod
     def _edit_batch_ledger_row(conn: Any, mutation_scope_id: str) -> dict[str, Any] | None:
@@ -2999,7 +3298,7 @@ class Repository:
         job_id: int | None,
         product_id: int | None,
         status: str,
-        published: bool,
+        published: bool | None,
         save_result: dict[str, Any],
         summary: dict[str, Any],
     ):
@@ -3025,7 +3324,7 @@ class Repository:
         job_id: int,
         product_id: int | None,
         *,
-        published: bool,
+        published: bool | None,
         save_result: dict[str, Any],
         summary: dict[str, Any],
     ) -> JobFinalizationResult:
@@ -3147,7 +3446,7 @@ class Repository:
                                 job_id,
                                 product_id,
                                 "failed",
-                                False,
+                                None,
                                 save_result,
                                 summary,
                                 now,
@@ -3224,11 +3523,12 @@ class Repository:
         job_id: int | None,
         product_id: int | None,
         status: str,
-        published: bool,
+        published: bool | None,
         save_result: dict[str, Any],
         summary: dict[str, Any],
         now: str,
     ) -> int:
+        published_db = _published_to_db(published)
         existing = conn.execute(
             "SELECT id, status FROM reports WHERE task_id=? AND job_id IS ? ORDER BY id LIMIT 1",
             (task_id, job_id),
@@ -3244,7 +3544,7 @@ class Repository:
                 SET product_id=?, status=?, published=?, save_result_json=?, summary_json=?, updated_at=?
                 WHERE id=?
                 """,
-                (product_id, status, int(published), dumps(save_result), dumps(summary), now, existing['id']),
+                (product_id, status, published_db, dumps(save_result), dumps(summary), now, existing['id']),
             )
             return int(existing['id'])
         cur = conn.execute(
@@ -3254,7 +3554,7 @@ class Repository:
                 save_result_json, summary_json, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (task_id, job_id, product_id, status, int(published), dumps(save_result), dumps(summary), now, now),
+            (task_id, job_id, product_id, status, published_db, dumps(save_result), dumps(summary), now, now),
         )
         return int(cur.lastrowid)
 
@@ -3263,7 +3563,7 @@ class Repository:
             row = conn.execute("SELECT * FROM reports WHERE id=?", (report_id,)).fetchone()
             if not row:
                 return None
-            row['published'] = bool(row['published'])
+            row['published'] = _published_from_db(row['published'])
             row['save_result'] = loads(row.pop('save_result_json'), {})
             row['summary'] = loads(row.pop('summary_json'), {})
             return row
@@ -3275,7 +3575,7 @@ class Repository:
             else:
                 rows = conn.execute("SELECT * FROM reports WHERE task_id=? ORDER BY id ASC", (task_id,)).fetchall()
             for row in rows:
-                row['published'] = bool(row['published'])
+                row['published'] = _published_from_db(row['published'])
                 row['save_result'] = loads(row.pop('save_result_json'), {})
                 row['summary'] = loads(row.pop('summary_json'), {})
             return rows

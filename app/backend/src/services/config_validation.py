@@ -394,7 +394,10 @@ class ConfigValidationService:
         return self._normalize_template_key(template)
 
     def _is_template_enabled(self, template: Mapping[str, Any]) -> bool:
-        return bool(template.get("is_enabled", template.get("enabled", True)))
+        return bool(
+            template.get("is_enabled", template.get("enabled", True))
+            and template.get("requires_manual_configuration") is not True
+        )
 
     def _normalize_template_key(self, value: Any) -> str:
         normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")

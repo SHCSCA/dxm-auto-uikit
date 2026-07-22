@@ -63,6 +63,8 @@ def init_db() -> None:
                 binding_scope TEXT NOT NULL,
                 payload_json TEXT NOT NULL,
                 is_enabled INTEGER NOT NULL DEFAULT 1,
+                requires_manual_configuration INTEGER NOT NULL DEFAULT 0,
+                quarantine_reason TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -150,7 +152,7 @@ def init_db() -> None:
                 job_id INTEGER,
                 product_id INTEGER,
                 status TEXT NOT NULL,
-                published INTEGER NOT NULL DEFAULT 0,
+                published INTEGER CHECK (published IS NULL OR published IN (0, 1)),
                 save_result_json TEXT NOT NULL,
                 summary_json TEXT NOT NULL,
                 created_at TEXT NOT NULL,
@@ -410,6 +412,14 @@ def init_db() -> None:
         )
         _ensure_columns(
             conn,
+            "templates",
+            {
+                "requires_manual_configuration": "INTEGER NOT NULL DEFAULT 0",
+                "quarantine_reason": "TEXT",
+            },
+        )
+        _ensure_columns(
+            conn,
             "ownership_locks",
             {
                 "lock_owner_run_id": "TEXT",
@@ -424,12 +434,14 @@ def init_db() -> None:
             "reports",
             {
                 "product_id": "INTEGER",
-                "published": "INTEGER NOT NULL DEFAULT 0",
+                "published": "INTEGER",
                 "save_result_json": "TEXT NOT NULL DEFAULT '{}'",
                 "summary_json": "TEXT NOT NULL DEFAULT '{}'",
             },
         )
+        migrate_reports_published_to_tristate(conn)
         disable_legacy_generated_starter_templates(conn)
+        disable_edit_batch_bundles_with_quarantined_sources(conn)
         disable_unexecutable_edit_batch_bundles(conn)
 
 
@@ -441,6 +453,65 @@ def _ensure_columns(conn: sqlite3.Connection, table_name: str, columns: dict[str
     for column_name, column_definition in columns.items():
         if column_name not in existing:
             conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}")
+
+
+def migrate_reports_published_to_tristate(conn: sqlite3.Connection) -> bool:
+    """Replace legacy default-false publication state with nullable truth."""
+
+    published_column = next(
+        (
+            row
+            for row in conn.execute("PRAGMA table_info(reports)").fetchall()
+            if row["name"] == "published"
+        ),
+        None,
+    )
+    if published_column is None:
+        conn.execute("ALTER TABLE reports ADD COLUMN published INTEGER")
+        return True
+    if (
+        int(published_column.get("notnull") or 0) == 0
+        and published_column.get("dflt_value") is None
+    ):
+        return False
+
+    # Every historical zero came from a NOT NULL DEFAULT 0 schema, so it cannot
+    # prove that a save completed without publishing. Preserve only explicit
+    # historical true; current code may write false again after a trusted save
+    # and independent no-publish verification.
+    conn.execute("ALTER TABLE reports RENAME TO reports__legacy_published")
+    conn.execute(
+        """
+        CREATE TABLE reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER NOT NULL,
+            job_id INTEGER,
+            product_id INTEGER,
+            status TEXT NOT NULL,
+            published INTEGER CHECK (published IS NULL OR published IN (0, 1)),
+            save_result_json TEXT NOT NULL,
+            summary_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO reports (
+            id, task_id, job_id, product_id, status, published,
+            save_result_json, summary_json, created_at, updated_at
+        )
+        SELECT
+            id, task_id, job_id, product_id, status,
+            CASE WHEN published = 1 THEN 1 ELSE NULL END,
+            save_result_json, summary_json, created_at, updated_at
+          FROM reports__legacy_published
+         ORDER BY id ASC
+        """
+    )
+    conn.execute("DROP TABLE reports__legacy_published")
+    return True
 
 
 def disable_legacy_generated_starter_templates(conn: sqlite3.Connection) -> list[int]:
@@ -484,19 +555,95 @@ def disable_legacy_generated_starter_templates(conn: sqlite3.Connection) -> list
             for row, _template_type in cohort
             if int(row.get("is_enabled") or 0) == 1
         )
-    if not matched_ids:
-        return []
-    disabled_at = datetime.now(timezone.utc).isoformat()
+    quarantined_at = datetime.now(timezone.utc).isoformat()
+    candidate_ids = [
+        int(row["id"])
+        for cohort in cohorts.values()
+        for row, _template_type in cohort
+    ]
+    for template_id in candidate_ids:
+        conn.execute(
+            """
+            UPDATE templates
+               SET requires_manual_configuration=1,
+                   quarantine_reason='LEGACY_STARTER_REQUIRES_MANUAL_CONFIGURATION',
+                   updated_at=?
+             WHERE id=?
+               AND requires_manual_configuration=0
+            """,
+            (quarantined_at, template_id),
+        )
     for template_id in matched_ids:
         conn.execute(
             """
             UPDATE templates
-               SET is_enabled=0, updated_at=?
-             WHERE id=? AND is_enabled=1
+               SET is_enabled=0,
+                   requires_manual_configuration=1,
+                   quarantine_reason='LEGACY_GENERATED_STARTER_EXACT_MATCH',
+                   updated_at=?
+             WHERE id=?
             """,
-            (disabled_at, template_id),
+            (quarantined_at, template_id),
         )
     return matched_ids
+
+
+def disable_edit_batch_bundles_with_quarantined_sources(
+    conn: sqlite3.Connection,
+) -> list[int]:
+    quarantined_source_ids = {
+        int(row["id"])
+        for row in conn.execute(
+            """
+            SELECT id FROM templates
+             WHERE requires_manual_configuration=1
+               AND template_type<>'edit_batch_bundle'
+            """
+        ).fetchall()
+    }
+    if not quarantined_source_ids:
+        return []
+    rows = conn.execute(
+        """
+        SELECT id, payload_json FROM templates
+         WHERE template_type='edit_batch_bundle'
+        """
+    ).fetchall()
+    affected: list[int] = []
+    for row in rows:
+        try:
+            payload = json.loads(str(row.get("payload_json") or ""))
+        except (TypeError, ValueError):
+            continue
+        sources = payload.get("source_templates") if isinstance(payload, dict) else None
+        if not isinstance(sources, dict):
+            continue
+        referenced_ids = {
+            int(source["template_id"])
+            for source in sources.values()
+            if isinstance(source, dict)
+            and isinstance(source.get("template_id"), int)
+            and not isinstance(source.get("template_id"), bool)
+        }
+        if not referenced_ids.intersection(quarantined_source_ids):
+            continue
+        affected.append(int(row["id"]))
+    if not affected:
+        return []
+    updated_at = datetime.now(timezone.utc).isoformat()
+    for template_id in affected:
+        conn.execute(
+            """
+            UPDATE templates
+               SET is_enabled=0,
+                   requires_manual_configuration=1,
+                   quarantine_reason='BUNDLE_REFERENCES_QUARANTINED_SOURCE',
+                   updated_at=?
+             WHERE id=?
+            """,
+            (updated_at, template_id),
+        )
+    return affected
 
 
 def disable_unexecutable_edit_batch_bundles(conn: sqlite3.Connection) -> list[int]:
