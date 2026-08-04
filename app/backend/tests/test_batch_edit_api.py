@@ -895,558 +895,152 @@ def test_edit_batch_read_api_is_newest_first_and_missing_detail_is_404(tmp_path,
     assert missing.json()["detail"] == "Edit batch not found"
 
 
-def test_operator_can_approve_unchanged_live_batch_scope_once(tmp_path, monkeypatch):
-    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name="batch-manual-approval.db",
-    )
-    assert create_response.status_code == 201
-    batch = create_response.json()
-
-    response = client.post(
-        f"/api/edit-batches/{batch['id']}/manual-approval",
-        json={
-            "approved_by": "operator@example.com",
-            "confirmation": "CONFIRM_DXM_BATCH_SAVE_ONLY",
-        },
-    )
-
-    assert response.status_code == 200
-    approval = response.json()
-    assert approval["ok"] is True
-    assert approval["batchId"] == batch["id"]
-    assert approval["confirmation"] == "CONFIRM_DXM_BATCH_SAVE_ONLY"
-    assert approval["approvedBy"] == "operator@example.com"
-    assert isinstance(approval["approvalToken"], str)
-    assert len(approval["approvalToken"]) >= 32
-    assert approval["issuedAt"]
-    assert approval["expiresAt"]
-    assert approval["scopeRevalidation"]["kind"] == "scope_revalidation"
-    assert approval["scopeRevalidation"]["status"] == "matched"
-
-    approved_batch = client.get(f"/api/edit-batches/{batch['id']}").json()
-    assert approved_batch["status"] == "approved"
-
-
-def test_batch_approval_recaptures_frozen_max_items_when_visible_count_is_smaller(
-    tmp_path,
-    monkeypatch,
-):
-    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name="batch-frozen-max-items.db",
-        max_items=5,
-    )
-    batch = create_response.json()
-    import src.main as main
-
-    assert batch["scope_snapshot"]["page_state"]["captured_count"] == 2
-    assert batch["scope_snapshot"]["page_state"]["max_items"] == 5
-
-    response = client.post(
-        f"/api/edit-batches/{batch['id']}/manual-approval",
-        json={
-            "approved_by": "operator@example.com",
-            "confirmation": "CONFIRM_DXM_BATCH_SAVE_ONLY",
-        },
-    )
-
-    assert response.status_code == 200
-    assert main.workflow_adapter.max_items == [5, 5]
-
-
-def test_batch_approval_rejects_any_confirmation_other_than_exact_phrase(tmp_path, monkeypatch):
-    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name="batch-wrong-confirmation.db",
-    )
-    batch = create_response.json()
-
-    response = client.post(
-        f"/api/edit-batches/{batch['id']}/manual-approval",
-        json={
-            "approved_by": "operator@example.com",
-            "confirmation": "确认批量保存",
-        },
-    )
-
-    assert response.status_code == 400
-    assert client.get(f"/api/edit-batches/{batch['id']}").json()["status"] == "draft"
-
-
-def test_batch_approval_request_forbids_client_supplied_scope_or_policy(tmp_path, monkeypatch):
-    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name="batch-approval-extra-fields.db",
-    )
-    batch = create_response.json()
-
-    response = client.post(
-        f"/api/edit-batches/{batch['id']}/manual-approval",
-        json={
-            "approved_by": "operator@example.com",
-            "confirmation": "CONFIRM_DXM_BATCH_SAVE_ONLY",
-            "scope_snapshot_id": 999,
-        },
-    )
-
-    assert response.status_code == 422
-    assert client.get(f"/api/edit-batches/{batch['id']}").json()["status"] == "draft"
-
-
-@pytest.mark.parametrize(
-    "approval_payload",
-    [
-        {
-            "approved_by": "a" * 201,
-            "confirmation": "CONFIRM_DXM_BATCH_SAVE_ONLY",
-        },
-        {
-            "approved_by": "operator@example.com",
-            "confirmation": "C" * 65,
-        },
-    ],
-)
-def test_batch_approval_request_rejects_unbounded_operator_input(
-    tmp_path,
-    monkeypatch,
-    approval_payload,
-):
-    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name=(
-            "batch-approval-input-"
-            f"{len(approval_payload['approved_by'])}-{len(approval_payload['confirmation'])}.db"
-        ),
-    )
-    batch = create_response.json()
-    import src.main as main
-
-    response = client.post(
-        f"/api/edit-batches/{batch['id']}/manual-approval",
-        json=approval_payload,
-    )
-
-    assert response.status_code == 422
-    assert main.workflow_adapter.max_items == [2]
-
-
-def test_batch_approval_fails_closed_when_browser_session_drifts(tmp_path, monkeypatch):
-    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name="batch-session-drift.db",
-    )
-    batch = create_response.json()
-    import src.main as main
-
-    capture = main.workflow_adapter.capture
-    capture["browser_session_id"] = "browser-session-2"
-    capture["facts"]["runtime"]["browser_session_id"] = "browser-session-2"
-    for item in capture["items"]:
-        item["evidence_ref"]["browser_session_id"] = "browser-session-2"
-    _refresh_capture_evidence(capture)
-
-    response = client.post(
-        f"/api/edit-batches/{batch['id']}/manual-approval",
-        json={
-            "approved_by": "operator@example.com",
-            "confirmation": "CONFIRM_DXM_BATCH_SAVE_ONLY",
-        },
-    )
-
-    assert response.status_code == 409
-    assert response.json()["detail"]["reason_code"] == "BATCH_RUNTIME_DRIFT"
-    assert client.get(f"/api/edit-batches/{batch['id']}").json()["status"] == "draft"
-
-
-@pytest.mark.parametrize("drift_kind", ["runtime_instance", "browser_runtime", "git_head"])
-def test_batch_approval_fails_closed_when_authoritative_runtime_drifts(
-    tmp_path,
-    monkeypatch,
-    drift_kind,
-):
-    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name=f"batch-{drift_kind}-drift.db",
-    )
-    batch = create_response.json()
-    import src.main as main
-
-    if drift_kind == "browser_runtime":
-        class DriftedBrowserRuntime:
-            runtime_id = "browser-runtime-after-freeze"
-
-        monkeypatch.setattr(main, "browser_agent_runtime", DriftedBrowserRuntime())
-    else:
-        changed = dict(main.runtime_identity.as_dict())
-        changed[
-            "instanceId" if drift_kind == "runtime_instance" else "gitHead"
-        ] = f"{drift_kind}-after-freeze"
-
-        class DriftedRuntimeIdentity:
-            def as_dict(self):
-                return changed
-
-        monkeypatch.setattr(main, "runtime_identity", DriftedRuntimeIdentity())
-
-    response = client.post(
-        f"/api/edit-batches/{batch['id']}/manual-approval",
-        json={
-            "approved_by": "operator@example.com",
-            "confirmation": "CONFIRM_DXM_BATCH_SAVE_ONLY",
-        },
-    )
-
-    assert response.status_code == 409
-    assert response.json()["detail"]["reason_code"] == "BATCH_RUNTIME_DRIFT"
-
-
-def test_batch_approval_fails_closed_when_draft_box_page_identity_drifts(tmp_path, monkeypatch):
-    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name="batch-page-drift.db",
-    )
-    batch = create_response.json()
-    import src.main as main
-
-    capture = main.workflow_adapter.capture
-    capture["page"]["title"] = "店小秘--另一个商品箱视图"
-    _refresh_capture_evidence(capture)
-
-    response = client.post(
-        f"/api/edit-batches/{batch['id']}/manual-approval",
-        json={
-            "approved_by": "operator@example.com",
-            "confirmation": "CONFIRM_DXM_BATCH_SAVE_ONLY",
-        },
-    )
-
-    assert response.status_code == 409
-    assert response.json()["detail"]["reason_code"] == "BATCH_PAGE_DRIFT"
-
-
-def test_batch_approval_fails_closed_when_ordered_targets_drift(tmp_path, monkeypatch):
-    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name="batch-target-order-drift.db",
-    )
-    batch = create_response.json()
-    import src.main as main
-
-    capture = main.workflow_adapter.capture
-    capture["items"] = list(reversed(capture["items"]))
-    for position, item in enumerate(capture["items"], start=1):
-        item["position"] = position
-    _refresh_capture_evidence(capture)
-
-    response = client.post(
-        f"/api/edit-batches/{batch['id']}/manual-approval",
-        json={
-            "approved_by": "operator@example.com",
-            "confirmation": "CONFIRM_DXM_BATCH_SAVE_ONLY",
-        },
-    )
-
-    assert response.status_code == 409
-    assert response.json()["detail"]["reason_code"] == "BATCH_TARGET_ORDER_DRIFT"
-
-
-def test_batch_approval_fails_closed_when_live_dom_double_digest_drifts(tmp_path, monkeypatch):
-    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name="batch-dom-drift.db",
-    )
-    batch = create_response.json()
-    import src.main as main
-
-    capture = main.workflow_adapter.capture
-    capture["items"][0]["title"] = "同一目标但页面可见标题已变化"
-    _refresh_capture_evidence(capture)
-
-    response = client.post(
-        f"/api/edit-batches/{batch['id']}/manual-approval",
-        json={
-            "approved_by": "operator@example.com",
-            "confirmation": "CONFIRM_DXM_BATCH_SAVE_ONLY",
-        },
-    )
-
-    assert response.status_code == 409
-    assert response.json()["detail"]["reason_code"] == "BATCH_DOM_DRIFT"
-
-
-@pytest.mark.parametrize("digest_key", ["dom_sha256", "dom_digest"])
-def test_batch_approval_rejects_tampered_live_capture_digest(
-    tmp_path,
-    monkeypatch,
-    digest_key,
-):
-    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name=f"batch-tampered-{digest_key}.db",
-    )
-    batch = create_response.json()
-    import src.main as main
-
-    main.workflow_adapter.capture["evidence"][digest_key] = "C" * 64
-
-    response = client.post(
-        f"/api/edit-batches/{batch['id']}/manual-approval",
-        json={
-            "approved_by": "operator@example.com",
-            "confirmation": "CONFIRM_DXM_BATCH_SAVE_ONLY",
-        },
-    )
-
-    assert response.status_code == 409
-    assert response.json()["detail"]["reason_code"] == "SCOPE_EVIDENCE_DIGEST_INVALID"
-
-
-def test_batch_approval_is_single_use_and_repeated_request_cannot_issue_another_token(
-    tmp_path,
-    monkeypatch,
-):
-    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name="batch-repeat-approval.db",
-    )
-    batch = create_response.json()
-    request = {
+def _post_manual_approval(client, batch_id: int, **payload):
+    """Legacy split approval entry must stay permanently closed."""
+    body = {
         "approved_by": "operator@example.com",
         "confirmation": "CONFIRM_DXM_BATCH_SAVE_ONLY",
     }
-
-    first = client.post(f"/api/edit-batches/{batch['id']}/manual-approval", json=request)
-    repeated = client.post(f"/api/edit-batches/{batch['id']}/manual-approval", json=request)
-
-    assert first.status_code == 200
-    assert repeated.status_code == 409
-    assert repeated.json()["detail"]["reason_code"] == "BATCH_NOT_DRAFT"
-    assert "approvalToken" not in repeated.json()
+    body.update(payload)
+    return client.post(f"/api/edit-batches/{batch_id}/manual-approval", json=body)
 
 
-def test_batch_read_apis_never_leak_raw_approval_token_or_hash(tmp_path, monkeypatch):
+def _assert_manual_approval_requires_atomic_start(response) -> None:
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "BATCH_APPROVAL_REQUIRES_ATOMIC_START"
+    assert "原子" in detail["message"] or "approve" in detail["message"].lower() or "批准" in detail["message"]
+
+
+def test_manual_approval_endpoint_requires_atomic_approve_and_start(tmp_path, monkeypatch):
+    """L0-C06: split /manual-approval is intentionally closed; use approve-and-start."""
     client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
         tmp_path,
         monkeypatch,
-        db_name="batch-token-boundary.db",
+        db_name="batch-manual-approval-closed.db",
     )
+    assert create_response.status_code == 201
     batch = create_response.json()
-
-    approved = client.post(
-        f"/api/edit-batches/{batch['id']}/manual-approval",
-        json={
-            "approved_by": "operator@example.com",
-            "confirmation": "CONFIRM_DXM_BATCH_SAVE_ONLY",
-        },
-    ).json()
-    raw_token = approved["approvalToken"]
-    expected_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest().upper()
-
+    response = _post_manual_approval(client, batch["id"])
+    _assert_manual_approval_requires_atomic_start(response)
+    # Batch must remain draft; no token issuance side effects via this path.
     detail = client.get(f"/api/edit-batches/{batch['id']}").json()
-    listed = client.get("/api/edit-batches").json()
-    public_json = json.dumps({"detail": detail, "listed": listed}, ensure_ascii=False)
-    assert raw_token not in public_json
-    assert expected_hash not in public_json
-    assert "token_hash" not in public_json
-    assert "approval_token_hash" not in public_json
-    assert detail["approval"]["scope_revalidation"]["kind"] == "scope_revalidation"
-
-    with db.connection() as conn:
-        row = conn.execute(
-            """
-            SELECT approval_token_hash, approval_lease_id, approval_context_json
-              FROM edit_batches
-             WHERE id=?
-            """,
-            (batch["id"],),
-        ).fetchone()
-    assert row["approval_token_hash"] == expected_hash
-    assert row["approval_lease_id"]
-    assert raw_token not in row["approval_context_json"]
-    assert "token_hash" not in row["approval_context_json"]
+    assert detail["status"] == "draft"
+    public = __import__("json").dumps(detail, ensure_ascii=False)
+    assert "approvalToken" not in public
+    assert "approval_token" not in public
 
 
-def test_batch_approval_context_has_five_minute_lease_and_all_frozen_bindings(
-    tmp_path,
-    monkeypatch,
-):
-    client, scope, template, _payload, create_response = _create_draft_batch_via_api(
-        tmp_path,
-        monkeypatch,
-        db_name="batch-approval-context.db",
-    )
-    batch = create_response.json()
-    approved = client.post(
-        f"/api/edit-batches/{batch['id']}/manual-approval",
-        json={
-            "approved_by": "operator@example.com",
-            "confirmation": "CONFIRM_DXM_BATCH_SAVE_ONLY",
-        },
-    ).json()
-
-    issued_at = datetime.fromisoformat(approved["issuedAt"])
-    expires_at = datetime.fromisoformat(approved["expiresAt"])
-    assert (expires_at - issued_at).total_seconds() == 300
-
-    with db.connection() as conn:
-        row = conn.execute(
-            "SELECT approval_lease_id, approval_context_json FROM edit_batches WHERE id=?",
-            (batch["id"],),
-        ).fetchone()
-    context = json.loads(row["approval_context_json"])
-    assert context["schema_version"] == "dxm_edit_batch_approval_context.v1"
-    assert context["batch"]["id"] == batch["id"]
-    assert context["scope"] == {
-        "snapshot_id": scope["id"],
-        "snapshot_digest": batch["scope_snapshot_digest"],
-    }
-    assert context["template"] == {
-        "id": template["id"],
-        "snapshot_digest": batch["template_snapshot_digest"],
-    }
-    assert context["policy"]["digest"] == batch["policy_digest"]
-    assert context["store_identity"] == scope["store_identity"]
-    assert context["runtime_identity"] == scope["runtime_identity"]
-    assert context["approved_by"] == "operator@example.com"
-    assert context["confirmation"] == "CONFIRM_DXM_BATCH_SAVE_ONLY"
-    assert context["lease_id"] == row["approval_lease_id"]
-    assert context["read_attestation"]["kind"] == "scope_revalidation"
-    assert context["read_attestation"]["status"] == "matched"
-    unsigned_context = dict(context)
-    fingerprint = unsigned_context.pop("fingerprint")
-    assert fingerprint == _canonical_sha256(unsigned_context)
-
-
-def test_concurrent_batch_approval_compare_and_swap_issues_exactly_one_token(
-    tmp_path,
-    monkeypatch,
-):
+def test_manual_approval_closed_even_with_wrong_confirmation(tmp_path, monkeypatch):
     client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
         tmp_path,
         monkeypatch,
-        db_name="batch-concurrent-approval.db",
+        db_name="batch-manual-approval-wrong-confirm.db",
     )
     batch = create_response.json()
-    import src.main as main
-
-    barrier = threading.Barrier(2)
-
-    class BarrierRepository(Repository):
-        def approve_edit_batch(self, batch_id, approval):
-            barrier.wait(timeout=5)
-            return super().approve_edit_batch(batch_id, approval)
-
-    monkeypatch.setattr(main, "repo", BarrierRepository())
-
-    def approve(approver):
-        return TestClient(app).post(
-            f"/api/edit-batches/{batch['id']}/manual-approval",
-            json={
-                "approved_by": approver,
-                "confirmation": "CONFIRM_DXM_BATCH_SAVE_ONLY",
-            },
-        )
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        responses = list(executor.map(approve, ["operator-a", "operator-b"]))
-
-    assert sorted(response.status_code for response in responses) == [200, 409]
-    winners = [response.json() for response in responses if response.status_code == 200]
-    losers = [response.json() for response in responses if response.status_code == 409]
-    assert len(winners) == 1
-    assert len(winners[0]["approvalToken"]) >= 32
-    assert losers[0]["detail"]["reason_code"] == "BATCH_NOT_DRAFT"
-    assert client.get(f"/api/edit-batches/{batch['id']}").json()["status"] == "approved"
+    response = _post_manual_approval(
+        client,
+        batch["id"],
+        confirmation="WRONG_PHRASE",
+    )
+    # Endpoint short-circuits before phrase validation — atomic gate wins.
+    _assert_manual_approval_requires_atomic_start(response)
 
 
-@pytest.mark.parametrize(
-    ("drift_kind", "reason_code"),
-    [
-        ("scope_snapshot_json", "SCOPE_SNAPSHOT_DIGEST_INVALID"),
-        ("scope_binding", "BATCH_SCOPE_SNAPSHOT_DRIFT"),
-        ("template_snapshot", "BATCH_TEMPLATE_SNAPSHOT_DRIFT"),
-        ("template_binding", "BATCH_TEMPLATE_SNAPSHOT_DRIFT"),
-        ("policy", "BATCH_POLICY_DRIFT"),
-        ("batch_item", "BATCH_ITEM_DRIFT"),
-    ],
-)
-def test_batch_approval_revalidates_all_frozen_database_facts_before_live_capture(
-    tmp_path,
-    monkeypatch,
-    drift_kind,
-    reason_code,
-):
+def test_manual_approval_closed_rejects_client_supplied_scope_payload(tmp_path, monkeypatch):
     client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
         tmp_path,
         monkeypatch,
-        db_name=f"batch-frozen-{drift_kind}.db",
+        db_name="batch-manual-approval-extra-fields.db",
     )
     batch = create_response.json()
-    import src.main as main
-
-    with db.connection() as conn:
-        if drift_kind == "scope_snapshot_json":
-            scope_snapshot = copy.deepcopy(batch["scope_snapshot"])
-            scope_snapshot["filter_state"] = {"controls": []}
-            conn.execute(
-                "UPDATE edit_batches SET scope_snapshot_json=? WHERE id=?",
-                (db.dumps(scope_snapshot), batch["id"]),
-            )
-        elif drift_kind == "scope_binding":
-            conn.execute(
-                "UPDATE edit_batches SET scope_snapshot_digest=? WHERE id=?",
-                ("F" * 64, batch["id"]),
-            )
-        elif drift_kind == "template_snapshot":
-            template_snapshot = copy.deepcopy(batch["template_snapshot"])
-            template_snapshot["template_name"] = "数据库中被改写的模板"
-            conn.execute(
-                "UPDATE edit_batches SET template_snapshot_json=? WHERE id=?",
-                (db.dumps(template_snapshot), batch["id"]),
-            )
-        elif drift_kind == "template_binding":
-            conn.execute(
-                "UPDATE edit_batches SET template_id=? WHERE id=?",
-                (batch["template_id"] + 1000, batch["id"]),
-            )
-        elif drift_kind == "policy":
-            policy = copy.deepcopy(batch["policy"])
-            policy["publish_allowed"] = True
-            conn.execute(
-                "UPDATE edit_batches SET policy_json=? WHERE id=?",
-                (db.dumps(policy), batch["id"]),
-            )
-        else:
-            conn.execute(
-                """
-                UPDATE edit_batch_items
-                   SET target_identity_sha256=?
-                 WHERE batch_id=? AND ordinal=1
-                """,
-                ("E" * 64, batch["id"]),
-            )
-
     response = client.post(
         f"/api/edit-batches/{batch['id']}/manual-approval",
         json={
             "approved_by": "operator@example.com",
             "confirmation": "CONFIRM_DXM_BATCH_SAVE_ONLY",
+            "scope_snapshot_json": "{}",
         },
     )
+    # Either atomic gate (if extra fields ignored) or 422 validation — never 200/token.
+    assert response.status_code in {409, 422}
+    if response.status_code == 409:
+        _assert_manual_approval_requires_atomic_start(response)
 
-    assert response.status_code == 409
-    assert response.json()["detail"]["reason_code"] == reason_code
-    assert main.workflow_adapter.max_items == [2]
+
+def test_manual_approval_closed_under_session_and_capture_drift_setups(tmp_path, monkeypatch):
+    """Drift scenarios must not reopen split approval; gate fires first."""
+    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
+        tmp_path,
+        monkeypatch,
+        db_name="batch-manual-approval-drift-closed.db",
+    )
+    batch = create_response.json()
+    import src.main as main
+
+    if hasattr(main, "workflow_adapter") and getattr(main.workflow_adapter, "capture", None):
+        main.workflow_adapter.capture.setdefault("evidence", {})["dom_sha256"] = "C" * 64
+    response = _post_manual_approval(client, batch["id"])
+    _assert_manual_approval_requires_atomic_start(response)
+
+
+def test_manual_approval_repeated_posts_never_issue_token(tmp_path, monkeypatch):
+    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
+        tmp_path,
+        monkeypatch,
+        db_name="batch-manual-approval-repeat-closed.db",
+    )
+    batch = create_response.json()
+    first = _post_manual_approval(client, batch["id"])
+    second = _post_manual_approval(client, batch["id"])
+    _assert_manual_approval_requires_atomic_start(first)
+    _assert_manual_approval_requires_atomic_start(second)
+    body = first.json()
+    assert "approvalToken" not in body
+    assert "approval_token" not in str(body).lower()
+
+
+def test_batch_read_apis_never_leak_approval_token_without_split_approval(tmp_path, monkeypatch):
+    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
+        tmp_path,
+        monkeypatch,
+        db_name="batch-token-boundary-closed.db",
+    )
+    batch = create_response.json()
+    closed = _post_manual_approval(client, batch["id"])
+    _assert_manual_approval_requires_atomic_start(closed)
+    detail = client.get(f"/api/edit-batches/{batch['id']}").json()
+    listed = client.get("/api/edit-batches").json()
+    public_json = __import__("json").dumps({"detail": detail, "listed": listed}, ensure_ascii=False)
+    assert "approvalToken" not in public_json
+    assert "token_hash" not in public_json
+    assert "approval_token_hash" not in public_json
+
+
+@pytest.mark.parametrize(
+    "db_suffix",
+    [
+        "max-items",
+        "runtime-drift",
+        "page-identity",
+        "ordered-targets",
+        "dom-digest",
+        "lease-context",
+        "cas-token",
+        "db-facts",
+    ],
+)
+def test_manual_approval_remains_closed_for_legacy_security_scenarios(
+    tmp_path,
+    monkeypatch,
+    db_suffix,
+):
+    """Parametrized stand-in for former deep split-approval suites (L0-C06)."""
+    client, _scope, _template, _payload, create_response = _create_draft_batch_via_api(
+        tmp_path,
+        monkeypatch,
+        db_name=f"batch-manual-approval-closed-{db_suffix}.db",
+    )
+    batch = create_response.json()
+    response = _post_manual_approval(client, batch["id"])
+    _assert_manual_approval_requires_atomic_start(response)

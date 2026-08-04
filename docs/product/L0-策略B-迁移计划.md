@@ -33,7 +33,7 @@
 | **L0-C03** | action-result 合同 | 部分已补 `save_result`/`fresh_probe` | 整文件 0 fail；不放宽证据 |
 | **L0-C04** | Agent Console | 预览改 probe | 整文件 0 fail |
 | **L0-C05** | LoginFlow / 公开响应最小披露 | 部分已迁 | 不扩大 API 泄露；测改读持久化证据 |
-| **L0-C06** | `test_batch_edit_api` 独立批准 | **~22 failed**（正确 409） | **迁到 E3 原子 approve-and-start 合同** 或登记「生产正确、测过时」关闭表；**禁止**重开旧端点 |
+| **L0-C06** | `test_batch_edit_api` 独立批准 | **已关闭（2026-08-03）** 整文件 **36 passed** | 旧 `/manual-approval` 成功/深漂移测已迁移为断言 `BATCH_APPROVAL_REQUIRES_ATOMIC_START`；**未**重开端点。深安全属性改由 E3 `approve-and-start` 专项承接 |
 | **L0-C07** | v1 runner / single_save / claim_only 状态机 | 大批历史失败 | 测迁移到现行公开入口 + 强制身份字段；不改弱生产私有 API |
 | **L0-C08** | 其余 login_flow 私有 `_save_only_on_page` 直调 | TypeError 等 | 测改走公开 save 路径或构造完整强制参数 |
 | **L0-C09** | 其它未分类 | 以完整 L0 摘要为准 | 逐项入表 |

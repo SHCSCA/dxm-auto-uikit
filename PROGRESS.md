@@ -7,7 +7,7 @@
 - **G0 用户裁定：策略 B**（完整 L0 绿或可审计簇关闭证明为 E2 关闭硬门槛）。计划：`docs/product/L0-策略B-迁移计划.md`。
 - **G1 用户授权：允许 commit 固定点**（不自动 push）；范围=E1/E2 核心源码/测试/相关文档与脚本，排除 `data/**`、Cookie、密钥、output/artifacts 垃圾。
 - **接手开发**：本轮由独立执行者在策略 B 下推进 G1 → G2 → G3；仍 **禁止 E3 / 真保存发布 / 未授权 raw**。
-- **`E2-CLOSE-CANDIDATE` SHA**：见本节更新后的 commit 记录（commit 完成后回填完整 40 位）。
+- **`E2-CLOSE-CANDIDATE` SHA：`09fceb756cd56f6971893db3977a1d97671bc208`**（短 `09fceb7`；消息 `feat(e2): pin E1/E2 plan-snapshot stack as G1 close candidate`；69 files；**未 push**）。
 - 仍 **不宣称** `E2_ACCEPTED` / `MVP_READY` / `PROD_READY`，直至 G2+G3(+G4) 按清单满足。
 
 ## `REOPEN E2`（2026-08-03 · 关闭清单执行中）
