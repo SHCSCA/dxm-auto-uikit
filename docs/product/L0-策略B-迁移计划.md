@@ -40,6 +40,16 @@
 
 数字以 **G1 SHA 上当次完整 L0 报告** 为准；本文件簇表随迁移更新。
 
+### 基线快照（G1 后 · 2026-08-03）
+
+| 项 | 值 |
+|----|-----|
+| 命令 | 隔离 `DXM_DATA_DIR` 下 `pytest -q --tb=no`（`app/backend`） |
+| 候选树 | `09fceb7` + `c5c6e7e`（C06）+ docs |
+| 结果 | **426 failed / 1469 passed / 0 skipped in 606.60s**，exit 1 |
+| 对照 | 历史约 **509 failed / 1392 passed** → failed −83、passed +77 |
+| 备注 | 未放宽 fail-closed；C06 迁移计入下降；C07 runner 等仍为主要红簇 |
+
 ---
 
 ## 3. 里程碑

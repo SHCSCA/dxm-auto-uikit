@@ -10,7 +10,7 @@
 - **`E2-CLOSE-CANDIDATE` SHA：`09fceb756cd56f6971893db3977a1d97671bc208`**（短 `09fceb7`；G1 固定点；**未 push**）。
 - **后续 L0 提交：`c5c6e7ef4f5dad32fe67c8563025de72983c389f`**（短 `c5c6e7e`；L0-C06 `/manual-approval` → 断言 `BATCH_APPROVAL_REQUIRES_ATOMIC_START`；`test_batch_edit_api` **36 passed**）。
 - **G2（在 G1 树/后继提交上当次复跑）**：E2+composer 专项 **122 passed**；前端 typecheck + Node **12** + browser **6** 全绿；文档 SelfTest **MVP_DOCS_OK**。
-- **G3 进度（策略 B）**：C01 composer 已绿；C06 已关闭；完整 L0 仍待全量基线与 C02–C05/C07–C09。
+- **G3 进度（策略 B）**：C01 composer 已绿；C06 已关闭；**G1 树完整 L0 基线（隔离 `DXM_DATA_DIR`，当次）`426 failed / 1469 passed / 0 skipped in 606.60s`**（相对历史约 509 failed 下降约 83；仍红，禁止宣称清零）。代表失败仍含 `test_v1_runner` 等 C07 簇。
 - 仍 **不宣称** `E2_ACCEPTED` / `MVP_READY` / `PROD_READY`，直至 G3(+G4) 按清单满足。
 
 ## `REOPEN E2`（2026-08-03 · 关闭清单执行中）
