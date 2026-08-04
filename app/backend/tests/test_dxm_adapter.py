@@ -209,7 +209,7 @@ def test_check_login_state_reuses_visible_logged_in_browser_before_headless_prob
     assert result['stage'] == 'login_success'
 
 
-def test_check_login_state_falls_back_to_saved_login_state_when_probe_hits_sync_guard():
+def test_check_login_state_fails_closed_when_probe_hits_sync_guard():
     flow = FakeLoginFlow(stage='login_success')
     flow.live_client = FailingLiveClient()
 
@@ -217,8 +217,9 @@ def test_check_login_state_falls_back_to_saved_login_state_when_probe_hits_sync_
 
     assert flow.live_client.probed is True
     assert flow.calls == [('get_state',)]
-    assert result['ok'] is True
-    assert result['stage'] == 'login_success'
+    assert result['ok'] is False
+    assert result['stage'] == 'login_failed'
+    assert result['requires_user_action'] is True
     assert 'Playwright Sync API' in result['evidence']['live_probe_error']
 
 

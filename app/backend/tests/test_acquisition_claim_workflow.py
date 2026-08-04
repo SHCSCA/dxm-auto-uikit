@@ -325,11 +325,13 @@ def test_stage_a_rejects_unscoped_or_non_png_draft_box_evidence(
 def test_acquisition_claim_request_creates_claim_stage_task(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     store = repo.create_store("Dang Kang", "AliExpress")
+    source_url = "https://detail.1688.com/offer/1013604102950.html"
 
     response = client.post(
         "/api/acquisition/claim-requests",
         json={
             "store_id": store["id"],
+            "source_url": source_url,
             "keyword": "Hazbin Hotel",
             "category_name": "立牌类谷子",
             "claim_mark": "AI-OPS",
@@ -342,6 +344,7 @@ def test_acquisition_claim_request_creates_claim_stage_task(tmp_path, monkeypatc
     assert data["stage"] == "pending_acquisition_claim"
     assert data["status"] == "pending"
     assert data["store_id"] == store["id"]
+    assert data["source_url"] == source_url
     assert data["keyword"] == "Hazbin Hotel"
     assert data["category_name"] == "立牌类谷子"
     assert data["claim_mark"] == "AI-OPS"
@@ -354,6 +357,7 @@ def test_acquisition_claim_request_creates_claim_stage_task(tmp_path, monkeypatc
     assert task["jobs"][0]["product_id"] is None
     assert task["payload"]["stage"] == "pending_acquisition_claim"
     assert task["payload"]["status"] == "pending"
+    assert task["payload"]["source_url"] == source_url
     assert repo.list_products(include_fixtures=True) == []
 
 
@@ -581,7 +585,7 @@ def test_acquisition_claim_request_accepts_source_url_only_match_hint(tmp_path, 
     assert repo.list_products(include_fixtures=True) == []
 
 
-def test_acquisition_claim_request_requires_product_hint(tmp_path, monkeypatch):
+def test_acquisition_claim_request_requires_source_url(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     store = repo.create_store("Dang Kang", "AliExpress")
 
@@ -596,12 +600,12 @@ def test_acquisition_claim_request_requires_product_hint(tmp_path, monkeypatch):
         },
     )
 
-    assert response.status_code == 400
-    assert "已有待认领商品" in response.json()["detail"]
-    assert "商品关键词" in response.json()["detail"]
-    assert "商品类目" in response.json()["detail"]
-    assert "选择一条待认领商品" in response.json()["detail"]
-    assert "来源链接" not in response.json()["detail"]
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert any(
+        item["loc"] == ["body", "source_url"] and item["type"] == "missing"
+        for item in detail
+    )
 
 
 def test_single_save_task_requires_claimed_draft_product(tmp_path, monkeypatch):
@@ -783,7 +787,7 @@ def test_single_save_task_rejects_claim_proof_from_a_different_store(tmp_path, m
     assert "store" in response.json()["detail"].lower() or "店铺" in response.json()["detail"]
 
 
-def test_single_save_task_rejects_fixture_even_when_claimed_flags_present(tmp_path, monkeypatch):
+def test_single_save_task_rejects_unproven_product_even_when_claimed_flags_present(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     store = repo.create_store("Dang Kang", "AliExpress")
     product = repo.create_product(
@@ -818,9 +822,9 @@ def test_single_save_task_rejects_fixture_even_when_claimed_flags_present(tmp_pa
 
     assert response.status_code == 409
     detail = response.json()["detail"]
-    assert "测试/示例数据" in detail
-    assert "已有待认领列表" in detail
-    assert "商品箱编辑保存" in detail
+    assert "已完成的待认领商品任务链" in detail
+    assert "完成真实认领" in detail
+    assert "商品进入商品箱" in detail
 
 
 def test_single_save_task_snapshots_acquisition_claim_proof(tmp_path, monkeypatch):

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { WorkbenchSection } from '../types'
 
 type PrimaryNavigationItem = {
@@ -9,19 +9,22 @@ type PrimaryNavigationItem = {
 }
 
 const primaryNavigation: PrimaryNavigationItem[] = [
-  { id: 'home', label: '编辑工作台', short: '编', hint: '查看当前状态和唯一下一步' },
-  { id: 'template_center', label: '模板中心', short: '模', hint: '管理编辑使用的模板' },
-  { id: 'start_save', label: '浏览器诊断', short: '诊', hint: '查看运行状态，或关闭占用共享浏览器的旧诊断窗口' },
-  { id: 'task_history', label: '批次记录', short: '记', hint: '查看实时进度、结果和人工复核' },
-  { id: 'settings', label: '系统设置', short: '设', hint: '查看运行环境与系统设置' },
+  { id: 'home', label: '工作台', short: '工', hint: '查看当前状态和唯一下一步' },
+  { id: 'dxm_access', label: '连接店小秘', short: '连', hint: '打开真实可见浏览器并确认当前登录会话' },
+  { id: 'draft_selection', label: '采集箱选品', short: '选', hint: '从实时 API 草稿列表选择至少三件商品' },
+  { id: 'template_center', label: '铺货方案', short: '案', hint: '管理本地编辑方案与模板引用' },
+  { id: 'start_save', label: '开始批量保存', short: '存', hint: '后续阶段：复核后串行执行只保存' },
+  { id: 'results', label: '保存结果', short: '果', hint: '查看回包、页面成功态与未发布证据' },
+  { id: 'settings', label: '设置', short: '设', hint: '查看运行环境与系统设置' },
 ]
 
 const sectionLabels: Record<WorkbenchSection, string> = {
-  home: '编辑工作台',
+  home: '工作台',
   dxm_access: '账号与浏览器',
   acquisition_claim: '待认领入箱',
+  draft_selection: '采集箱选品',
   draft_edit_save: '商品箱批量编辑',
-  template_center: '模板中心',
+  template_center: '铺货方案',
   product_tasks: '当前保存任务',
   current_task: '当前保存任务',
   task_history: '批次记录',
@@ -33,15 +36,15 @@ const sectionLabels: Record<WorkbenchSection, string> = {
   config_logistics: '包装物流',
   config_compliance: '合规海关',
   template_management: '模板管理',
-  start_save: '浏览器诊断',
+  start_save: '开始批量保存',
   preflight: '浏览器诊断',
   real_browser: '浏览器诊断',
   manual_takeover: '人工接管',
-  results: '结果报告',
+  results: '保存结果',
   issues: '问题与证据',
   evidence: '保存证据',
   help: '使用帮助',
-  settings: '系统设置',
+  settings: '设置',
 }
 
 type AppShellProps = {
@@ -62,6 +65,7 @@ export function AppShell({
   sourceLabel,
 }: AppShellProps) {
   const mainRef = useRef<HTMLElement | null>(null)
+  const [theme, setTheme] = useState<'light' | 'dark'>('light')
   const activeLabel = useMemo(
     () => sectionLabels[activeSection] ?? '工作台',
     [activeSection],
@@ -72,7 +76,7 @@ export function AppShell({
   }, [activeSection])
 
   return (
-    <div className={`app-shell ${sidebarCollapsed ? 'is-collapsed' : ''}`}>
+    <div className={`app-shell theme-${theme} ${sidebarCollapsed ? 'is-collapsed' : ''}`}>
       <aside className="sidebar" aria-label={`运营工作台导航，${sourceLabel}`}>
         <div className="sidebar__brand">
           <div className="brand-mark" aria-hidden="true">DX</div>
@@ -80,7 +84,7 @@ export function AppShell({
             <div>
               <strong>DXM 编辑工作台</strong>
               <span>受控编辑 · 只保存不发布</span>
-              <span className="sr-only">编辑工作台 / 模板中心 / 浏览器诊断 / 批次记录 / 系统设置</span>
+              <span className="sr-only">工作台 / 连接店小秘 / 采集箱选品 / 铺货方案 / 开始批量保存 / 保存结果 / 设置</span>
             </div>
           )}
           <button className="icon-button" type="button" onClick={onToggleSidebar} aria-label="切换侧边栏">
@@ -99,13 +103,9 @@ export function AppShell({
               aria-current={activeSection === item.id ? 'page' : undefined}
               data-section={item.id}
             >
-              {!sidebarCollapsed && (
-                <>
-                  <span className="nav-subitem__label">{item.label}</span>
-                  <small className="sr-only">{item.hint}</small>
-                </>
-              )}
-              {sidebarCollapsed && <span>{item.short}</span>}
+              <span className="nav-subitem__label">{item.label}</span>
+              <span className="nav-subitem__short" aria-hidden="true">{item.short}</span>
+              <small className="sr-only">{item.hint}</small>
             </button>
           ))}
         </nav>
@@ -113,7 +113,24 @@ export function AppShell({
       </aside>
       <main ref={mainRef} className="workspace" tabIndex={-1} aria-label={`${activeLabel}主内容`}>
         <span className="sr-only" aria-live="polite">当前页面：{activeLabel}</span>
-        {children}
+        <header className="workspace-topbar">
+          <div>
+            <span>当前页面</span>
+            <strong>{activeLabel}</strong>
+          </div>
+          <div className="workspace-topbar__actions">
+            <span className="workspace-topbar__source">{sourceLabel}</span>
+            <button
+              className="workspace-topbar__theme"
+              type="button"
+              onClick={() => setTheme((current) => current === 'light' ? 'dark' : 'light')}
+              aria-label={`切换到${theme === 'light' ? '深色' : '浅色'}主题`}
+            >
+              {theme === 'light' ? '深色' : '浅色'}
+            </button>
+          </div>
+        </header>
+        <div className="workspace-body">{children}</div>
       </main>
     </div>
   )

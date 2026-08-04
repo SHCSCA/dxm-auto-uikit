@@ -1122,9 +1122,8 @@ def _create_task(repo: Repository):
         {
             "name": "agent console task",
             "store_id": store["id"],
-            "mode": "single_save",
-            "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
-            "claim_mark": "AI认领",
+            "mode": "probe",
+            "publish_scene": "READ_ONLY_PROBE",
             "product_ids": [product["id"]],
             "payload": {"store_name": "Dang Kang"},
         }

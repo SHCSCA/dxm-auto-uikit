@@ -6,11 +6,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 这是什么
 
-**DXM 半托管自动化工作台**:用真实可见浏览器驱动真实「店小秘」(dianxiaomi.com)账号,把店小秘已有待认领商品受控认领到商品箱,再按已确认模板编辑并**「只保存、不发布」**。它不是本地演示页,也不是安全诊断工具。
+**DXM 半托管自动化工作台**:用真实可见浏览器驱动真实「店小秘」(dianxiaomi.com)账号,对采集箱/商品箱内商品按方案编辑并**「只保存、不发布」**。它不是本地演示页,也不是安全诊断工具。
 
-整个系统的核心价值与全部复杂度都在一件事上:**在能操作真实卖家账号的前提下,用分层证据门禁(L0→L1→L2→L3)把真实写入锁在同商品两段式真相链内**。Stage A `claim_only` 与 Stage B `single_save` 分别使用服务端审批租约,并绑定任务、运行时、浏览器会话、精确页面、目标和证据。改动本仓库时,默认假设你正在靠近这套门禁——任何让真实写入/发布更容易发生的改动都是高危改动。
+### 当前产品主迭代（2026-07-28）
 
-2026-07-17 当前源码处于两段式运行时加固阶段,生产交付为 `BLOCKED`。`claim_only` 与 `single_save` 是唯一进入受控源码路径的真实 mutation 模式,但没有同一干净 Git HEAD 的 portable、packaged smoke、新鲜 L2 和同商品 Stage A/B 现场闭环前,二者都不能解释为当前生产放行。2026-06-22 与 2026-07-04 的 `READY`/portable 记录只属于历史构建。`batch_save`、批量、无人值守和任何发布动作始终未放行。
+- **契约**: `docs/product/MVP-竖切-草稿箱批量只保存.md`
+- **Gold 指令**: `docs/product/CODEX-GOLD-工作指令-MVP批量只保存.md`
+- **主路径**: 草稿箱 `pageList(draft)` 多选 → 方案快照 → **`batch_draft_save`（先 Path A）** → 可见窗 + HVD + 暂停/继续 → 三铁证
+- **上游只读**: `D:\Desktop\py\DXM-TX`（docs / capture / 可交互原型）；禁止当第二生产代码仓
+- **就绪拆分**: `MVP_READY`（本迭代验收）与 `PROD_READY`（portable/L2/两段式硬化，后置）
+
+### 安全与历史路径（永久 / 仍保留）
+
+整个系统的安全复杂度在:**在能操作真实卖家账号的前提下,用分层证据门禁(L0→L1→L2→L3)与审批/ledger 锁住真实写入**。Stage A `claim_only` 与 Stage B `single_save` 仍是历史受控路径与代码能力,但**不是** MVP 批量主路径的前置必经；不得用其历史 READY 证据宣称批量已放行。改动本仓库时,任何让真实写入/发布更容易发生的改动都是高危改动。
+
+2026-07-17 起源码曾处于两段式运行时加固阶段,`PROD` 级交付可为 `BLOCKED`。`claim_only` 与 `single_save` 曾是唯一进入受控 release surface 的真实 mutation 模式；**MVP 迭代将显式增加/放行 `batch_draft_save`（草稿箱多 id 只保存）**,须自带合约、测试与 `MVP_READY` 证据,禁止扩大解释。2026-06-22 与 2026-07-04 的 `READY`/portable 记录只属于历史构建。无人值守和任何发布动作始终未放行。
 
 ## 仓库布局(顶层)
 
@@ -130,7 +140,7 @@ L2 真实只读 probe 需要**真实登录 cookie + 人工审批**,不由 `final
 - 配置合并/校验/预览:`services/config_defaults.py`、`config_validation.py`、`config_preview.py`
 - 前端控制流从这读起:`app/frontend/src/App.tsx`;全部面板:`components/WorkbenchModules.tsx`;客户端派生:`workspace.ts`
 - 交付自检流水线:`scripts/final-delivery-check.ps1`;浏览器 QA:`scripts/qa-browser-check.ps1`;启动器:`scripts/start-mvp.ps1`
-- 当前文档入口:`docs/README.md`;运行时架构:`docs/tech/当前运行时架构-20260717.md`;门禁规范:`docs/product/店小秘半托管执行器可交付化回归矩阵.md`、`docs/product/L2只读Probe门禁.md`
+- 当前文档入口:[docs/README.md](docs/README.md);MVP 产品与安全主合同:[docs/product/MVP-竖切-草稿箱批量只保存.md](docs/product/MVP-竖切-草稿箱批量只保存.md);Gold 执行边界:[docs/product/CODEX-GOLD-工作指令-MVP批量只保存.md](docs/product/CODEX-GOLD-工作指令-MVP批量只保存.md)。旧 `docs/tech/当前运行时架构-20260717.md`、`docs/product/店小秘半托管执行器可交付化回归矩阵.md`、`docs/product/L2只读Probe门禁.md` 已删除且不是现行指针,不得据此宣称 READY。
 
 ## 测试与协作约定(本仓库)
 

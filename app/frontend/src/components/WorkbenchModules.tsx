@@ -2138,6 +2138,7 @@ function EditableConfigSectionCard({
       ? '正在保存，请等待当前操作完成。'
       : '保存为店铺模板会影响后续匹配当前店铺/类目的任务。'
   const continueDisabled = taskSaveDisabled || !preview
+  const visibleMissingFields = visibleConfigMissing(preview?.missing ?? [])
   const receiptStatus = saveState?.status ?? 'clean'
   const receiptTitle = receiptStatus === 'dirty'
     ? '有未保存的修改'
@@ -2221,9 +2222,9 @@ function EditableConfigSectionCard({
           </div>
         </details>
       )}
-      {visibleConfigMissing(preview?.missing ?? []).length ? (
+      {visibleMissingFields.length ? (
         <div className="missing-strip">
-          {visibleConfigMissing(preview.missing).slice(0, 4).map((item, index) => <span key={`${item}-${index}`}>{item}</span>)}
+          {visibleMissingFields.slice(0, 4).map((item, index) => <span key={`${item}-${index}`}>{item}</span>)}
         </div>
       ) : null}
       <div className="config-save-scope-explainer" aria-label="保存方式说明">

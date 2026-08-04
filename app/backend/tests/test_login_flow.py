@@ -2284,7 +2284,7 @@ def test_dxm_login_flow_continue_records_login_failure(monkeypatch, tmp_path):
 
     state = flow.continue_login()
 
-    assert live_client.probed is True
+    assert live_client.probed is False
     assert state['stage'] == 'login_failed'
     assert state['requires_user_action'] is True
     assert state['screenshot_url'] == '/artifacts/screenshots/login-result.png'
@@ -2322,6 +2322,11 @@ def test_dxm_login_flow_continue_success_keeps_visible_browser_for_next_steps(mo
         'page_url': 'https://www.dianxiaomi.com/web/home',
         'screenshot_url': '/artifacts/screenshots/login-result.png',
     })
+    monkeypatch.setattr(
+        flow,
+        'read_draft_shops',
+        lambda: pytest.fail('visible home login detection must not run the draft Reader'),
+    )
     monkeypatch.setattr(flow, '_close_browser_session', lambda: close_calls.append('closed'))
     monkeypatch.setattr(flow, '_is_headless', lambda: False)
 
@@ -2354,11 +2359,42 @@ def test_submit_login_after_captcha_accepts_already_logged_in_visible_home(monke
     assert page.screenshot_calls
 
 
-def test_continue_login_uses_visible_home_when_headless_cookie_probe_hits_asyncio_guard(monkeypatch, tmp_path):
+def test_continue_login_accepts_visible_dxm_home_without_legacy_menu_markers(monkeypatch, tmp_path):
+    class RedesignedLoggedInHomePage(DummyLoggedInHomePage):
+        def inner_text(self, timeout: int = 0):
+            return '店小秘 工作空间 欢迎回来'
+
+    live_client = DummyLiveClient(logged_in=False)
+    live_client.cookie_file = tmp_path / 'cookies.json'
+    flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    page = RedesignedLoggedInHomePage()
+    flow._context = DummyCookieContext()
+
+    monkeypatch.setattr(flow, '_ensure_page', lambda: page)
+    monkeypatch.setattr(
+        flow,
+        '_click_first_available',
+        lambda *args, **kwargs: pytest.fail('DXM home must not click login controls'),
+    )
+    monkeypatch.setattr(
+        flow,
+        'read_draft_shops',
+        lambda: pytest.fail('visible home login detection must not run the draft Reader'),
+    )
+    monkeypatch.setattr(flow, '_is_headless', lambda: False)
+
+    state = flow.continue_login()
+
+    assert state['stage'] == 'login_success'
+    assert state['page_url'] == 'https://www.dianxiaomi.com/web/home'
+    assert state.get('account_ref') is None
+
+
+def test_continue_login_uses_visible_home_without_reader_or_headless_cookie_probe(monkeypatch, tmp_path):
     class AsyncioGuardLiveClient(DummyLiveClient):
         def probe_session(self):
             self.probed = True
-            raise RuntimeError('It looks like you are using Playwright Sync API inside the asyncio loop. Please use the Async API instead.')
+            raise AssertionError('continue_login must not start a second Playwright runtime')
 
     live_client = AsyncioGuardLiveClient(logged_in=False)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
@@ -2370,23 +2406,30 @@ def test_continue_login_uses_visible_home_when_headless_cookie_probe_hits_asynci
         'screenshot_url': '/artifacts/screenshots/login-result.png',
         'visible_logged_in': True,
     })
+    monkeypatch.setattr(
+        flow,
+        'read_draft_shops',
+        lambda: pytest.fail('visible home login detection must not run the draft Reader'),
+    )
     monkeypatch.setattr(flow, '_close_browser_session', lambda: close_calls.append('closed'))
     monkeypatch.setattr(flow, '_is_headless', lambda: False)
 
     state = flow.continue_login()
 
-    assert live_client.probed is True
+    assert live_client.probed is False
     assert state['stage'] == 'login_success'
     assert state['requires_user_action'] is False
     assert state['browser_visible'] is True
     assert state['page_url'] == 'https://www.dianxiaomi.com/web/home'
+    assert state.get('account_ref') is None
     assert '登录成功' in state['message']
     assert close_calls == []
 
 
-def test_continue_login_prefers_visible_home_over_stale_cookie_probe(monkeypatch, tmp_path):
+def test_continue_login_accepts_visible_home_without_running_reader_account_proof(monkeypatch, tmp_path):
     live_client = DummyLiveClient(logged_in=False)
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
+    reader_calls = []
 
     monkeypatch.setattr(flow, '_submit_login_after_captcha', lambda: {
         'page_title': '店小秘--首页',
@@ -2394,13 +2437,23 @@ def test_continue_login_prefers_visible_home_over_stale_cookie_probe(monkeypatch
         'screenshot_url': '/artifacts/screenshots/login-result.png',
         'visible_logged_in': True,
     })
+    monkeypatch.setattr(
+        flow,
+        'read_draft_shops',
+        lambda: reader_calls.append('called') or (_ for _ in ()).throw(
+            RuntimeError('authenticated account identity missing')
+        ),
+    )
     monkeypatch.setattr(flow, '_is_headless', lambda: False)
 
     state = flow.continue_login()
 
-    assert live_client.probed is True
+    assert live_client.probed is False
+    assert reader_calls == []
     assert state['stage'] == 'login_success'
+    assert state['requires_user_action'] is False
     assert state['page_url'] == 'https://www.dianxiaomi.com/web/home'
+    assert state.get('account_ref') is None
 
 
 def test_check_visible_login_state_uses_execution_browser_with_saved_cookies(monkeypatch, tmp_path):
@@ -2437,6 +2490,17 @@ def test_check_visible_login_state_uses_execution_browser_with_saved_cookies(mon
     assert state['page_url'] == 'https://www.dianxiaomi.com/web/home'
     assert state['browser_visible'] is True
     assert live_client.cookie_file.exists()
+
+    monkeypatch.setenv('DXM_WORKFLOW_ACTION_RUNTIME', 'browser_agent')
+    adapter_result = DxmWorkflowAdapter(flow).check_login_state()
+
+    assert adapter_result['ok'] is True
+    assert adapter_result['stage'] == 'login_success'
+    assert adapter_result['contract_facts']['postconditions'] == {
+        'business_page_ready': True,
+        'loading_absent': True,
+        'session_authenticated': True,
+    }
 
 
 def test_check_visible_login_state_skips_screenshot_to_avoid_blocking(monkeypatch, tmp_path):

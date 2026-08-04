@@ -71,6 +71,44 @@ export type DxmReferenceTemplateSection = {
   source: 'new' | 'legacy' | 'fallback'
 }
 export type Template = { id: number; template_type: string; template_name: string; binding_scope: string; payload: Record<string, unknown>; is_enabled: boolean }
+export type DxmDraftShop = {
+  id: string
+  name: string
+  platform: 'smt'
+  shop_type: string | null
+}
+export type DxmDraftShopsResponse = {
+  source: 'api'
+  session_bound: true
+  session_ref: string
+  shops: DxmDraftShop[]
+}
+export type DxmDraftProduct = {
+  id: string
+  shop_id: string
+  subject: string
+  category_id: string | null
+  dxm_state: 'draft'
+}
+export type DxmDraftPageResponse = {
+  source: 'api'
+  session_bound: true
+  session_ref: string
+  filter: {
+    shop_id: string
+    dxm_state: 'draft'
+  }
+  pagination: {
+    page_no: number
+    page_size: number
+    total_pages: number
+    total_items: number
+    has_previous: boolean
+    has_next: boolean
+  }
+  items: DxmDraftProduct[]
+  deduplicated_count: number
+}
 export type EditBatchBundleSectionCode =
   | 'category'
   | 'sku'
@@ -85,6 +123,7 @@ export type EditBatchBundleCandidate = {
   template_name: string
   template_type: EditBatchBundleSectionCode
   binding_scope: string
+  source_digest: string
   ready: boolean
   missing_fields: string[]
 }
@@ -110,7 +149,137 @@ export type EditBatchBundleCreateRequest = {
   category_name: string | null
   section_templates: Record<EditBatchBundleSectionCode, {
     template_id: number
+    source_digest: string
   }>
+}
+export type DxmTemplateRef = {
+  model: 'dxm_template_ref'
+  id: number
+  ref_type: 'product' | 'attribute' | 'variation' | 'freight' | 'service' | 'size'
+  dxm_template_id: string
+  shop_id: string
+  category_id: string | null
+  observed_display_name: string
+  source_api: string
+  availability: 'available' | 'missing' | 'drifted'
+  source_digest: string
+  resolved_values_hash: string
+  resolved_field_count: number
+  synced_at: string
+}
+export type DxmTemplateRefSyncResult = {
+  source: 'api'
+  session_bound: true
+  session_ref: string
+  shop_id: string
+  category_ids: string[]
+  category_schemas: Record<string, E2CategorySchema>
+  refs: DxmTemplateRef[]
+}
+export type E2CategorySchemaProperty = {
+  type: 'string' | 'number' | 'integer' | 'boolean' | 'array' | 'object'
+  ui_label_zh?: string
+  ui_binding?: string
+  natural_language?: boolean
+  enum?: unknown[]
+  values?: Array<{
+    id: string | number
+    name?: string
+    names?: { zh?: string; en?: string }
+  }>
+  properties?: Record<string, E2CategorySchemaProperty>
+  required?: string[]
+  items?: E2CategorySchemaProperty
+  [key: string]: unknown
+}
+export type E2CategorySchema = {
+  type: 'object'
+  properties: Record<string, E2CategorySchemaProperty>
+  required: string[]
+  dependentRequired?: Record<string, string[]>
+  allOf?: Array<Record<string, unknown>>
+  price_policy?: {
+    sku_cargo_not_above_sale: true
+    sku_prices_within_range: true
+  }
+}
+export type LocalPlanFieldMappingEntry = {
+  ui_label_zh: string
+  field_key: string
+  category_schema_path: string
+  ui_binding: string
+}
+export type LocalPlanTemplate = {
+  model: 'local_plan_template'
+  id: number
+  lineage_id: number
+  supersedes_id: number | null
+  name: string
+  version: string
+  shop_id: string
+  category_ids: string[]
+  path: 'A'
+  fixed_values: Record<string, unknown>
+  fill_rules: Record<string, Record<string, { value: unknown }>>
+  dxm_template_refs: Array<{ ref_id: number; source_digest: string }>
+  field_mappings: Record<string, {
+    mapping_version: string
+    entries: LocalPlanFieldMappingEntry[]
+  }>
+  validation_policy: {
+    required_fields: 'fail_closed'
+    natural_language: 'english_before_save'
+  }
+  exception_policy: { unknown: 'stop_batch' }
+  provenance: string
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+export type PlanSnapshot = {
+  id?: number
+  task_id?: number
+  schema: 'dxm_batch_draft_save_plan.v1'
+  mode: 'batch_draft_save'
+  path: 'A'
+  shop_scope: string
+  product_ids: string[]
+  local_plan_template: { id: number; version: string }
+  dxm_template_refs: Array<Record<string, unknown>>
+  fixed_values: Record<string, unknown>
+  fill_rules: Record<string, unknown>
+  session_context: {
+    session_ref: string
+    account_ref_hash: string
+    shop_id: string
+  }
+  approval_context: {
+    state: 'not_granted'
+    runner_released: false
+    publish_allowed: false
+  }
+  item_snapshots: Array<{
+    product_id: string
+    shop_id: string
+    categoryId: string
+    category_schema: { normalized_schema: Record<string, unknown>; schema_hash: string }
+    field_mapping: {
+      mapping_version: string
+      mapping_hash: string
+      entries: LocalPlanFieldMappingEntry[]
+    }
+    required_fields: Array<Record<string, unknown>>
+    resolution_result: {
+      resolved_fields: Array<Record<string, unknown>>
+      unresolved_fields: string[]
+      resolution_hash: string
+    }
+  }>
+  evidence_policy: 'three_proofs'
+  failure_policy: { unknown: 'stop_batch' }
+  publish_allowed: false
+  snapshot_hash: string
+  created_at?: string
 }
 export type DraftBoxScopeSnapshotCreateRequest = {
   max_items: number
@@ -707,6 +876,7 @@ export type WorkbenchSection =
   | 'home'
   | 'dxm_access'
   | 'acquisition_claim'
+  | 'draft_selection'
   | 'draft_edit_save'
   | 'template_center'
   | 'start_save'

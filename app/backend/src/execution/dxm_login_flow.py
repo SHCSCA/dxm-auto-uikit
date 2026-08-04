@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import math
 import os
 import re
 import socket
@@ -17,11 +18,16 @@ from urllib.parse import parse_qs, urljoin, urlparse
 
 from playwright.sync_api import Browser, BrowserContext, Page, Playwright, TimeoutError, sync_playwright
 
+from src.batch_edit.plan_schema_contract import (
+    PlanSchemaError,
+    normalize_wire_value,
+)
 from src.core.config import DATA_DIR, SCREENSHOT_DIR, SESSION_DIR
 from src.execution.browser_agent_protocol import mutation_target_hash
 from src.execution.browser_runtime import chrome_launch_options
 from src.execution.dxm_live import DxmLiveClient
 from src.services.agent_console import HUD_INIT_SCRIPT
+from src.services.dxm_draft_reader import DxmDraftReaderError
 from src.state_machine.two_stage import (
     TwoStageContractError,
     canonical_source_identity,
@@ -37,6 +43,53 @@ VISIBLE_CDP_CONNECT_TIMEOUT_MS = 8000
 FROZEN_DRAFT_TARGET_SCHEMA = 'dxm_draft_box_target.v1'
 _FROZEN_PRODUCT_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{5,128}$')
 _MUTATION_FAILURE_CODE_PATTERN = re.compile(r'^([A-Z][A-Z0-9_]{2,63})(?::|$)')
+DXM_DRAFT_READ_ALLOWLIST = frozenset({
+    ('GET', 'https://www.dianxiaomi.com/api/userInfo.json'),
+    ('POST', 'https://www.dianxiaomi.com/api/smtProduct/pageList.json'),
+})
+DXM_DRAFT_PAGE_FORM_KEYS = frozenset({
+    'pageNo',
+    'pageSize',
+    'total',
+    'searchType',
+    'searchValue',
+    'shopId',
+    'dxmState',
+    'dxmOfflineState',
+})
+DXM_E2_PLAN_READ_ALLOWLIST = frozenset({
+    ('GET', 'https://www.dianxiaomi.com/api/smtProduct/edit.json'),
+    ('POST', 'https://www.dianxiaomi.com/api/userTemplate/pageList.json'),
+    ('POST', 'https://www.dianxiaomi.com/api/smtAttributeTemplate/pageList.json'),
+    ('POST', 'https://www.dianxiaomi.com/api/smtShopInfoSync/list.json'),
+    ('POST', 'https://www.dianxiaomi.com/api/variationTemplate/com/smt/getNameListByCategory.json'),
+    ('POST', 'https://www.dianxiaomi.com/api/smtShopInfoSync/sizeChartList.json'),
+    ('POST', 'https://www.dianxiaomi.com/api/smtCategory/attributeList.json'),
+    ('POST', 'https://www.dianxiaomi.com/api/smtCategory/childAttributeList.json'),
+})
+DXM_ACCOUNT_IDENTITY_FIELDS = (
+    'id',
+    'puid',
+    'account',
+    'userId',
+    'userIdStr',
+    'accountId',
+    'accountIdStr',
+    'memberId',
+    'memberIdStr',
+    'employeeId',
+    'employeeIdStr',
+    'loginName',
+    'userName',
+    'username',
+)
+DXM_ACCOUNT_IDENTITY_CONTAINERS = (
+    'user',
+    'userInfo',
+    'account',
+    'member',
+    'employee',
+)
 
 
 class MutationAuthorizationError(RuntimeError):
@@ -1076,39 +1129,7 @@ class DxmLoginFlow:
             state['browser_visible'] = not self._is_headless()
             self._write_state(state)
             return state
-        try:
-            live_status = self.live_client.probe_session()
-        except Exception as exc:
-            if self._submit_state_looks_logged_in(submit_state):
-                state = self._login_success_state_from_submit(submit_state)
-                self._write_state(state)
-                return state
-            state = self._error_state(
-                stage='login_failed',
-                label='继续失败',
-                message=f'继续登录失败：{exc}',
-                next_action='真实浏览器窗口会保留；请确认验证码是否完成，必要时在窗口内修正后再次检测，或重新打开官网登录页。',
-            )
-            state['browser_visible'] = not self._is_headless()
-            self._write_state(state)
-            return state
-        if live_status.get('logged_in'):
-            state = {
-                'ok': True,
-                'stage': 'login_success',
-                'label': '已登录',
-                'message': '登录成功，已进入真实店小秘后台。',
-                'next_action': '真实浏览器窗口会保留；可继续进入已有待认领列表、商品箱和编辑流程。',
-                'requires_user_action': False,
-                'page_title': live_status.get('title') or live_status.get('product_page', {}).get('title') or '店小秘首页',
-                'page_url': live_status.get('final_url') or live_status.get('product_page', {}).get('url') or 'https://www.dianxiaomi.com/index.htm',
-                'screenshot_url': submit_state.get('screenshot_url') or live_status.get('home_screenshot_url') or live_status.get('product_page', {}).get('screenshot_url'),
-                'browser_visible': not self._is_headless(),
-                'updated_at': now_iso(),
-            }
-        elif self._submit_state_looks_logged_in(submit_state):
-            state = self._login_success_state_from_submit(submit_state)
-        else:
+        if not self._submit_state_looks_logged_in(submit_state):
             state = {
                 'ok': False,
                 'stage': 'login_failed',
@@ -1116,12 +1137,15 @@ class DxmLoginFlow:
                 'message': '继续登录后仍未检测到有效登录态，请检查验证码、账号密码或页面结构变化。',
                 'next_action': '真实浏览器窗口会保留；请在窗口内修正验证码或账号密码后，再点击检测登录态。',
                 'requires_user_action': True,
-                'page_title': live_status.get('title') or '店小秘官网登录页',
-                'page_url': live_status.get('final_url') or submit_state.get('page_url') or 'https://www.dianxiaomi.com/',
-                'screenshot_url': submit_state.get('screenshot_url') or live_status.get('home_screenshot_url') or live_status.get('product_page', {}).get('screenshot_url'),
+                'page_title': submit_state.get('page_title') or '店小秘官网登录页',
+                'page_url': submit_state.get('page_url') or 'https://www.dianxiaomi.com/',
+                'screenshot_url': submit_state.get('screenshot_url'),
                 'browser_visible': not self._is_headless(),
                 'updated_at': now_iso(),
             }
+            self._write_state(state)
+            return state
+        state = self._login_success_state_from_submit(submit_state)
         self._write_state(state)
         return state
 
@@ -1257,6 +1281,2003 @@ class DxmLoginFlow:
         }
         self._write_state(state)
         return state
+
+    def read_draft_shops(self) -> dict[str, Any]:
+        """Read userInfo.shopMap from the current visible authenticated session."""
+
+        _page, context, browser_session_id = self._draft_reader_session()
+        payload, account_ref = self._read_authenticated_user_info(
+            context,
+            browser_session_id,
+        )
+        return {
+            'browser_session_id': browser_session_id,
+            'account_ref': account_ref,
+            'payload': payload,
+        }
+
+    def read_draft_page(
+        self,
+        *,
+        shop_id: str,
+        page_no: int,
+        page_size: int,
+    ) -> dict[str, Any]:
+        """Read one draft-only page without navigating or exporting cookies."""
+
+        normalized_shop_id = str(shop_id or '')
+        if normalized_shop_id != '-1':
+            if (
+                normalized_shop_id != normalized_shop_id.strip()
+                or not normalized_shop_id.isdecimal()
+                or int(normalized_shop_id) <= 0
+                or str(int(normalized_shop_id)) != normalized_shop_id
+            ):
+                raise DxmDraftReaderError(
+                    'SHOP_FILTER_INVALID',
+                    '店铺筛选身份无效，已停止读取。',
+                )
+        if (
+            isinstance(page_no, bool)
+            or not isinstance(page_no, int)
+            or not 1 <= page_no <= 100_000
+            or isinstance(page_size, bool)
+            or not isinstance(page_size, int)
+            or not 1 <= page_size <= 100
+        ):
+            raise DxmDraftReaderError(
+                'PAGINATION_REQUEST_INVALID',
+                '草稿列表分页请求超出允许范围。',
+            )
+
+        _page, context, browser_session_id = self._draft_reader_session()
+        _user_info, account_ref = self._read_authenticated_user_info(
+            context,
+            browser_session_id,
+        )
+        form = {
+            'pageNo': str(page_no),
+            'pageSize': str(page_size),
+            'total': '0',
+            'searchType': '0',
+            'searchValue': '',
+            'shopId': normalized_shop_id,
+            'dxmState': 'draft',
+            'dxmOfflineState': '',
+        }
+        method = 'POST'
+        url = 'https://www.dianxiaomi.com/api/smtProduct/pageList.json'
+        self._assert_draft_reader_allowlisted(method, url, form=form)
+        try:
+            response = context.request.post(
+                url,
+                form=form,
+                timeout=15_000,
+            )
+        except Exception as exc:
+            raise DxmDraftReaderError(
+                'DXM_PAGE_READ_FAILED',
+                '当前真实店小秘会话的草稿列表读取失败。',
+            ) from exc
+        payload = self._validated_draft_reader_response(
+            response,
+            label='草稿列表',
+            expected_browser_session_id=browser_session_id,
+        )
+        return {
+            'browser_session_id': browser_session_id,
+            'account_ref': account_ref,
+            'payload': payload,
+        }
+
+    def read_e2_plan_scope(
+        self,
+        *,
+        shop_id: str,
+        category_ids: list[str],
+    ) -> dict[str, Any]:
+        """Read E2 template references and category schemas from this browser only."""
+
+        normalized_shop_id = self._positive_reader_id(shop_id, label='店铺')
+        normalized_category_ids = [
+            self._positive_reader_id(value, label='类目')
+            for value in category_ids
+        ]
+        if (
+            not normalized_category_ids
+            or len(normalized_category_ids) > 50
+            or len(set(normalized_category_ids)) != len(normalized_category_ids)
+        ):
+            raise DxmDraftReaderError(
+                'DXM_PLAN_SCOPE_INVALID',
+                'E2 类目作用域必须包含 1–50 个不重复类目。',
+            )
+        _page, context, browser_session_id = self._draft_reader_session()
+        user_info, account_ref = self._read_authenticated_user_info(
+            context,
+            browser_session_id,
+        )
+        if not self._user_info_contains_shop(user_info, normalized_shop_id):
+            raise DxmDraftReaderError(
+                'DXM_TEMPLATE_SCOPE_CONFLICT',
+                '请求店铺不在当前登录账号的 shopMap 中。',
+            )
+
+        records: list[dict[str, Any]] = []
+        records.extend(
+            self._read_e2_product_templates(
+                context,
+                browser_session_id=browser_session_id,
+                shop_id=normalized_shop_id,
+                category_ids=set(normalized_category_ids),
+            )
+        )
+        records.extend(
+            self._read_e2_attribute_templates(
+                context,
+                browser_session_id=browser_session_id,
+                shop_id=normalized_shop_id,
+                category_ids=set(normalized_category_ids),
+            )
+        )
+        shop_templates = self._e2_post_data(
+            context,
+            browser_session_id=browser_session_id,
+            url='https://www.dianxiaomi.com/api/smtShopInfoSync/list.json',
+            form={'shopId': normalized_shop_id},
+            label='店铺模板',
+        )
+        if not isinstance(shop_templates, Mapping):
+            raise DxmDraftReaderError(
+                'DXM_TEMPLATE_RESPONSE_INVALID',
+                '店铺模板只读回包 data 结构无效。',
+            )
+        records.extend(
+            self._e2_named_template_records(
+                shop_templates.get('freightTemplateList'),
+                ref_type='freight',
+                id_keys=('templateId',),
+                name_keys=('templateName',),
+                shop_id=normalized_shop_id,
+                category_id=None,
+                source_api='/api/smtShopInfoSync/list.json',
+            )
+        )
+        records.extend(
+            self._e2_named_template_records(
+                shop_templates.get('promiseTemplateList'),
+                ref_type='service',
+                id_keys=('templateId',),
+                name_keys=('templateName',),
+                shop_id=normalized_shop_id,
+                category_id=None,
+                source_api='/api/smtShopInfoSync/list.json',
+            )
+        )
+
+        category_schemas: dict[str, dict[str, Any]] = {}
+        for category_id in normalized_category_ids:
+            common_form = {
+                'shopId': normalized_shop_id,
+                'categoryId': category_id,
+            }
+            variation_data = self._e2_post_data(
+                context,
+                browser_session_id=browser_session_id,
+                url=(
+                    'https://www.dianxiaomi.com/api/'
+                    'variationTemplate/com/smt/getNameListByCategory.json'
+                ),
+                form=common_form,
+                label='类目变种模板',
+                allow_null=True,
+            )
+            variation_list = self._e2_optional_list(
+                variation_data,
+                keys=('list', 'variationTemplateList', 'nameList'),
+            )
+            records.extend(
+                self._e2_named_template_records(
+                    variation_list,
+                    ref_type='variation',
+                    id_keys=('idStr', 'id', 'templateId'),
+                    name_keys=('templateName', 'name'),
+                    shop_id=normalized_shop_id,
+                    category_id=category_id,
+                    source_api=(
+                        '/api/variationTemplate/com/smt/'
+                        'getNameListByCategory.json'
+                    ),
+                )
+            )
+
+            size_data = self._e2_post_data(
+                context,
+                browser_session_id=browser_session_id,
+                url='https://www.dianxiaomi.com/api/smtShopInfoSync/sizeChartList.json',
+                form=common_form,
+                label='类目尺码表',
+            )
+            if not isinstance(size_data, Mapping):
+                raise DxmDraftReaderError(
+                    'DXM_TEMPLATE_RESPONSE_INVALID',
+                    '类目尺码表只读回包 data 结构无效。',
+                )
+            records.extend(
+                self._e2_named_template_records(
+                    size_data.get('sizeList'),
+                    ref_type='size',
+                    id_keys=('idStr', 'id', 'templateId', 'sizeId'),
+                    name_keys=('templateName', 'name', 'sizeName'),
+                    shop_id=normalized_shop_id,
+                    category_id=category_id,
+                    source_api='/api/smtShopInfoSync/sizeChartList.json',
+                )
+            )
+
+            attribute_schema_data = self._e2_post_data(
+                context,
+                browser_session_id=browser_session_id,
+                url='https://www.dianxiaomi.com/api/smtCategory/attributeList.json',
+                form={'categoryId': category_id},
+                label='类目属性 Schema',
+            )
+            attribute_schema_data = self._read_e2_child_attribute_cases(
+                context,
+                browser_session_id=browser_session_id,
+                category_id=category_id,
+                attribute_schema_data=attribute_schema_data,
+            )
+            category_schemas[category_id] = self._e2_category_schema(
+                attribute_schema_data,
+                category_id=category_id,
+            )
+
+        records = [
+            self._e2_schema_normalized_template_record(
+                record,
+                category_schemas=category_schemas,
+            )
+            for record in records
+        ]
+        identities: dict[tuple[str, str, str, str | None], dict[str, Any]] = {}
+        for record in records:
+            identity = (
+                record['ref_type'],
+                record['dxm_template_id'],
+                record['shop_id'],
+                record['category_id'],
+            )
+            previous = identities.get(identity)
+            if previous is not None and previous != record:
+                raise DxmDraftReaderError(
+                    'DXM_TEMPLATE_IDENTITY_CONFLICT',
+                    '同一模板身份返回了冲突内容，已停止同步。',
+                )
+            identities[identity] = record
+        _ending_user_info, ending_account_ref = self._read_authenticated_user_info(
+            context,
+            browser_session_id,
+        )
+        if ending_account_ref != account_ref:
+            raise DxmDraftReaderError(
+                'AUTH_ACCOUNT_MISMATCH',
+                'E2 只读同步期间登录账号已变化，已丢弃全部结果。',
+            )
+        if self.browser_session_id() != browser_session_id:
+            raise DxmDraftReaderError(
+                'BROWSER_SESSION_MISMATCH',
+                'E2 只读同步期间真实浏览器会话已变化。',
+            )
+        return {
+            'browser_session_id': browser_session_id,
+            'account_ref': account_ref,
+            'payload': {
+                'template_records': list(identities.values()),
+                'category_schemas': category_schemas,
+            },
+        }
+
+    def read_e2_product_details(
+        self,
+        *,
+        shop_id: str,
+        product_ids: list[str],
+    ) -> dict[str, Any]:
+        """Read current edit.json values for the confirmed E2 draft scope."""
+
+        normalized_shop_id = self._positive_reader_id(shop_id, label='店铺')
+        if not isinstance(product_ids, list) or not 3 <= len(product_ids) <= 100:
+            raise DxmDraftReaderError(
+                'PLAN_ITEM_COUNT_INVALID',
+                'E2 编辑页当前值读取必须绑定 3–100 件当次草稿。',
+            )
+        normalized_product_ids = [
+            self._positive_reader_id(value, label='商品')
+            for value in product_ids
+        ]
+        if len(set(normalized_product_ids)) != len(normalized_product_ids):
+            raise DxmDraftReaderError(
+                'PLAN_PRODUCT_DUPLICATE',
+                'E2 编辑页当前值商品 ID 必须唯一。',
+            )
+
+        _page, context, browser_session_id = self._draft_reader_session()
+        user_info, account_ref = self._read_authenticated_user_info(
+            context,
+            browser_session_id,
+        )
+        if not self._user_info_contains_shop(user_info, normalized_shop_id):
+            raise DxmDraftReaderError(
+                'PLAN_SCOPE_CONFLICT',
+                '请求店铺不在当前登录账号的 shopMap 中。',
+            )
+
+        method = 'GET'
+        url = 'https://www.dianxiaomi.com/api/smtProduct/edit.json'
+        products: list[dict[str, Any]] = []
+        for product_id in normalized_product_ids:
+            self._assert_e2_product_detail_read_allowlisted(
+                method,
+                url,
+                params={'id': product_id},
+            )
+            try:
+                response = context.request.get(
+                    url,
+                    params={'id': product_id},
+                    timeout=15_000,
+                )
+            except Exception as exc:
+                raise DxmDraftReaderError(
+                    'DXM_PRODUCT_DETAIL_READ_FAILED',
+                    '当前真实店小秘会话的编辑页商品当前值读取失败。',
+                ) from exc
+            payload = self._validated_draft_reader_response(
+                response,
+                label='编辑页商品当前值',
+                expected_browser_session_id=browser_session_id,
+            )
+            code = payload.get('code')
+            if not (
+                (type(code) is int and code == 0)
+                or (type(code) is str and code == '0')
+            ):
+                raise DxmDraftReaderError(
+                    'DXM_PRODUCT_DETAIL_READ_REJECTED',
+                    '店小秘编辑页商品当前值接口未返回严格成功状态。',
+                )
+            data = payload.get('data')
+            product = data.get('product') if isinstance(data, Mapping) else None
+            if not isinstance(product, Mapping):
+                raise DxmDraftReaderError(
+                    'DXM_PRODUCT_DETAIL_RESPONSE_INVALID',
+                    '店小秘编辑页商品当前值回包缺少 product。',
+                )
+            products.append(dict(product))
+
+        _ending_user_info, ending_account_ref = self._read_authenticated_user_info(
+            context,
+            browser_session_id,
+        )
+        if ending_account_ref != account_ref:
+            raise DxmDraftReaderError(
+                'AUTH_ACCOUNT_MISMATCH',
+                '编辑页当前值读取期间登录账号已变化，已丢弃全部结果。',
+            )
+        if self.browser_session_id() != browser_session_id:
+            raise DxmDraftReaderError(
+                'BROWSER_SESSION_MISMATCH',
+                '编辑页当前值读取期间真实浏览器会话已变化。',
+            )
+        return {
+            'browser_session_id': browser_session_id,
+            'account_ref': account_ref,
+            'payload': {'products': products},
+        }
+
+    @staticmethod
+    def _assert_e2_product_detail_read_allowlisted(
+        method: str,
+        url: str,
+        *,
+        params: Mapping[str, str],
+    ) -> None:
+        if (
+            (method, url) not in DXM_E2_PLAN_READ_ALLOWLIST
+            or method != 'GET'
+            or set(params) != {'id'}
+        ):
+            raise DxmDraftReaderError(
+                'DXM_PLAN_READ_ALLOWLIST_VIOLATION',
+                'E2 编辑页当前值请求不在冻结的只读白名单内。',
+            )
+        product_id = str(params.get('id') or '')
+        if (
+            not product_id.isdecimal()
+            or int(product_id) <= 0
+            or str(int(product_id)) != product_id
+        ):
+            raise DxmDraftReaderError(
+                'DXM_PLAN_READ_ALLOWLIST_VIOLATION',
+                'E2 编辑页当前值请求包含无效商品 ID。',
+            )
+
+    def _read_e2_product_templates(
+        self,
+        context: BrowserContext,
+        *,
+        browser_session_id: str,
+        shop_id: str,
+        category_ids: set[str],
+    ) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        page_no = 1
+        while True:
+            data = self._e2_post_data(
+                context,
+                browser_session_id=browser_session_id,
+                url='https://www.dianxiaomi.com/api/userTemplate/pageList.json',
+                form={
+                    'platform': 'smt',
+                    'shopId': shop_id,
+                    'pageNo': str(page_no),
+                    'pageSize': '50',
+                    'total': '0',
+                    'searchType': '1',
+                    'searchValue': '',
+                },
+                label='产品模板',
+            )
+            if not isinstance(data, Mapping) or not isinstance(data.get('page'), Mapping):
+                raise DxmDraftReaderError(
+                    'DXM_TEMPLATE_RESPONSE_INVALID',
+                    '产品模板只读回包缺少分页 data.page。',
+                )
+            page = data['page']
+            observed_page_no = self._strict_reader_nonnegative_int(
+                page.get('pageNo'),
+                label='产品模板 pageNo',
+            )
+            page_size = self._strict_reader_nonnegative_int(
+                page.get('pageSize'),
+                label='产品模板 pageSize',
+            )
+            total_pages = self._strict_reader_nonnegative_int(
+                page.get('totalPage'),
+                label='产品模板 totalPage',
+            )
+            raw_items = page.get('list')
+            if (
+                observed_page_no != page_no
+                or page_size != 50
+                or not isinstance(raw_items, list)
+                or total_pages < 0
+                or total_pages > 100
+                or (total_pages == 0 and (page_no != 1 or raw_items))
+                or (total_pages > 0 and not 1 <= page_no <= total_pages)
+            ):
+                raise DxmDraftReaderError(
+                    'DXM_TEMPLATE_PAGINATION_INVALID',
+                    '产品模板分页回包不闭合。',
+                )
+            for raw in raw_items:
+                if not isinstance(raw, Mapping):
+                    raise DxmDraftReaderError(
+                        'DXM_TEMPLATE_RESPONSE_INVALID',
+                        '产品模板列表存在无效对象。',
+                    )
+                record_shop_id = self._positive_reader_id(
+                    raw.get('shopId'),
+                    label='产品模板店铺',
+                )
+                if record_shop_id != shop_id:
+                    raise DxmDraftReaderError(
+                        'DXM_TEMPLATE_SCOPE_CONFLICT',
+                        '产品模板属于另一个店铺。',
+                    )
+                raw_category_id = raw.get('categoryId') or raw.get('nodePathId')
+                category_id = (
+                    None
+                    if raw_category_id in (None, '')
+                    else self._positive_reader_id(
+                        raw_category_id,
+                        label='产品模板类目',
+                    )
+                )
+                if category_id is not None and category_id not in category_ids:
+                    continue
+                records.append(
+                    self._e2_template_record(
+                        raw,
+                        ref_type='product',
+                        id_keys=('idStr', 'id'),
+                        name_keys=('name', 'templateName'),
+                        shop_id=shop_id,
+                        category_id=category_id,
+                        source_api='/api/userTemplate/pageList.json',
+                    )
+                )
+            if total_pages in (0, page_no):
+                return records
+            page_no += 1
+
+    def _read_e2_attribute_templates(
+        self,
+        context: BrowserContext,
+        *,
+        browser_session_id: str,
+        shop_id: str,
+        category_ids: set[str],
+    ) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        page_no = 1
+        while True:
+            data = self._e2_post_data(
+                context,
+                browser_session_id=browser_session_id,
+                url=(
+                    'https://www.dianxiaomi.com/api/'
+                    'smtAttributeTemplate/pageList.json'
+                ),
+                form={
+                    'platform': 'smt',
+                    'shopId': '-1',
+                    'pageNo': str(page_no),
+                    'pageSize': '50',
+                    'total': '0',
+                    'searchType': '1',
+                    'searchValue': '',
+                },
+                label='属性模板',
+            )
+            if not isinstance(data, Mapping) or not isinstance(data.get('page'), Mapping):
+                raise DxmDraftReaderError(
+                    'DXM_TEMPLATE_RESPONSE_INVALID',
+                    '属性模板只读回包缺少分页 data.page。',
+                )
+            page = data['page']
+            observed_page_no = self._strict_reader_nonnegative_int(
+                page.get('pageNo'),
+                label='属性模板 pageNo',
+            )
+            page_size = self._strict_reader_nonnegative_int(
+                page.get('pageSize'),
+                label='属性模板 pageSize',
+            )
+            total_pages = self._strict_reader_nonnegative_int(
+                page.get('totalPage'),
+                label='属性模板 totalPage',
+            )
+            raw_items = page.get('list')
+            if (
+                observed_page_no != page_no
+                or page_size != 50
+                or not isinstance(raw_items, list)
+                or total_pages > 100
+                or (total_pages == 0 and (page_no != 1 or raw_items))
+                or (total_pages > 0 and not 1 <= page_no <= total_pages)
+            ):
+                raise DxmDraftReaderError(
+                    'DXM_TEMPLATE_PAGINATION_INVALID',
+                    '属性模板分页回包不闭合。',
+                )
+            for raw in raw_items:
+                if not isinstance(raw, Mapping):
+                    raise DxmDraftReaderError(
+                        'DXM_TEMPLATE_RESPONSE_INVALID',
+                        '属性模板列表存在无效对象。',
+                    )
+                record_shop_id = self._positive_reader_id(
+                    raw.get('shopId'),
+                    label='属性模板店铺',
+                )
+                if record_shop_id != shop_id:
+                    continue
+                category_id = self._positive_reader_id(
+                    raw.get('categoryId'),
+                    label='属性模板类目',
+                )
+                if category_id not in category_ids:
+                    continue
+                records.append(
+                    self._e2_template_record(
+                        raw,
+                        ref_type='attribute',
+                        id_keys=('idStr', 'id'),
+                        name_keys=('templateName',),
+                        shop_id=shop_id,
+                        category_id=category_id,
+                        source_api='/api/smtAttributeTemplate/pageList.json',
+                    )
+                )
+            if total_pages in (0, page_no):
+                return records
+            page_no += 1
+
+    def _e2_post_data(
+        self,
+        context: BrowserContext,
+        *,
+        browser_session_id: str,
+        url: str,
+        form: dict[str, str],
+        label: str,
+        allow_null: bool = False,
+    ) -> Any:
+        self._assert_e2_plan_read_allowlisted('POST', url, form=form)
+        try:
+            response = context.request.post(url, form=form, timeout=15_000)
+        except Exception as exc:
+            raise DxmDraftReaderError(
+                'DXM_PLAN_READ_FAILED',
+                f'当前真实店小秘会话的{label}读取失败。',
+            ) from exc
+        payload = self._validated_draft_reader_response(
+            response,
+            label=label,
+            expected_browser_session_id=browser_session_id,
+        )
+        code = payload.get('code')
+        if not (
+            (type(code) is int and code == 0)
+            or (type(code) is str and code == '0')
+        ):
+            raise DxmDraftReaderError(
+                'DXM_PLAN_READ_REJECTED',
+                f'店小秘{label}只读接口未返回严格成功状态。',
+            )
+        data = payload.get('data')
+        if data is None and allow_null:
+            return None
+        if data is None:
+            raise DxmDraftReaderError(
+                'DXM_TEMPLATE_RESPONSE_INVALID',
+                f'店小秘{label}只读回包缺少 data。',
+            )
+        return data
+
+    def _read_e2_child_attribute_cases(
+        self,
+        context: BrowserContext,
+        *,
+        browser_session_id: str,
+        category_id: str,
+        attribute_schema_data: Any,
+    ) -> list[dict[str, Any]]:
+        if not isinstance(attribute_schema_data, list):
+            raise DxmDraftReaderError(
+                'CATEGORY_SCHEMA_INVALID',
+                f'类目 {category_id} 的 attributeList data 不是数组。',
+            )
+        enriched: list[dict[str, Any]] = []
+        for raw_attribute in attribute_schema_data:
+            if not isinstance(raw_attribute, Mapping):
+                raise DxmDraftReaderError(
+                    'CATEGORY_SCHEMA_INVALID',
+                    f'类目 {category_id} 包含无效属性定义。',
+                )
+            attribute = dict(raw_attribute)
+            attribute_id = self._positive_reader_id(
+                attribute.get('arrtNameId'),
+                label='属性名',
+            )
+            values = self._e2_wire_list(
+                attribute.get('values'),
+                reason_code='CATEGORY_SCHEMA_INVALID',
+                label=f'类目 {category_id} 的属性 {attribute_id} values',
+            )
+            child_cases: list[dict[str, Any]] = []
+            for option in values or []:
+                if not isinstance(option, Mapping):
+                    raise DxmDraftReaderError(
+                        'CATEGORY_SCHEMA_INVALID',
+                        f'类目 {category_id} 的属性 {attribute_id} values 存在无效项。',
+                    )
+                raw_has_sub_attr = option.get('hasSubAttr')
+                has_sub_attr = (
+                    False
+                    if raw_has_sub_attr in (None, '')
+                    else self._strict_reader_bool(
+                        raw_has_sub_attr,
+                        label='选项 hasSubAttr',
+                    )
+                )
+                if not has_sub_attr:
+                    continue
+                parent_value_id = self._positive_reader_id(
+                    option.get('id') or option.get('attrValueId'),
+                    label='父属性选项值',
+                )
+                child_data = self._e2_post_data(
+                    context,
+                    browser_session_id=browser_session_id,
+                    url=(
+                        'https://www.dianxiaomi.com/api/'
+                        'smtCategory/childAttributeList.json'
+                    ),
+                    form={
+                        'categoryId': category_id,
+                        'arrtNameId': attribute_id,
+                        'arrtValueId': parent_value_id,
+                    },
+                    label='类目级联子属性 Schema',
+                )
+                if isinstance(child_data, Mapping):
+                    child_data = self._e2_optional_list(
+                        child_data,
+                        keys=('list', 'attributeList', 'childAttributeList'),
+                    )
+                if not isinstance(child_data, list) or not child_data:
+                    raise DxmDraftReaderError(
+                        'CATEGORY_SCHEMA_INVALID',
+                        (
+                            f'类目 {category_id} 的属性 {attribute_id} 选项 '
+                            f'{parent_value_id} 声明 hasSubAttr '
+                            '但没有可冻结的子属性定义。'
+                        ),
+                    )
+                child_cases.append({
+                    'parent_value_id': parent_value_id,
+                    'children': child_data,
+                })
+            if child_cases:
+                attribute['__child_attribute_cases__'] = child_cases
+            enriched.append(attribute)
+        return enriched
+
+    @staticmethod
+    def _assert_e2_plan_read_allowlisted(
+        method: str,
+        url: str,
+        *,
+        form: Mapping[str, str],
+    ) -> None:
+        if (method, url) not in DXM_E2_PLAN_READ_ALLOWLIST:
+            raise DxmDraftReaderError(
+                'DXM_PLAN_READ_ALLOWLIST_VIOLATION',
+                'E2 请求不在模板与类目只读白名单内。',
+            )
+        path = urlparse(url).path
+        keys = frozenset(form)
+        valid = False
+        if path in {
+            '/api/userTemplate/pageList.json',
+            '/api/smtAttributeTemplate/pageList.json',
+        }:
+            valid = (
+                keys
+                == {
+                    'platform',
+                    'shopId',
+                    'pageNo',
+                    'pageSize',
+                    'total',
+                    'searchType',
+                    'searchValue',
+                }
+                and form.get('platform') == 'smt'
+                and form.get('pageSize') == '50'
+                and form.get('total') == '0'
+                and form.get('searchType') == '1'
+                and form.get('searchValue') == ''
+                and (
+                    path != '/api/smtAttributeTemplate/pageList.json'
+                    or form.get('shopId') == '-1'
+                )
+            )
+        elif path == '/api/smtShopInfoSync/list.json':
+            valid = keys == {'shopId'}
+        elif path == '/api/smtCategory/attributeList.json':
+            valid = keys == {'categoryId'}
+        elif path == '/api/smtCategory/childAttributeList.json':
+            valid = (
+                keys == {'categoryId', 'arrtNameId', 'arrtValueId'}
+                and all(
+                    str(form.get(key) or '').isdecimal()
+                    and int(str(form.get(key))) > 0
+                    for key in ('categoryId', 'arrtNameId', 'arrtValueId')
+                )
+            )
+        else:
+            valid = keys == {'shopId', 'categoryId'}
+        if not valid:
+            raise DxmDraftReaderError(
+                'DXM_PLAN_READ_ALLOWLIST_VIOLATION',
+                'E2 只读请求表单偏离冻结合同。',
+            )
+
+    @classmethod
+    def _e2_named_template_records(
+        cls,
+        value: Any,
+        *,
+        ref_type: str,
+        id_keys: tuple[str, ...],
+        name_keys: tuple[str, ...],
+        shop_id: str,
+        category_id: str | None,
+        source_api: str,
+    ) -> list[dict[str, Any]]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise DxmDraftReaderError(
+                'DXM_TEMPLATE_RESPONSE_INVALID',
+                f'{ref_type} 模板列表结构无效。',
+            )
+        return [
+            cls._e2_template_record(
+                raw,
+                ref_type=ref_type,
+                id_keys=id_keys,
+                name_keys=name_keys,
+                shop_id=shop_id,
+                category_id=category_id,
+                source_api=source_api,
+            )
+            for raw in value
+        ]
+
+    @classmethod
+    def _e2_template_record(
+        cls,
+        raw: Any,
+        *,
+        ref_type: str,
+        id_keys: tuple[str, ...],
+        name_keys: tuple[str, ...],
+        shop_id: str,
+        category_id: str | None,
+        source_api: str,
+    ) -> dict[str, Any]:
+        if not isinstance(raw, Mapping):
+            raise DxmDraftReaderError(
+                'DXM_TEMPLATE_RESPONSE_INVALID',
+                f'{ref_type} 模板项不是对象。',
+            )
+        declared_ids = [
+            cls._positive_reader_id(raw.get(key), label=f'{ref_type} 模板')
+            for key in id_keys
+            if raw.get(key) not in (None, '')
+        ]
+        if not declared_ids or len(set(declared_ids)) != 1:
+            raise DxmDraftReaderError(
+                'DXM_TEMPLATE_IDENTITY_CONFLICT',
+                f'{ref_type} 模板缺少稳定 ID 或身份冲突。',
+            )
+        names = [
+            str(raw.get(key) or '').strip()
+            for key in name_keys
+            if str(raw.get(key) or '').strip()
+        ]
+        if not names:
+            raise DxmDraftReaderError(
+                'DXM_TEMPLATE_RESPONSE_INVALID',
+                f'{ref_type} 模板缺少显示名。',
+            )
+        raw_shop_id = raw.get('shopId')
+        if raw_shop_id not in (None, ''):
+            observed_shop_id = cls._positive_reader_id(
+                raw_shop_id,
+                label=f'{ref_type} 模板店铺',
+            )
+            if observed_shop_id != shop_id:
+                raise DxmDraftReaderError(
+                    'DXM_TEMPLATE_SCOPE_CONFLICT',
+                    f'{ref_type} 模板属于另一个店铺。',
+                )
+        raw_category_id = raw.get('categoryId')
+        if raw_category_id not in (None, ''):
+            observed_category_id = cls._positive_reader_id(
+                raw_category_id,
+                label=f'{ref_type} 模板类目',
+            )
+            if category_id is None or observed_category_id != category_id:
+                raise DxmDraftReaderError(
+                    'DXM_TEMPLATE_SCOPE_CONFLICT',
+                    f'{ref_type} 模板属于另一个类目。',
+                )
+        audit_items: list[dict[str, Any]] = []
+        resolved_values = cls._e2_template_resolved_values(
+            raw,
+            ref_type=ref_type,
+            template_id=declared_ids[0],
+            audit_items=audit_items,
+        )
+        return {
+            'ref_type': ref_type,
+            'dxm_template_id': declared_ids[0],
+            'shop_id': shop_id,
+            'category_id': category_id,
+            'observed_display_name': names[0],
+            'source_api': source_api,
+            'availability': 'available',
+            'resolved_values': resolved_values,
+            'audit_items': audit_items,
+            'source_record': json.loads(
+                json.dumps(
+                    dict(raw),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(',', ':'),
+                )
+            ),
+        }
+
+    @classmethod
+    def _e2_template_resolved_values(
+        cls,
+        raw: Mapping[str, Any],
+        *,
+        ref_type: str,
+        template_id: str,
+        audit_items: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        resolved: dict[str, Any] = {}
+        observed_audit_items = audit_items if audit_items is not None else []
+
+        def add(
+            field_key: str,
+            value: Any,
+            *,
+            allow_multiple: bool = False,
+        ) -> None:
+            if value is None or (isinstance(value, str) and not value.strip()):
+                return
+            if re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*', field_key) is None:
+                raise DxmDraftReaderError(
+                    'DXM_TEMPLATE_RESPONSE_INVALID',
+                    f'{ref_type} 模板解析出不稳定字段键。',
+                )
+            if 'publish' in field_key.casefold() or 'release' in field_key.casefold():
+                raise DxmDraftReaderError(
+                    'DXM_TEMPLATE_PUBLISH_FORBIDDEN',
+                    f'{ref_type} 模板包含发布字段，已停止同步。',
+                )
+            normalized_value = cls._e2_normalized_template_field_value(
+                field_key,
+                value,
+                ref_type=ref_type,
+            )
+            if normalized_value is None:
+                return
+            normalized = json.loads(
+                json.dumps(
+                    normalized_value,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(',', ':'),
+                )
+            )
+            if field_key in resolved:
+                existing = resolved[field_key]
+                if existing == normalized:
+                    return
+                if allow_multiple:
+                    existing_values = (
+                        list(existing)
+                        if isinstance(existing, list)
+                        else [existing]
+                    )
+                    if normalized not in existing_values:
+                        existing_values.append(normalized)
+                    resolved[field_key] = existing_values
+                    return
+                raise DxmDraftReaderError(
+                    'DXM_TEMPLATE_VALUE_CONFLICT',
+                    f'{ref_type} 模板内部字段 {field_key} 值冲突。',
+                )
+            resolved[field_key] = normalized
+
+        if ref_type == 'product':
+            module_list = raw.get('moduleList')
+            if module_list is not None and not isinstance(module_list, list):
+                raise DxmDraftReaderError(
+                    'DXM_TEMPLATE_RESPONSE_INVALID',
+                    '产品模板 moduleList 不是数组。',
+                )
+            for module in module_list or []:
+                if not isinstance(module, Mapping):
+                    raise DxmDraftReaderError(
+                        'DXM_TEMPLATE_RESPONSE_INVALID',
+                        '产品模板 moduleList 存在无效项。',
+                    )
+                module_data = module.get('data')
+                if module_data in (None, ''):
+                    continue
+                if isinstance(module_data, str):
+                    try:
+                        module_data = json.loads(module_data)
+                    except ValueError as exc:
+                        raise DxmDraftReaderError(
+                            'DXM_TEMPLATE_RESPONSE_INVALID',
+                            '产品模板模块 data 不是有效 JSON。',
+                        ) from exc
+                if not isinstance(module_data, Mapping):
+                    raise DxmDraftReaderError(
+                        'DXM_TEMPLATE_RESPONSE_INVALID',
+                        '产品模板模块 data 不是对象。',
+                    )
+                for field_key, value in module_data.items():
+                    add(str(field_key), value)
+        elif ref_type == 'attribute':
+            properties = cls._e2_wire_list(
+                raw.get('productPropertys'),
+                reason_code='DXM_TEMPLATE_RESPONSE_INVALID',
+                label='属性模板 productPropertys',
+            )
+            for property_index, property_value in enumerate(properties or []):
+                if not isinstance(property_value, Mapping):
+                    raise DxmDraftReaderError(
+                        'DXM_TEMPLATE_RESPONSE_INVALID',
+                        '属性模板包含无效属性项。',
+                    )
+                attribute_id = property_value.get('attrNameId')
+                if attribute_id in (None, ''):
+                    attribute_id = property_value.get('arrtNameId')
+                if attribute_id in (None, ''):
+                    meaningful_placeholder_values = (
+                        property_value.get('attrName'),
+                        property_value.get('arrtName'),
+                        property_value.get('name'),
+                        property_value.get('attrValueId'),
+                        property_value.get('attrValue'),
+                        property_value.get('attrValueName'),
+                        property_value.get('customValue'),
+                    )
+                    if all(
+                        value is None
+                        or (isinstance(value, str) and not value.strip())
+                        for value in meaningful_placeholder_values
+                    ):
+                        continue
+                    audit_name = next(
+                        (
+                            str(property_value.get(key) or '').strip()
+                            for key in ('attrName', 'arrtName', 'name')
+                            if str(property_value.get(key) or '').strip()
+                        ),
+                        '',
+                    )
+                    audit_value = next(
+                        (
+                            property_value.get(key)
+                            for key in (
+                                'attrValue',
+                                'attrValueName',
+                                'customValue',
+                                'attrValueId',
+                            )
+                            if property_value.get(key) not in (None, '')
+                        ),
+                        None,
+                    )
+                    if not audit_name or audit_value is None:
+                        raise DxmDraftReaderError(
+                            'DXM_TEMPLATE_RESPONSE_INVALID',
+                            '属性模板无 ID 自定义属性缺少可审计的名称或值。',
+                        )
+                    observed_audit_items.append({
+                        'kind': 'unmapped_custom_attribute',
+                        'executable': False,
+                        'source_index': property_index,
+                        'attr_name': audit_name,
+                        'attr_value': json.loads(
+                            json.dumps(
+                                audit_value,
+                                ensure_ascii=False,
+                                sort_keys=True,
+                                separators=(',', ':'),
+                            )
+                        ),
+                        'reason_code': 'DXM_TEMPLATE_ATTRIBUTE_ID_UNMAPPED',
+                    })
+                    continue
+                stable_attribute_id = cls._positive_reader_id(
+                    attribute_id,
+                    label='属性模板属性名',
+                )
+                raw_value_id = property_value.get('attrValueId')
+                if raw_value_id not in (None, ''):
+                    value = cls._positive_reader_id(
+                        raw_value_id,
+                        label='属性模板属性值',
+                    )
+                else:
+                    value = (
+                        property_value.get('attrValueName')
+                        or property_value.get('customValue')
+                    )
+                add(
+                    f'attr_{stable_attribute_id}',
+                    value,
+                    allow_multiple=True,
+                )
+        elif ref_type == 'freight':
+            add('freightTemplateId', template_id)
+        elif ref_type == 'service':
+            add('promiseTemplateId', template_id)
+        elif ref_type == 'size':
+            add('sizechartId', template_id)
+        return resolved
+
+    @classmethod
+    def _e2_schema_normalized_template_record(
+        cls,
+        record: Mapping[str, Any],
+        *,
+        category_schemas: Mapping[str, Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        category_id = record.get('category_id')
+        if category_id is None:
+            return dict(record)
+        schema = category_schemas.get(str(category_id))
+        if not isinstance(schema, Mapping):
+            raise DxmDraftReaderError(
+                'CATEGORY_SCHEMA_INVALID',
+                f'模板类目 {category_id} 缺少冻结 Schema。',
+            )
+        properties = schema.get('properties')
+        if not isinstance(properties, Mapping):
+            raise DxmDraftReaderError(
+                'CATEGORY_SCHEMA_INVALID',
+                f'模板类目 {category_id} 的 Schema 缺少 properties。',
+            )
+        normalized = dict(record)
+        normalized_values: dict[str, Any] = {}
+        for field_key, value in record['resolved_values'].items():
+            definition = properties.get(field_key)
+            if not isinstance(definition, Mapping):
+                normalized_values[field_key] = value
+                continue
+            try:
+                normalized_values[field_key] = normalize_wire_value(
+                    value,
+                    definition,
+                    field_key=field_key,
+                )
+            except PlanSchemaError as exc:
+                raise DxmDraftReaderError(
+                    'DXM_TEMPLATE_RESPONSE_INVALID',
+                    f'模板字段 {field_key} 无法按类目 Schema 归一化。',
+                ) from exc
+        normalized['resolved_values'] = normalized_values
+        return normalized
+
+    @staticmethod
+    def _e2_wire_list(
+        value: Any,
+        *,
+        reason_code: str,
+        label: str,
+    ) -> list[Any] | None:
+        if value is None:
+            return None
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str) and value and value == value.strip():
+            try:
+                decoded = json.loads(value)
+            except ValueError as exc:
+                raise DxmDraftReaderError(
+                    reason_code,
+                    f'{label} 不是有效 JSON 数组。',
+                ) from exc
+            if isinstance(decoded, list):
+                return decoded
+        raise DxmDraftReaderError(
+            reason_code,
+            f'{label} 既不是数组，也不是数组形式的 JSON 字符串。',
+        )
+
+    @classmethod
+    def _e2_normalized_template_field_value(
+        cls,
+        field_key: str,
+        value: Any,
+        *,
+        ref_type: str,
+    ) -> Any:
+        numeric_fields = {
+            'grossWeight',
+            'packageLength',
+            'packageWidth',
+            'packageHeight',
+            'productPrice',
+        }
+        if field_key in numeric_fields:
+            if isinstance(value, bool):
+                normalized_number: int | float | None = None
+            elif isinstance(value, int):
+                normalized_number = value
+            elif isinstance(value, float) and math.isfinite(value):
+                normalized_number = value
+            elif (
+                isinstance(value, str)
+                and value == value.strip()
+                and re.fullmatch(r'-?(?:0|[1-9]\d*)(?:\.\d+)?', value)
+            ):
+                normalized_number = float(value) if '.' in value else int(value)
+            else:
+                normalized_number = None
+            if normalized_number is None:
+                raise DxmDraftReaderError(
+                    'DXM_TEMPLATE_RESPONSE_INVALID',
+                    f'{ref_type} 模板字段 {field_key} 不是严格数字。',
+                )
+            return normalized_number
+        if field_key == 'originalBox':
+            if type(value) is bool:
+                return value
+            if type(value) is str and value in ('true', 'false', '1', '0'):
+                return value in ('true', '1')
+            raise DxmDraftReaderError(
+                'DXM_TEMPLATE_RESPONSE_INVALID',
+                f'{ref_type} 模板字段 {field_key} 不是严格布尔值。',
+            )
+        if field_key == 'aeopAeProductSKUs':
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except ValueError as exc:
+                    raise DxmDraftReaderError(
+                        'DXM_TEMPLATE_RESPONSE_INVALID',
+                        f'{ref_type} 模板字段 {field_key} 不是有效 JSON 数组。',
+                    ) from exc
+            if not isinstance(value, list):
+                raise DxmDraftReaderError(
+                    'DXM_TEMPLATE_RESPONSE_INVALID',
+                    f'{ref_type} 模板字段 {field_key} 不是数组。',
+                )
+            return value
+        if field_key == 'promiseTemplateId' and (
+            (type(value) is int and value == 0)
+            or (type(value) is str and value == '0')
+        ):
+            return None
+        if field_key in {'freightTemplateId', 'promiseTemplateId', 'sizechartId'}:
+            try:
+                return cls._positive_reader_id(
+                    value,
+                    label=f'{ref_type} 模板字段 {field_key}',
+                )
+            except DxmDraftReaderError as exc:
+                raise DxmDraftReaderError(
+                    'DXM_TEMPLATE_RESPONSE_INVALID',
+                    f'{ref_type} 模板字段 {field_key} 不是稳定正整数。',
+                ) from exc
+        return value
+
+    @staticmethod
+    def _e2_optional_list(value: Any, *, keys: tuple[str, ...]) -> Any:
+        if value is None or isinstance(value, list):
+            return value
+        if not isinstance(value, Mapping):
+            raise DxmDraftReaderError(
+                'DXM_TEMPLATE_RESPONSE_INVALID',
+                '可选模板名列表结构无效。',
+            )
+        for key in keys:
+            if key in value:
+                return value[key]
+        if not value:
+            return []
+        raise DxmDraftReaderError(
+            'DXM_TEMPLATE_RESPONSE_INVALID',
+            '可选模板名回包没有已知列表字段。',
+        )
+
+    @classmethod
+    def _e2_category_schema(
+        cls,
+        value: Any,
+        *,
+        category_id: str,
+    ) -> dict[str, Any]:
+        if not isinstance(value, list):
+            raise DxmDraftReaderError(
+                'CATEGORY_SCHEMA_INVALID',
+                f'类目 {category_id} 的 attributeList data 不是数组。',
+            )
+        properties: dict[str, dict[str, Any]] = {
+            'title': {
+                'type': 'string',
+                'minLength': 1,
+                'natural_language': True,
+                'ui_label_zh': '英文标题',
+                'source_api': '/api/smtProduct/pageList.json',
+            },
+            'aeopAeProductSKUs': {
+                'type': 'array',
+                'natural_language': False,
+                'ui_label_zh': 'SKU 行',
+                'schema_origin': 'dxm_product_editor',
+                'items': {
+                    'type': 'object',
+                    'properties': {
+                        'skuCode': {
+                            'type': 'string',
+                            'minLength': 1,
+                            'ui_label_zh': 'SKU 编码',
+                        },
+                        'skuPrice': {
+                            'type': 'string',
+                            'pattern': r'^(?:0|[1-9]\d*)(?:\.\d+)?$',
+                            'ui_label_zh': 'SKU 售价',
+                        },
+                        'cargoPrice': {
+                            'type': 'string',
+                            'pattern': r'^(?:0|[1-9]\d*)(?:\.\d+)?$',
+                            'ui_label_zh': 'SKU 货值',
+                        },
+                        'ipmSkuStock': {
+                            'type': 'integer',
+                            'minimum': 0,
+                            'ui_label_zh': 'SKU 库存',
+                        },
+                        'aeopSKUProperty': {
+                            'type': 'array',
+                            'ui_label_zh': 'SKU 属性组合',
+                            'items': {
+                                'type': 'object',
+                                'properties': {
+                                    'skuPropertyId': {
+                                        'type': 'string',
+                                        'minLength': 1,
+                                        'ui_label_zh': 'SKU 属性 ID',
+                                    },
+                                    'propertyValueId': {
+                                        'type': 'string',
+                                        'minLength': 1,
+                                        'ui_label_zh': '属性值 ID',
+                                    },
+                                    'attrVal': {
+                                        'type': 'string',
+                                        'ui_label_zh': '自定义属性值',
+                                    },
+                                    'themeVal': {
+                                        'type': 'string',
+                                        'ui_label_zh': '属性主题值',
+                                    },
+                                    'propertyValueDefinitionName': {
+                                        'type': 'string',
+                                        'ui_label_zh': '属性值名称',
+                                    },
+                                },
+                                'required': [],
+                            },
+                        },
+                    },
+                    'required': [],
+                },
+            },
+            'imageURLs': {
+                'type': 'array',
+                'wire_format': 'semicolon_delimited',
+                'items': {
+                    'type': 'string',
+                    'minLength': 1,
+                    'pattern': r'^https?://',
+                },
+                'natural_language': False,
+                'ui_label_zh': '主图与附图',
+                'schema_origin': 'dxm_product_editor',
+            },
+            'detail': {
+                'type': 'string',
+                'minLength': 1,
+                'natural_language': True,
+                'content_format': 'html',
+                'ui_label_zh': 'PC 英文描述',
+                'schema_origin': 'dxm_product_editor',
+            },
+            'mobileDetail': {
+                'type': 'string',
+                'minLength': 1,
+                'natural_language': True,
+                'content_format': 'json',
+                'ui_label_zh': '移动端英文描述',
+                'schema_origin': 'dxm_product_editor',
+            },
+            'grossWeight': {
+                'type': 'number',
+                'minimum': 0,
+                'natural_language': False,
+                'ui_label_zh': '包装后重量',
+                'schema_origin': 'dxm_product_editor',
+            },
+            'packageLength': {
+                'type': 'number',
+                'minimum': 0,
+                'natural_language': False,
+                'ui_label_zh': '包装长度',
+                'schema_origin': 'dxm_product_editor',
+            },
+            'packageWidth': {
+                'type': 'number',
+                'minimum': 0,
+                'natural_language': False,
+                'ui_label_zh': '包装宽度',
+                'schema_origin': 'dxm_product_editor',
+            },
+            'packageHeight': {
+                'type': 'number',
+                'minimum': 0,
+                'natural_language': False,
+                'ui_label_zh': '包装高度',
+                'schema_origin': 'dxm_product_editor',
+            },
+            'originalBox': {
+                'type': 'boolean',
+                'natural_language': False,
+                'ui_label_zh': '原包装',
+                'schema_origin': 'dxm_product_editor',
+            },
+            'productPrice': {
+                'type': 'number',
+                'minimum': 0,
+                'natural_language': False,
+                'ui_label_zh': '商品价格',
+                'schema_origin': 'dxm_product_editor',
+            },
+            'productMinPrice': {
+                'type': 'number',
+                'minimum': 0,
+                'natural_language': False,
+                'ui_label_zh': '最低价格',
+                'schema_origin': 'dxm_product_editor',
+            },
+            'productMaxPrice': {
+                'type': 'number',
+                'minimum': 0,
+                'natural_language': False,
+                'ui_label_zh': '最高价格',
+                'schema_origin': 'dxm_product_editor',
+            },
+            'currencyCode': {
+                'type': 'string',
+                'natural_language': False,
+                'ui_label_zh': '币种',
+                'schema_origin': 'dxm_product_editor',
+            },
+            'freightTemplateId': {
+                'type': 'string',
+                'natural_language': False,
+                'ui_label_zh': '运费模板',
+                'schema_origin': 'dxm_product_editor',
+            },
+            'promiseTemplateId': {
+                'type': 'string',
+                'natural_language': False,
+                'ui_label_zh': '服务模板',
+                'schema_origin': 'dxm_product_editor',
+            },
+            'sizechartId': {
+                'type': 'string',
+                'natural_language': False,
+                'ui_label_zh': '尺码模板',
+                'schema_origin': 'dxm_product_editor',
+            },
+        }
+        for editor_field_key, editor_definition in properties.items():
+            editor_definition['ui_binding'] = (
+                f'dxm_editor:{editor_field_key}'
+            )
+        required = ['title']
+        conditional_requirements: list[dict[str, Any]] = []
+        for raw in value:
+            if not isinstance(raw, Mapping):
+                raise DxmDraftReaderError(
+                    'CATEGORY_SCHEMA_INVALID',
+                    f'类目 {category_id} 包含无效属性定义。',
+                )
+            attribute_id = cls._positive_reader_id(
+                raw.get('arrtNameId'),
+                label='属性名',
+            )
+            field_key = f'attr_{attribute_id}'
+            if field_key in properties:
+                raise DxmDraftReaderError(
+                    'CATEGORY_SCHEMA_INVALID',
+                    f'类目 {category_id} 存在重复属性 ID。',
+                )
+            name_zh = str(raw.get('nameZh') or '').strip()
+            if not name_zh:
+                raise DxmDraftReaderError(
+                    'CATEGORY_SCHEMA_INVALID',
+                    f'类目 {category_id} 的属性 {attribute_id} 缺少中文名。',
+                )
+            values = cls._e2_wire_list(
+                raw.get('values'),
+                reason_code='CATEGORY_SCHEMA_INVALID',
+                label=f'类目 {category_id} 的属性 {attribute_id} values',
+            )
+            units = cls._e2_wire_list(
+                raw.get('units'),
+                reason_code='CATEGORY_SCHEMA_INVALID',
+                label=f'类目 {category_id} 的属性 {attribute_id} units',
+            )
+            input_type = str(raw.get('inputType') or '').strip().upper()
+            if not input_type:
+                raise DxmDraftReaderError(
+                    'CATEGORY_SCHEMA_INVALID',
+                    f'类目 {category_id} 的属性 {attribute_id} 缺少 inputType。',
+                )
+            show_type = str(
+                raw.get('attributeShowTypeValue') or ''
+            ).strip().casefold()
+            field_type = (
+                'array'
+                if (
+                    any(token in input_type for token in ('MULTI', 'CHECKBOX'))
+                    or show_type in {
+                        'check_box',
+                        'checkbox',
+                        'multi',
+                        'multi_select',
+                    }
+                )
+                else 'number'
+                if any(token in input_type for token in ('NUMBER', 'DECIMAL'))
+                else 'string'
+            )
+            definition = {
+                'type': field_type,
+                'natural_language': (
+                    field_type == 'string'
+                    and not values
+                    and any(token in input_type for token in ('STRING', 'TEXT', 'INPUT'))
+                ),
+                'ui_label_zh': name_zh,
+                'ui_binding': f'dxm_attribute:{attribute_id}',
+                'name_en': str(raw.get('nameEn') or '').strip() or None,
+                'input_type': input_type,
+                'sku': cls._strict_reader_bool(raw.get('sku'), label='sku'),
+                'values': json.loads(json.dumps(values or [], ensure_ascii=False)),
+                'units': json.loads(json.dumps(units or [], ensure_ascii=False)),
+                'source_definition': json.loads(
+                    json.dumps(
+                        dict(raw),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(',', ':'),
+                    )
+                ),
+            }
+            properties[field_key] = definition
+            if cls._strict_reader_bool(raw.get('required'), label='required'):
+                required.append(field_key)
+            child_cases = raw.get('__child_attribute_cases__')
+            if child_cases is None:
+                continue
+            if not isinstance(child_cases, list) or not child_cases:
+                raise DxmDraftReaderError(
+                    'CATEGORY_SCHEMA_INVALID',
+                    (
+                        f'类目 {category_id} 的属性 {attribute_id} '
+                        '级联子属性条件结构无效。'
+                    ),
+                )
+            for child_case in child_cases:
+                if not isinstance(child_case, Mapping):
+                    raise DxmDraftReaderError(
+                        'CATEGORY_SCHEMA_INVALID',
+                        f'类目 {category_id} 包含无效级联子属性条件。',
+                    )
+                parent_value_id = cls._positive_reader_id(
+                    child_case.get('parent_value_id'),
+                    label='父属性选项值',
+                )
+                children = child_case.get('children')
+                if not isinstance(children, list) or not children:
+                    raise DxmDraftReaderError(
+                        'CATEGORY_SCHEMA_INVALID',
+                        f'类目 {category_id} 的级联子属性定义为空。',
+                    )
+                required_children: list[str] = []
+                for child in children:
+                    if not isinstance(child, Mapping):
+                        raise DxmDraftReaderError(
+                            'CATEGORY_SCHEMA_INVALID',
+                            f'类目 {category_id} 包含无效子属性定义。',
+                        )
+                    child_id = cls._positive_reader_id(
+                        child.get('arrtNameId'),
+                        label='子属性名',
+                    )
+                    child_key = f'attr_{child_id}'
+                    child_name_zh = str(child.get('nameZh') or '').strip()
+                    child_input_type = str(
+                        child.get('inputType') or ''
+                    ).strip().upper()
+                    if not child_name_zh or not child_input_type:
+                        raise DxmDraftReaderError(
+                            'CATEGORY_SCHEMA_INVALID',
+                            f'类目 {category_id} 的子属性 {child_id} 定义不完整。',
+                        )
+                    child_values = cls._e2_wire_list(
+                        child.get('values'),
+                        reason_code='CATEGORY_SCHEMA_INVALID',
+                        label=(
+                            f'类目 {category_id} 的子属性 {child_id} values'
+                        ),
+                    )
+                    child_units = cls._e2_wire_list(
+                        child.get('units'),
+                        reason_code='CATEGORY_SCHEMA_INVALID',
+                        label=(
+                            f'类目 {category_id} 的子属性 {child_id} units'
+                        ),
+                    )
+                    child_show_type = str(
+                        child.get('attributeShowTypeValue') or ''
+                    ).strip().casefold()
+                    child_type = (
+                        'array'
+                        if (
+                            any(
+                                token in child_input_type
+                                for token in ('MULTI', 'CHECKBOX')
+                            )
+                            or child_show_type in {
+                                'check_box',
+                                'checkbox',
+                                'multi',
+                                'multi_select',
+                            }
+                        )
+                        else 'number'
+                        if any(
+                            token in child_input_type
+                            for token in ('NUMBER', 'DECIMAL')
+                        )
+                        else 'string'
+                    )
+                    child_definition = {
+                        'type': child_type,
+                        'natural_language': (
+                            child_type == 'string'
+                            and not child_values
+                            and any(
+                                token in child_input_type
+                                for token in ('STRING', 'TEXT', 'INPUT')
+                            )
+                        ),
+                        'ui_label_zh': child_name_zh,
+                        'ui_binding': f'dxm_attribute:{child_id}',
+                        'name_en': (
+                            str(child.get('nameEn') or '').strip() or None
+                        ),
+                        'input_type': child_input_type,
+                        'sku': cls._strict_reader_bool(
+                            child.get('sku'),
+                            label='子属性 sku',
+                        ),
+                        'values': json.loads(
+                            json.dumps(child_values or [], ensure_ascii=False)
+                        ),
+                        'units': json.loads(
+                            json.dumps(child_units or [], ensure_ascii=False)
+                        ),
+                        'parent_field_key': field_key,
+                        'source_definition': json.loads(
+                            json.dumps(
+                                dict(child),
+                                ensure_ascii=False,
+                                sort_keys=True,
+                                separators=(',', ':'),
+                            )
+                        ),
+                    }
+                    previous_child = properties.get(child_key)
+                    if (
+                        previous_child is not None
+                        and previous_child != child_definition
+                    ):
+                        raise DxmDraftReaderError(
+                            'CATEGORY_SCHEMA_INVALID',
+                            f'类目 {category_id} 存在冲突子属性 ID。',
+                        )
+                    properties[child_key] = child_definition
+                    if cls._strict_reader_bool(
+                        child.get('required'),
+                        label='子属性 required',
+                    ):
+                        required_children.append(child_key)
+                if required_children:
+                    parent_condition = (
+                        {'contains': {'const': parent_value_id}}
+                        if field_type == 'array'
+                        else {'const': parent_value_id}
+                    )
+                    conditional_requirements.append({
+                        'if': {
+                            'properties': {
+                                field_key: parent_condition,
+                            },
+                            'required': [field_key],
+                        },
+                        'then': {'required': required_children},
+                    })
+        schema = {
+            'type': 'object',
+            'properties': properties,
+            'required': required,
+            'price_policy': {
+                'sku_cargo_not_above_sale': True,
+                'sku_prices_within_range': True,
+            },
+        }
+        if conditional_requirements:
+            schema['allOf'] = conditional_requirements
+        return schema
+
+    @staticmethod
+    def _user_info_contains_shop(payload: Mapping[str, Any], shop_id: str) -> bool:
+        data = payload.get('data')
+        if not isinstance(data, Mapping):
+            return False
+        shop_map = data.get('shopMap')
+        if not isinstance(shop_map, Mapping):
+            return False
+        raw_shop = shop_map.get(shop_id)
+        if not isinstance(raw_shop, Mapping):
+            return False
+        declared = [
+            raw_shop.get(key)
+            for key in ('idStr', 'id', 'shopId', 'shopIdStr')
+            if raw_shop.get(key) not in (None, '')
+        ]
+        if not declared:
+            return True
+        return all(
+            DxmLoginFlow._positive_reader_id(value, label='shopMap 店铺') == shop_id
+            for value in declared
+        )
+
+    @staticmethod
+    def _positive_reader_id(value: Any, *, label: str) -> str:
+        if isinstance(value, bool):
+            text = ''
+        elif isinstance(value, int):
+            text = str(value)
+        elif isinstance(value, str):
+            text = value
+        else:
+            text = ''
+        if not text.isdecimal() or text != text.strip() or int(text or '0') <= 0:
+            raise DxmDraftReaderError(
+                'DXM_PLAN_IDENTITY_INVALID',
+                f'{label}身份不是稳定正整数。',
+            )
+        return str(int(text))
+
+    @staticmethod
+    def _strict_reader_nonnegative_int(value: Any, *, label: str) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise DxmDraftReaderError(
+                'DXM_TEMPLATE_PAGINATION_INVALID',
+                f'{label} 必须是非负整数。',
+            )
+        return value
+
+    @staticmethod
+    def _strict_reader_bool(value: Any, *, label: str) -> bool:
+        if type(value) is bool:
+            return value
+        if type(value) is int and value in (0, 1):
+            return bool(value)
+        if type(value) is str and value in ('0', '1', 'false', 'true'):
+            return value in ('1', 'true')
+        raise DxmDraftReaderError(
+            'CATEGORY_SCHEMA_INVALID',
+            f'类目属性 {label} 不是严格布尔值。',
+        )
+
+    def _read_authenticated_user_info(
+        self,
+        context: BrowserContext,
+        browser_session_id: str,
+    ) -> tuple[dict[str, Any], str]:
+        method = 'GET'
+        url = 'https://www.dianxiaomi.com/api/userInfo.json'
+        self._assert_draft_reader_allowlisted(method, url, form=None)
+        try:
+            response = context.request.get(
+                url,
+                timeout=15_000,
+            )
+        except Exception as exc:
+            raise DxmDraftReaderError(
+                'DXM_SHOP_READ_FAILED',
+                '当前真实店小秘会话的店铺与账号身份读取失败。',
+            ) from exc
+        payload = self._validated_draft_reader_response(
+            response,
+            label='店铺与账号身份',
+            expected_browser_session_id=browser_session_id,
+        )
+        return payload, self._authenticated_account_ref(payload)
+
+    @staticmethod
+    def _authenticated_account_ref(payload: Mapping[str, Any]) -> str:
+        code = payload.get('code')
+        if not (
+            (type(code) is int and code == 0)
+            or (type(code) is str and code == '0')
+        ):
+            raise DxmDraftReaderError(
+                'AUTH_ACCOUNT_UNPROVEN',
+                '账号身份接口未返回严格成功状态，已停止读取。',
+            )
+        data = payload.get('data')
+        if not isinstance(data, Mapping):
+            raise DxmDraftReaderError(
+                'AUTH_ACCOUNT_UNPROVEN',
+                '账号身份接口缺少 data，已停止读取。',
+            )
+
+        identity: dict[str, str] = {}
+
+        def collect(container: Mapping[str, Any], prefix: str) -> None:
+            for field in DXM_ACCOUNT_IDENTITY_FIELDS:
+                raw_value = container.get(field)
+                if (
+                    raw_value is None
+                    or isinstance(raw_value, bool)
+                    or not isinstance(raw_value, (str, int))
+                ):
+                    continue
+                value = str(raw_value).strip()
+                if value:
+                    identity[f'{prefix}{field}'] = value
+
+        collect(data, 'data.')
+        for container_name in DXM_ACCOUNT_IDENTITY_CONTAINERS:
+            nested = data.get(container_name)
+            if isinstance(nested, Mapping):
+                collect(nested, f'data.{container_name}.')
+        if not identity:
+            raise DxmDraftReaderError(
+                'AUTH_ACCOUNT_UNPROVEN',
+                '当前 userInfo 回包缺少稳定账号身份，已按失败关闭。',
+            )
+        canonical = json.dumps(
+            identity,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(',', ':'),
+        )
+        return hashlib.sha256(
+            f'dxm-auth-account:{canonical}'.encode('utf-8')
+        ).hexdigest()[:32]
+
+    def _draft_reader_session(self) -> tuple[Page, BrowserContext, str]:
+        page = self._page
+        context = self._context
+        browser = self._browser
+        browser_session_id = self.browser_session_id()
+        if (
+            page is None
+            or context is None
+            or browser is None
+            or not browser_session_id
+            or getattr(page, 'context', None) is not context
+            or self._is_playwright_object_closed(page)
+            or self._is_playwright_object_closed(context)
+            or not self._is_browser_connected(browser)
+        ):
+            raise DxmDraftReaderError(
+                'BROWSER_SESSION_UNAVAILABLE',
+                '当前没有可复用的真实可见浏览器会话；系统不会另开浏览器或自动导航。',
+            )
+        if self._browser_session_thread_id != threading.get_ident():
+            raise DxmDraftReaderError(
+                'BROWSER_SESSION_THREAD_MISMATCH',
+                '当前调用线程不是可见浏览器会话 owner，已拒绝跨线程读取。',
+            )
+        if self._is_headless():
+            raise DxmDraftReaderError(
+                'VISIBLE_BROWSER_REQUIRED',
+                '草稿列表只允许复用当前真实可见浏览器。',
+            )
+        if self._page_looks_like_login(page):
+            raise DxmDraftReaderError(
+                'LOGIN_REQUIRED',
+                '当前真实浏览器显示为登录页，请重新登录后再读取草稿。',
+            )
+        try:
+            parsed = urlparse(str(getattr(page, 'url', '') or ''))
+        except ValueError:
+            parsed = urlparse('')
+        host = str(parsed.hostname or '').casefold()
+        if host != 'dianxiaomi.com' and not host.endswith('.dianxiaomi.com'):
+            raise DxmDraftReaderError(
+                'DXM_PAGE_REQUIRED',
+                '当前真实浏览器不在店小秘站点，已停止读取。',
+            )
+        if not hasattr(context, 'request'):
+            raise DxmDraftReaderError(
+                'BROWSER_SESSION_UNAVAILABLE',
+                '当前真实浏览器会话不支持同源只读接口，已停止读取。',
+            )
+        return page, context, browser_session_id
+
+    @staticmethod
+    def _assert_draft_reader_allowlisted(
+        method: str,
+        url: str,
+        *,
+        form: Mapping[str, str] | None,
+    ) -> None:
+        if (method, url) not in DXM_DRAFT_READ_ALLOWLIST:
+            raise DxmDraftReaderError(
+                'READ_ALLOWLIST_VIOLATION',
+                '请求不在草稿 Reader 只读白名单内，已拒绝。',
+            )
+        if method == 'GET':
+            if form is not None:
+                raise DxmDraftReaderError(
+                    'READ_ALLOWLIST_VIOLATION',
+                    '店铺只读请求不得携带表单，已拒绝。',
+                )
+            return
+        if (
+            form is None
+            or frozenset(form) != DXM_DRAFT_PAGE_FORM_KEYS
+            or form.get('dxmState') != 'draft'
+            or form.get('total') != '0'
+            or form.get('searchType') != '0'
+            or form.get('searchValue') != ''
+            or form.get('dxmOfflineState') != ''
+        ):
+            raise DxmDraftReaderError(
+                'READ_ALLOWLIST_VIOLATION',
+                '草稿列表请求偏离固定只读表单，已拒绝。',
+            )
+
+    def _validated_draft_reader_response(
+        self,
+        response: Any,
+        *,
+        label: str,
+        expected_browser_session_id: str,
+    ) -> dict[str, Any]:
+        if self.browser_session_id() != expected_browser_session_id:
+            raise DxmDraftReaderError(
+                'BROWSER_SESSION_MISMATCH',
+                '只读接口返回前真实浏览器会话已变化，已丢弃结果。',
+            )
+        status = getattr(response, 'status', None)
+        if (
+            getattr(response, 'ok', None) is not True
+            or isinstance(status, bool)
+            or not isinstance(status, int)
+            or not 200 <= status < 300
+        ):
+            raise DxmDraftReaderError(
+                'DXM_READ_HTTP_FAILED',
+                f'店小秘{label}只读接口未成功返回，已停止读取。',
+            )
+        try:
+            payload = response.json()
+        except Exception as exc:
+            raise DxmDraftReaderError(
+                'DXM_RESPONSE_SCHEMA_INVALID',
+                f'店小秘{label}响应不是可解析 JSON，已停止读取。',
+            ) from exc
+        if not isinstance(payload, Mapping):
+            raise DxmDraftReaderError(
+                'DXM_RESPONSE_SCHEMA_INVALID',
+                f'店小秘{label}响应结构无效，已停止读取。',
+            )
+        if self.browser_session_id() != expected_browser_session_id:
+            raise DxmDraftReaderError(
+                'BROWSER_SESSION_MISMATCH',
+                '解析只读回包时真实浏览器会话已变化，已丢弃结果。',
+            )
+        return dict(payload)
 
     def capture_draft_box_scope(self, max_items: int) -> dict[str, Any]:
         """Read the ordered scope from the already-visible draft-box page.
@@ -1545,6 +3566,9 @@ class DxmLoginFlow:
           });
           const hostMatches = (host, domain) => host === domain || host.endsWith(`.${domain}`);
           const isDxmHost = (host) => hostMatches(host, 'dianxiaomi.com');
+          const isStableProductId = (value) => (
+            /^[A-Za-z0-9_-]{5,128}$/.test(value) && /[0-9]/.test(value)
+          );
           const isSupportedProductSource = (parsed) => {
             const host = parsed.hostname.toLowerCase();
             const path = parsed.pathname;
@@ -1574,7 +3598,7 @@ class DxmLoginFlow:
             for (const node of nodes) {
               for (const key of ['data-product-id', 'data-productid']) {
                 const value = String(node.getAttribute?.(key) || '').trim();
-                if (/^[A-Za-z0-9_-]{5,128}$/.test(value)) return value;
+                if (isStableProductId(value)) return value;
               }
             }
             const structuredFields = Array.from(row.querySelectorAll(
@@ -1586,7 +3610,7 @@ class DxmLoginFlow:
               const value = String(
                 field.value || field.getAttribute?.('value') || field.getAttribute?.('data-value') || textOf(field)
               ).trim();
-              if (/^[A-Za-z0-9_-]{5,128}$/.test(value)) return value;
+              if (isStableProductId(value)) return value;
             }
             for (const anchor of Array.from(row.querySelectorAll('a[href]'))) {
               try {
@@ -1596,7 +3620,7 @@ class DxmLoginFlow:
                 if (parsed.pathname.replace(/\/$/, '') === '/web/smt/edit') keys.push('id');
                 for (const key of keys) {
                   const value = String(parsed.searchParams.get(key) || '').trim();
-                  if (/^[A-Za-z0-9_-]{5,128}$/.test(value)) return value;
+                  if (isStableProductId(value)) return value;
                 }
               } catch (_) {}
             }
@@ -1713,6 +3737,14 @@ class DxmLoginFlow:
                 )
             title = ' '.join(str(raw.get('title') or '').split())
             product_id = str(raw.get('productId') or '').strip() or None
+            if product_id and (
+                re.fullmatch(r'[A-Za-z0-9_-]{5,128}', product_id) is None
+                or re.search(r'[0-9]', product_id) is None
+            ):
+                raise TwoStageContractError(
+                    'DRAFT_BOX_ITEM_IDENTITY_INCOMPLETE',
+                    f'商品箱第 {position} 行的产品 ID 不是稳定商品身份。',
+                )
             source_urls = [str(value).strip() for value in (raw.get('sourceUrls') or []) if str(value).strip()]
             canonical_urls: list[str] = []
             primary_source_url: str | None = None
@@ -2244,26 +4276,41 @@ class DxmLoginFlow:
         return self._inspect_visible_login_state(page).get('logged_in') is True
 
     def _inspect_visible_login_state(self, page: Page) -> dict[str, Any]:
-        url = str(getattr(page, 'url', '') or '').lower()
-        body_text = ''
-        if '/web/home' in url or 'index.htm' in url:
-            try:
-                body_text = page.locator('body').inner_text(timeout=2000)
-            except Exception:
-                body_text = ''
-            normalized = ''.join(str(body_text or '').split())
-            if not normalized:
-                return {'logged_in': False, 'url': url, 'body_excerpt': '', 'reason': 'home_body_empty'}
-            if '欢迎登录' in normalized:
-                return {'logged_in': False, 'url': url, 'body_excerpt': str(body_text or '')[:240], 'reason': 'login_text_visible'}
-            logged_in = any(term in normalized for term in ('首页', '产品', '订单', '仓库', '物流', '数据'))
+        url = str(getattr(page, 'url', '') or '')
+        try:
+            parsed = urlparse(url)
+        except ValueError:
+            parsed = urlparse('')
+        host = str(parsed.hostname or '').casefold()
+        path = str(parsed.path or '').rstrip('/').casefold()
+        is_dxm_host = host == 'dianxiaomi.com' or host.endswith('.dianxiaomi.com')
+        is_home_path = path == '/web/home' or path.endswith('/index.htm')
+        is_dxm_home = parsed.scheme.casefold() == 'https' and is_dxm_host and is_home_path
+        if not is_dxm_home:
+            return {'logged_in': False, 'url': url, 'body_excerpt': '', 'reason': 'not_home_url'}
+        try:
+            body_text = page.locator('body').inner_text(timeout=2000)
+        except Exception:
+            body_text = ''
+        normalized = ''.join(str(body_text or '').split())
+        if not normalized:
+            return {'logged_in': False, 'url': url, 'body_excerpt': '', 'reason': 'home_body_empty'}
+        if '欢迎登录' in normalized:
             return {
-                'logged_in': logged_in,
+                'logged_in': False,
                 'url': url,
                 'body_excerpt': str(body_text or '')[:240],
-                'reason': None if logged_in else 'home_markers_missing',
+                'reason': 'login_text_visible',
             }
-        return {'logged_in': False, 'url': url, 'body_excerpt': str(body_text or '')[:240], 'reason': 'not_home_url'}
+        return {
+            'logged_in': True,
+            'session_authenticated': True,
+            'business_page_ready': True,
+            'loading': False,
+            'url': url,
+            'body_excerpt': str(body_text or '')[:240],
+            'reason': None,
+        }
 
     def _submit_state_looks_logged_in(self, submit_state: dict[str, Any]) -> bool:
         if submit_state.get('visible_logged_in') is True:

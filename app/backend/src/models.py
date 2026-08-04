@@ -93,6 +93,11 @@ class EditBatchBundleSourceSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     template_id: StrictInt = Field(gt=0)
+    source_digest: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9A-Fa-f]{64}$",
+    )
 
 
 class EditBatchBundleSectionTemplates(BaseModel):
@@ -120,6 +125,49 @@ class EditBatchBundleComposeRequest(BaseModel):
     store_id: StrictInt = Field(gt=0)
     category_name: str | None = Field(default=None, max_length=200)
     section_templates: EditBatchBundleSectionTemplates
+
+
+class DxmTemplateRefSyncRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    shop_id: str = Field(pattern=r"^[1-9][0-9]*$")
+    category_ids: list[str] = Field(min_length=1, max_length=50)
+
+
+class LocalPlanTemplateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    version: str
+    shop_id: str
+    category_ids: list[str]
+    path: str
+    fixed_values: dict[str, Any]
+    fill_rules: dict[str, Any]
+    dxm_template_refs: list[dict[str, Any]]
+    field_mappings: dict[str, Any]
+    validation_policy: dict[str, Any]
+    exception_policy: dict[str, Any]
+    provenance: str
+
+
+class PlanSnapshotRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    local_plan_template_id: StrictInt = Field(gt=0)
+    shop_id: str = Field(pattern=r"^[1-9][0-9]*$")
+    session_ref: str = Field(pattern=r"^[0-9a-f]{16}$")
+    product_ids: list[str] = Field(min_length=3, max_length=100)
+    expected_snapshot_hash: str | None = Field(
+        default=None,
+        pattern=r"^[0-9A-Fa-f]{64}$",
+    )
+    idempotency_key: str | None = Field(
+        default=None,
+        min_length=8,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
 
 
 class ProductCreate(BaseModel):

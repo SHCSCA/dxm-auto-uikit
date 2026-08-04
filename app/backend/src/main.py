@@ -25,7 +25,7 @@ from src.core.config import DATA_DIR
 from src.services.runtime_bootstrap import ensure_runtime_bootstrap
 
 
-APP_VERSION = '0.1.0'
+APP_VERSION = '0.1.1'
 REPO_ROOT = Path(__file__).resolve().parents[3]
 runtime_bootstrap_state = ensure_runtime_bootstrap(
     data_dir=DATA_DIR,
@@ -52,6 +52,7 @@ from src.models import (
     AgentConsoleStartRequest,
     DraftBoxActionRequest,
     DraftBoxScopeSnapshotCreate,
+    DxmTemplateRefSyncRequest,
     EditBatchApproveAndStartRequest,
     EditBatchCreate,
     EditBatchBundleComposeRequest,
@@ -61,6 +62,8 @@ from src.models import (
     LoginContinueRequest,
     LoginNavigateRequest,
     LoginStartRequest,
+    LocalPlanTemplateRequest,
+    PlanSnapshotRequest,
     ProductCreate,
     ProductImportRequest,
     RuntimeControlRequest,
@@ -82,6 +85,8 @@ from src.batch_edit import (
     BundleComposerError,
     EditBatchBundleComposer,
 )
+from src.batch_edit.plan_contract import E2PlanService, PlanContractError
+from src.batch_edit.plan_schema_contract import PlanSchemaError
 from src.repository import Repository
 from src.services.config_defaults import DEFAULT_TEMPLATE_TYPES
 from src.services.title_ai import TitleAIService
@@ -93,6 +98,8 @@ from src.services.dxm_reference_templates import (
     configured_unsupported_reference_sections,
     resolve_dxm_reference_templates,
 )
+from src.services.dxm_draft_reader import DxmDraftReader, DxmDraftReaderError
+from src.services.dxm_plan_reader import DxmPlanReader, DxmPlanReaderError
 from src.services.template_center import template_center_metadata
 from src.state_machine.two_stage import (
     TwoStageContractError,
@@ -445,6 +452,45 @@ def dxm_workflow_open_draft_box():
     return normalize_artifact_paths(_run_login_flow(_workflow_adapter().open_draft_box))
 
 
+@app.get('/api/dxm/draft-reader/shops')
+def dxm_draft_reader_shops():
+    _assert_batch_browser_available()
+    try:
+        return _run_login_flow(DxmDraftReader(workflow_adapter).list_shops)
+    except DxmDraftReaderError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': exc.reason_code,
+                'message': str(exc),
+            },
+        ) from exc
+
+
+@app.get('/api/dxm/draft-reader/products')
+def dxm_draft_reader_products(
+    shop_id: str = Query(default='-1', min_length=1, max_length=32),
+    page_no: int = Query(default=1, ge=1, le=100_000),
+    page_size: int = Query(default=100, ge=1, le=100),
+):
+    _assert_batch_browser_available()
+    try:
+        return _run_login_flow(
+            DxmDraftReader(workflow_adapter).list_products,
+            shop_id=shop_id,
+            page_no=page_no,
+            page_size=page_size,
+        )
+    except DxmDraftReaderError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': exc.reason_code,
+                'message': str(exc),
+            },
+        ) from exc
+
+
 def _active_agent_console_browser() -> dict[str, Any] | None:
     console_status = agent_console_service.status()
     console_owns_browser = (
@@ -780,6 +826,210 @@ def compose_edit_batch_bundle(payload: EditBatchBundleComposeRequest):
                 'message': str(exc),
                 'missing': exc.missing,
             },
+        ) from exc
+
+
+@app.post('/api/dxm-template-refs/sync', status_code=201)
+def sync_dxm_template_refs(payload: DxmTemplateRefSyncRequest):
+    try:
+        read_result = _run_login_flow(
+            DxmPlanReader(workflow_adapter).read_scope,
+            shop_id=payload.shop_id,
+            category_ids=payload.category_ids,
+        )
+        refs = E2PlanService().sync_dxm_template_refs(
+            read_result["template_records"],
+            shop_id=read_result["shop_id"],
+            category_ids=read_result["category_ids"],
+        )
+        return {
+            "source": read_result["source"],
+            "session_bound": read_result["session_bound"],
+            "session_ref": read_result["session_ref"],
+            "shop_id": read_result["shop_id"],
+            "category_ids": read_result["category_ids"],
+            "category_schemas": read_result["category_schemas"],
+            "refs": refs,
+        }
+    except DxmPlanReaderError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+    except PlanContractError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+
+
+@app.get('/api/dxm-template-refs')
+def list_dxm_template_refs():
+    return E2PlanService().list_dxm_template_refs()
+
+
+@app.patch('/api/dxm-template-refs/{_ref_id}')
+def reject_dxm_template_ref_mutation(_ref_id: int, _payload: dict[str, Any]):
+    raise HTTPException(
+        status_code=405,
+        detail={
+            'reason_code': 'DXM_TEMPLATE_REF_READ_ONLY',
+            'message': '店小秘模板引用只允许从只读同步结果更新。',
+        },
+    )
+
+
+@app.post('/api/local-plan-templates', status_code=201)
+def create_local_plan_template(payload: LocalPlanTemplateRequest):
+    try:
+        return E2PlanService().create_local_plan(payload.model_dump())
+    except PlanContractError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+
+
+@app.get('/api/local-plan-templates')
+def list_local_plan_templates():
+    return E2PlanService().list_local_plans()
+
+
+@app.get('/api/local-plan-templates/{plan_id}')
+def get_local_plan_template(plan_id: int):
+    try:
+        return E2PlanService().get_local_plan(plan_id)
+    except PlanContractError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+
+
+@app.patch('/api/local-plan-templates/{plan_id}')
+def reject_local_plan_in_place_mutation(plan_id: int, _payload: dict[str, Any]):
+    try:
+        E2PlanService().get_local_plan(plan_id)
+    except PlanContractError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+    raise HTTPException(
+        status_code=409,
+        detail={
+            'reason_code': 'LOCAL_PLAN_VERSION_IMMUTABLE',
+            'message': '本地方案版本不可原地修改；请创建新版本。',
+        },
+    )
+
+
+@app.post('/api/local-plan-templates/{plan_id}/versions', status_code=201)
+def create_local_plan_template_version(plan_id: int, payload: LocalPlanTemplateRequest):
+    try:
+        return E2PlanService().create_local_plan(
+            payload.model_dump(),
+            supersedes_id=plan_id,
+        )
+    except PlanContractError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+
+
+@app.delete('/api/local-plan-templates/{plan_id}')
+def archive_local_plan_template(plan_id: int):
+    try:
+        return E2PlanService().archive_local_plan(plan_id)
+    except PlanContractError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+
+
+@app.post('/api/plan-snapshots/preview')
+def preview_plan_snapshot(payload: PlanSnapshotRequest):
+    try:
+        authoritative = _run_login_flow(
+            DxmPlanReader(workflow_adapter).build_snapshot_request,
+            local_plan_template_id=payload.local_plan_template_id,
+            shop_id=payload.shop_id,
+            product_ids=payload.product_ids,
+            expected_session_ref=payload.session_ref,
+        )
+        service = E2PlanService()
+        service.sync_dxm_template_refs(
+            authoritative["template_records"],
+            shop_id=authoritative["request"]["shop_id"],
+            category_ids=authoritative["category_ids"],
+        )
+        return service.build_plan_snapshot(authoritative["request"])
+    except (DxmPlanReaderError, PlanContractError, PlanSchemaError) as exc:
+        raise HTTPException(
+            status_code=getattr(exc, "status_code", 409),
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+
+
+@app.post('/api/plan-snapshots', status_code=201)
+def freeze_plan_snapshot(payload: PlanSnapshotRequest):
+    try:
+        if payload.expected_snapshot_hash is None:
+            raise PlanContractError(
+                "PLAN_SNAPSHOT_PREVIEW_REQUIRED",
+                "冻结前必须提交刚刚预览得到的 snapshot hash",
+            )
+        if payload.idempotency_key is None:
+            raise PlanContractError(
+                "PLAN_SNAPSHOT_IDEMPOTENCY_REQUIRED",
+                "冻结与建任务必须提交稳定的 idempotency_key",
+            )
+        authoritative = _run_login_flow(
+            DxmPlanReader(workflow_adapter).build_snapshot_request,
+            local_plan_template_id=payload.local_plan_template_id,
+            shop_id=payload.shop_id,
+            product_ids=payload.product_ids,
+            expected_session_ref=payload.session_ref,
+        )
+        service = E2PlanService()
+        service.sync_dxm_template_refs(
+            authoritative["template_records"],
+            shop_id=authoritative["request"]["shop_id"],
+            category_ids=authoritative["category_ids"],
+        )
+        return service.freeze_plan_snapshot(
+            authoritative["request"],
+            expected_snapshot_hash=payload.expected_snapshot_hash,
+            idempotency_key=payload.idempotency_key,
+        )
+    except (DxmPlanReaderError, PlanContractError, PlanSchemaError) as exc:
+        raise HTTPException(
+            status_code=getattr(exc, "status_code", 409),
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+
+
+@app.get('/api/plan-snapshots/{snapshot_id}')
+def get_plan_snapshot(snapshot_id: int):
+    try:
+        return E2PlanService().get_plan_snapshot(snapshot_id)
+    except PlanContractError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+
+
+@app.post('/api/plan-snapshots/{snapshot_id}/tasks', status_code=201)
+def create_batch_draft_save_task(snapshot_id: int):
+    try:
+        return E2PlanService().create_task_from_snapshot(snapshot_id, repo)
+    except PlanContractError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
         ) from exc
 
 

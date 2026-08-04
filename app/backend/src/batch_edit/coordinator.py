@@ -3,7 +3,7 @@ from __future__ import annotations
 import hmac
 from datetime import datetime, timezone
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.batch_edit.batch_contract import (
     BATCH_SCHEMA,
@@ -27,7 +27,8 @@ from src.batch_edit.execution_contract import (
     BatchExecutionContractError,
     authorize_batch_start,
 )
-from src.repository import Repository
+if TYPE_CHECKING:
+    from src.repository import Repository
 
 
 class BatchEditContractError(ValueError):

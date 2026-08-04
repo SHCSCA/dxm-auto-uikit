@@ -112,6 +112,11 @@ class EditBatchBundleComposer:
                 template = _decode_template(row)
                 snapshot = source_template_snapshot(template)
                 digest = canonical_sha256(snapshot)
+                if not isinstance(selection["source_digest"], str) or selection["source_digest"].upper() != digest:
+                    _reject(
+                        "TEMPLATE_SOURCE_DIGEST_DRIFT",
+                        f"source template {section} changed after the operator selected it",
+                    )
                 if template["is_enabled"] is not True:
                     _reject("TEMPLATE_SOURCE_DISABLED", f"source template {section} is disabled")
                 if template.get("requires_manual_configuration") is True:
@@ -255,6 +260,7 @@ class EditBatchBundleComposer:
             "template_name": template["template_name"],
             "template_type": template["template_type"],
             "binding_scope": template["binding_scope"],
+            "source_digest": canonical_sha256(snapshot),
             "missing_fields": list(dict.fromkeys(missing)),
             "ready": not missing,
         }

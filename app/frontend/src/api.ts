@@ -43,6 +43,14 @@ export async function patchJson<T>(path: string, body: unknown): Promise<T> {
   return response.json()
 }
 
+export async function deleteJson<T>(path: string): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: 'DELETE',
+  })
+  if (!response.ok) throw await responseError(response, `DELETE ${path} failed`)
+  return response.json()
+}
+
 async function responseError(response: Response, fallback: string): Promise<ApiRequestError> {
   try {
     const payload = await response.clone().json()
@@ -74,7 +82,7 @@ function safeApiErrorMessage(raw: string, status: number, fallback: string): str
     || normalized.includes('stack trace')
   )
   if (looksTechnical || status >= 500) {
-    if (fallback.startsWith('POST ') || fallback.startsWith('PATCH ')) {
+    if (fallback.startsWith('POST ') || fallback.startsWith('PATCH ') || fallback.startsWith('DELETE ')) {
       return `${humanRequestFallback(fallback)}：本机服务处理失败，操作结果未确认。系统不会自动重试；请先刷新工作台状态，必要时到真实页面人工核对。`
     }
     return `${humanRequestFallback(fallback)}：本机服务处理失败。请刷新工作台或查看实时日志。`
@@ -86,6 +94,7 @@ function safeApiErrorMessage(raw: string, status: number, fallback: string): str
 function humanRequestFallback(fallback: string) {
   if (fallback.startsWith('GET ')) return '数据读取失败'
   if (fallback.startsWith('PATCH ')) return '修改保存失败'
+  if (fallback.startsWith('DELETE ')) return '归档失败'
   if (fallback.startsWith('POST ')) return '操作提交失败'
   return '操作失败'
 }

@@ -234,6 +234,69 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_draft_box_scope_snapshots_created
                 ON draft_box_scope_snapshots (created_at DESC, id DESC);
 
+            CREATE TABLE IF NOT EXISTS dxm_template_refs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ref_type TEXT NOT NULL,
+                dxm_template_id TEXT NOT NULL,
+                shop_id TEXT NOT NULL,
+                category_id TEXT,
+                observed_display_name TEXT NOT NULL,
+                source_api TEXT NOT NULL,
+                availability TEXT NOT NULL,
+                source_digest TEXT NOT NULL,
+                resolved_values_json TEXT NOT NULL DEFAULT '{}',
+                resolved_values_hash TEXT NOT NULL DEFAULT '44136FA355B3678A1146AD16F7E8649E94FB4FC21FE77E8310C060F61CAFF8A',
+                audit_items_json TEXT NOT NULL DEFAULT '[]',
+                audit_items_hash TEXT NOT NULL DEFAULT '4F53CDA18C2BAA0C0354BB5F9A3ECBE5ED12AB4D8E10F13D464B1CD0DEBDF735',
+                synced_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_dxm_template_refs_identity
+                ON dxm_template_refs (
+                    ref_type,
+                    dxm_template_id,
+                    shop_id,
+                    COALESCE(category_id, '')
+                );
+
+            CREATE TABLE IF NOT EXISTS local_plan_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lineage_id INTEGER,
+                version TEXT NOT NULL,
+                name TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                supersedes_id INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_local_plan_version
+                ON local_plan_templates (lineage_id, version);
+
+            CREATE TABLE IF NOT EXISTS plan_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                local_plan_template_id INTEGER NOT NULL,
+                snapshot_hash TEXT NOT NULL UNIQUE,
+                snapshot_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_plan_snapshots_plan
+                ON plan_snapshots (local_plan_template_id, id DESC);
+
+            CREATE TABLE IF NOT EXISTS plan_snapshot_idempotency_keys (
+                idempotency_key TEXT PRIMARY KEY,
+                snapshot_id INTEGER NOT NULL,
+                snapshot_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_plan_snapshot_idempotency_snapshot
+                ON plan_snapshot_idempotency_keys (snapshot_id);
+
             CREATE TABLE IF NOT EXISTS edit_batches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 schema_version TEXT NOT NULL,
@@ -298,6 +361,22 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_edit_batch_items_batch
                 ON edit_batch_items (batch_id, ordinal);
             """
+        )
+        _ensure_columns(
+            conn,
+            "dxm_template_refs",
+            {
+                "resolved_values_json": "TEXT NOT NULL DEFAULT '{}'",
+                "resolved_values_hash": (
+                    "TEXT NOT NULL DEFAULT "
+                    "'44136FA355B3678A1146AD16F7E8649E94FB4FC21FE77E8310C060F61CAFF8A'"
+                ),
+                "audit_items_json": "TEXT NOT NULL DEFAULT '[]'",
+                "audit_items_hash": (
+                    "TEXT NOT NULL DEFAULT "
+                    "'4F53CDA18C2BAA0C0354BB5F9A3ECBE5ED12AB4D8E10F13D464B1CD0DEBDF735'"
+                ),
+            },
         )
         _ensure_columns(
             conn,
@@ -438,6 +517,38 @@ def init_db() -> None:
                 "save_result_json": "TEXT NOT NULL DEFAULT '{}'",
                 "summary_json": "TEXT NOT NULL DEFAULT '{}'",
             },
+        )
+        _ensure_columns(
+            conn,
+            "plan_snapshots",
+            {
+                "idempotency_key": "TEXT",
+                "task_id": "INTEGER",
+            },
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_snapshots_idempotency
+                ON plan_snapshots (idempotency_key)
+                WHERE idempotency_key IS NOT NULL
+            """
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_plan_snapshots_task
+                ON plan_snapshots (task_id)
+                WHERE task_id IS NOT NULL
+            """
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO plan_snapshot_idempotency_keys (
+                idempotency_key, snapshot_id, snapshot_hash, created_at
+            )
+            SELECT idempotency_key, id, snapshot_hash, created_at
+              FROM plan_snapshots
+             WHERE idempotency_key IS NOT NULL
+            """
         )
         migrate_reports_published_to_tristate(conn)
         disable_legacy_generated_starter_templates(conn)
@@ -769,7 +880,6 @@ def disable_unexecutable_edit_batch_bundles(conn: sqlite3.Connection) -> list[in
             continue
         category_name = binding.get("category_name")
         category_bound = isinstance(category_name, str) and bool(category_name.strip())
-
         dxm_reference = sections.get("dxm_reference")
         references = (
             dxm_reference.get("dxm_reference_templates")

@@ -187,7 +187,11 @@ def _complete_bundle_payload() -> dict:
         },
         "dxm_reference": {
             "dxm_reference_templates": {
-                name: {"names": [f"{name}-template"], "required": True}
+                name: (
+                    {"names": [], "required": False}
+                    if name in {"description", "compliance", "semi_managed"}
+                    else {"names": [f"{name}-template"], "required": True}
+                )
                 for name in (
                     "attribute_info",
                     "description",
@@ -212,7 +216,7 @@ def _complete_bundle_payload() -> dict:
             "id": 1000 + index,
             "template_type": section,
             "template_name": f"{section}-source",
-            "binding_scope": "DXM Shop A / 车载用品",
+            "binding_scope": "DXM Shop A",
             "payload": source_payload,
             "is_enabled": True,
             "created_at": "2026-07-21T08:00:00+00:00",
@@ -233,7 +237,7 @@ def _complete_bundle_payload() -> dict:
         "binding": {
             "store_id": 1,
             "store_name": "DXM Shop A",
-            "category_name": "车载用品",
+            "category_name": None,
             "platform": "AliExpress",
         },
         "source_templates": source_templates,
@@ -256,6 +260,18 @@ def _create_draft_batch_via_api(
     import src.main as main
 
     repository = Repository()
+    store = next(
+        (
+            candidate
+            for candidate in repository.list_stores()
+            if candidate["name"] == "DXM Shop A"
+            and candidate["platform"] == "AliExpress"
+        ),
+        None,
+    )
+    if store is None:
+        store = repository.create_store("DXM Shop A", "AliExpress")
+    assert store["id"] == 1
     capture = _scope_capture(tmp_path)
     capture["captured_at"] = captured_at
     capture["facts"]["pagination"]["max_items"] = max_items
@@ -281,7 +297,9 @@ def _create_draft_batch_via_api(
         json={"max_items": max_items},
     )
     assert scope_response.status_code == 201
-    scope_snapshot = scope_response.json()
+    public_scope_snapshot = scope_response.json()
+    scope_snapshot = repository.get_draft_box_scope_snapshot(public_scope_snapshot["id"])
+    assert scope_snapshot is not None
 
     bundle_payload = _complete_bundle_payload()
     template = repository.create_template(
@@ -333,30 +351,39 @@ def test_operator_can_capture_and_persist_current_draft_box_scope(tmp_path, monk
         json={"max_items": 2},
     )
 
-    assert response.status_code == 201
+    assert response.status_code == 201, response.text
     snapshot = response.json()
     assert browser_boundary.max_items == [2]
-    assert snapshot["schema_version"] == "dxm_draft_box_scope.v1"
     assert snapshot["id"] > 0
-    assert snapshot["digest"] == snapshot["snapshot_sha256"]
+    assert snapshot["store_identity"] == {"store_name": "DXM Shop A"}
+    assert [item["ordinal"] for item in snapshot["items"]] == [1, 2]
+    assert [item["dxm_product_id"] for item in snapshot["items"]] == [
+        "DXM-1001",
+        "DXM-1002",
+    ]
+    assert "digest" not in snapshot
+    assert "evidence" not in snapshot
+
+    persisted = repository.get_draft_box_scope_snapshot(snapshot["id"])
+    assert persisted is not None
+    assert persisted["schema_version"] == "dxm_draft_box_scope.v1"
+    assert persisted["digest"] == persisted["snapshot_sha256"]
     canonical_snapshot = {
         key: value
-        for key, value in snapshot.items()
+        for key, value in persisted.items()
         if key not in {"id", "digest", "snapshot_sha256", "created_at"}
     }
-    assert snapshot["digest"] == _canonical_sha256(canonical_snapshot)
-    assert [item["ordinal"] for item in snapshot["items"]] == [1, 2]
-    assert snapshot["store_identity"]["store_name"] == "DXM Shop A"
-    assert snapshot["zero_write_proof"] == {
+    assert persisted["digest"] == _canonical_sha256(canonical_snapshot)
+    assert persisted["zero_write_proof"] == {
         "strategy": "current_visible_page_dom_read",
         "navigation_attempted": False,
         "interactive_action_attempted": False,
         "mutation_dispatch_attempted": False,
     }
-    assert snapshot["evidence"]["kind"] == "live_dom_snapshot"
-    assert snapshot["evidence"]["dom_sha256"] == capture["evidence"]["dom_sha256"]
-    assert snapshot["evidence"]["refs_digest"] == capture["evidence"]["dom_digest"]
-    assert snapshot["created_at"]
+    assert persisted["evidence"]["kind"] == "live_dom_snapshot"
+    assert persisted["evidence"]["dom_sha256"] == capture["evidence"]["dom_sha256"]
+    assert persisted["evidence"]["refs_digest"] == capture["evidence"]["dom_digest"]
+    assert persisted["created_at"]
 
 
 def test_scope_endpoint_accepts_exact_raw_contract_emitted_by_login_flow(tmp_path, monkeypatch):
@@ -452,7 +479,8 @@ def test_scope_endpoint_accepts_exact_raw_contract_emitted_by_login_flow(tmp_pat
         def browser_session_id(self):
             return raw_capture["browser_session_id"]
 
-    monkeypatch.setattr(main, "repo", Repository())
+    repository = Repository()
+    monkeypatch.setattr(main, "repo", repository)
     monkeypatch.setattr(main, "workflow_adapter", BrowserBoundary())
 
     response = TestClient(app).post(
@@ -461,7 +489,12 @@ def test_scope_endpoint_accepts_exact_raw_contract_emitted_by_login_flow(tmp_pat
     )
 
     assert response.status_code == 201
-    evidence = response.json()["evidence"]
+    public_snapshot = response.json()
+    assert "evidence" not in public_snapshot
+    assert "digest" not in public_snapshot
+    persisted = repository.get_draft_box_scope_snapshot(public_snapshot["id"])
+    assert persisted is not None
+    evidence = persisted["evidence"]
     assert evidence["dom_sha256"] == raw_capture["evidence"]["dom_sha256"]
     assert evidence["refs_digest"] == raw_capture["evidence"]["dom_digest"]
 
@@ -503,15 +536,16 @@ def test_operator_can_create_immutable_draft_batch_from_scope_and_complete_bundl
         monkeypatch,
     )
 
-    assert response.status_code == 201
+    assert response.status_code == 201, response.text
     batch = response.json()
     assert batch["schema_version"] == "dxm_edit_batch.v1"
     assert batch["status"] == "draft"
     assert batch["scope_snapshot_id"] == scope_snapshot["id"]
-    assert batch["scope_snapshot_digest"] == scope_snapshot["digest"]
     assert batch["template_id"] == template["id"]
-    assert batch["template_snapshot"]["payload"] == bundle_payload
-    assert batch["template_snapshot_digest"] == _canonical_sha256(batch["template_snapshot"])
+    assert batch["template_snapshot"]["payload"] == {"version": bundle_payload["version"]}
+    assert "scope_snapshot_digest" not in batch
+    assert "template_snapshot_digest" not in batch
+    assert "policy_digest" not in batch
     assert batch["policy"]["approval_mode"] == "batch_once"
     assert batch["policy"]["dispatch_mode"] == "strict_sequential"
     assert batch["policy"]["global_concurrency"] == 1
@@ -519,7 +553,17 @@ def test_operator_can_create_immutable_draft_batch_from_scope_and_complete_bundl
     assert batch["policy"]["unknown_result_policy"] == "stop_no_retry"
     assert [item["ordinal"] for item in batch["items"]] == [1, 2]
     assert [item["status"] for item in batch["items"]] == ["pending", "pending"]
-    assert [item["target_identity_sha256"] for item in batch["items"]] == [
+
+    import src.main as main
+
+    persisted = main.repo.get_edit_batch_private(batch["id"])
+    assert persisted is not None
+    assert persisted["scope_snapshot_digest"] == scope_snapshot["digest"]
+    assert persisted["template_snapshot"]["payload"] == bundle_payload
+    assert persisted["template_snapshot_digest"] == _canonical_sha256(
+        persisted["template_snapshot"]
+    )
+    assert [item["target_identity_sha256"] for item in persisted["items"]] == [
         item["target_identity_sha256"] for item in scope_snapshot["items"]
     ]
 
@@ -528,7 +572,7 @@ def test_bundle_content_change_is_rejected_and_does_not_rewrite_frozen_draft_bat
     tmp_path,
     monkeypatch,
 ):
-    client, _scope_snapshot, template, original_payload, create_response = _create_draft_batch_via_api(
+    client, scope_snapshot, template, original_payload, create_response = _create_draft_batch_via_api(
         tmp_path,
         monkeypatch,
         db_name="batch-template-freeze.db",
@@ -553,10 +597,21 @@ def test_bundle_content_change_is_rejected_and_does_not_rewrite_frozen_draft_bat
     frozen_batch = response.json()
     assert frozen_batch == created_batch
     assert frozen_batch["template_snapshot"]["template_name"] == "车载商品编辑包"
-    assert frozen_batch["template_snapshot"]["payload"] == original_payload
-    assert frozen_batch["template_snapshot_digest"] == created_batch["template_snapshot_digest"]
-    assert frozen_batch["scope_snapshot_digest"] == created_batch["scope_snapshot_digest"]
-    assert frozen_batch["policy_digest"] == created_batch["policy_digest"]
+    assert frozen_batch["template_snapshot"]["payload"] == {"version": "1.0.0"}
+    assert "template_snapshot_digest" not in frozen_batch
+    assert "scope_snapshot_digest" not in frozen_batch
+    assert "policy_digest" not in frozen_batch
+
+    import src.main as main
+
+    persisted = main.repo.get_edit_batch_private(created_batch["id"])
+    assert persisted is not None
+    assert persisted["template_snapshot"]["payload"] == original_payload
+    assert persisted["template_snapshot_digest"] == _canonical_sha256(
+        persisted["template_snapshot"]
+    )
+    assert persisted["scope_snapshot_digest"] == scope_snapshot["digest"]
+    assert persisted["policy_digest"] == _canonical_sha256(persisted["policy"])
 
 
 def test_edit_batch_rejects_bundle_bound_to_a_different_scope_store(tmp_path, monkeypatch):
@@ -569,13 +624,14 @@ def test_edit_batch_rejects_bundle_bound_to_a_different_scope_store(tmp_path, mo
     import src.main as main
 
     payload = _complete_bundle_payload()
-    payload["binding"]["store_id"] = 999
+    other_store = main.repo.create_store("Other Store", "AliExpress")
+    payload["binding"]["store_id"] = other_store["id"]
     payload["binding"]["store_name"] = "Other Store"
     mismatched = main.repo.create_template(
         {
             "template_type": "edit_batch_bundle",
             "template_name": "other-store-bundle",
-            "binding_scope": "store:999;category:车载用品",
+            "binding_scope": "Other Store",
             "payload": payload,
             "is_enabled": True,
         }
@@ -647,18 +703,19 @@ def test_operator_can_list_draft_batches_without_loading_full_snapshots(tmp_path
             "schema_version": "dxm_edit_batch.v1",
             "status": "draft",
             "scope_snapshot_id": scope_snapshot["id"],
-            "scope_snapshot_digest": scope_snapshot["digest"],
             "template_id": template["id"],
-            "template_snapshot_digest": created["template_snapshot_digest"],
-            "policy_digest": created["policy_digest"],
             "item_count": 2,
-            "store_identity": scope_snapshot["store_identity"],
+            "store_identity": {
+                "store_name": scope_snapshot["store_identity"]["store_name"]
+            },
             "template": {
                 "name": "车载商品编辑包",
                 "version": "1.0.0",
             },
             "created_at": created["created_at"],
             "updated_at": created["updated_at"],
+            "execution": created["execution"],
+            "progress": created["progress"],
         }
     ]
 

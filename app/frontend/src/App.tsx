@@ -6,6 +6,8 @@ import { AgentExecutionPage as ExecutionConsole } from './components/workbench/A
 import { AcquisitionClaimPage } from './components/workbench/AcquisitionClaimPage'
 import { BatchEditPage } from './components/workbench/BatchEditPage'
 import { BatchRecordsPage } from './components/workbench/BatchRecordsPage'
+import { DraftSelectionPage } from './components/workbench/DraftSelectionPage'
+import { BatchSavePlaceholderPage } from './components/workbench/BatchSavePlaceholderPage'
 import { HelpPage } from './components/workbench/HelpPage'
 import { HomePage as Dashboard } from './components/workbench/HomePage'
 import { ProductTasksPage as TaskCenter } from './components/workbench/ProductTasksPage'
@@ -18,8 +20,9 @@ import {
   SystemSettings,
 } from './components/WorkbenchModules'
 import { humanOperatorMessage } from './components/workbench/workbenchCopy'
+import type { ConfirmedDraftTaskInput } from './draftSelection'
 import { isSupportedSourceProductUrl } from './sourceUrl'
-import type { AcquisitionClaimCreateRequest, AcquisitionClaimResponse, AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, DraftBoxScopeSnapshot, DxmCredentialSaveResult, EditBatchSummary, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LegacyWorkbenchSection, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
+import type { AcquisitionClaimCreateRequest, AcquisitionClaimResponse, AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, DraftBoxScopeSnapshot, DxmCredentialSaveResult, DxmTemplateRef, EditBatchSummary, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LegacyWorkbenchSection, LocalPlanTemplate, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
 import { composeWorkspace } from './workspace'
 
 const AGENT_CONSOLE_TARGET_URL = 'https://www.dianxiaomi.com/'
@@ -171,7 +174,10 @@ export default function App() {
   const [activeSection, setActiveSection] = useState<WorkbenchSection>('home')
   const [activeEditBatchId, setActiveEditBatchId] = useState<number | null>(null)
   const [activeScopeSnapshot, setActiveScopeSnapshot] = useState<DraftBoxScopeSnapshot | null>(null)
+  const [draftTaskInput, setDraftTaskInput] = useState<ConfirmedDraftTaskInput | null>(null)
   const [editBatches, setEditBatches] = useState<EditBatchSummary[]>([])
+  const [localPlans, setLocalPlans] = useState<LocalPlanTemplate[]>([])
+  const [dxmTemplateRefs, setDxmTemplateRefs] = useState<DxmTemplateRef[]>([])
   const [editBatchStateAvailable, setEditBatchStateAvailable] = useState(false)
   const [templateCenterEntryMode, setTemplateCenterEntryMode] = useState<TemplateCenterMode>('sections')
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(initialTaskIdFromUrl)
@@ -280,6 +286,8 @@ export default function App() {
       exceptions,
       reports,
       batchSummaries,
+      fetchedLocalPlans,
+      fetchedDxmTemplateRefs,
       consoleStatus,
       finalCheckSummary,
     ] = await Promise.all([
@@ -293,6 +301,8 @@ export default function App() {
       loadOrFallback<ExceptionItem[]>('/api/exceptions', []),
       loadOrFallback<Report[]>('/api/reports', []),
       loadOrFallback<EditBatchSummary[]>('/api/edit-batches', []),
+      loadOrFallback<LocalPlanTemplate[]>('/api/local-plan-templates', []),
+      loadOrFallback<DxmTemplateRef[]>('/api/dxm-template-refs', []),
       loadOrFallback<AgentConsoleSession | null>('/api/agent-console/status', null),
       loadOrFallback<FinalDeliveryCheckSummary | null>('/api/delivery/final-check', null),
     ])
@@ -310,6 +320,8 @@ export default function App() {
     const editBatchStateFailed = failures.some((failure) => failure.path === '/api/edit-batches')
     setWorkspace(nextWorkspace)
     if (!editBatchStateFailed) setEditBatches(batchSummaries)
+    setLocalPlans(fetchedLocalPlans)
+    setDxmTemplateRefs(fetchedDxmTemplateRefs)
     setEditBatchStateAvailable(!editBatchStateFailed)
     setAgentConsole(consoleStatus)
     setFinalCheck(finalCheckSummary)
@@ -1161,6 +1173,7 @@ export default function App() {
 
   const currentSection = normalizeWorkbenchSection(activeSection)
   const showGlobalSafetyStatus = currentSection !== 'home'
+    && currentSection !== 'draft_selection'
     && currentSection !== 'draft_edit_save'
     && currentSection !== 'task_history'
     && currentSection !== 'template_center'
@@ -1191,7 +1204,7 @@ export default function App() {
     setActiveSection('issues')
   }
   const setWorkbenchSection = useCallback((section: WorkbenchSection) => {
-    if (section === 'template_center') setTemplateCenterEntryMode('batch_bundle')
+    if (section === 'template_center') setTemplateCenterEntryMode('e2_plan')
     setActiveSection(normalizeWorkbenchSection(section))
   }, [])
   const persistedAcquisitionClaimRequest = useMemo(
@@ -1222,6 +1235,8 @@ export default function App() {
             onShowDraftEdit={() => setActiveSection('draft_edit_save')}
             onShowDxmAccess={() => setActiveSection('dxm_access')}
             batchScopeStoreName={activeScopeSnapshot?.store_identity.store_name ?? null}
+            localPlans={localPlans}
+            dxmTemplateRefs={dxmTemplateRefs}
             initialMode={templateCenterEntryMode}
           />
         )
@@ -1251,6 +1266,20 @@ export default function App() {
             onCreateClaimRequest={(request) => { void createAcquisitionClaimRequest(request) }}
             onShowDraftEdit={startNewEditBatch}
             onShowTasks={() => setActiveSection('product_tasks')}
+          />
+        )
+      case 'draft_selection':
+        return (
+          <DraftSelectionPage
+            plans={workspace.templates}
+            localPlans={localPlans}
+            taskInput={draftTaskInput}
+            onTaskInputChange={setDraftTaskInput}
+            onShowDxmAccess={() => setActiveSection('dxm_access')}
+            onShowPlans={() => {
+              setTemplateCenterEntryMode('e2_plan')
+              setActiveSection('template_center')
+            }}
           />
         )
       case 'product_tasks':
@@ -1329,6 +1358,16 @@ export default function App() {
           />
         )
       case 'start_save':
+        return (
+          <BatchSavePlaceholderPage
+            taskInput={draftTaskInput}
+            onShowSelection={() => setActiveSection('draft_selection')}
+            onShowPlans={() => {
+              setTemplateCenterEntryMode('e2_plan')
+              setActiveSection('template_center')
+            }}
+          />
+        )
       case 'preflight':
       case 'real_browser':
       case 'manual_takeover':

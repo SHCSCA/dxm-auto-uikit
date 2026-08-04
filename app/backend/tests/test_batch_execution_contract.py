@@ -6,7 +6,12 @@ from datetime import datetime, timezone
 
 import pytest
 
-from src.batch_edit.batch_contract import BATCH_TEMPLATE_REQUIRED_SECTIONS, frozen_batch_policy
+from src.batch_edit.batch_contract import (
+    BATCH_TEMPLATE_REQUIRED_SECTIONS,
+    BatchContractError,
+    freeze_template_bundle,
+    frozen_batch_policy,
+)
 from src.batch_edit.execution_contract import (
     BatchExecutionContractError,
     authorize_batch_start,
@@ -222,6 +227,15 @@ def _approved_batch() -> tuple[dict, str, str, dict]:
     }
     context = {**context_body, "fingerprint": canonical_sha256(context_body)}
     return batch, token, token_hash, context
+
+
+def test_old_batch_contract_rejects_category_bound_bundle_without_row_evidence() -> None:
+    batch, _token, _token_hash, _context = _approved_batch()
+
+    with pytest.raises(BatchContractError) as caught:
+        freeze_template_bundle(batch["template_snapshot"])
+
+    assert caught.value.reason_code == "BATCH_CATEGORY_SCOPE_UNVERIFIABLE"
 
 
 def test_authorize_batch_start_returns_only_sanitized_frozen_context():

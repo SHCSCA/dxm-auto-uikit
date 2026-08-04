@@ -95,6 +95,18 @@ def test_start_mvp_processes_runtime_restart_commands_from_ui():
     assert "Read-RuntimeControlCommand" in script[script.index("while ($true)"):]
 
 
+def test_start_mvp_backend_uses_visible_persistent_browser_agent_runtime():
+    script = START_MVP_SCRIPT.read_text(encoding="utf-8")
+    backend_command = script[
+        script.index("$backendCommand = New-ManagedProcessCommand"):
+        script.index("$frontendCommand = New-ManagedProcessCommand")
+    ]
+
+    assert 'DXM_WORKFLOW_ACTION_RUNTIME = "browser_agent"' in backend_command
+    assert "DXM_WORKFLOW_PROFILE_DIR = $workflowProfileDir" in backend_command
+    assert 'DXM_WORKFLOW_PERSISTENT_PROFILE = "1"' in backend_command
+
+
 def test_start_mvp_clears_stale_runtime_control_command_before_managed_startup():
     script = START_MVP_SCRIPT.read_text(encoding="utf-8")
 

@@ -252,6 +252,7 @@ export function BatchTemplateComposer({
       }
       sectionTemplates[sectionCode] = {
         template_id: candidate.template_id,
+        source_digest: candidate.source_digest,
       }
     }
 

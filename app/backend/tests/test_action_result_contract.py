@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
+import json
 
 import pytest
 
@@ -72,19 +74,136 @@ def _immutable_ref(
 
 
 def _valid_save_result() -> dict:
+    target_identity = {
+        "product_query": "product-1",
+        "store_name": "DXM Shop A",
+        "source_url": "https://detail.1688.com/offer/1013604102950.html",
+    }
+    target_identity_sha256 = hashlib.sha256(
+        json.dumps(
+            target_identity,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    authorization = {
+        "ok": True,
+        "executed": True,
+        "mutation_action": "save_only_click",
+        "mutation_status": "DISPATCHED",
+        "mutation_id": "mutation-save-1",
+    }
+    integrity = {
+        "ok": True,
+        "kind": "structured_nonempty_form_state",
+        "field_count": 2,
+        "nonempty_field_count": 2,
+        "sha256": "C" * 64,
+    }
+    pre_dispatch = {
+        "ok": True,
+        "required_readback_complete": True,
+        "write_attempted": False,
+        "phase": "before_ledger_begin_dispatch",
+        "exact_save_target": {
+            "ok": True,
+            "text": "保存",
+            "exact_save_count": 1,
+        },
+        "identity": {
+            "ok": True,
+            "product_identity_match": True,
+            "store_identity_match": True,
+            "source_identity_match": True,
+            "target_identity": target_identity,
+            "expected_store_name": "DXM Shop A",
+            "target_identity_sha256": target_identity_sha256,
+        },
+        "baseline_field_integrity": integrity,
+        "current_field_integrity": deepcopy(integrity),
+    }
+    network = {
+        "ok": True,
+        "receipt_complete": True,
+        "receipt_count": 1,
+        "url": "https://www.dianxiaomi.com/api/smtProduct/add.json",
+        "method": "POST",
+        "status": 200,
+        "code": 0,
+        "message": "编辑保存成功",
+    }
+    audit = {
+        "scope": "same_origin_write_window",
+        "complete": True,
+        "window_closed": True,
+        "registered_listener_count": 2,
+        "removed_listener_count": 2,
+        "mutation_request_count": 1,
+        "save_request_count": 1,
+        "other_mutation_request_count": 0,
+        "publish_request_count": 0,
+    }
+    publish_signal = {
+        "detected": False,
+        "kind": "network_route_classification",
+        "request_count": 0,
+    }
+    page = {
+        "ok": True,
+        "success_text": "保存成功",
+        "status_transition": {
+            "kind": "new_or_changed_structured_save_status",
+            "entry": {"text": "保存成功", "status": "success"},
+        },
+    }
+    save = {
+        "ok": True,
+        "published": False,
+        "exact_save_target": True,
+        "save_click_dispatched": True,
+        "clicked": True,
+        "publish_action_clicked": False,
+        "text": "保存",
+        "exact_save_count": 1,
+        "click_method": "dom_exact_save",
+        "mutation_authorization": authorization,
+        "pre_dispatch_readback": pre_dispatch,
+        "network_save_result": network,
+        "network_audit": audit,
+        "publish_signal": publish_signal,
+        "page_save_result": page,
+        "save_decision": {
+            "ok": True,
+            "rule": "page_success_and_network_success",
+            "page_ok": True,
+            "network_ok": True,
+            "network_receipt_ok": True,
+            "network_audit_ok": True,
+        },
+        "network_save_success": True,
+        "page_save_success": True,
+    }
     value = _valid_navigation_result()
     value.update(
         {
             "action": "save_only",
             "attempted_state": "SAVE_ONLY",
             "before_values": {
-                "target_identity": "product-1",
+                "target_identity": target_identity,
+                "store_name": "DXM Shop A",
                 "authorization_fingerprint": "authorization-1",
             },
             "after_values": {
-                "network_status": 200,
-                "page_message": "保存成功",
+                "exact_save_target": True,
+                "save_click_dispatched": True,
                 "published": False,
+                "mutation_authorization": authorization,
+                "pre_dispatch_readback": pre_dispatch,
+                "network_save_result": network,
+                "network_audit": audit,
+                "publish_signal": publish_signal,
+                "page_save_result": page,
             },
             "postconditions": {
                 "mutation_authorized": True,
@@ -97,8 +216,19 @@ def _valid_save_result() -> dict:
             },
             "evidence": {
                 "observations": {
-                    "network_status": 200,
-                    "page_message": "保存成功",
+                    "save_result": save,
+                    "exact_save_target": {
+                        "text": "保存",
+                        "exact_save_count": 1,
+                        "click_method": "dom_exact_save",
+                    },
+                    "save_click_dispatched": True,
+                    "mutation_authorization": authorization,
+                    "pre_dispatch_readback": pre_dispatch,
+                    "network_save_result": network,
+                    "network_audit": audit,
+                    "publish_signal": publish_signal,
+                    "page_save_result": page,
                 },
                 "refs": [_immutable_ref("save_screenshot")],
             },
@@ -115,17 +245,52 @@ def _valid_save_result() -> dict:
 
 def _valid_unpublished_result() -> dict:
     value = _valid_save_result()
+    target_identity = deepcopy(value["before_values"]["target_identity"])
+    target_identity_sha256 = value["evidence"]["observations"]["pre_dispatch_readback"]["identity"]["target_identity_sha256"]
+    identity_readback = {
+        "product_identity_match": True,
+        "store_identity_match": True,
+        "source_identity_match": True,
+    }
+    fresh_probe = {
+        "ok": True,
+        "published": False,
+        "proof_kind": "structured_unpublished_status",
+        "status_text": "草稿",
+        "verified_on_current_page": True,
+        "status_scope_unique": True,
+        "bound_candidate_count": 1,
+        "structured_candidate_count": 1,
+        "target_bound": True,
+        "product_matched": True,
+        "store_matched": True,
+        "source_identity_match": True,
+        "identity_binding_kind": "frozen_target_structured_page_readback",
+        "publish_risk_term": None,
+        "target_identity_sha256": target_identity_sha256,
+        "page_url": _PAGE_URLS["semi_managed"],
+        "identity_readback": identity_readback,
+    }
+    target_observation = {
+        "product_matched": True,
+        "store_matched": True,
+        "source_identity_match": True,
+        "target_bound": True,
+        "target_identity_sha256": target_identity_sha256,
+    }
     value.update(
         {
             "action": "verify_not_published",
             "attempted_state": "VERIFY_NOT_PUBLISHED",
             "before_values": {
-                "target_identity": "product-1",
+                "target_identity": target_identity,
                 "save_evidence_fingerprint": "save-proof-1",
             },
             "after_values": {
                 "published": False,
-                "probe_evidence_fingerprint": "unpublished-proof-1",
+                "fresh_probe": fresh_probe,
+                "target_identity": target_observation,
+                "identity_readback": identity_readback,
             },
             "postconditions": {
                 "independent_probe": True,
@@ -135,7 +300,11 @@ def _valid_unpublished_result() -> dict:
                 "save_evidence_not_reused": True,
             },
             "evidence": {
-                "observations": {"published": False, "probe": "current_page"},
+                "observations": {
+                    "fresh_probe": fresh_probe,
+                    "target_identity": target_observation,
+                    "identity_readback": identity_readback,
+                },
                 "refs": [
                     _immutable_ref(
                         "unpublished_screenshot",
@@ -151,6 +320,10 @@ def _valid_unpublished_result() -> dict:
 
 
 def _valid_registered_result(action: str, state: str) -> dict:
+    if action == "save_only" and state == "SAVE_ONLY":
+        return _valid_save_result()
+    if action == "verify_not_published" and state == "VERIFY_NOT_PUBLISHED":
+        return _valid_unpublished_result()
     contract = ACTION_RESULT_CONTRACTS[action][state]
     value = _valid_navigation_result()
     value.update(

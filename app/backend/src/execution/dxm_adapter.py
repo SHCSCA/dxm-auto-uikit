@@ -188,17 +188,20 @@ class DxmWorkflowAdapter:
                 )
             except Exception as exc:
                 saved_state = self.login_flow.get_state()
-                if self._state_looks_logged_in(saved_state):
-                    return self._result(
-                        'check_login_state',
-                        {
-                            **saved_state,
-                            'stage': saved_state.get('stage') or 'login_success',
-                            'live_probe_error': str(exc),
-                        },
-                        before_values={'probe': 'saved_session_after_live_probe_error'},
-                    )
-                raise
+                return self._result(
+                    'check_login_state',
+                    {
+                        **saved_state,
+                        'ok': False,
+                        'stage': 'login_failed',
+                        'label': '登录态检测失败',
+                        'message': '无法从当前真实会话重新证明登录账号，已按失败关闭。',
+                        'next_action': '请重新打开真实登录页并完成登录，再次检测后读取草稿。',
+                        'requires_user_action': True,
+                        'live_probe_error': str(exc),
+                    },
+                    before_values={'probe': 'live_session_probe_failed_closed'},
+                )
         return self._result(
             'check_login_state',
             self.login_flow.get_state(),
@@ -216,6 +219,39 @@ class DxmWorkflowAdapter:
         """Return the flow's raw, read-only scope attestation unchanged."""
 
         return self.login_flow.capture_draft_box_scope(max_items=max_items)
+
+    def read_draft_shops(self) -> dict[str, Any]:
+        """Return the allowlisted shopMap read envelope unchanged."""
+
+        return self.login_flow.read_draft_shops()
+
+    def read_draft_page(
+        self,
+        *,
+        shop_id: str,
+        page_no: int,
+        page_size: int,
+    ) -> dict[str, Any]:
+        """Return one allowlisted draft-only page read envelope unchanged."""
+
+        return self.login_flow.read_draft_page(
+            shop_id=shop_id,
+            page_no=page_no,
+            page_size=page_size,
+        )
+
+    def read_e2_plan_scope(
+        self,
+        *,
+        shop_id: str,
+        category_ids: list[str],
+    ) -> dict[str, Any]:
+        """Return current-session E2 template/schema reads unchanged."""
+
+        return self.login_flow.read_e2_plan_scope(
+            shop_id=shop_id,
+            category_ids=category_ids,
+        )
 
     def open_data_acquisition(self) -> dict[str, Any]:
         return self._result(

@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { getJsonOrDefault, patchJson, postJson } from '../../api'
-import type { ConfigPreview, DeliveryWorkspace, Task, Template, TemplateCenterMetadata, TemplateCenterSection } from '../../types'
+import type { ConfigPreview, DeliveryWorkspace, DxmTemplateRef, LocalPlanTemplate, Task, Template, TemplateCenterMetadata, TemplateCenterSection } from '../../types'
 import { BatchTemplateComposer } from './BatchTemplateComposer'
+import { LocalPlanWorkspace } from './LocalPlanWorkspace'
 
-export type TemplateCenterMode = 'sections' | 'batch_bundle'
+export type TemplateCenterMode = 'sections' | 'batch_bundle' | 'e2_plan'
 
 type TemplateCenterPageProps = {
   workspace: DeliveryWorkspace
@@ -16,6 +17,8 @@ type TemplateCenterPageProps = {
   onShowDraftEdit: () => void
   onShowDxmAccess: () => void
   batchScopeStoreName?: string | null
+  localPlans: LocalPlanTemplate[]
+  dxmTemplateRefs: DxmTemplateRef[]
   initialMode?: TemplateCenterMode
 }
 
@@ -112,6 +115,8 @@ export function TemplateCenterPage({
   onShowDraftEdit,
   onShowDxmAccess,
   batchScopeStoreName,
+  localPlans,
+  dxmTemplateRefs,
   initialMode = 'sections',
 }: TemplateCenterPageProps) {
   const [templateCenterMode, setTemplateCenterMode] = useState<TemplateCenterMode>(initialMode)
@@ -309,19 +314,28 @@ export function TemplateCenterPage({
       <div className="module-card span-3">
         <div className="module-head">
           <div>
-            <span className="eyebrow">模板中心</span>
-            <h2>{templateCenterMode === 'sections' ? '当前任务配置摘要' : '整批模板组合'}</h2>
+            <span className="eyebrow">
+              {templateCenterMode === 'e2_plan' ? '铺货方案' : '普货模板库'}
+            </span>
+            <h2>{templateCenterMode === 'sections'
+              ? '当前任务配置摘要'
+              : templateCenterMode === 'batch_bundle'
+                ? '整批模板组合'
+                : '本地方案与只读模板引用'}</h2>
             <p>{templateCenterMode === 'sections'
               ? '按店小秘编辑页分区维护多套模板。默认优先使用模板；临时手工覆盖只作为最后兜底。'
-              : '从 8 个已校验的编辑分区组合一份店铺级整批模板；店小秘引用只展示 5 个可执行控件。'}</p>
+              : templateCenterMode === 'batch_bundle'
+                ? '从 8 个已校验的编辑分区组合一份店铺级整批模板；店小秘引用只展示 5 个可执行控件。'
+                : 'local_plan_template 可编辑并创建新版本；dxm_template_ref 只读同步，两种模型不会合并。'}</p>
           </div>
           {templateCenterMode === 'sections' && (
             <button className="button button--quiet" type="button" onClick={onShowDraftEdit}>回到商品箱批次</button>
           )}
         </div>
         <div className="template-center-mode-switch" role="tablist" aria-label="模板中心模式">
-          <button type="button" role="tab" aria-selected={templateCenterMode === 'sections'} className={templateCenterMode === 'sections' ? 'is-active' : ''} onClick={() => setTemplateCenterMode('sections')}>分区模板</button>
-          <button type="button" role="tab" aria-selected={templateCenterMode === 'batch_bundle'} className={templateCenterMode === 'batch_bundle' ? 'is-active' : ''} onClick={() => setTemplateCenterMode('batch_bundle')}>整批模板</button>
+          <button type="button" role="tab" aria-selected={templateCenterMode === 'sections'} className={templateCenterMode === 'sections' ? 'is-active' : ''} onClick={() => setTemplateCenterMode('sections')}>普货模板库 · 分区</button>
+          <button type="button" role="tab" aria-selected={templateCenterMode === 'batch_bundle'} className={templateCenterMode === 'batch_bundle' ? 'is-active' : ''} onClick={() => setTemplateCenterMode('batch_bundle')}>普货模板库 · 整批</button>
+          <button type="button" role="tab" aria-selected={templateCenterMode === 'e2_plan'} className={templateCenterMode === 'e2_plan' ? 'is-active' : ''} onClick={() => setTemplateCenterMode('e2_plan')}>铺货方案（本地）</button>
         </div>
         {templateCenterMode === 'sections' && (
           <>
@@ -358,7 +372,13 @@ export function TemplateCenterPage({
         )}
       </div>
 
-      {templateCenterMode === 'batch_bundle' ? (
+      {templateCenterMode === 'e2_plan' ? (
+        <LocalPlanWorkspace
+          plans={localPlans}
+          dxmTemplateRefs={dxmTemplateRefs}
+          onChanged={onConfigSaved}
+        />
+      ) : templateCenterMode === 'batch_bundle' ? (
         <BatchTemplateComposer
           workspace={workspace}
           selectedTask={selectedTask}

@@ -1,27 +1,29 @@
 # DXM 文档导航
 
-更新时间：2026-07-17
+更新时间：2026-07-28
 
 这里区分“当前真相”与“历史快照”。日期较早的验收记录和计划保留用于审计，但不得覆盖当前代码、运行和打包证据。
 
 ## 当前真相（先读）
 
-- [项目 README](../README.md)：产品边界、启动与当前 `BLOCKED` 结论。
-- [2026-07-17 当前状态](product/DXM-Agent-Console-当前开发状态与后续计划-20260717.md)：核心需求、已进入源码的能力、未完成门禁和下一步。
-- [当前运行时架构](tech/当前运行时架构-20260717.md)：持久化 Browser Agent、两段式状态、审批、动作和证据真相链。
-- [交付工作台 API](product/交付工作台API.md)：workspace schema、空工作台语义和门禁字段。
-- [可交付化回归矩阵](product/店小秘半托管执行器可交付化回归矩阵.md)：L0–L3、两段式、状态一致性、mutation ledger 与打包门禁。
-- [L2 只读 Probe 门禁](product/L2只读Probe门禁.md)：真实只读探针的安全边界和证据绑定。
-- [2026-07-13 两段式运行时真相计划](superpowers/plans/2026-07-13-dxm-two-stage-runtime-truth.md)：当前实施计划；进度以 [SDD progress](../.superpowers/sdd/progress.md) 为准。
+### 主迭代（2026-07-28 · 优先）
 
-## 产品与操作参考
+- [MVP 竖切：草稿箱批量只保存](product/MVP-竖切-草稿箱批量只保存.md)：**产品主路径**、Path A 批量、`MVP_READY` / `PROD_READY` 双就绪、Epic DoD。
+- [Codex Gold 工作指令](product/CODEX-GOLD-工作指令-MVP批量只保存.md)：Gold 模式粘贴模板、红线、按 Epic 短指令。
+- 上游只读（非本仓代码）：`D:\Desktop\py\DXM-TX` 的 `docs/`、`data/capture/`、可交互原型。
 
-- [PRD V1.0](product/店小秘速卖通半托管自动化执行器_PRD_V1.0.md)
-- [全量字段矩阵](tech/全量字段矩阵.md)
-- [用户交付使用说明（2026-05-26）](product/用户交付使用说明-20260526.md)
-- [免安装版快速使用说明（2026-06-15）](product/免安装版快速使用说明-20260615.md)
+### 工程与安全（当前可解析）
 
-后两份操作说明对应旧包和旧界面，只可用于定位历史入口。使用当前构建前必须重新核对 README、当前状态与打包验收记录。
+- [项目 README](../README.md)：启动方式；其中生产 `BLOCKED`/两段式结论与 **MVP 主路径**并存——实现 bulk 以 MVP 文档为准，安全红线以 CLAUDE/门禁为准。
+- [AGENTS.md](../AGENTS.md)：AI 必读顺序与就绪口径。
+- [CLAUDE.md](../CLAUDE.md)：命令、runner、L 阶梯、禁发布。
+- [SDD progress](../.superpowers/sdd/progress.md)：仓库内仍可解析的实施状态；与 MVP 主合同冲突时，以当前代码/测试事实和 MVP 零发布边界为准。
+
+以下旧工程文档属于本工作树既有删除，不恢复、不再作为索引指针：`product/DXM-Agent-Console-当前开发状态与后续计划-20260717.md`、`tech/当前运行时架构-20260717.md`、`product/交付工作台API.md`、`product/店小秘半托管执行器可交付化回归矩阵.md`、`product/L2只读Probe门禁.md`、`superpowers/plans/2026-07-13-dxm-two-stage-runtime-truth.md`。若未来恢复，必须按当前 HEAD 与 MVP 主合同重新审阅后再建立链接。
+
+## 产品与操作参考（历史路径，非指针）
+
+`product/店小秘速卖通半托管自动化执行器_PRD_V1.0.md`、`tech/全量字段矩阵.md`、`product/用户交付使用说明-20260526.md`、`product/免安装版快速使用说明-20260615.md` 均属于本工作树既有删除，只保留文件名用于历史审计，不是当前真相、可执行任务或有效链接。旧操作说明对应旧包和旧界面；若以后取得原件，使用前仍须按当前代码、README、主合同与现场证据重新核对。
 
 ## 历史快照
 
