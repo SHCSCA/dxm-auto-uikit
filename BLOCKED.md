@@ -33,7 +33,9 @@
 
 - **状态：`REOPEN E2`，独立验收不通过；禁止进入 E3。**
 - **G0 关闭口径：已裁定策略 B**（2026-08-03 用户）。完整 L0 绿或可审计簇关闭为硬门槛；计划见 `docs/product/L0-策略B-迁移计划.md`。
-- **G1 Git 固定点：已授权 commit（不自动 push）**（2026-08-03 用户）。`E2-CLOSE-CANDIDATE` 以 `PROGRESS` 置顶回填的 SHA 为准。
+- **G1 Git 固定点：已授权 commit（不自动 push）**（2026-08-03 用户）。`E2-CLOSE-CANDIDATE`=`09fceb756cd56f6971893db3977a1d97671bc208`。
+- **G5-1 Gold 哈希：已授权并执行**（2026-08-04）。悬空架构文档引用已改；期望 SHA=`DD41C8A4…CBF2B`；SelfTest 绿。
+- **G4 真机零写：已授权，会话未闭环**（2026-08-04）。可见浏览器可到 DXM home URL，但自动 `login/continue` 未稳定 ok；需用户在可见窗完成登录后跑 `scripts/g4-zero-write-after-login.ps1`。
 - **G4 真实零写/fixture 待授权：**当前仍禁止登录、读取 `DXM-TX/data/**`、raw/Cookie/真实业务样例；无法自行补齐另两指定类目、非空 child 回包或真实脱敏固定 fixture。需要单独授权合规只读范围与脱敏落盘目录，或由人工提供脱敏 JSON。
 - **G5-1 Gold 指针待授权：**Gold 文件及其冻结 SHA256 仍只读；不得自行修复其悬空链接或更新校验器期望哈希。
 - **G3 旧独立批准测试簇待 G0 裁决：**`test_batch_edit_api.py` 当前剩余 22 个失败全部来自历史 `/manual-approval` 成功/漂移/单次令牌测试；生产端点现统一 409 `BATCH_APPROVAL_REQUIRES_ATOMIC_START`，防止批准令牌与启动分离。为这些旧测重开端点会越过 E2 并削弱原子批准边界；若选择策略 B，需另行裁决将其迁入 E3 的 `approve-and-start`/内部安全合同，或以获批的可接受剩余失败表登记，不能由本执行者擅自改成成功。

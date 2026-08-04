@@ -13,6 +13,13 @@
 - **G3 进度（策略 B）**：C01 composer 已绿；C06 已关闭；**G1 树完整 L0 基线（隔离 `DXM_DATA_DIR`，当次）`426 failed / 1469 passed / 0 skipped in 606.60s`**（相对历史约 509 failed 下降约 83；仍红，禁止宣称清零）。代表失败仍含 `test_v1_runner` 等 C07 簇。
 - 仍 **不宣称** `E2_ACCEPTED` / `MVP_READY` / `PROD_READY`，直至 G3(+G4) 按清单满足。
 
+## G5-1 / G4 授权执行（2026-08-04）
+
+- **用户授权：真机零写（G4）+ 修改 Gold 哈希（G5-1）。**
+- **G5-1 已完成**：Gold 第 4 条必读改为现行 `docs/README.md` / E2 关闭清单 / L0 策略 B 计划，**删除**对已删 `docs/tech/当前运行时架构-20260717.md` 的引用；`scripts/validate-mvp-docs.ps1` 期望 Gold SHA256 更新为 `DD41C8A4D2B2761760063702F5E0836F8DC9B2D105EFAD5B491A3091C89CBF2B`；SelfTest → `MVP_DOCS_OK`。
+- **G4 部分进展（未关闭）**：已启动 `start-mvp`（8000/5173 健康）；可见浏览器曾打开并到达 `https://www.dianxiaomi.com/web/home?...`（非欢迎登录字段页）；但 `login/continue` 在本会话多次 **超时/未 ok**（`about:blank` 或队列阻塞单 worker），**未能**在本会话完成 shops→products→preview→freeze 零写闭环。未读 Cookie 文件入 Git、未保存/发布。
+- **G4 操作续跑**：用户在可见窗完成店小秘登录后执行 `scripts\g4-zero-write-after-login.ps1`（只读 + 本地方案 preview/freeze，证据写入 `data/g4-zero-write/`，勿提交 Cookie）。
+
 ## `REOPEN E2`（2026-08-03 · 关闭清单执行中）
 
 - **当前裁定不变：E2 继续打开，禁止进入 E3；不宣称 `E2_ACCEPTED`、`MVP_READY` 或 `PROD_READY`。**

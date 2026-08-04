@@ -40,7 +40,7 @@
 1. `AGENTS.md`  
 2. `docs/product/MVP-竖切-草稿箱批量只保存.md`  
 3. `CLAUDE.md`（安全门禁 / 命令 / runner 结构；**产品主路径以 MVP 文档为准覆盖其中「仅认领+单品」的旧叙事**）  
-4. 实现时按需：`docs/tech/当前运行时架构-20260717.md`、TX 上列接口/手册  
+4. 实现时按需：`docs/README.md` 现行索引、`docs/product/E2-关闭剩余清单.md`、`docs/product/L0-策略B-迁移计划.md`、TX 上列接口/手册（**勿**再引用已删除的 `docs/tech/当前运行时架构-20260717.md`）
 
 冲突裁决：
 

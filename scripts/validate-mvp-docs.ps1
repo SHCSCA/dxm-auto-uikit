@@ -20,7 +20,7 @@ $paths = [ordered]@{
     Prototype = "D:\Desktop\py\DXM-TX\DXM-半托管工作台-可交互原型.html"
 }
 
-$expectedGoldSha256 = "648E004FBF600AE4620435ADD3C8324D473710EC283ACDA139BCF337FE8EAE1C"
+$expectedGoldSha256 = "DD41C8A4D2B2761760063702F5E0836F8DC9B2D105EFAD5B491A3091C89CBF2B"
 $expectedPrototypeSha256 = "29B76F8F2ACC6DDA15393AB20B4D0C07A10739B94A4E8E11A8341AD0DEC4A847"
 $contractRelativePath = "docs/product/MVP-竖切-草稿箱批量只保存.md"
 $aiNotice = "由 OpenAI GPT（Codex）AI 生成/维护"
