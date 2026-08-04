@@ -188,17 +188,16 @@ for ($i = 1; $i -le $MaxLoginAttempts; $i++) {
 }
 
 if (-not $shops -or $shops.source -ne "api" -or -not $shops.session_bound) {
-  throw @"
-未能建立可用的 Playwright 会话，无法继续 G4。
-
-请按顺序：
-  1) 确认 start-mvp 运行中
-  2) 重新运行本脚本
-  3) 在弹出的真实 Chrome 中登录到 /web/home
-  4) 回到终端按 Enter 再检测
-
-不要依赖 live-status 的 logged_in=true（那是 Cookie 探针，不是 draft-reader 会话）。
-"@
+  $hint = @(
+    "未能建立可用的 Playwright 会话，无法继续 G4。",
+    "请按顺序：",
+    "  1) 确认 start-mvp 运行中",
+    "  2) 重新运行本脚本",
+    "  3) 在弹出的真实 Chrome 中登录到 /web/home",
+    "  4) 回到终端按 Enter 再检测",
+    "不要依赖 live-status 的 logged_in=true（那是 Cookie 探针，不是 draft-reader 会话）。"
+  ) -join [Environment]::NewLine
+  throw $hint
 }
 
 $shopId = [string]$shops.shops[0].id
