@@ -21,6 +21,7 @@ function BrowserHarness() {
   const [activeSection, setActiveSection] = useState<WorkbenchSection>('draft_selection')
   const [taskInput, setTaskInput] = useState<ConfirmedDraftTaskInput | null>(null)
   const [selectionMounted, setSelectionMounted] = useState(true)
+  const autoAdvance = new URLSearchParams(window.location.search).get('autoAdvance') === '1'
 
   return (
     <>
@@ -56,6 +57,11 @@ function BrowserHarness() {
                 onTaskInputChange={setTaskInput}
                 onShowDxmAccess={() => setActiveSection('dxm_access')}
                 onShowPlans={() => setActiveSection('template_center')}
+                onReviewSnapshot={() => {
+                  if (!autoAdvance) return false
+                  setActiveSection('start_save')
+                  return true
+                }}
               />
               )
             : <div data-testid="selection-unmounted">selection unmounted</div>}

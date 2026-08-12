@@ -13,14 +13,67 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from src.execution.action_result_contract import ACTION_RESULT_CONTRACTS
-from src.execution.browser_agent_protocol import BrowserAgentCommand, browser_agent_command_from_worker_request
+from src.execution.browser_agent_protocol import (
+    BrowserAgentCommand,
+    browser_agent_command_from_worker_request,
+    build_frozen_product_target_identity,
+    canonical_frozen_target_identity,
+)
 import src.execution.browser_agent_worker as browser_agent_worker
 from src.execution.browser_agent_worker import BrowserAgentRuntime
 from src.services.browser_agent_status import build_browser_hud
 
 
+_TEST_STORE_NAME = "Dang Kang"
+_TEST_SOURCE_URL = "https://detail.1688.com/offer/70001.html"
+_TEST_FROZEN_TARGET = build_frozen_product_target_identity(
+    product_id="70001",
+    store_name=_TEST_STORE_NAME,
+    source_urls=[_TEST_SOURCE_URL],
+)
+_FROZEN_TEST_ACTIONS = {
+    "claim_product",
+    "open_editor",
+    "verify_edit_ownership",
+    "fill_editor_required_defaults",
+    "fill_editor_variants",
+    "fill_media_assets",
+    "fill_compliance_defaults",
+    "enable_semi_managed",
+    "open_semi_managed_page",
+    "fill_semi_managed_defaults",
+    "save_only",
+    "verify_not_published",
+}
+
+
+def _test_action_params(action: str) -> dict:
+    if action in {"claim_from_data_acquisition", "verify_draft_box_claim"}:
+        return {
+            "claim_mark": "AI-OPS",
+            "product_query": "product-70001",
+            "category_name": "测试类目",
+            "store_name": _TEST_STORE_NAME,
+            "target_source_urls": [_TEST_SOURCE_URL],
+        }
+    if action in _FROZEN_TEST_ACTIONS:
+        return {
+            "product_query": "70001",
+            "store_name": _TEST_STORE_NAME,
+            "target_source_urls": [_TEST_SOURCE_URL],
+            "target_identity": _TEST_FROZEN_TARGET,
+        }
+    return {}
+
+
 def _runtime_command(runtime, **kwargs):
     action = str(kwargs.get("action") or "")
+    if action == "claim_from_data_acquisition":
+        execution_mode = "claim_only"
+    elif action in {"save_only", "verify_not_published"}:
+        execution_mode = "single_save"
+    else:
+        execution_mode = ""
     if action == "check_login_state":
         expected_page = "authenticated_dxm"
     elif action in {"open_data_acquisition", "claim_from_data_acquisition"}:
@@ -41,6 +94,12 @@ def _runtime_command(runtime, **kwargs):
     kwargs.setdefault("deadline", (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat())
     kwargs.setdefault("expected_page", expected_page)
     kwargs.setdefault("runtime_id", runtime.runtime_id)
+    kwargs.setdefault("execution_mode", execution_mode)
+    provided_params = kwargs.get("params")
+    kwargs["params"] = {
+        **_test_action_params(action),
+        **(provided_params if isinstance(provided_params, dict) else {}),
+    }
     return BrowserAgentCommand(**kwargs)
 
 
@@ -50,8 +109,13 @@ def _complete_open_editor_raw(**overrides):
         "action": "open_editor",
         "page_url": "https://www.dianxiaomi.com/web/smt/edit",
         "page_title": "编辑商品",
+        "store_name": _TEST_STORE_NAME,
+        "target_identity": _TEST_FROZEN_TARGET,
         "contract_facts": {
-            "before_values": {"target": "product-1"},
+            "before_values": {
+                "store_name": _TEST_STORE_NAME,
+                "target_identity": _TEST_FROZEN_TARGET,
+            },
             "after_values": {"editor": "product-1"},
             "postconditions": {
                 "expected_editor_page": True,
@@ -183,9 +247,24 @@ def _legacy_runtime_adapter_contract_bridge(monkeypatch, tmp_path):
                 for postcondition in contract.required_postconditions
             }
         )
+        before_values = {"legacy_test_fixture": True}
+        if action in _FROZEN_TEST_ACTIONS:
+            command_params = params if isinstance(params, dict) else {}
+            store_name = command_params.get("store_name")
+            target_identity = canonical_frozen_target_identity(
+                command_params.get("target_identity"),
+                store_name=store_name,
+            )
+            before_values = {
+                "store_name": store_name,
+                "target_identity": target_identity,
+            }
         if raw["ok"] is True:
+            if action in _FROZEN_TEST_ACTIONS:
+                raw["store_name"] = store_name
+                raw["target_identity"] = target_identity
             raw["contract_facts"] = {
-                "before_values": {"legacy_test_fixture": True},
+                "before_values": before_values,
                 "after_values": {"legacy_test_fixture": True},
                 "postconditions": {
                     postcondition: True
@@ -206,9 +285,13 @@ def _legacy_runtime_adapter_contract_bridge(monkeypatch, tmp_path):
                 "verify_not_published",
             }:
                 raw.setdefault("evidence_ref", proof_ref)
+            if action == "save_only":
+                raw.setdefault("save_evidence_ref", proof_ref)
+            if action == "verify_not_published":
+                raw.setdefault("unpublished_evidence_ref", proof_ref)
         else:
             raw["contract_facts"] = {
-                "before_values": {"legacy_test_fixture": True},
+                "before_values": before_values,
                 "after_values": {},
                 "postconditions": {
                     postcondition: False
@@ -433,7 +516,7 @@ def test_browser_agent_open_edit_page_rejects_ok_without_contract_facts():
         job_id=102,
         state="OPEN_EDIT_PAGE",
         action="open_editor",
-        params={},
+        params=_test_action_params("open_editor"),
     )
 
     with pytest.raises(RuntimeError, match="BROWSER_AGENT_ACTION_RESULT_CONTRACT_FAILURE"):
@@ -457,7 +540,7 @@ def test_browser_agent_builds_and_validates_exact_canonical_action_result_envelo
         job_id=104,
         state="OPEN_EDIT_PAGE",
         action="open_editor",
-        params={},
+        params=_test_action_params("open_editor"),
     )
 
     result = runtime.run(command)
@@ -480,7 +563,10 @@ def test_browser_agent_builds_and_validates_exact_canonical_action_result_envelo
         "ok": True,
         "action": "open_editor",
         "attempted_state": "OPEN_EDIT_PAGE",
-        "before_values": {"target": "product-1"},
+        "before_values": {
+            "store_name": _TEST_STORE_NAME,
+            "target_identity": _TEST_FROZEN_TARGET,
+        },
         "after_values": {"editor": "product-1"},
         "postconditions": {
             "expected_editor_page": True,
@@ -535,7 +621,7 @@ def test_browser_agent_rejects_conflicting_producer_identity(raw_overrides):
         job_id=106,
         state="OPEN_EDIT_PAGE",
         action="open_editor",
-        params={},
+        params=_test_action_params("open_editor"),
     )
 
     with pytest.raises(RuntimeError, match="BROWSER_AGENT_ACTION_RESULT_CONTRACT_FAILURE"):
@@ -602,7 +688,10 @@ def test_browser_agent_returns_a_valid_explicit_failure_envelope():
         def open_editor(self, **_kwargs):
             result = _complete_open_editor_raw(ok=False)
             result["contract_facts"] = {
-                "before_values": {"target": "product-1"},
+                "before_values": {
+                    "store_name": _TEST_STORE_NAME,
+                    "target_identity": _TEST_FROZEN_TARGET,
+                },
                 "after_values": {},
                 "postconditions": {"editor_ready": False},
                 "evidence_observations": {},
@@ -890,7 +979,7 @@ def test_browser_agent_runtime_explicit_cancel_revokes_only_matching_command_and
     run_thread.join(timeout=2)
 
     assert not run_thread.is_alive()
-    assert errors and "BROWSER_AGENT_COMMAND_REVOKED" in str(errors[0])
+    assert errors and "BROWSER_AGENT_LATE_RESULT_IGNORED" in str(errors[0])
     assert runtime.status()["active"] is False
     assert runtime.status()["status"] != "idle"
     runtime.shutdown()
@@ -945,7 +1034,7 @@ def test_browser_agent_runtime_does_not_accept_semi_managed_page_as_plain_editor
         job_id=25,
         state="OPEN_EDIT_PAGE",
         action="open_editor",
-        params={},
+        params=_test_action_params("open_editor"),
     )
 
     with pytest.raises(
@@ -1396,7 +1485,7 @@ def test_browser_agent_cancel_during_upstream_authorization_prevents_the_mutatio
     assert adapter.authorization_result["ok"] is False
     assert adapter.authorization_result["reason"] == "browser_agent_command_revoked"
     assert len(run_errors) == 1
-    assert "BROWSER_AGENT_COMMAND_REVOKED" in str(run_errors[0])
+    assert "BROWSER_AGENT_LATE_RESULT_IGNORED" in str(run_errors[0])
     runtime.shutdown()
 
 
@@ -1429,7 +1518,7 @@ def test_browser_agent_cancel_returns_pending_without_waiting_for_inflight_mutat
                 assert release_operation.wait(timeout=2)
                 operation_calls.append("finished")
                 operation_finished.set()
-                return "clicked"
+                return {"dispatched": True, "result": "clicked"}
 
             self.authorization_result = self.authorizer(
                 {**self.command_context, "mutation_action": "claim_confirm_click"},
@@ -1486,11 +1575,11 @@ def test_browser_agent_cancel_returns_pending_without_waiting_for_inflight_mutat
         "ok": True,
         "policy": "operator-approved",
         "executed": True,
-        "operation_result": "clicked",
+        "operation_result": {"dispatched": True, "result": "clicked"},
         "command_id": command.command_id,
     }
     assert len(run_errors) == 1
-    assert "BROWSER_AGENT_COMMAND_REVOKED" in str(run_errors[0])
+    assert "BROWSER_AGENT_LATE_RESULT_IGNORED" in str(run_errors[0])
     runtime.shutdown()
 
 
@@ -1519,7 +1608,7 @@ def test_browser_agent_takeover_returns_pending_without_waiting_for_inflight_mut
                 operation_started.set()
                 assert release_operation.wait(timeout=2)
                 operation_finished.set()
-                return "clicked"
+                return {"dispatched": True, "result": "clicked"}
 
             self.authorizer(
                 {**self.command_context, "mutation_action": "claim_confirm_click"},
@@ -1571,7 +1660,7 @@ def test_browser_agent_takeover_returns_pending_without_waiting_for_inflight_mut
     assert takeover_returned.is_set()
     assert runtime.status()["status"] in {"takeover_pending", "manual_takeover"}
     assert len(run_errors) == 1
-    assert "BROWSER_AGENT_COMMAND_REVOKED" in str(run_errors[0])
+    assert "BROWSER_AGENT_LATE_RESULT_IGNORED" in str(run_errors[0])
     runtime.shutdown()
 
 
@@ -1600,7 +1689,7 @@ def test_browser_agent_shutdown_returns_pending_without_waiting_for_inflight_mut
                 operation_started.set()
                 assert release_operation.wait(timeout=2)
                 operation_finished.set()
-                return "clicked"
+                return {"dispatched": True, "result": "clicked"}
 
             self.authorizer(
                 {**self.command_context, "mutation_action": "claim_confirm_click"},
@@ -1655,7 +1744,7 @@ def test_browser_agent_shutdown_returns_pending_without_waiting_for_inflight_mut
     assert shutdown_returned.is_set()
     assert runtime.status()["status"] in {"stopping", "stopped"}
     assert len(run_errors) <= 1
-    assert all("BROWSER_AGENT_COMMAND_REVOKED" in str(error) for error in run_errors)
+    assert all("BROWSER_AGENT_LATE_RESULT_IGNORED" in str(error) for error in run_errors)
     runtime.shutdown()
 
 
@@ -1683,7 +1772,7 @@ def test_browser_agent_timeout_returns_without_waiting_for_mutation_dispatch():
                 operation_started.set()
                 assert release_operation.wait(timeout=2)
                 operation_finished.set()
-                return "clicked"
+                return {"dispatched": True, "result": "clicked"}
 
             self.authorizer(
                 {**self.command_context, "mutation_action": "claim_confirm_click"},
@@ -1750,7 +1839,7 @@ def test_browser_agent_mutation_operation_can_cancel_same_command_without_deadlo
                         self.command_context["runtime_id"],
                     )
                 )
-                return "clicked"
+                return {"dispatched": True, "result": "clicked"}
 
             self.authorizer(
                 {**self.command_context, "mutation_action": "claim_confirm_click"},
@@ -1787,7 +1876,7 @@ def test_browser_agent_mutation_operation_can_cancel_same_command_without_deadlo
     assert cancel_result["status"] == "cancel_pending_dispatch_inflight"
     assert cancel_result["reasonCode"] == "BROWSER_AGENT_MUTATION_DISPATCH_INFLIGHT"
     assert len(run_errors) == 1
-    assert "BROWSER_AGENT_COMMAND_REVOKED" in str(run_errors[0])
+    assert "BROWSER_AGENT_LATE_RESULT_IGNORED" in str(run_errors[0])
     runtime.shutdown()
 
 
@@ -1847,7 +1936,7 @@ def test_browser_agent_rejects_auth_time_live_mutation_identity_drift(
             }
 
     adapter = Adapter()
-    runtime = BrowserAgentRuntime(adapter)
+    runtime = BrowserAgentRuntime(adapter, mutation_ledger=object())
 
     def authorize(_command, _context):
         adapter.identity[drift_field] = drift_value
@@ -1872,6 +1961,171 @@ def test_browser_agent_rejects_auth_time_live_mutation_identity_drift(
     assert operation_calls == []
     assert adapter.authorization_result["ok"] is False
     assert adapter.authorization_result["reason"] == expected_reason
+    runtime.shutdown()
+
+
+def test_browser_agent_runs_final_page_preflight_before_single_jit_authorization():
+    order: list[str] = []
+    job_state = {"status": "running"}
+    operation_calls: list[str] = []
+
+    class Adapter:
+        def __init__(self):
+            self.authorizer = None
+            self.command_context = None
+            self.authorization_result = None
+
+        def set_mutation_authorizer(self, authorizer, command_context=None):
+            self.authorizer = authorizer
+            self.command_context = dict(command_context or {})
+
+        def clear_mutation_authorizer(self):
+            self.authorizer = None
+
+        def claim_from_data_acquisition(self, *_args, **_kwargs):
+            def final_page_preflight():
+                order.append("page_preflight")
+                job_state["status"] = "pending"
+                return {"ok": True}
+
+            self.authorization_result = self.authorizer(
+                {
+                    **self.command_context,
+                    "mutation_action": "claim_confirm_click",
+                    "_pre_dispatch_guard": final_page_preflight,
+                },
+                lambda: operation_calls.append("click")
+                or {"dispatched": True},
+            )
+            raise RuntimeError("stop_after_authorization_probe")
+
+    def authorize(_command, _context):
+        order.append(f"jit:{job_state['status']}")
+        if job_state["status"] != "running":
+            return {
+                "ok": False,
+                "reason_code": "AUTH_COMMAND_QUEUE_STATE_MISMATCH",
+            }
+        return {"ok": True, "reason_code": "OK"}
+
+    adapter = Adapter()
+    runtime = BrowserAgentRuntime(adapter)
+    runtime.set_mutation_authorizer(authorize)
+    command = _runtime_command(
+        runtime,
+        task_id=893,
+        job_id=894,
+        state="CLAIM_TO_DRAFT_BOX",
+        action="claim_from_data_acquisition",
+        params={"claim_mark": "AI-OPS"},
+    )
+
+    with pytest.raises(RuntimeError, match="stop_after_authorization_probe"):
+        runtime.run(command, timeout_seconds=1)
+
+    assert order == ["page_preflight", "jit:pending"]
+    assert operation_calls == []
+    assert adapter.authorization_result["ok"] is False
+    assert (
+        adapter.authorization_result["reason_code"]
+        == "AUTH_COMMAND_QUEUE_STATE_MISMATCH"
+    )
+    runtime.shutdown()
+
+
+@pytest.mark.parametrize(
+    "page_url",
+    [
+        "http://www.dianxiaomi.com/web/smt/edit",
+        "https://www.dianxiaomi.com:444/web/smt/edit",
+        "https://evil.dianxiaomi.com/web/smt/edit",
+    ],
+)
+def test_browser_agent_rejects_non_production_editor_origin_before_jit(page_url):
+    operation_calls = []
+
+    class Adapter:
+        requires_persistent_browser_agent = True
+
+        def __init__(self):
+            self.authorization_result = None
+
+        def browser_session_id(self):
+            return "strict-editor-session"
+
+        def current_mutation_identity(self):
+            return {
+                "browser_session_id": "strict-editor-session",
+                "page_url": page_url,
+                "page_kind": "editor",
+                "target_hash": "a" * 64,
+            }
+
+        def set_mutation_authorizer(self, authorizer, command_context=None):
+            self.authorizer = authorizer
+            self.command_context = dict(command_context or {})
+
+        def clear_mutation_authorizer(self):
+            self.authorizer = None
+
+        def save_only(self, **_kwargs):
+            self.authorization_result = self.authorizer(
+                {**self.command_context, "mutation_action": "save_only_click"},
+                lambda: operation_calls.append("clicked") or {"dispatched": True},
+            )
+            return {"ok": False}
+
+    adapter = Adapter()
+    runtime = BrowserAgentRuntime(adapter, mutation_ledger=object())
+    runtime.set_mutation_authorizer(lambda _command, _context: {"ok": True})
+    command = _runtime_command(
+        runtime,
+        task_id=919,
+        job_id=920,
+        state="SAVE_ONLY",
+        action="save_only",
+        expected_page="editor",
+        execution_mode="batch_draft_save",
+        params={},
+        target_hash="a" * 64,
+    )
+
+    with pytest.raises(RuntimeError):
+        runtime.run(command, timeout_seconds=1)
+
+    assert operation_calls == []
+    assert adapter.authorization_result["ok"] is False
+    assert adapter.authorization_result["reason"] == "browser_agent_mutation_page_url_drift"
+    runtime.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("batch_execution", "wrong_page"),
+    [
+        (True, "semi_managed"),
+        (False, "editor"),
+    ],
+)
+def test_browser_agent_save_command_page_is_isolated_by_execution_mode(
+    batch_execution,
+    wrong_page,
+):
+    runtime = BrowserAgentRuntime()
+    params = {}
+    command = _runtime_command(
+        runtime,
+        task_id=921,
+        job_id=922,
+        state="SAVE_ONLY",
+        action="save_only",
+        expected_page=wrong_page,
+        execution_mode=("batch_draft_save" if batch_execution else "single_save"),
+        params=params,
+    )
+
+    with pytest.raises(RuntimeError, match="BROWSER_AGENT_COMMAND_CONTRACT_MISMATCH"):
+        runtime.reserve_command(command)
+
     runtime.shutdown()
 
 
@@ -1954,7 +2208,7 @@ def test_browser_agent_successful_mutation_dispatch_executes_once_and_returns_au
         def claim_from_data_acquisition(self, *_args, **_kwargs):
             self.authorization_result = self.authorizer(
                 {**self.command_context, "mutation_action": "claim_confirm_click"},
-                lambda: operation_calls.append("clicked") or {"clicked": True},
+                lambda: operation_calls.append("clicked") or {"dispatched": True},
             )
             return {
                 "ok": True,
@@ -1988,7 +2242,7 @@ def test_browser_agent_successful_mutation_dispatch_executes_once_and_returns_au
         "policy": "operator-approved",
         "authorization_id": "auth-1",
         "executed": True,
-        "operation_result": {"clicked": True},
+        "operation_result": {"dispatched": True},
         "command_id": command.command_id,
     }
     runtime.shutdown()
@@ -2018,7 +2272,7 @@ def test_browser_agent_cancel_between_mutations_prevents_the_next_dispatch():
             authorization_results.append(
                 self.authorizer(
                     {**self.command_context, "mutation_action": "claim_open_dialog_click"},
-                    lambda: operation_calls.append("first") or "first-clicked",
+                    lambda: operation_calls.append("first") or {"dispatched": True, "result": "first-clicked"},
                 )
             )
             first_mutation_finished.set()
@@ -2026,7 +2280,7 @@ def test_browser_agent_cancel_between_mutations_prevents_the_next_dispatch():
             authorization_results.append(
                 self.authorizer(
                     {**self.command_context, "mutation_action": "claim_confirm_click"},
-                    lambda: operation_calls.append("second") or "second-clicked",
+                    lambda: operation_calls.append("second") or {"dispatched": True, "result": "second-clicked"},
                 )
             )
             return {
@@ -2066,11 +2320,11 @@ def test_browser_agent_cancel_between_mutations_prevents_the_next_dispatch():
     assert operation_calls == ["first"]
     assert len(upstream_calls) == 1
     assert authorization_results[0]["executed"] is True
-    assert authorization_results[0]["operation_result"] == "first-clicked"
+    assert authorization_results[0]["operation_result"] == {"dispatched": True, "result": "first-clicked"}
     assert authorization_results[1]["executed"] is False
     assert authorization_results[1]["reason"] == "browser_agent_command_revoked"
     assert len(run_errors) == 1
-    assert "BROWSER_AGENT_COMMAND_REVOKED" in str(run_errors[0])
+    assert "BROWSER_AGENT_LATE_RESULT_IGNORED" in str(run_errors[0])
     runtime.shutdown()
 
 
@@ -2150,7 +2404,7 @@ def test_browser_agent_lifecycle_revoke_during_upstream_authorization_prevents_m
     assert adapter.authorization_result["reason"] == "browser_agent_command_revoked"
     assert adapter.authorization_result["policy"] == "operator-approved"
     assert len(run_errors) == 1
-    assert "BROWSER_AGENT_COMMAND_REVOKED" in str(run_errors[0])
+    assert "BROWSER_AGENT_LATE_RESULT_IGNORED" in str(run_errors[0])
     runtime.shutdown()
 
 
@@ -2348,7 +2602,7 @@ def test_browser_agent_runtime_takeover_timeout_revokes_mutation_and_late_comple
         lambda: setattr(adapter, "mutation_count", adapter.mutation_count + 1),
     )["reason"] == "browser_agent_command_revoked"
     assert len(run_errors) == 1
-    assert "BROWSER_AGENT_COMMAND_REVOKED" in str(run_errors[0])
+    assert "BROWSER_AGENT_LATE_RESULT_IGNORED" in str(run_errors[0])
     assert runtime.status()["status"] == "manual_takeover"
     assert runtime.status()["manualTakeover"] is True
     runtime.shutdown()
@@ -2407,7 +2661,7 @@ def test_browser_agent_runtime_running_takeover_waits_for_full_run_finalization_
     assert takeover["status"] == "manual_takeover"
     assert takeover["manualTakeover"] is True
     assert len(run_errors) == 1
-    assert "BROWSER_AGENT_COMMAND_REVOKED" in str(run_errors[0])
+    assert "BROWSER_AGENT_LATE_RESULT_IGNORED" in str(run_errors[0])
     runtime.shutdown()
 
 
@@ -2462,7 +2716,7 @@ def test_browser_agent_runtime_takeover_retry_stays_pending_until_old_run_settle
     assert third["ok"] is True
     assert third["status"] == "manual_takeover"
     assert len(run_errors) == 1
-    assert "BROWSER_AGENT_COMMAND_REVOKED" in str(run_errors[0])
+    assert "BROWSER_AGENT_LATE_RESULT_IGNORED" in str(run_errors[0])
     runtime.shutdown()
 
 
@@ -2543,7 +2797,7 @@ def test_browser_agent_runtime_shutdown_timeout_revokes_mutation_and_closes_only
     assert upstream_authorizer_calls == []
     assert adapter.authorization_result["reason"] == "browser_agent_command_revoked"
     assert len(run_errors) == 1
-    assert "BROWSER_AGENT_COMMAND_REVOKED" in str(run_errors[0])
+    assert "BROWSER_AGENT_LATE_RESULT_IGNORED" in str(run_errors[0])
     assert adapter.close_thread == adapter.action_thread
     assert runtime.status()["status"] == "stopped"
     runtime.shutdown()
@@ -2605,7 +2859,7 @@ def test_browser_agent_runtime_running_shutdown_reports_success_only_after_run_a
     assert run_finished.is_set()
     assert close_finished.is_set()
     assert len(run_errors) == 1
-    assert "BROWSER_AGENT_COMMAND_REVOKED" in str(run_errors[0])
+    assert "BROWSER_AGENT_LATE_RESULT_IGNORED" in str(run_errors[0])
     assert runtime.status()["status"] == "stopped"
     assert runtime.status()["browserVisible"] is False
     runtime.shutdown()
@@ -2665,7 +2919,7 @@ def test_browser_agent_runtime_shutdown_retry_remains_fail_closed_until_stop_fin
     assert third["ok"] is True
     assert third["status"] == "stopped"
     assert len(run_errors) == 1
-    assert "BROWSER_AGENT_COMMAND_REVOKED" in str(run_errors[0])
+    assert "BROWSER_AGENT_LATE_RESULT_IGNORED" in str(run_errors[0])
 
 
 def test_browser_agent_runtime_idle_shutdown_is_singleflight_and_replays_terminal_result():
@@ -3098,7 +3352,7 @@ def test_browser_agent_runtime_normalizes_workflow_trace_step_copy():
     runtime.shutdown()
 
 
-def test_browser_agent_runtime_applies_hud_inside_agent_thread_before_action():
+def test_browser_agent_runtime_defers_page_hud_for_claim_mutation():
     class HudRecordingAdapter:
         def __init__(self):
             self.calls = []
@@ -3132,9 +3386,7 @@ def test_browser_agent_runtime_applies_hud_inside_agent_thread_before_action():
     result = runtime.run(command, timeout_seconds=1)
 
     assert result["ok"] is True
-    assert adapter.calls[0] == ("hud", "CLAIM_TO_DRAFT_BOX", "把已有待认领商品认领到商品箱")
-    assert adapter.calls[1] == ("claim",)
-    assert adapter.calls[-1][0] == "hud"
+    assert adapter.calls == [("claim",)]
     status = runtime.status()
     assert status["hud"]["state"] == "CLAIM_TO_DRAFT_BOX"
     assert status["message"] == "把已有待认领商品认领到商品箱"
@@ -3253,11 +3505,11 @@ def test_browser_agent_runtime_defers_page_hud_for_editor_and_save_actions(actio
 
         def save_only(self, **kwargs):
             self.calls.append(("save_only", kwargs.get("product_query")))
-            return {"ok": True, "page_url": "https://www.dianxiaomi.com/web/smt/editFromSmt?id=1", "page_title": "店小秘--半托管编辑"}
+            return {"ok": False, "reason": "intentional HUD-only probe", "page_url": "https://www.dianxiaomi.com/web/smt/editFromSmt?id=1", "page_title": "店小秘--半托管编辑"}
 
         def verify_not_published(self, **kwargs):
             self.calls.append(("verify_not_published", kwargs.get("product_query")))
-            return {"ok": True, "page_url": "https://www.dianxiaomi.com/web/smt/editFromSmt?id=1", "page_title": "店小秘--半托管编辑"}
+            return {"ok": False, "reason": "intentional HUD-only probe", "page_url": "https://www.dianxiaomi.com/web/smt/editFromSmt?id=1", "page_title": "店小秘--半托管编辑"}
 
     adapter = HudRecordingAdapter()
     runtime = BrowserAgentRuntime(adapter)
@@ -3272,7 +3524,7 @@ def test_browser_agent_runtime_defers_page_hud_for_editor_and_save_actions(actio
 
     result = runtime.run(command, timeout_seconds=1)
 
-    assert result["ok"] is True
+    assert result["ok"] is (action not in {"save_only", "verify_not_published"})
     assert all(call[0] != "hud" for call in adapter.calls)
     assert adapter.calls == [(action, "目标商品")]
     runtime.shutdown()
@@ -3745,7 +3997,7 @@ def test_browser_agent_runtime_injects_command_bound_mutation_authorizer_after_r
         def claim_from_data_acquisition(self, *_args, **_kwargs):
             result = self.authorizer(
                 {**self.command_context, "mutation_action": "claim_confirm_click"},
-                lambda: "clicked",
+                lambda: {"dispatched": True, "result": "clicked"},
             )
             assert result["ok"] is True
             assert result["executed"] is True

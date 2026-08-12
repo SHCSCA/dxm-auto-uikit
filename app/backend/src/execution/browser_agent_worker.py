@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import json
 import hashlib
+import re
 import time
 import traceback
 import uuid
@@ -22,6 +23,7 @@ from src.execution.action_result_contract import (
     ACTION_RESULT_CONTRACTS,
     ACTION_RESULT_SCHEMA_VERSION,
     ActionResultContractError,
+    controlled_dxm_page_identity,
     validate_action_result_envelope,
 )
 from src.execution.browser_agent_protocol import (
@@ -259,6 +261,12 @@ class BrowserAgentRuntime:
         with self._lock:
             self._validate_command_locked(command, timeout_seconds=None)
             ledger = self._mutation_ledger
+            if command.execution_mode == "batch_draft_save" and ledger is None:
+                return {
+                    "ok": False,
+                    "reasonCode": "MUTATION_LEDGER_REQUIRED",
+                    "runtimeId": self._runtime_id,
+                }
             if ledger is not None:
                 try:
                     ledger_decision = ledger.reserve_command(command)
@@ -732,6 +740,8 @@ class BrowserAgentRuntime:
 
     def run(self, command: BrowserAgentCommand, *, timeout_seconds: float | None = None) -> dict[str, Any]:
         with self._lock:
+            if command.execution_mode == "batch_draft_save" and self._mutation_ledger is None:
+                raise RuntimeError("MUTATION_LEDGER_REQUIRED")
             self._consume_command_reservation_locked(command)
             deadline_monotonic = self._validate_command_locked(command, timeout_seconds=timeout_seconds)
             replay = self._find_idempotent_replay_locked(command)
@@ -950,9 +960,21 @@ class BrowserAgentRuntime:
             if state_contracts is not None
             else None
         )
+        if command.action in {"save_only", "verify_not_published"}:
+            command_mode = _mode_for_command(command)
+            mode_page = (
+                action_contract.page_for_execution_mode(command_mode)
+                if action_contract is not None
+                else None
+            )
+            if command.expected_page != mode_page:
+                raise RuntimeError(
+                    "BROWSER_AGENT_COMMAND_CONTRACT_MISMATCH: "
+                    f"{command_mode} requires {mode_page}, got {command.expected_page}"
+                )
         if (
             action_contract is None
-            or action_contract.expected_page != command.expected_page
+            or command.expected_page not in action_contract.allowed_pages
         ):
             raise RuntimeError(
                 "BROWSER_AGENT_COMMAND_CONTRACT_MISMATCH: "
@@ -1092,6 +1114,29 @@ class BrowserAgentRuntime:
                 lease.context,
                 raw_result,
             )
+            if (
+                command.execution_mode == "batch_draft_save"
+                and command.state == "SAVE_ONLY"
+                and command.action == "save_only"
+                and isinstance(result, Mapping)
+                and result.get("ok") is True
+            ):
+                ledger = self._mutation_ledger
+                recorder = getattr(ledger, "record_success", None)
+                if not callable(recorder):
+                    raise RuntimeError("SAVE_SUCCESS_LEDGER_REQUIRED")
+                try:
+                    success_decision = recorder(command, result)
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"SAVE_SUCCESS_LEDGER_UNAVAILABLE: {exc}"
+                    ) from exc
+                if getattr(success_decision, "ok", False) is not True:
+                    reason_code = str(
+                        getattr(success_decision, "reason_code", "")
+                        or "SAVE_SUCCESS_LEDGER_REJECTED"
+                    )
+                    raise RuntimeError(reason_code)
             _write_action_result(
                 artifacts["result_file"],
                 {
@@ -1108,11 +1153,28 @@ class BrowserAgentRuntime:
                 },
             )
             if isinstance(result, dict) and result.get("ok") is not True:
+                if _is_batch_save_command(command) and not _mark_batch_save_unknown(
+                    self._mutation_ledger,
+                    command,
+                    phase="post_save_action_result",
+                    failure=result,
+                ):
+                    raise RuntimeError("SAVE_UNKNOWN_LEDGER_REJECTED")
                 return result
             if callable(updater) and not defer_page_hud:
                 updater(self._build_hud(command, status="success"))
             return result
         except Exception as exc:
+            if _is_batch_save_command(command):
+                try:
+                    _mark_batch_save_unknown(
+                        self._mutation_ledger,
+                        command,
+                        phase="post_save_evidence",
+                        failure=exc,
+                    )
+                except Exception:
+                    pass
             _write_action_result(
                 artifacts["result_file"],
                 {
@@ -1172,6 +1234,38 @@ class BrowserAgentRuntime:
                 _raise_action_result_contract_failure(
                     "successful action result target_identity/store_name do not match the command"
                 )
+        if (
+            command.execution_mode == "batch_draft_save"
+            and command.state == "VERIFY_NOT_PUBLISHED"
+            and command.action == "verify_not_published"
+        ):
+            verification_context = command.params.get("save_verification_context")
+            if not isinstance(verification_context, Mapping):
+                _raise_action_result_contract_failure(
+                    "batch VERIFY_NOT_PUBLISHED requires save_verification_context"
+                )
+            before_values = dict(contract_facts.get("before_values") or {})
+            before_values["save_verification_context"] = deepcopy(
+                dict(verification_context)
+            )
+            observations = dict(contract_facts.get("evidence_observations") or {})
+            fresh_probe = dict(observations.get("fresh_probe") or {})
+            fresh_probe["save_verification_context"] = deepcopy(
+                dict(verification_context)
+            )
+            observations["fresh_probe"] = fresh_probe
+            observations["save_verification_context"] = deepcopy(
+                dict(verification_context)
+            )
+            after_values = dict(contract_facts.get("after_values") or {})
+            after_fresh_probe = dict(after_values.get("fresh_probe") or {})
+            after_fresh_probe["save_verification_context"] = deepcopy(
+                dict(verification_context)
+            )
+            after_values["fresh_probe"] = after_fresh_probe
+            contract_facts["before_values"] = before_values
+            contract_facts["after_values"] = after_values
+            contract_facts["evidence_observations"] = observations
 
         cached_session_id = context.browser_session_id
         current_session_id = self._adapter_browser_session_id(adapter)
@@ -1227,17 +1321,64 @@ class BrowserAgentRuntime:
             "recoverability": contract_facts["recoverability"],
         }
         try:
-            return validate_action_result_envelope(
+            validated = validate_action_result_envelope(
                 envelope,
                 expected_state=command.state,
                 expected_action=command.action,
+                expected_page=command.expected_page,
+                execution_mode=context.mode,
                 expected_runtime_id=context.runtime_id,
                 expected_browser_session_id=cached_session_id,
+                expected_execution_payload=(
+                    command.params.get("defaults", {}).get(
+                        "_frozen_execution_payload"
+                    )
+                    if isinstance(command.params.get("defaults"), Mapping)
+                    else None
+                ),
             )
         except ActionResultContractError as exc:
             _raise_action_result_contract_failure(
                 f"{exc.reason_code}: {exc}"
             )
+        if (
+            command.execution_mode == "batch_draft_save"
+            and command.state == "SAVE_ONLY"
+            and command.action == "save_only"
+        ):
+            observations = validated.get("evidence", {}).get("observations", {})
+            save_result = (
+                observations.get("save_result")
+                if isinstance(observations, Mapping)
+                else None
+            )
+            pre_dispatch = (
+                save_result.get("pre_dispatch_readback")
+                if isinstance(save_result, Mapping)
+                else None
+            )
+            frozen_readback = (
+                pre_dispatch.get("frozen_execution_readback")
+                if isinstance(pre_dispatch, Mapping)
+                else None
+            )
+            observed_payload_hash = str(
+                frozen_readback.get("execution_payload_hash")
+                if isinstance(frozen_readback, Mapping)
+                else ""
+            ).strip().upper()
+            expected_payload_hash = str(
+                command.execution_payload_hash or ""
+            ).strip().upper()
+            if (
+                len(expected_payload_hash) != 64
+                or observed_payload_hash != expected_payload_hash
+            ):
+                _raise_action_result_contract_failure(
+                    "FROZEN_EXECUTION_READBACK_HASH_MISMATCH: "
+                    "the final page readback is not bound to the BrowserAgent command"
+                )
+        return validated
 
     def _authorize_mutation(
         self,
@@ -1320,6 +1461,7 @@ class BrowserAgentRuntime:
         ledger_started = False
         ledger_entry: dict[str, Any] | None = None
         final_identity: dict[str, Any] | None = None
+        diagnostics: dict[str, Any] = {}
         with self._mutation_dispatch_gate:
             final_identity, identity_rejection = self._bound_mutation_identity(
                 lease,
@@ -1335,11 +1477,24 @@ class BrowserAgentRuntime:
                     "outcome": "CANCELLED_BEFORE_DISPATCH",
                     "command_id": context.command_id,
                 }
+            with self._lock:
+                rejection = self._mutation_dispatch_rejection_locked(
+                    lease,
+                    public_mutation_context,
+                )
+                if rejection is not None:
+                    return {
+                        **rejection,
+                        "ok": False,
+                        "executed": False,
+                    }
+
             if callable(pre_dispatch_guard):
                 try:
                     preflight_result = pre_dispatch_guard()
                 except BaseException as exc:
                     return {
+                        **diagnostics,
                         "ok": False,
                         "executed": False,
                         "zero_click_proven": True,
@@ -1359,6 +1514,7 @@ class BrowserAgentRuntime:
                 )
                 if not preflight_ok:
                     return {
+                        **diagnostics,
                         "ok": False,
                         "executed": False,
                         "zero_click_proven": True,
@@ -1372,6 +1528,90 @@ class BrowserAgentRuntime:
                         ),
                         "command_id": context.command_id,
                     }
+
+            # The page guard may perform several read-only requests and can
+            # outlive the task/queue approval that was valid when the command
+            # entered the worker. Run the single database/runtime JIT only
+            # after that final page preflight, then revalidate the live browser
+            # identity and lifecycle once more before the ledger transition.
+            # Never hold the lifecycle lock across the external authorizer.
+            authorization = authorizer(command, public_mutation_context)
+            if not isinstance(authorization, Mapping) or authorization.get("ok") is not True:
+                diagnostics = dict(authorization) if isinstance(authorization, Mapping) else {}
+                return {
+                    **diagnostics,
+                    "ok": False,
+                    "executed": False,
+                    "reason": diagnostics.get("reason") or "browser_agent_mutation_not_authorized",
+                    "command_id": context.command_id,
+                }
+            diagnostics = dict(authorization)
+
+            # The external JIT authorizer is intentionally outside the page
+            # adapter.  It may take long enough for the live DOM target to
+            # drift after the first read-only preflight.  Re-run the same
+            # producer immediately before the identity/ledger transition so
+            # a stable binding, frozen value, or exact SAVE button count
+            # changed during JIT can never reach ``begin_dispatch``.
+            if callable(pre_dispatch_guard):
+                try:
+                    post_jit_preflight_result = pre_dispatch_guard()
+                except BaseException as exc:
+                    return {
+                        **diagnostics,
+                        "ok": False,
+                        "executed": False,
+                        "zero_click_proven": True,
+                        "outcome": "CANCELLED_BEFORE_DISPATCH",
+                        "reason": "browser_agent_mutation_post_jit_preflight_failed",
+                        "reason_code": str(
+                            getattr(exc, "reason_code", None)
+                            or getattr(exc, "error_code", None)
+                            or "MUTATION_TARGET_DRIFT"
+                        ),
+                        "detail": str(exc),
+                        "command_id": context.command_id,
+                    }
+                post_jit_preflight_ok = post_jit_preflight_result is True or (
+                    isinstance(post_jit_preflight_result, Mapping)
+                    and post_jit_preflight_result.get("ok") is True
+                )
+                if not post_jit_preflight_ok:
+                    return {
+                        **diagnostics,
+                        "ok": False,
+                        "executed": False,
+                        "zero_click_proven": True,
+                        "outcome": "CANCELLED_BEFORE_DISPATCH",
+                        "reason": "browser_agent_mutation_post_jit_preflight_rejected",
+                        "reason_code": "MUTATION_TARGET_DRIFT",
+                        "detail": (
+                            str(
+                                post_jit_preflight_result.get("reason")
+                                or "post-JIT target readback rejected"
+                            )
+                            if isinstance(post_jit_preflight_result, Mapping)
+                            else "post-JIT target readback rejected"
+                        ),
+                        "command_id": context.command_id,
+                    }
+
+            final_identity, identity_rejection = self._bound_mutation_identity(
+                lease,
+                command,
+                expected_identity=final_identity,
+            )
+            if identity_rejection is not None:
+                return {
+                    **diagnostics,
+                    **identity_rejection,
+                    "ok": False,
+                    "executed": False,
+                    "zero_click_proven": True,
+                    "outcome": "CANCELLED_BEFORE_DISPATCH",
+                    "command_id": context.command_id,
+                }
+
             with self._lock:
                 rejection = self._mutation_dispatch_rejection_locked(
                     lease,
@@ -1379,21 +1619,11 @@ class BrowserAgentRuntime:
                 )
                 if rejection is not None:
                     return {
+                        **diagnostics,
                         **rejection,
                         "ok": False,
                         "executed": False,
                     }
-                authorization = authorizer(command, public_mutation_context)
-                if not isinstance(authorization, Mapping) or authorization.get("ok") is not True:
-                    diagnostics = dict(authorization) if isinstance(authorization, Mapping) else {}
-                    return {
-                        **diagnostics,
-                        "ok": False,
-                        "executed": False,
-                        "reason": diagnostics.get("reason") or "browser_agent_mutation_not_authorized",
-                        "command_id": context.command_id,
-                    }
-                diagnostics = dict(authorization)
                 if ledger is not None:
                     try:
                         ledger_decision = ledger.begin_dispatch(
@@ -1716,6 +1946,25 @@ class BrowserAgentRuntime:
         if self._active_lease is lease and self._active_future is future:
             self._active_lease = None
             self._active_future = None
+        if lease.revoked and self._lifecycle_intent is None:
+            self._status.update(
+                {
+                    "status": "cancelled",
+                    "healthy": False,
+                    "active": False,
+                    "currentStep": "真实浏览器命令已取消",
+                    "lastError": lease.terminal_error_message,
+                    "lastEventAt": _now(),
+                    "message": "命令已撤销且执行线程已经完整收口",
+                    "nextAction": "请刷新任务状态；结果不明确时不得自动重试",
+                    "needsRestart": True,
+                }
+            )
+            self._record_event(
+                "cancel_command",
+                "真实浏览器命令已取消",
+                status="cancelled",
+            )
         if self._lifecycle_intent == "takeover":
             self._set_manual_takeover_locked()
         self._complete_idempotent_lease_locked(lease)
@@ -2299,6 +2548,50 @@ def _raise_action_result_contract_failure(message: str) -> None:
     raise RuntimeError(f"BROWSER_AGENT_ACTION_RESULT_CONTRACT_FAILURE: {message}")
 
 
+def _is_batch_save_command(command: BrowserAgentCommand) -> bool:
+    return (
+        command.execution_mode == "batch_draft_save"
+        and command.state == "SAVE_ONLY"
+        and command.action == "save_only"
+    )
+
+
+def _stable_post_save_reason_code(failure: Any) -> str:
+    if isinstance(failure, Mapping):
+        failure_code = str(failure.get("failure_code") or "").strip()
+        if re.fullmatch(r"[A-Z][A-Z0-9_]{2,63}", failure_code):
+            return failure_code
+    if isinstance(failure, ActionResultContractError):
+        return failure.reason_code
+    stable_codes = [
+        token
+        for token in re.findall(r"\b[A-Z][A-Z0-9_]{2,63}\b", str(failure or ""))
+        if "_" in token
+    ]
+    return stable_codes[-1] if stable_codes else "SAVE_SUCCESS_EVIDENCE_INVALID"
+
+
+def _mark_batch_save_unknown(
+    ledger: Any,
+    command: BrowserAgentCommand,
+    *,
+    phase: str,
+    failure: Any,
+) -> bool:
+    marker = getattr(ledger, "mark_unknown", None)
+    if not callable(marker):
+        return False
+    decision = marker(
+        command,
+        "save_only_click",
+        {
+            "phase": phase,
+            "reason_code": _stable_post_save_reason_code(failure),
+        },
+    )
+    return getattr(decision, "ok", False) is True
+
+
 def _action_result_page_url(result: Mapping[str, Any]) -> str | None:
     page_identity = result.get("page_identity")
     if not isinstance(page_identity, Mapping):
@@ -2317,50 +2610,28 @@ def _action_result_page_title(result: Mapping[str, Any]) -> str | None:
 
 
 def _page_url_matches_identity(page_url: str, expected_page: str) -> bool:
-    if not page_url:
-        return False
-    try:
-        parsed = urlparse(page_url)
-    except ValueError:
-        return False
-    hostname = str(parsed.hostname or "").casefold()
-    if hostname != "dianxiaomi.com" and not hostname.endswith(".dianxiaomi.com"):
-        return False
-    path = str(parsed.path or "").rstrip("/").casefold()
+    observed = controlled_dxm_page_identity(page_url)
     if expected_page == "authenticated_dxm":
-        return path.startswith("/web/") and "/login" not in path
-    if expected_page == "data_acquisition":
-        return path == "/web/productcrawl/dataacquisition"
-    if expected_page == "draft_box":
-        return path == "/web/smt/smtproductlist/draft"
-    if expected_page == "editor":
-        return path == "/web/smt/edit"
-    if expected_page == "semi_managed":
-        return path == "/web/smt/editfromsmt"
-    return False
+        return observed is not None
+    return observed == expected_page
 
 
 def _controlled_page_identity(page_url: str) -> str | None:
-    for identity in (
-        "data_acquisition",
-        "draft_box",
-        "semi_managed",
-        "editor",
-        "authenticated_dxm",
-    ):
-        if _page_url_matches_identity(page_url, identity):
-            return identity
-    return None
+    return controlled_dxm_page_identity(page_url)
 
 
 def _normalized_page_url(page_url: str) -> str:
     try:
         parsed = urlparse(page_url)
-    except ValueError:
+        port = parsed.port
+    except (TypeError, ValueError):
+        return ""
+    if controlled_dxm_page_identity(page_url) is None:
         return ""
     hostname = str(parsed.hostname or "").casefold()
     path = str(parsed.path or "").rstrip("/")
-    return f"{parsed.scheme.casefold()}://{hostname}{path}?{parsed.query}".rstrip("?")
+    authority = hostname if port in {None, 443} else f"{hostname}:{port}"
+    return f"https://{authority}{path}?{parsed.query}".rstrip("?")
 
 
 def _command_fingerprint(command: BrowserAgentCommand) -> str:
@@ -2415,11 +2686,7 @@ def _prepare_action_artifacts(command: BrowserAgentCommand, *, command_id: str |
 
 
 def _mode_for_command(command: BrowserAgentCommand) -> str:
-    if command.state == "CLAIM_TO_DRAFT_BOX":
-        return "claim_only"
-    if command.state == "SAVE_ONLY":
-        return "single_save"
-    return ""
+    return str(command.execution_mode or "").strip()
 
 
 def _write_action_result(path: Path, payload: dict[str, Any]) -> None:

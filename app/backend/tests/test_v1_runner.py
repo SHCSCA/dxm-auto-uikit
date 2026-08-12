@@ -1,4 +1,5 @@
 import asyncio
+from copy import deepcopy
 import hashlib
 import json
 import sqlite3
@@ -20,6 +21,7 @@ from src.execution.v1_runner import V1ExecutionError, V1TaskRunner
 from src.repository import Repository
 from src.state_machine.contracts import StateName
 from src.state_machine.two_stage import canonical_claim_target_identity, canonical_source_identity
+from tests.test_action_result_contract import _valid_save_result, _valid_unpublished_result
 
 
 def _test_runner(*args, **kwargs):
@@ -205,6 +207,153 @@ def _test_action_first_ref(result: dict) -> dict:
     return result["evidence"]["refs"][0]
 
 
+def _bind_single_save_action_result(
+    result: dict,
+    *,
+    target_identity: dict,
+    product_query: str,
+    store_name: str,
+    evidence_name: str,
+    execution_defaults: dict | None = None,
+) -> dict:
+    bound = deepcopy(result)
+    bound["before_values"]["product_query"] = product_query
+    bound["before_values"]["store_name"] = store_name
+    frozen_payload = (
+        execution_defaults.get("_frozen_execution_payload")
+        if isinstance(execution_defaults, dict)
+        else None
+    )
+    path_a = isinstance(frozen_payload, dict) and isinstance(
+        frozen_payload.get("fields"),
+        list,
+    )
+    if path_a:
+        bound["page_identity"]["kind"] = "editor"
+        bound["page_identity"]["url"] = "https://www.dianxiaomi.com/web/smt/edit"
+    digest = hashlib.sha256(
+        json.dumps(
+            target_identity,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    bound["before_values"]["target_identity"] = deepcopy(target_identity)
+    if bound["attempted_state"] == "SAVE_ONLY":
+        bound["before_values"]["store_name"] = store_name
+        category_schema_readback = None
+        frozen_execution_readback = None
+        if path_a:
+            category_schema_readback = {
+                "schema": "dxm.editor.category_schema_readback.v1",
+                "ok": True,
+                "phase": "before_ledger_begin_dispatch",
+                "expected_category_id": frozen_payload["category_id"],
+                "observed_category_id": frozen_payload["category_id"],
+                "expected_category_schema_hash": frozen_payload[
+                    "category_schema_hash"
+                ],
+                "observed_category_schema_hash": frozen_payload[
+                    "category_schema_hash"
+                ],
+                "category_source": "test:live_schema_readback",
+                "reason": None,
+            }
+            readback_fields = []
+            for field in frozen_payload["fields"]:
+                resolved_value = field["resolved_value"]
+                value_hash = hashlib.sha256(
+                    json.dumps(
+                        resolved_value,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    ).encode("utf-8")
+                ).hexdigest().upper()
+                readback_fields.append(
+                    {
+                        "field_key": field["field_key"],
+                        "ui_binding": field["ui_binding"],
+                        "expected_value_hash": value_hash,
+                        "observed_value_hash": value_hash,
+                        "match_count": (
+                            len(resolved_value)
+                            if isinstance(resolved_value, list)
+                            else 1
+                        ),
+                        "aggregate_kind": (
+                            "sku_rows"
+                            if field["field_key"] == "aeopAeProductSKUs"
+                            else (
+                                "choice_group"
+                                if isinstance(resolved_value, list)
+                                else "single"
+                            )
+                        ),
+                        "exact": True,
+                    }
+                )
+            frozen_execution_readback = {
+                "schema": "dxm.frozen_execution.readback.v1",
+                "ok": True,
+                "phase": "before_ledger_begin_dispatch",
+                "execution_payload_hash": frozen_payload["payload_hash"],
+                "field_count": len(readback_fields),
+                "fields": readback_fields,
+                "reason": None,
+            }
+        for container in (
+            bound["after_values"],
+            bound["evidence"]["observations"],
+            bound["evidence"]["observations"]["save_result"],
+        ):
+            identity = container["pre_dispatch_readback"]["identity"]
+            identity["target_identity"] = deepcopy(target_identity)
+            identity["target_identity_sha256"] = digest
+            identity["expected_store_name"] = store_name
+            if category_schema_readback is not None:
+                container["pre_dispatch_readback"][
+                    "category_schema_readback"
+                ] = deepcopy(category_schema_readback)
+                container["pre_dispatch_readback"][
+                    "frozen_execution_readback"
+                ] = deepcopy(frozen_execution_readback)
+        if category_schema_readback is not None:
+            bound["evidence"]["observations"]["save_result"]["network_audit"][
+                "read_only_schema_request_count"
+            ] = 1
+    else:
+        for container in (
+            bound["after_values"],
+            bound["evidence"]["observations"],
+        ):
+            fresh_probe = container["fresh_probe"]
+            fresh_probe["target_identity_sha256"] = digest
+            if path_a:
+                fresh_probe["page_url"] = "https://www.dianxiaomi.com/web/smt/edit"
+            target = container["target_identity"]
+            target["target_identity_sha256"] = digest
+    evidence_ref = _evidence_ref(evidence_name)
+    evidence_ref.update(
+        {
+            "kind": (
+                "save_screenshot"
+                if bound["attempted_state"] == "SAVE_ONLY"
+                else "unpublished_screenshot"
+            ),
+            "captured_at": (
+                "2026-07-15T08:00:00+08:00"
+                if bound["attempted_state"] == "SAVE_ONLY"
+                else "2026-07-15T08:00:01+08:00"
+            ),
+        }
+    )
+    bound["evidence"]["refs"] = [evidence_ref]
+    return bound
+
+
 class DummyManager:
     def __init__(self):
         self.events = []
@@ -227,6 +376,7 @@ class FakeWorkflowAdapter:
         self.save_result = save_result or {"ok": True, "code": 0, "msg": "真实保存成功", "published": False}
         self.include_save_result = include_save_result
         self.live_hud_calls = []
+        self._last_frozen_execution_defaults = None
 
     def check_login_state(self):
         return self._record("check_login_state")
@@ -244,6 +394,7 @@ class FakeWorkflowAdapter:
         category_name=None,
         store_name=None,
         target_source_urls=None,
+        **_kwargs,
     ):
         return self._record(
             "claim_from_data_acquisition",
@@ -261,6 +412,7 @@ class FakeWorkflowAdapter:
         category_name=None,
         store_name=None,
         target_source_urls=None,
+        **_kwargs,
     ):
         return self._record(
             "verify_draft_box_claim",
@@ -271,41 +423,65 @@ class FakeWorkflowAdapter:
             target_source_urls,
         )
 
-    def claim_product(self, note_text, product_query=None, store_name=None, target_source_urls=None):
+    def claim_product(self, note_text, product_query=None, store_name=None, target_source_urls=None, **_kwargs):
         return self._record("claim_product", note_text, product_query, store_name, target_source_urls)
 
-    def open_editor(self, product_query=None, store_name=None, note_text=None, target_source_urls=None):
+    def open_editor(self, product_query=None, store_name=None, note_text=None, target_source_urls=None, **_kwargs):
         return self._record("open_editor", product_query, store_name, note_text, target_source_urls)
 
-    def verify_edit_ownership(self, product_query=None, store_name=None, target_source_urls=None):
+    def verify_edit_ownership(self, product_query=None, store_name=None, target_source_urls=None, **_kwargs):
         return self._record("verify_edit_ownership", product_query, store_name, target_source_urls)
 
-    def fill_editor_required_defaults(self, defaults=None, product_query=None, store_name=None):
+    def fill_editor_required_defaults(self, defaults=None, product_query=None, store_name=None, **_kwargs):
         return self._record("fill_editor_required_defaults", defaults, product_query, store_name)
 
-    def fill_editor_variants(self, defaults=None, product_query=None, store_name=None):
+    def fill_editor_variants(self, defaults=None, product_query=None, store_name=None, **_kwargs):
         return self._record("fill_editor_variants", defaults, product_query, store_name)
 
-    def fill_media_assets(self, defaults=None, product_query=None, store_name=None):
+    def fill_media_assets(self, defaults=None, product_query=None, store_name=None, **_kwargs):
         return self._record("fill_media_assets", defaults, product_query, store_name)
 
-    def fill_compliance_defaults(self, defaults=None, product_query=None, store_name=None):
+    def fill_compliance_defaults(self, defaults=None, product_query=None, store_name=None, **_kwargs):
         return self._record("fill_compliance_defaults", defaults, product_query, store_name)
 
-    def enable_semi_managed(self, product_query=None, store_name=None):
+    def enable_semi_managed(self, product_query=None, store_name=None, **_kwargs):
         return self._record("enable_semi_managed", product_query, store_name)
 
-    def open_semi_managed_page(self, defaults=None, product_query=None, store_name=None):
+    def open_semi_managed_page(self, defaults=None, product_query=None, store_name=None, **_kwargs):
         return self._record("open_semi_managed_page", defaults, product_query, store_name)
 
-    def fill_semi_managed_defaults(self, defaults=None, product_query=None, store_name=None):
+    def fill_semi_managed_defaults(self, defaults=None, product_query=None, store_name=None, **_kwargs):
         return self._record("fill_semi_managed_defaults", defaults, product_query, store_name)
 
-    def save_only(self, defaults=None, product_query=None, store_name=None):
-        return self._record("save_only", defaults, product_query, store_name)
+    def save_only(
+        self,
+        defaults=None,
+        product_query=None,
+        store_name=None,
+        target_identity=None,
+        **_kwargs,
+    ):
+        return self._record(
+            "save_only",
+            defaults,
+            product_query,
+            store_name,
+            target_identity=target_identity,
+        )
 
-    def verify_not_published(self, product_query=None, store_name=None):
-        return self._record("verify_not_published", product_query, store_name)
+    def verify_not_published(
+        self,
+        product_query=None,
+        store_name=None,
+        target_identity=None,
+        **_kwargs,
+    ):
+        return self._record(
+            "verify_not_published",
+            product_query,
+            store_name,
+            target_identity=target_identity,
+        )
 
     def update_live_hud(self, hud):
         self.live_hud_calls.append(hud)
@@ -319,8 +495,56 @@ class FakeWorkflowAdapter:
             "updated_at": "2026-05-22T00:00:02+00:00",
         }
 
-    def _record(self, action, *args):
+    def _record(self, action, *args, target_identity=None):
         self.calls.append((action, *args))
+        if (
+            action == "save_only"
+            and action != self.fail_action
+            and self.include_save_result
+            and self.save_result.get("ok") is True
+        ):
+            execution_defaults = (
+                args[0]
+                if args and isinstance(args[0], dict)
+                else None
+            )
+            if isinstance(
+                (execution_defaults or {}).get("_frozen_execution_payload"),
+                dict,
+            ):
+                self._last_frozen_execution_defaults = deepcopy(execution_defaults)
+            result = _bind_single_save_action_result(
+                _valid_save_result(),
+                target_identity=deepcopy(target_identity),
+                product_query=str(args[-2] or ""),
+                store_name=str(args[-1] or ""),
+                evidence_name=f"workflow-save_only-{len(self.calls)}.png",
+                execution_defaults=execution_defaults,
+            )
+            strong_save_result = result["evidence"]["observations"][
+                "save_result"
+            ]
+            for key, value in deepcopy(self.save_result).items():
+                if isinstance(value, dict) and isinstance(
+                    strong_save_result.get(key),
+                    dict,
+                ):
+                    strong_save_result[key].update(value)
+                else:
+                    strong_save_result[key] = value
+            result["after_values"]["save_result"] = deepcopy(
+                strong_save_result
+            )
+            return result
+        if action == "verify_not_published" and action != self.fail_action:
+            return _bind_single_save_action_result(
+                _valid_unpublished_result(),
+                target_identity=deepcopy(target_identity),
+                product_query=str(args[-2] or ""),
+                store_name=str(args[-1] or ""),
+                evidence_name=f"workflow-verify_not_published-{len(self.calls)}.png",
+                execution_defaults=self._last_frozen_execution_defaults,
+            )
         evidence = {"action": action}
         if action == "claim_product":
             evidence["note_verified"] = self.note_verified
@@ -430,9 +654,13 @@ class ThreadRecordingWorkflowAdapter(FakeWorkflowAdapter):
         self.thread_names = []
         self.hud_thread_names = []
 
-    def _record(self, action, *args):
+    def _record(self, action, *args, target_identity=None):
         self.thread_names.append(threading.current_thread().name)
-        return super()._record(action, *args)
+        return super()._record(
+            action,
+            *args,
+            target_identity=target_identity,
+        )
 
     def update_live_hud(self, hud):
         self.hud_thread_names.append(threading.current_thread().name)
@@ -456,6 +684,31 @@ class FakeBrowserAgentRuntime:
                 "hud": hud,
                 "updated_at": "2026-05-22T00:00:03+00:00",
             }
+        if command.action in {"save_only", "verify_not_published"}:
+            result = _bind_single_save_action_result(
+                (
+                    _valid_save_result()
+                    if command.action == "save_only"
+                    else _valid_unpublished_result()
+                ),
+                target_identity=deepcopy(command.params["target_identity"]),
+                product_query=str(command.params.get("product_query") or ""),
+                store_name=str(command.params.get("store_name") or ""),
+                evidence_name=(
+                    f"browser-task-{command.task_id}-job-{command.job_id}-"
+                    f"{command.action}.png"
+                ),
+                execution_defaults=(
+                    command.params.get("defaults")
+                    if isinstance(command.params.get("defaults"), dict)
+                    else None
+                ),
+            )
+            result["page_identity"]["runtime_id"] = command.runtime_id
+            result["page_identity"][
+                "browser_session_id"
+            ] = "fake-browser-agent-session"
+            return result
         result = {
             "ok": True,
             "action": command.action,
@@ -512,15 +765,6 @@ class FakeBrowserAgentRuntime:
                 ) if command.action == "verify_draft_box_claim" else None,
             },
         }
-        if command.action == "save_only":
-            result["save_result"] = {"ok": True, "code": 0, "msg": "真实保存成功", "published": False}
-            result["evidence"]["save_result"] = result["save_result"]
-        if command.action in {"save_only", "verify_not_published"}:
-            evidence_ref = _evidence_ref(
-                f"browser-task-{command.task_id}-job-{command.job_id}-{command.action}.png"
-            )
-            result["evidence_ref"] = evidence_ref
-            result["evidence"]["evidence_ref"] = evidence_ref
         return _canonical_test_action_result(
             command.action,
             result,
@@ -620,13 +864,13 @@ def _create_task(
     store = repo.create_store("Dang Kang", "AliExpress")
     dxm_reference_templates = {
         "attribute_info": {"names": ["立牌类谷子"]},
-        "description": {"names": ["详情模板"]},
+        "description": {"names": [], "required": False},
         "freight": {"names": ["40g普货包裹"]},
         "service": {"names": ["Service Template for New Sellers"]},
         "eu_responsible": {"names": ["Jacqueiline Marti"]},
         "manufacturer": {"names": ["jiyang county thunder"]},
-        "compliance": {"names": ["合规模板"]},
-        "semi_managed": {"names": ["半托管模板"]},
+        "compliance": {"names": [], "required": False},
+        "semi_managed": {"names": [], "required": False},
     }
     template_payloads = {
         "category": {
@@ -678,7 +922,7 @@ def _create_task(
         )
     product_ids = []
     for idx in range(product_count):
-        source_url = f"https://detail.1688.com/offer/test-{idx + 1}.html"
+        source_url = f"https://detail.1688.com/offer/{100000000000 + idx + 1}.html"
         claim_task = None
         if mode == "single_save":
             claim_task = repo.create_acquisition_claim_request(
@@ -777,7 +1021,16 @@ def _create_task(
         }
     )
     if mode in {"single_save", "batch_save"} and manual_approval:
-        return repo.set_task_manual_approval(task["id"], approved=True, token="runner-approval-token", approved_by="ops-owner")
+        approval = repo.set_task_manual_approval(
+            task["id"],
+            approved=True,
+            token="runner-approval-token",
+            approved_by="ops-owner",
+        )
+        assert approval.ok is True
+        approved_task = repo.get_task_private(task["id"])
+        assert approved_task is not None
+        return approved_task
     return task
 
 
@@ -808,9 +1061,22 @@ def test_single_save_late_success_cannot_override_manual_review_after_save_autho
     manager = DummyManager()
 
     class ManualReviewDuringSaveAdapter(FakeWorkflowAdapter):
-        def save_only(self, defaults=None, product_query=None, store_name=None):
+        def save_only(
+            self,
+            defaults=None,
+            product_query=None,
+            store_name=None,
+            target_identity=None,
+            **kwargs,
+        ):
             repo.update_task_status(task["id"], "needs_manual_review")
-            return super().save_only(defaults, product_query, store_name)
+            return super().save_only(
+                defaults,
+                product_query,
+                store_name,
+                target_identity=target_identity,
+                **kwargs,
+            )
 
     asyncio.run(
         _test_runner(
@@ -855,8 +1121,8 @@ def test_single_save_calls_workflow_adapter_in_complete_save_order(v1_db):
     assert adapter.calls == [
         ("check_login_state",),
         ("open_draft_box",),
-        ("open_editor", "ACG Stand Product 1", "Dang Kang", f"AI认领-{task['id']}-{job_id}", ["https://detail.1688.com/offer/test-1.html"]),
-        ("verify_edit_ownership", "ACG Stand Product 1", "Dang Kang", ["https://detail.1688.com/offer/test-1.html"]),
+        ("open_editor", "ACG Stand Product 1", "Dang Kang", f"AI认领-{task['id']}-{job_id}", ["https://detail.1688.com/offer/100000000001.html"]),
+        ("verify_edit_ownership", "ACG Stand Product 1", "Dang Kang", ["https://detail.1688.com/offer/100000000001.html"]),
         ("fill_editor_required_defaults", adapter.calls[4][1], "ACG Stand Product 1", "Dang Kang"),
         ("fill_editor_variants", adapter.calls[5][1], "ACG Stand Product 1", "Dang Kang"),
         ("fill_media_assets", adapter.calls[6][1], "ACG Stand Product 1", "Dang Kang"),
@@ -1122,8 +1388,12 @@ def test_single_save_updates_live_browser_hud_without_agent_console(v1_db):
 
 def test_single_save_persists_save_and_unpublished_evidence_refs_in_workflow_meta(v1_db):
     class EvidenceWorkflowAdapter(FakeWorkflowAdapter):
-        def _record(self, action, *args):
-            result = super()._record(action, *args)
+        def _record(self, action, *args, target_identity=None):
+            result = super()._record(
+                action,
+                *args,
+                target_identity=target_identity,
+            )
             if action in {"save_only", "verify_not_published"}:
                 evidence_ref = _evidence_ref(f"{action}-proof.png")
                 result["evidence"]["refs"] = [
@@ -1349,7 +1619,7 @@ def test_single_save_report_includes_resolved_dxm_reference_templates(v1_db):
     reports = repo.list_reports(task["id"])
     assert reports[0]["status"] == "success"
     resolved = reports[0]["summary"]["dxm_reference_templates_resolved"]
-    assert resolved["description"] == {"names": ["详情模板"], "required": False}
+    assert resolved["description"] == {"names": [], "required": False}
     assert resolved["freight"] == {"names": ["40g普货包裹"], "required": True}
     reference_results = reports[0]["summary"]["dxm_reference_template_results"]
     assert set(reference_results) == {
@@ -1362,7 +1632,7 @@ def test_single_save_report_includes_resolved_dxm_reference_templates(v1_db):
         "compliance",
         "semi_managed",
     }
-    assert reference_results["description"] == {"ok": True, "section": "description", "names": ["详情模板"], "required": False}
+    assert reference_results["description"] == {"ok": True, "section": "description", "names": [], "required": False}
     assert reference_results["freight"] == {"ok": True, "section": "freight", "names": ["40g普货包裹"], "required": True}
 
 
@@ -1405,7 +1675,7 @@ def test_claim_only_calls_adapter_without_opening_editor_or_saving(v1_db):
     assert not any(call[0] in {"open_editor", "save_only"} for call in adapter.calls)
     reports = repo.list_reports(task["id"])
     assert reports[0]["status"] == "success"
-    assert reports[0]["published"] is False
+    assert reports[0]["published"] is None
     assert reports[0]["save_result"]["message"] == "待认领入箱已完成，商品已进入商品箱"
     products = repo.list_products()
     claimed = [product for product in products if product["status"] == "claimed_to_draft"]
@@ -2084,7 +2354,7 @@ def test_workflow_adapter_failure_fails_job_and_writes_exception_and_report(v1_d
     exceptions = repo.list_exceptions()
     assert refreshed["status"] == "failed"
     assert reports[0]["status"] == "failed"
-    assert reports[0]["published"] is False
+    assert reports[0]["published"] is None
     assert "open_editor" in reports[0]["summary"]["blocked_reason"]
     assert exceptions[0]["error_code"] == "E901"
     assert any(
@@ -2148,7 +2418,7 @@ def test_single_save_runner_requires_server_manual_approval_immediately_before_s
     assert "save_only" not in [call[0] for call in adapter.calls]
     reports = repo.list_reports(task["id"])
     assert reports[0]["status"] == "failed"
-    assert reports[0]["published"] is False
+    assert reports[0]["published"] is None
     assert "人工确认" in reports[0]["summary"]["blocked_reason"]
 
 
@@ -2172,7 +2442,7 @@ def test_single_save_browser_agent_still_requires_manual_approval_before_save(v1
     assert "save_only" not in actions
     reports = repo.list_reports(task["id"])
     assert reports[0]["status"] == "failed"
-    assert reports[0]["published"] is False
+    assert reports[0]["published"] is None
     assert "人工确认" in reports[0]["summary"]["blocked_reason"]
 
 
@@ -2210,14 +2480,18 @@ def test_save_only_false_save_result_fails_job(v1_db):
 
     reports = repo.list_reports(task["id"])
     assert reports[0]["status"] == "failed"
-    assert reports[0]["published"] is False
+    assert reports[0]["published"] is None
     assert "save_result" in reports[0]["summary"]["blocked_reason"]
 
 
 def test_single_save_fails_when_action_result_has_no_evidence_descriptor(v1_db):
     class MissingEvidenceAdapter(FakeWorkflowAdapter):
-        def _record(self, action, *args):
-            result = super()._record(action, *args)
+        def _record(self, action, *args, target_identity=None):
+            result = super()._record(
+                action,
+                *args,
+                target_identity=target_identity,
+            )
             if action in {"save_only", "verify_not_published"}:
                 result["evidence"]["refs"] = []
             return result
@@ -2242,8 +2516,12 @@ def test_single_save_fails_when_action_result_has_no_evidence_descriptor(v1_db):
 
 def test_single_save_rejects_nested_only_evidence_descriptor(v1_db):
     class NestedOnlyEvidenceAdapter(FakeWorkflowAdapter):
-        def _record(self, action, *args):
-            result = super()._record(action, *args)
+        def _record(self, action, *args, target_identity=None):
+            result = super()._record(
+                action,
+                *args,
+                target_identity=target_identity,
+            )
             if action == "save_only":
                 result["evidence"]["refs"] = []
             return result
@@ -2281,8 +2559,12 @@ def test_single_save_rejects_invalid_live_evidence(
     reason_code,
 ):
     class InvalidEvidenceAdapter(FakeWorkflowAdapter):
-        def _record(self, action, *args):
-            result = super()._record(action, *args)
+        def _record(self, action, *args, target_identity=None):
+            result = super()._record(
+                action,
+                *args,
+                target_identity=target_identity,
+            )
             if action != "save_only":
                 return result
 
@@ -2357,8 +2639,12 @@ def test_single_save_revalidates_save_evidence_before_finalize(v1_db):
             super().__init__()
             self.save_evidence_path = None
 
-        def _record(self, action, *args):
-            result = super()._record(action, *args)
+        def _record(self, action, *args, target_identity=None):
+            result = super()._record(
+                action,
+                *args,
+                target_identity=target_identity,
+            )
             if action == "save_only":
                 self.save_evidence_path = Path(_test_action_first_ref(result)["path"])
             elif action == "verify_not_published" and self.save_evidence_path:
@@ -2503,7 +2789,7 @@ def test_save_only_missing_save_result_fails_job(v1_db):
 
     reports = repo.list_reports(task["id"])
     assert reports[0]["status"] == "failed"
-    assert reports[0]["published"] is False
+    assert reports[0]["published"] is None
     assert "save_result" in reports[0]["summary"]["blocked_reason"]
 
 
@@ -2697,8 +2983,8 @@ def test_single_save_process_worker_keeps_source_urls_for_editor_identity(v1_db,
         )
 
     assert [request["action"] for request in requests] == ["open_editor", "verify_edit_ownership"]
-    assert requests[0]["params"]["target_source_urls"] == ["https://detail.1688.com/offer/test-1.html"]
-    assert requests[1]["params"]["target_source_urls"] == ["https://detail.1688.com/offer/test-1.html"]
+    assert requests[0]["params"]["target_source_urls"] == ["https://detail.1688.com/offer/100000000001.html"]
+    assert requests[1]["params"]["target_source_urls"] == ["https://detail.1688.com/offer/100000000001.html"]
 
 
 def test_claim_only_browser_agent_command_contains_acquisition_context(v1_db, monkeypatch):
@@ -3464,7 +3750,7 @@ def test_claim_only_without_workflow_adapter_fails(v1_db):
     assert "workflow_adapter" in reports[0]["summary"]["blocked_reason"]
 
 
-def test_batch_save_runs_jobs_serially_with_independent_reports(v1_db):
+def test_legacy_batch_save_is_rejected_before_any_real_edit_or_save(v1_db):
     repo = Repository()
     task = _create_task(repo, mode="batch_save", product_count=3)
     manager = DummyManager()
@@ -3475,11 +3761,19 @@ def test_batch_save_runs_jobs_serially_with_independent_reports(v1_db):
 
     reports = repo.list_reports(task["id"])
     refreshed = repo.get_task(task["id"])
-    assert refreshed["status"] == "completed"
-    assert refreshed["completed_jobs"] == 3
-    assert refreshed["failed_jobs"] == 0
-    assert len(reports) == 3
-    assert all(report["published"] is False for report in reports)
+    jobs = refreshed["jobs"]
+    actions = [call[0] for call in adapter.calls]
+    assert refreshed["status"] == "failed"
+    assert refreshed["completed_jobs"] == 0
+    assert refreshed["failed_jobs"] == 1
+    assert [job["status"] for job in jobs] == ["failed", "pending", "pending"]
+    assert len(reports) == 1
+    assert reports[0]["published"] is None
+    assert reports[0]["save_result"]["error_code"] == "E999"
+    assert "完整商品箱证据" in reports[0]["summary"]["blocked_reason"]
+    assert "open_editor" not in actions
+    assert "save_only" not in actions
+    assert "verify_not_published" not in actions
 
 
 def test_forbidden_publish_mode_fails_before_actions(v1_db):

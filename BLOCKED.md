@@ -2,6 +2,152 @@
 
 # 待裁决清单（BLOCKED）
 
+## E3 L0 无轮次限制续跑（2026-08-12 · 原三轮阻断已解除）
+
+- 第二固定点 clean backend 已取得 `2168 passed / 0 failed / 0 skipped`；当前新阻断仅为 clean checkout 下 Gold 被全局 `core.autocrlf=true` 转成 CRLF，导致物理 SHA 假漂移。Gold 内容和校验器均不改，正以单文件 `.gitattributes eol=lf` 固定跨 worktree 字节真相；在新 fixed commit 的 docs/frontend/desktop/backend 全门禁重新通过前仍保持 `E3_OPEN / BLOCKED`。
+- 本地固定提交已建立，但首次独立 clean worktree 完整 L0 为 `6 failed / 2162 passed / 0 skipped`，因此当前仍不能标 `E3_READY_FOR_CANARY`。失败不是 E3 写链生产反例，而是候选漏收 README/启动配置且 4 个测试错误依赖未提交历史文件删除；正在以“不恢复、不暂存 52 个删除”的最小合同修正后重新 clean 复验。
+- 完整后端 L0 已取得 `2168 passed / 0 failed / 0 skipped`；后端事实门禁不再阻断。当前只剩客户端、文档、范围/秘密/哈希、固定提交与干净 worktree 复验。
+- login-flow 已完成整文件复验：`461 passed / 0 failed / 0 skipped`；原 29 项及 1 个 skip 均已关闭。完整后端、客户端、文档、范围/秘密/哈希也已全绿；当前仅剩本地固定提交与干净 worktree 复验门禁。
+- 中间基线曾从 `29 failed / 431 passed / 1 skipped` 收敛到 `11 failed / 450 passed / 0 skipped`；其中 required-default 7、variants 3、media 1 随后已全部关闭，不再是当前阻断。
+- 原 `1 skipped` 已定位并通过生产 JavaScript 修复及 fixture 强化转为通过，不再是阻断；剩余失败继续按根因簇处理。
+- 用户已明确取消测试轮次上限，因此“已满三轮、不得继续运行”不再是阻断；下面 29 项与未知 skipped 已重新进入执行队列。
+- 仍然有效的阻断只有事实门禁：完整后端必须 `>=2000 passed / 0 failed / 0 skipped`，客户端/文档/diff/秘密扫描必须全绿，随后本地固定 commit 还必须在干净临时 worktree 复验通过。在此之前保持 `E3_OPEN`，禁止真实三商品保存验收。
+- 当前没有待用户裁决的产品歧义；若诊断出现需要改变冻结 MVP、安全边界或写入授权的新选择，再置顶登记并继续不受影响项。
+
+## E3 L0 清零续跑（2026-08-12 · 阻断审计已重开）
+
+- **本轮已达到硬停线：继续保持 `E3_OPEN / BLOCKED`。**login-flow 恢复三轮为 `55 failed / 166 passed / 240 deselected` → `75 failed / 386 passed` → `29 failed / 431 passed / 1 skipped`；最终仍 exit `1`，且 skipped 不为 0。按任务书“同一失败簇三轮即停”，不得继续修改/重跑该文件或完整 L0。
+- 用户已明确要求继续，本次从历史三轮停线后的失败清单按小簇恢复，不重做已完成的 E3 信任链和十类矩阵。
+- 当前尚未产生新的**完整** L0 结论；历史 `253 failed / 1747 passed` 仅作起点。non-login 第 1 轮为 `19 failed / 1686 passed / 0 skipped`，18 项已证实来自运行中共享测试文件迁移前的旧收集源码；当前树相关两文件为 `212 passed`。另 1 项跨测试 shutdown 缓存污染已通过公开 lifecycle seam 关闭；前置原子调度测试改为受控等待真实 Runner 后，相邻最终切片 `4 passed / 0 skipped`。
+- login-flow 恢复后前两轮为 `55 / 166 / 240 deselected` 与整文件 `75 / 386`；最终第 3 轮已执行并按置顶结论停线。
+- 固定 commit、干净 worktree 与 `E3_READY_FOR_CANARY` 仍须等待完整 L0 真正 `0 failed / 0 skipped`，在此之前保持不提交、不推送、不执行真实保存。
+
+### login-flow 第 3 轮剩余 29 项（精确节点）
+
+1. `test_ensure_page_detaches_browser_session_created_on_another_thread`
+2. `test_visible_editor_later_steps_preserve_existing_values_without_dom_eval`
+3. `test_visible_semi_managed_defaults_preserve_existing_without_dom_eval`
+4. `test_visible_editor_fill_semi_action_does_not_regoto_current_editor`
+5. `test_visible_editor_save_prefill_preserves_main_images_without_dom_repair`
+6. `test_visible_editor_semi_entry_steps_preserve_existing_without_dom_eval`
+7. `test_data_acquisition_claim_does_not_fail_when_visible_screenshot_fails`
+8. `test_perform_draft_box_edit_reuses_matching_open_editor_before_search`
+9. `test_visible_editor_required_defaults_state_uses_bounded_probe_not_page_evaluate`
+10. `test_save_only_from_editor_page_does_not_require_semi_managed_prefill`
+11. `test_editor_required_defaults_state_accepts_existing_category_value`
+12. `test_apply_reference_templates_treats_existing_attribute_template_text_as_applied`
+13. `test_fill_editor_required_defaults_defers_unsupported_reference_templates`
+14. `test_fill_editor_required_defaults_skips_manual_attributes_when_template_applied`
+15. `test_fill_editor_required_defaults_does_not_manual_fill_when_optional_template_misses`
+16. `test_fill_editor_required_defaults_defers_downstream_owned_fields`
+17. `test_visible_editor_fill_defaults_uses_safe_modal_checks`
+18. `test_visible_editor_fill_defaults_blocks_when_required_sections_remain_missing`
+19. `test_visible_editor_required_defaults_state_uses_runtime_probe`
+20. `test_visible_editor_fill_defaults_reuses_editor_state_when_title_present`
+21. `test_visible_editor_fill_defaults_applies_source_title_template_strategy`
+22. `test_visible_editor_fill_defaults_applies_template_goods_code_strategy`
+23. `test_visible_editor_fill_defaults_fails_fast_when_required_text_fields_not_found`
+24. `test_fill_semi_managed_defaults_uses_column_header_strategy`
+25. `test_fill_editor_variants_defers_missing_logistics_attribute_when_table_fields_filled`
+26. `test_fill_editor_variants_confirms_each_logistics_icon_even_when_plain_goods_visible`
+27. `test_fill_editor_variants_sanitizes_invalid_custom_names_before_save`
+28. `test_fill_semi_managed_defaults_accepts_retail_price_and_original_box_select`
+29. `test_fill_media_assets_marks_eu_outer_package_manual_required_when_picker_is_unavailable`
+
+- 最终输出只显示 `1 skipped`，没有节点名或 reason，且未重定向日志；为遵守三轮停线，未再执行 pytest 获取详情，故该 skipped 证据保持 `UNKNOWN`。
+- 当前不允许形成本地固定 commit：完整 L0 未绿，且 75 个候选依赖闭包仍与 691 个明确排除项共存于大脏工作树。`output/**`、Playwright 产物、prototype、data/raw 与 52 个删除均不得暂存；本轮实际 staged=`0`。
+
+## E3 完整信任链闭环当前阻断（2026-08-12 · 停线）
+
+- **唯一硬阻断仍是完整 L0 未清零。**最近完整运行=`253 failed / 1747 passed`；本轮后置安全强化后只允许并实际完成聚焦复验，不能把 `326 + 89 + 373` 绿或 `2166 collected` 改写成完整 L0 绿。
+- **同一失败簇三轮已经耗尽。**`test_login_flow.py` 为 `131 failed / 330 passed → 102 / 359 → 75 / 386`。任务书要求三轮即停，所以本轮禁止再次执行该文件或包含它的完整 L0；剩余旧 source/claim/add-note、ElementHandle/pre-dispatch fixture、legacy defaults/UI、CDP/签名与 `published=None` 必须在后续新轮次按簇迁移后再验。
+- **因此不能建立固定提交。**任务只授权在所有门禁绿后形成一个本地 commit；当前条件不成立，故未 staged、未 commit、未建临时 worktree、未 push。最终 status=`764`（tracked non-deleted=`60`、untracked=`652`、deleted=`52`）；当前 E3 核心与新增矩阵仍包含未跟踪文件，干净检出不可复现。
+- **状态只能是 `E3_OPEN / BLOCKED`。**不得标 `E3_READY_FOR_CANARY`、不得进入真实三商品保存；真实浏览器操作、保存、发布均为 `0`。
+- **非阻断 P2：** `DxmLoginFlow` 仍集中页面写入、读回、Schema、网络审计与身份校验；本轮将新增事务权威放入独立模块但未全量重构巨型类，后续需单独架构任务。
+- 任务0身份、只读哈希和端口保持；最终精确账号/密码/token/Cookie 扫描为 `0`，没有读取或写入真实 `data/**`。
+
+## E3 六次返修当前阻断（2026-08-12 · 进行中）
+
+- **本轮三个新生产 P1 已有独立红→绿，但 E3 尚未接受。**动作时租约已并入 ledger 同一事务；VERIFY 元数据改由实际 SAVE/任务/审批/ledger 权威事实重建；SAVE 成功必须携带并匹配当前类目/Schema 且至少一次只读 Schema 请求。三项合并 `160 passed`，不能替代完整 L0、固定点和真机三铁证。
+- **V1 已绿，但完整 L0 当次证据仍红。**V1 从第一轮 `21 failed / 68 passed` 收口为第二轮 `89 passed`；安全负例未放宽，legacy `batch_save` 保持写前拒绝。完整 L0 为 `253 failed / 1747 passed`、exit 1，绝不以聚焦绿覆盖。
+- **`test_login_flow.py` 已跑满三轮并停线。**三轮为 `131 failed / 330 passed → 102 / 359 → 75 / 386`；剩余 75 项仍覆盖旧 source/claim/add-note fixture、ElementHandle/点击前 guard fake、legacy defaults/UI、CDP/签名与 `published=None`。按硬规则不再运行该文件或包含它的完整 L0，需下一轮从失败清单逐类迁移后再取得新证据。
+- **遗留演示/小簇修后缺最终绿证据。**非 login-flow 合同簇由 `116 / 350` 降至 `65 / 401`；demo 最后一次运行在收集期因缩进退出，修正后仅 `py_compile` 通过。小簇第三轮余 1 项后修正文案但未第四跑。不得把语法绿或静态修正解释为 pytest 绿。
+- **可复验固定点仍缺失且本轮不能自行提交。**`batch_command_contract.py`、`product_identity.py`、`test_e3_batch_draft_save_gates.py` 仍为 untracked；原任务明确“未经另行授权不提交、不推送”，因此本轮不暂存/提交。若要解除此项，需用户单独授权审定提交范围后形成固定 commit；不能以旧 HEAD 绑定真实写权限。
+- **DxmLoginFlow 的 Divergent Change 尚未结构性拆分。**本轮只把租约、VERIFY 权威事实与 ActionResult Schema 规则收进独立深合同；页面写入/读回、Schema、网络审计和身份验证仍集中于超大 flow。该 P2 不用于放宽三个 P1，也不阻塞其专项修复，但在 E3 关闭前仍需架构裁定。
+- 真实浏览器操作=0、保存=0、发布=0；继续保持 `E3_OPEN / BLOCKED`，禁止真实三商品保存验收。
+
+## E3 五次返修当前阻断（2026-08-11 · 进行中）
+
+- **置顶：V1 单用例已触发三轮止损，当前完整 L0 不可宣称已复验。**`test_single_save_generates_success_report_and_never_publishes` 三次依次失败于证据引用缺 `kind/captured_at`、kind 不是 `save_screenshot`、VERIFY 与 SAVE 证据时间相同；最新数据库错误为 `VERIFY_NOT_PUBLISHED evidence must be captured after SAVE evidence`。fixture 已改为 SAVE=`08:00:00`、VERIFY=`08:00:01`，但按硬规则本轮不再运行该用例/文件/完整 L0，修正仍待下一轮一次性复验。最近完整 L0 `301 failed / 1668 passed` 只属修改前历史证据，不能代表当前工作树。
+- **已关闭“真实 readback producer 会被集中 consumer 自身拒绝”。**正式 producer→consumer 红测先稳定返回 `FROZEN_EXECUTION_READBACK_FIELD_INVALID`；现统一七键字段 schema 并校验定位基数/聚合语义，E3 整文件 `38 passed`。该缺陷已关闭，但不能抵消置顶的 L0/固定点阻断。
+- **已关闭“最终页面预检期间授权事实变化仍会点击”，并关闭 JIT→ledger 微窗。**唯一 DB/runtime JIT 已移到 `_pre_dispatch_guard` 成功之后；预检把 job 变为 pending 的反例返回 `AUTH_COMMAND_QUEUE_STATE_MISMATCH` 且 operation 未执行。随后 ledger 的 `BEGIN IMMEDIATE` 事务会再次以 command queue guard 对持久 task/jobs 做 CAS；JIT 后漂移同样拒绝且 ledger 保持 RESERVED，整文件 `16 passed`。
+- **已关闭“最终 Schema 复核 POST 会污染唯一 SAVE 审计”。**只豁免精确 `attributeList/childAttributeList` 同源 POST 并单列可审计计数；未知 POST、发布/release/online 与额外保存仍按 mutation fail-closed。真实 capture→finalize 正/负向 `2 passed`。
+- **已关闭“VERIFY 只验证自洽 context、未绑定实际 SAVE”。**ledger 新增/迁移 `command_sha256`，在首次 DISPATCHING 时冻结实际 SAVE command；batch VERIFY 必须命中对应 DISPATCHED 行并精确匹配其持久事实，伪造 command hash 即使重算 context 也返回 `SAVE_VERIFICATION_LEDGER_MISMATCH`。Runner pair 还有第二道 actual-command 比较。
+- **已关闭稳定 binding/hidden/部分写入/读写定位漂移。**中文字段名仅展示，不参与 frozen resolver；hidden 等不可见/不可操作控件拒绝；所有字段先全量定位与值预检后才允许首次 DOM 变更，后置非法 select/radio 不再污染前置 title；writer/readback 共享同一 resolver，相关 `7 passed`。
+- **专项绿不能覆盖当前两个硬阻断。**核心安全聚合 `432 passed`、E2→E3→PublishGuard `179 passed`、frontend/desktop 全绿；但当前没有一次修改后完整 L0，也没有可复验 Git 提交固定点。因此继续保持 `E3_OPEN / BLOCKED`，禁止真实三商品保存验收。
+
+## E3 四次返修当前阻断（2026-08-11 · 进行中）
+
+- **已关闭“JIT 可授权非当前 pending 商品/陈旧队列版本”。**新增集中式 queue guard：稳定 epoch 绑定任务、快照与有序 job 身份，动态 version 绑定 task/job 状态、步骤和更新时间；JIT 要求唯一串行队首并从 SQLite 重算。两个旧 `OK` 反例均已转为 `AUTH_COMMAND_QUEUE_STATE_MISMATCH`。
+- **已关闭“读回字段身份可脱离 payload 伪造”。**ActionResult、Runner 与 BrowserAgent 现在共用精确字段合同；总 hash 相同但字段键/binding/值 hash 不属于冻结 payload 时 fail-closed。
+- **已关闭“VERIFY 可脱离精确 SAVE 上下文”。**batch VERIFY command 与证据现在绑定 task/job/snapshot、queue generation、runtime/session、Git/worktree、授权事实、target/payload/mutation scope，以及精确 SAVE command/action-result 哈希；篡改回显或替换前序 SAVE 均 fail-closed。
+- **已关闭“页面 category/Schema 漂移仍可进入字段写入”。**正式 DxmLoginFlow 在任何字段写入前及 ledger/点击前各读取一次当前页面 categoryId 与同源只读实时 Schema，重建 hash 后与冻结 payload 精确比较；不可读或漂移均零写入停止。
+- **已关闭“合法 E2 冻结结果仍必然进入 legacy 固定字段清单”。**batch Path A 现在只按冻结 `ui_binding/resolved_value` 填写；所有 binding 先整体预检，唯一控件成立后才写，支持结构化 editor 字段、类目属性选择与 SKU 行，随后由独立读回逐字段重算 hash。两个相同值的歧义控件、重复 binding marker、缺失 SKU 子字段都会 fail-closed，不会用 `data-resolved-json` 伪造写入。
+- **仍阻断 E3 接受：**上述证明来自正式 `DxmLoginFlow` + 本地 Chromium DOM，不是真实店小秘三个类目的 DOM/Schema 集成；完整 L0 与可复验 Git 固定点仍红/缺失。真实店小秘三类目正式填写能力须在固定点与 L0 关闭后另行零发布验收，不以本地 DOM 绿代替。
+- **既有 task_start_guard 红簇未扩大。**本轮实测仍为 `4 failed / 131 passed`，分别是 claim_only 旧错误优先级、审批摘要未暴露 lease_id，以及两个测试尝试绕过生产单 active trigger 构造双 running 遗留态；与此前三轮止损记录一致，本轮不削弱生产触发器或批量授权合同换绿。
+- **完整 L0 仍是硬阻断。**当前工作树实测 `301 failed / 1668 passed in 617.80s`、exit 1；虽较 `302 / 1662` 改善，但 301 个失败未清零。失败清单仍以旧 single_save/claim_only、旧前端信息架构合同、legacy DxmLoginFlow/Runner 夹具为主；本轮五项 E3 新合同及正式冻结写入纵切均未进入失败清单。聚焦绿不能覆盖此红门禁。
+- **L0 首错已再次确认属于旧 single_save 合同。**`pytest -q -x --tb=short` 在 `331 passed` 后首先失败于 `test_valid_single_save_passes_with_required_templates`，其期望与当前“reference template unsupported”事实冲突；按既有三轮止损规则留待独立裁决，不以迁移旧 claim/single_save 夹具污染 batch Path A。
+- **可复验 Git 固定点仍缺失。**HEAD 仍为 `7dfab878...`，status=`742`（tracked=`102`、untracked=`640`、deleted=`52`）；本轮执行源码 tree 虽已取证为 `7E999C89...107200`，但实现仍位于大脏工作树，未 commit/push，也未清理用户文件。真机授权不得只绑定旧 HEAD。
+- 真实浏览器操作=0、保存=0、发布=0；继续保持 `E3_OPEN / BLOCKED`。
+
+## E3 三次返修当前阻断（2026-08-11 · 进行中）
+
+- **已关闭本轮 mode 降级绕过。**授权分支不再读取可删的 `batch_draft_save_execution` 参数；immutable `execution_mode` 必须与 SQLite 中 `task.mode` 精确一致，降级反例已由红转绿。
+- **已关闭“冻结后重新查模板/商品”的直接漂移。**Runner 已改为只从当前 job 对应的 E2 `item_snapshot.resolution_result` 编译执行值，并校验 Schema、mapping、resolution 三类 hash；模板 `10 → 99` 的反例保持执行值 `10`。
+- **已关闭 execution payload/readback 漂移。**正式 command、JIT、Runner 与 BrowserAgent 结果均绑定同一冻结 payload hash；保存前逐字段读回发生在预填后和 ledger/click 前，字段值或 readback hash 漂移均拒绝。E3 专项整文件 `33 passed`。
+- **已关闭 UNKNOWN 被误归普通失败。**恢复与 Runner 现在持久化 `job/report=unknown`、task=`needs_manual_review`，不增加 `failed_jobs`，并保持尾部 pending 与不可重试。
+- **已关闭 desktop 版本漂移。**desktop package/lock、前端与后端均为 `0.1.3`，桌面标准测试 `89/89 passed`。
+- **仍阻断 E3：本工作树完整 L0 为 `302 failed / 1662 passed in 519.35s`，exit 1；失败数显著下降仍不等于门禁通过，且没有可复验 Git 固定点。**
+- **固定点仍未形成。** 最终身份为 branch=`fix/dxm-two-stage-runtime-truth`、HEAD=`7dfab878...`、status=`741`（tracked=`102`、untracked=`639`、deleted=`52`），status SHA256=`7FBBF23C...15D31`；未 commit、未 push，也未恢复 52 个既有删除或清理用户文件。
+- **已关闭用户点名的两个当前红簇。**batch execution `43/43`、BrowserAgent status `93/93`；均在第三轮转绿，未使用 skip、todo 或放宽生产门禁。
+- 真实浏览器操作=0、保存=0、发布=0；继续保持 `E3_OPEN / BLOCKED`。
+
+## E3 当前待关闭项（2026-08-11 · 本轮最新）
+
+- **本轮审计两项关键安全缺陷已关闭。**JIT 现在精确绑定 command/snapshot/job/lease/mode/target 与 v2 worktree identity；未完成的 `DISPATCHED` 重启恢复为持久 `UNKNOWN` 且不可重试。HTTPS 正式 origin、模式化页面合同、终态执行身份和持久 worker SAVE→VERIFY 均有反向测试。
+- **仍阻断 E3 接受：完整 L0 红。**实测 `404 failed / 1553 passed in 840.36s`，首个失败为审批上下文 `EXACT_OBJECT_REQUIRED`。相对用户验收的 `405 / 1544` 未恶化不等于通过；不得放宽强证据、UNKNOWN 或发布门来换绿。
+- **仍缺可复现 Git 固定点。**HEAD 仍为 `7dfab878...`，status=`738`（tracked=`100`、untracked=`638`、deleted=`52`）；本轮执行源码树指纹为 `398FDA7B...E0849`，但 E1–E3 实现仍在大脏工作树。没有 commit/push，也没有恢复既有删除或清理未跟踪文件。
+- **当前运行服务不可作为本轮代码证据。**本轮未终止、接管或启动任何服务；收口检测 `8000/5173` 均无监听，与验收输入“8000 为修复前无 reload 后端”不同。真机前必须从审定固定点启动新服务并核对 runtime/Git/worktree identity。
+- **真实三商品三铁证仍未执行。**本轮所有 BrowserAgent 测试均使用隔离临时目录与 `external_write=false` 模拟操作；真实浏览器操作、保存、发布均为 0。只有完整 L0 与固定点关闭、服务身份一致，并再次明确授权后，才可逐件执行“回包 + 页面成功态 + 独立未发布”；任一 UNKNOWN 立即停批。
+- **当前版本仅为源码 `0.1.3`。**标准前端 build 已绿，但没有 portable 构建或交付，不得把版本升级解释为发布或 READY。
+- **L0 子项三轮停点：`test_batch_execution_contract.py`。**三次聚焦复跑依次暴露审批夹具缺 `l2_evidence_fingerprint`、把已禁用的类目绑定模板用于执行 happy path、以及把 name-only 的不支持 DXM 引用段标成必填；前两项迁移后继续向下暴露，第三轮为 `36 failed / 7 passed`。现已将夹具改为仅配置有真实精确控制路径的引用段，但按“同一验收连败 3 次即停”本轮不再复跑或宣称已绿，留待下一轮验证；生产 fail-closed 门禁未放宽。
+- **L0 子项三轮停点：`test_browser_agent_status.py`。**三轮由 `26 failed / 67 passed` → `24 / 69` → `7 / 86`；生产侧已把外部 JIT authorizer 移出生命周期锁，并在授权后、ledger/点击前重新检查撤销、页面/目标身份与 preflight，关闭取消/接管被授权调用堵住及授权期间身份漂移窗口。剩余 7 项为取消收口时序 1、晚结果错误码期望 3、旧编辑命令缺 frozen target 1、HUD 夹具身份不一致 2；本轮停止该子项，不宣称整文件已绿。
+- **L0 子项三轮停点：`test_task_start_guard.py`。**旧 helper 补齐稳定 1688 来源 URL、当前释放模式、精确直连禁用 reason_code 和不可执行 DXM 引用后，整文件由 `34 failed / 101 passed` 降到第三轮 `4 / 131`。剩余为：反向商品绑定用例仍先命中缺来源 URL 1、公共审批摘要缺 lease_id 1、SQLite 单 active 触发器阻止构造双 running 遗留态 2；本轮停止，不绕过生产触发器或削弱启动门。
+- **L0 子项三轮停点：`test_v1_runner.py`。**三轮为 `36 failed / 53 passed` → `34 / 55` → `31 / 58`。已把 description/compliance/semi_managed 三类没有真实精确控件与 readback 的引用改为 `required=false`，并把 `offer/test-1.html` 迁为数字商品 ID；剩余主要是旧 FakeWorkflowAdapter 不接收 frozen `target_identity`、旧 single_save 状态序列/错误码及报告预期。不得删除 target identity 或恢复宽松 URL 来换绿，本轮停止该文件。
+- **L0 子项三轮停点：`test_login_flow.py`。**第二轮仍为 `134 failed / 327 passed`；测试授权器补执行 pre-dispatch guard、直接保存调用补齐 frozen target/store/字段完整性后，第三轮为 `131 / 330`。剩余横跨已永久关闭的直连 mutation API、缺 source URL/冻结身份的私有调用、旧 CDP/DOM fake、网络审计 session 与当前严格 SAVE/VERIFY 合同；本轮停止，不给生产 `_save_only_on_page` 增加可省略身份的默认值。
+- **已关闭的 L0 子项：`test_batch_edit_api.py`。**当次整文件 `36 passed in 18.23s`；原子 approve-and-start 与 split approval 永久关闭边界保持，不重开旧批准令牌入口。
+- **完整 L0 本轮不再重跑。**上述五个文件已触发三轮止损；再次执行全量会重复已停止的同一失败项。最近完整证据保持 `404 failed / 1553 passed`，E3 核心 `160 passed` 与 identity/PublishGuard `27 passed` 只能证明新安全合同未回退，不能关闭 L0 或 E3。
+
+## E3 当前待关闭项（2026-08-10 · 本轮最新）
+
+- **已解除旧 Path A 生产合同阻断：**共享 action-result 现在原生允许批量 Path A `editor`，正式 `dxm_draft_box_target.v1`、批量授权事实、逐 job mutation scope、持久 BrowserAgent 与 ledger 已通过隔离纵切；Runner 不再把结果改写成 Path B。旧 `single_save` 的 `semi_managed` 合同保持。
+- **仍阻断 E3 接受：完整 L0 红。**本轮实测 `404 failed / 1545 passed in 770.22s`，虽优于 `425 / 1516`，但“失败数下降”不等于门禁通过。剩余失败仍分布在旧 batch execution、BrowserAgent lifecycle、task start 与 `single_save` V1 等历史簇；不得放宽强证据、恢复旧叙事或批量改断言换绿。
+- **仍阻断真机接受：三商品三铁证未执行。**本轮只运行隔离正式 worker，模拟外部 operation 明确 `external_write=false`；没有登录、打开真实编辑页、保存或发布。下一步必须另行明确授权可见浏览器的真实三商品“只保存不发布”验收，并逐件取得回包、页面成功态、独立未发布证据；任一 UNKNOWN 立即停批。
+- **仍缺可复现 Git 固定点。**HEAD 仍为 `7dfab878...`，E3 与此前 E1/E2/G4 实现仍位于大脏工作树；本轮没有 commit/push，也没有恢复 52 个既有删除或清理 638 个未跟踪文件。需要单独授权并审定固定点范围后才能形成可复现提交。
+- **运行时保持外部所有权。**收口时 8000/5173 分别由既有 PID 33636/31588 监听；PID 33636 同时持有真实 `data` lease。本轮测试全部使用隔离 `DXM_DATA_DIR`，未终止、接管或重启这些进程。
+
+## E3 Path A · BrowserAgent 页面合同旧阻断（已解除，保留历史）
+
+- 旧阻断是共享 BrowserAgent 曾把 `SAVE_ONLY` / `VERIFY_NOT_PUBLISHED` 固定为 `semi_managed/editFromSmt`。本轮用户授权的 E3 返修已将其参数化为 Path A `editor`，同时保留旧 single_save 页面合同；当前以本文件上一节最新裁定为准。
+
+## G4 当前唯一真机阻断（2026-08-10）
+
+- 历史“登录后运行 `scripts/g4-zero-write-after-login.ps1`”路径已被本次用户指令明确废止；G4 唯一主路径改为工作台 UI + 稳定 API，不得以脚本成功代替 UI 验收。
+- 会话架构与 UI 主路径已经用真机证明：`/web/home` → `LOGIN_READER_READY` → shops(API/同源会话/2 店铺) → 真实 products → 同店同类目 3 件 → 本地方案 #4 → preview。
+- 当前唯一阻断发生在 preview 的 E2 值解析：真实商品详情返回 `detail attrValueId 不是稳定正整数身份。`。生产端按 fail-closed 拒绝，未生成可冻结 snapshot；不得删除身份校验、用 mock/历史 raw 代替或直接构造 snapshot。
+- 待后续 E2 解析任务：在不读取 Cookie、不过度记录真实商品内容的前提下，为失败字段提供可审计的 wire-shape 分类，区分 `0` 哨兵、空 ID 自定义属性、缺失 ID 与非法 ID；只允许明确哨兵/不可执行审计项归一化，稳定身份字段继续严格正整数。修复后从同一工作台 UI 重跑 preview→freeze。
+- 真机验收仍坚持零店小秘写入：不得调用保存、发布或 Runner 启动。2026-08-10 网络核对未出现保存/发布/Runner/freeze/plan-snapshots 业务请求；当前没有 snapshot/task 可宣称完成。
+
 ## 置顶差异：8000 端口占用 PID 已漂移
 
 - 发现时间：2026-07-28 16:22（Asia/Shanghai）。

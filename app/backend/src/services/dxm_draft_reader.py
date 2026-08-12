@@ -4,6 +4,12 @@ import hashlib
 from collections.abc import Mapping
 from typing import Any
 
+from src.state_machine.two_stage import (
+    TwoStageContractError,
+    canonical_source_identity,
+    is_supported_product_detail_url,
+)
+
 
 class DxmDraftReaderError(RuntimeError):
     """A read-only DXM response could not be proven safe to expose."""
@@ -347,13 +353,63 @@ class DxmDraftReader:
             if raw_category_id in (None, "")
             else cls._canonical_positive_id(raw_category_id, label="商品类目")
         )
-        return {
+        normalized = {
             "id": product_id,
             "shop_id": product_shop_id,
             "subject": subject.strip(),
             "category_id": category_id,
             "dxm_state": "draft",
         }
+        source_urls = cls._normalize_product_source_urls(value)
+        if source_urls:
+            normalized["source_urls"] = source_urls
+        return normalized
+
+    @staticmethod
+    def _normalize_product_source_urls(value: Mapping[str, Any]) -> list[str]:
+        """Preserve only explicit, canonical product-detail URLs from pageList."""
+
+        raw_primary = value.get("sourceUrl")
+        raw_many = value.get("sourceUrls")
+        if raw_primary in (None, "") and raw_many in (None, [], ()):
+            return []
+        candidates: list[str] = []
+        if raw_primary not in (None, ""):
+            if not isinstance(raw_primary, str) or raw_primary != raw_primary.strip():
+                raise DxmDraftReaderError(
+                    "PRODUCT_SOURCE_URL_INVALID",
+                    "草稿商品来源链接字段结构无效，已停止读取。",
+                )
+            candidates.append(raw_primary)
+        if raw_many not in (None, [], ()):
+            if not isinstance(raw_many, (list, tuple)) or any(
+                not isinstance(item, str) or not item.strip() or item != item.strip()
+                for item in raw_many
+            ):
+                raise DxmDraftReaderError(
+                    "PRODUCT_SOURCE_URL_INVALID",
+                    "草稿商品来源链接列表结构无效，已停止读取。",
+                )
+            candidates.extend(raw_many)
+        if not candidates:
+            return []
+        try:
+            identity = canonical_source_identity(candidates[0], candidates)
+        except TwoStageContractError as exc:
+            raise DxmDraftReaderError(
+                "PRODUCT_SOURCE_URL_INVALID",
+                "草稿商品来源链接无法规范化，已停止读取。",
+            ) from exc
+        source_urls = list(identity["urls"])
+        if any(
+            not is_supported_product_detail_url(candidate)
+            for candidate in source_urls
+        ):
+            raise DxmDraftReaderError(
+                "PRODUCT_SOURCE_URL_UNSUPPORTED",
+                "草稿商品来源链接不是受支持的外部商品详情页，已停止读取。",
+            )
+        return source_urls
 
     @staticmethod
     def _success_data(payload: Mapping[str, Any], *, label: str) -> Mapping[str, Any]:

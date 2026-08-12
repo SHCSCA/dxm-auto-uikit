@@ -253,6 +253,19 @@ class DxmWorkflowAdapter:
             category_ids=category_ids,
         )
 
+    def read_e2_product_details(
+        self,
+        *,
+        shop_id: str,
+        product_ids: list[str],
+    ) -> dict[str, Any]:
+        """Return current-session edit-page reads unchanged."""
+
+        return self.login_flow.read_e2_product_details(
+            shop_id=shop_id,
+            product_ids=product_ids,
+        )
+
     def open_data_acquisition(self) -> dict[str, Any]:
         return self._result(
             'open_data_acquisition',
@@ -743,6 +756,8 @@ class DxmWorkflowAdapter:
                 and _strict_int(audit.get('mutation_request_count')) == 1
                 and _strict_int(audit.get('save_request_count')) == 1
                 and _strict_int(audit.get('other_mutation_request_count')) == 0
+                and _strict_int(audit.get('read_only_schema_request_count')) is not None
+                and _strict_int(audit.get('read_only_schema_request_count')) >= 0
                 and _strict_int(audit.get('publish_request_count')) == 0
                 and signal.get('detected') is False
                 and signal.get('kind') == 'network_route_classification'
@@ -1795,6 +1810,8 @@ class DxmWorkflowAdapter:
             and _strict_int(network_audit.get('mutation_request_count')) == 1
             and _strict_int(network_audit.get('save_request_count')) == 1
             and _strict_int(network_audit.get('other_mutation_request_count')) == 0
+            and _strict_int(network_audit.get('read_only_schema_request_count')) is not None
+            and _strict_int(network_audit.get('read_only_schema_request_count')) >= 0
             and _strict_int(network_audit.get('publish_request_count')) == 0
             and publish_signal.get('detected') is False
             and publish_signal.get('kind') == 'network_route_classification'

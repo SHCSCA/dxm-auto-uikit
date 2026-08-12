@@ -44,7 +44,9 @@ export function DxmAccessPage({
   onNavigateDxmTarget,
   onShowConsole,
 }: DxmAccessPageProps) {
-  const dxmLoggedIn = !runtimeStatusError && DXM_LOGGED_IN_STATUSES.has(runtimeStatus?.dxmLogin?.status ?? '')
+  const dxmLoggedIn = !runtimeStatusError
+    && DXM_LOGGED_IN_STATUSES.has(runtimeStatus?.dxmLogin?.status ?? '')
+    && runtimeStatus?.dxmLogin?.readerReady === true
   const loginLocation = compactDxmLoginUrl(runtimeStatus?.dxmLogin?.currentUrl) || '等待打开真实登录页'
   const loginPhase = humanDxmLoginPhase(runtimeStatus, runtimeStatusError)
   const loginState = humanDxmLoginState(runtimeStatus, runtimeStatusError) ?? {
@@ -98,7 +100,7 @@ export function DxmAccessPage({
         </div>
         <div className="dxm-access-status-card__actions">
           <button className="button button--secondary" type="button" onClick={dxmLoggedIn ? onShowConsole : onOpenDxmLogin} disabled={busy}>
-            {dxmLoggedIn ? '继续到浏览器现场' : '打开真实登录页'}
+            {dxmLoggedIn ? '进入采集箱选品' : '打开真实登录页'}
           </button>
         </div>
         <details className="inline-disclosure">
@@ -284,13 +286,23 @@ function humanDxmLoginState(runtimeStatus?: RuntimeStatus | null, runtimeStatusE
   }
   const status = runtimeStatus?.dxmLogin?.status
   if (!status) return null
+  const reasonCode = runtimeStatus?.dxmLogin?.reasonCode
+  const readerReady = runtimeStatus?.dxmLogin?.readerReady
   const currentUrl = compactDxmLoginUrl(runtimeStatus?.dxmLogin?.currentUrl)
-  if (DXM_LOGGED_IN_STATUSES.has(status) || status === 'workflow_navigation') {
+  if ((DXM_LOGGED_IN_STATUSES.has(status) || status === 'workflow_navigation') && readerReady === true) {
     return {
       tone: 'ok',
-      label: status === 'workflow_navigation' ? 'DXM 已进入业务页' : 'DXM 已登录',
+      label: 'DXM 已登录，Reader 已就绪',
       detail: currentUrl ? `真实浏览器停留位置：${currentUrl}` : '真实店小秘登录态已可用。',
-      next: '下一步：进入待认领列表、商品箱，或运行保存前安全检查。',
+      next: '下一步：进入采集箱读取店铺与真实草稿；不会保存或发布。',
+    }
+  }
+  if (runtimeStatus?.dxmLogin?.loggedIn && readerReady === false) {
+    return {
+      tone: 'danger',
+      label: '页面已登录，但 Reader 未就绪',
+      detail: `${reasonCode || 'READER_NOT_READY'}${currentUrl ? ` · ${currentUrl}` : ''}`,
+      next: '保留当前可见浏览器并重新检测；不要另开 PowerShell 登录脚本。',
     }
   }
   if (status === 'waiting_captcha') {

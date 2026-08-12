@@ -198,6 +198,8 @@ def init_db() -> None:
                 task_id TEXT NOT NULL,
                 job_id TEXT NOT NULL,
                 authorization_lease_id TEXT NOT NULL,
+                authorization_lease_fingerprint TEXT,
+                snapshot_row_authority_sha256 TEXT,
                 stage_task_facts_fingerprint TEXT NOT NULL,
                 target_hash TEXT NOT NULL,
                 authorization_fingerprint TEXT NOT NULL,
@@ -206,6 +208,13 @@ def init_db() -> None:
                 page_kind TEXT,
                 status TEXT NOT NULL,
                 command_id TEXT,
+                command_sha256 TEXT,
+                command_json TEXT,
+                save_action_result_sha256 TEXT,
+                save_action_result_json TEXT,
+                save_authority_sha256 TEXT,
+                save_authority_json TEXT,
+                save_success_recorded_at TEXT,
                 runtime_id TEXT,
                 outcome_json TEXT,
                 reserved_at TEXT NOT NULL,
@@ -360,6 +369,56 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_edit_batch_items_batch
                 ON edit_batch_items (batch_id, ordinal);
+            """
+        )
+        _ensure_columns(
+            conn,
+            "mutation_dispatch_ledger",
+            {
+                # Keep this projection complete. Older E3 databases predate
+                # the command/page identity columns; CREATE TABLE IF NOT
+                # EXISTS never upgrades those tables, while recovery queries
+                # require the complete current contract at process import.
+                "mutation_id": "TEXT",
+                "mutation_scope_id": "TEXT",
+                "mutation_action": "TEXT",
+                "ordinal": "INTEGER",
+                "command_state": "TEXT",
+                "command_action": "TEXT",
+                "task_id": "TEXT",
+                "job_id": "TEXT",
+                "authorization_lease_id": "TEXT",
+                "authorization_lease_fingerprint": "TEXT",
+                "snapshot_row_authority_sha256": "TEXT",
+                "stage_task_facts_fingerprint": "TEXT",
+                "target_hash": "TEXT",
+                "authorization_fingerprint": "TEXT",
+                "browser_session_id": "TEXT",
+                "page_url": "TEXT",
+                "page_kind": "TEXT",
+                "status": "TEXT",
+                "command_id": "TEXT",
+                "command_sha256": "TEXT",
+                "command_json": "TEXT",
+                "save_action_result_sha256": "TEXT",
+                "save_action_result_json": "TEXT",
+                "save_authority_sha256": "TEXT",
+                "save_authority_json": "TEXT",
+                "save_success_recorded_at": "TEXT",
+                "runtime_id": "TEXT",
+                "outcome_json": "TEXT",
+                "reserved_at": "TEXT",
+                "dispatch_started_at": "TEXT",
+                "dispatched_at": "TEXT",
+                "unknown_at": "TEXT",
+                "updated_at": "TEXT",
+            },
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS
+                idx_mutation_dispatch_ledger_mutation_id
+            ON mutation_dispatch_ledger (mutation_id)
             """
         )
         _ensure_columns(

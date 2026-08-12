@@ -1,7 +1,21 @@
 import pytest
 
 from src.execution.action_result_contract import ACTION_RESULT_CONTRACTS
+from src.execution.browser_agent_protocol import build_frozen_product_target_identity
 from src.execution.dxm_adapter import DxmWorkflowAdapter
+
+
+TARGET_STORE = 'Dang Kang'
+TARGET_PRODUCT_ID = '130658341390401740'
+TARGET_SOURCE_URL = 'https://detail.1688.com/offer/1057791519266.html'
+
+
+def frozen_target_identity():
+    return build_frozen_product_target_identity(
+        product_id=TARGET_PRODUCT_ID,
+        store_name=TARGET_STORE,
+        source_urls=[TARGET_SOURCE_URL],
+    )
 
 
 class FakeLoginFlow:
@@ -22,12 +36,12 @@ class FakeLoginFlow:
         self.calls.append(('verify_draft_box_claim', claim_mark, product_query, category_name, store_name, target_source_urls))
         return self._state('draft_box_claim_verified')
 
-    def perform_draft_box_action(self, action, note_text=None, product_query=None, store_name=None, target_source_urls=None):
-        self.calls.append(('perform_draft_box_action', action, note_text, product_query, store_name, target_source_urls))
+    def perform_draft_box_action(self, action, note_text=None, product_query=None, store_name=None, target_source_urls=None, target_identity=None):
+        self.calls.append(('perform_draft_box_action', action, note_text, product_query, store_name, target_source_urls, target_identity))
         return self._state('editor_page' if action == 'edit' else 'draft_box_action')
 
-    def perform_editor_action(self, action, defaults=None, product_query=None, store_name=None):
-        self.calls.append(('perform_editor_action', action, defaults, product_query, store_name))
+    def perform_editor_action(self, action, defaults=None, product_query=None, store_name=None, target_identity=None):
+        self.calls.append(('perform_editor_action', action, defaults, product_query, store_name, target_identity))
         return self._state(action)
 
     def _state(self, stage):
@@ -131,6 +145,24 @@ def test_real_dxm_adapter_declares_persistent_browser_agent_requirement():
     assert adapter.requires_persistent_browser_agent is True
 
 
+def test_adapter_exposes_e2_product_detail_reader_unchanged():
+    class ProductDetailFlow(FakeLoginFlow):
+        def read_e2_product_details(self, *, shop_id, product_ids):
+            self.calls.append(('read_e2_product_details', shop_id, tuple(product_ids)))
+            return {'payload': {'products': [{'id': product_ids[0]}]}}
+
+    flow = ProductDetailFlow()
+    result = DxmWorkflowAdapter(flow).read_e2_product_details(
+        shop_id='6517349',
+        product_ids=['130658341390401740'],
+    )
+
+    assert result == {'payload': {'products': [{'id': '130658341390401740'}]}}
+    assert flow.calls == [
+        ('read_e2_product_details', '6517349', ('130658341390401740',)),
+    ]
+
+
 def test_workflow_event_listener_forwards_to_login_flow():
     flow = FakeWorkflowEventLoginFlow()
     adapter = DxmWorkflowAdapter(flow)
@@ -160,7 +192,7 @@ def test_check_login_state_delegates_to_login_flow_get_state():
     result = DxmWorkflowAdapter(flow).check_login_state()
 
     assert flow.calls == [('get_state',)]
-    assert result['ok'] is True
+    assert result['ok'] is False
     assert result['action'] == 'check_login_state'
     assert result['stage'] == 'login_success'
     assert result['evidence']['page_title'] == '速卖通采集箱'
@@ -172,7 +204,7 @@ def test_check_login_state_prefers_live_probe_when_available():
 
     assert flow.calls == []
     assert flow.live_client.probed is True
-    assert result['ok'] is True
+    assert result['ok'] is False
     assert result['stage'] == 'login_success'
     assert result['page_url'] == 'https://www.dianxiaomi.com/web/home'
 
@@ -205,7 +237,7 @@ def test_check_login_state_reuses_visible_logged_in_browser_before_headless_prob
 
     assert flow.live_client.probed is False
     assert flow.calls == [('get_state',)]
-    assert result['ok'] is True
+    assert result['ok'] is False
     assert result['stage'] == 'login_success'
 
 
@@ -277,58 +309,72 @@ def test_adapter_does_not_infer_success_from_stage_without_explicit_ok():
 
 def test_claim_product_delegates_to_remark_action_with_note_text():
     flow = FakeLoginFlow()
-    result = DxmWorkflowAdapter(flow).claim_product('AI认领')
+    identity = frozen_target_identity()
+    result = DxmWorkflowAdapter(flow).claim_product(
+        'AI认领', store_name=TARGET_STORE, target_identity=identity
+    )
 
-    assert flow.calls == [('perform_draft_box_action', 'remark', 'AI认领', None, None, None)]
+    assert flow.calls == [('perform_draft_box_action', 'remark', 'AI认领', None, TARGET_STORE, None, identity)]
     assert result['action'] == 'claim_product'
     assert result['stage'] == 'draft_box_action'
 
 
 def test_claim_product_passes_optional_target_filters():
     flow = FakeLoginFlow()
-    result = DxmWorkflowAdapter(flow).claim_product('AI认领', product_query='崩坏3钥匙扣', store_name='Dang Kang')
+    identity = frozen_target_identity()
+    result = DxmWorkflowAdapter(flow).claim_product(
+        'AI认领', product_query='崩坏3钥匙扣', store_name=TARGET_STORE, target_identity=identity
+    )
 
-    assert flow.calls == [('perform_draft_box_action', 'remark', 'AI认领', '崩坏3钥匙扣', 'Dang Kang', None)]
+    assert flow.calls == [('perform_draft_box_action', 'remark', 'AI认领', '崩坏3钥匙扣', TARGET_STORE, None, identity)]
     assert result['action'] == 'claim_product'
 
 
 def test_open_editor_delegates_to_edit_action():
     flow = FakeLoginFlow()
-    result = DxmWorkflowAdapter(flow).open_editor()
+    identity = frozen_target_identity()
+    result = DxmWorkflowAdapter(flow).open_editor(store_name=TARGET_STORE, target_identity=identity)
 
-    assert flow.calls == [('perform_draft_box_action', 'edit', None, None, None, None)]
+    assert flow.calls == [('perform_draft_box_action', 'edit', None, None, TARGET_STORE, None, identity)]
     assert result['action'] == 'open_editor'
     assert result['stage'] == 'editor_page'
 
 
 def test_open_editor_passes_optional_target_filters():
     flow = FakeLoginFlow()
-    result = DxmWorkflowAdapter(flow).open_editor(product_query='崩坏3钥匙扣', store_name='Dang Kang')
+    identity = frozen_target_identity()
+    result = DxmWorkflowAdapter(flow).open_editor(
+        product_query='崩坏3钥匙扣', store_name=TARGET_STORE, target_identity=identity
+    )
 
-    assert flow.calls == [('perform_draft_box_action', 'edit', None, '崩坏3钥匙扣', 'Dang Kang', None)]
+    assert flow.calls == [('perform_draft_box_action', 'edit', None, '崩坏3钥匙扣', TARGET_STORE, None, identity)]
     assert result['action'] == 'open_editor'
 
 
 def test_open_editor_passes_note_text_for_claim_mark_targeting():
     flow = FakeLoginFlow()
+    identity = frozen_target_identity()
     result = DxmWorkflowAdapter(flow).open_editor(
         product_query='崩坏3钥匙扣',
-        store_name='Dang Kang',
+        store_name=TARGET_STORE,
         note_text='AI认领-19-31',
+        target_identity=identity,
     )
 
-    assert flow.calls == [('perform_draft_box_action', 'edit', 'AI认领-19-31', '崩坏3钥匙扣', 'Dang Kang', None)]
+    assert flow.calls == [('perform_draft_box_action', 'edit', 'AI认领-19-31', '崩坏3钥匙扣', TARGET_STORE, None, identity)]
     assert result['action'] == 'open_editor'
 
 
 def test_open_editor_passes_target_source_urls_for_existing_claimed_product():
     flow = FakeLoginFlow()
-    source_urls = ['https://detail.1688.com/offer/1057791519266.html']
+    source_urls = [TARGET_SOURCE_URL]
+    identity = frozen_target_identity()
     result = DxmWorkflowAdapter(flow).open_editor(
         product_query='正版玩具总动员攀爬吊饰钥匙扣挂件',
-        store_name='Dang Kang',
+        store_name=TARGET_STORE,
         note_text='AI-OPS',
         target_source_urls=source_urls,
+        target_identity=identity,
     )
 
     assert flow.calls == [(
@@ -336,89 +382,105 @@ def test_open_editor_passes_target_source_urls_for_existing_claimed_product():
         'edit',
         'AI-OPS',
         '正版玩具总动员攀爬吊饰钥匙扣挂件',
-        'Dang Kang',
+        TARGET_STORE,
         source_urls,
+        identity,
     )]
     assert result['action'] == 'open_editor'
 
 
 def test_enable_semi_managed_delegates_to_editor_action():
     flow = FakeLoginFlow()
-    result = DxmWorkflowAdapter(flow).enable_semi_managed(product_query='崩坏3钥匙扣', store_name='Dang Kang')
+    identity = frozen_target_identity()
+    result = DxmWorkflowAdapter(flow).enable_semi_managed(
+        product_query='崩坏3钥匙扣', store_name=TARGET_STORE, target_identity=identity
+    )
 
-    assert flow.calls == [('perform_editor_action', 'enable_semi_managed', None, '崩坏3钥匙扣', 'Dang Kang')]
+    assert flow.calls == [('perform_editor_action', 'enable_semi_managed', None, '崩坏3钥匙扣', TARGET_STORE, identity)]
     assert result['action'] == 'enable_semi_managed'
 
 
 def test_fill_editor_required_defaults_passes_defaults_and_target_context():
     flow = FakeLoginFlow()
+    identity = frozen_target_identity()
     result = DxmWorkflowAdapter(flow).fill_editor_required_defaults(
         defaults={'weight': '0.03'},
         product_query='崩坏3钥匙扣',
-        store_name='Dang Kang',
+        store_name=TARGET_STORE,
+        target_identity=identity,
     )
 
-    assert flow.calls == [('perform_editor_action', 'fill_editor_required_defaults', {'weight': '0.03'}, '崩坏3钥匙扣', 'Dang Kang')]
+    assert flow.calls == [('perform_editor_action', 'fill_editor_required_defaults', {'weight': '0.03'}, '崩坏3钥匙扣', TARGET_STORE, identity)]
     assert result['action'] == 'fill_editor_required_defaults'
 
 
 def test_fill_media_assets_passes_defaults_and_target_context():
     flow = FakeLoginFlow()
+    identity = frozen_target_identity()
     result = DxmWorkflowAdapter(flow).fill_media_assets(
         defaults={'image': {'eu_outer_package_filename': 'eu.jpg'}},
         product_query='崩坏3钥匙扣',
-        store_name='Dang Kang',
+        store_name=TARGET_STORE,
+        target_identity=identity,
     )
 
-    assert flow.calls == [('perform_editor_action', 'fill_media_assets', {'image': {'eu_outer_package_filename': 'eu.jpg'}}, '崩坏3钥匙扣', 'Dang Kang')]
+    assert flow.calls == [('perform_editor_action', 'fill_media_assets', {'image': {'eu_outer_package_filename': 'eu.jpg'}}, '崩坏3钥匙扣', TARGET_STORE, identity)]
     assert result['action'] == 'fill_media_assets'
 
 
 def test_fill_compliance_defaults_passes_defaults_and_target_context():
     flow = FakeLoginFlow()
+    identity = frozen_target_identity()
     result = DxmWorkflowAdapter(flow).fill_compliance_defaults(
         defaults={'compliance': {'material': 'ABS'}},
         product_query='崩坏3钥匙扣',
-        store_name='Dang Kang',
+        store_name=TARGET_STORE,
+        target_identity=identity,
     )
 
-    assert flow.calls == [('perform_editor_action', 'fill_compliance_defaults', {'compliance': {'material': 'ABS'}}, '崩坏3钥匙扣', 'Dang Kang')]
+    assert flow.calls == [('perform_editor_action', 'fill_compliance_defaults', {'compliance': {'material': 'ABS'}}, '崩坏3钥匙扣', TARGET_STORE, identity)]
     assert result['action'] == 'fill_compliance_defaults'
 
 
 def test_open_semi_managed_page_passes_defaults_and_target_context():
     flow = FakeLoginFlow()
+    identity = frozen_target_identity()
     result = DxmWorkflowAdapter(flow).open_semi_managed_page(
         defaults={'image': {'marketing_images_strategy': 'generate'}},
         product_query='崩坏3钥匙扣',
-        store_name='Dang Kang',
+        store_name=TARGET_STORE,
+        target_identity=identity,
     )
 
-    assert flow.calls == [('perform_editor_action', 'open_semi_managed_page', {'image': {'marketing_images_strategy': 'generate'}}, '崩坏3钥匙扣', 'Dang Kang')]
+    assert flow.calls == [('perform_editor_action', 'open_semi_managed_page', {'image': {'marketing_images_strategy': 'generate'}}, '崩坏3钥匙扣', TARGET_STORE, identity)]
     assert result['action'] == 'open_semi_managed_page'
 
 
 def test_fill_semi_managed_defaults_passes_defaults_and_target_context():
     flow = FakeLoginFlow()
+    identity = frozen_target_identity()
     result = DxmWorkflowAdapter(flow).fill_semi_managed_defaults(
         defaults={'weight': '0.03'},
         product_query='崩坏3钥匙扣',
-        store_name='Dang Kang',
+        store_name=TARGET_STORE,
+        target_identity=identity,
     )
 
-    assert flow.calls == [('perform_editor_action', 'fill_semi_managed_defaults', {'weight': '0.03'}, '崩坏3钥匙扣', 'Dang Kang')]
+    assert flow.calls == [('perform_editor_action', 'fill_semi_managed_defaults', {'weight': '0.03'}, '崩坏3钥匙扣', TARGET_STORE, identity)]
     assert result['action'] == 'fill_semi_managed_defaults'
 
 
 def test_save_only_passes_defaults_and_target_context_to_editor_action():
     flow = FakeLoginFlow()
+    identity = frozen_target_identity()
     result = DxmWorkflowAdapter(flow).save_only(
         defaults={'stock': '200'},
         product_query='崩坏3钥匙扣',
-        store_name='Dang Kang',
+        store_name=TARGET_STORE,
+        target_identity=identity,
     )
 
-    assert flow.calls == [('perform_editor_action', 'save_only', {'stock': '200'}, '崩坏3钥匙扣', 'Dang Kang')]
+    assert flow.calls == [('perform_editor_action', 'save_only', {'stock': '200'}, '崩坏3钥匙扣', TARGET_STORE, identity)]
     assert result['action'] == 'save_only'
 
 
@@ -453,7 +515,7 @@ def test_every_business_action_exposes_exact_contract_fact_keys_and_registry_pos
     assert set(result['contract_facts']['postconditions']) == expected_names
 
 
-def test_ok_raw_without_critical_observations_is_not_contract_complete():
+def test_ok_raw_without_critical_observations_fails_closed():
     result = DxmWorkflowAdapter(FakeLoginFlow())._result(
         'claim_product',
         {'ok': True, 'stage': 'claim_succeeded', 'label': 'success'},
@@ -461,7 +523,7 @@ def test_ok_raw_without_critical_observations_is_not_contract_complete():
     )
 
     facts = result['contract_facts']
-    assert result['ok'] is True
+    assert result['ok'] is False
     assert facts['postconditions'] == {
         'target_unique': False,
         'note_write_attempted': False,
@@ -520,7 +582,7 @@ def test_data_acquisition_claim_requires_two_exact_authorized_dispatch_receipts(
     assert facts['recoverability']['kind'] != 'none'
 
 
-def test_data_acquisition_claim_structured_receipts_can_complete_contract():
+def test_legacy_claim_receipts_without_complete_frozen_inputs_fail_closed():
     facts = DxmWorkflowAdapter(FakeLoginFlow())._result(
         'claim_from_data_acquisition',
         {
@@ -567,7 +629,7 @@ def test_data_acquisition_claim_structured_receipts_can_complete_contract():
     )['contract_facts']
 
     assert all(facts['postconditions'].values())
-    assert facts['recoverability']['kind'] == 'none'
+    assert facts['recoverability']['kind'] != 'none'
 
 
 @pytest.mark.parametrize(
@@ -645,12 +707,20 @@ def test_stage_label_and_message_do_not_change_contract_facts():
     left = adapter._result(
         'claim_product',
         {**raw, 'stage': 'success', 'label': 'green', 'message': 'done'},
-        before_values={'note_text': 'AI-OPS'},
+        before_values={
+            'note_text': 'AI-OPS',
+            'store_name': TARGET_STORE,
+            'target_identity': frozen_target_identity(),
+        },
     )['contract_facts']
     right = adapter._result(
         'claim_product',
         {**raw, 'stage': 'failed', 'label': 'red', 'message': 'broken'},
-        before_values={'note_text': 'AI-OPS'},
+        before_values={
+            'note_text': 'AI-OPS',
+            'store_name': TARGET_STORE,
+            'target_identity': frozen_target_identity(),
+        },
     )['contract_facts']
 
     assert left == right
@@ -701,7 +771,7 @@ def test_semi_managed_boolean_claims_without_per_field_readback_never_pass():
     assert facts['recoverability']['kind'] != 'none'
 
 
-def test_semi_managed_structured_per_field_readback_satisfies_goods_and_variants_union():
+def test_semi_managed_structured_per_field_readback_still_requires_frozen_target():
     def exact(expected):
         return {
             'ok': True,
@@ -735,14 +805,14 @@ def test_semi_managed_structured_per_field_readback_satisfies_goods_and_variants
     )['contract_facts']
 
     assert all(facts['postconditions'].values())
-    assert facts['recoverability']['kind'] == 'none'
+    assert facts['recoverability']['kind'] != 'none'
 
 
 @pytest.mark.parametrize(
     ('network_success', 'page_success', 'expected_complete'),
     ((True, True, True), (True, False, False), (False, True, False)),
 )
-def test_save_requires_network_and_page_success(network_success, page_success, expected_complete):
+def test_legacy_save_success_booleans_never_replace_structured_receipts(network_success, page_success, expected_complete):
     raw = {
         'ok': True,
         'save_result': {
@@ -772,9 +842,9 @@ def test_save_requires_network_and_page_success(network_success, page_success, e
         },
     )['contract_facts']
 
-    assert facts['postconditions']['network_save_success'] is network_success
-    assert facts['postconditions']['page_save_success'] is page_success
-    assert (facts['recoverability']['kind'] == 'none') is expected_complete
+    assert facts['postconditions']['network_save_success'] is False
+    assert facts['postconditions']['page_save_success'] is False
+    assert facts['recoverability']['kind'] != 'none'
 
 
 def test_save_rejects_authorization_for_a_different_mutation_action():
@@ -1058,6 +1128,8 @@ def test_verify_facts_expose_fresh_target_bound_probe_and_claim_observations():
         'product_matched': True,
         'store_matched': True,
         'target_bound': True,
+        'source_identity_match': None,
+        'target_identity_sha256': None,
     }
     assert set(facts['evidence_observations']['verification_result']) >= {
         'claimed_product',
@@ -1069,16 +1141,19 @@ def test_verify_facts_expose_fresh_target_bound_probe_and_claim_observations():
 
 def test_save_and_verify_before_values_share_exact_target_identity():
     adapter = DxmWorkflowAdapter(FakeLoginFlow())
+    identity = frozen_target_identity()
 
     save = adapter.save_only(
         product_query='item-123',
-        store_name='Dang Kang',
+        store_name=TARGET_STORE,
+        target_identity=identity,
     )
     verify = adapter.verify_not_published(
         product_query='item-123',
-        store_name='Dang Kang',
+        store_name=TARGET_STORE,
+        target_identity=identity,
     )
 
-    expected = {'product_query': 'item-123', 'store_name': 'Dang Kang'}
+    expected = identity
     assert save['contract_facts']['before_values']['target_identity'] == expected
     assert verify['contract_facts']['before_values']['target_identity'] == expected

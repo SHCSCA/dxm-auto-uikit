@@ -47,7 +47,8 @@ def test_draft_selection_builds_reviewable_input_without_starting_a_runner() -> 
 def test_primary_navigation_and_shell_keep_frozen_prototype_geometry() -> None:
     shell_source = APP_SHELL_TSX.read_text(encoding="utf-8")
     styles = STYLES_CSS.read_text(encoding="utf-8")
-    mobile_styles = styles[styles.rindex("@media (max-width: 860px)") :]
+    mobile_start = styles.index("@media (max-width: 860px)", styles.index(".draft-selection-toolbar"))
+    mobile_styles = styles[mobile_start : styles.index(".batch-save-placeholder__grid", mobile_start)]
 
     for label in (
         "工作台",

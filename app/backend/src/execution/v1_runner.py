@@ -15,6 +15,13 @@ from pathlib import Path
 from typing import Any
 
 from src.core.config import DATA_DIR, SCREENSHOT_DIR
+from src.batch_edit.plan_contract import E2PlanService, PlanContractError
+from src.batch_edit.frozen_execution_contract import (
+    FrozenExecutionContractError,
+    compile_frozen_execution_payload,
+    frozen_execution_defaults,
+    validate_frozen_execution_defaults,
+)
 from src.execution.action_result_contract import (
     ACTION_RESULT_SCHEMA_VERSION,
     ActionResultContractError,
@@ -31,7 +38,15 @@ from src.execution.browser_agent_protocol import (
     mutation_target_hash,
     validate_browser_agent_command,
 )
+from src.execution.batch_command_contract import (
+    BatchCommandContractError,
+    build_batch_queue_guard,
+    build_save_verification_context,
+)
 from src.execution.dxm_live import DxmLiveClient
+from src.execution.e3_authority_contract import (
+    authorization_lease_authority_fingerprint,
+)
 from src.repository import Repository, TerminalReportConflictError
 from src.services.browser_agent_status import build_browser_hud
 from src.services.config_defaults import DEFAULT_TEMPLATE_TYPES, ConfigDefaultsResolver
@@ -129,6 +144,18 @@ SINGLE_SAVE_STEPS = [
     if step[0] not in {StateName.CLAIM_PRODUCT, StateName.VERIFY_LIST_OWNERSHIP}
 ]
 
+BATCH_DRAFT_SAVE_STEPS = [
+    step
+    for step in SINGLE_SAVE_STEPS
+    if step[0]
+    not in {
+        StateName.ENABLE_SEMI_MANAGED,
+        StateName.OPEN_SEMI_MANAGED_PAGE,
+        StateName.FILL_SEMI_GOODS,
+        StateName.FILL_SEMI_VARIANTS,
+    }
+]
+
 CLAIM_ONLY_STEPS = [
     (StateName.PRECHECK_CONFIG, "启动前配置校验", "config"),
     (StateName.PRECHECK_SESSION, "检查店小秘登录态", "session"),
@@ -144,6 +171,7 @@ MODE_LAST_STATE = {
     "claim_only": StateName.VERIFY_DRAFT_BOX_CLAIM,
     "single_save": StateName.RELEASE_LOCK,
     "batch_save": StateName.RELEASE_LOCK,
+    "batch_draft_save": StateName.RELEASE_LOCK,
 }
 
 SINGLE_SAVE_PROGRESS_STEPS = [
@@ -386,15 +414,14 @@ class V1TaskRunner:
                     "publish_guard",
                     "禁止的执行模式",
                     str(exc),
-                    "改为 probe、dry_run、claim_only、single_save 或 batch_save。",
+                    "改为 probe、dry_run、claim_only、single_save、batch_draft_save 或 batch_save。",
                 )
             await self.manager.broadcast(task_id, {"type": "task_status", "status": "failed", "taskId": task_id})
             return
-        if not self.repo.try_update_task_status(
-            task_id,
-            "running",
-            expected_statuses=("draft", "running"),
-        ):
+        if not self.repo.try_claim_task_runner_dispatch(task_id):
+            return
+        task = self.repo.get_task_private(task_id)
+        if not task:
             return
         await self.manager.broadcast(task_id, {"type": "task_status", "status": "running", "taskId": task_id, "mode": mode})
 
@@ -409,11 +436,14 @@ class V1TaskRunner:
             else:
                 failed += 1
                 failed_task = self.repo.get_task(task_id)
-                if failed_task and failed_task.get("status") == "failed":
+                if failed_task and failed_task.get("status") in {
+                    "failed",
+                    "needs_manual_review",
+                }:
                     await self.manager.broadcast(task_id, {
                         "type": "task_status",
                         "taskId": task_id,
-                        "status": "failed",
+                        "status": failed_task.get("status"),
                         "completedJobs": failed_task.get("completed_jobs", completed),
                         "failedJobs": failed_task.get("failed_jobs", failed),
                     })
@@ -471,8 +501,8 @@ class V1TaskRunner:
         task_id = task["id"]
         job_id = job["id"]
         product_id = job.get("product_id")
-        product = self._product(product_id)
-        execution_defaults = self._execution_defaults(task, product)
+        product = None if mode == "batch_draft_save" else self._product(product_id)
+        execution_defaults = self._execution_defaults(task, product, job=job)
         lock_token: str | None = None
         claim_mark = self._claim_mark(task)
         filled_fields: list[str] = []
@@ -492,7 +522,12 @@ class V1TaskRunner:
         self.repo.add_log(task_id, job_id, "info", "V1 执行开始", {"mode": mode, "product_id": product_id})
 
         try:
-            if self.workflow_adapter is None and mode in {"claim_only", "single_save", "batch_save"}:
+            if self.workflow_adapter is None and mode in {
+                "claim_only",
+                "single_save",
+                "batch_save",
+                "batch_draft_save",
+            }:
                 raise V1ExecutionError("E901", "缺少真实工作流适配器", f"{mode} requires workflow_adapter")
 
             for state_name, step_name, field_domain in self._steps_for_mode(mode):
@@ -563,14 +598,23 @@ class V1TaskRunner:
                 if (mode, state_name) in {
                     ("claim_only", StateName.CLAIM_TO_DRAFT_BOX),
                     ("single_save", StateName.SAVE_ONLY),
+                    ("batch_draft_save", StateName.SAVE_ONLY),
                 }:
                     self._assert_real_mutation_authorized(task_id, mode, state_name)
-                workflow_result = await self._run_workflow_action_async(task, job, state_name, claim_mark, execution_defaults)
+                workflow_result = await self._run_workflow_action_async(
+                    task,
+                    job,
+                    state_name,
+                    claim_mark,
+                    execution_defaults,
+                    prior_results=workflow_results,
+                )
                 if workflow_result:
                     if state_name == StateName.VERIFY_NOT_PUBLISHED:
                         self._assert_save_and_unpublished_proofs_independent(
                             workflow_results,
                             workflow_result,
+                            mode=mode,
                         )
                     if mode == "claim_only" and state_name == StateName.VERIFY_DRAFT_BOX_CLAIM:
                         claimed_product = self._record_claimed_product_from_acquisition(
@@ -683,13 +727,14 @@ class V1TaskRunner:
                     filled_fields.append(field_domain)
 
                 if state_name == StateName.PRE_SAVE_GUARD_CHECK:
+                    publish_facts = self._validated_pre_save_publish_facts(
+                        workflow_results,
+                        mode=mode,
+                    )
                     result = self.publish_guard.check(
                         intended_action="save",
                         target_text="保存",
-                        current_url="https://www.dianxiaomi.com/web/smt/editFromSmt",
-                        visible_texts=["保存"],
-                        modal_texts=[],
-                        network_urls=["https://www.dianxiaomi.com/api/smt/product/save"],
+                        **publish_facts,
                     )
                     if not result["allowed"]:
                         raise V1ExecutionError("E999", "发布风险被拦截", "; ".join(result["reasons"]))
@@ -716,7 +761,7 @@ class V1TaskRunner:
 
             if mode in {"probe", "dry_run", "claim_only"}:
                 empty_fields.append("未进入商品保存字段，当前模式不需要填写")
-            if mode in {"single_save", "batch_save"}:
+            if mode in {"single_save", "batch_save", "batch_draft_save"}:
                 empty_fields.append("货品条码：配置允许留空")
 
             summary = self._build_summary(
@@ -734,8 +779,8 @@ class V1TaskRunner:
                 live_browser_hud_events=live_browser_hud_events,
                 claimed_product=claimed_product,
             )
-            if mode in {"single_save", "batch_save"}:
-                self._revalidate_terminal_action_evidence(workflow_results)
+            if mode in {"single_save", "batch_save", "batch_draft_save"}:
+                self._revalidate_terminal_action_evidence(workflow_results, mode=mode)
             save_result = self._save_result_for_mode(mode, workflow_results, claimed_product=claimed_product)
             summary["published"] = save_result["published"]
             report_product_id = int(claimed_product["id"]) if mode == "claim_only" and claimed_product and claimed_product.get("id") else product_id
@@ -824,7 +869,12 @@ class V1TaskRunner:
                 agent_action_events=agent_action_events,
                 live_browser_hud_events=live_browser_hud_events,
             )
-            finalized = self.repo.finalize_job_failure(
+            finalize = (
+                self.repo.finalize_job_unknown
+                if error.error_code == "UNKNOWN"
+                else self.repo.finalize_job_failure
+            )
+            finalized = finalize(
                 task_id,
                 job_id,
                 product_id,
@@ -832,7 +882,11 @@ class V1TaskRunner:
                 field_domain="v1_executor",
                 title=error.title,
                 detail=error.detail,
-                suggestion="检查配置、页面状态和证据后重试；禁止忽略发布或归属风险继续执行。",
+                suggestion=(
+                    "保存结果不确定，禁止自动重试；请先在店小秘草稿箱人工核对该商品。"
+                    if error.error_code == "UNKNOWN"
+                    else "检查配置、页面状态和证据后重试；禁止忽略发布或归属风险继续执行。"
+                ),
                 save_result={"ok": False, "error_code": error.error_code, "message": error.detail},
                 summary=failure_summary,
             )
@@ -846,6 +900,8 @@ class V1TaskRunner:
             return [V1_STEPS[0]]
         if mode == "claim_only":
             return CLAIM_ONLY_STEPS
+        if mode == "batch_draft_save":
+            return BATCH_DRAFT_SAVE_STEPS
         if mode == "single_save":
             return SINGLE_SAVE_STEPS
         return V1_STEPS
@@ -1252,16 +1308,84 @@ class V1TaskRunner:
             if not validation["ok"]:
                 detail = "缺少配置：" + ", ".join(validation["missing"]) if validation["missing"] else "; ".join(validation["warnings"])
                 raise V1ExecutionError(validation["error_code"] or "E302", "启动前配置校验失败", detail)
-            if mode in {"single_save", "batch_save"} and task.get("publish_scene") != "SMT_SEMI_MANAGED_SAVE_ONLY":
+            if mode in {"single_save", "batch_save", "batch_draft_save"} and task.get("publish_scene") != "SMT_SEMI_MANAGED_SAVE_ONLY":
                 raise V1ExecutionError("E999", "任务发布场景不安全", "V1 只允许 SMT_SEMI_MANAGED_SAVE_ONLY")
             if mode == "single_save":
                 self._guard_single_save_claimed_product(task, job, product)
+            if mode == "batch_draft_save":
+                self._guard_batch_draft_save_plan(task, job)
         if state_name in {StateName.CLAIM_PRODUCT, StateName.CLAIM_TO_DRAFT_BOX, StateName.VERIFY_DRAFT_BOX_CLAIM} and not claim_mark:
             raise V1ExecutionError("E202", "领取标记为空", "任务缺少 claim_mark")
         if state_name == StateName.SAVE_ONLY:
             result = self.publish_guard.check(intended_action="save", target_text="保存")
             if not result["allowed"]:
                 raise V1ExecutionError("E999", "保存动作被发布隔离器阻断", "; ".join(result["reasons"]))
+
+    @staticmethod
+    def _validated_pre_save_publish_facts(
+        workflow_results: list[dict[str, Any]],
+        *,
+        mode: str,
+    ) -> dict[str, Any]:
+        latest_envelope = next(
+            (
+                result.get("action_result")
+                for result in reversed(workflow_results)
+                if isinstance(result.get("action_result"), Mapping)
+            ),
+            None,
+        )
+        if not isinstance(latest_envelope, Mapping):
+            raise V1ExecutionError(
+                "E999",
+                "保存前页面证据缺失",
+                "PRE_SAVE_GUARD_CHECK requires the latest validated action-result page identity",
+            )
+        page_identity = latest_envelope.get("page_identity")
+        if not isinstance(page_identity, Mapping):
+            raise V1ExecutionError(
+                "E999",
+                "保存前页面证据缺失",
+                "latest action-result has no canonical page_identity",
+            )
+        expected_page = "editor" if mode == "batch_draft_save" else "semi_managed"
+        page_kind = str(page_identity.get("kind") or "").strip()
+        current_url = str(page_identity.get("url") or "").strip()
+        if page_kind != expected_page or not current_url:
+            raise V1ExecutionError(
+                "E999",
+                "保存前页面身份不匹配",
+                f"expected {expected_page}, got {page_kind or 'missing'}",
+            )
+
+        evidence = latest_envelope.get("evidence")
+        observations = (
+            evidence.get("observations")
+            if isinstance(evidence, Mapping)
+            and isinstance(evidence.get("observations"), Mapping)
+            else {}
+        )
+
+        def observed_strings(field_name: str) -> list[str]:
+            value = observations.get(field_name)
+            if value is None:
+                return []
+            if not isinstance(value, list) or any(
+                not isinstance(item, str) for item in value
+            ):
+                raise V1ExecutionError(
+                    "E999",
+                    "保存前发布扫描证据无效",
+                    f"{field_name} must be a list of observed strings",
+                )
+            return list(value)
+
+        return {
+            "current_url": current_url,
+            "visible_texts": observed_strings("visible_texts"),
+            "modal_texts": observed_strings("modal_texts"),
+            "network_urls": observed_strings("network_urls"),
+        }
 
     def _assert_real_mutation_authorized(
         self,
@@ -1301,6 +1425,78 @@ class V1TaskRunner:
                 reason_code,
                 "真实写入授权已失效",
                 reason_code,
+            )
+
+    def _guard_batch_draft_save_plan(
+        self,
+        task: Mapping[str, Any],
+        job: Mapping[str, Any],
+    ) -> None:
+        payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+        plan = payload.get("plan_snapshot") if isinstance(payload.get("plan_snapshot"), Mapping) else {}
+        payload_path = str(payload.get("path") or "").strip().upper()
+        snapshot_path = str(plan.get("path") or "").strip().upper()
+        if "B" in {payload_path, snapshot_path}:
+            raise V1ExecutionError(
+                "E999",
+                "Path B 已拒绝",
+                "batch_draft_save Path B (editFromSmt) is forbidden",
+            )
+        if payload_path != "A" or snapshot_path != "A":
+            raise V1ExecutionError(
+                "E999",
+                "Path A 必填",
+                "batch_draft_save requires path=A",
+            )
+        task_id = task.get("id")
+        current_task = (
+            self.repo.get_task_private(int(task_id))
+            if not isinstance(task_id, bool) and isinstance(task_id, int) and task_id > 0
+            else None
+        )
+        if not isinstance(current_task, Mapping):
+            raise V1ExecutionError(
+                "BATCH_TASK_NOT_FOUND",
+                "批量任务不存在",
+                "batch_draft_save task could not be reloaded before execution",
+            )
+        try:
+            plan = E2PlanService().assert_task_snapshot_binding(current_task)
+        except PlanContractError as exc:
+            raise V1ExecutionError(
+                exc.reason_code,
+                "冻结方案绑定失效",
+                str(exc),
+            ) from exc
+        payload = (
+            current_task.get("payload")
+            if isinstance(current_task.get("payload"), Mapping)
+            else {}
+        )
+        snapshot_hash = str(payload.get("plan_snapshot_hash") or plan.get("snapshot_hash") or "").strip()
+        if not snapshot_hash:
+            raise V1ExecutionError(
+                "E302",
+                "缺少冻结方案快照",
+                "batch_draft_save requires plan_snapshot_hash",
+            )
+        if payload.get("publish_allowed") is True or plan.get("publish_allowed") is True:
+            raise V1ExecutionError(
+                "E999",
+                "发布已禁止",
+                "batch_draft_save forbids publish_allowed",
+            )
+        product_id = job.get("product_id")
+        if isinstance(product_id, bool) or not isinstance(product_id, int) or product_id <= 0:
+            raise V1ExecutionError("E202", "商品身份无效", "batch_draft_save job requires one positive product id")
+        product_ids = payload.get("product_ids")
+        if isinstance(product_ids, list) and product_ids and int(product_id) not in {
+            int(value) for value in product_ids if not isinstance(value, bool) and isinstance(value, int)
+        }:
+            raise V1ExecutionError(
+                "E202",
+                "商品不在冻结快照中",
+                "job product_id is outside frozen plan_snapshot product_ids",
             )
 
     def _guard_single_save_claimed_product(
@@ -1359,6 +1555,64 @@ class V1TaskRunner:
                 f"{snapshot_error}；请从当前商品箱重新创建单商品只保存任务。",
             )
         self._frozen_single_save_target_identity(task, job)
+
+    def _frozen_batch_draft_target_identity(
+        self,
+        task: Mapping[str, Any],
+        job: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Derive Path A mutation target from the frozen plan_snapshot only."""
+
+        mode = str(task.get("mode") or "").strip()
+        if mode != "batch_draft_save":
+            raise V1ExecutionError(
+                "E999",
+                "批量草稿目标不适用",
+                "batch draft target identity is only available for batch_draft_save",
+            )
+        self._guard_batch_draft_save_plan(task, job)
+        payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+        plan = payload.get("plan_snapshot") if isinstance(payload.get("plan_snapshot"), Mapping) else {}
+        product_id = int(job["product_id"])
+        item_snapshots = plan.get("item_snapshots") if isinstance(plan.get("item_snapshots"), list) else []
+        item = next(
+            (
+                candidate
+                for candidate in item_snapshots
+                if isinstance(candidate, Mapping)
+                and str(candidate.get("product_id") or "").strip() in {str(product_id), f"{product_id}"}
+            ),
+            None,
+        )
+        if not isinstance(item, Mapping):
+            raise V1ExecutionError(
+                "E202",
+                "冻结商品快照缺失",
+                "batch_draft_save requires one exact item_snapshot for the current job",
+            )
+        raw_target = item.get("target_identity")
+        try:
+            target = canonical_frozen_target_identity(
+                dict(raw_target) if isinstance(raw_target, Mapping) else raw_target,
+                store_name=self._store_name(dict(task)),
+            )
+        except MutationCommandContractError as exc:
+            raise V1ExecutionError(
+                "E202",
+                "冻结商品身份无效",
+                f"{exc.reason_code}: batch item target_identity is invalid",
+            ) from exc
+        if (
+            not isinstance(target, Mapping)
+            or target.get("stable_identity", {}).get("kind") != "product_id"
+            or target.get("stable_identity", {}).get("value") != str(product_id)
+        ):
+            raise V1ExecutionError(
+                "E202",
+                "冻结商品身份不一致",
+                "batch item target_identity does not bind the current job product_id",
+            )
+        return dict(target)
 
     def _frozen_single_save_target_identity(
         self,
@@ -1672,13 +1926,25 @@ class V1TaskRunner:
         if spec is None or state_name not in FROZEN_TARGET_STATES:
             return spec
         action_name, error_code, error_title, params = spec
+        mode = str(task.get("mode") or "").strip()
+        target_identity = (
+            self._frozen_batch_draft_target_identity(task, job)
+            if mode == "batch_draft_save"
+            else self._frozen_single_save_target_identity(task, job)
+        )
+        if mode == "batch_draft_save":
+            params = {
+                **params,
+                "product_query": target_identity["stable_identity"]["value"],
+                "target_source_urls": list(target_identity["source_urls"]),
+            }
         return (
             action_name,
             error_code,
             error_title,
             {
                 **params,
-                "target_identity": self._frozen_single_save_target_identity(task, job),
+                "target_identity": target_identity,
             },
         )
 
@@ -1707,12 +1973,16 @@ class V1TaskRunner:
             "deadline": (
                 datetime.now(timezone.utc) + timedelta(seconds=self.workflow_action_timeout_seconds)
             ).isoformat(),
-            "expected_page": self._expected_page_for_state(state_name),
+            "expected_page": self._expected_page_for_state(
+                state_name,
+                mode=str(task.get("mode") or ""),
+            ),
             "runtime_id": runtime_id,
             "task_id": task.get("id"),
             "job_id": job.get("id"),
             "state": state_name.value,
             "action": action_name,
+            "mode": str(task.get("mode") or ""),
             "params": params,
         }
         result = self._invoke_workflow_worker(
@@ -1728,6 +1998,17 @@ class V1TaskRunner:
             error_code=error_code,
             error_title=error_title,
             result=result,
+            mode=str(task.get("mode") or ""),
+            expected_execution_payload=self._frozen_execution_payload(
+                task,
+                state_name,
+                defaults,
+            ),
+            expected_execution_payload_hash=self._frozen_execution_payload_hash(
+                task,
+                state_name,
+                defaults,
+            ),
         )
         validated_result["workflow_runtime"] = "process"
         return validated_result
@@ -1769,16 +2050,28 @@ class V1TaskRunner:
             self._active_browser_agent_commands.pop(command_key, None)
             detail = self._browser_agent_timeout_detail(state_name)
             self.workflow_runtime_unhealthy_reason = detail
+            uncertain_save = (
+                str(task.get("mode") or "") == "batch_draft_save"
+                and state_name == StateName.SAVE_ONLY
+            )
             raise V1ExecutionError(
-                "E901",
-                "真实浏览器操作超时",
+                "UNKNOWN" if uncertain_save else "E901",
+                "保存结果不确定" if uncertain_save else "真实浏览器操作超时",
                 detail,
             ) from exc
         except Exception as exc:
             self._active_browser_agent_commands.pop(command_key, None)
             detail = self._workflow_exception_detail(action_name, exc)
             self.workflow_runtime_unhealthy_reason = detail
-            raise V1ExecutionError(error_code, error_title, detail) from exc
+            uncertain_save = (
+                str(task.get("mode") or "") == "batch_draft_save"
+                and state_name == StateName.SAVE_ONLY
+            )
+            raise V1ExecutionError(
+                "UNKNOWN" if uncertain_save else error_code,
+                "保存结果不确定" if uncertain_save else error_title,
+                detail,
+            ) from exc
         try:
             validated_result = self._validate_workflow_action_result(
                 state_name=state_name,
@@ -1786,6 +2079,15 @@ class V1TaskRunner:
                 error_code=error_code,
                 error_title=error_title,
                 result=result,
+                mode=str(task.get("mode") or ""),
+                expected_execution_payload=(
+                    command.params.get("defaults", {}).get(
+                        "_frozen_execution_payload"
+                    )
+                    if isinstance(command.params.get("defaults"), Mapping)
+                    else None
+                ),
+                expected_execution_payload_hash=command.execution_payload_hash,
             )
         finally:
             self._active_browser_agent_commands.pop(command_key, None)
@@ -1800,14 +2102,93 @@ class V1TaskRunner:
         state_name: StateName,
         action_name: str,
         params: dict[str, Any],
+        *,
+        preceding_save_result: Mapping[str, Any] | None = None,
     ) -> BrowserAgentCommand:
         runtime_id = self._browser_agent_runtime_id()
+        command_params = dict(params)
+        execution_payload_hash: str | None = None
+        batch_verify = (
+            str(task.get("mode") or "").strip() == "batch_draft_save"
+            and state_name == StateName.VERIFY_NOT_PUBLISHED
+            and action_name == "verify_not_published"
+        )
+        if batch_verify:
+            save_command = (
+                preceding_save_result.get("browser_agent_command")
+                if isinstance(preceding_save_result, Mapping)
+                and isinstance(preceding_save_result.get("browser_agent_command"), Mapping)
+                else None
+            )
+            save_action_result = (
+                preceding_save_result.get("action_result")
+                if isinstance(preceding_save_result, Mapping)
+                and isinstance(preceding_save_result.get("action_result"), Mapping)
+                else None
+            )
+            try:
+                command_params["save_verification_context"] = (
+                    build_save_verification_context(
+                        task,
+                        job,
+                        save_command=save_command,
+                        save_action_result=save_action_result,
+                    )
+                )
+            except BatchCommandContractError as exc:
+                raise V1ExecutionError(
+                    "UNKNOWN",
+                    "未发布复核缺少精确保存上下文",
+                    f"{exc.reason_code}: VERIFY was not dispatched.",
+                ) from exc
+        if (
+            str(task.get("mode") or "").strip() == "batch_draft_save"
+            and state_name == StateName.SAVE_ONLY
+            and action_name == "save_only"
+        ):
+            current_task = self.repo.get_task_private(int(task.get("id")))
+            if not isinstance(current_task, Mapping):
+                raise V1ExecutionError(
+                    "E999",
+                    "批次队列状态无效",
+                    "BATCH_QUEUE_TASK_INVALID: no save command was created",
+                )
+            try:
+                command_params["batch_queue_guard"] = build_batch_queue_guard(
+                    current_task,
+                    int(job.get("id")),
+                )
+            except (BatchCommandContractError, TypeError, ValueError) as exc:
+                reason_code = getattr(exc, "reason_code", "BATCH_QUEUE_GUARD_INVALID")
+                raise V1ExecutionError(
+                    "E999",
+                    "批次队列状态无效",
+                    f"{reason_code}: no save command was created",
+                ) from exc
+            try:
+                expected_execution_payload = compile_frozen_execution_payload(
+                    task,
+                    job,
+                )
+                validated_execution_payload = validate_frozen_execution_defaults(
+                    command_params.get("defaults"),
+                    expected_payload=expected_execution_payload,
+                )
+            except FrozenExecutionContractError as exc:
+                raise V1ExecutionError(
+                    "E202",
+                    "冻结执行配置与命令不一致",
+                    f"{exc.reason_code}: no save command was created",
+                ) from exc
+            execution_payload_hash = str(
+                validated_execution_payload["payload_hash"]
+            )
         mutation_scope = self._build_browser_agent_mutation_scope(
             task,
             job,
             state_name,
             action_name,
-            params,
+            command_params,
         )
         request = {
             "command_id": uuid.uuid4().hex,
@@ -1818,13 +2199,18 @@ class V1TaskRunner:
             "deadline": (
                 datetime.now(timezone.utc) + timedelta(seconds=self.workflow_action_timeout_seconds)
             ).isoformat(),
-            "expected_page": self._expected_page_for_state(state_name),
+            "expected_page": self._expected_page_for_state(
+                state_name,
+                mode=str(task.get("mode") or ""),
+            ),
             "runtime_id": runtime_id,
             "task_id": task.get("id"),
             "job_id": job.get("id"),
             "state": state_name.value,
             "action": action_name,
-            "params": dict(params),
+            "execution_mode": str(task.get("mode") or ""),
+            "execution_payload_hash": execution_payload_hash,
+            "params": command_params,
             **mutation_scope,
         }
         command = browser_agent_command_from_worker_request(
@@ -1850,16 +2236,26 @@ class V1TaskRunner:
         action_name: str,
         params: dict[str, Any],
     ) -> dict[str, str]:
-        expected_stage = {
-            (StateName.CLAIM_TO_DRAFT_BOX, "claim_from_data_acquisition"): "stage_a",
-            (StateName.SAVE_ONLY, "save_only"): "stage_b",
-        }.get((state_name, action_name))
+        mode = str(task.get("mode") or "").strip()
+        batch_draft_mutation = (
+            mode == "batch_draft_save"
+            and state_name == StateName.SAVE_ONLY
+            and action_name == "save_only"
+        )
+        expected_stage = (
+            "batch_draft_save"
+            if batch_draft_mutation
+            else {
+                (StateName.CLAIM_TO_DRAFT_BOX, "claim_from_data_acquisition"): "stage_a",
+                (StateName.SAVE_ONLY, "save_only"): "stage_b",
+            }.get((state_name, action_name))
+        )
         if expected_stage is None:
             return {}
-        if not self._requires_persistent_browser_agent():
+        if not batch_draft_mutation and not self._requires_persistent_browser_agent():
             # Synthetic adapters used for contract and timeout tests do not
-            # perform external DXM mutations, so they do not consume a real
-            # authorization lease or durable mutation ledger scope.
+            # perform non-batch external DXM mutations, so they do not consume
+            # a real authorization lease or durable mutation ledger scope.
             return {}
 
         try:
@@ -1936,7 +2332,30 @@ class V1TaskRunner:
                 "真实浏览器变更范围无效",
                 f"{reason_code}: mutation authorization contract is invalid; no mutation was dispatched.",
             )
-        if (
+        batch_job_product_id = None
+        if batch_draft_mutation:
+            try:
+                batch_job_product_id = int(job.get("product_id"))
+                task_store_id = int(current_task.get("store_id"))
+            except (TypeError, ValueError) as exc:
+                raise V1ExecutionError(
+                    "E999",
+                    "真实浏览器变更范围无效",
+                    "batch mutation requires exact store and product IDs; no mutation was dispatched.",
+                ) from exc
+            if (
+                batch_job_product_id <= 0
+                or task_store_id <= 0
+                or stage_task_facts.get("task_id") != task_id
+                or stage_task_facts.get("store_id") != task_store_id
+                or batch_job_product_id not in stage_task_facts.get("product_ids", [])
+            ):
+                raise V1ExecutionError(
+                    "E999",
+                    "真实浏览器变更范围无效",
+                    "batch authorization facts do not bind this task, store, and product; no mutation was dispatched.",
+                )
+        elif (
             isinstance(stage_task_facts.get("task_id"), bool)
             or isinstance(stage_task_facts.get("job_id"), bool)
             or stage_task_facts.get("task_id") != task_id
@@ -1951,6 +2370,11 @@ class V1TaskRunner:
         try:
             target_digest = mutation_target_hash(action_name, params)
             authorization_digest = authorization_context_fingerprint(authorization_context)
+            lease_authority_digest = (
+                authorization_lease_authority_fingerprint(approval)
+                if batch_draft_mutation
+                else None
+            )
             stage_digest = str(stage_task_facts.get("fingerprint") or "")
             scope_id = build_mutation_scope_id(
                 authorization_lease_id=lease_id,
@@ -1959,20 +2383,23 @@ class V1TaskRunner:
                 state=state_name.value,
                 action=action_name,
             )
-        except (MutationCommandContractError, TwoStageContractError) as exc:
+        except (MutationCommandContractError, TwoStageContractError, ValueError) as exc:
             reason_code = getattr(exc, "reason_code", "MUTATION_SCOPE_INVALID")
             raise V1ExecutionError(
                 "E999",
                 "真实浏览器变更范围无效",
                 f"{reason_code}: mutation target or authorization fingerprint is invalid; no mutation was dispatched.",
             ) from exc
-        return {
+        result = {
             "mutation_scope_id": scope_id,
             "target_hash": target_digest,
             "authorization_fingerprint": authorization_digest,
             "authorization_lease_id": lease_id,
             "stage_task_facts_fingerprint": stage_digest,
         }
+        if lease_authority_digest is not None:
+            result["authorization_lease_fingerprint"] = lease_authority_digest
+        return result
 
     def _cancel_browser_agent_command(self, command: BrowserAgentCommand | None) -> dict[str, Any] | None:
         if command is None or self.browser_agent_runtime is None:
@@ -1986,7 +2413,12 @@ class V1TaskRunner:
             return None
         return dict(result) if isinstance(result, Mapping) else None
 
-    def _expected_page_for_state(self, state_name: StateName) -> str:
+    def _expected_page_for_state(self, state_name: StateName, *, mode: str = "") -> str:
+        if mode == "batch_draft_save" and state_name in {
+            StateName.SAVE_ONLY,
+            StateName.VERIFY_NOT_PUBLISHED,
+        }:
+            return "editor"
         expected_page = WORKFLOW_EXPECTED_PAGE_BY_STATE.get(state_name)
         if not expected_page:
             raise V1ExecutionError(
@@ -2022,6 +2454,12 @@ class V1TaskRunner:
         error_code: str,
         error_title: str,
     ) -> dict[str, Any]:
+        uncertain_save = (
+            str(request.get("mode") or "") == "batch_draft_save"
+            and state_name == StateName.SAVE_ONLY
+        )
+        boundary_error_code = "UNKNOWN" if uncertain_save else error_code
+        boundary_error_title = "保存结果不确定" if uncertain_save else error_title
         task_id = request.get("task_id") or "task"
         job_id = request.get("job_id") or "job"
         worker_dir = DATA_DIR / "workflow_worker"
@@ -2060,8 +2498,8 @@ class V1TaskRunner:
             if trace_tail:
                 detail = f"{detail} 最近执行轨迹：{trace_tail}"
             raise V1ExecutionError(
-                "E901",
-                "真实浏览器操作超时",
+                "UNKNOWN" if uncertain_save else "E901",
+                "保存结果不确定" if uncertain_save else "真实浏览器操作超时",
                 detail,
             ) from exc
 
@@ -2071,7 +2509,7 @@ class V1TaskRunner:
                 completed=completed,
                 fallback="执行器没有写回结果文件。",
             )
-            raise V1ExecutionError(error_code, error_title, detail)
+            raise V1ExecutionError(boundary_error_code, boundary_error_title, detail)
 
         try:
             payload = json.loads(result_file.read_text(encoding="utf-8"))
@@ -2081,7 +2519,7 @@ class V1TaskRunner:
                 completed=completed,
                 fallback=f"执行器结果文件无法读取：{exc}",
             )
-            raise V1ExecutionError(error_code, error_title, detail) from exc
+            raise V1ExecutionError(boundary_error_code, boundary_error_title, detail) from exc
 
         if payload.get("ok") is not True:
             error_text = " ".join(
@@ -2096,7 +2534,7 @@ class V1TaskRunner:
             )
             browser_detail = self._operator_browser_failure_detail(error_text)
             detail = browser_detail or f"{action_name}: {error_text or '真实浏览器执行器返回失败'}"
-            raise V1ExecutionError(error_code, error_title, detail[:1200])
+            raise V1ExecutionError(boundary_error_code, boundary_error_title, detail[:1200])
 
         result = payload.get("result")
         if not isinstance(result, dict):
@@ -2105,7 +2543,7 @@ class V1TaskRunner:
                 completed=completed,
                 fallback="执行器结果格式不正确。",
             )
-            raise V1ExecutionError(error_code, error_title, detail)
+            raise V1ExecutionError(boundary_error_code, boundary_error_title, detail)
         return result
 
     def _workflow_trace_tail(self, trace_file: Path, limit: int = 5) -> str:
@@ -2149,6 +2587,9 @@ class V1TaskRunner:
         error_code: str,
         error_title: str,
         result: Any,
+        mode: str = "",
+        expected_execution_payload: Mapping[str, Any] | None = None,
+        expected_execution_payload_hash: str | None = None,
     ) -> dict[str, Any]:
         if not isinstance(result, Mapping):
             raise V1ExecutionError(
@@ -2157,6 +2598,18 @@ class V1TaskRunner:
                 f"{action_name} result must be a mapping with ok=true",
             )
         result_dict = dict(result)
+        path_a_result = (
+            mode == "batch_draft_save"
+            and state_name in {StateName.SAVE_ONLY, StateName.VERIFY_NOT_PUBLISHED}
+        )
+        success_evidence_error_code = (
+            "UNKNOWN" if path_a_result and result_dict.get("ok") is True else error_code
+        )
+        success_evidence_error_title = (
+            "保存结果证据冲突"
+            if path_a_result and result_dict.get("ok") is True
+            else error_title
+        )
         if result_dict.get("schema_version") != ACTION_RESULT_SCHEMA_VERSION:
             legacy_detail = (
                 self._workflow_failure_detail(action_name, result_dict)
@@ -2164,8 +2617,8 @@ class V1TaskRunner:
                 else f"{action_name} result is missing {ACTION_RESULT_SCHEMA_VERSION}"
             )
             raise V1ExecutionError(
-                error_code,
-                error_title,
+                success_evidence_error_code,
+                success_evidence_error_title,
                 f"ACTION_RESULT_CONTRACT_MISSING: {legacy_detail}",
             )
         try:
@@ -2173,16 +2626,63 @@ class V1TaskRunner:
                 result_dict,
                 expected_state=state_name.value,
                 expected_action=action_name,
+                expected_page=self._expected_page_for_state(
+                    state_name,
+                    mode=mode,
+                ),
+                execution_mode=mode or None,
+                expected_execution_payload=expected_execution_payload,
             )
         except ActionResultContractError as exc:
             raise V1ExecutionError(
-                error_code,
-                error_title,
+                success_evidence_error_code,
+                success_evidence_error_title,
                 f"{exc.reason_code}: {exc}",
             ) from exc
 
+        if mode == "batch_draft_save" and state_name == StateName.SAVE_ONLY:
+            observations = envelope.get("evidence", {}).get("observations", {})
+            save_result = (
+                observations.get("save_result")
+                if isinstance(observations, Mapping)
+                else None
+            )
+            pre_dispatch = (
+                save_result.get("pre_dispatch_readback")
+                if isinstance(save_result, Mapping)
+                else None
+            )
+            frozen_readback = (
+                pre_dispatch.get("frozen_execution_readback")
+                if isinstance(pre_dispatch, Mapping)
+                else None
+            )
+            observed_payload_hash = str(
+                frozen_readback.get("execution_payload_hash")
+                if isinstance(frozen_readback, Mapping)
+                else ""
+            ).strip().upper()
+            expected_payload_hash = str(
+                expected_execution_payload_hash or ""
+            ).strip().upper()
+            if (
+                len(expected_payload_hash) != 64
+                or observed_payload_hash != expected_payload_hash
+            ):
+                raise V1ExecutionError(
+                    "UNKNOWN",
+                    "保存结果证据冲突",
+                    "FROZEN_EXECUTION_READBACK_HASH_MISMATCH: "
+                    "the final page readback is not bound to the frozen command payload",
+                )
+
         if envelope["ok"] is not True:
             recovery = envelope.get("recoverability") or {}
+            persisted_error_code = (
+                "UNKNOWN"
+                if envelope.get("failure_code") == "UNKNOWN"
+                else error_code
+            )
             operator_detail = self._operator_claim_failure_detail(action_name)
             observations = envelope.get("evidence", {}).get("observations", {})
             save_failure = (
@@ -2216,7 +2716,7 @@ class V1TaskRunner:
                 )
             )
             raise V1ExecutionError(
-                error_code,
+                persisted_error_code,
                 error_title,
                 operator_detail
                 or contract_detail,
@@ -2231,8 +2731,8 @@ class V1TaskRunner:
                     "size": evidence_ref.get("size"),
                 },
                 action_name=action_name,
-                error_code=error_code,
-                error_title=error_title,
+                error_code=success_evidence_error_code,
+                error_title=success_evidence_error_title,
             )
             normalized_refs.append(
                 {
@@ -2243,6 +2743,38 @@ class V1TaskRunner:
             )
         envelope["evidence"]["refs"] = normalized_refs
         return self._workflow_action_compatibility_view(envelope)
+
+    @staticmethod
+    def _frozen_execution_payload(
+        task: Mapping[str, Any],
+        state_name: StateName,
+        defaults: Any,
+    ) -> Mapping[str, Any] | None:
+        if (
+            str(task.get("mode") or "").strip() != "batch_draft_save"
+            or state_name != StateName.SAVE_ONLY
+            or not isinstance(defaults, Mapping)
+        ):
+            return None
+        value = defaults.get("_frozen_execution_payload")
+        return value if isinstance(value, Mapping) else None
+
+    @staticmethod
+    def _frozen_execution_payload_hash(
+        task: Mapping[str, Any],
+        state_name: StateName,
+        defaults: Any,
+    ) -> str | None:
+        if (
+            str(task.get("mode") or "").strip() != "batch_draft_save"
+            or state_name != StateName.SAVE_ONLY
+            or not isinstance(defaults, Mapping)
+        ):
+            return None
+        value = str(
+            defaults.get("_frozen_execution_payload_hash") or ""
+        ).strip().upper()
+        return value or None
 
     @staticmethod
     def _workflow_action_compatibility_view(envelope: Mapping[str, Any]) -> dict[str, Any]:
@@ -2336,33 +2868,96 @@ class V1TaskRunner:
         self,
         prior_results: list[dict[str, Any]],
         verification_result: Mapping[str, Any],
+        *,
+        mode: str = "",
     ) -> None:
-        save_envelope = next(
+        evidence_error_code = "UNKNOWN" if mode == "batch_draft_save" else "E999"
+        save_result = next(
             (
-                result.get("action_result")
+                result
                 for result in reversed(prior_results)
                 if isinstance(result.get("action_result"), Mapping)
                 and result["action_result"].get("attempted_state") == StateName.SAVE_ONLY.value
             ),
             None,
         )
+        save_envelope = (
+            save_result.get("action_result")
+            if isinstance(save_result, Mapping)
+            else None
+        )
         verification_envelope = verification_result.get("action_result")
         if not isinstance(save_envelope, Mapping) or not isinstance(
             verification_envelope, Mapping
         ):
             raise V1ExecutionError(
-                "E999",
+                evidence_error_code,
                 "保存与未发布证据链不完整",
                 "SAVE_ONLY and VERIFY_NOT_PUBLISHED require canonical action results",
             )
+        save_command = (
+            save_result.get("browser_agent_command")
+            if isinstance(save_result, Mapping)
+            and isinstance(save_result.get("browser_agent_command"), Mapping)
+            else None
+        )
+        verification_command = verification_result.get("browser_agent_command")
+        save_params = (
+            save_command.get("params")
+            if isinstance(save_command, Mapping)
+            and isinstance(save_command.get("params"), Mapping)
+            else {}
+        )
+        save_defaults = (
+            save_params.get("defaults")
+            if isinstance(save_params.get("defaults"), Mapping)
+            else {}
+        )
+        expected_execution_payload = save_defaults.get("_frozen_execution_payload")
+        verification_params = (
+            verification_command.get("params")
+            if isinstance(verification_command, Mapping)
+            and isinstance(verification_command.get("params"), Mapping)
+            else {}
+        )
+        expected_verification_context = verification_params.get(
+            "save_verification_context"
+        )
+        pair_execution_mode = (
+            "batch_draft_save"
+            if mode == "batch_draft_save"
+            and isinstance(save_command, Mapping)
+            and isinstance(verification_command, Mapping)
+            and isinstance(expected_verification_context, Mapping)
+            else None
+        )
         try:
             validate_independent_save_verification_pair(
                 save_envelope,
                 verification_envelope,
+                expected_page=(
+                    "editor"
+                    if mode == "batch_draft_save"
+                    else "semi_managed"
+                ),
+                execution_mode=pair_execution_mode,
+                expected_execution_payload=(
+                    expected_execution_payload
+                    if isinstance(expected_execution_payload, Mapping)
+                    else None
+                ),
+                expected_verification_context=(
+                    expected_verification_context
+                    if isinstance(expected_verification_context, Mapping)
+                    else None
+                ),
+                expected_save_command=(
+                    save_command if isinstance(save_command, Mapping) else None
+                ),
             )
         except ActionResultContractError as exc:
             raise V1ExecutionError(
-                "E999",
+                evidence_error_code,
                 "未发布证据不是独立复核",
                 f"{exc.reason_code}: {exc}",
             ) from exc
@@ -2370,7 +2965,10 @@ class V1TaskRunner:
     def _revalidate_terminal_action_evidence(
         self,
         workflow_results: list[dict[str, Any]],
+        *,
+        mode: str = "",
     ) -> None:
+        evidence_error_code = "UNKNOWN" if mode == "batch_draft_save" else "E999"
         required_actions = {
             "save_only": "只保存证据终态复核失败",
             "verify_not_published": "未发布证据终态复核失败",
@@ -2383,14 +2981,14 @@ class V1TaskRunner:
             ]
             if len(matches) != 1:
                 raise V1ExecutionError(
-                    "E999",
+                    evidence_error_code,
                     error_title,
                     f"{action_name} requires exactly one validated evidence_ref",
                 )
             matches[0]["evidence_ref"] = self._validate_action_evidence_ref(
                 matches[0].get("evidence_ref"),
                 action_name=action_name,
-                error_code="E999",
+                error_code=evidence_error_code,
                 error_title=error_title,
             )
 
@@ -2410,11 +3008,18 @@ class V1TaskRunner:
         acquisition_category = self._acquisition_category_name(task)
         target_source_urls = self._target_source_urls(task, job)
         store_name = self._store_name(task)
-        target_identity = (
-            self._frozen_single_save_target_identity(task, job)
-            if state_name in FROZEN_TARGET_STATES
-            else None
-        )
+        mode = str(task.get("mode") or "").strip()
+        if state_name in FROZEN_TARGET_STATES:
+            target_identity = (
+                self._frozen_batch_draft_target_identity(task, job)
+                if mode == "batch_draft_save"
+                else self._frozen_single_save_target_identity(task, job)
+            )
+            if mode == "batch_draft_save":
+                product_query = target_identity["stable_identity"]["value"]
+                target_source_urls = list(target_identity["source_urls"])
+        else:
+            target_identity = None
         actions = {
             StateName.PRECHECK_SESSION: ("check_login_state", "E101", "店小秘登录态检查失败", lambda: self.workflow_adapter.check_login_state()),
             StateName.OPEN_DATA_ACQUISITION: ("open_data_acquisition", "E201", "进入已有待认领列表失败", lambda: self.workflow_adapter.open_data_acquisition()),
@@ -2626,7 +3231,12 @@ class V1TaskRunner:
         try:
             result = call()
         except Exception as exc:
-            raise V1ExecutionError(error_code, error_title, self._workflow_exception_detail(action_name, exc)) from exc
+            uncertain_save = mode == "batch_draft_save" and state_name == StateName.SAVE_ONLY
+            raise V1ExecutionError(
+                "UNKNOWN" if uncertain_save else error_code,
+                "保存结果不确定" if uncertain_save else error_title,
+                self._workflow_exception_detail(action_name, exc),
+            ) from exc
         finally:
             if callable(mutation_clearer):
                 mutation_clearer()
@@ -2639,6 +3249,17 @@ class V1TaskRunner:
             error_code=error_code,
             error_title=error_title,
             result=result,
+            mode=mode,
+            expected_execution_payload=self._frozen_execution_payload(
+                task,
+                state_name,
+                defaults,
+            ),
+            expected_execution_payload_hash=self._frozen_execution_payload_hash(
+                task,
+                state_name,
+                defaults,
+            ),
         )
 
     def _mutation_click_authorization_result(
@@ -2796,6 +3417,8 @@ class V1TaskRunner:
         state_name: StateName,
         claim_mark: str,
         defaults: dict[str, Any],
+        *,
+        prior_results: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
         if self.workflow_adapter is None:
             return None
@@ -2804,15 +3427,19 @@ class V1TaskRunner:
         label = self._workflow_step_label(state_name)
         should_log_browser_action = state_name in WORKFLOW_BROWSER_ACTION_STATES
         runtime_setting = self._workflow_action_runtime_from_env()
-        if self._requires_persistent_browser_agent():
-            self._require_persistent_browser_agent_ready()
+        execution_mode = str(task.get("mode") or "").strip()
+        batch_draft_save = execution_mode == "batch_draft_save"
+        if self._requires_persistent_browser_agent() or batch_draft_save:
+            self._require_persistent_browser_agent_ready(
+                execution_mode=execution_mode
+            )
         if runtime_setting == "browser_agent" and self.browser_agent_runtime is None:
             raise V1ExecutionError(
                 "E901",
                 "自动浏览器未配置",
                 "当前已指定使用持久在线真实浏览器，但后端没有装配自动浏览器运行时；系统已停止任务，不会保存或发布。",
             )
-        use_browser_agent_runtime = self._use_browser_agent_runtime()
+        use_browser_agent_runtime = batch_draft_save or self._use_browser_agent_runtime()
         use_process_runtime = (not use_browser_agent_runtime) and self._use_process_workflow_runtime()
         runtime_name = "browser_agent" if use_browser_agent_runtime else "process" if use_process_runtime else "thread"
         if should_log_browser_action:
@@ -2835,12 +3462,29 @@ class V1TaskRunner:
             action_name, _error_code, _error_title, params = command_spec
             if state_name == StateName.SAVE_ONLY:
                 self._assert_manual_approval_before_save(task)
+            preceding_save_result = None
+            if (
+                str(task.get("mode") or "") == "batch_draft_save"
+                and state_name == StateName.VERIFY_NOT_PUBLISHED
+            ):
+                preceding_save_result = next(
+                    (
+                        result
+                        for result in reversed(prior_results or [])
+                        if isinstance(result.get("action_result"), Mapping)
+                        and result["action_result"].get("attempted_state")
+                        == StateName.SAVE_ONLY.value
+                        and isinstance(result.get("browser_agent_command"), Mapping)
+                    ),
+                    None,
+                )
             browser_agent_command = self._build_browser_agent_command(
                 task,
                 job,
                 state_name,
                 action_name,
                 params,
+                preceding_save_result=preceding_save_result,
             )
             reserve = getattr(self.browser_agent_runtime, "reserve_command", None)
             if callable(reserve):
@@ -2921,8 +3565,18 @@ class V1TaskRunner:
                     "runtime": runtime_name,
                 })
             raise V1ExecutionError(
-                "E901",
-                "真实浏览器操作超时",
+                (
+                    "UNKNOWN"
+                    if str(task.get("mode") or "") == "batch_draft_save"
+                    and state_name == StateName.SAVE_ONLY
+                    else "E901"
+                ),
+                (
+                    "保存结果不确定"
+                    if str(task.get("mode") or "") == "batch_draft_save"
+                    and state_name == StateName.SAVE_ONLY
+                    else "真实浏览器操作超时"
+                ),
                 detail,
             ) from exc
         except V1ExecutionError as exc:
@@ -2944,7 +3598,11 @@ class V1TaskRunner:
         command = self._active_browser_agent_commands.get((task_id, job_id, state_name.value))
         return self._cancel_browser_agent_command(command)
 
-    def _require_persistent_browser_agent_ready(self) -> dict[str, Any]:
+    def _require_persistent_browser_agent_ready(
+        self,
+        *,
+        execution_mode: str = "",
+    ) -> dict[str, Any]:
         runtime = self.browser_agent_runtime
         if runtime is None:
             raise V1ExecutionError(
@@ -2990,6 +3648,15 @@ class V1TaskRunner:
                 "E901",
                 "持久在线真实浏览器不健康",
                 "持久在线真实浏览器当前不健康或仍有命令未收口；系统已停止任务，不会保存或发布。",
+            )
+        if (
+            execution_mode == "batch_draft_save"
+            and status.get("mutationLedgerEnabled") is not True
+        ):
+            raise V1ExecutionError(
+                "E901",
+                "批量保存账本未启用",
+                "MUTATION_LEDGER_REQUIRED: batch_draft_save 必须绑定持久写入账本；系统已在写入前停止任务，不会保存或发布。",
             )
         return dict(status)
 
@@ -3069,6 +3736,49 @@ class V1TaskRunner:
         next_action = None
         if mode == "claim_only" and claimed_product:
             next_action = "进入“商品箱编辑保存”，选择该商品创建单商品只保存任务。"
+        batch_execution_evidence: dict[str, Any] = {}
+        if mode == "batch_draft_save":
+            payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+            approval = (
+                payload.get("manual_approval")
+                if isinstance(payload.get("manual_approval"), Mapping)
+                else {}
+            )
+            authorization_context = (
+                approval.get("authorization_context")
+                if isinstance(approval.get("authorization_context"), Mapping)
+                else {}
+            )
+            queue_jobs = task.get("jobs") if isinstance(task.get("jobs"), list) else []
+            queue_position = next(
+                (
+                    index
+                    for index, candidate in enumerate(queue_jobs, start=1)
+                    if isinstance(candidate, Mapping)
+                    and candidate.get("id") == job.get("id")
+                ),
+                None,
+            )
+            worktree_identity = authorization_context.get("worktree_identity")
+            execution_identity = {
+                "runtime_instance_id": authorization_context.get("runtime_instance_id"),
+                "browser_session_id": authorization_context.get("browser_session_id"),
+                "git_head": authorization_context.get("git_head"),
+                "worktree_identity": (
+                    json.loads(json.dumps(worktree_identity, ensure_ascii=False))
+                    if isinstance(worktree_identity, Mapping)
+                    else None
+                ),
+                "authorization_fingerprint": authorization_context.get("fingerprint"),
+                "authorization_lease_id": approval.get("lease_id"),
+            }
+            batch_execution_evidence = {
+                "plan_snapshot_id": payload.get("plan_snapshot_id"),
+                "plan_snapshot_hash": payload.get("plan_snapshot_hash"),
+                "queue_position": queue_position,
+                "queue_total": len(queue_jobs),
+                "execution_identity": execution_identity,
+            }
         return {
             "task_id": task["id"],
             "job_id": job["id"],
@@ -3096,6 +3806,7 @@ class V1TaskRunner:
             "live_browser_hud": live_hud_events[-1] if live_hud_events else None,
             "claimed_product": dict(claimed_product) if claimed_product else None,
             "next_action": next_action,
+            **batch_execution_evidence,
             # A failure can occur after a real mutation was dispatched.  Do not
             # turn missing terminal evidence into a fabricated non-publish fact.
             "published": None,
@@ -3198,6 +3909,30 @@ class V1TaskRunner:
         return evidence.get("save_result")
 
     def _store_name(self, task: dict[str, Any]) -> str:
+        if str(task.get("mode") or "").strip() == "batch_draft_save":
+            task_id = task.get("id")
+            current_task = (
+                self.repo.get_task_private(int(task_id))
+                if not isinstance(task_id, bool)
+                and isinstance(task_id, int)
+                and task_id > 0
+                else None
+            )
+            if isinstance(current_task, Mapping):
+                try:
+                    frozen = E2PlanService().assert_task_snapshot_binding(
+                        current_task
+                    )
+                except PlanContractError:
+                    frozen = {}
+                session = (
+                    frozen.get("session_context")
+                    if isinstance(frozen.get("session_context"), Mapping)
+                    else {}
+                )
+                frozen_name = str(session.get("shop_name") or "").strip()
+                if frozen_name:
+                    return frozen_name
         try:
             _store_id, authoritative_name = self._authoritative_store(task)
         except V1ExecutionError:
@@ -3238,7 +3973,26 @@ class V1TaskRunner:
         self,
         task: Mapping[str, Any],
         product: Mapping[str, Any] | None,
+        *,
+        job: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if str(task.get("mode") or "").strip() == "batch_draft_save":
+            if not isinstance(job, Mapping):
+                raise V1ExecutionError(
+                    "E202",
+                    "冻结执行商品缺失",
+                    "batch_draft_save requires the current frozen job",
+                )
+            try:
+                return frozen_execution_defaults(
+                    compile_frozen_execution_payload(task, job)
+                )
+            except FrozenExecutionContractError as exc:
+                raise V1ExecutionError(
+                    "E202",
+                    "冻结执行配置无效",
+                    f"{exc.reason_code}: {exc}",
+                ) from exc
         return self.defaults_resolver.resolve(self.repo.list_templates(), task, product).defaults
 
     def _template_applies_to(

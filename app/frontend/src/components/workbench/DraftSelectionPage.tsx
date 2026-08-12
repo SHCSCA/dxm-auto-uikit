@@ -33,6 +33,7 @@ type DraftSelectionPageProps = {
   onTaskInputChange: (taskInput: ConfirmedDraftTaskInput | null) => void
   onShowDxmAccess: () => void
   onShowPlans: () => void
+  onReviewSnapshot: () => boolean
 }
 
 const PAGE_SIZE = 20
@@ -53,6 +54,7 @@ export function DraftSelectionPage({
   onTaskInputChange,
   onShowDxmAccess,
   onShowPlans,
+  onReviewSnapshot,
 }: DraftSelectionPageProps) {
   const [shopsResponse, setShopsResponse] = useState<DxmDraftShopsResponse | null>(null)
   const [products, setProducts] = useState<DxmDraftProduct[]>([])
@@ -71,6 +73,7 @@ export function DraftSelectionPage({
   const requestSequence = useRef(0)
   const readerSessionRef = useRef<string | null>(null)
   const selectedProductsRef = useRef<Record<string, DxmDraftProduct>>({})
+  const confirmedHandoffRef = useRef(false)
 
   const availablePlans = useMemo(
     () => e2LocalPlans?.filter((plan) => plan.is_active)
@@ -195,7 +198,7 @@ export function DraftSelectionPage({
     onTaskInputChange(invalidated.confirmedInput)
     return () => {
       requestSequence.current += 1
-      onTaskInputChange(invalidated.confirmedInput)
+      if (!confirmedHandoffRef.current) onTaskInputChange(invalidated.confirmedInput)
     }
   }, [onTaskInputChange])
 
@@ -297,8 +300,9 @@ export function DraftSelectionPage({
         productSessionRef,
       )
       onTaskInputChange(nextInput)
-      setNotice('任务输入已形成；本步骤没有启动保存、发布或任何真实写入。')
+      setNotice('任务输入已形成；正在进入快照预览与冻结，本步骤没有保存、发布或任何真实写入。')
       setError(null)
+      confirmedHandoffRef.current = onReviewSnapshot() === true
     } catch (caught) {
       if (caught instanceof ReaderSessionChangedError) {
         invalidateReaderState('browser_session_change', false)
@@ -507,7 +511,7 @@ export function DraftSelectionPage({
             <div className="draft-selection-confirmed" role="status">
               <strong>任务输入已确认</strong>
               <code>{JSON.stringify(taskInput.input)}</code>
-              <span>只读选品完成；后续 Epic 才能冻结方案或启动批量保存。</span>
+              <span>只读选品完成；下一步只预览并冻结 draft 任务，不会启动批量保存。</span>
             </div>
             )}
         </aside>

@@ -2,9 +2,11 @@ export type Store = { id: number; name: string; platform: string; status: string
 export type RuntimeIdentity = {
   schemaVersion: string
   instanceId: string
+  gitHead: string
   gitDirty: boolean
   buildId: string
   packageVersion: string
+  packageSha256: string | null
   backendPid: number
   browserAgentPid: number
   browserExecutionModel: 'in_process_thread'
@@ -12,6 +14,7 @@ export type RuntimeIdentity = {
   workflowProfileDir: string
   resourceRoot: string
   startedAt: string
+  fingerprint: string
 }
 export type DesktopRuntimeInfo = {
   repoRoot?: string | null
@@ -546,7 +549,18 @@ export type RuntimeStatus = {
     message?: string | null
     nextAction?: string | null
   }
-  dxmLogin: { status: string; currentUrl?: string | null; pageTitle?: string | null; browserVisible?: boolean; lastError?: string | null; message?: string | null; nextAction?: string | null }
+  dxmLogin: {
+    status: string
+    reasonCode?: string | null
+    loggedIn?: boolean
+    readerReady?: boolean
+    currentUrl?: string | null
+    pageTitle?: string | null
+    browserVisible?: boolean
+    lastError?: string | null
+    message?: string | null
+    nextAction?: string | null
+  }
   l2ReadonlyProbe?: {
     running: boolean
     stale?: boolean

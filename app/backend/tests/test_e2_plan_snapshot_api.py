@@ -5,6 +5,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src import db
+from src.execution.browser_agent_protocol import canonical_mutation_target_payload
+from src.execution.v1_runner import V1TaskRunner
 from src.main import app
 from src.repository import Repository
 
@@ -53,6 +55,7 @@ class _TrustedE2ReaderSource:
                 ),
                 "categoryId": "100",
                 "dxmState": "draft",
+                "sourceUrl": "https://detail.1688.com/offer/70001.html",
             },
             {
                 "idStr": "70002",
@@ -60,6 +63,7 @@ class _TrustedE2ReaderSource:
                 "subject": "Existing Wireless Charger",
                 "categoryId": "200",
                 "dxmState": "draft",
+                "sourceUrl": "https://detail.1688.com/offer/70002.html",
             },
             {
                 "idStr": "70003",
@@ -67,6 +71,7 @@ class _TrustedE2ReaderSource:
                 "subject": "Existing Metal Phone Holder",
                 "categoryId": "100",
                 "dxmState": "draft",
+                "sourceUrl": "https://detail.1688.com/offer/70003.html",
             },
         ]
 
@@ -792,6 +797,7 @@ def test_e2_freezes_multi_category_snapshot_and_task_payload(tmp_path, monkeypat
             b"dxm-e2-account-context:account-e2-a"
         ).hexdigest().upper(),
         "shop_id": "3001",
+        "shop_name": "E2 测试店铺",
     }
     assert preview_snapshot["approval_context"] == {
         "state": "not_granted",
@@ -806,6 +812,16 @@ def test_e2_freezes_multi_category_snapshot_and_task_payload(tmp_path, monkeypat
     )
 
     by_product = {item["product_id"]: item for item in preview_snapshot["item_snapshots"]}
+    for product_id, item in by_product.items():
+        target = item["target_identity"]
+        assert canonical_mutation_target_payload(
+            "save_only",
+            {
+                "store_name": "E2 测试店铺",
+                "target_identity": target,
+            },
+        )["target_identity"] == target
+        assert target["stable_identity"]["value"] == product_id
     assert by_product["70001"]["categoryId"] == "100"
     assert by_product["70002"]["categoryId"] == "200"
     assert by_product["70001"]["category_schema"]["schema_hash"] != by_product["70002"]["category_schema"]["schema_hash"]
@@ -877,6 +893,28 @@ def test_e2_freezes_multi_category_snapshot_and_task_payload(tmp_path, monkeypat
     assert created_task["status"] == "draft"
     assert created_task["payload"]["plan_snapshot"]["snapshot_hash"] == stored["snapshot_hash"]
     assert created_task["payload"]["plan_snapshot"]["item_snapshots"] == stored["item_snapshots"]
+    private_task = _repository.get_task_private(created_task["id"])
+    frozen_runner = V1TaskRunner(_repository, manager=None)
+    runner_target = frozen_runner._frozen_batch_draft_target_identity(
+        private_task,
+        private_task["jobs"][0],
+    )
+    assert runner_target == stored["item_snapshots"][0]["target_identity"]
+    execution_payload = frozen_runner._execution_defaults(
+        private_task,
+        None,
+        job=private_task["jobs"][0],
+    )["_frozen_execution_payload"]
+    assert [field["field_key"] for field in execution_payload["fields"]] == [
+        "title",
+        "material",
+        "aeopAeProductSKUs",
+    ]
+    assert [field["ui_binding"] for field in execution_payload["fields"]] == [
+        "dxm_editor:title",
+        "dxm_attribute:1001",
+        "dxm_editor:aeopAeProductSKUs",
+    ]
 
     plan_v2 = client.post(
         f"/api/local-plan-templates/{plan_v1['id']}/versions",
@@ -1585,6 +1623,7 @@ def test_e2_preview_rejects_non_english_script_mixed_with_latin_letter(
         "Wireless Bluetooth Earbuds Noise Cancelling Stereo Headphones",
         "Cosplay Costume Accessories for Halloween Party",
         "Handmade Resin Statue Desktop Decoration Gift",
+        "Fantasy Hotel Character Acrylic Stand Keychain Colorful Bag Pendant Card",
     ],
 )
 def test_e2_preview_accepts_normal_english_product_titles(

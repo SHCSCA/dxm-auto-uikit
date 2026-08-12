@@ -196,7 +196,7 @@ class TaskCreate(BaseModel):
 
     name: str = Field(min_length=1, max_length=200, pattern=r".*\S.*")
     store_id: StrictInt | None = Field(default=None, gt=0)
-    mode: Literal["probe", "dry_run", "claim_only", "single_save", "batch_save"] = "single_save"
+    mode: Literal["probe", "dry_run", "claim_only", "single_save", "batch_save", "batch_draft_save"] = "single_save"
     publish_scene: str = Field(
         default="SMT_SEMI_MANAGED_SAVE_ONLY",
         min_length=1,

@@ -22,8 +22,14 @@ from src.batch_edit.plan_schema_contract import (
     PlanSchemaError,
     normalize_wire_value,
 )
+from src.batch_edit.frozen_execution_contract import (
+    FrozenExecutionContractError,
+    validate_frozen_execution_defaults,
+)
+from src.batch_edit.scope_contract import canonical_sha256
 from src.core.config import DATA_DIR, SCREENSHOT_DIR, SESSION_DIR
 from src.execution.browser_agent_protocol import mutation_target_hash
+from src.execution.product_identity import is_stable_product_id
 from src.execution.browser_runtime import chrome_launch_options
 from src.execution.dxm_live import DxmLiveClient
 from src.services.agent_console import HUD_INIT_SCRIPT
@@ -41,7 +47,6 @@ LOGIN_RESULT_SCREENSHOT_FILE = SCREENSHOT_DIR / 'dianxiaomi_login_result.png'
 WORKFLOW_BROWSER_PROFILE_DIR = DATA_DIR / 'browser_profiles' / 'dxm_workflow'
 VISIBLE_CDP_CONNECT_TIMEOUT_MS = 8000
 FROZEN_DRAFT_TARGET_SCHEMA = 'dxm_draft_box_target.v1'
-_FROZEN_PRODUCT_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{5,128}$')
 _MUTATION_FAILURE_CODE_PATTERN = re.compile(r'^([A-Z][A-Z0-9_]{2,63})(?::|$)')
 DXM_DRAFT_READ_ALLOWLIST = frozenset({
     ('GET', 'https://www.dianxiaomi.com/api/userInfo.json'),
@@ -698,8 +703,100 @@ class DxmLoginFlow:
 
     def get_state(self) -> dict[str, Any]:
         if self.state_file.exists():
-            return json.loads(self.state_file.read_text(encoding='utf-8'))
+            state = json.loads(self.state_file.read_text(encoding='utf-8'))
+            if (
+                state.get('logged_in') is True
+                and state.get('reader_ready') is True
+                and self.browser_session_id() is None
+            ):
+                return {
+                    **state,
+                    'ok': False,
+                    'stage': 'session_unavailable',
+                    'reason_code': 'BROWSER_SESSION_UNAVAILABLE',
+                    'logged_in': False,
+                    'reader_ready': False,
+                    'browser_session_id': None,
+                    'account_ref': None,
+                    'message': '上一次登录证明属于旧进程；当前 Playwright 可见会话尚未建立。',
+                    'next_action': '从工作台重新连接店小秘；持久化 profile 可复用，但必须由当前进程重新证明。',
+                    'requires_user_action': True,
+                    'updated_at': now_iso(),
+                }
+            return state
         return self._default_state()
+
+    def get_live_state(self) -> dict[str, Any]:
+        """Return a Reader-usable state from the visible-session owner thread.
+
+        The persisted login result is only a claim.  A disconnected CDP browser
+        can keep that claim green until Playwright processes its next command,
+        so live-status must verify the exact session object used by Reader.
+        This method is intentionally cheap and performs no navigation or DXM
+        request; callers dispatch it through the single visible-session owner.
+        """
+
+        if self.state_file.exists():
+            state = json.loads(self.state_file.read_text(encoding='utf-8'))
+        else:
+            state = self._default_state()
+        if state.get('logged_in') is not True or state.get('reader_ready') is not True:
+            page = self._promote_dxm_page_from_connected_browser()
+            if page is not None and self._page_looks_logged_in(page):
+                reader_status = self._visible_reader_session_status()
+                if reader_status.get('reader_ready') is True:
+                    verified = {
+                        **state,
+                        'ok': True,
+                        'stage': 'login_success',
+                        'reason_code': 'LOGIN_READER_READY',
+                        'logged_in': True,
+                        'reader_ready': True,
+                        'browser_session_id': reader_status.get('browser_session_id'),
+                        'account_ref': reader_status.get('account_ref'),
+                        'page_url': str(getattr(page, 'url', '') or ''),
+                        'message': '登录成功，当前真实可见浏览器已可直接读取店铺与草稿。',
+                        'next_action': '返回工作台进入采集箱选品；本阶段不会保存或发布。',
+                        'requires_user_action': False,
+                        'updated_at': now_iso(),
+                    }
+                    self._write_state(verified)
+                    return verified
+            return state
+        try:
+            page, _context, browser_session_id = self._draft_reader_session()
+        except DxmDraftReaderError as exc:
+            revoked = {
+                **state,
+                'ok': False,
+                'stage': 'session_unavailable',
+                'reason_code': str(exc.reason_code or 'BROWSER_SESSION_UNAVAILABLE'),
+                'logged_in': False,
+                'reader_ready': False,
+                'browser_session_id': None,
+                'account_ref': None,
+                'message': str(exc),
+                'next_action': '从工作台重新连接店小秘；登录成功后 Reader 会复用同一个真实可见会话。',
+                'requires_user_action': True,
+                'updated_at': now_iso(),
+            }
+            self._write_state(revoked)
+            return revoked
+        verified = {
+            **state,
+            'ok': True,
+            'stage': 'login_success',
+            'reason_code': 'LOGIN_READER_READY',
+            'logged_in': True,
+            'reader_ready': True,
+            'browser_session_id': browser_session_id,
+            'page_url': str(getattr(page, 'url', '') or state.get('page_url') or ''),
+            'requires_user_action': False,
+            'updated_at': now_iso(),
+        }
+        if verified != state:
+            self._write_state(verified)
+        return verified
 
     def update_live_hud(self, hud: dict[str, Any]) -> dict[str, Any]:
         self._latest_live_hud = dict(hud)
@@ -1086,21 +1183,47 @@ class DxmLoginFlow:
         }
 
     def start_login(self, username: str, password: str) -> dict[str, Any]:
+        opening_state = {
+            'ok': False,
+            'stage': 'opening_login_page',
+            'reason_code': 'LOGIN_OPENING',
+            'logged_in': False,
+            'reader_ready': False,
+            'label': '正在打开真实登录页',
+            'message': '正在复用唯一可见 Playwright 会话并填写登录信息。',
+            'next_action': '等待真实窗口进入验证码步骤；本操作不会保存或发布。',
+            'requires_user_action': False,
+            'page_title': '店小秘官网登录页',
+            'page_url': 'https://www.dianxiaomi.com/',
+            'screenshot_url': None,
+            'browser_visible': not self._is_headless(),
+            'updated_at': now_iso(),
+        }
+        self._write_state(opening_state)
         try:
             browser_state = self._open_login_page_and_fill(username, password)
         except Exception as exc:
+            self._discard_incomplete_browser_session()
             state = self._error_state(
                 stage='login_failed',
                 label='打开失败',
                 message=f'打开店小秘官网并填写账号密码失败：{exc}',
                 next_action='检查本机 Chrome、网络或页面结构后重试。',
+                reason_code='LOGIN_BROWSER_START_FAILED',
             )
             self._keep_visible_browser_for_recovery(state)
+            self._write_state(state)
+            return state
+        if browser_state.get('visible_logged_in') is True:
+            state = self._login_success_state_from_submit(browser_state)
             self._write_state(state)
             return state
         state = {
             'ok': False,
             'stage': 'waiting_captcha',
+            'reason_code': 'LOGIN_INTERACTION_REQUIRED',
+            'logged_in': False,
+            'reader_ready': False,
             'label': '等待验证码',
             'message': '账号密码已填写，等待用户输入验证码。',
             'next_action': '用户完成验证码后，点击继续登录。',
@@ -1125,6 +1248,7 @@ class DxmLoginFlow:
                 label='继续失败',
                 message=f'继续登录失败：{exc}',
                 next_action='真实浏览器窗口会保留；请确认验证码是否完成，必要时在窗口内修正后再次检测，或重新打开官网登录页。',
+                reason_code='LOGIN_CONTINUE_FAILED',
             )
             state['browser_visible'] = not self._is_headless()
             self._write_state(state)
@@ -1133,6 +1257,9 @@ class DxmLoginFlow:
             state = {
                 'ok': False,
                 'stage': 'login_failed',
+                'reason_code': 'LOGIN_REQUIRED',
+                'logged_in': False,
+                'reader_ready': False,
                 'label': '登录失败',
                 'message': '继续登录后仍未检测到有效登录态，请检查验证码、账号密码或页面结构变化。',
                 'next_action': '真实浏览器窗口会保留；请在窗口内修正验证码或账号密码后，再点击检测登录态。',
@@ -1146,6 +1273,76 @@ class DxmLoginFlow:
             self._write_state(state)
             return state
         state = self._login_success_state_from_submit(submit_state)
+        self._write_state(state)
+        return state
+
+    def probe_visible_session(self) -> dict[str, Any]:
+        """Prove the current Playwright session without creating or navigating a page."""
+
+        page = self._page
+        page_url = str(getattr(page, 'url', '') or '') if page is not None else ''
+        try:
+            _page, context, browser_session_id = self._draft_reader_session()
+            _payload, account_ref = self._read_authenticated_user_info(
+                context,
+                browser_session_id,
+            )
+        except DxmDraftReaderError as exc:
+            reason_code = str(exc.reason_code or 'BROWSER_SESSION_UNAVAILABLE')
+            stage = 'login_required' if reason_code == 'LOGIN_REQUIRED' else 'session_unavailable'
+            state = {
+                'ok': False,
+                'stage': stage,
+                'reason_code': reason_code,
+                'logged_in': False,
+                'reader_ready': False,
+                'label': '真实会话未就绪',
+                'message': str(exc),
+                'next_action': '从工作台连接店小秘；完成登录后再读取店铺与草稿。',
+                'requires_user_action': True,
+                'page_title': '店小秘可见会话',
+                'page_url': page_url or 'about:blank',
+                'screenshot_url': None,
+                'browser_visible': not self._is_headless(),
+                'updated_at': now_iso(),
+            }
+            self._write_state(state)
+            return state
+        except Exception as exc:
+            state = self._error_state(
+                stage='session_unavailable',
+                label='真实会话检查失败',
+                message=f'当前 Playwright 可见会话无法完成只读认证检查：{exc}',
+                next_action='保留当前窗口并重试；不要另开第二套登录脚本。',
+                reason_code='VISIBLE_SESSION_CHECK_FAILED',
+            )
+            state.update({
+                'logged_in': False,
+                'reader_ready': False,
+                'page_url': page_url or 'about:blank',
+                'browser_visible': not self._is_headless(),
+            })
+            self._write_state(state)
+            return state
+
+        state = {
+            'ok': True,
+            'stage': 'login_success',
+            'reason_code': 'LOGIN_READER_READY',
+            'logged_in': True,
+            'reader_ready': True,
+            'label': '已登录且 Reader 就绪',
+            'message': '当前 Playwright 可见会话已通过账号只读接口校验。',
+            'next_action': '进入采集箱选品；本阶段不会保存或发布。',
+            'requires_user_action': False,
+            'page_title': '店小秘可见会话',
+            'page_url': page_url,
+            'screenshot_url': None,
+            'browser_visible': not self._is_headless(),
+            'browser_session_id': browser_session_id,
+            'account_ref': account_ref,
+            'updated_at': now_iso(),
+        }
         self._write_state(state)
         return state
 
@@ -1176,13 +1373,26 @@ class DxmLoginFlow:
             unreadable_home = login_check.get('reason') == 'home_body_empty'
             if visible_logged_in:
                 self._persist_visible_browser_cookies()
+                reader_status = self._visible_reader_session_status()
+                reader_ready = reader_status['reader_ready'] is True
                 state = {
-                    'ok': True,
+                    'ok': reader_ready,
                     'stage': 'login_success',
-                    'label': '已登录',
-                    'message': '执行浏览器已登录店小秘，可以继续真实操作。',
-                    'next_action': '继续进入待认领商品或商品箱编辑保存。',
-                    'requires_user_action': False,
+                    'reason_code': reader_status['reason_code'],
+                    'logged_in': True,
+                    'reader_ready': reader_ready,
+                    'label': '已登录且 Reader 就绪' if reader_ready else '已登录，但 Reader 未就绪',
+                    'message': (
+                        '执行浏览器已登录店小秘，店铺与草稿 Reader 可以立即复用。'
+                        if reader_ready
+                        else '执行浏览器已登录店小秘，但当前只读会话仍不可复用。'
+                    ),
+                    'next_action': (
+                        '进入采集箱选品；当前阶段不会保存或发布。'
+                        if reader_ready
+                        else '保留当前窗口并重新检测，不要另开第二套登录脚本。'
+                    ),
+                    'requires_user_action': not reader_ready,
                     'page_title': page_title or '店小秘首页',
                     'page_url': getattr(page, 'url', None) or home_url,
                     'screenshot_url': screenshot_url,
@@ -1195,6 +1405,9 @@ class DxmLoginFlow:
                 state = {
                     'ok': False,
                     'stage': 'login_page_unreadable',
+                    'reason_code': 'DXM_PAGE_NOT_READY',
+                    'logged_in': False,
+                    'reader_ready': False,
                     'label': '店小秘页面未加载完成',
                     'message': '执行浏览器已打开店小秘首页，但页面内容为空，无法确认登录状态。',
                     'next_action': '请在真实浏览器刷新页面；如果仍为空，重启真实浏览器执行器后重新检测。',
@@ -1211,6 +1424,9 @@ class DxmLoginFlow:
                 state = {
                     'ok': False,
                     'stage': 'login_failed',
+                    'reason_code': 'LOGIN_REQUIRED',
+                    'logged_in': False,
+                    'reader_ready': False,
                     'label': '执行浏览器未登录',
                     'message': '执行浏览器还没有登录店小秘；请在打开的真实浏览器完成登录后再检测。',
                     'next_action': '点击打开真实登录页，或在当前浏览器内完成登录后重新检测。',
@@ -1231,6 +1447,7 @@ class DxmLoginFlow:
                 label='执行浏览器检查失败',
                 message=f'检查执行浏览器登录态失败：{exc}',
                 next_action='真实浏览器窗口会保留；请检查页面后重新检测。',
+                reason_code='VISIBLE_SESSION_CHECK_FAILED',
             )
             state['browser_visible'] = not self._is_headless()
             self._keep_visible_browser_for_recovery(state)
@@ -2106,8 +2323,27 @@ class DxmLoginFlow:
                 'DXM_TEMPLATE_RESPONSE_INVALID',
                 f'{ref_type} 模板列表结构无效。',
             )
-        return [
-            cls._e2_template_record(
+        records: list[dict[str, Any]] = []
+        for raw in value:
+            if ref_type == 'service' and isinstance(raw, Mapping):
+                declared = [raw.get(key) for key in id_keys]
+                has_explicit_zero = any(
+                    (type(item) is int and item == 0)
+                    or (type(item) is str and item.strip() == '0')
+                    for item in declared
+                )
+                only_empty_or_zero = all(
+                    item in (None, '')
+                    or (type(item) is int and item == 0)
+                    or (type(item) is str and item.strip() == '0')
+                    for item in declared
+                )
+                if has_explicit_zero and only_empty_or_zero:
+                    # DXM includes an explicit "not selected" option in the
+                    # service-template list. It has no executable identity and
+                    # must not become a template reference or fail the scope.
+                    continue
+            records.append(cls._e2_template_record(
                 raw,
                 ref_type=ref_type,
                 id_keys=id_keys,
@@ -2115,9 +2351,8 @@ class DxmLoginFlow:
                 shop_id=shop_id,
                 category_id=category_id,
                 source_api=source_api,
-            )
-            for raw in value
-        ]
+            ))
+        return records
 
     @classmethod
     def _e2_template_record(
@@ -3154,6 +3389,7 @@ class DxmLoginFlow:
         ).hexdigest()[:32]
 
     def _draft_reader_session(self) -> tuple[Page, BrowserContext, str]:
+        self._promote_dxm_page_from_connected_browser()
         page = self._page
         context = self._context
         browser = self._browser
@@ -3737,10 +3973,7 @@ class DxmLoginFlow:
                 )
             title = ' '.join(str(raw.get('title') or '').split())
             product_id = str(raw.get('productId') or '').strip() or None
-            if product_id and (
-                re.fullmatch(r'[A-Za-z0-9_-]{5,128}', product_id) is None
-                or re.search(r'[0-9]', product_id) is None
-            ):
+            if product_id and not is_stable_product_id(product_id):
                 raise TwoStageContractError(
                     'DRAFT_BOX_ITEM_IDENTITY_INCOMPLETE',
                     f'商品箱第 {position} 行的产品 ID 不是稳定商品身份。',
@@ -4183,6 +4416,9 @@ class DxmLoginFlow:
         return {
             'ok': False,
             'stage': 'opening_login_page',
+            'reason_code': 'BROWSER_SESSION_UNAVAILABLE',
+            'logged_in': False,
+            'reader_ready': False,
             'label': '待登录',
             'message': '还没有真实店小秘会话，应该从官网登录开始。',
             'next_action': '打开官网登录页，填账号密码，进入验证码等待态。',
@@ -4193,10 +4429,20 @@ class DxmLoginFlow:
             'updated_at': now_iso(),
         }
 
-    def _error_state(self, stage: str, label: str, message: str, next_action: str) -> dict[str, Any]:
+    def _error_state(
+        self,
+        stage: str,
+        label: str,
+        message: str,
+        next_action: str,
+        reason_code: str = 'DXM_SESSION_ERROR',
+    ) -> dict[str, Any]:
         return {
             'ok': False,
             'stage': stage,
+            'reason_code': reason_code,
+            'logged_in': False,
+            'reader_ready': False,
             'label': label,
             'message': message,
             'next_action': next_action,
@@ -4220,10 +4466,55 @@ class DxmLoginFlow:
                 pass
         return state
 
+    def _discard_incomplete_browser_session(self) -> bool:
+        """Release a failed launch before a login retry reuses the owner thread."""
+
+        if self._page is not None:
+            return False
+        try:
+            self._close_browser_session()
+        except Exception:
+            # Launch can fail between starting Playwright and connecting CDP.
+            # A retry must never see that half-runtime as a reusable session.
+            try:
+                self._close_external_browser_process()
+            except Exception:
+                pass
+            self._page = None
+            self._context = None
+            self._browser = None
+            self._playwright = None
+            self._browser_session_thread_id = None
+            self._remote_debugging_port = None
+            self._clear_browser_context_generation()
+        return True
+
     def _open_login_page_and_fill(self, username: str, password: str) -> dict[str, Any]:
         page = self._ensure_page()
-        self._goto_with_live_hud(page, 'https://www.dianxiaomi.com/', wait_until='domcontentloaded', timeout=45000)
+
+        def authenticated_home_state() -> dict[str, Any]:
+            reader_status = self._visible_reader_session_status()
+            return {
+                'page_title': self._safe_live_hud_page_title(page) or '店小秘--首页',
+                'page_url': page.url,
+                'screenshot_url': None,
+                'browser_visible': not self._is_headless(),
+                'visible_logged_in': True,
+                **reader_status,
+                'reader_reason_code': reader_status['reason_code'],
+            }
+
+        # A current authenticated home is already the strongest login proof.
+        # Navigating it back to the public root can replace the Reader-usable
+        # page with a login/about:blank tab and split the two status sources.
+        if self._page_looks_logged_in(page):
+            return authenticated_home_state()
+        # Login is deliberately sterile: old task HUD hooks must not interfere
+        # with the credential/captcha page or keep the login API pending.
+        self._goto_sterile(page, 'https://www.dianxiaomi.com/', wait_until='domcontentloaded', timeout=45000)
         page.wait_for_timeout(1500)
+        if self._page_looks_logged_in(page):
+            return authenticated_home_state()
         self._fill_first_available(page, [
             'input[placeholder="请输入用户名"]',
             'input[name="account"]',
@@ -4235,11 +4526,17 @@ class DxmLoginFlow:
             'input[name="password"]',
             'input[type="password"]',
         ], password)
-        page.screenshot(path=str(LOGIN_SCREENSHOT_FILE), full_page=True)
+        screenshot_url = None
+        try:
+            page.screenshot(path=str(LOGIN_SCREENSHOT_FILE), full_page=False, timeout=5000)
+            screenshot_url = self._artifact_url(LOGIN_SCREENSHOT_FILE)
+        except Exception:
+            # A diagnostic screenshot must never hold the only browser owner.
+            pass
         return {
-            'page_title': page.title(),
+            'page_title': self._safe_live_hud_page_title(page) or '店小秘官网登录页',
             'page_url': page.url,
-            'screenshot_url': self._artifact_url(LOGIN_SCREENSHOT_FILE),
+            'screenshot_url': screenshot_url,
             'browser_visible': not self._is_headless(),
         }
 
@@ -4259,11 +4556,14 @@ class DxmLoginFlow:
         page.wait_for_timeout(4000)
         page.screenshot(path=str(LOGIN_RESULT_SCREENSHOT_FILE), full_page=True)
         self._persist_visible_browser_cookies()
+        reader_status = self._visible_reader_session_status()
         return {
             'page_title': page.title(),
             'page_url': page.url,
             'screenshot_url': self._artifact_url(LOGIN_RESULT_SCREENSHOT_FILE),
             'visible_logged_in': self._page_looks_logged_in(page),
+            'reader_ready': reader_status['reader_ready'],
+            'reader_reason_code': reader_status['reason_code'],
         }
 
     def _persist_visible_browser_cookies(self) -> None:
@@ -4294,7 +4594,15 @@ class DxmLoginFlow:
             body_text = ''
         normalized = ''.join(str(body_text or '').split())
         if not normalized:
-            return {'logged_in': False, 'url': url, 'body_excerpt': '', 'reason': 'home_body_empty'}
+            return {
+                'logged_in': True,
+                'session_authenticated': True,
+                'business_page_ready': True,
+                'loading': False,
+                'url': url,
+                'body_excerpt': '',
+                'reason': 'home_body_unavailable',
+            }
         if '欢迎登录' in normalized:
             return {
                 'logged_in': False,
@@ -4320,18 +4628,54 @@ class DxmLoginFlow:
         return ('/web/home' in url or 'index.htm' in url) and '登录' not in title
 
     def _login_success_state_from_submit(self, submit_state: dict[str, Any]) -> dict[str, Any]:
+        reader_ready = submit_state.get('reader_ready') is not False
+        reason_code = str(
+            submit_state.get('reader_reason_code')
+            or ('LOGIN_READER_READY' if reader_ready else 'BROWSER_SESSION_UNAVAILABLE')
+        )
         return {
-            'ok': True,
+            'ok': reader_ready,
             'stage': 'login_success',
-            'label': '已登录',
-            'message': '登录成功，已进入真实店小秘后台。',
-            'next_action': '真实浏览器窗口会保留；可继续进入已有待认领列表、商品箱和编辑流程。',
-            'requires_user_action': False,
+            'reason_code': reason_code,
+            'logged_in': True,
+            'reader_ready': reader_ready,
+            'label': '已登录' if reader_ready else '已登录，但只读会话未就绪',
+            'message': (
+                '登录成功，当前真实可见浏览器已可直接读取店铺与草稿。'
+                if reader_ready
+                else '页面已显示登录成功，但当前 Playwright 会话尚不能复用只读接口。'
+            ),
+            'next_action': (
+                '返回工作台进入采集箱选品；本阶段不会保存或发布。'
+                if reader_ready
+                else '保留当前真实浏览器窗口并重新检测；不要另开脚本或第二套浏览器。'
+            ),
+            'requires_user_action': not reader_ready,
             'page_title': submit_state.get('page_title') or '店小秘首页',
             'page_url': submit_state.get('page_url') or 'https://www.dianxiaomi.com/web/home',
             'screenshot_url': submit_state.get('screenshot_url'),
             'browser_visible': not self._is_headless(),
+            'browser_session_id': submit_state.get('browser_session_id'),
+            'account_ref': submit_state.get('account_ref'),
             'updated_at': now_iso(),
+        }
+
+    def _visible_reader_session_status(self) -> dict[str, Any]:
+        try:
+            _page, context, browser_session_id = self._draft_reader_session()
+            _payload, account_ref = self._read_authenticated_user_info(
+                context,
+                browser_session_id,
+            )
+        except DxmDraftReaderError as exc:
+            return {'reader_ready': False, 'reason_code': exc.reason_code}
+        except Exception:
+            return {'reader_ready': False, 'reason_code': 'BROWSER_SESSION_UNAVAILABLE'}
+        return {
+            'reader_ready': True,
+            'reason_code': 'LOGIN_READER_READY',
+            'browser_session_id': browser_session_id,
+            'account_ref': account_ref,
         }
 
     def _navigate_in_session(self, target: str) -> dict[str, Any]:
@@ -6598,7 +6942,7 @@ class DxmLoginFlow:
                 '冻结商品来源链接不是规范的外部商品详情页，已停止打开编辑页。',
             )
         if kind == 'product_id':
-            if _FROZEN_PRODUCT_ID_PATTERN.fullmatch(value) is None:
+            if not is_stable_product_id(value):
                 raise FrozenTargetIdentityError(
                     'FROZEN_TARGET_PRODUCT_ID_INVALID',
                     '冻结商品产品 ID 无效，已停止打开编辑页。',
@@ -7936,6 +8280,9 @@ class DxmLoginFlow:
                     store_name=store_name,
                     baseline_field_integrity=prefill.get('field_integrity'),
                     required_readback_complete=prefill.get('required_readback_complete') is True,
+                    expected_execution_payload=prefill.get('execution_payload'),
+                    baseline_execution_readback=prefill.get('frozen_execution_readback'),
+                    baseline_category_schema_readback=prefill.get('category_schema_readback'),
                 )
             if isinstance(result, dict) and not result.get('source_editor_url'):
                 result['source_editor_url'] = editor_url
@@ -8087,6 +8434,8 @@ class DxmLoginFlow:
                 store_name=store_name,
                 baseline_field_integrity=(prefill.get('fill_result') or {}).get('field_integrity'),
                 required_readback_complete=prefill.get('ok') is True,
+                expected_execution_payload=None,
+                baseline_execution_readback=None,
             )
         if source_editor_url and isinstance(result, dict) and not result.get('source_editor_url'):
             result['source_editor_url'] = source_editor_url
@@ -8955,6 +9304,170 @@ class DxmLoginFlow:
                 return True
         return False
 
+    def _capture_current_editor_category_schema(
+        self,
+        page: Page,
+        execution_payload: Mapping[str, Any],
+        *,
+        phase: str,
+    ) -> dict[str, Any]:
+        """Read the current editor category and live read-only Schema before writes."""
+
+        expected_category_id = str(execution_payload.get('category_id') or '').strip()
+        expected_schema_hash = str(
+            execution_payload.get('category_schema_hash') or ''
+        ).strip().upper()
+        result: dict[str, Any] = {
+            'schema': 'dxm.editor.category_schema_readback.v1',
+            'ok': False,
+            'phase': phase,
+            'expected_category_id': expected_category_id,
+            'observed_category_id': None,
+            'expected_category_schema_hash': expected_schema_hash,
+            'observed_category_schema_hash': None,
+            'category_source': None,
+            'reason': 'category_schema_readback_unavailable',
+        }
+        if (
+            not expected_category_id.isdecimal()
+            or int(expected_category_id) <= 0
+            or len(expected_schema_hash) != 64
+            or any(character not in '0123456789ABCDEF' for character in expected_schema_hash)
+        ):
+            result['reason'] = 'frozen_category_schema_invalid'
+            return result
+        script = r'''async () => {
+          const canonicalId = (value) => {
+            const text = String(value ?? '').trim();
+            return /^\d+$/.test(text) && Number(text) > 0 ? text : null;
+          };
+          const candidates = [];
+          const add = (value, source) => {
+            const id = canonicalId(value);
+            if (id) candidates.push({id, source});
+          };
+          const url = new URL(window.location.href);
+          for (const key of ['categoryId', 'category_id', 'nodePathId']) {
+            if (url.searchParams.has(key)) add(url.searchParams.get(key), `url:${key}`);
+          }
+          const selectors = [
+            'input[name="categoryId"]',
+            'input[name="category_id"]',
+            'input[name="nodePathId"]',
+            '#categoryId',
+            '[data-category-id]',
+            '[data-categoryid]'
+          ];
+          for (const element of document.querySelectorAll(selectors.join(','))) {
+            for (const [name, value] of [
+              ['value', element.value],
+              ['data-category-id', element.getAttribute('data-category-id')],
+              ['data-categoryid', element.getAttribute('data-categoryid')]
+            ]) add(value, `dom:${name}`);
+          }
+          const unique = [...new Set(candidates.map(item => item.id))];
+          if (unique.length !== 1) {
+            return {ok: false, reason: unique.length ? 'category_identity_conflict' : 'category_identity_missing', candidates};
+          }
+          if (window.location.protocol !== 'https:' || window.location.hostname !== 'www.dianxiaomi.com' || (window.location.port && window.location.port !== '443')) {
+            return {ok: false, reason: 'uncontrolled_editor_origin', candidates};
+          }
+          const post = async (path, form) => {
+            const response = await fetch(path, {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: {'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'},
+              body: new URLSearchParams(form).toString(),
+            });
+            if (!response.ok) throw new Error(`schema_http_${response.status}`);
+            const payload = await response.json();
+            if (!payload || !((typeof payload.code === 'number' && payload.code === 0) || (typeof payload.code === 'string' && payload.code === '0'))) {
+              throw new Error('schema_response_not_strict_success');
+            }
+            return payload.data;
+          };
+          const asList = (value) => {
+            if (Array.isArray(value)) return value;
+            if (typeof value === 'string') {
+              const parsed = JSON.parse(value);
+              return Array.isArray(parsed) ? parsed : null;
+            }
+            return null;
+          };
+          try {
+            const categoryId = unique[0];
+            const attributes = await post('/api/smtCategory/attributeList.json', {categoryId});
+            if (!Array.isArray(attributes)) throw new Error('attribute_schema_not_array');
+            const enriched = [];
+            for (const raw of attributes) {
+              if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('attribute_schema_item_invalid');
+              const attribute = JSON.parse(JSON.stringify(raw));
+              const attributeId = canonicalId(attribute.arrtNameId);
+              if (!attributeId) throw new Error('attribute_id_invalid');
+              const values = asList(attribute.values) || [];
+              const childCases = [];
+              for (const option of values) {
+                if (!option || typeof option !== 'object' || Array.isArray(option)) throw new Error('attribute_option_invalid');
+                const rawFlag = option.hasSubAttr;
+                const hasSubAttr = rawFlag === true || rawFlag === 1 || rawFlag === '1' || String(rawFlag ?? '').toLowerCase() === 'true';
+                const noSubAttr = rawFlag === false || rawFlag === 0 || rawFlag === '0' || rawFlag === '' || rawFlag == null || String(rawFlag ?? '').toLowerCase() === 'false';
+                if (!hasSubAttr && !noSubAttr) throw new Error('has_sub_attr_invalid');
+                if (!hasSubAttr) continue;
+                const parentValueId = canonicalId(option.id ?? option.attrValueId);
+                if (!parentValueId) throw new Error('parent_attribute_value_id_invalid');
+                let children = await post('/api/smtCategory/childAttributeList.json', {
+                  categoryId,
+                  arrtNameId: attributeId,
+                  arrtValueId: parentValueId,
+                });
+                if (children && typeof children === 'object' && !Array.isArray(children)) {
+                  children = children.list ?? children.attributeList ?? children.childAttributeList;
+                }
+                if (!Array.isArray(children) || !children.length) throw new Error('declared_child_schema_missing');
+                childCases.push({parent_value_id: parentValueId, children});
+              }
+              if (childCases.length) attribute.__child_attribute_cases__ = childCases;
+              enriched.push(attribute);
+            }
+            return {
+              ok: true,
+              category_id: categoryId,
+              category_source: candidates.find(item => item.id === categoryId)?.source || null,
+              attributes: enriched,
+            };
+          } catch (error) {
+            return {ok: false, reason: String(error?.message || error || 'category_schema_read_failed'), candidates};
+          }
+        }'''
+        try:
+            observed = page.evaluate(script)
+        except Exception as exc:  # noqa: BLE001 - fail closed before any field write.
+            result['reason'] = f'category_schema_read_exception:{str(exc)[:160]}'
+            return result
+        if not isinstance(observed, Mapping) or observed.get('ok') is not True:
+            if isinstance(observed, Mapping):
+                result['reason'] = str(observed.get('reason') or result['reason'])
+            return result
+        observed_category_id = str(observed.get('category_id') or '').strip()
+        result['observed_category_id'] = observed_category_id or None
+        result['category_source'] = observed.get('category_source')
+        try:
+            normalized_schema = self._e2_category_schema(
+                observed.get('attributes'),
+                category_id=observed_category_id,
+            )
+            observed_schema_hash = canonical_sha256(normalized_schema)
+        except (DxmDraftReaderError, TypeError, ValueError) as exc:
+            result['reason'] = f'category_schema_normalization_failed:{str(exc)[:160]}'
+            return result
+        result['observed_category_schema_hash'] = observed_schema_hash
+        result['ok'] = bool(
+            observed_category_id == expected_category_id
+            and observed_schema_hash == expected_schema_hash
+        )
+        result['reason'] = None if result['ok'] else 'category_or_schema_drift'
+        return result
+
     def _prepare_editor_page_for_save(
         self,
         page: Page,
@@ -8962,6 +9475,50 @@ class DxmLoginFlow:
         *,
         require_explicit_defaults: bool = False,
     ) -> dict[str, Any]:
+        execution_payload: dict[str, Any] | None = None
+        if isinstance(defaults, Mapping) and (
+            "_frozen_execution_payload" in defaults
+            or "_frozen_execution_payload_hash" in defaults
+        ):
+            try:
+                execution_payload = validate_frozen_execution_defaults(defaults)
+            except FrozenExecutionContractError as exc:
+                return {
+                    'ok': False,
+                    'stage': 'editor_save_prefill_failed',
+                    'label': '冻结执行配置校验失败',
+                    'message': '保存前冻结执行配置已漂移，未进行页面写入。',
+                    'failure_code': exc.reason_code,
+                    'page_title': '店小秘编辑页',
+                    'page_url': str(getattr(page, 'url', '') or ''),
+                    'write_attempted': False,
+                    'published': None,
+                }
+        category_schema_readback = None
+        if execution_payload is not None:
+            category_schema_readback = self._capture_current_editor_category_schema(
+                page,
+                execution_payload,
+                phase='before_any_field_write',
+            )
+            if category_schema_readback.get('ok') is not True:
+                return {
+                    'ok': False,
+                    'stage': 'editor_save_prefill_failed',
+                    'label': '当前类目或 Schema 已漂移',
+                    'message': '当前编辑页类目或实时 Schema 与 E2 冻结快照不一致，未进行任何字段写入。',
+                    'failure_code': 'FROZEN_CATEGORY_SCHEMA_DRIFT',
+                    'page_title': '店小秘编辑页',
+                    'page_url': str(getattr(page, 'url', '') or ''),
+                    'category_schema_readback': category_schema_readback,
+                    'write_attempted': False,
+                    'published': None,
+                }
+            return self._prepare_frozen_execution_page_for_save(
+                page,
+                execution_payload,
+                category_schema_readback=category_schema_readback,
+            )
         unsupported = self._unsupported_dxm_reference_template_preflight(defaults or {})
         if unsupported:
             return self._unsupported_dxm_reference_template_failure(
@@ -9082,6 +9639,34 @@ class DxmLoginFlow:
                 'field_integrity': field_integrity,
                 'published': None,
             }
+        frozen_execution_readback = None
+        if execution_payload is not None:
+            frozen_execution_readback = self._capture_frozen_execution_readback(
+                page,
+                execution_payload,
+                phase='after_prefill',
+            )
+            if frozen_execution_readback.get('ok') is not True:
+                return {
+                    'ok': False,
+                    'stage': 'editor_save_prefill_failed',
+                    'label': '冻结执行值读回失败',
+                    'message': '页面字段与 E2 冻结值不完全一致，已在保存点击前停止。',
+                    'failure_code': 'FROZEN_EXECUTION_READBACK_MISMATCH',
+                    'page_title': '店小秘编辑页',
+                    'page_url': str(getattr(page, 'url', '') or ''),
+                    'preflight_results': {
+                        'required_defaults': required_result,
+                        'variants': variants_result,
+                        'media': media_result,
+                        'compliance': compliance_result,
+                        'main_images': main_images_result,
+                    },
+                    'field_integrity': field_integrity,
+                    'frozen_execution_readback': frozen_execution_readback,
+                    'write_attempted': False,
+                    'published': None,
+                }
         return {
             'ok': True,
             'stage': 'editor_save_prefill_ready',
@@ -9098,7 +9683,782 @@ class DxmLoginFlow:
             },
             'required_readback_complete': True,
             'field_integrity': field_integrity,
+            'execution_payload': execution_payload,
+            'execution_payload_hash': (
+                execution_payload.get('payload_hash')
+                if execution_payload is not None
+                else None
+            ),
+            'category_schema_readback': category_schema_readback,
+            'frozen_execution_readback': frozen_execution_readback,
             'published': None,
+        }
+
+    def _prepare_frozen_execution_page_for_save(
+        self,
+        page: Page,
+        execution_payload: Mapping[str, Any],
+        *,
+        category_schema_readback: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        fill_result = self._fill_frozen_execution_payload_on_page(
+            page,
+            execution_payload,
+        )
+        preflight_results = {'frozen_execution': fill_result}
+        if fill_result.get('ok') is not True:
+            return {
+                **fill_result,
+                'ok': False,
+                'stage': 'editor_save_prefill_failed',
+                'label': '冻结执行字段填写失败',
+                'message': fill_result.get('message') or '无法按 E2 冻结字段完成页面填写，未执行保存。',
+                'failure_code': fill_result.get('failure_code') or 'FROZEN_EXECUTION_FILL_FAILED',
+                'page_title': '店小秘编辑页',
+                'page_url': str(getattr(page, 'url', '') or ''),
+                'preflight_results': preflight_results,
+                'category_schema_readback': dict(category_schema_readback),
+                'write_attempted': bool(fill_result.get('write_attempted')),
+                'published': None,
+            }
+
+        field_integrity = self._capture_save_field_integrity_snapshot(page)
+        if field_integrity.get('ok') is not True:
+            return {
+                'ok': False,
+                'stage': 'editor_save_prefill_failed',
+                'label': '保存前字段读回失败',
+                'message': '未能生成结构化非空字段快照，不能保存。',
+                'failure_code': 'FROZEN_EXECUTION_FIELD_INTEGRITY_INVALID',
+                'page_title': '店小秘编辑页',
+                'page_url': str(getattr(page, 'url', '') or ''),
+                'preflight_results': preflight_results,
+                'category_schema_readback': dict(category_schema_readback),
+                'field_integrity': field_integrity,
+                'write_attempted': bool(fill_result.get('write_attempted')),
+                'published': None,
+            }
+
+        frozen_execution_readback = self._capture_frozen_execution_readback(
+            page,
+            execution_payload,
+            phase='after_prefill',
+        )
+        if frozen_execution_readback.get('ok') is not True:
+            return {
+                'ok': False,
+                'stage': 'editor_save_prefill_failed',
+                'label': '冻结执行值读回失败',
+                'message': '页面字段与 E2 冻结值不完全一致，已在保存点击前停止。',
+                'failure_code': 'FROZEN_EXECUTION_READBACK_MISMATCH',
+                'page_title': '店小秘编辑页',
+                'page_url': str(getattr(page, 'url', '') or ''),
+                'preflight_results': preflight_results,
+                'category_schema_readback': dict(category_schema_readback),
+                'field_integrity': field_integrity,
+                'frozen_execution_readback': frozen_execution_readback,
+                'write_attempted': bool(fill_result.get('write_attempted')),
+                'published': None,
+            }
+        return {
+            'ok': True,
+            'stage': 'editor_save_prefill_ready',
+            'label': '保存前冻结字段配置已完成',
+            'message': '已严格按 E2 冻结字段填写并逐字段读回。',
+            'page_title': '店小秘编辑页' if self._is_visible_dxm_editor_page(page) else page.title(),
+            'page_url': str(getattr(page, 'url', '') or ''),
+            'preflight_results': preflight_results,
+            'required_readback_complete': True,
+            'field_integrity': field_integrity,
+            'execution_payload': dict(execution_payload),
+            'execution_payload_hash': execution_payload.get('payload_hash'),
+            'category_schema_readback': dict(category_schema_readback),
+            'frozen_execution_readback': frozen_execution_readback,
+            'published': None,
+        }
+
+    @staticmethod
+    def _fill_frozen_execution_payload_on_page(
+        page: Page,
+        execution_payload: Mapping[str, Any],
+        *,
+        operation: str = 'apply',
+    ) -> dict[str, Any]:
+        payload_hash = str(execution_payload.get('payload_hash') or '').strip().upper()
+        payload_body = {
+            key: value
+            for key, value in execution_payload.items()
+            if key != 'payload_hash'
+        }
+        fields = execution_payload.get('fields')
+        unresolved_fields = execution_payload.get('unresolved_fields')
+        if (
+            execution_payload.get('schema') != 'dxm.batch_draft_save.execution_payload.v1'
+            or re.fullmatch(r'[0-9A-F]{64}', payload_hash) is None
+            or canonical_sha256(payload_body) != payload_hash
+            or not isinstance(fields, list)
+            or not fields
+            or unresolved_fields != []
+        ):
+            return {
+                'ok': False,
+                'stage': 'fill_frozen_execution_payload_failed',
+                'failure_code': 'FROZEN_EXECUTION_PAYLOAD_INVALID',
+                'message': 'E2 冻结执行 payload 无效或仍含未解析字段。',
+                'execution_payload_hash': payload_hash,
+                'field_count': 0,
+                'fields': [],
+                'write_attempted': False,
+            }
+
+        descriptors: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+        seen_bindings: set[str] = set()
+        for raw_field in fields:
+            if not isinstance(raw_field, Mapping):
+                descriptors = []
+                break
+            field_key = str(raw_field.get('field_key') or '')
+            binding = str(raw_field.get('ui_binding') or '')
+            label = str(raw_field.get('ui_label_zh') or '')
+            editor_match = re.fullmatch(r'dxm_editor:([A-Za-z][A-Za-z0-9_.-]{0,127})', binding)
+            attribute_match = re.fullmatch(r'dxm_attribute:([1-9][0-9]{0,19})', binding)
+            binding_valid = bool(
+                (editor_match is not None and editor_match.group(1) == field_key)
+                or attribute_match is not None
+            )
+            if (
+                not field_key
+                or not label
+                or not binding_valid
+                or field_key in seen_keys
+                or binding in seen_bindings
+                or 'resolved_value' not in raw_field
+            ):
+                descriptors = []
+                break
+            seen_keys.add(field_key)
+            seen_bindings.add(binding)
+            descriptors.append({
+                'field_key': field_key,
+                'ui_label_zh': label,
+                'ui_binding': binding,
+                'resolved_value': raw_field['resolved_value'],
+            })
+        if len(descriptors) != len(fields):
+            return {
+                'ok': False,
+                'stage': 'fill_frozen_execution_payload_failed',
+                'failure_code': 'FROZEN_EXECUTION_BINDING_INVALID',
+                'message': 'E2 冻结字段的 UI binding 缺失、重复或不稳定。',
+                'execution_payload_hash': payload_hash,
+                'field_count': 0,
+                'fields': [],
+                'write_attempted': False,
+            }
+
+        try:
+            raw_result = page.evaluate(r'''({fields, operation}) => {
+              const controlSelector = 'input,textarea,select,[contenteditable="true"],[data-resolved-json]';
+              const visible = (el) => {
+                if (!el || !el.getBoundingClientRect) return false;
+                const rect = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return rect.width > 0 && rect.height > 0
+                  && style.visibility !== 'hidden'
+                  && style.display !== 'none';
+              };
+              const clean = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+              const escape = (value) => window.CSS?.escape
+                ? window.CSS.escape(String(value))
+                : String(value).replace(/[^A-Za-z0-9_-]/g, '\\$&');
+              const unique = (values) => Array.from(new Set(values.filter(Boolean)));
+              const query = (selector, root = document) => {
+                try { return Array.from(root.querySelectorAll(selector)); } catch (_) { return []; }
+              };
+              const controlsFrom = (node) => {
+                if (!node) return [];
+                const result = [];
+                if (node.matches?.(controlSelector)) result.push(node);
+                result.push(...query(controlSelector, node));
+                return unique(result).filter(visible);
+              };
+              const stable = (value) => {
+                if (Array.isArray(value)) return value.map(stable);
+                if (value && typeof value === 'object') {
+                  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stable(value[key])]));
+                }
+                return value;
+              };
+              const same = (left, right) => JSON.stringify(stable(left)) === JSON.stringify(stable(right));
+              const normalizeForExpected = (observed, expected) => {
+                if (typeof expected === 'number' && typeof observed === 'string') {
+                  const text = observed.trim();
+                  if (/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(text)) return Number(text);
+                }
+                if (typeof expected === 'boolean' && typeof observed === 'string') {
+                  const text = observed.trim().toLowerCase();
+                  if (['1', 'true', 'yes', '是', 'checked'].includes(text)) return true;
+                  if (['0', 'false', 'no', '否', 'unchecked'].includes(text)) return false;
+                }
+                return observed;
+              };
+              const sameExpected = (observed, expected) => same(
+                normalizeForExpected(observed, expected),
+                expected,
+              );
+              const readControl = (el) => {
+                const jsonValue = el.getAttribute?.('data-resolved-json');
+                if (jsonValue) {
+                  try { return JSON.parse(jsonValue); } catch (_) { return jsonValue; }
+                }
+                const type = clean(el.getAttribute?.('type')).toLowerCase();
+                if (type === 'checkbox' || type === 'radio') return Boolean(el.checked);
+                if (el.tagName === 'SELECT') {
+                  return el.multiple
+                    ? Array.from(el.selectedOptions || []).map((option) => clean(option.value || option.textContent))
+                    : clean(el.value || el.selectedOptions?.[0]?.textContent);
+                }
+                if (el.getAttribute?.('contenteditable') === 'true') return clean(el.textContent);
+                return clean(el.value ?? el.textContent);
+              };
+              const setText = (el, value) => {
+                if (!el || el.disabled || el.readOnly) return false;
+                const desired = String(value ?? '');
+                el.scrollIntoView?.({block:'center', inline:'nearest'});
+                el.focus?.();
+                if (el.getAttribute?.('contenteditable') === 'true') {
+                  el.textContent = desired;
+                } else {
+                  const proto = el.tagName === 'TEXTAREA'
+                    ? window.HTMLTextAreaElement.prototype
+                    : window.HTMLInputElement.prototype;
+                  const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+                  if (setter) setter.call(el, desired); else el.value = desired;
+                }
+                el.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:desired}));
+                el.dispatchEvent(new Event('change', {bubbles:true}));
+                el.dispatchEvent(new Event('blur', {bubbles:true}));
+                return readControl(el) === desired.trim();
+              };
+              const optionIdentity = (control) => {
+                const value = clean(control.value || control.getAttribute?.('data-value'));
+                const label = control.closest?.('label');
+                const text = clean(label?.innerText || label?.textContent || control.parentElement?.innerText);
+                return unique([value, text]);
+              };
+              const exactBindingMarkers = (binding) => query(`[data-ui-binding="${escape(binding)}"]`).filter(visible);
+              const exactAttributeMarkers = (attributeId) => unique([
+                ...query(`[data-attribute-id="${escape(attributeId)}"]`),
+                ...query(`[data-attr-name-id="${escape(attributeId)}"]`),
+              ]).filter(visible);
+              const directControls = (field) => {
+                const key = field.field_key;
+                const exact = unique([
+                  ...query(`[data-field="${escape(key)}"]`),
+                  ...query(`[name="${escape(key)}"]`),
+                  ...query(`#${escape(key)}`),
+                ]).flatMap(controlsFrom);
+                if (key === 'title') {
+                  exact.push(...unique([
+                    ...query('[name="subject"]'),
+                    ...query('#form_item_subject'),
+                  ]).filter(visible));
+                }
+                return unique(exact);
+              };
+              const locateStandard = (field) => {
+                const markers = exactBindingMarkers(field.ui_binding);
+                if (markers.length > 1) return {ok:false, reason:'binding_marker_ambiguous', match_count:markers.length};
+                let controls = markers.length === 1 ? controlsFrom(markers[0]) : [];
+                let strategy = markers.length === 1 ? 'exact_ui_binding' : null;
+                if (!controls.length && field.ui_binding.startsWith('dxm_attribute:')) {
+                  const attributeId = field.ui_binding.split(':')[1];
+                  const attributeMarkers = exactAttributeMarkers(attributeId);
+                  if (attributeMarkers.length > 1) {
+                    return {ok:false, reason:'attribute_marker_ambiguous', match_count:attributeMarkers.length};
+                  }
+                  controls = attributeMarkers.length === 1 ? controlsFrom(attributeMarkers[0]) : [];
+                  strategy = controls.length ? 'exact_attribute_id' : strategy;
+                }
+                if (!controls.length && field.ui_binding.startsWith('dxm_editor:')) {
+                  controls = directControls(field);
+                  strategy = controls.length ? 'exact_editor_key' : strategy;
+                }
+                controls = unique(controls);
+                if (!controls.length) return {ok:false, reason:'binding_control_missing', match_count:0};
+                const types = controls.map((node) => clean(node.getAttribute?.('type')).toLowerCase());
+                const choiceGroup = types.every((type) => type === 'checkbox' || type === 'radio');
+                if (!choiceGroup && controls.length !== 1) {
+                  return {ok:false, reason:'binding_control_ambiguous', match_count:controls.length};
+                }
+                const kind = choiceGroup ? 'choice_group' : 'single';
+                const value = field.resolved_value;
+                if (
+                  !choiceGroup
+                  && value !== null
+                  && typeof value === 'object'
+                  && !controls[0].hasAttribute?.('data-resolved-json')
+                  && !(controls[0].tagName === 'SELECT' && controls[0].multiple && Array.isArray(value))
+                ) {
+                  return {ok:false, reason:'complex_control_not_writable', match_count:1};
+                }
+                return {ok:true, kind, controls, strategy, match_count:controls.length};
+              };
+              const skuControl = (row, key) => {
+                const escaped = escape(key);
+                const direct = unique([
+                  ...query(`[data-sku-field="${escaped}"]`, row),
+                  ...query(`[data-field="${escaped}"]`, row),
+                  ...query(`[name="${escaped}"]`, row),
+                  ...query(`#${escaped}`, row),
+                ]).filter(visible);
+                if (direct.length) return direct;
+                const token = new RegExp(`(?:^|[.\\[])${key.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}(?:\\]|$)`);
+                return query(controlSelector, row).filter(visible).filter((node) => {
+                  return [node.getAttribute?.('name'), node.getAttribute?.('id'), node.getAttribute?.('data-field')]
+                    .some((value) => token.test(String(value || '')));
+                });
+              };
+              const locateSku = (field) => {
+                const expectedRows = field.resolved_value;
+                if (!Array.isArray(expectedRows) || !expectedRows.length) {
+                  return {ok:false, reason:'sku_expected_rows_invalid', match_count:0};
+                }
+                const markers = exactBindingMarkers(field.ui_binding);
+                if (markers.length > 1) return {ok:false, reason:'sku_binding_ambiguous', match_count:markers.length};
+                let tables = [];
+                if (markers.length === 1) {
+                  const marker = markers[0];
+                  tables = marker.matches?.('table') ? [marker] : query('table', marker).filter(visible);
+                }
+                tables = unique(tables);
+                if (tables.length !== 1) {
+                  return {ok:false, reason:tables.length ? 'sku_table_ambiguous' : 'sku_table_missing', match_count:tables.length};
+                }
+                const rows = query('tbody tr', tables[0]).filter(visible).filter((row) => query(controlSelector, row).length > 0);
+                if (rows.length !== expectedRows.length) {
+                  return {ok:false, reason:'sku_row_count_mismatch', match_count:rows.length};
+                }
+                const mutableKeys = new Set(['skuCode', 'skuPrice', 'cargoPrice', 'ipmSkuStock']);
+                const rowPlans = [];
+                for (let index = 0; index < expectedRows.length; index += 1) {
+                  const expected = expectedRows[index];
+                  if (!expected || typeof expected !== 'object' || Array.isArray(expected) || !Object.keys(expected).length) {
+                    return {ok:false, reason:'sku_row_value_invalid', match_count:rows.length};
+                  }
+                  const keyPlans = [];
+                  for (const key of Object.keys(expected)) {
+                    const controls = unique(skuControl(rows[index], key));
+                    if (controls.length !== 1) {
+                      return {
+                        ok:false,
+                        reason:controls.length ? 'sku_subfield_ambiguous' : 'sku_subfield_missing',
+                        match_count:controls.length,
+                        subfield:`${index}.${key}`,
+                      };
+                    }
+                    const value = expected[key];
+                    const control = controls[0];
+                    const complex = value !== null && typeof value === 'object';
+                    if (complex && !control.hasAttribute?.('data-resolved-json')) {
+                      return {ok:false, reason:'sku_complex_subfield_not_readable', match_count:1, subfield:`${index}.${key}`};
+                    }
+                    keyPlans.push({key, control, expected:value, mutable:mutableKeys.has(key) && !complex});
+                  }
+                  rowPlans.push({row:rows[index], keys:keyPlans});
+                }
+                return {ok:true, kind:'sku_rows', table:tables[0], rows:rowPlans, match_count:rows.length, strategy:'exact_sku_table'};
+              };
+              const locate = (field) => field.field_key === 'aeopAeProductSKUs'
+                ? locateSku(field)
+                : locateStandard(field);
+              const plans = fields.map((field) => ({field, plan:locate(field)}));
+              const invalid = plans.find((item) => item.plan.ok !== true);
+              if (invalid) {
+                return {
+                  ok:false,
+                  failure_code:'FROZEN_EXECUTION_BINDING_UNRESOLVED',
+                  message:`冻结字段 ${invalid.field.field_key} 无法绑定唯一可验证控件：${invalid.plan.reason}`,
+                  field_count:fields.length,
+                  fields:plans.map((item) => ({
+                    field_key:item.field.field_key,
+                    ui_binding:item.field.ui_binding,
+                    ok:item.plan.ok === true,
+                    reason:item.plan.reason || null,
+                    match_count:item.plan.match_count || 0,
+                  })),
+                  write_attempted:false,
+                };
+              }
+              if (operation === 'readback') {
+                const observations = plans.map(({field, plan}) => {
+                  if (plan.kind === 'sku_rows') {
+                    const values = plan.rows.map((rowPlan) => {
+                      const observed = {};
+                      for (const keyPlan of rowPlan.keys) {
+                        observed[keyPlan.key] = readControl(keyPlan.control);
+                      }
+                      return observed;
+                    });
+                    return {
+                      field_key:field.field_key,
+                      found:true,
+                      value:values,
+                      match_count:plan.match_count,
+                      aggregate_kind:'sku_rows',
+                    };
+                  }
+                  if (plan.kind === 'choice_group') {
+                    if (typeof field.resolved_value === 'boolean' && plan.controls.length === 1) {
+                      return {
+                        field_key:field.field_key,
+                        found:true,
+                        value:Boolean(plan.controls[0].checked),
+                        match_count:plan.match_count,
+                        aggregate_kind:'choice_group',
+                      };
+                    }
+                    const expectedValues = (
+                      Array.isArray(field.resolved_value)
+                        ? field.resolved_value
+                        : [field.resolved_value]
+                    ).map((value) => clean(value));
+                    const selectedValues = plan.controls
+                      .filter((control) => control.checked)
+                      .map((control) => {
+                        const identities = optionIdentity(control);
+                        return expectedValues.find((value) => identities.includes(value)) || identities[0] || '';
+                      })
+                      .filter(Boolean);
+                    return {
+                      field_key:field.field_key,
+                      found:selectedValues.length > 0,
+                      value:Array.isArray(field.resolved_value) ? selectedValues : selectedValues[0],
+                      match_count:plan.match_count,
+                      aggregate_kind:'choice_group',
+                    };
+                  }
+                  const values = plan.controls
+                    .map(readControl)
+                    .filter((value) => value !== undefined && value !== '');
+                  return {
+                    field_key:field.field_key,
+                    found:values.length > 0,
+                    value:values.length === 1 ? values[0] : values,
+                    match_count:plan.match_count,
+                    aggregate_kind:plan.kind === 'choice_group' ? 'choice_group' : 'single',
+                  };
+                });
+                return {
+                  ok:observations.length === fields.length,
+                  failure_code:null,
+                  message:'已使用冻结 UI binding 共享运行时读取全部字段。',
+                  field_count:observations.length,
+                  observations,
+                  fields:[],
+                  write_attempted:false,
+                };
+              }
+              const preflightSingle = (control, expected) => {
+                const type = clean(control.getAttribute?.('type')).toLowerCase();
+                if (
+                  control.disabled
+                  || control.readOnly
+                  || ['hidden', 'file', 'button', 'submit', 'reset', 'image'].includes(type)
+                ) {
+                  return {ok:false, reason:'control_not_visible_actionable'};
+                }
+                if (control.hasAttribute?.('data-resolved-json')) {
+                  return {
+                    ok:sameExpected(readControl(control), expected),
+                    reason:'structured_readback_mismatch',
+                  };
+                }
+                if (control.tagName === 'SELECT') {
+                  const desired = Array.isArray(expected) ? expected.map(String) : [String(expected ?? '')];
+                  const options = Array.from(control.options || []);
+                  const matches = desired.map((value) => options.filter((option) => (
+                    clean(option.value) === clean(value) || clean(option.textContent) === clean(value)
+                  )));
+                  if (matches.some((items) => items.length !== 1) || (!control.multiple && desired.length !== 1)) {
+                    return {ok:false, reason:'select_option_not_exact'};
+                  }
+                  return {ok:true};
+                }
+                if (expected !== null && typeof expected === 'object') {
+                  return {ok:false, reason:'complex_value_not_writable'};
+                }
+                return {ok:true};
+              };
+              const preflightChoices = (controls, expected) => {
+                if (controls.some((control) => control.disabled)) {
+                  return {ok:false, reason:'choice_control_not_actionable'};
+                }
+                if (typeof expected === 'boolean' && controls.length === 1) return {ok:true};
+                const desired = (Array.isArray(expected) ? expected : [expected]).map((value) => clean(value));
+                const matches = desired.map((value) => controls.filter((control) => optionIdentity(control).includes(value)));
+                return matches.some((items) => items.length !== 1)
+                  ? {ok:false, reason:'choice_option_not_exact'}
+                  : {ok:true};
+              };
+              const valuePreflights = plans.map(({field, plan}) => {
+                if (plan.kind === 'sku_rows') {
+                  for (const rowPlan of plan.rows) {
+                    for (const keyPlan of rowPlan.keys) {
+                      const detail = keyPlan.mutable
+                        ? preflightSingle(keyPlan.control, keyPlan.expected)
+                        : {
+                            ok:sameExpected(readControl(keyPlan.control), keyPlan.expected),
+                            reason:'sku_readonly_value_mismatch',
+                          };
+                      if (!detail.ok) return {field, plan, ok:false, reason:detail.reason};
+                    }
+                  }
+                  return {field, plan, ok:true, reason:null};
+                }
+                const detail = plan.kind === 'choice_group'
+                  ? preflightChoices(plan.controls, field.resolved_value)
+                  : preflightSingle(plan.controls[0], field.resolved_value);
+                return {field, plan, ok:detail.ok === true, reason:detail.reason || null};
+              });
+              const invalidValue = valuePreflights.find((item) => item.ok !== true);
+              if (invalidValue) {
+                return {
+                  ok:false,
+                  failure_code:'FROZEN_EXECUTION_BINDING_UNRESOLVED',
+                  message:`冻结字段 ${invalidValue.field.field_key} 在任何写入前无法证明目标值可执行：${invalidValue.reason}`,
+                  field_count:fields.length,
+                  fields:valuePreflights.map((item) => ({
+                    field_key:item.field.field_key,
+                    ui_binding:item.field.ui_binding,
+                    ok:item.ok === true,
+                    reason:item.reason,
+                    match_count:item.plan.match_count || 0,
+                  })),
+                  write_attempted:false,
+                };
+              }
+              const writeSingle = (control, expected) => {
+                if (control.hasAttribute?.('data-resolved-json')) {
+                  const observed = readControl(control);
+                  return {ok:same(observed, expected), observed, write_attempted:false};
+                }
+                if (control.tagName === 'SELECT') {
+                  const desired = Array.isArray(expected) ? expected.map(String) : [String(expected ?? '')];
+                  const options = Array.from(control.options || []);
+                  const matches = desired.map((value) => options.filter((option) => (
+                    clean(option.value) === clean(value) || clean(option.textContent) === clean(value)
+                  )));
+                  if (matches.some((items) => items.length !== 1) || (!control.multiple && desired.length !== 1)) {
+                    return {ok:false, reason:'select_option_not_exact', write_attempted:false};
+                  }
+                  const selected = new Set(matches.flat());
+                  for (const option of options) option.selected = selected.has(option);
+                  control.dispatchEvent(new Event('input', {bubbles:true}));
+                  control.dispatchEvent(new Event('change', {bubbles:true}));
+                  control.dispatchEvent(new Event('blur', {bubbles:true}));
+                  const observed = readControl(control);
+                  return {ok:same(observed, control.multiple ? desired : desired[0]), observed, write_attempted:true};
+                }
+                if (expected !== null && typeof expected === 'object') {
+                  return {ok:false, reason:'complex_value_not_writable', write_attempted:false};
+                }
+                const ok = setText(control, expected);
+                return {ok, observed:readControl(control), write_attempted:true};
+              };
+              const writeChoices = (controls, expected) => {
+                if (typeof expected === 'boolean' && controls.length === 1) {
+                  const control = controls[0];
+                  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked')?.set;
+                  if (setter) setter.call(control, expected); else control.checked = expected;
+                  control.dispatchEvent(new Event('input', {bubbles:true}));
+                  control.dispatchEvent(new Event('change', {bubbles:true}));
+                  return {ok:control.checked === expected, observed:control.checked, write_attempted:true};
+                }
+                const desired = (Array.isArray(expected) ? expected : [expected]).map((value) => clean(value));
+                const matches = desired.map((value) => controls.filter((control) => optionIdentity(control).includes(value)));
+                if (matches.some((items) => items.length !== 1)) {
+                  return {ok:false, reason:'choice_option_not_exact', write_attempted:false};
+                }
+                const selected = new Set(matches.flat());
+                for (const control of controls) {
+                  const checked = selected.has(control);
+                  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked')?.set;
+                  if (setter) setter.call(control, checked); else control.checked = checked;
+                  control.dispatchEvent(new Event('input', {bubbles:true}));
+                  control.dispatchEvent(new Event('change', {bubbles:true}));
+                }
+                const observed = controls.filter((control) => control.checked).map((control) => optionIdentity(control)[0]);
+                const normalized = Array.isArray(expected) ? observed : observed[0];
+                return {ok:same(normalized, expected), observed:normalized, write_attempted:true};
+              };
+              const results = [];
+              let writeAttempted = false;
+              for (const item of plans) {
+                const {field, plan} = item;
+                if (plan.kind === 'sku_rows') {
+                  const observedRows = [];
+                  let ok = true;
+                  let reason = null;
+                  let wrote = false;
+                  for (const rowPlan of plan.rows) {
+                    const observedRow = {};
+                    for (const keyPlan of rowPlan.keys) {
+                      let detail;
+                      if (keyPlan.mutable) {
+                        detail = writeSingle(keyPlan.control, keyPlan.expected);
+                      } else {
+                        const observed = readControl(keyPlan.control);
+                        detail = {ok:sameExpected(observed, keyPlan.expected), observed, write_attempted:false};
+                      }
+                      observedRow[keyPlan.key] = normalizeForExpected(
+                        detail.observed,
+                        keyPlan.expected,
+                      );
+                      wrote = wrote || detail.write_attempted === true;
+                      if (!detail.ok && ok) {
+                        ok = false;
+                        reason = detail.reason || `sku_subfield_mismatch:${keyPlan.key}`;
+                      }
+                    }
+                    observedRows.push(observedRow);
+                  }
+                  writeAttempted = writeAttempted || wrote;
+                  results.push({
+                    field_key:field.field_key,
+                    ui_binding:field.ui_binding,
+                    ok:ok && same(observedRows, field.resolved_value),
+                    reason,
+                    match_count:plan.match_count,
+                    aggregate_kind:'sku_rows',
+                    strategy:plan.strategy,
+                    write_attempted:wrote,
+                  });
+                  continue;
+                }
+                const detail = plan.kind === 'choice_group'
+                  ? writeChoices(plan.controls, field.resolved_value)
+                  : writeSingle(plan.controls[0], field.resolved_value);
+                writeAttempted = writeAttempted || detail.write_attempted === true;
+                results.push({
+                  field_key:field.field_key,
+                  ui_binding:field.ui_binding,
+                  ok:detail.ok === true,
+                  reason:detail.reason || null,
+                  match_count:plan.match_count,
+                  aggregate_kind:plan.kind,
+                  strategy:plan.strategy,
+                  write_attempted:detail.write_attempted === true,
+                });
+              }
+              const failed = results.find((item) => item.ok !== true);
+              return {
+                ok:!failed,
+                failure_code:failed ? 'FROZEN_EXECUTION_FIELD_WRITE_MISMATCH' : null,
+                message:failed
+                  ? `冻结字段 ${failed.field_key} 写入或即时读回不一致。`
+                  : '已按冻结 UI binding 填写全部字段。',
+                field_count:results.length,
+                fields:results,
+                write_attempted:writeAttempted,
+              };
+            }''', {'fields': descriptors, 'operation': operation})
+        except Exception as exc:  # noqa: BLE001 - browser binding must fail closed.
+            return {
+                'ok': False,
+                'stage': 'fill_frozen_execution_payload_failed',
+                'failure_code': 'FROZEN_EXECUTION_BROWSER_WRITE_FAILED',
+                'message': f'冻结字段页面写入异常：{str(exc)[:240]}',
+                'execution_payload_hash': payload_hash,
+                'field_count': len(descriptors),
+                'fields': [],
+                'write_attempted': False,
+            }
+
+        if operation == 'readback':
+            raw_observations = (
+                raw_result.get('observations')
+                if isinstance(raw_result, Mapping)
+                else None
+            )
+            return {
+                'ok': bool(
+                    isinstance(raw_result, Mapping)
+                    and raw_result.get('ok') is True
+                    and isinstance(raw_observations, list)
+                    and len(raw_observations) == len(descriptors)
+                ),
+                'reason': (
+                    None
+                    if isinstance(raw_result, Mapping) and raw_result.get('ok') is True
+                    else str(
+                        raw_result.get('failure_code')
+                        if isinstance(raw_result, Mapping)
+                        else 'FROZEN_EXECUTION_BROWSER_RESULT_INVALID'
+                    )
+                ),
+                'observations': (
+                    list(raw_observations)
+                    if isinstance(raw_observations, list)
+                    else []
+                ),
+                'execution_payload_hash': payload_hash,
+                'write_attempted': False,
+            }
+
+        raw_fields = raw_result.get('fields') if isinstance(raw_result, Mapping) else None
+        returned_keys = [
+            str(item.get('field_key') or '')
+            for item in raw_fields
+            if isinstance(item, Mapping)
+        ] if isinstance(raw_fields, list) else []
+        expected_keys = [item['field_key'] for item in descriptors]
+        exact_result_shape = bool(
+            isinstance(raw_result, Mapping)
+            and isinstance(raw_fields, list)
+            and int(raw_result.get('field_count') or 0) == len(descriptors)
+            and returned_keys == expected_keys
+            and len(set(returned_keys)) == len(returned_keys)
+        )
+        ok = bool(
+            exact_result_shape
+            and raw_result.get('ok') is True
+            and all(
+                isinstance(item, Mapping)
+                and item.get('ok') is True
+                and item.get('ui_binding') == descriptors[index]['ui_binding']
+                for index, item in enumerate(raw_fields)
+            )
+        )
+        return {
+            'ok': ok,
+            'stage': (
+                'fill_frozen_execution_payload_ready'
+                if ok
+                else 'fill_frozen_execution_payload_failed'
+            ),
+            'failure_code': (
+                None
+                if ok
+                else str(
+                    raw_result.get('failure_code')
+                    if isinstance(raw_result, Mapping)
+                    else 'FROZEN_EXECUTION_BROWSER_RESULT_INVALID'
+                )
+            ),
+            'message': (
+                str(raw_result.get('message') or '')
+                if isinstance(raw_result, Mapping)
+                else '冻结字段页面写入没有返回结构化结果。'
+            ),
+            'execution_payload_hash': payload_hash,
+            'field_count': len(descriptors),
+            'fields': list(raw_fields) if isinstance(raw_fields, list) else [],
+            'write_attempted': bool(
+                isinstance(raw_result, Mapping)
+                and raw_result.get('write_attempted') is True
+            ),
         }
 
     def _enable_semi_managed_on_page(self, page: Page) -> dict[str, Any]:
@@ -10095,6 +11455,7 @@ class DxmLoginFlow:
                     'strategy': 'explicit_template_title',
                     'missing': [] if self._is_safe_english_title(values['title']) else ['category.explicit_title_value'],
                 }
+            expected_title_value = str(title_action.get('value') or existing_state_title).strip()
             if title_action.get('ok') and not title_action.get('write'):
                 title_ok = True
                 title_strategy = str(title_action.get('strategy') or 'preserve_existing_visible_editor_state')
@@ -10205,13 +11566,17 @@ class DxmLoginFlow:
             delivery_readback_state = self._visible_editor_text_input_state(page, '发货期限')
             sku_readback = str(sku_readback_state.get('value') or '').strip() if isinstance(sku_readback_state, dict) else ''
             delivery_readback = str(delivery_readback_state.get('value') or '').strip() if isinstance(delivery_readback_state, dict) else ''
-            title_ok = bool(title_ok and title_readback and title_readback == str(values['title']).strip())
-            sku_ok = bool(sku_ok and sku_readback and sku_readback == str(values['sku_code']).strip())
+            title_ok = bool(title_ok and title_readback and title_readback == expected_title_value)
+            sku_ok = bool(sku_ok and sku_readback and sku_readback == safe_sku_code)
             delivery_ok = bool(
                 delivery_fill.get('ok') is True
                 and delivery_readback
                 and delivery_readback == str(values['delivery_days']).strip()
             )
+            if title_ok:
+                values['title'] = expected_title_value
+            if sku_ok:
+                values['sku_code'] = safe_sku_code
             field_result.update({
                 'title': title_ok,
                 'sku_code': sku_ok,
@@ -13317,25 +14682,35 @@ class DxmLoginFlow:
           const scope = root || document;
           const candidateSelects = Array.from(scope.querySelectorAll('.ant-select')).filter(visible);
           const terms = priorities.map(String).filter(Boolean);
+          const expectedForSelectedText = (text) => {
+            const selected = norm(text);
+            return terms.find(term => {
+              const expected = norm(term);
+              return Boolean(expected && (selected === expected || selected === `${expected}${expected}`));
+            });
+          };
           const select = candidateSelects.find(el => {
             const text = textOf(el);
             return containsAny(text, templateTerms)
               || text.includes('请选择引用模板')
               || text.includes('---请选择引用模板---');
           });
-          const alreadySelected = candidateSelects.map(el => ({el, text:textOf(el)})).find(item => {
-            const selected = norm(item.text);
-            return terms.some(term => selected === norm(term)) && !item.text.includes('请选择');
-          });
+          const alreadySelected = candidateSelects
+            .map(el => {
+              const text = textOf(el);
+              return {el, text, expected:expectedForSelectedText(text)};
+            })
+            .find(item => item.expected && !item.text.includes('请选择'));
           if (!select && alreadySelected) {
-            const expected = terms.find(term => norm(term) === norm(alreadySelected.text));
+            const expected = alreadySelected.expected;
             const input = alreadySelected.el.querySelector('input');
             return {
               ok:Boolean(expected),
               already_selected:true,
               text:alreadySelected.text,
               expected_value:expected || null,
-              value_after:alreadySelected.text,
+              value_after:expected || null,
+              rendered_text:alreadySelected.text,
               exact_readback:Boolean(expected),
               input_id:input?.id || '',
               rect:rectOf(alreadySelected.el),
@@ -13348,14 +14723,15 @@ class DxmLoginFlow:
             select_candidates:candidateSelects.map(el => textOf(el).slice(0, 120)).filter(Boolean).slice(0, 12),
           };
           const selectedText = textOf(select);
-          const selectedExpected = terms.find(term => norm(selectedText) === norm(term));
+          const selectedExpected = expectedForSelectedText(selectedText);
           if (selectedExpected && !selectedText.includes('请选择')) {
             return {
               ok:true,
               already_selected:true,
               text:selectedText,
               expected_value:selectedExpected,
-              value_after:selectedText,
+              value_after:selectedExpected,
+              rendered_text:selectedText,
               exact_readback:true,
               input_id:select.querySelector('input')?.id || '',
               rect:rectOf(select),
@@ -13939,18 +15315,25 @@ class DxmLoginFlow:
             .replace(/选择分类/g, '')
             .replace(/自动识别分类/g, '')
             .replace(/请选择/g, '')
-            .replace(/[-—–_>＞/\\|:：]/g, '')
             .trim();
           const categoryPlaceholder = categoryText.includes('请选择分类') || !/[\u3400-\u9fffA-Za-z0-9]/.test(categoryValue);
           const expectedCategory = norm(expectedCategoryMatch);
+          const categorySegments = categoryValue
+            .split(/[>＞/\\|]/)
+            .map(value => norm(value).replace(/^[-—–_:：]+|[-—–_:：]+$/g, ''))
+            .filter(Boolean);
+          const parentheticalSegments = Array.from(categoryValue.matchAll(/[（(]([^()（）]+)[）)]/g))
+            .map(match => norm(match[1]))
+            .filter(Boolean);
           const categorySelected = Boolean(
             expectedCategory
             && categoryValue.length >= 2
             && !categoryPlaceholder
             && !categoryValue.includes('未选择')
             && (
-              categoryValue === expectedCategory
-              || categoryValue.split(/[>＞/|]/).filter(Boolean).includes(expectedCategory)
+              norm(categoryValue) === expectedCategory
+              || categorySegments.includes(expectedCategory)
+              || parentheticalSegments.includes(expectedCategory)
             )
           );
           if (!categorySelected) missing.push('category');
@@ -14749,6 +16132,7 @@ class DxmLoginFlow:
             return {x:r.x, y:r.y, w:r.width, h:r.height};
           };
           const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
           const overlaps = (a, b) => a.x < b.x + b.w + 80 && a.x + a.w > b.x - 80;
           const distance = (a, b) => Math.abs((a.x + a.w / 2) - (b.x + b.w / 2)) + Math.abs(a.y - (b.y + b.h));
           const options = Array.from(document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option, .ant-select-dropdown:not(.ant-select-dropdown-hidden) [role="option"]'))
@@ -15090,6 +16474,7 @@ class DxmLoginFlow:
             target.dispatchEvent(new Event('blur', {bubbles:true}));
             return String(target.value || '').trim() === String(value);
           };
+          const norm = (value) => String(value || '').replace(/\s+/g, '').trim().toLowerCase();
           const KEY_TERMS = ['产品价格', '重量', '尺寸', 'JIT库存', 'SKU编码', '货品编码', '货品条码', '物流属性', '是否原箱'];
           const headers = Array.from(document.querySelectorAll('th,td,label,div,span'))
             .filter(visible)
@@ -15686,6 +17071,201 @@ class DxmLoginFlow:
             'sha256': digest,
         }
 
+    @classmethod
+    def _capture_frozen_execution_readback(
+        cls,
+        page: Page,
+        execution_payload: Mapping[str, Any],
+        *,
+        phase: str,
+    ) -> dict[str, Any]:
+        fields = execution_payload.get('fields')
+        payload_hash = str(execution_payload.get('payload_hash') or '').strip().upper()
+        if not isinstance(fields, list) or not fields or re.fullmatch(r'[0-9A-F]{64}', payload_hash) is None:
+            return {
+                'schema': 'dxm.frozen_execution.readback.v1',
+                'ok': False,
+                'phase': phase,
+                'execution_payload_hash': payload_hash,
+                'field_count': 0,
+                'fields': [],
+                'reason': 'frozen_execution_payload_invalid',
+            }
+        descriptors = [
+            {
+                'field_key': str(field.get('field_key') or ''),
+                'ui_label_zh': str(field.get('ui_label_zh') or ''),
+                'ui_binding': str(field.get('ui_binding') or ''),
+                'resolved_value': field.get('resolved_value'),
+            }
+            for field in fields
+            if isinstance(field, Mapping)
+        ]
+        try:
+            runtime_result = cls._fill_frozen_execution_payload_on_page(
+                page,
+                execution_payload,
+                operation='readback',
+            )
+            raw_observations = runtime_result.get('observations', [])
+            if runtime_result.get('ok') is not True:
+                raise RuntimeError(
+                    str(runtime_result.get('reason') or 'frozen_execution_readback_failed')
+                )
+        except Exception as exc:  # noqa: BLE001 - readback must fail closed.
+            raw_observations = []
+            read_error = str(exc)[:240]
+        else:
+            read_error = None
+        observed_by_field = {
+            str(item.get('field_key') or ''): item
+            for item in raw_observations
+            if isinstance(item, Mapping)
+        } if isinstance(raw_observations, list) else {}
+        results: list[dict[str, Any]] = []
+        for field in fields:
+            if not isinstance(field, Mapping):
+                continue
+            field_key = str(field.get('field_key') or '')
+            observation = observed_by_field.get(field_key, {})
+            expected = field.get('resolved_value')
+            match_count = observation.get('match_count')
+            if isinstance(match_count, bool) or not isinstance(match_count, int):
+                match_count = 1 if observation.get('found') is True else 0
+            aggregate_kind = str(observation.get('aggregate_kind') or 'single')
+            binding_unambiguous = bool(
+                match_count == 1
+                or (
+                    aggregate_kind == 'choice_group'
+                    and match_count > 0
+                )
+                or (
+                    aggregate_kind == 'sku_rows'
+                    and isinstance(expected, list)
+                    and match_count > 0
+                )
+            )
+            observed = cls._normalize_frozen_readback_value(
+                expected,
+                observation.get('value'),
+            ) if observation.get('found') is True else None
+            expected_hash = cls._canonical_frozen_value_hash(expected)
+            observed_hash = cls._canonical_frozen_value_hash(observed)
+            results.append({
+                'field_key': field_key,
+                'ui_binding': str(field.get('ui_binding') or ''),
+                'expected_value_hash': expected_hash,
+                'observed_value_hash': observed_hash,
+                'match_count': match_count,
+                'aggregate_kind': aggregate_kind,
+                'exact': bool(
+                    observation.get('found') is True
+                    and binding_unambiguous
+                    and expected_hash == observed_hash
+                ),
+            })
+        ok = bool(
+            len(results) == len(fields)
+            and results
+            and all(item['exact'] is True for item in results)
+        )
+        ambiguous = any(
+            item['match_count'] != 1
+            and not (
+                item['aggregate_kind'] == 'choice_group'
+                and item['match_count'] > 0
+            )
+            and not (
+                item['aggregate_kind'] == 'sku_rows'
+                and isinstance(fields[index].get('resolved_value'), list)
+                and item['match_count'] > 0
+            )
+            for index, item in enumerate(results)
+        ) if len(results) == len(fields) else False
+        return {
+            'schema': 'dxm.frozen_execution.readback.v1',
+            'ok': ok,
+            'phase': phase,
+            'execution_payload_hash': payload_hash,
+            'field_count': len(results),
+            'fields': results,
+            'reason': (
+                None
+                if ok
+                else (
+                    read_error
+                    or ('frozen_execution_binding_ambiguous' if ambiguous else 'frozen_execution_value_mismatch')
+                )
+            ),
+        }
+
+    @classmethod
+    def _normalize_frozen_readback_value(cls, expected: Any, observed: Any) -> Any:
+        if isinstance(observed, list) and not isinstance(expected, list) and len(observed) == 1:
+            observed = observed[0]
+        if isinstance(expected, bool):
+            if isinstance(observed, bool):
+                return observed
+            text = str(observed or '').strip().casefold()
+            if text in {'1', 'true', 'yes', '是', 'checked'}:
+                return True
+            if text in {'0', 'false', 'no', '否', 'unchecked'}:
+                return False
+            return observed
+        if isinstance(expected, int) and not isinstance(expected, bool):
+            try:
+                return int(str(observed).strip())
+            except (TypeError, ValueError):
+                return observed
+        if isinstance(expected, float):
+            try:
+                return float(str(observed).strip())
+            except (TypeError, ValueError):
+                return observed
+        if isinstance(expected, str):
+            return str(observed or '').strip()
+        if isinstance(expected, list):
+            candidate = observed
+            if isinstance(candidate, str):
+                try:
+                    candidate = json.loads(candidate)
+                except (TypeError, ValueError):
+                    candidate = [part.strip() for part in candidate.split(';') if part.strip()]
+            if not isinstance(candidate, list) or len(candidate) != len(expected):
+                return candidate
+            return [
+                cls._normalize_frozen_readback_value(expected[index], value)
+                for index, value in enumerate(candidate)
+            ]
+        if isinstance(expected, Mapping):
+            candidate = observed
+            if isinstance(candidate, str):
+                try:
+                    candidate = json.loads(candidate)
+                except (TypeError, ValueError):
+                    return candidate
+            if not isinstance(candidate, Mapping) or set(candidate) != set(expected):
+                return candidate
+            return {
+                key: cls._normalize_frozen_readback_value(expected[key], candidate[key])
+                for key in expected
+            }
+        return observed
+
+    @staticmethod
+    def _canonical_frozen_value_hash(value: Any) -> str:
+        try:
+            encoded = json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(',', ':'),
+                allow_nan=False,
+            ).encode('utf-8')
+        except (TypeError, ValueError):
+            encoded = b'__DXM_NON_CANONICAL_VALUE__'
+        return hashlib.sha256(encoded).hexdigest().upper()
+
     def _save_only_on_page(
         self,
         page: Page,
@@ -15694,6 +17274,9 @@ class DxmLoginFlow:
         store_name: str | None,
         baseline_field_integrity: Mapping[str, Any] | None,
         required_readback_complete: bool,
+        expected_execution_payload: Mapping[str, Any] | None = None,
+        baseline_execution_readback: Mapping[str, Any] | None = None,
+        baseline_category_schema_readback: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         # A SAVE proof must be tied to the authorization that dispatched this
         # exact click, never to an earlier mutation in the same browser session.
@@ -15715,6 +17298,59 @@ class DxmLoginFlow:
             )
             baseline = dict(baseline_field_integrity or {})
             current = self._capture_save_field_integrity_snapshot(page)
+            frozen_readback = None
+            frozen_readback_ok = expected_execution_payload is None
+            category_schema_readback = None
+            category_schema_readback_ok = expected_execution_payload is None
+            if expected_execution_payload is not None:
+                category_schema_readback = self._capture_current_editor_category_schema(
+                    page,
+                    expected_execution_payload,
+                    phase='before_ledger_begin_dispatch',
+                )
+                baseline_category_schema = dict(
+                    baseline_category_schema_readback or {}
+                )
+                category_schema_readback_ok = bool(
+                    baseline_category_schema.get('ok') is True
+                    and category_schema_readback.get('ok') is True
+                    and baseline_category_schema.get('expected_category_id')
+                    == expected_execution_payload.get('category_id')
+                    and baseline_category_schema.get('observed_category_id')
+                    == expected_execution_payload.get('category_id')
+                    and category_schema_readback.get('observed_category_id')
+                    == expected_execution_payload.get('category_id')
+                    and baseline_category_schema.get(
+                        'expected_category_schema_hash'
+                    )
+                    == expected_execution_payload.get('category_schema_hash')
+                    and baseline_category_schema.get(
+                        'observed_category_schema_hash'
+                    )
+                    == expected_execution_payload.get('category_schema_hash')
+                    and category_schema_readback.get(
+                        'observed_category_schema_hash'
+                    )
+                    == expected_execution_payload.get('category_schema_hash')
+                )
+                frozen_readback = self._capture_frozen_execution_readback(
+                    page,
+                    expected_execution_payload,
+                    phase='before_ledger_begin_dispatch',
+                )
+                baseline_frozen = dict(baseline_execution_readback or {})
+                frozen_readback_ok = bool(
+                    baseline_frozen.get('ok') is True
+                    and frozen_readback.get('ok') is True
+                    and baseline_frozen.get('execution_payload_hash')
+                    == expected_execution_payload.get('payload_hash')
+                    and frozen_readback.get('execution_payload_hash')
+                    == expected_execution_payload.get('payload_hash')
+                    and baseline_frozen.get('field_count')
+                    == frozen_readback.get('field_count')
+                    and baseline_frozen.get('fields')
+                    == frozen_readback.get('fields')
+                )
             integrity_match = bool(
                 required_readback_complete is True
                 and baseline.get('ok') is True
@@ -15725,16 +17361,27 @@ class DxmLoginFlow:
                 and current.get('field_count') == baseline.get('field_count')
                 and current.get('nonempty_field_count') == baseline.get('nonempty_field_count')
                 and str(current.get('sha256') or '') == str(baseline.get('sha256') or '')
+                and category_schema_readback_ok
+                and frozen_readback_ok
             )
             final_pre_dispatch_readback.update({
                 'ok': integrity_match,
                 'identity': dict(identity),
                 'baseline_field_integrity': baseline,
                 'current_field_integrity': current,
+                'category_schema_readback': category_schema_readback,
+                'frozen_execution_readback': frozen_readback,
                 'required_readback_complete': required_readback_complete is True,
                 'write_attempted': False,
                 'phase': 'before_ledger_begin_dispatch',
-                'reason': None if integrity_match else 'required_field_integrity_changed_before_dispatch',
+                'reason': None if integrity_match else (
+                    'current_category_or_schema_changed_before_dispatch'
+                    if not category_schema_readback_ok
+                    else
+                    'frozen_execution_value_changed_before_dispatch'
+                    if not frozen_readback_ok
+                    else 'required_field_integrity_changed_before_dispatch'
+                ),
             })
             return dict(final_pre_dispatch_readback)
         unavailable_network_audit = {
@@ -15746,6 +17393,7 @@ class DxmLoginFlow:
             'mutation_request_count': 0,
             'save_request_count': 0,
             'other_mutation_request_count': 0,
+            'read_only_schema_request_count': 0,
             'publish_request_count': 0,
         }
         no_publish_signal = {
@@ -15897,6 +17545,7 @@ class DxmLoginFlow:
                         'network_save_success': False,
                         'page_save_success': False,
                         'publish_action_clicked': publish_signal.get('detected') is True,
+                        'pre_dispatch_readback': dict(final_pre_dispatch_readback),
                         'network_events': network_events[:8],
                         'network_audit': network_audit,
                         'publish_signal': publish_signal,
@@ -17216,6 +18865,11 @@ class DxmLoginFlow:
             return None
         path = parsed.path.lower()
         if str(method or '').upper() == 'POST' and path in {
+            '/api/smtcategory/attributelist.json',
+            '/api/smtcategory/childattributelist.json',
+        }:
+            return 'read_only_schema_request'
+        if str(method or '').upper() == 'POST' and path in {
             '/api/popchoiceproduct/add.json',
             '/api/smtproduct/add.json',
         }:
@@ -17238,6 +18892,10 @@ class DxmLoginFlow:
             value = network_audit.get(key)
             return isinstance(value, int) and not isinstance(value, bool) and value == expected
 
+        def non_negative_count(key: str) -> bool:
+            value = network_audit.get(key)
+            return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
         return bool(
             network_audit.get('scope') == 'same_origin_write_window'
             and network_audit.get('complete') is True
@@ -17247,6 +18905,7 @@ class DxmLoginFlow:
             and exact_count('mutation_request_count', 1)
             and exact_count('save_request_count', 1)
             and exact_count('other_mutation_request_count', 0)
+            and non_negative_count('read_only_schema_request_count')
             and exact_count('publish_request_count', 0)
             and publish_signal.get('detected') is False
             and publish_signal.get('kind') == 'network_route_classification'
@@ -17269,7 +18928,17 @@ class DxmLoginFlow:
                 continue
             removed += 1
         events = [dict(item) for item in list(session.get('events') or []) if isinstance(item, Mapping)]
-        mutation_requests = [item for item in events if item.get('request_observed') is True]
+        observed_requests = [item for item in events if item.get('request_observed') is True]
+        read_only_schema_requests = [
+            item
+            for item in observed_requests
+            if item.get('mutation_kind') == 'read_only_schema_request'
+        ]
+        mutation_requests = [
+            item
+            for item in observed_requests
+            if item.get('mutation_kind') != 'read_only_schema_request'
+        ]
         publish_requests = [
             item
             for item in mutation_requests
@@ -17309,6 +18978,7 @@ class DxmLoginFlow:
                 'mutation_request_count': len(mutation_requests),
                 'save_request_count': len(save_requests),
                 'other_mutation_request_count': len(other_mutation_requests),
+                'read_only_schema_request_count': len(read_only_schema_requests),
                 'publish_request_count': len(publish_requests),
             },
             'publish_signal': {
@@ -17391,6 +19061,7 @@ class DxmLoginFlow:
             has_browser=self._browser is not None,
             headless=self._is_headless(),
         )
+        self._promote_dxm_page_from_connected_browser()
         if self._page is not None and not self._is_playwright_object_closed(self._page):
             self._trace_workflow_event('ensure_page:reuse_page', current_url=getattr(self._page, 'url', None))
             return self._page
@@ -17461,6 +19132,70 @@ class DxmLoginFlow:
         self._reapply_live_hud_if_available(self._page)
         self._trace_workflow_event('ensure_page:new_page_created', current_url=getattr(self._page, 'url', None))
         return self._page
+
+    def _promote_dxm_page_from_connected_browser(self) -> Page | None:
+        """Promote an async-opened DXM home tab into the single session facade.
+
+        DXM login may replace or open a page after the login request has
+        returned.  Keeping the original public-root/about:blank Page object
+        splits UI status from Reader even though both pages share one visible
+        BrowserContext.  Business pages already in use are never displaced;
+        only a sterile/login placeholder is eligible for promotion.
+        """
+
+        current = self._page
+        if current is not None and not self._is_playwright_object_closed(current):
+            current_url = str(getattr(current, 'url', '') or '').strip()
+            try:
+                current_parsed = urlparse(current_url)
+            except ValueError:
+                current_parsed = urlparse('')
+            current_host = str(current_parsed.hostname or '').casefold()
+            current_path = str(current_parsed.path or '').rstrip('/').casefold()
+            current_is_dxm = current_host == 'dianxiaomi.com' or current_host.endswith('.dianxiaomi.com')
+            current_is_business_page = (
+                current_is_dxm
+                and current_path not in ('', '/', '/login')
+            )
+            if current_is_business_page:
+                return current
+
+        browser = self._browser
+        if browser is None or not self._is_browser_connected(browser):
+            return current
+        try:
+            contexts = list(getattr(browser, 'contexts', []) or [])
+        except Exception:
+            return current
+        for context in contexts:
+            try:
+                pages = list(getattr(context, 'pages', []) or [])
+            except Exception:
+                continue
+            for page in pages:
+                if self._is_playwright_object_closed(page):
+                    continue
+                page_url = str(getattr(page, 'url', '') or '').strip()
+                try:
+                    parsed = urlparse(page_url)
+                except ValueError:
+                    continue
+                host = str(parsed.hostname or '').casefold()
+                path = str(parsed.path or '').rstrip('/').casefold()
+                is_dxm = host == 'dianxiaomi.com' or host.endswith('.dianxiaomi.com')
+                if not is_dxm or (path != '/web/home' and not path.endswith('/index.htm')):
+                    continue
+                self._context = context
+                self._page = page
+                self._bind_browser_context_generation(context)
+                self._trace_workflow_event(
+                    'browser_session:promoted_authenticated_home',
+                    previous_url=str(getattr(current, 'url', '') or ''),
+                    current_url=page_url,
+                    human_step='登录跳转完成，已统一工作台与 Reader 会话',
+                )
+                return page
+        return current
 
     def _new_browser_context(self, browser: Browser) -> BrowserContext:
         context = browser.new_context(ignore_https_errors=True, viewport={'width': 1440, 'height': 1024})
@@ -17538,7 +19273,31 @@ class DxmLoginFlow:
         if self._browser is None:
             raise RuntimeError('真实浏览器接入失败，未获得可控浏览器会话。')
         contexts = list(getattr(self._browser, 'contexts', []) or [])
-        self._context = contexts[0] if contexts else self._browser.new_context(ignore_https_errors=True, viewport={'width': 1440, 'height': 1024})
+        selected_context: BrowserContext | None = None
+        selected_page: Page | None = None
+        fallback_context: BrowserContext | None = None
+        fallback_page: Page | None = None
+        for context in contexts:
+            for page in list(getattr(context, 'pages', []) or []):
+                page_url = str(getattr(page, 'url', '') or '').strip()
+                if fallback_page is None or page_url.casefold() != 'about:blank':
+                    fallback_context = context
+                    fallback_page = page
+                try:
+                    host = str(urlparse(page_url).hostname or '').casefold()
+                except ValueError:
+                    host = ''
+                if host == 'dianxiaomi.com' or host.endswith('.dianxiaomi.com'):
+                    selected_context = context
+                    selected_page = page
+                    break
+            if selected_page is not None:
+                break
+        self._context = selected_context or fallback_context or (
+            contexts[0]
+            if contexts
+            else self._browser.new_context(ignore_https_errors=True, viewport={'width': 1440, 'height': 1024})
+        )
         self._bind_browser_context_generation(self._context)
         self._trace_workflow_event(
             'ensure_page:external_cdp_connected',
@@ -17546,7 +19305,9 @@ class DxmLoginFlow:
             profile_dir=str(profile_dir),
             human_step='接入真实浏览器',
         )
-        return self._context.pages[0] if self._context.pages else self._context.new_page()
+        return selected_page or fallback_page or (
+            self._context.pages[0] if self._context.pages else self._context.new_page()
+        )
 
     def _visible_cdp_connect_timeout_ms(self) -> int:
         configured = os.getenv('DXM_VISIBLE_CDP_CONNECT_TIMEOUT_MS') or os.getenv('DXM_WORKFLOW_CDP_CONNECT_TIMEOUT_MS')
@@ -17605,9 +19366,19 @@ class DxmLoginFlow:
 
     def _existing_profile_devtools_port(self, profile_dir: Path) -> int | None:
         terminated_unhealthy = False
+        found_unreachable_port = False
         for command_line in self._chrome_command_lines_for_profile(profile_dir):
             port = self._remote_debugging_port_from_command_line(command_line)
-            if port and self._devtools_http_ready_on_port(port):
+            if port and not self._devtools_http_ready_on_port(port):
+                found_unreachable_port = True
+                self._trace_workflow_event(
+                    'ensure_page:external_cdp_existing_chrome_unreachable',
+                    port=port,
+                    profile_dir=str(profile_dir),
+                    human_step='旧执行浏览器控制端口失联，准备重启',
+                )
+                continue
+            if port:
                 if not self._devtools_page_runtime_healthy_on_port(port):
                     self._trace_workflow_event(
                         'ensure_page:external_cdp_existing_chrome_unhealthy',
@@ -17620,6 +19391,8 @@ class DxmLoginFlow:
                         terminated_unhealthy = True
                     continue
                 return port
+        if found_unreachable_port and not terminated_unhealthy:
+            self._terminate_existing_profile_chrome_processes(profile_dir)
         return None
 
     def _chrome_command_lines_for_profile(self, profile_dir: Path) -> list[str]:
@@ -17754,7 +19527,7 @@ class DxmLoginFlow:
             return True
         if os.getenv('DXM_WORKFLOW_PROFILE_DIR', '').strip():
             return True
-        return False
+        return not self._is_headless()
 
     def _install_data_acquisition_notice_auto_dismiss_for_context(self, context: BrowserContext) -> None:
         if not self._is_headless():

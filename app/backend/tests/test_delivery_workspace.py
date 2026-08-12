@@ -1,4 +1,5 @@
 import base64
+from copy import deepcopy
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
@@ -16,6 +17,10 @@ from src.services.state_consistency import audit_state_consistency
 from src.state_machine.two_stage import (
     canonical_claim_target_identity,
     canonical_source_identity,
+)
+from tests.test_action_result_contract import (
+    _valid_save_result as _strict_save_action_result,
+    _valid_unpublished_result as _strict_unpublished_action_result,
 )
 
 
@@ -861,13 +866,11 @@ def _create_delivery_fixture(
         "published": False,
     }
     if with_network:
-        network_events = [
-            {
-                "method": "POST",
-                "url": "https://www.dianxiaomi.com/api/smt/product/save",
-                "status": 200,
-            }
-        ]
+        strict_save = deepcopy(_strict_save_action_result())
+        strict_verify = deepcopy(_strict_unpublished_action_result())
+        save_result = deepcopy(strict_save["evidence"]["observations"]["save_result"])
+        save_result["message"] = "已点击保存"
+        network_events = []
         if with_publish_network:
             network_events.append(
                 {
@@ -876,22 +879,12 @@ def _create_delivery_fixture(
                     "status": 200,
                 }
             )
-        save_result.update(
-            {
-                "network_save_result": {
-                    "ok": True,
-                    "method": "POST",
-                    "url": "https://www.dianxiaomi.com/api/smt/product/save",
-                    "code": 0,
-                    "msg": "产品已保存到「待发布」",
-                },
-                "network_events": network_events,
-                "har_summary": {
-                    "save_response_seen": True,
-                    "path": "data/network_logs/save.har",
-                },
-            }
-        )
+        if network_events:
+            save_result["network_events"] = network_events
+        strict_save["evidence"]["observations"]["save_result"] = deepcopy(save_result)
+    else:
+        strict_save = None
+        strict_verify = None
 
     summary = {
         "task_id": task["id"],
@@ -923,20 +916,24 @@ def _create_delivery_fixture(
             }
         ],
         "workflow_actions": ["save_only", "verify_not_published"],
-        "workflow_results": [
-            {
-                "action": "save_only",
-                "ok": True,
-                "save_result": save_result,
-                "screenshot_url": "/artifacts/screenshots/dianxiaomi_save_only.png",
-            },
-            {
-                "action": "verify_not_published",
-                "ok": True,
-                "published": published_value,
-                "screenshot_url": "/artifacts/screenshots/dianxiaomi_verify_not_published.png",
-            },
-        ],
+        "workflow_results": (
+            [strict_save, strict_verify]
+            if strict_save is not None and strict_verify is not None
+            else [
+                {
+                    "action": "save_only",
+                    "ok": True,
+                    "save_result": save_result,
+                    "screenshot_url": "/artifacts/screenshots/dianxiaomi_save_only.png",
+                },
+                {
+                    "action": "verify_not_published",
+                    "ok": True,
+                    "published": published_value,
+                    "screenshot_url": "/artifacts/screenshots/dianxiaomi_verify_not_published.png",
+                },
+            ]
+        ),
         "published": published_value,
     }
     if not with_verify_proof:
@@ -1112,20 +1109,11 @@ def _create_two_stage_delivery_fixture(
         }
     )
     save_job = repo.get_task(save_task["id"])["jobs"][0]
-    save_result = {
-        "ok": True,
-        "message": "已点击保存",
-        "success_text": "编辑成功",
-        "published": False,
-        "network_save_result": {
-            "ok": True,
-            "method": "POST",
-            "url": "https://www.dianxiaomi.com/api/popChoiceProduct/add.json",
-            "status": 200,
-            "code": 0,
-            "msg": "您的产品编辑保存成功！",
-        },
-    }
+    strict_save = deepcopy(_strict_save_action_result())
+    strict_verify = deepcopy(_strict_unpublished_action_result())
+    save_result = deepcopy(strict_save["evidence"]["observations"]["save_result"])
+    save_result["message"] = "已点击保存"
+    strict_save["evidence"]["observations"]["save_result"] = deepcopy(save_result)
     save_summary = {
         "stage": "draft_edit_save",
         "status": "success",
@@ -1133,20 +1121,7 @@ def _create_two_stage_delivery_fixture(
         "claim_task_id": claim_task["id"],
         "claimed_product_id": product["id"],
         "workflow_actions": ["save_only", "verify_not_published"],
-        "workflow_results": [
-            {
-                "action": "save_only",
-                "ok": True,
-                "save_result": save_result,
-                "screenshot_url": "/artifacts/screenshots/save.png",
-            },
-            {
-                "action": "verify_not_published",
-                "ok": True,
-                "published": False,
-                "screenshot_url": "/artifacts/screenshots/not_published.png",
-            },
-        ],
+        "workflow_results": [strict_save, strict_verify],
         "published": False,
     }
     save_evidence_ref = _evidence_ref(f"save-{save_task['id']}-{save_job['id']}.png")
@@ -1227,30 +1202,16 @@ def _create_delivery_fixture_with_missing_second_job(repo: Repository) -> dict:
         }
     )
     first_job = repo.get_task(task["id"])["jobs"][0]
-    save_result = {
-        "ok": True,
-        "message": "已点击保存",
-        "success_text": "编辑成功",
-        "published": False,
-        "network_save_result": {
-            "ok": True,
-            "method": "POST",
-            "url": "https://www.dianxiaomi.com/api/smt/product/save",
-            "code": 0,
-            "msg": "产品已保存到「待发布」",
-        },
-        "har_summary": {"save_response_seen": True, "path": "data/network_logs/save.har"},
-    }
+    strict_save = deepcopy(_strict_save_action_result())
+    strict_verify = deepcopy(_strict_unpublished_action_result())
+    save_result = deepcopy(strict_save["evidence"]["observations"]["save_result"])
     summary = {
         "task_id": task["id"],
         "job_id": first_job["id"],
         "product_id": products[0]["id"],
         "mode": "batch_save",
         "status": "success",
-        "workflow_results": [
-            {"action": "save_only", "ok": True, "save_result": save_result, "screenshot_url": "/artifacts/screenshots/save.png"},
-            {"action": "verify_not_published", "ok": True, "published": False, "screenshot_url": "/artifacts/screenshots/not_published.png"},
-        ],
+        "workflow_results": [strict_save, strict_verify],
         "published": False,
     }
     save_evidence_ref = _evidence_ref(
@@ -1438,7 +1399,12 @@ def test_delivery_workspace_returns_frontend_contract(tmp_path, monkeypatch):
     assert data["dxmReferenceTemplates"][2]["section"] == "freight"
     assert data["dxmReferenceTemplates"][2]["templateNames"] == ["40g普货包裹"]
     assert data["real_mode_release_plan"]["schema"] == "dxm_real_mode_release_plan.v1"
-    assert [item["mode"] for item in data["real_mode_release_plan"]["modes"]] == ["single_save", "claim_only", "batch_save"]
+    assert [item["mode"] for item in data["real_mode_release_plan"]["modes"]] == [
+        "single_save",
+        "claim_only",
+        "controlled_edit_batch",
+        "batch_save",
+    ]
 
 
 def test_delivery_workspace_exposes_unreleased_real_mode_release_plan(tmp_path, monkeypatch):
@@ -1449,7 +1415,7 @@ def test_delivery_workspace_exposes_unreleased_real_mode_release_plan(tmp_path, 
 
     assert response.status_code == 200
     plan = response.json()["real_mode_release_plan"]
-    assert plan["scope"] == "controlled_claim_and_single_save"
+    assert plan["scope"] == "controlled_claim_single_save_and_edit_batch"
     assert plan["batch_unattended_publish_allowed"] is False
     assert plan["publish_allowed"] is False
     modes = {item["mode"]: item for item in plan["modes"]}
@@ -1461,7 +1427,7 @@ def test_delivery_workspace_exposes_unreleased_real_mode_release_plan(tmp_path, 
     assert single_save_checklist["l2_dual_target"]["status"] == "blocked"
     assert single_save_checklist["l2_dual_target"]["blocker"] == "fresh L2 existing-claim-list and draft-box readonly proof is missing or stale"
     assert single_save_checklist["l3_single_canary"]["status"] == "passed"
-    assert "historical single_save canary" in single_save_checklist["l3_single_canary"]["label"]
+    assert "当前任务完整保存与未发布证据" in single_save_checklist["l3_single_canary"]["label"]
     assert modes["claim_only"]["status"] == "blocked_stale_l2"
     assert modes["claim_only"]["allowed"] is False
     assert modes["claim_only"]["release_scope"] == "controlled claim to draft box"
@@ -1469,26 +1435,35 @@ def test_delivery_workspace_exposes_unreleased_real_mode_release_plan(tmp_path, 
     assert modes["batch_save"]["allowed"] is False
     assert modes["batch_save"]["release_scope"] == "not released"
     assert any("claim to draft box proof" in item for item in modes["claim_only"]["required_evidence"])
-    assert any("batch size limit" in item for item in modes["batch_save"]["required_evidence"])
+    assert modes["batch_save"]["required_evidence"] == [
+        "not applicable; use controlled_edit_batch instead"
+    ]
     operator_release_text = json.dumps(plan, ensure_ascii=False)
     assert "data_acquisition" not in operator_release_text
     assert "unique acquisition product proof" not in operator_release_text
     assert "已有待认领列表" in operator_release_text
     assert "受控待认领入箱" in operator_release_text
-    assert any("rollback" in item for item in modes["batch_save"]["required_controls"])
+    assert modes["batch_save"]["required_controls"] == [
+        "task mode batch_save stays blocked",
+        "unattended scheduling stays blocked",
+    ]
     assert modes["claim_only"]["blockers"]
-    assert any("cannot reuse single_save" in item for item in modes["batch_save"]["blockers"])
+    assert modes["batch_save"]["blockers"] == [
+        "legacy batch_save is outside the release surface"
+    ]
     for mode in ("batch_save",):
         checklist = modes[mode]["readiness_checklist"]
         assert checklist
         assert all({"id", "label", "required", "status", "evidence_source", "blocker", "detail"} <= set(item) for item in checklist)
-        assert all(item["status"] == "missing" for item in checklist)
-        assert any(item["blocker"] == "cannot reuse single_save evidence" for item in checklist)
+        assert all(item["status"] == "blocked" for item in checklist)
+        assert any(item["blocker"] == "use controlled_edit_batch" for item in checklist)
     claim_checklist = {item["id"]: item for item in modes["claim_only"]["readiness_checklist"]}
     assert claim_checklist["l2_dual_target"]["status"] == "blocked"
     assert claim_checklist["claim_ownership_proof"]["status"] == "blocked"
     assert claim_checklist["no_editor_or_save"]["status"] == "passed"
-    assert any(item["id"] == "batch_size_limit" for item in modes["batch_save"]["readiness_checklist"])
+    assert [item["id"] for item in modes["batch_save"]["readiness_checklist"]] == [
+        "legacy_mode_blocked"
+    ]
 
 
 def test_delivery_workspace_delivery_scope_releases_claim_and_single_save_only(tmp_path, monkeypatch):
@@ -1514,7 +1489,7 @@ def test_delivery_workspace_delivery_scope_releases_claim_and_single_save_only(t
     data = response.json()
     plan = data["real_mode_release_plan"]
     modes = {item["mode"]: item for item in plan["modes"]}
-    assert plan["scope"] == "controlled_claim_and_single_save"
+    assert plan["scope"] == "controlled_claim_single_save_and_edit_batch"
     assert plan["publish_allowed"] is False
     assert plan["batch_unattended_publish_allowed"] is False
     assert modes["single_save"]["allowed"] is True
@@ -2176,15 +2151,15 @@ def test_delivery_workspace_exposes_publish_guard_and_dxm_reference_fields(tmp_p
     assert data["report_summary"]["dxm_reference_fields"]["freight"]["resolved"]["required"] is True
 
 
-def test_delivery_workspace_grades_b_without_network_or_har_save_response(tmp_path, monkeypatch):
+def test_delivery_workspace_grades_c_without_network_or_har_save_response(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     fixture = _create_delivery_fixture(repo, with_network=False)
 
     data = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}").json()
 
     assert data["evidence_grade"]["grade"] == "C"
-    assert data["evidence_grade"]["raw_evidence_grade"] == "B"
-    assert data["evidence_grade"]["has_save_result"] is True
+    assert data["evidence_grade"]["raw_evidence_grade"] == "C"
+    assert data["evidence_grade"]["has_save_result"] is False
     assert data["evidence_grade"]["has_network_or_har_save_response"] is False
 
 
@@ -2210,7 +2185,7 @@ def test_delivery_workspace_does_not_treat_generic_ok_as_network_save_response(t
     assert not any(point["kind"] == "network_save_result" for point in data["evidence_points"])
 
 
-def test_delivery_workspace_accepts_dxm_add_json_code_zero_as_save_response(tmp_path, monkeypatch):
+def test_delivery_workspace_accepts_dxm_add_json_network_event_as_response(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     fixture = _create_delivery_fixture(repo, with_network=False)
     report = repo.list_reports(fixture["task"]["id"])[0]
@@ -2245,11 +2220,11 @@ def test_delivery_workspace_accepts_dxm_add_json_code_zero_as_save_response(tmp_
     data = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}").json()
 
     assert data["delivery_readiness"]["jobs"][0]["has_network_or_har_save_response"] is True
-    assert data["evidence_grade"]["has_network_or_har_save_response"] is True
+    assert data["evidence_grade"]["has_network_or_har_save_response"] is False
     assert any(point["kind"] == "network_save_result" for point in data["evidence_points"])
 
 
-def test_delivery_workspace_accepts_smt_add_json_nested_success_as_save_response(tmp_path, monkeypatch):
+def test_delivery_workspace_accepts_smt_add_json_nested_network_event(tmp_path, monkeypatch):
     client, repo = _client_with_temp_repo(tmp_path, monkeypatch)
     fixture = _create_delivery_fixture(repo, with_network=False)
     report = repo.list_reports(fixture["task"]["id"])[0]
@@ -2301,7 +2276,7 @@ def test_delivery_workspace_accepts_smt_add_json_nested_success_as_save_response
     data = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}").json()
 
     assert data["delivery_readiness"]["jobs"][0]["has_network_or_har_save_response"] is True
-    assert data["evidence_grade"]["has_network_or_har_save_response"] is True
+    assert data["evidence_grade"]["has_network_or_har_save_response"] is False
     assert any(
         point["kind"] == "network_save_result"
         and point["network_save_result"]["url"].endswith("/api/smtProduct/add.json")
@@ -2900,7 +2875,7 @@ def test_delivery_workspace_ignores_ambient_publish_buttons_in_body_excerpt(tmp_
 
     data = client.get(f"/api/delivery/workspace?task_id={fixture['task']['id']}").json()
 
-    assert data["publish_guard_state"]["status"] == "safe_unpublished"
+    assert data["publish_guard_state"]["status"] == "waiting_for_unpublished_proof"
     assert data["evidence_grade"]["has_publish_risk"] is False
 
 

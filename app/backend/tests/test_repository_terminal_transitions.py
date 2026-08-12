@@ -11,6 +11,7 @@ from src import db
 from src.core import config
 from src.execution.v1_runner import V1TaskRunner
 from src.repository import Repository, TerminalReportConflictError
+from tests.test_v1_runner import _canonical_test_action_result
 
 
 _MINIMAL_VALID_PNG = base64.b64decode(
@@ -442,7 +443,7 @@ class _LateClaimResultAdapter:
         )
 
     def _result(self, action: str, *, evidence: dict | None = None):
-        return {
+        legacy_result = {
             "ok": True,
             "action": action,
             "stage": f"{action}_stage",
@@ -454,7 +455,10 @@ class _LateClaimResultAdapter:
             ),
             "screenshot_url": f"/artifacts/{action}.png",
             "evidence": evidence or {"action": action},
+            "product_query": "真实待认领商品 A",
+            "store_name": "Dang Kang",
         }
+        return _canonical_test_action_result(action, legacy_result)
 
 
 class _NonTerminalStateConflictAdapter(_LateClaimResultAdapter):
@@ -513,6 +517,7 @@ def test_claim_runner_stops_without_success_epilogue_when_terminal_transition_re
     screenshot_dir = tmp_path / "screenshots"
     screenshot_dir.mkdir()
     monkeypatch.setattr(v1_runner, "SCREENSHOT_DIR", screenshot_dir)
+    monkeypatch.setattr(config, "SCREENSHOT_DIR", screenshot_dir)
     store = repo.create_store("Dang Kang", "AliExpress")
     task = repo.create_acquisition_claim_request(
         {
@@ -563,6 +568,7 @@ def test_claim_runner_records_nonterminal_transition_rejection_as_failure(tmp_pa
     screenshot_dir = tmp_path / "state-conflict-screenshots"
     screenshot_dir.mkdir()
     monkeypatch.setattr(v1_runner, "SCREENSHOT_DIR", screenshot_dir)
+    monkeypatch.setattr(config, "SCREENSHOT_DIR", screenshot_dir)
     store = repo.create_store("Dang Kang", "AliExpress")
     task = repo.create_acquisition_claim_request(
         {

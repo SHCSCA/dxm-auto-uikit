@@ -10,6 +10,7 @@ class ExecutionMode(StrEnum):
     CLAIM_ONLY = "claim_only"
     SINGLE_SAVE = "single_save"
     BATCH_SAVE = "batch_save"
+    BATCH_DRAFT_SAVE = "batch_draft_save"
 
 
 FORBIDDEN_EXECUTION_MODES = frozenset(

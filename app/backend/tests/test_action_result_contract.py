@@ -142,6 +142,7 @@ def _valid_save_result() -> dict:
         "mutation_request_count": 1,
         "save_request_count": 1,
         "other_mutation_request_count": 0,
+        "read_only_schema_request_count": 0,
         "publish_request_count": 0,
     }
     publish_signal = {
@@ -319,6 +320,204 @@ def _valid_unpublished_result() -> dict:
     return value
 
 
+def _path_a_execution_payload() -> dict:
+    body = {
+        "schema": "dxm.batch_draft_save.execution_payload.v1",
+        "product_id": "70001",
+        "category_id": "2621",
+        "category_schema_hash": "A" * 64,
+        "field_mapping_hash": "B" * 64,
+        "resolution_hash": "C" * 64,
+        "fields": [
+            {
+                "field_key": "weight",
+                "ui_label_zh": "包装重量",
+                "ui_binding": "dxm_editor:weight",
+                "category_schema_path": "$.properties.weight",
+                "resolved_value": "10",
+            }
+        ],
+        "unresolved_fields": [],
+        "price_validation": {"ok": True},
+    }
+    encoded = json.dumps(
+        body,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return {**body, "payload_hash": hashlib.sha256(encoded).hexdigest().upper()}
+
+
+def _as_path_a_editor(value: dict, execution_payload: dict | None = None) -> dict:
+    result = deepcopy(value)
+    result["page_identity"]["kind"] = "editor"
+    result["page_identity"]["url"] = _PAGE_URLS["editor"]
+    if result["attempted_state"] == "SAVE_ONLY":
+        execution_payload = execution_payload or _path_a_execution_payload()
+        value_hash = hashlib.sha256(b'"10"').hexdigest().upper()
+        category_schema_readback = {
+            "schema": "dxm.editor.category_schema_readback.v1",
+            "ok": True,
+            "phase": "before_ledger_begin_dispatch",
+            "expected_category_id": execution_payload["category_id"],
+            "observed_category_id": execution_payload["category_id"],
+            "expected_category_schema_hash": execution_payload[
+                "category_schema_hash"
+            ],
+            "observed_category_schema_hash": execution_payload[
+                "category_schema_hash"
+            ],
+            "category_source": "same_origin_attribute_schema",
+            "reason": None,
+        }
+        frozen_readback = {
+            "schema": "dxm.frozen_execution.readback.v1",
+            "ok": True,
+            "phase": "before_ledger_begin_dispatch",
+            "execution_payload_hash": execution_payload["payload_hash"],
+            "field_count": 1,
+            "fields": [
+                {
+                    "field_key": "weight",
+                    "ui_binding": "dxm_editor:weight",
+                    "expected_value_hash": value_hash,
+                    "observed_value_hash": value_hash,
+                    "match_count": 1,
+                    "aggregate_kind": "single",
+                    "exact": True,
+                }
+            ],
+            "reason": None,
+        }
+        for container in (
+            result["after_values"],
+            result["evidence"]["observations"],
+            result["evidence"]["observations"]["save_result"],
+        ):
+            container["pre_dispatch_readback"][
+                "category_schema_readback"
+            ] = deepcopy(category_schema_readback)
+            container["pre_dispatch_readback"][
+                "frozen_execution_readback"
+            ] = deepcopy(frozen_readback)
+        result["evidence"]["observations"]["save_result"]["network_audit"][
+            "read_only_schema_request_count"
+        ] = 1
+    if result["attempted_state"] == "VERIFY_NOT_PUBLISHED":
+        result["after_values"]["fresh_probe"]["page_url"] = _PAGE_URLS["editor"]
+        result["evidence"]["observations"]["fresh_probe"]["page_url"] = _PAGE_URLS[
+            "editor"
+        ]
+    return result
+
+
+def _canonical_sha256(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest().upper()
+
+
+def _bind_batch_save_verification_context(
+    save: dict,
+    verification: dict,
+    execution_payload: dict,
+) -> dict:
+    body = {
+        "schema": "dxm.batch_draft_save.save_verification.v1",
+        "task_id": 11,
+        "job_id": 22,
+        "execution_mode": "batch_draft_save",
+        "plan_snapshot_id": 33,
+        "plan_snapshot_hash": "1" * 64,
+        "queue_epoch": "2" * 64,
+        "queue_version": "3" * 64,
+        "runtime_id": save["page_identity"]["runtime_id"],
+        "browser_session_id": save["page_identity"]["browser_session_id"],
+        "git_head": "4" * 40,
+        "worktree_identity_sha256": "5" * 64,
+        "authorization_fingerprint": "6" * 64,
+        "authorization_lease_id": "contract-test-lease",
+        "stage_task_facts_fingerprint": "7" * 64,
+        "target_hash": "8" * 64,
+        "execution_payload_hash": execution_payload["payload_hash"],
+        "mutation_scope_id": "9" * 64,
+        "save_command_id": "contract-test-save-command",
+        "save_command_sha256": "A" * 64,
+        "save_action_result_sha256": _canonical_sha256(save),
+    }
+    context = {**body, "context_sha256": _canonical_sha256(body)}
+    verification["before_values"]["save_verification_context"] = deepcopy(context)
+    for container in (
+        verification["after_values"]["fresh_probe"],
+        verification["evidence"]["observations"]["fresh_probe"],
+    ):
+        container["save_verification_context"] = deepcopy(context)
+    return context
+
+
+def test_batch_path_a_save_and_unpublished_proof_are_native_editor_contracts():
+    execution_payload = _path_a_execution_payload()
+    save = _as_path_a_editor(_valid_save_result(), execution_payload)
+    unpublished = _as_path_a_editor(_valid_unpublished_result())
+    verification_context = _bind_batch_save_verification_context(
+        save,
+        unpublished,
+        execution_payload,
+    )
+
+    assert validate_action_result_envelope(
+        save,
+        expected_state="SAVE_ONLY",
+        expected_action="save_only",
+        expected_page="editor",
+        execution_mode="batch_draft_save",
+        expected_execution_payload=execution_payload,
+    )["page_identity"]["kind"] == "editor"
+    assert validate_independent_save_verification_pair(
+        save,
+        unpublished,
+        expected_page="editor",
+        execution_mode="batch_draft_save",
+        expected_execution_payload=execution_payload,
+        expected_verification_context=verification_context,
+    )["verification"]["page_identity"]["kind"] == "editor"
+
+    with pytest.raises(ActionResultContractError):
+        validate_action_result_envelope(
+            _valid_save_result(),
+            expected_state="SAVE_ONLY",
+            expected_action="save_only",
+            expected_page="semi_managed",
+            execution_mode="batch_draft_save",
+        )
+    with pytest.raises(ActionResultContractError):
+        validate_action_result_envelope(
+            save,
+            expected_state="SAVE_ONLY",
+            expected_action="save_only",
+            expected_page="editor",
+            execution_mode="single_save",
+        )
+
+    poisoned = deepcopy(save)
+    poisoned["page_identity"]["url"] = (
+        "https://www.dianxiaomi.com/web/smt/edit-not-a-real-editor"
+    )
+    with pytest.raises(ActionResultContractError):
+        validate_action_result_envelope(
+            poisoned,
+            expected_state="SAVE_ONLY",
+            expected_action="save_only",
+            expected_page="editor",
+        )
+
+
 def _valid_registered_result(action: str, state: str) -> dict:
     if action == "save_only" and state == "SAVE_ONLY":
         return _valid_save_result()
@@ -463,6 +662,85 @@ def test_save_result_requires_an_immutable_evidence_reference():
 
     assert captured.value.reason_code == "ACTION_RESULT_CONTRACT_VIOLATION"
     assert "immutable evidence" in str(captured.value)
+
+
+def test_save_result_requires_explicit_read_only_schema_request_count():
+    value = _valid_save_result()
+    value["evidence"]["observations"]["save_result"]["network_audit"].pop(
+        "read_only_schema_request_count"
+    )
+
+    with pytest.raises(ActionResultContractError):
+        validate_action_result_envelope(value)
+
+
+def test_batch_save_requires_current_category_schema_readback():
+    execution_payload = _path_a_execution_payload()
+    value = _as_path_a_editor(_valid_save_result(), execution_payload)
+    value["evidence"]["observations"]["save_result"][
+        "pre_dispatch_readback"
+    ].pop("category_schema_readback")
+    value["evidence"]["observations"]["save_result"]["network_audit"][
+        "read_only_schema_request_count"
+    ] = 1
+
+    with pytest.raises(ActionResultContractError, match="category_schema_readback"):
+        validate_action_result_envelope(
+            value,
+            expected_state="SAVE_ONLY",
+            expected_action="save_only",
+            expected_page="editor",
+            execution_mode="batch_draft_save",
+            expected_execution_payload=execution_payload,
+        )
+
+
+def test_batch_save_requires_a_live_read_only_schema_request():
+    execution_payload = _path_a_execution_payload()
+    value = _as_path_a_editor(_valid_save_result(), execution_payload)
+    value["evidence"]["observations"]["save_result"]["network_audit"][
+        "read_only_schema_request_count"
+    ] = 0
+
+    with pytest.raises(ActionResultContractError, match="read-only Schema request"):
+        validate_action_result_envelope(
+            value,
+            expected_state="SAVE_ONLY",
+            expected_action="save_only",
+            expected_page="editor",
+            execution_mode="batch_draft_save",
+            expected_execution_payload=execution_payload,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "drifted_value"),
+    [
+        ("expected_category_id", "9999"),
+        ("observed_category_id", "9999"),
+        ("expected_category_schema_hash", "D" * 64),
+        ("observed_category_schema_hash", "D" * 64),
+    ],
+)
+def test_batch_save_category_schema_readback_matches_frozen_execution_payload(
+    field, drifted_value
+):
+    execution_payload = _path_a_execution_payload()
+    value = _as_path_a_editor(_valid_save_result(), execution_payload)
+    category_schema_readback = value["evidence"]["observations"]["save_result"][
+        "pre_dispatch_readback"
+    ]["category_schema_readback"]
+    category_schema_readback[field] = drifted_value
+
+    with pytest.raises(ActionResultContractError, match="frozen execution payload"):
+        validate_action_result_envelope(
+            value,
+            expected_state="SAVE_ONLY",
+            expected_action="save_only",
+            expected_page="editor",
+            execution_mode="batch_draft_save",
+            expected_execution_payload=execution_payload,
+        )
 
 
 def test_success_rejects_a_page_identity_without_an_absolute_http_url():

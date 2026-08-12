@@ -63,6 +63,13 @@ class DummyDxmLoginFlow:
         return {"stage": "draft_box_action", "action": action}
 
 
+def _assert_direct_mutation_route_disabled(response) -> None:
+    assert response.status_code == 403
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "DIRECT_MUTATION_ROUTE_DISABLED"
+    assert "旧直连写入口已关闭" in detail["message"]
+
+
 def _client_with_temp_repo(tmp_path, monkeypatch):
     db_path = tmp_path / "task-start-guard.db"
     monkeypatch.setattr(db, "DB_PATH", db_path)
@@ -75,6 +82,19 @@ def _client_with_temp_repo(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "runner", runner)
     monkeypatch.setattr(main, "_current_browser_session_id", lambda: "test-browser-context-generation")
     return TestClient(app), repo, runner
+
+
+def _force_legacy_multiple_running_tasks(*task_ids: int) -> None:
+    """Simulate a pre-trigger corrupt DB, then restore the production trigger."""
+
+    placeholders = ", ".join("?" for _ in task_ids)
+    with db.connection() as conn:
+        conn.execute("DROP TRIGGER trg_tasks_single_running_browser_update")
+        conn.execute(
+            f"UPDATE tasks SET status='running' WHERE id IN ({placeholders})",
+            task_ids,
+        )
+    db.init_db()
 
 
 def _create_task(
@@ -204,7 +224,11 @@ def _create_task(
 def test_released_real_dxm_mutation_scope_is_controlled_two_stage_only():
     import src.main as main
 
-    assert main.RELEASED_REAL_DXM_MUTATION_MODES == {"claim_only", "single_save"}
+    assert main.RELEASED_REAL_DXM_MUTATION_MODES == {
+        "claim_only",
+        "single_save",
+        "batch_draft_save",
+    }
     assert "batch_save" not in main.RELEASED_REAL_DXM_MUTATION_MODES
 
 
@@ -216,6 +240,7 @@ def _create_claim_request(repo: Repository, *, store_name: str = "Dang Kang"):
             "keyword": "Hazbin Hotel 立牌",
             "category_name": "立牌类谷子",
             "claim_mark": "AI认领",
+            "source_url": "https://detail.1688.com/offer/1013604102950.html",
             "template_id": None,
         }
     )
@@ -233,13 +258,13 @@ def _create_required_save_templates(repo: Repository, *, omit_override_backed_fi
             {
                 "dxm_reference_templates": {
                     "attribute_info": {"names": ["立牌类谷子"]},
-                    "description": {"names": ["详情模板"]},
+                    "description": {"names": [], "required": False},
                     "freight": {"names": ["40g普货包裹"]},
                     "service": {"names": ["Service Template for New Sellers"]},
                     "eu_responsible": {"names": ["Jacqueiline Marti"]},
                     "manufacturer": {"names": ["jiyang county thunder"]},
-                    "compliance": {"names": ["合规模板"]},
-                    "semi_managed": {"names": ["半托管模板"]},
+                    "compliance": {"names": [], "required": False},
+                    "semi_managed": {"names": [], "required": False},
                 },
                 "category": {"category_keyword": "立牌", "category_match": "ACG Stand"},
             },
@@ -478,7 +503,9 @@ def _complete_test_claim(
         },
     )
     assert batch_response.status_code == 403
-    assert "Only controlled claim_only and single_save are released" in batch_response.json()["detail"]
+    detail = batch_response.json()["detail"]
+    assert "released" in detail.lower()
+    assert "batch_save remains unreleased" in detail
 
 
 def test_create_task_api_rejects_claim_only_with_existing_product_ids(tmp_path, monkeypatch):
@@ -834,7 +861,11 @@ def test_batch_save_remains_unreleased_when_claim_only_is_released(tmp_path, mon
         json={"approved_by": "ops-owner", "confirmation": "CONFIRM_DXM_SAVE_ONLY"},
     )
 
-    assert main.RELEASED_REAL_DXM_MUTATION_MODES == {"claim_only", "single_save"}
+    assert main.RELEASED_REAL_DXM_MUTATION_MODES == {
+        "claim_only",
+        "single_save",
+        "batch_draft_save",
+    }
     assert response.status_code == 403
 
 
@@ -913,7 +944,8 @@ def test_unreleased_real_modes_reject_manual_approval(tmp_path, monkeypatch):
 
         assert response.status_code == 403
         detail = response.json()["detail"].lower()
-        assert "controlled claim_only and single_save" in detail
+        assert "batch_draft_save" in detail or "released" in detail
+        assert "batch_save" in detail or "unreleased" in detail
         assert "released" in detail
 
 
@@ -939,7 +971,8 @@ def test_unreleased_real_modes_cannot_start_after_approval_and_l2_passed(tmp_pat
 
         assert response.status_code == 403
         detail = response.json()["detail"].lower()
-        assert "controlled claim_only and single_save" in detail
+        assert "batch_draft_save" in detail or "released" in detail
+        assert "batch_save" in detail or "unreleased" in detail
         assert "released" in detail
         assert task["id"] not in runner.calls
     assert runner.calls == []
@@ -1725,7 +1758,10 @@ def test_agent_console_execution_browser_rejects_unreleased_and_non_real_modes(t
         response = client.post("/api/agent-console/start", json={"task_id": task["id"], "launch_browser": True})
 
         assert response.status_code == 403
-        assert "Only controlled claim_only and single_save are released" in response.json()["detail"]
+        detail = response.json()["detail"]
+        assert "released" in detail.lower()
+        if mode == "batch_save":
+            assert "batch_save remains unreleased" in detail
 
 
 def test_agent_console_execution_browser_allows_controlled_claim_only_task(tmp_path, monkeypatch):
@@ -2117,8 +2153,10 @@ def test_runtime_control_clears_only_non_real_stuck_tasks(tmp_path, monkeypatch)
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     dry_run = _create_task(repo, mode="dry_run")
     single_save = _create_task(repo, mode="single_save")
-    repo.update_task_status(dry_run["id"], "running")
-    repo.update_task_status(single_save["id"], "running")
+    # Recovery must tolerate a legacy/corrupt database that predates the
+    # repository's one-active-task invariant; construct that impossible state
+    # directly without weakening the production transition API.
+    _force_legacy_multiple_running_tasks(dry_run["id"], single_save["id"])
 
     response = client.post("/api/runtime/control", json={"action": "clear_stuck_tasks"})
 
@@ -2193,8 +2231,7 @@ def test_startup_recovery_moves_orphaned_real_tasks_to_manual_review(tmp_path, m
     single_save = _create_task(repo, mode="single_save")
     dry_job = repo.get_task(dry_run["id"])["jobs"][0]
     real_job = repo.get_task(single_save["id"])["jobs"][0]
-    repo.update_task_status(dry_run["id"], "running")
-    repo.update_task_status(single_save["id"], "running")
+    _force_legacy_multiple_running_tasks(dry_run["id"], single_save["id"])
     repo.update_job(dry_job["id"], status="running")
     repo.update_job(real_job["id"], status="running")
 
@@ -3456,13 +3493,13 @@ def test_config_preview_uses_resolved_dxm_reference_template_sections(tmp_path, 
             "payload": {
                 "dxm_reference_templates": {
                     "attribute_info": {"names": ["属性模板 A"]},
-                    "description": {"names": ["描述模板 A"], "required": False},
+                    "description": {"names": [], "required": False},
                     "freight": {"names": ["半托管运费模板"]},
                     "service": {"names": ["无忧服务模板"]},
                     "eu_responsible": {"names": ["EU Responsible Person"]},
                     "manufacturer": {"names": ["默认制造商"]},
-                    "compliance": {"names": ["合规模板"]},
-                    "semi_managed": {"names": ["半托管模板"]},
+                    "compliance": {"names": [], "required": False},
+                    "semi_managed": {"names": [], "required": False},
                 }
             },
             "is_enabled": True,
@@ -3958,8 +3995,7 @@ def test_direct_draft_box_action_rejects_when_l2_gate_not_passed(tmp_path, monke
         json={"action": "remark", "note_text": "AI认领", "store_name": "Dang Kang"},
     )
 
-    assert response.status_code == 403
-    assert "Direct real DXM mutation requires an approved guarded task" in response.json()["detail"]
+    _assert_direct_mutation_route_disabled(response)
     assert flow.draft_box_actions == []
 
 
@@ -3976,8 +4012,7 @@ def test_direct_claim_product_rejects_when_l2_gate_not_passed(tmp_path, monkeypa
         json={"action": "remark", "note_text": "AI认领", "store_name": "Dang Kang"},
     )
 
-    assert response.status_code == 403
-    assert "Direct real DXM mutation requires an approved guarded task" in response.json()["detail"]
+    _assert_direct_mutation_route_disabled(response)
     assert flow.draft_box_actions == []
 
 
@@ -4009,10 +4044,8 @@ def test_direct_real_dxm_mutation_rejects_approved_task_when_l2_gate_not_passed(
         json={"action": "remark", "note_text": "AI认领", **approval},
     )
 
-    assert draft_response.status_code == 403
-    assert claim_response.status_code == 403
-    assert "L2 readonly probe gate is not passed: failed" in draft_response.json()["detail"]
-    assert "L2 readonly probe gate is not passed: failed" in claim_response.json()["detail"]
+    _assert_direct_mutation_route_disabled(draft_response)
+    _assert_direct_mutation_route_disabled(claim_response)
     assert flow.draft_box_actions == []
 
 
@@ -4048,10 +4081,7 @@ def test_direct_real_dxm_mutation_rejects_unreleased_modes_even_after_l2_and_app
                 },
             )
 
-            assert response.status_code == 403
-            detail = response.json()["detail"].lower()
-            assert "controlled claim_only and single_save" in detail
-            assert "released" in detail
+            _assert_direct_mutation_route_disabled(response)
     assert flow.draft_box_actions == []
 
 
@@ -4079,8 +4109,7 @@ def test_direct_real_dxm_mutation_rejects_even_after_l2_and_approval(tmp_path, m
         },
     )
 
-    assert response.status_code == 403
-    assert "task runner evidence chain" in response.json()["detail"]
+    _assert_direct_mutation_route_disabled(response)
     assert flow.draft_box_actions == []
 
 

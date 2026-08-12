@@ -21,6 +21,7 @@ from src.batch_edit.execution_contract import (
 )
 from src.batch_edit.scope_contract import canonical_sha256
 from src.execution.browser_agent_protocol import build_mutation_scope_id
+from src.services.dxm_reference_templates import EXECUTABLE_REFERENCE_TEMPLATE_SECTIONS
 
 
 NOW = datetime(2026, 7, 21, 9, 2, tzinfo=timezone.utc)
@@ -44,6 +45,7 @@ def _facts() -> tuple[dict, dict]:
         "runtime_identity": runtime,
         "browser_session_id": "session-1",
         "git_head": "a" * 40,
+        "l2_evidence_fingerprint": "F" * 64,
         "store_identity": store,
         "page_identity": page,
     }
@@ -99,7 +101,10 @@ def _approved_batch() -> tuple[dict, str, str, dict]:
         "created_at": "2026-07-21T09:00:00+00:00",
     }
     reference_templates = {
-        name: {"names": [f"{name}-template"], "required": True}
+        name: {
+            "names": [f"{name}-template"] if name in EXECUTABLE_REFERENCE_TEMPLATE_SECTIONS else [],
+            "required": name in EXECUTABLE_REFERENCE_TEMPLATE_SECTIONS,
+        }
         for name in (
             "attribute_info",
             "description",
@@ -173,7 +178,7 @@ def _approved_batch() -> tuple[dict, str, str, dict]:
             "binding": {
                 "store_id": 1,
                 "store_name": "DXM Shop A",
-                "category_name": "车载用品",
+                "category_name": None,
                 "platform": "AliExpress",
             },
             "source_templates": source_templates,
@@ -208,6 +213,7 @@ def _approved_batch() -> tuple[dict, str, str, dict]:
         "ordered_targets": {"items": targets, "digest": canonical_sha256(targets)},
         "store_identity": identity["store"],
         "runtime_identity": identity["runtime"],
+        "l2_evidence_fingerprint": "F" * 64,
         "read_attestation": {
             "kind": "scope_revalidation",
             "status": "matched",
@@ -231,6 +237,7 @@ def _approved_batch() -> tuple[dict, str, str, dict]:
 
 def test_old_batch_contract_rejects_category_bound_bundle_without_row_evidence() -> None:
     batch, _token, _token_hash, _context = _approved_batch()
+    batch["template_snapshot"]["payload"]["binding"]["category_name"] = "车载用品"
 
     with pytest.raises(BatchContractError) as caught:
         freeze_template_bundle(batch["template_snapshot"])
@@ -340,6 +347,10 @@ def _start() -> tuple[dict, dict]:
         now=NOW,
         authoritative_facts=facts,
     )
+    # The production grant contract consumes only a durably claimed running
+    # item.  Model the repository's start/claim CAS before deriving the grant.
+    batch["status"] = "running"
+    batch["items"][0]["status"] = "running"
     return batch, start
 
 
@@ -385,10 +396,10 @@ def test_derive_next_item_grant_issues_only_first_pending_ordinal_with_all_bindi
 @pytest.mark.parametrize(
     ("statuses", "reason_code"),
     [
-        (["running", "pending"], "BATCH_ITEM_RUNNING"),
+        (["running", "running"], "MULTIPLE_BATCH_ITEMS_RUNNING"),
         (["pending", "succeeded"], "BATCH_ITEM_ORDER_INVALID"),
-        (["failed", "pending"], "BATCH_PRIOR_ITEM_NONTERMINAL"),
-        (["pending", "running"], "BATCH_ITEM_RUNNING"),
+        (["failed", "pending"], "BATCH_ITEM_ORDER_INVALID"),
+        (["pending", "running"], "BATCH_ITEM_ORDER_INVALID"),
     ],
 )
 def test_derive_next_item_grant_rejects_running_prior_nonterminal_or_out_of_order(
@@ -412,8 +423,8 @@ def test_derive_next_item_grant_rejects_running_prior_nonterminal_or_out_of_orde
 
 def test_derive_next_item_grant_accepts_running_batch_after_start_cas_and_selects_second_item():
     batch, start = _start()
-    batch["status"] = "running"
     batch["items"][0]["status"] = "succeeded"
+    batch["items"][1]["status"] = "running"
 
     issued = derive_next_item_grant(
         batch,
@@ -450,10 +461,6 @@ def test_authorize_batch_start_accepts_only_the_safe_public_approval_summary_sha
         "approved": True,
         "approved_by": context["approved_by"],
         "approved_at": context["issued_at"],
-        "issued_at": context["issued_at"],
-        "expires_at": context["expires_at"],
-        "confirmation": context["confirmation"],
-        "scope_revalidation": context["read_attestation"],
     }
 
     result = authorize_batch_start(
@@ -542,6 +549,7 @@ def _execution_request(grant: dict) -> dict:
                 "runtime_identity",
                 "browser_session_id",
                 "git_head",
+                "l2_evidence_fingerprint",
                 "page_identity",
                 "mutation_scope_id",
                 "grant_lease_id",
@@ -551,7 +559,7 @@ def _execution_request(grant: dict) -> dict:
     }
 
 
-def test_validate_and_consume_grant_returns_one_pending_to_running_transition():
+def test_validate_and_consume_grant_keeps_the_claimed_item_running():
     grant, nonce = _issued_grant()
 
     transition = validate_and_consume_item_grant(
@@ -567,7 +575,7 @@ def test_validate_and_consume_grant_returns_one_pending_to_running_transition():
         "batch_id": 7,
         "item_id": 11,
         "ordinal": 1,
-        "from_status": "pending",
+        "from_status": "running",
         "to_status": "running",
         "grant_lease_id": "grant-lease-1",
         "grant_fingerprint": grant["fingerprint"],
@@ -651,6 +659,12 @@ def test_authorize_batch_start_rejects_consumed_approval_token_replay():
 
 
 def _outcome(grant: dict, *, ok: bool = False) -> dict:
+    execution_page = {
+        "kind": "semi_managed",
+        "url": "https://www.dianxiaomi.com/web/smt/editFromSmt",
+        "runtime_id": grant["runtime_identity"]["browser_runtime_id"],
+        "browser_session_id": grant["browser_session_id"],
+    }
     return {
         "schema_version": "dxm_edit_batch_item_outcome_evidence.v1",
         "ok": ok,
@@ -662,16 +676,23 @@ def _outcome(grant: dict, *, ok: bool = False) -> dict:
             "mutation_request_count": 1 if ok else 0,
             "publish_request_count": 0,
         },
-        "publish_signal": {"detected": False, "kind": None},
+        "publish_signal": {
+            "detected": False,
+            "kind": "network_route_classification",
+        },
         "save_proven": ok,
+        "scope_page_identity": copy.deepcopy(grant["page_identity"]),
+        "action_page_identity": None,
+        "save_page_identity": copy.deepcopy(execution_page) if ok else None,
+        "verification_page_identity": copy.deepcopy(execution_page) if ok else None,
         **{
             key: copy.deepcopy(grant[key])
             for key in (
                 "runtime_identity",
                 "browser_session_id",
                 "git_head",
+                "l2_evidence_fingerprint",
                 "store_identity",
-                "page_identity",
                 "target_identity_sha256",
                 "mutation_scope_id",
             )
@@ -679,7 +700,7 @@ def _outcome(grant: dict, *, ok: bool = False) -> dict:
     }
 
 
-def test_classify_item_outcome_allows_only_proven_success_or_pre_save_zero_write_isolation():
+def test_classify_item_outcome_allows_proven_success_and_stops_post_grant_failure():
     grant, _nonce = _issued_grant()
 
     succeeded = classify_item_outcome(grant, _outcome(grant, ok=True))
@@ -688,9 +709,9 @@ def test_classify_item_outcome_allows_only_proven_success_or_pre_save_zero_write
     assert succeeded["classification"] == "SUCCEEDED"
     assert succeeded["continue_batch"] is True
     assert succeeded["retry_allowed"] is False
-    assert isolated["classification"] == "ISOLATED_PRE_SAVE_NO_WRITE"
-    assert isolated["continue_batch"] is True
-    assert isolated["reason_code"] == "PRE_SAVE_VALIDATION_ISOLATED"
+    assert isolated["classification"] == "STOPPED_UNCERTAIN"
+    assert isolated["continue_batch"] is False
+    assert isolated["reason_code"] == "POST_GRANT_FAILURE_REQUIRES_REVIEW"
     assert isolated["retry_allowed"] is False
 
 
@@ -712,10 +733,13 @@ def test_classify_item_outcome_allows_only_proven_success_or_pre_save_zero_write
             "PUBLISH_RISK_DETECTED",
         ),
         (lambda o: o["network_audit"].update(complete=False), "EVIDENCE_MISSING"),
-        (lambda o: o.update(validation_reason="NOT_ALLOWLISTED"), "VALIDATION_REASON_NOT_ALLOWED"),
+        (
+            lambda o: o.update(validation_reason="NOT_ALLOWLISTED"),
+            "POST_GRANT_FAILURE_REQUIRES_REVIEW",
+        ),
         (lambda o: o.update(browser_session_id="drift"), "OUTCOME_IDENTITY_DRIFT"),
         (
-            lambda o: o["page_identity"].update(url="https://example.invalid"),
+            lambda o: o["scope_page_identity"].update(url="https://example.invalid"),
             "OUTCOME_IDENTITY_DRIFT",
         ),
         (lambda o: o.update(target_identity_sha256="0" * 64), "OUTCOME_IDENTITY_DRIFT"),

@@ -349,7 +349,7 @@ class BatchExecutionRuntime:
         return self._repository.get_edit_batch(batch_id)
 
     def is_batch_command(self, command: BrowserAgentCommand) -> bool:
-        return isinstance(command.params, dict) and command.params.get("batch_execution") is True
+        return str(command.execution_mode or "").strip() == "batch_save"
 
     def authorize_mutation(self, command: BrowserAgentCommand, mutation_context: Any) -> dict[str, Any]:
         """Consume the in-memory nonce and persistent grant immediately before SAVE."""
@@ -1214,6 +1214,7 @@ class BatchExecutionRuntime:
             state=step.state,
             action=step.action,
             params=params,
+            execution_mode="batch_save",
             step_label=step.label,
             **mutation_fields,
         )

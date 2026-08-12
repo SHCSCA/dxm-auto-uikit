@@ -28,6 +28,10 @@ from src.batch_edit.plan_template_contract import (
 )
 from src.batch_edit.plan_value_contract import PlanValueContract
 from src.batch_edit.scope_contract import canonical_sha256
+from src.execution.browser_agent_protocol import (
+    MutationCommandContractError,
+    canonical_frozen_target_identity,
+)
 
 
 PLAN_SNAPSHOT_SCHEMA = "dxm_batch_draft_save_plan.v1"
@@ -70,7 +74,7 @@ class PlanSnapshotCompiler:
         )
         session_context = self._values.exact_object(
             exact["session_context"],
-            {"session_ref", "account_ref_hash", "shop_id"},
+            {"session_ref", "account_ref_hash", "shop_id", "shop_name"},
             "session_context",
         )
         session_ref = self._values.non_empty_text(
@@ -95,6 +99,10 @@ class PlanSnapshotCompiler:
                 "PLAN_SCOPE_CONFLICT",
                 "session context shop does not match snapshot shop",
             )
+        session_shop_name = self._values.non_empty_text(
+            session_context["shop_name"],
+            "session_context.shop_name",
+        )
         raw_items = exact["items"]
         if not isinstance(raw_items, list) or not 3 <= len(raw_items) <= 100:
             self._reject(
@@ -119,6 +127,7 @@ class PlanSnapshotCompiler:
                 plan=plan,
                 template_refs=template_refs,
                 requested_shop_id=requested_shop_id,
+                requested_shop_name=session_shop_name,
             )
             if item["product_id"] in seen_products:
                 self._reject(
@@ -138,6 +147,7 @@ class PlanSnapshotCompiler:
                 "session_ref": session_ref,
                 "account_ref_hash": account_ref_hash,
                 "shop_id": session_shop_id,
+                "shop_name": session_shop_name,
             },
             "approval_context": {
                 "state": "not_granted",
@@ -180,6 +190,7 @@ class PlanSnapshotCompiler:
         plan: Mapping[str, Any],
         template_refs: ResolvedTemplateReferences,
         requested_shop_id: str,
+        requested_shop_name: str,
     ) -> dict[str, Any]:
         item = self._values.exact_object(
             raw_item,
@@ -190,6 +201,7 @@ class PlanSnapshotCompiler:
                 "category_schema",
                 "expected_schema_hash",
                 "current_values",
+                "target_identity",
             },
             f"items[{index}]",
         )
@@ -214,6 +226,26 @@ class PlanSnapshotCompiler:
             self._reject(
                 "PLAN_CATEGORY_SCOPE_CONFLICT",
                 "item category is not covered by the local plan",
+            )
+        try:
+            target_identity = canonical_frozen_target_identity(
+                item["target_identity"],
+                store_name=requested_shop_name,
+            )
+        except MutationCommandContractError as exc:
+            self._reject(
+                "PLAN_TARGET_IDENTITY_INVALID",
+                f"frozen item target is invalid: {exc.reason_code}",
+            )
+        if (
+            target_identity is None
+            or target_identity != item["target_identity"]
+            or target_identity["stable_identity"]["kind"] != "product_id"
+            or target_identity["stable_identity"]["value"] != product_id
+        ):
+            self._reject(
+                "PLAN_TARGET_IDENTITY_INVALID",
+                "frozen item target must exactly bind the current product_id",
             )
         normalized_schema = normalize_category_schema(item["category_schema"])
         schema_hash = canonical_sha256(normalized_schema)
@@ -380,6 +412,9 @@ class PlanSnapshotCompiler:
         return {
             "product_id": product_id,
             "shop_id": shop_id,
+            "source_urls": list(target_identity["source_urls"]),
+            "target_identity": self._values.clone(target_identity),
+            "target_identity_sha256": canonical_sha256(target_identity),
             "categoryId": category_id,
             "category_schema": {
                 "normalized_schema": normalized_schema,

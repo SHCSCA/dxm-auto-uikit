@@ -406,9 +406,11 @@ def test_reader_routes_return_safe_409_for_schema_drift(monkeypatch: pytest.Monk
 def test_reader_routes_expose_shopmap_with_real_source_label(monkeypatch: pytest.MonkeyPatch) -> None:
     source = FakeDraftSource(_shop_response(), _page_response())
     dispatched: list[str] = []
+    fail_fast_flags: list[bool] = []
 
     def run_on_login_owner(func: Any, *args: Any, **kwargs: Any) -> Any:
         dispatched.append(func.__name__)
+        fail_fast_flags.append(kwargs.pop("fail_if_busy", False))
         return func(*args, **kwargs)
 
     monkeypatch.setattr("src.main.workflow_adapter", source)
@@ -421,6 +423,7 @@ def test_reader_routes_expose_shopmap_with_real_source_label(monkeypatch: pytest
     assert response.json()["source"] == "api"
     assert [shop["id"] for shop in response.json()["shops"]] == ["101", "202"]
     assert dispatched == ["list_shops"]
+    assert fail_fast_flags == [True]
 
 
 class FakeApiResponse:
@@ -701,6 +704,30 @@ def test_e2_product_detail_current_attribute_ids_are_normalized() -> None:
     )
 
     assert current_values == {"attr_5301": "7301"}
+
+
+@pytest.mark.parametrize("wire_sentinel", [0, "0"])
+def test_e2_product_detail_zero_value_id_uses_auditable_wire_value(
+    wire_sentinel,
+) -> None:
+    current_values = DxmPlanReader._current_values_from_detail(
+        {
+            "aeopAeProductPropertys": json.dumps(
+                [{
+                    "attrNameId": 5301,
+                    "attrValueId": wire_sentinel,
+                    "attrValue": "Acrylic",
+                }]
+            ),
+        },
+        schema={
+            "properties": {
+                "attr_5301": {"type": "string"},
+            },
+        },
+    )
+
+    assert current_values == {"attr_5301": "Acrylic"}
 
 
 def test_visible_session_page_reader_forces_allowlisted_draft_form(
@@ -1168,6 +1195,24 @@ def test_e2_product_templates_accept_unselected_promise_template_sentinel() -> N
         13,
         14,
     ]
+
+
+def test_e2_service_templates_drop_unselected_zero_identity_sentinel() -> None:
+    records = DxmLoginFlow._e2_named_template_records(
+        [
+            {"templateId": 0, "templateName": "未选择服务模板"},
+            {"templateId": "901", "templateName": "真实服务模板"},
+        ],
+        ref_type="service",
+        id_keys=("templateId",),
+        name_keys=("templateName",),
+        shop_id="101",
+        category_id=None,
+        source_api="/api/smtShopInfoSync/list.json",
+    )
+
+    assert len(records) == 1
+    assert records[0]["dxm_template_id"] == "901"
 
 
 @pytest.mark.parametrize(

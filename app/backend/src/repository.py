@@ -3181,6 +3181,48 @@ class Repository:
             )
             return cur.rowcount == 1
 
+    def try_claim_task_runner_dispatch(self, task_id: int) -> bool:
+        """Claim one durable runner dispatch for a draft or API-started task."""
+
+        claimed_at = now_iso()
+        with connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            task = conn.execute(
+                'SELECT status, payload_json FROM tasks WHERE id=?',
+                (task_id,),
+            ).fetchone()
+            if not task or task.get('status') not in {'draft', 'running'}:
+                return False
+            if self._active_edit_batch_exists(conn):
+                return False
+            if self._other_running_task_exists(conn, task_id):
+                return False
+            payload = loads(task['payload_json'], {})
+            dispatch = payload.get('runner_dispatch')
+            if isinstance(dispatch, dict) and dispatch.get('claimed') is True:
+                return False
+            next_payload = dict(payload)
+            next_payload['runner_dispatch'] = {
+                'schema': 'dxm.task-runner-dispatch.v1',
+                'claimed': True,
+                'claimed_at': claimed_at,
+            }
+            updated = conn.execute(
+                """
+                UPDATE tasks
+                   SET status='running', payload_json=?, updated_at=?
+                 WHERE id=? AND status=? AND payload_json=?
+                """,
+                (
+                    dumps(next_payload),
+                    claimed_at,
+                    task_id,
+                    task['status'],
+                    task['payload_json'],
+                ),
+            )
+            return updated.rowcount == 1
+
     def try_start_task_with_authorization(
         self,
         task_id: int,
@@ -3266,6 +3308,109 @@ class Repository:
             )
             if updated.rowcount != 1:
                 return AuthorizationLeaseResult(False, 'AUTH_START_CAS_CONFLICT', self.get_task(task_id), None)
+        return AuthorizationLeaseResult(
+            True,
+            'OK',
+            self.get_task(task_id),
+            self._public_authorization_lease(next_approval),
+        )
+
+    def approve_and_start_task_with_authorization(
+        self,
+        task_id: int,
+        *,
+        token: str,
+        confirmation: str,
+        approved_by: str,
+        authorization_context: dict[str, Any],
+        lease_id: str,
+        issued_at: str,
+        expires_at: str,
+        consumed_at: str,
+    ) -> AuthorizationLeaseResult:
+        """Atomically issue, consume, and start one real-write task authorization."""
+
+        try:
+            issued = datetime.fromisoformat(str(issued_at).replace('Z', '+00:00'))
+            expiry = datetime.fromisoformat(str(expires_at).replace('Z', '+00:00'))
+            consumed = datetime.fromisoformat(str(consumed_at).replace('Z', '+00:00'))
+            issued = issued if issued.tzinfo else issued.replace(tzinfo=timezone.utc)
+            expiry = expiry if expiry.tzinfo else expiry.replace(tzinfo=timezone.utc)
+            consumed = consumed if consumed.tzinfo else consumed.replace(tzinfo=timezone.utc)
+        except (AttributeError, TypeError, ValueError):
+            return AuthorizationLeaseResult(False, 'AUTH_TIME_INVALID', self.get_task(task_id), None)
+        if (
+            not isinstance(token, str)
+            or not token
+            or not isinstance(confirmation, str)
+            or not confirmation
+            or not isinstance(approved_by, str)
+            or not approved_by.strip()
+            or not isinstance(lease_id, str)
+            or not lease_id.strip()
+            or not isinstance(authorization_context, dict)
+            or not authorization_context
+        ):
+            return AuthorizationLeaseResult(False, 'TASK_APPROVAL_INPUT_INVALID', self.get_task(task_id), None)
+        if not (issued <= consumed < expiry) or (expiry - issued).total_seconds() > 5 * 60:
+            return AuthorizationLeaseResult(False, 'TASK_APPROVAL_TIME_INVALID', self.get_task(task_id), None)
+
+        next_approval = {
+            'approved': True,
+            'token_hash': hashlib.sha256(token.encode('utf-8')).hexdigest(),
+            'approved_by': approved_by.strip(),
+            'approved_at': issued_at,
+            'source': 'server',
+            'lease_id': lease_id,
+            'confirmation': confirmation,
+            'stage_task_facts': dict(authorization_context.get('stage_task_facts') or {}),
+            'authorization_context': dict(authorization_context),
+            'issued_at': issued_at,
+            'expires_at': expires_at,
+            'consumed': True,
+            'consumed_at': consumed_at,
+        }
+        with connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            task = conn.execute('SELECT * FROM tasks WHERE id=?', (task_id,)).fetchone()
+            if not task:
+                return AuthorizationLeaseResult(False, 'AUTH_TASK_NOT_FOUND', None, None)
+            if task.get('status') != 'draft':
+                return AuthorizationLeaseResult(
+                    False,
+                    'AUTH_TASK_NOT_DRAFT',
+                    self.get_task(task_id),
+                    None,
+                )
+            if self._active_edit_batch_exists(conn):
+                return AuthorizationLeaseResult(False, 'AUTH_EDIT_BATCH_ACTIVE', self.get_task(task_id), None)
+            if self._other_running_task_exists(conn, task_id):
+                return AuthorizationLeaseResult(False, 'AUTH_ANOTHER_TASK_ACTIVE', self.get_task(task_id), None)
+            payload = loads(task['payload_json'], {})
+            if isinstance(payload.get('manual_approval'), dict):
+                return AuthorizationLeaseResult(
+                    False,
+                    'TASK_APPROVAL_ALREADY_ISSUED',
+                    self.get_task(task_id),
+                    None,
+                )
+            next_payload = dict(payload)
+            next_payload['manual_approval'] = next_approval
+            updated = conn.execute(
+                """
+                UPDATE tasks
+                   SET status='running', payload_json=?, updated_at=?
+                 WHERE id=? AND status='draft' AND payload_json=?
+                """,
+                (dumps(next_payload), consumed_at, task_id, task['payload_json']),
+            )
+            if updated.rowcount != 1:
+                return AuthorizationLeaseResult(
+                    False,
+                    'AUTH_START_CAS_CONFLICT',
+                    self.get_task(task_id),
+                    None,
+                )
         return AuthorizationLeaseResult(
             True,
             'OK',
@@ -3439,6 +3584,7 @@ class Repository:
                 next_status = str(requested_status or "")
                 failure_terminal = {
                     "failed",
+                    "unknown",
                     "cancelled",
                     "needs_manual_review",
                     "stopped_uncertain",
@@ -3734,6 +3880,128 @@ class Repository:
             report=self.get_report(report_id) if report_id is not None else None,
         )
 
+    def finalize_job_unknown(
+        self,
+        task_id: int,
+        job_id: int,
+        product_id: int | None,
+        *,
+        error_code: str,
+        field_domain: str,
+        title: str,
+        detail: str,
+        suggestion: str,
+        save_result: dict[str, Any],
+        summary: dict[str, Any],
+    ) -> JobFinalizationResult:
+        """Persist a non-retryable unknown mutation outcome without counting it failed."""
+
+        now = now_iso()
+        report_id: int | None = None
+        with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            task = conn.execute(
+                "SELECT status FROM tasks WHERE id=?",
+                (task_id,),
+            ).fetchone()
+            if not task:
+                conflict_code = "TASK_NOT_FOUND"
+                reason = "task does not exist"
+            else:
+                job = conn.execute(
+                    "SELECT status FROM jobs WHERE id=? AND task_id=?",
+                    (job_id, task_id),
+                ).fetchone()
+                if not job:
+                    conflict_code = "JOB_NOT_FOUND"
+                    reason = "job does not exist for task"
+                else:
+                    existing_report = conn.execute(
+                        "SELECT id, status FROM reports WHERE task_id=? AND job_id IS ? ORDER BY id LIMIT 1",
+                        (task_id, job_id),
+                    ).fetchone()
+                    already_terminal = bool(
+                        existing_report
+                        and existing_report.get("status") == "unknown"
+                        and job.get("status") == "unknown"
+                    )
+                    if already_terminal:
+                        conflict_code = TerminalReportConflictError.conflict_code
+                        reason = "unknown report and unknown job are already terminal"
+                        report_id = int(existing_report["id"])
+                    elif existing_report:
+                        conflict_code = TerminalReportConflictError.conflict_code
+                        reason = "an existing report prevents unknown finalization"
+                        report_id = int(existing_report["id"])
+                    else:
+                        report_id = self._upsert_report(
+                            conn,
+                            task_id,
+                            job_id,
+                            product_id,
+                            "unknown",
+                            None,
+                            save_result,
+                            summary,
+                            now,
+                        )
+                        updated = conn.execute(
+                            """
+                            UPDATE jobs
+                               SET status='unknown', current_step_code='UNKNOWN',
+                                   current_step_name='保存结果待人工核对', error_code=?,
+                                   error_message=?, updated_at=?
+                             WHERE id=? AND task_id=? AND status IN ('pending', 'running')
+                            """,
+                            (error_code, detail, now, job_id, task_id),
+                        )
+                        if updated.rowcount != 1:
+                            raise RuntimeError("job unknown compare-and-set failed")
+                        conn.execute(
+                            """
+                            INSERT INTO exceptions (
+                                task_id, job_id, error_code, field_domain, title,
+                                detail, suggestion, created_at, updated_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                task_id,
+                                job_id,
+                                error_code,
+                                field_domain,
+                                title,
+                                detail,
+                                suggestion,
+                                now,
+                                now,
+                            ),
+                        )
+                        conn.execute(
+                            """
+                            UPDATE tasks
+                               SET status='needs_manual_review',
+                                   completed_jobs=(
+                                       SELECT COUNT(*) FROM jobs
+                                        WHERE task_id=? AND status IN ('succeeded', 'completed')
+                                   ),
+                                   failed_jobs=(
+                                       SELECT COUNT(*) FROM jobs
+                                        WHERE task_id=? AND status='failed'
+                                   ),
+                                   updated_at=?
+                             WHERE id=? AND status IN ('running', 'paused', 'completed', 'partial_success')
+                            """,
+                            (task_id, task_id, now, task_id),
+                        )
+                        conflict_code = None
+                        reason = None
+        return JobFinalizationResult(
+            applied=conflict_code is None,
+            conflict_code=conflict_code,
+            reason=reason,
+            report=self.get_report(report_id) if report_id is not None else None,
+        )
+
     def _upsert_report(
         self,
         conn,
@@ -3751,8 +4019,8 @@ class Repository:
             "SELECT id, status FROM reports WHERE task_id=? AND job_id IS ? ORDER BY id LIMIT 1",
             (task_id, job_id),
         ).fetchone()
-        if existing and existing.get('status') == 'failed':
-            if status != 'failed':
+        if existing and existing.get('status') in {'failed', 'unknown'}:
+            if status != existing.get('status'):
                 raise TerminalReportConflictError(task_id, job_id)
             return int(existing['id'])
         if existing:

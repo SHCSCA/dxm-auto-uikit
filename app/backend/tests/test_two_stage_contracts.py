@@ -886,6 +886,51 @@ def test_authorization_context_fingerprint_binds_task_store_session_head_and_app
     json.dumps(context, ensure_ascii=False, allow_nan=False)
 
 
+def test_authorization_context_v2_binds_exact_execution_worktree_identity():
+    source, _proof = _draft_box_proof_fixture()
+    stage_a = build_stage_a_task_facts(
+        task_id=11,
+        job_id=12,
+        store_id=13,
+        target_identity=_claim_target_from_source(source),
+    )
+    worktree = {
+        "schema": "dxm.git-worktree.identity.v1",
+        "git_head": "a" * 40,
+        "git_dirty": True,
+        "status_count": 737,
+        "status_sha256": "D" * 64,
+        "execution_file_count": 123,
+        "execution_tree_sha256": "E" * 64,
+    }
+    expected = build_authorization_context(
+        stage_task_facts=stage_a,
+        runtime_instance_id="backend-instance-a",
+        browser_session_id="browser-session-a",
+        git_head="a" * 40,
+        worktree_identity=worktree,
+        l2_evidence_fingerprint="C" * 64,
+        approved_by="张三",
+    )
+    drifted = build_authorization_context(
+        stage_task_facts=stage_a,
+        runtime_instance_id="backend-instance-a",
+        browser_session_id="browser-session-a",
+        git_head="a" * 40,
+        worktree_identity={**worktree, "execution_tree_sha256": "F" * 64},
+        l2_evidence_fingerprint="C" * 64,
+        approved_by="张三",
+    )
+
+    assert expected["schema"] == "dxm.authorization.context.v2"
+    assert expected["worktree_identity"] == worktree
+    assert verify_authorization_context(expected) == {"ok": True, "reason_code": "OK"}
+    assert compare_authorization_context(expected, drifted) == {
+        "ok": False,
+        "reason_code": "AUTH_CONTEXT_MISMATCH",
+    }
+
+
 def test_authorization_context_rejects_cross_task_store_session_head_and_tampering():
     source, _proof = _draft_box_proof_fixture()
 

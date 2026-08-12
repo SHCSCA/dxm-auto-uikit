@@ -17,11 +17,14 @@ CLAIM_TARGET_IDENTITY_SCHEMA = "dxm.claim_target.identity.v1"
 DRAFT_BOX_PROOF_SCHEMA = "dxm.draft_box.proof.v1"
 DRAFT_BOX_OBSERVATION_SCHEMA = "dxm.draft_box.observation.v1"
 STAGE_TASK_FACTS_SCHEMA = "dxm.two_stage.task_facts.v1"
+BATCH_DRAFT_TASK_FACTS_SCHEMA = "dxm.batch_draft_save.task_facts.v1"
 STAGE_A_CONFIRMATION = "确认将该已有商品认领到商品箱"
 STAGE_B_CONFIRMATION = "CONFIRM_DXM_SAVE_ONLY"
 STAGE_A_PUBLISH_SCENE = "CONTROLLED_CLAIM_TO_DRAFT_ONLY"
 STAGE_B_PUBLISH_SCENE = "SMT_SEMI_MANAGED_SAVE_ONLY"
 AUTHORIZATION_CONTEXT_SCHEMA = "dxm.authorization.context.v1"
+AUTHORIZATION_CONTEXT_SCHEMA_V2 = "dxm.authorization.context.v2"
+WORKTREE_IDENTITY_SCHEMA = "dxm.git-worktree.identity.v1"
 _SOURCE_IDENTITY_KEYS = frozenset({"schema", "primary_url", "urls", "fingerprint"})
 _CLAIM_TARGET_IDENTITY_KEYS = frozenset(
     {"schema", "source_identity", "keyword", "category_name", "fingerprint"}
@@ -87,6 +90,23 @@ _STAGE_B_FACT_KEYS = frozenset(
         "draft_box_proof_fingerprint",
     }
 )
+_BATCH_DRAFT_FACT_KEYS = frozenset(
+    {
+        "schema",
+        "stage",
+        "mode",
+        "confirmation",
+        "publish_scene",
+        "action",
+        "task_id",
+        "store_id",
+        "product_ids",
+        "plan_snapshot_id",
+        "plan_snapshot_hash",
+        "path",
+        "fingerprint",
+    }
+)
 _STAGE_STATIC_FACTS = {
     "stage_a": {
         "mode": "claim_only",
@@ -100,6 +120,12 @@ _STAGE_STATIC_FACTS = {
         "publish_scene": STAGE_B_PUBLISH_SCENE,
         "action": "save_only",
     },
+    "batch_draft_save": {
+        "mode": "batch_draft_save",
+        "confirmation": STAGE_B_CONFIRMATION,
+        "publish_scene": STAGE_B_PUBLISH_SCENE,
+        "action": "batch_draft_save_only",
+    },
 }
 _AUTHORIZATION_CONTEXT_KEYS = frozenset(
     {
@@ -111,6 +137,20 @@ _AUTHORIZATION_CONTEXT_KEYS = frozenset(
         "l2_evidence_fingerprint",
         "approved_by",
         "fingerprint",
+    }
+)
+_AUTHORIZATION_CONTEXT_V2_KEYS = frozenset(
+    {*_AUTHORIZATION_CONTEXT_KEYS, "worktree_identity"}
+)
+_WORKTREE_IDENTITY_KEYS = frozenset(
+    {
+        "schema",
+        "git_head",
+        "git_dirty",
+        "status_count",
+        "status_sha256",
+        "execution_file_count",
+        "execution_tree_sha256",
     }
 )
 
@@ -234,6 +274,61 @@ def _canonical_git_head(value: Any) -> str:
             "git_head must be a full hex object ID",
         ) from exc
     return git_head
+
+
+def _canonical_worktree_identity(
+    value: Any,
+    *,
+    git_head: str,
+) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != _WORKTREE_IDENTITY_KEYS:
+        raise TwoStageContractError(
+            "WORKTREE_IDENTITY_SHAPE_MISMATCH",
+            "worktree identity must contain the exact v1 fields",
+        )
+    if value.get("schema") != WORKTREE_IDENTITY_SCHEMA:
+        raise TwoStageContractError(
+            "WORKTREE_IDENTITY_SCHEMA_MISMATCH",
+            "worktree identity schema mismatch",
+        )
+    canonical_head = _canonical_git_head(value.get("git_head"))
+    if canonical_head != git_head:
+        raise TwoStageContractError(
+            "WORKTREE_IDENTITY_HEAD_MISMATCH",
+            "worktree identity HEAD differs from authorization HEAD",
+        )
+    if type(value.get("git_dirty")) is not bool:
+        raise TwoStageContractError(
+            "WORKTREE_IDENTITY_DIRTY_INVALID",
+            "worktree identity git_dirty must be a boolean",
+        )
+    status_count = value.get("status_count")
+    execution_file_count = value.get("execution_file_count")
+    if (
+        type(status_count) is not int
+        or status_count < 0
+        or type(execution_file_count) is not int
+        or execution_file_count < 0
+    ):
+        raise TwoStageContractError(
+            "WORKTREE_IDENTITY_COUNT_INVALID",
+            "worktree identity counts must be non-negative integers",
+        )
+    return {
+        "schema": WORKTREE_IDENTITY_SCHEMA,
+        "git_head": canonical_head,
+        "git_dirty": value["git_dirty"],
+        "status_count": status_count,
+        "status_sha256": _canonical_sha256(
+            value.get("status_sha256"),
+            field_name="worktree_status_sha256",
+        ),
+        "execution_file_count": execution_file_count,
+        "execution_tree_sha256": _canonical_sha256(
+            value.get("execution_tree_sha256"),
+            field_name="execution_tree_sha256",
+        ),
+    }
 
 
 def _canonical_source_url(value: Any) -> str:
@@ -915,6 +1010,63 @@ def build_stage_a_task_facts(
     )
 
 
+def build_batch_draft_save_task_facts(
+    *,
+    task_id: int,
+    store_id: int,
+    product_ids: Iterable[Any],
+    plan_snapshot_id: int,
+    plan_snapshot_hash: str,
+    path: str = "A",
+) -> dict[str, Any]:
+    """Build immutable facts authorized for batch_draft_save Path A only."""
+
+    normalized_path = str(path or "").strip().upper()
+    if normalized_path != "A":
+        raise TwoStageContractError(
+            "BATCH_PATH_FORBIDDEN",
+            "batch_draft_save authorization only allows Path A",
+        )
+    ids: list[int] = []
+    seen: set[int] = set()
+    for raw in product_ids:
+        value = _positive_id(raw, field_name="product_id")
+        if value in seen:
+            raise TwoStageContractError(
+                "BATCH_PRODUCT_DUPLICATE",
+                "batch_draft_save product_ids must be unique",
+            )
+        seen.add(value)
+        ids.append(value)
+    if not ids:
+        raise TwoStageContractError(
+            "BATCH_PRODUCT_IDS_REQUIRED",
+            "batch_draft_save requires at least one product id",
+        )
+    snapshot_hash = _canonical_sha256(
+        plan_snapshot_hash,
+        field_name="plan_snapshot_hash",
+    )
+    static = _STAGE_STATIC_FACTS["batch_draft_save"]
+    unsigned = {
+        "schema": BATCH_DRAFT_TASK_FACTS_SCHEMA,
+        "stage": "batch_draft_save",
+        **static,
+        "task_id": _positive_id(task_id, field_name="task_id"),
+        "store_id": _positive_id(store_id, field_name="store_id"),
+        "product_ids": ids,
+        "plan_snapshot_id": _positive_id(plan_snapshot_id, field_name="plan_snapshot_id"),
+        "plan_snapshot_hash": snapshot_hash,
+        "path": "A",
+    }
+    if set(unsigned) | {"fingerprint"} != _BATCH_DRAFT_FACT_KEYS:
+        raise TwoStageContractError(
+            "BATCH_TASK_FACTS_SHAPE_MISMATCH",
+            "batch_draft_save task facts shape is invalid",
+        )
+    return {**unsigned, "fingerprint": _sha256(unsigned)}
+
+
 def build_stage_b_task_facts(
     *,
     task_id: int,
@@ -992,47 +1144,73 @@ def verify_exact_stage_task_facts(
         return _check(False, "STAGE_TASK_FACTS_SHAPE_MISMATCH")
     if facts.get("stage") != expected_stage:
         return _check(False, "STAGE_TASK_FACTS_STAGE_MISMATCH")
-    expected_keys = _STAGE_A_FACT_KEYS if expected_stage == "stage_a" else _STAGE_B_FACT_KEYS
+    if expected_stage == "batch_draft_save":
+        expected_keys = _BATCH_DRAFT_FACT_KEYS
+        expected_schema = BATCH_DRAFT_TASK_FACTS_SCHEMA
+    elif expected_stage == "stage_a":
+        expected_keys = _STAGE_A_FACT_KEYS
+        expected_schema = STAGE_TASK_FACTS_SCHEMA
+    else:
+        expected_keys = _STAGE_B_FACT_KEYS
+        expected_schema = STAGE_TASK_FACTS_SCHEMA
     if set(facts) != expected_keys:
         return _check(False, "STAGE_TASK_FACTS_SHAPE_MISMATCH")
-    if facts.get("schema") != STAGE_TASK_FACTS_SCHEMA:
+    if facts.get("schema") != expected_schema:
         return _check(False, "STAGE_TASK_FACTS_SCHEMA_MISMATCH")
     for field_name, expected in _STAGE_STATIC_FACTS[expected_stage].items():
         if facts.get(field_name) != expected:
             return _check(False, f"STAGE_TASK_FACTS_{field_name.upper()}_MISMATCH")
     try:
         _positive_id(facts.get("task_id"), field_name="task_id")
-        _positive_id(facts.get("job_id"), field_name="job_id")
         _positive_id(facts.get("store_id"), field_name="store_id")
-        if expected_stage == "stage_a":
-            _validated_claim_target_identity(facts.get("target_identity"))
+        if expected_stage == "batch_draft_save":
+            if facts.get("path") != "A":
+                return _check(False, "BATCH_PATH_FORBIDDEN")
+            product_ids = facts.get("product_ids")
+            if not isinstance(product_ids, list) or not product_ids:
+                return _check(False, "BATCH_PRODUCT_IDS_REQUIRED")
+            seen: set[int] = set()
+            for raw in product_ids:
+                value = _positive_id(raw, field_name="product_id")
+                if value in seen:
+                    return _check(False, "BATCH_PRODUCT_DUPLICATE")
+                seen.add(value)
+            _positive_id(facts.get("plan_snapshot_id"), field_name="plan_snapshot_id")
+            _canonical_sha256(
+                facts.get("plan_snapshot_hash"),
+                field_name="plan_snapshot_hash",
+            )
         else:
-            source = facts.get("source_identity")
-            if source is not None:
-                _validated_source_identity(source)
-            target = _validated_claim_target_identity(facts.get("target_identity"))
-            if not hmac.compare_digest(
+            _positive_id(facts.get("job_id"), field_name="job_id")
+            if expected_stage == "stage_a":
+                _validated_claim_target_identity(facts.get("target_identity"))
+            else:
+                source = facts.get("source_identity")
+                if source is not None:
+                    _validated_source_identity(source)
+                target = _validated_claim_target_identity(facts.get("target_identity"))
+                if not hmac.compare_digest(
+                    _canonical_sha256(
+                        facts.get("claim_target_fingerprint"),
+                        field_name="claim_target_fingerprint",
+                    ),
+                    target["fingerprint"],
+                ):
+                    raise TwoStageContractError(
+                        "CLAIM_TARGET_FINGERPRINT_MISMATCH",
+                        "Stage B target fingerprint mismatch",
+                    )
                 _canonical_sha256(
-                    facts.get("claim_target_fingerprint"),
-                    field_name="claim_target_fingerprint",
-                ),
-                target["fingerprint"],
-            ):
-                raise TwoStageContractError(
-                    "CLAIM_TARGET_FINGERPRINT_MISMATCH",
-                    "Stage B target fingerprint mismatch",
+                    facts.get("stage_a_task_facts_fingerprint"),
+                    field_name="stage_a_task_facts_fingerprint",
                 )
-            _canonical_sha256(
-                facts.get("stage_a_task_facts_fingerprint"),
-                field_name="stage_a_task_facts_fingerprint",
-            )
-            _positive_id(facts.get("product_id"), field_name="product_id")
-            _positive_id(facts.get("claim_task_id"), field_name="claim_task_id")
-            _positive_id(facts.get("claim_job_id"), field_name="claim_job_id")
-            _canonical_sha256(
-                facts.get("draft_box_proof_fingerprint"),
-                field_name="draft_box_proof_fingerprint",
-            )
+                _positive_id(facts.get("product_id"), field_name="product_id")
+                _positive_id(facts.get("claim_task_id"), field_name="claim_task_id")
+                _positive_id(facts.get("claim_job_id"), field_name="claim_job_id")
+                _canonical_sha256(
+                    facts.get("draft_box_proof_fingerprint"),
+                    field_name="draft_box_proof_fingerprint",
+                )
     except TwoStageContractError as exc:
         return _check(False, exc.reason_code)
     unsigned = {key: facts[key] for key in expected_keys if key != "fingerprint"}
@@ -1042,13 +1220,28 @@ def verify_exact_stage_task_facts(
 
 
 def _authorization_context_unsigned(context: Mapping[str, Any]) -> dict[str, Any]:
-    if not isinstance(context, Mapping) or frozenset(context) not in {
-        _AUTHORIZATION_CONTEXT_KEYS,
-        _AUTHORIZATION_CONTEXT_KEYS - {"fingerprint"},
-    }:
+    if not isinstance(context, Mapping):
         raise TwoStageContractError(
             "AUTH_CONTEXT_SHAPE_MISMATCH",
             "authorization context fields do not match the v1 contract",
+        )
+    context_keys = frozenset(context)
+    if context_keys in {
+        _AUTHORIZATION_CONTEXT_KEYS,
+        _AUTHORIZATION_CONTEXT_KEYS - {"fingerprint"},
+    }:
+        expected_schema = AUTHORIZATION_CONTEXT_SCHEMA
+        has_worktree_identity = False
+    elif context_keys in {
+        _AUTHORIZATION_CONTEXT_V2_KEYS,
+        _AUTHORIZATION_CONTEXT_V2_KEYS - {"fingerprint"},
+    }:
+        expected_schema = AUTHORIZATION_CONTEXT_SCHEMA_V2
+        has_worktree_identity = True
+    else:
+        raise TwoStageContractError(
+            "AUTH_CONTEXT_SHAPE_MISMATCH",
+            "authorization context fields do not match a supported contract",
         )
     facts = context.get("stage_task_facts")
     stage = facts.get("stage") if isinstance(facts, Mapping) else None
@@ -1072,7 +1265,7 @@ def _authorization_context_unsigned(context: Mapping[str, Any]) -> dict[str, Any
         context.get("l2_evidence_fingerprint"),
         field_name="l2_evidence_fingerprint",
     )
-    if context.get("schema") != AUTHORIZATION_CONTEXT_SCHEMA:
+    if context.get("schema") != expected_schema:
         raise TwoStageContractError(
             "AUTH_CONTEXT_SCHEMA_MISMATCH",
             "authorization context schema mismatch",
@@ -1083,8 +1276,8 @@ def _authorization_context_unsigned(context: Mapping[str, Any]) -> dict[str, Any
         raise TwoStageContractError("AUTH_CONTEXT_NOT_CANONICAL", "browser session ID is not canonical")
     if approved_by != context.get("approved_by") or git_head != context.get("git_head"):
         raise TwoStageContractError("AUTH_CONTEXT_NOT_CANONICAL", "authorization context is not canonical")
-    return {
-        "schema": AUTHORIZATION_CONTEXT_SCHEMA,
+    unsigned = {
+        "schema": expected_schema,
         "stage_task_facts": _json_clone(dict(facts)),
         "runtime_instance_id": runtime_instance_id,
         "browser_session_id": browser_session_id,
@@ -1092,6 +1285,12 @@ def _authorization_context_unsigned(context: Mapping[str, Any]) -> dict[str, Any
         "l2_evidence_fingerprint": l2_evidence_fingerprint,
         "approved_by": approved_by,
     }
+    if has_worktree_identity:
+        unsigned["worktree_identity"] = _canonical_worktree_identity(
+            context.get("worktree_identity"),
+            git_head=git_head,
+        )
+    return unsigned
 
 
 def authorization_context_fingerprint(context: Mapping[str, Any]) -> str:
@@ -1106,13 +1305,20 @@ def build_authorization_context(
     runtime_instance_id: str,
     browser_session_id: str,
     git_head: str,
+    worktree_identity: Mapping[str, Any] | None = None,
     l2_evidence_fingerprint: str,
     approved_by: str,
 ) -> dict[str, Any]:
     """Bind approval to one task/store/action, browser session, runtime and HEAD."""
 
+    canonical_git_head = _canonical_git_head(git_head)
+    schema = (
+        AUTHORIZATION_CONTEXT_SCHEMA_V2
+        if worktree_identity is not None
+        else AUTHORIZATION_CONTEXT_SCHEMA
+    )
     unsigned = {
-        "schema": AUTHORIZATION_CONTEXT_SCHEMA,
+        "schema": schema,
         "stage_task_facts": _json_clone(dict(stage_task_facts)),
         "runtime_instance_id": _nonempty_text(
             runtime_instance_id,
@@ -1122,13 +1328,18 @@ def build_authorization_context(
             browser_session_id,
             field_name="browser_session_id",
         ),
-        "git_head": _canonical_git_head(git_head),
+        "git_head": canonical_git_head,
         "l2_evidence_fingerprint": _canonical_sha256(
             l2_evidence_fingerprint,
             field_name="l2_evidence_fingerprint",
         ),
         "approved_by": _nonempty_text(approved_by, field_name="approved_by"),
     }
+    if worktree_identity is not None:
+        unsigned["worktree_identity"] = _canonical_worktree_identity(
+            worktree_identity,
+            git_head=canonical_git_head,
+        )
     unsigned = _authorization_context_unsigned(unsigned)
     return {**unsigned, "fingerprint": _sha256(unsigned)}
 
@@ -1137,7 +1348,10 @@ def build_authorization_context(
 def verify_authorization_context(
     context: Mapping[str, Any],
 ) -> dict[str, bool | str]:
-    if not isinstance(context, Mapping) or set(context) != _AUTHORIZATION_CONTEXT_KEYS:
+    if not isinstance(context, Mapping) or frozenset(context) not in {
+        _AUTHORIZATION_CONTEXT_KEYS,
+        _AUTHORIZATION_CONTEXT_V2_KEYS,
+    }:
         return _check(False, "AUTH_CONTEXT_SHAPE_MISMATCH")
     try:
         stored = _canonical_sha256(

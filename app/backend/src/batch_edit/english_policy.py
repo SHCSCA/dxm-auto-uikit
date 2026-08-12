@@ -28,16 +28,16 @@ _ENGLISH_WORDS = {
 _ENGLISH_WORDS.update(
     """
     adapter adhesive air aluminum ankle apparel arm audio bag base bass
-    action anime
+    action acrylic anime
     bathroom belt bicycle bluetooth board bottle bracelet breathable brush
-    button camera camping cap ceramic clip clipper clock clothing coffee cosplay costume
+    button camera camping cap card ceramic character clip clipper clock clothing coffee colorful cosplay costume
     cancelling collar collectible controller cooking cotton cordless cushion cutter daily demon desk
     decoration desktop display double dress drill earphone elastic ergonomic fabric fan fashion
-    filter fitness floral foldable food furniture gaming garden glass gloves
+    fantasy filter fitness floral foldable food furniture gaming garden glass gloves
     earbuds figure figurine gift halloween handmade handle handbag hat headphone heavy hood hooded indoor insulated jacket
-    keyboard kitchen lamp laptop leather lightweight lock magnetic men mesh
+    hotel keyboard keychain kitchen lamp laptop leather lightweight lock magnetic men mesh
     man marvel microphone model mount mouse necklace noise non slip office outdoor pants plastic
-    party pocket rack rain rechargeable remote resistant ring rubber running
+    party pendant pocket rack rain rechargeable remote resistant ring rubber running
     safety screen shirt shoes silicone slayer sleeve solar speaker speed spider sports statue stereo
     stainless stand steel storage strap straw summer table travel trousers resin
     toy universal vacuum watch water weather women wood wooden

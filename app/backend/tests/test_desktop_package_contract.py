@@ -23,8 +23,10 @@ START_DESKTOP = REPO_ROOT / "scripts" / "start-desktop.bat"
 VERIFY_DESKTOP_PACKAGE = REPO_ROOT / "scripts" / "verify-desktop-package.ps1"
 FRONTEND_VITE_CONFIG = REPO_ROOT / "app" / "frontend" / "vite.config.ts"
 README = REPO_ROOT / "README.md"
+DOCS_INDEX = REPO_ROOT / "docs" / "README.md"
 USER_GUIDE = REPO_ROOT / "docs" / "product" / "用户交付使用说明-20260526.md"
 PORTABLE_QUICK_GUIDE = REPO_ROOT / "docs" / "product" / "免安装版快速使用说明-20260615.md"
+MVP_CONTRACT = REPO_ROOT / "docs" / "product" / "MVP-竖切-草稿箱批量只保存.md"
 APP_TSX = REPO_ROOT / "app" / "frontend" / "src" / "App.tsx"
 SAFETY_STATUS_BAR = REPO_ROOT / "app" / "frontend" / "src" / "components" / "SafetyStatusBar.tsx"
 WORKBENCH_MODULES_TSX = REPO_ROOT / "app" / "frontend" / "src" / "components" / "WorkbenchModules.tsx"
@@ -764,47 +766,37 @@ def test_verify_desktop_package_smoke_script_checks_packaged_exe_logs():
     assert "Portable smoke skipped. Current delivery target is the verified directory免安装版" in source
 
 
-def test_user_docs_present_desktop_exe_as_primary_delivery_entry():
+def test_historical_delivery_guides_are_not_current_authority():
     readme = README.read_text(encoding="utf-8")
-    user_guide = USER_GUIDE.read_text(encoding="utf-8")
-
-    for source in (readme, user_guide):
-        assert "DXM Agent Console 桌面版" in source
-        assert "D:\\Desktop\\DXM-Agent-Console-免安装版\\DXM-Agent-Console-Portable-0.1.0.exe" in source
-        assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
-        assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in source
-        assert "87FF78089190226C2E98FAA1B4BA60DA25E25C320901B9FD7C0A6207F9C140F8" in source
-        assert "portable 首次启动会解包 Electron 与 Python 运行时" in source
-        assert "%TEMP%` 所在磁盘建议至少保留 1GB 可用空间" in source
-        assert "scripts\\start-desktop.bat" in source
-        assert "scripts\\verify-desktop-package.ps1" in source
-        assert "AppData\\Roaming\\DXM Agent Console\\data\\desktop-main.log" in source
+    index = DOCS_INDEX.read_text(encoding="utf-8")
+    for guide in (USER_GUIDE, PORTABLE_QUICK_GUIDE):
+        relative_path = f"product/{guide.name}"
+        assert f"]({relative_path})" not in index
+        assert f"`{relative_path}`" in index
+    assert "不是当前真相、可执行任务或有效链接" in index
+    assert MVP_CONTRACT.exists()
+    assert "MVP-竖切-草稿箱批量只保存.md" in readme
+    assert "E3_OPEN" in readme and "BLOCKED" in readme
 
 
-def test_portable_quick_guide_uses_verified_portable_entry():
-    source = PORTABLE_QUICK_GUIDE.read_text(encoding="utf-8")
+def test_current_mvp_contract_supersedes_removed_portable_quick_guide():
+    source = MVP_CONTRACT.read_text(encoding="utf-8")
 
-    assert "D:\\Desktop\\DXM-Agent-Console-免安装版\\DXM-Agent-Console-Portable-0.1.0.exe" in source
-    assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
-    assert "使用目录版时必须保留整个文件夹和 `resources` 目录" in source
-    assert "outputs\\desktop-build\\DXM-Agent-Console-Portable-0.1.0.exe" in source
-    assert "87FF78089190226C2E98FAA1B4BA60DA25E25C320901B9FD7C0A6207F9C140F8" in source
-    assert "至少建议保留 1GB 可用空间" in source
+    assert "E1–E4 的唯一产品主合同" in source
+    assert "batch_draft_save" in source
+    assert "真实可见浏览器" in source
+    assert "只保存" in source and "不发布" in source
+    assert source.count("`MVP_READY`") >= 2
+    assert source.count("`PROD_READY`") >= 2
 
 
-def test_delivery_docs_describe_two_stage_real_browser_scope():
-    docs = [
-        README,
-        PORTABLE_QUICK_GUIDE,
-        USER_GUIDE,
-    ]
+def test_delivery_docs_describe_current_batch_save_only_scope():
+    docs = [README, MVP_CONTRACT]
     for path in docs:
         source = path.read_text(encoding="utf-8")
-        assert "待认领商品" in source
-        assert "商品箱编辑保存" in source
         assert "只保存" in source
         assert "不发布" in source
-        assert "真实浏览器" in source
+        assert "真实" in source and "浏览器" in source
         assert "本地测试商品" not in source
 
 
@@ -825,7 +817,7 @@ def test_frontend_vite_proxy_uses_runtime_backend_target_for_isolated_qa():
     assert "target: 'ws://127.0.0.1:8000'" not in source
 
 
-def test_app_shell_presents_agent_console_as_user_first_navigation():
+def test_app_shell_presents_frozen_mvp_navigation():
     source = (REPO_ROOT / "app" / "frontend" / "src" / "components" / "AppShell.tsx").read_text(encoding="utf-8")
     index_html = (REPO_ROOT / "app" / "frontend" / "index.html").read_text(encoding="utf-8")
 
@@ -833,10 +825,10 @@ def test_app_shell_presents_agent_console_as_user_first_navigation():
     assert "type PrimaryNavigationItem" in source
     assert "const primaryNavigation" in source
     primary_block = source[source.index("const primaryNavigation"):source.index("const sectionLabels")]
-    for label in ["编辑工作台", "模板中心", "浏览器现场", "批次记录", "系统设置"]:
+    for label in ["工作台", "连接店小秘", "采集箱选品", "铺货方案", "开始批量保存", "保存结果", "设置"]:
         assert label in primary_block
-    assert primary_block.count("{ id: '") == 5
-    for hidden_label in ["待认领入箱", "商品箱编辑保存", "当前保存任务", "报告与证据", "问题与证据"]:
+    assert primary_block.count("{ id: '") == 7
+    for hidden_label in ["待认领入箱", "商品箱编辑保存", "当前保存任务", "问题与证据"]:
         assert hidden_label not in primary_block
     assert "nav-subitem" in source
     assert "Agent 控制台" not in source

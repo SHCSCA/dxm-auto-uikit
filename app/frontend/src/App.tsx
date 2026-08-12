@@ -39,8 +39,8 @@ const DXM_TARGET_LABELS: Record<keyof typeof DXM_TARGET_URLS, string> = {
   draft_box: '商品箱',
 }
 const AGENT_CONSOLE_NAVIGATION_SETTLE_MS = 2500
-const REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save', 'batch_save'])
-const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save'])
+const REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save', 'batch_save', 'batch_draft_save'])
+const RELEASED_REAL_DXM_MUTATION_MODES = new Set(['claim_only', 'single_save', 'batch_draft_save'])
 const UNRELEASED_REAL_DXM_MUTATION_MODES = new Set(['batch_save'])
 const DXM_READY_SESSION_STATUSES = new Set(['login_success', 'logged_in', 'not_published_verified', 'workflow_navigation'])
 const CLAIM_ONLY_CONFIRMATION = '确认将该已有商品认领到商品箱'
@@ -846,8 +846,7 @@ export default function App() {
       if (!dxmLoginDraft.rememberCredential) {
         setDxmLoginDraft((current) => ({ ...current, password: '' }))
       }
-      const stage = String(loginStart.stage ?? '')
-      setActiveSection(stage === 'waiting_captcha' ? 'dxm_access' : 'start_save')
+      setActiveSection('dxm_access')
       await refreshRuntimeStatus()
       await refreshRuntimeLogs()
       await refreshWorkspace()
@@ -911,14 +910,18 @@ export default function App() {
     try {
       const loginResult = await postJson<Record<string, unknown>>('/api/dxm/login/continue', { confirm: true })
       const stage = String(loginResult.stage ?? '')
+      const reasonCode = String(loginResult.reason_code ?? '')
+      const readerReady = loginResult.logged_in === true
+        && loginResult.reader_ready === true
+        && reasonCode === 'LOGIN_READER_READY'
       const message = humanDxmLoginFlowNotice(loginResult, '已检测店小秘登录态。')
-      const loginFailed = stage === 'login_failed' || stage.includes('failed')
+      const loginFailed = stage === 'login_failed' || stage.includes('failed') || !readerReady
       if (loginFailed) {
         setOperationError(message)
         setActiveSection('dxm_access')
       } else {
-        setOperationNotice(message)
-        setActiveSection(stage === 'waiting_captcha' ? 'dxm_access' : 'start_save')
+        setOperationNotice(`${message} 正在进入真实采集箱选品；不会保存或发布。`)
+        setActiveSection('draft_selection')
       }
       await refreshRuntimeStatus()
       await refreshRuntimeLogs()
@@ -1253,7 +1256,7 @@ export default function App() {
             onOpenDxmLogin={openDxmLogin}
             onContinueDxmLogin={continueDxmLogin}
             onNavigateDxmTarget={navigateDxmTarget}
-            onShowConsole={() => setActiveSection('start_save')}
+            onShowConsole={() => setActiveSection('draft_selection')}
           />
         )
       case 'acquisition_claim':
@@ -1280,6 +1283,7 @@ export default function App() {
               setTemplateCenterEntryMode('e2_plan')
               setActiveSection('template_center')
             }}
+            onReviewSnapshot={() => { setActiveSection('start_save'); return true }}
           />
         )
       case 'product_tasks':

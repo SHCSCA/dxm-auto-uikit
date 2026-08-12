@@ -162,11 +162,12 @@ def _install_reader_routes(page: Page, state: dict[str, object]) -> None:
     page.route("**/api/dxm/draft-reader/**", handle)
 
 
-def _confirm_three_products(page: Page) -> None:
+def _confirm_three_products(page: Page, *, expect_confirmed: bool = True) -> None:
     page.get_by_role("button", name="选择本页").click()
     page.locator(".draft-selection-plan select").select_option("9")
     page.get_by_role("button", name="确认任务输入（不启动）").click()
-    page.get_by_text("任务输入已确认").wait_for()
+    if expect_confirmed:
+        page.get_by_text("任务输入已确认").wait_for()
 
 
 def test_draft_selection_revokes_parent_input_on_failure_unmount_and_account_change(
@@ -255,6 +256,37 @@ def test_cross_page_product_identity_drift_fails_closed_in_mounted_component(
     assert "冲突身份" in alert.inner_text()
     assert "0 件已选择" in page.locator(".draft-selection-receipt").inner_text()
     assert page.get_by_test_id("parent-task-input").inner_text() == "null"
+    page.close()
+
+
+def test_confirmed_real_reader_input_advances_to_preview_and_freeze_page(
+    browser: Browser,
+    vite_origin: str,
+) -> None:
+    page = browser.new_page(viewport={"width": 1280, "height": 900})
+    _install_reader_routes(page, _reader_state())
+    page.route(
+        "**/api/local-plan-templates/9",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(_e2_plan_payload(), ensure_ascii=False),
+        ),
+    )
+    page.goto(
+        f"{vite_origin}/tests/browser/draft-selection-harness.html?autoAdvance=1",
+        wait_until="domcontentloaded",
+    )
+    page.get_by_text("Draft 1001").wait_for()
+
+    _confirm_three_products(page, expect_confirmed=False)
+
+    page.get_by_role("heading", name="开始批量保存").wait_for()
+    review = page.get_by_label("plan snapshot 预览与冻结")
+    preview_button = review.get_by_role("button", name="预览并校验快照")
+    page.wait_for_timeout(500)
+    assert preview_button.is_enabled(), page.locator("main").inner_text()
+    assert "不会启动保存或发布" in page.locator("main").inner_text()
     page.close()
 
 

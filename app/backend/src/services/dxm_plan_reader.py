@@ -11,6 +11,10 @@ from src.batch_edit.plan_schema_contract import (
     normalize_wire_value,
 )
 from src.batch_edit.scope_contract import canonical_sha256
+from src.execution.browser_agent_protocol import (
+    MutationCommandContractError,
+    build_frozen_product_target_identity,
+)
 from src.services.dxm_draft_reader import DxmDraftReader
 
 
@@ -153,11 +157,20 @@ class DxmPlanReader:
                 "DXM_PLAN_SESSION_MISMATCH",
                 "当前真实浏览器会话与选品确认时的 Reader 证明不一致。",
             )
-        if normalized_shop_id not in {shop["id"] for shop in shops["shops"]}:
+        selected_shop = next(
+            (
+                shop
+                for shop in shops["shops"]
+                if shop["id"] == normalized_shop_id
+            ),
+            None,
+        )
+        if selected_shop is None:
             raise DxmPlanReaderError(
                 "PLAN_SCOPE_CONFLICT",
                 "快照店铺不在当前登录账号的真实 shopMap 中。",
             )
+        store_name = str(selected_shop["name"])
 
         requested = set(normalized_product_ids)
         observed: dict[str, dict[str, Any]] = {}
@@ -304,6 +317,17 @@ class DxmPlanReader:
                 detail,
                 schema=schema,
             )
+            try:
+                target_identity = build_frozen_product_target_identity(
+                    product_id=product["id"],
+                    store_name=store_name,
+                    source_urls=list(product.get("source_urls") or []),
+                )
+            except MutationCommandContractError as exc:
+                raise DxmPlanReaderError(
+                    "PLAN_TARGET_IDENTITY_INVALID",
+                    "草稿商品缺少可复现的稳定身份或规范来源链接，已停止冻结。",
+                ) from exc
             items.append(
                 {
                     "product_id": product["id"],
@@ -312,6 +336,7 @@ class DxmPlanReader:
                     "category_schema": schema,
                     "expected_schema_hash": canonical_sha256(schema),
                     "current_values": current_values,
+                    "target_identity": target_identity,
                 }
             )
         return {
@@ -323,6 +348,7 @@ class DxmPlanReader:
                     "session_ref": expected_session_ref,
                     "account_ref_hash": scope["account_context_hash"],
                     "shop_id": normalized_shop_id,
+                    "shop_name": store_name,
                 },
             },
             "template_records": scope["template_records"],
@@ -428,7 +454,12 @@ class DxmPlanReader:
                     )
                 raw_attr_name_id = raw_attribute.get("attrNameId")
                 raw_value_id = raw_attribute.get("attrValueId")
-                if raw_value_id not in (None, ""):
+                value_id_is_unselected = (
+                    type(raw_value_id) is int and raw_value_id == 0
+                ) or (
+                    type(raw_value_id) is str and raw_value_id.strip() == "0"
+                )
+                if raw_value_id not in (None, "") and not value_id_is_unselected:
                     raw_value = _positive_id_text(
                         raw_value_id,
                         "detail attrValueId",

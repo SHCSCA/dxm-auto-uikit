@@ -9,6 +9,7 @@ class PlaywrightEngine:
                 "claim_only",
                 "single_save",
                 "batch_save",
+                "batch_draft_save",
                 "check_login",
                 "open_smt_draft_list",
                 "claim_product",

@@ -7,7 +7,7 @@ API_TS = REPO_ROOT / "app" / "frontend" / "src" / "api.ts"
 
 def test_frontend_api_errors_hide_raw_technical_failures_from_user_messages():
     source = API_TS.read_text(encoding="utf-8")
-    response_error = source[source.index("async function responseErrorMessage"):source.index("function safeApiErrorMessage")]
+    response_error = source[source.index("async function responseError("):source.index("function safeApiErrorMessage")]
     safe_error = source[source.index("function safeApiErrorMessage"):]
 
     assert "safeApiErrorMessage(" in response_error
@@ -19,4 +19,4 @@ def test_frontend_api_errors_hide_raw_technical_failures_from_user_messages():
     assert "Traceback" in safe_error
     assert "<html" in safe_error
     assert "本机服务处理失败" in safe_error
-    assert "系统没有执行保存或发布" in safe_error
+    assert "操作结果未确认。系统不会自动重试" in safe_error

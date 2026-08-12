@@ -1147,8 +1147,19 @@ def _two_stage_acceptance(
     publish_guard = _publish_guard_state(reports, extracted)
 
     claim_provenance_valid = bool(product) and repo.product_has_completed_claim_provenance(product)
+    # Public task payloads intentionally redact the immutable Stage A proof.  The
+    # readiness validator must compare the persisted private snapshot, never the
+    # redacted API projection, or every valid task is misclassified as drifted.
+    persisted_save_task = (
+        repo.get_task_private(save_task_id)
+        if save_task_id is not None
+        else None
+    )
     claim_snapshot_error = (
-        repo.single_save_claim_snapshot_error(dict(task), product)
+        repo.single_save_claim_snapshot_error(
+            dict(persisted_save_task or task),
+            product,
+        )
         if product is not None
         else "claimed product is unavailable"
     )
@@ -2478,6 +2489,8 @@ def _looks_like_save_result(payload: Mapping[str, Any]) -> bool:
         and audit.get("save_request_count") == 1
         and type(audit.get("other_mutation_request_count")) is int
         and audit.get("other_mutation_request_count") == 0
+        and type(audit.get("read_only_schema_request_count")) is int
+        and audit.get("read_only_schema_request_count") >= 0
         and type(audit.get("publish_request_count")) is int
         and audit.get("publish_request_count") == 0
     ):
