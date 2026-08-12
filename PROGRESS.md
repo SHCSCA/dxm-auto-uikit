@@ -4,6 +4,8 @@
 
 ## E3 L0 无轮次限制续跑（2026-08-12 · 用户已批准）
 
+- **E3 工程门禁结论：`E3_READY_FOR_CANARY`（非 `E3_ACCEPTED`）。**固定代码提交 `717ae3c5618ced19467d528e41aac784e896c810` 的 detached clean worktree status=`0`；完整 backend L0 为 `2168 passed / 0 failed / 0 skipped in 894.31s`、exit `0`，日志 `C:/Users/wz/AppData/Local/Temp/dxm-e3-final-l0-717ae3c/pytest.log`。同一提交的 frontend 标准 build 为 Node `12/12`、Chromium `7/7`、typecheck 与 Vite `56 modules` 全绿；desktop=`89/89`、skipped/todo=`0`；文档 SelfTest 两项 `RED_EXPECTED` 后 `MVP_DOCS_OK`；`git diff --check`、clean status、端口 5173/8000 均为 `0`。
+- **固定范围与零写边界：**代码提交相对父提交为 `79 files / 0 deletions`，首次 clean 假绿依赖已关闭；Gold clean 物理 SHA 恢复并锁定为 `DD41C8A4...`。主工作树 52 个既有删除仍未进入提交，未读取/提交 data、Cookie、raw 抓包或真实业务样例；真实 DXM 登录、站点浏览器操作、保存、发布均为 `0`，没有 push。下一步仅可在另行明确授权后执行工作台 UI 三商品 canary。
 - **第二固定点 clean backend 已全绿，但文档物理哈希暴露跨检出缺口：**detached `ff2bb468...`、status=`0` 的 clean worktree 完整 L0 为 `2168 passed / 0 failed / 0 skipped in 766.72s`、exit `0`；随后文档 SelfTest 的两项内存反例均正确输出 `RED_EXPECTED`，但真实文件因 Windows 全局 `core.autocrlf=true` 把 Gold 的 280 个 LF 检出成 CRLF，物理 SHA 从锁定 `DD41C8A4...` 变为 `A53196B1...` 而判红。Gold blob/文本未改，修复方向是新增精确 `.gitattributes` 令该受保护真源始终 `eol=lf`，不修改 Gold 或放宽校验器。
 - **固定提交 clean 复验已真实判红并继续修复：**本地候选 `44e853aa...` 的独立 clean worktree 完整 L0 为 `6 failed / 2162 passed / 0 skipped in 844.99s`、exit `1`。6 项均为候选范围过窄导致的自包含缺口：4 项测试错误依赖 52 个未提交历史删除，1 项依赖未提交 README，1 项依赖未提交 `start-mvp.ps1` 持久 BrowserAgent 配置；不得拿主脏树 `2168 passed` 冒充固定提交全绿。
 - **最小修复方向已冻结：**历史说明可留档但不得成为 README/docs 索引的有效权威链接，不会为过测试而暂存 52 个既有删除；README 作为当前状态入口、`start-mvp.ps1` 作为统一可见持久 BrowserAgent 的生产启动真相纳入候选。完成定向 clean 红→绿后 amend，再重跑完整 clean L0。

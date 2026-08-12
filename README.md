@@ -6,9 +6,9 @@ DXM 半托管自动化工作台：用真实可见浏览器处理店小秘已有�
 
 当前产品主合同是 [MVP 竖切：草稿箱批量只保存](docs/product/MVP-竖切-草稿箱批量只保存.md)：从店小秘草稿箱只读选择多件商品，以本地方案和只读店小秘模板形成不可变 `plan_snapshot`，后续仅允许 `batch_draft_save`；发布、保存并发布和移入待发布始终禁止。旧 `claim_only` / `single_save` 只保留为历史兼容能力，不是 MVP 前置或当前产品主叙事。
 
-**当前状态为 `E2_DEFERRED` / `E3_OPEN`，生产交付仍为 `BLOCKED`。** 用户已裁定 E2 遗留登记后允许开展 E3 工程合同，但这不是 `E2_ACCEPTED` 或 `E3_ACCEPTED`。本轮已把 JIT 授权、队列顺序、审批租约、冻结 snapshot/Schema/字段值、页面身份、SAVE ActionResult、mutation ledger、重启 `UNKNOWN` 与后续 `VERIFY_NOT_PUBLISHED` 绑定为同一不可变执行链；发布、保存并发布和移入待发布仍无入口。
+**当前工程状态为 `E2_DEFERRED` / `E3_READY_FOR_CANARY`，生产交付仍为 `BLOCKED`。** 这只表示 E3 代码、合同和固定提交的本地工程门禁已通过，不是 `E2_ACCEPTED`、`E3_ACCEPTED`、`MVP_READY` 或 `PROD_READY`。本轮已把 JIT 授权、队列顺序、审批租约、冻结 snapshot/Schema/字段值、页面身份、SAVE ActionResult、mutation ledger、重启 `UNKNOWN` 与后续 `VERIFY_NOT_PUBLISHED` 绑定为同一不可变执行链；发布、保存并发布和移入待发布仍无入口。
 
-本轮真实店小秘登录、保存、发布和站点浏览器操作均为 0。当前主工作树完整 backend L0 为 `2168 passed / 0 failed / 0 skipped`，login-flow 为 `461/461`；frontend 标准 build、desktop `89/89` 与文档 SelfTest 也已通过。首次本地固定提交的 clean checkout 暴露 6 个候选自包含缺口，正在以最小范围修复并重新全量复验；clean 固定点未全绿前不得标 `E3_READY_FOR_CANARY`，详见 [PROGRESS](PROGRESS.md) 与 [BLOCKED](BLOCKED.md)。
+本轮真实店小秘登录、保存、发布和站点浏览器操作均为 0。固定代码提交 `717ae3c5618ced19467d528e41aac784e896c810` 的独立 clean worktree 完整 backend L0 为 `2168 passed / 0 failed / 0 skipped`；frontend 标准 build（Node `12/12`、Chromium `7/7`、typecheck、Vite）、desktop `89/89`、文档 SelfTest 红→绿、diff/status/端口门禁也已通过。下一步只能在另行明确授权后执行可见浏览器三商品 canary，详见 [PROGRESS](PROGRESS.md) 与 [BLOCKED](BLOCKED.md)。
 
 当前源码/package 版本是 `0.1.3`，但本轮没有构建或交付 `0.1.3` portable。2026-07-04 的 `0.1.0` portable 与 `READY` 记录仅是历史构建快照，不是当前分支或 `0.1.3` 的放行结论。当前事实入口见 [文档导航](docs/README.md)、[MVP 主合同](docs/product/MVP-竖切-草稿箱批量只保存.md) 和 [E2 冻结遗留与 E3 开工](docs/product/E2-冻结遗留与E3开工.md)。
 
@@ -303,9 +303,9 @@ scripts\final-delivery-check.bat --help
 ## 下一步重点
 
 1. 保持 `config/l2_readonly_allowlist.json` 的最小只读范围；Schema 查询即使使用 POST 也只能进入明确只读审计白名单，未知请求一律失败关闭。
-2. 在本地固定提交的 clean worktree 重跑完整 backend L0、frontend 标准 build、desktop 测试、文档 SelfTest、范围/秘密/哈希门禁；任一项红灯都继续 `E3_OPEN / BLOCKED`。
-3. 只有上述 clean 固定点全绿，工程状态才可提升为 `E3_READY_FOR_CANARY`；这仍不是 `E3_ACCEPTED`、`MVP_READY` 或 `PROD_READY`，真实写入必须另行明确授权。
-4. 后续可见浏览器 canary 必须由工作台 UI 完成真实登录、同次 Reader 选择至少 3 件草稿、按冻结 snapshot 串行只保存，并逐件取得“回包 + 页面成功态 + 独立未发布”三铁证；任何 `UNKNOWN` 立即停批。批量、无人值守和发布不得从旧能力推导授权。
+2. 保持固定提交 clean worktree 的 backend L0、frontend 标准 build、desktop 测试、文档 SelfTest、范围/秘密/哈希门禁全绿；任一项回退都撤销 `E3_READY_FOR_CANARY` 并恢复 `E3_OPEN / BLOCKED`。
+3. 当前 `E3_READY_FOR_CANARY` 仍不是 `E3_ACCEPTED`、`MVP_READY` 或 `PROD_READY`，真实写入必须另行明确授权，且授权必须绑定实际固定提交与工作树身份。
+4. 获得授权后的可见浏览器 canary 必须由工作台 UI 完成真实登录、同次 Reader 选择至少 3 件草稿、按冻结 snapshot 串行只保存，并逐件取得“回包 + 页面成功态 + 独立未发布”三铁证；任何 `UNKNOWN` 立即停批。扩大批量、无人值守和发布不得从旧能力或本次受控三件 canary 推导授权。
 
 免安装版快速使用说明与 2026-06-22/2026-07-04 验收记录均为历史资料。当前源码有新改动或 L2/L3 证据过期时，交付前必须重新跑 clean worktree、同 HEAD portable 和新鲜门禁；不得复用旧 `single_save` 结论扩大解释。
 
@@ -357,4 +357,4 @@ scripts/
 
 ## 一句话状态
 
-**当前源码处于 `E2_DEFERRED / E3_OPEN`：主工作树工程门禁已绿，固定提交 clean 复验仍在进行；真实三商品 canary 未授权、未执行，生产交付保持 `BLOCKED`。**
+**当前源码处于 `E2_DEFERRED / E3_READY_FOR_CANARY`：固定提交 clean 工程门禁已全绿；真实三商品 canary 未授权、未执行，生产交付保持 `BLOCKED`。**

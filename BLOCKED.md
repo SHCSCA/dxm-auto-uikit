@@ -4,6 +4,8 @@
 
 ## E3 L0 无轮次限制续跑（2026-08-12 · 原三轮阻断已解除）
 
+- **当前无未解决的 E3 自动化工程红项；状态提升为 `E3_READY_FOR_CANARY`。**固定代码提交 `717ae3c5618ced19467d528e41aac784e896c810` 的 clean backend=`2168 passed / 0 failed / 0 skipped`，frontend/desktop/docs/diff/status/端口门禁均绿。剩余阻断仅是外部真实三商品 canary 尚未获得本轮明确授权、尚未执行；因此不得标 `E3_ACCEPTED`、`MVP_READY` 或 `PROD_READY`，生产交付仍为 `BLOCKED`。
+- **待后续授权的唯一执行项：**从工作台 UI 使用同一可见会话完成真实登录 → shops/products 至少 3 件 draft → preview/freeze → 串行 `batch_draft_save`，逐件复核回包、页面成功态与独立未发布三铁证；任何 `UNKNOWN` 必须停批。发布、保存并发布、移入待发布继续禁止。
 - 第二固定点 clean backend 已取得 `2168 passed / 0 failed / 0 skipped`；当前新阻断仅为 clean checkout 下 Gold 被全局 `core.autocrlf=true` 转成 CRLF，导致物理 SHA 假漂移。Gold 内容和校验器均不改，正以单文件 `.gitattributes eol=lf` 固定跨 worktree 字节真相；在新 fixed commit 的 docs/frontend/desktop/backend 全门禁重新通过前仍保持 `E3_OPEN / BLOCKED`。
 - 本地固定提交已建立，但首次独立 clean worktree 完整 L0 为 `6 failed / 2162 passed / 0 skipped`，因此当前仍不能标 `E3_READY_FOR_CANARY`。失败不是 E3 写链生产反例，而是候选漏收 README/启动配置且 4 个测试错误依赖未提交历史文件删除；正在以“不恢复、不暂存 52 个删除”的最小合同修正后重新 clean 复验。
 - 完整后端 L0 已取得 `2168 passed / 0 failed / 0 skipped`；后端事实门禁不再阻断。当前只剩客户端、文档、范围/秘密/哈希、固定提交与干净 worktree 复验。
