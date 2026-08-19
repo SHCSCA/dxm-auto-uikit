@@ -750,6 +750,9 @@ def test_browser_runtime_never_calls_operation_when_lease_expires_after_jit(ledg
         def browser_session_id(self):
             return "batch-browser-session-lease-cas"
 
+        def refresh_account_context_hash(self):
+            return "A" * 64
+
         def current_mutation_identity(self):
             return {
                 "browser_session_id": self.browser_session_id(),

@@ -261,6 +261,22 @@ test('selected QA data always lives below QA userData while normal dev keeps rep
   )
 })
 
+test('packaged launch skips occupied 8000 and uses the next free loopback port', async () => {
+  const packagedPort = await selectBackendPort({
+    isIsolatedQa: false,
+    isPackaged: true,
+    isPortFree: async (port) => port === 8003,
+  })
+  assert.equal(packagedPort, 8003)
+
+  const packagedDefault = await selectBackendPort({
+    isIsolatedQa: false,
+    isPackaged: true,
+    isPortFree: async () => true,
+  })
+  assert.equal(packagedDefault, 8000)
+})
+
 test('normal launch is fixed to port 8000 and isolated QA alone may select 8000..8079', async () => {
   let checks = 0
   const normalPort = await selectBackendPort({

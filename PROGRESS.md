@@ -2,6 +2,174 @@
 
 # 当前状态（置顶）
 
+## 分支整理与文档复核（2026-08-19）
+
+- **真实仓库：** `D:\Desktop\py\dxm-auto-uikit`；当前分支 `fix/dxm-two-stage-runtime-truth`；复核前 HEAD=`416810f61ad0f038bdd5bde850ed1dd50300d354`。
+- **用户授权：** 用户已明确要求合并分支、同步文档并推送代码；本次授权不改变禁止发布、只保存、可见浏览器、三铁证和 `UNKNOWN` 停批边界。
+- **专项复验：** backend 审计/E4/模板/派发 `39 passed`；frontend Node `27 passed`、browser harness `9 passed`、typecheck 通过；desktop `92 passed`。所有结果均为离线或隔离数据，真实店小秘登录/保存/发布=`0/0/0`。
+- **仍未关闭：** 完整 backend L0 未绑定新提交重跑为全绿；`outputs\desktop-build` 不存在；portable 同 HEAD smoke、真实三商品 preview/freeze/save、`MVP_READY` 和 `PROD_READY` 均未完成。
+- **生成物处理：** `.agents/`、`.playwright-cli/`、`output/`、`artifacts/` 等本地诊断生成物不纳入提交；不修改、不删除用户文件。
+
+## 免安装桌面交付与全链路操作日志 · 开工（2026-08-14）
+
+- **本会话认领：** 按任务书实现 A–F；零真实保存/发布；不启动/克隆 `#191`；不 commit/push。
+- **重测身份：** 权威仓 `D:\Desktop\py\dxm-auto-uikit`；branch=`fix/dxm-two-stage-runtime-truth`；HEAD=`416810f61ad0f038bdd5bde850ed1dd50300d354`（ahead 12）；既有改动与 52 个删除不覆盖、不恢复。
+- **版本：** backend/frontend/desktop=`0.1.4`；`outputs\desktop-build` 仍不存在。
+- **A 实测：** `pytest tests/test_operation_audit.py -q` → `6 passed` / exit `0`（独立 `DXM_DATA_DIR`）。覆盖脱敏、hash-chain、点击前 `AUDIT_WRITE_FAILED` 零点击、点击后 `UNKNOWN` 停批、重启读回、幂等 correlation。
+- **B/C/D 接线：** 登录 start/continue（只记 username_length）、preview、approve-and-start、页面切换、mutation 点击前 append；失败则 `MutationAuthorizationError` 且不点。
+- **E 实测：** `node --test tests/operationAudit.test.mjs` → `2 passed`。结果页加入时间线与导出 ZIP API。
+- **F 部分：** `verify-desktop-package.ps1` 改为读 `app/desktop/package.json` 的 `0.1.4` 拼 portable 文件名。用户一页说明已写。
+- **F 产物（用户同意后构建）：** `outputs\desktop-build\DXM-Agent-Console-Portable-0.1.4.exe` size=`103373233` SHA256=`89AAEAE83AB3ED9CC034C8A0865946E87291637A47759F82E695AFC0B1628083`；manifest fingerprint=`C21B31663C5BE0FD812B4EABC0DFC6345E535F360430D546A743336602540242`。首次 `verify-desktop-package.ps1 -CheckPortable` 因脚本把 `DXM_DESKTOP=1` 套在非 Electron owner 上超时；已改为 `DXM_RUNTIME_OWNER=package_probe`。打包后端在该 owner 下 `import src.main` 成功。官方全套 smoke **尚未复跑绿**。口径 `DESKTOP_CANARY_BLOCKED`。
+- **portable 双击失败（已定位并修源码）：** 日志 `runtime identity backendPid mismatch`。原因是免安装版固定打 8000，健康检查打到本机已有 `start-mvp`/旧后端。现改为 packaged 在 8000 占用时改用 8001–8079，且错误页会写明端口冲突。desktop `launch-policy`+`runtime-start` **43 passed**。
+- **新包已打通控制台：** `DXM-Agent-Console-Portable-0.1.4.exe` SHA256=`C09388177FF6F888CC9DF8ED3C38384264173BED066941458461B879855E0039` size=`103374829`（2026-08-14 10:31）。
+- **根因：** Windows venv `python.exe` spawn pid ≠ 真实解释器 `D:\PY\python.exe` `os.getpid()`；同 instanceId 应对账 live pid。asar 已含该对账；desktop **57 passed**。
+- **实测：** `2026-08-14T02:35:03Z` `Loaded frontend` `apiBase=http://127.0.0.1:8000`；`/health` instance=`desktop-mssc3liu-e85651f8ee43` packageSha 与新包一致。窗口应已打开。
+- **采集箱列表：** 行展示缩略图 / 备注 / 店铺名 / 来源平台；分页 `第 a–b 条，共 n 条` + 20/50/100（默认 100）。任务身份不变。保存/发布仍 `0`。
+
+## 免安装桌面交付与全链路操作日志 · 规划完成（2026-08-14）
+
+- **用户产品裁定：** 正式控制台必须交付 Windows 免安装 EXE；用户不应打开网页、PowerShell、Python 或 npm。店小秘自动化仍使用独立真实可见浏览器窗口。
+- **任务书已落盘：** [CODEX-GOAL-免安装桌面版与全链路操作日志-20260814.md](docs/product/CODEX-GOAL-免安装桌面版与全链路操作日志-20260814.md)。本轮只完成基线核对、计划和文档同步，尚未开始该目标的业务代码、测试、打包或真实 DXM 操作。
+- **开工基线（规划前实测）：** 权威仓 `D:\Desktop\py\dxm-auto-uikit`；branch=`fix/dxm-two-stage-runtime-truth`，HEAD=`416810f61ad0f038bdd5bde850ed1dd50300d354`；status records=`742`（tracked=`94` / untracked=`648` / deleted=`52`）。这些数字只代表当时工作树，既有改动和 52 个删除不得覆盖或恢复。
+- **版本/包事实：** backend/frontend/desktop manifest 均为 `0.1.4`；`outputs\desktop-build` 不存在，当前没有 `0.1.4` portable。`app/desktop` 已有 `build:portable`，但 `scripts/verify-desktop-package.ps1` 仍固定查找 `DXM-Agent-Console-Portable-0.1.0.exe`，必须改为从 manifest 解析实际版本。
+- **日志事实：** 已有 `job_logs`、`job_evidences`、`reports`、mutation ledger、runtime 文本日志、AgentConsole/BrowserAgent 事件；当前分散在数据库、文本和内存中，BrowserAgent 只留最近 50 条，不能完整回答“用户点了什么 → 哪个 API/任务/商品 → 浏览器做了什么 → DXM 回了什么 → 证据落在哪里”。
+- **已冻结的实现方向：** append-only 结构化审计事件 + correlation/causation 链 + task/job/product/snapshot/command/mutation/build 身份 + hash chain；配置、预览、审批、四键、Runner、DOM 写读、网络摘要和三铁证全接入；前端复用现有导航显示中文时间线；可导出带 SHA256 的脱敏诊断 ZIP。
+- **安全门禁：** 密码、Cookie、Authorization、token、完整 HTML/原始响应永不记录。真实点击前审计落盘失败必须 `AUDIT_WRITE_FAILED` 且零点击；点击后审计或证据不确定必须 `UNKNOWN`、停批、禁自动重试。日志可用性不能只靠内存或前端显示证明。
+- **交付顺序：** 审计数据合同 → 全链路埋点与 fail-closed → 时间线/筛选/诊断包 → 动态版本 portable → 隔离 user-data 打包 smoke → 全量门禁。完成后才由用户在新 portable 中配置真实类目分区模板、创建**新**三商品 snapshot；旧 `#191` 继续 `draft`，不得启动/克隆。
+- **当前口径：** `E3_READY_FOR_CANARY` 仅属于历史 clean 固定点；当前工作树、模板、portable 与统一审计未形成同源证据，按 `E3_OPEN / BLOCKED` 管理。本轮店小秘登录=`0`、浏览器操作=`0`、保存=`0`、发布=`0`、commit/push=`0`；不得宣称 `E3_ACCEPTED`、`E4_ACCEPTED`、`MVP_READY` 或 `PROD_READY`。
+
+## 状态收口 · E4 代码完成 / DoD 未关（2026-08-13）
+
+- **用户确认：** 视觉对齐 v6 原型**先不改**；先更新文档。
+- **阶段口径（不变）：** `E2_DEFERRED` · `E3_READY_FOR_CANARY`（非 `E3_ACCEPTED`）。**不宣称** `E4_ACCEPTED` / `MVP_READY` / `PROD_READY`。`#191` 保持 `draft`。
+- **E4 结论（写死）：**
+  - **代码控制面：完成。** request + worker 安全点 ack + 前端四键 + 定向单测已绿。
+  - **§7.5 DoD / 真机验收：未完成。** 未做真实 ≥3 品「暂停 ≥10s → 继续不重做已完成保存 / 停止后不再派发」；HVD 与日志/结果同源仅有代码投影，缺真机核对。
+  - **固定关系：** E4 单测绿 ≠ E4 验收关闭 ≠ `MVP_READY`。
+- **E3 真写：** 仍滞后（分区模板未配齐 + 未授权 canary）。
+- **视觉：** 与 `dxm-console-v6.html` 的 rail/监控舞台等偏差**登记保留、本轮不改**；MVP 已裁定的 7 导航 Path A 与 240/56 布局以合同为准。
+- **下一步（需用户另授）：** 类目模板配齐 → 真写 canary（E3）→ 真机四键（E4 DoD）→ 人工 §11；未授权前零保存、零发布、不 commit/push。
+
+## E4 控制面落地明细（2026-08-13 · 代码完成）
+
+- **范围（MVP §5.4 / §7.5）：** 开始 / 暂停 / 继续 / 停止 = 后端控制 + 持久化 + **worker ack**；禁止仅前端假暂停。
+- **后端：**
+  - `execution/task_worker_control.py`：控制请求/ack 合同与 HVD 公开投影。
+  - Repository：`request_pause_task` / `acknowledge_pause_task` / `request_resume_task` / `request_stop_task` / `acknowledge_stop_task` + runner_dispatch 释放以便 resume 重派。
+  - API：取消真实写入 pause/stop/resume 硬 409 disabled；pause→`pause_requested`、stop→`stop_requested`；resume 仅自已 ack 的 `paused` 并重派 runner；`GET /tasks` 与 `GET /tasks/{id}` 投影 `workerControl`。
+  - Runner：商品安全点 ack；resume 跳过 completed/failed/unknown 等终态 job；停止后不派发剩余 pending。
+  - 单 active 触发器：`running|pause_requested|stop_requested|paused` 互斥。
+- **前端四键：** `taskControl.ts` + `TaskControlKeys`；挂在「开始批量保存」与「当前保存任务」。`pause_requested`/`stop_requested` 显示确认中；`paused` 可继续/停止；`stopped` 全禁用。工作台轮询覆盖 active 态。
+- **测试（历史本段）：** backend 控制相关 **20 passed**；frontend node **23 passed** + typecheck 绿。
+- **明确未做：** 真机四键 ≥10s；真机 HVD 同源核对；`E4_ACCEPTED` / `MVP_READY`；视觉改版；commit/push。
+
+## E3 模板链路滞后登记（2026-08-13 · 用户裁定）
+
+- **裁定：** 类目分区模板配置 + 真实 Path A 只保存 canary **本步滞后**，改走 E4 控制面开发。
+- **已接受（本段会话，开发向，非 E3 接受）：**
+  1. **OPEN_EDIT 匹配与回退：** 实机采集箱表头/店铺徽章/来源文案对齐；VXE 虚拟列表未命中时官方 `/web/smt/edit?id=` 回退；遮罩/ant-spin 程序自清；`EDITOR_NOT_READY` 文案门禁放宽为「保存 + 标题/店/类目」。
+  2. **冻结 payload 路由：** Path A 填字段走冻结 `ui_binding/resolved_value`，不再依赖 legacy 固定清单。
+  3. **分区模板门禁 + 接线（未配齐不得真写）：** `path_a_section_templates.py`；缺属性/运费/服务 ref → `PATH_A_SECTION_TEMPLATES_MISSING`；freeze 摘要 `observed_display_name`；Runner `_path_a_fill_context`（不进 payload hash）；编辑页优先「引用产品模板」+ DXM 分区 Select，套上后禁止手填属性/运费。
+  4. **单品试跑结论（已停）：** 目标品 `130658340712223024`（店 `6517349` / 类目 `200083142`）可开编辑页并部分写入标题/重量/尺寸/运费等；属性/模板完整保存**未证明**。任务克隆 `#192–#206` 失败在 OPEN_EDIT/FILL 各阶段；**零成功保存、零发布**。`#191`（3 draft）从未启动。
+  5. **产品方向：** 用户明确「优先调用模板，不是一手填」；真测等类目各分区模板配齐后再做。
+- **定向测试（历史本段）：** `test_path_a_section_templates` + E2 freeze/dispatch 相关曾 **`75 passed`**；E2 夹具补 service ref `911` 以过 section gate。
+- **未做：** 未标 `E3_ACCEPTED`；未三铁证；未启动 `#191`；未 commit/push（除非另授权）。
+
+## 实机暂停，改开发分区模板门禁（2026-08-13）
+
+- 用户决定：**真实 Path A 先不跑**。等开发完成，并且**按类目配齐各分区模板**后再测。
+- 本轮只改合同与接线，**未** `approve-and-start`、未保存、未发布。`#191` 仍 `draft`。
+- 门禁：`path_a_section_templates.py`。真实 E2 快照若带 `dxm_template_refs`，缺下面三类就 `PATH_A_SECTION_TEMPLATES_MISSING`：
+  - 属性信息 · 产品属性模板（按类目）
+  - 模版信息 · 运费模板
+  - 模版信息 · 服务模板
+- **模板写入接线（本轮）：**
+  - freeze 摘要带上 `observed_display_name`
+  - Runner 把冻结 ref 编成 `_path_a_fill_context`（运行时字段，不进 payload hash）
+  - 可见编辑页先走「引用产品模板」+ `_apply_dxm_reference_templates_on_page`（属性/运费/服务 Select）
+  - 套上后**禁止**再手填属性/运费
+- 建议再配：引用产品模板 / 变种模板 / 尺码表。类目 `200083142` 当前冻结仍只有产品模板 `1138913`，实机仍不要开。
+- 定向：`test_path_a_section_templates` + E2 freeze/dispatch 相关 **`75 passed`**。
+
+## #198 遮罩已隐藏，编辑页就绪，卡在身份读回（2026-08-13 · 已停）
+
+- 用户确认转圈是遮罩并要求暂时隐藏后重试。已强制注入 CSS 隐藏 `ant-spin` / `ant-modal-mask`，并跳过采集箱搜索。
+- `#198` 只开 1 品 `130658340712223024`。编辑页 4 秒内 `ready=true, loading=false`。**未保存、未发布。`#191` 仍 draft。**
+- 新失败：`FROZEN_TARGET_EDITOR_READBACK_MISMATCH`（来源 URL 与冻结值对不上），不是转圈。
+
+## 编辑页转圈改由程序自清（2026-08-13）
+
+- 用户明确：转圈不能让人手工刷新。此前采集箱搜索、公告 mask、Escape 停 loading 已修过多轮，这次没接到「打开编辑页」上。
+- 现改为：有冻结产品 ID 时**不再搜采集箱**（避免把 ant-spin 带到编辑页）；打开 `/web/smt/edit?id=` 后复用 Escape + 去 mask/spin；标题和保存已在时残留转圈不算未就绪；DevTools 超时不再把蓝色 HUD 误判成 loading。
+- 定向 5 passed。**尚未热加载进 8000，未再开真写。**
+
+## #196 已打开编辑页，卡在 EDITOR_NOT_READY（2026-08-13 · 已停）
+
+- 用户同意后已重启 headed backend（pid 11216），`LOGIN_READER_READY`，L2 仍 passed（年龄 ~4152s）。
+- 只启动 1 品 `#196` / snapshot `#6` / job `#2664`。**`#191` 仍 draft**。未保存、未发布。
+- 编辑页回退生效：`goto /web/smt/edit?id=130658340712223024` 成功，页面 kind=`editor`。
+- 20s 就绪门禁判 `EDITOR_NOT_READY`。轨迹显示 loading 第 4 次后已结束，标题/店铺/类目/保存都在：`绝区零游戏周边艾莲乔…`、`Dang Kang`、`切割刀模(Cutting Dies)`、`保存`。缺的是旧文案「基本信息 / 产品信息」。
+- 已改可见编辑页就绪：有「保存」+ 标题/店铺/类目非空即可，不再强求那两个旧栏目名。定向 4 passed。**尚未热加载，未再开下一次真写。**
+
+## #195 行匹配已通、虚拟列表未命中（2026-08-13 · 已停）
+
+- 已重启 backend（pid 9908，headed + persistent profile），`LOGIN_READER_READY`。L2 仍 passed（当时年龄 ~3540s / 上限 7200s）。
+- 只启动 1 品任务 `#195` / snapshot `#5` / job `#2663`，商品 `130658340712223024`。**未启动 `#191`**。未保存、未发布。
+- 新 `reason_code` 已透出：`FROZEN_TARGET_ROW_NOT_FOUND`（不再假报 `DXM_SESSION_ERROR`）。
+- 匹配器本身已工作：首页 DOM 读到 8 行（VXE 虚拟滚动），店铺 `Dang Kang`、产品 ID、1688/PDD 来源都能读回。目标商品不在这 8 行里。
+- 只读 Reader 证明该商品仍在店 `6517349` 第 1 页 100 条里，标题仍是中文「绝区零游戏周边艾莲乔…」。搜索 `916629722545` / 内部 ID 后 `row_count=0`（搜索类型是标题，不是产品 ID）。
+- 已补官方回退：虚拟行找不到时打开 `/web/smt/edit?id={冻结产品ID}`，再由编辑页身份读回 fail-closed。测试 5 passed。**此回退尚未热加载，也未再开第 6 次真写。**
+
+## OPEN_EDIT 三次失败根因（2026-08-13 · 已修匹配器，待热加载后再试 1 品）
+
+- `#192/#193/#194` 都不是会话死了，也不是商品没了。活状态原文是：`商品箱中未找到与冻结身份和店铺完全一致的唯一商品行。` 被 `_error_state` 默认包成 `DXM_SESSION_ERROR`。
+- 实机采集箱表头是 `图片 / 标题/产品ID / 分组 / 价格 / 库存 / 运费模板 / 时间 / 操作`，店铺写在标题格 `「Dang Kang」`，1688 徽章链文案是 `1688` 不是 `来源`。旧冻结匹配要求独立店铺列 + `来源` 链接，所以首页和搜索后都找不到行。
+- 搜索还把店小秘内部 ID 当标题关键字；UI 搜索类型只有「标题 / 商品编码」。现改为先搜 1688 offer / PDD goods_id / AE item，再搜产品 ID，并透出真实 `reason_code`。
+- 定向测试：实机表布局命中、错店拒绝、搜索词顺序、reason_code 保留，共 7 passed。未保存、未发布，未启动 `#191`。
+- 当前 8000 进程仍是旧代码。必须重启 backend 后才能对 `130658340712223024` 再跑 1 品 Path A。
+
+## 换品试跑 130658340712223024（2026-08-13 · 已停）
+
+- 原第 1 件 `130658341178856048` **仍在草稿箱**，不是下架/消失。
+- 新 ID 存在：类目 `200083142`，任务 `#193`（1 job）。`#191` 仍 draft。
+- 登录已恢复后启动，仍在 `OPEN_EDIT_PAGE` 失败：`E901 / DXM_SESSION_ERROR`。**未保存、未发布**。
+- 两次失败同一节点，判定为可见会话打开编辑页问题，不是商品没了。未再自动重试。
+
+## 单品 Path A 试跑（2026-08-13 · 已停，未保存成功）
+
+- 用户指定 freeze 第 1 件：`130658341178856048`。**未启动 3 品任务 `#191`**（仍 `draft`）。
+- 新建 1 品任务 `#192` + snapshot `#2` 后 L2 复验通过，已 `approve-and-start`。
+- 执行进入草稿箱后，在 `OPEN_EDIT_PAGE` 失败：`E901 open_editor / DXM_SESSION_ERROR`。
+- **保存未发生**：`published=null`，`save_result.ok=false`，`completed_jobs=0`。未发布。
+- 未自动重试。需会话恢复后再决定是否对同一件再试一次。
+
+## 生产约束（2026-08-13 · 用户当场纠正）
+
+- **真实生产环境。只允许 1 个产品做 Path A 只保存。禁止启动 3 品批量。**
+- 任务 `#191`（3 draft / `batch_draft_save`）**不得** `approve-and-start`，保持 `draft`。
+- 先前「3 品 canary」授权被本条收窄；未另选单品并获口头确认前，不点保存。
+
+## A 零写彩排到 freeze（2026-08-13 · 已通过，已停）
+
+- **闸门：** 用户指定 A 不过就停；本轮 **未做 B 真写、未做 E4**。
+- **活会话：** `LOGIN_READER_READY`，可见浏览器停在店小秘首页；Reader `source=api`。
+- **链路：** shops → drafts（店 `6517349`，draft 共 116）→ 本地方案新版本（仅本地英文补差）→ preview → freeze。
+- **3 品：** `130658341178856048 / 130658341278207676 / 130658341226423110`，类目 `202228203`，Path A。
+- **freeze：** snapshot `#1` hash `EA368B02…13BB091`；任务 `#191` 仍为 `draft` / `batch_draft_save` / `publish_allowed=false` / `runner_released=false` / 批准 `not_granted`。
+- **零写核验：** 未调用 `approve-and-start`、`/start`、保存或发布。
+- **本地方案：** 为过英文门从 plan `#5` 派生 `#6–#9`（`attr_3` / `attr_200000600` / `attr_20305` / `attr_247856685`），未改店小秘商品。
+- **下一步：** 等用户口头授权后再做 B（3 品 Path A canary）。未授权前保持停。
+
+## 接手后续开发（2026-08-12 · 用户授权本会话）
+
+- **接手人：** 本会话 Grok。仓库 `dxm-auto-uikit`，分支 `fix/dxm-two-stage-runtime-truth`，固定点 `717ae3c` / `416810f`。
+- **继承口径：** `E2_DEFERRED` · `E3_READY_FOR_CANARY`（非 `E3_ACCEPTED`）· **不宣称** `MVP_READY` / `PROD_READY`。
+- **本轮认领（零真实写入）：** 收口 HEAD 之后已有的 canary 预热改动——工作台一次 `approve-and-start`、账号上下文绑定、会话与 plan-reader 哨兵。不另开第三套 runner，不进入 E4 真暂停验收，不启动店小秘保存/发布。
+- **已修：** 只读会话不再误走 mutation `"run"` 门禁；`shutdown` 后的全局 runtime 可复活 owner 线程。否则 TestClient 收尾会把后续 preview/shops 打成 `BROWSER_AGENT_LIFECYCLE_BUSY`。
+- **当次证据：** frontend `17 passed` + typecheck；backend 定向 `155 + 28 passed`（E2/E3/Reader/session/dispatch/e1 browser）。真实登录/保存/发布仍为 `0`。
+- **真机 3 品 canary：** 仍须用户在可见会话登录后**另行口头确认**才执行；本接手不等于授权真写。
+- **工作树纪律：** 不暂存 52 个历史删除；不 commit/push，除非用户再授权。
+
 ## E3 L0 无轮次限制续跑（2026-08-12 · 用户已批准）
 
 - **E3 工程门禁结论：`E3_READY_FOR_CANARY`（非 `E3_ACCEPTED`）。**固定代码提交 `717ae3c5618ced19467d528e41aac784e896c810` 的 detached clean worktree status=`0`；完整 backend L0 为 `2168 passed / 0 failed / 0 skipped in 894.31s`、exit `0`，日志 `C:/Users/wz/AppData/Local/Temp/dxm-e3-final-l0-717ae3c/pytest.log`。同一提交的 frontend 标准 build 为 Node `12/12`、Chromium `7/7`、typecheck 与 Vite `56 modules` 全绿；desktop=`89/89`、skipped/todo=`0`；文档 SelfTest 两项 `RED_EXPECTED` 后 `MVP_DOCS_OK`；`git diff --check`、clean status、端口 5173/8000 均为 `0`。

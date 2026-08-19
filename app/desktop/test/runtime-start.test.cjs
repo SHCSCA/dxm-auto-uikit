@@ -217,6 +217,17 @@ test('unknown startup failure does not become a package error because its stack 
   assert.equal(presentation.logPath, 'C:\\qa\\data\\desktop-main.log')
 })
 
+test('backend pid mismatch is explained as a port conflict, not a blank failure', () => {
+  const error = new Error('Backend health check reached a mismatched backend at http://127.0.0.1:8000/health: runtime identity backendPid mismatch')
+  const presentation = createStartupFailurePresentation(error, {
+    desktopLogWritten: true,
+    desktopLogPath: 'C:\\Users\\wz\\AppData\\Roaming\\DXM Agent Console\\data\\desktop-main.log',
+  })
+  assert.equal(presentation.code, 'DXM_BACKEND_IDENTITY_MISMATCH')
+  assert.match(presentation.message, /8000/)
+  assert.match(presentation.message, /不会接管/)
+})
+
 test('transactional window setup destroys only the failed window and clears only a matching reference', async () => {
   const destroyed = []
   let currentWindow = null

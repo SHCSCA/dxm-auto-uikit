@@ -22,6 +22,11 @@ from src.batch_edit.frozen_execution_contract import (
     frozen_execution_defaults,
     validate_frozen_execution_defaults,
 )
+from src.batch_edit.path_a_section_templates import (
+    PATH_A_FILL_CONTEXT_KEY,
+    build_path_a_fill_context,
+    reject_if_path_a_section_templates_missing,
+)
 from src.execution.action_result_contract import (
     ACTION_RESULT_SCHEMA_VERSION,
     ActionResultContractError,
@@ -425,9 +430,34 @@ class V1TaskRunner:
             return
         await self.manager.broadcast(task_id, {"type": "task_status", "status": "running", "taskId": task_id, "mode": mode})
 
+        completed = int(task.get("completed_jobs") or 0)
+        failed = int(task.get("failed_jobs") or 0)
+        # Recount from durable job facts so resume does not re-save completed items.
         completed = 0
         failed = 0
+        for existing in task.get("jobs") or []:
+            status = str(existing.get("status") or "").lower()
+            if status in {"completed", "succeeded"}:
+                completed += 1
+            elif status == "failed":
+                failed += 1
+
         for job in task["jobs"]:
+            control = await self._apply_worker_control_at_safe_point(
+                task_id,
+                completed_jobs=completed,
+                failed_jobs=failed,
+            )
+            if control in {"paused", "stopped"}:
+                return
+
+            job_status = str(job.get("status") or "").lower()
+            if job_status in {"completed", "succeeded", "failed", "unknown", "cancelled", "skipped"}:
+                # Resume/re-dispatch: never re-run terminal jobs (including unknown).
+                continue
+            if job_status not in {"pending", "running"}:
+                continue
+
             success = await self._run_job(task, job, mode)
             if success is None:
                 return
@@ -440,6 +470,7 @@ class V1TaskRunner:
                     "failed",
                     "needs_manual_review",
                 }:
+                    self.repo.release_task_runner_dispatch(task_id, reason="task_failed_terminal")
                     await self.manager.broadcast(task_id, {
                         "type": "task_status",
                         "taskId": task_id,
@@ -449,6 +480,7 @@ class V1TaskRunner:
                     })
                     return
             if mode == "claim_only" and success:
+                self.repo.release_task_runner_dispatch(task_id, reason="claim_only_completed")
                 await self.manager.broadcast(task_id, {
                     "type": "job_completed",
                     "taskId": task_id,
@@ -464,6 +496,23 @@ class V1TaskRunner:
                     "failedJobs": failed,
                 })
                 return
+
+            # Safe point after a product finishes: honor pause/stop before next dispatch.
+            control = await self._apply_worker_control_at_safe_point(
+                task_id,
+                completed_jobs=completed,
+                failed_jobs=failed,
+            )
+            if control in {"paused", "stopped"}:
+                await self.manager.broadcast(task_id, {
+                    "type": "job_completed",
+                    "taskId": task_id,
+                    "jobId": job["id"],
+                    "completedJobs": completed,
+                    "failedJobs": failed,
+                })
+                return
+
             if not self.repo.try_update_task_status(
                 task_id,
                 "running",
@@ -471,6 +520,14 @@ class V1TaskRunner:
                 completed_jobs=completed,
                 failed_jobs=failed,
             ):
+                # Status may have flipped to pause/stop_requested between checks.
+                control = await self._apply_worker_control_at_safe_point(
+                    task_id,
+                    completed_jobs=completed,
+                    failed_jobs=failed,
+                )
+                if control in {"paused", "stopped"}:
+                    return
                 return
             await self.manager.broadcast(task_id, {
                 "type": "job_completed",
@@ -480,6 +537,15 @@ class V1TaskRunner:
                 "failedJobs": failed,
             })
 
+        # Final control check in case stop/pause arrived after the last product.
+        control = await self._apply_worker_control_at_safe_point(
+            task_id,
+            completed_jobs=completed,
+            failed_jobs=failed,
+        )
+        if control in {"paused", "stopped"}:
+            return
+
         final_status = "completed" if failed == 0 else ("partial_success" if completed else "failed")
         if not self.repo.try_update_task_status(
             task_id,
@@ -488,7 +554,15 @@ class V1TaskRunner:
             completed_jobs=completed,
             failed_jobs=failed,
         ):
+            control = await self._apply_worker_control_at_safe_point(
+                task_id,
+                completed_jobs=completed,
+                failed_jobs=failed,
+            )
+            if control in {"paused", "stopped"}:
+                return
             return
+        self.repo.release_task_runner_dispatch(task_id, reason=f"task_{final_status}")
         await self.manager.broadcast(task_id, {
             "type": "task_status",
             "taskId": task_id,
@@ -496,6 +570,92 @@ class V1TaskRunner:
             "completedJobs": completed,
             "failedJobs": failed,
         })
+
+    async def _apply_worker_control_at_safe_point(
+        self,
+        task_id: int,
+        *,
+        completed_jobs: int,
+        failed_jobs: int,
+    ) -> str | None:
+        """Honor operator pause/stop only at product boundaries (E4 worker ack).
+
+        Returns the acked status (`paused` / `stopped`) when control was applied,
+        otherwise None so the runner may continue dispatching.
+        """
+        task = self.repo.get_task_private(task_id)
+        if not task:
+            return "stopped"
+        status = str(task.get("status") or "")
+        if status == "pause_requested":
+            result = self.repo.acknowledge_pause_task(
+                task_id,
+                completed_jobs=completed_jobs,
+                failed_jobs=failed_jobs,
+            )
+            if result.ok and result.status == "paused":
+                self.repo.add_log(
+                    task_id,
+                    None,
+                    "info",
+                    "worker 已确认暂停；不再派发下一商品",
+                    {
+                        "reason_code": result.reason_code,
+                        "completed_jobs": completed_jobs,
+                        "failed_jobs": failed_jobs,
+                        "worker_control": result.as_public_dict().get("workerControl"),
+                    },
+                )
+                await self.manager.broadcast(
+                    task_id,
+                    {
+                        "type": "task_status",
+                        "taskId": task_id,
+                        "status": "paused",
+                        "completedJobs": completed_jobs,
+                        "failedJobs": failed_jobs,
+                        "workerControl": result.as_public_dict().get("workerControl"),
+                        "workerAck": "paused",
+                    },
+                )
+                return "paused"
+            return None
+        if status == "stop_requested":
+            result = self.repo.acknowledge_stop_task(
+                task_id,
+                completed_jobs=completed_jobs,
+                failed_jobs=failed_jobs,
+            )
+            if result.ok and result.status == "stopped":
+                self.repo.add_log(
+                    task_id,
+                    None,
+                    "warning",
+                    "worker 已确认停止；剩余商品不会派发",
+                    {
+                        "reason_code": result.reason_code,
+                        "completed_jobs": completed_jobs,
+                        "failed_jobs": failed_jobs,
+                        "worker_control": result.as_public_dict().get("workerControl"),
+                    },
+                )
+                await self.manager.broadcast(
+                    task_id,
+                    {
+                        "type": "task_status",
+                        "taskId": task_id,
+                        "status": "stopped",
+                        "completedJobs": completed_jobs,
+                        "failedJobs": failed_jobs,
+                        "workerControl": result.as_public_dict().get("workerControl"),
+                        "workerAck": "stopped",
+                    },
+                )
+                return "stopped"
+            return None
+        if status in {"paused", "stopped", "cancelled", "failed", "needs_manual_review", "completed", "partial_success"}:
+            return status if status in {"paused", "stopped"} else "stopped"
+        return None
 
     async def _run_job(self, task: dict[str, Any], job: dict[str, Any], mode: str) -> bool | None:
         task_id = task["id"]
@@ -3984,9 +4144,25 @@ class V1TaskRunner:
                     "batch_draft_save requires the current frozen job",
                 )
             try:
-                return frozen_execution_defaults(
-                    compile_frozen_execution_payload(task, job)
+                execution_payload = compile_frozen_execution_payload(task, job)
+                plan = (
+                    task.get("payload", {}).get("plan_snapshot")
+                    if isinstance(task.get("payload"), Mapping)
+                    else None
                 )
+                plan_mapping = plan if isinstance(plan, Mapping) else None
+                category_id = str(execution_payload.get("category_id") or "")
+                reject_if_path_a_section_templates_missing(plan_mapping, category_id)
+                defaults = frozen_execution_defaults(execution_payload)
+                if plan_mapping is not None and "dxm_template_refs" in plan_mapping:
+                    defaults = {
+                        **defaults,
+                        PATH_A_FILL_CONTEXT_KEY: build_path_a_fill_context(
+                            plan_mapping.get("dxm_template_refs"),
+                            category_id,
+                        ),
+                    }
+                return defaults
             except FrozenExecutionContractError as exc:
                 raise V1ExecutionError(
                     "E202",

@@ -1,20 +1,26 @@
 # DXM 文档导航
 
-更新时间：2026-07-28
+> 由 OpenAI GPT（Codex）AI 生成/维护。
+
+更新时间：2026-08-19
 
 这里区分“当前真相”与“历史快照”。日期较早的验收记录和计划保留用于审计，但不得覆盖当前代码、运行和打包证据。
 
 ## 当前真相（先读）
 
-### 主迭代（2026-07-28 · 优先）
+### 主迭代与当前交付（2026-08-19 · 优先）
 
 - [MVP 竖切：草稿箱批量只保存](product/MVP-竖切-草稿箱批量只保存.md)：**产品主路径**、Path A 批量、`MVP_READY` / `PROD_READY` 双就绪、Epic DoD。
+- [免安装桌面版与全链路操作日志](product/CODEX-GOAL-免安装桌面版与全链路操作日志-20260814.md)：当前交付目标；[用户一页说明](product/免安装桌面版用户说明.md)。
 - [Codex Gold 工作指令](product/CODEX-GOLD-工作指令-MVP批量只保存.md)：Gold 模式粘贴模板、红线、按 Epic 短指令。
+- [免安装桌面版与全链路操作日志开发目标](product/CODEX-GOAL-免安装桌面版与全链路操作日志-20260814.md)：当前下一开发单；交付双击即用 portable、统一操作审计和脱敏诊断包，完成前不进入新的真实三商品保存。
+- [PROGRESS](../PROGRESS.md) / [BLOCKED](../BLOCKED.md)：当前工程、真机、portable 与日志交付状态；旧验收数字不得覆盖置顶事实。
+- 当前代码切片已包含 E4 worker 控制面、持久化操作审计、中文时间线/诊断导出与动态版本桌面启动修复；专项测试通过，但完整 L0、同 HEAD portable smoke、真实三商品保存仍未通过或未执行，继续保持 `E3_OPEN / BLOCKED`。
 - 上游只读（非本仓代码）：`D:\Desktop\py\DXM-TX` 的 `docs/`、`data/capture/`、可交互原型。
 
 ### 工程与安全（当前可解析）
 
-- [项目 README](../README.md)：启动方式；其中生产 `BLOCKED`/两段式结论与 **MVP 主路径**并存——实现 bulk 以 MVP 文档为准，安全红线以 CLAUDE/门禁为准。
+- [项目 README](../README.md)：桌面交付入口、开发态启动和当前 `BLOCKED` 说明；当前 `0.1.4` manifest 不等于已有 portable。
 - [AGENTS.md](../AGENTS.md)：AI 必读顺序与就绪口径。
 - [CLAUDE.md](../CLAUDE.md)：命令、runner、L 阶梯、禁发布。
 - [SDD progress](../.superpowers/sdd/progress.md)：仓库内仍可解析的实施状态；与 MVP 主合同冲突时，以当前代码/测试事实和 MVP 零发布边界为准。

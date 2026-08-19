@@ -61,7 +61,17 @@ class PlanSnapshotCompiler:
                 "session_context",
             },
             "plan snapshot request",
+            optional_keys=frozenset(
+                {
+                    "target_category_id",
+                    "target_category_schema",
+                    "expected_target_schema_hash",
+                    "target_category_name",
+                    "target_category_match",
+                }
+            ),
         )
+        target_category = self._normalize_target_category(exact)
         plan_id = exact["local_plan_template_id"]
         if isinstance(plan_id, bool) or not isinstance(plan_id, int) or plan_id <= 0:
             self._reject(
@@ -104,10 +114,10 @@ class PlanSnapshotCompiler:
             "session_context.shop_name",
         )
         raw_items = exact["items"]
-        if not isinstance(raw_items, list) or not 3 <= len(raw_items) <= 100:
+        if not isinstance(raw_items, list) or not 1 <= len(raw_items) <= 100:
             self._reject(
                 "PLAN_ITEM_COUNT_INVALID",
-                "plan snapshot requires 3 to 100 draft products",
+                "plan snapshot requires 1 to 100 draft products",
             )
 
         plan, template_refs = self._local_plan_store.load_snapshot_inputs(plan_id)
@@ -128,6 +138,7 @@ class PlanSnapshotCompiler:
                 template_refs=template_refs,
                 requested_shop_id=requested_shop_id,
                 requested_shop_name=session_shop_name,
+                target_category=target_category,
             )
             if item["product_id"] in seen_products:
                 self._reject(
@@ -182,6 +193,60 @@ class PlanSnapshotCompiler:
                 "plan snapshot hash cannot be reproduced",
             )
 
+    def _normalize_target_category(
+        self,
+        request: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        target_category_id = request.get("target_category_id")
+        if target_category_id in (None, ""):
+            return None
+        category_id = self._values.positive_id_text(
+            target_category_id,
+            "target_category_id",
+        )
+        raw_schema = request.get("target_category_schema")
+        if not isinstance(raw_schema, dict):
+            self._reject(
+                "PLAN_TARGET_CATEGORY_INVALID",
+                "target_category_schema must be an object",
+            )
+        normalized_schema = normalize_category_schema(raw_schema)
+        schema_hash = canonical_sha256(normalized_schema)
+        expected_hash = self._values.sha256_text(
+            request.get("expected_target_schema_hash"),
+            "expected_target_schema_hash",
+        )
+        if expected_hash != schema_hash:
+            self._reject(
+                "PLAN_TARGET_SCHEMA_DRIFT",
+                "target category schema changed before the plan snapshot was frozen",
+            )
+        normalized_name = self._values.optional_text(
+            request.get("target_category_name"),
+            "target_category_name",
+            max_length=120,
+        )
+        normalized_match = self._values.optional_text(
+            request.get("target_category_match"),
+            "target_category_match",
+            max_length=200,
+        )
+        return {
+            "category_id": category_id,
+            "schema": normalized_schema,
+            "schema_hash": schema_hash,
+            **(
+                {"category_name": normalized_name}
+                if normalized_name is not None
+                else {}
+            ),
+            **(
+                {"category_match": normalized_match}
+                if normalized_match is not None
+                else {}
+            ),
+        }
+
     def _build_item_snapshot(
         self,
         raw_item: Any,
@@ -191,6 +256,7 @@ class PlanSnapshotCompiler:
         template_refs: ResolvedTemplateReferences,
         requested_shop_id: str,
         requested_shop_name: str,
+        target_category: dict[str, Any] | None,
     ) -> dict[str, Any]:
         item = self._values.exact_object(
             raw_item,
@@ -225,7 +291,8 @@ class PlanSnapshotCompiler:
         if category_id not in set(plan["category_ids"]):
             self._reject(
                 "PLAN_CATEGORY_SCOPE_CONFLICT",
-                "item category is not covered by the local plan",
+                f"商品类目 {category_id} 不在本地方案覆盖范围内"
+                f"（方案仅覆盖：{', '.join(plan['category_ids'])}）",
             )
         try:
             target_identity = canonical_frozen_target_identity(
@@ -409,6 +476,15 @@ class PlanSnapshotCompiler:
                 "resolved_values": resolved_price_validation,
             },
         }
+        target_category_snapshot: dict[str, Any] | None = None
+        if target_category is not None:
+            target_category_snapshot = self._resolve_target_category_preflight(
+                target_category,
+                plan=plan,
+                template_refs=template_refs,
+                current_values=current_values,
+                product_id=product_id,
+            )
         return {
             "product_id": product_id,
             "shop_id": shop_id,
@@ -427,6 +503,111 @@ class PlanSnapshotCompiler:
                 **resolution_body,
                 "resolution_hash": canonical_sha256(resolution_body),
             },
+            **(
+                {"target_category": target_category_snapshot}
+                if target_category_snapshot is not None
+                else {}
+            ),
+        }
+
+    def _resolve_target_category_preflight(
+        self,
+        target_category: Mapping[str, Any],
+        *,
+        plan: Mapping[str, Any],
+        template_refs: ResolvedTemplateReferences,
+        current_values: Mapping[str, Any],
+        product_id: str,
+    ) -> dict[str, Any]:
+        category_id = str(target_category["category_id"])
+        schema = target_category["schema"]
+        properties = schema["properties"]
+        required_keys = potential_required_fields(schema)
+        field_mappings = plan["field_mappings"]
+        if isinstance(field_mappings, dict) and category_id in field_mappings:
+            mapping_entries = {
+                entry["field_key"]
+                for entry in self._normalize_field_mapping(
+                    field_mappings[category_id],
+                    category_id=category_id,
+                    schema=schema,
+                )["entries"]
+            }
+        else:
+            mapping_entries = set()
+        fill_rules = (
+            plan["fill_rules"].get(category_id, {})
+            if isinstance(plan["fill_rules"], dict)
+            else {}
+        )
+        fixed_field_values = (
+            plan["fixed_values"]
+            .get("field_values", {})
+            .get(category_id, {})
+            if isinstance(plan["fixed_values"], dict)
+            else {}
+        )
+        template_values = template_refs.values_for_category(
+            category_id,
+            allowed_fields=properties,
+        )
+        resolved_sources: dict[str, str] = {}
+        unresolved: list[str] = []
+        for field_key in required_keys:
+            if (
+                field_key in fixed_field_values
+                and self._values.is_resolved_value(fixed_field_values[field_key])
+            ):
+                resolved_sources[field_key] = "fixed_value"
+            elif (
+                field_key in fill_rules
+                and isinstance(fill_rules[field_key], dict)
+                and set(fill_rules[field_key]) == {"value"}
+                and self._values.is_resolved_value(fill_rules[field_key]["value"])
+            ):
+                resolved_sources[field_key] = LOCAL_PLAN_MODEL
+            elif field_key in template_values:
+                resolved_sources[field_key] = DXM_TEMPLATE_REF_MODEL
+            elif (
+                field_key in current_values
+                and self._values.is_resolved_value(current_values[field_key])
+            ):
+                resolved_sources[field_key] = f"current@{product_id}"
+            else:
+                unresolved.append(field_key)
+        if unresolved:
+            self._reject(
+                "PLAN_TARGET_REQUIRED_FIELD_UNRESOLVED",
+                "target category required fields are unresolved for "
+                + category_id
+                + ": "
+                + ", ".join(unresolved),
+            )
+        return {
+            "category_id": category_id,
+            "schema": {
+                "normalized_schema": schema,
+                "schema_hash": target_category["schema_hash"],
+            },
+            **(
+                {"category_name": target_category["category_name"]}
+                if "category_name" in target_category
+                else {}
+            ),
+            **(
+                {"category_match": target_category["category_match"]}
+                if "category_match" in target_category
+                else {}
+            ),
+            "required_fields_preflight": [
+                {
+                    "field_key": field_key,
+                    "resolved_source": resolved_sources.get(field_key),
+                }
+                for field_key in required_keys
+            ],
+            "mapped_fields": sorted(mapping_entries),
+            "unresolved_required_fields": unresolved,
         }
 
     def _normalize_field_mapping(

@@ -12,7 +12,8 @@ const primaryNavigation: PrimaryNavigationItem[] = [
   { id: 'home', label: '工作台', short: '工', hint: '查看当前状态和唯一下一步' },
   { id: 'dxm_access', label: '连接店小秘', short: '连', hint: '打开真实可见浏览器并确认当前登录会话' },
   { id: 'draft_selection', label: '采集箱选品', short: '选', hint: '从实时 API 草稿列表选择至少三件商品' },
-  { id: 'template_center', label: '铺货方案', short: '案', hint: '管理本地编辑方案与模板引用' },
+  { id: 'dxm_templates', label: '店小秘模板', short: '模', hint: '同步并查看店小秘后台已配置的模板' },
+  { id: 'template_center', label: '普货方案', short: '案', hint: '新建、查看、改版本、归档本地方案' },
   { id: 'start_save', label: '开始批量保存', short: '存', hint: '后续阶段：复核后串行执行只保存' },
   { id: 'results', label: '保存结果', short: '果', hint: '查看回包、页面成功态与未发布证据' },
   { id: 'settings', label: '设置', short: '设', hint: '查看运行环境与系统设置' },
@@ -24,7 +25,8 @@ const sectionLabels: Record<WorkbenchSection, string> = {
   acquisition_claim: '待认领入箱',
   draft_selection: '采集箱选品',
   draft_edit_save: '商品箱批量编辑',
-  template_center: '铺货方案',
+  dxm_templates: '店小秘模板',
+  template_center: '普货方案',
   product_tasks: '当前保存任务',
   current_task: '当前保存任务',
   task_history: '批次记录',
@@ -84,7 +86,7 @@ export function AppShell({
             <div>
               <strong>DXM 编辑工作台</strong>
               <span>受控编辑 · 只保存不发布</span>
-              <span className="sr-only">工作台 / 连接店小秘 / 采集箱选品 / 铺货方案 / 开始批量保存 / 保存结果 / 设置</span>
+              <span className="sr-only">工作台 / 连接店小秘 / 采集箱选品 / 店小秘模板 / 普货方案 / 开始批量保存 / 保存结果 / 设置</span>
             </div>
           )}
           <button className="icon-button" type="button" onClick={onToggleSidebar} aria-label="切换侧边栏">

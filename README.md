@@ -1,50 +1,35 @@
 # dxm-auto-uikit
 
+> 由 OpenAI GPT（Codex）AI 参与生成/维护；运行与验收结论仍以同一源码、包和现场证据为准。
+
 DXM 半托管自动化工作台：用真实可见浏览器处理店小秘已有商品，受控完成“待认领商品入箱 → 商品箱编辑 → 只保存不发布”。
 
-## 当前状态（2026-08-12）
+## 当前状态（2026-08-19）
 
 当前产品主合同是 [MVP 竖切：草稿箱批量只保存](docs/product/MVP-竖切-草稿箱批量只保存.md)：从店小秘草稿箱只读选择多件商品，以本地方案和只读店小秘模板形成不可变 `plan_snapshot`，后续仅允许 `batch_draft_save`；发布、保存并发布和移入待发布始终禁止。旧 `claim_only` / `single_save` 只保留为历史兼容能力，不是 MVP 前置或当前产品主叙事。
 
-**当前工程状态为 `E2_DEFERRED` / `E3_READY_FOR_CANARY`，生产交付仍为 `BLOCKED`。** 这只表示 E3 代码、合同和固定提交的本地工程门禁已通过，不是 `E2_ACCEPTED`、`E3_ACCEPTED`、`MVP_READY` 或 `PROD_READY`。本轮已把 JIT 授权、队列顺序、审批租约、冻结 snapshot/Schema/字段值、页面身份、SAVE ActionResult、mutation ledger、重启 `UNKNOWN` 与后续 `VERIFY_NOT_PUBLISHED` 绑定为同一不可变执行链；发布、保存并发布和移入待发布仍无入口。
+**历史固定点曾登记 `E2_DEFERRED` / `E3_READY_FOR_CANARY`，但当前工作树与桌面交付状态必须重新按 `E3_OPEN / BLOCKED` 管理；E4 与操作审计代码控制面已落地，但生产交付仍为 `BLOCKED`。** 这不是 `E2_ACCEPTED`、`E3_ACCEPTED`、`E4_ACCEPTED`、`MVP_READY` 或 `PROD_READY`。当前真实 Path A 还缺按类目配置完整的产品属性、运费和服务模板；E4 还缺真实批次暂停/继续/停止与 HVD 同源验收。
 
-本轮真实店小秘登录、保存、发布和站点浏览器操作均为 0。固定代码提交 `717ae3c5618ced19467d528e41aac784e896c810` 的独立 clean worktree 完整 backend L0 为 `2168 passed / 0 failed / 0 skipped`；frontend 标准 build（Node `12/12`、Chromium `7/7`、typecheck、Vite）、desktop `89/89`、文档 SelfTest 红→绿、diff/status/端口门禁也已通过。下一步只能在另行明确授权后执行可见浏览器三商品 canary，详见 [PROGRESS](PROGRESS.md) 与 [BLOCKED](BLOCKED.md)。
+固定提交 `717ae3c5618ced19467d528e41aac784e896c810` 曾取得独立 clean worktree backend `2168 passed / 0 failed / 0 skipped` 及当时的 frontend/desktop/文档门禁，但它不是当前工作树新增 E4/模板改动的同源交付证据。后续单商品诊断任务 `#192–#206` 只证明可打开编辑页并部分填写字段，**成功保存为 0、发布为 0**；三商品任务 `#191` 从未启动，继续保持 `draft` 且不得复用旧快照。
 
-当前源码/package 版本是 `0.1.3`，但本轮没有构建或交付 `0.1.3` portable。2026-07-04 的 `0.1.0` portable 与 `READY` 记录仅是历史构建快照，不是当前分支或 `0.1.3` 的放行结论。当前事实入口见 [文档导航](docs/README.md)、[MVP 主合同](docs/product/MVP-竖切-草稿箱批量只保存.md) 和 [E2 冻结遗留与 E3 开工](docs/product/E2-冻结遗留与E3开工.md)。
+当前 backend/frontend/desktop manifest 版本均为 `0.1.4`，但仓内不存在 `outputs\desktop-build`，因此**当前没有可交付的 `0.1.4` 免安装 EXE**。操作审计与桌面控制面专项测试已通过；完整 L0、同 HEAD portable smoke、真实登录和真实保存仍未完成。下一步是形成可复验提交、构建并验收 portable，再让用户在同源桌面版内录入真实模板并创建新快照。开发任务书见 [免安装桌面版与全链路操作日志](docs/product/CODEX-GOAL-免安装桌面版与全链路操作日志-20260814.md)，当前事实见 [PROGRESS](PROGRESS.md) 与 [BLOCKED](BLOCKED.md)。
 
 真实用户主路径从草稿箱只读 Reader 开始：选择至少 3 件草稿、审阅本地方案与只读模板、预览并冻结逐商品计划。E2 到此停止，不触发 Runner、保存或发布；任何事实缺失、身份/Schema/模板漂移或语言结果为 `UNKNOWN` 都必须失败关闭并转人工复核。
 
 ## 真实用户快速开始
 
-> 本节保留源码启动方式和 2026-07-04 的 `0.1.0` 历史包路径，便于追溯。它不是当前 `0.1.3` 源码的构建产物，也不代表当前分支已放行；真实写入继续保持 `BLOCKED`。
+> 正式用户入口必须是当前源码同源的免安装桌面 EXE，不是网页，也不要求用户打开后端/前端命令窗口。当前包尚未生成；在任务书完成前，本节只说明目标入口，不能据此开始真实保存。
 
 ### 推荐入口：DXM Agent Console 桌面版
 
-交付用户优先使用桌面版，不需要分别打开后端和前端两个控制台窗口。
-
-2026-07-04 历史验收使用的免安装 EXE：
-
-```text
-D:\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console-Portable-0.1.0.exe
-outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
-```
-
-2026-07-04 05:43（Asia/Shanghai）main 构建后 packaged/portable smoke 已通过，文件 SHA-256：
-
-```text
-87FF78089190226C2E98FAA1B4BA60DA25E25C320901B9FD7C0A6207F9C140F8
-```
-
-历史桌面包验收记录：`docs/product/最终交付验收记录-20260623-桌面包.md`。其中 `READY` 只属于记录内的旧 commit、旧包和受控单商品保存范围；它没有证明当前源码或完整两段式生产交付。
-
-仓库内也保留同源构建产物：
+目标交付物由当前 manifest 动态命名；以当前 `0.1.4` 基线为例，预期路径是：
 
 ```text
 outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe
-outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
+outputs\desktop-build\DXM-Agent-Console-Portable-0.1.4.exe
 ```
 
-目录版必须保留整个文件夹和 `resources` 目录，不能只复制 exe 文件。portable 首次启动会解包 Electron 与 Python 运行时，`%TEMP%` 所在磁盘建议至少保留 1GB 可用空间；空间不足时会出现启动即退出、没有日志的现象。
+上面两个文件当前都不存在，不能向用户声称已交付。最终 portable 必须双击即用，内置前端和后端运行时；首次启动会解包 Electron 与 Python 运行时，`%TEMP%` 所在磁盘建议至少保留 1GB。真实店小秘操作仍在独立可见浏览器窗口中进行。
 
 源码开发态可用下面命令启动桌面壳：
 
@@ -61,13 +46,13 @@ scripts\start-desktop.bat
 
 常见展开路径是 `C:\Users\<用户名>\AppData\Roaming\DXM Agent Console\data\desktop-main.log`。
 
-打包验收命令：
+开发者打包验收命令（当前验证脚本仍需先修复旧版本硬编码）：
 
 ```bat
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-desktop-package.ps1
 ```
 
-该命令会启动 `outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe`，检查 `desktop-main.log` 中是否出现 `Starting backend` 和 `Loaded frontend`。
+完成任务书后，该命令必须从 manifest 解析实际 portable 文件名，启动目录包和免安装包，并核对 `desktop-main.log` 中的 `Starting backend`、`Loaded frontend`、运行身份和诊断日志导出结果。
 
 ### 源码备用入口：单窗口启动器
 
@@ -148,29 +133,14 @@ scripts\start-mvp.bat
 
 ### 0. DXM Agent Console 桌面版
 
-推荐给真实用户的入口是桌面版。
-
-2026-07-04 历史验收使用的免安装 EXE：
-
-```bat
-D:\Desktop\DXM-Agent-Console-免安装版\DXM-Agent-Console-Portable-0.1.0.exe
-outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
-```
-
-2026-07-04 05:43（Asia/Shanghai）main clean worktree 构建后 packaged/portable smoke 已通过，文件 SHA-256：
-
-```bat
-87FF78089190226C2E98FAA1B4BA60DA25E25C320901B9FD7C0A6207F9C140F8
-```
-
-仓库内同源构建产物：
+推荐给真实用户的唯一控制台入口是免安装桌面版。当前 `0.1.4` 基线的目标产物如下，但尚未构建、验收或交付：
 
 ```bat
 outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe
-outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe
+outputs\desktop-build\DXM-Agent-Console-Portable-0.1.4.exe
 ```
 
-目录版必须保留整个文件夹和 `resources` 目录。portable 需要 `%TEMP%` 所在磁盘至少约 1GB 可用空间用于解包；空间不足时请清理旧的 `%TEMP%\ns*.tmp` 解包残留。
+文件名必须由 manifest 版本生成，不能在脚本或说明中固定写死。portable 需要 `%TEMP%` 所在磁盘至少约 1GB 可用空间用于解包；目录版仅供开发验收，若使用则必须保留整个文件夹和 `resources` 目录。
 
 源码开发态启动桌面版：
 
@@ -183,6 +153,8 @@ packaged smoke 验收：
 ```bat
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-desktop-package.ps1
 ```
+
+正式交付还必须完成 [免安装桌面版与全链路操作日志任务书](docs/product/CODEX-GOAL-免安装桌面版与全链路操作日志-20260814.md) 中的日志完整性、脱敏诊断包、隔离 user-data 重启读回与同源 SHA256 门禁；旧 `0.1.0` 包只属于历史记录，不能复用。
 
 桌面版日志：
 
@@ -302,10 +274,11 @@ scripts\final-delivery-check.bat --help
 
 ## 下一步重点
 
-1. 保持 `config/l2_readonly_allowlist.json` 的最小只读范围；Schema 查询即使使用 POST 也只能进入明确只读审计白名单，未知请求一律失败关闭。
-2. 保持固定提交 clean worktree 的 backend L0、frontend 标准 build、desktop 测试、文档 SelfTest、范围/秘密/哈希门禁全绿；任一项回退都撤销 `E3_READY_FOR_CANARY` 并恢复 `E3_OPEN / BLOCKED`。
-3. 当前 `E3_READY_FOR_CANARY` 仍不是 `E3_ACCEPTED`、`MVP_READY` 或 `PROD_READY`，真实写入必须另行明确授权，且授权必须绑定实际固定提交与工作树身份。
-4. 获得授权后的可见浏览器 canary 必须由工作台 UI 完成真实登录、同次 Reader 选择至少 3 件草稿、按冻结 snapshot 串行只保存，并逐件取得“回包 + 页面成功态 + 独立未发布”三铁证；任何 `UNKNOWN` 立即停批。扩大批量、无人值守和发布不得从旧能力或本次受控三件 canary 推导授权。
+1. 先按 [免安装桌面版与全链路操作日志任务书](docs/product/CODEX-GOAL-免安装桌面版与全链路操作日志-20260814.md) 建立持久化审计时间线、脱敏诊断包和双击即用 portable；每个用户配置动作、Runner/浏览器步骤和证据结果必须可关联复盘。
+2. 保持 `config/l2_readonly_allowlist.json` 的最小只读范围；Schema 查询即使使用 POST 也只能进入明确只读审计白名单，未知请求一律失败关闭。日志写入失败时，真实 mutation 必须零点击；点击后证据不确定必须转 `UNKNOWN` 并停批。
+3. 在新的免安装桌面版内，由用户配置真实店铺、类目以及产品属性/运费/服务等店小秘模板，重新预览并冻结至少 3 件商品；不得启动或克隆旧任务 `#191`。
+4. 保持同一固定源码/包身份的 backend 全量、frontend 标准 build、desktop 测试、文档 SelfTest、portable smoke、范围/秘密/哈希门禁全绿。没有 clean 固定点授权时只能标内部 canary 包，不得标发布包。
+5. 当前 `E3_READY_FOR_CANARY` 仍不是 `E3_ACCEPTED`、`E4_ACCEPTED`、`MVP_READY` 或 `PROD_READY`。获得另行授权后的可见浏览器 canary 才可按新 snapshot 串行只保存，并逐件取得“回包 + 页面成功态 + 独立未发布”三铁证；任何 `UNKNOWN` 立即停批。批量、无人值守和发布不得从本次受控三件 canary 推导授权。
 
 免安装版快速使用说明与 2026-06-22/2026-07-04 验收记录均为历史资料。当前源码有新改动或 L2/L3 证据过期时，交付前必须重新跑 clean worktree、同 HEAD portable 和新鲜门禁；不得复用旧 `single_save` 结论扩大解释。
 
@@ -357,4 +330,4 @@ scripts/
 
 ## 一句话状态
 
-**当前源码处于 `E2_DEFERRED / E3_READY_FOR_CANARY`：固定提交 clean 工程门禁已全绿；真实三商品 canary 未授权、未执行，生产交付保持 `BLOCKED`。**
+**历史固定点曾达到 `E3_READY_FOR_CANARY`，当前工作树按 `E3_OPEN / BLOCKED` 管理：`0.1.4` portable 与统一操作审计尚未交付，类目分区模板、E4 真机 DoD 和真实三商品 canary 均未关闭。**

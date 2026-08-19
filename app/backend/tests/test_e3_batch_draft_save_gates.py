@@ -61,6 +61,9 @@ class E3WorkflowAdapter(FakeWorkflowAdapter):
         self.failure_code = failure_code
         self.target_ids: list[int] = []
 
+    def refresh_account_context_hash(self):
+        return "A" * 64
+
     def open_editor(self, **kwargs):
         return self._record_e3("open_editor", **kwargs)
 
@@ -964,7 +967,7 @@ def test_prepare_editor_uses_only_formal_frozen_ui_binding_writer(monkeypatch):
     monkeypatch.setattr(
         flow,
         "_fill_frozen_execution_payload_on_page",
-        lambda _page, actual: calls.append((
+        lambda _page, actual, **_kwargs: calls.append((
             "frozen",
             [field["field_key"] for field in actual["fields"]],
         )) or deepcopy(ok_result),
@@ -1573,6 +1576,87 @@ def test_frozen_sku_writer_requires_exact_stable_binding_marker():
     assert result["failure_code"] == "FROZEN_EXECUTION_BINDING_UNRESOLVED"
     assert result["write_attempted"] is False
     assert observed == "OLD-SKU"
+
+
+def test_frozen_writer_writes_resolved_fields_when_optional_fields_unresolved():
+    body = {
+        "schema": "dxm.batch_draft_save.execution_payload.v1",
+        "product_id": "70001",
+        "category_id": "2621",
+        "category_schema_hash": "A" * 64,
+        "field_mapping_hash": "B" * 64,
+        "resolution_hash": "C" * 64,
+        "fields": [
+            {
+                "field_key": "title",
+                "ui_label_zh": "英文标题",
+                "ui_binding": "dxm_editor:title",
+                "category_schema_path": "$.properties.title",
+                "resolved_value": "Collectible Display Model For Cosplay Accessory",
+            }
+        ],
+        "unresolved_fields": ["currencyCode", "promiseTemplateId"],
+        "price_validation": {},
+    }
+    payload = {**body, "payload_hash": canonical_sha256(body)}
+    flow = object.__new__(DxmLoginFlow)
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.set_content("""
+          <style>input { display:block; width:240px; height:32px; }</style>
+          <section data-ui-binding="dxm_editor:title">
+            <input name="title" value="Old title" />
+          </section>
+        """)
+        filled = flow._fill_frozen_execution_payload_on_page(page, payload)
+        observed = page.locator('input[name="title"]').input_value()
+        browser.close()
+
+    assert filled["ok"] is True
+    assert filled["write_attempted"] is True
+    assert observed == "Collectible Display Model For Cosplay Accessory"
+
+
+def test_visible_dxm_fallback_fills_form_item_without_binding_marker():
+    body = {
+        "schema": "dxm.batch_draft_save.execution_payload.v1",
+        "product_id": "70001",
+        "category_id": "2621",
+        "category_schema_hash": "A" * 64,
+        "field_mapping_hash": "B" * 64,
+        "resolution_hash": "C" * 64,
+        "fields": [
+            {
+                "field_key": "grossWeight",
+                "ui_label_zh": "包装后重量",
+                "ui_binding": "dxm_editor:grossWeight",
+                "category_schema_path": "$.properties.grossWeight",
+                "resolved_value": 0.03,
+            }
+        ],
+        "unresolved_fields": ["currencyCode"],
+        "price_validation": {},
+    }
+    payload = {**body, "payload_hash": canonical_sha256(body)}
+    flow = object.__new__(DxmLoginFlow)
+    flow._force_visible_frozen_fallback = True
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.set_content("""
+          <style>input { display:block; width:200px; height:32px; }</style>
+          <input id="form_item_grossWeight" value="1" />
+        """)
+        filled = flow._fill_frozen_execution_payload_on_page(page, payload, flow=flow)
+        observed = page.locator('#form_item_grossWeight').input_value()
+        browser.close()
+
+    assert filled["ok"] is True
+    assert filled["write_attempted"] is True
+    assert observed == "0.03"
 
 
 def test_batch_save_prefill_stops_before_click_when_frozen_value_readback_drifts(
@@ -2367,6 +2451,9 @@ def test_batch_save_crosses_persistent_browser_agent_with_real_authorization_and
         def browser_session_id(self):
             return browser_session_id
 
+        def refresh_account_context_hash(self):
+            return "A" * 64
+
         def current_mutation_identity(self):
             return {
                 "browser_session_id": browser_session_id,
@@ -2482,6 +2569,7 @@ def test_batch_save_crosses_persistent_browser_agent_with_real_authorization_and
             worktree_identity=_worktree_identity(git_head, "formal-worker"),
             l2_status="passed",
             l2_evidence_fingerprint=main._l2_authorization_fingerprint(l2_gate),
+            account_ref_hash="A" * 64,
         ),
     )
     runtime = BrowserAgentRuntime(adapter, mutation_ledger=ledger)
@@ -2758,6 +2846,7 @@ def test_startup_recovery_preserves_unknown_batch_save_and_leaves_tail_pending(
             worktree_identity=_worktree_identity("3" * 40, "restart"),
             l2_status="passed",
             l2_evidence_fingerprint="4" * 64,
+            account_ref_hash="A" * 64,
         ),
     )
     assert before_restart.reserve_command(command).ok is True

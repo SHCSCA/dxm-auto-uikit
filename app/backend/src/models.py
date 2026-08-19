@@ -157,7 +157,7 @@ class PlanSnapshotRequest(BaseModel):
     local_plan_template_id: StrictInt = Field(gt=0)
     shop_id: str = Field(pattern=r"^[1-9][0-9]*$")
     session_ref: str = Field(pattern=r"^[0-9a-f]{16}$")
-    product_ids: list[str] = Field(min_length=3, max_length=100)
+    product_ids: list[str] = Field(min_length=1, max_length=100)
     expected_snapshot_hash: str | None = Field(
         default=None,
         pattern=r"^[0-9A-Fa-f]{64}$",
@@ -167,6 +167,20 @@ class PlanSnapshotRequest(BaseModel):
         min_length=8,
         max_length=128,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    target_category_id: str | None = Field(
+        default=None,
+        pattern=r"^[1-9][0-9]*$",
+    )
+    target_category_name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=120,
+    )
+    target_category_match: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
     )
 
 

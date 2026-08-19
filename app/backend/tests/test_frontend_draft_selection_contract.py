@@ -33,7 +33,7 @@ def test_draft_selection_builds_reviewable_input_without_starting_a_runner() -> 
     page_source = DRAFT_SELECTION_TSX.read_text(encoding="utf-8")
     state_source = DRAFT_STATE_TS.read_text(encoding="utf-8")
 
-    assert "MIN_DRAFT_SELECTION = 3" in state_source
+    assert "MIN_DRAFT_SELECTION = 1" in state_source
     assert "shopId" in state_source
     assert "productIds" in state_source
     assert "planId" in state_source
@@ -42,6 +42,25 @@ def test_draft_selection_builds_reviewable_input_without_starting_a_runner() -> 
     assert "/start" not in page_source
     assert "/approve" not in page_source
     assert "resetSelectionForShopChange" in page_source
+
+
+def test_draft_selection_target_category_cascade_feeds_snapshot_request() -> None:
+    page_source = DRAFT_SELECTION_TSX.read_text(encoding="utf-8")
+    state_source = DRAFT_STATE_TS.read_text(encoding="utf-8")
+    batch_source = (
+        FRONTEND_SRC / "components" / "workbench" / "BatchSavePlaceholderPage.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert "/api/dxm/category/children?" in page_source
+    assert "/api/dxm/category/search?" in page_source
+    assert "targetCategoryId" in state_source
+    assert "targetCategoryName" in state_source
+    assert "targetCategoryMatch" in state_source
+    assert "target_category_id" in batch_source
+    assert "target_category_name" in batch_source
+    assert "target_category_match" in batch_source
+    assert "统一目标类目" in page_source
+    assert "/start" not in page_source
 
 
 def test_primary_navigation_and_shell_keep_frozen_prototype_geometry() -> None:
@@ -54,7 +73,7 @@ def test_primary_navigation_and_shell_keep_frozen_prototype_geometry() -> None:
         "工作台",
         "连接店小秘",
         "采集箱选品",
-        "铺货方案",
+        "普货方案",
         "开始批量保存",
         "保存结果",
         "设置",

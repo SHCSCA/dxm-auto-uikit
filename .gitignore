@@ -31,6 +31,7 @@ app/backend/data/
 .codex/
 .hermes/
 .worktrees/
+.superdesign/tmp/
 
 # Local probe junk should live under tools/probes/, not root
 /tmp_*.py

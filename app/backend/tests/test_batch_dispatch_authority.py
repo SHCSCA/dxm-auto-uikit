@@ -253,6 +253,7 @@ def authority_case(tmp_path, monkeypatch):
         "worktree_identity": worktree_identity,
         "l2_status": "passed",
         "l2_evidence_fingerprint": L2_FINGERPRINT,
+        "account_ref_hash": "A" * 64,
     }
     return {
         "repository": repository,
@@ -303,6 +304,80 @@ def _assert_rejected_without_dispatch(case: dict[str, Any], decision, reason_cod
     )
     assert entry["status"] == "RESERVED"
     assert entry["dispatch_started_at"] is None
+
+
+def test_transaction_authority_rejects_account_context_drift_with_same_browser_session(
+    authority_case,
+) -> None:
+    live = import_module("src.execution.batch_dispatch_authority").LiveDispatchFacts(
+        **authority_case["live_facts"]
+    )
+    object.__setattr__(live, "account_ref_hash", "B" * 64)
+
+    authority = import_module("src.execution.batch_dispatch_authority")
+    with db.connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        decision = authority.validate_in_transaction(
+            conn,
+            authority_case["command"],
+            authority_case["identity"],
+            live,
+        )
+
+    _assert_rejected_without_dispatch(
+        authority_case,
+        decision,
+        "AUTH_ACCOUNT_CONTEXT_MISMATCH",
+    )
+
+
+def test_ledger_begin_keeps_reservation_when_current_account_drifted(
+    authority_case,
+) -> None:
+    authority = import_module("src.execution.batch_dispatch_authority")
+    drifted = authority.LiveDispatchFacts(
+        **{
+            **authority_case["live_facts"],
+            "account_ref_hash": "B" * 64,
+        }
+    )
+    ledger = MutationDispatchLedger(
+        recover_inflight=False,
+        live_facts_provider=lambda: drifted,
+    )
+
+    decision = ledger.begin_dispatch(
+        authority_case["command"],
+        "save_only_click",
+        identity=authority_case["identity"],
+    )
+
+    _assert_rejected_without_dispatch(
+        {**authority_case, "ledger": ledger},
+        decision,
+        "AUTH_ACCOUNT_CONTEXT_MISMATCH",
+    )
+
+
+def test_restarted_live_authority_rejects_account_drift_with_same_session(
+    authority_case,
+) -> None:
+    authority = import_module("src.execution.batch_dispatch_authority")
+    frozen = _validate(authority_case)
+    drifted = authority.LiveDispatchFacts(
+        **{
+            **authority_case["live_facts"],
+            "account_ref_hash": "B" * 64,
+        }
+    )
+
+    decision = authority.validate_current_live_facts_against_frozen_authority(
+        frozen.authority,
+        drifted,
+    )
+
+    assert decision.ok is False
+    assert decision.reason_code == "AUTH_ACCOUNT_CONTEXT_MISMATCH"
 
 
 def test_transaction_authority_rejects_nested_approval_context_drift_after_jit(
@@ -563,6 +638,7 @@ def test_transaction_authority_returns_full_immutable_canonical_blob(
         "runtime_instance_id": RUNTIME_INSTANCE_ID,
         "browser_runtime_id": BROWSER_RUNTIME_ID,
         "browser_session_id": BROWSER_SESSION_ID,
+        "account_ref_hash": "A" * 64,
     }
     assert authority["target"]["identity"]["stable_identity"]["value"] == "70001"
     assert authority["target"]["payload"]["target_identity"] == authority["target"][

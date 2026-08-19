@@ -13,7 +13,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Event, Lock, RLock
+from threading import Event, Lock, RLock, current_thread, get_ident
 from types import MappingProxyType
 from typing import Any, Mapping
 from urllib.parse import urlparse
@@ -201,6 +201,8 @@ class BrowserAgentRuntime:
         self._mutation_authorizer: Any | None = None
         self._mutation_ledger = mutation_ledger
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="dxm-browser-agent")
+        self._owner_thread_id: int | None = None
+        self._session_operation_active = False
         self._lock = RLock()
         self._mutation_dispatch_gate = Lock()
         self._generation = 0
@@ -257,8 +259,104 @@ class BrowserAgentRuntime:
             status["events"] = list(self.events[-20:])
             return status
 
+    def run_session_operation(
+        self,
+        operation: Any,
+        *args: Any,
+        timeout_seconds: float | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Run non-mutation visible-session work on the Playwright owner thread."""
+
+        if not callable(operation):
+            raise TypeError("BROWSER_AGENT_SESSION_OPERATION_INVALID")
+        with self._lock:
+            status = str(self._status.get("status") or "")
+            if status in {"resetting", "stopping"}:
+                raise RuntimeError("BROWSER_AGENT_LIFECYCLE_BUSY")
+            if self._active_future is not None:
+                raise RuntimeError("BROWSER_AGENT_SESSION_BUSY")
+            if self._session_operation_active and get_ident() != self._owner_thread_id:
+                raise RuntimeError("BROWSER_AGENT_SESSION_BUSY")
+            self._ensure_session_owner_thread_locked()
+            executor = self._executor
+            generation = self._generation
+            if get_ident() == self._owner_thread_id:
+                direct = True
+            else:
+                direct = False
+                self._session_operation_active = True
+        if direct:
+            return operation(*args, **kwargs)
+        def owned_operation() -> Any:
+            with self._lock:
+                if generation != self._generation or executor is not self._executor:
+                    raise RuntimeError("BROWSER_AGENT_SESSION_OWNER_CHANGED")
+                self._owner_thread_id = get_ident()
+            return operation(*args, **kwargs)
+
+        future = executor.submit(owned_operation)
+        try:
+            result = future.result(
+                timeout=None if timeout_seconds is None else max(0.0, float(timeout_seconds))
+            )
+            with self._lock:
+                if generation != self._generation or executor is not self._executor:
+                    raise RuntimeError("BROWSER_AGENT_SESSION_OWNER_CHANGED")
+            return result
+        except FutureTimeoutError as exc:
+            future.cancel()
+            raise RuntimeError("BROWSER_AGENT_SESSION_OPERATION_TIMEOUT") from exc
+        finally:
+            with self._lock:
+                self._session_operation_active = False
+
+    def _executor_is_dead_locked(self) -> bool:
+        executor = self._executor
+        return executor is None or bool(getattr(executor, "_shutdown", False))
+
+    def _ensure_session_owner_thread_locked(self) -> None:
+        """Revive the Playwright owner thread after lifespan/shutdown leftover."""
+
+        status = str(self._status.get("status") or "")
+        owner_action = self._lifecycle_owner.action if self._lifecycle_owner is not None else None
+        leftover_shutdown = status == "stopped" or owner_action == "shutdown"
+        if not leftover_shutdown and not self._executor_is_dead_locked():
+            return
+        if status in {"resetting", "stopping", "running"}:
+            raise RuntimeError("BROWSER_AGENT_LIFECYCLE_BUSY")
+        if self._active_future is not None or self._active_lease is not None:
+            raise RuntimeError("BROWSER_AGENT_SESSION_BUSY")
+        if self._executor_is_dead_locked():
+            self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="dxm-browser-agent")
+            self._generation += 1
+            self._owner_thread_id = None
+        if leftover_shutdown:
+            self._lifecycle_owner = None
+            self._lifecycle_intent = None
+            self._shutdown_flight = None
+            self._status.update(
+                {
+                    "status": "idle",
+                    "healthy": True,
+                    "active": False,
+                    "manualTakeover": False,
+                    "currentStep": "待启动",
+                    "lastError": None,
+                    "message": None,
+                    "nextAction": None,
+                    "needsRestart": False,
+                }
+            )
+
     def reserve_command(self, command: BrowserAgentCommand) -> dict[str, Any]:
         with self._lock:
+            if self._session_operation_active:
+                return {
+                    "ok": False,
+                    "reasonCode": "BROWSER_AGENT_SESSION_BUSY",
+                    "runtimeId": self._runtime_id,
+                }
             self._validate_command_locked(command, timeout_seconds=None)
             ledger = self._mutation_ledger
             if command.execution_mode == "batch_draft_save" and ledger is None:
@@ -267,25 +365,11 @@ class BrowserAgentRuntime:
                     "reasonCode": "MUTATION_LEDGER_REQUIRED",
                     "runtimeId": self._runtime_id,
                 }
-            if ledger is not None:
-                try:
-                    ledger_decision = ledger.reserve_command(command)
-                except Exception as exc:
-                    return {
-                        "ok": False,
-                        "reasonCode": "MUTATION_LEDGER_UNAVAILABLE",
-                        "detail": str(exc),
-                        "runtimeId": self._runtime_id,
-                    }
-                if getattr(ledger_decision, "ok", False) is not True:
-                    return {
-                        "ok": False,
-                        "reasonCode": str(
-                            getattr(ledger_decision, "reason_code", None)
-                            or "MUTATION_LEDGER_RESERVATION_REJECTED"
-                        ),
-                        "runtimeId": self._runtime_id,
-                    }
+        ledger_rejection = self._reserve_command_in_ledger(command, ledger)
+        if ledger_rejection is not None:
+            return ledger_rejection
+        with self._lock:
+            self._validate_command_locked(command, timeout_seconds=None)
             fingerprint = _command_fingerprint(command)
             existing = self._command_reservations.get(command.command_id)
             if existing is not None:
@@ -330,6 +414,53 @@ class BrowserAgentRuntime:
                 "runtimeId": self._runtime_id,
                 "status": "reserved",
             }
+
+    def _reserve_command_in_ledger(
+        self,
+        command: BrowserAgentCommand,
+        ledger: Any | None,
+    ) -> dict[str, Any] | None:
+        if ledger is None:
+            return None
+
+        def reserve() -> dict[str, Any] | None:
+            account_rejection = self._refresh_batch_account_context(command)
+            if account_rejection is not None:
+                return account_rejection
+            try:
+                ledger_decision = ledger.reserve_command(command)
+            except Exception as exc:
+                return {
+                    "ok": False,
+                    "reasonCode": "MUTATION_LEDGER_UNAVAILABLE",
+                    "detail": str(exc),
+                    "runtimeId": self._runtime_id,
+                }
+            if getattr(ledger_decision, "ok", False) is not True:
+                return {
+                    "ok": False,
+                    "reasonCode": str(
+                        getattr(ledger_decision, "reason_code", None)
+                        or "MUTATION_LEDGER_RESERVATION_REJECTED"
+                    ),
+                    "runtimeId": self._runtime_id,
+                }
+            return None
+
+        if (
+            command.execution_mode == "batch_draft_save"
+            and not current_thread().name.startswith("dxm-browser-agent")
+        ):
+            try:
+                return self._executor.submit(reserve).result(timeout=20)
+            except BaseException as exc:
+                return {
+                    "ok": False,
+                    "reasonCode": "AUTH_ACCOUNT_CONTEXT_UNAVAILABLE",
+                    "detail": str(exc),
+                    "runtimeId": self._runtime_id,
+                }
+        return reserve()
 
     def cancel_command(self, command_id: str, runtime_id: str) -> dict[str, Any]:
         with self._lock:
@@ -403,6 +534,8 @@ class BrowserAgentRuntime:
     def reset(self, adapter: Any | None = None) -> dict[str, Any]:
         with self._lock:
             self._assert_no_running_execution_locked()
+            if self._session_operation_active:
+                raise RuntimeError("BROWSER_AGENT_SESSION_BUSY")
             rejection = self._control_rejection_reason_locked("reset")
             if rejection:
                 raise RuntimeError(f"{rejection}: reset is not allowed from the current runtime state")
@@ -455,6 +588,8 @@ class BrowserAgentRuntime:
             self._takeover_snapshot = None
             self._shutdown_flight = None
             self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="dxm-browser-agent")
+            self._owner_thread_id = None
+            self._session_operation_active = False
             self._release_lifecycle_owner_locked(reset_owner)
             self._status = {
                 "sessionId": None,
@@ -740,6 +875,8 @@ class BrowserAgentRuntime:
 
     def run(self, command: BrowserAgentCommand, *, timeout_seconds: float | None = None) -> dict[str, Any]:
         with self._lock:
+            if self._session_operation_active:
+                raise RuntimeError("BROWSER_AGENT_SESSION_BUSY")
             if command.execution_mode == "batch_draft_save" and self._mutation_ledger is None:
                 raise RuntimeError("MUTATION_LEDGER_REQUIRED")
             self._consume_command_reservation_locked(command)
@@ -1612,6 +1749,17 @@ class BrowserAgentRuntime:
                     "command_id": context.command_id,
                 }
 
+            account_rejection = self._refresh_batch_account_context(command)
+            if account_rejection is not None:
+                return {
+                    **diagnostics,
+                    **account_rejection,
+                    "executed": False,
+                    "zero_click_proven": True,
+                    "outcome": "CANCELLED_BEFORE_DISPATCH",
+                    "command_id": context.command_id,
+                }
+
             with self._lock:
                 rejection = self._mutation_dispatch_rejection_locked(
                     lease,
@@ -1810,6 +1958,50 @@ class BrowserAgentRuntime:
                 reason = "browser_agent_mutation_target_drift"
             return None, {"reason": reason}
         return normalized, None
+
+    def _refresh_batch_account_context(
+        self,
+        command: BrowserAgentCommand,
+    ) -> dict[str, Any] | None:
+        if (
+            command.execution_mode != "batch_draft_save"
+            or command.state not in {"SAVE_ONLY", "VERIFY_NOT_PUBLISHED"}
+        ):
+            return None
+        adapter = self.adapter
+        refresher = getattr(adapter, "refresh_account_context_hash", None)
+        if not callable(refresher):
+            return {
+                "ok": False,
+                "reason": "browser_agent_account_context_unavailable",
+                "reasonCode": "AUTH_ACCOUNT_CONTEXT_UNAVAILABLE",
+                "reason_code": "AUTH_ACCOUNT_CONTEXT_UNAVAILABLE",
+                "runtimeId": self._runtime_id,
+            }
+        try:
+            if current_thread().name.startswith("dxm-browser-agent"):
+                value = refresher()
+            else:
+                value = self._executor.submit(refresher).result(timeout=20)
+        except BaseException as exc:
+            return {
+                "ok": False,
+                "reason": "browser_agent_account_context_unavailable",
+                "reasonCode": "AUTH_ACCOUNT_CONTEXT_UNAVAILABLE",
+                "reason_code": "AUTH_ACCOUNT_CONTEXT_UNAVAILABLE",
+                "detail": str(exc),
+                "runtimeId": self._runtime_id,
+            }
+        text = str(value or "").strip().upper()
+        if len(text) != 64 or any(character not in "0123456789ABCDEF" for character in text):
+            return {
+                "ok": False,
+                "reason": "browser_agent_account_context_unavailable",
+                "reasonCode": "AUTH_ACCOUNT_CONTEXT_UNAVAILABLE",
+                "reason_code": "AUTH_ACCOUNT_CONTEXT_UNAVAILABLE",
+                "runtimeId": self._runtime_id,
+            }
+        return None
 
     def _adapter_current_mutation_identity(
         self,

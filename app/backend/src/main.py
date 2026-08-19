@@ -22,10 +22,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from src.core.config import DATA_DIR
+from src.services.operation_audit import (
+    OperationAuditError,
+    get_audit_service,
+    record_best_effort,
+)
 from src.services.runtime_bootstrap import ensure_runtime_bootstrap
 
 
-APP_VERSION = '0.1.3'
+APP_VERSION = '0.1.4'
 REPO_ROOT = Path(__file__).resolve().parents[3]
 runtime_bootstrap_state = ensure_runtime_bootstrap(
     data_dir=DATA_DIR,
@@ -217,6 +222,7 @@ def _mutation_dispatch_live_facts() -> LiveDispatchFacts:
         worktree_identity=_current_execution_worktree_identity(git_summary),
         l2_status=str(l2_gate.get("status") or ""),
         l2_evidence_fingerprint=_l2_authorization_fingerprint(l2_gate),
+        account_ref_hash=workflow_adapter.refresh_account_context_hash(),
     )
 
 
@@ -732,6 +738,22 @@ def dxm_login_start(payload: LoginStartRequest):
             next_action='请关闭旧的 DXM Agent Console 或旧浏览器进程后重试；账号密码不会用于保存或发布。',
             raw_error=str(exc),
         )
+    audit_state = record_best_effort({
+        'actor': 'operator',
+        'component': 'dxm_access',
+        'action': 'login_start',
+        'phase': 'completed' if result.get('ok') is not False else 'failed',
+        'status': 'ok' if result.get('ok') is not False else 'failed',
+        'correlation_id': 'login-start',
+        'root_correlation_id': 'login',
+        'input': {'username_length': len(payload.username or '')},
+        'output': {
+            'reason_code': result.get('reason_code'),
+            'logged_in': result.get('logged_in') is True,
+        },
+    })
+    if audit_state.get('degraded'):
+        result = {**result, 'audit_degraded': True}
     return normalize_artifact_paths(result)
 
 
@@ -749,6 +771,19 @@ def dxm_login_continue(payload: LoginContinueRequest):
             next_action='请确认真实浏览器窗口仍然打开，完成验证码或账号修正后再次检测；必要时重新打开登录页。',
             raw_error=str(exc),
         )
+    record_best_effort({
+        'actor': 'operator',
+        'component': 'dxm_access',
+        'action': 'login_continue',
+        'phase': 'completed',
+        'status': 'ok' if result.get('logged_in') is True else 'pending',
+        'correlation_id': 'login-continue',
+        'root_correlation_id': 'login',
+        'output': {
+            'reason_code': result.get('reason_code'),
+            'reader_ready': result.get('reader_ready') is True,
+        },
+    })
     return normalize_artifact_paths(result)
 
 
@@ -816,6 +851,65 @@ def dxm_draft_reader_products(
                 'message': str(exc),
             },
         ) from exc
+
+
+def _dxm_category_query_exception_mapping(exc: Exception) -> HTTPException:
+    if isinstance(exc, DxmSessionBusyError):
+        return _dxm_session_busy_http_exception()
+    if isinstance(exc, DxmDraftReaderError):
+        return HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': exc.reason_code,
+                'message': str(exc),
+            },
+        )
+    raise exc
+
+
+@app.get('/api/dxm/category/children')
+def dxm_category_children(
+    pcid: str = Query(default='', max_length=24),
+):
+    _assert_batch_browser_available()
+    try:
+        return _run_login_flow(
+            workflow_adapter.read_category_children,
+            pcid=pcid,
+            fail_if_busy=True,
+        )
+    except Exception as exc:
+        raise _dxm_category_query_exception_mapping(exc) from exc
+
+
+@app.get('/api/dxm/category/search')
+def dxm_category_search(
+    keyword: str = Query(min_length=1, max_length=64),
+):
+    _assert_batch_browser_available()
+    try:
+        return _run_login_flow(
+            workflow_adapter.search_categories,
+            keyword=keyword,
+            fail_if_busy=True,
+        )
+    except Exception as exc:
+        raise _dxm_category_query_exception_mapping(exc) from exc
+
+
+@app.get('/api/dxm/category/get')
+def dxm_category_get(
+    category_id: str = Query(min_length=1, max_length=24),
+):
+    _assert_batch_browser_available()
+    try:
+        return _run_login_flow(
+            workflow_adapter.get_category_by_id,
+            category_id=category_id,
+            fail_if_busy=True,
+        )
+    except Exception as exc:
+        raise _dxm_category_query_exception_mapping(exc) from exc
 
 
 def _active_agent_console_browser() -> dict[str, Any] | None:
@@ -1293,6 +1387,9 @@ def preview_plan_snapshot(payload: PlanSnapshotRequest):
             shop_id=payload.shop_id,
             product_ids=payload.product_ids,
             expected_session_ref=payload.session_ref,
+            target_category_id=payload.target_category_id,
+            target_category_name=payload.target_category_name,
+            target_category_match=payload.target_category_match,
             fail_if_busy=True,
         )
         service = E2PlanService()
@@ -1301,7 +1398,23 @@ def preview_plan_snapshot(payload: PlanSnapshotRequest):
             shop_id=authoritative["request"]["shop_id"],
             category_ids=authoritative["category_ids"],
         )
-        return service.build_plan_snapshot(authoritative["request"])
+        snapshot = service.build_plan_snapshot(authoritative["request"])
+        record_best_effort({
+            'actor': 'operator',
+            'component': 'plan',
+            'action': 'preview',
+            'phase': 'completed',
+            'status': 'ok',
+            'correlation_id': f"preview-{payload.local_plan_template_id}",
+            'root_correlation_id': f"plan-{payload.local_plan_template_id}",
+            'store_id': payload.shop_id,
+            'snapshot_id': snapshot.get('snapshot_hash') if isinstance(snapshot, Mapping) else None,
+            'input': {
+                'product_count': len(payload.product_ids or []),
+                'plan_id': payload.local_plan_template_id,
+            },
+        })
+        return snapshot
     except DxmSessionBusyError as exc:
         raise _dxm_session_busy_http_exception() from exc
     except (DxmPlanReaderError, PlanContractError, PlanSchemaError) as exc:
@@ -1330,6 +1443,9 @@ def freeze_plan_snapshot(payload: PlanSnapshotRequest):
             shop_id=payload.shop_id,
             product_ids=payload.product_ids,
             expected_session_ref=payload.session_ref,
+            target_category_id=payload.target_category_id,
+            target_category_name=payload.target_category_name,
+            target_category_match=payload.target_category_match,
             fail_if_busy=True,
         )
         service = E2PlanService()
@@ -1500,12 +1616,26 @@ def _normalize_acquisition_claim_request(payload: AcquisitionClaimRequest) -> di
 
 @app.get('/api/tasks')
 def list_tasks():
-    return repo.list_tasks()
+    return [_with_public_worker_control(task) for task in repo.list_tasks()]
 
 
 @app.get('/api/tasks/{task_id}')
 def get_task(task_id: int):
-    return repo.get_task(task_id)
+    task = repo.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail='Task not found')
+    return _with_public_worker_control(task)
+
+
+def _with_public_worker_control(task: dict | None) -> dict | None:
+    if not task:
+        return task
+    control = repo.public_task_worker_control(task)
+    if control is None:
+        return task
+    public = dict(task)
+    public['workerControl'] = control
+    return public
 
 
 @app.post('/api/tasks')
@@ -1635,6 +1765,17 @@ async def approve_and_start_task_for_real_dxm(
 ):
     required_confirmation = _assert_task_can_receive_manual_approval(task_id, payload)
     _assert_workflow_runtime_healthy()
+    record_best_effort({
+        'actor': 'operator',
+        'component': 'task',
+        'action': 'approve_and_start',
+        'phase': 'requested',
+        'status': 'ok',
+        'correlation_id': f"approve-{task_id}",
+        'root_correlation_id': f"task-{task_id}",
+        'task_id': str(task_id),
+        'input': {'confirmation_length': len(getattr(payload, 'confirmation', '') or '')},
+    })
     task = repo.get_task_private(task_id)
     if not task:
         raise HTTPException(status_code=404, detail='Task not found')
@@ -1726,19 +1867,78 @@ def pause_task(task_id: int):
     task = repo.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail='Task not found')
-    if task.get('mode') in REAL_WRITE_START_MODES:
-        raise HTTPException(status_code=409, detail='Real save task pause is disabled until worker pause acknowledgements are implemented')
-    if not repo.try_pause_task(task_id):
-        raise HTTPException(status_code=409, detail='Task is not running')
-    return {'ok': True, 'taskId': task_id, 'status': 'paused'}
+    result = repo.request_pause_task(task_id)
+    if not result.ok:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': result.reason_code,
+                'message': 'Task cannot be paused in its current state',
+                'status': result.status or task.get('status'),
+            },
+        )
+    public = result.as_public_dict()
+    repo.add_log(
+        task_id,
+        None,
+        'info',
+        '操作员请求暂停；等待 worker 在商品安全点确认',
+        {
+            'reason_code': result.reason_code,
+            'status': result.status,
+            'worker_control': public.get('workerControl'),
+        },
+    )
+    return {
+        'ok': True,
+        'taskId': task_id,
+        'status': result.status,
+        'reasonCode': result.reason_code,
+        'applied': result.applied,
+        'idempotent': result.idempotent,
+        'workerControl': public.get('workerControl'),
+        'message': '暂停已请求；worker 确认前任务仍可能完成当前商品',
+    }
 
 
 @app.post('/api/tasks/{task_id}/resume')
-def resume_task(task_id: int):
+async def resume_task(task_id: int):
     task = repo.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail='Task not found')
-    raise HTTPException(status_code=409, detail='Resume is disabled until worker resume acknowledgements are implemented')
+    result = repo.request_resume_task(task_id)
+    if not result.ok:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': result.reason_code,
+                'message': 'Task cannot be resumed until pause is worker-acked and task is paused',
+                'status': result.status or task.get('status'),
+            },
+        )
+    public = result.as_public_dict()
+    repo.add_log(
+        task_id,
+        None,
+        'info',
+        '操作员继续任务；runner 将跳过已完成商品',
+        {
+            'reason_code': result.reason_code,
+            'status': result.status,
+            'worker_control': public.get('workerControl'),
+        },
+    )
+    asyncio.create_task(runner.run_task(task_id))
+    return {
+        'ok': True,
+        'taskId': task_id,
+        'status': result.status,
+        'reasonCode': result.reason_code,
+        'applied': result.applied,
+        'idempotent': result.idempotent,
+        'workerControl': public.get('workerControl'),
+        'message': '已从暂停点继续；已完成保存不会重做',
+    }
 
 
 @app.post('/api/tasks/{task_id}/stop')
@@ -1746,10 +1946,38 @@ def stop_task(task_id: int):
     task = repo.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail='Task not found')
-    if task.get('mode') in REAL_WRITE_START_MODES:
-        raise HTTPException(status_code=409, detail='Real save task stop is disabled until worker stop acknowledgements are implemented')
-    repo.update_task_status(task_id, 'cancelled')
-    return {'ok': True, 'taskId': task_id, 'status': 'cancelled'}
+    result = repo.request_stop_task(task_id)
+    if not result.ok:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                'reason_code': result.reason_code,
+                'message': 'Task cannot be stopped in its current state',
+                'status': result.status or task.get('status'),
+            },
+        )
+    public = result.as_public_dict()
+    repo.add_log(
+        task_id,
+        None,
+        'warning',
+        '操作员请求停止；等待 worker 安全收敛后确认',
+        {
+            'reason_code': result.reason_code,
+            'status': result.status,
+            'worker_control': public.get('workerControl'),
+        },
+    )
+    return {
+        'ok': True,
+        'taskId': task_id,
+        'status': result.status,
+        'reasonCode': result.reason_code,
+        'applied': result.applied,
+        'idempotent': result.idempotent,
+        'workerControl': public.get('workerControl'),
+        'message': '停止已请求；当前商品安全收敛后不再派发新商品',
+    }
 
 
 @app.get('/api/exceptions')
@@ -1886,6 +2114,60 @@ def _runtime_control_restart_block_detail() -> str:
     return '当前后端不是由 DXM Agent Console 或 start-mvp 启动器托管，无法通过 UI 重启服务。请关闭当前 Python 进程后重新打开免安装版 exe。'
 
 
+@app.get('/api/operation-audit/events')
+def list_operation_audit_events(
+    status: str | None = None,
+    task_id: str | None = None,
+    product_id: str | None = None,
+    component: str | None = None,
+    phase: str | None = None,
+    reason: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
+):
+    listed = get_audit_service().list_events(
+        status=status,
+        task_id=task_id,
+        product_id=product_id,
+        component=component,
+        phase=phase,
+        reason=reason,
+        limit=limit,
+        offset=offset,
+    )
+    listed['chain'] = get_audit_service().verify_chain()
+    return listed
+
+
+@app.post('/api/operation-audit/client-events')
+def record_operation_audit_client_event(payload: dict[str, Any]):
+    event = dict(payload or {})
+    event.setdefault('actor', 'operator')
+    event.setdefault('component', 'workbench')
+    event.setdefault('action', 'page_switch')
+    event.setdefault('phase', 'completed')
+    event.setdefault('status', 'ok')
+    stored = record_best_effort(event)
+    if stored.get('degraded'):
+        return {'ok': False, 'audit_degraded': True, 'reason_code': 'AUDIT_DEGRADED'}
+    return {'ok': True, 'event': stored}
+
+
+@app.post('/api/operation-audit/export')
+def export_operation_audit_package():
+    export_dir = DATA_DIR / 'operation-audit'
+    export_dir.mkdir(parents=True, exist_ok=True)
+    dest = export_dir / f"dxm-audit-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.zip"
+    try:
+        result = get_audit_service().export_diagnostic_zip(dest)
+    except OperationAuditError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={'reason_code': exc.reason_code, 'message': str(exc)},
+        ) from exc
+    return result
+
+
 @app.get('/api/runtime/status')
 def runtime_status(frontend_url: str | None = None):
     frontend_url = _runtime_frontend_url(frontend_url)
@@ -1928,6 +2210,7 @@ def runtime_status(frontend_url: str | None = None):
             'message': dxm_state.get('message'),
             'nextAction': dxm_state.get('next_action'),
         },
+        'operationAudit': get_audit_service().verify_chain(),
         'l2ReadonlyProbe': _l2_probe_lock_status(),
         'dependencies': {
             'python': {
@@ -2248,7 +2531,11 @@ def runtime_control(payload: RuntimeControlRequest):
     if action == 'clear_stuck_tasks':
         cleared: list[dict] = []
         skipped: list[dict] = []
-        candidates = [task for task in repo.list_tasks() if task.get('status') in {'running', 'paused'}]
+        candidates = [
+            task
+            for task in repo.list_tasks()
+            if task.get('status') in {'running', 'pause_requested', 'stop_requested', 'paused'}
+        ]
         for task in candidates:
             task_id = task.get('id')
             mode = str(task.get('mode') or (task.get('payload') or {}).get('execution_mode') or '')
@@ -4254,7 +4541,7 @@ def _run_login_flow(func, *args, fail_if_busy: bool = False, **kwargs):
     if not acquired:
         raise DxmSessionBusyError('DXM_SESSION_BUSY')
     try:
-        return login_flow_executor.submit(func, *args, **kwargs).result()
+        return browser_agent_runtime.run_session_operation(func, *args, **kwargs)
     finally:
         login_flow_api_lock.release()
 

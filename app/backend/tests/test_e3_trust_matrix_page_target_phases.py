@@ -21,6 +21,11 @@ import test_batch_dispatch_authority as authority_support
 authority_case = authority_support.authority_case
 
 
+class _AccountBoundAdapter:
+    def refresh_account_context_hash(self) -> str:
+        return "A" * 64
+
+
 def _runtime_reservation(
     case: dict[str, Any],
 ) -> tuple[BrowserAgentRuntime, MutationDispatchLedger, Any, dict[str, Any]]:
@@ -30,7 +35,7 @@ def _runtime_reservation(
         recover_inflight=False,
         live_facts_provider=lambda: authority_module.LiveDispatchFacts(**live_facts),
     )
-    runtime = BrowserAgentRuntime(object(), mutation_ledger=ledger)
+    runtime = BrowserAgentRuntime(_AccountBoundAdapter(), mutation_ledger=ledger)
     live_facts["browser_runtime_id"] = runtime.runtime_id
     command = replace(
         case["command"],
@@ -349,7 +354,10 @@ def test_restart_rejects_self_consistent_target_drift(
         recover_inflight=False,
         live_facts_provider=lambda: authority_module.LiveDispatchFacts(**restarted_live),
     )
-    restarted_runtime = BrowserAgentRuntime(object(), mutation_ledger=restarted_ledger)
+    restarted_runtime = BrowserAgentRuntime(
+        _AccountBoundAdapter(),
+        mutation_ledger=restarted_ledger,
+    )
     restarted_live["browser_runtime_id"] = restarted_runtime.runtime_id
     restarted_command = replace(
         authority_case["command"],

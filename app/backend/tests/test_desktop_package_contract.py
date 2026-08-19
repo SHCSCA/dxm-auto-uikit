@@ -726,7 +726,7 @@ def test_verify_desktop_package_smoke_script_checks_packaged_exe_logs():
     assert "trap {" in source
     assert "exit 1" in source[source.index("trap {"):source.index("$RepoRoot =")]
     assert "outputs\\desktop-build\\win-unpacked\\DXM-Agent-Console.exe" in source
-    assert "DXM-Agent-Console-Portable-0.1.0.exe" in source
+    assert "DXM-Agent-Console-Portable-$DesktopVersion.exe" in source
     assert "[switch]$CheckPortable" in source
     assert "desktop-main.log" in source
     assert "Loaded frontend" in source
@@ -825,9 +825,9 @@ def test_app_shell_presents_frozen_mvp_navigation():
     assert "type PrimaryNavigationItem" in source
     assert "const primaryNavigation" in source
     primary_block = source[source.index("const primaryNavigation"):source.index("const sectionLabels")]
-    for label in ["工作台", "连接店小秘", "采集箱选品", "铺货方案", "开始批量保存", "保存结果", "设置"]:
+    for label in ["工作台", "连接店小秘", "采集箱选品", "店小秘模板", "普货方案", "开始批量保存", "保存结果", "设置"]:
         assert label in primary_block
-    assert primary_block.count("{ id: '") == 7
+    assert primary_block.count("{ id: '") == 8
     for hidden_label in ["待认领入箱", "商品箱编辑保存", "当前保存任务", "问题与证据"]:
         assert hidden_label not in primary_block
     assert "nav-subitem" in source

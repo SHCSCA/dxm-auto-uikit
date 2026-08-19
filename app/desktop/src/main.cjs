@@ -704,6 +704,7 @@ async function startDesktopRuntime() {
   runtimeInfo.dataDir = dataDir
   const port = await selectBackendPort({
     isIsolatedQa: launchPolicy.isIsolatedQa,
+    isPackaged: app.isPackaged,
     isPortFree: isLoopbackPortFree,
   })
   if (!launchPolicy.isIsolatedQa) {
@@ -711,6 +712,7 @@ async function startDesktopRuntime() {
       dataDir,
       tcpProbe: tcpOccupancyProbe,
       httpProbe: httpRuntimeProbe,
+      requireFixedPortFree: !(app.isPackaged && port !== 8000),
     })
   }
 

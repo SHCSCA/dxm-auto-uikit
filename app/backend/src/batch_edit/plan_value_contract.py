@@ -54,8 +54,15 @@ class PlanValueContract:
         value: Any,
         keys: set[str],
         label: str,
+        *,
+        optional_keys: frozenset[str] | None = None,
     ) -> dict[str, Any]:
-        if not isinstance(value, dict) or set(value) != keys:
+        allowed = keys | (optional_keys or frozenset())
+        if (
+            not isinstance(value, dict)
+            or set(value) - allowed
+            or keys - set(value)
+        ):
             self.reject(
                 "PLAN_SCHEMA_INVALID",
                 f"{label} has an unexpected shape",
@@ -101,6 +108,23 @@ class PlanValueContract:
                 f"{label} must be non-empty normalized text",
             )
         return value
+
+    def optional_text(
+        self,
+        value: Any,
+        label: str,
+        *,
+        max_length: int | None = None,
+    ) -> str | None:
+        if value is None or value == "":
+            return None
+        text = self.non_empty_text(value, label)
+        if max_length is not None and len(text) > max_length:
+            self.reject(
+                "PLAN_TEXT_TOO_LONG",
+                f"{label} must be at most {max_length} characters",
+            )
+        return text
 
     def clone(self, value: Any) -> Any:
         try:

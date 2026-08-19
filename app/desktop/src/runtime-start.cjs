@@ -23,12 +23,15 @@ const STARTUP_FAILURE_MESSAGES = Object.freeze({
   DXM_PORT_8000_OCCUPIED: '本机 8000 端口已被占用。请先确认并关闭占用该端口的程序，再重新打开；系统不会自动结束该进程。',
   DXM_PORT_8000_UNCERTAIN: '无法确认本机 8000 端口可用。为避免连接到错误服务，本次启动已停止；请稍后重试或联系维护人员。',
   DXM_BACKEND_START_FAILED: '后端服务启动失败。请重新打开；如果仍失败，把本页错误码和实际生成的日志文件发给维护人员排查。',
+  DXM_BACKEND_IDENTITY_MISMATCH: '本机已有另一个服务占用了工作台端口。请先关闭占用 8000 端口的旧 DXM 窗口或 start-mvp 后再打开免安装版；系统不会接管旧进程。',
   DXM_STARTUP_FAILED: '工作台启动失败。系统没有执行保存或发布动作；请关闭当前窗口后重新打开。',
 })
 
 function normalizeStartupFailureCode(error) {
   const code = typeof error?.code === 'string' ? error.code.trim() : ''
   if (code === 'DXM_SAME_DATA_RUNTIME' || Object.hasOwn(STARTUP_FAILURE_MESSAGES, code)) return code
+  const message = String(error?.message || '')
+  if (/mismatched backend|backendPid mismatch/i.test(message)) return 'DXM_BACKEND_IDENTITY_MISMATCH'
   return 'DXM_STARTUP_FAILED'
 }
 

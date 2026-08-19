@@ -47,6 +47,9 @@ function BrowserHarness() {
               taskInput={taskInput}
               onShowSelection={() => setActiveSection('draft_selection')}
               onShowPlans={() => setActiveSection('template_center')}
+              onTaskSelected={() => undefined}
+              onShowTaskMonitor={() => setActiveSection('product_tasks')}
+              onShowResults={() => setActiveSection('results')}
             />
             )
           : selectionMounted

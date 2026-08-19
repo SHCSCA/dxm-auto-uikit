@@ -145,6 +145,26 @@ class DxmWorkflowAdapter:
         text = str(value or '').strip()
         return text or None
 
+    def refresh_account_context_hash(self) -> str:
+        refresher = getattr(self.login_flow, 'refresh_account_context_hash', None)
+        if not callable(refresher):
+            raise RuntimeError('AUTH_ACCOUNT_CONTEXT_UNAVAILABLE')
+        value = refresher()
+        text = str(value or '').strip().upper()
+        if len(text) != 64 or any(character not in '0123456789ABCDEF' for character in text):
+            raise RuntimeError('AUTH_ACCOUNT_CONTEXT_UNAVAILABLE')
+        return text
+
+    def current_account_context_hash(self) -> str | None:
+        getter = getattr(self.login_flow, 'current_account_context_hash', None)
+        if not callable(getter):
+            return None
+        value = getter()
+        text = str(value or '').strip().upper()
+        if len(text) != 64 or any(character not in '0123456789ABCDEF' for character in text):
+            return None
+        return text
+
     def current_mutation_identity(self) -> dict[str, Any] | None:
         getter = getattr(self.login_flow, 'current_mutation_identity', None)
         if not callable(getter):
@@ -224,6 +244,15 @@ class DxmWorkflowAdapter:
         """Return the allowlisted shopMap read envelope unchanged."""
 
         return self.login_flow.read_draft_shops()
+
+    def read_category_children(self, pcid: str = '') -> list[dict[str, Any]]:
+        return self.login_flow.read_category_children(pcid=pcid)
+
+    def search_categories(self, keyword: str) -> list[dict[str, Any]]:
+        return self.login_flow.search_categories(keyword=keyword)
+
+    def get_category_by_id(self, category_id: str) -> dict[str, Any] | None:
+        return self.login_flow.get_category_by_id(category_id=category_id)
 
     def read_draft_page(
         self,

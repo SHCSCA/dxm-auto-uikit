@@ -206,7 +206,7 @@ def test_mvp_contract_defines_batch_save_evidence_and_readiness_boundary():
     contract = MVP_CONTRACT.read_text(encoding="utf-8")
 
     assert "真实可见浏览器" in contract
-    assert "draft ≥3" in contract
+    assert "draft ≥1" in contract
     assert "batch_draft_save" in contract
     assert "保存回包成功" in contract
     assert "页面成功态" in contract
@@ -222,7 +222,7 @@ def test_mvp_contract_has_current_manual_acceptance_checklist():
 
     assert "## 11. 人工验收" in contract
     assert "真实可见浏览器已登录" in contract
-    assert "人工勾选至少 3 个真实 draft" in contract
+    assert "人工勾选至少 1 个真实 draft" in contract
     assert "确认真实可见浏览器操作当前商品" in contract
     assert "伪造/删除三铁证任一项时，商品不得显示成功" in contract
     assert "零发布复核" in contract

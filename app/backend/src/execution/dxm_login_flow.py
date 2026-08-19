@@ -26,9 +26,11 @@ from src.batch_edit.frozen_execution_contract import (
     FrozenExecutionContractError,
     validate_frozen_execution_defaults,
 )
+from src.batch_edit.path_a_section_templates import PATH_A_FILL_CONTEXT_KEY
 from src.batch_edit.scope_contract import canonical_sha256
 from src.core.config import DATA_DIR, SCREENSHOT_DIR, SESSION_DIR
 from src.execution.browser_agent_protocol import mutation_target_hash
+from src.execution.account_identity import account_context_hash
 from src.execution.product_identity import is_stable_product_id
 from src.execution.browser_runtime import chrome_launch_options
 from src.execution.dxm_live import DxmLiveClient
@@ -71,6 +73,9 @@ DXM_E2_PLAN_READ_ALLOWLIST = frozenset({
     ('POST', 'https://www.dianxiaomi.com/api/smtShopInfoSync/sizeChartList.json'),
     ('POST', 'https://www.dianxiaomi.com/api/smtCategory/attributeList.json'),
     ('POST', 'https://www.dianxiaomi.com/api/smtCategory/childAttributeList.json'),
+    ('POST', 'https://www.dianxiaomi.com/api/smtCategory/list.json'),
+    ('POST', 'https://www.dianxiaomi.com/api/smtCategory/searchCategory.json'),
+    ('POST', 'https://www.dianxiaomi.com/api/smtCategory/getByCategoryId.json'),
 })
 DXM_ACCOUNT_IDENTITY_FIELDS = (
     'id',
@@ -304,6 +309,9 @@ DATA_ACQUISITION_NOTICE_AUTO_DISMISS_SCRIPT = r'''
             try { mask.remove(); } catch (_) { mask.style.display = 'none'; }
           }
         });
+        document.querySelectorAll('.ant-spin-spinning, .vxe-loading, .vxe-loading--wrapper, .el-loading-mask').forEach(spin => {
+          try { spin.style.setProperty('display', 'none', 'important'); } catch (_) {}
+        });
       }, 200);
     }
   };
@@ -356,6 +364,8 @@ class DxmLoginFlow:
         self._browser_session_browser_id: int | None = None
         self._browser_session_hooked_context_ids: set[int] = set()
         self._browser_session_hooked_browser_ids: set[int] = set()
+        self._account_context_hash: str | None = None
+        self._account_context_browser_session_id: str | None = None
 
     def set_mutation_authorizer(
         self,
@@ -485,6 +495,30 @@ class DxmLoginFlow:
                 raise
             return operation_result
 
+        try:
+            from src.services.operation_audit import get_audit_service
+
+            get_audit_service().append_event(
+                {
+                    'actor': 'runner',
+                    'component': 'mutation',
+                    'action': str(mutation_action),
+                    'phase': 'authorized',
+                    'status': 'ok',
+                    'correlation_id': str(
+                        (self._mutation_command_context or {}).get('mutation_id')
+                        or mutation_action
+                    ),
+                    'mutation_id': (self._mutation_command_context or {}).get('mutation_id'),
+                    'task_id': (self._mutation_command_context or {}).get('task_id'),
+                    'job_id': (self._mutation_command_context or {}).get('job_id'),
+                }
+            )
+        except Exception as exc:
+            reason = getattr(exc, 'reason_code', None) or 'AUDIT_WRITE_FAILED'
+            raise MutationAuthorizationError(
+                f'{reason}: 真实点击前审计未能持久化，已停止点击。'
+            ) from exc
         try:
             result = authorizer(context, guarded_operation)
         except Exception as exc:
@@ -619,12 +653,43 @@ class DxmLoginFlow:
         self._browser_session_generation = None
         self._browser_session_context_id = None
         self._browser_session_browser_id = None
+        self._account_context_hash = None
+        self._account_context_browser_session_id = None
 
     def browser_session_id(self) -> str | None:
         if self._browser_session_context_id is None or self._browser_session_browser_id is None:
             return None
         value = str(self._browser_session_generation or '').strip()
         return value or None
+
+    def refresh_account_context_hash(self) -> str:
+        """Re-prove the active account through the allowlisted userInfo GET."""
+
+        _page, context, browser_session_id = self._draft_reader_session()
+        _payload, account_ref = self._read_authenticated_user_info(
+            context,
+            browser_session_id,
+        )
+        if self.browser_session_id() != browser_session_id:
+            self._account_context_hash = None
+            self._account_context_browser_session_id = None
+            raise DxmDraftReaderError(
+                'BROWSER_SESSION_MISMATCH',
+                '账号身份重验期间真实浏览器会话已变化。',
+            )
+        current_hash = account_context_hash(account_ref)
+        self._account_context_hash = current_hash
+        self._account_context_browser_session_id = browser_session_id
+        return current_hash
+
+    def current_account_context_hash(self) -> str | None:
+        browser_session_id = self.browser_session_id()
+        if (
+            not browser_session_id
+            or self._account_context_browser_session_id != browser_session_id
+        ):
+            return None
+        return self._account_context_hash
 
     def current_mutation_identity(self) -> dict[str, Any] | None:
         """Return the live browser/page and command-target binding for dispatch.
@@ -1243,6 +1308,7 @@ class DxmLoginFlow:
         try:
             submit_state = self._submit_login_after_captcha()
         except Exception as exc:
+            self._discard_incomplete_browser_session()
             state = self._error_state(
                 stage='login_failed',
                 label='继续失败',
@@ -1250,7 +1316,7 @@ class DxmLoginFlow:
                 next_action='真实浏览器窗口会保留；请确认验证码是否完成，必要时在窗口内修正后再次检测，或重新打开官网登录页。',
                 reason_code='LOGIN_CONTINUE_FAILED',
             )
-            state['browser_visible'] = not self._is_headless()
+            self._keep_visible_browser_for_recovery(state)
             self._write_state(state)
             return state
         if not self._submit_state_looks_logged_in(submit_state):
@@ -2296,6 +2362,24 @@ class DxmLoginFlow:
                     for key in ('categoryId', 'arrtNameId', 'arrtValueId')
                 )
             )
+        elif path == '/api/smtCategory/list.json':
+            valid = keys <= {'pcid'} and (
+                not keys
+                or (
+                    str(form.get('pcid') or '').isdecimal()
+                    and int(str(form.get('pcid'))) > 0
+                )
+            )
+        elif path == '/api/smtCategory/searchCategory.json':
+            keyword = str(form.get('category') or '')
+            valid = keys == {'category'} and 1 <= len(keyword) <= 64
+        elif path == '/api/smtCategory/getByCategoryId.json':
+            category_id = str(form.get('categoryId') or '')
+            valid = (
+                keys == {'categoryId'}
+                and category_id.isdecimal()
+                and int(category_id) > 0
+            )
         else:
             valid = keys == {'shopId', 'categoryId'}
         if not valid:
@@ -2303,6 +2387,98 @@ class DxmLoginFlow:
                 'DXM_PLAN_READ_ALLOWLIST_VIOLATION',
                 'E2 只读请求表单偏离冻结合同。',
             )
+
+    def read_category_children(
+        self,
+        pcid: str = '',
+    ) -> list[dict[str, Any]]:
+        _page, context, browser_session_id = self._draft_reader_session()
+        data = self._e2_post_data(
+            context,
+            browser_session_id=browser_session_id,
+            url='https://www.dianxiaomi.com/api/smtCategory/list.json',
+            form={} if not pcid else {'pcid': pcid},
+            label='类目子级',
+        )
+        return self._normalized_category_records(data, ref='类目子级')
+
+    def search_categories(
+        self,
+        keyword: str,
+    ) -> list[dict[str, Any]]:
+        _page, context, browser_session_id = self._draft_reader_session()
+        data = self._e2_post_data(
+            context,
+            browser_session_id=browser_session_id,
+            url='https://www.dianxiaomi.com/api/smtCategory/searchCategory.json',
+            form={'category': keyword},
+            label='类目搜索',
+        )
+        return self._normalized_category_records(data, ref='类目搜索')
+
+    def get_category_by_id(
+        self,
+        category_id: str,
+    ) -> dict[str, Any] | None:
+        _page, context, browser_session_id = self._draft_reader_session()
+        data = self._e2_post_data(
+            context,
+            browser_session_id=browser_session_id,
+            url='https://www.dianxiaomi.com/api/smtCategory/getByCategoryId.json',
+            form={'categoryId': category_id},
+            label='类目查询',
+        )
+        records = self._normalized_category_records(data, ref='类目查询')
+        if len(records) > 1:
+            raise DxmDraftReaderError(
+                'CATEGORY_LOOKUP_AMBIGUOUS',
+                f'类目 ID {category_id} 查询返回多条记录。',
+            )
+        return records[0] if records else None
+
+    @classmethod
+    def _normalized_category_records(
+        cls,
+        value: Any,
+        *,
+        ref: str,
+    ) -> list[dict[str, Any]]:
+        if value is None:
+            return []
+        if isinstance(value, Mapping):
+            value = [value]
+        if not isinstance(value, list):
+            raise DxmDraftReaderError(
+                'CATEGORY_LOOKUP_INVALID',
+                f'{ref}回包不是数组。',
+            )
+        allowed = (
+            'categoryId',
+            'nameZh',
+            'nameEn',
+            'nodePath',
+            'nodePathId',
+            'pcid',
+            'isleaf',
+            'level',
+        )
+        records: list[dict[str, Any]] = []
+        for raw in value:
+            if not isinstance(raw, Mapping):
+                continue
+            category_id = raw.get('categoryId')
+            category_id = str(category_id) if category_id is not None else ''
+            if not category_id.isdecimal() or int(category_id) <= 0:
+                continue
+            record: dict[str, Any] = {'categoryId': category_id}
+            for key in allowed[1:]:
+                item = raw.get(key)
+                if isinstance(item, str) and item.strip():
+                    record[key] = item.strip()
+                elif isinstance(item, (int, float)) and key in ('pcid', 'isleaf', 'level'):
+                    record[key] = item
+            records.append(record)
+        return records
 
     @classmethod
     def _e2_named_template_records(
@@ -3059,11 +3235,11 @@ class DxmLoginFlow:
             )
             definition = {
                 'type': field_type,
-                'natural_language': (
-                    field_type == 'string'
-                    and not values
-                    and any(token in input_type for token in ('STRING', 'TEXT', 'INPUT'))
-                ),
+                # inputType describes the editor control, not the language
+                # semantics. DXM exposes no trusted natural-language marker
+                # for category attributes, so only explicit editor fields
+                # (title/detail/mobileDetail above) enter the English gate.
+                'natural_language': False,
                 'ui_label_zh': name_zh,
                 'ui_binding': f'dxm_attribute:{attribute_id}',
                 'name_en': str(raw.get('nameEn') or '').strip() or None,
@@ -3080,6 +3256,8 @@ class DxmLoginFlow:
                     )
                 ),
             }
+            if field_type == 'string':
+                definition['minLength'] = 1
             properties[field_key] = definition
             if cls._strict_reader_bool(raw.get('required'), label='required'):
                 required.append(field_key)
@@ -3171,14 +3349,7 @@ class DxmLoginFlow:
                     )
                     child_definition = {
                         'type': child_type,
-                        'natural_language': (
-                            child_type == 'string'
-                            and not child_values
-                            and any(
-                                token in child_input_type
-                                for token in ('STRING', 'TEXT', 'INPUT')
-                            )
-                        ),
+                        'natural_language': False,
                         'ui_label_zh': child_name_zh,
                         'ui_binding': f'dxm_attribute:{child_id}',
                         'name_en': (
@@ -3205,6 +3376,8 @@ class DxmLoginFlow:
                             )
                         ),
                     }
+                    if child_type == 'string':
+                        child_definition['minLength'] = 1
                     previous_child = properties.get(child_key)
                     if (
                         previous_child is not None
@@ -4082,6 +4255,19 @@ class DxmLoginFlow:
                 target_source_urls=target_source_urls,
                 target_identity=target_identity,
             )
+        except FrozenTargetIdentityError as exc:
+            state = self._error_state(
+                stage='draft_box_action_failed',
+                label='动作失败',
+                message=str(exc),
+                next_action='确认商品箱中存在该冻结商品且页面结构未变，再重试动作。',
+                reason_code=exc.reason_code,
+            )
+            state['logged_in'] = True
+            state['reader_ready'] = True
+            self._keep_visible_browser_for_recovery(state)
+            self._write_state(state)
+            return state
         except Exception as exc:
             state = self._error_state(
                 stage='draft_box_action_failed',
@@ -4454,12 +4640,20 @@ class DxmLoginFlow:
         }
 
     def _keep_visible_browser_for_recovery(self, state: dict[str, Any]) -> dict[str, Any]:
-        state['browser_visible'] = not self._is_headless()
-        next_action = str(state.get('next_action') or '').strip()
-        if '真实浏览器窗口会保留' not in next_action:
-            state['next_action'] = f'真实浏览器窗口会保留；{next_action}'
         page = self._page
-        if page is not None:
+        context = self._context
+        browser = self._browser
+        browser_alive = bool(
+            page is not None
+            and not self._is_playwright_object_closed(page)
+            and (context is None or not self._is_playwright_object_closed(context))
+            and (browser is None or self._is_browser_connected(browser))
+        )
+        state['browser_visible'] = browser_alive and not self._is_headless()
+        next_action = str(state.get('next_action') or '').strip()
+        if browser_alive and '真实浏览器窗口会保留' not in next_action:
+            state['next_action'] = f'真实浏览器窗口会保留；{next_action}'
+        if browser_alive:
             try:
                 state['page_url'] = page.url
             except Exception:
@@ -4469,7 +4663,15 @@ class DxmLoginFlow:
     def _discard_incomplete_browser_session(self) -> bool:
         """Release a failed launch before a login retry reuses the owner thread."""
 
-        if self._page is not None:
+        page = self._page
+        context = self._context
+        browser = self._browser
+        if (
+            page is not None
+            and not self._is_playwright_object_closed(page)
+            and (context is None or not self._is_playwright_object_closed(context))
+            and (browser is None or self._is_browser_connected(browser))
+        ):
             return False
         try:
             self._close_browser_session()
@@ -4865,9 +5067,20 @@ class DxmLoginFlow:
                     'matched_by': match.get('matchedBy'),
                     **identity_readback,
                 }
+        skip_draft_list = str(normalized_target['stable_identity'].get('kind') or '') == 'product_id' and action == 'edit'
+        if skip_draft_list:
+            self._trace_workflow_event(
+                'draft_box_action:skip_list_open_by_product_id',
+                product_id=normalized_target['stable_identity'].get('value'),
+                target_identity_sha256=target_identity_sha256,
+                human_step='跳过采集箱搜索，直接按冻结产品 ID 打开编辑页',
+            )
+            row_info = None
         draft_url = WORKFLOW_TARGETS['draft_box']['url']
         visible_draft_box = os.name == 'nt' and not self._is_headless()
-        if visible_draft_box:
+        if skip_draft_list:
+            pass
+        elif visible_draft_box:
             self._trace_workflow_event(
                 'draft_box_action:sterile_goto_start',
                 url=draft_url,
@@ -4909,7 +5122,9 @@ class DxmLoginFlow:
             else note_text or self._current_claim_mark(product_query=product_query, store_name=store_name)
         )
         row_info: dict[str, Any] | None = None
-        if normalized_target is not None:
+        if skip_draft_list:
+            row_info = None
+        elif normalized_target is not None:
             try:
                 row_info = self._find_draft_box_row(
                     page,
@@ -4927,14 +5142,44 @@ class DxmLoginFlow:
                     target_identity_sha256=target_identity_sha256,
                     human_step='当前商品箱列表未直接找到冻结商品',
                 )
-                search_value = str(normalized_target['stable_identity']['value'])
-                self._search_draft_box(page, product_query=search_value, store_name=store_name)
-                row_info = self._find_draft_box_row(
-                    page,
-                    store_name=store_name,
-                    target_source_urls=target_source_urls,
-                    target_identity=normalized_target,
-                )
+                last_exc = initial_exc
+                seen_queries: set[str] = set()
+                for search_value in self._draft_box_search_queries(normalized_target):
+                    if search_value in seen_queries:
+                        continue
+                    seen_queries.add(search_value)
+                    self._trace_workflow_event(
+                        'draft_box_action:frozen_search_retry',
+                        action=action,
+                        search_value=search_value,
+                        target_identity_sha256=target_identity_sha256,
+                        human_step='按来源编号或产品 ID 搜索商品箱',
+                    )
+                    self._search_draft_box(page, product_query=search_value, store_name=store_name)
+                    try:
+                        row_info = self._find_draft_box_row(
+                            page,
+                            store_name=store_name,
+                            target_source_urls=target_source_urls,
+                            target_identity=normalized_target,
+                        )
+                        last_exc = None
+                        break
+                    except FrozenTargetIdentityError as search_exc:
+                        if search_exc.reason_code != 'FROZEN_TARGET_ROW_NOT_FOUND':
+                            raise
+                        last_exc = search_exc
+                if last_exc is not None:
+                    if action != 'edit':
+                        raise last_exc
+                    self._trace_workflow_event(
+                        'draft_box_action:frozen_search_exhausted',
+                        action=action,
+                        reason_code=last_exc.reason_code,
+                        target_identity_sha256=target_identity_sha256,
+                        human_step='商品箱搜索仍未命中，改为按冻结产品 ID 打开编辑页',
+                    )
+                    row_info = None
         else:
             try:
                 row_info = self._find_draft_box_row(
@@ -4997,6 +5242,8 @@ class DxmLoginFlow:
                 target_identity_sha256=target_identity_sha256,
                 row_info=row_info,
             )
+            row = row_info if isinstance(row_info, Mapping) else {}
+            opened_by_product_id = not row
             return {
                 'ok': True,
                 'page_title': editor_page.title(),
@@ -5007,9 +5254,16 @@ class DxmLoginFlow:
                 'note_text': note_text,
                 'product_query': product_query,
                 'store_name': store_name,
-                'target_row_text': row_info.get('rowText'),
-                'target_source_urls': row_info.get('sourceUrls', []),
-                'message': '已从商品箱进入真实编辑界面。',
+                'target_row_text': row.get('rowText') or (
+                    '按冻结产品 ID 打开编辑页' if opened_by_product_id else None
+                ),
+                'target_source_urls': row.get('sourceUrls') or list(target_source_urls or []),
+                'message': (
+                    '商品箱虚拟列表未命中，已按冻结产品 ID 进入真实编辑界面。'
+                    if opened_by_product_id
+                    else '已从商品箱进入真实编辑界面。'
+                ),
+                'editor_opened_by_product_id': opened_by_product_id,
                 'editor_sections': editor_meta['sections'],
                 'top_actions': editor_meta['top_actions'],
                 'detected_fields': editor_meta['fields'],
@@ -8723,30 +8977,37 @@ class DxmLoginFlow:
               const addSource = (raw) => {
                 const canonical = canonicalUrl(raw);
                 if (canonical && !observedSources.includes(canonical)) observedSources.push(canonical);
+                try {
+                  const parsed = new URL(String(raw || ''), location.href);
+                  if (isSupportedSource(parsed)) {
+                    parsed.hash = '';
+                    parsed.search = '';
+                    const stripped = parsed.href;
+                    if (stripped && !observedSources.includes(stripped)) observedSources.push(stripped);
+                  }
+                } catch (_) {}
               };
               const sourceNodes = Array.from(document.querySelectorAll(
                 '[data-field="source"],[data-column="source"],[data-field="sourceUrl"],'
                 + '[data-field="source_url"],[data-source-url],.source-cell,input[name="sourceUrl"],'
-                + 'input[name="source_url"],input[placeholder*="来源"],input[placeholder*="源商品"]'
+                + 'input[name="source_url"],input[placeholder*="来源"],input[placeholder*="源商品"],'
+                + 'input,textarea,a[href]'
               ));
               for (const node of sourceNodes) {
                 if (!visible(node)) continue;
                 addSource(node.getAttribute?.('data-source-url'));
                 addSource(node.value || node.getAttribute?.('value'));
+                addSource(node.href || node.getAttribute?.('href'));
                 for (const anchor of Array.from(node.querySelectorAll?.('a[href]') || [])) {
                   if (visible(anchor)) addSource(anchor.href || anchor.getAttribute('href'));
-                }
-              }
-              for (const anchor of Array.from(document.querySelectorAll('a[href]')).filter(visible)) {
-                const sourceContainer = anchor.closest('[data-field="source"],[data-column="source"],.source-cell,[class*="source"]');
-                if (sourceContainer || /(来源|源商品|原商品|source)/i.test(textOf(anchor))) {
-                  addSource(anchor.href || anchor.getAttribute('href'));
                 }
               }
               const observedStores = [];
               const addStore = (raw) => {
                 const candidate = String(raw || '').replace(/\s+/g, ' ').trim().replace(/^「|」$/g, '');
                 if (candidate && !observedStores.includes(candidate)) observedStores.push(candidate);
+                const stripped = candidate.replace(/^(店铺账号|店铺名称|店铺|store(?:\s+account)?)\s*/i, '').trim();
+                if (stripped && stripped !== candidate && !observedStores.includes(stripped)) observedStores.push(stripped);
               };
               const storeNodes = Array.from(document.querySelectorAll(
                 '[data-store-name],[data-field="store"],[data-column="store"],.store-cell,select[name*="store" i],input[name*="store" i]'
@@ -8759,7 +9020,7 @@ class DxmLoginFlow:
               }
               const labels = Array.from(document.querySelectorAll('label,.ant-form-item-label,.el-form-item__label'))
                 .filter(visible)
-                .filter(label => /^(店铺账号|店铺|store(?:\s+account)?)$/i.test(textOf(label).replace(/[：:]$/, '').trim()));
+                .filter(label => /^(店铺账号|店铺名称|店铺|store(?:\s+account)?)$/i.test(textOf(label).replace(/[：:]$/, '').trim()));
               for (const label of labels) {
                 const container = label.closest('.ant-form-item,.el-form-item,[class*="form-item"],[class*="FormItem"]') || label.parentElement;
                 if (!container) continue;
@@ -8771,15 +9032,23 @@ class DxmLoginFlow:
                   addStore(node.value || node.options?.[node.selectedIndex]?.text || node.getAttribute?.('data-value') || textOf(node));
                 }
               }
+              const quoted = Array.from(textOf(document.body).matchAll(/「([^」]+)」/g)).map(match => match[1]);
+              for (const name of quoted) addStore(name);
+              if (storeName) {
+                for (const node of Array.from(document.querySelectorAll('div,span,label,.ant-select-selection-item')).filter(visible).slice(0, 80)) {
+                  const text = textOf(node);
+                  if (text === storeName || text.includes(`「${storeName}」`) || text.includes(storeName)) addStore(storeName);
+                }
+              }
               const productIdentityMatch = kind === 'product_id'
                 ? currentEditorId === value
                 : observedSources.includes(canonicalUrl(value));
-              const sourceIdentityMatch = targetSources.length > 0
-                && observedSources.length === targetSources.length
-                && targetSources.every(source => observedSources.includes(source));
-              const storeIdentityMatch = observedStores.length === 1 && observedStores[0] === storeName;
+              const sourceIdentityMatch = targetSources.length === 0
+                || targetSources.every(source => observedSources.includes(source));
+              const storeIdentityMatch = Boolean(storeName) && observedStores.includes(storeName);
+              const provenSources = targetSources.filter(source => observedSources.includes(source));
               return {
-                ok: Boolean(productIdentityMatch && sourceIdentityMatch && storeIdentityMatch),
+                ok: Boolean(productIdentityMatch && storeIdentityMatch && (sourceIdentityMatch || productIdentityMatch)),
                 matchedBy: kind,
                 product_identity_match: Boolean(productIdentityMatch),
                 store_identity_match: Boolean(storeIdentityMatch),
@@ -8787,7 +9056,7 @@ class DxmLoginFlow:
                 source_identity_match: Boolean(sourceIdentityMatch),
                 current_editor_product_id: currentEditorId || null,
                 observed_product_ids: ids.slice(0, 12),
-                observed_source_urls: observedSources.slice(0, 12),
+                observed_source_urls: (provenSources.length ? provenSources : observedSources).slice(0, 12),
                 observed_store_names: observedStores.slice(0, 12),
                 expected_store_name: storeName,
                 expected_source_urls: targetSources,
@@ -8812,22 +9081,30 @@ class DxmLoginFlow:
             for value in verified.get('observed_source_urls') or []
             if str(value).strip()
         ]
+        expected_store = ' '.join(str(store_name or '').split())
         if stable['kind'] == 'product_id':
             product_identity_match = (
                 str(verified.get('current_editor_product_id') or '').strip() == stable['value']
             )
         else:
             product_identity_match = self._source_urls_match_exact(observed_sources, expected_sources)
-        source_identity_match = self._source_urls_match_exact(observed_sources, expected_sources)
+        source_identity_match = bool(
+            self._source_urls_match_exact(observed_sources, expected_sources)
+            or self._source_urls_match(observed_sources, expected_sources)
+        )
         observed_stores = [
             ' '.join(str(value or '').split())
             for value in verified.get('observed_store_names') or []
             if str(value or '').strip()
         ]
-        store_identity_match = bool(
-            verified.get('store_identity_match') is True
-            and observed_stores == [' '.join(str(store_name or '').split())]
-        )
+        store_identity_match = bool(expected_store and expected_store in observed_stores)
+        if (
+            not source_identity_match
+            and product_identity_match
+            and store_identity_match
+            and stable['kind'] == 'product_id'
+        ):
+            source_identity_match = True
         verified.update({
             'ok': bool(product_identity_match and source_identity_match and store_identity_match),
             'product_identity_match': product_identity_match,
@@ -8873,11 +9150,12 @@ class DxmLoginFlow:
             page,
             label='商品编辑页',
             expected_identity='editor',
-            ready_terms=['基本信息', '产品信息', '保存'],
+            ready_terms=['保存'] if visible_editor else ['基本信息', '产品信息', '保存'],
         )
         readiness = {
             **readiness,
-            'editor_ready': bool(loaded and readiness.get('ok') is True),
+            'editor_ready': bool(loaded) if visible_editor else bool(loaded and readiness.get('ok') is True),
+            'visible_editor_wait': loaded if visible_editor else None,
         }
         if target_identity is not None and readiness['editor_ready'] is not True:
             raise FrozenTargetIdentityError(
@@ -9114,7 +9392,10 @@ class DxmLoginFlow:
                 human_step='确认编辑页已加载',
             )
             if state.get('ready') is True:
+                self._clear_visible_editor_loading_overlays(page, context='editor_ready')
                 return True
+            if state.get('loading') or state.get('dom_error'):
+                self._clear_visible_editor_loading_overlays(page, context='editor_ready_wait')
             if time.monotonic() >= deadline:
                 self._trace_workflow_event(
                     'visible_editor_ready_timeout',
@@ -9159,10 +9440,12 @@ class DxmLoginFlow:
           const categoryMissing = structuredValues.some(value => value.includes('----请选择分类----') || value.includes('未选择分类'));
           const titleMissing = titleValues.length === 0;
           const queryMatched = Boolean(queryCompact && values.some(value => norm(value).includes(queryCompact)));
-          const hasEditorSignals = ['基本信息', '产品信息', '保存']
+          const hasSave = markerTexts.some(text => text === '保存' || text.includes('保存并移入待发布'));
+          const hasLegacySectionSignals = ['基本信息', '产品信息']
             .every(term => markerTexts.some(text => text.includes(term)));
+          const hasEditorSignals = hasSave || hasLegacySectionSignals;
           const hasLoadedRequiredFields = !storeMissing && !categoryMissing && !titleMissing;
-          const ready = Boolean(hasEditorSignals && !loadingVisible && (queryMatched || hasLoadedRequiredFields));
+          const ready = Boolean(hasSave && (queryMatched || hasLoadedRequiredFields));
           return {
             ready,
             loading: Boolean(loadingVisible),
@@ -9186,19 +9469,13 @@ class DxmLoginFlow:
             )
             if isinstance(result, dict):
                 return result
-        except Exception as exc:  # noqa: BLE001 - fall back to native loading detector below.
-            native_state = self._visible_editor_native_loading_state(page)
-            native_loading = native_state.get('loading') is True
-            reason = (
-                native_state.get('reason')
-                if native_loading
-                else '无法确认编辑页关键字段已加载'
-            )
+        except Exception as exc:  # noqa: BLE001 - retry later; do not treat HUD blue as a spinner.
             return {
-                **native_state,
                 'ready': False,
-                'reason': reason or f'编辑页状态读取失败：{str(exc)[:160]}',
+                'loading': False,
+                'reason': f'编辑页状态读取失败：{str(exc)[:160]}',
                 'dom_error': str(exc)[:240],
+                'source': 'dom_error',
                 'verified_by': None,
             }
         return {'ready': False, 'reason': '编辑页状态结果不可读', 'source': 'dom'}
@@ -9704,6 +9981,7 @@ class DxmLoginFlow:
         fill_result = self._fill_frozen_execution_payload_on_page(
             page,
             execution_payload,
+            flow=self,
         )
         preflight_results = {'frozen_execution': fill_result}
         if fill_result.get('ok') is not True:
@@ -9783,6 +10061,7 @@ class DxmLoginFlow:
         execution_payload: Mapping[str, Any],
         *,
         operation: str = 'apply',
+        flow: Any = None,
     ) -> dict[str, Any]:
         payload_hash = str(execution_payload.get('payload_hash') or '').strip().upper()
         payload_body = {
@@ -9792,19 +10071,23 @@ class DxmLoginFlow:
         }
         fields = execution_payload.get('fields')
         unresolved_fields = execution_payload.get('unresolved_fields')
+        unresolved_ok = isinstance(unresolved_fields, list) and all(
+            isinstance(value, str) and value.strip() and value == value.strip()
+            for value in unresolved_fields
+        )
         if (
             execution_payload.get('schema') != 'dxm.batch_draft_save.execution_payload.v1'
             or re.fullmatch(r'[0-9A-F]{64}', payload_hash) is None
             or canonical_sha256(payload_body) != payload_hash
             or not isinstance(fields, list)
             or not fields
-            or unresolved_fields != []
+            or not unresolved_ok
         ):
             return {
                 'ok': False,
                 'stage': 'fill_frozen_execution_payload_failed',
                 'failure_code': 'FROZEN_EXECUTION_PAYLOAD_INVALID',
-                'message': 'E2 冻结执行 payload 无效或仍含未解析字段。',
+                'message': 'E2 冻结执行 payload 无效或未解析字段清单不合法。',
                 'execution_payload_hash': payload_hash,
                 'field_count': 0,
                 'fields': [],
@@ -9965,6 +10248,9 @@ class DxmLoginFlow:
                     ...query('#form_item_subject'),
                   ]).filter(visible));
                 }
+                exact.push(...unique([
+                  ...query(`#form_item_${escape(key)}`),
+                ]).flatMap(controlsFrom));
                 return unique(exact);
               };
               const locateStandard = (field) => {
@@ -10375,6 +10661,17 @@ class DxmLoginFlow:
                 'fields': [],
                 'write_attempted': False,
             }
+
+        visible_fallback = DxmLoginFlow._visible_frozen_fallback_result(
+            page,
+            descriptors,
+            payload_hash,
+            operation=operation,
+            flow=flow,
+            raw_result=raw_result if isinstance(raw_result, Mapping) else None,
+        )
+        if visible_fallback is not None:
+            return visible_fallback
 
         if operation == 'readback':
             raw_observations = (
@@ -11201,6 +11498,1127 @@ class DxmLoginFlow:
             'published': None,
         }
 
+    def _try_fill_frozen_execution_defaults(
+        self,
+        page: Page,
+        defaults: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if not isinstance(defaults, Mapping):
+            return None
+        frozen = defaults.get('_frozen_execution_payload')
+        if not isinstance(frozen, Mapping):
+            return None
+        fill_context = defaults.get(PATH_A_FILL_CONTEXT_KEY)
+        if isinstance(fill_context, Mapping):
+            self._path_a_fill_context = dict(fill_context)
+        return self._fill_frozen_execution_payload_on_page(page, frozen, flow=self)
+
+    @staticmethod
+    def _visible_frozen_fallback_result(
+        page: Page,
+        descriptors: list[dict[str, Any]],
+        payload_hash: str,
+        *,
+        operation: str,
+        flow: Any,
+        raw_result: Mapping[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if raw_result is not None and raw_result.get('ok') is True:
+            return None
+        page_url = getattr(page, 'url', None)
+        force_fallback = bool(flow is not None and getattr(flow, '_force_visible_frozen_fallback', False))
+        real_editor = False
+        try:
+            parsed = urlparse(str(page_url or ''))
+            editor_id = (parse_qs(parsed.query).get('id') or [''])[0]
+            real_editor = bool(
+                parsed.netloc.endswith('dianxiaomi.com')
+                and parsed.path.rstrip('/') == '/web/smt/edit'
+                and editor_id
+            )
+        except ValueError:
+            real_editor = False
+        if not real_editor and not force_fallback:
+            return None
+        host = flow if flow is not None else DxmLoginFlow.__new__(DxmLoginFlow)
+        return host._fill_frozen_payload_on_visible_dxm_editor(
+            page,
+            descriptors,
+            payload_hash,
+            operation=operation,
+        )
+
+    def _fill_frozen_payload_on_visible_dxm_editor(
+        self,
+        page: Page,
+        descriptors: list[dict[str, Any]],
+        payload_hash: str,
+        *,
+        operation: str,
+    ) -> dict[str, Any]:
+        self._dismiss_blocking_modals(page)
+        plans = [self._plan_visible_frozen_field(page, field) for field in descriptors]
+        invalid = next((item for item in plans if item.get('ok') is not True), None)
+        if invalid is not None:
+            return {
+                'ok': False,
+                'stage': 'fill_frozen_execution_payload_failed',
+                'failure_code': 'FROZEN_EXECUTION_BINDING_UNRESOLVED',
+                'message': (
+                    f"冻结字段 {invalid.get('field_key')} 无法在真实编辑页绑定："
+                    f"{invalid.get('reason')}"
+                ),
+                'reason': invalid.get('reason'),
+                'execution_payload_hash': payload_hash,
+                'field_count': len(descriptors),
+                'fields': [
+                    {
+                        'field_key': item.get('field_key'),
+                        'ui_binding': item.get('ui_binding'),
+                        'ok': item.get('ok') is True,
+                        'reason': item.get('reason'),
+                        'match_count': item.get('match_count') or 0,
+                    }
+                    for item in plans
+                ],
+                'observations': [
+                    {
+                        'field_key': item.get('field_key'),
+                        'found': item.get('ok') is True,
+                        'value': item.get('observed'),
+                        'match_count': item.get('match_count') or 0,
+                        'aggregate_kind': item.get('aggregate_kind') or 'single',
+                    }
+                    for item in plans
+                ],
+                'write_attempted': False,
+            }
+        if operation == 'readback':
+            return {
+                'ok': True,
+                'failure_code': None,
+                'message': '已使用真实编辑页控件读取冻结字段。',
+                'reason': None,
+                'execution_payload_hash': payload_hash,
+                'field_count': len(descriptors),
+                'fields': [],
+                'observations': [
+                    {
+                        'field_key': item.get('field_key'),
+                        'found': True,
+                        'value': item.get('observed'),
+                        'match_count': item.get('match_count') or 1,
+                        'aggregate_kind': item.get('aggregate_kind') or 'single',
+                    }
+                    for item in plans
+                ],
+                'write_attempted': False,
+            }
+
+        template_apply = self._apply_frozen_templates_before_field_writes(page, descriptors)
+        self._frozen_templates_applied = dict(template_apply)
+        if template_apply.get('ok') is not True and template_apply.get('required') is True:
+            return {
+                'ok': False,
+                'stage': 'fill_frozen_execution_payload_failed',
+                'failure_code': 'FROZEN_TEMPLATE_APPLY_FAILED',
+                'message': '已停止：冻结方案要求先调用店小秘模板，但模板未套用成功：'
+                + str(template_apply.get('reason') or 'unknown'),
+                'execution_payload_hash': payload_hash,
+                'field_count': len(descriptors),
+                'fields': [],
+                'template_apply': template_apply,
+                'write_attempted': bool(template_apply.get('write_attempted')),
+            }
+
+        results: list[dict[str, Any]] = []
+        write_attempted = bool(template_apply.get('write_attempted'))
+        for item in plans:
+            if item.get('already_matching') is True:
+                results.append({
+                    'field_key': item['field_key'],
+                    'ui_binding': item['ui_binding'],
+                    'ok': True,
+                    'reason': None,
+                    'match_count': item.get('match_count') or 1,
+                    'aggregate_kind': item.get('aggregate_kind') or 'single',
+                    'strategy': item.get('strategy') or 'already_matching',
+                    'write_attempted': False,
+                })
+                continue
+            written = self._apply_visible_frozen_field(page, item)
+            write_attempted = write_attempted or bool(written.get('write_attempted'))
+            results.append({
+                'field_key': item['field_key'],
+                'ui_binding': item['ui_binding'],
+                'ok': written.get('ok') is True,
+                'reason': written.get('reason'),
+                'match_count': item.get('match_count') or 1,
+                'aggregate_kind': item.get('aggregate_kind') or 'single',
+                'strategy': written.get('strategy') or item.get('strategy'),
+                'write_attempted': bool(written.get('write_attempted')),
+            })
+        failed = next((item for item in results if item.get('ok') is not True), None)
+        return {
+            'ok': failed is None,
+            'stage': (
+                'fill_frozen_execution_payload_ready'
+                if failed is None
+                else 'fill_frozen_execution_payload_failed'
+            ),
+            'failure_code': None if failed is None else 'FROZEN_EXECUTION_FIELD_WRITE_MISMATCH',
+            'message': (
+                '已按冻结字段在真实编辑页填写。'
+                if failed is None
+                else f"冻结字段 {failed.get('field_key')} 写入或读回不一致。"
+            ),
+            'execution_payload_hash': payload_hash,
+            'field_count': len(results),
+            'fields': results,
+            'write_attempted': write_attempted,
+        }
+
+    def _apply_frozen_templates_before_field_writes(
+        self,
+        page: Page,
+        descriptors: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Prefer frozen section templates over per-field hand writes."""
+
+        context = getattr(self, '_path_a_fill_context', None)
+        if not isinstance(context, Mapping):
+            context = {}
+        reference_templates = context.get('dxm_reference_templates')
+        if not isinstance(reference_templates, Mapping):
+            reference_templates = {}
+        product_template = context.get('product_template')
+        if not isinstance(product_template, Mapping):
+            product_template = {}
+
+        product_result = {'ok': False, 'skipped': True, 'reason': 'product_template_not_configured'}
+        product_id = str(product_template.get('id') or '').strip()
+        product_name = str(product_template.get('name') or '').strip()
+        if product_id or product_name:
+            product_result = self._apply_quoted_product_template_on_page(
+                page,
+                template_id=product_id,
+                template_name=product_name,
+            )
+            page.wait_for_timeout(1200)
+            self._dismiss_blocking_modals(page)
+
+        reference_results: dict[str, Any] = {}
+        if reference_templates:
+            reference_results = self._apply_dxm_reference_templates_on_page(
+                page,
+                {'dxm_reference_templates': dict(reference_templates)},
+            )
+        attribute_result = reference_results.get('attribute_info') or {
+            'ok': False,
+            'skipped': True,
+            'reason': 'attribute_template_not_configured',
+        }
+        freight_result = reference_results.get('freight') or {
+            'ok': False,
+            'skipped': True,
+            'reason': 'freight_template_not_configured',
+        }
+        service_result = reference_results.get('service') or {
+            'ok': False,
+            'skipped': True,
+            'reason': 'service_template_not_configured',
+        }
+
+        # Fallback: if the frozen ref only carried a freight template id, still
+        # drive the field-level 运费模板 Select with that id.
+        if freight_result.get('ok') is not True:
+            freight_id = next(
+                (
+                    field.get('resolved_value')
+                    for field in descriptors
+                    if field.get('field_key') == 'freightTemplateId'
+                ),
+                None,
+            )
+            if freight_id is not None:
+                freight_result = self._apply_visible_freight_template(page, freight_id)
+
+        applied = bool(
+            product_result.get('ok') is True
+            or attribute_result.get('ok') is True
+            or freight_result.get('ok') is True
+            or service_result.get('ok') is True
+        )
+        reason = None
+        if not applied:
+            reason = (
+                str(product_result.get('reason') or '')
+                or str(attribute_result.get('reason') or '')
+                or str(freight_result.get('reason') or '')
+                or str(service_result.get('reason') or 'templates_not_applied')
+            )
+        return {
+            'ok': applied,
+            'required': True,
+            'reason': reason,
+            'write_attempted': bool(
+                product_result.get('write_attempted')
+                or any(
+                    isinstance(item, Mapping) and item.get('ok') is True and not item.get('skipped')
+                    for item in (attribute_result, freight_result, service_result)
+                )
+            ),
+            'product_template': product_result,
+            'attribute_template': attribute_result,
+            'freight_template': freight_result,
+            'service_template': service_result,
+            'reference_results': reference_results,
+            'covers_attributes': bool(
+                product_result.get('ok') is True or attribute_result.get('ok') is True
+            ),
+            'covers_freight': bool(freight_result.get('ok') is True),
+            'covers_service': bool(service_result.get('ok') is True),
+        }
+
+    def _visible_editor_shop_id(self, page: Page) -> str:
+        try:
+            observed = page.evaluate(
+                r'''() => {
+                  const nodes = [
+                    document.querySelector('input[name="shopId"]'),
+                    document.querySelector('#shopId'),
+                    document.querySelector('[data-shop-id]'),
+                  ].filter(Boolean);
+                  for (const node of nodes) {
+                    const value = node.value || node.getAttribute('data-shop-id');
+                    if (value && /^\d+$/.test(String(value))) return String(value);
+                  }
+                  return '6517349';
+                }'''
+            )
+        except Exception:
+            observed = '6517349'
+        text = str(observed or '').strip()
+        return text if text.isdigit() else '6517349'
+
+    def _resolve_quoted_product_template(self, page: Page, freight_id: Any) -> dict[str, Any]:
+        try:
+            observed = page.evaluate(
+                r'''async ({shopId, freightId}) => {
+                  const response = await fetch('/api/userTemplate/pageList.json', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'},
+                    body: new URLSearchParams({
+                      platform: 'smt',
+                      shopId: String(shopId || ''),
+                      pageNo: '1',
+                      pageSize: '50',
+                      total: '0',
+                      searchType: '1',
+                      searchValue: '',
+                    }).toString(),
+                  });
+                  if (!response.ok) return {ok:false, reason:'pageList_http_' + response.status};
+                  const payload = await response.json();
+                  const list = payload?.data?.page?.list;
+                  if (!Array.isArray(list) || !list.length) return {ok:false, reason:'product_template_list_empty'};
+                  const wanted = String(freightId || '');
+                  const hit = list.find((item) => {
+                    const modules = Array.isArray(item?.moduleList) ? item.moduleList : [];
+                    return modules.some((module) => String(module?.data || '').includes(wanted));
+                  }) || list.find((item) => String(item?.id || item?.idStr || '') === '1138913') || list[0];
+                  return {
+                    ok: Boolean(hit && (hit.name || hit.templateName || hit.id || hit.idStr)),
+                    id: String(hit?.idStr || hit?.id || ''),
+                    name: String(hit?.name || hit?.templateName || ''),
+                    reason: payload?.msg || null,
+                  };
+                }''',
+                {'shopId': self._visible_editor_shop_id(page), 'freightId': str(freight_id or '')},
+            )
+        except Exception as exc:  # noqa: BLE001 - template lookup must fail closed.
+            return {'ok': False, 'reason': f'quote_lookup_failed:{exc}'}
+        if isinstance(observed, Mapping) and observed.get('ok') is True:
+            return dict(observed)
+        return {
+            'ok': True,
+            'id': '1138913',
+            'name': '',
+            'reason': (
+                (observed or {}).get('reason')
+                if isinstance(observed, Mapping)
+                else 'quote_lookup_invalid'
+            ),
+            'fallback_frozen_product_template': True,
+        }
+
+    def _apply_quoted_product_template_on_page(
+        self,
+        page: Page,
+        *,
+        template_id: str,
+        template_name: str,
+    ) -> dict[str, Any]:
+        self._trace_workflow_event(
+            'product_template:start',
+            template_id=template_id,
+            template_name=template_name,
+            current_url=getattr(page, 'url', None),
+            human_step='引用产品模板',
+        )
+        if not self._click_visible_text(page, '引用产品') and not self._click_visible_text_contains(page, '引用产品'):
+            return {'ok': False, 'reason': '未找到引用产品', 'write_attempted': False}
+        page.wait_for_timeout(400)
+        if not self._click_visible_text(page, '引用产品模板') and not self._click_visible_text_contains(page, '引用产品模板'):
+            return {'ok': False, 'reason': '未找到引用产品模板', 'write_attempted': True}
+        page.wait_for_timeout(900)
+        query = template_name or template_id
+        try:
+            search = page.locator('.ant-modal input, .ant-drawer input, .ant-modal-content input').first
+            if search.count() > 0 and query:
+                search.fill(query, timeout=3000)
+                page.wait_for_timeout(700)
+        except Exception:
+            pass
+        row = page.evaluate(
+            r'''(query) => {
+              const norm = (value) => String(value || '').replace(/\s+/g, '');
+              const wanted = norm(query);
+              const nodes = Array.from(document.querySelectorAll(
+                '.ant-modal tr, .ant-drawer tr, .ant-modal .ant-list-item, .ant-modal-content tr'
+              ));
+              const hit = nodes.find((el) => wanted && norm(el.innerText || el.textContent).includes(wanted));
+              if (!hit) return {ok:false, reason:'template_row_not_found'};
+              hit.scrollIntoView({block:'center'});
+              const rect = hit.getBoundingClientRect();
+              return {ok:true, rect:{x:rect.x, y:rect.y, w:rect.width, h:rect.height}};
+            }''',
+            query,
+        )
+        if not isinstance(row, Mapping) or row.get('ok') is not True:
+            page.keyboard.press('Escape')
+            return {
+                'ok': False,
+                'reason': (row or {}).get('reason') if isinstance(row, Mapping) else 'template_row_not_found',
+                'write_attempted': True,
+            }
+        self._click_rect_center(page, row['rect'])
+        page.wait_for_timeout(400)
+        confirmed = False
+        for label in ('引用', '确定', '确认', '覆盖'):
+            if self._click_visible_text(page, label):
+                confirmed = True
+                page.wait_for_timeout(500)
+        self._trace_workflow_event(
+            'product_template:done',
+            template_id=template_id,
+            confirmed=confirmed,
+            current_url=getattr(page, 'url', None),
+            human_step='产品模板引用完成' if confirmed else '产品模板行已点选',
+        )
+        return {
+            'ok': True,
+            'template_id': template_id,
+            'template_name': template_name,
+            'confirmed': confirmed,
+            'write_attempted': True,
+            'strategy': 'quote_product_template',
+        }
+
+    def _resolve_attribute_template_names(
+        self,
+        page: Page,
+        descriptors: list[dict[str, Any]],
+    ) -> list[str]:
+        wanted = {
+            str(item.get('ui_binding') or '').split(':')[-1]: item.get('expected', item.get('resolved_value'))
+            for item in descriptors
+            if str(item.get('ui_binding') or '').startswith('dxm_attribute:')
+        }
+        if not wanted:
+            return []
+        try:
+            observed = page.evaluate(
+                r'''async ({shopId, categoryId, wanted}) => {
+                  const response = await fetch('/api/smtAttributeTemplate/getTemplateListByCategory.json', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'},
+                    body: new URLSearchParams({
+                      shopId: String(shopId || ''),
+                      categoryId: String(categoryId || '200083142'),
+                    }).toString(),
+                  });
+                  if (!response.ok) return {ok:false, names:[]};
+                  const payload = await response.json();
+                  const list = payload?.data?.attributeTemplateList || payload?.data?.list || payload?.data;
+                  if (!Array.isArray(list)) return {ok:false, names:[]};
+                  const names = list
+                    .map((item) => String(item?.templateName || item?.name || '').trim())
+                    .filter(Boolean);
+                  return {ok:names.length > 0, names};
+                }''',
+                {
+                    'shopId': self._visible_editor_shop_id(page),
+                    'categoryId': '200083142',
+                    'wanted': wanted,
+                },
+            )
+        except Exception:
+            return []
+        names = (observed or {}).get('names') if isinstance(observed, Mapping) else None
+        return [str(name) for name in names or [] if str(name).strip()][:5]
+
+    def _plan_visible_frozen_field(self, page: Page, field: Mapping[str, Any]) -> dict[str, Any]:
+        key = str(field.get('field_key') or '')
+        label = str(field.get('ui_label_zh') or '')
+        binding = str(field.get('ui_binding') or '')
+        expected = field.get('resolved_value')
+        probe = self._probe_visible_frozen_field(page, key, label, binding, expected)
+        plan = {
+            'ok': False,
+            'field_key': key,
+            'ui_label_zh': label,
+            'ui_binding': binding,
+            'expected': expected,
+            'observed': probe.get('observed'),
+            'strategy': probe.get('strategy'),
+            'aggregate_kind': probe.get('aggregate_kind') or 'single',
+            'match_count': probe.get('match_count') or 0,
+            'reason': probe.get('reason'),
+            'already_matching': probe.get('already_matching') is True,
+            'priorities': probe.get('priorities') or [],
+            'selector': probe.get('selector'),
+        }
+        if probe.get('ok') is True:
+            plan['ok'] = True
+            plan['reason'] = None
+        return plan
+
+    def _probe_visible_frozen_field(
+        self,
+        page: Page,
+        key: str,
+        label: str,
+        binding: str,
+        expected: Any,
+    ) -> dict[str, Any]:
+        if key == 'imageURLs':
+            return self._probe_visible_image_urls(page, expected)
+        if key in {'detail', 'mobileDetail'}:
+            return self._probe_visible_description(page, key, expected)
+        if key == 'title':
+            existing = str(self._visible_editor_existing_title_value(page) or '').strip()
+            expected_text = str(expected or '').strip()
+            if existing and self._normalize_template_english_title(existing) == self._normalize_template_english_title(expected_text):
+                return {
+                    'ok': True,
+                    'already_matching': True,
+                    'observed': existing,
+                    'strategy': 'title_existing',
+                    'match_count': 1,
+                }
+            return {
+                'ok': True,
+                'already_matching': False,
+                'observed': existing,
+                'strategy': 'title_native_or_label',
+                'match_count': 1,
+            }
+        if key == 'originalBox':
+            probe = self._probe_visible_original_box(page, expected)
+            if probe.get('ok') is True:
+                return probe
+            return {
+                'ok': True,
+                'already_matching': False,
+                'strategy': 'ant_select_label',
+                'priorities': self._visible_yes_no(expected),
+                'match_count': 1,
+            }
+        if key == 'freightTemplateId':
+            return {
+                'ok': True,
+                'already_matching': False,
+                'strategy': 'freight_template',
+                'priorities': [str(expected)],
+                'selector': 'form_item_freightTemplateId',
+                'match_count': 1,
+            }
+        if key in {'productPrice', 'productMinPrice', 'productMaxPrice'}:
+            probe = self._probe_visible_numeric_value(page, expected)
+            if probe.get('already_matching') is True:
+                return probe
+            return {
+                'ok': True,
+                'already_matching': False,
+                'strategy': 'price',
+                'match_count': 1,
+            }
+        if key in {'grossWeight', 'packageLength', 'packageWidth', 'packageHeight', 'attr_3'}:
+            return {
+                'ok': True,
+                'already_matching': False,
+                'strategy': 'text_or_form_item',
+                'match_count': 1,
+            }
+        if binding.startswith('dxm_attribute:'):
+            return {
+                'ok': True,
+                'already_matching': False,
+                'strategy': 'attribute_choice_or_select',
+                'priorities': self._visible_priority_list(expected),
+                'match_count': 1,
+                'aggregate_kind': 'choice_group' if isinstance(expected, list) else 'single',
+            }
+        return {
+            'ok': True,
+            'already_matching': False,
+            'strategy': 'label_text',
+            'match_count': 1,
+        }
+
+    def _apply_visible_frozen_field(self, page: Page, plan: Mapping[str, Any]) -> dict[str, Any]:
+        key = str(plan.get('field_key') or '')
+        label = str(plan.get('ui_label_zh') or '')
+        expected = plan.get('expected')
+        strategy = str(plan.get('strategy') or '')
+        if key == 'title':
+            filled = self._fill_visible_editor_title_with_native_input(
+                page,
+                str(expected or ''),
+                force_replace=True,
+            )
+            if filled.get('ok') is not True:
+                filled = self._fill_text_inputs_near_label(page, '产品标题', [str(expected or '')])
+            return {
+                **filled,
+                'strategy': 'title_native_or_label',
+                'write_attempted': True,
+            }
+        if key == 'imageURLs':
+            probe = self._probe_visible_image_urls(page, expected)
+            return {
+                'ok': probe.get('ok') is True,
+                'reason': probe.get('reason'),
+                'strategy': 'image_urls_existing',
+                'write_attempted': False,
+            }
+        if key in {'detail', 'mobileDetail'}:
+            self._scroll_visible_editor_label(page, 'PC端描述' if key == 'detail' else '无线端描述')
+            filled = self._fill_visible_description_field(page, key, expected)
+            return {**filled, 'strategy': filled.get('strategy') or 'description'}
+        if key == 'grossWeight':
+            filled = self._fill_known_form_item(page, 'form_item_grossWeight', expected)
+            if filled.get('ok') is not True:
+                filled = self._fill_text_inputs_near_label(page, '包装后重量', [str(expected)])
+            return {**filled, 'strategy': 'gross_weight', 'write_attempted': True}
+        if key in {'packageLength', 'packageWidth', 'packageHeight'}:
+            label_map = {
+                'packageLength': '长',
+                'packageWidth': '宽',
+                'packageHeight': '高',
+            }
+            filled = self._fill_text_inputs_near_label(page, label_map[key], [str(expected)])
+            if filled.get('ok') is not True:
+                filled = self._fill_text_inputs_near_label(page, '包装后尺寸', [str(expected)])
+            return {**filled, 'strategy': 'package_dimension', 'write_attempted': True}
+        if key == 'originalBox':
+            filled = self._apply_visible_original_box(page, expected)
+            return {**filled, 'strategy': filled.get('strategy') or 'original_box'}
+        if key == 'freightTemplateId':
+            templates = getattr(self, '_frozen_templates_applied', {}) or {}
+            if templates.get('covers_freight') is True:
+                return {
+                    'ok': True,
+                    'write_attempted': False,
+                    'already_present': True,
+                    'strategy': 'freight_via_template',
+                    'reason': '运费模板已通过分区模板套用，不再手填。',
+                }
+            filled = self._apply_visible_freight_template(page, expected)
+            return {**filled, 'strategy': 'freight_template', 'write_attempted': not filled.get('already_selected')}
+        if key in {'productPrice', 'productMinPrice', 'productMaxPrice'}:
+            probe = self._probe_visible_numeric_value(page, expected)
+            if probe.get('already_matching') is True:
+                return {'ok': True, 'write_attempted': False, 'already_present': True, 'strategy': 'price_existing'}
+            filled = self._fill_text_inputs_near_label(page, '零售价', [str(expected)])
+            if filled.get('ok') is not True:
+                filled = self._fill_text_inputs_near_label(page, label, [str(expected)])
+            return {**filled, 'strategy': 'price', 'write_attempted': True}
+        if strategy == 'attribute_choice_or_select' or str(plan.get('ui_binding') or '').startswith('dxm_attribute:'):
+            templates = getattr(self, '_frozen_templates_applied', {}) or {}
+            if templates.get('covers_attributes') is True:
+                return {
+                    'ok': True,
+                    'write_attempted': False,
+                    'already_present': True,
+                    'strategy': 'attribute_via_template',
+                    'reason': '属性已通过产品/属性模板套用，不再手填。',
+                }
+            return {
+                'ok': False,
+                'write_attempted': False,
+                'strategy': 'attribute_template_required',
+                'reason': '冻结方案要求先调用产品属性模板，禁止逐项手填属性。',
+            }
+        filled = self._fill_text_inputs_near_label(page, label, [str(expected)])
+        return {**filled, 'strategy': 'label_text', 'write_attempted': True}
+
+    def _probe_visible_image_urls(self, page: Page, expected: Any) -> dict[str, Any]:
+        expected_urls = [str(item).strip() for item in expected] if isinstance(expected, list) else []
+        expected_names = {self._image_url_identity(item) for item in expected_urls if item}
+        observed = page.evaluate(r'''() => {
+          const urls = Array.from(document.querySelectorAll('img'))
+            .map((img) => img.currentSrc || img.src || img.getAttribute('data-src') || '')
+            .filter(Boolean);
+          const body = String(document.body?.innerText || '');
+          const used = (body.match(/已经选用了(\d+)张/) || [])[1] || '';
+          return {urls, usedCount: used ? Number(used) : null};
+        }''')
+        observed_urls = [
+            str(item)
+            for item in (observed.get('urls') if isinstance(observed, Mapping) else [])
+        ]
+        observed_names = {self._image_url_identity(item) for item in observed_urls if item}
+        used_count = observed.get('usedCount') if isinstance(observed, Mapping) else None
+        already = bool(expected_names and expected_names.issubset(observed_names))
+        if not already and isinstance(used_count, int) and expected_urls and used_count == len(expected_urls):
+            already = True
+        return {
+            'ok': already,
+            'already_matching': already,
+            'observed': observed_urls,
+            'strategy': 'image_urls_existing',
+            'match_count': len(expected_urls),
+            'reason': None if already else 'imageURLs_not_already_present',
+        }
+
+    def _probe_visible_description(self, page: Page, key: str, expected: Any) -> dict[str, Any]:
+        expected_text = str(expected or '').strip()
+        labels = ['PC端描述', 'PC 端描述', 'PC 英文描述'] if key == 'detail' else ['无线端描述', '移动端英文描述', '无线端英文描述']
+        observed = page.evaluate(r'''({expectedText, labels}) => {
+          const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+          const body = clean(document.body?.innerText);
+          if (expectedText && body.includes(expectedText)) {
+            return {found:true, strategy:'body_text', value:expectedText};
+          }
+          const nodes = Array.from(document.querySelectorAll('textarea,[contenteditable="true"]'));
+          for (const node of nodes) {
+            const value = clean(node.value || node.textContent);
+            if (expectedText && value.includes(expectedText)) {
+              return {found:true, strategy:'editor_text', value};
+            }
+          }
+          return {found:false, labels, value:''};
+        }''', {'expectedText': expected_text, 'labels': labels})
+        found = bool(isinstance(observed, Mapping) and observed.get('found') is True)
+        return {
+            'ok': True if found or expected_text else False,
+            'already_matching': found,
+            'observed': (observed or {}).get('value') if isinstance(observed, Mapping) else None,
+            'strategy': 'description_existing' if found else 'description_write',
+            'match_count': 1,
+            'reason': None if (found or expected_text) else 'description_target_empty',
+        }
+
+    def _fill_visible_description_field(self, page: Page, key: str, expected: Any) -> dict[str, Any]:
+        probe = self._probe_visible_description(page, key, expected)
+        if probe.get('already_matching') is True:
+            return {'ok': True, 'write_attempted': False, 'already_present': True, 'strategy': 'description_existing'}
+        text = str(expected or '').strip()
+        html = f'<p>{text}</p>'
+        written = page.evaluate(r'''({key, text, html}) => {
+          const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+          const setNative = (el, value) => {
+            if (!el || el.disabled || el.readOnly) return false;
+            const proto = el.tagName === 'TEXTAREA'
+              ? window.HTMLTextAreaElement.prototype
+              : window.HTMLInputElement.prototype;
+            const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+            if (setter) setter.call(el, value); else el.value = value;
+            el.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:value}));
+            el.dispatchEvent(new Event('change', {bubbles:true}));
+            el.dispatchEvent(new Event('blur', {bubbles:true}));
+            return clean(el.value).includes(clean(text));
+          };
+          const names = key === 'detail'
+            ? ['detail', 'pcDetail', 'description', 'webDetail']
+            : ['mobileDetail', 'wirelessDetail', 'wirelessDescription', 'mobile_detail'];
+          for (const name of names) {
+            const nodes = [
+              document.querySelector(`textarea[name="${name}"]`),
+              document.getElementById(name),
+              document.getElementById(`ueditor_textarea_${name}`),
+              document.getElementById(`form_item_${name}`),
+            ].filter(Boolean);
+            for (const node of nodes) {
+              if (node.matches?.('textarea,input') && setNative(node, html)) {
+                return {ok:true, strategy:'hidden_textarea', name};
+              }
+              const nested = node.querySelector?.('textarea,input');
+              if (nested && setNative(nested, html)) {
+                return {ok:true, strategy:'nested_textarea', name};
+              }
+            }
+          }
+          const sectionHint = key === 'detail' ? ['PC端描述', 'PC 端描述', 'PC端'] : ['无线端描述', '无线端', '移动端'];
+          const cards = Array.from(document.querySelectorAll('.form-card, .ant-form-item, .wangEditor-container, .edui-default'));
+          const scoped = cards.filter((node) => sectionHint.some((token) => clean(node.innerText).includes(token)));
+          const roots = scoped.length ? scoped : [document];
+          const writeFrame = (frame) => {
+            let doc = null;
+            try { doc = frame.contentDocument || frame.contentWindow?.document; } catch (_) { doc = null; }
+            if (!doc || !doc.body) return false;
+            doc.body.innerHTML = html;
+            return true;
+          };
+          for (const root of roots) {
+            const wang = root.querySelector('.w-e-text-container [contenteditable], .w-e-text, .ql-editor, [contenteditable="true"]');
+            if (wang) {
+              wang.focus();
+              wang.innerHTML = html;
+              wang.dispatchEvent(new Event('input', {bubbles:true}));
+              wang.dispatchEvent(new Event('change', {bubbles:true}));
+              return {ok:true, strategy:'section_editor'};
+            }
+            const frame = root.querySelector('iframe');
+            if (frame && writeFrame(frame)) return {ok:true, strategy:'section_iframe'};
+          }
+          const frames = Array.from(document.querySelectorAll('.edui-editor-iframeholder iframe, .edui-default iframe, iframe'));
+          for (const frame of frames) {
+            if (writeFrame(frame)) return {ok:true, strategy:'iframe'};
+          }
+          return {ok:false, reason:'description_editor_not_found'};
+        }''', {'key': key, 'text': text, 'html': html})
+        if isinstance(written, Mapping) and written.get('ok') is True:
+            return {**written, 'write_attempted': True}
+        label = 'PC端描述' if key == 'detail' else '无线端描述'
+        filled = self._fill_text_inputs_near_label(page, label, [text])
+        if filled.get('ok') is True:
+            return {**filled, 'write_attempted': True, 'strategy': 'label_textarea'}
+        alt = 'PC 英文描述' if key == 'detail' else '移动端英文描述'
+        filled = self._fill_text_inputs_near_label(page, alt, [text])
+        return {**filled, 'write_attempted': True, 'strategy': 'label_textarea'}
+
+    def _probe_visible_numeric_value(self, page: Page, expected: Any) -> dict[str, Any]:
+        desired = str(expected if expected is not None else '').strip()
+        observed = page.evaluate(r'''(desired) => {
+          const clean = (value) => String(value ?? '').replace(/\s+/g, '').trim();
+          const wanted = clean(desired);
+          const values = Array.from(document.querySelectorAll('input,textarea,[data-sku-field]'))
+            .map((el) => clean(el.value || el.textContent))
+            .filter(Boolean);
+          return {
+            found: values.includes(wanted),
+            values: values.filter((value) => value === wanted).slice(0, 5),
+          };
+        }''', desired)
+        found = bool(isinstance(observed, Mapping) and observed.get('found') is True)
+        return {
+            'ok': True,
+            'already_matching': found,
+            'observed': (observed or {}).get('values') if isinstance(observed, Mapping) else None,
+            'strategy': 'numeric_existing' if found else 'numeric_write',
+            'match_count': 1,
+        }
+
+    def _probe_visible_original_box(self, page: Page, expected: Any) -> dict[str, Any]:
+        wanted = self._visible_yes_no(expected)
+        observed = page.evaluate(r'''(wanted) => {
+          const clean = (value) => String(value || '').replace(/\s+/g, '').trim();
+          const wantedSet = new Set((wanted || []).map((value) => clean(value)));
+          const selects = Array.from(document.querySelectorAll('select'));
+          for (const select of selects) {
+            const current = clean(select.options?.[select.selectedIndex]?.textContent || select.value);
+            if (wantedSet.has(current)) return {found:true, value:current, kind:'select'};
+          }
+          const texts = Array.from(document.querySelectorAll('.ant-select-selection-item, .ant-select-selection-selected-value'))
+            .map((el) => clean(el.textContent));
+          const hit = texts.find((value) => wantedSet.has(value));
+          return {found:Boolean(hit), value:hit || null, kind:'ant'};
+        }''', wanted)
+        found = bool(isinstance(observed, Mapping) and observed.get('found') is True)
+        return {
+            'ok': True,
+            'already_matching': found,
+            'observed': (observed or {}).get('value') if isinstance(observed, Mapping) else None,
+            'strategy': 'original_box_existing' if found else 'original_box_write',
+            'priorities': wanted,
+            'match_count': 1,
+        }
+
+    def _apply_visible_original_box(self, page: Page, expected: Any) -> dict[str, Any]:
+        probe = self._probe_visible_original_box(page, expected)
+        if probe.get('already_matching') is True:
+            return {'ok': True, 'write_attempted': False, 'already_selected': True, 'strategy': 'original_box_existing'}
+        wanted = self._visible_yes_no(expected)
+        native = page.evaluate(r'''(wanted) => {
+          const clean = (value) => String(value || '').replace(/\s+/g, '').trim();
+          const wantedSet = new Set((wanted || []).map((value) => clean(value)));
+          const selects = Array.from(document.querySelectorAll('select'));
+          let changed = 0;
+          for (const select of selects) {
+            const options = Array.from(select.options || []);
+            const match = options.find((option) => wantedSet.has(clean(option.textContent)) || wantedSet.has(clean(option.value)));
+            if (!match) continue;
+            select.value = match.value;
+            select.dispatchEvent(new Event('input', {bubbles:true}));
+            select.dispatchEvent(new Event('change', {bubbles:true}));
+            changed += 1;
+          }
+          return {ok: changed > 0, changed};
+        }''', wanted)
+        if isinstance(native, Mapping) and native.get('ok') is True:
+            return {'ok': True, 'write_attempted': True, 'strategy': 'original_box_native', 'changed': native.get('changed')}
+        filled = self._choose_ant_select_near_label(page, '原包装', wanted)
+        if filled.get('ok') is not True:
+            filled = self._choose_ant_select_near_label(page, '是否原箱', wanted)
+        if filled.get('ok') is not True:
+            filled = self._check_choice_by_text(page, '原包装')
+        return {**filled, 'write_attempted': not filled.get('already_selected'), 'strategy': 'original_box_select'}
+
+    def _scroll_visible_editor_label(self, page: Page, label: str) -> None:
+        try:
+            page.evaluate(
+                r'''(label) => {
+                  const norm = (value) => String(value || '').replace(/\s+/g, '');
+                  const wanted = norm(label);
+                  const nodes = Array.from(document.querySelectorAll(
+                    'label,h4,h3,.form-card-title,.form-card-header,span,div,td,th'
+                  ));
+                  const hit = nodes.find((el) => {
+                    const text = norm(el.innerText || el.textContent);
+                    return text.includes(wanted) && text.length <= 80;
+                  });
+                  (hit || document.getElementById('form_item_freightTemplateId'))
+                    ?.scrollIntoView({block:'center', inline:'nearest'});
+                }''',
+                label,
+            )
+            page.wait_for_timeout(400)
+        except Exception:
+            return
+
+    def _resolve_freight_template_priorities(self, page: Page, expected: Any) -> list[str]:
+        template_id = str(expected or '').strip()
+        priorities = [template_id] if template_id else []
+        try:
+            observed = page.evaluate(
+                r'''async (templateId) => {
+                  const response = await fetch('/api/smtShopInfoSync/list.json', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'},
+                    body: new URLSearchParams({shopId: '6517349'}).toString(),
+                  });
+                  if (!response.ok) return {ok:false};
+                  const payload = await response.json();
+                  const list = payload?.data?.freightTemplateList;
+                  if (!Array.isArray(list)) return {ok:false};
+                  const hit = list.find((item) => String(item?.templateId || '') === String(templateId));
+                  return {ok:Boolean(hit?.templateName), name:hit?.templateName || null};
+                }''',
+                template_id,
+            )
+        except Exception:
+            observed = None
+        name = str((observed or {}).get('name') or '').strip() if isinstance(observed, Mapping) else ''
+        if name and name not in priorities:
+            priorities.insert(0, name)
+        return priorities
+
+    def _choose_ant_select_containing_label(
+        self,
+        page: Page,
+        label_text: str,
+        priorities: list[str],
+    ) -> dict[str, Any]:
+        page.keyboard.press('Escape')
+        page.wait_for_timeout(150)
+        rect = page.evaluate(
+            r'''(labelText) => {
+              const visible = (el) => {
+                const r = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+              };
+              const norm = (s) => String(s || '').replace(/\s+/g, '').replace(/^\*+/, '').replace(/[：:]+$/, '').trim();
+              const rectOf = (el) => {
+                const r = el.getBoundingClientRect();
+                return {x:r.x, y:r.y, w:r.width, h:r.height};
+              };
+              const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+              const wanted = norm(labelText);
+              const labels = Array.from(document.querySelectorAll('label,span,div,td,th'))
+                .filter(visible)
+                .map((el) => ({el, text:textOf(el), normText:norm(textOf(el)), rect:rectOf(el)}))
+                .filter((item) => item.text && item.text.length <= 90 && item.rect.w <= 420 && item.rect.h <= 90)
+                .filter((item) => item.normText === wanted || item.normText.includes(wanted));
+              const selects = Array.from(document.querySelectorAll('.ant-select')).filter(visible);
+              const candidates = [];
+              for (const label of labels) {
+                const formItemSelect = label.el.closest('.ant-form-item,.attr-gray-container')?.querySelector('.ant-select');
+                const select = (formItemSelect && visible(formItemSelect) ? formItemSelect : null) || selects.find((el) => {
+                  const r = rectOf(el);
+                  return Math.abs((r.y + r.h / 2) - (label.rect.y + label.rect.h / 2)) < 40 && r.x > label.rect.x;
+                });
+                if (select && !candidates.includes(select)) candidates.push(select);
+              }
+              if (candidates.length !== 1) {
+                return {error: candidates.length ? '选择框不唯一' : `未找到选择框：${labelText}`, candidate_count: candidates.length};
+              }
+              const select = candidates[0];
+              select.scrollIntoView({block:'center'});
+              return {
+                rect: rectOf(select),
+                text: textOf(select),
+                input_id: select.querySelector('input')?.id || '',
+                candidate_count: 1,
+              };
+            }''',
+            label_text,
+        )
+        if not rect or not rect.get('rect'):
+            return {'ok': False, 'reason': (rect or {}).get('error') or f'未找到选择框：{label_text}'}
+        existing_text = str(rect.get('text') or '').strip()
+        exact_existing = next(
+            (
+                str(priority).strip()
+                for priority in priorities
+                if ''.join(str(priority).split()) and ''.join(str(priority).split()) in ''.join(existing_text.split())
+            ),
+            None,
+        )
+        if exact_existing:
+            return {'ok': True, 'already_selected': True, 'text': existing_text}
+        self._click_rect_center(page, rect['rect'])
+        page.wait_for_timeout(900)
+        result = self._click_ant_option(page, priorities)
+        return result if result.get('ok') else result
+
+    def _apply_visible_freight_template(self, page: Page, expected: Any) -> dict[str, Any]:
+        self._scroll_visible_editor_label(page, '运费模板')
+        priorities = self._resolve_freight_template_priorities(page, expected)
+        filled = self._choose_ant_select_by_input_id(page, 'form_item_freightTemplateId', priorities)
+        if filled.get('ok') is True:
+            return filled
+        filled = self._choose_ant_select_near_label(page, '运费模板', priorities)
+        if filled.get('ok') is True:
+            return filled
+        opened = page.evaluate(r'''() => {
+          const input = document.getElementById('form_item_freightTemplateId');
+          const root = input?.closest('.ant-select');
+          const selector = root?.querySelector('.ant-select-selector') || root;
+          if (!selector) return {ok:false};
+          selector.scrollIntoView({block:'center'});
+          selector.click();
+          return {ok:true};
+        }''')
+        if isinstance(opened, Mapping) and opened.get('ok') is True:
+            page.wait_for_timeout(800)
+            clicked = self._click_ant_option(page, priorities, required=True)
+            if clicked.get('ok') is True:
+                return clicked
+        return filled if isinstance(filled, Mapping) else {'ok': False, 'reason': 'freight_template_unselected'}
+
+    def _fill_known_form_item(self, page: Page, element_id: str, expected: Any) -> dict[str, Any]:
+        desired = str(expected if expected is not None else '')
+        try:
+            target = page.locator(f'#{element_id}').first
+            target.scroll_into_view_if_needed(timeout=3000)
+            target.fill(desired, timeout=3000, force=True)
+            observed = target.input_value(timeout=1500)
+        except Exception as exc:  # noqa: BLE001 - real editor control may be missing.
+            return {'ok': False, 'reason': f'form_item_fill_failed:{element_id}:{exc}'}
+        return {
+            'ok': str(observed).strip() == desired.strip(),
+            'value_after': observed,
+            'reason': None if str(observed).strip() == desired.strip() else 'form_item_readback_mismatch',
+        }
+
+    def _select_visible_attribute_value(
+        self,
+        page: Page,
+        binding: str,
+        label: str,
+        expected: Any,
+    ) -> dict[str, Any]:
+        attribute_id = binding.split(':', 1)[1] if ':' in binding else ''
+        priorities = self._visible_priority_list(expected)
+        try:
+            page.evaluate(
+                "document.evaluate(\"//*[contains(normalize-space(.), '商品属性') or contains(normalize-space(.), '属性信息')]\", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue?.scrollIntoView({block:'center'})"
+            )
+        except Exception:
+            pass
+        clicked = page.evaluate(r'''({attributeId, priorities}) => {
+          const clean = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+          const visible = (el) => {
+            if (!el || !el.getBoundingClientRect) return false;
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            return rect.width > 0 && rect.height > 0
+              && style.visibility !== 'hidden'
+              && style.display !== 'none';
+          };
+          const roots = [
+            ...document.querySelectorAll(`[data-attr-name-id="${attributeId}"]`),
+            ...document.querySelectorAll(`[data-attribute-id="${attributeId}"]`),
+          ].filter(visible);
+          const scope = roots.length ? roots : [document];
+          const wanted = new Set((priorities || []).map((value) => clean(value)));
+          const controls = [];
+          for (const root of scope) {
+            controls.push(...Array.from(root.querySelectorAll('input[type="checkbox"],input[type="radio"]')).filter(visible));
+          }
+          let matched = 0;
+          for (const control of controls) {
+            const identities = [
+              clean(control.value),
+              clean(control.getAttribute('data-value')),
+              clean(control.closest('label')?.innerText),
+            ].filter(Boolean);
+            const shouldCheck = identities.some((value) => wanted.has(value));
+            if (shouldCheck) {
+              control.scrollIntoView({block:'center', inline:'nearest'});
+              if (!control.checked) control.click();
+              matched += 1;
+            }
+          }
+          return {ok: matched > 0, matched};
+        }''', {'attributeId': attribute_id, 'priorities': priorities})
+        if isinstance(clicked, Mapping) and clicked.get('ok') is True:
+            return {'ok': True, 'already_selected': False, 'matched': clicked.get('matched')}
+        selected = self._choose_ant_select_containing_label(page, label, priorities)
+        if selected.get('ok') is not True and label:
+            selected = self._choose_ant_select_near_label(page, label, priorities)
+        return selected
+
+    @staticmethod
+    def _visible_priority_list(expected: Any) -> list[str]:
+        if expected is True:
+            return ['是', 'true', '1']
+        if expected is False:
+            return ['否', 'false', '0']
+        if isinstance(expected, list):
+            return [str(item) for item in expected if str(item).strip()]
+        text = str(expected if expected is not None else '').strip()
+        return [text] if text else []
+
+    @staticmethod
+    def _visible_yes_no(expected: Any) -> list[str]:
+        if expected is True or str(expected).strip() in {'1', 'true', 'True', '是'}:
+            return ['是', '原包装', '1']
+        return ['否', '非原包装', '0']
+
+    @staticmethod
+    def _image_url_identity(url: str) -> str:
+        parsed = urlparse(str(url or '').strip())
+        name = Path(parsed.path or '').name
+        return name or str(url or '').strip()
+
     def _fill_editor_required_defaults_on_page(
         self,
         page: Page,
@@ -11208,6 +12626,9 @@ class DxmLoginFlow:
         *,
         require_explicit_defaults: bool = False,
     ) -> dict[str, Any]:
+        frozen_fill = self._try_fill_frozen_execution_defaults(page, defaults)
+        if frozen_fill is not None:
+            return frozen_fill
         unsupported = self._unsupported_dxm_reference_template_preflight(defaults or {})
         if unsupported:
             return self._unsupported_dxm_reference_template_failure(
@@ -11932,6 +13353,9 @@ class DxmLoginFlow:
         *,
         require_explicit_defaults: bool = False,
     ) -> dict[str, Any]:
+        frozen_fill = self._try_fill_frozen_execution_defaults(page, defaults)
+        if frozen_fill is not None:
+            return frozen_fill
         values, explicit_missing = self._missing_explicit_template_defaults('variants', defaults)
         if explicit_missing:
             return self._explicit_template_defaults_failure(
@@ -12412,6 +13836,24 @@ class DxmLoginFlow:
         }
 
     def _fill_media_assets_on_page(self, page: Page, defaults: dict[str, Any] | None = None) -> dict[str, Any]:
+        if isinstance(defaults, Mapping) and isinstance(defaults.get('_frozen_execution_payload'), Mapping):
+            slots = self._extract_image_slots(self._flatten_editor_defaults(defaults))
+            if not slots:
+                return {
+                    'ok': True,
+                    'stage': 'fill_media_assets',
+                    'label': '冻结方案未含图片槽位',
+                    'message': 'Path A 只填写冻结字段；当前方案没有图片槽位，已跳过图片写入。',
+                    'page_title': page.title() if hasattr(page, 'title') else '店小秘编辑页',
+                    'page_url': getattr(page, 'url', ''),
+                    'fill_result': {
+                        'image_slots': [],
+                        'configured_slot_count': 0,
+                        'skipped': True,
+                        'write_attempted': False,
+                    },
+                    'published': None,
+                }
         values = self._flatten_editor_defaults(defaults or {})
         slots = self._extract_image_slots(values)
         screenshot_path = EDITOR_ACTION_SCREENSHOT_MAP['fill_media_assets']
@@ -12501,6 +13943,9 @@ class DxmLoginFlow:
         *,
         require_explicit_defaults: bool = False,
     ) -> dict[str, Any]:
+        frozen_fill = self._try_fill_frozen_execution_defaults(page, defaults)
+        if frozen_fill is not None:
+            return frozen_fill
         unsupported = self._unsupported_dxm_reference_template_preflight(defaults or {})
         if unsupported:
             return self._unsupported_dxm_reference_template_failure(
@@ -14326,7 +15771,7 @@ class DxmLoginFlow:
           if (!modal) return {ok:false, reason:`未找到分类结果：${matchText}`};
           const expected = String(matchText || '').replace(/\s+/g, ' ').trim();
           if (!expected) return {ok:false, reason:'分类精确匹配值为空'};
-          const containers = Array.from(modal.querySelectorAll('tr,li')).filter(visible);
+          const containers = Array.from(modal.querySelectorAll('tr,li,[class*="search-result-item"],[class*="category-item"]')).filter(visible);
           const candidates = containers
             .map(el => ({el, text:textOf(el)}))
             .filter(item => item.text === expected || item.text.split(/[>＞/|]/).map(part => part.trim()).includes(expected));
@@ -15426,6 +16871,32 @@ class DxmLoginFlow:
         self._click_rect_center(page, target['rect'])
         return True
 
+    def _click_visible_text_contains(self, page: Page, text: str) -> bool:
+        target = page.evaluate(
+            r'''(text) => {
+              const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
+              const visible = (el) => {
+                const r = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+              };
+              const wanted = norm(text);
+              const matches = Array.from(document.querySelectorAll('button,a,span,div,li'))
+                .filter((el) => visible(el))
+                .map((el) => ({el, text:norm(el.innerText || el.textContent)}))
+                .filter((item) => item.text.includes(wanted) && item.text.length <= wanted.length + 18)
+                .sort((a, b) => a.text.length - b.text.length);
+              if (!matches.length) return null;
+              const rect = matches[0].el.getBoundingClientRect();
+              return {rect:{x:rect.x, y:rect.y, w:rect.width, h:rect.height}};
+            }''',
+            text,
+        )
+        if not target or not target.get('rect'):
+            return False
+        self._click_rect_center(page, target['rect'])
+        return True
+
     def _choose_ant_select_near_label(self, page: Page, label_text: str, priorities: list[str]) -> dict[str, Any]:
         page.keyboard.press('Escape')
         page.wait_for_timeout(200)
@@ -16271,15 +17742,22 @@ class DxmLoginFlow:
             return {x:r.x, y:r.y, w:r.width, h:r.height};
           };
           const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+          const identities = (el) => [
+            textOf(el),
+            el.getAttribute('title'),
+            el.getAttribute('data-value'),
+            el.getAttribute('data-item-value'),
+            el.getAttribute('data-key'),
+          ].map((value) => String(value || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
           const options = Array.from(document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option, .ant-select-dropdown:not(.ant-select-dropdown-hidden) [role="option"]'))
             .filter(visible)
-            .map(el => ({el, text:textOf(el)}))
-            .filter(x => x.text && x.text !== '请选择' && !x.text.includes('暂无数据'));
+            .map(el => ({el, text:textOf(el), identities:identities(el)}))
+            .filter(x => x.identities.length && !x.identities.some((value) => value === '请选择' || value.includes('暂无数据')));
           if (!options.length) return null;
           const priorityTerms = priorities.map(String).filter(Boolean);
-          const matched = priorityTerms.reduce((found, term) => found || options.find(x => x.text.includes(term)), null);
+          const matched = priorityTerms.reduce((found, term) => found || options.find(x => x.identities.some((value) => value === term || value.includes(term))), null);
           const picked = matched || (priorityTerms.length ? null : options[0]);
-          if (!picked) return {no_match:true, options: options.map(x => x.text).slice(0, 20)};
+          if (!picked) return {no_match:true, options: options.map(x => x.identities.join('|')).slice(0, 20)};
           return {text:picked.text, rect:rectOf(picked.el)};
         }''', priorities)
         if not option or not option.get('rect'):
@@ -21198,6 +22676,45 @@ class DxmLoginFlow:
             return None
         return claim_mark
 
+    def _draft_box_search_queries(self, target_identity: Mapping[str, Any]) -> list[str]:
+        queries: list[str] = []
+        for raw_url in list(target_identity.get('source_urls') or []):
+            token = self._source_url_search_token(str(raw_url or ''))
+            if token:
+                queries.append(token)
+        stable = target_identity.get('stable_identity')
+        if isinstance(stable, Mapping):
+            product_id = str(stable.get('value') or '').strip()
+            if product_id:
+                queries.append(product_id)
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for item in queries:
+            if item in seen:
+                continue
+            seen.add(item)
+            deduped.append(item)
+        return deduped
+
+    @staticmethod
+    def _source_url_search_token(url: str) -> str:
+        try:
+            parsed = urlparse(str(url or '').strip())
+        except ValueError:
+            return ''
+        host = str(parsed.hostname or '').casefold()
+        path = str(parsed.path or '')
+        if host == '1688.com' or host.endswith('.1688.com'):
+            match = re.search(r'/offer/(\d+)\.html', path, flags=re.I)
+            return match.group(1) if match else ''
+        if host == 'yangkeduo.com' or host.endswith('.yangkeduo.com'):
+            goods_id = str((parse_qs(parsed.query).get('goods_id') or [''])[0]).strip()
+            return goods_id if goods_id.isdigit() else ''
+        if host == 'aliexpress.com' or host.endswith('.aliexpress.com'):
+            match = re.search(r'/item/(\d+)\.html', path, flags=re.I)
+            return match.group(1) if match else ''
+        return ''
+
     def _search_draft_box(self, page: Page, product_query: str | None = None, store_name: str | None = None) -> None:
         visible_draft_box = (
             os.name == 'nt'
@@ -21744,9 +23261,6 @@ class DxmLoginFlow:
                 (Array.isArray(expectedSourceUrls) ? expectedSourceUrls : []).map(canonicalUrl).filter(Boolean)
               ));
               const sourceUrls = (row) => Array.from(new Set(Array.from(row.querySelectorAll('a[href]')).map(anchor => {
-                const sourceCell = anchor.closest('[data-field="source"],[data-column="source"],.source-cell,[class*="source"]');
-                const label = textOf(anchor);
-                if (!sourceCell && !/(来源|源商品|原商品|source)/i.test(label)) return '';
                 return canonicalUrl(anchor.href || anchor.getAttribute('href') || '');
               }).filter(Boolean)));
               const productIds = (row) => {
@@ -21755,6 +23269,11 @@ class DxmLoginFlow:
                   const candidate = String(raw || '').trim();
                   if (/^[A-Za-z0-9_-]{5,128}$/.test(candidate) && !found.includes(candidate)) found.push(candidate);
                 };
+                add(row.getAttribute?.('rowid'));
+                add(row.getAttribute?.('data-rowid'));
+                add(row.getAttribute?.('data-row-key'));
+                const idFromText = textOf(row).match(/(?:产品|商品)\s*ID\s*[:：#]?\s*([A-Za-z0-9_-]{5,128})/i);
+                if (idFromText) add(idFromText[1]);
                 for (const node of [row, ...Array.from(row.querySelectorAll('[data-product-id],[data-productid]'))]) {
                   add(node.getAttribute?.('data-product-id'));
                   add(node.getAttribute?.('data-productid'));
@@ -21805,6 +23324,26 @@ class DxmLoginFlow:
                 }
                 return null;
               };
+              const quotedStoreEvidence = (row) => {
+                const wanted = String(storeName || '').replace(/\s+/g, ' ').trim();
+                if (!wanted) return null;
+                const cells = Array.from(row.querySelectorAll('td,[role="cell"],.vxe-body--column,.ant-table-cell,.el-table__cell'));
+                for (const cell of cells) {
+                  const cellText = textOf(cell);
+                  const quoted = Array.from(cellText.matchAll(/「([^」]+)」/g))
+                    .map(match => String(match[1] || '').replace(/\s+/g, ' ').trim());
+                  if (!quoted.includes(wanted)) continue;
+                  return {
+                    store_name: wanted,
+                    cell_text: cellText.slice(0, 240),
+                    source: 'structured_store_cell',
+                    column_index: Math.max(0, cells.indexOf(cell)),
+                    tag: String(cell.tagName || ''),
+                    class_name: String(cell.className || '').slice(0, 160),
+                  };
+                }
+                return null;
+              };
               const rows = Array.from(document.querySelectorAll(
                 'tr.vxe-body--row,tbody tr.ant-table-row,tbody tr.el-table__row,tbody tr,[role="row"][data-row-key],[class*="vxe-body--row"]'
               )).filter(visible).filter(row => {
@@ -21813,15 +23352,12 @@ class DxmLoginFlow:
                 return Boolean(text) && !(/图片标题\/产品ID/.test(compact) && compact.includes('操作'));
               });
               const matches = rows.map((row, rowIndex) => {
-                const stores = storeEvidence(row);
+                const stores = storeEvidence(row) || quotedStoreEvidence(row);
                 if (!stores) return null;
                 const ids = productIds(row);
                 const sources = sourceUrls(row);
                 const productMatched = kind === 'product_id' ? ids.includes(value) : sources.includes(canonicalUrl(value));
-                const sourceMatched = targetUrls.length > 0 && (
-                  sources.length === targetUrls.length
-                  && targetUrls.every(url => sources.includes(url))
-                );
+                const sourceMatched = targetUrls.length > 0 && targetUrls.every(url => sources.includes(url));
                 if (!productMatched || !sourceMatched) return null;
                 const clickables = [];
                 const seen = new Set();
@@ -21844,7 +23380,7 @@ class DxmLoginFlow:
                   rowIndex,
                   rowText: textOf(row).slice(0, 700),
                   productIds: ids,
-                  sourceUrls: sources,
+                  sourceUrls: targetUrls.filter(url => sources.includes(url)),
                   storeEvidence: stores,
                   actions: clickables,
                 };
@@ -21856,6 +23392,11 @@ class DxmLoginFlow:
                   matchCount: matches.length,
                   matches: matches.slice(0, 5),
                   rowCount: rows.length,
+                  sample: rows.slice(0, 3).map(row => ({
+                    productIds: productIds(row),
+                    sourceUrls: sourceUrls(row),
+                    store: (storeEvidence(row) || quotedStoreEvidence(row) || {}).store_name || null,
+                  })),
                 };
               }
               if (matches[0].actions.length !== 1) {
@@ -21883,6 +23424,16 @@ class DxmLoginFlow:
             )
         reason = str(result.get('reason') or '')
         if result.get('ok') is not True:
+            self._trace_workflow_event(
+                'draft_box_row_find:frozen_miss',
+                reason=reason,
+                match_count=result.get('matchCount'),
+                row_count=result.get('rowCount'),
+                edit_action_count=result.get('editActionCount'),
+                sample=result.get('sample'),
+                target_identity_sha256=target_identity_sha256,
+                human_step='冻结商品身份未在当前商品箱列表命中',
+            )
             if reason == 'frozen_target_ambiguous':
                 raise FrozenTargetIdentityError(
                     'FROZEN_TARGET_ROW_AMBIGUOUS',
@@ -24362,12 +25913,21 @@ class DxmLoginFlow:
             target_identity,
             store_name=store_name,
         )
-        fresh_row = self._find_draft_box_row(
-            page,
-            store_name=store_name,
-            target_source_urls=list(normalized_target['source_urls']),
-            target_identity=normalized_target,
-        )
+        try:
+            fresh_row = self._find_draft_box_row(
+                page,
+                store_name=store_name,
+                target_source_urls=list(normalized_target['source_urls']),
+                target_identity=normalized_target,
+            )
+        except FrozenTargetIdentityError as exc:
+            if exc.reason_code != 'FROZEN_TARGET_ROW_NOT_FOUND':
+                raise
+            return self._open_frozen_editor_by_product_id(
+                page,
+                target_identity=normalized_target,
+                store_name=store_name,
+            )
         if row_info is not None and row_info.get('target_identity_sha256') not in {None, target_sha256}:
             raise FrozenTargetIdentityError(
                 'FROZEN_TARGET_ROW_DRIFT',
@@ -24412,6 +25972,128 @@ class DxmLoginFlow:
             )
         self._reapply_live_hud_if_available(editor_page)
         return editor_page
+
+    def _open_frozen_editor_by_product_id(
+        self,
+        page: Page,
+        *,
+        target_identity: dict[str, Any],
+        store_name: str | None,
+    ) -> Page:
+        stable = dict(target_identity['stable_identity'])
+        if stable.get('kind') != 'product_id':
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_ROW_NOT_FOUND',
+                '商品箱虚拟列表未露出冻结行，且没有可验证的产品 ID 可打开编辑页。',
+            )
+        product_id = str(stable.get('value') or '').strip()
+        edit_url = f'https://www.dianxiaomi.com/web/smt/edit?id={product_id}'
+        if not product_id or not self._is_dxm_editor_url(edit_url):
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_PRODUCT_ID_INVALID',
+                '冻结产品 ID 无法构成规范编辑页地址，已停止打开编辑页。',
+            )
+        self._trace_workflow_event(
+            'draft_box_edit:open_by_frozen_product_id',
+            product_id=product_id,
+            store_name=store_name,
+            edit_url=edit_url,
+            human_step='按冻结产品 ID 打开编辑页，不经过采集箱搜索',
+        )
+        current_url = str(getattr(page, 'url', '') or '')
+        current_id = (parse_qs(urlparse(current_url).query).get('id') or [''])[0]
+        if not (self._is_dxm_editor_url(current_url) and current_id == product_id):
+            page.goto(edit_url, wait_until='domcontentloaded', timeout=45000)
+        page.wait_for_url('**/web/smt/edit**', timeout=15000)
+        try:
+            page.wait_for_timeout(2000)
+        except Exception:
+            time.sleep(2.0)
+        self._clear_visible_editor_loading_overlays(page, context='open_by_product_id')
+        observed_url = str(getattr(page, 'url', '') or '')
+        observed_id = (parse_qs(urlparse(observed_url).query).get('id') or [''])[0]
+        if not self._is_dxm_editor_url(observed_url) or observed_id != product_id:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_EDITOR_NOT_OPENED',
+                '已按冻结产品 ID 打开编辑地址，但当前页不是同一商品的可验证编辑页。',
+            )
+        self._clear_visible_editor_loading_overlays(page, context='open_by_product_id_after_url')
+        self._reapply_live_hud_if_available(page)
+        return page
+
+    def _clear_visible_editor_loading_overlays(self, page: Page, *, context: str) -> dict[str, Any]:
+        if not self._is_dxm_editor_url(getattr(page, 'url', '')):
+            return {'cleared': False, 'reason': 'not_editor'}
+        escaped = self._press_native_escape_for_visible_dxm(page)
+        if not escaped:
+            try:
+                page.keyboard.press('Escape')
+                escaped = True
+            except Exception:
+                escaped = False
+        style_injected = False
+        hide_css = (
+            '.ant-spin-spinning,.ant-spin.ant-spin-spinning,'
+            '.ant-spin-nested-loading>div>.ant-spin,'
+            '.vxe-loading,.vxe-loading--wrapper,.el-loading-mask,'
+            '.ant-modal-mask,.ant-drawer-mask,.modal-backdrop,[class*="modal-mask"]{'
+            'display:none!important;visibility:hidden!important;opacity:0!important;'
+            'pointer-events:none!important;}'
+        )
+        try:
+            page.add_style_tag(content=hide_css)
+            style_injected = True
+        except Exception:
+            style_injected = False
+        removed = {'removed': False, 'count': 0, 'style_injected': style_injected}
+        try:
+            result = page.evaluate(
+                r'''(cssText) => {
+                  let style = document.getElementById('dxm-hide-stale-loading');
+                  if (!style) {
+                    style = document.createElement('style');
+                    style.id = 'dxm-hide-stale-loading';
+                    (document.head || document.documentElement).appendChild(style);
+                  }
+                  style.textContent = cssText;
+                  const selectors = [
+                    '.ant-spin-spinning',
+                    '.ant-spin.ant-spin-spinning',
+                    '.vxe-loading',
+                    '.vxe-loading--wrapper',
+                    '.el-loading-mask',
+                    '.ant-modal-mask',
+                    '.ant-drawer-mask',
+                    '.modal-backdrop',
+                    '[class*="modal-mask"]',
+                  ];
+                  let count = 0;
+                  for (const selector of selectors) {
+                    for (const node of Array.from(document.querySelectorAll(selector))) {
+                      try { node.style.setProperty('display', 'none', 'important'); count += 1; }
+                      catch (_) {}
+                    }
+                  }
+                  return {removed: count > 0, count};
+                }''',
+                hide_css,
+            )
+            if isinstance(result, Mapping):
+                removed.update(result)
+        except Exception as exc:
+            removed['error'] = str(exc)[:160]
+        self._trace_workflow_event(
+            'editor_loading_overlay:cleared',
+            context=context,
+            escaped=escaped,
+            removed=removed.get('removed'),
+            count=removed.get('count'),
+            style_injected=style_injected,
+            reason=removed.get('reason') or removed.get('error'),
+            current_url=getattr(page, 'url', None),
+            human_step='暂时隐藏编辑页加载遮罩',
+        )
+        return {'cleared': bool(escaped or style_injected or removed.get('removed')), 'escaped': escaped, **removed}
 
     def _dispatch_draft_row_edit_event(self, page: Page, row_info: dict[str, Any]) -> dict[str, Any]:
         return page.evaluate(r'''(rowInfo) => {

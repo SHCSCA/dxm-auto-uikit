@@ -11,6 +11,7 @@ import { BatchSavePlaceholderPage } from './components/workbench/BatchSavePlaceh
 import { HelpPage } from './components/workbench/HelpPage'
 import { HomePage as Dashboard } from './components/workbench/HomePage'
 import { ProductTasksPage as TaskCenter } from './components/workbench/ProductTasksPage'
+import { DxmTemplateLibraryPage } from './components/workbench/DxmTemplateLibraryPage'
 import { TemplateCenterPage, type TemplateCenterMode } from './components/workbench/TemplateCenterPage'
 import {
   DxmAccessPage,
@@ -19,10 +20,12 @@ import {
   ReportCenter,
   SystemSettings,
 } from './components/WorkbenchModules'
+import { OperationAuditTimeline } from './components/workbench/OperationAuditTimeline'
 import { humanOperatorMessage } from './components/workbench/workbenchCopy'
 import type { ConfirmedDraftTaskInput } from './draftSelection'
 import { isSupportedSourceProductUrl } from './sourceUrl'
 import type { AcquisitionClaimCreateRequest, AcquisitionClaimResponse, AgentConsoleControlCommand, AgentConsoleControlResponse, AgentConsoleSession, ConfigPreview, DeliveryWorkspace, DesktopRuntimeInfo, DraftBoxScopeSnapshot, DxmCredentialSaveResult, DxmTemplateRef, EditBatchSummary, Evidence, ExceptionItem, FinalDeliveryCheckSummary, LegacyWorkbenchSection, LocalPlanTemplate, LogItem, Product, RealTaskCreateRequest, Report, RuntimeControlAction, RuntimeControlResponse, RuntimeLogResponse, RuntimeLogSource, RuntimeStatus, Store, Task, Template, WorkbenchSection } from './types'
+import { isTaskControlActive } from './taskControl'
 import { composeWorkspace } from './workspace'
 
 const AGENT_CONSOLE_TARGET_URL = 'https://www.dianxiaomi.com/'
@@ -254,6 +257,18 @@ export default function App() {
     }
   }, [operationError, selectedTaskCompleted])
 
+  useEffect(() => {
+    void postJson('/api/operation-audit/client-events', {
+      action: 'page_switch',
+      component: 'workbench',
+      phase: 'completed',
+      status: 'ok',
+      correlation_id: `page-${activeSection}`,
+      root_correlation_id: 'workbench',
+      input: { section: activeSection },
+    }).catch(() => undefined)
+  }, [activeSection])
+
   const refreshWorkspace = useCallback(async (options?: { silent?: boolean }) => {
     const deliveryPath = selectedTaskId ? `/api/delivery/workspace?task_id=${selectedTaskId}` : '/api/delivery/workspace'
     const failures: ApiFailure[] = []
@@ -357,10 +372,10 @@ export default function App() {
     void refreshWorkspace()
   }, [refreshWorkspace])
 
-  const workspaceHasRunningTask = workspace.tasks.some((task) => task.status === 'running')
+  const workspaceHasRunningTask = workspace.tasks.some((task) => isTaskControlActive(task.status))
   const workspaceHasRunningBatch = editBatches.some((batch) => batch.status === 'running' || batch.status === 'stop_requested')
   const runningEditBatch = editBatches.find((batch) => batch.status === 'running' || batch.status === 'stop_requested') ?? null
-  const runningMutationTask = workspace.tasks.find((task) => task.status === 'running' && REAL_DXM_MUTATION_MODES.has(task.mode)) ?? null
+  const runningMutationTask = workspace.tasks.find((task) => isTaskControlActive(task.status) && REAL_DXM_MUTATION_MODES.has(task.mode)) ?? null
 
   useEffect(() => {
     if (!workspaceHasRunningTask && !workspaceHasRunningBatch && !agentConsole?.active) return
@@ -717,6 +732,13 @@ export default function App() {
       ? workspace.tasks.find((task) => task.id === taskId) ?? null
       : selectedTask
     if (!taskToStart) return
+    if (taskToStart.mode === 'batch_draft_save') {
+      setSelectedTaskId(taskToStart.id)
+      syncSelectedTaskIdUrl(taskToStart.id)
+      setOperationError('batch_draft_save 不能使用旧 manual-approval/start；请在“开始批量保存”核对冻结事实并一次原子批准。')
+      setActiveSection('start_save')
+      return
+    }
     setBusy(true)
     setOperationError(null)
     try {
@@ -802,6 +824,39 @@ export default function App() {
       await refreshWorkspace()
     } catch (error) {
       setOperationError(humanOperationError(error instanceof Error ? error.message : '启动保存核验任务失败'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function controlTask(taskId: number, action: 'pause' | 'resume' | 'stop') {
+    setBusy(true)
+    setOperationError(null)
+    try {
+      const result = await postJson<{
+        ok?: boolean
+        status?: string
+        message?: string
+        reasonCode?: string
+        workerControl?: Task['workerControl']
+      }>(`/api/tasks/${taskId}/${action}`, {})
+      setSelectedTaskId(taskId)
+      syncSelectedTaskIdUrl(taskId)
+      const statusLabel = result.status || action
+      const message = result.message
+        || (action === 'pause'
+          ? '暂停已请求，等待 worker 确认'
+          : action === 'resume'
+            ? '已从暂停点继续'
+            : '停止已请求，等待 worker 确认')
+      setWorkspaceNotice({
+        kind: 'degraded',
+        title: `任务 #${taskId} · ${statusLabel}`,
+        detail: message,
+      })
+      await refreshWorkspace()
+    } catch (error) {
+      setOperationError(humanOperationError(error instanceof Error ? error.message : `任务${action}失败`))
     } finally {
       setBusy(false)
     }
@@ -1180,6 +1235,7 @@ export default function App() {
     && currentSection !== 'draft_edit_save'
     && currentSection !== 'task_history'
     && currentSection !== 'template_center'
+    && currentSection !== 'dxm_templates'
     && currentSection !== 'template_management'
     && currentSection !== 'results'
     && currentSection !== 'issues'
@@ -1224,6 +1280,18 @@ export default function App() {
       case 'config_images':
       case 'config_logistics':
       case 'config_compliance':
+      case 'dxm_templates':
+        return (
+          <DxmTemplateLibraryPage
+            refs={dxmTemplateRefs}
+            onChanged={async () => { await refreshWorkspace() }}
+            onShowDxmAccess={() => setActiveSection('dxm_access')}
+            onShowPlans={() => {
+              setTemplateCenterEntryMode('e2_plan')
+              setActiveSection('template_center')
+            }}
+          />
+        )
       case 'template_center':
       case 'template_management':
         return (
@@ -1302,6 +1370,9 @@ export default function App() {
             onL3ApprovedByChange={setL3ApprovedBy}
             onRunL2Probe={runL2ReadonlyProbe}
             onStartTask={(taskId) => startSelectedTask(taskId)}
+            onPauseTask={(taskId) => { void controlTask(taskId, 'pause') }}
+            onResumeTask={(taskId) => { void controlTask(taskId, 'resume') }}
+            onStopTask={(taskId) => { void controlTask(taskId, 'stop') }}
             onShowAcquisition={() => setActiveSection('acquisition_claim')}
             onShowDxmAccess={() => setActiveSection('dxm_access')}
             onSelectTask={(taskId) => {
@@ -1365,11 +1436,23 @@ export default function App() {
         return (
           <BatchSavePlaceholderPage
             taskInput={draftTaskInput}
+            controlledTask={selectedTask?.mode === 'batch_draft_save' ? selectedTask : null}
+            busy={busy}
             onShowSelection={() => setActiveSection('draft_selection')}
             onShowPlans={() => {
               setTemplateCenterEntryMode('e2_plan')
               setActiveSection('template_center')
             }}
+            onTaskSelected={(task) => {
+              setSelectedTaskId(task.id)
+              syncSelectedTaskIdUrl(task.id)
+              void refreshWorkspace({ silent: true })
+            }}
+            onPauseTask={(taskId) => { void controlTask(taskId, 'pause') }}
+            onResumeTask={(taskId) => { void controlTask(taskId, 'resume') }}
+            onStopTask={(taskId) => { void controlTask(taskId, 'stop') }}
+            onShowTaskMonitor={() => setActiveSection('product_tasks')}
+            onShowResults={() => setActiveSection('results')}
           />
         )
       case 'preflight':
@@ -1435,7 +1518,12 @@ export default function App() {
           />
         )
       case 'results':
-        return <ReportCenter workspace={workspace} editBatches={editBatches} activeBatchId={activeEditBatchId} selectedTask={selectedTask} finalCheck={finalCheck} onShowDraftEdit={startNewEditBatch} onShowBatchRecords={showBatchRecords} onOpenBatch={openBatchForApproval} onShowEvidence={() => setActiveSection('evidence')} onShowTasks={() => setActiveSection('product_tasks')} onShowExceptions={showSelectedTaskIssues} />
+        return (
+          <>
+            <OperationAuditTimeline />
+            <ReportCenter workspace={workspace} editBatches={editBatches} activeBatchId={activeEditBatchId} selectedTask={selectedTask} finalCheck={finalCheck} onShowDraftEdit={startNewEditBatch} onShowBatchRecords={showBatchRecords} onOpenBatch={openBatchForApproval} onShowEvidence={() => setActiveSection('evidence')} onShowTasks={() => setActiveSection('product_tasks')} onShowExceptions={showSelectedTaskIssues} />
+          </>
+        )
       case 'help':
         return (
           <HelpPage

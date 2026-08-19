@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from src.execution.account_identity import account_context_hash
 from src.execution.dxm_adapter import DxmWorkflowAdapter
 from src.execution.dxm_login_flow import (
     DXM_DRAFT_PAGE_FORM_KEYS,
@@ -17,7 +18,7 @@ from src.execution.dxm_login_flow import (
 )
 from src.main import app
 from src.services.dxm_draft_reader import DxmDraftReader, DxmDraftReaderError
-from src.services.dxm_plan_reader import DxmPlanReader
+from src.services.dxm_plan_reader import DxmPlanReader, DxmPlanReaderError
 
 
 def _shop_response() -> dict[str, Any]:
@@ -236,6 +237,96 @@ def test_page_list_is_bound_to_requested_shop_and_draft_state() -> None:
             "category_id": "302",
             "dxm_state": "draft",
         },
+    ]
+
+
+def test_page_list_accepts_pdd_goods1_source_url() -> None:
+    page = _page_response(
+        page_size=1,
+        total_size=1,
+        items=[
+            {
+                "idStr": "9001",
+                "shopId": "101",
+                "subject": "PDD draft",
+                "dxmState": "draft",
+                "categoryId": "301",
+                "sourceUrl": "https://mobile.yangkeduo.com/goods1.html?goods_id=953148740292",
+            },
+        ],
+    )
+    reader = DxmDraftReader(FakeDraftSource(_shop_response(), page))
+
+    result = reader.list_products(shop_id="101", page_no=1, page_size=1)
+
+    assert result["items"][0]["source_urls"] == [
+        "https://mobile.yangkeduo.com/goods1.html?goods_id=953148740292",
+    ]
+
+
+def test_page_list_exposes_thumbnail_remark_shop_and_platform() -> None:
+    page = _page_response(
+        page_size=1,
+        total_size=1,
+        items=[
+            {
+                "idStr": "9001",
+                "shopId": "101",
+                "subject": "Draft one",
+                "dxmState": "draft",
+                "categoryId": "301",
+                "imageURLs": (
+                    "https://wxalbum-10001658-file.dianxiaomi.com/a.jpg;"
+                    "https://cbu01.alicdn.com/b.jpg"
+                ),
+                "comment": "  宋 积木 资质没做  ",
+                "sourceName": "1688",
+            },
+        ],
+    )
+    reader = DxmDraftReader(FakeDraftSource(_shop_response(), page))
+
+    result = reader.list_products(shop_id="101", page_no=1, page_size=1)
+
+    assert result["items"][0]["thumbnail_url"] == (
+        "https://wxalbum-10001658-file.dianxiaomi.com/a.jpg"
+    )
+    assert result["items"][0]["remark"] == "宋 积木 资质没做"
+    assert result["items"][0]["source_platform"] == "1688"
+    assert result["items"][0]["shop_id"] == "101"
+
+
+def test_page_list_omits_unsupported_source_url_without_stopping() -> None:
+    page = _page_response(
+        page_size=2,
+        total_size=2,
+        items=[
+            {
+                "idStr": "9001",
+                "shopId": "101",
+                "subject": "XHS draft",
+                "dxmState": "draft",
+                "categoryId": "301",
+                "sourceUrl": "https://www.xiaohongshu.com/goods-detail/6986d3db4937e700017482a8",
+            },
+            {
+                "idStr": "9002",
+                "shopId": "101",
+                "subject": "1688 draft",
+                "dxmState": "draft",
+                "categoryId": "302",
+                "sourceUrl": "https://detail.1688.com/offer/1067786157619.html",
+            },
+        ],
+    )
+    reader = DxmDraftReader(FakeDraftSource(_shop_response(), page))
+
+    result = reader.list_products(shop_id="101", page_no=1, page_size=2)
+
+    assert [item["id"] for item in result["items"]] == ["9001", "9002"]
+    assert "source_urls" not in result["items"][0]
+    assert result["items"][1]["source_urls"] == [
+        "https://detail.1688.com/offer/1067786157619.html",
     ]
 
 
@@ -552,6 +643,44 @@ def test_visible_account_reference_changes_with_authenticated_user(
     assert first != flow._authenticated_account_ref(changed)
 
 
+def test_owner_thread_account_refresh_reproves_userinfo_and_updates_context_hash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flow, api_request = _visible_flow(monkeypatch)
+    first_ref = flow._authenticated_account_ref(_shop_response())
+
+    first_hash = flow.refresh_account_context_hash()
+
+    assert first_hash == account_context_hash(first_ref)
+    assert flow.current_account_context_hash() == first_hash
+    assert api_request.calls == [
+        ("GET", "https://www.dianxiaomi.com/api/userInfo.json", 15_000)
+    ]
+
+    api_request.shop_payload["data"]["userId"] = "84"
+    changed_ref = flow._authenticated_account_ref(api_request.shop_payload)
+    second_hash = flow.refresh_account_context_hash()
+
+    assert second_hash == account_context_hash(changed_ref)
+    assert second_hash != first_hash
+    assert flow.current_account_context_hash() == second_hash
+    assert flow.browser_session_id() == "visible-session-1"
+
+
+def test_account_refresh_rejects_non_owner_thread_even_when_cache_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flow, _api_request = _visible_flow(monkeypatch)
+    cached = flow.refresh_account_context_hash()
+    flow._browser_session_thread_id = -1
+
+    with pytest.raises(DxmDraftReaderError) as caught:
+        flow.refresh_account_context_hash()
+
+    assert caught.value.reason_code == "BROWSER_SESSION_THREAD_MISMATCH"
+    assert flow.current_account_context_hash() == cached
+
+
 def test_visible_account_reference_accepts_current_userinfo_identity_schema(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -612,6 +741,9 @@ def test_e2_plan_reader_allowlist_contains_only_documented_read_contracts() -> N
             "POST",
             "https://www.dianxiaomi.com/api/smtCategory/childAttributeList.json",
         ),
+        ("POST", "https://www.dianxiaomi.com/api/smtCategory/list.json"),
+        ("POST", "https://www.dianxiaomi.com/api/smtCategory/searchCategory.json"),
+        ("POST", "https://www.dianxiaomi.com/api/smtCategory/getByCategoryId.json"),
     }
     assert all("save" not in url.casefold() and "publish" not in url.casefold() for _method, url in DXM_E2_PLAN_READ_ALLOWLIST)
 
@@ -728,6 +860,71 @@ def test_e2_product_detail_zero_value_id_uses_auditable_wire_value(
     )
 
     assert current_values == {"attr_5301": "Acrylic"}
+
+
+@pytest.mark.parametrize("wire_sentinel", [-1, "-1"])
+def test_e2_product_detail_negative_one_value_id_uses_known_attribute_custom_text(
+    wire_sentinel,
+) -> None:
+    current_values = DxmPlanReader._current_values_from_detail(
+        {
+            "aeopAeProductPropertys": json.dumps(
+                [{
+                    "attrNameId": 5301,
+                    "attrValueId": wire_sentinel,
+                    "attrValue": "Acrylic",
+                }]
+            ),
+        },
+        schema={
+            "properties": {
+                "attr_5301": {"type": "string"},
+            },
+        },
+    )
+
+    assert current_values == {"attr_5301": "Acrylic"}
+
+
+@pytest.mark.parametrize(
+    ("raw_value_id", "wire_shape"),
+    [
+        (True, "boolean"),
+        (0.0, "float_zero"),
+        (1.5, "float_positive"),
+        (" 0 ", "whitespace_numeric"),
+        (-7, "negative"),
+        ([], "container"),
+        ("not-an-id", "text"),
+    ],
+)
+def test_e2_product_detail_rejects_invalid_attr_value_id_by_wire_shape(
+    raw_value_id,
+    wire_shape: str,
+) -> None:
+    with pytest.raises(DxmPlanReaderError) as captured:
+        DxmPlanReader._current_values_from_detail(
+            {
+                "aeopAeProductPropertys": json.dumps(
+                    [
+                        {"attrNameId": 5301, "attrValueId": 7301},
+                        {"attrNameId": 5302, "attrValueId": raw_value_id},
+                    ]
+                ),
+            },
+            schema={
+                "properties": {
+                    "attr_5301": {"type": "string"},
+                    "attr_5302": {"type": "string"},
+                },
+            },
+        )
+
+    assert captured.value.reason_code == "DXM_PLAN_IDENTITY_INVALID"
+    assert str(captured.value) == (
+        "编辑页 attrValueId 非法："
+        f"property_index=1 wire_shape={wire_shape}。"
+    )
 
 
 def test_visible_session_page_reader_forces_allowlisted_draft_form(
@@ -890,6 +1087,16 @@ def test_visible_session_e2_reader_uses_only_documented_read_endpoints(
                     "code": 0,
                     "data": [
                         {
+                            "arrtNameId": 3,
+                            "nameZh": "型号",
+                            "nameEn": "Model",
+                            "inputType": "INPUT",
+                            "required": False,
+                            "sku": False,
+                            "values": "[]",
+                            "units": "[]",
+                        },
+                        {
                             "arrtNameId": f"5{category_id}",
                             "nameZh": f"类目 {category_id} 材质",
                             "nameEn": "Material",
@@ -984,6 +1191,11 @@ def test_visible_session_e2_reader_uses_only_documented_read_endpoints(
     )
     assert schemas["301"]["properties"]["detail"]["natural_language"] is True
     assert schemas["301"]["properties"]["mobileDetail"]["natural_language"] is True
+    identifier_schema = schemas["301"]["properties"]["attr_3"]
+    assert identifier_schema["type"] == "string"
+    assert identifier_schema["minLength"] == 1
+    assert identifier_schema["natural_language"] is False
+    assert identifier_schema["ui_binding"] == "dxm_attribute:3"
     sku_schema = schemas["301"]["properties"]["aeopAeProductSKUs"]["items"]
     assert sku_schema["properties"]["skuPrice"]["pattern"]
     assert sku_schema["properties"]["cargoPrice"]["pattern"]
@@ -1342,3 +1554,129 @@ def test_adapter_exposes_only_the_two_read_contracts() -> None:
     assert shops["payload"] == _shop_response()
     assert page["payload"] == _page_response()
     assert flow.page_calls == [{"shop_id": "101", "page_no": 1, "page_size": 2}]
+
+
+def test_category_tree_proxy_children_and_search_normalize_records(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flow, api_request = _visible_flow(monkeypatch)
+
+    def post(
+        url: str,
+        *,
+        form: dict[str, str],
+        timeout: int,
+    ) -> FakeApiResponse:
+        api_request.calls.append(("POST", url, dict(form), timeout))
+        if url.endswith("/api/smtCategory/list.json"):
+            if not form:
+                return FakeApiResponse({"code": 0, "data": []})
+            return FakeApiResponse(
+                {
+                    "code": 0,
+                    "data": [
+                        {
+                            "categoryId": 200003937,
+                            "nameZh": "手工艺品&缝纫用品（半成品）",
+                            "nameEn": "Arts,Crafts & Sewing",
+                            "nodePath": "家居用品(Home & Garden) > 手工艺品&缝纫用品（半成品）",
+                            "nodePathId": "15/200003937",
+                            "pcid": 15,
+                            "isleaf": 0,
+                            "level": 2,
+                        },
+                        {"categoryId": "bad", "nameZh": "脏记录"},
+                        {"nameZh": "无 ID 记录"},
+                    ],
+                }
+            )
+        if url.endswith("/api/smtCategory/searchCategory.json"):
+            return FakeApiResponse(
+                {
+                    "code": 0,
+                    "data": [
+                        {
+                            "categoryId": "28191907",
+                            "nameZh": "广告立牌",
+                            "nodePath": "Industry & Business/Advertising Equipment/Advertising Screens(广告立牌)",
+                        }
+                    ],
+                }
+            )
+        if url.endswith("/api/smtCategory/getByCategoryId.json"):
+            return FakeApiResponse(
+                {
+                    "code": 0,
+                    "data": {
+                        "categoryId": "201393405",
+                        "nameZh": "人形立牌",
+                    },
+                }
+            )
+        raise AssertionError(f"unexpected post url {url}")
+
+    monkeypatch.setattr(api_request, "post", post)
+
+    children = flow.read_category_children(pcid="200003937")
+    assert children == [
+        {
+            "categoryId": "200003937",
+            "nameZh": "手工艺品&缝纫用品（半成品）",
+            "nameEn": "Arts,Crafts & Sewing",
+            "nodePath": "家居用品(Home & Garden) > 手工艺品&缝纫用品（半成品）",
+            "nodePathId": "15/200003937",
+            "pcid": 15,
+            "isleaf": 0,
+            "level": 2,
+        }
+    ]
+
+    top = flow.read_category_children(pcid="")
+    assert top == []
+    assert api_request.calls[1][2] == {}
+
+    found = flow.search_categories(keyword="立牌")
+    assert found[0]["categoryId"] == "28191907"
+    assert api_request.calls[2][2] == {"category": "立牌"}
+
+    by_id = flow.get_category_by_id(category_id="201393405")
+    assert by_id == {
+        "categoryId": "201393405",
+        "nameZh": "人形立牌",
+    }
+    assert api_request.calls[-1][2] == {"categoryId": "201393405"}
+
+
+def test_category_tree_proxy_rejects_off_contract_forms(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flow, api_request = _visible_flow(monkeypatch)
+
+    def post(
+        url: str,
+        *,
+        form: dict[str, str],
+        timeout: int,
+    ) -> FakeApiResponse:
+        api_request.calls.append(("POST", url, dict(form), timeout))
+        return FakeApiResponse({"code": 0, "data": []})
+
+    monkeypatch.setattr(api_request, "post", post)
+
+    with pytest.raises(DxmDraftReaderError) as caught:
+        flow.read_category_children(pcid="-1")
+    assert caught.value.reason_code == "DXM_PLAN_READ_ALLOWLIST_VIOLATION"
+
+    with pytest.raises(DxmDraftReaderError) as caught:
+        flow.search_categories(keyword="")
+    assert caught.value.reason_code == "DXM_PLAN_READ_ALLOWLIST_VIOLATION"
+
+    with pytest.raises(DxmDraftReaderError) as caught:
+        flow.search_categories(keyword="x" * 65)
+    assert caught.value.reason_code == "DXM_PLAN_READ_ALLOWLIST_VIOLATION"
+
+    with pytest.raises(DxmDraftReaderError) as caught:
+        flow.get_category_by_id(category_id="abc")
+    assert caught.value.reason_code == "DXM_PLAN_READ_ALLOWLIST_VIOLATION"
+
+    assert api_request.calls == []

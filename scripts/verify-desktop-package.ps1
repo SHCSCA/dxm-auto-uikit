@@ -32,7 +32,14 @@ function Resolve-SmokeArtifactPath {
 }
 
 $ExePath = Join-Path $RepoRoot 'outputs\desktop-build\win-unpacked\DXM-Agent-Console.exe'
-$PortableExePath = Join-Path $RepoRoot 'outputs\desktop-build\DXM-Agent-Console-Portable-0.1.0.exe'
+$DesktopManifestPath = Join-Path $RepoRoot 'app\desktop\package.json'
+$DesktopManifest = Get-Content -LiteralPath $DesktopManifestPath -Raw | ConvertFrom-Json
+$DesktopVersion = [string]$DesktopManifest.version
+if ([string]::IsNullOrWhiteSpace($DesktopVersion)) {
+  throw "Desktop package.json is missing version: $DesktopManifestPath"
+}
+$PortableExePath = Join-Path $RepoRoot "outputs\desktop-build\DXM-Agent-Console-Portable-$DesktopVersion.exe"
+Write-Host "Desktop manifest version: $DesktopVersion"
 if ([string]::IsNullOrWhiteSpace($PortableCapturePath)) {
   $PortableCapturePath = Join-Path $env:TEMP 'dxm-agent-console-portable-smoke.png'
 }
@@ -278,7 +285,7 @@ function Assert-PackagedBackendResourceStatus {
     $StartInfo.CreateNoWindow = $true
     $StartInfo.EnvironmentVariables['DXM_DATA_DIR'] = $RuntimeDataDir
     $StartInfo.EnvironmentVariables['DXM_RESOURCE_ROOT'] = $ResourceRoot
-    $StartInfo.EnvironmentVariables['DXM_DESKTOP'] = '1'
+    $StartInfo.EnvironmentVariables['DXM_RUNTIME_OWNER'] = 'package_probe'
     $StartInfo.EnvironmentVariables['DXM_LAUNCHER_LOG_FILE'] = Join-Path $RuntimeDataDir 'desktop-main.log'
     $StartInfo.EnvironmentVariables['DXM_BACKEND_PORT'] = [string]$Port
     $StartInfo.EnvironmentVariables['DXM_BACKEND_URL'] = $ApiBase

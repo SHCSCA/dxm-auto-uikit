@@ -2129,6 +2129,113 @@ def test_browser_agent_save_command_page_is_isolated_by_execution_mode(
     runtime.shutdown()
 
 
+def test_batch_reservation_samples_account_and_enters_ledger_on_browser_owner_thread():
+    calls: list[tuple[str, str]] = []
+
+    class Adapter:
+        requires_persistent_browser_agent = True
+
+        def refresh_account_context_hash(self):
+            calls.append(("account", threading.current_thread().name))
+            return "A" * 64
+
+    class Decision:
+        ok = True
+        reason_code = "OK"
+        entry = None
+
+    class Ledger:
+        def reserve_command(self, _command):
+            calls.append(("ledger", threading.current_thread().name))
+            return Decision()
+
+    runtime = BrowserAgentRuntime(Adapter(), mutation_ledger=Ledger())
+    command = _runtime_command(
+        runtime,
+        task_id=923,
+        job_id=924,
+        state="SAVE_ONLY",
+        action="save_only",
+        expected_page="editor",
+        execution_mode="batch_draft_save",
+        params={},
+        target_hash="a" * 64,
+    )
+
+    try:
+        assert runtime.reserve_command(command)["ok"] is True
+        assert calls
+        assert {name for _kind, name in calls} == {calls[0][1]}
+        assert calls[0][1].startswith("dxm-browser-agent")
+        assert [kind for kind, _name in calls] == ["account", "ledger"]
+    finally:
+        runtime.shutdown()
+
+
+def test_visible_session_operations_share_the_browser_agent_owner_thread():
+    runtime = BrowserAgentRuntime()
+    calls: list[tuple[str, str]] = []
+
+    def record(label: str) -> str:
+        calls.append((label, threading.current_thread().name))
+        return label
+
+    try:
+        assert runtime.run_session_operation(record, "login") == "login"
+        assert runtime.run_session_operation(record, "reader") == "reader"
+        assert [label for label, _thread in calls] == ["login", "reader"]
+        assert {thread for _label, thread in calls} == {calls[0][1]}
+        assert calls[0][1].startswith("dxm-browser-agent")
+    finally:
+        runtime.shutdown()
+
+
+def test_visible_session_operations_revive_after_runtime_shutdown():
+    runtime = BrowserAgentRuntime()
+    first = runtime.run_session_operation(lambda: threading.current_thread().name)
+    assert first.startswith("dxm-browser-agent")
+    shutdown = runtime.shutdown()
+    assert shutdown["ok"] is True
+    revived = runtime.run_session_operation(lambda: threading.current_thread().name)
+    assert revived.startswith("dxm-browser-agent")
+    assert runtime.status()["status"] == "idle"
+    runtime.shutdown()
+
+
+def test_batch_reservation_fails_closed_without_owner_account_sampler():
+    class Adapter:
+        requires_persistent_browser_agent = True
+
+    class Decision:
+        ok = True
+        reason_code = "OK"
+        entry = None
+
+    class Ledger:
+        def reserve_command(self, _command):
+            return Decision()
+
+    runtime = BrowserAgentRuntime(Adapter(), mutation_ledger=Ledger())
+    command = _runtime_command(
+        runtime,
+        task_id=925,
+        job_id=926,
+        state="SAVE_ONLY",
+        action="save_only",
+        expected_page="editor",
+        execution_mode="batch_draft_save",
+        params={},
+        target_hash="b" * 64,
+    )
+
+    try:
+        result = runtime.reserve_command(command)
+        assert result["ok"] is False
+        assert result["reasonCode"] == "AUTH_ACCOUNT_CONTEXT_UNAVAILABLE"
+    finally:
+        runtime.shutdown()
+
+
 def test_browser_agent_mutation_dispatch_rejects_wrong_command_context_without_execution():
     operation_calls = []
     upstream_calls = []

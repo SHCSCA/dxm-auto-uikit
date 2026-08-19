@@ -5,6 +5,7 @@ import hmac
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlparse
 
@@ -41,6 +42,16 @@ from src.batch_edit.execution_contract import (
 from src.batch_edit.batch_contract import BatchContractError, freeze_template_bundle
 from src.batch_edit.scope_contract import canonical_sha256
 from src.execution.browser_agent_protocol import mutation_target_hash
+from src.execution.task_worker_control import (
+    ACTIVE_TASK_STATUSES,
+    PAYLOAD_KEY as WORKER_CONTROL_PAYLOAD_KEY,
+    TaskControlResult,
+    build_ack_control,
+    build_request_control,
+    empty_worker_control,
+    normalize_worker_control,
+    public_worker_control,
+)
 from src.services.evidence_ref import validate_evidence_ref
 from src.state_machine.two_stage import (
     TwoStageContractError,
@@ -1419,15 +1430,18 @@ class Repository:
 
     @staticmethod
     def _running_task_exists(conn: Any) -> bool:
+        placeholders = ", ".join("?" for _ in ACTIVE_TASK_STATUSES)
         return conn.execute(
-            "SELECT 1 AS active FROM tasks WHERE status='running' LIMIT 1"
+            f"SELECT 1 AS active FROM tasks WHERE status IN ({placeholders}) LIMIT 1",
+            tuple(ACTIVE_TASK_STATUSES),
         ).fetchone() is not None
 
     @staticmethod
     def _other_running_task_exists(conn: Any, task_id: int) -> bool:
+        placeholders = ", ".join("?" for _ in ACTIVE_TASK_STATUSES)
         return conn.execute(
-            "SELECT 1 AS active FROM tasks WHERE status='running' AND id<>? LIMIT 1",
-            (task_id,),
+            f"SELECT 1 AS active FROM tasks WHERE status IN ({placeholders}) AND id<>? LIMIT 1",
+            (*ACTIVE_TASK_STATUSES, task_id),
         ).fetchone() is not None
 
     @staticmethod
@@ -3468,16 +3482,414 @@ class Repository:
         )
 
     def try_pause_task(self, task_id: int) -> bool:
-        now = now_iso()
-        with connection() as conn:
-            cur = conn.execute(
-                "UPDATE tasks SET status='paused', updated_at=? WHERE id=? AND status='running'",
-                (now, task_id),
-            )
-            return cur.rowcount == 1
+        """Backward-compatible alias: request pause (not yet worker-acked)."""
+        return self.request_pause_task(task_id).ok
 
     def try_resume_task(self, task_id: int) -> bool:
-        return False
+        return self.request_resume_task(task_id).ok
+
+    def get_task_worker_control(self, task_id: int) -> dict[str, Any] | None:
+        task = self.get_task_private(task_id)
+        if not task:
+            return None
+        payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+        return normalize_worker_control(payload.get(WORKER_CONTROL_PAYLOAD_KEY))
+
+    def request_pause_task(self, task_id: int, *, detail: str | None = None) -> TaskControlResult:
+        now = now_iso()
+        control = build_request_control(
+            request="pause",
+            requested_at=now,
+            reason_code="OPERATOR_PAUSE_REQUESTED",
+            detail=detail,
+        )
+        with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT id, status, payload_json FROM tasks WHERE id=?",
+                (task_id,),
+            ).fetchone()
+            if not row:
+                return TaskControlResult(False, "TASK_NOT_FOUND")
+            status = str(row["status"] or "")
+            if status == "pause_requested":
+                existing = normalize_worker_control(
+                    loads(row["payload_json"], {}).get(WORKER_CONTROL_PAYLOAD_KEY)
+                )
+                return TaskControlResult(
+                    True,
+                    "PAUSE_ALREADY_REQUESTED",
+                    status=status,
+                    applied=True,
+                    idempotent=True,
+                    worker_control=existing,
+                )
+            if status == "paused":
+                existing = normalize_worker_control(
+                    loads(row["payload_json"], {}).get(WORKER_CONTROL_PAYLOAD_KEY)
+                )
+                return TaskControlResult(
+                    True,
+                    "PAUSE_ALREADY_ACKED",
+                    status=status,
+                    applied=True,
+                    idempotent=True,
+                    worker_control=existing,
+                )
+            if status == "stop_requested":
+                return TaskControlResult(False, "TASK_STOP_PENDING", status=status)
+            if status != "running":
+                return TaskControlResult(False, "TASK_NOT_RUNNING", status=status)
+            payload = loads(row["payload_json"], {})
+            next_payload = dict(payload)
+            next_payload[WORKER_CONTROL_PAYLOAD_KEY] = control
+            updated = conn.execute(
+                """
+                UPDATE tasks
+                   SET status='pause_requested', payload_json=?, updated_at=?
+                 WHERE id=? AND status='running' AND payload_json=?
+                """,
+                (dumps(next_payload), now, task_id, row["payload_json"]),
+            )
+            if updated.rowcount != 1:
+                return TaskControlResult(False, "PAUSE_REQUEST_CAS_CONFLICT")
+        return TaskControlResult(
+            True,
+            "OK",
+            status="pause_requested",
+            applied=True,
+            worker_control=control,
+        )
+
+    def acknowledge_pause_task(
+        self,
+        task_id: int,
+        *,
+        completed_jobs: int | None = None,
+        failed_jobs: int | None = None,
+        detail: str | None = None,
+    ) -> TaskControlResult:
+        now = now_iso()
+        with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT id, status, payload_json, completed_jobs, failed_jobs FROM tasks WHERE id=?",
+                (task_id,),
+            ).fetchone()
+            if not row:
+                return TaskControlResult(False, "TASK_NOT_FOUND")
+            status = str(row["status"] or "")
+            payload = loads(row["payload_json"], {})
+            if status == "paused":
+                existing = normalize_worker_control(payload.get(WORKER_CONTROL_PAYLOAD_KEY))
+                return TaskControlResult(
+                    True,
+                    "PAUSE_ALREADY_ACKED",
+                    status=status,
+                    applied=True,
+                    idempotent=True,
+                    worker_control=existing,
+                )
+            if status != "pause_requested":
+                return TaskControlResult(False, "TASK_NOT_PAUSE_REQUESTED", status=status)
+            control = build_ack_control(
+                payload.get(WORKER_CONTROL_PAYLOAD_KEY),
+                ack="paused",
+                acked_at=now,
+                reason_code="WORKER_PAUSE_ACKED",
+                detail=detail or "worker acked pause at product safe point",
+            )
+            next_payload = dict(payload)
+            next_payload[WORKER_CONTROL_PAYLOAD_KEY] = control
+            next_payload["runner_dispatch"] = self._released_runner_dispatch(
+                payload.get("runner_dispatch"),
+                released_at=now,
+                reason="pause_acked",
+            )
+            updated = conn.execute(
+                """
+                UPDATE tasks
+                   SET status='paused',
+                       payload_json=?,
+                       completed_jobs=COALESCE(?, completed_jobs),
+                       failed_jobs=COALESCE(?, failed_jobs),
+                       updated_at=?
+                 WHERE id=? AND status='pause_requested' AND payload_json=?
+                """,
+                (
+                    dumps(next_payload),
+                    completed_jobs,
+                    failed_jobs,
+                    now,
+                    task_id,
+                    row["payload_json"],
+                ),
+            )
+            if updated.rowcount != 1:
+                return TaskControlResult(False, "PAUSE_ACK_CAS_CONFLICT")
+        return TaskControlResult(
+            True,
+            "OK",
+            status="paused",
+            applied=True,
+            worker_control=control,
+        )
+
+    def request_resume_task(self, task_id: int, *, detail: str | None = None) -> TaskControlResult:
+        now = now_iso()
+        with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if self._active_edit_batch_exists(conn):
+                return TaskControlResult(False, "AUTH_EDIT_BATCH_ACTIVE")
+            if self._other_running_task_exists(conn, task_id):
+                return TaskControlResult(False, "AUTH_ANOTHER_TASK_ACTIVE")
+            row = conn.execute(
+                "SELECT id, status, payload_json FROM tasks WHERE id=?",
+                (task_id,),
+            ).fetchone()
+            if not row:
+                return TaskControlResult(False, "TASK_NOT_FOUND")
+            status = str(row["status"] or "")
+            if status != "paused":
+                if status == "running":
+                    return TaskControlResult(
+                        False,
+                        "TASK_ALREADY_RUNNING",
+                        status=status,
+                    )
+                if status == "pause_requested":
+                    return TaskControlResult(
+                        False,
+                        "PAUSE_ACK_REQUIRED",
+                        status=status,
+                    )
+                return TaskControlResult(False, "TASK_NOT_PAUSED", status=status)
+            payload = loads(row["payload_json"], {})
+            control = empty_worker_control()
+            control["reason_code"] = "OPERATOR_RESUME_REQUESTED"
+            control["detail"] = " ".join(str(detail or "operator resume from paused").split())
+            control["requested_at"] = now
+            next_payload = dict(payload)
+            next_payload[WORKER_CONTROL_PAYLOAD_KEY] = control
+            next_payload["runner_dispatch"] = {
+                "schema": "dxm.task-runner-dispatch.v1",
+                "claimed": False,
+                "released_at": now,
+                "resume_requested_at": now,
+            }
+            updated = conn.execute(
+                """
+                UPDATE tasks
+                   SET status='running', payload_json=?, updated_at=?
+                 WHERE id=? AND status='paused' AND payload_json=?
+                """,
+                (dumps(next_payload), now, task_id, row["payload_json"]),
+            )
+            if updated.rowcount != 1:
+                return TaskControlResult(False, "RESUME_CAS_CONFLICT")
+        return TaskControlResult(
+            True,
+            "OK",
+            status="running",
+            applied=True,
+            worker_control=control,
+        )
+
+    def request_stop_task(self, task_id: int, *, detail: str | None = None) -> TaskControlResult:
+        now = now_iso()
+        control = build_request_control(
+            request="stop",
+            requested_at=now,
+            reason_code="OPERATOR_STOP_REQUESTED",
+            detail=detail,
+        )
+        with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT id, status, payload_json FROM tasks WHERE id=?",
+                (task_id,),
+            ).fetchone()
+            if not row:
+                return TaskControlResult(False, "TASK_NOT_FOUND")
+            status = str(row["status"] or "")
+            if status == "stop_requested":
+                existing = normalize_worker_control(
+                    loads(row["payload_json"], {}).get(WORKER_CONTROL_PAYLOAD_KEY)
+                )
+                return TaskControlResult(
+                    True,
+                    "STOP_ALREADY_REQUESTED",
+                    status=status,
+                    applied=True,
+                    idempotent=True,
+                    worker_control=existing,
+                )
+            if status == "stopped":
+                existing = normalize_worker_control(
+                    loads(row["payload_json"], {}).get(WORKER_CONTROL_PAYLOAD_KEY)
+                )
+                return TaskControlResult(
+                    True,
+                    "STOP_ALREADY_ACKED",
+                    status=status,
+                    applied=True,
+                    idempotent=True,
+                    worker_control=existing,
+                )
+            if status not in {"running", "pause_requested", "paused"}:
+                return TaskControlResult(False, "TASK_NOT_STOPPABLE", status=status)
+            payload = loads(row["payload_json"], {})
+            next_payload = dict(payload)
+            next_payload[WORKER_CONTROL_PAYLOAD_KEY] = control
+            updated = conn.execute(
+                f"""
+                UPDATE tasks
+                   SET status='stop_requested', payload_json=?, updated_at=?
+                 WHERE id=? AND status=? AND payload_json=?
+                """,
+                (dumps(next_payload), now, task_id, status, row["payload_json"]),
+            )
+            if updated.rowcount != 1:
+                return TaskControlResult(False, "STOP_REQUEST_CAS_CONFLICT")
+        return TaskControlResult(
+            True,
+            "OK",
+            status="stop_requested",
+            applied=True,
+            worker_control=control,
+        )
+
+    def acknowledge_stop_task(
+        self,
+        task_id: int,
+        *,
+        completed_jobs: int | None = None,
+        failed_jobs: int | None = None,
+        detail: str | None = None,
+    ) -> TaskControlResult:
+        now = now_iso()
+        with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT id, status, payload_json FROM tasks WHERE id=?",
+                (task_id,),
+            ).fetchone()
+            if not row:
+                return TaskControlResult(False, "TASK_NOT_FOUND")
+            status = str(row["status"] or "")
+            payload = loads(row["payload_json"], {})
+            if status == "stopped":
+                existing = normalize_worker_control(payload.get(WORKER_CONTROL_PAYLOAD_KEY))
+                return TaskControlResult(
+                    True,
+                    "STOP_ALREADY_ACKED",
+                    status=status,
+                    applied=True,
+                    idempotent=True,
+                    worker_control=existing,
+                )
+            if status != "stop_requested":
+                return TaskControlResult(False, "TASK_NOT_STOP_REQUESTED", status=status)
+            control = build_ack_control(
+                payload.get(WORKER_CONTROL_PAYLOAD_KEY),
+                ack="stopped",
+                acked_at=now,
+                reason_code="WORKER_STOP_ACKED",
+                detail=detail or "worker acked stop; no further products dispatched",
+            )
+            next_payload = dict(payload)
+            next_payload[WORKER_CONTROL_PAYLOAD_KEY] = control
+            next_payload["runner_dispatch"] = self._released_runner_dispatch(
+                payload.get("runner_dispatch"),
+                released_at=now,
+                reason="stop_acked",
+            )
+            updated = conn.execute(
+                """
+                UPDATE tasks
+                   SET status='stopped',
+                       payload_json=?,
+                       completed_jobs=COALESCE(?, completed_jobs),
+                       failed_jobs=COALESCE(?, failed_jobs),
+                       updated_at=?
+                 WHERE id=? AND status='stop_requested' AND payload_json=?
+                """,
+                (
+                    dumps(next_payload),
+                    completed_jobs,
+                    failed_jobs,
+                    now,
+                    task_id,
+                    row["payload_json"],
+                ),
+            )
+            if updated.rowcount != 1:
+                return TaskControlResult(False, "STOP_ACK_CAS_CONFLICT")
+            # Leave remaining pending jobs untouched so operators can audit the queue.
+            conn.execute(
+                """
+                UPDATE jobs
+                   SET current_step_code=COALESCE(current_step_code, 'STOPPED'),
+                       current_step_name=COALESCE(current_step_name, '已停止，未派发'),
+                       updated_at=?
+                 WHERE task_id=? AND status='pending'
+                """,
+                (now, task_id),
+            )
+        return TaskControlResult(
+            True,
+            "OK",
+            status="stopped",
+            applied=True,
+            worker_control=control,
+        )
+
+    def release_task_runner_dispatch(self, task_id: int, *, reason: str) -> bool:
+        now = now_iso()
+        with connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT payload_json FROM tasks WHERE id=?",
+                (task_id,),
+            ).fetchone()
+            if not row:
+                return False
+            payload = loads(row["payload_json"], {})
+            next_payload = dict(payload)
+            next_payload["runner_dispatch"] = self._released_runner_dispatch(
+                payload.get("runner_dispatch"),
+                released_at=now,
+                reason=reason,
+            )
+            updated = conn.execute(
+                """
+                UPDATE tasks
+                   SET payload_json=?, updated_at=?
+                 WHERE id=? AND payload_json=?
+                """,
+                (dumps(next_payload), now, task_id, row["payload_json"]),
+            )
+            return updated.rowcount == 1
+
+    @staticmethod
+    def _released_runner_dispatch(previous: Any, *, released_at: str, reason: str) -> dict[str, Any]:
+        base = dict(previous) if isinstance(previous, dict) else {}
+        return {
+            "schema": "dxm.task-runner-dispatch.v1",
+            "claimed": False,
+            "released_at": released_at,
+            "release_reason": reason,
+            "previous_claimed_at": base.get("claimed_at"),
+        }
+
+    def public_task_worker_control(self, task: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        if not isinstance(task, Mapping):
+            return None
+        payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
+        raw = payload.get(WORKER_CONTROL_PAYLOAD_KEY)
+        if raw is None and str(task.get("status") or "") not in ACTIVE_TASK_STATUSES | {"stopped"}:
+            return None
+        return public_worker_control(raw)
 
     def _public_task_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         public_payload = {

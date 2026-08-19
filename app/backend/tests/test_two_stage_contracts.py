@@ -18,6 +18,7 @@ from src.state_machine.two_stage import (
     build_stage_b_task_facts,
     canonical_claim_target_identity,
     canonical_source_identity,
+    is_supported_product_detail_url,
     compare_authorization_context,
     verify_authorization_context,
     verify_draft_box_proof,
@@ -70,6 +71,33 @@ def test_source_identity_rejects_unsafe_or_invalid_urls(url):
         canonical_source_identity(url)
 
     assert error.value.reason_code == "SOURCE_URL_INVALID"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://mobile.yangkeduo.com/goods.html?goods_id=877361738237",
+        "https://mobile.yangkeduo.com/goods1.html?goods_id=953148740292",
+        "https://mobile.yangkeduo.com/goods2.html?goods_id=893543996663",
+        "https://detail.1688.com/offer/992940612628.html",
+        "https://www.aliexpress.com/item/1005011837878679.html",
+    ],
+)
+def test_supported_product_detail_urls_include_pdd_goods1(url):
+    assert is_supported_product_detail_url(url) is True
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.xiaohongshu.com/goods-detail/6986d3db4937e700017482a8",
+        "https://www.dianxiaomi.com/web/smt/edit?id=1",
+        "https://mobile.yangkeduo.com/goods1.html",
+        "https://item.taobao.com/item.htm?id=1",
+    ],
+)
+def test_unsupported_product_detail_urls_stay_rejected(url):
+    assert is_supported_product_detail_url(url) is False
 
 
 def test_claim_target_identity_supports_hint_only_without_inventing_a_source_url():

@@ -52,6 +52,64 @@ const realPageResponse = {
 }
 
 
+test('confirmed input carries unified target category into the batch contract', () => {
+  const confirmed = buildConfirmedDraftTaskInput(
+    {
+      shopId: '101',
+      productIds: ['1001'],
+      planId: 42,
+      products: [{
+        id: '1001',
+        shop_id: '101',
+        subject: 'Draft one',
+        category_id: '301',
+        dxm_state: 'draft',
+      }],
+      targetCategoryId: '300',
+      targetCategoryName: 'ACG Stand(立牌类谷子)',
+      targetCategoryMatch: 'ACG Stand',
+    },
+    'session-a',
+  )
+  assert.deepEqual(confirmed, {
+    sessionRef: 'session-a',
+    input: {
+      shopId: '101',
+      productIds: ['1001'],
+      planId: 42,
+      targetCategoryId: '300',
+      targetCategoryName: 'ACG Stand(立牌类谷子)',
+      targetCategoryMatch: 'ACG Stand',
+      items: [{
+        productId: '1001',
+        shopId: '101',
+        categoryId: '301',
+        categoryName: null,
+        title: 'Draft one',
+      }],
+    },
+  })
+  assert.equal(confirmed.input.targetCategoryId, '300')
+})
+
+
+test('confirmed input rejects an invalid target category id', () => {
+  assert.throws(
+    () => buildConfirmedDraftTaskInput(
+      {
+        shopId: '101',
+        productIds: ['1001'],
+        planId: 42,
+        targetCategoryId: '0',
+        targetCategoryMatch: 'ACG Stand',
+      },
+      'session-a',
+    ),
+    /target category/,
+  )
+})
+
+
 test('selection keeps stable unique product ids in operator order', () => {
   assert.deepEqual(
     mergeDraftSelection(['1001'], ['1002', '1001', '1003']),
@@ -113,20 +171,20 @@ test('changing visible browser session clears cross-session selection', () => {
 })
 
 
-test('task input requires at least three products and a positive plan id', () => {
-  assert.equal(MIN_DRAFT_SELECTION, 3)
+test('task input requires at least one product and a positive plan id', () => {
+  assert.equal(MIN_DRAFT_SELECTION, 1)
   assert.throws(
     () => buildDraftTaskInput({
       shopId: '101',
-      productIds: ['1001', '1002'],
+      productIds: [],
       planId: 9,
     }),
-    /at least 3/,
+    /at least 1/,
   )
   assert.throws(
     () => buildDraftTaskInput({
       shopId: '101',
-      productIds: ['1001', '1002', '1003'],
+      productIds: ['1001'],
       planId: null,
     }),
     /plan/,
@@ -240,6 +298,10 @@ test('Reader source label exposes API, waiting and failed states', () => {
   assert.equal(readerSourceLabel(null, null), '等待真实 API')
   assert.equal(
     readerSourceLabel(null, '本机 Reader 服务不可用'),
+    '真实 Reader 读取失败',
+  )
+  assert.equal(
+    readerSourceLabel(null, '真实浏览器会话已变化'),
     '真实 Reader 读取失败 · 状态已失效',
   )
 })

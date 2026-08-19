@@ -7,12 +7,23 @@ from src.batch_edit.scope_contract import canonical_sha256
 
 
 FROZEN_EXECUTION_PAYLOAD_SCHEMA = "dxm.batch_draft_save.execution_payload.v1"
+# Runtime-only defaults keys attached by the Runner for Path A template Select
+# writes. They must never participate in the frozen defaults equality contract.
+FROZEN_EXECUTION_RUNTIME_DEFAULT_KEYS = frozenset({"_path_a_fill_context"})
 
 
 class FrozenExecutionContractError(ValueError):
     def __init__(self, reason_code: str, detail: str) -> None:
         self.reason_code = reason_code
         super().__init__(detail)
+
+
+def strip_frozen_execution_runtime_defaults(defaults: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in defaults.items()
+        if key not in FROZEN_EXECUTION_RUNTIME_DEFAULT_KEYS
+    }
 
 
 def compile_frozen_execution_payload(
@@ -42,6 +53,10 @@ def compile_frozen_execution_payload(
         )
     item = matches[0]
     category_id = _non_empty_text(item.get("categoryId"), "categoryId")
+
+    target_category = item.get("target_category")
+    if target_category is not None and not isinstance(target_category, Mapping):
+        _reject("FROZEN_EXECUTION_TARGET_INVALID", "target_category is invalid")
 
     category_schema = item.get("category_schema")
     if not isinstance(category_schema, Mapping):
@@ -174,6 +189,11 @@ def compile_frozen_execution_payload(
         "fields": fields,
         "unresolved_fields": unresolved,
         "price_validation": deepcopy(dict(price_validation)),
+        **(
+            {"target_category": _normalized_target_category(target_category)}
+            if target_category is not None
+            else {}
+        ),
     }
     return {**body, "payload_hash": canonical_sha256(body)}
 
@@ -192,6 +212,27 @@ def frozen_execution_defaults(execution_payload: Mapping[str, Any]) -> dict[str,
         if field_key in defaults or "resolved_value" not in raw_field:
             _reject("FROZEN_EXECUTION_PAYLOAD_INVALID", "execution field is duplicated or empty")
         defaults[field_key] = deepcopy(raw_field["resolved_value"])
+    target_category = execution_payload.get("target_category")
+    if isinstance(target_category, Mapping):
+        current_category_id = _non_empty_text(
+            execution_payload.get("category_id"),
+            "execution payload category_id",
+        )
+        target_category_id = _non_empty_text(
+            target_category.get("category_id"),
+            "target_category.category_id",
+        )
+        if target_category_id == current_category_id:
+            _reject(
+                "FROZEN_EXECUTION_TARGET_INVALID",
+                "target_category must differ from the current category",
+            )
+        category_name = target_category.get("category_name")
+        if category_name not in (None, ""):
+            defaults["category_keyword"] = str(category_name)
+        category_match = target_category.get("category_match")
+        if category_match not in (None, ""):
+            defaults["category_match"] = str(category_match)
     defaults["_frozen_execution_payload"] = deepcopy(dict(execution_payload))
     defaults["_frozen_execution_payload_hash"] = _sha256_text(
         execution_payload.get("payload_hash"),
@@ -229,7 +270,7 @@ def validate_frozen_execution_defaults(
     ) != payload_hash:
         _reject("FROZEN_EXECUTION_PAYLOAD_DRIFT", "defaults payload hash does not match")
     canonical_defaults = frozen_execution_defaults(execution_payload)
-    if dict(defaults) != canonical_defaults:
+    if strip_frozen_execution_runtime_defaults(dict(defaults)) != canonical_defaults:
         _reject(
             "FROZEN_EXECUTION_DEFAULTS_DRIFT",
             "execution defaults differ from the embedded resolved fields",
@@ -240,6 +281,19 @@ def validate_frozen_execution_defaults(
             "execution payload differs from the current frozen item snapshot",
         )
     return deepcopy(dict(execution_payload))
+
+
+def _normalized_target_category(value: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = {
+        "category_id": _positive_id_text(value.get("category_id"), "target_category.category_id"),
+    }
+    category_name = value.get("category_name")
+    if category_name not in (None, ""):
+        normalized["category_name"] = _non_empty_text(category_name, "target_category.category_name")
+    category_match = value.get("category_match")
+    if category_match not in (None, ""):
+        normalized["category_match"] = _non_empty_text(category_match, "target_category.category_match")
+    return normalized
 
 
 def _positive_id_text(value: Any, label: str) -> str:

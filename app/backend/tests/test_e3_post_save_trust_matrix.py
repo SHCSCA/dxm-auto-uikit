@@ -69,6 +69,9 @@ class _VerifyProbeAdapter:
     def browser_session_id(self) -> str:
         return "e3-test-browser-session"
 
+    def refresh_account_context_hash(self) -> str:
+        return "A" * 64
+
     def current_mutation_identity(self) -> dict:
         return {
             "browser_session_id": self.browser_session_id(),
@@ -238,6 +241,7 @@ def _prepare_dispatched_save(tmp_path, monkeypatch) -> _PostSaveHarness:
             worktree_identity=worktree_identity,
             l2_status="passed",
             l2_evidence_fingerprint="9" * 64,
+            account_ref_hash="A" * 64,
         )
 
     ledger = MutationDispatchLedger(
@@ -335,6 +339,7 @@ def _prepare_runtime_save(tmp_path, monkeypatch, adapter):
             worktree_identity=_worktree_identity(git_head, "runner-context"),
             l2_status="passed",
             l2_evidence_fingerprint="9" * 64,
+            account_ref_hash="A" * 64,
         ),
     )
     runtime = BrowserAgentRuntime(adapter, mutation_ledger=ledger)

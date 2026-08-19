@@ -15,6 +15,7 @@ from src.execution.browser_agent_protocol import (
     MutationCommandContractError,
     build_frozen_product_target_identity,
 )
+from src.execution.account_identity import account_context_hash
 from src.services.dxm_draft_reader import DxmDraftReader
 
 
@@ -116,6 +117,9 @@ class DxmPlanReader:
         shop_id: str,
         product_ids: list[str],
         expected_session_ref: str,
+        target_category_id: str | None = None,
+        target_category_name: str | None = None,
+        target_category_match: str | None = None,
     ) -> dict[str, Any]:
         normalized_shop_id = _positive_id_text(shop_id, "shop_id")
         if (
@@ -127,6 +131,28 @@ class DxmPlanReader:
                 "LOCAL_PLAN_NOT_FOUND",
                 "local_plan_template_id 必须是正整数。",
             )
+        normalized_target_category_id: str | None = None
+        if target_category_id not in (None, ""):
+            normalized_target_category_id = _positive_id_text(
+                target_category_id,
+                "target_category_id",
+            )
+        normalized_target_category_name: str | None = None
+        if target_category_name not in (None, ""):
+            normalized_target_category_name = str(target_category_name).strip()
+            if not 1 <= len(normalized_target_category_name) <= 120:
+                raise DxmPlanReaderError(
+                    "PLAN_TARGET_CATEGORY_NAME_INVALID",
+                    "target_category_name 长度必须为 1–120 个字符。",
+                )
+        normalized_target_category_match: str | None = None
+        if target_category_match not in (None, ""):
+            normalized_target_category_match = str(target_category_match).strip()
+            if not 1 <= len(normalized_target_category_match) <= 200:
+                raise DxmPlanReaderError(
+                    "PLAN_TARGET_CATEGORY_MATCH_INVALID",
+                    "target_category_match 长度必须为 1–200 个字符。",
+                )
         if (
             not isinstance(expected_session_ref, str)
             or re.fullmatch(r"[0-9a-f]{16}", expected_session_ref) is None
@@ -135,10 +161,10 @@ class DxmPlanReader:
                 "DXM_PLAN_SESSION_REF_INVALID",
                 "快照请求缺少当次 Reader 的 session_ref。",
             )
-        if not isinstance(product_ids, list) or not 3 <= len(product_ids) <= 100:
+        if not isinstance(product_ids, list) or not 1 <= len(product_ids) <= 100:
             raise DxmPlanReaderError(
                 "PLAN_ITEM_COUNT_INVALID",
-                "plan_snapshot 必须绑定 3–100 件当次草稿。",
+                "plan_snapshot 必须绑定 1–100 件当次草稿。",
             )
         normalized_product_ids = [
             _positive_id_text(value, "product_id")
@@ -275,6 +301,11 @@ class DxmPlanReader:
         category_ids = list(
             dict.fromkeys(str(item["category_id"]) for item in ordered_products)
         )
+        if (
+            normalized_target_category_id is not None
+            and normalized_target_category_id not in category_ids
+        ):
+            category_ids.append(normalized_target_category_id)
         scope = self.read_scope(
             shop_id=normalized_shop_id,
             category_ids=category_ids,
@@ -295,6 +326,14 @@ class DxmPlanReader:
                 "CATEGORY_SCHEMA_INVALID",
                 "E2 Reader 返回的类目 Schema 作用域不完整或越界。",
             )
+        target_schema: Any = None
+        if normalized_target_category_id is not None:
+            target_schema = raw_schemas[normalized_target_category_id]
+            if not isinstance(target_schema, dict):
+                raise DxmPlanReaderError(
+                    "CATEGORY_SCHEMA_INVALID",
+                    f"目标类目 {normalized_target_category_id} 的 Schema 不是对象。",
+                )
         items = []
         for product in ordered_products:
             category_id = str(product["category_id"])
@@ -350,6 +389,24 @@ class DxmPlanReader:
                     "shop_id": normalized_shop_id,
                     "shop_name": store_name,
                 },
+                **(
+                    {
+                        "target_category_id": normalized_target_category_id,
+                        "target_category_schema": target_schema,
+                        "expected_target_schema_hash": canonical_sha256(target_schema),
+                        **(
+                            {
+                                "target_category_name": normalized_target_category_name,
+                                "target_category_match": normalized_target_category_match,
+                            }
+                            if normalized_target_category_name is not None
+                            or normalized_target_category_match is not None
+                            else {}
+                        ),
+                    }
+                    if normalized_target_category_id is not None
+                    else {}
+                ),
             },
             "template_records": scope["template_records"],
             "category_ids": category_ids,
@@ -358,9 +415,7 @@ class DxmPlanReader:
 
     @staticmethod
     def _account_context_hash(account_ref: str) -> str:
-        return hashlib.sha256(
-            f"dxm-e2-account-context:{account_ref}".encode("utf-8")
-        ).hexdigest().upper()
+        return account_context_hash(account_ref)
 
     @staticmethod
     def _validated_product_detail(
@@ -446,29 +501,60 @@ class DxmPlanReader:
                     "DXM_PRODUCT_DETAIL_RESPONSE_INVALID",
                     "编辑页类目属性不是数组。",
                 )
-            for raw_attribute in raw_attributes:
+            for property_index, raw_attribute in enumerate(raw_attributes):
                 if not isinstance(raw_attribute, Mapping):
                     raise DxmPlanReaderError(
                         "DXM_PRODUCT_DETAIL_RESPONSE_INVALID",
                         "编辑页类目属性中存在无效对象。",
                     )
                 raw_attr_name_id = raw_attribute.get("attrNameId")
+                value_id_wire_shape = _attr_value_id_wire_shape(raw_attribute)
                 raw_value_id = raw_attribute.get("attrValueId")
-                value_id_is_unselected = (
-                    type(raw_value_id) is int and raw_value_id == 0
-                ) or (
-                    type(raw_value_id) is str and raw_value_id.strip() == "0"
-                )
-                if raw_value_id not in (None, "") and not value_id_is_unselected:
+                if value_id_wire_shape == "stable_positive":
                     raw_value = _positive_id_text(
                         raw_value_id,
                         "detail attrValueId",
                     )
-                else:
+                elif value_id_wire_shape in {
+                    "missing",
+                    "empty",
+                    "zero_sentinel",
+                    "negative_one_sentinel",
+                }:
                     raw_value = (
                         raw_attribute.get("attrValue")
                         or raw_attribute.get("attrValueName")
                         or raw_attribute.get("customValue")
+                    )
+                    if value_id_wire_shape == "negative_one_sentinel":
+                        attr_name_id = _positive_id_text(
+                            raw_attr_name_id,
+                            "detail attrNameId for custom-value sentinel",
+                        )
+                        if f"attr_{attr_name_id}" not in properties:
+                            raise DxmPlanReaderError(
+                                "DXM_PLAN_IDENTITY_INVALID",
+                                (
+                                    "编辑页 -1 自定义值哨兵未绑定当前类目 Schema："
+                                    f"property_index={property_index}。"
+                                ),
+                            )
+                        if raw_value in (None, ""):
+                            raise DxmPlanReaderError(
+                                "DXM_PRODUCT_DETAIL_RESPONSE_INVALID",
+                                (
+                                    "编辑页 -1 自定义值哨兵缺少自然语言值："
+                                    f"property_index={property_index}。"
+                                ),
+                            )
+                else:
+                    raise DxmPlanReaderError(
+                        "DXM_PLAN_IDENTITY_INVALID",
+                        (
+                            "编辑页 attrValueId 非法："
+                            f"property_index={property_index} "
+                            f"wire_shape={value_id_wire_shape}。"
+                        ),
                     )
                 if raw_value in (None, ""):
                     continue
@@ -774,6 +860,46 @@ def _positive_id_text(value: Any, label: str) -> str:
             f"{label} 不是稳定正整数身份。",
         )
     return text
+
+
+def _attr_value_id_wire_shape(attribute: Mapping[str, Any]) -> str:
+    if "attrValueId" not in attribute:
+        return "missing"
+    value = attribute["attrValueId"]
+    if value is None or (type(value) is str and value == ""):
+        return "empty"
+    if type(value) is bool:
+        return "boolean"
+    if type(value) is int:
+        if value == -1:
+            return "negative_one_sentinel"
+        if value == 0:
+            return "zero_sentinel"
+        return "stable_positive" if value > 0 else "negative"
+    if type(value) is float:
+        if value == 0:
+            return "float_zero"
+        if value > 0:
+            return "float_positive"
+        if value < 0:
+            return "negative"
+        return "text"
+    if type(value) is str:
+        if value == "-1":
+            return "negative_one_sentinel"
+        if value == "0":
+            return "zero_sentinel"
+        if re.fullmatch(r"[1-9][0-9]*", value) is not None:
+            return "stable_positive"
+        stripped = value.strip()
+        if value != stripped and re.fullmatch(r"[+-]?[0-9]+", stripped):
+            return "whitespace_numeric"
+        if re.fullmatch(r"-[0-9]+", value) is not None:
+            return "negative"
+        return "text"
+    if isinstance(value, (Mapping, list, tuple, set, frozenset)):
+        return "container"
+    return "text"
 
 
 def _normalized_text(value: Any, label: str) -> str:

@@ -861,6 +861,86 @@ def test_login_start_and_continue_are_dispatched_on_same_thread(monkeypatch):
     assert flow.calls[0][1] == flow.calls[1][1]
 
 
+def test_login_and_reader_operations_use_the_browser_agent_session_facade(monkeypatch):
+    class SessionFacade:
+        def __init__(self):
+            self.calls: list[str] = []
+
+        def run_session_operation(self, callback, *args, **kwargs):
+            self.calls.append(callback.__name__)
+            return callback(*args, **kwargs)
+
+    class Flow(DummyLoginFlow):
+        def get_live_state(self):
+            return {
+                'ok': True,
+                'stage': 'login_success',
+                'reason_code': 'LOGIN_READER_READY',
+                'logged_in': True,
+                'reader_ready': True,
+            }
+
+    facade = SessionFacade()
+    flow = Flow()
+    monkeypatch.setattr(main_module, 'browser_agent_runtime', facade)
+    monkeypatch.setattr(main_module, 'login_flow', flow)
+    monkeypatch.setattr(main_module, '_assert_batch_browser_available', lambda: None)
+
+    login_result = main_module.dxm_login_start(LoginStartRequest(username='u', password='p'))
+    live_result = main_module.dxm_live_status()
+
+    assert login_result['stage'] == 'waiting_captcha'
+    assert live_result['reason_code'] == 'LOGIN_READER_READY'
+    assert facade.calls == ['start_login', 'get_live_state']
+
+
+def test_failed_login_discards_a_closed_non_null_browser_session(tmp_path):
+    class ClosedPage:
+        url = 'about:blank'
+
+        def is_closed(self):
+            return True
+
+    class ClosedContext:
+        def is_closed(self):
+            return True
+
+        def close(self):
+            return None
+
+    class ClosedBrowser:
+        def is_connected(self):
+            return False
+
+        def close(self):
+            return None
+
+    class StoppedPlaywright:
+        def __init__(self):
+            self.stopped = False
+
+        def stop(self):
+            self.stopped = True
+
+    flow = DxmLoginFlow(DummyLiveClient(), state_file=tmp_path / 'login-state.json')
+    playwright = StoppedPlaywright()
+    flow._page = ClosedPage()
+    flow._context = ClosedContext()
+    flow._browser = ClosedBrowser()
+    flow._playwright = playwright
+    flow._browser_session_thread_id = threading.get_ident()
+    flow._browser_session_generation = 'stale-generation'
+
+    assert flow._discard_incomplete_browser_session() is True
+    assert flow._page is None
+    assert flow._context is None
+    assert flow._browser is None
+    assert flow._playwright is None
+    assert flow._browser_session_thread_id is None
+    assert flow._browser_session_generation is None
+    assert playwright.stopped is True
+
+
 def test_live_status_uses_the_same_visible_playwright_session_as_login_and_reader(monkeypatch):
     class VisibleSessionFlow(DummyLoginFlow):
         def __init__(self):
@@ -1444,6 +1524,402 @@ def test_capture_draft_box_scope_rejects_unproven_product_source_and_store_ident
     assert result['reason_code'] == expected_reason
     assert result['items'] == []
     assert result['zero_write_proof']['mutation_dispatch_attempted'] is False
+
+
+_REAL_DXM_DRAFT_BOX_HTML = '''
+<html>
+  <head>
+    <title>店小秘--速卖通产品</title>
+    <style>
+      table, input, button, a { display: block; width: 240px; height: 28px; }
+      tr, td, th { display: table-row; width: 300px; height: 30px; }
+    </style>
+  </head>
+  <body>
+    <div>店铺账号: 全部 Dang Kang Bai Ze</div>
+    <div>搜索类型 标题 商品编码</div>
+    <input name="tableSearchInput" placeholder="搜索内容" />
+    <button>搜索</button>
+    <table>
+      <thead>
+        <tr>
+          <th>图片</th>
+          <th>标题/产品ID</th>
+          <th>分组</th>
+          <th>价格</th>
+          <th>库存</th>
+          <th>运费模板</th>
+          <th>时间</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="vxe-body--row" rowid="130658340712223024">
+          <td>图</td>
+          <td>
+            <a href="https://detail.1688.com/offer/916629722545.html">1688</a>
+            Acrylic Standee Anime Peripheral 备注:AI处理 「Dang Kang」
+          </td>
+          <td>未分组</td>
+          <td>「零 9.81 - 12.80 CNY」</td>
+          <td>100</td>
+          <td>300g普货包裹</td>
+          <td>创建： 2026-08-13</td>
+          <td>
+            <a href="https://www.dianxiaomi.com/web/smt/edit?id=130658340712223024">编辑</a>
+            <button>更多</button>
+          </td>
+        </tr>
+        <tr class="vxe-body--row" rowid="130658341178856048">
+          <td>图</td>
+          <td>
+            <a href="https://detail.1688.com/offer/1013604102950.html">1688</a>
+            Other Product 「Bai Ze」
+          </td>
+          <td>未分组</td>
+          <td>「零 1.00 CNY」</td>
+          <td>1</td>
+          <td>40g</td>
+          <td>创建： 2026-08-12</td>
+          <td>
+            <a href="https://www.dianxiaomi.com/web/smt/edit?id=130658341178856048">编辑</a>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </body>
+</html>
+'''
+
+
+def _open_offline_draft_box_page(html: str):
+    playwright = sync_playwright().start()
+    browser = playwright.chromium.launch(headless=True)
+    context = browser.new_context(viewport={'width': 1280, 'height': 800})
+    context.route(
+        '**/*',
+        lambda route: route.fulfill(
+            status=200,
+            headers={'Content-Type': 'text/html; charset=utf-8'},
+            body=html,
+        ),
+    )
+    page = context.new_page()
+    page.goto(WORKFLOW_TARGETS['draft_box']['url'])
+    return playwright, browser, context, page
+
+
+def test_frozen_draft_row_matches_real_dxm_title_cell_store_and_1688_badge(monkeypatch, tmp_path):
+    playwright, browser, context, page = _open_offline_draft_box_page(_REAL_DXM_DRAFT_BOX_HTML)
+    try:
+        flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+        flow._browser = browser
+        flow._context = context
+        flow._page = page
+        flow._browser_session_thread_id = threading.get_ident()
+        flow._bind_browser_context_generation(context)
+        monkeypatch.setattr(flow, '_is_headless', lambda: False)
+
+        target = _frozen_product_target(
+            '130658340712223024',
+            store_name='Dang Kang',
+            source_url='https://detail.1688.com/offer/916629722545.html',
+        )
+        row = flow._find_draft_box_row(
+            page,
+            store_name='Dang Kang',
+            target_source_urls=list(target['source_urls']),
+            target_identity=target,
+        )
+    finally:
+        context.close()
+        browser.close()
+        playwright.stop()
+
+    assert row['product_identity_match'] is True
+    assert row['store_identity_match'] is True
+    assert row['source_identity_match'] is True
+    assert row['actions'][0]['txt'] == '编辑'
+    assert '130658340712223024' in str(row['actions'][0].get('href') or '')
+
+
+def test_frozen_draft_row_rejects_quoted_price_cell_as_store(monkeypatch, tmp_path):
+    playwright, browser, context, page = _open_offline_draft_box_page(_REAL_DXM_DRAFT_BOX_HTML)
+    try:
+        flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+        flow._browser = browser
+        flow._context = context
+        flow._page = page
+        flow._browser_session_thread_id = threading.get_ident()
+        flow._bind_browser_context_generation(context)
+        monkeypatch.setattr(flow, '_is_headless', lambda: False)
+
+        target = _frozen_product_target(
+            '130658340712223024',
+            store_name='Bai Ze',
+            source_url='https://detail.1688.com/offer/916629722545.html',
+        )
+        with pytest.raises(FrozenTargetIdentityError) as exc_info:
+            flow._find_draft_box_row(
+                page,
+                store_name='Bai Ze',
+                target_source_urls=list(target['source_urls']),
+                target_identity=target,
+            )
+    finally:
+        context.close()
+        browser.close()
+        playwright.stop()
+
+    assert exc_info.value.reason_code == 'FROZEN_TARGET_ROW_NOT_FOUND'
+
+
+def test_draft_box_search_queries_prefer_source_offer_id_over_internal_product_id(tmp_path):
+    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+    target = _frozen_product_target(
+        '130658340712223024',
+        store_name='Dang Kang',
+        source_url='https://detail.1688.com/offer/916629722545.html',
+    )
+
+    assert flow._draft_box_search_queries(target) == [
+        '916629722545',
+        '130658340712223024',
+    ]
+
+
+def test_perform_draft_box_edit_continues_after_search_miss(monkeypatch, tmp_path):
+    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+    page = type('Page', (), {'url': 'https://www.dianxiaomi.com/web/smt/smtProductList/draft?status=0', 'title': lambda self: '店小秘编辑页'})()
+    opened: dict[str, bool] = {}
+    target = _frozen_product_target(
+        '130658340712223024',
+        store_name='Dang Kang',
+        source_url='https://detail.1688.com/offer/916629722545.html',
+    )
+
+    def missing_row(*_args, **_kwargs):
+        raise FrozenTargetIdentityError(
+            'FROZEN_TARGET_ROW_NOT_FOUND',
+            '商品箱中未找到与冻结身份和店铺完全一致的唯一商品行。',
+        )
+
+    monkeypatch.setattr(flow, '_ensure_page_with_cookies', lambda: page)
+    monkeypatch.setattr(flow, '_find_open_editor_page_for_target', lambda **_kwargs: None)
+    monkeypatch.setattr(flow, '_is_headless', lambda: True)
+    monkeypatch.setattr(flow, '_goto_with_live_hud', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(flow, '_wait_for_page_ready', lambda *_args, **_kwargs: {'ready': True})
+    monkeypatch.setattr(flow, '_dismiss_blocking_modals', lambda *_args, **_kwargs: None)
+    searches: list[str] = []
+    monkeypatch.setattr(flow, '_search_draft_box', lambda *_args, **_kwargs: searches.append('searched'))
+    monkeypatch.setattr(flow, '_find_draft_box_row', missing_row)
+
+    def fake_open(_page, **_kwargs):
+        opened['called'] = True
+        _page.url = 'https://www.dianxiaomi.com/web/smt/edit?id=130658340712223024'
+        return _page
+
+    monkeypatch.setattr(flow, '_open_editor_from_draft_box', fake_open)
+    monkeypatch.setattr(flow, '_capture_optional_workflow_screenshot', lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(flow, '_extract_editor_page_meta', lambda *_args, **_kwargs: {
+        'sections': [],
+        'top_actions': [],
+        'fields': [],
+    })
+    monkeypatch.setattr(flow, '_verify_opened_editor_target', lambda *_args, **_kwargs: {
+        'product_identity_match': True,
+        'store_identity_match': True,
+        'store_match': True,
+        'source_identity_match': True,
+        'target_identity': target,
+        'target_identity_sha256': 'A' * 64,
+    })
+
+    result = flow._perform_draft_box_action(
+        'edit',
+        product_query='130658340712223024',
+        store_name='Dang Kang',
+        target_source_urls=list(target['source_urls']),
+        target_identity=target,
+    )
+
+    assert searches == []
+    assert opened.get('called') is True
+    assert result['ok'] is True
+    assert '/web/smt/edit?id=130658340712223024' in result['page_url']
+
+
+_REAL_DXM_EDITOR_HTML = '''
+<html>
+  <head><title>店小秘--编辑速卖通产品</title>
+    <style>
+      input, button, select { display: block; width: 360px; height: 32px; }
+    </style>
+  </head>
+  <body>
+    <div>店铺名称 Dang Kang</div>
+    <input value="绝区零游戏周边艾莲乔cos道具服武器鲨鱼妹剪刀可开合未开刃模型" />
+    <input value="切割刀模(Cutting Dies)" />
+    <button>一键翻译</button>
+    <button>存为模板</button>
+    <button>保存并移入待发布</button>
+    <button>保存</button>
+    <button>发布</button>
+    <div class="ant-spin ant-spin-spinning" style="width:80px;height:80px;">加载中</div>
+    <div class="ant-modal-mask" style="width:100px;height:100px;"></div>
+  </body>
+</html>
+'''
+
+
+def test_editor_frozen_identity_accepts_unlabeled_1688_and_repeated_store(monkeypatch, tmp_path):
+    html = '''
+    <html>
+      <head><title>店小秘--编辑速卖通产品</title>
+        <style>input, button, div { display:block; width:360px; height:32px; }</style>
+      </head>
+      <body>
+        <label>店铺名称</label>
+        <div class="ant-select-selection-item">Dang Kang</div>
+        <div>店铺名称 Dang Kang</div>
+        <input value="https://detail.1688.com/offer/916629722545.html?spm=a.b" />
+        <input value="Acrylic Standee Anime Peripheral" />
+        <button>保存</button>
+      </body>
+    </html>
+    '''
+    playwright, browser, context, page = _open_offline_draft_box_page(html)
+    try:
+        page.goto('https://www.dianxiaomi.com/web/smt/edit?id=130658340712223024')
+        flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+        flow._browser = browser
+        flow._context = context
+        flow._page = page
+        flow._browser_session_thread_id = threading.get_ident()
+        flow._bind_browser_context_generation(context)
+        monkeypatch.setattr(flow, '_is_headless', lambda: False)
+        target = _frozen_product_target(
+            '130658340712223024',
+            store_name='Dang Kang',
+            source_url='https://detail.1688.com/offer/916629722545.html',
+        )
+        match = flow._editor_page_matches_frozen_target(
+            page,
+            target_identity=target,
+            store_name='Dang Kang',
+        )
+    finally:
+        context.close()
+        browser.close()
+        playwright.stop()
+
+    assert match['ok'] is True
+    assert match['product_identity_match'] is True
+    assert match['store_identity_match'] is True
+
+
+def test_visible_editor_ready_without_legacy_section_headings(monkeypatch, tmp_path):
+    playwright, browser, context, page = _open_offline_draft_box_page(_REAL_DXM_EDITOR_HTML)
+    try:
+        page.goto('https://www.dianxiaomi.com/web/smt/edit?id=130658340712223024')
+        flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+        flow._browser = browser
+        flow._context = context
+        flow._page = page
+        flow._browser_session_thread_id = threading.get_ident()
+        flow._bind_browser_context_generation(context)
+        monkeypatch.setattr(flow, '_is_headless', lambda: False)
+
+        state = flow._visible_editor_ready_state(page, product_query='130658340712223024')
+    finally:
+        context.close()
+        browser.close()
+        playwright.stop()
+
+    assert state['ready'] is True
+    assert state['title_missing'] is False
+    assert state['has_editor_signals'] is True
+    cleared = flow._clear_visible_editor_loading_overlays(page, context='test')
+    assert cleared.get('cleared') is True
+
+
+def test_open_frozen_editor_falls_back_to_edit_url_when_virtual_row_missing(monkeypatch, tmp_path):
+    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+    opened: dict[str, str] = {}
+
+    class DummyEditorPage:
+        url = 'https://www.dianxiaomi.com/web/smt/smtProductList/draft?status=0'
+
+        def goto(self, url, **_kwargs):
+            opened['url'] = url
+            self.url = url
+
+        def wait_for_url(self, *_args, **_kwargs):
+            if opened.get('url'):
+                self.url = opened['url']
+
+        def wait_for_timeout(self, *_args, **_kwargs):
+            return None
+
+    page = DummyEditorPage()
+    target = _frozen_product_target(
+        '130658340712223024',
+        store_name='Dang Kang',
+        source_url='https://detail.1688.com/offer/916629722545.html',
+    )
+
+    def missing_row(*_args, **_kwargs):
+        raise FrozenTargetIdentityError(
+            'FROZEN_TARGET_ROW_NOT_FOUND',
+            '商品箱中未找到与冻结身份和店铺完全一致的唯一商品行。',
+        )
+
+    def fake_goto(_page, url, **_kwargs):
+        opened['url'] = url
+        _page.url = url
+
+    monkeypatch.setattr(flow, '_find_draft_box_row', missing_row)
+    monkeypatch.setattr(flow, '_goto_with_live_hud', fake_goto)
+    monkeypatch.setattr(flow, '_clear_visible_editor_loading_overlays', lambda *_args, **_kwargs: {'cleared': True})
+    monkeypatch.setattr(flow, '_reapply_live_hud_if_available', lambda *_args, **_kwargs: None)
+
+    result = flow._open_frozen_target_editor_from_draft_box(
+        page,
+        row_info=None,
+        target_identity=target,
+        store_name='Dang Kang',
+    )
+
+    assert result is page
+    assert opened['url'] == 'https://www.dianxiaomi.com/web/smt/edit?id=130658340712223024'
+    assert page.url == opened['url']
+
+
+def test_perform_draft_box_action_preserves_frozen_target_reason_code(tmp_path):
+    flow = DxmLoginFlow(DummyLiveClient(logged_in=True), state_file=tmp_path / 'runtime.json')
+
+    def boom(*_args, **_kwargs):
+        raise FrozenTargetIdentityError(
+            'FROZEN_TARGET_ROW_NOT_FOUND',
+            '商品箱中未找到与冻结身份和店铺完全一致的唯一商品行。',
+        )
+
+    flow._perform_draft_box_action = boom
+    result = flow.perform_draft_box_action(
+        'edit',
+        product_query='130658340712223024',
+        store_name='Dang Kang',
+        target_identity=_frozen_product_target(
+            '130658340712223024',
+            store_name='Dang Kang',
+            source_url='https://detail.1688.com/offer/916629722545.html',
+        ),
+    )
+
+    assert result['ok'] is False
+    assert result['reason_code'] == 'FROZEN_TARGET_ROW_NOT_FOUND'
+    assert result['logged_in'] is True
+    assert 'DXM_SESSION_ERROR' not in str(result.get('reason_code') or '')
 
 
 def test_capture_draft_box_scope_distinguishes_expired_login_without_dom_scan(tmp_path):
@@ -4339,6 +4815,13 @@ def test_dxm_login_flow_draft_box_action_failure_keeps_visible_browser_for_recov
     flow = DxmLoginFlow(live_client, state_file=tmp_path / 'runtime.json')
     close_calls = []
 
+    class DummyVisiblePage:
+        url = 'https://www.dianxiaomi.com/web/smt/smtProductList/draft?status=0'
+
+        def is_closed(self):
+            return False
+
+    flow._page = DummyVisiblePage()
     monkeypatch.setattr(flow, '_perform_draft_box_action', lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('target row missing')))
     monkeypatch.setattr(flow, '_close_browser_session', lambda: close_calls.append('closed'))
     monkeypatch.setattr(flow, '_is_headless', lambda: False)

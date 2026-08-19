@@ -8,6 +8,8 @@ TYPES_TS = FRONTEND_SRC / "types.ts"
 TEMPLATE_CENTER_TSX = FRONTEND_SRC / "components" / "workbench" / "TemplateCenterPage.tsx"
 LOCAL_PLAN_TSX = FRONTEND_SRC / "components" / "workbench" / "LocalPlanWorkspace.tsx"
 SNAPSHOT_TSX = FRONTEND_SRC / "components" / "workbench" / "BatchSavePlaceholderPage.tsx"
+BATCH_APPROVAL_TS = FRONTEND_SRC / "batchApproval.ts"
+SCHEMA_VALUE_EDITOR_TS = FRONTEND_SRC / "schemaValueEditor.ts"
 DRAFT_SELECTION_TSX = FRONTEND_SRC / "components" / "workbench" / "DraftSelectionPage.tsx"
 
 
@@ -34,7 +36,9 @@ def test_e2_ui_keeps_local_plan_and_dxm_ref_models_visibly_separate():
     assert 'className="e2-schema-field"' in workspace
     assert "reviewed:${fieldKey}" not in workspace
     assert "definition.ui_binding" in workspace
-    assert "item.names?.zh" in workspace
+    schema_editor = SCHEMA_VALUE_EDITOR_TS.read_text(encoding="utf-8")
+    assert "item.names?.zh" in schema_editor
+    assert "resolveSchemaChoiceOptions" in workspace
     assert "price_policy?:" in types
     assert "价格关系已冻结" in workspace
     assert "商品价与 SKU 售价须在最低/最高价范围内" not in workspace
@@ -58,9 +62,10 @@ def test_e2_ui_keeps_local_plan_and_dxm_ref_models_visibly_separate():
     assert "loadOrFallback<DxmTemplateRef[]>('/api/dxm-template-refs'" in app
 
 
-def test_e2_ui_carries_per_item_category_and_only_freezes_draft_task():
+def test_e2_ui_carries_per_item_category_and_freezes_before_atomic_batch_approval():
     draft_selection = DRAFT_SELECTION_TSX.read_text(encoding="utf-8")
     snapshot = SNAPSHOT_TSX.read_text(encoding="utf-8")
+    approval = BATCH_APPROVAL_TS.read_text(encoding="utf-8")
 
     assert "products: selectedIds" in draft_selection
     assert "e2LocalPlans?.filter((plan) => plan.is_active)" in draft_selection
@@ -70,7 +75,12 @@ def test_e2_ui_carries_per_item_category_and_only_freezes_draft_task():
     assert "/api/plan-snapshots/${snapshot.id}/tasks" not in snapshot
     assert "/api/tasks/${snapshot.task_id}" in snapshot
     assert "idempotency_key:" in snapshot
-    assert "/start" not in snapshot
+    assert "/manual-approval" not in snapshot
+    assert "postJson(request.path, request.body)" in snapshot
+    assert "CONFIRM_DXM_SAVE_ONLY" in approval
+    assert "`/api/tasks/${input.taskId}/approve-and-start`" in approval
+    assert "method: 'GET'" in approval
+    assert "`/api/tasks/${input.taskId}`" in approval
     assert "冻结为 draft 任务（不启动）" in snapshot
     assert "session_ref: taskInput.sessionRef" in snapshot
     assert "product_ids: taskInput.input.productIds" in snapshot
@@ -83,5 +93,16 @@ def test_e2_ui_carries_per_item_category_and_only_freezes_draft_task():
     assert "<textarea" not in snapshot
     assert "canonicalSha256" not in snapshot
     assert "后端重新读取当前 draft、模板与类目 Schema" in snapshot
-    assert "保存或发布" in snapshot
+    assert "冻结前保持零写" in snapshot
+    assert "发布始终不允许" in snapshot
     assert "发布允许" in snapshot
+
+
+def test_legacy_manual_approval_start_path_routes_batch_tasks_to_atomic_review():
+    app = APP_TSX.read_text(encoding="utf-8")
+
+    batch_guard = app.index("if (taskToStart.mode === 'batch_draft_save')")
+    legacy_manual_approval = app.index("/manual-approval", batch_guard)
+    assert batch_guard < legacy_manual_approval
+    assert "不能使用旧 manual-approval/start" in app[batch_guard:legacy_manual_approval]
+    assert "setActiveSection('start_save')" in app[batch_guard:legacy_manual_approval]

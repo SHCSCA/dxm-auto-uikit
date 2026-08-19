@@ -501,6 +501,11 @@ def init_db() -> None:
                 ON edit_batch_items (mutation_scope_id)
                 WHERE mutation_scope_id IS NOT NULL;
 
+            DROP TRIGGER IF EXISTS trg_tasks_single_running_browser_update;
+            DROP TRIGGER IF EXISTS trg_tasks_single_running_browser_insert;
+            DROP TRIGGER IF EXISTS trg_edit_batches_single_browser_update;
+            DROP TRIGGER IF EXISTS trg_edit_batches_single_browser_insert;
+
             CREATE TRIGGER IF NOT EXISTS trg_tasks_single_running_browser_update
             BEFORE UPDATE OF status ON tasks
             WHEN NEW.status='running' AND OLD.status<>'running'
@@ -508,7 +513,8 @@ def init_db() -> None:
                 SELECT RAISE(ABORT, 'AUTH_ANOTHER_TASK_ACTIVE')
                  WHERE EXISTS (
                     SELECT 1 FROM tasks
-                     WHERE status='running' AND id<>NEW.id
+                     WHERE status IN ('running', 'pause_requested', 'stop_requested', 'paused')
+                       AND id<>NEW.id
                  );
                 SELECT RAISE(ABORT, 'AUTH_EDIT_BATCH_ACTIVE')
                  WHERE EXISTS (
@@ -522,7 +528,10 @@ def init_db() -> None:
             WHEN NEW.status='running'
             BEGIN
                 SELECT RAISE(ABORT, 'AUTH_ANOTHER_TASK_ACTIVE')
-                 WHERE EXISTS (SELECT 1 FROM tasks WHERE status='running');
+                 WHERE EXISTS (
+                    SELECT 1 FROM tasks
+                     WHERE status IN ('running', 'pause_requested', 'stop_requested', 'paused')
+                 );
                 SELECT RAISE(ABORT, 'AUTH_EDIT_BATCH_ACTIVE')
                  WHERE EXISTS (
                     SELECT 1 FROM edit_batches
@@ -536,7 +545,10 @@ def init_db() -> None:
              AND OLD.status NOT IN ('running', 'stop_requested')
             BEGIN
                 SELECT RAISE(ABORT, 'LEGACY_TASK_ACTIVE')
-                 WHERE EXISTS (SELECT 1 FROM tasks WHERE status='running');
+                 WHERE EXISTS (
+                    SELECT 1 FROM tasks
+                     WHERE status IN ('running', 'pause_requested', 'stop_requested', 'paused')
+                 );
             END;
 
             CREATE TRIGGER IF NOT EXISTS trg_edit_batches_single_browser_insert
@@ -544,8 +556,53 @@ def init_db() -> None:
             WHEN NEW.status IN ('running', 'stop_requested')
             BEGIN
                 SELECT RAISE(ABORT, 'LEGACY_TASK_ACTIVE')
-                 WHERE EXISTS (SELECT 1 FROM tasks WHERE status='running');
-            END;
+                 WHERE EXISTS (
+                    SELECT 1 FROM tasks
+                     WHERE status IN ('running', 'pause_requested', 'stop_requested', 'paused')
+                 );
+             END;
+
+            CREATE TABLE IF NOT EXISTS operation_audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                seq INTEGER NOT NULL UNIQUE,
+                recorded_at TEXT NOT NULL,
+                event_id TEXT NOT NULL UNIQUE,
+                correlation_id TEXT NOT NULL,
+                causation_id TEXT,
+                root_correlation_id TEXT NOT NULL,
+                session_id TEXT,
+                runtime_id TEXT,
+                browser_id TEXT,
+                actor TEXT NOT NULL,
+                component TEXT NOT NULL,
+                action TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                task_id TEXT,
+                job_id TEXT,
+                batch_id TEXT,
+                item_id TEXT,
+                product_id TEXT,
+                store_id TEXT,
+                category_id TEXT,
+                snapshot_id TEXT,
+                command_id TEXT,
+                mutation_id TEXT,
+                lease_id TEXT,
+                build_id TEXT,
+                reason TEXT,
+                status TEXT NOT NULL,
+                input_summary_json TEXT NOT NULL,
+                output_summary_json TEXT NOT NULL,
+                evidence_refs_json TEXT NOT NULL,
+                prev_hash TEXT NOT NULL,
+                event_hash TEXT NOT NULL,
+                idempotency_key TEXT UNIQUE,
+                degraded INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_operation_audit_events_recorded
+                ON operation_audit_events (recorded_at, seq);
+            CREATE INDEX IF NOT EXISTS idx_operation_audit_events_corr
+                ON operation_audit_events (root_correlation_id, seq);
             """
         )
         _ensure_columns(

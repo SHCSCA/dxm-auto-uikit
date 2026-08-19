@@ -41,6 +41,7 @@ class ResolvedTemplateReferences:
                 "id": ref["dxm_template_id"],
                 "shop_id": ref["shop_id"],
                 "category_id": ref["category_id"],
+                "observed_display_name": ref.get("observed_display_name") or "",
                 "source_digest": ref["source_digest"],
                 "resolved_values_hash": ref["resolved_values_hash"],
                 "availability": ref["availability"],

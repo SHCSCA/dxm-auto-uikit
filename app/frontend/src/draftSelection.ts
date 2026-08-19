@@ -4,19 +4,23 @@ import type {
   DxmDraftShopsResponse,
 } from './types'
 
-export const MIN_DRAFT_SELECTION = 3
+export const MIN_DRAFT_SELECTION = 1
 
 export type DraftTaskInput = {
   shopId: string
   productIds: string[]
   planId: number
   items?: DraftTaskProduct[]
+  targetCategoryId?: string
+  targetCategoryName?: string
+  targetCategoryMatch?: string
 }
 
 export type DraftTaskProduct = {
   productId: string
   shopId: string
   categoryId: string | null
+  categoryName?: string | null
   title: string
 }
 
@@ -37,6 +41,9 @@ type DraftTaskInputCandidate = {
   productIds: string[]
   planId: number | null
   products?: DxmDraftProduct[]
+  targetCategoryId?: string | null
+  targetCategoryName?: string | null
+  targetCategoryMatch?: string | null
 }
 
 export class ReaderSessionChangedError extends Error {
@@ -112,7 +119,11 @@ export function readerSourceLabel(
   response: DxmDraftShopsResponse | null,
   error: string | null,
 ) {
-  if (error) return '真实 Reader 读取失败 · 状态已失效'
+  if (error) {
+    return /会话|登录/.test(error)
+      ? '真实 Reader 读取失败 · 状态已失效'
+      : '真实 Reader 读取失败'
+  }
   return response?.source === 'api' ? '实时 API · 当前会话' : '等待真实 API'
 }
 
@@ -182,6 +193,18 @@ export function buildDraftTaskInput(candidate: DraftTaskInputCandidate): DraftTa
     productIds,
     planId: candidate.planId,
   }
+  if (candidate.targetCategoryId) {
+    input.targetCategoryId = canonicalPositiveIntegerText(
+      candidate.targetCategoryId,
+      'target category',
+    )
+  }
+  if (candidate.targetCategoryName) {
+    input.targetCategoryName = candidate.targetCategoryName.trim()
+  }
+  if (candidate.targetCategoryMatch) {
+    input.targetCategoryMatch = candidate.targetCategoryMatch.trim()
+  }
   if (candidate.products) {
     const productsById = new Map(candidate.products.map((product) => [product.id, product]))
     input.items = productIds.map((productId) => {
@@ -193,6 +216,7 @@ export function buildDraftTaskInput(candidate: DraftTaskInputCandidate): DraftTa
         productId,
         shopId: product.shop_id,
         categoryId: product.category_id,
+        categoryName: product.category_name ?? null,
         title: product.subject,
       }
     })

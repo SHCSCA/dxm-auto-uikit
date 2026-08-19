@@ -11,11 +11,14 @@ from src.main import app
 from src.repository import Repository
 
 
+_E2_ACCOUNT_REF = "a" * 32
+
+
 class _TrustedE2ReaderSource:
     def __init__(self):
         self.calls = []
         self.browser_session_id = "browser-e2-a"
-        self.account_ref = "account-e2-a"
+        self.account_ref = _E2_ACCOUNT_REF
         self.template_revision = "v1"
         self.omitted_template_ids = set()
         self.extra_template_records = []
@@ -141,6 +144,17 @@ class _TrustedE2ReaderSource:
                 "shop_id": shop_id,
                 "category_id": None,
                 "observed_display_name": "默认运费模板",
+                "source_api": "/api/smtShopInfoSync/list.json",
+                "availability": "available",
+                "source_record": {"revision": self.template_revision},
+                "resolved_values": {},
+            },
+            {
+                "ref_type": "service",
+                "dxm_template_id": "911",
+                "shop_id": shop_id,
+                "category_id": None,
+                "observed_display_name": "默认服务模板",
                 "source_api": "/api/smtShopInfoSync/list.json",
                 "availability": "available",
                 "source_record": {"revision": self.template_revision},
@@ -278,7 +292,7 @@ def test_dxm_template_ref_sync_accepts_only_scope_and_reads_trusted_browser(
     assert len(body["session_ref"]) == 16
     assert body["shop_id"] == "3001"
     assert body["category_ids"] == ["100", "200"]
-    assert [item["dxm_template_id"] for item in body["refs"]] == ["901", "902", "903"]
+    assert [item["dxm_template_id"] for item in body["refs"]] == ["901", "911", "902", "903"]
     assert all(len(item["source_digest"]) == 64 for item in body["refs"])
     assert all(item["source_digest"] != "F" * 64 for item in body["refs"])
     ref_by_template = {
@@ -288,6 +302,7 @@ def test_dxm_template_ref_sync_accepts_only_scope_and_reads_trusted_browser(
     assert ref_by_template["902"]["audit_item_count"] == 1
     assert len(ref_by_template["902"]["audit_items_hash"]) == 64
     assert ref_by_template["901"]["audit_item_count"] == 0
+    assert ref_by_template["911"]["audit_item_count"] == 0
     assert source.calls == [("read_e2_plan_scope", "3001", ("100", "200"))]
 
 
@@ -308,6 +323,7 @@ def test_dxm_template_ref_sync_marks_disappeared_scope_records_missing(
     assert synced.status_code == 201
     assert {item["dxm_template_id"] for item in synced.json()["refs"]} == {
         "901",
+        "911",
         "903",
     }
 
@@ -315,6 +331,7 @@ def test_dxm_template_ref_sync_marks_disappeared_scope_records_missing(
     refreshed = {item["dxm_template_id"]: item for item in listed}
     assert refreshed["902"]["availability"] == "missing"
     assert refreshed["901"]["availability"] == "available"
+    assert refreshed["911"]["availability"] == "available"
     assert refreshed["903"]["availability"] == "available"
 
 
@@ -503,6 +520,7 @@ def _plan_payload(refs, *, version="1.0.0", first_title="Car Phone Holder"):
             }
             for item in (
                 ref_by_template_id["901"],
+                ref_by_template_id["911"],
                 ref_by_template_id["902"],
                 ref_by_template_id["903"],
             )
@@ -528,7 +546,7 @@ def _snapshot_request(plan_id, *, expected_snapshot_hash=None):
         "local_plan_template_id": plan_id,
         "shop_id": "3001",
         "session_ref": hashlib.sha256(
-            b"dxm-draft-reader:browser-e2-a:account-e2-a"
+            f"dxm-draft-reader:browser-e2-a:{_E2_ACCOUNT_REF}".encode("utf-8")
         ).hexdigest()[:16],
         "product_ids": ["70001", "70002", "70003"],
         "expected_snapshot_hash": expected_snapshot_hash,
@@ -664,6 +682,100 @@ def test_plan_snapshot_rejects_ambiguous_editor_wire_values(
     )
 
 
+@pytest.mark.parametrize(
+    ("raw_value_id", "wire_shape"),
+    [
+        pytest.param(True, "boolean", id="boolean"),
+        pytest.param(0.0, "float_zero", id="float-zero"),
+        pytest.param(7301.0, "float_positive", id="float-positive"),
+        pytest.param(" 7301 ", "whitespace_numeric", id="whitespace-numeric"),
+    ],
+)
+def test_plan_snapshot_preview_rejects_invalid_attr_value_identity_without_writes(
+    tmp_path,
+    monkeypatch,
+    raw_value_id,
+    wire_shape,
+):
+    client, _repository, source = _setup(tmp_path, monkeypatch)
+    refs = _sync_refs(client)
+    plan = client.post("/api/local-plan-templates", json=_plan_payload(refs)).json()
+    source.products[0]["aeopAeProductPropertys"] = json.dumps(
+        [{"attrNameId": 5301, "attrValueId": raw_value_id}]
+    )
+
+    preview = client.post(
+        "/api/plan-snapshots/preview",
+        json=_snapshot_request(plan["id"]),
+    )
+
+    assert preview.status_code == 409
+    assert preview.json()["detail"] == {
+        "reason_code": "DXM_PLAN_IDENTITY_INVALID",
+        "message": (
+            "编辑页 attrValueId 非法："
+            f"property_index=0 wire_shape={wire_shape}。"
+        ),
+    }
+    with db.connection() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) AS count FROM plan_snapshots"
+        ).fetchone()["count"] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) AS count FROM tasks"
+        ).fetchone()["count"] == 0
+
+
+@pytest.mark.parametrize(
+    "attr_value_id_case",
+    ["missing", "empty-string", "null"],
+)
+def test_plan_snapshot_preview_audits_custom_attribute_without_value_identity(
+    tmp_path,
+    monkeypatch,
+    attr_value_id_case,
+):
+    client, _repository, source = _setup(tmp_path, monkeypatch)
+    refs = _sync_refs(client)
+    plan = client.post("/api/local-plan-templates", json=_plan_payload(refs)).json()
+    custom_attribute = {
+        "attrName": "Custom finish note",
+        "customValue": "Matte",
+    }
+    if attr_value_id_case == "empty-string":
+        custom_attribute["attrValueId"] = ""
+    elif attr_value_id_case == "null":
+        custom_attribute["attrValueId"] = None
+    source.products[0]["aeopAeProductPropertys"] = json.dumps(
+        [
+            {"attrNameId": 5301, "attrValueId": 7301},
+            custom_attribute,
+        ]
+    )
+
+    preview = client.post(
+        "/api/plan-snapshots/preview",
+        json=_snapshot_request(plan["id"]),
+    )
+
+    assert preview.status_code == 200, preview.text
+    first_item = next(
+        item
+        for item in preview.json()["item_snapshots"]
+        if item["product_id"] == "70001"
+    )
+    assert first_item["current_value_snapshot"][
+        "__unmapped_custom_attributes__"
+    ] == [{"name": "Custom finish note", "value": "Matte"}]
+    with db.connection() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) AS count FROM plan_snapshots"
+        ).fetchone()["count"] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) AS count FROM tasks"
+        ).fetchone()["count"] == 0
+
+
 def test_plan_snapshot_rejects_invalid_frozen_price_relationship(
     tmp_path,
     monkeypatch,
@@ -794,7 +906,7 @@ def test_e2_freezes_multi_category_snapshot_and_task_payload(tmp_path, monkeypat
     assert preview_snapshot["session_context"] == {
         "session_ref": _snapshot_request(plan_v1["id"])["session_ref"],
         "account_ref_hash": hashlib.sha256(
-            b"dxm-e2-account-context:account-e2-a"
+            f"dxm-e2-account-context:{_E2_ACCOUNT_REF}".encode("utf-8")
         ).hexdigest().upper(),
         "shop_id": "3001",
         "shop_name": "E2 测试店铺",
@@ -1710,3 +1822,208 @@ def test_e2_preview_validates_english_inside_html_and_mobile_json(
     )
 
     assert preview.status_code == 200, preview.text
+
+
+def test_e2_preview_treats_category_identifier_as_non_natural_language_but_keeps_editor_language_gates(
+    tmp_path,
+    monkeypatch,
+):
+    client, _repository, source = _setup(tmp_path, monkeypatch)
+    source.schemas[0]["properties"].update({
+        "attr_3": {
+            "type": "string",
+            "minLength": 1,
+            "natural_language": False,
+            "ui_binding": "dxm_attribute:3",
+        },
+        "detail": {
+            "type": "string",
+            "minLength": 1,
+            "natural_language": True,
+            "content_format": "html",
+            "ui_binding": "dxm_editor:detail",
+        },
+    })
+    refs = _sync_refs(client)
+
+    def plan_payload(*, version, title, detail):
+        payload = _plan_payload(refs, version=version, first_title=title)
+        payload["fill_rules"]["100"].update({
+            "attr_3": {"value": "型号-A"},
+            "detail": {"value": detail},
+        })
+        payload["field_mappings"]["100"]["entries"].extend([
+            {
+                "ui_label_zh": "型号",
+                "field_key": "attr_3",
+                "category_schema_path": "$.properties.attr_3",
+                "ui_binding": "dxm_attribute:3",
+            },
+            {
+                "ui_label_zh": "PC 英文描述",
+                "field_key": "detail",
+                "category_schema_path": "$.properties.detail",
+                "ui_binding": "dxm_editor:detail",
+            },
+        ])
+        return payload
+
+    valid = client.post(
+        "/api/local-plan-templates",
+        json=plan_payload(
+            version="5.3.0",
+            title="Colorful Acrylic Character Stand Keychain",
+            detail="<p>Colorful acrylic accessory for bags and display.</p>",
+        ),
+    )
+    assert valid.status_code == 201, valid.text
+    preview = client.post(
+        "/api/plan-snapshots/preview",
+        json=_snapshot_request(valid.json()["id"]),
+    )
+    assert preview.status_code == 200, preview.text
+    first_item = next(
+        item
+        for item in preview.json()["item_snapshots"]
+        if item["product_id"] == "70001"
+    )
+    identifier = next(
+        field
+        for field in first_item["resolution_result"]["resolved_fields"]
+        if field["field_key"] == "attr_3"
+    )
+    assert identifier["resolved_value"] == "型号-A"
+    assert identifier["natural_language"] is False
+    assert identifier["expected_language"] is None
+    assert identifier["detected_language"] is None
+
+    for version, title, detail, expected_field in (
+        (
+            "5.3.1",
+            "这是中文商品标题",
+            "<p>Colorful acrylic accessory for bags and display.</p>",
+            "title",
+        ),
+        (
+            "5.3.2",
+            "Colorful Acrylic Character Stand Keychain",
+            "<p>这是中文商品描述。</p>",
+            "detail",
+        ),
+    ):
+        rejected = client.post(
+            "/api/local-plan-templates",
+            json=plan_payload(version=version, title=title, detail=detail),
+        )
+        assert rejected.status_code == 201, rejected.text
+        response = client.post(
+            "/api/plan-snapshots/preview",
+            json=_snapshot_request(rejected.json()["id"]),
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"] == {
+            "reason_code": "NATURAL_LANGUAGE_ENGLISH_REQUIRED",
+            "message": (
+                f"field {expected_field} must contain validated English "
+                "natural-language content"
+            ),
+        }
+
+
+def test_e2_snapshot_preview_accepts_target_category_with_resolvable_required_fields(
+    tmp_path,
+    monkeypatch,
+):
+    client, _repository, source = _setup(tmp_path, monkeypatch)
+    refs = _sync_refs(client)
+    plan_payload = _plan_payload(refs)
+    plan_payload["category_ids"] = ["100", "200", "300"]
+    plan_payload["fixed_values"]["field_values"]["300"] = {"voltage": 220}
+    plan_payload["fill_rules"]["300"] = {}
+    plan_payload["field_mappings"]["300"] = _mapping(
+        "zh-map-300-v1",
+        ["title", "voltage"],
+    )
+    plan = client.post(
+        "/api/local-plan-templates",
+        json=plan_payload,
+    ).json()
+
+    preview = client.post(
+        "/api/plan-snapshots/preview",
+        json={
+            **_snapshot_request(plan["id"]),
+            "target_category_id": "300",
+            "target_category_name": "ACG Stand(立牌类谷子)",
+            "target_category_match": "ACG Stand",
+        },
+    )
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    for item in body["item_snapshots"]:
+        target = item["target_category"]
+        assert target["category_id"] == "300"
+        assert target["category_name"] == "ACG Stand(立牌类谷子)"
+        assert target["category_match"] == "ACG Stand"
+        assert target["schema"]["schema_hash"] == _sha256(_schemas()[2])
+        sources = {
+            entry["field_key"]: entry["resolved_source"]
+            for entry in target["required_fields_preflight"]
+        }
+        assert sources["title"].startswith("current@7000")
+        assert sources["voltage"] == "fixed_value"
+        assert target["unresolved_required_fields"] == []
+    assert source.calls[-1][2] == ("100", "200", "300")
+
+    frozen = client.post(
+        "/api/plan-snapshots",
+        json={
+            **_snapshot_request(
+                plan["id"],
+                expected_snapshot_hash=body["snapshot_hash"],
+            ),
+            "target_category_id": "300",
+            "target_category_name": "ACG Stand(立牌类谷子)",
+            "target_category_match": "ACG Stand",
+        },
+    )
+    assert frozen.status_code == 201, frozen.text
+    stored = frozen.json()
+    task = client.post(f"/api/plan-snapshots/{stored['id']}/tasks")
+    assert task.status_code == 201
+    created_task = task.json()
+    private_task = _repository.get_task_private(created_task["id"])
+    runner = V1TaskRunner(_repository, manager=None)
+    defaults = runner._execution_defaults(
+        private_task,
+        None,
+        job=private_task["jobs"][0],
+    )
+    assert defaults["category_keyword"] == "ACG Stand(立牌类谷子)"
+    assert defaults["category_match"] == "ACG Stand"
+    execution_payload = defaults["_frozen_execution_payload"]
+    assert execution_payload["target_category"]["category_id"] == "300"
+
+
+def test_e2_snapshot_preview_fails_closed_when_target_required_field_unresolved(
+    tmp_path,
+    monkeypatch,
+):
+    client, _repository, _source = _setup(tmp_path, monkeypatch)
+    refs = _sync_refs(client)
+    plan = client.post(
+        "/api/local-plan-templates",
+        json=_plan_payload(refs),
+    ).json()
+
+    preview = client.post(
+        "/api/plan-snapshots/preview",
+        json={
+            **_snapshot_request(plan["id"]),
+            "target_category_id": "300",
+        },
+    )
+    assert preview.status_code == 409
+    detail = preview.json()["detail"]
+    assert detail["reason_code"] == "PLAN_TARGET_REQUIRED_FIELD_UNRESOLVED"
+    assert "voltage" in detail["message"]

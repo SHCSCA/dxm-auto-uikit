@@ -360,10 +360,39 @@ class DxmDraftReader:
             "category_id": category_id,
             "dxm_state": "draft",
         }
+        category_name = cls._optional_text(value.get("categoryNameZh"))
+        if category_name:
+            normalized["category_name"] = category_name
+        thumbnail_url = cls._optional_thumbnail_url(value.get("imageURLs"))
+        if thumbnail_url:
+            normalized["thumbnail_url"] = thumbnail_url
+        remark = cls._optional_text(value.get("comment"))
+        if remark:
+            normalized["remark"] = remark
+        source_platform = cls._optional_text(value.get("sourceName"))
+        if source_platform:
+            normalized["source_platform"] = source_platform
         source_urls = cls._normalize_product_source_urls(value)
         if source_urls:
             normalized["source_urls"] = source_urls
         return normalized
+
+    @staticmethod
+    def _optional_text(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        text = " ".join(value.split())
+        return text or None
+
+    @staticmethod
+    def _optional_thumbnail_url(value: Any) -> str | None:
+        if not isinstance(value, str) or not value.strip():
+            return None
+        for candidate in value.split(";"):
+            url = candidate.strip()
+            if url.startswith("https://") or url.startswith("http://"):
+                return url
+        return None
 
     @staticmethod
     def _normalize_product_source_urls(value: Mapping[str, Any]) -> list[str]:
@@ -395,20 +424,14 @@ class DxmDraftReader:
             return []
         try:
             identity = canonical_source_identity(candidates[0], candidates)
-        except TwoStageContractError as exc:
-            raise DxmDraftReaderError(
-                "PRODUCT_SOURCE_URL_INVALID",
-                "草稿商品来源链接无法规范化，已停止读取。",
-            ) from exc
+        except TwoStageContractError:
+            return []
         source_urls = list(identity["urls"])
         if any(
             not is_supported_product_detail_url(candidate)
             for candidate in source_urls
         ):
-            raise DxmDraftReaderError(
-                "PRODUCT_SOURCE_URL_UNSUPPORTED",
-                "草稿商品来源链接不是受支持的外部商品详情页，已停止读取。",
-            )
+            return []
         return source_urls
 
     @staticmethod

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import shutil
 import socket
@@ -209,8 +210,6 @@ def test_draft_selection_revokes_parent_input_on_failure_unmount_and_account_cha
     assert page.get_by_test_id("parent-task-input").inner_text() == "null"
     assert "会话已变化" in page.get_by_role("alert").inner_text()
     page.close()
-
-
 def test_rail_is_computed_hidden_at_680px(
     browser: Browser,
     vite_origin: str,
@@ -286,7 +285,9 @@ def test_confirmed_real_reader_input_advances_to_preview_and_freeze_page(
     preview_button = review.get_by_role("button", name="预览并校验快照")
     page.wait_for_timeout(500)
     assert preview_button.is_enabled(), page.locator("main").inner_text()
-    assert "不会启动保存或发布" in page.locator("main").inner_text()
+    main_text = page.locator("main").inner_text()
+    assert "冻结前保持零写" in main_text
+    assert "发布始终不允许" in main_text
     page.close()
 
 
@@ -308,8 +309,8 @@ def test_real_app_start_save_navigation_opens_safe_placeholder(
     main = page.locator("main")
     page.get_by_role("heading", name="开始批量保存").wait_for()
 
-    assert "尚未开放执行" in main.inner_text()
-    assert "不会启动保存或发布" in main.inner_text()
+    assert "只保存 · 不发布" in main.inner_text()
+    assert "冻结前保持零写" in main.inner_text()
     assert "浏览器诊断" not in main.inner_text()
     page.close()
 
@@ -399,7 +400,12 @@ def _e2_snapshot(*, frozen: bool) -> dict[str, object]:
 def _install_e2_plan_routes(
     page: Page,
     requests: list[tuple[str, str, object | None]],
+    *,
+    approval_response_lost: bool = False,
+    empty_choice_field: bool = False,
 ) -> None:
+    approval_state = {"dispatched": False}
+
     def handle(route: Route) -> None:
         path = urlparse(route.request.url).path
         method = route.request.method
@@ -409,6 +415,52 @@ def _install_e2_plan_routes(
             else None
         )
         requests.append((method, path, body))
+        if path == "/api/dxm/draft-reader/shops":
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({
+                    "source": "api",
+                    "session_bound": True,
+                    "session_ref": "0123456789abcdef",
+                    "shops": [{
+                        "id": "3001",
+                        "name": "浏览器测试店铺",
+                        "platform": "smt",
+                        "shop_type": "POP",
+                    }],
+                }, ensure_ascii=False),
+            )
+            return
+        if path == "/api/dxm/draft-reader/products":
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps({
+                    "source": "api",
+                    "session_bound": True,
+                    "session_ref": "0123456789abcdef",
+                    "filter": {"shop_id": "3001", "dxm_state": "draft"},
+                    "pagination": {
+                        "page_no": 1,
+                        "page_size": 100,
+                        "total_pages": 1,
+                        "total_items": 1,
+                        "has_previous": False,
+                        "has_next": False,
+                    },
+                    "items": [{
+                        "id": "70001",
+                        "shop_id": "3001",
+                        "subject": "Draft 70001",
+                        "category_id": "100",
+                        "category_name": "测试类目",
+                        "dxm_state": "draft",
+                    }],
+                    "deduplicated_count": 0,
+                }, ensure_ascii=False),
+            )
+            return
         if path == "/api/dxm-template-refs/sync":
             route.fulfill(
                 status=201,
@@ -456,6 +508,16 @@ def _install_e2_plan_routes(
                                         "minLength": 1,
                                     },
                                 },
+                                **({
+                                    "attr_3": {
+                                        "type": "string",
+                                        "ui_label_zh": "自定义英文属性",
+                                        "ui_binding": "dxm_attribute:3",
+                                        "natural_language": True,
+                                        "values": [],
+                                        "enum": [],
+                                    },
+                                } if empty_choice_field else {}),
                             },
                             "required": ["title", "material"],
                         }
@@ -496,14 +558,16 @@ def _install_e2_plan_routes(
                 body=json.dumps(_e2_snapshot(frozen=True), ensure_ascii=False),
             )
             return
-        if path == "/api/tasks/17":
+        if path == "/api/tasks/17" and method == "GET":
             route.fulfill(
                 status=200,
                 content_type="application/json",
                 body=json.dumps({
                     "id": 17,
                     "name": "E2 atomic draft",
-                    "status": "draft",
+                    "status": (
+                        "running" if approval_state["dispatched"] else "draft"
+                    ),
                     "mode": "batch_draft_save",
                     "publish_scene": "SMT_SEMI_MANAGED_SAVE_ONLY",
                     "total_jobs": 3,
@@ -511,6 +575,26 @@ def _install_e2_plan_routes(
                     "failed_jobs": 0,
                     "payload": {"runner_released": False},
                 }, ensure_ascii=False),
+            )
+            return
+        if path == "/api/tasks/17/approve-and-start" and method == "POST":
+            approval_state["dispatched"] = True
+            route.fulfill(
+                status=503 if approval_response_lost else 200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "detail": "simulated response loss",
+                    }
+                    if approval_response_lost
+                    else {
+                        "ok": True,
+                        "taskId": 17,
+                        "status": "running",
+                        "authorizationConsumed": True,
+                    },
+                    ensure_ascii=False,
+                ),
             )
             return
         route.fulfill(
@@ -533,36 +617,36 @@ def test_e2_local_plan_uses_structured_schema_controls_in_browser(
         f"{vite_origin}/tests/browser/e2-plan-harness.html",
         wait_until="domcontentloaded",
     )
-    workspace = page.get_by_label("E2 铺货方案工作区")
-    workspace.locator("label").filter(has_text="方案名称").locator("input").fill(
+    page.get_by_role("button", name="新建方案").click()
+    dialog = page.get_by_label("新建方案")
+    dialog.locator("label").filter(has_text="方案名称").locator("input").fill(
         "浏览器结构化方案"
     )
-    workspace.locator("label").filter(has_text="shopId").locator("input").fill(
+    dialog.locator("label").filter(has_text="店铺").locator("select").select_option(
         "3001"
     )
-    workspace.locator("label").filter(
-        has_text="categoryId（逗号分隔）"
-    ).locator("input").fill("100")
-    workspace.get_by_role("button", name="从当前真实会话同步").click()
-    workspace.locator('input[value="英文标题"]').wait_for()
+    dialog.get_by_role("button", name="同步店小秘模板").click()
+    dialog.locator("label").filter(has_text="测试类目").locator("input").check()
+    dialog.get_by_role("button", name="套用店小秘模板").click()
+    dialog.get_by_role("tab", name="属性模板").click()
+    dialog.get_by_text("属性模板甲", exact=True).click()
+    dialog.get_by_role("button", name="高级（字段补差）").click()
 
-    assert workspace.locator("textarea").count() == 0
-    workspace.get_by_label("title 来源策略").select_option("fixed")
-    workspace.get_by_label("title 固定值").fill("English Product Title")
-    workspace.get_by_label("material 来源策略").select_option("fill")
-    assert workspace.get_by_label("material 补差值").locator(
+    assert dialog.locator("textarea").count() == 0
+    dialog.get_by_label("英文标题 来源策略").select_option("fixed")
+    dialog.get_by_label("title 固定值").fill("English Product Title")
+    dialog.get_by_label("材质 来源策略").select_option("fill")
+    assert dialog.get_by_label("material 补差值").locator(
         'option[value="ABS"]'
     ).inner_text() == "塑料 · ABS"
-    workspace.get_by_label("material 补差值").select_option("ABS")
-    workspace.get_by_label("imageURLs 来源策略").select_option("fixed")
-    workspace.get_by_label("imageURLs 添加一项").click()
-    workspace.get_by_label("imageURLs[0] 第 1 项").fill(
+    dialog.get_by_label("material 补差值").select_option("ABS")
+    dialog.get_by_label("主图与附图 来源策略").select_option("fixed")
+    dialog.get_by_label("imageURLs 添加一项").click()
+    dialog.get_by_label("imageURLs[0] 第 1 项").fill(
         "https://example.invalid/product-main.jpg"
     )
-    workspace.get_by_text("属性模板甲", exact=True).wait_for()
-    workspace.get_by_text("属性模板甲", exact=True).click()
-    workspace.get_by_role("button", name="创建本地方案").click()
-    workspace.get_by_text("已保存 local_plan_template").wait_for()
+    dialog.get_by_role("button", name="创建方案").click()
+    page.get_by_text("已保存「浏览器结构化方案」").wait_for()
 
     create_body = next(
         body
@@ -599,6 +683,38 @@ def test_e2_local_plan_uses_structured_schema_controls_in_browser(
     page.close()
 
 
+def test_e2_empty_schema_choices_render_an_editable_type_control(
+    browser: Browser,
+    vite_origin: str,
+) -> None:
+    page = browser.new_page(viewport={"width": 1280, "height": 1000})
+    requests: list[tuple[str, str, object | None]] = []
+    _install_e2_plan_routes(page, requests, empty_choice_field=True)
+    page.goto(
+        f"{vite_origin}/tests/browser/e2-plan-harness.html",
+        wait_until="domcontentloaded",
+    )
+    page.get_by_role("button", name="新建方案").click()
+    dialog = page.get_by_label("新建方案")
+    dialog.locator("label").filter(has_text="方案名称").locator("input").fill(
+        "空枚举方案"
+    )
+    dialog.locator("label").filter(has_text="店铺").locator("select").select_option(
+        "3001"
+    )
+    dialog.get_by_role("button", name="同步店小秘模板").click()
+    dialog.locator("label").filter(has_text="测试类目").locator("input").check()
+    dialog.get_by_role("button", name="高级（字段补差）").click()
+    dialog.get_by_role("tab", name="属性模板").click()
+    dialog.get_by_label("自定义英文属性 来源策略").select_option("fixed")
+
+    editor = dialog.get_by_label("attr_3 固定值")
+    assert editor.evaluate("element => element.tagName") == "INPUT"
+    editor.fill("Handmade acrylic collectible accessory")
+    assert editor.input_value() == "Handmade acrylic collectible accessory"
+    page.close()
+
+
 def test_e2_preview_freeze_browser_flow_uses_atomic_task_and_idempotency(
     browser: Browser,
     vite_origin: str,
@@ -615,7 +731,7 @@ def test_e2_preview_freeze_browser_flow_uses_atomic_task_and_idempotency(
     section.get_by_role("button", name="预览并校验快照").click()
     section.get_by_text("快照预览已通过").wait_for()
     section.get_by_role("button", name="冻结为 draft 任务（不启动）").click()
-    section.get_by_text("任务 #17 · draft · runner 未开放").wait_for()
+    section.get_by_text("任务 #17 · draft · batch_draft_save").wait_for()
 
     freeze_body = next(
         body
@@ -632,4 +748,79 @@ def test_e2_preview_freeze_browser_flow_uses_atomic_task_and_idempotency(
         (method, path)
         for method, path, _body in requests
     ]
+    page.close()
+
+
+def test_batch_task_atomic_approval_never_reposts_after_response_loss(
+    browser: Browser,
+    vite_origin: str,
+) -> None:
+    page = browser.new_page(viewport={"width": 1280, "height": 1100})
+    requests: list[tuple[str, str, object | None]] = []
+    _install_e2_plan_routes(
+        page,
+        requests,
+        approval_response_lost=True,
+    )
+    page.goto(
+        f"{vite_origin}/tests/browser/e2-plan-harness.html",
+        wait_until="domcontentloaded",
+    )
+    section = page.get_by_label("开始批量保存")
+    section.get_by_text("浏览器测试方案 · v1.0.0 · #9").wait_for()
+    section.get_by_role("button", name="预览并校验快照").click()
+    section.get_by_text("快照预览已通过").wait_for()
+    section.get_by_role("button", name="冻结为 draft 任务（不启动）").click()
+
+    approval = page.get_by_label("batch_draft_save 一次批准")
+    approval.get_by_text("任务", exact=True).wait_for()
+    assert "#17" in approval.inner_text()
+    assert "C" * 64 in approval.inner_text()
+    assert "发布允许\n否" in approval.inner_text()
+    approval.get_by_label("批准人").fill("operator-a")
+    approval.get_by_label(
+        "输入确认短语 CONFIRM_DXM_SAVE_ONLY"
+    ).fill("CONFIRM_DXM_SAVE_ONLY")
+
+    approve_button = approval.get_by_role(
+        "button", name="一次批准并开始只保存"
+    )
+    assert approve_button.is_enabled()
+    approve_button.evaluate("button => { button.click(); button.click(); }")
+
+    page.get_by_test_id("selected-task-id").get_by_text("17").wait_for()
+    page.get_by_test_id("batch-task-destination").get_by_text(
+        "monitor"
+    ).wait_for()
+
+    approval_posts = [
+        (method, path, body)
+        for method, path, body in requests
+        if method == "POST" and path == "/api/tasks/17/approve-and-start"
+    ]
+    assert approval_posts == [(
+        "POST",
+        "/api/tasks/17/approve-and-start",
+        {
+            "approved_by": "operator-a",
+            "confirmation": "CONFIRM_DXM_SAVE_ONLY",
+        },
+    )]
+    assert not any(
+        method == "POST"
+        and path in {
+            "/api/tasks/17/manual-approval",
+            "/api/tasks/17/start",
+        }
+        for method, path, _body in requests
+    )
+    approval_post_index = next(
+        index
+        for index, (method, path, _body) in enumerate(requests)
+        if method == "POST" and path == "/api/tasks/17/approve-and-start"
+    )
+    assert any(
+        method == "GET" and path == "/api/tasks/17"
+        for method, path, _body in requests[approval_post_index + 1 :]
+    )
     page.close()

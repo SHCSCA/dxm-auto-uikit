@@ -331,6 +331,31 @@ test('current ownership liveness requires the exact record and a live child', ()
   assert.equal(isCurrentOwnedBackendLive(ownership, ownership), false)
 })
 
+test('health waiter accepts same instance when interpreter pid differs from spawn pid', async (t) => {
+  const expected = expectedIdentity()
+  const live = actualIdentity(expected, { backendPid: 9999, browserAgentPid: 9999 })
+  const child = { pid: expected.backendPid, exitCode: null, signalCode: null }
+  const ownership = createBackendOwnership({ child, instanceId: expected.instanceId, expectedIdentity: expected })
+  const server = http.createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ status: 'ok', instanceId: live.instanceId, runtimeIdentity: live }))
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise((resolve) => server.close(resolve)))
+  const address = server.address()
+  const verified = await waitForOwnedBackendHealth({
+    apiBase: `http://127.0.0.1:${address.port}`,
+    timeoutMs: 1000,
+    requestTimeoutMs: 200,
+    pollIntervalMs: 10,
+    ownership,
+    getCurrentOwnership: () => ownership,
+  })
+  assert.equal(verified.instanceId, expected.instanceId)
+  assert.equal(verified.backendPid, 9999)
+  assert.equal(ownership.pid, expected.backendPid)
+})
+
 test('health waiter cannot verify a late response after timeout', async (t) => {
   const expected = expectedIdentity()
   const actual = actualIdentity(expected)
@@ -410,8 +435,8 @@ test('prebuild generator writes a fingerprinted manifest without packaging Elect
   })
 
   assert.equal(result.status, 0, result.stderr || result.stdout)
-  const generated = parseBuildManifest(fs.readFileSync(output, 'utf8'), { expectedPackageVersion: '0.1.3' })
+  const generated = parseBuildManifest(fs.readFileSync(output, 'utf8'), { expectedPackageVersion: '0.1.4' })
   assert.equal(generated.buildId, 'test-build-id')
   assert.equal(generated.gitDirty, true)
-  assert.equal(generated.packageVersion, '0.1.3')
+  assert.equal(generated.packageVersion, '0.1.4')
 })

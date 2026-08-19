@@ -2,6 +2,62 @@
 
 # 待裁决清单（BLOCKED）
 
+## 2026-08-19 分支整理后的仍存阻断
+
+- **完整 L0 同源证据缺失：** 本轮只复验了 backend 审计/E4/模板/派发 `39 passed`、frontend `27 passed` + browser `9 passed` + typecheck、desktop `92 passed`；没有把完整 L0 重新绑定到本轮提交并取得 `0 failed / 0 skipped`，不得用专项绿替代。
+- **portable 门禁未完成：** `outputs\desktop-build` 当前不存在；尚未取得目录包/免安装包、manifest、SHA256、隔离 user-data 重启读回和同 HEAD smoke 的同源证据。
+- **真实业务验收未执行：** 本轮真实店小秘登录、浏览器操作、保存、发布均为 `0`；类目属性/运费/服务模板尚未为真实三商品配置并冻结，旧任务 `#191` 仍禁止启动或克隆。
+- **交付身份：** 用户已授权本次分支整理、文档同步、提交和推送；生成的 `.agents/`、`.playwright-cli/`、`output/`、`artifacts/` 不进入提交。完成推送不等于 `E3_ACCEPTED`、`E4_ACCEPTED`、`MVP_READY` 或 `PROD_READY`。
+
+## 置顶状态（2026-08-14 · 桌面交付与日志规划后）
+
+| 项 | 状态 | 说明 |
+|----|------|------|
+| E2 | `E2_DEFERRED` | 不挡 E3 canary 预热口径；完整三类目/fixture 等历史项仍见下文 |
+| E3 工程 | 历史固定点 `E3_READY_FOR_CANARY`；当前 `E3_OPEN / BLOCKED` | 当前工作树、模板、portable 与统一审计未形成同源验收；**非** `E3_ACCEPTED` |
+| E3 真写 canary | **滞后 / BLOCKED** | 分区模板未配齐 + 未口头授权；`#191` 禁启动 |
+| E4 代码控制面 | **完成** | request + worker ack + 前端四键 + 单测 |
+| E4 §7.5 DoD | **未关闭 / BLOCKED** | 缺真机暂停≥10s、继续不重做、停止不派发、HVD 同源核对 |
+| 当前免安装桌面包 | **IN_PROGRESS** | 新 `0.1.4` portable 已加载控制台（SHA256=`C09388177...`）；官方 `-CheckPortable` / 真机登录未做 |
+| 全链路操作审计 | **IN_PROGRESS** | A 合同与核心 API/时间线已接线；portable 双击仍待用户用新包验证 |
+| 视觉对齐 v6 | **暂不改** | 用户确认；偏差已记录，不挡代码 |
+| `MVP_READY` / `PROD_READY` | **禁止宣称** | 生产交付仍 `BLOCKED` |
+
+## 免安装桌面与操作审计阻断（2026-08-14 · 新增）
+
+- **产品入口阻断：** 正式用户必须使用免安装桌面 EXE；当前 backend/frontend/desktop 虽均为 `0.1.4`，但仓内没有 `outputs\desktop-build`，因此不能让用户按旧 `0.1.0` 路径或源码网页开始配置/真机验收。
+- **验包阻断：** `scripts/verify-desktop-package.ps1` 仍固定读取 `DXM-Agent-Console-Portable-0.1.0.exe`；不改为 manifest 驱动就会错验、漏验当前包。
+- **可追溯阻断：** 当前 `job_logs`/evidence/report/ledger/runtime log/AgentConsole/BrowserAgent 事件没有统一 correlation/causation 和持久化时间线；BrowserAgent 只保留最近 50 条，AgentConsole 事件主要驻内存。现在让用户完成一轮复杂配置后，不能保证逐步回放和精确归因。
+- **安全阻断：** 统一日志必须先具备凭据/Cookie/token 永不落盘、诊断包脱敏、事件 hash-chain、点击前 write-ahead 和点击后断链转 `UNKNOWN`；缺任一项不得进入新的真实三商品保存。
+- **交付阻断：** 当前工作树不是 clean 固定点，且存在大量既有改动/未跟踪文件/52 个删除。未获 commit 授权前可以开发和生成内部 canary 包，但不得标 source-package/release ready；不得恢复、暂存或覆盖无关历史改动来伪造 clean。
+- **关闭条件：** 完成 [免安装桌面版与全链路操作日志任务书](docs/product/CODEX-GOAL-免安装桌面版与全链路操作日志-20260814.md) 的全量、反例、隔离 portable smoke 和同源产物清单；随后用户在新包内配齐真实类目分区模板并创建新 snapshot。真实保存仍需单独批准。
+- **本轮未扩大授权：** 不启动/克隆 `#191`，不登录店小秘，不执行浏览器动作、保存或发布，不 commit/push。
+
+## E4 DoD 仍阻断（2026-08-13 · 代码完成之后）
+
+- **已关闭（代码，可复测单测，非真机）：**
+  - 真实写入 pause/stop/resume 不再硬 409「until worker acknowledgements」。
+  - 状态机：`running` → `pause_requested` → `paused` → resume → `running`；`stop_requested` → `stopped`。
+  - Runner 安全点 ack；resume 跳过已完成 job；停止后剩余 pending 不派发。
+  - 前端四键绑定 `pause_requested` / `stop_requested` / `paused` / `stopped`（开始批量保存 + 当前保存任务）；列表/详情投影 `workerControl`。
+- **仍阻断 E4 验收关闭（§7.5）：**
+  1. 未在真实可见浏览器、真实 batch（建议 ≥3 draft）上证明：暂停 ≥10 秒后 worker ack、无下一写动作；继续后不重做已完成保存、不丢队列。
+  2. 未证明停止后不再派发新商品；在途不确定 SAVE 归 `UNKNOWN` 的真机/强证据路径未做 E4 专项验收。
+  3. HVD / 日志 / 结果 / API / 持久化在同一任务·快照·商品粒度的**真机**一致核对未做。
+  4. 前置 E3 真写 canary 未过：模板未配齐时不得为做 E4 而放开保存。
+- **不得宣称：** `E4_ACCEPTED`、`E4_DONE`（若指 DoD）、`MVP_READY`、`PROD_READY`。
+- **视觉：** 与 `docs/research/dxm-console-v6.html` 的 rail 配色/图标、执行监控整页舞台等偏差**不处理**；MVP 7 导航与 240/56 以主合同为准。
+
+## E3 分区模板 / 真实 Path A 滞后（2026-08-13 · 用户裁定，仍有效）
+
+- **用户明确：** 分区模板配置与真实只保存试跑**本步滞后**；E4 控制面代码已先做完，**不等于** E3/E4 验收关闭。
+- **E3 真写仍阻断：**
+  1. 类目须配齐分区模板（至少属性 / 运费 / 服务；建议产品模板、变种、尺码表）。类目 `200083142` 冻结目前仅产品模板 `1138913` → 门禁 `PATH_A_SECTION_TEMPLATES_MISSING` 正确挡真写。
+  2. 真机 Path A 完整「模板套用 → 保存 → 三铁证」尚未成功；单品 `130658340712223024` 仅证明可开编辑页与部分字段写入。
+  3. 任务 `#191`（3 draft）**禁止** `approve-and-start`，保持 draft；未另选并口头授权前不真写。
+  4. 发布 / 保存并发布 / Path B / `editFromSmt` 继续永久禁止。
+- **生产交付：** 仍为 `BLOCKED`。E4/E3 单测或工程绿 ≠ 人工 §11 签字。
+
 ## E3 L0 无轮次限制续跑（2026-08-12 · 原三轮阻断已解除）
 
 - **当前无未解决的 E3 自动化工程红项；状态提升为 `E3_READY_FOR_CANARY`。**固定代码提交 `717ae3c5618ced19467d528e41aac784e896c810` 的 clean backend=`2168 passed / 0 failed / 0 skipped`，frontend/desktop/docs/diff/status/端口门禁均绿。剩余阻断仅是外部真实三商品 canary 尚未获得本轮明确授权、尚未执行；因此不得标 `E3_ACCEPTED`、`MVP_READY` 或 `PROD_READY`，生产交付仍为 `BLOCKED`。

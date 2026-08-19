@@ -86,12 +86,27 @@ export type DxmDraftShopsResponse = {
   session_ref: string
   shops: DxmDraftShop[]
 }
+export type DxmCategoryRecord = {
+  categoryId: string
+  nameZh?: string
+  nameEn?: string
+  nodePath?: string
+  nodePathId?: string
+  pcid?: string
+  isleaf?: boolean | number | string
+  level?: number | string
+}
 export type DxmDraftProduct = {
   id: string
   shop_id: string
   subject: string
   category_id: string | null
+  category_name?: string
   dxm_state: 'draft'
+  thumbnail_url?: string
+  remark?: string
+  source_platform?: string
+  source_urls?: string[]
 }
 export type DxmDraftPageResponse = {
   source: 'api'
@@ -473,7 +488,39 @@ export type Product = {
   draft_box_verified?: boolean | null
 }
 export type TaskJob = { id: number; task_id?: number; product_id?: number | null; status: string; current_step_code?: string | null; current_step_name?: string | null; error_code?: string | null; error_message?: string | null; [key: string]: unknown }
-export type Task = { id: number; name: string; status: string; mode: string; publish_scene: string; store_id?: number | null; total_jobs: number; completed_jobs: number; failed_jobs: number; payload: { product_ids?: number[]; store_name?: string; category_name?: string; image?: { eu_outer_package_filename?: string }; [key: string]: unknown }; jobs?: TaskJob[] }
+export type TaskWorkerControl = {
+  schemaVersion?: string | null
+  request?: 'pause' | 'stop' | null
+  requestedAt?: string | null
+  ackedAt?: string | null
+  ack?: 'paused' | 'stopped' | null
+  reasonCode?: string | null
+  detail?: string | null
+  pending?: boolean
+}
+
+export type Task = {
+  id: number
+  name: string
+  status: string
+  mode: string
+  publish_scene: string
+  store_id?: number | null
+  total_jobs: number
+  completed_jobs: number
+  failed_jobs: number
+  payload: {
+    product_ids?: number[]
+    store_name?: string
+    category_name?: string
+    image?: { eu_outer_package_filename?: string }
+    worker_control?: TaskWorkerControl | Record<string, unknown>
+    [key: string]: unknown
+  }
+  jobs?: TaskJob[]
+  /** E4 HVD projection from GET /api/tasks/{id} */
+  workerControl?: TaskWorkerControl | null
+}
 export type RealTaskCreateRequest = { storeId: number; mode: 'probe' | 'single_save'; productIds: number[] }
 export type ClaimCandidate = {
   id: string
@@ -893,6 +940,7 @@ export type WorkbenchSection =
   | 'draft_selection'
   | 'draft_edit_save'
   | 'template_center'
+  | 'dxm_templates'
   | 'start_save'
   | 'results'
   | 'issues'

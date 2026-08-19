@@ -23,6 +23,8 @@ const taskInput: ConfirmedDraftTaskInput = {
 
 function E2PlanHarness() {
   const [refs, setRefs] = useState<DxmTemplateRef[]>([])
+  const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null)
+  const [destination, setDestination] = useState<'idle' | 'monitor' | 'results'>('idle')
 
   return (
     <main className="workspace-content">
@@ -51,7 +53,12 @@ function E2PlanHarness() {
         taskInput={taskInput}
         onShowSelection={() => undefined}
         onShowPlans={() => undefined}
+        onTaskSelected={(task) => setSelectedTaskId(task.id)}
+        onShowTaskMonitor={() => setDestination('monitor')}
+        onShowResults={() => setDestination('results')}
       />
+      <output data-testid="selected-task-id">{selectedTaskId ?? 'none'}</output>
+      <output data-testid="batch-task-destination">{destination}</output>
     </main>
   )
 }

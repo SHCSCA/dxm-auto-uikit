@@ -53,6 +53,7 @@ class LiveDispatchFacts:
     worktree_identity: Mapping[str, Any]
     l2_status: str
     l2_evidence_fingerprint: str
+    account_ref_hash: str
 
 
 @dataclass(frozen=True)
@@ -329,6 +330,12 @@ def validate_current_live_facts_against_frozen_authority(
             != live_facts.browser_session_id
         ):
             _reject("AUTH_BROWSER_SESSION_MISMATCH")
+        live_account_hash = _sha256_text(
+            live_facts.account_ref_hash,
+            "AUTH_ACCOUNT_CONTEXT_UNAVAILABLE",
+        )
+        if frozen_runtime.get("account_ref_hash") != live_account_hash:
+            _reject("AUTH_ACCOUNT_CONTEXT_MISMATCH")
     except DispatchAuthorityError as exc:
         return DispatchAuthorityDecision(False, exc.reason_code)
 
@@ -545,6 +552,10 @@ def _validate(
             "runtime_instance_id": live.runtime_instance_id,
             "browser_runtime_id": live.browser_runtime_id,
             "browser_session_id": live.browser_session_id,
+            "account_ref_hash": _sha256_text(
+                live.account_ref_hash,
+                "AUTH_ACCOUNT_CONTEXT_UNAVAILABLE",
+            ),
         },
         "browser_identity": deepcopy(dict(identity)),
         "target": {
@@ -845,6 +856,21 @@ def _validate_authorization(
         _reject("AUTH_BROWSER_SESSION_MISMATCH")
     if command.runtime_id != live.browser_runtime_id:
         _reject("AUTH_RUNTIME_IDENTITY_MISMATCH")
+    session_context = (
+        snapshot.get("session_context")
+        if isinstance(snapshot.get("session_context"), Mapping)
+        else {}
+    )
+    frozen_account_hash = _sha256_text(
+        session_context.get("account_ref_hash"),
+        "AUTH_SNAPSHOT_ACCOUNT_CONTEXT_INVALID",
+    )
+    live_account_hash = _sha256_text(
+        live.account_ref_hash,
+        "AUTH_ACCOUNT_CONTEXT_UNAVAILABLE",
+    )
+    if not hmac.compare_digest(frozen_account_hash, live_account_hash):
+        _reject("AUTH_ACCOUNT_CONTEXT_MISMATCH")
     try:
         context_fingerprint = authorization_context_fingerprint(stored_context)
     except TwoStageContractError:
@@ -1047,6 +1073,23 @@ def _validated_authority(value: Mapping[str, Any]) -> dict[str, Any]:
         or not isinstance(row_binding.get("created_at"), str)
         or not row_binding.get("created_at")
     ):
+        _reject("AUTH_FROZEN_AUTHORITY_INVALID")
+    runtime = canonical["runtime"]
+    session_context = plan_snapshot.get("session_context")
+    if not isinstance(session_context, dict):
+        _reject("AUTH_FROZEN_AUTHORITY_INVALID")
+    try:
+        frozen_account_hash = _sha256_text(
+            session_context.get("account_ref_hash"),
+            "AUTH_FROZEN_AUTHORITY_INVALID",
+        )
+        runtime_account_hash = _sha256_text(
+            runtime.get("account_ref_hash"),
+            "AUTH_FROZEN_AUTHORITY_INVALID",
+        )
+    except DispatchAuthorityError:
+        _reject("AUTH_FROZEN_AUTHORITY_INVALID")
+    if not hmac.compare_digest(frozen_account_hash, runtime_account_hash):
         _reject("AUTH_FROZEN_AUTHORITY_INVALID")
     command = canonical["command"]
     if (

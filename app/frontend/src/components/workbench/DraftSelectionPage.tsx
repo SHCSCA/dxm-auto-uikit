@@ -18,6 +18,7 @@ import {
   type DraftSelectionInvalidationReason,
 } from '../../draftSelection'
 import type {
+  DxmCategoryRecord,
   DxmDraftPageResponse,
   DxmDraftProduct,
   DxmDraftShopsResponse,
@@ -36,11 +37,12 @@ type DraftSelectionPageProps = {
   onReviewSnapshot: () => boolean
 }
 
-const PAGE_SIZE = 20
+const PAGE_SIZES = [20, 50, 100] as const
+const DEFAULT_PAGE_SIZE = 100
 
 const emptyPagination: DxmDraftPageResponse['pagination'] = {
   page_no: 1,
-  page_size: PAGE_SIZE,
+  page_size: DEFAULT_PAGE_SIZE,
   total_pages: 0,
   total_items: 0,
   has_previous: false,
@@ -61,6 +63,7 @@ export function DraftSelectionPage({
   const [pagination, setPagination] = useState(emptyPagination)
   const [shopId, setShopId] = useState('-1')
   const [pageNo, setPageNo] = useState(1)
+  const [pageSize, setPageSize] = useState<(typeof PAGE_SIZES)[number]>(DEFAULT_PAGE_SIZE)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [selectedProducts, setSelectedProducts] = useState<Record<string, DxmDraftProduct>>({})
   const [planId, setPlanId] = useState('')
@@ -70,6 +73,15 @@ export function DraftSelectionPage({
   const [notice, setNotice] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
   const [productSessionRef, setProductSessionRef] = useState<string | null>(null)
+  const [categoryLevels, setCategoryLevels] = useState<DxmCategoryRecord[][]>([[], [], []])
+  const [categorySelection, setCategorySelection] = useState<(DxmCategoryRecord | null)[]>([null, null, null])
+  const [categoryLoading, setCategoryLoading] = useState(false)
+  const [categorySearch, setCategorySearch] = useState('')
+  const [categorySearchResults, setCategorySearchResults] = useState<DxmCategoryRecord[]>([])
+  const [targetCategoryId, setTargetCategoryId] = useState<string | null>(null)
+  const [targetCategoryName, setTargetCategoryName] = useState<string | null>(null)
+  const [targetCategoryMatch, setTargetCategoryMatch] = useState<string | null>(null)
+  const [targetCategoryPath, setTargetCategoryPath] = useState('')
   const requestSequence = useRef(0)
   const readerSessionRef = useRef<string | null>(null)
   const selectedProductsRef = useRef<Record<string, DxmDraftProduct>>({})
@@ -136,6 +148,94 @@ export function DraftSelectionPage({
     }
   }, [invalidateReaderState])
 
+  const loadCategoryChildren = useCallback(async (level: number, pcid: string) => {
+    const sequence = requestSequence.current + 1
+    requestSequence.current = sequence
+    setCategoryLoading(true)
+    try {
+      const params = new URLSearchParams(pcid ? { pcid } : {})
+      const records = await getJson<DxmCategoryRecord[]>(
+        `/api/dxm/category/children?${params.toString()}`,
+      )
+      if (sequence !== requestSequence.current) return
+      setCategoryLevels((current) => {
+        const next = [...current]
+        next[level] = records
+        return next
+      })
+      setCategoryLoading(false)
+    } catch (caught) {
+      if (sequence !== requestSequence.current) return
+      setCategoryLevels((current) => {
+        const next = [...current]
+        next[level] = []
+        return next
+      })
+      setCategoryLoading(false)
+      setError(humanCategoryError(caught))
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadCategoryChildren(0, '')
+  }, [loadCategoryChildren])
+
+  const adoptTargetCategory = useCallback((
+    record: DxmCategoryRecord,
+    drillIntoChildren: boolean,
+    level?: number,
+  ) => {
+    const name = record.nameZh || record.nameEn || ''
+    const path = record.nodePath || [record.nameZh, record.nameEn].filter(Boolean).join('/')
+    setTargetCategoryId(record.categoryId)
+    setTargetCategoryName(name || null)
+    setTargetCategoryMatch(name || null)
+    setTargetCategoryPath(path)
+    setCategorySelection((current) => {
+      const next = [...current]
+      if (level !== undefined) {
+        next[level] = record
+        for (let i = level + 1; i < next.length; i += 1) next[i] = null
+      }
+      return next
+    })
+    if (drillIntoChildren && level !== undefined && level + 1 < 3) {
+      void loadCategoryChildren(level + 1, record.categoryId)
+    }
+    setCategorySearchResults([])
+    onTaskInputChange(null)
+    setNotice('已设置统一目标类目；整批商品将统一切换到该类目，快照预检会按目标类目必填字段把关。')
+    setError((current) => current?.startsWith('类目') ? null : current)
+  }, [loadCategoryChildren, onTaskInputChange])
+
+  const pickCategory = useCallback((level: number, record: DxmCategoryRecord) => {
+    adoptTargetCategory(record, true, level)
+  }, [adoptTargetCategory])
+
+  async function searchCategories() {
+    const keyword = categorySearch.trim()
+    if (!keyword) return
+    setCategoryLoading(true)
+    try {
+      const params = new URLSearchParams({ keyword })
+      const records = await getJson<DxmCategoryRecord[]>(
+        `/api/dxm/category/search?${params.toString()}`,
+      )
+      setCategorySearchResults(records)
+      setCategoryLoading(false)
+    } catch (caught) {
+      setCategorySearchResults([])
+      setCategoryLoading(false)
+      setError(humanCategoryError(caught))
+    }
+  }
+
+  const targetCategoryLabel = categorySelection
+    .filter((record): record is DxmCategoryRecord => record !== null)
+    .map((record) => record.nameZh || record.nameEn || '')
+    .filter(Boolean)
+    .join('/')
+
   const loadProducts = useCallback(async (
     nextShopId: string,
     nextPageNo: number,
@@ -148,7 +248,7 @@ export function DraftSelectionPage({
       const params = new URLSearchParams({
         shop_id: nextShopId,
         page_no: String(nextPageNo),
-        page_size: String(PAGE_SIZE),
+        page_size: String(pageSize),
       })
       const rawResponse = await getJson<unknown>(
         `/api/dxm/draft-reader/products?${params.toString()}`,
@@ -191,7 +291,7 @@ export function DraftSelectionPage({
     } finally {
       if (sequence === requestSequence.current) setProductsLoading(false)
     }
-  }, [invalidateReaderState, loadShops])
+  }, [invalidateReaderState, loadShops, pageSize])
 
   useEffect(() => {
     const invalidated = invalidateDraftSelectionState('page_remount')
@@ -212,7 +312,7 @@ export function DraftSelectionPage({
       return
     }
     void loadProducts(shopId, pageNo, shopsResponse.session_ref)
-  }, [loadProducts, pageNo, shopId, shopsResponse])
+  }, [loadProducts, pageNo, pageSize, shopId, shopsResponse])
 
   useEffect(() => {
     if (!planId || availablePlans.some((plan) => String(plan.id) === planId)) return
@@ -293,6 +393,9 @@ export function DraftSelectionPage({
           shopId,
           productIds: selectedIds,
           planId: selectedPlan?.id ?? null,
+          targetCategoryId,
+          targetCategoryName,
+          targetCategoryMatch,
           products: selectedIds
             .map((productId) => selectedProductsRef.current[productId])
             .filter((product): product is DxmDraftProduct => Boolean(product)),
@@ -391,6 +494,7 @@ export function DraftSelectionPage({
             {productsLoading && <div className="draft-selection-empty" role="status">正在读取真实草稿列表…</div>}
             {!productsLoading && products.map((product) => {
               const selected = selectedIds.includes(product.id)
+              const shopLabel = shopName(product.shop_id, shopsResponse)
               return (
                 <label key={product.id} className={`draft-product-row ${selected ? 'is-selected' : ''}`}>
                   <input
@@ -398,13 +502,17 @@ export function DraftSelectionPage({
                     checked={selected}
                     onChange={() => toggleProduct(product)}
                   />
+                  {product.thumbnail_url
+                    ? <img className="draft-product-row__thumb" src={product.thumbnail_url} alt="" />
+                    : <span className="draft-product-row__thumb is-empty" aria-hidden="true" />}
                   <span className="draft-product-row__main">
                     <strong>{product.subject || `草稿商品 ${product.id}`}</strong>
-                    <small>商品 ID {product.id} · 店铺 {shopName(product.shop_id, shopsResponse)}</small>
-                  </span>
-                  <span className="draft-product-row__meta">
-                    <b>{product.category_id ? `类目 ${product.category_id}` : '类目待解析'}</b>
-                    <small>草稿</small>
+                    {product.remark && <em className="draft-product-row__remark">备注：{product.remark}</em>}
+                    <small>「{shopLabel}」{product.source_platform ? ` · ${product.source_platform}` : ''}</small>
+                    <small className="draft-product-row__category">
+                      类目：{product.category_name || `类目 ${product.category_id ?? '未知'}`}
+                      {product.category_name && product.category_id ? ` · categoryId ${product.category_id}` : ''}
+                    </small>
                   </span>
                 </label>
               )
@@ -418,25 +526,40 @@ export function DraftSelectionPage({
           </div>
 
           <footer className="draft-selection-pagination">
-            <button
-              className="button button--quiet"
-              type="button"
-              disabled={productsLoading || !pagination.has_previous}
-              onClick={() => setPageNo((current) => Math.max(1, current - 1))}
-            >
-              上一页
-            </button>
-            <span>
-              第 {pagination.page_no} / {Math.max(1, pagination.total_pages)} 页
-            </span>
-            <button
-              className="button button--quiet"
-              type="button"
-              disabled={productsLoading || !pagination.has_next}
-              onClick={() => setPageNo((current) => current + 1)}
-            >
-              下一页
-            </button>
+            <span>{paginationSummary(pagination)}</span>
+            <div className="draft-selection-pagination__nav">
+              <button
+                className="button button--quiet"
+                type="button"
+                disabled={productsLoading || !pagination.has_previous}
+                onClick={() => setPageNo((current) => Math.max(1, current - 1))}
+              >
+                上一页
+              </button>
+              <button
+                className="button button--quiet"
+                type="button"
+                disabled={productsLoading || !pagination.has_next}
+                onClick={() => setPageNo((current) => current + 1)}
+              >
+                下一页
+              </button>
+              <label>
+                <span className="sr-only">每页条数</span>
+                <select
+                  value={pageSize}
+                  disabled={productsLoading}
+                  onChange={(event) => {
+                    setPageSize(Number(event.target.value) as (typeof PAGE_SIZES)[number])
+                    setPageNo(1)
+                  }}
+                >
+                  {PAGE_SIZES.map((size) => (
+                    <option key={size} value={size}>{size}条/页</option>
+                  ))}
+                </select>
+              </label>
+            </div>
           </footer>
         </article>
 
@@ -486,6 +609,69 @@ export function DraftSelectionPage({
             </button>
           )}
 
+          <div className="draft-selection-target">
+            <span>统一目标类目（可选）</span>
+            <div className="draft-selection-target__cascade">
+              {[0, 1, 2].map((level) => (
+                <select
+                  key={level}
+                  value={categorySelection[level]?.categoryId ?? ''}
+                  disabled={categoryLoading || (level > 0 && !categorySelection[level - 1])}
+                  onChange={(event) => {
+                    const record = categoryLevels[level]
+                      .find((item) => item.categoryId === event.target.value)
+                    if (record) pickCategory(level, record)
+                  }}
+                >
+                  <option value="">{level === 0 ? '一级类目' : `${level + 1} 级类目`}</option>
+                  {categoryLevels[level].map((record) => (
+                    <option key={record.categoryId} value={record.categoryId}>
+                      {categoryLabel(record)}
+                    </option>
+                  ))}
+                </select>
+              ))}
+            </div>
+            <div className="draft-selection-target__search">
+              <input
+                value={categorySearch}
+                onChange={(event) => setCategorySearch(event.target.value)}
+                placeholder="按名称搜索类目，如 立牌"
+                disabled={categoryLoading}
+              />
+              <button
+                className="button button--quiet"
+                type="button"
+                disabled={categoryLoading || !categorySearch.trim()}
+                onClick={() => { void searchCategories() }}
+              >
+                搜索
+              </button>
+            </div>
+            {categorySearchResults.length > 0 && (
+              <ul className="draft-selection-target__results">
+                {categorySearchResults.map((record) => (
+                  <li key={record.categoryId}>
+                    <button
+                      type="button"
+                      onClick={() => adoptTargetCategory(record, false)}
+                    >
+                      <span>{categoryLabel(record)}</span>
+                      <small>{record.nodePath || `categoryId ${record.categoryId}`}</small>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {targetCategoryId && (
+              <small className="draft-selection-target__picked">
+                整批将统一切换到：{targetCategoryPath || targetCategoryLabel}
+                （categoryId {targetCategoryId}）
+              </small>
+            )}
+            <small>不选择则沿用商品当前类目；选择后快照预检按目标类目必填字段把关。</small>
+          </div>
+
           <div className="draft-selection-contract">
             <span>待复核输入</span>
             <dl>
@@ -522,6 +708,25 @@ export function DraftSelectionPage({
 
 function shopName(shopId: string, response: DxmDraftShopsResponse | null) {
   return response?.shops.find((shop) => shop.id === shopId)?.name ?? shopId
+}
+
+function paginationSummary(pagination: DxmDraftPageResponse['pagination']) {
+  if (pagination.total_items <= 0) return '共 0 条'
+  const from = (pagination.page_no - 1) * pagination.page_size + 1
+  const to = Math.min(pagination.page_no * pagination.page_size, pagination.total_items)
+  return `第 ${from}–${to} 条，共 ${pagination.total_items} 条`
+}
+
+function categoryLabel(record: DxmCategoryRecord) {
+  return record.nameZh || record.nameEn || `类目 ${record.categoryId}`
+}
+
+function humanCategoryError(caught: unknown) {
+  const message = caught instanceof Error ? caught.message : '类目读取失败'
+  if (/登录|会话|浏览器|店小秘/.test(message)) return message
+  if (/fetch|network|failed/i.test(message)) return '本机 Reader 服务不可用；类目联动不可用，请确认后端已启动后重试。'
+  if (/409|忙/.test(message)) return '类目服务当前忙；稍后重试。'
+  return `类目读取失败：${message}`
 }
 
 function humanReaderError(caught: unknown) {

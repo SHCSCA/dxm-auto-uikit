@@ -1630,22 +1630,28 @@ def test_completed_real_save_task_cannot_be_paused_then_restarted(tmp_path, monk
     start_response = client.post(f"/api/tasks/{task['id']}/start", json=payload)
 
     assert pause_response.status_code == 409
-    assert "pause is disabled" in pause_response.json()["detail"]
+    detail = pause_response.json()["detail"]
+    assert detail["reason_code"] == "TASK_NOT_RUNNING"
     assert start_response.status_code == 409
     assert repo.get_task(task["id"])["status"] == "completed"
     assert runner.calls == []
 
 
-def test_running_real_save_task_cannot_be_stopped_without_worker_ack(tmp_path, monkeypatch):
+def test_running_real_save_task_stop_is_request_not_final_without_worker_ack(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     task = _create_task(repo, approval={"approved": True, "token": "l3-token"})
     repo.update_task_status(task["id"], "running")
 
     response = client.post(f"/api/tasks/{task['id']}/stop")
 
-    assert response.status_code == 409
-    assert "stop is disabled" in response.json()["detail"]
-    assert repo.get_task(task["id"])["status"] == "running"
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "stop_requested"
+    assert body["workerControl"]["request"] == "stop"
+    assert body["workerControl"]["pending"] is True
+    assert body["workerControl"]["ack"] is None
+    # Without worker ack the durable status stays stop_requested, not stopped/cancelled.
+    assert repo.get_task(task["id"])["status"] == "stop_requested"
 
 
 def test_stop_task_requires_existing_task(tmp_path, monkeypatch):
@@ -1657,7 +1663,7 @@ def test_stop_task_requires_existing_task(tmp_path, monkeypatch):
     assert response.json()["detail"] == "Task not found"
 
 
-def test_dry_run_task_can_be_stopped(tmp_path, monkeypatch):
+def test_dry_run_task_stop_requests_worker_ack(tmp_path, monkeypatch):
     client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
     task = _create_task(repo, mode="dry_run")
     repo.update_task_status(task["id"], "running")
@@ -1665,11 +1671,15 @@ def test_dry_run_task_can_be_stopped(tmp_path, monkeypatch):
     response = client.post(f"/api/tasks/{task['id']}/stop")
 
     assert response.status_code == 200
-    assert response.json()["status"] == "cancelled"
-    assert repo.get_task(task["id"])["status"] == "cancelled"
+    assert response.json()["status"] == "stop_requested"
+    assert repo.get_task(task["id"])["status"] == "stop_requested"
+    ack = repo.acknowledge_stop_task(task["id"])
+    assert ack.ok is True
+    assert ack.status == "stopped"
+    assert repo.get_task(task["id"])["status"] == "stopped"
 
 
-def test_running_real_save_task_cannot_be_paused_or_restarted(tmp_path, monkeypatch):
+def test_running_real_save_task_pause_is_request_and_blocks_restart(tmp_path, monkeypatch):
     client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     import src.main as main
 
@@ -1701,22 +1711,37 @@ def test_running_real_save_task_cannot_be_paused_or_restarted(tmp_path, monkeypa
     )
 
     assert first.status_code == 200
-    assert pause_response.status_code == 409
-    assert "pause is disabled" in pause_response.json()["detail"]
+    assert pause_response.status_code == 200
+    assert pause_response.json()["status"] == "pause_requested"
+    assert pause_response.json()["workerControl"]["pending"] is True
     assert second.status_code == 409
-    assert repo.get_task(task["id"])["status"] == "running"
+    assert repo.get_task(task["id"])["status"] == "pause_requested"
     assert runner.calls == [task["id"]]
 
 
-def test_resume_is_disabled_without_worker_acknowledgement(tmp_path, monkeypatch):
-    client, repo, _runner = _client_with_temp_repo(tmp_path, monkeypatch)
+def test_resume_requires_worker_acked_pause(tmp_path, monkeypatch):
+    client, repo, runner = _client_with_temp_repo(tmp_path, monkeypatch)
     task = _create_task(repo, mode="dry_run")
-    repo.update_task_status(task["id"], "paused")
+    repo.update_task_status(task["id"], "running")
 
-    response = client.post(f"/api/tasks/{task['id']}/resume")
+    pause = client.post(f"/api/tasks/{task['id']}/pause")
+    assert pause.status_code == 200
+    assert pause.json()["status"] == "pause_requested"
 
-    assert response.status_code == 409
-    assert "Resume is disabled" in response.json()["detail"]
+    # Resume before worker ack must fail closed.
+    early = client.post(f"/api/tasks/{task['id']}/resume")
+    assert early.status_code == 409
+    assert early.json()["detail"]["reason_code"] == "PAUSE_ACK_REQUIRED"
+
+    ack = repo.acknowledge_pause_task(task["id"])
+    assert ack.ok is True
+    assert repo.get_task(task["id"])["status"] == "paused"
+
+    resumed = client.post(f"/api/tasks/{task['id']}/resume")
+    assert resumed.status_code == 200
+    assert resumed.json()["status"] == "running"
+    assert repo.get_task(task["id"])["status"] == "running"
+    assert task["id"] in runner.calls
 
 
 def test_agent_console_start_requires_passed_l2_gate(tmp_path, monkeypatch):
