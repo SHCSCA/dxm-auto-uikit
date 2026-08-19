@@ -9,6 +9,7 @@
 - **专项复验：** backend 审计/E4/模板/派发 `39 passed`；frontend Node `27 passed`、browser harness `9 passed`、typecheck 通过；desktop `92 passed`。所有结果均为离线或隔离数据，真实店小秘登录/保存/发布=`0/0/0`。
 - **仍未关闭：** 完整 backend L0 未绑定新提交重跑为全绿；`outputs\desktop-build` 不存在；portable 同 HEAD smoke、真实三商品 preview/freeze/save、`MVP_READY` 和 `PROD_READY` 均未完成。
 - **生成物处理：** `.agents/`、`.playwright-cli/`、`output/`、`artifacts/` 等本地诊断生成物不纳入提交；不修改、不删除用户文件。
+- **推送结果：** 本地提交已完成；两次 push 与一次 `git ls-remote` 均因当前环境到 GitHub 443 连接失败/重置未完成，不能报告为已推送。
 
 ## 免安装桌面交付与全链路操作日志 · 开工（2026-08-14）
 
