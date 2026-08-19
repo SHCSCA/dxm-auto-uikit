@@ -4,7 +4,7 @@
 
 ## 分支整理与文档复核（2026-08-19）
 
-- **真实仓库：** `D:\Desktop\py\dxm-auto-uikit`；当前分支 `fix/dxm-two-stage-runtime-truth`；复核前 HEAD=`416810f61ad0f038bdd5bde850ed1dd50300d354`。
+- **真实仓库：** `D:\Desktop\py\dxm-auto-uikit`；当前分支 `fix/dxm-two-stage-runtime-truth`；本次整理提交 `ac08b78908d7b23038cffd2b204705fe2c12df44`（由复核前 HEAD `416810f61ad0f038bdd5bde850ed1dd50300d354` 产生）。
 - **用户授权：** 用户已明确要求合并分支、同步文档并推送代码；本次授权不改变禁止发布、只保存、可见浏览器、三铁证和 `UNKNOWN` 停批边界。
 - **专项复验：** backend 审计/E4/模板/派发 `39 passed`；frontend Node `27 passed`、browser harness `9 passed`、typecheck 通过；desktop `92 passed`。所有结果均为离线或隔离数据，真实店小秘登录/保存/发布=`0/0/0`。
 - **仍未关闭：** 完整 backend L0 未绑定新提交重跑为全绿；`outputs\desktop-build` 不存在；portable 同 HEAD smoke、真实三商品 preview/freeze/save、`MVP_READY` 和 `PROD_READY` 均未完成。

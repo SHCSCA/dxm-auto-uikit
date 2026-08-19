@@ -7,7 +7,7 @@
 - **完整 L0 同源证据缺失：** 本轮只复验了 backend 审计/E4/模板/派发 `39 passed`、frontend `27 passed` + browser `9 passed` + typecheck、desktop `92 passed`；没有把完整 L0 重新绑定到本轮提交并取得 `0 failed / 0 skipped`，不得用专项绿替代。
 - **portable 门禁未完成：** `outputs\desktop-build` 当前不存在；尚未取得目录包/免安装包、manifest、SHA256、隔离 user-data 重启读回和同 HEAD smoke 的同源证据。
 - **真实业务验收未执行：** 本轮真实店小秘登录、浏览器操作、保存、发布均为 `0`；类目属性/运费/服务模板尚未为真实三商品配置并冻结，旧任务 `#191` 仍禁止启动或克隆。
-- **交付身份：** 用户已授权本次分支整理、文档同步、提交和推送；生成的 `.agents/`、`.playwright-cli/`、`output/`、`artifacts/` 不进入提交。完成推送不等于 `E3_ACCEPTED`、`E4_ACCEPTED`、`MVP_READY` 或 `PROD_READY`。
+- **交付身份：** 本次整理提交为 `ac08b78908d7b23038cffd2b204705fe2c12df44`；用户已授权分支整理、文档同步、提交和推送。生成的 `.agents/`、`.playwright-cli/`、`output/`、`artifacts/` 不进入提交。完成推送不等于 `E3_ACCEPTED`、`E4_ACCEPTED`、`MVP_READY` 或 `PROD_READY`。
 
 ## 置顶状态（2026-08-14 · 桌面交付与日志规划后）
 
