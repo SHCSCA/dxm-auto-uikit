@@ -11,10 +11,10 @@ class OwnershipLockService:
     def __init__(self, lock_ttl_seconds: int = 30 * 60):
         self.lock_ttl_seconds = lock_ttl_seconds
 
-    def build_claim_mark(self, base_mark: str, task_id: int, job_id: int | None = None) -> str:
+    def build_ownership_tag(self, base_tag: str, task_id: int, job_id: int | None = None) -> str:
         if job_id is None:
-            return f"{base_mark}-{task_id}"
-        return f"{base_mark}-{task_id}-{job_id}"
+            return f"{base_tag}-{task_id}"
+        return f"{base_tag}-{task_id}-{job_id}"
 
     def acquire_lock(
         self,
@@ -24,12 +24,12 @@ class OwnershipLockService:
         store_name: str,
         source_title: str,
         sku_prefix: str | None = None,
-        claim_mark_base: str = "AI认领",
+        ownership_tag_base: str = "DXM-LOCK",
         lock_owner_run_id: str | None = None,
     ) -> dict:
         now = self._now_iso()
         expires_at = self._expires_at_iso()
-        claim_mark = self.build_claim_mark(claim_mark_base, task_id, job_id)
+        ownership_tag = self.build_ownership_tag(ownership_tag_base, task_id, job_id)
         fingerprint = self._build_fingerprint(
             product_id=product_id,
             store_name=store_name,
@@ -55,7 +55,7 @@ class OwnershipLockService:
                     acquired=False,
                     conflict=True,
                     lock_token=active_lock["lock_token"],
-                    claim_mark=active_lock["claim_mark"],
+                    ownership_tag=active_lock["ownership_tag"],
                     status="conflict",
                     reason="ownership_locked",
                 )
@@ -64,12 +64,12 @@ class OwnershipLockService:
                 conn.execute(
                     """
                     UPDATE ownership_locks
-                    SET job_id=?, claim_mark=?, lock_owner_run_id=?, expires_at=?, updated_at=?
+                    SET job_id=?, ownership_tag=?, lock_owner_run_id=?, expires_at=?, updated_at=?
                     WHERE lock_token=?
                     """,
                     (
                         job_id,
-                        claim_mark,
+                        ownership_tag,
                         lock_owner_run_id,
                         expires_at,
                         now,
@@ -80,7 +80,7 @@ class OwnershipLockService:
                     acquired=True,
                     conflict=False,
                     lock_token=active_lock["lock_token"],
-                    claim_mark=claim_mark,
+                    ownership_tag=ownership_tag,
                     status="refreshed",
                     reason="lock_refreshed",
                 )
@@ -97,7 +97,7 @@ class OwnershipLockService:
                     store_name,
                     source_title,
                     sku_prefix,
-                    claim_mark,
+                    ownership_tag,
                     lock_owner_run_id,
                     status,
                     expires_at,
@@ -114,7 +114,7 @@ class OwnershipLockService:
                     store_name,
                     source_title,
                     sku_prefix,
-                    claim_mark,
+                    ownership_tag,
                     lock_owner_run_id,
                     expires_at,
                     now,
@@ -125,53 +125,9 @@ class OwnershipLockService:
                 acquired=True,
                 conflict=False,
                 lock_token=lock_token,
-                claim_mark=claim_mark,
+                ownership_tag=ownership_tag,
                 status="acquired",
                 reason="lock_acquired",
-            )
-
-    def mark_page_claim_verified(self, lock_token: str, page_claim_mark: str) -> dict:
-        now = self._now_iso()
-        with connection() as conn:
-            lock = conn.execute(
-                "SELECT * FROM ownership_locks WHERE lock_token=?",
-                (lock_token,),
-            ).fetchone()
-            if not lock:
-                return self._result(
-                    acquired=False,
-                    conflict=False,
-                    lock_token=lock_token,
-                    claim_mark=None,
-                    status="missing",
-                    reason="lock_not_found",
-                )
-
-            if lock["claim_mark"] != page_claim_mark:
-                return self._result(
-                    acquired=lock["status"] == "active",
-                    conflict=True,
-                    lock_token=lock["lock_token"],
-                    claim_mark=lock["claim_mark"],
-                    status="claim_mismatch",
-                    reason="page_claim_mark_mismatch",
-                )
-
-            conn.execute(
-                """
-                UPDATE ownership_locks
-                SET page_claim_mark=?, page_claim_verified=1, page_claim_verified_at=?, updated_at=?
-                WHERE lock_token=?
-                """,
-                (page_claim_mark, now, now, lock_token),
-            )
-            return self._result(
-                acquired=lock["status"] == "active",
-                conflict=False,
-                lock_token=lock["lock_token"],
-                claim_mark=lock["claim_mark"],
-                status="verified",
-                reason="page_claim_mark_verified",
             )
 
     def release_lock(self, lock_token: str) -> dict:
@@ -186,7 +142,7 @@ class OwnershipLockService:
                     acquired=False,
                     conflict=False,
                     lock_token=lock_token,
-                    claim_mark=None,
+                    ownership_tag=None,
                     status="missing",
                     reason="lock_not_found",
                 )
@@ -203,7 +159,7 @@ class OwnershipLockService:
                 acquired=False,
                 conflict=False,
                 lock_token=lock["lock_token"],
-                claim_mark=lock["claim_mark"],
+                ownership_tag=lock["ownership_tag"],
                 status="released",
                 reason="lock_released",
             )
@@ -233,7 +189,7 @@ class OwnershipLockService:
         acquired: bool,
         conflict: bool,
         lock_token: str | None,
-        claim_mark: str | None,
+        ownership_tag: str | None,
         status: str,
         reason: str,
     ) -> dict:
@@ -241,7 +197,7 @@ class OwnershipLockService:
             "acquired": acquired,
             "conflict": conflict,
             "lock_token": lock_token,
-            "claim_mark": claim_mark,
+            "ownership_tag": ownership_tag,
             "status": status,
             "reason": reason,
         }

@@ -39,8 +39,8 @@ from src.execution.dxm_live import DxmLiveClient
 from src.services.agent_console import HUD_INIT_SCRIPT
 from src.services.dxm_draft_reader import DxmDraftReaderError
 from src.services.dxm_editor_model import enrich_dxm_editor_schema
-from src.state_machine.two_stage import (
-    TwoStageContractError,
+from src.state_machine.save_authorization import (
+    SaveOnlyContractError,
     canonical_source_identity,
     is_supported_product_detail_url,
 )
@@ -147,7 +147,6 @@ class FrozenTargetIdentityError(RuntimeError):
 
 WORKFLOW_SCREENSHOT_MAP = {
     'product': SCREENSHOT_DIR / 'dianxiaomi_product_page.png',
-    'data_acquisition': SCREENSHOT_DIR / 'dianxiaomi_data_acquisition.png',
     'draft_box': SCREENSHOT_DIR / 'dianxiaomi_draft_box.png',
 }
 DXM_REFERENCE_TEMPLATE_SECTIONS = (
@@ -164,24 +163,8 @@ DXM_REFERENCE_TEMPLATE_SECTIONS = (
     'semi_managed',
 )
 DRAFT_ACTION_SCREENSHOT_MAP = {
-    'remark': SCREENSHOT_DIR / 'dianxiaomi_draft_box_remark.png',
     'edit': SCREENSHOT_DIR / 'dianxiaomi_draft_box_edit.png',
 }
-ACQUISITION_ACTION_SCREENSHOT_MAP = {
-    'claim': SCREENSHOT_DIR / 'dianxiaomi_data_acquisition_claim.png',
-    'verify': SCREENSHOT_DIR / 'dianxiaomi_draft_box_claim_verified.png',
-}
-DATA_ACQUISITION_CLAIM_FORBIDDEN_TERMS = (
-    '保存',
-    '发布',
-    '立即发布',
-    '继续发布',
-    '保存并发布',
-    '保存并移入待发布',
-    '移入待发布',
-    '批量发布',
-)
-DATA_ACQUISITION_CLAIM_ACTION_TERMS = ('认领', '领取')
 EDITOR_ACTION_SCREENSHOT_MAP = {
     'fill_editor_required_defaults': SCREENSHOT_DIR / 'dianxiaomi_fill_editor_required_defaults.png',
     'verify_edit_ownership': SCREENSHOT_DIR / 'dianxiaomi_verify_edit_ownership.png',
@@ -198,14 +181,8 @@ WORKFLOW_TARGETS = {
     'product': {
         'url': 'https://www.dianxiaomi.com/product/productList.htm',
         'label': '产品列表',
-        'message': '已进入产品列表页，可以继续往已有待认领列表或产品管理操作。',
-        'next_action': '继续切到已有待认领列表或商品箱视图。',
-    },
-    'data_acquisition': {
-        'url': 'https://www.dianxiaomi.com/web/productCrawl/dataAcquisition',
-        'label': '已有待认领列表',
-        'message': '已进入店小秘已有待认领列表，可以继续认领到商品箱。',
-        'next_action': '继续切换到商品箱或执行认领。',
+        'message': '已进入产品列表页，可以继续查看产品或切换到商品箱。',
+        'next_action': '继续切到商品箱视图。',
     },
     'draft_box': {
         'url': 'https://www.dianxiaomi.com/web/smt/smtProductList/draft?status=0',
@@ -216,7 +193,6 @@ WORKFLOW_TARGETS = {
 }
 WORKFLOW_READY_TERMS = {
     'product': ['产品列表', '标题 / 产品ID', '标题/产品ID', '操作'],
-    'data_acquisition': ['数据采集', '搜索内容', '认领', '采集箱'],
     'draft_box': ['店铺账号', '搜索内容', '标题/产品ID', '移入待发布', '编辑'],
     'editor': ['基本信息', '产品信息', '保存'],
     'semi_managed': ['半托管', '重量', '包装尺寸', '物流属性'],
@@ -224,9 +200,6 @@ WORKFLOW_READY_TERMS = {
 WORKFLOW_PAGE_IDENTITIES = {
     'product': {
         'path': '/product/productList.htm',
-    },
-    'data_acquisition': {
-        'path': '/web/productCrawl/dataAcquisition',
     },
     'draft_box': {
         'path': '/web/smt/smtProductList/draft',
@@ -240,135 +213,6 @@ WORKFLOW_PAGE_IDENTITIES = {
         'path': '/web/smt/editFromSmt',
     },
 }
-WORKFLOW_HUMAN_STEP_COPY = {
-    'data_acquisition_claim:open_start': '打开已有待认领列表',
-    'data_acquisition_claim:page_ready_done': '确认待认领列表可操作',
-    'data_acquisition_claim:initial_settle_done': '等待待认领列表稳定',
-    'data_acquisition_claim:dismiss_before_search_skipped': '准备匹配已有待认领商品',
-    'data_acquisition_claim:search_start': '筛选已有待认领商品',
-    'data_acquisition_search:source_input_filled': '来源链接仅作匹配',
-    'data_acquisition_search:start_collect_clicked': '已阻止新建商品',
-    'data_acquisition_search:collect_result_ready': '等待列表刷新',
-    'data_acquisition_search:source_input_submitted': '等待列表刷新',
-    'data_acquisition_search:result_ready_wait_skipped': '等待列表刷新',
-    'data_acquisition_claim:target_find_start': '定位待认领商品',
-    'data_acquisition_claim:source_lookup_start': '匹配来源链接',
-    'data_acquisition_claim:source_lookup_dom_scan_done': '匹配来源链接',
-    'data_acquisition_claim:target_find_done': '确认待认领商品',
-    'data_acquisition_claim:click_claim_start': '点击认领按钮',
-    'data_acquisition_claim:click_claim_done': '已点击认领按钮',
-    'data_acquisition_claim:dialog_start': '确认认领弹窗',
-    'data_acquisition_claim:dialog_done': '完成认领确认',
-    'data_acquisition_claim:screenshot_start': '保存认领证据',
-    'data_acquisition_claim:done': '认领到商品箱完成',
-}
-
-DATA_ACQUISITION_NOTICE_AUTO_DISMISS_SCRIPT = r'''
-(() => {
-  if (window.__dxmAgentDataAcquisitionNoticeAutoDismissInstalled) return;
-  window.__dxmAgentDataAcquisitionNoticeAutoDismissInstalled = true;
-  const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
-  const isVisible = (el) => {
-    if (!el || !el.getBoundingClientRect) return false;
-    const r = el.getBoundingClientRect();
-    const style = window.getComputedStyle(el);
-    return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-  };
-  const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-  const isNoticeLike = (el, compact) => {
-    const cls = String(el.className || '');
-    return cls.includes('notice')
-      || cls.includes('Notice')
-      || cls.includes('activity')
-      || cls.includes('Activity')
-      || compact.includes('线下活动')
-      || compact.includes('小秘公告')
-      || compact.includes('活动亮点')
-      || compact.includes('公告');
-  };
-  const hasDangerousMutationText = (compact) => [
-    '立即发布',
-    '继续发布',
-    '保存并发布',
-    '确认发布',
-    '提交发布',
-    '保存并移入待发布',
-    '移入待发布',
-  ].some(term => compact.includes(norm(term)));
-  const closeNotice = () => {
-    const selectors = [
-      '.notice-list-modal',
-      '.ant-modal-wrap',
-      '.ant-modal',
-      '[role="dialog"]',
-      '[class*="notice"]',
-      '[class*="Notice"]',
-      '[class*="activity"]',
-      '[class*="Activity"]'
-    ].join(',');
-    const modals = Array.from(document.querySelectorAll(selectors))
-      .filter(isVisible)
-      .map(el => ({el, text: textOf(el), compact: norm(textOf(el))}))
-      .filter(item => item.text && isNoticeLike(item.el, item.compact) && !hasDangerousMutationText(item.compact));
-    for (const item of modals) {
-      const modal = item.el;
-      const controls = Array.from(modal.querySelectorAll('.ant-modal-close, .ant-modal-close-x, .close, .close-btn, .notice-close, [class*="close"], [aria-label*="Close"], [aria-label*="关闭"], button, a, span, div'))
-        .filter(isVisible)
-        .map(el => ({
-          el,
-          text: norm(el.innerText || el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || ''),
-          cls: String(el.className || ''),
-          tag: String(el.tagName || '').toLowerCase(),
-        }))
-        .filter(item => {
-          if (['开始采集', '一键发布', '采集并一键发布', '认领', '批量认领', '保存', '发布'].includes(item.text)) return false;
-          return item.text === '关闭'
-            || item.text === '知道了'
-            || item.text === '我知道了'
-            || item.cls.includes('ant-modal-close')
-            || item.cls.includes('close')
-            || item.cls.includes('Close');
-        });
-      const target = controls.find(item => item.text === '关闭')
-        || controls.find(item => item.cls.includes('ant-modal-close') || item.cls.includes('close') || item.cls.includes('Close'))
-        || controls[0];
-      if (target) {
-        try { target.el.click(); } catch (_) {}
-      }
-      setTimeout(() => {
-        if (document.body.contains(modal) && isVisible(modal)) {
-          try { modal.remove(); } catch (_) { modal.style.display = 'none'; }
-        }
-        document.querySelectorAll('.ant-modal-mask, .modal-backdrop, [class*="modal-mask"]').forEach(mask => {
-          if (isVisible(mask)) {
-            try { mask.remove(); } catch (_) { mask.style.display = 'none'; }
-          }
-        });
-        document.querySelectorAll('.ant-spin-spinning, .vxe-loading, .vxe-loading--wrapper, .el-loading-mask').forEach(spin => {
-          try { spin.style.setProperty('display', 'none', 'important'); } catch (_) {}
-        });
-      }, 200);
-    }
-  };
-  closeNotice();
-  const timer = window.setInterval(closeNotice, 500);
-  const observer = new MutationObserver(closeNotice);
-  const start = () => {
-    if (document.documentElement) {
-      observer.observe(document.documentElement, {childList: true, subtree: true});
-    }
-  };
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', start, {once: true});
-  } else {
-    start();
-  }
-  window.setTimeout(() => {
-    window.clearInterval(timer);
-    observer.disconnect();
-  }, 30000);
-})();
-'''
 
 
 class DxmLoginFlow:
@@ -384,7 +228,6 @@ class DxmLoginFlow:
         self._live_hud_reapply_pending = False
         self._live_hud_bound_page_ids: set[int] = set()
         self._live_hud_bound_context_ids: set[int] = set()
-        self._data_acquisition_notice_bound_context_ids: set[int] = set()
         self._last_dismiss_blocking_modals_trace: list[dict[str, Any]] = []
         self._recent_workflow_events: list[dict[str, Any]] = []
         self._workflow_event_listener: Callable[[dict[str, Any]], None] | None = None
@@ -737,7 +580,7 @@ class DxmLoginFlow:
 
         This method runs on the Browser Agent thread, so reading the current
         Playwright page is safe. The target hash is recomputed from task-bound
-        values; claim/save click primitives separately revalidate the DOM target
+        values; save mutation primitives separately revalidate the DOM target
         immediately before emitting their input event.
         """
 
@@ -1040,7 +883,7 @@ class DxmLoginFlow:
             **payload,
         }
         if not record.get('human_step'):
-            record['human_step'] = WORKFLOW_HUMAN_STEP_COPY.get(event) or event
+            record['human_step'] = event
         self._recent_workflow_events.append(record)
         del self._recent_workflow_events[:-400]
         listener = self._workflow_event_listener
@@ -1119,28 +962,6 @@ class DxmLoginFlow:
         page.goto(url, wait_until=wait_until, timeout=timeout)
         self._trace_workflow_event('goto:sterile_finished', url=url, current_url=page.url)
 
-    def _goto_data_acquisition_sterile(self, page: Page, url: str, *, wait_until: str = 'domcontentloaded', timeout: int = 45000) -> None:
-        self._trace_workflow_event(
-            'data_acquisition_open:sterile_goto_start',
-            url=url,
-            current_url=getattr(page, 'url', None),
-            wait_until=wait_until,
-            timeout=timeout,
-            human_step='打开已有待认领列表',
-        )
-        page.goto(url, wait_until=wait_until, timeout=timeout)
-        self._trace_workflow_event(
-            'data_acquisition_open:sterile_goto_finished',
-            url=url,
-            current_url=getattr(page, 'url', None),
-            human_step='已有待认领列表已打开',
-        )
-        self._trace_workflow_event(
-            'data_acquisition_open:sterile_settle',
-            seconds=3.0,
-            human_step='等待页面自行加载',
-        )
-        time.sleep(3.0)
 
     def _is_current_page_url(self, page: Page, url: str) -> bool:
         try:
@@ -1624,7 +1445,7 @@ class DxmLoginFlow:
                 stage='workflow_navigation_failed',
                 label='无效目标',
                 message=f'不支持的业务导航目标：{target}',
-                next_action='请改为 product、data_acquisition 或 draft_box。',
+                next_action='请改为 product 或 draft_box。',
             )
             self._write_state(state)
             return state
@@ -4974,7 +4795,7 @@ class DxmLoginFlow:
                 browser_session_id=browser_session_id,
                 page_url=str(getattr(page, 'url', '') or ''),
             )
-        except TwoStageContractError as exc:
+        except SaveOnlyContractError as exc:
             reason_code = str(exc.reason_code or '')
             if not reason_code.startswith('DRAFT_BOX_'):
                 reason_code = 'DRAFT_BOX_ITEM_IDENTITY_INCOMPLETE'
@@ -5339,7 +5160,7 @@ class DxmLoginFlow:
         page_url: str,
     ) -> list[dict[str, Any]]:
         if not isinstance(raw_items, list):
-            raise TwoStageContractError(
+            raise SaveOnlyContractError(
                 'DRAFT_BOX_SCOPE_READ_FAILED',
                 '商品箱 DOM 返回的 items 不是列表。',
             )
@@ -5347,14 +5168,14 @@ class DxmLoginFlow:
         fingerprints: set[str] = set()
         for position, raw in enumerate(raw_items, start=1):
             if not isinstance(raw, Mapping):
-                raise TwoStageContractError(
+                raise SaveOnlyContractError(
                     'DRAFT_BOX_ITEM_IDENTITY_INCOMPLETE',
                     f'商品箱第 {position} 行不是结构化商品记录。',
                 )
             title = ' '.join(str(raw.get('title') or '').split())
             product_id = str(raw.get('productId') or '').strip() or None
             if product_id and not is_stable_product_id(product_id):
-                raise TwoStageContractError(
+                raise SaveOnlyContractError(
                     'DRAFT_BOX_ITEM_IDENTITY_INCOMPLETE',
                     f'商品箱第 {position} 行的产品 ID 不是稳定商品身份。',
                 )
@@ -5374,7 +5195,7 @@ class DxmLoginFlow:
             store_name = ' '.join(str(store.get('store_name') or '').split())
             store_cell_text = ' '.join(str(store.get('cell_text') or '').split())
             if not title or not store_name or not store_cell_text or store.get('source') != 'structured_store_cell':
-                raise TwoStageContractError(
+                raise SaveOnlyContractError(
                     'DRAFT_BOX_ITEM_IDENTITY_INCOMPLETE',
                     f'商品箱第 {position} 行缺少标题或结构化店铺证据。',
                 )
@@ -5391,13 +5212,13 @@ class DxmLoginFlow:
                     'fingerprint': source['fingerprint'],
                 }
             else:
-                raise TwoStageContractError(
+                raise SaveOnlyContractError(
                     'DRAFT_BOX_ITEM_IDENTITY_INCOMPLETE',
                     f'商品箱第 {position} 行缺少产品 ID 或来源 URL。',
                 )
             fingerprint = str(identity['fingerprint'])
             if fingerprint in fingerprints:
-                raise TwoStageContractError(
+                raise SaveOnlyContractError(
                     'DRAFT_BOX_ITEM_IDENTITY_AMBIGUOUS',
                     f'商品箱存在重复或歧义身份：第 {position} 行与前序商品相同。',
                 )
@@ -5438,25 +5259,23 @@ class DxmLoginFlow:
     def perform_draft_box_action(
         self,
         action: str,
-        note_text: str | None = None,
         product_query: str | None = None,
         store_name: str | None = None,
         target_source_urls: list[str] | None = None,
         target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if action not in DRAFT_ACTION_SCREENSHOT_MAP:
+        if action != 'edit':
             state = self._error_state(
                 stage='draft_box_action_failed',
                 label='无效动作',
                 message=f'不支持的商品箱动作：{action}',
-                next_action='请改为 remark 或 edit。',
+                next_action='商品箱只允许进入编辑页；系统不会发布商品。',
             )
             self._write_state(state)
             return state
         try:
             result = self._perform_draft_box_action(
                 action,
-                note_text=note_text,
                 product_query=product_query,
                 store_name=store_name,
                 target_source_urls=target_source_urls,
@@ -5479,66 +5298,28 @@ class DxmLoginFlow:
             state = self._error_state(
                 stage='draft_box_action_failed',
                 label='动作失败',
-                message=f'执行商品箱动作失败：{exc}',
-                next_action='确认已进入商品箱且页面结构未变，再重试动作。',
+                message=f'执行商品箱编辑动作失败：{exc}',
+                next_action='确认已进入商品箱且页面结构未变，再重新打开编辑页。',
             )
             self._keep_visible_browser_for_recovery(state)
             self._write_state(state)
             return state
 
-        if action == 'edit':
-            state = {
-                'ok': result.get('ok') is True,
-                'stage': 'editor_page',
-                'label': '已进入编辑界面',
-                'message': result.get('message') or '已进入真实编辑界面，可继续读取字段与模板映射。',
-                'next_action': '继续处理分类引导、属性信息与编辑页字段。',
-                'requires_user_action': False,
-                'page_title': result.get('page_title') or '店小秘--编辑速卖通产品',
-                'page_url': result.get('page_url'),
-                'screenshot_url': result.get('screenshot_url'),
-                'updated_at': now_iso(),
-                'current_nav': 'edit_page',
-                'current_action': action,
-                'note_text': note_text,
-                'product_query': result.get('product_query'),
-                'store_name': result.get('store_name'),
-                'target_row_text': result.get('target_row_text'),
-                'target_source_urls': result.get('target_source_urls', []),
-                'target_identity': result.get('target_identity'),
-                'target_identity_sha256': result.get('target_identity_sha256'),
-                'target_identity_evidence': result.get('target_identity_evidence'),
-                'product_identity_match': result.get('product_identity_match'),
-                'store_identity_match': result.get('store_identity_match'),
-                'store_match': result.get('store_match'),
-                'source_identity_match': result.get('source_identity_match'),
-                'readiness': result.get('readiness'),
-                'editor_sections': result.get('editor_sections', []),
-                'top_actions': result.get('top_actions', []),
-                'detected_fields': result.get('detected_fields', []),
-                'draft_action_result': dict(result),
-            }
-            self._write_state(state)
-            return state
-
         state = {
             'ok': result.get('ok') is True,
-            'stage': 'draft_box_action',
-            'label': '商品箱动作已触发',
-            'message': self._draft_box_action_message(action, note_text),
-            'next_action': '继续验证页面回显或进入下一步。',
+            'stage': 'editor_page',
+            'label': '已进入编辑界面',
+            'message': result.get('message') or '已进入真实编辑界面，可继续读取字段与模板映射。',
+            'next_action': '继续处理分类引导、属性信息与编辑页字段。',
             'requires_user_action': False,
-            'page_title': result.get('page_title') or '速卖通商品箱',
-            'page_url': result.get('page_url') or WORKFLOW_TARGETS['draft_box']['url'],
+            'page_title': result.get('page_title') or '店小秘--编辑速卖通产品',
+            'page_url': result.get('page_url'),
             'screenshot_url': result.get('screenshot_url'),
-            'evidence_ref': result.get('evidence_ref'),
             'updated_at': now_iso(),
-            'current_nav': 'draft_box',
+            'current_nav': 'edit_page',
             'current_action': action,
-            'note_text': note_text,
             'product_query': result.get('product_query'),
             'store_name': result.get('store_name'),
-            'note_verified': result.get('note_verified'),
             'target_row_text': result.get('target_row_text'),
             'target_source_urls': result.get('target_source_urls', []),
             'target_identity': result.get('target_identity'),
@@ -5548,151 +5329,16 @@ class DxmLoginFlow:
             'store_identity_match': result.get('store_identity_match'),
             'store_match': result.get('store_match'),
             'source_identity_match': result.get('source_identity_match'),
+            'readiness': result.get('readiness'),
+            'editor_sections': result.get('editor_sections', []),
+            'top_actions': result.get('top_actions', []),
+            'detected_fields': result.get('detected_fields', []),
             'draft_action_result': dict(result),
         }
         self._write_state(state)
         return state
 
-    def claim_from_data_acquisition(
-        self,
-        claim_mark: str,
-        product_query: str | None = None,
-        category_name: str | None = None,
-        store_name: str | None = None,
-        target_source_urls: list[str] | None = None,
-    ) -> dict[str, Any]:
-        try:
-            result = self._perform_data_acquisition_claim(
-                claim_mark=claim_mark,
-                product_query=product_query,
-                category_name=category_name,
-                store_name=store_name,
-                target_source_urls=target_source_urls,
-            )
-        except Exception as exc:
-            state = self._error_state(
-                stage='data_acquisition_claim_failed',
-                label='认领失败',
-                message=f'认领已有待认领商品到商品箱失败：{exc}',
-                next_action='请确认目标商品已存在于店小秘待认领列表，真实浏览器筛选唯一后再重新认领。',
-            )
-            self._keep_visible_browser_for_recovery(state)
-            self._write_state(state)
-            return state
 
-        state = {
-            'ok': True,
-            'stage': 'data_acquisition_claim',
-            'label': '已提交认领',
-            'message': result.get('message') or '已在真实店小秘已有待认领列表提交认领。',
-            'next_action': '继续打开商品箱确认该商品已经出现。',
-            'requires_user_action': False,
-            'page_title': result.get('page_title'),
-            'page_url': result.get('page_url'),
-            'screenshot_url': result.get('screenshot_url'),
-            'screenshot_error': result.get('screenshot_error'),
-            'updated_at': now_iso(),
-            'current_nav': 'data_acquisition',
-            'claim_mark': claim_mark,
-            'product_query': product_query,
-            'category_name': category_name,
-            'store_name': store_name,
-            'search_result': result.get('search_result'),
-            'target_source_urls': result.get('target_source_urls', []),
-            'claimed_product': result.get('claimed_product'),
-            'claim_target': result.get('claim_target'),
-            'claim_dialog': result.get('claim_dialog'),
-            'claim_click_safety': result.get('claim_click_safety'),
-            'claim_result': dict(result),
-        }
-        self._write_state(state)
-        return state
-
-    def verify_draft_box_claim(
-        self,
-        claim_mark: str,
-        product_query: str | None = None,
-        category_name: str | None = None,
-        store_name: str | None = None,
-        target_source_urls: list[str] | None = None,
-    ) -> dict[str, Any]:
-        previous_state = self.get_state()
-        try:
-            result = self._verify_draft_box_claim(
-                claim_mark=claim_mark,
-                product_query=product_query,
-                category_name=category_name,
-                store_name=store_name,
-                target_source_urls=target_source_urls,
-            )
-        except Exception as exc:
-            state = self._error_state(
-                stage='draft_box_claim_verify_failed',
-                label='商品箱确认失败',
-                message=f'确认商品箱商品失败：{exc}',
-                next_action='请打开商品箱检查认领商品是否出现，必要时回到已有待认领列表重新认领。',
-            )
-            self._keep_visible_browser_for_recovery(state)
-            self._write_state(state)
-            return state
-
-        if isinstance(result, dict) and result.get('ok') is False:
-            state = {
-                'ok': False,
-                'stage': result.get('stage') or 'draft_box_claim_verify_failed',
-                'label': result.get('label') or '商品箱确认失败',
-                'message': result.get('message') or '商品箱商品确认没有完成。',
-                'next_action': result.get('next_action') or '请打开商品箱检查认领商品是否出现，必要时回到已有待认领列表重新认领。',
-                'requires_user_action': result.get('requires_user_action', True),
-                'page_title': result.get('page_title'),
-                'page_url': result.get('page_url'),
-                'screenshot_url': result.get('screenshot_url'),
-                'browser_visible': result.get('browser_visible', not self._is_headless()),
-                'verification_result': dict(result),
-                'updated_at': now_iso(),
-            }
-            self._keep_visible_browser_for_recovery(state)
-            self._write_state(state)
-            return state
-
-        previous_claim_target = previous_state.get('claim_target') if isinstance(previous_state.get('claim_target'), dict) else None
-        verification_result = {
-            **dict(result),
-            'claim_mark': claim_mark,
-            'claimed_product': result.get('claimed_product'),
-            'draft_box_match': result.get('draft_box_match'),
-            'claim_target': result.get('claim_target') or previous_claim_target,
-            'search_result': (
-                result.get('search_result')
-                if result.get('search_result') is not None
-                else previous_state.get('search_result')
-            ),
-        }
-        state = {
-            'ok': True,
-            'stage': 'draft_box_claim_verified',
-            'label': '商品箱已确认',
-            'message': '已确认真实商品进入商品箱。',
-            'next_action': '可以进入编辑保存，选择模板后只保存。',
-            'requires_user_action': False,
-            'page_title': result.get('page_title'),
-            'page_url': result.get('page_url'),
-            'screenshot_url': result.get('screenshot_url'),
-            'evidence_ref': result.get('evidence_ref'),
-            'updated_at': now_iso(),
-            'current_nav': 'draft_box',
-            'claim_mark': claim_mark,
-            'product_query': product_query,
-            'category_name': category_name,
-            'store_name': store_name,
-            'target_source_urls': result.get('target_source_urls', []),
-            'claimed_product': result.get('claimed_product'),
-            'draft_box_match': result.get('draft_box_match'),
-            'claim_target': result.get('claim_target') or previous_claim_target,
-            'verification_result': verification_result,
-        }
-        self._write_state(state)
-        return state
 
     def perform_editor_action(
         self,
@@ -6129,9 +5775,7 @@ class DxmLoginFlow:
         page = self._ensure_page_with_cookies()
         self._trace_workflow_event('navigate:page_ready', target=target, current_url=page.url)
         visible_draft_box = target == 'draft_box' and os.name == 'nt' and not self._is_headless()
-        if target == 'data_acquisition':
-            self._goto_data_acquisition_sterile(page, config['url'], wait_until='domcontentloaded', timeout=45000)
-        elif visible_draft_box:
+        if visible_draft_box:
             self._trace_workflow_event(
                 'navigate:visible_draft_box_goto_start',
                 target=target,
@@ -6149,36 +5793,8 @@ class DxmLoginFlow:
         else:
             self._goto_with_live_hud(page, config['url'], wait_until='domcontentloaded', timeout=45000)
         self._trace_workflow_event('navigate:goto_done', target=target, current_url=page.url)
-        if target == 'data_acquisition':
-            readiness = self._browser_readiness_gate(
-                page,
-                label=config['label'],
-                expected_identity='data_acquisition',
-                ready_terms=WORKFLOW_READY_TERMS['data_acquisition'],
-            )
-            if readiness.get('ok') is not True:
-                raise RuntimeError(readiness.get('message') or '已有待认领列表页面未就绪')
-            wait_result = {
-                'ready': True,
-                'ready_term': readiness.get('business_marker'),
-                'loading': readiness.get('loading'),
-                'rows': None,
-                'inputs': None,
-                'url': getattr(page, 'url', ''),
-                'title': readiness.get('page_title') or '店小秘--数据采集',
-                'text_excerpt': readiness.get('body_excerpt') or '',
-                'expected_identity': 'data_acquisition',
-                'readiness': readiness,
-            }
-            self._trace_workflow_event(
-                'navigate:wait_ready_done',
-                target=target,
-                current_url=getattr(page, 'url', None),
-                reason='exact_identity_business_marker_loading_gate',
-            )
-            dismissed_blocking_modals = 0
-            self._trace_workflow_event('navigate:dismiss_skipped', target=target, reason='open_data_acquisition_only')
-        elif visible_draft_box:
+
+        if visible_draft_box:
             wait_result = self._settle_visible_draft_box(page, expected_identity='draft_box')
             if not wait_result.get('ready'):
                 excerpt = str(wait_result.get('text_excerpt') or '').replace('\n', ' ')[:180]
@@ -6194,7 +5810,11 @@ class DxmLoginFlow:
                 reason='visible_draft_box_sterile_settle',
             )
             dismissed_blocking_modals = 0
-            self._trace_workflow_event('navigate:dismiss_skipped', target=target, reason='visible_draft_box_sterile_settle')
+            self._trace_workflow_event(
+                'navigate:dismiss_skipped',
+                target=target,
+                reason='visible_draft_box_sterile_settle',
+            )
         else:
             wait_result = self._wait_for_page_ready(
                 page,
@@ -6202,22 +5822,35 @@ class DxmLoginFlow:
                 label=config['label'],
                 expected_identity=target,
                 timeout=60000,
-                dismiss_strategy='full',
             )
-            self._trace_workflow_event('navigate:wait_ready_done', target=target, current_url=page.url, wait_result=wait_result)
+            self._trace_workflow_event(
+                'navigate:wait_ready_done',
+                target=target,
+                current_url=page.url,
+                wait_result=wait_result,
+            )
             dismissed_blocking_modals = self._dismiss_blocking_modals(page)
-        self._trace_workflow_event('navigate:dismiss_done', target=target, current_url=page.url, dismissed=dismissed_blocking_modals)
+
+        self._trace_workflow_event(
+            'navigate:dismiss_done',
+            target=target,
+            current_url=page.url,
+            dismissed=dismissed_blocking_modals,
+        )
         screenshot_path = WORKFLOW_SCREENSHOT_MAP[target]
         screenshot_url = None
-        if target == 'data_acquisition' or visible_draft_box:
-            reason = 'data_acquisition_viewport_screenshot_can_block' if target == 'data_acquisition' else 'visible_draft_box_open_only_screenshot_skipped'
-            self._trace_workflow_event('navigate:screenshot_skipped', target=target, reason=reason)
+        if visible_draft_box:
+            self._trace_workflow_event(
+                'navigate:screenshot_skipped',
+                target=target,
+                reason='visible_draft_box_open_only_screenshot_skipped',
+            )
         else:
             self._trace_workflow_event('navigate:screenshot_start', target=target, path=str(screenshot_path))
             page.screenshot(path=str(screenshot_path), full_page=True, timeout=15000)
             self._trace_workflow_event('navigate:screenshot_done', target=target, path=str(screenshot_path), current_url=page.url)
             screenshot_url = self._artifact_url(screenshot_path)
-        page_title = wait_result.get('title') if (target == 'data_acquisition' or visible_draft_box) else page.title()
+        page_title = wait_result.get('title') if visible_draft_box else page.title()
         page_title = page_title or config['label']
         self._trace_workflow_event('navigate:return', target=target, current_url=page.url, page_title=page_title)
         return {
@@ -6233,16 +5866,17 @@ class DxmLoginFlow:
     def _perform_draft_box_action(
         self,
         action: str,
-        note_text: str | None = None,
         product_query: str | None = None,
         store_name: str | None = None,
         target_source_urls: list[str] | None = None,
         target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if action != 'edit':
+            raise RuntimeError(f'商品箱只支持 edit 动作：{action}')
         if target_identity is None:
             raise FrozenTargetIdentityError(
                 'FROZEN_TARGET_REQUIRED',
-                f'{action} 必须携带冻结商品身份，已在打开商品箱前停止。',
+                'edit 必须携带冻结商品身份，已在打开商品箱前停止。',
             )
         normalized_target, target_identity_sha256 = self._normalize_frozen_target_identity(
             target_identity,
@@ -6251,65 +5885,64 @@ class DxmLoginFlow:
         )
         target_source_urls = list(normalized_target['source_urls'])
         page = self._ensure_page_with_cookies()
-        if action == 'edit':
-            open_editor = self._find_open_editor_page_for_target(
-                product_query=product_query,
-                target_source_urls=target_source_urls or [],
-                target_identity=normalized_target,
-                store_name=store_name,
+
+        open_editor = self._find_open_editor_page_for_target(
+            product_query=product_query,
+            target_source_urls=target_source_urls,
+            target_identity=normalized_target,
+            store_name=store_name,
+        )
+        if open_editor is not None:
+            editor_page = open_editor['page']
+            match = open_editor.get('match') or {}
+            self._page = editor_page
+            self._reapply_live_hud_if_available(editor_page)
+            self._trace_workflow_event(
+                'draft_box_action:reuse_open_editor_for_target',
+                matched_by=match.get('matchedBy'),
+                source_urls=match.get('sourceUrls') or target_source_urls,
+                current_url=getattr(editor_page, 'url', None),
+                human_step='接管已打开的商品编辑页',
             )
-            if open_editor is not None:
-                editor_page = open_editor['page']
-                match = open_editor.get('match') or {}
-                self._page = editor_page
-                self._reapply_live_hud_if_available(editor_page)
-                self._trace_workflow_event(
-                    'draft_box_action:reuse_open_editor_for_target',
-                    matched_by=match.get('matchedBy'),
-                    source_urls=match.get('sourceUrls') or target_source_urls or [],
-                    current_url=getattr(editor_page, 'url', None),
-                    human_step='接管已打开的商品编辑页',
-                )
-                screenshot_path = DRAFT_ACTION_SCREENSHOT_MAP[action]
-                screenshot_result = self._capture_optional_workflow_screenshot(
-                    editor_page,
-                    screenshot_path,
-                    trace_prefix='draft_box_edit_reuse',
-                )
-                editor_meta = self._extract_editor_page_meta(editor_page)
-                identity_readback = self._verify_opened_editor_target(
-                    editor_page,
-                    product_query=product_query,
-                    store_name=store_name,
-                    target_source_urls=target_source_urls or [],
-                    target_identity=normalized_target,
-                    target_identity_sha256=target_identity_sha256,
-                    row_info=match,
-                )
-                try:
-                    page_title = editor_page.title()
-                except Exception:
-                    page_title = '店小秘编辑页'
-                return {
-                    'ok': True,
-                    'page_title': page_title,
-                    'page_url': getattr(editor_page, 'url', ''),
-                    'screenshot_url': screenshot_result.get('screenshot_url'),
-                    'screenshot_error': screenshot_result.get('error'),
-                    'action': action,
-                    'note_text': note_text,
-                    'product_query': product_query,
-                    'store_name': store_name,
-                    'target_row_text': match.get('textExcerpt') or '已接管当前打开的编辑页',
-                    'target_source_urls': match.get('sourceUrls') or target_source_urls or [],
-                    'message': '已接管已打开的真实编辑界面。',
-                    'editor_sections': editor_meta['sections'],
-                    'top_actions': editor_meta['top_actions'],
-                    'detected_fields': editor_meta['fields'],
-                    'editor_reused': True,
-                    'matched_by': match.get('matchedBy'),
-                    **identity_readback,
-                }
+            screenshot_result = self._capture_optional_workflow_screenshot(
+                editor_page,
+                DRAFT_ACTION_SCREENSHOT_MAP['edit'],
+                trace_prefix='draft_box_edit_reuse',
+            )
+            editor_meta = self._extract_editor_page_meta(editor_page)
+            identity_readback = self._verify_opened_editor_target(
+                editor_page,
+                product_query=product_query,
+                store_name=store_name,
+                target_source_urls=target_source_urls,
+                target_identity=normalized_target,
+                target_identity_sha256=target_identity_sha256,
+                row_info=match,
+            )
+            try:
+                page_title = editor_page.title()
+            except Exception:
+                page_title = '店小秘编辑页'
+            return {
+                'ok': True,
+                'page_title': page_title,
+                'page_url': getattr(editor_page, 'url', ''),
+                'screenshot_url': screenshot_result.get('screenshot_url'),
+                'screenshot_error': screenshot_result.get('error'),
+                'action': action,
+                'product_query': product_query,
+                'store_name': store_name,
+                'target_row_text': match.get('textExcerpt') or '已接管当前打开的编辑页',
+                'target_source_urls': match.get('sourceUrls') or target_source_urls,
+                'message': '已接管已打开的真实编辑界面。',
+                'editor_sections': editor_meta['sections'],
+                'top_actions': editor_meta['top_actions'],
+                'detected_fields': editor_meta['fields'],
+                'editor_reused': True,
+                'matched_by': match.get('matchedBy'),
+                **identity_readback,
+            }
+
         skip_draft_list = str(normalized_target['stable_identity'].get('kind') or '') == 'product_id' and action == 'edit'
         if skip_draft_list:
             self._trace_workflow_event(
@@ -6318,7 +5951,6 @@ class DxmLoginFlow:
                 target_identity_sha256=target_identity_sha256,
                 human_step='跳过采集箱搜索，直接按冻结产品 ID 打开编辑页',
             )
-            row_info = None
         draft_url = WORKFLOW_TARGETS['draft_box']['url']
         visible_draft_box = os.name == 'nt' and not self._is_headless()
         if visible_draft_box:
@@ -6338,7 +5970,7 @@ class DxmLoginFlow:
             if not wait_result.get('ready'):
                 excerpt = str(wait_result.get('text_excerpt') or '').replace('\n', ' ')[:180]
                 raise RuntimeError(
-                    f'速卖通商品箱静置后仍未加载完成；'
+                    '速卖通商品箱静置后仍未加载完成；'
                     f'最后状态 loading={wait_result.get("loading")} text={excerpt}'
                 )
             self._trace_workflow_event(
@@ -6354,762 +5986,95 @@ class DxmLoginFlow:
                 label='速卖通商品箱',
                 expected_identity='draft_box',
                 timeout=60000,
-                dismiss_strategy='full',
             )
             self._dismiss_blocking_modals(page)
-        claim_mark = (
-            None
-            if normalized_target is not None
-            else note_text or self._current_claim_mark(product_query=product_query, store_name=store_name)
-        )
-        row_info: dict[str, Any] | None = None
-        if skip_draft_list:
+
+        try:
             row_info = None
-        elif normalized_target is not None:
-            try:
+            if not skip_draft_list:
                 row_info = self._find_draft_box_row(
                     page,
                     store_name=store_name,
                     target_source_urls=target_source_urls,
                     target_identity=normalized_target,
                 )
-            except FrozenTargetIdentityError as initial_exc:
-                if initial_exc.reason_code != 'FROZEN_TARGET_ROW_NOT_FOUND':
-                    raise
-                self._trace_workflow_event(
-                    'draft_box_action:frozen_find_missed',
-                    action=action,
-                    reason_code=initial_exc.reason_code,
-                    target_identity_sha256=target_identity_sha256,
-                    human_step='当前商品箱列表未直接找到冻结商品',
-                )
-                last_exc = initial_exc
-                seen_queries: set[str] = set()
-                for search_value in self._draft_box_search_queries(normalized_target):
-                    if search_value in seen_queries:
-                        continue
-                    seen_queries.add(search_value)
-                    self._trace_workflow_event(
-                        'draft_box_action:frozen_search_retry',
-                        action=action,
-                        search_value=search_value,
-                        target_identity_sha256=target_identity_sha256,
-                        human_step='按来源编号或产品 ID 搜索商品箱',
-                    )
-                    self._search_draft_box(page, product_query=search_value, store_name=store_name)
-                    try:
-                        row_info = self._find_draft_box_row(
-                            page,
-                            store_name=store_name,
-                            target_source_urls=target_source_urls,
-                            target_identity=normalized_target,
-                        )
-                        last_exc = None
-                        break
-                    except FrozenTargetIdentityError as search_exc:
-                        if search_exc.reason_code != 'FROZEN_TARGET_ROW_NOT_FOUND':
-                            raise
-                        last_exc = search_exc
-                if last_exc is not None:
-                    if action != 'edit':
-                        raise last_exc
-                    self._trace_workflow_event(
-                        'draft_box_action:frozen_search_exhausted',
-                        action=action,
-                        reason_code=last_exc.reason_code,
-                        target_identity_sha256=target_identity_sha256,
-                        human_step='商品箱搜索仍未命中，改为按冻结产品 ID 打开编辑页',
-                    )
-                    row_info = None
-        else:
-            try:
-                row_info = self._find_draft_box_row(
-                    page,
-                    product_query,
-                    store_name=store_name,
-                    claim_mark=claim_mark,
-                    target_source_urls=target_source_urls,
-                )
-            except RuntimeError as initial_exc:
-                self._trace_workflow_event(
-                    'draft_box_action:visible_find_missed',
-                    action=action,
-                    reason=str(initial_exc)[:240],
-                    human_step='当前商品箱列表未直接找到商品',
-                )
-        if row_info is None and normalized_target is None:
-            self._search_draft_box(page, product_query=product_query, store_name=store_name)
-            try:
-                row_info = self._find_draft_box_row(
-                    page,
-                    product_query,
-                    store_name=store_name,
-                    claim_mark=claim_mark,
-                    target_source_urls=target_source_urls,
-                )
-            except RuntimeError:
-                if not product_query or not store_name:
-                    raise
-                self._search_draft_box(page, product_query=None, store_name=store_name)
-                row_info = self._find_draft_box_row(
-                    page,
-                    product_query,
-                    store_name=store_name,
-                    claim_mark=claim_mark,
-                    target_source_urls=target_source_urls,
-                )
-
-        if action == 'edit':
-            editor_page = self._open_editor_from_draft_box(
-                page,
-                row_info=row_info,
-                target_identity=normalized_target,
-                store_name=store_name,
-            )
-            self._page = editor_page
-            screenshot_path = DRAFT_ACTION_SCREENSHOT_MAP[action]
-            screenshot_result = self._capture_optional_workflow_screenshot(
-                editor_page,
-                screenshot_path,
-                trace_prefix='draft_box_edit',
-            )
-            editor_meta = self._extract_editor_page_meta(editor_page)
-            identity_readback = self._verify_opened_editor_target(
-                editor_page,
-                product_query=product_query,
-                store_name=store_name,
-                target_source_urls=target_source_urls or [],
-                target_identity=normalized_target,
+        except FrozenTargetIdentityError as initial_exc:
+            if initial_exc.reason_code != 'FROZEN_TARGET_ROW_NOT_FOUND':
+                raise
+            self._trace_workflow_event(
+                'draft_box_action:frozen_find_missed',
+                action=action,
+                reason_code=initial_exc.reason_code,
                 target_identity_sha256=target_identity_sha256,
-                row_info=row_info,
+                human_step='当前商品箱列表未直接找到冻结商品',
             )
-            row = row_info if isinstance(row_info, Mapping) else {}
-            opened_by_product_id = not row
-            return {
-                'ok': True,
-                'page_title': editor_page.title(),
-                'page_url': editor_page.url,
-                'screenshot_url': screenshot_result.get('screenshot_url'),
-                'screenshot_error': screenshot_result.get('error'),
-                'action': action,
-                'note_text': note_text,
-                'product_query': product_query,
-                'store_name': store_name,
-                'target_row_text': row.get('rowText') or (
-                    '按冻结产品 ID 打开编辑页' if opened_by_product_id else None
-                ),
-                'target_source_urls': row.get('sourceUrls') or list(target_source_urls or []),
-                'message': (
-                    '商品箱虚拟列表未命中，已按冻结产品 ID 进入真实编辑界面。'
-                    if opened_by_product_id
-                    else '已从商品箱进入真实编辑界面。'
-                ),
-                'editor_opened_by_product_id': opened_by_product_id,
-                'editor_sections': editor_meta['sections'],
-                'top_actions': editor_meta['top_actions'],
-                'detected_fields': editor_meta['fields'],
-                **identity_readback,
-            }
-
-        note_text = note_text or 'AI认领'
-        if note_text in (row_info.get('rowText') or ''):
-            exact_row = self._find_draft_box_row_by_frozen_target(
+            search_value = str(normalized_target['stable_identity']['value'])
+            self._search_draft_box(page, product_query=search_value, store_name=store_name)
+            row_info = self._find_draft_box_row(
                 page,
-                target_identity=normalized_target,
-                target_identity_sha256=str(target_identity_sha256),
-                store_name=' '.join(str(store_name or '').split()),
-            )
-            note_result = {
-                'verified': note_text in str(exact_row.get('rowText') or ''),
-                'rowText': exact_row.get('rowText'),
-                'already_present': True,
-                'write_attempted': False,
-                'target_unique': exact_row.get('target_unique') is True,
-                'product_identity_match': exact_row.get('product_identity_match') is True,
-                'store_identity_match': exact_row.get('store_identity_match') is True,
-                'source_identity_match': exact_row.get('source_identity_match') is True,
-                'ownership_binding_match': True,
-                'target_identity_evidence': {'after_readback': exact_row},
-            }
-        else:
-            note_result = self._add_note_to_draft_row(
-                page,
-                row_info,
-                note_text,
                 store_name=store_name,
+                target_source_urls=target_source_urls,
                 target_identity=normalized_target,
-                target_identity_sha256=str(target_identity_sha256),
             )
-        screenshot_path = DRAFT_ACTION_SCREENSHOT_MAP[action]
-        screenshot_result = self._capture_optional_workflow_screenshot(
+
+        editor_page = self._open_editor_from_draft_box(
             page,
-            screenshot_path,
-            trace_prefix=f'draft_box_{action}',
+            row_info=row_info,
+            target_identity=normalized_target,
+            store_name=store_name,
         )
+        self._page = editor_page
+        screenshot_result = self._capture_optional_workflow_screenshot(
+            editor_page,
+            DRAFT_ACTION_SCREENSHOT_MAP['edit'],
+            trace_prefix='draft_box_edit',
+        )
+        editor_meta = self._extract_editor_page_meta(editor_page)
+        identity_readback = self._verify_opened_editor_target(
+            editor_page,
+            product_query=product_query,
+            store_name=store_name,
+            target_source_urls=target_source_urls,
+            target_identity=normalized_target,
+            target_identity_sha256=target_identity_sha256,
+            row_info=row_info,
+        )
+        row = row_info if isinstance(row_info, Mapping) else {}
+        opened_by_product_id = not row
         return {
             'ok': True,
-            'page_title': page.title(),
-            'page_url': page.url,
+            'page_title': editor_page.title(),
+            'page_url': editor_page.url,
             'screenshot_url': screenshot_result.get('screenshot_url'),
             'screenshot_error': screenshot_result.get('error'),
             'action': action,
-            'note_text': note_text,
             'product_query': product_query,
             'store_name': store_name,
-            'target_identity': dict(normalized_target),
-            'target_identity_sha256': target_identity_sha256,
-            'target_identity_evidence': note_result.get('target_identity_evidence'),
-            'product_identity_match': note_result.get('product_identity_match') is True,
-            'store_identity_match': note_result.get('store_identity_match') is True,
-            'store_match': note_result.get('store_identity_match') is True,
-            'source_identity_match': note_result.get('source_identity_match') is True,
-            'target_unique': note_result.get('target_unique') is True,
-            'note_write_attempted': bool(
-                note_result.get('write_attempted') is True
-                or note_result.get('already_present') is True
+            'target_row_text': row.get('rowText') or (
+                '按冻结产品 ID 打开编辑页' if opened_by_product_id else None
             ),
-            'ownership_binding_match': note_result.get('ownership_binding_match') is True,
-            'note_verified': note_result.get('verified'),
-            'target_row_text': note_result.get('rowText') or row_info.get('rowText'),
-            'target_source_urls': row_info.get('sourceUrls', []),
-        }
-
-    def _perform_data_acquisition_claim(
-        self,
-        claim_mark: str,
-        product_query: str | None = None,
-        category_name: str | None = None,
-        store_name: str | None = None,
-        target_source_urls: list[str] | None = None,
-    ) -> dict[str, Any]:
-        target_source_urls = self._require_canonical_target_source_urls(
-            target_source_urls,
-            phase='认领商品',
-        )
-        normalized_store_name = ' '.join(str(store_name or '').split())
-        if not normalized_store_name or store_name != normalized_store_name:
-            raise FrozenTargetIdentityError(
-                'EXACT_STORE_IDENTITY_REQUIRED',
-                '认领商品缺少规范店铺名称，已在页面操作前停止。',
-            )
-        store_name = normalized_store_name
-        self._trace_workflow_event('data_acquisition_claim:open_start')
-        data_acquisition_url = WORKFLOW_TARGETS['data_acquisition']['url']
-        page = self._open_data_acquisition_page_for_claim(data_acquisition_url)
-        try:
-            wait_result = self._wait_for_data_acquisition_ready_for_claim(page)
-        except Exception as exc:
-            if not self._is_playwright_target_closed_error(exc):
-                raise
-            self._trace_workflow_event(
-                'data_acquisition_claim:recover_closed_page',
-                error=str(exc),
-                current_url=getattr(page, 'url', None),
-            )
-            self._page = None
-            page = self._open_data_acquisition_page_for_claim(data_acquisition_url, force_goto=True)
-            wait_result = self._wait_for_data_acquisition_ready_for_claim(page)
-        self._trace_workflow_event('data_acquisition_claim:page_ready_done')
-        page.wait_for_timeout(300)
-        self._trace_workflow_event('data_acquisition_claim:initial_settle_done', stopped_loading_with_escape=False)
-        self._trace_workflow_event('data_acquisition_claim:dismiss_before_search_skipped', reason='activity_notice_can_block')
-        self._trace_workflow_event('data_acquisition_claim:search_start')
-        search_result = self._search_data_acquisition(
-            page,
-            product_query=product_query,
-            category_name=category_name,
-            store_name=store_name,
-            target_source_urls=target_source_urls,
-            source_input_rect=wait_result.get('first_input_rect') if isinstance(wait_result, dict) else None,
-            start_collect_rect=wait_result.get('start_collect_rect') if isinstance(wait_result, dict) else None,
-        )
-        self._trace_workflow_event(
-            'data_acquisition_claim:search_done',
-            query_source=search_result.get('query_source') if isinstance(search_result, dict) else None,
-            filled=search_result.get('filled') if isinstance(search_result, dict) else None,
-            clicked_search=search_result.get('clicked_search') if isinstance(search_result, dict) else None,
-            reason=search_result.get('reason') if isinstance(search_result, dict) else None,
-        )
-        if isinstance(search_result, dict) and search_result.get('reason'):
-            raise RuntimeError(str(search_result['reason']))
-        self._trace_workflow_event('data_acquisition_claim:target_find_start')
-        target = self._find_data_acquisition_claim_target(
-            page,
-            product_query=product_query,
-            category_name=category_name,
-            store_name=store_name,
-            target_source_urls=target_source_urls,
-        )
-        self._trace_workflow_event(
-            'data_acquisition_claim:target_find_done',
-            ok=target.get('ok'),
-            matched_by=target.get('matchedBy'),
-            reason=target.get('reason'),
-        )
-        if not target.get('ok'):
-            raise RuntimeError(target.get('reason') or '未找到可认领的待认领商品')
-        if (
-            target.get('matchedBy') != 'source_url'
-            or not self._source_urls_match_exact(
-                list(target.get('sourceUrls') or []), target_source_urls
-            )
-        ):
-            raise FrozenTargetIdentityError(
-                'EXACT_SOURCE_IDENTITY_MISMATCH',
-                '待认领商品没有唯一精确匹配授权来源 URL，已停止认领。',
-            )
-
-        dismissed_modals = self._dismiss_data_acquisition_blocking_modals(page)
-        self._trace_workflow_event(
-            'data_acquisition_claim:dismiss_before_click_done',
-            dismissed=dismissed_modals,
-            human_step='清理认领前弹窗',
-        )
-        page.wait_for_timeout(300)
-        self._trace_workflow_event('data_acquisition_claim:target_refind_after_dismiss_start')
-        target = self._find_data_acquisition_claim_target(
-            page,
-            product_query=product_query,
-            category_name=category_name,
-            store_name=store_name,
-            target_source_urls=target_source_urls,
-        )
-        self._trace_workflow_event(
-            'data_acquisition_claim:target_refind_after_dismiss_done',
-            ok=target.get('ok'),
-            matched_by=target.get('matchedBy'),
-            reason=target.get('reason'),
-            action_rect=target.get('actionRect'),
-            action_text=target.get('actionText'),
-            row_text=str(target.get('rowText') or '')[:240],
-            debug=target.get('debug'),
-            human_step='重新确认认领按钮',
-        )
-        if not target.get('ok'):
-            raise RuntimeError(target.get('reason') or '清理弹窗后未找到可认领的待认领商品')
-        if (
-            target.get('matchedBy') != 'source_url'
-            or not self._source_urls_match_exact(
-                list(target.get('sourceUrls') or []), target_source_urls
-            )
-        ):
-            raise FrozenTargetIdentityError(
-                'EXACT_SOURCE_IDENTITY_DRIFT',
-                '认领点击前商品来源身份已变化，已停止认领。',
-            )
-        safety_result = self._assert_data_acquisition_claim_click_safe(
-            page,
-            target,
-            target_source_urls=target_source_urls or [],
-        )
-        self._trace_workflow_event(
-            'data_acquisition_claim:click_claim_start',
-            safety_ok=safety_result.get('ok') if isinstance(safety_result, dict) else None,
-        )
-        claim_click_receipt = self._click_data_acquisition_claim_rect_center(
-            page,
-            target['actionRect'],
-            purpose='认领按钮',
-            mutation_action='claim_open_dialog_click',
-            pre_dispatch_guard=lambda: self._assert_data_acquisition_claim_click_safe(
-                page,
-                target,
-                target_source_urls=target_source_urls or [],
+            'target_source_urls': row.get('sourceUrls') or list(target_source_urls),
+            'message': (
+                '商品箱虚拟列表未命中，已按冻结产品 ID 进入真实编辑界面。'
+                if opened_by_product_id
+                else '已从商品箱进入真实编辑界面。'
             ),
-        )
-        self._trace_workflow_event('data_acquisition_claim:click_claim_done')
-        time.sleep(1.5)
-        self._trace_workflow_event('data_acquisition_claim:dialog_start')
-        dialog_result = self._complete_data_acquisition_claim_dialog(
-            page,
-            category_name=category_name,
-            store_name=store_name,
-        )
-        if not dialog_result.get('ok'):
-            raise RuntimeError(dialog_result.get('reason') or '认领确认失败')
-        self._trace_workflow_event('data_acquisition_claim:dialog_done')
-        time.sleep(2.5)
-        self._dismiss_data_acquisition_blocking_modals(page)
-        self._trace_workflow_event('data_acquisition_claim:screenshot_start')
-        screenshot_path = ACQUISITION_ACTION_SCREENSHOT_MAP['claim']
-        screenshot_result = self._capture_optional_workflow_screenshot(
-            page,
-            screenshot_path,
-            trace_prefix='data_acquisition_claim',
-        )
-        claimed_product = {
-            'title': target.get('title') or product_query or category_name or '店小秘待认领商品',
-            'category_name': target.get('categoryName') or category_name,
-            'source_url': (target.get('sourceUrls') or [None])[0],
-            'row_text': target.get('rowText'),
-        }
-        self._trace_workflow_event('data_acquisition_claim:done')
-        page_url = str(getattr(page, 'url', '') or WORKFLOW_TARGETS['data_acquisition']['url'])
-        if os.name == 'nt' and not self._is_headless() and self._is_data_acquisition_page_url(page):
-            page_title = '店小秘--数据采集'
-        else:
-            page_title = page.title()
-        return {
-            'page_title': page_title,
-            'page_url': page_url,
-            'screenshot_url': screenshot_result.get('screenshot_url'),
-            'screenshot_error': screenshot_result.get('error'),
-            'message': '已在已有待认领列表提交认领到商品箱。',
-            'claim_mark': claim_mark,
-            'product_query': product_query,
-            'category_name': category_name,
-            'store_name': store_name,
-            'search_result': search_result,
-            'target_source_urls': target.get('sourceUrls', []) or target_source_urls or [],
-            'claimed_product': claimed_product,
-            'claim_target': target,
-            'claim_dialog': dialog_result,
-            'claim_click_safety': safety_result,
-            'claim_click_receipt': claim_click_receipt,
-            'published': None,
+            'editor_opened_by_product_id': opened_by_product_id,
+            'editor_sections': editor_meta['sections'],
+            'top_actions': editor_meta['top_actions'],
+            'detected_fields': editor_meta['fields'],
+            **identity_readback,
         }
 
-    def _open_data_acquisition_page_for_claim(self, data_acquisition_url: str, *, force_goto: bool = False) -> Page:
-        page = self._ensure_data_acquisition_page_with_cookies()
-        if not force_goto and self._is_current_page_url(page, data_acquisition_url):
-            self._trace_workflow_event(
-                'data_acquisition_claim:reuse_current_page',
-                current_url=getattr(page, 'url', None),
-                target_url=data_acquisition_url,
-            )
-            self._attach_and_reapply_live_hud_page(page)
-            return page
-        self._goto_data_acquisition_sterile(page, data_acquisition_url, wait_until='domcontentloaded', timeout=45000)
-        return page
 
-    def _ensure_data_acquisition_page_with_cookies(self) -> Page:
-        if os.name == 'nt' and not self._is_headless() and self._page is not None:
-            try:
-                is_reusable_visible_data_acquisition_page = (
-                    not self._is_playwright_object_closed(self._page)
-                    and self._is_data_acquisition_page_url(self._page)
-                )
-            except Exception:
-                is_reusable_visible_data_acquisition_page = False
-            if is_reusable_visible_data_acquisition_page:
-                self._trace_workflow_event(
-                    'ensure_page:reuse_visible_data_acquisition_page',
-                    current_url=getattr(self._page, 'url', None),
-                    reason='preserve_loaded_visible_data_acquisition_page',
-                    human_step='复用已打开的已有待认领列表',
-                )
-                return self._page
-        return self._ensure_page_with_cookies()
 
-    def _install_data_acquisition_notice_auto_dismiss(self, page: Page | None) -> bool:
-        if page is None or self._is_headless():
-            return False
-        try:
-            context = page.context
-        except Exception:
-            return False
-        context_id = id(context)
-        if context_id in self._data_acquisition_notice_bound_context_ids:
-            return True
-        try:
-            context.add_init_script(DATA_ACQUISITION_NOTICE_AUTO_DISMISS_SCRIPT)
-            self._data_acquisition_notice_bound_context_ids.add(context_id)
-            self._trace_workflow_event(
-                'data_acquisition_notice_auto_dismiss:installed',
-                human_step='准备关闭店小秘通知弹窗',
-            )
-            return True
-        except Exception as exc:
-            self._trace_workflow_event(
-                'data_acquisition_notice_auto_dismiss:install_failed',
-                error=str(exc)[:240],
-                human_step='准备关闭店小秘通知弹窗',
-            )
-            return False
 
-    def _wait_for_data_acquisition_ready_for_claim(self, page: Page) -> dict[str, Any]:
-        if os.name == 'nt' and not self._is_headless() and self._is_data_acquisition_page_url(page):
-            return self._wait_for_visible_data_acquisition_claim_settle(page, expected_identity='data_acquisition')
-        return self._wait_for_page_ready(
-            page,
-            WORKFLOW_READY_TERMS['data_acquisition'],
-            label='已有待认领列表',
-            expected_identity='data_acquisition',
-            timeout=60000,
-            dismiss_strategy='data_acquisition_no_dismiss',
-        )
 
-    def _wait_for_visible_data_acquisition_claim_settle(self, page: Page, *, expected_identity: str) -> dict[str, Any]:
-        identity_result = self._page_identity_result(getattr(page, 'url', None), expected_identity)
-        if identity_result.get('ok') is not True:
-            raise RuntimeError(
-                f'已有待认领列表页面路由不匹配 expected_identity={expected_identity} '
-                f'url={getattr(page, "url", None)}'
-            )
-        terms = WORKFLOW_READY_TERMS['data_acquisition']
-        timeout = 60000
-        deadline = time.monotonic() + timeout / 1000
-        last: dict[str, Any] = {}
-        last_trace_at = 0.0
-        self._trace_workflow_event(
-            'wait_ready:start',
-            label='已有待认领列表',
-            terms=terms,
-            timeout=timeout,
-            current_url=getattr(page, 'url', None),
-            dismiss_strategy='visible_sterile_settle',
-            human_step='等待已有待认领列表自行加载',
-        )
-        self._trace_workflow_event(
-            'wait_ready:settle',
-            label='已有待认领列表',
-            seconds=3.0,
-            reason='visible_data_acquisition_claim_uses_sterile_settle_without_dom_probe',
-            human_step='等待页面稳定',
-        )
-        time.sleep(3.0)
-        first_check_at = time.monotonic()
-        no_claim_fast_fail_after = 8.0
-        while time.monotonic() < deadline:
-            result = self._inspect_data_acquisition_ready_state_with_locators(page, terms)
-            result['strategy'] = 'visible_locator_condition_wait'
-            if not result.get('ready') and int(result.get('claim_count') or 0) > 0:
-                result['ready'] = True
-                result['ready_term'] = 'existing_claim_action_ready'
-                result['ignored_loading'] = bool(result.get('loading'))
-            last = result
-            if result.get('ready'):
-                self._trace_workflow_event('wait_ready:ready', label='已有待认领列表', result=result)
-                return result
-            now = time.monotonic()
-            has_collect_form = bool(
-                result.get('has_collect_form')
-                or result.get('first_input_rect')
-                or result.get('start_collect_rect')
-            )
-            no_claim_visible_collect_form = (
-                int(result.get('claim_count') or 0) == 0
-                and has_collect_form
-                and now - first_check_at >= no_claim_fast_fail_after
-            )
-            if no_claim_visible_collect_form:
-                reason_parts: list[str] = []
-                if result.get('loading'):
-                    reason_parts.append('页面仍在加载')
-                reason_parts.append('未看到已有待认领商品的认领按钮')
-                reason_parts.append('当前停留在店小秘新建商品输入区，系统不会填写链接或新建商品')
-                reason = '，'.join(reason_parts)
-                diagnostic = self._data_acquisition_claim_timeout_diagnostic(result)
-                self._trace_workflow_event(
-                    'wait_ready:timeout',
-                    label='已有待认领列表',
-                    result=result,
-                    reason=reason,
-                    diagnostic=diagnostic,
-                    fast_fail=True,
-                    human_step='已有待认领列表还不能操作',
-                )
-                diagnostic_text = f'{diagnostic}。' if diagnostic else ''
-                raise RuntimeError(
-                    f'已有待认领列表未显示可认领商品：{reason}。'
-                    f'{diagnostic_text}'
-                    '系统不会填写链接、不会点击开始采集、不会新建商品；'
-                    '请确认待认领列表里已经显示目标商品后重试。'
-                )
-            if now - last_trace_at >= 5:
-                last_trace_at = now
-                self._trace_workflow_event('wait_ready:poll', label='已有待认领列表', result=result)
-            time.sleep(1.0)
-        reason_parts: list[str] = []
-        if last.get('loading'):
-            reason_parts.append('页面仍在加载')
-        if not last.get('claim_count'):
-            reason_parts.append('未看到已有待认领商品的认领按钮')
-        if last.get('has_collect_form') and not last.get('claim_count'):
-            reason_parts.append('当前停留在店小秘新建商品输入区，系统不会填写链接或新建商品')
-        reason = '，'.join(reason_parts) or '页面未达到可操作状态'
-        diagnostic = self._data_acquisition_claim_timeout_diagnostic(last)
-        self._trace_workflow_event(
-            'wait_ready:timeout',
-            label='已有待认领列表',
-            result=last,
-            reason=reason,
-            diagnostic=diagnostic,
-            human_step='已有待认领列表还不能操作',
-        )
-        diagnostic_text = f'{diagnostic}。' if diagnostic else ''
-        raise RuntimeError(
-            f'已有待认领列表 {timeout // 1000} 秒内仍不可认领：{reason}。'
-            f'{diagnostic_text}'
-            '系统不会填写链接、不会点击开始采集、不会新建商品；'
-            '请确认待认领列表里已经显示目标商品后重试。'
-        )
 
-    def _data_acquisition_claim_timeout_diagnostic(self, state: dict[str, Any]) -> str:
-        details: list[str] = []
-        current_url = str(state.get('url') or '').strip()
-        if current_url:
-            details.append(f'当前地址 {current_url[:180]}')
-        loading_items = state.get('loading_items')
-        if isinstance(loading_items, list) and loading_items:
-            markers: list[str] = []
-            for item in loading_items[:3]:
-                if not isinstance(item, dict):
-                    continue
-                selector = str(item.get('selector') or '').strip()
-                text = str(item.get('text') or '').replace('\n', ' ').strip()
-                marker = selector or 'loading'
-                if text:
-                    marker = f'{marker}={text[:60]}'
-                markers.append(marker)
-            if markers:
-                details.append('加载标记 ' + ' / '.join(markers))
-        elif str(state.get('loading_text') or '').strip():
-            details.append('加载提示 ' + str(state.get('loading_text') or '').strip()[:120])
-        probe_error = str(state.get('probe_error') or '').strip()
-        if probe_error:
-            details.append('页面检查异常 ' + probe_error[:160])
-        if int(state.get('claim_count') or 0) <= 0:
-            details.append('未检测到认领按钮')
-        return '；'.join(details)
 
-    def _is_playwright_target_closed_error(self, exc: Exception) -> bool:
-        text = str(exc).casefold()
-        return (
-            'target page, context or browser has been closed' in text
-            or 'browser has been closed' in text
-            or 'target closed' in text
-        )
 
-    def _assert_data_acquisition_claim_click_safe(
-        self,
-        page: Page,
-        target: dict[str, Any],
-        *,
-        target_source_urls: list[str] | None = None,
-    ) -> dict[str, Any]:
-        target_row_text = str(target.get('rowText') or '')
-        target_action_text = str(target.get('actionText') or '')
-        action_rect = target.get('actionRect') if isinstance(target.get('actionRect'), dict) else {}
-        target_context = f'{target_row_text} {target_action_text}'
-        if self._contains_data_acquisition_claim_forbidden_term(target_context):
-            raise RuntimeError('待认领商品安全检查未通过：目标商品行包含保存、发布或待发布动作，系统已停止；不会保存或发布。')
-        if not any(term in target_action_text for term in DATA_ACQUISITION_CLAIM_ACTION_TERMS):
-            raise RuntimeError('待认领商品安全检查未通过：当前点击目标不是认领按钮，系统已停止；不会保存或发布。')
-        if not self._rect_has_clickable_area(action_rect):
-            raise RuntimeError('待认领商品安全检查未通过：没有拿到可点击的认领按钮位置，系统已停止；不会保存或发布。')
-        if target.get('matchedBy') == 'source_url_search_first_result':
-            raise RuntimeError('待认领商品安全检查未通过：不再允许使用固定坐标认领，必须识别到真实商品行和认领按钮。')
 
-        live_context = page.evaluate(r'''({actionRect}) => {
-          const visible = (el) => {
-            if (!el) return false;
-            const r = el.getBoundingClientRect();
-            const style = window.getComputedStyle(el);
-            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-          };
-          const textOf = (el) => (el ? (el.innerText || el.textContent || '') : '').replace(/\s+/g, ' ').trim();
-          const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
-          const forbidden = ['保存','发布','立即发布','继续发布','保存并发布','保存并移入待发布','移入待发布','批量发布'];
-          const claimTerms = ['认领', '领取'];
-          const url = String(window.location.href || '');
-          const isDxmPage = /dianxiaomi\.com/i.test(url);
-          const isDataAcquisitionUrl = /dataAcquisition|productCrawl/i.test(url);
-          if (isDxmPage && !isDataAcquisitionUrl) {
-            return {
-              ok: false,
-              reason: '当前页面不是店小秘已有待认领列表页',
-              page_url: url,
-            };
-          }
-          const rect = actionRect || {};
-          const x = Number(rect.x || 0) + Number(rect.w || 0) / 2;
-          const y = Number(rect.y || 0) + Number(rect.h || 0) / 2;
-          const hit = document.elementFromPoint(x, y);
-          if (!visible(hit)) {
-            return {ok:false, reason:'当前认领按钮位置不可见', page_url:url};
-          }
-          const action = hit.closest('button,a,[role="button"]') || hit;
-          const row = hit.closest('tr.vxe-body--row, tr.ant-table-row, tr.el-table__row, tr, .ant-table-row, .el-table__row, .vxe-body--row, [class*="table-row"], [class*="list-item"]');
-          const actionText = textOf(action);
-          const rowText = textOf(row || action);
-          const sourceUrls = Array.from((row || action).querySelectorAll?.('a[href]') || [])
-            .map(anchor => String(anchor.href || anchor.getAttribute('href') || '').trim())
-            .filter(Boolean);
-          const actionContext = norm(`${actionText} ${action.getAttribute?.('title') || ''} ${action.getAttribute?.('aria-label') || ''} ${action.className || ''}`);
-          const rowContext = norm(rowText);
-          if (forbidden.some(term => actionContext.includes(norm(term)) || rowContext.includes(norm(term)))) {
-            return {
-              ok: false,
-              reason: '点击区域包含保存、发布或待发布动作',
-              action_text: actionText.slice(0, 120),
-              row_text: rowText.slice(0, 260),
-              page_url: url,
-            };
-          }
-          if (!claimTerms.some(term => actionContext.includes(norm(term)))) {
-            return {
-              ok: false,
-              reason: '当前点击目标不是认领按钮',
-              action_text: actionText.slice(0, 120),
-              row_text: rowText.slice(0, 260),
-              page_url: url,
-            };
-          }
-          return {
-            ok: true,
-            action_text: actionText.slice(0, 120),
-            row_text: rowText.slice(0, 900),
-            source_urls: sourceUrls,
-            page_url: url,
-          };
-        }''', {'actionRect': action_rect})
-        if not isinstance(live_context, dict) or not live_context.get('ok'):
-            reason = (live_context or {}).get('reason') if isinstance(live_context, dict) else None
-            self._trace_workflow_event(
-                'data_acquisition_claim:click_safety_failed',
-                reason=reason,
-                action_rect=action_rect,
-                action_text=(live_context or {}).get('action_text') if isinstance(live_context, dict) else None,
-                row_text=(live_context or {}).get('row_text') if isinstance(live_context, dict) else None,
-                page_url=(live_context or {}).get('page_url') if isinstance(live_context, dict) else None,
-                human_step='认领按钮安全检查失败',
-            )
-            raise RuntimeError(f'待认领商品安全检查未通过：{reason or "当前页面不适合执行认领"}，系统已停止；不会保存或发布。')
-        live_source_urls = live_context.get('source_urls')
-        live_source_urls = live_source_urls if isinstance(live_source_urls, list) else []
-        authorized_source_urls = [
-            str(value).strip()
-            for value in target_source_urls or []
-            if str(value or '').strip()
-        ]
-        selected_source_urls = [
-            str(value).strip()
-            for value in target.get('sourceUrls') or []
-            if str(value or '').strip()
-        ]
-        if not authorized_source_urls or not self._source_urls_match_exact(
-            live_source_urls,
-            authorized_source_urls,
-        ):
-            raise RuntimeError(
-                '待认领商品安全检查未通过：当前点击商品行来源与授权目标不一致，系统已停止；不会认领其他商品。'
-            )
-        if not selected_source_urls or not self._source_urls_match_exact(
-            live_source_urls,
-            selected_source_urls,
-        ):
-            raise RuntimeError(
-                '待认领商品安全检查未通过：当前点击商品行已不是刚才选中的目标，系统已停止；不会认领其他商品。'
-            )
-        return {
-            **live_context,
-            'publish_action_attempted': False,
-        }
 
-    def _contains_data_acquisition_claim_forbidden_term(self, text: str) -> bool:
-        normalized = ''.join(str(text or '').split())
-        return any(''.join(term.split()) in normalized for term in DATA_ACQUISITION_CLAIM_FORBIDDEN_TERMS)
 
     def _rect_has_clickable_area(self, rect: dict[str, Any]) -> bool:
         try:
@@ -7117,1190 +6082,28 @@ class DxmLoginFlow:
         except (TypeError, ValueError):
             return False
 
-    def _search_data_acquisition(
-        self,
-        page: Page,
-        product_query: str | None = None,
-        category_name: str | None = None,
-        store_name: str | None = None,
-        target_source_urls: list[str] | None = None,
-        source_input_rect: dict[str, Any] | None = None,
-        start_collect_rect: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        source_query = next((str(value).strip() for value in (target_source_urls or []) if str(value or '').strip()), '')
-        if source_query and str(product_query or '').strip():
-            try:
-                product_query_matches_source = self._source_urls_match([str(product_query).strip()], target_source_urls or [])
-            except Exception:
-                product_query_matches_source = str(product_query).strip() in {str(value).strip() for value in (target_source_urls or [])}
-            if product_query_matches_source:
-                product_query = None
-        if source_query:
-            self._trace_workflow_event(
-                'data_acquisition_search:source_url_match_only',
-                target_source_url_count=len([value for value in (target_source_urls or []) if str(value or '').strip()]),
-                human_step='来源链接仅用于匹配已有待认领商品',
-            )
-        if str(product_query or '').strip():
-            query = str(product_query or '').strip()
-            query_source = 'product_query'
-        elif str(category_name or '').strip():
-            query = str(category_name or '').strip()
-            query_source = 'category_name'
-        else:
-            query = ''
-            query_source = 'none'
-        if not query and not store_name:
-            return {
-                'query': '',
-                'query_source': query_source,
-                'target_source_urls': list(target_source_urls or []),
-                'source_match_only': bool(source_query),
-                'filled': False,
-                'clicked_search': False,
-            }
-        result = page.evaluate(r'''({query, store, querySource}) => {
-          const visible = (el) => {
-            const r = el.getBoundingClientRect();
-            const style = window.getComputedStyle(el);
-            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-          };
-          const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
-          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-          if (store) {
-            const storeTarget = Array.from(document.querySelectorAll('button,a,span,div,li'))
-              .filter(visible)
-              .find(el => norm(textOf(el)) === norm(store) || norm(textOf(el)).includes(norm(store)));
-            if (storeTarget) storeTarget.dispatchEvent(new MouseEvent('click', {bubbles:true}));
-          }
-          let filled = false;
-          if (query) {
-            const inputs = Array.from(document.querySelectorAll('input, textarea')).filter(el => {
-              if (!visible(el) || el.disabled || el.readOnly) return false;
-              const r = el.getBoundingClientRect();
-              return r.width > 140 && r.height > 18;
-            });
-            const isUrlInput = (el) => {
-              const label = norm([el.placeholder, el.getAttribute('aria-label'), el.getAttribute('name'), el.id, el.className].join(' '));
-              return label.includes('来源链接') || label.includes('商品链接') || label.includes('链接') || label.includes('网址') || label.includes('来源') || label.includes('url') || label.includes('source');
-            };
-            const urlInput = inputs.find(isUrlInput);
-            const nonUrlInputs = inputs.filter(el => !isUrlInput(el));
-            const genericInput = nonUrlInputs.find(el => {
-              const label = norm([el.placeholder, el.getAttribute('aria-label'), el.getAttribute('name')].join(' '));
-              return label.includes('搜索') || label.includes('标题') || label.includes('产品') || label.includes('关键词') || label.includes('内容');
-            }) || nonUrlInputs[0];
-            const input = genericInput;
-            if (input) {
-              input.value = query;
-              input.dispatchEvent(new Event('input', {bubbles:true}));
-              input.dispatchEvent(new Event('change', {bubbles:true}));
-              filled = true;
-            }
-          }
-          const search = Array.from(document.querySelectorAll('button,a,span,div'))
-            .filter(visible)
-            .find(el => ['搜索','查询','筛选'].includes(norm(textOf(el))));
-          if (search) search.dispatchEvent(new MouseEvent('click', {bubbles:true}));
-          return {filled, clicked_search: Boolean(search)};
-        }''', {'query': query, 'store': store_name, 'querySource': query_source})
-        result = {
-            **(result or {}),
-            'query': query,
-            'query_source': query_source,
-            'target_source_urls': list(target_source_urls or []),
-            'source_match_only': bool(source_query),
-        }
-        if result.get('filled') or result.get('clicked_search') or store_name:
-            page.wait_for_timeout(8000)
-            page.keyboard.press('Escape')
-            page.wait_for_timeout(500)
-            self._trace_workflow_event(
-                'data_acquisition_search:result_ready_wait_skipped',
-                reason='data_acquisition_dom_probe_can_block_after_search',
-                stopped_loading_with_escape=True,
-            )
-        return result
 
-    def _search_data_acquisition_source_url_input(
-        self,
-        page: Page,
-        query: str,
-        target_source_urls: list[str],
-        product_query: str | None = None,
-        source_input_rect: dict[str, Any] | None = None,
-        start_collect_rect: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        self._trace_workflow_event(
-            'data_acquisition_search:source_url_match_only',
-            target_source_url_count=len([value for value in (target_source_urls or []) if str(value or '').strip()]),
-            human_step='来源链接仅用于匹配已有待认领商品',
-        )
-        return {
-            'query': query,
-            'query_source': 'target_source_url',
-            'target_source_urls': list(target_source_urls or []),
-            'filled': False,
-            'clicked_search': False,
-            'source_match_only': True,
-            'reason': '商品链接只用于匹配已有待认领商品，不写入店小秘输入框，不新建商品。',
-        }
 
-    def _data_acquisition_source_input_value_snapshot(self, page: Page, expected_query: str) -> dict[str, Any]:
-        selectors = (
-            'textarea[placeholder*="产品的网址"]',
-            'textarea[placeholder*="网址"]',
-            'textarea[placeholder*="商品链接"]',
-            'textarea[placeholder*="来源链接"]',
-            'textarea[placeholder*="链接"]',
-            'textarea[placeholder*="URL"]',
-            'textarea[placeholder*="url"]',
-            'textarea.ant-input',
-            'textarea',
-            'input[placeholder*="产品的网址"]',
-            'input[placeholder*="网址"]',
-            'input[placeholder*="商品链接"]',
-            'input[placeholder*="来源链接"]',
-            'input[placeholder*="链接"]',
-            'input[placeholder*="URL"]',
-            'input[placeholder*="url"]',
-            '[contenteditable="true"]',
-            '[role="textbox"]',
-            'input',
-        )
-        expected_tokens = self._data_acquisition_source_url_tokens([expected_query])
-        first_text_field: dict[str, Any] | None = None
-        for selector in selectors:
-            try:
-                candidates = page.locator(selector)
-                count = min(self._locator_count(candidates), 5)
-                for index in range(count):
-                    candidate = candidates.nth(index)
-                    info = candidate.evaluate(
-                        """(el) => {
-                          const tag = String(el.tagName || '').toLowerCase();
-                          const type = String(el.getAttribute('type') || '').toLowerCase();
-                          const editable = el.isContentEditable || el.getAttribute('contenteditable') === 'true';
-                          const textLikeInput = tag === 'input' && !['checkbox','radio','hidden','button','submit','reset','file'].includes(type);
-                          const usable = tag === 'textarea' || textLikeInput || editable || el.getAttribute('role') === 'textbox';
-                          return {
-                            usable,
-                            tag,
-                            type,
-                            value: String(el.value || el.textContent || '').trim(),
-                          };
-                        }""",
-                        timeout=700,
-                    )
-                    if not isinstance(info, dict) or not info.get('usable'):
-                        continue
-                    text = str(info.get('value') or '').strip()
-                    contains_expected = expected_query in text or any(token and token in text for token in expected_tokens)
-                    snapshot = {
-                        'found': True,
-                        'selector': selector,
-                        'index': index,
-                        'tag': info.get('tag'),
-                        'type': info.get('type'),
-                        'value_excerpt': text[:260],
-                        'contains_expected': contains_expected,
-                    }
-                    if contains_expected:
-                        return snapshot
-                    if first_text_field is None:
-                        first_text_field = snapshot
-            except Exception as exc:  # noqa: BLE001 - DXM widgets can detach while we inspect.
-                last_error = str(exc)[:160]
-                continue
-        if first_text_field is not None:
-            return first_text_field
-        return {
-            'found': False,
-            'contains_expected': False,
-            'reason': locals().get('last_error', '未找到可读取值的来源链接输入框'),
-        }
 
-    def _fill_data_acquisition_source_url_input_rect(
-        self,
-        page: Page,
-        query: str,
-        source_input_rect: dict[str, Any] | None,
-    ) -> dict[str, Any]:
-        self._trace_workflow_event(
-            'data_acquisition_search:source_input_blocked',
-            reason='source_url_match_only_scope',
-        )
-        return {'ok': False, 'reason': '商品链接只用于匹配已有待认领商品，不写入店小秘输入框，不新建商品。'}
 
-    def _fill_data_acquisition_source_url_primary_input(self, page: Page, query: str) -> dict[str, Any]:
-        self._trace_workflow_event(
-            'data_acquisition_search:source_input_blocked',
-            reason='source_url_match_only_scope',
-        )
-        return {'ok': False, 'reason': '商品链接只用于匹配已有待认领商品，不写入店小秘输入框，不新建商品。'}
 
-    def _deprecated_fill_data_acquisition_source_url_primary_input(self, page: Page, query: str) -> dict[str, Any]:
-        selectors = [
-            'textarea[placeholder*="产品的网址"]',
-            'textarea[placeholder*="网址"]',
-            'textarea[placeholder*="商品链接"]',
-            'textarea[placeholder*="来源链接"]',
-            'textarea[placeholder*="链接"]',
-            'textarea[placeholder*="URL"]',
-            'textarea[placeholder*="url"]',
-            'textarea.ant-input',
-            'input[placeholder*="产品的网址"]',
-            'input[placeholder*="网址"]',
-            'input[placeholder*="商品链接"]',
-            'input[placeholder*="来源链接"]',
-            'input[placeholder*="链接"]',
-            'input[placeholder*="URL"]',
-            'input[placeholder*="url"]',
-        ]
-        errors: list[str] = []
-        for selector in selectors:
-            try:
-                candidates = page.locator(selector)
-                if self._locator_count(candidates) < 1:
-                    continue
-                field = candidates.first
-                field.fill(query, timeout=1200)
-                return {'ok': True, 'selector': selector, 'method': 'primary_locator_fill'}
-            except Exception as exc:  # noqa: BLE001 - Playwright raises locator-specific timeout errors.
-                errors.append(f'{selector}: {str(exc)[:120]}')
-        return {
-            'ok': False,
-            'reason': '; '.join(errors[-3:]) or '未找到店小秘采集页网址输入框',
-        }
 
-    def _fill_data_acquisition_source_url_input(self, page: Page, query: str) -> dict[str, Any]:
-        self._trace_workflow_event(
-            'data_acquisition_search:source_input_blocked',
-            reason='source_url_match_only_scope',
-        )
-        return {'ok': False, 'reason': '商品链接只用于匹配已有待认领商品，不写入店小秘输入框，不新建商品。'}
 
-    def _deprecated_fill_data_acquisition_source_url_input(self, page: Page, query: str) -> dict[str, Any]:
-        query_json = json.dumps(query, ensure_ascii=False)
-        expression = r'''(() => {
-              const query = __DXM_SOURCE_QUERY__;
-              const visible = (el) => {
-                if (!el) return false;
-                const r = el.getBoundingClientRect();
-                const style = window.getComputedStyle(el);
-                return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-              };
-              const norm = (s) => String(s || '').replace(/\s+/g, '').trim().toLowerCase();
-              const textOf = (el) => (el ? (el.innerText || el.textContent || '') : '').replace(/\s+/g, ' ').trim();
-              const setValue = (el, value) => {
-                const tag = String(el.tagName || '').toLowerCase();
-                if (el.isContentEditable) {
-                  el.focus();
-                  el.textContent = value;
-                } else {
-                  const proto = tag === 'textarea' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
-                  const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-                  el.focus();
-                  if (setter) setter.call(el, value);
-                  else el.value = value;
-                }
-                el.dispatchEvent(new Event('input', {bubbles:true}));
-                el.dispatchEvent(new Event('change', {bubbles:true}));
-              };
-              const fields = Array.from(document.querySelectorAll('textarea,input,[contenteditable="true"]'))
-                .filter(el => {
-                  if (!visible(el) || el.disabled || el.readOnly) return false;
-                  const r = el.getBoundingClientRect();
-                  return r.width >= 120 && r.height >= 18;
-                })
-                .map((el, index) => {
-                  const r = el.getBoundingClientRect();
-                  const tag = String(el.tagName || '').toLowerCase();
-                  const meta = norm([
-                    el.placeholder,
-                    el.getAttribute('aria-label'),
-                    el.getAttribute('name'),
-                    el.id,
-                    el.className,
-                    textOf(el.closest('label')),
-                    textOf(el.parentElement),
-                  ].join(' '));
-                  let score = 0;
-                  if (meta.includes('网址') || meta.includes('链接') || meta.includes('url') || meta.includes('source')) score += 100;
-                  if (meta.includes('产品') || meta.includes('商品')) score += 35;
-                  if (tag === 'textarea') score += 35;
-                  if (r.width >= 300) score += 15;
-                  if (r.height >= 60) score += 25;
-                  if (String(el.type || '').toLowerCase() === 'hidden') score -= 200;
-                  return {el, index, score, tag, meta, rect:{x:r.x, y:r.y, w:r.width, h:r.height}};
-                })
-                .filter(item => item.score > 0)
-                .sort((a, b) => b.score - a.score || a.rect.y - b.rect.y);
-              const target = fields[0];
-              if (!target) {
-                return {ok:false, reason:'页面中没有找到可见的网址或链接输入区'};
-              }
-              target.el.scrollIntoView({block:'center', inline:'nearest'});
-              setValue(target.el, query);
-              return {
-                ok: true,
-                selector: `${target.tag}:nth(${target.index})`,
-                tag: target.tag,
-                score: target.score,
-                rect: target.rect,
-                meta: target.meta.slice(0, 160),
-              };
-            })()'''.replace('__DXM_SOURCE_QUERY__', query_json)
-        try:
-            cdp = page.context.new_cdp_session(page)
-            response = cdp.send(
-                'Runtime.evaluate',
-                {
-                    'expression': expression,
-                    'returnByValue': True,
-                    'timeout': 2000,
-                },
-            )
-            if isinstance(response, dict) and response.get('exceptionDetails'):
-                text = str(response.get('exceptionDetails'))[:240]
-                return {'ok': False, 'reason': f'页面输入区脚本执行失败：{text}'}
-            value = ((response or {}).get('result') or {}).get('value')
-            if isinstance(value, dict):
-                return value
-            return {'ok': False, 'reason': '页面输入区没有返回可用结果'}
-        except Exception as exc:  # noqa: BLE001 - Playwright may fail while DXM is navigating.
-            return {'ok': False, 'reason': str(exc)[:240]}
 
-    def _click_data_acquisition_start_collect(
-        self,
-        page: Page,
-        *,
-        start_collect_rect: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        self._trace_workflow_event(
-            'data_acquisition_search:start_collect_blocked',
-            reason='existing_data_claim_scope',
-        )
-        return {'ok': False, 'reason': '当前系统只处理店小秘已有待认领商品，不新建商品。'}
 
-    def _wait_data_acquisition_collect_result(
-        self,
-        page: Page,
-        *,
-        timeout: int = 90000,
-        product_query: str | None = None,
-        target_source_urls: list[str] | None = None,
-    ) -> dict[str, Any]:
-        visible_data_acquisition = self._is_data_acquisition_page_url(page) and not self._is_headless()
-        target_required = visible_data_acquisition and bool(
-            str(product_query or '').strip() or any(str(value or '').strip() for value in (target_source_urls or []))
-        )
-        if visible_data_acquisition:
-            settle_seconds = min(max(timeout / 1000, 3), 3)
-            self._trace_workflow_event(
-                'data_acquisition_search:collect_result_initial_settle',
-                seconds=settle_seconds,
-                reason='wait_before_checking_visible_dxm_result_list',
-            )
-            time.sleep(settle_seconds)
-        deadline = time.monotonic() + timeout / 1000
-        last_state: dict[str, Any] = {}
-        while time.monotonic() < deadline:
-            loading_state = self._data_acquisition_visible_loading_state(page)
-            loading = bool(loading_state.get('loading'))
-            claim_count = self._count_exact_data_acquisition_claim_actions(page)
-            target_state = (
-                self._data_acquisition_collect_target_state(
-                    page,
-                    product_query=product_query,
-                    target_source_urls=target_source_urls,
-                )
-                if target_required and claim_count > 0
-                else {'ready': not target_required}
-            )
-            target_ready = bool(target_state.get('ready'))
-            last_state = {
-                'loading': loading,
-                'loading_count': loading_state.get('loading_count', 0),
-                'loading_text': loading_state.get('loading_text', ''),
-                'claim_count': claim_count,
-                'target_ready': target_ready,
-                'target_state': target_state,
-                'strategy': 'visible_locator_collect_result',
-            }
-            if claim_count > 0 and target_ready:
-                self._trace_workflow_event(
-                    'data_acquisition_search:collect_result_ready',
-                    loading=loading,
-                    claim_count=claim_count,
-                    target_ready=target_ready,
-                    target_matched_by=target_state.get('matched_by'),
-                    ignored_loading=bool(loading),
-                )
-                return {'ok': True, **last_state}
-            if claim_count > 0 and target_required:
-                self._trace_workflow_event(
-                    'data_acquisition_search:collect_result_target_pending',
-                    loading=loading,
-                    claim_count=claim_count,
-                    target_state=target_state,
-                )
-            if visible_data_acquisition:
-                time.sleep(1.0)
-            else:
-                page.wait_for_timeout(1000)
-        if target_required:
-            raise RuntimeError(
-                '店小秘已有待认领列表没有出现目标商品，系统不会从旧列表或不确定列表认领；'
-                f'最后状态 claim_count={last_state.get("claim_count")} target={last_state.get("target_state")}'
-            )
-        raise RuntimeError('店小秘已有待认领列表一直在加载，系统没有看到可认领商品；请确认目标商品已存在于店小秘待认领列表后再重试。')
 
-    def _data_acquisition_collect_target_state(
-        self,
-        page: Page,
-        *,
-        product_query: str | None = None,
-        target_source_urls: list[str] | None = None,
-    ) -> dict[str, Any]:
-        try:
-            target = self._find_data_acquisition_claim_target(
-                page,
-                product_query=product_query,
-                target_source_urls=target_source_urls,
-            )
-        except Exception as exc:  # noqa: BLE001 - DXM may still be refreshing the result table.
-            return {'ready': False, 'reason': str(exc)[:240]}
-        if not isinstance(target, dict):
-            return {'ready': False, 'reason': '目标商品检查没有返回结果'}
-        return {
-            'ready': bool(target.get('ok')),
-            'matched_by': target.get('matchedBy'),
-            'reason': target.get('reason'),
-            'debug': target.get('debug'),
-            'row_text': str(target.get('rowText') or '')[:240],
-        }
 
-    def _inspect_data_acquisition_collect_result_state(self, page: Page) -> dict[str, Any]:
-        script = r'''() => {
-          const visible = (el) => {
-            if (!el) return false;
-            const r = el.getBoundingClientRect();
-            const style = window.getComputedStyle(el);
-            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-          };
-          const textOf = (el) => String(el && (el.innerText || el.textContent) || '').replace(/\s+/g, ' ').trim();
-          const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
-          const loadingNodes = Array.from(document.querySelectorAll(
-            '.ant-spin-spinning, .vxe-loading, .vxe-loading--wrapper, .el-loading-mask, .ant-spin, .loading, [class*="loading"], [class*="Loading"]'
-          )).filter(visible).slice(0, 10);
-          const actions = Array.from(document.querySelectorAll('button,a,[role="button"],span'))
-            .filter(visible)
-            .map(el => norm(textOf(el)))
-            .filter(text => ['认领','领取','认领到采集箱','领取到采集箱'].includes(text));
-          return {
-            loading: loadingNodes.length > 0,
-            loading_count: loadingNodes.length,
-            loading_text: loadingNodes.map(textOf).filter(Boolean).join(' ').slice(0, 200),
-            claim_count: actions.length,
-            url: location.href,
-            title: document.title,
-          };
-        }'''
-        try:
-            result = self._evaluate_zero_arg_page_function_with_runtime_timeout(page, script, timeout=2000)
-        except Exception as exc:
-            self._trace_workflow_event('data_acquisition_search:collect_result_probe_failed', error=str(exc)[:240])
-            return {'loading': True, 'loading_count': 1, 'loading_text': '页面检查无响应', 'claim_count': 0, 'probe_error': str(exc)[:240]}
-        if isinstance(result, dict):
-            return result
-        return {'loading': True, 'loading_count': 1, 'loading_text': '页面检查未返回结果', 'claim_count': 0, 'probe_error': 'non_object'}
 
-    def _count_exact_data_acquisition_claim_actions(self, page: Page) -> int:
-        count = 0
-        for selector in ('button', 'a', '[role="button"]', 'span'):
-            try:
-                candidates = page.locator(selector).filter(has_text='认领')
-            except Exception:
-                continue
-            for index in range(min(self._locator_count(candidates), 20)):
-                text = self._locator_text(candidates.nth(index), timeout=500)
-                compact = ''.join(str(text or '').split())
-                if compact in {'认领', '领取', '认领到采集箱', '领取到采集箱'}:
-                    count += 1
-        return count
 
-    def _locator_visible_any(self, page: Page, selectors: tuple[str, ...]) -> bool:
-        for selector in selectors:
-            try:
-                locator = page.locator(selector).first
-                if locator.is_visible(timeout=350):
-                    return True
-            except Exception:
-                continue
-        return False
 
-    def _data_acquisition_visible_loading_state(self, page: Page) -> dict[str, Any]:
-        selectors = (
-            '.vxe-loading',
-            '.vxe-loading--wrapper',
-            '.el-loading-mask',
-            '.ant-spin-spinning',
-            '.ant-spin',
-        )
-        visible_items: list[dict[str, Any]] = []
-        for selector in selectors:
-            try:
-                nodes = page.locator(selector)
-            except Exception:
-                continue
-            for index in range(min(self._locator_count(nodes), 8)):
-                node = nodes.nth(index)
-                rect = self._locator_bounding_box(node, timeout=250)
-                if not rect:
-                    continue
-                text = self._locator_text(node, timeout=250)
-                visible_items.append({
-                    'selector': selector,
-                    'text': text[:80],
-                    'rect': rect,
-                })
-                break
-        return {
-            'loading': bool(visible_items),
-            'loading_count': len(visible_items),
-            'loading_text': ' '.join(item.get('text') or item.get('selector') or '' for item in visible_items)[:200],
-            'loading_items': visible_items[:5],
-        }
 
-    def _find_data_acquisition_claim_target(
-        self,
-        page: Page,
-        product_query: str | None = None,
-        category_name: str | None = None,
-        store_name: str | None = None,
-        target_source_urls: list[str] | None = None,
-    ) -> dict[str, Any]:
-        if any(str(value or '').strip() for value in (target_source_urls or [])):
-            source_target = self._find_data_acquisition_claim_target_by_source_url(
-                page,
-                target_source_urls or [],
-                product_query=product_query,
-            )
-            if (
-                not isinstance(source_target, dict)
-                or source_target.get('ok') is not True
-                or source_target.get('matchedBy') != 'source_url'
-                or not self._claim_candidate_has_authorized_source(
-                    source_target, target_source_urls or []
-                )
-            ):
-                return {
-                    **(source_target if isinstance(source_target, dict) else {}),
-                    'ok': False,
-                    'reason': '待认领商品行来源与授权来源不唯一或不一致，系统已停止；不会按标题认领。',
-                }
-            return source_target
-        if str(product_query or '').strip():
-            product_target = self._find_data_acquisition_claim_target_by_product_query_script(
-                page,
-                str(product_query or '').strip(),
-                target_source_urls=target_source_urls or [],
-            )
-            if (
-                isinstance(product_target, dict)
-                and product_target.get('ok')
-                and self._claim_candidate_has_authorized_source(product_target, target_source_urls or [])
-            ):
-                return product_target
-        return page.evaluate(r'''({productQuery, categoryName, storeName, targetSourceUrls}) => {
-          const visible = (el) => {
-            const r = el.getBoundingClientRect();
-            const style = window.getComputedStyle(el);
-            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-          };
-          const rectOf = (el) => {
-            const r = el.getBoundingClientRect();
-            return {x:r.x, y:r.y, w:r.width, h:r.height};
-          };
-          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-          const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
-          const forbidden = ['发布','立即发布','继续发布','保存并发布','保存并移入待发布','移入待发布','批量发布'];
-          const sourceUrls = (row) => Array.from(row.querySelectorAll('a[href]'))
-            .map(a => String(a.href || a.getAttribute('href') || ''))
-            .filter(url => url.includes('detail.1688.com') || url.includes('yangkeduo.com') || url.includes('http'));
-          const targetUrls = Array.isArray(targetSourceUrls) ? targetSourceUrls.filter(Boolean).map(String) : [];
-          const hasTargetSource = (row) => {
-            if (!targetUrls.length) return false;
-            const urls = sourceUrls(row);
-            return urls.some(url => targetUrls.some(target => url === target));
-          };
-          const rows = Array.from(document.querySelectorAll(
-            'tr.vxe-body--row, tr.ant-table-row, tr.el-table__row, tr, .ant-table-row, .el-table__row, .vxe-body--row, [class*="table-row"], [class*="list-item"]'
-          )).filter(visible);
-          const query = String(productQuery || '').trim();
-          const category = String(categoryName || '').trim();
-          const store = String(storeName || '').trim();
-          const candidates = [];
-          rows.forEach((row, index) => {
-            const rowText = textOf(row);
-            if (!rowText || forbidden.some(term => norm(rowText).includes(norm(term)))) return;
-            if (store && rowText.includes(store) === false && norm(rowText).includes(norm(store)) === false) {
-              // 数据采集页通常不直接展示店铺，店铺可能在认领弹窗里选择，因此不强制过滤。
-            }
-            const actions = Array.from(row.querySelectorAll('button,a,[role="button"],span,div'))
-              .filter(visible)
-              .map(el => ({
-                el,
-                text: norm(textOf(el)),
-                title: norm([el.getAttribute('title'), el.getAttribute('aria-label')].join(' ')),
-                cls: String(el.className || ''),
-                disabled: Boolean(el.disabled || el.getAttribute('aria-disabled') === 'true' || String(el.className || '').includes('disabled')),
-                rect: rectOf(el),
-              }))
-              .filter(item => {
-                const hay = `${item.text} ${item.title} ${item.cls}`;
-                if (item.disabled) return false;
-                if (forbidden.some(term => norm(hay).includes(norm(term)))) return false;
-                if (item.text.includes('已认领') || item.text.includes('已领取')) return false;
-                return item.text === '认领'
-                  || item.text === '领取'
-                  || item.text.includes('认领到采集箱')
-                  || item.text.includes('领取到采集箱')
-                  || item.title.includes('认领')
-                  || item.title.includes('领取');
-              })
-              .sort((a, b) => (a.rect.w * a.rect.h) - (b.rect.w * b.rect.h));
-            if (!actions.length) return;
-            const compact = norm(rowText);
-            const queryMatched = query ? (rowText.includes(query) || compact.includes(norm(query))) : false;
-            const categoryMatched = category ? (rowText.includes(category) || compact.includes(norm(category))) : false;
-            const sourceMatched = hasTargetSource(row);
-            if (targetUrls.length) {
-              if (!sourceMatched) return;
-            } else {
-              if (query && !queryMatched) return;
-              if (!query && category && !categoryMatched) return;
-            }
-            const lines = rowText.split(/\s{2,}|\n/).map(s => s.trim()).filter(Boolean);
-            candidates.push({
-              ok: true,
-              rowIndex: index,
-              rowText: rowText.slice(0, 900),
-              title: lines.find(line => !/(认领|领取|采集箱|操作|来源|店铺)/.test(line)) || query || category || rowText.slice(0, 80),
-              categoryName: categoryMatched ? category : null,
-              sourceUrls: sourceUrls(row),
-              actionText: actions[0].text || actions[0].title,
-              actionRect: actions[0].rect,
-              matchedBy: sourceMatched ? 'source_url' : (queryMatched ? 'product_query' : (categoryMatched ? 'category_name' : 'first_claimable')),
-            });
-          });
-          if (!candidates.length) {
-            return {
-              ok: false,
-              reason: query
-                ? `未找到包含“${query}”且可认领的待认领商品`
-                : '未找到可认领的待认领商品；请先筛选到唯一商品',
-            };
-          }
-          if (!query && candidates.length > 1) {
-            return {
-              ok: false,
-              reason: '当前待认领结果不唯一，请先输入商品关键词或选择具体商品后再认领',
-              matches: candidates.slice(0, 5).map(item => ({rowIndex:item.rowIndex, rowText:item.rowText.slice(0, 260)})),
-            };
-          }
-          if (query && candidates.length > 1) {
-            const exact = candidates.filter(item => norm(item.rowText).includes(norm(query)));
-            if (exact.length === 1) return exact[0];
-            return {
-              ok: false,
-              reason: `商品关键词“${query}”匹配到多个可认领结果，请先缩小筛选范围`,
-              matches: candidates.slice(0, 5).map(item => ({rowIndex:item.rowIndex, rowText:item.rowText.slice(0, 260)})),
-            };
-          }
-          return candidates[0];
-        }''', {'productQuery': product_query, 'categoryName': category_name, 'storeName': store_name, 'targetSourceUrls': target_source_urls or []})
 
-    def _find_data_acquisition_claim_target_by_product_query_script(
-        self,
-        page: Page,
-        product_query: str,
-        *,
-        target_source_urls: list[str],
-    ) -> dict[str, Any] | None:
-        script = r'''({productQuery, targetSourceUrls}) => {
-          const visible = (el) => {
-            const r = el.getBoundingClientRect();
-            const style = window.getComputedStyle(el);
-            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-          };
-          const rectOf = (el) => {
-            const r = el.getBoundingClientRect();
-            return {x:r.x, y:r.y, w:r.width, h:r.height};
-          };
-          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-          const norm = (s) => String(s || '').replace(/\s+/g, '').trim().toLowerCase();
-          const forbidden = ['发布','立即发布','继续发布','保存并发布','保存并移入待发布','移入待发布','批量发布','一键发布'];
-          const sourceUrls = (row) => Array.from(row.querySelectorAll('a[href]'))
-            .map(a => String(a.href || a.getAttribute('href') || ''))
-            .filter(url => url.includes('detail.1688.com') || url.includes('yangkeduo.com') || url.includes('aliexpress') || url.includes('http'));
-          const targetUrls = Array.isArray(targetSourceUrls) ? targetSourceUrls.filter(Boolean).map(String) : [];
-          const sourceMatched = (urls) => urls.some(url => targetUrls.some(target => url === target));
-          const query = String(productQuery || '').trim();
-          const queryNorm = norm(query);
-          const tokens = query
-            .toLowerCase()
-            .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, ' ')
-            .split(/\s+/)
-            .filter(token => token.length >= 4)
-            .slice(0, 8);
-          const rows = Array.from(document.querySelectorAll(
-            'tr.vxe-body--row, tr.ant-table-row, tr.el-table__row, tr, .ant-table-row, .el-table__row, .vxe-body--row'
-          )).filter(visible);
-          const candidates = [];
-          for (const [index, row] of rows.entries()) {
-            const rowText = textOf(row);
-            const compact = norm(rowText);
-            if (!rowText || forbidden.some(term => compact.includes(norm(term)))) continue;
-            const urls = sourceUrls(row);
-            const hasSourceMismatch = targetUrls.length && !sourceMatched(urls);
-            if (hasSourceMismatch) continue;
-            const exact = queryNorm && compact.includes(queryNorm);
-            const tokenHits = tokens.filter(token => compact.includes(norm(token))).length;
-            if (!exact && tokenHits < Math.min(3, tokens.length || 3)) continue;
-            const actions = Array.from(row.querySelectorAll('button,a,[role="button"],span,div'))
-              .filter(visible)
-              .map(el => ({
-                el,
-                text: norm(textOf(el)),
-                title: norm([el.getAttribute('title'), el.getAttribute('aria-label')].join(' ')),
-                cls: String(el.className || ''),
-                disabled: Boolean(el.disabled || el.getAttribute('aria-disabled') === 'true' || String(el.className || '').includes('disabled')),
-                rect: rectOf(el),
-              }))
-              .filter(item => {
-                const hay = `${item.text} ${item.title} ${item.cls}`;
-                if (item.disabled) return false;
-                if (forbidden.some(term => norm(hay).includes(norm(term)))) return false;
-                if (item.text.includes('已认领') || item.text.includes('已领取')) return false;
-                return item.text === '认领'
-                  || item.text === '领取'
-                  || item.text.includes('认领到采集箱')
-                  || item.text.includes('领取到采集箱')
-                  || item.title.includes('认领')
-                  || item.title.includes('领取');
-              })
-              .sort((a, b) => (a.rect.w * a.rect.h) - (b.rect.w * b.rect.h));
-            if (!actions.length) continue;
-            const lines = rowText.split(/\s{2,}|\n/).map(s => s.trim()).filter(Boolean);
-            candidates.push({
-              ok: true,
-              matchedBy: exact ? 'product_query_exact_script' : 'product_query_tokens_script',
-              rowIndex: index,
-              title: lines.find(line => !/(认领|领取|采集箱|操作|来源|店铺)/.test(line)) || query || rowText.slice(0, 80),
-              rowText: rowText.slice(0, 900),
-              actionText: actions[0].text || actions[0].title || '认领',
-              actionRect: actions[0].rect,
-              sourceUrls: urls,
-              debug: {strategy:'product_query_script', tokenHits, tokenCount:tokens.length, sourceChecked:Boolean(targetUrls.length), sourceMatched:sourceMatched(urls)},
-            });
-          }
-          if (!candidates.length) return null;
-          candidates.sort((a, b) => {
-            const aExact = a.matchedBy === 'product_query_exact_script' ? 1 : 0;
-            const bExact = b.matchedBy === 'product_query_exact_script' ? 1 : 0;
-            return bExact - aExact || a.rowIndex - b.rowIndex;
-          });
-          return candidates[0];
-        }'''
-        try:
-            payload = {'productQuery': product_query, 'targetSourceUrls': target_source_urls or []}
-            try:
-                cdp = page.context.new_cdp_session(page)
-                response = cdp.send(
-                    'Runtime.evaluate',
-                    {
-                        'expression': f'({script})({json.dumps(payload, ensure_ascii=False)})',
-                        'returnByValue': True,
-                        'timeout': 2000,
-                    },
-                )
-                if isinstance(response, dict) and response.get('exceptionDetails'):
-                    raise RuntimeError(str(response.get('exceptionDetails'))[:240])
-                result = ((response or {}).get('result') or {}).get('value')
-            except Exception:
-                result = page.evaluate(script, payload)
-        except Exception as exc:
-            self._trace_workflow_event(
-                'data_acquisition_claim:product_query_script_failed',
-                error=str(exc)[:240],
-            )
-            return self._find_data_acquisition_claim_target_by_product_query_locator(
-                page,
-                product_query,
-                target_source_urls=target_source_urls,
-            )
-        if (
-            isinstance(result, dict)
-            and result.get('ok')
-            and target_source_urls
-            and not self._claim_candidate_has_authorized_source(result, target_source_urls)
-        ):
-            return None
-        if isinstance(result, dict):
-            return result
-        return None
 
-    def _data_acquisition_source_url_tokens(self, source_urls: list[str]) -> list[str]:
-        path_tokens: list[str] = []
-        query_tokens: list[str] = []
-        for raw in source_urls:
-            text = str(raw or '').strip()
-            if not text:
-                continue
-            parsed = urlparse(text)
-            for pattern in (r'[?&#]goods_id=(\d+)', r'offer/(\d+)\.html', r'item/(\d+)\.html'):
-                for match in re.findall(pattern, text):
-                    if match and match not in path_tokens:
-                        path_tokens.append(match)
-            parts = [(parsed.path, path_tokens), (parsed.query, query_tokens)]
-            if not parsed.path and not parsed.query:
-                parts.append((text, path_tokens))
-            for part, bucket in parts:
-                normalized = ''.join(ch if ch.isalnum() else ' ' for ch in part)
-                for token in normalized.split():
-                    if len(token) >= 8 and token not in bucket:
-                        bucket.append(token)
-        path_tokens.sort(key=lambda token: (0 if token.isdigit() else 1, -len(token)))
-        query_tokens.sort(key=lambda token: (0 if token.isdigit() else 1, -len(token)))
-        tokens: list[str] = []
-        for token in [*path_tokens, *query_tokens]:
-            if token not in tokens:
-                tokens.append(token)
-        return tokens[:12]
 
-    def _find_data_acquisition_claim_target_by_source_url(
-        self,
-        page: Page,
-        target_source_urls: list[str],
-        product_query: str | None = None,
-    ) -> dict[str, Any]:
-        tokens = self._data_acquisition_source_url_tokens(target_source_urls)
-        if not tokens:
-            return {'ok': False, 'reason': '来源链接缺少可用于匹配的商品标识'}
-        self._trace_workflow_event('data_acquisition_claim:source_lookup_start', token_count=len(tokens))
-        result: dict[str, Any] | None = None
-        matches: list[dict[str, Any]] = []
-        seen_action_rects: set[tuple[int, int, int, int]] = set()
-        scanned_links = 0
-        matched_without_action: dict[str, Any] | None = None
-        try:
-            anchors = page.locator('a[href]')
-            count = min(self._locator_count(anchors), 40)
-        except Exception:
-            anchors = None
-            count = 0
-        scanned_links = count
-        for index in range(count):
-            anchor = anchors.nth(index)
-            source_url = self._locator_attribute(anchor, 'href', timeout=1000)
-            if not source_url or not self._source_urls_match([source_url], target_source_urls):
-                continue
-            row = self._source_match_container(anchor)
-            row_text = self._locator_text(row, timeout=1000)
-            if self._contains_data_acquisition_claim_forbidden_term(row_text):
-                continue
-            observed_source_urls: list[str] = []
-            try:
-                row_anchors = row.locator('a[href]')
-                for row_anchor_index in range(min(self._locator_count(row_anchors), 20)):
-                    candidate_url = self._locator_attribute(
-                        row_anchors.nth(row_anchor_index), 'href', timeout=500
-                    )
-                    if candidate_url and self._source_urls_match([candidate_url], target_source_urls):
-                        observed_source_urls.append(candidate_url)
-            except Exception:
-                observed_source_urls = [source_url]
-            observed_source_urls = sorted(self._canonical_source_url_set(observed_source_urls))
-            if not self._source_urls_match_exact(observed_source_urls, target_source_urls):
-                continue
-            action = self._claim_action_in_container(row)
-            if action is None:
-                matched_without_action = {
-                    'reason': '待认领商品行内未找到认领按钮',
-                    'rowText': row_text[:400],
-                    'sourceUrls': observed_source_urls,
-                    'debug': {'matchedSourceUrl': source_url, 'scannedLinks': scanned_links},
-                }
-                continue
-            action_rect = self._locator_box(action, timeout=1000)
-            if not self._rect_has_clickable_area(action_rect):
-                matched_without_action = {
-                    'reason': '待认领商品行内未拿到可点击认领按钮位置',
-                    'rowText': row_text[:400],
-                    'sourceUrls': observed_source_urls,
-                    'debug': {'matchedSourceUrl': source_url, 'scannedLinks': scanned_links},
-                }
-                continue
-            action_text = self._locator_text(action, timeout=1000) or '认领'
-            rect_key = tuple(
-                int(round(float(action_rect.get(key) or 0)))
-                for key in ('x', 'y', 'w', 'h')
-            )
-            if rect_key in seen_action_rects:
-                continue
-            seen_action_rects.add(rect_key)
-            matches.append({
-                'ok': True,
-                'matchedBy': 'source_url',
-                'rowIndex': index,
-                'title': self._source_match_title(row_text),
-                'rowText': row_text[:800],
-                'actionText': action_text[:120],
-                'actionRect': action_rect,
-                'sourceUrls': observed_source_urls,
-                'debug': {
-                    'matchedSourceUrl': source_url,
-                    'scannedLinks': scanned_links,
-                    'strategy': 'canonical_exact_bounded_locator',
-                },
-            })
-        if len(matches) == 1:
-            result = matches[0]
-        elif len(matches) > 1:
-            result = {
-                'ok': False,
-                'reason': '来源 URL 精确匹配到多个可认领商品行，已停止认领。',
-                'matchCount': len(matches),
-                'matches': [
-                    {
-                        'rowIndex': item.get('rowIndex'),
-                        'sourceUrls': item.get('sourceUrls'),
-                        'actionRect': item.get('actionRect'),
-                    }
-                    for item in matches[:5]
-                ],
-                'debug': {'scannedLinks': scanned_links, 'strategy': 'canonical_exact_unique_locator'},
-            }
-        if result is None and matched_without_action:
-            result = {'ok': False, **matched_without_action}
-        if result is None:
-            result = {
-                'ok': False,
-                'reason': '未找到来源链接对应的可认领商品行；请确认该商品已存在于店小秘待认领列表，或换用准确来源链接。',
-                'debug': {
-                    'scannedLinks': scanned_links,
-                    'tokenCount': len(tokens),
-                    'strategy': 'bounded_locator',
-                },
-            }
-        self._trace_workflow_event(
-            'data_acquisition_claim:source_lookup_dom_scan_done',
-            ok=isinstance(result, dict) and result.get('ok'),
-            reason=result.get('reason') if isinstance(result, dict) else None,
-            debug=result.get('debug') if isinstance(result, dict) else None,
-        )
-        if isinstance(result, dict) and result.get('ok'):
-            return result
-        return {
-            'ok': False,
-            'reason': (
-                result.get('reason')
-                if isinstance(result, dict) and result.get('reason')
-                else '未找到来源链接对应的可认领商品行；请确认该商品已存在于店小秘待认领列表，或换用准确来源链接。'
-            ),
-            'target_source_urls': target_source_urls,
-            'tokens': tokens,
-            'debug': result.get('debug') if isinstance(result, dict) else None,
-        }
 
-    def _find_data_acquisition_claim_target_by_product_query_locator(
-        self,
-        page: Page,
-        product_query: str,
-        *,
-        target_source_urls: list[str],
-    ) -> dict[str, Any] | None:
-        query_tokens = [
-            token.lower()
-            for token in ''.join(ch if ch.isalnum() else ' ' for ch in product_query).split()
-            if len(token) >= 4
-        ][:6]
-        actions: list[Any] = []
-        exact_text_predicate = (
-            'normalize-space(.)="认领" or normalize-space(.)="领取" '
-            'or normalize-space(.)="认领到采集箱" or normalize-space(.)="领取到采集箱"'
-        )
-        for selector in (
-            f'xpath=//button[{exact_text_predicate}]',
-            f'xpath=//a[{exact_text_predicate}]',
-            f'xpath=//*[@role="button" and ({exact_text_predicate})]',
-            f'xpath=//span[{exact_text_predicate}]',
-        ):
-            try:
-                candidates = page.locator(selector)
-            except Exception:
-                continue
-            for index in range(min(self._locator_count(candidates), 20 - len(actions))):
-                actions.append(candidates.nth(index))
-            if len(actions) >= 20:
-                break
-        count = min(len(actions), 20)
-        samples: list[dict[str, Any]] = []
-        self._trace_workflow_event(
-            'data_acquisition_claim:product_query_locator_start',
-            action_count=count,
-            query_tokens=query_tokens,
-            human_step='按标题匹配待认领结果',
-        )
-        for index in range(count):
-            action = actions[index]
-            action_text = self._locator_text(action, timeout=800)
-            compact_action = ''.join(str(action_text or '').split())
-            if compact_action not in {'认领', '领取', '认领到采集箱', '领取到采集箱'}:
-                if len(samples) < 6:
-                    samples.append({
-                        'index': index,
-                        'skip': 'action_text',
-                        'actionText': str(action_text or '')[:120],
-                    })
-                continue
-            row = self._source_match_container(action)
-            row_text = self._locator_text(row, timeout=1000)
-            if self._contains_data_acquisition_claim_forbidden_term(row_text):
-                if len(samples) < 6:
-                    samples.append({
-                        'index': index,
-                        'skip': 'forbidden_text',
-                        'actionText': str(action_text or '')[:120],
-                        'rowText': str(row_text or '')[:240],
-                    })
-                continue
-            source_urls = self._source_urls_in_container(row)
-            if target_source_urls and (
-                not source_urls or not self._source_urls_match(source_urls, target_source_urls)
-            ):
-                if len(samples) < 6:
-                    samples.append({
-                        'index': index,
-                        'skip': 'source_url_mismatch',
-                        'actionText': str(action_text or '')[:120],
-                        'rowText': str(row_text or '')[:240],
-                        'sourceUrls': source_urls[:3],
-                    })
-                continue
-            hay = row_text.lower()
-            if query_tokens and not any(token in hay for token in query_tokens):
-                if len(samples) < 6:
-                    samples.append({
-                        'index': index,
-                        'skip': 'query_token_miss',
-                        'actionText': str(action_text or '')[:120],
-                        'rowText': str(row_text or '')[:240],
-                        'sourceUrls': source_urls[:3],
-                    })
-                continue
-            action_rect = self._locator_box(action, timeout=1000)
-            if not self._rect_has_clickable_area(action_rect):
-                if len(samples) < 6:
-                    samples.append({
-                        'index': index,
-                        'skip': 'action_rect_missing',
-                        'actionText': str(action_text or '')[:120],
-                        'rowText': str(row_text or '')[:240],
-                    })
-                continue
-            self._trace_workflow_event(
-                'data_acquisition_claim:product_query_locator_matched',
-                index=index,
-                row_text=str(row_text or '')[:240],
-                source_urls=source_urls[:3],
-                human_step='按标题匹配待认领结果',
-            )
-            return {
-                'ok': True,
-                'matchedBy': 'product_query_after_collect',
-                'rowIndex': index,
-                'title': self._source_match_title(row_text) or product_query[:160],
-                'rowText': row_text[:800],
-                'actionText': action_text[:120] or '认领',
-                'actionRect': action_rect,
-                'sourceUrls': source_urls,
-                'debug': {
-                    'strategy': 'product_query_locator_after_collect',
-                    'queryTokens': query_tokens,
-                },
-            }
-        self._trace_workflow_event(
-            'data_acquisition_claim:product_query_locator_no_match',
-            action_count=count,
-            query_tokens=query_tokens,
-            samples=samples,
-            human_step='按标题匹配待认领结果',
-        )
-        return None
 
-    def _source_urls_in_container(self, container: Any) -> list[str]:
-        urls: list[str] = []
-        try:
-            anchors = container.locator('a[href]')
-        except Exception:
-            return urls
-        for index in range(min(self._locator_count(anchors), 10)):
-            url = self._locator_attribute(anchors.nth(index), 'href', timeout=500)
-            if url and url not in urls:
-                urls.append(url)
-        return urls
 
-    def _structured_store_cell_evidence_in_container(
-        self,
-        container: Any,
-        store_name: str | None,
-    ) -> dict[str, Any] | None:
-        normalized_store = ' '.join(str(store_name or '').split())
-        if not normalized_store:
-            return None
-        try:
-            cells = container.locator(
-                'td, [role="cell"], .vxe-body--column, .ant-table-cell, '
-                '.el-table__cell, [class*="cell"]'
-            )
-        except Exception:
-            return None
-        matches: list[tuple[int, dict[str, Any]]] = []
-        for index in range(min(self._locator_count(cells), 40)):
-            cell = cells.nth(index)
-            cell_text = ' '.join(self._locator_text(cell, timeout=500).split())
-            compact = ''.join(cell_text.split()).casefold()
-            compact_store = ''.join(normalized_store.split()).casefold()
-            if compact not in {compact_store, f'「{compact_store}」'} and f'「{compact_store}」' not in compact:
-                continue
-            matches.append((
-                len(cell_text),
-                {
-                    'store_name': normalized_store,
-                    'cell_text': cell_text,
-                    'source': 'structured_store_cell',
-                    'tag': self._locator_attribute(cell, 'tagName', timeout=300),
-                    'class_name': self._locator_attribute(cell, 'class', timeout=300)[:240],
-                },
-            ))
-        if not matches:
-            return None
-        matches.sort(key=lambda item: item[0])
-        return matches[0][1]
 
-    def _data_acquisition_page_has_source_links(self, page: Page) -> bool:
-        try:
-            anchors = page.locator('a[href]')
-        except Exception:
-            return True
-        for index in range(min(self._locator_count(anchors), 30)):
-            url = self._locator_attribute(anchors.nth(index), 'href', timeout=500)
-            if url and ('http' in url or 'detail.1688.com' in url or 'aliexpress' in url or 'yangkeduo.com' in url):
-                return True
-        return False
 
     def _source_urls_match(self, actual_urls: list[str], target_urls: list[str]) -> bool:
         actual = self._canonical_source_url_set(actual_urls)
@@ -8328,7 +6131,7 @@ class DxmLoginFlow:
         raw_urls = [value.strip() for value in target_source_urls]
         try:
             canonical = canonical_source_identity(raw_urls[0], raw_urls)
-        except TwoStageContractError as exc:
+        except SaveOnlyContractError as exc:
             raise FrozenTargetIdentityError(
                 'EXACT_SOURCE_IDENTITY_INVALID',
                 f'{phase}的来源 URL 不是可验证的商品详情页，已停止操作。',
@@ -8350,7 +6153,7 @@ class DxmLoginFlow:
                 text = str(raw_url or '').strip()
                 if text:
                     canonical.add(canonical_source_identity(text)['primary_url'])
-        except TwoStageContractError:
+        except SaveOnlyContractError:
             return set()
         return canonical
 
@@ -8424,7 +6227,7 @@ class DxmLoginFlow:
             )
         try:
             canonical_source = canonical_source_identity(source_urls[0], source_urls)
-        except TwoStageContractError as exc:
+        except SaveOnlyContractError as exc:
             raise FrozenTargetIdentityError(
                 'FROZEN_TARGET_SOURCE_INVALID',
                 '冻结商品来源链接无效，已停止打开编辑页。',
@@ -8497,935 +6300,19 @@ class DxmLoginFlow:
         }
         return normalized, self._canonical_frozen_target_sha256(normalized)
 
-    def _claim_candidate_has_authorized_source(
-        self,
-        candidate: Mapping[str, Any],
-        target_source_urls: list[str],
-    ) -> bool:
-        authorized = [str(value).strip() for value in target_source_urls if str(value or '').strip()]
-        if not authorized:
-            return False
-        observed = candidate.get('sourceUrls')
-        if not isinstance(observed, list):
-            return False
-        return self._source_urls_match_exact(observed, authorized)
 
-    def _source_match_container(self, anchor: Any) -> Any:
-        for selector in (
-            'xpath=ancestor::tr[1]',
-            'xpath=ancestor::*[contains(@class,"row") or contains(@class,"item") or contains(@class,"table")][1]',
-            'xpath=ancestor::*[self::li or self::section or self::div][1]',
-        ):
-            try:
-                candidate = anchor.locator(selector)
-                if self._locator_count(candidate) > 0:
-                    return candidate.first
-            except Exception:
-                continue
-        return anchor
 
-    def _claim_action_in_container(self, container: Any) -> Any | None:
-        for selector in (
-            'button',
-            'a',
-            '[role="button"]',
-            'span',
-            'div',
-        ):
-            try:
-                candidates = container.locator(selector).filter(has_text='认领')
-                for index in range(min(self._locator_count(candidates), 10)):
-                    candidate = candidates.nth(index)
-                    compact = ''.join(str(self._locator_text(candidate, timeout=500) or '').split())
-                    if compact in {'认领', '认领到采集箱'}:
-                        return candidate
-            except Exception:
-                continue
-            try:
-                candidates = container.locator(selector).filter(has_text='领取')
-                for index in range(min(self._locator_count(candidates), 10)):
-                    candidate = candidates.nth(index)
-                    compact = ''.join(str(self._locator_text(candidate, timeout=500) or '').split())
-                    if compact in {'领取', '领取到采集箱'}:
-                        return candidate
-            except Exception:
-                continue
-        return None
 
-    def _source_match_title(self, row_text: str) -> str:
-        for line in [part.strip() for part in str(row_text or '').replace('\r', '\n').split('\n') if part.strip()]:
-            if not any(term in line for term in ('认领', '领取', '采集箱', '操作', '来源', '店铺')):
-                return line[:160]
-        return str(row_text or '店小秘待认领商品')[:160]
 
-    def _locator_count(self, locator: Any) -> int:
-        try:
-            return int(locator.count())
-        except Exception:
-            return 0
 
-    def _locator_text(self, locator: Any, *, timeout: int = 1000) -> str:
-        try:
-            return str(locator.inner_text(timeout=timeout) or '').strip()
-        except TypeError:
-            try:
-                return str(locator.inner_text() or '').strip()
-            except Exception:
-                return ''
-        except Exception:
-            return ''
 
-    def _locator_attribute(self, locator: Any, name: str, *, timeout: int = 1000) -> str:
-        try:
-            return str(locator.get_attribute(name, timeout=timeout) or '').strip()
-        except TypeError:
-            try:
-                return str(locator.get_attribute(name) or '').strip()
-            except Exception:
-                return ''
-        except Exception:
-            return ''
 
-    def _locator_box(self, locator: Any, *, timeout: int = 1000) -> dict[str, Any]:
-        try:
-            box = locator.bounding_box(timeout=timeout)
-        except TypeError:
-            try:
-                box = locator.bounding_box()
-            except Exception:
-                box = None
-        except Exception:
-            box = None
-        if not isinstance(box, dict):
-            return {}
-        return {
-            'x': float(box.get('x') or 0),
-            'y': float(box.get('y') or 0),
-            'w': float(box.get('width') or box.get('w') or 0),
-            'h': float(box.get('height') or box.get('h') or 0),
-        }
 
-    def _complete_data_acquisition_claim_dialog(
-        self,
-        page: Page,
-        category_name: str | None = None,
-        store_name: str | None = None,
-    ) -> dict[str, Any]:
-        if os.name == 'nt' and not self._is_headless() and self._is_data_acquisition_page_url(page):
-            self._trace_workflow_event(
-                'data_acquisition_claim_dialog:visible_scan_start',
-                human_step='检查认领确认弹窗',
-            )
-            try:
-                page.wait_for_timeout(1200)
-            except Exception:
-                pass
-        category_json = json.dumps(category_name or '', ensure_ascii=False)
-        store_json = json.dumps(store_name or '', ensure_ascii=False)
-        script = r'''() => {
-          const categoryName = __CATEGORY_NAME__;
-          const storeName = __STORE_NAME__;
-          const visible = (el) => {
-            const r = el.getBoundingClientRect();
-            const style = window.getComputedStyle(el);
-            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-          };
-          const rectOf = (el) => {
-            const r = el.getBoundingClientRect();
-            return {x:r.x, y:r.y, w:r.width, h:r.height};
-          };
-          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-          const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
-          const forbidden = ['发布','立即发布','继续发布','保存并发布','保存并移入待发布','移入待发布','批量发布'];
-          const containers = Array.from(document.querySelectorAll('.ant-modal, .ant-modal-wrap, .el-dialog, [role="dialog"], .modal, .layui-layer'))
-            .filter(visible)
-            .filter(el => {
-              const text = textOf(el);
-              return text.includes('认领') || text.includes('领取') || text.includes('采集箱');
-            });
-          const dialog = containers[containers.length - 1];
-          if (!dialog) return {ok:true, skipped:true, reason:'未出现认领确认弹窗'};
-          const dialogText = textOf(dialog);
-          if (forbidden.some(term => norm(dialogText).includes(norm(term)))) {
-            return {ok:false, reason:'认领弹窗中检测到发布相关动作，已停止'};
-          }
-          const dialogRect = rectOf(dialog);
-          const optionRects = [];
-          const optionTargetFor = (el) => {
-            for (const selector of ['label', '.ant-checkbox-wrapper', '.el-checkbox', '.ant-radio-wrapper', 'li', '[role="treeitem"]']) {
-              try {
-                const target = el.closest(selector);
-                if (!target || !dialog.contains(target) || !visible(target)) continue;
-                const r = rectOf(target);
-                if (r.width >= dialogRect.w * 0.92 && r.height >= dialogRect.h * 0.45) continue;
-                return target;
-              } catch (_) {}
-            }
-            return el;
-          };
-          for (const label of [storeName, categoryName].filter(Boolean)) {
-            const labelNorm = norm(label);
-            const option = Array.from(dialog.querySelectorAll('button,a,li,span,div,label'))
-              .filter(visible)
-              .map(el => {
-                const text = textOf(el);
-                const textNorm = norm(text);
-                const target = optionTargetFor(el);
-                const targetRect = rectOf(target);
-                const elRect = rectOf(el);
-                return {
-                  el,
-                  target,
-                  text,
-                  textNorm,
-                  targetRect,
-                  elRect,
-                  exact: textNorm === labelNorm,
-                  starts: textNorm.startsWith(labelNorm),
-                  area: Math.max(1, targetRect.w * targetRect.h),
-                };
-              })
-              .filter(item => item.textNorm === labelNorm || item.textNorm.includes(labelNorm))
-              .filter(item => item.targetRect.w < dialogRect.w * 0.92 || item.exact || item.starts)
-              .sort((a, b) => {
-                if (a.exact !== b.exact) return a.exact ? -1 : 1;
-                if (a.starts !== b.starts) return a.starts ? -1 : 1;
-                if (a.textNorm.length !== b.textNorm.length) return a.textNorm.length - b.textNorm.length;
-                return a.area - b.area;
-              })[0];
-            if (option) {
-              optionRects.push({label, rect:option.targetRect, text:option.text.slice(0, 120)});
-            }
-          }
-          const buttons = Array.from(dialog.querySelectorAll('button,a,[role="button"],span,div'))
-            .filter(visible)
-            .map(el => ({
-              el,
-              text: norm(textOf(el)),
-              cls: String(el.className || ''),
-              rect: rectOf(el),
-              disabled: Boolean(el.disabled || el.getAttribute('aria-disabled') === 'true' || String(el.className || '').includes('disabled')),
-            }))
-            .filter(item => !item.disabled && !forbidden.some(term => norm(`${item.text} ${item.cls}`).includes(norm(term))));
-          const submit = buttons.find(item => ['确定','确认','提交','开始认领','认领','领取'].includes(item.text))
-            || buttons.find(item => item.text.includes('认领') || item.text.includes('领取'));
-          if (!submit) {
-            return {ok:false, reason:'认领弹窗已打开，但未找到安全确认按钮', dialog_text:dialogText.slice(0, 400), clicked_options: optionRects.map(item => item.label)};
-          }
-          return {
-            ok:true,
-            submitted:false,
-            submit_text:submit.text,
-            submit_rect:submit.rect,
-            option_rects: optionRects,
-            clicked_options: optionRects.map(item => item.label),
-          };
-        }'''.replace('__CATEGORY_NAME__', category_json).replace('__STORE_NAME__', store_json)
-        try:
-            result = self._evaluate_zero_arg_page_function_with_runtime_timeout(page, script, timeout=2000)
-        except Exception as exc:  # noqa: BLE001 - DXM may navigate while the dialog is being inspected.
-            return {'ok': False, 'reason': f'认领弹窗扫描失败：{str(exc)[:240]}'}
-        if not isinstance(result, dict):
-            return {'ok': False, 'reason': '认领弹窗扫描没有返回可用结果'}
-        if not result.get('ok'):
-            return result
-        if result.get('skipped'):
-            if str(store_name or '').strip():
-                return {
-                    'ok': False,
-                    'reason': '认领确认弹窗未出现，无法证明已选择请求店铺',
-                    'requested_store_name': str(store_name).strip(),
-                    'dialog_state': result,
-                }
-            return result
-        requested_store_name = ' '.join(str(store_name or '').split())
-        option_rects = [item for item in result.get('option_rects') or [] if isinstance(item, dict)]
-        if requested_store_name:
-            store_option = next(
-                (
-                    item
-                    for item in option_rects
-                    if ' '.join(str(item.get('label') or '').split()).casefold()
-                    == requested_store_name.casefold()
-                ),
-                None,
-            )
-            if store_option is None or not isinstance(store_option.get('rect'), dict) or not self._rect_has_clickable_area(store_option['rect']):
-                return {
-                    'ok': False,
-                    'submitted': False,
-                    'reason': f'认领弹窗未找到请求店铺选项 {requested_store_name}，已停止确认',
-                    'requested_store_name': requested_store_name,
-                    'dialog_state': result,
-                }
-        clicked_options: list[str] = []
-        option_click_receipts: list[dict[str, Any]] = []
-        for option in option_rects:
-            if not isinstance(option, dict) or not isinstance(option.get('rect'), dict):
-                continue
-            if not self._rect_has_clickable_area(option['rect']):
-                continue
-            click_receipt = self._click_data_acquisition_claim_rect_center(page, option['rect'], purpose='认领弹窗选项')
-            if not isinstance(click_receipt, dict) or click_receipt.get('dispatched') is not True:
-                return {
-                    'ok': False,
-                    'submitted': False,
-                    'reason': f"认领弹窗选项 {str(option.get('label') or option.get('text') or '')} 没有真实点击回执，已停止确认",
-                    'requested_store_name': requested_store_name or None,
-                    'clicked_options': clicked_options,
-                    'dialog_state': result,
-                }
-            clicked_options.append(str(option.get('label') or option.get('text') or ''))
-            option_click_receipts.append(dict(click_receipt))
-            try:
-                page.wait_for_timeout(250)
-            except Exception:
-                pass
-        store_selection: dict[str, Any] | None = None
-        if requested_store_name:
-            readback_script = r'''() => {
-              const storeName = __STORE_NAME__;
-              const categoryName = __CATEGORY_NAME__;
-              const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
-              const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-              const visible = (el) => {
-                if (!el) return false;
-                const r = el.getBoundingClientRect();
-                const style = window.getComputedStyle(el);
-                return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-              };
-              const containers = Array.from(document.querySelectorAll('.ant-modal, .ant-modal-wrap, .el-dialog, [role="dialog"], .modal, .layui-layer'))
-                .filter(visible)
-                .filter(el => textOf(el).includes('认领') || textOf(el).includes('领取') || textOf(el).includes('采集箱'));
-              const dialog = containers[containers.length - 1];
-              if (!dialog) return {ok:false, requested_store_name:storeName, observed_store_name:null, selected:false, reason:'认领弹窗已消失，无法回读店铺选择'};
-              const optionSelector = 'label,.ant-checkbox-wrapper,.el-checkbox,.ant-radio-wrapper,.el-radio-wrapper,li,[role="treeitem"],[role="option"]';
-              const exactTextNode = Array.from(dialog.querySelectorAll(`${optionSelector},button,a,span,div`))
-                .filter(visible)
-                .find(el => norm(textOf(el)) === norm(storeName));
-              const exact = exactTextNode && (exactTextNode.closest(optionSelector) || exactTextNode);
-              if (!exact) return {ok:false, requested_store_name:storeName, observed_store_name:null, selected:false, reason:'无法回读请求店铺选项'};
-              const input = exact.matches('input') ? exact : exact.querySelector('input[type="checkbox"],input[type="radio"]');
-              const ariaChecked = exact.getAttribute('aria-checked') || (input && input.getAttribute('aria-checked')) || null;
-              const ariaSelected = exact.getAttribute('aria-selected') || null;
-              const className = String(exact.className || '');
-              const inputChecked = Boolean(input && input.checked);
-              const selected = inputChecked || ariaChecked === 'true' || ariaSelected === 'true' || /(?:^|[-_\s])(checked|selected)(?:$|[-_\s])/i.test(className);
-              const selectedOptionNames = [];
-              const seenOptions = new Set();
-              const optionRoots = Array.from(dialog.querySelectorAll(optionSelector));
-              for (const option of optionRoots) {
-                if (!visible(option)) continue;
-                const optionInput = option.querySelector('input[type="checkbox"],input[type="radio"]');
-                const optionClass = String(option.className || '');
-                const optionSelected = Boolean(
-                  (optionInput && optionInput.checked)
-                  || option.getAttribute('aria-checked') === 'true'
-                  || option.getAttribute('aria-selected') === 'true'
-                  || (optionInput && optionInput.getAttribute('aria-checked') === 'true')
-                  || /(?:^|[-_\s])(checked|selected)(?:$|[-_\s])/i.test(optionClass)
-                );
-                if (!optionSelected) continue;
-                const optionName = textOf(option);
-                const optionKey = norm(optionName);
-                if (!optionKey || seenOptions.has(optionKey)) continue;
-                seenOptions.add(optionKey);
-                selectedOptionNames.push(optionName);
-              }
-              const selectedStoreNames = selectedOptionNames.filter(name => norm(name) !== norm(categoryName));
-              return {
-                ok:true,
-                requested_store_name:storeName,
-                observed_store_name:textOf(exact),
-                selected,
-                selected_store_names:selectedStoreNames,
-                selection_evidence:{
-                  input_checked:inputChecked,
-                  aria_checked:ariaChecked,
-                  aria_selected:ariaSelected,
-                  class_name:className,
-                  selected_option_names:selectedOptionNames,
-                },
-              };
-            }'''.replace('__STORE_NAME__', json.dumps(requested_store_name, ensure_ascii=False)).replace('__CATEGORY_NAME__', category_json)
-            try:
-                readback = self._evaluate_zero_arg_page_function_with_runtime_timeout(page, readback_script, timeout=1500)
-            except Exception as exc:  # noqa: BLE001 - a missing readback is a fail-closed proof failure.
-                readback = {'ok': False, 'selected': False, 'reason': f'店铺选择回读失败：{str(exc)[:180]}'}
-            store_selection = dict(readback) if isinstance(readback, dict) else {'ok': False, 'selected': False}
-            observed_store_name = ' '.join(str(store_selection.get('observed_store_name') or '').split())
-            selected_store_names: list[str] = []
-            selected_store_keys: set[str] = set()
-            for raw_name in store_selection.get('selected_store_names') or []:
-                selected_name = ' '.join(str(raw_name or '').split())
-                selected_key = selected_name.casefold()
-                if selected_name and selected_key not in selected_store_keys:
-                    selected_store_keys.add(selected_key)
-                    selected_store_names.append(selected_name)
-            store_selection['selected_store_names'] = selected_store_names
-            if (
-                store_selection.get('ok') is not True
-                or store_selection.get('selected') is not True
-                or observed_store_name.casefold() != requested_store_name.casefold()
-                or not isinstance(store_selection.get('selection_evidence'), dict)
-                or not store_selection.get('selection_evidence')
-                or len(selected_store_names) != 1
-                or selected_store_names[0].casefold() != requested_store_name.casefold()
-            ):
-                return {
-                    'ok': False,
-                    'submitted': False,
-                    'reason': store_selection.get('reason') or '无法证明仅请求店铺被真实选中，已停止确认',
-                    'requested_store_name': requested_store_name,
-                    'store_selection': store_selection,
-                    'clicked_options': clicked_options,
-                    'dialog_state': result,
-                }
-        submit_rect = result.get('submit_rect')
-        if not isinstance(submit_rect, dict) or not self._rect_has_clickable_area(submit_rect):
-            return {'ok': False, 'reason': '认领弹窗确认按钮坐标不可用', 'dialog_state': result}
-        submit_click_receipt = self._click_data_acquisition_claim_rect_center(
-            page,
-            submit_rect,
-            purpose='认领弹窗确认',
-            mutation_action='claim_confirm_click',
-            pre_dispatch_guard=lambda: self._assert_data_acquisition_claim_dialog_submit_safe(
-                page,
-                submit_rect=submit_rect,
-                requested_store_name=requested_store_name,
-                category_name=category_name,
-            ),
-        )
-        try:
-            page.wait_for_timeout(800)
-        except Exception:
-            pass
-        updated = dict(result)
-        updated['submitted'] = True
-        updated['clicked_options'] = clicked_options or result.get('clicked_options') or []
-        updated['option_click_receipts'] = option_click_receipts
-        updated['submit_click_receipt'] = submit_click_receipt
-        if store_selection is not None:
-            updated['store_selection'] = store_selection
-        return updated
 
-    def _assert_data_acquisition_claim_dialog_submit_safe(
-        self,
-        page: Page,
-        *,
-        submit_rect: dict[str, Any],
-        requested_store_name: str,
-        category_name: str | None,
-    ) -> dict[str, Any]:
-        """Re-read the selected store and exact confirm button at click time."""
 
-        payload = {
-            'storeName': str(requested_store_name or '').strip(),
-            'categoryName': str(category_name or '').strip(),
-            'expectedRect': dict(submit_rect),
-        }
-        result = self._evaluate_zero_arg_page_function_with_runtime_timeout(
-            page,
-            r'''() => {
-              const payload = __PAYLOAD__;
-              const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
-              const textOf = (el) => (el?.innerText || el?.textContent || '').replace(/\s+/g, ' ').trim();
-              const visible = (el) => {
-                if (!el) return false;
-                const r = el.getBoundingClientRect();
-                const s = window.getComputedStyle(el);
-                return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
-              };
-              const rectOf = (el) => {
-                const r = el.getBoundingClientRect();
-                return {x:r.x, y:r.y, w:r.width, h:r.height};
-              };
-              const forbidden = ['发布','立即发布','继续发布','保存并发布','保存并移入待发布','移入待发布','批量发布'];
-              const dialogs = Array.from(document.querySelectorAll('.ant-modal,.ant-modal-wrap,.el-dialog,[role="dialog"],.modal,.layui-layer'))
-                .filter(visible)
-                .filter(el => /认领|领取|采集箱/.test(textOf(el)));
-              const dialog = dialogs[dialogs.length - 1];
-              if (!dialog) return {ok:false, reason:'claim_dialog_missing'};
-              if (forbidden.some(term => norm(textOf(dialog)).includes(norm(term)))) {
-                return {ok:false, reason:'claim_dialog_contains_publish_action'};
-              }
-              const buttons = Array.from(dialog.querySelectorAll('button,a,[role="button"]'))
-                .filter(visible)
-                .filter(el => !el.disabled && el.getAttribute('aria-disabled') !== 'true');
-              const submitCandidates = buttons.filter(el => {
-                const text = norm(textOf(el));
-                return ['确定','确认','提交','开始认领','认领','领取'].includes(text);
-              });
-              if (submitCandidates.length !== 1) {
-                return {ok:false, reason:'claim_submit_not_unique', count:submitCandidates.length};
-              }
-              const actualRect = rectOf(submitCandidates[0]);
-              const expectedRect = payload.expectedRect || {};
-              const rectStable = ['x','y','w','h'].every(key =>
-                Math.abs(Number(actualRect[key] || 0) - Number(expectedRect[key] || 0)) <= 2
-              );
-              if (!rectStable) return {ok:false, reason:'claim_submit_rect_changed', actual_rect:actualRect};
-              const optionSelector = 'label,.ant-checkbox-wrapper,.el-checkbox,.ant-radio-wrapper,.el-radio-wrapper,li,[role="treeitem"],[role="option"]';
-              const selectedNames = Array.from(dialog.querySelectorAll(optionSelector))
-                .filter(visible)
-                .filter(option => {
-                  const input = option.querySelector('input[type="checkbox"],input[type="radio"]');
-                  const cls = String(option.className || '');
-                  return Boolean(
-                    (input && input.checked)
-                    || option.getAttribute('aria-checked') === 'true'
-                    || option.getAttribute('aria-selected') === 'true'
-                    || /(?:^|[-_\s])(checked|selected)(?:$|[-_\s])/i.test(cls)
-                  );
-                })
-                .map(textOf)
-                .filter(name => norm(name) && norm(name) !== norm(payload.categoryName));
-              const uniqueStores = Array.from(new Set(selectedNames.map(name => norm(name))));
-              if (uniqueStores.length !== 1 || uniqueStores[0] !== norm(payload.storeName)) {
-                return {ok:false, reason:'claim_store_selection_changed', selected_stores:selectedNames};
-              }
-              return {ok:true, submit_text:textOf(submitCandidates[0]), submit_rect:actualRect, selected_stores:selectedNames};
-            }'''.replace('__PAYLOAD__', json.dumps(payload, ensure_ascii=False)),
-            timeout=1500,
-        )
-        if not isinstance(result, dict) or result.get('ok') is not True:
-            reason = (
-                str(result.get('reason') or 'claim dialog target changed')
-                if isinstance(result, dict)
-                else 'claim dialog target probe unavailable'
-            )
-            raise MutationAuthorizationError(f'MUTATION_TARGET_DRIFT: {reason}')
-        return result
 
-    def _verify_draft_box_claim(
-        self,
-        claim_mark: str,
-        product_query: str | None = None,
-        category_name: str | None = None,
-        store_name: str | None = None,
-        target_source_urls: list[str] | None = None,
-    ) -> dict[str, Any]:
-        authorized_target_source_urls = self._require_canonical_target_source_urls(
-            target_source_urls,
-            phase='商品箱认领验证',
-        )
-        normalized_store_name = ' '.join(str(store_name or '').split())
-        if not normalized_store_name or store_name != normalized_store_name:
-            raise FrozenTargetIdentityError(
-                'EXACT_STORE_IDENTITY_REQUIRED',
-                '商品箱认领验证缺少规范店铺名称，已在导航前停止。',
-            )
-        store_name = normalized_store_name
-        self._trace_workflow_event(
-            'draft_box_claim_verify:start',
-            product_query=product_query,
-            category_name=category_name,
-            store_name=store_name,
-            human_step='打开商品箱确认认领结果',
-        )
-        state = self.get_state()
-        claimed = state.get('claimed_product') if isinstance(state.get('claimed_product'), dict) else {}
-        claim_dialog = state.get('claim_dialog') if isinstance(state.get('claim_dialog'), dict) else {}
-        store_selection = (
-            claim_dialog.get('store_selection')
-            if isinstance(claim_dialog.get('store_selection'), dict)
-            else None
-        )
-        product_query = product_query or claimed.get('title')
-        category_name = category_name or claimed.get('category_name')
-        page = self._ensure_page_with_cookies()
-        visible_from_data_acquisition = os.name == 'nt' and not self._is_headless() and self._is_data_acquisition_page_url(page)
-        if visible_from_data_acquisition:
-            trace: list[dict[str, Any]] = []
-            self._dismiss_data_acquisition_notice_with_native_click(page)
-            self._click_data_acquisition_visible_dismiss_points(page, trace)
-            self._press_native_escape_for_visible_dxm(page)
-        draft_box_url = WORKFLOW_TARGETS['draft_box']['url']
-        visible_browser = os.name == 'nt' and not self._is_headless()
-        native_navigated = (
-            visible_from_data_acquisition
-            and self._navigate_visible_dxm_with_native_address_bar(page, draft_box_url)
-        )
-        if not native_navigated and visible_browser:
-            self._trace_workflow_event(
-                'draft_box_claim_verify:sterile_goto_start',
-                url=draft_box_url,
-                current_url=getattr(page, 'url', None),
-                human_step='打开商品箱页面',
-            )
-            try:
-                page.goto(
-                    draft_box_url,
-                    wait_until='commit' if visible_from_data_acquisition else 'domcontentloaded',
-                    timeout=15000 if visible_from_data_acquisition else 45000,
-                )
-            except Exception as exc:
-                if not (visible_from_data_acquisition and self._is_current_page_url(page, draft_box_url)):
-                    raise
-                self._trace_workflow_event(
-                    'draft_box_claim_verify:sterile_goto_timeout_continue',
-                    error=str(exc)[:240],
-                    current_url=getattr(page, 'url', None),
-                    human_step='商品箱页面已开始切换，继续等待页面稳定',
-                )
-            self._trace_workflow_event(
-                'draft_box_claim_verify:sterile_goto_done',
-                current_url=getattr(page, 'url', None),
-                human_step='商品箱页面已打开',
-            )
-        elif not native_navigated:
-            self._goto_with_live_hud(
-                page,
-                draft_box_url,
-                wait_until='commit' if visible_from_data_acquisition else 'domcontentloaded',
-                timeout=15000 if visible_from_data_acquisition else 45000,
-            )
-        self._trace_workflow_event(
-            'draft_box_claim_verify:navigate_done',
-            current_url=getattr(page, 'url', None),
-            native_navigated=native_navigated,
-            human_step='已打开商品箱',
-        )
-        if self._page_looks_like_login(page):
-            page_title = None
-            try:
-                page_title = page.title()
-            except Exception:
-                page_title = None
-            self._trace_workflow_event(
-                'draft_box_claim_verify:login_required',
-                current_url=getattr(page, 'url', None),
-                page_title=page_title,
-                human_step='商品箱页面要求重新登录',
-            )
-            return {
-                'ok': False,
-                'stage': 'draft_box_claim_login_required',
-                'label': '需要重新登录店小秘',
-                'message': '商品箱页面打开后显示登录页，当前真实浏览器登录态已失效或被店小秘重定向。',
-                'next_action': '请在真实浏览器中重新登录店小秘，然后重新执行待认领入箱确认。',
-                'requires_user_action': True,
-                'page_title': page_title,
-                'page_url': getattr(page, 'url', None),
-                'screenshot_url': None,
-                'browser_visible': not self._is_headless(),
-                'updated_at': now_iso(),
-            }
-        visible_draft_box = visible_browser
-        if visible_draft_box:
-            self._trace_workflow_event(
-                'draft_box_claim_verify:visible_settle_start',
-                seconds=3,
-                human_step='等待商品箱页面稳定',
-            )
-            page.wait_for_timeout(3000)
-            readiness = self._browser_readiness_gate(
-                page,
-                label='商品箱',
-                expected_identity='draft_box',
-                ready_terms=WORKFLOW_READY_TERMS['draft_box'],
-            )
-            self._trace_workflow_event(
-                'draft_box_claim_verify:readiness_gate',
-                readiness=readiness,
-                human_step='检查商品箱页面是否可操作',
-            )
-            if readiness.get('ok') is not True:
-                return {
-                    'ok': False,
-                    'stage': 'draft_box_claim_page_not_ready',
-                    'label': '商品箱页面未就绪',
-                    'message': readiness.get('message') or '商品箱页面尚未达到可操作状态。',
-                    'next_action': '请在真实浏览器中处理登录、加载或弹窗后重新执行商品箱确认。',
-                    'requires_user_action': True,
-                    'reason': readiness.get('reason'),
-                    'readiness': readiness,
-                    'page_title': readiness.get('page_title'),
-                    'page_url': readiness.get('page_url') or getattr(page, 'url', None),
-                    'screenshot_url': None,
-                    'browser_visible': not self._is_headless(),
-                    'updated_at': now_iso(),
-                }
-            wait_result = {
-                'ready': True,
-                'ready_term': 'browser_readiness_gate',
-                'loading': readiness.get('loading'),
-                'rows': None,
-                'text_excerpt': readiness.get('body_excerpt') or '',
-                'url': readiness.get('page_url') or getattr(page, 'url', ''),
-                'title': readiness.get('page_title') or '',
-            }
-        else:
-            wait_result = self._wait_for_page_ready(
-                page,
-                WORKFLOW_READY_TERMS['draft_box'],
-                label='商品箱',
-                expected_identity='draft_box',
-                timeout=60000,
-            )
-        self._trace_workflow_event(
-            'draft_box_claim_verify:ready',
-            wait_result={
-                'ready': wait_result.get('ready') if isinstance(wait_result, dict) else None,
-                'ready_term': wait_result.get('ready_term') if isinstance(wait_result, dict) else None,
-                'rows': wait_result.get('rows') if isinstance(wait_result, dict) else None,
-                'loading': wait_result.get('loading') if isinstance(wait_result, dict) else None,
-            },
-            human_step='商品箱页面已加载',
-        )
-        dismissed = self._dismiss_blocking_modals_if_visible(page, context='draft_box_claim_verify:after_ready')
-        self._trace_workflow_event(
-            'draft_box_claim_verify:dismiss_done',
-            dismissed=dismissed,
-            human_step='检查商品箱弹窗',
-        )
-        row_info: dict[str, Any] | None = None
-        try:
-            self._trace_workflow_event(
-                'draft_box_claim_verify:find_visible_start',
-                product_query=None,
-                store_name=store_name,
-                target_source_urls=authorized_target_source_urls,
-                human_step='先检查当前商品箱列表',
-            )
-            row_info = self._find_draft_box_row(
-                page,
-                store_name=store_name,
-                target_source_urls=authorized_target_source_urls,
-            )
-            self._trace_workflow_event(
-                'draft_box_claim_verify:find_visible_done',
-                matched_by=row_info.get('matchedBy'),
-                human_step='当前列表已找到商品',
-            )
-        except RuntimeError as exc:
-            self._trace_workflow_event(
-                'draft_box_claim_verify:find_visible_missed',
-                reason=str(exc)[:240],
-                human_step='当前列表未直接找到商品',
-            )
 
-        if row_info is None:
-            self._search_draft_box(
-                page,
-                product_query=authorized_target_source_urls[0],
-                store_name=store_name,
-            )
-            self._trace_workflow_event(
-                'draft_box_claim_verify:search_done',
-                product_query=authorized_target_source_urls[0],
-                store_name=store_name,
-                human_step='搜索商品箱商品',
-            )
-            self._trace_workflow_event(
-                'draft_box_claim_verify:find_start',
-                product_query=None,
-                store_name=store_name,
-                target_source_urls=authorized_target_source_urls,
-                human_step='按精确来源身份定位商品箱商品',
-            )
-            row_info = self._find_draft_box_row(
-                page,
-                store_name=store_name,
-                target_source_urls=authorized_target_source_urls,
-            )
-        if row_info is None:
-            raise RuntimeError('未找到商品箱商品')
-        if (
-            row_info.get('matchedBy') != 'source_url'
-            or not self._source_urls_match_exact(
-                list(row_info.get('sourceUrls') or []), authorized_target_source_urls
-            )
-        ):
-            raise FrozenTargetIdentityError(
-                'EXACT_SOURCE_IDENTITY_MISMATCH',
-                '商品箱认领验证没有唯一精确读回同一来源身份，已停止。',
-            )
-        self._trace_workflow_event(
-            'draft_box_claim_verify:find_done',
-            matched_by=row_info.get('matchedBy'),
-            source_urls=row_info.get('sourceUrls', []),
-            human_step='已找到商品箱商品',
-        )
-        screenshot_path = self._scoped_evidence_path(
-            ACQUISITION_ACTION_SCREENSHOT_MAP['verify'],
-            action='verify_draft_box_claim',
-        )
-        self._trace_workflow_event(
-            'draft_box_claim_verify:screenshot_start',
-            path=str(screenshot_path),
-            human_step='保存商品箱证据',
-        )
-        evidence_ref = self._capture_scoped_evidence_screenshot(
-            page,
-            ACQUISITION_ACTION_SCREENSHOT_MAP['verify'],
-            action='verify_draft_box_claim',
-            full_page=True,
-        )
-        screenshot_path = Path(evidence_ref['path'])
-        self._trace_workflow_event(
-            'draft_box_claim_verify:screenshot_done',
-            path=str(screenshot_path),
-            human_step='商品箱证据已保存',
-        )
-        claimed_product_title = self._draft_box_claimed_product_title(
-            product_query=product_query,
-            row_text=row_info.get('rowText'),
-            category_name=category_name,
-            claimed=claimed,
-        )
-        draft_box_match = self._semantic_draft_box_match(
-            row_info,
-            target_source_urls=authorized_target_source_urls,
-            store_name=store_name,
-            store_selection=store_selection,
-        )
-        return {
-            'page_title': page.title(),
-            'page_url': page.url,
-            'screenshot_url': self._artifact_url(screenshot_path),
-            'evidence_ref': evidence_ref,
-            'product_query': product_query,
-            'category_name': category_name,
-            'store_name': store_name,
-            'claim_mark': claim_mark,
-            'target_row_text': row_info.get('rowText'),
-            'target_source_urls': row_info.get('sourceUrls', []),
-            'draft_box_match': draft_box_match,
-            'claimed_product': {
-                'title': claimed_product_title,
-                'category_name': category_name,
-                'source_url': (row_info.get('sourceUrls') or [None])[0],
-                'row_text': row_info.get('rowText'),
-            },
-            'published': None,
-        }
 
-    def _semantic_draft_box_match(
-        self,
-        row_info: dict[str, Any],
-        *,
-        target_source_urls: list[str],
-        store_name: str | None,
-        store_selection: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        row_text = str(row_info.get('rowText') or '').strip()
-        observed_source_urls = [
-            str(value).strip()
-            for value in row_info.get('sourceUrls') or []
-            if str(value or '').strip()
-        ]
-        if not observed_source_urls:
-            raise RuntimeError('商品箱真实行缺少可审计的来源链接')
-        raw_matched_by = str(row_info.get('matchedBy') or '').strip()
-        canonical_observed_urls: dict[str, str] = {}
-        canonical_target_urls: set[str] = set()
-        try:
-            for observed in observed_source_urls:
-                canonical = canonical_source_identity(observed)['primary_url']
-                canonical_observed_urls.setdefault(canonical, observed)
-            for target in target_source_urls:
-                canonical_target_urls.add(canonical_source_identity(target)['primary_url'])
-        except TwoStageContractError as exc:
-            raise RuntimeError('商品箱真实行包含无效来源链接') from exc
-        if (
-            raw_matched_by != 'source_url'
-            or not canonical_target_urls
-            or set(canonical_observed_urls) != canonical_target_urls
-        ):
-            raise RuntimeError('商品箱真实行来源与授权来源不唯一或不一致')
-        matched_by = 'source_url'
-        matched_value = sorted(canonical_target_urls)[0]
-        normalized_store = ' '.join(str(store_name or '').split()).casefold()
-        store_cell_evidence = row_info.get('storeEvidence')
-        if not isinstance(store_cell_evidence, dict):
-            raise RuntimeError('商品箱真实行缺少结构化店铺单元格证据')
-        cell_store_name = ' '.join(str(store_cell_evidence.get('store_name') or '').split())
-        cell_text = ' '.join(str(store_cell_evidence.get('cell_text') or '').split())
-        if (
-            not normalized_store
-            or store_cell_evidence.get('source') != 'structured_store_cell'
-            or cell_store_name.casefold() != normalized_store
-            or not self._contains_exact_observed_hint(cell_text.casefold(), normalized_store)
-        ):
-            raise RuntimeError('商品箱结构化店铺单元格没有实际命中授权店铺')
-        store_selection = dict(store_selection or {})
-        observed_store_name = ' '.join(str(store_selection.get('observed_store_name') or '').split())
-        selection_evidence = store_selection.get('selection_evidence')
-        selected_store_names = [
-            ' '.join(str(value or '').split())
-            for value in store_selection.get('selected_store_names') or []
-            if ' '.join(str(value or '').split())
-        ]
-        if (
-            store_selection.get('selected') is not True
-            or observed_store_name.casefold() != normalized_store
-            or len(selected_store_names) != 1
-            or selected_store_names[0].casefold() != normalized_store
-            or not isinstance(selection_evidence, dict)
-            or not selection_evidence
-        ):
-            raise RuntimeError('认领弹窗没有可审计的真实店铺选择回读')
-        return {
-            'matched_by': matched_by,
-            'matched_value': matched_value,
-            'raw_matched_by': raw_matched_by,
-            'row_text': row_text,
-            'source_urls': observed_source_urls,
-            'store_name': observed_store_name,
-            'store_evidence': dict(store_cell_evidence),
-            'store_observation': {
-                'observed_store_name': observed_store_name,
-                'selected': True,
-                'selected_store_names': selected_store_names,
-                'selection_evidence': dict(selection_evidence),
-                'draft_box_cell_evidence': dict(store_cell_evidence),
-            },
-        }
-
-    def _contains_exact_observed_hint(self, normalized_text: str, normalized_hint: str) -> bool:
-        if not normalized_text or not normalized_hint:
-            return False
-        if re.search(r'[a-z0-9]', normalized_hint):
-            pattern = rf'(?<![a-z0-9]){re.escape(normalized_hint)}(?![a-z0-9])'
-            return re.search(pattern, normalized_text) is not None
-        return normalized_hint in normalized_text
-
-    def _draft_box_claimed_product_title(
-        self,
-        *,
-        product_query: str | None,
-        row_text: str | None,
-        category_name: str | None,
-        claimed: dict[str, Any] | None = None,
-    ) -> str:
-        row_title = self._product_title_from_draft_box_row(row_text)
-        query = str(product_query or '').strip()
-        claimed_title = str((claimed or {}).get('title') or '').strip()
-        for candidate in (row_title, claimed_title, query, str(category_name or '').strip()):
-            if candidate and not self._looks_like_external_url(candidate):
-                return candidate
-        return query or claimed_title or str(category_name or '').strip() or '店小秘待认领商品'
-
-    @staticmethod
-    def _looks_like_external_url(value: str) -> bool:
-        text = str(value or '').strip()
-        if not text:
-            return False
-        try:
-            parsed = urlparse(text)
-        except Exception:
-            return False
-        return bool(parsed.scheme in {'http', 'https'} and parsed.netloc)
-
-    @staticmethod
-    def _product_title_from_draft_box_row(row_text: str | None) -> str:
-        text = re.sub(r'\s+', ' ', str(row_text or '')).strip()
-        if not text:
-            return ''
-        text = re.split(r'\s+「[^」]+」|\s+创建：|\s+更新：|\s+移入待发布|\s+编辑|\s+发布|\s+更多', text, maxsplit=1)[0].strip()
-        text = re.sub(r'^(1688|拼多多|淘宝|天猫|京东|Wish|AliExpress|Shopee|Lazada|eBay|Amazon)\s+', '', text, flags=re.IGNORECASE).strip()
-        return text[:120].strip()
 
     def _perform_editor_action(
         self,
@@ -10284,10 +7171,10 @@ class DxmLoginFlow:
               const productIdentityMatch = kind === 'product_id'
                 ? currentEditorId === value
                 : observedSources.includes(canonicalUrl(value));
-              const sourceIdentityMatch = targetSources.length === 0
-                || targetSources.every(source => observedSources.includes(source));
-              const storeIdentityMatch = Boolean(storeName) && observedStores.includes(storeName);
-              const provenSources = targetSources.filter(source => observedSources.includes(source));
+              const sourceIdentityMatch = targetSources.length > 0
+                && observedSources.length === targetSources.length
+                && targetSources.every(source => observedSources.includes(source));
+              const storeIdentityMatch = observedStores.length === 1 && observedStores[0] === storeName;
               return {
                 ok: Boolean(productIdentityMatch && storeIdentityMatch && (sourceIdentityMatch || productIdentityMatch)),
                 matchedBy: kind,
@@ -10297,7 +7184,7 @@ class DxmLoginFlow:
                 source_identity_match: Boolean(sourceIdentityMatch),
                 current_editor_product_id: currentEditorId || null,
                 observed_product_ids: ids.slice(0, 12),
-                observed_source_urls: (provenSources.length ? provenSources : observedSources).slice(0, 12),
+                observed_source_urls: observedSources.slice(0, 12),
                 observed_store_names: observedStores.slice(0, 12),
                 expected_store_name: storeName,
                 expected_source_urls: targetSources,
@@ -10329,10 +7216,7 @@ class DxmLoginFlow:
             )
         else:
             product_identity_match = self._source_urls_match_exact(observed_sources, expected_sources)
-        source_identity_match = bool(
-            self._source_urls_match_exact(observed_sources, expected_sources)
-            or self._source_urls_match(observed_sources, expected_sources)
-        )
+        source_identity_match = self._source_urls_match_exact(observed_sources, expected_sources)
         observed_stores = [
             ' '.join(str(value or '').split())
             for value in verified.get('observed_store_names') or []
@@ -10686,7 +7570,7 @@ class DxmLoginFlow:
             .every(term => markerTexts.some(text => text.includes(term)));
           const hasEditorSignals = hasSave || hasLegacySectionSignals;
           const hasLoadedRequiredFields = !storeMissing && !categoryMissing && !titleMissing;
-          const ready = Boolean(hasSave && (queryMatched || hasLoadedRequiredFields));
+          const ready = Boolean(!loadingVisible && hasSave && (queryMatched || hasLoadedRequiredFields));
           return {
             ready,
             loading: Boolean(loadingVisible),
@@ -22425,21 +19309,6 @@ class DxmLoginFlow:
             return True
         return not self._is_headless()
 
-    def _install_data_acquisition_notice_auto_dismiss_for_context(self, context: BrowserContext) -> None:
-        if not self._is_headless():
-            try:
-                context.add_init_script(DATA_ACQUISITION_NOTICE_AUTO_DISMISS_SCRIPT)
-                self._data_acquisition_notice_bound_context_ids.add(id(context))
-                self._trace_workflow_event(
-                    'data_acquisition_notice_auto_dismiss:installed_on_context_create',
-                    human_step='准备关闭店小秘通知弹窗',
-                )
-            except Exception as exc:
-                self._trace_workflow_event(
-                    'data_acquisition_notice_auto_dismiss:context_install_failed',
-                    error=str(exc)[:240],
-                    human_step='准备关闭店小秘通知弹窗',
-                )
 
     def _is_playwright_object_closed(self, value: Any) -> bool:
         is_closed = getattr(value, 'is_closed', None)
@@ -22915,353 +19784,9 @@ class DxmLoginFlow:
             raise RuntimeError(str(response.get('exceptionDetails'))[:240])
         return ((response or {}).get('result') or {}).get('value')
 
-    def _dismiss_data_acquisition_blocking_modals(self, page: Page) -> int:
-        dismissed = 0
-        trace: list[dict[str, Any]] = []
-        self._last_dismiss_blocking_modals_trace = trace
-        visible_headed_data_acquisition = os.name == 'nt' and not self._is_headless() and self._is_data_acquisition_page_url(page)
-        pressed_visible_escape = False
-        if visible_headed_data_acquisition:
-            if self._dismiss_data_acquisition_notice_with_native_click(page):
-                trace.append({'clicked': 'native:notice-close'})
-            self._click_data_acquisition_visible_dismiss_points(page, trace)
-            if self._press_native_escape_for_visible_dxm(page):
-                pressed_visible_escape = True
-                trace.append({'clicked': 'native:escape'})
-            plugin_guide_dismissed = self._dismiss_data_acquisition_plugin_guide_with_runtime(page, trace)
-            if plugin_guide_dismissed:
-                return plugin_guide_dismissed
-            # Native fixed points are only a fast path. DXM can move the plugin guide,
-            # so continue into the bounded DOM scan and click the actual dismiss control.
-        for index in range(4):
-            self._trace_workflow_event('dismiss_data_acquisition:start', iteration=index, current_url=page.url)
-            if pressed_visible_escape:
-                pressed_visible_escape = False
-            elif self._press_native_escape_for_visible_dxm(page):
-                self._trace_workflow_event(
-                    'dismiss_data_acquisition:native_escape',
-                    iteration=index,
-                    reason='visible_browser_escape_before_bounded_overlay_scan',
-                    human_step='检查页面弹窗',
-                )
-            script = r'''() => {
-              const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
-              const rectOf = (el) => {
-                const r = el.getBoundingClientRect();
-                return {x:r.x, y:r.y, w:r.width, h:r.height};
-              };
-              const isVisible = (el) => {
-                const r = el.getBoundingClientRect();
-                const style = window.getComputedStyle(el);
-                return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-              };
-              const findTextTarget = (root, labels, limit = 300) => {
-                for (const label of labels) {
-                  const wanted = norm(label);
-                  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-                  let seen = 0;
-                  while (seen < limit) {
-                    const node = walker.nextNode();
-                    if (!node) break;
-                    seen += 1;
-                    const text = norm(node.nodeValue || '');
-                    if (text !== wanted) continue;
-                    let el = node.parentElement;
-                    while (el && el !== root && !isVisible(el)) el = el.parentElement;
-                    if (!el || !isVisible(el)) continue;
-                    const clickable = el.closest('button,a,[role="button"],.ant-modal-close,[class*="close"]');
-                    const target = clickable && root.contains(clickable) && isVisible(clickable) ? clickable : el;
-                    return {el:target, text:text, rect:rectOf(target), tag:target.tagName};
-                  }
-                }
-                return null;
-              };
-              const visibleInteractiveControls = (root) => Array.from(root.querySelectorAll('button,a,[role="button"],span,div,.ant-modal-close,[class*="close"]'))
-                .filter(isVisible)
-                .filter(el => norm(el.innerText || el.textContent || el.getAttribute('aria-label') || ''));
-              const visibleGuides = Array.from(document.querySelectorAll('.guide-overlay, .guide-body, [class*="guide-overlay"], [class*="guide-body"]'))
-                .filter(isVisible);
-              if (visibleGuides.length) {
-                const hasVisibleGuideControl = visibleGuides.some(el => visibleInteractiveControls(el).length > 0);
-                const hasOnlyOverlayShells = visibleGuides.every(el => {
-                  const compact = norm(el.innerText || el.textContent || '');
-                  return visibleInteractiveControls(el).length === 0
-                    && (
-                      !compact
-                      || Array.from(el.querySelectorAll('.guide-body, [class*="guide-body"]')).some(child => !isVisible(child))
-                    );
-                });
-                if (!hasVisibleGuideControl && hasOnlyOverlayShells) {
-                  visibleGuides.forEach(el => el.remove());
-                  return {
-                    visible: true,
-                    removed: true,
-                    removed_count: visibleGuides.length,
-                    clicked: 'removed:blank-guide-overlay',
-                    text: '店小秘采集引导遮罩'
-                  };
-                }
-              }
-              const selectors = [
-                '.guide-overlay',
-                '.guide-body',
-                '.notice-list-modal',
-                '.ant-modal-wrap',
-                '.ant-modal',
-                '.el-dialog',
-                '.el-dialog__wrapper',
-                '[role="dialog"]',
-                '.ant-dropdown:not(.ant-dropdown-hidden)',
-                '.ant-dropdown-menu',
-                '[role="menu"]'
-              ].join(',');
-              const containers = Array.from(document.querySelectorAll(selectors))
-                .filter(isVisible)
-                .filter(el => !el.classList.contains('ant-modal-mask'));
-              const modal = containers.find(el => {
-                const text = norm(el.innerText || el.textContent);
-                return text || el.querySelector('button,a,[role="button"],input,textarea,.ant-modal-close,[class*="close"]');
-              });
-              if (!modal) return {visible:false};
-              const text = (modal.innerText || modal.textContent || '').replace(/\s+/g, ' ').trim();
-              const compact = norm(text);
-              const dangerousTerms = ['发布', '立即发布', '继续发布', '保存并发布', '确认发布', '提交发布', '保存并移入待发布', '移入待发布'];
-              const dangerousTerm = dangerousTerms.find(term => compact.includes(norm(term)));
-              if (dangerousTerm) {
-                return {visible:true, dangerous:true, reason:`检测到危险弹窗：${dangerousTerm}`, text:text.slice(0,300)};
-              }
-              const labels = ['跳过','完成','我知道了','知道了','关闭','确定','忽略提示','下一步','取消'];
-              const scoreControl = (item) => {
-                const tag = String(item.tag || '').toLowerCase();
-                const cls = String(item.cls || '').toLowerCase();
-                const role = String(item.role || '').toLowerCase();
-                const area = Math.max(0, Number(item.rect?.w || 0) * Number(item.rect?.h || 0));
-                let score = Math.min(area, 20000) / 100;
-                if (tag === 'button' || tag === 'a' || role === 'button') score -= 1000;
-                if (cls.includes('close') || cls.includes('btn')) score -= 500;
-                if (tag === 'div' || tag === 'span') score += 60;
-                if (area > 20000) score += 1000;
-                return score;
-              };
-              const controls = Array.from(modal.querySelectorAll('button,a,[role="button"],span,div,.ant-modal-close,[class*="close"]'))
-                .filter(isVisible)
-                .map(el => ({
-                  el,
-                  text:norm(el.innerText || el.textContent || el.getAttribute('aria-label') || ''),
-                  rect:rectOf(el),
-                  tag:el.tagName,
-                  cls:String(el.className || ''),
-                  role:String(el.getAttribute('role') || '')
-                }))
-                .sort((a, b) => scoreControl(a) - scoreControl(b));
-              const match = labels.map(label => controls.find(item => item.text === norm(label))).find(Boolean)
-                || findTextTarget(modal, labels)
-                || controls.find(item => labels.includes(item.text))
-                || controls.find(item => item.text.includes('关闭') || item.text.includes('知道'));
-              if (!match) {
-                const pageControls = Array.from(document.querySelectorAll('button,a,[role="button"],span,.ant-modal-close,[class*="close"]'))
-                  .filter(isVisible)
-                  .map(el => ({el, text:norm(el.innerText || el.textContent || el.getAttribute('aria-label') || ''), rect:rectOf(el), tag:el.tagName}));
-                const pageMatch = labels.map(label => pageControls.find(item => item.text === norm(label))).find(Boolean)
-                  || findTextTarget(document.body, labels, 1000);
-                if (pageMatch) return {visible:true, clicked:`standalone:${pageMatch.text}`, rect:pageMatch.rect, text:text.slice(0,300)};
-                return {visible:true, clicked:null, text:text.slice(0,300)};
-              }
-              return {visible:true, clicked:match.text || 'close', rect:match.rect, text:text.slice(0,300)};
-            }'''
-            try:
-                result = self._evaluate_zero_arg_page_function_with_runtime_timeout(page, script, timeout=2000)
-            except Exception as exc:
-                self._trace_workflow_event(
-                    'dismiss_data_acquisition:scan_failed',
-                    iteration=index,
-                    error=str(exc)[:240],
-                    human_step='检查页面弹窗',
-                )
-                return dismissed
-            self._trace_workflow_event('dismiss_data_acquisition:evaluated', iteration=index, result=result)
-            if not result or not result.get('visible'):
-                return dismissed
-            trace.append({
-                'clicked': result.get('clicked'),
-                'rect': result.get('rect'),
-                'text': str(result.get('text') or '')[:160],
-                'dangerous': bool(result.get('dangerous')),
-            })
-            if result.get('dangerous'):
-                raise RuntimeError(result.get('reason') or '检测到危险弹窗，已停止自动点击')
-            if result.get('removed'):
-                dismissed += 1
-                try:
-                    page.wait_for_timeout(300)
-                except Exception:
-                    pass
-                continue
-            if not result.get('clicked') or not result.get('rect'):
-                return dismissed
-            self._click_rect_center(page, result['rect'])
-            dismissed += 1
-            page.wait_for_timeout(500)
-            if visible_headed_data_acquisition:
-                return dismissed
-        return dismissed
 
-    def _dismiss_data_acquisition_plugin_guide_with_runtime(self, page: Page, trace: list[dict[str, Any]]) -> int:
-        if os.name != 'nt' or self._is_headless() or not self._is_data_acquisition_page_url(page):
-            return 0
-        script = r'''() => {
-          const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
-          const textOf = (el) => (el ? (el.innerText || el.textContent || '') : '').replace(/\s+/g, ' ').trim();
-          const isVisible = (el) => {
-            if (!el || !el.getBoundingClientRect) return false;
-            const r = el.getBoundingClientRect();
-            const style = window.getComputedStyle(el);
-            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-          };
-          const rectOf = (el) => {
-            const r = el.getBoundingClientRect();
-            return {x:r.x, y:r.y, w:r.width, h:r.height};
-          };
-          const guides = Array.from(document.querySelectorAll('.guide-overlay, .guide-body, [class*="guide-overlay"], [class*="guide-body"]'))
-            .filter(isVisible)
-            .filter(el => {
-              const compact = norm(textOf(el));
-              return compact.includes('安装店小秘采集插件') && compact.includes('跳过');
-            });
-          if (!guides.length) return {visible:false};
-          const guide = guides.find(el => norm(textOf(el)).includes('下载采集插件')) || guides[0];
-          const compact = norm(textOf(guide));
-          const dangerousTerms = ['发布', '立即发布', '继续发布', '保存并发布', '确认发布', '提交发布', '保存并移入待发布', '移入待发布'];
-          const dangerousTerm = dangerousTerms.find(term => compact.includes(norm(term)));
-          if (dangerousTerm) {
-            return {visible:true, dangerous:true, reason:`检测到危险引导层：${dangerousTerm}`, text:textOf(guide).slice(0, 300)};
-          }
-          const candidates = Array.from(guide.querySelectorAll('button,a,[role="button"],[onclick],span,div'))
-            .filter(isVisible)
-            .map(el => ({el, text:norm(textOf(el)), rect:rectOf(el), cls:String(el.className || ''), tag:String(el.tagName || '').toLowerCase()}))
-            .filter(item => item.text === '跳过');
-          const target = candidates.find(item => ['button', 'a'].includes(item.tag) || item.cls.includes('pointer'))
-            || candidates[0];
-          try {
-            if (target && target.el && typeof target.el.click === 'function') target.el.click();
-          } catch (_) {}
-          const toRemove = new Set();
-          for (const item of guides) {
-            const overlay = item.closest('.guide-overlay, [class*="guide-overlay"]');
-            toRemove.add(overlay || item);
-          }
-          let removed = 0;
-          for (const item of toRemove) {
-            if (item && item.parentElement) {
-              item.remove();
-              removed += 1;
-            }
-          }
-          return {
-            visible: true,
-            removed: true,
-            removed_count: removed,
-            clicked: 'runtime:guide-skip',
-            rect: target ? target.rect : null,
-            text: textOf(guide).slice(0, 300),
-          };
-        }'''
-        try:
-            result = self._evaluate_zero_arg_page_function_with_runtime_timeout(page, script, timeout=2000)
-        except Exception as exc:
-            self._trace_workflow_event(
-                'dismiss_data_acquisition:plugin_guide_runtime_failed',
-                error=str(exc)[:240],
-                human_step='关闭采集插件引导',
-            )
-            return 0
-        self._trace_workflow_event(
-            'dismiss_data_acquisition:plugin_guide_runtime_evaluated',
-            result=result,
-            human_step='关闭采集插件引导',
-        )
-        if not isinstance(result, dict) or not result.get('visible'):
-            return 0
-        trace.append({
-            'clicked': result.get('clicked') or 'runtime:guide-skip',
-            'rect': result.get('rect'),
-            'text': str(result.get('text') or '')[:160],
-            'removed': bool(result.get('removed')),
-        })
-        if result.get('dangerous'):
-            raise RuntimeError(result.get('reason') or '检测到危险引导层，已停止自动点击')
-        if result.get('removed') or result.get('clicked'):
-            try:
-                page.wait_for_timeout(300)
-            except Exception:
-                pass
-            return 1
-        return 0
 
-    def _click_data_acquisition_visible_dismiss_points(self, page: Page, trace: list[dict[str, Any]]) -> int:
-        if os.name != 'nt' or self._is_headless() or not self._is_data_acquisition_page_url(page):
-            return 0
-        # Visible DXM can block Playwright/CDP inspection while an activity or guide overlay is active.
-        # These points target only known dismiss controls on the data-acquisition page and never submit, claim, save, or publish.
-        points = [
-            ('notice-header-close-1440', 1170.0, 91.0),
-            ('notice-header-close-wide', 1650.0, 128.0),
-            ('notice-footer-close-1440', 1147.0, 675.0),
-            ('notice-footer-close-wide', 1618.0, 950.0),
-            ('guide-skip', 542.0, 357.0),
-        ]
-        for label, x, y in points:
-            self._trace_workflow_event(
-                'dismiss_data_acquisition:native_point_start',
-                label=label,
-                point={'x': x, 'y': y},
-                human_step='关闭页面遮罩',
-            )
-            if self._click_point_with_native_window(page, x, y):
-                trace.append({'clicked': f'native:{label}', 'rect': {'x': x, 'y': y, 'w': 1, 'h': 1}})
-                self._trace_workflow_event(
-                    'dismiss_data_acquisition:native_point_done',
-                    label=label,
-                    point={'x': x, 'y': y},
-                    human_step='关闭页面遮罩',
-                )
-                time.sleep(0.25)
-            else:
-                self._trace_workflow_event(
-                    'dismiss_data_acquisition:native_point_skipped',
-                    label=label,
-                    point={'x': x, 'y': y},
-                    human_step='关闭页面遮罩',
-                )
-        return 0
 
-    def _press_native_escape_for_visible_dxm(self, page: Page) -> bool:
-        if os.name != 'nt' or self._is_headless():
-            return False
-        page_url = str(getattr(page, 'url', '') or '')
-        if 'dianxiaomi.com' not in page_url:
-            return False
-        try:
-            import ctypes
-            from ctypes import wintypes
-
-            self._force_foreground_dxm_window()
-            user32 = ctypes.windll.user32
-            user32.keybd_event.argtypes = [wintypes.BYTE, wintypes.BYTE, wintypes.DWORD, ctypes.POINTER(ctypes.c_ulong)]
-            user32.keybd_event.restype = None
-            vk_escape = 0x1B
-            keyeventf_keyup = 0x0002
-            user32.keybd_event(vk_escape, 0, 0, None)
-            time.sleep(0.03)
-            user32.keybd_event(vk_escape, 0, keyeventf_keyup, None)
-            return True
-        except Exception as exc:
-            self._trace_workflow_event(
-                'dismiss_data_acquisition:native_escape_failed',
-                error=str(exc)[:240],
-                human_step='检查页面弹窗',
-            )
-            return False
 
     def _dismiss_blocking_modals(self, page: Page) -> int:
         dismissed = 0
@@ -23750,197 +20275,9 @@ class DxmLoginFlow:
         )
         return False
 
-    def _inspect_data_acquisition_ready_state(self, page: Page, terms: list[str]) -> dict[str, Any]:
-        if os.name == 'nt' and not self._is_headless() and self._is_data_acquisition_page_url(page):
-            return self._inspect_data_acquisition_ready_state_with_runtime(page, terms)
-        locator_result = self._inspect_data_acquisition_ready_state_with_locators(page, terms)
-        if locator_result.get('ready') or locator_result.get('locator_probe_available'):
-            return locator_result
-        return self._inspect_data_acquisition_ready_state_with_runtime(page, terms)
 
-    def _inspect_data_acquisition_ready_state_with_runtime(self, page: Page, terms: list[str]) -> dict[str, Any]:
-        encoded_terms = json.dumps([str(term) for term in terms], ensure_ascii=False)
-        script = r'''() => {
-          const terms = __DXM_READY_TERMS__;
-          const visible = (el) => {
-            if (!el) return false;
-            const r = el.getBoundingClientRect();
-            const style = window.getComputedStyle(el);
-            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && style.opacity !== '0';
-          };
-          const textOf = (el) => String(el && el.textContent || '').replace(/\s+/g, ' ').trim();
-          const limitedText = (selector, limit = 80) => Array.from(document.querySelectorAll(selector))
-            .slice(0, limit)
-            .map(textOf)
-            .filter(Boolean)
-            .join(' ')
-            .slice(0, 1200);
-          const pageText = [
-            limitedText('nav, header, [role="navigation"], .breadcrumb, .page-title, .title, h1, h2, h3', 40),
-            limitedText('input[placeholder], textarea[placeholder], button, a, [role="tab"], .ant-tabs-tab, .el-tabs__item', 80),
-            limitedText('.vxe-toolbar, .vxe-table, .ant-table, table', 20),
-          ].filter(Boolean).join(' ');
-          const compact = pageText.replace(/\s+/g, '');
-          const readyTerm = terms.find(term => pageText.includes(term) || compact.includes(String(term).replace(/\s+/g, '')));
-          const url = String(location.href || '');
-          const dataAcquisitionUrl = /dataAcquisition|productCrawl/i.test(url);
-          const loadingNodes = Array.from(document.querySelectorAll(
-            '.ant-spin-spinning, .vxe-loading, .vxe-loading--wrapper, .el-loading-mask'
-          )).filter(visible).slice(0, 20);
-          const loadingText = loadingNodes.map(textOf).join('');
-          const loading = (
-            loadingNodes.length > 0
-            || compact.includes('LOADING')
-            || compact.includes('加载中')
-            || compact.includes('正在加载')
-          ) && !readyTerm;
-          const rows = document.querySelectorAll('tr.vxe-body--row, .vxe-body--row, .ant-table-row').length;
-          const inputs = document.querySelectorAll('input, textarea').length;
-          const firstInput = document.querySelector('input, textarea');
-          const firstInputRect = firstInput ? (() => {
-            const r = firstInput.getBoundingClientRect();
-            return {x:r.x, y:r.y, w:r.width, h:r.height};
-          })() : null;
-          const startCollect = Array.from(document.querySelectorAll('button,a,[role="button"]')).find(el => {
-            if (!el) return false;
-            const r = el.getBoundingClientRect();
-            const style = window.getComputedStyle(el);
-            if (!(r.width > 0 && r.height > 0) || style.visibility === 'hidden' || style.display === 'none') return false;
-            const text = String(el.textContent || '').replace(/\s+/g, '').trim();
-            return text === '开始采集';
-          });
-          const startCollectRect = startCollect ? (() => {
-            const r = startCollect.getBoundingClientRect();
-            return {x:r.x, y:r.y, w:r.width, h:r.height};
-          })() : null;
-          const claimActions = Array.from(document.querySelectorAll('button,a,[role="button"],span'))
-            .filter(visible)
-            .map(el => String(el.textContent || '').replace(/\s+/g, '').trim())
-            .filter(text => ['认领','领取','认领到采集箱','领取到采集箱'].includes(text));
-          const formReady = Boolean(firstInputRect);
-          const interactive = formReady || (inputs > 0 && document.querySelectorAll('button, a').length > 0);
-          const existingClaimReady = dataAcquisitionUrl && claimActions.length > 0 && !loading;
-          const ready = dataAcquisitionUrl
-            ? existingClaimReady
-            : (Boolean(readyTerm) || interactive) && !loading;
-          const resolvedReadyTerm = dataAcquisitionUrl
-            ? (ready ? 'existing_claim_action_ready' : null)
-            : (ready ? (readyTerm || 'interactive_ready') : null);
-          return {
-            ready,
-            ready_term: resolvedReadyTerm,
-            loading,
-            loading_count: loadingNodes.length,
-            rows,
-            inputs,
-            claim_count: claimActions.length,
-            has_collect_form: Boolean(firstInputRect || startCollectRect),
-            first_input_rect: dataAcquisitionUrl ? null : firstInputRect,
-            start_collect_rect: null,
-            text_excerpt: pageText.slice(0, 500),
-            url,
-            title: document.title,
-            loading_text: loadingText.slice(0, 200),
-          };
-        }'''.replace('__DXM_READY_TERMS__', encoded_terms)
-        self._trace_workflow_event(
-            'data_acquisition_ready:runtime_probe_start',
-            current_url=getattr(page, 'url', None),
-        )
-        try:
-            result = self._evaluate_zero_arg_page_function_with_runtime_timeout(page, script, timeout=2000)
-        except Exception as exc:
-            self._trace_workflow_event(
-                'data_acquisition_ready:runtime_probe_failed',
-                current_url=getattr(page, 'url', None),
-                error=str(exc)[:240],
-            )
-            result = None
-        if isinstance(result, dict):
-            self._trace_workflow_event(
-                'data_acquisition_ready:runtime_probe_done',
-                result={
-                    'ready': result.get('ready'),
-                    'loading': result.get('loading'),
-                    'loading_count': result.get('loading_count'),
-                    'rows': result.get('rows'),
-                    'inputs': result.get('inputs'),
-                    'claim_count': result.get('claim_count'),
-                    'has_collect_form': bool(result.get('has_collect_form')),
-                },
-            )
-            return result
-        return {
-            'ready': False,
-            'ready_term': None,
-            'loading': False,
-            'loading_count': 0,
-            'rows': 0,
-            'inputs': 0,
-            'text_excerpt': '',
-            'url': getattr(page, 'url', ''),
-            'title': '',
-            'loading_text': '',
-            'probe_error': 'data_acquisition_ready_probe_returned_non_object',
-        }
 
-    def _is_data_acquisition_page_url(self, page: Page) -> bool:
-        page_url = str(getattr(page, 'url', '') or '')
-        return 'dianxiaomi.com' in page_url and (
-            'dataAcquisition' in page_url or 'productCrawl' in page_url
-        )
 
-    def _inspect_data_acquisition_ready_state_with_locators(self, page: Page, terms: list[str]) -> dict[str, Any]:
-        try:
-            source_input = page.locator(
-                'textarea[placeholder*="产品的网址"], '
-                'textarea[placeholder*="产品"], '
-                'input[placeholder*="产品的网址"]'
-            ).first
-            start_collect = page.locator(
-                'button:has-text("开始采集"), '
-                'a:has-text("开始采集"), '
-                '[role="button"]:has-text("开始采集")'
-            ).first
-        except Exception:
-            return {'ready': False, 'locator_probe_available': False}
-
-        input_rect = self._locator_bounding_box(source_input, timeout=1800)
-        start_rect = self._locator_bounding_box(start_collect, timeout=1800)
-        loading_state = self._data_acquisition_visible_loading_state(page)
-        loading = bool(loading_state.get('loading'))
-        claim_count = self._count_exact_data_acquisition_claim_actions(page)
-        ready = bool(claim_count > 0 and not loading)
-        page_url = str(getattr(page, 'url', '') or '')
-        if os.name == 'nt' and not self._is_headless() and self._is_data_acquisition_page_url(page):
-            page_title = ''
-        else:
-            try:
-                page_title = page.title()
-            except Exception:
-                page_title = ''
-        text_excerpt = ' '.join(str(term) for term in terms)
-        if claim_count:
-            text_excerpt = f'{text_excerpt} 已有认领按钮'
-        elif input_rect or start_rect:
-            text_excerpt = f'{text_excerpt} 店小秘采集输入区'
-        return {
-            'ready': ready,
-            'ready_term': 'existing_claim_action_ready' if ready else None,
-            'loading': loading,
-            'loading_count': loading_state.get('loading_count', 0),
-            'rows': claim_count,
-            'inputs': 0,
-            'claim_count': claim_count,
-            'has_collect_form': bool(input_rect or start_rect),
-            'first_input_rect': None,
-            'start_collect_rect': None,
-            'text_excerpt': text_excerpt.strip(),
-            'url': page_url,
-            'title': page_title,
-            'loading_text': loading_state.get('loading_text', ''),
-            'locator_probe_available': bool(claim_count or input_rect or start_rect),
-        }
 
     def _locator_bounding_box(self, locator: Any, *, timeout: int = 1500) -> dict[str, float] | None:
         try:
@@ -23968,7 +20305,6 @@ class DxmLoginFlow:
         label: str,
         expected_identity: str,
         timeout: int = 60000,
-        dismiss_strategy: str = 'full',
     ) -> dict[str, Any]:
         identity_result = self._page_identity_result(getattr(page, 'url', None), expected_identity)
         if identity_result.get('ok') is not True:
@@ -23976,33 +20312,20 @@ class DxmLoginFlow:
                 f'{label} 页面路由不匹配 expected_identity={expected_identity} '
                 f'url={getattr(page, "url", None)}'
             )
-        self._trace_workflow_event('wait_ready:start', label=label, terms=terms, expected_identity=expected_identity, timeout=timeout, current_url=getattr(page, 'url', None), dismiss_strategy=dismiss_strategy)
+        self._trace_workflow_event(
+            'wait_ready:start',
+            label=label,
+            terms=terms,
+            expected_identity=expected_identity,
+            timeout=timeout,
+            current_url=getattr(page, 'url', None),
+        )
         deadline = time.monotonic() + timeout / 1000
         last: dict[str, Any] = {}
         last_trace_at = 0.0
-        data_acquisition_dismissed_once = False
-        data_acquisition_scan = dismiss_strategy in {'data_acquisition', 'data_acquisition_no_dismiss'}
-        if data_acquisition_scan:
-            self._trace_workflow_event('wait_ready:settle', label=label, seconds=3.0)
-            time.sleep(3.0)
-            operable = self._inspect_data_acquisition_ready_state(page, terms)
-            if operable.get('ready'):
-                self._trace_workflow_event('wait_ready:ready', label=label, result=operable)
-                return operable
         while time.monotonic() < deadline:
-            data_acquisition_scan = dismiss_strategy in {'data_acquisition', 'data_acquisition_no_dismiss'}
-            if dismiss_strategy in {'none', 'data_acquisition_no_dismiss'}:
-                pass
-            elif dismiss_strategy == 'data_acquisition':
-                if not data_acquisition_dismissed_once:
-                    data_acquisition_dismissed_once = True
-                    self._dismiss_data_acquisition_blocking_modals(page)
-            else:
-                self._dismiss_blocking_modals(page)
-            if data_acquisition_scan:
-                last = self._inspect_data_acquisition_ready_state(page, terms)
-            else:
-                last = page.evaluate(r'''(terms) => {
+            self._dismiss_blocking_modals(page)
+            last = page.evaluate(r'''(terms) => {
               const visible = (el) => {
                 const r = el.getBoundingClientRect();
                 const style = window.getComputedStyle(el);
@@ -24046,10 +20369,7 @@ class DxmLoginFlow:
             if now - last_trace_at >= 5:
                 last_trace_at = now
                 self._trace_workflow_event('wait_ready:poll', label=label, result=last)
-            if data_acquisition_scan:
-                time.sleep(1.0)
-            else:
-                page.wait_for_timeout(1000)
+            page.wait_for_timeout(1000)
         excerpt = (last.get('text_excerpt') or '').replace('\n', ' ')[:180]
         self._trace_workflow_event('wait_ready:timeout', label=label, result=last)
         raise RuntimeError(
@@ -24058,41 +20378,7 @@ class DxmLoginFlow:
             f'最后状态 loading={last.get("loading")} rows={last.get("rows")} inputs={last.get("inputs")} text={excerpt}'
         )
 
-    def _open_editor_page_for_product(self, page: Page, product_query: str, store_name: str | None = None) -> Page:
-        draft_url = WORKFLOW_TARGETS['draft_box']['url']
-        self._goto_with_live_hud(page, draft_url, wait_until='domcontentloaded', timeout=45000)
-        self._wait_for_page_ready(
-            page,
-            WORKFLOW_READY_TERMS['draft_box'],
-            label='速卖通商品箱',
-            expected_identity='draft_box',
-            timeout=60000,
-        )
-        self._dismiss_blocking_modals(page)
-        claim_mark = self._current_claim_mark(product_query=product_query, store_name=store_name)
-        self._search_draft_box(page, product_query=product_query, store_name=store_name)
-        try:
-            row_info = self._find_draft_box_row(page, product_query, store_name=store_name, claim_mark=claim_mark)
-        except RuntimeError:
-            if not store_name:
-                raise
-            self._search_draft_box(page, product_query=None, store_name=store_name)
-            row_info = self._find_draft_box_row(page, product_query, store_name=store_name, claim_mark=claim_mark)
-        editor_page = self._open_editor_from_draft_box(page, row_info=row_info)
-        editor_page.wait_for_timeout(1500)
-        self._reapply_live_hud_if_available(editor_page)
-        return editor_page
 
-    def _current_claim_mark(self, product_query: str | None = None, store_name: str | None = None) -> str | None:
-        state = self.get_state()
-        claim_mark = state.get('note_text')
-        if not claim_mark:
-            return None
-        if product_query and state.get('product_query') and state.get('product_query') != product_query:
-            return None
-        if store_name and state.get('store_name') and state.get('store_name') != store_name:
-            return None
-        return claim_mark
 
     def _draft_box_search_queries(self, target_identity: Mapping[str, Any]) -> list[str]:
         queries: list[str] = []
@@ -24434,191 +20720,26 @@ class DxmLoginFlow:
     def _find_draft_box_row(
         self,
         page: Page,
-        product_query: str | None = None,
         store_name: str | None = None,
-        claim_mark: str | None = None,
         target_source_urls: list[str] | None = None,
         target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if target_identity is not None:
-            normalized_target, target_sha256 = self._normalize_frozen_target_identity(
-                target_identity,
-                store_name=store_name,
-                target_source_urls=target_source_urls,
+        if target_identity is None:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_REQUIRED',
+                '商品箱行定位必须携带冻结商品身份。',
             )
-            return self._find_draft_box_row_by_frozen_target(
-                page,
-                target_identity=normalized_target,
-                target_identity_sha256=target_sha256,
-                store_name=' '.join(str(store_name or '').split()),
-            )
-        target_source_urls = self._require_canonical_target_source_urls(
-            target_source_urls,
-            phase='商品箱精确行定位',
-        )
-        # Stage A may use a display query to narrow the visible list, but row
-        # identity is always the complete canonical source-URL set.
-        product_query = None
-        claim_mark = None
-        payload = {
-            'frag': product_query,
-            'store': store_name,
-            'claimMark': claim_mark,
-            'targetSourceUrls': target_source_urls or [],
-        }
-        self._trace_workflow_event(
-            'draft_box_row_find:start',
-            product_query=product_query,
+        normalized_target, target_sha256 = self._normalize_frozen_target_identity(
+            target_identity,
             store_name=store_name,
-            has_claim_mark=bool(claim_mark),
-            target_source_url_count=len(target_source_urls or []),
-            human_step='定位商品箱商品行',
+            target_source_urls=target_source_urls,
         )
-        if os.name == 'nt' and os.getenv('DXM_LOGIN_HEADED') == '1' and not self._is_headless():
-            runtime_row = self._find_draft_box_row_with_runtime_snapshot(
-                page,
-                product_query=product_query,
-                store_name=store_name,
-                claim_mark=claim_mark,
-                target_source_urls=target_source_urls or [],
-            )
-            if runtime_row:
-                self._trace_workflow_event(
-                    'draft_box_row_find:runtime_done',
-                    matched_by=runtime_row.get('matchedBy'),
-                    human_step='商品箱商品行定位完成',
-                )
-                return runtime_row
-            self._trace_workflow_event(
-                'draft_box_row_find:runtime_missed',
-                product_query=product_query,
-                human_step='商品箱商品行未找到',
-            )
-            raise RuntimeError(f'未找到目标商品行：{product_query or "首个可操作商品"}')
-        try:
-            row_info = self._evaluate_page_function_with_runtime_timeout(page, r'''({frag, store, claimMark, targetSourceUrls}) => {
-          const rows = Array.from(document.querySelectorAll('tr.vxe-body--row, tr, .ant-table-row, .el-table__row, [class*="vxe-body--row"], [class*="table"] [class*="row"], [class*="list"] [class*="item"]'));
-          const normText = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-          const looksTableWrapper = (text) => (
-            /图片\s*标题\/产品ID/.test(text)
-            && /分组\s*价格\s*库存/.test(text)
-            && text.includes('操作')
-          );
-          const looksAggregate = (text) => (
-            (text.match(/创建：/g) || []).length > 1
-            || (text.match(/移入待发布/g) || []).length > 2
-            || looksTableWrapper(text)
-          );
-          const sourceUrls = (row) => Array.from(row.querySelectorAll('a[href]'))
-            .map(a => String(a.href || a.getAttribute('href') || ''))
-            .filter(url => url.includes('goods_id=') || url.includes('detail.1688.com') || url.includes('yangkeduo.com') || url.includes('aliexpress.com'));
-          const canonicalUrl = (url) => {
-            try {
-              const parsed = new URL(String(url || ''), location.href);
-              if (!['http:', 'https:'].includes(parsed.protocol)) return '';
-              parsed.hash = '';
-              return parsed.href;
-            } catch (_) {
-              return '';
-            }
-          };
-          const sourceUrlMatches = (url, target) => {
-            const actual = canonicalUrl(url);
-            const expected = canonicalUrl(target);
-            return Boolean(actual && expected && actual === expected);
-          };
-          const storeEvidence = (row) => {
-            if (!store) return null;
-            const storeNorm = String(store).replace(/\s+/g, '').trim().toLocaleLowerCase();
-            const cells = Array.from(row.querySelectorAll('td,[role="cell"],.vxe-body--column,.ant-table-cell,.el-table__cell,[class*="cell"]'))
-              .map(cell => ({cell, text:normText(cell)}))
-              .filter(item => {
-                const compact = item.text.replace(/\s+/g, '').trim().toLocaleLowerCase();
-                return compact === storeNorm
-                  || compact === `「${storeNorm}」`
-                  || compact.includes(`「${storeNorm}」`);
-              })
-              .sort((a, b) => a.text.length - b.text.length);
-            const picked = cells[0];
-            if (!picked) return null;
-            return {
-              store_name:String(store).replace(/\s+/g, ' ').trim(),
-              cell_text:picked.text.slice(0, 240),
-              source:'structured_store_cell',
-              tag:String(picked.cell.tagName || ''),
-              class_name:String(picked.cell.className || '').slice(0, 240),
-            };
-          };
-          const claim = claimMark;
-          const targetUrls = Array.isArray(targetSourceUrls) ? targetSourceUrls.filter(Boolean).map(String) : [];
-          const hasExplicitTarget = Boolean(claim) || Boolean(frag) || targetUrls.length > 0;
-          const hasTargetSource = (row) => {
-            if (!targetUrls.length) return false;
-            const urls = sourceUrls(row);
-            return urls.some(url => targetUrls.some(target => sourceUrlMatches(url, target)));
-          };
-          const candidates = rows.map((tr, idx) => ({idx, text:normText(tr)})).filter(x => {
-            if (!x.text || looksAggregate(x.text)) return false;
-            if (store && !storeEvidence(rows[x.idx])) return false;
-            if (targetUrls.length) return hasTargetSource(rows[x.idx]);
-            if (claim && x.text.includes(claim)) return true;
-            if (hasTargetSource(rows[x.idx])) return true;
-            if (frag) return x.text.includes(frag);
-            if (hasExplicitTarget) return false;
-            return ['移入待发布','编辑','发布','更多'].some(k => x.text.includes(k));
-          });
-          const claimMatches = claim ? candidates.filter(x => x.text.includes(claim)) : [];
-          if (claimMatches.length > 1) {
-            return {ok:false, ambiguous:true, matches:claimMatches.map(x => ({rowIndex:x.idx, rowText:x.text.slice(0,300)}))};
-          }
-          if (claimMatches.length === 1) {
-            const row = rows[claimMatches[0].idx];
-            const actions = Array.from(row.querySelectorAll('*')).map(el => {
-              const txt = normText(el);
-              const r = el.getBoundingClientRect();
-              if (!txt || r.width < 5 || r.height < 5) return null;
-              if (!['移入待发布','编辑','发布','更多'].includes(txt)) return null;
-              return {txt, tag: el.tagName, cls: String(el.className || ''), href: String(el.href || el.getAttribute('href') || ''), rect: {x:r.x,y:r.y,w:r.width,h:r.height}};
-            }).filter(Boolean);
-            return {ok:true, rowIndex:claimMatches[0].idx, rowText:claimMatches[0].text.slice(0,700), sourceUrls:sourceUrls(row), storeEvidence:storeEvidence(row), actions, matchedBy:'claim_mark'};
-          }
-          const sourceMatches = targetUrls.length ? candidates.filter(x => hasTargetSource(rows[x.idx])) : [];
-          if (sourceMatches.length > 1) {
-            return {ok:false, ambiguous:true, matches:sourceMatches.map(x => ({rowIndex:x.idx, rowText:x.text.slice(0,300), sourceUrls:sourceUrls(rows[x.idx])}))};
-          }
-          if (sourceMatches.length === 1) {
-            const row = rows[sourceMatches[0].idx];
-            const actions = Array.from(row.querySelectorAll('*')).map(el => {
-              const txt = normText(el);
-              const r = el.getBoundingClientRect();
-              if (!txt || r.width < 5 || r.height < 5) return null;
-              if (!['移入待发布','编辑','发布','更多'].includes(txt)) return null;
-              return {txt, tag: el.tagName, cls: String(el.className || ''), href: String(el.href || el.getAttribute('href') || ''), rect: {x:r.x,y:r.y,w:r.width,h:r.height}};
-            }).filter(Boolean);
-            return {ok:true, rowIndex:sourceMatches[0].idx, rowText:sourceMatches[0].text.slice(0,700), sourceUrls:sourceUrls(row), storeEvidence:storeEvidence(row), actions, matchedBy:'source_url'};
-          }
-          return {ok:false, reason:'exact_source_row_not_found', matches:[]};
-        }''', payload, timeout=3000)
-        except Exception as exc:
-            self._trace_workflow_event(
-                'draft_box_row_find:failed',
-                product_query=product_query,
-                error=str(exc)[:240],
-                human_step='商品箱商品行扫描失败',
-            )
-            raise RuntimeError(f'商品箱商品行扫描失败：{exc}') from exc
-        self._trace_workflow_event(
-            'draft_box_row_find:done',
-            ok=bool(row_info and row_info.get('ok')),
-            matched_by=(row_info or {}).get('matchedBy') if isinstance(row_info, dict) else None,
-            match_count=len((row_info or {}).get('matches') or []) if isinstance(row_info, dict) else 0,
-            human_step='商品箱商品行扫描完成',
+        return self._find_draft_box_row_by_frozen_target(
+            page,
+            target_identity=normalized_target,
+            target_identity_sha256=target_sha256,
+            store_name=' '.join(str(store_name or '').split()),
         )
-        if not row_info or not row_info.get('ok'):
-            if row_info and row_info.get('ambiguous'):
-                raise RuntimeError(f'目标商品行不唯一，请提供更精确的商品标题或唯一标识：{product_query}')
-            raise RuntimeError(f'未找到目标商品行：{product_query or "首个可操作商品"}')
-        return row_info
 
     def _find_draft_box_row_by_frozen_target(
         self,
@@ -24775,7 +20896,10 @@ class DxmLoginFlow:
                 const ids = productIds(row);
                 const sources = sourceUrls(row);
                 const productMatched = kind === 'product_id' ? ids.includes(value) : sources.includes(canonicalUrl(value));
-                const sourceMatched = targetUrls.length > 0 && targetUrls.every(url => sources.includes(url));
+                const sourceMatched = targetUrls.length > 0 && (
+                  sources.length === targetUrls.length
+                  && targetUrls.every(url => sources.includes(url))
+                );
                 if (!productMatched || !sourceMatched) return null;
                 const clickables = [];
                 const seen = new Set();
@@ -24909,453 +21033,10 @@ class DxmLoginFlow:
         )
         return verified
 
-    def _find_draft_box_row_with_runtime_snapshot(
-        self,
-        page: Page,
-        *,
-        product_query: str | None,
-        store_name: str | None,
-        claim_mark: str | None,
-        target_source_urls: list[str],
-    ) -> dict[str, Any] | None:
-        self._trace_workflow_event(
-            'draft_box_row_find:runtime_start',
-            human_step='读取当前商品箱列表',
-        )
-        self._force_foreground_dxm_window()
-        payload = {
-            'frag': product_query,
-            'store': store_name,
-            'claimMark': claim_mark,
-            'targetSourceUrls': target_source_urls or [],
-        }
-        try:
-            result = self._evaluate_page_function_with_runtime_timeout(page, r'''({frag, store, claimMark, targetSourceUrls}) => {
-              const textOf = (el) => (el ? (el.innerText || el.textContent || '') : '').replace(/\s+/g, ' ').trim();
-              const bodyText = textOf(document.body);
-              const compactBody = bodyText.replace(/\s+/g, '');
-              const visible = (el) => {
-                if (!el || !el.getBoundingClientRect) return false;
-                const r = el.getBoundingClientRect();
-                const style = window.getComputedStyle(el);
-                return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-              };
-              const rows = Array.from(document.querySelectorAll('tr.vxe-body--row, tr, .ant-table-row, .el-table__row, [class*="vxe-body--row"], [class*="table"] [class*="row"], [class*="list"] [class*="item"]'))
-                .filter(visible);
-              const rowText = (row) => textOf(row);
-              const looksTableWrapper = (text) => (
-                /图片\s*标题\/产品ID/.test(text)
-                && /分组\s*价格\s*库存/.test(text)
-                && text.includes('操作')
-              );
-              const looksAggregate = (text) => (
-                (text.match(/创建：/g) || []).length > 1
-                || (text.match(/移入待发布/g) || []).length > 2
-                || looksTableWrapper(text)
-              );
-              const sourceUrls = (row) => Array.from(row.querySelectorAll('a[href]'))
-                .map(a => String(a.href || a.getAttribute('href') || ''))
-                .filter(url => url.includes('goods_id=') || url.includes('detail.1688.com') || url.includes('yangkeduo.com') || url.includes('aliexpress.com'));
-              const canonicalUrl = (url) => {
-                try {
-                  const parsed = new URL(String(url || ''), location.href);
-                  if (!['http:', 'https:'].includes(parsed.protocol)) return '';
-                  parsed.hash = '';
-                  return parsed.href;
-                } catch (_) {
-                  return '';
-                }
-              };
-              const sourceUrlMatches = (url, target) => {
-                const actual = canonicalUrl(url);
-                const expected = canonicalUrl(target);
-                return Boolean(actual && expected && actual === expected);
-              };
-              const storeEvidence = (row) => {
-                if (!store) return null;
-                const storeNorm = String(store).replace(/\s+/g, '').trim().toLocaleLowerCase();
-                const cells = Array.from(row.querySelectorAll('td,[role="cell"],.vxe-body--column,.ant-table-cell,.el-table__cell,[class*="cell"]'))
-                  .map(cell => ({cell, text:textOf(cell)}))
-                  .filter(item => {
-                    const compact = item.text.replace(/\s+/g, '').trim().toLocaleLowerCase();
-                    return compact === storeNorm
-                      || compact === `「${storeNorm}」`
-                      || compact.includes(`「${storeNorm}」`);
-                  })
-                  .sort((a, b) => a.text.length - b.text.length);
-                const picked = cells[0];
-                if (!picked) return null;
-                return {
-                  store_name:String(store).replace(/\s+/g, ' ').trim(),
-                  cell_text:picked.text.slice(0, 240),
-                  source:'structured_store_cell',
-                  tag:String(picked.cell.tagName || ''),
-                  class_name:String(picked.cell.className || '').slice(0, 240),
-                };
-              };
-              const targetUrls = Array.from(new Set(
-                (Array.isArray(targetSourceUrls) ? targetSourceUrls : [])
-                  .map(canonicalUrl)
-                  .filter(Boolean)
-              )).sort();
-              const hasTargetSource = (row) => {
-                if (!targetUrls.length) return false;
-                const urls = Array.from(new Set(sourceUrls(row).map(canonicalUrl).filter(Boolean))).sort();
-                return urls.length === targetUrls.length
-                  && urls.every((url, index) => url === targetUrls[index]);
-              };
-              const rectOf = (el) => {
-                const r = el.getBoundingClientRect();
-                return {x:r.x, y:r.y, w:r.width, h:r.height};
-              };
-              const actionCandidates = (row) => Array.from(row.querySelectorAll('a,button,[role="button"],span,div'))
-                .filter(visible)
-                .map(el => {
-                  const text = textOf(el).replace(/\s+/g, '');
-                  const target = el.closest('a,button,[role="button"]') || el;
-                  return {txt:text, tag:target.tagName, cls:String(target.className || ''), href:String(target.href || target.getAttribute('href') || ''), rect:rectOf(target)};
-                })
-                .filter(item => ['移入待发布','编辑','发布','更多'].includes(item.txt));
-              const loading = Boolean(
-                compactBody.includes('LOADING') ||
-                compactBody.includes('加载中') ||
-                document.querySelector('.ant-spin-spinning,.el-loading-mask,.vxe-loading,.loading,[class*="loading"]')
-              );
-              const empty = compactBody.includes('暂无数据') || compactBody.includes('暂无记录') || compactBody.includes('没有数据');
-              const candidates = rows.map((row, idx) => ({row, idx, text:rowText(row)})).filter(item => {
-                if (!item.text || looksAggregate(item.text)) return false;
-                if (!['移入待发布','编辑','发布','更多'].some(k => item.text.includes(k))) return false;
-                if (store && !storeEvidence(item.row)) return false;
-                return targetUrls.length > 0 && hasTargetSource(item.row);
-              });
-              if (!candidates.length) {
-                return {
-                  ok:false,
-                  reason: empty ? 'draft_box_empty' : (loading ? 'draft_box_loading' : 'draft_box_no_match'),
-                  loading,
-                  empty,
-                  rowCount: rows.length,
-                  textExcerpt: bodyText.slice(0, 500)
-                };
-              }
-              const sourceMatches = candidates.filter(item => hasTargetSource(item.row));
-              const pickedMatches = sourceMatches;
-              if (pickedMatches.length > 1) {
-                return {ok:false, ambiguous:true, matches:pickedMatches.map(item => ({rowIndex:item.idx, rowText:item.text.slice(0,300), sourceUrls:sourceUrls(item.row)}))};
-              }
-              const picked = pickedMatches[0];
-              if (!picked) return {ok:false, reason:'draft_box_no_exact_source_match'};
-              const actions = actionCandidates(picked.row);
-              const edit = actions.find(item => item.txt === '编辑');
-              if (!edit) {
-                return {ok:false, reason:'draft_box_edit_missing', rowText:picked.text.slice(0, 500), actions};
-              }
-              return {
-                ok:true,
-                rowIndex:picked.idx,
-                rowText:picked.text.slice(0,700),
-                sourceUrls:Array.from(new Set(sourceUrls(picked.row).map(canonicalUrl).filter(Boolean))).sort(),
-                storeEvidence:storeEvidence(picked.row),
-                actions:[edit, ...actions.filter(item => item.txt !== '编辑')],
-                matchedBy:'source_url'
-              };
-            }''', payload, timeout=2500)
-        except Exception as exc:
-            self._trace_workflow_event(
-                'draft_box_row_find:runtime_failed',
-                error=str(exc)[:240],
-                human_step='商品箱列表读取失败',
-            )
-            raise RuntimeError('读取商品箱列表超时或失败。请确认真实店小秘窗口已正常加载商品箱；系统不会继续保存或发布。') from exc
 
-        self._trace_workflow_event(
-            'draft_box_row_find:runtime_result',
-            ok=bool(isinstance(result, dict) and result.get('ok')),
-            reason=(result or {}).get('reason') if isinstance(result, dict) else None,
-            row_count=(result or {}).get('rowCount') if isinstance(result, dict) else None,
-            loading=(result or {}).get('loading') if isinstance(result, dict) else None,
-            empty=(result or {}).get('empty') if isinstance(result, dict) else None,
-            human_step='商品箱列表读取完成',
-        )
-        if isinstance(result, dict) and result.get('ok'):
-            return result
-        if isinstance(result, dict) and result.get('ambiguous'):
-            raise RuntimeError(f'商品箱里匹配到多个目标商品，请先筛选到唯一商品：{product_query}')
-        if isinstance(result, dict) and result.get('reason') in {'draft_box_empty', 'draft_box_loading'}:
-            raise RuntimeError(
-                '真实商品箱当前没有找到本次商品。页面显示暂无数据或仍在加载；请确认商品已经认领到商品箱，或刷新商品箱后重新创建只保存任务。'
-            )
-        if isinstance(result, dict) and result.get('reason') == 'draft_box_edit_missing':
-            raise RuntimeError('已找到商品行，但没有找到“编辑”入口；请确认该商品仍在商品箱草稿列表。')
-        return None
 
-    def _find_draft_box_row_with_bounded_locators(
-        self,
-        page: Page,
-        *,
-        product_query: str | None,
-        store_name: str | None,
-        claim_mark: str | None,
-        target_source_urls: list[str],
-    ) -> dict[str, Any] | None:
-        samples: list[dict[str, Any]] = []
-        query = str(product_query or '').strip()
-        selectors: list[str] = []
-        if claim_mark:
-            selectors.append(f'text="{claim_mark}"')
-        if query:
-            selectors.append(f'text="{query}"')
-            if len(query) > 18:
-                selectors.append(f'text="{query[:18]}"')
-        self._trace_workflow_event(
-            'draft_box_row_find:bounded_start',
-            selector_count=len(selectors),
-            human_step='按当前商品标题定位商品箱行',
-        )
-        for selector in selectors:
-            try:
-                candidates = page.locator(selector)
-            except Exception as exc:
-                samples.append({'selector': selector, 'error': str(exc)[:160]})
-                continue
-            count = min(self._locator_count(candidates), 8)
-            samples.append({'selector': selector, 'count': count})
-            for index in range(count):
-                matched = candidates.nth(index)
-                row = self._draft_box_match_container(matched)
-                row_text = self._locator_text(row, timeout=800)
-                if not row_text:
-                    continue
-                store_evidence = self._structured_store_cell_evidence_in_container(row, store_name)
-                if store_name and store_evidence is None:
-                    continue
-                if claim_mark and claim_mark not in row_text:
-                    continue
-                if query and query not in row_text and query[:18] not in row_text:
-                    continue
-                action = self._draft_box_edit_action_in_container(row)
-                if action is None:
-                    samples.append({'selector': selector, 'index': index, 'skip': 'edit_action_missing', 'rowText': row_text[:160]})
-                    continue
-                action_text = self._locator_text(action, timeout=800) or '编辑'
-                action_href = self._locator_attribute(action, 'href', timeout=800)
-                action_rect = self._locator_box(action, timeout=800)
-                if not action_href and not self._rect_has_clickable_area(action_rect):
-                    samples.append({'selector': selector, 'index': index, 'skip': 'edit_target_missing', 'rowText': row_text[:160]})
-                    continue
-                source_urls = self._source_urls_in_container(row)
-                if target_source_urls and not self._source_urls_match(source_urls, target_source_urls):
-                    samples.append({'selector': selector, 'index': index, 'skip': 'authorized_source_missing', 'rowText': row_text[:160]})
-                    continue
-                return {
-                    'ok': True,
-                    'rowIndex': index,
-                    'rowText': row_text[:700],
-                    'sourceUrls': source_urls,
-                    'storeEvidence': store_evidence,
-                    'actions': [
-                        {
-                            'txt': '编辑',
-                            'tag': 'A' if action_href else 'BUTTON',
-                            'cls': '',
-                            'href': action_href,
-                            'rect': action_rect,
-                        }
-                    ],
-                    'matchedBy': 'bounded_title',
-                    'debug': {'samples': samples[:8]},
-                }
-        self._trace_workflow_event(
-            'draft_box_row_find:bounded_no_match',
-            samples=samples[:8],
-            human_step='当前商品箱列表未找到目标商品',
-        )
-        return None
 
-    def _draft_box_match_container(self, locator: Any) -> Any:
-        for selector in (
-            'xpath=ancestor::tr[contains(@class,"vxe-body--row") or contains(@class,"ant-table-row") or contains(@class,"el-table__row")][1]',
-            'xpath=ancestor::tr[1]',
-            'xpath=ancestor::*[contains(@class,"vxe-body--row") or contains(@class,"ant-table-row") or contains(@class,"el-table__row")][1]',
-            'xpath=ancestor::*[contains(@class,"row") or contains(@class,"item")][1]',
-        ):
-            try:
-                candidate = locator.locator(selector)
-                if self._locator_count(candidate) > 0:
-                    return candidate.first
-            except Exception:
-                continue
-        return locator
 
-    def _draft_box_edit_action_in_container(self, container: Any) -> Any | None:
-        for selector in (
-            'a',
-            'button',
-            '[role="button"]',
-            'span',
-        ):
-            try:
-                candidates = container.locator(selector).filter(has_text='编辑')
-            except Exception:
-                continue
-            for index in range(min(self._locator_count(candidates), 8)):
-                candidate = candidates.nth(index)
-                compact = ''.join(str(self._locator_text(candidate, timeout=500) or '').split())
-                if compact == '编辑':
-                    return candidate
-        return None
-
-    def _add_note_to_draft_row(
-        self,
-        page: Page,
-        row_info: dict[str, Any],
-        note_text: str,
-        store_name: str | None = None,
-        target_identity: dict[str, Any] | None = None,
-        target_identity_sha256: str | None = None,
-    ) -> dict[str, Any]:
-        if target_identity is None or not target_identity_sha256:
-            raise FrozenTargetIdentityError(
-                'FROZEN_TARGET_REQUIRED',
-                '写入商品备注前缺少冻结商品身份，已停止操作。',
-            )
-        row_info = self._find_draft_box_row_by_frozen_target(
-            page,
-            target_identity=target_identity,
-            target_identity_sha256=target_identity_sha256,
-            store_name=' '.join(str(store_name or '').split()),
-        )
-        actions = row_info.get('actions', [])
-        more = (
-            next((a for a in actions if a.get('txt') == '更多' and 'ant-dropdown-trigger' in str(a.get('cls', ''))), None)
-            or next((a for a in actions if a.get('txt') == '更多' and a.get('tag') in {'A', 'SPAN'}), None)
-            or next((a for a in actions if a.get('txt') == '更多'), None)
-        )
-        if not more:
-            raise RuntimeError('目标商品行未找到更多入口')
-        self._click_rect_center(page, more['rect'])
-        page.wait_for_timeout(1500)
-
-        add_note = page.evaluate(r'''() => {
-          const visible = (el) => {
-            const r = el.getBoundingClientRect();
-            const style = window.getComputedStyle(el);
-            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-          };
-          const norm = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, '').trim();
-          const rectOf = (el) => {
-            const r = el.getBoundingClientRect();
-            return {x:r.x,y:r.y,w:r.width,h:r.height};
-          };
-          const dangerousTerms = ['发布', '立即发布', '继续发布', '保存并发布', '确认发布', '提交发布', '保存并移入待发布', '移入待发布', '删除'];
-          const menus = Array.from(document.querySelectorAll('.ant-dropdown:not(.ant-dropdown-hidden), .ant-dropdown-menu, [role="menu"], .dropdown-menu, .vxe-table--context-menu-wrapper, .vxe-pulldown--panel'))
-            .filter(visible);
-          const scope = menus.length ? menus[menus.length - 1] : document;
-          const candidates = Array.from(scope.querySelectorAll('li.ant-dropdown-menu-item, li, a, button, span, div, [role="menuitem"]'))
-            .filter(visible)
-            .map(el => {
-              const clickable = el.closest('li.ant-dropdown-menu-item,[role="menuitem"],a,button') || el;
-              return {
-                el,
-                clickable,
-                text:norm(el),
-                clickText:norm(clickable),
-                tag:clickable.tagName,
-                cls:String(clickable.className || ''),
-                rect:rectOf(clickable),
-              };
-            })
-            .filter(item => item.text);
-          const safeRemark = candidates
-            .filter(item => {
-            const label = item.text || item.clickText;
-            if (!label.includes('备注')) return false;
-            if (dangerousTerms.some(term => item.text.includes(term))) return false;
-            if (dangerousTerms.some(term => item.clickText.includes(term))) return false;
-            return true;
-          })
-            .sort((a, b) => {
-              const score = (item) => {
-                const label = item.text || item.clickText;
-                if (['备注','添加备注','修改备注'].includes(label)) return 0;
-                if (label.includes('备注') && label.length <= 8) return 1;
-                if (['A','BUTTON','LI'].includes(item.tag)) return 2;
-                return 3;
-              };
-              return score(a) - score(b) || a.text.length - b.text.length;
-            })[0];
-          if (!safeRemark) {
-            return {
-              ok:false,
-              reason:'未找到添加备注入口',
-              menu_text: (menus.map(menu => norm(menu)).filter(Boolean).join(' | ') || '').slice(0, 500),
-              samples: candidates.map(item => item.text).filter(Boolean).slice(0, 20),
-            };
-          }
-          return {ok:true, text:safeRemark.text, click_text:safeRemark.clickText, tag:safeRemark.tag, rect:safeRemark.rect};
-        }''')
-        if not add_note or not add_note.get('ok'):
-            samples = add_note.get('samples') if isinstance(add_note, dict) else None
-            sample_text = f"；菜单项：{' / '.join(samples[:8])}" if isinstance(samples, list) and samples else ""
-            reason = (add_note or {}).get('reason') or '未找到添加备注入口'
-            raise RuntimeError(f'{reason}{sample_text}')
-        self._click_rect_center(page, add_note['rect'])
-        page.wait_for_timeout(1500)
-
-        write_res = page.evaluate(r'''(note) => {
-          const modal = Array.from(document.querySelectorAll('[role="dialog"], .ant-modal-wrap, .ant-modal')).find(el => {
-            const t = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-            return t.includes('备注');
-          });
-          if (!modal) return {ok:false, reason:'未找到备注弹窗'};
-          const field = Array.from(modal.querySelectorAll('textarea,input')).find(el => {
-            const r = el.getBoundingClientRect();
-            return r.width > 150 && r.height > 20 && !el.disabled;
-          });
-          if (!field) return {ok:false, reason:'未找到备注输入框'};
-          field.value = note;
-          field.dispatchEvent(new Event('input', {bubbles:true}));
-          field.dispatchEvent(new Event('change', {bubbles:true}));
-          const submit = Array.from(modal.querySelectorAll('button,span,a,div')).find(el => {
-            return (el.innerText || el.textContent || '').replace(/\s+/g, '').trim() === '提交';
-          });
-          if (!submit) return {ok:false, reason:'未找到提交按钮'};
-          submit.dispatchEvent(new MouseEvent('click', {bubbles:true}));
-          return {ok:true};
-        }''', note_text)
-        if not write_res.get('ok'):
-            raise RuntimeError(write_res.get('reason') or '提交备注失败')
-        page.wait_for_timeout(2500)
-
-        exact_row = self._find_draft_box_row_by_frozen_target(
-            page,
-            target_identity=target_identity,
-            target_identity_sha256=target_identity_sha256,
-            store_name=' '.join(str(store_name or '').split()),
-        )
-        row_text = str(exact_row.get('rowText') or '')
-        verified = bool(note_text and note_text in row_text)
-        return {
-            'verified': verified,
-            'rowText': row_text,
-            'verifiedBy': 'frozen_target_structured_row_readback',
-            'write_attempted': True,
-            'target_unique': exact_row.get('target_unique') is True,
-            'product_identity_match': exact_row.get('product_identity_match') is True,
-            'store_identity_match': exact_row.get('store_identity_match') is True,
-            'source_identity_match': exact_row.get('source_identity_match') is True,
-            'ownership_binding_match': bool(
-                verified
-                and exact_row.get('target_unique') is True
-                and exact_row.get('product_identity_match') is True
-                and exact_row.get('store_identity_match') is True
-                and exact_row.get('source_identity_match') is True
-            ),
-            'target_identity_evidence': {
-                'before_readback': row_info,
-                'after_readback': exact_row,
-            },
-        }
 
     def _click_rect_center(
         self,
@@ -25442,92 +21123,6 @@ class DxmLoginFlow:
             self._trace_workflow_event('click_rect:mouse_failed', error=str(exc)[:240], human_step='点击页面按钮')
         raise RuntimeError('真实浏览器点击失败：浏览器输入事件不可用，已停止本次操作。')
 
-    def _click_data_acquisition_claim_rect_center(
-        self,
-        page: Page,
-        rect: dict[str, Any],
-        *,
-        purpose: str,
-        mutation_action: str | None = None,
-        pre_dispatch_guard: Callable[[], Any] | None = None,
-    ) -> dict[str, Any]:
-        if not isinstance(rect, dict) or not self._rect_has_clickable_area(rect):
-            raise RuntimeError(f'{purpose}坐标不可用，已停止本次认领。')
-        x = float(rect['x']) + float(rect['w']) / 2
-        y = float(rect['y']) + float(rect['h']) / 2
-        if os.name == 'nt' and not self._is_headless() and self._is_data_acquisition_page_url(page):
-            self._trace_workflow_event(
-                'data_acquisition_claim:page_mouse_click_start',
-                x=x,
-                y=y,
-                purpose=purpose,
-                human_step=purpose,
-            )
-            click_operation_entered = False
-            try:
-                def click_operation() -> dict[str, Any]:
-                    nonlocal click_operation_entered
-                    click_operation_entered = True
-                    page.mouse.click(x, y, delay=50)
-                    return {'dispatched': True, 'method': 'playwright_mouse'}
-
-                authorization = (
-                    self._dispatch_authorized_mutation(
-                        mutation_action,
-                        click_operation,
-                        pre_dispatch_guard=pre_dispatch_guard,
-                    )
-                    if mutation_action
-                    else None
-                )
-                operation_result = authorization.get('operation_result') if authorization else click_operation()
-                if not isinstance(operation_result, Mapping) or operation_result.get('dispatched') is not True:
-                    raise MutationAuthorizationError(
-                        'MUTATION_OPERATION_RESULT_INVALID: 认领点击 operation 未确认 dispatched'
-                    )
-                self._trace_workflow_event(
-                    'data_acquisition_claim:page_mouse_click_done',
-                    x=x,
-                    y=y,
-                    purpose=purpose,
-                    method='playwright_mouse',
-                    authorization=(authorization or {}).get('authorization_facts'),
-                    human_step=purpose,
-                )
-                return {
-                    **dict(operation_result),
-                    'authorization': (authorization or {}).get('authorization_facts'),
-                }
-            except Exception as exc:
-                if isinstance(exc, MutationAuthorizationError):
-                    raise
-                if click_operation_entered:
-                    raise MutationAuthorizationError(
-                        f'MUTATION_OUTCOME_UNKNOWN: claim click failed after dispatch operation entered: {exc}'
-                    ) from exc
-                self._trace_workflow_event(
-                    'data_acquisition_claim:page_mouse_click_failed',
-                    x=x,
-                    y=y,
-                    purpose=purpose,
-                    error=str(exc)[:240],
-                    human_step=purpose,
-                )
-        self._click_rect_center(
-            page,
-            rect,
-            mutation_action=mutation_action,
-            pre_dispatch_guard=pre_dispatch_guard,
-        )
-        return {
-            'dispatched': True,
-            'method': 'rect_center',
-            'authorization': (
-                dict(self._last_mutation_authorization_facts or {})
-                if mutation_action
-                else None
-            ),
-        }
 
     def _bring_page_to_front_for_click(self, page: Page) -> bool:
         native_front = self._force_foreground_dxm_window()
@@ -26744,40 +22339,6 @@ class DxmLoginFlow:
             self._trace_workflow_event('click_rect:native_click_failed', error=str(exc)[:240], human_step='点击页面按钮')
             return False
 
-    def _dismiss_data_acquisition_notice_with_native_click(self, page: Page) -> bool:
-        if os.name != 'nt' or self._is_headless() or not self._is_data_acquisition_page_url(page):
-            return False
-        self._trace_workflow_event(
-            'dismiss_data_acquisition_notice:native_start',
-            human_step='关闭店小秘通知弹窗',
-        )
-        # DXM's offline notice uses a full-screen modal. A normal Escape does not close it.
-        # The modal is responsive, so try the known close controls for both 1440px and maximized windows.
-        self._bring_page_to_front_for_click(page)
-        clicked_points: list[dict[str, float]] = []
-        for x, y in (
-            (1170.0, 91.0),
-            (1650.0, 128.0),
-            (1147.0, 675.0),
-            (1618.0, 950.0),
-        ):
-            if self._click_point_with_native_window(page, x, y):
-                clicked_points.append({'x': x, 'y': y})
-                time.sleep(0.15)
-        if clicked_points:
-            time.sleep(0.35)
-            self._trace_workflow_event(
-                'dismiss_data_acquisition_notice:native_done',
-                points=clicked_points,
-                human_step='关闭店小秘通知弹窗',
-            )
-            return True
-        self._trace_workflow_event(
-            'dismiss_data_acquisition_notice:native_skipped',
-            reason='native_click_unavailable',
-            human_step='关闭店小秘通知弹窗',
-        )
-        return False
 
     def _replace_active_field_with_native_clipboard_text(self, text: str) -> bool:
         if os.name != 'nt' or self._is_headless():
@@ -27200,124 +22761,17 @@ class DxmLoginFlow:
     ) -> Page:
         if self._context is None:
             raise RuntimeError('浏览器上下文不存在，无法从商品箱进入编辑页')
-        if target_identity is not None:
-            return self._open_frozen_target_editor_from_draft_box(
-                page,
-                row_info=row_info,
-                target_identity=target_identity,
-                store_name=store_name,
+        if target_identity is None:
+            raise FrozenTargetIdentityError(
+                'FROZEN_TARGET_REQUIRED',
+                '打开商品箱编辑页必须携带冻结商品身份。',
             )
-
-        edit_selectors = [
-            'button:has-text("编辑")',
-            'a:has-text("编辑")',
-            'text=编辑',
-        ]
-        skip_selectors = [
-            'button:has-text("跳过，去编辑产品")',
-            'text=跳过，去编辑产品',
-        ]
-
-        actions = (row_info or {}).get('actions', [])
-        edit_action = (
-            next((a for a in actions if a.get('txt') == '编辑' and a.get('tag') == 'A'), None)
-            or next((a for a in actions if a.get('txt') == '编辑' and a.get('tag') in {'A', 'SPAN'}), None)
-            or next((a for a in actions if a.get('txt') == '编辑'), None)
+        return self._open_frozen_target_editor_from_draft_box(
+            page,
+            row_info=row_info,
+            target_identity=target_identity,
+            store_name=store_name,
         )
-        if edit_action:
-            edit_href = str(edit_action.get('href') or '').strip()
-            if edit_href and not edit_href.lower().startswith('javascript') and edit_href != '#':
-                edit_url = urljoin(str(page.url or ''), edit_href)
-                if '/web/smt/edit' in edit_url:
-                    self._goto_with_live_hud(page, edit_url, wait_until='domcontentloaded', timeout=45000)
-                    page.wait_for_url('**/web/smt/edit**', timeout=15000)
-                    page.wait_for_timeout(1500)
-                    self._reapply_live_hud_if_available(page)
-                    return page
-            pages_before_dom = self._context_pages()
-            dom_click = self._dispatch_draft_row_edit_event(page, row_info or {}) or {}
-            if dom_click.get('ok'):
-                page.wait_for_timeout(1500)
-                editor_page = self._find_editor_page(
-                    [page, *self._new_context_pages(pages_before_dom)],
-                    wait_ms=8000,
-                )
-                if editor_page is not None:
-                    self._reapply_live_hud_if_available(editor_page)
-                    return editor_page
-            if hasattr(self._context, 'expect_page'):
-                pages_before = self._context_pages()
-                try:
-                    with self._context.expect_page(timeout=8000) as new_page_info:
-                        self._click_rect_center(page, edit_action['rect'])
-                    new_page = new_page_info.value
-                    new_page.wait_for_load_state('domcontentloaded', timeout=10000)
-                    editor_page = self._find_editor_page(
-                        [new_page, page, *self._new_context_pages(pages_before)],
-                        wait_ms=12000,
-                    )
-                    if editor_page is not None:
-                        self._reapply_live_hud_if_available(editor_page)
-                        return editor_page
-                    page = new_page
-                except TimeoutError:
-                    page.wait_for_timeout(1500)
-                    editor_page = self._find_editor_page(
-                        [page, *self._new_context_pages(pages_before)],
-                        wait_ms=1500,
-                    )
-                    if editor_page is not None:
-                        self._reapply_live_hud_if_available(editor_page)
-                        return editor_page
-            else:
-                self._click_rect_center(page, edit_action['rect'])
-                page.wait_for_timeout(1500)
-        else:
-            for selector in edit_selectors:
-                locator = page.locator(selector).first
-                try:
-                    if locator.count() == 0:
-                        continue
-                    locator.click(timeout=3000)
-                    page.wait_for_timeout(1500)
-                    break
-                except TimeoutError:
-                    continue
-            else:
-                raise RuntimeError('未找到商品箱编辑入口')
-
-        if '/web/smt/edit' in page.url:
-            return page
-
-        for selector in skip_selectors:
-            locator = page.locator(selector).first
-            try:
-                if locator.count() == 0:
-                    continue
-                pages_before = self._context_pages()
-                with self._context.expect_page(timeout=5000) as new_page_info:
-                    locator.click(timeout=3000)
-                new_page = new_page_info.value
-                new_page.wait_for_load_state('domcontentloaded', timeout=10000)
-                editor_page = self._find_editor_page(
-                    [new_page, page, *self._new_context_pages(pages_before)],
-                    wait_ms=5000,
-                )
-                final_page = editor_page or new_page
-                self._reapply_live_hud_if_available(final_page)
-                return final_page
-            except TimeoutError:
-                try:
-                    locator.click(timeout=3000)
-                    page.wait_for_timeout(1500)
-                    if '/web/smt/edit' in page.url:
-                        return page
-                except TimeoutError:
-                    continue
-
-        if '/web/smt/edit' in page.url:
-            return page
-        raise RuntimeError('已触发编辑动作，但未能进入真实编辑界面')
 
     def _open_frozen_target_editor_from_draft_box(
         self,
@@ -27441,130 +22895,109 @@ class DxmLoginFlow:
 
     def _clear_visible_editor_loading_overlays(self, page: Page, *, context: str) -> dict[str, Any]:
         if not self._is_dxm_editor_url(getattr(page, 'url', '')):
-            return {'cleared': False, 'reason': 'not_editor'}
-        escaped = self._press_native_escape_for_visible_dxm(page)
-        if not escaped:
-            try:
-                page.keyboard.press('Escape')
-                escaped = True
-            except Exception:
-                escaped = False
-        style_injected = False
-        hide_css = (
-            '.ant-spin-spinning,.ant-spin.ant-spin-spinning,'
-            '.ant-spin-nested-loading>div>.ant-spin,'
-            '.vxe-loading,.vxe-loading--wrapper,.el-loading-mask,'
-            '.ant-modal-mask,.ant-drawer-mask,.modal-backdrop,[class*="modal-mask"]{'
-            'display:none!important;visibility:hidden!important;opacity:0!important;'
-            'pointer-events:none!important;}'
-        )
-        try:
-            page.add_style_tag(content=hide_css)
-            style_injected = True
-        except Exception:
-            style_injected = False
-        removed = {'removed': False, 'count': 0, 'style_injected': style_injected}
-        try:
-            result = page.evaluate(
-                r'''(cssText) => {
-                  let style = document.getElementById('dxm-hide-stale-loading');
-                  if (!style) {
-                    style = document.createElement('style');
-                    style.id = 'dxm-hide-stale-loading';
-                    (document.head || document.documentElement).appendChild(style);
-                  }
-                  style.textContent = cssText;
-                  const selectors = [
-                    '.ant-spin-spinning',
-                    '.ant-spin.ant-spin-spinning',
-                    '.vxe-loading',
-                    '.vxe-loading--wrapper',
-                    '.el-loading-mask',
-                    '.ant-modal-mask',
-                    '.ant-drawer-mask',
-                    '.modal-backdrop',
-                    '[class*="modal-mask"]',
-                  ];
-                  let count = 0;
-                  for (const selector of selectors) {
-                    for (const node of Array.from(document.querySelectorAll(selector))) {
-                      try { node.style.setProperty('display', 'none', 'important'); count += 1; }
-                      catch (_) {}
-                    }
-                  }
-                  return {removed: count > 0, count};
-                }''',
-                hide_css,
-            )
-            if isinstance(result, Mapping):
-                removed.update(result)
-        except Exception as exc:
-            removed['error'] = str(exc)[:160]
-        self._trace_workflow_event(
-            'editor_loading_overlay:cleared',
-            context=context,
-            escaped=escaped,
-            removed=removed.get('removed'),
-            count=removed.get('count'),
-            style_injected=style_injected,
-            reason=removed.get('reason') or removed.get('error'),
-            current_url=getattr(page, 'url', None),
-            human_step='暂时隐藏编辑页加载遮罩',
-        )
-        return {'cleared': bool(escaped or style_injected or removed.get('removed')), 'escaped': escaped, **removed}
+            raise RuntimeError('EDITOR_OVERLAY_IDENTITY_UNCONFIRMED: 当前页不是可验证的店小秘编辑页')
 
-    def _dispatch_draft_row_edit_event(self, page: Page, row_info: dict[str, Any]) -> dict[str, Any]:
-        return page.evaluate(r'''(rowInfo) => {
-          const visible = (el) => {
-            const r = el.getBoundingClientRect();
-            const style = window.getComputedStyle(el);
-            return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-          };
-          const textOf = (el) => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-          const rows = Array.from(document.querySelectorAll('tr,.ant-table-row,.vxe-body--row,li,div')).filter(visible);
-          const rowTextFull = String(rowInfo?.rowText || '').replace(/\s+/g, ' ').trim();
-          const rowText = rowTextFull.slice(0, 260);
-          const compactRowText = rowTextFull.replace(/\s+/g, '');
-          const claimMark = rowTextFull.match(/AI认领-\d+-\d+/)?.[0] || '';
-          const sourceTitle = rowTextFull.split(/备注[:：]/)[0].trim();
-          const meaningfulPrefix = sourceTitle.length >= 24 ? sourceTitle.slice(0, 48) : rowTextFull.slice(0, 48);
-          const rowMatches = (text) => {
-            const normalized = String(text || '').replace(/\s+/g, ' ').trim();
-            if (!normalized || normalized.length < 20) return false;
-            if (!normalized.includes('编辑')) return false;
-            if (!rowTextFull) return true;
-            const compact = normalized.replace(/\s+/g, '');
-            if (claimMark && normalized.includes(claimMark)) return true;
-            if (meaningfulPrefix.length >= 20 && normalized.includes(meaningfulPrefix)) return true;
-            if (normalized.includes(rowText) || rowText.includes(normalized)) return true;
-            if (compactRowText.length >= 40 && compact.includes(compactRowText.slice(0, 80))) return true;
-            return false;
-          };
-          const rowIndex = Number(rowInfo?.rowIndex);
-          let row = Number.isInteger(rowIndex) && rowIndex >= 0 && rowIndex < rows.length ? rows[rowIndex] : null;
-          if (row && !rowMatches(textOf(row))) row = null;
-          if (!row && rowText) {
-            row = rows
-              .map(el => ({el, text:textOf(el)}))
-              .filter(item => rowMatches(item.text))
-              .sort((a, b) => a.text.length - b.text.length)[0]?.el || null;
-          }
-          if (!row) return {ok:false, reason:'未找到目标草稿行'};
-          const edit = Array.from(row.querySelectorAll('a,button,span,[role="button"]'))
-            .filter(visible)
-            .find(el => textOf(el) === '编辑');
-          if (!edit) return {ok:false, reason:'未找到目标行编辑入口', row_text:textOf(row).slice(0, 260)};
-          edit.scrollIntoView({block:'center', inline:'nearest'});
-          for (const type of ['mouseover', 'mousemove', 'mousedown', 'mouseup', 'click']) {
-            edit.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true, view:window}));
-          }
-          return {
-            ok:true,
-            strategy:'dom_mouse_event',
-            target_text:textOf(edit),
-            row_text:textOf(row).slice(0, 260),
-          };
-        }''', row_info)
+        def inspect() -> dict[str, Any]:
+            result = page.evaluate(r'''() => {
+              const visible = (node) => {
+                if (!node || !node.getBoundingClientRect) return false;
+                const rect = node.getBoundingClientRect();
+                const style = window.getComputedStyle(node);
+                return rect.width > 0 && rect.height > 0
+                  && style.display !== 'none'
+                  && style.visibility !== 'hidden'
+                  && Number(style.opacity || 1) > 0;
+              };
+              const editorPaths = new Set(['/web/smt/edit', '/web/smt/editFromSmt']);
+              const path = String(location.pathname || '').replace(/\/$/, '');
+              const host = String(location.hostname || '').toLowerCase();
+              const identityOk = (host === 'dianxiaomi.com' || host.endsWith('.dianxiaomi.com'))
+                && editorPaths.has(path);
+              const loadingNodes = Array.from(document.querySelectorAll(
+                '.ant-spin-spinning,.vxe-loading--spinner,.el-loading-spinner'
+              )).filter(visible);
+              const blockerNodes = Array.from(document.querySelectorAll(
+                '.ant-modal-mask,.ant-drawer-mask,.modal-backdrop,[role="dialog"]'
+              )).filter(visible);
+              const describe = (node) => ({
+                tag: String(node.tagName || '').toLowerCase(),
+                class_name: String(node.className || '').slice(0, 160),
+                role: String(node.getAttribute?.('role') || ''),
+                text: String(node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 160),
+              });
+              return {
+                identity_ok: identityOk,
+                page_url: String(location.href || ''),
+                loading_count: loadingNodes.length,
+                blocker_count: blockerNodes.length,
+                loading: loadingNodes.slice(0, 8).map(describe),
+                blockers: blockerNodes.slice(0, 8).map(describe),
+              };
+            }''')
+            if not isinstance(result, Mapping):
+                raise RuntimeError('EDITOR_OVERLAY_STATE_UNKNOWN: 编辑页遮罩只读检查返回不可读')
+            return dict(result)
+
+        try:
+            snapshot = inspect()
+            if snapshot.get('loading_count') or snapshot.get('blocker_count'):
+                try:
+                    page.wait_for_timeout(200)
+                except Exception:
+                    time.sleep(0.2)
+                snapshot = inspect()
+        except Exception as exc:
+            if isinstance(exc, RuntimeError) and str(exc).startswith('EDITOR_OVERLAY_'):
+                raise
+            raise RuntimeError(f'EDITOR_OVERLAY_STATE_UNKNOWN: 编辑页遮罩只读检查失败：{str(exc)[:160]}') from exc
+
+        if snapshot.get('identity_ok') is not True:
+            raise RuntimeError('EDITOR_OVERLAY_IDENTITY_UNCONFIRMED: 页面实时身份不是店小秘编辑页')
+        blocker_count = int(snapshot.get('blocker_count') or 0)
+        loading_count = int(snapshot.get('loading_count') or 0)
+        if blocker_count:
+            self._trace_workflow_event(
+                'editor_loading_overlay:blocked',
+                context=context,
+                snapshot=snapshot,
+                current_url=getattr(page, 'url', None),
+                human_step='编辑页存在需人工处理的遮罩',
+            )
+            raise RuntimeError(
+                'EDITOR_VISIBLE_BLOCKER_REQUIRES_BOUND_CLOSE_ACTION: '
+                '编辑页存在可见遮罩，且没有已绑定的精确关闭动作'
+            )
+        if loading_count:
+            self._trace_workflow_event(
+                'editor_loading_overlay:blocked',
+                context=context,
+                snapshot=snapshot,
+                current_url=getattr(page, 'url', None),
+                human_step='编辑页仍在加载，停止写入',
+            )
+            raise RuntimeError(
+                'EDITOR_VISIBLE_LOADING_BLOCKED_PRE_WRITE: '
+                '编辑页二次有界检查后仍显示加载状态，已停止写入'
+            )
+
+        result = {
+            'cleared': False,
+            'blocked': False,
+            'loading': False,
+            'loading_count': loading_count,
+            'reason': 'no_visible_loading_or_blocker',
+            'snapshot': snapshot,
+        }
+        self._trace_workflow_event(
+            'editor_loading_overlay:observed',
+            context=context,
+            loading=result['loading'],
+            loading_count=loading_count,
+            reason=result['reason'],
+            current_url=getattr(page, 'url', None),
+            human_step='只读检查编辑页加载状态',
+        )
+        return result
 
     def _click_first_available(self, page: Page, selectors: list[str]) -> None:
         for selector in selectors:
@@ -27627,8 +23060,8 @@ class DxmLoginFlow:
                 human_step='可见编辑页跳过整页截图',
             )
             return {'ok': False, 'screenshot_url': None, 'error': 'visible_editor_screenshot_skipped'}
-        full_page = not (os.name == 'nt' and not self._is_headless() and self._is_data_acquisition_page_url(page))
-        timeout = 5000 if not full_page else 15000
+        full_page = True
+        timeout = 15000
         try:
             page.screenshot(path=str(path), full_page=full_page, timeout=timeout)
         except TypeError:
@@ -27658,12 +23091,6 @@ class DxmLoginFlow:
         )
         return {'ok': True, 'screenshot_url': self._artifact_url(path), 'error': None}
 
-    def _draft_box_action_message(self, action: str, note_text: str | None = None) -> str:
-        if action == 'remark':
-            return f'已进入商品箱备注动作，目标备注：{note_text or "AI认领"}。'
-        if action == 'edit':
-            return '已进入商品箱编辑动作，下一步应处理分类引导并打开真实编辑页。'
-        return f'已触发商品箱动作：{action}'
 
     def _is_headless(self) -> bool:
         if os.getenv('DXM_LOGIN_HEADLESS') == '1':

@@ -8,24 +8,24 @@ from src.main import app
 
 def _strict_ready_recorded_contracts() -> dict:
     acceptance = {
-        "schema": "dxm_two_stage_acceptance.v1",
+        "schema": "dxm_single_save_acceptance.v1",
         "passed": True,
         "status": "passed",
-        "claim_task_id": 7,
         "save_task_id": 8,
-        "claimed_product_id": 9,
+        "product_id": 9,
+        "user_message": "单商品只保存证据完整。",
+        "product_box_snapshot_error": None,
+        "save_report_count": 1,
+        "evidence_count": 2,
         "missing_codes": [],
         "state_violation_codes": [],
         "checks": {
-            "claim_task_present": True,
-            "claim_completed": True,
+            "save_task_mode_valid": True,
             "save_task_completed": True,
-            "claimed_product_present": True,
-            "claim_provenance_valid": True,
-            "single_save_claim_snapshot_valid": True,
-            "claim_product_matches": True,
-            "draft_box_verified": True,
-            "single_save_linked_to_claim": True,
+            "product_present": True,
+            "product_box_snapshot_valid": True,
+            "single_save_target_bound": True,
+            "manual_approval_consumed": True,
             "save_success": True,
             "unpublished_proof": True,
             "save_evidence_integrity": True,
@@ -39,12 +39,12 @@ def _strict_ready_recorded_contracts() -> dict:
         "consistent": True,
         "violation_codes": [],
         "violations": [],
-        "audited_task_ids": [7, 8],
+        "audited_task_ids": [8],
     }
     return {
         "schema": "dxm_final_delivery_check.v1",
-        "twoStageAcceptance": acceptance,
-        "twoStageAcceptanceReadiness": {
+        "singleSaveAcceptance": acceptance,
+        "singleSaveAcceptanceReadiness": {
             "ready": True,
             "status": "passed",
             "missing": [],
@@ -59,7 +59,7 @@ def _strict_ready_recorded_contracts() -> dict:
     }
 
 
-def test_current_real_dxm_gate_summary_blocks_ready_when_two_stage_is_false(monkeypatch):
+def test_current_real_dxm_gate_summary_blocks_ready_when_single_save_is_false(monkeypatch):
     import src.main as main
 
     monkeypatch.setattr(
@@ -71,16 +71,16 @@ def test_current_real_dxm_gate_summary_blocks_ready_when_two_stage_is_false(monk
                 {"level": "L3", "status": "passed"},
             ],
             "delivery_readiness": {"ready": True},
-            "two_stage_acceptance": {"passed": False, "status": "missing_save_stage"},
+            "single_save_acceptance": {"passed": False, "status": "missing_save_stage"},
         },
     )
 
     summary = main._current_real_dxm_gate_summary()
 
     assert summary["readiness"] == "BLOCKED"
-    assert summary["two_stage_ready"] is False
-    assert summary["two_stage_status"] == "missing_save_stage"
-    assert "Two-stage acceptance is not passed" in summary["blocked_reason"]
+    assert summary["single_save_ready"] is False
+    assert summary["single_save_status"] == "missing_save_stage"
+    assert "Single-save acceptance is not passed" in summary["blocked_reason"]
 
 
 def test_current_real_dxm_gate_summary_blocks_ready_on_state_contradiction(monkeypatch):
@@ -95,7 +95,7 @@ def test_current_real_dxm_gate_summary_blocks_ready_on_state_contradiction(monke
                 {"level": "L3", "status": "passed"},
             ],
             "delivery_readiness": {"ready": True},
-            "two_stage_acceptance": {"passed": True, "status": "passed"},
+            "single_save_acceptance": {"passed": True, "status": "passed"},
             "state_consistency": {
                 "consistent": False,
                 "violation_codes": ["STATE_FAILED_JOB_HAS_SUCCESS_REPORT"],
@@ -125,7 +125,7 @@ def test_current_real_dxm_gate_summary_fails_closed_when_workspace_is_unreadable
 
     assert summary["readiness"] == "BLOCKED"
     assert summary["delivery_ready"] is False
-    assert summary["two_stage_ready"] is False
+    assert summary["single_save_ready"] is False
     assert summary["state_consistent"] is False
     assert "不可读取" in summary["blocked_reason"]
 
@@ -204,7 +204,7 @@ def test_final_delivery_check_summary_reads_latest_report(tmp_path, monkeypatch)
         "localWorkbenchCheck": "PASS",
         "realDxmWriteReadiness": "BLOCKED",
         "productionRealWriteReady": False,
-        "realDxmWriteBlockedReason": "L2 gate is failed; real DXM writes require existing-claim-list and draft-box readonly pass in the same run.",
+        "realDxmWriteBlockedReason": "L2 gate is failed; real DXM writes require draft-box readonly pass in the same run.",
         "l3EvidenceReadiness": {"ready": False, "missing": ["L3 manual canary evidence missing"]},
         "sourcePackageReadiness": "CLEAN",
         "sourcePackageCheck": "PASS",
@@ -216,10 +216,9 @@ def test_final_delivery_check_summary_reads_latest_report(tmp_path, monkeypatch)
             "publishAllowed": False,
             "batchUnattendedPublishAllowed": False,
             "allowedModes": ["single_save"],
-            "blockedModes": ["claim_only", "batch_save"],
+            "blockedModes": ["batch_save"],
             "modes": [
                 {"mode": "single_save", "allowed": True},
-                {"mode": "claim_only", "allowed": False},
                 {"mode": "batch_save", "allowed": False},
             ],
         },
@@ -284,7 +283,7 @@ def test_final_delivery_check_summary_reads_latest_report(tmp_path, monkeypatch)
     assert payload["ok_scope"] == "local_workbench_only"
     assert payload["real_dxm_mutation_allowed"] is False
     assert payload["real_mode_release_plan"]["scope"] == "controlled_single_save_only"
-    assert payload["real_mode_release_plan"]["blockedModes"] == ["claim_only", "batch_save"]
+    assert payload["real_mode_release_plan"]["blockedModes"] == ["batch_save"]
     assert payload["expected_real_dxm_write_readiness"] == "BLOCKED"
     assert payload["real_dxm_write_readiness_matches_expected"] is True
     assert payload["browser_qa_ok"] is True
@@ -535,7 +534,7 @@ def test_final_delivery_check_summary_keeps_local_ready_when_dirty_source_packag
         "realDxmMutationAllowed": True,
         "realDxmMutationScope": "controlled_single_save_only",
         "controlledSingleSaveReady": True,
-        "realDxmTwoStageEndToEnd": "passed",
+        "realDxmSingleSaveEndToEnd": "passed",
         "okScope": "local_workbench_and_controlled_single_save_ready",
         "sourcePackageReadiness": "DIRTY",
         "sourcePackageCheck": "NOT_REQUIRED",
@@ -564,8 +563,8 @@ def test_final_delivery_check_summary_keeps_local_ready_when_dirty_source_packag
             "l2_status": "passed",
             "l3_status": "passed",
             "delivery_ready": True,
-            "two_stage_ready": True,
-            "two_stage_status": "passed",
+            "single_save_ready": True,
+            "single_save_status": "passed",
         },
         raising=False,
     )
@@ -596,19 +595,19 @@ def test_final_delivery_check_summary_does_not_treat_single_save_ready_as_produc
         "realDxmMutationAllowed": True,
         "realDxmMutationScope": "controlled_single_save_only",
         "controlledSingleSaveReady": True,
-        "realDxmTwoStageEndToEnd": "pending_live_dxm_validation",
-        "expectedRealDxmTwoStageEndToEnd": "pending_live_dxm_validation",
-        "twoStageAcceptanceMatchesExpected": True,
+        "realDxmSingleSaveEndToEnd": "pending_live_dxm_validation",
+        "expectedRealDxmSingleSaveEndToEnd": "pending_live_dxm_validation",
+        "singleSaveAcceptanceMatchesExpected": True,
         "productionDeliveryReady": False,
-        "twoStageAcceptance": {
+        "singleSaveAcceptance": {
             "passed": False,
-            "status": "missing_claim_stage",
-            "missing_codes": ["claim_task_missing"],
+            "status": "missing_product_box_snapshot",
+            "missing_codes": ["product_box_snapshot"],
         },
-        "twoStageAcceptanceReadiness": {
+        "singleSaveAcceptanceReadiness": {
             "ready": False,
-            "status": "missing_claim_stage",
-            "missing": ["claim_task_missing"],
+            "status": "missing_product_box_snapshot",
+            "missing": ["product_box_snapshot"],
         },
         "sourcePackageReadiness": "CLEAN",
         "sourcePackageCheck": "PASS",
@@ -637,8 +636,8 @@ def test_final_delivery_check_summary_does_not_treat_single_save_ready_as_produc
             "l2_status": "passed",
             "l3_status": "passed",
             "delivery_ready": True,
-            "two_stage_ready": False,
-            "two_stage_status": "missing_claim_stage",
+            "single_save_ready": False,
+            "single_save_status": "missing_product_box_snapshot",
         },
         raising=False,
     )
@@ -650,20 +649,20 @@ def test_final_delivery_check_summary_does_not_treat_single_save_ready_as_produc
     payload = response.json()
     assert payload["effective_real_dxm_write_readiness"] == "BLOCKED"
     assert payload["effective_real_dxm_mutation_allowed"] is False
-    assert "Two-stage acceptance" in payload["effective_real_dxm_write_blocked_reason"]
-    assert payload["real_dxm_two_stage_end_to_end"] == "pending_live_dxm_validation"
-    assert payload["expected_real_dxm_two_stage_end_to_end"] == "pending_live_dxm_validation"
-    assert payload["effective_real_dxm_two_stage_end_to_end"] == "pending_live_dxm_validation"
-    assert payload["two_stage_acceptance"]["passed"] is False
-    assert payload["two_stage_acceptance_readiness"]["ready"] is False
-    assert payload["two_stage_acceptance_matches_expected"] is True
-    assert payload["current_two_stage_ready"] is False
-    assert payload["current_two_stage_status"] == "missing_claim_stage"
+    assert "Single-save acceptance" in payload["effective_real_dxm_write_blocked_reason"]
+    assert payload["real_dxm_single_save_end_to_end"] == "pending_live_dxm_validation"
+    assert payload["expected_real_dxm_single_save_end_to_end"] == "pending_live_dxm_validation"
+    assert payload["effective_real_dxm_single_save_end_to_end"] == "pending_live_dxm_validation"
+    assert payload["single_save_acceptance"]["passed"] is False
+    assert payload["single_save_acceptance_readiness"]["ready"] is False
+    assert payload["single_save_acceptance_matches_expected"] is True
+    assert payload["current_single_save_ready"] is False
+    assert payload["current_single_save_status"] == "missing_product_box_snapshot"
     assert payload["production_delivery_ready"] is False
     assert payload["final_delivery_completed"] is False
 
 
-def test_final_delivery_check_summary_blocks_every_two_stage_report_or_current_contradiction(tmp_path, monkeypatch):
+def test_final_delivery_check_summary_blocks_every_single_save_report_or_current_contradiction(tmp_path, monkeypatch):
     import src.main as main
 
     report_path = tmp_path / "final-delivery-check.json"
@@ -675,37 +674,37 @@ def test_final_delivery_check_summary_blocks_every_two_stage_report_or_current_c
         "realDxmWriteReadiness": "READY",
         "realDxmMutationAllowed": True,
         "realDxmMutationScope": "controlled_single_save_only",
-        "realDxmTwoStageEndToEnd": "passed",
-        "twoStageAcceptance": {"passed": True, "status": "passed"},
-        "twoStageAcceptanceReadiness": {"ready": True, "status": "passed"},
+        "realDxmSingleSaveEndToEnd": "passed",
+        "singleSaveAcceptance": {"passed": True, "status": "passed"},
+        "singleSaveAcceptanceReadiness": {"ready": True, "status": "passed"},
         "stateConsistency": {"consistent": True, "violation_codes": []},
         "gitHead": "abc123",
     }
     cases = [
         (
             base_report,
-            {"two_stage_ready": False, "two_stage_status": "missing_save_stage"},
+            {"single_save_ready": False, "single_save_status": "missing_save_stage"},
         ),
         (
             base_report,
-            {"two_stage_ready": True, "two_stage_status": "missing_save_stage"},
+            {"single_save_ready": True, "single_save_status": "missing_save_stage"},
         ),
         (
             {
                 **base_report,
-                "twoStageAcceptance": {"passed": True, "status": "missing_save_stage"},
+                "singleSaveAcceptance": {"passed": True, "status": "missing_save_stage"},
             },
-            {"two_stage_ready": True, "two_stage_status": "passed"},
+            {"single_save_ready": True, "single_save_status": "passed"},
         ),
         (
-            {key: value for key, value in base_report.items() if key != "twoStageAcceptanceReadiness"},
-            {"two_stage_ready": True, "two_stage_status": "passed"},
+            {key: value for key, value in base_report.items() if key != "singleSaveAcceptanceReadiness"},
+            {"single_save_ready": True, "single_save_status": "passed"},
         ),
     ]
 
-    for report, current_two_stage in cases:
+    for report, current_single_save in cases:
         report_path.write_text(json.dumps(report), encoding="utf-8")
-        monkeypatch.setattr(main, "_current_real_dxm_gate_summary", lambda current=current_two_stage: {
+        monkeypatch.setattr(main, "_current_real_dxm_gate_summary", lambda current=current_single_save: {
             "readiness": "READY",
             "blocked_reason": "",
             "l2_status": "passed",
@@ -736,16 +735,16 @@ def test_final_delivery_check_summary_blocks_legacy_incomplete_ready_report(tmp_
         "realDxmMutationAllowed": True,
         "realDxmMutationScope": "controlled_single_save_only",
         "controlledSingleSaveReady": True,
-        "realDxmTwoStageEndToEnd": "passed",
-        "expectedRealDxmTwoStageEndToEnd": "passed",
-        "twoStageAcceptanceMatchesExpected": True,
+        "realDxmSingleSaveEndToEnd": "passed",
+        "expectedRealDxmSingleSaveEndToEnd": "passed",
+        "singleSaveAcceptanceMatchesExpected": True,
         "productionDeliveryReady": True,
-        "twoStageAcceptance": {
+        "singleSaveAcceptance": {
             "passed": True,
             "status": "passed",
             "missing_codes": [],
         },
-        "twoStageAcceptanceReadiness": {
+        "singleSaveAcceptanceReadiness": {
             "ready": True,
             "status": "passed",
             "missing": [],
@@ -777,8 +776,8 @@ def test_final_delivery_check_summary_blocks_legacy_incomplete_ready_report(tmp_
             "l2_status": "passed",
             "l3_status": "passed",
             "delivery_ready": True,
-            "two_stage_ready": True,
-            "two_stage_status": "passed",
+            "single_save_ready": True,
+            "single_save_status": "passed",
         },
         raising=False,
     )
@@ -788,14 +787,14 @@ def test_final_delivery_check_summary_blocks_legacy_incomplete_ready_report(tmp_
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["real_dxm_two_stage_end_to_end"] == "passed"
-    assert payload["expected_real_dxm_two_stage_end_to_end"] == "passed"
-    assert payload["effective_real_dxm_two_stage_end_to_end"] == "pending_live_dxm_validation"
-    assert payload["two_stage_acceptance"]["passed"] is True
-    assert payload["two_stage_acceptance_readiness"]["ready"] is True
-    assert payload["two_stage_acceptance_matches_expected"] is True
-    assert payload["current_two_stage_ready"] is True
-    assert payload["current_two_stage_status"] == "passed"
+    assert payload["real_dxm_single_save_end_to_end"] == "passed"
+    assert payload["expected_real_dxm_single_save_end_to_end"] == "passed"
+    assert payload["effective_real_dxm_single_save_end_to_end"] == "pending_live_dxm_validation"
+    assert payload["single_save_acceptance"]["passed"] is True
+    assert payload["single_save_acceptance_readiness"]["ready"] is True
+    assert payload["single_save_acceptance_matches_expected"] is True
+    assert payload["current_single_save_ready"] is True
+    assert payload["current_single_save_status"] == "passed"
     assert payload["effective_real_dxm_write_readiness"] == "BLOCKED"
     assert payload["effective_real_dxm_mutation_allowed"] is False
     assert payload["production_delivery_ready"] is False
@@ -814,7 +813,7 @@ def test_final_delivery_check_summary_accepts_complete_strict_recorded_contracts
         "realDxmWriteReadiness": "READY",
         "realDxmMutationAllowed": True,
         "realDxmMutationScope": "controlled_single_save_only",
-        "realDxmTwoStageEndToEnd": "passed",
+        "realDxmSingleSaveEndToEnd": "passed",
         "productionDeliveryReady": True,
         "gitHead": "abc123",
     }), encoding="utf-8")
@@ -828,8 +827,8 @@ def test_final_delivery_check_summary_accepts_complete_strict_recorded_contracts
         "l2_status": "passed",
         "l3_status": "passed",
         "delivery_ready": True,
-        "two_stage_ready": True,
-        "two_stage_status": "passed",
+        "single_save_ready": True,
+        "single_save_status": "passed",
         "state_consistent": True,
         "state_violation_codes": [],
     })
@@ -838,7 +837,7 @@ def test_final_delivery_check_summary_accepts_complete_strict_recorded_contracts
 
     assert payload["effective_real_dxm_write_readiness"] == "READY"
     assert payload["effective_real_dxm_mutation_allowed"] is True
-    assert payload["effective_real_dxm_two_stage_end_to_end"] == "passed"
+    assert payload["effective_real_dxm_single_save_end_to_end"] == "passed"
     assert payload["production_delivery_ready"] is True
     assert payload["final_delivery_completed"] is True
 
@@ -860,8 +859,8 @@ def test_final_delivery_check_summary_blocks_each_incomplete_or_contradictory_re
         "l2_status": "passed",
         "l3_status": "passed",
         "delivery_ready": True,
-        "two_stage_ready": True,
-        "two_stage_status": "passed",
+        "single_save_ready": True,
+        "single_save_status": "passed",
         "state_consistent": True,
         "state_violation_codes": [],
     })
@@ -870,25 +869,24 @@ def test_final_delivery_check_summary_blocks_each_incomplete_or_contradictory_re
         "realDxmWriteReadiness": "READY",
         "realDxmMutationAllowed": True,
         "realDxmMutationScope": "controlled_single_save_only",
-        "realDxmTwoStageEndToEnd": "passed",
+        "realDxmSingleSaveEndToEnd": "passed",
         "productionDeliveryReady": True,
         "gitHead": "abc123",
     }
     missing = object()
     cases = [
         ("final schema", ("schema",), "wrong.v1"),
-        ("two-stage schema", ("twoStageAcceptance", "schema"), "wrong.v1"),
-        ("two-stage passed type", ("twoStageAcceptance", "passed"), "true"),
-        ("two-stage status", ("twoStageAcceptance", "status"), "incomplete"),
-        ("two-stage missing codes", ("twoStageAcceptance", "missing_codes"), ["missing"]),
-        ("two-stage state codes", ("twoStageAcceptance", "state_violation_codes"), ["STATE_X"]),
-        ("claim task id", ("twoStageAcceptance", "claim_task_id"), 0),
-        ("save task id", ("twoStageAcceptance", "save_task_id"), True),
-        ("claimed product id", ("twoStageAcceptance", "claimed_product_id"), -1),
-        ("two-stage readiness", ("twoStageAcceptanceReadiness", "ready"), "true"),
-        ("two-stage readiness status", ("twoStageAcceptanceReadiness", "status"), "missing"),
-        ("two-stage readiness missing", ("twoStageAcceptanceReadiness", "missing"), ["missing"]),
-        ("two-stage readiness acceptance", ("twoStageAcceptanceReadiness", "acceptance"), missing),
+        ("single-save schema", ("singleSaveAcceptance", "schema"), "wrong.v1"),
+        ("single-save passed type", ("singleSaveAcceptance", "passed"), "true"),
+        ("single-save status", ("singleSaveAcceptance", "status"), "incomplete"),
+        ("single-save missing codes", ("singleSaveAcceptance", "missing_codes"), ["missing"]),
+        ("single-save state codes", ("singleSaveAcceptance", "state_violation_codes"), ["STATE_X"]),
+        ("save task id", ("singleSaveAcceptance", "save_task_id"), True),
+        ("product id", ("singleSaveAcceptance", "product_id"), -1),
+        ("single-save readiness", ("singleSaveAcceptanceReadiness", "ready"), "true"),
+        ("single-save readiness status", ("singleSaveAcceptanceReadiness", "status"), "missing"),
+        ("single-save readiness missing", ("singleSaveAcceptanceReadiness", "missing"), ["missing"]),
+        ("single-save readiness acceptance", ("singleSaveAcceptanceReadiness", "acceptance"), missing),
         ("state schema", ("stateConsistency", "schema"), "wrong.v1"),
         ("state consistent type", ("stateConsistency", "consistent"), 1),
         ("state violation codes", ("stateConsistency", "violation_codes"), ["STATE_X"]),
@@ -898,13 +896,13 @@ def test_final_delivery_check_summary_blocks_each_incomplete_or_contradictory_re
         ("state readiness", ("stateConsistencyReadiness", "ready"), False),
         ("state readiness missing", ("stateConsistencyReadiness", "missing"), ["missing"]),
         ("state readiness snapshot", ("stateConsistencyReadiness", "stateConsistency"), missing),
-        ("two-stage end-to-end", ("realDxmTwoStageEndToEnd",), missing),
+        ("single-save end-to-end", ("realDxmSingleSaveEndToEnd",), missing),
     ]
-    for check_name in _strict_ready_recorded_contracts()["twoStageAcceptance"]["checks"]:
+    for check_name in _strict_ready_recorded_contracts()["singleSaveAcceptance"]["checks"]:
         cases.append(
             (
-                f"two-stage check {check_name}",
-                ("twoStageAcceptance", "checks", check_name),
+                f"single-save check {check_name}",
+                ("singleSaveAcceptance", "checks", check_name),
                 False,
             )
         )
@@ -946,7 +944,7 @@ def test_final_delivery_check_summary_blocks_ready_report_with_inconsistent_stat
         "realDxmMutationAllowed": True,
         "realDxmMutationScope": "controlled_single_save_only",
         "productionDeliveryReady": True,
-        "realDxmTwoStageEndToEnd": "passed",
+        "realDxmSingleSaveEndToEnd": "passed",
         "stateConsistency": inconsistent_state,
         "stateConsistencyReadiness": {
             "ready": False,
@@ -968,8 +966,8 @@ def test_final_delivery_check_summary_blocks_ready_report_with_inconsistent_stat
         "l2_status": "passed",
         "l3_status": "passed",
         "delivery_ready": True,
-        "two_stage_ready": True,
-        "two_stage_status": "passed",
+        "single_save_ready": True,
+        "single_save_status": "passed",
         "state_consistent": True,
         "state_violation_codes": [],
     })
@@ -995,7 +993,7 @@ def test_final_delivery_check_summary_blocks_ready_report_without_state_consiste
         "realDxmWriteReadiness": "READY",
         "realDxmMutationAllowed": True,
         "productionDeliveryReady": True,
-        "realDxmTwoStageEndToEnd": "passed",
+        "realDxmSingleSaveEndToEnd": "passed",
         "gitHead": "abc123",
     }), encoding="utf-8")
     monkeypatch.setattr(main, "FINAL_DELIVERY_CHECK_JSON", report_path)
@@ -1005,8 +1003,8 @@ def test_final_delivery_check_summary_blocks_ready_report_without_state_consiste
     monkeypatch.setattr(main, "_current_real_dxm_gate_summary", lambda: {
         "readiness": "READY",
         "blocked_reason": "",
-        "two_stage_ready": True,
-        "two_stage_status": "passed",
+        "single_save_ready": True,
+        "single_save_status": "passed",
         "state_consistent": True,
         "state_violation_codes": [],
     })
@@ -1028,8 +1026,8 @@ def test_final_delivery_check_summary_blocks_when_current_runtime_gate_is_unread
         "realDxmMutationAllowed": True,
         "realDxmMutationScope": "controlled_single_save_only",
         "productionDeliveryReady": True,
-        "realDxmTwoStageEndToEnd": "passed",
-        "twoStageAcceptance": {"passed": True, "status": "passed"},
+        "realDxmSingleSaveEndToEnd": "passed",
+        "singleSaveAcceptance": {"passed": True, "status": "passed"},
         "stateConsistency": {
             "schema": "dxm_state_consistency.v1",
             "consistent": True,
@@ -1049,8 +1047,8 @@ def test_final_delivery_check_summary_blocks_when_current_runtime_gate_is_unread
         "l2_status": None,
         "l3_status": None,
         "delivery_ready": None,
-        "two_stage_ready": None,
-        "two_stage_status": None,
+        "single_save_ready": None,
+        "single_save_status": None,
         "state_consistent": None,
         "state_violation_codes": [],
     })

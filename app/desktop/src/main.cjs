@@ -450,18 +450,36 @@ function createBackendInstanceId() {
 }
 
 function resolvePythonPath(repoRoot) {
+  const packagedPython = path.join(repoRoot, 'app', 'backend', 'python-runtime', 'python.exe')
+  if (app.isPackaged) {
+    if (fs.existsSync(packagedPython)) {
+      return packagedPython
+    }
+    throw createCodedStartupError(
+      'DXM_PACKAGED_BACKEND_MISSING',
+      `Packaged backend Python is missing: ${packagedPython}`,
+    )
+  }
   const bundledVenvPython = path.join(repoRoot, 'app', 'backend', '.venv', 'Scripts', 'python.exe')
   // Contract path: app/backend/.venv/Scripts/python.exe
   if (fs.existsSync(bundledVenvPython)) {
     return bundledVenvPython
   }
-  if (app.isPackaged) {
-    throw createCodedStartupError(
-      'DXM_PACKAGED_BACKEND_MISSING',
-      `Packaged backend Python is missing: ${bundledVenvPython}`,
-    )
-  }
   return process.platform === 'win32' ? 'python' : 'python3'
+}
+
+function buildPackagedPythonEnvironment(baseEnvironment, backendDir) {
+  const environment = { ...baseEnvironment }
+  if (!app.isPackaged) return environment
+  for (const key of Object.keys(environment)) {
+    if (['PYTHONHOME', 'PYTHONPATH', 'VIRTUAL_ENV'].includes(key.toUpperCase())) {
+      delete environment[key]
+    }
+  }
+  environment.PYTHONHOME = path.join(backendDir, 'python-runtime')
+  environment.PYTHONPATH = path.join(backendDir, '.venv', 'Lib', 'site-packages')
+  environment.PYTHONNOUSERSITE = '1'
+  return environment
 }
 
 async function startBackend(repoRoot, port, backendInstanceId, launchIdentity) {
@@ -483,8 +501,9 @@ async function startBackend(repoRoot, port, backendInstanceId, launchIdentity) {
   const args = ['-m', 'src.desktop_server']
   appendDesktopLog(`Starting backend: ${pythonPath} ${args.join(' ')}`)
 
+  const packagedPythonEnvironment = buildPackagedPythonEnvironment(process.env, backendDir)
   const desktopBackendEnvironment = buildDesktopBackendEnvironment({
-    ...process.env,
+    ...packagedPythonEnvironment,
     DXM_LAUNCHER_LOG_FILE: runtimeInfo.desktopLogPath,
     DXM_BACKEND_URL: `http://127.0.0.1:${port}`,
     DXM_WORKFLOW_ACTION_RUNTIME: 'browser_agent',

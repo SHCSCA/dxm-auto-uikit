@@ -26,7 +26,6 @@ const primaryNavigation: PrimaryNavigationItem[] = [
 const sectionLabels: Record<WorkbenchSection, string> = {
   home: '工作台',
   dxm_access: '账号与浏览器',
-  acquisition_claim: '待认领入箱',
   draft_selection: '采集箱选品',
   draft_edit_save: '商品箱批量编辑',
   dxm_templates: '店小秘模板',

@@ -16,9 +16,21 @@ if ($parseErrors.Count -gt 0) {
   throw "final-delivery-check.ps1 does not parse: $($parseErrors[0].Message)"
 }
 
+foreach ($removedToken in @(
+  "two_stage_acceptance",
+  "twoStageAcceptance",
+  "ExpectedRealDxmTwoStageEndToEnd",
+  "claim_task_id",
+  "claimed_product_id"
+)) {
+  if ($source.Contains($removedToken)) {
+    throw "removed acceptance token remains in final-delivery-check.ps1: $removedToken"
+  }
+}
+
 foreach ($functionName in @(
   "Get-L3EvidenceReadiness",
-  "Get-TwoStageAcceptanceReadiness",
+  "Get-SingleSaveAcceptanceReadiness",
   "Get-StateConsistencyReadiness",
   "Get-RealDxmWriteReadiness",
   "Get-RealDxmWriteBlockedReason",
@@ -46,7 +58,7 @@ $malformedSafetyWorkspace = [pscustomobject]@{
     total_job_count = 1
     complete_job_count = 1
     blocked_by_state_consistency = $false
-    blocked_by_two_stage_acceptance = $false
+    blocked_by_single_save_acceptance = $false
     jobs = @([pscustomobject]@{
       job_id = 9
       ready = "true"
@@ -58,20 +70,22 @@ $malformedSafetyWorkspace = [pscustomobject]@{
       missing = @()
     })
   }
-  two_stage_acceptance = [pscustomobject]@{
+  single_save_acceptance = [pscustomobject]@{
     schema = "wrong.v1"
     passed = "true"
     status = "passed"
-    claim_task_id = 7
     save_task_id = 8
-    claimed_product_id = 9
+    product_id = 9
+    product_box_snapshot_error = "drifted"
+    save_report_count = 0
+    evidence_count = 1
     missing_codes = @("should-block")
     checks = [pscustomobject]@{}
   }
 }
 $malformedL3 = Get-L3EvidenceReadiness -WorkspaceSnapshot $malformedSafetyWorkspace
-$malformedTwoStage = Get-TwoStageAcceptanceReadiness -WorkspaceSnapshot $malformedSafetyWorkspace
-if ($malformedL3.ready -ne $false -or $malformedTwoStage.ready -ne $false) {
+$malformedSingleSave = Get-SingleSaveAcceptanceReadiness -WorkspaceSnapshot $malformedSafetyWorkspace
+if ($malformedL3.ready -ne $false -or $malformedSingleSave.ready -ne $false) {
   throw "string/integer booleans, wrong schema, and non-empty missing codes must fail closed"
 }
 
@@ -86,8 +100,8 @@ $validSafetyWorkspace = [pscustomobject]@{
     complete_job_count = 1
     blocked_by_state_consistency = $false
     state_violation_codes = @()
-    blocked_by_two_stage_acceptance = $false
-    two_stage_missing_codes = @()
+    blocked_by_single_save_acceptance = $false
+    single_save_missing_codes = @()
     jobs = @([pscustomobject]@{
       job_id = 9
       ready = $true
@@ -99,25 +113,25 @@ $validSafetyWorkspace = [pscustomobject]@{
       missing = @()
     })
   }
-  two_stage_acceptance = [pscustomobject]@{
-    schema = "dxm_two_stage_acceptance.v1"
+  single_save_acceptance = [pscustomobject]@{
+    schema = "dxm_single_save_acceptance.v1"
     passed = $true
     status = "passed"
-    claim_task_id = 7
+    user_message = "single save passed"
     save_task_id = 8
-    claimed_product_id = 9
+    product_id = 9
+    product_box_snapshot_error = $null
+    save_report_count = 1
+    evidence_count = 2
     missing_codes = @()
     state_violation_codes = @()
     checks = [pscustomobject]@{
-      claim_task_present = $true
-      claim_completed = $true
+      save_task_mode_valid = $true
       save_task_completed = $true
-      claimed_product_present = $true
-      claim_provenance_valid = $true
-      single_save_claim_snapshot_valid = $true
-      claim_product_matches = $true
-      draft_box_verified = $true
-      single_save_linked_to_claim = $true
+      product_present = $true
+      product_box_snapshot_valid = $true
+      single_save_target_bound = $true
+      manual_approval_consumed = $true
       save_success = $true
       unpublished_proof = $true
       save_evidence_integrity = $true
@@ -128,9 +142,23 @@ $validSafetyWorkspace = [pscustomobject]@{
   }
 }
 $validL3 = Get-L3EvidenceReadiness -WorkspaceSnapshot $validSafetyWorkspace
-$validTwoStage = Get-TwoStageAcceptanceReadiness -WorkspaceSnapshot $validSafetyWorkspace
-if ($validL3.ready -ne $true -or $validTwoStage.ready -ne $true) {
-  throw "strict valid delivery and two-stage contracts must remain READY"
+$validSingleSave = Get-SingleSaveAcceptanceReadiness -WorkspaceSnapshot $validSafetyWorkspace
+if ($validL3.ready -ne $true -or $validSingleSave.ready -ne $true) {
+  throw "strict valid delivery and single-save contracts must remain READY"
+}
+
+$invalidSnapshotWorkspace = $validSafetyWorkspace | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+$invalidSnapshotWorkspace.single_save_acceptance.product_box_snapshot_error = "snapshot drifted"
+$invalidSnapshot = Get-SingleSaveAcceptanceReadiness -WorkspaceSnapshot $invalidSnapshotWorkspace
+if ($invalidSnapshot.ready -ne $false -or $invalidSnapshot.missing -notcontains "single_save_acceptance.product_box_snapshot_error must be null") {
+  throw "product-box snapshot errors must fail closed"
+}
+
+$invalidEvidenceCountWorkspace = $validSafetyWorkspace | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+$invalidEvidenceCountWorkspace.single_save_acceptance.evidence_count = 1
+$invalidEvidenceCount = Get-SingleSaveAcceptanceReadiness -WorkspaceSnapshot $invalidEvidenceCountWorkspace
+if ($invalidEvidenceCount.ready -ne $false) {
+  throw "single-save acceptance requires separate save and unpublished evidence records"
 }
 
 function New-WorkspaceSnapshot {
@@ -227,7 +255,7 @@ foreach ($case in $cases) {
     -L3Gate ([pscustomobject]@{ status = "passed" }) `
     -L3EvidenceReadiness ([pscustomobject]@{ ready = $true }) `
     -StateConsistencyReadiness $actual `
-    -TwoStageAcceptanceReadiness ([pscustomobject]@{ ready = $true; missing = @() })
+    -SingleSaveAcceptanceReadiness ([pscustomobject]@{ ready = $true; missing = @() })
   $expectedWriteReadiness = if ($case.expected) { "READY" } else { "BLOCKED" }
   if ($writeReadiness -ne $expectedWriteReadiness) {
     throw "$($case.name): expected write readiness $expectedWriteReadiness, got $writeReadiness"
@@ -237,7 +265,7 @@ foreach ($case in $cases) {
     -L3Gate ([pscustomobject]@{ status = "passed" }) `
     -L3EvidenceReadiness ([pscustomobject]@{ ready = $true }) `
     -StateConsistencyReadiness $actual `
-    -TwoStageAcceptanceReadiness ([pscustomobject]@{ ready = $true; missing = @() })
+    -SingleSaveAcceptanceReadiness ([pscustomobject]@{ ready = $true; missing = @() })
   if ($case.expected -and $blockedReason -ne "") {
     throw "$($case.name): valid state must not have a blocked reason"
   }
@@ -246,30 +274,30 @@ foreach ($case in $cases) {
   }
 }
 
-$blockedByTwoStage = Get-RealDxmWriteReadiness `
+$blockedBySingleSave = Get-RealDxmWriteReadiness `
   -L2Gate ([pscustomobject]@{ status = "passed" }) `
   -L3Gate ([pscustomobject]@{ status = "passed" }) `
   -L3EvidenceReadiness ([pscustomobject]@{ ready = $true }) `
   -StateConsistencyReadiness ([pscustomobject]@{ ready = $true; missing = @() }) `
-  -TwoStageAcceptanceReadiness ([pscustomobject]@{ ready = $false; missing = @("two-stage acceptance not passed") })
-if ($blockedByTwoStage -ne "BLOCKED") {
-  throw "two-stage acceptance missing: expected write readiness BLOCKED, got $blockedByTwoStage"
+  -SingleSaveAcceptanceReadiness ([pscustomobject]@{ ready = $false; missing = @("single-save acceptance not passed") })
+if ($blockedBySingleSave -ne "BLOCKED") {
+  throw "single-save acceptance missing: expected write readiness BLOCKED, got $blockedBySingleSave"
 }
 
-$twoStageBlockedDecision = Get-RealDxmWriteDecision `
+$singleSaveBlockedDecision = Get-RealDxmWriteDecision `
   -L2Gate ([pscustomobject]@{ status = "passed" }) `
   -L3Gate ([pscustomobject]@{ status = "passed" }) `
   -L3EvidenceReadiness ([pscustomobject]@{ ready = $true; missing = @() }) `
   -StateConsistencyReadiness ([pscustomobject]@{ ready = $true; missing = @() }) `
-  -TwoStageAcceptanceReadiness ([pscustomobject]@{ ready = $false; missing = @("two-stage acceptance not passed") })
+  -SingleSaveAcceptanceReadiness ([pscustomobject]@{ ready = $false; missing = @("single-save acceptance not passed") })
 if (
-  $twoStageBlockedDecision.readiness -ne "BLOCKED" -or
-  $twoStageBlockedDecision.controlledSingleSaveReady -ne $false -or
-  $twoStageBlockedDecision.realDxmMutationAllowed -ne $false -or
-  $twoStageBlockedDecision.realDxmMutationScope -ne "none" -or
-  $twoStageBlockedDecision.blockedReason -notmatch "Two-stage acceptance is not passed"
+  $singleSaveBlockedDecision.readiness -ne "BLOCKED" -or
+  $singleSaveBlockedDecision.controlledSingleSaveReady -ne $false -or
+  $singleSaveBlockedDecision.realDxmMutationAllowed -ne $false -or
+  $singleSaveBlockedDecision.realDxmMutationScope -ne "none" -or
+  $singleSaveBlockedDecision.blockedReason -notmatch "Single-save acceptance is not passed"
 ) {
-  throw "two-stage acceptance missing: READY, controlled single-save, and mutation must all remain blocked"
+  throw "single-save acceptance missing: READY, controlled single-save, and mutation must all remain blocked"
 }
 
 $readyDecision = Get-RealDxmWriteDecision `
@@ -277,7 +305,7 @@ $readyDecision = Get-RealDxmWriteDecision `
   -L3Gate ([pscustomobject]@{ status = "passed" }) `
   -L3EvidenceReadiness ([pscustomobject]@{ ready = $true; missing = @() }) `
   -StateConsistencyReadiness ([pscustomobject]@{ ready = $true; missing = @() }) `
-  -TwoStageAcceptanceReadiness ([pscustomobject]@{ ready = $true; missing = @() })
+  -SingleSaveAcceptanceReadiness ([pscustomobject]@{ ready = $true; missing = @() })
 if (
   $readyDecision.readiness -ne "READY" -or
   $readyDecision.controlledSingleSaveReady -ne $true -or
@@ -292,7 +320,7 @@ $overallWithInvalidState = Test-FinalDeliveryOverallOk `
   -LocalWorkbenchOk $true `
   -GateEvidenceOk $true `
   -RealDxmWriteReadinessMatchesExpected $true `
-  -TwoStageAcceptanceMatchesExpected $true `
+  -SingleSaveAcceptanceMatchesExpected $true `
   -StateConsistencyReadiness ([pscustomobject]@{ ready = $false; missing = @("STATE_X") }) `
   -RequireCleanSourcePackage $false `
   -SourcePackageCheck "NOT_REQUIRED"
@@ -304,7 +332,7 @@ $overallWithValidState = Test-FinalDeliveryOverallOk `
   -LocalWorkbenchOk $true `
   -GateEvidenceOk $true `
   -RealDxmWriteReadinessMatchesExpected $true `
-  -TwoStageAcceptanceMatchesExpected $true `
+  -SingleSaveAcceptanceMatchesExpected $true `
   -StateConsistencyReadiness ([pscustomobject]@{ ready = $true; missing = @() }) `
   -RequireCleanSourcePackage $false `
   -SourcePackageCheck "NOT_REQUIRED"

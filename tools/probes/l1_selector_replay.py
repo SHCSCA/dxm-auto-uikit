@@ -156,7 +156,10 @@ def run_named_check(name: str, parsed: dict[str, Any], visible_buttons: list[str
     body = parsed["body_text"]
     nodes = parsed["nodes"]
     checks = {
-        "claimed_row_ownership": lambda: contains_all(body, ["Dang Kang", "AI认领"]),
+        "product_box_row_identity": lambda: contains_all(
+            body,
+            ["绝区零妄想天使南宫羽猫咪话筒麦克风cos道具", "Dang Kang"],
+        ),
         "publish_button_absent": lambda: not any(exact_or_contains(button, FORBIDDEN_VISIBLE_TEXTS) for button in visible_buttons),
         "eu_outer_package_image_bank": lambda: contains_all(body, ["外包装/标签实拍图-欧盟", "添加图片", "图片银行（速卖通）"]),
         "marketing_white_background": lambda: contains_all(body, ["营销图片", "1:1白底图", "3:4场景图", "图片白底", "一键白底"]),

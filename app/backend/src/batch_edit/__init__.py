@@ -7,17 +7,19 @@ DXM Batch Edit Module
     has been removed from this module.
 """
 
+from importlib import import_module
+from typing import Any
 import warnings as _warnings
 
-from src.batch_edit.coordinator import BatchEditContractError, BatchEditCoordinator
-from src.batch_edit.bundle_composer import BundleComposerError, EditBatchBundleComposer
 
-__all__ = [
-    "BatchEditContractError",
-    "BatchEditCoordinator",
-    "BundleComposerError",
-    "EditBatchBundleComposer",
-]
+_EXPORTS = {
+    "BatchEditContractError": ("src.batch_edit.coordinator", "BatchEditContractError"),
+    "BatchEditCoordinator": ("src.batch_edit.coordinator", "BatchEditCoordinator"),
+    "BundleComposerError": ("src.batch_edit.bundle_composer", "BundleComposerError"),
+    "EditBatchBundleComposer": ("src.batch_edit.bundle_composer", "EditBatchBundleComposer"),
+}
+
+__all__ = list(_EXPORTS)
 
 
 class _DeprecatedBatchExecutionRuntime:
@@ -26,13 +28,13 @@ class _DeprecatedBatchExecutionRuntime:
     def __init__(self, *args, **kwargs):
         _warnings.warn(
             "BatchExecutionRuntime is deprecated and has been removed. "
-            "Use V1TaskRunner from execution.v1_runner instead.",
+            "Use V1TaskRunner from execution/v1_runner instead.",
             DeprecationWarning,
             stacklevel=2,
         )
         raise RuntimeError(
             "BatchExecutionRuntime has been removed. "
-            "Use V1TaskRunner from execution.v1_runner instead."
+            "Use V1TaskRunner from execution/v1_runner instead."
         )
 
 
@@ -46,11 +48,17 @@ class _DeprecatedBatchRuntimeError(RuntimeError):
         super().__init__(*args, **kwargs)
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
+    target = _EXPORTS.get(name)
+    if target is not None:
+        module_name, attribute_name = target
+        value = getattr(import_module(module_name), attribute_name)
+        globals()[name] = value
+        return value
     if name == "BatchExecutionRuntime":
         _warnings.warn(
             "BatchExecutionRuntime is deprecated and has been removed. "
-            "Use V1TaskRunner from execution.v1_runner instead.",
+            "Use V1TaskRunner from execution/v1_runner instead.",
             DeprecationWarning,
             stacklevel=2,
         )

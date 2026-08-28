@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { getJson, postJson } from '../../api'
 import { SectionFieldDetailPanel } from './SectionFieldDetailPanel'
 import type {
@@ -132,9 +132,6 @@ export function BatchTemplateComposer({
   const [createdBundle, setCreatedBundle] = useState<Template | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
-
-  // Path B: Track expanded sections
-  const [expandedSections, setExpandedSections] = useState<Set<PathBPlanSectionCode>>(new Set())
 
   // Path B: Field details per section
   const [sectionFields, setSectionFields] = useState<Record<PathBPlanSectionCode, PlanFieldDetail[]>>({

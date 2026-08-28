@@ -441,6 +441,7 @@ export type DraftBoxScopeItem = {
   ordinal: number
   title: string
   dxm_product_id: string | null
+  local_product_id: number | null
 }
 export type DraftBoxScopeSnapshot = {
   id: number
@@ -451,6 +452,7 @@ export type DraftBoxScopeSnapshot = {
   }
   store_identity: {
     store_name: string
+    store_id: number | null
   }
   filter_state: Record<string, unknown>
   sort_state: Record<string, unknown>
@@ -601,14 +603,9 @@ export type Product = {
   image?: { eu_outer_package_filename?: string }
   lifecycle_state?: string | null
   lifecycle_label?: string | null
-  source_status_label?: string | null
-  draft_box_verification_label?: string | null
   source_url?: string | null
-  claim_task_id?: number | string | null
   store_id?: number | null
   store_name?: string | null
-  claimed_at?: string | null
-  draft_box_verified?: boolean | null
 }
 export type TaskJob = { id: number; task_id?: number; product_id?: number | null; status: string; current_step_code?: string | null; current_step_name?: string | null; error_code?: string | null; error_message?: string | null; [key: string]: unknown }
 export type TaskWorkerControl = {
@@ -645,42 +642,6 @@ export type Task = {
   workerControl?: TaskWorkerControl | null
 }
 export type RealTaskCreateRequest = { storeId: number; mode: 'probe' | 'single_save'; productIds: number[] }
-export type ClaimCandidate = {
-  id: string
-  title: string
-  source?: string | null
-  sourceUrl?: string | null
-  source_url?: string | null
-  storeAccount?: string | null
-  store_account?: string | null
-  createdAt?: string | null
-  created_at?: string | null
-  categoryHint?: string | null
-  category_hint?: string | null
-}
-export type AcquisitionClaimCreateRequest = { storeId: number; sourceUrl: string; keyword?: string; categoryName?: string; claimMark: string; templateId?: number | null }
-export type AcquisitionClaimResponse = {
-  id: number
-  task_id: number
-  stage: string
-  status: string
-  store_id: number
-  keyword?: string | null
-  category_name?: string | null
-  source_url?: string | null
-  claim_mark: string
-  template_id?: number | null
-  claimed_product_id?: number | null
-  claimed_product_title?: string | null
-  claimed_product_status?: string | null
-  claimed_product_source?: string | null
-  claimed_product_source_url?: string | null
-  claimed_product_category_name?: string | null
-  draft_box_verified?: boolean | null
-  next_step?: string | null
-  completed_at?: string | null
-  task_status?: string | null
-}
 export type LogItem = { id: number; task_id: number; job_id: number | null; level: string; message: string; context: Record<string, unknown>; created_at: string }
 export type RuntimeLogSource = 'backend' | 'frontend' | 'launcher' | 'npm' | 'task' | 'agent'
 export type RuntimeLogItem = { line: string; level: 'info' | 'warning' | 'error' | string; tags: string[] }
@@ -1015,12 +976,9 @@ export type FinalDeliveryCheckSummary = {
   effective_real_dxm_write_blocked_reason?: string | null
   effective_real_dxm_mutation_allowed?: boolean | null
   effective_real_dxm_mutation_scope?: string | null
-  real_dxm_two_stage_end_to_end?: string | null
-  expected_real_dxm_two_stage_end_to_end?: string | null
-  effective_real_dxm_two_stage_end_to_end?: string | null
-  two_stage_acceptance_matches_expected?: boolean | null
-  current_two_stage_ready?: boolean | null
-  current_two_stage_status?: string | null
+  single_save_acceptance_matches_expected?: boolean | null
+  current_single_save_ready?: boolean | null
+  current_single_save_status?: string | null
   production_delivery_ready?: boolean | null
   final_delivery_completed?: boolean | null
   effective_real_dxm_write_readiness_matches_expected?: boolean | null
@@ -1059,7 +1017,6 @@ export type FinalDeliveryCheckSummary = {
 export type WorkbenchSection =
   | 'home'
   | 'dxm_access'
-  | 'acquisition_claim'
   | 'draft_selection'
   | 'draft_edit_save'
   | 'template_center'
@@ -1139,7 +1096,7 @@ export type L2ProbePlan = {
   safetyNotes: string[]
 }
 export type RealModeReleaseItem = {
-  mode: 'single_save' | 'claim_only' | 'batch_save' | string
+  mode: 'single_save' | 'edit_batch' | 'batch_save' | string
   label: string
   status: 'released_controlled' | 'blocked_unreleased' | string
   allowed: boolean
@@ -1165,25 +1122,31 @@ export type RealModeReleasePlan = {
   modes: RealModeReleaseItem[]
 }
 
-export type TwoStageAcceptance = {
+export type SingleSaveAcceptance = {
   schema: string
   passed: boolean
   status: string
   userMessage: string
-  claimTaskId: number | null
   saveTaskId: number | null
-  claimedProductId: number | null
+  productId: number | null
   missingCodes: string[]
+  stateViolationCodes: string[]
+  saveReportCount: number
+  evidenceCount: number
+  productBoxSnapshotError: string | null
   checks: {
-    claim_task_present?: boolean
-    claim_completed?: boolean
-    claimed_product_present?: boolean
-    claim_product_matches?: boolean
-    draft_box_verified?: boolean
-    single_save_linked_to_claim?: boolean
+    save_task_mode_valid?: boolean
+    save_task_completed?: boolean
+    product_present?: boolean
+    product_box_snapshot_valid?: boolean
+    single_save_target_bound?: boolean
+    manual_approval_consumed?: boolean
     save_success?: boolean
     unpublished_proof?: boolean
+    save_evidence_integrity?: boolean
+    unpublished_evidence_integrity?: boolean
     publish_guard_safe?: boolean
+    state_consistent?: boolean
     [key: string]: boolean | undefined
   }
 }
@@ -1208,8 +1171,7 @@ export type DeliveryWorkspace = {
   regressionGates: RegressionGate[]
   l2ProbePlan: L2ProbePlan
   realModeReleasePlan: RealModeReleasePlan
-  twoStageAcceptance: TwoStageAcceptance
-  claimCandidates: ClaimCandidate[]
+  singleSaveAcceptance: SingleSaveAcceptance
   dxmReferenceTemplates: DxmReferenceTemplateSection[]
   acceptanceGaps: AcceptanceGap[]
   safety: {

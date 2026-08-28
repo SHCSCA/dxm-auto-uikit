@@ -12,8 +12,8 @@ from src.execution.browser_agent_protocol import (
     MutationCommandContractError,
     canonical_frozen_target_identity,
 )
-from src.state_machine.two_stage import (
-    TwoStageContractError,
+from src.state_machine.save_authorization import (
+    SaveOnlyContractError,
     canonical_source_identity,
     is_supported_product_detail_url,
 )
@@ -299,7 +299,7 @@ def _normalize_items(
             )
         try:
             canonical_source = canonical_source_identity(source_urls[0], source_urls)
-        except TwoStageContractError as exc:
+        except SaveOnlyContractError as exc:
             raise ScopeContractError("SCOPE_ITEM_SOURCE_INVALID", str(exc)) from exc
         if (
             list(canonical_source["urls"]) != source_urls

@@ -414,12 +414,16 @@ def test_operator_can_capture_and_persist_current_draft_box_scope(tmp_path, monk
     snapshot = response.json()
     assert browser_boundary.max_items == [2]
     assert snapshot["id"] > 0
-    assert snapshot["store_identity"] == {"store_name": "DXM Shop A"}
+    assert snapshot["store_identity"] == {
+        "store_name": "DXM Shop A",
+        "store_id": None,
+    }
     assert [item["ordinal"] for item in snapshot["items"]] == [1, 2]
     assert [item["dxm_product_id"] for item in snapshot["items"]] == [
         "DXM-1001",
         "DXM-1002",
     ]
+    assert [item["local_product_id"] for item in snapshot["items"]] == [None, None]
     assert "digest" not in snapshot
     assert "evidence" not in snapshot
 

@@ -68,14 +68,18 @@ from src.services.config_validation import ConfigValidationService
 from src.services.evidence_ref import validate_evidence_ref
 from src.services.ownership_lock import OwnershipLockService
 from src.services.publish_guard import PublishGuardService
-from src.state_machine.two_stage import (
-    TwoStageContractError,
-    authorization_context_fingerprint,
-    canonical_claim_target_identity,
-    canonical_source_identity,
-    verify_authorization_context,
-    verify_draft_box_proof,
-    verify_exact_stage_task_facts,
+from src.state_machine.save_authorization import (
+    SaveOnlyContractError,
+    authorization_context_fingerprint as save_authorization_context_fingerprint,
+    verify_authorization_context as verify_save_authorization_context,
+    verify_exact_save_task_facts,
+    verify_product_box_snapshot,
+)
+from src.state_machine.batch_draft_authorization import (
+    BatchDraftAuthorizationError,
+    authorization_context_fingerprint as batch_authorization_context_fingerprint,
+    verify_authorization_context as verify_batch_authorization_context,
+    verify_exact_batch_draft_save_task_facts,
 )
 from src.state_machine.contracts import StateName, normalize_execution_mode
 from src.utils import now_iso
@@ -88,8 +92,6 @@ V1_STEPS = [
     (StateName.OPEN_DRAFT_LIST, "进入商品箱", "navigation"),
     (StateName.FIND_PRODUCT, "定位目标商品", "ownership"),
     (StateName.ITEM_LOCKING, "创建商品归属锁", "ownership"),
-    (StateName.CLAIM_PRODUCT, "写入领取备注", "ownership"),
-    (StateName.VERIFY_LIST_OWNERSHIP, "校验商品箱归属", "ownership"),
     (StateName.OPEN_EDIT_PAGE, "打开普通编辑页", "editor"),
     (StateName.VERIFY_EDIT_OWNERSHIP, "校验编辑页归属", "ownership"),
     (StateName.FILL_BASE_INFO, "输入标题/选择分类", "base_info"),
@@ -111,7 +113,6 @@ V1_STEPS = [
 
 FROZEN_TARGET_STATES = frozenset(
     {
-        StateName.CLAIM_PRODUCT,
         StateName.OPEN_EDIT_PAGE,
         StateName.VERIFY_EDIT_OWNERSHIP,
         StateName.FILL_BASE_INFO,
@@ -152,11 +153,7 @@ def _observed_text_contains_exact_boundary(observed_text: str, expected_text: st
         normalized_observed,
     ) is not None
 
-SINGLE_SAVE_STEPS = [
-    step
-    for step in V1_STEPS
-    if step[0] not in {StateName.CLAIM_PRODUCT, StateName.VERIFY_LIST_OWNERSHIP}
-]
+SINGLE_SAVE_STEPS = list(V1_STEPS)
 
 SEMI_MANAGED_STEPS = [
     (StateName.ENABLE_SEMI_MANAGED, "选择半托管服务", "semi_managed"),
@@ -230,19 +227,10 @@ BATCH_PATH_B_STEPS = (
     + REPORT_AND_RELEASE
 )
 
-CLAIM_ONLY_STEPS = [
-    (StateName.PRECHECK_CONFIG, "启动前配置校验", "config"),
-    (StateName.PRECHECK_SESSION, "检查店小秘登录态", "session"),
-    (StateName.PRECHECK_PUBLISH_GUARD, "发布隔离预检", "publish_guard"),
-    (StateName.OPEN_DATA_ACQUISITION, "打开已有待认领列表", "navigation"),
-    (StateName.CLAIM_TO_DRAFT_BOX, "认领到商品箱", "acquisition"),
-    (StateName.VERIFY_DRAFT_BOX_CLAIM, "确认商品箱商品", "acquisition"),
-]
 
 MODE_LAST_STATE = {
     "probe": StateName.PRECHECK_PUBLISH_GUARD,
     "dry_run": StateName.PRECHECK_CONFIG,
-    "claim_only": StateName.VERIFY_DRAFT_BOX_CLAIM,
     "single_save": StateName.RELEASE_LOCK,
     "batch_save": StateName.RELEASE_LOCK,
     "batch_draft_save": StateName.RELEASE_LOCK,
@@ -270,14 +258,9 @@ HUD_PROGRESS_INDEX = {
     StateName.PRECHECK_CONFIG: 1,
     StateName.PRECHECK_SESSION: 1,
     StateName.PRECHECK_PUBLISH_GUARD: 1,
-    StateName.OPEN_DATA_ACQUISITION: 2,
-    StateName.CLAIM_TO_DRAFT_BOX: 3,
-    StateName.VERIFY_DRAFT_BOX_CLAIM: 3,
     StateName.OPEN_DRAFT_LIST: 2,
     StateName.FIND_PRODUCT: 3,
     StateName.ITEM_LOCKING: 3,
-    StateName.CLAIM_PRODUCT: 3,
-    StateName.VERIFY_LIST_OWNERSHIP: 3,
     StateName.OPEN_EDIT_PAGE: 4,
     StateName.VERIFY_EDIT_OWNERSHIP: 4,
     StateName.FILL_BASE_INFO: 5,
@@ -300,14 +283,9 @@ HUD_STEP_COPY = {
     StateName.PRECHECK_CONFIG: ("开始任务", "开始任务", "正在检查任务、店铺登录和只保存边界"),
     StateName.PRECHECK_SESSION: ("开始任务", "开始任务", "正在确认店小秘已经登录"),
     StateName.PRECHECK_PUBLISH_GUARD: ("开始任务", "开始任务", "正在确认本次只保存，不发布"),
-    StateName.OPEN_DATA_ACQUISITION: ("打开已有待认领列表", "打开已有待认领列表", "正在打开店小秘已有待认领列表"),
-    StateName.CLAIM_TO_DRAFT_BOX: ("认领到商品箱", "认领到商品箱", "正在把真实商品认领到商品箱"),
-    StateName.VERIFY_DRAFT_BOX_CLAIM: ("确认商品箱", "确认商品箱", "正在确认商品已经进入商品箱"),
     StateName.OPEN_DRAFT_LIST: ("打开草稿箱", "打开草稿箱", "正在打开店小秘草稿箱"),
     StateName.FIND_PRODUCT: ("查找商品", "查找商品", "正在查找本次要保存的商品"),
     StateName.ITEM_LOCKING: ("查找商品", "查找商品", "正在锁定本次商品，避免误操作其他商品"),
-    StateName.CLAIM_PRODUCT: ("查找商品", "查找商品", "正在标记本次任务商品"),
-    StateName.VERIFY_LIST_OWNERSHIP: ("查找商品", "查找商品", "正在确认只处理本次商品"),
     StateName.OPEN_EDIT_PAGE: ("打开编辑页", "打开编辑页", "正在进入当前商品编辑页"),
     StateName.VERIFY_EDIT_OWNERSHIP: ("打开编辑页", "打开编辑页", "正在确认编辑页商品匹配"),
     StateName.FILL_BASE_INFO: ("输入标题", "输入标题", "正在输入商品标题和卖点"),
@@ -340,11 +318,7 @@ HUD_VIRTUAL_STAGE_AFTER = {
 
 WORKFLOW_BROWSER_ACTION_STATES = {
     StateName.PRECHECK_SESSION,
-    StateName.OPEN_DATA_ACQUISITION,
-    StateName.CLAIM_TO_DRAFT_BOX,
-    StateName.VERIFY_DRAFT_BOX_CLAIM,
     StateName.OPEN_DRAFT_LIST,
-    StateName.CLAIM_PRODUCT,
     StateName.OPEN_EDIT_PAGE,
     StateName.VERIFY_EDIT_OWNERSHIP,
     StateName.FILL_BASE_INFO,
@@ -361,11 +335,7 @@ WORKFLOW_BROWSER_ACTION_STATES = {
 
 WORKFLOW_EXPECTED_PAGE_BY_STATE = {
     StateName.PRECHECK_SESSION: "authenticated_dxm",
-    StateName.OPEN_DATA_ACQUISITION: "data_acquisition",
-    StateName.CLAIM_TO_DRAFT_BOX: "data_acquisition",
-    StateName.VERIFY_DRAFT_BOX_CLAIM: "draft_box",
     StateName.OPEN_DRAFT_LIST: "draft_box",
-    StateName.CLAIM_PRODUCT: "draft_box",
     StateName.OPEN_EDIT_PAGE: "editor",
     StateName.VERIFY_EDIT_OWNERSHIP: "editor",
     StateName.FILL_BASE_INFO: "editor",
@@ -488,7 +458,7 @@ class V1TaskRunner:
                     "publish_guard",
                     "禁止的执行模式",
                     str(exc),
-                    "改为 probe、dry_run、claim_only、single_save、batch_draft_save 或 batch_save。",
+                    "改为 probe、dry_run、single_save、batch_draft_save 或 batch_save。",
                 )
             await self.manager.broadcast(task_id, {"type": "task_status", "status": "failed", "taskId": task_id})
             return
@@ -548,24 +518,6 @@ class V1TaskRunner:
                         "failedJobs": failed_task.get("failed_jobs", failed),
                     })
                     return
-            if mode == "claim_only" and success:
-                self.repo.release_task_runner_dispatch(task_id, reason="claim_only_completed")
-                await self.manager.broadcast(task_id, {
-                    "type": "job_completed",
-                    "taskId": task_id,
-                    "jobId": job["id"],
-                    "completedJobs": completed,
-                    "failedJobs": failed,
-                })
-                await self.manager.broadcast(task_id, {
-                    "type": "task_status",
-                    "taskId": task_id,
-                    "status": "completed",
-                    "completedJobs": completed,
-                    "failedJobs": failed,
-                })
-                return
-
             # Safe point after a product finishes: honor pause/stop before next dispatch.
             control = await self._apply_worker_control_at_safe_point(
                 task_id,
@@ -736,7 +688,6 @@ class V1TaskRunner:
         plan = payload.get("plan_snapshot") if isinstance(payload.get("plan_snapshot"), Mapping) else {}
         snapshot_path = str(plan.get("path") or payload.get("path") or "A").strip().upper()
         lock_token: str | None = None
-        claim_mark = self._claim_mark(task)
         filled_fields: list[str] = []
         empty_fields: list[str] = []
         evidence_paths: list[str] = []
@@ -744,7 +695,6 @@ class V1TaskRunner:
         agent_console_events: list[dict[str, Any]] = []
         agent_action_events: list[dict[str, Any]] = []
         live_browser_hud_events: list[dict[str, Any]] = []
-        claimed_product: dict[str, Any] | None = None
         last_state = MODE_LAST_STATE[mode]
         current_state_name = StateName.PRECHECK_CONFIG
         current_step_name = "启动前配置校验"
@@ -755,7 +705,6 @@ class V1TaskRunner:
 
         try:
             if self.workflow_adapter is None and mode in {
-                "claim_only",
                 "single_save",
                 "batch_save",
                 "batch_draft_save",
@@ -789,7 +738,7 @@ class V1TaskRunner:
                             "Orchestrator 初始化失败，继续执行（不影响步骤）",
                             {"error": str(exc)},
                         )
-                self._guard_step(task, job, state_name, claim_mark, product)
+                self._guard_step(task, job, state_name, product)
                 self.repo.update_job(job_id, status="running", current_step_code=state_name.value, current_step_name=step_name)
                 evidence_path = self._write_evidence(task_id, job_id, state_name)
                 evidence_paths.append(str(evidence_path))
@@ -838,20 +787,13 @@ class V1TaskRunner:
                         product_id=product_id or job_id,
                         store_name=self._store_name(task),
                         source_title=self._source_title(product_id),
-                        claim_mark_base=task.get("payload", {}).get("claim_mark", "AI认领"),
+                        ownership_tag_base="DXM-LOCK",
                     )
                     if lock["conflict"]:
                         raise V1ExecutionError("E202", "商品归属锁冲突", lock["reason"])
                     lock_token = lock["lock_token"]
-                    claim_mark = lock["claim_mark"]
-
-                if state_name == StateName.VERIFY_LIST_OWNERSHIP and lock_token:
-                    verified = self.ownership_lock.mark_page_claim_verified(lock_token, claim_mark)
-                    if verified["conflict"]:
-                        raise V1ExecutionError("E202", "页面领取标记不一致", verified["reason"])
 
                 if (mode, state_name) in {
-                    ("claim_only", StateName.CLAIM_TO_DRAFT_BOX),
                     ("single_save", StateName.SAVE_ONLY),
                     ("batch_draft_save", StateName.SAVE_ONLY),
                 }:
@@ -905,7 +847,6 @@ class V1TaskRunner:
                     task,
                     job,
                     state_name,
-                    claim_mark,
                     execution_defaults,
                     prior_results=workflow_results,
                 )
@@ -915,13 +856,6 @@ class V1TaskRunner:
                             workflow_results,
                             workflow_result,
                             mode=mode,
-                        )
-                    if mode == "claim_only" and state_name == StateName.VERIFY_DRAFT_BOX_CLAIM:
-                        claimed_product = self._record_claimed_product_from_acquisition(
-                            task,
-                            job,
-                            workflow_result,
-                            claim_mark,
                         )
                     agent_action_event = self._sync_agent_action(
                         task,
@@ -1059,7 +993,7 @@ class V1TaskRunner:
                 if state_name == last_state:
                     break
 
-            if mode in {"probe", "dry_run", "claim_only"}:
+            if mode in {"probe", "dry_run"}:
                 empty_fields.append("未进入商品保存字段，当前模式不需要填写")
             if mode in {"single_save", "batch_save", "batch_draft_save"}:
                 empty_fields.append("货品条码：配置允许留空")
@@ -1068,7 +1002,6 @@ class V1TaskRunner:
                 task,
                 job,
                 mode,
-                claim_mark,
                 filled_fields,
                 empty_fields,
                 evidence_paths,
@@ -1077,36 +1010,23 @@ class V1TaskRunner:
                 agent_console_events=agent_console_events,
                 agent_action_events=agent_action_events,
                 live_browser_hud_events=live_browser_hud_events,
-                claimed_product=claimed_product,
             )
             if mode in {"single_save", "batch_save", "batch_draft_save"}:
                 self._revalidate_terminal_action_evidence(workflow_results, mode=mode)
-            save_result = self._save_result_for_mode(mode, workflow_results, claimed_product=claimed_product)
+            save_result = self._save_result_for_mode(mode, workflow_results)
             summary["published"] = save_result["published"]
-            report_product_id = int(claimed_product["id"]) if mode == "claim_only" and claimed_product and claimed_product.get("id") else product_id
-            if mode == "claim_only":
-                self.repo.add_report(
-                    task_id,
-                    job_id,
-                    report_product_id,
-                    "success",
-                    save_result["published"],
-                    save_result,
-                    summary,
-                )
-            else:
-                finalized = self.repo.finalize_job_success(
-                    task_id,
-                    job_id,
-                    report_product_id,
-                    published=save_result["published"],
-                    save_result=save_result,
-                    summary=summary,
-                )
-                if not finalized.applied:
-                    if finalized.conflict_code == TerminalReportConflictError.conflict_code:
-                        raise TerminalReportConflictError(task_id, job_id)
-                    raise _JobTerminalTransitionRejected(finalized.conflict_code, finalized.reason)
+            finalized = self.repo.finalize_job_success(
+                task_id,
+                job_id,
+                product_id,
+                published=save_result["published"],
+                save_result=save_result,
+                summary=summary,
+            )
+            if not finalized.applied:
+                if finalized.conflict_code == TerminalReportConflictError.conflict_code:
+                    raise TerminalReportConflictError(task_id, job_id)
+                raise _JobTerminalTransitionRejected(finalized.conflict_code, finalized.reason)
             self.repo.add_log(
                 task_id,
                 job_id,
@@ -1115,8 +1035,6 @@ class V1TaskRunner:
                 {"mode": mode, "published": save_result["published"]},
             )
             return True
-        except _ClaimTerminalTransitionRejected:
-            return None
         except _JobTerminalTransitionRejected:
             return None
         except Exception as exc:
@@ -1158,7 +1076,6 @@ class V1TaskRunner:
                 task,
                 job,
                 mode,
-                claim_mark,
                 filled_fields,
                 empty_fields,
                 evidence_paths,
@@ -1198,8 +1115,6 @@ class V1TaskRunner:
     def _steps_for_mode(self, mode: str, snapshot_path: str = "A"):
         if mode == "dry_run":
             return [V1_STEPS[0]]
-        if mode == "claim_only":
-            return CLAIM_ONLY_STEPS
         if mode == "batch_draft_save":
             if snapshot_path == "B":
                 return BATCH_PATH_B_STEPS
@@ -1364,7 +1279,7 @@ class V1TaskRunner:
         resolved_step_name = str(override.get("step_name") or step_name)
         store_name = self._store_name(task)
         hud = build_browser_hud({
-            "task_name": "待认领商品" if mode == "claim_only" else "商品箱编辑保存",
+            "task_name": "商品箱编辑保存",
             "step": resolved_step_code,
             "status": override.get("status") or "running",
             "severity": override.get("severity"),
@@ -1528,7 +1443,7 @@ class V1TaskRunner:
             return "save"
         if action_name == "fill_media_assets":
             return "upload"
-        if action_name.startswith("fill_") or action_name in {"claim_product", "claim_from_data_acquisition"}:
+        if action_name.startswith("fill_"):
             return "fill"
         if action_name in {"enable_semi_managed"}:
             return "select"
@@ -1541,10 +1456,6 @@ class V1TaskRunner:
     def _agent_action_target(self, action_name: str, workflow_result: Mapping[str, Any]) -> str | None:
         if action_name == "save_only":
             return "保存"
-        if action_name == "claim_product":
-            return "领取备注"
-        if action_name == "claim_from_data_acquisition":
-            return "认领到商品箱"
         if action_name.startswith("fill_"):
             return str(workflow_result.get("product_query") or "编辑页字段")
         if action_name.startswith("open_"):
@@ -1601,7 +1512,6 @@ class V1TaskRunner:
         task: dict[str, Any],
         job: dict[str, Any],
         state_name: StateName,
-        claim_mark: str,
         product: Mapping[str, Any] | None = None,
     ) -> None:
         if state_name == StateName.PRECHECK_CONFIG:
@@ -1613,11 +1523,9 @@ class V1TaskRunner:
             if mode in {"single_save", "batch_save", "batch_draft_save"} and task.get("publish_scene") != "SMT_SEMI_MANAGED_SAVE_ONLY":
                 raise V1ExecutionError("E999", "任务发布场景不安全", "V1 只允许 SMT_SEMI_MANAGED_SAVE_ONLY")
             if mode == "single_save":
-                self._guard_single_save_claimed_product(task, job, product)
+                self._guard_single_save_product_box_item(task, job, product)
             if mode == "batch_draft_save":
                 self._guard_batch_draft_save_plan(task, job)
-        if state_name in {StateName.CLAIM_PRODUCT, StateName.CLAIM_TO_DRAFT_BOX, StateName.VERIFY_DRAFT_BOX_CLAIM} and not claim_mark:
-            raise V1ExecutionError("E202", "领取标记为空", "任务缺少 claim_mark")
         if state_name == StateName.SAVE_ONLY:
             result = self.publish_guard.check(intended_action="save", target_text="保存")
             if not result["allowed"]:
@@ -1807,7 +1715,7 @@ class V1TaskRunner:
                 "job product_id is outside frozen plan_snapshot product_ids",
             )
 
-    def _guard_single_save_claimed_product(
+    def _guard_single_save_product_box_item(
         self,
         task: Mapping[str, Any],
         job: Mapping[str, Any],
@@ -1817,22 +1725,22 @@ class V1TaskRunner:
             raise V1ExecutionError(
                 "E202",
                 "保存任务缺少商品箱商品",
-                "单商品只保存必须从已认领并通过商品箱验证的真实商品启动；系统不会打开编辑页或保存。",
+                "单商品只保存必须绑定当前已验证的商品箱商品；系统不会打开编辑页或保存。",
             )
         status = str(product.get("status") or "")
         payload = product.get("payload") if isinstance(product.get("payload"), Mapping) else {}
-        source = str(payload.get("source") or product.get("source") or "").strip()
-        if status not in {"claimed_to_draft", "ready_for_edit"}:
+        source = str(product.get("source") or "").strip()
+        if status != "ready_for_edit":
             raise V1ExecutionError(
                 "E202",
                 "保存任务商品未进入商品箱",
-                "当前商品还不是已认领的商品箱商品；请先从店小秘已有待认领列表认领并确认商品箱后再启动只保存。",
+                "当前商品不是可编辑的商品箱商品；请从当前商品箱重新选择并创建只保存任务。",
             )
-        if source != "dxm_data_acquisition":
+        if source != "dxm_draft_box":
             raise V1ExecutionError(
                 "E202",
                 "保存任务商品来源不正确",
-                "单商品只保存只能处理从店小秘已有待认领列表进入商品箱的真实商品；手工导入或测试商品不会启动真实保存。",
+                "单商品只保存只能处理系统从店小秘商品箱捕获的真实商品；手工导入或测试商品不会启动真实保存。",
             )
         if payload.get("draft_box_verified") is not True:
             raise V1ExecutionError(
@@ -1846,13 +1754,7 @@ class V1TaskRunner:
                 "商品箱身份校验证据不足",
                 "单商品只保存必须确认商品箱中能唯一匹配本次商品；系统不会打开编辑页或保存。",
             )
-        if not self.repo.product_has_completed_claim_provenance(dict(product)):
-            raise V1ExecutionError(
-                "E202",
-                "待认领商品任务链不完整",
-                "单商品只保存必须能追溯到已完成的待认领商品任务；请重新完成认领到商品箱后再启动只保存。",
-            )
-        snapshot_error = self.repo.single_save_claim_snapshot_error(
+        snapshot_error = self.repo.single_save_product_box_snapshot_error(
             dict(task),
             dict(product),
         )
@@ -1927,7 +1829,7 @@ class V1TaskRunner:
         task: Mapping[str, Any],
         job: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """Derive the mutation target only from the immutable Stage A proof snapshot."""
+        """Derive the mutation target only from the immutable product-box snapshot."""
 
         mode = str(task.get("mode") or "").strip()
         if mode != "single_save":
@@ -1940,102 +1842,28 @@ class V1TaskRunner:
         if isinstance(product_id, bool) or not isinstance(product_id, int) or product_id <= 0:
             raise V1ExecutionError("E202", "商品身份无效", "single_save job is not bound to one exact product")
         payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
-        proof = payload.get("draft_box_proof")
-        stage_a_facts = payload.get("stage_a_task_facts")
-        if not isinstance(proof, Mapping) or not isinstance(stage_a_facts, Mapping):
+        snapshot = payload.get("product_box_snapshot")
+        if not isinstance(snapshot, Mapping):
             raise V1ExecutionError(
                 "E202",
                 "商品箱证据缺失",
-                "single_save requires the immutable Stage A draft-box proof snapshot",
+                "single_save requires an immutable product-box snapshot",
             )
-        proof_check = verify_draft_box_proof(
-            proof,
-            stage_a_task_facts=stage_a_facts,
-            product_id=product_id,
-        )
-        if proof_check.get("ok") is not True:
+        snapshot_check = verify_product_box_snapshot(snapshot)
+        if snapshot_check.get("ok") is not True:
             raise V1ExecutionError(
                 "E202",
                 "商品箱证据无效",
-                str(proof_check.get("reason_code") or "DRAFT_BOX_PROOF_INVALID"),
+                str(snapshot_check.get("reason_code") or "PRODUCT_BOX_SNAPSHOT_INVALID"),
             )
-        proof_content = proof.get("proof_content")
-        observed_source = (
-            proof_content.get("observed_source_identity")
-            if isinstance(proof_content, Mapping)
-            else None
-        )
-        observed_store = (
-            proof_content.get("observed_store_identity")
-            if isinstance(proof_content, Mapping)
-            else None
-        )
-        if not isinstance(observed_source, Mapping) or not isinstance(observed_store, Mapping):
-            raise V1ExecutionError(
-                "E202",
-                "商品箱精确身份缺失",
-                "Stage A proof must contain exact source and structured store observations",
-            )
-        try:
-            source_identity = canonical_source_identity(
-                observed_source.get("primary_url"),
-                observed_source.get("urls") or (),
-            )
-        except TwoStageContractError as exc:
-            raise V1ExecutionError("E202", "商品来源身份无效", exc.reason_code) from exc
-        if dict(observed_source) != source_identity:
-            raise V1ExecutionError(
-                "E202",
-                "商品来源身份不规范",
-                "Stage A observed source identity is not canonical",
-            )
-        snapshot_source = payload.get("claimed_product_source_identity")
-        snapshot_urls = payload.get("claimed_product_source_urls")
-        if snapshot_source != source_identity or snapshot_urls != list(source_identity["urls"]):
-            raise V1ExecutionError(
-                "E202",
-                "商品来源快照不一致",
-                "single_save source snapshot has drifted from the immutable Stage A proof",
-            )
+        if snapshot.get("product_id") != product_id:
+            raise V1ExecutionError("E202", "商品箱身份不一致", "snapshot product does not match this job")
         _store_id, authoritative_store_name = self._authoritative_store(task)
         store_name = " ".join(authoritative_store_name.split())
-        observed_store_name = " ".join(str(observed_store.get("store_name") or "").split())
-        selected_store_names = observed_store.get("selected_store_names")
-        cell_evidence = observed_store.get("draft_box_cell_evidence")
-        if (
-            not store_name
-            or observed_store_name != store_name
-            or observed_store.get("selected") is not True
-            or selected_store_names != [store_name]
-            or not isinstance(cell_evidence, Mapping)
-            or cell_evidence.get("source") != "structured_store_cell"
-            or " ".join(str(cell_evidence.get("store_name") or "").split()) != store_name
-        ):
-            raise V1ExecutionError(
-                "E202",
-                "商品箱店铺身份不一致",
-                "single_save target is not bound to the exact structured store cell from Stage A",
-            )
-        store_fingerprint = hashlib.sha256(
-            json.dumps(
-                {"source": "structured_store_cell", "store_name": store_name},
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest().upper()
-        candidate = {
-            "schema_version": "dxm_draft_box_target.v1",
-            "store_fingerprint": store_fingerprint,
-            "stable_identity": {
-                "kind": "source_url",
-                "value": source_identity["primary_url"],
-                "fingerprint": str(source_identity["fingerprint"]).upper(),
-            },
-            "source_urls": list(source_identity["urls"]),
-        }
+        if " ".join(str(snapshot.get("store_name") or "").split()) != store_name:
+            raise V1ExecutionError("E202", "商品箱店铺身份不一致", "snapshot store does not match this task")
         try:
-            target = canonical_frozen_target_identity(candidate, store_name=store_name)
+            target = canonical_frozen_target_identity(snapshot.get("target_identity"), store_name=store_name)
         except MutationCommandContractError as exc:
             raise V1ExecutionError("E202", "商品箱精确身份无效", str(exc)) from exc
         if target is None:
@@ -2047,12 +1875,9 @@ class V1TaskRunner:
         task: dict[str, Any],
         job: dict[str, Any],
         state_name: StateName,
-        claim_mark: str,
         defaults: dict[str, Any],
     ) -> tuple[str, str, str, dict[str, Any]] | None:
         product_query = self._source_title(job.get("product_id"))
-        acquisition_query = self._acquisition_product_query(task, job) or None
-        acquisition_category = self._acquisition_category_name(task)
         target_source_urls = self._target_source_urls(task, job)
         store_name = self._store_name(task)
         specs: dict[StateName, tuple[str, str, str, dict[str, Any]]] = {
@@ -2062,59 +1887,17 @@ class V1TaskRunner:
                 "店小秘登录态检查失败",
                 {},
             ),
-            StateName.OPEN_DATA_ACQUISITION: (
-                "open_data_acquisition",
-                "E201",
-                "进入已有待认领列表失败",
-                {},
-            ),
-            StateName.CLAIM_TO_DRAFT_BOX: (
-                "claim_from_data_acquisition",
-                "E202",
-                "认领到商品箱失败",
-                {
-                    "claim_mark": claim_mark,
-                    "product_query": acquisition_query,
-                    "category_name": acquisition_category,
-                    "store_name": store_name,
-                    "target_source_urls": target_source_urls,
-                },
-            ),
-            StateName.VERIFY_DRAFT_BOX_CLAIM: (
-                "verify_draft_box_claim",
-                "E202",
-                "商品箱确认失败",
-                {
-                    "claim_mark": claim_mark,
-                    "product_query": acquisition_query,
-                    "category_name": acquisition_category,
-                    "store_name": store_name,
-                    "target_source_urls": target_source_urls,
-                },
-            ),
             StateName.OPEN_DRAFT_LIST: (
                 "open_draft_box",
                 "E201",
                 "进入商品箱失败",
                 {},
             ),
-            StateName.CLAIM_PRODUCT: (
-                "claim_product",
-                "E202",
-                "写入领取备注失败",
-                {
-                    "note_text": claim_mark,
-                    "product_query": product_query,
-                    "store_name": store_name,
-                    "target_source_urls": target_source_urls,
-                },
-            ),
             StateName.OPEN_EDIT_PAGE: (
                 "open_editor",
                 "E901",
                 "打开编辑页失败",
                 {
-                    "note_text": claim_mark,
                     "product_query": product_query,
                     "store_name": store_name,
                     "target_source_urls": target_source_urls,
@@ -2261,10 +2044,9 @@ class V1TaskRunner:
         task: dict[str, Any],
         job: dict[str, Any],
         state_name: StateName,
-        claim_mark: str,
         defaults: dict[str, Any],
     ) -> dict[str, Any] | None:
-        spec = self._workflow_action_worker_request(task, job, state_name, claim_mark, defaults)
+        spec = self._workflow_action_worker_request(task, job, state_name, defaults)
         if spec is None:
             return None
         action_name, error_code, error_title, params = spec
@@ -2326,13 +2108,12 @@ class V1TaskRunner:
         task: dict[str, Any],
         job: dict[str, Any],
         state_name: StateName,
-        claim_mark: str,
         defaults: dict[str, Any],
         command: BrowserAgentCommand | None = None,
     ) -> dict[str, Any] | None:
         if self.browser_agent_runtime is None:
             return None
-        spec = self._workflow_action_worker_request(task, job, state_name, claim_mark, defaults)
+        spec = self._workflow_action_worker_request(task, job, state_name, defaults)
         if spec is None:
             return None
         action_name, error_code, error_title, params = spec
@@ -2550,15 +2331,7 @@ class V1TaskRunner:
             and state_name == StateName.SAVE_ONLY
             and action_name == "save_only"
         )
-        expected_stage = (
-            "batch_draft_save"
-            if batch_draft_mutation
-            else {
-                (StateName.CLAIM_TO_DRAFT_BOX, "claim_from_data_acquisition"): "stage_a",
-                (StateName.SAVE_ONLY, "save_only"): "stage_b",
-            }.get((state_name, action_name))
-        )
-        if expected_stage is None:
+        if (state_name, action_name) != (StateName.SAVE_ONLY, "save_only"):
             return {}
         if not batch_draft_mutation and not self._requires_persistent_browser_agent():
             # Synthetic adapters used for contract and timeout tests do not
@@ -2624,11 +2397,12 @@ class V1TaskRunner:
                 "真实浏览器变更范围无效",
                 "mutation authorization stage facts have drifted; no mutation was dispatched.",
             )
-        context_check = verify_authorization_context(authorization_context)
-        facts_check = verify_exact_stage_task_facts(
-            stage_task_facts,
-            expected_stage=expected_stage,
-        )
+        if batch_draft_mutation:
+            context_check = verify_batch_authorization_context(authorization_context)
+            facts_check = verify_exact_batch_draft_save_task_facts(stage_task_facts)
+        else:
+            context_check = verify_save_authorization_context(authorization_context)
+            facts_check = verify_exact_save_task_facts(stage_task_facts)
         if context_check.get("ok") is not True or facts_check.get("ok") is not True:
             reason_code = (
                 context_check.get("reason_code")
@@ -2677,7 +2451,11 @@ class V1TaskRunner:
 
         try:
             target_digest = mutation_target_hash(action_name, params)
-            authorization_digest = authorization_context_fingerprint(authorization_context)
+            authorization_digest = (
+                batch_authorization_context_fingerprint(authorization_context)
+                if batch_draft_mutation
+                else save_authorization_context_fingerprint(authorization_context)
+            )
             lease_authority_digest = (
                 authorization_lease_authority_fingerprint(approval)
                 if batch_draft_mutation
@@ -2691,7 +2469,12 @@ class V1TaskRunner:
                 state=state_name.value,
                 action=action_name,
             )
-        except (MutationCommandContractError, TwoStageContractError, ValueError) as exc:
+        except (
+            MutationCommandContractError,
+            SaveOnlyContractError,
+            BatchDraftAuthorizationError,
+            ValueError,
+        ) as exc:
             reason_code = getattr(exc, "reason_code", "MUTATION_SCOPE_INVALID")
             raise V1ExecutionError(
                 "E999",
@@ -2991,7 +2774,7 @@ class V1TaskRunner:
                 if envelope.get("failure_code") == "UNKNOWN"
                 else error_code
             )
-            operator_detail = self._operator_claim_failure_detail(action_name)
+            operator_detail = self._workflow_failure_detail(action_name, result_dict)
             observations = envelope.get("evidence", {}).get("observations", {})
             save_failure = (
                 observations.get("save_result")
@@ -3026,8 +2809,11 @@ class V1TaskRunner:
             raise V1ExecutionError(
                 persisted_error_code,
                 error_title,
-                operator_detail
-                or contract_detail,
+                (
+                    f"{operator_detail}; {contract_detail}"
+                    if operator_detail and contract_detail not in operator_detail
+                    else operator_detail or contract_detail
+                ),
             )
 
         normalized_refs: list[dict[str, Any]] = []
@@ -3305,15 +3091,12 @@ class V1TaskRunner:
         task: dict[str, Any],
         job: dict[str, Any],
         state_name: StateName,
-        claim_mark: str,
         defaults: dict[str, Any],
     ) -> dict[str, Any] | None:
         if self.workflow_adapter is None:
             return None
 
         product_query = self._source_title(job.get("product_id"))
-        acquisition_query = self._acquisition_product_query(task, job) or None
-        acquisition_category = self._acquisition_category_name(task)
         target_source_urls = self._target_source_urls(task, job)
         store_name = self._store_name(task)
         mode = str(task.get("mode") or "").strip()
@@ -3330,44 +3113,7 @@ class V1TaskRunner:
             target_identity = None
         actions = {
             StateName.PRECHECK_SESSION: ("check_login_state", "E101", "店小秘登录态检查失败", lambda: self.workflow_adapter.check_login_state()),
-            StateName.OPEN_DATA_ACQUISITION: ("open_data_acquisition", "E201", "进入已有待认领列表失败", lambda: self.workflow_adapter.open_data_acquisition()),
-            StateName.CLAIM_TO_DRAFT_BOX: (
-                "claim_from_data_acquisition",
-                "E202",
-                "认领到商品箱失败",
-                lambda: self.workflow_adapter.claim_from_data_acquisition(
-                    claim_mark,
-                    product_query=acquisition_query,
-                    category_name=acquisition_category,
-                    store_name=store_name,
-                    target_source_urls=target_source_urls,
-                ),
-            ),
-            StateName.VERIFY_DRAFT_BOX_CLAIM: (
-                "verify_draft_box_claim",
-                "E202",
-                "商品箱确认失败",
-                lambda: self.workflow_adapter.verify_draft_box_claim(
-                    claim_mark,
-                    product_query=acquisition_query,
-                    category_name=acquisition_category,
-                    store_name=store_name,
-                    target_source_urls=target_source_urls,
-                ),
-            ),
             StateName.OPEN_DRAFT_LIST: ("open_draft_box", "E201", "进入商品箱失败", lambda: self.workflow_adapter.open_draft_box()),
-            StateName.CLAIM_PRODUCT: (
-                "claim_product",
-                "E202",
-                "写入领取备注失败",
-                lambda: self.workflow_adapter.claim_product(
-                    claim_mark,
-                    product_query=product_query,
-                    store_name=store_name,
-                    target_source_urls=target_source_urls,
-                    target_identity=target_identity,
-                ),
-            ),
             StateName.OPEN_EDIT_PAGE: (
                 "open_editor",
                 "E901",
@@ -3375,7 +3121,6 @@ class V1TaskRunner:
                 lambda: self.workflow_adapter.open_editor(
                     product_query=product_query,
                     store_name=store_name,
-                    note_text=claim_mark,
                     target_source_urls=target_source_urls,
                     target_identity=target_identity,
                 ),
@@ -3583,7 +3328,7 @@ class V1TaskRunner:
                 "reason_code": "MUTATION_OPERATION_INVALID",
             }
         mode = str(task.get("mode") or "")
-        if state_name not in {StateName.CLAIM_TO_DRAFT_BOX, StateName.SAVE_ONLY}:
+        if state_name != StateName.SAVE_ONLY:
             operation_result = operation()
             return {
                 "ok": True,
@@ -3619,19 +3364,12 @@ class V1TaskRunner:
         )
 
     def _workflow_exception_detail(self, action_name: str, exc: Exception) -> str:
-        operator_detail = self._operator_claim_failure_detail(action_name)
-        if operator_detail:
-            return operator_detail
         browser_detail = self._operator_browser_failure_detail(str(exc))
         if browser_detail:
             return browser_detail
         return f"{action_name}: {exc}"
 
     def _workflow_failure_detail(self, action_name: str, result: Mapping[str, Any]) -> str:
-        operator_detail = self._operator_claim_failure_detail(action_name)
-        if operator_detail:
-            return operator_detail
-
         evidence = result.get("evidence") if isinstance(result.get("evidence"), Mapping) else {}
         browser_detail = self._operator_browser_failure_detail(
             result.get("message"),
@@ -3644,8 +3382,9 @@ class V1TaskRunner:
         if browser_detail:
             return browser_detail
 
-        stage = result.get("stage") or "unknown_stage"
-        page_url = result.get("page_url") or "unknown_url"
+        page_identity = result.get("page_identity") if isinstance(result.get("page_identity"), Mapping) else {}
+        stage = result.get("stage") or result.get("attempted_state") or "unknown_stage"
+        page_url = result.get("page_url") or page_identity.get("url") or "unknown_url"
         parts = [f"{action_name} failed at {stage}: {page_url}"]
 
         for value in (result.get("message"), result.get("reason"), result.get("error")):
@@ -3705,25 +3444,11 @@ class V1TaskRunner:
             "请关闭残留的店小秘浏览器和旧后台进程，重新打开执行浏览器后再重试。"
         )
 
-    def _operator_claim_failure_detail(self, action_name: str) -> str | None:
-        if action_name == "claim_from_data_acquisition":
-            return (
-                "待认领入箱没有完成。请保持真实店小秘浏览器打开，"
-                "检查搜索关键词、商品类目、店铺和验证码后重试；系统没有进入编辑页，不会保存或发布。"
-            )
-        if action_name == "verify_draft_box_claim":
-            return (
-                "商品箱商品确认没有完成。请在真实店小秘商品箱确认商品是否已经进入商品箱后重试；"
-                "系统没有进入编辑页，不会保存或发布。"
-            )
-        return None
-
     async def _run_workflow_action_async(
         self,
         task: dict[str, Any],
         job: dict[str, Any],
         state_name: StateName,
-        claim_mark: str,
         defaults: dict[str, Any],
         *,
         prior_results: list[dict[str, Any]] | None = None,
@@ -3762,7 +3487,6 @@ class V1TaskRunner:
                 task,
                 job,
                 state_name,
-                claim_mark,
                 defaults,
             )
             if command_spec is None:
@@ -3819,7 +3543,6 @@ class V1TaskRunner:
                 task,
                 job,
                 state_name,
-                claim_mark,
                 defaults,
                 browser_agent_command,
             )
@@ -3831,7 +3554,6 @@ class V1TaskRunner:
                 task,
                 job,
                 state_name,
-                claim_mark,
                 defaults,
             )
             wait_timeout = self.workflow_action_timeout_seconds + 10
@@ -3842,7 +3564,6 @@ class V1TaskRunner:
                 task,
                 job,
                 state_name,
-                claim_mark,
                 defaults,
             )
             wait_timeout = self.workflow_action_timeout_seconds
@@ -4025,7 +3746,6 @@ class V1TaskRunner:
         task: dict[str, Any],
         job: dict[str, Any],
         mode: str,
-        claim_mark: str,
         filled_fields: list[str],
         empty_fields: list[str],
         evidence_paths: list[str],
@@ -4035,15 +3755,10 @@ class V1TaskRunner:
         agent_console_events: list[dict[str, Any]] | None = None,
         agent_action_events: list[dict[str, Any]] | None = None,
         live_browser_hud_events: list[dict[str, Any]] | None = None,
-        claimed_product: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         console_events = agent_console_events or []
         action_events = agent_action_events or []
         live_hud_events = live_browser_hud_events or []
-        summary_product_id = claimed_product.get("id") if claimed_product else job.get("product_id")
-        next_action = None
-        if mode == "claim_only" and claimed_product:
-            next_action = "进入“商品箱编辑保存”，选择该商品创建单商品只保存任务。"
         batch_execution_evidence: dict[str, Any] = {}
         if mode == "batch_draft_save":
             payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
@@ -4090,12 +3805,16 @@ class V1TaskRunner:
         return {
             "task_id": task["id"],
             "job_id": job["id"],
-            "product_id": summary_product_id,
+            "product_id": job.get("product_id"),
             "store_name": self._store_name(task),
             "source_title": self._source_title(job.get("product_id")),
             "category": self._summary_category(task, job, execution_defaults),
-            "claim_mark": claim_mark,
             "mode": mode,
+            "product_box_snapshot_fingerprint": (
+                (task.get("payload") or {}).get("product_box_snapshot_fingerprint")
+                if isinstance(task.get("payload"), Mapping)
+                else None
+            ),
             "status": "failed" if blocked_reason else "success",
             "blocked_reason": blocked_reason,
             "empty_fields": empty_fields,
@@ -4112,8 +3831,6 @@ class V1TaskRunner:
             "agent_action_events": action_events,
             "live_browser_hud_events": live_hud_events,
             "live_browser_hud": live_hud_events[-1] if live_hud_events else None,
-            "claimed_product": dict(claimed_product) if claimed_product else None,
-            "next_action": next_action,
             **batch_execution_evidence,
             # A failure can occur after a real mutation was dispatched.  Do not
             # turn missing terminal evidence into a fabricated non-publish fact.
@@ -4162,26 +3879,7 @@ class V1TaskRunner:
         self,
         mode: str,
         workflow_results: list[dict[str, Any]],
-        *,
-        claimed_product: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if mode == "claim_only":
-            result = {
-                "ok": True,
-                "mode": mode,
-                "message": "待认领入箱已完成，商品已进入商品箱",
-                "published": None,
-                "save_attempted": False,
-                "publish_attempted": False,
-                "next_action": "进入“商品箱编辑保存”，选择该商品创建单商品只保存任务。",
-            }
-            if claimed_product:
-                result.update({
-                    "claimed_product_id": claimed_product.get("id"),
-                    "claimed_product_title": claimed_product.get("title"),
-                    "claimed_product_status": claimed_product.get("status"),
-                })
-            return result
         if mode in {"probe", "dry_run"}:
             return {
                 "ok": True,
@@ -4211,10 +3909,17 @@ class V1TaskRunner:
 
     def _extract_save_result(self, workflow_result: dict[str, Any]) -> dict[str, Any] | None:
         save_result = workflow_result.get("save_result")
-        if save_result:
+        if isinstance(save_result, Mapping):
             return save_result
-        evidence = workflow_result.get("evidence") or {}
-        return evidence.get("save_result")
+        evidence = workflow_result.get("evidence")
+        if not isinstance(evidence, Mapping):
+            return None
+        nested = evidence.get("save_result")
+        if isinstance(nested, Mapping):
+            return dict(nested)
+        observations = evidence.get("observations")
+        nested = observations.get("save_result") if isinstance(observations, Mapping) else None
+        return dict(nested) if isinstance(nested, Mapping) else None
 
     def _store_name(self, task: dict[str, Any]) -> str:
         if str(task.get("mode") or "").strip() == "batch_draft_save":
@@ -4418,247 +4123,6 @@ class V1TaskRunner:
     def _normalize_template_type(self, value: Any) -> str:
         return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
-    def _acquisition_product_query(self, task: Mapping[str, Any], job: Mapping[str, Any]) -> str:
-        payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
-        for value in (payload.get("keyword"), payload.get("source_title"), payload.get("title")):
-            if str(value or "").strip():
-                return str(value).strip()
-        if job.get("product_id") is None:
-            return ""
-        return self._source_title(job.get("product_id"))
-
-    def _acquisition_category_name(self, task: Mapping[str, Any]) -> str | None:
-        payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
-        value = payload.get("category_name") or payload.get("category")
-        return str(value).strip() if str(value or "").strip() else None
-
-    def _record_claimed_product_from_acquisition(
-        self,
-        task: Mapping[str, Any],
-        job: Mapping[str, Any],
-        workflow_result: Mapping[str, Any],
-        claim_mark: str,
-    ) -> dict[str, Any]:
-        evidence = workflow_result.get("evidence") if isinstance(workflow_result.get("evidence"), Mapping) else {}
-        claimed = evidence.get("claimed_product") if isinstance(evidence.get("claimed_product"), Mapping) else None
-        if not claimed:
-            raise V1ExecutionError("E202", "待认领商品缺少真实商品证据", "draft-box verification did not return claimed_product evidence")
-        draft_box_match = (
-            evidence.get("draft_box_match")
-            if isinstance(evidence.get("draft_box_match"), Mapping)
-            else None
-        )
-        if not draft_box_match:
-            raise V1ExecutionError(
-                "E202",
-                "待认领商品缺少真实商品箱匹配证据",
-                "VERIFY_DRAFT_BOX_CLAIM did not return immutable draft_box_match evidence",
-            )
-        payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
-        title = (
-            claimed.get("title")
-            or workflow_result.get("product_query")
-            or payload.get("keyword")
-            or payload.get("category_name")
-            or "店小秘已有待认领商品"
-        )
-        category_name = claimed.get("category_name") or payload.get("category_name") or "未分类"
-        row_text = str(draft_box_match.get("row_text") or "").strip()
-        source_urls = [
-            str(value).strip()
-            for value in draft_box_match.get("source_urls") or ()
-            if isinstance(value, str) and value.strip()
-        ]
-        if not row_text or not source_urls:
-            raise V1ExecutionError(
-                "E202",
-                "待认领商品缺少商品箱身份校验证据",
-                "商品箱真实行没有返回行文本和来源链接。",
-            )
-        try:
-            target_identity = canonical_claim_target_identity(
-                payload.get("source_url"),
-                payload.get("source_urls") or (),
-                keyword=payload.get("keyword"),
-                category_name=payload.get("category_name"),
-            )
-            source_identity = canonical_source_identity(source_urls[0], source_urls)
-        except TwoStageContractError as exc:
-            raise V1ExecutionError(
-                "E202",
-                "商品箱来源证据无效",
-                f"{exc.reason_code}: draft-box source evidence is invalid",
-            ) from exc
-        claimed_source_url = str(claimed.get("source_url") or "").strip()
-        if claimed_source_url:
-            try:
-                claimed_source_identity = canonical_source_identity(claimed_source_url)
-            except TwoStageContractError as exc:
-                raise V1ExecutionError("E202", "商品箱来源证据无效", exc.reason_code) from exc
-            if claimed_source_identity["primary_url"] not in source_identity["urls"]:
-                raise V1ExecutionError(
-                    "E202",
-                    "商品箱来源证据互相矛盾",
-                    "claimed_product source URL is outside draft_box_match source URLs",
-                )
-        authoritative_store_id, expected_store_name = self._authoritative_store(task)
-        store_observation = (
-            draft_box_match.get("store_observation")
-            if isinstance(draft_box_match.get("store_observation"), Mapping)
-            else None
-        )
-        observed_store_name = str((store_observation or {}).get("observed_store_name") or "").strip()
-        selection_evidence = (store_observation or {}).get("selection_evidence")
-        store_cell_evidence = (store_observation or {}).get("draft_box_cell_evidence")
-        top_level_store_evidence = draft_box_match.get("store_evidence")
-        selected_store_names_value = (store_observation or {}).get("selected_store_names")
-        selected_store_names: list[str] = []
-        selected_store_keys: set[str] = set()
-        selected_store_names_valid = isinstance(selected_store_names_value, list)
-        if isinstance(selected_store_names_value, list):
-            for raw_name in selected_store_names_value:
-                if not isinstance(raw_name, str) or not raw_name.strip():
-                    selected_store_names_valid = False
-                    continue
-                selected_name = " ".join(raw_name.split())
-                if selected_name and selected_name not in selected_store_keys:
-                    selected_store_keys.add(selected_name)
-                    selected_store_names.append(selected_name)
-        if (
-            store_observation is None
-            or store_observation.get("selected") is not True
-            or not selected_store_names_valid
-            or selected_store_names != [expected_store_name]
-            or not isinstance(selection_evidence, Mapping)
-            or not selection_evidence
-            or not isinstance(store_cell_evidence, Mapping)
-            or not isinstance(top_level_store_evidence, Mapping)
-            or dict(top_level_store_evidence) != dict(store_cell_evidence)
-            or not expected_store_name
-            or observed_store_name != expected_store_name
-            or store_cell_evidence.get("source") != "structured_store_cell"
-            or " ".join(str(store_cell_evidence.get("store_name") or "").split()) != expected_store_name
-            or not _observed_text_contains_exact_boundary(
-                str(store_cell_evidence.get("cell_text") or ""),
-                expected_store_name,
-            )
-        ):
-            raise V1ExecutionError(
-                "E202",
-                "商品箱真实行没有匹配授权店铺",
-                "draft_box_match does not contain observed store evidence for the task store",
-            )
-        semantic_matched_by = str(draft_box_match.get("matched_by") or "").strip()
-        semantic_matched_value = " ".join(str(draft_box_match.get("matched_value") or "").split())
-        authorized_source = target_identity.get("source_identity")
-        if not isinstance(authorized_source, Mapping):
-            raise V1ExecutionError(
-                "E202",
-                "待认领任务缺少精确来源商品 URL",
-                "controlled claim verification never accepts keyword, title, category, or row-text identity fallbacks",
-            )
-        if semantic_matched_by != "source_url":
-            raise V1ExecutionError(
-                "E202",
-                "商品箱真实行没有按授权来源命中",
-                "URL-authorized claim requires source_url draft_box_match evidence",
-            )
-        if (
-            source_identity["primary_url"] != authorized_source["primary_url"]
-            or not set(source_identity["urls"]).issubset(set(authorized_source["urls"]))
-            or semantic_matched_value != authorized_source["primary_url"]
-        ):
-            raise V1ExecutionError(
-                "E202",
-                "商品箱真实行来源与授权来源不一致",
-                "observed draft-box source identity does not exactly match the Stage A source URL",
-            )
-        matched_by = ["source_url"]
-        match_evidence = {"source_url": authorized_source["primary_url"]}
-        claim_target = evidence.get("claim_target") if isinstance(evidence.get("claim_target"), Mapping) else {}
-        search_result = evidence.get("search_result") if isinstance(evidence.get("search_result"), Mapping) else {}
-        evidence_ref = evidence.get("evidence_ref")
-        if not isinstance(evidence_ref, Mapping) or set(evidence_ref) != {"path", "sha256", "size"}:
-            raise V1ExecutionError(
-                "E202",
-                "商品箱证据文件描述缺失",
-                "VERIFY_DRAFT_BOX_CLAIM must return exact path, sha256, and size evidence",
-            )
-        draft_box_observation = {
-            "schema": "dxm.draft_box.observation.v1",
-            "verification_state": StateName.VERIFY_DRAFT_BOX_CLAIM.value,
-            "action": "verify_draft_box_claim",
-            "draft_box_verified": True,
-            "page_url": workflow_result.get("page_url"),
-            "authorized_target_identity": target_identity,
-            "authorized_target_fingerprint": target_identity["fingerprint"],
-            "observed_source_identity": source_identity,
-            "observed_store_identity": {
-                "store_id": authoritative_store_id,
-                "store_name": observed_store_name,
-                "selected": True,
-                "selected_store_names": list(selected_store_names),
-                "selection_evidence": dict(selection_evidence),
-                "draft_box_cell_evidence": dict(store_cell_evidence),
-            },
-            "matched_by": matched_by,
-            "match_evidence": match_evidence,
-            "observed_product_identity": str(title),
-            "observed_row_identity": row_text,
-            "evidence_ref": dict(evidence_ref),
-        }
-        product_payload = {
-            "source": "dxm_data_acquisition",
-            "store_id": authoritative_store_id,
-            "store_name": expected_store_name,
-            "source_url": source_identity["primary_url"],
-            "source_urls": list(source_identity["urls"]),
-            "source_title": title,
-            "claim_mark": claim_mark,
-            "claim_task_id": task.get("id"),
-            "draft_box_verified": True,
-            "draft_box_url": workflow_result.get("page_url"),
-            "data_acquisition_row_text": claim_target.get("rowText") if isinstance(claim_target, Mapping) else None,
-            "data_acquisition_match": claim_target.get("matchedBy") if isinstance(claim_target, Mapping) else None,
-            "draft_box_row_text": row_text,
-            "draft_box_match": dict(draft_box_match),
-            "acquisition_search": dict(search_result) if search_result else None,
-            "template_id": payload.get("template_id"),
-        }
-        try:
-            result = self.repo.create_claimed_product_and_complete_acquisition(
-                int(task["id"]),
-                {
-                    "title": str(title),
-                    "source": "dxm_data_acquisition",
-                    "status": "claimed_to_draft",
-                    "category_name": str(category_name),
-                    "price": 0,
-                    "currency": "USD",
-                    "sku_count": 1,
-                    "image_count": 0,
-                    "payload": {key: value for key, value in product_payload.items() if value is not None},
-                },
-                draft_box_observation=draft_box_observation,
-            )
-        except TwoStageContractError as exc:
-            raise V1ExecutionError(
-                "E202",
-                "商品箱店铺证据合同无效",
-                f"{exc.reason_code}: draft-box proof was rejected",
-            ) from exc
-        if not result.applied and not result.idempotent:
-            if result.conflict_code == "CLAIM_TERMINAL_STATE_CONFLICT":
-                raise _ClaimTerminalTransitionRejected(result.conflict_code, result.reason)
-            raise V1ExecutionError(
-                result.conflict_code or "E202",
-                "认领状态转换被拒绝",
-                result.reason or "claim completion was rejected",
-            )
-        if result.product is None:
-            raise V1ExecutionError("E202", "商品箱认领结果未落库", "claim completion returned no claimed product")
-        return result.product
-
     def _source_title(self, product_id: int | None) -> str:
         if product_id is None:
             return "未指定商品"
@@ -4716,18 +4180,6 @@ class V1TaskRunner:
             if product.get("id") == product_id:
                 return product
         return None
-
-    def _claim_mark(self, task: dict[str, Any]) -> str:
-        base_mark = task.get("payload", {}).get("claim_mark", "AI认领")
-        return f"{base_mark}-{task['id']}"
-
-
-class _ClaimTerminalTransitionRejected(Exception):
-    def __init__(self, conflict_code: str | None, reason: str | None) -> None:
-        super().__init__(reason or conflict_code or "claim terminal transition rejected")
-        self.conflict_code = conflict_code
-        self.reason = reason
-
 
 class _JobTerminalTransitionRejected(Exception):
     def __init__(self, conflict_code: str | None, reason: str | None) -> None:

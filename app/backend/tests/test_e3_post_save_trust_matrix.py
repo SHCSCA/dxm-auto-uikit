@@ -263,7 +263,6 @@ def _prepare_dispatched_save(tmp_path, monkeypatch) -> _PostSaveHarness:
         private,
         first_job,
         StateName.SAVE_ONLY,
-        "E3_BATCH_DRAFT",
         defaults,
     )
     assert spec is not None
@@ -360,7 +359,6 @@ def _prepare_runtime_save(tmp_path, monkeypatch, adapter):
         private,
         first_job,
         StateName.SAVE_ONLY,
-        "E3_BATCH_DRAFT",
         defaults,
     )
     assert spec is not None

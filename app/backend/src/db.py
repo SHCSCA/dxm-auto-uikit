@@ -188,12 +188,9 @@ def init_db() -> None:
                 store_name TEXT NOT NULL,
                 source_title TEXT NOT NULL,
                 sku_prefix TEXT,
-                claim_mark TEXT NOT NULL,
+                ownership_tag TEXT NOT NULL,
                 lock_owner_run_id TEXT,
                 status TEXT NOT NULL DEFAULT 'active',
-                page_claim_mark TEXT,
-                page_claim_verified INTEGER NOT NULL DEFAULT 0,
-                page_claim_verified_at TEXT,
                 expires_at TEXT NOT NULL,
                 released_at TEXT,
                 created_at TEXT NOT NULL,
@@ -659,12 +656,11 @@ def init_db() -> None:
             "ownership_locks",
             {
                 "lock_owner_run_id": "TEXT",
-                "page_claim_mark": "TEXT",
-                "page_claim_verified": "INTEGER NOT NULL DEFAULT 0",
-                "page_claim_verified_at": "TEXT",
+                "ownership_tag": "TEXT",
                 "released_at": "TEXT",
             },
         )
+        migrate_legacy_ownership_tags(conn)
         _ensure_columns(
             conn,
             "reports",
@@ -709,6 +705,8 @@ def init_db() -> None:
         )
         migrate_reports_published_to_tristate(conn)
         migrate_canonical_receipts(conn)
+        migrate_legacy_product_box_rows(conn)
+        migrate_legacy_claim_tasks(conn)
         disable_legacy_generated_starter_templates(conn)
         disable_edit_batch_bundles_with_quarantined_sources(conn)
         disable_unexecutable_edit_batch_bundles(conn)
@@ -755,6 +753,201 @@ def migrate_canonical_receipts(conn: sqlite3.Connection) -> bool:
         )
         return True
     return False
+
+
+def migrate_legacy_ownership_tags(conn: sqlite3.Connection) -> bool:
+    """Rebuild the lock table once so removed marker columns cannot constrain new writes."""
+
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(ownership_locks)").fetchall()
+    }
+    legacy_columns = {
+        "claim_mark",
+        "page_claim_mark",
+        "page_claim_verified",
+        "page_claim_verified_at",
+    }
+    if not (columns & legacy_columns):
+        return False
+    rows = conn.execute("SELECT * FROM ownership_locks ORDER BY id ASC").fetchall()
+    conn.execute("DROP TABLE IF EXISTS ownership_locks_v2")
+    conn.execute(
+        """
+        CREATE TABLE ownership_locks_v2 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            lock_token TEXT NOT NULL UNIQUE,
+            ownership_fingerprint TEXT NOT NULL,
+            task_id INTEGER NOT NULL,
+            job_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            store_name TEXT NOT NULL,
+            source_title TEXT NOT NULL,
+            sku_prefix TEXT,
+            ownership_tag TEXT NOT NULL,
+            lock_owner_run_id TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            expires_at TEXT NOT NULL,
+            released_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    for row in rows:
+        ownership_tag = str(
+            row.get("ownership_tag")
+            or row.get("claim_mark")
+            or f"DXM-LOCK-LEGACY-{row['id']}"
+        ).strip()
+        conn.execute(
+            """
+            INSERT INTO ownership_locks_v2 (
+                id, lock_token, ownership_fingerprint, task_id, job_id,
+                product_id, store_name, source_title, sku_prefix,
+                ownership_tag, lock_owner_run_id, status, expires_at,
+                released_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["id"],
+                row["lock_token"],
+                row["ownership_fingerprint"],
+                row["task_id"],
+                row["job_id"],
+                row["product_id"],
+                row["store_name"],
+                row["source_title"],
+                row.get("sku_prefix"),
+                ownership_tag,
+                row.get("lock_owner_run_id"),
+                row["status"],
+                row["expires_at"],
+                row.get("released_at"),
+                row["created_at"],
+                row["updated_at"],
+            ),
+        )
+    conn.execute("DROP TABLE ownership_locks")
+    conn.execute("ALTER TABLE ownership_locks_v2 RENAME TO ownership_locks")
+    conn.execute(
+        """
+        CREATE INDEX idx_ownership_locks_active_fingerprint
+            ON ownership_locks (ownership_fingerprint, status, expires_at)
+        """
+    )
+    conn.execute(
+        "CREATE INDEX idx_ownership_locks_token ON ownership_locks (lock_token)"
+    )
+    return True
+
+
+def migrate_legacy_product_box_rows(conn: sqlite3.Connection) -> list[int]:
+    """Quarantine legacy acquisition rows; they must be recaptured from the product box."""
+
+    rows = conn.execute(
+        """
+        SELECT id, source, status, payload_json, updated_at
+          FROM products
+         WHERE source='dxm_data_acquisition' OR status='claimed_to_draft'
+         ORDER BY id ASC
+        """
+    ).fetchall()
+    migrated: list[int] = []
+    for row in rows:
+        legacy_payload = loads(row.get("payload_json"), {})
+        safe_store_id = legacy_payload.get("store_id") if isinstance(legacy_payload, dict) else None
+        safe_store_name = legacy_payload.get("store_name") if isinstance(legacy_payload, dict) else None
+        payload = {
+            "legacy_record_quarantined": True,
+            "product_box_recapture_required": True,
+        }
+        if isinstance(safe_store_id, int) and not isinstance(safe_store_id, bool) and safe_store_id > 0:
+            payload["store_id"] = safe_store_id
+        if isinstance(safe_store_name, str) and safe_store_name.strip():
+            payload["store_name"] = safe_store_name.strip()
+        product_id = int(row["id"])
+        conn.execute(
+            """
+            UPDATE products
+               SET source='removed_workflow_legacy', status='quarantined', payload_json=?
+             WHERE id=?
+            """,
+            (dumps(payload), product_id),
+        )
+        migrated.append(product_id)
+    return migrated
+
+
+def migrate_legacy_claim_tasks(conn: sqlite3.Connection) -> list[int]:
+    """Archive and hide tasks that belong to the removed acquisition workflow."""
+
+    quarantined_product_ids = {
+        int(row["id"])
+        for row in conn.execute(
+            "SELECT id FROM products WHERE source='removed_workflow_legacy'"
+        ).fetchall()
+    }
+    rows = conn.execute(
+        """
+        SELECT id, mode, payload_json
+          FROM tasks
+         WHERE mode IN ('claim_only', 'single_save')
+         ORDER BY id ASC
+        """
+    ).fetchall()
+    migrated: list[int] = []
+    for row in rows:
+        task_id = int(row["id"])
+        legacy_payload = loads(row.get("payload_json"), {})
+        payload_keys = set(legacy_payload) if isinstance(legacy_payload, dict) else set()
+        linked_product_ids = {
+            int(job["product_id"])
+            for job in conn.execute(
+                "SELECT product_id FROM jobs WHERE task_id=? AND product_id IS NOT NULL",
+                (task_id,),
+            ).fetchall()
+        }
+        has_removed_chain = bool(
+            payload_keys
+            & {
+                "claim_task_id",
+                "claim_job_id",
+                "claimed_product_id",
+                "stage_a_task_facts",
+                "draft_box_proof",
+            }
+        )
+        if (
+            row.get("mode") != "claim_only"
+            and not has_removed_chain
+            and not (linked_product_ids & quarantined_product_ids)
+        ):
+            continue
+        payload = {
+            "legacy_record_quarantined": True,
+            "removed_workflow": True,
+        }
+        conn.execute(
+            """
+            UPDATE tasks
+               SET mode='removed_workflow_legacy', status='archived', payload_json=?
+             WHERE id=?
+            """,
+            (dumps(payload), task_id),
+        )
+        conn.execute(
+            """
+            UPDATE jobs
+               SET status='cancelled',
+                   error_code='FEATURE_REMOVED',
+                   error_message='The legacy acquisition workflow has been removed.'
+             WHERE task_id=? AND status NOT IN ('completed', 'failed', 'cancelled')
+            """,
+            (task_id,),
+        )
+        migrated.append(task_id)
+    return migrated
 
 
 def migrate_reports_published_to_tristate(conn: sqlite3.Connection) -> bool:

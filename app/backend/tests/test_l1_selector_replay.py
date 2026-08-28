@@ -93,6 +93,25 @@ def test_l1_selector_replay_markdown_is_readable(tmp_path):
     markdown = Path(result["markdown_path"]).read_text(encoding="utf-8")
 
     assert "L1 Selector Replay 证据" in markdown
-    assert "draft_list_claimed_product" in markdown
+    assert "draft_list_product_box_item" in markdown
     assert "manifest_sha256" in markdown
     assert "failures：无" in markdown
+
+
+def test_l1_selector_replay_has_no_removed_claim_fixture_contract():
+    module = _load_replay_module()
+    manifest = module.DEFAULT_MANIFEST.read_text(encoding="utf-8")
+    source = Path(module.__file__).read_text(encoding="utf-8")
+    fixture_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in module.DEFAULT_FIXTURE_DIR.glob("*.html")
+    )
+
+    for removed_token in (
+        "draft_list_claimed_product",
+        "claimed_row_ownership",
+        "AI认领",
+    ):
+        assert removed_token not in manifest
+        assert removed_token not in source
+        assert removed_token not in fixture_text

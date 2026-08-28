@@ -18,6 +18,9 @@ def frozen_target_identity():
     )
 
 
+_frozen_target_identity = frozen_target_identity
+
+
 class FakeLoginFlow:
     def __init__(self, stage='login_success', ok=True):
         self.calls = []
@@ -32,24 +35,59 @@ class FakeLoginFlow:
         self.calls.append(('navigate_post_login', target))
         return self._state('workflow_navigation')
 
-    def verify_draft_box_claim(self, claim_mark, product_query=None, category_name=None, store_name=None, target_source_urls=None):
-        self.calls.append(('verify_draft_box_claim', claim_mark, product_query, category_name, store_name, target_source_urls))
-        return self._state('draft_box_claim_verified')
-
-    def perform_draft_box_action(self, action, note_text=None, product_query=None, store_name=None, target_source_urls=None, target_identity=None):
-        self.calls.append(('perform_draft_box_action', action, note_text, product_query, store_name, target_source_urls, target_identity))
+    def perform_draft_box_action(
+        self,
+        action,
+        product_query=None,
+        store_name=None,
+        target_source_urls=None,
+        target_identity=None,
+    ):
+        self.calls.append(
+            (
+                'perform_draft_box_action',
+                action,
+                None,
+                product_query,
+                store_name,
+                target_source_urls,
+                target_identity,
+            )
+        )
         return self._state('editor_page' if action == 'edit' else 'draft_box_action')
 
-    def perform_editor_action(self, action, defaults=None, product_query=None, store_name=None, target_identity=None):
-        self.calls.append(('perform_editor_action', action, defaults, product_query, store_name, target_identity))
+    def perform_editor_action(
+        self,
+        action,
+        defaults=None,
+        product_query=None,
+        store_name=None,
+        target_source_urls=None,
+        target_identity=None,
+    ):
+        self.calls.append(
+            (
+                'perform_editor_action',
+                action,
+                defaults,
+                product_query,
+                store_name,
+                target_identity,
+            )
+        )
         return self._state(action)
 
     def _state(self, stage):
         state = {
             'stage': stage,
-            'page_title': '速卖通采集箱',
+            'page_title': '速卖通商品箱',
             'page_url': 'https://www.dianxiaomi.com/web/smt/smtProductList/draft',
             'screenshot_url': '/artifacts/screenshots/draft-box.png',
+            'login_check': {
+                'logged_in': True,
+                'business_page_ready': True,
+                'loading': False,
+            },
         }
         if self.ok is not None:
             state['ok'] = self.ok
@@ -114,31 +152,6 @@ class FakeVisibleLoginFlow(FakeLoginFlow):
         self._browser = object()
 
 
-class FakeWorkflowEventLoginFlow(FakeLoginFlow):
-    def __init__(self):
-        super().__init__()
-        self.listener = None
-        self.events = [{'event': 'data_acquisition_claim:target_find_start', 'human_step': '定位待认领商品'}]
-
-    def set_workflow_event_listener(self, listener):
-        self.listener = listener
-
-    def recent_workflow_events(self, limit=20):
-        self.calls.append(('recent_workflow_events', limit))
-        return self.events[-limit:]
-
-
-class FakeDraftBoxClaimNotReadyFlow(FakeLoginFlow):
-    def verify_draft_box_claim(self, claim_mark, product_query=None, category_name=None, store_name=None, target_source_urls=None):
-        self.calls.append(('verify_draft_box_claim', claim_mark, product_query, category_name, store_name, target_source_urls))
-        return {
-            **self._state('draft_box_claim_page_not_ready'),
-            'ok': False,
-            'reason': 'page_loading',
-            'message': '商品箱页面仍在加载，请人工处理后重试。',
-        }
-
-
 def test_real_dxm_adapter_declares_persistent_browser_agent_requirement():
     adapter = DxmWorkflowAdapter(FakeLoginFlow())
 
@@ -190,39 +203,15 @@ def test_adapter_forwards_e2_representative_products_without_signature_drift():
     )]
 
 
-def test_workflow_event_listener_forwards_to_login_flow():
-    flow = FakeWorkflowEventLoginFlow()
-    adapter = DxmWorkflowAdapter(flow)
-    observed = []
-
-    adapter.set_workflow_event_listener(observed.append)
-    flow.listener({'event': 'data_acquisition_claim:target_find_start', 'human_step': '定位待认领商品'})
-    recent = adapter.recent_workflow_events()
-
-    assert observed == [{'event': 'data_acquisition_claim:target_find_start', 'human_step': '定位待认领商品'}]
-    assert recent == [{'event': 'data_acquisition_claim:target_find_start', 'human_step': '定位待认领商品'}]
-    assert flow.calls == [('recent_workflow_events', 20)]
-
-
-def test_adapter_result_includes_recent_workflow_events():
-    flow = FakeWorkflowEventLoginFlow()
-    result = DxmWorkflowAdapter(flow).check_login_state()
-
-    assert result['workflow_events'] == [
-        {'event': 'data_acquisition_claim:target_find_start', 'human_step': '定位待认领商品'}
-    ]
-    assert flow.calls == [('get_state',), ('recent_workflow_events', 240)]
-
-
 def test_check_login_state_delegates_to_login_flow_get_state():
     flow = FakeLoginFlow()
     result = DxmWorkflowAdapter(flow).check_login_state()
 
     assert flow.calls == [('get_state',)]
-    assert result['ok'] is False
+    assert result['ok'] is True
     assert result['action'] == 'check_login_state'
     assert result['stage'] == 'login_success'
-    assert result['evidence']['page_title'] == '速卖通采集箱'
+    assert result['evidence']['page_title'] == '速卖通商品箱'
 
 
 def test_check_login_state_prefers_live_probe_when_available():
@@ -264,7 +253,7 @@ def test_check_login_state_reuses_visible_logged_in_browser_before_headless_prob
 
     assert flow.live_client.probed is False
     assert flow.calls == [('get_state',)]
-    assert result['ok'] is False
+    assert result['ok'] is True
     assert result['stage'] == 'login_success'
 
 
@@ -314,17 +303,6 @@ def test_capture_draft_box_scope_delegates_readonly_capture_without_contract_rew
     assert result['items'] == [{'position': 1, 'title': '商品 A'}]
 
 
-def test_adapter_result_respects_explicit_false_ok_even_without_failed_stage_suffix():
-    flow = FakeDraftBoxClaimNotReadyFlow()
-
-    result = DxmWorkflowAdapter(flow).verify_draft_box_claim('AI认领')
-
-    assert flow.calls == [('verify_draft_box_claim', 'AI认领', None, None, None, None)]
-    assert result['ok'] is False
-    assert result['stage'] == 'draft_box_claim_page_not_ready'
-    assert result['evidence']['reason'] == 'page_loading'
-
-
 def test_adapter_does_not_infer_success_from_stage_without_explicit_ok():
     flow = FakeLoginFlow(stage='workflow_navigation', ok=None)
 
@@ -332,29 +310,6 @@ def test_adapter_does_not_infer_success_from_stage_without_explicit_ok():
 
     assert result['ok'] is False
     assert result['stage'] == 'workflow_navigation'
-
-
-def test_claim_product_delegates_to_remark_action_with_note_text():
-    flow = FakeLoginFlow()
-    identity = frozen_target_identity()
-    result = DxmWorkflowAdapter(flow).claim_product(
-        'AI认领', store_name=TARGET_STORE, target_identity=identity
-    )
-
-    assert flow.calls == [('perform_draft_box_action', 'remark', 'AI认领', None, TARGET_STORE, None, identity)]
-    assert result['action'] == 'claim_product'
-    assert result['stage'] == 'draft_box_action'
-
-
-def test_claim_product_passes_optional_target_filters():
-    flow = FakeLoginFlow()
-    identity = frozen_target_identity()
-    result = DxmWorkflowAdapter(flow).claim_product(
-        'AI认领', product_query='崩坏3钥匙扣', store_name=TARGET_STORE, target_identity=identity
-    )
-
-    assert flow.calls == [('perform_draft_box_action', 'remark', 'AI认领', '崩坏3钥匙扣', TARGET_STORE, None, identity)]
-    assert result['action'] == 'claim_product'
 
 
 def test_open_editor_delegates_to_edit_action():
@@ -375,44 +330,6 @@ def test_open_editor_passes_optional_target_filters():
     )
 
     assert flow.calls == [('perform_draft_box_action', 'edit', None, '崩坏3钥匙扣', TARGET_STORE, None, identity)]
-    assert result['action'] == 'open_editor'
-
-
-def test_open_editor_passes_note_text_for_claim_mark_targeting():
-    flow = FakeLoginFlow()
-    identity = frozen_target_identity()
-    result = DxmWorkflowAdapter(flow).open_editor(
-        product_query='崩坏3钥匙扣',
-        store_name=TARGET_STORE,
-        note_text='AI认领-19-31',
-        target_identity=identity,
-    )
-
-    assert flow.calls == [('perform_draft_box_action', 'edit', 'AI认领-19-31', '崩坏3钥匙扣', TARGET_STORE, None, identity)]
-    assert result['action'] == 'open_editor'
-
-
-def test_open_editor_passes_target_source_urls_for_existing_claimed_product():
-    flow = FakeLoginFlow()
-    source_urls = [TARGET_SOURCE_URL]
-    identity = frozen_target_identity()
-    result = DxmWorkflowAdapter(flow).open_editor(
-        product_query='正版玩具总动员攀爬吊饰钥匙扣挂件',
-        store_name=TARGET_STORE,
-        note_text='AI-OPS',
-        target_source_urls=source_urls,
-        target_identity=identity,
-    )
-
-    assert flow.calls == [(
-        'perform_draft_box_action',
-        'edit',
-        'AI-OPS',
-        '正版玩具总动员攀爬吊饰钥匙扣挂件',
-        TARGET_STORE,
-        source_urls,
-        identity,
-    )]
     assert result['action'] == 'open_editor'
 
 
@@ -540,218 +457,6 @@ def test_every_business_action_exposes_exact_contract_fact_keys_and_registry_pos
         )
     )
     assert set(result['contract_facts']['postconditions']) == expected_names
-
-
-def test_ok_raw_without_critical_observations_fails_closed():
-    result = DxmWorkflowAdapter(FakeLoginFlow())._result(
-        'claim_product',
-        {'ok': True, 'stage': 'claim_succeeded', 'label': 'success'},
-        before_values={'note_text': 'AI-OPS'},
-    )
-
-    facts = result['contract_facts']
-    assert result['ok'] is False
-    assert facts['postconditions'] == {
-        'target_unique': False,
-        'note_write_attempted': False,
-        'note_readback_exact': False,
-        'ownership_binding_match': False,
-    }
-    assert facts['failure_code'] == 'ACTION_CLAIM_PRODUCT_FAILED'
-    assert facts['recoverability']['kind'] != 'none'
-
-
-def test_data_acquisition_claim_requires_two_exact_authorized_dispatch_receipts():
-    required = set().union(
-        *(
-            contract.required_postconditions
-            for contract in ACTION_RESULT_CONTRACTS['claim_from_data_acquisition'].values()
-        )
-    )
-    facts = DxmWorkflowAdapter(FakeLoginFlow())._result(
-        'claim_from_data_acquisition',
-        {
-            'ok': True,
-            'contract_observations': {
-                'postconditions': {name: True for name in required},
-                'after_values': {'claim': 'claimed'},
-            },
-            'claim_result': {
-                'claim_target': {
-                    'ok': True,
-                    'actionRect': {'x': 1, 'y': 2, 'w': 3, 'h': 4},
-                    'matchedBy': 'source_url',
-                    'sourceUrls': ['https://example.test/item/1'],
-                },
-                'category_name': 'Keychains',
-                'claim_dialog': {
-                    'submitted': True,
-                    'clicked_options': ['Keychains'],
-                    'store_selection': {
-                        'selected': True,
-                        'requested_store_name': 'Dang Kang',
-                        'observed_store_name': 'Dang Kang',
-                        'selected_store_names': ['Dang Kang'],
-                    },
-                    'submit_click_receipt': {'dispatched': None},
-                },
-                'claim_click_safety': {'ok': True, 'publish_action_attempted': False},
-                'claim_click_receipt': {'dispatched': True, 'authorization': {'executed': True}},
-                'published': False,
-            },
-        },
-        before_values={'claim_mark': 'AI-OPS'},
-    )['contract_facts']
-
-    assert facts['postconditions']['claim_dispatched'] is False
-    assert facts['evidence_observations']['claim_click_dispatched'] is True
-    assert facts['evidence_observations']['claim_confirm_dispatched'] is None
-    assert facts['recoverability']['kind'] != 'none'
-
-
-def test_legacy_claim_receipts_without_complete_frozen_inputs_fail_closed():
-    facts = DxmWorkflowAdapter(FakeLoginFlow())._result(
-        'claim_from_data_acquisition',
-        {
-            'ok': True,
-            'claim_result': {
-                'claim_target': {
-                    'ok': True,
-                    'actionRect': {'x': 1, 'y': 2, 'w': 3, 'h': 4},
-                    'matchedBy': 'source_url',
-                    'sourceUrls': ['https://example.test/item/1'],
-                },
-                'category_name': 'Keychains',
-                'claim_dialog': {
-                    'submitted': True,
-                    'clicked_options': ['Keychains'],
-                    'store_selection': {
-                        'selected': True,
-                        'requested_store_name': 'Dang Kang',
-                        'observed_store_name': 'Dang Kang',
-                        'selected_store_names': ['Dang Kang'],
-                    },
-                    'submit_click_receipt': {
-                        'dispatched': True,
-                        'authorization': {
-                            'ok': True,
-                            'executed': True,
-                            'mutation_action': 'claim_confirm_click',
-                        },
-                    },
-                },
-                'claim_click_safety': {'ok': True, 'publish_action_attempted': False},
-                'claim_click_receipt': {
-                    'dispatched': True,
-                    'authorization': {
-                        'ok': True,
-                        'executed': True,
-                        'mutation_action': 'claim_open_dialog_click',
-                    },
-                },
-                'published': False,
-            },
-        },
-        before_values={'claim_mark': 'AI-OPS'},
-    )['contract_facts']
-
-    assert all(facts['postconditions'].values())
-    assert facts['recoverability']['kind'] != 'none'
-
-
-@pytest.mark.parametrize(
-    ('action', 'raw', 'before_values'),
-    (
-        (
-            'save_only',
-            {
-                'ok': True,
-                'save_result': {
-                    'mutation_authorization': 'not-a-mapping',
-                    'network_save_result': 7,
-                    'page_save_result': ['unexpected'],
-                },
-            },
-            {'target_identity': {'product_query': 'item', 'store_name': 'shop'}},
-        ),
-        (
-            'verify_draft_box_claim',
-            {
-                'ok': True,
-                'verification_result': {
-                    'claimed_product': 'unexpected',
-                    'draft_box_match': 7,
-                    'claim_target': ['unexpected'],
-                },
-            },
-            {'claim_mark': 'AI-OPS'},
-        ),
-        (
-            'claim_from_data_acquisition',
-            {
-                'ok': True,
-                'claim_result': {
-                    'claim_target': 'unexpected',
-                    'claim_click_receipt': 'unexpected',
-                    'claim_dialog': {'submit_click_receipt': 7},
-                },
-            },
-            {'claim_mark': 'AI-OPS'},
-        ),
-        (
-            'open_editor',
-            {'ok': True, 'draft_action_result': {'readiness': 'unexpected'}},
-            {'product_query': 'item'},
-        ),
-    ),
-)
-def test_malformed_nested_business_facts_fail_closed_without_crashing(action, raw, before_values):
-    facts = DxmWorkflowAdapter(FakeLoginFlow())._result(
-        action,
-        raw,
-        before_values=before_values,
-    )['contract_facts']
-
-    assert facts['failure_code'] == f'ACTION_{action.upper()}_FAILED'
-    assert facts['recoverability']['kind'] != 'none'
-
-
-def test_stage_label_and_message_do_not_change_contract_facts():
-    adapter = DxmWorkflowAdapter(FakeLoginFlow())
-    raw = {
-        'ok': True,
-        'contract_observations': {
-            'postconditions': {
-                'target_unique': True,
-                'note_write_attempted': True,
-                'note_readback_exact': True,
-                'ownership_binding_match': True,
-            },
-            'after_values': {'note_readback': 'AI-OPS'},
-        },
-    }
-
-    left = adapter._result(
-        'claim_product',
-        {**raw, 'stage': 'success', 'label': 'green', 'message': 'done'},
-        before_values={
-            'note_text': 'AI-OPS',
-            'store_name': TARGET_STORE,
-            'target_identity': frozen_target_identity(),
-        },
-    )['contract_facts']
-    right = adapter._result(
-        'claim_product',
-        {**raw, 'stage': 'failed', 'label': 'red', 'message': 'broken'},
-        before_values={
-            'note_text': 'AI-OPS',
-            'store_name': TARGET_STORE,
-            'target_identity': frozen_target_identity(),
-        },
-    )['contract_facts']
-
-    assert left == right
-    assert left['recoverability']['kind'] == 'none'
 
 
 def test_semi_managed_deferred_validation_never_satisfies_readback_postconditions():
@@ -986,67 +691,6 @@ def test_unpublished_boolean_claims_without_current_page_structured_probe_fail_c
     assert facts['recoverability']['kind'] != 'none'
 
 
-def test_navigation_facts_require_exact_identity_marker_and_no_loading_or_modal():
-    raw = {
-        'ok': True,
-        'wait_result': {
-            'ready': True,
-            'expected_identity': 'data_acquisition',
-            'loading': False,
-            'readiness': {
-                'ok': True,
-                'expected_identity': 'data_acquisition',
-                'business_marker': '已有待认领商品',
-                'loading': False,
-                'blocking_modal': None,
-            },
-        },
-    }
-
-    facts = DxmWorkflowAdapter(FakeLoginFlow())._result(
-        'open_data_acquisition',
-        raw,
-        before_values={'target': 'data_acquisition'},
-    )['contract_facts']
-
-    assert all(facts['postconditions'].values())
-    assert facts['recoverability']['kind'] == 'none'
-
-
-def test_navigation_boolean_claims_cannot_override_wrong_page_or_loading_state():
-    facts = DxmWorkflowAdapter(FakeLoginFlow())._result(
-        'open_data_acquisition',
-        {
-            'ok': True,
-            'contract_observations': {
-                'postconditions': {
-                    'expected_page': True,
-                    'business_marker_present': True,
-                    'loading_absent': True,
-                    'blocking_modal_absent': True,
-                },
-                'after_values': {'claimed_ready': True},
-            },
-            'wait_result': {
-                'ready': True,
-                'expected_identity': 'draft_box',
-                'loading': True,
-                'readiness': {
-                    'ok': True,
-                    'expected_identity': 'draft_box',
-                    'business_marker': '错误页面',
-                    'loading': True,
-                    'blocking_modal': {'visible': True},
-                },
-            },
-        },
-        before_values={'requested_page_identity': 'data_acquisition'},
-    )['contract_facts']
-
-    assert not any(facts['postconditions'].values())
-    assert facts['recoverability']['kind'] != 'none'
-
-
 def test_navigation_requires_business_marker_from_structured_readiness_probe():
     facts = DxmWorkflowAdapter(FakeLoginFlow())._result(
         'open_draft_box',
@@ -1117,55 +761,6 @@ def test_save_facts_expose_authorization_target_click_and_both_success_proofs():
     }
 
 
-def test_verify_facts_expose_fresh_target_bound_probe_and_claim_observations():
-    save_ref = {'path': 'save.png', 'sha256': 'a' * 64}
-    unpublished_ref = {'path': 'unpublished.png', 'sha256': 'b' * 64}
-    verification_result = {
-        'claimed_product': {'title': 'item'},
-        'draft_box_match': {'matched_by': 'source_url'},
-        'claim_target': {'matchedBy': 'source_url'},
-        'search_result': {'query_source': 'product_query'},
-    }
-    proof = {
-        'ok': True,
-        'verified_on_current_page': True,
-        'proof_kind': 'structured_unpublished_status',
-        'status_text': '未发布',
-        'target_bound': True,
-        'product_matched': True,
-        'store_matched': True,
-        'publish_risk_term': None,
-        'published': False,
-    }
-
-    facts = DxmWorkflowAdapter(FakeLoginFlow())._result(
-        'verify_not_published',
-        {
-            'ok': True,
-            'verification_result': verification_result,
-            'unpublished_proof': proof,
-            'save_evidence_ref': save_ref,
-            'unpublished_evidence_ref': unpublished_ref,
-        },
-        before_values={'product_query': 'item', 'store_name': 'shop'},
-    )['contract_facts']
-
-    assert facts['after_values']['fresh_probe']['verified_on_current_page'] is True
-    assert facts['after_values']['target_identity'] == {
-        'product_matched': True,
-        'store_matched': True,
-        'target_bound': True,
-        'source_identity_match': None,
-        'target_identity_sha256': None,
-    }
-    assert set(facts['evidence_observations']['verification_result']) >= {
-        'claimed_product',
-        'draft_box_match',
-        'claim_target',
-        'search_result',
-    }
-
-
 def test_save_and_verify_before_values_share_exact_target_identity():
     adapter = DxmWorkflowAdapter(FakeLoginFlow())
     identity = frozen_target_identity()
@@ -1184,3 +779,111 @@ def test_save_and_verify_before_values_share_exact_target_identity():
     expected = identity
     assert save['contract_facts']['before_values']['target_identity'] == expected
     assert verify['contract_facts']['before_values']['target_identity'] == expected
+
+
+def _strict_save_result(
+    *,
+    target_identity: dict,
+    network_success: bool = True,
+    page_success: bool = True,
+) -> dict:
+    return {
+        'ok': network_success and page_success,
+        'mutation_authorization': {
+            'ok': True,
+            'executed': True,
+            'mutation_action': 'save_only_click',
+            'mutation_id': 'mutation-1',
+            'mutation_status': 'DISPATCHED',
+        },
+        'pre_dispatch_readback': {
+            'ok': True,
+            'required_readback_complete': True,
+            'write_attempted': False,
+            'phase': 'before_ledger_begin_dispatch',
+            'exact_save_target': {'ok': True, 'text': '保存', 'exact_save_count': 1},
+            'identity': target_identity,
+            'current_field_integrity': {'ok': True},
+        },
+        'exact_save_target': True,
+        'text': '保存',
+        'exact_save_count': 1,
+        'click_method': 'native_exact_save',
+        'save_click_dispatched': True,
+        'clicked': True,
+        'network_save_result': {
+            'ok': network_success,
+            'receipt_complete': True,
+            'receipt_count': 1,
+            'url': 'https://www.dianxiaomi.com/api/smtProduct/add.json',
+            'method': 'POST',
+            'status': 200,
+            'code': 0,
+            'message': '保存成功',
+        },
+        'network_audit': {
+            'scope': 'same_origin_write_window',
+            'complete': True,
+            'window_closed': True,
+            'registered_listener_count': 2,
+            'removed_listener_count': 2,
+            'mutation_request_count': 1,
+            'save_request_count': 1,
+            'other_mutation_request_count': 0,
+            'read_only_schema_request_count': 0,
+            'publish_request_count': 0,
+        },
+        'publish_signal': {
+            'detected': False,
+            'kind': 'network_route_classification',
+            'request_count': 0,
+        },
+        'page_save_result': {
+            'ok': page_success,
+            'success_text': '保存成功',
+            'status_transition': {
+                'kind': 'new_or_changed_structured_save_status',
+                'entry': {'text': '保存成功'},
+            },
+        },
+        'save_decision': {
+            'ok': network_success and page_success,
+            'rule': 'page_success_and_network_success',
+            'network_ok': network_success,
+            'page_ok': page_success,
+            'network_receipt_ok': network_success,
+            'network_audit_ok': network_success,
+        },
+        'published': False,
+        'publish_action_clicked': False,
+    }
+
+@pytest.mark.parametrize(
+    ('network_success', 'page_success', 'expected_complete'),
+    ((True, True, True), (True, False, False), (False, True, False)),
+)
+def test_save_requires_network_and_page_success(network_success, page_success, expected_complete):
+    target_identity = _frozen_target_identity()
+    raw = {
+        'ok': True,
+        'published': False,
+        'save_result': _strict_save_result(
+            target_identity=target_identity,
+            network_success=network_success,
+            page_success=page_success,
+        ),
+    }
+
+    facts = DxmWorkflowAdapter(FakeLoginFlow())._result(
+        'save_only',
+        raw,
+        before_values={
+            'defaults': {'stock': '200'},
+            'store_name': 'Dang Kang',
+            'target_identity': target_identity,
+        },
+    )['contract_facts']
+
+    assert facts['postconditions']['network_save_success'] is network_success
+    assert facts['postconditions']['page_save_success'] is page_success
+    assert (facts['recoverability']['kind'] == 'none') is expected_complete

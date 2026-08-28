@@ -30,7 +30,7 @@ from src.execution.e3_authority_contract import (
     authorization_lease_authority_fingerprint,
 )
 from src.repository import Repository
-from src.state_machine.two_stage import (
+from src.state_machine.batch_draft_authorization import (
     build_authorization_context,
     build_batch_draft_save_task_facts,
 )

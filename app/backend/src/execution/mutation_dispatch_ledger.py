@@ -38,7 +38,7 @@ from src.execution.e3_authority_contract import (
     parse_strict_utc_timestamp,
     utc_now_iso,
 )
-from src.state_machine.two_stage import verify_authorization_context
+from src.state_machine.batch_draft_authorization import verify_authorization_context
 from src.utils import now_iso
 
 
@@ -325,6 +325,21 @@ class MutationDispatchLedger:
                 "save_authority_sha256",
                 "save_authority_json",
                 "save_success_recorded_at",
+                "dispatch_started_at",
+                "dispatched_at",
+                "unknown_at",
+            )
+        )
+
+    @staticmethod
+    def _reserved_row_is_pristine(row: dict[str, Any]) -> bool:
+        return all(
+            row.get(key) is None
+            for key in (
+                "browser_session_id",
+                "page_url",
+                "page_kind",
+                "outcome_json",
                 "dispatch_started_at",
                 "dispatched_at",
                 "unknown_at",

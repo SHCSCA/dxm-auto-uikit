@@ -4,8 +4,8 @@ import hashlib
 from collections.abc import Mapping
 from typing import Any
 
-from src.state_machine.two_stage import (
-    TwoStageContractError,
+from src.state_machine.save_authorization import (
+    SaveOnlyContractError,
     canonical_source_identity,
     is_supported_product_detail_url,
 )
@@ -427,7 +427,7 @@ class DxmDraftReader:
             return []
         try:
             identity = canonical_source_identity(candidates[0], candidates)
-        except TwoStageContractError:
+        except SaveOnlyContractError:
             return []
         source_urls = list(identity["urls"])
         if any(

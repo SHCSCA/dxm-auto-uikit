@@ -47,25 +47,17 @@ _RAW_CONTRACT_FACT_KEYS = frozenset(
 )
 _PROOF_EVIDENCE_KIND_BY_STATE = MappingProxyType(
     {
-        "VERIFY_DRAFT_BOX_CLAIM": "draft_box_screenshot",
         "SAVE_ONLY": "save_screenshot",
         "VERIFY_NOT_PUBLISHED": "unpublished_screenshot",
     }
 )
 _MUTATION_ACTION_SEQUENCE_BY_STATE = MappingProxyType(
     {
-        "CLAIM_TO_DRAFT_BOX": MappingProxyType(
-            {
-                "claim_open_dialog_click": 1,
-                "claim_confirm_click": 2,
-            }
-        ),
         "SAVE_ONLY": MappingProxyType({"save_only_click": 1}),
     }
 )
 _FROZEN_TARGET_REQUIRED_ACTIONS = frozenset(
     {
-        "claim_product",
         "open_editor",
         "verify_edit_ownership",
         "fill_editor_required_defaults",
@@ -784,7 +776,6 @@ class BrowserAgentRuntime:
                 or not expected_page_url
                 or expected_page not in {
                     "authenticated_dxm",
-                    "data_acquisition",
                     "draft_box",
                     "editor",
                     "semi_managed",
@@ -1119,7 +1110,6 @@ class BrowserAgentRuntime:
             )
         if command.expected_page not in {
             "authenticated_dxm",
-            "data_acquisition",
             "draft_box",
             "editor",
             "semi_managed",
@@ -2020,7 +2010,6 @@ class BrowserAgentRuntime:
         # Compatibility for small unit-test adapters. Real DXM adapters declare
         # ``requires_persistent_browser_agent`` and must expose a live identity.
         default_urls = {
-            "data_acquisition": "https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
             "draft_box": "https://www.dianxiaomi.com/web/smt/smtProductList/draft",
             "editor": "https://www.dianxiaomi.com/web/smt/edit?id=test",
             "semi_managed": "https://www.dianxiaomi.com/web/smt/editFromSmt",
@@ -2484,36 +2473,8 @@ def execute_browser_agent_action(adapter: Any, action: str, params: dict[str, An
         return updater(hud)
     if action == "check_login_state":
         return adapter.check_login_state()
-    if action == "open_data_acquisition":
-        return adapter.open_data_acquisition()
-    if action == "claim_from_data_acquisition":
-        claim_target = canonical_mutation_target_payload("claim_from_data_acquisition", params)
-        return adapter.claim_from_data_acquisition(
-            str(claim_target["claim_mark"]),
-            product_query=_optional_str(claim_target.get("product_query")),
-            category_name=_optional_str(claim_target.get("category_name")),
-            store_name=str(claim_target["store_name"]),
-            target_source_urls=list(claim_target["target_source_urls"]),
-        )
-    if action == "verify_draft_box_claim":
-        claim_target = canonical_mutation_target_payload("claim_from_data_acquisition", params)
-        return adapter.verify_draft_box_claim(
-            str(claim_target["claim_mark"]),
-            product_query=_optional_str(claim_target.get("product_query")),
-            category_name=_optional_str(claim_target.get("category_name")),
-            store_name=str(claim_target["store_name"]),
-            target_source_urls=list(claim_target["target_source_urls"]),
-        )
     if action == "open_draft_box":
         return adapter.open_draft_box()
-    if action == "claim_product":
-        return adapter.claim_product(
-            str(params.get("note_text") or ""),
-            product_query=_optional_str(params.get("product_query")),
-            store_name=_optional_str(params.get("store_name")),
-            target_source_urls=_optional_str_list(params.get("target_source_urls")),
-            **target_identity_kwargs,
-        )
     if action == "open_editor":
         return adapter.open_editor(
             product_query=_optional_str(params.get("product_query")),
@@ -2895,11 +2856,7 @@ def _safe_file_part(value: Any) -> str:
 def _defer_page_hud_until_after_action(command: BrowserAgentCommand) -> bool:
     return command.action in {
         "check_login_state",
-        "open_data_acquisition",
-        "claim_from_data_acquisition",
-        "verify_draft_box_claim",
         "open_draft_box",
-        "claim_product",
         "open_editor",
         "verify_edit_ownership",
         "fill_editor_required_defaults",
@@ -2964,7 +2921,4 @@ def _now() -> str:
 
 
 def _task_name_for_state(state: str) -> str:
-    normalized = str(state or "").upper()
-    if normalized in {"OPEN_DATA_ACQUISITION", "CLAIM_TO_DRAFT_BOX", "VERIFY_DRAFT_BOX_CLAIM"}:
-        return "待认领商品"
     return "商品箱编辑保存"

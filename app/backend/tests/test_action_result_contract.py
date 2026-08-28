@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from copy import deepcopy
 import hashlib
 import json
@@ -16,13 +18,10 @@ from src.execution.action_result_contract import (
 
 _PAGE_URLS = {
     "authenticated_dxm": "https://www.dianxiaomi.com/web/index.htm",
-    "data_acquisition": "https://www.dianxiaomi.com/web/productCrawl/dataAcquisition",
     "draft_box": "https://www.dianxiaomi.com/web/smt/smtProductList/draft",
     "editor": "https://www.dianxiaomi.com/web/smt/edit",
     "semi_managed": "https://www.dianxiaomi.com/web/smt/editFromSmt",
 }
-
-
 def _valid_navigation_result() -> dict:
     return {
         "schema_version": "dxm.action-result.v1",
@@ -244,6 +243,7 @@ def _valid_save_result() -> dict:
     return value
 
 
+
 def _valid_unpublished_result() -> dict:
     value = _valid_save_result()
     target_identity = deepcopy(value["before_values"]["target_identity"])
@@ -318,6 +318,7 @@ def _valid_unpublished_result() -> dict:
         }
     )
     return value
+
 
 
 def _path_a_execution_payload() -> dict:
@@ -539,7 +540,6 @@ def _valid_registered_result(action: str, state: str) -> dict:
                 "refs": [
                     _immutable_ref(
                         {
-                            "VERIFY_DRAFT_BOX_CLAIM": "draft_box_screenshot",
                             "SAVE_ONLY": "save_screenshot",
                             "VERIFY_NOT_PUBLISHED": "unpublished_screenshot",
                         }.get(state, "screenshot")
@@ -572,14 +572,10 @@ def test_valid_navigation_result_returns_an_isolated_canonical_dict():
     assert result["before_values"] is not value["before_values"]
 
 
-def test_registry_covers_precheck_and_all_sixteen_browser_actions():
+def test_registry_covers_precheck_and_all_supported_browser_actions():
     expected = {
         "check_login_state": {"PRECHECK_SESSION": "authenticated_dxm"},
-        "open_data_acquisition": {"OPEN_DATA_ACQUISITION": "data_acquisition"},
-        "claim_from_data_acquisition": {"CLAIM_TO_DRAFT_BOX": "data_acquisition"},
-        "verify_draft_box_claim": {"VERIFY_DRAFT_BOX_CLAIM": "draft_box"},
         "open_draft_box": {"OPEN_DRAFT_LIST": "draft_box"},
-        "claim_product": {"CLAIM_PRODUCT": "draft_box"},
         "open_editor": {"OPEN_EDIT_PAGE": "editor"},
         "verify_edit_ownership": {"VERIFY_EDIT_OWNERSHIP": "editor"},
         "fill_editor_required_defaults": {"FILL_BASE_INFO": "editor"},
@@ -792,8 +788,8 @@ def test_stage_and_label_cannot_be_used_as_success_facts():
 @pytest.mark.parametrize(
     ("expected_state", "expected_action", "message"),
     [
-        ("CLAIM_PRODUCT", "open_draft_box", "attempted_state does not match"),
-        ("OPEN_DRAFT_LIST", "claim_product", "action does not match"),
+        ("OPEN_EDIT_PAGE", "open_draft_box", "attempted_state does not match"),
+        ("OPEN_DRAFT_LIST", "open_editor", "action does not match"),
     ],
 )
 def test_command_state_and_action_must_match_the_producer_envelope(
@@ -811,7 +807,7 @@ def test_command_state_and_action_must_match_the_producer_envelope(
 
 def test_unregistered_state_action_pair_is_rejected():
     value = _valid_navigation_result()
-    value["attempted_state"] = "CLAIM_PRODUCT"
+    value["attempted_state"] = "REMOVED_STATE"
 
     with pytest.raises(ActionResultContractError, match="unsupported state/action pair"):
         validate_action_result_envelope(value)
@@ -935,16 +931,6 @@ def test_failures_require_a_stable_code_and_non_empty_recoverability(
         validate_action_result_envelope(value)
 
 
-def test_draft_box_proof_state_requires_an_immutable_reference():
-    value = _valid_registered_result(
-        "verify_draft_box_claim", "VERIFY_DRAFT_BOX_CLAIM"
-    )
-    value["evidence"]["refs"] = []
-
-    with pytest.raises(ActionResultContractError, match="immutable evidence"):
-        validate_action_result_envelope(value)
-
-
 @pytest.mark.parametrize(
     ("field", "invalid_value", "message"),
     [
@@ -1039,8 +1025,8 @@ def test_runtime_and_session_identity_can_be_bound_to_authoritative_values(
         validate_action_result_envelope(value, **kwargs)
 
 
-@pytest.mark.parametrize("state,action", [("CLAIM_TO_DRAFT_BOX", "claim_from_data_acquisition"), ("CLAIM_PRODUCT", "claim_product"), ("SAVE_ONLY", "save_only")])
-def test_unknown_mutation_failure_cannot_claim_automatic_retry(state, action):
+@pytest.mark.parametrize("state,action", [("SAVE_ONLY", "save_only")])
+def test_unknown_mutation_failure_cannot_allow_automatic_retry(state, action):
     value = _valid_registered_result(action, state)
     value.update(
         {

@@ -8,11 +8,12 @@
     "start": "electron .",
     "build:frontend": "npm --prefix ../frontend run build",
     "build:metadata": "node scripts/generate-build-manifest.cjs",
+    "prepare:python-runtime": "node scripts/prepare-python-runtime.cjs",
     "patch:portable-template": "node scripts/patch-electron-builder-portable.cjs",
     "test": "node --test test/*.test.cjs",
-    "build": "npm run build:metadata && npm run build:frontend && electron-builder --dir --config electron-builder.yml",
-    "build:portable": "npm run build:metadata && npm run patch:portable-template && npm run build:frontend && electron-builder --win portable --config electron-builder.yml",
-    "build:installer": "npm run build:metadata && npm run patch:portable-template && npm run build:frontend && electron-builder --config electron-builder.yml"
+    "build": "npm run build:metadata && npm run prepare:python-runtime && npm run build:frontend && electron-builder --dir --config electron-builder.yml",
+    "build:portable": "npm run build:metadata && npm run prepare:python-runtime && npm run patch:portable-template && npm run build:frontend && electron-builder --win portable --config electron-builder.yml",
+    "build:installer": "npm run build:metadata && npm run prepare:python-runtime && npm run patch:portable-template && npm run build:frontend && electron-builder --config electron-builder.yml"
   },
   "devDependencies": {
     "electron": "^33.2.1",

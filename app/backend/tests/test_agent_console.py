@@ -387,7 +387,8 @@ def test_agent_console_hud_extends_old_payload_with_chinese_defaults(tmp_path, m
     hud = status["hud"]
     assert hud["title"] == "正在只保存"
     assert hud["state"] == "SAVE_ONLY"
-    assert hud["phase"] == "第二段：商品箱编辑保存"
+    assert hud["phase"] == "商品箱编辑保存"
+    assert "第二段" not in hud["phase"]
     assert hud["severity"] == "running"
     assert hud["line1"] == "只点击保存，不发布"
     assert hud["human_title"] == "正在只保存"

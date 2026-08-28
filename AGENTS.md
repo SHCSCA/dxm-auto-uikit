@@ -29,7 +29,7 @@ Gold 指令位于 `docs/product/CODEX-GOLD-工作指令-MVP批量只保存.md`�
 
 - 产品：真实可见浏览器中的店小秘草稿箱批量只保存工作台。
 - 当前产品主链：同源登录/Reader → draft ≥3 → 动态目标叶子 → 完整方案 + 只读模板 → 五项 ALWAYS_ON snapshot → 普通编辑/视频/批发/翻译 → 主保存意图 Modal → 点击“编辑半托管信息”触发店小秘原生门 → 按真实事件闭合 SAVE1 → `editFromSmt` → SAVE2 → 两次三铁证。
-- `claim_only` / `single_save` 是历史兼容路径，不是 MVP 前置，也不能提供批量授权。
+- `claim_only` 业务模式、认领页面、API 与运行时动作已从当前产品删除；`single_save` 只保留为历史兼容/金丝雀路径。两者都不是 MVP 前置，也不能提供批量授权。
 - 视频、翻译、批发、半托管和 rollback preparation 是每件商品无条件执行的产品必需能力；当前未接生产意味着 `BLOCKED`，不意味着可选。
 - Path B 是完整成功路径。中间“继续发布”仅允许以 `SEMI_MANAGED_CONTINUE_TRANSITION` 的精确上下文自动化；最终发布、立即发布、保存并发布和移入待发布永久禁止。
 - 半托管资格不做本地/接口预检；`verifyPopChoiceShop` 只能作为点击“编辑半托管信息”后店小秘自身请求的被动证据。提示 Modal 不能证明 SAVE1 已完成；SAVE1 与原生门先后以 network/page/ledger 为准。

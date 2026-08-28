@@ -16,7 +16,6 @@ _CONTRACT_SOURCE_KEYS = (
     'wait_result',
     'navigation_result',
     'draft_action_result',
-    'claim_result',
     'verification_result',
     'editor_action_result',
     'fill_result',
@@ -25,7 +24,6 @@ _CONTRACT_SOURCE_KEYS = (
 )
 _FROZEN_TARGET_REQUIRED_ACTIONS = frozenset(
     {
-        'claim_product',
         'open_editor',
         'verify_edit_ownership',
         'fill_editor_required_defaults',
@@ -297,100 +295,10 @@ class DxmWorkflowAdapter:
             product_ids=product_ids,
         )
 
-    def open_data_acquisition(self) -> dict[str, Any]:
-        return self._result(
-            'open_data_acquisition',
-            self.login_flow.navigate_post_login('data_acquisition'),
-            before_values={'requested_page_identity': 'data_acquisition'},
-        )
-
-    def claim_from_data_acquisition(
-        self,
-        claim_mark: str,
-        product_query: str | None = None,
-        category_name: str | None = None,
-        store_name: str | None = None,
-        target_source_urls: list[str] | None = None,
-    ) -> dict[str, Any]:
-        return self._result(
-            'claim_from_data_acquisition',
-            self.login_flow.claim_from_data_acquisition(
-                claim_mark=claim_mark,
-                product_query=product_query,
-                category_name=category_name,
-                store_name=store_name,
-                target_source_urls=target_source_urls,
-            ),
-            before_values={
-                'claim_mark': claim_mark,
-                'product_query': product_query,
-                'category_name': category_name,
-                'store_name': store_name,
-                'target_source_urls': list(target_source_urls or []),
-            },
-        )
-
-    def verify_draft_box_claim(
-        self,
-        claim_mark: str,
-        product_query: str | None = None,
-        category_name: str | None = None,
-        store_name: str | None = None,
-        target_source_urls: list[str] | None = None,
-    ) -> dict[str, Any]:
-        return self._result(
-            'verify_draft_box_claim',
-            self.login_flow.verify_draft_box_claim(
-                claim_mark=claim_mark,
-                product_query=product_query,
-                category_name=category_name,
-                store_name=store_name,
-                target_source_urls=target_source_urls,
-            ),
-            before_values={
-                'claim_mark': claim_mark,
-                'product_query': product_query,
-                'category_name': category_name,
-                'store_name': store_name,
-                'target_source_urls': list(target_source_urls or []),
-            },
-        )
-
-    def claim_product(
-        self,
-        note_text: str,
-        product_query: str | None = None,
-        store_name: str | None = None,
-        target_source_urls: list[str] | None = None,
-        target_identity: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        target_identity = self._require_frozen_target_identity(
-            'claim_product', target_identity, store_name
-        )
-        return self._result(
-            'claim_product',
-            self.login_flow.perform_draft_box_action(
-                'remark',
-                note_text,
-                product_query=product_query,
-                store_name=store_name,
-                target_source_urls=target_source_urls,
-                target_identity=target_identity,
-            ),
-            before_values={
-                'note_text': note_text,
-                'product_query': product_query,
-                'store_name': store_name,
-                'target_source_urls': list(target_source_urls or []),
-                'target_identity': dict(target_identity),
-            },
-        )
-
     def open_editor(
         self,
         product_query: str | None = None,
         store_name: str | None = None,
-        note_text: str | None = None,
         target_source_urls: list[str] | None = None,
         target_identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -401,14 +309,12 @@ class DxmWorkflowAdapter:
             'open_editor',
             self.login_flow.perform_draft_box_action(
                 'edit',
-                note_text,
                 product_query=product_query,
                 store_name=store_name,
                 target_source_urls=target_source_urls,
                 target_identity=target_identity,
             ),
             before_values={
-                'note_text': note_text,
                 'product_query': product_query,
                 'store_name': store_name,
                 'target_source_urls': list(target_source_urls or []),
@@ -993,15 +899,6 @@ class DxmWorkflowAdapter:
     def _facts_inputs_complete(cls, action: str, before_values: Mapping[str, Any]) -> bool:
         if not cls._has_concrete_value(before_values):
             return False
-        if action in {'claim_from_data_acquisition', 'verify_draft_box_claim'}:
-            source_urls = before_values.get('target_source_urls')
-            return bool(
-                str(before_values.get('claim_mark') or '').strip()
-                and str(before_values.get('store_name') or '').strip()
-                and isinstance(source_urls, list)
-                and source_urls
-                and all(isinstance(value, str) and value.strip() for value in source_urls)
-            )
         if action not in _FROZEN_TARGET_REQUIRED_ACTIONS:
             return True
         target = before_values.get('target_identity')
@@ -1025,7 +922,7 @@ class DxmWorkflowAdapter:
         if action == 'check_login_state':
             probe = sources.get('login_check') or sources.get('live_probe') or {}
             return {'session_probe': dict(probe)} if probe else {}
-        if action in {'open_data_acquisition', 'open_draft_box'}:
+        if action == 'open_draft_box':
             wait = sources.get('wait_result') or {}
             if not wait and isinstance((sources.get('navigation_result') or {}).get('wait_result'), Mapping):
                 wait = dict((sources.get('navigation_result') or {})['wait_result'])
@@ -1076,40 +973,6 @@ class DxmWorkflowAdapter:
                 'identity_readback': _mapping_copy(proof.get('identity_readback')),
                 'published': proof.get('published'),
             }
-        if action == 'verify_draft_box_claim':
-            verification = sources.get('verification_result') or {}
-            return {
-                'claimed_product': _mapping_copy(verification.get('claimed_product')),
-                'draft_box_match': _mapping_copy(verification.get('draft_box_match')),
-                'claim_target': _mapping_copy(verification.get('claim_target')),
-                'search_result': _mapping_copy(verification.get('search_result')),
-            }
-        if action == 'claim_from_data_acquisition':
-            claim = sources.get('claim_result') or {}
-            dialog = claim.get('claim_dialog') if isinstance(claim.get('claim_dialog'), Mapping) else {}
-            click_receipt = claim.get('claim_click_receipt') if isinstance(claim.get('claim_click_receipt'), Mapping) else {}
-            confirm_receipt = dialog.get('submit_click_receipt') if isinstance(dialog.get('submit_click_receipt'), Mapping) else {}
-            return {
-                'claim_target': _mapping_copy(claim.get('claim_target')),
-                'claim_dialog': dict(dialog),
-                'claim_click_dispatched': click_receipt.get('dispatched'),
-                'claim_confirm_dispatched': confirm_receipt.get('dispatched'),
-                'published': claim.get('published'),
-            }
-        if action == 'claim_product':
-            raw = sources.get('draft_action_result') or {}
-            return {
-                'target_selection': {
-                    'target_unique': raw.get('target_unique'),
-                    'ownership_binding_match': raw.get('ownership_binding_match'),
-                },
-                'note_write_attempted': raw.get('note_write_attempted'),
-                'note_readback': {
-                    'verified': raw.get('note_verified'),
-                    'note_text': raw.get('note_text'),
-                    'target_row_text': raw.get('target_row_text'),
-                },
-            }
         if action == 'open_editor':
             raw = sources.get('draft_action_result') or {}
             return {
@@ -1152,11 +1015,7 @@ class DxmWorkflowAdapter:
             }
         preferred = {
             'check_login_state': ('login_check', 'live_probe'),
-            'open_data_acquisition': ('wait_result', 'navigation_result'),
             'open_draft_box': ('wait_result', 'navigation_result'),
-            'claim_from_data_acquisition': ('claim_result',),
-            'verify_draft_box_claim': ('verification_result',),
-            'claim_product': ('draft_action_result',),
             'open_editor': ('draft_action_result',),
             'verify_edit_ownership': ('fill_result', 'editor_action_result'),
             'fill_editor_required_defaults': ('fill_result', 'editor_action_result'),
@@ -1202,17 +1061,6 @@ class DxmWorkflowAdapter:
                 'publish_signal': _mapping_copy(save.get('publish_signal')),
                 'page_save_result': _mapping_copy(save.get('page_save_result')),
             })
-        elif action == 'claim_from_data_acquisition':
-            claim = sources.get('claim_result') or {}
-            dialog = claim.get('claim_dialog') if isinstance(claim.get('claim_dialog'), Mapping) else {}
-            claim_click_receipt = _mapping_copy(claim.get('claim_click_receipt'))
-            confirm_click_receipt = _mapping_copy(dialog.get('submit_click_receipt'))
-            observations.update({
-                'claim_click_receipt': claim_click_receipt,
-                'claim_confirm_click_receipt': confirm_click_receipt,
-                'claim_click_dispatched': claim_click_receipt.get('dispatched'),
-                'claim_confirm_dispatched': confirm_click_receipt.get('dispatched'),
-            })
         elif action == 'verify_not_published':
             proof = sources.get('unpublished_proof') or {}
             observations.update({
@@ -1226,14 +1074,6 @@ class DxmWorkflowAdapter:
                 },
                 'identity_readback': _mapping_copy(proof.get('identity_readback')),
             })
-        elif action == 'verify_draft_box_claim':
-            verification = sources.get('verification_result') or {}
-            observations.update({
-                'claimed_product': _mapping_copy(verification.get('claimed_product')),
-                'draft_box_match': _mapping_copy(verification.get('draft_box_match')),
-                'claim_target': _mapping_copy(verification.get('claim_target')),
-                'search_result': _mapping_copy(verification.get('search_result')),
-            })
 
     def _derive_action_postconditions(
         self,
@@ -1244,15 +1084,8 @@ class DxmWorkflowAdapter:
     ) -> None:
         if action == 'check_login_state':
             self._derive_login_postconditions(sources, postconditions)
-        elif action in {'open_data_acquisition', 'open_draft_box'}:
-            expected = 'data_acquisition' if action == 'open_data_acquisition' else 'draft_box'
-            self._derive_navigation_postconditions(sources, postconditions, expected)
-        elif action == 'claim_from_data_acquisition':
-            self._derive_acquisition_claim_postconditions(evidence, sources, postconditions)
-        elif action == 'verify_draft_box_claim':
-            self._derive_draft_verification_postconditions(evidence, sources, postconditions)
-        elif action == 'claim_product':
-            self._derive_claim_product_postconditions(evidence, sources, postconditions)
+        elif action == 'open_draft_box':
+            self._derive_navigation_postconditions(sources, postconditions, 'draft_box')
         elif action == 'open_editor':
             self._derive_open_editor_postconditions(evidence, sources, postconditions)
         elif action == 'verify_edit_ownership':
@@ -1340,111 +1173,6 @@ class DxmWorkflowAdapter:
             and 'blocking_modal' in readiness
             and readiness.get('blocking_modal') in (None, False, '')
         )
-
-    @staticmethod
-    def _derive_acquisition_claim_postconditions(
-        evidence: Mapping[str, Any],
-        sources: Mapping[str, dict[str, Any]],
-        postconditions: dict[str, bool],
-    ) -> None:
-        raw = sources.get('claim_result') or evidence
-        target = raw.get('claim_target') if isinstance(raw.get('claim_target'), Mapping) else {}
-        dialog = raw.get('claim_dialog') if isinstance(raw.get('claim_dialog'), Mapping) else {}
-        store_selection = dialog.get('store_selection') if isinstance(dialog.get('store_selection'), Mapping) else {}
-        safety = raw.get('claim_click_safety') if isinstance(raw.get('claim_click_safety'), Mapping) else {}
-        claim_click_receipt = raw.get('claim_click_receipt') if isinstance(raw.get('claim_click_receipt'), Mapping) else {}
-        claim_authorization = (
-            claim_click_receipt.get('authorization')
-            if isinstance(claim_click_receipt.get('authorization'), Mapping)
-            else {}
-        )
-        confirm_click_receipt = (
-            dialog.get('submit_click_receipt')
-            if isinstance(dialog.get('submit_click_receipt'), Mapping)
-            else {}
-        )
-        confirm_authorization = (
-            confirm_click_receipt.get('authorization')
-            if isinstance(confirm_click_receipt.get('authorization'), Mapping)
-            else {}
-        )
-        postconditions['target_unique'] = bool(
-            target.get('ok') is True
-            and isinstance(target.get('actionRect'), Mapping)
-            and str(target.get('matchedBy') or '').strip()
-        )
-        postconditions['source_identity_match'] = bool(
-            target.get('matchedBy') == 'source_url'
-            and target.get('sourceUrls')
-        )
-        requested_store = ' '.join(str(store_selection.get('requested_store_name') or '').split()).casefold()
-        observed_store = ' '.join(str(store_selection.get('observed_store_name') or '').split()).casefold()
-        selected_names = [
-            ' '.join(str(value or '').split()).casefold()
-            for value in store_selection.get('selected_store_names') or []
-            if str(value or '').strip()
-        ]
-        postconditions['store_selected_exact'] = bool(
-            store_selection.get('selected') is True
-            and requested_store
-            and observed_store == requested_store
-            and selected_names == [requested_store]
-        )
-        requested_category = str(raw.get('category_name') or '').strip()
-        clicked_options = [str(value).strip() for value in dialog.get('clicked_options') or []]
-        postconditions['category_selected_exact'] = bool(
-            requested_category and requested_category in clicked_options
-        )
-        postconditions['claim_dispatched'] = bool(
-            dialog.get('submitted') is True
-            and safety.get('ok') is True
-            and claim_click_receipt.get('dispatched') is True
-            and claim_authorization.get('ok') is True
-            and claim_authorization.get('executed') is True
-            and claim_authorization.get('mutation_action') == 'claim_open_dialog_click'
-            and confirm_click_receipt.get('dispatched') is True
-            and confirm_authorization.get('ok') is True
-            and confirm_authorization.get('executed') is True
-            and confirm_authorization.get('mutation_action') == 'claim_confirm_click'
-        )
-        postconditions['publish_not_attempted'] = safety.get('publish_action_attempted') is False
-
-    @staticmethod
-    def _derive_draft_verification_postconditions(
-        evidence: Mapping[str, Any],
-        sources: Mapping[str, dict[str, Any]],
-        postconditions: dict[str, bool],
-    ) -> None:
-        raw = sources.get('verification_result') or evidence
-        match = raw.get('draft_box_match') if isinstance(raw.get('draft_box_match'), Mapping) else {}
-        postconditions['draft_box_verified'] |= bool(match and raw.get('evidence_ref'))
-        postconditions['target_unique'] |= bool(match.get('matched_by') and match.get('matched_value'))
-        postconditions['product_identity_match'] |= bool(match.get('matched_by') and match.get('matched_value'))
-        postconditions['store_match'] |= bool(
-            match.get('store_name') and isinstance(match.get('store_evidence'), Mapping)
-        )
-        postconditions['source_identity_match'] |= bool(
-            match.get('matched_by') == 'source_url' and match.get('source_urls')
-        )
-        claim_mark = str(raw.get('claim_mark') or '').strip()
-        row_text = str(match.get('row_text') or raw.get('target_row_text') or '')
-        postconditions['claim_mark_match'] |= bool(claim_mark and claim_mark in row_text)
-
-    @staticmethod
-    def _derive_claim_product_postconditions(
-        evidence: Mapping[str, Any],
-        sources: Mapping[str, dict[str, Any]],
-        postconditions: dict[str, bool],
-    ) -> None:
-        raw = sources.get('draft_action_result') or evidence
-        note_text = str(raw.get('note_text') or '').strip()
-        row_text = str(raw.get('target_row_text') or '')
-        postconditions['target_unique'] |= raw.get('target_unique') is True
-        postconditions['note_write_attempted'] |= raw.get('note_write_attempted') is True
-        postconditions['note_readback_exact'] |= bool(
-            raw.get('note_verified') is True and note_text and note_text in row_text
-        )
-        postconditions['ownership_binding_match'] |= raw.get('ownership_binding_match') is True
 
     @staticmethod
     def _derive_open_editor_postconditions(

@@ -7,8 +7,8 @@ import type {
   ItemResultBreakdown,
   RegressionGate,
   Report,
+  SingleSaveAcceptance,
   Task,
-  TwoStageAcceptance,
   TwoStageSaveStatus,
 } from '../../types'
 import { toArtifactUrl } from '../../workspace'
@@ -178,7 +178,7 @@ const READONLY_PRECHECK_CTA = '运行保存前安全检查'
 const realWriteReleasePrerequisites = [
   {
     title: '保存前安全检查通过',
-    detail: '已有待认领列表和商品箱都要完成安全检查；检查过程中不能出现认领、保存、发布或异常跳转。',
+    detail: '商品箱要完成安全检查；检查过程中不能出现修改、保存、发布或异常跳转。',
   },
   {
     title: '异常放行必须人工复核',
@@ -233,7 +233,6 @@ export function ResultsPage({
     ?? editBatches[0]
     ?? null
   const focusedBatch = explicitlySelectedBatch ?? (!selectedTaskHasResults ? operationalBatch : null)
-
   if (focusedBatch) {
     return (
       <>
@@ -303,6 +302,7 @@ export function ResultsPage({
           realWriteExpectedBlocked={realWriteExpectedBlocked}
           primaryAction={primaryAction}
         />
+        <SingleSaveAcceptanceCard acceptance={workspace.singleSaveAcceptance} />
         <div className="module-card span-3">
           <ModuleHead
             title="保存后核对"
@@ -589,10 +589,9 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
   const runtimeGateStale = runtimeGateFreshness === 'stale_gate'
   const realDxmMutationAllowed = finalCheck?.effective_real_dxm_mutation_allowed ?? (isReadyReadiness(readiness) && finalCheck?.real_dxm_mutation_allowed === true)
   const realDxmMutationScope = finalCheck?.effective_real_dxm_mutation_scope ?? (realDxmMutationAllowed ? finalCheck?.real_dxm_mutation_scope ?? '单商品只保存' : 'none')
-  const twoStageEndToEnd = finalCheck?.effective_real_dxm_two_stage_end_to_end ?? finalCheck?.real_dxm_two_stage_end_to_end ?? 'pending_live_dxm_validation'
-  const twoStagePassed = twoStageEndToEnd === 'passed'
-  const twoStageEndToEndLabel = humanTwoStageEndToEndLabel(twoStageEndToEnd)
-  const productionDeliveryReady = finalCheck?.production_delivery_ready === true && finalCheck?.final_delivery_completed === true && twoStagePassed
+  const singleSaveReady = finalCheck?.current_single_save_ready === true || isReadyReadiness(readiness)
+  const singleSaveStatus = finalCheck?.current_single_save_status ?? (singleSaveReady ? 'passed' : 'incomplete')
+  const productionDeliveryReady = finalCheck?.production_delivery_ready === true && finalCheck?.final_delivery_completed === true && singleSaveReady
   const productionDeliveryLabel = productionDeliveryReady ? '生产交付已完成' : '生产交付未完成'
   const reportWriteExpectedBlocked = isBlockedReadiness(finalCheck?.real_dxm_write_readiness ?? '') && finalCheck?.real_dxm_mutation_allowed !== true
   const realDxmMutationAllowedLabel = realDxmMutationAllowed
@@ -606,25 +605,19 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
       : runtimeGateStale
         ? '交付检查报告待刷新；请先重新运行保存前安全检查和本地验收。'
       : isReadyReadiness(readiness)
-      ? twoStagePassed
-        ? '两段式端到端已验收；执行前仍需人工确认，批量、无人值守和发布仍保持关闭。'
-        : '受控保存能力已有验收记录，但两段式端到端还未完成；不能标记为生产交付完成。'
+        ? '商品箱单阶段只保存已验收；执行前仍需人工确认，旧版批量保存、无人值守和发布仍保持关闭。'
       : isBlockedReadiness(readiness)
         ? '自动化工作台可继续查看和检查；真实保存暂不启动。'
         : '当前真实写入状态未知，不可执行真实写入；请先重新运行本地验收并复核保存前安全检查。'
   const nextStepText = isReadyReadiness(readiness)
-    ? twoStagePassed
-      ? '复核当前任务、批准人和报告链路后，再启动商品箱编辑保存。'
-      : '先完成待认领入箱，再执行商品箱编辑保存并核对未发布证明。'
-    : `先在当前任务点击"${READONLY_PRECHECK_CTA}"，通过后再进行人工确认保存。`
+    ? '复核商品箱范围、批准人和报告链路后，再启动编辑保存。'
+    : `先在当前任务点击“${READONLY_PRECHECK_CTA}”，通过后再进行人工确认保存。`
   const freshnessLabel = finalCheckMatchesCurrent ? '自检覆盖当前代码' : '自检未覆盖当前代码'
   const browserCheckLabel = `浏览器检查${finalCheck?.browser_qa_ok === true ? '已通过' : finalCheck?.browser_qa_ok === false ? '未通过' : '待刷新'}`
   const reportEvidenceCheckLabel = `保存证据检查${finalCheck?.post_final_report_qa_ok === true ? '已通过' : finalCheck?.post_final_report_qa_ok === false ? '未通过' : '待刷新'}`
   const localWorkbenchLabel = `本机检查${finalCheck?.local_workbench_check === 'PASS' ? '已通过' : finalCheck?.local_workbench_check === 'FAIL' ? '未通过' : '待刷新'}`
   const readinessBoundaryCopy = isReadyReadiness(readiness)
-    ? twoStagePassed
-      ? '真实店小秘两段式端到端已通过；批量、无人值守和发布仍保持关闭。'
-      : '真实店小秘保存能力可申请；两段式端到端仍未完成，不能标记为生产交付。'
+    ? '真实店小秘商品箱只保存已通过；旧版批量保存、无人值守和发布仍保持关闭。'
     : '预期阻断：不可执行真实写入；真实保存暂不启动。'
 
   return (
@@ -641,9 +634,9 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
           state={isBlockedReadiness(readiness) ? 'locked' : undefined}
         />
         <CheckRow
-          label={`两段式端到端：${twoStageEndToEndLabel}`}
-          ok={twoStagePassed}
-          state={twoStagePassed ? undefined : 'locked'}
+          label={`单阶段只保存：${singleSaveReady ? '已通过' : '待完成'}`}
+          ok={singleSaveReady}
+          state={singleSaveReady ? undefined : 'locked'}
         />
         <CheckRow
           label={`生产交付状态：${productionDeliveryLabel}`}
@@ -750,8 +743,8 @@ function FinalDeliveryCheckCard({ finalCheck }: { finalCheck: FinalDeliveryCheck
             <span>代码与自检版本一致性 {freshnessLabel}</span>
             <span>OK 范围 {finalCheck?.ok_scope ?? '未记录'} / {realDxmMutationAllowedLabel}</span>
             <span>有效真实保存 {humanReadinessLabel(readiness)} / 报告记录 {humanReadinessLabel(reportReadiness)} / 运行门禁 {runtimeGateFreshness}</span>
-            <span>两段式端到端 {twoStageEndToEndLabel} / 预期 {finalCheck?.expected_real_dxm_two_stage_end_to_end ?? '未记录'} / 匹配 {finalCheck?.two_stage_acceptance_matches_expected === true ? 'true' : 'false'}</span>
-            <span>生产交付状态 {productionDeliveryLabel} / 当前两段式 {finalCheck?.current_two_stage_status ?? '未记录'}</span>
+            <span>单阶段只保存 {singleSaveReady ? '已通过' : '未完成'} / 匹配 {finalCheck?.single_save_acceptance_matches_expected === true ? 'true' : 'false'}</span>
+            <span>生产交付状态 {productionDeliveryLabel} / 当前单阶段 {singleSaveStatus}</span>
             <span>受控单商品只保存 {finalCheck?.controlled_single_save_ready === true ? '可申请' : '未放行'} / 批量无人值守发布 {finalCheck?.batch_unattended_publish_allowed === true ? '允许' : '阻断'}</span>
             <span>预期真实写入 {finalCheck?.expected_real_dxm_write_readiness ?? '未记录'} / 有效预期匹配 {finalCheck?.effective_real_dxm_write_readiness_matches_expected === true ? 'true' : 'false'} / 报告记录匹配 {finalCheck?.real_dxm_write_readiness_matches_expected === true ? 'true' : 'false'}</span>
             <span>保存前安全检查候选评审模板 {finalCheck?.l2_allowlist_review_template_state ?? '未生成'} / 候选 {finalCheck?.l2_allowlist_review_template_candidate_count ?? 0} 项</span>
@@ -784,29 +777,37 @@ function ModuleHead({ title, meta }: { title: string; meta: string }) {
   )
 }
 
-function TwoStageAcceptanceCard({
+function SingleSaveAcceptanceCard({
   acceptance,
 }: {
-  acceptance: TwoStageAcceptance
+  acceptance: SingleSaveAcceptance
 }) {
   const checks = acceptance.checks ?? {}
-  const claimReady = checks.claim_task_present === true && checks.claim_completed === true && checks.claim_product_matches === true
-  const draftReady = checks.claimed_product_present === true && checks.draft_box_verified === true && checks.single_save_linked_to_claim === true
-  const saveReady = checks.save_success === true && checks.unpublished_proof === true && checks.publish_guard_safe === true
-  const title = acceptance.passed ? '真实两段式已完成' : humanTwoStageAcceptanceStatus(acceptance.status)
+  const scopeReady = checks.product_present === true
+    && checks.product_box_snapshot_valid === true
+    && checks.single_save_target_bound === true
+  const approvalReady = checks.save_task_mode_valid === true && checks.manual_approval_consumed === true
+  const saveReady = checks.save_task_completed === true
+    && checks.save_success === true
+    && checks.save_evidence_integrity === true
+  const unpublishedReady = checks.unpublished_proof === true
+    && checks.unpublished_evidence_integrity === true
+    && checks.publish_guard_safe === true
+    && checks.state_consistent === true
+  const title = acceptance.passed ? '商品箱只保存已完成' : humanSingleSaveAcceptanceStatus(acceptance.status)
   const nextAction = acceptance.passed
     ? '查看保存证据，确认未发布。'
-    : humanTwoStageNextAction(acceptance.status)
+    : humanSingleSaveNextAction(acceptance.status)
 
   return (
-    <div className="module-card span-3 two-stage-acceptance-card">
+    <div className="module-card span-3 single-save-acceptance-card">
       <ModuleHead title="完整流程完成度" meta={title} />
       <p>{acceptance.userMessage}</p>
       <div className="report-check-grid">
-        <CheckRow label="待认领商品" ok={claimReady} state={claimReady ? 'present' : 'missing'} />
-        <CheckRow label="商品箱编辑保存" ok={draftReady} state={draftReady ? 'present' : 'missing'} />
+        <CheckRow label="商品箱范围" ok={scopeReady} state={scopeReady ? 'present' : 'missing'} />
+        <CheckRow label="人工批准" ok={approvalReady} state={approvalReady ? 'present' : 'missing'} />
         <CheckRow label="保存成功" ok={saveReady} state={saveReady ? 'present' : 'missing'} />
-        <CheckRow label="未发布" ok={checks.publish_guard_safe === true} state={checks.publish_guard_safe === true ? 'present' : 'missing'} />
+        <CheckRow label="未发布" ok={unpublishedReady} state={unpublishedReady ? 'present' : 'missing'} />
       </div>
       <div className="report-followup-actions business-result-summary__actions">
         <div>
@@ -914,24 +915,29 @@ function BusinessResultSummaryCard({
   )
 }
 
-function humanTwoStageAcceptanceStatus(status: string) {
+function humanSingleSaveAcceptanceStatus(status: string) {
   return ({
-    no_task: '等待创建真实任务',
-    missing_claim_stage: '等待待认领入箱',
-    missing_draft_box_stage: '等待商品箱商品确认',
-    missing_save_stage: '等待商品箱编辑保存',
+    no_task: '等待创建商品箱只保存任务',
+    inconsistent_state: '任务状态需要人工复核',
+    invalid_task_mode: '任务模式不可用于只保存',
+    missing_product_box_snapshot: '等待商品箱范围确认',
+    missing_save_stage: '等待编辑并只保存',
     missing_unpublished_proof: '等待未发布证明',
+    invalid_l3_evidence: '保存证据需要重新核对',
+    passed: '商品箱只保存已完成',
     incomplete: '流程证据不完整',
   } as Record<string, string>)[status] ?? '流程证据不完整'
 }
 
-function humanTwoStageNextAction(status: string) {
+function humanSingleSaveNextAction(status: string) {
   return ({
-    no_task: '先到"待认领商品"创建认领任务。',
-    missing_claim_stage: '先从店小秘已有待认领列表把真实商品认领到商品箱。',
-    missing_draft_box_stage: '确认选择的是刚进入商品箱的真实商品。',
-    missing_save_stage: '回到浏览器现场，启动单商品只保存。',
+    no_task: '从商品箱读取现有商品并创建只保存任务。',
+    inconsistent_state: '先人工核对任务、商品箱现场和保存结果。',
+    invalid_task_mode: '返回商品箱编辑保存，创建正确的只保存任务。',
+    missing_product_box_snapshot: '重新读取并冻结商品箱范围。',
+    missing_save_stage: '回到当前任务，批准并启动只保存。',
     missing_unpublished_proof: '查看保存结果和未发布证明，确认没有发布。',
+    invalid_l3_evidence: '重新核对保存回执、截图和未发布证据。',
     incomplete: '按页面提示补齐缺失步骤后重试。',
   } as Record<string, string>)[status] ?? '按页面提示补齐缺失步骤后重试。'
 }
@@ -1225,13 +1231,6 @@ function humanReadinessLabel(readiness: string) {
   return '待确认'
 }
 
-function humanTwoStageEndToEndLabel(status: string) {
-  if (status === 'passed') return '已通过'
-  if (status === 'pending_live_dxm_validation') return '待现场验证'
-  if (status === 'not_run') return '未运行'
-  return '待确认'
-}
-
 function formatTime(value: string) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
@@ -1269,9 +1268,8 @@ function humanGateDetail(detail?: string | null) {
   ) {
     return `保存前安全检查证据已过期，请点击"${READONLY_PRECHECK_CTA}"刷新后再继续。`
   }
-  if (detail.includes('data_acquisition') || detail.includes('draft_box')) {
+  if (detail.includes('draft_box')) {
     return safeDetail
-      .split('data_acquisition').join('已有待认领列表')
       .split('draft_box').join('商品箱页')
       .split('L2').join('保存前安全检查')
       .split('L3').join('真实保存')
@@ -1318,7 +1316,6 @@ function humanL2PrecheckError(message: string) {
 
 function humanL2TargetLabel(target: string) {
   return ({
-    data_acquisition: '已有待认领列表',
     draft_box: '商品箱',
   } as Record<string, string>)[target] ?? target
 }
@@ -1338,7 +1335,7 @@ function l2DiagnosticNextAction({
     return '先在真实登录浏览器完成登录，再重新运行保存前安全检查。'
   }
   if (failedCheckKeys.includes('final_url_matches') || failedCheckKeys.includes('target_url_matches') || finalClass === 'home' || finalClass === 'other') {
-    return '检查目标页面是否跳到首页/登录页，必要时重新进入待认领列表或商品箱后复跑。'
+    return '检查目标页面是否跳到首页或登录页，必要时重新进入商品箱后复跑。'
   }
   if (reviewCandidateCount > 0) {
     return '把只读依赖候选交给人工评审；未评审前不要放行真实保存。'

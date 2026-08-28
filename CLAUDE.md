@@ -22,7 +22,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 安全与历史路径
 
-整个系统的安全复杂度在:**在能操作真实卖家账号的前提下，用当前会话、不可变 snapshot、审批租约、JIT、队列 CAS、mutation ledger、读回和三铁证锁住每一次真实写入**。`claim_only` 与 `single_save` 只保留为历史受控路径和只读证据，**不是**完整商品批量主路径的前置必经；不得用历史 READY、旧 snapshot 或旧 portable 宣称当前批量已放行。
+整个系统的安全复杂度在:**在能操作真实卖家账号的前提下，用当前会话、不可变 snapshot、审批租约、JIT、队列 CAS、mutation ledger、读回和三铁证锁住每一次真实写入**。`claim_only` 业务模式、认领 UI/API 和运行时动作已删除；`single_save` 只保留为历史兼容/金丝雀路径，**不是**完整商品批量主路径的前置必经。不得用历史 READY、旧 snapshot 或旧 portable 宣称当前批量已放行。
 
 完整产品成功路径固定为 Path B。系统不得主动调用 `verifyPopChoiceShop` 或推断半托管资格；点击“编辑半托管信息”后只观察店小秘原生门。提示 Modal 不等于 SAVE1 完成，SAVE1 与门 outcome 的先后以同源 network/page/ledger 为准；半托管页首写前必须同时满足 SAVE1 verified、门 admitted 和正式页面 identity。中间精确“继续发布”只允许映射为 `SEMI_MANAGED_CONTINUE_TRANSITION`，用于进入冻结的 `editFromSmt`；最终发布、立即发布、保存并发布和移入待发布永久禁止。任何外部 mutation 派发后结果不确定都必须 `UNKNOWN` 停批且不得自动重试。
 
@@ -81,10 +81,10 @@ L2 真实只读 probe 需要**真实登录 cookie + 人工审批**,不由 `final
 `app/backend/src/main.py` 在 import 时把一切装配成单例:一个共享 `Repository`(SQLite)、一个 `ConnectionManager`(WS 广播)、`PlaywrightEngine`(仅静态能力描述,**不执行任何自动化**)、以及 `DxmLiveClient → DxmLoginFlow → DxmWorkflowAdapter` 这条真实浏览器链、若干 services,和把它们串起来的 `V1TaskRunner`。CORS 锁死在 loopback 正则;`/artifacts/{screenshots,evidences}` 静态暴露 `DATA_DIR` 子目录(敏感的 `sessions/sqlite/ai` 不暴露)。
 
 ### 执行 = 状态机 + 模式/路径双门禁
-- `state_machine/contracts.py` 定义 `ExecutionMode`(probe/dry_run/claim_only/single_save/batch_save/batch_draft_save)、`FORBIDDEN_EXECUTION_MODES`(publish/continue_publish/save_and_publish,被 `normalize_execution_mode` 直接拒绝)、`StateName` 枚举与节点不变量。
-- `execution/v1_runner.py` 的 `V1_STEPS` 是基础保存流水线,另有独立 `CLAIM_ONLY_STEPS` 与冻结批次路径。`batch_draft_save` 只能从 plan snapshot 创建；Path A 可进入现有执行合同，Path B 虽可配置/preview/freeze，但批准、启动和 Runner 仍由 `PLAN_PATH_EXECUTION_NOT_RELEASED` 阻断。这是「爆炸半径」的结构性边界。
+- `state_machine/contracts.py` 定义 `ExecutionMode`(probe/dry_run/single_save/batch_save/batch_draft_save)、`FORBIDDEN_EXECUTION_MODES`(publish/continue_publish/save_and_publish,被 `normalize_execution_mode` 直接拒绝)、`StateName` 枚举与节点不变量。
+- `execution/v1_runner.py` 的 `V1_STEPS` 是基础保存流水线，另有冻结批次路径；不存在认领 Runner。`batch_draft_save` 只能从 plan snapshot 创建；Path A 可进入现有执行合同，Path B 虽可配置/preview/freeze，但批准、启动和 Runner 仍由 `PLAN_PATH_EXECUTION_NOT_RELEASED` 阻断。这是「爆炸半径」的结构性边界。
 - **真假分流的唯一开关仍是 `workflow_adapter`**,但真实路径已经由持久化 `BrowserAgentRuntime` 承载。`V1TaskRunner` 构造带 command ID、幂等/变更标识、deadline、runtime/session/page/target 绑定和取消纪元的命令,worker 再调用 `DxmWorkflowAdapter → DxmLoginFlow`。若 `workflow_adapter is None`,真实写入模式直接失败;probe/dry_run 仍保持非真实写入。
-- **真实浏览器不是每步重开。** `DxmLoginFlow` 持有可见 browser/context/page,`BrowserAgentRuntime` 在 Stage A/Stage B 动作间维持同一受控会话并做生命周期接管。磁盘 runtime state 只作为恢复/诊断资料,不能替代实时 session、精确页面、目标绑定和动作前复核。
+- **真实浏览器不是每步重开。** `DxmLoginFlow` 持有可见 browser/context/page,`BrowserAgentRuntime` 在普通编辑与半托管动作间维持同一受控会话并做生命周期接管。磁盘 runtime state 只作为恢复/诊断资料,不能替代实时 session、精确页面、目标绑定和动作前复核。
 - **save 判定以真实保存证据为准且文字精确**:`_save_only_on_page` 只点规范化文本**恰为「保存」**的按钮,若发现任何发布类按钮则中止;保存成功接受 DOM 出现「保存成功/编辑保存成功/编辑成功」或保存接口回包成功。真实接口包括 `.../api/smtProduct/add.json` / `.../api/popChoiceProduct/add.json`,必须是 POST、2xx、`code==0` 且成功文案命中;显式排除 publish/release/online/history URL。report/log 全程 `published=false`。
 
 ### 安全门禁——这是本仓库最该读懂的部分
@@ -96,9 +96,9 @@ L2 真实只读 probe 需要**真实登录 cookie + 人工审批**,不由 `final
 
 2. **Publish guard**(`publish_guard.py`,无状态内容扫描):对 action/目标文本/URL/可见文本/弹窗文本/网络 URL 规范化后,命中任何发布信号(立即发布/继续发布/保存并发布/移入待发布/精确「发布」/`submitpublish` 等)即 `allowed=False`、`risk_level=critical`、`E999`。它放行仅提及「待发布」状态的良性文案,只拦发布**动作**。Runner 在 `PRECHECK_PUBLISH_GUARD`、`PRE_SAVE_GUARD_CHECK`、`SAVE_ONLY` 三处调用它。
 
-3. **任务启动闸**(`main.py`):`REAL_DXM_MUTATION_MODES = {claim_only, single_save, batch_save, batch_draft_save}`；受控 mode surface 包含 `batch_draft_save`，但它还必须经过 frozen snapshot 与 execution path 子门禁，当前只释放 Path A，Path B 返回 `403 BATCH_PATH_B_FORBIDDEN`。两阶段 legacy 模式与冻结批次各自要求 publish scene、确认文本和服务端审批租约；令牌只存 hash，读 API 不回显。`try_start_task` 用原子 SQL 做单飞 draft→running；启动后每个真实 mutation 前仍要重新校验已消费租约和动作上下文。
+3. **任务启动闸**(`main.py`):`REAL_DXM_MUTATION_MODES = {single_save, batch_save, batch_draft_save}`；受控 mode surface 包含 `batch_draft_save`，但它还必须经过 frozen snapshot 与 execution path 子门禁，当前只释放 Path A，Path B 返回 `403 BATCH_PATH_B_FORBIDDEN`。legacy 单保存与冻结批次各自要求 publish scene、确认文本和服务端审批租约；令牌只存 hash，读 API 不回显。`try_start_task` 用原子 SQL 做单飞 draft→running；启动后每个真实 mutation 前仍要重新校验已消费租约和动作上下文。
 
-4. **直连变更端点是「陷阱闸」**:`/api/dxm/draft-box/action`、`/workflow/claim-product`、`/workflow/open-editor` 走 `_assert_direct_real_dxm_mutation_allowed`——它跑完整启动闸校验后**无条件 raise 403**。即便一个完全合法、已审批、L2 已过的请求也返回 403:真实变更在产证据的 runner 之外**结构上不可能发生**。
+4. **直连变更端点是「陷阱闸」**:`/api/dxm/draft-box/action` 与 `/workflow/open-editor` 走 `_assert_direct_real_dxm_mutation_allowed`——它跑完整启动闸校验后**无条件 raise 403**。即便一个完全合法、已审批、L2 已过的请求也返回 403:真实变更在产证据的 runner 之外**结构上不可能发生**。
 
 5. **双重阻断(backend + frontend)**:前端 `App.tsx`/`WorkbenchModules.tsx`/`SafetyStatusBar.tsx` 镜像同样的常量并禁用按钮,但这**纯属 UX**;后端对每个条件独立重算,绕过 UI(curl/回放/自动化)照样撞 403。`test_task_start_guard.py` / `test_publish_guard.py` 是这套契约的可执行测试。
 
@@ -112,14 +112,14 @@ L2 真实只读 probe 需要**真实登录 cookie + 人工审批**,不由 `final
 
 ## 不可破坏的不变量(改这些前先停下来)
 
-- **生产结论必须 fail-closed**:`dxm_two_stage_acceptance.v1`、`dxm_state_consistency.v1`、L2/L3、runtime/build/package identity 任一缺失或冲突,都只能是 `BLOCKED`。
+- **生产结论必须 fail-closed**:`dxm_single_save_acceptance.v1`、`dxm_state_consistency.v1`、L2/L3、runtime/build/package identity 任一缺失或冲突,都只能是 `BLOCKED`。旧两阶段认领验收 schema 已移除，不能作为当前产品证据。
 - **Mutation 不确定性不能自动重试**:持久化 mutation ledger 必须以稳定审批/任务 scope 生成动作 ID;进程崩溃时仍处于 `DISPATCHING` 的动作恢复为 `UNKNOWN`,只允许人工对账,不得因为换 runtime 或重启而再次点击。
 - **动作前实时身份复核**:真实点击前必须重查 browser session、精确页面、目标绑定、审批租约和生命周期 owner。授权检查通过不代表稍后点击仍然安全。
 
-- **当前生产放行范围是 `none` (`BLOCKED`)**。解释 `final-delivery-check.json` 时不能只看 `ok`:必须连同 `okScope`、`realDxmMutationScope`、`realDxmWriteReadiness`、`twoStageAcceptance`、`stateConsistency`、Git/runtime/build/package identity 和证据路径一起读。该 JSON 写入时带 **UTF-8 BOM**,Python 解析须 `encoding='utf-8-sig'`。
+- **当前生产放行范围是 `none` (`BLOCKED`)**。解释 legacy `final-delivery-check.json` 时不能只看 `ok`:必须连同 `okScope`、`realDxmMutationScope`、`realDxmWriteReadiness`、`singleSaveAcceptance`、`stateConsistency`、Git/runtime/build/package identity 和证据路径一起读；即使其单保存范围变绿，也不能扩大为批量 Path B 放行。该 JSON 写入时带 **UTF-8 BOM**,Python 解析须 `encoding='utf-8-sig'`。
 - **发布四层独立封锁**:`config_validation` 的 E999、`repo.create_task` 强制 `publish_allowed=False`、`agent_console` 的 `BLOCKED_SELECTOR_CONTROL_KEYWORDS` + 仅允许 dianxiaomi.com 的 goto、`selector_profile` 的 `forbidden_buttons`(经 L1 replay 暴露)。删任何一层都不会开放发布,但每层都假设其他层存在。
-- **两段式不是范围复用**:`claim_only` 与 `single_save` 各自建立审批和动作证据,Stage B 必须绑定 Stage A 的同商品事实。`batch_draft_save` 使用独立 snapshot/审批/队列/JIT/ledger 合同；Path A 代码不能授权 Path B，`batch_save` 也继续未释放。
-- **真实写入硬约束**:店铺来自任务与真实页面的权威绑定,不得硬编码或跨店复用证据;只操作 Stage A 来源、Stage B 快照与当前页面一致的同一商品。store/title/SKU/product_id/来源/商品箱证明任一冲突即停止(商品归属锁 `ownership_lock.py`)。
+- **执行范围不能复用**:`single_save` 的历史兼容/金丝雀证据不能授权批量。`batch_draft_save` 使用独立 snapshot/审批/队列/JIT/ledger 合同；Path A 代码不能授权 Path B，`batch_save` 也继续未释放。
+- **真实写入硬约束**:店铺来自任务与真实页面的权威绑定,不得硬编码或跨店复用证据；只操作冻结 snapshot、当前页面和当前队列共同指向的同一商品。store/title/SKU/product_id/来源/商品箱证明任一冲突即停止(商品归属锁 `ownership_lock.py`)。
 - **AI 不进执行闭环**:`title_ai.py`(DeepSeek 标题改写)等 AI 只做配置建议/标题/异常分析,绝不临场决定类目/品牌/是否发布、绝不绕验证码。
 - **Browser-Use 是预留增强引擎,不是底座**:执行层走统一 ExecutionEngine 抽象,默认 `PlaywrightEngine`,`BrowserUseEngine` 仅扩展位。业务中台(模板中心/状态机/异常池/证据)必须自建。
 
@@ -137,7 +137,7 @@ L2 真实只读 probe 需要**真实登录 cookie + 人工审批**,不由 `final
 
 - 装配 + 启动闸 + 路由 + artifact URL:`app/backend/src/main.py`
 - L0–L3 门禁定义/计算 + L2 严格闸 + 发布放行计划:`app/backend/src/services/delivery_workspace.py`
-- 两段式验收与状态一致性:`app/backend/src/state_machine/two_stage.py`、`app/backend/src/services/state_consistency.py`
+- 批量草稿保存授权与状态一致性:`app/backend/src/state_machine/batch_draft_authorization.py`、`app/backend/src/state_machine/save_authorization.py`、`app/backend/src/services/state_consistency.py`
 - Browser Agent 协议/生命周期/动作契约:`app/backend/src/execution/browser_agent_protocol.py`、`browser_agent_worker.py`、`action_result_contract.py`;持久化 mutation 派发账本:`mutation_dispatch_ledger.py`
 - 发布拦截:`app/backend/src/services/publish_guard.py`;商品归属锁:`services/ownership_lock.py`
 - 24 状态机执行引擎:`app/backend/src/execution/v1_runner.py`

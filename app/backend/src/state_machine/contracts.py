@@ -7,7 +7,6 @@ from enum import StrEnum
 class ExecutionMode(StrEnum):
     PROBE = "probe"
     DRY_RUN = "dry_run"
-    CLAIM_ONLY = "claim_only"
     SINGLE_SAVE = "single_save"
     BATCH_SAVE = "batch_save"
     BATCH_DRAFT_SAVE = "batch_draft_save"
@@ -28,15 +27,10 @@ class StateName(StrEnum):
     PRECHECK_SESSION = "PRECHECK_SESSION"
     PRECHECK_SELECTOR_PROFILE = "PRECHECK_SELECTOR_PROFILE"
     PRECHECK_PUBLISH_GUARD = "PRECHECK_PUBLISH_GUARD"
-    OPEN_DATA_ACQUISITION = "OPEN_DATA_ACQUISITION"
-    CLAIM_TO_DRAFT_BOX = "CLAIM_TO_DRAFT_BOX"
-    VERIFY_DRAFT_BOX_CLAIM = "VERIFY_DRAFT_BOX_CLAIM"
     OPEN_DRAFT_LIST = "OPEN_DRAFT_LIST"
     FIND_PRODUCT = "FIND_PRODUCT"
     ITEM_LOCKING = "ITEM_LOCKING"
     ITEM_LOCKED = "ITEM_LOCKED"
-    CLAIM_PRODUCT = "CLAIM_PRODUCT"
-    VERIFY_LIST_OWNERSHIP = "VERIFY_LIST_OWNERSHIP"
     OPEN_EDIT_PAGE = "OPEN_EDIT_PAGE"
     VERIFY_EDIT_OWNERSHIP = "VERIFY_EDIT_OWNERSHIP"
     FILL_BASE_INFO = "FILL_BASE_INFO"
@@ -146,32 +140,6 @@ def build_v1_state_specs() -> dict[StateName, StateNodeSpec]:
             failure_code="E999",
             ownership_required=False,
         ),
-        StateName.OPEN_DATA_ACQUISITION: StateNodeSpec(
-            state_name=StateName.OPEN_DATA_ACQUISITION,
-            preconditions=("session is usable", "publish guard passed"),
-            actions=("open dianxiaomi existing claimable product list",),
-            expected_url=("/web/productCrawl/dataAcquisition",),
-            expected_text=("已有待认领商品", "认领"),
-            failure_code="E201",
-            ownership_required=False,
-        ),
-        StateName.CLAIM_TO_DRAFT_BOX: StateNodeSpec(
-            state_name=StateName.CLAIM_TO_DRAFT_BOX,
-            preconditions=("existing claimable product list is open", "target claimable product is unique"),
-            actions=("claim target existing product to draft box",),
-            expected_text=("认领", "采集箱"),
-            failure_code="E202",
-            ownership_required=False,
-        ),
-        StateName.VERIFY_DRAFT_BOX_CLAIM: StateNodeSpec(
-            state_name=StateName.VERIFY_DRAFT_BOX_CLAIM,
-            preconditions=("claim to draft box completed",),
-            actions=("open draft box and verify claimed product exists",),
-            expected_url=("/web/smt/smtProductList/draft",),
-            expected_dom=("unique claimed draft row",),
-            failure_code="E202",
-            ownership_required=False,
-        ),
         StateName.OPEN_DRAFT_LIST: StateNodeSpec(
             state_name=StateName.OPEN_DRAFT_LIST,
             preconditions=("session is usable", "publish guard passed"),
@@ -194,20 +162,6 @@ def build_v1_state_specs() -> dict[StateName, StateNodeSpec]:
             actions=("create or refresh local ownership lock",),
             failure_code="E202",
             publish_guard_required=False,
-        ),
-        StateName.CLAIM_PRODUCT: StateNodeSpec(
-            state_name=StateName.CLAIM_PRODUCT,
-            preconditions=("local ownership lock acquired",),
-            actions=("write task claim mark to product row remark",),
-            expected_text=("claim mark visible",),
-            failure_code="E202",
-        ),
-        StateName.VERIFY_LIST_OWNERSHIP: StateNodeSpec(
-            state_name=StateName.VERIFY_LIST_OWNERSHIP,
-            preconditions=("claim action completed",),
-            actions=("read product row claim mark and compare lock token context",),
-            expected_text=("task claim mark visible",),
-            failure_code="E202",
         ),
         StateName.OPEN_EDIT_PAGE: StateNodeSpec(
             state_name=StateName.OPEN_EDIT_PAGE,

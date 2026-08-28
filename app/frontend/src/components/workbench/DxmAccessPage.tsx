@@ -29,7 +29,7 @@ type DxmAccessPageProps = {
   onContinueDxmLogin: () => void
   onLogoutDxm: () => void
   onSwitchDxmAccount: () => void
-  onNavigateDxmTarget: (target: 'data_acquisition' | 'draft_box') => void
+  onNavigateDxmTarget: (target: 'draft_box') => void
   onShowConsole: () => void
 }
 
@@ -141,9 +141,6 @@ export function DxmAccessPage({
           <div className="dxm-access-status-card__actions">
             <button className="button button--quiet" type="button" onClick={() => onNavigateDxmTarget('draft_box')} disabled={!dxmLoggedIn || busy}>
               进入商品箱
-            </button>
-            <button className="button button--quiet" type="button" onClick={() => onNavigateDxmTarget('data_acquisition')} disabled={!dxmLoggedIn || busy}>
-              进入待认领列表
             </button>
             <button className="button button--quiet" type="button" onClick={onShowConsole}>
               查看登录日志

@@ -63,7 +63,6 @@ from src.execution.playwright_engine import PlaywrightEngine
 from src.execution.v1_runner import V1TaskRunner
 from src.models import (
     AIConfigUpdateRequest,
-    AcquisitionClaimRequest,
     AgentConsoleBrowserDiagnosticsRequest,
     AgentConsoleControlRequest,
     AgentConsoleHudRequest,
@@ -129,16 +128,16 @@ from src.services.dxm_draft_reader import DxmDraftReader, DxmDraftReaderError
 from src.services.dxm_plan_reader import DxmPlanReader, DxmPlanReaderError
 from src.services.dxm_editor_model import build_dxm_editor_models
 from src.services.template_center import template_center_metadata
-from src.state_machine.two_stage import (
-    TwoStageContractError,
-    authorization_context_fingerprint,
-    build_authorization_context,
+from src.state_machine.batch_draft_authorization import (
+    BatchDraftAuthorizationError,
+    authorization_context_fingerprint as batch_authorization_context_fingerprint,
+    build_authorization_context as build_batch_authorization_context,
     build_batch_draft_save_task_facts,
-    build_stage_a_task_facts,
-    build_stage_b_task_facts,
-    canonical_claim_target_identity,
-    canonical_source_identity,
-    is_supported_product_detail_url,
+)
+from src.state_machine.save_authorization import (
+    SaveOnlyContractError,
+    build_authorization_context as build_save_authorization_context,
+    build_save_task_facts,
 )
 from src.ws import ConnectionManager
 
@@ -354,8 +353,8 @@ def _verify_batch_draft_save_command_authorization(
         else {}
     )
     try:
-        expected_authorization_fingerprint = authorization_context_fingerprint(stored_context)
-    except TwoStageContractError:
+        expected_authorization_fingerprint = batch_authorization_context_fingerprint(stored_context)
+    except BatchDraftAuthorizationError:
         return _reject_batch_command_authorization('AUTH_COMMAND_AUTHORIZATION_MISMATCH')
     if (
         str(command.authorization_lease_id or '') != str(approval.get('lease_id') or '')
@@ -439,10 +438,7 @@ def _authorize_browser_mutation(command: Any, context: Any) -> dict[str, Any]:
         return _reject_batch_command_authorization('AUTH_COMMAND_MODE_MISMATCH')
     if persisted_mode == 'batch_draft_save':
         return _verify_batch_draft_save_command_authorization(command, context)
-    expected_mode = (
-        'claim_only' if command.state == 'CLAIM_TO_DRAFT_BOX' else 'single_save'
-    )
-    if persisted_mode != expected_mode:
+    if persisted_mode != 'single_save' or command.state != 'SAVE_ONLY':
         return _reject_batch_command_authorization('AUTH_COMMAND_MODE_MISMATCH')
     return _verify_runner_authorization(
         task_id,
@@ -466,17 +462,15 @@ runner = V1TaskRunner(
     workflow_executor=login_flow_executor,
 )
 
-REAL_DXM_MUTATION_MODES = {'claim_only', 'single_save', 'batch_save', 'batch_draft_save'}
-RELEASED_REAL_DXM_MUTATION_MODES = {'claim_only', 'single_save', 'batch_draft_save'}
+REAL_DXM_MUTATION_MODES = {'single_save', 'batch_save', 'batch_draft_save'}
+RELEASED_REAL_DXM_MUTATION_MODES = {'single_save', 'batch_draft_save'}
 AUTHORIZATION_LEASE_TTL_SECONDS = 5 * 60
 REAL_WRITE_START_MODES = REAL_DXM_MUTATION_MODES
-ALLOWED_START_MODES = {'probe', 'dry_run', 'claim_only', 'single_save', 'batch_save', 'batch_draft_save'}
+ALLOWED_START_MODES = {'probe', 'dry_run', 'single_save', 'batch_save', 'batch_draft_save'}
 SAVE_ONLY_PUBLISH_SCENE = 'SMT_SEMI_MANAGED_SAVE_ONLY'
-CLAIM_TO_DRAFT_PUBLISH_SCENE = 'CONTROLLED_CLAIM_TO_DRAFT_ONLY'
-CLAIM_CONFIRMATION = '确认将该已有商品认领到商品箱'
 L3_CONFIRMATION = 'CONFIRM_DXM_SAVE_ONLY'
 UNRELEASED_REAL_DXM_MODE_DETAIL = (
-    'Only controlled claim_only, single_save, and batch_draft_save are released for real DXM mutation; '
+    'Only controlled single_save and batch_draft_save are released for real DXM mutation; '
     'batch_save remains unreleased'
 )
 FINAL_DELIVERY_CHECK_JSON = REPO_ROOT / 'outputs' / 'final-delivery-check' / 'final-delivery-check.json'
@@ -1018,7 +1012,7 @@ def create_draft_box_scope_snapshot(payload: DraftBoxScopeSnapshotCreate):
             },
             expected_browser_session_id=workflow_adapter.browser_session_id(),
         )
-    except BatchEditContractError as exc:
+    except (BatchEditContractError, SaveOnlyContractError) as exc:
         raise HTTPException(
             status_code=409,
             detail={"reason_code": exc.reason_code, "message": str(exc)},
@@ -1089,11 +1083,6 @@ def list_edit_batches():
 
 @app.post('/api/dxm/draft-box/action')
 def dxm_draft_box_action(payload: DraftBoxActionRequest):
-    _assert_direct_real_dxm_mutation_allowed(payload)
-
-
-@app.post('/api/dxm/workflow/claim-product')
-def dxm_workflow_claim_product(payload: DraftBoxActionRequest):
     _assert_direct_real_dxm_mutation_allowed(payload)
 
 
@@ -1761,11 +1750,6 @@ def list_products():
     return repo.list_products()
 
 
-@app.get('/api/acquisition/claimed-products')
-def list_acquisition_claimed_products():
-    return repo.list_claimed_draft_products()
-
-
 @app.post('/api/products')
 def create_product(payload: ProductCreate):
     return repo.create_product(payload.model_dump())
@@ -1774,63 +1758,6 @@ def create_product(payload: ProductCreate):
 @app.post('/api/products/import')
 def import_products(payload: ProductImportRequest):
     return repo.bulk_import_products(payload.rows)
-
-
-@app.post('/api/acquisition/claim-requests')
-def create_acquisition_claim_request(payload: AcquisitionClaimRequest):
-    task = repo.create_acquisition_claim_request(_normalize_acquisition_claim_request(payload))
-    task_payload = task.get('payload') or {}
-    return {
-        'id': task.get('id'),
-        'task_id': task.get('id'),
-        'stage': task_payload.get('stage') or 'pending_acquisition_claim',
-        'status': task_payload.get('status') or 'pending',
-        'store_id': task_payload.get('store_id'),
-        'source_url': task_payload.get('source_url'),
-        'keyword': task_payload.get('keyword'),
-        'category_name': task_payload.get('category_name'),
-        'claim_mark': task_payload.get('claim_mark'),
-        'template_id': task_payload.get('template_id'),
-        'claimed_product_id': task_payload.get('claimed_product_id'),
-        'claimed_product_title': task_payload.get('claimed_product_title'),
-        'claimed_product_status': task_payload.get('claimed_product_status'),
-        'claimed_product_source': task_payload.get('claimed_product_source'),
-        'claimed_product_source_url': task_payload.get('claimed_product_source_url'),
-        'claimed_product_category_name': task_payload.get('claimed_product_category_name'),
-        'draft_box_verified': task_payload.get('draft_box_verified'),
-        'next_step': task_payload.get('next_step'),
-        'completed_at': task_payload.get('completed_at'),
-        'task_status': task.get('status'),
-    }
-
-
-def _normalize_acquisition_claim_request(payload: AcquisitionClaimRequest) -> dict[str, Any]:
-    data = payload.model_dump()
-    source_url = str(data.get('source_url') or '').strip()
-    keyword = str(data.get('keyword') or '').strip()
-    category_name = str(data.get('category_name') or '').strip()
-    claim_mark = str(data.get('claim_mark') or '').strip()
-    if not claim_mark:
-        raise HTTPException(status_code=400, detail='请填写认领标记。')
-    if not source_url:
-        raise HTTPException(
-            status_code=400,
-            detail='真实认领必须提供受支持的来源商品详情 URL；关键词和类目只能辅助筛选。',
-        )
-    if not is_supported_product_detail_url(source_url):
-        raise HTTPException(
-            status_code=400,
-            detail='来源 URL 必须是受支持的 1688、拼多多或 AliExpress 商品详情页。',
-        )
-    try:
-        canonical_source = canonical_source_identity(source_url)
-    except TwoStageContractError as exc:
-        raise HTTPException(status_code=400, detail=f'{exc.reason_code}: 来源商品 URL 无效。') from exc
-    data['source_url'] = canonical_source['primary_url']
-    data['keyword'] = keyword or None
-    data['category_name'] = category_name or None
-    data['claim_mark'] = claim_mark
-    return data
 
 
 @app.get('/api/tasks')
@@ -1869,12 +1796,6 @@ def _with_public_worker_control(task: dict | None) -> dict | None:
 def create_task(payload: TaskCreate):
     _assert_task_create_scope(payload)
     data = payload.model_dump()
-    if str(payload.mode or '').strip() == 'claim_only':
-        task_payload = dict(data.get('payload') or {})
-        source = canonical_source_identity(str(task_payload['source_url']))
-        task_payload['source_url'] = source['primary_url']
-        task_payload['source_urls'] = list(source['urls'])
-        data['payload'] = task_payload
     return repo.create_task(data)
 
 
@@ -2573,7 +2494,7 @@ def _workflow_runtime_status() -> dict[str, Any]:
             'healthy': False,
             'unhealthyReason': reason,
             'resetAction': 'reset_workflow_runtime',
-            'message': '真实浏览器执行器需要重启后才能继续真实认领或保存任务。',
+            'message': '真实浏览器执行器需要重启后才能继续商品箱保存任务。',
             'nextAction': '点击“重启真实浏览器执行器”，再重新打开执行浏览器后重试。',
         }
     return {
@@ -2701,7 +2622,7 @@ def runtime_control(payload: RuntimeControlRequest):
             'ok': True,
             'action': action,
             **result,
-            'message': '已启动 L2 双目标真实只读复验；请在执行控制台查看启动器日志',
+            'message': '已启动 L2 商品箱真实只读复验；请在执行控制台查看启动器日志',
         }
 
     if action == 'stop_agent_console':
@@ -2914,15 +2835,11 @@ def start_agent_console(payload: AgentConsoleStartRequest):
         if task is None:
             raise HTTPException(
                 status_code=403,
-                detail='Agent execution browser start requires a selected controlled claim_only or single_save task',
+                detail='Agent execution browser start requires a selected controlled single_save task',
             )
         mode = str(task.get('mode') or (task.get('payload') or {}).get('execution_mode') or '')
         if mode not in RELEASED_REAL_DXM_MUTATION_MODES:
             raise HTTPException(status_code=403, detail=UNRELEASED_REAL_DXM_MODE_DETAIL)
-        if mode == 'claim_only' and str(task.get('publish_scene') or '') != CLAIM_TO_DRAFT_PUBLISH_SCENE:
-            raise HTTPException(status_code=403, detail='Controlled claim_only task requires claim-to-draft scene')
-        if mode == 'claim_only':
-            _assert_claim_only_acquisition_task(task)
         task_status = str(task.get('status') or '')
         if task_status == 'running':
             raise HTTPException(status_code=409, detail='Task is already running')
@@ -3485,13 +3402,13 @@ def _start_l2_readonly_probe(task_id: int | None) -> dict:
         _release_l2_probe_lock(run_id)
         raise HTTPException(status_code=500, detail=f'Could not record L2 readonly probe lock: {exc}') from exc
     _append_runtime_control_log(
-        f"started L2 readonly dual-target probe run_id={run_id} pid={process.pid} task={task_id or 'none'}"
+        f"started L2 readonly product-box probe run_id={run_id} pid={process.pid} task={task_id or 'none'}"
     )
     return {
         'runId': run_id,
         'pid': process.pid,
         'logPath': str(log_path),
-        'targets': ['data_acquisition', 'draft_box'],
+        'targets': ['draft_box'],
     }
 
 
@@ -3624,16 +3541,13 @@ def _port_open(host: str, port: int | None) -> bool:
         return False
 
 
-_FINAL_TWO_STAGE_REQUIRED_CHECKS = (
-    'claim_task_present',
-    'claim_completed',
+_FINAL_SINGLE_SAVE_REQUIRED_CHECKS = (
+    'save_task_mode_valid',
     'save_task_completed',
-    'claimed_product_present',
-    'claim_provenance_valid',
-    'single_save_claim_snapshot_valid',
-    'claim_product_matches',
-    'draft_box_verified',
-    'single_save_linked_to_claim',
+    'product_present',
+    'product_box_snapshot_valid',
+    'single_save_target_bound',
+    'manual_approval_consumed',
     'save_success',
     'unpublished_proof',
     'save_evidence_integrity',
@@ -3651,23 +3565,28 @@ def _is_empty_json_array(value: Any) -> bool:
     return isinstance(value, list) and not value
 
 
-def _strict_final_two_stage_ready(
+def _strict_final_single_save_ready(
     acceptance: dict[str, Any],
     readiness: dict[str, Any],
 ) -> bool:
     checks = acceptance.get('checks')
     return (
-        acceptance.get('schema') == 'dxm_two_stage_acceptance.v1'
+        acceptance.get('schema') == 'dxm_single_save_acceptance.v1'
         and acceptance.get('passed') is True
         and acceptance.get('status') == 'passed'
         and all(
             _is_positive_json_integer(acceptance.get(field))
-            for field in ('claim_task_id', 'save_task_id', 'claimed_product_id')
+            for field in ('save_task_id', 'product_id')
         )
+        and acceptance.get('product_box_snapshot_error') is None
+        and _is_positive_json_integer(acceptance.get('save_report_count'))
+        and isinstance(acceptance.get('evidence_count'), int)
+        and not isinstance(acceptance.get('evidence_count'), bool)
+        and acceptance.get('evidence_count') >= 2
         and _is_empty_json_array(acceptance.get('missing_codes'))
         and _is_empty_json_array(acceptance.get('state_violation_codes'))
         and isinstance(checks, dict)
-        and all(checks.get(field) is True for field in _FINAL_TWO_STAGE_REQUIRED_CHECKS)
+        and all(checks.get(field) is True for field in _FINAL_SINGLE_SAVE_REQUIRED_CHECKS)
         and readiness.get('ready') is True
         and readiness.get('status') == 'passed'
         and _is_empty_json_array(readiness.get('missing'))
@@ -3720,18 +3639,18 @@ def _read_final_delivery_check_summary():
     l2_allowlist_review_template = payload.get('l2AllowlistReviewTemplate') if isinstance(payload.get('l2AllowlistReviewTemplate'), dict) else {}
     l2_allowlist_review_candidates = l2_allowlist_review_template.get('candidates')
     l2_allowlist_review_template_hashes = payload.get('l2AllowlistReviewTemplateHashes') if isinstance(payload.get('l2AllowlistReviewTemplateHashes'), dict) else {}
-    two_stage_acceptance = payload.get('twoStageAcceptance') if isinstance(payload.get('twoStageAcceptance'), dict) else {}
-    two_stage_acceptance_readiness = payload.get('twoStageAcceptanceReadiness') if isinstance(payload.get('twoStageAcceptanceReadiness'), dict) else {}
+    single_save_acceptance = payload.get('singleSaveAcceptance') if isinstance(payload.get('singleSaveAcceptance'), dict) else {}
+    single_save_acceptance_readiness = payload.get('singleSaveAcceptanceReadiness') if isinstance(payload.get('singleSaveAcceptanceReadiness'), dict) else {}
     state_consistency = payload.get('stateConsistency') if isinstance(payload.get('stateConsistency'), dict) else {}
     state_consistency_readiness = payload.get('stateConsistencyReadiness') if isinstance(payload.get('stateConsistencyReadiness'), dict) else {}
-    report_two_stage_end_to_end = (
-        payload.get('realDxmTwoStageEndToEnd')
-        or ('passed' if two_stage_acceptance.get('passed') is True else 'pending_live_dxm_validation')
+    report_single_save_end_to_end = (
+        payload.get('realDxmSingleSaveEndToEnd')
+        or ('passed' if single_save_acceptance.get('passed') is True else 'pending_live_dxm_validation')
     )
-    expected_two_stage_end_to_end = payload.get('expectedRealDxmTwoStageEndToEnd') or report_two_stage_end_to_end
-    two_stage_acceptance_matches_expected = payload.get('twoStageAcceptanceMatchesExpected')
-    if two_stage_acceptance_matches_expected is None and expected_two_stage_end_to_end:
-        two_stage_acceptance_matches_expected = report_two_stage_end_to_end == expected_two_stage_end_to_end
+    expected_single_save_end_to_end = payload.get('expectedRealDxmSingleSaveEndToEnd') or report_single_save_end_to_end
+    single_save_acceptance_matches_expected = payload.get('singleSaveAcceptanceMatchesExpected')
+    if single_save_acceptance_matches_expected is None and expected_single_save_end_to_end:
+        single_save_acceptance_matches_expected = report_single_save_end_to_end == expected_single_save_end_to_end
     current_git = _current_git_summary()
     current_gate = _current_real_dxm_gate_summary()
     report_git_head = payload.get('gitHead')
@@ -3746,17 +3665,17 @@ def _read_final_delivery_check_summary():
             state_consistency_readiness,
         )
     )
-    report_two_stage_ready = (
+    report_single_save_ready = (
         report_schema_ready
-        and _strict_final_two_stage_ready(
-            two_stage_acceptance,
-            two_stage_acceptance_readiness,
+        and _strict_final_single_save_ready(
+            single_save_acceptance,
+            single_save_acceptance_readiness,
         )
-        and payload.get('realDxmTwoStageEndToEnd') == 'passed'
+        and payload.get('realDxmSingleSaveEndToEnd') == 'passed'
     )
-    current_two_stage_ready = (
-        current_gate.get('two_stage_ready') is True
-        and current_gate.get('two_stage_status') == 'passed'
+    current_single_save_ready = (
+        current_gate.get('single_save_ready') is True
+        and current_gate.get('single_save_status') == 'passed'
     )
     matches_current = (
         bool(report_git_head)
@@ -3786,7 +3705,7 @@ def _read_final_delivery_check_summary():
         effective_readiness = 'BLOCKED'
         effective_blocked_reason = stale_final_check_reason
         effective_mutation_allowed = False
-        effective_two_stage_end_to_end = 'pending_live_dxm_validation'
+        effective_single_save_end_to_end = 'pending_live_dxm_validation'
     elif current_readiness not in {'READY', 'BLOCKED'}:
         effective_readiness = 'BLOCKED'
         effective_blocked_reason = (
@@ -3794,7 +3713,7 @@ def _read_final_delivery_check_summary():
             or '当前运行门禁不可读取；不可依据旧自检报告启动真实写入。'
         )
         effective_mutation_allowed = False
-        effective_two_stage_end_to_end = 'pending_live_dxm_validation'
+        effective_single_save_end_to_end = 'pending_live_dxm_validation'
     else:
         effective_readiness = current_readiness
         effective_blocked_reason = (
@@ -3803,33 +3722,33 @@ def _read_final_delivery_check_summary():
             else payload.get('realDxmWriteBlockedReason')
         )
         effective_mutation_allowed = payload.get('realDxmMutationAllowed') is True and effective_readiness == 'READY'
-        effective_two_stage_end_to_end = (
+        effective_single_save_end_to_end = (
             'passed'
-            if report_two_stage_ready and current_two_stage_ready
+            if report_single_save_ready and current_single_save_ready
             else 'pending_live_dxm_validation'
         )
-    if not report_two_stage_ready or not current_two_stage_ready:
+    if not report_single_save_ready or not current_single_save_ready:
         if effective_readiness != 'BLOCKED' or not effective_blocked_reason:
-            if not report_two_stage_ready:
+            if not report_single_save_ready:
                 effective_blocked_reason = (
-                    'Two-stage acceptance is missing, contradictory, or not passed in the final-check report; '
+                    'Single-save acceptance is missing, contradictory, or not passed in the final-check report; '
                     'READY remains blocked.'
                 )
             else:
                 effective_blocked_reason = (
                     current_gate.get('blocked_reason')
-                    or 'Two-stage acceptance is missing, contradictory, or not passed in the current workspace; READY remains blocked.'
+                    or 'Single-save acceptance is missing, contradictory, or not passed in the current workspace; READY remains blocked.'
                 )
         effective_readiness = 'BLOCKED'
         effective_mutation_allowed = False
-        effective_two_stage_end_to_end = 'pending_live_dxm_validation'
+        effective_single_save_end_to_end = 'pending_live_dxm_validation'
     if not report_state_consistent:
         state_codes = ', '.join(str(code) for code in state_consistency.get('violation_codes') or [])
         if effective_readiness != 'BLOCKED' or not effective_blocked_reason:
             effective_blocked_reason = f"State consistency is not passed: {state_codes or 'state consistency unavailable'}; READY remains blocked."
         effective_readiness = 'BLOCKED'
         effective_mutation_allowed = False
-        effective_two_stage_end_to_end = 'pending_live_dxm_validation'
+        effective_single_save_end_to_end = 'pending_live_dxm_validation'
     effective_mutation_scope = payload.get('realDxmMutationScope') if effective_mutation_allowed else 'none'
     expected_readiness = payload.get('expectedRealDxmWriteReadiness') or report_readiness
     effective_readiness_matches_expected = (
@@ -3839,7 +3758,7 @@ def _read_final_delivery_check_summary():
     )
     production_delivery_ready = (
         payload.get('productionDeliveryReady') is True
-        and effective_two_stage_end_to_end == 'passed'
+        and effective_single_save_end_to_end == 'passed'
         and effective_readiness == 'READY'
     )
     return {
@@ -3857,18 +3776,18 @@ def _read_final_delivery_check_summary():
         'effective_real_dxm_write_blocked_reason': effective_blocked_reason,
         'effective_real_dxm_mutation_allowed': effective_mutation_allowed,
         'effective_real_dxm_mutation_scope': effective_mutation_scope,
-        'real_dxm_two_stage_end_to_end': report_two_stage_end_to_end,
-        'expected_real_dxm_two_stage_end_to_end': expected_two_stage_end_to_end,
-        'effective_real_dxm_two_stage_end_to_end': effective_two_stage_end_to_end,
-        'two_stage_acceptance': two_stage_acceptance,
-        'two_stage_acceptance_readiness': two_stage_acceptance_readiness,
-        'two_stage_acceptance_matches_expected': two_stage_acceptance_matches_expected,
+        'real_dxm_single_save_end_to_end': report_single_save_end_to_end,
+        'expected_real_dxm_single_save_end_to_end': expected_single_save_end_to_end,
+        'effective_real_dxm_single_save_end_to_end': effective_single_save_end_to_end,
+        'single_save_acceptance': single_save_acceptance,
+        'single_save_acceptance_readiness': single_save_acceptance_readiness,
+        'single_save_acceptance_matches_expected': single_save_acceptance_matches_expected,
         'state_consistency': state_consistency,
         'state_consistency_readiness': state_consistency_readiness,
         'current_state_consistent': current_gate.get('state_consistent'),
         'current_state_violation_codes': current_gate.get('state_violation_codes') or [],
-        'current_two_stage_ready': current_gate.get('two_stage_ready'),
-        'current_two_stage_status': current_gate.get('two_stage_status'),
+        'current_single_save_ready': current_gate.get('single_save_ready'),
+        'current_single_save_status': current_gate.get('single_save_status'),
         'production_delivery_ready': production_delivery_ready,
         'final_delivery_completed': production_delivery_ready,
         'production_real_write_ready': payload.get('productionRealWriteReady'),
@@ -4028,8 +3947,8 @@ def _current_real_dxm_gate_summary():
             'l2_status': None,
             'l3_status': None,
             'delivery_ready': False,
-            'two_stage_ready': False,
-            'two_stage_status': None,
+            'single_save_ready': False,
+            'single_save_status': None,
             'state_consistent': False,
             'state_violation_codes': [],
         }
@@ -4038,34 +3957,34 @@ def _current_real_dxm_gate_summary():
     l3_gate = _workspace_gate(gates, 'L3')
     delivery_readiness = workspace.get('delivery_readiness') if isinstance(workspace, dict) else {}
     delivery_ready = delivery_readiness.get('ready') is True if isinstance(delivery_readiness, dict) else False
-    two_stage_acceptance = workspace.get('two_stage_acceptance') if isinstance(workspace, dict) else {}
-    two_stage_ready = two_stage_acceptance.get('passed') is True if isinstance(two_stage_acceptance, dict) else False
-    two_stage_status = two_stage_acceptance.get('status') if isinstance(two_stage_acceptance, dict) else None
+    single_save_acceptance = workspace.get('single_save_acceptance') if isinstance(workspace, dict) else {}
+    single_save_ready = single_save_acceptance.get('passed') is True if isinstance(single_save_acceptance, dict) else False
+    single_save_status = single_save_acceptance.get('status') if isinstance(single_save_acceptance, dict) else None
     state_consistency = workspace.get('state_consistency') if isinstance(workspace, dict) else {}
     state_consistent = state_consistency.get('consistent') is True if isinstance(state_consistency, dict) else False
     state_violation_codes = list(state_consistency.get('violation_codes') or []) if isinstance(state_consistency, dict) else []
     l2_status = l2_gate.get('status') if l2_gate else None
     l3_status = l3_gate.get('status') if l3_gate else None
-    if l2_status == 'passed' and l3_status == 'passed' and delivery_ready and two_stage_ready and state_consistent:
+    if l2_status == 'passed' and l3_status == 'passed' and delivery_ready and single_save_ready and state_consistent:
         return {
             'readiness': 'READY',
             'blocked_reason': '',
             'l2_status': l2_status,
             'l3_status': l3_status,
             'delivery_ready': delivery_ready,
-            'two_stage_ready': two_stage_ready,
-            'two_stage_status': two_stage_status,
+            'single_save_ready': single_save_ready,
+            'single_save_status': single_save_status,
             'state_consistent': state_consistent,
             'state_violation_codes': state_violation_codes,
         }
     if not l2_gate or not l3_gate:
         reason = '当前运行门禁缺少 L2/L3 记录；不可依据旧自检报告启动真实写入。'
     elif l2_status != 'passed':
-        reason = f"L2 gate is {l2_status}; {l2_gate.get('detail') or 'real DXM writes require fresh dual-target readonly evidence.'}"
+        reason = f"L2 gate is {l2_status}; {l2_gate.get('detail') or 'real DXM writes require fresh product-box readonly evidence.'}"
     elif l3_status != 'passed':
         reason = f"L3 gate is {l3_status}; {l3_gate.get('detail') or 'real DXM writes require fresh single_save canary evidence.'}"
-    elif not two_stage_ready:
-        reason = f"Two-stage acceptance is not passed: {two_stage_status or 'missing'}; claim and save proof are both required."
+    elif not single_save_ready:
+        reason = f"Single-save acceptance is not passed: {single_save_status or 'missing'}; product-box, save, and unpublished proof are required."
     elif not state_consistent:
         codes = ', '.join(str(code) for code in state_violation_codes)
         reason = f"State consistency is not passed: {codes or 'state consistency unavailable'}; READY remains blocked."
@@ -4077,8 +3996,8 @@ def _current_real_dxm_gate_summary():
         'l2_status': l2_status,
         'l3_status': l3_status,
         'delivery_ready': delivery_ready,
-        'two_stage_ready': two_stage_ready,
-        'two_stage_status': two_stage_status,
+        'single_save_ready': single_save_ready,
+        'single_save_status': single_save_status,
         'state_consistent': state_consistent,
         'state_violation_codes': state_violation_codes,
     }
@@ -4176,44 +4095,35 @@ def _build_task_stage_facts(task: dict[str, Any]) -> dict[str, Any]:
                 ),
                 path=str(payload.get('path') or ((payload.get('plan_snapshot') or {}).get('path') if isinstance(payload.get('plan_snapshot'), dict) else 'A') or 'A'),
             )
+        if mode != 'single_save':
+            raise HTTPException(
+                status_code=409,
+                detail='AUTH_TASK_MODE_MISMATCH: task is not an authorized save-only mode',
+            )
         if len(jobs) != 1:
             raise HTTPException(status_code=409, detail='AUTH_TASK_JOB_SHAPE_MISMATCH: exactly one job is required')
         job = jobs[0]
-        if mode == 'claim_only':
-            target_identity = canonical_claim_target_identity(
-                payload.get('source_url'),
-                payload.get('source_urls') or (),
-                keyword=payload.get('keyword'),
-                category_name=payload.get('category_name'),
-            )
-            return build_stage_a_task_facts(
-                task_id=int(task['id']),
-                job_id=int(job['id']),
-                store_id=int(task['store_id']),
-                target_identity=target_identity,
-            )
         product = repo.get_product(int(job['product_id']))
         if not product:
-            raise HTTPException(status_code=409, detail='AUTH_PRODUCT_NOT_FOUND: Stage B product is unavailable')
-        snapshot_error = repo.single_save_claim_snapshot_error(task, product)
+            raise HTTPException(status_code=409, detail='AUTH_PRODUCT_NOT_FOUND: product-box item is unavailable')
+        snapshot_error = repo.single_save_product_box_snapshot_error(task, product)
         if snapshot_error:
             raise HTTPException(
                 status_code=409,
-                detail=f'AUTH_STAGE_B_SNAPSHOT_MISMATCH: {snapshot_error}',
+                detail=f'AUTH_PRODUCT_BOX_SNAPSHOT_MISMATCH: {snapshot_error}',
             )
-        return build_stage_b_task_facts(
+        return build_save_task_facts(
             task_id=int(task['id']),
             job_id=int(job['id']),
             store_id=int(task['store_id']),
             product_id=int(product['id']),
-            stage_a_task_facts=payload['stage_a_task_facts'],
-            draft_box_proof=payload['draft_box_proof'],
+            product_box_snapshot_fingerprint=str(payload['product_box_snapshot_fingerprint']),
         )
     except HTTPException:
         raise
-    except (KeyError, TypeError, ValueError, TwoStageContractError) as exc:
+    except (KeyError, TypeError, ValueError, SaveOnlyContractError, BatchDraftAuthorizationError) as exc:
         reason_code = getattr(exc, 'reason_code', 'AUTH_TASK_FACTS_INVALID')
-        raise HTTPException(status_code=409, detail=f'{reason_code}: exact two-stage task facts are invalid') from exc
+        raise HTTPException(status_code=409, detail=f'{reason_code}: exact save-only task facts are invalid') from exc
 
 
 def _build_task_authorization_context(
@@ -4234,26 +4144,26 @@ def _build_task_authorization_context(
         or ''
     ).strip()
     try:
-        return build_authorization_context(
-            stage_task_facts=_build_task_stage_facts(task),
-            runtime_instance_id=str(runtime_identity.instance_id),
-            browser_session_id=_current_browser_session_id(),
-            git_head=git_head,
-            worktree_identity=(
-                _current_execution_worktree_identity(git_summary)
-                if mode == 'batch_draft_save'
-                else None
-            ),
-            l2_evidence_fingerprint=_l2_authorization_fingerprint(l2_gate),
-            approved_by=approved_by,
-        )
-    except TwoStageContractError as exc:
+        common = {
+            'stage_task_facts': _build_task_stage_facts(task),
+            'runtime_instance_id': str(runtime_identity.instance_id),
+            'browser_session_id': _current_browser_session_id(),
+            'git_head': git_head,
+            'l2_evidence_fingerprint': _l2_authorization_fingerprint(l2_gate),
+            'approved_by': approved_by,
+        }
+        if mode == 'batch_draft_save':
+            return build_batch_authorization_context(
+                **common,
+                worktree_identity=_current_execution_worktree_identity(git_summary),
+            )
+        return build_save_authorization_context(**common)
+    except (SaveOnlyContractError, BatchDraftAuthorizationError) as exc:
         raise HTTPException(status_code=409, detail=f'{exc.reason_code}: authorization context is invalid') from exc
 
 
 def _verify_runner_authorization(task_id: int, mode: str, state: str) -> dict[str, Any]:
     required_state = {
-        'claim_only': 'CLAIM_TO_DRAFT_BOX',
         'single_save': 'SAVE_ONLY',
         'batch_draft_save': 'SAVE_ONLY',
     }.get(mode)
@@ -4326,18 +4236,14 @@ def _assert_task_can_receive_manual_approval(task_id: int, request: TaskManualAp
         raise HTTPException(status_code=403, detail=UNRELEASED_REAL_DXM_MODE_DETAIL)
     if task.get('status') != 'draft':
         raise HTTPException(status_code=409, detail=f"Task cannot be approved from status: {task.get('status')}")
-    if mode == 'claim_only':
-        if str(task.get('publish_scene') or '') != CLAIM_TO_DRAFT_PUBLISH_SCENE:
-            raise HTTPException(status_code=403, detail='Controlled claim_only task requires claim-to-draft scene')
-        _assert_claim_only_acquisition_task(task)
-    elif mode == 'batch_draft_save':
+    if mode == 'batch_draft_save':
         _assert_batch_draft_save_task_scope(task)
     else:
         _assert_single_save_product_count(task.get('payload') or {}, status_code=409)
-        _assert_single_save_uses_claimed_draft_product((task.get('payload') or {}).get('product_ids') or [])
+        _assert_single_save_uses_product_box_item((task.get('payload') or {}).get('product_ids') or [])
         if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
             raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')
-    required_confirmation = CLAIM_CONFIRMATION if mode == 'claim_only' else L3_CONFIRMATION
+    required_confirmation = L3_CONFIRMATION
     if not request.approved_by or not request.approved_by.strip():
         raise HTTPException(status_code=400, detail='approved_by is required')
     if request.confirmation != required_confirmation:
@@ -4395,15 +4301,11 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> dict[str,
     _assert_workflow_runtime_healthy()
     if mode not in RELEASED_REAL_DXM_MUTATION_MODES:
         raise HTTPException(status_code=403, detail=UNRELEASED_REAL_DXM_MODE_DETAIL)
-    if mode == 'claim_only':
-        if str(task.get('publish_scene') or '') != CLAIM_TO_DRAFT_PUBLISH_SCENE:
-            raise HTTPException(status_code=403, detail='Controlled claim_only task requires claim-to-draft scene')
-        _assert_claim_only_acquisition_task(task)
-    elif mode == 'batch_draft_save':
+    if mode == 'batch_draft_save':
         _assert_batch_draft_save_task_scope(task)
     else:
         _assert_single_save_product_count(task.get('payload') or {}, status_code=409)
-        _assert_single_save_uses_claimed_draft_product(payload.get('product_ids') or [])
+        _assert_single_save_uses_product_box_item(payload.get('product_ids') or [])
         if str(task.get('publish_scene') or '') != SAVE_ONLY_PUBLISH_SCENE:
             raise HTTPException(status_code=403, detail='Real DXM mutation task requires save-only publish scene')
 
@@ -4420,7 +4322,7 @@ def _assert_task_can_start(task_id: int, request: TaskStartRequest) -> dict[str,
         and stored_approver
         and hmac.compare_digest(request_approver.encode('utf-8'), stored_approver.encode('utf-8'))
     )
-    required_confirmation = CLAIM_CONFIRMATION if mode == 'claim_only' else L3_CONFIRMATION
+    required_confirmation = L3_CONFIRMATION
     approved = (
         request.manual_approval is True
         and request.confirmation == required_confirmation
@@ -4473,23 +4375,9 @@ def _assert_task_create_scope(payload: TaskCreate) -> None:
             status_code=400,
             detail='真实店小秘任务必须绑定一个明确店铺。',
         )
-    if mode == 'claim_only' and str(payload.publish_scene or '') != CLAIM_TO_DRAFT_PUBLISH_SCENE:
-        raise HTTPException(status_code=403, detail='Controlled claim_only task requires claim-to-draft scene')
-    if mode == 'claim_only' and payload.product_ids:
-        raise HTTPException(
-            status_code=400,
-            detail='Controlled claim_only must be created from acquisition claim request without existing product_ids',
-        )
-    if mode == 'claim_only':
-        source_url = str((payload.payload or {}).get('source_url') or '').strip()
-        if not source_url or not is_supported_product_detail_url(source_url):
-            raise HTTPException(
-                status_code=400,
-                detail='Controlled claim_only requires one supported exact source product URL.',
-            )
     if mode == 'single_save':
         _assert_single_save_product_count({'product_ids': payload.product_ids}, status_code=400)
-        _assert_single_save_uses_claimed_draft_product(
+        _assert_single_save_uses_product_box_item(
             payload.product_ids,
             expected_store_id=payload.store_id,
         )
@@ -4629,25 +4517,7 @@ def _assert_batch_draft_save_task_scope(task: dict[str, Any]) -> None:
         )
 
 
-def _assert_claim_only_acquisition_task(task: dict[str, Any]) -> None:
-    payload = task.get('payload') if isinstance(task.get('payload'), dict) else {}
-    jobs = task.get('jobs') if isinstance(task.get('jobs'), list) else []
-    if not jobs:
-        raise HTTPException(status_code=409, detail='待认领商品任务缺少认领作业，请重新创建任务。')
-    if any(job.get('product_id') is not None for job in jobs if isinstance(job, dict)):
-        raise HTTPException(
-            status_code=409,
-            detail='待认领入箱必须从店小秘已有待认领列表开始，不能直接绑定本地商品。',
-        )
-    source_url = str(payload.get('source_url') or '').strip()
-    if not source_url or not is_supported_product_detail_url(source_url):
-        raise HTTPException(
-            status_code=409,
-            detail='该待认领任务没有受支持的精确来源商品 URL，请重新创建任务。',
-        )
-
-
-def _assert_single_save_uses_claimed_draft_product(
+def _assert_single_save_uses_product_box_item(
     product_ids: list[int],
     *,
     expected_store_id: int | None = None,
@@ -4658,29 +4528,29 @@ def _assert_single_save_uses_claimed_draft_product(
         raise HTTPException(status_code=404, detail=f'Product not found: {product_id}')
     status = str(product.get('status') or '')
     payload = product.get('payload') if isinstance(product.get('payload'), dict) else {}
-    source = str(payload.get('source') or product.get('source') or '').strip()
-    if status not in {'claimed_to_draft', 'ready_for_edit'}:
+    source = str(product.get('source') or '').strip()
+    if status != 'ready_for_edit':
         raise HTTPException(
             status_code=409,
             detail=(
                 '编辑保存必须从商品箱里的真实商品开始。'
-                '请先完成“待认领商品”，确认商品已进入商品箱后，再创建单商品只保存任务。'
+                '请刷新当前商品箱现场并重新选择商品。'
             ),
         )
-    if source != 'dxm_data_acquisition':
+    if source != 'dxm_draft_box':
         raise HTTPException(
             status_code=409,
             detail=(
-                '编辑保存必须从店小秘已有待认领商品进入商品箱的商品开始。'
-                '请先完成“待认领商品”，不要使用手工创建或本地导入商品。'
+                '编辑保存必须从真实店小秘商品箱现场读取商品。'
+                '手工创建或本地导入商品不能启动真实保存。'
             ),
         )
     if payload.get('draft_box_verified') is not True:
         raise HTTPException(
             status_code=409,
             detail=(
-                '编辑保存必须先确认商品已进入商品箱。'
-                '请确认商品已进入商品箱后，再创建单商品只保存任务。'
+                '编辑保存必须先确认商品当前仍在商品箱。'
+                '请刷新商品箱现场后重新创建单商品只保存任务。'
             ),
         )
     source_url = ''
@@ -4698,32 +4568,19 @@ def _assert_single_save_uses_claimed_draft_product(
             status_code=409,
             detail=(
                 '编辑保存缺少商品箱身份校验证据。'
-                '请重新完成“待认领商品”，并确认商品箱中能唯一匹配本次商品后再创建任务。'
-            ),
-        )
-    if not repo.product_has_completed_claim_provenance(product):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                '编辑保存必须能追溯到已完成的待认领商品任务链。'
-                '请先从“待认领商品”完成真实认领，并确认商品进入商品箱后再创建任务。'
+                '请刷新商品箱现场，并确认能唯一匹配本次商品后再创建任务。'
             ),
         )
     product_store_id = payload.get('store_id')
-    proof = payload.get('draft_box_proof') if isinstance(payload.get('draft_box_proof'), dict) else {}
-    proof_store_id = proof.get('store_id')
     if expected_store_id is not None and (
         isinstance(expected_store_id, bool)
         or isinstance(product_store_id, bool)
-        or isinstance(proof_store_id, bool)
         or not isinstance(product_store_id, int)
-        or not isinstance(proof_store_id, int)
         or product_store_id != int(expected_store_id)
-        or proof_store_id != int(expected_store_id)
     ):
         raise HTTPException(
             status_code=409,
-            detail='单商品只保存的店铺与认领证明店铺不一致；请在原认领店铺中创建保存任务。',
+            detail='单商品只保存的店铺与商品箱现场店铺不一致；请从当前店铺商品箱重新选择。',
         )
 
 
@@ -4921,8 +4778,8 @@ def build_login_state(data: dict):
         return {
             'stage': 'login_success',
             'label': '已登录',
-            'message': '已检测到真实店小秘登录态；受控 claim_only 可按 Stage A 审批启动，受控 single_save 可按 Stage B 审批启动。',
-            'next_action': '先完成配置预检和 L2 复验，再按各自人工审批启动；batch_save 和发布仍关闭。',
+            'message': '已检测到真实店小秘登录态；受控单商品只保存可在商品箱现场校验后启动。',
+            'next_action': '先完成配置预检和 L2 复验，再按人工审批启动；batch_save 和发布仍关闭。',
             'requires_user_action': False,
             'screenshot_url': data.get('home_screenshot_url') or data.get('product_page', {}).get('screenshot_url'),
             'page_title': data.get('title') or data.get('product_page', {}).get('title'),

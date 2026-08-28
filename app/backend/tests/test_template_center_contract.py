@@ -56,9 +56,10 @@ def test_template_fields_have_chinese_labels_and_store_edit_page_sections():
     ]:
         assert required_section in section_labels
 
-    for required_label in ["店铺", "绑定类目", "认领标记", "主图策略", "物流属性", "报关品名", "半托管模板"]:
+    for required_label in ["店铺", "任务模式", "绑定类目", "主图策略", "物流属性", "报关品名", "半托管模板"]:
         assert required_label in labels
 
+    assert "认领标记" not in labels
     assert all("_" not in field["label"] for section in sections for field in section["fields"])
     assert all(field["key"] for section in sections for field in section["fields"])
 

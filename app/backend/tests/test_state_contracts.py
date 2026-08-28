@@ -28,21 +28,20 @@ def test_save_only_requires_publish_guard_and_ownership():
     assert "click save button only" in spec.actions
 
 
-def test_acquisition_claim_states_are_first_class_and_do_not_save_or_publish():
+def test_removed_acquisition_states_are_absent_and_single_save_stays_guarded():
     specs = build_v1_state_specs()
 
-    for state in (
-        StateName.OPEN_DATA_ACQUISITION,
-        StateName.CLAIM_TO_DRAFT_BOX,
-        StateName.VERIFY_DRAFT_BOX_CLAIM,
-    ):
-        assert state in specs
+    removed_states = {
+        "OPEN_DATA_ACQUISITION",
+        "CLAIM_TO_DRAFT_BOX",
+        "VERIFY_DRAFT_BOX_CLAIM",
+    }
+    assert removed_states.isdisjoint({state.value for state in StateName})
+    assert removed_states.isdisjoint({state.value for state in specs})
 
-    claim_actions = " ".join(build_v1_state_specs()[StateName.CLAIM_TO_DRAFT_BOX].actions).lower()
-    assert "claim" in claim_actions
-    assert "edit" not in claim_actions
-    assert "save" not in claim_actions
-    assert "publish" not in claim_actions
+    save_spec = specs[StateName.SAVE_ONLY]
+    assert save_spec.publish_guard_required is True
+    assert save_spec.ownership_required is True
 
 
 def test_publish_modes_are_forbidden():

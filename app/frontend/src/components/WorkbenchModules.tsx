@@ -16,7 +16,6 @@ import type {
   FinalDeliveryCheckSummary,
   LogItem,
   Product,
-  RealTaskCreateRequest,
   RegressionGate,
   Report,
   RuntimeLogResponse,
@@ -31,13 +30,6 @@ import type {
   Template,
 } from '../types'
 import { evidenceGrade, humanLevel, humanTaskStatus, referenceSectionLabels, toArtifactUrl } from '../workspace'
-import {
-  L2ProbeResourceRepairPanel,
-  ReadonlyRecheckHelpCard,
-  RealModeReleasePlanPanel,
-  SingleSaveRecoveryGuide,
-  TaskCurrentActionPanel,
-} from './workbench/ProductTaskPanels'
 import { humanOperatorMessage, humanOperatorTitle, humanTaskDisplayName } from './workbench/workbenchCopy'
 export { DxmAccessPage } from './workbench/DxmAccessPage'
 export { HelpPage as HelpCenter } from './workbench/HelpPage'
@@ -105,64 +97,10 @@ type ConfigSectionSaveState = {
   message?: string
 }
 
-type DxmAccessPageProps = {
-  runtimeStatus: RuntimeStatus | null
-  runtimeStatusError: string | null
-  dxmLoginDraft: DxmLoginDraft
-  dxmCredentialState: DxmCredentialState
-  busy: boolean
-  onDxmLoginDraftChange: (draft: DxmLoginDraft) => void
-  onClearSavedDxmCredential: () => void
-  onOpenDxmLogin: () => void
-  onContinueDxmLogin: () => void
-  onNavigateDxmTarget: (target: 'data_acquisition' | 'draft_box') => void
-  onShowConsole: () => void
-}
-
 export const l3PostEvidenceGapIds = new Set(['gap-save-result', 'gap-unpublished-proof', 'gap-network-save-response'])
 export const DXM_LOGGED_IN_STATUSES = new Set(['login_success', 'logged_in', 'not_published_verified', 'workflow_navigation'])
 const READONLY_PRECHECK_CTA = '运行保存前安全检查'
-const READONLY_PRECHECK_PURPOSE = '保存前安全检查只读取店小秘已有待认领列表和商品箱，不认领、不保存、不发布；通过后回到当前保存任务直接批准并启动。'
-
-const realWriteReleasePrerequisites = [
-  {
-    title: '保存前安全检查通过',
-    detail: '已有待认领列表和商品箱都要完成安全检查；检查过程中不能出现认领、保存、发布或异常跳转。',
-  },
-  {
-    title: '异常放行必须人工复核',
-    detail: '如果页面出现新接口或新按钮，必须先人工确认风险并重新检查，不能自动绕过。',
-  },
-  {
-    title: '人工确认单商品只保存',
-    detail: '只有保存前安全检查通过后，才允许启动一次单商品只保存。',
-  },
-  {
-    title: '保存结果必须可核对',
-    detail: '需要拿到店小秘保存成功、未发布和页面记录后，才认为本次只保存完成。',
-  },
-]
-
-type TaskCenterProps = CommonProps & {
-  configPreview: ConfigPreview | null
-  configPreviewError: string | null
-  configPreviewLoading: boolean
-  runtimeStatus: RuntimeStatus | null
-  runtimeStatusError: string | null
-  busy: boolean
-  demoEnabled: boolean
-  l3ApprovedBy: string
-  onL3ApprovedByChange: (value: string) => void
-  onSelectTask: (taskId: number) => void
-  onCreateRealTask: (request: RealTaskCreateRequest) => void | Promise<void>
-  onBootstrapDemo: () => void
-  onStartTask: () => void
-  onRunL2Probe: () => void
-  onShowConfig: () => void
-  onShowConsole: () => void
-  onShowEvidence: () => void
-  onShowReports: () => void
-}
+const READONLY_PRECHECK_PURPOSE = '保存前安全检查只读取店小秘商品箱，不修改、不保存、不发布；通过后回到当前保存任务直接批准并启动。'
 
 type ExecutionConsoleProps = CommonProps & {
   agentConsole: AgentConsoleSession | null
@@ -191,7 +129,7 @@ type ExecutionConsoleProps = CommonProps & {
   onStartAgentConsole: () => void
   onOpenDxmLogin: () => void
   onContinueDxmLogin: () => void
-  onNavigateDxmTarget: (target: 'data_acquisition' | 'draft_box') => void
+  onNavigateDxmTarget: (target: 'draft_box') => void
   onStopAgentConsole: () => void
   onSnapshotAgentConsole: () => void
   onRequestAgentConsoleTakeover: () => void
@@ -540,11 +478,10 @@ const editableConfigSections: EditableConfigSection[] = [
     templateType: 'task_basic',
     previewSection: 'task_basic',
     title: '店铺与任务基础',
-    detail: '控制当前任务绑定店铺、类目和认领标记；执行模式在创建任务时选择。',
+    detail: '控制当前任务绑定店铺和类目；执行模式在创建任务时选择。',
     fields: [
       { name: 'store_name', label: '店铺', placeholder: '填写当前真实店铺名称', usage: 'direct' },
       { name: 'category_name', label: '绑定类目', placeholder: '填写当前真实类目', usage: 'direct' },
-      { name: 'claim_mark', label: '认领标记', placeholder: '用于区分 DXM 商品箱记录', usage: 'direct' },
     ],
   },
   {
@@ -2302,621 +2239,6 @@ function EditableConfigSectionCard({
   )
 }
 
-export function TaskCenterView({ workspace, selectedTask, configPreview, configPreviewError, configPreviewLoading, runtimeStatus, runtimeStatusError, busy, demoEnabled, l3ApprovedBy, onL3ApprovedByChange, onSelectTask, onCreateRealTask, onBootstrapDemo, onStartTask, onRunL2Probe, onShowConfig, onShowConsole, onShowEvidence, onShowReports }: TaskCenterProps) {
-  const uniqueStoreOptions = useMemo(() => uniqueByStoreIdentity(workspace.stores), [workspace.stores])
-  const uniqueProductOptions = useMemo(() => uniqueByProductIdentity(workspace.products), [workspace.products])
-  const [draftStoreId, setDraftStoreId] = useState(() => uniqueStoreOptions[0]?.id ? String(uniqueStoreOptions[0].id) : '')
-  const [draftMode, setDraftMode] = useState<RealTaskCreateRequest['mode']>('single_save')
-  const [draftProductIds, setDraftProductIds] = useState<number[]>([])
-  const [showAllTasks, setShowAllTasks] = useState(false)
-  const needsApproval = selectedTask ? requiresManualApproval(selectedTask) : false
-  const l2Gate = workspace.regressionGates.find((gate) => gate.level === 'L2')
-  const l3Gate = workspace.regressionGates.find((gate) => gate.level === 'L3')
-  const l2ProbeResourceState = getL2ProbeResourceState(runtimeStatus)
-  const needsRealL2 = selectedTask ? requiresRealL2(selectedTask) : false
-  const selectedTaskIsDryRun = selectedTask?.mode === 'dry_run'
-  const selectedRealDxmMutationTask = Boolean(selectedTask && isRealDxmMutationTask(selectedTask))
-  const selectedTaskNeedsEditConfig = selectedTask?.mode === 'single_save'
-  const dxmLoggedIn = !runtimeStatusError && DXM_LOGGED_IN_STATUSES.has(runtimeStatus?.dxmLogin?.status ?? '')
-  const selectedTaskIsUnreleasedRealMode = selectedTask ? isUnreleasedRealDxmMutationTask(selectedTask) : false
-  const selectedTaskCompleted = selectedTask?.status === 'completed'
-  const selectedTaskNotDraft = Boolean(selectedTask && selectedTask.status !== 'draft')
-  const selectedTaskBlocksStart = Boolean(selectedTask && selectedTask.status !== 'draft' && selectedTask.status !== 'running' && selectedTask.status !== 'completed')
-  const l2BlocksStart = needsRealL2 && l2Gate?.status !== 'passed'
-  const l3BlocksStart = selectedTaskNeedsEditConfig && needsRealL2 && l3Gate?.status === 'blocked'
-  const loginBlocksStart = selectedRealDxmMutationTask && !dxmLoggedIn
-  const configPreviewForSelectedTask = selectedTask && configPreview?.taskId === selectedTask.id ? configPreview : null
-  const configPreviewTaskMismatch = Boolean(selectedTask && configPreview && configPreview.taskId !== selectedTask.id)
-  const configPreviewLoadingBlocksStart = Boolean(selectedTaskNeedsEditConfig && configPreviewLoading)
-  const configUnknownBlocksStart = Boolean(selectedTaskNeedsEditConfig && !configPreviewForSelectedTask && !configPreviewLoading)
-  const configBlocksStart = Boolean(selectedTaskNeedsEditConfig && configPreviewForSelectedTask && !configPreviewForSelectedTask.ok)
-  const l2DiagnosticSummaries = summarizeL2Diagnostics(l2Gate)
-  const selectedStore = uniqueStoreOptions.find((store) => String(store.id) === draftStoreId)
-  const draftProductIdSet = new Set(draftProductIds)
-  const selectedDraftProducts = uniqueProductOptions.filter((product) => draftProductIdSet.has(product.id))
-  const primaryProductCandidates = uniqueProductOptions.slice(0, 4)
-  const singleSaveProductCountInvalid = draftMode === 'single_save' && selectedDraftProducts.length !== 1
-  const canCreateSingleSaveTask = Boolean(selectedStore && selectedDraftProducts.length === 1 && !busy)
-  const quickCreateSingleSaveDisabledReason = busy
-    ? '正在处理当前操作，请稍候。'
-    : !selectedStore
-      ? '请选择真实店铺。'
-    : selectedDraftProducts.length === 0
-        ? '请先选择 1 个商品箱商品后再创建只保存任务。'
-        : selectedDraftProducts.length !== 1
-        ? `商品箱编辑保存一次只能选 1 个商品；当前已选 ${selectedDraftProducts.length} 个。`
-        : ''
-  const unreleasedReleaseItems = workspace.realModeReleasePlan.modes.filter((item) => item.mode === 'claim_only' || item.mode === 'batch_save')
-  const latestSingleSaveTask = [...workspace.tasks]
-    .filter(isStartableSingleSaveTask)
-    .sort((a, b) => b.id - a.id)[0] ?? null
-  const compactTaskRows = useMemo(() => {
-    const seen = new Set<string>()
-    const rows: Task[] = []
-    for (const task of workspace.tasks) {
-      const key = getTaskDisplayKey(task)
-      if (seen.has(key)) continue
-      seen.add(key)
-      rows.push(task)
-    }
-    return rows
-  }, [workspace.tasks])
-  const defaultTaskRows = compactTaskRows.filter((task) => !isAuxiliaryTask(task))
-  const compactVisibleTaskRows = defaultTaskRows.slice(0, 6)
-  const visibleTaskRows = showAllTasks
-    ? workspace.tasks
-    : selectedTask && isAuxiliaryTask(selectedTask)
-      ? [selectedTask, ...compactVisibleTaskRows].slice(0, 12)
-    : selectedTask && !compactVisibleTaskRows.some((task) => task.id === selectedTask.id)
-      ? [selectedTask, ...compactVisibleTaskRows.filter((task) => task.id !== selectedTask.id)].slice(0, 12)
-      : compactVisibleTaskRows
-  const collapsedTaskCount = Math.max(workspace.tasks.length - compactTaskRows.length, 0)
-  const hiddenTaskCount = Math.max(workspace.tasks.length - visibleTaskRows.length, 0)
-  const canToggleTaskHistory = workspace.tasks.length > visibleTaskRows.length || showAllTasks
-  const canCreateRealTask = Boolean(selectedStore && selectedDraftProducts.length > 0 && !busy && !singleSaveProductCountInvalid)
-  const needsSingleSaveRecovery = Boolean(selectedTask && (selectedTaskBlocksStart || selectedTaskIsUnreleasedRealMode || loginBlocksStart || configUnknownBlocksStart || configPreviewLoadingBlocksStart || configBlocksStart || l2BlocksStart || l3BlocksStart))
-  const startDisabled = busy || !selectedTask || selectedTaskNotDraft || selectedTaskIsUnreleasedRealMode || loginBlocksStart || configUnknownBlocksStart || configPreviewLoadingBlocksStart || configBlocksStart || l2BlocksStart || l3BlocksStart
-  const startLabel = !selectedTask
-    ? '请选择任务'
-    : selectedTask.status === 'completed'
-      ? '任务已完成，查看保存结果'
-      : selectedTask.status === 'running'
-        ? '任务运行中'
-        : selectedTask.status === 'failed'
-          ? '重新创建商品箱编辑保存任务'
-        : selectedTask.status !== 'draft'
-          ? '任务非草稿，禁止启动'
-          : selectedTaskIsUnreleasedRealMode
-            ? '未发布，禁止启动'
-            : runtimeStatusError && loginBlocksStart
-              ? '运行状态不可用，先查看日志'
-            : loginBlocksStart
-              ? 'DXM 未登录，先打开真实浏览器登录'
-              : configPreviewTaskMismatch
-                ? '配置属于其它任务，重新检查本次任务'
-              : configPreviewError && configUnknownBlocksStart
-                ? '配置检查接口不可用'
-              : configUnknownBlocksStart
-                ? '先检查本次任务配置'
-                : configPreviewLoadingBlocksStart
-                  ? '正在检查配置，稍候启动'
-                  : configBlocksStart
-                    ? '配置未完成，禁止启动'
-                    : l2BlocksStart
-                      ? l2StartLabel(l2Gate?.status)
-                      : l3BlocksStart
-                        ? '人工确认未完成，禁止启动'
-                        : selectedTask?.mode === 'claim_only'
-                          ? '启动待认领入箱'
-                        : needsApproval
-                          ? '批准并启动单商品只保存'
-                          : needsRealL2
-                            ? '启动保存核验任务'
-                            : '启动开发自检任务'
-  const historyTaskHint = canToggleTaskHistory
-    ? showAllTasks
-      ? '历史任务已展开。'
-      : `还有 ${hiddenTaskCount} 个历史任务可展开。`
-    : workspace.tasks.length
-      ? '当前已显示可用任务。'
-      : '暂无历史任务；先完成待认领入箱，再创建商品箱编辑保存任务。'
-  const blockedStartButtonLabel = startDisabled
-    ? startLabel.includes('禁止启动')
-      ? startLabel
-      : `暂不能启动只保存：${startLabel}`
-    : '可启动浏览器现场'
-  const taskActionDiagnosis = {
-    create: quickCreateSingleSaveDisabledReason || '可创建商品箱编辑保存任务',
-    history: historyTaskHint,
-    start: blockedStartButtonLabel,
-  }
-
-  useEffect(() => {
-    const firstStore = uniqueStoreOptions[0]
-    if (!firstStore) {
-      if (draftStoreId) setDraftStoreId('')
-      return
-    }
-    if (!draftStoreId || !uniqueStoreOptions.some((store) => String(store.id) === draftStoreId)) {
-      setDraftStoreId(String(firstStore.id))
-    }
-  }, [draftStoreId, uniqueStoreOptions])
-
-  useEffect(() => {
-    const availableIds = new Set(uniqueProductOptions.map((product) => product.id))
-    setDraftProductIds((current) => {
-      const kept = current.filter((id) => availableIds.has(id))
-      if (kept.length) return kept.length === current.length ? current : kept
-      return []
-    })
-  }, [uniqueProductOptions])
-
-  function selectSingleDraftProduct(productId: number) {
-    setDraftProductIds([productId])
-    setDraftMode('single_save')
-  }
-
-  function submitRealTask() {
-    if (!canCreateRealTask || !selectedStore) return
-    void onCreateRealTask({
-      storeId: selectedStore.id,
-      mode: draftMode,
-      productIds: selectedDraftProducts.map((product) => product.id),
-    })
-  }
-
-  function submitSingleSaveTask() {
-    if (!canCreateSingleSaveTask || !selectedStore) return
-    setDraftMode('single_save')
-    void onCreateRealTask({
-      storeId: selectedStore.id,
-      mode: 'single_save',
-      productIds: selectedDraftProducts.map((product) => product.id),
-    })
-  }
-
-  return (
-    <section className="module-layout" aria-label="编辑保存">
-      <div className="module-card span-1 task-quick-actions" aria-label="编辑保存主操作">
-        <ModuleHead title="编辑保存" meta="从商品箱商品创建第二段只保存任务" />
-        <div className="task-product-selection" aria-label="选择商品箱商品">
-          <div className="task-product-selection__head">
-            <span>商品箱商品</span>
-            <strong>{selectedDraftProducts[0]?.title ?? '请先选择 1 个商品箱商品'}</strong>
-            <small>当前交付只允许从商品箱商品创建只保存任务；点击候选会替换本次选择，不会启动批量、发布或无人值守。</small>
-          </div>
-          <label className="task-product-selection__store">
-            <span>店铺</span>
-            <select value={draftStoreId} onChange={(event) => setDraftStoreId(event.target.value)} disabled={busy || uniqueStoreOptions.length === 0}>
-              {uniqueStoreOptions.map((store) => (
-                <option key={store.id} value={store.id}>
-                  {store.name} / {store.platform}
-                </option>
-              ))}
-              {!uniqueStoreOptions.length && <option value="">等待真实店铺</option>}
-            </select>
-          </label>
-          <div className="task-product-selection__list">
-            {primaryProductCandidates.map((product) => (
-              <button
-                key={product.id}
-                className={`task-product-choice ${selectedDraftProducts[0]?.id === product.id ? 'is-selected' : ''}`}
-                type="button"
-                onClick={() => selectSingleDraftProduct(product.id)}
-                disabled={busy}
-                aria-pressed={selectedDraftProducts[0]?.id === product.id}
-              >
-                <strong>{product.title}</strong>
-                <span>{selectedStore?.name ?? '待选店铺'} / {product.category_name || '未指定类目'}</span>
-                <small>SKU {product.sku_count}，图片 {product.image_count}，来源状态 {product.status}</small>
-              </button>
-            ))}
-            {!uniqueProductOptions.length && <EmptyState title="暂无商品" detail="请先导入真实商品；普通模式不使用本地演示商品。" />}
-          </div>
-          {uniqueProductOptions.length > primaryProductCandidates.length && (
-            <small className="task-product-selection__more">
-              还有 {uniqueProductOptions.length - primaryProductCandidates.length} 个商品在下方“查看更多商品”里；本次只选择 1 个商品箱商品创建任务。
-            </small>
-          )}
-        </div>
-        <div className="task-quick-actions__buttons task-quick-actions__buttons--single">
-          <button
-            className="button button--primary"
-            type="button"
-            onClick={submitSingleSaveTask}
-            disabled={Boolean(quickCreateSingleSaveDisabledReason)}
-            aria-describedby={quickCreateSingleSaveDisabledReason ? 'task-quick-create-single-save-reason' : undefined}
-            title={quickCreateSingleSaveDisabledReason || undefined}
-            data-testid="task-quick-create-single-save"
-          >
-            创建编辑保存任务
-          </button>
-          {quickCreateSingleSaveDisabledReason && (
-            <small id="task-quick-create-single-save-reason" className="task-quick-actions__reason">
-              {quickCreateSingleSaveDisabledReason}
-            </small>
-          )}
-        </div>
-        <details className="task-quick-actions__diagnosis inline-disclosure" aria-label="任务按钮不可点击原因">
-          <summary>为什么不能启动浏览器现场</summary>
-          <span>
-            <strong>创建任务</strong>
-            <small>{taskActionDiagnosis.create}</small>
-          </span>
-          <span>
-            <strong>浏览器现场</strong>
-            <small>{taskActionDiagnosis.start}</small>
-          </span>
-        </details>
-        <div className="task-quick-actions__status">
-          <span>当前任务</span>
-          <strong>{selectedTask ? displayTaskName(selectedTask) : '未选择任务'}</strong>
-          <small>{selectedTask ? `${humanTaskModeLabel(selectedTask.mode)} / ${humanTaskStatus(selectedTask.status)}` : '先完成待认领入箱，再创建商品箱编辑保存任务'}</small>
-        </div>
-        <p>
-          {!quickCreateSingleSaveDisabledReason
-            ? `将使用 ${selectedStore?.name ?? '当前店铺'} 和已选 ${selectedDraftProducts.length} 个商品创建草稿任务。`
-            : quickCreateSingleSaveDisabledReason}
-        </p>
-      </div>
-
-      <div className="module-card span-2">
-        <ModuleHead title="当前任务" meta={showAllTasks ? `${workspace.tasks.length} 个批次` : `${visibleTaskRows.length} 个常用批次`} />
-        <TaskCurrentActionPanel
-          selectedTask={selectedTask}
-          workspace={workspace}
-          configPreview={configPreviewForSelectedTask}
-          l2Gate={l2Gate}
-          l3Gate={l3Gate}
-          startLabel={startLabel}
-          startDisabled={startDisabled}
-          busy={busy}
-          l2ProbeResourceState={l2ProbeResourceState}
-          onStartTask={onStartTask}
-          onRunL2Probe={onRunL2Probe}
-          onShowConfig={onShowConfig}
-          onShowConsole={onShowConsole}
-          onShowEvidence={onShowEvidence}
-          onShowReports={onShowReports}
-        />
-        {!selectedTaskCompleted && needsSingleSaveRecovery && (
-          <SingleSaveRecoveryGuide
-            selectedTask={selectedTask}
-            latestSingleSaveTask={latestSingleSaveTask}
-            selectedTaskIsUnreleasedRealMode={selectedTaskIsUnreleasedRealMode}
-            configBlocksStart={configBlocksStart}
-            l2BlocksStart={l2BlocksStart}
-            l3BlocksStart={l3BlocksStart}
-            canCreateRealTask={canCreateRealTask}
-            busy={busy}
-            l2ProbeResourceState={l2ProbeResourceState}
-            onSelectSingleSave={() => latestSingleSaveTask && onSelectTask(latestSingleSaveTask.id)}
-            onCreateSingleSave={submitSingleSaveTask}
-            onRunL2Probe={onRunL2Probe}
-            onShowConfig={onShowConfig}
-            onShowReports={onShowReports}
-          />
-        )}
-        {!selectedTaskCompleted && (configBlocksStart || configPreviewLoading || configPreviewError || configPreviewTaskMismatch) && (
-          <div className={`gate-note ${configBlocksStart ? 'gate-note--danger' : ''}`}>
-            <strong>{configPreviewError ? '配置检查接口不可用' : configPreviewTaskMismatch ? '配置属于其它任务' : configPreviewLoading ? '正在检查配置' : '配置检查未通过'}</strong>
-            <span>{configPreviewError ? humanConfigError(configPreviewError) : configPreviewTaskMismatch ? '请重新检查本次任务配置，避免沿用上一任务的配置结果。' : configPreviewLoading ? '正在读取当前任务的 DXM 编辑页字段来源。' : `请先补齐：${visibleConfigMissing(configPreviewForSelectedTask?.missing ?? []).slice(0, 6).join('、') || '当前支持的必填配置'}`}</span>
-            {(configBlocksStart || configPreviewTaskMismatch) && (
-              <div className="next-step-actions">
-                <button className="button button--secondary" type="button" onClick={onShowConfig}>去填写编辑页</button>
-              </div>
-            )}
-          </div>
-        )}
-        {!selectedTaskCompleted && l2BlocksStart && (
-          <ReadonlyRecheckHelpCard
-            l2Gate={l2Gate}
-            l3BlocksStart={l3BlocksStart}
-            summaries={l2DiagnosticSummaries}
-            busy={busy}
-            demoEnabled={demoEnabled}
-            selectedTask={selectedTask}
-            selectedTaskIsDryRun={selectedTaskIsDryRun}
-            l2ProbeResourceState={l2ProbeResourceState}
-            onRunL2Probe={onRunL2Probe}
-            onShowConsole={onShowConsole}
-            onShowEvidence={onShowEvidence}
-            onShowReports={onShowReports}
-          />
-        )}
-        {!selectedTaskCompleted && !l2BlocksStart && l3BlocksStart && (
-          <div className="gate-note gate-note--danger">
-            <strong>真实保存已阻断</strong>
-            <span>{humanGateDetail(l2Gate?.detail) ?? '需要已有待认领列表与商品箱页面两个页面检查均通过。'}</span>
-            <span>待认领入箱是第一段；保存前安全检查只用于第二段商品箱编辑保存前，人工确认未完成前不启动单商品只保存，批量保存当前未开放。</span>
-            <div className="next-step-actions">
-              <button className="button button--secondary" type="button" onClick={onShowConsole}>查看阻断说明</button>
-              <button className="button button--secondary" type="button" onClick={onShowReports} data-section="reports">查看评审与检查计划</button>
-              <button className="button button--quiet" type="button" onClick={onShowEvidence}>查看证据缺口</button>
-            </div>
-          </div>
-        )}
-        {!selectedTaskCompleted && l2BlocksStart && l2DiagnosticSummaries.length > 0 && (
-          <details className="inline-disclosure l2-block-summary">
-            <summary>保存前安全检查诊断摘要</summary>
-            {l2DiagnosticSummaries.slice(0, 2).map((item) => (
-              <span key={item.target}>{item.targetLabel}：{humanDiagnosticNavigation(item.navigation)}，{item.failedChecks.slice(0, 2).map(humanFailedCheckLabel).join(' / ') || '页面检查未满足'}。下一步：{item.nextAction}</span>
-            ))}
-          </details>
-        )}
-        {!selectedTaskCompleted && needsApproval && !selectedTaskNotDraft && (
-          <div className="gate-note">
-            <span>待认领入箱可直接启动第一段流程；单商品只保存会先请求后端批准令牌；批量保存当前未开放。</span>
-            <L3ApprovalInlineForm
-              approvedBy={l3ApprovedBy}
-              busy={busy || startDisabled}
-              onApprovedByChange={onL3ApprovedByChange}
-              onSubmit={onStartTask}
-              disabledReason={startDisabled ? startLabel : ''}
-            />
-          </div>
-        )}
-      </div>
-
-      <details className="module-card span-2 task-support-drawer disclosure-card">
-        <summary>
-          更多任务操作与记录
-          <span>历史任务、更多商品和高级诊断继续折叠，不抢占首屏</span>
-        </summary>
-        <div className="task-support-drawer__content">
-          <details className="inline-disclosure task-create-drawer">
-            <summary>创建商品箱编辑保存任务</summary>
-            <div className="real-task-card" aria-label="创建真实任务" data-publish-scene="SMT_SEMI_MANAGED_SAVE_ONLY">
-              <div className="real-task-card__head">
-                <div>
-                  <strong>选择店铺、商品和执行范围</strong>
-                  <span>保存路径固定为只保存不发布；批量/无人值守仍需单独验收。</span>
-                </div>
-                <span className="guard-chip">发布动作未开放</span>
-              </div>
-              <div className="real-task-form">
-                <label>
-                  <span>店铺</span>
-                  <select value={draftStoreId} onChange={(event) => setDraftStoreId(event.target.value)} disabled={busy || uniqueStoreOptions.length === 0}>
-                    {uniqueStoreOptions.map((store) => (
-                      <option key={store.id} value={store.id}>
-                        {store.name} / {store.platform}
-                      </option>
-                    ))}
-                    {!uniqueStoreOptions.length && <option value="">等待真实店铺</option>}
-                  </select>
-                </label>
-                <div className="real-task-mode" role="radiogroup" aria-label="执行模式">
-                  <button className="is-selected" type="button" aria-pressed="true">
-                    <strong>单商品只保存</strong>
-                    <span>当前交付唯一可创建路径</span>
-                  </button>
-                  <button type="button" disabled aria-disabled="true">
-                    <strong>批量保存未放行</strong>
-                    <span>批量/无人值守需单独验收</span>
-                  </button>
-                </div>
-              </div>
-              {singleSaveProductCountInvalid && (
-                <div className="guard-note guard-note--warn">
-                  商品箱编辑保存一次只能选择 1 个商品；当前已选 {selectedDraftProducts.length} 个。保存前安全检查可多选，真实保存请保留 1 个商品。
-                </div>
-              )}
-              <div className="real-task-products" aria-label="选择商品箱商品">
-                {uniqueProductOptions.slice(0, 6).map((product) => (
-                  <label key={product.id} className="real-task-product">
-                    <input
-                      type="radio"
-                      name="single-save-product"
-                      checked={selectedDraftProducts[0]?.id === product.id}
-                      onChange={() => selectSingleDraftProduct(product.id)}
-                      disabled={busy}
-                    />
-                    <span>{product.title}</span>
-                    <small>{product.category_name || '未指定类目'} / SKU {product.sku_count}</small>
-                  </label>
-                ))}
-                {uniqueProductOptions.length > 6 && <span className="toolbar-note">还有 {uniqueProductOptions.length - 6} 个商品保留在队列；当前版本每次只创建 1 个商品的只保存任务。</span>}
-                {!uniqueProductOptions.length && <EmptyState title="暂无商品" detail="请先导入真实商品；普通模式不使用本地演示商品。" />}
-              </div>
-              <div className="task-start-strip">
-                <button
-                  className="button button--primary"
-                  type="button"
-                  onClick={submitRealTask}
-                  disabled={!canCreateRealTask}
-                  data-testid="real-task-create"
-                >
-                  创建真实任务
-                </button>
-                <span className="toolbar-note">{selectedDraftProducts.length ? `已选择 ${selectedDraftProducts.length} 个商品箱商品` : '先选择商品箱商品'}</span>
-              </div>
-            </div>
-            {demoEnabled && (
-              <div className="toolbar task-start-strip" aria-label="开发模式任务">
-                <button className="button button--quiet" type="button" onClick={onBootstrapDemo} disabled={busy}>
-                  创建开发自检批次
-                </button>
-                <span className="toolbar-note">开发模式，不触达 DXM</span>
-              </div>
-            )}
-          </details>
-          <details className="inline-disclosure task-history-drawer">
-            <summary>选择其它任务 / 历史批次</summary>
-            {workspace.tasks.length > 0 && (
-              <div className="task-list-toolbar">
-                <div className="task-list-summary">
-                  <strong>任务列表</strong>
-                  <span>
-                    默认显示单商品只保存相关批次，辅助/历史批次默认隐藏{collapsedTaskCount > 0 ? `，已合并 ${collapsedTaskCount} 条重复批次` : ''}。
-                  </span>
-                </div>
-                {canToggleTaskHistory && (
-                  <button className="button button--quiet" type="button" onClick={() => setShowAllTasks((value) => !value)}>
-                    {showAllTasks ? '收起历史任务' : `显示全部历史任务（${workspace.tasks.length}）`}
-                  </button>
-                )}
-                {!showAllTasks && hiddenTaskCount > 0 && <small>已隐藏 {hiddenTaskCount} 条历史记录，不影响真实任务数据。</small>}
-              </div>
-            )}
-            <div className="task-list">
-              {visibleTaskRows.map((task) => (
-                <button
-                  key={task.id}
-                  type="button"
-                  className={`task-row ${selectedTask?.id === task.id ? 'is-selected' : ''}`}
-                  onClick={() => onSelectTask(task.id)}
-                  data-task-id={task.id}
-                  data-task-mode={task.mode}
-                >
-                  <div>
-                    <strong>{displayTaskName(task)}</strong>
-                    <span>{task.payload.store_name ?? workspace.stores[0]?.name ?? '未绑定店铺'} / {task.payload.category_name ?? '未指定类目'}</span>
-                  </div>
-                  <div className="task-row__meta">
-                    <span>{humanTaskStatus(task.status)}</span>
-                    <small>{task.completed_jobs}/{Math.max(task.total_jobs, 1)} 完成</small>
-                  </div>
-                </button>
-              ))}
-              {!workspace.tasks.length && (
-                <EmptyState title="暂无真实任务" detail={demoEnabled ? '开发模式可创建本地自检批次；普通使用请先完成待认领入箱，再创建商品箱编辑保存任务。' : '请先完成待认领入箱，再创建商品箱编辑保存任务，普通模式不展示本地自检入口。'} />
-              )}
-            </div>
-          </details>
-          <details className="inline-disclosure task-product-drawer">
-            <summary>查看更多商品</summary>
-            <div className="product-queue-card">
-              <ModuleHead title="商品队列" meta={`${uniqueProductOptions.length} 个商品`} />
-              <div className="product-list">
-                {uniqueProductOptions.map((product) => (
-                  <ProductCard key={product.id} product={product} />
-                ))}
-                {!uniqueProductOptions.length && (
-                  <EmptyState title="暂无商品" detail="真实导入后这里展示待保存队列；开发自检数据仅开发模式可用。" />
-                )}
-              </div>
-            </div>
-          </details>
-          <details className="inline-disclosure task-release-drawer">
-            <summary>查看批量/发布边界</summary>
-            <RealModeReleasePlanPanel items={unreleasedReleaseItems} />
-          </details>
-          <details className="inline-disclosure task-acceptance-drawer">
-            <summary>查看任务验收口径</summary>
-            <div>
-              <ModuleHead title="任务验收口径" meta="运营可读" />
-              <div className="acceptance-strip">
-                <span>先验证配置完整性</span>
-                <span>保存前安全检查通过后才允许人工确认保存</span>
-                <span>保留截图与结构化证据</span>
-                <span>异常进入人工池</span>
-                <span>最后生成报告</span>
-              </div>
-            </div>
-          </details>
-          <details className="inline-disclosure task-decision-drawer">
-            <summary>启动条件说明</summary>
-            <div className="gate-decision">
-              <DecisionRow
-                label="保存前安全检查"
-                status={l2Gate?.status ?? 'not_run'}
-                detail="只有真实页面检查通过后，才允许进入真实保存启动判断；离线证据、部分通过、失败或未运行都不能启动真实保存。"
-              />
-              {l2DiagnosticSummaries.length > 0 && (
-                <div className="l2-diagnostics" aria-label="L2 失败诊断">
-                  <div className="l2-diagnostics__head">
-                    <strong>只读失败诊断</strong>
-                    <span>仅用于定位问题，不放行真实保存</span>
-                  </div>
-                {l2DiagnosticSummaries.map((item) => (
-                  <article key={item.target} className="l2-diagnostic-card">
-                    <div className="l2-diagnostic-card__title">
-                      <strong>{item.targetLabel}</strong>
-                      <span>{item.navigation}</span>
-                    </div>
-                    <div className="l2-diagnostic-card__chips">
-                      {item.failedChecks.slice(0, 4).map((check) => (
-                        <span key={check} className="guard-chip guard-chip--danger">{check}</span>
-                      ))}
-                    </div>
-                    <ul>
-                      <li><strong>最终地址</strong>{item.navigation}</li>
-                      <li><strong>失败检查</strong>{item.failedChecks.slice(0, 4).map(humanFailedCheckLabel).join(' / ') || '页面检查未满足'}</li>
-                      <li><strong>请求情况</strong>{item.requestSummary}</li>
-                      <li><strong>下一步</strong>{item.nextAction}</li>
-                      {item.renderHint && <li>{item.renderHint}</li>}
-                      {item.reviewCandidateCount > 0 && (
-                        <li>只读依赖候选 {item.reviewCandidateCount} 项，仍需人工评审，不自动放行。</li>
-                      )}
-                    </ul>
-                    {(item.topRequests.length > 0 || item.reviewCandidateRequests.length > 0) && (
-                      <details className="inline-disclosure l2-raw-request-drawer">
-                        <summary>查看原始请求诊断</summary>
-                        {item.topRequests.length > 0 && (
-                          <div className="l2-review-candidates" aria-label={`${item.targetLabel} 拦截请求诊断清单`}>
-                            <strong>拦截请求诊断清单</strong>
-                            <span>仅用于开发排查，不自动放行真实保存</span>
-                            <ul>
-                              {item.topRequests.map((request) => (
-                                <li key={request}>{request}</li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-                        {item.reviewCandidateRequests.length > 0 && (
-                          <div className="l2-review-candidates" aria-label={`${item.targetLabel} 只读依赖人工评审清单`}>
-                            <strong>只读依赖人工评审清单</strong>
-                            <span>仅人工评审，不自动放行真实保存</span>
-                            <ul>
-                              {item.reviewCandidateRequests.map((request) => (
-                                <li key={request}>{request}</li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-                      </details>
-                    )}
-                  </article>
-                ))}
-                </div>
-              )}
-              {l2Gate?.status !== 'passed' && l2DiagnosticSummaries.length === 0 && (
-                <div className="l2-diagnostics" aria-label="L2 失败诊断">
-                  <div className="l2-diagnostics__head">
-                    <strong>只读失败诊断</strong>
-                    <span>未收到明细，不放行真实保存</span>
-                  </div>
-                  <article className="l2-diagnostic-card">
-                    <div className="l2-diagnostic-card__title">
-                      <strong>保存前安全检查未通过</strong>
-                      <span>{l2Gate?.status ?? 'not_run'}</span>
-                    </div>
-                    <ul>
-                      <li>{l2Gate?.detail ?? '缺少保存前安全检查证据。'}</li>
-                      <li>需要已有待认领列表与商品箱页面双目标真实通过后，才可进入保存判断。</li>
-                    </ul>
-                  </article>
-                </div>
-              )}
-              <DecisionRow
-                label="单商品只保存"
-                status={l3Gate?.status ?? 'not_run'}
-                detail={l3Gate?.status === 'blocked'
-                  ? '待认领入箱是第一段；保存前安全检查只用于第二段商品箱编辑保存前，人工确认未完成前不启动单商品只保存，批量保存当前未开放。'
-                  : '真实写操作仍需要人工批准令牌；待批准不等于已通过。'}
-              />
-              <div className="gate-note">
-                当前按钮策略：待认领入箱可启动第一段流程；保存前安全检查未通过时只阻断第二段编辑保存；单商品只保存仍需后端人工批准；批量保存当前未开放。
-              </div>
-            </div>
-          </details>
-        </div>
-      </details>
-    </section>
-  )
-}
-
 export function ExecutionConsole({
   workspace,
   selectedTask,
@@ -3238,7 +2560,7 @@ function AgentStagePanel({
   onClearSavedDxmCredential: () => void
   onOpenDxmLogin: () => void
   onContinueDxmLogin: () => void
-  onNavigateDxmTarget: (target: 'data_acquisition' | 'draft_box') => void
+  onNavigateDxmTarget: (target: 'draft_box') => void
   onStopAgentConsole: () => void
   onSnapshotAgentConsole: () => void
   onRequestAgentConsoleTakeover: () => void
@@ -3351,7 +2673,7 @@ function ConsoleCompletedReviewPanel({
       <div className="console-review-panel__body">
         <div>
           <strong>下一步只复核结果</strong>
-          <span>查看保存结果、未发布证明和真实浏览器记录；如要处理新商品，先完成待认领入箱，再回到商品箱编辑保存创建新任务。</span>
+          <span>查看保存结果、未发布证明和真实浏览器记录；如要处理新商品，直接回到商品箱编辑保存创建新任务。</span>
         </div>
         <div className="console-review-panel__facts">
           <span><b>结果</b><strong>优先查看</strong></span>
@@ -3485,6 +2807,36 @@ function runtimeControlOwnerText(owner: string, managedByDesktop: boolean) {
   return '旧进程/直接 Python，关闭并重新打开免安装版 exe'
 }
 
+function L2ProbeResourceRepairPanel({
+  l2ProbeResourceState,
+}: {
+  l2ProbeResourceState: ReturnType<typeof getL2ProbeResourceState>
+}) {
+  if (
+    !l2ProbeResourceState.blocked
+    || (!l2ProbeResourceState.repairSteps.length && !l2ProbeResourceState.checkedPathPreview.length)
+  ) return null
+
+  return (
+    <div className="l2-probe-repair-panel" aria-label="保存前安全检查资源修复步骤">
+      <strong>保存前安全检查资源修复步骤</strong>
+      {l2ProbeResourceState.repairSteps.length > 0 && (
+        <ol>
+          {l2ProbeResourceState.repairSteps.map((step) => <li key={step}>{step}</li>)}
+        </ol>
+      )}
+      {l2ProbeResourceState.checkedPathPreview.length > 0 && (
+        <details className="inline-disclosure">
+          <summary>查看已检查路径</summary>
+          <div>
+            {l2ProbeResourceState.checkedPathPreview.map((path) => <small key={path}>{path}</small>)}
+          </div>
+        </details>
+      )}
+    </div>
+  )
+}
+
 function getL2ProbeResourceState(runtimeStatus: RuntimeStatus | null) {
   if (!runtimeStatus || !runtimeStatus.dependencies) {
     return {
@@ -3520,7 +2872,7 @@ function getL2ProbeResourceState(runtimeStatus: RuntimeStatus | null) {
   if (!missing.length) {
     return {
       blocked: false,
-      title: '运行双目标保存前安全检查；不会保存、不会发布。',
+      title: '运行商品箱保存前安全检查；不会保存、不会发布。',
       detail: '',
       repairSteps: [],
       checkedPathPreview: [],
@@ -3597,10 +2949,9 @@ function RuntimeControlResultSummary({ result }: { result: RuntimeControlRespons
 
 function formatL2ProbeTargets(targets?: string[]) {
   const labels = {
-    data_acquisition: '已有待认领列表',
     draft_box: '商品箱',
   } as Record<string, string>
-  const values = (targets?.length ? targets : ['data_acquisition', 'draft_box'])
+  const values = (targets?.length ? targets : ['draft_box'])
     .map((target) => labels[target] ?? target)
   return values.join('、')
 }
@@ -3631,7 +2982,7 @@ function manualReviewTaskLabel(item: Record<string, unknown>) {
 function canMarkRealTaskForManualReview(task: Task | null) {
   if (!task) return false
   const mode = String(task.mode || task.payload?.execution_mode || '')
-  if (!['claim_only', 'single_save', 'batch_save'].includes(mode)) return false
+  if (!['single_save', 'batch_save'].includes(mode)) return false
   return ['running', 'paused', 'failed', 'partial_success'].includes(String(task.status || ''))
 }
 
@@ -4035,7 +3386,7 @@ function ConsolePrimaryBlockerCard({
         {primaryPath.action === 'run_l2' && (
           <div className="console-primary-blocker-card__recovery" aria-label="保存前安全检查失败恢复路径">
             <span><b>1 确认登录</b><small>真实浏览器已登录，验证码或账号密码错误先在登录窗口修正。</small></span>
-            <span><b>2 打开目标页</b><small>能打开已有待认领列表和商品箱；打不开先处理页面权限或网络。</small></span>
+            <span><b>2 打开目标页</b><small>能打开商品箱；打不开先处理页面权限或网络。</small></span>
             <span><b>3 重新检查</b><small>无写入风险后，再点击运行保存前安全检查。</small></span>
             <button className="button button--quiet" type="button" onClick={() => onRuntimeLogSourceChange('launcher')}>
               查看启动器日志
@@ -4047,9 +3398,9 @@ function ConsolePrimaryBlockerCard({
         )}
         {primaryPath.code === 'select_task' && (
           <div className="console-primary-blocker-card__task-path" aria-label="任务准备路径">
-            <span><b>1 创建待认领商品任务</b><small>先从店小秘已有待认领列表把商品放进商品箱。</small></span>
+            <span><b>1 读取商品箱现有商品</b><small>从店小秘商品箱冻结本次编辑范围。</small></span>
             <span><b>2 从商品箱创建保存任务</b><small>完成后，选择已进入商品箱的商品创建单商品只保存。</small></span>
-            <span><b>3 再确认配置并保存</b><small>第二段才补编辑页配置、人工确认只保存；批量和发布入口保持关闭。</small></span>
+            <span><b>3 确认配置并保存</b><small>补齐编辑页配置、人工确认只保存；旧版批量保存和发布入口保持关闭。</small></span>
           </div>
         )}
         {showLoginRecovery && (
@@ -4296,7 +3647,7 @@ function AgentConsoleControls({
   browserStartBlocked: boolean
   browserStartBlockReason: string
   onStartAgentConsole: () => void
-  onNavigateDxmTarget: (target: 'data_acquisition' | 'draft_box') => void
+  onNavigateDxmTarget: (target: 'draft_box') => void
   onStopAgentConsole: () => void
   onSnapshotAgentConsole: () => void
   onRequestAgentConsoleTakeover: () => void
@@ -4434,7 +3785,7 @@ function AgentConsoleControls({
           type="button"
           onClick={onStartAgentConsole}
           disabled={busy || !selectedTask || browserStartBlocked || active || launching}
-          title={active ? '独立诊断浏览器正在运行；真实任务启动前需要先关闭。' : browserStartBlocked ? browserStartBlockReason : realSaveBlocked ? realSaveBlockReason : '仅打开独立诊断浏览器，不会启动认领、保存或发布'}
+          title={active ? '独立诊断浏览器正在运行；真实任务启动前需要先关闭。' : browserStartBlocked ? browserStartBlockReason : realSaveBlocked ? realSaveBlockReason : '仅打开独立诊断浏览器，不会启动保存或发布'}
         >
           {launching
             ? '诊断浏览器启动中'
@@ -4447,7 +3798,7 @@ function AgentConsoleControls({
         <summary>模式说明与安全边界</summary>
         <div className="agent-console-controls__mission">
           <strong>独立诊断模式</strong>
-          <span>本页只用于排查登录、页面和浏览器问题，不负责启动真实认领、单商品保存或整批执行。诊断结束后先关闭窗口，再回到对应任务页批准并启动。</span>
+          <span>本页只用于排查登录、页面和浏览器问题，不负责启动单商品保存或整批执行。诊断结束后先关闭窗口，再回到对应任务页批准并启动。</span>
           <div>
             <b>1 排查登录</b>
             <b>2 查看页面</b>
@@ -4613,7 +3964,7 @@ function L2RunnerStatePanel({
     : state.status === 'failed'
       ? '保存前安全检查失败，真实保存仍阻断'
       : state.status === 'running'
-        ? '正在运行双目标保存前安全检查'
+        ? '正在运行商品箱保存前安全检查'
         : '等待运行保存前安全检查'
   const stateLine = state.line ? humanL2PrecheckError(state.line) : null
 
@@ -4626,7 +3977,7 @@ function L2RunnerStatePanel({
         <small>{state.status === 'passed'
           ? '可以继续人工确认只保存。'
           : state.status === 'failed'
-            ? '请确认已登录并能打开已有待认领列表、商品箱页面后重试。'
+            ? '请确认已登录并能打开商品箱页面后重试。'
             : state.status === 'running'
               ? '请等待检查完成，完成后自动刷新。'
               : '点击下方按钮开始检查。'}</small>
@@ -4691,7 +4042,7 @@ function L2PrecheckFailureAdvice({
         <article>
           <span><b>失败页面</b><small>等待诊断明细</small></span>
           <span><b>失败检查</b><small>未收到页面诊断，请先查看启动器日志。</small></span>
-          <span><b>下一步处理</b><small>请确认已登录并能打开已有待认领列表、商品箱页后重试。</small></span>
+          <span><b>下一步处理</b><small>请确认已登录并能打开商品箱页后重试。</small></span>
         </article>
       )}
     </div>
@@ -4719,8 +4070,8 @@ function L2PrecheckRunbook({
     <details className="l2-precheck-runbook inline-disclosure" aria-label="保存前安全检查操作引导">
       <summary>安全检查说明</summary>
       <div className="l2-precheck-runbook__steps">
-        <span><b>1 打开真实店小秘页面</b><small>确认已登录，能访问已有待认领列表。</small></span>
-        <span><b>2 检查两个页面</b><small>已有待认领列表 + 商品箱；不会认领、不会保存、不会发布。</small></span>
+        <span><b>1 打开真实店小秘页面</b><small>确认已登录，能访问商品箱。</small></span>
+        <span><b>2 检查商品箱</b><small>只读取页面；不会修改、不会保存、不会发布。</small></span>
         <span><b>3 通过后人工确认保存</b><small>只读通过不等于保存，仍需人工确认单商品只保存。</small></span>
       </div>
       <small>{nextAction}</small>
@@ -4996,9 +4347,7 @@ function isBusinessRuntimeLogItem(item: RuntimeLogItem, summary: string) {
     '店小秘',
     '登录',
     '保存前安全检查',
-    '待认领列表',
     '商品箱',
-    '认领',
     '编辑页',
     '填写',
     '图片',
@@ -5013,9 +4362,6 @@ function isBusinessRuntimeLogItem(item: RuntimeLogItem, summary: string) {
     || [
       'step=',
       'task#',
-      'open_data_acquisition',
-      'claim_to_draft_box',
-      'verify_draft_box_claim',
       'open_edit_page',
       'open_editor',
       'fill_base_info',
@@ -5091,12 +4437,6 @@ function humanRuntimeLogLine(item: RuntimeLogItem) {
     if (normalized.includes('save_only') || normalized.includes('add.json') || normalized.includes('保存')) {
       return '保存步骤失败：系统没有继续发布，请按页面提示检查真实浏览器后重试。'
     }
-    if (normalized.includes('claim_to_draft_box') || normalized.includes('认领')) {
-      return '待认领入箱失败：商品没有进入商品箱，系统没有进入编辑保存。请检查目标商品是否已在店小秘待认领列表中，然后重试。'
-    }
-    if (normalized.includes('open_data_acquisition')) {
-      return '已有待认领列表打开失败：请确认店小秘已登录并能访问待认领列表。'
-    }
     if (normalized.includes('open_edit_page') || normalized.includes('open_editor')) {
       return '编辑页打开失败：请确认商品已进入商品箱后重试。'
     }
@@ -5113,15 +4453,6 @@ function humanRuntimeLogLine(item: RuntimeLogItem) {
   }
   if (line.includes('Cannot switch to a different thread') || normalized.includes('greenlet') || line.includes('Playwright Sync API') || line.includes('Playwright')) {
     return '浏览器会话异常：当前浏览器自动化会话已经失效，系统没有继续保存。请关闭当前浏览器现场，重新打开真实浏览器后再运行任务。'
-  }
-  if (normalized.includes('open_data_acquisition')) {
-    return '正在打开店小秘已有待认领列表。'
-  }
-  if (normalized.includes('claim_to_draft_box')) {
-    return '正在把选中的商品放进商品箱。'
-  }
-  if (normalized.includes('verify_draft_box_claim')) {
-    return '正在确认商品已经进入商品箱。'
   }
   if (normalized.includes('open_edit_page') || normalized.includes('open_editor')) {
     return '正在打开店小秘商品编辑页。'
@@ -5155,9 +4486,6 @@ function humanRuntimeLogLine(item: RuntimeLogItem) {
   }
   if (normalized.includes('target=draft_box') || normalized.includes('draft_box')) {
     return '正在检查店小秘商品箱页面。'
-  }
-  if (normalized.includes('target=data_acquisition') || normalized.includes('data_acquisition')) {
-    return '正在检查店小秘已有待认领列表。'
   }
   if (normalized.includes('add.json') || line.includes('保存成功') || line.includes('编辑成功')) {
     return '店小秘保存接口返回成功。'
@@ -5345,10 +4673,10 @@ function buildConsolePrimaryPath({
     return {
       code: 'select_task',
       title: '需要选择任务',
-      reason: '当前没有选中的待认领商品或商品箱编辑保存任务。',
-      detail: '先从店小秘已有待认领商品创建任务；商品进入商品箱后，再创建商品箱编辑保存任务。',
-      next: '去待认领入箱',
-      ctaLabel: '去待认领入箱',
+      reason: '当前没有选中的商品箱编辑保存任务。',
+      detail: '直接读取商品箱现有商品，再创建编辑保存任务。',
+      next: '去商品箱编辑保存',
+      ctaLabel: '去商品箱编辑保存',
       action: 'tasks',
       browserStatus: '未选择任务，浏览器现场暂不启动',
       blocksBrowserStart: true,
@@ -5356,17 +4684,14 @@ function buildConsolePrimaryPath({
     }
   }
   if (selectedTask.status === 'completed') {
-    const claimCompleted = selectedTask.mode === 'claim_only'
     return {
       code: 'completed',
-      title: claimCompleted ? '待认领入箱完成' : '保存成功',
+      title: '保存成功',
       reason: '当前任务已完成。',
-      detail: claimCompleted
-        ? '商品已进入商品箱；下一步到“商品箱编辑保存”创建只保存任务。'
-        : '继续复核保存结果、未发布证明、日志和证据。',
-      next: claimCompleted ? '进入商品箱编辑保存' : '查看保存结果与未发布证明',
-      ctaLabel: claimCompleted ? '进入商品箱编辑保存' : '查看保存结果',
-      action: claimCompleted ? 'draft_edit_save' : 'reports',
+      detail: '继续复核保存结果、未发布证明、日志和证据。',
+      next: '查看保存结果与未发布证明',
+      ctaLabel: '查看保存结果',
+      action: 'reports',
       browserStatus: '任务已完成',
       blocksBrowserStart: true,
       saveBlocked: false,
@@ -5434,7 +4759,7 @@ function buildConsolePrimaryPath({
       code: 'unreleased',
       title: '当前模式未放行',
       reason: `${humanTaskModeLabel(selectedTask.mode)} 当前未放行。`,
-      detail: '批量保存和无人值守仍需单独验收；当前开放待认领入箱和单商品只保存路径。',
+      detail: '旧版批量保存和无人值守仍需单独验收；当前开放商品箱受控逐件批次和单商品只保存路径。',
       next: '回到商品箱编辑保存页创建只保存任务',
       ctaLabel: '创建商品箱编辑保存任务',
       action: 'tasks',
@@ -5506,7 +4831,7 @@ function buildConsolePrimaryPath({
       code: 'l2',
       title: '需要运行保存前安全检查',
       reason: `保存前安全检查：${humanGateStateLabel(l2Gate?.status ?? 'not_run')}。${READONLY_PRECHECK_PURPOSE}`,
-      detail: l2Detail ?? '需要已有待认领列表和商品箱页面两个真实页面检查均通过。',
+      detail: l2Detail ?? '需要商品箱页面真实检查通过。',
       next: READONLY_PRECHECK_CTA,
       ctaLabel: READONLY_PRECHECK_CTA,
       action: 'run_l2',
@@ -5546,10 +4871,8 @@ function buildConsolePrimaryPath({
   return {
     code: 'ready',
     title: '任务已就绪',
-    reason: selectedTask.mode === 'claim_only' ? '店小秘登录和保存前安全检查当前未阻断。' : '配置、保存前安全检查和人工确认当前未阻断。',
-    detail: selectedTask.mode === 'claim_only'
-      ? '回到当前保存任务，填写批准人后直接批准并启动认领。无需先打开独立诊断浏览器。'
-      : '回到当前保存任务，填写批准人后直接批准并启动单商品只保存。无需先打开独立诊断浏览器。',
+    reason: '配置、保存前安全检查和人工确认当前未阻断。',
+    detail: '回到当前保存任务，填写批准人后直接批准并启动单商品只保存。无需先打开独立诊断浏览器。',
     next: '回到当前保存任务批准并启动',
     ctaLabel: '回到当前保存任务',
     action: 'tasks',
@@ -5811,7 +5134,6 @@ function humanEvidencePointTitle(point: EvidencePoint) {
     VERIFY_EDIT_OWNERSHIP: '确认编辑页归属',
     OPEN_EDIT_PAGE: '打开编辑页',
     VERIFY_LIST_OWNERSHIP: '确认商品箱归属',
-    CLAIM_PRODUCT: '写入认领标记',
     ITEM_LOCKING: '锁定任务商品',
     FIND_PRODUCT: '定位目标商品',
     OPEN_DRAFT_LIST: '打开商品箱',
@@ -5875,7 +5197,7 @@ function buildProblemCardCopy(item: ExceptionItem) {
     return {
       title: '保存前安全检查没有通过',
       what: message,
-      why: '已有待认领列表和商品箱页面没有完成安全检查前，系统不会启动真实保存。',
+      why: '商品箱页面没有完成安全检查前，系统不会启动真实保存。',
       next: `点“${READONLY_PRECHECK_CTA}”；如果提示正在运行，就等待完成后刷新。`,
     }
   }
@@ -6122,7 +5444,6 @@ function summarizeL2Diagnostics(gate?: RegressionGate): L2DiagnosticSummary[] {
 
 function humanL2TargetLabel(target: string) {
   return ({
-    data_acquisition: '已有待认领列表',
     draft_box: '商品箱',
   } as Record<string, string>)[target] ?? target
 }
@@ -6142,7 +5463,7 @@ function l2DiagnosticNextAction({
     return '先在真实登录浏览器完成登录，再重新运行保存前安全检查。'
   }
   if (failedCheckKeys.includes('final_url_matches') || failedCheckKeys.includes('target_url_matches') || finalClass === 'home' || finalClass === 'other') {
-    return '检查目标页面是否跳到首页/登录页，必要时重新进入待认领列表或商品箱后复跑。'
+    return '检查目标页面是否跳到首页/登录页，必要时重新进入商品箱后复跑。'
   }
   if (reviewCandidateCount > 0) {
     return '把只读依赖候选交给人工评审；未评审前不要放行真实保存。'
@@ -6238,7 +5559,7 @@ function buildConsoleSteps(selectedTask: Task | null, logs: LogItem[]) {
     { title: '配置检查', detail: '店铺、商品、模板、图片与隔离口径', state: hasLogs ? 'done' : 'current' },
     { title: '任务锁定', detail: '绑定商品与批次，不触碰上架入口', state: active || completed ? 'done' : 'pending' },
     { title: '只读页面核验', detail: '核对真实页面、字段和证据路径', state: active ? 'current' : completed ? 'done' : 'pending' },
-    { title: '只读复核', detail: '确认双目标同轮次只读证据', state: completed ? 'done' : 'pending' },
+    { title: '只读复核', detail: '确认商品箱同轮次只读证据', state: completed ? 'done' : 'pending' },
     { title: '真实保存确认', detail: '需要人工批准与明确保存回包证据', state: completed ? 'done' : 'pending' },
     { title: '保存复盘', detail: '证明强度、失败恢复、验收缺口归档', state: completed ? 'done' : 'pending' },
   ]
@@ -6365,7 +5686,7 @@ function isStartableSingleSaveTask(task: Task) {
 }
 
 function isReleasedRealDxmMutationTask(task: Task) {
-  return task.mode === 'claim_only' || task.mode === 'single_save'
+  return task.mode === 'single_save'
 }
 
 function isUnreleasedRealDxmMutationTask(task: Task) {
@@ -6380,7 +5701,6 @@ function humanTaskModeLabel(mode?: string | null) {
   const labels: Record<string, string> = {
     probe: '保存前安全检查',
     single_save: '单商品只保存',
-    claim_only: '待认领商品',
     batch_save: '批量保存未开放',
     dry_run: '开发自检',
   }
@@ -6417,9 +5737,8 @@ function humanGateDetail(detail?: string | null) {
   ) {
     return `保存前安全检查证据已过期，请点击“${READONLY_PRECHECK_CTA}”刷新后再继续。`
   }
-  if (detail.includes('data_acquisition') || detail.includes('draft_box')) {
+  if (detail.includes('draft_box')) {
     return detail
-      .split('data_acquisition').join('已有待认领列表')
       .split('draft_box').join('商品箱页面')
       .split('L2').join('保存前安全检查')
       .split('L3').join('真实保存')
@@ -6463,9 +5782,7 @@ function humanL2PrecheckError(message: string) {
 
 function humanDiagnosticNavigation(value: string) {
   return value
-    .split('data_acquisition').join('已有待认领列表')
     .split('draft_box').join('商品箱页面')
-    .replace(/\/web\/productCrawl\/dataAcquisition/g, '已有待认领列表')
     .replace(/\/web\/smt\/smtProductList\/draft/g, '商品箱页面')
 }
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import hashlib
 import hmac
-import html as html_lib
 import re
 from collections import defaultdict
 from collections.abc import Mapping
@@ -45,9 +44,8 @@ L2_PROBE_COOKIE_FILE = "data\\sessions\\dianxiaomi_cookies.json"
 L2_PROBE_DESKTOP_COOKIE_FILE = "%APPDATA%\\DXM Agent Console\\data\\sessions\\dianxiaomi_cookies.json"
 L2_PROBE_OUTPUT_DIR = "data\\l2_readonly_probe"
 L2_PROBE_ALLOWLIST_FILE = "config\\l2_readonly_allowlist.json"
-REQUIRED_L2_TARGETS = ("data_acquisition", "draft_box")
+REQUIRED_L2_TARGETS = ("draft_box",)
 L2_TARGET_PATH_HINTS = {
-    "data_acquisition": "/web/productcrawl/dataacquisition",
     "draft_box": "/web/smt/smtproductlist/draft",
 }
 L2_ZERO_NETWORK_COUNTERS = (
@@ -61,19 +59,9 @@ L2_READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 L2_ACTIVE_RESOURCE_TYPES = {"xhr", "fetch", "eventsource", "websocket"}
 L2_REAL_TARGET_MAX_SKEW_SECONDS = 30 * 60
 L2_REAL_TARGET_MAX_AGE_SECONDS = 2 * 60 * 60
-CLAIM_CANDIDATE_LIMIT = 20
-CLAIM_ROW_RE = re.compile(r"<tr\b[^>]*class=\"[^\"]*\bvxe-body--row\b[^\"]*\"[^>]*>.*?</tr>", re.IGNORECASE | re.DOTALL)
-TITLE_ATTR_RE = re.compile(r"class=\"[^\"]*\bno-new-line4\b[^\"]*\"[^>]*\btitle=\"([^\"]+)\"", re.IGNORECASE | re.DOTALL)
-FALLBACK_TITLE_ATTR_RE = re.compile(r"class=\"[^\"]*\bno-new-line2\b[^\"]*\"[^>]*\btitle=\"([^\"]+)\"", re.IGNORECASE | re.DOTALL)
-ANCHOR_RE = re.compile(r"<a\b(?=[^>]*\bhref=\"([^\"]+)\")[^>]*>(.*?)</a>", re.IGNORECASE | re.DOTALL)
-TAG_RE = re.compile(r"<[^>]+>")
-DATE_RE = re.compile(r"20\d{2}-\d{2}-\d{2}\s+\d{2}:\d{2}")
-PHONE_OR_ACCOUNT_RE = re.compile(r"\b1\d{10}\b")
-
 ACTION_TO_STATES = {
     "check_login_state": ("PRECHECK_SESSION",),
     "open_draft_box": ("OPEN_DRAFT_LIST",),
-    "claim_product": ("CLAIM_PRODUCT",),
     "open_editor": ("OPEN_EDIT_PAGE",),
     "verify_edit_ownership": ("VERIFY_EDIT_OWNERSHIP",),
     "fill_editor_required_defaults": ("FILL_BASE_INFO",),
@@ -125,7 +113,7 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
         task,
         reports,
     )
-    two_stage_acceptance = _two_stage_acceptance(
+    single_save_acceptance = _single_save_acceptance(
         repo,
         task,
         reports,
@@ -138,9 +126,8 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
         reports,
         evidences,
         state_consistency,
-        two_stage_acceptance,
+        single_save_acceptance,
     )
-    claim_candidates = _claim_candidates_from_l2_gate(l2_gate)
 
     workspace = {
         "baseline": _baseline(),
@@ -165,13 +152,12 @@ def build_delivery_workspace(repo: Repository, task_id: int | None = None) -> di
             l2_gate,
             delivery_readiness,
             state_consistency,
-            two_stage_acceptance,
+            single_save_acceptance,
         ),
         "state_consistency": state_consistency,
         "delivery_readiness": delivery_readiness,
-        "two_stage_acceptance": two_stage_acceptance,
+        "single_save_acceptance": single_save_acceptance,
         "real_mode_release_plan": _real_mode_release_plan(l2_gate, delivery_readiness),
-        "claim_candidates": claim_candidates,
         "acceptanceGaps": _acceptance_gaps(
             exceptions,
             extracted,
@@ -213,38 +199,7 @@ def _workspace_state_consistency(
         audits.append(audit)
 
     append_audit(task, reports)
-    claim_task_id = _linked_claim_task_id(repo, task)
-    if claim_task_id is not None and claim_task_id != task_id:
-        claim_task = repo.get_task_private(claim_task_id)
-        if claim_task:
-            append_audit(claim_task, repo.list_reports(claim_task_id))
-
     return combine_state_consistency(audits)
-
-
-def _linked_claim_task_id(repo: Repository, task: Mapping[str, Any]) -> int | None:
-    payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
-    claim_task_id = _int_or_none(payload.get("claim_task_id"))
-    if claim_task_id is not None:
-        return claim_task_id
-
-    product_ids = [
-        _int_or_none(payload.get("claimed_product_id")),
-        *[_int_or_none(job.get("product_id")) for job in task.get("jobs") or []],
-    ]
-    for product_id in product_ids:
-        if product_id is None:
-            continue
-        product = repo.get_product(product_id)
-        product_payload = (
-            product.get("payload")
-            if isinstance((product or {}).get("payload"), Mapping)
-            else {}
-        )
-        claim_task_id = _int_or_none(product_payload.get("claim_task_id"))
-        if claim_task_id is not None:
-            return claim_task_id
-    return None
 
 
 def _empty_delivery_workspace(
@@ -255,7 +210,6 @@ def _empty_delivery_workspace(
 ) -> dict[str, Any]:
     extracted = _extract_delivery_evidence([], [])
     l2_gate = _l2_probe_gate()
-    claim_candidates = _claim_candidates_from_l2_gate(l2_gate)
     delivery_readiness = {
         "schema": "dxm_delivery_readiness.v1",
         "ready": False,
@@ -267,6 +221,9 @@ def _empty_delivery_workspace(
         "jobs": [],
         "blocked_by_state_consistency": True,
         "state_violation_codes": ["STATE_TASK_UNAVAILABLE"],
+        "single_save_required": False,
+        "blocked_by_single_save_acceptance": True,
+        "single_save_missing_codes": ["task"],
     }
     state_consistency = {
         "schema": "dxm_state_consistency.v1",
@@ -302,16 +259,15 @@ def _empty_delivery_workspace(
         "regression_gates": _regression_gates(extracted, l2_gate, delivery_readiness, state_consistency),
         "state_consistency": state_consistency,
         "delivery_readiness": delivery_readiness,
-        "two_stage_acceptance": _empty_two_stage_acceptance(),
+        "single_save_acceptance": _empty_single_save_acceptance(),
         "real_mode_release_plan": _real_mode_release_plan(l2_gate, delivery_readiness),
-        "claim_candidates": claim_candidates,
         "acceptanceGaps": [
             {
                 "id": "empty-workspace",
                 "title": "还没有可执行任务",
                 "severity": "blocker",
                 "owner": "task_selection",
-                "detail": "请先在“待认领商品”或“商品箱编辑保存”中创建任务；没有任务时不会启动真实保存。",
+                "detail": "请先在“商品箱编辑保存”中选择真实商品并创建任务；没有任务时不会启动真实保存。",
                 "evidenceLevel": "C",
             }
         ],
@@ -380,26 +336,22 @@ def _real_mode_release_plan(
         }
 
     shared_controls = [
-        "fresh same-run L2 existing-claim-list and draft-box proof",
+        "fresh L2 draft-box readonly proof bound to the current build and browser session",
         "server-side manual approval token",
         "task runner evidence chain only; direct mutation endpoint remains forbidden",
         "publish guard must prove no publish, continue publish, save-and-publish, or move-to-publish action",
+        "UNKNOWN or DISPATCHED mutations must never be automatically retried",
     ]
     l2_status = str((l2_gate or {}).get("status") or "")
     l2_passed = l2_status == "passed"
-    claim_only_currently_allowed = l2_passed
     single_save_currently_allowed = l2_passed
     controlled_batch_currently_allowed = l2_passed
-    claim_only_status = "released_controlled" if claim_only_currently_allowed else "blocked_stale_l2"
     single_save_status = "released_controlled" if single_save_currently_allowed else "blocked_stale_l2"
     controlled_batch_status = (
         "released_controlled" if controlled_batch_currently_allowed else "blocked_stale_l2"
     )
-    claim_only_blockers = [] if claim_only_currently_allowed else [
-        str((l2_gate or {}).get("detail") or "fresh same-run L2 existing-claim-list and draft-box proof is required before real claim_only can start")
-    ]
     single_save_blockers = [] if single_save_currently_allowed else [
-        str((l2_gate or {}).get("detail") or "fresh same-run L2 existing-claim-list and draft-box proof is required before real single_save can start")
+        str((l2_gate or {}).get("detail") or "fresh L2 draft-box readonly proof is required before real single_save can start")
     ]
     controlled_batch_blockers = [] if controlled_batch_currently_allowed else [
         str(
@@ -411,10 +363,10 @@ def _real_mode_release_plan(
     current_delivery_status = "passed" if current_delivery_ready else "missing"
     current_delivery_blocker = None if current_delivery_ready else "current task has no complete L3 evidence chain"
     l2_check_status = "passed" if l2_passed else "blocked"
-    l2_check_blocker = None if l2_passed else "fresh L2 existing-claim-list and draft-box readonly proof is missing or stale"
+    l2_check_blocker = None if l2_passed else "fresh L2 draft-box readonly proof is missing or stale"
     return {
         "schema": "dxm_real_mode_release_plan.v1",
-        "scope": "controlled_claim_single_save_and_edit_batch",
+        "scope": "controlled_single_save_and_edit_batch",
         "publish_allowed": False,
         "batch_unattended_publish_allowed": False,
         "modes": [
@@ -425,7 +377,8 @@ def _real_mode_release_plan(
                 "allowed": single_save_currently_allowed,
                 "release_scope": "single product save-only canary",
                 "required_evidence": [
-                    "L2 existing-claim-list and draft-box readonly proof",
+                    "L2 draft-box readonly proof",
+                    "immutable product-box snapshot bound to the exact store and product",
                     "L3 save_result code=0",
                     "published=false proof",
                     "save and unpublished screenshots or paths",
@@ -434,7 +387,7 @@ def _real_mode_release_plan(
                 "required_controls": shared_controls,
                 "blockers": single_save_blockers,
                 "readiness_checklist": [
-                    checklist("l2_dual_target", "已有待认领列表和商品箱只读检查", status=l2_check_status, evidence_source="L2 gate", blocker=l2_check_blocker),
+                    checklist("l2_draft_box", "商品箱只读检查", status=l2_check_status, evidence_source="L2 gate", blocker=l2_check_blocker),
                     checklist(
                         "l3_single_canary",
                         "当前任务完整保存与未发布证据",
@@ -452,44 +405,51 @@ def _real_mode_release_plan(
                 ],
             },
             {
-                "mode": "claim_only",
-                "label": "受控待认领入箱",
-                "status": claim_only_status,
-                "allowed": claim_only_currently_allowed,
-                "release_scope": "controlled claim to draft box",
+                "mode": "controlled_edit_batch",
+                "label": "受控整批编辑",
+                "status": controlled_batch_status,
+                "allowed": controlled_batch_currently_allowed,
+                "release_scope": "frozen visible draft-box scope; serial save-only execution",
                 "required_evidence": [
-                    "L2 existing-claim-list and draft-box readonly proof",
-                    "unique existing claimable product proof",
-                    "claim to draft box proof",
-                    "no editor open and no save request proof",
+                    "fresh L2 readonly proof bound to approval and every item dispatch",
+                    "immutable ordered scope and store-level template bundle",
+                    "per-item exact identity and required-field readback",
+                    "per-item exact SAVE receipt and independent unpublished proof",
+                    "UNKNOWN stop and manual reconciliation evidence",
                 ],
                 "required_controls": [
-                    "fresh same-run L2 existing-claim-list and draft-box proof",
-                    "task runner evidence chain only; direct mutation endpoint remains forbidden",
-                    "claim_only must not open editor, save, publish, or move to pending publish",
-                    "manual recovery path for wrong target claim",
+                    "one atomic approve-and-start operation for the frozen batch",
+                    "global concurrency one and strict serial dispatch",
+                    "60-second one-time item mutation grant",
+                    "pre-save zero-write failures may isolate; dispatch uncertainty stops the batch",
+                    "legacy unattended task mode remains forbidden",
                 ],
-                "blockers": claim_only_blockers,
+                "blockers": controlled_batch_blockers,
                 "readiness_checklist": [
-                    checklist("l2_dual_target", "已有待认领列表和商品箱只读检查", status=l2_check_status, evidence_source="L2 gate", blocker=l2_check_blocker),
                     checklist(
-                        "claim_ownership_proof",
-                        "Claim ownership proof",
-                        status="passed" if claim_only_currently_allowed else "blocked",
-                        blocker=None if claim_only_currently_allowed else "missing L2 gate",
-                        detail="Runner verifies the claimed product can be traced to store, product query/category, and source URL when available.",
+                        "l2_batch_binding",
+                        "L2 与整批批准及逐商品派发绑定",
+                        status=l2_check_status,
+                        evidence_source="L2 gate",
+                        blocker=l2_check_blocker,
                     ),
                     checklist(
-                        "no_editor_or_save",
-                        "No editor open and no save request proof",
-                        status="passed",
-                        detail="claim_only must not open the editor or issue save/add.json requests.",
+                        "immutable_scope",
+                        "当前可见商品箱范围与顺序冻结",
+                        status="enforced_by_runtime",
+                        evidence_source="edit-batch contract",
                     ),
                     checklist(
-                        "rollback_release",
-                        "Ownership release or manual rollback path",
-                        status="operator_required",
-                        detail="Operator must have a documented recovery path before claim_only can be released.",
+                        "serial_jit_dispatch",
+                        "全局单并发与逐商品即时授权",
+                        status="enforced_by_runtime",
+                        evidence_source="edit-batch runtime",
+                    ),
+                    checklist(
+                        "unknown_manual_reconciliation",
+                        "UNKNOWN 停批且禁止自动重试",
+                        status="enforced_by_runtime",
+                        evidence_source="mutation dispatch ledger",
                     ),
                 ],
             },
@@ -836,7 +796,7 @@ def _regression_gates(
     l2_gate: Mapping[str, Any] | None = None,
     delivery_readiness: Mapping[str, Any] | None = None,
     state_consistency: Mapping[str, Any] | None = None,
-    two_stage_acceptance: Mapping[str, Any] | None = None,
+    single_save_acceptance: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     latest_l1 = _latest_schema_result(L1_REPLAY_DIR, "dxm_l1_selector_replay.v1")
     l2_gate = dict(l2_gate or _l2_probe_gate())
@@ -856,12 +816,13 @@ def _regression_gates(
         and (extracted["network_save_results"] or extracted["har_summaries"])
     )
     state_consistent = bool(state_consistency) and state_consistency.get("consistent") is True
-    two_stage_checks = (two_stage_acceptance or {}).get("checks") or {}
-    claim_provenance_invalid = (
-        (delivery_readiness or {}).get("two_stage_required") is True
+    single_save_checks = (single_save_acceptance or {}).get("checks") or {}
+    product_box_snapshot_invalid = (
+        (delivery_readiness or {}).get("single_save_required") is True
         and (
-            two_stage_checks.get("claim_provenance_valid") is False
-            or two_stage_checks.get("single_save_claim_snapshot_valid") is False
+            single_save_checks.get("product_present") is False
+            or single_save_checks.get("product_box_snapshot_valid") is False
+            or single_save_checks.get("single_save_target_bound") is False
         )
     )
     if not state_consistent:
@@ -872,14 +833,14 @@ def _regression_gates(
     elif not l2_passed:
         l3_status = "blocked"
         l3_level = "C"
-        l3_detail = f"L2 未通过（当前：{l2_gate['status']}），真实 claim_only、single_save 与受控整批编辑入口关闭。"
-    elif claim_provenance_invalid:
+        l3_detail = f"L2 未通过（当前：{l2_gate['status']}），真实 single_save 与受控整批编辑入口关闭。"
+    elif product_box_snapshot_invalid:
         l3_status = "blocked"
         l3_level = "C"
         missing_codes = ", ".join(
-            str(code) for code in (two_stage_acceptance or {}).get("missing_codes") or []
+            str(code) for code in (single_save_acceptance or {}).get("missing_codes") or []
         )
-        l3_detail = f"两段式认领来源或保存任务快照无效，L3 禁止 READY：{missing_codes or 'claim provenance invalid'}。"
+        l3_detail = f"商品箱快照或保存目标绑定无效，L3 禁止 READY：{missing_codes or 'product-box snapshot invalid'}。"
     elif (
         delivery_readiness
         and delivery_readiness.get("has_l3_evidence") is True
@@ -936,7 +897,7 @@ def _regression_gates(
             "status": l2_gate["status"],
             "evidenceLevel": l2_gate["evidenceLevel"],
             "requiresApproval": True,
-            "command": "tools/probes/l2_readonly_probe.py --target data_acquisition|draft_box --allowlist-file config\\l2_readonly_allowlist.json",
+            "command": "tools/probes/l2_readonly_probe.py --target draft_box --allowlist-file config\\l2_readonly_allowlist.json",
             "detail": l2_gate["detail"],
             "latest": l2_gate["latest"],
         },
@@ -968,7 +929,7 @@ def _l2_probe_plan() -> dict[str, Any]:
     return {
         "schema": "dxm_l2_readonly_probe_plan.v1",
         "requiresApproval": True,
-        "purpose": "真实店小秘已有待认领列表和商品箱保存前安全检查；不认领、不备注、不保存、不发布。",
+        "purpose": "真实店小秘商品箱保存前安全检查；不编辑、不保存、不发布。",
         "runIdCommand": run_id_command,
         "pythonCommand": L2_PROBE_PYTHON,
         "scriptPath": L2_PROBE_SCRIPT,
@@ -984,21 +945,20 @@ def _l2_probe_plan() -> dict[str, Any]:
                 "required": True,
             }
             for target, url in (
-                ("data_acquisition", "https://www.dianxiaomi.com/web/productCrawl/dataAcquisition"),
                 ("draft_box", "https://www.dianxiaomi.com/web/smt/smtProductList/draft"),
             )
         ],
         "commands": commands,
         "acceptanceCriteria": [
-            "两个目标必须使用同一 run-id。",
-            "两个目标必须共享同一 session fingerprint、script_sha256 和 git_head。",
+            "商品箱证据必须包含非空 run-id。",
+            "商品箱证据必须绑定 session fingerprint、script_sha256 和 git_head。",
             "write_request_count、non_read_request_count、blocked_request_count、forbidden_keyword_request_count 与 websocket_count 必须全为 0。",
             "目标 URL 与最终 URL 必须停留在对应真实店小秘目标路径，且不得疑似登录页。",
         ],
         "safetyNotes": [
             "运行前必须由操作者明确批准真实保存前安全检查。",
             "保存前安全检查失败或只产生 mock 证据时不自动放行真实保存。",
-            "该计划只生成诊断证据，不授权 claim_only、single_save 或受控整批编辑真实写入；旧 batch_save 始终关闭。",
+            "该计划只生成诊断证据，不授权 single_save 或受控整批编辑真实写入；旧 batch_save 始终关闭。",
         ],
     }
 
@@ -1008,7 +968,7 @@ def _delivery_readiness(
     reports: list[dict[str, Any]],
     evidences: list[dict[str, Any]],
     state_consistency: Mapping[str, Any],
-    two_stage_acceptance: Mapping[str, Any],
+    single_save_acceptance: Mapping[str, Any],
 ) -> dict[str, Any]:
     jobs = list(task.get("jobs") or [])
     reports_by_job: dict[int, list[dict[str, Any]]] = defaultdict(list)
@@ -1065,17 +1025,17 @@ def _delivery_readiness(
     complete_count = sum(1 for item in job_results if item["ready"])
     state_consistent = state_consistency.get("consistent") is True
     task_completed = str(task.get("status") or "").lower() == "completed"
-    two_stage_required = task.get("mode") == "single_save"
-    two_stage_ready = (
-        not two_stage_required
-        or two_stage_acceptance.get("passed") is True
+    single_save_required = task.get("mode") == "single_save"
+    single_save_ready = (
+        not single_save_required
+        or single_save_acceptance.get("passed") is True
     )
     return {
         "schema": "dxm_delivery_readiness.v1",
         "ready": (
             state_consistent
             and task_completed
-            and two_stage_ready
+            and single_save_ready
             and bool(job_results)
             and complete_count == len(job_results)
         ),
@@ -1087,41 +1047,43 @@ def _delivery_readiness(
         "jobs": job_results,
         "blocked_by_state_consistency": not state_consistent,
         "state_violation_codes": list(state_consistency.get("violation_codes") or []),
-        "two_stage_required": two_stage_required,
-        "blocked_by_two_stage_acceptance": not two_stage_ready,
-        "two_stage_missing_codes": list(two_stage_acceptance.get("missing_codes") or []),
+        "single_save_required": single_save_required,
+        "blocked_by_single_save_acceptance": not single_save_ready,
+        "single_save_missing_codes": list(single_save_acceptance.get("missing_codes") or []),
     }
 
 
-def _empty_two_stage_acceptance() -> dict[str, Any]:
+def _empty_single_save_acceptance() -> dict[str, Any]:
     return {
-        "schema": "dxm_two_stage_acceptance.v1",
+        "schema": "dxm_single_save_acceptance.v1",
         "passed": False,
         "status": "no_task",
-        "user_message": "请选择店小秘已有待认领商品，并确认进入商品箱后，再执行单商品只保存。",
-        "claim_task_id": None,
+        "user_message": "请从店小秘商品箱选择一个真实商品，再执行单商品只保存。",
         "save_task_id": None,
-        "claimed_product_id": None,
+        "product_id": None,
         "missing_codes": ["task"],
         "checks": {
-            "claim_task_present": False,
-            "claim_completed": False,
+            "save_task_mode_valid": False,
             "save_task_completed": False,
-            "claimed_product_present": False,
-            "claim_provenance_valid": False,
-            "single_save_claim_snapshot_valid": False,
-            "draft_box_verified": False,
-            "single_save_linked_to_claim": False,
+            "product_present": False,
+            "product_box_snapshot_valid": False,
+            "single_save_target_bound": False,
+            "manual_approval_consumed": False,
             "save_success": False,
             "unpublished_proof": False,
             "save_evidence_integrity": False,
             "unpublished_evidence_integrity": False,
             "publish_guard_safe": False,
+            "state_consistent": False,
         },
+        "product_box_snapshot_error": "task is unavailable",
+        "save_report_count": 0,
+        "evidence_count": 0,
+        "state_violation_codes": ["STATE_TASK_UNAVAILABLE"],
     }
 
 
-def _two_stage_acceptance(
+def _single_save_acceptance(
     repo: Repository,
     task: Mapping[str, Any],
     reports: list[dict[str, Any]],
@@ -1129,61 +1091,52 @@ def _two_stage_acceptance(
     extracted: dict[str, Any],
     state_consistency: Mapping[str, Any],
 ) -> dict[str, Any]:
-    payload = task.get("payload") if isinstance(task.get("payload"), Mapping) else {}
-    jobs = list(task.get("jobs") or [])
     save_task_id = _int_or_none(task.get("id"))
-    product_ids = [
-        value
-        for value in [_int_or_none(payload.get("claimed_product_id")), *[_int_or_none(job.get("product_id")) for job in jobs]]
-        if value is not None
-    ]
-    claimed_product_id = product_ids[0] if product_ids else None
-    product = repo.get_product(claimed_product_id) if claimed_product_id is not None else None
-    product_payload = product.get("payload") if isinstance((product or {}).get("payload"), Mapping) else {}
-    claim_task_id = _int_or_none(payload.get("claim_task_id")) or _int_or_none(product_payload.get("claim_task_id"))
-    claim_task = repo.get_task_private(claim_task_id) if claim_task_id is not None else None
-    claim_payload = claim_task.get("payload") if isinstance((claim_task or {}).get("payload"), Mapping) else {}
-    claim_reports = repo.list_reports(claim_task_id) if claim_task_id is not None else []
+    private_task = repo.get_task_private(save_task_id) if save_task_id is not None else None
+    validation_task = private_task if isinstance(private_task, Mapping) else task
+    payload = (
+        validation_task.get("payload")
+        if isinstance(validation_task.get("payload"), Mapping)
+        else {}
+    )
+    jobs = list(task.get("jobs") or [])
+    snapshot = payload.get("product_box_snapshot") if isinstance(payload.get("product_box_snapshot"), Mapping) else {}
+    job_product_ids = {
+        product_id
+        for product_id in (_int_or_none(job.get("product_id")) for job in jobs)
+        if product_id is not None
+    }
+    snapshot_product_id = _int_or_none(snapshot.get("product_id"))
+    product_id = (
+        next(iter(job_product_ids))
+        if len(job_product_ids) == 1
+        else snapshot_product_id
+    )
+    product = repo.get_product(product_id) if product_id is not None else None
     publish_guard = _publish_guard_state(reports, extracted)
-
-    claim_provenance_valid = bool(product) and repo.product_has_completed_claim_provenance(product)
-    # Public task payloads intentionally redact the immutable Stage A proof.  The
-    # readiness validator must compare the persisted private snapshot, never the
-    # redacted API projection, or every valid task is misclassified as drifted.
-    persisted_save_task = (
-        repo.get_task_private(save_task_id)
-        if save_task_id is not None
-        else None
+    snapshot_validator = getattr(repo, "single_save_product_box_snapshot_error", None)
+    if product is None:
+        product_box_snapshot_error = "product is unavailable"
+    elif not callable(snapshot_validator):
+        product_box_snapshot_error = "product-box snapshot validator is unavailable"
+    else:
+        product_box_snapshot_error = snapshot_validator(dict(validation_task), product)
+    product_box_snapshot_valid = product_box_snapshot_error is None
+    save_task_mode_valid = task.get("mode") == "single_save"
+    single_save_target_bound = (
+        save_task_mode_valid
+        and product_id is not None
+        and job_product_ids == {product_id}
+        and snapshot_product_id == product_id
+        and product_box_snapshot_valid
     )
-    claim_snapshot_error = (
-        repo.single_save_claim_snapshot_error(
-            dict(persisted_save_task or task),
-            product,
-        )
-        if product is not None
-        else "claimed product is unavailable"
-    )
-    single_save_claim_snapshot_valid = claim_snapshot_error is None
-    claim_completed = _claim_stage_completed(claim_task, claim_payload, claim_reports, claimed_product_id)
-    claim_product_matches = _claim_reports_match_product(claim_reports, claimed_product_id) or (
-        _int_or_none(claim_payload.get("claimed_product_id")) == claimed_product_id
-    )
-    product_source = str(
-        payload.get("claimed_product_source")
-        or product_payload.get("source")
-        or ((product or {}).get("source"))
-        or ""
-    ).strip()
-    product_status = str((product or {}).get("status") or payload.get("claimed_product_status") or "").strip()
-    draft_box_verified = payload.get("draft_box_verified") is True or product_payload.get("draft_box_verified") is True
-    job_product_ids = {_int_or_none(job.get("product_id")) for job in jobs}
-    single_save_linked = (
-        task.get("mode") == "single_save"
-        and claimed_product_id is not None
-        and job_product_ids == {claimed_product_id}
-        and product_source == "dxm_data_acquisition"
-        and product_status in {"claimed_to_draft", "ready_for_edit"}
-        and draft_box_verified
+    private_payload = private_task.get("payload") if isinstance((private_task or {}).get("payload"), Mapping) else {}
+    manual_approval = private_payload.get("manual_approval") if isinstance(private_payload.get("manual_approval"), Mapping) else {}
+    manual_approval_consumed = (
+        manual_approval.get("approved") is True
+        and manual_approval.get("source") == "server"
+        and manual_approval.get("consumed") is True
+        and manual_approval.get("confirmation") == "CONFIRM_DXM_SAVE_ONLY"
     )
     save_success = any(_report_has_successful_save(report) for report in reports)
     unpublished_proof = bool(extracted.get("published_proofs"))
@@ -1202,15 +1155,12 @@ def _two_stage_acceptance(
     save_task_completed = str(task.get("status") or "").lower() == "completed"
 
     checks = {
-        "claim_task_present": claim_task is not None,
-        "claim_completed": claim_completed,
+        "save_task_mode_valid": save_task_mode_valid,
         "save_task_completed": save_task_completed,
-        "claimed_product_present": product is not None and claimed_product_id is not None,
-        "claim_provenance_valid": claim_provenance_valid,
-        "single_save_claim_snapshot_valid": single_save_claim_snapshot_valid,
-        "claim_product_matches": claim_product_matches,
-        "draft_box_verified": draft_box_verified,
-        "single_save_linked_to_claim": single_save_linked,
+        "product_present": product is not None and product_id is not None,
+        "product_box_snapshot_valid": product_box_snapshot_valid,
+        "single_save_target_bound": single_save_target_bound,
+        "manual_approval_consumed": manual_approval_consumed,
         "save_success": save_success,
         "unpublished_proof": unpublished_proof,
         "save_evidence_integrity": save_evidence_integrity,
@@ -1221,28 +1171,18 @@ def _two_stage_acceptance(
     missing_codes: list[str] = []
     if not state_consistent:
         missing_codes.append("state_consistency")
+    if not save_task_mode_valid:
+        missing_codes.append("save_task_mode")
     if not save_task_completed:
         missing_codes.append("save_task_completed")
-    if claim_task_id is None:
-        missing_codes.append("claim_task_id")
-    if claim_task is None:
-        missing_codes.append("claim_task")
-    if not claim_completed:
-        missing_codes.append("claim_completed")
-    if not claim_product_matches:
-        missing_codes.append("claim_product_match")
-    if product is None or claimed_product_id is None:
-        missing_codes.append("claimed_product")
-    if not claim_provenance_valid:
-        missing_codes.append("claim_provenance")
-    if not single_save_claim_snapshot_valid:
-        missing_codes.append("single_save_claim_snapshot")
-    if product_source != "dxm_data_acquisition":
-        missing_codes.append("claimed_product_source")
-    if not draft_box_verified:
-        missing_codes.append("draft_box_verified")
-    if not single_save_linked:
-        missing_codes.append("single_save_linked_to_claim")
+    if product is None or product_id is None:
+        missing_codes.append("product")
+    if not product_box_snapshot_valid:
+        missing_codes.append("product_box_snapshot")
+    if not single_save_target_bound:
+        missing_codes.append("single_save_target_binding")
+    if not manual_approval_consumed:
+        missing_codes.append("manual_approval_consumed")
     if not save_success:
         missing_codes.append("save_success")
     if not unpublished_proof:
@@ -1259,16 +1199,16 @@ def _two_stage_acceptance(
         user_message = "任务、Job、报告或异常状态互相矛盾，已阻止 READY；请保留失败历史并创建新任务重试。"
     elif not missing_codes:
         status = "passed"
-        user_message = "真实两段式已完成：商品已从待认领商品进入商品箱，并完成单商品只保存且未发布。"
-    elif any(code in missing_codes for code in ("claim_task_id", "claim_task", "claim_completed", "claim_product_match")):
-        status = "missing_claim_stage"
-        user_message = "还没有完整的待认领入箱证据。请先从店小秘已有待认领列表把真实商品放进商品箱，再创建单商品只保存任务。"
-    elif any(code in missing_codes for code in ("claim_provenance", "single_save_claim_snapshot")):
-        status = "invalid_claim_provenance"
-        user_message = "认领来源或保存任务中的两段式快照已失配，已阻止 READY；请从有效商品箱商品重新创建单商品只保存任务。"
-    elif any(code in missing_codes for code in ("claimed_product", "claimed_product_source", "draft_box_verified", "single_save_linked_to_claim")):
-        status = "missing_draft_box_stage"
-        user_message = "商品箱商品链路不完整。请确认本次保存任务选择的是刚进入商品箱的真实商品。"
+        user_message = "单商品只保存已完成：保存成功、证据完整，并确认商品没有发布。"
+    elif "save_task_mode" in missing_codes:
+        status = "invalid_task_mode"
+        user_message = "当前任务不是受控单商品只保存，已阻止 READY。"
+    elif any(code in missing_codes for code in ("product", "product_box_snapshot", "single_save_target_binding")):
+        status = "missing_product_box_snapshot"
+        user_message = "商品箱商品快照缺失或已漂移。请从当前商品箱重新选择真实商品并创建单商品只保存任务。"
+    elif "manual_approval_consumed" in missing_codes:
+        status = "approval_required"
+        user_message = "真实保存仍需服务端人工批准，并在保存动作前完成即时复核。"
     elif "save_task_completed" in missing_codes or "save_success" in missing_codes:
         status = "missing_save_stage"
         user_message = "商品箱编辑保存还没有成功证据。请启动单商品只保存，并等待保存成功。"
@@ -1283,79 +1223,22 @@ def _two_stage_acceptance(
         user_message = "保存或未发布截图的文件、大小或哈希已失配，已阻止 READY；请重新执行本次单商品只保存。"
     else:
         status = "incomplete"
-        user_message = "两段式验收证据不完整，请按页面提示补齐后重试。"
+        user_message = "单商品只保存验收证据不完整，请按页面提示补齐后重试。"
 
     return {
-        "schema": "dxm_two_stage_acceptance.v1",
+        "schema": "dxm_single_save_acceptance.v1",
         "passed": status == "passed",
         "status": status,
         "user_message": user_message,
-        "claim_task_id": claim_task_id,
         "save_task_id": save_task_id,
-        "claimed_product_id": claimed_product_id,
+        "product_id": product_id,
         "missing_codes": missing_codes,
         "checks": checks,
-        "claim_snapshot_error": claim_snapshot_error,
-        "claim_report_count": len(claim_reports),
+        "product_box_snapshot_error": product_box_snapshot_error,
         "save_report_count": len(reports),
         "evidence_count": len(evidences),
         "state_violation_codes": list(state_consistency.get("violation_codes") or []),
     }
-
-
-def _claim_stage_completed(
-    claim_task: Mapping[str, Any] | None,
-    claim_payload: Mapping[str, Any],
-    claim_reports: list[dict[str, Any]],
-    claimed_product_id: int | None,
-) -> bool:
-    if not claim_task or claimed_product_id is None:
-        return False
-    if claim_task.get("mode") != "claim_only":
-        return False
-    claim_payload_product_id = _int_or_none(claim_payload.get("claimed_product_id"))
-    claim_payload_complete = (
-        claim_task.get("status") == "completed"
-        and claim_payload.get("status") == "completed"
-        and claim_payload.get("stage") == "claimed_to_draft"
-        and claim_payload.get("draft_box_verified") is True
-        and claim_payload_product_id == claimed_product_id
-    )
-    if not claim_payload_complete:
-        return False
-    if not claim_reports:
-        return True
-    return any(report.get("status") == "success" and _claim_report_mentions_product(report, claimed_product_id) for report in claim_reports)
-
-
-def _claim_reports_match_product(claim_reports: list[dict[str, Any]], claimed_product_id: int | None) -> bool:
-    return any(_claim_report_mentions_product(report, claimed_product_id) for report in claim_reports)
-
-
-def _claim_report_mentions_product(report: Mapping[str, Any], claimed_product_id: int | None) -> bool:
-    if claimed_product_id is None:
-        return False
-    if _int_or_none(report.get("product_id")) == claimed_product_id:
-        return True
-    for payload in (report.get("save_result"), report.get("summary")):
-        if _payload_mentions_product(payload, claimed_product_id):
-            return True
-    return False
-
-
-def _payload_mentions_product(payload: Any, product_id: int) -> bool:
-    if isinstance(payload, Mapping):
-        if _int_or_none(payload.get("claimed_product_id")) == product_id:
-            return True
-        if _int_or_none(payload.get("product_id")) == product_id:
-            return True
-        nested = payload.get("claimed_product")
-        if isinstance(nested, Mapping) and _int_or_none(nested.get("id")) == product_id:
-            return True
-        return any(_payload_mentions_product(value, product_id) for value in payload.values())
-    if isinstance(payload, list):
-        return any(_payload_mentions_product(item, product_id) for item in payload)
-    return False
 
 
 def _report_has_successful_save(report: Mapping[str, Any]) -> bool:
@@ -1550,7 +1433,7 @@ def _l2_probe_gate(now: datetime | None = None) -> dict[str, Any]:
             return {
                 "status": "failed",
                 "evidenceLevel": "C",
-                "detail": f"真实 L2 双目标证据不满足时效要求：{time_window['detail']}；禁止进入 L3。",
+                "detail": f"真实 L2 商品箱证据不满足时效要求：{time_window['detail']}；禁止进入 L3。",
                 "latest": latest,
             }
         run_binding = _l2_real_targets_run_binding(real_targets)
@@ -1559,13 +1442,13 @@ def _l2_probe_gate(now: datetime | None = None) -> dict[str, Any]:
             return {
                 "status": "failed",
                 "evidenceLevel": "C",
-                "detail": f"真实 L2 双目标证据不满足同轮次要求：{run_binding['detail']}；禁止进入 L3。",
+                "detail": f"真实 L2 商品箱证据绑定不完整：{run_binding['detail']}；禁止进入 L3。",
                 "latest": latest,
             }
         return {
             "status": "passed",
             "evidenceLevel": "A",
-            "detail": "已有待认领列表与商品箱保存前安全检查均通过，且写入、拦截、禁词、WebSocket 计数全为 0。",
+            "detail": "商品箱保存前安全检查通过，且写入、拦截、禁词、WebSocket 计数全为 0。",
             "latest": latest,
         }
 
@@ -1666,137 +1549,6 @@ def _l2_probe_result_dirs() -> list[Path]:
     return unique
 
 
-def _claim_candidates_from_l2_gate(l2_gate: Mapping[str, Any] | None) -> list[dict[str, Any]]:
-    if not isinstance(l2_gate, Mapping) or l2_gate.get("status") != "passed":
-        return []
-    latest = l2_gate.get("latest")
-    if not isinstance(latest, Mapping):
-        return []
-    targets = latest.get("targets") or latest.get("realTargets")
-    if not isinstance(targets, Mapping):
-        return []
-    data_acquisition = targets.get("data_acquisition")
-    if not isinstance(data_acquisition, Mapping) or data_acquisition.get("ok") is not True:
-        return []
-    dom_path = _resolve_l2_evidence_path(data_acquisition.get("dom_path"))
-    if dom_path is None or not dom_path.is_file():
-        return []
-    try:
-        raw_html = dom_path.read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        return []
-    return _extract_claim_candidates_from_html(
-        raw_html,
-        dom_path=str(dom_path),
-        run_id=str(data_acquisition.get("run_id") or ""),
-        captured_at=str(data_acquisition.get("created_at") or ""),
-    )
-
-
-def _extract_claim_candidates_from_html(
-    raw_html: str,
-    *,
-    dom_path: str = "",
-    run_id: str = "",
-    captured_at: str = "",
-) -> list[dict[str, Any]]:
-    candidates: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
-    for row in CLAIM_ROW_RE.findall(raw_html):
-        row_text = _clean_html_text(row, limit=900)
-        if "认领" not in row_text:
-            continue
-        title = _claim_candidate_title(row)
-        if not title:
-            continue
-        source_url, source_label = _claim_candidate_source(row)
-        identity = (source_url or "", title)
-        if identity in seen:
-            continue
-        seen.add(identity)
-        store_account = _first_regex_match(PHONE_OR_ACCOUNT_RE, row_text)
-        created_at = _first_regex_match(DATE_RE, row_text)
-        candidates.append(
-            {
-                "id": f"{run_id or 'l2-readonly'}:{len(candidates) + 1}",
-                "title": title,
-                "source": source_label or "",
-                "source_url": source_url or "",
-                "store_account": store_account or "",
-                "created_at": created_at or "",
-                "category_hint": _claim_candidate_category_hint(title, row_text),
-                "text_excerpt": row_text[:260],
-                "run_id": run_id,
-                "captured_at": captured_at,
-                "dom_path": dom_path,
-                "readonly": True,
-            }
-        )
-        if len(candidates) >= CLAIM_CANDIDATE_LIMIT:
-            break
-    return candidates
-
-
-def _claim_candidate_title(row_html: str) -> str:
-    for pattern in (TITLE_ATTR_RE, FALLBACK_TITLE_ATTR_RE):
-        for match in pattern.findall(row_html):
-            title = _clean_plain_text(match, limit=160)
-            if title and not title.startswith("品牌:"):
-                return title
-    return ""
-
-
-def _claim_candidate_source(row_html: str) -> tuple[str, str]:
-    fallback_url = ""
-    fallback_label = ""
-    for href, label_html in ANCHOR_RE.findall(row_html):
-        url = _clean_plain_text(href, limit=2000)
-        label = _clean_html_text(label_html, limit=40)
-        if not url.lower().startswith(("http://", "https://")):
-            continue
-        if not fallback_url:
-            fallback_url, fallback_label = url, label
-        if _looks_like_source_platform_label(label) or _looks_like_marketplace_url(url):
-            return url, label
-    return fallback_url, fallback_label
-
-
-def _looks_like_source_platform_label(label: str) -> bool:
-    normalized = label.lower()
-    return any(token in normalized for token in ("1688", "拼多多", "淘宝", "天猫", "temu", "amazon", "aliexpress", "wish", "shopee"))
-
-
-def _looks_like_marketplace_url(url: str) -> bool:
-    normalized = url.lower()
-    return any(token in normalized for token in ("1688.com", "yangkeduo.com", "taobao.com", "tmall.com", "aliexpress.com", "amazon.", "wish.com", "shopee."))
-
-
-def _claim_candidate_category_hint(title: str, row_text: str) -> str:
-    text = f"{title} {row_text}"
-    if any(token in text for token in ("立牌", "亚克力")):
-        return "立牌类谷子"
-    if any(token in text for token in ("棉花娃娃", "毛绒", "玩偶")):
-        return "毛绒玩偶"
-    if any(token in text for token in ("钥匙扣", "挂件", "徽章", "胸针")):
-        return "钥匙扣/挂件"
-    return ""
-
-
-def _clean_html_text(value: Any, *, limit: int = 500) -> str:
-    return _clean_plain_text(TAG_RE.sub(" ", str(value or "")), limit=limit)
-
-
-def _clean_plain_text(value: Any, *, limit: int = 500) -> str:
-    text = html_lib.unescape(str(value or "")).replace("\xa0", " ")
-    text = " ".join(text.split())
-    return text[:limit]
-
-
-def _first_regex_match(pattern: re.Pattern[str], value: str) -> str:
-    match = pattern.search(value)
-    return match.group(0) if match else ""
-
-
 def _latest_l2_results_by_target(results: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     latest: dict[str, dict[str, Any]] = {}
     for result in results:
@@ -1871,7 +1623,7 @@ def _l2_real_targets_time_window(
         }
     return {
         "ok": skew_seconds <= L2_REAL_TARGET_MAX_SKEW_SECONDS and newest_age_seconds <= L2_REAL_TARGET_MAX_AGE_SECONDS,
-        "detail": f"双目标时间差 {skew_seconds}s，上限 {L2_REAL_TARGET_MAX_SKEW_SECONDS}s；最新证据年龄 {newest_age_seconds}s，上限 {L2_REAL_TARGET_MAX_AGE_SECONDS}s",
+        "detail": f"目标证据时间差 {skew_seconds}s，上限 {L2_REAL_TARGET_MAX_SKEW_SECONDS}s；最新证据年龄 {newest_age_seconds}s，上限 {L2_REAL_TARGET_MAX_AGE_SECONDS}s",
         "skewSeconds": skew_seconds,
         "maxSkewSeconds": L2_REAL_TARGET_MAX_SKEW_SECONDS,
         "ageSeconds": newest_age_seconds,
@@ -1905,7 +1657,7 @@ def _l2_real_targets_run_binding(real_targets: Mapping[str, Mapping[str, Any]]) 
         detail_parts.append(f"run metadata 不一致：{', '.join(mismatched)}")
     return {
         "ok": ok,
-        "detail": "；".join(detail_parts) if detail_parts else "双目标 run_id、session fingerprint、script_sha256 与 git_head 一致。",
+        "detail": "；".join(detail_parts) if detail_parts else "商品箱证据的 run_id、session fingerprint、script_sha256 与 git_head 均有效。",
         "runIds": distinct["run_id"],
         "scriptSha256": distinct["script_sha256"],
         "gitHeads": distinct["git_head"],
@@ -1970,6 +1722,8 @@ def _l2_result_is_strict_pass(result: Mapping[str, Any], *, require_real_target_
             return False
         if login_state.get("suspected_login_page") is not False:
             return False
+        if not _l2_evidence_binding_is_valid(result):
+            return False
     for key in ("screenshot_path", "screenshot_sha256", "dom_path", "dom_sha256"):
         if not result.get(key):
             return False
@@ -1985,6 +1739,33 @@ def _l2_result_is_strict_pass(result: Mapping[str, Any], *, require_real_target_
     if not isinstance(network, Mapping):
         return False
     return all(_counter_is_zero(network.get(key)) for key in L2_ZERO_NETWORK_COUNTERS)
+
+
+def _l2_evidence_binding_is_valid(result: Mapping[str, Any]) -> bool:
+    binding = result.get("evidence_binding")
+    if not isinstance(binding, Mapping):
+        return False
+    if binding.get("schema") != "dxm_l2_evidence_binding.v1":
+        return False
+    target_set = binding.get("target_set")
+    if not isinstance(target_set, list) or target_set != list(REQUIRED_L2_TARGETS):
+        return False
+    if str(binding.get("script_path") or "").replace("/", "\\").casefold() != L2_PROBE_SCRIPT.casefold():
+        return False
+    expected_pairs = (
+        ("run_id", "run_id"),
+        ("script_sha256", "script_sha256"),
+        ("git_head", "git_head"),
+        ("session_fingerprint_sha256", "cookie_file_sha256"),
+    )
+    for binding_key, result_key in expected_pairs:
+        binding_value = binding.get(binding_key)
+        result_value = result.get(result_key)
+        if not isinstance(binding_value, str) or not binding_value.strip():
+            return False
+        if binding_value.strip() != str(result_value or "").strip():
+            return False
+    return True
 
 
 def _l2_evidence_files_match_hashes(result: Mapping[str, Any]) -> bool:
@@ -2775,7 +2556,7 @@ def _acceptance_gaps(
                 "title": "L2 真实只读门禁未通过",
                 "severity": "blocker",
                 "owner": "l2_readonly_probe",
-                "detail": str(l2_gate.get("detail") or f"L2 当前状态为 {l2_status}，禁止进入真实 claim_only、single_save 与受控整批编辑。"),
+                "detail": str(l2_gate.get("detail") or f"L2 当前状态为 {l2_status}，禁止进入真实 single_save 与受控整批编辑。"),
                 "evidenceLevel": "C",
             }
         )
@@ -2848,7 +2629,7 @@ def _acceptance_gaps(
                 "title": "L3 金丝雀需人工批准",
                 "severity": "watch",
                 "owner": "ops-review",
-                "detail": "真实 claim_only、single_save 与受控整批编辑必须在用户明确批准后执行；旧 batch_save 仍关闭。",
+                "detail": "真实 single_save 与受控整批编辑必须在用户明确批准后执行；旧 batch_save 仍关闭。",
                 "evidenceLevel": "C",
             }
         )
@@ -2863,7 +2644,7 @@ def _safety_state(
 ) -> dict[str, Any]:
     grade = _evidence_grade(extracted, reports, l2_gate, delivery_readiness)
     return {
-        "mode": "controlled_edit_batch / single_save / claim_only / dry_run / probe",
+        "mode": "controlled_edit_batch / single_save / dry_run / probe",
         "guarantee": "只保存不发布：工作台不提供任何发布动作入口，后端发布隔离固定开启。",
         "forbiddenActions": ["发布", "继续发布", "保存并发布", "移入待发布"],
         "lastCheckedAt": "runtime aggregation",

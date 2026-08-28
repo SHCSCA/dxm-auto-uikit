@@ -34,8 +34,8 @@ from src.execution.e3_authority_contract import (
     authorization_lease_authority_fingerprint,
     canonical_authorization_lease_authority,
 )
-from src.state_machine.two_stage import (
-    TwoStageContractError,
+from src.state_machine.batch_draft_authorization import (
+    BatchDraftAuthorizationError,
     authorization_context_fingerprint,
     build_batch_draft_save_task_facts,
     verify_authorization_context,
@@ -819,7 +819,7 @@ def _validate_authorization(
             plan_snapshot_hash=str(payload.get("plan_snapshot_hash") or ""),
             path=str(payload.get("path") or ""),
         )
-    except (KeyError, TypeError, ValueError, TwoStageContractError):
+    except (KeyError, TypeError, ValueError, BatchDraftAuthorizationError):
         _reject("AUTH_STAGE_FACTS_MISMATCH")
     if current_stage != stored_stage or not hmac.compare_digest(
         str(command.stage_task_facts_fingerprint or "").casefold(),
@@ -873,7 +873,7 @@ def _validate_authorization(
         _reject("AUTH_ACCOUNT_CONTEXT_MISMATCH")
     try:
         context_fingerprint = authorization_context_fingerprint(stored_context)
-    except TwoStageContractError:
+    except BatchDraftAuthorizationError:
         _reject("AUTH_COMMAND_AUTHORIZATION_MISMATCH")
     if not hmac.compare_digest(
         str(command.authorization_fingerprint or "").casefold(),

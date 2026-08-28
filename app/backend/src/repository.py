@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -42,7 +44,7 @@ from src.batch_edit.execution_contract import (
 )
 from src.batch_edit.batch_contract import BatchContractError, freeze_template_bundle
 from src.batch_edit.scope_contract import canonical_sha256
-from src.execution.browser_agent_protocol import mutation_target_hash
+from src.execution.browser_agent_protocol import canonical_frozen_target_identity, mutation_target_hash
 from src.execution.task_worker_control import (
     ACTIVE_TASK_STATUSES,
     PAYLOAD_KEY as WORKER_CONTROL_PAYLOAD_KEY,
@@ -54,25 +56,19 @@ from src.execution.task_worker_control import (
     public_worker_control,
 )
 from src.services.evidence_ref import validate_evidence_ref
-from src.state_machine.two_stage import (
-    TwoStageContractError,
-    build_draft_box_proof,
-    build_stage_a_task_facts,
-    canonical_claim_target_identity,
-    compare_authorization_context,
-    verify_draft_box_proof,
+from src.state_machine.save_authorization import (
+    SaveOnlyContractError,
+    build_product_box_snapshot,
+    canonical_source_identity,
+    canonical_sha256 as canonical_contract_sha256,
+    compare_authorization_context as compare_save_authorization_context,
+    verify_product_box_snapshot,
 )
+from src.state_machine.batch_draft_authorization import (
+    compare_authorization_context as compare_batch_authorization_context,
+)
+from src.core.config import EVIDENCE_DIR
 from src.utils import now_iso
-
-
-@dataclass(frozen=True)
-class ClaimCompletionResult:
-    applied: bool
-    idempotent: bool
-    conflict_code: str | None
-    reason: str | None
-    task: dict[str, Any] | None
-    product: dict[str, Any] | None
 
 
 class TerminalReportConflictError(RuntimeError):
@@ -149,6 +145,58 @@ def _published_from_db(value: Any) -> bool | None:
     if value == 1:
         return True
     raise ValueError("reports.published contains an invalid tri-state value")
+
+
+def _product_box_evidence_integrity_error(evidence_ref: Any) -> str | None:
+    """Validate the immutable on-disk source evidence used by a product-box task."""
+
+    if not isinstance(evidence_ref, dict) or set(evidence_ref) != {'path', 'sha256', 'size'}:
+        return 'product-box evidence reference is invalid'
+    path_text = evidence_ref.get('path')
+    digest = evidence_ref.get('sha256')
+    expected_size = evidence_ref.get('size')
+    if (
+        not isinstance(path_text, str)
+        or not path_text.strip()
+        or not isinstance(digest, str)
+        or len(digest) != 64
+        or digest != digest.upper()
+        or isinstance(expected_size, bool)
+        or not isinstance(expected_size, int)
+        or expected_size <= 0
+    ):
+        return 'product-box evidence reference is invalid'
+    try:
+        int(digest, 16)
+    except ValueError:
+        return 'product-box evidence reference is invalid'
+
+    configured_root = EVIDENCE_DIR.resolve(strict=False)
+    supplied_path = Path(path_text)
+    if not supplied_path.is_absolute():
+        return 'product-box evidence path is not absolute'
+    try:
+        resolved_path = supplied_path.resolve(strict=True)
+        resolved_path.relative_to(configured_root)
+    except (FileNotFoundError, OSError, RuntimeError):
+        return 'product-box evidence file is missing'
+    except ValueError:
+        return 'product-box evidence path is outside the evidence directory'
+    if supplied_path.is_symlink() or not resolved_path.is_file():
+        return 'product-box evidence path is not a regular file'
+    try:
+        stat = resolved_path.stat()
+        if stat.st_size != expected_size:
+            return 'product-box evidence size does not match its immutable reference'
+        hasher = hashlib.sha256()
+        with resolved_path.open('rb') as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b''):
+                hasher.update(block)
+    except OSError:
+        return 'product-box evidence file cannot be read'
+    if not hmac.compare_digest(hasher.hexdigest().upper(), digest):
+        return 'product-box evidence SHA-256 does not match its immutable reference'
+    return None
 
 
 class Repository:
@@ -297,26 +345,169 @@ class Repository:
 
     def create_draft_box_scope_snapshot(self, snapshot: dict[str, Any]):
         now = now_iso()
+        evidence_ref = self._persist_product_box_scope_evidence(snapshot)
         with connection() as conn:
-            cur = conn.execute(
-                """
-                INSERT INTO draft_box_scope_snapshots
-                    (schema_version, digest, snapshot_json, created_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                (
-                    snapshot['schema_version'],
-                    snapshot['digest'],
-                    dumps(snapshot),
-                    now,
-                ),
+            existing = conn.execute(
+                "SELECT * FROM draft_box_scope_snapshots WHERE digest=?",
+                (snapshot['digest'],),
+            ).fetchone()
+            if existing:
+                stored_snapshot = loads(existing['snapshot_json'], {})
+                if stored_snapshot != snapshot:
+                    raise SaveOnlyContractError(
+                        'PRODUCT_BOX_SCOPE_DIGEST_CONFLICT',
+                        'an existing product-box scope digest contains different facts',
+                    )
+                stored = {
+                    'id': int(existing['id']),
+                    **stored_snapshot,
+                    'created_at': existing['created_at'],
+                }
+            else:
+                cur = conn.execute(
+                    """
+                    INSERT INTO draft_box_scope_snapshots
+                        (schema_version, digest, snapshot_json, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        snapshot['schema_version'],
+                        snapshot['digest'],
+                        dumps(snapshot),
+                        now,
+                    ),
+                )
+                stored = {
+                    'id': int(cur.lastrowid),
+                    **snapshot,
+                    'created_at': now,
+                }
+            store_id, local_product_ids = self._sync_products_from_scope_snapshot(
+                conn,
+                stored,
+                evidence_ref=evidence_ref,
             )
-            stored = {
-                'id': int(cur.lastrowid),
-                **snapshot,
-                'created_at': now,
+            return self._public_draft_box_scope_snapshot(
+                stored,
+                store_id=store_id,
+                local_product_ids=local_product_ids,
+            )
+
+    @staticmethod
+    def _persist_product_box_scope_evidence(snapshot: dict[str, Any]) -> dict[str, Any]:
+        content = json.dumps(
+            snapshot,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(',', ':'),
+            allow_nan=False,
+        ).encode('utf-8')
+        digest = hashlib.sha256(content).hexdigest().upper()
+        declared_digest = str(snapshot.get('digest') or '').strip().upper()
+        if len(declared_digest) != 64:
+            raise SaveOnlyContractError(
+                'PRODUCT_BOX_SCOPE_DIGEST_INVALID',
+                'product-box scope digest is missing or invalid',
+            )
+        EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+        path = (EVIDENCE_DIR / f'product-box-scope-{declared_digest}.json').resolve()
+        if path.exists():
+            existing = path.read_bytes()
+            if existing != content:
+                raise SaveOnlyContractError(
+                    'PRODUCT_BOX_SCOPE_EVIDENCE_CONFLICT',
+                    'product-box scope evidence path already contains different facts',
+                )
+        else:
+            path.write_bytes(content)
+        return {'path': str(path), 'sha256': digest, 'size': len(content)}
+
+    @staticmethod
+    def _sync_products_from_scope_snapshot(
+        conn: Any,
+        snapshot: dict[str, Any],
+        *,
+        evidence_ref: dict[str, Any],
+    ) -> tuple[int | None, dict[int, int]]:
+        store_identity = snapshot.get('store_identity')
+        store_name = (
+            str(store_identity.get('store_name') or '').strip()
+            if isinstance(store_identity, dict)
+            else ''
+        )
+        normalized_store_name = ' '.join(store_name.split())
+        stores = conn.execute('SELECT id, name FROM stores ORDER BY id ASC').fetchall()
+        matches = [
+            row
+            for row in stores
+            if ' '.join(str(row.get('name') or '').strip().split()) == normalized_store_name
+        ]
+        if len(matches) != 1:
+            return None, {}
+        store_id = int(matches[0]['id'])
+        existing_rows = conn.execute(
+            "SELECT * FROM products WHERE source='dxm_draft_box' ORDER BY id ASC"
+        ).fetchall()
+        existing_by_key: dict[str, list[dict[str, Any]]] = {}
+        for row in existing_rows:
+            payload = loads(row.get('payload_json'), {})
+            key = payload.get('product_box_record_key') if isinstance(payload, dict) else None
+            if isinstance(key, str) and key:
+                existing_by_key.setdefault(key, []).append(row)
+
+        local_product_ids: dict[int, int] = {}
+        observed_at = str(snapshot.get('observed_at') or '')
+        scope_digest = str(snapshot.get('digest') or '').strip().upper()
+        for item in snapshot.get('items') or []:
+            if not isinstance(item, dict):
+                continue
+            ordinal = int(item['ordinal'])
+            record_key = f"{store_id}:{item['stable_record_key']}"
+            candidates = existing_by_key.get(record_key, [])
+            if len(candidates) > 1:
+                raise SaveOnlyContractError(
+                    'PRODUCT_BOX_IDENTITY_AMBIGUOUS',
+                    'multiple local products match one live product-box identity',
+                )
+            payload = {
+                'store_id': store_id,
+                'store_name': store_name,
+                'draft_box_verified': True,
+                'source_url': item['source_url'],
+                'source_urls': list(item['source_urls']),
+                'product_box_record_key': record_key,
+                'product_box_observed_at': observed_at,
+                'product_box_evidence_ref': dict(evidence_ref),
+                'product_box_target_identity': dict(item['target_identity']),
+                'product_box_target_identity_sha256': item['target_identity_sha256'],
+                'product_box_scope_snapshot_id': int(snapshot['id']),
+                'product_box_scope_digest': scope_digest,
             }
-            return self._public_draft_box_scope_snapshot(stored)
+            if candidates:
+                product_id = int(candidates[0]['id'])
+                conn.execute(
+                    """
+                    UPDATE products
+                       SET title=?, source='dxm_draft_box', status='ready_for_edit',
+                           payload_json=?, updated_at=?
+                     WHERE id=?
+                    """,
+                    (item['title'], dumps(payload), observed_at, product_id),
+                )
+            else:
+                cur = conn.execute(
+                    """
+                    INSERT INTO products (
+                        title, source, status, category_name, price, currency,
+                        sku_count, image_count, payload_json, created_at, updated_at
+                    ) VALUES (?, 'dxm_draft_box', 'ready_for_edit', '未分类', 0, 'USD', 1, 0, ?, ?, ?)
+                    """,
+                    (item['title'], dumps(payload), observed_at, observed_at),
+                )
+                product_id = int(cur.lastrowid)
+                existing_by_key[record_key] = [{'id': product_id}]
+            local_product_ids[ordinal] = product_id
+        return store_id, local_product_ids
 
     def get_draft_box_scope_snapshot(self, snapshot_id: int):
         with connection() as conn:
@@ -334,7 +525,12 @@ class Repository:
             }
 
     @staticmethod
-    def _public_draft_box_scope_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    def _public_draft_box_scope_snapshot(
+        snapshot: dict[str, Any],
+        *,
+        store_id: int | None = None,
+        local_product_ids: dict[int, int] | None = None,
+    ) -> dict[str, Any]:
         page = snapshot.get('page_identity') if isinstance(snapshot.get('page_identity'), dict) else {}
         store = snapshot.get('store_identity') if isinstance(snapshot.get('store_identity'), dict) else {}
         return {
@@ -346,6 +542,7 @@ class Repository:
             },
             'store_identity': {
                 'store_name': store.get('store_name'),
+                'store_id': store_id,
             },
             'filter_state': snapshot.get('filter_state'),
             'sort_state': snapshot.get('sort_state'),
@@ -355,6 +552,7 @@ class Repository:
                     'ordinal': item.get('ordinal'),
                     'title': item.get('title'),
                     'dxm_product_id': item.get('dxm_product_id'),
+                    'local_product_id': (local_product_ids or {}).get(int(item.get('ordinal') or 0)),
                 }
                 for item in snapshot.get('items') or []
                 if isinstance(item, dict)
@@ -2189,36 +2387,30 @@ class Repository:
 
     def list_products(self, *, include_fixtures: bool = False):
         with connection() as conn:
-            rows = conn.execute("SELECT * FROM products ORDER BY id DESC").fetchall()
+            rows = conn.execute(
+                """
+                SELECT * FROM products
+                 WHERE source NOT IN ('removed_workflow_legacy', 'dxm_data_acquisition')
+                   AND status!='claimed_to_draft'
+                 ORDER BY id DESC
+                """
+            ).fetchall()
             for row in rows:
                 row['payload'] = loads(row.pop('payload_json'), {})
                 self._attach_product_lifecycle(row)
             return rows
 
-    def list_claimed_draft_products(self):
-        products = self.list_products()
-        claimed_statuses = {'claimed_to_draft', 'ready_for_edit'}
-        eligible = []
-        for product in products:
-            payload = product.get('payload') if isinstance(product.get('payload'), dict) else {}
-            source = str(payload.get('source') or product.get('source') or '').strip()
-            source_url = self._first_source_url(payload)
-            if product.get('status') not in claimed_statuses:
-                continue
-            if source != 'dxm_data_acquisition':
-                continue
-            if payload.get('draft_box_verified') is not True:
-                continue
-            if not source_url:
-                continue
-            if not self.product_has_completed_claim_provenance(product):
-                continue
-            eligible.append(product)
-        return eligible
-
     def get_product(self, product_id: int):
         with connection() as conn:
-            row = conn.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
+            row = conn.execute(
+                """
+                SELECT * FROM products
+                 WHERE id=?
+                   AND source NOT IN ('removed_workflow_legacy', 'dxm_data_acquisition')
+                   AND status!='claimed_to_draft'
+                """,
+                (product_id,),
+            ).fetchone()
             if not row:
                 return None
             row['payload'] = loads(row.pop('payload_json'), {})
@@ -2240,42 +2432,6 @@ class Repository:
         row['payload'] = loads(row.pop('payload_json'), {})
         self._attach_product_lifecycle(row)
         return row
-
-    def create_acquisition_claim_request(self, data: dict[str, Any]):
-        store_name = str(data.get('store_name') or self._store_name_for_id(data['store_id']) or '').strip()
-        payload = {
-            'stage': 'pending_acquisition_claim',
-            'status': 'pending',
-            'store_id': data['store_id'],
-            'store_name': store_name or None,
-            'source_url': data.get('source_url'),
-            'keyword': data.get('keyword'),
-            'category_name': data.get('category_name'),
-            'claim_mark': data['claim_mark'],
-            'template_id': data.get('template_id'),
-        }
-        task = self.create_task({
-            'name': f"待认领商品 - {payload.get('keyword') or payload.get('category_name') or '待选择商品'}",
-            'store_id': payload['store_id'],
-            'mode': 'claim_only',
-            'publish_scene': 'CONTROLLED_CLAIM_TO_DRAFT_ONLY',
-            'claim_mark': payload['claim_mark'],
-            'product_ids': [],
-            'payload': payload,
-        })
-        now = now_iso()
-        with connection() as conn:
-            conn.execute(
-                "UPDATE tasks SET total_jobs=1, updated_at=? WHERE id=?",
-                (now, task['id']),
-            )
-            conn.execute(
-                "INSERT INTO jobs (task_id, product_id, status, created_at, updated_at) VALUES (?, NULL, 'pending', ?, ?)",
-                (task['id'], now, now),
-            )
-        task = self.get_task_private(task['id'])
-        task['payload'] = self._public_task_payload(task.get('payload') or {})
-        return task
 
     def _store_name_for_id(self, store_id: Any) -> str | None:
         with connection() as conn:
@@ -2299,7 +2455,9 @@ class Repository:
 
     def list_tasks(self):
         with connection() as conn:
-            rows = conn.execute("SELECT * FROM tasks ORDER BY id DESC").fetchall()
+            rows = conn.execute(
+                "SELECT * FROM tasks WHERE mode!='removed_workflow_legacy' ORDER BY id DESC"
+            ).fetchall()
             for row in rows:
                 row['payload'] = self._public_task_payload(loads(row.pop('payload_json'), {}))
             return rows
@@ -2324,7 +2482,10 @@ class Repository:
 
     def get_task(self, task_id: int, *, include_private: bool = False):
         with connection() as conn:
-            task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            task = conn.execute(
+                "SELECT * FROM tasks WHERE id=? AND mode!='removed_workflow_legacy'",
+                (task_id,),
+            ).fetchone()
             if not task:
                 return None
             payload = loads(task.pop('payload_json'), {})
@@ -2341,14 +2502,18 @@ class Repository:
         payload.pop('manual_approval', None)
         payload.update({
             'product_ids': data.get('product_ids', []),
-            'claim_mark': data.get('claim_mark', 'AI认领'),
             'execution_mode': data['mode'],
             'publish_allowed': False,
             'max_count': len(data.get('product_ids', [])),
         })
         with connection() as conn:
             if data.get('mode') == 'single_save':
-                self._attach_single_save_claim_proof(conn, payload, data.get('product_ids', []))
+                self._attach_single_save_product_box_snapshot(
+                    conn,
+                    payload,
+                    data.get('product_ids', []),
+                    expected_store_id=data.get('store_id'),
+                )
             cur = conn.execute(
                 "INSERT INTO tasks (name, store_id, status, mode, publish_scene, total_jobs, payload_json, created_at, updated_at) VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?)",
                 (data['name'], data.get('store_id'), data['mode'], data['publish_scene'], len(data.get('product_ids', [])), dumps(payload), now, now),
@@ -2363,7 +2528,14 @@ class Repository:
             task['payload'] = loads(task.pop('payload_json'), {})
             return task
 
-    def _attach_single_save_claim_proof(self, conn: Any, payload: dict[str, Any], product_ids: list[int]) -> None:
+    def _attach_single_save_product_box_snapshot(
+        self,
+        conn: Any,
+        payload: dict[str, Any],
+        product_ids: list[int],
+        *,
+        expected_store_id: Any,
+    ) -> None:
         if len(product_ids) != 1:
             return
         product = conn.execute("SELECT * FROM products WHERE id=?", (int(product_ids[0]),)).fetchone()
@@ -2371,32 +2543,97 @@ class Repository:
             return
         product_payload = loads(product.get('payload_json'), {})
         product['payload'] = product_payload
-        if not self.product_has_completed_claim_provenance(product):
-            raise TwoStageContractError(
-                'CLAIM_PROOF_INVALID',
-                'single-save task requires a fully verified completed claim provenance',
+        if product.get('source') != 'dxm_draft_box':
+            raise SaveOnlyContractError(
+                'PRODUCT_BOX_SOURCE_INVALID',
+                'single-save requires a product created from the current product-box scope',
             )
-        source = str(product_payload.get('source') or product.get('source') or '').strip()
         source_url = self._first_source_url(product_payload)
+        source_urls = list(product_payload.get('source_urls') or ([source_url] if source_url else []))
+        if not source_url:
+            raise SaveOnlyContractError(
+                'PRODUCT_BOX_IDENTITY_MISSING',
+                'single-save requires an exact product-box source identity',
+            )
+        product_store_id = product_payload.get('store_id')
+        if (
+            isinstance(expected_store_id, bool)
+            or not isinstance(expected_store_id, int)
+            or expected_store_id <= 0
+            or isinstance(product_store_id, bool)
+            or not isinstance(product_store_id, int)
+            or product_store_id != expected_store_id
+        ):
+            raise SaveOnlyContractError(
+                'PRODUCT_BOX_STORE_MISMATCH',
+                'single-save task store must match the product-box item store',
+            )
+        if product.get('status') != 'ready_for_edit':
+            raise SaveOnlyContractError(
+                'PRODUCT_BOX_STATUS_INVALID',
+                'single-save requires a product currently available in the product box',
+            )
+        if product_payload.get('draft_box_verified') is not True:
+            raise SaveOnlyContractError(
+                'PRODUCT_BOX_NOT_VERIFIED',
+                'single-save requires current product-box verification',
+            )
+        store_name = str(product_payload.get('store_name') or self._store_name_for_id(product_store_id) or '').strip()
+        source_identity = canonical_source_identity(source_url, source_urls)
+        evidence_ref = product_payload.get('product_box_evidence_ref')
+        evidence_error = _product_box_evidence_integrity_error(evidence_ref)
+        if evidence_error:
+            raise SaveOnlyContractError(
+                'PRODUCT_BOX_EVIDENCE_INVALID',
+                evidence_error,
+            )
+        target_identity = product_payload.get('product_box_target_identity')
+        if not isinstance(target_identity, dict):
+            store_fingerprint = canonical_contract_sha256(
+                {'store_name': store_name, 'source': 'structured_store_cell'}
+            )
+            target_identity = {
+                'schema_version': 'dxm_draft_box_target.v1',
+                'store_fingerprint': store_fingerprint,
+                'stable_identity': {
+                    'kind': 'source_url',
+                    'value': source_identity['primary_url'],
+                    'fingerprint': source_identity['fingerprint'],
+                },
+                'source_urls': list(source_identity['urls']),
+            }
+        target_identity = canonical_frozen_target_identity(target_identity, store_name=store_name)
+        if target_identity is None:
+            raise SaveOnlyContractError('PRODUCT_BOX_TARGET_INVALID', 'product-box target identity is missing')
+        captured_at = str(
+            product_payload.get('product_box_observed_at')
+            or product_payload.get('draft_box_observed_at')
+            or product.get('updated_at')
+            or ''
+        )
+        snapshot = build_product_box_snapshot(
+            product_id=int(product['id']),
+            store_id=product_store_id,
+            store_name=store_name,
+            product_title=str(product.get('title') or ''),
+            product_status=str(product.get('status') or ''),
+            source_identity=source_identity,
+            target_identity=target_identity,
+            captured_at=captured_at,
+            evidence_ref=evidence_ref,
+        )
         payload.update({
-            'stage': 'draft_edit_save',
-            'claimed_product_id': product.get('id'),
-            'claimed_product_title': product.get('title'),
-            'claimed_product_status': product.get('status'),
-            'claimed_product_source': source or None,
-            'claimed_product_source_url': source_url,
-            'claimed_product_category_name': product.get('category_name'),
-            'claim_task_id': product_payload.get('claim_task_id'),
-            'claim_job_id': product_payload.get('claim_job_id'),
+            'stage': 'product_box_edit_save',
+            'product_box_product_id': product.get('id'),
+            'product_box_product_title': product.get('title'),
+            'product_box_product_status': product.get('status'),
+            'product_box_source_url': source_url,
+            'product_box_category_name': product.get('category_name'),
             'store_id': product_payload.get('store_id'),
-            'claimed_product_source_identity': product_payload.get('source_identity'),
-            'claimed_product_source_urls': list(product_payload.get('source_urls') or []),
-            'stage_a_task_facts': product_payload.get('stage_a_task_facts'),
-            'stage_a_task_facts_fingerprint': product_payload.get('stage_a_task_facts_fingerprint'),
-            'claim_target_identity': product_payload.get('claim_target_identity'),
-            'claim_target_fingerprint': product_payload.get('claim_target_fingerprint'),
-            'draft_box_proof': product_payload.get('draft_box_proof'),
-            'draft_box_proof_fingerprint': product_payload.get('draft_box_proof_fingerprint'),
+            'product_box_source_identity': source_identity,
+            'product_box_source_urls': list(source_identity['urls']),
+            'product_box_snapshot': snapshot,
+            'product_box_snapshot_fingerprint': snapshot['fingerprint'],
             'draft_box_verified': product_payload.get('draft_box_verified') is True,
         })
         if source_url:
@@ -2407,41 +2644,31 @@ class Repository:
 
     def _attach_product_lifecycle(self, product: dict[str, Any]) -> None:
         payload = product.get('payload') if isinstance(product.get('payload'), dict) else {}
-        source = str(payload.get('source') or product.get('source') or '').strip()
+        source = str(product.get('source') or '').strip()
         source_url = self._first_source_url(payload)
         status = str(product.get('status') or '').strip().lower()
         draft_box_verified = payload.get('draft_box_verified') is True
         if status in {'saved', 'save_completed', 'completed'}:
             lifecycle_state = 'saved'
             lifecycle_label = '已保存结果'
-        elif status == 'ready_for_edit' or (
-            status == 'claimed_to_draft'
-            and source == 'dxm_data_acquisition'
-            and draft_box_verified
-            and bool(source_url)
-        ):
+        elif status == 'ready_for_edit' and draft_box_verified and bool(source_url):
             lifecycle_state = 'editable'
             lifecycle_label = '可编辑商品'
-        elif status in {'claimed_to_draft', 'claimed'} or payload.get('claim_task_id'):
-            lifecycle_state = 'claimed'
-            lifecycle_label = '已认领商品'
         else:
-            lifecycle_state = 'awaiting_claim'
-            lifecycle_label = '待认领商品'
+            lifecycle_state = 'unverified'
+            lifecycle_label = '等待商品箱确认'
 
-        if source == 'dxm_data_acquisition':
-            source_status_label = '店小秘已有待认领商品'
+        if source == 'dxm_draft_box':
+            source_status_label = '店小秘商品箱商品'
         elif source in {'manual', 'manual_import'}:
             source_status_label = '手工/导入商品'
         else:
             source_status_label = '等待来源确认'
 
         if draft_box_verified:
-            draft_box_verification_label = '已确认进入商品箱'
-        elif lifecycle_state in {'claimed', 'editable'}:
-            draft_box_verification_label = '等待确认商品箱'
+            draft_box_verification_label = '已确认在商品箱'
         else:
-            draft_box_verification_label = '未进入商品箱'
+            draft_box_verification_label = '等待商品箱确认'
 
         product.update({
             'lifecycle_state': lifecycle_state,
@@ -2449,69 +2676,18 @@ class Repository:
             'source_status_label': source_status_label,
             'draft_box_verification_label': draft_box_verification_label,
             'source_url': source_url,
-            'claim_task_id': payload.get('claim_task_id'),
             'store_id': payload.get('store_id'),
             'store_name': payload.get('store_name'),
-            'claimed_at': payload.get('claimed_at') or payload.get('completed_at'),
             'draft_box_verified': draft_box_verified,
         })
 
-    def product_has_completed_claim_provenance(self, product: dict[str, Any]) -> bool:
-        payload = product.get('payload') if isinstance(product.get('payload'), dict) else {}
-        claim_task_id = payload.get('claim_task_id') or product.get('claim_task_id')
-        try:
-            claim_task_id_int = _exact_positive_int(claim_task_id)
-            product_id = _exact_positive_int(product.get('id'))
-        except ValueError:
-            return False
-        task = self.get_task_private(claim_task_id_int)
-        if not task:
-            return False
-        if task.get('mode') != 'claim_only':
-            return False
-        if task.get('status') != 'completed':
-            return False
-        task_payload = task.get('payload') if isinstance(task.get('payload'), dict) else {}
-        if task_payload.get('status') != 'completed':
-            return False
-        jobs = task.get('jobs') if isinstance(task.get('jobs'), list) else []
-        if len(jobs) != 1 or jobs[0].get('product_id') is not None:
-            return False
-        try:
-            claimed_product_id = _exact_positive_int(task_payload.get('claimed_product_id'))
-        except ValueError:
-            return False
-        if claimed_product_id != product_id or task_payload.get('draft_box_verified') is not True:
-            return False
-        if self._claim_product_proof_error(
-            claim_task_id_int,
-            product,
-            task=task,
-            job=jobs[0],
-        ) is not None:
-            return False
-        expected_task_snapshot = {
-            'claim_job_id': payload.get('claim_job_id'),
-            'store_id': payload.get('store_id'),
-            'stage_a_task_facts': payload.get('stage_a_task_facts'),
-            'stage_a_task_facts_fingerprint': payload.get('stage_a_task_facts_fingerprint'),
-            'claim_target_identity': payload.get('claim_target_identity'),
-            'claim_target_fingerprint': payload.get('claim_target_fingerprint'),
-            'claimed_product_source_identity': payload.get('source_identity'),
-            'draft_box_proof': payload.get('draft_box_proof'),
-            'draft_box_proof_fingerprint': payload.get('draft_box_proof_fingerprint'),
-        }
-        return all(task_payload.get(key) == value for key, value in expected_task_snapshot.items())
-
-    def single_save_claim_snapshot_error(
+    def single_save_product_box_snapshot_error(
         self,
         task: dict[str, Any],
         product: dict[str, Any],
     ) -> str | None:
         if task.get('mode') != 'single_save':
             return 'task is not single_save'
-        if not self.product_has_completed_claim_provenance(product):
-            return 'current product claim provenance is invalid'
         task_payload = task.get('payload') if isinstance(task.get('payload'), dict) else {}
         product_payload = product.get('payload') if isinstance(product.get('payload'), dict) else {}
         jobs = task.get('jobs') if isinstance(task.get('jobs'), list) else []
@@ -2520,7 +2696,7 @@ class Repository:
             task_store_id = _exact_positive_int(task.get('store_id'))
             product_id = _exact_positive_int(product.get('id'))
             product_store_id = _exact_positive_int(product_payload.get('store_id'))
-            snapshot_product_id = _exact_positive_int(task_payload.get('claimed_product_id'))
+            snapshot_product_id = _exact_positive_int(task_payload.get('product_box_product_id'))
         except ValueError:
             return 'single-save task or product bindings are invalid'
         if len(jobs) != 1:
@@ -2535,29 +2711,33 @@ class Repository:
             and task_payload.get('product_ids') == [product_id]
         ):
             return 'single-save task store or product binding has drifted'
-        expected_snapshot = {
-            'claimed_product_id': product_id,
-            'claimed_product_title': product.get('title'),
-            'claimed_product_status': product.get('status'),
-            'claimed_product_source': product_payload.get('source') or product.get('source'),
-            'claimed_product_source_url': _first_source_url_from_payload(product_payload),
-            'claimed_product_category_name': product.get('category_name'),
-            'claim_task_id': product_payload.get('claim_task_id'),
-            'claim_job_id': product_payload.get('claim_job_id'),
-            'store_id': product_payload.get('store_id'),
-            'claimed_product_source_identity': product_payload.get('source_identity'),
-            'claimed_product_source_urls': list(product_payload.get('source_urls') or []),
-            'stage_a_task_facts': product_payload.get('stage_a_task_facts'),
-            'stage_a_task_facts_fingerprint': product_payload.get('stage_a_task_facts_fingerprint'),
-            'claim_target_identity': product_payload.get('claim_target_identity'),
-            'claim_target_fingerprint': product_payload.get('claim_target_fingerprint'),
-            'draft_box_proof': product_payload.get('draft_box_proof'),
-            'draft_box_proof_fingerprint': product_payload.get('draft_box_proof_fingerprint'),
-            'draft_box_verified': True,
-        }
-        for key, expected in expected_snapshot.items():
-            if task_payload.get(key) != expected:
-                return f'single-save task snapshot field {key} has drifted'
+        snapshot = task_payload.get('product_box_snapshot')
+        if not isinstance(snapshot, dict):
+            return 'product-box snapshot is missing'
+        verification = verify_product_box_snapshot(snapshot)
+        if verification.get('ok') is not True:
+            return f"product-box snapshot is invalid: {verification.get('reason_code')}"
+        evidence_error = _product_box_evidence_integrity_error(snapshot.get('evidence_ref'))
+        if evidence_error:
+            return evidence_error
+        if task_payload.get('product_box_snapshot_fingerprint') != snapshot.get('fingerprint'):
+            return 'product-box snapshot fingerprint has drifted'
+        if (
+            snapshot.get('product_id') != product_id
+            or snapshot.get('store_id') != product_store_id
+            or snapshot.get('product_title') != product.get('title')
+            or snapshot.get('product_status') != product.get('status')
+        ):
+            return 'product-box snapshot no longer matches the selected product'
+        try:
+            canonical_target = canonical_frozen_target_identity(
+                snapshot.get('target_identity'),
+                store_name=str(snapshot.get('store_name') or ''),
+            )
+        except Exception:
+            return 'product-box frozen target identity is invalid'
+        if canonical_target != snapshot.get('target_identity'):
+            return 'product-box frozen target identity has drifted'
         return None
 
     def set_task_manual_approval(
@@ -2675,7 +2855,7 @@ class Repository:
                 return None
             payload = loads(task['payload_json'], {})
             if section == 'task_basic':
-                allowed = {'store_name', 'category_name', 'claim_mark', 'execution_mode'}
+                allowed = {'store_name', 'category_name', 'execution_mode'}
                 for key, value in dict(values or {}).items():
                     if key not in allowed:
                         continue
@@ -2801,405 +2981,6 @@ class Repository:
             )
             return updated.rowcount == 1
 
-    def mark_acquisition_claim_completed(self, task_id: int, claimed_product: dict[str, Any]) -> ClaimCompletionResult:
-        now = now_iso()
-        product_id = claimed_product.get('id')
-        with connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            authoritative_product = None
-            if product_id is not None:
-                product_row = conn.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
-                if product_row:
-                    product_row['payload'] = loads(product_row.pop('payload_json'), {})
-                    self._attach_product_lifecycle(product_row)
-                    authoritative_product = product_row
-            if authoritative_product is None:
-                decision = {
-                    'idempotent': False,
-                    'conflict_code': 'CLAIM_PRODUCT_NOT_FOUND',
-                    'reason': 'claimed product does not exist',
-                }
-            else:
-                decision = self._claim_completion_decision(
-                    conn,
-                    task_id,
-                    authoritative_product,
-                    allow_draft=True,
-                )
-                if decision['conflict_code'] is None and not decision['idempotent']:
-                    self._apply_claim_completion(
-                        conn,
-                        decision['task'],
-                        decision['jobs'][0],
-                        decision['payload'],
-                        authoritative_product,
-                        now,
-                    )
-        return ClaimCompletionResult(
-            applied=decision['conflict_code'] is None and not decision['idempotent'],
-            idempotent=bool(decision['idempotent']),
-            conflict_code=decision['conflict_code'],
-            reason=decision['reason'],
-            task=self.get_task_private(task_id),
-            product=self.get_product(int(product_id)) if product_id is not None else None,
-        )
-
-    def create_claimed_product_and_complete_acquisition(
-        self,
-        task_id: int,
-        product_data: dict[str, Any],
-        *,
-        draft_box_observation: dict[str, Any] | None = None,
-    ) -> ClaimCompletionResult:
-        """Create the verified claimed product and complete its claim task atomically."""
-        now = now_iso()
-        product_id: int | None = None
-        with connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            decision = self._claim_completion_decision(
-                conn,
-                task_id,
-                product_data,
-                validate_product_proof=False,
-            )
-            if decision['conflict_code'] is None and not decision['idempotent']:
-                exact_product_data = dict(product_data)
-                exact_product_payload = dict(product_data.get('payload') or {})
-                exact_product_payload.pop('draft_box_proof', None)
-                exact_product_data['payload'] = exact_product_payload
-                product = self._insert_product(conn, exact_product_data, now)
-                product_id = int(product['id'])
-                job = decision['jobs'][0]
-                stage_a_task_facts = self._build_stage_a_task_facts(decision['task'], job)
-                proof = build_draft_box_proof(
-                    stage_a_task_facts=stage_a_task_facts,
-                    product_id=product_id,
-                    proof_content=draft_box_observation or {},
-                )
-                proof_content = proof['proof_content']
-                source_identity = proof_content.get('observed_source_identity')
-                if source_identity is None:
-                    exact_product_payload.pop('source_url', None)
-                    exact_product_payload.pop('source_urls', None)
-                else:
-                    exact_product_payload['source_url'] = source_identity['primary_url']
-                    exact_product_payload['source_urls'] = list(source_identity['urls'])
-                exact_product_payload.update({
-                    'claim_task_id': int(task_id),
-                    'claim_job_id': int(job['id']),
-                    'store_id': int(decision['task']['store_id']),
-                    'source_identity': source_identity,
-                    'stage_a_task_facts': stage_a_task_facts,
-                    'stage_a_task_facts_fingerprint': stage_a_task_facts['fingerprint'],
-                    'claim_target_identity': stage_a_task_facts['target_identity'],
-                    'claim_target_fingerprint': stage_a_task_facts['target_identity']['fingerprint'],
-                    'draft_box_verified': True,
-                    'draft_box_proof': proof,
-                    'draft_box_proof_fingerprint': proof['fingerprint'],
-                })
-                conn.execute(
-                    "UPDATE products SET payload_json=?, updated_at=? WHERE id=?",
-                    (dumps(exact_product_payload), now, product_id),
-                )
-                product['payload'] = exact_product_payload
-                proof_error = self._claim_product_proof_error(
-                    task_id,
-                    product,
-                    task=decision['task'],
-                    job=job,
-                )
-                if proof_error:
-                    raise TwoStageContractError('CLAIM_PROOF_INVALID', proof_error)
-                self._apply_claim_completion(
-                    conn,
-                    decision['task'],
-                    job,
-                    decision['payload'],
-                    product,
-                    now,
-                )
-        return ClaimCompletionResult(
-            applied=product_id is not None,
-            idempotent=bool(decision['idempotent']),
-            conflict_code=decision['conflict_code'],
-            reason=decision['reason'],
-            task=self.get_task_private(task_id),
-            product=self.get_product(product_id) if product_id is not None else None,
-        )
-
-    def _build_stage_a_task_facts(
-        self,
-        task: dict[str, Any],
-        job: dict[str, Any],
-    ) -> dict[str, Any]:
-        payload = (
-            task.get('payload')
-            if isinstance(task.get('payload'), dict)
-            else loads(task.get('payload_json'), {})
-        )
-        target_identity = canonical_claim_target_identity(
-            payload.get('source_url'),
-            payload.get('source_urls') or (),
-            keyword=payload.get('keyword'),
-            category_name=payload.get('category_name'),
-        )
-        return build_stage_a_task_facts(
-            task_id=_exact_positive_int(task.get('id')),
-            job_id=_exact_positive_int(job.get('id')),
-            store_id=_exact_positive_int(task.get('store_id')),
-            target_identity=target_identity,
-        )
-
-    def _claim_completion_decision(
-        self,
-        conn: Any,
-        task_id: int,
-        claimed_product: dict[str, Any],
-        *,
-        allow_draft: bool = False,
-        validate_product_proof: bool = True,
-    ) -> dict[str, Any]:
-        task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
-        if not task:
-            return {
-                'task': None,
-                'jobs': [],
-                'payload': {},
-                'idempotent': False,
-                'conflict_code': 'CLAIM_TASK_NOT_FOUND',
-                'reason': 'claim task does not exist',
-            }
-        jobs = conn.execute("SELECT * FROM jobs WHERE task_id=? ORDER BY id ASC", (task_id,)).fetchall()
-        payload = loads(task['payload_json'], {})
-        claimed_payload = claimed_product.get('payload') if isinstance(claimed_product.get('payload'), dict) else {}
-        has_failed_report = conn.execute(
-            "SELECT 1 FROM reports WHERE task_id=? AND status='failed' LIMIT 1",
-            (task_id,),
-        ).fetchone() is not None
-        has_open_exception = conn.execute(
-            "SELECT 1 FROM exceptions WHERE task_id=? AND status='open' LIMIT 1",
-            (task_id,),
-        ).fetchone() is not None
-        terminal_failure = (
-            task.get('status') in {'failed', 'partial_success', 'cancelled', 'needs_manual_review'}
-            or any(job.get('status') == 'failed' or job.get('error_code') for job in jobs)
-            or has_failed_report
-            or has_open_exception
-        )
-        completed_state = task.get('status') == 'completed' or payload.get('status') == 'completed'
-        task_shape_valid = task.get('mode') == 'claim_only' and len(jobs) == 1 and jobs[0].get('product_id') is None
-        proof_error = (
-            self._claim_product_proof_error(
-                task_id,
-                claimed_product,
-                task=task,
-                job=jobs[0],
-            )
-            if validate_product_proof and task_shape_valid
-            else None
-        )
-        claimed_proof = claimed_payload.get('draft_box_proof') if isinstance(claimed_payload.get('draft_box_proof'), dict) else {}
-        same_completed_result = (
-            claimed_product.get('id') is not None
-            and task.get('status') == 'completed'
-            and payload.get('status') == 'completed'
-            and str(payload.get('claimed_product_id')) == str(claimed_product.get('id'))
-            and payload.get('claimed_product_source_url') == _first_source_url_from_payload(claimed_payload)
-            and payload.get('draft_box_verified') is True
-            and len(jobs) == 1
-            and jobs[0].get('status') in {'completed', 'succeeded'}
-            and not jobs[0].get('error_code')
-            and payload.get('claim_job_id') == claimed_payload.get('claim_job_id') == jobs[0].get('id')
-            and payload.get('store_id') == claimed_payload.get('store_id') == task.get('store_id')
-            and payload.get('stage_a_task_facts') == claimed_payload.get('stage_a_task_facts')
-            and payload.get('stage_a_task_facts_fingerprint') == claimed_payload.get('stage_a_task_facts_fingerprint')
-            and payload.get('claim_target_identity') == claimed_payload.get('claim_target_identity')
-            and payload.get('claim_target_fingerprint') == claimed_payload.get('claim_target_fingerprint')
-            and payload.get('claimed_product_source_identity') == claimed_payload.get('source_identity')
-            and payload.get('draft_box_proof') == claimed_proof
-            and payload.get('draft_box_proof_fingerprint') == claimed_proof.get('fingerprint')
-        )
-        conflict_code: str | None = None
-        reason: str | None = None
-        idempotent = False
-        if terminal_failure:
-            conflict_code = 'CLAIM_TERMINAL_STATE_CONFLICT'
-            reason = 'failed claim facts are terminal and cannot be rewritten by a late success'
-        elif completed_state:
-            if proof_error:
-                conflict_code = 'CLAIM_PROOF_INVALID'
-                reason = proof_error
-            elif same_completed_result:
-                idempotent = True
-            else:
-                conflict_code = 'CLAIM_COMPLETION_RESULT_CONFLICT'
-                reason = 'completed claim result does not match the requested product proof'
-        elif not task_shape_valid:
-            conflict_code = 'CLAIM_TASK_SHAPE_CONFLICT'
-            reason = 'claim completion requires one product-less claim job'
-        elif (
-            task.get('status') not in ({'draft', 'running'} if allow_draft else {'running'})
-            or jobs[0].get('status') not in ({'pending', 'running'} if allow_draft else {'running'})
-        ):
-            conflict_code = 'CLAIM_STATE_TRANSITION_CONFLICT'
-            reason = 'claim task and job are not in a completable state'
-        else:
-            if proof_error:
-                conflict_code = 'CLAIM_PROOF_INVALID'
-                reason = proof_error
-        return {
-            'task': task,
-            'jobs': jobs,
-            'payload': payload,
-            'idempotent': idempotent,
-            'conflict_code': conflict_code,
-            'reason': reason,
-        }
-
-    def _claim_product_proof_error(
-        self,
-        task_id: int,
-        claimed_product: dict[str, Any],
-        *,
-        task: dict[str, Any],
-        job: dict[str, Any],
-    ) -> str | None:
-        payload = claimed_product.get('payload') if isinstance(claimed_product.get('payload'), dict) else {}
-        source = str(payload.get('source') or claimed_product.get('source') or '').strip()
-        try:
-            proof_task_id = _exact_positive_int(payload.get('claim_task_id'))
-        except ValueError:
-            proof_task_id = None
-        if source != 'dxm_data_acquisition':
-            return 'claimed product source is not dxm_data_acquisition'
-        if proof_task_id != int(task_id):
-            return 'claimed product proof belongs to a different claim task'
-        if payload.get('draft_box_verified') is not True:
-            return 'claimed product is missing verified draft-box proof'
-        try:
-            claim_job_id = _exact_positive_int(payload.get('claim_job_id'))
-            proof_store_id = _exact_positive_int(payload.get('store_id'))
-            product_id = _exact_positive_int(claimed_product.get('id'))
-            expected_job_id = _exact_positive_int(job.get('id'))
-            expected_store_id = _exact_positive_int(task.get('store_id'))
-            stage_a_task_facts = self._build_stage_a_task_facts(task, job)
-        except (TypeError, ValueError, TwoStageContractError):
-            return 'claimed product proof bindings are invalid'
-        if claim_job_id != expected_job_id:
-            return 'claimed product proof belongs to a different claim job'
-        if proof_store_id != expected_store_id:
-            return 'claimed product proof belongs to a different store'
-        proof = payload.get('draft_box_proof')
-        verification = verify_draft_box_proof(
-            proof,
-            stage_a_task_facts=stage_a_task_facts,
-            product_id=product_id,
-        )
-        if verification.get('ok') is not True:
-            return f"draft-box proof is invalid: {verification.get('reason_code')}"
-        proof_content = proof.get('proof_content') if isinstance(proof, dict) else {}
-        evidence_ref = proof_content.get('evidence_ref') if isinstance(proof_content, dict) else None
-        evidence_validation = validate_evidence_ref(
-            evidence_ref,
-            screenshot_root=SCREENSHOT_DIR,
-        )
-        if evidence_validation.get('ok') is not True:
-            return (
-                'draft-box proof evidence reference is invalid: '
-                f"{evidence_validation.get('reason_code')}"
-            )
-        observed_store_identity = proof_content.get('observed_store_identity') if isinstance(proof_content, dict) else None
-        authoritative_store_name = str(self._store_name_for_id(expected_store_id) or '').strip()
-        if (
-            not isinstance(observed_store_identity, dict)
-            or not authoritative_store_name
-            or str(observed_store_identity.get('store_name') or '').strip()
-            != authoritative_store_name
-        ):
-            return 'draft-box proof observed store name does not match the authoritative store'
-        observed_source_identity = proof_content.get('observed_source_identity')
-        expected_source_url = (
-            observed_source_identity.get('primary_url')
-            if isinstance(observed_source_identity, dict)
-            else None
-        )
-        if payload.get('source_identity') != observed_source_identity:
-            return 'claimed product source identity has drifted'
-        if _first_source_url_from_payload(payload) != expected_source_url:
-            return 'claimed product source URL has drifted'
-        if payload.get('stage_a_task_facts') != stage_a_task_facts:
-            return 'claimed product Stage A task facts have drifted'
-        if payload.get('stage_a_task_facts_fingerprint') != stage_a_task_facts.get('fingerprint'):
-            return 'claimed product Stage A task facts fingerprint has drifted'
-        if payload.get('claim_target_identity') != stage_a_task_facts.get('target_identity'):
-            return 'claimed product claim target has drifted'
-        if payload.get('claim_target_fingerprint') != stage_a_task_facts.get('target_identity', {}).get('fingerprint'):
-            return 'claimed product claim target fingerprint has drifted'
-        if payload.get('draft_box_proof_fingerprint') != proof.get('fingerprint'):
-            return 'claimed product draft-box proof fingerprint has drifted'
-        if str(claimed_product.get('status') or '').strip().lower() not in {'claimed_to_draft', 'ready_for_edit'}:
-            return 'claimed product is not in an editable draft-box state'
-        return None
-
-    def _apply_claim_completion(
-        self,
-        conn: Any,
-        task: dict[str, Any],
-        job: dict[str, Any],
-        payload: dict[str, Any],
-        claimed_product: dict[str, Any],
-        now: str,
-    ) -> None:
-        claimed_payload = claimed_product.get('payload') if isinstance(claimed_product.get('payload'), dict) else {}
-        next_payload = dict(payload)
-        next_payload.update({
-            'stage': 'claimed_to_draft',
-            'status': 'completed',
-            'claimed_product_id': claimed_product.get('id'),
-            'claimed_product_title': claimed_product.get('title'),
-            'claimed_product_status': claimed_product.get('status'),
-            'claimed_product_source': claimed_payload.get('source') or claimed_product.get('source'),
-            'claimed_product_source_url': _first_source_url_from_payload(claimed_payload),
-            'claimed_product_category_name': claimed_product.get('category_name'),
-            'draft_box_verified': claimed_payload.get('draft_box_verified') is True,
-            'claim_job_id': job.get('id'),
-            'store_id': task.get('store_id'),
-            'stage_a_task_facts': claimed_payload.get('stage_a_task_facts'),
-            'stage_a_task_facts_fingerprint': claimed_payload.get('stage_a_task_facts_fingerprint'),
-            'claim_target_identity': claimed_payload.get('claim_target_identity'),
-            'claim_target_fingerprint': claimed_payload.get('claim_target_fingerprint'),
-            'claimed_product_source_identity': claimed_payload.get('source_identity'),
-            'draft_box_proof': claimed_payload.get('draft_box_proof'),
-            'draft_box_proof_fingerprint': (claimed_payload.get('draft_box_proof') or {}).get('fingerprint'),
-            'completed_at': now,
-            'next_step': '进入“商品箱编辑保存”，选择该商品创建单商品只保存任务。',
-        })
-        task_update = conn.execute(
-            """
-            UPDATE tasks
-               SET status='completed', completed_jobs=1, failed_jobs=0,
-                   payload_json=?, updated_at=?
-             WHERE id=? AND status IN ('draft', 'running')
-            """,
-            (dumps(next_payload), now, task['id']),
-        )
-        job_update = conn.execute(
-            """
-            UPDATE jobs
-               SET status='completed',
-                   current_step_code='VERIFY_DRAFT_BOX_CLAIM',
-                   current_step_name='确认商品箱商品',
-                   error_code=NULL,
-                   error_message=NULL,
-                   updated_at=?
-             WHERE id=? AND task_id=? AND product_id IS NULL
-               AND status IN ('pending', 'running')
-            """,
-            (now, job['id'], task['id']),
-        )
-        if task_update.rowcount != 1 or job_update.rowcount != 1:
-            raise RuntimeError('claim completion compare-and-set failed')
-
     def try_start_task(self, task_id: int) -> bool:
         now = now_iso()
         with connection() as conn:
@@ -3293,7 +3074,12 @@ class Repository:
             except ValueError:
                 expiry = None
             stored_context = approval.get('authorization_context')
-            context_check = compare_authorization_context(stored_context, authorization_context)
+            compare_context = (
+                compare_batch_authorization_context
+                if str(task.get('mode') or '') == 'batch_draft_save'
+                else compare_save_authorization_context
+            )
+            context_check = compare_context(stored_context, authorization_context)
             edit_batch_active = self._active_edit_batch_exists(conn)
             another_task_active = self._other_running_task_exists(conn, task_id)
             if task.get('status') != 'draft':
@@ -3478,7 +3264,12 @@ class Repository:
         except ValueError:
             expiry = None
         stored_context = approval.get('authorization_context')
-        context_check = compare_authorization_context(stored_context, authorization_context)
+        compare_context = (
+            compare_batch_authorization_context
+            if str(task.get('mode') or '') == 'batch_draft_save'
+            else compare_save_authorization_context
+        )
+        context_check = compare_context(stored_context, authorization_context)
         if task.get('status') != 'running':
             reason_code = 'AUTH_TASK_NOT_RUNNING'
         elif approval.get('approved') is not True or approval.get('source') != 'server':
@@ -4042,7 +3833,15 @@ class Repository:
     def list_logs(self, task_id: int | None = None):
         with connection() as conn:
             if task_id is None:
-                rows = conn.execute("SELECT * FROM job_logs ORDER BY id DESC LIMIT 200").fetchall()
+                rows = conn.execute(
+                    """
+                    SELECT job_logs.*
+                      FROM job_logs
+                      JOIN tasks ON tasks.id=job_logs.task_id
+                     WHERE tasks.mode!='removed_workflow_legacy'
+                     ORDER BY job_logs.id DESC LIMIT 200
+                    """
+                ).fetchall()
             else:
                 rows = conn.execute("SELECT * FROM job_logs WHERE task_id=? ORDER BY id DESC LIMIT 200", (task_id,)).fetchall()
             for row in rows:
@@ -4060,7 +3859,15 @@ class Repository:
     def list_evidences(self, task_id: int | None = None):
         with connection() as conn:
             if task_id is None:
-                rows = conn.execute("SELECT * FROM job_evidences ORDER BY id DESC LIMIT 200").fetchall()
+                rows = conn.execute(
+                    """
+                    SELECT job_evidences.*
+                      FROM job_evidences
+                      JOIN tasks ON tasks.id=job_evidences.task_id
+                     WHERE tasks.mode!='removed_workflow_legacy'
+                     ORDER BY job_evidences.id DESC LIMIT 200
+                    """
+                ).fetchall()
             else:
                 rows = conn.execute("SELECT * FROM job_evidences WHERE task_id=? ORDER BY id DESC LIMIT 200", (task_id,)).fetchall()
             for row in rows:
@@ -4148,7 +3955,15 @@ class Repository:
 
     def list_exceptions(self):
         with connection() as conn:
-            return conn.execute("SELECT * FROM exceptions ORDER BY id DESC LIMIT 200").fetchall()
+            return conn.execute(
+                """
+                SELECT exceptions.*
+                  FROM exceptions
+                  JOIN tasks ON tasks.id=exceptions.task_id
+                 WHERE tasks.mode!='removed_workflow_legacy'
+                 ORDER BY exceptions.id DESC LIMIT 200
+                """
+            ).fetchall()
 
     def list_task_exceptions(self, task_id: int):
         """Return the complete exception history for one exact task."""
@@ -4559,7 +4374,15 @@ class Repository:
     def list_reports(self, task_id: int | None = None):
         with connection() as conn:
             if task_id is None:
-                rows = conn.execute("SELECT * FROM reports ORDER BY id DESC LIMIT 200").fetchall()
+                rows = conn.execute(
+                    """
+                    SELECT reports.*
+                      FROM reports
+                      JOIN tasks ON tasks.id=reports.task_id
+                     WHERE tasks.mode!='removed_workflow_legacy'
+                     ORDER BY reports.id DESC LIMIT 200
+                    """
+                ).fetchall()
             else:
                 rows = conn.execute("SELECT * FROM reports WHERE task_id=? ORDER BY id ASC", (task_id,)).fetchall()
             for row in rows:

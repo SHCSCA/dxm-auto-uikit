@@ -142,16 +142,17 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "realDxmMutationAllowed" in script
     assert "$ExpectedRealDxmWriteReadiness = \"BLOCKED\"" in script
     assert "default BLOCKED" in script
-    assert "$ExpectedRealDxmTwoStageEndToEnd = \"pending_live_dxm_validation\"" in script
-    assert "Get-TwoStageAcceptanceReadiness" in script
-    assert "twoStageAcceptance" in script
-    assert "twoStageAcceptanceReadiness" in script
-    assert "realDxmTwoStageEndToEnd" in script
-    assert "expectedRealDxmTwoStageEndToEnd" in script
-    assert "twoStageAcceptanceMatchesExpected" in script
+    assert "$ExpectedRealDxmSingleSaveEndToEnd = \"pending_live_dxm_validation\"" in script
+    assert "Get-SingleSaveAcceptanceReadiness" in script
+    assert "singleSaveAcceptance" in script
+    assert "singleSaveAcceptanceReadiness" in script
+    assert "realDxmSingleSaveEndToEnd" in script
+    assert "expectedRealDxmSingleSaveEndToEnd" in script
+    assert "singleSaveAcceptanceMatchesExpected" in script
     assert "productionDeliveryReady" in script
-    assert "$overallOk = $localWorkbenchOk -and $gateEvidenceOk -and $realDxmWriteReadinessMatchesExpected -and $twoStageAcceptanceMatchesExpected" in script
-    assert "Real DXM two-stage end-to-end" in script
+    assert "Test-FinalDeliveryOverallOk" in script
+    assert "-SingleSaveAcceptanceMatchesExpected $singleSaveAcceptanceMatchesExpected" in script
+    assert "Real DXM single-save end-to-end" in script
     assert "realDxmWriteReadinessMatchesExpected" in script
     assert "productionRealWriteReady" in script
     assert "realDxmWriteBlockedReason" in script
@@ -162,7 +163,8 @@ def test_final_delivery_check_reports_l2_probe_evidence_and_plan():
     assert "blockedModes" in script
     assert "missing_checklist" in script
     assert "## Real Mode Release Plan" in script
-    assert "do not infer claim_only, batch_save, unattended, or publish readiness" in script
+    assert "do not infer single_save, controlled_edit_batch, batch_save, unattended, or publish readiness" in script
+    assert "twoStageAcceptance" not in script
     assert "save screenshot/path missing" in script
     assert "network/HAR save response missing" in script
     assert "READY note: real DXM READY currently means controlled single_save readiness only" in script
@@ -271,22 +273,22 @@ def test_browser_qa_disables_extensions_and_bounds_cdp_commands():
     assert "pending.delete(msgId)" in script
 
 
-def test_browser_qa_bootstraps_two_stage_flow_without_fake_single_save_products():
+def test_browser_qa_reuses_real_single_save_without_fabricating_product_box_facts():
     script = QA_BROWSER_CHECK.read_text(encoding="utf-8")
     ensure_section = script[script.index("async function ensureRealMutationTask"):script.index("async function verifyUnreleasedRealModeCreateBlocked")]
 
-    assert "/api/acquisition/claim-requests" in ensure_section
-    assert "/api/acquisition/claimed-products" in ensure_section
-    assert "Local acceptance claim request" in ensure_section
-    assert "Local acceptance draft save task" in ensure_section
-    assert "LOCAL_ACCEPTANCE" in ensure_section
-    assert "QA two-stage acquisition claim request" not in ensure_section
+    assert "task?.mode === 'single_save'" in ensure_section
+    assert "return await ensureDryRunDemoTask()" in ensure_section
+    assert "/api/acquisition/" not in ensure_section
+    assert "/api/products" not in ensure_section
+    assert "postJson('/api/tasks'" not in ensure_section
+    assert "product_box_snapshot" not in ensure_section
     assert "QA local gated single_save one product fixture" not in script
     assert "QA guarded single-save product" not in script
-    assert "QA unreleased claim_only task" not in script
-    assert "product_ids: [claimedProduct.id]" in ensure_section
     assert "source: 'qa'" not in ensure_section
-    assert "product_ids: [qaProduct.id]" not in ensure_section
+    assert "claim_only" not in script
+    assert "data_acquisition" not in script
+    assert "待认领" not in script
 
 
 def test_final_delivery_check_captures_final_report_center_after_final_json_write():

@@ -43,11 +43,11 @@ from src.execution.v1_runner import V1ExecutionError, V1TaskRunner
 from src.main import app
 from src.repository import Repository
 from src.state_machine.contracts import ExecutionMode, StateName, normalize_execution_mode
-from src.state_machine.two_stage import (
-    TwoStageContractError,
+from src.state_machine.batch_draft_authorization import (
+    BatchDraftAuthorizationError,
     build_authorization_context,
     build_batch_draft_save_task_facts,
-    verify_exact_stage_task_facts,
+    verify_exact_batch_draft_save_task_facts,
 )
 from tests.test_action_result_contract import _valid_save_result, _valid_unpublished_result
 from tests.test_v1_runner import DummyManager, FakeWorkflowAdapter, _create_task, _evidence_ref
@@ -748,7 +748,6 @@ def test_browser_agent_rejects_frozen_readback_hash_not_bound_to_command(
         private,
         job,
         StateName.SAVE_ONLY,
-        "E3_BATCH_DRAFT",
         defaults,
     )
     assert spec is not None
@@ -2014,7 +2013,6 @@ def test_batch_browser_request_uses_only_the_frozen_product_identity(
         private,
         first_job,
         StateName.SAVE_ONLY,
-        "E3_BATCH_DRAFT",
         {},
     )
 
@@ -2099,7 +2097,6 @@ def test_batch_save_builds_formal_consumed_lease_command_and_reserves_ledger(
         private,
         first_job,
         StateName.SAVE_ONLY,
-        "E3_BATCH_DRAFT",
         frozen_defaults,
     )
     assert spec is not None
@@ -2202,7 +2199,6 @@ def test_batch_jit_authorization_rejects_command_target_outside_frozen_job(
         private,
         first_job,
         StateName.SAVE_ONLY,
-        "E3_BATCH_DRAFT",
         frozen_defaults,
     )
     assert spec is not None
@@ -2351,7 +2347,6 @@ def test_batch_jit_authorization_rejects_command_target_outside_frozen_job(
         private,
         pending_job,
         StateName.SAVE_ONLY,
-        "E3_BATCH_DRAFT",
         pending_defaults,
     )
     assert pending_spec is not None
@@ -2598,7 +2593,6 @@ def test_batch_save_crosses_persistent_browser_agent_with_real_authorization_and
         private,
         first_job,
         StateName.SAVE_ONLY,
-        "E3_BATCH_DRAFT",
         frozen_defaults,
     )
     assert spec is not None
@@ -2686,7 +2680,6 @@ def test_batch_save_crosses_persistent_browser_agent_with_real_authorization_and
         private,
         first_job,
         StateName.VERIFY_NOT_PUBLISHED,
-        "E3_BATCH_DRAFT",
         {},
     )
     assert verify_spec is not None
@@ -2823,7 +2816,6 @@ def test_startup_recovery_preserves_unknown_batch_save_and_leaves_tail_pending(
         private,
         first_job,
         StateName.SAVE_ONLY,
-        "E3_BATCH_DRAFT",
         frozen_defaults,
     )
     assert spec is not None
@@ -2914,10 +2906,10 @@ def test_batch_draft_save_task_facts_path_a_only():
     assert facts["stage"] == "batch_draft_save"
     assert facts["path"] == "A"
     assert facts["product_ids"] == [10, 20, 30]
-    checked = verify_exact_stage_task_facts(facts, expected_stage="batch_draft_save")
+    checked = verify_exact_batch_draft_save_task_facts(facts)
     assert checked["ok"] is True
 
-    with pytest.raises(TwoStageContractError) as exc:
+    with pytest.raises(BatchDraftAuthorizationError) as exc:
         build_batch_draft_save_task_facts(
             task_id=1,
             store_id=2,

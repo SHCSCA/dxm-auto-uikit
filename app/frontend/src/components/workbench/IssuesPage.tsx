@@ -213,7 +213,7 @@ function buildProblemCardCopy(item: ExceptionItem) {
     return {
       title: '店小秘还没登录',
       what: '系统还没有确认真实店小秘浏览器处于已登录状态。',
-      why: '没有登录态时不会启动真实认领或保存，也不会发布。',
+      why: '没有登录态时不会启动真实保存，也不会发布。',
       next: '点“登录店小秘”，打开真实登录页，完成验证码后再点“检测登录状态”。',
     }
   }
@@ -221,7 +221,7 @@ function buildProblemCardCopy(item: ExceptionItem) {
     return {
       title: '保存前安全检查没有通过',
       what: message,
-      why: '已有待认领列表和商品箱页没有完成安全检查前，系统不会启动真实保存。',
+      why: '商品箱页没有完成安全检查前，系统不会启动真实保存。',
       next: `点“${READONLY_PRECHECK_CTA}”；如果提示正在运行，就等待完成后刷新。`,
     }
   }
@@ -324,9 +324,8 @@ function humanGateDetail(detail?: string | null) {
   ) {
     return `保存前安全检查证据已过期，请点击“${READONLY_PRECHECK_CTA}”刷新后再继续。`
   }
-  if (detail.includes('data_acquisition') || detail.includes('draft_box')) {
+  if (detail.includes('draft_box')) {
     return safeDetail
-      .split('data_acquisition').join('已有待认领列表')
       .split('draft_box').join('商品箱页')
       .split('L2').join('保存前安全检查')
       .split('L3').join('真实保存')

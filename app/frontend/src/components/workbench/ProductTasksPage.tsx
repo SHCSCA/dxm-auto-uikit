@@ -6,7 +6,6 @@ import type {
   TaskWorkerControl,
 } from '../../types'
 import { isTaskControlActive } from '../../taskControl'
-import { isSupportedSourceProductUrl } from '../../sourceUrl'
 import { humanTaskDisplayName, humanOperatorMessage } from './workbenchCopy'
 import { TaskControlKeys } from './TaskControlKeys'
 
@@ -27,7 +26,6 @@ type ProductTasksPageProps = {
   onPauseTask: (taskId: number) => void
   onResumeTask: (taskId: number) => void
   onStopTask: (taskId: number) => void
-  onShowAcquisition: () => void
   onShowDxmAccess: () => void
   onShowConfig: () => void
   onShowDraftEdit: () => void
@@ -54,7 +52,6 @@ export function ProductTasksPage({
   onPauseTask,
   onResumeTask,
   onStopTask,
-  onShowAcquisition,
   onShowDxmAccess,
   onShowConfig,
   onShowDraftEdit,
@@ -70,7 +67,7 @@ export function ProductTasksPage({
   const currentTaskNeedsApproval = Boolean(
     currentTask
     && currentTask.status === 'draft'
-    && (currentTask.mode === 'claim_only' || currentTask.mode === 'single_save')
+    && currentTask.mode === 'single_save'
     && l2Gate?.status === 'passed'
   )
   const currentTaskApprovalMissing = currentTaskNeedsApproval && !currentApprover
@@ -88,7 +85,6 @@ export function ProductTasksPage({
   })
   const primaryAction = actionForDecision(decision.code, currentTask, {
     onShowDraftEdit,
-    onShowAcquisition,
     onShowDxmAccess,
     onShowConfig,
     onRunL2Probe,
@@ -105,7 +101,7 @@ export function ProductTasksPage({
           <div>
             <span className="eyebrow">当前保存任务</span>
             <h2>{currentTask ? humanTaskDisplayName(currentTask) : '还没有可启动的保存任务'}</h2>
-            <p>这里不选择商品，也不创建任务。要创建新的只保存任务，请先在“待认领入箱”完成第一段，再到“商品箱编辑保存”选择商品箱商品。</p>
+            <p>这里保留单商品只保存的历史与执行入口。新任务直接从商品箱读取现有商品并创建，只保存、不发布。</p>
           </div>
         </div>
 
@@ -171,14 +167,14 @@ export function ProductTasksPage({
         {currentTask?.mode === 'single_save' && l2Gate?.status !== 'passed' && (
           <div className="gate-note">
             <strong>保存前检查没有通过</strong>
-            <span>{safeGateDetail(l2Gate?.detail) || '需要确认已有待认领列表和商品箱页面能正常打开，且检查过程没有写入动作。'}</span>
+            <span>{safeGateDetail(l2Gate?.detail) || '需要确认商品箱页面能正常打开，且检查过程没有写入动作。'}</span>
           </div>
         )}
 
         {currentTaskNeedsApproval && (
           <div className="gate-note">
-            <strong>{currentTask?.mode === 'claim_only' ? '人工确认认领到商品箱' : '人工确认只保存不发布'}</strong>
-            <span>{currentTask?.mode === 'claim_only' ? '确认将该已有商品认领到商品箱' : '确认本次只保存不发布'}。填写批准人后系统会直接批准并启动；如旧诊断浏览器仍在运行，必须先关闭。</span>
+            <strong>人工确认只保存不发布</strong>
+            <span>确认本次只保存不发布。填写批准人后系统会直接批准并启动；如旧诊断浏览器仍在运行，必须先关闭。</span>
             <label className="approval-inline">
               <span>批准人</span>
               <input value={l3ApprovedBy} onChange={(event) => onL3ApprovedByChange(event.target.value)} placeholder="填写当前操作者" disabled={busy} required />
@@ -211,7 +207,7 @@ export function ProductTasksPage({
         ) : (
           <div className="gate-note">
             <strong>还没有任务</strong>
-            <span>先从“待认领入箱”处理真实已有商品，再到“商品箱编辑保存”创建只保存任务。</span>
+            <span>从商品箱读取现有商品并创建只保存任务。</span>
           </div>
         )}
       </div>
@@ -220,19 +216,15 @@ export function ProductTasksPage({
 }
 
 function firstOperatorTask(tasks: Task[]) {
-  return tasks.find(isActionableSingleSaveTask) ?? tasks.find(isActionableClaimTask) ?? tasks.find(isOperatorTask) ?? null
+  return tasks.find(isActionableSingleSaveTask) ?? tasks.find(isOperatorTask) ?? null
 }
 
 function isOperatorTask(task: Task) {
-  return task.mode === 'claim_only' || task.mode === 'single_save'
+  return task.mode === 'single_save'
 }
 
 function isActionableSingleSaveTask(task: Task) {
   return task.mode === 'single_save' && !['completed', 'partial_success', 'cancelled', 'stopped', 'archived'].includes(task.status)
-}
-
-function isActionableClaimTask(task: Task) {
-  return task.mode === 'claim_only' && !['completed', 'partial_success', 'cancelled', 'stopped', 'archived'].includes(task.status)
 }
 
 function isDxmLoggedIn(runtimeStatus: RuntimeStatus | null, runtimeStatusError: string | null) {
@@ -262,7 +254,7 @@ function buildTaskDecision({
   busy: boolean
 }) {
   if (!task) {
-    return decision('show_acquisition', 'warn', '还没有保存任务', '当前没有可启动的待认领入箱或单商品只保存任务。', '先从真实来源商品创建待认领任务；已有商品箱内容可直接走整批编辑。', '创建待认领任务', false)
+    return decision('go_draft_edit', 'warn', '还没有保存任务', '当前没有可启动的单商品只保存任务。', '直接读取商品箱现有商品并创建只保存批次。', '读取商品箱范围', false)
   }
   if (task.status === 'completed' || task.status === 'partial_success') {
     return decision('show_reports', 'ok', '任务已完成', '当前任务已经结束，不能重复启动。', '查看保存结果和未发布证明。', '查看保存结果', false)
@@ -285,11 +277,8 @@ function buildTaskDecision({
   if (task.status !== 'draft') {
     return decision('go_draft_edit', 'warn', '当前任务不可直接启动', '这条任务不是草稿状态。', '重新从商品箱商品创建编辑保存任务。', '去商品箱编辑保存', false)
   }
-  if (task.mode === 'claim_only' && !taskHasSupportedSourceUrl(task)) {
-    return decision('show_acquisition', 'warn', '缺少真实来源商品 URL', '关键词、类目或标题只能辅助筛选，不能唯一授权真实认领。', '回到待认领入箱，选择带来源 URL 的候选或粘贴完整商品链接。', '补齐来源商品 URL', false)
-  }
   if (diagnosticBrowserActive) {
-    return decision('show_console', 'warn', '旧诊断浏览器仍在运行', '真实认领、单商品只保存和整批执行不能与旧 Agent Console 共享浏览器。', '到浏览器诊断关闭旧窗口，再回来批准并启动。', '关闭旧诊断浏览器', false)
+    return decision('show_console', 'warn', '旧诊断浏览器仍在运行', '单商品只保存和整批执行不能与旧 Agent Console 共享浏览器。', '到浏览器诊断关闭旧窗口，再回来批准并启动。', '关闭旧诊断浏览器', false)
   }
   if (!dxmLoggedIn) {
     return decision('show_login', 'warn', '需要登录店小秘', '系统还没有检测到真实店小秘登录态。', '先到账号与浏览器完成登录，再回来继续。', '登录店小秘', false)
@@ -301,14 +290,12 @@ function buildTaskDecision({
     return decision('show_config', 'warn', '需要补齐编辑页模板', configPreviewError ? humanOperatorMessage(configPreviewError) : '当前任务的编辑页模板还没有通过检查。', '去模板中心确认本次执行会使用哪些值。', '检查编辑页模板', false)
   }
   if (!l2Passed) {
-    return decision('run_l2', 'warn', '需要保存前检查', '真实浏览器保存前必须确认已有待认领列表和商品箱页面没有写入风险。', '运行保存前安全检查。', READONLY_PRECHECK_CTA, false)
+    return decision('run_l2', 'warn', '需要保存前检查', '真实浏览器保存前必须确认商品箱页面没有写入风险。', '运行保存前安全检查。', READONLY_PRECHECK_CTA, false)
   }
-  if ((task.mode === 'claim_only' || task.mode === 'single_save') && !currentApproverPresent) {
-    return task.mode === 'claim_only'
-      ? decision('start', 'warn', '等待人工确认认领到商品箱', '确认将该已有商品认领到商品箱，并填写本次任务批准人。', '填写批准人后再启动待认领入箱。', '填写当前批准人', true)
-      : decision('start', 'warn', '等待人工确认只保存不发布', '确认本次只保存不发布，并填写本次任务批准人。', '填写批准人后再启动单商品只保存。', '填写当前批准人', true)
+  if (task.mode === 'single_save' && !currentApproverPresent) {
+    return decision('start', 'warn', '等待人工确认只保存不发布', '确认本次只保存不发布，并填写本次任务批准人。', '填写批准人后再启动单商品只保存。', '填写当前批准人', true)
   }
-  return decision('start', 'ok', task.mode === 'claim_only' ? '可以处理待认领入箱' : '可以处理单商品只保存', '当前没有阻断项，旧诊断浏览器已关闭。', '一次批准后由任务运行器直接启动真实执行。', task.mode === 'claim_only' ? '批准并启动认领' : '批准并启动只保存', busy)
+  return decision('start', 'ok', '可以处理单商品只保存', '当前没有阻断项，旧诊断浏览器已关闭。', '一次批准后由任务运行器直接启动真实执行。', '批准并启动只保存', busy)
 }
 
 function decision(code: string, tone: 'ok' | 'warn', what: string, why: string, next: string, cta: string, disabled: boolean) {
@@ -317,7 +304,6 @@ function decision(code: string, tone: 'ok' | 'warn', what: string, why: string, 
 
 function actionForDecision(code: string, currentTask: Task | null, actions: {
   onShowDraftEdit: () => void
-  onShowAcquisition: () => void
   onShowDxmAccess: () => void
   onShowConfig: () => void
   onRunL2Probe: () => void
@@ -327,7 +313,6 @@ function actionForDecision(code: string, currentTask: Task | null, actions: {
 }) {
   return ({
     go_draft_edit: actions.onShowDraftEdit,
-    show_acquisition: actions.onShowAcquisition,
     show_login: actions.onShowDxmAccess,
     show_config: actions.onShowConfig,
     run_l2: actions.onRunL2Probe,
@@ -337,18 +322,9 @@ function actionForDecision(code: string, currentTask: Task | null, actions: {
   } as Record<string, (() => void) | undefined>)[code]
 }
 
-function taskHasSupportedSourceUrl(task: Task) {
-  const value = typeof task.payload?.source_url === 'string'
-    ? task.payload.source_url
-    : typeof task.payload?.claimed_product_source_url === 'string'
-      ? task.payload.claimed_product_source_url
-      : ''
-  return isSupportedSourceProductUrl(value)
-}
-
 function configStatusLabel(task: Task | null, configPreview: ConfigPreview | null, loading: boolean, error: string | null) {
   if (!task) return '等待任务'
-  if (task.mode !== 'single_save') return '第一段无需模板'
+  if (task.mode !== 'single_save') return '当前任务无需编辑模板'
   if (loading) return '检查中'
   if (error) return '检查失败'
   return configPreview?.ok ? '已通过' : '待补齐'
@@ -394,7 +370,6 @@ function resolveTaskWorkerControl(task: Task): TaskWorkerControl | null {
 
 function taskModeLabel(mode: string) {
   return ({
-    claim_only: '待认领入箱',
     single_save: '商品箱编辑保存',
   } as Record<string, string>)[mode] ?? mode
 }
@@ -416,7 +391,6 @@ function safeGateDetail(detail?: string | null) {
     return '保存前检查未通过；原始技术信息已收进维护日志，请按页面提示重新检查。'
   }
   return detail
-    .split('data_acquisition').join('已有待认领列表')
     .split('draft_box').join('商品箱页')
     .split('L2').join('保存前检查')
     .split('L3').join('真实保存')
